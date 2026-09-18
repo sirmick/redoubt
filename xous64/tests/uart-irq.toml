@@ -1,0 +1,9 @@
+description = "External interrupt through the PLIC to a userspace handler, with injected console input"
+arch = ["rv64", "rv32"]
+kind = "boot"
+programs = ["uart-echo"]
+expect = ["claimed irq 10", "irq 10: received 'x'", "irq 10: received 'y'", "irq 10: received 'z'"]
+
+[[input]]
+after = "claimed irq 10"
+send = "xyz"

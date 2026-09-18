@@ -1,0 +1,16 @@
+description = "Every message type across address spaces: scalar, blocking scalar, lend, lend_mut, move"
+arch = ["rv64", "rv32"]
+kind = "boot"
+programs = ["log-server", "ipc-client"]
+smp = [1, 4]
+expect = [
+    'KMAIN \(clean boot\)',
+    '\[server\] PID 2 listening',
+    '\[server\] scalars: 1 2 3 4',
+    'ok: blocking scalar sum',
+    'ok: lend_mut returned Ok\("LENT MUTABLY ACROSS ADDRESS SPACES"\)',
+    'ok: 1000 lend_mut round trips',
+    '\[server\] moved page at',
+    "ok: moved page's address is free again",
+    'IPC TEST PASSED',
+]
