@@ -97,6 +97,39 @@ impl AddressSpace {
         slot.set(sv39::Pte::leaf(phys, flags | existing.flags()));
     }
 
+    /// Make the physmap's view of the frame at `phys` read-only.
+    ///
+    /// The physmap maps all of RAM writable, which would otherwise give the kernel a
+    /// writable alias of its own code, in breach of W^X. The physmap is built from
+    /// gigapages, so the superpages covering `phys` are first split into smaller ones.
+    pub fn write_protect_in_physmap(&self, alloc: &mut PageAllocator, phys: usize) {
+        let virt = PHYSMAP_BASE + phys;
+        let mut table = self.root;
+        for level in [2, 1] {
+            let slot = table.slot(sv39::vpn(virt, level));
+            table = match table.child(sv39::vpn(virt, level)) {
+                Some(child) => child,
+                None => {
+                    // Replace this superpage with a table of the next size down that maps
+                    // exactly the same memory with the same permissions.
+                    let superpage = slot.get();
+                    assert!(superpage.is_leaf(), "{phys:#x} is not in the physmap");
+                    let frame = alloc.alloc(self.pid);
+                    // SAFETY: `alloc` returns a RAM frame that nothing else uses.
+                    let child = unsafe { slot.install_table(frame) };
+                    let flags = superpage.flags() - PteFlags::VALID;
+                    for index in 0..ENTRIES {
+                        let part = superpage.phys() + index * sv39::leaf_size(level - 1);
+                        child.slot(index).set(sv39::Pte::leaf(part, flags));
+                    }
+                    child
+                }
+            };
+        }
+        let slot = table.slot(sv39::vpn(virt, 0));
+        slot.set(slot.get().without(PteFlags::W));
+    }
+
     /// Reserve a page for demand paging: permissions without `VALID`. The kernel backs
     /// it with memory on first touch.
     pub fn reserve(&self, alloc: &mut PageAllocator, virt: usize, flags: PteFlags) {

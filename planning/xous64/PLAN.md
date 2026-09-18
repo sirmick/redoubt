@@ -130,7 +130,21 @@ Fixed in this pass (each with a test where one makes sense):
 - `run-qemu.sh` duplicated the bench -> `cargo testbench --run`.
 - The loader used `fdt.memory()`, which panics on trees it dislikes -> lookup by `device_type`.
 
+Second pass, against the tenets (same day): typed page tables in a shared `sv39` crate, W^X enforced
+and verified at boot, `KernelCell` for globals, RNG fails closed, the `unsafe` ratchet, attack tests.
+Found and fixed an upstream bug on the way: `interrupt_free` bounds check was off by one, so any
+process could panic the kernel. **Worth reporting upstream to betrusted-io/xous-core.**
+
 Open, in rough priority order:
+- [ ] Inherited `unsafe`: RISC-V arch layer 35 and kernel core 82 uses, none justified. Convert the
+      remaining `static mut` globals to `KernelCell` (SWITCHTO_CALLER, PREVIOUS_PAIR, PROCESS_TABLE,
+      MEMORY_ALLOCATIONS, ...), then justify what is left. The ratchet in `xous64/tests/unsafe-budget.toml`
+      records progress.
+- [ ] **Ambient authority**: design device grants (who may claim which MMIO region / IRQ), e.g. a
+      manifest in the boot bundle enforced by the kernel. Today it is first come, first served.
+- [ ] Delete what we do not run (tenet 1), pending the rv32 decision: swap, gdb stub, ARM, Precursor
+      and bao1x platforms, the Sv32 window code, prebuilt blobs.
+- [ ] Bench: inject a device tree, to test fail-closed paths (no rng-seed, no memory node, junk).
 - [ ] **Firmware is C (OpenSBI), in M-mode.** That contradicts "no C in the trusted path". Goal: RustSBI
       on both XLENs, OpenSBI kept as a second firmware in the test matrix. Findings: RustSBI Prototyper
       (HEAD eae4cc7) builds for rv64 and rv32 in ~10 s each with its pinned nightly, and boots
