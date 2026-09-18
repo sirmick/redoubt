@@ -117,7 +117,7 @@ struct ProcessTable {
 }
 
 static mut PROCESS_TABLE: ProcessTable =
-    ProcessTable { current: unsafe { PID::new_unchecked(1) }, table: [false; MAX_PROCESS_COUNT] };
+    ProcessTable { current: crate::services::KERNEL_PID, table: [false; MAX_PROCESS_COUNT] };
 
 #[repr(C)]
 #[cfg(baremetal)]
@@ -143,7 +143,9 @@ pub struct InitialProcess {
 impl InitialProcess {
     pub fn pid(&self) -> PID {
         let pid = crate::arch::mem::pid_from_satp(self.satp);
-        unsafe { PID::new_unchecked(pid as u8) }
+        // The loader wrote this value. Check it rather than trust it: a zero here would be
+        // undefined behaviour in a `NonZeroU8`.
+        PID::new(pid as u8).expect("initial process has PID 0")
     }
 }
 
