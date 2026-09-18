@@ -1,5 +1,6 @@
 [alias]
 xtask = "run --package xtask --"
+testbench = "run --quiet --package testbench --"
 
 # [net]
 # offline = true              # do not access the network

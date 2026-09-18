@@ -7,8 +7,9 @@ Hard fork of xous-core (forked at c025441, 2026-09-15). Branch: `xous64`.
   Hand-roll only what is Xous-specific.
 - Keep rv32 building: rv64 code lives in new files selected by `cfg`, shared code goes through helpers.
 - Record design decisions in `planning/xous64/` before or with the code.
-- Run `xous64/test.sh` (boots QEMU, exits non-zero unless the IPC test passes) before and after
-  kernel or loader changes.
+- Run `cargo testbench` before and after kernel or loader changes (about 3 s; see `xous64/README.md`).
+  New kernel behaviour gets a test case in `xous64/tests/` and, if needed, a program in
+  `xous64/test-programs/`.
 
 ## Hardware abstraction
 CPUs and SoCs differ in ways that have nothing to do with XLEN, so code never uses
@@ -50,7 +51,7 @@ CPUs and SoCs differ in ways that have nothing to do with XLEN, so code never us
 Design: `planning/xous64/MEMORY-LAYOUT.md` (direct physmap instead of the page-table window; address
 space split by root entry). Build: `cargo build -p xous-kernel --target riscv64imac-unknown-none-elf --features qemu-virt`.
 
-**Milestone 2026-09-18: boots to userspace on QEMU virt and passes the IPC test** (`xous64/test.sh`:
+**Milestone 2026-09-18: boots to userspace on QEMU virt and passes the IPC test** (`cargo testbench`:
 scalar, blocking scalar with 64-bit values, lend, 1000x lend_mut, move; 1 and 4 harts).
 First reached userspace the same day: loader64 -> kernel (Sv39, SBI console) -> a
 `no_std` process in U-mode that claims the UART MMIO page and prints, then yields millions of times
@@ -101,13 +102,22 @@ Userspace:
 - Exit: minimal server set boots to a UART shell in QEMU.
 
 ### Next up (in order)
-1. Test bench (`xous64/testbench`): declarative cases, inject binaries, drive QEMU, assert output.
-   Then rv32 on QEMU virt: Sv32 support in the loader + an rv32 SBI firmware (RustSBI).
+1. rv32 on QEMU virt, so both XLENs are boot-tested, not just built: Sv32 tables (with the page-table
+   window the Sv32 kernel expects) in the SBI loader, an rv32 SBI firmware (Ubuntu's QEMU ships only
+   the rv64 OpenSBI; RustSBI is the pure-Rust option), upstream `riscv` crate for rv32+`sbi`.
+   The bench already lists rv32 for every boot case and reports them as SKIP until then.
 2. Audit for register-punning / `u32`-in-ABI bugs in `xous-rs` and `xous-ipc` (two found so far, both
    invisible to the compiler).
 3. `riscv64gc-unknown-xous-elf` target + `std`, then bring over `xous-log`, `xous-names`, `xous-ticktimer`.
 4. Process `env` block and `.eh_frame` from the loader (needed by `std`).
 5. `virtio-drivers` crate in a userspace block server (start of Phase 2).
+
+### Test bench (done 2026-09-18)
+`xous64/testbench`: declarative TOML cases, injects workspace or prebuilt binaries into the boot bundle,
+boots QEMU per hart count, feeds console input on triggers, asserts ordered `expect` regexes and
+`forbid` patterns, keeps logs, non-zero exit on failure. Self-checked against timeout, forbidden
+output and missing-program failures. Today: ipc, timer, uart-irq, all-together (rv64) and a Precursor
+build check (rv32). Not covered yet: the kernel's hosted-mode unit tests (`kernel/src/test.rs`).
 
 ## Phase 2: filesystem (userspace; can proceed in hosted mode in parallel)
 - [ ] `virtio-blk` server, `blockcache` server, `vfs` server; `lend_mut` page buffers for zero-copy.

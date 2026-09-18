@@ -1,0 +1,6 @@
+description = "IPC and timer tests sharing one log server, to catch interference between processes"
+arch = ["rv64"]
+kind = "boot"
+programs = ["log-server", "ipc-client", "timer-test"]
+smp = [1, 2]
+expect = ["IPC TEST PASSED", "TIMER TEST PASSED"]
