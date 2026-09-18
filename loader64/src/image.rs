@@ -55,6 +55,10 @@ pub fn load_elf(
                 None => alloc.alloc(pid),
             };
             space.map(alloc, page_phys, page_virt, flags);
+            // The kernel must not have a writable alias of its own code or constants.
+            if !user && !flags.contains(Pte::W) {
+                space.write_protect_in_physmap(alloc, page_phys);
+            }
 
             // Copy the part of the file image that lands in this page.
             let copy_start = page_virt.max(vaddr);

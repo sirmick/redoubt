@@ -122,6 +122,44 @@ fn check_permissions(flags: MMUFlags) -> Result<(), xous_kernel::Error> {
     Ok(())
 }
 
+/// The entry that translates `virt` under `root`, at whatever level it is found.
+fn lookup(root: Table, virt: usize) -> Option<Pte> {
+    let mut table = root;
+    for level in (0..sv39::LEVELS).rev() {
+        let pte = table.get(sv39::vpn(virt, level));
+        if pte.is_leaf() {
+            return Some(pte);
+        }
+        table = table.child(sv39::vpn(virt, level))?;
+    }
+    None
+}
+
+/// Check W^X over the kernel's own mappings: no kernel page is writable and executable,
+/// and no executable kernel frame has a writable alias in the physmap. Returns the
+/// number of executable pages checked. The loader is supposed to guarantee this; the
+/// kernel refuses to run if it did not.
+pub fn verify_kernel_wx() -> usize {
+    let root = current_root();
+    let mut executable = 0;
+    let Some(l1) = root.child(sv39::vpn(KERNEL_AREA, 2)) else { panic!("kernel area is not mapped") };
+    for i1 in 0..sv39::ENTRIES {
+        let Some(l0) = l1.child(i1) else { continue };
+        for i0 in 0..sv39::ENTRIES {
+            let pte = l0.get(i0);
+            if !pte.is_leaf() || !pte.has(MMUFlags::X) {
+                continue;
+            }
+            executable += 1;
+            assert!(!pte.has(MMUFlags::W), "kernel page {:#x} is writable and executable", pte.phys());
+            let alias = lookup(root, PHYSMAP_BASE + pte.phys()).expect("kernel frame is missing from the physmap");
+            assert!(!alias.has(MMUFlags::W), "kernel code frame {:#x} is writable through the physmap", pte.phys());
+            assert!(!alias.has(MMUFlags::X), "the physmap must never be executable");
+        }
+    }
+    executable
+}
+
 fn user_flag(pid: PID) -> MMUFlags { if pid.get() != 1 { MMUFlags::USER } else { MMUFlags::NONE } }
 
 #[derive(Copy, Clone, Default, PartialEq)]

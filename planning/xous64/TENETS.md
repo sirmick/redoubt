@@ -101,18 +101,19 @@ system, held to the same standard of simplicity as the kernel.
   arguments, messages) gets a fuzz target.
 - A test that is flaky is a bug, in the test or in the system, and is fixed rather than retried.
 
-## Where we stand against these (2026-09-18)
-Honest baseline, so progress is measurable. Numbers are for the rv64 build.
+## Where we stand against these (updated 2026-09-18, after the first hardening pass)
+Honest baseline, so progress is measurable. Numbers are for the rv64 build. `cargo testbench` enforces
+the ones marked (enforced).
 
 | Tenet | Today |
 | --- | --- |
-| 1 Simple | Kernel ~9,700 lines, loader 560, 41 lines of assembly. Carries rv32/Precursor/ARM/swap/gdb code we do not run. 19 `static mut` globals. |
-| 2 No ambient authority | **Violated.** Any process may claim any unclaimed MMIO region or IRQ, including QEMU's power-off device. Server IDs are guessable-by-design capabilities with no revocation. |
-| 2 W^X | **Violated in the kernel.** The physmap maps all RAM read-write, which includes a writable alias of kernel text. User mappings do honour ELF permissions. |
+| 1 Simple | Kernel ~9,700 lines, loader ~600, `sv39` crate ~230, 41 lines of assembly. Still carries rv32/Precursor/ARM/swap/gdb code we do not run. Globals are moving to `KernelCell`; most are still `static mut`. |
+| 2 No ambient authority | **Violated.** Any process may claim any unclaimed MMIO region or IRQ, including QEMU's power-off device. Server IDs are capabilities with no revocation. Needs a design. |
+| 2 W^X | **Holds** (enforced). `sv39::Pte::leaf` cannot express a W+X mapping; syscalls asking for one get `InvalidArgument`; the physmap alias of kernel code is read-only; the kernel verifies all of this over its own address space at boot and refuses to run otherwise. Tests: `wx`, `kernel-wx`. Known gap: user code pages still have a writable alias in the (kernel-only) physmap. |
 | 2 Verified boot | **Missing.** The boot bundle is not authenticated. |
-| 2 Fail closed | Partly. A missing RNG seed is only a warning (the test bench treats it as failure). |
-| 2 `unsafe` budget | ~300 occurrences of `unsafe` in the kernel, 21 in the loader, mostly without stated invariants. |
-| 3 All Rust | Kernel and loader: yes, no C toolchain on rv64. **Firmware is OpenSBI (C) in M-mode.** rv32 still links prebuilt assembly objects. |
+| 2 Fail closed | RNG seed: yes, loader and kernel both refuse to run without one. Not yet testable, because QEMU always provides a seed; needs device-tree injection in the bench. |
+| 2 `unsafe` budget | (enforced) New code is fully justified: `sv39` 12 uses / 0 unjustified, loader 13 / 0, Sv39+SBI+PLIC backends 15 / 0. Inherited code is not: RISC-V arch layer 35 / 35, kernel core 82 / 81. Was 211 / 211 in total before the pass. |
+| 3 All Rust | Kernel and loader: yes, no C toolchain on rv64. **Firmware is OpenSBI (C) in M-mode**; RustSBI builds and boots us but its device tree trips our parser (see PLAN.md). rv32 still links prebuilt assembly objects. |
 | 4 Standards | Good: SBI, PLIC, Sv39, device tree, ELF, tar, virtio planned. The kernel argument block is a home-grown format, documented in BOOT.md. |
-| 6 Tested | Bench exists and is self-checked: 8 cases, 10 boots, ~3 s. Covers IPC, timer, IRQ, RNG, two hostile images. rv64 only; one firmware; no syscall/message attack tests; no fuzzing; the kernel's own hosted unit tests are not wired in. |
-| 5 Dependencies | Kernel 21 crates, loader 12. None audited or vendored. `fdt` panics on input it dislikes (hit once already). |
+| 5 Dependencies | Kernel 21 crates + `sv39`, loader 12. None audited or vendored. `fdt` panics on input it dislikes (hit once already). |
+| 6 Tested | (enforced) 13 cases, ~3 s: ipc, timer, uart-irq, rng, all-together, kernel-wx, and attack tests wx, irq-attack, loader-rejects-kernel-address/-entry, plus the unsafe ratchet and an rv32 build check. `irq-attack` found and now guards a real upstream bug (any process could panic the kernel with `FreeInterrupt(32)`). rv64 only; one firmware; no fuzzing; the kernel's hosted unit tests are not wired in. |

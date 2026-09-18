@@ -1,0 +1,5 @@
+description = "The kernel verifies at boot that none of its code is writable, directly or through the physmap"
+arch = ["rv64"]
+kind = "boot"
+programs = ["log-server"]
+expect = ['W\^X verified: [1-9]\d* executable kernel pages, none writable under any alias', 'PID 2 listening']

@@ -61,6 +61,9 @@ pub fn init() {
 
     irq::init();
 
+    #[cfg(target_arch = "riscv64")]
+    println!("W^X verified: {} executable kernel pages, none writable under any alias", mem::verify_kernel_wx());
+
     unsafe {
         sie::set_ssoft();
         sie::set_sext();

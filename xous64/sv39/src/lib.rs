@@ -217,6 +217,9 @@ impl Slot {
     }
 }
 
+/// Bytes mapped by a leaf in a table at `level` (0 = 4 KiB, 1 = 2 MiB, 2 = 1 GiB).
+pub const fn leaf_size(level: usize) -> usize { PAGE_SIZE << (9 * level) }
+
 /// Index into the table at `level` (2 = root) for `virt`.
 pub const fn vpn(virt: usize, level: usize) -> usize { (virt >> (12 + 9 * level)) & (ENTRIES - 1) }
 
