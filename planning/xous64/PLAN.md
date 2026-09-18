@@ -42,7 +42,7 @@ CPUs and SoCs differ in ways that have nothing to do with XLEN, so code never us
 - [x] Patch workspace to use local `xous-rs` instead of crates.io.
 - [x] `loader64`: new loader crate for SBI + device tree platforms. Boots in S-mode on QEMU virt, prints over
       SBI, parses the DTB (RAM, harts, virtio-mmio slots), queries HSM hart state, shuts down via SRST.
-      Entry is `global_asm!`, so no C toolchain. Run with `loader64/run-qemu.sh`.
+      Entry is `global_asm!`, so no C toolchain. Run with `cargo testbench --run <program>`.
       The old `loader/` (M-mode, secboot, swap, OLED) is left alone; generic pieces (args, minielf,
       phase1/phase2) get ported into `loader64` as needed.
 - [ ] Custom userspace target `riscv64gc-unknown-xous-elf` (JSON spec, `-Zbuild-std`, needs nightly).
@@ -73,7 +73,7 @@ Kernel (release .text = 54 KiB):
 - [x] Kernel RNG keyed from `/chosen/rng-seed` via a `Seed` tag (was: the `time` CSR). Test: `rng`.
 - [x] Interrupt controller split into backends: `intc_vexriscv.rs` and `intc_plic.rs` (rustsbi `plic`
       crate, claim in `pending()`, complete in `enable_all_irqs()`, masking via `sie.SEIE`).
-      Verified with `xous64/hello-uart`: claims UART IRQ 10, handler runs in userspace, returns through
+      Verified with `uart-echo` in `xous64/test-programs`: claims UART IRQ 10, handler runs in userspace, returns through
       the magic ISR address, PLIC completes and re-arms. Kernel IRQ table is 32 entries; QEMU's PCIe
       INTx are 32-35, so widen it when PCI matters.
 - [x] Fixed: `scause` interrupt causes were matched as `0x8000_000x` (bit 31). The flag is the top bit,
@@ -95,10 +95,10 @@ Loader (`loader64`), see BOOT.md:
 
 Userspace:
 - [ ] `riscv64gc-unknown-xous-elf` target spec + `-Zbuild-std`; audit `std`'s Xous PAL and `xous-ipc`.
-- [x] First init process: `xous64/hello-uart`, `no_std`, `uart_16550` crate over claimed MMIO, echoes
-      input from a userspace interrupt handler. Try it: `loader64/run-qemu.sh target/riscv64imac-unknown-none-elf/release/hello-uart`.
+- [x] First init process: `uart-echo` in `xous64/test-programs`, `no_std`, `uart_16550` crate over claimed MMIO, echoes
+      input from a userspace interrupt handler. Try it: `cargo testbench --run uart-echo`.
 - [x] `xous64/ipc-test`: `no_std` server (owns the UART) + client covering every message type.
-- [ ] `xtask` support for building an rv64 bundle (today: `loader64/run-qemu.sh`).
+- [x] Building and booting an rv64 bundle lives in the test bench (`xous64/testbench`), not `xtask`.
 - Exit: minimal server set boots to a UART shell in QEMU.
 
 ### Next up (in order)
