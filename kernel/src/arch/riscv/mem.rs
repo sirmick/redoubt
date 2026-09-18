@@ -36,6 +36,9 @@ bitflags! {
     }
 }
 
+/// Extract the PID (stored as the ASID) from a raw `satp` value.
+pub fn pid_from_satp(satp: usize) -> usize { (satp >> 22) & ((1 << 9) - 1) }
+
 #[derive(Copy, Clone, Default, PartialEq)]
 pub struct MemoryMapping {
     satp: usize,

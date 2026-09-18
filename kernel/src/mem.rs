@@ -24,8 +24,10 @@ enum ClaimReleaseMove {
 #[allow(dead_code)]
 #[repr(C)]
 pub struct MemoryRangeExtra {
-    mem_start: u32,
-    mem_size: u32,
+    // `usize` so that rv64 can describe regions above 4 GiB. The layout on
+    // 32-bit targets is unchanged.
+    mem_start: usize,
+    mem_size: usize,
     mem_tag: u32,
     _padding: u32,
 }
@@ -201,10 +203,21 @@ impl MemoryManager {
             );
         }
         assert!(xarg_def.name == u32::from_le_bytes(*b"XArg"), "mm: first tag wasn't XArg");
-        assert!(xarg_def.data[1] == 1, "mm: XArg had unexpected version");
-        self.ram_start = xarg_def.data[2] as usize;
-        self.ram_size = xarg_def.data[3] as usize;
-        self.ram_name = xarg_def.data[4];
+        // XArg v1 describes RAM with 32-bit words. v2 (rv64) uses 64-bit values, low word first.
+        #[cfg(target_pointer_width = "32")]
+        {
+            assert!(xarg_def.data[1] == 1, "mm: XArg had unexpected version");
+            self.ram_start = xarg_def.data[2] as usize;
+            self.ram_size = xarg_def.data[3] as usize;
+            self.ram_name = xarg_def.data[4];
+        }
+        #[cfg(target_pointer_width = "64")]
+        {
+            assert!(xarg_def.data[1] == 2, "mm: XArg had unexpected version");
+            self.ram_start = xarg_def.data[2] as usize | (xarg_def.data[3] as usize) << 32;
+            self.ram_size = xarg_def.data[4] as usize | (xarg_def.data[5] as usize) << 32;
+            self.ram_name = xarg_def.data[6];
+        }
 
         let mem_size = self.ram_size / PAGE_SIZE;
         let mut extra_size = 0;
@@ -1232,7 +1245,7 @@ impl MemoryManager {
         Ok(())
     }
 
-    #[cfg(all(baremetal, target_arch = "riscv32", not(feature = "bao1x")))]
+    #[cfg(all(baremetal, any(target_arch = "riscv32", target_arch = "riscv64"), not(feature = "bao1x")))]
     pub fn check_for_duplicates(&self) {
         use crate::services::SystemServices;
 

@@ -1,0 +1,10 @@
+[package]
+name = "hello-uart"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "xous64 bring-up test: a no_std process that claims the ns16550 UART and prints to it"
+
+[dependencies]
+xous = "0.9.70"
+uart_16550 = { version = "0.3", default-features = false }

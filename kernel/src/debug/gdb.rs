@@ -20,7 +20,7 @@ mod multi_thread_single_step;
 mod single_register_access;
 mod target;
 
-#[cfg(target_arch = "riscv32")]
+#[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
 #[path = "gdb/riscv.rs"]
 mod cpu;
 

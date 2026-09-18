@@ -29,7 +29,11 @@ fn set_supervisor(supervisor: bool) {
 }
 
 pub fn resume(supervisor: bool, thread: &Thread) -> ! {
-    sepc::write(thread.sepc);
+    // `unsafe` on the upstream `riscv` crate (rv64), safe on the vendored one (rv32).
+    #[allow(unused_unsafe)]
+    unsafe {
+        sepc::write(thread.sepc)
+    };
 
     // Return to the appropriate CPU mode
     set_supervisor(supervisor);
@@ -41,4 +45,49 @@ pub fn resume(supervisor: bool, thread: &Thread) -> ! {
         thread.sepc,
     );
     unsafe { _xous_resume_context(thread.registers.as_ptr()) };
+}
+
+/// Make a syscall from inside the kernel (PID 1).
+///
+/// Without SBI firmware, the loader delegates S-mode `ecall` back to S-mode, so the
+/// kernel can simply `ecall` into its own trap handler.
+#[cfg(not(feature = "sbi"))]
+pub fn kernel_syscall(call: xous_kernel::SysCall) -> xous_kernel::SysCallResult { xous_kernel::rsyscall(call) }
+
+/// Make a syscall from inside the kernel (PID 1).
+///
+/// Under SBI firmware an S-mode `ecall` is a call into that firmware and never reaches us. Instead, enter the trap handler directly, with the
+/// CSRs set up exactly as the hardware would have left them for an `ecall` from S-mode.
+#[cfg(feature = "sbi")]
+pub fn kernel_syscall(call: xous_kernel::SysCall) -> xous_kernel::SysCallResult {
+    let mut args = call.as_args();
+    unsafe {
+        core::arch::asm!(
+            // The handler resumes at sepc + 4, as if stepping over a 4-byte `ecall`.
+            "lla {tmp}, 2f - 4",
+            "csrw sepc, {tmp}",
+            "li {tmp}, 9",          // scause: environment call from S-mode
+            "csrw scause, {tmp}",
+            "li {tmp}, 0x22",       // sstatus.SIE = 0 now, and again after sret (SPIE = 0)
+            "csrc sstatus, {tmp}",
+            "li {tmp}, 0x100",      // sstatus.SPP = Supervisor
+            "csrs sstatus, {tmp}",
+            "j _start_trap",
+            ".balign 4",
+            "2:",
+            tmp = out(reg) _,
+            inlateout("a0") args[0],
+            inlateout("a1") args[1],
+            inlateout("a2") args[2],
+            inlateout("a3") args[3],
+            inlateout("a4") args[4],
+            inlateout("a5") args[5],
+            inlateout("a6") args[6],
+            inlateout("a7") args[7],
+        )
+    };
+    match xous_kernel::Result::from_args(args) {
+        xous_kernel::Result::Error(e) => Err(e),
+        other => Ok(other),
+    }
 }

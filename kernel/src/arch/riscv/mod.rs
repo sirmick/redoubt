@@ -3,8 +3,11 @@
 
 use riscv::register::{satp, sie, sstatus};
 
+#[cfg(target_arch = "riscv64")]
+mod asm64;
 pub mod exception;
 pub mod irq;
+#[cfg_attr(target_arch = "riscv64", path = "mem_sv39.rs")]
 pub mod mem;
 pub mod panic;
 pub mod process;
@@ -12,7 +15,7 @@ pub mod syscall;
 
 #[cfg(any(feature = "precursor", feature = "renode"))]
 use utralib::generated::*;
-#[cfg(any(feature = "bao1x"))]
+#[cfg(not(any(feature = "precursor", feature = "renode")))]
 use xous_kernel::PID;
 #[cfg(any(feature = "precursor", feature = "renode"))]
 use xous_kernel::{MemoryFlags, MemoryType, PID};
@@ -32,7 +35,7 @@ pub struct Wfi {
     pub base: *mut usize,
 }
 
-pub fn current_pid() -> PID { PID::new(satp::read().asid() as _).unwrap() }
+pub fn current_pid() -> PID { PID::new(mem::pid_from_satp(satp::read().bits()) as _).unwrap() }
 
 pub fn init() {
     #[cfg(any(feature = "precursor", feature = "renode"))]
@@ -52,6 +55,9 @@ pub fn init() {
     let mut wfi_kernel_csr = CSR::new(WFI_KERNEL.base as *mut u32);
     #[cfg(any(feature = "precursor", feature = "renode"))]
     wfi_kernel_csr.wfo(utra::wfi::IGNORE_LOCKED_IGNORE_LOCKED, 1);
+
+    #[cfg(feature = "plic")]
+    irq::init();
 
     unsafe {
         sie::set_ssoft();

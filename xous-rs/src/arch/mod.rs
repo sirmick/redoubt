@@ -3,9 +3,9 @@ mod arm;
 #[cfg(all(any(target_os = "none", target_os = "xous"), target_arch = "arm"))]
 pub use arm::*;
 
-#[cfg(all(any(target_os = "xous", target_os = "none"), target_arch = "riscv32"))]
+#[cfg(all(any(target_os = "xous", target_os = "none"), any(target_arch = "riscv32", target_arch = "riscv64")))]
 pub mod riscv;
-#[cfg(all(any(target_os = "xous", target_os = "none"), target_arch = "riscv32"))]
+#[cfg(all(any(target_os = "xous", target_os = "none"), any(target_arch = "riscv32", target_arch = "riscv64")))]
 pub use riscv::*;
 
 #[cfg(all(
