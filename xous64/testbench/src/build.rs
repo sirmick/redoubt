@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context, Result};
 
-use crate::case::Program;
+use crate::case::{Corruption, Program};
 use crate::target::Target;
 
 pub struct Builder {
@@ -48,6 +48,15 @@ impl Builder {
                 let name = path.file_name().context("program path has no file name")?.to_string_lossy().into_owned();
                 return Ok((name, self.workspace.join(path)));
             }
+            Program::Corrupted { corrupt, with } => {
+                self.cargo(target, "test-programs", Some(corrupt), &[])?;
+                let mut elf = std::fs::read(self.out_dir(target).join(corrupt))?;
+                corrupt_elf(&mut elf, with)?;
+                let name = format!("{corrupt}-corrupted");
+                let path = self.workspace.join("target/testbench").join(format!("{name}-{}.elf", target.name));
+                std::fs::write(&path, elf)?;
+                return Ok((name, path));
+            }
             Program::TestProgram(bin) => ("test-programs", bin.as_str()),
             Program::Package { package, bin } => (package.as_str(), bin.as_str()),
         };
@@ -56,6 +65,40 @@ impl Builder {
     }
 
     pub fn artifact(&self, target: &Target, name: &str) -> PathBuf { self.out_dir(target).join(name) }
+}
+
+/// Rewrite one field of a little-endian ELF in place. Handles ELF32 and ELF64.
+fn corrupt_elf(elf: &mut [u8], corruption: &Corruption) -> Result<()> {
+    const PT_LOAD: u32 = 1;
+    let is_64 = match elf.get(..5) {
+        Some([0x7f, b'E', b'L', b'F', class]) => *class == 2,
+        _ => bail!("not an ELF file"),
+    };
+    let parse = |hex: &str| u64::from_str_radix(hex.trim_start_matches("0x"), 16).context("bad hex address");
+    // Addresses are 8 bytes in ELF64 and 4 in ELF32.
+    let put = |elf: &mut [u8], at: usize, value: u64| {
+        let width = if is_64 { 8 } else { 4 };
+        elf[at..at + width].copy_from_slice(&value.to_le_bytes()[..width]);
+    };
+    let u16_at = |elf: &[u8], at: usize| u16::from_le_bytes([elf[at], elf[at + 1]]) as usize;
+
+    match corruption {
+        Corruption::Entry(address) => put(elf, 0x18, parse(address)?),
+        Corruption::SegmentVaddr(address) => {
+            // (e_phoff, e_phentsize, e_phnum, p_vaddr within a program header)
+            let (phoff, phentsize, phnum, vaddr_at) = if is_64 {
+                (u64::from_le_bytes(elf[0x20..0x28].try_into()?) as usize, u16_at(elf, 0x36), u16_at(elf, 0x38), 0x10)
+            } else {
+                (u32::from_le_bytes(elf[0x1c..0x20].try_into()?) as usize, u16_at(elf, 0x2a), u16_at(elf, 0x2c), 0x08)
+            };
+            let header = (0..phnum)
+                .map(|i| phoff + i * phentsize)
+                .find(|at| u32::from_le_bytes(elf[*at..*at + 4].try_into().unwrap()) == PT_LOAD)
+                .context("ELF has no loadable segment")?;
+            put(elf, header + vaddr_at, parse(address)?);
+        }
+    }
+    Ok(())
 }
 
 /// Pack the boot bundle: a ustar archive with the kernel first, then the programs in PID order.

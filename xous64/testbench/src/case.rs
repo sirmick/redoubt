@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 /// Output that fails any boot test, on top of the case's own `forbid` list.
-pub const ALWAYS_FORBIDDEN: &[&str] = &["PANIC", "TEST FAILED", "loader64 PANIC"];
+pub const ALWAYS_FORBIDDEN: &[&str] = &["PANIC", "TEST FAILED", "WARNING: INSECURE"];
 
 #[derive(Debug, Deserialize)]
 pub struct Case {
@@ -44,6 +44,14 @@ pub struct Boot {
     /// Regular expressions that must never match.
     #[serde(default)]
     pub forbid: Vec<String>,
+    /// Set to false for cases that provoke a panic on purpose. `ALWAYS_FORBIDDEN` is
+    /// then not applied, only the case's own `forbid` list.
+    #[serde(default = "default_true")]
+    pub default_forbid: bool,
+    /// Regular expressions with one capture group. The case is booted twice, and what
+    /// each captures must differ between the two boots (for randomness, ASLR, ...).
+    #[serde(default)]
+    pub distinct_across_boots: Vec<String>,
     /// Console input to inject.
     #[serde(default)]
     pub input: Vec<Input>,
@@ -69,6 +77,18 @@ pub enum Program {
     Package { package: String, bin: String },
     /// A prebuilt ELF, relative to the workspace root.
     Path { path: PathBuf },
+    /// A `test-programs` binary, corrupted before injection, for testing how the loader
+    /// and kernel cope with hostile images.
+    Corrupted { corrupt: String, with: Corruption },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Corruption {
+    /// Move the first loadable segment to this virtual address (hex).
+    SegmentVaddr(String),
+    /// Set the entry point to this virtual address (hex).
+    Entry(String),
 }
 
 #[derive(Debug, Deserialize)]
@@ -78,6 +98,8 @@ pub struct Input {
     pub after: String,
     pub send: String,
 }
+
+fn default_true() -> bool { true }
 
 fn default_smp() -> Vec<u32> { vec![1] }
 

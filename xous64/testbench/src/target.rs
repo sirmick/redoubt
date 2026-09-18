@@ -21,7 +21,7 @@ pub const TARGETS: &[Target] = &[
         triple: "riscv64imac-unknown-none-elf",
         machine: Ok(Machine {
             qemu: "qemu-system-riscv64",
-            qemu_args: &["-machine", "virt", "-bios", "default", "-m", "256M"],
+            qemu_args: &["-machine", "virt", "-m", "256M"],
             loader_package: "loader64",
             kernel_features: &["qemu-virt"],
         }),

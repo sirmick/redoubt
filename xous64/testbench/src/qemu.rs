@@ -13,7 +13,8 @@ use crate::case::{Boot, ALWAYS_FORBIDDEN};
 use crate::target::Machine;
 
 pub enum Verdict {
-    Pass,
+    /// Everything expected appeared. Carries what each `distinct_across_boots` pattern captured.
+    Pass(Vec<Option<String>>),
     Fail(String),
 }
 
@@ -27,26 +28,55 @@ impl Drop for Guest {
     }
 }
 
-pub fn run(machine: &Machine, boot: &Boot, smp: u32, loader: &Path, bundle: &Path, log: &Path) -> Result<Verdict> {
+/// What to boot: the same for a test run and for an interactive session.
+pub struct Image<'a> {
+    pub machine: &'a Machine,
+    /// A firmware image for `-bios`, or "default" for the one QEMU ships (OpenSBI).
+    pub firmware: &'a str,
+    pub loader: &'a Path,
+    pub bundle: &'a Path,
+    pub smp: u32,
+}
+
+impl Image<'_> {
+    fn qemu(&self) -> Command {
+        let mut qemu = Command::new(self.machine.qemu);
+        qemu.args(self.machine.qemu_args)
+            .args(["-bios", self.firmware])
+            .args(["-smp", &self.smp.to_string()])
+            .arg("-kernel")
+            .arg(self.loader)
+            .arg("-initrd")
+            .arg(self.bundle);
+        qemu
+    }
+
+    /// Boot with the console on this terminal. Ctrl-A X quits QEMU.
+    pub fn run_interactive(&self) -> Result<()> {
+        let status = self.qemu().arg("-nographic").status().with_context(|| format!("starting {}", self.machine.qemu))?;
+        anyhow::ensure!(status.success(), "{} exited with {status}", self.machine.qemu);
+        Ok(())
+    }
+}
+
+pub fn run(image: &Image, boot: &Boot, log: &Path) -> Result<Verdict> {
+    let machine = image.machine;
     let compile = |patterns: &mut dyn Iterator<Item = &str>| -> Result<Vec<Regex>> {
         patterns.map(|p| Regex::new(p).with_context(|| format!("bad regular expression {p:?}"))).collect()
     };
     let expect = compile(&mut boot.expect.iter().map(String::as_str))?;
-    let forbid = compile(&mut boot.forbid.iter().map(String::as_str).chain(ALWAYS_FORBIDDEN.iter().copied()))?;
+    let defaults = if boot.default_forbid { ALWAYS_FORBIDDEN } else { &[] };
+    let forbid = compile(&mut boot.forbid.iter().map(String::as_str).chain(defaults.iter().copied()))?;
+    let capture = compile(&mut boot.distinct_across_boots.iter().map(String::as_str))?;
+    let mut captured: Vec<Option<String>> = vec![None; capture.len()];
     let mut inputs = boot
         .input
         .iter()
         .map(|i| Ok((Regex::new(&i.after)?, i.send.as_str())))
         .collect::<Result<Vec<_>>>()?;
 
-    let mut qemu = Command::new(machine.qemu);
-    qemu.args(machine.qemu_args)
-        .args(["-smp", &smp.to_string()])
-        .args(["-display", "none", "-monitor", "none", "-serial", "stdio"])
-        .arg("-kernel")
-        .arg(loader)
-        .arg("-initrd")
-        .arg(bundle)
+    let mut qemu = image.qemu();
+    qemu.args(["-display", "none", "-monitor", "none", "-serial", "stdio"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -83,6 +113,9 @@ pub fn run(machine: &Machine, boot: &Boot, smp: u32, loader: &Path, bundle: &Pat
         if let Some(pattern) = forbid.iter().find(|p| p.is_match(&line)) {
             return Ok(Verdict::Fail(format!("forbidden output /{pattern}/: {line}")));
         }
+        for (pattern, slot) in capture.iter().zip(captured.iter_mut()).filter(|(_, slot)| slot.is_none()) {
+            *slot = pattern.captures(&line).and_then(|c| c.get(1)).map(|m| m.as_str().to_string());
+        }
         if expect[next].is_match(&line) {
             next += 1;
         }
@@ -97,5 +130,5 @@ pub fn run(machine: &Machine, boot: &Boot, smp: u32, loader: &Path, bundle: &Pat
         }
         inputs = pending;
     }
-    Ok(Verdict::Pass)
+    Ok(Verdict::Pass(captured))
 }

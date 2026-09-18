@@ -22,8 +22,8 @@ use core::ops::Range;
 use fdt::Fdt;
 use tar_no_std::TarArchiveRef;
 use xous::arch::{
-    EXCEPTION_STACK_PAGES, EXCEPTION_STACK_TOP, KERNEL_STACK_PAGES, KERNEL_STACK_TOP, PHYSMAP_BASE,
-    THREAD_CONTEXT_AREA, THREAD_CONTEXT_PAGES, USER_STACK_TOP,
+    EXCEPTION_STACK_PAGES, EXCEPTION_STACK_TOP, KERNEL_AREA, KERNEL_STACK_PAGES, KERNEL_STACK_TOP,
+    PHYSMAP_BASE, THREAD_CONTEXT_AREA, THREAD_CONTEXT_PAGES, USER_AREA_END, USER_STACK_TOP,
 };
 
 use crate::alloc::{PageAllocator, Pid, KERNEL_PID};
@@ -84,9 +84,7 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
 
     // Safety: the SBI boot protocol guarantees `a1` points at a valid FDT blob.
     let fdt = unsafe { Fdt::from_ptr(dtb as *const u8) }.expect("invalid device tree");
-    let region = fdt.memory().regions().next().expect("device tree has no memory region");
-    let ram_start = region.starting_address as usize;
-    let ram = ram_start..ram_start + region.size.expect("memory region has no size");
+    let ram = main_memory(&fdt).expect("device tree describes no memory");
     let bundle = initrd(&fdt).expect("no boot bundle: pass one with -initrd");
     println!("  model: {}, {} hart(s)", fdt.root().model(), fdt.cpus().count());
     println!("  ram: {:#x}..{:#x} ({} MiB)", ram.start, ram.end, ram.len() >> 20);
@@ -136,6 +134,18 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
         None => println!("  no PLIC found in the device tree"),
     }
 
+    // Entropy for the kernel's RNG. Server IDs are drawn from it, and knowing a server
+    // ID is what allows a process to connect, so this must not be guessable.
+    match fdt.find_node("/chosen").and_then(|chosen| chosen.property("rng-seed")) {
+        Some(seed) if seed.value.len() >= 16 => {
+            println!("  rng-seed: {} bytes", seed.value.len());
+            args.begin(b"Seed");
+            args.bytes(seed.value);
+            args.end();
+        }
+        _ => println!("  WARNING: no /chosen/rng-seed; the kernel RNG will be predictable"),
+    }
+
     // Ticks per second of the `time` CSR, for whoever ends up driving the hart timer.
     if let Some(timebase) = fdt.find_node("/cpus").and_then(|cpus| cpus.property("timebase-frequency")) {
         args.begin(b"Time");
@@ -152,7 +162,8 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     let kernel_image = entries.next().expect("boot bundle is empty");
     let kernel = AddressSpace::new_kernel(&mut alloc, KERNEL_PID);
     let kernel_flags = Pte::R | Pte::W | Pte::GLOBAL;
-    let kernel_entry = image::load_elf(&mut alloc, &kernel, KERNEL_PID, kernel_image.data(), false);
+    let kernel_entry =
+        image::load_elf(&mut alloc, &kernel, KERNEL_PID, kernel_image.data(), KERNEL_AREA..usize::MAX, false);
     kernel.map_stack(&mut alloc, KERNEL_STACK_TOP, KERNEL_STACK_PAGES, kernel_flags);
     kernel.map_stack(&mut alloc, EXCEPTION_STACK_TOP, EXCEPTION_STACK_PAGES, kernel_flags);
     map_context(&mut alloc, &kernel, KERNEL_PID);
@@ -171,7 +182,7 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
         let name = name.as_str().unwrap_or("?");
 
         let space = AddressSpace::new_user(&mut alloc, pid, &kernel);
-        let entrypoint = image::load_elf(&mut alloc, &space, pid, entry.data(), true);
+        let entrypoint = image::load_elf(&mut alloc, &space, pid, entry.data(), PAGE_SIZE..USER_AREA_END, true);
         let stack_flags = Pte::R | Pte::W | Pte::USER;
         space.map_stack(&mut alloc, USER_STACK_TOP, 1, stack_flags);
         for page in 2..=USER_STACK_PAGES {
@@ -255,6 +266,18 @@ unsafe fn enter_kernel(
     )
 }
 
+/// The first region of the first node with `device_type = "memory"`. (The `fdt` crate's
+/// `memory()` helper looks the node up by name and panics if that fails, which it does
+/// with the device tree RustSBI hands over.)
+fn main_memory(fdt: &Fdt) -> Option<Range<usize>> {
+    let node = fdt
+        .all_nodes()
+        .find(|node| node.property("device_type").and_then(|p| p.as_str()) == Some("memory"))?;
+    let region = node.reg()?.next()?;
+    let start = region.starting_address as usize;
+    Some(start..start + region.size?)
+}
+
 /// The boot bundle's location, from `/chosen`. The properties are one or two cells wide
 /// depending on who wrote the device tree.
 fn initrd(fdt: &Fdt) -> Option<Range<usize>> {
@@ -275,7 +298,7 @@ struct ExtraRegion {
 /// inside these regions (and nowhere else outside RAM), and tracks who owns them.
 fn extra_regions<'a>(fdt: &'a Fdt<'a>, ram: &'a Range<usize>) -> impl Iterator<Item = ExtraRegion> + 'a {
     fdt.all_nodes()
-        .filter(|node| !node.name.starts_with("memory"))
+        .filter(|node| node.property("device_type").and_then(|p| p.as_str()) != Some("memory"))
         .flat_map(|node| {
             let mut name = *b"    ";
             let len = node.name.len().min(4);

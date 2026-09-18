@@ -70,7 +70,7 @@ Kernel (release .text = 54 KiB):
       assembled from rv32 offsets: `<< 7` context index, zero-extended addresses). `kernel/link64.x`.
 - [x] Upstream `riscv` 0.16 crate for CSRs on rv64 (vendored 0.5.6 + blobs stays for rv32 only).
 - [x] `platform/qemu_virt`: kernel console over the SBI debug console (`sbi-rt`), no utralib.
-- [ ] Kernel RNG is seeded from the `time` CSR only. Loader must pass `/chosen/rng-seed`. (FIXME in code)
+- [x] Kernel RNG keyed from `/chosen/rng-seed` via a `Seed` tag (was: the `time` CSR). Test: `rng`.
 - [x] Interrupt controller split into backends: `intc_vexriscv.rs` and `intc_plic.rs` (rustsbi `plic`
       crate, claim in `pending()`, complete in `enable_all_irqs()`, masking via `sie.SEIE`).
       Verified with `xous64/hello-uart`: claims UART IRQ 10, handler runs in userspace, returns through
@@ -116,8 +116,40 @@ Userspace:
 `xous64/testbench`: declarative TOML cases, injects workspace or prebuilt binaries into the boot bundle,
 boots QEMU per hart count, feeds console input on triggers, asserts ordered `expect` regexes and
 `forbid` patterns, keeps logs, non-zero exit on failure. Self-checked against timeout, forbidden
-output and missing-program failures. Today: ipc, timer, uart-irq, all-together (rv64) and a Precursor
-build check (rv32). Not covered yet: the kernel's hosted-mode unit tests (`kernel/src/test.rs`).
+output and missing-program failures. Also: ELF corruption for hostile-input tests, cross-boot
+distinctness checks, `--firmware`, and interactive `--run`. Cases: ipc, timer, uart-irq, rng,
+all-together, loader-rejects-kernel-address/-entry (rv64) and a Precursor build check (rv32). Not covered yet: the kernel's hosted-mode unit tests (`kernel/src/test.rs`).
+
+## Review 2026-09-18: debt and risks
+Fixed in this pass (each with a test where one makes sense):
+- Predictable kernel RNG -> seeded from the device tree (`rng`: IDs differ within and across boots).
+- Loader trusted ELF addresses -> segments and entry are range-checked (`loader-rejects-kernel-*`).
+- Duplicated PTE flag code -> `arch/riscv/mmu_flags.rs`, shared by Sv32 and Sv39.
+- `run-qemu.sh` duplicated the bench -> `cargo testbench --run`.
+- The loader used `fdt.memory()`, which panics on trees it dislikes -> lookup by `device_type`.
+
+Open, in rough priority order:
+- [ ] **Firmware is C (OpenSBI), in M-mode.** That contradicts "no C in the trusted path". Goal: RustSBI
+      on both XLENs, OpenSBI kept as a second firmware in the test matrix. Findings: RustSBI Prototyper
+      (HEAD eae4cc7) builds for rv64 and rv32 in ~10 s each with its pinned nightly, and boots
+      `loader64`. But it re-serializes the device tree (to add a reserved-memory node for itself), and
+      the `fdt` 0.1.5 parser asserts "bad node" on the result, so RAM and initrd cannot be read.
+      Not yet determined whether the tree violates the spec (properties after child nodes?) or the
+      parser is too strict. Reproduce: `cargo testbench ipc --firmware <rustsbi-prototyper elf>`.
+      Options: fix/report upstream, try `fdt` 0.2, or a more tolerant parser.
+- [ ] **No secure boot** (regression vs. stock Xous). Sign the bundle; verify in `loader64`.
+- [ ] rv32 cannot be boot-tested (needs Sv32 in the SBI loader + rv32 firmware, i.e. the item above).
+- [ ] rv32 still links prebuilt assembly blobs (`kernel/bin/*.a`, needs a C toolchain to regenerate);
+      rv64 uses `global_asm!`. Unify once rv32 boots in the bench, so breakage is visible.
+- [ ] IRQ numbers: 32-entry table and `1 << irq` bitmasks. Fine on QEMU, wrong for SoCs with 100+
+      PLIC sources (Orange Pi RV2).
+- [ ] Test programs hardcode the UART address and IRQ. Userspace needs a device-tree service.
+- [ ] Any process may claim any unclaimed MMIO region (stock Xous behaviour). On QEMU that includes the
+      power/reset device. Needs a policy once untrusted programs exist.
+- [ ] `IniE` tags are emitted empty just so the kernel can count processes.
+Accepted trade-offs (documented where they live): the physmap makes all RAM kernel-addressable,
+including a writable alias of kernel text; every map/unmap does a global `sfence.vma`; kernel entry
+relies on the firmware delegating instruction page faults to S-mode.
 
 ## Phase 2: filesystem (userspace; can proceed in hosted mode in parallel)
 - [ ] `virtio-blk` server, `blockcache` server, `vfs` server; `lend_mut` page buffers for zero-copy.
