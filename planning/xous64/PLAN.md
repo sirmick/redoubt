@@ -2,6 +2,8 @@
 
 Hard fork of xous-core (forked at c025441, 2026-09-15). Branch: `xous64`.
 
+**Read `TENETS.md` first.** It outranks this plan.
+
 ## Working rules
 - Prefer maintained pure-Rust `no_std` crates over hand-rolled code (`sbi-rt`, `riscv`, `fdt`, ...).
   Hand-roll only what is Xous-specific.
