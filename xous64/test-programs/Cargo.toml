@@ -1,9 +1,9 @@
 [package]
-name = "hello-uart"
+name = "test-programs"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "xous64 bring-up test: a no_std process that claims the ns16550 UART and prints to it"
+description = "no_std programs that run inside Xous under the test bench (xous64/testbench)"
 
 [dependencies]
 xous = "0.9.70"

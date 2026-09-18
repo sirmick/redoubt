@@ -25,3 +25,22 @@ pub fn early_init() {
 }
 
 pub fn init() { rand::init(); }
+
+/// `SysCall::PlatformSpecific` for SBI platforms. Numbers are in `xous::arch::platform_call`.
+pub fn platform_call(pid: xous_kernel::PID, op: usize, a2: usize, _a3: usize) -> Result<xous_kernel::Result, xous_kernel::Error> {
+    use xous_kernel::arch::platform_call::*;
+
+    use crate::arch::irq::timer;
+    match op {
+        TIMER_TIMEBASE => Ok(xous_kernel::Result::Scalar1(timer::timebase() as usize)),
+        TIMER_SET_DEADLINE => {
+            // The hart timer belongs to whoever claimed its interrupt.
+            if crate::irq::interrupt_owner(timer::IRQ) != Some(pid) {
+                return Err(xous_kernel::Error::AccessDenied);
+            }
+            timer::set_deadline(a2 as u64);
+            Ok(xous_kernel::Result::Ok)
+        }
+        _ => Err(xous_kernel::Error::UnhandledSyscall),
+    }
+}

@@ -56,7 +56,6 @@ pub fn init() {
     #[cfg(any(feature = "precursor", feature = "renode"))]
     wfi_kernel_csr.wfo(utra::wfi::IGNORE_LOCKED_IGNORE_LOCKED, 1);
 
-    #[cfg(feature = "plic")]
     irq::init();
 
     unsafe {

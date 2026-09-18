@@ -136,6 +136,13 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
         None => println!("  no PLIC found in the device tree"),
     }
 
+    // Ticks per second of the `time` CSR, for whoever ends up driving the hart timer.
+    if let Some(timebase) = fdt.find_node("/cpus").and_then(|cpus| cpus.property("timebase-frequency")) {
+        args.begin(b"Time");
+        args.word64(timebase.as_usize().unwrap_or(0) as u64);
+        args.end();
+    }
+
     let processes = alloc.alloc(KERNEL_PID) as *mut InitialProcess;
     let bundle = unsafe { core::slice::from_raw_parts(bundle.start as *const u8, bundle.len()) };
     let archive = TarArchiveRef::new(bundle).expect("boot bundle is not a tar archive");

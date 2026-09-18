@@ -1,4 +1,4 @@
-//! First userspace program for xous64 bring-up: a UART echo driver.
+//! A UART echo driver, and the first userspace program that ran on xous64.
 //!
 //! It exercises the path from the loader to U-mode and back: ELF loading, the first
 //! context switch, `ecall` traps, claiming device memory that the loader described from
@@ -41,14 +41,8 @@ pub extern "C" fn _start() -> ! {
         .expect("couldn't claim the UART interrupt");
     writeln!(port, "claimed irq {}, type something", UART_IRQ).ok();
 
-    loop {
-        xous::yield_slice();
-    }
+    test_programs::park()
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
-    loop {
-        xous::yield_slice();
-    }
-}
+fn panic(_info: &core::panic::PanicInfo) -> ! { test_programs::park() }
