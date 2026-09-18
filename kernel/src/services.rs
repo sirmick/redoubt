@@ -19,6 +19,17 @@ use crate::filled_array;
 use crate::platform;
 use crate::server::Server;
 
+/// The kernel is always process 1.
+pub const KERNEL_PID: PID = match PID::new(1) {
+    Some(pid) => pid,
+    None => unreachable!(),
+};
+#[allow(dead_code)]
+const FIRST_USER_PID: PID = match PID::new(2) {
+    Some(pid) => pid,
+    None => unreachable!(),
+};
+
 const MAX_SERVER_COUNT: usize = 128;
 
 pub use crate::arch::process::{INITIAL_TID, MAX_PROCESS_COUNT};
@@ -181,9 +192,9 @@ pub struct Process {
 impl Default for Process {
     fn default() -> Self {
         Process {
-            ppid: unsafe { PID::new_unchecked(1) },
+            ppid: KERNEL_PID,
             state: ProcessState::Allocated,
-            pid: unsafe { PID::new_unchecked(2) },
+            pid: FIRST_USER_PID,
             current_thread: 0,
             previous_thread: 0,
             exception_handler: None,
@@ -241,7 +252,7 @@ impl Default for ProcessInner {
             mem_heap_size: 0,
             mem_heap_max: if cfg!(feature = "big-heap") { 1024 * 1024 * 12 } else { 1024 * 512 },
             connection_map: [None; 32],
-            pid: unsafe { PID::new_unchecked(1) },
+            pid: KERNEL_PID,
             _reserved: [0; 1],
         }
     }
@@ -291,8 +302,8 @@ impl Process {
 std::thread_local!(static SYSTEM_SERVICES: core::cell::RefCell<SystemServices> = core::cell::RefCell::new(SystemServices {
     processes: [Process {
         state: ProcessState::Free,
-        ppid: unsafe { PID::new_unchecked(1) },
-        pid: unsafe { PID::new_unchecked(1) },
+        ppid: KERNEL_PID,
+        pid: KERNEL_PID,
         mapping: arch::mem::DEFAULT_MEMORY_MAPPING,
         current_thread: 0_usize,
         previous_thread: INITIAL_TID as TID,
@@ -308,8 +319,8 @@ std::thread_local!(static SYSTEM_SERVICES: core::cell::RefCell<SystemServices> =
 static mut SYSTEM_SERVICES: SystemServices = SystemServices {
     processes: [Process {
         state: ProcessState::Free,
-        ppid: unsafe { PID::new_unchecked(1) },
-        pid: unsafe { PID::new_unchecked(1) },
+        ppid: KERNEL_PID,
+        pid: KERNEL_PID,
         mapping: arch::mem::DEFAULT_MEMORY_MAPPING,
         current_thread: INITIAL_TID,
         previous_thread: INITIAL_TID as TID,
@@ -412,7 +423,7 @@ impl SystemServices {
             // );
             unsafe {
                 process.mapping.from_init_process(*init);
-                process.ppid = PID::new_unchecked(1);
+                process.ppid = KERNEL_PID;
                 process.pid = PID::new(pid as _).unwrap();
             };
             // let old_state = process.state;

@@ -13,8 +13,8 @@ max_undocumented = 0
 [[budget]]
 name = "loader"
 paths = ["loader64/src"]
-max_unsafe = 14
-max_undocumented = 10
+max_unsafe = 13
+max_undocumented = 0
 
 [[budget]]
 name = "kernel: Sv39, SBI and PLIC backends"
@@ -23,8 +23,8 @@ paths = [
     "kernel/src/arch/riscv/intc_plic.rs", "kernel/src/arch/riscv/timer_sbi.rs",
     "kernel/src/arch/riscv/asm64.rs", "kernel/src/platform/sbi",
 ]
-max_unsafe = 20
-max_undocumented = 11
+max_unsafe = 15
+max_undocumented = 0
 
 [[budget]]
 name = "kernel: RISC-V arch (shared with rv32)"
@@ -32,8 +32,8 @@ paths = [
     "kernel/src/arch/riscv/irq.rs", "kernel/src/arch/riscv/process.rs", "kernel/src/arch/riscv/syscall.rs",
     "kernel/src/arch/riscv/mod.rs", "kernel/src/arch/riscv/exception.rs", "kernel/src/arch/riscv/panic.rs",
 ]
-max_unsafe = 37
-max_undocumented = 37
+max_unsafe = 35
+max_undocumented = 35
 
 [[budget]]
 name = "kernel: core"
@@ -41,5 +41,5 @@ paths = [
     "kernel/src/main.rs", "kernel/src/mem.rs", "kernel/src/services.rs", "kernel/src/server.rs",
     "kernel/src/syscall.rs", "kernel/src/irq.rs", "kernel/src/args.rs", "kernel/src/io.rs",
 ]
-max_unsafe = 89
-max_undocumented = 88
+max_unsafe = 82
+max_undocumented = 81

@@ -9,7 +9,9 @@
 use rand_chacha::ChaCha8Rng;
 use rand_chacha::rand_core::{RngCore, SeedableRng};
 
-static mut RNG: Option<ChaCha8Rng> = None;
+use crate::cell::KernelCell;
+
+static RNG: KernelCell<Option<ChaCha8Rng>> = KernelCell::new(None);
 
 pub fn init() {
     let mut key = [0u8; 32];
@@ -22,15 +24,10 @@ pub fn init() {
             }
             println!("Kernel RNG seeded from the loader ({} bytes)", arg.data.len() * 4);
         }
-        None => {
-            // Not acceptable outside bring-up. Shout, so it cannot go unnoticed.
-            println!("WARNING: INSECURE KERNEL RNG: the loader passed no seed; server IDs are guessable");
-            key[..8].copy_from_slice(&riscv::register::time::read64().to_le_bytes());
-        }
+        // Fail closed: there is no acceptable fallback. A clock is not entropy.
+        None => panic!("the loader passed no RNG seed; refusing to run with guessable server IDs"),
     }
-    unsafe { *(&raw mut RNG) = Some(ChaCha8Rng::from_seed(key)) };
+    RNG.with(|rng| *rng = Some(ChaCha8Rng::from_seed(key)));
 }
 
-pub fn get_u32() -> u32 {
-    unsafe { (*(&raw mut RNG)).as_mut().expect("kernel rng used before init").next_u32() }
-}
+pub fn get_u32() -> u32 { RNG.with(|rng| rng.as_mut().expect("kernel rng used before init").next_u32()) }

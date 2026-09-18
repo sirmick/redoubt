@@ -21,6 +21,8 @@ static mut CONSOLE: SbiConsole = SbiConsole;
 /// The SBI console needs no setup, so bring it up before anything that might panic.
 pub fn early_init() {
     #[cfg(any(feature = "debug-print", feature = "print-panics"))]
+    // SAFETY: `early_init` runs once, at boot, before anything else can refer to `CONSOLE`,
+    // so this is the only reference to it that ever exists. (`SbiConsole` has no state.)
     crate::debug::shell::init(unsafe { &mut *(&raw mut CONSOLE) });
 }
 

@@ -62,6 +62,9 @@ pub fn load_elf(
             if copy_start < copy_end {
                 let src = &file[copy_start - vaddr..copy_end - vaddr];
                 let dst = (page_phys + (copy_start - page_virt)) as *mut u8;
+                // SAFETY: `dst..dst + src.len()` lies within the page at `page_phys`, which
+                // this loader allocated for this process (it never overlaps the bundle that
+                // `src` points into, which is a reserved range).
                 unsafe { core::ptr::copy_nonoverlapping(src.as_ptr(), dst, src.len()) };
             }
         }

@@ -82,7 +82,8 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     println!();
     println!("loader64: Xous RV64 loader, boot hart {}", hart_id);
 
-    // Safety: the SBI boot protocol guarantees `a1` points at a valid FDT blob.
+    // SAFETY: the SBI boot protocol passes the address of a device tree blob in `a1`. The
+    // parser validates the header and never reads past the size it declares.
     let fdt = unsafe { Fdt::from_ptr(dtb as *const u8) }.expect("invalid device tree");
     let ram = main_memory(&fdt).expect("device tree describes no memory");
     let bundle = initrd(&fdt).expect("no boot bundle: pass one with -initrd");
@@ -109,9 +110,11 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     let xpt = alloc.alloc_contiguous(extra_pages.div_ceil(PAGE_SIZE).max(1), KERNEL_PID);
 
     let args_base = alloc.alloc_contiguous(ARGS_PAGES, KERNEL_PID);
-    let mut args = args::ArgsBuilder::new(unsafe {
-        core::slice::from_raw_parts_mut(args_base as *mut u32, ARGS_PAGES * PAGE_SIZE / 4)
-    });
+    // SAFETY: a fresh, zeroed, page-aligned allocation of exactly this size, referenced
+    // from nowhere else.
+    let args_buffer =
+        unsafe { core::slice::from_raw_parts_mut(args_base as *mut u32, ARGS_PAGES * PAGE_SIZE / 4) };
+    let mut args = args::ArgsBuilder::new(args_buffer);
     args.begin(b"MREx");
     for region in extra_regions(&fdt, &ram) {
         args.word64(region.range.start as u64);
@@ -143,7 +146,8 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
             args.bytes(seed.value);
             args.end();
         }
-        _ => println!("  WARNING: no /chosen/rng-seed; the kernel RNG will be predictable"),
+        // Fail closed: the kernel has no other source of entropy at boot.
+        _ => panic!("the device tree has no usable /chosen/rng-seed"),
     }
 
     // Ticks per second of the `time` CSR, for whoever ends up driving the hart timer.
@@ -153,7 +157,15 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
         args.end();
     }
 
-    let processes = alloc.alloc(KERNEL_PID) as *mut InitialProcess;
+    // The table of initial processes, kernel first. One page bounds how many there can be.
+    // SAFETY: a fresh, zeroed, page-aligned allocation referenced from nowhere else.
+    // `InitialProcess` is four `usize`s, for which all-zeroes is valid.
+    let processes: &mut [InitialProcess] = unsafe {
+        let page = alloc.alloc(KERNEL_PID) as *mut InitialProcess;
+        core::slice::from_raw_parts_mut(page, PAGE_SIZE / core::mem::size_of::<InitialProcess>())
+    };
+    // SAFETY: the firmware placed the bundle at this range (from the device tree), it is
+    // reserved in the allocator so nothing overwrites it, and it is only read.
     let bundle = unsafe { core::slice::from_raw_parts(bundle.start as *const u8, bundle.len()) };
     let archive = TarArchiveRef::new(bundle).expect("boot bundle is not a tar archive");
     let mut entries = archive.entries();
@@ -193,7 +205,7 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
 
         let process =
             InitialProcess { satp: space.satp(), entrypoint, sp: USER_STACK_TOP - STACK_PADDING, env: 0 };
-        unsafe { processes.add(count).write(process) };
+        *processes.get_mut(count).expect("too many initial processes") = process;
         count += 1;
 
         // The kernel only needs these tags to count processes and to find `.eh_frame`.
@@ -209,14 +221,17 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
         args.bytes(name.as_bytes());
         args.end();
     }
-    unsafe { processes.write(kernel_process) };
+    processes[0] = kernel_process;
     args.finish(ram.start, ram.len(), b"sram");
 
     println!("  {} MiB free, entering kernel", alloc.free_bytes() >> 20);
+    // SAFETY: `kernel.satp()` names the address space built above, in which `kernel_entry`
+    // and the kernel stack are mapped, and the four pointers are physmap addresses of
+    // pages owned by PID 1.
     unsafe {
         enter_kernel(
             PHYSMAP_BASE + args_base,
-            PHYSMAP_BASE + processes as usize,
+            PHYSMAP_BASE + processes.as_ptr() as usize,
             PHYSMAP_BASE + alloc.rpt_base(),
             PHYSMAP_BASE + xpt,
             kernel.satp(),
@@ -240,6 +255,11 @@ fn map_context(alloc: &mut PageAllocator, space: &AddressSpace, pid: Pid) {
 /// no instruction after the `satp` write can be fetched. Instead of building a throwaway
 /// identity mapping, point `stvec` at the kernel entry: the fetch after `csrw satp`
 /// faults, and the hart "traps" straight into the kernel with a0-a3 and sp intact.
+///
+/// # Safety
+/// `satp` must name a complete Sv39 address space in which `entry` is mapped executable
+/// and `sp` is the top of a mapped, writable stack. This never returns, and nothing of
+/// the loader survives it.
 unsafe fn enter_kernel(
     args: usize,
     processes: usize,

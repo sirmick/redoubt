@@ -62,6 +62,10 @@ impl PageAllocator {
             }
         };
         self.next = start;
+        // SAFETY: the range lies inside RAM (checked against `ram.start` above), outside every
+        // reserved range (firmware, loader, device tree, bundle), and below every earlier
+        // allocation, so nothing else is using it. Translation is off, so the physical
+        // address is directly usable.
         unsafe { core::ptr::write_bytes(start as *mut u8, 0, size) };
         self.set_owner(start..start + size, owner);
         start
@@ -76,6 +80,9 @@ impl PageAllocator {
         assert!(self.next == self.ram.end, "the RPT must be the first allocation");
         let pages = self.ram.len() / PAGE_SIZE;
         let base = self.alloc_contiguous(pages.div_ceil(PAGE_SIZE), KERNEL_PID);
+        // SAFETY: `base` is a fresh, zeroed allocation of at least `pages` bytes that is
+        // never handed out again, so this is the only reference to it for the rest of the
+        // loader's life. `Pid` is `u8`, for which all-zeroes is valid.
         self.rpt = unsafe { core::slice::from_raw_parts_mut(base as *mut Pid, pages) };
         let rpt_range = base..base + pages.next_multiple_of(PAGE_SIZE);
         self.set_owner(rpt_range, KERNEL_PID);
