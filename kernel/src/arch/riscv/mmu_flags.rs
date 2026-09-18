@@ -7,6 +7,11 @@
 
 use xous_kernel::MemoryFlags;
 
+// On rv64 the flags are the `sv39` crate's, so that the loader and the kernel agree.
+#[cfg(target_arch = "riscv64")]
+pub use sv39::PteFlags as MMUFlags;
+
+#[cfg(not(target_arch = "riscv64"))]
 bitflags! {
     pub struct MMUFlags: usize {
         const NONE      = 0b00_0000_0000;

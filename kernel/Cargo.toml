@@ -33,6 +33,7 @@ riscv = { version = "0.5.6", package = "xous-riscv" }                           
 
 [target.'cfg(target_arch = "riscv64")'.dependencies]
 riscv = "0.16"
+sv39 = { path = "../xous64/sv39" }
 
 [target.'cfg(any(target_arch = "riscv32", target_arch = "riscv64"))'.dependencies]
 gdbstub = { version = "0.6.5", optional = true, default-features = false }

@@ -6,8 +6,6 @@ use core::fmt;
 use xous_kernel::{MemoryFlags, MemoryRange, PID, arch::*};
 
 pub use crate::arch::mem::MemoryMapping;
-#[cfg(baremetal)]
-use crate::arch::mem::{MMUFlags, flush_mmu, pagetable_entry};
 use crate::arch::process::Process;
 #[cfg(feature = "swap")]
 use crate::swap::SwapAlloc;
@@ -682,11 +680,7 @@ impl MemoryManager {
                 mm.reserve_address(self, virt, MemoryFlags::R | MemoryFlags::P)?;
 
                 // now mark the page as USER
-                let pte = pagetable_entry(virt)?;
-                unsafe {
-                    pte.write_volatile(pte.read_volatile() | MMUFlags::USER.bits());
-                    flush_mmu();
-                }
+                crate::arch::mem::mark_page_user(virt)?;
             }
             // note that the region returned is snapped to the nearest page boundary, even if
             // the use called us with unaligned addresses.

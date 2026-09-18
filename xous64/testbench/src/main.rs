@@ -4,6 +4,7 @@
 //! Test cases are TOML files in `xous64/tests/` (format: `case.rs`). Run with
 //! `cargo testbench [FILTER]`. Console logs are kept in `target/testbench/`.
 
+mod budget;
 mod build;
 mod case;
 mod qemu;
@@ -86,6 +87,17 @@ fn main() -> Result<()> {
             println!("{:<16} [{}] {}", case.name, case.arch.join(", "), case.description);
             continue;
         }
+        if let Kind::UnsafeBudget(check) = &case.kind {
+            let (failure, summary) = budget::check(&workspace, &check.budget)?;
+            match failure {
+                None => println!("PASS  {:<32}\n      {summary}", case.name),
+                Some(why) => {
+                    failures += 1;
+                    println!("FAIL  {:<32}        {why}\n      {summary}", case.name);
+                }
+            }
+            continue;
+        }
         for arch in case.arch.iter().filter(|a| args.arch.as_ref().is_none_or(|only| only == *a)) {
             let target = target::find(arch).with_context(|| format!("{}: unknown arch {arch:?}", case.name))?;
             for (variant, outcome, seconds) in run_case(&builder, case, target, &args.firmware, &logs)? {
@@ -158,6 +170,7 @@ fn run_case(
             return Ok(vec![(String::new(), outcome, elapsed(started))]);
         }
         Kind::Boot(boot) => boot,
+        Kind::UnsafeBudget(_) => unreachable!("handled before the per-target loop"),
     };
     let machine = match &target.machine {
         Ok(machine) => machine,

@@ -10,6 +10,8 @@ pub mod irq;
 #[cfg_attr(target_arch = "riscv64", path = "mem_sv39.rs")]
 pub mod mem;
 mod mmu_flags;
+#[cfg(target_arch = "riscv64")]
+mod sv39;
 pub mod panic;
 pub mod process;
 pub mod syscall;

@@ -12,4 +12,4 @@ sbi-rt = "0.0.3"
 elf = { version = "0.8", default-features = false }
 tar-no-std = { version = "0.5", default-features = false }
 crc = { version = "3", default-features = false }
-bitflags = "2"
+sv39 = { path = "../xous64/sv39" }
