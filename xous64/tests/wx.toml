@@ -1,0 +1,11 @@
+description = "W^X through the syscall interface: no writable+executable mapping, errors instead of kernel panics"
+arch = ["rv64", "rv32"]
+kind = "boot"
+programs = ["log-server", "wx-test"]
+expect = [
+    'ok: mapping write\+execute -> Err',
+    'ok: mapping no permissions at all -> Err',
+    'ok: mapping read\+execute -> Ok',
+    'ok: adding execute to a writable page -> Err',
+    'WX TEST PASSED',
+]

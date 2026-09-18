@@ -739,6 +739,16 @@ pub fn map_page_inner(
     Ok(())
 }
 
+/// Make a reserved (not yet valid) page a user page once it is backed.
+pub fn mark_page_user(virt: usize) -> Result<(), xous_kernel::Error> {
+    let pte = pagetable_entry(virt)?;
+    unsafe {
+        pte.write_volatile(pte.read_volatile() | MMUFlags::USER.bits());
+        flush_mmu();
+    }
+    Ok(())
+}
+
 /// Get the pagetable entry for a given address, or `Err()` if the address is invalid
 pub fn pagetable_entry(addr: usize) -> Result<*mut usize, xous_kernel::Error> {
     if addr & 3 != 0 {

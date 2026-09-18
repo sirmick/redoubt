@@ -4207,11 +4207,11 @@ dependencies = [
 name = "loader64"
 version = "0.1.0"
 dependencies = [
- "bitflags 2.13.1",
  "crc 3.2.1",
  "elf",
  "fdt",
  "sbi-rt",
+ "sv39",
  "tar-no-std",
  "xous",
 ]
@@ -6864,6 +6864,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
+name = "sv39"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.13.1",
+]
+
+[[package]]
 name = "svd2repl"
 version = "0.1.0"
 dependencies = [
@@ -8694,6 +8701,7 @@ dependencies = [
  "riscv 0.16.1",
  "sbi-rt",
  "stats_alloc",
+ "sv39",
  "utralib 0.1.27",
  "xous",
  "xous-riscv",

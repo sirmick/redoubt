@@ -501,7 +501,11 @@ impl SystemServices {
             entry.pid = new_pid.unwrap();
             entry.ppid = PID::new(1).unwrap();
             entry.state = ProcessState::Allocated;
-            unsafe { entry.mapping.allocate(new_pid.unwrap()).or(Err(xous_kernel::Error::InternalError))? };
+            // `allocate` is a safe function on Sv39 and an unsafe one on Sv32.
+            #[allow(unused_unsafe)]
+            unsafe {
+                entry.mapping.allocate(new_pid.unwrap()).or(Err(xous_kernel::Error::InternalError))?
+            };
             break;
         }
         if entry_idx.is_none() {

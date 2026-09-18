@@ -14,7 +14,8 @@ pub struct Case {
     #[serde(skip)]
     pub name: String,
     pub description: String,
-    /// Targets to run on, by name (see `target.rs`).
+    /// Targets to run on, by name (see `target.rs`). Empty for source-level checks.
+    #[serde(default)]
     pub arch: Vec<String>,
     #[serde(flatten)]
     pub kind: Kind,
@@ -28,6 +29,25 @@ pub enum Kind {
     /// Only check that something compiles for the target. Coverage for configurations
     /// that cannot be booted under QEMU.
     Build(Build),
+    /// A ratchet on `unsafe` in the trusted computing base. Not a boot; reads the sources.
+    UnsafeBudget(UnsafeBudget),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UnsafeBudget {
+    pub budget: Vec<Budget>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Budget {
+    pub name: String,
+    /// Files or directories, relative to the workspace root.
+    pub paths: Vec<String>,
+    /// Most uses of the `unsafe` keyword allowed across `paths`.
+    pub max_unsafe: usize,
+    /// Most of those allowed to lack a `// SAFETY:` comment directly above them.
+    pub max_undocumented: usize,
 }
 
 #[derive(Debug, Deserialize)]
