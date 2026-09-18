@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use core::mem;
-static mut PROCESS: *mut ProcessImpl = 0xff80_1000 as *mut ProcessImpl;
+static mut PROCESS: *mut ProcessImpl = xous_kernel::arch::THREAD_CONTEXT_AREA as *mut ProcessImpl;
 pub const MAX_THREAD: TID = 31;
 pub const EXCEPTION_TID: TID = 1;
 pub const INITIAL_TID: TID = 2;
@@ -18,17 +18,24 @@ pub const DEFAULT_STACK_SIZE: usize = 128 * 1024;
 pub const MAX_PROCESS_COUNT: usize = 64;
 // pub use crate::arch::mem::DEFAULT_STACK_TOP;
 
+/// Base of a range of addresses that are never mapped. Jumping to one of them faults into
+/// the kernel, which uses the faulting address to tell what the program is returning from.
+#[cfg(target_pointer_width = "32")]
+const MAGIC_RETURN_BASE: usize = 0xff80_0000;
+#[cfg(target_pointer_width = "64")]
+const MAGIC_RETURN_BASE: usize = xous_kernel::arch::PROCESS_AREA + 0x80_0000;
+
 /// This is the address a program will jump to in order to return from an ISR.
-pub const RETURN_FROM_ISR: usize = 0xff80_2000;
+pub const RETURN_FROM_ISR: usize = MAGIC_RETURN_BASE + 0x2000;
 
 /// This is the address a thread will return to when it exits.
-pub const EXIT_THREAD: usize = 0xff80_3000;
+pub const EXIT_THREAD: usize = MAGIC_RETURN_BASE + 0x3000;
 
 /// This is the address a thread will return to when it finishes handling an exception.
-pub const RETURN_FROM_EXCEPTION_HANDLER: usize = 0xff80_4000;
+pub const RETURN_FROM_EXCEPTION_HANDLER: usize = MAGIC_RETURN_BASE + 0x4000;
 
 /// This is the address the swapper returns from
-pub const RETURN_FROM_SWAPPER: usize = 0xff80_8000;
+pub const RETURN_FROM_SWAPPER: usize = MAGIC_RETURN_BASE + 0x8000;
 
 /// Support processing interrupts, which normally are TID 0. Since
 /// the TID is a NonZeroU8, we must pick a value here that can be
@@ -75,9 +82,9 @@ struct ProcessImpl {
     /// The last thread ID that was allocated
     last_tid_allocated: u8,
 
-    /// Pad everything to 128 bytes, so the Thread slice starts at
-    /// offset 128.
-    _padding: [u32; 13],
+    /// Pad the header out to the size of one `Thread`, so that the header is
+    /// "context 0" and the ISR can find context N at `N * size_of::<Thread>()`.
+    _padding: [u8; HEADER_PADDING],
 
     /// This enables the kernel to keep track of threads in the
     /// target process, and know which threads are ready to
@@ -85,20 +92,19 @@ struct ProcessImpl {
     threads: [Thread; MAX_THREAD],
 }
 
-/// Compile-time assertion that the procesor-specific Process implementation
-/// is a multiple of the page size.
-fn _assert_processimpl_is_page_sized() {
-    unsafe {
-        mem::transmute::<ProcessImpl, [u8; xous_kernel::arch::PAGE_SIZE]>(ProcessImpl {
-            scratch: 0,
-            hardware_thread: 0,
-            inner: Default::default(),
-            last_tid_allocated: 0,
-            _padding: [0; 13],
-            threads: [Default::default(); MAX_THREAD],
-        });
-    }
-}
+const HEADER_PADDING: usize =
+    mem::size_of::<Thread>() - (2 * mem::size_of::<usize>() + mem::size_of::<ProcessInner>() + 1);
+
+/// Number of pages `ProcessImpl` occupies at `THREAD_CONTEXT_AREA`: 1 on rv32, 2 on rv64.
+pub const PROCESS_IMPL_PAGES: usize = mem::size_of::<ProcessImpl>() / PAGE_SIZE;
+
+// The trap handler in asm indexes contexts as `THREAD_CONTEXT_AREA + (n << log2(size_of::<Thread>()))`.
+const _: () = assert!(mem::size_of::<Thread>() == 32 * mem::size_of::<usize>());
+const _: () = assert!(mem::size_of::<ProcessImpl>() == (MAX_THREAD + 1) * mem::size_of::<Thread>());
+const _: () = assert!(mem::size_of::<ProcessImpl>() % PAGE_SIZE == 0);
+// The loader maps this many pages for PID 1 and for every initial process.
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(PROCESS_IMPL_PAGES == xous_kernel::arch::THREAD_CONTEXT_PAGES);
 
 /// Singleton process table. Each process in the system gets allocated from this table.
 struct ProcessTable {
@@ -136,7 +142,7 @@ pub struct InitialProcess {
 
 impl InitialProcess {
     pub fn pid(&self) -> PID {
-        let pid = (self.satp >> 22) & ((1 << 9) - 1);
+        let pid = crate::arch::mem::pid_from_satp(self.satp);
         unsafe { PID::new_unchecked(pid as u8) }
     }
 }
@@ -166,7 +172,7 @@ pub struct Thread {
 impl Process {
     pub fn current() -> Process {
         let pid = unsafe { PROCESS_TABLE.current };
-        let hardware_pid = (riscv::register::satp::read().bits() >> 22) & ((1 << 9) - 1);
+        let hardware_pid = crate::arch::mem::pid_from_satp(riscv::register::satp::read().bits());
         assert_eq!((pid.get() as usize), hardware_pid);
         Process { pid }
     }
@@ -318,15 +324,6 @@ impl Process {
 
         assert_eq!(pid, crate::arch::current_pid(), "hardware pid does not match setup pid");
         assert!(tid != IRQ_TID, "tried to init using the irq thread");
-        assert!(
-            mem::size_of::<ProcessImpl>() == PAGE_SIZE,
-            "Process size is {}, not PAGE_SIZE ({}) (Thread size: {}, array: {}, Inner: {})",
-            mem::size_of::<ProcessImpl>(),
-            PAGE_SIZE,
-            mem::size_of::<Thread>(),
-            mem::size_of::<[Thread; MAX_THREAD + 1]>(),
-            mem::size_of::<ProcessInner>(),
-        );
         assert!(tid - 1 < process.threads.len(), "tried to init a thread that's out of range");
         assert!(
             tid == INITIAL_TID,

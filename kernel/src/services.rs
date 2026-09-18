@@ -435,9 +435,9 @@ impl SystemServices {
                 }
 
                 let arg0 = eh_frame as _;
-                #[cfg(target_arch = "riscv32")]
+                #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
                 let arg1 = init.env as _;
-                #[cfg(not(target_arch = "riscv32"))]
+                #[cfg(not(any(target_arch = "riscv32", target_arch = "riscv64")))]
                 let arg1 = 0;
                 let arg2 = 0;
                 let arg3 = 0;

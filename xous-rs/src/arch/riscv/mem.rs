@@ -11,13 +11,44 @@ pub const DEFAULT_BASE: usize = 0x6000_0000;
 pub const SWAP_HAL_VADDR: usize = 0xa000_0000;
 pub const MMAP_VIRT_BASE: usize = 0xb000_0000;
 
-pub const USER_AREA_END: usize = 0xff00_0000;
-pub const EXCEPTION_STACK_TOP: usize = 0xffff_0000;
 pub const PAGE_SIZE: usize = 4096;
-pub const PAGE_TABLE_OFFSET: usize = 0xff40_0000;
-pub const PAGE_TABLE_ROOT_OFFSET: usize = 0xff80_0000;
-pub const THREAD_CONTEXT_AREA: usize = 0xff80_1000;
-pub const USERSPACE_BUFFER: usize = 0xff90_0000;
+
+#[cfg(target_pointer_width = "32")]
+mod layout {
+    pub const USER_AREA_END: usize = 0xff00_0000;
+    pub const EXCEPTION_STACK_TOP: usize = 0xffff_0000;
+    pub const PAGE_TABLE_OFFSET: usize = 0xff40_0000;
+    pub const PAGE_TABLE_ROOT_OFFSET: usize = 0xff80_0000;
+    pub const THREAD_CONTEXT_AREA: usize = 0xff80_1000;
+    pub const USERSPACE_BUFFER: usize = 0xff90_0000;
+}
+
+/// Sv39 layout. See `planning/xous64/MEMORY-LAYOUT.md`.
+#[cfg(target_pointer_width = "64")]
+mod layout {
+    /// Root entries 0..=255: userspace.
+    pub const USER_AREA_END: usize = 0x40_0000_0000;
+    /// Root entries 256..=383: all of physical memory, `virt = PHYSMAP_BASE + phys`.
+    pub const PHYSMAP_BASE: usize = 0xffff_ffc0_0000_0000;
+    pub const PHYSMAP_SIZE: usize = 128 << 30;
+    /// Root entry 510: per-process kernel data.
+    pub const PROCESS_AREA: usize = 0xffff_ffff_8000_0000;
+    pub const THREAD_CONTEXT_AREA: usize = PROCESS_AREA;
+    pub const USERSPACE_BUFFER: usize = PROCESS_AREA + 0x10_0000;
+    /// Pages occupied by the kernel's per-process bookkeeping at `THREAD_CONTEXT_AREA`.
+    pub const THREAD_CONTEXT_PAGES: usize = 2;
+    /// Root entry 511: the kernel, shared by every address space.
+    pub const KERNEL_AREA: usize = 0xffff_ffff_c000_0000;
+    /// Where the kernel maps the platform's interrupt controller.
+    pub const KERNEL_PLIC_BASE: usize = 0xffff_ffff_f000_0000;
+    pub const KERNEL_STACK_TOP: usize = 0xffff_ffff_fff8_0000;
+    pub const KERNEL_STACK_PAGES: usize = 8;
+    pub const EXCEPTION_STACK_TOP: usize = 0xffff_ffff_ffff_0000;
+    pub const EXCEPTION_STACK_PAGES: usize = 8;
+    /// Top of the initial thread's stack in every user process.
+    pub const USER_STACK_TOP: usize = 0x8000_0000;
+}
+pub use layout::*;
 
 pub const FLG_VALID: usize = 0x1;
 pub const FLG_R: usize = 0x2;

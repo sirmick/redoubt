@@ -49,6 +49,7 @@ pub unsafe extern "C" fn init(
     xpt_offset: usize,
 ) {
     args::KernelArguments::init(arg_offset);
+    platform::early_init();
     let args = args::KernelArguments::get();
     // Everything needs memory, so the first thing we should do is initialize the memory manager.
     crate::mem::MemoryManager::with_mut(|mm| {
@@ -114,8 +115,11 @@ pub extern "C" fn kmain() {
             Some(pid) => {
                 #[cfg(feature = "debug-print")]
                 println!("  PID{:?}->{:?}", last_pid, pid); // keep this succinct as it happens often
-                xous_kernel::rsyscall(xous_kernel::SysCall::SwitchTo(pid, 0))
-                    .expect("couldn't switch to pid");
+                #[cfg(all(baremetal, any(target_arch = "riscv32", target_arch = "riscv64")))]
+                use arch::syscall::kernel_syscall;
+                #[cfg(not(all(baremetal, any(target_arch = "riscv32", target_arch = "riscv64"))))]
+                use xous_kernel::rsyscall as kernel_syscall;
+                kernel_syscall(xous_kernel::SysCall::SwitchTo(pid, 0)).expect("couldn't switch to pid");
             }
             None => {
                 #[cfg(feature = "debug-print")]

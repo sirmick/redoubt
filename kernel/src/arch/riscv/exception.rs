@@ -165,6 +165,11 @@ impl RiscvException {
     pub fn from_regs(cause: usize, epc: usize, tval: usize) -> RiscvException {
         use RiscvException::*;
 
+        // The interrupt flag is the top bit of `scause`, so its position depends on XLEN.
+        // Move it to bit 31 so that the table below serves both rv32 and rv64.
+        const INTERRUPT: usize = 1 << (usize::BITS - 1);
+        let cause = if cause & INTERRUPT != 0 { 0x8000_0000 | (cause & !INTERRUPT) } else { cause };
+
         if epc == 0 && tval == 0 && cause == 0 {
             return NoException;
         }

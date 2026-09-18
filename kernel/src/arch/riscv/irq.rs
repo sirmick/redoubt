@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use riscv::register::{scause, sepc, sstatus, stval};
 use xous_kernel::{PID, SysCall, TID};
@@ -18,108 +18,34 @@ use crate::services::SystemServices;
 use crate::swap::Swap;
 
 extern "Rust" {
-    fn _xous_syscall_return_result(result: &xous_kernel::Result, context: &Thread) -> !;
+    fn _xous_syscall_return_result(args: &[usize; 8], context: &Thread) -> !;
 }
 
-// use RAM-based backing so this variable is automatically saved on suspend
-static SIM_BACKING: AtomicUsize = AtomicUsize::new(0);
+/// Resume `context`, delivering `result` in its argument registers.
+///
+/// The result is serialized with `to_args()` rather than by reinterpreting the enum's
+/// memory as eight registers. The two only coincide when every field is exactly one
+/// register wide, which is not the case on rv64 (e.g. a `SID` is four `u32`s).
+fn return_result(result: &xous_kernel::Result, context: &Thread) -> ! {
+    let args = result.to_args();
+    unsafe { _xous_syscall_return_result(&args, context) }
+}
 
-// Interrupts are enabled very early on, so just assume they're on by default
-static IRQ_ENABLED: AtomicBool = AtomicBool::new(true);
+/// The interrupt controller backend. Every backend provides `enable_irq`, `disable_irq`,
+/// `disable_all_irqs`, `enable_all_irqs`, `pending` and `mask`; add a new controller
+/// (AIA, CLIC, ...) as another file and capability feature.
+#[cfg_attr(feature = "plic", path = "intc_plic.rs")]
+#[cfg_attr(not(feature = "plic"), path = "intc_vexriscv.rs")]
+mod intc;
+pub use intc::{disable_all_irqs, disable_irq, enable_all_irqs, enable_irq};
+#[cfg(feature = "plic")]
+pub use intc::init;
 
 // Indicate when we handle an IRQ
 static HANDLING_IRQ: AtomicBool = AtomicBool::new(false);
 
 #[cfg(feature = "swap")]
 pub fn is_handling_irq() -> bool { HANDLING_IRQ.load(Ordering::SeqCst) }
-
-#[cfg(not(feature = "vexii-test"))]
-fn sim_read() -> usize {
-    let existing: usize;
-    unsafe { core::arch::asm!("csrrs {0}, 0x9C0, zero", out(reg) existing) };
-    existing
-}
-
-#[cfg(not(feature = "vexii-test"))]
-fn sim_write(new: usize) { unsafe { core::arch::asm!("csrrw zero, 0x9C0, {0}", in(reg) new) }; }
-
-#[cfg(not(feature = "vexii-test"))]
-fn sip_read() -> usize {
-    let existing: usize;
-    unsafe { core::arch::asm!("csrrs {0}, 0xDC0, zero", out(reg) existing) };
-    existing
-}
-
-// using verilator-only as a proxy for the bao1x config;
-// when the flag is off, assume precursor config
-#[cfg(all(feature = "vexii-test", feature = "verilator-only"))]
-use crate::platform::bao1x::{
-    LEGACY_INT_VMEM,
-    legacy_int::{SUPER_MASK, SUPER_PENDING},
-};
-#[cfg(all(feature = "vexii-test", not(feature = "verilator-only")))]
-use crate::platform::precursor::{
-    LEGACY_INT_VMEM,
-    legacy_int::{SUPER_MASK, SUPER_PENDING},
-};
-
-#[cfg(feature = "vexii-test")]
-fn sim_read() -> usize {
-    let legacy_int = utralib::CSR::new(LEGACY_INT_VMEM as *mut u32);
-    legacy_int.r(SUPER_MASK) as usize
-}
-
-#[cfg(feature = "vexii-test")]
-fn sim_write(new: usize) {
-    let mut legacy_int = utralib::CSR::new(LEGACY_INT_VMEM as *mut u32);
-    legacy_int.wo(SUPER_MASK, new as u32);
-}
-
-#[cfg(feature = "vexii-test")]
-fn sip_read() -> usize {
-    let legacy_int = utralib::CSR::new(LEGACY_INT_VMEM as *mut u32);
-    legacy_int.r(SUPER_PENDING) as usize
-}
-
-/// Disable external interrupts
-pub fn disable_all_irqs() {
-    SIM_BACKING.store(sim_read(), Ordering::Relaxed);
-    IRQ_ENABLED.store(false, Ordering::Relaxed);
-    sim_write(0x0);
-}
-
-/// Enable external interrupts
-#[export_name = "_enable_all_irqs"]
-pub extern "C" fn enable_all_irqs() {
-    IRQ_ENABLED.store(true, Ordering::Relaxed);
-    sim_write(SIM_BACKING.load(Ordering::Relaxed));
-}
-
-/// Enable a given IRQ. If interrupts are currently disabled, then update the
-/// SIM backing instead so that it will be enabled when interrupts are restored.
-pub fn enable_irq(irq_no: usize) {
-    // Note that the vexriscv "IRQ Mask" register is inverse-logic --
-    // that is, setting a bit in the "mask" register unmasks (i.e. enables) it.
-    if IRQ_ENABLED.load(Ordering::Relaxed) {
-        sim_write(sim_read() | (1 << irq_no));
-    } else {
-        SIM_BACKING
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |existing| Some(existing | (1 << irq_no)))
-            .ok();
-    }
-}
-
-/// Disable a given IRQ. If interrupts are currently disabled, then update the
-/// SIM backing instead so that it will be disabled when interrupts are restored.
-pub fn disable_irq(irq_no: usize) {
-    if IRQ_ENABLED.load(Ordering::Relaxed) {
-        sim_write(sim_read() & !(1 << irq_no));
-    } else {
-        SIM_BACKING
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |existing| Some(existing & !(1 << irq_no)))
-            .ok();
-    }
-}
 
 static mut PREVIOUS_PAIR: Option<(PID, TID)> = None;
 
@@ -213,7 +139,7 @@ pub extern "C" fn trap_handler(
 
     // If we were previously in Supervisor mode and we've just tried to write to
     // invalid memory, then we likely blew out the stack.
-    if cfg!(target_arch = "riscv32") && sstatus::read().spp() == sstatus::SPP::Supervisor && sc.bits() == 0xf
+    if cfg!(any(target_arch = "riscv32", target_arch = "riscv64")) && sstatus::read().spp() == sstatus::SPP::Supervisor && sc.bits() == 0xf
     {
         let pid = current_pid();
         let ex = RiscvException::from_regs(sc.bits(), sepc::read(), stval::read());
@@ -236,7 +162,7 @@ pub extern "C" fn trap_handler(
             tid,
             ex,
             sepc::read(),
-            sim_read(),
+            intc::mask(),
             // ArchProcess::with_current(|p| p.current_thread().registers)
         );
     }
@@ -254,8 +180,8 @@ pub extern "C" fn trap_handler(
                 p.current_tid()
             });
             let call = SysCall::from_args(a0, a1, a2, a3, a4, a5, a6, a7).unwrap_or_else(|_| {
-                ArchProcess::with_current_mut(|p| unsafe {
-                    _xous_syscall_return_result(
+                ArchProcess::with_current_mut(|p| {
+                    return_result(
                         &xous_kernel::Result::Error(xous_kernel::Error::UnhandledSyscall),
                         p.current_thread(),
                     )
@@ -276,13 +202,13 @@ pub extern "C" fn trap_handler(
                     crate::arch::syscall::resume(current_pid().get() == 1, thread);
                 } else {
                     // println!("Returning to address {:08x}", thread.sepc);
-                    unsafe { _xous_syscall_return_result(&response, thread) };
+                    return_result(&response, thread);
                 }
             });
         }
         // Hardware interrupt
         RiscvException::UserExternalInterrupt(_) | RiscvException::SupervisorExternalInterrupt(_) => {
-            let irqs_pending = sip_read() & sim_read();
+            let irqs_pending = intc::pending();
 
             // Safe to access globals since interrupts are disabled
             // when this function runs.
@@ -378,7 +304,7 @@ pub extern "C" fn trap_handler(
             /* #[cfg(feature = "debug-swap")]
             {
                 let pid = crate::arch::process::current_pid();
-                let hardware_pid = (riscv::register::satp::read().bits() >> 22) & ((1 << 9) - 1);
+                let hardware_pid = crate::arch::mem::pid_from_satp(riscv::register::satp::read().bits());
                 println!("IPF RFS from PID{}, hw{}, offset {:x}", pid.get(), hardware_pid, _offset);
             } */
             // Cleanup after the swapper
@@ -394,7 +320,7 @@ pub extern "C" fn trap_handler(
                 {
                     // debugging
                     SystemServices::with(|ss| {
-                        let hardware_pid = (riscv::register::satp::read().bits() >> 22) & ((1 << 9) - 1);
+                        let hardware_pid = crate::arch::mem::pid_from_satp(riscv::register::satp::read().bits());
                         let current = ss.get_process(current_pid()).unwrap();
                         let state = current.state();
                         ArchProcess::with_current(|p| {
@@ -425,7 +351,7 @@ pub extern "C" fn trap_handler(
                     // cleaning exiting out of its entry point. Means every thunk out has to check
                     // this special case, even though it's rare...
                     Swap::with_mut(|s| s.clearmem_restore_irq());
-                    unsafe { _xous_syscall_return_result(&response, thread) };
+                    return_result(&response, thread);
                 });
             }
         }

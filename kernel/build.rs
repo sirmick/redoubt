@@ -25,18 +25,24 @@ fn main() {
 
     // For RISC-V and ARM, link in the startup library.
     if target.starts_with("riscv") || target.starts_with("arm") {
-        fs::copy(format!("bin/{}.a", target), out_dir.join(format!("lib{}.a", name))).unwrap();
-
-        println!("cargo:rustc-link-lib=static={}", name);
+        // rv64 startup code is `global_asm!` (src/arch/riscv/asm64.rs); only the older
+        // targets link a startup library that was assembled ahead of time.
+        if !target.starts_with("riscv64") {
+            fs::copy(format!("bin/{}.a", target), out_dir.join(format!("lib{}.a", name))).unwrap();
+            println!("cargo:rustc-link-lib=static={}", name);
+            println!("cargo:rerun-if-changed=bin/{}.a", target);
+        }
         println!("cargo:rustc-link-search={}", out_dir.display());
-        println!("cargo:rerun-if-changed=bin/{}.a", target);
         println!("cargo:rustc-link-arg=-Tlink.x");
 
         let linker_file_path = if target.starts_with("arm") {
             PathBuf::from("src/arch/arm/link.x")
+        } else if target.starts_with("riscv64") {
+            PathBuf::from("link64.x")
         } else {
             PathBuf::from("link.x")
         };
+        println!("cargo:rerun-if-changed={}", linker_file_path.display());
 
         // Put the linker script somewhere the linker can find it
         fs::File::create(out_dir.join("link.x"))

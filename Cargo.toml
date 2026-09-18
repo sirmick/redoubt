@@ -96,6 +96,9 @@ members = [
   "services/usb-device-xous",
   "kernel",
   "loader",
+  "loader64",
+  "xous64/hello-uart",
+  "xous64/ipc-test",
   "libs/bio-lib",
   "libs/blitstr2",
   "libs/chat",
@@ -229,8 +232,8 @@ rev = "5f86cb10bebd521a45fb3abb06995200aeda2948"  # use the commitref because we
 path = "./utralib"
 [patch.crates-io.svd2utra]
 path = "./svd2utra"
-# [patch.crates-io.xous]
-# path = "./xous-rs"
+[patch.crates-io.xous]
+path = "./xous-rs"
 # [patch.crates-io.xous-ipc]
 # path = "./xous-ipc"
 # [patch.crates-io.xous-api-names]

@@ -1,0 +1,15 @@
+[package]
+name = "loader64"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Xous loader for RV64 SBI + device tree platforms (QEMU virt, softcores, SBCs)"
+
+[dependencies]
+xous = "0.9.70"                                                # memory layout constants shared with the kernel
+fdt = { version = "0.1.5", default-features = false }
+sbi-rt = "0.0.3"
+elf = { version = "0.8", default-features = false }
+tar-no-std = { version = "0.5", default-features = false }
+crc = { version = "3", default-features = false }
+bitflags = "2"

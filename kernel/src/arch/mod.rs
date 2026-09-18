@@ -11,9 +11,9 @@ mod hosted;
 #[cfg(any(windows, unix))]
 pub use hosted::*;
 
-#[cfg(target_arch = "riscv32")]
+#[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
 mod riscv;
-#[cfg(target_arch = "riscv32")]
+#[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
 pub use crate::arch::riscv::*;
 
 #[cfg(all(target_arch = "riscv64", not(baremetal)))]
