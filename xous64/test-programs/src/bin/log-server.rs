@@ -1,9 +1,12 @@
+//! Owns the UART and prints on behalf of every other test program. Also the server
+//! side of the IPC test.
+
 #![no_std]
 #![no_main]
 
 use core::fmt::Write;
 
-use ipc_test::{op, SERVER_ADDRESS};
+use test_programs::{op, SERVER_ADDRESS};
 use uart_16550::MmioSerialPort;
 use xous::{MemoryAddress, MemoryFlags, MemoryMessage, Message};
 
@@ -38,7 +41,7 @@ pub extern "C" fn _start() -> ! {
                 xous::return_scalar(sender, m.arg1 + m.arg2 + m.arg3 + m.arg4).expect("couldn't reply");
             }
             Message::Borrow(m) if m.id == op::PRINT => {
-                writeln!(out, "[client] {}", text(m)).ok();
+                writeln!(out, "{}", text(m)).ok();
             }
             Message::MutableBorrow(m) if m.id == op::UPPERCASE => {
                 let len = m.valid.map_or(0, |v| v.get());
@@ -55,8 +58,4 @@ pub extern "C" fn _start() -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
-    loop {
-        xous::yield_slice();
-    }
-}
+fn panic(_info: &core::panic::PanicInfo) -> ! { test_programs::park() }

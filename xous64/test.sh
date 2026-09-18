@@ -8,9 +8,9 @@ OUT=target/$TARGET/release
 LOG=$(mktemp)
 trap 'rm -f "$LOG"' EXIT
 
-cargo build --release --target $TARGET -p ipc-test
+cargo build --release --target $TARGET -p test-programs
 QEMU_ARGS="-display none -serial file:$LOG -monitor none" SMP="${SMP:-1}" \
-    timeout "${TIMEOUT:-60}" loader64/run-qemu.sh $OUT/ipc-server $OUT/ipc-client >/dev/null 2>&1 &
+    timeout "${TIMEOUT:-60}" loader64/run-qemu.sh $OUT/log-server $OUT/ipc-client $OUT/timer-test >/dev/null 2>&1 &
 QEMU=$!
 
 verdict=timeout

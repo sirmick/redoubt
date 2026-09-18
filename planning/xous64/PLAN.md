@@ -81,14 +81,10 @@ Kernel (release .text = 54 KiB):
       eight registers, which only works when every field is one word. Now serialized with `to_args()`.
       **Audit for the same class** (struct/enum memory punned as register arrays, `u32` fields in ABI
       types): `xous-rs` message/envelope paths, `xous-ipc`, `std`'s Xous PAL.
-- [ ] Timer. There is no MMIO timer to give a userspace ticktimer; the S-mode timer is a CPU resource
-      (SBI TIME / Sstc `stimecmp`). Design needed: kernel exposes it as a virtual IRQ + "set deadline"
-      call, behind a `timer` backend like the interrupt controller. Also gives preemption.
-- [ ] `kernel/src/mem.rs` (generic): audit `u32`/4 GiB assumptions in the RAM allocation tables.
-- [ ] Swap and gdb-stub are not ported (features stay rv32-only).
-
-- [x] XArg v2 / 64-bit MREx parsing; early console so boot panics are visible; panic powers off via SBI.
-- [x] `kernel_syscall()`: kernel-internal syscalls no longer use `ecall` (that is SBI's on these platforms).
+- [x] Hart timer (design: `planning/xous64/TIMER.md`): delivered as IRQ 0, programmed through
+      `PlatformSpecific` calls (allowed from interrupt context), `rdtime` readable from U-mode, backend
+      `timer_sbi.rs` / `timer_none.rs`. Verified by `timer-test` (5 one-shot ticks at 20 Hz = 251 ms).
+      No time-slice preemption yet; that is a scheduling decision for Phase 3.
 
 Loader (`loader64`), see BOOT.md:
 - [x] Boot bundle = ustar of ELFs via initrd (`tar-no-std` + `elf`), replacing create-image/MiniELF.
@@ -105,7 +101,8 @@ Userspace:
 - Exit: minimal server set boots to a UART shell in QEMU.
 
 ### Next up (in order)
-1. Timer backend + preemption (design note first: virtual IRQ + set-deadline, SBI TIME vs Sstc).
+1. Test bench (`xous64/testbench`): declarative cases, inject binaries, drive QEMU, assert output.
+   Then rv32 on QEMU virt: Sv32 support in the loader + an rv32 SBI firmware (RustSBI).
 2. Audit for register-punning / `u32`-in-ABI bugs in `xous-rs` and `xous-ipc` (two found so far, both
    invisible to the compiler).
 3. `riscv64gc-unknown-xous-elf` target + `std`, then bring over `xous-log`, `xous-names`, `xous-ticktimer`.

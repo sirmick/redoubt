@@ -1541,7 +1541,10 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
             }
         }
 
-        #[cfg(not(feature = "bao1x"))]
+        #[cfg(feature = "sbi")]
+        SysCall::PlatformSpecific(op, a2, a3, _a4, _a5, _a6, _a7) => crate::platform::sbi::platform_call(pid, op, a2, a3),
+
+        #[cfg(not(any(feature = "bao1x", feature = "sbi")))]
         SysCall::PlatformSpecific(_a1, _a2, _a3, _a4, _a5, _a6, _a7) => {
             unimplemented!("No platform specific calls for this platform")
         }

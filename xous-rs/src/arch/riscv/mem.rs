@@ -50,6 +50,17 @@ mod layout {
 }
 pub use layout::*;
 
+/// `SysCall::PlatformSpecific` operations on platforms where the kernel runs under SBI
+/// firmware. See `planning/xous64/TIMER.md`.
+pub mod platform_call {
+    /// The hart timer is delivered as this interrupt. Claim it with `claim_interrupt`.
+    pub const TIMER_IRQ: usize = 0;
+    /// Returns `Scalar1(ticks per second of the `time` CSR)`.
+    pub const TIMER_TIMEBASE: usize = 1;
+    /// `a2` = absolute `time` value at which to raise `TIMER_IRQ`. Only for the owner of `TIMER_IRQ`.
+    pub const TIMER_SET_DEADLINE: usize = 2;
+}
+
 pub const FLG_VALID: usize = 0x1;
 pub const FLG_R: usize = 0x2;
 pub const FLG_W: usize = 0x4;

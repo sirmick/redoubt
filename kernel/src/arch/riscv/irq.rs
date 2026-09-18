@@ -37,9 +37,45 @@ fn return_result(result: &xous_kernel::Result, context: &Thread) -> ! {
 #[cfg_attr(feature = "plic", path = "intc_plic.rs")]
 #[cfg_attr(not(feature = "plic"), path = "intc_vexriscv.rs")]
 mod intc;
-pub use intc::{disable_all_irqs, disable_irq, enable_all_irqs, enable_irq};
-#[cfg(feature = "plic")]
-pub use intc::init;
+
+/// The hart timer backend, for platforms where the timer is a CPU resource rather than
+/// a device that userspace can own. See `planning/xous64/TIMER.md`.
+#[cfg_attr(feature = "sbi", path = "timer_sbi.rs")]
+#[cfg_attr(not(feature = "sbi"), path = "timer_none.rs")]
+pub mod timer;
+
+pub fn init() {
+    #[cfg(feature = "plic")]
+    intc::init();
+    #[cfg(feature = "sbi")]
+    timer::init();
+}
+
+pub fn enable_irq(irq_no: usize) {
+    // The timer is armed by setting a deadline, not by claiming its interrupt.
+    if !timer::owns(irq_no) {
+        intc::enable_irq(irq_no);
+    }
+}
+
+pub fn disable_irq(irq_no: usize) {
+    if timer::owns(irq_no) {
+        timer::mask();
+    } else {
+        intc::disable_irq(irq_no);
+    }
+}
+
+/// Hold off every interrupt source while a userspace handler runs; Xous does not nest them.
+pub fn disable_all_irqs() {
+    intc::disable_all_irqs();
+    timer::mask();
+}
+
+pub fn enable_all_irqs() {
+    intc::enable_all_irqs();
+    timer::unmask();
+}
 
 // Indicate when we handle an IRQ
 static HANDLING_IRQ: AtomicBool = AtomicBool::new(false);
@@ -207,7 +243,17 @@ pub extern "C" fn trap_handler(
             });
         }
         // Hardware interrupt
-        RiscvException::UserExternalInterrupt(_) | RiscvException::SupervisorExternalInterrupt(_) => {
+        RiscvException::UserExternalInterrupt(_)
+        | RiscvException::SupervisorExternalInterrupt(_)
+        | RiscvException::SupervisorTimerInterrupt(_) => {
+            #[cfg(feature = "sbi")]
+            let irqs_pending = if let RiscvException::SupervisorTimerInterrupt(_) = ex {
+                timer::on_interrupt();
+                1 << timer::IRQ
+            } else {
+                intc::pending()
+            };
+            #[cfg(not(feature = "sbi"))]
             let irqs_pending = intc::pending();
 
             // Safe to access globals since interrupts are disabled

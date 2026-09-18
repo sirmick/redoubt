@@ -89,6 +89,12 @@ pub fn interrupt_claim(
     }
 }
 
+/// The process that has claimed `irq`, if any.
+#[allow(dead_code)]
+pub fn interrupt_owner(irq: usize) -> Option<PID> {
+    unsafe { (&*(&raw const IRQ_HANDLERS)).get(irq).copied().flatten().map(|(pid, _, _)| pid) }
+}
+
 pub fn interrupt_free(irq: usize, pid: PID) -> Result<(), xous_kernel::Error> {
     // Unsafe is required since we're accessing a static mut array.
     // However, we disable interrupts to prevent contention on this array.
