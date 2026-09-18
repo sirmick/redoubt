@@ -16,9 +16,9 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 
 use crate::build::Builder;
-use crate::case::{Case, Kind};
-use crate::qemu::Verdict;
-use crate::target::Target;
+use crate::case::{Case, Kind, Program};
+use crate::qemu::{Image, Verdict};
+use crate::target::{Machine, Target};
 
 #[derive(Parser)]
 #[command(about = "Boot Xous under QEMU with injected programs and assert on its console output")]
@@ -31,6 +31,16 @@ struct Args {
     /// List the cases and exit.
     #[arg(long)]
     list: bool,
+    /// Firmware image to pass as `-bios` instead of QEMU's bundled OpenSBI, e.g. a RustSBI build.
+    #[arg(long, default_value = "default")]
+    firmware: String,
+    /// Instead of running tests, boot these programs with the console on this terminal
+    /// (Ctrl-A X quits). Names of test-programs binaries, or paths to ELF files.
+    #[arg(long, num_args = 1.., value_name = "PROGRAM")]
+    run: Vec<String>,
+    /// Hart count for --run.
+    #[arg(long, default_value_t = 1)]
+    smp: u32,
     /// Show cargo's output.
     #[arg(long, short)]
     verbose: bool,
@@ -49,6 +59,20 @@ fn main() -> Result<()> {
     std::fs::create_dir_all(&logs)?;
     let builder = Builder { workspace: workspace.clone(), verbose: args.verbose };
 
+    if !args.run.is_empty() {
+        let target = target::find(args.arch.as_deref().unwrap_or("rv64")).context("unknown arch")?;
+        let machine = target.machine.as_ref().map_err(|why| anyhow::anyhow!("{} cannot boot: {why}", target.name))?;
+        let programs: Vec<_> = args
+            .run
+            .iter()
+            .map(|p| if p.contains('/') { Program::Path { path: p.into() } } else { Program::TestProgram(p.clone()) })
+            .collect();
+        let bundle = prepare(&builder, target, machine, &programs, &[], &logs.join("interactive.tar"))?;
+        let loader = builder.artifact(target, machine.loader_package);
+        let image = Image { machine, firmware: &args.firmware, loader: &loader, bundle: &bundle, smp: args.smp };
+        return image.run_interactive();
+    }
+
     let mut paths: Vec<_> = std::fs::read_dir(workspace.join("xous64/tests"))?
         .filter_map(|e| Some(e.ok()?.path()))
         .filter(|p| p.extension().is_some_and(|e| e == "toml"))
@@ -64,7 +88,7 @@ fn main() -> Result<()> {
         }
         for arch in case.arch.iter().filter(|a| args.arch.as_ref().is_none_or(|only| only == *a)) {
             let target = target::find(arch).with_context(|| format!("{}: unknown arch {arch:?}", case.name))?;
-            for (variant, outcome, seconds) in run_case(&builder, case, target, &logs)? {
+            for (variant, outcome, seconds) in run_case(&builder, case, target, &args.firmware, &logs)? {
                 let label = format!("{} [{}{}]", case.name, target.name, variant);
                 match outcome {
                     Outcome::Pass => println!("PASS  {label:<32} {seconds:5.1}s"),
@@ -83,11 +107,43 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// Build the kernel, the loader and `programs` for `target`, and pack them into `bundle`.
+fn prepare(
+    builder: &Builder,
+    target: &Target,
+    machine: &Machine,
+    programs: &[Program],
+    extra_kernel_features: &[String],
+    bundle: &std::path::Path,
+) -> Result<PathBuf> {
+    let mut features: Vec<String> = machine.kernel_features.iter().map(|f| f.to_string()).collect();
+    features.extend(extra_kernel_features.iter().cloned());
+    builder.cargo_build(target, "xous-kernel", &features)?;
+    builder.cargo_build(target, machine.loader_package, &[])?;
+    let programs = programs.iter().map(|p| builder.program(target, p)).collect::<Result<Vec<_>>>()?;
+    build::bundle(bundle, &builder.artifact(target, "xous-kernel"), &programs)?;
+    Ok(bundle.to_path_buf())
+}
+
+/// Check that every `distinct_across_boots` pattern captured something on both boots,
+/// and that the two captures differ.
+fn compare_boots(boot: &case::Boot, first: &[Option<String>], second: &[Option<String>]) -> Outcome {
+    for ((pattern, a), b) in boot.distinct_across_boots.iter().zip(first).zip(second) {
+        match (a, b) {
+            (Some(a), Some(b)) if a != b => {}
+            (Some(a), Some(_)) => return Outcome::Fail(format!("/{pattern}/ captured {a:?} on both boots")),
+            _ => return Outcome::Fail(format!("/{pattern}/ captured nothing")),
+        }
+    }
+    Outcome::Pass
+}
+
 /// Run one case on one target. A boot case yields one result per `smp` entry.
 fn run_case(
     builder: &Builder,
     case: &Case,
     target: &'static Target,
+    firmware: &str,
     logs: &std::path::Path,
 ) -> Result<Vec<(String, Outcome, f32)>> {
     let started = Instant::now();
@@ -109,17 +165,8 @@ fn run_case(
     };
 
     // Build everything once, then boot it once per hart count.
-    let prepared = (|| -> Result<_> {
-        let mut features: Vec<String> = machine.kernel_features.iter().map(|f| f.to_string()).collect();
-        features.extend(boot.kernel_features.iter().cloned());
-        builder.cargo_build(target, "xous-kernel", &features)?;
-        builder.cargo_build(target, machine.loader_package, &[])?;
-        let programs = boot.programs.iter().map(|p| builder.program(target, p)).collect::<Result<Vec<_>>>()?;
-        let bundle = logs.join(format!("{}-{}.tar", case.name, target.name));
-        build::bundle(&bundle, &builder.artifact(target, "xous-kernel"), &programs)?;
-        Ok(bundle)
-    })();
-    let bundle = match prepared {
+    let bundle = logs.join(format!("{}-{}.tar", case.name, target.name));
+    let bundle = match prepare(builder, target, machine, &boot.programs, &boot.kernel_features, &bundle) {
         Ok(bundle) => bundle,
         Err(e) => return Ok(vec![(String::new(), Outcome::Fail(format!("{e:#}")), elapsed(started))]),
     };
@@ -129,9 +176,17 @@ fn run_case(
     for smp in &boot.smp {
         let run_started = Instant::now();
         let log = logs.join(format!("{}-{}-smp{}.log", case.name, target.name, smp));
-        let outcome = match qemu::run(machine, boot, *smp, &loader, &bundle, &log)? {
-            Verdict::Pass => Outcome::Pass,
+        let image = Image { machine, firmware, loader: &loader, bundle: &bundle, smp: *smp };
+        let outcome = match qemu::run(&image, boot, &log)? {
             Verdict::Fail(why) => Outcome::Fail(why),
+            Verdict::Pass(_) if boot.distinct_across_boots.is_empty() => Outcome::Pass,
+            Verdict::Pass(first) => {
+                let second_log = log.with_extension("second-boot.log");
+                match qemu::run(&image, boot, &second_log)? {
+                    Verdict::Fail(why) => Outcome::Fail(format!("second boot: {why}")),
+                    Verdict::Pass(second) => compare_boots(boot, &first, &second),
+                }
+            }
         };
         results.push((format!(", smp={smp}"), outcome, elapsed(run_started)));
     }

@@ -1,0 +1,8 @@
+description = "The loader refuses a program image with a segment in the kernel's address range"
+arch = ["rv64", "rv32"]
+kind = "boot"
+programs = ["log-server", { corrupt = "rng-test", with = { segment-vaddr = "0xffffffffffd00000" } }]
+timeout_secs = 20
+default_forbid = false      # the loader is supposed to panic here
+expect = ['loader64 PANIC', 'ELF segment 0xffffffffffd00000\S* is outside']
+forbid = ['KMAIN', 'entering kernel']

@@ -9,6 +9,7 @@ pub mod exception;
 pub mod irq;
 #[cfg_attr(target_arch = "riscv64", path = "mem_sv39.rs")]
 pub mod mem;
+mod mmu_flags;
 pub mod panic;
 pub mod process;
 pub mod syscall;

@@ -1,6 +1,6 @@
 # xous64 boot flow
 
-Status: working on QEMU `virt` (2026-09-18). `loader64/run-qemu.sh [init-elf ...]` builds and boots it.
+Status: working on QEMU `virt` (2026-09-18). `cargo testbench --run <program>...` builds and boots it.
 
 ```
 SBI firmware (OpenSBI / RustSBI), M-mode
@@ -39,8 +39,14 @@ execute-in-place from flash. Not needed on these targets.)
 - Kernel console = SBI debug console. The kernel owns no devices; the ns16550 belongs to userspace.
 - A kernel panic powers the machine off through SBI SRST, so test runs terminate.
 
+## Hardening
+- The kernel RNG is keyed from `/chosen/rng-seed` (`Seed` tag). Without one the kernel prints a loud
+  warning, which the test bench treats as a failure.
+- Every ELF segment and entry point is range-checked: programs must lie in the user area, the kernel
+  in the kernel area. Kernel tables are shared by all address spaces, so this is not just hygiene.
+- **No secure boot.** Stock Xous verifies ed25519 signatures on its images; the bundle is unverified.
+
 ## Not done yet
 - `env` block for processes (loader passes 0) and `.eh_frame` reporting in `IniE` (needed by `std`).
-- `/chosen/rng-seed` -> kernel RNG seed.
 - Handing the DTB to a userspace device manager.
 - Secondary harts are left parked in the firmware.

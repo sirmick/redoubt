@@ -13,7 +13,18 @@ use crate::paging::{AddressSpace, Pte};
 use crate::PAGE_SIZE;
 
 /// Map every `PT_LOAD` segment of `image` into `space` and return the entry point.
-pub fn load_elf(alloc: &mut PageAllocator, space: &AddressSpace, pid: u8, image: &[u8], user: bool) -> usize {
+///
+/// Every segment, and the entry point, must lie inside `allowed`. Without this a program
+/// image could ask to be mapped over the kernel: the kernel's tables are shared by every
+/// address space, so that would reach far beyond the process being loaded.
+pub fn load_elf(
+    alloc: &mut PageAllocator,
+    space: &AddressSpace,
+    pid: u8,
+    image: &[u8],
+    allowed: core::ops::Range<usize>,
+    user: bool,
+) -> usize {
     let elf = ElfBytes::<LittleEndian>::minimal_parse(image).expect("invalid ELF");
     let segments = elf.segments().expect("ELF has no program headers");
 
@@ -26,6 +37,13 @@ pub fn load_elf(alloc: &mut PageAllocator, space: &AddressSpace, pid: u8, image:
         }
 
         let vaddr = segment.p_vaddr as usize;
+        let segment_end = vaddr.checked_add(segment.p_memsz as usize).expect("ELF segment wraps the address space");
+        assert!(
+            allowed.contains(&vaddr) && segment_end <= allowed.end && segment.p_filesz <= segment.p_memsz,
+            "ELF segment {vaddr:#x}..{segment_end:#x} is outside {:#x}..{:#x}",
+            allowed.start,
+            allowed.end
+        );
         let file = &image[segment.p_offset as usize..][..segment.p_filesz as usize];
         let first_page = vaddr & !(PAGE_SIZE - 1);
         let end = vaddr + segment.p_memsz as usize;
@@ -48,5 +66,7 @@ pub fn load_elf(alloc: &mut PageAllocator, space: &AddressSpace, pid: u8, image:
             }
         }
     }
-    elf.ehdr.e_entry as usize
+    let entry = elf.ehdr.e_entry as usize;
+    assert!(allowed.contains(&entry), "ELF entry point {entry:#x} is outside the allowed range");
+    entry
 }

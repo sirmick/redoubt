@@ -48,4 +48,21 @@ In-guest programs print through `log-server` (`test_programs::Logger`) and finis
 
 ## Poking at it by hand
 
-    loader64/run-qemu.sh target/riscv64imac-unknown-none-elf/release/uart-echo     # Ctrl-A X to quit
+    cargo testbench --run uart-echo                   # console on this terminal; Ctrl-A X quits
+    cargo testbench --run log-server ipc-client --smp 4
+    cargo testbench --run path/to/some.elf
+
+## Other firmware
+
+`--firmware <image>` replaces QEMU's bundled OpenSBI for a test run or for `--run`, e.g. a RustSBI
+Prototyper build. See "Firmware" in `planning/xous64/PLAN.md` for the current state.
+
+## Hostile inputs
+
+A program entry can be a good binary that the bench corrupts before injecting it:
+
+    programs = ["log-server", { corrupt = "rng-test", with = { segment-vaddr = "0xffffffffffd00000" } }]
+
+`with` is `segment-vaddr` or `entry`. Cases that expect a deliberate refusal set `default_forbid = false`
+and list what must not happen instead (`forbid = ['KMAIN']`). `distinct_across_boots = ['id: (.*)']`
+boots twice and requires the captured text to differ.

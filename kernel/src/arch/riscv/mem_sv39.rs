@@ -13,27 +13,13 @@
 use ::riscv::register::satp;
 use xous_kernel::{MemoryFlags, PID, arch::*};
 
+pub use super::mmu_flags::MMUFlags;
+use super::mmu_flags::{translate_flags, untranslate_flags};
 use crate::arch::process::InitialProcess;
 use crate::mem::MemoryManager;
 
 extern "C" {
     pub fn flush_mmu();
-}
-
-bitflags! {
-    pub struct MMUFlags: usize {
-        const NONE      = 0b00_0000_0000;
-        const VALID     = 0b00_0000_0001;
-        const R         = 0b00_0000_0010;
-        const W         = 0b00_0000_0100;
-        const X         = 0b00_0000_1000;
-        const USER      = 0b00_0001_0000;
-        const GLOBAL    = 0b00_0010_0000;
-        const A         = 0b00_0100_0000;
-        const D         = 0b00_1000_0000;
-        const S         = 0b01_0000_0000; // Shared page
-        const P         = 0b10_0000_0000; // swaP
-    }
 }
 
 const RWX: usize = 0b1110;
@@ -156,41 +142,6 @@ impl core::fmt::Debug for MemoryMapping {
             root_from_satp(self.satp),
         )
     }
-}
-
-fn translate_flags(req_flags: MemoryFlags) -> MMUFlags {
-    let mut flags = MMUFlags::NONE;
-    if req_flags & xous_kernel::MemoryFlags::R == xous_kernel::MemoryFlags::R {
-        flags |= MMUFlags::R;
-    }
-    if req_flags & xous_kernel::MemoryFlags::W == xous_kernel::MemoryFlags::W {
-        flags |= MMUFlags::W;
-    }
-    if req_flags & xous_kernel::MemoryFlags::X == xous_kernel::MemoryFlags::X {
-        flags |= MMUFlags::X;
-    }
-    if req_flags & xous_kernel::MemoryFlags::P == xous_kernel::MemoryFlags::P {
-        flags |= MMUFlags::P;
-    }
-    flags
-}
-
-fn untranslate_flags(req_flags: usize) -> MemoryFlags {
-    let req_flags = MMUFlags::from_bits_truncate(req_flags);
-    let mut flags = xous_kernel::MemoryFlags::FREE;
-    if req_flags & MMUFlags::R == MMUFlags::R {
-        flags |= xous_kernel::MemoryFlags::R;
-    }
-    if req_flags & MMUFlags::W == MMUFlags::W {
-        flags |= xous_kernel::MemoryFlags::W;
-    }
-    if req_flags & MMUFlags::X == MMUFlags::X {
-        flags |= xous_kernel::MemoryFlags::X;
-    }
-    if req_flags & MMUFlags::P == MMUFlags::P {
-        flags |= xous_kernel::MemoryFlags::P;
-    }
-    flags
 }
 
 /// Controls MMU configurations.
