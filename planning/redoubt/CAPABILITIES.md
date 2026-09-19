@@ -26,7 +26,7 @@ The kernel knows processes, handles and resource containers. Nothing about users
   to be told.
 - **Leases** are revocation on a timer (a lease service holds the revoker).
 
-## Layer 2: principals (policy, in Elixir)
+## Layer 2: principals (policy, in the steward, a Rust server)
 - A **principal** is a named, accountable identity: an authentication method, a root capability set
   (namespace and service grants), and an audit identity. Humans and agents are the same kind of
   principal; they differ in authentication and default policy, not mechanism.
