@@ -340,6 +340,11 @@ impl Literals {
     }
 
     /// Whether this snapshot has every chunk `other` has.
+    /// How many chunks there are.
+    pub fn chunks(&self) -> usize {
+        self.0.len()
+    }
+
     fn covers(&self, other: &Literals) -> bool {
         Arc::ptr_eq(&self.0, &other.0) || self.0.len() >= other.0.len()
     }
