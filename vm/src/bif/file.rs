@@ -66,6 +66,11 @@ pub fn name2native(c: &mut Ctx, a: &[Term]) -> R {
     Ok(Term::binary(&bytes))
 }
 
+/// A file name argument (string, deep list, binary or atom) as UTF-8 bytes.
+pub(crate) fn name_bytes(t: &Term) -> Option<Vec<u8>> {
+    native_name(t)
+}
+
 fn native_name(t: &Term) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     let mut work = alloc::vec![t];
@@ -489,29 +494,32 @@ pub fn advise(c: &mut Ctx, a: &[Term]) -> R {
     done(c, h.map(|_| ()))
 }
 
+/// The whole file at `path` (already resolved), if it is at most `max` bytes.
+pub fn read_whole_file(f: &mut dyn Files, path: &str, max: usize) -> Result<Vec<u8>, FileError> {
+    let size = f.info(path, true)?.size;
+    if size > max as u64 {
+        return Err(FileError::Einval);
+    }
+    let h = f.open(path, OpenMode { read: true, ..OpenMode::default() })?;
+    let mut out = Vec::new();
+    let r = loop {
+        match f.read(h, 1 << 16) {
+            Ok(d) if d.is_empty() => break Ok(out),
+            Ok(d) if out.len() + d.len() > max => break Err(FileError::Einval),
+            Ok(d) => out.extend_from_slice(&d),
+            Err(e) => break Err(e),
+        }
+    };
+    f.close(h);
+    r
+}
+
 /// `read_file_nif(Path)`: the whole file. Files larger than a binary may be are `enomem`
 /// in BEAM; here `einval` (the file is not read at all).
 pub fn read_file(c: &mut Ctx, a: &[Term]) -> R {
     let max = c.sys.limits.max_binary_bits / 8;
     with_path(c, &a[0], |c, p| {
-        let r = files(c).and_then(|f| {
-            let size = f.info(p, true)?.size;
-            if size > max as u64 {
-                return Err(FileError::Einval);
-            }
-            let h = f.open(p, OpenMode { read: true, ..OpenMode::default() })?;
-            let mut out = Vec::new();
-            let r = loop {
-                match f.read(h, 1 << 16) {
-                    Ok(d) if d.is_empty() => break Ok(out),
-                    Ok(d) if out.len() + d.len() > max => break Err(FileError::Einval),
-                    Ok(d) => out.extend_from_slice(&d),
-                    Err(e) => break Err(e),
-                }
-            };
-            f.close(h);
-            r
-        });
+        let r = files(c).and_then(|f| read_whole_file(f, p, max));
         Ok(match r {
             Ok(d) => ok_with(c, Term::binary(&d)),
             Err(e) => error(c, e),

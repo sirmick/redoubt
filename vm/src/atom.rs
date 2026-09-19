@@ -22,6 +22,12 @@ impl Atom {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// A number that identifies this atom (its allocation: atoms are interned and never freed),
+    /// for cheap keys.
+    pub fn id(&self) -> usize {
+        Rc::as_ptr(&self.0) as *const u8 as usize
+    }
 }
 
 impl PartialEq for Atom {

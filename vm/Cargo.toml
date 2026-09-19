@@ -15,3 +15,5 @@ libm = "0.2"
 ryu = "1"
 # Pure-Rust deflate/inflate (zlib format): compressed external terms and the zlib module.
 miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
+# RustCrypto MD5: module checksums (BEAM identifies funs by them) and erlang:md5/1.
+md-5 = { version = "0.11", default-features = false }

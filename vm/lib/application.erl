@@ -91,6 +91,7 @@ start_loaded(App) ->
             case proplists:get_value(mod, Spec) of
                 undefined -> started(App, undefined);
                 {Mod, Args} ->
+                    kernel_services(),
                     try Mod:start(normal, Args) of
                         {ok, Pid} -> started(App, Pid);
                         {ok, Pid, _State} -> started(App, Pid);
@@ -99,6 +100,20 @@ start_loaded(App) ->
                     catch C:R:St -> {error, {{C, R, St}, {Mod, start, [normal, Args]}}}
                     end
             end
+    end.
+
+%% The kernel application's servers that other applications call, started the first time an
+%% application with a callback module starts (BEAM starts them at boot): erl_signal_server,
+%% the event manager for OS signals (there are none here, but Elixir registers handlers), and
+%% global_name_server, for {global, Name} registration within this one node.
+kernel_services() ->
+    case whereis(erl_signal_server) of
+        undefined -> {ok, _} = gen_event:start({local, erl_signal_server}), ok;
+        _ -> ok
+    end,
+    case whereis(global_name_server) of
+        undefined -> {ok, _} = global:start(), ok;
+        _ -> ok
     end.
 
 started(App, Pid) ->
@@ -230,8 +245,17 @@ get_all_key(App) ->
     end.
 
 %% No application masters, so a process's application is unknown.
+%% The application a process or module belongs to: for a module, the loaded application whose
+%% specification lists it. Processes are not tracked (there are no application masters).
 get_application() -> undefined.
-get_application(_) -> undefined.
+get_application(Module) when is_atom(Module) ->
+    Owners = [App || {App, Spec} <- maps:to_list(loaded()),
+                     lists:member(Module, proplists:get_value(modules, Spec, []))],
+    case Owners of
+        [App | _] -> {ok, App};
+        [] -> undefined
+    end;
+get_application(_Pid) -> undefined.
 
 which_applications() ->
     [ensure_loaded(A) || {A, _} <- running()],

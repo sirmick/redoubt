@@ -1,10 +1,11 @@
 //! `beamlet`: run BEAM code on a POSIX host.
 //!
-//!     beamlet [-pa DIR]... [--root DIR] MODULE [FUNCTION]
+//!     beamlet [-pa DIR]... [--root DIR] MODULE [FUNCTION [ARG...]]
 //!     beamlet --check FILE.beam...      validate files with the loader and report errors
 //!
 //! Loads modules on demand from the `-pa` directories (in order), calls `MODULE:FUNCTION()`
-//! (default `start`) in a new process, and prints its result with `~w` formatting:
+//! (default `start`) in a new process, or `MODULE:FUNCTION([ARG, ...])` with the arguments as
+//! strings when there are any, and prints its result with `~w` formatting:
 //! the returned term, or `{'EXCEPTION',Class,Reason}`. The differential test harness compares
 //! this line with what the real BEAM prints for the same call.
 //!
@@ -144,7 +145,7 @@ impl Platform for Posix {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: beamlet [-pa DIR]... [--root DIR] MODULE [FUNCTION]");
+    eprintln!("usage: beamlet [-pa DIR]... [--root DIR] MODULE [FUNCTION [ARG...]]");
     ExitCode::from(2)
 }
 
@@ -192,9 +193,10 @@ fn main() -> ExitCode {
             _ => positional.push(a),
         }
     }
-    let (module, function) = match positional.as_slice() {
-        [m] => (m.clone(), "start".to_string()),
-        [m, f] => (m.clone(), f.clone()),
+    let (module, function, args) = match positional.as_slice() {
+        [m] => (m.clone(), "start".to_string(), None),
+        [m, f] => (m.clone(), f.clone(), None),
+        [m, f, rest @ ..] => (m.clone(), f.clone(), Some(rest.to_vec())),
         _ => return usage(),
     };
 
@@ -205,14 +207,32 @@ fn main() -> ExitCode {
         Box::leak([beamlet_crypto::NATIVES, beamlet_re::NATIVES].concat().into_boxed_slice());
     let config = beamlet_vm::vm::Config { natives, ..Default::default() };
     let mut vm = Vm::with_config(Box::new(platform), config);
-    let pid = match vm.spawn(&module, &function, Vec::new()) {
+    let string = |s: &str| Term::list(s.chars().map(|c| Term::Int(c as i64)).collect::<Vec<_>>());
+    let call_args = match args {
+        Some(a) => vec![Term::list(a.iter().map(|s| string(s)).collect::<Vec<_>>())],
+        None => Vec::new(),
+    };
+    let pid = match vm.spawn(&module, &function, call_args) {
         Ok(pid) => pid,
         Err(e) => {
             println!("{}", exception(&mut vm, e.class, e.reason));
             return ExitCode::SUCCESS;
         }
     };
+    // BEAMLET_PROFILE=N: print the N hottest places (sampled once per time slice) at exit.
+    let profile = std::env::var("BEAMLET_PROFILE").ok().and_then(|n| n.parse::<usize>().ok());
+    if profile.is_some() {
+        vm.enable_profile();
+    }
     let result = vm.run(pid);
+    if let Some(n) = profile {
+        let samples = vm.profile();
+        let total: u64 = samples.iter().map(|s| s.0).sum();
+        eprintln!("profile: {total} samples");
+        for (count, place) in samples.iter().take(n) {
+            eprintln!("{:6.2}% {count:6} {place}", 100.0 * *count as f64 / total.max(1) as f64);
+        }
+    }
     // The result goes on a line of its own, even after a prompt.
     if mid_line.get() {
         println!();

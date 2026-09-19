@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Run Elixir's own test suite (lib/elixir/test/elixir from the pinned Elixir's sources) on
+# beamlet, one file per VM, and summarise.
+#
+#   tools/elixir-tests [FILE...]      default: every *_test.exs under the test directory
+#
+# Needs a checkout of the pinned Elixir version (ELIXIR_SRC, default ../beam-ref/elixir-<v>).
+# Output per file goes to build/elixir-tests/<file>.out.
+set -uo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+. "$root/tools/env.sh"
+version="$(elixir --short-version 2>/dev/null || elixir -e 'IO.write System.version()')"
+src="${ELIXIR_SRC:-$root/../beam-ref/elixir-$version}"
+testdir="lib/elixir/test/elixir"   # run from lib/elixir, as Elixir's Makefile does
+[ -d "$src/$testdir" ] || { echo "no Elixir $version sources at $src" >&2; exit 2; }
+otp_lib="$(dirname "$(dirname "$(command -v erl)")")/lib"
+elixir_lib="$(dirname "$(dirname "$(command -v elixir)")")/lib"
+path=""
+for app in stdlib kernel compiler crypto public_key asn1 ssl ssh erts syntax_tools tools parsetools; do
+    path="$path -pa $(ls -d "$otp_lib"/$app-*/ebin)"
+done
+for app in elixir logger eex iex ex_unit; do path="$path -pa $elixir_lib/$app/ebin"; done
+out="$root/build/elixir-tests"; mkdir -p "$out"
+erlc -o "$out" "$root/tools/exunit.erl"
+cargo build --quiet --release --manifest-path "$root/Cargo.toml" -p beamlet
+files=("$@")
+if [ ${#files[@]} -eq 0 ]; then
+    while IFS= read -r f; do files+=("${f#"$src/$testdir/"}"); done < <(find "$src/$testdir" -name '*_test.exs' | sort)
+fi
+pass=0; fail=0
+for f in "${files[@]}"; do
+    log="$out/${f//\//_}.out"
+    timeout "${TEST_TIMEOUT:-300}" "$root/target/release/beamlet" --root "$src" -pa "$out" $path \
+        exunit run /lib/elixir test/elixir/test_helper.exs "test/elixir/$f" > "$log" 2>&1
+    result="$(tail -n 1 "$log")"
+    if [[ "$result" =~ failures\ =\>\ 0, ]]; then
+        pass=$((pass + 1)); printf 'ok    %s  %s\n' "$f" "$result"
+    else
+        fail=$((fail + 1)); printf 'FAIL  %s  %s\n' "$f" "$(printf '%s' "$result" | cut -c1-150)"
+    fi
+done
+echo "elixir-tests: $pass files passed, $fail failed"

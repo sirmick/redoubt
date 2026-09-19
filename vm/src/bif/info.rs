@@ -32,7 +32,7 @@ pub fn processes(c: &mut Ctx, _a: &[Term]) -> R {
 /// One `process_info` item, or `None` for an item this VM does not track. Takes the atom
 /// table and the process separately so it works both for the running process (borrowed by the
 /// caller) and for one in the process table.
-fn info_item(table: &mut AtomTable, atoms: &Atoms, p: &Process, running: bool, item: &Term) -> Option<Term> {
+fn info_item(table: &mut AtomTable, atoms: &Atoms, p: &Process, running: bool, depth: usize, item: &Term) -> Option<Term> {
     // `{dictionary, Key}`: one entry of the process dictionary.
     if let Some([Term::Atom(k), key]) = item.as_tuple() {
         if k.as_str() == "dictionary" {
@@ -67,29 +67,15 @@ fn info_item(table: &mut AtomTable, atoms: &Atoms, p: &Process, running: bool, i
         ),
         "group_leader" => Term::Pid(p.group_leader.unwrap_or(p.pid)),
         "reductions" => Term::Int(p.reductions as i64),
-        // The current function, then the functions that will be returned to (no locations).
-        "current_stacktrace" => {
-            let conts = core::iter::once(&p.pc).chain(p.cp.iter()).chain(p.frames.iter().rev().filter_map(|f| f.cp.as_ref()));
-            let entries: Vec<Term> = conts
-                .take(8)
-                .filter_map(|cp| {
-                    let f = cp.module.function_at(cp.pc.saturating_sub(1))?;
-                    Some(Term::tuple(alloc::vec![
-                        Term::Atom(cp.module.name.clone()),
-                        Term::Atom(f.name.clone()),
-                        Term::Int(f.arity as i64),
-                        Term::Nil,
-                    ]))
-                })
-                .collect();
-            Term::list(entries)
-        }
+        // The current function, then the functions that will be returned to.
+        "current_stacktrace" => crate::interp::current_stacktrace(atoms, p, depth),
         "stack_size" => Term::Int((p.stack.len() + p.frames.len()) as i64),
         // Measured now (see `memory`): the words the process holds, each shared term once.
         "heap_size" | "total_heap_size" => Term::Int(crate::memory::process(p, u64::MAX).words as i64),
         "memory" => Term::Int((crate::memory::process(p, u64::MAX).words * 8) as i64),
         "min_heap_size" => Term::Int(233),
         "max_heap_size" => super::proc::max_heap_term(table, atoms, p.max_heap),
+        "priority" => atom(p.priority.name()),
         "error_handler" => match &p.error_handler {
             Some(m) => Term::Atom(m.clone()),
             None => atom("error_handler"),
@@ -120,6 +106,7 @@ pub fn process_info(c: &mut Ctx, a: &[Term]) -> R {
     let single = matches!(a[1], Term::Atom(_) | Term::Tuple(_));
     let items: Vec<Term> = if single { alloc::vec![a[1].clone()] } else { a[1].to_vec().ok_or_else(|| c.badarg())? };
     let running = pid == c.p.pid;
+    let depth = c.sys.backtrace_depth;
     let sys = &mut *c.sys;
     let (table, atoms) = (&mut sys.atom_table, &sys.atoms);
     let p: &Process = if running {
@@ -132,7 +119,7 @@ pub fn process_info(c: &mut Ctx, a: &[Term]) -> R {
     };
     let mut out = Vec::new();
     for item in &items {
-        let value = info_item(table, atoms, p, running, item)
+        let value = info_item(table, atoms, p, running, depth, item)
             .ok_or_else(|| Exception::error(Term::Atom(atoms.badarg.clone())))?;
         // Asked for alone, an unnamed process's `registered_name` is just `[]`.
         if single && item.is_atom(&table.intern("registered_name").expect("short atom")) && matches!(value, Term::Nil) {
@@ -277,6 +264,7 @@ pub fn get_module_info(c: &mut Ctx, a: &[Term]) -> R {
             "attributes" => decode(c, &m.attributes),
             "compile" => decode(c, &m.compile_info),
             "nifs" => Term::Nil,
+            "md5" => Term::binary(&m.md5),
             _ => return None,
         })
     };
@@ -284,7 +272,7 @@ pub fn get_module_info(c: &mut Ctx, a: &[Term]) -> R {
         Some(Term::Atom(key)) => item(c, key.as_str()).ok_or_else(|| c.badarg()),
         Some(_) => Err(c.badarg()),
         None => {
-            let keys = ["module", "exports", "attributes", "compile"];
+            let keys = ["module", "exports", "attributes", "compile", "md5"];
             let mut out = Vec::new();
             for k in keys {
                 let v = item(c, k).expect("known key");
@@ -540,6 +528,45 @@ pub fn crc32(c: &mut Ctx, a: &[Term]) -> R {
     let bin = super::erlang::iolist_to_binary(c, core::slice::from_ref(data))?;
     let Term::Bits(b) = bin else { return Err(c.badarg()) };
     Ok(Term::Int(crc32_update(old, &b.to_bytes()) as i64))
+}
+
+/// `erlang:md5(IoData)`.
+pub fn md5(c: &mut Ctx, a: &[Term]) -> R {
+    use md5::Digest;
+    let data = a[0].iodata_bytes().ok_or_else(|| c.badarg())?;
+    Ok(Term::binary(&md5::Md5::digest(&data)))
+}
+
+/// An MD5 context as `md5_init/0` hands it out: the hash's serialized state, a binary.
+fn md5_context(c: &Ctx, t: &Term) -> Result<md5::Md5, Exception> {
+    use md5::digest::common::hazmat::{SerializableState, SerializedState};
+    let Term::Bits(b) = t else { return Err(c.badarg()) };
+    let bytes = b.to_bytes();
+    let state = SerializedState::<md5::Md5>::try_from(&bytes[..]).map_err(|_| c.badarg())?;
+    md5::Md5::deserialize(&state).map_err(|_| c.badarg())
+}
+
+fn md5_state(h: &md5::Md5) -> Term {
+    use md5::digest::common::hazmat::SerializableState;
+    Term::binary(&h.serialize())
+}
+
+pub fn md5_init(_c: &mut Ctx, _a: &[Term]) -> R {
+    use md5::Digest;
+    Ok(md5_state(&md5::Md5::new()))
+}
+
+pub fn md5_update(c: &mut Ctx, a: &[Term]) -> R {
+    use md5::Digest;
+    let mut h = md5_context(c, &a[0])?;
+    h.update(a[1].iodata_bytes().ok_or_else(|| c.badarg())?);
+    Ok(md5_state(&h))
+}
+
+pub fn md5_final(c: &mut Ctx, a: &[Term]) -> R {
+    use md5::Digest;
+    let h = md5_context(c, &a[0])?;
+    Ok(Term::binary(&h.finalize()))
 }
 
 /// Adler-32 (RFC 1950), as zlib.
