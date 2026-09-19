@@ -139,6 +139,7 @@ impl NineError {
     pub const NOT_SUPPORTED: NineError = NineError("not supported");
     pub const NO_AUTH: NineError = NineError("authentication not required");
     pub const NO_CONNECTION: NineError = NineError("no such connection");
+    pub const NO_ID: NineError = NineError("no connection id");
     pub const NO_MEMORY: NineError = NineError("out of memory");
     pub const PERMISSION: NineError = NineError("permission denied");
     pub const TOO_DEEP: NineError = NineError("path too deep");
@@ -730,15 +731,16 @@ impl<S: FileServer> NineServer<S> {
     }
 
     /// A random connection id no live connection has: unpredictable, never a counter
-    /// (CONTAINMENT.md), so it tells nobody how many others were made.
+    /// (CONTAINMENT.md), so it tells nobody how many others were made. `NO_ID` if the kernel's
+    /// randomness fails, or if every draw collided, which needs a broken CSPRNG.
     fn fresh_id(&self, kernel: &mut impl Minter) -> Result<u64, NineError> {
         for _ in 0..4 {
-            let id = kernel.random().map_err(|_| NineError::NO_MEMORY)?;
+            let id = kernel.random().map_err(|_| NineError::NO_ID)?;
             if id != 0 && !self.minted.iter().any(|m| m.id == id) {
                 return Ok(id);
             }
         }
-        Err(NineError::NO_MEMORY)
+        Err(NineError::NO_ID)
     }
 
     /// `disconnect(id)` from `caller`: frees the connection and every connection minted under

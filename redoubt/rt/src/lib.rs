@@ -24,16 +24,19 @@
 //! widths; nothing here depends on the machine's word size.
 //!
 //! Pending questions are built as recommended, each at one site marked `QUESTIONS.md N
-//! (pending)`: 108 here, 112 in [`startup`], 113 and 114 in [`server::ninep`].
+//! (pending)`: 108 and 117 here, 112 in [`startup`], 113, 114 and 118 in [`server::ninep`].
 
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]
 
 extern crate alloc;
 
-// QUESTIONS.md 108 (pending): the layouts of the `startup` message (INIT.md) and of
-// `ninep_common` (NAMESPACES.md) are the design editor's, used as generated from the notes.
-// WP-R1b added `new_connection`'s `quota` and the `refused` error, which byte quotas need.
+// QUESTIONS.md 108 and 117 (pending): the layouts of the `startup` message (INIT.md) and of
+// `ninep_common` (NAMESPACES.md) are the design editor's, used as generated from the notes,
+// with WP-R1b's two additions (117): `new_connection`'s `quota`, which a granter needs to set a
+// root's byte quota, and the error `refused` (code 3), which `new_connection` needs for a root
+// that is not there or a cap that is reached. 117 also covers the fair share counting a
+// connection a client minted for itself in the share it came from ([`server::ninep`]).
 pub mod client;
 pub mod handle;
 pub mod heap;
