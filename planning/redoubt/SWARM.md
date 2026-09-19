@@ -39,6 +39,7 @@ merged; the waves show what can run together.
 | --- | --- |
 | 1 | M0 model, W1 codecs, L1 littlefs, T1 bench extensions, A1 ABI crate |
 | 2 | K1 budgets and handles; R1 runtime (after A1, W1); L1 and T1 continue |
+| 2b | design review of answers 1-55; A2 ABI update; W2 generator update |
 | 3 | K2 endpoints and messages; host-side parts of D1/D2/D3 against R1 |
 | 4 | K3 devices and interrupts; R4 bootfsd and consoled (once K3 lands) |
 | 5 | K4 process creation; B1 beamlet platform; D1 blkd; D3 netd and ipd; S1 keyd |
@@ -51,15 +52,17 @@ merged; the waves show what can run together.
 ## Claims
 | Package | State | Branch | Notes |
 | --- | --- | --- | --- |
-| M0 | review | wp-m0 | |
+| M0 | review | wp-m0 | round 3; also carries WP-M1 (answers 28-55) |
 | W1 | merged | wp-w1 | d52896bee |
 | L1 | merged | wp-l1 | 25ab39296 |
 | T1 | merged | wp-t1 | 987bacbed |
 | A1 | merged | wp-a1 | 44f1780a1 |
 | K0 | merged | wp-k0 | f7b9fdd16 |
 | T1b | merged | wp-t1b | 6cd067a39 |
-| R1 | review | wp-r1 | fix round |
+| R1 | review | wp-r1 | fix round; also carries WP-R1b (answers 39-42, 50-53) |
 | K1 | building | wp-k1 | kernel track |
+| A2 | waiting | | ABI update for answers 28-55; after the design review round; before K2 |
+| W2 | ready | | generator: handle kinds, Malformed = 1 |
 | all others | waiting | | see BUILD-PLAN.md "Needs" |
 
 States: `waiting` (needs not merged), `ready`, `building`, `review`, `merged`.
