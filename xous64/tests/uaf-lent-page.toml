@@ -1,0 +1,8 @@
+description = "A process that dies while a page is lent out must not let that frame be reused under the borrower"
+arch = ["rv64"]
+kind = "boot"
+programs = ["log-server", "uaf-holder", "uaf-victim", "uaf-grabber"]
+timeout_secs = 30
+# The holder prints "UAF TEST FAILED" if it sees the grabber's data; that contains
+# "TEST FAILED", which the bench always forbids. So the safe outcome is the only pass.
+expect = ['\[holder\] holding page', '\[grabber\] stamped', 'UAF TEST PASSED']

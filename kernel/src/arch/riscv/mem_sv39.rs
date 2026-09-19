@@ -268,6 +268,16 @@ impl MemoryMapping {
         }
     }
 
+    /// Call `f` with the physical frame of every page this address space has lent out
+    /// (a leaf with the shared bit set).
+    pub fn for_each_lent_frame(&self, mut f: impl FnMut(usize)) {
+        self.for_each_user_leaf(|_virt, pte| {
+            if pte.has(MMUFlags::S) {
+                f(pte.phys());
+            }
+        });
+    }
+
     #[allow(dead_code)]
     pub fn phys_to_virt(&self, phys: usize) -> Result<Option<usize>, xous_kernel::Error> {
         if phys & (PAGE_SIZE - 1) != 0 {
@@ -330,6 +340,9 @@ impl MemoryMapping {
 }
 
 pub const DEFAULT_MEMORY_MAPPING: MemoryMapping = MemoryMapping { satp: 0 };
+
+/// Call `f` with the physical frame of every page the current process has lent out.
+pub fn for_each_lent_frame(f: impl FnMut(usize)) { MemoryMapping::current().for_each_lent_frame(f); }
 
 /// When we allocate pages, they are owned by the kernel so we can zero
 /// them out.  After that is done, hand the page to the user.

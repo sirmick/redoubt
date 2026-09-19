@@ -1123,41 +1123,68 @@ impl MemoryManager {
     /// memory from the process, it only marks it as free.
     /// This is very unsafe because the memory can immediately be re-allocated
     /// to another process, so only call this as part of destroying a process.
-    pub unsafe fn release_all_memory_for_process(&mut self, _pid: PID) {
-        // FIXME(xous64): `page_is_lent` takes a virtual address, but is given a physical one
-        // here (inherited from upstream). See planning/xous64/PLAN.md, "lent pages at exit".
-        // release the main memory allocs
-        #[cfg(baremetal)]
-        for idx in 0..self.allocations.len() {
-            // If this address has been allocated to this process, consider
-            // freeing it or reparenting it.
-            #[cfg(not(feature = "swap"))]
-            if self.allocations[idx] == Some(_pid) {
-                let phys_addr = self.allocation_offset_to_address(idx).unwrap();
-                // If the page is lent, reparent it to PID 1 so it will get freed when it
-                // is returned. Otherwise mark it as free, which allows it to be re-allocated.
-                let lent = crate::arch::mem::page_is_lent(phys_addr as *mut u8);
-                self.allocations[idx] = if lent { PID::new(1) } else { None };
+    /// The index into `extra_allocations` for a physical address in one of the extra
+    /// (device) regions, if any.
+    #[cfg(baremetal)]
+    fn extra_index(&self, phys: usize) -> Option<usize> {
+        let mut base = 0;
+        for region in self.extra_regions {
+            let start = region.mem_start as usize;
+            let size = region.mem_size as usize;
+            if phys >= start && phys < start + size {
+                return Some(base + (phys - start) / PAGE_SIZE);
             }
-            #[cfg(feature = "swap")]
-            if self.allocations[idx].is_pid(_pid) {
-                let phys_addr = self.allocation_offset_to_address(idx).unwrap();
-                if crate::arch::mem::page_is_lent(phys_addr as *mut u8) {
-                    self.allocations[idx].reparent(PID::new(1).unwrap());
-                } else {
+            base += size / PAGE_SIZE;
+        }
+        None
+    }
+
+    /// Free all memory that belongs to a process. This does not unmap the memory from the
+    /// process, it only marks it as free. Because a freed frame can be re-allocated
+    /// immediately, only call this as part of destroying a process.
+    pub unsafe fn release_all_memory_for_process(&mut self, pid: PID) {
+        #[cfg(baremetal)]
+        {
+            let kernel = PID::new(1).unwrap();
+
+            // Pass 1: a frame this process has lent out is still mapped in the borrower.
+            // Reparent it to the kernel so the frame is not reused while the borrower holds
+            // it; it is freed when the borrower returns it. Which frames are lent is read
+            // from this process's own page table (its address space is active here), where
+            // the "shared" bit actually lives -- not guessed from a physical address.
+            crate::arch::mem::for_each_lent_frame(|phys| {
+                if self.is_main_memory(phys as *mut u8) {
+                    let idx = (phys - self.ram_start) / PAGE_SIZE;
+                    #[cfg(not(feature = "swap"))]
+                    {
+                        self.allocations[idx] = Some(kernel);
+                    }
+                    #[cfg(feature = "swap")]
+                    self.allocations[idx].reparent(kernel);
+                } else if let Some(idx) = self.extra_index(phys) {
+                    self.extra_allocations[idx] = Some(kernel);
+                }
+            });
+
+            // Pass 2: free every frame still owned by this process.
+            for idx in 0..self.allocations.len() {
+                #[cfg(not(feature = "swap"))]
+                if self.allocations[idx] == Some(pid) {
+                    self.allocations[idx] = None;
+                }
+                #[cfg(feature = "swap")]
+                if self.allocations[idx].is_pid(pid) {
                     self.allocations[idx].update(None, None);
                 }
             }
-        }
-        // release the extra allocs
-        #[cfg(baremetal)]
-        for idx in 0..self.extra_allocations.len() {
-            if self.extra_allocations[idx] == Some(_pid) {
-                let phys_addr = self.allocation_offset_to_address_extra(idx).unwrap();
-                let lent = crate::arch::mem::page_is_lent(phys_addr as *mut u8);
-                self.extra_allocations[idx] = if lent { PID::new(1) } else { None };
+            for idx in 0..self.extra_allocations.len() {
+                if self.extra_allocations[idx] == Some(pid) {
+                    self.extra_allocations[idx] = None;
+                }
             }
         }
+        #[cfg(not(baremetal))]
+        let _ = pid;
     }
 
     /// Adjust the flags on the given memory range. This allows for stripping flags from a memory
