@@ -217,6 +217,28 @@ Later:
 - [ ] Linux + xous64 partition under OpenSBI domains on QEMU, then the Orange Pi RV2.
 - [ ] Retarget `std::fs` on the Xous target from PDDB to the fs server.
 
+## Decisions without their own note
+- **No dynamic linking** (2026-09-18). Native code is statically linked, signed as one binary, and
+  fixed at build time. Shared-at-runtime code is a server, not a library. The launcher shares
+  read-only pages of identical ELFs. The dynamic part of the system is the BEAM: modules load at
+  runtime through beamlet's `Platform::load_module`, where signatures are checked.
+
+## Design backlog (not yet designed), in the order we intend to settle them
+Kernel-interface-bound first:
+1. **Capability mechanism** (next; note: `CAPABILITIES.md`): unforgeable handles instead of 128-bit
+   password SIDs, transfer, badges, attenuation, revocation, death notification.
+2. **Principals: users and AI agents as first-class, equal principals**; delegation, leases,
+   powerbox escalation, audit (same note).
+3. **Resource accounting and quotas** (memory, handles, threads, IRQ rates); today there are none.
+4. **Startup block format** (namespace table + granted capabilities).
+5. **Init and supervision**: who is first, who holds root capabilities and when they are dropped.
+6. **Scheduling**: preemption, priorities (drivers/router over apps), then SMP.
+System structure: keys and root of trust (key server, sealed storage, disk key); signed A/B updates,
+rollback protection, key rotation.
+Services: entropy server, wall clock + NTP (Elixir), DNS (`inet_res`), log/audit server, userspace
+debug server, terminals for SSH sessions, packaging and reproducible builds, Rust `std` target.
+Later: desktop (virtio-gpu/input, display protocol, maybe a 9P tree as Plan 9's rio), SMP (Phase 3).
+
 ## Phase 3: SMP
 - Note: OpenSBI picks the boot hart at random (observed hart 2 of 4). Never assume hart 0.
 - [ ] Secondary hart bring-up via SBI HSM; per-hart trap stack; per-hart current (PID, TID) via `sscratch`.
