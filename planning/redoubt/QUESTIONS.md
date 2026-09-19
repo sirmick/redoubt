@@ -5,7 +5,7 @@ so each needs your decision; the answer goes into the named note with a HISTORY.
 **Rec** is the orchestrator's recommendation. Reply with numbers, e.g. "all Rec except 7: ...".
 
 **1-101 answered 2026-09-19** (ANSWERS.md, four tranches; each "Answered" line says where the
-answer now lives). **Open: 102-115** (at the end: K1's handle limit, and the design editor's choices in applying 56-101). The round-4 answers revised 56 (handle
+answer now lives). **Open: 102-116** (at the end: K1's handle limit, and the design editor's choices in applying 56-101). The round-4 answers revised 56 (handle
 kinds are checked by use) and replaced 57 and 58 (by 82).
 
 ## Kernel: messages and IPC (KERNEL-SPEC.md)
@@ -867,3 +867,12 @@ point to change the IPC design. Several items interact; the cross-references say
      *Rec:* don't allocate while decoding. A record page must already be backed, otherwise
      `InvalidArgument`, and the runtime touches its record buffers first. The decoding stage then
      never allocates, and the error rows stay as written.
+
+## From the ABI update (WP-A2)
+
+116. **`MAX_HANDLES` at delivery.** Question 102 sets the limit, but not what happens when a
+     message's handles would take the receiver past it, or a reply's handles would take the
+     caller past it.
+     *Rec:* the same as any cost the receiver can't pay (answer 72): a message is `Refused` to its
+     sender. A reply's handles that don't fit give the caller `OutOfMemory` (question 107's rule),
+     and the reply is still delivered, without them.
