@@ -169,7 +169,7 @@ fn scope(c: &Ctx, opts: Option<&Term>, size: usize) -> Result<(usize, usize), Ex
     let mut range = (0, size);
     for o in opts.to_vec().ok_or_else(|| c.badarg())? {
         match o.as_tuple() {
-            Some([tag, part]) if matches!(tag, Term::Atom(a) if a.as_str() == "scope") => match part.as_tuple() {
+            Some([Term::Atom(tag), part]) if tag.as_str() == "scope" => match part.as_tuple() {
                 Some([s, l]) => range = part_range(c, s, l, size)?,
                 _ => return Err(c.badarg()),
             },
