@@ -492,9 +492,12 @@ pub fn binary_to_list3(c: &mut Ctx, a: &[Term]) -> R {
 pub fn bitstring_to_list(c: &mut Ctx, a: &[Term]) -> R {
     let b = bits(c, &a[0])?;
     let whole = b.len / 8;
-    let items: Vec<Term> = (0..whole).map(|i| Term::Int(b.byte(i) as i64)).collect();
-    let tail = if b.len % 8 == 0 { Term::Nil } else { Term::bits(b.slice(whole * 8, b.len % 8)) };
-    Ok(Term::list_with_tail(items, tail))
+    let mut items: Vec<Term> = (0..whole).map(|i| Term::Int(b.byte(i) as i64)).collect();
+    // Leftover bits are the last element of a proper list: [1, 2, <<3:4>>].
+    if b.len % 8 != 0 {
+        items.push(Term::bits(b.slice(whole * 8, b.len % 8)));
+    }
+    Ok(Term::list(items))
 }
 
 /// Flatten an iolist (bytes 0..255, binaries and nested iolists; a binary may end a list) into
@@ -720,7 +723,8 @@ pub fn term_to_binary(c: &mut Ctx, a: &[Term]) -> R {
             }
         }
     }
-    let bytes = crate::etf::encode_compressed(&a[0], level).map_err(|_| c.badarg())?;
+    let sys = &*c.sys;
+    let bytes = crate::etf::encode_compressed(&a[0], level, &|m| sys.loaded_md5(m)).map_err(|_| c.badarg())?;
     Ok(Term::binary(&bytes))
 }
 

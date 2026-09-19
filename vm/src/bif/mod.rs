@@ -15,9 +15,11 @@ use crate::vm::System;
 mod arith;
 mod atomics;
 mod binary;
+mod code;
 mod erlang;
 mod ets;
 mod file;
+pub(crate) use file::read_whole_file;
 mod info;
 mod lists;
 mod maps;
@@ -272,6 +274,16 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("erlang", "group_leader", 0, proc::group_leader),
     ("erlang", "group_leader", 2, proc::set_group_leader),
     ("net_kernel", "dflag_unicode_io", 1, proc::dflag_unicode_io),
+    // There is no distribution: this node is never alive and no other node ever connects, so
+    // subscriptions to node events are accepted and never fire.
+    ("net_kernel", "monitor_nodes", 1, proc::ok_any),
+    ("net_kernel", "monitor_nodes", 2, proc::ok_any),
+    ("erlang", "nodes", 0, proc::nil_any),
+    ("erlang", "nodes", 1, proc::nil_any),
+    ("erlang", "nodes", 2, proc::nil_any),
+    ("erlang", "is_alive", 0, proc::false_1),
+    ("erlang", "monitor_node", 2, proc::monitor_node),
+    ("erlang", "monitor_node", 3, proc::monitor_node),
     ("io", "printable_range", 0, proc::printable_range),
     ("erlang", "start_timer", 3, proc::start_timer),
     ("erlang", "start_timer", 4, proc::start_timer),
@@ -433,6 +445,7 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("erlang", "halt", 1, proc::halt),
     ("erlang", "halt", 2, proc::halt),
     ("erlang", "statistics", 1, proc::statistics),
+    ("erlang", "system_flag", 2, proc::system_flag),
     ("erlang", "registered", 0, proc::registered),
     ("erlang", "get_keys", 0, proc::get_keys),
     ("erlang", "get_keys", 1, proc::get_keys),
@@ -450,6 +463,10 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("erlang", "term_to_iovec", 2, erlang::term_to_iovec),
     ("erlang", "external_size", 1, erlang::external_size),
     ("erlang", "external_size", 2, erlang::external_size),
+    ("erlang", "md5", 1, info::md5),
+    ("erlang", "md5_init", 0, info::md5_init),
+    ("erlang", "md5_update", 2, info::md5_update),
+    ("erlang", "md5_final", 1, info::md5_final),
     ("erlang", "adler32", 1, info::adler32),
     ("erlang", "adler32", 2, info::adler32),
     ("erlang", "adler32_combine", 3, info::adler32_combine),
@@ -458,6 +475,8 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("persistent_term", "put_new", 2, proc::pt_put_new),
     ("persistent_term", "info", 0, proc::pt_info),
     ("os", "getpid", 0, info::os_getpid),
+    // The platform delivers no OS signals; handlers can be registered and never fire.
+    ("os", "set_signal", 2, proc::ok_2),
     ("os", "env", 0, info::os_env),
     ("os", "perf_counter", 0, proc::monotonic_time),
     ("string", "list_to_float", 1, erlang::string_list_to_float),
@@ -478,6 +497,25 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("erlang", "delete_module", 1, info::delete_module),
     ("erlang", "check_old_code", 1, proc::false_1),
     ("code", "ensure_modules_loaded", 1, info::ensure_modules_loaded),
+    ("code", "add_patha", 1, code::add_patha),
+    ("code", "add_pathz", 1, code::add_pathz),
+    ("code", "add_path", 1, code::add_pathz),
+    ("code", "add_patha", 2, code::add_patha),
+    ("code", "add_pathz", 2, code::add_pathz),
+    ("code", "add_path", 2, code::add_pathz),
+    ("code", "add_pathsa", 1, code::add_pathsa),
+    ("code", "add_pathsz", 1, code::add_pathsz),
+    ("code", "add_paths", 1, code::add_pathsz),
+    ("code", "add_pathsa", 2, code::add_pathsa),
+    ("code", "add_pathsz", 2, code::add_pathsz),
+    ("code", "add_paths", 2, code::add_pathsz),
+    ("code", "del_path", 1, code::del_path),
+    ("code", "del_paths", 1, code::del_paths),
+    ("code", "get_path", 0, code::get_path),
+    ("code", "set_path", 1, code::set_path),
+    ("code", "set_path", 2, code::set_path),
+    ("code", "which", 1, code::which),
+    ("code", "all_available", 0, code::all_available),
     ("erlang", "pid_to_list", 1, info::pid_to_list),
     ("erlang", "list_to_pid", 1, info::list_to_pid),
     ("erlang", "ref_to_list", 1, info::ref_to_list),
@@ -559,6 +597,13 @@ impl Default for Registry {
 impl Ctx<'_> {
     pub fn badarg(&self) -> Exception {
         Exception::error(Term::Atom(self.sys.atoms.badarg.clone()))
+    }
+
+    /// `badarg`, with the `cause` BEAM gives in its `error_info` (see [`Exception::cause`]).
+    pub fn badarg_because(&mut self, cause: &str) -> Exception {
+        let mut e = self.badarg();
+        e.cause = Some(self.atom(cause));
+        e
     }
 
     pub fn badarith(&self) -> Exception {

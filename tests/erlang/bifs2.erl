@@ -47,5 +47,6 @@ start() ->
     Misc = {erlang:append([1], [2]), erlang:subtract([1, 2, 3], [2]), N1 < N2, PT, PTBad,
             binary:referenced_byte_size(binary:part(<<"0123456789">>, 2, 3)),
             binary:referenced_byte_size(binary:part(list_to_binary(lists:duplicate(100, $x)), 2, 70))},
+    Bits = [bitstring_to_list(B) || B <- [<<>>, <<1, 2>>, <<1:3>>, <<1, 2, 3:4>>, <<255, 7:7>>]],
     {AG, Ex, CE1, CE2, Wrap, UW, Bad, Max, Min, atomics:get(A, 1), Counts, Sums, Floats,
-     Tuples, Keys, Ext, Reg, Stats, Misc}.
+     Tuples, Keys, Ext, Reg, Stats, Misc, Bits}.

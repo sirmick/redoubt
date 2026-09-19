@@ -17,8 +17,32 @@ pub fn error(_c: &mut Ctx, a: &[Term]) -> R {
 }
 
 /// `error/2` and `error/3`: the extra arguments only annotate the stack trace.
-pub fn error2(_c: &mut Ctx, a: &[Term]) -> R {
-    Err(Exception::error(a[0].clone()))
+/// `error(Reason, Args)` and `error(Reason, Args, Options)`. As in BEAM, the trace starts at the
+/// calling function, showing `Args` (a list, or `none` for just the arity), with the
+/// `error_info` option (used by `erl_error` and Elixir to explain the error) added to its
+/// location.
+pub fn error2(c: &mut Ctx, a: &[Term]) -> R {
+    let mut e = Exception::error(a[0].clone());
+    let trace = crate::interp::caller_stacktrace(c.sys, c.p);
+    let error_info = a.get(2).and_then(|opts| opts.to_vec()).and_then(|opts| {
+        opts.into_iter().find(|o| matches!(o.as_tuple(), Some([Term::Atom(k), _]) if k.as_str() == "error_info"))
+    });
+    e.trace = Some(match (&trace, a[1].to_vec()) {
+        (Term::Cons(cell), args) => match cell.head.as_tuple() {
+            Some([m, f, arity, location]) => {
+                let args = match args {
+                    Some(list) => Term::list(list),
+                    None => arity.clone(),
+                };
+                let mut loc = location.to_vec().unwrap_or_default();
+                loc.extend(error_info);
+                Term::cons(Term::tuple(alloc::vec![m.clone(), f.clone(), args, Term::list(loc)]), cell.tail.clone())
+            }
+            _ => trace.clone(),
+        },
+        _ => trace.clone(),
+    });
+    Err(e)
 }
 
 pub fn exit(_c: &mut Ctx, a: &[Term]) -> R {
@@ -37,7 +61,7 @@ pub fn raise(c: &mut Ctx, a: &[Term]) -> R {
         t if t.is_atom(&c.sys.atoms.throw) => Class::Throw,
         _ => return Ok(Term::Atom(c.sys.atoms.badarg.clone())),
     };
-    Err(Exception { class, reason: a[1].clone(), trace: Some(a[2].clone()) })
+    Err(Exception::with_trace(class, a[1].clone(), a[2].clone()))
 }
 
 // ---- identity ----
@@ -376,6 +400,31 @@ pub fn process_flag(c: &mut Ctx, a: &[Term]) -> R {
         let old = core::mem::replace(&mut c.p.trap_exit, new);
         return Ok(c.bool(old));
     }
+    // Flags that tune BEAM's implementation (distribution buffering, heap sizing, call
+    // saving, trace hiding) and change nothing here: accepted, with BEAM's default as the old
+    // value.
+    if let Term::Atom(f) = &a[0] {
+        let old = match f.as_str() {
+            "async_dist" | "sensitive" => Some(c.bool(false)),
+            "save_calls" => Some(Term::Int(0)),
+            "message_queue_data" => Some(c.atom("on_heap")),
+            "min_heap_size" => Some(Term::Int(233)),
+            "min_bin_vheap_size" => Some(Term::Int(46422)),
+            "fullsweep_after" => Some(Term::Int(65535)),
+            _ => None,
+        };
+        if let Some(old) = old {
+            return Ok(old);
+        }
+    }
+    if matches!(&a[0], Term::Atom(f) if f.as_str() == "priority") {
+        let new = match &a[1] {
+            Term::Atom(p) => crate::process::Priority::from_name(p.as_str()).ok_or_else(|| c.badarg())?,
+            _ => return Err(c.badarg()),
+        };
+        let old = core::mem::replace(&mut c.p.priority, new);
+        return Ok(c.atom(old.name()));
+    }
     if matches!(&a[0], Term::Atom(f) if f.as_str() == "error_handler") {
         let Term::Atom(new) = &a[1] else { return Err(c.badarg()) };
         let new = (new.as_str() != "error_handler").then(|| new.clone());
@@ -711,7 +760,7 @@ pub fn module_loaded(c: &mut Ctx, a: &[Term]) -> R {
 /// and ignored: this VM has no per-process heaps and one priority.
 fn spawn_with(c: &mut Ctx, entry: crate::process::Cp, args: Vec<Term>, opts: &Term) -> R {
     let opts = opts.to_vec().ok_or_else(|| c.badarg())?;
-    let (mut link, mut monitor, mut max_heap) = (false, false, None);
+    let (mut link, mut monitor, mut max_heap, mut priority) = (false, false, None, None);
     for o in &opts {
         match o {
             Term::Atom(a) if a.as_str() == "link" => link = true,
@@ -719,6 +768,10 @@ fn spawn_with(c: &mut Ctx, entry: crate::process::Cp, args: Vec<Term>, opts: &Te
             Term::Tuple(t) if !t.is_empty() && matches!(&t[0], Term::Atom(a) if a.as_str() == "monitor") => monitor = true,
             Term::Tuple(t) if t.len() == 2 && matches!(&t[0], Term::Atom(a) if a.as_str() == "max_heap_size") => {
                 max_heap = Some(parse_max_heap(c, &t[1])?);
+            }
+            Term::Tuple(t) if t.len() == 2 && matches!(&t[0], Term::Atom(a) if a.as_str() == "priority") => {
+                let Term::Atom(p) = &t[1] else { return Err(c.badarg()) };
+                priority = Some(crate::process::Priority::from_name(p.as_str()).ok_or_else(|| c.badarg())?);
             }
             Term::Tuple(t) if t.len() == 2 => {}
             _ => return Err(c.badarg()),
@@ -728,8 +781,13 @@ fn spawn_with(c: &mut Ctx, entry: crate::process::Cp, args: Vec<Term>, opts: &Te
         Term::Pid(p) => p,
         _ => unreachable!("do_spawn returns a pid"),
     };
-    if let (Some(m), Some(p)) = (max_heap, c.sys.procs.get_mut(pid)) {
-        p.max_heap = m;
+    if let Some(p) = c.sys.procs.get_mut(pid) {
+        if let Some(m) = max_heap {
+            p.max_heap = m;
+        }
+        if let Some(pr) = priority {
+            p.priority = pr;
+        }
     }
     if !monitor {
         return Ok(Term::Pid(pid));
@@ -800,6 +858,7 @@ pub fn system_info(c: &mut Ctx, a: &[Term]) -> R {
             Term::tuple(alloc::vec![c.atom("max_heap_size"), m])
         }
         "ets_limit" => Term::Int(crate::ets::MAX_TABLES as i64),
+        "backtrace_depth" => Term::Int(c.sys.backtrace_depth as i64),
         _ => return Err(c.badarg()),
     })
 }
@@ -948,6 +1007,55 @@ pub fn pt_info(c: &mut Ctx, _a: &[Term]) -> R {
     Ok(Term::map(map))
 }
 
+/// `erlang:system_flag(Flag, Value)`: `backtrace_depth` takes effect; the other flags that
+/// portable code sets are accepted and report BEAM's defaults as their old values.
+pub fn system_flag(c: &mut Ctx, a: &[Term]) -> R {
+    let Term::Atom(flag) = &a[0] else { return Err(c.badarg()) };
+    Ok(match flag.as_str() {
+        "backtrace_depth" => {
+            let n = a[1].as_usize().ok_or_else(|| c.badarg())?.min(1024);
+            Term::Int(core::mem::replace(&mut c.sys.backtrace_depth, n) as i64)
+        }
+        "schedulers_online" | "dirty_cpu_schedulers_online" => Term::Int(1),
+        "multi_scheduling" => c.atom("enabled"),
+        "min_heap_size" | "min_bin_vheap_size" => Term::Int(233),
+        "fullsweep_after" => Term::Int(65535),
+        "trace_control_word" => Term::Int(0),
+        "time_offset" => c.atom("final"),
+        "scheduler_wall_time" | "microstate_accounting" | "system_logger" => c.bool(false),
+        "max_heap_size" => {
+            let m = max_heap_term(&mut c.sys.atom_table, &c.sys.atoms, MaxHeap::default());
+            Term::tuple(alloc::vec![c.atom("max_heap_size"), m])
+        }
+        _ => return Err(c.badarg()),
+    })
+}
+
+pub fn ok_any(c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(c.ok())
+}
+
+pub fn nil_any(_c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(Term::Nil)
+}
+
+/// `monitor_node(Node, Flag)`: with no distribution every other node is down at once, so the
+/// caller gets `{nodedown, Node}` straight away (BEAM does the same for an unreachable node).
+pub fn monitor_node(c: &mut Ctx, a: &[Term]) -> R {
+    let Term::Atom(_) = &a[0] else { return Err(c.badarg()) };
+    if a[1].is_atom(&c.sys.atoms.true_) {
+        let msg = Term::tuple(alloc::vec![c.atom("nodedown"), a[0].clone()]);
+        if !crate::vm::deliver(c.p, msg, &mut c.sys.run_queue, c.sys.limits.max_mailbox) {
+            c.p.pending_exit = Some(crate::vm::mailbox_full(&mut c.sys.atom_table, &c.sys.atoms));
+        }
+    }
+    Ok(c.bool(true))
+}
+
+pub fn ok_2(c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(c.ok())
+}
+
 pub fn false_1(c: &mut Ctx, _a: &[Term]) -> R {
     Ok(c.bool(false))
 }
@@ -1018,7 +1126,15 @@ pub fn fun_info(c: &mut Ctx, a: &[Term]) -> R {
         (Fun::Local { .. }, "type") => c.atom("local"),
         (Fun::Export { .. }, "env") => Term::Nil,
         (Fun::Local { env, .. }, "env") => Term::list(env.clone()),
-        (Fun::Local { index, .. }, "index") => Term::Int(*index as i64),
+        (Fun::Local { index, .. }, "index" | "new_index") => Term::Int(*index as i64),
+        (Fun::Local { uniq, .. }, "uniq") => Term::Int(*uniq as i64),
+        (Fun::Local { module, .. }, "new_uniq") => Term::binary(&c.sys.loaded_md5(module).unwrap_or([0; 16])),
+        // Funs do not record their creator; BEAM reports the same for funs it did not track.
+        (Fun::Local { .. }, "pid") => Term::Pid(Pid { serial: 0, index: 0 }),
+        (Fun::Local { .. }, "refc") => Term::Int(1),
+        (Fun::Export { .. }, "pid" | "index" | "new_index" | "uniq" | "new_uniq" | "refc") => {
+            Term::Atom(c.sys.atoms.undefined.clone())
+        }
         _ => return Err(c.badarg()),
     };
     Ok(Term::tuple(alloc::vec![a[1].clone(), value]))

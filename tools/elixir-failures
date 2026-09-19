@@ -1,0 +1,23 @@
+#!/usr/bin/env python3
+"""Summarise failures from tools/elixir-tests output: for each failing test, the test name and
+the first line of its error. Usage: tools/elixir-failures [FILE.out...] (default: all)."""
+import glob, re, sys, os
+
+ansi = re.compile(r'\x1b\[[0-9;]*m')
+files = sys.argv[1:] or sorted(glob.glob(os.path.join(os.path.dirname(__file__), '..', 'build', 'elixir-tests', '*.out')))
+for path in files:
+    text = ansi.sub('', open(path, errors='replace').read())
+    lines = text.splitlines()
+    last = lines[-1] if lines else ''
+    if re.search(r'failures => 0,', last):
+        continue
+    print('==', os.path.basename(path)[:-4])
+    if 'EXCEPTION' in last:
+        msgs = [bytes(int(x) for x in m.split(',')).decode('utf8', 'replace') for m in re.findall(r'<<([0-9,]+)>>', last)]
+        print('   load failed:', last[:160], '|', ' | '.join(m[:200] for m in msgs))
+        continue
+    for i, l in enumerate(lines):
+        m = re.match(r'\s+\d+\) (?:test|doctest|property) (.*)', l)
+        if m:
+            detail = next((x.strip() for x in lines[i + 2:i + 8] if x.strip() and not x.strip().startswith('code:')), '')
+            print('   -', m.group(1)[:90], '::', detail[:140])

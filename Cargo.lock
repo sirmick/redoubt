@@ -117,6 +117,7 @@ version = "0.1.0"
 dependencies = [
  "beamlet-vm",
  "regex-automata",
+ "regex-syntax",
 ]
 
 [[package]]
@@ -124,6 +125,7 @@ name = "beamlet-vm"
 version = "0.1.0"
 dependencies = [
  "libm",
+ "md-5",
  "miniz_oxide",
  "num-bigint",
  "num-integer",

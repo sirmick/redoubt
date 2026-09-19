@@ -97,6 +97,9 @@ pub struct Module {
     /// The `Attr` and `CInf` chunks (external term format), for `module_info/1`.
     pub attributes: Vec<u8>,
     pub compile_info: Vec<u8>,
+    /// BEAM's module checksum (`module_info(md5)`), which also identifies its funs in the
+    /// external term format.
+    pub md5: [u8; 16],
 }
 
 /// The `Line` chunk: which source line each `line` instruction marks.

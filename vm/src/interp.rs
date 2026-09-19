@@ -18,9 +18,6 @@ use crate::process::{Class, Cp, Exception, Frame, Handler, Process};
 use crate::term::{Bits, Fun, Map, MapKey, MatchState, Term};
 use crate::vm::{System, Target};
 
-/// Stack trace entries recorded per exception, as BEAM's default `backtrace_depth`.
-const TRACE_DEPTH: usize = 8;
-
 pub enum Stop {
     /// Out of reductions; run again later.
     Yield,
@@ -304,12 +301,36 @@ fn run_native(
             let raiser = m == &sys.atoms.erlang
                 && matches!(f.as_str(), "error" | "exit" | "throw" | "raise" | "nif_error");
             if e.trace.is_none() && !raiser {
-                let top = Term::tuple(alloc::vec![Term::Atom(m.clone()), Term::Atom(f.clone()), Term::list(args.to_vec()), Term::Nil]);
+                // As BEAM does for its BIFs, name the module that can explain the error
+                // (`erl_error` and Elixir turn `badarg` into "not a list" and the like).
+                let location = match (e.class, error_formatter(m.as_str())) {
+                    (crate::process::Class::Error, Some(formatter)) => {
+                        let mut info = crate::term::Map::new();
+                        info.insert(crate::term::MapKey(Term::Atom(sys.atom("module"))), Term::Atom(sys.atom(formatter)));
+                        if let Some(cause) = e.cause.take() {
+                            info.insert(crate::term::MapKey(Term::Atom(sys.atom("cause"))), cause);
+                        }
+                        Term::list(alloc::vec![Term::tuple(alloc::vec![Term::Atom(sys.atom("error_info")), Term::map(info)])])
+                    }
+                    _ => Term::Nil,
+                };
+                let top = Term::tuple(alloc::vec![Term::Atom(m.clone()), Term::Atom(f.clone()), Term::list(args.to_vec()), location]);
                 e.trace = Some(Term::cons(top, stacktrace(sys, p, None)));
             }
             Err(Fault::Raise(e))
         }
     }
+}
+
+/// The module whose `format_error/2` explains errors from a native in `module`, as BEAM's
+/// `beam_common.c` assigns them.
+fn error_formatter(module: &str) -> Option<&'static str> {
+    Some(match module {
+        "erlang" | "erts_internal" | "atomics" | "counters" | "persistent_term" => "erl_erts_errors",
+        "code" | "os" => "erl_kernel_errors",
+        "binary" | "ets" | "lists" | "maps" | "math" | "re" | "unicode" => "erl_stdlib_errors",
+        _ => return None,
+    })
 }
 
 /// Call a native on x0.. and return its result.
@@ -328,9 +349,16 @@ pub(crate) fn fun_entry(sys: &mut System, fun: &Term, mut args: Vec<Term>) -> Re
         return Err(error_tuple(&sys.atoms.badarity, info));
     }
     match &**f {
-        Fun::Local { module, index, env, .. } => {
+        Fun::Local { module, index, env, uniq, arity } => {
             let m = sys.module(module).ok_or_else(|| Exception::error(Term::Atom(sys.atoms.undef.clone())))?;
-            let entry = m.funs.get(*index as usize).ok_or_else(|| error_tuple(&sys.atoms.badfun, fun.clone()))?.entry;
+            // A fun from another version of the module (or decoded from a binary) must match
+            // this version's fun table, or it is a bad fun.
+            let entry = m
+                .funs
+                .get(*index as usize)
+                .filter(|e| e.uniq == *uniq && e.num_free as usize == env.len() && e.arity == arity + e.num_free)
+                .ok_or_else(|| error_tuple(&sys.atoms.badfun, fun.clone()))?
+                .entry;
             args.extend(env.iter().cloned());
             Ok((Cp { module: m, pc: entry }, args))
         }
@@ -368,9 +396,12 @@ fn call_mfa_with(
     if arity > 255 {
         return Err(Fault::BadCode("arity above 255"));
     }
-    // erlang:apply/2,3 are control flow, not ordinary natives.
+    // erlang:apply/2,3 and erlang:hibernate/0,3 are control flow, not ordinary natives.
     if m == &sys.atoms.erlang && f.as_str() == "apply" && (arity == 2 || arity == 3) {
         return apply(sys, p, arity, kind);
+    }
+    if m == &sys.atoms.erlang && f.as_str() == "hibernate" && (arity == 0 || arity == 3) {
+        return hibernate(sys, p, arity, kind);
     }
     let target = match native {
         Some(n) => Some(Target::Native(n)),
@@ -423,11 +454,63 @@ fn call_mfa_with(
             let mut e = Exception::error(Term::Atom(sys.atoms.undef.clone()));
             // A tail call has already left the calling function, so the trace starts at its
             // caller (as in BEAM).
-            let rest = if kind == Kind::Call { stacktrace(sys, p, None) } else { continuations(sys, p, TRACE_DEPTH) };
+            let rest = if kind == Kind::Call { stacktrace(sys, p, None) } else { continuations(sys, p, sys.backtrace_depth) };
             e.trace = Some(Term::cons(missing, rest));
             Err(Fault::Raise(e))
         }
     }
+}
+
+/// `erlang:hibernate()`: wait until the mailbox has a message (any message, consuming none),
+/// then return `ok`. `erlang:hibernate(M, F, Args)`: the same, but the call stack is
+/// discarded and the process continues with `M:F(Args...)`. (BEAM's loader turns the call in
+/// `erlang:hibernate/0`'s own body into this; run literally, that body calls itself forever.)
+fn hibernate(sys: &mut System, p: &mut Process, arity: usize, kind: Kind) -> R<Flow> {
+    p.save = 0;
+    if arity == 0 {
+        p.x[0] = Term::Atom(sys.atoms.ok.clone());
+        let flow = match kind {
+            Kind::Call => Flow::Next,
+            Kind::Last => {
+                deallocate(p)?;
+                do_return(p)
+            }
+            Kind::Only => do_return(p),
+        };
+        return Ok(match flow {
+            Flow::Next => Flow::Stop(Stop::Wait),
+            other => other,
+        });
+    }
+    let badarg = || Fault::Raise(Exception::error(Term::Atom(sys.atoms.badarg.clone())));
+    let (Term::Atom(m), Term::Atom(f)) = (p.x[0].clone(), p.x[1].clone()) else { return Err(badarg()) };
+    let args = p.x[2].to_vec().filter(|a| a.len() <= 255).ok_or_else(badarg)?;
+    let Some(Target::Code(cp)) = sys.resolve(&m, &f, args.len() as u32) else {
+        return Err(Fault::Raise(Exception::error(Term::Atom(sys.atoms.undef.clone()))));
+    };
+    p.stack.clear();
+    p.frames.clear();
+    p.handlers.clear();
+    p.cp = None;
+    for (i, a) in args.into_iter().enumerate() {
+        p.x[i] = a;
+    }
+    p.pc = cp;
+    Ok(Flow::Stop(Stop::Wait))
+}
+
+/// `badarg` for an apply whose module or function is not an atom. As in BEAM, the trace starts
+/// with `erlang:apply/3` and its arguments.
+fn bad_apply(sys: &mut System, p: &Process, m: &Term, f: &Term, args: Term) -> Fault {
+    let mut e = Exception::error(Term::Atom(sys.atoms.badarg.clone()));
+    let head = Term::tuple(alloc::vec![
+        Term::Atom(sys.atoms.erlang.clone()),
+        Term::Atom(sys.atom("apply")),
+        Term::list(alloc::vec![m.clone(), f.clone(), args]),
+        Term::Nil,
+    ]);
+    e.trace = Some(Term::cons(head, stacktrace(sys, p, None)));
+    Fault::Raise(e)
 }
 
 /// `erlang:apply(Fun, Args)` or `erlang:apply(M, F, Args)` with its arguments in x0..
@@ -442,7 +525,8 @@ fn apply(sys: &mut System, p: &mut Process, arity: usize, kind: Kind) -> R<Flow>
         return call_fun(sys, p, &fun, args, kind);
     }
     let (Term::Atom(m), Term::Atom(f)) = (p.x[0].clone(), p.x[1].clone()) else {
-        return Err(Fault::Raise(Exception::error(Term::Atom(sys.atoms.badarg.clone()))));
+        let (m, f) = (p.x[0].clone(), p.x[1].clone());
+        return Err(bad_apply(sys, p, &m, &f, args_term));
     };
     let n = args.len();
     for (i, a) in args.into_iter().enumerate() {
@@ -508,12 +592,12 @@ fn cooked(raw: &Term) -> Term {
     }
 }
 
-fn trace_entry(sys: &mut System, m: &Module, pc: u32, args: Option<Term>) -> Option<Term> {
+fn trace_entry(atoms: &crate::atom::Atoms, m: &Module, pc: u32, args: Option<Term>) -> Option<Term> {
     let f = m.function_at(pc)?;
     let location = match m.location(pc) {
         Some((file, line)) => Term::list(alloc::vec![
-            Term::tuple(alloc::vec![Term::Atom(sys.atoms.file.clone()), file.clone()]),
-            Term::tuple(alloc::vec![Term::Atom(sys.atoms.line.clone()), Term::Int(line as i64)]),
+            Term::tuple(alloc::vec![Term::Atom(atoms.file.clone()), file.clone()]),
+            Term::tuple(alloc::vec![Term::Atom(atoms.line.clone()), Term::Int(line as i64)]),
         ]),
         None => Term::Nil,
     };
@@ -528,23 +612,59 @@ fn trace_entry(sys: &mut System, m: &Module, pc: u32, args: Option<Term>) -> Opt
 /// A stack trace: the current function, then the functions that will be returned to.
 fn stacktrace(sys: &mut System, p: &Process, args: Option<Term>) -> Term {
     let here = p.pc.pc.saturating_sub(1);
-    let head = trace_entry(sys, &p.pc.module, here, args);
-    let rest = continuations(sys, p, TRACE_DEPTH - usize::from(head.is_some()));
+    let head = trace_entry(&sys.atoms, &p.pc.module, here, args);
+    let rest = continuations(sys, p, sys.backtrace_depth.saturating_sub(usize::from(head.is_some())));
     match head {
         Some(h) => Term::cons(h, rest),
         None => rest,
     }
 }
 
+/// The stack trace of a native's caller, as an exception raised there would get it.
+pub(crate) fn caller_stacktrace(sys: &mut System, p: &Process) -> Term {
+    stacktrace(sys, p, None)
+}
+
 /// Up to `n` trace entries for the functions that will be returned to. Looks at no more frames
 /// than entries it keeps: the cost of raising must not grow with the depth of the stack.
 fn continuations(sys: &mut System, p: &Process, n: usize) -> Term {
+    continuation_entries(&sys.atoms, p, n)
+}
+
+fn continuation_entries(atoms: &crate::atom::Atoms, p: &Process, n: usize) -> Term {
     let conts = p.cp.iter().chain(p.frames.iter().rev().take(n).filter_map(|f| f.cp.as_ref()));
     let mut entries = Vec::new();
     for cp in conts.take(n) {
-        entries.extend(trace_entry(sys, &cp.module, cp.pc.saturating_sub(1), None));
+        entries.extend(trace_entry(atoms, &cp.module, cp.pc.saturating_sub(1), None));
     }
     Term::list(entries)
+}
+
+/// Where `p` is, as text: its current function and up to `depth - 1` callers.
+pub(crate) fn where_is(p: &Process, depth: usize) -> alloc::string::String {
+    let mut out = alloc::string::String::new();
+    let conts = core::iter::once(&p.pc).chain(p.cp.iter()).chain(p.frames.iter().rev().filter_map(|f| f.cp.as_ref()));
+    for (i, cp) in conts.take(depth).enumerate() {
+        let pc = if i == 0 { cp.pc } else { cp.pc.saturating_sub(1) };
+        if let Some(f) = cp.module.function_at(pc) {
+            if !out.is_empty() {
+                out.push_str(" < ");
+            }
+            out.push_str(&alloc::format!("{}:{}/{}", cp.module.name.as_str(), f.name.as_str(), f.arity));
+        }
+    }
+    out
+}
+
+/// `process_info(P, current_stacktrace)`: where `p` is, then what it will return to, with
+/// source locations, at most `n` entries.
+pub(crate) fn current_stacktrace(atoms: &crate::atom::Atoms, p: &Process, n: usize) -> Term {
+    let head = trace_entry(atoms, &p.pc.module, p.pc.pc.saturating_sub(1), None);
+    let rest = continuation_entries(atoms, p, n.saturating_sub(usize::from(head.is_some())));
+    match head {
+        Some(h) => Term::cons(h, rest),
+        None => rest,
+    }
 }
 
 /// Transfer control to the innermost handler, or end the process if there is none.
@@ -907,7 +1027,7 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
                 Some([c, t]) => (class_of(sys, c).unwrap_or(Class::Error), t.clone()),
                 _ => (Class::Error, raw.clone()),
             };
-            return Err(Fault::Raise(Exception { class, reason, trace: Some(trace) }));
+            return Err(Fault::Raise(Exception::with_trace(class, reason, trace)));
         }
         op::RAW_RAISE => {
             let class = if p.x[0].is_atom(&a.error) {
@@ -920,7 +1040,7 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
                 p.x[0] = Term::Atom(a.badarg.clone());
                 return Ok(Flow::Next);
             };
-            let e = Exception { class, reason: p.x[1].clone(), trace: Some(cooked(&p.x[2])) };
+            let e = Exception::with_trace(class, p.x[1].clone(), cooked(&p.x[2]));
             return Err(Fault::Raise(e));
         }
 
@@ -965,9 +1085,11 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
                 return Err(Fault::BadCode("apply arity"));
             }
             let (m, f) = (p.x[arity].clone(), p.x[arity + 1].clone());
-            let (Term::Atom(m), Term::Atom(f)) = (m, f) else {
-                return Err(Fault::Raise(Exception::error(Term::Atom(a.badarg.clone()))));
+            let (Term::Atom(m), Term::Atom(f)) = (&m, &f) else {
+                let args = Term::list(p.x[..arity].to_vec());
+                return Err(bad_apply(sys, p, &m, &f, args));
             };
+            let (m, f) = (m.clone(), f.clone());
             let kind = if ins.op == op::APPLY { Kind::Call } else { Kind::Last };
             return call_mfa(sys, p, &m, &f, arity, kind);
         }

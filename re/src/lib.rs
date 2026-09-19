@@ -186,11 +186,45 @@ fn translate(p: &str) -> String {
         } else if ch == '[' {
             in_class = true;
             class_start = i + 1 + usize::from(chars.get(i + 1) == Some(&'^'));
+        } else if ch == '{' {
+            // PCRE reads `{` as a quantifier only in `{n}`, `{n,}`, `{n,m}` or `{,m}`; anywhere
+            // else it is a literal brace, which Rust's syntax wants escaped.
+            match quantifier(&chars[i..]) {
+                Some((len, lower_missing)) => {
+                    out.push('{');
+                    if lower_missing {
+                        out.push('0');
+                    }
+                    out.extend(&chars[i + 1..i + len]);
+                    i += len;
+                }
+                None => {
+                    out.push_str("\\{");
+                    i += 1;
+                }
+            }
+            continue;
         }
         out.push(ch);
         i += 1;
     }
     out
+}
+
+/// If `s` starts with a PCRE counted quantifier, its length and whether its lower bound is
+/// missing (`{,m}`).
+fn quantifier(s: &[char]) -> Option<(usize, bool)> {
+    let close = s.iter().position(|&c| c == '}')?;
+    let body = &s[1..close];
+    let digits = |p: &[char]| p.iter().all(|c| c.is_ascii_digit());
+    let ok = match body.iter().position(|&c| c == ',') {
+        None => !body.is_empty() && digits(body),
+        Some(comma) => {
+            let (lo, hi) = (&body[..comma], &body[comma + 1..]);
+            digits(lo) && digits(hi) && (!lo.is_empty() || !hi.is_empty())
+        }
+    };
+    ok.then_some((close + 1, body.first() == Some(&',')))
 }
 
 fn build(pattern: &[u8], f: Flags) -> Result<Compiled, (String, usize)> {
@@ -217,6 +251,7 @@ fn build(pattern: &[u8], f: Flags) -> Result<Compiled, (String, usize)> {
         .ignore_whitespace(f.extended)
         .swap_greed(f.ungreedy)
         .crlf(f.crlf);
+    let original_len = pattern.chars().count();
     let pattern = translate(&pattern);
     let regex = Regex::builder()
         .syntax(cfg)
@@ -231,9 +266,39 @@ fn build(pattern: &[u8], f: Flags) -> Result<Compiled, (String, usize)> {
                 .dfa_size_limit(Some(NFA_SIZE_LIMIT)),
         )
         .build(&pattern)
-        .map_err(|e| (format!("{e}"), 0))?;
+        .map_err(|e| pcre_error(&e, original_len))?;
     let names = regex.group_info().pattern_names(regex_automata::PatternID::ZERO).map(|n| n.map(String::from)).collect();
     Ok(Compiled { regex, unicode: f.unicode, names })
+}
+
+/// A compile error as PCRE2 words it (programs match on these messages, e.g. Elixir's tests), with
+/// a position in the pattern: its end for unterminated constructs, as PCRE reports them, and
+/// otherwise just after the offending item (in the translated pattern; the two differ only
+/// where `translate` rewrote something before that point).
+fn pcre_error(e: &regex_automata::meta::BuildError, len: usize) -> (String, usize) {
+    use regex_syntax::ast::ErrorKind as K;
+    let Some(regex_syntax::Error::Parse(err)) = e.syntax_error() else {
+        return (format!("{e}"), 0);
+    };
+    // PCRE reports where it noticed the problem: just after the offending item, mostly.
+    let at = err.span().end.offset.min(len);
+    let (msg, pos) = match err.kind() {
+        K::ClassUnclosed => ("missing terminating ] for character class", len),
+        K::GroupUnclosed => ("missing closing parenthesis", len),
+        K::GroupUnopened => ("unmatched closing parenthesis", at),
+        K::RepetitionMissing => ("quantifier does not follow a repeatable item", (err.span().start.offset + 1).min(len)),
+        K::RepetitionCountInvalid => ("numbers out of order in {} quantifier", at.saturating_sub(1)),
+        K::RepetitionCountUnclosed | K::RepetitionCountDecimalEmpty => ("missing } after quantifier", at),
+        K::EscapeUnexpectedEof => ("\\ at end of pattern", len),
+        K::EscapeUnrecognized => ("unrecognized character follows \\", at),
+        K::ClassRangeInvalid => ("range out of order in character class", at),
+        K::GroupNameDuplicate { .. } => ("two named subpatterns have the same name (PCRE2_DUPNAMES not set)", (at + 1).min(len)),
+        K::GroupNameInvalid | K::GroupNameEmpty => ("subpattern name expected", at),
+        K::UnsupportedBackreference => ("backreferences are not supported", at),
+        K::UnsupportedLookAround => ("lookaround assertions are not supported", at),
+        _ => return (format!("{}", err.kind()), at),
+    };
+    (String::from(msg), pos)
 }
 
 fn error_tuple(c: &mut Ctx, msg: &str, pos: usize) -> Term {
@@ -593,5 +658,15 @@ mod tests {
         assert_eq!(translate("[a&&b]"), "[a&\\&b]");
         assert_eq!(translate("\\e\\h"), "\\x1B[ \\t]");
         assert_eq!(translate("a[b-c]d"), "a[b-c]d");
+    }
+
+    #[test]
+    fn braces_are_quantifiers_only_when_counted() {
+        assert_eq!(translate("a{2}b{2,}c{2,5}"), "a{2}b{2,}c{2,5}");
+        assert_eq!(translate("x{,3}"), "x{0,3}");
+        assert_eq!(translate("{atom, keyword}"), "\\{atom, keyword}");
+        assert_eq!(translate("%\\{\\}"), "%\\{\\}");
+        assert_eq!(translate("a{}b{,}c{x}"), "a\\{}b\\{,}c\\{x}");
+        assert_eq!(translate("[{]"), "[{]");
     }
 }

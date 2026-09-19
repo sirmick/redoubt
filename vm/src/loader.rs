@@ -142,7 +142,43 @@ pub fn load(bytes: &[u8], atoms: &mut AtomTable) -> Result<Module> {
 
     let attributes = chunk(b"Attr").unwrap_or(&[]).to_vec();
     let compile_info = chunk(b"CInf").unwrap_or(&[]).to_vec();
-    Ok(Module { name, imports, exports, funs, literals, strings, code, functions, lines, body_natives: Vec::new(), attributes, compile_info })
+    let md5 = checksum(&chunk);
+    Ok(Module {
+        name,
+        imports,
+        exports,
+        funs,
+        literals,
+        strings,
+        code,
+        functions,
+        lines,
+        body_natives: Vec::new(),
+        attributes,
+        compile_info,
+        md5,
+    })
+}
+
+/// BEAM's module checksum (`beam_file.c`): MD5 over the chunks that define the code, in a fixed
+/// order, with each fun's `OldUniq` zeroed (it came from an old, endian-dependent hash).
+fn checksum<'a>(chunk: &impl Fn(&[u8; 4]) -> Option<&'a [u8]>) -> [u8; 16] {
+    use md5::Digest;
+    let mut h = md5::Md5::new();
+    for id in [b"AtU8", b"Code", b"StrT", b"ImpT", b"ExpT"] {
+        h.update(chunk(id).unwrap_or(&[]));
+    }
+    if let Some(funt) = chunk(b"FunT").filter(|d| d.len() >= 4) {
+        h.update(&funt[..4]);
+        for entry in funt[4..].chunks_exact(24) {
+            h.update(&entry[..20]);
+            h.update([0u8; 4]);
+        }
+    }
+    for id in [b"LitT", b"Meta", b"Recs", b"DbgB"] {
+        h.update(chunk(id).unwrap_or(&[]));
+    }
+    h.finalize().into()
 }
 
 /// Parse the `Line` chunk (see `parse_line_chunk` in BEAM's `beam_file.c`).

@@ -104,8 +104,12 @@ fn inflate(input: &[u8], size: usize) -> Result<(Vec<u8>, usize), EtfError> {
 
 /// Encode `t` compressed at zlib level `level` (0-9), as `term_to_binary(T, [compressed])`
 /// does: only if that makes it smaller.
-pub fn encode_compressed(t: &Term, level: u8) -> Result<Vec<u8>, EncodeError> {
-    let plain = encode(t)?;
+pub fn encode_compressed(
+    t: &Term,
+    level: u8,
+    md5_of: &dyn Fn(&crate::atom::Atom) -> Option<[u8; 16]>,
+) -> Result<Vec<u8>, EncodeError> {
+    let plain = encode_with(t, md5_of)?;
     if level == 0 {
         return Ok(plain);
     }
@@ -285,8 +289,33 @@ impl<'a> Reader<'a, '_> {
                 }
                 Term::Ref(crate::term::Ref((ids[0] & 0x3ffff) | (ids[1] << 18) | (ids[2] << 50)))
             }
-            // Ports, local funs, the old float format, compressed terms and distribution
-            // headers are not accepted.
+            // NEW_FUN_EXT. In safe mode a fun is refused: it names code to run.
+            112 if !self.safe => {
+                let start = self.pos;
+                let size = self.u32()?;
+                let arity = self.u8()? as u32;
+                self.take(16)?; // the module's MD5; the fun is checked against the module when called
+                let index = self.u32()? as u32;
+                let num_free = self.u32()?;
+                self.check_count(num_free, 1)?;
+                let module = self.atom(depth)?;
+                let (Term::Int(_), Term::Int(uniq)) = (self.term(depth + 1)?, self.term(depth + 1)?) else {
+                    return Err(EtfError::Malformed);
+                };
+                if !matches!(self.term(depth + 1)?, Term::Pid(_)) {
+                    return Err(EtfError::Malformed);
+                }
+                let mut env = Vec::with_capacity(num_free);
+                for _ in 0..num_free {
+                    env.push(self.term(depth + 1)?);
+                }
+                if self.pos - start != size {
+                    return Err(EtfError::Malformed);
+                }
+                let uniq = u32::try_from(uniq).map_err(|_| EtfError::Malformed)?;
+                Term::Fun(Rc::new(Fun::Local { module, index, arity, env, uniq }))
+            }
+            // Ports, the old float format and distribution headers are not accepted.
             other => return Err(EtfError::BadTag(other)),
         })
     }
@@ -316,9 +345,30 @@ pub enum EncodeError {
 pub const NODE: &str = "nonode@nohost";
 
 pub fn encode(t: &Term) -> Result<Vec<u8>, EncodeError> {
+    encode_with(t, &|_| None)
+}
+
+/// Where the encoder is in a term: a term still to write, or the end of a fun whose size field
+/// (at this offset) can now be filled in.
+enum Work {
+    Term(Term),
+    FunEnd(usize),
+}
+
+/// Encode `t`. `md5_of` gives the checksum of a loaded module, which identifies its local funs;
+/// a fun of a module that is no longer loaded is written with a zero checksum.
+pub fn encode_with(t: &Term, md5_of: &dyn Fn(&crate::atom::Atom) -> Option<[u8; 16]>) -> Result<Vec<u8>, EncodeError> {
     let mut out = alloc::vec![VERSION];
-    let mut work = alloc::vec![t.clone()];
-    while let Some(t) = work.pop() {
+    let mut work = alloc::vec![Work::Term(t.clone())];
+    while let Some(w) = work.pop() {
+        let t = match w {
+            Work::Term(t) => t,
+            Work::FunEnd(at) => {
+                let size = (out.len() - at) as u32;
+                out[at..at + 4].copy_from_slice(&size.to_be_bytes());
+                continue;
+            }
+        };
         match &t {
             Term::Int(i) => encode_int(&mut out, *i),
             Term::Big(b) => encode_big(&mut out, b),
@@ -351,8 +401,8 @@ pub fn encode(t: &Term) -> Result<Vec<u8>, EncodeError> {
                     _ => {
                         out.push(108);
                         out.extend_from_slice(&(items.len() as u32).to_be_bytes());
-                        work.push(tail);
-                        work.extend(items.into_iter().rev());
+                        work.push(Work::Term(tail));
+                        work.extend(items.into_iter().rev().map(Work::Term));
                     }
                 }
             }
@@ -363,14 +413,14 @@ pub fn encode(t: &Term) -> Result<Vec<u8>, EncodeError> {
                     out.push(105);
                     out.extend_from_slice(&(elems.len() as u32).to_be_bytes());
                 }
-                work.extend(elems.iter().rev().cloned());
+                work.extend(elems.iter().rev().cloned().map(Work::Term));
             }
             Term::Map(m) => {
                 out.push(116);
                 out.extend_from_slice(&(m.len() as u32).to_be_bytes());
                 for (k, v) in m.iter().rev() {
-                    work.push(v.clone());
-                    work.push(k.0.clone());
+                    work.push(Work::Term(v.clone()));
+                    work.push(Work::Term(k.0.clone()));
                 }
             }
             Term::Bits(b) => {
@@ -392,7 +442,25 @@ pub fn encode(t: &Term) -> Result<Vec<u8>, EncodeError> {
                     encode_atom(&mut out, function.as_str());
                     encode_int(&mut out, *arity as i64);
                 }
-                Fun::Local { .. } => return Err(EncodeError::Unsupported),
+                // NEW_FUN_EXT: Size, Arity, Uniq (module MD5), Index, NumFree, Module,
+                // OldIndex, OldUniq, Pid (the creator; not tracked here), then the free variables.
+                Fun::Local { module, index, arity, env, uniq } => {
+                    out.push(112);
+                    let at = out.len();
+                    out.extend_from_slice(&[0; 4]);
+                    out.push(u8::try_from(*arity).map_err(|_| EncodeError::Unsupported)?);
+                    out.extend_from_slice(&md5_of(module).unwrap_or([0; 16]));
+                    out.extend_from_slice(&index.to_be_bytes());
+                    out.extend_from_slice(&(env.len() as u32).to_be_bytes());
+                    encode_atom(&mut out, module.as_str());
+                    encode_int(&mut out, *index as i64);
+                    encode_int(&mut out, *uniq as i64);
+                    out.push(88);
+                    encode_atom(&mut out, NODE);
+                    out.extend_from_slice(&[0; 12]);
+                    work.push(Work::FunEnd(at));
+                    work.extend(env.iter().rev().cloned().map(Work::Term));
+                }
             },
             Term::Pid(p) => {
                 out.push(88);
@@ -555,12 +623,12 @@ mod tests {
     fn compressed_terms_round_trip() {
         let mut atoms = AtomTable::new();
         let t = Term::list((0..500).map(|i| Term::Int(i % 7)).collect::<Vec<_>>());
-        let packed = encode_compressed(&t, 6).unwrap();
+        let packed = encode_compressed(&t, 6, &|_| None).unwrap();
         assert_eq!(packed[1], COMPRESSED);
         assert!(packed.len() < encode(&t).unwrap().len());
         assert_eq!(decode(&packed, &mut atoms).unwrap().to_string(), t.to_string());
         // Small terms are left alone.
-        assert_eq!(encode_compressed(&Term::Nil, 6).unwrap(), encode(&Term::Nil).unwrap());
+        assert_eq!(encode_compressed(&Term::Nil, 6, &|_| None).unwrap(), encode(&Term::Nil).unwrap());
         // A lying size, a truncated stream, and a claimed size the input could never produce.
         let mut lie = packed.clone();
         lie[5] ^= 1;

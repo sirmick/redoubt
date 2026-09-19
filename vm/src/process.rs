@@ -56,17 +56,52 @@ pub struct Exception {
     /// The stack trace as a list of `{M, F, A, Location}`. `None` until the interpreter records
     /// where the exception was raised; `erlang:raise/3` supplies one.
     pub trace: Option<Term>,
+    /// For an error from a native: what went wrong, more precisely than the reason (the
+    /// `cause` of BEAM's `error_info`, e.g. `id` for an ETS table that does not exist).
+    pub cause: Option<Term>,
 }
 
 impl Exception {
     pub fn error(reason: Term) -> Exception {
-        Exception { class: Class::Error, reason, trace: None }
+        Exception { class: Class::Error, reason, trace: None, cause: None }
     }
     pub fn exit(reason: Term) -> Exception {
-        Exception { class: Class::Exit, reason, trace: None }
+        Exception { class: Class::Exit, reason, trace: None, cause: None }
     }
     pub fn throw(reason: Term) -> Exception {
-        Exception { class: Class::Throw, reason, trace: None }
+        Exception { class: Class::Throw, reason, trace: None, cause: None }
+    }
+    pub fn with_trace(class: Class, reason: Term, trace: Term) -> Exception {
+        Exception { class, reason, trace: Some(trace), cause: None }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Priority {
+    Low,
+    Normal,
+    High,
+    Max,
+}
+
+impl Priority {
+    pub fn name(self) -> &'static str {
+        match self {
+            Priority::Low => "low",
+            Priority::Normal => "normal",
+            Priority::High => "high",
+            Priority::Max => "max",
+        }
+    }
+
+    pub fn from_name(s: &str) -> Option<Priority> {
+        Some(match s {
+            "low" => Priority::Low,
+            "normal" => Priority::Normal,
+            "high" => Priority::High,
+            "max" => Priority::Max,
+            _ => return None,
+        })
     }
 }
 
@@ -133,6 +168,8 @@ pub struct Process {
     /// The module whose `undefined_function/3` handles calls to missing functions
     /// (`process_flag(error_handler, M)`); `None` for the default, which raises `undef`.
     pub error_handler: Option<Atom>,
+    /// `low`, `normal`, `high` or `max`, as set; the scheduler does not act on it yet.
+    pub priority: Priority,
     /// The last measurement of this process's memory, and `reductions` when it was taken.
     pub usage: crate::memory::Usage,
     pub measured_at: u64,
@@ -172,6 +209,7 @@ impl Process {
             reductions: 0,
             max_heap: MaxHeap::default(),
             error_handler: None,
+            priority: Priority::Normal,
             usage: crate::memory::Usage::default(),
             measured_at: 0,
         }

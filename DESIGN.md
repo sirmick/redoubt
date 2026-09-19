@@ -216,7 +216,9 @@ NIFs of `prim_file` and `prim_buffer`, over a `Files` trait the platform may pro
 - An open file belongs to the process that opened it; it is closed when that process exits.
   At most 1024 open files per VM (`emfile`). Links, ownership, permissions and times cannot be
   changed (`enotsup`, which `write_file_info` tolerates).
-- `file_server_2` starts at boot only when the platform has a file system.
+- `file_server_2` starts at boot (about 2 ms) if the platform can load it: without a file
+  system, `file:get_cwd/0` (which compilers call) still works and file operations fail with
+  `enotsup`.
 - POSIX: `beamlet --root DIR` exposes one directory through `cap-std`, which refuses symbolic
   links out of it (a unit test tries). Without `--root`, `file` calls fail with `enotsup`.
 - The `Files` trait is synchronous and file-shaped, a first step towards the design below: its

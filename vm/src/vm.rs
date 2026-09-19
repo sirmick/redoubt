@@ -109,6 +109,17 @@ pub struct System {
     /// The process that receives console input (`beamlet:console_subscribe/0`): the `user`
     /// I/O server. `None` once input has ended, or before anyone asked.
     pub(crate) console_reader: Option<Pid>,
+    /// Entries in a stack trace (`system_flag(backtrace_depth, N)`; BEAM's default is 8).
+    pub(crate) backtrace_depth: usize,
+    /// Directories of the VM's own file system searched for `.beam` files after the platform
+    /// (`code:add_patha/1` and friends), in order.
+    pub(crate) code_path: Vec<String>,
+    /// Samples of where processes are at the end of each time slice (the top few functions),
+    /// when profiling is on (`Vm::enable_profile`).
+    pub(crate) profile: Option<BTreeMap<String, u64>>,
+    /// What `resolve` found for `(module, function, arity)`, by atom identity. Emptied whenever
+    /// a module is loaded or deleted, so it never holds stale code.
+    resolved: BTreeMap<(usize, usize, u32), Target>,
     pub(crate) stats: Stats,
 }
 
@@ -141,7 +152,7 @@ const EMBEDDED: &[&[u8]] = &[
 ];
 
 enum Slot {
-    Free { serial: u32 },
+    Free,
     Present(Box<Process>),
     /// Taken out by the scheduler while it runs.
     Running { serial: u32 },
@@ -151,11 +162,15 @@ pub(crate) struct ProcTable {
     slots: Vec<Slot>,
     free: Vec<u32>,
     live: usize,
+    /// The serial of the next process. One counter for the whole table, so pids order by
+    /// creation (as BEAM's do, which code relies on through map and `lists:sort` order) and a
+    /// stale pid never matches a reused slot.
+    next_serial: u32,
 }
 
 impl ProcTable {
     fn new() -> ProcTable {
-        ProcTable { slots: Vec::new(), free: Vec::new(), live: 0 }
+        ProcTable { slots: Vec::new(), free: Vec::new(), live: 0, next_serial: 0 }
     }
 
     fn allocate(&mut self) -> Option<Pid> {
@@ -163,17 +178,17 @@ impl ProcTable {
             return None;
         }
         self.live += 1;
-        if let Some(index) = self.free.pop() {
-            let serial = match self.slots[index as usize] {
-                Slot::Free { serial } => serial.wrapping_add(1),
-                _ => unreachable!("free list holds free slots"),
-            };
-            self.slots[index as usize] = Slot::Running { serial };
-            return Some(Pid { index, serial });
-        }
-        let index = self.slots.len() as u32;
-        self.slots.push(Slot::Running { serial: 0 });
-        Some(Pid { index, serial: 0 })
+        let serial = self.next_serial;
+        self.next_serial = self.next_serial.wrapping_add(1);
+        let index = match self.free.pop() {
+            Some(index) => index,
+            None => {
+                self.slots.push(Slot::Free);
+                (self.slots.len() - 1) as u32
+            }
+        };
+        self.slots[index as usize] = Slot::Running { serial };
+        Some(Pid { index, serial })
     }
 
     pub(crate) fn get_mut(&mut self, pid: Pid) -> Option<&mut Process> {
@@ -221,13 +236,13 @@ impl ProcTable {
             .filter_map(|(i, s)| match s {
                 Slot::Present(p) => Some(p.pid),
                 Slot::Running { serial } => Some(Pid { index: i as u32, serial: *serial }),
-                Slot::Free { .. } => None,
+                Slot::Free => None,
             })
             .collect()
     }
 
     fn release(&mut self, pid: Pid) {
-        self.slots[pid.index as usize] = Slot::Free { serial: pid.serial };
+        self.slots[pid.index as usize] = Slot::Free;
         self.free.push(pid.index);
         self.live -= 1;
     }
@@ -351,6 +366,10 @@ impl Vm {
                 files: BTreeMap::new(),
                 halted: None,
                 console_reader: None,
+                backtrace_depth: 8,
+                code_path: Vec::new(),
+                profile: None,
+                resolved: BTreeMap::new(),
                 stats: Stats::default(),
             },
         }
@@ -374,11 +393,10 @@ impl Vm {
         }
         self.sys.default_group_leader = Some(user);
         // OTP's file server, which `file` calls for most operations: started now, so that it is
-        // registered before any other code runs. Only if the platform has a file system.
-        if self.sys.platform.files().is_some() {
-            if let Ok(pid) = self.spawn("file_server", "start", Vec::new()) {
-                let _ = self.run_bounded(pid, 100_000);
-            }
+        // registered before any other code runs (about 2 ms). Without a file system it still
+        // answers `get_cwd`, which compilers ask for; file operations fail with `enotsup`.
+        if let Ok(pid) = self.spawn("file_server", "start", Vec::new()) {
+            let _ = self.run_bounded(pid, 100_000);
         }
         self
     }
@@ -411,6 +429,20 @@ impl Vm {
                 return Err(RunError::Deadlock);
             }
         }
+    }
+
+    /// Start sampling where processes are at the end of each time slice (a statistical profile
+    /// for finding hot code; see [`Vm::profile`]).
+    pub fn enable_profile(&mut self) {
+        self.sys.profile = Some(BTreeMap::new());
+    }
+
+    /// The samples so far, most frequent first: `(count, "m:f/a < caller < ...")`.
+    pub fn profile(&self) -> Vec<(u64, String)> {
+        let mut v: Vec<(u64, String)> =
+            self.sys.profile.iter().flatten().map(|(k, n)| (*n, k.clone())).collect();
+        v.sort_by(|a, b| b.cmp(a));
+        v
     }
 
     /// Like [`Vm::run`], but give up after `max_steps` scheduling steps and return `None`.
@@ -474,6 +506,7 @@ impl System {
         }
         let name = module.name.clone();
         self.modules.insert(name.as_str().to_string(), Rc::new(module));
+        self.resolved.clear();
         Ok(name)
     }
 
@@ -485,7 +518,10 @@ impl System {
         if RUNTIME_MODULES.contains(&name.as_str()) {
             return None;
         }
-        let bytes = self.platform.load_module(name.as_str())?;
+        let bytes = match self.platform.load_module(name.as_str()) {
+            Some(b) => b,
+            None => self.find_in_code_path(name.as_str())?.1,
+        };
         let loaded = self.load(&bytes).ok()?;
         if &loaded != name {
             // A file that claims to be a different module than the one asked for.
@@ -493,6 +529,25 @@ impl System {
             return None;
         }
         self.modules.get(name.as_str()).cloned()
+    }
+
+    /// `Module.beam` from the first directory of the VM's code path that has it: its path and
+    /// its bytes.
+    pub(crate) fn find_in_code_path(&mut self, module: &str) -> Option<(String, Vec<u8>)> {
+        let max = self.limits.max_binary_bits / 8;
+        let files = self.platform.files()?;
+        for dir in &self.code_path {
+            let path = alloc::format!("{}/{}.beam", dir.trim_end_matches('/'), module);
+            if let Ok(bytes) = crate::bif::read_whole_file(files, &path, max) {
+                return Some((path, bytes));
+            }
+        }
+        None
+    }
+
+    /// The checksum of a loaded module (without loading it).
+    pub fn loaded_md5(&self, name: &Atom) -> Option<[u8; 16]> {
+        self.modules.get(name.as_str()).map(|m| m.md5)
     }
 
     pub fn is_loaded(&self, name: &Atom) -> bool {
@@ -503,6 +558,7 @@ impl System {
     /// running in it finishes (it is reference counted). A later call loads it afresh through
     /// the platform, if the platform has it. `false` if it was not loaded.
     pub fn delete_module(&mut self, name: &Atom) -> bool {
+        self.resolved.clear();
         self.modules.remove(name.as_str()).is_some()
     }
 
@@ -518,12 +574,20 @@ impl System {
 
     /// Resolve `module:function/arity` to code: a native function or an exported Erlang one.
     pub fn resolve(&mut self, module: &Atom, function: &Atom, arity: u32) -> Option<Target> {
-        if let Some(n) = self.native(module, function, arity) {
-            return Some(Target::Native(n));
+        let key = (module.id(), function.id(), arity);
+        if let Some(t) = self.resolved.get(&key) {
+            return Some(t.clone());
         }
-        let m = self.module(module)?;
-        let entry = m.export(function, arity)?;
-        Some(Target::Code(Cp { module: m, pc: entry }))
+        let target = match self.native(module, function, arity) {
+            Some(n) => Target::Native(n),
+            None => {
+                let m = self.module(module)?;
+                let entry = m.export(function, arity)?;
+                Target::Code(Cp { module: m, pc: entry })
+            }
+        };
+        self.resolved.insert(key, target.clone());
+        Some(target)
     }
 
     pub fn spawn(&mut self, module: &Atom, function: &Atom, args: Vec<Term>) -> Result<Pid, Exception> {
@@ -628,6 +692,9 @@ impl System {
         let before = p.reductions;
         let mut stop = interp::run(self, &mut p);
         self.stats.reductions += p.reductions - before;
+        if let Some(profile) = &mut self.profile {
+            *profile.entry(crate::interp::where_is(&p, 3)).or_default() += 1;
+        }
         self.stats.context_switches += 1;
         if matches!(stop, Stop::Yield | Stop::Wait) && self.over_memory(&mut p) {
             stop = Stop::Exit(Err(Exception::exit(Term::Atom(self.atoms.killed.clone()))));
@@ -859,6 +926,7 @@ pub(crate) fn deliver(p: &mut Process, msg: Term, run_queue: &mut VecDeque<Pid>,
 }
 
 /// What a call resolves to.
+#[derive(Clone)]
 pub enum Target {
     Native(Native),
     Code(Cp),

@@ -17,15 +17,21 @@ fn end_of_table(c: &mut Ctx) -> Term {
     c.atom("$end_of_table")
 }
 
-/// The table `id` names, if the caller may read it (or, with `write`, change it).
+/// The table `id` names, if the caller may read it (or, with `write`, change it). The error's
+/// cause is `id` for no such table and `access` for a table the caller may not use, as in BEAM.
 fn table_id(c: &Ctx, id: &Term, write: bool) -> Result<u64, Exception> {
-    let tid = c.sys.ets.resolve(id).ok_or_else(|| c.badarg())?;
+    let because = |cause: &str| {
+        let mut e = c.badarg();
+        e.cause = c.sys.atom_table.existing(cause).map(Term::Atom);
+        e
+    };
+    let tid = c.sys.ets.resolve(id).ok_or_else(|| because("id"))?;
     let t = c.sys.ets.get(tid).expect("resolved");
     let allowed = if write { t.may_write(c.p.pid) } else { t.may_read(c.p.pid) };
     if allowed {
         Ok(tid)
     } else {
-        Err(c.badarg())
+        Err(because("access"))
     }
 }
 
