@@ -3,13 +3,48 @@
 
 use std::collections::BTreeMap;
 
-use littlefs::{BlockDevice, Error, Filesystem, OpenOptions, SeekFrom};
+use littlefs::{BlockDevice, Error, Filesystem, OpenOptions};
 
 use super::*;
 
-pub const NAMES: [&str; 6] = ["a", "b", "cc", "dir", "e0", "a-rather-long-name-that-fills-metadata-quickly-0123456789"];
+const NAMES: [&str; 6] = ["a", "b", "cc", "dir", "e0", "a-rather-long-name-that-fills-metadata-quickly-0123456789"];
 /// File sizes: inline, one block, several blocks.
-pub const SIZES: [usize; 9] = [0, 1, 17, 64, 200, 511, 1000, 3000, 9000];
+const SIZES: [usize; 9] = [0, 1, 17, 64, 200, 511, 1000, 3000, 9000];
+
+/// What random workloads draw from.
+#[derive(Clone, Copy)]
+pub struct Profile {
+    pub names: &'static [&'static str],
+    pub sizes: &'static [usize],
+    pub max_attr: u64,
+    /// How far past a file's end a patch may start, and a truncation may extend it.
+    pub grow: u64,
+}
+
+impl Profile {
+    /// Few names, deep trees, files of every shape. With 128-byte blocks one entry with the
+    /// long name and three attributes cannot fit a metadata block at all (the reference fails
+    /// the same way), so the long name is left out there.
+    pub fn default_for(cfg: littlefs::Config) -> Profile {
+        let names = if cfg.block_size < 256 { &NAMES[..5] } else { &NAMES[..] };
+        Profile { names, sizes: &SIZES, max_attr: (cfg.block_size / 16) as u64, grow: 500 }
+    }
+
+    /// Many names and small files: directories split over several pairs and pairs empty
+    /// and drop, while handles stay open; on a small volume the allocator soon reuses the
+    /// dropped pairs' blocks.
+    pub fn crowded() -> Profile {
+        const MANY: [&str; 24] = [
+            "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u",
+            "v", "w", "x",
+        ];
+        Profile { names: &MANY, sizes: &[0, 3, 9, 40, 300], max_attr: 4, grow: 20 }
+    }
+
+    pub fn name(&self, rng: &mut Rng) -> &'static str { self.names[rng.below(self.names.len() as u64) as usize] }
+
+    pub fn size(&self, rng: &mut Rng) -> usize { self.sizes[rng.below(self.sizes.len() as u64) as usize] }
+}
 
 /// One operation. `Write` creates or replaces a whole file; `Patch` overwrites part of one
 /// (possibly past its end), then truncates it if `cut` says so.
@@ -36,9 +71,9 @@ pub fn pick<'a>(rng: &mut Rng, tree: &'a Tree, f: impl Fn(&str, &Node) -> bool) 
 }
 
 /// A new path in an existing directory.
-pub fn fresh(rng: &mut Rng, tree: &Tree, names: usize) -> Option<String> {
+pub fn fresh(rng: &mut Rng, tree: &Tree, p: &Profile) -> Option<String> {
     let dir = pick(rng, tree, |_, v| matches!(v, Node::Dir { .. }))?.clone();
-    let path = format!("{dir}/{}", NAMES[rng.below(names as u64) as usize]);
+    let path = format!("{dir}/{}", p.name(rng));
     (!tree.contains_key(&path)).then_some(path)
 }
 
@@ -112,24 +147,23 @@ pub fn expect(tree: &Tree, op: &Op) -> Result<(), Error> {
 }
 
 /// A random operation the model says succeeds, so that any failure is a finding.
-pub fn generate(rng: &mut Rng, tree: &Tree, names: usize, max_attr: u64) -> Option<Op> {
-    let sizes = SIZES;
+pub fn generate(rng: &mut Rng, tree: &Tree, p: &Profile) -> Option<Op> {
     let files = |_: &str, v: &Node| matches!(v, Node::File { .. });
     Some(match rng.below(9) {
         0 | 1 => {
-            let path = if rng.below(2) == 0 { fresh(rng, tree, names)? } else { pick(rng, tree, files)?.clone() };
-            let n = sizes[rng.below(sizes.len() as u64) as usize];
+            let path = if rng.below(2) == 0 { fresh(rng, tree, p)? } else { pick(rng, tree, files)?.clone() };
+            let n = p.size(rng);
             Op::Write { path, data: rng.bytes(n) }
         }
         2 => {
             let path = pick(rng, tree, files)?.clone();
             let Some(Node::File { data, .. }) = tree.get(&path) else { return None };
-            let at = rng.below(data.len() as u64 + 300) as u32;
-            let n = sizes[rng.below(sizes.len() as u64) as usize];
-            let cut = (rng.below(3) == 0).then(|| rng.below(data.len() as u64 + 2000) as u32);
+            let at = rng.below(data.len() as u64 + p.grow) as u32;
+            let n = p.size(rng);
+            let cut = (rng.below(3) == 0).then(|| rng.below(data.len() as u64 + 4 * p.grow) as u32);
             Op::Patch { path, at, data: rng.bytes(n), cut }
         }
-        3 => Op::Mkdir(fresh(rng, tree, names)?),
+        3 => Op::Mkdir(fresh(rng, tree, p)?),
         4 => {
             let path = pick(rng, tree, |k, v| !k.is_empty() && (matches!(v, Node::File { .. }) || is_empty_dir(tree, k)))?;
             Op::Remove(path.clone())
@@ -138,7 +172,7 @@ pub fn generate(rng: &mut Rng, tree: &Tree, names: usize, max_attr: u64) -> Opti
             let from = pick(rng, tree, |k, _| !k.is_empty())?.clone();
             let from_dir = matches!(tree.get(&from), Some(Node::Dir { .. }));
             let to = if rng.below(2) == 0 {
-                fresh(rng, tree, names)?
+                fresh(rng, tree, p)?
             } else if from_dir {
                 pick(rng, tree, |k, _| !k.is_empty() && is_empty_dir(tree, k))?.clone()
             } else {
@@ -152,7 +186,7 @@ pub fn generate(rng: &mut Rng, tree: &Tree, names: usize, max_attr: u64) -> Opti
         7 => {
             let path = pick(rng, tree, |_, _| true)?.clone();
             let t = ATTR_TYPES[rng.below(ATTR_TYPES.len() as u64) as usize];
-            let n = rng.below(max_attr) as usize;
+            let n = rng.below(p.max_attr) as usize;
             Op::SetAttr(path, t, rng.bytes(n))
         }
         _ => {
@@ -219,7 +253,7 @@ pub fn apply_rust<D: BlockDevice>(fs: &mut Filesystem<D>, op: &Op) -> Result<(),
         Op::Write { path, data } => write_file(fs, path, data),
         Op::Patch { path, at, data, cut } => (|| {
             let h = fs.open(path, OpenOptions { read: true, write: true, ..Default::default() })?;
-            fs.seek(h, SeekFrom::Start(*at))?;
+            fs.seek(h, *at)?;
             fs.write(h, data)?;
             if let Some(c) = cut {
                 fs.truncate(h, *c)?;

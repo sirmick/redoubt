@@ -96,10 +96,14 @@ pub struct Filesystem<D: BlockDevice> {
     pub(crate) gdelta: GState,
     alloc: Alloc,
     pub(crate) files: Vec<Option<OpenFile>>,
+    /// Generation of the most recently opened file handle.
+    pub(crate) file_generation: u32,
     /// Successful metadata commits, to tell whether a failed operation changed the disk.
     commits: u64,
     /// Set when memory may no longer match the disk; everything then fails until a remount.
     poisoned: bool,
+    /// The orphan repair has run since mount (see `force_consistency`).
+    repaired: bool,
 }
 
 impl<D: BlockDevice> Filesystem<D> {
@@ -127,8 +131,10 @@ impl<D: BlockDevice> Filesystem<D> {
             gdelta: GState::default(),
             alloc: Alloc { next: 0, left: 0, ckpoint: block_count, used: vec![0; words] },
             files: Vec::new(),
+            file_generation: 0,
             commits: 0,
             poisoned: false,
+            repaired: false,
         })
     }
 
@@ -344,24 +350,36 @@ impl<D: BlockDevice> Filesystem<D> {
     /// Calls `f` with every block in use (each one checked to be inside the volume): all
     /// metadata pairs, every file's data blocks, and the blocks open files hold (their old
     /// contents and what they are writing).
+    ///
+    /// On a valid volume the committed part visits at most `3 * block_count` blocks: every
+    /// block holds one pair or one file's data, a directory's pair is seen again through its
+    /// entry, and a pending rename shows one file twice. More means forged sizes or looping
+    /// pointers (each file alone is bounded by the volume size, but many files claiming the
+    /// whole volume would make every allocation scan cost files x blocks), so it is `Corrupt`.
     fn traverse(&mut self, f: &mut dyn FnMut(u32) -> Result<(), Error>) -> Result<(), Error> {
+        let limit = 3 * self.block_count as u64;
+        let mut visited = 0u64;
+        let mut committed = |b: u32| {
+            visited += 1;
+            if visited > limit { Err(Error::Corrupt) } else { f(b) }
+        };
         let mut tail = [0, 1];
         let mut walk = self.walk();
         while !pair_is_null(&tail) {
             walk.step()?;
             let d = self.fetch(tail)?;
-            f(tail[0])?;
-            f(tail[1])?;
+            committed(tail[0])?;
+            committed(tail[1])?;
             for e in &d.c.entries {
                 if !is_file_or_dir(e.name_type) {
                     continue;
                 }
                 match self.decode(e)? {
-                    Struct::Ctz { head, size } => self.ctz_traverse(head, size, None, f)?,
+                    Struct::Ctz { head, size } => self.ctz_traverse(head, size, None, &mut committed)?,
                     // A directory is also on the tail list, unless it is an orphan.
                     Struct::Dir(p) => {
-                        f(p[0])?;
-                        f(p[1])?;
+                        committed(p[0])?;
+                        committed(p[1])?;
                     }
                     Struct::Inline(_) => {}
                 }
@@ -389,7 +407,7 @@ impl<D: BlockDevice> Filesystem<D> {
     /// Calls `f` with each block of a file's skip-list. At most one pointer read per block,
     /// and the file size (checked against the volume) bounds the number of blocks.
     /// `first`: the head block's leading pointers, when that block is still in memory.
-    fn ctz_traverse(
+    pub(crate) fn ctz_traverse(
         &mut self,
         mut head: u32,
         size: u32,
@@ -430,14 +448,6 @@ impl<D: BlockDevice> Filesystem<D> {
         }
     }
 
-    /// Every block of a file's skip-list.
-    pub(crate) fn ctz_blocks(&mut self, head: u32, size: u32, out: &mut Vec<u32>) -> Result<(), Error> {
-        self.ctz_traverse(head, size, None, &mut |b| {
-            out.push(b);
-            Ok(())
-        })
-    }
-
     /// Finds the block holding byte `pos` of a file, and the offset in it.
     pub(crate) fn ctz_find(&mut self, mut head: u32, size: u32, pos: u32) -> Result<(u32, u32), Error> {
         if pos >= size {
@@ -472,6 +482,9 @@ impl<D: BlockDevice> Filesystem<D> {
         if deletes && c.entries.is_empty() {
             if let Some(pred) = self.pred(&dir.pair)? {
                 if pred.c.split {
+                    // Files open on the emptied pair were all deleted by this commit; detach
+                    // them before the pair's blocks become free for reuse.
+                    self.follow_files(&dir.pair, attrs)?;
                     self.gdelta = self.gdelta.xor(&dir.c.gdelta);
                     // This commit deletes nothing, so it cannot drop in turn.
                     return self.commit(pred.pair, &[attr_tail(dir.c.split, dir.c.tail)]);
@@ -750,11 +763,22 @@ impl<D: BlockDevice> Filesystem<D> {
                 return Err(Error::Corrupt);
             }
             let (pair, id) = (self.gdisk.pair, tag::id(self.gdisk.tag));
+            // Only a file or directory can have been renamed; never delete anything else
+            // (the superblock entry, above all) on the medium's say-so.
+            let dir = self.fetch(pair)?;
+            if !dir.c.entries.get(id as usize).is_some_and(|e| is_file_or_dir(e.name_type)) {
+                return Err(Error::Corrupt);
+            }
             self.prep_move(None);
             self.commit(pair, &[attr_delete(id)])?;
         }
-        if self.gstate.orphans() != 0 {
+        // The orphan repair runs once per mount even when the orphan flag is clear: the C
+        // reference can leave orphaned or half-orphaned directories on the list with the flag
+        // cleared (a relocation during a removal resets its count). Repairing them before the
+        // first write, rather than refusing the volume, keeps its images usable.
+        if self.gstate.orphans() != 0 || !self.repaired {
             self.deorphan()?;
+            self.repaired = true;
         }
         Ok(())
     }

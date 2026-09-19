@@ -1,7 +1,9 @@
-//! Crash injection: power fails at every single block write of a workload (the failing
-//! program persists only half its bytes, nothing after it persists). After each crash the
-//! image must mount, show exactly the state before or after the interrupted operation, pass
-//! the volume check after the repairs a write triggers, and keep working.
+//! Crash injection: power fails at every single block write of a workload. The failing write
+//! is torn as the `BlockDevice` contract allows (a random prefix of whole program units, then
+//! part of one unit; optionally a torn erase), and nothing after it persists. After each
+//! crash the image must mount, show exactly the state before or after the interrupted
+//! operation, pass the volume check after the repairs a write triggers, and keep working.
+//! Optionally the repair itself is crashed at each of its writes too.
 
 mod common;
 
@@ -72,13 +74,13 @@ fn workload() -> Vec<Op> {
 
 /// A random workload from the shared generator, new files created first (see `create`).
 fn random_workload(seed: u64, cfg: Config, len: usize) -> Vec<Op> {
-    let names = if cfg.block_size < 256 { NAMES.len() - 1 } else { NAMES.len() };
+    let p = Profile::default_for(cfg);
     let mut rng = Rng(seed);
     let mut model = Tree::new();
     model.insert(String::new(), Node::Dir { attrs: Default::default() });
     let mut out = Vec::new();
     while out.len() < len {
-        let Some(op) = generate(&mut rng, &model, names, (cfg.block_size / 16) as u64) else { continue };
+        let Some(op) = generate(&mut rng, &model, &p) else { continue };
         if let Op::Write { path, .. } = &op {
             if !model.contains_key(path) {
                 out.push(create(path));
@@ -90,9 +92,30 @@ fn random_workload(seed: u64, cfg: Config, len: usize) -> Vec<Op> {
     out
 }
 
-fn crash_everywhere(cfg: Config) { crash_workload(cfg, workload()) }
+fn crash_everywhere(cfg: Config) { crash_workload(cfg, workload(), Tear::Prefix, false) }
 
-fn crash_workload(cfg: Config, ops: Vec<Op>) {
+/// Mounts `image`, checks it shows the state before or after operation `k`, repairs and
+/// checks it, and uses it. Returns what it showed.
+fn check_crashed(cfg: Config, image: Vec<u8>, states: &[Tree], k: usize, what: &str) -> Tree {
+    let mut ram = Ram::from_image(cfg, image);
+    let mut fs = Filesystem::mount(&mut ram, cfg).unwrap_or_else(|e| panic!("{what}: mount: {e}"));
+    let seen = dump(&mut fs).unwrap_or_else(|e| panic!("{what}: dump: {e}"));
+    assert!(
+        seen == states[k] || seen == states[k + 1],
+        "{what} (operation {k}): neither the state before nor after: {:#?}",
+        tree_diff(&seen, &states[k])
+    );
+    fs.fsck().unwrap_or_else(|e| panic!("{what} (operation {k}): fsck: {e}"));
+    assert_eq!(dump(&mut fs).unwrap(), seen, "{what}: repair changed what is visible");
+    write_file(&mut fs, "/after-crash", b"still works").unwrap();
+    assert_eq!(read_file(&mut fs, "/after-crash").unwrap(), b"still works");
+    fs.fsck().unwrap();
+    seen
+}
+
+/// Crashes `ops` at each of its writes, torn as `tear` says; with `double`, also crashes the
+/// repair after each crash at each of the repair's writes.
+fn crash_workload(cfg: Config, ops: Vec<Op>, tear: Tear, double: bool) {
     let mut ram = Ram::new(cfg);
     Filesystem::format(&mut ram, cfg).unwrap();
     let formatted = ram.data.clone();
@@ -112,9 +135,9 @@ fn crash_workload(cfg: Config, ops: Vec<Op>) {
     let total = ram.writes;
     assert!(total > 50);
 
+    let mut doubles = 0;
     for n in 1..=total {
-        let mut ram = Ram::from_image(cfg, formatted.clone());
-        ram.budget = Some(n);
+        let mut ram = Ram::from_image(cfg, formatted.clone()).failing_at(n, tear, n);
         let mut failed_at = None;
         {
             let mut fs = Filesystem::mount(&mut ram, cfg).unwrap();
@@ -126,22 +149,26 @@ fn crash_workload(cfg: Config, ops: Vec<Op>) {
             }
         }
         let k = failed_at.unwrap_or_else(|| panic!("write {n} of {total} failed but no operation did"));
+        let crashed = ram.data;
+        let seen = check_crashed(cfg, crashed.clone(), &states, k, &format!("crash at write {n}"));
 
-        let mut ram = Ram::from_image(cfg, ram.data);
-        let mut fs = Filesystem::mount(&mut ram, cfg).unwrap_or_else(|e| panic!("crash at write {n}: mount: {e}"));
-        let seen = dump(&mut fs).unwrap_or_else(|e| panic!("crash at write {n}: dump: {e}"));
-        assert!(
-            seen == states[k] || seen == states[k + 1],
-            "crash at write {n} (operation {k}): neither the state before nor after\n{seen:#?}"
-        );
-        fs.fsck().unwrap_or_else(|e| panic!("crash at write {n} (operation {k}): fsck: {e}"));
-        assert_eq!(dump(&mut fs).unwrap(), seen, "crash at write {n}: repair changed what is visible");
-        // Still fully usable.
-        write_file(&mut fs, "/after-crash", b"still works").unwrap();
-        assert_eq!(read_file(&mut fs, "/after-crash").unwrap(), b"still works");
-        fs.fsck().unwrap();
+        // Power fails again while the next mount repairs (at each of the repair's writes).
+        for m in 1.. {
+            if !double {
+                break;
+            }
+            let mut ram = Ram::from_image(cfg, crashed.clone()).failing_at(m, tear, n << 20 | m);
+            let repaired = Filesystem::mount(&mut ram, cfg).and_then(|mut fs| fs.fsck()).is_ok();
+            if repaired {
+                break;
+            }
+            doubles += 1;
+            let again = check_crashed(cfg, ram.data, &states, k, &format!("crash at write {n}, then repair write {m}"));
+            assert_eq!(again, seen, "crash at write {n}, then repair write {m}: the repair changed what is visible");
+            assert!(m < 64, "a repair of more than 64 writes");
+        }
     }
-    eprintln!("{cfg:?}: crashed at each of {total} writes");
+    eprintln!("{cfg:?} {tear:?}: crashed at each of {total} writes, {doubles} crashes during repair");
 }
 
 #[test]
@@ -159,11 +186,42 @@ fn crash_at_every_write_large_blocks() {
 fn crash_at_every_write_random_workloads() {
     for seed in 1..=6 {
         let cfg = Config { block_size: 256, block_count: 512, prog_size: 16 };
-        crash_workload(cfg, random_workload(seed, cfg, 80));
+        crash_workload(cfg, random_workload(seed, cfg, 80), Tear::Prefix, false);
     }
     for seed in 7..=9 {
         let cfg = Config { block_size: 128, block_count: 1024, prog_size: 1 };
-        crash_workload(cfg, random_workload(seed, cfg, 60));
+        crash_workload(cfg, random_workload(seed, cfg, 60), Tear::Prefix, false);
+    }
+}
+
+#[test]
+fn crash_at_every_write_torn_erases() {
+    for seed in 11..=14 {
+        let cfg = Config { block_size: 256, block_count: 256, prog_size: 16 };
+        crash_workload(cfg, random_workload(seed, cfg, 60), Tear::PrefixAndErase, false);
+    }
+}
+
+#[test]
+fn crash_during_repair() {
+    crash_workload(Config { block_size: 256, block_count: 128, prog_size: 16 }, workload(), Tear::PrefixAndErase, true);
+    for seed in 21..=23 {
+        let cfg = Config { block_size: 256, block_count: 256, prog_size: 16 };
+        crash_workload(cfg, random_workload(seed, cfg, 50), Tear::PrefixAndErase, true);
+    }
+}
+
+/// Why the `BlockDevice` contract asks for prefix tearing: when a torn program may persist
+/// any subset of its units, a unit can land after an unwritten one. The forward CRC only
+/// vouches for the first unit past a commit, so the next append programs over the stray
+/// unit (the first failure seen: "program over unerased bytes"). Not a property this crate
+/// can fix; run with `--ignored` to see it fail.
+#[test]
+#[ignore]
+fn subset_tearing_is_outside_the_contract() {
+    for seed in 31..=40 {
+        let cfg = Config { block_size: 256, block_count: 256, prog_size: 16 };
+        crash_workload(cfg, random_workload(seed, cfg, 50), Tear::Subset, false);
     }
 }
 

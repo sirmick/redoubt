@@ -218,8 +218,16 @@ impl Contents {
 
     /// Every id must have been named: a log that creates an entry and never names it is not
     /// something littlefs writes.
+    /// Nor two files or directories of the same name in one pair: which one a lookup finds
+    /// would depend on the implementation.
     pub fn check(&self) -> Result<(), Error> {
-        if self.entries.iter().any(|e| e.name_type == UNNAMED) { Err(Error::Corrupt) } else { Ok(()) }
+        if self.entries.iter().any(|e| e.name_type == UNNAMED) {
+            return Err(Error::Corrupt);
+        }
+        let mut names: Vec<&[u8]> =
+            self.entries.iter().filter(|e| is_file_or_dir(e.name_type)).map(|e| e.name.as_slice()).collect();
+        names.sort_unstable();
+        if names.windows(2).any(|w| w[0] == w[1]) { Err(Error::Corrupt) } else { Ok(()) }
     }
 
     /// Bytes the entries take in a compacted block.

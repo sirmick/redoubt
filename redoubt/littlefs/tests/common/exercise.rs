@@ -2,7 +2,7 @@
 //! requirement is that nothing panics or hangs. Shared by `tests/hostile.rs` and the fuzzer
 //! (which includes this file by path).
 
-use littlefs::{BlockDevice, FileType, Filesystem, OpenOptions, SeekFrom};
+use littlefs::{BlockDevice, FileType, Filesystem, OpenOptions};
 
 /// Walks at most `limit` directories (a hostile tree may loop), reading everything.
 fn walk<D: BlockDevice>(fs: &mut Filesystem<D>, limit: usize) {
@@ -14,7 +14,7 @@ fn walk<D: BlockDevice>(fs: &mut Filesystem<D>, limit: usize) {
             return;
         }
         let mut entries = Vec::new();
-        let _ = fs.read_dir(&dir, |e| entries.push((e.name.to_vec(), e.kind)));
+        let _ = fs.read_dir(&dir, |e| entries.push((e.name.to_vec(), e.meta.kind)));
         let _ = fs.get_attr(&dir, 1);
         for (name, kind) in entries {
             let Ok(name) = String::from_utf8(name) else { continue };
@@ -31,7 +31,8 @@ fn walk<D: BlockDevice>(fs: &mut Filesystem<D>, limit: usize) {
                                 break;
                             }
                         }
-                        let _ = fs.seek(h, SeekFrom::End(-1));
+                        let end = fs.file_size(h).unwrap_or(0);
+                        let _ = fs.seek(h, end.saturating_sub(1));
                         let _ = fs.read(h, &mut buf);
                         let _ = fs.close(h);
                     }
@@ -48,7 +49,7 @@ pub fn exercise<D: BlockDevice>(fs: &mut Filesystem<D>) {
     let w = OpenOptions { read: true, write: true, create: true, ..Default::default() };
     if let Ok(h) = fs.open("/fz/f", w) {
         let _ = fs.write(h, &[0x5a; 3000]);
-        let _ = fs.seek(h, SeekFrom::Start(100));
+        let _ = fs.seek(h, 100);
         let _ = fs.write(h, b"patch");
         let _ = fs.truncate(h, 1500);
         let _ = fs.close(h);

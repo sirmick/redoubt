@@ -47,7 +47,7 @@ mod tag;
 #[cfg(test)]
 mod tests;
 
-pub use file::{FileHandle, OpenOptions, SeekFrom};
+pub use file::{FileHandle, OpenOptions};
 pub use fs::Filesystem;
 
 /// The on-disk version this crate reads and writes: major 2, minor 1. Older images (2.0,
@@ -57,8 +57,22 @@ pub const DISK_VERSION: u32 = 0x0002_0001;
 /// Storage as littlefs sees it: `block_count` blocks of `block_size` bytes.
 ///
 /// Reads may be of any range inside a block. Programs start and end on multiples of the
-/// configured `prog_size` and only target erased bytes. Implementations report failures as
-/// [`Error::Io`].
+/// configured `prog_size` and only target bytes erased since they were last programmed.
+/// Implementations report failures as [`Error::Io`].
+///
+/// # What power-loss safety relies on
+/// The crash guarantees hold for a device that keeps this contract (the crash tests inject
+/// exactly these failures; a device outside it is shown failing in `tests/crash.rs`):
+/// - **A torn program persists a prefix.** If power fails during `prog`, the bytes that
+///   landed are a prefix of whole program units, possibly followed by one partly written
+///   unit; nothing after that. A unit is overwritten as a whole: a later program of it
+///   replaces all its bytes (disk semantics) or only clears bits of erased bytes (flash).
+/// - **A torn erase** leaves the block erased, untouched, or erased only in part.
+/// - **Order within a block**: an erase and later programs of the same block reach the
+///   medium in the order they were issued.
+/// - **`sync` means durable**: when it returns `Ok`, everything programmed or erased
+///   before it survives power loss. The filesystem syncs before each metadata commit that
+///   depends on data blocks, and after each commit.
 pub trait BlockDevice {
     fn read(&mut self, block: u32, off: u32, buf: &mut [u8]) -> Result<(), Error>;
     fn prog(&mut self, block: u32, off: u32, data: &[u8]) -> Result<(), Error>;
@@ -112,6 +126,15 @@ impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result { core::fmt::Debug::fmt(self, f) }
 }
 
+/// What [`Filesystem::check`] found on a volume that is not damaged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Health {
+    Clean,
+    /// Leftovers the first write after mount repairs: a half-done rename, orphaned or
+    /// half-orphaned directories on the list of pairs.
+    NeedsRepair,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileType {
     File,
@@ -130,6 +153,5 @@ pub struct Metadata {
 #[derive(Debug)]
 pub struct DirEntry<'a> {
     pub name: &'a [u8],
-    pub kind: FileType,
-    pub size: u32,
+    pub meta: Metadata,
 }
