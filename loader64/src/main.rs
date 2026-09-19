@@ -41,6 +41,11 @@ const USER_STACK_PAGES: usize = 32;
 const STACK_PADDING: usize = 16;
 const ARGS_PAGES: usize = 4;
 
+// The `.bss`-zeroing loop is the only width-specific part: store one XLEN word per step.
+#[cfg(target_arch = "riscv64")]
+global_asm!(".equ REGBYTES, 8", concat!("\n", ".macro STOREZ rd, off, rs\n sd \\rd, \\off(\\rs)\n .endm\n"));
+#[cfg(target_arch = "riscv32")]
+global_asm!(".equ REGBYTES, 4", concat!("\n", ".macro STOREZ rd, off, rs\n sw \\rd, \\off(\\rs)\n .endm\n"));
 global_asm!(
     r#"
     .section .text.init, "ax"
@@ -53,8 +58,8 @@ _start:
     la      t0, _sbss
     la      t1, _ebss
 1:  bgeu    t0, t1, 2f
-    sd      zero, 0(t0)
-    addi    t0, t0, 8
+    STOREZ  zero, 0, t0
+    addi    t0, t0, REGBYTES
     j       1b
 2:
     la      sp, _stack_top
