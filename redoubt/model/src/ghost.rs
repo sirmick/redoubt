@@ -132,8 +132,10 @@ impl Ghost {
         self.irqs.entry(d).or_default().undelivered = false;
     }
 
-    /// A `receive` on the IRQ blocks or times out: there must be no raised, undelivered
-    /// interrupt (it would be lost).
+    /// A `receive` on the IRQ that has just begun is about to block: no raised interrupt may be
+    /// undelivered then, or it would wait unseen (R5: the receive unmasks the source, and a
+    /// pending line fires at once). A waiter that times out while another waiter's interrupt
+    /// keeps the source masked is not a lost interrupt: the next receive gets it.
     pub fn irq_not_delivered(&mut self, d: u64) {
         if self.irqs.get(&d).is_some_and(|i| i.undelivered) {
             self.violations

@@ -5,11 +5,12 @@
 //! | [`kernel_sequence`] | I1-I9, I11-I13 and the rule checks after every step of a random sequence |
 //! | [`budget_lifecycle`] | I10: create a budget, use it, destroy it; everyone else's counters are unchanged |
 //! | [`scheduler_fairness`] | R12: class order, and each budget's share over every interval it was runnable |
-//! | [`steward_policy`] | the steward's M1 policy (steward.rs), including non-interference |
+//! | `policy::steward_policy` | the steward's M1 policy (steward.rs) |
+//! | `policy::steward_noninterference` | the policy's non-interference property |
 //!
 //! Every family is a function of one seed (and an optional mutation), so any failure is
 //! reproduced by rerunning that seed; [`shrink`] cuts a failing kernel sequence down to the ops
-//! that matter, and `trace::encode` prints it. I14 (no panic) is checked by the test runner,
+//! that matter, and `trace::record` prints it. I14 (no panic) is checked by the test runner,
 //! which catches panics around each family (tests/properties.rs).
 
 use alloc::format;

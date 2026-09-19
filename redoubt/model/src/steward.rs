@@ -186,7 +186,8 @@ pub struct Steward {
     pub declassified: Vec<(u64, Vec<u8>)>,
     pub blames: BTreeMap<u64, Vec<u64>>,
     pub audit: Vec<Audit>,
-    next_session: u64,
+    /// Sessions started so far, per principal (drives session ids).
+    started: BTreeMap<usize, u64>,
     secret: u64,
     counter: u64,
 }
@@ -308,7 +309,7 @@ impl Steward {
             declassified: Vec::new(),
             blames: BTreeMap::new(),
             audit: Vec::new(),
-            next_session: 1,
+            started: BTreeMap::new(),
             secret,
             counter: 0,
         };
@@ -403,8 +404,14 @@ impl Steward {
         let parent = self.principals[principal].h;
         let h = self.budget_create(parent, pages, 1, 5, &labels, 0, deadline)?;
         let budget = self.budget_id(h);
-        let id = self.next_session;
-        self.next_session += 1;
+        // A random id, like a request id: a global counter would tell every principal how many
+        // sessions the others started.
+        let n = self.started.entry(principal).or_insert(0);
+        *n += 1;
+        let mut id = mix(self.secret ^ 0x5e55 ^ mix(((principal as u64) << 32) ^ *n));
+        while id == 0 || self.sessions.contains_key(&id) {
+            id = mix(id);
+        }
         self.sessions.insert(id, Session { id, principal, kind, labels, budget, h, submitted: 0 });
         Ok(id)
     }

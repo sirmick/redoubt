@@ -191,7 +191,10 @@ impl Run {
     }
 
     fn resolve(&self, r: ReqRef) -> u64 {
-        self.submitted.get(&(r.session, r.nth)).copied().unwrap_or(r.session * 7919 + r.nth)
+        self.submitted
+            .get(&(r.session, r.nth))
+            .copied()
+            .unwrap_or(r.session.wrapping_mul(7919).wrapping_add(r.nth))
     }
 
     /// Apply one op, check P1-P9 and the kernel invariants, and return what the caller saw.
@@ -414,8 +417,8 @@ pub fn steward_policy(seed: u64, mutation: Option<Mutation>) -> Result<(), Failu
 
 /// P10 (CONTAINMENT.md, the no-leaky-state attack case): one sequence runs twice, the second time
 /// without the work of the vault sessions (their item writes and submissions). Everything another
-/// principal observes must be the same: every result it gets, and the usage of its own and every
-/// other principal's top budget.
+/// principal observes must be the same: every result it gets, and the usage of its own top
+/// budget (the vault owner's own usage is left out: see the cap, below).
 ///
 /// The observer is another principal: requests of the vault's own principal count against one
 /// per-account cap whatever their labels, so an unlabelled session of the same principal can see
@@ -501,7 +504,7 @@ pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<
                 )));
             }
         }
-        for p in 0..with.st.principals.len() {
+        for &p in &observers {
             let h = with.st.principals[p].h;
             if with.st.usage(h) != without.st.usage(h) {
                 return Err(fail(format!(

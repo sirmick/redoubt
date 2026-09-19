@@ -283,13 +283,22 @@ chose as follows. Each should be confirmed or overruled in KERNEL-SPEC.md.
     the end of the call that created it (the returned handle is then closed).
 18. **Weight 0** (other than a revocation scope): the budget's threads never run.
 19. **IRQ sources start masked**; the first `receive` unmasks. A line raised while masked stays
-    pending and fires at the next unmask.
+    pending and fires at the next unmask. The oldest waiter gets a fire. With several threads
+    waiting on one IRQ, R5 as written means: after one waiter is given an interrupt the source is
+    masked, so a second event waits for the next `receive` to begin, and the other waiters keep
+    waiting (and may time out) meanwhile. Nothing is lost, but a driver should wait on an IRQ with
+    one thread. (The 10^6 run found this: the model's first "no lost interrupt" check was stronger
+    than R5.)
 20. **`init`** lives in `root`, has no exit endpoint, and gets handles 1-3 = root, system, users,
     then the devices. Its own objects are charged to `root`; `root` keeps what `system` and `users`
     do not take.
 21. **Budget usage** returns (page limit, pages used, process limit, processes used), as
     `redoubt-sys` does.
-22. **Policy numbers** the design leaves open: `PENDING_CAP` 4, `DECLASSIFY_MAX` 256 bytes of
+22. **Session ids are random** (keyed per principal), like request ids. A global counter would tell
+    every principal how many sessions the others started; the 10^6 run of P10 found exactly that.
+    CONTAINMENT.md names only request ids; the same rule should cover every id the steward hands
+    out.
+23. **Policy numbers** the design leaves open: `PENDING_CAP` 4, `DECLASSIFY_MAX` 256 bytes of
     printable ASCII, `FIELD_CAP` 64 characters, session and lease sizes; the approver of a request
     is the requester's own principal; the blame window is three crashes within ten minutes of each
     other, and the count restarts after a logout.
@@ -316,8 +325,9 @@ KERNEL-SPEC.md or the policy notes.
    applies no write-down to the steward's records, but a vault session (`alice+X`) and Alice's
    unlabelled session share one account, so the vault's pending requests change whether the
    unlabelled session's next request is refused at the cap: one bit per request, out of the
-   label. P10 therefore observes only other principals. Fix: count the cap per (account, label
-   set).
+   label. The bit also propagates: a refused unlabelled request is one the owner never approves,
+   so the owner's own budget usage can differ (the 10^6 run found this path). P10 therefore
+   observes only other principals. Fix: count the cap per (account, label set).
 4. **Exit notices and `budget_usage` have no system-class exemption** (R1 exempts only messages).
    As written, `init` and the steward (unlabelled, system) never receive exit notices of labelled
    budgets and cannot read their usage, so crash blame and restarts cannot see labelled processes.

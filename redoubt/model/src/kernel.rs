@@ -549,9 +549,7 @@ impl Kernel {
         // Boot must fit; a Boot that does not is a bad test configuration, not a kernel path.
         k.install(pid, &hs).expect("boot handles fit in root");
         k.charge(root, c.thread).expect("init's thread fits in root");
-        let tid = k.new_thread(pid);
-        k.notes.clear();
-        let _ = tid;
+        k.new_thread(pid);
         k
     }
 
@@ -1004,7 +1002,7 @@ impl Kernel {
                 let b = &self.budgets[&rbudget];
                 (b.class, b.labels.clone())
             };
-            let Some(Wait::Receive { h: rh, max_transfer, .. }) = self.threads[&rtid].wait else { return };
+            let Some(Wait::Receive { max_transfer, .. }) = self.threads[&rtid].wait else { return };
 
             if let Some(n) = self.endpoints.get_mut(&e).unwrap().exits.pop_front() {
                 // R1: an exit notice goes only to a receiver whose labels ⊇ the exiting budget's;
@@ -1163,7 +1161,6 @@ impl Kernel {
                 handles: installed,
                 buffer: received,
             };
-            let _ = rh;
             self.wake(rtid, Ok(Ret::Message(msg)));
             match m.kind {
                 MsgKind::Send => self.wake(m.sender_tid, Ok(Ret::Unit)),
@@ -1404,8 +1401,9 @@ impl Kernel {
                     ep.receivers.retain(|x| *x != tid);
                 }
             }
+            // With several threads waiting on one IRQ, a second event can stay pending (masked)
+            // while this one times out: R5 unmasks only when a receive begins.
             Wait::Irq { device, .. } => {
-                self.ghost.irq_not_delivered(device);
                 if let Some(d) = self.devices.get_mut(&device) {
                     d.waiters.retain(|x| *x != tid);
                 }
