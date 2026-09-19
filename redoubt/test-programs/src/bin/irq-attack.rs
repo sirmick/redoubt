@@ -42,6 +42,8 @@ pub extern "C" fn _start() -> ! {
     } else {
         log!(logger, "IRQ ATTACK TEST FAILED: {} failure(s)", failures);
     }
+    // The verdict is the checker's, not ours (redoubt/README.md, "Writing an attack case").
+    test_programs::checker::done();
     test_programs::park()
 }
 

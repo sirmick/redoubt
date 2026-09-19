@@ -1,8 +1,21 @@
 description = "Hostile interrupt syscalls: out-of-range numbers, unowned and doubly claimed interrupts"
 arch = ["rv64", "rv32"]
 kind = "boot"
-programs = ["log-server", "irq-attack"]
-expect = ['ok: irq 0x20: free -> Err', 'ok: irq 0xf+', 'ok: double claim', 'IRQ ATTACK TEST PASSED']
+# PID 3 irq-attack attacks; PID 4 attack-checker gives the verdict (README "Writing an attack case").
+programs = ["log-server", "irq-attack", "attack-checker"]
+# The attacker's reports, required only as progress; a refusal it did not get shows as FAIL.
+expect = [
+    '^\[pid 3\] \[irq-attack\] ok: irq 0x20: free -> Err',
+    '^\[pid 3\] \[irq-attack\] ok: irq 0xf+',
+    '^\[pid 3\] \[irq-attack\] ok: double claim',
+    # The verdict: the kernel survived every attempt, said by someone other than the attacker.
+    '^\[pid 4\] \[checker\] PID 3 finished its attempts; the kernel still serves',
+]
+forbid = ['\] FAIL']
+poweroff = true
+# Pending (WP-K3): that each call was refused is still only the attacker's report. With IRQ
+# receive, a victim holding the interrupt can assert that it still receives it after the attempts
+# (as grant-attack does for irq 10 today).
 
 [[grant]]
 program = "log-server"
@@ -11,3 +24,7 @@ mmio = ["0x10000000:0x1000"]
 [[grant]]
 program = "irq-attack"
 irq = [6]
+
+[[grant]]
+program = "attack-checker"
+mmio = ["0x100000:0x1000"]

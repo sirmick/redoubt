@@ -1,10 +1,17 @@
 description = "A process cannot map physical RAM by address (no reading freed frames), and anonymous RAM is zeroed"
 arch = ["rv64", "rv32"]
 kind = "boot"
-programs = ["log-server", "mem-attack"]
-# "MEM ATTACK TEST FAILED" (and any leak report) contains "TEST FAILED", which the bench
-# always forbids, so the safe outcome is the only pass.
-expect = ['\[mem-attack\] anonymous page is zeroed: ok', 'refused \(InvalidArgument\): ok', 'MEM ATTACK TEST PASSED']
+# PID 3 mem-victim frees pages holding its secret and judges; PID 4 mem-attack lends it every
+# page it can get, anonymous or mapped by physical address (README "Writing an attack case").
+programs = ["log-server", "mem-victim", "mem-attack"]
+# The verdict is the victim's line. The attacker's are progress only.
+expect = [
+    '^\[pid 3\] \[mem-victim\] left the secret in 64 freed pages$',
+    '^\[pid 4\] \[mem-attack\] lent 128 anonymous pages to the victim$',
+    '^\[pid 3\] \[mem-victim\] checked 128 pages from PID 4: all zero$',
+]
+# A page with data (the victim's report), or a mapping by physical address (the attacker's).
+forbid = ['BREACH', 'MAPPED', 'another error']
 
 [[grant]]
 program = "log-server"

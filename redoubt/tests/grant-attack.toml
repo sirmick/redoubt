@@ -1,16 +1,23 @@
-description = "No ambient authority: an ungranted process is denied every device page and interrupt"
+description = "No ambient authority: an ungranted process gets no device page or interrupt; the victim that owns them says so"
 arch = ["rv64"]
 kind = "boot"
+# PID 2 log-server is the victim: it owns the UART and (granted here) irq 10, and claims both
+# before any client can run. PID 3 grant-attack has no grants and uses whatever it manages to
+# take (see its source).
 programs = ["log-server", "grant-attack"]
-expect = [
-    'ok: mapping the UART -> Err\(AccessDenied\)',
-    'ok: mapping the power-off device -> Err\(AccessDenied\)',
-    'ok: anonymous RAM still maps -> Ok',
-    'ok: claiming irq 10 -> Err\(AccessDenied\)',
-    'GRANT ATTACK PASSED',
-]
+timeout_secs = 20
+# The verdict is the victim's own, unprefixed line: it still receives input sent after every
+# attempt, so nobody took irq 10 or powered the machine off. A raw BREACH line could only come
+# from a process that owns the UART. The attacker's lines are only progress (`attempts done`)
+# and breach reports (forbidden).
+expect = ['^\[server\] claimed irq 10$', '^\[pid 3\] \[grant\] attempts done$', "^\\[server\\] irq 10: received 'y'$"]
+forbid = ['BREACH']
 
-# grant-attack itself gets nothing; log-server needs the UART to print.
+[[input]]
+after = '^\[pid 3\] \[grant\] attempts done$'
+send = "y"
+
 [[grant]]
 program = "log-server"
 mmio = ["0x10000000:0x1000"]
+irq = [10]

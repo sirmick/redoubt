@@ -1,15 +1,28 @@
 description = "W^X through the syscall interface: no writable+executable mapping, errors instead of kernel panics"
 arch = ["rv64", "rv32"]
 kind = "boot"
-programs = ["log-server", "wx-test"]
+# PID 3 wx-test attacks; PID 4 attack-checker gives the verdict (README "Writing an attack case").
+programs = ["log-server", "wx-test", "attack-checker"]
+# The attacker's reports, required only as progress: they cannot pass the case on their own.
+# Any refusal it did not get shows as FAIL (forbidden).
 expect = [
-    'ok: mapping write\+execute -> Err',
-    'ok: mapping no permissions at all -> Err',
-    'ok: mapping read\+execute -> Ok',
-    'ok: adding execute to a writable page -> Err',
-    'WX TEST PASSED',
+    '^\[pid 3\] \[wx\] ok: mapping write\+execute -> Err',
+    '^\[pid 3\] \[wx\] ok: mapping no permissions at all -> Err',
+    '^\[pid 3\] \[wx\] ok: mapping read\+execute -> Ok',
+    '^\[pid 3\] \[wx\] ok: adding execute to a writable page -> Err',
+    # The verdict: the kernel survived every attempt, said by someone other than the attacker.
+    '^\[pid 4\] \[checker\] PID 3 finished its attempts; the kernel still serves',
 ]
+forbid = ['\] FAIL']
+poweroff = true
+# Pending (WP-K4): that each attempt was refused is still only the attacker's report. With
+# process creation and exit notices the checker can launch the attacker and learn from the
+# kernel how it ended, e.g. a fault when it jumps into a page it could only make writable.
 
 [[grant]]
 program = "log-server"
 mmio = ["0x10000000:0x1000"]
+
+[[grant]]
+program = "attack-checker"
+mmio = ["0x100000:0x1000"]

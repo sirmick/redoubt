@@ -98,6 +98,42 @@ pub fn park() -> ! {
     }
 }
 
+/// The attack checker (`attack-checker`): the party that ends an attack case. An attacker's
+/// own output can never pass a case, because the attacker could print anything; so when an
+/// attacker has made its attempts it tells the checker, and the checker (whose lines log-server
+/// marks with the checker's PID) reports that the system is still serving and powers off.
+/// See redoubt/README.md, "Writing an attack case".
+pub mod checker {
+    use xous::Message;
+
+    /// Well-known address of the checker's server.
+    pub const ADDRESS: &[u8; 16] = b"redoubt-checker!";
+    /// BlockingScalar: the sender has finished its attempts.
+    pub const DONE: usize = 1;
+
+    /// Tell the checker this process has finished its attempts. Blocks until it has answered,
+    /// which it does just before powering off.
+    pub fn done() {
+        let sid = xous::SID::from_bytes(ADDRESS).unwrap();
+        let cid = xous::connect(sid).expect("couldn't connect to the attack checker");
+        xous::send_message(cid, Message::new_blocking_scalar(DONE, 0, 0, 0, 0)).expect("couldn't reach the checker");
+    }
+}
+
+/// Protocol for the memory attack test (`mem-attack`, `mem-victim`). The victim leaves a secret
+/// in pages it frees; the attacker lends it every page it gets, and the victim, not the
+/// attacker, says whether any of them held data. See `redoubt/tests/mem-attack.toml`.
+pub mod mem {
+    /// Well-known address of the victim's server.
+    pub const VICTIM_ADDRESS: &[u8; 16] = b"redoubt-mem-vict";
+    /// Borrow: a page the attacker got; the victim checks that it holds nothing.
+    pub const CHECK: usize = 1;
+    /// BlockingScalar: the attacker has lent everything it got.
+    pub const DONE: usize = 2;
+    /// What the victim writes into the pages it frees.
+    pub const SECRET: &[u8; 8] = b"SECRET!!";
+}
+
 /// Protocol for the use-after-free attack test (`uaf-*` binaries). A "holder" server
 /// keeps a page lent to it by a "victim" that then terminates; a "grabber" tries to
 /// reclaim the freed frame. See `redoubt/tests/uaf-lent-page.toml`.
