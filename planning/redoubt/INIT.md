@@ -41,6 +41,17 @@ steward:  principals, sessions and agents (beamlet VMs)
   account. Every budget shares one stride queue (RESOURCES.md): `init`, the steward and the drivers
   run at the large weights the manifest gives them, every other server at its ordinary manifest
   weight. Nothing runs ahead of the queue.
+- **`init` refuses a manifest that hands `keyd` a key the box is authenticated by.** Two cases, each
+  a boot failure: a key listed both as a principal's login or approval key and as a `keyd` key
+  (CAPABILITIES.md, approvals), and **the key the loader verifies the boot bundle with**
+  (VERIFIED-BOOT.md), which `init` carries as the same compiled-in constant. `keyd` cannot see
+  either itself: it is given seeds and purposes, and not what the rest of the system does with the
+  matching public keys. `init` holds no crypto and never derives a public key from a seed, so it
+  asks `keyd` instead, once `keyd` is started and before anything else runs: `holds(public key)`,
+  answered yes or no (WP-S1 writes the operation into `keyd`'s table), and a yes stops the boot.
+  Domain separation already keeps a `keyd` signature from being a valid bundle signature
+  (VERIFIED-BOOT.md); this check keeps the bundle key out of `keyd` at all, so the boot root and a
+  key some badge may use are never one key. Closed from both sides, not from one.
 - The physical console is labelled with no labels. From milestone 2 the first owner is enrolled on
   it at first boot (a trusted path) and uses it for approvals.
 
@@ -54,6 +65,7 @@ One strict JSON file (WIRE.md) in the signed bundle; `init`'s only input. Entrie
 | `labels` | each label's name, owner principal and 64-bit id |
 | `volumes` | each volume's name, `blkd` partition and label set |
 | `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), device names, volume, the endpoints it receives on, the endpoints it is handed, and arguments (never its own budget) |
+| `public` | the bundle entries `bootfsd` serves at `/boot`, by exact name: programs and module archives, and nothing else in the bundle |
 | `principals` | milestone 1 only: each principal's name, SSH public keys for login and approval, budget, account, owned labels, the label sets it works under (each gets a fixed sub-budget of the principal's budget: pages, processes, weight), home (volume and path), and network scope (IP prefixes and ports) |
 
 Each field has one JSON type (WIRE.md): 64-bit quantities (label ids, accounts, page and byte sizes,
@@ -71,6 +83,23 @@ weights carve the system budget, like every other limit (R7).
 1-64 bytes of `[a-z0-9_:+-]`, starting with a letter (`fsd:data`, `alice+secrets`), and the
 manifest decoder refuses any other. Names become endpoint names, volume names and 9P paths, so an
 empty name, a NUL, U+FEFF or a C1 control must never reach them.
+
+**Arguments.** A `servers` entry's arguments are **opaque strings**. `init` passes them through
+unchanged and in order as the startup block's `argv` (below) and never interprets them: what they
+mean belongs to the server, and **each server's note defines its own** (`keyd`'s
+`name,purpose,seed`, for instance, written with WP-S1). `init` validates only their **count**,
+their **length** and their **encoding**: each is well-formed UTF-8 with no NUL, and the count and
+the lengths together must leave the startup block inside its one page, which is what bounds them.
+A manifest breaking any of that is refused. Arguments are not names in the sense above, so the
+name rule does not apply to them; a server that wants one validates it itself.
+
+**What `/boot` shows.** `bootfsd` serves exactly the bundle entries the `public` list names,
+matched byte for byte (no globbing, no prefixes), as one flat read-only directory; a walk to any
+other name is "does not exist", so nothing there tells a caller what else the bundle holds
+(NAMESPACES.md). `init` passes the list to `bootfsd` as its arguments, and refuses a manifest whose
+`public` list names an entry the bundle does not hold, or names the manifest itself. **The manifest
+is never public:** it carries `keyd`'s seeds (below) and every principal's account and keys, while
+every session reaches `/boot` for its modules.
 
 Example fragment:
 ```json
@@ -98,7 +127,8 @@ Example fragment:
 ## The system servers above the drivers
 - **steward:** principals, authentication decisions, sessions, the powerbox, leases (as budgets),
   launching (PACKAGES.md), and, from milestone 2, packages, trust lists and profiles. It appends the
-  audit log to a file only it can write (a separate audit server is deferred). It parses the most
+  audit log to a file only it can write (a separate audit server is deferred), signing each record
+  through `keyd`'s `audit` purpose (CONTAINMENT.md): it holds a grant, never a key. It parses the most
   untrusted input in the system (every agent's requests), so it holds no keys and never parses an ELF.
   It filters requests by labels (CONTAINMENT.md). Its manifest weight is large, which is what keeps
   logout and ending a lease responsive; it bounds the work any one request can cause and relies on
@@ -107,11 +137,18 @@ Example fragment:
   label set, and carves sessions and leases from them. It passes a server a narrowing budget only
   as a revocation scope created for that purpose, never a budget that holds processes
   (CAPABILITIES.md).
-- **keyd:** holds the keys the box uses on your behalf (host keys, principals' signing keys); signs
+- **keyd:** holds the keys the box uses on your behalf (in milestone 1 the SSH host key and the
+  steward's audit key; principals' signing keys from milestone 2); signs
   on request, never exports. Each badge names one key and one purpose (for SSH, a signature over the
   session identifier `keyd` computed itself), never arbitrary bytes. It never holds keys that
   authenticate a person to the box (CAPABILITIES.md, approvals). Separate from the steward because a
-  leaked key cannot be revoked; authority can.
+  leaked key cannot be revoked; authority can. In milestone 1 its keys arrive as manifest
+  arguments (`name,purpose,seed`, defined in `keyd`'s own note), so **the private seeds live in
+  `init`'s memory and in the bundle image**, at the same trust as the bundle: whoever can read the
+  bundle image holds the box's private keys, and what keeps them off `/boot` is that the manifest
+  is not public (above), not encryption — the bundle is signed, never encrypted
+  (VERIFIED-BOOT.md). That is the stated residual for milestone 1. Milestone 2 seals them to the
+  machine and generates them at first boot instead of shipping them in an image.
 - **sshd:** the SSH front door (`sunset`: `no_std`, no allocation, by dropbear's author). It asks the
   steward to authenticate users and start sessions, and asks `keyd` to sign with the host key. It
   rejects any login key that `keyd` holds. It serves `ssh approve@box`, in which only the steward
@@ -174,8 +211,9 @@ writes blocks for launchers.
 **Launching gives fresh connections.** A launcher never places its own connection to a server in a
 child's block; it asks the server for a fresh connection for the child (`new_connection`,
 NAMESPACES.md) and passes that one (CAPABILITIES.md, one badge, one client). It keeps each
-connection's id and disconnects it when it receives the child's exit notice. This is a rule for
-`init`, the steward and every shell.
+connection's id and disconnects it when it receives the child's exit notice; on the same notice it
+**releases** every grant it took for the child from a typed server, by the ids that server returned
+(WIRE.md, granting and releasing). This is a rule for `init`, the steward and every shell.
 
 ## Worked example: Alice, Bob and Alice's agent (milestone 1)
 ```
@@ -204,8 +242,11 @@ her namespace, and launches beamlet with it; IEx's `.beam` files come from the s
 | `/` | `fsd:data` at `/home/alice`, rw | `fsd:data` at `/home/bob`, rw | `fsd` (badge) |
 | `/dev/cons` | her SSH channel | his | `sshd` (badge, channel labels) |
 | `/net` | `ipd:lan`, connect out to ports 22 and 443, not the box's own addresses | `ipd:lan`, connect out to 443 | `ipd` (badge) |
-| `keys` | sign with Alice's keys | Bob's | `keyd` |
 | `powerbox`, `budget` | hers | his | steward, kernel |
+
+No session or lease holds `keys` in milestone 1: `keyd`'s purposes are the host key and audit
+signing, and a `grant` mints only the granter's own key and purpose, so there is nothing a session
+could be given (CAPABILITIES.md, agents 7). Principals' signing keys are milestone 2.
 
 Neither can name the other's home, `/system`, `fsd:alice-secrets`, the host key or block devices, or
 listen on the network.

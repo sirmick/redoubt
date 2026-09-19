@@ -34,9 +34,9 @@ not needed.
 - **Typed-message tables:** each server package (WP-D1, WP-D2, WP-D3, WP-S1, WP-S2, WP-S3) writes
   the tables of the protocols its server serves into that server's note, in WIRE.md's format, with a
   HISTORY.md line: a small design addition, reviewed as one.
-- **The owner's answers 1-119** (QUESTIONS.md) are in the notes; nothing is open. Packages built
+- **The owner's answers 1-126** (QUESTIONS.md) are in the notes; nothing is open. Packages built
   before an answer that changes them get a follow-up package below (WP-A2, WP-A3, WP-W2, WP-W3,
-  WP-M1, WP-R1b) rather than a silent edit.
+  WP-M1, WP-R1b, WP-V1) rather than a silent edit.
 
 ## Work packages
 
@@ -167,6 +167,19 @@ not needed.
 - Accepted when: `bench-attack-forgery` shows a client cannot forge an unprefixed or another PID's
   line; `wx` and `irq-attack` are listed as survival-only until WP-K4 and WP-K3.
 - Needs: WP-T1. Merged.
+
+**WP-V1. The bundle signing domain (answer 120).** Size S. (Emerged from WP-S1.)
+- Reads: VERIFIED-BOOT.md (Signature, Testbench).
+- Delivers: the loader verifies the boot bundle's signature over
+  `"redoubt.bundle.v1\0" || u64_le(len) || tar`, with `len` taken from the initrd it is reading, and
+  never over the bare archive (`loader/src/verify.rs`); the bench's signing path builds the same
+  preimage (`redoubt/testbench`, the bundle builder), so the two change together — nothing boots if
+  only one does; a case that signs the bare archive, with no domain and no length.
+- Accepted when: every bench case still boots; the bare-archive case is refused by the loader and
+  the machine powers off, as `verified-boot-rejects-tamper` does; `tamper_bundle` still fails; a
+  signature made over a preimage with another domain, or with the wrong `len`, is refused.
+- Needs: nothing. Changes what ships (the loader is TCB), so it lands on its own, before any
+  production key exists.
 
 ### Track K: the kernel (one integrator at a time; see "Hotspots")
 **WP-K0. Kernel memory panics.** Size S. (Emerged from WP-T1b's audit.)
@@ -340,24 +353,39 @@ not needed.
 **WP-R3. init and the boot manifest.** Size M.
 - Reads: INIT.md (all), WIRE.md (JSON).
 - Delivers: `init`: reads the manifest (refusing names outside INIT.md's name rule, and any grant of
-  a server's own budget), builds the budget tree with the manifest's weights (large for itself, the
-  steward and the drivers; ordinary for the servers that work for users: answer 103), hands out
+  a server's own budget; refusing a manifest that gives `keyd` a principal's login or approval key
+  or the key the loader verifies the bundle with, which it asks `keyd` for with `holds`, answers
+  120 and 122-123; passing each server's arguments through unchanged, validating only their count,
+  length and encoding; passing the `public` list to `bootfsd`, and refusing a `public` list naming
+  the manifest itself or an entry the bundle does not hold), builds the budget tree with the
+  manifest's weights (large for itself, the steward and the drivers; ordinary for the servers that
+  work for users: answer 103), hands out
   device handles, starts every system server through the stub, restarts with the rate
   limit, passes crash blame by (account, label set) to the steward (the typed message whose table
   WP-S2 writes), reboot as last resort; the boot loader loading only the kernel and `init`, once
   `init` can start every bundle program through the stub.
 - Accepted when: the milestone 1 manifest boots every server, each in a budget carrying the weight
   the manifest names; a manifest with a bad name, or one granting a server its budget, is refused;
-  no server's startup block holds a budget handle; a crashing server restarts on the same endpoint; blame case: 3 crashes blamed on one (account,
+  attack cases: a manifest giving `keyd` the bundle key stops the boot (the `holds` answer, not a
+  derivation in `init`), and so does one giving `keyd` a principal's login or approval key; a
+  manifest whose `public` list names the manifest, or an entry the bundle lacks, is refused;
+  arguments reach their server byte for byte, and a count or length that would overflow the startup
+  page is refused; no server's startup block holds a budget handle; a crashing server restarts on
+  the same endpoint; blame case: 3 crashes blamed on one (account,
   label set) produce the steward signal naming that (account, label set) and no other (a vault
   session's crashes name its label set, not its owner's empty one; what the steward then destroys
   is WP-S2's case); more than 5 restarts in 60 s reboots.
-- Needs: WP-R2, WP-W1, WP-K3, WP-K5.
+- Needs: WP-R2, WP-W1, WP-K3, WP-K5. The `holds` operation it calls belongs to `keyd`'s table
+  (WP-S1), so the refusal is written here and exercised end to end once WP-S1 has landed.
 
 **WP-R4. bootfsd and consoled.** Size S.
-- Delivers: `bootfsd` (read-only 9P over the verified bundle); `consoled` (UART driver serving
+- Delivers: `bootfsd` (read-only 9P over the verified bundle), serving **only the bundle entries
+  the manifest's `public` list names** (the list arrives as its arguments from `init`), matched
+  byte for byte, never the manifest (answer 123); `consoled` (UART driver serving
   `/dev/cons` over 9P, IRQ receive); both serve `ninep_common` through the skeleton.
-- Accepted when: 9P conformance vectors from WP-W1; typing on the UART reaches a 9P reader.
+- Accepted when: 9P conformance vectors from WP-W1; typing on the UART reaches a 9P reader; attack
+  case: a session walking `/boot` sees only the public entries, and a walk to the manifest's own
+  name is refused exactly as a name the bundle never held.
 - Needs: WP-R1b, WP-K3.
 
 ### Track B: beamlet on Redoubt (parallel with track K once WP-R1 exists)
@@ -412,13 +440,24 @@ labelled callers.
 ### Track S: security servers
 **WP-S1. keyd.** Size S. Holds keys; signs through a badge-scoped capability naming one key and one
 purpose (for SSH, a signature over the session identifier `keyd` computes itself), never arbitrary
-bytes; never holds keys that authenticate a person to the box; constant-time signing.
-- Reads: INIT.md (keyd), CAPABILITIES.md (the powerbox and approvals, agents), CONTAINMENT.md
-  (covert and timing channels: constant time).
+bytes; never holds keys that authenticate a person to the box; constant-time signing. Its keys in
+milestone 1 are the SSH host key and the steward's `audit` key; **no session and no lease holds
+`keys`** (answer 124), since `grant` mints only the granter's own key and purpose and neither of
+those is a principal's: a principal's key, with the one message shape it may sign, is milestone 2.
+- Reads: INIT.md (keyd, the boot manifest's arguments), CAPABILITIES.md (the powerbox and
+  approvals, agents 7), CONTAINMENT.md (covert and timing channels: constant time; minted badges),
+  WIRE.md (granting and releasing).
+- Delivers, besides signing: `grant` and `release` in WIRE.md's shape, written into `keyd`'s table;
+  `holds(public key)`, answered yes or no, which is how `init` refuses a manifest that hands `keyd`
+  the bundle key without deriving a public key itself (INIT.md, answer 120); its keys taken as the
+  manifest arguments `name,purpose,seed`, defined in `keyd`'s own note (answer 122); its first
+  minted badge drawn at random above 2^63 (answer 126, with the 9P skeleton, which changes with it).
 - Accepted when: a signature round-trips through a badge-scoped handle; attack cases: a caller
   cannot sign with a key or for a purpose its badge does not name, a request to sign arbitrary
   bytes (a relayed SSH user-auth blob) is refused, no export operation exists, enrolling a login
-  key is refused; the signing path is constant-time under the bench's timing check.
+  key is refused, a `release` of an id the caller never received is refused like one that does not
+  exist, and a grant released with its parent leaves nothing usable behind; two boots of the same
+  bundle mint different badges; the signing path is constant-time under the bench's timing check.
 - Needs: WP-R1b.
 
 **WP-S2. steward (stateless, milestone 1).** Size L.
@@ -435,8 +474,11 @@ bytes; never holds keys that authenticate a person to the box; constant-time sig
   accepted from the sponsor ahead of admission, notifications only to channels whose labels ⊇ the
   request's, and random ids; audit records carrying the request's labels, read under `check`;
   declassification by snapshot, the steward `call`ing a short-lived reader budget with the item's
-  labels, which fills its lend; on the third blamed crash of an (account, label set), every budget
-  of it destroyed and new sessions refused until the window passes; the typed message by which
+  labels, which fills its lend; each audit record signed through a `keyd` grant for the `audit`
+  purpose and its signature stored beside it in the file (answer 125; the steward holds a grant,
+  never a key, and verification is an operator tool in milestone 2); on the third blamed crash of
+  an (account, label set), every budget of it destroyed and new sessions refused until the window
+  passes; the typed message by which
   `init` reports blame, its table written into INIT.md; the work of any one request bounded, since
   the steward's promptness now rests on its large manifest weight in the one queue and on nothing
   else (answer 103); `check` on its own records.
@@ -446,8 +488,10 @@ bytes; never holds keys that authenticate a person to the box; constant-time sig
   capped); a lease request over `MAX_LEASE` refused; a sub-agent dies with its agent's lease; no
   reader budget outlives its declassification; an agent flooding the steward and `fsd` does not
   stop Alice opening a file and ending its lease; after three blamed crashes Bob's sessions and
-  leases of that label set are gone and a new login is refused within the window; a logout and an
-  ended lease still complete promptly while every user budget spins (its weight, not an order); no
+  leases of that label set are gone and a new login is refused within the window; every audit
+  record in the file carries a signature that verifies against `keyd`'s audit key, and one byte
+  changed in a record makes its signature fail; a logout and an ended lease still complete promptly
+  while every user budget spins (its weight, not an order); no
   server can destroy a session; a vault session's leases do not change the unlabelled sub-budget's
   free limits.
 - Needs: WP-R3, WP-B1, WP-D2.
@@ -473,7 +517,7 @@ this `sshd` in milestone 1, a stated residual).
 ## Order
 ```
 merged:                  W1  W2  L1  T1  T1b  A1  A2  K0  K1  R1  R1b
-start now, in parallel:  M0 -> M1;  A3 (after A2);  W3 (after W2, R1b)
+start now, in parallel:  M0 -> M1;  A3 (after A2);  W3 (after W2, R1b);  V1 (nothing)
 kernel, serialized:      K2 (after A3) -> K3 -> K4 -> K5 -> K6 (after R1b)
 runtime:                 R2 (after K4) -> R3 (after K3, K5)
                          R4 (after R1b, K3)
@@ -483,10 +527,12 @@ security:                S1 (after R1b);  S2 (after R3, B1, D2);  S3 (after D3, 
 conformance:             C1 (after M1, K5, T1)
 milestone:               E1 (after all)
 ```
-**The owner's answers 1-119** (QUESTIONS.md) are all in the notes; nothing is open. Answers
-102-119 add A3 and W3 and change K2, K5, M1, R3, D2 and S2. The critical path is the kernel track
-(K2 to K5), then R3, S2 and S3; A3 must land before K2, which removes the `first` flag the merged
-K1 built.
+**The owner's answers 1-126** (QUESTIONS.md) are all in the notes; nothing is open. Answers
+102-119 add A3 and W3 and change K2, K5, M1, R3, D2 and S2; answers 120-126 add V1 and change R3,
+R4, S1 and S2. The critical path is unchanged: the kernel track (K2 to K5), then R3, S2 and S3;
+A3 must land before K2, which removes the `first` flag the merged K1 built. V1 is off the path and
+depends on nothing, but it changes the loader and the bench's signing path together, so it is one
+package and no other package may edit either half while it runs (Hotspots).
 Everything off that path (model, codecs, littlefs, bench, drivers, beamlet's platform) can proceed
 in parallel. SWARM.md's waves follow this order.
 
@@ -494,6 +540,8 @@ in parallel. SWARM.md's waves follow this order.
 - `kernel/src/syscall.rs`, `kernel/src/services.rs`, `kernel/src/mem.rs`,
   `kernel/src/arch/riscv/process.rs`: only the one kernel package in progress edits them.
 - `redoubt-sys` (the ABI): changed only with a KERNEL-SPEC.md change.
+- `loader/src/verify.rs` and the bench's bundle builder (`redoubt/testbench`): the signature's
+  preimage lives in both, so only WP-V1 edits either until it lands.
 - The boot manifest format (INIT.md) and the typed-message tables (WIRE.md and each server's note):
   one owner each; changes go through the design notes first.
 - `planning/redoubt/`: design changes only with a HISTORY.md entry; STATUS.md updated by whoever

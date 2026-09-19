@@ -4,11 +4,12 @@ Raised by the wave 1 packages and their reviews (2026-09-19). Each touches the f
 so each needs your decision; the answer goes into the named note with a HISTORY.md entry.
 **Rec** is the orchestrator's recommendation. Reply with numbers, e.g. "all Rec except 7: ...".
 
-**1-119 answered 2026-09-19** (ANSWERS.md, six tranches; each "Answered" line says where the
-answer now lives). **Open: 120-126** (from WP-S1), **127-128** (from WP-K2) and **129-137** (userland,
-USERLAND.md), at the end. The round-4 answers revised 56 (handle kinds are checked by
-use) and replaced 57 and 58 (by 82); the last tranche replaced 103 (no `first` flag and no strict
-priority: one stride queue for every budget).
+**1-126 answered 2026-09-19** (ANSWERS.md, seven tranches; each "Answered" line says where the
+answer now lives). **Open: 127-128** (from WP-K2) and **129-137** (userland, USERLAND.md), at the
+end. The round-4 answers revised 56 (handle kinds are checked by use) and replaced 57 and 58 (by
+82); a later tranche replaced 103 (no `first` flag and no strict priority: one stride queue for
+every budget); the tranche for 120-126 accepted every recommendation and added one change to what
+ships: the boot bundle's signature gets its own domain now (VERIFIED-BOOT.md).
 
 ## Kernel: messages and IPC (KERNEL-SPEC.md)
 
@@ -956,6 +957,12 @@ point to change the IPC design. Several items interact; the cross-references say
        signing lands in milestone 2;
      - WP-R3's `init` refuses a manifest that gives keyd the key the loader verifies the bundle
        with, beside the login and approval-key check it already owns. keyd cannot see that itself.
+     **Answered:** both, and one addition from the owner: the bundle signature gets its own domain
+     now, in milestone 1. VERIFIED-BOOT.md, Signature (the loader verifies, and the signing tool
+     builds, `"redoubt.bundle.v1\0" || u64_le(len) || tar`; domains are prefix-free) and Testbench;
+     PACKAGES.md, What is signed (`"redoubt.pkg.v1\0"` over a digest, milestone 2); INIT.md, Boot
+     (`init` refuses the manifest, asking `keyd` through `holds` rather than deriving a public key);
+     BUILD-PLAN.md, WP-V1 (new) and WP-R3.
 
 121. **A typed server has no equivalent of `ninep_common` for freeing per-client state.** 9P
      servers get `new_connection` and `disconnect`; keyd had to invent `grant` and `release` for
@@ -963,12 +970,16 @@ point to change the IPC design. Several items interact; the cross-references say
      *Rec:* WIRE.md states the pattern once: a typed protocol that mints a narrower capability
      names its grant and release operations, and CONTAINMENT.md says a launcher releases a child's
      grants when it receives the child's exit notice, as it disconnects its connections.
+     **Answered:** WIRE.md, Granting and releasing; CAPABILITIES.md, Disconnect (the launcher's
+     rule); INIT.md, Launching gives fresh connections; BUILD-PLAN.md, WP-S1.
 
 122. **What manifest arguments mean.** INIT.md's manifest table says a `servers` entry carries
      "arguments (never its own budget)", but not what they are. keyd has now defined its own
      (`name,purpose,seed`), in its own note.
      *Rec:* INIT.md says arguments are opaque strings `init` passes through unchanged, and each
      server's note defines its own; `init` validates only the count and the encoding.
+     **Answered:** INIT.md, the boot manifest (Arguments: count, length and encoding only);
+     BUILD-PLAN.md, WP-R3 and WP-S1.
 
 123. **Where keyd's private seeds live.** WP-S1 takes each key as a manifest argument
      `name,purpose,seed`, so the seeds sit in the boot manifest: inside the signed but unencrypted
@@ -978,6 +989,9 @@ point to change the IPC design. Several items interact; the cross-references say
      archives), never the manifest itself. INIT.md then states the remaining residual: the seeds
      live in `init`'s memory and in the bundle image, at the same trust as the bundle, until
      milestone 2 seals them to the machine.
+     **Answered:** INIT.md, the boot manifest (the `public` entry; What `/boot` shows) and keyd
+     (the residual; milestone 2 also generates them at first boot); NAMESPACES.md, Boot;
+     BUILD-PLAN.md, WP-R3 and WP-R4.
 
 124. **What `keys` names in a milestone 1 session or lease.** keyd's purposes are `ssh_host` and
      `audit`, and `grant` mints only the granter's own key and purpose, so the steward can hand a
@@ -986,11 +1000,15 @@ point to change the IPC design. Several items interact; the cross-references say
      *Rec:* no session or lease holds `keys` in milestone 1. The worked example's row goes, and
      both mentions are marked milestone 2, where a principal's key comes with the one message
      shape it may sign.
+     **Answered:** CAPABILITIES.md, Agents (7); INIT.md, the worked example (the `keys` row gone);
+     BUILD-PLAN.md, WP-S1.
 
 125. **Signed audit records.** keyd has an `audit` purpose, but no note says audit records are
      signed, or who verifies them.
      *Rec:* keep it. WP-S2 signs each record it appends and the audit file carries the signatures;
      verification is an operator tool in milestone 2.
+     **Answered:** CONTAINMENT.md, the shared server library (the steward's records); INIT.md,
+     steward; BUILD-PLAN.md, WP-S2.
 
 126. **Minted badges after a restart.** Endpoints outlive servers, and a server keeps no state
      across a restart, so keyd and the 9P skeleton both restart their minted badges at 2^63 while
@@ -998,6 +1016,8 @@ point to change the IPC design. Several items interact; the cross-references say
      handles.
      *Rec:* a server draws its first minted badge at random above 2^63, from `random`. The
      skeleton and keyd change together.
+     **Answered:** CONTAINMENT.md, the shared server library (Handles and badges); BUILD-PLAN.md,
+     WP-S1.
 
 ## From the kernel's IPC (WP-K2)
 

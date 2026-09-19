@@ -33,7 +33,10 @@ device object takes one of three forms; KERNEL-SPEC.md) and nothing about users,
 - **Disconnect, not a kernel notice.** The kernel does not tell a server when a client's handles
   are gone. Only the holder of a connection id can `disconnect(id)`, which frees that connection
   and everything minted under it. A launcher disconnects a child's connections when it receives the
-  child's exit notice; the steward does so at logout and at lease expiry. Stated residual: a
+  child's exit notice, and on the same notice **releases the child's grants from typed servers**,
+  which work the same way (WIRE.md states the pattern: `grant` and `release` are the typed
+  counterparts of `new_connection` and `disconnect`); the steward does so at logout and at lease
+  expiry. Stated residual: a
   launcher that dies without disconnecting leaks its children's connections until its own
   connection is freed, and the leak counts against its own (account, label set).
 
@@ -123,10 +126,14 @@ share's stamp. Alice un-shares: the scope is destroyed, and `sub` dies with it.
    with more authority than it holds (PACKAGES.md).
 6. **Labels** bound what an agent can leak; capabilities bound what it can do (CONTAINMENT.md).
 7. **No credentials in agent memory.** Agents use keys through `keyd` and, later, models through
-   `gatewayd`, which holds API keys. A lease carries `keys` only if its approval named the key, and
-   a `keyd` badge names one key and one purpose (for SSH, a signature over the session identifier
-   `keyd` computed itself), never arbitrary bytes: otherwise a hijacked agent is a signature oracle
-   that lets its peer log in as its sponsor elsewhere.
+   `gatewayd`, which holds API keys. **A lease carries `keys` only from milestone 2**, and then only
+   if its approval named the key: a principal's key comes with **the one message shape it may sign**
+   (a `keyd` badge names one key and one purpose — for SSH, a signature over the session identifier
+   `keyd` computed itself), never arbitrary bytes, or a hijacked agent is a signature oracle that
+   lets its peer log in as its sponsor elsewhere. In milestone 1 no session and no lease holds
+   `keys` at all: `keyd`'s only purposes are the host key and audit signing, and `grant` mints
+   nothing but the granter's own key and purpose, so there is nothing to hand out (INIT.md's worked
+   example).
 8. **Runtime:** each agent is its own beamlet VM (one VM = one trust domain); sub-agents with
    different authority are separate VMs.
 9. **Everything is audited:** mint, delegate, revoke, approve, lease expiry, with the principal chain.

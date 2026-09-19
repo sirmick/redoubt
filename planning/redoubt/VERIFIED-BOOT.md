@@ -12,10 +12,27 @@ authenticates the boot bundle before executing any of it.** A tampered bundle is
 
 ## Signature
 - **Algorithm:** Ed25519 (RFC 8032), via the pure-Rust, self-contained, `no_std` `ed25519-compact`.
-- **Container:** the initrd is `signature (64 bytes) || bundle tar`; the signature covers the whole
-  tar. The loader verifies it before reading the tar, and on failure panics, which powers the machine
-  off via SBI. No unsigned fallback. Packages use the same container (PACKAGES.md).
+- **Container:** the initrd is `signature (64 bytes) || bundle tar`.
+- **What is signed is not the bare archive.** The signature covers the domain-separated preimage
+  `"redoubt.bundle.v1\0" || u64_le(len) || tar`: 18 bytes of NUL-terminated ASCII domain, then the
+  archive's byte count as a little-endian `u64`, then the archive. `len` is the number of bytes
+  after the 64-byte signature in the initrd; the verifier takes it from the container it is reading,
+  never from the signed bytes. **The loader builds that preimage and verifies over it**, before
+  reading the tar, and on failure panics, which powers the machine off via SBI. No unsigned
+  fallback, and no acceptance of a signature over the archive alone. **The signing tool builds the
+  same preimage** (the bench's bundle builder today, any production signer later); the two are the
+  only places the preimage is constructed.
+- **Domains are prefix-free**, so one key's signature can never be read as another protocol's.
+  Every Redoubt signing domain is a NUL-terminated ASCII name followed by the `u64_le` length of
+  what it covers: `"redoubt.audit.v1\0" || u64_le(len) || record` in `keyd` (CONTAINMENT.md),
+  `"redoubt.pkg.v1\0"` for packages from milestone 2 (PACKAGES.md), `"redoubt.bundle.v1\0"` here.
+  Without a domain on this one, a signature made elsewhere could be made to cover a valid bundle:
+  a ustar header's name field is 100 bytes of arbitrary bytes, so another protocol's domain and
+  length fit inside the first tar header, and its preimage is then a well-formed archive
+  (question 120).
 - **Key:** the loader embeds one Ed25519 public key (`loader/src/verify.rs`). No algorithm agility.
+  `init` carries the same key as a compiled-in constant, so that it can refuse a manifest handing it
+  to `keyd` (INIT.md).
 
 ## Development key
 The bench signs with a key derived from a fixed, public seed (`[0x42; 32]`), so builds are
@@ -25,7 +42,8 @@ It is **not for production**: a real deployment generates a secret key and repla
 ## Testbench
 Every bundle the bench builds is signed, so all boot tests exercise the verified path. A case may set
 `tamper_bundle = true` to flip one payload byte after signing; `verified-boot-rejects-tamper` checks
-the loader refuses to boot.
+the loader refuses to boot. A case also signs the bare archive, with no domain and no length, and
+checks the loader refuses that too (BUILD-PLAN.md, WP-V1).
 
 ## Not covered
 - Verifying the loader itself (needs firmware or ROM support; the FPGA's boot ROM can do it,

@@ -38,6 +38,13 @@ is (VERIFIED-BOOT.md owns the signature container). The boot bundle is the syste
 boot, system updates and user packages share one verifier. `.beam` archives and native programs are
 covered as package contents. The steward records which key signed each installed program.
 
+**The package container has its own domain** (milestone 2, when package signing lands): the
+signature covers `"redoubt.pkg.v1\0" || u64_le(len) || tar`, never the bare archive, and `keyd`
+signs a 32-byte digest of that preimage which it computed itself, never bytes a caller handed it.
+The bundle's domain is `"redoubt.bundle.v1\0"` (VERIFIED-BOOT.md, which owns the rule that every
+domain is prefix-free); a package signature is therefore never a bundle signature, and the reverse
+(question 120).
+
 The package manifest (strict JSON, WIRE.md) names the contents and **requests** capabilities
 ("`/net` connect to 443", "read my config directory"). It can grant nothing.
 

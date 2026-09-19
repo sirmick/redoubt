@@ -118,7 +118,13 @@ Every system server that serves more than one account links one small library:
   118).
 - **Handles and badges.** The library closes every handle a request carries that the protocol did
   not ask for, so a client cannot grow a server's handle table. A server never reuses a badge
-  number, so a handle revoked in flight never reaches a later connection.
+  number, so a handle revoked in flight never reaches a later connection. **A server draws its
+  first minted badge at random above 2^63** (from `random`) and counts up from there, refusing to
+  mint rather than wrapping. Endpoints outlive servers and a server keeps no state across a restart
+  (INIT.md), so a restarted server that began again at a fixed number would reissue badges its
+  clients still hold, and their old handles would match its new grants; drawing the start at random
+  makes that collision negligible instead of certain (question 126). Badge 0 stays the receive
+  right (KERNEL-SPEC.md).
 
 Each server's note states what its objects and state are, so that nothing a labelled caller
 influences is visible to a caller without that label:
@@ -128,7 +134,16 @@ influences is visible to a caller without that label:
 - **steward**: applies `check` to its own records. Labelled callers can only submit requests.
   Every id it hands out (request and session ids, connection ids, and any other) is unpredictable:
   random 64-bit, keyed, never a counter, which would tell every principal how many the others made.
-  Audit records carry the request's labels and are read under `check`. Ending a lease is always
+  Audit records carry the request's labels and are read under `check`. **Each record is signed**:
+  the steward asks `keyd` to sign it under the `audit` purpose, over the domain-separated preimage
+  `"redoubt.audit.v1\0" || u64_le(len) || record` whose digest `keyd` computes itself
+  (VERIFIED-BOOT.md owns the domain rule), and the audit file carries the signature beside the
+  record, so a record cannot be altered undetected by anything that can write the file later. The
+  steward holds no key: it holds a `keyd` grant for that one purpose, and `keyd` signs nothing else
+  with it. Verifying the file is an **operator tool in milestone 2**; milestone 1 produces the
+  signatures and stores them (question 125). Stated limit: per-record signatures catch edits, not
+  records dropped or reordered wholesale; chaining them is for milestone 2, with the verifier.
+  Ending a lease is always
   accepted from the sponsor, ahead of admission. Its manifest weight is large (RESOURCES.md), not a
   priority above the queue, so it bounds the work any one request can cause and relies on its caps.
 

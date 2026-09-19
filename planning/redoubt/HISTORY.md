@@ -388,6 +388,53 @@ The same three roles, attacking v3 and pinning interfaces for a swarm build. Fou
   one queue and tests the `SLICE` of latency; WP-M1, WP-R3 (manifest weights), WP-D2 (the byte
   quotas) and WP-S2 (the steward's weight) follow; the merged packages and the order are updated,
   and A3 must land before K2.
+- **The boot bundle's signature gets its own domain** (2026-09-19, answer 120; **a change to what
+  ships**, not only to the notes): the loader now verifies, and the signing tool builds, the
+  preimage `"redoubt.bundle.v1\0" || u64_le(len) || tar` — 18 bytes of NUL-terminated domain, the
+  archive's length as a little-endian `u64`, then the archive — instead of the bare archive.
+  Reason: a signature over a bare archive can be made to cover something else's bytes. A ustar
+  header's name field is 100 bytes of arbitrary bytes, so another protocol's domain and length fit
+  inside the first header, and that protocol's preimage is then a well-formed bundle; separating
+  `keyd`'s domains closes the hole from one side only. And it is cheap now and awkward later: the
+  loader and the signer are small, and the only bundles in existence are the bench's, signed with
+  the public development seed, so no production key has to be re-signed. Every Redoubt signing
+  domain is now a NUL-terminated name plus a `u64_le` length, and so prefix-free
+  (`"redoubt.audit.v1\0"` for `keyd`'s audit records, `"redoubt.pkg.v1\0"` for packages in
+  milestone 2). VERIFIED-BOOT.md states the container and the rule; PACKAGES.md the package
+  domain; BUILD-PLAN.md WP-V1 changes the loader and the bench's signing path together, with a
+  case that a signature over the bare archive is refused.
+- **Answers 120-126: keys, arguments and what `/boot` shows** (2026-09-19): `init` refuses a
+  manifest that gives `keyd` the key the loader verifies the bundle with, beside the login and
+  approval-key check it already owned, asking `keyd` through `holds` so that `init` never derives a
+  public key from a seed (120; INIT.md). A typed protocol that mints a narrower capability names
+  its `grant` and `release` operations, the typed counterpart of `new_connection` and `disconnect`:
+  `grant` mints no wider than the caller, stamped like the request's handle, and returns a random
+  id; `release(id)` frees it and everything under it, for the holder of the id alone; a launcher
+  releases a child's grants on its exit notice, as it disconnects its connections (121; WIRE.md,
+  CAPABILITIES.md, INIT.md). Manifest arguments are opaque strings `init` passes through unchanged,
+  each server's note defining its own, with `init` validating only their count, length and encoding
+  (122; INIT.md). `bootfsd` serves only the bundle entries the manifest's new `public` list names,
+  matched byte for byte, never the manifest itself, and the residual is stated: in milestone 1 the
+  seeds live in `init`'s memory and in the bundle image, at the bundle's trust, and milestone 2
+  seals them to the machine and generates them at first boot (123; INIT.md, NAMESPACES.md). No
+  session and no lease holds `keys` in milestone 1 — the worked example's row is gone — and a
+  lease carries `keys` from milestone 2, where a principal's key comes with the one message shape
+  it may sign (124, answer 95; CAPABILITIES.md, INIT.md). The steward signs each audit record through
+  `keyd`'s `audit` purpose and the file carries the signatures, with verification an operator tool
+  in milestone 2 and the stated limit that per-record signatures catch edits, not wholesale
+  deletion (125; CONTAINMENT.md). A server draws its first minted badge at random above 2^63 and
+  counts up, refusing to mint rather than wrapping, so a restarted server on an endpoint that
+  outlived it never reissues a badge a client still holds (126; CONTAINMENT.md).
+- **BUILD-PLAN.md follows answers 120-126** (2026-09-19): WP-V1 added (the bundle domain in the
+  loader and the bench's signing path, with a bare-archive case; it changes what ships, so it lands
+  on its own, and both halves are hotspots until it does); WP-R3 gains the manifest refusals (the
+  bundle key through `holds`, a `public` list naming the manifest or a missing entry), arguments
+  passed through unchanged, and the `public` list handed to `bootfsd`; WP-R4 serves only public
+  entries, with a case that a walk to the manifest's name is refused like a name the bundle never
+  held; WP-S1 gains `grant`, `release`, `holds`, its manifest arguments, the random first badge, and
+  the note that no lease carries `keys` in milestone 1; WP-S2 signs each audit record through a
+  `keyd` grant. The Order still holds: V1 depends on nothing and is off the critical path, which
+  stays K2 to K5, then R3, S2 and S3.
 
 ## Milestone 1 build (from 2026-09-19)
 One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
