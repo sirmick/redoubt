@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! How the kernel reaches page tables: through the physmap. The typed page-table layer
-//! itself is the `sv39` crate, which the loader uses too.
+//! itself is the `paging` crate, which the loader uses too.
 
-pub use sv39::*;
+pub use paging::*;
 use xous_kernel::arch::{PHYSMAP_BASE, PHYSMAP_SIZE};
 
 /// The kernel's view of physical memory.
