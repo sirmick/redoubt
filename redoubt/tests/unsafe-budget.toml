@@ -64,3 +64,10 @@ name = "redoubt-rt (native runtime): the heap's free lists, page buffers and len
 paths = ["redoubt/rt/src"]
 max_unsafe = 9
 max_undocumented = 0
+
+[[budget]]
+name = "keyd (holds every private key; signs, never exports)"
+paths = ["redoubt/keyd/src"]
+# WP-S1: none, and the crate says `#![forbid(unsafe_code)]`, so this can only stay at 0.
+max_unsafe = 0
+max_undocumented = 0

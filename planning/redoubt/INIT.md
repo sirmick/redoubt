@@ -143,12 +143,13 @@ Example fragment:
   session identifier `keyd` computed itself), never arbitrary bytes. It never holds keys that
   authenticate a person to the box (CAPABILITIES.md, approvals). Separate from the steward because a
   leaked key cannot be revoked; authority can. In milestone 1 its keys arrive as manifest
-  arguments (`name,purpose,seed`, defined in `keyd`'s own note), so **the private seeds live in
-  `init`'s memory and in the bundle image**, at the same trust as the bundle: whoever can read the
-  bundle image holds the box's private keys, and what keeps them off `/boot` is that the manifest
-  is not public (above), not encryption — the bundle is signed, never encrypted
-  (VERIFIED-BOOT.md). That is the stated residual for milestone 1. Milestone 2 seals them to the
-  machine and generates them at first boot instead of shipping them in an image.
+  arguments (`name,purpose,seed`, defined in `keyd`'s own note below, with its purposes and its
+  typed messages), so **the private seeds live in `init`'s memory and in the bundle image**, at
+  the same trust as the bundle: whoever can read the bundle image holds the box's private keys,
+  and what keeps them off `/boot` is that the manifest is not public (above), not encryption —
+  the bundle is signed, never encrypted (VERIFIED-BOOT.md). That is the stated residual for
+  milestone 1. Milestone 2 seals them to the machine and generates them at first boot instead of
+  shipping them in an image.
 - **sshd:** the SSH front door (`sunset`: `no_std`, no allocation, by dropbear's author). It asks the
   steward to authenticate users and start sessions, and asks `keyd` to sign with the host key. It
   rejects any login key that `keyd` holds. It serves `ssh approve@box`, in which only the steward
@@ -157,6 +158,86 @@ Example fragment:
   milestone 1 `approve@` shares it with every other channel (a stated residual; milestone 2 gives
   `approve@` its own instance or the console).
 - Users' own outbound TLS and SSH (OTP `:ssl`, `:ssh`) run inside their VMs, in userland.
+
+## keyd: keys, purposes and messages
+
+**Its keys come from the manifest, one per argument** (`servers`, `arguments`). Milestone 1
+generates no key on the box: `keyd` holds exactly what the signed bundle gave it, and there is no
+enrolment, import or export operation for it to hold anything else. An argument is
+`name,purpose,seed`, separated by commas (a comma is outside the name rule, so no field can swallow
+another): `name` under the manifest's name rule, `purpose` from the table below, and `seed` the
+Ed25519 secret seed (RFC 8032) as exactly 64 lower-case hex digits. `keyd` refuses to start on an
+argument it cannot parse, an unknown purpose, a repeated name, or two keys with the same public key
+— fail closed and loudly, since a key it cannot read is a key it cannot sign with.
+
+**A badge names one key and one purpose.** The **root badge of the key in argument *i* is *i***
+(from 1), so `init` mints each root capability without asking `keyd` anything, and a restarted
+`keyd` gives the same badges the same meaning from the same arguments, holding no state across the
+restart (decision 5). Badges at or above 2^63 are minted by `grant` at run time, are never reused,
+and are gone after a restart.
+
+| Purpose | Key | The one thing its badge may sign |
+| --- | --- | --- |
+| `ssh_host` | the box's SSH host key | `sign_ssh_exchange`: the exchange hash `keyd` computes, which is the session identifier |
+| `audit` | the steward's audit key | `sign_record`: an audit record under the audit domain string |
+
+`keyd`'s keys carry no labels in milestone 1, so `check` lets anyone read a public key and only an
+unlabelled caller sign: a labelled (vault) session that needs to sign needs a labelled key, which
+is milestone 2.
+
+**It never holds a key that authenticates a person to the box** (CAPABILITIES.md, approvals). No
+purpose signs an SSH user-authentication request, and `keyd` itself refuses any purpose outside the
+table. That a manifest does not hand `keyd` a key it also lists as a principal's login or approval
+key is checked where both lists are read, in `init` (BUILD-PLAN.md, WP-R3); `holds` is the
+operation with which `init`, the steward and `sshd` ask.
+
+**Messages.** A typed protocol, not 9P: `keyd` serves six fixed operations and no namespace, and a
+file server's read and write would be the export this protocol must not have. Every request is
+admitted and label-checked; a badge that names no key, names another key's purpose, or fails the
+label check gets `not_permitted`, which says no more than that.
+
+<!-- wire: keyd -->
+| Opcode | Message | Fields | Reply |
+| --- | --- | --- | --- |
+| 1 | `sign_ssh_exchange` | `v_c: bytes`, `v_s: bytes`, `i_c: bytes`, `i_s: bytes`, `q_c: bytes`, `q_s: bytes`, `k: bytes` | `signature: bytes` |
+| 2 | `sign_record` | `record: bytes` | `signature: bytes` |
+| 3 | `public_key` | - | `algorithm: string`, `key: bytes` |
+| 4 | `holds` | `algorithm: string`, `key: bytes` | `held: u32` |
+| 5 | `grant` | - | `id: u64`, `capability: handle[0] endpoint` |
+| 6 | `release` | `id: u64` | - |
+
+<!-- wire-errors: keyd -->
+| Code | Error |
+| --- | --- |
+| 2 | `not_permitted` |
+| 3 | `too_many` |
+| 4 | `failed` |
+
+- `sign_ssh_exchange` (purpose `ssh_host`) is the SSH exchange hash of RFC 4253 §8: `keyd` hashes
+  `string V_C`, `string V_S`, `string I_C`, `string I_S`, `string K_S`, `string Q_C`, `string Q_S`,
+  `mpint K` with SHA-256 and signs the 32-byte result. The caller passes the seven fields it knows;
+  `K_S` is `string "ssh-ed25519" || string <public key>`, which **`keyd` builds from its own key**,
+  so no caller can have it sign a transcript naming another host key. `k` is the shared secret
+  already in `mpint` body form (the caller has it and computes the same hash for its own key
+  derivation; encoding it here would make `keyd`'s work depend on the secret's leading bytes).
+  The reply is the raw 64-byte Ed25519 signature; SSH's `string "ssh-ed25519" || string <sig>`
+  framing is the caller's.
+- `sign_record` (purpose `audit`) signs `"redoubt.audit.v1\0"`, the record's length as a
+  little-endian `u64`, then the record. The domain string and the length make a signature from one
+  purpose unusable in another protocol, and no operation signs bytes with no domain at all.
+- `public_key` returns `ssh-ed25519` and the 32 raw public-key bytes of the key the badge names.
+  `holds` answers 1 if `keyd` holds that public key and 0 if not, for a key the asker already has;
+  public keys are published (the host key goes to every client that connects), so this reveals
+  nothing, and it is how `sshd` refuses a login with a key `keyd` holds.
+- `grant` mints a fresh capability with the caller's own key and purpose, the way `new_connection`
+  does for 9P, because **a launcher never passes its own connection to a child**: the steward asks
+  for one per session or lease rather than copying its own. It is stamped like the handle the
+  request came through, so it dies with what the caller holds; the reply's `id` is random, and only
+  the caller that received it may `release` it, which frees it and everything granted under it.
+  Nothing granted is ever wider than the badge it came through, so there is no attenuation
+  argument to get wrong.
+- There is **no operation that returns a private key, or any function of one but a signature**, and
+  none that adds, replaces or removes a key.
 
 ## The shell
 A session's shell is **IEx** (Elixir's interactive shell) on beamlet, with a small Redoubt helpers

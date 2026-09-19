@@ -1075,8 +1075,10 @@ mod tests {
             found.push(tables);
         }
         let p = link(found).unwrap();
-        let (n, s) = (&p[0], &p[1]);
-        assert_eq!((n.name.as_str(), s.name.as_str()), ("ninep_common", "startup"));
+        // By name, not by position: INIT.md holds `keyd`'s tables as well (WP-S1), and other
+        // notes will grow more, so this must not depend on how many a note happens to have.
+        let by_name = |want: &str| p.iter().find(|t| t.name == want).unwrap_or_else(|| panic!("{want}"));
+        let (n, s) = (by_name("ninep_common"), by_name("startup"));
         let names: Vec<&str> = n.messages.iter().map(|m| m.name.as_str()).collect();
         assert_eq!(names, ["new_connection", "disconnect"]);
         assert!(!n.messages[0].inline(), "`new_connection` carries a string");
