@@ -6,11 +6,20 @@ use crate::atom::Atom;
 use crate::term::Term;
 
 /// An external function a module calls: `module:function/arity`.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Import {
     pub module: Atom,
     pub function: Atom,
     pub arity: u32,
+    /// The native implementing it, if there is one; resolved once when the module is loaded
+    /// (natives never change, so this cannot go stale).
+    pub native: Option<crate::bif::Native>,
+}
+
+impl core::fmt::Debug for Import {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}:{}/{}", self.module.as_str(), self.function.as_str(), self.arity)
+    }
 }
 
 #[derive(Clone, Debug)]

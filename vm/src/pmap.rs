@@ -114,20 +114,27 @@ impl<K: Ord + Clone, V: Clone> PMap<K, V> {
         self.iter().map(|(_, v)| v)
     }
 
-    /// Take the map apart without recursion: the entries of every node no other version
-    /// shares. Shared subtrees are only released. Used to drop deep terms iteratively.
-    pub fn into_unique_entries(mut self) -> Vec<(K, V)> {
-        let mut out = Vec::new();
-        let mut stack = alloc::vec![self.root.take()];
-        while let Some(link) = stack.pop() {
-            let Some(rc) = link else { continue };
+    /// Take the map apart without recursion, handing `f` the entries of every node no other
+    /// version shares; shared subtrees are only released. Used to drop deep terms iteratively.
+    /// After an update most nodes are shared with the new version, so this is usually a short
+    /// walk down one path.
+    pub fn drain_unique(mut self, mut f: impl FnMut(K, V)) {
+        self.len = 0;
+        let Some(root) = self.root.take() else { return };
+        let mut stack = alloc::vec![root];
+        while let Some(rc) = stack.pop() {
             if let Ok(node) = Rc::try_unwrap(rc) {
-                out.push((node.key, node.value));
-                stack.push(node.left);
-                stack.push(node.right);
+                f(node.key, node.value);
+                stack.extend(node.left);
+                stack.extend(node.right);
             }
         }
-        self.len = 0;
+    }
+
+    /// The entries of every node no other version shares (see [`PMap::drain_unique`]).
+    pub fn into_unique_entries(self) -> Vec<(K, V)> {
+        let mut out = Vec::new();
+        self.drain_unique(|k, v| out.push((k, v)));
         out
     }
 }

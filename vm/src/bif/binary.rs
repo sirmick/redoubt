@@ -66,7 +66,7 @@ pub fn part(c: &mut Ctx, a: &[Term]) -> R {
         _ => (a[1].clone(), a[2].clone()),
     };
     let (lo, hi) = part_range(c, &start, &len, b.len / 8)?;
-    Ok(Term::Bits(b.slice(lo * 8, (hi - lo) * 8)))
+    Ok(Term::bits(b.slice(lo * 8, (hi - lo) * 8)))
 }
 
 pub fn copy(c: &mut Ctx, a: &[Term]) -> R {
@@ -257,7 +257,7 @@ pub fn split(c: &mut Ctx, a: &[Term]) -> R {
             pieces.pop();
         }
     }
-    Ok(Term::list(pieces.into_iter().map(|(s, e)| Term::Bits(b.slice(s * 8, (e - s) * 8))).collect::<Vec<_>>()))
+    Ok(Term::list(pieces.into_iter().map(|(s, e)| Term::bits(b.slice(s * 8, (e - s) * 8))).collect::<Vec<_>>()))
 }
 
 fn common(c: &Ctx, a: &Term, suffix: bool) -> R {

@@ -68,7 +68,7 @@ pub fn load(bytes: &[u8], atoms: &mut AtomTable) -> Result<Module> {
 
     let mut imports = Vec::new();
     for [m, f, a] in triples(need("ImpT")?)? {
-        imports.push(Import { module: atom(m)?, function: atom(f)?, arity: arity(a)? });
+        imports.push(Import { module: atom(m)?, function: atom(f)?, arity: arity(a)?, native: None });
     }
 
     let literals = match chunk(b"LitT") {
@@ -378,7 +378,13 @@ fn check_operands(ins: &Instr, imports: &[Import], funs: &[FunEntry], _lits: &[T
         }
     };
     match ins.op {
-        CALL_EXT | CALL_EXT_LAST | CALL_EXT_ONLY => import_at(1)?,
+        // The call's arity must be the import's: natives are resolved per import.
+        CALL_EXT | CALL_EXT_LAST | CALL_EXT_ONLY => {
+            import_at(1)?;
+            if imports[index_at(1)?].arity as usize != index_at(0)? {
+                return Err(LoadError::Malformed("call arity does not match the import"));
+            }
+        }
         BIF0 => bif_arity(0, 0)?,
         BIF1 => bif_arity(1, 1)?,
         BIF2 => bif_arity(1, 2)?,

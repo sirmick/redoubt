@@ -35,7 +35,7 @@ fn collect(c: &Ctx, data: &Term, latin1: bool, out: &mut Vec<char>) -> Result<Op
                     Err(e) => {
                         let good = e.valid_up_to();
                         out.extend(core::str::from_utf8(&bytes[..good]).unwrap_or("").chars());
-                        let rest = Term::Bits(b.slice(good * 8, b.len - good * 8));
+                        let rest = Term::bits(b.slice(good * 8, b.len - good * 8));
                         return Ok(Some(if e.error_len().is_none() { Stop::Incomplete(rest) } else { Stop::Error(rest) }));
                     }
                 }

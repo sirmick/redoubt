@@ -26,6 +26,26 @@ impl Builder {
         Builder { bytes: Vec::new(), len: 0 }
     }
 
+    /// Continue building on `bits` without copying it, if nothing else holds its bytes and it
+    /// covers them exactly; otherwise start from a copy. Either way the result is the same.
+    pub fn resume(bits: Bits) -> Builder {
+        let whole = bits.offset == 0 && bits.len.div_ceil(8) == bits.data.len();
+        let len = bits.len;
+        if whole {
+            match Rc::try_unwrap(bits.data) {
+                Ok(bytes) => return Builder { bytes, len },
+                Err(shared) => {
+                    let mut b = Builder::new();
+                    b.push_bits(&Bits { data: shared, offset: 0, len });
+                    return b;
+                }
+            }
+        }
+        let mut b = Builder::new();
+        b.push_bits(&bits);
+        b
+    }
+
     pub fn bit_len(&self) -> usize {
         self.len
     }
@@ -148,7 +168,7 @@ impl Builder {
     }
 
     pub fn finish(self) -> Term {
-        Term::Bits(Bits { data: Rc::from(self.bytes), offset: 0, len: self.len })
+        Term::bits(Bits { data: Rc::new(self.bytes), offset: 0, len: self.len })
     }
 }
 
