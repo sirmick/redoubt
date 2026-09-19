@@ -31,6 +31,7 @@ and the steward, 9P namespaces, packages, storage and network servers). Order: [
 | [IO-ARCHITECTURE.md](IO-ARCHITECTURE.md) | Drivers (virtio), DMA, storage and network stacks; the "Later" designs. |
 | [PLATFORM-FPGA.md](PLATFORM-FPGA.md) | The FPGA target, its trust assumptions, what its hardware changes. |
 | [PLAN.md](PLAN.md) | The three milestones, the milestone 1 slice and attack suite, what comes after. |
+| [BUILD-PLAN.md](BUILD-PLAN.md) | Milestone 1 as work packages: what each reads, delivers and must pass; order; hotspots. |
 
 **Built today**
 
