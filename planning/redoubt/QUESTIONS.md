@@ -5,7 +5,7 @@ so each needs your decision; the answer goes into the named note with a HISTORY.
 **Rec** is the orchestrator's recommendation. Reply with numbers, e.g. "all Rec except 7: ...".
 
 **1-101 answered 2026-09-19** (ANSWERS.md, four tranches; each "Answered" line says where the
-answer now lives). **Open: 102-111** (at the end: K1's handle limit, and the design editor's choices in applying 56-101). The round-4 answers revised 56 (handle
+answer now lives). **Open: 102-114** (at the end: K1's handle limit, and the design editor's choices in applying 56-101). The round-4 answers revised 56 (handle
 kinds are checked by use) and replaced 57 and 58 (by 82).
 
 ## Kernel: messages and IPC (KERNEL-SPEC.md)
@@ -555,7 +555,7 @@ point to change the IPC design. Several items interact; the cross-references say
     at every handle copy and drop). *Rec:* accept. It keeps the kernel minimal, and every
     milestone 1 client has a launcher that outlives it.
     **Answered:** KERNEL-SPEC.md (no badge slot, badge notice or old I15); CAPABILITIES.md, Handles
-    (disconnect); NAMESPACES.md, `ninep-common`; CONTAINMENT.md, `admit`.
+    (disconnect); NAMESPACES.md, `ninep_common`; CONTAINMENT.md, `admit`.
 
 70. **A lend is charged to both sides while its call is open.** *Proposal:* taking a `call`
     charges its lent pages, and their page tables, to the receiver as well as the caller. A
@@ -662,8 +662,8 @@ point to change the IPC design. Several items interact; the cross-references say
     9P endpoint also serves typed operations, where word 0 = 0 is 9P and anything else is an
     opcode. Every 9P server serves `new_connection` (opcode 2, reply `conn: handle[0] endpoint`),
     minting a connection rooted at or below the caller's. The table lives in NAMESPACES.md as
-    `ninep-common`, R1b implements it, and R4 serves it. It also carries item 69's connection id.
-    **Answered:** NAMESPACES.md, `ninep-common`; WIRE.md, Messages; CAPABILITIES.md, Handles.
+    `ninep_common`, R1b implements it, and R4 serves it. It also carries item 69's connection id.
+    **Answered:** NAMESPACES.md, `ninep_common`; WIRE.md, Messages; CAPABILITIES.md, Handles.
 
 84. **User work runs at system priority inside servers** (CPU amplification). Bob makes
     `fsd`/`keyd`/`ipd` do expensive work, and no user budget runs meanwhile. *Rec:* strict
@@ -825,7 +825,7 @@ point to change the IPC design. Several items interact; the cross-references say
      the caller `OutOfMemory`, since 72 speaks only of `receive`. *Rec:* confirm.
 
 108. **The new message layouts (75, 83) are the editor's.** They are the fields of the `startup`
-     message and the `ninep-common` table: `disconnect` as opcode 3, and a `root: string` in
+     message and the `ninep_common` table: `disconnect` as opcode 3, and a `root: string` in
      `new_connection`. Both are fenced until WP-R1b generates them. *Rec:* confirm; R1b may
      adjust the layouts, recorded in HISTORY.md.
 
@@ -841,3 +841,22 @@ point to change the IPC design. Several items interact; the cross-references say
      *Rec:* pages in use. It's what the memory actually costs, and handles are never moved to
      compact the table. The cost table says "1 per table page holding a handle", and the model
      follows.
+
+## From the generator update (WP-W2)
+
+112. **The `startup` message can't be decoded from its page as specified.** INIT.md says the rest of
+     the page after the message isn't read, but a typed message has no overall length, and the
+     decoder refuses trailing bytes.
+     *Rec:* the page starts with a `u32` byte length, then the `startup` message; the decoder reads
+     exactly that many bytes. INIT.md states it.
+
+113. **Opcodes on a shared 9P endpoint.** Every 9P server also serves `ninep_common` (opcodes 2 and
+     3). WIRE.md doesn't say whether a server may also serve its own typed protocol on the same
+     endpoint, or how their opcodes are kept apart.
+     *Rec:* `ninep_common` reserves opcodes 1-15 on every 9P endpoint, and a server's own protocol
+     on that endpoint uses 16 and up. The generator refuses a table marked as a 9P server's protocol
+     (a new `<!-- wire: NAME ninep -->` marker) that uses opcodes below 16.
+
+114. **`disconnect` and a stranger's connection id.** *Rec:* the `ninep_common` error table gains
+     code 2, `not_yours`, for a `disconnect` naming an id the caller didn't receive. That makes it
+     indistinguishable from an id that doesn't exist, so nothing is revealed.

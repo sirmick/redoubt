@@ -266,10 +266,10 @@ not needed.
 
 **WP-R1b. The runtime follows answers 64 and 69-101.** Size M.
 - Reads: CONTAINMENT.md (the shared server library), INIT.md (Startup block), NAMESPACES.md
-  (`ninep-common`), WIRE.md, KERNEL-SPEC.md (`receive`'s record, abandoned-call notices, `serve`).
+  (`ninep_common`), WIRE.md, KERNEL-SPEC.md (`receive`'s record, abandoned-call notices, `serve`).
 - Delivers: in `redoubt-rt`: the startup block as the `startup` typed message (answer 75),
   replacing the tag-and-CRC format, with handle names under the manifest's name rule (answer 64);
-  `ninep-common` (`new_connection` with a random connection id, `disconnect` freeing a connection
+  `ninep_common` (`new_connection` with a random connection id, `disconnect` freeing a connection
   and everything minted under it) served by the 9P skeleton, its table and INIT.md's `startup`
   table unfenced and generated (answers 69, 83); the badge-notice hook removed (answer 69); `serve`
   before resuming a parked call, and an immediate reply to an abandoned-call notice (answers 81,
@@ -311,7 +311,7 @@ not needed.
 
 **WP-R4. bootfsd and consoled.** Size S.
 - Delivers: `bootfsd` (read-only 9P over the verified bundle); `consoled` (UART driver serving
-  `/dev/cons` over 9P, IRQ receive); both serve `ninep-common` through the skeleton.
+  `/dev/cons` over 9P, IRQ receive); both serve `ninep_common` through the skeleton.
 - Accepted when: 9P conformance vectors from WP-W1; typing on the UART reaches a 9P reader.
 - Needs: WP-R1b, WP-K3.
 

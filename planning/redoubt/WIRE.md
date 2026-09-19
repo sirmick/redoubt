@@ -9,7 +9,7 @@ and in human-written files. One convention for every message, one for every file
   words are all zero, in the request and in a successful reply. A request with word 0 = 0 and any
   other non-zero word, or with no lend, is refused with reply status 1 (`Malformed`, below). A
   request whose word 0 is not 0 is a typed operation on the same endpoint: every 9P server serves
-  `ninep-common` (`new_connection`, `disconnect`; NAMESPACES.md).
+  `ninep_common` (`new_connection`, `disconnect`; NAMESPACES.md).
 - **Typed messages** (everything that is not 9P: `blkd` <-> `fsd`, the steward, `keyd`, `sshd`
   <-> steward, `ipd`'s connect and listen operations) use **9P's own encoding**: little-endian
   fixed-size integers (`u8`, `u16`, `u32`, `u64`), strings as `u16` length + UTF-8, byte arrays as
