@@ -127,44 +127,78 @@ pub enum Syscall {
         h: u64,
     },
     TimeNow,
+    Random {
+        len: u64,
+    },
     SystemReset {
         h: u64,
         kind: u64,
     },
-    Random {
-        len: u64,
-    },
 }
 
+/// The calls' names, in KERNEL-SPEC.md's table order (the order of `redoubt-sys`'s numbers,
+/// from 1). The one list of them: [`Syscall::name`], the trace and the tests use it.
+pub const CALL_NAMES: [&str; 24] = [
+    "map_anon",
+    "unmap",
+    "set_flags",
+    "map_device",
+    "dma_alloc",
+    "thread_create",
+    "thread_exit",
+    "process_exit",
+    "process_create",
+    "process_map",
+    "process_start",
+    "endpoint_create",
+    "mint",
+    "call",
+    "send",
+    "receive",
+    "reply",
+    "handle_close",
+    "budget_create",
+    "budget_destroy",
+    "budget_usage",
+    "time_now",
+    "random",
+    "system_reset",
+];
+
 impl Syscall {
+    /// The call's number (`redoubt-sys`'s, from 1).
+    pub fn number(&self) -> usize {
+        match self {
+            Syscall::MapAnon { .. } => 1,
+            Syscall::Unmap { .. } => 2,
+            Syscall::SetFlags { .. } => 3,
+            Syscall::MapDevice { .. } => 4,
+            Syscall::DmaAlloc { .. } => 5,
+            Syscall::ThreadCreate { .. } => 6,
+            Syscall::ThreadExit => 7,
+            Syscall::ProcessExit { .. } => 8,
+            Syscall::ProcessCreate { .. } => 9,
+            Syscall::ProcessMap { .. } => 10,
+            Syscall::ProcessStart { .. } => 11,
+            Syscall::EndpointCreate => 12,
+            Syscall::Mint { .. } => 13,
+            Syscall::Call { .. } => 14,
+            Syscall::Send { .. } => 15,
+            Syscall::Receive { .. } => 16,
+            Syscall::Reply { .. } => 17,
+            Syscall::HandleClose { .. } => 18,
+            Syscall::BudgetCreate { .. } => 19,
+            Syscall::BudgetDestroy { .. } => 20,
+            Syscall::BudgetUsage { .. } => 21,
+            Syscall::TimeNow => 22,
+            Syscall::Random { .. } => 23,
+            Syscall::SystemReset { .. } => 24,
+        }
+    }
+
     /// The spec's name for this call.
     pub fn name(&self) -> &'static str {
-        match self {
-            Syscall::MapAnon { .. } => "map_anon",
-            Syscall::Unmap { .. } => "unmap",
-            Syscall::SetFlags { .. } => "set_flags",
-            Syscall::MapDevice { .. } => "map_device",
-            Syscall::DmaAlloc { .. } => "dma_alloc",
-            Syscall::ThreadCreate { .. } => "thread_create",
-            Syscall::ThreadExit => "thread_exit",
-            Syscall::ProcessExit { .. } => "process_exit",
-            Syscall::ProcessCreate { .. } => "process_create",
-            Syscall::ProcessMap { .. } => "process_map",
-            Syscall::ProcessStart { .. } => "process_start",
-            Syscall::EndpointCreate => "endpoint_create",
-            Syscall::Mint { .. } => "mint",
-            Syscall::Call { .. } => "call",
-            Syscall::Send { .. } => "send",
-            Syscall::Receive { .. } => "receive",
-            Syscall::Reply { .. } => "reply",
-            Syscall::HandleClose { .. } => "handle_close",
-            Syscall::BudgetCreate { .. } => "budget_create",
-            Syscall::BudgetDestroy { .. } => "budget_destroy",
-            Syscall::BudgetUsage { .. } => "budget_usage",
-            Syscall::TimeNow => "time_now",
-            Syscall::SystemReset { .. } => "system_reset",
-            Syscall::Random { .. } => "random",
-        }
+        CALL_NAMES[self.number() - 1]
     }
 }
 

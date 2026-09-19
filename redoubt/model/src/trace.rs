@@ -10,7 +10,7 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use crate::kernel::{Boot, Costs, DeviceSpec, Kernel, Note, Step};
+use crate::kernel::{Boot, Costs, DeviceSpec, Kernel, Limits, Note, Step};
 use crate::mutation::Mutation;
 use crate::spec::*;
 use crate::syscall::*;
@@ -217,8 +217,8 @@ impl Names {
                     Names::time(*deadline)
                 )
             }
-            S::SystemReset { h: x, kind } => format!("{} {kind}", h(*x)),
             S::Random { len } => format!("{len}"),
+            S::SystemReset { h: x, kind } => format!("{} {kind}", h(*x)),
         };
         if args.is_empty() { c.name().to_string() } else { format!("{} {args}", c.name()) }
     }
@@ -304,22 +304,19 @@ fn device_pages(k: &Kernel, pid: u64, h: u64) -> u64 {
     }
 }
 
+fn limits(l: Limits) -> String {
+    format!("[{},{},{}]", l.pages, l.processes, l.weight)
+}
+
 fn boot_lines(boot: &Boot) -> Vec<String> {
     let c = boot.costs;
     let mut out = alloc::vec![
         HEADER.to_string(),
         format!(
-            "boot ram_pages={} root_processes={} root_weight={} system_pages={} system_processes={} system_weight={} \
-             users_pages={} users_processes={} users_weight={}",
-            boot.ram_pages,
-            boot.root_processes,
-            boot.root_weight,
-            boot.system_pages,
-            boot.system_processes,
-            boot.system_weight,
-            boot.users_pages,
-            boot.users_processes,
-            boot.users_weight
+            "boot root={} system={} users={}",
+            limits(boot.root),
+            limits(boot.system),
+            limits(boot.users)
         ),
         format!(
             "costs budget={} process={} thread={} endpoint={} handles_per_page={}",
@@ -339,9 +336,9 @@ fn boot_lines(boot: &Boot) -> Vec<String> {
 }
 
 /// Run `ops` on a fresh model and write the trace. Ops the model rejects as illegal events are
-/// left out (so a shrunk sequence records cleanly).
-pub fn record(boot: &Boot, ops: &[Op], mutation: Option<Mutation>) -> String {
-    let mut k = Kernel::boot(boot, mutation);
+/// left out (so a shrunk sequence records cleanly). `Err` if `boot` is not a valid boot.
+pub fn record(boot: &Boot, ops: &[Op], mutation: Option<Mutation>) -> Result<String, String> {
+    let mut k = Kernel::boot(boot, mutation)?;
     let mut names = Names::default();
     let mut lines = boot_lines(boot);
     let init_tid = *k.processes[&crate::kernel::INIT_PID].threads.first().unwrap();
@@ -352,7 +349,7 @@ pub fn record(boot: &Boot, ops: &[Op], mutation: Option<Mutation>) -> String {
     }
     let mut s = lines.join("\n");
     s.push('\n');
-    s
+    Ok(s)
 }
 
 fn step_lines(names: &mut Names, op: &Op, step: &Step, after: &Kernel) -> Vec<String> {
@@ -502,10 +499,24 @@ pub fn parse_call(t: &[Token]) -> Result<Syscall, String> {
         "budget_destroy" => S::BudgetDestroy { h: v(0)? },
         "budget_usage" => S::BudgetUsage { h: v(0)? },
         "time_now" => S::TimeNow,
-        "system_reset" => S::SystemReset { h: v(0)?, kind: v(1)? },
         "random" => S::Random { len: v(0)? },
+        "system_reset" => S::SystemReset { h: v(0)?, kind: v(1)? },
         other => return Err(format!("unknown call {other}")),
     })
+}
+
+fn limits_field(t: &[Token], key: &str) -> Result<Limits, String> {
+    let v = t
+        .iter()
+        .find_map(|x| match x {
+            Token::Field(k, v) if *k == key => Some(list(v)),
+            _ => None,
+        })
+        .unwrap_or_else(|| Err(format!("missing {key}=")))?;
+    match v[..] {
+        [pages, processes, weight] => Ok(Limits { pages, processes, weight }),
+        _ => Err(format!("{key}= needs [pages,processes,weight]")),
+    }
 }
 
 fn field<'a>(t: &'a [Token<'a>], key: &str) -> Result<u64, String> {
@@ -535,15 +546,9 @@ pub fn parse(text: &str) -> Result<(Boot, Vec<Op>), String> {
         };
         match t.first() {
             Some(Token::Word("boot")) => {
-                boot.ram_pages = field(&t, "ram_pages")?;
-                boot.root_processes = field(&t, "root_processes")?;
-                boot.root_weight = field(&t, "root_weight")?;
-                boot.system_pages = field(&t, "system_pages")?;
-                boot.system_processes = field(&t, "system_processes")?;
-                boot.system_weight = field(&t, "system_weight")?;
-                boot.users_pages = field(&t, "users_pages")?;
-                boot.users_processes = field(&t, "users_processes")?;
-                boot.users_weight = field(&t, "users_weight")?;
+                boot.root = limits_field(&t, "root")?;
+                boot.system = limits_field(&t, "system")?;
+                boot.users = limits_field(&t, "users")?;
             }
             Some(Token::Word("costs")) => {
                 boot.costs = Costs {
@@ -586,7 +591,7 @@ pub fn parse(text: &str) -> Result<(Boot, Vec<Op>), String> {
 /// note. `Ok` means the trace is what the model (with `mutation`) does.
 pub fn check(text: &str, mutation: Option<Mutation>) -> Result<(), String> {
     let (boot, ops) = parse(text)?;
-    let again = record(&boot, &ops, mutation);
+    let again = record(&boot, &ops, mutation)?;
     let want: Vec<&str> = text.lines().filter(|l| !l.is_empty() && !l.starts_with('#')).collect();
     let got: Vec<&str> = again.lines().collect();
     for (i, (w, g)) in want.iter().zip(got.iter()).enumerate() {

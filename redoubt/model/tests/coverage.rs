@@ -8,34 +8,7 @@ use std::collections::BTreeSet;
 use redoubt_model::gen::Gen;
 use redoubt_model::kernel::{Boot, Kernel};
 use redoubt_model::spec::{Cause, Error};
-use redoubt_model::syscall::{BufferKind, Op, Outcome, Ret};
-
-const CALLS: [&str; 24] = [
-    "map_anon",
-    "unmap",
-    "set_flags",
-    "map_device",
-    "dma_alloc",
-    "thread_create",
-    "thread_exit",
-    "process_exit",
-    "process_create",
-    "process_map",
-    "process_start",
-    "endpoint_create",
-    "mint",
-    "call",
-    "send",
-    "receive",
-    "reply",
-    "handle_close",
-    "budget_create",
-    "budget_destroy",
-    "budget_usage",
-    "time_now",
-    "system_reset",
-    "random",
-];
+use redoubt_model::syscall::{BufferKind, CALL_NAMES, Op, Outcome, Ret};
 
 fn kind(r: &Result<Ret, Error>) -> String {
     match r {
@@ -55,7 +28,7 @@ fn every_call_and_error_is_reached() {
     for seed in 0..5000u64 {
         // The call each blocked thread is in, so its later result counts for that call.
         let mut blocked: std::collections::BTreeMap<u64, &'static str> = Default::default();
-        let mut k = Kernel::boot(&Boot::default(), None);
+        let mut k = Kernel::boot(&Boot::default(), None).unwrap();
         let mut g = Gen::new(seed);
         for _ in 0..150 {
             if k.halted.is_some() {
@@ -91,7 +64,7 @@ fn every_call_and_error_is_reached() {
             }
         }
     }
-    for c in CALLS {
+    for c in CALL_NAMES {
         assert!(seen.contains(&format!("{c} ok")), "`{c}` never succeeded");
     }
     for e in Error::ALL {

@@ -91,7 +91,7 @@ pub fn explain(f: &Failure, mutation: Option<Mutation>) -> String {
         s += &format!(
             "\nshrunk to {} ops ({why}); trace:\n{}",
             small.len(),
-            trace::record(&boot, &small, mutation)
+            trace::record(&boot, &small, mutation).unwrap_or_default()
         );
     }
     s

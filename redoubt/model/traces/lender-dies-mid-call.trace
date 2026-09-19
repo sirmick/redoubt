@@ -4,7 +4,7 @@
 # discarded, and then freed. The client's exit notice (killed) is waiting on the endpoint.
 # Written by tests/traces.rs (REDOUBT_MODEL_BLESS=1 rewrites it); format: README.md.
 redoubt-model-trace 1
-boot ram_pages=1024 root_processes=24 root_weight=1000 system_pages=256 system_processes=8 system_weight=250 users_pages=512 users_processes=12 users_weight=500
+boot root=[1024,24,1000] system=[256,8,250] users=[512,12,500]
 costs budget=1 process=1 thread=1 endpoint=1 handles_per_page=8
 device mmio base=0x10000000 pages=1 dma=0
 device mmio base=0x10001000 pages=1 dma=1

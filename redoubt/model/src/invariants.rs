@@ -315,7 +315,20 @@ fn i6_i8_budgets(k: &Kernel) -> Check {
             "I6: bad label set on {}",
             b.id
         );
-        ensure!(b.depth < MAX_DEPTH, "budget {} is at depth {}", b.id, b.depth);
+        // Depth from the parent chain, not the kernel's field.
+        let mut depth = 0;
+        let mut cur = b.parent;
+        while let Some(p) = cur {
+            depth += 1;
+            cur = k.budgets.get(&p).and_then(|x| x.parent);
+            ensure!(depth <= MAX_DEPTH, "budget {} has a parent cycle or is too deep", b.id);
+        }
+        ensure!(
+            depth == b.depth && depth < MAX_DEPTH,
+            "budget {} is at depth {depth} (recorded {})",
+            b.id,
+            b.depth
+        );
         let Some(p) = b.parent.and_then(|p| k.budgets.get(&p)) else { continue };
         ensure!(superset(&b.labels, &p.labels), "I6: budget {} lacks its parent's labels", b.id);
         if b.labels != p.labels {

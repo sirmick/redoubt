@@ -23,7 +23,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::kernel::{Boot, INIT_PID, Kernel, Note, Object};
+use crate::kernel::{Boot, INIT_PID, Kernel, Limits, Note, Object};
 use crate::mutation::Mutation;
 use crate::spec::{Class, Counters, Error, FOREVER};
 use crate::syscall::{Op, Outcome, Ret, Syscall};
@@ -273,8 +273,8 @@ impl Steward {
         {
             return Err(Denied::BadManifest);
         }
-        let boot = Boot { users_pages: 600, users_processes: 12, ..Boot::default() };
-        let mut k = Kernel::boot(&boot, mutation);
+        let boot = Boot { users: Limits { pages: 600, processes: 12, weight: 500 }, ..Boot::default() };
+        let mut k = Kernel::boot(&boot, mutation).map_err(|_| Denied::BadManifest)?;
         let init_tid = *k.processes[&INIT_PID].threads.first().unwrap();
         let init = |k: &mut Kernel, call: Syscall| -> Res<(Ret, Vec<Note>)> {
             let s =

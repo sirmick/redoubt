@@ -41,7 +41,7 @@ pub const SEQUENCE_LEN: usize = 150;
 /// Run `ops` from boot, checking every invariant after each step. Ops that are not legal events
 /// at their point (possible after shrinking) are skipped.
 pub fn replay(boot: &Boot, ops: &[Op], mutation: Option<Mutation>) -> Result<(), String> {
-    let mut k = Kernel::boot(boot, mutation);
+    let mut k = Kernel::boot(boot, mutation)?;
     invariants::check(&k)?;
     for op in ops {
         if k.step(op).is_some() {
@@ -53,7 +53,7 @@ pub fn replay(boot: &Boot, ops: &[Op], mutation: Option<Mutation>) -> Result<(),
 
 /// A random sequence from boot, with every invariant checked after each step.
 pub fn kernel_sequence(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
-    let mut k = Kernel::boot(&Boot::default(), mutation);
+    let mut k = Kernel::boot(&Boot::default(), mutation).expect("the default boot is valid");
     let mut gen = Gen::new(seed);
     let mut ops = Vec::new();
     let fail = |message: String, ops: &Vec<Op>| Failure {
@@ -168,7 +168,7 @@ pub fn shrink(boot: &Boot, ops: &[Op], mutation: Option<Mutation>) -> Vec<Op> {
 pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
     use crate::kernel::Object;
     use crate::syscall::Syscall;
-    let mut k = Kernel::boot(&Boot::default(), mutation);
+    let mut k = Kernel::boot(&Boot::default(), mutation).expect("the default boot is valid");
     let mut gen = Gen::new(seed);
     let mut ops = Vec::new();
     let fail = |message: String, ops: &Vec<Op>| Failure {

@@ -63,22 +63,23 @@ pub enum DeviceSpec {
     Reset,
 }
 
+/// A budget's three carved limits (R7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limits {
+    pub pages: u64,
+    pub processes: u64,
+    pub weight: u64,
+}
+
 /// What the kernel is booted with: the argument block's budget sizes and the device objects.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Boot {
-    /// `root`'s limits: all of RAM, every PID, all the weight.
-    pub ram_pages: u64,
-    pub root_processes: u64,
-    pub root_weight: u64,
+    /// `root`: all of RAM, every PID, all the weight.
+    pub root: Limits,
     /// `system`'s reserved share, carved from `root`.
-    pub system_pages: u64,
-    pub system_processes: u64,
-    pub system_weight: u64,
-    /// `users`, carved from `root`. What `root` keeps is `init`'s own (the spec gives the split
-    /// only as "system gets its reserved share"; see README.md).
-    pub users_pages: u64,
-    pub users_processes: u64,
-    pub users_weight: u64,
+    pub system: Limits,
+    /// `users`, carved from `root`. What `root` keeps is `init`'s own (README choice 20).
+    pub users: Limits,
     /// In `init`'s handle order after the three budgets.
     pub devices: Vec<DeviceSpec>,
     pub costs: Costs,
@@ -87,15 +88,9 @@ pub struct Boot {
 impl Default for Boot {
     fn default() -> Boot {
         Boot {
-            ram_pages: 1024,
-            root_processes: 24,
-            root_weight: 1000,
-            system_pages: 256,
-            system_processes: 8,
-            system_weight: 250,
-            users_pages: 512,
-            users_processes: 12,
-            users_weight: 500,
+            root: Limits { pages: 1024, processes: 24, weight: 1000 },
+            system: Limits { pages: 256, processes: 8, weight: 250 },
+            users: Limits { pages: 512, processes: 12, weight: 500 },
             devices: vec![
                 DeviceSpec::Mmio { base: 0x1000_0000, pages: 1, dma: false },
                 DeviceSpec::Mmio { base: 0x1000_1000, pages: 1, dma: true },
@@ -106,6 +101,56 @@ impl Default for Boot {
             costs: Costs::default(),
         }
     }
+}
+
+/// Refuse a `Boot` the kernel could not start: `system` and `users` must fit in `root` with room
+/// for `init` (its process, thread and handle table), each must hold its own budget object, and
+/// devices must be well formed.
+fn check_boot(b: &Boot) -> Result<(), alloc::string::String> {
+    use alloc::format;
+    let c = b.costs;
+    if c.handles_per_page == 0 {
+        return Err("boot: handles_per_page must be at least 1".into());
+    }
+    if b.devices.len() > 64 {
+        return Err("boot: at most 64 devices".into());
+    }
+    let mut irqs = BTreeSet::new();
+    for d in &b.devices {
+        match *d {
+            DeviceSpec::Mmio { base, pages, .. } => {
+                if pages == 0 || pages > 1 << 20 || base % PAGE_SIZE != 0 {
+                    return Err(format!("boot: bad MMIO device at {base:#x}"));
+                }
+            }
+            DeviceSpec::Irq { n } => {
+                if !irqs.insert(n) {
+                    return Err(format!("boot: IRQ {n} listed twice"));
+                }
+            }
+            DeviceSpec::Reset => {}
+        }
+    }
+    let table = (3 + b.devices.len() as u64).div_ceil(c.handles_per_page);
+    let init = c.process.checked_add(c.thread).and_then(|x| x.checked_add(table));
+    let pages = [c.budget, b.system.pages, b.users.pages, init.unwrap_or(u64::MAX)]
+        .iter()
+        .try_fold(0u64, |acc, x| acc.checked_add(*x));
+    if pages.is_none_or(|p| p > b.root.pages) {
+        return Err("boot: system, users and init do not fit in root's pages".into());
+    }
+    if b.system.pages < c.budget || b.users.pages < c.budget {
+        return Err("boot: system and users must each hold their own budget object".into());
+    }
+    let procs = b.system.processes.checked_add(b.users.processes).and_then(|x| x.checked_add(1));
+    if procs.is_none_or(|p| p > b.root.processes) {
+        return Err("boot: system, users and init do not fit in root's processes".into());
+    }
+    let weight = b.system.weight.checked_add(b.users.weight);
+    if weight.is_none_or(|w| w > b.root.weight) || b.root.weight > U32_MAX {
+        return Err("boot: system and users weigh more than root".into());
+    }
+    Ok(())
 }
 
 /// Where user virtual addresses end (Sv39's lower half). `process_map`'s `dst` must lie below.
@@ -441,7 +486,10 @@ fn buffer_range(b: Buffer) -> R<(u64, u64)> {
 impl Kernel {
     /// Boot: the kernel creates `root`, `system` and `users` from the argument block and starts
     /// `init` in `root` with handles to all three (slots 1, 2, 3) and to every device (slots 4..).
-    pub fn boot(boot: &Boot, mutation: Option<Mutation>) -> Kernel {
+    ///
+    /// A `Boot` that cannot be built (from a hostile trace, say) is an `Err`, never a panic.
+    pub fn boot(boot: &Boot, mutation: Option<Mutation>) -> Result<Kernel, alloc::string::String> {
+        check_boot(boot)?;
         let mut k = Kernel {
             mutation,
             costs: boot.costs,
@@ -473,9 +521,9 @@ impl Kernel {
             Vec::new(),
             0,
             None,
-            boot.ram_pages,
-            boot.root_processes,
-            boot.root_weight,
+            boot.root.pages,
+            boot.root.processes,
+            boot.root.weight,
             Class::System,
         );
         let system = k.new_budget(
@@ -484,9 +532,9 @@ impl Kernel {
             Vec::new(),
             0,
             None,
-            boot.system_pages,
-            boot.system_processes,
-            boot.system_weight,
+            boot.system.pages,
+            boot.system.processes,
+            boot.system.weight,
             Class::System,
         );
         let users = k.new_budget(
@@ -495,9 +543,9 @@ impl Kernel {
             Vec::new(),
             0,
             None,
-            boot.users_pages,
-            boot.users_processes,
-            boot.users_weight,
+            boot.users.pages,
+            boot.users.processes,
+            boot.users.weight,
             Class::System,
         );
         assert_eq!((root, system, users), (ROOT, SYSTEM, USERS));
@@ -535,11 +583,11 @@ impl Kernel {
             k.devices.insert(id, Device { id, kind, waiters: VecDeque::new() });
             hs.push(Handle { object: Object::Device(id), badge: 0, stamp: root, origin: Origin::Boot });
         }
-        // Boot must fit; a Boot that does not is a bad test configuration, not a kernel path.
-        k.install(pid, &hs).expect("boot handles fit in root");
-        k.charge(root, c.thread).expect("init's thread fits in root");
+        // check_boot made room for these.
+        k.install(pid, &hs).map_err(|e| alloc::format!("boot: init's handles: {e:?}"))?;
+        k.charge(root, c.thread).map_err(|e| alloc::format!("boot: init's thread: {e:?}"))?;
         k.new_thread(pid);
-        k
+        Ok(k)
     }
 
     fn broken(&self, m: Mutation) -> bool {
@@ -1620,8 +1668,8 @@ impl Kernel {
             },
             S::BudgetUsage { h } => done(self.budget_usage(pid, *h).map(Ret::Usage)),
             S::TimeNow => done(Ok(Ret::Time(self.time_now()))),
-            S::SystemReset { h, kind } => done(self.system_reset(pid, *h, *kind).map(|_| Ret::Unit)),
             S::Random { len } => done(self.random(*len).map(|len| Ret::Random { len })),
+            S::SystemReset { h, kind } => done(self.system_reset(pid, *h, *kind).map(|_| Ret::Unit)),
         }
     }
 
