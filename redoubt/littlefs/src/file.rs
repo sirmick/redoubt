@@ -102,7 +102,7 @@ impl<D: BlockDevice> Filesystem<D> {
 
     pub fn open(&mut self, path: &str, o: OpenOptions) -> Result<FileHandle, Error> {
         let needs_write = o.create || o.create_new || o.truncate || o.append;
-        if !(o.read || o.write) || (needs_write && !o.write) {
+        if !o.write && (!o.read || needs_write) {
             return Err(Error::Invalid);
         }
         let f = if o.write {

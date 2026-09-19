@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 
 use common::ops::*;
 use common::*;
-use littlefs::{Config, Filesystem, OpenOptions, SeekFrom};
+use littlefs::{Config, Filesystem};
 use littlefs_diff::{CConfig, CFs, LFS_ERR_NOATTR};
 
 fn apply_c(fs: &mut CFs, op: &Op) {

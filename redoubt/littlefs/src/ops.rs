@@ -21,6 +21,9 @@ pub(crate) enum Lookup {
     Missing { dir: MDir, id: u16 },
 }
 
+/// A name's entry (`Ok`), or where it would be inserted (`Err`): a pair and an id.
+type Found = Result<(MDir, u16), (MDir, u16)>;
+
 /// Splits a path into names. Empty components (repeated or trailing slashes) are skipped;
 /// `.` and `..` are refused rather than resolved: callers walk one name at a time.
 pub(crate) fn components(path: &str) -> Result<Vec<&[u8]>, Error> {
@@ -59,7 +62,7 @@ impl<D: BlockDevice> Filesystem<D> {
     /// Looks `name` up in the directory whose first pair is `head` (the reference's
     /// `lfs_dir_find`). Not found: the pair and id where it would be inserted to keep the
     /// directory sorted, which is where the search stopped.
-    fn find(&mut self, head: Pair, name: &[u8]) -> Result<Result<(MDir, u16), (MDir, u16)>, Error> {
+    fn find(&mut self, head: Pair, name: &[u8]) -> Result<Found, Error> {
         let mut pair = head;
         let mut cycle = Cycle::new();
         loop {

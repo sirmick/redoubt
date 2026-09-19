@@ -44,6 +44,8 @@ mod fs;
 mod mdir;
 mod ops;
 mod tag;
+#[cfg(test)]
+mod tests;
 
 pub use file::{FileHandle, OpenOptions, SeekFrom};
 pub use fs::Filesystem;

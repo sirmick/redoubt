@@ -1,0 +1,30 @@
+[package]
+name = "littlefs-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Host-only, and outside the workspace (see the root Cargo.toml `exclude`).
+# Run: cargo +nightly-2026-05-11 fuzz run image   (from redoubt/littlefs)
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+littlefs = { path = ".." }
+
+[[bin]]
+name = "image"
+path = "fuzz_targets/image.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mutate"
+path = "fuzz_targets/mutate.rs"
+test = false
+doc = false
+bench = false

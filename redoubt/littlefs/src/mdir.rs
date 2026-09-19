@@ -36,6 +36,11 @@ pub(crate) fn pair_same(a: &Pair, b: &Pair) -> bool {
 /// The largest number of entries one pair may hold: ids are 10 bits and 0x3ff is reserved.
 pub(crate) const MAX_ENTRIES: usize = 0x3ff;
 
+/// Receives a tag and its data.
+pub(crate) type TagSink<'a> = dyn FnMut(u32, &[u8]) -> Result<(), Error> + 'a;
+/// Reads bytes at an offset of the block being committed to.
+pub(crate) type ReadAt<'a> = dyn FnMut(u32, &mut [u8]) -> Result<(), Error> + 'a;
+
 pub(crate) fn le32(b: &[u8]) -> u32 { u32::from_le_bytes([b[0], b[1], b[2], b[3]]) }
 
 /// Global state (SPEC.md "0x7ff LFS_TYPE_MOVESTATE"): the XOR of one delta per metadata pair.
@@ -68,7 +73,7 @@ impl GState {
         GState { tag: le32(&b[0..]), pair: [le32(&b[4..]), le32(&b[8..])] }
     }
 
-    pub fn to_bytes(&self) -> [u8; 12] {
+    pub fn to_bytes(self) -> [u8; 12] {
         let mut b = [0u8; 12];
         b[0..4].copy_from_slice(&self.tag.to_le_bytes());
         b[4..8].copy_from_slice(&self.pair[0].to_le_bytes());
@@ -113,7 +118,7 @@ impl Entry {
 
     /// Calls `f` with each tag (and its data) that describes this entry at position `id`:
     /// what a compaction writes for it.
-    pub fn tags(&self, id: u16, f: &mut dyn FnMut(u32, &[u8]) -> Result<(), Error>) -> Result<(), Error> {
+    pub fn tags(&self, id: u16, f: &mut TagSink) -> Result<(), Error> {
         f(tag::mk(self.name_type, id, len16(&self.name)?), &self.name)?;
         if let Some((t, d)) = &self.strct {
             f(tag::mk(*t, id, len16(d)?), d)?;
@@ -207,11 +212,7 @@ impl Contents {
                 self.tail = [le32(&data[0..]), le32(&data[4..])];
                 self.split = tag::chunk(t) & 1 == 1;
             }
-            T1_GSTATE => {
-                if tag::type3(t) == TYPE_MOVESTATE {
-                    self.gdelta = GState::from_bytes(data);
-                }
-            }
+            T1_GSTATE if tag::type3(t) == TYPE_MOVESTATE => self.gdelta = GState::from_bytes(data),
             // Type 0x1 is never on disk and CRC tags (0x5) are consumed by the parser.
             _ => {}
         }
@@ -390,7 +391,7 @@ impl CommitBuf {
         &mut self,
         block_size: u32,
         prog_size: u32,
-        read_next: &mut dyn FnMut(u32, &mut [u8]) -> Result<(), Error>,
+        read_next: &mut ReadAt,
     ) -> Result<(), Error> {
         let end = align_up((self.off() + 20).min(block_size), prog_size);
         while self.off() < end {
