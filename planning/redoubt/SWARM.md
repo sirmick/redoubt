@@ -56,10 +56,10 @@ merged; the waves show what can run together.
 | L1 | merged | wp-l1 | 25ab39296 |
 | T1 | merged | wp-t1 | 987bacbed |
 | A1 | merged | wp-a1 | 44f1780a1 |
-| K0 | building | wp-k0 | fix: lending an untouched page panics the kernel (found by T1b) |
+| K0 | merged | wp-k0 | f7b9fdd16 |
 | T1b | merged | wp-t1b | 6cd067a39 |
-| R1 | building | wp-r1 | needs A1, W1 (merged) |
-| K1 | ready | | starts when K0 merges (kernel track is serial) |
+| R1 | review | wp-r1 | fix round |
+| K1 | building | wp-k1 | kernel track |
 | all others | waiting | | see BUILD-PLAN.md "Needs" |
 
 States: `waiting` (needs not merged), `ready`, `building`, `review`, `merged`.
