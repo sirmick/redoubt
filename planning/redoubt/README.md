@@ -109,7 +109,10 @@ Sessions and agents are beamlet VMs in user budgets, not servers.
   stride**: the per-budget counters of stride scheduling.
 - **Exit notice**: the one message a process's creator receives when it exits, faults or is killed;
   a fault names the blamed account and labels. **Badge notice**: the kernel telling an endpoint that
-  the last handle with one of its badges is gone, so the server frees that client's state.
+  the last handle with one of its badges is gone, so the server frees that client's state. **Exit
+  slot**: the page a creator pays at `process_create`, so the exit notice never allocates
+  (KERNEL-SPEC.md). **Badge slot**: the endpoint's count of handles carrying one badge, plus its one
+  pending badge notice (KERNEL-SPEC.md).
 - **Principal**: an accountable identity (a human, an agent, or a project). **Sponsor**: the
   principal accountable for another. **Session**: processes started from a principal's
   capabilities. **Vault session**: `ssh alice+X@box`, a session carrying exactly the label

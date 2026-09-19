@@ -13,8 +13,9 @@ minus its ambient parts.
 
 ## Capabilities are 9P connections
 - **One connection = one endpoint handle**, whose badge names the attach root inside the server.
-- 9P `attach` gives a root fid; every `walk` is relative to a held fid. A server never walks above
-  the attach root, so a fid is a directory capability.
+- 9P `attach` gives a root fid; every `walk` is relative to a held fid. `Tattach`'s `uname` and
+  `aname` are ignored; the badge decides. A server never walks above the attach root, so a fid is a
+  directory capability.
 - Fids are per connection: a fid cannot be named from another connection. A copied handle is the
   **same** connection (the same badge, so the same fids), which is why a launcher never passes its
   own connection on and gets each child a fresh one (CAPABILITIES.md, one badge, one client). To
@@ -53,8 +54,8 @@ A single file: reads return input bytes, writes send output bytes. `sshd` serves
 A socket capability is a connection rooted in part of that tree. **Its scope is IP prefixes and
 ports only** ("connect to 10.0.0.0/8 port 443", "listen on TCP 22"). DNS runs in the client, so a
 name-scoped check could only ever see the IP the client chose. Session scopes never include the box's
-own addresses (CAPABILITIES.md). `ipd` is a sink and refuses labelled callers. Elixir wraps the tree
-in `gen_tcp`-like modules.
+own addresses, including any address that routes back to the box (CAPABILITIES.md). `ipd` is a sink
+and refuses labelled callers. Elixir wraps the tree in `gen_tcp`-like modules.
 
 ## Filesystem servers
 - **Holds:** one block-range handle (a partition from `blkd`). No MMIO, IRQ or DMA.
@@ -66,6 +67,8 @@ in `gen_tcp`-like modules.
   read (a qid and a `stat` included) needs the volume's labels ⊆ the caller's, a write needs them
   equal. A walk into a node the caller cannot read is refused, and a directory read lists only
   entries it can read. Its state is per volume. There are no per-file labels.
+- **A remove succeeds while another connection holds a fid on the file.** An "in use" refusal would
+  be a channel between connections.
 - **Admission** is per (account, label set), and per badge for account 0 (the shared server
   library); a badge notice frees a dead client's fids.
 - **Robust to a bad disk:** crash-consistent and robust to bad metadata, and fuzzed for it. Disk

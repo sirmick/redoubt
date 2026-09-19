@@ -49,10 +49,10 @@ Two primitives, each with a timeout (KERNEL-SPEC.md, Messages):
   the server, charged to it, until it replies.
 - **Exit notices.** Whoever creates a process names an endpoint and receives one exit notice there;
   the creator pays for the notice when it creates the process. There are no death subscriptions.
-- **Badge notices.** A server learns when the last handle with one of its badges is gone (closed, or
-  its holder dead or revoked), and frees that client's state (KERNEL-SPEC.md, Messages).
   There is no per-process kill: a process that must be killable on its own gets its own budget, and
   killing it means destroying that budget.
+- **Badge notices.** A server learns when the last handle with one of its badges is gone (closed, or
+  its holder dead or revoked), and frees that client's state (KERNEL-SPEC.md, Messages).
 - **Interrupts** are received like messages: a driver thread waits on its IRQ handle.
 
 ## Minting and revocation
@@ -96,8 +96,9 @@ share's stamp. Alice un-shares: the scope is destroyed, and `sub` dies with it.
 1. **Own principal, never an impersonation.** Every action is attributable to the agent. Every agent
    has an accountable **sponsor** (a human, or an agent with a human at the top of the chain).
 2. **An agent's budget sits under its sponsor's, so it shares the sponsor's account.** Its requests
-   count against the sponsor's admission limits, and crashes blamed on it log out the sponsor's
-   sessions with the same label set (CONTAINMENT.md). The sponsor answers for its agents.
+   count against the sponsor's admission limits for its label set, and crashes blamed on it log out
+   the sponsor's sessions with the same label set (CONTAINMENT.md). The sponsor answers for its
+   agents.
 3. **Delegation only narrows.** Human -> agent -> sub-agent, each step attenuated, the chain
    recorded. Agents may spawn sub-agents freely, as budgets **inside their own budget**: an agent
    holds only its own budget handle, so it cannot create siblings, and destroying the agent's budget
@@ -134,9 +135,12 @@ declassification). Most things need none.
   influence the approval channel" (TENETS.md).
 - **The approval key is the person's own.** Keys that authenticate a person to the box (login and
   approval) stay on the person's machine or security key and **never live in `keyd`**. The steward
-  refuses to enrol a key in both roles; `sshd` rejects authentication with any public key `keyd`
-  holds; session network capabilities never include the box's own addresses. Otherwise a hijacked
-  session could log in to `approve@box` over loopback, signing with `keyd`, and approve itself.
+  refuses to enrol a key in both roles, and `init` refuses a manifest listing one key both as a
+  principal's login or approval key and as a `keyd` key; `sshd` rejects authentication with any
+  public key `keyd` holds; session network capabilities never include the box's own addresses, which
+  include any address that routes back to the box (for example, QEMU's gateway with a forwarded
+  port). Otherwise a hijacked session could log in to `approve@box` over loopback, signing with
+  `keyd`, and approve itself.
 - **Rendering.** The steward renders from the structured request: who is asking (the requester's
   kind, such as agent or session, and its steward-assigned name, `agent-7`, besides its principal),
   what, where, how long, and the label consequences. Every rendered field is a whitelist of

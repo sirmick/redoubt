@@ -213,7 +213,7 @@ The same three roles, attacking v3 and pinning interfaces for a swarm build. Fou
   asserts its outcome through the kernel, the victim or a clean power-off, never the attacker's
   own output: the console does not say who wrote a line, so a hostile program could print its own
   PASSED line.
-- **Kernel IPC and revocation** (2026-09-19, owner answers 30-32, 44, 45, 47, 49, 53; QUESTIONS.md):
+- **Kernel IPC and revocation** (2026-09-19, owner answers 30-32, 43-45, 47, 49, 53; QUESTIONS.md):
   R10 now reaches messages already sent, because a queued or taken message through a revoked handle
   was still delivered and its reply's handles still reached the sender: a queued one fails with
   `Dead`, a taken call's caller gets `Dead` at once, and its reply is discarded (lend kept as in R3,
@@ -226,7 +226,8 @@ The same three roles, attacking v3 and pinning interfaces for a swarm build. Fou
   handle with a badge is gone, so a server can free a dead client's fids and quota, which until
   then only a restart released; one pending slot per badge, charged to the endpoint's owner at the
   `mint` that creates the badge (so the notice never allocates), the exit notices' label rule, new
-  I15.
+  I15. I10 now holds once the destroyed budget's exit notices are received or dropped, since the
+  creator paid their slots (answer 43).
 - **Blame by the most recent open call, and per (account, label set)** (2026-09-19, answers 31, 37,
   48, 55; 37 and 55 changed): after answer 2 a thread can hold many open calls, and blaming every
   one of them would blame everyone waiting on a `consoled` thread when Bob's request crashes it (the
@@ -283,6 +284,8 @@ The same three roles, attacking v3 and pinning interfaces for a swarm build. Fou
   worked example shows the vault session reading its owner's unlabelled volume. KERNEL-SPEC.md
   counts four object kinds. 59-62 and 66 confirm the notes as written (the badge-slot cost is
   confirmed in WP-K2).
+- **Design review round 4** (2026-09-19; Fable red team, simplifier, editor over answers 1-55):
+  editorial fixes applied; owner questions 69-101.
 
 ## Milestone 1 build (from 2026-09-19)
 One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.

@@ -33,7 +33,7 @@ not needed.
 - **Typed-message tables:** each server package (WP-D1, WP-D2, WP-D3, WP-S1, WP-S2, WP-S3) writes
   the tables of the protocols its server serves into that server's note, in WIRE.md's format, with a
   HISTORY.md line: a small design addition, reviewed as one.
-- **The owner's answers 1-68** (QUESTIONS.md) are in the notes. Packages merged before an answer
+- **The owner's answers 1-68** (QUESTIONS.md) are in the notes. Packages built before an answer
   that changes them get a follow-up package below (WP-A2, WP-W2, WP-M1, WP-R1b) rather than a
   silent edit.
 
@@ -41,12 +41,14 @@ not needed.
 
 ### Track M: model and contracts (start immediately, in parallel)
 **WP-M0. Executable security model.** Size L.
-- Reads: KERNEL-SPEC.md (all), CONTAINMENT.md, CAPABILITIES.md (steward policy parts used in M1).
+- Reads: KERNEL-SPEC.md (all), CONTAINMENT.md, CAPABILITIES.md (steward policy parts used in
+  milestone 1).
 - Delivers: `redoubt/model/`: a host Rust crate implementing every object, system call, error and
-  rule of KERNEL-SPEC.md with the same names and arguments; the steward's M1 policy (principals,
-  sessions, vault sessions, leases, approvals, declassification) as a layer above it; property
-  tests (random operation sequences) for invariants I1-I15 and the policy's properties; a trace
-  format (a sequence of calls and their expected results) that WP-C1 replays on the real kernel.
+  rule of KERNEL-SPEC.md with the same names and arguments; the steward's milestone 1 policy
+  (principals, sessions, vault sessions, leases, approvals, declassification) as a layer above it;
+  property tests (random operation sequences) for invariants I1-I14 and the policy's properties; a
+  trace format (a sequence of calls and their expected results) that WP-C1 replays on the real
+  kernel.
 - Accepted when: all property tests pass at 10^6 sequences; **each rule R1-R12, deliberately broken
   in the model, makes at least one property test fail** (so the tests are not vacuous).
 - Needs: nothing. Handed to red-team agents as soon as it passes.
@@ -63,7 +65,7 @@ not needed.
   14, 20, 23, 24 stand), and the open questions it listed closed; mutations for
   each new rule (a badge notice sent early, a stale notice not withdrawn, blame of an older open
   call, blame falling back to another thread's open call, a revoked message still delivered).
-- Accepted when: as WP-M0, at 10^6 sequences, with I15 and the new mutations.
+- Accepted when: as WP-M0, at 10^6 sequences, adding I15 and the new mutations.
 - Needs: WP-M0.
 
 **WP-W1. Wire codecs.** Size M.
@@ -78,8 +80,9 @@ not needed.
 **WP-W2. Wire generator follows answers 28, 41, 42 and 56.** Size S.
 - Reads: WIRE.md (Tables, Layout in a message).
 - Delivers: `redoubt/wire/`: `handle[N] KIND` in the table format, the kind in the generated docs
-  and a generated helper checking it against the kind `receive` reports (answer 56); code 1 `Malformed` reserved and added to every error table
-  (`tables/example.md`'s code 1 renumbered); a table giving code 1 its own meaning refused.
+  and a generated helper checking it against the kind `receive` reports (answer 56); code 1
+  `Malformed` reserved and added to every error table (`tables/example.md`'s code 1 renumbered); a
+  table giving code 1 its own meaning refused.
 - Accepted when: the drift test covers kinds and `Malformed`; a table with an unknown kind or its
   own code 1 fails generation; the Elixir codec round-trips the new vectors.
 - Needs: WP-W1, WP-A2 (the handle-kind type the helper checks against).
@@ -150,22 +153,25 @@ not needed.
 - Reads: KERNEL-SPEC.md Endpoint (badge slots), Messages (badge notices), R1-R4b, R10 (messages
   in flight), `endpoint_create`, `mint`, `call`, `send`, `receive`, `reply`, `handle_close`.
 - Delivers: endpoints; the four IPC calls with lend and transfer; `receive` reporting a call or a
-  send, and each received handle's kind; open calls (up to `MAX_OPEN_CALLS` per process, each charged a page, `Busy` also for a
-  receiver already waiting); `mint` with stamps, from an open call of the caller's thread; badge-0
-  receive rights; badge slots and badge notices (charged to the endpoint's owner, withdrawn by a
-  re-mint; confirming the cost table's 128 slots per page, or changing it); the label check against the endpoint's owner; fair waiting by (account, label set),
+  send, and each received handle's kind; open calls (up to `MAX_OPEN_CALLS` per process, each
+  charged a page, `Busy` also for a receiver already waiting); `mint` with stamps, from an open call
+  of the caller's thread; badge-0 receive rights; badge slots and badge notices (charged to the
+  endpoint's owner, withdrawn by a re-mint; confirming the cost table's 128 slots per page, or
+  changing it); the label check against the endpoint's owner; fair waiting by (account, label set),
   `WAIT_CAP` counting queued messages only; lends that outlive their lender; transfer opt-in
   (counting page tables); `Dead` for the calls a dying server had taken; R10's reach into messages
   in flight (K1 has no messages to test it with).
 - Accepted when: kernel cases for R1-R4b and I3, I4, I7, I9, I11, I15; attack cases: steal a receive
-  right, mint badge 0, mint into a foreign budget, unequal-label call, 10,000 blocked senders with
-  another account still served in turn, a vault-labelled sender filling its `WAIT_CAP` with its
-  owner's unlabelled sender unaffected, open calls beyond `MAX_OPEN_CALLS`, reply to a send, lender
-  destroyed mid-call with the server surviving, unrequested transfer, a transfer beyond the
-  receiver's free pages, a revoked handle's queued message and taken call (no reply handle reaches
-  the sender), `mint` from a `send`'s id; badge notices: sent after the last copy closes and not
-  before, one pending per badge, withdrawn by a re-mint, dropped across unequal labels to a
-  user-class owner.
+  right, mint badge 0, mint into a foreign budget, unequal-label call, 10,000 sender threads
+  attempting to call with another account still served in turn, a vault-labelled sender filling its
+  `WAIT_CAP` with its owner's unlabelled sender unaffected, open calls beyond `MAX_OPEN_CALLS`,
+  reply to a send, lender destroyed mid-call with the server surviving, unrequested transfer, a
+  transfer beyond the receiver's free pages, a revoked handle's queued message and taken call (no
+  reply handle reaches the sender), `mint` from a `send`'s id; badge notices: sent after the last
+  copy closes and not before, one pending per badge, withdrawn by a re-mint, dropped across unequal
+  labels to a user-class owner; a message whose handles the receiver cannot pay for stays queued and
+  the receiver gets `OutOfMemory`; a receiver waiting when its process reaches `MAX_OPEN_CALLS` gets
+  `Busy` with the call still queued.
 - Needs: WP-K1, WP-A2.
 
 **WP-K3. Device objects and interrupts.** Size M.
@@ -183,7 +189,7 @@ not needed.
 - Delivers: `process_create`/`process_map`/`process_start` (with `arg`, the startup page's address);
   exit notices with cause, blamed account and blamed labels, their slots charged to the creator; a
   `process_exit` holding open calls reported `faulted`; each thread's serving account (its most
-  recently taken open call); the boot loader loading only the kernel and `init`.
+  recently taken open call).
 - Accepted when: kernel cases for exit notices (all three causes, and a labelled process's notice
   reaching a system-class `init`), blame on a server fault and on a panic with open calls going to
   the most recent open call only (a thread holding several callers' calls blames one), a `send`
@@ -225,29 +231,30 @@ not needed.
 
 ### Track R: user runtime and system servers
 **WP-R1. Native runtime crate.** Size M.
-- Delivers: `redoubt-rt`: startup-block parsing and writing (INIT.md, Startup block), typed handle
+- Delivered (merged, `8298608af`, with everything from answers 39-42 and 50-53): `redoubt-rt`:
+  startup-block parsing and writing as INIT.md states it, found through `arg`; typed handle
   wrappers, `call`/`send`/`receive` helpers, an allocator over `map_anon`, a panic handler; the
   shared server library (CONTAINMENT.md): `admit(badge, account, labels)` (per (account, label
-  set), per badge for account 0, freed by badge notices), `check(caller_labels, object_labels,
-  read|write)` (read: object ⊆ caller; write: equal), a 9P server skeleton (fids keyed by (badge,
-  account, label set), walks and directory reads checked as reads) and typed-message dispatch
-  (WIRE.md).
-- Accepted when: unit tests on the host; a bench echo server and client use only this crate.
-- Needs: WP-A1, WP-W1 (and WP-K2 to run on the kernel).
+  set), per badge for account 0), `check(caller_labels, object_labels, read|write)` (read: object
+  ⊆ caller; write: equal), a 9P server skeleton (fids keyed by (badge, account, label set), `..`
+  kept inside the root, walks, qids, `stat` and directory reads checked as reads, a 9P call with
+  non-zero words or no lend refused with `Malformed`, a hook freeing a badge's fids and slots when
+  its badge notice arrives) and typed-message dispatch (WIRE.md, status 1 = `Malformed`).
+- Accepted when: host tests against a fake kernel; a bench echo server and client use only this
+  crate; an rv32 and rv64 build case; fuzz targets.
+- Needs: WP-A1, WP-W1 (and WP-K2 to run on the kernel). Merged.
 
-**WP-R1b. The runtime follows answers 39-42 and 50-53.** Size S.
-- Reads: CONTAINMENT.md (the shared server library), INIT.md (Startup block), WIRE.md, KERNEL-SPEC.md
-  (badge notices).
-- Delivers: in `redoubt-rt`: `admit(badge, account, labels)` with account 0 per badge; `check` with
-  write equality; the 9P skeleton treating walks, qids and `stat` as reads, filtering directory
-  reads, keying fids by (badge, account, label set), refusing a 9P call with non-zero words or no
-  lend with `Malformed`, and freeing a badge's fids and slots on its badge notice; the startup block
-  exactly as INIT.md now states it, found through `arg`, with `Hndl` names under the manifest's name
-  rule (answer 64).
-- Accepted when: host tests for each rule (a blind write up refused, an unreadable walk refused, a
-  listing filtered, a badge notice freeing its fids, two badges of one account not sharing fids);
-  the startup-block fuzz target.
-- Needs: WP-R1, WP-A2, WP-W2.
+**WP-R1b. The runtime follows the kernel's records and the round-4 answers.** Size S. After the
+owner's round-4 answers (QUESTIONS.md 69-101).
+- Reads: CONTAINMENT.md (the shared server library), INIT.md (Startup block), KERNEL-SPEC.md
+  (badge notices, `receive`'s record), and whatever the round-4 answers change.
+- Delivers: in `redoubt-rt`: the badge-notice hook wired to the kernel's notice once WP-A2 and
+  WP-K2 land; `Hndl` names under the manifest's name rule (answer 64); and what QUESTIONS.md 69-101
+  decide for the library (item 83's connection operation, item 85's handle closing and caps, item
+  90's fair share).
+- Accepted when: host tests for each change (a badge notice freeing its fids; a `Hndl` name outside
+  the rule refused), and the cases the round-4 answers name; the startup-block fuzz target rerun.
+- Needs: WP-R1, WP-A2, WP-W2, WP-K2 (for the hook), the owner's round-4 answers.
 
 **WP-R2. Loader stub.** Size S.
 - Reads: PACKAGES.md (launching), INIT.md (startup block).
@@ -264,8 +271,9 @@ not needed.
 - Delivers: `init`: reads the manifest (refusing names outside INIT.md's name rule), builds the
   budget tree, hands out device handles, starts every system server through the stub, restarts
   with the rate limit, crash blame by (account, label set) and the steward logout signal, reboot as
-  last resort.
-- Accepted when: the M1 manifest boots every server; a manifest with a bad name is refused; a
+  last resort; the boot loader loading only the kernel and `init`, once `init` can start every
+  bundle program through the stub.
+- Accepted when: the milestone 1 manifest boots every server; a manifest with a bad name is refused; a
   crashing server restarts on the same endpoint; blame case: 3 crashes blamed on one (account,
   label set) log out those sessions and nobody else (a vault session's crashes leave its owner's
   unlabelled session logged in); more than 5 restarts in 60 s reboots.
@@ -283,14 +291,14 @@ not needed.
 - Delivers: a `no_std` `Platform` over `redoubt-rt`: console over `/dev/cons`, monotonic and wall
   time, randomness (`random`), module loading through `bootfsd`, the asynchronous 9P client on a small
   pool of I/O threads.
-- Accepted when: **Elixir prints on the box** (the M1 step 2 milestone); beamlet's differential
+- Accepted when: **Elixir prints on the box** (PLAN.md's milestone 1, step 2); beamlet's differential
   suite subset runs on the box with identical output.
 - Needs: WP-R1b, WP-R4.
 
 **WP-B2. IEx on the UART console.** Size S.
 - Delivers: an IEx session on the UART; the first Redoubt IEx helpers (`ls`, `cd`, `cat` over 9P).
-- Accepted when: a bench case types expressions at IEx and checks the answers (the M1 step 3
-  milestone).
+- Accepted when: a bench case types expressions at IEx and checks the answers (PLAN.md's
+  milestone 1, step 3).
 - Needs: WP-B1, WP-R3.
 
 ### Track D: storage and network
@@ -323,6 +331,11 @@ labelled callers.
 ### Track S: security servers
 **WP-S1. keyd.** Size S. Holds keys; signs through a badge-scoped capability; never holds keys
 that authenticate a person to the box; constant-time signing.
+- Reads: INIT.md (keyd), CAPABILITIES.md (the powerbox and approvals), CONTAINMENT.md (covert and
+  timing channels: constant time).
+- Accepted when: a signature round-trips through a badge-scoped handle; attack cases: a caller
+  cannot sign with a key its badge does not name, no export operation exists, enrolling a login key
+  is refused; the signing path is constant-time under the bench's timing check.
 - Needs: WP-R1b.
 
 **WP-S2. steward (stateless, milestone 1).** Size L.
@@ -360,10 +373,10 @@ steward; rejects keys `keyd` holds; each channel labelled with its session's lab
 
 ## Order
 ```
-merged:                  W1  L1  T1  T1b  A1  K0
+merged:                  W1  L1  T1  T1b  A1  K0  R1
 start now, in parallel:  M0 -> M1;  A2 (after A1);  W2 (after W1, A2)
 kernel, serialized:      K1 -> K2 (after A2) -> K3 -> K4 -> K5 -> K6 (after R1b)
-runtime:                 R1 (after A1, W1) -> R1b (after A2, W2) -> R2 (after K4) -> R3 (after K3, K5)
+runtime:                 R1 -> R1b (after A2, W2, K2) -> R2 (after K4) -> R3 (after K3, K5)
                          R4 (after R1b, K3)
 beamlet:                 B1 (after R1b, R4) -> B2 (after R3)
 storage and network:     D1 (after R1b, K3) -> D2 (after L1);  D3 (after R1b, K3, W2)
@@ -371,7 +384,9 @@ security:                S1 (after R1b);  S2 (after R3, B1, D2);  S3 (after D3, 
 conformance:             C1 (after M1, K5, T1)
 milestone:               E1 (after all)
 ```
-The critical path is the kernel track (K1 to K5), then R3, S2 and S3; A2 must land before K2.
+**Waiting on the owner:** A2, W2, M1, R1b and K2 wait on the owner's round-4 answers (QUESTIONS.md
+56-101; 56-68 are answered). The critical path is the kernel track (K1 to K5), then R3, S2 and S3;
+A2 must land before K2.
 Everything off that path (model, codecs, littlefs, bench, drivers, beamlet's platform) can proceed
 in parallel. SWARM.md's waves follow this order.
 
