@@ -60,7 +60,9 @@ pub fn memory_range(addr: usize, size: usize) -> Result<MemoryRange, xous_kernel
 }
 
 pub struct MemoryManager {
+    #[cfg_attr(not(baremetal), allow(dead_code))]
     ram_start: usize,
+    #[cfg_attr(not(baremetal), allow(dead_code))]
     ram_size: usize,
     #[allow(dead_code)]
     ram_name: u32,
@@ -424,6 +426,7 @@ impl MemoryManager {
         Ok(virt)
     }
 
+    #[cfg_attr(not(baremetal), allow(dead_code))]
     pub fn is_main_memory(&self, phys: *mut u8) -> bool {
         (phys as usize) >= self.ram_start && (phys as usize) < self.ram_start + self.ram_size
     }
