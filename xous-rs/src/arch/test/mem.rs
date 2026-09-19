@@ -4,7 +4,6 @@ extern crate alloc;
 use alloc::alloc::{Layout, alloc, dealloc};
 
 pub const PAGE_SIZE: usize = 4096;
-pub const MMAP_VIRT_BASE: usize = 0xb000_0000;
 pub const DEFAULT_HEAP_BASE: usize = 0x2000_0000;
 pub const DEFAULT_MESSAGE_BASE: usize = 0x4000_0000;
 pub const DEFAULT_BASE: usize = 0x6000_0000;

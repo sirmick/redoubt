@@ -472,37 +472,6 @@ impl MemoryManager {
         // flag.
         let device_ram = (flags & MemoryFlags::DEV == MemoryFlags::DEV) && (phys == 0);
 
-        // If no physical address is specified and the range is in the pure virtual mapping request,
-        // just allocate the region as "swapped". No further checks is done on the validity of the requested
-        // range - if the range is out of bounds, it will be caught as a runtime error in the resolver
-        // that attempts to find the physical page that corresponds to a virtual mapping.
-        #[cfg(baremetal)]
-        if phys == 0
-            && (flags & MemoryFlags::VIRT == MemoryFlags::VIRT)
-            && ((virt_ptr as usize & 0xF000_0000) == MMAP_VIRT_BASE)
-        {
-            // only the range from 0xB000_0000 - 0xBFFF_FFFF is reserved for this purpose
-            if (virt_ptr as usize).saturating_add(size) & 0xF000_0000 != MMAP_VIRT_BASE {
-                return Err(xous_kernel::Error::BadAddress);
-            }
-            let mut mm = MemoryMapping::current();
-            // round down any virtual address to the next page
-            let start = virt_ptr as usize & !(PAGE_SIZE - 1);
-            // round up to the nearest page boundary
-            let end = (virt_ptr as usize + size + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
-            for virt in (start..end).step_by(PAGE_SIZE) {
-                // Pages are read-only. Writes take a special call to ensure atomicity of write
-                // updates (and subsequent page unmap). Valid is not set, because it's not
-                // wired into memory, and "P" (swap) is set to indicate this is a swapper managed page.
-                mm.reserve_address(self, virt, MemoryFlags::R | MemoryFlags::P)?;
-
-                // now mark the page as USER
-                crate::arch::mem::mark_page_user(virt)?;
-            }
-            // note that the region returned is snapped to the nearest page boundary, even if
-            // the use called us with unaligned addresses.
-            return crate::mem::memory_range(start as usize, end - start);
-        }
         // If no physical address is specified, give the user the next available pages
         if phys == 0 && !device_ram {
             return self.reserve_range(virt, size, flags);
