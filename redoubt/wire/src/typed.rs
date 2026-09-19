@@ -17,9 +17,9 @@
 //!   so reply data can only travel in the lend.
 //!
 //! **Word 0 of a reply is a status**: 0 for success, otherwise a code from the protocol's
-//! error table. An error reply has words 1..=3 zero and no handles, and the caller ignores
-//! the buffer. The reply does not carry the request's opcode: the caller knows what it sent
-//! and names it when decoding.
+//! error table, where code 1 is always [`MALFORMED`]. An error reply has words 1..=3 zero
+//! and no handles, and the caller ignores the buffer. The reply does not carry the request's
+//! opcode: the caller knows what it sent and names it when decoding.
 //!
 //! **A typed operation written into a 9P file** (e.g. `ipd`'s `ctl` files) has no words, so
 //! its bytes are the opcode as a `u32` followed by the buffer-shape encoding of the fields,
@@ -43,6 +43,54 @@ pub const INLINE_BYTES: usize = 12;
 
 /// A message's words, widened to `u64`.
 pub type Words = [u64; WORDS];
+
+/// Error code 1 in every protocol (and a 9P call's reply status): `Malformed`, a request that
+/// does not decode (WIRE.md, Errors). The generator adds it to every error table and refuses
+/// a table that gives code 1 another meaning; a protocol's own codes start at 2.
+pub const MALFORMED: u32 = 1;
+
+/// The kind of object a handle slot must name, as a table writes it (`handle[N] KIND`;
+/// KERNEL-SPEC.md, Objects). Documentation only: the kernel does not report a received
+/// handle's kind, so nothing checks it on receipt, and a handle of the wrong kind is found by
+/// use (`WrongObject` on first use, answer 56).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandleKind {
+    Endpoint,
+    Budget,
+    Process,
+    Mmio,
+    Irq,
+    Reset,
+}
+
+impl HandleKind {
+    /// Every kind, in WIRE.md's order.
+    pub const ALL: [HandleKind; 6] = [
+        HandleKind::Endpoint,
+        HandleKind::Budget,
+        HandleKind::Process,
+        HandleKind::Mmio,
+        HandleKind::Irq,
+        HandleKind::Reset,
+    ];
+
+    /// The name a table writes.
+    pub const fn name(self) -> &'static str {
+        match self {
+            HandleKind::Endpoint => "endpoint",
+            HandleKind::Budget => "budget",
+            HandleKind::Process => "process",
+            HandleKind::Mmio => "mmio",
+            HandleKind::Irq => "irq",
+            HandleKind::Reset => "reset",
+        }
+    }
+
+    /// The kind a table's name stands for.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.name() == name)
+    }
+}
 
 /// One row of a generated protocol's layout: a request, or the reply to one (keyed by the
 /// request's opcode).
@@ -274,6 +322,15 @@ mod tests {
         assert_eq!(reply_status(&error_reply(3), 0), Ok(Some(3)));
         assert_eq!(reply_status(&[3, 0, 0, 1], 0), Err(Error::BadWords));
         assert_eq!(reply_status(&[3, 0, 0, 0], 1), Err(Error::BadHandles));
+    }
+
+    #[test]
+    fn handle_kinds_round_trip_by_name() {
+        for k in HandleKind::ALL {
+            assert_eq!(HandleKind::from_name(k.name()), Some(k));
+        }
+        assert_eq!(HandleKind::from_name("Endpoint"), None);
+        assert_eq!(HandleKind::from_name(""), None);
     }
 
     #[test]

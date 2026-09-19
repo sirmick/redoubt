@@ -6,7 +6,10 @@ defmodule Redoubt.Wire.Proto.Example do
   @moduledoc """
   Codec for the `example` protocol. A request or reply is `{name, fields}`, with `fields` a
   map holding exactly the table's non-handle fields; an error reply decodes to
-  `{:failed, error}`. Framing and errors: `Redoubt.Wire`.
+  `{:failed, error}`; `:malformed` (code 1) is every protocol's error for a request that
+  does not decode. Handle kinds in `layout/1` are documentation, checked by use (a
+  handle of the wrong kind gets `WrongObject` on first use). Framing and errors:
+  `Redoubt.Wire`.
   """
   alias Redoubt.Wire, as: W
 
@@ -34,14 +37,16 @@ defmodule Redoubt.Wire.Proto.Example do
     4294967295 => {:last, :buffer, 0}
   }
   @errors %{
-    1 => :not_found,
-    2 => :denied,
+    1 => :malformed,
+    2 => :not_found,
+    3 => :denied,
     4294967295 => :last_error
   }
 
   @doc """
   A message's layout: `{opcode, shape, fields, handles, reply}`, where `fields` lists
-  `{name, type}` in order and `reply` is `{fields, handles}`.
+  `{name, type}` in order, `handles` lists `{name, kind}` by slot, and `reply` is
+  `{fields, handles}`.
   """
   def layout(:ping), do: {1, :inline, [], [], {[], []}}
   def layout(:pong), do: {2, :inline, [{:seq, :u64}, {:flags, :u32}], [], {[], []}}
@@ -49,9 +54,9 @@ defmodule Redoubt.Wire.Proto.Example do
   def layout(:wide), do: {4, :buffer, [{:a, :u64}, {:b, :u32}, {:c, :u8}], [], {[], []}}
   def layout(:named), do: {5, :buffer, [{:id, :u32}, {:name, :string}], [], {[{:id, :u32}], []}}
   def layout(:blob), do: {6, :buffer, [{:offset, :u64}, {:data, :bytes}, {:label, :string}], [], {[], []}}
-  def layout(:grant), do: {7, :inline, [{:pages, :u32}], [:range, :reply], {[], [:key]}}
+  def layout(:grant), do: {7, :inline, [{:pages, :u32}], [{:range, :endpoint}, {:reply, :endpoint}], {[], [{:key, :budget}]}}
   def layout(:read), do: {8, :buffer, [{:offset, :u64}, {:count, :u32}], [], {[{:data, :bytes}], []}}
-  def layout(:last), do: {4294967295, :buffer, [{:note, :string}], [:key], {[{:n, :u64}, {:m, :u32}], []}}
+  def layout(:last), do: {4294967295, :buffer, [{:note, :string}], [{:key, :process}], {[{:n, :u64}, {:m, :u32}], []}}
   def layout(_), do: nil
 
   @doc "Encodes a request: `{:ok, words, buffer}` or `{:error, reason}`."

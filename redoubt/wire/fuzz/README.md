@@ -31,3 +31,6 @@ All runs on one x86-64 host, the three targets in parallel.
 | 2026-09-19 | after review (replies, file framing, atomic writes, table-driven 9P) | `ninep` | 10 min | 75,019,956 | none |
 | 2026-09-19 | after review | `typed` | 10 min | 63,651,585 | none |
 | 2026-09-19 | after review | `json` | 10 min | 3,604,251 | none |
+| 2026-09-19 | WP-W2 (`Malformed` as code 1, handle kinds) | `ninep` | 10 min | 83,412,410 | none |
+| 2026-09-19 | WP-W2 | `typed` | 10 min | 74,061,179 | none |
+| 2026-09-19 | WP-W2 | `json` | 10 min | 11,120,945 | none |

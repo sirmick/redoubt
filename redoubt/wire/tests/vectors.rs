@@ -85,6 +85,7 @@ fn render_reply(r: &Reply<'_>) -> String {
 
 fn error_name(e: ErrorCode) -> &'static str {
     match e {
+        ErrorCode::Malformed => "malformed",
         ErrorCode::NotFound => "not_found",
         ErrorCode::Denied => "denied",
         ErrorCode::LastError => "last_error",
@@ -217,6 +218,7 @@ fn hand_built_replies() -> Vec<Result<Reply<'static>, ErrorCode>> {
         Ok(Reply::Grant(GrantReply {})),
         Ok(Reply::Read(ReadReply { data: b"hello" })),
         Ok(Reply::Last(LastReply { n: u64::MAX, m: 7 })),
+        Err(ErrorCode::Malformed),
         Err(ErrorCode::NotFound),
         Err(ErrorCode::Denied),
         Err(ErrorCode::LastError),
@@ -240,7 +242,7 @@ fn hand_built_files() -> Vec<Message<'static>> {
 fn example_vectors() {
     let counts = check_file("example.txt");
     let want: Vec<(&str, usize)> =
-        vec![("bad", 24), ("badfile", 7), ("badreply", 12), ("failed", 4), ("file", 6), ("ok", 14), ("reply", 9)];
+        vec![("bad", 24), ("badfile", 7), ("badreply", 12), ("failed", 5), ("file", 6), ("ok", 14), ("reply", 9)];
     let got: Vec<(&str, usize)> = counts.iter().map(|(k, v)| (k.as_str(), *v)).collect();
     assert_eq!(got, want);
 
@@ -288,7 +290,18 @@ fn layouts_by_hand() {
     assert_eq!(buf[..6], [2, 0, 0, 0, b'h', b'i']);
     // An inline reply: status 0 in word 0, fields in words 1..=3.
     assert_eq!(Reply::Small(SmallReply { c: 9 }).encode(&mut []).unwrap(), [0, 9, 0, 0]);
-    assert_eq!(ErrorCode::Denied.encode(), [2, 0, 0, 0]);
+    assert_eq!(ErrorCode::Denied.encode(), [3, 0, 0, 0]);
+    // Code 1 is `Malformed` in every protocol, the table's own codes after it.
+    assert_eq!(ErrorCode::Malformed.encode(), [1, 0, 0, 0]);
+    assert_eq!(ErrorCode::Malformed.code(), redoubt_wire::typed::MALFORMED);
+    assert_eq!(ErrorCode::from_code(1), Some(ErrorCode::Malformed));
+    assert_eq!(ErrorCode::NotFound.code(), 2);
+    // Handle kinds are documentation, generated from the table.
+    use redoubt_wire::typed::HandleKind;
+    assert_eq!(Message::Grant(Grant { pages: 1 }).handle_kinds(), [HandleKind::Endpoint, HandleKind::Endpoint]);
+    assert_eq!(Reply::Grant(GrantReply {}).handle_kinds(), [HandleKind::Budget]);
+    assert_eq!(Message::Last(Last { note: "" }).handle_kinds(), [HandleKind::Process]);
+    assert_eq!(Message::Ping(Ping {}).handle_kinds(), []);
     // The file framing: opcode, then the fields, even for an inline message.
     let n = Message::Small(Small { a: 1, b: 0x0302 }).encode_file(&mut buf).unwrap();
     assert_eq!(buf[..n], [3, 0, 0, 0, 1, 2, 3]);
@@ -457,7 +470,8 @@ fn generated_cases() -> Vec<Case> {
             let (mut words, mut buf) = framed(r.encode(&mut out).unwrap(), &out, r.encode(&mut []).is_ok());
             let mut handles = r.handle_names().len();
             if rng.below(3) == 0 {
-                let code = [ErrorCode::NotFound, ErrorCode::Denied, ErrorCode::LastError][rng.below(3) as usize];
+                let codes = [ErrorCode::Malformed, ErrorCode::NotFound, ErrorCode::Denied, ErrorCode::LastError];
+                let code = codes[rng.below(4) as usize];
                 (words, handles) = (code.encode(), 0);
             }
             rng.mutate(&mut handles, &mut words, &mut buf);
@@ -465,7 +479,7 @@ fn generated_cases() -> Vec<Case> {
             continue;
         }
         let request = OPCODES[rng.below(OPCODES.len() as u64) as usize] as u32;
-        let status = [0, 0, 0, 1, 2, 3, 0xffff_ffff, 1 << 32][rng.below(8) as usize];
+        let status = [0, 0, 0, 1, 2, 3, 4, 0xffff_ffff, 1 << 32][rng.below(9) as usize];
         let mut words = [status, rng.word(), rng.word(), rng.word()];
         let mut buf = if rng.below(3) == 0 { rng.bytes(24) } else { Vec::new() };
         match rng.below(3) {
@@ -611,7 +625,7 @@ fn print_hand_built_lines() {
         let c = Case::Request { handles: m.handle_names().len(), words: w, buf: buf[..len].to_vec() };
         println!("{}", line(&c));
     }
-    let ops = [1, 2, 3, 4, 5, 6, 7, 8, 0xffff_ffff, 1, 8, 0xffff_ffff, 1];
+    let ops = [1, 2, 3, 4, 5, 6, 7, 8, 0xffff_ffff, 1, 1, 8, 0xffff_ffff, 1];
     for (r, op) in hand_built_replies().into_iter().zip(ops) {
         let (w, len, handles) = match r {
             Ok(r) => {

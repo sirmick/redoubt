@@ -17,7 +17,7 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use redoubt_wire::typed::{INLINE_BYTES, MAX_MSG_HANDLES};
+use redoubt_wire::typed::{HandleKind, INLINE_BYTES, MALFORMED, MAX_MSG_HANDLES};
 
 const MESSAGE_HEADER: [&str; 4] = ["Opcode", "Message", "Fields", "Reply"];
 const ERROR_HEADER: [&str; 2] = ["Code", "Error"];
@@ -33,8 +33,9 @@ pub enum Ty {
     U64,
     Str,
     Bytes,
-    /// The handle in this slot; carries no bytes.
-    Handle(usize),
+    /// The handle in this slot, and the kind of object it must name (documentation: kinds
+    /// are checked by use, WIRE.md); carries no bytes.
+    Handle(usize, HandleKind),
 }
 
 impl Ty {
@@ -48,7 +49,7 @@ impl Ty {
             Ty::U64 => (Some(8), "u64", "u64"),
             Ty::Str => (None, "string", "&'a str"),
             Ty::Bytes => (None, "bytes", "&'a [u8]"),
-            Ty::Handle(_) => (Some(0), "handle", ""),
+            Ty::Handle(..) => (Some(0), "handle", ""),
         }
     }
 
@@ -65,11 +66,11 @@ pub struct Field {
 
 /// The fields that are encoded (everything but handles).
 fn data(fields: &[Field]) -> impl Iterator<Item = &Field> {
-    fields.iter().filter(|f| !matches!(f.ty, Ty::Handle(_)))
+    fields.iter().filter(|f| !matches!(f.ty, Ty::Handle(..)))
 }
 
 fn handles(fields: &[Field]) -> impl Iterator<Item = &Field> {
-    fields.iter().filter(|f| matches!(f.ty, Ty::Handle(_)))
+    fields.iter().filter(|f| matches!(f.ty, Ty::Handle(..)))
 }
 
 /// Every field has a fixed size and together they fit in words 1..=3.
@@ -146,8 +147,8 @@ const RESERVED: &[&str] = &[
 /// Type names a message may not produce: the generated module's own items and imports, and
 /// the Rust prelude's names, which the generated code uses (`Result`, `Ok`, ...).
 const RESERVED_TYPES: &[&str] = &[
-    "Message", "Reply", "ErrorCode", "Error", "Reader", "Writer", "Layout", "Words", "Result", "Ok", "Err",
-    "Option", "Some", "None", "Box", "Vec", "String", "Copy", "Clone", "Debug", "PartialEq", "Eq",
+    "Message", "Reply", "ErrorCode", "Error", "Reader", "Writer", "Layout", "Words", "HandleKind", "Result", "Ok",
+    "Err", "Option", "Some", "None", "Box", "Vec", "String", "Copy", "Clone", "Debug", "PartialEq", "Eq",
     "PartialOrd", "Ord", "Hash", "Default", "Drop", "Send", "Sync", "Sized", "Unpin", "Fn", "FnMut", "FnOnce",
     "From", "Into", "TryFrom", "TryInto", "AsRef", "AsMut", "Iterator", "IntoIterator", "DoubleEndedIterator",
     "ExactSizeIterator", "Extend", "FromIterator", "ToOwned", "ToString",
@@ -210,18 +211,31 @@ fn parse_type(s: &str, handles_so_far: usize) -> Result<Ty, String> {
         "string" => Ty::Str,
         "bytes" => Ty::Bytes,
         _ => {
-            let slot = s
+            // `handle[N] KIND`: the slot, then the kind of object the handle must name.
+            let mut words = s.split_whitespace();
+            let (slot, kind) = (words.next().unwrap_or(""), words.next());
+            let slot = slot
                 .strip_prefix("handle[")
                 .and_then(|r| r.strip_suffix(']'))
+                .filter(|n| n.bytes().all(|b| b.is_ascii_digit()) && (*n == "0" || !n.starts_with('0')))
                 .and_then(|n| n.parse::<usize>().ok())
                 .ok_or_else(|| format!("unknown type `{s}`"))?;
+            let kinds = || HandleKind::ALL.map(HandleKind::name).join(", ");
+            let kind = match (kind, words.next()) {
+                (None, _) => {
+                    return Err(format!("`{s}`: a handle needs its kind, `handle[{slot}] KIND` (one of {})", kinds()));
+                }
+                (Some(k), None) => HandleKind::from_name(k)
+                    .ok_or_else(|| format!("`{s}`: unknown handle kind `{k}` (one of {})", kinds()))?,
+                (Some(_), Some(_)) => return Err(format!("`{s}`: expected `handle[{slot}] KIND`")),
+            };
             if slot != handles_so_far {
                 return Err(format!("`{s}`: handle slots must be numbered 0, 1, ... in order"));
             }
             if slot >= MAX_MSG_HANDLES {
                 return Err(format!("`{s}`: a message carries at most {MAX_MSG_HANDLES} handles"));
             }
-            Ty::Handle(slot)
+            Ty::Handle(slot, kind)
         }
     })
 }
@@ -255,6 +269,11 @@ fn parse_message(row: &[&str]) -> Result<MessageDef, String> {
     let name = backticked(name).ok_or_else(|| format!("message name `{name}` must be in backticks"))?;
     check_ident("message", name)?;
     Ok(MessageDef { opcode, name: name.to_string(), fields: parse_fields(fields)?, reply: parse_fields(reply)? })
+}
+
+/// The error every protocol has: code 1 (WIRE.md, Errors).
+fn malformed() -> ErrorDef {
+    ErrorDef { code: MALFORMED, name: "malformed".into() }
 }
 
 fn parse_error(row: &[&str]) -> Result<ErrorDef, String> {
@@ -326,7 +345,9 @@ pub fn parse(source: &str, text: &str) -> Result<Tables, String> {
             rows.push((i, row));
             i += 1;
         }
-        if rows.is_empty() {
+        // An error table may be empty: `malformed` is every protocol's, and a protocol may
+        // have no errors of its own.
+        if rows.is_empty() && header == MESSAGE_HEADER {
             return Err(at(marker, format!("table `{name}` has no rows")));
         }
         // A row cut off from its table by a blank line would otherwise be read as prose.
@@ -338,9 +359,18 @@ pub fn parse(source: &str, text: &str) -> Result<Tables, String> {
             return Err(at(next, format!("this looks like a row of `{name}`, but its table ended at the blank line above")));
         }
         if header == ERROR_HEADER {
-            let mut errors: Vec<ErrorDef> = Vec::new();
+            // Code 1 is `malformed` in every protocol (WIRE.md, Errors): added here, and a
+            // table may not give the code (or the name) a meaning of its own.
+            let mut errors: Vec<ErrorDef> = vec![malformed()];
             for (n, row) in rows {
                 let e = parse_error(&row).map_err(|e| at(n, e))?;
+                if e.code == MALFORMED || camel(&e.name) == camel(&malformed().name) {
+                    return Err(at(n, format!(
+                        "error `{}` (code {}): code {MALFORMED} is `malformed` in every protocol, added by the generator; \
+                         a protocol's own codes start at 2",
+                        e.name, e.code
+                    )));
+                }
                 if errors.iter().any(|o| o.code == e.code || camel(&o.name) == camel(&e.name)) {
                     return Err(at(n, format!("error `{}` or code {} used twice", e.name, e.code)));
                 }
@@ -410,12 +440,22 @@ pub fn link(tables: Vec<Tables>) -> Result<Vec<Protocol>, String> {
     Ok(protocols)
 }
 
+/// `slot N, KIND`, for a handle field's doc.
+fn slot_doc(ty: Ty) -> String {
+    match ty {
+        Ty::Handle(slot, kind) => format!("slot {slot}, {}", kind.name()),
+        _ => String::new(),
+    }
+}
+
 /// One Rust struct per request or reply.
 fn rust_struct(s: &mut String, doc: &str, name: &str, fields: &[Field]) {
     let _ = writeln!(s, "\n{doc}");
-    let hs: Vec<String> = handles(fields).map(|f| format!("`{}`", f.name)).collect();
+    let hs: Vec<String> = handles(fields).map(|f| format!("`{}` ({})", f.name, slot_doc(f.ty))).collect();
     if !hs.is_empty() {
-        let _ = writeln!(s, "/// Handle slots: {}.", hs.join(", "));
+        let _ = writeln!(s, "///\n/// Handle slots: {}.", hs.join(", "));
+        s.push_str("/// Kinds are documentation, checked by use: a handle of the wrong kind gets `WrongObject`\n");
+        s.push_str("/// on first use.\n");
     }
     let _ = writeln!(s, "#[derive(Debug, Clone, Copy, PartialEq, Eq)]");
     if data(fields).next().is_none() {
@@ -461,6 +501,15 @@ fn rust_enum(s: &mut String, kind: &str, doc: &str, rows: &[Row<'_>]) {
         let _ = writeln!(s, "            {kind}::{}(_) => &[{}],", r.variant, names.join(", "));
     }
     s.push_str("        }\n    }\n\n");
+    s.push_str("    /// The kind of object each handle must name, by slot: documentation from the table, not\n");
+    s.push_str("    /// checked on receipt (a handle of the wrong kind gets `WrongObject` on first use).\n");
+    s.push_str("    pub fn handle_kinds(&self) -> &'static [HandleKind] {\n        match self {\n");
+    for r in rows {
+        let kinds: Vec<String> =
+            handles(r.fields).map(|f| format!("HandleKind::{}", camel(slot_kind(f.ty)))).collect();
+        let _ = writeln!(s, "            {kind}::{}(_) => &[{}],", r.variant, kinds.join(", "));
+    }
+    s.push_str("        }\n    }\n\n");
     let key = if kind == "Reply" { "The opcode of the request this replies to." } else { "The opcode in word 0." };
     let _ = writeln!(s, "    /// {key}");
     s.push_str("    fn opcode(&self) -> u32 {\n        match self {\n");
@@ -500,6 +549,12 @@ fn rust_enum(s: &mut String, kind: &str, doc: &str, rows: &[Row<'_>]) {
         let chosen: Vec<&Row<'_>> = rows.iter().filter(|r| r.inline || !only_inline).collect();
         let reads = chosen.iter().any(|r| data(r.fields).next().is_some());
         let r = if reads { "r" } else { "_r" };
+        if chosen.is_empty() {
+            // A protocol with no inline messages (only a `_` arm would be unreachable code).
+            let _ = writeln!(s, "    fn {fname}(_opcode: u32, {r}: &mut Reader<{rlt}>) -> Result<Self, Error> {{");
+            s.push_str("        Err(Error::BadOpcode)\n    }\n\n");
+            continue;
+        }
         let _ = writeln!(s, "    fn {fname}(opcode: u32, {r}: &mut Reader<{rlt}>) -> Result<Self, Error> {{");
         s.push_str("        Ok(match opcode {\n");
         for r in chosen {
@@ -519,7 +574,7 @@ pub fn rust(p: &Protocol) -> String {
     let _ = writeln!(s, "//! Generated by `redoubt-wire-gen` from the tables in `{}`.", p.source);
     let _ = writeln!(s, "//! Do not edit: change the tables and run `cargo run -p redoubt-wire-gen`.");
     s.push('\n');
-    s.push_str("use crate::codec::{Error, Reader, Writer};\nuse crate::typed::{self, Layout, Words};\n");
+    s.push_str("use crate::codec::{Error, Reader, Writer};\nuse crate::typed::{self, HandleKind, Layout, Words};\n");
     for m in &p.messages {
         let shape = if m.inline() { "inline" } else { "buffer" };
         let doc = format!("/// `{}`: opcode {}, {shape}; reply [`{}`].", m.name, m.opcode, m.reply_type());
@@ -578,7 +633,8 @@ pub fn rust(p: &Protocol) -> String {
     s.push_str("    pub fn encode(&self, buf: &mut [u8]) -> Result<Words, Error> {\n");
     s.push_str("        typed::encode(typed::layout(REPLIES, self.opcode())?, 0, buf, |w| self.write(w))\n    }\n}\n");
 
-    s.push_str("\n/// The protocol's error codes: word 0 of an error reply.\n");
+    s.push_str("\n/// The protocol's error codes: word 0 of an error reply. Code 1, `Malformed`, is every\n");
+    s.push_str("/// protocol's: a request that does not decode (WIRE.md, Errors).\n");
     s.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum ErrorCode {\n");
     for e in &p.errors {
         let _ = writeln!(s, "    {},", camel(&e.name));
@@ -610,9 +666,17 @@ pub fn rust_mod(protocols: &[Protocol]) -> String {
     s
 }
 
+/// A handle field's kind as the table writes it (empty for other fields).
+fn slot_kind(ty: Ty) -> &'static str {
+    match ty {
+        Ty::Handle(_, kind) => kind.name(),
+        _ => "",
+    }
+}
+
 fn elixir_fields(fields: &[Field]) -> String {
     let f: Vec<String> = data(fields).map(|f| format!("{{:{}, :{}}}", f.name, f.ty.info().1)).collect();
-    let h: Vec<String> = handles(fields).map(|f| format!(":{}", f.name)).collect();
+    let h: Vec<String> = handles(fields).map(|f| format!("{{:{}, :{}}}", f.name, slot_kind(f.ty))).collect();
     format!("[{}], [{}]", f.join(", "), h.join(", "))
 }
 
@@ -668,7 +732,10 @@ pub fn elixir(p: &Protocol) -> String {
     let _ = writeln!(s, "  @moduledoc \"\"\"");
     let _ = writeln!(s, "  Codec for the `{}` protocol. A request or reply is `{{name, fields}}`, with `fields` a", p.name);
     let _ = writeln!(s, "  map holding exactly the table's non-handle fields; an error reply decodes to");
-    let _ = writeln!(s, "  `{{:failed, error}}`. Framing and errors: `Redoubt.Wire`.");
+    let _ = writeln!(s, "  `{{:failed, error}}`; `:malformed` (code 1) is every protocol's error for a request that");
+    let _ = writeln!(s, "  does not decode. Handle kinds in `layout/1` are documentation, checked by use (a");
+    let _ = writeln!(s, "  handle of the wrong kind gets `WrongObject` on first use). Framing and errors:");
+    let _ = writeln!(s, "  `Redoubt.Wire`.");
     let _ = writeln!(s, "  \"\"\"");
     s.push_str("  alias Redoubt.Wire, as: W\n\n");
     let shape = |m: &MessageDef| if m.inline() { ":inline" } else { ":buffer" };
@@ -689,7 +756,8 @@ pub fn elixir(p: &Protocol) -> String {
     let _ = writeln!(s, "  @errors %{{\n{}\n  }}\n", errs.join(",\n"));
 
     s.push_str("  @doc \"\"\"\n  A message's layout: `{opcode, shape, fields, handles, reply}`, where `fields` lists\n");
-    s.push_str("  `{name, type}` in order and `reply` is `{fields, handles}`.\n  \"\"\"\n");
+    s.push_str("  `{name, type}` in order, `handles` lists `{name, kind}` by slot, and `reply` is\n");
+    s.push_str("  `{fields, handles}`.\n  \"\"\"\n");
     for m in &p.messages {
         let reply = format!("{{{}}}", elixir_fields(&m.reply));
         let _ = writeln!(s, "  def layout(:{}), do: {{{}, {}, {}, {reply}}}", m.name, m.opcode, shape(m), elixir_fields(&m.fields));
@@ -797,7 +865,7 @@ mod tests {
     use super::*;
 
     const HEAD: &str = "<!-- wire: demo -->\n| Opcode | Message | Fields | Reply |\n| --- | --- | --- | --- |\n";
-    const ERRORS: &str = "\n<!-- wire-errors: demo -->\n| Code | Error |\n| --- | --- |\n| 1 | `denied` |\n";
+    const ERRORS: &str = "\n<!-- wire-errors: demo -->\n| Code | Error |\n| --- | --- |\n| 2 | `denied` |\n";
 
     fn protocols(text: &str) -> Result<Vec<Protocol>, String> {
         link(vec![parse("n.md", text)?])
@@ -811,22 +879,23 @@ mod tests {
     #[test]
     fn parses_tables() {
         let t = format!(
-            "intro\n\n{HEAD}| 1 | `a` | - | - |\n| 2 | `b_c` | `x: u64`, `h: handle[0]`, `s: string` | - |\n\
-             | 3 | `d` | `x: u64` | `data: bytes`, `k: handle[0]` |\n\nafter\n{ERRORS}"
+            "intro\n\n{HEAD}| 1 | `a` | - | - |\n| 2 | `b_c` | `x: u64`, `h: handle[0] endpoint`, `s: string` | - |\n\
+             | 3 | `d` | `x: u64` | `data: bytes`, `k: handle[0] budget` |\n\nafter\n{ERRORS}"
         );
         let p = protocols(&t).unwrap();
         assert_eq!(p.len(), 1);
         assert_eq!(p[0].name, "demo");
         let m = &p[0].messages;
         assert_eq!(m[1].type_name(), "BC");
-        assert_eq!(m[1].fields[1].ty, Ty::Handle(0));
+        assert_eq!(m[1].fields[1].ty, Ty::Handle(0, HandleKind::Endpoint));
         assert_eq!(m[0].reply, []);
-        assert_eq!(m[2].reply[1].ty, Ty::Handle(0));
+        assert_eq!(m[2].reply[1].ty, Ty::Handle(0, HandleKind::Budget));
         assert!(m[0].inline());
         assert!(!m[1].inline());
         // An inline request whose reply needs a buffer is buffer-shaped.
         assert!(!m[2].inline());
-        assert_eq!(p[0].errors, [ErrorDef { code: 1, name: "denied".into() }]);
+        // `malformed` is added as code 1.
+        assert_eq!(p[0].errors, [malformed(), ErrorDef { code: 2, name: "denied".into() }]);
     }
 
     #[test]
@@ -838,8 +907,8 @@ mod tests {
         assert!(err("| 1 | `a` | - | - |\n| 2 | `a` | - | - |\n").contains("defined twice"));
         assert!(err("| 1 | `a` | - | - |\n| 2 | `a_reply` | - | - |\n").contains("defined twice"));
         assert!(err("| 1 | `a` | `x: u128` | - |\n").contains("unknown type"));
-        assert!(err("| 1 | `a` | `x: handle[1]` | - |\n").contains("in order"));
-        let five = "`a: handle[0]`, `b: handle[1]`, `c: handle[2]`, `d: handle[3]`, `e: handle[4]`";
+        assert!(err("| 1 | `a` | `x: handle[1] endpoint` | - |\n").contains("in order"));
+        let five = "`a: handle[0] irq`, `b: handle[1] irq`, `c: handle[2] irq`, `d: handle[3] irq`, `e: handle[4] irq`";
         assert!(err(&format!("| 1 | `a` | {five} | - |\n")).contains("at most 4"));
         assert!(err(&format!("| 1 | `a` | - | {five} |\n")).contains("at most 4"));
         assert!(err("| 1 | `a` | `x: u8`, `x: u8` | - |\n").contains("twice"));
@@ -866,15 +935,113 @@ mod tests {
             protocols(&format!("{HEAD}| 1 | `a` | - | - |\n\n<!-- wire-errors: demo -->\n| Code | Error |\n| --- | --- |\n{rows}")).unwrap_err()
         };
         assert!(errors("| 0 | `x` |\n").contains("error code 0 is reserved"));
-        assert!(errors("| 1 | `x` |\n| 1 | `y` |\n").contains("used twice"));
-        assert!(errors("| 1 | `x` |\n| 2 | `x` |\n").contains("used twice"));
-        assert!(errors("| 1 | `X` |\n").contains("snake_case"));
+        assert!(errors("| 2 | `x` |\n| 2 | `y` |\n").contains("used twice"));
+        assert!(errors("| 2 | `x` |\n| 3 | `x` |\n").contains("used twice"));
+        assert!(errors("| 2 | `X` |\n").contains("snake_case"));
+    }
+
+    /// Answers 28 and 56: every handle names its kind, one WIRE.md lists; the kind is
+    /// documentation, and there is nothing else after it.
+    #[test]
+    fn handle_kinds() {
+        for kind in HandleKind::ALL {
+            let p = protocols(&format!("{HEAD}| 1 | `a` | `h: handle[0] {}` | - |\n{ERRORS}", kind.name())).unwrap();
+            assert_eq!(p[0].messages[0].fields[0].ty, Ty::Handle(0, kind));
+        }
+        assert!(err("| 1 | `a` | `h: handle[0]` | - |\n").contains("needs its kind"));
+        assert!(err("| 1 | `a` | - | `h: handle[0]` |\n").contains("needs its kind"));
+        assert!(err("| 1 | `a` | `h: handle[0] socket` | - |\n").contains("unknown handle kind `socket`"));
+        assert!(err("| 1 | `a` | `h: handle[0] Endpoint` | - |\n").contains("unknown handle kind"));
+        assert!(err("| 1 | `a` | `h: handle[0] endpoint budget` | - |\n").contains("expected `handle[0] KIND`"));
+        assert!(err("| 1 | `a` | `h: handle[00] endpoint` | - |\n").contains("unknown type"));
+        assert!(err("| 1 | `a` | `h: handle[+0] endpoint` | - |\n").contains("unknown type"));
+        assert!(err("| 1 | `a` | `h: handle [0] endpoint` | - |\n").contains("unknown type"));
+        assert!(err("| 1 | `a` | `h: u32 endpoint` | - |\n").contains("unknown type"));
+    }
+
+    /// The kinds reach the generated docs and `handle_kinds()`, in both languages.
+    #[test]
+    fn kinds_are_generated() {
+        let p = protocols(&format!(
+            "{HEAD}| 1 | `a` | `r: handle[0] endpoint`, `x: u32`, `m: handle[1] mmio` | `b: handle[0] budget` |\n{ERRORS}"
+        ))
+        .unwrap();
+        let rust = rust(&p[0]);
+        assert!(rust.contains("/// Handle slots: `r` (slot 0, endpoint), `m` (slot 1, mmio)."), "{rust}");
+        assert!(rust.contains("/// Handle slots: `b` (slot 0, budget)."), "{rust}");
+        assert!(rust.contains("Message::A(_) => &[HandleKind::Endpoint, HandleKind::Mmio],"), "{rust}");
+        assert!(rust.contains("Reply::A(_) => &[HandleKind::Budget],"), "{rust}");
+        let ex = elixir(&p[0]);
+        assert!(ex.contains("[{:r, :endpoint}, {:m, :mmio}], {[], [{:b, :budget}]}"), "{ex}");
+    }
+
+    /// Answers 41 and 42: code 1 is `Malformed` in every protocol, added by the generator;
+    /// a table giving code 1 (or the name) a meaning of its own is refused.
+    #[test]
+    fn malformed_is_code_one_everywhere() {
+        let errors = |rows: &str| {
+            protocols(&format!("{HEAD}| 1 | `a` | - | - |\n\n<!-- wire-errors: demo -->\n| Code | Error |\n| --- | --- |\n{rows}"))
+        };
+        assert!(errors("| 1 | `not_found` |\n").unwrap_err().contains("code 1 is `malformed` in every protocol"));
+        assert!(errors("| 1 | `malformed` |\n").unwrap_err().contains("code 1 is `malformed`"));
+        assert!(errors("| 7 | `malformed` |\n").unwrap_err().contains("code 1 is `malformed`"));
+        // A protocol with no errors of its own has an empty error table, and still `malformed`.
+        assert_eq!(errors("\n").unwrap()[0].errors, [malformed()]);
+        assert_eq!(errors("").unwrap()[0].errors, [malformed()]);
+        // A row cut off from the empty table is still refused.
+        assert!(errors("\n| 2 | `x` |\n").unwrap_err().contains("ended at the blank line"));
+        let p = errors("| 2 | `denied` |\n").unwrap();
+        let rust = rust(&p[0]);
+        assert!(rust.contains("    Malformed,\n    Denied,\n"), "{rust}");
+        assert!(rust.contains("ErrorCode::Malformed => 1,"), "{rust}");
+        assert!(elixir(&p[0]).contains("1 => :malformed,\n    2 => :denied"));
+    }
+
+    /// Answer 98: every milestone 1 typed message is a `call`; a table has no `kind` column.
+    #[test]
+    fn no_kind_column() {
+        let t = "<!-- wire: demo -->\n| Opcode | Kind | Message | Fields | Reply |\n| --- | --- | --- | --- | --- |\n\
+                 | 1 | call | `a` | - | - |\n";
+        assert!(protocols(t).unwrap_err().contains("expected the header `| Opcode | Message | Fields | Reply |`"));
+    }
+
+    /// The tables WP-R1b unfences (NAMESPACES.md `ninep-common`, INIT.md `startup`), copied
+    /// here as they stand fenced, with the marker R1b adds (a protocol name is snake_case, so
+    /// `ninep_common`) and the error table every protocol needs: the generator can express
+    /// both.
+    #[test]
+    fn fenced_r1b_tables_parse() {
+        let ninep_common = "<!-- wire: ninep_common -->\n| Opcode | Message | Fields | Reply |\n| --- | --- | --- | --- |\n\
+             | 2 | `new_connection` | `root: string` | `conn: handle[0] endpoint`, `id: u64` |\n\
+             | 3 | `disconnect` | `id: u64` | - |\n\n\
+             <!-- wire-errors: ninep_common -->\n| Code | Error |\n| --- | --- |\n";
+        let startup = "<!-- wire: startup -->\n| Opcode | Message | Fields | Reply |\n| --- | --- | --- | --- |\n\
+             | 1 | `startup` | `version: u32`, `handle_count: u32`, `namespace: bytes`, `handles: bytes`, `argv: bytes` | - |\n\n\
+             <!-- wire-errors: startup -->\n| Code | Error |\n| --- | --- |\n";
+        let p = link(vec![parse("NAMESPACES.md", ninep_common).unwrap(), parse("INIT.md", startup).unwrap()]).unwrap();
+        let (n, s) = (&p[0], &p[1]);
+        assert_eq!((n.name.as_str(), s.name.as_str()), ("ninep_common", "startup"));
+        assert!(!n.messages[0].inline(), "`new_connection` carries a string");
+        assert_eq!(n.messages[0].reply[0].ty, Ty::Handle(0, HandleKind::Endpoint));
+        assert!(n.messages[1].inline());
+        assert!(!s.messages[0].inline());
+        assert_eq!(n.errors, [malformed()]);
+        // Found on a scratch copy: a protocol with no inline message generated a `match`
+        // with only its `_` arm, which does not build warning-free.
+        let rust = rust(s);
+        assert!(!rust.contains("Ok(match opcode {\n            _ =>"), "{rust}");
+        assert!(rust.contains("fn read_inline(_opcode: u32, _r: &mut Reader<'_>) -> Result<Self, Error> {\n        Err(Error::BadOpcode)"));
+        // The notes' own name, `ninep-common`, is not a protocol name.
+        assert!(parse("n.md", &ninep_common.replace("ninep_common", "ninep-common")).unwrap_err().contains("snake_case"));
     }
 
     /// Found by review: these names compiled into code that did not build.
     #[test]
     fn refuses_names_that_clash_in_generated_code() {
-        for name in ["message", "reply", "error_code", "error", "words", "reader", "writer", "layout", "result", "ok", "option", "vec"] {
+        for name in [
+            "message", "reply", "error_code", "error", "words", "reader", "writer", "layout", "handle_kind", "result", "ok",
+            "option", "vec",
+        ] {
             assert!(err(&format!("| 1 | `{name}` | - | - |\n")).contains("already uses"), "{name}");
         }
         assert!(protocols(&format!("{HEAD}| 1 | `value` | - | - |\n{ERRORS}")).is_ok());
@@ -913,7 +1080,7 @@ mod tests {
     #[test]
     fn inline_boundary_is_twelve_bytes() {
         let t = format!(
-            "{HEAD}| 1 | `a` | `x: u64`, `y: u32`, `h: handle[0]` | - |\n| 2 | `b` | `x: u64`, `y: u32`, `z: u8` | - |\n\
+            "{HEAD}| 1 | `a` | `x: u64`, `y: u32`, `h: handle[0] mmio` | - |\n| 2 | `b` | `x: u64`, `y: u32`, `z: u8` | - |\n\
              | 3 | `c` | - | `x: u64`, `y: u32` |\n| 4 | `d` | - | `x: u64`, `y: u32`, `z: u8` |\n{ERRORS}"
         );
         let p = protocols(&t).unwrap();

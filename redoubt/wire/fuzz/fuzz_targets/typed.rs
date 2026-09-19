@@ -60,11 +60,12 @@ fuzz_target!(|data: &[u8]| {
         }
     } else {
         // The request's opcode comes from the handle byte's high bits; word 0 is the status,
-        // mostly 0 or a defined code.
+        // mostly 0 or a small code: 1 (`malformed`, every protocol's), 2 and 3 (the table's
+        // own), or 4 (undefined).
         let request = opcode(u64::from(head[32] >> 3)) as u32;
         words[0] = match words[0] % 6 {
             0..=2 => 0,
-            3 => 1,
+            3 => 1 + (words[0] >> 3) % 4,
             4 => u64::from(u32::MAX),
             _ => words[0],
         };
