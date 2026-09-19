@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-use core::fmt;
+#[cfg(baremetal)]
+use core::convert::TryFrom;
 
 use xous_kernel::{MemoryFlags, MemoryRange, PID, arch::*};
 
@@ -17,33 +18,34 @@ enum ClaimReleaseMove {
     Move(PID /* from */),
 }
 
-#[allow(dead_code)]
-#[repr(C)]
-pub struct MemoryRangeExtra {
-    // `u64`, not `usize`: the loader (one binary for both widths) writes every MREx entry
-    // with 64-bit base and size, so the entry is 24 bytes on rv32 too. Consumers narrow
-    // with `as usize`; on rv32 the high words are zero because MMIO fits in 32 bits.
-    mem_start: u64,
-    mem_size: u64,
-    mem_tag: u32,
-    _padding: u32,
+/// One entry of the loader's `MREx` table (BOOT.md): a device region processes may claim.
+#[cfg(baremetal)]
+#[derive(Clone, Copy)]
+struct MemoryRangeExtra {
+    start: usize,
+    size: usize,
 }
 
-impl fmt::Display for MemoryRangeExtra {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}{}{}{} - ({:08x}) {:08x} - {:08x} {} bytes",
-            ((self.mem_tag) & 0xff) as u8 as char,
-            ((self.mem_tag >> 8) & 0xff) as u8 as char,
-            ((self.mem_tag >> 16) & 0xff) as u8 as char,
-            ((self.mem_tag >> 24) & 0xff) as u8 as char,
-            self.mem_tag,
-            self.mem_start,
-            self.mem_start + self.mem_size,
-            self.mem_size
-        )
+#[cfg(baremetal)]
+impl MemoryRangeExtra {
+    /// Words per entry. The loader (one binary for both widths) writes every entry as
+    /// `start: u64, size: u64, tag: u32, pad: u32`, each `u64` low word first, so the entry is
+    /// six words on rv32 too.
+    const WORDS: usize = 6;
+
+    /// Decode one entry. The table is read word by word rather than cast to a struct: the tag
+    /// data is only word-aligned, and a struct with `u64` fields needs 8-byte alignment.
+    fn from_words(words: &[u32]) -> Self {
+        let wide = |lo: u32, hi: u32| {
+            usize::try_from(lo as u64 | (hi as u64) << 32).expect("mm: MREx address does not fit a usize")
+        };
+        let start = wide(words[0], words[1]);
+        let size = wide(words[2], words[3]);
+        assert!(start.checked_add(size).is_some(), "mm: MREx region wraps the address space");
+        MemoryRangeExtra { start, size }
     }
+
+    fn contains(&self, addr: usize) -> bool { addr >= self.start && addr - self.start < self.size }
 }
 
 /// Construct a `MemoryRange` describing `addr..addr + size`.
@@ -75,9 +77,10 @@ pub struct MemoryManager {
     /// The same, for the pages of every region in `extra_regions`, back to back.
     #[cfg(baremetal)]
     extra_allocations: &'static mut [Option<PID>],
-    /// Memory outside RAM that processes may claim: memory-mapped devices.
+    /// Memory outside RAM that processes may claim: memory-mapped devices. The data of the
+    /// loader's `MREx` tag, `MemoryRangeExtra::WORDS` words per region; see `extra_regions()`.
     #[cfg(baremetal)]
-    extra_regions: &'static [MemoryRangeExtra],
+    extra_regions: &'static [u32],
     /// Budgets and the per-process ledger that charges them (`budget.rs`), and the handle tables
     /// (`handle.rs`). Here, beside the ownership table, because a frame changing owner is what
     /// most charges are.
@@ -195,25 +198,18 @@ impl MemoryManager {
         let mut extra_size = 0;
         for tag in args_iter {
             if tag.name == u32::from_le_bytes(*b"MREx") {
-                // SAFETY: the loader placed the MREx tag data here; it is a table of MemoryRangeExtra (see
-                // BOOT.md).
-                unsafe {
-                    assert!(
-                        self.extra_regions.is_empty(),
-                        "mm: MREx tag appears twice!  self.extra.len() is {}, not 0",
-                        self.extra_regions.len()
-                    );
-                    let ptr = tag.data.as_ptr() as *mut MemoryRangeExtra;
-                    self.extra_regions = slice::from_raw_parts(
-                        ptr,
-                        tag.data.len() * 4 / core::mem::size_of::<MemoryRangeExtra>(),
-                    )
-                };
+                assert!(self.extra_regions.is_empty(), "mm: MREx tag appears twice");
+                assert!(
+                    tag.data.len() % MemoryRangeExtra::WORDS == 0,
+                    "mm: MREx is not a whole number of entries"
+                );
+                self.extra_regions = tag.data;
             }
         }
 
-        for range in self.extra_regions.iter() {
-            extra_size += range.mem_size as usize / PAGE_SIZE;
+        // Decoding checks every entry, so a malformed one stops the boot here.
+        for range in self.extra_regions() {
+            extra_size += range.size / PAGE_SIZE;
         }
         // SAFETY: the loader placed a `mem_size`-entry ownership table at `rpt_base`.
         unsafe { self.allocations = slice::from_raw_parts_mut(rpt_base as *mut Option<PID>, mem_size) };
@@ -860,9 +856,9 @@ impl MemoryManager {
         offset = 0;
         // Go through additional regions looking for this address, and claim it
         // if it's not in use.
-        for region in self.extra_regions {
-            if addr >= (region.mem_start as usize) && addr < (region.mem_start + region.mem_size) as usize {
-                offset += (addr - (region.mem_start as usize)) / PAGE_SIZE;
+        for region in self.extra_regions() {
+            if region.contains(addr) {
+                offset += (addr - region.start) / PAGE_SIZE;
                 if self.is_peripheral_ram(offset) {
                     // don't allow aliasing of peripheral RAM, because peripheral RAM can be unmapped
                     return action_inner(&mut self.extra_allocations[offset], pid, action, false, addr);
@@ -872,7 +868,7 @@ impl MemoryManager {
                     return action_inner(&mut self.extra_allocations[offset], pid, action, true, addr);
                 }
             }
-            offset += region.mem_size as usize / PAGE_SIZE;
+            offset += region.size / PAGE_SIZE;
         }
         // println!(
         //     "mem: unable to claim or release physical address {:08x}",
@@ -895,18 +891,23 @@ impl MemoryManager {
     /// memory from the process, it only marks it as free.
     /// This is very unsafe because the memory can immediately be re-allocated
     /// to another process, so only call this as part of destroying a process.
+    /// The regions of the loader's `MREx` table, in order.
+    #[cfg(baremetal)]
+    fn extra_regions(&self) -> impl Iterator<Item = MemoryRangeExtra> + use<> {
+        let table: &'static [u32] = self.extra_regions;
+        table.chunks_exact(MemoryRangeExtra::WORDS).map(MemoryRangeExtra::from_words)
+    }
+
     /// The index into `extra_allocations` for a physical address in one of the extra
     /// (device) regions, if any.
     #[cfg(baremetal)]
     fn extra_index(&self, phys: usize) -> Option<usize> {
         let mut base = 0;
-        for region in self.extra_regions {
-            let start = region.mem_start as usize;
-            let size = region.mem_size as usize;
-            if phys >= start && phys < start + size {
-                return Some(base + (phys - start) / PAGE_SIZE);
+        for region in self.extra_regions() {
+            if region.contains(phys) {
+                return Some(base + (phys - region.start) / PAGE_SIZE);
             }
-            base += size / PAGE_SIZE;
+            base += region.size / PAGE_SIZE;
         }
         None
     }
