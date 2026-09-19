@@ -14,7 +14,7 @@ fn h(index: u32) -> Handle { Handle::new(index).unwrap() }
 
 fn pages(addr: usize, npages: usize) -> Pages { Pages { addr, npages: NonZeroUsize::new(npages).unwrap() } }
 
-fn badge(value: u64) -> NonZeroU64 { NonZeroU64::new(value).unwrap() }
+fn nz(value: u64) -> NonZeroU64 { NonZeroU64::new(value).unwrap() }
 
 const CALLS: u64 = Number::ALL.len() as u64;
 const ERRORS: u64 = Error::ALL.len() as u64;
@@ -36,8 +36,9 @@ fn sample_calls() -> Vec<Call> {
         Call::ProcessMap { process: h(5), src: 0x2000_0000, dst: 0x1000, len: 0x4000, flags: MemFlags::NONE },
         Call::ProcessStart { process: h(5), entry: 0x1000, sp: 0x8000_0000, handles_rec: 0x3000, count: 7 },
         Call::EndpointCreate,
-        Call::Mint { source: MintSource::Message(BIG), badge: badge(!BIG), budget: None },
-        Call::Mint { source: MintSource::Handle(h(u32::MAX - 1)), badge: badge(1), budget: Some(h(0)) },
+        Call::Mint { source: MintSource::Message(nz(BIG)), badge: nz(!BIG), budget: None },
+        Call::Mint { source: MintSource::Handle(h(u32::MAX)), badge: nz(1), budget: Some(h(1)) },
+        Call::Mint { source: MintSource::Message(nz(1)), badge: nz(u64::MAX), budget: Some(h(u32::MAX)) },
         Call::Call { endpoint: h(6), body_rec: 0x5000, lend: None, timeout: FOREVER },
         Call::Call {
             endpoint: h(6),
@@ -47,13 +48,13 @@ fn sample_calls() -> Vec<Call> {
         },
         Call::Send { endpoint: h(7), body_rec: 0x5000, transfer: None, timeout: 0 },
         Call::Send { endpoint: h(7), body_rec: 0x5000, transfer: Some(pages(0x6000, 3)), timeout: 10 },
-        Call::Receive { from: Some(h(0)), timeout: BIG, max_transfer: 16, received_rec: 0x7000 },
+        Call::Receive { from: Some(h(1)), timeout: BIG, max_transfer: 16, received_rec: 0x7000 },
         Call::Receive { from: None, timeout: SLICE, max_transfer: 0, received_rec: 0x7000 },
-        Call::Reply { msg_id: BIG, body_rec: 0x5000 },
+        Call::Reply { msg_id: nz(BIG), body_rec: 0x5000 },
         Call::HandleClose { handle: h(9) },
         Call::BudgetCreate { parent: h(1), spec_rec: 0x8000 },
         Call::BudgetDestroy { budget: h(10) },
-        Call::BudgetUsage { budget: h(11) },
+        Call::BudgetUsage { budget: h(11), usage_rec: 0xa000 },
         Call::TimeNow,
         Call::Random { bytes: 0x9001, len: MAX_RANDOM },
         Call::SystemReset { device: h(12), kind: ResetKind::PowerOff },
@@ -68,14 +69,8 @@ fn sample_returns(number: Number) -> Vec<Return> {
         Number::DmaAlloc => std::vec![Return::Dma { addr: 0x2000_0000, phys: BIG }],
         Number::ThreadCreate => std::vec![Return::Tid(MAX_THREADS as u32)],
         Number::ProcessCreate | Number::EndpointCreate | Number::Mint | Number::BudgetCreate => {
-            std::vec![Return::Handle(h(0)), Return::Handle(h(u32::MAX - 1))]
+            std::vec![Return::Handle(h(1)), Return::Handle(h(u32::MAX))]
         }
-        Number::BudgetUsage => std::vec![Return::Usage(Usage {
-            pages_limit: BIG,
-            pages_usage: !BIG,
-            processes_limit: 40,
-            processes_usage: u32::MAX,
-        })],
         Number::TimeNow => std::vec![Return::Time(0), Return::Time(BIG)],
         _ => std::vec![Return::Nothing],
     }
@@ -151,40 +146,52 @@ fn numbers_and_codes_are_dense_from_one() {
 }
 
 fn body(nhandles: u32) -> Body {
-    let handles: Vec<Handle> = (0..nhandles).map(|i| h(i * 7)).collect();
+    let handles: Vec<Handle> = (0..nhandles).map(|i| h(i * 7 + 1)).collect();
     Body { words: [1, usize::MAX >> 32, 0, 42], handles: Handles::from_slice(&handles).unwrap() }
 }
 
 fn labels(n: u64) -> Labels { Labels::from_slice(&(0..n).map(|i| BIG ^ i).collect::<Vec<_>>()).unwrap() }
 
 fn sample_received() -> Vec<Received> {
-    let message = |buffer| {
+    let message = |kind| {
         Received::Message(Message {
-            msg_id: BIG,
+            msg_id: nz(BIG),
             badge: 1,
             account: !BIG,
             labels: labels(3),
             body: body(2),
-            buffer,
+            kind,
         })
     };
     std::vec![
-        message(None),
-        message(Some(Buffer::Lend(pages(0x6000, MAX_LEND_PAGES)))),
-        message(Some(Buffer::Transfer(pages(0x6000, 1)))),
+        message(MessageKind::Call { lend: None }),
+        message(MessageKind::Call { lend: Some(pages(0x6000, MAX_LEND_PAGES)) }),
+        message(MessageKind::Send { transfer: None }),
+        message(MessageKind::Send { transfer: Some(pages(0x6000, 1)) }),
         Received::Message(Message {
-            msg_id: 0,
+            msg_id: nz(1),
             badge: u64::MAX,
             account: 0,
             labels: labels(MAX_LABELS as u64),
             body: body(MAX_MSG_HANDLES as u32),
-            buffer: None,
+            kind: MessageKind::Send { transfer: None },
         }),
         Received::Interrupt(h(8)),
         Received::Exit(ExitNotice { pid: 3, cause: Cause::Exited, code: 0, blamed_account: 0 }),
         Received::Exit(ExitNotice { pid: 4, cause: Cause::Faulted, code: u32::MAX, blamed_account: BIG }),
         Received::Exit(ExitNotice { pid: 5, cause: Cause::Killed, code: 1, blamed_account: 7 }),
     ]
+}
+
+fn sample_usage() -> Usage {
+    Usage {
+        pages_limit: BIG,
+        pages_usage: !BIG,
+        processes_limit: 40,
+        processes_usage: u32::MAX,
+        weight_limit: 100,
+        weight_carved: 20,
+    }
 }
 
 fn sample_specs() -> Vec<BudgetSpec> {
@@ -222,6 +229,8 @@ fn records_round_trip() {
     for s in sample_specs() {
         assert_eq!(BudgetSpec::decode(&s.encode()), Ok(s));
     }
+    let usage = sample_usage();
+    assert_eq!(Usage::decode(&usage.encode()), Ok(usage));
     assert!(Class::User < Class::System);
 }
 
@@ -259,18 +268,31 @@ fn malformed_calls_are_refused() {
     let exit = Number::ProcessExit as u64;
     assert_eq!(decode([exit, wide, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "wide code");
     let close = Number::HandleClose as u64;
-    assert_eq!(decode([close, u32::MAX.into(), 0, 0, 0, 0, 0, 0]), Err(Error::BadHandle), "reserved handle");
+    assert_eq!(decode([close, 0, 0, 0, 0, 0, 0, 0]), Err(Error::BadHandle), "handle 0");
     assert_eq!(decode([close, wide, 0, 0, 0, 0, 0, 0]), Err(Error::BadHandle), "wide handle");
     let mint = Number::Mint as u64;
     assert_eq!(decode([mint, 1, 5, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "badge 0");
     assert_eq!(decode([mint, 3, 0, 0, 1, 0, 0, 0]), Err(Error::InvalidArgument), "unknown mint source");
     assert_eq!(decode([mint, 0, 0, 0, 1, 0, 0, 0]), Err(Error::InvalidArgument), "mint source 0");
     assert_eq!(decode([mint, 2, wide, 0, 1, 0, 0, 0]), Err(Error::InvalidArgument), "wide half");
-    assert_eq!(decode([mint, 2, 0, 1, 1, 0, 0, 0]), Err(Error::BadHandle), "mint source handle");
+    assert_eq!(decode([mint, 2, 0, 1, 1, 0, 0, 0]), Err(Error::BadHandle), "wide mint source handle");
+    assert_eq!(decode([mint, 2, 0, 0, 1, 0, 0, 0]), Err(Error::BadHandle), "mint source handle 0");
+    assert_eq!(decode([mint, 1, 0, 0, 1, 0, 0, 0]), Err(Error::InvalidArgument), "message id 0");
     assert_eq!(
-        decode([mint, 1, 5, 0, 1, 0, u32::MAX.into(), 0]),
-        Ok(Call::Mint { source: MintSource::Message(5), badge: badge(1), budget: None })
+        decode([mint, 1, 5, 0, 1, 0, 0, 0]),
+        Ok(Call::Mint { source: MintSource::Message(nz(5)), badge: nz(1), budget: None })
     );
+    let reply = Number::Reply as u64;
+    assert_eq!(decode([reply, 0, 0, 0x5000, 0, 0, 0, 0]), Err(Error::InvalidArgument), "reply to id 0");
+    let start = Number::ProcessStart as u64;
+    let too_many = MAX_START_HANDLES as u64 + 1;
+    assert_eq!(
+        decode([start, 1, 0x1000, 0x2000, 0x3000, too_many, 0, 0]),
+        Err(Error::TooLarge),
+        "start list"
+    );
+    assert_eq!(decode([start, 1, 0x1000, 0x2000, 0x3000, too_many, 1, 0]), Err(Error::TooLarge), "order");
+    assert!(decode([start, 1, 0x1000, 0x2000, 0x3000, MAX_START_HANDLES as u64, 0, 0]).is_ok());
     let reset = Number::SystemReset as u64;
     assert_eq!(decode([reset, 1, 3, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "unknown reset kind");
     assert_eq!(decode([reset, 1, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "reset kind 0");
@@ -286,13 +308,12 @@ fn malformed_results_are_refused() {
         decode_result(Number::ThreadCreate, &[0, 1 << 32, 0, 0, 0, 0, 0, 0]),
         Err(Error::InvalidArgument)
     );
-    let none = u64::from(u32::MAX);
-    assert_eq!(decode_result(Number::Mint, &[0, none, 0, 0, 0, 0, 0, 0]), Err(Error::BadHandle));
+    assert_eq!(decode_result(Number::Mint, &[0, 0, 0, 0, 0, 0, 0, 0]), Err(Error::BadHandle), "handle 0");
 }
 
 #[test]
 fn malformed_records_are_refused() {
-    // Body: too many handles, a stray handle slot, a reserved handle.
+    // Body: too many handles, a stray handle slot, handle 0.
     let mut slots = body(1).encode();
     slots[WORDS] = MAX_MSG_HANDLES as u64 + 1;
     assert_eq!(Body::decode(&slots), Err(Error::TooLarge));
@@ -300,7 +321,7 @@ fn malformed_records_are_refused() {
     slots[WORDS + 2] = 9;
     assert_eq!(Body::decode(&slots), Err(Error::InvalidArgument));
     let mut slots = body(1).encode();
-    slots[WORDS + 1] = u32::MAX.into();
+    slots[WORDS + 1] = 0;
     assert_eq!(Body::decode(&slots), Err(Error::BadHandle));
 
     // BudgetSpec: unknown class, too many labels, a stray label slot, wide processes.
@@ -318,7 +339,7 @@ fn malformed_records_are_refused() {
         assert_eq!(BudgetSpec::decode(&slots), Err(error), "spec slot {slot} = {value}");
     }
 
-    // Received: unknown kinds, stray slots after each kind, a buffer kind 0 with an address.
+    // Received: unknown kinds, stray slots after each kind, bad message kinds and page ranges.
     for kind in [0, 4] {
         let mut slots = [0; RECEIVED_SLOTS];
         slots[0] = kind;
@@ -333,16 +354,23 @@ fn malformed_records_are_refused() {
     assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "unknown cause");
     let mut slots = sample_received()[0].encode();
     slots[RECEIVED_SLOTS - 2] = 0x6000;
-    assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "no buffer, but an address");
-    let mut slots = sample_received()[0].encode();
-    slots[RECEIVED_SLOTS - 3] = 3;
-    assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "unknown buffer kind");
+    assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "an address and no pages");
+    for kind in [0, 3] {
+        let mut slots = sample_received()[0].encode();
+        slots[RECEIVED_SLOTS - 3] = kind;
+        assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "message kind {kind}");
+    }
     let mut slots = sample_received()[1].encode();
     slots[RECEIVED_SLOTS - 1] = 0;
     assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "a lend of 0 pages");
-    let mut slots = sample_received()[1].encode();
-    slots[RECEIVED_SLOTS - 3] = 0;
-    assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "pages, but no buffer");
+    let mut slots = sample_received()[0].encode();
+    slots[1] = 0;
+    assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "message id 0");
+
+    // Usage: a counter too wide for its field.
+    let mut slots = sample_usage().encode();
+    slots[USAGE_SLOTS - 1] = 1 << 32;
+    assert_eq!(Usage::decode(&slots), Err(Error::InvalidArgument));
 }
 
 /// xorshift64: deterministic, so a failure reproduces.
@@ -405,6 +433,10 @@ fn random_records() {
         received[0] %= 4;
         if let Ok(r) = Received::decode(&received) {
             assert_eq!(r.encode(), received);
+        }
+        let usage = [0; USAGE_SLOTS].map(|_| rng.value());
+        if let Ok(u) = Usage::decode(&usage) {
+            assert_eq!(u.encode(), usage);
         }
     }
 }
