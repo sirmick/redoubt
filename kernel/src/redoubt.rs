@@ -15,7 +15,7 @@
 //! `time_now`, `random`. Every other call decodes, then gets `InvalidArgument` until its package
 //! builds it (WP-K2 to WP-K5).
 
-use redoubt_sys::{BUDGET_SPEC_SLOTS, BudgetSpec, Call, Error, REGS, Return, USAGE_SLOTS, encode_result};
+use redoubt_sys::{BUDGET_SPEC_SLOTS, BudgetSpec, Call, Error, Number, REGS, Return, USAGE_SLOTS, encode_result};
 use xous_kernel::{PID, TID};
 
 use crate::kframe;
@@ -34,6 +34,12 @@ pub fn handle(pid: PID, tid: TID, in_irq: bool, regs: &[u64; REGS]) -> Outcome {
     // A legacy interrupt callback runs on borrowed time inside another process's quantum; it
     // gets none of these calls. (INTERIM: WP-K3 replaces callbacks with IRQ handles.)
     let result = if in_irq { Err(Error::NotPermitted) } else { Call::decode(regs).and_then(|c| dispatch(pid, tid, c)) };
+    // Every error a call returns is in its row of the spec's error table (`Number::can_return`).
+    // The interim refusal of legacy callbacks is outside the table, and an unknown number has no
+    // row (it is `InvalidArgument`).
+    if let (Err(error), false, Some(number)) = (&result, in_irq, Number::from_raw(regs[0])) {
+        debug_assert!(number.can_return(*error), "{} returned {:?}, outside its row", number.name(), error);
+    }
     match result {
         Ok(None) => Outcome::Resume,
         Ok(Some(value)) => Outcome::Return(encode_result(&Ok(value))),

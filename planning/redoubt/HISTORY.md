@@ -421,3 +421,14 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
 - **A revoked handle is 0 in its slot** (2026-09-19, editorial, from the WP-A2 review): R10 already
   says such a handle arrives as 0; KERNEL-SPEC.md's ABI section now says the slot keeps its position,
   so `receive`'s record carries a 0 there and decoders accept it.
+- **WP-A2 ABI follows answers 28-101** (`c98034520`): `redoubt-sys` carries `process_start`'s `arg`;
+  `serve` (number 18, later calls renumbered); `random` returning one `u64`; `budget_create`'s
+  `first` flag in place of a class; `receive`'s one 24-slot record for call, send, interrupt, exit
+  (with `blamed_labels`) and abandoned, with no badge notice and no handle kinds; received handles
+  are optional per slot (a revoked handle is 0); `MAX_HANDLES`; each call's error row, asserted by
+  the kernel in debug builds. Pending questions 102, 103, 105, 107, 115 and 116 are marked at
+  their sites. The kernel's `budget_create` checks `first`, `random` answers in registers, and
+  `kframe::write_byte` went (kernel `unsafe` 24 -> 23). The review found received messages could
+  not carry a revoked handle (fixed). Found on the way: a debug-assertion kernel does not boot
+  (`mem.rs:207`, the loader's memory-region table read against `from_raw_parts`'s rules): WP-K0b.
+
