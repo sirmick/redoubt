@@ -1,0 +1,13 @@
+description = "Bench self-check: a session's forbid list fails the case when its output matches"
+kind = "ssh-loopback"
+timeout_secs = 20
+authorized = ["alice"]
+must_fail = '^session alice: step 2: forbidden output /secret/: the secret$'
+
+[[session]]
+user = "alice"
+forbid = ['secret']
+steps = [
+    { send = "echo the secret; echo done\n" },
+    { expect = 'done' },
+]

@@ -1,0 +1,48 @@
+description = "Bench self-check: concurrent scripted SSH sessions, ordered by marks, against a host OpenSSH server"
+kind = "ssh-loopback"
+timeout_secs = 20
+# The host sshd runs /bin/sh for every login and accepts only these test keys. It can log in
+# only the user running the bench, so `user` here only chooses the key (see README).
+authorized = ["alice", "bob"]
+
+[[session]]
+user = "alice"
+forbid = ['bob-was-here']
+steps = [
+    { send = "echo alice-$((6 * 7))\n" },
+    { expect = '^alice-42$' },
+    { mark = "alice-in" },
+    { wait = "bob-done" },
+    { send = "exit 3\n" },
+    { expect = '\[ssh exited: 3\]' },
+]
+
+[[session]]
+user = "bob"
+forbid = ['alice-42']
+steps = [
+    { wait = "alice-in" },
+    { send = "echo bob-was-here\n" },
+    { expect = 'bob-was-here' },
+    { mark = "bob-done" },
+    { close = true },
+    { expect = '\[ssh exited: 0\]' },
+]
+
+# A terminal session: the login name's `+label` is not part of the key's name.
+[[session]]
+name = "alice-tty"
+user = "alice+tty"
+pty = true
+steps = [
+    { send = "tty; exit\n" },
+    { expect = '/dev/pts/\d+' },
+]
+
+# A key the server does not accept: ssh's own refusal is part of the output.
+[[session]]
+user = "mallory"
+steps = [
+    { expect = 'Permission denied \(publickey\)' },
+    { expect = '\[ssh exited: 255\]' },
+]
