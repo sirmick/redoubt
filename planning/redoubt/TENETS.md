@@ -12,8 +12,16 @@ That rules out security through obscurity, through "nobody would try that", or t
 that merely slows a human down. What is left: a small trusted base, mechanisms that are correct by
 construction, and no ambient authority.
 
-Out of scope for now, stated so nobody assumes otherwise: physical attacks, microarchitectural side
-channels (Spectre-class, cache timing), and malicious hardware. These need hardware answers.
+Out of scope for the software, stated so nobody assumes otherwise: physical attacks,
+microarchitectural side channels (Spectre-class, cache timing), and malicious hardware. These need
+hardware answers; on the FPGA target, side channels are to be handled in the RTL (partitioning,
+flushing on domain switches).
+
+**Review model.** Humans *could* review every line; we do not assume they will. The system is
+pressure-tested by adversarial agents from several vendors. So **the design is what must hold up**:
+bugs will exist in every component, and the design must bound what a bug in any one of them can
+reach (a compromised process holds only its own capabilities; a compromised server reaches only its
+clients' data).
 
 ## What this is not
 Said up front, because these are the pressures that erode the tenets below.

@@ -87,11 +87,14 @@ virtio-net driver -> link server -> IP stack server(s) -> clients (9P /net)
 - **Routing (mid term; designed toward now):** a router server holds several interface capabilities
   and forwards between them: longest-prefix match, TTL, ARP/NDP, stateful filtering and NAT for
   forwarded traffic. Endpoint stacks attach to it like any other interface. Data plane in Rust
-  (small of our own, or Netstack3's portable core if it earns its size); **control plane in Elixir**
-  (routing protocols, DHCP server, policy), talking to the data plane over 9P. Keep interface
+  (small of our own, or Netstack3's portable core if it earns its size); control plane (routing
+  protocols, DHCP server, policy) talking to the data plane over 9P. The control plane of a *shared*
+  router crosses principals, so it is Rust (the BEAM is not in the TCB); an Elixir control plane is
+  fine for a network one principal owns. Keep interface
   capabilities and the manifest wiring general enough that adding the router changes no other server.
-- **TLS and SSH are end to end** (in the Elixir userland: OTP `:ssh` / `:ssl`), so the driver, the
-  stack and anything serving virtio-net carry only ciphertext.
+- **TLS and SSH are end to end**, so the driver, the stack and anything serving virtio-net carry
+  only ciphertext. The front doors (sshd, webd) are Rust; users' own outbound TLS/SSH may use OTP
+  `:ssl` / `:ssh` inside their VM.
 - **Keys live in a key server.** VMs ask it to sign; they never hold private keys.
 
 ## The Elixir boundary (beamlet)

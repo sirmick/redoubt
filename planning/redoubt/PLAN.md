@@ -4,6 +4,17 @@ Hard fork of xous-core (forked at c025441, 2026-09-15). Branch: `redoubt`.
 
 **Read `TENETS.md` first.** It outranks this plan.
 
+## North star
+**Alice and Bob logged in over SSH on QEMU, separated, every property backed by an attack test.**
+Design is settled (CAPABILITIES, RESOURCES, INIT, NAMESPACES, PACKAGES, IO-ARCHITECTURE); build one
+thin vertical slice toward it:
+1. Kernel: handles, endpoints, budgets.
+2. beamlet on Redoubt, printing from Elixir over the console.
+3. init + startup block; `bootfs` over 9P (shared 9P codec, fuzzed).
+4. Preemption: hierarchical stride scheduling, two classes; then donation.
+5. virtio-blk -> blockd -> littlefs; virtio-net -> linkd -> ip:lan.
+6. steward and sshd (Rust), sessions as beamlet VMs.
+
 ## Working rules
 - Prefer maintained pure-Rust `no_std` crates over hand-rolled code (`sbi-rt`, `riscv`, `fdt`, ...).
   Hand-roll only what is Xous-specific.
