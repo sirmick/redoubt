@@ -34,9 +34,12 @@ CPUs and SoCs differ in ways that have nothing to do with XLEN, so code never us
 - Pure Rust as far as possible. No C in the trusted path, no C-binding crates.
 
 ## Targets
-1. QEMU `virt` (rv64, OpenSBI/RustSBI, ns16550, PLIC, virtio-mmio).
-2. RV64 softcore with virtio devices.
-3. Possibly Orange Pi RV2 (8-core, Sv39, PLIC + CLINT + OpenSBI).
+All targets present the same contract: virtio-mmio devices, PLIC, SBI, device tree (tenet 7,
+`IO-ARCHITECTURE.md`).
+1. QEMU `virt` (rv64, OpenSBI/RustSBI, ns16550, PLIC, virtio-mmio; later `iommu-sys=on`).
+2. RV64 softcore on an FPGA (e.g. CVA6) with virtio devices and a RISC-V IOMMU: the secure configuration.
+3. Messy SoCs such as the Orange Pi RV2: Linux on reserved cores serves virtio, xous64 on the rest,
+   partitioned by OpenSBI domains. No native K1 drivers.
 
 ## Phase 0: platform
 - [x] Install `qemu-system-riscv64` (8.2.2, bundled OpenSBI v1.3).
@@ -112,7 +115,7 @@ Userspace:
    invisible to the compiler).
 3. `riscv64gc-unknown-xous-elf` target + `std`, then bring over `xous-log`, `xous-names`, `xous-ticktimer`.
 4. Process `env` block and `.eh_frame` from the loader (needed by `std`).
-5. `virtio-drivers` crate in a userspace block server (start of Phase 2).
+5. Phase 2 kernel prerequisites, then `virtio-blk` (see Phase 2).
 
 ### Test bench (done 2026-09-18)
 `xous64/testbench`: declarative TOML cases, injects workspace or prebuilt binaries into the boot bundle,
@@ -184,10 +187,25 @@ Accepted trade-offs (documented where they live): the physmap makes all RAM kern
 including a writable alias of kernel text; every map/unmap does a global `sfence.vma`; kernel entry
 relies on the firmware delegating instruction page faults to S-mode.
 
-## Phase 2: filesystem (userspace; can proceed in hosted mode in parallel)
-- [ ] `virtio-blk` server, `blockcache` server, `vfs` server; `lend_mut` page buffers for zero-copy.
-- [ ] Filesystem choice deferred. Constraint: native pure Rust.
-- [ ] Later: retarget `std::fs` on the Xous target from PDDB to the VFS server.
+## Phase 2: I/O (design: `IO-ARCHITECTURE.md`)
+Kernel prerequisites first:
+- [ ] Transferable connections (send a capability over IPC); manifest declares the boot server graph.
+- [ ] Server-death notification and connection revocation (restartable drivers).
+- [ ] DMA page allocation gated by a manifest grant; manifest carries IOMMU device identity.
+- [ ] Wider IRQ numbering.
+- [ ] Drivers get MMIO/IRQ from startup arguments, not hardcoded (fixes the test programs).
+Storage:
+- [ ] `virtio-blk` driver server (`virtio-drivers`), hardened against a hostile device side, fuzzed.
+- [ ] Block server: partitions, cache, block-range capabilities, per-block AEAD + Merkle root.
+- [ ] fs server with directory capabilities (no global namespace). Choice: RedoxFS vs our own CoW fs.
+Network:
+- [ ] `virtio-net` driver server; net server on `smoltcp` with scoped socket capabilities.
+- [ ] Key server; beamlet `:crypto` natives in Rust.
+Trivial drivers: ns16550 (done), goldfish RTC.
+Later:
+- [ ] IOMMU backend (QEMU `iommu-sys`, needs QEMU >= 10; FPGA).
+- [ ] Linux + xous64 partition under OpenSBI domains on QEMU, then the Orange Pi RV2.
+- [ ] Retarget `std::fs` on the Xous target from PDDB to the fs server.
 
 ## Phase 3: SMP
 - Note: OpenSBI picks the boot hart at random (observed hart 2 of 4). Never assume hart 0.
