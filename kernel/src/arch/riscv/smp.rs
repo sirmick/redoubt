@@ -44,14 +44,18 @@ unsafe impl Sync for BlockCell {}
 static BLOCK: BlockCell = BlockCell(UnsafeCell::new(HartBlock { satp: 0, sp: 0, entry: 0 }));
 
 /// The secondary hart's stack, in the kernel image so it is mapped in every address space.
+/// `static mut` so it lands in writable `.bss`: an immutable `static` goes to `.rodata`, which
+/// the kernel maps read-only, and the first spill would fault. Only its address is taken here;
+/// the secondary hart is its sole user.
 const STACK_WORDS: usize = 1024;
-static SECONDARY_STACK: [usize; STACK_WORDS] = [0; STACK_WORDS];
+static mut SECONDARY_STACK: [usize; STACK_WORDS] = [0; STACK_WORDS];
 
 #[cfg(target_arch = "riscv64")]
 core::arch::global_asm!(
     r#"
     .section .text
     .global _smp_secondary_start
+    .global _smp_secondary_land
 _smp_secondary_start:              // a0 = hartid, a1 = &HartBlock (physical, MMU off)
     ld      t0, 0(a1)              // satp
     ld      sp, 8(a1)              // sp (virtual; only used after paging is on)
@@ -60,13 +64,19 @@ _smp_secondary_start:              // a0 = hartid, a1 = &HartBlock (physical, MM
     sfence.vma
     csrw    satp, t0               // paging on; the next physical fetch faults to stvec
     unimp
-"#
+
+    .balign 4                      // stvec's low two bits are its mode: the target must be 4-aligned
+_smp_secondary_land:               // virtual, MMU on; a0 = hartid still
+    tail    {main}
+"#,
+    main = sym secondary_main
 );
 #[cfg(target_arch = "riscv32")]
 core::arch::global_asm!(
     r#"
     .section .text
     .global _smp_secondary_start
+    .global _smp_secondary_land
 _smp_secondary_start:              // a0 = hartid, a1 = &HartBlock (physical, MMU off)
     lw      t0, 0(a1)              // satp
     lw      sp, 4(a1)              // sp
@@ -75,14 +85,21 @@ _smp_secondary_start:              // a0 = hartid, a1 = &HartBlock (physical, MM
     sfence.vma
     csrw    satp, t0               // paging on; the next physical fetch faults to stvec
     unimp
-"#
+
+    .balign 4                      // stvec's low two bits are its mode: the target must be 4-aligned
+_smp_secondary_land:               // virtual, MMU on; a0 = hartid still
+    tail    {main}
+"#,
+    main = sym secondary_main
 );
 
 extern "C" {
     fn _smp_secondary_start();
+    fn _smp_secondary_land();
 }
 
-/// The secondary hart lands here (virtual, MMU on, interrupts off, `sp` set).
+/// The secondary hart lands here, through `_smp_secondary_land` (virtual, MMU on, interrupts
+/// off, `sp` set).
 extern "C" fn secondary_main(_hartid: usize) -> ! {
     for _ in 0..ITERS {
         COUNTER.with(|c| *c += 1);
@@ -102,8 +119,9 @@ extern "C" fn secondary_main(_hartid: usize) -> ! {
 /// Run the spike on the boot hart, after the console and paging are up. Prints one line.
 pub fn run() {
     let satp = riscv::register::satp::read().bits();
-    let sp = core::ptr::addr_of!(SECONDARY_STACK) as usize + core::mem::size_of_val(&SECONDARY_STACK) - 16;
-    let entry = secondary_main as *const () as usize;
+    let sp = &raw const SECONDARY_STACK as usize + STACK_WORDS * core::mem::size_of::<usize>() - 16;
+    // Not `secondary_main` itself: a Rust function is only 2-aligned under the C extension.
+    let entry = _smp_secondary_land as *const () as usize;
 
     // SAFETY: sole writer; the fence below publishes it before the secondary can read.
     unsafe { *BLOCK.0.get() = HartBlock { satp, sp, entry } };
