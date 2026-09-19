@@ -6,9 +6,11 @@ Hard fork of xous-core (forked at c025441, 2026-09-15). Branch: `redoubt`.
 
 ## North star
 **Alice and Bob logged in over SSH on QEMU, separated, every property backed by an attack test.**
-Design is settled (CAPABILITIES, RESOURCES, INIT, NAMESPACES, PACKAGES, IO-ARCHITECTURE); build one
-thin vertical slice toward it:
-1. Kernel: handles, endpoints, budgets.
+Design is settled (CAPABILITIES, CONTAINMENT, RESOURCES, INIT, NAMESPACES, PACKAGES, IO-ARCHITECTURE)
+except derived-capability revocation; build one thin vertical slice toward it:
+0. Executable security model (CONTAINMENT.md): capabilities, derivation, revocation, budgets,
+   labels; invariants model-checked and red-teamed.
+1. Kernel: handles, endpoints, budgets, built to the model; label slots from the start.
 2. beamlet on Redoubt, printing from Elixir over the console.
 3. init + startup block; `bootfs` over 9P (shared 9P codec, fuzzed).
 4. Preemption: hierarchical stride scheduling, two classes; then donation.
