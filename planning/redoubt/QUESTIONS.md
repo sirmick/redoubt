@@ -329,3 +329,38 @@ Blocking: **K1 cannot start until 1-16 are settled** (they fix the ABI, `redoubt
 42. **A common error code for a malformed typed request.** WIRE.md has no error status that
     works across protocols, so each server names its own.
     *Rec:* reserve code 1 in every protocol's error table as `Malformed`. The generator adds it.
+
+## From the model's second round (WP-M0)
+
+43. **I10's wording, now that exit slots are charged to the creator (answer 7).** Destroying a
+    child budget restores the parent's usage only once the `killed` notices are received.
+    *Rec:* I10 reads "... unchanged, once its processes' exit notices are received or dropped."
+
+44. **A send's handles and page tables when the receiver can't pay for them.** Nothing says what
+    happens, or whether R4's "free pages to hold them" counts page tables.
+    *Rec:* R4's check counts the transferred pages plus the page tables to map them. A receiver
+    that can't take the message's handles or pages gets `OutOfMemory` from `receive`, and the
+    message stays queued (the model does this).
+
+45. **R4a at delivery.** A thread already waiting in `receive` when its process reaches
+    `MAX_OPEN_CALLS` isn't covered.
+    *Rec:* that `receive` returns `Busy` and the call stays queued (the model does this).
+
+46. **I7 against R1's owner rule (answer 4).** A receive right handed to a process in another
+    budget receives messages whose labels were compared only with the endpoint owner's.
+    *Rec:* this is accepted, because handing out a receive right is delegation. I7 says flows are
+    checked against the endpoint owner, and CONTAINMENT.md says a receive right must never be
+    handed across label sets. A system server that does so is buggy, not the kernel.
+
+47. **Page-table freeing and address placement.** Both are unstated, and exact `usage` replay
+    (WP-C1) depends on them.
+    *Rec:* page tables are freed when they map nothing. `map_anon` addresses are the kernel's
+    choice, and C1 compares usage only in the model's placement profile.
+
+48. **Crash blame keyed by account alone.** A vault session that crashes a shared server three
+    times logs out its owner's unlabelled sessions too. This is the same leak as question 17.
+    *Rec:* blame, its limit and the logout it triggers are keyed by (account, label set).
+
+49. **Where lends go when R10 fails calls in flight to a destroyed endpoint.**
+    *Rec:* as in R3, the lend stays with the server, charged to it, until its `reply` or its
+    death. The model does this.
