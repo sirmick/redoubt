@@ -6,7 +6,7 @@ plans for what comes next: `planning/redoubt/` (start with its `README.md` and `
 | Path              | What                                                                          |
 | ----------------- | ----------------------------------------------------------------------------- |
 | `paging/`         | Typed Sv32/Sv39 page tables — the one place page-table memory is touched (loader + kernel) |
-| `test-programs/`  | `no_std` programs that run inside Redoubt: `log-server`, `rng-test`, `timer-test`, `uart-echo`, `mem-attack` |
+| `test-programs/`  | `no_std` programs that run inside Redoubt, for example `log-server`, `rng-test`, `timer-test`, `uart-echo`, `mem-attack` |
 | `testbench/`      | Host tool: builds, injects programs, boots QEMU, asserts on the console       |
 | `tests/`          | Test cases for the bench, one TOML file each                                  |
 

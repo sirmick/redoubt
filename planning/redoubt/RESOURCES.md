@@ -1,33 +1,31 @@
 # Resources: budgets, scheduling, the timer
 
 Designed, not built (today: no budgets, cooperative scheduling, the timer as IRQ 0; BOOT.md).
-Owns: budgets, scheduling, the timer. Revocation by budget: CAPABILITIES.md. Labels: CONTAINMENT.md.
+Owns: why budgets look the way they do, scheduling policy, the timer. The precise fields, rules and
+constants: KERNEL-SPEC.md. Revocation by budget: CAPABILITIES.md. Labels: CONTAINMENT.md.
 
 ## Budgets
-Every process lives in exactly one budget, and every resource is charged to one. A budget is a
-kernel object held by capability, with seven fields:
+Every process lives in exactly one budget, and every resource is charged to one. One object does five
+jobs, instead of five mechanisms (cgroups, namespaces, revocation lists, security labels, schedulers):
+1. **Accounting:** every kernel object costs pages from its budget; running out is an error for the
+   caller, never for anyone else.
+2. **CPU:** its weight is its share.
+3. **Revocation:** destroying it revokes everything stamped with it (CAPABILITIES.md).
+4. **Information flow:** its labels (CONTAINMENT.md).
+5. **Identity for servers:** its account travels with every message.
 
-| Field | Meaning |
-| --- | --- |
-| parent | Budgets form a tree: root -> system / users -> alice -> session, agent -> sub-agent. |
-| pages | Limit and usage. **Every kernel object is charged in pages** to its owning budget: memory, page tables, handle tables, thread contexts, endpoints, and budgets themselves. |
-| processes | Limit and usage (PIDs double as ASIDs, which are scarce on rv32). |
-| weight | CPU share, carved like memory. |
-| class | `system` or user (Scheduling). |
-| labels | Fixed at creation (CONTAINMENT.md). |
-| deadline | Optional; when it passes the kernel destroys the budget (a lease). |
-
-- **Hard limits, no overcommit.** A child's pages, processes and weight are carved from its parent:
-  the children never add up to more than the parent. An allocation succeeds or fails on the caller's
-  own budget alone.
+Seven fields: parent, pages, processes, weight, class, labels, deadline, plus the account. Why each
+rule:
+- **Everything costs pages**, including threads, handles, endpoints and budgets themselves, so one
+  number bounds every kind of exhaustion. Processes are counted separately only because PIDs are
+  address-space tags, which are scarce on rv32.
+- **Carved, never overcommitted.** Children's limits add up to at most the parent's, so an allocation
+  succeeds or fails on the caller's own budget alone and reveals nothing about anyone else. A
+  parent's usage counts its children's limits, not their live usage, for the same reason.
 - **Top level:** `root -> system [default 25% of RAM, set in the boot manifest] + users [the rest]`.
-- **Bounded depth** (revocation checks walk ancestors).
-- **Limits fail the caller** with `OutOfMemory` (or the matching error). The kernel never panics and
-  never kills an innocent process to make room.
-- **Every page is zeroed** before a process gets it; userspace never names physical RAM.
-- **Destroying a budget** kills everything in it, revokes every handle stamped with it or a
-  descendant, and returns every resource.
-- **Usage is read with a syscall** by a holder whose labels allow it (CONTAINMENT.md).
+- **Bounded depth**, because revocation and "is this a descendant" walk ancestors.
+- **The kernel never panics and never kills an innocent process to make room.**
+- **Destroying a budget returns everything**; a lease is a budget with a deadline.
 
 ## Scheduling
 ### Two classes, strictly ordered
@@ -36,33 +34,28 @@ kernel object held by capability, with seven fields:
 - **Everyone else:** users, agents, applications, sharing by weight.
 No numeric priorities. Real-time guarantees are a non-goal until something needs them.
 
-### Stride scheduling over budgets
-- Each budget that runs processes has a weight and a *pass*. The scheduler runs the runnable budget
-  with the lowest pass, from one flat queue.
-- **Charge actual runtime at every deschedule:** pass += runtime x `STRIDE / weight`. A thread that
-  runs briefly and sleeps is still charged for what it ran.
-- **On wake,** pass = max(own pass, current minimum): a sleeper cannot bank credit and still runs
-  promptly.
-- Because weight is carved like memory, every budget gets at least its carved share. Unused share
-  goes to everyone by weight.
-- The timer ends a slice (10 ms to start); it is always armed.
+### Stride over budgets
+One flat queue of budgets with runnable threads (KERNEL-SPEC.md, R12). Actual runtime is charged at
+every deschedule, so a thread that runs briefly and sleeps is still charged; a waking budget cannot
+bank credit while asleep, and still runs promptly. Because weight is carved like pages, a budget
+always gets at least its share; idle share is redistributed by weight. Within a budget, threads run
+round-robin.
 
 ### Deferred
-- **Time donation** (a server running on the caller's budget during a call) and **CPU quotas**.
-  Donation is intricate (seL4's scheduling contexts), and a donated server thread stopped mid-call by
-  the caller's quota or lease could hold server locks forever. Add only if measured priority
-  inversion hurts. Until then servers pay for their own CPU, and leases are bounded by deadline and
-  weight.
+**Time donation** (a server running on the caller's budget during a call) and **CPU quotas**.
+Donation is intricate (seL4's scheduling contexts), and a donated server thread stopped mid-call by
+the caller's quota or lease could hold server locks forever. Add only if measured priority inversion
+hurts. Until then servers pay for their own CPU, and leases are bounded by deadline and weight.
 
 ### SMP
-One global run queue under the kernel lock first. All hardware threads of a core run one budget or
-idle (PLATFORM-FPGA.md). The work list is in PLAN.md.
+One global run queue under the kernel lock first; one budget per core (PLATFORM-FPGA.md). The work
+list: PLAN.md.
 
 ## The timer
-- **The kernel owns the hart timer.** It keeps one deadline queue (slice ends, sleepers, lease
-  deadlines) and programs SBI TIME, or Sstc by capability feature.
-- **`receive` takes a timeout.** Sleeping is a receive with a deadline and nothing to receive. There
-  is no timer server and no IRQ 0 timer.
+- **The kernel owns the hart timer.** One deadline queue (slice ends, timeouts, lease deadlines),
+  programmed through SBI TIME, or Sstc by capability feature. It is always armed.
+- **Every blocking call takes a timeout.** Sleeping is a `receive` with a timeout and nothing to
+  receive. There is no timer server and no IRQ 0 timer.
 - **User mode reads the high-resolution counter** (`rdtime`) directly. Hiding time protects nothing
   (TENETS.md, timing).
 - **Wall-clock time** (dates, time zones, NTP) is a userspace offset over monotonic time.
@@ -76,5 +69,6 @@ budget exceed its total; swapped pages encrypted and authenticated; the system b
   between bursts.
 - A thread, endpoint, handle or budget bomb hits its own page limit; other budgets keep creating.
 - A memory hog gets `OutOfMemory`; the system budget is untouched.
-- Transferring pages to a server that did not opt in fails; the server's budget is untouched.
-- Lease expiry reclaims everything; usage returns to zero.
+- A transfer to a server that did not opt in fails; the server's budget is untouched.
+- A lender that dies mid-call leaves the server running; the pages are freed at its reply.
+- Lease expiry reclaims everything; the parent's usage returns to what it was.

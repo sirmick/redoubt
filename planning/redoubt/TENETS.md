@@ -3,6 +3,9 @@
 These outrank every other note. When a change conflicts with a tenet, either the change loses or
 the tenet is amended here first, with the reason written down. Terms: [README.md](README.md).
 
+**Design v4 is frozen for milestone 1:** a change to it needs a stated reason, recorded in
+HISTORY.md.
+
 ## The adversary
 Design for a capable, patient, automated adversary that has read every line of this repository, can
 generate and test exploit candidates faster than a human can review them, and controls any code it
@@ -41,8 +44,9 @@ Said up front, because these are the pressures that erode the tenets below.
 A competent reader should be able to read the entire trusted computing base (firmware interface,
 loader, kernel) and hold it in their head. It should read like a textbook example of each mechanism.
 
-- The kernel stays a microkernel: memory, threads, IPC, interrupt routing. Nothing else. Drivers,
-  filesystems and policy are unprivileged servers.
+- **The kernel keeps memory, threads, IPC, interrupt delivery and the timer. Nothing else.**
+  Drivers, filesystems and policy are unprivileged servers. (Its objects and calls: KERNEL-SPEC.md.
+  This is the one statement of what the kernel keeps; other notes link here.)
 - One obvious way to do each thing. No clever tricks without a comment that explains why the
   obvious way does not work. If the comment is hard to write, the trick goes.
 - Size is budgeted, not just observed. Growing the TCB needs a justification in the commit.
@@ -71,7 +75,7 @@ loader, kernel) and hold it in their head. It should read like a textbook exampl
 ## 3. Rust, and assembly only where Rust cannot reach
 - Everything that runs on the machine is Rust: loader, kernel, servers, applications, and the
   firmware where we choose it (RustSBI). OpenSBI (C) is tolerated on QEMU and in the Linux-partition
-  mode, where it is TCB.
+  mode; firmware is always TCB.
 - Assembly is limited to what the language cannot express: trap entry and exit, context switch, the
   first instructions after reset. It is written as `global_asm!`/`asm!` inside Rust sources, never as
   separate prebuilt objects.

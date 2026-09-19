@@ -108,3 +108,43 @@ The same three roles, attacking the v2 fixes. Fourteen decisions:
 13. North star adds Alice's leased agent and a scripted hostile agent; the shell is IEx.
 14. Exit messages and kill-by-budget; FPGA host and bitstream assumptions; steward state on a system
     volume; small deletions and editorial fixes.
+
+## SMP spike (2026-09-19)
+With the `smp` feature, `KernelCell` became a spinlock (host stress test), then a second hart started
+through SBI HSM ran kernel code and contended on it without losing updates, on both widths (the
+`smp-spike` case). The bug that cost the debugging: `virt_to_phys` returns the frame base, so the
+trampoline addresses lacked their page offset.
+
+## Review round 3 (tag `redoubt-design-v4`; frozen for milestone 1)
+The same three roles, attacking v3 and pinning interfaces for a swarm build. Fourteen decisions:
+1. Keys that authenticate a person to the box never live in `keyd`; `sshd` rejects keys `keyd`
+   holds; sessions cannot connect to the box's own addresses (closes loopback self-approval).
+2. Lent pages stay with the server, charged to it, until it replies, if the lender dies or times
+   out; lends are size-capped; `call`, `send` and `receive` all take timeouts.
+3. Budgets carry an `account` (replacing "principal id"); endpoints serve waiting senders
+   round-robin by account, with a per-account cap.
+4. Crash blame is the account of the message the faulting thread was serving; three blamed crashes
+   log that account out.
+5. Minting keeps the stamp by default; a budget handle only narrows; zero-limit revocation scopes.
+6. Parent usage counts children's limits; steward no-write-down, random request ids, pending caps;
+   declassification snapshots and shows the whole item; calls and sends between user budgets need
+   equal labels.
+7. The terminal rule became ordinary no-write-down on labelled SSH channels.
+8. Interrupts are received on IRQ handles; no handler context, no `ClaimInterrupt`.
+9. `call` lends one writable buffer; `send` transfers; read-only lends and transfer-in-call dropped.
+10. The loader stub is a flat binary; launchers copy ELF bytes and never parse them. Corrected claim:
+    a hijacked agent can run code it wrote, never with more authority than it holds.
+11. Milestone 1 trimmed (bundle-only programs, stateless steward, one approval path, no sharing);
+    milestone 2 defined to carry the rest; FIDO approvals deferred further.
+12. The milestone 1 attack suite: a scripted hostile agent and a scripted hostile user; a real-agent
+    harness right after milestone 1; milestone 3 defined (self-hosted development).
+13. Wire format: 9P's encoding for every typed message, strict JSON for human-written files; vault
+    names select one label; packages are signed as a whole; interface pins (KERNEL-SPEC.md).
+14. One exit slot per process and one fired flag per IRQ; agents share their sponsor's account;
+    volume labels never come from the medium; the shared server library is `admit` and `check`;
+    A/B details; the kernel rules became KERNEL-SPEC.md.
+
+## Milestones (defined in round 3)
+1. Separation and containment: Alice and Bob over SSH, Alice's leased agent contained.
+2. Install, share, persist: packages, projects, reboot memory, A/B updates.
+3. Self-hosted development: a real agent harness, compilers on the box, the server APIs.

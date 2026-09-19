@@ -1,8 +1,8 @@
 # Capabilities, IPC and principals
 
-Designed, not built. Owns: handles, IPC, minting, revocation, exit messages, principals, agents,
-projects, the powerbox and approvals. Labels: CONTAINMENT.md. Budgets: RESOURCES.md. Launching and
-signing: PACKAGES.md.
+Designed, not built. Owns: why handles, how IPC and minting are used, revocation policy, principals,
+agents, projects, the powerbox and approvals. The precise kernel rules: KERNEL-SPEC.md. Labels:
+CONTAINMENT.md. Budgets: RESOURCES.md. Launching and signing: PACKAGES.md.
 
 ## Why change what Xous has
 Stock Xous uses password capabilities: a server is a 128-bit random `SID`, and knowing it is enough
@@ -13,132 +13,129 @@ to connect (`TryConnect(SID)`). Knowledge is authority, so:
 - confused deputies (a server cannot tell which grant a request came through).
 
 ## Handles
-The kernel knows processes, handles, endpoints, budgets and device objects. It knows nothing about
-users, agents or policy.
-- **A handle is (object, badge, stamp)**, an index into a per-process, kernel-held table.
-  Unforgeable: a process can only use indices into its own table.
-- **No rights bits.** Every handle can be used, moved and copied. Non-transferable handles would not
-  help: a holder can proxy. Delegation is bounded by stamps (below) and labels (CONTAINMENT.md).
-- **Badges.** A server mints a capability with an unforgeable tag; every request through it carries
-  the badge, so the server knows which grant is in use (e.g. "9P root `/home/alice/project`,
-  read-only"). The kernel guarantees the badge; the server gives it meaning.
+A handle is (object, badge, stamp), an index into a kernel-held, per-process table: unforgeable,
+because a process can only name indices into its own table. The kernel knows its five object kinds
+(KERNEL-SPEC.md) and nothing about users, agents or policy.
+- **No rights bits.** Every handle can be used and copied. Non-transferable handles would not help:
+  a holder can proxy. Delegation is bounded by stamps (below) and labels (CONTAINMENT.md).
+- **Badges.** A server mints a handle with a badge; every request through it carries the badge, so
+  the server knows which grant is in use (e.g. "9P root `/home/alice/project`, read-only"). The
+  kernel guarantees the badge; the server gives it meaning.
 - **Attenuation** is asking the server to mint a narrower badge. Semantic rights (read-only, a
   subdirectory, a port range) are enforced by the server.
 
 ## IPC
-Two primitives. Each may carry handles and at most one buffer.
-
-| | no buffer | lend read-only | lend writable | transfer |
-| --- | --- | --- | --- | --- |
-| **`call`** (waits for the reply) | yes | yes | yes | yes |
-| **`send`** (one-way) | yes | no | no | yes |
-
-- **All buffer modes are zero-copy:** the kernel remaps pages. A lent buffer is unmapped from the
-  lender until the reply (no double fetch).
-- **Transfer** moves pages to the receiver for good: owner and payer change together, so a page's
-  owner is always its payer. A receiver gets transferred pages only if its `receive` declared that it
-  accepts transfers and how many pages at most.
-- **No kernel queue.** `send` waits until the receiver takes the message (rendezvous), so a message
-  always occupies its sender's thread. `receive` takes a timeout.
-- **The kernel attaches the caller's budget id, principal id and label set** to every message,
-  unforgeably. Servers use them for admission limits and label checks (CONTAINMENT.md).
-- **Server death:** the endpoint and handles to it survive (INIT.md); senders blocked on it and
-  calls in flight get an error.
-- **Exit messages.** Whoever creates a process names an endpoint at creation and receives one exit
-  message there. There are no death subscriptions.
+Two primitives, each with a timeout (KERNEL-SPEC.md, Messages):
+- **`call`** waits for the reply and may **lend** one writable buffer, zero-copy: the pages are
+  mapped into the server and unmapped from the caller until the call ends. Read-only data is lent
+  writable; a client already trusts the server with it.
+- **`send`** is one-way and may **transfer** pages for good, zero-copy. The receiver must opt in with
+  a maximum; the pages' owner and payer change together. Handing pages over and waiting for an answer
+  is a `send` then a `call`.
+- **No kernel queue.** A sender waits until the receiver takes its message; waiting senders are
+  served round-robin by account, and each account may have only a few waiting per endpoint, so
+  thousands of threads from one account cannot starve another.
+- **Every message carries the caller's badge, account and labels.** Servers use them for admission
+  and label checks (CONTAINMENT.md). The raw budget id does not travel.
+- **The other side going away** (death or timeout) never corrupts a server: a lent buffer stays with
+  the server, charged to it, until it replies.
+- **Exit notices.** Whoever creates a process names an endpoint and receives one exit notice there.
+  There are no death subscriptions. There is no per-process kill: a process that must be killable on
+  its own gets its own budget, and killing it means destroying that budget.
+- **Interrupts** are received like messages: a driver thread waits on its IRQ handle.
 
 ## Minting and revocation
-There are no per-capability revokers. Budgets are the only revocation.
-1. **Mint takes a budget handle.** The kernel accepts it only if that budget is the stamp of the
-   capability the request came through, or a descendant of it. You can place a capability only in a
-   budget below the one your own authority came from.
-2. **Destroying a budget revokes every handle stamped with it or any descendant, wherever the copies
-   went.** Calls in flight fail cleanly.
-3. **Single-grant revocation is a sub-budget.** To make one grant revocable on its own, mint it into
-   a fresh sub-budget and destroy that to revoke.
-4. **The steward mints a principal's capabilities through that principal's root capability**, into
-   sub-budgets under the principal. Destroying the principal's budget, or a sub-budget, revokes
-   exactly what it should.
-5. **Budget ids are 64-bit and never reused**, on both widths, so a stale stamp can never match a new
-   budget. Ids identify; only handles grant.
+There are no per-capability revokers. **Budgets are the only revocation**: destroying a budget
+revokes every handle stamped with it or a descendant, wherever the copies went.
+- **Minting keeps the stamp by default.** A handle a server mints in answer to a request is stamped
+  like the handle the request came through. Bob's narrower capability to `shared/sub` is therefore
+  stamped with Alice's share, and dies with it, without Bob ever holding Alice's budget.
+- **A budget handle can only narrow.** Minting "into" a budget is allowed only for the default stamp
+  or a descendant of it. This is how the steward places a principal's capabilities in sub-budgets
+  under that principal: it mints through the principal's capabilities, narrowing to a sub-budget.
+- **Revocation scopes.** To make one grant revocable on its own, mint it into a **revocation scope**:
+  a budget with zero limits (no pages, processes or weight), used only to be destroyed. Nothing runs
+  in it, and its handle is never given to another principal.
+- **Creating a process in a budget** charges it to that budget and attributes it to that budget's
+  account.
+- **Leases** are budgets with a kernel deadline; the kernel destroys them when it passes.
+- **Budget ids are never reused**, so a stale stamp never matches a new budget. Ids identify; only
+  handles grant.
 
-**Leases** are budgets with a kernel deadline in monotonic time; the kernel destroys the budget when
-it passes. **Killing** a process means destroying its budget. A restarted steward can enumerate and
-destroy its descendant budgets, so no revocation record lives only in server memory.
-
-Example: Alice shares `shared/`; the steward mints the share into a sub-budget of Alice's. Bob asks
-`fsd` for a narrower capability to `shared/sub`; it can only land in that sub-budget or below, so
-when Alice destroys the share, `sub` dies with it.
-
-Model invariant: after budget B is destroyed, no process holds a handle stamped with B or any
-descendant of B.
+Example (milestone 2): Alice shares `shared/`; the steward mints the share into a revocation scope
+under Alice's budget and passes it to Bob. Bob asks `fsd` for `shared/sub`; the new handle keeps the
+share's stamp. Alice un-shares: the scope is destroyed, and `sub` dies with it.
 
 ## Principals (policy, in the steward)
-- A **principal** is a named, accountable identity: an authentication method, a root capability set
+- A **principal** is a named, accountable identity: an authentication method, its capability set
   (namespace and service grants), and an audit identity. Humans, agents and projects are the same
   kind of principal; they differ in authentication and default policy, not mechanism.
-- A **session** is processes started with capabilities derived from a principal's root set, never more.
-- **No root, no sudo.** "Admin" means holding specific capabilities over shared things. The first
-  owner receives the root capability set at first boot and delegates from there (INIT.md).
+- Each principal's top budget carries its **account** (set by the steward). Everything under it,
+  including its agents, shares that account.
+- A **session** is processes started with capabilities derived from a principal's set, never more.
+- **No root, no sudo.** "Admin" means holding specific capabilities over shared things. In
+  milestone 1 the principals come from the boot manifest (INIT.md); from milestone 2 the first owner
+  is enrolled at first boot and delegates from there.
 - **Nesting.** Every principal has its own space; its sponsor can destroy its budget. Principals can
   run their own servers and delegate into them.
 
 ## Agents
 1. **Own principal, never an impersonation.** Every action is attributable to the agent. Every agent
    has an accountable **sponsor** (a human, or an agent with a human at the top of the chain).
-2. **Own durable space** when long-running; the sponsor can revoke all of it.
+2. **An agent's budget sits under its sponsor's, so it shares the sponsor's account.** Its requests
+   count against the sponsor's admission limits, and crashes blamed on it log out the sponsor's
+   sessions (CONTAINMENT.md). The sponsor answers for its agents.
 3. **Delegation only narrows.** Human -> agent -> sub-agent, each step attenuated, the chain
-   recorded. Agents may spawn sub-agents in child budgets freely; a new *durable* principal, or a
+   recorded. Agents may spawn sub-agents in child budgets freely; a new durable principal, or a
    budget with more labels than its parent, needs the steward and an approval.
 4. **Task-scoped leases:** "read `~/project`, write `~/project/out`, connect to `203.0.113.0/24:443`,
    2 hours, 256 MB, 4 processes, weight 20".
 5. **Assume every agent is compromised** by something it read. A hijacked agent can do what its
-   capabilities allow, until its lease ends, and nothing more.
+   capabilities allow, until its lease ends, and nothing more. It can run code it wrote, but never
+   with more authority than it holds (PACKAGES.md).
 6. **Labels** bound what an agent can leak; capabilities bound what it can do (CONTAINMENT.md).
 7. **No credentials in agent memory.** Agents use keys through `keyd` and, later, models through
-   `gatewayd`, which holds API keys; they never hold keys themselves.
-8. **Runtime:** each agent session is its own beamlet VM (one VM = one trust domain); sub-agents with
+   `gatewayd`, which holds API keys.
+8. **Runtime:** each agent is its own beamlet VM (one VM = one trust domain); sub-agents with
    different authority are separate VMs.
 9. **Everything is audited:** mint, delegate, revoke, approve, lease expiry, with the principal chain.
 
-Humans authenticate with an SSH key (and the approver credential for high-stakes approvals) and hold
-durable root sets. Agents are launched by their sponsor with a leased set; they have no password.
-
-## Projects (group principals)
-A **project** is a principal sponsored by several members, with its own budget (carved from the
-sponsors), its own volume (`fsd:project-x`), its own package directory and profile, and optionally
-its own label. Membership is capabilities minted into a **sub-budget per member**: removing a member
-destroys their sub-budget. Members bind the project into their namespace (`/proj/x`) and run its
-tools if they trust the signer. A labelled project is worked on in project vault sessions
-(`ssh alice+project-x@box`); declassifying one of its items needs a project owner's approval
-(which members count is project policy). No kernel mechanism is involved.
+## Projects (group principals; milestone 2)
+A **project** is a principal sponsored by several members, with its own budget, volume
+(`fsd:project-x`), package directory and profile, and optionally a label. Membership is capabilities
+minted into a revocation scope per member; removing a member destroys it. A labelled project is
+worked on in project vault sessions (`ssh alice+project-x@box`); declassifying one of its items needs
+a project owner's approval (which members count is project policy). No kernel mechanism is involved.
 
 ## The powerbox and approvals
 The powerbox (in the steward) grants authority a principal lacks, and confirms a principal's own
 high-stakes steps. It is needed when an agent asks its sponsor, when a principal asks the holder of a
 shared resource, or for a high-stakes step on one's own behalf (a new trusted key, a
-declassification). Most things need none (installing a trusted package, running your own server on a
-granted resource).
+declassification). Most things need none.
 
-- **Out of band, like 2FA.** An approval happens only in an approval session where the steward alone
-  talks to the terminal (`ssh approve@box`), or on the board console. Sessions, agents and the
-  browser GUI only *notify* that an approval is waiting. This is the tenet "the requester can never
+- **Out of band, like 2FA.** An approval happens only where the steward alone talks to the terminal:
+  `ssh approve@box` (and, from milestone 2, the physical console for the first owner). Sessions and
+  agents only *notify* that an approval is waiting. This is the tenet "the requester can never
   influence the approval channel" (TENETS.md).
+- **The approval key is the person's own.** Keys that authenticate a person to the box (login and
+  approval) stay on the person's machine or security key and **never live in `keyd`**. The steward
+  refuses to enrol a key in both roles; `sshd` rejects authentication with any public key `keyd`
+  holds; session network capabilities never include the box's own addresses. Otherwise a hijacked
+  session could log in to `approve@box` over loopback, signing with `keyd`, and approve itself.
 - **Rendering.** The steward renders from the structured request: what, where, how long, and the
   label consequences. Printable text only, control characters stripped, every field length-capped.
-  Names are steward-assigned (`agent-7`, `request 41`), never requester-chosen. The requester's
-  free-text reason is quoted, escaped and marked untrusted. A declassification shows the item's
-  content (bounded), not just its name.
-- **Binding.** Each request has a steward-issued id and a hash of its exact content; approving
+  Names are steward-assigned (`agent-7`); the requester's free-text reason is quoted, escaped and
+  marked untrusted.
+- **Binding.** Each request has a random 64-bit id and a hash of its exact content; approving
   confirms both. The request is frozen until answered; any change makes it a new request.
-- **Labels.** A request from a labelled budget is shown only to principals owning every label it
-  carries; otherwise it is refused at submission.
-- **Tiers.** *Routine* (inside the approver's own space, lease-limited): `ssh approve@box`, possibly
-  later (asynchronous). *High-stakes* (shared infrastructure, a new durable principal, a new trusted
-  signing key, a budget with added labels, declassification): `ssh approve-hs@box`, a fresh
-  connection that accepts only the approver credential (a FIDO `sk-` key with user verification).
-- An approval grants no more than the approver holds.
-- Later option: a physical approval button or display on the board (PLATFORM-FPGA.md).
+- **Limits and labels.** Each account has a cap on pending requests. A request from a labelled budget
+  is shown only to principals owning every label it carries; otherwise it is refused at submission.
+- **Milestone 1** has one approval path: `ssh approve@box` with the person's own SSH key. An approval
+  grants no more than the approver holds.
+- **Later:** high-stakes approvals in a fresh `ssh approve-hs@box` connection that accepts only the
+  approver credential, a FIDO `sk-` key; `sshd` must check the signature's user-verification flag,
+  not just the key type, and `sunset`'s `sk-` support is unverified. A physical approval button or
+  display on the board is an option (PLATFORM-FPGA.md).
 
 ## Prior art
 seL4, Zircon, KeyKOS/EROS, CapDesk, Polaris, Sandstorm, Capsicum, Android permissions, Plan 9 factotum.
