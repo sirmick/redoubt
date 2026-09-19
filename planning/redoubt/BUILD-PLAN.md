@@ -20,14 +20,12 @@ Each package (WP) has:
 Everything in milestone 1 is `no_std` + `alloc` Rust or Elixir on beamlet; the Rust `std` target is
 not needed.
 
-## Spec questions to settle before the dependent packages start
-- **Q1. Randomness for user processes.** KERNEL-SPEC.md has no source of randomness for userspace,
-  but beamlet (`Platform::random`), `keyd` (key generation) and `sshd` (key exchange) need one.
-  Options: a `random` system call over the kernel's seeded RNG, or `init` handing each process a
-  seed in its startup block (a per-process CSPRNG in the runtime crate). Blocks WP-B1, WP-S1, WP-S3.
-- **Q2. rv32 in milestone 1.** Tenet 6 says every width we claim is booted in the bench. Proposed:
-  the kernel packages keep rv32 building and pass their kernel cases on both widths; the full
-  milestone (beamlet, SSH) is required on rv64 only.
+## Settled before the build
+- **Randomness:** a `random` system call (KERNEL-SPEC.md), used by WP-B1, WP-S1, WP-S3.
+- **Widths:** milestone 1 is built and booted on rv64. rv32 must keep **compiling** (kernel, loader,
+  `redoubt-sys`, `redoubt-rt`, servers): a build check in the bench, no rv32 boots. Width-specific
+  code only in paging geometry, trap entry and saved context, and the ABI's register encoding
+  (PLAN.md).
 
 ## Work packages
 
@@ -56,7 +54,7 @@ not needed.
 - Reads: KERNEL-SPEC.md (system calls, messages, errors).
 - Delivers: `redoubt-sys`: call numbers, argument and result register encodings for both widths, the
   error enum, and a host round-trip test for every call and error (like `xous`'s `Result` test).
-- Accepted when: round-trip tests pass on both widths; the names match WP-M0 exactly.
+- Accepted when: round-trip tests pass for both widths' encodings; the names match WP-M0 exactly.
 - Needs: WP-M0's call list (can start from KERNEL-SPEC.md directly).
 
 **WP-L1. littlefs in pure Rust.** Size L.
@@ -76,7 +74,7 @@ not needed.
 
 ### Track K: the kernel (one integrator at a time; see "Hotspots")
 **WP-K1. Budgets and handle tables.** Size L.
-- Reads: KERNEL-SPEC.md objects (Budget, Handle), R6-R10, `budget_*`, `handle_close`, `time_now`.
+- Reads: KERNEL-SPEC.md objects (Budget, Handle), R6-R10, `budget_*`, `handle_close`, `time_now`, `random`.
 - Delivers: budget objects with page and process accounting, carving, accounts, deadlines recorded
   (enforced by WP-K5), destruction sweeping stamped handles; per-process handle tables charged in
   pages; 64-bit never-reused ids.
@@ -131,7 +129,7 @@ not needed.
 **WP-C1. Model conformance.** Size M.
 - Delivers: a bench case replaying WP-M0 traces on the real kernel and comparing every result;
   a system-call fuzzer program (random and hostile arguments; I14).
-- Accepted when: 10^5 model traces replay with identical results on both widths; the fuzzer runs
+- Accepted when: 10^5 model traces replay with identical results; the fuzzer runs
   for its budget with no kernel panic.
 - Needs: WP-M0, WP-K1 to WP-K5, WP-T1.
 
@@ -172,11 +170,11 @@ not needed.
 **WP-B1. The Redoubt platform for beamlet.** Size M.
 - Reads: beamlet DESIGN.md (I/O), PACKAGES.md.
 - Delivers: a `no_std` `Platform` over `redoubt-rt`: console over `/dev/cons`, monotonic and wall
-  time, randomness (Q1), module loading through `bootfsd`, the asynchronous 9P client on a small
+  time, randomness (`random`), module loading through `bootfsd`, the asynchronous 9P client on a small
   pool of I/O threads.
 - Accepted when: **Elixir prints on the box** (the M1 step 2 milestone); beamlet's differential
   suite subset runs on the box with identical output.
-- Needs: WP-R1, WP-R4, Q1.
+- Needs: WP-R1, WP-R4.
 
 **WP-B2. IEx on the UART console.** Size S.
 - Delivers: an IEx session on the UART; the first Redoubt IEx helpers (`ls`, `cd`, `cat` over 9P).
@@ -207,7 +205,7 @@ labelled callers.
 ### Track S: security servers
 **WP-S1. keyd.** Size S. Holds keys; signs through a badge-scoped capability; never holds keys
 that authenticate a person to the box; constant-time signing.
-- Needs: WP-R1, Q1.
+- Needs: WP-R1.
 
 **WP-S2. steward (stateless, milestone 1).** Size L.
 - Reads: CAPABILITIES.md, CONTAINMENT.md, INIT.md, PACKAGES.md (launching).
@@ -225,7 +223,7 @@ steward; rejects keys `keyd` holds; each channel labelled with its session's lab
 `ssh approve@box`.
 - Accepted when: `alice@`, `alice+secrets@`, `bob@` and `approve@` sessions work from the bench's
   SSH client; loopback login with a `keyd` key refused.
-- Needs: WP-D3, WP-S1, WP-S2, Q1.
+- Needs: WP-D3, WP-S1, WP-S2.
 
 ### Track E: the milestone
 **WP-E1. Alice's agent and the attack suite.** Size M.
@@ -236,13 +234,13 @@ steward; rejects keys `keyd` holds; each channel labelled with its session's lab
 
 ## Order
 ```
-start now, in parallel:  M0  W1  L1  T1  A1        (+ settle Q1, Q2)
+start now, in parallel:  M0  W1  L1  T1  A1
 kernel, serialized:      K1 -> K2 -> K3 -> K4 -> K5 -> K6
 runtime:                 R1 (after A1, W1) -> R2 (after K4) -> R3 (after K3, K5)
                          R4 (after R1, K3)
-beamlet:                 B1 (after R1, R4, Q1) -> B2 (after R3)
+beamlet:                 B1 (after R1, R4) -> B2 (after R3)
 storage and network:     D1 (after R1, K3) -> D2 (after L1);  D3 (after R1, K3)
-security:                S1 (after R1, Q1);  S2 (after R3, B1, D2);  S3 (after D3, S1, S2)
+security:                S1 (after R1);  S2 (after R3, B1, D2);  S3 (after D3, S1, S2)
 conformance:             C1 (after M0, K5, T1)
 milestone:               E1 (after all)
 ```

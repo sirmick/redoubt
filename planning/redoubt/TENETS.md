@@ -114,7 +114,8 @@ system, held to the same standard of simplicity as the kernel.
 - **Attack tests, not just happy paths.** Hostile images, hostile syscall arguments, hostile
   messages, resource exhaustion, malformed device trees. Expected outcome: a clean refusal, never a
   kernel panic, never silent corruption.
-- **Every dimension we claim.** Each XLEN, each hart count, each supported firmware. A configuration
+- **Every dimension we claim.** (Milestones 1 to 3 claim rv64 only; rv32 is built, not booted, until
+  its goal after milestone 3, HISTORY.md.) Each XLEN, each hart count, each supported firmware. A configuration
   that is not booted in the bench is not supported.
 - **The harness can fail.** It is itself checked against known-bad runs, so a green result means something.
 - **Fuzz what parses.** Anything that parses untrusted bytes (ELF, tar, device tree, syscall
