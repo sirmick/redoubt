@@ -391,7 +391,10 @@ fn main() -> ExitCode {
         ..Default::default()
     };
     let mut vm = Vm::with_config(Box::new(platform), config);
+    #[cfg(feature = "threads")]
     vm.set_schedulers(schedulers);
+    #[cfg(not(feature = "threads"))]
+    let _ = schedulers; // built without threads: one scheduler
     for dir in &libs {
         vm.add_lib_root(dir);
     }
