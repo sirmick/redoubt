@@ -52,12 +52,14 @@ merged; the waves show what can run together.
 | Package | State | Branch | Notes |
 | --- | --- | --- | --- |
 | M0 | review | wp-m0 | |
-| W1 | review | wp-w1 | |
+| W1 | merged | wp-w1 | d52896bee |
 | L1 | review | wp-l1 | |
 | T1 | merged | wp-t1 | 987bacbed |
-| A1 | review | wp-a1 | fixing to the answered spec |
+| A1 | merged | wp-a1 | 44f1780a1 |
 | K0 | building | wp-k0 | fix: lending an untouched page panics the kernel (found by T1b) |
 | T1b | review | wp-t1b | attack cases asserted by the system (answer 26) |
+| R1 | building | wp-r1 | needs A1, W1 (merged) |
+| K1 | ready | | starts when K0 merges (kernel track is serial) |
 | all others | waiting | | see BUILD-PLAN.md "Needs" |
 
 States: `waiting` (needs not merged), `ready`, `building`, `review`, `merged`.

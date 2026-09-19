@@ -225,3 +225,13 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   14): message id 0 is a decoding error in `reply` and `mint`; `budget_usage` returns its six
   counters in a record (they do not fit the result registers); stage 1 checks each register in
   full when it reaches it, a list count included, and unused registers last.
+- **WP-A1 `redoubt-sys`** (`44f1780a1`): the system call ABI for KERNEL-SPEC.md, one register
+  layout on both widths (a 64-bit value is two 32-bit halves), no width `cfg`, one `unsafe` (the
+  `ecall` stub), no dependencies; host round-trip and malformed-input tests and a fuzz target
+  (about 1.7 billion runs, no findings). Its three gaps in the spec were corrected (above).
+- **WP-W1 wire codecs** (`d52896bee`): `redoubt-wire` (9P2000 from one message table, typed
+  messages with replies and error tables, strict JSON with schema-fixed types) and a generator from
+  the notes' tables to Rust and Elixir codecs; vectors run on the BEAM and on beamlet; fuzzed.
+  Reviews found uncompilable generated names, silently dropped table rows and half-written
+  directory entries; all fixed. No server tables exist yet (each server package writes its own).
+
