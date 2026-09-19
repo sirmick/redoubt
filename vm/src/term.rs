@@ -326,6 +326,9 @@ pub enum Fun {
         env: Vec<Term>,
         /// The compiler's hash of the fun's code (from the fun table).
         uniq: u32,
+        /// The name of the function implementing it (`'-f/1-fun-0-'`), kept so `fun_info/2`
+        /// can still name a fun whose module has since been reloaded or deleted, as BEAM can.
+        name: Atom,
     },
     Export { module: Atom, function: Atom, arity: u32 },
 }

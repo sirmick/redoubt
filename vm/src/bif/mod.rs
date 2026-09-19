@@ -557,6 +557,8 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("init", "get_arguments", 0, info::init_get_arguments),
     ("init", "get_plain_arguments", 0, info::init_get_arguments),
     ("init", "get_argument", 1, info::init_get_argument),
+    // OTP's error_handler asks init to load modules when there is no code server.
+    ("init", "ensure_loaded", 1, info::ensure_loaded),
     ("init", "get_status", 0, info::init_get_status),
     ("os", "getenv", 0, info::getenv_all),
     ("os", "getenv", 1, info::getenv),

@@ -349,7 +349,7 @@ pub(crate) fn fun_entry(sys: &mut System, fun: &Term, mut args: Vec<Term>) -> Re
         return Err(error_tuple(&sys.atoms.badarity, info));
     }
     match &**f {
-        Fun::Local { module, index, env, uniq, arity } => {
+        Fun::Local { module, index, env, uniq, arity, .. } => {
             let m = sys.module(module).ok_or_else(|| Exception::error(Term::Atom(sys.atoms.undef.clone())))?;
             // A fun from another version of the module (or decoded from a binary) must match
             // this version's fun table, or it is a bad fun.
@@ -1099,6 +1099,7 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
                 arity: entry.arity - entry.num_free,
                 env,
                 uniq: entry.uniq,
+                name: entry.function.clone(),
             };
             dst(p, ins, 1, Term::Fun(Rc::new(fun)))?;
         }

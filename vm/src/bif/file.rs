@@ -254,9 +254,13 @@ pub fn make_dir(c: &mut Ctx, a: &[Term]) -> R {
     })
 }
 
+/// `del_file_nif(Path)`. A directory is `eperm`, as OTP reports it.
 pub fn del_file(c: &mut Ctx, a: &[Term]) -> R {
     with_path(c, &a[0], |c, p| {
-        let r = files(c).and_then(|f| f.delete(p));
+        let r = files(c).and_then(|f| f.delete(p)).map_err(|e| match e {
+            FileError::Eisdir => FileError::Eperm,
+            e => e,
+        });
         done(c, r)
     })
 }
@@ -272,9 +276,13 @@ pub fn del_dir(c: &mut Ctx, a: &[Term]) -> R {
     })
 }
 
+/// `rename_nif(From, To)`. Onto a directory that is not empty is `eexist`, as OTP reports it.
 pub fn rename(c: &mut Ctx, a: &[Term]) -> R {
     let (from, to) = (path(c, &a[0])?, path(c, &a[1])?);
-    let r = from.and_then(|from| to.and_then(|to| files(c)?.rename(&from, &to)));
+    let r = from.and_then(|from| to.and_then(|to| files(c)?.rename(&from, &to))).map_err(|e| match e {
+        FileError::Enotempty => FileError::Eexist,
+        e => e,
+    });
     done(c, r)
 }
 

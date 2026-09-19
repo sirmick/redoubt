@@ -313,7 +313,10 @@ impl<'a> Reader<'a, '_> {
                     return Err(EtfError::Malformed);
                 }
                 let uniq = u32::try_from(uniq).map_err(|_| EtfError::Malformed)?;
-                Term::Fun(Rc::new(Fun::Local { module, index, arity, env, uniq }))
+                // The name is not in the external format; the module's fun table has it, if
+                // the module is loaded now (and matches), else it is left unknown.
+                let name = self.atoms.intern("-unknown-fun-").map_err(|_| EtfError::BadAtom)?;
+                Term::Fun(Rc::new(Fun::Local { module, index, arity, env, uniq, name }))
             }
             // Ports, the old float format and distribution headers are not accepted.
             other => return Err(EtfError::BadTag(other)),
@@ -444,7 +447,7 @@ pub fn encode_with(t: &Term, md5_of: &dyn Fn(&crate::atom::Atom) -> Option<[u8; 
                 }
                 // NEW_FUN_EXT: Size, Arity, Uniq (module MD5), Index, NumFree, Module,
                 // OldIndex, OldUniq, Pid (the creator; not tracked here), then the free variables.
-                Fun::Local { module, index, arity, env, uniq } => {
+                Fun::Local { module, index, arity, env, uniq, .. } => {
                     out.push(112);
                     let at = out.len();
                     out.extend_from_slice(&[0; 4]);

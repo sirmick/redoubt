@@ -25,7 +25,13 @@ struct Atomics {
 }
 
 fn new(c: &mut Ctx, size: &Term, signed: bool) -> R {
-    let n = size.as_usize().filter(|n| (1..=MAX_SIZE).contains(n)).ok_or_else(|| c.badarg())?;
+    // Too large is a system limit (as in BEAM); zero, negative or not an integer is badarg.
+    let n = match size {
+        Term::Int(n) if *n >= 1 && (*n as u64) <= MAX_SIZE as u64 => *n as usize,
+        Term::Int(n) if *n >= 1 => return Err(c.system_limit()),
+        Term::Big(b) if b.sign() == num_bigint::Sign::Plus => return Err(c.system_limit()),
+        _ => return Err(c.badarg()),
+    };
     let id = c.sys.make_ref().0;
     let a = Atomics { signed, cells: RefCell::new(alloc::vec![0; n]) };
     Ok(Term::Resource(Rc::new(Resource { id, value: alloc::boxed::Box::new(a) })))

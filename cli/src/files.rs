@@ -77,6 +77,51 @@ impl HostDir {
         (m, inner)
     }
 
+    /// Resolve the symbolic links in a VM path, as the VM's name space sees them: a relative
+    /// target is taken from the link's directory, an absolute one from the VM's `/` (not the
+    /// host's), across mounts. The last component is followed only if `follow_last`. More than
+    /// 40 links is `eloop`. The result names no links (save the last, if not followed), so
+    /// cap-std never has to follow one; it still refuses anything that would leave a mount.
+    fn walk(&self, path: &str, follow_last: bool) -> Result<String, FileError> {
+        let mut todo: std::collections::VecDeque<String> = path.split('/').filter(|c| !c.is_empty()).map(String::from).collect();
+        let mut done: Vec<String> = Vec::new();
+        let mut links = 0;
+        while let Some(c) = todo.pop_front() {
+            match c.as_str() {
+                "." => continue,
+                ".." => {
+                    done.pop();
+                    continue;
+                }
+                _ => {}
+            }
+            done.push(c);
+            if todo.is_empty() && !follow_last {
+                break;
+            }
+            let here = format!("/{}", done.join("/"));
+            let (m, inner) = self.at(&here);
+            let Ok(meta) = m.dir.symlink_metadata(inner) else { continue };
+            if !meta.file_type().is_symlink() {
+                continue;
+            }
+            links += 1;
+            if links > 40 {
+                return Err(FileError::Eloop);
+            }
+            let target = m.dir.read_link_contents(inner).map_err(error)?;
+            let target = target.to_str().ok_or(FileError::Einval)?;
+            done.pop();
+            if target.starts_with('/') {
+                done.clear();
+            }
+            for (i, part) in target.split('/').filter(|p| !p.is_empty()).enumerate() {
+                todo.insert(i, String::from(part));
+            }
+        }
+        Ok(format!("/{}", done.join("/")))
+    }
+
     /// Like [`HostDir::at`], for an operation that changes something.
     fn at_writable<'p>(&self, path: &'p str) -> Result<(&Dir, &'p str), FileError> {
         let (m, inner) = self.at(path);
@@ -192,7 +237,8 @@ impl Files for HostDir {
         } else {
             o.create(mode.create);
         }
-        let (m, inner) = self.at(path);
+        let path = self.walk(path, true)?;
+        let (m, inner) = self.at(&path);
         if m.read_only && (mode.write || mode.create || mode.truncate || mode.append) {
             return Err(FileError::Erofs);
         }
@@ -253,12 +299,15 @@ impl Files for HostDir {
     }
 
     fn info(&mut self, path: &str, follow: bool) -> Result<FileInfo, FileError> {
-        let (m, inner) = self.at(path);
-        let m = if follow { m.dir.metadata(inner) } else { m.dir.symlink_metadata(inner) };
+        let path = self.walk(path, follow)?;
+        let (m, inner) = self.at(&path);
+        let m = m.dir.symlink_metadata(inner);
         Ok(info(&m.map_err(error)?))
     }
 
     fn list_dir(&mut self, path: &str) -> Result<Vec<Vec<u8>>, FileError> {
+        let path = self.walk(path, true)?;
+        let path = path.as_str();
         let (m, inner) = self.at(path);
         let mut names = Vec::new();
         for entry in m.dir.read_dir(inner).map_err(error)? {
@@ -277,22 +326,26 @@ impl Files for HostDir {
     }
 
     fn make_dir(&mut self, path: &str) -> Result<(), FileError> {
-        let (d, inner) = self.at_writable(path)?;
+        let path = self.walk(path, false)?;
+        let (d, inner) = self.at_writable(&path)?;
         d.create_dir(inner).map_err(error)
     }
 
     fn delete(&mut self, path: &str) -> Result<(), FileError> {
-        let (d, inner) = self.at_writable(path)?;
+        let path = self.walk(path, false)?;
+        let (d, inner) = self.at_writable(&path)?;
         d.remove_file(inner).map_err(error)
     }
 
     fn del_dir(&mut self, path: &str) -> Result<(), FileError> {
-        let (d, inner) = self.at_writable(path)?;
+        let path = self.walk(path, false)?;
+        let (d, inner) = self.at_writable(&path)?;
         d.remove_dir(inner).map_err(error)
     }
 
     fn rename(&mut self, from: &str, to: &str) -> Result<(), FileError> {
-        let ((a, from), (b, to)) = (self.at_writable(from)?, self.at_writable(to)?);
+        let (from, to) = (self.walk(from, false)?, self.walk(to, false)?);
+        let ((a, from), (b, to)) = (self.at_writable(&from)?, self.at_writable(&to)?);
         if !std::ptr::eq(a, b) {
             return Err(FileError::Exdev);
         }
@@ -302,30 +355,39 @@ impl Files for HostDir {
     fn set_times(&mut self, path: &str, atime: i64, mtime: i64) -> Result<(), FileError> {
         let at = |secs: i64| std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_secs(secs.max(0) as u64));
         let (Some(a), Some(m)) = (at(atime), at(mtime)) else { return Err(FileError::Einval) };
-        let times = std::fs::FileTimes::new().set_accessed(a).set_modified(m);
-        let (d, inner) = self.at_writable(path)?;
-        let file = match d.open(inner) {
-            Ok(f) => f.into_std(),
-            // Directories cannot be opened as files; open them as directories.
-            Err(_) => d.open_dir(inner).map_err(error)?.into_std_file(),
-        };
-        file.set_times(times).map_err(error)
+        // By host path, which works whatever the file's mode (opening it first would not); the
+        // path names no links, having been walked.
+        let path = self.walk(path, true)?;
+        let (mount, inner) = self.at(&path);
+        if mount.read_only {
+            return Err(FileError::Erofs);
+        }
+        use fs_set_times::SystemTimeSpec::Absolute;
+        fs_set_times::set_times(mount.host.join(inner), Some(Absolute(a)), Some(Absolute(m))).map_err(error)
     }
 
     fn set_permissions(&mut self, path: &str, mode: u32) -> Result<(), FileError> {
-        use cap_std::fs::PermissionsExt;
-        let (d, inner) = self.at_writable(path)?;
-        d.set_permissions(inner, cap_std::fs::Permissions::from_mode(mode)).map_err(error)
+        // By host path, which (unlike opening the file first) works whatever its mode; the
+        // path names no links, having been walked.
+        let path = self.walk(path, true)?;
+        let (m, inner) = self.at(&path);
+        if m.read_only {
+            return Err(FileError::Erofs);
+        }
+        std::fs::set_permissions(m.host.join(inner), std::os::unix::fs::PermissionsExt::from_mode(mode)).map_err(error)
     }
 
     fn make_symlink(&mut self, target: &[u8], link: &str) -> Result<(), FileError> {
         let target = std::path::Path::new(std::ffi::OsStr::from_bytes(target));
-        let (d, inner) = self.at_writable(link)?;
-        d.symlink(target, inner).map_err(error)
+        // The target is stored as given; `walk` interprets it within the VM's name space.
+        let link = self.walk(link, false)?;
+        let (d, inner) = self.at_writable(&link)?;
+        d.symlink_contents(target, inner).map_err(error)
     }
 
     fn make_link(&mut self, existing: &str, new: &str) -> Result<(), FileError> {
-        let ((a, existing), (b, new)) = (self.at_writable(existing)?, self.at_writable(new)?);
+        let (existing, new) = (self.walk(existing, false)?, self.walk(new, false)?);
+        let ((a, existing), (b, new)) = (self.at_writable(&existing)?, self.at_writable(&new)?);
         if !std::ptr::eq(a, b) {
             return Err(FileError::Exdev);
         }
@@ -333,8 +395,9 @@ impl Files for HostDir {
     }
 
     fn read_link(&mut self, path: &str) -> Result<Vec<u8>, FileError> {
-        let (m, inner) = self.at(path);
-        let target = m.dir.read_link(inner).map_err(error)?;
+        let path = self.walk(path, false)?;
+        let (m, inner) = self.at(&path);
+        let target = m.dir.read_link_contents(inner).map_err(error)?;
         Ok(target.as_os_str().as_bytes().to_vec())
     }
 }
@@ -368,10 +431,21 @@ mod tests {
         std::os::unix::fs::symlink("..", s.0.join("root/up")).unwrap();
         let mut fs = HostDir::new(s.0.join("root").to_str().unwrap()).unwrap();
         let read = OpenMode { read: true, ..OpenMode::default() };
+        // Links are followed within the VM's name space: none of them reaches the secret.
         for p in ["/abs", "/rel", "/up/secret"] {
-            assert_eq!(fs.open(p, read), Err(FileError::Eacces), "{p}");
+            assert!(fs.open(p, read).is_err(), "{p}");
             assert!(fs.info(p, true).is_err(), "{p}");
         }
+        // An absolute target means the VM's `/`.
+        std::fs::write(s.0.join("root/inside"), b"in").unwrap();
+        fs.make_symlink(b"/inside", "/abs_in").unwrap();
+        let h = fs.open("/abs_in", read).unwrap();
+        assert_eq!(fs.read(h, 10).unwrap(), b"in");
+        assert_eq!(fs.read_link("/abs_in").unwrap(), b"/inside");
+        // A cycle is eloop.
+        fs.make_symlink(b"/cyc2", "/cyc1").unwrap();
+        fs.make_symlink(b"/cyc1", "/cyc2").unwrap();
+        assert_eq!(fs.open("/cyc1", read), Err(FileError::Eloop));
         // The link itself is inside and may be inspected.
         assert_eq!(fs.info("/abs", false).unwrap().kind, FileKind::Symlink);
     }

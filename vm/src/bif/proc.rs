@@ -1162,9 +1162,11 @@ pub fn fun_info(c: &mut Ctx, a: &[Term]) -> R {
         (Fun::Export { module, .. } | Fun::Local { module, .. }, "module") => Term::Atom(module.clone()),
         (_, "arity") => Term::Int(f.arity() as i64),
         (Fun::Export { function, .. }, "name") => Term::Atom(function.clone()),
-        (Fun::Local { module, index, .. }, "name") => {
-            let m = c.sys.module(module).ok_or_else(|| c.badarg())?;
-            Term::Atom(m.funs.get(*index as usize).ok_or_else(|| c.badarg())?.function.clone())
+        (Fun::Local { module, index, uniq, name, .. }, "name") => {
+            // From the module's fun table when this is still its fun (decoded funs do not
+            // carry a name), else the name recorded when the fun was made.
+            let current = c.sys.module(module).and_then(|m| m.funs.get(*index as usize).filter(|e| e.uniq == *uniq).map(|e| e.function.clone()));
+            Term::Atom(current.unwrap_or_else(|| name.clone()))
         }
         (Fun::Export { .. }, "type") => c.atom("external"),
         (Fun::Local { .. }, "type") => c.atom("local"),
