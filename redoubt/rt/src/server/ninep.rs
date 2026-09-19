@@ -2,23 +2,53 @@
 //! open modes, directory offsets) and applies every rule that does not depend on what the files
 //! are; a [`FileServer`] supplies the files. `src/bin/echo-server.rs` is the model server.
 //!
-//! **On the wire.** A 9P request is a `call` whose words are all zero ([`WORDS_9P`]) with the
-//! T-message at the start of its lend; the reply's words are all zero and the R-message is
-//! written at the start of the same lend. A call with other words, or with no lend, is
-//! malformed: its reply is status 1 ([`MALFORMED`]), as for every typed protocol (answers 41 and
-//! 42), and nothing is written in the lend. Handles sent with a 9P call are closed unread.
+//! **On the wire.** A request whose word 0 is 0 is 9P: a `call` whose words are all zero
+//! ([`WORDS_9P`]) with the T-message at the start of its lend; the reply's words are all zero and
+//! the R-message is written at the start of the same lend. A 9P call with another word non-zero,
+//! or with no lend, is malformed: its reply is status 1 ([`MALFORMED`]), as for every typed
+//! protocol (answers 41 and 42), and nothing is written in the lend. Handles sent with a 9P call
+//! are closed unread. Any other word 0 is a typed opcode ([`NineServer::serve_with`]): the
+//! `ninep_common` operations every 9P server serves, or the server's own protocol.
 //!
-//! **Connections.** One badge is one client. The rule (answer 50): a launcher never passes its
-//! own connection to a child; each child gets a fresh connection from the server. As a second
-//! line of defence, a connection is keyed by (badge, account, label set), so holders of a copied
-//! handle in different accounts or label sets never share fids or a `Tversion`. When the last
-//! handle with a badge is closed, the kernel tells the endpoint's owner (answer 53), and
-//! [`NineServer::badge_closed`] frees everything that badge held.
+//! **Connections** (CAPABILITIES.md, one badge, one client). One badge is one client. A launcher
+//! never passes its own connection to a child: it asks for a fresh one with `new_connection`,
+//! which the skeleton serves ([`ninep_common`]):
+//! - `new_connection(root, quota)` mints a connection rooted at `root`, a path relative to the caller's own
+//!   root, cleaned so it never climbs above it, and walked with the same label checks as a `Twalk`. The new
+//!   badge comes from a counter starting at [`FIRST_MINTED_BADGE`] and is never reused (answer 86), so a
+//!   handle revoked in flight never reaches a later connection. The reply carries the handle and a random
+//!   64-bit connection id; the minted connection is charged to the requester's [`Resource::State`].
+//! - `disconnect(id)` frees that connection and every connection minted under it: their fids are clunked,
+//!   their admission released, their quotas returned. Only the connection that asked for the id (the same
+//!   badge, account and label set) may name it (answer 69); anyone else, like an id that does not exist, gets
+//!   the same refusal.
+//! - Badges below [`FIRST_MINTED_BADGE`] are the server's own: whoever set the server up minted them, and
+//!   [`FileServer::attach`] says what each means. A badge at or above it that the skeleton has not minted, or
+//!   has disconnected, is no connection at all.
+//!
+//! As a second line of defence, fids are keyed by (badge, account, label set), so holders of a
+//! copied handle in different accounts or label sets never share fids or a `Tversion`.
+//!
+//! **Admission** ([`Admission`]): fids ([`Resource::Files`]) and minted connections
+//! ([`Resource::State`]) are charged to the caller's (account, label set), with a fair share per
+//! badge. A connection a client mints for itself counts in the share of the connection it minted
+//! it through (the share goes up the chain while the requester is the same client), so a client
+//! gains nothing by minting more connections; a connection someone else minted for it (the
+//! steward, for a lease's agent) is a share of its own.
+//!
+//! **Byte quotas** (answer 85; NAMESPACES.md, Filesystem servers). Each root a connection is
+//! minted at can have its own byte quota, set by whoever granted it: `new_connection`'s `quota`
+//! carves that many bytes from the requester's own quota (0 shares the requester's), and
+//! `disconnect` gives them back, with whatever they hold, to the quota they came from. A server's
+//! own badges have [`FileServer::quota`] (unlimited by default). Under a limited quota the
+//! skeleton charges by file length, from `stat`: a `Twrite` needs room for all it could add and
+//! is charged what it did add; truncation and `Tremove` credit what they freed. Stated limit: bytes are
+//! credited to the quota of the connection that freed them, not the one that wrote them (a server that tracks
+//! owners, like `fsd`, can do better).
 //!
 //! **What the skeleton guarantees a [`FileServer`]**, whatever the client sends:
-//! - At most [`MAX_FIDS`] fids per connection, each charged to its client's (account, label set)
-//!   ([`Admission`], [`Resource::Files`]); both limits are checked before the server is asked to attach or
-//!   walk.
+//! - At most [`MAX_FIDS`] fids per connection, each charged to its client ([`Admission`],
+//!   [`Resource::Files`]); both limits are checked before the server is asked to attach or walk.
 //! - Every fid is looked up; no request reaches the server for a fid that does not exist.
 //! - Walk names are valid path components ([`path::valid_name`]). A fid keeps the node and qid of every step
 //!   from its attach root, so `..` is the step before, never a question to the server; at the root it stays
@@ -30,8 +60,8 @@
 //!
 //! **Labels** ([`check`], on every request, against [`FileServer::labels`] of the object named):
 //! - `Read` on the attach root; on the directory walked from, and on every node walked into (a qid is a read,
-//!   answer 52); on the node for `Tstat`, `Tread` and opening for reading; on every directory entry listed
-//!   (entries the caller cannot read are left out).
+//!   answer 52), for a `Twalk` and a `new_connection` alike; on the node for `Tstat`, `Tread` and opening for
+//!   reading; on every directory entry listed (entries the caller cannot read are left out).
 //! - `Write` (equal label sets, answer 51) on the node for `Twrite`, opening for writing, truncation
 //!   (`OTRUNC`) and `Tremove`, and on the directory for `Tcreate`.
 //!
@@ -47,15 +77,20 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::num::NonZeroU64;
+use core::ops::RangeInclusive;
 
-use redoubt_sys::Error;
+use redoubt_sys::{Error, Handle, Handles};
 use redoubt_wire::MSIZE;
 use redoubt_wire::codec::Writer;
 pub use redoubt_wire::ninep::Qid;
 use redoubt_wire::ninep::{Body, IOHDRSZ, MAXWELEM, Message, NOFID, NOTAG, Qids, Stat, VERSION};
+pub use redoubt_wire::proto::ninep_common;
+use redoubt_wire::proto::ninep_common::{ErrorCode, NewConnectionReply, Reply};
 
-use super::admit::{Admission, AdmitKey, Limits, Resource};
+use super::admit::{Admission, AdmitKey, Limits, Resource, Unsized};
 use super::label::{Access, check};
+use super::typed::Outcome;
 use crate::ipc::{Caller, Request, Words};
 use crate::path;
 
@@ -68,6 +103,19 @@ pub const MAX_FIDS: usize = 64;
 pub const QTDIR: u8 = 0x80;
 /// `Stat::mode` bit of a directory.
 pub const DMDIR: u32 = 0x8000_0000;
+/// The first badge `new_connection` mints; badges below it are the server's own.
+pub const FIRST_MINTED_BADGE: u64 = 1 << 63;
+
+/// QUESTIONS.md 113 (pending): the typed opcodes `ninep_common` owns on every 9P endpoint. A
+/// server's own protocol on the same endpoint uses opcodes above them; an opcode in this range
+/// that `ninep_common` does not define is malformed.
+pub const NINEP_COMMON_OPCODES: RangeInclusive<u64> = 1..=15;
+
+/// QUESTIONS.md 114 (pending): the status of a `disconnect` naming an id the caller did not
+/// receive, the same whether the id belongs to someone else or to nobody, so nothing is
+/// revealed: code 2, as the question recommends, which the table leaves free for it. Not yet in
+/// `ninep_common`'s error table, so the generated codec does not know it.
+pub const NOT_YOURS: u32 = 2;
 
 /// Open modes (intro(5)): the access in the low two bits, then flags.
 pub mod mode {
@@ -94,8 +142,10 @@ impl NineError {
     pub const NOT_OPEN: NineError = NineError("fid not open for this");
     pub const NOT_SUPPORTED: NineError = NineError("not supported");
     pub const NO_AUTH: NineError = NineError("authentication not required");
+    pub const NO_CONNECTION: NineError = NineError("no such connection");
     pub const NO_MEMORY: NineError = NineError("out of memory");
     pub const PERMISSION: NineError = NineError("permission denied");
+    pub const QUOTA: NineError = NineError("quota exceeded");
     pub const TOO_DEEP: NineError = NineError("path too deep");
     pub const TOO_MANY: NineError = NineError("too many open files");
     pub const TOO_SMALL: NineError = NineError("count too small");
@@ -139,8 +189,13 @@ pub trait FileServer {
     /// root) and drops them without telling the server.
     type Node: Clone;
 
-    /// The root of a new attach through the caller's badge (which grant it is).
+    /// The root of an attach through one of the server's own badges (the caller's: which grant
+    /// it is). Connections minted by `new_connection` attach at their own root without asking.
     fn attach(&mut self, caller: &Caller, aname: &str) -> Result<(Self::Node, Qid), NineError>;
+
+    /// The byte quota of the root one of the server's own badges attaches at; unlimited unless
+    /// the server says otherwise.
+    fn quota(&mut self, _badge: u64) -> u64 { u64::MAX }
 
     /// The labels of the object `node` belongs to (for `fsd`, its volume's).
     fn labels(&self, node: &Self::Node) -> &[u64];
@@ -197,13 +252,35 @@ pub trait FileServer {
         Err(NineError::NOT_SUPPORTED)
     }
 
-    /// A fid went away (clunked, removed, or reset by `Tversion`); `node` is the one it rested on.
-    /// Only that node is clunked: nodes passed on a walk, and nodes a failed request produced, are
-    /// simply dropped, which is why a node must hold no resource.
+    /// A fid went away (clunked, removed, reset by `Tversion`, or its connection disconnected);
+    /// `node` is the one it rested on. Only that node is clunked: nodes passed on a walk, and
+    /// nodes a failed request produced, are simply dropped, which is why a node must hold no
+    /// resource.
     fn clunk(&mut self, _node: &Self::Node) {}
 }
 
-/// Whose a connection is: the badge it came through and the client using it.
+/// What the skeleton needs from the kernel to answer `new_connection`, apart so that
+/// [`NineServer::answer_common`] runs in host tests with no system call.
+pub trait Minter {
+    /// A handle to the endpoint the request came in on, with `badge`, stamped like the handle the
+    /// request came through (`mint` from the message: CAPABILITIES.md, minting keeps the stamp).
+    fn mint(&mut self, badge: NonZeroU64) -> Result<Handle, Error>;
+    /// A random `u64` (`random`).
+    fn random(&mut self) -> Result<u64, Error>;
+}
+
+/// The kernel, answering for the request with this message id.
+struct Kernel(NonZeroU64);
+
+impl Minter for Kernel {
+    fn mint(&mut self, badge: NonZeroU64) -> Result<Handle, Error> {
+        Ok(crate::ipc::mint_from_message(self.0, badge)?.handle())
+    }
+
+    fn random(&mut self) -> Result<u64, Error> { crate::handle::random_u64() }
+}
+
+/// Whose a connection's fids are: the badge it came through and the client using it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ConnKey {
     badge: u64,
@@ -232,8 +309,41 @@ impl<N: Clone> Fid<N> {
     fn is_dir(&self) -> bool { self.here().1.kind & QTDIR != 0 }
 }
 
-/// A connection's fids, by number.
-type Fids<N> = Vec<(u32, Fid<N>)>;
+/// One client's fids on one connection, and the share they are charged to.
+struct Fids<N> {
+    key: ConnKey,
+    share: u64,
+    fids: Vec<(u32, Fid<N>)>,
+}
+
+/// A connection minted by `new_connection`.
+struct Minted<N> {
+    badge: u64,
+    id: u64,
+    /// Who asked for it: only they may disconnect it.
+    requester: ConnKey,
+    /// The share its [`Resource::State`] charge was taken from.
+    requester_share: u64,
+    /// The badge it was minted through: it goes when that one is disconnected.
+    parent: u64,
+    root: (N, Qid),
+    /// The quota its files are charged to: its own badge if it was given one, else its parent's.
+    pool: u64,
+}
+
+/// A byte quota: `limit` bytes, of which `used` are charged and `carved` given to child quotas.
+struct Pool {
+    id: u64,
+    limit: u64,
+    used: u64,
+    carved: u64,
+    /// The quota it was carved from (none for a server's own badge's).
+    parent: Option<u64>,
+}
+
+impl Pool {
+    fn free(&self) -> u64 { self.limit.saturating_sub(self.used).saturating_sub(self.carved) }
+}
 
 /// A copy of `steps`, allocated fallibly.
 fn copy_steps<N: Clone>(steps: &[(N, Qid)]) -> Result<Vec<(N, Qid)>, NineError> {
@@ -246,9 +356,13 @@ fn copy_steps<N: Clone>(steps: &[(N, Qid)]) -> Result<Vec<(N, Qid)>, NineError> 
 /// Serves 9P for a [`FileServer`].
 pub struct NineServer<S: FileServer> {
     pub fs: S,
-    /// Fid tables by connection; a connection with no fids has no entry. Plain vectors, searched
-    /// linearly, so every growth can fail cleanly (`try_reserve`).
-    conns: Vec<(ConnKey, Fids<S::Node>)>,
+    /// Fid tables by connection and client; one with no fids has no entry. Plain vectors,
+    /// searched linearly, so every growth can fail cleanly (`try_reserve`).
+    conns: Vec<Fids<S::Node>>,
+    minted: Vec<Minted<S::Node>>,
+    pools: Vec<Pool>,
+    /// The next badge `new_connection` mints; only goes up.
+    next_badge: u64,
     admission: Admission,
     /// Where a reply's data is gathered before it is written into the lend: the request is
     /// decoded from the lend, so the reply cannot be built there until the request is done with.
@@ -258,56 +372,143 @@ pub struct NineServer<S: FileServer> {
 }
 
 impl<S: FileServer> NineServer<S> {
-    /// Serves `fs`; `limits.files` bounds the fids one client (account, label set) holds across
-    /// all its connections.
-    pub fn new(fs: S, limits: Limits) -> NineServer<S> {
-        NineServer {
+    /// Serves `fs`. `limits.files` bounds the fids one client (account, label set) holds across
+    /// all its connections, `limits.state` the connections it has minted; the limits must leave
+    /// the open-call headroom ([`Admission::new`]) and should fit the server's budget
+    /// ([`Limits::fits`]).
+    pub fn new(fs: S, limits: Limits) -> Result<NineServer<S>, Unsized> {
+        Ok(NineServer {
             fs,
             conns: Vec::new(),
-            admission: Admission::new(limits),
+            minted: Vec::new(),
+            pools: Vec::new(),
+            next_badge: FIRST_MINTED_BADGE,
+            admission: Admission::new(limits)?,
             scratch: Vec::new(),
             stat: FileStat::default(),
-        }
+        })
     }
 
     /// Fids open on the caller's connection.
     pub fn fids(&self, caller: &Caller) -> usize {
-        self.conn(&ConnKey::of(caller)).map_or(0, |i| self.conns[i].1.len())
+        self.conn(&ConnKey::of(caller)).map_or(0, |i| self.conns[i].fids.len())
     }
 
-    /// The last handle with `badge` is gone (the kernel's notice, answer 53): every connection
-    /// through it is over, so its fids are clunked and their charges released. The notice's
-    /// receive result arrives with a `redoubt-sys` update; a server's receive loop calls this
-    /// when it gets one.
-    pub fn badge_closed(&mut self, badge: u64) {
-        while let Some(i) = self.conns.iter().position(|(key, _)| key.badge == badge) {
-            let (key, fids) = self.conns.swap_remove(i);
-            for (_, fid) in fids {
-                self.drop_fid(&key, fid);
-            }
+    /// Connections minted and not yet disconnected.
+    pub fn connections(&self) -> usize { self.minted.len() }
+
+    /// Admission, to see what each client holds.
+    pub fn admission(&self) -> &Admission { &self.admission }
+
+    /// Handles one call and replies to it: 9P, or `ninep_common`; any other opcode is malformed.
+    pub fn serve(&mut self, request: Request) -> Result<(), Error> {
+        self.serve_with(request, |_, request| reply_closing(request, &MALFORMED, &Handles::new()))
+    }
+
+    /// Handles one call and replies to it: 9P and `ninep_common` here, and a typed opcode above
+    /// [`NINEP_COMMON_OPCODES`] by `own` (the server's own protocol on this endpoint; its
+    /// dispatch closes handles the protocol did not ask for, as [`super::typed::serve_call`]
+    /// does).
+    pub fn serve_with(
+        &mut self,
+        mut request: Request,
+        own: impl FnOnce(&mut Self, Request) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        let (caller, words) = (request.caller, request.words);
+        // A missing handle (revoked on its way, R10) makes any request malformed (WIRE.md); the
+        // ones present are closed all the same.
+        let (handles, missing) = match super::typed::present(&request.handles) {
+            Ok(handles) => (handles, false),
+            Err(present) => (present, true),
+        };
+        if words[0] == 0 {
+            // Handles are no part of 9P; closing them keeps a client from filling our table.
+            let words = if missing || words != WORDS_9P {
+                MALFORMED
+            } else {
+                match self.answer_in_place(&caller, request.lend()) {
+                    Some(()) => WORDS_9P,
+                    None => MALFORMED,
+                }
+            };
+            return reply_closing(request, &words, &handles);
         }
-    }
-
-    /// Handles one call and replies to it.
-    pub fn serve(&mut self, mut request: Request) -> Result<(), Error> {
-        // Handles are no part of 9P; closing them keeps a client from filling our handle table.
-        // A missing one (revoked on its way, R10) makes the request malformed, as in the typed
-        // layer (WIRE.md).
-        let missing = request.handles.as_slice().contains(&None);
-        for handle in request.handles.as_slice().iter().flatten() {
+        if !NINEP_COMMON_OPCODES.contains(&words[0]) {
+            return own(self, request);
+        }
+        if missing {
+            return reply_closing(request, &MALFORMED, &handles);
+        }
+        let mut kernel = Kernel(request.id());
+        let outcome = self.answer_common(&caller, &words, &handles, request.lend(), &mut kernel);
+        // Handles that do not travel are closed before the reply, so the caller never sees the
+        // server's table holding them; those that travel, once the reply has copied them.
+        let (sending, now): (&[Handle], &[Handle]) = (outcome.send.as_slice(), outcome.close.as_slice());
+        for handle in now.iter().filter(|h| !sending.contains(h)) {
             let _ = crate::handle::close(*handle);
         }
-        let words = if missing || request.words != WORDS_9P {
-            MALFORMED
-        } else {
-            let caller = request.caller;
-            match self.answer_in_place(&caller, request.lend()) {
-                Some(()) => WORDS_9P,
-                None => MALFORMED,
-            }
+        let sent = request.reply(&outcome.words, sending).map_err(|(e, _)| e);
+        for handle in now.iter().filter(|h| sending.contains(h)) {
+            let _ = crate::handle::close(*handle);
+        }
+        sent
+    }
+
+    /// Answers a `ninep_common` request without replying: its outcome, the reply's fields
+    /// written into `lend`. Makes no system call but through `kernel`.
+    pub fn answer_common(
+        &mut self,
+        caller: &Caller,
+        words: &Words,
+        handles: &Handles,
+        lend: &mut [u8],
+        kernel: &mut impl Minter,
+    ) -> Outcome {
+        let none = Handles::new();
+        // Neither operation takes a handle, so any the request brought are closed unread:
+        // one that does not decode is malformed.
+        let decoded = ninep_common::Message::decode(words, lend, handles.as_slice().len());
+        let fail = |code: u32| Outcome {
+            words: redoubt_wire::typed::error_reply(code),
+            send: none,
+            close: *handles,
         };
-        // Words and no handles always encode, so the request cannot come back.
-        request.reply(&words, &[]).map_err(|(e, _)| e)
+        match decoded {
+            Err(_) => fail(ErrorCode::Malformed.code()),
+            Ok(ninep_common::Message::Disconnect(d)) => match self.disconnect(caller, d.id) {
+                Ok(()) => {
+                    // An inline reply with no fields always encodes.
+                    let words = Reply::Disconnect(ninep_common::DisconnectReply {}).encode(&mut []);
+                    words.map_or_else(
+                        |_| fail(ErrorCode::Malformed.code()),
+                        |words| Outcome { words, send: none, close: none },
+                    )
+                }
+                Err(()) => fail(NOT_YOURS),
+            },
+            Ok(ninep_common::Message::NewConnection(n)) => {
+                // `root` borrows the lend, which the reply is written over: the connection is
+                // made before the reply is encoded.
+                match self.new_connection(caller, n.root, n.quota, kernel) {
+                    Err(_) => fail(ErrorCode::Refused.code()),
+                    Ok((handle, id, badge)) => {
+                        match Reply::NewConnection(NewConnectionReply { id }).encode(lend) {
+                            // Our copy of the handle is closed once the reply has copied it.
+                            Ok(words) => {
+                                let send = Handles::from_slice(&[handle]).unwrap_or(none);
+                                Outcome { words, send, close: send }
+                            }
+                            // No room for the reply: the connection is undone.
+                            Err(_) => {
+                                self.forget(badge);
+                                let close = Handles::from_slice(&[handle]).unwrap_or(none);
+                                Outcome { words: MALFORMED, send: none, close }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Reads the T-message at the front of `lend` and writes the R-message over it; `None` if
@@ -339,10 +540,8 @@ impl<S: FileServer> NineServer<S> {
             Body::Tversion { msize, version } => {
                 // A new session on this connection: every fid on it goes (intro(5), version).
                 if let Some(i) = self.conn(&key) {
-                    let (_, fids) = self.conns.swap_remove(i);
-                    for (_, fid) in fids {
-                        self.drop_fid(&key, fid);
-                    }
+                    let conn = self.conns.swap_remove(i);
+                    self.drop_fids(conn);
                 }
                 // A version we do not speak is answered "unknown" (intro(5), version).
                 let version = if version.starts_with(VERSION) { VERSION } else { "unknown" };
@@ -353,16 +552,15 @@ impl<S: FileServer> NineServer<S> {
                 if afid != NOFID {
                     return Err(NineError::NO_AUTH);
                 }
-                self.reserve_fid(&key, fid)?;
-                let attached = self.fs.attach(caller, aname).and_then(|(node, qid)| {
-                    self.may_read(caller, &node)?;
+                self.reserve_fid(caller, fid)?;
+                let attached = self.root(caller, aname).and_then(|(node, qid)| {
                     let mut steps = Vec::new();
                     steps.try_reserve(1).map_err(|_| NineError::NO_MEMORY)?;
                     steps.push((node, qid));
                     Ok((Fid { steps, open: None, dir_next: (0, 0) }, qid))
                 });
-                let (state, qid) = self.unreserve_on_error(&key, attached)?;
-                self.insert_fid(&key, fid, state)?;
+                let (state, qid) = self.unreserve_on_error(caller, attached)?;
+                self.insert_fid(caller, fid, state)?;
                 Ok(Body::Rattach { qid })
             }
             Body::Twalk { fid, newfid, wnames } => {
@@ -377,7 +575,14 @@ impl<S: FileServer> NineServer<S> {
                 }
                 let node = f.node();
                 self.check_open(caller, &node, mode, f.is_dir())?;
+                // Truncation frees the file's bytes; they are credited once it is done.
+                let metered = if mode & mode::OTRUNC != 0 { self.metered(caller, &node)? } else { None };
                 let qid = self.fs.open(caller, &node, mode)?;
+                if let Some((pool, before)) = metered {
+                    let after = self.fs.stat(caller, &node).map_or(before, |s| s.length);
+                    self.pools[pool].used =
+                        self.pools[pool].used.saturating_sub(before.saturating_sub(after));
+                }
                 let f = self.fid_mut(&key, fid)?;
                 f.open = Some(mode);
                 f.dir_next = (0, 0);
@@ -417,10 +622,22 @@ impl<S: FileServer> NineServer<S> {
                 if !f.open.is_some_and(|m| matches!(m & 3, mode::OWRITE | mode::ORDWR)) {
                     return Err(NineError::NOT_OPEN);
                 }
-                offset.checked_add(data.len() as u64).ok_or(NineError::BAD_OFFSET)?;
+                let end = offset.checked_add(data.len() as u64).ok_or(NineError::BAD_OFFSET)?;
                 let node = f.node();
                 self.check_labels(caller, &node, Access::Write)?;
+                // A quota must hold all the write could add; it is charged what it did add.
+                let metered = self.metered(caller, &node)?;
+                if let Some((pool, before)) = metered {
+                    if self.pools[pool].free() < end.saturating_sub(before) {
+                        return Err(NineError::QUOTA);
+                    }
+                }
                 let n = self.fs.write(caller, &node, offset, data)?;
+                if let Some((pool, before)) = metered {
+                    let after = self.fs.stat(caller, &node).map_or(before, |s| s.length);
+                    self.pools[pool].used =
+                        self.pools[pool].used.saturating_add(after.saturating_sub(before));
+                }
                 // A server claiming more than it was given is a bug; do not pass it on.
                 let count = u32::try_from(n)
                     .ok()
@@ -430,17 +647,22 @@ impl<S: FileServer> NineServer<S> {
             }
             Body::Tclunk { fid } => {
                 let f = self.remove_fid(&key, fid)?;
-                self.drop_fid(&key, f);
+                self.drop_fid(key.client, f.1, f.0);
                 Ok(Body::Rclunk)
             }
             Body::Tremove { fid } => {
                 // The fid goes whether or not the remove succeeds (intro(5), remove).
-                let f = self.remove_fid(&key, fid)?;
-                let node = f.node();
-                let result = self
-                    .check_labels(caller, &node, Access::Write)
-                    .and_then(|()| self.fs.remove(caller, &node));
-                self.drop_fid(&key, f);
+                let (fid, share) = self.remove_fid(&key, fid)?;
+                let node = fid.node();
+                let result = self.check_labels(caller, &node, Access::Write).and_then(|()| {
+                    let metered = self.metered(caller, &node)?;
+                    self.fs.remove(caller, &node)?;
+                    if let Some((pool, length)) = metered {
+                        self.pools[pool].used = self.pools[pool].used.saturating_sub(length);
+                    }
+                    Ok(())
+                });
+                self.drop_fid(key.client, share, fid);
                 result.map(|()| Body::Rremove)
             }
             Body::Tstat { fid } => {
@@ -454,6 +676,207 @@ impl<S: FileServer> NineServer<S> {
             // R-messages travel only from servers.
             _ => Err(NineError::BAD_MESSAGE),
         }
+    }
+
+    /// The root the caller's connection attaches at, checked readable.
+    fn root(&mut self, caller: &Caller, aname: &str) -> Result<(S::Node, Qid), NineError> {
+        let root = if caller.badge >= FIRST_MINTED_BADGE {
+            let conn =
+                self.minted.iter().find(|m| m.badge == caller.badge).ok_or(NineError::NO_CONNECTION)?;
+            conn.root.clone()
+        } else {
+            self.fs.attach(caller, aname)?
+        };
+        self.may_read(caller, &root.0)?;
+        Ok(root)
+    }
+
+    /// The share `caller`'s requests count in: its badge, or, for a connection it minted for
+    /// itself, the share of the connection it minted it through.
+    fn share(&self, caller: &Caller) -> u64 {
+        let client = AdmitKey::of(caller);
+        let mut badge = caller.badge;
+        // Each step goes to an older badge, so this ends; the bound is only a backstop.
+        for _ in 0..=self.minted.len() {
+            match self.minted.iter().find(|m| m.badge == badge) {
+                Some(m) if m.requester.client == client => badge = m.parent,
+                _ => break,
+            }
+        }
+        badge
+    }
+
+    /// `new_connection`: mints a connection rooted at `root` below the caller's own root, with
+    /// `quota` bytes carved from the caller's quota (0: the caller's quota). Returns the new
+    /// handle, its id and its badge.
+    fn new_connection(
+        &mut self,
+        caller: &Caller,
+        root: &str,
+        quota: u64,
+        kernel: &mut impl Minter,
+    ) -> Result<(Handle, u64, u64), NineError> {
+        // Admission first, so a client at its cap makes the server do no work for it.
+        let (requester, share) = (ConnKey::of(caller), self.share(caller));
+        self.admission.admit(requester.client, share, Resource::State).map_err(|_| NineError::TOO_MANY)?;
+        let made = self.make_connection(caller, root, quota, kernel, share);
+        if made.is_err() {
+            self.admission.release(requester.client, share, Resource::State);
+        }
+        made
+    }
+
+    /// The rest of `new_connection`, its admission taken.
+    fn make_connection(
+        &mut self,
+        caller: &Caller,
+        root: &str,
+        quota: u64,
+        kernel: &mut impl Minter,
+        requester_share: u64,
+    ) -> Result<(Handle, u64, u64), NineError> {
+        // `root` is only a path, relative to the caller's root, cleaned so it never climbs above
+        // it, and every step is checked as a `Twalk`'s is.
+        let names = path::clean(root).map_err(|_| NineError::BAD_NAME)?;
+        let mut steps = Vec::new();
+        steps.try_reserve(names.len() + 1).map_err(|_| NineError::NO_MEMORY)?;
+        steps.push(self.root(caller, "")?);
+        for name in &names {
+            self.step(caller, &mut steps, name)?;
+        }
+        let new_root = steps.pop().ok_or(NineError::NOT_FOUND)?;
+        let pool = self.pool(caller.badge)?;
+        if quota > self.pools[pool].free() {
+            return Err(NineError::QUOTA);
+        }
+        let badge = NonZeroU64::new(self.next_badge).filter(|b| b.get() >= FIRST_MINTED_BADGE);
+        let badge = badge.ok_or(NineError::TOO_MANY)?;
+        let id = self.fresh_id(kernel)?;
+        self.minted.try_reserve(1).map_err(|_| NineError::NO_MEMORY)?;
+        self.pools.try_reserve(1).map_err(|_| NineError::NO_MEMORY)?;
+        let handle = kernel.mint(badge).map_err(|_| NineError::NO_MEMORY)?;
+        // Never reused, whatever happens to this connection (answer 86).
+        self.next_badge = badge.get().wrapping_add(1);
+        let own_pool = if quota == 0 {
+            self.pools[pool].id
+        } else {
+            let parent = self.pools[pool].id;
+            self.pools[pool].carved += quota;
+            self.pools.push(Pool { id: badge.get(), limit: quota, used: 0, carved: 0, parent: Some(parent) });
+            badge.get()
+        };
+        self.minted.push(Minted {
+            badge: badge.get(),
+            id,
+            requester: ConnKey::of(caller),
+            requester_share,
+            parent: caller.badge,
+            root: new_root,
+            pool: own_pool,
+        });
+        Ok((handle, id, badge.get()))
+    }
+
+    /// A random connection id no live connection has: unpredictable, never a counter
+    /// (CONTAINMENT.md), so it tells nobody how many others were made.
+    fn fresh_id(&self, kernel: &mut impl Minter) -> Result<u64, NineError> {
+        for _ in 0..4 {
+            let id = kernel.random().map_err(|_| NineError::NO_MEMORY)?;
+            if id != 0 && !self.minted.iter().any(|m| m.id == id) {
+                return Ok(id);
+            }
+        }
+        Err(NineError::NO_MEMORY)
+    }
+
+    /// `disconnect(id)` from `caller`: frees the connection and every connection minted under
+    /// it. `Err` if the caller did not receive `id`.
+    fn disconnect(&mut self, caller: &Caller, id: u64) -> Result<(), ()> {
+        let requester = ConnKey::of(caller);
+        let top =
+            self.minted.iter().find(|m| m.id == id && m.requester == requester).map(|m| m.badge).ok_or(())?;
+        // Everything minted under it, found by walking the parent links up to it.
+        let mut doomed: Vec<u64> = Vec::new();
+        for m in &self.minted {
+            let mut badge = m.badge;
+            for _ in 0..=self.minted.len() {
+                if badge == top {
+                    // No memory to list one more: free what is listed; the rest stays, still
+                    // under a connection that is gone, and is freed by a later disconnect.
+                    if doomed.try_reserve(1).is_ok() {
+                        doomed.push(m.badge);
+                    }
+                    break;
+                }
+                match self.minted.iter().find(|p| p.badge == badge) {
+                    Some(p) => badge = p.parent,
+                    None => break,
+                }
+            }
+        }
+        // Children before parents (they were minted later), so a child's quota returns to its
+        // parent's before that one returns to its own parent.
+        doomed.sort_unstable_by(|a, b| b.cmp(a));
+        for badge in doomed {
+            self.forget(badge);
+        }
+        Ok(())
+    }
+
+    /// Frees one minted connection: its fids, its admission, its quota. Not its children.
+    fn forget(&mut self, badge: u64) {
+        while let Some(i) = self.conns.iter().position(|c| c.key.badge == badge) {
+            let conn = self.conns.swap_remove(i);
+            self.drop_fids(conn);
+        }
+        let Some(i) = self.minted.iter().position(|m| m.badge == badge) else { return };
+        let m = self.minted.swap_remove(i);
+        self.admission.release(m.requester.client, m.requester_share, Resource::State);
+        if let Some(p) = self.pools.iter().position(|p| p.id == badge) {
+            let pool = self.pools.swap_remove(p);
+            // Its carving comes back to its parent, and what its files hold stays charged there.
+            if let Some(parent) = self.pools.iter_mut().find(|p| Some(p.id) == pool.parent) {
+                parent.carved = parent.carved.saturating_sub(pool.limit);
+                parent.used = parent.used.saturating_add(pool.used);
+            }
+        }
+    }
+
+    /// The quota a connection's files are charged to, made on first use for one of the server's
+    /// own badges.
+    fn pool(&mut self, badge: u64) -> Result<usize, NineError> {
+        let id = if badge >= FIRST_MINTED_BADGE {
+            self.minted.iter().find(|m| m.badge == badge).map(|m| m.pool).ok_or(NineError::NO_CONNECTION)?
+        } else {
+            badge
+        };
+        if let Some(i) = self.pools.iter().position(|p| p.id == id) {
+            return Ok(i);
+        }
+        if badge >= FIRST_MINTED_BADGE {
+            // A minted connection's quota is its own or its parent's, which outlive it.
+            return Err(NineError::NO_CONNECTION);
+        }
+        self.pools.try_reserve(1).map_err(|_| NineError::NO_MEMORY)?;
+        let limit = self.fs.quota(badge);
+        self.pools.push(Pool { id, limit, used: 0, carved: 0, parent: None });
+        Ok(self.pools.len() - 1)
+    }
+
+    /// For a write, truncation or remove through the caller's connection: its quota and the
+    /// file's length now, or `None` if the quota is unlimited, so a server with no quotas (a
+    /// console) is never asked for a `stat`. A quota whose file length cannot be read refuses.
+    fn metered(&mut self, caller: &Caller, node: &S::Node) -> Result<Option<(usize, u64)>, NineError> {
+        let pool = self.pool(caller.badge)?;
+        if self.pools[pool].limit == u64::MAX {
+            return Ok(None);
+        }
+        Ok(Some((pool, self.fs.stat(caller, node)?.length)))
+    }
+
+    /// Bytes free in the quota the caller's connection writes to.
+    pub fn quota_free(&mut self, caller: &Caller) -> Option<u64> {
+        self.pool(caller.badge).ok().map(|i| self.pools[i].free())
     }
 
     /// Walks `newfid` from `fid` along `names` and writes the qids walked into `qids`; returns
@@ -474,7 +897,7 @@ impl<S: FileServer> NineServer<S> {
         let mut steps = copy_steps(&f.steps)?;
         let charged = newfid != fid;
         if charged {
-            self.reserve_fid(&key, newfid)?;
+            self.reserve_fid(caller, newfid)?;
         }
         let mut walked = 0;
         for name in names {
@@ -488,14 +911,14 @@ impl<S: FileServer> NineServer<S> {
                 // The first name failing is an error; a later one ends the walk short.
                 Err(e) => {
                     if charged {
-                        self.admission.release(key.client, Resource::Files);
+                        self.unreserve(caller);
                     }
                     return if walked == 0 { Err(e) } else { Ok(walked) };
                 }
             }
         }
         if charged {
-            self.insert_fid(&key, newfid, Fid { steps, open: None, dir_next: (0, 0) })?;
+            self.insert_fid(caller, newfid, Fid { steps, open: None, dir_next: (0, 0) })?;
         } else {
             self.fid_mut(&key, fid)?.steps = steps;
         }
@@ -607,12 +1030,12 @@ impl<S: FileServer> NineServer<S> {
         check(caller.labels.as_slice(), self.fs.labels(node), access).map_err(|_| NineError::PERMISSION)
     }
 
-    fn conn(&self, key: &ConnKey) -> Option<usize> { self.conns.iter().position(|(k, _)| k == key) }
+    fn conn(&self, key: &ConnKey) -> Option<usize> { self.conns.iter().position(|c| c.key == *key) }
 
     fn fid(&self, key: &ConnKey, fid: u32) -> Result<&Fid<S::Node>, NineError> {
         let conn = self.conn(key).ok_or(NineError::UNKNOWN_FID)?;
         self.conns[conn]
-            .1
+            .fids
             .iter()
             .find(|(f, _)| *f == fid)
             .map(|(_, state)| state)
@@ -621,40 +1044,62 @@ impl<S: FileServer> NineServer<S> {
 
     fn fid_mut(&mut self, key: &ConnKey, fid: u32) -> Result<&mut Fid<S::Node>, NineError> {
         let conn = self.conn(key).ok_or(NineError::UNKNOWN_FID)?;
-        let fids = &mut self.conns[conn].1;
+        let fids = &mut self.conns[conn].fids;
         fids.iter_mut().find(|(f, _)| *f == fid).map(|(_, state)| state).ok_or(NineError::UNKNOWN_FID)
     }
 
-    /// Checks that `fid` can be added to the connection and charges it to the client: all before
-    /// the server does any work for it. Undone by `insert_fid` failing or `unreserve_on_error`.
-    fn reserve_fid(&mut self, key: &ConnKey, fid: u32) -> Result<(), NineError> {
-        if fid == NOFID || self.fid(key, fid).is_ok() {
-            return Err(NineError::FID_IN_USE);
-        }
-        if self.conn(key).is_some_and(|i| self.conns[i].1.len() >= MAX_FIDS) {
-            return Err(NineError::TOO_MANY);
-        }
-        self.admission.admit(key.client, Resource::Files).map_err(|_| NineError::TOO_MANY)
+    /// The share a connection's fids are charged to: fixed when its table is made, so a fid is
+    /// released from the share it was taken from.
+    fn fid_share(&self, caller: &Caller) -> u64 {
+        self.conn(&ConnKey::of(caller)).map_or_else(|| self.share(caller), |i| self.conns[i].share)
     }
 
-    fn unreserve_on_error<T>(&mut self, key: &ConnKey, result: Result<T, NineError>) -> Result<T, NineError> {
+    /// Checks that `fid` can be added to the connection and charges it to the client: all before
+    /// the server does any work for it. Undone by `insert_fid` failing or `unreserve`.
+    fn reserve_fid(&mut self, caller: &Caller, fid: u32) -> Result<(), NineError> {
+        let key = ConnKey::of(caller);
+        if caller.badge >= FIRST_MINTED_BADGE && !self.minted.iter().any(|m| m.badge == caller.badge) {
+            return Err(NineError::NO_CONNECTION);
+        }
+        if fid == NOFID || self.fid(&key, fid).is_ok() {
+            return Err(NineError::FID_IN_USE);
+        }
+        if self.conn(&key).is_some_and(|i| self.conns[i].fids.len() >= MAX_FIDS) {
+            return Err(NineError::TOO_MANY);
+        }
+        let share = self.fid_share(caller);
+        self.admission.admit(key.client, share, Resource::Files).map_err(|_| NineError::TOO_MANY)
+    }
+
+    fn unreserve(&mut self, caller: &Caller) {
+        let share = self.fid_share(caller);
+        self.admission.release(AdmitKey::of(caller), share, Resource::Files);
+    }
+
+    fn unreserve_on_error<T>(
+        &mut self,
+        caller: &Caller,
+        result: Result<T, NineError>,
+    ) -> Result<T, NineError> {
         if result.is_err() {
-            self.admission.release(key.client, Resource::Files);
+            self.unreserve(caller);
         }
         result
     }
 
     /// Adds a reserved fid; on failure (no memory) its reservation is released.
-    fn insert_fid(&mut self, key: &ConnKey, fid: u32, state: Fid<S::Node>) -> Result<(), NineError> {
-        let conn = match self.conn(key) {
+    fn insert_fid(&mut self, caller: &Caller, fid: u32, state: Fid<S::Node>) -> Result<(), NineError> {
+        let key = ConnKey::of(caller);
+        let share = self.fid_share(caller);
+        let conn = match self.conn(&key) {
             Some(conn) => Ok(conn),
             None => self.conns.try_reserve(1).map(|()| {
-                self.conns.push((*key, Vec::new()));
+                self.conns.push(Fids { key, share, fids: Vec::new() });
                 self.conns.len() - 1
             }),
         };
         let fids = conn.and_then(|conn| {
-            let fids = &mut self.conns[conn].1;
+            let fids = &mut self.conns[conn].fids;
             fids.try_reserve(1).map(|()| fids)
         });
         match fids {
@@ -664,29 +1109,48 @@ impl<S: FileServer> NineServer<S> {
             }
             Err(_) => {
                 // A connection pushed above with no fids must not stay.
-                self.conns.retain(|(_, fids)| !fids.is_empty());
-                self.admission.release(key.client, Resource::Files);
+                self.conns.retain(|c| !c.fids.is_empty());
+                self.admission.release(key.client, share, Resource::Files);
                 Err(NineError::NO_MEMORY)
             }
         }
     }
 
-    fn remove_fid(&mut self, key: &ConnKey, fid: u32) -> Result<Fid<S::Node>, NineError> {
+    /// Takes `fid` out of its table; returns it and the share it was charged to.
+    fn remove_fid(&mut self, key: &ConnKey, fid: u32) -> Result<(Fid<S::Node>, u64), NineError> {
         let conn = self.conn(key).ok_or(NineError::UNKNOWN_FID)?;
-        let fids = &mut self.conns[conn].1;
+        let share = self.conns[conn].share;
+        let fids = &mut self.conns[conn].fids;
         let index = fids.iter().position(|(f, _)| *f == fid).ok_or(NineError::UNKNOWN_FID)?;
         let (_, state) = fids.swap_remove(index);
         if fids.is_empty() {
             self.conns.swap_remove(conn);
         }
-        Ok(state)
+        Ok((state, share))
     }
 
     /// A fid is gone: release its charge and clunk the node it rested on.
-    fn drop_fid(&mut self, key: &ConnKey, fid: Fid<S::Node>) {
-        self.admission.release(key.client, Resource::Files);
+    fn drop_fid(&mut self, client: AdmitKey, share: u64, fid: Fid<S::Node>) {
+        self.admission.release(client, share, Resource::Files);
         self.fs.clunk(&fid.node());
     }
+
+    /// Every fid of a table is gone.
+    fn drop_fids(&mut self, conn: Fids<S::Node>) {
+        for (_, fid) in conn.fids {
+            self.drop_fid(conn.key.client, conn.share, fid);
+        }
+    }
+}
+
+/// Closes `close` (what the request brought), then replies with `words` and no handles.
+fn reply_closing(request: Request, words: &Words, close: &Handles) -> Result<(), Error> {
+    // Closed first, so the caller never sees the server's table holding them.
+    for handle in close.as_slice() {
+        let _ = crate::handle::close(*handle);
+    }
+    // Words and no handles always encode, so the request cannot come back.
+    request.reply(words, &[]).map_err(|(e, _)| e)
 }
 
 /// Refuses unknown mode bits, and anything but plain reading for a directory.

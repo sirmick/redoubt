@@ -3,8 +3,9 @@
 //! Each fake process is a host thread with its own handle table, account and labels; they
 //! share the host's address space, so a lend is "mapped" into the server by passing its
 //! address, and records are read and written where the runtime put them. It models what the
-//! runtime and the echo pair use (endpoints, badges, `mint`, the four IPC calls, `map_anon`,
-//! `unmap`, `handle_close`, `time_now`, `random`, `process_exit`) and not the rest: no budgets
+//! runtime and the echo pair use (endpoints, badges, `mint`, the four IPC calls, `serve`,
+//! abandoned calls and their notices, `map_anon`, `unmap`, `handle_close`, `time_now`, `random`,
+//! `process_exit`) and not the rest: no budgets
 //! or charging, no label check between user budgets (R1), no fair waiting (R2), no lend
 //! unmapping from the caller. The executable model (`redoubt/model`, WP-M0) should replace it
 //! once merged. Calls it does not model panic, so a test cannot rely on them by accident.
@@ -70,6 +71,12 @@ struct State {
     taken: HashSet<u64>,
     exits: HashMap<usize, u32>,
     rng: u64,
+    /// Abandoned-call notices not yet received: (receiving process, endpoint, message id).
+    notices: VecDeque<(usize, usize, u64)>,
+    /// Taken calls whose caller gave up: their reply reaches nobody.
+    abandoned: HashSet<u64>,
+    /// `serve` and `reply` as they happened: (process, call, message id).
+    log: Vec<(usize, &'static str, u64)>,
 }
 
 pub struct Fake {
@@ -130,6 +137,14 @@ impl Fake {
         install(&mut s, to, Endpoint { badge, ..ep })
     }
 
+    /// Copies `from`'s handle `from_handle` into `to`, badge and all: what `process_start` does
+    /// with the handles it installs.
+    pub fn copy(&self, from: usize, from_handle: Handle, to: usize) -> Handle {
+        let mut s = self.lock();
+        let ep = lookup(&s, from, from_handle).expect("copy a handle that exists");
+        install(&mut s, to, ep)
+    }
+
     /// Destroys the endpoint: its receivers and blocked callers get `Dead`.
     pub fn destroy(&self, owner: usize, handle: Handle) {
         let mut s = self.lock();
@@ -143,6 +158,16 @@ impl Fake {
         let s = self.lock();
         let p = &s.processes[pid];
         (p.handles.iter().flatten().count(), p.mappings.values().map(|len| len / PAGE_SIZE).sum())
+    }
+
+    /// The `serve` and `reply` calls `pid` made, in order: ("serve" or "reply", message id).
+    pub fn log(&self, pid: usize) -> Vec<(&'static str, u64)> {
+        self.lock().log.iter().filter(|(p, _, _)| *p == pid).map(|(_, call, id)| (*call, *id)).collect()
+    }
+
+    /// Calls taken and not yet replied to, by any process.
+    pub fn open_calls(&self, pid: usize) -> usize {
+        self.lock().open.values().filter(|(p, _)| *p == pid).count()
     }
 
     /// Runs `body` as process `pid` on its own thread; the handle yields its exit code.
@@ -310,7 +335,11 @@ impl redoubt_rt::HostKernel for Fake {
                     .map(|h| lookup(&s, pid, *h))
                     .collect::<Result<Vec<_>, _>>()?;
                 s.open.remove(&msg_id.get());
-                s.replies.insert(msg_id.get(), (body.words, handles));
+                s.log.push((pid, "reply", msg_id.get()));
+                // An abandoned call's reply is discarded (R3).
+                if !s.abandoned.remove(&msg_id.get()) {
+                    s.replies.insert(msg_id.get(), (body.words, handles));
+                }
                 self.changed.notify_all();
                 Ok(Return::Nothing)
             }
@@ -325,6 +354,16 @@ impl redoubt_rt::HostKernel for Fake {
             Call::ProcessExit { code } => {
                 self.lock().exits.insert(pid, code);
                 std::panic::resume_unwind(Box::new(Exited(code)))
+            }
+            Call::Serve { msg_id } => {
+                let mut s = self.lock();
+                match s.open.get(&msg_id.get()) {
+                    Some(&(receiver, _)) if receiver == pid => {
+                        s.log.push((pid, "serve", msg_id.get()));
+                        Ok(Return::Nothing)
+                    }
+                    _ => Err(Error::InvalidArgument),
+                }
             }
             other => panic!("the fake kernel does not model {:?}", other.number().name()),
         }
@@ -385,9 +424,19 @@ impl Fake {
             }
             if !self.wait(&mut guard, deadline) {
                 let s = guard.as_mut().unwrap();
-                // Only a message still queued times out here; a taken call waits for its reply.
                 if let Some(i) = s.endpoints[ep.id].queue.iter().position(|p| p.id == id) {
                     s.endpoints[ep.id].queue.remove(i);
+                    return Err(Error::Timeout);
+                }
+                // A call the server took is abandoned (R3): it stays open there until the
+                // server replies, and the server is told.
+                if let Some(&(receiver, endpoint)) = s.open.get(&id.get()) {
+                    s.abandoned.insert(id.get());
+                    s.notices.push_back((receiver, endpoint, id.get()));
+                    self.changed.notify_all();
+                    return Err(Error::Timeout);
+                }
+                if !is_call {
                     return Err(Error::Timeout);
                 }
             }
@@ -409,6 +458,14 @@ impl Fake {
             let s = guard.as_mut().unwrap();
             if s.endpoints[ep.id].dead {
                 return Err(Error::Dead);
+            }
+            // Notices before messages.
+            if let Some(i) = s.notices.iter().position(|(p, e, _)| *p == pid && *e == ep.id) {
+                let (_, _, id) = s.notices.remove(i).unwrap();
+                let notice = Received::Abandoned(NonZeroU64::new(id).unwrap());
+                // SAFETY: as below, the runtime's live, 8-aligned receive record.
+                unsafe { (rec as *mut [u64; RECEIVED_SLOTS]).write(notice.encode()) };
+                return Ok(Return::Nothing);
             }
             if let Some(p) = s.endpoints[ep.id].queue.pop_front() {
                 let handles: Vec<Handle> = p.handles.iter().map(|e| install(s, pid, *e)).collect();

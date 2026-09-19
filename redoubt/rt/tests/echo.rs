@@ -1,6 +1,7 @@
 //! The echo pair (`src/bin/echo-server.rs`, `src/bin/echo-client.rs`), unchanged, as two fake
 //! processes: each gets a startup block written with `StartupBuilder`, exactly as a launcher
-//! would, and runs its entry function. Then a hostile client attacks the same server.
+//! would, and runs its entry function. Then a hostile client attacks the same server, and a
+//! launcher gives a child a fresh connection and disconnects it.
 
 mod common;
 
@@ -11,6 +12,7 @@ mod echo_server;
 
 use common::fake;
 use redoubt_rt::abi::{FOREVER, Handle, PAGE_SIZE};
+use redoubt_rt::client::{Client, ClientError};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::Buffer;
 use redoubt_rt::server::MALFORMED;
@@ -131,6 +133,66 @@ fn a_hostile_client_does_not_hurt_the_server_or_other_clients() {
     let connection = f.grant(server, receive, honest, 4);
     let block = StartupBuilder::new(connection.index()).namespace("/", connection).finish().unwrap();
     assert_eq!(launch(honest, block, echo_client::run).join().unwrap(), 0);
+    f.destroy(server, receive);
+    assert_eq!(server_thread.join().unwrap(), 0);
+}
+
+#[test]
+fn the_echo_servers_caps_fit_its_budget() {
+    assert!(echo_server::LIMITS.fits(&echo_server::COST, echo_server::BUDGET));
+}
+
+/// INIT.md, launching gives fresh connections: a launcher asks the server for a connection for
+/// its child, passes that, and disconnects it when the child is done. Only the launcher can.
+#[test]
+fn a_launcher_gives_its_child_a_fresh_connection_and_disconnects_it() {
+    let (server, receive, launcher, connection) = pair(1001, 5);
+    let f = fake();
+    let server_thread = launch(server, server_block(receive), echo_server::serve);
+    let child = f.process(1001, &[]);
+    let stranger = f.process(1001, &[]);
+    let strangers_conn = f.grant(server, receive, stranger, 6);
+    let handles_before = f.held(server).0;
+
+    let (fresh, id) = f.as_process(launcher, || {
+        let mut client = Client::new(Endpoint::from_handle(connection), 1).unwrap();
+        let (fresh, id) = client.new_connection("", 0).unwrap();
+        // Rooted below the launcher's root; a file that is not there is refused.
+        assert_eq!(client.new_connection("nope", 0).err(), Some(ClientError::Remote));
+        (fresh.handle(), id)
+    });
+    // The server kept no handle: its copy of the minted one was closed once the reply carried it.
+    assert_eq!(f.held(server).0, handles_before);
+    let fresh = f.copy(launcher, fresh, child);
+    let block = StartupBuilder::new(fresh.index()).namespace("/", fresh).finish().unwrap();
+    assert_eq!(launch(child, block, echo_client::run).join().unwrap(), 0);
+
+    // Someone else cannot disconnect the child, even knowing its id.
+    f.as_process(stranger, || {
+        let mut client = Client::new(Endpoint::from_handle(strangers_conn), 1).unwrap();
+        assert_eq!(client.disconnect(id), Err(ClientError::Remote));
+    });
+    f.as_process(child, || {
+        let mut client = Client::new(Endpoint::from_handle(fresh), 1).unwrap();
+        client.attach(7, "").unwrap(); // the echo client still holds fid 0
+    });
+    // The launcher can; then the child's connection is gone, its fid with it.
+    f.as_process(launcher, || {
+        let mut client = Client::new(Endpoint::from_handle(connection), 1).unwrap();
+        client.disconnect(id).unwrap();
+        assert_eq!(client.disconnect(id), Err(ClientError::Remote), "an id is spent once used");
+    });
+    f.as_process(child, || {
+        let mut client = Client::new(Endpoint::from_handle(fresh), 1).unwrap();
+        assert_eq!(client.attach(1, ""), Err(ClientError::Remote));
+        // A ninep_common call bringing handles it did not ask for: malformed, and closed.
+        let junk = Endpoint::create().unwrap();
+        let ep = Endpoint::from_handle(fresh);
+        let reply = ep.call(&[3, 0, 0, 0], &[junk.handle(), junk.handle()], None, FOREVER);
+        assert_eq!(reply.unwrap().words, MALFORMED);
+        junk.close().unwrap();
+    });
+    assert_eq!(f.held(server).0, handles_before);
     f.destroy(server, receive);
     assert_eq!(server_thread.join().unwrap(), 0);
 }

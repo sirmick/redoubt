@@ -14,8 +14,8 @@ use alloc::vec::Vec;
 use redoubt_rt::abi::{Error, FOREVER};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Caller, Event};
-use redoubt_rt::server::Limits;
 use redoubt_rt::server::ninep::{DMDIR, FileServer, FileStat, NineError, NineServer, QTDIR, Qid, mode};
+use redoubt_rt::server::{Cost, Limits};
 use redoubt_rt::startup::Startup;
 
 redoubt_rt::entry!(serve);
@@ -26,6 +26,16 @@ const MAX_DATA: usize = 64 * 1024;
 /// Exit codes: 0 when the endpoint goes away.
 pub const NO_ENDPOINT: u32 = 2;
 pub const RECEIVE_FAILED: u32 = 3;
+pub const BAD_LIMITS: u32 = 4;
+
+/// What admission lets clients hold: sized so that every bucket at its cap fits [`BUDGET`]
+/// (answer 85). The skeleton holds no calls open, so none are admitted in flight.
+pub const LIMITS: Limits = Limits { buckets: 16, in_flight: 0, files: 32, state: 8 };
+/// What one of each costs, in bytes: a fid is its table entry and a few steps; a connection its
+/// record and a quota.
+pub const COST: Cost = Cost { in_flight: 0, file: 256, state: 256 };
+/// The bytes of this server's budget clients may use (its manifest gives the budget).
+pub const BUDGET: u64 = 256 * 1024;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Node {
@@ -108,7 +118,7 @@ impl EchoFs {
 pub fn serve(startup: &Startup) -> u32 {
     let Some(handle) = startup.handle("echo") else { return NO_ENDPOINT };
     let endpoint = Endpoint::from_handle(handle);
-    let mut server = NineServer::new(EchoFs::default(), Limits { in_flight: 1, files: 32, state: 1 });
+    let Ok(mut server) = NineServer::new(EchoFs::default(), LIMITS) else { return BAD_LIMITS };
     loop {
         match endpoint.receive(FOREVER, 0) {
             Ok(Event::Call(request)) => {
@@ -121,8 +131,7 @@ pub fn serve(startup: &Startup) -> u32 {
                     let _ = redoubt_rt::handle::close(*handle);
                 }
             }
-            // Every call is answered before the next `receive`, so none is ever held to be
-            // abandoned; interrupts and exits are not this endpoint's.
+            // No call is ever held open here, so no abandoned-call notice names one.
             Ok(Event::Interrupt | Event::Exit(_) | Event::Abandoned(_)) => {}
             Err(Error::Dead) => return redoubt_rt::exit::OK,
             Err(_) => return RECEIVE_FAILED,

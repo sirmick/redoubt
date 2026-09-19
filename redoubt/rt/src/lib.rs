@@ -8,8 +8,9 @@
 //! - [`start`]: the entry point ([`entry!`]), exit codes and the panic handler.
 //! - [`path`]: lexical path cleaning, so `..` never climbs above a root.
 //! - [`client`]: a small synchronous 9P client.
-//! - [`server`]: the shared server library (CONTAINMENT.md): `admit`, `check`, the 9P server skeleton and
-//!   typed-message dispatch.
+//! - [`server`]: the shared server library (CONTAINMENT.md): `admit` with a fair share per badge, `check`,
+//!   the 9P server skeleton with `ninep_common` (fresh connections, `disconnect`, byte quotas), parked calls,
+//!   and typed-message dispatch.
 //!
 //! Models to copy: `src/bin/echo-server.rs` is a complete 9P server on the skeleton, and
 //! `src/bin/echo-client.rs` a program that uses its namespace; the [`server::typed`] docs show a
@@ -21,12 +22,18 @@
 //!
 //! Handles are `u32` indices and 64-bit values (ids, badges, accounts, time) are `u64` on both
 //! widths; nothing here depends on the machine's word size.
+//!
+//! Pending questions are built as recommended, each at one site marked `QUESTIONS.md N
+//! (pending)`: 108 here, 112 in [`startup`], 113 and 114 in [`server::ninep`].
 
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]
 
 extern crate alloc;
 
+// QUESTIONS.md 108 (pending): the layouts of the `startup` message (INIT.md) and of
+// `ninep_common` (NAMESPACES.md) are the design editor's, used as generated from the notes.
+// WP-R1b added `new_connection`'s `quota` and the `refused` error, which byte quotas need.
 pub mod client;
 pub mod handle;
 pub mod heap;

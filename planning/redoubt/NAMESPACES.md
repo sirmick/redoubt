@@ -27,12 +27,16 @@ minus its ambient parts.
 - **Every 9P endpoint also serves typed operations**: a request whose word 0 is 0 is 9P, anything
   else is a typed opcode (WIRE.md). Every 9P server serves `ninep_common`:
 
-  ```
+  <!-- wire: ninep_common -->
   | Opcode | Message | Fields | Reply |
   | --- | --- | --- | --- |
-  | 2 | `new_connection` | `root: string` | `conn: handle[0] endpoint`, `id: u64` |
+  | 2 | `new_connection` | `root: string`, `quota: u64` | `conn: handle[0] endpoint`, `id: u64` |
   | 3 | `disconnect` | `id: u64` | - |
-  ```
+
+  <!-- wire-errors: ninep_common -->
+  | Code | Error |
+  | --- | --- |
+  | 3 | `refused` |
 
   `new_connection` mints a connection rooted at `root`, a path relative to the caller's own root
   (empty for the same root; it never climbs above it), and returns it with a random connection id.
