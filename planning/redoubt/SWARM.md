@@ -61,9 +61,10 @@ merged; the waves show what can run together.
 | T1b | merged | wp-t1b | 6cd067a39 |
 | R1 | merged | wp-r1 | 8298608af (carried the answers 39-42, 50-53 part of R1b) |
 | K1 | merged | wp-k1 | e1d2c6216 |
-| A2 | building | wp-a2 | pending questions built at marked sites |
+| A2 | merged | wp-a2 | c98034520 |
 | R1b | building | wp-r1b | round-4 library changes |
 | W2 | merged | wp-w2 | 3715363a9 |
+| K0b | building | wp-k0b | undefined behaviour at kernel/src/mem.rs:207; a debug-assertion kernel boots in the bench |
 | all others | waiting | | see BUILD-PLAN.md "Needs" |
 
 States: `waiting` (needs not merged), `ready`, `building`, `review`, `merged`.
