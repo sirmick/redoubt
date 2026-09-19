@@ -9,3 +9,7 @@ version.workspace = true
 num-bigint = { version = "0.4", default-features = false }
 num-traits = { version = "0.2", default-features = false }
 num-integer = { version = "0.1", default-features = false }
+# Pure-Rust port of musl libm (rust-lang). Needed because no_std has no float math.
+libm = "0.2"
+# Ryu shortest float formatting: the algorithm OTP itself uses, so ties round identically.
+ryu = "1"

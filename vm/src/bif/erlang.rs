@@ -247,6 +247,9 @@ pub fn atom_to_list(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn atom_to_binary(c: &mut Ctx, a: &[Term]) -> R {
     let atom = atom_arg(c, &a[0])?;
+    if a.len() == 2 && !(a[1].is_atom(&c.sys.atoms.latin1) || a[1].is_atom(&c.sys.atoms.unicode) || a[1].is_atom(&c.sys.atoms.utf8)) {
+        return Err(c.badarg());
+    }
     if a.len() == 2 && a[1].is_atom(&c.sys.atoms.latin1) {
         let bytes: Option<Vec<u8>> = atom.as_str().chars().map(|ch| u8::try_from(ch as u32).ok()).collect();
         return Ok(Term::binary(&bytes.ok_or_else(|| c.badarg())?));
@@ -458,4 +461,214 @@ pub fn display(c: &mut Ctx, a: &[Term]) -> R {
     let text = alloc::format!("{}\n", a[0]);
     c.sys.platform.console_write(text.as_bytes());
     Ok(Term::Atom(c.sys.atoms.true_.clone()))
+}
+
+// ---- records and tuples ----
+
+/// `is_record(Term, Tag)` and `is_record(Term, Tag, Size)`.
+pub fn is_record(c: &mut Ctx, a: &[Term]) -> R {
+    if !matches!(a[1], Term::Atom(_)) {
+        return Err(c.badarg());
+    }
+    let size = match a.get(2) {
+        None => None,
+        Some(t) => Some(t.as_usize().ok_or_else(|| c.badarg())?),
+    };
+    let ok = match a[0].as_tuple() {
+        Some(t) => !t.is_empty() && t[0].eq_exact(&a[1]) && size.is_none_or(|s| s == t.len()),
+        None => false,
+    };
+    Ok(c.bool(ok))
+}
+
+pub fn insert_element(c: &mut Ctx, a: &[Term]) -> R {
+    let t = tuple(c, &a[1])?;
+    let i = position(c, &a[0], t.len() + 1)?;
+    let mut v = t.to_vec();
+    v.insert(i, a[2].clone());
+    Ok(Term::tuple(v))
+}
+
+pub fn delete_element(c: &mut Ctx, a: &[Term]) -> R {
+    let t = tuple(c, &a[1])?;
+    let i = position(c, &a[0], t.len())?;
+    let mut v = t.to_vec();
+    v.remove(i);
+    Ok(Term::tuple(v))
+}
+
+// ---- floats as text, with options ----
+
+/// `float_to_list(F, Options)` / `float_to_binary(F, Options)`: `{decimals, N}`, `compact`,
+/// `{scientific, N}`, `short`. Later options override earlier ones, as in BEAM.
+fn float_text(c: &Ctx, f: f64, opts: &Term) -> Result<String, Exception> {
+    enum Fmt {
+        Scientific(usize),
+        Decimals(usize),
+        Short,
+    }
+    let mut fmt = Fmt::Scientific(20);
+    let mut compact = false;
+    for o in opts.to_vec().ok_or_else(|| c.badarg())? {
+        match &o {
+            Term::Atom(a) if a.as_str() == "compact" => compact = true,
+            Term::Atom(a) if a.as_str() == "short" => fmt = Fmt::Short,
+            Term::Tuple(t) if t.len() == 2 => match (&t[0], t[1].as_usize()) {
+                (Term::Atom(a), Some(n)) if a.as_str() == "decimals" && n <= 253 => fmt = Fmt::Decimals(n),
+                (Term::Atom(a), Some(n)) if a.as_str() == "scientific" && n <= 249 => fmt = Fmt::Scientific(n),
+                _ => return Err(c.badarg()),
+            },
+            _ => return Err(c.badarg()),
+        }
+    }
+    Ok(match fmt {
+        Fmt::Short => crate::float::format_short(f),
+        Fmt::Scientific(n) => {
+            let s = alloc::format!("{f:.n$e}");
+            let (m, e) = s.split_once('e').expect("{:e} has an exponent");
+            let e: i32 = e.parse().expect("exponent");
+            alloc::format!("{m}e{}{:02}", if e < 0 { '-' } else { '+' }, e.abs())
+        }
+        Fmt::Decimals(n) => {
+            let mut s = alloc::format!("{f:.n$}");
+            if compact && s.contains('.') {
+                // Drop trailing zeros, but keep one digit after the point.
+                while s.ends_with('0') && !s.ends_with(".0") {
+                    s.pop();
+                }
+            }
+            s
+        }
+    })
+}
+
+pub fn float_to_list2(c: &mut Ctx, a: &[Term]) -> R {
+    let f = float_arg(c, &a[0])?;
+    Ok(chars_to_list(&float_text(c, f, &a[1])?))
+}
+
+pub fn float_to_binary2(c: &mut Ctx, a: &[Term]) -> R {
+    let f = float_arg(c, &a[0])?;
+    Ok(Term::binary(float_text(c, f, &a[1])?.as_bytes()))
+}
+
+/// Parse Erlang float syntax: digits, `.`, digits, optional exponent. `"1"` and `"1."` are not
+/// floats; `"1.0e5"` and `"-2.5E-3"` are. Like BEAM (whose parser allows it), a `,` may stand for
+/// the decimal point: `list_to_float("1,0")` is `1.0`.
+fn parse_float(c: &Ctx, s: &str) -> R {
+    let owned = s.replacen(',', ".", 1);
+    let s = owned.as_str();
+    let body = s.strip_prefix(['+', '-']).unwrap_or(s);
+    let (mantissa, exponent) = match body.find(['e', 'E']) {
+        Some(i) => (&body[..i], Some(&body[i + 1..])),
+        None => (body, None),
+    };
+    let ok_mantissa = mantissa
+        .split_once('.')
+        .is_some_and(|(w, f)| !w.is_empty() && !f.is_empty() && (w.chars().chain(f.chars())).all(|ch| ch.is_ascii_digit()));
+    let ok_exponent = exponent.is_none_or(|e| {
+        let d = e.strip_prefix(['+', '-']).unwrap_or(e);
+        !d.is_empty() && d.chars().all(|ch| ch.is_ascii_digit())
+    });
+    if !ok_mantissa || !ok_exponent {
+        return Err(c.badarg());
+    }
+    match s.parse::<f64>() {
+        Ok(f) if f.is_finite() => Ok(Term::Float(f)),
+        _ => Err(c.badarg()),
+    }
+}
+
+pub fn list_to_float(c: &mut Ctx, a: &[Term]) -> R {
+    let s = list_to_string(c, &a[0])?;
+    parse_float(c, &s)
+}
+
+pub fn binary_to_float(c: &mut Ctx, a: &[Term]) -> R {
+    let b = binary(c, &a[0])?;
+    let s = core::str::from_utf8(&b.to_bytes()).map_err(|_| c.badarg())?.to_string();
+    parse_float(c, &s)
+}
+
+// ---- the external term format ----
+
+pub fn term_to_binary(c: &mut Ctx, a: &[Term]) -> R {
+    // Options (compressed, minor_version, deterministic) do not change our output: maps are
+    // always written in key order and nothing is compressed.
+    if let Some(opts) = a.get(1) {
+        opts.to_vec().ok_or_else(|| c.badarg())?;
+    }
+    let bytes = crate::etf::encode(&a[0]).map_err(|_| c.badarg())?;
+    Ok(Term::binary(&bytes))
+}
+
+/// `binary_to_term(Bin)` and `binary_to_term(Bin, Options)` with `safe` (create no atoms) and
+/// `used` (also return how many bytes were read).
+pub fn binary_to_term(c: &mut Ctx, a: &[Term]) -> R {
+    let b = binary(c, &a[0])?;
+    let bytes = b.to_bytes().into_owned();
+    let (mut safe, mut used) = (false, false);
+    if let Some(opts) = a.get(1) {
+        for o in opts.to_vec().ok_or_else(|| c.badarg())? {
+            match &o {
+                Term::Atom(x) if x.as_str() == "safe" => safe = true,
+                Term::Atom(x) if x.as_str() == "used" => used = true,
+                _ => return Err(c.badarg()),
+            }
+        }
+    }
+    let (t, n) = crate::etf::decode_prefix(&bytes, &mut c.sys.atom_table, safe).map_err(|_| c.badarg())?;
+    if used {
+        return Ok(Term::tuple(alloc::vec![t, Term::Int(n as i64)]));
+    }
+    if n != bytes.len() {
+        return Err(c.badarg());
+    }
+    Ok(t)
+}
+
+/// `erts_debug:flat_size(Term)`: the heap words BEAM would use to copy `Term` (64-bit, OTP 28),
+/// ignoring sharing. Calibrated against the real BEAM; see `tests/erlang/flat_size.erl`. Maps
+/// above 32 keys are counted as flat maps, which BEAM does not use for them.
+pub fn flat_size(_c: &mut Ctx, a: &[Term]) -> R {
+    let mut words: u64 = 0;
+    let mut work = alloc::vec![a[0].clone()];
+    while let Some(t) = work.pop() {
+        words += match &t {
+            Term::Int(_) | Term::Atom(_) | Term::Nil | Term::Pid(_) => 0,
+            Term::Big(b) => 1 + b.bits().div_ceil(64),
+            Term::Float(_) => 2,
+            Term::Cons(c) => {
+                work.push(c.head.clone());
+                work.push(c.tail.clone());
+                2
+            }
+            Term::Tuple(e) => {
+                work.extend(e.iter().cloned());
+                if e.is_empty() { 0 } else { 1 + e.len() as u64 }
+            }
+            Term::Map(m) => {
+                for (k, v) in m.iter() {
+                    work.push(k.0.clone());
+                    work.push(v.clone());
+                }
+                let n = m.len() as u64;
+                3 + n + if n > 0 { 1 + n } else { 0 }
+            }
+            Term::Bits(b) => {
+                let bytes = b.len.div_ceil(8) as u64;
+                if bytes <= 64 { 2 + bytes.div_ceil(8) } else { 8 }
+            }
+            Term::Fun(f) => match &**f {
+                crate::term::Fun::Export { .. } => 2,
+                crate::term::Fun::Local { env, .. } => {
+                    work.extend(env.iter().cloned());
+                    2 + env.len() as u64
+                }
+            },
+            Term::Ref(_) => 3,
+            Term::Match(_) => 0,
+        };
+    }
+    Ok(Term::Int(words as i64))
 }

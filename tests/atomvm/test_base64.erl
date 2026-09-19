@@ -1,0 +1,288 @@
+%
+% This file is part of AtomVM.
+%
+% Copyright 2020 Fred Dushin <fred@dushin.net>
+%
+% Licensed under the Apache License, Version 2.0 (the "License");
+% you may not use this file except in compliance with the License.
+% You may obtain a copy of the License at
+%
+%    http://www.apache.org/licenses/LICENSE-2.0
+%
+% Unless required by applicable law or agreed to in writing, software
+% distributed under the License is distributed on an "AS IS" BASIS,
+% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+% See the License for the specific language governing permissions and
+% limitations under the License.
+%
+% SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
+%
+
+-module(test_base64).
+
+-export([start/0]).
+
+%% erlfmt-ignore
+start() ->
+    %% simple tests (easy to debug)
+    verify_b64(<<"">>, <<"">>),
+    verify_b64(<<1, 2, 3>>, <<"AQID">>),
+    verify_b64(<<1, 2, 3, 4>>, <<"AQIDBA==">>),
+    verify_b64(<<1, 2, 3, 4, 5>>, <<"AQIDBAU=">>),
+    verify_b64(<<1, 2, 3, 4, 5, 6>>, <<"AQIDBAUG">>),
+
+    %% test against some random entries generated from OTP via
+    %% L = [crypto:strong_rand_bytes(I) || I <- lists:seq(0,20)].
+    %% [{E, base64:encode(E)} || E <- L]
+    RandomEntries = [
+        {<<>>,<<>>},
+        {<<"Â">>,<<"wg==">>},
+        {<<"µb">>,<<"tWI=">>},
+        {<<"YãH">>,<<"WeNI">>},
+        {<<"¢I\f<">>,<<"okkMPA==">>},
+        {<<"ÿßæ´L">>,<<"/9/mtEw=">>},
+        {<<252,112,131,64,138,139>>,<<"/HCDQIqL">>},
+        {<<135,167,68,16,70,100,110>>,<<"h6dEEEZkbg==">>},
+        {<<12,227,186,221,35,228,29,171>>,<<"DOO63SPkHas=">>},
+        {<<47,158,206,66,251,170,81,134,229>>,<<"L57OQvuqUYbl">>},
+        {<<226,246,35,243,215,128,215,253,125,143>>, <<"4vYj89eA1/19jw==">>},
+        {<<217,65,59,149,152,174,114,216,6,137,56>>, <<"2UE7lZiuctgGiTg=">>},
+        {<<252,87,132,165,80,235,132,47,235,27,132,6>>, <<"/FeEpVDrhC/rG4QG">>},
+        {<<227,16,167,184,46,129,119,108,218,245,1,129,45>>,  <<"4xCnuC6Bd2za9QGBLQ==">>},
+        {<<67,21,60,37,89,149,96,46,156,36,122,186,91,115>>, <<"QxU8JVmVYC6cJHq6W3M=">>},
+        {<<35,235,3,216,183,47,111,48,65,37,212,86,133,132,153>>, <<"I+sD2LcvbzBBJdRWhYSZ">>},
+        {<<128,94,25,153,53,246,23,93,146,130,136,191,115,204,81,25>>, <<"gF4ZmTX2F12Sgoi/c8xRGQ==">>},
+        {<<180,177,165,83,215,106,14,96,96,208,219,55,52,197,78,65,4>>, <<"tLGlU9dqDmBg0Ns3NMVOQQQ=">>},
+        {<<218,98,97,28,235,173,247,81,90,217,205,114,65,120,130,104,208,206>>, <<"2mJhHOut91Fa2c1yQXiCaNDO">>},
+        {<<49,242,114,177,206,35,163,178,51,148,61,69,157,110,19,155,214,30,134>>,<<"MfJysc4jo7IzlD1FnW4Tm9Yehg==">>},
+        {<<109,1,224,147,38,223,203,238,33,219,84,2,149,110,207,208,246,163,183,19>>,<<"bQHgkybfy+4h21QClW7P0PajtxM=">>}],
+    [verify_b64(Value, ExpectedEncoding) || {Value, ExpectedEncoding} <- RandomEntries],
+
+    %% test against some randomly generated inputs
+    [verify_b64(rand_bytes(I), undefined) || I <- [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,50,100,131,147,200,201,217,500,517]],
+
+    % expected errors
+    expect_error(fun() -> base64:encode(foo) end, badarg),
+    expect_error(fun() -> base64:decode(foo) end, badarg),
+    expect_error(fun() -> base64:decode(<<"A">>) end, badarg),
+    expect_error(fun() -> base64:decode(<<"A%ID">>) end, badarg),
+    expect_error(fun() -> base64:decode(<<"A ID">>) end, badarg),
+
+    % it turns out we actually support iolists, which is kind of nice
+    case erlang:system_info(machine) of
+        "BEAM" ->
+            expect_error(fun() -> base64:encode([<<1, 2>>, <<3, 4, 5>>, <<6>>]) end, badarith),
+            expect_error(fun() -> base64:encode([<<1, 2>>, <<3, 4, 5>>, <<6>>]) end, badarith),
+            expect_error(fun() -> base64:decode(["AQ", "ID", "BAUG"]) end, badarg),
+            expect_error(fun() -> base64:decode(["AQ", "ID", <<"BAUG">>]) end, badarg);
+        _ ->
+            <<"AQIDBAUG">> = base64:encode([<<1, 2>>, <<3, 4, 5>>, <<6>>]),
+            <<"AQIDBAUG">> = base64:encode([<<1, 2>>, <<3, 4, 5>>, 6]),
+            <<1, 2, 3, 4, 5, 6>> = base64:decode(["AQ", "ID", "BAUG"]),
+            <<1, 2, 3, 4, 5, 6>> = base64:decode(["AQ", "ID", <<"BAUG">>])
+    end,
+
+    test_padding_option(),
+    test_urlsafe_mode(),
+
+    0.
+
+test_padding_option() ->
+    %% encode/2 with padding => true behaves identically to encode/1
+    <<"AQID">> = base64:encode(<<1, 2, 3>>, #{padding => true}),
+    <<"AQIDBA==">> = base64:encode(<<1, 2, 3, 4>>, #{padding => true}),
+    <<"AQIDBAU=">> = base64:encode(<<1, 2, 3, 4, 5>>, #{padding => true}),
+    <<"AQIDBAUG">> = base64:encode(<<1, 2, 3, 4, 5, 6>>, #{padding => true}),
+    <<>> = base64:encode(<<>>, #{padding => true}),
+
+    %% encode/2 with padding => false strips trailing '=' padding
+    <<>> = base64:encode(<<>>, #{padding => false}),
+    <<"AQID">> = base64:encode(<<1, 2, 3>>, #{padding => false}),
+    <<"AQIDBA">> = base64:encode(<<1, 2, 3, 4>>, #{padding => false}),
+    <<"AQIDBAU">> = base64:encode(<<1, 2, 3, 4, 5>>, #{padding => false}),
+    <<"AQIDBAUG">> = base64:encode(<<1, 2, 3, 4, 5, 6>>, #{padding => false}),
+
+    %% encode_to_string/2 with padding options
+    "AQIDBA==" = base64:encode_to_string(<<1, 2, 3, 4>>, #{padding => true}),
+    "AQIDBAU=" = base64:encode_to_string(<<1, 2, 3, 4, 5>>, #{padding => true}),
+    "AQIDBA" = base64:encode_to_string(<<1, 2, 3, 4>>, #{padding => false}),
+    "AQIDBAU" = base64:encode_to_string(<<1, 2, 3, 4, 5>>, #{padding => false}),
+
+    %% decode/2 with padding => true behaves identically to decode/1
+    <<1, 2, 3>> = base64:decode(<<"AQID">>, #{padding => true}),
+    <<1, 2, 3, 4>> = base64:decode(<<"AQIDBA==">>, #{padding => true}),
+    <<1, 2, 3, 4, 5>> = base64:decode(<<"AQIDBAU=">>, #{padding => true}),
+    <<>> = base64:decode(<<>>, #{padding => true}),
+
+    %% decode/2 with padding => false accepts unpadded input
+    <<1, 2, 3, 4>> = base64:decode(<<"AQIDBA">>, #{padding => false}),
+    <<1, 2, 3, 4, 5>> = base64:decode(<<"AQIDBAU">>, #{padding => false}),
+    <<1, 2, 3>> = base64:decode(<<"AQID">>, #{padding => false}),
+    <<>> = base64:decode(<<>>, #{padding => false}),
+
+    %% decode/2 with padding => false also accepts padded input (OTP-compatible)
+    <<1, 2, 3, 4>> = base64:decode(<<"AQIDBA==">>, #{padding => false}),
+    <<1, 2, 3, 4, 5>> = base64:decode(<<"AQIDBAU=">>, #{padding => false}),
+
+    %% decode_to_string/2 with padding options
+    [1, 2, 3, 4] = base64:decode_to_string(<<"AQIDBA==">>, #{padding => true}),
+    [1, 2, 3, 4] = base64:decode_to_string(<<"AQIDBA">>, #{padding => false}),
+
+    %% decode/1 and decode/2 with padding => true reject unpadded input (default)
+    expect_error(fun() -> base64:decode(<<"AQIDBA">>) end, badarg),
+    expect_error(fun() -> base64:decode(<<"AQIDBAU">>) end, badarg),
+    expect_error(fun() -> base64:decode(<<"AQIDBA">>, #{padding => true}) end, badarg),
+    expect_error(fun() -> base64:decode(<<"AQIDBAU">>, #{padding => true}) end, badarg),
+
+    %% length % 4 == 1 is always invalid, even with padding => false
+    expect_error(fun() -> base64:decode(<<"A">>, #{padding => false}) end, badarg),
+    expect_error(fun() -> base64:decode(<<"AQIDA">>, #{padding => false}) end, badarg),
+
+    %% round-trip with padding => false
+    [
+        verify_b64_no_padding(rand_bytes(I))
+     || I <- lists_seq(0, 20) ++ [50, 100, 131, 147, 200, 201]
+    ],
+
+    ok.
+
+lists_seq(0, 20) ->
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20].
+
+test_urlsafe_mode() ->
+    %% Known vectors: bytes that produce + or / in standard mode
+    %% Generated via OTP: base64:encode(Bin, #{mode => urlsafe})
+    UrlsafeVectors = [
+        %% standard: /9/mtEw=   urlsafe: _9_mtEw=
+        {<<255, 223, 230, 180, 76>>, <<"_9_mtEw=">>},
+        %% standard: /HCDQIqL   urlsafe: _HCDQIqL
+        {<<252, 112, 131, 64, 138, 139>>, <<"_HCDQIqL">>},
+        %% standard: /FeEpVDrhC/rG4QG   urlsafe: _FeEpVDrhC_rG4QG
+        {<<252, 87, 132, 165, 80, 235, 132, 47, 235, 27, 132, 6>>, <<"_FeEpVDrhC_rG4QG">>},
+        %% standard: I+sD2LcvbzBBJdRWhYSZ   urlsafe: I-sD2LcvbzBBJdRWhYSZ
+        {
+            <<35, 235, 3, 216, 183, 47, 111, 48, 65, 37, 212, 86, 133, 132, 153>>,
+            <<"I-sD2LcvbzBBJdRWhYSZ">>
+        },
+        %% standard: gF4ZmTX2F12Sgoi/c8xRGQ==   urlsafe: gF4ZmTX2F12Sgoi_c8xRGQ==
+        {
+            <<128, 94, 25, 153, 53, 246, 23, 93, 146, 130, 136, 191, 115, 204, 81, 25>>,
+            <<"gF4ZmTX2F12Sgoi_c8xRGQ==">>
+        },
+        %% standard: bQHgkybfy+4h21QClW7P0PajtxM=   urlsafe: bQHgkybfy-4h21QClW7P0PajtxM=
+        {
+            <<109, 1, 224, 147, 38, 223, 203, 238, 33, 219, 84, 2, 149, 110, 207, 208, 246, 163,
+                183, 19>>,
+            <<"bQHgkybfy-4h21QClW7P0PajtxM=">>
+        }
+    ],
+
+    %% encode/2 with mode => urlsafe produces correct output
+    [
+        begin
+            Encoded = base64:encode(Bin, #{mode => urlsafe}),
+            Encoded = Expected
+        end
+     || {Bin, Expected} <- UrlsafeVectors
+    ],
+
+    %% decode/2 with mode => urlsafe decodes back to original
+    [
+        begin
+            Decoded = base64:decode(Expected, #{mode => urlsafe}),
+            Decoded = Bin
+        end
+     || {Bin, Expected} <- UrlsafeVectors
+    ],
+
+    %% encode_to_string/2 with mode => urlsafe
+    "_9_mtEw=" = base64:encode_to_string(<<255, 223, 230, 180, 76>>, #{mode => urlsafe}),
+    "I-sD2LcvbzBBJdRWhYSZ" = base64:encode_to_string(
+        <<35, 235, 3, 216, 183, 47, 111, 48, 65, 37, 212, 86, 133, 132, 153>>, #{mode => urlsafe}
+    ),
+
+    %% decode_to_string/2 with mode => urlsafe
+    [255, 223, 230, 180, 76] = base64:decode_to_string(<<"_9_mtEw=">>, #{mode => urlsafe}),
+
+    %% mode => standard is the default (same as encode/1)
+    <<"AQIDBA==">> = base64:encode(<<1, 2, 3, 4>>, #{mode => standard}),
+    <<"AQIDBA==">> = base64:encode(<<1, 2, 3, 4>>, #{}),
+
+    %% combined mode => urlsafe, padding => false
+    <<"_9_mtEw">> = base64:encode(<<255, 223, 230, 180, 76>>, #{mode => urlsafe, padding => false}),
+    <<"_HCDQIqL">> = base64:encode(<<252, 112, 131, 64, 138, 139>>, #{
+        mode => urlsafe, padding => false
+    }),
+    <<255, 223, 230, 180, 76>> = base64:decode(<<"_9_mtEw">>, #{mode => urlsafe, padding => false}),
+    <<252, 112, 131, 64, 138, 139>> = base64:decode(<<"_HCDQIqL">>, #{
+        mode => urlsafe, padding => false
+    }),
+
+    %% cross-mode: standard chars invalid in urlsafe, urlsafe chars invalid in standard
+    expect_error(fun() -> base64:decode(<<"/9/mtEw=">>, #{mode => urlsafe}) end, badarg),
+    expect_error(fun() -> base64:decode(<<"_9_mtEw=">>, #{mode => standard}) end, badarg),
+    expect_error(fun() -> base64:decode(<<"I+sD2Lc=">>, #{mode => urlsafe}) end, badarg),
+    expect_error(fun() -> base64:decode(<<"I-sD2Lc=">>, #{mode => standard}) end, badarg),
+
+    %% round-trip with mode => urlsafe for various sizes
+    [verify_b64_urlsafe(rand_bytes(I)) || I <- lists_seq(0, 20) ++ [50, 100, 131]],
+
+    ok.
+
+verify_b64_urlsafe(Input) ->
+    Encoded = base64:encode(Input, #{mode => urlsafe}),
+    %% verify no standard-only chars (+, /) are present
+    nomatch = binary:match(Encoded, <<"+">>),
+    nomatch = binary:match(Encoded, <<"/">>),
+    %% verify round-trip
+    Decoded = base64:decode(Encoded, #{mode => urlsafe}),
+    Input = Decoded.
+
+rand_bytes(I) ->
+    case erlang:system_info(machine) of
+        "BEAM" -> crypto:strong_rand_bytes(I);
+        _ -> atomvm:rand_bytes(I)
+    end.
+
+verify_b64(Input, ExpectedEncoding) ->
+    %erlang:display({Input, ExpectedEncoding}),
+    Encoded = base64:encode(Input),
+    Encoded = base64:encode(binary_to_list(Input)),
+    %erlang:display({encoded, Encoded}),
+    EncodedString = base64:encode_to_string(Input),
+    EncodedString = base64:encode_to_string(binary_to_list(Input)),
+    verify_value(Encoded, ExpectedEncoding),
+    Decoded = base64:decode(Encoded),
+    Decoded = base64:decode(binary_to_list(Encoded)),
+    %erlang:display({decoded, Decoded}),
+    DecodedString = base64:decode_to_string(Encoded),
+    DecodedString = base64:decode_to_string(binary_to_list(Encoded)),
+    Input = Decoded.
+
+verify_b64_no_padding(Input) ->
+    Encoded = base64:encode(Input, #{padding => false}),
+    %% verify no padding characters are present
+    nomatch = binary:match(Encoded, <<"=">>),
+    %% verify round-trip
+    Decoded = base64:decode(Encoded, #{padding => false}),
+    Input = Decoded.
+
+verify_value(_Value, undefined) ->
+    ok;
+verify_value(Value, ExpectedValue) ->
+    Value = ExpectedValue.
+
+expect_error(F, _Reason) ->
+    error =
+        try
+            F(),
+            ok
+        catch
+            _E:_R ->
+                %% TODO E doesn't seem to match error and R doesn't seem to match Reason
+                %% even through they display the same
+                %% erlang:display({E, R}),
+                %% E = error,
+                %% R = Reason,
+                error
+        end.

@@ -3,9 +3,14 @@
 %% with ~kw (maps in key order, which beamlet always uses) exactly as `beamlet` prints it, to DIR/Module.expected. The oracle for difftest.
 main([Dir]) ->
     true = code:add_patha(Dir),
-    [expect(Dir, list_to_atom(filename:basename(F, ".beam")))
-     || F <- filelib:wildcard(filename:join(Dir, "*.beam"))],
+    [expect(Dir, M) || F <- filelib:wildcard(filename:join(Dir, "*.beam")),
+                       M <- [list_to_atom(filename:basename(F, ".beam"))],
+                       has_start(M)],
     ok.
+
+has_start(M) ->
+    {module, M} = code:ensure_loaded(M),
+    erlang:function_exported(M, start, 0).
 
 expect(Dir, M) ->
     Self = self(),

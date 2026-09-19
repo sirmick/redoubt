@@ -98,8 +98,9 @@ pub struct Process {
     pub links: BTreeSet<Pid>,
     /// Monitors this process holds, by reference: the monitored process.
     pub monitors: BTreeMap<Ref, Pid>,
-    /// Monitors on this process, by reference: the watching process.
-    pub monitored_by: BTreeMap<Ref, Pid>,
+    /// Monitors on this process, by reference: the watching process, and how it named this one
+    /// (a pid, or `{Name, Node}` for a monitor taken by registered name), for its `'DOWN'`.
+    pub monitored_by: BTreeMap<Ref, (Pid, Term)>,
     pub trap_exit: bool,
     pub registered_name: Option<Atom>,
     pub dictionary: BTreeMap<MapKey, Term>,

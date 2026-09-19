@@ -53,8 +53,8 @@ pub struct System {
     next_ref: u64,
     pub(crate) registered: BTreeMap<String, Pid>,
     pub(crate) procs: ProcTable,
-    /// Exit signals waiting to be delivered: (target, sender, reason).
-    pub(crate) exits: VecDeque<(Pid, Pid, Term)>,
+    /// Exit signals waiting to be delivered.
+    pub(crate) exits: VecDeque<ExitSignal>,
     /// Final results of processes someone is waiting for through [`Vm::run`].
     results: BTreeMap<Pid, Result<Term, Exception>>,
     watched: BTreeSet<Pid>,
@@ -129,12 +129,25 @@ impl ProcTable {
         self.slots[index] = Slot::Present(p);
     }
 
+    pub(crate) fn count(&self) -> usize {
+        self.live
+    }
+
     fn release(&mut self, pid: Pid) {
         self.slots[pid.index as usize] = Slot::Free { serial: pid.serial };
         self.free.push(pid.index);
         self.live -= 1;
     }
 
+}
+
+/// An exit signal in flight. `kill` means "kill unconditionally" only when sent by `exit/2`;
+/// a linked process that dies with reason `kill` sends an ordinary, trappable signal.
+pub(crate) struct ExitSignal {
+    pub target: Pid,
+    pub from: Pid,
+    pub reason: Term,
+    pub from_link: bool,
 }
 
 /// Why [`Vm::run`] returned.
@@ -403,14 +416,14 @@ impl System {
             if let Some(o) = self.procs.get_mut(other) {
                 o.links.remove(&pid);
             }
-            self.exits.push_back((other, pid, reason.clone()));
+            self.exits.push_back(ExitSignal { target: other, from: pid, reason: reason.clone(), from_link: true });
         }
-        for (r, watcher) in &p.monitored_by {
+        for (r, (watcher, object)) in &p.monitored_by {
             let msg = Term::tuple(alloc::vec![
                 Term::Atom(self.atoms.down.clone()),
                 Term::Ref(*r),
                 Term::Atom(self.atoms.process.clone()),
-                Term::Pid(pid),
+                object.clone(),
                 reason.clone(),
             ]);
             if let Some(w) = self.procs.get_mut(*watcher) {
@@ -433,8 +446,8 @@ impl System {
     /// Deliver queued exit signals. A signal either becomes an `{'EXIT', From, Reason}` message
     /// (the target traps exits), is ignored (reason `normal`), or kills the target.
     fn deliver_exits(&mut self) {
-        while let Some((target, from, reason)) = self.exits.pop_front() {
-            let kill = reason.is_atom(&self.atoms.kill);
+        while let Some(ExitSignal { target, from, reason, from_link }) = self.exits.pop_front() {
+            let kill = !from_link && reason.is_atom(&self.atoms.kill);
             let normal = reason.is_atom(&self.atoms.normal);
             let Some(p) = self.procs.get_mut(target) else { continue };
             if p.trap_exit && !kill {
