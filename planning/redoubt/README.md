@@ -23,10 +23,10 @@ and the steward, 9P namespaces, packages, storage and network servers). Order: [
 | [CAPABILITIES.md](CAPABILITIES.md) | Why handles; how IPC and minting are used; revocation policy; principals, agents, projects; the powerbox and approvals. |
 | [CONTAINMENT.md](CONTAINMENT.md) | Labels, sessions and vaults, declassification, the shared server library, crash blame, covert and timing channels, the executable model. |
 | [RESOURCES.md](RESOURCES.md) | Why budgets look as they do; scheduling policy; the timer. |
-| [KERNEL-SPEC.md](KERNEL-SPEC.md) | The precise kernel: objects, system calls, messages, rules, errors, constants, invariants. |
+| [KERNEL-SPEC.md](KERNEL-SPEC.md) | The precise kernel: objects and their costs, system calls, messages, rules, errors and the order of checks, constants, invariants. |
 | [INIT.md](INIT.md) | After the kernel: init, the boot manifest, the steward, keyd, sshd, restarts, the startup block; the worked example. |
 | [NAMESPACES.md](NAMESPACES.md) | 9P, per-process namespaces, `/dev/cons`, `/net`, filesystem servers, littlefs. |
-| [WIRE.md](WIRE.md) | Byte layouts: 9P's encoding for every message, strict JSON for files people write. |
+| [WIRE.md](WIRE.md) | Byte layouts: 9P's encoding for every message, the typed-message table format and replies, strict JSON for files people write. |
 | [PACKAGES.md](PACKAGES.md) | Launching and the loader stub, what is signed, signer trust, per-principal packages, system updates. |
 | [IO-ARCHITECTURE.md](IO-ARCHITECTURE.md) | Drivers (virtio), DMA, storage and network stacks; the "Later" designs. |
 | [PLATFORM-FPGA.md](PLATFORM-FPGA.md) | The FPGA target, its trust assumptions, what its hardware changes. |
@@ -94,7 +94,8 @@ Sessions and agents are beamlet VMs in user budgets, not servers.
   kernel object for an MMIO range (with a DMA flag), an interrupt, or the reset right.
 - **Endpoint**: the kernel object clients call; it outlives the server process receiving on it.
 - **call / send**: the two IPC primitives (CAPABILITIES.md). **Lend**: map a buffer into the
-  receiver for the length of a call. **Transfer**: give pages to the receiver for good.
+  receiver for the length of a call. **Transfer**: give pages to the receiver for good. **Open
+  call**: a call a server has taken and not yet replied to.
 - **Budget**: a kernel container every process lives in; it pays for and bounds everything, carries
   labels, a deadline and an account (RESOURCES.md). **Lease**: a budget with a deadline.
   **Revocation scope**: a budget with zero limits, used only to be destroyed. **Account**: a 64-bit

@@ -23,8 +23,9 @@ Decentralized information flow control in the Flume/HiStar style, with labels fi
 - **System servers are exempt from the kernel check and enforce labels themselves**, using the
   caller's label set the kernel attaches to every message (the shared server library, below).
 - **Budget observation obeys labels.** Reading a budget's usage, or receiving its exit notices, needs
-  the reader's labels ⊇ the target's. A parent's usage counts its children's limits, never their
-  live usage, so a labelled child cannot signal through its parent's counters.
+  the reader's labels ⊇ the target's, unless the reader is class `system` (like the message check:
+  `init` and the steward must see labelled processes exit). A parent's usage counts its children's
+  limits, never their live usage, so a labelled child cannot signal through its parent's counters.
 - **Sinks** (servers whose output leaves a principal or the machine: `ipd`, later `gatewayd`) are
   cleared for nothing by default, and refuse labelled callers. A local model on the FPGA's GPU card
   can be cleared for a label, because the data stays on the machine.
@@ -71,8 +72,10 @@ influences is visible to a caller without that label:
 - `fsd`: state is per volume; one label set per volume (NAMESPACES.md).
 - `ipd`: a sink; refuses labelled callers (IO-ARCHITECTURE.md).
 - `sshd`: state is per channel; each channel labelled with its session (above).
-- **steward**: applies no-write-down to its own records. Labelled callers can only submit requests;
-  request ids are random 64-bit numbers; each account has a cap on pending requests.
+- **steward**: applies no-write-down to its own records. Labelled callers can only submit requests.
+  Every id it hands out (request and session ids, and any other) is unpredictable: random 64-bit,
+  keyed, never a counter, which would tell every principal how many the others made. The cap on
+  pending requests is per (account, label set).
 
 ## Crash blame
 A server that faults reports, in its exit notice, the account of the message the faulting thread was
@@ -94,6 +97,9 @@ perfect clock (TENETS.md).
   (RESOURCES.md).
 - **Labelled budgets get their own volume**, so shared filesystem metadata carries nothing between
   labels.
+- **Caps are counted per (account, label set), not per account.** A vault session and its owner's
+  unlabelled session share an account; a shared cap (the steward's pending requests, the kernel's
+  `WAIT_CAP` and R2's turns) would let the vault signal by filling it.
 - **Residual, stated:** memory bandwidth, and the shared L2 across cores until the RTL partitions it.
   On QEMU and ordinary hardware, none of the microarchitectural channels are closed.
 
