@@ -227,8 +227,8 @@ NIFs of `prim_file` and `prim_buffer`, over a `Files` trait the platform may pro
   asynchronous interface without changing the Erlang side.
 
 ## I/O: one 9P client, asynchronous (decided 2026-09-18; files and console built as steps)
-On xous64 every user-facing service speaks 9P2000 and a process's namespace is a table of
-capabilities (xous-core `planning/xous64/NAMESPACES.md`). beamlet follows that:
+On Redoubt every user-facing service speaks 9P2000 and a process's namespace is a table of
+capabilities (xous-core `planning/redoubt/NAMESPACES.md`). beamlet follows that:
 - **`Platform` grows one generic I/O interface, a 9P client**, not per-service methods: attach,
   walk, open, read, write, clunk, stat on handles the embedder granted. Files are namespace walks,
   TCP is Plan 9's `/net` (`/net/tcp/clone`, `connect addr!port`, the data file), the console is
@@ -237,6 +237,9 @@ capabilities (xous-core `planning/xous64/NAMESPACES.md`). beamlet follows that:
 - **I/O is asynchronous.** The VM is one thread, so a blocking read would stop every process. The
   VM submits a request and continues; the completion arrives later as a message to the requesting
   Erlang process. `Platform::idle` returns on a timer deadline or a completion.
+  Redoubt's kernel has no queued sends (every message occupies its sender's thread until taken),
+  so on Redoubt the `Platform` gets this asynchrony from a small pool of I/O threads, each making
+  one blocking call.
 - **POSIX platform:** serves the same tree from host files and host sockets, so the differential
   suite exercises `gen_tcp`, `ssl` and `ssh` over real TCP against the real BEAM.
 - Mailbox overflow kills the receiver (Resource limits), so an active-mode socket that outruns its
