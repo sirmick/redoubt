@@ -108,7 +108,12 @@ and refuses labelled callers. Elixir wraps the tree in `gen_tcp`-like modules.
   encryption is deferred (IO-ARCHITECTURE.md, Later).
 - **Crash:** clients see errors, `init` restarts it (INIT.md), copy-on-write keeps the volume
   consistent.
-- **Boot:** `bootfsd` is a read-only server over the verified boot bundle, mounted at `/boot`.
+- **Boot:** `bootfsd` is a read-only server over the verified boot bundle, mounted at `/boot`. It
+  serves **only the bundle entries the boot manifest's `public` list names** (programs and module
+  archives), as one flat directory, matched byte for byte; **never the manifest itself**, which
+  carries `keyd`'s seeds and every principal's keys (INIT.md). A walk to any other name is "does
+  not exist", the same answer as for a name the bundle never held, so `/boot` reveals nothing about
+  the rest of the bundle. `init` passes the list to `bootfsd` as its arguments (question 123).
 
 ### littlefs
 Criteria: a published on-disk format, an independent second implementation to test against,

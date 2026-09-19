@@ -59,6 +59,22 @@ reserves 1-15 there (above):
   shape, bad lengths, a missing handle, or one found to be of the wrong kind). The generator
   reserves it and adds it to every table; a protocol's own codes start at 2, and a protocol with no errors of its own has an error table with no rows.
 
+### Granting and releasing
+A typed protocol that mints a narrower capability **names its grant and release operations**, the
+typed counterpart of 9P's `new_connection` and `disconnect` (NAMESPACES.md, `ninep_common`). Stated
+once here, so no server invents its own shape:
+- **`grant`** mints a capability **no wider than the caller's own** — never a right the caller does
+  not hold, never a wider one — **stamped like the handle the request came in on** (CAPABILITIES.md,
+  stamps), and returns a **random id**: unpredictable, 64-bit, never a counter.
+- **`release(id)`** frees that capability **and everything granted under it**, and only for the
+  holder of the id: an id the caller never received is refused exactly as one that does not exist,
+  so nothing is revealed (as `disconnect`'s `not_yours`, NAMESPACES.md).
+
+Each protocol writes the two rows into its own table, with its own fields (`keyd`'s `grant` names a
+key and a purpose); only the shape and the rules are common. A launcher releases a child's grants
+when it receives the child's exit notice, as it disconnects its connections (CAPABILITIES.md;
+INIT.md, launching).
+
 ### Layout in a message
 - **Word 0** of a request is its opcode. **Word 0 of a reply is its status**: 0 = ok, otherwise a
   code from the protocol's error table; a reply with a non-zero status carries no fields.
