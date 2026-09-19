@@ -58,14 +58,23 @@ peers). Elixir wraps the text control messages in `gen_tcp`-like modules.
   loader authenticates), mounted at `/boot`. Programs launch from it until a disk is up.
 
 ### Which filesystem
-No pure-Rust read-write filesystem is proven at ext4/ZFS level. Plan:
-1. Time-boxed audit of **RedoxFS** (CoW, checksums, encryption, atomic updates since 0.5): builds
-   `no_std` over our block interface? small enough to read? survives our fuzzing and crash
-   injection? If yes: vendor and adopt.
-2. Otherwise our own small CoW filesystem with a written spec, using RedoxFS and PDDB
-   (`services/pddb`) as references.
-3. Either way the same harness judges it: fuzzed images, crash injection at every block write,
-   model-based tests against an in-memory reference.
+Chosen for the tenets, not for being Rust (tenet 3 makes Rust a requirement, not a merit): a
+published format, a second implementation to test against, power-loss safety, small enough to read.
+- **The littlefs on-disk format (its `SPEC.md`), reimplemented in pure Rust.** Copy-on-write
+  metadata pairs, power-loss safe by design, bounded memory, small. The C reference runs only on the
+  host, as a test oracle: every image either implementation writes must read back identically in
+  the other. Nothing C runs on the target. (`littlefs2` on crates.io wraps the C library: not used.)
+- **Metadata:** littlefs custom attributes (typed tags per file, up to 1022 bytes by default) carry
+  what 9P `stat` needs (mtime, qid version) and our own (content signatures, labels). Names, sizes
+  and directory structure are native. No owners or permission bits: access is by capability.
+- **Accepted limits:** large directories and files scale poorly; data is not checksummed by
+  littlefs (the block layer's AEAD covers it); wear leveling is unneeded on virtual disks.
+- **Fallback:** our own small CoW filesystem with a written spec. The filesystem is a per-volume
+  9P server, so replacing it later changes nothing above it.
+- **Rejected:** RedoxFS (no published spec, one implementation, format churn, its own encryption
+  duplicating the block layer); ext4 as native (too large; read-only interop instead).
+- **Harness:** fuzzed images, crash injection at every block write, model-based tests against an
+  in-memory reference, differential tests against the C reference.
 Interop servers, untrusted: `ext4-view` (read-only ext2/4, no panics on bad data), `fatfs`.
 
 ## Process launching

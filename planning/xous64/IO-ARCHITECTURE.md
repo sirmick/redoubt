@@ -59,8 +59,8 @@ spec was a release candidate in 2025; revisit when ratified.
 - **fs server:** no global namespace. Clients hold directory capabilities; paths resolve only below
   a held handle and `..` never escapes it (as WASI preopens, Capsicum, Fuchsia).
 - **Every on-disk parser is attack surface** and gets a fuzz target.
-- **Filesystem:** pure Rust, crash-consistent. Candidates: RedoxFS (CoW, pure Rust), or a small
-  specified CoW design of our own. FAT (`fatfs`) only for interop, as a separate untrusted server.
+- **Filesystem:** the littlefs format reimplemented in pure Rust (see NAMESPACES.md); fallback a
+  small specified CoW design of our own. FAT (`fatfs`) only for interop, as a separate untrusted server.
 
 ## Networking
 `virtio-net driver -> net server (smoltcp) -> clients`
@@ -110,7 +110,6 @@ capabilities; filesystems are per-volume servers.
 
 ## Open questions
 - Directory capabilities with no global `/`: agreed as the secure choice; the shell UX is to be designed.
-- RedoxFS versus our own CoW filesystem.
 - IOMMU versus IOPMP on the FPGA; which softcore (CVA6 has the IOMMU integrated; VexiiRiscv continues
   the Xous lineage).
 - Doorbell mechanism for the Linux partition.
