@@ -38,6 +38,7 @@ programs = [                 # initial processes, PID 2 onwards
     { path = "prebuilt/thing.elf" },               # or a prebuilt ELF
 ]
 smp = [1, 4]                 # one boot per hart count (default [1])
+memory_mib = 32              # guest RAM (default 256); small for cases that exhaust it on purpose
 timeout_secs = 60            # default 60; fractions allowed
 kernel_features = []         # extra kernel features, e.g. ["debug-print"]
 expect = ['regex 1', 'regex 2']   # must each match a console line, in this order

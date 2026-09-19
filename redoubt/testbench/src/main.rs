@@ -78,7 +78,15 @@ fn main() -> Result<()> {
             .collect();
         let bundle = prepare(&builder, target, machine, &programs, &[], &[], "", false, &logs.join("interactive.tar"))?;
         let loader = builder.artifact(target, machine.loader_package);
-        let image = Image { machine, firmware: &args.firmware, loader: &loader, bundle: &bundle, smp: args.smp, devices: &[] };
+        let image = Image {
+            machine,
+            firmware: &args.firmware,
+            loader: &loader,
+            bundle: &bundle,
+            smp: args.smp,
+            memory_mib: target::DEFAULT_MEMORY_MIB,
+            devices: &[],
+        };
         return image.run_interactive(args.debug);
     }
     // Something the host lacks. A skip would make the run look greener than it is.
@@ -289,7 +297,15 @@ fn run_case(
         // Every boot gets fresh devices: a new disk, new host ports.
         let boot_once = |log: &Path| -> Result<Verdict> {
             let (devices, forwards) = qemu::virtio_devices(boot, &log.with_extension("img"))?;
-            let image = Image { machine, firmware: &firmware, loader: &loader, bundle: &bundle, smp: *smp, devices: &devices };
+            let image = Image {
+                machine,
+                firmware: &firmware,
+                loader: &loader,
+                bundle: &bundle,
+                smp: *smp,
+                memory_mib: boot.memory_mib.unwrap_or(target::DEFAULT_MEMORY_MIB),
+                devices: &devices,
+            };
             qemu::run(&image, boot, &builder.workspace, &forwards, log)
         };
         let outcome = match boot_once(&log)? {
