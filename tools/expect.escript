@@ -5,10 +5,15 @@
 %% directory as its file system root (`--root`).
 main([Dir]) ->
     true = code:add_patha(Dir),
+    %% Tests with console input (a .stdin file next to the source) are run by difftest itself.
     [expect(Dir, M) || F <- filelib:wildcard(filename:join(Dir, "*.beam")),
                        M <- [list_to_atom(filename:basename(F, ".beam"))],
-                       has_start(M)],
+                       has_start(M), not reads_console(M)],
     ok.
+
+reads_console(M) ->
+    Src = proplists:get_value(source, M:module_info(compile), ""),
+    filelib:is_regular(filename:join(filename:dirname(Src), atom_to_list(M) ++ ".stdin")).
 
 has_start(M) ->
     {module, M} = code:ensure_loaded(M),

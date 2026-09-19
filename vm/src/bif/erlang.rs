@@ -701,13 +701,26 @@ pub fn binary_to_float(c: &mut Ctx, a: &[Term]) -> R {
 
 // ---- the external term format ----
 
+/// `term_to_binary(Term)` and `term_to_binary(Term, Options)`. `compressed` and
+/// `{compressed, Level}` compress (when that is smaller); `minor_version`, `deterministic` and
+/// `local` change nothing, since maps are always written in key order.
 pub fn term_to_binary(c: &mut Ctx, a: &[Term]) -> R {
-    // Options (compressed, minor_version, deterministic) do not change our output: maps are
-    // always written in key order and nothing is compressed.
+    let mut level = 0u8;
     if let Some(opts) = a.get(1) {
-        opts.to_vec().ok_or_else(|| c.badarg())?;
+        for o in opts.to_vec().ok_or_else(|| c.badarg())? {
+            match &o {
+                Term::Atom(x) if x.as_str() == "compressed" => level = 6,
+                Term::Atom(x) if x.as_str() == "deterministic" || x.as_str() == "local" => {}
+                Term::Tuple(t) => match (&t[..], t.first()) {
+                    ([_, Term::Int(l @ 0..=9)], Some(Term::Atom(k))) if k.as_str() == "compressed" => level = *l as u8,
+                    ([_, Term::Int(0..=2)], Some(Term::Atom(k))) if k.as_str() == "minor_version" => {}
+                    _ => return Err(c.badarg()),
+                },
+                _ => return Err(c.badarg()),
+            }
+        }
     }
-    let bytes = crate::etf::encode(&a[0]).map_err(|_| c.badarg())?;
+    let bytes = crate::etf::encode_compressed(&a[0], level).map_err(|_| c.badarg())?;
     Ok(Term::binary(&bytes))
 }
 

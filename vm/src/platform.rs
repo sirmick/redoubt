@@ -26,6 +26,13 @@ pub trait Platform {
     /// Write bytes to the VM's console (the `user` I/O device).
     fn console_write(&mut self, bytes: &[u8]);
 
+    /// Input typed at the console, if any has arrived. Must not block: the VM calls it between
+    /// time slices, and [`Platform::idle`] is where it waits (an `idle` call should return when
+    /// input arrives). The default is a console with no input at all.
+    fn console_read(&mut self) -> ConsoleInput {
+        ConsoleInput::Eof
+    }
+
     /// Fill `buf` from a cryptographically secure source. On failure the VM raises rather than
     /// using a weaker source.
     fn random(&mut self, buf: &mut [u8]) -> Result<(), PlatformError>;
@@ -180,6 +187,16 @@ impl FileError {
             FileError::Exdev => "exdev",
         }
     }
+}
+
+/// What [`Platform::console_read`] found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConsoleInput {
+    /// Nothing yet.
+    Nothing,
+    Data(Vec<u8>),
+    /// The input has ended; there will be no more.
+    Eof,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

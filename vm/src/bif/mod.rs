@@ -496,6 +496,7 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("erlang", "crc32", 1, info::crc32),
     ("erlang", "crc32", 2, info::crc32),
     ("beamlet", "app_spec", 1, info::app_spec),
+    ("beamlet", "console_subscribe", 0, info::console_subscribe),
     ("inet", "gethostname", 0, info::gethostname),
     ("net_adm", "localhost", 0, info::localhost),
     ("init", "get_arguments", 0, info::init_get_arguments),

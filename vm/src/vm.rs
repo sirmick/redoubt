@@ -14,7 +14,7 @@ use crate::bif::{self, Native};
 use crate::interp::{self, Stop};
 use crate::loader::{self, LoadError};
 use crate::module::Module;
-use crate::platform::Platform;
+use crate::platform::{ConsoleInput, Platform};
 use crate::process::{Class, Cp, Exception, Process, State};
 use crate::term::{Pid, Ref, Term};
 
@@ -106,6 +106,9 @@ pub struct System {
     pub(crate) files: BTreeMap<u64, Pid>,
     /// Set by `erlang:halt`: the VM stops with this status.
     pub(crate) halted: Option<i64>,
+    /// The process that receives console input (`beamlet:console_subscribe/0`): the `user`
+    /// I/O server. `None` once input has ended, or before anyone asked.
+    pub(crate) console_reader: Option<Pid>,
     pub(crate) stats: Stats,
 }
 
@@ -347,6 +350,7 @@ impl Vm {
                 cwd: "/".into(),
                 files: BTreeMap::new(),
                 halted: None,
+                console_reader: None,
                 stats: Stats::default(),
             },
         }
@@ -599,11 +603,17 @@ impl System {
     fn step(&mut self) -> bool {
         self.deliver_exits();
         self.fire_timers();
+        self.poll_console();
         let Some(pid) = self.run_queue.pop_front() else {
-            // Nothing runnable: sleep until the next timer, or give up if there is none.
+            // Nothing runnable: sleep until the next timer or console input, or give up if
+            // nothing can ever arrive.
             return match self.timers.first() {
                 Some(&(deadline, _)) => {
                     self.platform.idle(Some(deadline));
+                    true
+                }
+                None if self.console_reader.is_some() => {
+                    self.platform.idle(None);
                     true
                 }
                 None => !self.exits.is_empty(),
@@ -699,6 +709,21 @@ impl System {
     }
 
     /// End process `p`: tell its links and monitors, then free its slot.
+    /// Pass console input, if any has arrived, to the process reading it.
+    fn poll_console(&mut self) {
+        let Some(reader) = self.console_reader else { return };
+        let msg = match self.platform.console_read() {
+            ConsoleInput::Nothing => return,
+            ConsoleInput::Data(bytes) => Term::binary(&bytes),
+            ConsoleInput::Eof => {
+                self.console_reader = None;
+                Term::Atom(self.atom("eof"))
+            }
+        };
+        let tag = Term::Atom(self.atom("beamlet_console"));
+        self.send(reader, Term::tuple(alloc::vec![tag, msg]));
+    }
+
     /// Close the files `pid` opened.
     fn close_files(&mut self, pid: Pid) {
         let handles: Vec<u64> = self.files.iter().filter(|(_, &o)| o == pid).map(|(&h, _)| h).collect();
@@ -728,6 +753,9 @@ impl System {
         }
         self.aliases.retain(|_, a| a.owner != pid);
         self.close_files(pid);
+        if self.console_reader == Some(pid) {
+            self.console_reader = None;
+        }
         if let Some(name) = &p.registered_name {
             self.registered.remove(name.as_str());
         }
