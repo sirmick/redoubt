@@ -228,10 +228,10 @@ Kernel-interface-bound first:
 1. **Capability mechanism** (designed: `CAPABILITIES.md`, packages: `PACKAGES.md`): unforgeable handles instead of 128-bit
    password SIDs, transfer, badges, attenuation, revocation, death notification.
 2. **Principals: users and AI agents as first-class, equal principals** (designed, same note).
-3. **Resource accounting and quotas** (memory, handles, threads, IRQ rates); today there are none.
+3. **Resource accounting and quotas** (designed: `RESOURCES.md`, budgets).
 4. **Startup block format** (namespace table + granted capabilities).
 5. **Init and supervision**: who is first, who holds root capabilities and when they are dropped.
-6. **Scheduling**: preemption, priorities (drivers/router over apps), then SMP.
+6. **Scheduling** (designed: `RESOURCES.md`, two classes + hierarchical stride + donation).
 System structure: keys and root of trust (key server, sealed storage, disk key); signed A/B updates,
 rollback protection, key rotation.
 Services: entropy server, wall clock + NTP (Elixir), DNS (`inet_res`), log/audit server, userspace
