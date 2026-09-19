@@ -342,12 +342,14 @@ pub fn link(c: &mut Ctx, a: &[Term]) -> R {
     if pid == c.p.pid {
         return Ok(Term::Atom(c.sys.atoms.true_));
     }
-    match c.sys.procs.get_mut(pid) {
-        Some(other) => {
-            other.links.insert(c.p.pid);
+    let me = c.p.pid;
+    match c.sys.procs.update(pid, move |other| {
+        other.links.insert(me);
+    }) {
+        true => {
             c.p.links.insert(pid);
         }
-        None => {
+        false => {
             let noproc = Term::Atom(c.sys.atoms.noproc);
             if c.p.trap_exit {
                 let msg = c.tuple(&[Term::Atom(c.sys.atoms.exit_upper), Term::Pid(pid), noproc]);
@@ -363,9 +365,10 @@ pub fn link(c: &mut Ctx, a: &[Term]) -> R {
 pub fn unlink(c: &mut Ctx, a: &[Term]) -> R {
     let pid = pid_arg(c, &a[0])?;
     c.p.links.remove(&pid);
-    if let Some(other) = c.sys.procs.get_mut(pid) {
-        other.links.remove(&c.p.pid);
-    }
+    let me = c.p.pid;
+    c.sys.procs.update(pid, move |other| {
+        other.links.remove(&me);
+    });
     Ok(Term::Atom(c.sys.atoms.true_))
 }
 
@@ -420,9 +423,9 @@ fn monitor_tagged(c: &mut Ctx, a: &[Term], tag: Option<Term>) -> R {
                 object: c.own(object),
                 tag: tag.map(|t| c.own(t)),
             };
-            if let Some(t) = c.sys.procs.get_mut(pid) {
+            c.sys.procs.update(pid, move |t| {
                 t.monitored_by.insert(r, monitor);
-            }
+            });
             c.p.monitors.insert(r, pid);
         }
         Some(pid) if pid == c.p.pid => {} // monitoring yourself never fires
@@ -446,9 +449,9 @@ pub fn demonitor(c: &mut Ctx, a: &[Term]) -> R {
         return Err(c.badarg());
     };
     if let Some(pid) = c.p.monitors.remove(&r) {
-        if let Some(t) = c.sys.procs.get_mut(pid) {
+        c.sys.procs.update(pid, move |t| {
             t.monitored_by.remove(&r);
-        }
+        });
     }
     if c.sys
         .aliases
@@ -639,14 +642,19 @@ pub fn register(c: &mut Ctx, a: &[Term]) -> R {
     if name == c.sys.atoms.undefined || c.sys.registered.contains_key(name.as_str()) {
         return Err(c.badarg());
     }
-    let target = if pid == c.p.pid {
-        Some(&mut *c.p)
-    } else {
-        c.sys.procs.get_mut(pid)
-    };
-    match target {
-        Some(p) if p.registered_name.is_none() => p.registered_name = Some(name),
-        _ => return Err(c.badarg()),
+    // A process has at most one name; the table of names says which have one.
+    let named = c.sys.registered.values().any(|&p| p == pid);
+    if named {
+        return Err(c.badarg());
+    }
+    if pid == c.p.pid {
+        c.p.registered_name = Some(name);
+    } else if !c
+        .sys
+        .procs
+        .update(pid, move |p| p.registered_name = Some(name))
+    {
+        return Err(c.badarg());
     }
     c.sys.registered.insert(name.as_str().into(), pid);
     Ok(Term::Atom(c.sys.atoms.true_))
@@ -661,13 +669,10 @@ pub fn unregister(c: &mut Ctx, a: &[Term]) -> R {
         .registered
         .remove(name.as_str())
         .ok_or_else(|| c.badarg())?;
-    let target = if pid == c.p.pid {
-        Some(&mut *c.p)
+    if pid == c.p.pid {
+        c.p.registered_name = None;
     } else {
-        c.sys.procs.get_mut(pid)
-    };
-    if let Some(p) = target {
-        p.registered_name = None;
+        c.sys.procs.update(pid, |p| p.registered_name = None);
     }
     Ok(Term::Atom(c.sys.atoms.true_))
 }
@@ -717,8 +722,14 @@ pub fn set_group_leader(c: &mut Ctx, a: &[Term]) -> R {
     if *pid == c.p.pid {
         c.p.group_leader = Some(*leader);
     } else {
-        let badarg = c.badarg();
-        c.sys.procs.get_mut(*pid).ok_or(badarg)?.group_leader = Some(*leader);
+        let leader = *leader;
+        if !c
+            .sys
+            .procs
+            .update(*pid, move |p| p.group_leader = Some(leader))
+        {
+            return Err(c.badarg());
+        }
     }
     Ok(Term::Atom(c.sys.atoms.true_))
 }

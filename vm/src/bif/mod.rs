@@ -904,6 +904,14 @@ impl Ctx<'_> {
         })
     }
 
+    /// Finish this call later: the process yields and the native is called again, with the
+    /// same arguments, when it next runs. For a native that needs a process another scheduler
+    /// is running just now. Only for natives called as functions (not guard BIFs).
+    pub fn retry(&mut self) -> Result<Term, Exception> {
+        self.p.retry = true;
+        Ok(Term::Nil)
+    }
+
     /// A new resource holding `value`, with a fresh id.
     pub fn new_resource<T: core::any::Any + crate::sync::Shared>(&mut self, value: T) -> Term {
         let id = self.sys.make_ref().0;
