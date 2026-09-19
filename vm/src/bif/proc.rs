@@ -831,6 +831,19 @@ fn spawn_with(c: &mut Ctx, entry: crate::process::Cp, args: Vec<Term>, opts: &Te
     Ok(Term::tuple(alloc::vec![Term::Pid(pid), Term::Ref(r)]))
 }
 
+/// `spawn_monitor(Fun)` and `spawn_monitor(M, F, A)`: `{Pid, Ref}`.
+pub fn spawn_monitor1(c: &mut Ctx, a: &[Term]) -> R {
+    let (entry, args) = interp::fun_entry(c.sys, &a[0], Vec::new())?;
+    let monitor = Term::list(alloc::vec![c.atom("monitor")]);
+    spawn_with(c, entry, args, &monitor)
+}
+
+pub fn spawn_monitor3(c: &mut Ctx, a: &[Term]) -> R {
+    let (entry, args) = mfa_entry(c, a)?;
+    let monitor = Term::list(alloc::vec![c.atom("monitor")]);
+    spawn_with(c, entry, args, &monitor)
+}
+
 pub fn spawn_opt2(c: &mut Ctx, a: &[Term]) -> R {
     let (entry, args) = interp::fun_entry(c.sys, &a[0], Vec::new())?;
     spawn_with(c, entry, args, &a[1])

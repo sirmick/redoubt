@@ -309,6 +309,8 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("erlang", "function_exported", 3, proc::function_exported),
     ("erlang", "module_loaded", 1, proc::module_loaded),
     ("erlang", "spawn_opt", 2, proc::spawn_opt2),
+    ("erlang", "spawn_monitor", 1, proc::spawn_monitor1),
+    ("erlang", "spawn_monitor", 3, proc::spawn_monitor3),
     ("erlang", "spawn_opt", 4, proc::spawn_opt4),
     ("erlang", "system_info", 1, proc::system_info),
     ("erlang", "nif_error", 1, proc::nif_error),
