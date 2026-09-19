@@ -135,8 +135,19 @@ and verified at boot, `KernelCell` for globals, RNG fails closed, the `unsafe` r
 Found and fixed an upstream bug on the way: `interrupt_free` bounds check was off by one, so any
 process could panic the kernel. **Worth reporting upstream to betrusted-io/xous-core.**
 
+**Security bug found and fixed (2026-09-18), confirmed by test `uaf-lent-page`:** a process that
+terminated while one of its pages was lent to (and still mapped in) another process had that physical
+frame freed and re-allocated to a third process -- a cross-process use-after-free / memory disclosure.
+Root cause: `release_all_memory_for_process` called `page_is_lent(phys)` with a physical address where
+a virtual one was required, so lent pages were never detected. Fix: detect lent frames by walking the
+dying process's page table (`arch::mem::for_each_lent_frame`) and reparent them to PID 1 so the frame
+is not reused while a borrower holds it. **Present in upstream betrusted-io/xous-core; worth reporting.**
+Remaining: the return path when the borrower later returns a page to a dead lender (possible frame
+leak, not a safety hole) is not yet handled -- see "lent pages at exit".
+
 Open, in rough priority order:
-- [ ] Inherited `unsafe`: RISC-V arch layer 35 and kernel core 82 uses, none justified. Convert the
+- [x] Kernel core `unsafe` 82 -> 67: memory manager and its allocation tables moved behind `KernelCell`.
+- [ ] Inherited `unsafe`: RISC-V arch layer 35 and kernel core 67 uses, none justified. Convert the
       remaining `static mut` globals to `KernelCell` (SWITCHTO_CALLER, PREVIOUS_PAIR, PROCESS_TABLE,
       MEMORY_ALLOCATIONS, ...), then justify what is left. The ratchet in `xous64/tests/unsafe-budget.toml`
       records progress.

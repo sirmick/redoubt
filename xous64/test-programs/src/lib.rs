@@ -97,3 +97,40 @@ pub fn park() -> ! {
         xous::yield_slice();
     }
 }
+
+/// Protocol for the use-after-free attack test (`uaf-*` binaries). A "holder" server
+/// keeps a page lent to it by a "victim" that then terminates; a "grabber" tries to
+/// reclaim the freed frame. See `xous64/tests/uaf-lent-page.toml`.
+pub mod uaf {
+    /// Well-known address of the holder server.
+    pub const HOLDER_ADDRESS: &[u8; 16] = b"xous64-uaf-holdr";
+    /// MutableBorrow: hold this page forever and remember where it is mapped.
+    pub const HOLD: usize = 1;
+    /// BlockingScalar: reply once a page has been held (a barrier for the victim's terminator thread).
+    pub const WAIT_HELD: usize = 2;
+    /// BlockingScalar: reply immediately (liveness / ordering for the grabber).
+    pub const SYNC: usize = 3;
+    /// BlockingScalar: re-read the held page; reply 1 if it still reads back as the victim's data.
+    pub const CHECK: usize = 4;
+    /// The victim writes this into the page before lending it.
+    pub const VICTIM_SENTINEL: &[u8; 8] = b"VICTIM!!";
+    /// The grabber writes this into every page it allocates.
+    pub const GRABBER_SENTINEL: &[u8; 8] = b"GRABBER!";
+}
+
+/// Wait about `ms` milliseconds, reading the `time` CSR (which the kernel lets U-mode
+/// read) but yielding between checks. These processes have no timer preemption, so a pure
+/// busy-loop would never let another runnable thread proceed. Used only to order events
+/// between processes that cannot otherwise synchronise.
+pub fn wait_ms(ms: u64) {
+    fn now() -> u64 {
+        let t: u64;
+        unsafe { core::arch::asm!("rdtime {}", out(reg) t) };
+        t
+    }
+    // QEMU virt runs the timer at 10 MHz.
+    let deadline = now() + ms * 10_000;
+    while now() < deadline {
+        xous::yield_slice();
+    }
+}

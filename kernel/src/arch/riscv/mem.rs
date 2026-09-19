@@ -749,6 +749,24 @@ pub fn mark_page_user(virt: usize) -> Result<(), xous_kernel::Error> {
     Ok(())
 }
 
+/// Call `f` with the physical frame of every page the current process has lent out
+/// (a leaf with the shared bit set).
+pub fn for_each_lent_frame(mut f: impl FnMut(usize)) {
+    let l1_pt = unsafe { &(*(PAGE_TABLE_ROOT_OFFSET as *const RootPageTable)) };
+    for (i, l1_entry) in l1_pt.entries.iter().enumerate() {
+        // Skip empty superpages and the kernel superpage (1023).
+        if *l1_entry & MMUFlags::VALID.bits() == 0 || i == 1023 {
+            continue;
+        }
+        let l0_pt = unsafe { &(*((PAGE_TABLE_OFFSET + i * PAGE_SIZE) as *const LeafPageTable)) };
+        for l0_entry in l0_pt.entries.iter() {
+            if *l0_entry & MMUFlags::S.bits() != 0 {
+                f((*l0_entry >> 10) << 12);
+            }
+        }
+    }
+}
+
 /// Get the pagetable entry for a given address, or `Err()` if the address is invalid
 pub fn pagetable_entry(addr: usize) -> Result<*mut usize, xous_kernel::Error> {
     if addr & 3 != 0 {
