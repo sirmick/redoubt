@@ -5,7 +5,7 @@ so each needs your decision; the answer goes into the named note with a HISTORY.
 **Rec** is the orchestrator's recommendation. Reply with numbers, e.g. "all Rec except 7: ...".
 
 **1-119 answered 2026-09-19** (ANSWERS.md, six tranches; each "Answered" line says where the
-answer now lives). **Open: 120-126** (from WP-S1, at the end). The round-4 answers revised 56 (handle kinds are checked by
+answer now lives). **Open: 127-128** (from WP-K2, at the end). The round-4 answers revised 56 (handle kinds are checked by
 use) and replaced 57 and 58 (by 82); the last tranche replaced 103 (no `first` flag and no strict
 priority: one stride queue for every budget).
 
@@ -997,4 +997,22 @@ point to change the IPC design. Several items interact; the cross-references say
      handles.
      *Rec:* a server draws its first minted badge at random above 2^63, from `random`. The
      skeleton and keyd change together.
+
+## From the kernel's IPC (WP-K2)
+
+127. **The cost table is silent about per-process kernel storage.** A process object costs one
+     page, but its saved thread contexts take `PROCESS_IMPL_PAGES` (two on rv64). WP-K1 covered the
+     gap with the first thread's page; now that a thread's page holds its IPC state, WP-K2 reserves
+     the difference at boot instead, so every charged page still has a frame behind it.
+     *Rec:* the cost table says what a process really costs: its own page, plus
+     `PROCESS_IMPL_PAGES - 1` for its saved contexts, plus one page per thread for that thread's
+     IPC state. The kernel then charges it rather than reserving it at boot, once WP-K4 creates
+     processes from userspace.
+
+128. **An endpoint cannot be destroyed.** It dies only with its owner budget (R10), so a process
+     can spend its budget's pages on endpoints it can never reclaim. That is bounded by the budget,
+     and a revocation scope gives a way to reclaim them, so it may be deliberate.
+     *Rec:* state it in KERNEL-SPEC.md rather than adding a call: an endpoint lives until its
+     owner budget dies, and a process that wants to reclaim one creates it in a scope it can
+     destroy. No `endpoint_destroy`.
 
