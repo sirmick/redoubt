@@ -2,8 +2,8 @@
 //!
 //! Two invariants a hostile process must not be able to break:
 //!   1. RAM handed out anonymously (`phys = 0`) is zeroed before the process sees it.
-//!   2. A process cannot map a physical RAM frame *by address*: that would let it point at
-//!      another process's freed page and read what was left there.
+//!   2. A process cannot map a physical RAM frame *by address*: that would let it point at another process's
+//!      freed page and read what was left there.
 //!
 //! `mem-victim` has just freed pages holding its secret. This program takes twice as many
 //! anonymous pages, tries to map several physical addresses inside main RAM, and lends every
@@ -18,8 +18,8 @@
 #![no_std]
 #![no_main]
 
-use test_programs::{log, mem, Logger};
-use xous::{MemoryAddress, MemoryFlags, MemoryRange, Message, CID};
+use test_programs::{Logger, log, mem};
+use xous::{CID, MemoryAddress, MemoryFlags, MemoryRange, Message};
 
 /// Physical addresses inside QEMU `virt` main RAM (base 0x8000_0000, 256 MiB, on both
 /// widths). Mapping any of these by explicit address must be refused.
@@ -28,7 +28,8 @@ const RAM_ADDRS: &[usize] = &[0x8000_0000, 0x8100_0000, 0x88ff_f000];
 const PAGES: usize = 2 * mem::SECRET_PAGES;
 
 fn lend(victim: CID, page: MemoryRange) {
-    xous::send_message(victim, Message::new_lend(mem::CHECK, page, None, None)).expect("couldn't lend to the victim");
+    xous::send_message(victim, Message::new_lend(mem::CHECK, page, None, None))
+        .expect("couldn't lend to the victim");
 }
 
 #[no_mangle]
@@ -43,12 +44,9 @@ pub extern "C" fn _start() -> ! {
     for _ in 0..PAGES {
         match xous::map_memory(None, None, 4096, flags) {
             Ok(page) => {
-                // Touch the page first. Lending a page never touched (the kernel backs anonymous
-                // pages on first use) panics the kernel today ("RefCell already borrowed",
-                // kernel/src/cell.rs), a kernel bug that SWARM.md K0 is fixing, with its own case.
-                // Remove this when K0 lands. Reading does not change what the victim will see.
-                // SAFETY: the kernel just mapped this page readable for us.
-                unsafe { page.as_ptr().read_volatile() };
+                // Lend it untouched: the kernel backs anonymous pages on first use, and lending
+                // one it has never touched must be served, not a kernel panic (WP-K0,
+                // lend-untouched-page). The victim sees zeroes either way.
                 lend(victim, page);
                 lent += 1;
             }
@@ -71,7 +69,8 @@ pub extern "C" fn _start() -> ! {
         }
     }
 
-    xous::send_message(victim, Message::new_blocking_scalar(mem::DONE, 0, 0, 0, 0)).expect("couldn't reach the victim");
+    xous::send_message(victim, Message::new_blocking_scalar(mem::DONE, 0, 0, 0, 0))
+        .expect("couldn't reach the victim");
     test_programs::park()
 }
 

@@ -1,0 +1,19 @@
+description = "A server cannot move on a page that was only lent to it: the move is refused, not a kernel panic, and the lender gets its page back"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# PID 2 log-server; PID 3 move-borrowed (attacker); PID 4 move-borrowed-victim (lender).
+programs = ["log-server", "move-borrowed", "move-borrowed-victim"]
+timeout_secs = 30
+# The kernel once changed the page tables for such a move, then found the frame belonged to
+# the lender and panicked ("unable to send"). The verdict is the victim's line, relayed under
+# its own PID 4, which the attacker cannot forge: its lend returned and its page still holds
+# what it wrote. The attacker's PID 3 line is progress only.
+expect = [
+    '^\[pid 3\] \[move-borrowed\] moving the borrowed page on: Err\(ShareViolation\)$',
+    '^\[pid 4\] \[victim\] lend returned Ok\(MemoryReturned\(.*\)\), page intact: victim data$',
+]
+forbid = ['CHANGED', '^\[server\] moved page']
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]

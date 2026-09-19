@@ -1,0 +1,27 @@
+description = "Faulting in more reserved anonymous memory than there is RAM terminates the one process, not the kernel (verdict: survival only)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# 32 MiB so the attacker (64 MiB of touches) exhausts RAM in milliseconds.
+memory_mib = 32
+# PID 2 log-server; PID 3 touch-beyond-ram (dies); PID 4 survivor; PID 5 attack-checker.
+programs = ["log-server", "touch-beyond-ram", "touch-beyond-ram-survivor", "attack-checker"]
+timeout_secs = 30
+# The fault-path allocator once `.expect()`ed and halted the machine on OOM. PANIC is always
+# forbidden; the verdict is the survivor's report and the checker's clean power-off under its
+# own PID, which a panicked kernel never reaches. The attacker prints BREACH only if it never
+# died.
+expect = [
+    '^\[pid 3\] \[attacker\] touching 16384 reserved pages$',
+    '^\[pid 4\] \[survivor\] still scheduled after the attacker exhausted RAM$',
+    '^\[pid 5\] \[checker\] PID 4 reported; the kernel still serves',
+]
+forbid = ['BREACH']
+poweroff = true
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]
+
+[[grant]]
+program = "attack-checker"
+mmio = ["0x100000:0x1000"]
