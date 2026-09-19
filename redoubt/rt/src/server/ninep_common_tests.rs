@@ -281,53 +281,23 @@ fn a_client_at_its_connection_cap_costs_the_server_no_walk() {
     t.connect(&mut k, &caller(2, 2002, &[]), "a/b", 0).unwrap();
 }
 
+/// QUESTIONS.md 118: byte quotas are the file server's; the skeleton hands it every grant and
+/// every disconnect.
 #[test]
-fn quotas_are_carved_charged_and_returned() {
+fn a_quota_is_the_file_servers_to_grant_and_a_disconnect_reaches_it() {
     let (mut t, mut k) = (T::new(), FakeKernel::new());
-    let root = caller(QUOTA_BADGE, 1001, &[]);
-    assert_eq!(t.server.quota_free(&root), Some(QUOTA));
-    let (c, id) = t.connect(&mut k, &root, "", 60).unwrap();
-    assert_eq!(t.server.quota_free(&root), Some(40));
-    assert_eq!(t.connect(&mut k, &root, "", 41), Err(REFUSED), "more than is left to carve");
-    // Writes through the new root are charged to its 60 bytes.
-    let child = through(&root, c);
-    t.attach(&child, 0, "");
-    let create = Body::Tcreate { fid: 0, name: "q", perm: 0o644, mode: mode::ORDWR };
-    assert!(matches!(t.rpc(&child, create), Body::Rcreate { .. }));
-    let data = [7u8; 60];
-    assert_eq!(t.rpc(&child, Body::Twrite { fid: 0, offset: 0, data: &data }), Body::Rwrite { count: 60 });
-    assert_eq!(t.server.quota_free(&child), Some(0));
-    assert_eq!(t.err(&child, Body::Twrite { fid: 0, offset: 60, data: b"x" }), "quota exceeded");
-    // Overwriting adds nothing; truncating credits what it freed.
-    assert_eq!(t.rpc(&child, Body::Twrite { fid: 0, offset: 10, data: b"abc" }), Body::Rwrite { count: 3 });
-    t.clunk(&child, 0);
-    t.attach(&child, 0, "");
-    t.walk(&child, 0, 1, &["q"]);
-    t.open(&child, 1, mode::OWRITE | mode::OTRUNC).unwrap();
-    assert_eq!(t.server.quota_free(&child), Some(60));
-    assert_eq!(
-        t.rpc(&child, Body::Twrite { fid: 1, offset: 0, data: &data[..50] }),
-        Body::Rwrite { count: 50 }
-    );
-    // A connection the child mints with no quota of its own shares the child's.
-    let (grandchild, _) = t.connect(&mut k, &child, "", 0).unwrap();
-    assert_eq!(t.server.quota_free(&through(&root, grandchild)), Some(10));
-    // Removing credits the file's bytes.
-    t.walk(&child, 0, 2, &["q"]);
-    assert_eq!(t.rpc(&child, Body::Tremove { fid: 2 }), Body::Rremove);
-    assert_eq!(t.server.quota_free(&child), Some(60));
-    t.walk(&child, 0, 3, &[]);
-    let create = Body::Tcreate { fid: 3, name: "r", perm: 0o644, mode: mode::OWRITE };
-    assert!(matches!(t.rpc(&child, create), Body::Rcreate { .. }));
-    assert_eq!(
-        t.rpc(&child, Body::Twrite { fid: 3, offset: 0, data: &data[..50] }),
-        Body::Rwrite { count: 50 }
-    );
-    // Disconnecting returns the carving; the 50 bytes still on disk stay charged to the root.
-    t.disconnect(&mut k, &root, id).unwrap();
-    assert_eq!(t.server.quota_free(&root), Some(QUOTA - 50));
-    // Another server badge's root is unlimited, and unaffected.
-    assert_eq!(t.server.quota_free(&alice()), Some(u64::MAX));
+    let a = alice();
+    let (c, id) = t.connect(&mut k, &a, "a", 60).unwrap();
+    assert_eq!(t.server.fs.grants, [(c, 1, 60)]);
+    // The server refuses a grant: nothing is minted, the admission comes back.
+    assert_eq!(t.connect(&mut k, &a, "", REFUSED_QUOTA), Err(REFUSED));
+    assert_eq!(k.minted, [c]);
+    assert_eq!(t.server.admission().held(AdmitKey::of(&a), Resource::State), 1);
+    // Disconnecting reaches it, for the whole subtree.
+    let (g, _) = t.connect(&mut k, &through(&a, c), "b", 0).unwrap();
+    assert_eq!(t.server.fs.grants, [(c, 1, 60), (g, 2, 0)]);
+    t.disconnect(&mut k, &a, id).unwrap();
+    assert!(t.server.fs.grants.is_empty());
 }
 
 #[test]
