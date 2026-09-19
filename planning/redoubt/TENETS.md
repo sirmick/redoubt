@@ -17,6 +17,10 @@ microarchitectural side channels (Spectre-class, cache timing), and malicious ha
 hardware answers; on the FPGA target, side channels are handled in the RTL, and the hardware plan
 may change to avoid them (PLATFORM-FPGA.md).
 
+**Timing.** Assume the attacker has a perfect clock: it can count on another core or timestamp
+against a machine it controls. Secrets are protected by constant-time code and by not sharing
+hardware state between budgets, never by hiding time (CONTAINMENT.md).
+
 **Review model.** We do not rely on human review. Adversarial agents from several vendors, and real
 attacks, test the system, so **the design, not review, must bound the damage**. Every component will
 have bugs; a compromised process holds only its own capabilities, and a compromised server reaches
@@ -65,7 +69,9 @@ loader, kernel) and hold it in their head. It should read like a textbook exampl
   break it.
 
 ## 3. Rust, and assembly only where Rust cannot reach
-- Everything that runs on the machine is Rust: firmware, loader, kernel, servers, applications.
+- Everything that runs on the machine is Rust: loader, kernel, servers, applications, and the
+  firmware where we choose it (RustSBI). OpenSBI (C) is tolerated on QEMU and in the Linux-partition
+  mode, where it is TCB.
 - Assembly is limited to what the language cannot express: trap entry and exit, context switch, the
   first instructions after reset. It is written as `global_asm!`/`asm!` inside Rust sources, never as
   separate prebuilt objects.
