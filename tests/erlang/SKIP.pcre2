@@ -1,0 +1,4 @@
+# Modules that test the default (Rust) regex engine against BEAM and do not hold with the pcre2
+# test engine. One module per line, then why.
+
+re_errors      three error offsets differ between the vendored PCRE2 10.46 and BEAM's 10.47

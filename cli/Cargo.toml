@@ -11,3 +11,7 @@ beamlet-crypto = { path = "../crypto" }
 beamlet-re = { path = "../re" }
 cap-std = "3"
 fs-set-times = "0.20"
+
+[features]
+# Real PCRE2 (C) behind `re`, for testing against BEAM; never in a default build.
+pcre2 = ["beamlet-re/pcre2"]
