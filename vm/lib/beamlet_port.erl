@@ -44,8 +44,12 @@ loop(S) ->
     end.
 
 owner() ->
-    {connected, Owner} = erlang:port_info(self(), connected),
-    Owner.
+    case erlang:port_info(self(), connected) of
+        {connected, Owner} -> Owner;
+        %% Closed (port_close/1) while this was still running on another scheduler: the
+        %% signal that ends it is on its way; stop now.
+        undefined -> exit(normal)
+    end.
 
 %% Only the connected process may command a port; anything else is a bad signal.
 check_owner(From) ->
