@@ -197,9 +197,16 @@ Kernel prerequisites first:
 Storage:
 - [ ] `virtio-blk` driver server (`virtio-drivers`), hardened against a hostile device side, fuzzed.
 - [ ] Block server: partitions, cache, block-range capabilities, per-block AEAD + Merkle root.
-- [ ] fs server with directory capabilities (no global namespace). Choice: RedoxFS vs our own CoW fs.
+- [ ] fs server speaking 9P, one per volume (design: `NAMESPACES.md`).
+- [ ] Time-boxed RedoxFS audit (no_std over our block interface, size, fuzz + crash injection);
+      else our own spec'd CoW fs. Same harness judges either.
+- [ ] Read-only boot-bundle fs server at `/boot`.
+Namespaces and launching (`NAMESPACES.md`):
+- [ ] Shared 9P2000 codec, fuzzed; namespace library (prefix table, lexical `..`); beamlet Platform.
+- [ ] Startup block carries the namespace table.
+- [ ] Launcher server + bare address-space primitive: only when runtime launching is first needed.
 Network:
-- [ ] `virtio-net` driver server; net server on `smoltcp` with scoped socket capabilities.
+- [ ] `virtio-net` driver server; net server on `smoltcp` serving a Plan 9 style `/net` tree over 9P.
 - [ ] Key server; beamlet `:crypto` natives in Rust.
 Trivial drivers: ns16550 (done), goldfish RTC.
 Later:

@@ -104,6 +104,10 @@ For messy SoCs. Not a hypervisor: the K1 does not appear to have the H extension
 4. Wider IRQ numbering (currently 32 entries).
 5. IOMMU backend (a capability feature, like `plic`), programmed from the grants.
 
+## Namespaces
+See NAMESPACES.md: every user-facing service speaks 9P; a namespace is a per-process table of
+capabilities; filesystems are per-volume servers.
+
 ## Open questions
 - Directory capabilities with no global `/`: agreed as the secure choice; the shell UX is to be designed.
 - RedoxFS versus our own CoW filesystem.
