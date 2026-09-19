@@ -297,7 +297,8 @@ Blocking: **K1 cannot start until 1-16 are settled** (they fix the ABI, `redoubt
     - `mint` accepts any message id among the caller's open calls. A `send`'s message id is never
       open (question 31), so it can't be a mint source.
 
-38. **The server library's `admit(account)` has the same shape as question 17.** Answer 17 keyed
+38. **Answered by answer 17** (CONTAINMENT.md: caps are counted per (account, label set); `admit`'s
+    limits are caps, and line 65 now says so). **The server library's `admit(account)` has the same shape as question 17.** Answer 17 keyed
     the kernel and steward caps by (account, label set), but the shared server library still
     admits per account. A vault session filling fsd's admission slots would show up in its
     owner's unlabelled session.
@@ -364,3 +365,55 @@ Blocking: **K1 cannot start until 1-16 are settled** (they fix the ABI, `redoubt
 49. **Where lends go when R10 fails calls in flight to a destroyed endpoint.**
     *Rec:* as in R3, the lend stays with the server, charged to it, until its `reply` or its
     death. The model does this.
+
+Note on 41 and 42: they should share one rule. Status 1 means "malformed" in 9P calls and in typed
+protocols alike, so `redoubt/wire/tables/example.md`'s code 1 is renumbered when this is adopted.
+
+## From the runtime's red team (WP-R1)
+
+50. **One badge, one client.** Every copy of a handle carries the same badge, and `process_start`
+    copies handles into children. So all of Alice's processes (her shell and her agents) share one
+    9P connection to a server: one fid table and one `Tversion`. A hostile agent can read, close or
+    wipe its owner's open files. The kernel gives a server no per-process identity.
+    *Rec:* a launcher never passes its own connection to a child. It asks the server for a fresh
+    connection for each child (a `mint` on the server's side, through a typed "connect" operation)
+    and passes that one. CAPABILITIES.md and INIT.md state the rule, and the skeleton also keys
+    fids by (badge, account, label set) as a second line of defence.
+
+51. **Writing up destroys.** `check`'s no-write-down lets an unlabelled caller write into a
+    labelled volume. It can therefore truncate, overwrite or remove labelled files it can't read,
+    and `Tcreate`'s "file exists" error reveals names inside a directory it can't list.
+    *Rec:* creating, truncating and removing need the caller's labels to equal the object's. A
+    blind write-up is append-only and gets one fixed error text.
+
+52. **Labelled metadata flows down.** A walk returns the target's qid, including its version, with
+    no read check on the target, and a directory read returns every entry's stat. Each vault write
+    then changes what an unlabelled caller sees: a covert channel out of the vault.
+    *Rec:* a qid is a read. Walking into a node the caller can't read is refused. A directory read
+    lists only entries the caller can read, so `dir_entry` returns the node, and the skeleton
+    checks it.
+
+53. **Admission for system callers and dead clients.** Account 0 is "none", so every system-class
+    caller shares one admission bucket, and a daemon can lock the steward out. Nothing releases a
+    dead client's fids, so a crashed or hostile agent uses up its account's quota until the server
+    restarts.
+    *Rec:*
+    - Account 0 is admitted per badge.
+    - The kernel sends the endpoint's owner a notice when the last handle with a given badge is
+      closed or destroyed. It is received like an exit notice, and the server frees that badge's
+      state.
+
+    The notice is a small addition to KERNEL-SPEC.md.
+
+54. **A system-class reader and `check`.** `check` compares label sets only, and a message
+    doesn't say the sender's class. So the steward (no labels) can't read a labelled item to
+    snapshot it for declassification, or stat a labelled volume.
+    *Rec:* declassification reads through the label owner's own session, which the steward
+    drives. No universal reader, because the steward stays unlabelled. CONTAINMENT.md states this.
+
+55. **Does a panic count toward crash blame?** A Rust panic exits through `process_exit`, which
+    gives cause `exited`, not `faulted`. Blame speaks of "the faulting thread", so the most common
+    crash from hostile input may never be blamed.
+    *Rec:* an exit while the process holds open calls is blamed like a fault. Each open call's
+    account is blamed (see question 37).
+
