@@ -2,7 +2,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use core::mem;
-static mut PROCESS: *mut ProcessImpl = xous_kernel::arch::THREAD_CONTEXT_AREA as *mut ProcessImpl;
+/// The current process's bookkeeping lives at a fixed virtual address that the loader
+/// maps, to a different physical page, in every address space. So this one pointer always
+/// refers to whichever process is currently active.
+const PROCESS: *mut ProcessImpl = xous_kernel::arch::THREAD_CONTEXT_AREA as *mut ProcessImpl;
+
+/// The current process's `ProcessImpl`.
+///
+/// # Safety of the body
+/// `PROCESS` points at a live, aligned `ProcessImpl` (mapped by the loader and by
+/// `MemoryMapping::allocate` in every address space). The kernel runs on a single hart
+/// with interrupts disabled, so these references never overlap in time and are unique
+/// while held. Callers must not hold two of them across each other.
+#[allow(clippy::mut_from_ref)]
+fn process_impl() -> &'static mut ProcessImpl {
+    // SAFETY: see the function's doc comment.
+    unsafe { &mut *PROCESS }
+}
 pub const MAX_THREAD: TID = 31;
 pub const EXCEPTION_TID: TID = 1;
 pub const INITIAL_TID: TID = 2;
@@ -11,6 +27,7 @@ pub const IRQ_TID: TID = 0;
 use xous_kernel::arch::PAGE_SIZE;
 use xous_kernel::{PID, ProcessInit, ProcessStartup, TID, ThreadInit};
 
+use crate::cell::KernelCell;
 use crate::services::ProcessInner;
 
 // use crate::args::KernelArguments;
@@ -116,8 +133,8 @@ struct ProcessTable {
     table: [bool; MAX_PROCESS_COUNT],
 }
 
-static mut PROCESS_TABLE: ProcessTable =
-    ProcessTable { current: crate::services::KERNEL_PID, table: [false; MAX_PROCESS_COUNT] };
+static PROCESS_TABLE: KernelCell<ProcessTable> =
+    KernelCell::new(ProcessTable { current: crate::services::KERNEL_PID, table: [false; MAX_PROCESS_COUNT] });
 
 #[repr(C)]
 #[cfg(baremetal)]
@@ -173,7 +190,7 @@ pub struct Thread {
 
 impl Process {
     pub fn current() -> Process {
-        let pid = unsafe { PROCESS_TABLE.current };
+        let pid = PROCESS_TABLE.with(|pt| pt.current);
         let hardware_pid = crate::arch::mem::pid_from_satp(riscv::register::satp::read().bits());
         assert_eq!((pid.get() as usize), hardware_pid);
         Process { pid }
@@ -187,7 +204,7 @@ impl Process {
     where
         F: FnOnce(&ProcessInner) -> R,
     {
-        let process = unsafe { &*PROCESS };
+        let process = process_impl();
         f(&process.inner)
     }
 
@@ -213,24 +230,24 @@ impl Process {
     where
         F: FnOnce(&mut ProcessInner) -> R,
     {
-        let process = unsafe { &mut *PROCESS };
+        let process = process_impl();
         f(&mut process.inner)
     }
 
     pub fn current_thread_mut(&mut self) -> &mut Thread {
-        let process = unsafe { &mut *PROCESS };
+        let process = process_impl();
         assert!(process.hardware_thread != 0, "thread number was 0");
         &mut process.threads[process.hardware_thread - 1]
     }
 
     pub fn current_thread(&self) -> &Thread {
-        let process = unsafe { &mut *PROCESS };
+        let process = process_impl();
         &mut process.threads[process.hardware_thread - 1]
         // self.thread(process.hardware_thread - 1)
     }
 
     pub fn current_tid(&self) -> TID {
-        let process = unsafe { &*PROCESS };
+        let process = process_impl();
         process.hardware_thread - 1
     }
 
@@ -241,7 +258,7 @@ impl Process {
 
     /// Set the current thread number.
     pub fn set_tid(&mut self, tid: TID) -> Result<(), xous_kernel::Error> {
-        let process = unsafe { &mut *PROCESS };
+        let process = process_impl();
         let tid = fixup_irq(tid);
         klog!("Switching to thread {}", tid);
         assert!(tid < process.threads.len(), "attempt to switch to an invalid thread {}", tid);
@@ -250,14 +267,14 @@ impl Process {
     }
 
     pub fn thread_mut(&mut self, tid: TID) -> &mut Thread {
-        let process = unsafe { &mut *PROCESS };
+        let process = process_impl();
         let tid = fixup_irq(tid);
         assert!(tid < process.threads.len(), "attempt to retrieve an invalid thread {}", tid);
         &mut process.threads[tid]
     }
 
     pub fn thread(&self, tid: TID) -> &Thread {
-        let process = unsafe { &mut *PROCESS };
+        let process = process_impl();
         let tid = fixup_irq(tid);
         assert!(tid < process.threads.len(), "attempt to retrieve an invalid thread {}", tid);
         &process.threads[tid]
@@ -268,7 +285,7 @@ impl Process {
     where
         F: FnMut(TID, &Thread),
     {
-        let process = unsafe { &mut *PROCESS };
+        let process = process_impl();
         for (idx, thread) in process.threads.iter_mut().enumerate() {
             // Ignore threads that have no PC, and ignore the ISR thread
             if thread.sepc == 0 {
@@ -283,7 +300,7 @@ impl Process {
     }
 
     pub fn find_free_thread(&self) -> Option<TID> {
-        let process = unsafe { &mut *PROCESS };
+        let process = process_impl();
         let start_tid = process.last_tid_allocated as usize;
         let a = &process.threads[start_tid..process.threads.len()];
         let b = &process.threads[0..start_tid];
@@ -310,7 +327,7 @@ impl Process {
     }
 
     pub fn retry_instruction(&mut self, tid: TID) -> Result<(), xous_kernel::Error> {
-        let process = unsafe { &mut *PROCESS };
+        let process = process_impl();
         let thread = &mut process.threads[tid];
         if thread.sepc >= 4 {
             thread.sepc -= 4;
@@ -321,7 +338,7 @@ impl Process {
     /// Initialize this process thread with the given entrypoint and stack
     /// addresses.
     pub fn setup_process(pid: PID, thread_init: ThreadInit) -> Result<(), xous_kernel::Error> {
-        let process = unsafe { &mut *PROCESS };
+        let process = process_impl();
         let tid = INITIAL_TID;
 
         assert_eq!(pid, crate::arch::current_pid(), "hardware pid does not match setup pid");
@@ -335,11 +352,11 @@ impl Process {
         );
 
         klog!("Setting up new process {}", pid.get());
-        unsafe {
-            let pid_idx = (pid.get() as usize) - 1;
-            assert!(!PROCESS_TABLE.table[pid_idx], "process {} is already allocated", pid);
-            PROCESS_TABLE.table[pid_idx] = true;
-        }
+        let pid_idx = (pid.get() as usize) - 1;
+        PROCESS_TABLE.with(|pt| {
+            assert!(!pt.table[pid_idx], "process {} is already allocated", pid);
+            pt.table[pid_idx] = true;
+        });
 
         // By convention, thread 0 is the trap thread. Therefore, thread 1 is
         // the first default thread. There is an offset of 1 due to how the
@@ -458,7 +475,7 @@ impl Process {
 
     #[cfg(not(feature = "bao1x"))]
     pub fn print_all_threads(&self) {
-        let process = unsafe { &mut *PROCESS };
+        let process = process_impl();
         for (tid_idx, &thread) in process.threads.iter().enumerate() {
             let tid = tid_idx;
             if thread.registers[1] != 0 {
@@ -519,12 +536,13 @@ impl Process {
     }
 
     pub fn destroy(pid: PID) -> Result<(), xous_kernel::Error> {
-        let process_table = unsafe { &mut *core::ptr::addr_of_mut!(PROCESS_TABLE) };
         let pid_idx = pid.get() as usize - 1;
-        if pid_idx >= process_table.table.len() {
-            panic!("attempted to destroy PID that exceeds table index: {}", pid);
-        }
-        process_table.table[pid_idx] = false;
+        PROCESS_TABLE.with(|pt| {
+            if pid_idx >= pt.table.len() {
+                panic!("attempted to destroy PID that exceeds table index: {}", pid);
+            }
+            pt.table[pid_idx] = false;
+        });
         Ok(())
     }
 
@@ -532,7 +550,7 @@ impl Process {
     where
         F: Fn(TID, &Thread) -> bool,
     {
-        let process = unsafe { &mut *PROCESS };
+        let process = process_impl();
         for (idx, thread) in process.threads.iter_mut().enumerate() {
             if thread.sepc == 0 {
                 continue;
@@ -604,17 +622,15 @@ impl core::fmt::Display for Thread {
 
 pub fn set_current_pid(pid: PID) {
     let pid_idx = (pid.get() - 1) as usize;
-    unsafe {
-        let pt = &mut *core::ptr::addr_of_mut!(PROCESS_TABLE);
-
+    PROCESS_TABLE.with(|pt| {
         match pt.table.get(pid_idx) {
             None | Some(false) => panic!("PID {} does not exist", pid),
             _ => (),
         }
         pt.current = pid;
-    }
+    });
 }
 
-pub fn current_pid() -> PID { unsafe { PROCESS_TABLE.current } }
+pub fn current_pid() -> PID { PROCESS_TABLE.with(|pt| pt.current) }
 
-pub fn current_tid() -> TID { unsafe { ((*PROCESS).hardware_thread) - 1 } }
+pub fn current_tid() -> TID { process_impl().hardware_thread - 1 }
