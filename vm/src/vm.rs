@@ -30,11 +30,15 @@ pub const MAX_MAILBOX: usize = 1 << 16;
 pub struct Limits {
     /// Largest binary or bitstring any one operation may build, in bits.
     pub max_binary_bits: usize,
+    /// Most stack slots (Y registers plus one per frame) one process may use. Body recursion
+    /// a few million deep is ordinary Erlang (`lists:map/2` on a long list), so this is large.
+    pub max_stack_slots: usize,
 }
 
 impl Default for Limits {
     fn default() -> Limits {
-        Limits { max_binary_bits: 1 << 30 } // 128 MiB
+        // 128 MiB of binary; 16M stack slots (256 MiB of 16-byte terms, plus frames).
+        Limits { max_binary_bits: 1 << 30, max_stack_slots: 1 << 24 }
     }
 }
 
@@ -338,7 +342,10 @@ impl System {
     }
 
     fn load(&mut self, bytes: &[u8]) -> Result<Atom, LoadError> {
-        let module = loader::load(bytes, &mut self.atom_table)?;
+        let mut module = loader::load(bytes, &mut self.atom_table)?;
+        for imp in &mut module.imports {
+            imp.native = self.natives.get(&imp.module, &imp.function, imp.arity);
+        }
         let name = module.name.clone();
         self.modules.insert(name.as_str().to_string(), Rc::new(module));
         Ok(name)

@@ -202,7 +202,7 @@ pub fn binary_part(c: &mut Ctx, a: &[Term]) -> R {
     let (lo, hi) = if len >= 0 { (start, start.checked_add(len)) } else { (start + len, Some(start)) };
     let size = (b.len / 8) as i64;
     match hi {
-        Some(hi) if lo >= 0 && hi <= size => Ok(Term::Bits(b.slice(lo as usize * 8, (hi - lo) as usize * 8))),
+        Some(hi) if lo >= 0 && hi <= size => Ok(Term::bits(b.slice(lo as usize * 8, (hi - lo) as usize * 8))),
         _ => Err(c.badarg()),
     }
 }
@@ -212,7 +212,7 @@ pub fn split_binary(c: &mut Ctx, a: &[Term]) -> R {
     match a[1].as_usize() {
         Some(n) if n * 8 <= b.len => {
             let (x, y) = (b.slice(0, n * 8), b.slice(n * 8, b.len - n * 8));
-            Ok(Term::tuple(alloc::vec![Term::Bits(x), Term::Bits(y)]))
+            Ok(Term::tuple(alloc::vec![Term::bits(x), Term::bits(y)]))
         }
         _ => Err(c.badarg()),
     }
@@ -399,7 +399,7 @@ pub fn bitstring_to_list(c: &mut Ctx, a: &[Term]) -> R {
     let b = bits(c, &a[0])?;
     let whole = b.len / 8;
     let items: Vec<Term> = (0..whole).map(|i| Term::Int(b.byte(i) as i64)).collect();
-    let tail = if b.len % 8 == 0 { Term::Nil } else { Term::Bits(b.slice(whole * 8, b.len % 8)) };
+    let tail = if b.len % 8 == 0 { Term::Nil } else { Term::bits(b.slice(whole * 8, b.len % 8)) };
     Ok(Term::list_with_tail(items, tail))
 }
 

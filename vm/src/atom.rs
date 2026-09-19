@@ -14,8 +14,9 @@ pub const MAX_ATOMS: usize = 1 << 20;
 /// Longest atom in characters, as in stock BEAM.
 pub const MAX_ATOM_CHARS: usize = 255;
 
+/// A thin pointer (`Rc<String>`, not the two-word `Rc<str>`), which keeps `Term` two words.
 #[derive(Clone)]
-pub struct Atom(Rc<str>);
+pub struct Atom(Rc<alloc::string::String>);
 
 impl Atom {
     pub fn as_str(&self) -> &str {
@@ -65,9 +66,8 @@ impl AtomTable {
         if self.by_name.len() >= MAX_ATOMS {
             return Err(AtomError::TableFull);
         }
-        let s: Rc<str> = Rc::from(name);
-        let atom = Atom(s.clone());
-        self.by_name.insert(s, atom.clone());
+        let atom = Atom(Rc::new(name.into()));
+        self.by_name.insert(Rc::from(name), atom.clone());
         Ok(atom)
     }
 

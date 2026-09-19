@@ -186,7 +186,7 @@ impl<'a> Reader<'a, '_> {
                     return Err(EtfError::Malformed);
                 }
                 let data = self.take(n)?;
-                Term::Bits(Bits { data: Rc::from(data), offset: 0, len: (n - 1) * 8 + last_bits })
+                Term::bits(Bits { data: Rc::new(data.to_vec()), offset: 0, len: (n - 1) * 8 + last_bits })
             }
             116 => {
                 let n = self.u32()?;

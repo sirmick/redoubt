@@ -18,8 +18,6 @@ use crate::process::{Class, Cp, Exception, Frame, Handler, Process};
 use crate::term::{Bits, Fun, Map, MapKey, MatchState, Term};
 use crate::vm::{System, Target};
 
-/// Most stack slots one process may use: Y registers plus one per frame (about 32 MiB).
-pub const MAX_STACK: usize = 1 << 20;
 /// Stack trace entries recorded per exception, as BEAM's default `backtrace_depth`.
 const TRACE_DEPTH: usize = 8;
 
@@ -63,12 +61,18 @@ pub const MAX_INSTRUCTIONS_PER_SLICE: usize = 200_000;
 
 pub fn run(sys: &mut System, p: &mut Process) -> Stop {
     let mut instructions = 0usize;
+    let mut module = p.pc.module.clone();
     loop {
         instructions += 1;
         if instructions > MAX_INSTRUCTIONS_PER_SLICE {
             return Stop::Yield;
         }
-        let result = step(sys, p);
+        // Hold the current module here, so fetching an instruction costs no reference-count
+        // traffic; refresh it only when a call or return has moved to another module.
+        if !Rc::ptr_eq(&module, &p.pc.module) {
+            module = p.pc.module.clone();
+        }
+        let result = step(sys, p, &module);
         if let Some(reason) = p.pending_exit.take() {
             return Stop::Exit(Err(Exception::exit(reason)));
         }
@@ -157,13 +161,34 @@ fn put(p: &mut Process, a: &Arg, t: Term) -> R {
     Ok(())
 }
 
+/// Move a register's value out, leaving `[]`.
+fn take(p: &mut Process, a: &Arg) -> R<Term> {
+    match a {
+        Arg::X(x) => Ok(core::mem::replace(&mut p.x[*x as usize], Term::Nil)),
+        Arg::Y(y) => {
+            let i = y_slot(p, *y)?;
+            Ok(core::mem::replace(&mut p.stack[i], Term::Nil))
+        }
+        _ => Err(Fault::BadCode("expected a register")),
+    }
+}
+
 fn src(p: &Process, ins: &Instr, i: usize) -> R<Term> {
     get(p, arg(ins, i)?)
 }
 
+/// Borrow a source operand without cloning it, for instructions that only look at it.
+fn val<'a>(p: &'a Process, ins: &'a Instr, i: usize) -> R<&'a Term> {
+    match arg(ins, i)? {
+        Arg::X(x) => Ok(&p.x[*x as usize]),
+        Arg::Y(y) => Ok(&p.stack[y_slot(p, *y)?]),
+        Arg::Const(t) => Ok(t),
+        _ => Err(Fault::BadCode("expected a source operand")),
+    }
+}
+
 fn dst(p: &mut Process, ins: &Instr, i: usize, t: Term) -> R {
-    let a = arg(ins, i)?.clone();
-    put(p, &a, t)
+    put(p, arg(ins, i)?, t)
 }
 
 /// A number that may be encoded either as an unsigned literal or as a source operand.
@@ -198,7 +223,7 @@ fn as_value(t: Term) -> Term {
     match t {
         Term::Match(m) => {
             let pos = m.pos.get();
-            Term::Bits(m.bits.slice(pos, m.bits.len - pos))
+            Term::bits(m.bits.slice(pos, m.bits.len - pos))
         }
         t => t,
     }
@@ -239,12 +264,12 @@ fn do_return(p: &mut Process) -> Flow {
     }
 }
 
-fn allocate(p: &mut Process, size: usize) -> R {
+fn allocate(p: &mut Process, size: usize, max_stack: usize) -> R {
     if size > MAX_Y_REGS {
         return Err(Fault::BadCode("frame too large"));
     }
     // Every frame counts, even one with no Y registers, so `allocate 0` in a loop is bounded too.
-    if p.stack.len() + p.frames.len() + size > MAX_STACK {
+    if p.stack.len() + p.frames.len() + size > max_stack {
         return Err(Fault::Limit("stack"));
     }
     let base = p.stack.len();
@@ -271,15 +296,15 @@ fn run_native(
     p: &mut Process,
     n: Native,
     (m, f): (&crate::atom::Atom, &crate::atom::Atom),
-    args: Vec<Term>,
+    args: &[Term],
 ) -> R<Term> {
-    match n(&mut Ctx { sys, p }, &args) {
+    match n(&mut Ctx { sys, p }, args) {
         Ok(t) => Ok(t),
         Err(mut e) => {
             let raiser = m == &sys.atoms.erlang
                 && matches!(f.as_str(), "error" | "exit" | "throw" | "raise" | "nif_error");
             if e.trace.is_none() && !raiser {
-                let top = Term::tuple(alloc::vec![Term::Atom(m.clone()), Term::Atom(f.clone()), Term::list(args), Term::Nil]);
+                let top = Term::tuple(alloc::vec![Term::Atom(m.clone()), Term::Atom(f.clone()), Term::list(args.to_vec()), Term::Nil]);
                 e.trace = Some(Term::cons(top, stacktrace(sys, p, None)));
             }
             Err(Fault::Raise(e))
@@ -290,7 +315,7 @@ fn run_native(
 /// Call a native on x0.. and return its result.
 fn call_native(sys: &mut System, p: &mut Process, n: Native, mf: (&crate::atom::Atom, &crate::atom::Atom), arity: usize) -> R<Term> {
     let args: Vec<Term> = p.x[..arity].iter().cloned().map(as_value).collect();
-    run_native(sys, p, n, mf, args)
+    run_native(sys, p, n, mf, &args)
 }
 
 /// The code and x registers for calling `fun` with `args`.
@@ -325,8 +350,21 @@ enum Kind {
     Only,
 }
 
-/// Enter `module:function/arity` with arguments already in x registers.
+/// Enter `module:function/arity` with arguments already in x registers. `native` is the
+/// implementation if the caller already knows it is a native (resolved at load time).
 fn call_mfa(sys: &mut System, p: &mut Process, m: &crate::atom::Atom, f: &crate::atom::Atom, arity: usize, kind: Kind) -> R<Flow> {
+    call_mfa_with(sys, p, m, f, arity, kind, None)
+}
+
+fn call_mfa_with(
+    sys: &mut System,
+    p: &mut Process,
+    m: &crate::atom::Atom,
+    f: &crate::atom::Atom,
+    arity: usize,
+    kind: Kind,
+    native: Option<Native>,
+) -> R<Flow> {
     if arity > 255 {
         return Err(Fault::BadCode("arity above 255"));
     }
@@ -334,7 +372,11 @@ fn call_mfa(sys: &mut System, p: &mut Process, m: &crate::atom::Atom, f: &crate:
     if m == &sys.atoms.erlang && f.as_str() == "apply" && (arity == 2 || arity == 3) {
         return apply(sys, p, arity, kind);
     }
-    match sys.resolve(m, f, arity as u32) {
+    let target = match native {
+        Some(n) => Some(Target::Native(n)),
+        None => sys.resolve(m, f, arity as u32),
+    };
+    match target {
         Some(Target::Native(n)) => {
             let r = call_native(sys, p, n, (m, f), arity)?;
             p.x[0] = r;
@@ -540,8 +582,7 @@ fn remove_handler(p: &mut Process, ins: &Instr) -> R {
 
 // ---- the instruction loop ----
 
-fn step(sys: &mut System, p: &mut Process) -> R<Flow> {
-    let module = p.pc.module.clone();
+fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
     let here = p.pc.pc;
     let ins = module.code.get(here as usize).ok_or(Fault::BadCode("pc outside the code"))?;
     p.pc.pc = here + 1;
@@ -577,8 +618,11 @@ fn step(sys: &mut System, p: &mut Process) -> R<Flow> {
                 op::CALL_EXT_LAST => Kind::Last,
                 _ => Kind::Only,
             };
-            let (m, f) = (imp.module.clone(), imp.function.clone());
-            return call_mfa(sys, p, &m, &f, arity, kind);
+            if imp.arity as usize != arity {
+                return Err(Fault::BadCode("call arity does not match the import"));
+            }
+            let (m, f, native) = (imp.module.clone(), imp.function.clone(), imp.native);
+            return call_mfa_with(sys, p, &m, &f, arity, kind, native);
         }
 
         op::BIF0 | op::BIF1 | op::BIF2 | op::GC_BIF1 | op::GC_BIF2 | op::GC_BIF3 => {
@@ -598,15 +642,13 @@ fn step(sys: &mut System, p: &mut Process) -> R<Flow> {
             if imp.arity as usize != nargs {
                 return Err(Fault::BadCode("BIF import arity"));
             }
-            let n = sys.native(&imp.module, &imp.function, imp.arity).ok_or_else(|| {
-                Fault::Raise(Exception::error(Term::Atom(sys.atoms.undef.clone())))
-            })?;
-            let mut args = Vec::with_capacity(nargs);
-            for i in 0..nargs {
-                args.push(as_value(src(p, ins, first + 1 + i)?));
+            let n = imp.native.ok_or_else(|| Fault::Raise(Exception::error(Term::Atom(sys.atoms.undef.clone()))))?;
+            // At most three arguments: a stack array, not an allocation per guard BIF.
+            let mut args = [Term::Nil, Term::Nil, Term::Nil];
+            for (i, slot) in args.iter_mut().enumerate().take(nargs) {
+                *slot = as_value(src(p, ins, first + 1 + i)?);
             }
-            let (m, f) = (imp.module.clone(), imp.function.clone());
-            match run_native(sys, p, n, (&m, &f), args) {
+            match run_native(sys, p, n, (&imp.module, &imp.function), &args[..nargs]) {
                 Ok(t) => dst(p, ins, first + 1 + nargs, t)?,
                 // A guard BIF with a fail label fails the guard instead of raising.
                 Err(Fault::Raise(_)) if fail.is_some() => jump(p, fail)?,
@@ -614,8 +656,7 @@ fn step(sys: &mut System, p: &mut Process) -> R<Flow> {
             }
         }
 
-        op::ALLOCATE => allocate(p, u(ins, 0)?)?,
-        op::ALLOCATE_HEAP => allocate(p, u(ins, 0)?)?,
+        op::ALLOCATE | op::ALLOCATE_HEAP => allocate(p, u(ins, 0)?, sys.limits.max_stack_slots)?,
         op::DEALLOCATE => deallocate(p)?,
         op::RETURN => return Ok(do_return(p)),
         op::INIT_YREGS => {
@@ -654,20 +695,22 @@ fn step(sys: &mut System, p: &mut Process) -> R<Flow> {
             let (h, t) = (src(p, ins, 0)?, src(p, ins, 1)?);
             dst(p, ins, 2, Term::cons(h, t))?;
         }
-        op::GET_LIST => match src(p, ins, 0)? {
-            Term::Cons(c) => {
-                dst(p, ins, 1, c.head.clone())?;
-                dst(p, ins, 2, c.tail.clone())?;
-            }
-            _ => return Err(Fault::BadCode("get_list on a non-list")),
-        },
-        op::GET_HD | op::GET_TL => match src(p, ins, 0)? {
-            Term::Cons(c) => {
-                let t = if ins.op == op::GET_HD { c.head.clone() } else { c.tail.clone() };
-                dst(p, ins, 1, t)?;
-            }
-            _ => return Err(Fault::BadCode("get_hd/get_tl on a non-list")),
-        },
+        op::GET_LIST => {
+            let (h, t) = match val(p, ins, 0)? {
+                Term::Cons(c) => (c.head.clone(), c.tail.clone()),
+                _ => return Err(Fault::BadCode("get_list on a non-list")),
+            };
+            dst(p, ins, 1, h)?;
+            dst(p, ins, 2, t)?;
+        }
+        op::GET_HD | op::GET_TL => {
+            let t = match val(p, ins, 0)? {
+                Term::Cons(c) if ins.op == op::GET_HD => c.head.clone(),
+                Term::Cons(c) => c.tail.clone(),
+                _ => return Err(Fault::BadCode("get_hd/get_tl on a non-list")),
+            };
+            dst(p, ins, 1, t)?;
+        }
         op::PUT_TUPLE2 => {
             let mut elems = Vec::new();
             for e in list(ins, 1)? {
@@ -676,9 +719,8 @@ fn step(sys: &mut System, p: &mut Process) -> R<Flow> {
             dst(p, ins, 0, Term::tuple(elems))?;
         }
         op::GET_TUPLE_ELEMENT => {
-            let t = src(p, ins, 0)?;
             let i = u(ins, 1)?;
-            let e = t.as_tuple().and_then(|t| t.get(i)).ok_or(Fault::BadCode("get_tuple_element"))?.clone();
+            let e = val(p, ins, 0)?.as_tuple().and_then(|t| t.get(i)).ok_or(Fault::BadCode("get_tuple_element"))?.clone();
             dst(p, ins, 2, e)?;
         }
         op::SET_TUPLE_ELEMENT => {
@@ -706,14 +748,14 @@ fn step(sys: &mut System, p: &mut Process) -> R<Flow> {
 
         // ---- tests: jump to the label if the test fails ----
         op::IS_LT | op::IS_GE | op::IS_EQ | op::IS_NE | op::IS_EQ_EXACT | op::IS_NE_EXACT => {
-            let (x, y) = (src(p, ins, 1)?, src(p, ins, 2)?);
+            let (x, y) = (val(p, ins, 1)?, val(p, ins, 2)?);
             let ok = match ins.op {
-                op::IS_LT => x.cmp_term(&y) == Ordering::Less,
-                op::IS_GE => x.cmp_term(&y) != Ordering::Less,
-                op::IS_EQ => x.eq_arith(&y),
-                op::IS_NE => !x.eq_arith(&y),
-                op::IS_EQ_EXACT => x.eq_exact(&y),
-                _ => !x.eq_exact(&y),
+                op::IS_LT => x.cmp_term(y) == Ordering::Less,
+                op::IS_GE => x.cmp_term(y) != Ordering::Less,
+                op::IS_EQ => x.eq_arith(y),
+                op::IS_NE => !x.eq_arith(y),
+                op::IS_EQ_EXACT => x.eq_exact(y),
+                _ => !x.eq_exact(y),
             };
             if !ok {
                 jump(p, label(ins, 0)?)?;
@@ -722,7 +764,13 @@ fn step(sys: &mut System, p: &mut Process) -> R<Flow> {
         op::IS_INTEGER | op::IS_FLOAT | op::IS_NUMBER | op::IS_ATOM | op::IS_PID | op::IS_REFERENCE | op::IS_PORT
         | op::IS_NIL | op::IS_BINARY | op::IS_LIST | op::IS_NONEMPTY_LIST | op::IS_TUPLE | op::IS_FUNCTION
         | op::IS_BOOLEAN | op::IS_MAP | op::IS_BITSTR => {
-            let t = as_value(src(p, ins, 1)?);
+            let t = val(p, ins, 1)?;
+            // A match context counts as the bitstring it is matching.
+            let bits_like = |t: &Term, whole_bytes: bool| match t {
+                Term::Bits(b) => !whole_bytes || b.is_binary(),
+                Term::Match(m) => !whole_bytes || (m.bits.len - m.pos.get()).is_multiple_of(8),
+                _ => false,
+            };
             let ok = match ins.op {
                 op::IS_INTEGER => t.is_integer(),
                 op::IS_FLOAT => matches!(t, Term::Float(_)),
@@ -732,14 +780,14 @@ fn step(sys: &mut System, p: &mut Process) -> R<Flow> {
                 op::IS_REFERENCE => matches!(t, Term::Ref(_)),
                 op::IS_PORT => false,
                 op::IS_NIL => matches!(t, Term::Nil),
-                op::IS_BINARY => matches!(&t, Term::Bits(b) if b.is_binary()),
+                op::IS_BINARY => bits_like(t, true),
                 op::IS_LIST => matches!(t, Term::Nil | Term::Cons(_)),
                 op::IS_NONEMPTY_LIST => matches!(t, Term::Cons(_)),
                 op::IS_TUPLE => matches!(t, Term::Tuple(_)),
                 op::IS_FUNCTION => matches!(t, Term::Fun(_)),
                 op::IS_BOOLEAN => t.is_atom(&a.true_) || t.is_atom(&a.false_),
                 op::IS_MAP => matches!(t, Term::Map(_)),
-                _ => matches!(t, Term::Bits(_)),
+                _ => bits_like(t, false),
             };
             if !ok {
                 jump(p, label(ins, 0)?)?;
@@ -753,23 +801,21 @@ fn step(sys: &mut System, p: &mut Process) -> R<Flow> {
             }
         }
         op::TEST_ARITY => {
-            let t = src(p, ins, 1)?;
             let n = u(ins, 2)?;
-            if t.as_tuple().map(|t| t.len()) != Some(n) {
+            if val(p, ins, 1)?.as_tuple().map(|t| t.len()) != Some(n) {
                 jump(p, label(ins, 0)?)?;
             }
         }
         op::IS_TAGGED_TUPLE => {
-            let t = src(p, ins, 1)?;
             let n = u(ins, 2)?;
-            let tag = src(p, ins, 3)?;
-            let ok = matches!(t.as_tuple(), Some(e) if e.len() == n && n > 0 && e[0].eq_exact(&tag));
+            let (t, tag) = (val(p, ins, 1)?, val(p, ins, 3)?);
+            let ok = matches!(t.as_tuple(), Some(e) if e.len() == n && n > 0 && e[0].eq_exact(tag));
             if !ok {
                 jump(p, label(ins, 0)?)?;
             }
         }
         op::SELECT_VAL => {
-            let v = src(p, ins, 0)?;
+            let v = val(p, ins, 0)?;
             let mut target = label(ins, 1)?;
             for pair in list(ins, 2)?.chunks(2) {
                 let [Arg::Const(c), Arg::Label(l)] = pair else { return Err(Fault::BadCode("select_val list")) };
@@ -781,8 +827,7 @@ fn step(sys: &mut System, p: &mut Process) -> R<Flow> {
             jump(p, target)?;
         }
         op::SELECT_TUPLE_ARITY => {
-            let v = src(p, ins, 0)?;
-            let n = v.as_tuple().map(|t| t.len()).ok_or(Fault::BadCode("select_tuple_arity on a non-tuple"))?;
+            let n = val(p, ins, 0)?.as_tuple().map(|t| t.len()).ok_or(Fault::BadCode("select_tuple_arity on a non-tuple"))?;
             let mut target = label(ins, 1)?;
             for pair in list(ins, 2)?.chunks(2) {
                 let [Arg::U(arity), Arg::Label(l)] = pair else { return Err(Fault::BadCode("select_tuple_arity list")) };
@@ -1098,7 +1143,7 @@ fn step(sys: &mut System, p: &mut Process) -> R<Flow> {
         op::BS_GET_TAIL => {
             let Term::Match(m) = src(p, ins, 0)? else { return Err(Fault::BadCode("bs_get_tail")) };
             let pos = m.pos.get();
-            dst(p, ins, 1, Term::Bits(m.bits.slice(pos, m.bits.len - pos)))?;
+            dst(p, ins, 1, Term::bits(m.bits.slice(pos, m.bits.len - pos)))?;
         }
         op::BS_MATCH => return bs_match(sys, p, ins),
         op::BS_START_MATCH3 => {
@@ -1142,6 +1187,24 @@ fn bs_create_bin(sys: &mut System, p: &mut Process, ins: &Instr, module: &Module
     let max_bits = sys.limits.max_binary_bits;
     let mut out = Builder::new();
     let mut ok = true;
+    let mut segments = segments;
+    // `private_append` first: the compiler promises nothing else refers to that binary, so take
+    // it out of its register and, when its bytes are not shared, append to them in place. This
+    // turns a binary comprehension from quadratic into linear.
+    if let [Arg::Const(Term::Atom(ty)), _, Arg::U(unit), _, src @ (Arg::X(_) | Arg::Y(_)), size, rest @ ..] = segments {
+        // Only without a fail label: with one, the code there could still read the register.
+        if fail.is_none() && ty.as_str() == "private_append" && matches!(size, Arg::Const(t) if t.is_atom(&sys.atoms.all)) {
+            let taken = take(p, src)?;
+            match taken {
+                Term::Bits(b) if *unit <= 1 || b.len % *unit as usize == 0 => {
+                    // Unwrap the term too, so a unique binary is unique all the way down.
+                    out = Builder::resume(Rc::try_unwrap(b).unwrap_or_else(|shared| (*shared).clone()));
+                    segments = rest;
+                }
+                other => put(p, src, other)?, // not a binary: let the general path report it
+            }
+        }
+    }
     for seg in segments.chunks(6) {
         let [Arg::Const(Term::Atom(ty)), _seg, Arg::U(unit), flags, value, size] = seg else {
             return Err(Fault::BadCode("bs_create_bin segment"));
@@ -1299,7 +1362,7 @@ fn bs_match(sys: &mut System, p: &mut Process, ins: &Instr) -> R<Flow> {
                 let t = if name.as_str() == "integer" {
                     bits::read_integer(bits, pos, n, flags_signed(sys, &flags), flags_little(sys, &flags))
                 } else {
-                    Term::Bits(bits.slice(pos, n))
+                    Term::bits(bits.slice(pos, n))
                 };
                 pos += n;
                 let d = d.clone();
@@ -1307,7 +1370,7 @@ fn bs_match(sys: &mut System, p: &mut Process, ins: &Instr) -> R<Flow> {
             }
             "get_tail" => {
                 let [_live, _unit, d] = take(&mut i, 3)? else { return Err(Fault::BadCode("get_tail")) };
-                let t = Term::Bits(bits.slice(pos, remaining));
+                let t = Term::bits(bits.slice(pos, remaining));
                 pos = bits.len;
                 let d = d.clone();
                 put(p, &d, t)?;
@@ -1391,7 +1454,7 @@ fn bs_get(sys: &mut System, p: &mut Process, ins: &Instr, module: &Module) -> R<
                 Some(n) if n <= remaining => match ins.op {
                     op::BS_GET_INTEGER2 => Some((Some(bits::read_integer(bits, pos, n, signed, little)), n)),
                     op::BS_GET_FLOAT2 => bits::read_float(bits, pos, n, little).map(|f| (Some(Term::Float(f)), n)),
-                    op::BS_GET_BINARY2 => Some((Some(Term::Bits(bits.slice(pos, n))), n)),
+                    op::BS_GET_BINARY2 => Some((Some(Term::bits(bits.slice(pos, n))), n)),
                     _ => Some((None, n)),
                 },
                 _ => None,
@@ -1413,7 +1476,7 @@ fn bs_get(sys: &mut System, p: &mut Process, ins: &Instr, module: &Module) -> R<
                 .checked_add(n.div_ceil(8))
                 .and_then(|end| module.strings.get(offset..end))
                 .ok_or(Fault::BadCode("bs_match_string range"))?;
-            let want = Bits { data: Rc::from(bytes), offset: 0, len: n };
+            let want = Bits { data: Rc::new(bytes.to_vec()), offset: 0, len: n };
             let ok = n <= remaining && (0..n).all(|i| bits.bit(pos + i) == want.bit(i));
             ok.then_some((None, n))
         }

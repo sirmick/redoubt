@@ -36,7 +36,7 @@ pub enum Term {
     Tuple(Rc<Tuple>),
     Map(Rc<Map>),
     /// A binary or bitstring.
-    Bits(Bits),
+    Bits(Rc<Bits>),
     Fun(Rc<Fun>),
     Pid(Pid),
     Ref(Ref),
@@ -47,7 +47,7 @@ pub enum Term {
 
 /// The state of a binary match: the bits being matched and how far matching has got.
 pub struct MatchState {
-    pub bits: Bits,
+    pub bits: Rc<Bits>,
     pub pos: core::cell::Cell<usize>,
 }
 
@@ -90,10 +90,10 @@ fn drop_flat(mut work: Vec<Term>) {
             }
             Term::Map(rc) => {
                 if let Ok(mut m) = Rc::try_unwrap(rc) {
-                    for (k, v) in core::mem::take(&mut m.0).into_unique_entries() {
-                        work.push(k.0);
-                        work.push(v);
-                    }
+                    core::mem::take(&mut m.0).drain_unique(|k, v| {
+                        push_compound(&mut work, k.0);
+                        push_compound(&mut work, v);
+                    });
                 }
             }
             Term::Fun(rc) => {
@@ -110,12 +110,29 @@ fn drop_flat(mut work: Vec<Term>) {
 }
 
 impl Drop for Cons {
+    /// Walk down the tail, unlinking cells this list owns alone. Allocates only if some head
+    /// is itself compound (a list of numbers or atoms drops with no allocation at all).
     fn drop(&mut self) {
-        let (h, t) = (core::mem::replace(&mut self.head, Term::Nil), core::mem::replace(&mut self.tail, Term::Nil));
-        if matches!(h, Term::Cons(_) | Term::Tuple(_) | Term::Map(_) | Term::Fun(_))
-            || matches!(t, Term::Cons(_) | Term::Tuple(_) | Term::Map(_) | Term::Fun(_))
-        {
-            drop_flat(alloc::vec![h, t]);
+        let mut work = Vec::new();
+        push_compound(&mut work, core::mem::replace(&mut self.head, Term::Nil));
+        let mut tail = core::mem::replace(&mut self.tail, Term::Nil);
+        loop {
+            match tail {
+                Term::Cons(rc) => match Rc::try_unwrap(rc) {
+                    Ok(mut cell) => {
+                        push_compound(&mut work, core::mem::replace(&mut cell.head, Term::Nil));
+                        tail = core::mem::replace(&mut cell.tail, Term::Nil);
+                    }
+                    Err(_) => break, // shared: someone else still uses the rest
+                },
+                other => {
+                    push_compound(&mut work, other);
+                    break;
+                }
+            }
+        }
+        if !work.is_empty() {
+            drop_flat(work);
         }
     }
 }
@@ -128,14 +145,21 @@ impl Drop for Tuple {
     }
 }
 
+/// Queue `t` for `drop_flat` only if it contains other terms; atoms and numbers just drop.
+fn push_compound(work: &mut Vec<Term>, t: Term) {
+    if matches!(t, Term::Cons(_) | Term::Tuple(_) | Term::Map(_) | Term::Fun(_)) {
+        work.push(t);
+    }
+}
+
 impl Drop for Map {
     fn drop(&mut self) {
-        if !self.0.is_empty() {
-            let mut work = Vec::with_capacity(self.0.len() * 2);
-            for (k, v) in core::mem::take(&mut self.0).into_unique_entries() {
-                work.push(k.0);
-                work.push(v);
-            }
+        let mut work = Vec::new();
+        core::mem::take(&mut self.0).drain_unique(|k, v| {
+            push_compound(&mut work, k.0);
+            push_compound(&mut work, v);
+        });
+        if !work.is_empty() {
             drop_flat(work);
         }
     }
@@ -218,14 +242,16 @@ impl Ord for MapKey {
 /// share the bytes of the binary they were matched out of.
 #[derive(Clone)]
 pub struct Bits {
-    pub data: Rc<[u8]>,
+    /// The bytes. A `Vec` so a binary that nobody else holds can be grown in place (see
+    /// `bs_create_bin`'s `private_append`); a window never sees bytes past its own `len`.
+    pub data: Rc<Vec<u8>>,
     pub offset: usize,
     pub len: usize,
 }
 
 impl Bits {
     pub fn from_bytes(bytes: &[u8]) -> Bits {
-        Bits { data: Rc::from(bytes), offset: 0, len: bytes.len() * 8 }
+        Bits { data: Rc::new(bytes.to_vec()), offset: 0, len: bytes.len() * 8 }
     }
 
     /// Whether this is a binary (a whole number of bytes).
@@ -337,8 +363,12 @@ impl Term {
         items.into_iter().rev().fold(tail, |acc, t| Term::cons(t, acc))
     }
 
+    pub fn bits(b: Bits) -> Term {
+        Term::Bits(Rc::new(b))
+    }
+
     pub fn binary(bytes: &[u8]) -> Term {
-        Term::Bits(Bits::from_bytes(bytes))
+        Term::bits(Bits::from_bytes(bytes))
     }
 
     pub fn map(map: Map) -> Term {
@@ -475,6 +505,20 @@ impl Term {
 /// Compare two terms. Pairs still to compare wait on an explicit stack, in the order Erlang
 /// compares them, so deep or long terms cannot exhaust the Rust stack.
 fn compare(a: &Term, b: &Term, exact: bool) -> Ordering {
+    // Fast path, no allocation: most comparisons are between atomic values.
+    let container = |t: &Term| matches!(t, Term::Cons(_) | Term::Tuple(_) | Term::Map(_) | Term::Fun(_));
+    if !container(a) || !container(b) {
+        if let (Term::Int(x), Term::Int(y)) = (a, b) {
+            return x.cmp(y);
+        }
+        let (ra, rb) = (type_rank(a), type_rank(b));
+        if ra != rb {
+            return ra.cmp(&rb);
+        }
+        if !container(a) && !container(b) {
+            return compare_one(a, b, exact);
+        }
+    }
     let mut work: Vec<(Term, Term, bool)> = alloc::vec![(a.clone(), b.clone(), exact)];
     while let Some((a, b, exact)) = work.pop() {
         let (ra, rb) = (type_rank(&a), type_rank(&b));
@@ -864,5 +908,14 @@ mod tests {
             Term::map(Map::new()),
         ]);
         assert_eq!(t.to_string(), "{[1,2],[1|2],{},[],#{}}");
+    }
+}
+
+#[cfg(test)]
+mod size_tests {
+    /// Terms are copied constantly; keep them two words. (Checked so a change is deliberate.)
+    #[test]
+    fn term_is_small() {
+        assert_eq!(core::mem::size_of::<super::Term>(), 16, "Term grew");
     }
 }

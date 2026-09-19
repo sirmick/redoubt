@@ -129,9 +129,24 @@ enforced access, heirs, match specifications restricted to pure guard functions)
 loader refuses deprecated opcodes, and the interpreter implements all live ones except `on_load`.
 
 ## Performance
-Not a goal, but measured so nothing is gratuitously slow. On one core: `fib(27)` 0.12 s, a
-200k-element `lists:map`/`filter`/`sum` 0.13 s, a 200k-insert map fold 0.25 s, sorting 200k
-integers 0.48 s. BEAM's JIT is roughly 10-30x faster.
+Not a goal, but measured (`perf`) so nothing is gratuitously slow. One core, wall time
+including start-up; BEAM is OTP 28 with its JIT (about 0.09 s of which is its own start-up):
+
+| Workload | beamlet | BEAM |
+| --- | --- | --- |
+| `fib(30)` | 0.24 s | 0.09 s |
+| map/filter/sum over 1M-element list | 0.40 s | 0.13 s |
+| 1M `maps:put` into a 10k-key map | 0.70 s | 0.22 s |
+| `lists:sort` of 1M integers | 1.2 s | 0.25 s |
+| 300k messages to another process | 0.10 s | 0.13 s |
+| 1M-byte binary comprehension and match | 0.46 s | 0.17 s |
+
+What the profile pointed at, and was fixed: natives looked up by name per call (now resolved
+per import at load), allocation in term comparison, a reference-count per instruction fetch,
+32-byte terms (now 16: bitstrings and atoms are thin pointers), allocation per dropped cons
+cell, quadratic binary appends (`private_append` now grows a uniquely owned buffer in place),
+and whole-map walks when dropping an old map version. What remains is the interpreter's own
+dispatch and operand decoding; pre-decoding operands would be the next step if it matters.
 
 ## Open questions
 - Mailbox overflow currently drops messages silently. Kill the receiver instead?
