@@ -61,7 +61,8 @@ merged; the waves show what can run together.
 | T1b | merged | wp-t1b | 6cd067a39 |
 | R1 | merged | wp-r1 | 8298608af (carried the answers 39-42, 50-53 part of R1b) |
 | K1 | merged | wp-k1 | e1d2c6216 |
-| A2 | waiting | | ABI update for answers 1-101; after the owner confirms 102-110 and reviews the design |
+| A2 | building | wp-a2 | pending questions built at marked sites |
+| R1b | building | wp-r1b | round-4 library changes |
 | W2 | merged | wp-w2 | 3715363a9 |
 | all others | waiting | | see BUILD-PLAN.md "Needs" |
 
