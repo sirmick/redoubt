@@ -49,8 +49,6 @@ const MINIELF_FLG_EHF: u8 = 8;
 pub enum CallbackType {
     /// args: irq_no, arg
     Interrupt(usize, *mut usize),
-    Swap([usize; 8]),
-    SwapInIrq([usize; 8]),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -608,27 +606,16 @@ impl SystemServices {
         // isn't running, that means the system has gotten into an invalid
         // state.
 
-        match cb_type {
-            CallbackType::SwapInIrq(_) => {
-                // don't manipulate current PID state at all if handling an IRQ fault
-            }
-            _ => {
-                let current_pid = self.current_pid();
-                let current = self.get_process_mut(current_pid).expect("couldn't get current PID");
-                // The current thread should never be 0, but for some reason it ends up
-                // as 0 after resuming from suspend. It's unclear how this happens.
-                if current.current_thread == 0 {
-                    current.current_thread = arch::process::current_tid();
-                }
-                // let old_state = current.state;
-                current.state = match current.state {
-                    ProcessState::Running(x) => ProcessState::Ready(x | (1 << current.current_thread)),
-                    y => panic!("current process was {:?}, not 'Running(_)'", y),
-                };
-                // log_process_update(file!(), line!(), current, old_state);
-                // println!("Making PID {} state {:?}", current_pid, current.state);
-            }
+        // Mark the interrupted process ready to run again.
+        let current_pid = self.current_pid();
+        let current = self.get_process_mut(current_pid).expect("couldn't get current PID");
+        if current.current_thread == 0 {
+            current.current_thread = arch::process::current_tid();
         }
+        current.state = match current.state {
+            ProcessState::Running(x) => ProcessState::Ready(x | (1 << current.current_thread)),
+            y => panic!("current process was {:?}, not 'Running(_)'", y),
+        };
 
         // Get the new process, and ensure that it is in a state where it's fit
         // to run.  Again, if the new process isn't fit to run, then the system
@@ -667,41 +654,23 @@ impl SystemServices {
             let sp = if pid.get() == 1 {
                 EXCEPTION_STACK_TOP
             } else {
-                match cb_type {
-                    // for swap, we have to provide our own stack, because we can have a fault
-                    // *inside* an IRQ handler, which leaves us with no stack (as the IRQ handler
-                    // is already planning on vampiring off an existing thread's stack).
-                    CallbackType::Swap(_) | CallbackType::SwapInIrq(_) => SWAP_STACK_TOP_VADDR,
-                    _ => arch_process.current_thread().stack_pointer(),
-                }
+                arch_process.current_thread().stack_pointer()
             };
 
             // Activate the current context
             arch_process.set_tid(arch::process::IRQ_TID).unwrap();
 
-            // Construct the new frame
-            match cb_type {
-                CallbackType::Interrupt(irq_no, arg) => {
-                    arch::syscall::invoke(
-                        arch_process.current_thread_mut(),
-                        pid.get() == 1,
-                        pc as usize,
-                        sp,
-                        arch::process::RETURN_FROM_ISR,
-                        &[irq_no, arg as usize],
-                    );
-                }
-                CallbackType::Swap(args) | CallbackType::SwapInIrq(args) => {
-                    arch::syscall::invoke(
-                        arch_process.current_thread_mut(),
-                        pid.get() == 1,
-                        pc as usize,
-                        sp,
-                        arch::process::RETURN_FROM_SWAPPER,
-                        &args,
-                    );
-                }
-            }
+            // Construct the new frame. Returning jumps to RETURN_FROM_ISR, faulting out
+            // of the interrupt.
+            let CallbackType::Interrupt(irq_no, arg) = cb_type;
+            arch::syscall::invoke(
+                arch_process.current_thread_mut(),
+                pid.get() == 1,
+                pc as usize,
+                sp,
+                arch::process::RETURN_FROM_ISR,
+                &[irq_no, arg as usize],
+            );
         });
         Ok(())
     }

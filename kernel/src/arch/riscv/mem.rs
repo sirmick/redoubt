@@ -360,14 +360,6 @@ pub fn hand_page_to_user(virt: *mut u8) -> Result<(), xous_kernel::Error> {
     Ok(())
 }
 
-/// Make a reserved (not yet valid) page a user page once it is backed.
-pub fn mark_page_user(virt: usize) -> Result<(), xous_kernel::Error> {
-    let slot = walk(current_root(), virt, None)?;
-    slot.set(slot.get().with(MMUFlags::USER));
-    flush_tlb();
-    Ok(())
-}
-
 /// Map the given page into the current address space.  If necessary,
 /// allocate new page tables on behalf of `pid`.
 ///
