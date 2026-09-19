@@ -21,7 +21,9 @@ The kernel knows processes, handles and resource containers. Nothing about users
   semantic rights (read-only, a port range) are server-enforced through the badge. Narrowing means
   asking the server to mint a narrower capability. No operation widens authority.
 - **Revocation.** Minting yields a revoker; revoking kills every copy wherever it travelled.
-  Requests in flight fail cleanly.
+  Requests in flight fail cleanly. Each capability records the budget it was minted into;
+  destroying a budget revokes everything minted into it and its descendants, wherever the copies
+  went (CONTAINMENT.md). There is no derivation tree.
 - **Death notification.** A dead server's capabilities go dead; callers get errors; holders may ask
   to be told.
 - **Leases** are revocation on a timer (a lease service holds the revoker).

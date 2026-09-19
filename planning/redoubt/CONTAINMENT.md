@@ -75,6 +75,19 @@ tests and attacked by red-team agents from several vendors writing counterexampl
 - budgets never go negative; destroying one returns everything.
 The kernel is then built to the model, and the bench checks conformance against it.
 
-## Open: revocation of derived capabilities
-When a server mints a narrower capability from a request that came through capability C, is the new
-one revoked when C is? To be discussed before the handle design is fixed.
+## Revocation of derived capabilities: by budget, not by derivation tree (decided)
+A server may mint a new, narrower capability D in answer to a request made through C. D is not a
+copy of C, so revoking C does not reach D. Options were a kernel derivation tree (seL4-style),
+servers checking C's liveness on every use, or revocation at the budget level. **Decided: budget
+level**, as the simplest mechanism that fits the tenets.
+- **Every capability records the budget it was minted into** (the recipient's budget at mint time),
+  and keeps it when copied or transferred.
+- **Destroying a budget revokes every capability minted into it or its descendants, wherever the
+  copies went.** A lease ending, an agent being revoked or a session ending therefore removes
+  everything granted to or obtained by that principal, including anything it passed to others.
+- **Revoking one capability** kills it and its copies only. Things obtained through it survive until
+  the budget ends. Taking back *one* grant mid-task is coarse by design: end the lease (or give
+  agents short leases and renew them).
+- Kernel cost: one field per capability and a sweep on budget destruction. No derivation tree.
+- Model invariant: after budget B is destroyed, no process holds a capability minted into B or any
+  descendant of B.
