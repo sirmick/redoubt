@@ -4,7 +4,7 @@ version = "0.9.70"
 authors = ["Sean Cross <sean@xobs.io>"]
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "System call interface for Xous"
+description = "The xous system-call ABI — Redoubt's userspace/kernel interface"
 repository = "https://github.com/betrusted-io/xous-core/"
 homepage = "https://betrusted.io/"
 

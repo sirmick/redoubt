@@ -3,7 +3,7 @@ name = "loader"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "Xous loader for RV64 SBI + device tree platforms (QEMU virt, softcores, SBCs)"
+description = "Redoubt loader for RISC-V (RV32/RV64) SBI + device-tree platforms (QEMU virt, FPGA softcores)"
 
 [dependencies]
 xous = "0.9.70"                                                # memory layout constants shared with the kernel

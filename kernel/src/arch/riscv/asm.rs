@@ -10,7 +10,7 @@
 //! instruction change with the register width. All of that is confined to the small,
 //! `cfg`-gated preamble below; the entry paths are shared. Addresses come from
 //! `xous_kernel::arch` rather than being repeated as literals. There is no suspend/resume
-//! entry path; that was specific to the Precursor SoC.
+//! entry path (Redoubt has no low-power suspend).
 
 use core::arch::global_asm;
 
