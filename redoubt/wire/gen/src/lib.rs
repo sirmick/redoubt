@@ -135,14 +135,14 @@ pub struct Protocol {
     pub messages: Vec<MessageDef>,
 }
 
-/// Rust and Elixir words a name may not be (generated code uses names as identifiers).
+/// Rust keywords (struct fields and modules) and Elixir reserved words (map keys, atoms) a
+/// name may not be. Generated code never binds a bare field name, so no local can clash.
 const RESERVED: &[&str] = &[
     "as", "break", "const", "continue", "crate", "else", "enum", "extern", "false", "fn", "for", "if",
     "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return", "self", "static",
     "struct", "super", "trait", "true", "type", "unsafe", "use", "where", "while", "async", "await", "dyn",
     "abstract", "become", "box", "do", "final", "macro", "override", "priv", "typeof", "unsized", "virtual",
-    "yield", "try", "gen", "and", "or", "not", "when", "end", "nil", "catch", "rescue", "after", "m", "f",
-    "w", "r", "buf", "words", "handles", "bytes", "body", "message",
+    "yield", "try", "gen", "and", "or", "not", "when", "end", "nil", "catch", "rescue", "after",
 ];
 
 fn check_ident(what: &str, name: &str) -> Result<(), String> {
