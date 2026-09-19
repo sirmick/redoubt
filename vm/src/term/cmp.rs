@@ -47,7 +47,15 @@ impl Heap {
 
     /// `=:=`
     pub fn eq_exact(&self, a: Term, b: Term) -> bool {
-        self.cmp_exact(a, b) == Ordering::Equal
+        // Fast path for the common case (`select_val`, `is_eq_exact` on atoms and small
+        // integers): these equal only a term of their own kind. Bigs are always outside `i64`.
+        match (a, b) {
+            (Term::Atom(x), Term::Atom(y)) => x == y,
+            (Term::Int(x), Term::Int(y)) => x == y,
+            (Term::Nil, Term::Nil) => true,
+            (Term::Atom(_) | Term::Int(_) | Term::Nil, _) | (_, Term::Atom(_) | Term::Int(_) | Term::Nil) => false,
+            _ => self.cmp_exact(a, b) == Ordering::Equal,
+        }
     }
 }
 
