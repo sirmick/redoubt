@@ -26,6 +26,12 @@ impl Atom {
         &self.0
     }
 
+    /// An atom outside any table, for unit tests.
+    #[cfg(test)]
+    pub fn test(name: &str) -> Atom {
+        Atom(Box::leak(Box::new(String::from(name))))
+    }
+
     /// A number that identifies this atom (its allocation: atoms are interned and never freed),
     /// for cheap keys.
     pub fn id(&self) -> usize {
