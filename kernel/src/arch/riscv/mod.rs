@@ -11,7 +11,7 @@ pub mod mem;
 mod mmu_flags;
 pub mod panic;
 pub mod process;
-mod sv39;
+mod physmap;
 pub mod syscall;
 
 pub fn current_pid() -> PID { PID::new(mem::pid_from_satp(satp::read().bits()) as _).unwrap() }
