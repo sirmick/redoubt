@@ -22,6 +22,26 @@
 //!
 //! The table belongs to one thread: a call is replied to by the thread that took it
 //! (KERNEL-SPEC.md, `reply`), and its abandoned-call notice arrives at that thread's `receive`.
+//! The loop around it has one shape (`tests/parked.rs` runs it):
+//!
+//! ```text
+//! loop {
+//!     let now = time_now()?;
+//!     while let Some(call) = parked.expired(now) { ...answer it with a timeout... }
+//!     let timeout = parked.next_deadline().map_or(FOREVER, |d| d.saturating_sub(now).max(1));
+//!     match endpoint.receive(timeout, 0)? {
+//!         Event::Call(request) => ...park it, answer it, or answer it ahead of admission...,
+//!         Event::Abandoned(id) => { parked.abandoned(id, &words); }
+//!         ...
+//!     }
+//! }
+//! ```
+//!
+//! **Not yet joined to the 9P skeleton.** A [`crate::server::ninep::NineServer`] answers every
+//! request as it takes it, so it cannot park one. The first 9P server that must wait for
+//! something (`consoled`, for input) needs two things: the skeleton handing the `Request` back
+//! instead of answering it, and `Parked` borrowing the skeleton's [`Admission`] rather than
+//! owning one, so fids and parked calls are charged in the same buckets and shares.
 
 use alloc::vec::Vec;
 
@@ -56,24 +76,17 @@ impl<T> Parked<T> {
         Parked { admission, calls: Vec::new(), longest }
     }
 
-    /// Parks `request` until `deadline` (µs since boot; clamped to `now` + the longest wait),
-    /// charged to its caller's bucket and `share`. Refused when the caller's bucket or share is
-    /// full, or there is no memory; the request comes back to be answered now.
+    /// Parks `request` at `now` (µs since boot) for at most the longest wait, charged to its
+    /// caller's bucket and `share`. Refused when the caller's bucket or share is full, or there
+    /// is no memory; the request comes back to be answered now.
     #[allow(clippy::result_large_err)] // the request comes back by value, as `Request::reply`'s does
-    pub fn park(
-        &mut self,
-        request: Request,
-        share: u64,
-        state: T,
-        now: u64,
-        deadline: u64,
-    ) -> Result<(), NotParked> {
+    pub fn park(&mut self, request: Request, share: u64, state: T, now: u64) -> Result<(), NotParked> {
         let key = AdmitKey::of(&request.caller);
         if self.calls.try_reserve(1).is_err() || self.admission.admit(key, share, Resource::InFlight).is_err()
         {
             return Err(NotParked(request));
         }
-        let deadline = deadline.min(now.saturating_add(self.longest));
+        let deadline = now.saturating_add(self.longest);
         self.calls.push(Call { request, key, share, deadline, state });
         Ok(())
     }
@@ -129,7 +142,4 @@ impl<T> Parked<T> {
         let _ = request.reply(words, &[]);
         Some(state)
     }
-
-    /// Admission for parked calls.
-    pub fn admission(&self) -> &Admission { &self.admission }
 }
