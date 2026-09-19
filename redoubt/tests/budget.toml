@@ -1,4 +1,4 @@
-description = "Budgets and handle tables (WP-K1): carving and charging (R6, R7), classes and labels (I8), destruction and its sweep (R10, I2, I10), 128 handles per table page, usage within limits (I5), ids over 500 create-destroy cycles (I12), time_now and random, and a model-predicted sequence"
+description = "Budgets and handle tables (WP-K1), as seen by a system-class caller holding the boot budgets: carving and charging (R6, R7), labels added and sorted (part of I6), depth, destruction and its sweep of the caller's own table (R10, I2, I10), 128 handles per table page, usage within limits (I5), 500 create-destroy cycles, time_now and random, and a model-predicted sequence. Accounts, other budgets' stamps, user-class callers and killing below system wait for WP-K2 and WP-K4"
 arch = ["rv64", "rv32"]
 kind = "boot"
 # PID 2 budget-test (the loader's first program: it holds root, system and users); PID 3 log-server.

@@ -400,3 +400,17 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   overflow in the startup parser; all fixed. Runs on the kernel after WP-K2.
 - **`ninep-common` renamed `ninep_common`** (2026-09-19, editorial, from WP-W2): protocol names are
   snake_case identifiers (WIRE.md, Tables); the table's marker must be one.
+- **Call numbers from `NUMBER_BASE` = 0x100** (2026-09-19, WP-K1, encoding only): until WP-K6
+  deletes the legacy Xous calls, the kernel serves both interfaces through one `ecall`, and
+  Redoubt's numbers 1..=24 collided with the legacy ones. Numbers belong to `redoubt-sys`
+  (KERNEL-SPEC.md, ABI), so the spec's tables do not change; WP-K6 sets the base back to 0.
+- **WP-K1 budgets and handle tables** (`e1d2c6216`): budgets as one RAM frame each, carving (R6, R7),
+  accounts (R8), deadlines recorded, destruction that kills the budget's processes and sweeps every
+  handle naming or stamped with a destroyed budget before any frame is freed (R10, I2, I10); handle
+  tables of 128 32-byte handles a page (the cost table's figure confirmed), at most 4096 a process;
+  each handle checks its object's and its stamp's ids. Answers 73 and 76 built; pending questions
+  102, 111 and 115 built as their recommendations at single sites. Interim until K4/K6: the kernel
+  sizes root, system and users from RAM, every loader process lives in `system`, only the first
+  holds the three handles, and a Redoubt call inside a legacy interrupt callback is `NotPermitted`.
+  Kernel 11.8k -> 12.9k lines; `unsafe` unchanged. The red team found nothing exploitable.
+
