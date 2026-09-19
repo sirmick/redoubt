@@ -409,10 +409,9 @@ pub fn init_get_arguments(_c: &mut Ctx, _a: &[Term]) -> R {
 pub fn init_get_argument(c: &mut Ctx, a: &[Term]) -> R {
     let value = match &a[0] {
         Term::Atom(f) if f.as_str() == "home" => c.sys.env.get("HOME").cloned(),
-        Term::Atom(f) if f.as_str() == "root" && !c.sys.lib_roots.is_empty() => match super::code::root_dir(c, &[])?.to_vec() {
-            Some(chars) => Some(chars.iter().filter_map(|t| t.as_i64().and_then(|i| char::from_u32(i as u32))).collect()),
-            None => None,
-        },
+        Term::Atom(f) if f.as_str() == "root" && !c.sys.lib_roots.is_empty() => super::code::root_dir(c, &[])?
+            .to_vec()
+            .map(|chars| chars.iter().filter_map(|t| t.as_i64().and_then(|i| char::from_u32(i as u32))).collect()),
         _ => None,
     };
     Ok(match value {
