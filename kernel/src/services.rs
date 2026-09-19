@@ -10,12 +10,12 @@ use xous_kernel::{
 };
 
 use crate::arch;
-#[cfg(baremetal)]
-use crate::cell::KernelCell;
 use crate::arch::mem::MemoryMapping;
 pub use crate::arch::process::Process as ArchProcess;
 #[cfg(not(any(windows, unix)))]
 pub use crate::arch::process::Thread;
+#[cfg(baremetal)]
+use crate::cell::KernelCell;
 use crate::filled_array;
 use crate::platform;
 use crate::server::Server;
@@ -324,6 +324,24 @@ impl core::fmt::Debug for Process {
     }
 }
 
+/// Get every destination page of a transfer ready before any page moves or is lent: allocate
+/// its page tables and check that it is free. With the source already backed (and, for a move,
+/// owned by the sender), each transfer in the loop can then no longer fail, so running out of
+/// memory, or a destination already in use, refuses the whole transfer with nothing changed.
+#[cfg(baremetal)]
+fn prepare_destination(
+    mm: &mut crate::mem::MemoryManager,
+    dest_mapping: &arch::mem::MemoryMapping,
+    dest_pid: PID,
+    dest_virt: usize,
+    len: usize,
+) -> Result<(), xous_kernel::Error> {
+    for offset in (0..len).step_by(PAGE_SIZE) {
+        arch::mem::prepare_map(mm, dest_mapping, dest_pid, dest_virt + offset)?;
+    }
+    Ok(())
+}
+
 impl SystemServices {
     /// Calls the provided function with the current inner process state.
     pub fn with<F, R>(f: F) -> R
@@ -398,7 +416,8 @@ impl SystemServices {
             //     pid - 1,
             //     init,
             // );
-            // SAFETY: `from_init_process` records a loader-built satp; the loader guarantees it names a root table.
+            // SAFETY: `from_init_process` records a loader-built satp; the loader guarantees it names a root
+            // table.
             unsafe {
                 process.mapping.from_init_process(*init);
                 process.ppid = KERNEL_PID;
@@ -1283,18 +1302,18 @@ impl SystemServices {
 
         // If the dest and src PID is the same, do nothing.
         if current_pid == dest_pid {
-            crate::mem::MemoryManager::with_mut(|mm| {
-                for offset in (0..usize_len).step_by(usize_page) {
-                    mm.ensure_page_exists(src_virt.wrapping_add(offset) as usize)?;
-                }
-                Ok(())
-            })?;
+            crate::mem::MemoryManager::with_mut(|mm| mm.ensure_range_exists(src_virt as usize, len))?;
             return Ok(src_virt);
         }
 
         let src_mapping = self.get_process(current_pid)?.mapping;
         let dest_mapping = self.get_process(dest_pid)?.mapping;
         crate::mem::MemoryManager::with_mut(|mm| {
+            // Back and check every page before moving any, so that a failure leaves nothing
+            // half moved and the moves below cannot fail on ownership.
+            mm.ensure_range_exists(src_virt as usize, len)?;
+            mm.check_owned_range(current_pid, src_virt as usize, len)?;
+
             // Locate an address to fit the new memory.
             dest_mapping.activate()?;
             let dest_virt = mm
@@ -1304,14 +1323,14 @@ impl SystemServices {
                     e
                 })? as *mut usize;
             src_mapping.activate().expect("Couldn't switch back to source mapping");
+            prepare_destination(mm, &dest_mapping, dest_pid, dest_virt as usize, len)?;
 
             let mut error = None;
 
-            // Move each subsequent page.
+            // Move each subsequent page. Nothing here can fail any more (see above).
             for offset in (0..usize_len).step_by(usize_page) {
                 assert!(((src_virt.wrapping_add(offset) as usize) & 0xfff) == 0);
                 assert!(((dest_virt.wrapping_add(offset) as usize) & 0xfff) == 0);
-                mm.ensure_page_exists(src_virt.wrapping_add(offset) as usize)?;
                 mm.move_page(
                     current_pid,
                     &src_mapping,
@@ -1322,7 +1341,7 @@ impl SystemServices {
                 )
                 .unwrap_or_else(|e| error = Some(e));
             }
-            error.map_or_else(|| Ok(dest_virt), |e| panic!("unable to send: {:?}", e))
+            error.map_or_else(|| Ok(dest_virt), |e| panic!("a prepared move failed: {:?}", e))
         })
         .map(|val| val as *mut usize)
     }
@@ -1392,19 +1411,16 @@ impl SystemServices {
         // If it's within the same process, ignore the move operation and
         // just ensure the pages actually exist.
         if current_pid == dest_pid {
-            MemoryManager::with_mut(|mm| {
-                for offset in (0..usize_len).step_by(usize_page) {
-                    assert!(((src_virt.wrapping_add(offset) as usize) & 0xfff) == 0);
-                    mm.ensure_page_exists(src_virt.wrapping_add(offset) as usize)?;
-                }
-                Ok(())
-            })?;
+            MemoryManager::with_mut(|mm| mm.ensure_range_exists(src_virt as usize, len))?;
             return Ok(src_virt);
         }
         let src_mapping = self.get_process(current_pid)?.mapping;
         let dest_mapping = self.get_process(dest_pid)?.mapping;
         use crate::mem::MemoryManager;
         MemoryManager::with_mut(|mm| {
+            // Back every page before lending any, so that a failure leaves nothing half lent.
+            mm.ensure_range_exists(src_virt as usize, len)?;
+
             // Locate an address to fit the new memory.
             dest_mapping.activate()?;
             let dest_virt = mm
@@ -1415,14 +1431,14 @@ impl SystemServices {
                     e
                 })? as *mut usize;
             src_mapping.activate().unwrap();
+            prepare_destination(mm, &dest_mapping, dest_pid, dest_virt as usize, len)?;
 
             let mut error = None;
 
-            // Lend each subsequent page.
+            // Lend each subsequent page. Nothing here can fail any more (see above).
             for offset in (0..usize_len).step_by(usize_page) {
                 assert!(((src_virt.wrapping_add(offset) as usize) & 0xfff) == 0);
                 assert!(((dest_virt.wrapping_add(offset) as usize) & 0xfff) == 0);
-                mm.ensure_page_exists(src_virt.wrapping_add(offset) as usize)?;
                 mm.lend_page(
                     &src_mapping,
                     src_virt.wrapping_add(offset) as *mut u8,
@@ -1445,7 +1461,7 @@ impl SystemServices {
                 || Ok(dest_virt),
                 |e| {
                     panic!(
-                        "unable to lend {:08x} in pid {} to {:08x} in pid {}: {:?}",
+                        "a prepared lend failed: {:08x} in pid {} to {:08x} in pid {}: {:?}",
                         src_virt as usize, current_pid, dest_virt as usize, dest_pid, e
                     )
                 },
@@ -1724,7 +1740,7 @@ impl SystemServices {
         // TODO: Come up with a way to randomize the server ID
         let ppid = self.get_process(pid)?.ppid.get();
         if ppid != 1 {
-            panic!("KERNEL({}): Non-PID1 processes cannot start servers yet", pid.get());
+            return Err(xous_kernel::Error::AccessDenied);
         }
 
         for entry in self.servers.iter_mut() {
@@ -2222,7 +2238,8 @@ impl SystemServices {
             if arg.name != u32::from_le_bytes(*b"PNam") {
                 continue;
             }
-            // SAFETY: `arg.data` is `arg.size` words of the kernel argument block; viewing them as bytes is valid.
+            // SAFETY: `arg.data` is `arg.size` words of the kernel argument block; viewing them as bytes is
+            // valid.
             let data = unsafe {
                 let ptr = arg.data.as_ptr();
                 let len = arg.size;

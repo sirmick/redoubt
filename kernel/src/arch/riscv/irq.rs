@@ -279,7 +279,7 @@ pub extern "C" fn trap_handler(
         RiscvException::StorePageFault(_pc, addr) | RiscvException::LoadPageFault(_pc, addr) => {
             #[cfg(all(feature = "debug-print", feature = "print-panics"))]
             println!("KERNEL({}): RISC-V fault: {} @ {:08x}, addr {:08x} - ", pid, ex, _pc, addr);
-            crate::arch::mem::ensure_page_exists_inner(addr)
+            crate::mem::MemoryManager::with_mut(|mm| crate::arch::mem::ensure_page_exists_inner(mm, addr))
                 .map(|_new_page| {
                     ArchProcess::with_current_mut(|process| {
                         #[cfg(all(feature = "debug-print", feature = "print-panics"))]
