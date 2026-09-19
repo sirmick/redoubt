@@ -51,9 +51,19 @@ impl Image<'_> {
         qemu
     }
 
-    /// Boot with the console on this terminal. Ctrl-A X quits QEMU.
-    pub fn run_interactive(&self) -> Result<()> {
-        let status = self.qemu().arg("-nographic").status().with_context(|| format!("starting {}", self.machine.qemu))?;
+    /// Boot with the console on this terminal. Ctrl-A X quits QEMU. If `debug`, start
+    /// paused with QEMU's gdb stub on :1234 so a host gdb can attach with our symbols.
+    pub fn run_interactive(&self, debug: bool) -> Result<()> {
+        let mut qemu = self.qemu();
+        qemu.arg("-nographic");
+        if debug {
+            qemu.args(["-s", "-S"]);
+            eprintln!(
+                "\nQEMU paused with a gdb stub on :1234. In another shell:\n                   gdb {}\n  (gdb) target remote :1234\n  (gdb) break kmain\n  (gdb) continue\n\n                 (Use gdb-multiarch if your gdb lacks riscv support.)\n",
+                self.loader.display()
+            );
+        }
+        let status = qemu.status().with_context(|| format!("starting {}", self.machine.qemu))?;
         anyhow::ensure!(status.success(), "{} exited with {status}", self.machine.qemu);
         Ok(())
     }

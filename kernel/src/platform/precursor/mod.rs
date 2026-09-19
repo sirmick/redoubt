@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: 2022 Foundation Devices, Inc. <hello@foundationdevices.com>
 // SPDX-License-Identifier: Apache-2.0
 
-#[cfg(feature = "gdb-stub")]
-pub mod gdbuart;
 #[cfg(all(feature = "print-panics"))]
 pub mod lcdpanic;
 pub mod rand;
@@ -73,6 +71,4 @@ pub fn init() {
 
     self::rand::init();
 
-    #[cfg(feature = "gdb-stub")]
-    crate::debug::gdb::init();
 }

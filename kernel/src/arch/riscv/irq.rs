@@ -99,14 +99,6 @@ static PREVIOUS_PAIR: KernelCell<Option<(PID, TID)>> = KernelCell::new(None);
 /// must pair this with exactly one `take_isr_return_pair`.
 pub unsafe fn set_isr_return_pair(pid: PID, tid: TID) { PREVIOUS_PAIR.with(|p| *p = Some((pid, tid))); }
 
-#[cfg(feature = "gdb-stub")]
-/// Take the pending ISR return target, if any.
-///
-/// # Safety
-/// As for [`set_isr_return_pair`]: `unsafe` is a cross-architecture ABI marker; the
-/// operation itself is sound.
-pub unsafe fn take_isr_return_pair() -> Option<(PID, TID)> { PREVIOUS_PAIR.with(|p| p.take()) }
-
 /// Finish a pending ISR. Return `false` if there was none.
 fn finish_isr() -> bool {
     if !HANDLING_IRQ.swap(false, Ordering::Relaxed) {
@@ -429,34 +421,6 @@ pub extern "C" fn trap_handler(
                 .ok(); // If this fails, fall through.
         }
 
-        #[cfg(feature = "gdb-stub")]
-        RiscvException::Breakpoint(_address) => {
-            let insn_lo = crate::arch::mem::peek_memory(epc as *mut u16).unwrap_or(0xffff);
-            let insn_hi = crate::arch::mem::peek_memory((epc + 2) as *mut u16).unwrap_or(0xffff);
-            if (insn_lo & 0xffff == 0x9002) || (insn_hi == 0x0010 && insn_lo == 0x0073) {
-                // Report that the process has stopped
-                let tid = ArchProcess::with_current_mut(|process| process.current_tid());
-
-                // Note that we report the current `epc` here without manipulation --
-                // the debugger will unpatch the opcode and re-issue the instruction.
-                crate::debug::gdb::report_stop(pid, tid, epc);
-
-                // Pause for debugging, which switches to the parent process
-                SystemServices::with_mut(|ss| {
-                    ss.pause_process_for_debug(pid).expect("couldn't debug current process");
-                    crate::syscall::reset_switchto_caller();
-                });
-
-                // Don't lock up when debugging ISRs
-                finish_isr();
-
-                // Resume the parent process.
-                ArchProcess::with_current_mut(|process| {
-                    crate::arch::syscall::resume(current_pid().get() == 1, process.current_thread())
-                })
-            }
-        }
-
         _ => {
             #[cfg(not(any(feature = "precursor", feature = "renode")))]
             println!("!!! Unrecognized exception: {:x?}", ex);
@@ -531,15 +495,6 @@ pub extern "C" fn trap_handler(
 
     // If it's not a failure in the kernel, terminate or debug the current process.
     SystemServices::with_mut(|ss| {
-        #[cfg(feature = "gdb-stub")]
-        {
-            ss.pause_process_for_debug(pid).expect("couldn't debug current process");
-            crate::debug::gdb::report_terminated(pid);
-            println!("Program suspended. You may inspect it using gdb.");
-        }
-        #[cfg(not(feature = "gdb-stub"))]
-        println!("Process {:?} terminated", pid);
-        #[cfg(not(feature = "gdb-stub"))]
         ss.terminate_process(pid).expect("couldn't terminate current process");
         crate::syscall::reset_switchto_caller();
     });

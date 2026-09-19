@@ -36,8 +36,6 @@ riscv = "0.16"
 sv39 = { path = "../xous64/sv39" }
 
 [target.'cfg(any(target_arch = "riscv32", target_arch = "riscv64"))'.dependencies]
-gdbstub = { version = "0.6.5", optional = true, default-features = false }
-gdbstub_arch = { version = "0.2.4", optional = true, default-features = false }
 
 
 [lints.rust]
@@ -65,7 +63,6 @@ hosted = ["utralib/hosted"]
 renode = ["utralib/renode"]
 
 debug-print = []
-gdb-stub = ["gdbstub", "gdbstub_arch", "bao1x-api"]
 print-panics = []
 dump-kernel-pages = []                              # include kernel pages in panic dumps
 report-memory = ["stats_alloc"]

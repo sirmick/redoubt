@@ -6,5 +6,3 @@ mod macros;
 #[cfg(baremetal)]
 pub mod shell;
 
-#[cfg(all(baremetal, feature = "gdb-stub"))]
-pub mod gdb;

@@ -42,6 +42,9 @@ struct Args {
     /// Hart count for --run.
     #[arg(long, default_value_t = 1)]
     smp: u32,
+    /// With --run, start QEMU paused with a gdb stub on :1234 (see planning/xous64/DEBUGGING.md).
+    #[arg(long)]
+    debug: bool,
     /// Show cargo's output.
     #[arg(long, short)]
     verbose: bool,
@@ -71,7 +74,7 @@ fn main() -> Result<()> {
         let bundle = prepare(&builder, target, machine, &programs, &[], "", false, &logs.join("interactive.tar"))?;
         let loader = builder.artifact(target, machine.loader_package);
         let image = Image { machine, firmware: &args.firmware, loader: &loader, bundle: &bundle, smp: args.smp };
-        return image.run_interactive();
+        return image.run_interactive(args.debug);
     }
 
     let mut paths: Vec<_> = std::fs::read_dir(workspace.join("xous64/tests"))?
