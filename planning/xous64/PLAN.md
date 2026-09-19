@@ -158,14 +158,16 @@ Open, in rough priority order:
 - [ ] Delete what we do not run (tenet 1), pending the rv32 decision: swap, gdb stub, ARM, Precursor
       and bao1x platforms, the Sv32 window code, prebuilt blobs.
 - [ ] Bench: inject a device tree, to test fail-closed paths (no rng-seed, no memory node, junk).
-- [ ] **Firmware is C (OpenSBI), in M-mode.** That contradicts "no C in the trusted path". Goal: RustSBI
-      on both XLENs, OpenSBI kept as a second firmware in the test matrix. Findings: RustSBI Prototyper
-      (HEAD eae4cc7) builds for rv64 and rv32 in ~10 s each with its pinned nightly, and boots
-      `loader64`. But it re-serializes the device tree (to add a reserved-memory node for itself), and
-      the `fdt` 0.1.5 parser asserts "bad node" on the result, so RAM and initrd cannot be read.
-      Not yet determined whether the tree violates the spec (properties after child nodes?) or the
-      parser is too strict. Reproduce: `cargo testbench ipc --firmware <rustsbi-prototyper elf>`.
-      Options: fix/report upstream, try `fdt` 0.2, or a more tolerant parser.
+- [ ] **Firmware is C (OpenSBI), in M-mode** (tenet 3). Goal: a pure-Rust firmware. RustSBI Prototyper
+      (HEAD eae4cc7) builds for rv64/rv32 and boots `loader64`, BUT **root-caused blocker**: its device
+      tree re-serialization is lossy. `firmware/prototyper/src/devicetree.rs` models the tree as a
+      partial `Tree` struct (`model`, `cpus`, `soc`, `memory`) and re-emits via `serde_device_tree::ser::to_dtb`
+      to add its firmware reservation, so every unmodeled node is dropped -- including `/chosen`, which
+      carries `linux,initrd-start/end` and `rng-seed`. Result: the loader finds no initrd (and would
+      lose the RNG seed). **Report upstream** (lossy DT round-trip drops /chosen and any unmodeled node).
+      Paths: (a) fix RustSBI to preserve unmodeled nodes / edit the DTB in place; (b) RustSBI payload
+      mode (embeds the payload, no initrd via /chosen -- but still loses rng-seed); (c) another Rust SBI.
+      OpenSBI stays the working firmware meanwhile. Reproduce: boot with `-bios <rustsbi-prototyper>`.
 - [x] **Verified boot**: the loader authenticates the whole bundle with an embedded Ed25519 key
       (`ed25519-compact`, pure Rust, self-contained) before running any of it; tamper -> fail closed.
       Design: VERIFIED-BOOT.md. Test: `verified-boot-rejects-tamper`. Open: loader itself unverified on
