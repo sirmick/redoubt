@@ -184,3 +184,36 @@ Accepted as recommended: 102 (`MAX_HANDLES` = 4096, `TooLarge`), 104, 105, 106, 
   overflow checks on is not a special build, and the bench boots chosen cases with it. The shipped
   configuration is still what most cases boot. It has already earned its place (the undefined
   behaviour in the argument-block read, two latent SMP bugs).
+
+---
+
+# Answers to 120-126 (owner, 2026-09-19; confirmed)
+
+**All Rec, with an addition to 120.**
+
+**120. Domain separation, plus the bundle signature itself.** Accept both recommendations (a
+domain for the package container in milestone 2; `init` refuses a manifest that gives `keyd` the
+key the loader verifies the bundle with, since `keyd` cannot see that itself). **In addition, give
+the bundle signature its own domain now**, in milestone 1: the loader verifies a signature over
+`domain || length || tar` rather than the bare archive. The loader and the signing tool are small
+and no production key exists yet, so it is cheap now and awkward later, and it closes the
+cross-protocol signing hole from both sides rather than relying only on `init`'s check.
+VERIFIED-BOOT.md states the container, with a HISTORY.md entry.
+
+- **121.** Accept: WIRE.md states the pattern once (a typed protocol that mints a narrower
+  capability names its grant and release operations), and CONTAINMENT.md says a launcher releases a
+  child's grants when it receives the child's exit notice, as it disconnects its connections.
+- **122.** Accept: manifest arguments are opaque strings passed through unchanged; each server's
+  note defines its own; `init` validates only their count, length and encoding.
+- **123.** Accept: `bootfsd` serves only the entries the manifest marks public (programs, module
+  archives), never the manifest itself. INIT.md states the residual: in milestone 1 the seeds live
+  in `init`'s memory and in the bundle image, at the same trust as the bundle. Milestone 2 seals
+  them to the machine and generates them at first boot rather than shipping them.
+- **124.** Accept: no session or lease holds `keys` in milestone 1. The worked example's row goes,
+  and both mentions are marked milestone 2, where a principal's key comes with the one message
+  shape it may sign (answer 95).
+- **125.** Accept: `keyd` keeps the `audit` purpose, WP-S2 signs each audit record, the file carries
+  the signatures, and verification is an operator tool in milestone 2.
+- **126.** Accept: a server draws its first minted badge at random above 2^63 (`random`), so a
+  restarted server never reissues a badge a client still holds. The 9P skeleton and `keyd` change
+  together.
