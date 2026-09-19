@@ -29,12 +29,19 @@ pub const BAD_LIMITS: u32 = 4;
 /// cannot sign with, and serving without it would look like the key simply not existing
 /// (TENETS.md 2, fail closed and loudly).
 pub const BAD_KEYS: u32 = 5;
+/// The kernel would not give a random word. `keyd`'s first granted badge is drawn from one
+/// (answer 126), and a predictable one is a hole across a restart, so it does not start
+/// without it.
+pub const NO_RANDOM: u32 = 6;
 
 /// Serves until the endpoint is destroyed.
 pub fn serve(startup: &Startup) -> u32 {
     let Some(handle) = startup.handle("keyd") else { return NO_ENDPOINT };
     let Ok(keys) = Keys::from_args(startup.args()) else { return BAD_KEYS };
-    let Ok(mut server) = KeyServer::new(keys, LIMITS, &COST, BUDGET) else { return BAD_LIMITS };
+    // A predictable first granted badge would be a hole across a restart (answer 126), so a
+    // `keyd` that cannot draw one does not start.
+    let Ok(random) = redoubt_rt::handle::random_u64() else { return NO_RANDOM };
+    let Ok(mut server) = KeyServer::new(keys, LIMITS, &COST, BUDGET, random) else { return BAD_LIMITS };
     let endpoint = Endpoint::from_handle(handle);
     loop {
         match endpoint.receive(FOREVER, 0) {

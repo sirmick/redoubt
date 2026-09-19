@@ -20,7 +20,7 @@
 use redoubt_rt::abi::{Error, Handle, Handles, ReceivedHandles};
 use redoubt_rt::ipc::{Caller, Request, Words};
 pub use redoubt_rt::server::minted::FIRST_MINTED_BADGE as FIRST_GRANTED_BADGE;
-use redoubt_rt::server::minted::{Kernel, MintError, Minted, Minter};
+use redoubt_rt::server::minted::{Entry, Kernel, MintError, Minted, Minter};
 use redoubt_rt::server::typed::{Answer, Outcome, Protocol, TypedServer, answer, finish};
 use redoubt_rt::server::{Access, Admission, AdmitKey, Cost, Limits, Resource, Unsized, check};
 use redoubt_rt::wire::Error as WireError;
@@ -47,6 +47,10 @@ pub const AUDIT_DOMAIN: &[u8] = b"redoubt.audit.v1\0";
 /// The most an audit record may be: enough for a record the steward writes, small enough that
 /// one request's work is bounded by a number stated here.
 pub const MAX_RECORD: usize = 8 * 1024;
+
+/// The id `release` takes to mean "everything I granted". [`Minted`] never issues it, so it
+/// cannot collide with a real one.
+pub const ALL_GRANTS: u64 = 0;
 
 /// What a client may hold in `keyd` at once, per (account, label set) (CONTAINMENT.md).
 ///
@@ -77,26 +81,30 @@ pub struct KeyServer {
     /// Where a reply's signature is held while the reply borrows it: the request is decoded
     /// from the caller's lend, which the reply is then written over.
     signature: [u8; SIGNATURE_LEN],
-    /// The badge `grant` made while answering the call in hand, so that a reply that never
-    /// reaches its caller can be undone: the requester never learns the id, so nothing could
-    /// ever `release` it.
-    granted_here: Option<u64>,
 }
 
 impl KeyServer {
     /// Serves `keys` under `limits`. Refuses limits that do not leave the open-call headroom or
     /// that cannot seat a fair share ([`Admission::new`]), and limits whose caps at their
     /// ceiling would not fit `budget` bytes (answer 85).
-    pub fn new(keys: Keys, limits: Limits, cost: &Cost, budget: u64) -> Result<KeyServer, Unsized> {
+    /// `random` is one word of the kernel's CSPRNG, which is where the granted badges start
+    /// (answer 126): a `keyd` that cannot get one does not start, because a predictable first
+    /// badge is a hole across a restart (see [`redoubt_rt::server::minted`]).
+    pub fn new(
+        keys: Keys,
+        limits: Limits,
+        cost: &Cost,
+        budget: u64,
+        random: u64,
+    ) -> Result<KeyServer, Unsized> {
         if !limits.fits(cost, budget) {
             return Err(Unsized);
         }
         Ok(KeyServer {
             keys,
-            granted: Minted::new(),
+            granted: Minted::new(random),
             admission: Admission::new(limits)?,
             signature: [0; SIGNATURE_LEN],
-            granted_here: None,
         })
     }
 
@@ -110,7 +118,7 @@ impl KeyServer {
     /// Answers one call and replies to it.
     pub fn serve(&mut self, mut request: Request) -> Result<(), Error> {
         let (caller, words, handles) = (request.caller, request.words, request.handles);
-        self.granted_here = None;
+        self.granted.answering();
         // Minting from the message id keeps the caller's stamp (CAPABILITIES.md) and borrows
         // nothing, so the lend is read on the same path as everything else.
         let mut kernel = Kernel(request.id());
@@ -120,7 +128,7 @@ impl KeyServer {
         // granted capability nobody can ever name: its id went nowhere, and `release` answers
         // only the holder of an id. Undo it, so a client cannot fill its own bucket by dying
         // mid-grant.
-        if let Some(badge) = self.granted_here.take() {
+        if let Some(badge) = self.granted.minted_here() {
             if sent.is_err() {
                 self.forget_badge(badge);
             }
@@ -189,6 +197,19 @@ impl KeyServer {
             // the handle the request came through, so a launcher never passes its own on
             // (INIT.md). Nothing granted is ever wider than the badge it came through.
             Message::Grant(Grant {}) => {
+                // **Only a root badge may grant.** A granted capability cannot grant again,
+                // so grants never chain. Without that rule a system-class caller escapes its
+                // cap: `admit` keys account 0 by badge (CONTAINMENT.md, because the budget id
+                // a system caller shares does not travel), and `share` folds a capability into
+                // its parent's only when the requester and the caller are the same client,
+                // which two badges of account 0 never are. One daemon could then open a fresh
+                // bucket per chained grant until `LIMITS.buckets` were spent and nobody, the
+                // steward included, could grant at all. Milestone 1 needs no chain: only the
+                // steward and `sshd` hold `keyd` capabilities, both through root badges, and
+                // no session or lease holds `keys` at all (answer 124).
+                if caller.badge >= FIRST_GRANTED_BADGE {
+                    return Err(ErrorCode::NotPermitted);
+                }
                 // Admission first, so a client at its cap makes the server do no work for it.
                 let (client, share) = (AdmitKey::of(caller), self.granted.share(caller));
                 self.admission.admit(client, share, Resource::State).map_err(|_| ErrorCode::TooMany)?;
@@ -196,14 +217,13 @@ impl KeyServer {
                     .granted
                     .reserve(caller, share, kernel)
                     .and_then(|ticket| self.granted.commit(ticket, index, kernel));
-                let (handle, id, badge) = made.map_err(|e| {
+                let (handle, id, _badge) = made.map_err(|e| {
                     self.admission.release(client, share, Resource::State);
                     match e {
                         MintError::TooMany => ErrorCode::TooMany,
                         MintError::Failed => ErrorCode::Failed,
                     }
                 })?;
-                self.granted_here = Some(badge);
                 let mut handles = Handles::new();
                 // Cannot fail: one handle, and a reply may carry `MAX_MSG_HANDLES`.
                 let _ = handles.push(handle);
@@ -214,14 +234,23 @@ impl KeyServer {
             // `release(id)`: frees the capability and every capability granted under it, for
             // the caller that received `id` and nobody else; the same answer whether the id
             // belongs to somebody else or to nobody, so nothing is revealed.
+            //
+            // **`release(0)` frees everything this caller granted.** No grant is ever given the
+            // id 0, so it cannot name one. It is what a holder asks for when its ids are gone:
+            // a server that crashed and was restarted on the same root badge (INIT.md decision
+            // 4) comes back knowing nothing, and without this its share would stay full for the
+            // life of `keyd`, because only the holder of an id can name a capability.
             Message::Release(Release { id }) => {
                 let admission = &mut self.admission;
-                self.granted
-                    .disconnect(caller, id, |gone| {
-                        let (client, share) = gone.charged_to();
-                        admission.release(client, share, Resource::State);
-                    })
-                    .map_err(|_| ErrorCode::NotPermitted)?;
+                let mut freed = |gone: Entry<usize>| {
+                    let (client, share) = gone.charged_to();
+                    admission.release(client, share, Resource::State);
+                };
+                if id == ALL_GRANTS {
+                    self.granted.disconnect_all(caller, freed);
+                } else {
+                    self.granted.disconnect(caller, id, &mut freed).map_err(|_| ErrorCode::NotPermitted)?;
+                }
                 Ok(Answer::new(Reply::Release(ReleaseReply {})))
             }
         }

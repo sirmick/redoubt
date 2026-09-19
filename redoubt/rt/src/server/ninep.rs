@@ -99,7 +99,8 @@ pub const MAX_FIDS: usize = 64;
 pub const QTDIR: u8 = 0x80;
 /// `Stat::mode` bit of a directory.
 pub const DMDIR: u32 = 0x8000_0000;
-pub use super::minted::{FIRST_MINTED_BADGE, Minter};
+use super::minted::NotYours;
+pub use super::minted::{FIRST_MINTED_BADGE, Minter, first_badge};
 
 /// QUESTIONS.md 113 (pending): the typed opcodes `ninep_common` owns on every 9P endpoint. A
 /// server's own protocol on the same endpoint uses opcodes above them; an opcode in this range
@@ -332,12 +333,14 @@ impl<S: FileServer> NineServer<S> {
     /// Serves `fs`. `limits.files` bounds the fids one client (account, label set) holds across
     /// all its connections, `limits.state` the connections it has minted; the limits must leave
     /// the open-call headroom ([`Admission::new`]) and should fit the server's budget
-    /// ([`Limits::fits`]).
-    pub fn new(fs: S, limits: Limits) -> Result<NineServer<S>, Unsized> {
+    /// ([`Limits::fits`]). `random` is one word of the kernel's CSPRNG, which is where the
+    /// minted badges start (answer 126: see [`super::minted`]); a server that cannot get one
+    /// must not start, because a predictable first badge is a hole across a restart.
+    pub fn new(fs: S, limits: Limits, random: u64) -> Result<NineServer<S>, Unsized> {
         Ok(NineServer {
             fs,
             conns: Vec::new(),
-            minted: Minted::new(),
+            minted: Minted::new(random),
             admission: Admission::new(limits)?,
             scratch: Vec::new(),
             stat: FileStat::default(),
@@ -396,9 +399,19 @@ impl<S: FileServer> NineServer<S> {
         if missing {
             return finish(request, &Outcome { words: MALFORMED, send: Handles::new(), close: handles });
         }
+        self.minted.answering();
         let mut kernel = super::minted::Kernel(request.id());
         let outcome = self.answer_common(&caller, &words, &handles, request.lend(), &mut kernel);
-        finish(request, &outcome)
+        let sent = finish(request, &outcome);
+        // A reply that could not be sent leaves a connection nobody can ever name: its id went
+        // nowhere, and `disconnect` answers only the holder of an id, so its admission slot
+        // would be held for the life of the process. Undo it (the same rule keyd follows).
+        if let Some(badge) = self.minted.minted_here() {
+            if sent.is_err() {
+                self.forget(badge);
+            }
+        }
+        sent
     }
 
     /// Answers a `ninep_common` request without replying: its outcome, the reply's fields
@@ -431,7 +444,7 @@ impl<S: FileServer> NineServer<S> {
                         |words| Outcome { words, send: none, close: none },
                     )
                 }
-                Err(()) => fail(NOT_YOURS),
+                Err(NotYours) => fail(NOT_YOURS),
             },
             Ok(ninep_common::Message::NewConnection(n)) => {
                 // `root` borrows the lend, which the reply is written over: the connection is
@@ -672,7 +685,7 @@ impl<S: FileServer> NineServer<S> {
 
     /// `disconnect(id)` from `caller`: frees the connection and every connection minted under
     /// it (the shared table's order). `Err` if the caller did not receive `id`.
-    fn disconnect(&mut self, caller: &Caller, id: u64) -> Result<(), ()> {
+    fn disconnect(&mut self, caller: &Caller, id: u64) -> Result<(), NotYours> {
         let Self { minted, conns, admission, fs, .. } = self;
         minted.disconnect(caller, id, |gone| Self::connection_gone(conns, admission, fs, gone))
     }

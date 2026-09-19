@@ -153,7 +153,7 @@ impl Minter for Kernel {
 }
 
 fuzz_target!(|data: &[u8]| {
-    let mut server = NineServer::new(Tree { data: Default::default() }, LIMITS).unwrap();
+    let mut server = NineServer::new(Tree { data: Default::default() }, LIMITS, 0).unwrap();
     let mut kernel = Kernel { minted: Vec::new(), rng: 0x2545_f491_4f6c_dd1d };
     // Connection ids handed out, with who asked for each.
     let mut ids: Vec<(u64, Caller)> = Vec::new();

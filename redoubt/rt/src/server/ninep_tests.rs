@@ -190,6 +190,10 @@ fn caller(badge: u64, account: u64, labels: &[u64]) -> Caller {
 
 const ALICE: u64 = 1;
 
+/// The word these tests draw their first minted badge from, so a failure reproduces. On the
+/// machine it comes from the kernel's CSPRNG (answer 126).
+const TEST_RANDOM: u64 = 0;
+
 fn alice() -> Caller { caller(ALICE, 1001, &[]) }
 
 impl T {
@@ -198,7 +202,7 @@ impl T {
     /// A server whose buckets may hold `files` fids each; a lone share holds half of that.
     fn with_limit(files: u32) -> T {
         let limits = Limits { buckets: 8, in_flight: 0, files, state: 8 };
-        T { server: NineServer::new(MemFs::new(), limits).unwrap(), buf: vec![0; MSIZE] }
+        T { server: NineServer::new(MemFs::new(), limits, TEST_RANDOM).unwrap(), buf: vec![0; MSIZE] }
     }
 
     /// Sends `body` as `who` with a lend of `lend` bytes; the reply's body.

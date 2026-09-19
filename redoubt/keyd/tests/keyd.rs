@@ -10,15 +10,30 @@ mod common;
 
 use common::fake;
 use ed25519_compact::{PublicKey, Signature};
-use redoubt_keyd::server::audit_digest;
+use redoubt_keyd::keys::Keys;
+use redoubt_keyd::server::{BUDGET, COST, KeyServer, LIMITS, audit_digest};
 use redoubt_rt::abi::{FOREVER, Handle};
 use redoubt_rt::handle::Endpoint;
-use redoubt_rt::ipc::{Buffer, Words};
+use redoubt_rt::ipc::{Buffer, Event, Words};
 use redoubt_rt::server::MALFORMED;
 use redoubt_rt::startup::{Startup, StartupBuilder};
 use redoubt_rt::wire::proto::keyd::{
     ErrorCode, Grant, Holds, Message, PublicKey as PublicKeyRequest, Release, Reply, SignRecord,
+    SignSshExchange,
 };
+
+/// A transcript for the host key's one operation.
+fn transcript() -> SignSshExchange<'static> {
+    SignSshExchange {
+        v_c: b"SSH-2.0-client",
+        v_s: b"SSH-2.0-redoubt",
+        i_c: b"client kexinit",
+        i_s: b"server kexinit",
+        q_c: &[7; 32],
+        q_s: &[8; 32],
+        k: &[9; 32],
+    }
+}
 
 #[path = "../src/bin/keyd.rs"]
 mod keyd;
@@ -287,4 +302,100 @@ fn a_one_way_message_is_dropped_and_its_handles_closed() {
     });
     assert_eq!(fake().held(keyd.server).0, before);
     assert_eq!(keyd.stop(), 0);
+}
+
+/// The red team's attack, turned into its refutation. Endpoints outlive servers (INIT.md
+/// decision 4) and a server keeps no state across a restart, so a capability granted before a
+/// restart is still a live handle afterwards. When both incarnations started their badges at
+/// 2^63, the restarted `keyd` handed that very badge to its first new client, and the stale
+/// handle silently became a capability for whatever that client asked for — an agent's audit
+/// grant turning into the box's SSH host key, with no id anyone could use to evict it.
+///
+/// Now each incarnation draws its first badge at random above 2^63 (answer 126), so the badge
+/// the restarted `keyd` gives out is not the one the stale handle carries, and the stale handle
+/// names nothing at all.
+#[test]
+fn a_stale_grant_does_not_name_a_new_key_after_a_restart() {
+    let f = fake();
+    let keys = default_keys();
+    let args: Vec<&str> = keys.iter().map(String::as_str).collect();
+
+    // keyd, first incarnation: it answers one call (a grant) and then exits.
+    let server1 = f.process(0, &[]);
+    let receive1 = f.endpoint(server1);
+    let block1 = keyd_block(receive1, &args);
+    let first = f.run(server1, move || {
+        let startup = Startup::parse(&block1).unwrap();
+        let handle = startup.handle("keyd").unwrap();
+        let keys = Keys::from_args(startup.args()).unwrap();
+        // The first incarnation's own draw.
+        let mut server = KeyServer::new(keys, LIMITS, &COST, BUDGET, 0x1111_1111_1111_1111).unwrap();
+        let endpoint = Endpoint::from_handle(handle);
+        match endpoint.receive(FOREVER, 0) {
+            Ok(Event::Call(request)) => {
+                let _ = server.serve(request);
+            }
+            other => panic!("expected a call, got {other:?}"),
+        }
+        7
+    });
+
+    // The steward grants an audit capability and hands it to an agent, as it would for a lease.
+    let steward = f.process(0, &[]);
+    let steward_cap = f.grant(server1, receive1, steward, AUDIT_BADGE);
+    let agent = f.process(1001, &[]);
+    let stale = f.as_process(steward, || {
+        let (words, _, handles) = call(steward_cap, &Message::Grant(Grant {}));
+        assert_eq!(words[0], 0, "granted");
+        f.copy(steward, handles[0], agent)
+    });
+    assert_eq!(first.join().unwrap(), 7, "keyd's first incarnation is gone");
+
+    // `init` restarts keyd on the same endpoint, from the same manifest arguments. Its draw is
+    // a different word, which is the whole of the fix.
+    let server2 = f.process(0, &[]);
+    let receive2 = f.copy(server1, receive1, server2);
+    let block2 = keyd_block(receive2, &args);
+    let second = f.run(server2, move || {
+        let startup = Startup::parse(&block2).unwrap();
+        let handle = startup.handle("keyd").unwrap();
+        let keys = Keys::from_args(startup.args()).unwrap();
+        let mut server = KeyServer::new(keys, LIMITS, &COST, BUDGET, 0x2222_2222_2222_2222).unwrap();
+        let endpoint = Endpoint::from_handle(handle);
+        loop {
+            match endpoint.receive(FOREVER, 0) {
+                Ok(Event::Call(request)) => {
+                    let _ = server.serve(request);
+                }
+                Ok(_) => {}
+                Err(_) => return 0,
+            }
+        }
+    });
+
+    // sshd asks the restarted keyd for a fresh capability for the host key.
+    let sshd = f.process(0, &[]);
+    let sshd_cap = f.grant(server1, receive1, sshd, HOST_BADGE);
+    f.as_process(sshd, || {
+        let (words, _, handles) = call(sshd_cap, &Message::Grant(Grant {}));
+        assert_eq!(words[0], 0, "granted");
+        assert_eq!(handles.len(), 1);
+    });
+
+    // The agent's stale capability names nothing: not the host key, not the audit key, nothing.
+    f.as_process(agent, || {
+        assert_eq!(
+            ask(stale, &Message::PublicKey(PublicKeyRequest {})),
+            Err(Some(ErrorCode::NotPermitted)),
+            "a badge from before the restart names no key"
+        );
+        assert_eq!(
+            ask(stale, &Message::SignSshExchange(transcript())),
+            Err(Some(ErrorCode::NotPermitted)),
+            "and certainly does not speak as the box"
+        );
+    });
+
+    f.destroy(server1, receive1);
+    assert_eq!(second.join().unwrap(), 0);
 }
