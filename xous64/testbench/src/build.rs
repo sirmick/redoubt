@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context, Result};
+use ed25519_compact::{KeyPair, Seed};
 
 use crate::case::{Corruption, Program};
 use crate::target::Target;
@@ -102,9 +103,19 @@ fn corrupt_elf(elf: &mut [u8], corruption: &Corruption) -> Result<()> {
 }
 
 /// Pack the boot bundle: a ustar archive with the kernel first, then the programs in PID order.
-pub fn bundle(path: &Path, kernel: &Path, programs: &[(String, PathBuf)], manifest: &str) -> Result<()> {
-    let file = std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
-    let mut archive = tar::Builder::new(file);
+/// The development signing seed (public: see VERIFIED-BOOT.md). NOT FOR PRODUCTION.
+const DEV_SEED: [u8; 32] = [0x42; 32];
+
+/// Build the boot bundle, sign it, and write `signature || tar` to `path`. If `tamper`,
+/// flip one payload byte after signing, so the loader must reject it.
+pub fn bundle(
+    path: &Path,
+    kernel: &Path,
+    programs: &[(String, PathBuf)],
+    manifest: &str,
+    tamper: bool,
+) -> Result<()> {
+    let mut archive = tar::Builder::new(Vec::new());
     let entries = std::iter::once(("kernel".to_string(), kernel.to_path_buf())).chain(programs.iter().cloned());
     for (name, elf) in entries {
         let data = std::fs::read(&elf).with_context(|| format!("reading {}", elf.display()))?;
@@ -114,7 +125,19 @@ pub fn bundle(path: &Path, kernel: &Path, programs: &[(String, PathBuf)], manife
     if !manifest.is_empty() {
         append(&mut archive, "grants", manifest.as_bytes())?;
     }
-    archive.finish()?;
+    let mut tar = archive.into_inner()?;
+
+    let keypair = KeyPair::from_seed(Seed::new(DEV_SEED));
+    let signature = keypair.sk.sign(&tar, None);
+    if tamper {
+        // Corrupt a payload byte so verification fails, without touching the signature.
+        let mid = tar.len() / 2;
+        tar[mid] ^= 0xff;
+    }
+
+    let mut out = signature.as_ref().to_vec();
+    out.extend_from_slice(&tar);
+    std::fs::write(path, out).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }
 

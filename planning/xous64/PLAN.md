@@ -166,7 +166,10 @@ Open, in rough priority order:
       Not yet determined whether the tree violates the spec (properties after child nodes?) or the
       parser is too strict. Reproduce: `cargo testbench ipc --firmware <rustsbi-prototyper elf>`.
       Options: fix/report upstream, try `fdt` 0.2, or a more tolerant parser.
-- [ ] **No secure boot** (regression vs. stock Xous). Sign the bundle; verify in `loader64`.
+- [x] **Verified boot**: the loader authenticates the whole bundle with an embedded Ed25519 key
+      (`ed25519-compact`, pure Rust, self-contained) before running any of it; tamper -> fail closed.
+      Design: VERIFIED-BOOT.md. Test: `verified-boot-rejects-tamper`. Open: loader itself unverified on
+      QEMU (needs firmware/ROM); no rollback protection or key rotation.
 - [ ] rv32 cannot be boot-tested (needs Sv32 in the SBI loader + rv32 firmware, i.e. the item above).
 - [ ] rv32 still links prebuilt assembly blobs (`kernel/bin/*.a`, needs a C toolchain to regenerate);
       rv64 uses `global_asm!`. Unify once rv32 boots in the bench, so breakage is visible.
