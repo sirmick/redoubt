@@ -65,9 +65,11 @@ bad 0 5 8 0 0 2a0000000200c080 BadUtf8
 
 # Replies: word 0 is the status, 0 for success.
 reply 1 0 0 0 0 0 - ping
+reply 2 0 0 0 0 0 - pong
 reply 3 0 0 deadbeef 0 0 - small c=3735928559
 reply 4 0 0 0 0 0 - wide
 reply 5 0 0 4 0 0 2a000000 named id=42
+reply 6 0 0 0 0 0 - blob
 reply 7 1 0 0 0 0 - grant
 reply 8 0 0 9 0 0 0500000068656c6c6f read data=b:68656c6c6f
 reply ffffffff 0 0 c 0 0 ffffffffffffffff07000000 last n=18446744073709551615 m=7
@@ -77,7 +79,7 @@ failed ffffffff 0 ffffffff 0 0 0 - last_error
 # An error reply's buffer is ignored (the lend comes back as it was).
 failed 1 0 1 0 0 0 ffff not_found
 
-badreply 2 0 0 0 0 0 - BadOpcode
+badreply 0 0 0 0 0 0 - BadOpcode
 badreply 9 0 1 0 0 0 - BadOpcode
 badreply 1 0 100000000 0 0 0 - BadWords
 badreply 1 0 1 0 0 5 - BadWords

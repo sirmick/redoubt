@@ -49,7 +49,7 @@ fuzz_target!(|data: &[u8]| {
             assert!(same(&ours, &theirs), "values differ: {ours:?} vs {theirs:?}");
             check_members(&ours);
             if let Value::Str(s) = &ours {
-                assert_eq!(ours.u64().ok(), s.parse::<u64>().ok().filter(|_| !s.starts_with(['+', '0']) || s.as_ref() == "0"));
+                assert_eq!(ours.u64_string().ok(), s.parse::<u64>().ok().filter(|_| !s.starts_with(['+', '0']) || s.as_ref() == "0"));
             }
         }
         Err(e) => {

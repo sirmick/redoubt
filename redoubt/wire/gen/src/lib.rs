@@ -88,8 +88,8 @@ pub struct MessageDef {
     pub name: String,
     /// In table order, handles included.
     pub fields: Vec<Field>,
-    /// `None` for a message with no reply (a `send`); `Some(vec![])` for a status-only reply.
-    pub reply: Option<Vec<Field>>,
+    /// The reply's fields; empty for a reply that is its status alone.
+    pub reply: Vec<Field>,
 }
 
 impl MessageDef {
@@ -97,7 +97,7 @@ impl MessageDef {
     /// message whose reply needs a buffer is buffer-shaped, because reply data can only
     /// come back in the caller's lend (WIRE.md).
     pub fn inline(&self) -> bool {
-        fits_inline(&self.fields) && self.reply.as_deref().is_none_or(fits_inline)
+        fits_inline(&self.fields) && fits_inline(&self.reply)
     }
 
     fn type_name(&self) -> String {
@@ -121,14 +121,8 @@ pub struct Protocol {
     /// The note the table came from, relative to the repository root.
     pub source: String,
     pub messages: Vec<MessageDef>,
-    /// From the protocol's error table; present exactly when some message has a reply.
+    /// From the protocol's error table (every protocol has one).
     pub errors: Vec<ErrorDef>,
-}
-
-impl Protocol {
-    fn replies(&self) -> impl Iterator<Item = (&MessageDef, &[Field])> {
-        self.messages.iter().filter_map(|m| m.reply.as_deref().map(|r| (m, r)))
-    }
 }
 
 /// An error table, before it is joined with its protocol.
@@ -260,12 +254,7 @@ fn parse_message(row: &[&str]) -> Result<MessageDef, String> {
     let opcode = parse_code("opcode", opcode)?;
     let name = backticked(name).ok_or_else(|| format!("message name `{name}` must be in backticks"))?;
     check_ident("message", name)?;
-    let reply = match *reply {
-        "-" => None,
-        "ok" => Some(Vec::new()),
-        cell => Some(parse_fields(cell)?),
-    };
-    Ok(MessageDef { opcode, name: name.to_string(), fields: parse_fields(fields)?, reply })
+    Ok(MessageDef { opcode, name: name.to_string(), fields: parse_fields(fields)?, reply: parse_fields(reply)? })
 }
 
 fn parse_error(row: &[&str]) -> Result<ErrorDef, String> {
@@ -368,10 +357,7 @@ pub fn parse(source: &str, text: &str) -> Result<Tables, String> {
                 }
                 // Every Rust type the message produces must be new: `a_reply` and the
                 // reply of `a` would both be `AReply`.
-                let mut new_types = vec![m.type_name()];
-                if m.reply.is_some() {
-                    new_types.push(m.reply_type());
-                }
+                let new_types = vec![m.type_name(), m.reply_type()];
                 for t in &new_types {
                     if RESERVED_TYPES.contains(&t.as_str()) {
                         return Err(at(n, format!("message `{}` would make the Rust type `{t}`, which the generated code already uses", m.name)));
@@ -393,8 +379,8 @@ pub fn parse(source: &str, text: &str) -> Result<Tables, String> {
     Ok(tables)
 }
 
-/// Joins every protocol with its error table, sorted by name. A protocol whose messages
-/// have replies needs exactly one error table; one without replies has none.
+/// Joins every protocol with its error table, sorted by name. Every protocol has exactly
+/// one error table (WIRE.md).
 pub fn link(tables: Vec<Tables>) -> Result<Vec<Protocol>, String> {
     let mut protocols: Vec<Protocol> = Vec::new();
     let mut errors: Vec<ErrorTable> = Vec::new();
@@ -417,12 +403,8 @@ pub fn link(tables: Vec<Tables>) -> Result<Vec<Protocol>, String> {
         }
         p.errors = e.errors;
     }
-    for p in &protocols {
-        match (p.replies().next().is_some(), p.errors.is_empty()) {
-            (true, true) => return Err(format!("{}: protocol `{}` has replies but no `<!-- wire-errors: {} -->` table", p.source, p.name, p.name)),
-            (false, false) => return Err(format!("{}: protocol `{}` has an error table but no replies", p.source, p.name)),
-            _ => {}
-        }
+    if let Some(p) = protocols.iter().find(|p| p.errors.is_empty()) {
+        return Err(format!("{}: protocol `{}` has no `<!-- wire-errors: {} -->` table", p.source, p.name, p.name));
     }
     protocols.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(protocols)
@@ -540,15 +522,9 @@ pub fn rust(p: &Protocol) -> String {
     s.push_str("use crate::codec::{Error, Reader, Writer};\nuse crate::typed::{self, Layout, Words};\n");
     for m in &p.messages {
         let shape = if m.inline() { "inline" } else { "buffer" };
-        let reply = match &m.reply {
-            None => "no reply (sent)".to_string(),
-            Some(_) => format!("reply [`{}`]", m.reply_type()),
-        };
-        let doc = format!("/// `{}`: opcode {}, {shape}; {reply}.", m.name, m.opcode);
+        let doc = format!("/// `{}`: opcode {}, {shape}; reply [`{}`].", m.name, m.opcode, m.reply_type());
         rust_struct(&mut s, &doc, &m.type_name(), &m.fields);
-        if let Some(fields) = &m.reply {
-            rust_struct(&mut s, &format!("/// The reply to [`{}`].", m.type_name()), &m.reply_type(), fields);
-        }
+        rust_struct(&mut s, &format!("/// The reply to [`{}`].", m.type_name()), &m.reply_type(), &m.reply);
     }
 
     let layouts = |rows: Vec<(u32, bool, usize)>| {
@@ -581,17 +557,16 @@ pub fn rust(p: &Protocol) -> String {
     s.push_str("    pub fn encode_file(&self, out: &mut [u8]) -> Result<usize, Error> {\n");
     s.push_str("        typed::encode_file(typed::layout(REQUESTS, self.opcode())?, out, |w| self.write(w))\n    }\n}\n");
 
-    if p.replies().next().is_none() {
-        return s;
-    }
-    let replies = layouts(p.replies().map(|(m, r)| (m.opcode, m.inline(), handles(r).count())).collect());
+    let replies = layouts(p.messages.iter().map(|m| (m.opcode, m.inline(), handles(&m.reply).count())).collect());
     let _ = write!(s, "\n/// Replies, by the opcode of their request.\nconst REPLIES: &[Layout] = &[\n{replies}];\n");
     let rows: Vec<Row<'_>> = p
-        .replies()
-        .map(|(m, r)| Row { opcode: m.opcode, variant: m.type_name(), ty: m.reply_type(), fields: r, inline: m.inline() })
+        .messages
+        .iter()
+        .map(|m| Row { opcode: m.opcode, variant: m.type_name(), ty: m.reply_type(), fields: &m.reply, inline: m.inline() })
         .collect();
     rust_enum(&mut s, "Reply", "Every successful reply of the protocol, named after its request.", &rows);
-    s.push_str("    /// Decodes the reply to the request with `opcode`: `Ok(Ok(reply))`, `Ok(Err(code))`\n");
+    s.push_str("    /// Decodes the reply to the request with `opcode` (the caller knows what it sent):\n");
+    s.push_str("    /// `Ok(Ok(reply))`, `Ok(Err(code))`\n");
     s.push_str("    /// for an error reply, or `Err` if the reply is malformed.\n");
     s.push_str("    pub fn decode(opcode: u32, words: &Words, buf: &'a [u8], handles: usize) -> Result<Result<Self, ErrorCode>, Error> {\n");
     s.push_str("        let layout = typed::layout(REPLIES, opcode)?;\n");
@@ -704,19 +679,19 @@ pub fn elixir(p: &Protocol) -> String {
         .map(|m| format!("    {} => {{:{}, {}, {}}}", m.opcode, m.name, shape(m), handles(&m.fields).count()))
         .collect();
     let _ = writeln!(s, "  @requests %{{\n{}\n  }}", reqs.join(",\n"));
-    let reps: Vec<String> =
-        p.replies().map(|(m, r)| format!("    {} => {{:{}, {}, {}}}", m.opcode, m.name, shape(m), handles(r).count())).collect();
-    let _ = writeln!(s, "  @replies %{{{}}}", if reps.is_empty() { String::new() } else { format!("\n{}\n  ", reps.join(",\n")) });
+    let reps: Vec<String> = p
+        .messages
+        .iter()
+        .map(|m| format!("    {} => {{:{}, {}, {}}}", m.opcode, m.name, shape(m), handles(&m.reply).count()))
+        .collect();
+    let _ = writeln!(s, "  @replies %{{\n{}\n  }}", reps.join(",\n"));
     let errs: Vec<String> = p.errors.iter().map(|e| format!("    {} => :{}", e.code, e.name)).collect();
-    let _ = writeln!(s, "  @errors %{{{}}}\n", if errs.is_empty() { String::new() } else { format!("\n{}\n  ", errs.join(",\n")) });
+    let _ = writeln!(s, "  @errors %{{\n{}\n  }}\n", errs.join(",\n"));
 
     s.push_str("  @doc \"\"\"\n  A message's layout: `{opcode, shape, fields, handles, reply}`, where `fields` lists\n");
-    s.push_str("  `{name, type}` in order and `reply` is `nil` (no reply) or `{fields, handles}`.\n  \"\"\"\n");
+    s.push_str("  `{name, type}` in order and `reply` is `{fields, handles}`.\n  \"\"\"\n");
     for m in &p.messages {
-        let reply = match &m.reply {
-            None => "nil".to_string(),
-            Some(r) => format!("{{{}}}", elixir_fields(r)),
-        };
+        let reply = format!("{{{}}}", elixir_fields(&m.reply));
         let _ = writeln!(s, "  def layout(:{}), do: {{{}, {}, {}, {reply}}}", m.name, m.opcode, shape(m), elixir_fields(&m.fields));
     }
     s.push_str("  def layout(_), do: nil\n\n");
@@ -740,9 +715,7 @@ pub fn elixir(p: &Protocol) -> String {
     let (mut enc, mut read) = (String::new(), String::new());
     for m in &p.messages {
         elixir_clauses(&mut enc, &mut read, "request", m, &m.fields);
-        if let Some(r) = &m.reply {
-            elixir_clauses(&mut enc, &mut read, "reply", m, r);
-        }
+        elixir_clauses(&mut enc, &mut read, "reply", m, &m.reply);
     }
     s.push_str(&enc);
     s.push_str("  defp enc(_, _, _), do: throw({:wire, :bad_message})\n\n");
@@ -824,21 +797,22 @@ mod tests {
     use super::*;
 
     const HEAD: &str = "<!-- wire: demo -->\n| Opcode | Message | Fields | Reply |\n| --- | --- | --- | --- |\n";
-    const ERRORS: &str = "<!-- wire-errors: demo -->\n| Code | Error |\n| --- | --- |\n| 1 | `denied` |\n";
+    const ERRORS: &str = "\n<!-- wire-errors: demo -->\n| Code | Error |\n| --- | --- |\n| 1 | `denied` |\n";
 
     fn protocols(text: &str) -> Result<Vec<Protocol>, String> {
         link(vec![parse("n.md", text)?])
     }
 
-    fn err(text: &str) -> String {
-        protocols(text).unwrap_err()
+    /// The error for a message table `rows`, given an error table.
+    fn err(rows: &str) -> String {
+        protocols(&format!("{HEAD}{rows}{ERRORS}")).unwrap_err()
     }
 
     #[test]
     fn parses_tables() {
         let t = format!(
-            "intro\n\n{HEAD}| 1 | `a` | - | ok |\n| 2 | `b_c` | `x: u64`, `h: handle[0]`, `s: string` | - |\n\
-             | 3 | `d` | `x: u64` | `data: bytes`, `k: handle[0]` |\n\nafter\n\n{ERRORS}"
+            "intro\n\n{HEAD}| 1 | `a` | - | - |\n| 2 | `b_c` | `x: u64`, `h: handle[0]`, `s: string` | - |\n\
+             | 3 | `d` | `x: u64` | `data: bytes`, `k: handle[0]` |\n\nafter\n{ERRORS}"
         );
         let p = protocols(&t).unwrap();
         assert_eq!(p.len(), 1);
@@ -846,9 +820,8 @@ mod tests {
         let m = &p[0].messages;
         assert_eq!(m[1].type_name(), "BC");
         assert_eq!(m[1].fields[1].ty, Ty::Handle(0));
-        assert_eq!(m[0].reply, Some(vec![]));
-        assert_eq!(m[1].reply, None);
-        assert_eq!(m[2].reply.as_ref().unwrap()[1].ty, Ty::Handle(0));
+        assert_eq!(m[0].reply, []);
+        assert_eq!(m[2].reply[1].ty, Ty::Handle(0));
         assert!(m[0].inline());
         assert!(!m[1].inline());
         // An inline request whose reply needs a buffer is buffer-shaped.
@@ -858,79 +831,90 @@ mod tests {
 
     #[test]
     fn refuses_bad_tables() {
-        assert!(err("| Opcode | Message | Fields | Reply |\n| --- | --- | --- | --- |\n| 1 | `a` | - | - |\n").contains("needs a"));
-        assert!(err("| Code | Error |\n| --- | --- |\n| 1 | `a` |\n").contains("needs a"));
-        assert!(err(&format!("{HEAD}| 1 | `a` | - | - |\n| 1 | `b` | - | - |\n")).contains("opcode 1 used twice"));
-        assert!(err(&format!("{HEAD}| 1 | `a` | - | - |\n| 2 | `a` | - | - |\n")).contains("defined twice"));
-        assert!(err(&format!("{HEAD}| 1 | `a` | - | ok |\n| 2 | `a_reply` | - | - |\n")).contains("defined twice"));
-        assert!(err(&format!("{HEAD}| 1 | `a` | `x: u128` | - |\n")).contains("unknown type"));
-        assert!(err(&format!("{HEAD}| 1 | `a` | `x: handle[1]` | - |\n")).contains("in order"));
+        let bare = |t: &str| protocols(t).unwrap_err();
+        assert!(bare("| Opcode | Message | Fields | Reply |\n| --- | --- | --- | --- |\n| 1 | `a` | - | - |\n").contains("needs a"));
+        assert!(bare("| Code | Error |\n| --- | --- |\n| 1 | `a` |\n").contains("needs a"));
+        assert!(err("| 1 | `a` | - | - |\n| 1 | `b` | - | - |\n").contains("opcode 1 used twice"));
+        assert!(err("| 1 | `a` | - | - |\n| 2 | `a` | - | - |\n").contains("defined twice"));
+        assert!(err("| 1 | `a` | - | - |\n| 2 | `a_reply` | - | - |\n").contains("defined twice"));
+        assert!(err("| 1 | `a` | `x: u128` | - |\n").contains("unknown type"));
+        assert!(err("| 1 | `a` | `x: handle[1]` | - |\n").contains("in order"));
         let five = "`a: handle[0]`, `b: handle[1]`, `c: handle[2]`, `d: handle[3]`, `e: handle[4]`";
-        assert!(err(&format!("{HEAD}| 1 | `a` | {five} | - |\n")).contains("at most 4"));
-        assert!(err(&format!("{HEAD}| 1 | `a` | - | {five} |\n")).contains("at most 4"));
-        assert!(err(&format!("{HEAD}| 1 | `a` | `x: u8`, `x: u8` | - |\n")).contains("twice"));
-        assert!(err(&format!("{HEAD}| 1 | `a` | `type: u8` | - |\n")).contains("reserved"));
-        assert!(err(&format!("{HEAD}| 1 | `A` | - | - |\n")).contains("snake_case"));
-        assert!(err(&format!("{HEAD}| -1 | `a` | - | - |\n")).contains("decimal u32"));
-        assert!(err(&format!("{HEAD}| 4294967296 | `a` | - | - |\n")).contains("decimal u32"));
-        assert!(err(&format!("{HEAD}| 007 | `a` | - | - |\n")).contains("leading zeros"));
-        assert!(err(&format!("{HEAD}| 0 | `a` | - | - |\n")).contains("opcode 0 is reserved"));
-        assert!(err(&format!("{HEAD}| 1 | a | - | - |\n")).contains("backticks"));
-        assert!(err(&format!("{HEAD}| 1 | `a` | - |\n")).contains("3 cells, expected 4"));
-        assert!(err(&format!("{HEAD}\n")).contains("no rows"));
-        assert!(err("<!-- wire: demo -->\n| Opcode | Message | Fields |\n").contains("header"));
+        assert!(err(&format!("| 1 | `a` | {five} | - |\n")).contains("at most 4"));
+        assert!(err(&format!("| 1 | `a` | - | {five} |\n")).contains("at most 4"));
+        assert!(err("| 1 | `a` | `x: u8`, `x: u8` | - |\n").contains("twice"));
+        assert!(err("| 1 | `a` | `type: u8` | - |\n").contains("reserved"));
+        assert!(err("| 1 | `A` | - | - |\n").contains("snake_case"));
+        assert!(err("| -1 | `a` | - | - |\n").contains("decimal u32"));
+        assert!(err("| 4294967296 | `a` | - | - |\n").contains("decimal u32"));
+        assert!(err("| 007 | `a` | - | - |\n").contains("leading zeros"));
+        assert!(err("| 0 | `a` | - | - |\n").contains("opcode 0 is reserved"));
+        assert!(err("| 1 | a | - | - |\n").contains("backticks"));
+        assert!(err("| 1 | `a` | - | ok |\n").contains("backticks"));
+        assert!(err("| 1 | `a` | - |\n").contains("3 cells, expected 4"));
+        assert!(err("\n").contains("no rows"));
+        assert!(bare("<!-- wire: demo -->\n| Opcode | Message | Fields |\n").contains("header"));
     }
 
     #[test]
     fn error_tables() {
-        let ok = format!("{HEAD}| 1 | `a` | - | ok |\n\n{ERRORS}");
-        assert!(protocols(&ok).is_ok());
-        assert!(err(&format!("{HEAD}| 1 | `a` | - | ok |\n")).contains("no `<!-- wire-errors: demo -->` table"));
-        assert!(err(&format!("{HEAD}| 1 | `a` | - | - |\n\n{ERRORS}")).contains("no replies"));
-        assert!(err(&format!("{ok}\n{ERRORS}")).contains("two error tables"));
-        assert!(err(&ERRORS.replace("demo", "other")).contains("unknown protocol"));
-        let errors = |rows: &str| format!("{HEAD}| 1 | `a` | - | ok |\n\n<!-- wire-errors: demo -->\n| Code | Error |\n| --- | --- |\n{rows}");
-        assert!(err(&errors("| 0 | `x` |\n")).contains("error code 0 is reserved"));
-        assert!(err(&errors("| 1 | `x` |\n| 1 | `y` |\n")).contains("used twice"));
-        assert!(err(&errors("| 1 | `x` |\n| 2 | `x` |\n")).contains("used twice"));
-        assert!(err(&errors("| 1 | `X` |\n")).contains("snake_case"));
+        assert!(protocols(&format!("{HEAD}| 1 | `a` | - | - |\n{ERRORS}")).is_ok());
+        assert!(protocols(&format!("{HEAD}| 1 | `a` | - | - |\n")).unwrap_err().contains("no `<!-- wire-errors: demo -->` table"));
+        assert!(err(&format!("| 1 | `a` | - | - |\n{ERRORS}")).contains("two error tables"));
+        assert!(protocols(&format!("{HEAD}| 1 | `a` | - | - |\n{}", ERRORS.replace("demo", "other"))).unwrap_err().contains("unknown protocol"));
+        let errors = |rows: &str| {
+            protocols(&format!("{HEAD}| 1 | `a` | - | - |\n\n<!-- wire-errors: demo -->\n| Code | Error |\n| --- | --- |\n{rows}")).unwrap_err()
+        };
+        assert!(errors("| 0 | `x` |\n").contains("error code 0 is reserved"));
+        assert!(errors("| 1 | `x` |\n| 1 | `y` |\n").contains("used twice"));
+        assert!(errors("| 1 | `x` |\n| 2 | `x` |\n").contains("used twice"));
+        assert!(errors("| 1 | `X` |\n").contains("snake_case"));
     }
 
     /// Found by review: these names compiled into code that did not build.
     #[test]
     fn refuses_names_that_clash_in_generated_code() {
         for name in ["message", "reply", "error_code", "error", "words", "reader", "writer", "layout", "result", "ok", "option", "vec"] {
-            assert!(err(&format!("{HEAD}| 1 | `{name}` | - | - |\n")).contains("already uses"), "{name}");
+            assert!(err(&format!("| 1 | `{name}` | - | - |\n")).contains("already uses"), "{name}");
         }
-        assert!(protocols(&format!("{HEAD}| 1 | `value` | - | - |\n")).is_ok());
+        assert!(protocols(&format!("{HEAD}| 1 | `value` | - | - |\n{ERRORS}")).is_ok());
     }
 
     /// Found by review: rows were dropped without an error.
     #[test]
     fn every_row_is_read_or_refused() {
-        assert!(err(&format!("{HEAD}| 1 | `a` | - | - |\n\n| 2 | `b` | - | - |\n")).contains("ended at the blank line"));
-        assert!(err(&format!("{HEAD}| 1 | `a` | - | - |\n\n2 | `b` | - | - |\n")).contains("ended at the blank line"));
-        assert!(err(&format!("{HEAD}| 1 | `a` | - | - |\n| 2 | `b` | - | -\n")).contains("start and end with"));
-        assert!(err(&format!("{HEAD}| 1 | `a` | - | - |\n2 | `b` | - | - |\n")).contains("start and end with"));
-        assert!(err(&format!("{HEAD}| 1 | `a` | - | - |\nSome prose.\n")).contains("start and end with"));
-        assert!(err(&format!("{HEAD}| 1 | `a` | - | - | x |\n")).contains("5 cells"));
+        assert!(err("| 1 | `a` | - | - |\n\n| 2 | `b` | - | - |\n").contains("ended at the blank line"));
+        assert!(err("| 1 | `a` | - | - |\n\n2 | `b` | - | - |\n").contains("ended at the blank line"));
+        assert!(err("| 1 | `a` | - | - |\n| 2 | `b` | - | -\n").contains("start and end with"));
+        assert!(err("| 1 | `a` | - | - |\n2 | `b` | - | - |\n").contains("start and end with"));
+        assert!(err("| 1 | `a` | - | - |\nSome prose.\n").contains("start and end with"));
+        assert!(err("| 1 | `a` | - | - | x |\n").contains("5 cells"));
         // Prose after a blank line is fine.
-        assert_eq!(protocols(&format!("{HEAD}| 1 | `a` | - | - |\n\nSome prose.\n")).unwrap()[0].messages.len(), 1);
+        assert_eq!(protocols(&format!("{HEAD}| 1 | `a` | - | - |\n\nSome prose.\n{ERRORS}")).unwrap()[0].messages.len(), 1);
     }
 
     #[test]
     fn fenced_code_is_not_a_table() {
-        let table = format!("{HEAD}| 1 | `a` | - | - |\n");
+        let table = format!("{HEAD}| 1 | `a` | - | - |\n{ERRORS}");
         assert_eq!(protocols(&format!("```\n{table}```\n")).unwrap(), []);
         assert_eq!(protocols(&format!("~~~md\n{table}~~~\n\n{table}")).unwrap().len(), 1);
-        assert!(err(&format!("```\n{table}")).contains("unclosed code fence"));
+        assert!(protocols(&format!("```\n{table}")).unwrap_err().contains("unclosed code fence"));
+    }
+
+    /// WIRE.md shows an example table in a code fence and names the markers in prose; it
+    /// defines no protocol.
+    #[test]
+    fn wire_md_defines_no_protocol() {
+        let text = std::fs::read_to_string(repo_root().join("planning/redoubt/WIRE.md")).unwrap();
+        assert!(text.contains("<!-- wire: example -->"), "WIRE.md no longer shows its example");
+        assert_eq!(parse("planning/redoubt/WIRE.md", &text), Ok(Tables::default()));
     }
 
     #[test]
     fn inline_boundary_is_twelve_bytes() {
         let t = format!(
             "{HEAD}| 1 | `a` | `x: u64`, `y: u32`, `h: handle[0]` | - |\n| 2 | `b` | `x: u64`, `y: u32`, `z: u8` | - |\n\
-             | 3 | `c` | - | `x: u64`, `y: u32` |\n| 4 | `d` | - | `x: u64`, `y: u32`, `z: u8` |\n\n{ERRORS}"
+             | 3 | `c` | - | `x: u64`, `y: u32` |\n| 4 | `d` | - | `x: u64`, `y: u32`, `z: u8` |\n{ERRORS}"
         );
         let p = protocols(&t).unwrap();
         let inline: Vec<bool> = p[0].messages.iter().map(MessageDef::inline).collect();

@@ -3,11 +3,12 @@
 //!
 //! WIRE.md's rules, as enforced here:
 //! - UTF-8 only;
-//! - no object has two members with the same name (compared after unescaping, so `"a"` and
-//!   `"\u0061"` are the same name);
-//! - integers beyond 2^53 are written as strings: a JSON number must lie in
-//!   `-(2^53 - 1)..=2^53 - 1` ([`MAX_SAFE_INT`], I-JSON's safe range; 2^53 itself is
-//!   refused), and [`Value::u64`] reads a decimal string up to `u64::MAX`;
+//! - no object has two members with the same name. Names are compared byte for byte after
+//!   unescaping (so `"a"` and `"\u0061"` are the same name), with no Unicode normalisation;
+//! - each field's JSON type is fixed by the schema: a 64-bit quantity is a decimal string,
+//!   read with [`Value::u64_string`] (up to `u64::MAX`), and a small count is a number, read
+//!   with [`Value::int`]; the wrong JSON type is a `WrongType` error. A number must lie in
+//!   `-(2^53 - 1)..=2^53 - 1` ([`MAX_SAFE_INT`], I-JSON's safe range; 2^53 itself is refused);
 //! - nesting at most [`MAX_DEPTH`] (32) deep, counting the top-level container as depth 1;
 //! - a file at most [`MAX_LEN`] (64 KiB);
 //! - unknown members are errors: objects are decoded only through [`Value::object`], which
@@ -19,8 +20,7 @@
 //!   (U+FDD0..U+FDEF, U+xFFFE, U+xFFFF), escaped or raw (RFC 7493 section 2.1);
 //! - numbers are integers: fractions, exponents and `-0` are refused, so the parser has no
 //!   floating point and 0 has one spelling;
-//! - a small integer may be a number or a decimal string (`4096` or `"4096"`, as INIT.md's
-//!   example writes it); [`Value::u64`] accepts both, with no sign or leading zeros.
+//! - a decimal string is canonical: digits only, no sign, spaces or leading zeros.
 //!
 //! Errors from typed decoding ([`SchemaError`]) name where they happened, e.g.
 //! `servers[2].budget.pages`.
@@ -416,18 +416,21 @@ impl<'a> Value<'a> {
         }
     }
 
-    /// A non-negative integer: a JSON number, or a decimal string (how integers beyond
-    /// 2^53 are written) with no sign, spaces or leading zeros, up to `u64::MAX`.
-    pub fn u64(&self) -> Result<u64, SchemaError> {
-        let n = match self {
-            Value::Int(n) => u64::try_from(*n).ok(),
-            Value::Str(s) => {
-                let canonical = s == "0" || (!s.starts_with('0') && !s.is_empty());
-                // Digits only, so the only failure left for `parse` is overflow.
-                (canonical && s.bytes().all(|b| b.is_ascii_digit())).then(|| s.parse().ok()).flatten()
-            }
-            _ => None,
-        };
+    /// A small count: a JSON number (within `MAX_SAFE_INT`, which the parser enforced).
+    pub fn int(&self) -> Result<i64, SchemaError> {
+        match self {
+            Value::Int(n) => Ok(*n),
+            _ => Err(SchemaError::new(SchemaKind::WrongType)),
+        }
+    }
+
+    /// A 64-bit quantity: a decimal string of digits only, with no sign, spaces or leading
+    /// zeros, up to `u64::MAX`. A JSON number is the wrong type.
+    pub fn u64_string(&self) -> Result<u64, SchemaError> {
+        let Value::Str(s) = self else { return Err(SchemaError::new(SchemaKind::WrongType)) };
+        let canonical = s == "0" || (!s.starts_with('0') && !s.is_empty());
+        // Digits only, so the only failure left for `parse` is overflow.
+        let n = (canonical && s.bytes().all(|b| b.is_ascii_digit())).then(|| s.parse().ok()).flatten();
         n.ok_or(SchemaError::new(SchemaKind::WrongType))
     }
 
@@ -535,10 +538,13 @@ mod tests {
 
     #[test]
     fn big_integers_as_strings() {
-        let v = parse(br#"["18446744073709551615", "0", 7, "007", "-1", " 1", "18446744073709551616", -1, true]"#).unwrap();
+        let v = parse(br#"["18446744073709551615", "0", 7, "007", "-1", " 1", "18446744073709551616", -1, true, "7"]"#).unwrap();
         let Value::Array(items) = &v else { panic!() };
-        let got: Vec<Option<u64>> = items.iter().map(|v| v.u64().ok()).collect();
-        assert_eq!(got, [Some(u64::MAX), Some(0), Some(7), None, None, None, None, None, None]);
+        let strings: Vec<Option<u64>> = items.iter().map(|v| v.u64_string().ok()).collect();
+        assert_eq!(strings, [Some(u64::MAX), Some(0), None, None, None, None, None, None, None, Some(7)]);
+        // Each type has one reader: a number is not a string and a string is not a number.
+        let numbers: Vec<Option<i64>> = items.iter().map(|v| v.int().ok()).collect();
+        assert_eq!(numbers, [None, None, Some(7), None, None, None, None, Some(-1), None, None]);
     }
 
     #[test]
@@ -600,19 +606,20 @@ mod tests {
         SchemaError { path: path.into(), kind }
     }
 
+    /// INIT.md's budget: pages is a 64-bit quantity (a string), the rest small counts.
     #[derive(Debug, PartialEq)]
     struct Budget {
         pages: u64,
-        processes: u64,
-        weight: u64,
+        processes: i64,
+        weight: i64,
     }
 
     fn budget(v: &Value<'_>) -> Result<Budget, SchemaError> {
         v.object(|m| {
             Ok(Budget {
-                pages: m.required("pages", Value::u64)?,
-                processes: m.required("processes", Value::u64)?,
-                weight: m.required("weight", Value::u64)?,
+                pages: m.required("pages", Value::u64_string)?,
+                processes: m.required("processes", Value::int)?,
+                weight: m.required("weight", Value::int)?,
             })
         })
     }
@@ -631,7 +638,7 @@ mod tests {
     fn unknown_members_are_errors() {
         // The manifest example from INIT.md.
         let text = br#"{ "name": "fsd:data", "program": "fsd", "volume": "data",
-                         "budget": { "pages": "4096", "processes": "1", "weight": "100" },
+                         "budget": { "pages": "4096", "processes": 1, "weight": 100 },
                          "receives": ["fsd:data"], "handed": ["blkd"] }"#;
         let v = parse(text).unwrap();
         let all = ["name", "program", "volume", "receives", "handed"];
@@ -642,12 +649,14 @@ mod tests {
 
     #[test]
     fn schema_errors_name_the_path() {
-        let v = parse(br#"{"servers": [{"budget": {"pages": "1", "processes": "1", "weight": "x"}}]}"#).unwrap();
+        let v = parse(br#"{"servers": [{"budget": {"pages": "1", "processes": 1, "weight": "1"}}]}"#).unwrap();
         let servers = |v: &Value<'_>| v.object(|m| m.required("servers", |s| s.items(|s| server(s, &[]))));
         assert_eq!(servers(&v), Err(err("servers[0].budget.weight", SchemaKind::WrongType)));
-        let v = parse(br#"{"servers": [{"budget": {"pages": "1", "processes": "1"}}]}"#).unwrap();
+        let v = parse(br#"{"servers": [{"budget": {"pages": 1, "processes": 1, "weight": 1}}]}"#).unwrap();
+        assert_eq!(servers(&v), Err(err("servers[0].budget.pages", SchemaKind::WrongType)));
+        let v = parse(br#"{"servers": [{"budget": {"pages": "1", "processes": 1}}]}"#).unwrap();
         assert_eq!(servers(&v), Err(err("servers[0].budget.weight", SchemaKind::Missing)));
-        let v = parse(br#"{"servers": [{"budget": {"pages": "1", "processes": "1", "weight": "1", "cpu": 2}}]}"#).unwrap();
+        let v = parse(br#"{"servers": [{"budget": {"pages": "1", "processes": 1, "weight": 1, "cpu": 2}}]}"#).unwrap();
         assert_eq!(servers(&v), Err(err("servers[0].budget.cpu", SchemaKind::Unknown)));
         assert_eq!(servers(&Value::Int(1)), Err(err("", SchemaKind::WrongType)));
         let v = parse(br#"{"servers": {}}"#).unwrap();
