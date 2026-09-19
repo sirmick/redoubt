@@ -1,6 +1,9 @@
 description = "Lending, mutably lending or moving anonymous pages never touched is served, a half-mapped range is refused whole, and running past RAM is the caller's error (verdict: survival only)"
 arch = ["rv64", "rv32"]
 kind = "boot"
+# Debug assertions: `core`'s preconditions on raw-pointer calls and the kernel's own
+# `debug_assert!`s run in this boot (redoubt/README.md, "Debug assertions").
+debug_assertions = true
 # 32 MiB so the lend-past-RAM step (12k pages = 48 MiB) exhausts RAM in milliseconds.
 memory_mib = 32
 # PID 2 log-server; PID 3 lend-untouched makes every attempt; PID 4 attack-checker ends it.

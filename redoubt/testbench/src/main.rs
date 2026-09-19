@@ -18,7 +18,7 @@ use std::time::Instant;
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 
-use crate::build::Builder;
+use crate::build::{Builder, Profile};
 use crate::case::{Case, Kind, Program};
 use crate::qemu::{Image, Verdict};
 use crate::target::{Machine, Target};
@@ -76,8 +76,8 @@ fn main() -> Result<()> {
             .iter()
             .map(|p| if p.contains('/') { Program::Path { path: p.into() } } else { Program::TestProgram(p.clone()) })
             .collect();
-        let bundle = prepare(&builder, target, machine, &programs, &[], &[], "", false, &logs.join("interactive.tar"))?;
-        let loader = builder.artifact(target, machine.loader_package);
+        let bundle = prepare(&builder, target, machine, &programs, &[], &[], "", false, Profile::Release, &logs.join("interactive.tar"))?;
+        let loader = builder.artifact(target, machine.loader_package, Profile::Release);
         let image = Image {
             machine,
             firmware: &args.firmware,
@@ -203,6 +203,7 @@ fn resolve_firmware(case_firmware: Option<&str>, cli_default: &str, target: &Tar
 }
 
 /// Build the kernel, the loader, `programs` and `files` for `target`, and pack them into `bundle`.
+/// `profile` applies to the kernel and the loader (the trusted base); programs are always release.
 #[allow(clippy::too_many_arguments)]
 fn prepare(
     builder: &Builder,
@@ -213,18 +214,19 @@ fn prepare(
     extra_kernel_features: &[String],
     manifest: &str,
     tamper: bool,
+    profile: Profile,
     bundle: &Path,
 ) -> Result<PathBuf> {
     let mut features: Vec<String> = machine.kernel_features.iter().map(|f| f.to_string()).collect();
     features.extend(extra_kernel_features.iter().cloned());
-    builder.cargo_build(target, "xous-kernel", &features)?;
-    builder.cargo_build(target, machine.loader_package, &[])?;
+    builder.cargo_build_with(target, "xous-kernel", &features, profile)?;
+    builder.cargo_build_with(target, machine.loader_package, &[], profile)?;
     let programs = programs.iter().map(|p| builder.program(target, p)).collect::<Result<Vec<_>>>()?;
     let files = files
         .iter()
         .map(|file| Ok((file.name.clone(), builder.program(target, &file.from)?.1)))
         .collect::<Result<Vec<_>>>()?;
-    build::bundle(bundle, &builder.artifact(target, "xous-kernel"), &programs, &files, manifest, tamper)?;
+    build::bundle(bundle, &builder.artifact(target, "xous-kernel", profile), &programs, &files, manifest, tamper)?;
     Ok(bundle.to_path_buf())
 }
 
@@ -284,12 +286,24 @@ fn run_case(
     // or the code's problem, never what a `must_fail` is waiting for, so it is not judged.
     let bundle = logs.join(format!("{}-{}.tar", case.name, target.name));
     let manifest = boot.grant.iter().flat_map(|g| g.manifest_lines()).collect::<Vec<_>>().join("\n");
-    let bundle = match prepare(builder, target, machine, &boot.programs, &boot.file, &boot.kernel_features, &manifest, boot.tamper_bundle, &bundle) {
+    let profile = if boot.debug_assertions { Profile::DebugAssertions } else { Profile::Release };
+    let bundle = match prepare(
+        builder,
+        target,
+        machine,
+        &boot.programs,
+        &boot.file,
+        &boot.kernel_features,
+        &manifest,
+        boot.tamper_bundle,
+        profile,
+        &bundle,
+    ) {
         Ok(bundle) => bundle,
         Err(e) => return Ok(vec![(String::new(), Outcome::Fail(format!("{e:#}")), elapsed(started))]),
     };
 
-    let loader = builder.artifact(target, machine.loader_package);
+    let loader = builder.artifact(target, machine.loader_package, profile);
     let mut results = Vec::new();
     for smp in &boot.smp {
         let run_started = Instant::now();

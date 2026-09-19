@@ -1,6 +1,9 @@
 description = "IPC and timer tests sharing one log server, to catch interference between processes"
 arch = ["rv64"]
 kind = "boot"
+# Debug assertions: `core`'s preconditions on raw-pointer calls and the kernel's own
+# `debug_assert!`s run in this boot (redoubt/README.md, "Debug assertions").
+debug_assertions = true
 programs = ["log-server", "ipc-client", "timer-test"]
 smp = [1, 2]
 expect = ["IPC TEST PASSED", "TIMER TEST PASSED"]

@@ -14,17 +14,61 @@ pub struct Builder {
     pub verbose: bool,
 }
 
+/// How a package is built: the release profile as the workspace defines it, or the same with
+/// debug assertions and overflow checks on (as the debug profile couples them), so every
+/// precondition check in `core` (`slice::from_raw_parts`, `ptr::read`, ...), every
+/// `debug_assert!` and every arithmetic overflow becomes a panic instead of silence. The
+/// checked build has its own target directory, so switching between the two never rebuilds
+/// either.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Profile {
+    Release,
+    DebugAssertions,
+}
+
 impl Builder {
-    fn out_dir(&self, target: &Target) -> PathBuf { self.workspace.join("target").join(target.triple).join("release") }
+    fn target_dir(&self, profile: Profile) -> PathBuf {
+        match profile {
+            Profile::Release => self.workspace.join("target"),
+            Profile::DebugAssertions => self.workspace.join("target/debug-assertions"),
+        }
+    }
+
+    fn out_dir(&self, target: &Target, profile: Profile) -> PathBuf {
+        self.target_dir(profile).join(target.triple).join("release")
+    }
 
     /// `cargo build --release` one package for `target`.
     pub fn cargo_build(&self, target: &Target, package: &str, features: &[String]) -> Result<()> {
-        self.cargo(target, package, None, features)
+        self.cargo(target, package, None, features, Profile::Release)
     }
 
-    fn cargo(&self, target: &Target, package: &str, bin: Option<&str>, features: &[String]) -> Result<()> {
+    /// The same, with `profile`.
+    pub fn cargo_build_with(
+        &self,
+        target: &Target,
+        package: &str,
+        features: &[String],
+        profile: Profile,
+    ) -> Result<()> {
+        self.cargo(target, package, None, features, profile)
+    }
+
+    fn cargo(
+        &self,
+        target: &Target,
+        package: &str,
+        bin: Option<&str>,
+        features: &[String],
+        profile: Profile,
+    ) -> Result<()> {
         let mut cargo = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
         cargo.current_dir(&self.workspace).args(["build", "--release", "--target", target.triple, "-p", package]);
+        cargo.arg("--target-dir").arg(self.target_dir(profile));
+        if profile == Profile::DebugAssertions {
+            cargo.env("CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS", "true");
+            cargo.env("CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS", "true");
+        }
         if let Some(bin) = bin {
             cargo.args(["--bin", bin]);
         }
@@ -50,8 +94,8 @@ impl Builder {
                 return Ok((name, self.workspace.join(path)));
             }
             Program::Corrupted { corrupt, with } => {
-                self.cargo(target, "test-programs", Some(corrupt), &[])?;
-                let mut elf = std::fs::read(self.out_dir(target).join(corrupt))?;
+                self.cargo(target, "test-programs", Some(corrupt), &[], Profile::Release)?;
+                let mut elf = std::fs::read(self.out_dir(target, Profile::Release).join(corrupt))?;
                 corrupt_elf(&mut elf, with)?;
                 let name = format!("{corrupt}-corrupted");
                 let path = self.workspace.join("target/testbench").join(format!("{name}-{}.elf", target.name));
@@ -61,11 +105,13 @@ impl Builder {
             Program::TestProgram(bin) => ("test-programs", bin.as_str()),
             Program::Package { package, bin } => (package.as_str(), bin.as_str()),
         };
-        self.cargo(target, package, Some(bin), &[])?;
-        Ok((bin.to_string(), self.out_dir(target).join(bin)))
+        self.cargo(target, package, Some(bin), &[], Profile::Release)?;
+        Ok((bin.to_string(), self.out_dir(target, Profile::Release).join(bin)))
     }
 
-    pub fn artifact(&self, target: &Target, name: &str) -> PathBuf { self.out_dir(target).join(name) }
+    pub fn artifact(&self, target: &Target, name: &str, profile: Profile) -> PathBuf {
+        self.out_dir(target, profile).join(name)
+    }
 }
 
 /// Rewrite one field of a little-endian ELF in place, or cut it short. Handles ELF32 and ELF64.
