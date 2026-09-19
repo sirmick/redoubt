@@ -1,0 +1,14 @@
+description = "Bench self-check: results the guest reports are compared with a file (model-trace replay)"
+arch = ["rv64"]
+kind = "boot"
+programs = ["log-server", "ipc-client"]
+expect = ['IPC TEST PASSED']
+
+# ipc-client's "ok:" lines stand in for a replayer's per-call results.
+[results]
+pattern = '^\[ipc\] ok: (.*)$'
+expected = "redoubt/tests/data/ipc-results.txt"
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]

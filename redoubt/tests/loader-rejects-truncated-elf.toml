@@ -1,0 +1,12 @@
+description = "The loader refuses a program image cut short inside its program headers"
+arch = ["rv64"]
+kind = "boot"
+programs = ["log-server", { corrupt = "rng-test", with = { truncate = 80 } }]
+timeout_secs = 20
+default_forbid = false      # the loader is supposed to panic here
+expect = ['loader PANIC', 'invalid ELF']
+forbid = ['KMAIN', 'entering kernel']
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]

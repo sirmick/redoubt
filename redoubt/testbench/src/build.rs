@@ -68,8 +68,8 @@ impl Builder {
     pub fn artifact(&self, target: &Target, name: &str) -> PathBuf { self.out_dir(target).join(name) }
 }
 
-/// Rewrite one field of a little-endian ELF in place. Handles ELF32 and ELF64.
-fn corrupt_elf(elf: &mut [u8], corruption: &Corruption) -> Result<()> {
+/// Rewrite one field of a little-endian ELF in place, or cut it short. Handles ELF32 and ELF64.
+fn corrupt_elf(elf: &mut Vec<u8>, corruption: &Corruption) -> Result<()> {
     const PT_LOAD: u32 = 1;
     let is_64 = match elf.get(..5) {
         Some([0x7f, b'E', b'L', b'F', class]) => *class == 2,
@@ -84,6 +84,7 @@ fn corrupt_elf(elf: &mut [u8], corruption: &Corruption) -> Result<()> {
     let u16_at = |elf: &[u8], at: usize| u16::from_le_bytes([elf[at], elf[at + 1]]) as usize;
 
     match corruption {
+        Corruption::Truncate(length) => elf.truncate(*length),
         Corruption::Entry(address) => put(elf, 0x18, parse(address)?),
         Corruption::SegmentVaddr(address) => {
             // (e_phoff, e_phentsize, e_phnum, p_vaddr within a program header)
@@ -106,17 +107,25 @@ fn corrupt_elf(elf: &mut [u8], corruption: &Corruption) -> Result<()> {
 /// The development signing seed (public: see VERIFIED-BOOT.md). NOT FOR PRODUCTION.
 const DEV_SEED: [u8; 32] = [0x42; 32];
 
-/// Build the boot bundle, sign it, and write `signature || tar` to `path`. If `tamper`,
-/// flip one payload byte after signing, so the loader must reject it.
+/// Build the boot bundle, sign it, and write `signature || tar` to `path`. `files` are data
+/// entries, placed after the programs. If `tamper`, flip one payload byte after signing, so
+/// the loader must reject it.
 pub fn bundle(
     path: &Path,
     kernel: &Path,
     programs: &[(String, PathBuf)],
+    files: &[(String, PathBuf)],
     manifest: &str,
     tamper: bool,
 ) -> Result<()> {
     let mut archive = tar::Builder::new(Vec::new());
-    let entries = std::iter::once(("kernel".to_string(), kernel.to_path_buf())).chain(programs.iter().cloned());
+    let entries: Vec<_> =
+        std::iter::once(("kernel".to_string(), kernel.to_path_buf())).chain(programs.iter().chain(files).cloned()).collect();
+    let mut names: Vec<&str> = entries.iter().map(|(name, _)| name.as_str()).chain(["grants"]).collect();
+    names.sort();
+    if let Some(pair) = names.windows(2).find(|pair| pair[0] == pair[1]) {
+        bail!("two bundle entries are named {:?}", pair[0]);
+    }
     for (name, elf) in entries {
         let data = std::fs::read(&elf).with_context(|| format!("reading {}", elf.display()))?;
         append(&mut archive, &name, &data)?;

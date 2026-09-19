@@ -1,0 +1,4 @@
+blocking scalar sum = 0x200000000000007
+lend_mut returned Ok("LENT MUTABLY ACROSS ADDRESS SPACES")
+999 lend_mut round trips
+moved page's address is free again

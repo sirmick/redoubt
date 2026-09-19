@@ -1,0 +1,20 @@
+description = "Bench self-check: a session reaches the guest's forwarded SSH port through QEMU"
+arch = ["rv64"]
+kind = "boot"
+programs = ["log-server"]
+timeout_secs = 2
+expect = ['PID 2 listening']
+
+[net]
+forward = [22]
+
+# Nothing in the guest speaks TCP yet (netd and sshd come later), so QEMU accepts the
+# connection on the host port and the SSH handshake then gets no answer. Without the forward
+# ssh would be refused at once instead. ssh gives up when the case's time runs out.
+[[session]]
+user = "alice"
+steps = [{ expect = 'Connection timed out during banner exchange' }]
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]

@@ -8,9 +8,11 @@ mod budget;
 mod build;
 mod case;
 mod qemu;
+mod ssh;
 mod target;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
@@ -45,6 +47,10 @@ struct Args {
     /// With --run, start QEMU paused with a gdb stub on :1234 (see planning/redoubt/DEBUGGING.md).
     #[arg(long)]
     debug: bool,
+    /// Print the public half of the SSH test key NAME (for a boot manifest) and write its
+    /// private half for a manual `ssh -i`.
+    #[arg(long, value_name = "NAME")]
+    ssh_key: Option<String>,
     /// Show cargo's output.
     #[arg(long, short)]
     verbose: bool,
@@ -71,10 +77,15 @@ fn main() -> Result<()> {
             .iter()
             .map(|p| if p.contains('/') { Program::Path { path: p.into() } } else { Program::TestProgram(p.clone()) })
             .collect();
-        let bundle = prepare(&builder, target, machine, &programs, &[], "", false, &logs.join("interactive.tar"))?;
+        let bundle = prepare(&builder, target, machine, &programs, &[], &[], "", false, &logs.join("interactive.tar"))?;
         let loader = builder.artifact(target, machine.loader_package);
-        let image = Image { machine, firmware: &args.firmware, loader: &loader, bundle: &bundle, smp: args.smp };
+        let image = Image { machine, firmware: &args.firmware, loader: &loader, bundle: &bundle, smp: args.smp, devices: &[] };
         return image.run_interactive(args.debug);
+    }
+    if let Some(name) = &args.ssh_key {
+        println!("{}", ssh::public_key(name)?);
+        println!("private key: {}", ssh::key_file(&logs.join("ssh"), name)?.display());
+        return Ok(());
     }
 
     let mut paths: Vec<_> = std::fs::read_dir(workspace.join("redoubt/tests"))?
@@ -101,18 +112,17 @@ fn main() -> Result<()> {
             }
             continue;
         }
+        if let Kind::SshLoopback(loopback) = &case.kind {
+            let started = Instant::now();
+            let outcome = ssh_loopback(case, loopback, &logs).unwrap_or_else(|e| Outcome::Fail(format!("{e:#}")));
+            let outcome = judge(loopback.must_fail.as_deref(), outcome)?;
+            failures += report(&case.name, outcome, started.elapsed().as_secs_f32());
+            continue;
+        }
         for arch in case.arch.iter().filter(|a| args.arch.as_ref().is_none_or(|only| only == *a)) {
             let target = target::find(arch).with_context(|| format!("{}: unknown arch {arch:?}", case.name))?;
             for (variant, outcome, seconds) in run_case(&builder, case, target, &args.firmware, &logs)? {
-                let label = format!("{} [{}{}]", case.name, target.name, variant);
-                match outcome {
-                    Outcome::Pass => println!("PASS  {label:<32} {seconds:5.1}s"),
-                    Outcome::Skip(why) => println!("SKIP  {label:<32}        {why}"),
-                    Outcome::Fail(why) => {
-                        failures += 1;
-                        println!("FAIL  {label:<32} {seconds:5.1}s  {why}");
-                    }
-                }
+                failures += report(&format!("{} [{}{}]", case.name, target.name, variant), outcome, seconds);
             }
         }
     }
@@ -120,6 +130,19 @@ fn main() -> Result<()> {
         bail!("{failures} test(s) failed; console logs are in {}", logs.display());
     }
     Ok(())
+}
+
+/// Print one result line; returns 1 for a failure, to count them.
+fn report(label: &str, outcome: Outcome, seconds: f32) -> usize {
+    match outcome {
+        Outcome::Pass => println!("PASS  {label:<32} {seconds:5.1}s"),
+        Outcome::Skip(why) => println!("SKIP  {label:<32}        {why}"),
+        Outcome::Fail(why) => {
+            println!("FAIL  {label:<32} {seconds:5.1}s  {why}");
+            return 1;
+        }
+    }
+    0
 }
 
 /// The RustSBI Prototyper binary for `target`, or an error naming where it was looked for.
@@ -154,23 +177,29 @@ fn resolve_firmware(case_firmware: Option<&str>, cli_default: &str, target: &Tar
     }
 }
 
-/// Build the kernel, the loader and `programs` for `target`, and pack them into `bundle`.
+/// Build the kernel, the loader, `programs` and `files` for `target`, and pack them into `bundle`.
+#[allow(clippy::too_many_arguments)]
 fn prepare(
     builder: &Builder,
     target: &Target,
     machine: &Machine,
     programs: &[Program],
+    files: &[case::BundleFile],
     extra_kernel_features: &[String],
     manifest: &str,
     tamper: bool,
-    bundle: &std::path::Path,
+    bundle: &Path,
 ) -> Result<PathBuf> {
     let mut features: Vec<String> = machine.kernel_features.iter().map(|f| f.to_string()).collect();
     features.extend(extra_kernel_features.iter().cloned());
     builder.cargo_build(target, "xous-kernel", &features)?;
     builder.cargo_build(target, machine.loader_package, &[])?;
     let programs = programs.iter().map(|p| builder.program(target, p)).collect::<Result<Vec<_>>>()?;
-    build::bundle(bundle, &builder.artifact(target, "xous-kernel"), &programs, manifest, tamper)?;
+    let files = files
+        .iter()
+        .map(|file| Ok((file.name.clone(), builder.program(target, &file.from)?.1)))
+        .collect::<Result<Vec<_>>>()?;
+    build::bundle(bundle, &builder.artifact(target, "xous-kernel"), &programs, &files, manifest, tamper)?;
     Ok(bundle.to_path_buf())
 }
 
@@ -207,19 +236,32 @@ fn run_case(
             return Ok(vec![(String::new(), outcome, elapsed(started))]);
         }
         Kind::Boot(boot) => boot,
-        Kind::UnsafeBudget(_) => unreachable!("handled before the per-target loop"),
+        Kind::UnsafeBudget(_) | Kind::SshLoopback(_) => unreachable!("handled before the per-target loop"),
     };
     let machine = match &target.machine {
         Ok(machine) => machine,
         Err(why) => return Ok(vec![(String::new(), Outcome::Skip(why.to_string()), 0.0)]),
     };
 
+    if !boot.session.is_empty() {
+        if let Err(why) = ssh_available() {
+            return Ok(vec![(String::new(), Outcome::Skip(why), 0.0)]);
+        }
+    }
+
     // Build everything once, then boot it once per hart count.
     let bundle = logs.join(format!("{}-{}.tar", case.name, target.name));
     let manifest = boot.grant.iter().flat_map(|g| g.manifest_lines()).collect::<Vec<_>>().join("\n");
-    let bundle = match prepare(builder, target, machine, &boot.programs, &boot.kernel_features, &manifest, boot.tamper_bundle, &bundle) {
-        Ok(bundle) => bundle,
-        Err(e) => return Ok(vec![(String::new(), Outcome::Fail(format!("{e:#}")), elapsed(started))]),
+    let prepared = prepare(builder, target, machine, &boot.programs, &boot.file, &boot.kernel_features, &manifest, boot.tamper_bundle, &bundle);
+    let expected_results = match &boot.results {
+        Some(results) => std::fs::read_to_string(builder.workspace.join(&results.expected))
+            .with_context(|| format!("reading {}", results.expected.display()))
+            .map(|text| text.lines().map(str::to_string).collect()),
+        None => Ok(Vec::new()),
+    };
+    let (bundle, expected_results) = match (prepared, expected_results) {
+        (Ok(bundle), Ok(expected)) => (bundle, expected),
+        (Err(e), _) | (_, Err(e)) => return Ok(vec![(String::new(), Outcome::Fail(format!("{e:#}")), elapsed(started))]),
     };
 
     let loader = builder.artifact(target, machine.loader_package);
@@ -231,19 +273,65 @@ fn run_case(
             Ok(fw) => fw,
             Err(why) => return Ok(vec![(String::new(), Outcome::Skip(why), 0.0)]),
         };
-        let image = Image { machine, firmware: &firmware, loader: &loader, bundle: &bundle, smp: *smp };
-        let outcome = match qemu::run(&image, boot, &log)? {
+        // Every boot gets fresh devices: a new disk, new host ports.
+        let boot_once = |log: &Path| -> Result<Verdict> {
+            let (devices, forwards) = qemu::virtio_devices(boot, &builder.workspace, &log.with_extension("img"))?;
+            let image = Image { machine, firmware: &firmware, loader: &loader, bundle: &bundle, smp: *smp, devices: &devices };
+            qemu::run(&image, boot, &forwards, &expected_results, log)
+        };
+        let outcome = match boot_once(&log)? {
             Verdict::Fail(why) => Outcome::Fail(why),
             Verdict::Pass(_) if boot.distinct_across_boots.is_empty() => Outcome::Pass,
             Verdict::Pass(first) => {
                 let second_log = log.with_extension("second-boot.log");
-                match qemu::run(&image, boot, &second_log)? {
+                match boot_once(&second_log)? {
                     Verdict::Fail(why) => Outcome::Fail(format!("second boot: {why}")),
                     Verdict::Pass(second) => compare_boots(boot, &first, &second),
                 }
             }
         };
-        results.push((format!(", smp={smp}"), outcome, elapsed(run_started)));
+        results.push((format!(", smp={smp}"), judge(boot.must_fail.as_deref(), outcome)?, elapsed(run_started)));
     }
     Ok(results)
+}
+
+/// Apply a case's `must_fail`: then the case passes only if the bench failed it, and for the
+/// named reason, so a self-check cannot pass by failing for some unrelated reason.
+fn judge(must_fail: Option<&str>, outcome: Outcome) -> Result<Outcome> {
+    let Some(pattern) = must_fail else { return Ok(outcome) };
+    let pattern = regex::Regex::new(pattern).with_context(|| format!("bad regular expression {pattern:?}"))?;
+    Ok(match outcome {
+        Outcome::Fail(why) if pattern.is_match(&why) => Outcome::Pass,
+        Outcome::Fail(why) => Outcome::Fail(format!("failed, but not with /{pattern}/: {why}")),
+        Outcome::Pass => Outcome::Fail(format!("passed, but must fail with /{pattern}/")),
+        skip @ Outcome::Skip(_) => skip,
+    })
+}
+
+/// SSH sessions need OpenSSH's client (and loopback cases its server) on the host.
+fn ssh_available() -> Result<(), String> {
+    match Command::new(ssh::SSH).arg("-V").stderr(Stdio::null()).status() {
+        Ok(status) if status.success() => Ok(()),
+        _ => Err(format!("OpenSSH's `{}` is not installed", ssh::SSH)),
+    }
+}
+
+/// Run an `ssh-loopback` case: its sessions against a host sshd accepting its keys.
+fn ssh_loopback(case: &Case, loopback: &case::SshLoopback, logs: &Path) -> Result<Outcome> {
+    if let Err(why) = ssh_available() {
+        return Ok(Outcome::Skip(why));
+    }
+    if !Path::new(ssh::SSHD).exists() {
+        return Ok(Outcome::Skip(format!("OpenSSH's server {} is not installed", ssh::SSHD)));
+    }
+    let deadline = Instant::now() + std::time::Duration::from_secs(loopback.timeout_secs);
+    let sshd = ssh::start_loopback(&logs.join("ssh"), &case.name, &loopback.authorized)?;
+    let user = Command::new("id").arg("-un").output().context("running id -un")?;
+    let user = String::from_utf8(user.stdout)?.trim().to_string();
+    let server = ssh::Server::Loopback { port: sshd.port, user };
+    let abort = std::sync::atomic::AtomicBool::new(false);
+    Ok(match ssh::run(&loopback.session, &server, logs, &case.name, deadline, &abort)? {
+        None => Outcome::Pass,
+        Some(why) => Outcome::Fail(why),
+    })
 }
