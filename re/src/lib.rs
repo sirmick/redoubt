@@ -15,14 +15,12 @@
 
 extern crate alloc;
 
-use alloc::boxed::Box;
 use alloc::format;
-use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use beamlet_vm::bif::{Ctx, NativeSpec};
-use beamlet_vm::term::Resource;
+use beamlet_vm::bif::{Ctx, Held, NativeSpec};
+use beamlet_vm::term::Heap;
 use beamlet_vm::{Exception, Term};
 use regex_automata::meta::Regex;
 use regex_automata::util::syntax;
@@ -103,7 +101,7 @@ fn atom(t: &Term) -> Option<&str> {
 }
 
 /// Apply one compile option. `false` if it is not a compile option.
-fn compile_option(f: &mut Flags, o: &Term) -> bool {
+fn compile_option(h: &Heap, f: &mut Flags, o: &Term) -> bool {
     match atom(o) {
         Some("unicode") => f.unicode = true,
         Some("caseless") => f.caseless = true,
@@ -118,8 +116,8 @@ fn compile_option(f: &mut Flags, o: &Term) -> bool {
         Some("ucp") => f.ucp = true,
         Some("no_start_optimize" | "no_auto_capture" | "never_utf" | "dupnames"
             | "firstline" | "bsr_anycrlf" | "bsr_unicode" | "report_errors") => {}
-        _ => match o.as_tuple() {
-            Some([k, v]) if atom(k) == Some("newline") => f.crlf = matches!(atom(v), Some("crlf" | "anycrlf" | "any")),
+        _ => match h.as_tuple(*o) {
+            Some(&[k, v]) if atom(&k) == Some("newline") => f.crlf = matches!(atom(&v), Some("crlf" | "anycrlf" | "any")),
             _ => return false,
         },
     }
@@ -128,21 +126,25 @@ fn compile_option(f: &mut Flags, o: &Term) -> bool {
 
 /// Bytes of a subject or pattern: a binary is used as it is; a list is characters (encoded as
 /// UTF-8 under `unicode`, else as Latin-1 bytes).
-fn text(t: &Term, unicode: bool) -> Option<Vec<u8>> {
+fn text(h: &Heap, t: &Term, unicode: bool) -> Option<Vec<u8>> {
     if !unicode || matches!(t, Term::Bits(_)) {
-        return t.iodata_bytes();
+        return h.iodata_bytes(*t);
     }
     let mut s = String::new();
-    let mut work = alloc::vec![t.clone()];
+    let mut work = alloc::vec![*t];
     while let Some(t) = work.pop() {
         match t {
             Term::Nil => {}
-            Term::Bits(b) if b.is_binary() => s.push_str(core::str::from_utf8(&b.to_bytes()).ok()?),
-            Term::Cons(c) => {
-                work.push(c.tail.clone());
-                match &c.head {
-                    Term::Int(i) => s.push(u32::try_from(*i).ok().and_then(char::from_u32)?),
-                    h => work.push(h.clone()),
+            Term::Bits(_) => {
+                let b = h.as_bits(t).filter(|b| b.is_binary())?;
+                s.push_str(core::str::from_utf8(&b.to_bytes()).ok()?)
+            }
+            Term::Cons(_) => {
+                let (head, tail) = h.as_cons(t)?;
+                work.push(tail);
+                match head {
+                    Term::Int(i) => s.push(u32::try_from(i).ok().and_then(char::from_u32)?),
+                    head => work.push(head),
                 }
             }
             _ => return None,
@@ -540,20 +542,22 @@ fn pcre_error(e: &regex_automata::meta::BuildError, len: usize) -> (String, usiz
 }
 
 fn error_tuple(c: &mut Ctx, msg: &str, pos: usize) -> Term {
-    let chars = Term::list(msg.chars().map(|ch| Term::Int(ch as i64)).collect::<Vec<_>>());
-    Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.error.clone()), Term::tuple(alloc::vec![chars, Term::Int(pos as i64)])])
+    let chars = c.string(msg);
+    let reason = c.tuple(&[chars, Term::Int(pos as i64)]);
+    c.error_tuple(reason)
 }
 
 fn mp_term(c: &mut Ctx, compiled: Compiled) -> Term {
     let groups = compiled.names.len() as i64 - 1;
     let unicode = compiled.unicode as i64;
-    let res = Term::Resource(Rc::new(Resource { id: c.sys.make_ref().0, value: Box::new(compiled) }));
-    Term::tuple(alloc::vec![c.atom("re_pattern"), Term::Int(groups), Term::Int(unicode), Term::Int(0), res])
+    let res = c.new_resource(compiled);
+    let tag = c.atom("re_pattern");
+    c.tuple(&[tag, Term::Int(groups), Term::Int(unicode), Term::Int(0), res])
 }
 
-fn compiled_of(t: &Term) -> Option<&Compiled> {
-    match t.as_tuple() {
-        Some([tag, _, _, _, Term::Resource(r)]) if atom(tag) == Some("re_pattern") => r.get::<Compiled>(),
+fn compiled_of(c: &Ctx, t: &Term) -> Option<Held<Compiled>> {
+    match c.heap().as_tuple(*t) {
+        Some(&[tag, _, _, _, r]) if atom(&tag) == Some("re_pattern") => c.resource::<Compiled>(r),
         _ => None,
     }
 }
@@ -565,29 +569,28 @@ pub fn compile(c: &mut Ctx, a: &[Term]) -> R {
     let mut f = Flags::default();
     let mut export = false;
     let opts = match a.get(1) {
-        Some(o) => o.to_vec().ok_or_else(|| c.badarg())?,
+        Some(o) => c.list_arg(*o)?,
         None => Vec::new(),
     };
     for o in &opts {
         if atom(o) == Some("export") {
             export = true;
-        } else if !compile_option(&mut f, o) {
+        } else if !compile_option(c.heap(), &mut f, o) {
             return Err(c.badarg());
         }
     }
-    let pattern = text(&a[0], f.unicode).ok_or_else(|| c.badarg())?;
+    let pattern = text(c.heap(), &a[0], f.unicode).ok_or_else(|| c.badarg())?;
     Ok(match build(&pattern, f) {
         Ok(_) if export => {
-            let exported = Term::tuple(alloc::vec![
-                c.atom("re_exported_pattern"),
-                Term::binary(b"beamlet"),
-                Term::binary(&pattern),
-                a[1].clone(),
-                Term::binary(&[]),
-            ]);
-            Term::tuple(alloc::vec![c.ok(), exported])
+            let tag = c.atom("re_exported_pattern");
+            let (header, source, code) = (c.binary(b"beamlet"), c.binary(&pattern), c.binary(&[]));
+            let exported = c.tuple(&[tag, header, source, a[1], code]);
+            c.ok_tuple(exported)
         }
-        Ok(compiled) => Term::tuple(alloc::vec![c.ok(), mp_term(c, compiled)]),
+        Ok(compiled) => {
+            let mp = mp_term(c, compiled);
+            c.ok_tuple(mp)
+        }
         Err((msg, pos)) => error_tuple(c, &msg, pos),
     })
 }
@@ -595,17 +598,17 @@ pub fn compile(c: &mut Ctx, a: &[Term]) -> R {
 /// `import(Exported)`: compile the pattern from the source an exported pattern carries (the
 /// fallback OTP documents for a node that cannot use the exporter's bytecode, as here).
 pub fn import(c: &mut Ctx, a: &[Term]) -> R {
-    let Some([tag, _header, source, opts, _code]) = a[0].as_tuple() else { return Err(c.badarg()) };
-    if atom(tag) != Some("re_exported_pattern") {
+    let Some(&[tag, _header, source, opts, _code]) = c.heap().as_tuple(a[0]) else { return Err(c.badarg()) };
+    if atom(&tag) != Some("re_exported_pattern") {
         return Err(c.badarg());
     }
     let mut f = Flags::default();
-    for o in opts.to_vec().ok_or_else(|| c.badarg())? {
-        if atom(&o) != Some("export") && !compile_option(&mut f, &o) {
+    for o in c.list_arg(opts)? {
+        if atom(&o) != Some("export") && !compile_option(c.heap(), &mut f, &o) {
             return Err(c.badarg());
         }
     }
-    let pattern = text(source, f.unicode).ok_or_else(|| c.badarg())?;
+    let pattern = text(c.heap(), &source, f.unicode).ok_or_else(|| c.badarg())?;
     match build(&pattern, f) {
         Ok(compiled) => Ok(mp_term(c, compiled)),
         Err(_) => Err(c.badarg()),
@@ -642,6 +645,7 @@ struct RunOpts {
 }
 
 fn run_options(c: &Ctx, opts: &[Term], flags: &mut Flags) -> Result<RunOpts, Exception> {
+    let h = c.heap();
     let mut r = RunOpts {
         global: false,
         offset: 0,
@@ -658,16 +662,16 @@ fn run_options(c: &Ctx, opts: &[Term], flags: &mut Flags) -> Result<RunOpts, Exc
             Some("notempty") => r.notempty = true,
             Some("notempty_atstart") => r.notempty_atstart = true,
             Some("notbol" | "noteol" | "report_errors") => {}
-            _ => match o.as_tuple() {
-                Some([k, v]) if atom(k) == Some("offset") => r.offset = v.as_usize().ok_or_else(|| c.badarg())?,
-                Some([k, v]) if matches!(atom(k), Some("match_limit" | "match_limit_recursion")) => {
+            _ => match h.as_tuple(*o) {
+                Some(&[k, v]) if atom(&k) == Some("offset") => r.offset = v.as_usize().ok_or_else(|| c.badarg())?,
+                Some(&[k, v]) if matches!(atom(&k), Some("match_limit" | "match_limit_recursion")) => {
                     // Matching is linear here; limits have nothing to bound.
                     v.as_usize().ok_or_else(|| c.badarg())?;
                 }
-                Some([k, s]) if atom(k) == Some("capture") => r.spec = spec(c, s)?,
-                Some([k, s, t]) if atom(k) == Some("capture") => {
-                    r.spec = spec(c, s)?;
-                    r.kind = match atom(t) {
+                Some(&[k, s]) if atom(&k) == Some("capture") => r.spec = spec(c, &s)?,
+                Some(&[k, s, t]) if atom(&k) == Some("capture") => {
+                    r.spec = spec(c, &s)?;
+                    r.kind = match atom(&t) {
                         Some("index") => Kind::Index,
                         Some("list") => Kind::List,
                         Some("binary") => Kind::Binary,
@@ -675,7 +679,7 @@ fn run_options(c: &Ctx, opts: &[Term], flags: &mut Flags) -> Result<RunOpts, Exc
                     };
                 }
                 _ => {
-                    if !compile_option(flags, o) {
+                    if !compile_option(h, flags, o) {
                         return Err(c.badarg());
                     }
                 }
@@ -692,7 +696,7 @@ fn spec(c: &Ctx, t: &Term) -> Result<Spec, Exception> {
         Some("first") => Spec::First,
         Some("none") => Spec::None,
         Some("all_names") => Spec::AllNames,
-        _ => Spec::List(t.to_vec().ok_or_else(|| c.badarg())?),
+        _ => Spec::List(c.list_arg(*t)?),
     })
 }
 
@@ -790,10 +794,10 @@ fn char_len(re: &Compiled, s: &[u8], i: usize) -> usize {
 
 fn capture_term(c: &mut Ctx, re: &Compiled, subject: &[u8], span: Option<(usize, usize)>, kind: Kind) -> Term {
     match (kind, span) {
-        (Kind::Index, Some((s, e))) => Term::tuple(alloc::vec![Term::Int(s as i64), Term::Int((e - s) as i64)]),
-        (Kind::Index, None) => Term::tuple(alloc::vec![Term::Int(-1), Term::Int(0)]),
-        (Kind::Binary, Some((s, e))) => Term::binary(&subject[s..e]),
-        (Kind::Binary, None) => Term::binary(&[]),
+        (Kind::Index, Some((s, e))) => c.tuple(&[Term::Int(s as i64), Term::Int((e - s) as i64)]),
+        (Kind::Index, None) => c.tuple(&[Term::Int(-1), Term::Int(0)]),
+        (Kind::Binary, Some((s, e))) => c.binary(&subject[s..e]),
+        (Kind::Binary, None) => c.binary(&[]),
         (Kind::List, Some((s, e))) => {
             let bytes = &subject[s..e];
             let chars: Vec<Term> = if re.unicode {
@@ -801,8 +805,7 @@ fn capture_term(c: &mut Ctx, re: &Compiled, subject: &[u8], span: Option<(usize,
             } else {
                 bytes.iter().map(|&b| Term::Int(b as i64)).collect()
             };
-            let _ = c;
-            Term::list(chars)
+            c.list(chars)
         }
         (Kind::List, None) => Term::Nil,
     }
@@ -829,7 +832,7 @@ fn captures(c: &mut Ctx, re: &Compiled, subject: &[u8], g: &Groups, o: &RunOpts)
                     Term::Int(i) => usize::try_from(*i).ok().filter(|i| *i < g.len()),
                     Term::Atom(a) => re.names.iter().position(|n| n.as_deref() == Some(a.as_str())),
                     other => {
-                        let name = other.iodata_bytes().and_then(|b| String::from_utf8(b).ok());
+                        let name = c.heap().iodata_bytes(*other).and_then(|b| String::from_utf8(b).ok());
                         name.and_then(|n| re.names.iter().position(|x| x.as_deref() == Some(n.as_str())))
                     }
                 };
@@ -842,23 +845,26 @@ fn captures(c: &mut Ctx, re: &Compiled, subject: &[u8], g: &Groups, o: &RunOpts)
         .into_iter()
         .map(|i| capture_term(c, re, subject, i.and_then(|i| g.get(i).copied().flatten()), o.kind))
         .collect();
-    Ok(Term::list(items))
+    Ok(c.list(items))
 }
 
 /// `run(Subject, RE[, Options])` and `internal_run(Subject, RE, Options, FirstCall)`.
 pub fn run(c: &mut Ctx, a: &[Term]) -> R {
     let opts = match a.get(2) {
-        Some(t) => t.to_vec().ok_or_else(|| c.badarg())?,
+        Some(t) => c.list_arg(*t)?,
         None => Vec::new(),
     };
     let mut flags = Flags::default();
     let mut o = run_options(c, &opts, &mut flags)?;
     // A pattern given as text is compiled with the compile options among the run options.
-    let owned;
-    let re = match compiled_of(&a[1]) {
-        Some(re) => re,
+    let (held, owned);
+    let re: &Compiled = match compiled_of(c, &a[1]) {
+        Some(re) => {
+            held = re;
+            &held
+        }
         None => {
-            let pattern = text(&a[1], flags.unicode).ok_or_else(|| c.badarg())?;
+            let pattern = text(c.heap(), &a[1], flags.unicode).ok_or_else(|| c.badarg())?;
             owned = match build(&pattern, flags) {
                 Ok(r) => r,
                 Err(_) => return Err(c.badarg()),
@@ -866,7 +872,7 @@ pub fn run(c: &mut Ctx, a: &[Term]) -> R {
             &owned
         }
     };
-    let subject = text(&a[0], re.unicode).ok_or_else(|| c.badarg())?;
+    let subject = text(c.heap(), &a[0], re.unicode).ok_or_else(|| c.badarg())?;
     if o.offset > subject.len() {
         return Err(c.badarg());
     }
@@ -882,7 +888,8 @@ pub fn run(c: &mut Ctx, a: &[Term]) -> R {
             Some(_) if matches!(o.spec, Spec::None) => c.atom("match"),
             Some(g) => {
                 let caps = captures(c, re, &subject, &g, &o)?;
-                Term::tuple(alloc::vec![c.atom("match"), caps])
+                let tag = c.atom("match");
+                c.tuple(&[tag, caps])
             }
         });
     }
@@ -917,23 +924,27 @@ pub fn run(c: &mut Ctx, a: &[Term]) -> R {
     for g in &all {
         items.push(captures(c, re, &subject, g, &o)?);
     }
-    Ok(Term::tuple(alloc::vec![c.atom("match"), Term::list(items)]))
+    let items = c.list(items);
+    let tag = c.atom("match");
+    Ok(c.tuple(&[tag, items]))
 }
 
 /// `inspect(MP, namelist)` → `{namelist, [Name]}`, names sorted as PCRE lists them.
 pub fn inspect(c: &mut Ctx, a: &[Term]) -> R {
-    let Some(re) = compiled_of(&a[0]) else { return Err(c.badarg()) };
+    let Some(re) = compiled_of(c, &a[0]) else { return Err(c.badarg()) };
     if atom(&a[1]) != Some("namelist") {
         return Err(c.badarg());
     }
     let mut names: Vec<&str> = re.names.iter().filter_map(|n| n.as_deref()).collect();
     names.sort();
-    let list = Term::list(names.into_iter().map(|n| Term::binary(n.as_bytes())).collect::<Vec<_>>());
-    Ok(Term::tuple(alloc::vec![c.atom("namelist"), list]))
+    let names: Vec<Term> = names.into_iter().map(|n| c.binary(n.as_bytes())).collect();
+    let list = c.list(names);
+    let tag = c.atom("namelist");
+    Ok(c.tuple(&[tag, list]))
 }
 
-pub fn version(_c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(Term::binary(b"regex-automata 0.4 (beamlet)"))
+pub fn version(c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(c.binary(b"regex-automata 0.4 (beamlet)"))
 }
 
 #[cfg(test)]

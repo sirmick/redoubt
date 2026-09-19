@@ -8,6 +8,7 @@
 use alloc::vec::Vec;
 
 use beamlet_vm::bif::Ctx;
+use beamlet_vm::term::Heap;
 use beamlet_vm::Term;
 
 use crate::R;
@@ -22,19 +23,23 @@ struct Error(&'static str, usize);
 /// `Tag` is the class in bits 16-17 and the tag number below; `Value` is a binary (primitive)
 /// or a list of TLVs (constructed, including indefinite length).
 pub fn decode_ber_tlv(c: &mut Ctx, a: &[Term]) -> R {
-    let Some(input) = a[0].iodata_bytes() else { return Err(c.badarg()) };
+    let Some(input) = c.heap().iodata_bytes(a[0]) else { return Err(c.badarg()) };
     let mut pos = 0;
-    match decode(&input, &mut pos, input.len(), 0) {
-        Ok(t) => Ok(Term::tuple(alloc::vec![t, Term::binary(&input[pos..])])),
+    match decode(c.heap_mut(), &input, &mut pos, input.len(), 0) {
+        Ok(t) => {
+            let rest = c.binary(&input[pos..]);
+            Ok(c.tuple(&[t, rest]))
+        }
         Err(Error(reason, at)) => {
-            let e = Term::tuple(alloc::vec![c.atom(reason), Term::Int(at as i64)]);
-            Ok(Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.error.clone()), e]))
+            let reason = c.atom(reason);
+            let e = c.tuple(&[reason, Term::Int(at as i64)]);
+            Ok(c.error_tuple(e))
         }
     }
 }
 
 /// Decode one TLV starting at `*pos`, not reading past `end`.
-fn decode(b: &[u8], pos: &mut usize, end: usize, depth: usize) -> Result<Term, Error> {
+fn decode(h: &mut Heap, b: &[u8], pos: &mut usize, end: usize, depth: usize) -> Result<Term, Error> {
     if depth > MAX_DEPTH {
         return Err(Error("unknown", *pos));
     }
@@ -77,13 +82,14 @@ fn decode(b: &[u8], pos: &mut usize, end: usize, depth: usize) -> Result<Term, E
         }
         let mut items = Vec::new();
         while !(b[*pos] == 0 && b[*pos + 1] == 0) {
-            items.push(decode(b, pos, end, depth + 1)?);
+            items.push(decode(h, b, pos, end, depth + 1)?);
             if *pos + 1 >= end {
                 return Err(Error("invalid_length", *pos));
             }
         }
         *pos += 2;
-        return Ok(Term::tuple(alloc::vec![tag, Term::list(items)]));
+        let items = h.list(items);
+        return Ok(h.tuple(&[tag, items]));
     }
     let len = if l0 < 0x80 {
         l0 as usize
@@ -107,39 +113,39 @@ fn decode(b: &[u8], pos: &mut usize, end: usize, depth: usize) -> Result<Term, E
     let value = if constructed {
         let mut items = Vec::new();
         while *pos < value_end {
-            items.push(decode(b, pos, value_end, depth + 1)?);
+            items.push(decode(h, b, pos, value_end, depth + 1)?);
         }
-        Term::list(items)
+        h.list(items)
     } else {
-        let v = Term::binary(&b[*pos..value_end]);
+        let v = h.binary(&b[*pos..value_end]);
         *pos = value_end;
         v
     };
-    Ok(Term::tuple(alloc::vec![tag, value]))
+    Ok(h.tuple(&[tag, value]))
 }
 
 /// `encode_ber_tlv({Tag, Value})` → the BER bytes, or `{error, Code}`. A binary value is
 /// primitive, a list of TLVs constructed.
 pub fn encode_ber_tlv(c: &mut Ctx, a: &[Term]) -> R {
     let mut out = Vec::new();
-    if encode(&a[0], &mut out, 0).is_none() {
-        return Ok(Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.error.clone()), Term::Int(-1)]));
+    if encode(c.heap(), &a[0], &mut out, 0).is_none() {
+        return Ok(c.error_tuple(Term::Int(-1)));
     }
-    Ok(Term::binary(&out))
+    Ok(c.binary(&out))
 }
 
-fn encode(t: &Term, out: &mut Vec<u8>, depth: usize) -> Option<()> {
+fn encode(h: &Heap, t: &Term, out: &mut Vec<u8>, depth: usize) -> Option<()> {
     if depth > MAX_DEPTH {
         return None;
     }
-    let [tag, value] = t.as_tuple()? else { return None };
+    let &[tag, value] = h.as_tuple(*t)? else { return None };
     let tag = u32::try_from(tag.as_i64()?).ok()?;
     let (constructed, content) = match value {
-        Term::Bits(b) if b.is_binary() => (false, b.to_bytes().into_owned()),
+        Term::Bits(_) => (false, h.as_bits(value).filter(|b| b.is_binary())?.to_bytes().into_owned()),
         Term::Nil | Term::Cons(_) => {
             let mut inner = Vec::new();
-            for item in value.list_iter() {
-                encode(&item.ok()?, &mut inner, depth + 1)?;
+            for item in h.list_iter(value) {
+                encode(h, &item.ok()?, &mut inner, depth + 1)?;
             }
             (true, inner)
         }
@@ -179,12 +185,17 @@ mod tests {
 
     const CERTS: &[&[u8]] = &[include_bytes!("../tests/fixtures/rsa-root.der"), include_bytes!("../tests/fixtures/ec-root.der")];
 
+    fn heap() -> Heap {
+        Heap::new(&Default::default())
+    }
+
     fn roundtrip(bytes: &[u8]) {
         let mut pos = 0;
-        let t = decode(bytes, &mut pos, bytes.len(), 0).unwrap_or_else(|_| panic!("decodes"));
+        let mut h = heap();
+        let t = decode(&mut h, bytes, &mut pos, bytes.len(), 0).unwrap_or_else(|_| panic!("decodes"));
         assert_eq!(pos, bytes.len());
         let mut out = Vec::new();
-        encode(&t, &mut out, 0).expect("encodes");
+        encode(&h, &t, &mut out, 0).expect("encodes");
         assert_eq!(out, bytes, "DER re-encodes to the same bytes");
     }
 
@@ -201,7 +212,7 @@ mod tests {
         let mut deep = alloc::vec![0x30u8, 0x80].repeat(10_000);
         deep.extend(alloc::vec![0u8; 20_000]);
         let mut pos = 0;
-        assert!(decode(&deep, &mut pos, deep.len(), 0).is_err());
+        assert!(decode(&mut heap(), &deep, &mut pos, deep.len(), 0).is_err());
     }
 
     /// Mutated certificates: decoding may fail but must never panic or read out of bounds.
@@ -225,7 +236,7 @@ mod tests {
                 }
             }
             let mut pos = 0;
-            let _ = decode(&b, &mut pos, b.len(), 0);
+            let _ = decode(&mut heap(), &b, &mut pos, b.len(), 0);
         }
     }
 }

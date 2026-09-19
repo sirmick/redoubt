@@ -24,15 +24,12 @@ pub mod bits;
 pub mod etf;
 pub mod ets;
 pub mod float;
-#[allow(dead_code)]
-pub mod heap;
 pub mod interp;
 pub mod loader;
 pub mod memory;
 pub mod module;
 pub mod opcodes;
 pub mod platform;
-pub mod pmap;
 pub mod process;
 pub mod term;
 pub mod vm;

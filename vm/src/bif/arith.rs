@@ -27,7 +27,7 @@ enum Num {
 fn num(ctx: &Ctx, t: &Term) -> Result<Num, Exception> {
     match t {
         Term::Int(i) => Ok(Num::I(BigInt::from(*i))),
-        Term::Big(b) => Ok(Num::I((**b).clone())),
+        Term::Big(_) => Ok(Num::I(ctx.heap().as_big(*t).expect("a bignum").clone())),
         Term::Float(f) => Ok(Num::F(*f)),
         _ => Err(ctx.badarith()),
     }
@@ -48,11 +48,11 @@ fn mk_float(ctx: &Ctx, f: f64) -> R {
     }
 }
 
-fn big(ctx: &Ctx, b: BigInt) -> R {
+fn big(ctx: &mut Ctx, b: BigInt) -> R {
     if b.bits() > MAX_BIG_BITS {
         return Err(ctx.system_limit());
     }
-    Ok(Term::big(b))
+    Ok({ let v = b; ctx.big(v) })
 }
 
 /// Shared shape of `+`, `-`, `*`: an `i64` fast path, else bignum or float.
@@ -101,7 +101,7 @@ pub fn fdiv(ctx: &mut Ctx, a: &[Term]) -> R {
 }
 
 fn ints(ctx: &Ctx, a: &[Term]) -> Result<(BigInt, BigInt), Exception> {
-    match (a[0].as_bigint(), a[1].as_bigint()) {
+    match (ctx.heap().as_bigint(a[0]), ctx.heap().as_bigint(a[1])) {
         (Some(x), Some(y)) => Ok((x, y)),
         _ => Err(ctx.badarith()),
     }
@@ -139,8 +139,11 @@ pub fn rem(ctx: &mut Ctx, a: &[Term]) -> R {
 
 pub fn neg(ctx: &mut Ctx, a: &[Term]) -> R {
     match &a[0] {
-        Term::Int(i) => Ok(i.checked_neg().map(Term::Int).unwrap_or_else(|| Term::big(-BigInt::from(*i)))),
-        Term::Big(b) => Ok(Term::big(-(**b).clone())),
+        Term::Int(i) => Ok(i.checked_neg().map(Term::Int).unwrap_or_else(|| { let v = -BigInt::from(*i); ctx.big(v) })),
+        Term::Big(_) => {
+            let v = -ctx.heap().as_big(a[0]).expect("a bignum").clone();
+            Ok(ctx.big(v))
+        }
         Term::Float(f) => Ok(Term::Float(-f)),
         _ => Err(ctx.badarith()),
     }
@@ -177,7 +180,10 @@ pub fn bxor(ctx: &mut Ctx, a: &[Term]) -> R {
 pub fn bnot(ctx: &mut Ctx, a: &[Term]) -> R {
     match &a[0] {
         Term::Int(i) => Ok(Term::Int(!i)),
-        Term::Big(b) => Ok(Term::big(-(**b).clone() - 1)),
+        Term::Big(_) => {
+            let v = -ctx.heap().as_big(a[0]).expect("a bignum").clone() - 1;
+            Ok(ctx.big(v))
+        }
         _ => Err(ctx.badarith()),
     }
 }
@@ -203,7 +209,7 @@ fn shift(ctx: &mut Ctx, x: &Term, n: &Term, left: bool) -> R {
             return Ok(Term::Int(r));
         }
     }
-    let (Some(x), Some(n)) = (x.as_bigint(), n.as_bigint()) else {
+    let (Some(x), Some(n)) = (ctx.heap().as_bigint(*x), ctx.heap().as_bigint(*n)) else {
         return Err(ctx.badarith());
     };
     let n = if left { n } else { -n };
@@ -241,8 +247,11 @@ pub fn bsr(ctx: &mut Ctx, a: &[Term]) -> R {
 
 pub fn abs(ctx: &mut Ctx, a: &[Term]) -> R {
     match &a[0] {
-        Term::Int(i) => Ok(i.checked_abs().map(Term::Int).unwrap_or_else(|| Term::big(BigInt::from(*i).abs()))),
-        Term::Big(b) => Ok(Term::big(b.abs())),
+        Term::Int(i) => Ok(i.checked_abs().map(Term::Int).unwrap_or_else(|| { let v = BigInt::from(*i).abs(); ctx.big(v) })),
+        Term::Big(_) => {
+            let v = ctx.heap().as_big(a[0]).expect("a bignum").abs();
+            Ok(ctx.big(v))
+        }
         Term::Float(f) => Ok(Term::Float(f.abs())),
         _ => Err(ctx.badarg()),
     }
@@ -256,8 +265,11 @@ pub fn float(ctx: &mut Ctx, a: &[Term]) -> R {
 }
 
 /// Integer from a float that has already been rounded to a whole number.
-fn whole(ctx: &Ctx, f: f64) -> R {
-    BigInt::from_f64(f).map(Term::big).ok_or_else(|| ctx.badarg())
+fn whole(ctx: &mut Ctx, f: f64) -> R {
+    match BigInt::from_f64(f) {
+        Some(b) => Ok(ctx.big(b)),
+        None => Err(ctx.badarg()),
+    }
 }
 
 fn rounding(ctx: &mut Ctx, a: &[Term], op: fn(f64) -> f64) -> R {
@@ -285,45 +297,45 @@ pub fn ceil(ctx: &mut Ctx, a: &[Term]) -> R {
     rounding(ctx, a, FloatCore::ceil)
 }
 
-pub fn max(_ctx: &mut Ctx, a: &[Term]) -> R {
+pub fn max(ctx: &mut Ctx, a: &[Term]) -> R {
     // On equal values the first argument wins, as in Erlang.
-    Ok(if a[1].cmp_term(&a[0]) == Ordering::Greater { a[1].clone() } else { a[0].clone() })
+    Ok(if ctx.heap().cmp_term(a[1], a[0]) == Ordering::Greater { a[1].clone() } else { a[0].clone() })
 }
 
-pub fn min(_ctx: &mut Ctx, a: &[Term]) -> R {
-    Ok(if a[1].cmp_term(&a[0]) == Ordering::Less { a[1].clone() } else { a[0].clone() })
+pub fn min(ctx: &mut Ctx, a: &[Term]) -> R {
+    Ok(if ctx.heap().cmp_term(a[1], a[0]) == Ordering::Less { a[1].clone() } else { a[0].clone() })
 }
 
 pub fn eq(ctx: &mut Ctx, a: &[Term]) -> R {
-    Ok(ctx.bool(a[0].eq_arith(&a[1])))
+    Ok(ctx.bool(ctx.heap().eq_arith(a[0], a[1])))
 }
 
 pub fn ne(ctx: &mut Ctx, a: &[Term]) -> R {
-    Ok(ctx.bool(!a[0].eq_arith(&a[1])))
+    Ok(ctx.bool(!ctx.heap().eq_arith(a[0], a[1])))
 }
 
 pub fn eq_exact(ctx: &mut Ctx, a: &[Term]) -> R {
-    Ok(ctx.bool(a[0].eq_exact(&a[1])))
+    Ok(ctx.bool(ctx.heap().eq_exact(a[0], a[1])))
 }
 
 pub fn ne_exact(ctx: &mut Ctx, a: &[Term]) -> R {
-    Ok(ctx.bool(!a[0].eq_exact(&a[1])))
+    Ok(ctx.bool(!ctx.heap().eq_exact(a[0], a[1])))
 }
 
 pub fn lt(ctx: &mut Ctx, a: &[Term]) -> R {
-    Ok(ctx.bool(a[0].cmp_term(&a[1]) == Ordering::Less))
+    Ok(ctx.bool(ctx.heap().cmp_term(a[0], a[1]) == Ordering::Less))
 }
 
 pub fn gt(ctx: &mut Ctx, a: &[Term]) -> R {
-    Ok(ctx.bool(a[0].cmp_term(&a[1]) == Ordering::Greater))
+    Ok(ctx.bool(ctx.heap().cmp_term(a[0], a[1]) == Ordering::Greater))
 }
 
 pub fn le(ctx: &mut Ctx, a: &[Term]) -> R {
-    Ok(ctx.bool(a[0].cmp_term(&a[1]) != Ordering::Greater))
+    Ok(ctx.bool(ctx.heap().cmp_term(a[0], a[1]) != Ordering::Greater))
 }
 
 pub fn ge(ctx: &mut Ctx, a: &[Term]) -> R {
-    Ok(ctx.bool(a[0].cmp_term(&a[1]) != Ordering::Less))
+    Ok(ctx.bool(ctx.heap().cmp_term(a[0], a[1]) != Ordering::Less))
 }
 
 fn boolean(ctx: &Ctx, t: &Term) -> Result<bool, Exception> {

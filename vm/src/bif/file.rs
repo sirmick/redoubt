@@ -11,7 +11,6 @@
 //! Every open file belongs to the process that opened it and is closed when that process exits.
 
 use alloc::collections::VecDeque;
-use alloc::rc::Rc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::{Cell, RefCell};
@@ -19,7 +18,7 @@ use core::cell::{Cell, RefCell};
 use super::Ctx;
 use crate::platform::{FileError, FileInfo, FileKind, Files, OpenMode, SeekFrom};
 use crate::process::Exception;
-use crate::term::{Bits, Resource, Term};
+use crate::term::{Bits, Heap, Term};
 
 type R = Result<Term, Exception>;
 
@@ -39,11 +38,11 @@ struct FileRef {
 
 fn error(c: &mut Ctx, e: FileError) -> Term {
     let reason = c.atom(e.name());
-    Term::tuple(alloc::vec![c.atom("error"), reason])
+    { let e = [c.atom("error"), reason]; c.tuple(&e) }
 }
 
 fn ok_with(c: &mut Ctx, v: Term) -> Term {
-    Term::tuple(alloc::vec![c.ok(), v])
+    { let e = [c.ok(), v]; c.tuple(&e) }
 }
 
 /// `ok` or `{error, Reason}`.
@@ -62,31 +61,35 @@ fn files<'c>(c: &'c mut Ctx) -> Result<&'c mut dyn Files, FileError> {
 
 /// `internal_name2native(Name)`: a name (a string, possibly deep, or a binary) as UTF-8 bytes.
 pub fn name2native(c: &mut Ctx, a: &[Term]) -> R {
-    let bytes = native_name(&a[0]).ok_or_else(|| c.badarg())?;
-    Ok(Term::binary(&bytes))
+    let bytes = native_name(c.heap(), a[0]).ok_or_else(|| c.badarg())?;
+    Ok({ let v = &bytes; c.binary(v) })
 }
 
 /// A file name argument (string, deep list, binary or atom) as UTF-8 bytes.
-pub(crate) fn name_bytes(t: &Term) -> Option<Vec<u8>> {
-    native_name(t)
+pub(crate) fn name_bytes(heap: &Heap, t: Term) -> Option<Vec<u8>> {
+    native_name(heap, t)
 }
 
-fn native_name(t: &Term) -> Option<Vec<u8>> {
+fn native_name(heap: &Heap, t: Term) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     let mut work = alloc::vec![t];
     while let Some(t) = work.pop() {
         match t {
             Term::Nil => {}
-            Term::Cons(cell) => {
-                work.push(&cell.tail);
-                work.push(&cell.head);
+            Term::Cons(_) => {
+                let (head, tail) = heap.as_cons(t)?;
+                work.push(tail);
+                work.push(head);
             }
             Term::Int(ch) => {
-                let ch = char::from_u32(u32::try_from(*ch).ok()?)?;
+                let ch = char::from_u32(u32::try_from(ch).ok()?)?;
                 let mut buf = [0u8; 4];
                 out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
             }
-            Term::Bits(b) if b.is_binary() => out.extend_from_slice(&b.to_bytes()),
+            Term::Bits(_) => {
+                let b = heap.as_bits(t).filter(Bits::is_binary)?;
+                out.extend_from_slice(&b.to_bytes())
+            }
             Term::Atom(a) => out.extend_from_slice(a.as_str().as_bytes()),
             _ => return None,
         }
@@ -98,30 +101,26 @@ fn native_name(t: &Term) -> Option<Vec<u8>> {
     (!out.contains(&0)).then_some(out)
 }
 
-fn chars(s: &str) -> Term {
-    Term::list(s.chars().map(|ch| Term::Int(ch as i64)).collect::<Vec<_>>())
-}
-
 /// `internal_native2name(Bin)`: the name as a string, or `{error, ignore}` if it is not UTF-8.
 pub fn native2name(c: &mut Ctx, a: &[Term]) -> R {
-    let Term::Bits(b) = &a[0] else { return Err(c.badarg()) };
+    let b = c.heap().as_bits(a[0]).ok_or_else(|| c.badarg())?;
     match core::str::from_utf8(&b.to_bytes()) {
-        Ok(s) => Ok(chars(s)),
-        Err(_) => Ok(Term::tuple(alloc::vec![c.atom("error"), c.atom("ignore")])),
+        Ok(s) => Ok(c.string(s)),
+        Err(_) => Ok({ let e = [c.atom("error"), c.atom("ignore")]; c.tuple(&e) }),
     }
 }
 
 /// `internal_normalize_utf8(Bin)`: the string. Names are not normalized (as on Linux).
 pub fn normalize_utf8(c: &mut Ctx, a: &[Term]) -> R {
-    let Term::Bits(b) = &a[0] else { return Err(c.badarg()) };
+    let b = c.heap().as_bits(a[0]).ok_or_else(|| c.badarg())?;
     let bytes = b.to_bytes();
     let s = core::str::from_utf8(&bytes).map_err(|_| c.badarg())?;
-    Ok(chars(s))
+    Ok(c.string(s))
 }
 
 pub fn is_translatable(c: &mut Ctx, a: &[Term]) -> R {
     let ok = match &a[0] {
-        Term::Bits(b) => core::str::from_utf8(&b.to_bytes()).is_ok(),
+        Term::Bits(_) => c.heap().as_bits(a[0]).is_some_and(|b| core::str::from_utf8(&b.to_bytes()).is_ok()),
         _ => true,
     };
     Ok(c.bool(ok))
@@ -166,7 +165,7 @@ pub fn resolve(cwd: &str, name: &[u8]) -> Result<String, FileError> {
 
 /// The platform path an encoded name argument stands for.
 fn path(c: &Ctx, t: &Term) -> Result<Result<String, FileError>, Exception> {
-    let Term::Bits(b) = t else { return Err(c.badarg()) };
+    let b = c.heap().as_bits(*t).ok_or_else(|| c.badarg())?;
     Ok(resolve(&c.sys.cwd, &b.to_bytes()))
 }
 
@@ -194,22 +193,22 @@ fn info_term(c: &mut Ctx, i: &FileInfo) -> Term {
         (false, false) => "none",
     };
     let int = |n: i64| Term::Int(n);
-    Term::tuple(alloc::vec![
+    { let e = [
         c.atom("file_info"),
-        Term::big(i.size.into()),
+        { let v = i.size.into(); c.big(v) },
         c.atom(kind),
         c.atom(access),
         int(i.atime),
         int(i.mtime),
         int(i.ctime),
         int(i.mode as i64),
-        Term::big(i.links.into()),
+        { let v = i.links.into(); c.big(v) },
         int(0),
         int(0),
-        Term::big(i.inode.into()),
+        { let v = i.inode.into(); c.big(v) },
         int(i.uid as i64),
         int(i.gid as i64),
-    ])
+    ]; c.tuple(&e) }
 }
 
 /// `read_info_nif(Path, FollowLinks)`: a `#file_info{}` with POSIX times, or `{error, R}`.
@@ -239,8 +238,8 @@ pub fn list_dir(c: &mut Ctx, a: &[Term]) -> R {
     with_path(c, &a[0], |c, p| {
         Ok(match files(c).and_then(|f| f.list_dir(p)) {
             Ok(names) => {
-                let names: Vec<Term> = names.iter().map(|n| Term::binary(n)).collect();
-                ok_with(c, Term::list(names))
+                let names: Vec<Term> = names.iter().map(|n| { let v = n; c.binary(v) }).collect();
+                { let v = names; let v = c.list(v); ok_with(c, v) }
             }
             Err(e) => error(c, e),
         })
@@ -289,7 +288,7 @@ pub fn rename(c: &mut Ctx, a: &[Term]) -> R {
 pub fn read_link(c: &mut Ctx, a: &[Term]) -> R {
     with_path(c, &a[0], |c, p| {
         Ok(match files(c).and_then(|f| f.read_link(p)) {
-            Ok(target) => ok_with(c, Term::binary(&target)),
+            Ok(target) => { let v = &target; let v = c.binary(v); ok_with(c, v) },
             Err(e) => error(c, e),
         })
     })
@@ -301,7 +300,7 @@ pub fn get_cwd(c: &mut Ctx, _a: &[Term]) -> R {
     if let Some(Err(e)) = c.sys.platform.files().map(|f| f.info(&cwd, true)) {
         return Ok(error(c, e));
     }
-    Ok(ok_with(c, Term::binary(cwd.as_bytes())))
+    Ok({ let v = cwd.as_bytes(); let v = c.binary(v); ok_with(c, v) })
 }
 
 /// `set_cwd_nif(Path)`: this VM's working directory, which must be a directory.
@@ -342,8 +341,7 @@ pub fn set_permissions(c: &mut Ctx, a: &[Term]) -> R {
 
 /// `make_soft_link_nif(Target, Link)`: the target is stored as written.
 pub fn make_symlink(c: &mut Ctx, a: &[Term]) -> R {
-    let Term::Bits(target) = &a[0] else { return Err(c.badarg()) };
-    let target = target.to_bytes().into_owned();
+    let target = c.heap().as_bits(a[0]).ok_or_else(|| c.badarg())?.to_bytes().into_owned();
     with_path(c, &a[1], |c, p| {
         let r = files(c).and_then(|f| f.make_symlink(&target, p));
         done(c, r)
@@ -366,7 +364,7 @@ pub fn not_supported(c: &mut Ctx, _a: &[Term]) -> R {
 
 /// `open_nif(Path, Modes)`: `{ok, FileRef}` or `{error, Reason}`.
 pub fn open(c: &mut Ctx, a: &[Term]) -> R {
-    let modes = a[1].to_vec().ok_or_else(|| c.badarg())?;
+    let modes = c.list_arg(a[1])?;
     let mut m = OpenMode::default();
     for mode in &modes {
         match mode {
@@ -400,11 +398,7 @@ pub fn open(c: &mut Ctx, a: &[Term]) -> R {
             Ok(h) => {
                 let owner = c.p.pid;
                 c.sys.files.insert(h, owner);
-                let id = c.sys.make_ref().0;
-                let r = Term::Resource(Rc::new(Resource {
-                    id,
-                    value: alloc::boxed::Box::new(FileRef { handle: h, open: Cell::new(true) }),
-                }));
+                let r = c.new_resource(FileRef { handle: h, open: Cell::new(true) });
                 Ok(ok_with(c, r))
             }
             Err(e) => Ok(error(c, e)),
@@ -415,8 +409,7 @@ pub fn open(c: &mut Ctx, a: &[Term]) -> R {
 /// The platform handle of an open `FileRef`; `ebadf` once closed. Only the process that opened
 /// the file may use it (BEAM checks the owner in `prim_file`; the check here backs that up).
 fn handle(c: &Ctx, t: &Term) -> Result<Result<u64, FileError>, Exception> {
-    let Term::Resource(r) = t else { return Err(c.badarg()) };
-    let f = r.get::<FileRef>().ok_or_else(|| c.badarg())?;
+    let f = c.resource::<FileRef>(*t).ok_or_else(|| c.badarg())?;
     if !f.open.get() {
         return Ok(Err(FileError::Ebadf));
     }
@@ -427,8 +420,7 @@ fn handle(c: &Ctx, t: &Term) -> Result<Result<u64, FileError>, Exception> {
 }
 
 pub fn close(c: &mut Ctx, a: &[Term]) -> R {
-    let Term::Resource(r) = &a[0] else { return Err(c.badarg()) };
-    let f = r.get::<FileRef>().ok_or_else(|| c.badarg())?;
+    let f = c.resource::<FileRef>(a[0]).ok_or_else(|| c.badarg())?;
     if !f.open.replace(false) {
         return Ok(error(c, FileError::Einval));
     }
@@ -448,7 +440,7 @@ fn read_size(c: &Ctx, t: &Term) -> Result<usize, Exception> {
 fn data(c: &mut Ctx, r: Result<Vec<u8>, FileError>) -> Term {
     match r {
         Ok(d) if d.is_empty() => c.atom("eof"),
-        Ok(d) => ok_with(c, Term::binary(&d)),
+        Ok(d) => { let v = &d; let v = c.binary(v); ok_with(c, v) },
         Err(e) => error(c, e),
     }
 }
@@ -456,7 +448,7 @@ fn data(c: &mut Ctx, r: Result<Vec<u8>, FileError>) -> Term {
 pub fn read(c: &mut Ctx, a: &[Term]) -> R {
     let (h, len) = (handle(c, &a[0])?, read_size(c, &a[1])?);
     if len == 0 {
-        return Ok(ok_with(c, Term::binary(&[])));
+        return Ok({ let v = &[]; let v = c.binary(v); ok_with(c, v) });
     }
     let r = h.and_then(|h| files(c)?.read(h, len));
     Ok(data(c, r))
@@ -467,7 +459,7 @@ pub fn pread(c: &mut Ctx, a: &[Term]) -> R {
     let off = offset(c, &a[1])?;
     let len = read_size(c, &a[2])?;
     if len == 0 {
-        return Ok(ok_with(c, Term::binary(&[])));
+        return Ok({ let v = &[]; let v = c.binary(v); ok_with(c, v) });
     }
     let r = h.and_then(|h| files(c)?.pread(h, off, len));
     Ok(data(c, r))
@@ -483,9 +475,9 @@ fn offset(c: &Ctx, t: &Term) -> Result<u64, Exception> {
 /// The bytes of an iovec (a list of binaries).
 fn iovec(c: &Ctx, t: &Term) -> Result<Vec<u8>, Exception> {
     let mut out = Vec::new();
-    for b in t.to_vec().ok_or_else(|| c.badarg())? {
-        match &b {
-            Term::Bits(b) if b.is_binary() => out.extend_from_slice(&b.to_bytes()),
+    for b in c.list_arg(*t)? {
+        match c.heap().as_bits(b) {
+            Some(b) if b.is_binary() => out.extend_from_slice(&b.to_bytes()),
             _ => return Err(c.badarg()),
         }
     }
@@ -521,7 +513,7 @@ pub fn seek(c: &mut Ctx, a: &[Term]) -> R {
         _ => return Err(c.badarg()),
     };
     Ok(match h.and_then(|h| files(c)?.seek(h, to)) {
-        Ok(pos) => ok_with(c, Term::big(pos.into())),
+        Ok(pos) => { let v = pos.into(); let v = c.big(v); ok_with(c, v) },
         Err(e) => error(c, e),
     })
 }
@@ -571,7 +563,7 @@ pub fn read_file(c: &mut Ctx, a: &[Term]) -> R {
     with_path(c, &a[0], |c, p| {
         let r = files(c).and_then(|f| read_whole_file(f, p, max));
         Ok(match r {
-            Ok(d) => ok_with(c, Term::binary(&d)),
+            Ok(d) => { let v = &d; let v = c.binary(v); ok_with(c, v) },
             Err(e) => error(c, e),
         })
     })
@@ -585,17 +577,13 @@ struct Buffer {
     locked: Cell<bool>,
 }
 
-fn buffer<'t>(c: &Ctx, t: &'t Term) -> Result<&'t Buffer, Exception> {
-    match t {
-        Term::Resource(r) => r.get::<Buffer>().ok_or_else(|| c.badarg()),
-        _ => Err(c.badarg()),
-    }
+fn buffer(c: &Ctx, t: &Term) -> Result<super::Held<Buffer>, Exception> {
+    c.resource::<Buffer>(*t).ok_or_else(|| c.badarg())
 }
 
 pub fn buffer_new(c: &mut Ctx, _a: &[Term]) -> R {
-    let id = c.sys.make_ref().0;
     let b = Buffer { bytes: RefCell::new(VecDeque::new()), locked: Cell::new(false) };
-    Ok(Term::Resource(Rc::new(Resource { id, value: alloc::boxed::Box::new(b) })))
+    Ok(c.new_resource(b))
 }
 
 pub fn buffer_size(c: &mut Ctx, a: &[Term]) -> R {
@@ -605,8 +593,8 @@ pub fn buffer_size(c: &mut Ctx, a: &[Term]) -> R {
 /// `peek_head(Buffer)`: the buffer's contents, left in place.
 pub fn buffer_peek_head(c: &mut Ctx, a: &[Term]) -> R {
     let b = buffer(c, &a[0])?;
-    let mut bytes = b.bytes.borrow_mut();
-    Ok(Term::bits(Bits::from_bytes(bytes.make_contiguous())))
+    let v = Bits::from_bytes(b.bytes.borrow_mut().make_contiguous());
+    Ok(c.bits(v))
 }
 
 /// `copying_read(Buffer, Size)`: the first `Size` bytes, removed.
@@ -618,7 +606,7 @@ pub fn buffer_copying_read(c: &mut Ctx, a: &[Term]) -> R {
         return Err(c.badarg());
     }
     let out: Vec<u8> = bytes.drain(..n).collect();
-    Ok(Term::binary(&out))
+    Ok({ let v = &out; c.binary(v) })
 }
 
 pub fn buffer_write(c: &mut Ctx, a: &[Term]) -> R {

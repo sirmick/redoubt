@@ -19,14 +19,10 @@ type R = Result<Term, Exception>;
 /// Most directories on the code path.
 const MAX_PATHS: usize = 1024;
 
-fn string(s: &str) -> Term {
-    Term::list(s.chars().map(|ch| Term::Int(ch as i64)).collect::<Vec<_>>())
-}
-
 /// A directory argument, resolved against the working directory: `Err(())` if it is not a
 /// directory the file system has.
 fn directory(c: &mut Ctx, t: &Term) -> Result<Result<String, ()>, Exception> {
-    let name = super::file::name_bytes(t).ok_or_else(|| c.badarg())?;
+    let name = super::file::name_bytes(c.heap(), *t).ok_or_else(|| c.badarg())?;
     let Ok(path) = super::file::resolve(&c.sys.cwd, &name) else { return Ok(Err(())) };
     let is_dir = c.sys.platform.files().and_then(|f| f.info(&path, true).ok()).is_some_and(|i| i.kind == FileKind::Directory);
     Ok(if is_dir { Ok(path) } else { Err(()) })
@@ -61,7 +57,7 @@ fn added(c: &mut Ctx, ok: bool) -> Term {
     if ok {
         c.bool(true)
     } else {
-        Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.error.clone()), c.atom("bad_directory")])
+        { let e = [Term::Atom(c.sys.atoms.error.clone()), c.atom("bad_directory")]; c.tuple(&e) }
     }
 }
 
@@ -79,14 +75,14 @@ pub fn add_pathz(c: &mut Ctx, a: &[Term]) -> R {
 /// `add_pathsa(Dirs)`: each goes first, so the list ends up in front in reverse order, as
 /// OTP does. Directories that do not exist are skipped.
 pub fn add_pathsa(c: &mut Ctx, a: &[Term]) -> R {
-    for d in a[0].to_vec().ok_or_else(|| c.badarg())? {
+    for d in c.list_arg(a[0])? {
         add(c, &d, true)?;
     }
     Ok(c.ok())
 }
 
 pub fn add_pathsz(c: &mut Ctx, a: &[Term]) -> R {
-    for d in a[0].to_vec().ok_or_else(|| c.badarg())? {
+    for d in c.list_arg(a[0])? {
         add(c, &d, false)?;
     }
     Ok(c.ok())
@@ -94,27 +90,29 @@ pub fn add_pathsz(c: &mut Ctx, a: &[Term]) -> R {
 
 /// `del_path(Dir)`: `true` if it was on the path.
 pub fn del_path(c: &mut Ctx, a: &[Term]) -> R {
-    let name = super::file::name_bytes(&a[0]).ok_or_else(|| c.badarg())?;
+    let name = super::file::name_bytes(c.heap(), a[0]).ok_or_else(|| c.badarg())?;
     let Ok(dir) = super::file::resolve(&c.sys.cwd, &name) else { return Ok(c.bool(false)) };
     let removed = remove(c, &dir);
     Ok(c.bool(removed))
 }
 
 pub fn del_paths(c: &mut Ctx, a: &[Term]) -> R {
-    for d in a[0].to_vec().ok_or_else(|| c.badarg())? {
+    for d in c.list_arg(a[0])? {
         del_path(c, &[d])?;
     }
     Ok(c.ok())
 }
 
 pub fn get_path(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(Term::list(c.sys.code_path.iter().map(|p| string(p)).collect::<Vec<_>>()))
+    let paths = c.sys.code_path.clone();
+    let v: Vec<Term> = paths.iter().map(|p| c.string(p)).collect();
+    Ok(c.list(v))
 }
 
 /// `set_path(Dirs)`: `true`, or `{error, bad_directory}` (leaving the path as it was).
 pub fn set_path(c: &mut Ctx, a: &[Term]) -> R {
     let mut paths = Vec::new();
-    for d in a[0].to_vec().ok_or_else(|| c.badarg())? {
+    for d in c.list_arg(a[0])? {
         match directory(c, &d)? {
             Ok(p) if !paths.contains(&p) => paths.push(p),
             Ok(_) => {}
@@ -138,15 +136,15 @@ pub fn which(c: &mut Ctx, a: &[Term]) -> R {
         return Ok(c.atom("non_existing"));
     }
     if c.sys.is_loaded(m) {
-        if let Some(file) = c.sys.module_files.get(m.as_str()) {
-            return Ok(file.clone());
+        if let Some(file) = c.sys.module_files.get(m.as_str()).cloned() {
+            return Ok(c.copy_in(&file));
         }
     }
     let name = String::from(m.as_str());
     Ok(match c.sys.locate_module(&name) {
-        Some(Found::Path(path, _)) => string(&path),
+        Some(Found::Path(path, _)) => c.string(&path),
         Some(Found::Platform(_)) => match c.sys.platform.module_file(&name) {
-            Some(path) => string(&path),
+            Some(path) => c.string(&path),
             None => c.atom("preloaded"),
         },
         None => c.atom("non_existing"),
@@ -161,7 +159,7 @@ pub fn all_available(c: &mut Ctx, _a: &[Term]) -> R {
     let mut out = Vec::new();
     for m in c.sys.loaded_modules() {
         seen.insert(String::from(m.as_str()));
-        out.push(Term::tuple(alloc::vec![string(m.as_str()), c.atom("preloaded"), c.bool(true)]));
+        out.push({ let e = [c.string(m.as_str()), c.atom("preloaded"), c.bool(true)]; c.tuple(&e) });
     }
     let dirs = c.sys.code_path.clone();
     for dir in dirs {
@@ -169,12 +167,12 @@ pub fn all_available(c: &mut Ctx, _a: &[Term]) -> R {
         for n in names {
             let Some(module) = core::str::from_utf8(&n).ok().and_then(|n| n.strip_suffix(".beam")) else { continue };
             if seen.insert(String::from(module)) {
-                let file = string(&alloc::format!("{}/{}.beam", dir.trim_end_matches('/'), module));
-                out.push(Term::tuple(alloc::vec![string(module), file, c.bool(false)]));
+                let file = c.string(&alloc::format!("{}/{}.beam", dir.trim_end_matches('/'), module));
+                out.push({ let e = [c.string(module), file, c.bool(false)]; c.tuple(&e) });
             }
         }
     }
-    Ok(Term::list(out))
+    Ok({ let v = out; c.list(v) })
 }
 
 /// The directory of application `app`: `Root/App` or the highest `Root/App-Vsn` in the first
@@ -208,12 +206,12 @@ fn lib_dir_of(c: &mut Ctx, app: &str) -> Option<String> {
 fn app_name(c: &Ctx, t: &Term) -> Result<String, Exception> {
     match t {
         Term::Atom(a) => Ok(String::from(a.as_str())),
-        _ => super::file::name_bytes(t).and_then(|b| String::from_utf8(b).ok()).ok_or_else(|| c.badarg()),
+        _ => super::file::name_bytes(c.heap(), *t).and_then(|b| String::from_utf8(b).ok()).ok_or_else(|| c.badarg()),
     }
 }
 
 fn bad_name(c: &mut Ctx) -> Term {
-    Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.error.clone()), c.atom("bad_name")])
+    { let e = [Term::Atom(c.sys.atoms.error.clone()), c.atom("bad_name")]; c.tuple(&e) }
 }
 
 /// `lib_dir(App)`, and `lib_dir(App, SubDir)`: `{error, bad_name}` if there is no such
@@ -225,8 +223,8 @@ pub fn lib_dir(c: &mut Ctx, a: &[Term]) -> R {
         None => None,
     };
     Ok(match (lib_dir_of(c, &app), sub) {
-        (Some(d), None) => string(&d),
-        (Some(d), Some(s)) => string(&alloc::format!("{d}/{s}")),
+        (Some(d), None) => c.string(&d),
+        (Some(d), Some(s)) => c.string(&alloc::format!("{d}/{s}")),
         (None, _) => bad_name(c),
     })
 }
@@ -234,7 +232,7 @@ pub fn lib_dir(c: &mut Ctx, a: &[Term]) -> R {
 pub fn priv_dir(c: &mut Ctx, a: &[Term]) -> R {
     let app = app_name(c, &a[0])?;
     Ok(match lib_dir_of(c, &app) {
-        Some(d) => string(&alloc::format!("{d}/priv")),
+        Some(d) => c.string(&alloc::format!("{d}/priv")),
         None => bad_name(c),
     })
 }
@@ -248,17 +246,18 @@ pub fn root_dir(c: &mut Ctx, _a: &[Term]) -> R {
             Some(i) => String::from(&r[..i]),
         }
     });
-    Ok(string(root.as_deref().unwrap_or("/")))
+    Ok(c.string(root.as_deref().unwrap_or("/")))
 }
 
 /// Load `bytes` as `module` and remember the file it came from.
 fn load_from(c: &mut Ctx, module: &crate::atom::Atom, bytes: &[u8], file: Term) -> Term {
     match c.sys.load_bytes(bytes) {
         Ok(name) if &name == module => {
+            let file = c.own(file);
             c.sys.module_files.insert(String::from(name.as_str()), file);
-            Term::tuple(alloc::vec![c.atom("module"), Term::Atom(name)])
+            { let e = [c.atom("module"), Term::Atom(name)]; c.tuple(&e) }
         }
-        Ok(_) | Err(_) => Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.error.clone()), c.atom("badfile")]),
+        Ok(_) | Err(_) => { let e = [Term::Atom(c.sys.atoms.error.clone()), c.atom("badfile")]; c.tuple(&e) },
     }
 }
 
@@ -267,19 +266,25 @@ pub fn load_file(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Atom(m) = &a[0] else { return Err(c.badarg()) };
     let m = m.clone();
     Ok(match c.sys.locate_module(m.as_str()) {
-        Some(Found::Path(path, bytes)) => load_from(c, &m, &bytes, string(&path)),
-        Some(Found::Platform(bytes)) => {
-            let file = c.sys.platform.module_file(m.as_str()).map(|p| string(&p)).unwrap_or_else(|| c.atom("preloaded"));
+        Some(Found::Path(path, bytes)) => {
+            let file = c.string(&path);
             load_from(c, &m, &bytes, file)
         }
-        None => Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.error.clone()), c.atom("nofile")]),
+        Some(Found::Platform(bytes)) => {
+            let file = match c.sys.platform.module_file(m.as_str()) {
+                Some(p) => c.string(&p),
+                None => c.atom("preloaded"),
+            };
+            load_from(c, &m, &bytes, file)
+        }
+        None => { let e = [Term::Atom(c.sys.atoms.error.clone()), c.atom("nofile")]; c.tuple(&e) },
     })
 }
 
 /// `load_abs(File)`: load `File.beam` from the VM's file system.
 pub fn load_abs(c: &mut Ctx, a: &[Term]) -> R {
-    let name = super::file::name_bytes(&a[0]).ok_or_else(|| c.badarg())?;
-    let nofile = |c: &mut Ctx| Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.error.clone()), c.atom("nofile")]);
+    let name = super::file::name_bytes(c.heap(), a[0]).ok_or_else(|| c.badarg())?;
+    let nofile = |c: &mut Ctx| { let e = [Term::Atom(c.sys.atoms.error.clone()), c.atom("nofile")]; c.tuple(&e) };
     let Ok(path) = super::file::resolve(&c.sys.cwd, &name) else { return Ok(nofile(c)) };
     let file = alloc::format!("{path}.beam");
     let max = c.sys.limits.max_binary_bits / 8;
@@ -291,5 +296,6 @@ pub fn load_abs(c: &mut Ctx, a: &[Term]) -> R {
     let Some(m) = c.sys.atom_table.existing(module).or_else(|| c.sys.atom_table.intern(module).ok()) else {
         return Ok(nofile(c));
     };
-    Ok(load_from(c, &m, &bytes, string(&file)))
+    let file = c.string(&file);
+    Ok(load_from(c, &m, &bytes, file))
 }

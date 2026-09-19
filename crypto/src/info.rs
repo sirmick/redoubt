@@ -3,34 +3,33 @@
 use alloc::vec::Vec;
 
 use beamlet_vm::bif::Ctx;
-use beamlet_vm::term::{Map, MapKey};
 use beamlet_vm::Term;
 use num_bigint::BigUint;
 use num_traits::Zero;
 
-use crate::{badarg, bin, bytes, random_bytes, string, R};
+use crate::{badarg, bin, bytes, random_bytes, R};
 
 fn atoms(c: &mut Ctx, names: &[&str]) -> Term {
-    Term::list(names.iter().map(|n| c.atom(n)).collect::<Vec<_>>())
+    let v: Vec<Term> = names.iter().map(|n| c.atom(n)).collect();
+    c.list(v)
 }
 
 /// `[{Name, VerNum, VerStr}]`, as for OpenSSL: here, this crate.
-pub fn info_lib(_c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(Term::list(alloc::vec![Term::tuple(alloc::vec![
-        bin(b"beamlet-crypto (RustCrypto)"),
-        Term::Int(0x0001_0000),
-        bin(b"beamlet-crypto 0.1.0"),
-    ])]))
+pub fn info_lib(c: &mut Ctx, _a: &[Term]) -> R {
+    let name = bin(c, b"beamlet-crypto (RustCrypto)");
+    let version = bin(c, b"beamlet-crypto 0.1.0");
+    let lib = c.tuple(&[name, Term::Int(0x0001_0000), version]);
+    Ok(c.list([lib]))
 }
 
 pub fn info_nif(c: &mut Ctx, _a: &[Term]) -> R {
-    let mut m = Map::new();
-    m.insert(MapKey(c.atom("compile_type")), c.atom("normal"));
-    m.insert(MapKey(c.atom("link_type")), c.atom("static"));
-    m.insert(MapKey(c.atom("cryptolib_version_compiled")), string("beamlet-crypto 0.1.0"));
-    m.insert(MapKey(c.atom("cryptolib_version_linked")), string("beamlet-crypto 0.1.0"));
-    m.insert(MapKey(c.atom("fips_provider_available")), c.bool(false));
-    Ok(Term::map(m))
+    let mut m: Vec<(Term, Term)> = Vec::new();
+    { let k = c.atom("compile_type"); let v = c.atom("normal"); m.push((k, v)); }
+    { let k = c.atom("link_type"); let v = c.atom("static"); m.push((k, v)); }
+    { let k = c.atom("cryptolib_version_compiled"); let v = c.string("beamlet-crypto 0.1.0"); m.push((k, v)); }
+    { let k = c.atom("cryptolib_version_linked"); let v = c.string("beamlet-crypto 0.1.0"); m.push((k, v)); }
+    { let k = c.atom("fips_provider_available"); let v = c.bool(false); m.push((k, v)); }
+    Ok(c.map_from(m))
 }
 
 pub fn info_fips(c: &mut Ctx, _a: &[Term]) -> R {
@@ -76,7 +75,7 @@ pub fn rsa_opts_algorithms(c: &mut Ctx, _a: &[Term]) -> R {
 pub fn strong_rand_bytes(c: &mut Ctx, a: &[Term]) -> R {
     let Some(n) = a[0].as_usize().filter(|n| *n <= 1 << 24) else { return Err(badarg(c, 0, "Bad length")) };
     match random_bytes(c, n) {
-        Ok(b) => Ok(bin(&b)),
+        Ok(b) => Ok(bin(c, &b)),
         Err(_) => Ok(c.bool(false)),
     }
 }
@@ -104,7 +103,8 @@ pub fn strong_rand_range(c: &mut Ctx, a: &[Term]) -> R {
     if range.is_zero() {
         return Err(badarg(c, 0, "Bad range"));
     }
-    Ok(bin(&uniform_below(c, &range)?.to_bytes_be()))
+    let n = uniform_below(c, &range)?.to_bytes_be();
+    Ok(bin(c, &n))
 }
 
 /// `rand_uniform_nif(From, To)` with both as binaries (mpint): an integer in `[From, To)`.
@@ -122,7 +122,7 @@ pub fn rand_uniform(c: &mut Ctx, a: &[Term]) -> R {
     let v = r.to_bytes_be();
     let mut out = (v.len() as u32).to_be_bytes().to_vec();
     out.extend_from_slice(&v);
-    Ok(bin(&out))
+    Ok(bin(c, &out))
 }
 
 /// `rand_seed_nif(Seed)`: the platform's source needs no seeding.

@@ -205,7 +205,7 @@ impl Heap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::heap::Literals;
+    use crate::term::Literals;
     use alloc::collections::BTreeMap;
 
     /// Check order, balance and cached heights of every node; return the height.

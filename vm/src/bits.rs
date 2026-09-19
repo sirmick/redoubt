@@ -1,13 +1,13 @@
 //! Building and reading bitstrings, for `<<...>>` construction and binary pattern matching.
 
-use alloc::rc::Rc;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use num_bigint::{BigInt, Sign};
 use num_traits::float::FloatCore;
 use num_traits::{Signed, ToPrimitive, Zero};
 
-use crate::term::{Bits, Term};
+use crate::term::{Bits, Heap, Term};
 
 /// Accumulates bits, most significant first.
 pub struct Builder {
@@ -32,7 +32,7 @@ impl Builder {
         let whole = bits.offset == 0 && bits.len.div_ceil(8) == bits.data.len();
         let len = bits.len;
         if whole {
-            match Rc::try_unwrap(bits.data) {
+            match Arc::try_unwrap(bits.data) {
                 Ok(bytes) => return Builder { bytes, len },
                 Err(shared) => {
                     let mut b = Builder::new();
@@ -167,13 +167,29 @@ impl Builder {
         self.push_integer(&BigInt::from(value), size, little)
     }
 
-    pub fn finish(self) -> Term {
-        Term::bits(Bits { data: Rc::new(self.bytes), offset: 0, len: self.len })
+    /// The bitstring built, on `heap`.
+    pub fn finish(self, heap: &mut Heap) -> Term {
+        heap.bits(self.into_bits())
+    }
+
+    pub fn into_bits(self) -> Bits {
+        Bits { data: Arc::new(self.bytes), offset: 0, len: self.len }
+    }
+
+    /// The bytes and length in bits.
+    pub fn into_parts(self) -> (Vec<u8>, usize) {
+        (self.bytes, self.len)
+    }
+
+    /// Continue building on bytes holding `len` bits.
+    pub fn from_parts(bytes: Vec<u8>, len: usize) -> Builder {
+        debug_assert_eq!(bytes.len(), len.div_ceil(8));
+        Builder { bytes, len }
     }
 }
 
 /// Read `size` bits at `pos` of `b` as an integer.
-pub fn read_integer(b: &Bits, pos: usize, size: usize, signed: bool, little: bool) -> Term {
+pub fn read_integer(heap: &mut Heap, b: &Bits, pos: usize, size: usize, signed: bool, little: bool) -> Term {
     if size == 0 {
         return Term::Int(0);
     }
@@ -208,19 +224,19 @@ pub fn read_integer(b: &Bits, pos: usize, size: usize, signed: bool, little: boo
             }
             v += BigInt::from(top) << shift;
         }
-        return finish_int(v, size, signed);
+        return finish_int(heap, v, size, signed);
     }
     let v = BigInt::from_bytes_be(Sign::Plus, &be);
-    finish_int(v, size, signed)
+    finish_int(heap, v, size, signed)
 }
 
-fn finish_int(v: BigInt, size: usize, signed: bool) -> Term {
+fn finish_int(heap: &mut Heap, v: BigInt, size: usize, signed: bool) -> Term {
     if signed && size > 0 && (&v >> (size - 1)) & BigInt::from(1) == BigInt::from(1) {
-        return Term::big(v - (BigInt::from(1) << size));
+        return heap.big(v - (BigInt::from(1) << size));
     }
     match v.to_i64() {
         Some(i) => Term::Int(i),
-        None => Term::big(v),
+        None => heap.big(v),
     }
 }
 
@@ -375,10 +391,16 @@ mod tests {
     use super::*;
     use alloc::string::ToString;
 
+    fn show(b: Builder) -> alloc::string::String {
+        let mut h = Heap::new(&Default::default());
+        let t = b.finish(&mut h);
+        h.show(t).to_string()
+    }
+
     fn build(f: impl FnOnce(&mut Builder)) -> alloc::string::String {
         let mut b = Builder::new();
         f(&mut b);
-        b.finish().to_string()
+        show(b)
     }
 
     /// Expected strings are what OTP 28 prints for the same construction.
@@ -406,8 +428,9 @@ mod tests {
         ] {
             let mut b = Builder::new();
             b.push_small(v, size, little);
-            let Term::Bits(bits) = b.finish() else { panic!() };
-            assert_eq!(read_integer(&bits, 0, size, signed, little).as_i64(), Some(v), "{v} {size} {signed} {little}");
+            let bits = b.into_bits();
+            let mut h = Heap::new(&Default::default());
+            assert_eq!(read_integer(&mut h, &bits, 0, size, signed, little).as_i64(), Some(v), "{v} {size} {signed} {little}");
         }
     }
 
@@ -415,16 +438,16 @@ mod tests {
     fn floats() {
         let mut b = Builder::new();
         assert!(push_float(&mut b, 1.5, 64, false));
-        assert_eq!(b.finish().to_string(), "<<63,248,0,0,0,0,0,0>>");
+        assert_eq!(show(b), "<<63,248,0,0,0,0,0,0>>");
         let mut b = Builder::new();
         assert!(push_float(&mut b, 1.5, 16, false));
-        assert_eq!(b.finish().to_string(), "<<62,0>>");
+        assert_eq!(show(b), "<<62,0>>");
         // Too big for 32 bits: written as infinity, as BEAM does.
         let mut b = Builder::new();
         assert!(push_float(&mut b, 1.0e300, 32, false));
-        assert_eq!(b.finish().to_string(), "<<127,128,0,0>>");
+        assert_eq!(show(b), "<<127,128,0,0>>");
         let mut b = Builder::new();
         assert!(push_float(&mut b, -1.0e300, 16, false));
-        assert_eq!(b.finish().to_string(), "<<252,0>>");
+        assert_eq!(show(b), "<<252,0>>");
     }
 }

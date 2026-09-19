@@ -18,13 +18,14 @@ enum Stop {
 }
 
 /// Walk chardata (code points, binaries and nested lists) collecting code points.
-fn collect(c: &Ctx, data: &Term, latin1: bool, out: &mut Vec<char>) -> Result<Option<Stop>, Exception> {
+fn collect(c: &mut Ctx, data: &Term, latin1: bool, out: &mut Vec<char>) -> Result<Option<Stop>, Exception> {
     // An explicit stack of what is left to convert, so nesting depth costs no Rust stack.
-    let mut work = alloc::vec![data.clone()];
+    let mut work = alloc::vec![*data];
     while let Some(t) = work.pop() {
-        match &t {
+        match t {
             Term::Nil => {}
-            Term::Bits(b) if b.is_binary() => {
+            Term::Bits(_) => {
+                let b = c.heap().as_bits(t).filter(|b| b.is_binary()).ok_or_else(|| c.badarg())?;
                 let bytes = b.to_bytes();
                 if latin1 {
                     out.extend(bytes.iter().map(|&x| x as char));
@@ -35,31 +36,32 @@ fn collect(c: &Ctx, data: &Term, latin1: bool, out: &mut Vec<char>) -> Result<Op
                     Err(e) => {
                         let good = e.valid_up_to();
                         out.extend(core::str::from_utf8(&bytes[..good]).unwrap_or("").chars());
-                        let rest = Term::bits(b.slice(good * 8, b.len - good * 8));
+                        let rest = c.bits(b.slice(good * 8, b.len - good * 8));
                         return Ok(Some(if e.error_len().is_none() { Stop::Incomplete(rest) } else { Stop::Error(rest) }));
                     }
                 }
             }
-            Term::Cons(cell) => {
-                match &cell.head {
-                    Term::Int(i) => match u32::try_from(*i).ok().and_then(char::from_u32) {
-                        Some(ch) if !latin1 || *i <= 255 => out.push(ch),
+            Term::Cons(_) => {
+                let (head, tail) = c.heap().as_cons(t).expect("a list cell");
+                match head {
+                    Term::Int(i) => match u32::try_from(i).ok().and_then(char::from_u32) {
+                        Some(ch) if !latin1 || i <= 255 => out.push(ch),
                         _ => {
-                            let rest = Term::list_with_tail(core::iter::once(cell.head.clone()).collect::<Vec<_>>(), cell.tail.clone());
+                            let rest = c.cons(head, tail);
                             let mut pending = Vec::new();
                             pending.push(rest);
                             pending.extend(work.into_iter().rev());
-                            return Ok(Some(Stop::Error(Term::list(pending))));
+                            return Ok(Some(Stop::Error(c.list(pending))));
                         }
                     },
-                    h @ (Term::Bits(_) | Term::Cons(_) | Term::Nil) => {
-                        work.push(cell.tail.clone());
-                        work.push(h.clone());
+                    Term::Bits(_) | Term::Cons(_) | Term::Nil => {
+                        work.push(tail);
+                        work.push(head);
                         continue;
                     }
                     _ => return Err(c.badarg()),
                 }
-                work.push(cell.tail.clone());
+                work.push(tail);
             }
             _ => return Err(c.badarg()),
         }
@@ -78,15 +80,15 @@ fn in_encoding(c: &Ctx, t: &Term) -> Result<bool, Exception> {
 fn finish(c: &mut Ctx, converted: Term, stop: Option<Stop>) -> Term {
     match stop {
         None => converted,
-        Some(Stop::Error(rest)) => Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.error.clone()), converted, rest]),
-        Some(Stop::Incomplete(rest)) => Term::tuple(alloc::vec![c.atom("incomplete"), converted, rest]),
+        Some(Stop::Error(rest)) => { let e = [Term::Atom(c.sys.atoms.error.clone()), converted, rest]; c.tuple(&e) },
+        Some(Stop::Incomplete(rest)) => { let e = [c.atom("incomplete"), converted, rest]; c.tuple(&e) },
     }
 }
 
 /// `unicode:bin_is_7bit(Bin)`: whether `Bin` is a binary of ASCII bytes (`false` for anything
 /// that is not a binary).
 pub fn bin_is_7bit(c: &mut Ctx, a: &[Term]) -> R {
-    let ascii = matches!(&a[0], Term::Bits(b) if b.is_binary() && b.to_bytes().is_ascii());
+    let ascii = c.heap().as_bits(a[0]).is_some_and(|b| b.is_binary() && b.to_bytes().is_ascii());
     Ok(c.bool(ascii))
 }
 
@@ -94,7 +96,7 @@ pub fn characters_to_list(c: &mut Ctx, a: &[Term]) -> R {
     let latin1 = in_encoding(c, &a[1])?;
     let mut chars = Vec::new();
     let stop = collect(c, &a[0], latin1, &mut chars)?;
-    let list = Term::list(chars.into_iter().map(|ch| Term::Int(ch as i64)).collect::<Vec<_>>());
+    let list = { let v = chars.into_iter().map(|ch| Term::Int(ch as i64)).collect::<Vec<_>>(); c.list(v) };
     Ok(finish(c, list, stop))
 }
 
@@ -103,6 +105,6 @@ pub fn characters_to_binary(c: &mut Ctx, a: &[Term]) -> R {
     let mut chars = Vec::new();
     let stop = collect(c, &a[0], latin1, &mut chars)?;
     let s: alloc::string::String = chars.into_iter().collect();
-    let bin = Term::binary(s.as_bytes());
+    let bin = { let v = s.as_bytes(); c.binary(v) };
     Ok(finish(c, bin, stop))
 }

@@ -9,7 +9,6 @@ use core::cell::RefCell;
 
 use aes::cipher::{BlockCipherDecrypt, BlockCipherEncrypt, KeyInit, KeyIvInit, StreamCipher, StreamCipherSeek};
 use beamlet_vm::bif::Ctx;
-use beamlet_vm::term::{Map, MapKey};
 use beamlet_vm::{Exception, Term};
 
 use crate::{atom_name, badarg, bin, bytes, is_true, nif_error, notsup, random_bytes, resource, resource_ref, R};
@@ -83,16 +82,16 @@ pub fn cipher_info(c: &mut Ctx, a: &[Term]) -> R {
         Mode::Gcm => "gcm_mode",
         Mode::ChaCha20 | Mode::ChaCha20Poly1305 => "stream_cipher",
     };
-    let mut m = Map::new();
+    let mut m: Vec<(Term, Term)> = Vec::new();
     // OpenSSL 3 reports no NID for the CTR and ChaCha ciphers; neither do we.
     let ty = if matches!(mode, Mode::Ctr | Mode::ChaCha20 | Mode::ChaCha20Poly1305) { c.atom("undefined") } else { Term::Int(nid) };
-    m.insert(MapKey(c.atom("type")), ty);
-    m.insert(MapKey(c.atom("key_length")), Term::Int(key_len as i64));
-    m.insert(MapKey(c.atom("iv_length")), Term::Int(iv_len(mode) as i64));
-    m.insert(MapKey(c.atom("block_size")), Term::Int(block as i64));
-    m.insert(MapKey(c.atom("prop_aead")), c.bool(aead));
-    m.insert(MapKey(c.atom("mode")), c.atom(mode_name));
-    Ok(Term::map(m))
+    { let k = c.atom("type"); let v = ty; m.push((k, v)); }
+    { let k = c.atom("key_length"); let v = Term::Int(key_len as i64); m.push((k, v)); }
+    { let k = c.atom("iv_length"); let v = Term::Int(iv_len(mode) as i64); m.push((k, v)); }
+    { let k = c.atom("block_size"); let v = Term::Int(block as i64); m.push((k, v)); }
+    { let k = c.atom("prop_aead"); let v = c.bool(aead); m.push((k, v)); }
+    { let k = c.atom("mode"); let v = c.atom(mode_name); m.push((k, v)); }
+    Ok(c.map_from(m))
 }
 
 // ---- the block cipher ----
@@ -243,11 +242,12 @@ fn options(c: &mut Ctx, t: &Term, arg: i64) -> Result<(bool, Padding), Exception
     if t.is_atom(&c.sys.atoms.false_) {
         return Ok((false, Padding::Undefined));
     }
-    let Some(opts) = t.to_vec() else { return Err(badarg(c, arg, "Options are not a boolean or a proper list")) };
+    let Some(opts) = c.heap().to_vec(*t) else { return Err(badarg(c, arg, "Options are not a boolean or a proper list")) };
     let (mut encrypt, mut padding) = (true, Padding::Undefined);
     for o in opts {
-        match o.as_tuple() {
-            Some([k, v]) if atom_name(k) == Some("encrypt") => {
+        match c.heap().as_tuple(o) {
+            Some(&[k, v]) if atom_name(&k) == Some("encrypt") => {
+                let v = &v;
                 if is_true(c, v) {
                     encrypt = true;
                 } else if v.is_atom(&c.sys.atoms.false_) {
@@ -256,8 +256,8 @@ fn options(c: &mut Ctx, t: &Term, arg: i64) -> Result<(bool, Padding), Exception
                     return Err(badarg(c, arg, "Bad encrypt option"));
                 }
             }
-            Some([k, v]) if atom_name(k) == Some("padding") => {
-                padding = match atom_name(v) {
+            Some(&[k, v]) if atom_name(&k) == Some("padding") => {
+                padding = match atom_name(&v) {
                     Some("undefined") => Padding::Undefined,
                     Some("none") => Padding::None,
                     Some("pkcs_padding") => Padding::Pkcs,
@@ -417,8 +417,8 @@ impl CipherCtx {
     }
 }
 
-fn ctx_arg<'t>(c: &mut Ctx, t: &'t Term) -> Result<&'t RefCell<CipherCtx>, Exception> {
-    resource_ref::<RefCell<CipherCtx>>(t).ok_or_else(|| badarg(c, 0, "Bad State"))
+fn ctx_arg(c: &mut Ctx, t: &Term) -> Result<beamlet_vm::bif::Held<RefCell<CipherCtx>>, Exception> {
+    resource_ref::<RefCell<CipherCtx>>(c, t).ok_or_else(|| badarg(c, 0, "Bad State"))
 }
 
 /// `ng_crypto_init_nif(Cipher, Key, IVec, Options)`.
@@ -432,14 +432,14 @@ pub fn update(c: &mut Ctx, a: &[Term]) -> R {
     let data = bytes(c, a, 1, "data")?;
     let ctx = ctx_arg(c, &a[0])?;
     let out = ctx.borrow_mut().update(&data);
-    Ok(bin(&out))
+    Ok(bin(c, &out))
 }
 
 pub fn finalize(c: &mut Ctx, a: &[Term]) -> R {
     let ctx = ctx_arg(c, &a[0])?;
     let mut state = ctx.borrow_mut();
     let out = state.finalize(c)?;
-    Ok(bin(&out))
+    Ok(bin(c, &out))
 }
 
 pub fn get_data(c: &mut Ctx, a: &[Term]) -> R {
@@ -448,12 +448,12 @@ pub fn get_data(c: &mut Ctx, a: &[Term]) -> R {
         let s = ctx.borrow();
         (s.size, s.padded_size, s.padding, s.encrypt)
     };
-    let mut m = Map::new();
-    m.insert(MapKey(c.atom("size")), Term::Int(size as i64));
-    m.insert(MapKey(c.atom("padding_size")), Term::Int(padded as i64));
-    m.insert(MapKey(c.atom("padding_type")), c.atom(padding.name()));
-    m.insert(MapKey(c.atom("encrypt")), c.bool(encrypt));
-    Ok(Term::map(m))
+    let mut m: Vec<(Term, Term)> = Vec::new();
+    { let k = c.atom("size"); let v = Term::Int(size as i64); m.push((k, v)); }
+    { let k = c.atom("padding_size"); let v = Term::Int(padded as i64); m.push((k, v)); }
+    { let k = c.atom("padding_type"); let v = c.atom(padding.name()); m.push((k, v)); }
+    { let k = c.atom("encrypt"); let v = c.bool(encrypt); m.push((k, v)); }
+    Ok(c.map_from(m))
 }
 
 /// `ng_crypto_one_time_nif(Cipher, Key, IVec, Data, Options)`: update and final in one.
@@ -462,7 +462,7 @@ pub fn one_time(c: &mut Ctx, a: &[Term]) -> R {
     let data = bytes(c, a, 3, "data")?;
     let mut out = ctx.update(&data);
     out.extend(ctx.finalize(c)?);
-    Ok(bin(&out))
+    Ok(bin(c, &out))
 }
 
 // ---- AEAD ----
@@ -554,9 +554,9 @@ pub fn aead_one_time(c: &mut Ctx, a: &[Term]) -> R {
         Err(bytes(c, a, 5, "tag")?)
     };
     match aead_run(c, mode, &key, &iv, input, &aad, enc)? {
-        (out, Some(tag)) if encrypt => Ok(Term::tuple(alloc::vec![bin(&out), bin(&tag)])),
+        (out, Some(tag)) if encrypt => Ok({ let e = [bin(c, &out), bin(c, &tag)]; c.tuple(&e) }),
         (_, Some(_)) => Ok(Term::Atom(c.sys.atoms.error.clone())),
-        (out, None) => Ok(bin(&out)),
+        (out, None) => Ok(bin(c, &out)),
     }
 }
 
@@ -579,7 +579,7 @@ pub fn aead_init(c: &mut Ctx, a: &[Term]) -> R {
 /// `aead_cipher_nif(State, IV, In, AAD)`: encrypting returns ciphertext followed by the tag;
 /// decrypting expects the tag at the end of `In`.
 pub fn aead_with_state(c: &mut Ctx, a: &[Term]) -> R {
-    let Some(st) = resource_ref::<AeadState>(&a[0]) else { return Err(badarg(c, 0, "Bad state")) };
+    let Some(st) = resource_ref::<AeadState>(c, &a[0]) else { return Err(badarg(c, 0, "Bad state")) };
     let (mode, key, tag_len, encrypt) = (st.mode, st.key.clone(), st.tag_len, st.encrypt);
     let iv = bytes(c, a, 1, "iv")?;
     let mut input = bytes(c, a, 2, "text")?;
@@ -587,14 +587,14 @@ pub fn aead_with_state(c: &mut Ctx, a: &[Term]) -> R {
     if encrypt {
         let (mut out, tag) = aead_run(c, mode, &key, &iv, input, &aad, Ok(tag_len))?;
         out.extend(tag.unwrap_or_default());
-        return Ok(bin(&out));
+        return Ok(bin(c, &out));
     }
     if input.len() < tag_len {
         return Ok(Term::Atom(c.sys.atoms.error.clone()));
     }
     let tag = input.split_off(input.len() - tag_len);
     match aead_run(c, mode, &key, &iv, input, &aad, Err(tag))? {
-        (out, None) => Ok(bin(&out)),
+        (out, None) => Ok(bin(c, &out)),
         _ => Ok(Term::Atom(c.sys.atoms.error.clone())),
     }
 }

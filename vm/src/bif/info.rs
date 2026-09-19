@@ -6,17 +6,13 @@ use alloc::vec::Vec;
 use super::Ctx;
 use crate::atom::{AtomTable, Atoms};
 use crate::process::{Exception, Process, State};
-use crate::term::{Pid, Term};
+use crate::term::{compare, copy, Heap, Pid, Term};
 
 type R = Result<Term, Exception>;
 
-fn string(s: &str) -> Term {
-    Term::list(s.chars().map(|ch| Term::Int(ch as i64)).collect::<Vec<_>>())
-}
-
 fn text_of(c: &Ctx, t: &Term) -> Result<String, Exception> {
     let mut s = String::new();
-    for item in t.list_iter() {
+    for item in c.heap().list_iter(*t) {
         let ch = item.ok().and_then(|x| x.as_i64()).and_then(|i| u32::try_from(i).ok()).and_then(char::from_u32);
         s.push(ch.ok_or_else(|| c.badarg())?);
     }
@@ -26,67 +22,90 @@ fn text_of(c: &Ctx, t: &Term) -> Result<String, Exception> {
 // ---- processes ----
 
 pub fn processes(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(Term::list(c.sys.procs.pids().into_iter().filter(|p| !p.port).map(Term::Pid).collect::<Vec<_>>()))
+    let pids: Vec<Term> = c.sys.procs.pids().into_iter().filter(|p| !p.port).map(Term::Pid).collect();
+    Ok(c.list(pids))
 }
 
-/// One `process_info` item, or `None` for an item this VM does not track. Takes the atom
-/// table and the process separately so it works both for the running process (borrowed by the
-/// caller) and for one in the process table.
-fn info_item(table: &mut AtomTable, atoms: &Atoms, p: &Process, running: bool, depth: usize, item: &Term) -> Option<Term> {
+/// One `process_info` item of `p`, built on `out`, or `None` for an item this VM does not
+/// track. `item` is a term of `item_heap` (the caller's). Terms of `p` are copied to `out`,
+/// so this works for another process as for the caller itself.
+#[allow(clippy::too_many_arguments)]
+fn info_item(
+    table: &mut AtomTable,
+    atoms: &Atoms,
+    p: &Process,
+    running: bool,
+    depth: usize,
+    item_heap: &Heap,
+    item: Term,
+    out: &mut Heap,
+) -> Option<Term> {
     // `{dictionary, Key}`: one entry of the process dictionary.
-    if let Some([Term::Atom(k), key]) = item.as_tuple() {
+    if let Some(&[Term::Atom(k), key]) = item_heap.as_tuple(item) {
         if k.as_str() == "dictionary" {
-            let v = p.dictionary.get(&crate::term::MapKey(key.clone())).cloned();
-            return Some(v.unwrap_or_else(|| Term::Atom(atoms.undefined.clone())));
+            let v = p.dictionary.entries().iter().find(|(k, _)| compare(&p.heap, *k, item_heap, key, true).is_eq()).map(|e| e.1);
+            return Some(match v {
+                Some(v) => copy(&p.heap, v, out),
+                None => Term::Atom(atoms.undefined),
+            });
         }
         return None;
     }
     let Term::Atom(item) = item else { return None };
     let item = item.as_str();
-    let pids = |set: &mut dyn Iterator<Item = Pid>| Term::list(set.map(Term::Pid).collect::<Vec<_>>());
-    let bool = |b: bool| Term::Atom(if b { atoms.true_.clone() } else { atoms.false_.clone() });
+    let pids = |out: &mut Heap, set: &mut dyn Iterator<Item = Pid>| out.list(set.map(Term::Pid).collect::<Vec<_>>());
+    let bool = |b: bool| Term::Atom(if b { atoms.true_ } else { atoms.false_ });
     let mut atom = |name: &str| Term::Atom(table.intern(name).expect("short atom"));
     Some(match item {
-        "links" => pids(&mut p.links.iter().copied()),
-        "monitored_by" => pids(&mut p.monitored_by.values().map(|m| m.watcher)),
-        "monitors" => Term::list(
-            p.monitors
-                .values()
-                .map(|pid| Term::tuple(alloc::vec![Term::Atom(atoms.process.clone()), Term::Pid(*pid)]))
-                .collect::<Vec<_>>(),
-        ),
+        "links" => pids(out, &mut p.links.iter().copied()),
+        "monitored_by" => pids(out, &mut p.monitored_by.values().map(|m| m.watcher)),
+        "monitors" => {
+            let items: Vec<Term> = p.monitors.values().map(|pid| out.tuple(&[Term::Atom(atoms.process), Term::Pid(*pid)])).collect();
+            out.list(items)
+        }
         "trap_exit" => bool(p.trap_exit),
         "registered_name" => match &p.registered_name {
-            Some(n) => Term::Atom(n.clone()),
+            Some(n) => Term::Atom(*n),
             None => Term::Nil,
         },
         "message_queue_len" => Term::Int(p.mailbox.len() as i64),
-        "messages" => Term::list(p.mailbox.iter().cloned().collect::<Vec<_>>()),
-        "dictionary" => Term::list(
-            p.dictionary.iter().map(|(k, v)| Term::tuple(alloc::vec![k.0.clone(), v.clone()])).collect::<Vec<_>>(),
-        ),
+        "messages" => {
+            let msgs: Vec<Term> = p.mailbox.iter().map(|m| copy(&p.heap, *m, out)).collect();
+            out.list(msgs)
+        }
+        "dictionary" => {
+            let items: Vec<Term> = p
+                .dictionary
+                .entries()
+                .iter()
+                .map(|(k, v)| {
+                    let (k, v) = (copy(&p.heap, *k, out), copy(&p.heap, *v, out));
+                    out.tuple(&[k, v])
+                })
+                .collect();
+            out.list(items)
+        }
         "group_leader" => Term::Pid(p.group_leader.unwrap_or(p.pid)),
         "reductions" => Term::Int(p.reductions as i64),
         // The current function, then the functions that will be returned to.
-        "current_stacktrace" => crate::interp::current_stacktrace(atoms, p, depth),
+        "current_stacktrace" => {
+            let points = crate::interp::stacktrace_points(p, depth);
+            crate::interp::current_stacktrace(atoms, out, &points)
+        }
         "stack_size" => Term::Int((p.stack.len() + p.frames.len()) as i64),
-        // Measured now (see `memory`): the words the process holds, each shared term once.
-        "heap_size" | "total_heap_size" => Term::Int(crate::memory::process(p, u64::MAX).words as i64),
-        "memory" => Term::Int((crate::memory::process(p, u64::MAX).words * 8) as i64),
+        // Read off the heap: what the process holds, garbage not yet collected included.
+        "heap_size" | "total_heap_size" => Term::Int(crate::memory::process(p).words as i64),
+        "memory" => Term::Int((crate::memory::process(p).total_words() * 8) as i64),
         "min_heap_size" => Term::Int(233),
-        "max_heap_size" => super::proc::max_heap_term(table, atoms, p.max_heap),
+        "max_heap_size" => super::proc::max_heap_term(table, atoms, out, p.max_heap),
         "priority" => atom(p.priority.name()),
         "error_handler" => match &p.error_handler {
-            Some(m) => Term::Atom(m.clone()),
+            Some(m) => Term::Atom(*m),
             None => atom("error_handler"),
         },
         "current_function" => match p.pc.module.function_at(p.pc.pc) {
-            Some(f) => Term::tuple(alloc::vec![
-                Term::Atom(p.pc.module.name.clone()),
-                Term::Atom(f.name.clone()),
-                Term::Int(f.arity as i64),
-            ]),
-            None => Term::Atom(atoms.undefined.clone()),
+            Some(f) => out.tuple(&[Term::Atom(p.pc.module.name), Term::Atom(f.name), Term::Int(f.arity as i64)]),
+            None => Term::Atom(atoms.undefined),
         },
         "status" => atom(if running {
             "running"
@@ -100,60 +119,70 @@ fn info_item(table: &mut AtomTable, atoms: &Atoms, p: &Process, running: bool, d
 }
 
 /// `process_info(Pid, Item)` and `process_info(Pid, [Item])`. `undefined` for a dead process.
-/// Memory items (`memory`, `heap_size`, ...) are measured when asked for: see `memory.rs`.
 pub fn process_info(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Pid(pid) = a[0] else { return Err(c.badarg()) };
     if pid.port {
         return Err(c.badarg());
     }
     let single = matches!(a[1], Term::Atom(_) | Term::Tuple(_));
-    let items: Vec<Term> = if single { alloc::vec![a[1].clone()] } else { a[1].to_vec().ok_or_else(|| c.badarg())? };
+    let items: Vec<Term> = if single { alloc::vec![a[1]] } else { c.heap().to_vec(a[1]).ok_or_else(|| c.badarg())? };
     let running = pid == c.p.pid;
     let depth = c.sys.backtrace_depth;
-    let sys = &mut *c.sys;
-    let (table, atoms) = (&mut sys.atom_table, &sys.atoms);
-    let p: &Process = if running {
-        c.p
-    } else {
-        match sys.procs.get_mut(pid) {
-            Some(p) => p,
-            None => return Ok(Term::Atom(atoms.undefined.clone())),
+    let registered_name = Term::Atom(c.sys.atom("registered_name"));
+    // Built on a heap of its own, then copied to the caller's (which may be the process read).
+    let mut out = Heap::new(&c.sys.literals);
+    let result = {
+        let sys = &mut *c.sys;
+        let (table, atoms) = (&mut sys.atom_table, &sys.atoms);
+        let p: &Process = if running {
+            c.p
+        } else {
+            match sys.procs.get_mut(pid) {
+                Some(p) => p,
+                None => return Ok(Term::Atom(atoms.undefined)),
+            }
+        };
+        let mut pairs = Vec::new();
+        let mut result = None;
+        for &item in &items {
+            let value = info_item(table, atoms, p, running, depth, &c.p.heap, item, &mut out)
+                .ok_or_else(|| Exception::error(Term::Atom(atoms.badarg)))?;
+            let item_here = copy(&c.p.heap, item, &mut out);
+            // Asked for alone, an unnamed process's `registered_name` is just `[]`.
+            if single && c.p.heap.eq_exact(item, registered_name) && matches!(value, Term::Nil) {
+                result = Some(Term::Nil);
+                break;
+            }
+            pairs.push(out.tuple(&[item_here, value]));
+        }
+        match result {
+            Some(r) => r,
+            None if single => pairs.pop().expect("one item"),
+            None => out.list(pairs),
         }
     };
-    let mut out = Vec::new();
-    for item in &items {
-        let value = info_item(table, atoms, p, running, depth, item)
-            .ok_or_else(|| Exception::error(Term::Atom(atoms.badarg.clone())))?;
-        // Asked for alone, an unnamed process's `registered_name` is just `[]`.
-        if single && item.is_atom(&table.intern("registered_name").expect("short atom")) && matches!(value, Term::Nil) {
-            return Ok(Term::Nil);
-        }
-        out.push(Term::tuple(alloc::vec![item.clone(), value]));
-    }
-    if single {
-        return Ok(out.pop().expect("one item"));
-    }
-    Ok(Term::list(out))
+    Ok(copy(&out, result, &mut c.p.heap))
 }
 
 pub fn process_info1(c: &mut Ctx, a: &[Term]) -> R {
     let items = ["registered_name", "status", "message_queue_len", "links", "dictionary", "trap_exit", "group_leader"];
-    let list = Term::list(items.iter().map(|i| c.atom(i)).collect::<Vec<_>>());
-    process_info(c, &[a[0].clone(), list])
+    let items: Vec<Term> = items.iter().map(|i| c.atom(i)).collect();
+    let list = c.list(items);
+    process_info(c, &[a[0], list])
 }
 
 // ---- code ----
 
 pub fn loaded(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(Term::list(c.sys.loaded_modules().into_iter().map(Term::Atom).collect::<Vec<_>>()))
+    Ok({ let v = c.sys.loaded_modules().into_iter().map(Term::Atom).collect::<Vec<_>>(); c.list(v) })
 }
 
 /// `code:ensure_loaded(M)`: load through the platform if needed.
 pub fn ensure_loaded(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Atom(m) = &a[0] else { return Err(c.badarg()) };
     Ok(match c.sys.module(m) {
-        Some(_) => Term::tuple(alloc::vec![c.atom("module"), a[0].clone()]),
-        None => Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.error.clone()), c.atom("nofile")]),
+        Some(_) => { let e = [c.atom("module"), a[0].clone()]; c.tuple(&e) },
+        None => { let e = [Term::Atom(c.sys.atoms.error.clone()), c.atom("nofile")]; c.tuple(&e) },
     })
 }
 
@@ -162,7 +191,7 @@ pub fn ensure_loaded(c: &mut Ctx, a: &[Term]) -> R {
 pub fn is_loaded(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Atom(m) = &a[0] else { return Err(c.badarg()) };
     Ok(if c.sys.is_loaded(m) {
-        Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.file.clone()), c.atom("loaded")])
+        { let e = [Term::Atom(c.sys.atoms.file.clone()), c.atom("loaded")]; c.tuple(&e) }
     } else {
         c.bool(false)
     })
@@ -171,31 +200,36 @@ pub fn is_loaded(c: &mut Ctx, a: &[Term]) -> R {
 /// `code:ensure_modules_loaded(Modules)`: `ok`, or `{error, [{Module, nofile}]}`.
 pub fn ensure_modules_loaded(c: &mut Ctx, a: &[Term]) -> R {
     let mut missing = Vec::new();
-    for m in a[0].to_vec().ok_or_else(|| c.badarg())? {
+    for m in c.heap().to_vec(a[0]).ok_or_else(|| c.badarg())? {
         let Term::Atom(name) = &m else { return Err(c.badarg()) };
         if c.sys.module(name).is_none() {
-            missing.push(Term::tuple(alloc::vec![m.clone(), c.atom("nofile")]));
+            missing.push({ let e = [m.clone(), c.atom("nofile")]; c.tuple(&e) });
         }
     }
     Ok(if missing.is_empty() {
         c.ok()
     } else {
-        Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.error.clone()), Term::list(missing)])
+        { let e = [Term::Atom(c.sys.atoms.error.clone()), { let v = missing; c.list(v) }]; c.tuple(&e) }
     })
 }
 
 /// `code:load_binary(Module, File, Binary)`: load a module from bytes (e.g. fresh from the
 /// compiler). The same loader checks apply as for modules from the platform.
 pub fn load_binary(c: &mut Ctx, a: &[Term]) -> R {
-    let Term::Atom(m) = &a[0] else { return Err(c.badarg()) };
-    let bytes = a[2].iodata_bytes().ok_or_else(|| c.badarg())?;
+    let Term::Atom(m) = a[0] else { return Err(c.badarg()) };
+    let bytes = c.heap().iodata_bytes(a[2]).ok_or_else(|| c.badarg())?;
+    let error = Term::Atom(c.sys.atoms.error);
     match c.sys.load_bytes(&bytes) {
-        Ok(name) if &name == m => {
-            c.sys.module_files.insert(String::from(m.as_str()), a[1].clone());
-            Ok(Term::tuple(alloc::vec![c.atom("module"), a[0].clone()]))
+        Ok(name) if name == m => {
+            let file = c.own(a[1]);
+            c.sys.module_files.insert(String::from(m.as_str()), file);
+            let module = c.atom("module");
+            Ok(c.tuple(&[module, a[0]]))
         }
-        Ok(_) => Ok(Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.error.clone()), c.atom("badfile")])),
-        Err(_) => Ok(Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.error.clone()), c.atom("badfile")])),
+        Ok(_) | Err(_) => {
+            let badfile = c.atom("badfile");
+            Ok(c.tuple(&[error, badfile]))
+        }
     }
 }
 
@@ -237,16 +271,16 @@ pub fn get_object_code(c: &mut Ctx, a: &[Term]) -> R {
         None => None,
     };
     Ok(match found {
-        Some((file, bytes)) => Term::tuple(alloc::vec![a[0].clone(), Term::binary(&bytes), string(&file)]),
+        Some((file, bytes)) => { let e = [a[0].clone(), { let v = &bytes; c.binary(v) }, c.string(&file)]; c.tuple(&e) },
         None => Term::Atom(c.sys.atoms.error.clone()),
     })
 }
 
 pub fn all_loaded(c: &mut Ctx, _a: &[Term]) -> R {
     let file = c.atom("loaded");
-    Ok(Term::list(
-        c.sys.loaded_modules().into_iter().map(|m| Term::tuple(alloc::vec![Term::Atom(m), file.clone()])).collect::<Vec<_>>(),
-    ))
+    let mods = c.sys.loaded_modules();
+    let v: Vec<Term> = mods.into_iter().map(|m| c.tuple(&[Term::Atom(m), file])).collect();
+    Ok(c.list(v))
 }
 
 /// `erlang:get_module_info(M)` and `get_module_info(M, Key)`, behind every `M:module_info/0,1`.
@@ -257,27 +291,27 @@ pub fn get_module_info(c: &mut Ctx, a: &[Term]) -> R {
         if bytes.is_empty() {
             return Term::Nil;
         }
-        crate::etf::decode(bytes, &mut c.sys.atom_table).unwrap_or(Term::Nil)
+        crate::etf::decode(bytes, &mut c.sys.atom_table, &mut c.p.heap).unwrap_or(Term::Nil)
     };
     let item = |c: &mut Ctx, key: &str| -> Option<Term> {
         Some(match key {
             "module" => Term::Atom(m.name.clone()),
-            "exports" => Term::list(
+            "exports" => { let v = 
                 m.exports
                     .iter()
-                    .map(|e| Term::tuple(alloc::vec![Term::Atom(e.function.clone()), Term::Int(e.arity as i64)]))
-                    .collect::<Vec<_>>(),
-            ),
-            "functions" => Term::list(
+                    .map(|e| { let e = [Term::Atom(e.function.clone()), Term::Int(e.arity as i64)]; c.tuple(&e) })
+                    .collect::<Vec<_>>();
+             c.list(v) },
+            "functions" => { let v = 
                 m.functions
                     .iter()
-                    .map(|f| Term::tuple(alloc::vec![Term::Atom(f.name.clone()), Term::Int(f.arity as i64)]))
-                    .collect::<Vec<_>>(),
-            ),
+                    .map(|f| { let e = [Term::Atom(f.name.clone()), Term::Int(f.arity as i64)]; c.tuple(&e) })
+                    .collect::<Vec<_>>();
+             c.list(v) },
             "attributes" => decode(c, &m.attributes),
             "compile" => decode(c, &m.compile_info),
             "nifs" => Term::Nil,
-            "md5" => Term::binary(&m.md5),
+            "md5" => { let v = &m.md5; c.binary(v) },
             _ => return None,
         })
     };
@@ -289,9 +323,9 @@ pub fn get_module_info(c: &mut Ctx, a: &[Term]) -> R {
             let mut out = Vec::new();
             for k in keys {
                 let v = item(c, k).expect("known key");
-                out.push(Term::tuple(alloc::vec![c.atom(k), v]));
+                out.push({ let e = [c.atom(k), v]; c.tuple(&e) });
             }
-            Ok(Term::list(out))
+            Ok({ let v = out; c.list(v) })
         }
     }
 }
@@ -303,7 +337,7 @@ pub fn pid_to_list(c: &mut Ctx, a: &[Term]) -> R {
     if p.port {
         return Err(c.badarg());
     }
-    Ok(string(&alloc::format!("<0.{}.{}>", p.index, p.serial)))
+    Ok(c.string(&alloc::format!("<0.{}.{}>", p.index, p.serial)))
 }
 
 /// `list_to_pid("<0.I.S>")`. Pids are not capabilities inside one VM (see DESIGN.md), so making
@@ -322,33 +356,34 @@ pub fn list_to_pid(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn ref_to_list(c: &mut Ctx, a: &[Term]) -> R {
     // A resource is a reference to Erlang code, and prints as one.
-    let id = match &a[0] {
+    let id = match a[0] {
         Term::Ref(r) => r.0,
-        Term::Resource(r) => r.id,
+        Term::Resource(_) => c.heap().as_resource(a[0]).map_or(0, |r| r.id),
         _ => return Err(c.badarg()),
     };
-    Ok(string(&alloc::format!("#Ref<0.0.0.{id}>")))
+    Ok(c.string(&alloc::format!("#Ref<0.0.0.{id}>")))
 }
 
 pub fn fun_to_list(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Fun(_) = &a[0] else { return Err(c.badarg()) };
-    Ok(string(&alloc::format!("{}", a[0])))
+    let text = c.show(a[0]);
+    Ok(c.string(&text))
 }
 
 /// `display_string(String)` / `display_string(Device, String)`: raw text to the console.
 pub fn display_string(c: &mut Ctx, a: &[Term]) -> R {
     let s = a.last().expect("one or two arguments");
-    let text = match s {
-        Term::Bits(b) if b.is_binary() => b.to_bytes().into_owned(),
+    let text = match c.heap().as_bits(*s) {
+        Some(b) if b.is_binary() => b.to_bytes().into_owned(),
         _ => text_of(c, s)?.into_bytes(),
     };
     c.sys.platform.console_write(&text);
-    Ok(Term::Atom(c.sys.atoms.true_.clone()))
+    Ok(Term::Atom(c.sys.atoms.true_))
 }
 
 pub fn system_version(c: &mut Ctx, _a: &[Term]) -> R {
     let _ = c;
-    Ok(string(&alloc::format!(
+    Ok(c.string(&alloc::format!(
         "Erlang/OTP {} [erts-{}] [beamlet] [64-bit]\n",
         super::proc::OTP_RELEASE,
         super::proc::ERTS_VERSION
@@ -359,14 +394,16 @@ pub fn system_version(c: &mut Ctx, _a: &[Term]) -> R {
 
 pub fn getenv(c: &mut Ctx, a: &[Term]) -> R {
     let name = text_of(c, &a[0])?;
-    Ok(match c.sys.env.get(&name) {
-        Some(v) => string(v),
-        None => a.get(1).cloned().unwrap_or_else(|| Term::Atom(c.sys.atoms.false_.clone())),
+    Ok(match c.sys.env.get(&name).cloned() {
+        Some(v) => c.string(&v),
+        None => a.get(1).copied().unwrap_or(Term::Atom(c.sys.atoms.false_)),
     })
 }
 
 pub fn getenv_all(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(Term::list(c.sys.env.iter().map(|(k, v)| string(&alloc::format!("{k}={v}"))).collect::<Vec<_>>()))
+    let vars: Vec<String> = c.sys.env.iter().map(|(k, v)| alloc::format!("{k}={v}")).collect();
+    let v: Vec<Term> = vars.iter().map(|s| c.string(s)).collect();
+    Ok(c.list(v))
 }
 
 pub fn putenv(c: &mut Ctx, a: &[Term]) -> R {
@@ -391,20 +428,21 @@ pub fn app_spec(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Atom(app) = &a[0] else { return Err(c.badarg()) };
     let name = String::from(app.as_str());
     Ok(match c.sys.platform.load_app(&name) {
-        Some(b) => Term::binary(&b),
-        None => Term::Atom(c.sys.atoms.error.clone()),
+        Some(b) => c.binary(&b),
+        None => Term::Atom(c.sys.atoms.error),
     })
 }
 
 /// `inet:gethostname()`: a VM does not learn its host's name (that would be ambient
 /// information); it is `localhost` unless an embedder's native says otherwise.
 pub fn gethostname(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(Term::tuple(alloc::vec![c.ok(), string("localhost")]))
+    let name = c.string("localhost");
+    Ok(c.ok_tuple(name))
 }
 
 /// `net_adm:localhost()`: the host name without a resolver domain (there is no resolver).
-pub fn localhost(_c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(string("localhost"))
+pub fn localhost(c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(c.string("localhost"))
 }
 
 // ---- init (a preloaded module in BEAM; its queries answered here) ----
@@ -419,20 +457,26 @@ pub fn init_get_arguments(_c: &mut Ctx, _a: &[Term]) -> R {
 pub fn init_get_argument(c: &mut Ctx, a: &[Term]) -> R {
     let value = match &a[0] {
         Term::Atom(f) if f.as_str() == "home" => c.sys.env.get("HOME").cloned(),
-        Term::Atom(f) if f.as_str() == "root" && !c.sys.lib_roots.is_empty() => super::code::root_dir(c, &[])?
-            .to_vec()
-            .map(|chars| chars.iter().filter_map(|t| t.as_i64().and_then(|i| char::from_u32(i as u32))).collect()),
+        Term::Atom(f) if f.as_str() == "root" && !c.sys.lib_roots.is_empty() => {
+            let root = super::code::root_dir(c, &[])?;
+            c.heap().to_vec(root).map(|chars| chars.iter().filter_map(|t| t.as_i64().and_then(|i| char::from_u32(i as u32))).collect())
+        }
         _ => None,
     };
     Ok(match value {
-        Some(v) => Term::tuple(alloc::vec![c.ok(), Term::list(alloc::vec![Term::list(alloc::vec![string(&v)])])]),
-        None => Term::Atom(c.sys.atoms.error.clone()),
+        Some(v) => {
+            let s = c.string(&v);
+            let inner = c.list([s]);
+            let outer = c.list([inner]);
+            c.ok_tuple(outer)
+        }
+        None => Term::Atom(c.sys.atoms.error),
     })
 }
 
 pub fn init_get_status(c: &mut Ctx, _a: &[Term]) -> R {
     let started = c.atom("started");
-    Ok(Term::tuple(alloc::vec![started.clone(), started]))
+    Ok(c.tuple(&[started, started]))
 }
 
 // ---- time of day ----
@@ -462,20 +506,19 @@ fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
 }
 
 /// `{{Y, M, D}, {H, Mi, S}}` for seconds since the Unix epoch.
-fn datetime(secs: i64) -> Term {
+fn datetime(c: &mut Ctx, secs: i64) -> Term {
     let (y, m, d) = civil(secs.div_euclid(86_400));
     let t = secs.rem_euclid(86_400);
-    Term::tuple(alloc::vec![
-        Term::tuple(alloc::vec![Term::Int(y), Term::Int(m as i64), Term::Int(d as i64)]),
-        Term::tuple(alloc::vec![Term::Int(t / 3600), Term::Int(t / 60 % 60), Term::Int(t % 60)]),
-    ])
+    let date = c.tuple(&[Term::Int(y), Term::Int(m as i64), Term::Int(d as i64)]);
+    let time = c.tuple(&[Term::Int(t / 3600), Term::Int(t / 60 % 60), Term::Int(t % 60)]);
+    c.tuple(&[date, time])
 }
 
 /// `universaltime()` as `{{Y, M, D}, {H, Mi, S}}`. `localtime()` is the same: the VM has no time
 /// zone (the platform could supply one later).
 pub fn universaltime(c: &mut Ctx, _a: &[Term]) -> R {
     let us = c.sys.platform.system_time_us().ok_or_else(|| c.badarg())?;
-    Ok(datetime((us / 1_000_000) as i64))
+    Ok(datetime(c, (us / 1_000_000) as i64))
 }
 
 /// Years BEAM's calendar conversions accept.
@@ -483,20 +526,21 @@ const YEARS: core::ops::RangeInclusive<i64> = 0..=9999;
 
 pub fn posixtime_to_universaltime(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Int(secs) = a[0] else { return Err(c.badarg()) };
-    let t = datetime(secs);
-    match t.as_tuple().and_then(|dt| dt[0].as_tuple().map(|d| d[0].clone())) {
-        Some(Term::Int(y)) if YEARS.contains(&y) => Ok(t),
-        _ => Err(c.badarg()),
+    let (y, _, _) = civil(secs.div_euclid(86_400));
+    if !YEARS.contains(&y) {
+        return Err(c.badarg());
     }
+    Ok(datetime(c, secs))
 }
 
 /// `universaltime_to_posixtime({{Y, M, D}, {H, Mi, S}})`, checking that the date exists.
 pub fn universaltime_to_posixtime(c: &mut Ctx, a: &[Term]) -> R {
-    let field = |t: &Term, i: usize| t.as_tuple().filter(|x| x.len() == 3).and_then(|x| match x[i] {
+    let h = c.heap();
+    let field = |t: &Term, i: usize| h.as_tuple(*t).filter(|x| x.len() == 3).and_then(|x| match x[i] {
         Term::Int(n) => Some(n),
         _ => None,
     });
-    let parts = a[0].as_tuple().filter(|x| x.len() == 2).and_then(|dt| {
+    let parts = h.as_tuple(a[0]).filter(|x| x.len() == 2).and_then(|dt| {
         Some([field(&dt[0], 0)?, field(&dt[0], 1)?, field(&dt[0], 2)?, field(&dt[1], 0)?, field(&dt[1], 1)?, field(&dt[1], 2)?])
     });
     let Some([y, m, d, h, mi, s]) = parts else { return Err(c.badarg()) };
@@ -518,21 +562,21 @@ pub fn universaltime_to_posixtime(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn date(c: &mut Ctx, a: &[Term]) -> R {
     let now = universaltime(c, a)?;
-    Ok(now.as_tuple().expect("{Date, Time}")[0].clone())
+    Ok(c.heap().as_tuple(now).expect("{Date, Time}")[0])
 }
 
 pub fn time(c: &mut Ctx, a: &[Term]) -> R {
     let now = universaltime(c, a)?;
-    Ok(now.as_tuple().expect("{Date, Time}")[1].clone())
+    Ok(c.heap().as_tuple(now).expect("{Date, Time}")[1])
 }
 
 /// Local time is UTC here, so conversions between the two are the identity (after checking
 /// the argument has the right shape).
 pub fn same_datetime(c: &mut Ctx, a: &[Term]) -> R {
-    match a[0].as_tuple() {
-        Some([d, t]) if d.as_tuple().is_some_and(|x| x.len() == 3) && t.as_tuple().is_some_and(|x| x.len() == 3) => {
-            Ok(if a.len() == 1 { a[0].clone() } else { Term::list(alloc::vec![a[0].clone()]) })
-        }
+    let h = c.heap();
+    let three = |t: Term| h.as_tuple(t).is_some_and(|x| x.len() == 3);
+    match h.as_tuple(a[0]) {
+        Some(&[d, t]) if three(d) && three(t) => Ok(if a.len() == 1 { a[0] } else { c.list([a[0]]) }),
         _ => Err(c.badarg()),
     }
 }
@@ -558,48 +602,47 @@ pub fn crc32(c: &mut Ctx, a: &[Term]) -> R {
         [old, data] => (old.as_i64().and_then(|v| u32::try_from(v).ok()).ok_or_else(|| c.badarg())?, data),
         _ => return Err(c.badarg()),
     };
-    let bin = super::erlang::iolist_to_binary(c, core::slice::from_ref(data))?;
-    let Term::Bits(b) = bin else { return Err(c.badarg()) };
-    Ok(Term::Int(crc32_update(old, &b.to_bytes()) as i64))
+    let bytes = c.heap().iodata_bytes(*data).ok_or_else(|| c.badarg())?;
+    Ok(Term::Int(crc32_update(old, &bytes) as i64))
 }
 
 /// `erlang:md5(IoData)`.
 pub fn md5(c: &mut Ctx, a: &[Term]) -> R {
     use md5::Digest;
-    let data = a[0].iodata_bytes().ok_or_else(|| c.badarg())?;
-    Ok(Term::binary(&md5::Md5::digest(&data)))
+    let data = c.heap().iodata_bytes(a[0]).ok_or_else(|| c.badarg())?;
+    Ok(c.binary(&md5::Md5::digest(&data)))
 }
 
 /// An MD5 context as `md5_init/0` hands it out: the hash's serialized state, a binary.
 fn md5_context(c: &Ctx, t: &Term) -> Result<md5::Md5, Exception> {
     use md5::digest::common::hazmat::{SerializableState, SerializedState};
-    let Term::Bits(b) = t else { return Err(c.badarg()) };
+    let b = c.heap().as_bits(*t).ok_or_else(|| c.badarg())?;
     let bytes = b.to_bytes();
     let state = SerializedState::<md5::Md5>::try_from(&bytes[..]).map_err(|_| c.badarg())?;
     md5::Md5::deserialize(&state).map_err(|_| c.badarg())
 }
 
-fn md5_state(h: &md5::Md5) -> Term {
+fn md5_state(c: &mut Ctx, h: &md5::Md5) -> Term {
     use md5::digest::common::hazmat::SerializableState;
-    Term::binary(&h.serialize())
+    c.binary(&h.serialize())
 }
 
-pub fn md5_init(_c: &mut Ctx, _a: &[Term]) -> R {
+pub fn md5_init(c: &mut Ctx, _a: &[Term]) -> R {
     use md5::Digest;
-    Ok(md5_state(&md5::Md5::new()))
+    Ok(md5_state(c, &md5::Md5::new()))
 }
 
 pub fn md5_update(c: &mut Ctx, a: &[Term]) -> R {
     use md5::Digest;
     let mut h = md5_context(c, &a[0])?;
-    h.update(a[1].iodata_bytes().ok_or_else(|| c.badarg())?);
-    Ok(md5_state(&h))
+    h.update(c.heap().iodata_bytes(a[1]).ok_or_else(|| c.badarg())?);
+    Ok(md5_state(c, &h))
 }
 
 pub fn md5_final(c: &mut Ctx, a: &[Term]) -> R {
     use md5::Digest;
     let h = md5_context(c, &a[0])?;
-    Ok(Term::binary(&h.finalize()))
+    Ok(c.binary(&h.finalize()))
 }
 
 /// Adler-32 (RFC 1950), as zlib.
@@ -624,9 +667,8 @@ pub fn adler32(c: &mut Ctx, a: &[Term]) -> R {
         [old, data] => (old.as_i64().and_then(|v| u32::try_from(v).ok()).ok_or_else(|| c.badarg())?, data),
         _ => return Err(c.badarg()),
     };
-    let bin = super::erlang::iolist_to_binary(c, core::slice::from_ref(data))?;
-    let Term::Bits(b) = bin else { return Err(c.badarg()) };
-    Ok(Term::Int(adler32_update(old, &b.to_bytes()) as i64))
+    let bytes = c.heap().iodata_bytes(*data).ok_or_else(|| c.badarg())?;
+    Ok(Term::Int(adler32_update(old, &bytes) as i64))
 }
 
 /// Arguments of the `*_combine` functions: two checksums and a length.
@@ -704,21 +746,29 @@ pub fn crc32_combine(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 /// `os:getpid()`: the VM has no host process number of its own to report.
-pub fn os_getpid(_c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(string("1"))
+pub fn os_getpid(c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(c.string("1"))
 }
 
 /// `os:env()`: the VM's environment as `{Name, Value}` pairs.
 pub fn os_env(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(Term::list(c.sys.env.iter().map(|(k, v)| Term::tuple(alloc::vec![string(k), string(v)])).collect::<Vec<_>>()))
+    let vars: Vec<(String, String)> = c.sys.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let v: Vec<Term> = vars
+        .iter()
+        .map(|(k, v)| {
+            let (k, v) = (c.string(k), c.string(v));
+            c.tuple(&[k, v])
+        })
+        .collect();
+    Ok(c.list(v))
 }
 
 /// `binary:referenced_byte_size(Bin)`: the size of the buffer `Bin` is a window into. As in
 /// BEAM, a binary of 64 bytes or less counts as its own copy (BEAM copies such small ones).
 pub fn referenced_byte_size(c: &mut Ctx, a: &[Term]) -> R {
-    match &a[0] {
-        Term::Bits(b) if b.is_binary() && b.len / 8 <= 64 => Ok(Term::Int((b.len / 8) as i64)),
-        Term::Bits(b) if b.is_binary() => Ok(Term::Int(b.data.len() as i64)),
+    match c.heap().as_bits(a[0]) {
+        Some(b) if b.is_binary() && b.len / 8 <= 64 => Ok(Term::Int((b.len / 8) as i64)),
+        Some(b) if b.is_binary() => Ok(Term::Int(b.data.len() as i64)),
         _ => Err(c.badarg()),
     }
 }
@@ -737,16 +787,17 @@ pub fn console_subscribe(c: &mut Ctx, _a: &[Term]) -> R {
 const MEMORY_TYPES: [&str; 9] =
     ["total", "processes", "processes_used", "system", "atom", "atom_used", "binary", "code", "ets"];
 
-/// Bytes in use per category of `erlang:memory/0`, from each process's last measurement (the
-/// caller's is taken now) and the ETS tables' running totals. `code` is not tracked (0), and
+/// Bytes in use per category of `erlang:memory/0`, read off each process's heap, and the ETS
+/// tables' running totals. `code` is not tracked (0), and
 /// atoms are estimated from their count.
 fn memory_values(c: &mut Ctx) -> [u64; 9] {
-    let current = crate::memory::process(c.p, u64::MAX);
+    let current = crate::memory::process(c.p);
     let (mut procs, mut binary) = (current.words, current.binary_bytes);
     for pid in c.sys.procs.pids() {
         if let Some(p) = c.sys.procs.get_mut(pid) {
-            procs += p.usage.words.max(crate::memory::PROCESS_WORDS);
-            binary += p.usage.binary_bytes;
+            let usage = crate::memory::process(p);
+            procs += usage.words;
+            binary += usage.binary_bytes;
         }
     }
     let processes = procs * 8;
@@ -760,8 +811,8 @@ fn memory_values(c: &mut Ctx) -> [u64; 9] {
 pub fn memory0(c: &mut Ctx, _a: &[Term]) -> R {
     let values = memory_values(c);
     let items: Vec<Term> =
-        MEMORY_TYPES.iter().zip(values).map(|(k, v)| Term::tuple(alloc::vec![c.atom(k), Term::Int(v as i64)])).collect();
-    Ok(Term::list(items))
+        MEMORY_TYPES.iter().zip(values).map(|(k, v)| { let e = [c.atom(k), Term::Int(v as i64)]; c.tuple(&e) }).collect();
+    Ok({ let v = items; c.list(v) })
 }
 
 /// `erlang:memory(Type)` and `erlang:memory([Type])`.
@@ -774,12 +825,12 @@ pub fn memory1(c: &mut Ctx, a: &[Term]) -> R {
     if let Term::Atom(_) = &a[0] {
         return value(c, &a[0]);
     }
-    let types = a[0].to_vec().ok_or_else(|| c.badarg())?;
+    let types = c.heap().to_vec(a[0]).ok_or_else(|| c.badarg())?;
     let mut out = Vec::new();
     for t in &types {
-        out.push(Term::tuple(alloc::vec![t.clone(), value(c, t)?]));
+        out.push({ let e = [t.clone(), value(c, t)?]; c.tuple(&e) });
     }
-    Ok(Term::list(out))
+    Ok({ let v = out; c.list(v) })
 }
 
 #[cfg(test)]

@@ -8,16 +8,17 @@ type R = Result<Term, Exception>;
 
 /// `lists:reverse(List, Tail)`.
 pub fn reverse(c: &mut Ctx, a: &[Term]) -> R {
-    let mut acc = a[1].clone();
-    for item in a[0].list_iter() {
-        acc = Term::cons(item.map_err(|_| c.badarg())?, acc);
+    let items = c.list_arg(a[0])?;
+    let mut acc = a[1];
+    for item in items {
+        acc = c.cons(item, acc);
     }
     Ok(acc)
 }
 
 pub fn member(c: &mut Ctx, a: &[Term]) -> R {
-    for item in a[1].list_iter() {
-        if item.map_err(|_| c.badarg())?.eq_exact(&a[0]) {
+    for item in c.heap().list_iter(a[1]) {
+        if c.heap().eq_exact(item.map_err(|_| c.badarg())?, a[0]) {
             return Ok(c.bool(true));
         }
     }
@@ -30,11 +31,12 @@ fn keyfind_tuple(c: &Ctx, a: &[Term]) -> Result<Option<Term>, Exception> {
         Some(n) if n >= 1 => n - 1,
         _ => return Err(c.badarg()),
     };
-    for item in a[2].list_iter() {
+    let h = c.heap();
+    for item in h.list_iter(a[2]) {
         let item = item.map_err(|_| c.badarg())?;
-        if let Some(t) = item.as_tuple() {
+        if let Some(t) = h.as_tuple(item) {
             // keyfind compares with ==, so 1 matches 1.0.
-            if t.get(n).is_some_and(|e| e.eq_arith(&a[0])) {
+            if t.get(n).is_some_and(|e| h.eq_arith(*e, a[0])) {
                 return Ok(Some(item));
             }
         }
@@ -53,7 +55,10 @@ pub fn keymember(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn keysearch(c: &mut Ctx, a: &[Term]) -> R {
     Ok(match keyfind_tuple(c, a)? {
-        Some(t) => Term::tuple(alloc::vec![c.atom("value"), t]),
+        Some(t) => {
+            let value = c.atom("value");
+            c.tuple(&[value, t])
+        }
         None => c.bool(false),
     })
 }

@@ -32,6 +32,7 @@ use std::sync::mpsc::{Receiver, Sender};
 
 use beamlet_vm::platform::{ConsoleInput, Platform, PlatformError, ProgramEvent, Programs, Spawn, Spawned};
 use programs::Event;
+use beamlet_vm::term::OwnedTerm;
 use beamlet_vm::{Class, Term, Vm};
 
 impl Posix {
@@ -243,7 +244,10 @@ fn check(files: &[String]) -> ExitCode {
     for f in files {
         let result = std::fs::read(f)
             .map_err(|e| format!("{e}"))
-            .and_then(|b| beamlet_vm::loader::load(&b, &mut beamlet_vm::atom::AtomTable::new()).map_err(|e| format!("{e:?}")));
+            .and_then(|b| {
+                let mut lits = beamlet_vm::term::Literals::default();
+                beamlet_vm::loader::load(&b, &mut beamlet_vm::atom::AtomTable::new(), &mut lits).map_err(|e| format!("{e:?}"))
+            });
         match result {
             Ok(m) => println!("{f}: ok ({}, {} instructions)", m.name.as_str(), m.code.len()),
             Err(e) => {
@@ -357,15 +361,16 @@ fn main() -> ExitCode {
             vm.setenv(&name, &value);
         }
     }
-    let string = |s: &str| Term::list(s.chars().map(|c| Term::Int(c as i64)).collect::<Vec<_>>());
-    let call_args = match args {
-        Some(a) => vec![Term::list(a.iter().map(|s| string(s)).collect::<Vec<_>>())],
+    let pid = match vm.spawn(&module, &function, |h| match &args {
+        Some(a) => {
+            let strings: Vec<Term> = a.iter().map(|s| h.string(s)).collect();
+            vec![h.list(strings)]
+        }
         None => Vec::new(),
-    };
-    let pid = match vm.spawn(&module, &function, call_args) {
+    }) {
         Ok(pid) => pid,
         Err(e) => {
-            println!("{}", exception(&mut vm, e.class, e.reason));
+            println!("{}", exception(&mut vm, e.class, &e.reason));
             return ExitCode::SUCCESS;
         }
     };
@@ -391,9 +396,12 @@ fn main() -> ExitCode {
         Ok(Ok(value)) => println!("{value}"),
         Ok(Err(e)) => {
             if std::env::var_os("BEAMLET_DEBUG").is_some() {
-                eprintln!("stacktrace: {}", e.trace.clone().unwrap_or(Term::Nil));
+                match &e.trace {
+                    Some(t) => eprintln!("stacktrace: {t}"),
+                    None => eprintln!("stacktrace: []"),
+                }
             }
-            println!("{}", exception(&mut vm, e.class, e.reason))
+            println!("{}", exception(&mut vm, e.class, &e.reason))
         }
         Err(beamlet_vm::vm::RunError::Halted(status)) => return ExitCode::from(status.clamp(0, 255) as u8),
         Err(e) => {
@@ -404,11 +412,16 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn exception(vm: &mut Vm, class: Class, reason: Term) -> Term {
+/// `{'EXCEPTION', Class, Reason}`, as the differential harness prints a failed call.
+fn exception(vm: &mut Vm, class: Class, reason: &OwnedTerm) -> OwnedTerm {
     let class = match class {
         Class::Error => "error",
         Class::Exit => "exit",
         Class::Throw => "throw",
     };
-    Term::tuple(vec![vm.atom("EXCEPTION"), vm.atom(class), reason])
+    let (tag, class) = (vm.atom("EXCEPTION"), vm.atom(class));
+    OwnedTerm::build(reason.heap().literals(), |h| {
+        let reason = reason.copy_into(h);
+        h.tuple(&[tag, class, reason])
+    })
 }

@@ -29,13 +29,10 @@
 
 extern crate alloc;
 
-use alloc::boxed::Box;
-use alloc::rc::Rc;
 use alloc::vec::Vec;
 use core::any::Any;
 
-use beamlet_vm::bif::{Ctx, NativeSpec};
-use beamlet_vm::term::{Map, MapKey, Resource};
+use beamlet_vm::bif::{Ctx, Held, NativeSpec};
 use beamlet_vm::{Exception, Term};
 
 mod asn1;
@@ -112,11 +109,11 @@ pub static NATIVES: &[NativeSpec] = &[
 /// turns into `error:{Id, {File, Line}, Msg}` with the offending argument marked. `arg` is
 /// 0-based, as in the C NIFs; `-1` means no particular argument.
 fn nif_error(c: &mut Ctx, id: &str, arg: i64, msg: &str) -> Exception {
-    let mut info = Map::new();
-    info.insert(MapKey(c.atom("c_file_name")), string("beamlet_crypto"));
-    info.insert(MapKey(c.atom("c_file_line_num")), Term::Int(0));
-    info.insert(MapKey(c.atom("c_function_arg_num")), Term::Int(arg));
-    Exception::error(Term::tuple(alloc::vec![c.atom(id), Term::map(info), string(msg)]))
+    let [file, line, argn, id] = ["c_file_name", "c_file_line_num", "c_function_arg_num", id].map(|n| c.atom(n));
+    let name = c.string("beamlet_crypto");
+    let info = c.map_from([(file, name), (line, Term::Int(0)), (argn, Term::Int(arg))]);
+    let msg = c.string(msg);
+    Exception::error(c.tuple(&[id, info, msg]))
 }
 
 fn badarg(c: &mut Ctx, arg: i64, msg: &str) -> Exception {
@@ -127,15 +124,11 @@ fn notsup(c: &mut Ctx, arg: i64, msg: &str) -> Exception {
     nif_error(c, "notsup", arg, msg)
 }
 
-fn string(s: &str) -> Term {
-    Term::list(s.chars().map(|ch| Term::Int(ch as i64)).collect::<Vec<_>>())
-}
-
 // ---- arguments ----
 
 /// Argument `i` as bytes: a binary or iodata, as `enif_inspect_iolist_as_binary` accepts.
 fn bytes(c: &mut Ctx, a: &[Term], i: usize, what: &str) -> Result<Vec<u8>, Exception> {
-    match a[i].iodata_bytes() {
+    match c.heap().iodata_bytes(a[i]) {
         Some(b) => Ok(b),
         None => Err(badarg(c, i as i64, &alloc::format!("Bad {what}"))),
     }
@@ -156,15 +149,12 @@ fn is_true(c: &Ctx, t: &Term) -> bool {
 
 /// Wrap a native value as a resource term.
 fn resource<T: Any>(c: &mut Ctx, value: T) -> Term {
-    Term::Resource(Rc::new(Resource { id: c.sys.make_ref().0, value: Box::new(value) }))
+    c.new_resource(value)
 }
 
-/// The `T` inside a resource argument.
-fn resource_ref<T: Any>(t: &Term) -> Option<&T> {
-    match t {
-        Term::Resource(r) => r.get::<T>(),
-        _ => None,
-    }
+/// The `T` inside a resource argument, held so the caller's heap stays free.
+fn resource_ref<T: Any>(c: &Ctx, t: &Term) -> Option<Held<T>> {
+    c.resource::<T>(*t)
 }
 
 // ---- randomness ----
@@ -222,6 +212,6 @@ fn uint(c: &mut Ctx, a: &[Term], i: usize, what: &str) -> Result<num_bigint::Big
     Ok(num_bigint::BigUint::from_bytes_be(&b))
 }
 
-fn bin(b: &[u8]) -> Term {
-    Term::binary(b)
+fn bin(c: &mut Ctx, b: &[u8]) -> Term {
+    c.binary(b)
 }

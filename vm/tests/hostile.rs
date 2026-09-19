@@ -89,7 +89,7 @@ fn mutate(rng: &mut Rng, input: &[u8]) -> Vec<u8> {
 #[test]
 fn fixtures_load() {
     for (name, bytes) in FIXTURES {
-        let m = loader::load(bytes, &mut AtomTable::new()).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        let m = loader::load(bytes, &mut AtomTable::new(), &mut Default::default()).unwrap_or_else(|e| panic!("{name}: {e:?}"));
         assert_eq!(m.name.as_str(), *name);
     }
 }
@@ -98,7 +98,7 @@ fn fixtures_load() {
 fn every_truncation_is_rejected() {
     for (name, bytes) in FIXTURES {
         for len in 0..bytes.len() {
-            let r = loader::load(&bytes[..len], &mut AtomTable::new());
+            let r = loader::load(&bytes[..len], &mut AtomTable::new(), &mut Default::default());
             assert!(r.is_err(), "{name} truncated to {len} bytes loaded");
         }
     }
@@ -107,12 +107,12 @@ fn every_truncation_is_rejected() {
 #[test]
 fn wrong_formats_are_named() {
     let mut atoms = AtomTable::new();
-    assert_eq!(loader::load(b"", &mut atoms).err(), Some(LoadError::NotBeam));
-    assert_eq!(loader::load(b"FOR1\0\0\0\x04BEAM", &mut atoms).err(), Some(LoadError::MissingChunk("AtU8")));
+    assert_eq!(loader::load(b"", &mut atoms, &mut Default::default()).err(), Some(LoadError::NotBeam));
+    assert_eq!(loader::load(b"FOR1\0\0\0\x04BEAM", &mut atoms, &mut Default::default()).err(), Some(LoadError::MissingChunk("AtU8")));
     // A chunk length that runs past the end of the file.
     let mut bad = FIXTURES[0].1.to_vec();
     bad[16..20].copy_from_slice(&u32::MAX.to_be_bytes());
-    assert_eq!(loader::load(&bad, &mut atoms).err(), Some(LoadError::NotBeam));
+    assert_eq!(loader::load(&bad, &mut atoms, &mut Default::default()).err(), Some(LoadError::NotBeam));
 }
 
 /// Load and, where loading succeeds, run thousands of mutants. Nothing may panic.
@@ -132,7 +132,7 @@ fn mutants_never_panic() {
             eprintln!("round {round}");
             std::fs::write(path, &bytes).unwrap();
         }
-        let Ok(module) = loader::load(&bytes, &mut atoms) else { continue };
+        let Ok(module) = loader::load(&bytes, &mut atoms, &mut Default::default()) else { continue };
         loaded += 1;
         let module_name = module.name.as_str().to_string();
         let mut modules = BTreeMap::new();
@@ -140,7 +140,7 @@ fn mutants_never_panic() {
         // Small limits keep each run fast; the limits themselves are what is being tested.
         let limits = Limits { max_binary_bits: 1 << 20, max_stack_slots: 1 << 16, ..Limits::default() };
         let mut vm = Vm::with_limits(Box::new(TestPlatform { now: 0, modules }), limits);
-        if let Ok(pid) = vm.spawn(&module_name, "start", Vec::new()) {
+        if let Ok(pid) = vm.spawn(&module_name, "start", |_| Vec::new()) {
             // A mutant may loop forever; that is fine, as long as it does not crash the VM.
             let _ = vm.run_bounded(pid, 2_000);
         }
@@ -160,8 +160,8 @@ fn jump_loops_are_preempted() {
     let mut modules = BTreeMap::new();
     modules.insert("jumploop".to_string(), include_bytes!("fixtures/jumploop.beam").to_vec());
     let mut vm = Vm::new(Box::new(TestPlatform { now: 0, modules }));
-    let _spinner = vm.spawn("jumploop", "spin", Vec::new()).unwrap();
-    let done = vm.spawn("jumploop", "done", Vec::new()).unwrap();
+    let _spinner = vm.spawn("jumploop", "spin", |_| Vec::new()).unwrap();
+    let done = vm.spawn("jumploop", "done", |_| Vec::new()).unwrap();
     let r = vm.run_bounded(done, 100).expect("done/0 ran despite the spinning process");
     assert_eq!(r.unwrap().unwrap().to_string(), "42");
 }
@@ -174,7 +174,7 @@ fn empty_frames_count_against_the_stack() {
     modules.insert("exceptions".to_string(), include_bytes!("fixtures/regress-frames.beam").to_vec());
     let limits = Limits { max_binary_bits: 1 << 20, max_stack_slots: 1 << 20, ..Limits::default() };
     let mut vm = Vm::with_limits(Box::new(TestPlatform { now: 0, modules }), limits);
-    let pid = vm.spawn("exceptions", "start", Vec::new()).unwrap();
+    let pid = vm.spawn("exceptions", "start", |_| Vec::new()).unwrap();
     let r = vm.run_bounded(pid, 100_000).expect("finished");
     let e = r.unwrap().unwrap_err();
     assert_eq!(e.reason.to_string(), "{system_limit,stack}");

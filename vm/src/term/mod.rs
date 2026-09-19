@@ -18,6 +18,9 @@
 //! Nothing recurses on the Rust stack over a term's depth: copying, comparing, printing and
 //! collecting use work lists or Cheney's scan.
 
+// Resources are not yet `Send`: that comes with several schedulers (DESIGN.md, "Heaps").
+#![allow(clippy::arc_with_non_send_sync)]
+
 mod cmp;
 mod copy;
 mod gc;
@@ -145,6 +148,23 @@ pub enum Term {
     Header(Header),
     /// An entry of the off-heap table of the space holding the object.
     OffHeap(u32),
+}
+
+/// Without its heap, a term can only show itself as far as it is held directly.
+impl core::fmt::Debug for Term {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Term::Int(i) => write!(f, "{i}"),
+            Term::Float(x) => write!(f, "{x:?}"),
+            Term::Atom(a) => write!(f, "{a:?}"),
+            Term::Nil => f.write_str("[]"),
+            Term::Pid(p) => write!(f, "{p:?}"),
+            Term::Ref(r) => write!(f, "{r:?}"),
+            Term::Header(h) => write!(f, "{h:?}"),
+            Term::OffHeap(i) => write!(f, "OffHeap({i})"),
+            other => write!(f, "#Object<{:?}>", other.ptr()),
+        }
+    }
 }
 
 /// What an object's cells may refer to outside the heap.
@@ -278,6 +298,15 @@ pub struct Chunk {
 /// a snapshot, taken when they are made and refreshed when a term is copied into them.
 #[derive(Clone, Default)]
 pub struct Literals(Arc<Vec<Arc<Chunk>>>);
+
+/// `t`, a term of a heap that has become literal chunk `space`, as a term of that chunk.
+pub fn relocate(t: &mut Term, space: u32) {
+    if let Some(p) = t.ptr_mut() {
+        if p.space == 0 {
+            p.space = space;
+        }
+    }
+}
 
 impl Literals {
     fn chunk(&self, space: u32) -> &Chunk {
@@ -699,6 +728,39 @@ impl Heap {
     pub fn resource_shared(&mut self, r: Arc<Resource>) -> Term {
         let v = self.push_offheap(OffHeap::Resource(r));
         Term::Resource(self.push_object(Kind::Resource, &[v]))
+    }
+
+    /// The bytes of bitstring `t`, taken to append to in place: `Some((entry, bytes, len))` if
+    /// `t` is on this heap, its window starts at its bytes' start and ends at their end, and no
+    /// one else holds them (other terms of this heap may share the entry: their windows end
+    /// earlier, so appending past them changes nothing they see). Put the bytes back with
+    /// [`Heap::finish_append`] before anything else reads this heap. This is BEAM's writable
+    /// binary: `<<Acc/binary, X>>` in a loop does not copy `Acc` each time.
+    pub fn take_for_append(&mut self, t: Term) -> Option<(u32, Vec<u8>, usize)> {
+        let Term::Bits(p) = t else { return None };
+        if p.space != 0 {
+            return None;
+        }
+        let (Term::OffHeap(i), Term::Int(0), Term::Int(len)) = (self.terms[p.at() + 1], self.terms[p.at() + 2], self.terms[p.at() + 3]) else {
+            return None;
+        };
+        let OffHeap::Bytes(arc) = &mut self.offheap[i as usize] else { return None };
+        let bytes = Arc::get_mut(arc)?;
+        if (len as usize).div_ceil(8) != bytes.len() {
+            return None;
+        }
+        let bytes = core::mem::take(bytes);
+        self.offheap_bytes -= bytes.len();
+        Some((i, bytes, len as usize))
+    }
+
+    /// A bitstring of `len` bits over `bytes`, put back into the entry they were taken from by
+    /// [`Heap::take_for_append`].
+    pub fn finish_append(&mut self, entry: u32, bytes: Vec<u8>, len: usize) -> Term {
+        self.offheap_bytes += bytes.len();
+        let OffHeap::Bytes(arc) = &mut self.offheap[entry as usize] else { unreachable!("taken for appending") };
+        *Arc::get_mut(arc).expect("taken for appending") = bytes;
+        Term::Bits(self.push_object(Kind::Bits, &[Term::OffHeap(entry), Term::Int(0), Term::Int(len as i64)]))
     }
 
     /// A match state over the bitstring `bits`, at `pos`.

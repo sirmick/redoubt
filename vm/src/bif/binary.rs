@@ -10,11 +10,8 @@ use crate::term::{Bits, Term};
 
 type R = Result<Term, Exception>;
 
-fn bin<'t>(c: &Ctx, t: &'t Term) -> Result<&'t Bits, Exception> {
-    match t {
-        Term::Bits(b) if b.is_binary() => Ok(b),
-        _ => Err(c.badarg()),
-    }
+fn bin(c: &Ctx, t: &Term) -> Result<Bits, Exception> {
+    c.heap().as_bits(*t).filter(Bits::is_binary).ok_or_else(|| c.badarg())
 }
 
 fn bytes_of(c: &Ctx, t: &Term) -> Result<Vec<u8>, Exception> {
@@ -59,14 +56,14 @@ pub fn last(c: &mut Ctx, a: &[Term]) -> R {
 pub fn part(c: &mut Ctx, a: &[Term]) -> R {
     let b = bin(c, &a[0])?;
     let (start, len) = match a.len() {
-        2 => match a[1].as_tuple() {
-            Some([s, l]) => (s.clone(), l.clone()),
+        2 => match c.heap().as_tuple(a[1]) {
+            Some(&[s, l]) => (s, l),
             _ => return Err(c.badarg()),
         },
-        _ => (a[1].clone(), a[2].clone()),
+        _ => (a[1], a[2]),
     };
     let (lo, hi) = part_range(c, &start, &len, b.len / 8)?;
-    Ok(Term::bits(b.slice(lo * 8, (hi - lo) * 8)))
+    Ok(c.bits(b.slice(lo * 8, (hi - lo) * 8)))
 }
 
 pub fn copy(c: &mut Ctx, a: &[Term]) -> R {
@@ -78,7 +75,7 @@ pub fn copy(c: &mut Ctx, a: &[Term]) -> R {
     if bytes.len().saturating_mul(n).saturating_mul(8) > c.sys.limits.max_binary_bits {
         return Err(c.system_limit());
     }
-    Ok(Term::binary(&bytes.repeat(n)))
+    Ok(c.binary(&bytes.repeat(n)))
 }
 
 pub fn bin_to_list(c: &mut Ctx, a: &[Term]) -> R {
@@ -86,13 +83,13 @@ pub fn bin_to_list(c: &mut Ctx, a: &[Term]) -> R {
     let size = b.len / 8;
     let (lo, hi) = match a.len() {
         1 => (0, size),
-        2 => match a[1].as_tuple() {
-            Some([s, l]) => part_range(c, s, l, size)?,
+        2 => match c.heap().as_tuple(a[1]) {
+            Some(&[s, l]) => part_range(c, &s, &l, size)?,
             _ => return Err(c.badarg()),
         },
         _ => part_range(c, &a[1], &a[2], size)?,
     };
-    Ok(Term::list((lo..hi).map(|i| Term::Int(b.byte(i) as i64)).collect::<Vec<_>>()))
+    Ok(c.list((lo..hi).map(|i| Term::Int(b.byte(i) as i64)).collect::<Vec<_>>()))
 }
 
 pub fn list_to_bin(c: &mut Ctx, a: &[Term]) -> R {
@@ -100,7 +97,7 @@ pub fn list_to_bin(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 pub fn encode_unsigned(c: &mut Ctx, a: &[Term]) -> R {
-    let v = a[0].as_bigint().filter(|v| v.sign() != Sign::Minus).ok_or_else(|| c.badarg())?;
+    let v = c.heap().as_bigint(a[0]).filter(|v| v.sign() != Sign::Minus).ok_or_else(|| c.badarg())?;
     let little = a.get(1).is_some_and(|e| e.is_atom(&c.sys.atoms.little));
     if a.len() == 2 && !little && !a[1].is_atom(&c.sys.atoms.big) {
         return Err(c.badarg());
@@ -109,7 +106,7 @@ pub fn encode_unsigned(c: &mut Ctx, a: &[Term]) -> R {
     if bytes.is_empty() {
         bytes.push(0);
     }
-    Ok(Term::binary(&bytes))
+    Ok(c.binary(&bytes))
 }
 
 pub fn decode_unsigned(c: &mut Ctx, a: &[Term]) -> R {
@@ -118,7 +115,7 @@ pub fn decode_unsigned(c: &mut Ctx, a: &[Term]) -> R {
     if a.len() == 2 && !little && !a[1].is_atom(&c.sys.atoms.big) {
         return Err(c.badarg());
     }
-    Ok(Term::big(if little {
+    Ok(c.big(if little {
         BigInt::from_bytes_le(Sign::Plus, &bytes)
     } else {
         BigInt::from_bytes_be(Sign::Plus, &bytes)
@@ -130,13 +127,13 @@ pub fn decode_unsigned(c: &mut Ctx, a: &[Term]) -> R {
 /// A pattern: one binary or a list of them, none empty.
 fn patterns(c: &Ctx, t: &Term) -> Result<Vec<Vec<u8>>, Exception> {
     let list = match t {
-        Term::Bits(_) => alloc::vec![t.clone()],
+        Term::Bits(_) => alloc::vec![*t],
         // A "compiled" pattern is just the pattern (see `compile_pattern/1`).
-        Term::Tuple(_) => match t.as_tuple() {
-            Some([_, p]) => return patterns(c, p),
+        Term::Tuple(_) => match c.heap().as_tuple(*t) {
+            Some(&[_, p]) => return patterns(c, &p),
             _ => return Err(c.badarg()),
         },
-        _ => t.to_vec().ok_or_else(|| c.badarg())?,
+        _ => c.heap().to_vec(*t).ok_or_else(|| c.badarg())?,
     };
     let mut out = Vec::new();
     for p in &list {
@@ -169,7 +166,7 @@ fn options(c: &Ctx, t: &Term) -> Result<Vec<Term>, Exception> {
     if !matches!(t, Term::Nil | Term::Cons(_)) {
         return Err(c.badarg());
     }
-    Ok(t.list_iter().map_while(|x| x.ok()).collect())
+    Ok(c.heap().list_iter(*t).map_while(|x| x.ok()).collect())
 }
 
 /// `{scope, {Start, Length}}` from an options list, or the whole binary.
@@ -177,9 +174,9 @@ fn scope(c: &Ctx, opts: Option<&Term>, size: usize) -> Result<(usize, usize), Ex
     let Some(opts) = opts else { return Ok((0, size)) };
     let mut range = (0, size);
     for o in options(c, opts)? {
-        match o.as_tuple() {
-            Some([Term::Atom(tag), part]) if tag.as_str() == "scope" => match part.as_tuple() {
-                Some([s, l]) => range = part_range(c, s, l, size)?,
+        match c.heap().as_tuple(o) {
+            Some(&[Term::Atom(tag), part]) if tag.as_str() == "scope" => match c.heap().as_tuple(part) {
+                Some(&[s, l]) => range = part_range(c, &s, &l, size)?,
                 _ => return Err(c.badarg()),
             },
             _ => return Err(c.badarg()),
@@ -188,13 +185,14 @@ fn scope(c: &Ctx, opts: Option<&Term>, size: usize) -> Result<(usize, usize), Ex
     Ok(range)
 }
 
-fn found(i: usize, len: usize) -> Term {
-    Term::tuple(alloc::vec![Term::Int(i as i64), Term::Int(len as i64)])
+fn found(c: &mut Ctx, i: usize, len: usize) -> Term {
+    c.tuple(&[Term::Int(i as i64), Term::Int(len as i64)])
 }
 
 pub fn compile_pattern(c: &mut Ctx, a: &[Term]) -> R {
     patterns(c, &a[0])?;
-    Ok(Term::tuple(alloc::vec![c.atom("bm"), a[0].clone()]))
+    let bm = c.atom("bm");
+    Ok(c.tuple(&[bm, a[0]]))
 }
 
 pub fn match_(c: &mut Ctx, a: &[Term]) -> R {
@@ -202,7 +200,7 @@ pub fn match_(c: &mut Ctx, a: &[Term]) -> R {
     let pats = patterns(c, &a[1])?;
     let (lo, hi) = scope(c, a.get(2), hay.len())?;
     Ok(match find(&hay, &pats, lo, hi) {
-        Some((i, len)) => found(i, len),
+        Some((i, len)) => found(c, i, len),
         None => c.atom("nomatch"),
     })
 }
@@ -213,15 +211,15 @@ pub fn matches(c: &mut Ctx, a: &[Term]) -> R {
     let (mut at, hi) = scope(c, a.get(2), hay.len())?;
     let mut out = Vec::new();
     while let Some((i, len)) = find(&hay, &pats, at, hi) {
-        out.push(found(i, len));
+        out.push(found(c, i, len));
         at = i + len;
     }
-    Ok(Term::list(out))
+    Ok(c.list(out))
 }
 
 /// `split(Bin, Pattern, Options)` with `global`, `trim`, `trim_all` and `{scope, _}`.
 pub fn split(c: &mut Ctx, a: &[Term]) -> R {
-    let b = bin(c, &a[0])?.clone();
+    let b = bin(c, &a[0])?;
     let hay = b.to_bytes().into_owned();
     let pats = patterns(c, &a[1])?;
     let (mut global, mut trim, mut trim_all) = (false, false, false);
@@ -232,12 +230,12 @@ pub fn split(c: &mut Ctx, a: &[Term]) -> R {
                 Term::Atom(x) if x.as_str() == "global" => global = true,
                 Term::Atom(x) if x.as_str() == "trim" => trim = true,
                 Term::Atom(x) if x.as_str() == "trim_all" => trim_all = true,
-                Term::Tuple(_) => scope_opts.push(o.clone()),
+                Term::Tuple(_) => scope_opts.push(o),
                 _ => return Err(c.badarg()),
             }
         }
     }
-    let scope_list = Term::list(scope_opts);
+    let scope_list = c.list(scope_opts);
     let (mut at, hi) = scope(c, Some(&scope_list), hay.len())?;
     let mut pieces: Vec<(usize, usize)> = Vec::new();
     let mut start = 0;
@@ -257,11 +255,12 @@ pub fn split(c: &mut Ctx, a: &[Term]) -> R {
             pieces.pop();
         }
     }
-    Ok(Term::list(pieces.into_iter().map(|(s, e)| Term::bits(b.slice(s * 8, (e - s) * 8))).collect::<Vec<_>>()))
+    let pieces: Vec<Term> = pieces.into_iter().map(|(s, e)| c.bits(b.slice(s * 8, (e - s) * 8))).collect();
+    Ok(c.list(pieces))
 }
 
 fn common(c: &Ctx, a: &Term, suffix: bool) -> R {
-    let bins: Vec<Vec<u8>> = a.to_vec().ok_or_else(|| c.badarg())?.iter().map(|t| bytes_of(c, t)).collect::<Result<_, _>>()?;
+    let bins: Vec<Vec<u8>> = c.heap().to_vec(*a).ok_or_else(|| c.badarg())?.iter().map(|t| bytes_of(c, t)).collect::<Result<_, _>>()?;
     if bins.is_empty() {
         return Err(c.badarg());
     }

@@ -9,7 +9,6 @@
 
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
-use alloc::rc::Rc;
 use alloc::vec::Vec;
 use core::cell::{Cell, RefCell};
 
@@ -19,7 +18,7 @@ use miniz_oxide::{DataFormat, MZError, MZFlush, MZStatus};
 
 use super::Ctx;
 use crate::process::Exception;
-use crate::term::{Pid, Resource, Term};
+use crate::term::{OwnedTerm, Pid, Resource, Term};
 
 type R = Result<Term, Exception>;
 
@@ -89,7 +88,18 @@ struct Stream {
     /// Output made but not yet handed out (it comes out a chunk at a time).
     output: RefCell<VecDeque<u8>>,
     codec: RefCell<Codec>,
-    stash: RefCell<Option<Term>>,
+    /// Kept outside the heap of whoever set it.
+    stash: RefCell<Option<OwnedTerm>>,
+}
+
+/// A stream held through its resource (so the caller's heap stays free for building results).
+struct StreamRef(alloc::sync::Arc<Resource>);
+
+impl core::ops::Deref for StreamRef {
+    type Target = Stream;
+    fn deref(&self) -> &Stream {
+        self.0.get::<Stream>().expect("checked when made")
+    }
 }
 
 // ---- errors ----
@@ -99,11 +109,9 @@ fn raise(c: &mut Ctx, what: &str) -> Exception {
 }
 
 /// The stream an argument names, if the caller controls it.
-fn stream<'t>(c: &mut Ctx, t: &'t Term) -> Result<&'t Stream, Exception> {
-    let s = match t {
-        Term::Resource(r) => r.get::<Stream>().ok_or_else(|| c.badarg())?,
-        _ => return Err(c.badarg()),
-    };
+fn stream(c: &mut Ctx, t: &Term) -> Result<StreamRef, Exception> {
+    let r = c.heap().as_resource(*t).filter(|r| r.get::<Stream>().is_some()).cloned().ok_or_else(|| c.badarg())?;
+    let s = StreamRef(r);
     if s.owner.get() != c.p.pid {
         return Err(raise(c, "not_on_controlling_process"));
     }
@@ -162,7 +170,7 @@ pub fn open(c: &mut Ctx, _a: &[Term]) -> R {
         stash: RefCell::new(None),
     };
     let id = c.sys.make_ref().0;
-    Ok(Term::Resource(Rc::new(Resource { id, value: Box::new(s) })))
+    Ok(c.heap_mut().resource(Resource { id, value: Box::new(s) }))
 }
 
 pub fn close(c: &mut Ctx, a: &[Term]) -> R {
@@ -240,9 +248,9 @@ fn new_inflater(wrap: Wrap, after_end: AfterEnd) -> Inflater {
 pub fn enqueue(c: &mut Ctx, a: &[Term]) -> R {
     let s = stream(c, &a[0])?;
     let mut data = Vec::new();
-    for b in a[1].to_vec().ok_or_else(|| c.badarg())? {
-        match &b {
-            Term::Bits(b) if b.is_binary() => data.extend_from_slice(&b.to_bytes()),
+    for b in c.list_arg(a[1])? {
+        match c.heap().as_bits(b) {
+            Some(b) if b.is_binary() => data.extend_from_slice(&b.to_bytes()),
             _ => return Err(c.badarg()),
         }
     }
@@ -268,9 +276,15 @@ fn chunk(c: &mut Ctx, s: &Stream, chunk: usize) -> Term {
     let n = chunk.min(output.len());
     let bytes: Vec<u8> = output.drain(..n).collect();
     let done = output.is_empty() && s.input.borrow().is_empty() && n < chunk;
-    let out = if bytes.is_empty() { Term::Nil } else { Term::list(alloc::vec![Term::binary(&bytes)]) };
+    drop(output);
+    let out = if bytes.is_empty() {
+        Term::Nil
+    } else {
+        let b = c.binary(&bytes);
+        c.list([b])
+    };
     let tag = c.atom(if done { "finished" } else { "continue" });
-    Term::tuple(alloc::vec![tag, out])
+    c.tuple(&[tag, out])
 }
 
 /// `deflate_nif(Z, InputChunk, OutputChunk, Flush)`: flush is 0 (none), 2 (sync), 3 (full) or
@@ -293,7 +307,7 @@ pub fn deflate(c: &mut Ctx, a: &[Term]) -> R {
         out.extend_from_slice(&GZIP_HEADER);
         d.header_done = true;
     }
-    let input = take_input(s, in_chunk);
+    let input = take_input(&s, in_chunk);
     if !input.is_empty() {
         d.used = true;
         if d.gzip {
@@ -332,7 +346,7 @@ pub fn deflate(c: &mut Ctx, a: &[Term]) -> R {
     }
     drop(codec);
     s.output.borrow_mut().extend(out);
-    Ok(chunk(c, s, out_chunk))
+    Ok(chunk(c, &s, out_chunk))
 }
 
 /// `inflate_nif(Z, InputChunk, OutputChunk, Flush)`.
@@ -427,7 +441,7 @@ pub fn inflate_nif(c: &mut Ctx, a: &[Term]) -> R {
     }
     drop(codec);
     s.output.borrow_mut().extend(out);
-    Ok(chunk(c, s, out_chunk))
+    Ok(chunk(c, &s, out_chunk))
 }
 
 /// `deflateReset_nif` and `inflateReset_nif`: start a new stream with the same settings.
@@ -501,7 +515,10 @@ pub fn get_stash(c: &mut Ctx, a: &[Term]) -> R {
     let s = stream(c, &a[0])?;
     let stash = s.stash.borrow().clone();
     Ok(match stash {
-        Some(t) => Term::tuple(alloc::vec![c.ok(), t]),
+        Some(t) => {
+            let t = c.copy_in(&t);
+            c.ok_tuple(t)
+        }
         None => c.atom("empty"),
     })
 }
@@ -511,7 +528,7 @@ pub fn set_stash(c: &mut Ctx, a: &[Term]) -> R {
     if s.stash.borrow().is_some() {
         return Err(raise(c, "error"));
     }
-    *s.stash.borrow_mut() = Some(a[1].clone());
+    *s.stash.borrow_mut() = Some(c.own(a[1]));
     Ok(c.ok())
 }
 

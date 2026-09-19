@@ -19,7 +19,7 @@ use alloc::vec::Vec;
 use super::Ctx;
 use crate::platform::{FileError, Program, ProgramEvent, Spawn};
 use crate::process::Exception;
-use crate::term::{Pid, Term};
+use crate::term::{Heap, Pid, Term};
 
 type R = Result<Term, Exception>;
 
@@ -60,8 +60,8 @@ fn open_port_arg(c: &Ctx, t: &Term) -> Result<Pid, Exception> {
 }
 
 /// Text in a port setting: a string or a binary, as UTF-8.
-fn text(t: &Term) -> Option<String> {
-    let bytes = super::file::name_bytes(t)?;
+fn text(heap: &Heap, t: &Term) -> Option<String> {
+    let bytes = super::file::name_bytes(heap, *t)?;
     if bytes.contains(&0) {
         return None;
     }
@@ -76,27 +76,28 @@ enum Framing {
 }
 
 pub fn open_port(c: &mut Ctx, a: &[Term]) -> R {
-    if let Some([Term::Atom(k), Term::Int(0), Term::Int(out @ (1 | 2))]) = a[0].as_tuple() {
+    if let Some(&[Term::Atom(k), Term::Int(0), Term::Int(out @ (1 | 2))]) = c.heap().as_tuple(a[0]) {
         if k.as_str() == "fd" {
-            return open_console(c, *out, &a[1]);
+            return open_console(c, out, &a[1]);
         }
     }
-    let Some([kind, what]) = a[0].as_tuple() else { return Err(c.badarg()) };
+    let Some(&[kind, what]) = c.heap().as_tuple(a[0]) else { return Err(c.badarg()) };
     let shell = match kind {
         Term::Atom(k) if k.as_str() == "spawn" => true,
         Term::Atom(k) if k.as_str() == "spawn_executable" => false,
         _ => return Err(c.badarg()),
     };
-    let name = text(what).filter(|n| !n.is_empty()).ok_or_else(|| c.badarg())?;
+    let h = c.heap();
+    let name = text(h, &what).filter(|n| !n.is_empty()).ok_or_else(|| c.badarg())?;
 
     let mut framing = Framing::Stream;
     let (mut binary, mut eof, mut exit_status, mut stderr_to_stdout) = (false, false, false, false);
     let (mut input, mut output) = (false, false);
     let mut env: Vec<(String, Option<String>)> = Vec::new();
     let (mut cd, mut args, mut arg0) = (None, None, None);
-    let opts = a[1].to_vec().ok_or_else(|| c.badarg())?;
+    let opts = h.to_vec(a[1]).ok_or_else(|| c.badarg())?;
     for o in &opts {
-        match o {
+        match *o {
             Term::Atom(o) => match o.as_str() {
                 "stream" => framing = Framing::Stream,
                 "binary" => binary = true,
@@ -108,24 +109,24 @@ pub fn open_port(c: &mut Ctx, a: &[Term]) -> R {
                 "use_stdio" | "hide" | "overlapped_io" => {}
                 _ => return Err(c.badarg()),
             },
-            Term::Tuple(t) => match &t[..] {
-                [Term::Atom(k), Term::Int(n)] if k.as_str() == "packet" && matches!(n, 1 | 2 | 4) => framing = Framing::Packet(*n as u8),
-                [Term::Atom(k), Term::Int(n)] if k.as_str() == "line" && *n > 0 => framing = Framing::Line(*n),
-                [Term::Atom(k), dir] if k.as_str() == "cd" => cd = Some(text(dir).ok_or_else(|| c.badarg())?),
+            Term::Tuple(_) => match *h.as_tuple(*o).expect("a tuple") {
+                [Term::Atom(k), Term::Int(n)] if k.as_str() == "packet" && matches!(n, 1 | 2 | 4) => framing = Framing::Packet(n as u8),
+                [Term::Atom(k), Term::Int(n)] if k.as_str() == "line" && n > 0 => framing = Framing::Line(n),
+                [Term::Atom(k), dir] if k.as_str() == "cd" => cd = Some(text(h, &dir).ok_or_else(|| c.badarg())?),
                 [Term::Atom(k), list] if k.as_str() == "args" && !shell => {
-                    let list = list.to_vec().ok_or_else(|| c.badarg())?;
-                    args = Some(list.iter().map(text).collect::<Option<Vec<_>>>().ok_or_else(|| c.badarg())?);
+                    let list = h.to_vec(list).ok_or_else(|| c.badarg())?;
+                    args = Some(list.iter().map(|t| text(h, t)).collect::<Option<Vec<_>>>().ok_or_else(|| c.badarg())?);
                 }
-                [Term::Atom(k), s] if k.as_str() == "arg0" && !shell => arg0 = Some(text(s).ok_or_else(|| c.badarg())?),
+                [Term::Atom(k), s] if k.as_str() == "arg0" && !shell => arg0 = Some(text(h, &s).ok_or_else(|| c.badarg())?),
                 [Term::Atom(k), list] if k.as_str() == "env" => {
-                    for pair in list.to_vec().ok_or_else(|| c.badarg())? {
-                        let Some([k, v]) = pair.as_tuple() else { return Err(c.badarg()) };
-                        let k = text(k).filter(|k| !k.is_empty() && !k.contains('=')).ok_or_else(|| c.badarg())?;
+                    for pair in h.to_vec(list).ok_or_else(|| c.badarg())? {
+                        let Some(&[k, v]) = h.as_tuple(pair) else { return Err(c.badarg()) };
+                        let k = text(h, &k).filter(|k| !k.is_empty() && !k.contains('=')).ok_or_else(|| c.badarg())?;
                         // `false` (or `[]`) removes the variable.
                         let v = match v {
                             Term::Atom(f) if f.as_str() == "false" => None,
                             Term::Nil => None,
-                            v => Some(text(v).ok_or_else(|| c.badarg())?),
+                            v => Some(text(h, &v).ok_or_else(|| c.badarg())?),
                         };
                         env.push((k, v));
                     }
@@ -172,8 +173,14 @@ pub fn open_port(c: &mut Ctx, a: &[Term]) -> R {
     let packet = if let Framing::Packet(n) = framing { n } else { 0 };
     let framing = match framing {
         Framing::Stream => c.atom("stream"),
-        Framing::Packet(n) => Term::tuple(alloc::vec![c.atom("packet"), Term::Int(n as i64)]),
-        Framing::Line(n) => Term::tuple(alloc::vec![c.atom("line"), Term::Int(n)]),
+        Framing::Packet(n) => {
+            let tag = c.atom("packet");
+            c.tuple(&[tag, Term::Int(n as i64)])
+        }
+        Framing::Line(n) => {
+            let tag = c.atom("line");
+            c.tuple(&[tag, Term::Int(n)])
+        }
     };
     let st = PortState { handle: Some(spawned.handle), os_pid: spawned.os_pid, owner: c.p.pid, name, packet, writable: output, input: 0, output: 0 };
     let settings = settings_of(c, framing, binary, eof, exit_status);
@@ -182,11 +189,11 @@ pub fn open_port(c: &mut Ctx, a: &[Term]) -> R {
 
 /// The driver's settings: #{framing => stream | {packet, N} | {line, L}, binary, eof, exit_status}.
 fn settings_of(c: &mut Ctx, framing: Term, binary: bool, eof: bool, exit_status: bool) -> Term {
-    let mut settings = crate::term::Map::new();
-    for (k, v) in [("framing", framing), ("binary", c.bool(binary)), ("eof", c.bool(eof)), ("exit_status", c.bool(exit_status))] {
-        settings.insert(crate::term::MapKey(c.atom(k)), v);
-    }
-    Term::map(settings)
+    let pairs: Vec<(Term, Term)> = [("framing", framing), ("binary", c.bool(binary)), ("eof", c.bool(eof)), ("exit_status", c.bool(exit_status))]
+        .into_iter()
+        .map(|(k, v)| (c.atom(k), v))
+        .collect();
+    c.map_from(pairs)
 }
 
 /// The code a port runs.
@@ -200,7 +207,7 @@ fn driver(c: &mut Ctx) -> Result<crate::process::Cp, Exception> {
 
 /// Start the process behind a port, linked to the caller, and record the port.
 fn start_driver(c: &mut Ctx, entry: crate::process::Cp, settings: Term, st: PortState) -> Result<Pid, Exception> {
-    let port = match c.sys.spawn_as(entry, alloc::vec![settings], true) {
+    let port = match c.sys.spawn_copy(entry, &c.p.heap, &[settings], true) {
         Ok(port) => port,
         Err(e) => {
             if let (Some(h), Some(programs)) = (st.handle, c.sys.platform.programs()) {
@@ -225,7 +232,7 @@ fn start_driver(c: &mut Ctx, entry: crate::process::Cp, settings: Term, st: Port
 /// `open_port({fd, 0, Out}, Opts)`: the console, for output (`stream` only).
 fn open_console(c: &mut Ctx, out: i64, opts: &Term) -> R {
     let mut binary = false;
-    for o in opts.to_vec().ok_or_else(|| c.badarg())? {
+    for o in c.list_arg(*opts)? {
         match &o {
             Term::Atom(o) if o.as_str() == "binary" => binary = true,
             Term::Atom(o) if matches!(o.as_str(), "out" | "in" | "stream" | "eof" | "hide") => {}
@@ -251,7 +258,7 @@ fn posix(c: &mut Ctx, e: FileError) -> Exception {
 /// `port_command(Port, Data)`: write `Data` to the program, framed if the port uses packets.
 pub fn port_command(c: &mut Ctx, a: &[Term]) -> R {
     let port = open_port_arg(c, &a[0])?;
-    let data = a[1].iodata_bytes().ok_or_else(|| c.badarg())?;
+    let data = c.heap().iodata_bytes(a[1]).ok_or_else(|| c.badarg())?;
     let st = &c.sys.ports[&port];
     if !st.writable {
         return Err(c.badarg());
@@ -284,7 +291,7 @@ pub fn port_command(c: &mut Ctx, a: &[Term]) -> R {
 /// `port_command(Port, Data, Options)`: `force` and `nosuspend` change nothing here (a port is
 /// never busy), so this is `port_command/2`.
 pub fn port_command3(c: &mut Ctx, a: &[Term]) -> R {
-    for o in a[2].to_vec().ok_or_else(|| c.badarg())? {
+    for o in c.list_arg(a[2])? {
         if !matches!(&o, Term::Atom(o) if matches!(o.as_str(), "force" | "nosuspend")) {
             return Err(c.badarg());
         }
@@ -308,7 +315,7 @@ pub fn port_close(c: &mut Ctx, a: &[Term]) -> R {
     let port = open_port_arg(c, &a[0])?;
     close(c, port);
     if port != c.p.pid {
-        let normal = Term::Atom(c.sys.atoms.normal.clone());
+        let normal = alloc::sync::Arc::new(crate::term::OwnedTerm::immediate(Term::Atom(c.sys.atoms.normal)));
         c.sys.exits.push_back(crate::vm::ExitSignal { target: port, from: c.p.pid, reason: normal, from_link: false, forced: true });
         // As `exit/2`: the port is gone before the caller runs again.
         c.p.budget = c.p.budget.min(1);
@@ -346,7 +353,8 @@ pub fn no_driver(c: &mut Ctx, _a: &[Term]) -> R {
 
 /// `erlang:ports()`.
 pub fn ports(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(Term::list(c.sys.ports.keys().map(|&p| Term::Pid(p)).collect::<Vec<_>>()))
+    let ports: Vec<Term> = c.sys.ports.keys().map(|&p| Term::Pid(p)).collect();
+    Ok(c.list(ports))
 }
 
 const INFO_ITEMS: [&str; 7] = ["name", "links", "id", "connected", "input", "output", "os_pid"];
@@ -359,9 +367,9 @@ fn info_item(c: &mut Ctx, port: Pid, item: &str) -> Option<Term> {
         let p: &crate::process::Process = if port == c.p.pid { c.p } else { c.sys.procs.get_mut(port)? };
         (p.links.iter().copied().collect(), p.monitored_by.values().map(|m| m.watcher).collect())
     };
-    let pids = |set: Vec<Pid>| Term::list(set.into_iter().map(Term::Pid).collect::<Vec<_>>());
+    let pids = |c: &mut Ctx, set: Vec<Pid>| c.list(set.into_iter().map(Term::Pid).collect::<Vec<_>>());
     let value = match item {
-        "name" => Term::list(name.chars().map(|ch| Term::Int(ch as i64)).collect::<Vec<_>>()),
+        "name" => c.string(&name),
         "id" => Term::Int(id as i64),
         "connected" => Term::Pid(owner),
         "input" => Term::Int(input as i64),
@@ -370,8 +378,8 @@ fn info_item(c: &mut Ctx, port: Pid, item: &str) -> Option<Term> {
             Some(n) => Term::Int(n as i64),
             None => c.atom("undefined"),
         },
-        "links" => pids(links),
-        "monitored_by" => pids(watchers),
+        "links" => pids(c, links),
+        "monitored_by" => pids(c, watchers),
         "monitors" => Term::Nil,
         "registered_name" => {
             let name = c.sys.registered.iter().find(|(_, &p)| p == port).map(|(n, _)| String::from(n.as_str()));
@@ -397,29 +405,31 @@ pub fn port_info1(c: &mut Ctx, a: &[Term]) -> R {
     let mut items = Vec::new();
     // A registered port gives its name first, as BEAM's does.
     if let Some(name) = info_item(c, port, "registered_name").filter(|n| !matches!(n, Term::Nil)) {
-        items.push(Term::tuple(alloc::vec![c.atom("registered_name"), name]));
+        let tag = c.atom("registered_name");
+        items.push(c.tuple(&[tag, name]));
     }
     for item in INFO_ITEMS {
         if item == "os_pid" && c.sys.ports[&port].os_pid.is_none() {
             continue;
         }
         let v = info_item(c, port, item).expect("an open port has every item");
-        items.push(Term::tuple(alloc::vec![c.atom(item), v]));
+        let tag = c.atom(item);
+        items.push(c.tuple(&[tag, v]));
     }
-    Ok(Term::list(items))
+    Ok(c.list(items))
 }
 
 /// `port_info(Port, Item)`: `{Item, Value}`, or `undefined` once it is closed.
 pub fn port_info2(c: &mut Ctx, a: &[Term]) -> R {
     let port = port_arg(c, &a[0]).ok_or_else(|| c.badarg())?;
     let Term::Atom(item) = &a[1] else { return Err(c.badarg()) };
-    let item = item.clone();
+    let item = *item;
     if !c.sys.ports.contains_key(&port) {
         return Ok(c.atom("undefined"));
     }
     match info_item(c, port, item.as_str()) {
         // A port with no registered name answers `[]`, as BEAM's does.
-        Some(v) => Ok(Term::tuple(alloc::vec![Term::Atom(item), v])),
+        Some(v) => Ok(c.tuple(&[Term::Atom(item), v])),
         None => Err(c.badarg()),
     }
 }
@@ -431,13 +441,13 @@ pub fn port_to_list(c: &mut Ctx, a: &[Term]) -> R {
         return Err(c.badarg());
     }
     let s = alloc::format!("#Port<0.{}>", p.serial);
-    Ok(Term::list(s.chars().map(|ch| Term::Int(ch as i64)).collect::<Vec<_>>()))
+    Ok(c.string(&s))
 }
 
 /// `list_to_port("#Port<0.N>")`: an open port with that number, or one that no longer
 /// exists (which behaves as a closed port).
 pub fn list_to_port(c: &mut Ctx, a: &[Term]) -> R {
-    let s = text(&a[0]).ok_or_else(|| c.badarg())?;
+    let s = text(c.heap(), &a[0]).ok_or_else(|| c.badarg())?;
     let n: u32 = s
         .strip_prefix("#Port<0.")
         .and_then(|r| r.strip_suffix('>'))
@@ -457,18 +467,21 @@ impl crate::vm::System {
         }
         while let Some((handle, event)) = self.platform.programs().and_then(|p| p.poll()) {
             let Some(&port) = self.program_ports.get(&handle) else { continue };
-            let event = match event {
-                ProgramEvent::Output(bytes) => {
-                    if let Some(st) = self.ports.get_mut(&port) {
-                        st.input += bytes.len() as u64;
+            if let (ProgramEvent::Output(bytes), Some(st)) = (&event, self.ports.get_mut(&port)) {
+                st.input += bytes.len() as u64;
+            }
+            let [data, eof, exit_status, tag] = ["data", "eof", "exit_status", "$beamlet_program"].map(|n| Term::Atom(self.atom(n)));
+            self.send_with(port, |h| {
+                let event = match &event {
+                    ProgramEvent::Output(bytes) => {
+                        let b = h.binary(bytes);
+                        h.tuple(&[data, b])
                     }
-                    Term::tuple(alloc::vec![Term::Atom(self.atom("data")), Term::binary(&bytes)])
-                }
-                ProgramEvent::Eof => Term::Atom(self.atom("eof")),
-                ProgramEvent::Exit(n) => Term::tuple(alloc::vec![Term::Atom(self.atom("exit_status")), Term::Int(n as i64)]),
-            };
-            let tag = Term::Atom(self.atom("$beamlet_program"));
-            self.send(port, Term::tuple(alloc::vec![tag, event]));
+                    ProgramEvent::Eof => eof,
+                    ProgramEvent::Exit(n) => h.tuple(&[exit_status, Term::Int(*n as i64)]),
+                };
+                h.tuple(&[tag, event])
+            });
         }
     }
 

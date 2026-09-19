@@ -8,13 +8,12 @@
 //! Encoding writes what OTP 28 writes, byte for byte, except that maps are always in key order
 //! (as with `term_to_binary(T, [deterministic])`). It uses a work list, not recursion.
 
-use alloc::rc::Rc;
 use alloc::vec::Vec;
 
 use num_bigint::{BigInt, Sign};
 
 use crate::atom::{AtomError, AtomTable};
-use crate::term::{Bits, Fun, Map, MapKey, Term};
+use crate::term::{FunView, Heap, Term};
 
 /// How deeply tuples, maps and list heads may nest. Lists nest along the tail without limit.
 pub const MAX_DEPTH: usize = 256;
@@ -52,9 +51,9 @@ const COMPRESSED: u8 = 80;
 /// 1032:1, so a size is also refused if the input is too short to produce it.
 const MAX_INFLATED: usize = 1 << 27;
 
-/// Decode one complete term (with its version byte) that must fill all of `bytes`.
-pub fn decode(bytes: &[u8], atoms: &mut AtomTable) -> Result<Term, EtfError> {
-    let (t, used) = decode_prefix(bytes, atoms, false)?;
+/// Decode one complete term (with its version byte) that must fill all of `bytes`, onto `heap`.
+pub fn decode(bytes: &[u8], atoms: &mut AtomTable, heap: &mut Heap) -> Result<Term, EtfError> {
+    let (t, used) = decode_prefix(bytes, atoms, heap, false)?;
     if used != bytes.len() {
         return Err(EtfError::TrailingBytes);
     }
@@ -63,8 +62,8 @@ pub fn decode(bytes: &[u8], atoms: &mut AtomTable) -> Result<Term, EtfError> {
 
 /// Decode the term at the start of `bytes`; also return how many bytes it used. With `safe`,
 /// an atom that does not already exist is an error rather than a new atom.
-pub fn decode_prefix(bytes: &[u8], atoms: &mut AtomTable, safe: bool) -> Result<(Term, usize), EtfError> {
-    let mut r = Reader { bytes, pos: 0, atoms, safe };
+pub fn decode_prefix(bytes: &[u8], atoms: &mut AtomTable, heap: &mut Heap, safe: bool) -> Result<(Term, usize), EtfError> {
+    let mut r = Reader { bytes, pos: 0, atoms, heap, safe };
     if r.u8()? != VERSION {
         return Err(EtfError::BadTag(bytes[0]));
     }
@@ -72,7 +71,7 @@ pub fn decode_prefix(bytes: &[u8], atoms: &mut AtomTable, safe: bool) -> Result<
         r.pos = 2;
         let size = r.u32()?;
         let (inflated, used) = inflate(&bytes[r.pos..], size)?;
-        let mut inner = Reader { bytes: &inflated, pos: 0, atoms: r.atoms, safe };
+        let mut inner = Reader { bytes: &inflated, pos: 0, atoms: r.atoms, heap: r.heap, safe };
         let t = inner.term(0)?;
         if inner.pos != inflated.len() {
             return Err(EtfError::Malformed);
@@ -105,11 +104,12 @@ fn inflate(input: &[u8], size: usize) -> Result<(Vec<u8>, usize), EtfError> {
 /// Encode `t` compressed at zlib level `level` (0-9), as `term_to_binary(T, [compressed])`
 /// does: only if that makes it smaller.
 pub fn encode_compressed(
-    t: &Term,
+    heap: &Heap,
+    t: Term,
     level: u8,
     md5_of: &dyn Fn(&crate::atom::Atom) -> Option<[u8; 16]>,
 ) -> Result<Vec<u8>, EncodeError> {
-    let plain = encode_with(t, md5_of)?;
+    let plain = encode_with(heap, t, md5_of)?;
     if level == 0 {
         return Ok(plain);
     }
@@ -128,6 +128,7 @@ struct Reader<'a, 'b> {
     bytes: &'a [u8],
     pos: usize,
     atoms: &'b mut AtomTable,
+    heap: &'b mut Heap,
     safe: bool,
 }
 
@@ -196,7 +197,7 @@ impl<'a> Reader<'a, '_> {
                 // Any non-zero sign byte means negative, as BEAM reads it.
                 let sign = if self.u8()? == 0 { Sign::Plus } else { Sign::Minus };
                 let digits = self.take(n)?;
-                Term::big(BigInt::from_bytes_le(sign, digits))
+                self.heap.big(BigInt::from_bytes_le(sign, digits))
             }
             118 | 119 | 100 | 115 => {
                 let n = if tag == 119 || tag == 115 { self.u8()? as usize } else { self.u16()? };
@@ -221,13 +222,14 @@ impl<'a> Reader<'a, '_> {
                 for _ in 0..n {
                     elems.push(self.term(depth + 1)?);
                 }
-                Term::tuple(elems)
+                self.heap.tuple(&elems)
             }
             106 => Term::Nil,
             107 => {
                 let n = self.u16()?;
                 let bytes = self.take(n)?;
-                Term::list(bytes.iter().map(|&b| Term::Int(b as i64)).collect::<Vec<_>>())
+                let items: Vec<Term> = bytes.iter().map(|&b| Term::Int(b as i64)).collect();
+                self.heap.list(items)
             }
             108 => {
                 let n = self.u32()?;
@@ -237,11 +239,12 @@ impl<'a> Reader<'a, '_> {
                     items.push(self.term(depth + 1)?);
                 }
                 let tail = self.term(depth + 1)?;
-                Term::list_with_tail(items, tail)
+                self.heap.list_with_tail(items, tail)
             }
             109 => {
                 let n = self.u32()?;
-                Term::binary(self.take(n)?)
+                let bytes = self.take(n)?;
+                self.heap.binary(bytes)
             }
             77 => {
                 let n = self.u32()?;
@@ -250,18 +253,19 @@ impl<'a> Reader<'a, '_> {
                     return Err(EtfError::Malformed);
                 }
                 let data = self.take(n)?;
-                Term::bits(Bits { data: Rc::new(data.to_vec()), offset: 0, len: (n - 1) * 8 + last_bits })
+                let bits = crate::term::Bits { data: alloc::sync::Arc::new(data.to_vec()), offset: 0, len: (n - 1) * 8 + last_bits };
+                self.heap.bits(bits)
             }
             116 => {
                 let n = self.u32()?;
                 self.check_count(n, 2)?;
-                let mut map = Map::new();
+                let mut pairs = Vec::with_capacity(n);
                 for _ in 0..n {
                     let k = self.term(depth + 1)?;
                     let v = self.term(depth + 1)?;
-                    map.insert(MapKey(k), v);
+                    pairs.push((k, v));
                 }
-                Term::map(map)
+                self.heap.map_from(pairs)
             }
             113 => {
                 let module = self.atom(depth)?;
@@ -270,7 +274,7 @@ impl<'a> Reader<'a, '_> {
                     Term::Int(a) if (0..=255).contains(&a) => a as u32,
                     _ => return Err(EtfError::Malformed),
                 };
-                Term::Fun(Rc::new(Fun::Export { module, function, arity }))
+                self.heap.fun_export(module, function, arity)
             }
             // NEW_PID_EXT and PID_EXT: only this node's pids (there is no distribution).
             88 | 103 => {
@@ -328,7 +332,7 @@ impl<'a> Reader<'a, '_> {
                 // The name is not in the external format; the module's fun table has it, if
                 // the module is loaded now (and matches), else it is left unknown.
                 let name = self.atoms.intern("-unknown-fun-").map_err(|_| EtfError::BadAtom)?;
-                Term::Fun(Rc::new(Fun::Local { module, index, arity, env, uniq, name }))
+                self.heap.fun_local(module, index, arity, uniq, name, &env)
             }
             // Ports, the old float format and distribution headers are not accepted.
             other => return Err(EtfError::BadTag(other)),
@@ -359,8 +363,8 @@ pub enum EncodeError {
 /// The node name this VM reports; pids and references are encoded with it.
 pub const NODE: &str = "nonode@nohost";
 
-pub fn encode(t: &Term) -> Result<Vec<u8>, EncodeError> {
-    encode_with(t, &|_| None)
+pub fn encode(heap: &Heap, t: Term) -> Result<Vec<u8>, EncodeError> {
+    encode_with(heap, t, &|_| None)
 }
 
 /// Where the encoder is in a term: a term still to write, or the end of a fun whose size field
@@ -372,9 +376,9 @@ enum Work {
 
 /// Encode `t`. `md5_of` gives the checksum of a loaded module, which identifies its local funs;
 /// a fun of a module that is no longer loaded is written with a zero checksum.
-pub fn encode_with(t: &Term, md5_of: &dyn Fn(&crate::atom::Atom) -> Option<[u8; 16]>) -> Result<Vec<u8>, EncodeError> {
+pub fn encode_with(heap: &Heap, t: Term, md5_of: &dyn Fn(&crate::atom::Atom) -> Option<[u8; 16]>) -> Result<Vec<u8>, EncodeError> {
     let mut out = alloc::vec![VERSION];
-    let mut work = alloc::vec![Work::Term(t.clone())];
+    let mut work = alloc::vec![Work::Term(t)];
     while let Some(w) = work.pop() {
         let t = match w {
             Work::Term(t) => t,
@@ -384,9 +388,9 @@ pub fn encode_with(t: &Term, md5_of: &dyn Fn(&crate::atom::Atom) -> Option<[u8; 
                 continue;
             }
         };
-        match &t {
-            Term::Int(i) => encode_int(&mut out, *i),
-            Term::Big(b) => encode_big(&mut out, b),
+        match t {
+            Term::Int(i) => encode_int(&mut out, i),
+            Term::Big(_) => encode_big(&mut out, heap.as_big(t).expect("a bignum")),
             Term::Float(f) => {
                 out.push(70);
                 out.extend_from_slice(&f.to_be_bytes());
@@ -397,7 +401,7 @@ pub fn encode_with(t: &Term, md5_of: &dyn Fn(&crate::atom::Atom) -> Option<[u8; 
                 // A proper list of bytes up to 65535 long is a STRING_EXT, as in BEAM.
                 let mut items = Vec::new();
                 let mut tail = Term::Nil;
-                for item in t.list_iter() {
+                for item in heap.list_iter(t) {
                     match item {
                         Ok(x) => items.push(x),
                         Err(x) => tail = x,
@@ -421,24 +425,27 @@ pub fn encode_with(t: &Term, md5_of: &dyn Fn(&crate::atom::Atom) -> Option<[u8; 
                     }
                 }
             }
-            Term::Tuple(elems) => {
+            Term::Tuple(_) => {
+                let elems = heap.as_tuple(t).expect("a tuple");
                 if elems.len() <= 255 {
                     out.extend_from_slice(&[104, elems.len() as u8]);
                 } else {
                     out.push(105);
                     out.extend_from_slice(&(elems.len() as u32).to_be_bytes());
                 }
-                work.extend(elems.iter().rev().cloned().map(Work::Term));
+                work.extend(elems.iter().rev().copied().map(Work::Term));
             }
-            Term::Map(m) => {
+            Term::Map(_) => {
+                let entries = heap.map_entries(t).expect("a map");
                 out.push(116);
-                out.extend_from_slice(&(m.len() as u32).to_be_bytes());
-                for (k, v) in m.iter().rev() {
-                    work.push(Work::Term(v.clone()));
-                    work.push(Work::Term(k.0.clone()));
+                out.extend_from_slice(&(entries.len() as u32).to_be_bytes());
+                for (k, v) in entries.into_iter().rev() {
+                    work.push(Work::Term(v));
+                    work.push(Work::Term(k));
                 }
             }
-            Term::Bits(b) => {
+            Term::Bits(_) => {
+                let b = heap.as_bits(t).expect("bits");
                 let bytes = b.to_bytes();
                 if b.is_binary() {
                     out.push(109);
@@ -450,31 +457,31 @@ pub fn encode_with(t: &Term, md5_of: &dyn Fn(&crate::atom::Atom) -> Option<[u8; 
                 }
                 out.extend_from_slice(&bytes);
             }
-            Term::Fun(f) => match &**f {
-                Fun::Export { module, function, arity } => {
+            Term::Fun(_) => match heap.as_fun(t).expect("a fun") {
+                FunView::Export { module, function, arity } => {
                     out.push(113);
                     encode_atom(&mut out, module.as_str());
                     encode_atom(&mut out, function.as_str());
-                    encode_int(&mut out, *arity as i64);
+                    encode_int(&mut out, arity as i64);
                 }
                 // NEW_FUN_EXT: Size, Arity, Uniq (module MD5), Index, NumFree, Module,
                 // OldIndex, OldUniq, Pid (the creator; not tracked here), then the free variables.
-                Fun::Local { module, index, arity, env, uniq, .. } => {
+                FunView::Local { module, index, arity, env, uniq, .. } => {
                     out.push(112);
                     let at = out.len();
                     out.extend_from_slice(&[0; 4]);
-                    out.push(u8::try_from(*arity).map_err(|_| EncodeError::Unsupported)?);
-                    out.extend_from_slice(&md5_of(module).unwrap_or([0; 16]));
+                    out.push(u8::try_from(arity).map_err(|_| EncodeError::Unsupported)?);
+                    out.extend_from_slice(&md5_of(&module).unwrap_or([0; 16]));
                     out.extend_from_slice(&index.to_be_bytes());
                     out.extend_from_slice(&(env.len() as u32).to_be_bytes());
                     encode_atom(&mut out, module.as_str());
-                    encode_int(&mut out, *index as i64);
-                    encode_int(&mut out, *uniq as i64);
+                    encode_int(&mut out, index as i64);
+                    encode_int(&mut out, uniq as i64);
                     out.push(88);
                     encode_atom(&mut out, NODE);
                     out.extend_from_slice(&[0; 12]);
                     work.push(Work::FunEnd(at));
-                    work.extend(env.iter().rev().cloned().map(Work::Term));
+                    work.extend(env.iter().rev().copied().map(Work::Term));
                 }
             },
             Term::Pid(p) if p.port => {
@@ -502,8 +509,11 @@ pub fn encode_with(t: &Term, md5_of: &dyn Fn(&crate::atom::Atom) -> Option<[u8; 
             // A resource (a compiled regex, a hash state, ...) is written as the reference it
             // is to Erlang code, as BEAM writes its magic references: decoded, it is a plain
             // reference, and the native state never leaves the VM.
-            Term::Resource(r) => work.push(Work::Term(Term::Ref(crate::term::Ref(r.id)))),
-            Term::Match(_) => return Err(EncodeError::Unsupported),
+            Term::Resource(_) => {
+                let id = heap.as_resource(t).expect("a resource").id;
+                work.push(Work::Term(Term::Ref(crate::term::Ref(id))))
+            }
+            Term::Match(_) | Term::Node(_) | Term::Header(_) | Term::OffHeap(_) => return Err(EncodeError::Unsupported),
         }
     }
     Ok(out)
@@ -545,11 +555,17 @@ fn encode_atom(out: &mut Vec<u8>, a: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::format;
     use alloc::string::ToString;
 
-    fn dec(bytes: &[u8]) -> Result<Term, EtfError> {
-        decode(bytes, &mut AtomTable::new())
+    fn heap() -> Heap {
+        Heap::new(&Default::default())
+    }
+
+    /// Decode and print (the heap is gone after, so tests compare text).
+    fn dec(bytes: &[u8]) -> Result<alloc::string::String, EtfError> {
+        let mut h = heap();
+        let t = decode(bytes, &mut AtomTable::new(), &mut h)?;
+        Ok(h.show(t).to_string())
     }
 
     /// Byte strings are `term_to_binary/1` output from OTP 28.
@@ -571,7 +587,7 @@ mod tests {
             (&[131, 113, 119, 5, 108, 105, 115, 116, 115, 119, 3, 109, 97, 112, 97, 2], "fun lists:map/2"),
         ];
         for (bytes, want) in cases {
-            assert_eq!(dec(bytes).unwrap().to_string(), *want, "decoding {bytes:?}");
+            assert_eq!(dec(bytes).unwrap(), *want, "decoding {bytes:?}");
         }
     }
 
@@ -594,19 +610,21 @@ mod tests {
             &[131, 113, 119, 5, 108, 105, 115, 116, 115, 119, 3, 109, 97, 112, 97, 2],
         ];
         for bytes in cases {
-            let t = dec(bytes).unwrap();
-            assert_eq!(encode(&t).unwrap(), *bytes, "re-encoding {t}");
+            let mut h = heap();
+            let t = decode(bytes, &mut AtomTable::new(), &mut h).unwrap();
+            assert_eq!(encode(&h, t).unwrap(), *bytes, "re-encoding {}", h.show(t));
         }
     }
 
     #[test]
     fn safe_mode_creates_no_atoms() {
         let mut atoms = AtomTable::new();
+        let mut h = heap();
         let bytes = [131, 119, 3, 110, 101, 119];
-        assert_eq!(decode_prefix(&bytes, &mut atoms, true).err(), Some(EtfError::BadAtom));
+        assert_eq!(decode_prefix(&bytes, &mut atoms, &mut h, true).err(), Some(EtfError::BadAtom));
         assert!(atoms.existing("new").is_none());
-        assert!(decode_prefix(&bytes, &mut atoms, false).is_ok());
-        assert!(decode_prefix(&bytes, &mut atoms, true).is_ok());
+        assert!(decode_prefix(&bytes, &mut atoms, &mut h, false).is_ok());
+        assert!(decode_prefix(&bytes, &mut atoms, &mut h, true).is_ok());
     }
 
     #[test]
@@ -630,35 +648,38 @@ mod tests {
     #[test]
     fn local_pids_and_refs_round_trip() {
         let mut atoms = AtomTable::new();
+        let mut h = heap();
         for t in [Term::Pid(crate::term::Pid::process(77, 3)), Term::Ref(crate::term::Ref(0x1234_5678_9abc_def0))] {
-            let bytes = encode(&t).unwrap();
-            let back = decode(&bytes, &mut atoms).unwrap();
-            assert_eq!(back.to_string(), t.to_string());
+            let bytes = encode(&h, t).unwrap();
+            let back = decode(&bytes, &mut atoms, &mut h).unwrap();
+            assert_eq!(h.show(back).to_string(), h.show(t).to_string());
         }
         // Another node's pid is refused.
         let mut other = alloc::vec![131, 88];
         other.extend_from_slice(&[119, 5]);
         other.extend_from_slice(b"a@b.c");
         other.extend_from_slice(&[0; 12]);
-        assert!(decode(&other, &mut atoms).is_err());
+        assert!(decode(&other, &mut atoms, &mut h).is_err());
     }
 
     #[test]
     fn compressed_terms_round_trip() {
         let mut atoms = AtomTable::new();
-        let t = Term::list((0..500).map(|i| Term::Int(i % 7)).collect::<Vec<_>>());
-        let packed = encode_compressed(&t, 6, &|_| None).unwrap();
+        let mut h = heap();
+        let t = h.list((0..500).map(|i| Term::Int(i % 7)).collect::<Vec<_>>());
+        let packed = encode_compressed(&h, t, 6, &|_| None).unwrap();
         assert_eq!(packed[1], COMPRESSED);
-        assert!(packed.len() < encode(&t).unwrap().len());
-        assert_eq!(decode(&packed, &mut atoms).unwrap().to_string(), t.to_string());
+        assert!(packed.len() < encode(&h, t).unwrap().len());
+        let back = decode(&packed, &mut atoms, &mut h).unwrap();
+        assert!(h.eq_exact(back, t));
         // Small terms are left alone.
-        assert_eq!(encode_compressed(&Term::Nil, 6, &|_| None).unwrap(), encode(&Term::Nil).unwrap());
+        assert_eq!(encode_compressed(&h, Term::Nil, 6, &|_| None).unwrap(), encode(&h, Term::Nil).unwrap());
         // A lying size, a truncated stream, and a claimed size the input could never produce.
         let mut lie = packed.clone();
         lie[5] ^= 1;
-        assert!(decode(&lie, &mut atoms).is_err());
-        assert!(decode(&packed[..packed.len() - 3], &mut atoms).is_err());
-        assert!(decode(&[131, 80, 0x7f, 0xff, 0xff, 0xff, 0x78, 0x9c], &mut atoms).is_err());
+        assert!(decode(&lie, &mut atoms, &mut h).is_err());
+        assert!(decode(&packed[..packed.len() - 3], &mut atoms, &mut h).is_err());
+        assert!(decode(&[131, 80, 0x7f, 0xff, 0xff, 0xff, 0x78, 0x9c], &mut atoms, &mut h).is_err());
     }
 
     #[test]
@@ -685,9 +706,8 @@ mod tests {
             b.extend([97, 7]);
         }
         b.push(106);
-        let t = dec(&b).unwrap();
-        assert_eq!(t.list_iter().count(), 1_000_000);
-        drop(t);
-        let _ = format!("{}", 1);
+        let mut h = heap();
+        let t = decode(&b, &mut AtomTable::new(), &mut h).unwrap();
+        assert_eq!(h.list_iter(t).count(), 1_000_000);
     }
 }
