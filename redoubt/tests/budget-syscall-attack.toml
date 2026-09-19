@@ -1,8 +1,7 @@
-description = "Hostile arguments to every call WP-K1 built (bad and wide handles, unknown numbers, stray registers, records misaligned, in the kernel, read-only, never touched, straddling, malformed), in the spec's order of checks, and 4000 calls over hostile values: errors, never a panic (I14)"
+description = "Hostile arguments to every call WP-K1 built (bad and wide handles, unknown numbers, stray registers, records misaligned, in the kernel, read-only, never touched, straddling, malformed), in the spec's order of checks, and 4000 calls over hostile values: errors, never a panic (I14) (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# Debug assertions: `core`'s preconditions on raw-pointer calls and the kernel's own
-# `debug_assert!`s run in this boot (redoubt/README.md, "Debug assertions").
+# Built with the checks on (redoubt/README.md, "Debug assertions").
 debug_assertions = true
 # PID 2 the attacker (the loader's first program, holding root, system and users); PID 3
 # log-server; PID 4 budget-victim, in system beside the attacker; PID 5 attack-checker.

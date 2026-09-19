@@ -69,6 +69,11 @@ pub unsafe extern "C" fn init(
     platform::init();
 
     println!("KMAIN (clean boot): Supervisor mode started...");
+    if cfg!(debug_assertions) {
+        // The bench's `debug_assertions` cases expect this line, so a build that silently
+        // lost the checks fails instead of passing quietly (`bench-debug-assertions`).
+        println!("kernel: checks on (debug assertions, overflow checks)");
+    }
 
     // rand::init() already clears the initial pipe, but pump the TRNG a little more out of no other reason
     // than sheer paranoia

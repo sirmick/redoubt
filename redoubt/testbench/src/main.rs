@@ -219,8 +219,8 @@ fn prepare(
 ) -> Result<PathBuf> {
     let mut features: Vec<String> = machine.kernel_features.iter().map(|f| f.to_string()).collect();
     features.extend(extra_kernel_features.iter().cloned());
-    builder.cargo_build_with(target, "xous-kernel", &features, profile)?;
-    builder.cargo_build_with(target, machine.loader_package, &[], profile)?;
+    builder.cargo_build(target, "xous-kernel", &features, profile)?;
+    builder.cargo_build(target, machine.loader_package, &[], profile)?;
     let programs = programs.iter().map(|p| builder.program(target, p)).collect::<Result<Vec<_>>>()?;
     let files = files
         .iter()
@@ -259,7 +259,7 @@ fn run_case(
 
     let boot = match &case.kind {
         Kind::Build(build) => {
-            let outcome = match builder.cargo_build(target, &build.package, &build.features) {
+            let outcome = match builder.cargo_build(target, &build.package, &build.features, Profile::Release) {
                 Ok(()) => Outcome::Pass,
                 Err(e) => Outcome::Fail(format!("{e:#}")),
             };
@@ -286,7 +286,7 @@ fn run_case(
     // or the code's problem, never what a `must_fail` is waiting for, so it is not judged.
     let bundle = logs.join(format!("{}-{}.tar", case.name, target.name));
     let manifest = boot.grant.iter().flat_map(|g| g.manifest_lines()).collect::<Vec<_>>().join("\n");
-    let profile = if boot.debug_assertions { Profile::DebugAssertions } else { Profile::Release };
+    let profile = if boot.debug_assertions { Profile::Checked } else { Profile::Release };
     let bundle = match prepare(
         builder,
         target,

@@ -14,43 +14,33 @@ pub struct Builder {
     pub verbose: bool,
 }
 
-/// How a package is built: the release profile as the workspace defines it, or the same with
-/// debug assertions and overflow checks on (as the debug profile couples them), so every
-/// precondition check in `core` (`slice::from_raw_parts`, `ptr::read`, ...), every
-/// `debug_assert!` and every arithmetic overflow becomes a panic instead of silence. The
-/// checked build has its own target directory, so switching between the two never rebuilds
-/// either.
+/// Which cargo profile builds a package: the workspace's `release`, or `checked` (Cargo.toml):
+/// release with debug assertions and overflow checks on, so every precondition check in
+/// `core` (`slice::from_raw_parts`, `ptr::read`, ...), every `debug_assert!` and every
+/// arithmetic overflow becomes a panic instead of silence. Cargo keeps each profile's
+/// artifacts apart, so switching between the two rebuilds neither.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Profile {
     Release,
-    DebugAssertions,
+    Checked,
+}
+
+impl Profile {
+    fn name(self) -> &'static str {
+        match self {
+            Profile::Release => "release",
+            Profile::Checked => "checked",
+        }
+    }
 }
 
 impl Builder {
-    fn target_dir(&self, profile: Profile) -> PathBuf {
-        match profile {
-            Profile::Release => self.workspace.join("target"),
-            Profile::DebugAssertions => self.workspace.join("target/debug-assertions"),
-        }
-    }
-
     fn out_dir(&self, target: &Target, profile: Profile) -> PathBuf {
-        self.target_dir(profile).join(target.triple).join("release")
+        self.workspace.join("target").join(target.triple).join(profile.name())
     }
 
-    /// `cargo build --release` one package for `target`.
-    pub fn cargo_build(&self, target: &Target, package: &str, features: &[String]) -> Result<()> {
-        self.cargo(target, package, None, features, Profile::Release)
-    }
-
-    /// The same, with `profile`.
-    pub fn cargo_build_with(
-        &self,
-        target: &Target,
-        package: &str,
-        features: &[String],
-        profile: Profile,
-    ) -> Result<()> {
+    /// `cargo build` one package for `target` with `profile`.
+    pub fn cargo_build(&self, target: &Target, package: &str, features: &[String], profile: Profile) -> Result<()> {
         self.cargo(target, package, None, features, profile)
     }
 
@@ -63,12 +53,7 @@ impl Builder {
         profile: Profile,
     ) -> Result<()> {
         let mut cargo = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
-        cargo.current_dir(&self.workspace).args(["build", "--release", "--target", target.triple, "-p", package]);
-        cargo.arg("--target-dir").arg(self.target_dir(profile));
-        if profile == Profile::DebugAssertions {
-            cargo.env("CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS", "true");
-            cargo.env("CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS", "true");
-        }
+        cargo.current_dir(&self.workspace).args(["build", "--profile", profile.name(), "--target", target.triple, "-p", package]);
         if let Some(bin) = bin {
             cargo.args(["--bin", bin]);
         }

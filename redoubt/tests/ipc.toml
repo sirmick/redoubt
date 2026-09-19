@@ -1,8 +1,7 @@
-description = "Every message type across address spaces: scalar, blocking scalar, lend, lend_mut, move"
+description = "Every message type across address spaces: scalar, blocking scalar, lend, lend_mut, move (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# Debug assertions: `core`'s preconditions on raw-pointer calls and the kernel's own
-# `debug_assert!`s run in this boot (redoubt/README.md, "Debug assertions").
+# Built with the checks on (redoubt/README.md, "Debug assertions").
 debug_assertions = true
 programs = ["log-server", "ipc-client"]
 smp = [1, 4]
