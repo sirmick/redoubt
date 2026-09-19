@@ -1,21 +1,26 @@
-//! Host tests: every call, result, error and buffer round-trips on both register widths, and
-//! decoding rejects malformed input (and never panics on random input).
+//! Host tests: every call, result, error and record round-trips, every encoding fits rv32's
+//! registers, and decoding rejects malformed input (and never panics on random input).
 
 extern crate std;
-use std::format;
+use core::num::{NonZeroU64, NonZeroUsize};
+use std::string::String;
 use std::vec::Vec;
 
-use crate::regs::Writer;
 use crate::*;
 
 const BIG: u64 = 0x1234_5678_9abc_def0; // a u64 whose halves differ, to catch a swapped pair
 
 fn h(index: u32) -> Handle { Handle::new(index).unwrap() }
 
-fn pages(addr: usize, npages: usize) -> Option<Pages> { Some(Pages { addr, npages }) }
+fn pages(addr: usize, npages: usize) -> Pages { Pages { addr, npages: NonZeroUsize::new(npages).unwrap() } }
+
+fn badge(value: u64) -> NonZeroU64 { NonZeroU64::new(value).unwrap() }
+
+const CALLS: u64 = Number::ALL.len() as u64;
+const ERRORS: u64 = Error::ALL.len() as u64;
 
 /// At least one of every call, with every optional argument both present and absent. Addresses
-/// fit in 32 bits so the 32-bit encodings can hold them.
+/// fit in 32 bits so the encodings are exactly rv32's.
 fn sample_calls() -> Vec<Call> {
     let rw = MemFlags::READ | MemFlags::WRITE;
     std::vec![
@@ -29,23 +34,28 @@ fn sample_calls() -> Vec<Call> {
         Call::ProcessExit { code: u32::MAX },
         Call::ProcessCreate { budget: h(1), exit_endpoint: h(2) },
         Call::ProcessMap { process: h(5), src: 0x2000_0000, dst: 0x1000, len: 0x4000, flags: MemFlags::NONE },
-        Call::ProcessStart { process: h(5), entry: 0x1000, sp: 0x8000_0000, handles_buf: 0x3000, count: 7 },
+        Call::ProcessStart { process: h(5), entry: 0x1000, sp: 0x8000_0000, handles_rec: 0x3000, count: 7 },
         Call::EndpointCreate,
-        Call::Mint { source: MintSource::Message(BIG), badge: !BIG, budget: None },
-        Call::Mint { source: MintSource::Handle(h(u32::MAX - 1)), badge: 1, budget: Some(h(0)) },
-        Call::Call { endpoint: h(6), body_buf: 0x5000, lend: None, timeout: FOREVER },
-        Call::Call { endpoint: h(6), body_buf: 0x5000, lend: pages(0x6000, MAX_LEND_PAGES), timeout: BIG },
-        Call::Send { endpoint: h(7), body_buf: 0x5000, transfer: None, timeout: 0 },
-        Call::Send { endpoint: h(7), body_buf: 0x5000, transfer: pages(0x6000, 3), timeout: 10 },
-        Call::Receive { from: Some(h(0)), timeout: BIG, max_transfer: 16, record: 0x7000 },
-        Call::Receive { from: None, timeout: SLICE, max_transfer: 0, record: 0x7000 },
-        Call::Reply { msg_id: BIG, body_buf: 0x5000 },
+        Call::Mint { source: MintSource::Message(BIG), badge: badge(!BIG), budget: None },
+        Call::Mint { source: MintSource::Handle(h(u32::MAX - 1)), badge: badge(1), budget: Some(h(0)) },
+        Call::Call { endpoint: h(6), body_rec: 0x5000, lend: None, timeout: FOREVER },
+        Call::Call {
+            endpoint: h(6),
+            body_rec: 0x5000,
+            lend: Some(pages(0x6000, MAX_LEND_PAGES)),
+            timeout: BIG
+        },
+        Call::Send { endpoint: h(7), body_rec: 0x5000, transfer: None, timeout: 0 },
+        Call::Send { endpoint: h(7), body_rec: 0x5000, transfer: Some(pages(0x6000, 3)), timeout: 10 },
+        Call::Receive { from: Some(h(0)), timeout: BIG, max_transfer: 16, received_rec: 0x7000 },
+        Call::Receive { from: None, timeout: SLICE, max_transfer: 0, received_rec: 0x7000 },
+        Call::Reply { msg_id: BIG, body_rec: 0x5000 },
         Call::HandleClose { handle: h(9) },
-        Call::BudgetCreate { parent: h(1), spec_buf: 0x8000 },
+        Call::BudgetCreate { parent: h(1), spec_rec: 0x8000 },
         Call::BudgetDestroy { budget: h(10) },
         Call::BudgetUsage { budget: h(11) },
         Call::TimeNow,
-        Call::Random { buf: 0x9000, len: 64 },
+        Call::Random { bytes: 0x9001, len: MAX_RANDOM },
         Call::SystemReset { device: h(12), kind: ResetKind::PowerOff },
         Call::SystemReset { device: h(12), kind: ResetKind::Reboot },
     ]
@@ -62,132 +72,82 @@ fn sample_returns(number: Number) -> Vec<Return> {
         }
         Number::BudgetUsage => std::vec![Return::Usage(Usage {
             pages_limit: BIG,
-            pages_used: !BIG,
+            pages_usage: !BIG,
             processes_limit: 40,
-            processes_used: u32::MAX,
+            processes_usage: u32::MAX,
         })],
         Number::TimeNow => std::vec![Return::Time(0), Return::Time(BIG)],
         _ => std::vec![Return::Nothing],
     }
 }
 
-fn check_calls<R: Register>() {
+/// Every register holds at most 32 bits, so the encoding is valid on rv32 too.
+fn fits_rv32(regs: &[u64; REGS]) -> bool { regs.iter().all(|r| *r <= u64::from(u32::MAX)) }
+
+#[test]
+fn every_call_round_trips() {
     let calls = sample_calls();
     for number in Number::ALL {
-        assert!(calls.iter().any(|c| c.number() == number), "no sample for {}", number.name());
+        assert!(calls.iter().any(|c| c.number() == number), "no sample for {number:?}");
     }
     for call in calls {
-        let mut regs = [R::ZERO; REGS];
-        let mut w = Writer::new(&mut regs);
-        call.write(&mut w);
-        assert!(w.used() <= REGS, "{call:?} needs {} registers", w.used());
-        assert_eq!(regs, call.encode::<R>());
-        assert_eq!(regs[0].widen(), call.number() as u64);
+        let regs = call.encode();
+        assert!(fits_rv32(&regs), "{call:?} encoded as {regs:?}");
+        assert_eq!(regs[0], call.number() as u64);
         assert_eq!(Call::decode(&regs), Ok(call), "{call:?} encoded as {regs:?}");
+        // Every register matters: changing any one changes the call or breaks the encoding.
+        for i in 1..REGS {
+            let mut bad = regs;
+            bad[i] ^= 1;
+            assert_ne!(Call::decode(&bad), Ok(call), "{call:?} ignores a{i}");
+        }
     }
 }
 
-fn check_results<R: Register>() {
+#[test]
+fn every_result_and_error_round_trips() {
     for number in Number::ALL {
         for value in sample_returns(number) {
-            let mut regs = [R::ZERO; REGS];
-            let mut w = Writer::new(&mut regs);
-            crate::ret::write_result(&Ok(value), &mut w);
-            assert!(w.used() <= REGS, "{value:?} needs {} registers", w.used());
-            assert_eq!(regs[0], R::ZERO);
+            let regs = encode_result(&Ok(value));
+            assert!(fits_rv32(&regs), "{value:?} encoded as {regs:?}");
+            assert_eq!(regs[0], 0);
             assert_eq!(decode_result(number, &regs), Ok(value), "{value:?} encoded as {regs:?}");
         }
         for error in Error::ALL {
-            let regs = encode_result::<R>(&Err(error));
-            assert_eq!(regs[0].widen(), u64::from(error.code()));
-            assert!(regs[1..].iter().all(|r| *r == R::ZERO));
+            let regs = encode_result(&Err(error));
+            assert_eq!(regs, [error as u64, 0, 0, 0, 0, 0, 0, 0]);
             assert_eq!(decode_result(number, &regs), Err(error));
         }
     }
 }
 
-#[test]
-fn every_call_round_trips_64() { check_calls::<u64>() }
-
-#[test]
-fn every_call_round_trips_32() { check_calls::<u32>() }
-
-#[test]
-fn every_result_and_error_round_trips_64() { check_results::<u64>() }
-
-#[test]
-fn every_result_and_error_round_trips_32() { check_results::<u32>() }
-
-#[test]
-fn names_match_the_spec() {
-    let calls = [
-        "map_anon",
-        "unmap",
-        "set_flags",
-        "map_device",
-        "dma_alloc",
-        "thread_create",
-        "thread_exit",
-        "process_exit",
-        "process_create",
-        "process_map",
-        "process_start",
-        "endpoint_create",
-        "mint",
-        "call",
-        "send",
-        "receive",
-        "reply",
-        "handle_close",
-        "budget_create",
-        "budget_destroy",
-        "budget_usage",
-        "time_now",
-        "random",
-        "system_reset",
-    ];
-    let names: Vec<_> = Number::ALL.iter().map(|n| n.name()).collect();
-    assert_eq!(names, calls);
-    for (i, number) in Number::ALL.iter().enumerate() {
-        assert_eq!(*number as u64, i as u64 + 1);
-        assert_eq!(Number::from_raw(*number as u64), Some(*number));
+fn snake_case(camel: &str) -> String {
+    let mut snake = String::new();
+    for c in camel.chars() {
+        if c.is_ascii_uppercase() && !snake.is_empty() {
+            snake.push('_');
+        }
+        snake.push(c.to_ascii_lowercase());
     }
-    assert_eq!(Number::from_raw(0), None);
-    assert_eq!(Number::from_raw(Number::ALL.len() as u64 + 1), None);
-
-    let errors = [
-        "BadHandle",
-        "WrongObject",
-        "InvalidArgument",
-        "OutOfMemory",
-        "OutOfProcesses",
-        "TooManyThreads",
-        "NotPermitted",
-        "ClassDenied",
-        "LabelDenied",
-        "Busy",
-        "Refused",
-        "TooLarge",
-        "Timeout",
-        "Dead",
-    ];
-    let names: Vec<_> = Error::ALL.iter().map(|e| format!("{e:?}")).collect();
-    assert_eq!(names, errors);
-    for (i, error) in Error::ALL.iter().enumerate() {
-        assert_eq!(error.code(), i as u32 + 1);
-        assert_eq!(Error::from_code(error.code().into()), Some(*error));
-    }
-    assert_eq!(Error::from_code(0), None);
-    assert_eq!(Error::from_code(Error::ALL.len() as u64 + 1), None);
+    snake
 }
 
 #[test]
-fn constants_match_the_spec() {
-    assert_eq!(
-        (WORDS, MAX_MSG_HANDLES, MAX_LEND_PAGES, MAX_THREADS, MAX_LABELS, MAX_DEPTH, WAIT_CAP),
-        (4, 4, 16, 31, 8, 8, 16)
-    );
-    assert_eq!((STRIDE, SLICE, FOREVER), (1 << 20, 10_000, u64::MAX));
+fn numbers_and_codes_are_dense_from_one() {
+    for (i, number) in Number::ALL.iter().enumerate() {
+        assert_eq!(*number as u64, i as u64 + 1);
+        assert_eq!(Number::from_raw(*number as u64), Some(*number));
+        // The spec's name, typed once in the table, agrees with the variant's.
+        assert_eq!(number.name(), snake_case(&std::format!("{number:?}")));
+    }
+    assert_eq!(Number::from_raw(0), None);
+    assert_eq!(Number::from_raw(CALLS + 1), None);
+    for (i, error) in Error::ALL.iter().enumerate() {
+        assert_eq!(*error as u64, i as u64 + 1);
+        assert_eq!(Error::from_code(*error as u64), Some(*error));
+    }
+    assert_eq!(Error::from_code(0), None);
+    assert_eq!(Error::from_code(ERRORS + 1), None);
 }
 
 fn body(nhandles: u32) -> Body {
@@ -210,8 +170,8 @@ fn sample_received() -> Vec<Received> {
     };
     std::vec![
         message(None),
-        message(Some(Buffer::Lend(Pages { addr: 0x6000, npages: MAX_LEND_PAGES }))),
-        message(Some(Buffer::Transfer(Pages { addr: 0x6000, npages: 1 }))),
+        message(Some(Buffer::Lend(pages(0x6000, MAX_LEND_PAGES)))),
+        message(Some(Buffer::Transfer(pages(0x6000, 1)))),
         Received::Message(Message {
             msg_id: 0,
             badge: u64::MAX,
@@ -251,7 +211,7 @@ fn sample_specs() -> Vec<BudgetSpec> {
 }
 
 #[test]
-fn buffers_round_trip() {
+fn records_round_trip() {
     for n in 0..=MAX_MSG_HANDLES as u32 {
         let b = body(n);
         assert_eq!(Body::decode(&b.encode()), Ok(b));
@@ -275,69 +235,63 @@ fn lists_hold_at_most_their_capacity() {
 }
 
 /// Every way a call's registers can be malformed is refused with the right error.
-fn check_malformed_calls<R: Register>() {
-    let t = |v: u64| R::truncate(v);
-    let decode = |regs: [u64; REGS]| Call::decode(&regs.map(t));
+#[test]
+fn malformed_calls_are_refused() {
+    let decode = |regs: [u64; REGS]| Call::decode(&regs);
+    let wide = 1 << 32; // too wide for a 32-bit field (only rv64 registers can hold it)
     assert_eq!(decode([0; REGS]), Err(Error::InvalidArgument), "call number 0");
-    assert_eq!(decode([25, 0, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "unknown call");
-    // A non-zero register after the last argument, for every sample call.
-    for call in sample_calls() {
-        let mut regs = [R::ZERO; REGS];
-        let mut w = Writer::new(&mut regs);
-        call.write(&mut w);
-        for unused in w.used()..REGS {
-            let mut bad = regs;
-            bad[unused] = t(1);
-            assert_eq!(Call::decode(&bad), Err(Error::InvalidArgument), "{call:?} with a{unused} set");
-        }
-    }
+    assert_eq!(decode([CALLS + 1, 0, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "unknown call");
     let map_anon = Number::MapAnon as u64;
     assert_eq!(decode([map_anon, 0x1000, 8, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "unknown flag");
+    assert_eq!(
+        decode([map_anon, 0x1000, wide | 1, 0, 0, 0, 0, 0]),
+        Err(Error::InvalidArgument),
+        "wide flags"
+    );
+    assert_eq!(decode([map_anon, 0x1000, 6, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "W+X");
+    assert_eq!(decode([map_anon, 0x1000, 7, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "RW+X");
+    let random = Number::Random as u64;
+    let too_many = MAX_RANDOM as u64 + 1;
+    assert_eq!(decode([random, 0x9000, too_many, 0, 0, 0, 0, 0]), Err(Error::TooLarge), "random len");
+    let call = Number::Call as u64;
+    assert_eq!(decode([call, 6, 0x5000, 0x6000, 0, 0, 0, 0]), Err(Error::InvalidArgument), "lend of 0 pages");
+    assert_eq!(decode([call, 6, 0x5000, 0, 1, 0, 0, 0]), Err(Error::InvalidArgument), "lend at 0");
+    let exit = Number::ProcessExit as u64;
+    assert_eq!(decode([exit, wide, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "wide code");
     let close = Number::HandleClose as u64;
     assert_eq!(decode([close, u32::MAX.into(), 0, 0, 0, 0, 0, 0]), Err(Error::BadHandle), "reserved handle");
+    assert_eq!(decode([close, wide, 0, 0, 0, 0, 0, 0]), Err(Error::BadHandle), "wide handle");
     let mint = Number::Mint as u64;
+    assert_eq!(decode([mint, 1, 5, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "badge 0");
     assert_eq!(decode([mint, 3, 0, 0, 1, 0, 0, 0]), Err(Error::InvalidArgument), "unknown mint source");
     assert_eq!(decode([mint, 0, 0, 0, 1, 0, 0, 0]), Err(Error::InvalidArgument), "mint source 0");
+    assert_eq!(decode([mint, 2, wide, 0, 1, 0, 0, 0]), Err(Error::InvalidArgument), "wide half");
+    assert_eq!(decode([mint, 2, 0, 1, 1, 0, 0, 0]), Err(Error::BadHandle), "mint source handle");
+    assert_eq!(
+        decode([mint, 1, 5, 0, 1, 0, u32::MAX.into(), 0]),
+        Ok(Call::Mint { source: MintSource::Message(5), badge: badge(1), budget: None })
+    );
     let reset = Number::SystemReset as u64;
     assert_eq!(decode([reset, 1, 3, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "unknown reset kind");
     assert_eq!(decode([reset, 1, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "reset kind 0");
 }
 
 #[test]
-fn malformed_calls_are_refused_64() {
-    check_malformed_calls::<u64>();
-    // Only 64-bit registers can hold values too wide for a 32-bit field.
-    let wide = 1 << 32;
-    let exit = Number::ProcessExit as u64;
-    assert_eq!(Call::decode(&[exit, wide, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument));
-    let close = Number::HandleClose as u64;
-    assert_eq!(Call::decode(&[close, wide, 0, 0, 0, 0, 0, 0]), Err(Error::BadHandle));
-    let mint = Number::Mint as u64;
-    assert_eq!(Call::decode(&[mint, 2, wide, 1, 0, 0, 0, 0]), Err(Error::BadHandle), "mint source handle");
-    assert_eq!(Call::decode(&[mint, 1, 5, 1, wide, 0, 0, 0]), Err(Error::BadHandle), "mint budget");
-    let map_anon = Number::MapAnon as u64;
-    assert_eq!(Call::decode(&[map_anon, 0x1000, wide | 1, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument));
-}
-
-#[test]
-fn malformed_calls_are_refused_32() { check_malformed_calls::<u32>() }
-
-#[test]
 fn malformed_results_are_refused() {
-    let regs = encode_result::<u64>(&Ok(Return::Addr(0x1000)));
+    let regs = encode_result(&Ok(Return::Addr(0x1000)));
     assert_eq!(decode_result(Number::Unmap, &regs), Err(Error::InvalidArgument), "wrong shape");
-    assert_eq!(decode_result(Number::Unmap, &[15u64, 0, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument));
-    assert_eq!(decode_result(Number::Unmap, &[1u64, 1, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument));
+    assert_eq!(decode_result(Number::Unmap, &[ERRORS + 1, 0, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument));
+    assert_eq!(decode_result(Number::Unmap, &[1, 1, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument));
     assert_eq!(
-        decode_result(Number::ThreadCreate, &[0u64, 1 << 32, 0, 0, 0, 0, 0, 0]),
+        decode_result(Number::ThreadCreate, &[0, 1 << 32, 0, 0, 0, 0, 0, 0]),
         Err(Error::InvalidArgument)
     );
     let none = u64::from(u32::MAX);
-    assert_eq!(decode_result(Number::Mint, &[0u64, none, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument));
+    assert_eq!(decode_result(Number::Mint, &[0, none, 0, 0, 0, 0, 0, 0]), Err(Error::BadHandle));
 }
 
 #[test]
-fn malformed_buffers_are_refused() {
+fn malformed_records_are_refused() {
     // Body: too many handles, a stray handle slot, a reserved handle.
     let mut slots = body(1).encode();
     slots[WORDS] = MAX_MSG_HANDLES as u64 + 1;
@@ -383,6 +337,12 @@ fn malformed_buffers_are_refused() {
     let mut slots = sample_received()[0].encode();
     slots[RECEIVED_SLOTS - 3] = 3;
     assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "unknown buffer kind");
+    let mut slots = sample_received()[1].encode();
+    slots[RECEIVED_SLOTS - 1] = 0;
+    assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "a lend of 0 pages");
+    let mut slots = sample_received()[1].encode();
+    slots[RECEIVED_SLOTS - 3] = 0;
+    assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "pages, but no buffer");
 }
 
 /// xorshift64: deterministic, so a failure reproduces.
@@ -409,30 +369,25 @@ impl Rng {
 
 /// Decoding random registers never panics, and whatever decodes has exactly one encoding: the
 /// registers it came from.
-fn check_random_registers<R: Register>(seed: u64) {
-    let mut rng = Rng(seed);
+#[test]
+fn random_registers() {
+    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
     for _ in 0..200_000 {
-        let mut regs = [R::ZERO; REGS].map(|_| R::truncate(rng.value()));
-        regs[0] = R::truncate(rng.next() % 26);
+        let mut regs = [0; REGS].map(|_| rng.value());
+        regs[0] = rng.next() % (CALLS + 2);
         if let Ok(call) = Call::decode(&regs) {
-            assert_eq!(call.encode::<R>(), regs);
+            assert_eq!(call.encode(), regs);
         }
-        let number = Number::ALL[(rng.next() % 24) as usize];
-        regs[0] = R::truncate(rng.next() % 16);
+        let number = Number::ALL[(rng.next() % CALLS) as usize];
+        regs[0] = rng.next() % (ERRORS + 2);
         if let Ok(value) = decode_result(number, &regs) {
-            assert_eq!(encode_result::<R>(&Ok(value)), regs);
+            assert_eq!(encode_result(&Ok(value)), regs);
         }
     }
 }
 
 #[test]
-fn random_registers_64() { check_random_registers::<u64>(0x9e37_79b9_7f4a_7c15) }
-
-#[test]
-fn random_registers_32() { check_random_registers::<u32>(0x2545_f491_4f6c_dd1d) }
-
-#[test]
-fn random_buffers() {
+fn random_records() {
     let mut rng = Rng(0xd1b5_4a32_d192_ed03);
     for _ in 0..200_000 {
         let mut body = [0; BODY_SLOTS].map(|_| rng.value());

@@ -1,7 +1,7 @@
 //! The Redoubt system call ABI, shared by the kernel and every process.
 //!
 //! The calls, errors and constants are KERNEL-SPEC.md's, under the same names. This crate only
-//! says how they travel: which registers, which buffers, which numbers. What a call *does* is the
+//! says how they travel: which registers, which records, which numbers. What a call *does* is the
 //! kernel's business.
 //!
 //! # Registers
@@ -9,73 +9,90 @@
 //! A call is an `ecall` with `a0` = the call's [`Number`] and its arguments in `a1..=a7`, in the
 //! order listed on each [`Call`] variant. The kernel answers in the same eight registers:
 //! `a0` = 0 and the result in `a1..=a7` (see [`Return`]), or `a0` = an [`Error`] code and
-//! `a1..=a7` = 0.
+//! `a1..=a7` = 0. The kernel preserves every register other than `a0..=a7` across the `ecall`.
+//!
+//! The layout is the same on both widths: in this crate a register is a `u64` holding the
+//! register's value, and no register ever holds more than 32 bits or one `usize`, so rv32 carries
+//! every encoding.
 //!
 //! | Argument kind | Registers | Rule |
 //! | --- | --- | --- |
 //! | address, length, word (`usize`) | 1 | |
-//! | 64-bit value (`u64`: ids, badges, accounts, time) | 1 on rv64, 2 on rv32 (low, high) | |
-//! | small value (`u32`: tid, pid, exit code, weight) | 1 | must fit in 32 bits |
+//! | 64-bit value (`u64`: ids, badges, accounts, time) | 2: low half, high half | each half fits in 32 bits |
+//! | small value (`u32`: tid, pid, exit code, weight, count) | 1 | must fit in 32 bits |
+//! | [`MemFlags`] | 1 | only `READ`, `WRITE`, `EXECUTE`; never `WRITE` with `EXECUTE` |
 //! | handle | 1 | an index below `u32::MAX` |
 //! | optional handle | 1 | `u32::MAX` = none |
-//! | optional page range (lend, transfer) | 2: address, pages | (0, 0) = none |
-//! | enum tag (reset kind, mint source; in buffers: class, kinds) | 1 | numbered from 1; 0 is never a valid tag, except "no buffer" in a [`Received`] message |
+//! | optional [`Pages`] (lend, transfer) | 2: address, pages | (0, 0) = none; one of them 0 is invalid |
+//! | enum tag (reset kind, mint source; in records: class, cause, kind) | 1 | numbered from 1; 0 is never a valid tag, except "no buffer" in a [`Received`] message |
 //!
-//! Registers a call does not use must be 0. Decoding in the kernel's direction ([`Call::decode`])
-//! rejects every malformed value with an error and never panics (KERNEL-SPEC.md I14). It checks
-//! only the encoding: unknown numbers, tags and flag bits, values too wide for their field, lists
-//! longer than their array, non-zero unused registers and slots. Everything else (does the handle
-//! exist, is the range page-aligned, is `len` at most 64) is the kernel's check. A decoding
-//! failure is `BadHandle` for a handle that is not an index, `TooLarge` for a list count above its
-//! capacity, and `InvalidArgument` for everything else.
+//! Registers a call does not use must be 0.
 //!
-//! # Buffers
+//! Timeouts are relative microseconds. The kernel turns one into a deadline with
+//! `saturating_add`, so [`FOREVER`] never wraps and never expires.
 //!
-//! What does not fit in seven registers goes through a buffer in the caller's memory, passed by
-//! address. Every buffer is a fixed-length array of `u64` slots, little-endian, the same layout on
-//! both widths; a `usize` field in a slot must fit the target's `usize`. Unused slots must be 0.
-//! The kernel copies the buffer in, decodes it here, and (for results) encodes and copies out.
+//! # Records
 //!
-//! | Buffer | Slots | Used by |
+//! What does not fit in seven registers goes through a record in the caller's memory, passed by
+//! address (the fields named `*_rec`). A record is a fixed-length array of `u64` slots,
+//! little-endian and 8-byte aligned (a misaligned record is `InvalidArgument`), with the same
+//! layout on both widths; unused slots must be 0. A `usize` field in a slot must fit the target's
+//! `usize`: on rv32 a value above `u32::MAX` is `InvalidArgument`. The kernel copies the record in,
+//! decodes it here, and (for results) encodes and copies out. "Buffer" keeps the spec's meaning:
+//! the pages of a lend or a transfer.
+//!
+//! | Record | Slots | Used by |
 //! | --- | --- | --- |
 //! | [`Body`]: words, handle count, handles | [`BODY_SLOTS`] | `call` (request in, reply out), `send`, `reply` |
 //! | [`Received`]: what `receive` returned | [`RECEIVED_SLOTS`] | `receive` (out) |
 //! | [`BudgetSpec`]: a new budget's fields | [`BUDGET_SPEC_SLOTS`] | `budget_create` (in) |
 //! | handle list: one handle per slot ([`Handle::from_raw`]) | the call's count | `process_start` (in) |
-//! | bytes | the call's length | `random` (out) |
 //!
-//! # Widths
+//! `random` writes plain bytes (no record, any alignment).
 //!
-//! The encodings are generic over the register type ([`Register`], `u32` or `u64`), so the host
-//! tests exercise both. [`Reg`] is the target's register type; `width.rs` is the one place in this
-//! crate that looks at `target_pointer_width`.
+//! Records can overlap the pages a call acts on; the kernel must copy a record in before it
+//! changes those pages, and copy results out only to memory still the caller's. For example a
+//! `call`'s body record may lie inside its lend (which is unmapped from the caller during the
+//! call), and a `process_start` handle list may lie in pages just moved away by `process_map`.
+//!
+//! # Decoding
+//!
+//! Decoding in the kernel's direction ([`Call::decode`], [`Body::decode`],
+//! [`BudgetSpec::decode`]) rejects every malformed value with an error and never panics
+//! (KERNEL-SPEC.md I14). It checks the encoding (unknown numbers, tags and flag bits, values too
+//! wide for their field, lists longer than their array, non-zero unused registers and slots) and
+//! the few rules a single value states by itself: no W+X flags, no badge 0 in `mint`, `random`'s
+//! `len` at most [`MAX_RANDOM`]. Everything else (does the handle exist, is the range
+//! page-aligned) is the kernel's check.
+//!
+//! One rule picks the error, in both directions (also [`decode_result`] and
+//! [`Received::decode`]): `BadHandle` for a handle that is not an index, `TooLarge` for a count
+//! above its limit, and `InvalidArgument` for everything else.
 
 #![no_std]
 // `deny`, not `forbid`: the `ecall` stub (the only `unsafe` here) must be able to allow it.
 #![deny(unsafe_code)]
 
-mod buffer;
 mod call;
 #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
 mod ecall;
 mod error;
+mod record;
 mod regs;
 mod ret;
 #[cfg(test)]
 mod tests;
-mod width;
 
-pub use buffer::{
-    BODY_SLOTS, BUDGET_SPEC_SLOTS, Body, BudgetSpec, Buffer, Cause, Class, ExitNotice, Handles, Labels, List,
-    Message, RECEIVED_SLOTS, Received,
-};
 pub use call::{Call, Handle, MemFlags, MintSource, Number, Pages, ResetKind};
 #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
 pub use ecall::syscall;
 pub use error::Error;
-pub use regs::{REGS, Register};
+pub use record::{
+    BODY_SLOTS, BUDGET_SPEC_SLOTS, Body, BudgetSpec, Buffer, Cause, Class, ExitNotice, Handles, Labels, List,
+    Message, RECEIVED_SLOTS, Received, Slot,
+};
+pub use regs::REGS;
 pub use ret::{Return, Usage, decode_result, encode_result};
-pub use width::Reg;
 
 /// Machine words in a message.
 pub const WORDS: usize = 4;
@@ -97,3 +114,7 @@ pub const STRIDE: u64 = 1 << 20;
 pub const SLICE: u64 = 10_000;
 /// A timeout that never expires (microseconds).
 pub const FOREVER: u64 = u64::MAX;
+/// Bytes one `random` call returns at most (KERNEL-SPEC.md, `random`).
+pub const MAX_RANDOM: usize = 64;
+/// The base page, on both Sv32 and Sv39: the unit of lends, transfers and page counts.
+pub const PAGE_SIZE: usize = 4096;

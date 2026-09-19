@@ -40,10 +40,6 @@ impl Error {
         Error::Dead,
     ];
 
-    pub fn code(self) -> u32 { self as u32 }
-
     /// The error with this code; `None` for 0 and unknown codes.
-    pub fn from_code(code: u64) -> Option<Error> {
-        Error::ALL.iter().copied().find(|e| u64::from(e.code()) == code)
-    }
+    pub fn from_code(code: u64) -> Option<Error> { Error::ALL.iter().copied().find(|e| *e as u64 == code) }
 }

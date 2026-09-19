@@ -1,12 +1,14 @@
 //! The system calls and their argument registers (KERNEL-SPEC.md, System calls).
 
-use crate::Error;
-use crate::regs::{REGS, Reader, Register, Writer};
+use core::num::{NonZeroU64, NonZeroUsize};
+
+use crate::regs::{REGS, Reader, Writer};
+use crate::{Error, MAX_RANDOM};
 
 /// An index into the calling process's handle table. `u32::MAX` is never an index: in a register
 /// it means "no handle".
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub struct Handle(u32);
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Handle(pub(crate) u32);
 
 impl Handle {
     const NONE: u64 = u32::MAX as u64;
@@ -18,29 +20,23 @@ impl Handle {
 
     pub const fn index(self) -> u32 { self.0 }
 
-    /// The handle as a register or buffer slot.
+    /// The handle as a register or record slot.
     pub const fn to_raw(self) -> u64 { self.0 as u64 }
 
-    /// A handle from a register or buffer slot (the `process_start` list); anything that is not
+    /// A handle from a register or record slot (the `process_start` list); anything that is not
     /// an index is `BadHandle`.
     pub fn from_raw(raw: u64) -> Result<Handle, Error> {
         if raw < Handle::NONE { Ok(Handle(raw as u32)) } else { Err(Error::BadHandle) }
     }
-
-    pub(crate) fn raw(handle: Option<Handle>) -> u64 { handle.map_or(Handle::NONE, |h| h.0.into()) }
-
-    pub(crate) fn from_raw_optional(raw: u64) -> Result<Option<Handle>, Error> {
-        if raw == Handle::NONE { Ok(None) } else { Handle::from_raw(raw).map(Some) }
-    }
 }
 
-/// Access to a mapping. The kernel refuses writable and executable together (R11); this type can
-/// express it so that the refusal is the kernel's, with the kernel's error.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+/// Access to a mapping. Writable and executable together cannot be decoded: this is the one point
+/// every call passes through, so refusing W+X here (`InvalidArgument`) backs up the kernel's own
+/// check (R11) rather than replacing it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct MemFlags(u32);
 
 impl MemFlags {
-    const ALL: u32 = 7;
     pub const EXECUTE: MemFlags = MemFlags(4);
     pub const NONE: MemFlags = MemFlags(0);
     pub const READ: MemFlags = MemFlags(1);
@@ -48,12 +44,11 @@ impl MemFlags {
 
     pub const fn bits(self) -> u32 { self.0 }
 
-    /// `None` if any unknown bit is set.
+    /// `None` if an unknown bit is set, or both `WRITE` and `EXECUTE`.
     pub const fn from_bits(bits: u32) -> Option<MemFlags> {
-        if bits & !MemFlags::ALL == 0 { Some(MemFlags(bits)) } else { None }
+        let wx = MemFlags::WRITE.0 | MemFlags::EXECUTE.0;
+        if bits & !7 == 0 && bits & wx != wx { Some(MemFlags(bits)) } else { None }
     }
-
-    pub const fn contains(self, other: MemFlags) -> bool { self.0 & other.0 == other.0 }
 }
 
 impl core::ops::BitOr for MemFlags {
@@ -62,15 +57,33 @@ impl core::ops::BitOr for MemFlags {
     fn bitor(self, other: MemFlags) -> MemFlags { MemFlags(self.0 | other.0) }
 }
 
-/// A page range: a lend (`call`) or a transfer (`send`). In registers, `None` is (0, 0), so
-/// `Some` of (0, 0) is sent as `None`. Alignment and size are the kernel's checks.
+/// A page range: a lend (`call`), a transfer (`send`) or what a message brought. Two registers
+/// or slots, address then page count; (0, 0) is "none", and exactly one of them 0 is
+/// `InvalidArgument`, so each value has one encoding. Alignment and size are the kernel's checks.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Pages {
     pub addr: usize,
-    pub npages: usize,
+    pub npages: NonZeroUsize,
 }
 
-/// What `mint` derives the new handle from.
+impl Pages {
+    pub(crate) fn write(pages: Option<Pages>, w: &mut Writer) {
+        let (addr, npages) = pages.map_or((0, 0), |p| (p.addr, p.npages.get()));
+        w.usize(addr);
+        w.usize(npages);
+    }
+
+    pub(crate) fn read(r: &mut Reader) -> Result<Option<Pages>, Error> {
+        match (r.usize()?, NonZeroUsize::new(r.usize()?)) {
+            (0, None) => Ok(None),
+            (addr, Some(npages)) if addr != 0 => Ok(Some(Pages { addr, npages })),
+            _ => Err(Error::InvalidArgument),
+        }
+    }
+}
+
+/// What `mint` derives the new handle from. Registers: a tag (1 message, 2 handle), then the
+/// value as a `u64`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MintSource {
     /// A message id the caller is serving.
@@ -86,442 +99,203 @@ pub enum ResetKind {
     Reboot = 2,
 }
 
-/// The call numbers, in KERNEL-SPEC.md's table order. They travel in `a0`; 0 is not a call.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Number {
-    MapAnon = 1,
-    Unmap = 2,
-    SetFlags = 3,
-    MapDevice = 4,
-    DmaAlloc = 5,
-    ThreadCreate = 6,
-    ThreadExit = 7,
-    ProcessExit = 8,
-    ProcessCreate = 9,
-    ProcessMap = 10,
-    ProcessStart = 11,
-    EndpointCreate = 12,
-    Mint = 13,
-    Call = 14,
-    Send = 15,
-    Receive = 16,
-    Reply = 17,
-    HandleClose = 18,
-    BudgetCreate = 19,
-    BudgetDestroy = 20,
-    BudgetUsage = 21,
-    TimeNow = 22,
-    Random = 23,
-    SystemReset = 24,
+/// How each kind of argument travels in registers (the table in the crate docs).
+trait Arg: Sized {
+    fn write(&self, w: &mut Writer);
+    fn read(r: &mut Reader) -> Result<Self, Error>;
 }
 
-impl Number {
-    /// Every call, in number order.
-    pub const ALL: [Number; 24] = [
-        Number::MapAnon,
-        Number::Unmap,
-        Number::SetFlags,
-        Number::MapDevice,
-        Number::DmaAlloc,
-        Number::ThreadCreate,
-        Number::ThreadExit,
-        Number::ProcessExit,
-        Number::ProcessCreate,
-        Number::ProcessMap,
-        Number::ProcessStart,
-        Number::EndpointCreate,
-        Number::Mint,
-        Number::Call,
-        Number::Send,
-        Number::Receive,
-        Number::Reply,
-        Number::HandleClose,
-        Number::BudgetCreate,
-        Number::BudgetDestroy,
-        Number::BudgetUsage,
-        Number::TimeNow,
-        Number::Random,
-        Number::SystemReset,
-    ];
+impl Arg for usize {
+    fn write(&self, w: &mut Writer) { w.usize(*self) }
 
-    pub fn from_raw(raw: u64) -> Option<Number> { Number::ALL.iter().copied().find(|n| *n as u64 == raw) }
+    fn read(r: &mut Reader) -> Result<Self, Error> { r.usize() }
+}
 
-    /// The name KERNEL-SPEC.md (and the executable model) uses.
-    pub fn name(self) -> &'static str {
-        match self {
-            Number::MapAnon => "map_anon",
-            Number::Unmap => "unmap",
-            Number::SetFlags => "set_flags",
-            Number::MapDevice => "map_device",
-            Number::DmaAlloc => "dma_alloc",
-            Number::ThreadCreate => "thread_create",
-            Number::ThreadExit => "thread_exit",
-            Number::ProcessExit => "process_exit",
-            Number::ProcessCreate => "process_create",
-            Number::ProcessMap => "process_map",
-            Number::ProcessStart => "process_start",
-            Number::EndpointCreate => "endpoint_create",
-            Number::Mint => "mint",
-            Number::Call => "call",
-            Number::Send => "send",
-            Number::Receive => "receive",
-            Number::Reply => "reply",
-            Number::HandleClose => "handle_close",
-            Number::BudgetCreate => "budget_create",
-            Number::BudgetDestroy => "budget_destroy",
-            Number::BudgetUsage => "budget_usage",
-            Number::TimeNow => "time_now",
-            Number::Random => "random",
-            Number::SystemReset => "system_reset",
-        }
+impl Arg for u32 {
+    fn write(&self, w: &mut Writer) { w.u32(*self) }
+
+    fn read(r: &mut Reader) -> Result<Self, Error> { r.u32() }
+}
+
+impl Arg for u64 {
+    fn write(&self, w: &mut Writer) { w.u64(*self) }
+
+    fn read(r: &mut Reader) -> Result<Self, Error> { r.u64() }
+}
+
+/// A badge: `mint` never creates badge 0 (the receive right), so 0 does not decode.
+impl Arg for NonZeroU64 {
+    fn write(&self, w: &mut Writer) { w.u64(self.get()) }
+
+    fn read(r: &mut Reader) -> Result<Self, Error> { NonZeroU64::new(r.u64()?).ok_or(Error::InvalidArgument) }
+}
+
+impl Arg for Handle {
+    fn write(&self, w: &mut Writer) { w.u32(self.0) }
+
+    fn read(r: &mut Reader) -> Result<Self, Error> { Handle::from_raw(r.raw()) }
+}
+
+impl Arg for Option<Handle> {
+    fn write(&self, w: &mut Writer) { w.u32(self.map_or(u32::MAX, |h| h.0)) }
+
+    fn read(r: &mut Reader) -> Result<Self, Error> {
+        let raw = r.raw();
+        if raw == Handle::NONE { Ok(None) } else { Handle::from_raw(raw).map(Some) }
     }
 }
 
-/// A system call with its arguments, in register order (`a1` first). Fields named `*_buf` or
-/// `record` are addresses of buffers in the caller's memory (see the crate docs for layouts).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Call {
-    /// -> [`Return::Addr`](crate::Return::Addr)
-    MapAnon {
-        len: usize,
-        flags: MemFlags,
-    },
-    Unmap {
-        addr: usize,
-        len: usize,
-    },
-    SetFlags {
-        addr: usize,
-        len: usize,
-        flags: MemFlags,
-    },
-    /// -> [`Return::Addr`](crate::Return::Addr)
-    MapDevice {
-        device: Handle,
-    },
-    /// -> [`Return::Dma`](crate::Return::Dma)
-    DmaAlloc {
-        device: Handle,
-        npages: usize,
-    },
-    /// -> [`Return::Tid`](crate::Return::Tid)
-    ThreadCreate {
-        entry: usize,
-        sp: usize,
-        arg: usize,
-    },
-    /// Does not return.
-    ThreadExit,
-    /// Does not return.
-    ProcessExit {
-        code: u32,
-    },
-    /// -> [`Return::Handle`](crate::Return::Handle)
-    ProcessCreate {
-        budget: Handle,
-        exit_endpoint: Handle,
-    },
-    ProcessMap {
-        process: Handle,
-        src: usize,
-        dst: usize,
-        len: usize,
-        flags: MemFlags,
-    },
-    /// `handles_buf` holds `count` slots, one handle each, copied into the child's slots 1..=count.
-    ProcessStart {
-        process: Handle,
-        entry: usize,
-        sp: usize,
-        handles_buf: usize,
-        count: usize,
-    },
-    /// -> [`Return::Handle`](crate::Return::Handle)
-    EndpointCreate,
-    /// -> [`Return::Handle`](crate::Return::Handle). Registers: source tag (1 message, 2
-    /// handle), source value as a `u64`, badge, budget.
-    Mint {
-        source: MintSource,
-        badge: u64,
-        budget: Option<Handle>,
-    },
-    /// `body_buf` is a [`Body`](crate::Body): the request going in, the reply coming out.
-    Call {
-        endpoint: Handle,
-        body_buf: usize,
-        lend: Option<Pages>,
-        timeout: u64,
-    },
-    /// `body_buf` is a [`Body`](crate::Body).
-    Send {
-        endpoint: Handle,
-        body_buf: usize,
-        transfer: Option<Pages>,
-        timeout: u64,
-    },
-    /// `from` is a badge-0 endpoint, an IRQ, or none (sleep). `max_transfer` is in pages. The
-    /// kernel writes a [`Received`](crate::Received) to `record`.
-    Receive {
-        from: Option<Handle>,
-        timeout: u64,
-        max_transfer: usize,
-        record: usize,
-    },
-    /// `body_buf` is a [`Body`](crate::Body).
-    Reply {
-        msg_id: u64,
-        body_buf: usize,
-    },
-    HandleClose {
-        handle: Handle,
-    },
-    /// `spec_buf` is a [`BudgetSpec`](crate::BudgetSpec). -> [`Return::Handle`](crate::Return::Handle)
-    BudgetCreate {
-        parent: Handle,
-        spec_buf: usize,
-    },
-    BudgetDestroy {
-        budget: Handle,
-    },
-    /// -> [`Return::Usage`](crate::Return::Usage)
-    BudgetUsage {
-        budget: Handle,
-    },
-    /// -> [`Return::Time`](crate::Return::Time)
-    TimeNow,
-    /// The kernel writes `len` random bytes to `buf`.
-    Random {
-        buf: usize,
-        len: usize,
-    },
-    SystemReset {
-        device: Handle,
-        kind: ResetKind,
-    },
+impl Arg for MemFlags {
+    fn write(&self, w: &mut Writer) { w.u32(self.0) }
+
+    fn read(r: &mut Reader) -> Result<Self, Error> {
+        MemFlags::from_bits(r.u32()?).ok_or(Error::InvalidArgument)
+    }
 }
 
-impl Call {
-    pub fn number(&self) -> Number {
-        match self {
-            Call::MapAnon { .. } => Number::MapAnon,
-            Call::Unmap { .. } => Number::Unmap,
-            Call::SetFlags { .. } => Number::SetFlags,
-            Call::MapDevice { .. } => Number::MapDevice,
-            Call::DmaAlloc { .. } => Number::DmaAlloc,
-            Call::ThreadCreate { .. } => Number::ThreadCreate,
-            Call::ThreadExit => Number::ThreadExit,
-            Call::ProcessExit { .. } => Number::ProcessExit,
-            Call::ProcessCreate { .. } => Number::ProcessCreate,
-            Call::ProcessMap { .. } => Number::ProcessMap,
-            Call::ProcessStart { .. } => Number::ProcessStart,
-            Call::EndpointCreate => Number::EndpointCreate,
-            Call::Mint { .. } => Number::Mint,
-            Call::Call { .. } => Number::Call,
-            Call::Send { .. } => Number::Send,
-            Call::Receive { .. } => Number::Receive,
-            Call::Reply { .. } => Number::Reply,
-            Call::HandleClose { .. } => Number::HandleClose,
-            Call::BudgetCreate { .. } => Number::BudgetCreate,
-            Call::BudgetDestroy { .. } => Number::BudgetDestroy,
-            Call::BudgetUsage { .. } => Number::BudgetUsage,
-            Call::TimeNow => Number::TimeNow,
-            Call::Random { .. } => Number::Random,
-            Call::SystemReset { .. } => Number::SystemReset,
-        }
-    }
+impl Arg for Option<Pages> {
+    fn write(&self, w: &mut Writer) { Pages::write(*self, w) }
 
-    /// The registers `a0..=a7` for this call (userspace side).
-    pub fn encode<R: Register>(&self) -> [R; REGS] {
-        let mut regs = [R::ZERO; REGS];
-        self.write(&mut Writer::new(&mut regs));
-        regs
-    }
+    fn read(r: &mut Reader) -> Result<Self, Error> { Pages::read(r) }
+}
 
-    pub(crate) fn write<R: Register>(&self, w: &mut Writer<R>) {
-        w.u32(self.number() as u32);
-        let handle = |w: &mut Writer<R>, h: Handle| w.u32(h.0);
-        let pages = |w: &mut Writer<R>, p: Option<Pages>| {
-            let p = p.unwrap_or(Pages { addr: 0, npages: 0 });
-            w.usize(p.addr);
-            w.usize(p.npages);
+impl Arg for MintSource {
+    fn write(&self, w: &mut Writer) {
+        let (tag, value) = match *self {
+            MintSource::Message(id) => (1, id),
+            MintSource::Handle(h) => (2, h.to_raw()),
         };
-        match *self {
-            Call::MapAnon { len, flags } => {
-                w.usize(len);
-                w.u32(flags.0);
+        w.u32(tag);
+        w.u64(value);
+    }
+
+    fn read(r: &mut Reader) -> Result<Self, Error> {
+        let tag = r.raw();
+        let value = r.u64()?;
+        match tag {
+            1 => Ok(MintSource::Message(value)),
+            2 => Ok(MintSource::Handle(Handle::from_raw(value)?)),
+            _ => Err(Error::InvalidArgument),
+        }
+    }
+}
+
+impl Arg for ResetKind {
+    fn write(&self, w: &mut Writer) { w.u32(*self as u32) }
+
+    fn read(r: &mut Reader) -> Result<Self, Error> { r.tag(&[ResetKind::PowerOff, ResetKind::Reboot]) }
+}
+
+/// The one table of calls. Each entry gives a [`Number`] variant and its value (it travels in
+/// `a0`; 0 is not a call), the spec's name, and the [`Call`] variant's arguments in register
+/// order (`a1` first). From it the macro generates `Number`, `Number::ALL`, `Number::name`,
+/// `Call`, `Call::number`, `Call::encode` and `Call::decode`.
+macro_rules! calls {
+    ($( $(#[$doc:meta])* $variant:ident = $number:literal $name:literal
+        $({ $($field:ident: $ty:ty),* })? ; )*) => {
+        /// The call numbers, in KERNEL-SPEC.md's table order.
+        #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+        pub enum Number { $( $variant = $number, )* }
+
+        impl Number {
+            /// Every call, in number order.
+            pub const ALL: [Number; [$($number),*].len()] = [ $( Number::$variant, )* ];
+
+            pub fn from_raw(raw: u64) -> Option<Number> {
+                Number::ALL.iter().copied().find(|n| *n as u64 == raw)
             }
-            Call::Unmap { addr, len } => {
-                w.usize(addr);
-                w.usize(len);
+
+            /// The name KERNEL-SPEC.md (and the executable model) uses.
+            pub fn name(self) -> &'static str {
+                match self { $( Number::$variant => $name, )* }
             }
-            Call::SetFlags { addr, len, flags } => {
-                w.usize(addr);
-                w.usize(len);
-                w.u32(flags.0);
+        }
+
+        /// A system call with its arguments, in register order (`a1` first). Fields named `*_rec`
+        /// are addresses of records in the caller's memory (crate docs, Records).
+        #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+        pub enum Call { $( $(#[$doc])* $variant $({ $($field: $ty),* })?, )* }
+
+        impl Call {
+            pub fn number(&self) -> Number {
+                match self { $( Call::$variant { .. } => Number::$variant, )* }
             }
-            Call::MapDevice { device } => handle(w, device),
-            Call::DmaAlloc { device, npages } => {
-                handle(w, device);
-                w.usize(npages);
+
+            /// The registers `a0..=a7` for this call (userspace side).
+            pub fn encode(&self) -> [u64; REGS] {
+                let mut regs = [0; REGS];
+                let w = &mut Writer::regs(&mut regs);
+                w.u32(self.number() as u32);
+                match self { $( Call::$variant $({ $($field),* })? => { $($( $field.write(w); )*)? } )* }
+                regs
             }
-            Call::ThreadCreate { entry, sp, arg } => {
-                w.usize(entry);
-                w.usize(sp);
-                w.usize(arg);
-            }
-            Call::ThreadExit | Call::EndpointCreate | Call::TimeNow => {}
-            Call::ProcessExit { code } => w.u32(code),
-            Call::ProcessCreate { budget, exit_endpoint } => {
-                handle(w, budget);
-                handle(w, exit_endpoint);
-            }
-            Call::ProcessMap { process, src, dst, len, flags } => {
-                handle(w, process);
-                w.usize(src);
-                w.usize(dst);
-                w.usize(len);
-                w.u32(flags.0);
-            }
-            Call::ProcessStart { process, entry, sp, handles_buf, count } => {
-                handle(w, process);
-                w.usize(entry);
-                w.usize(sp);
-                w.usize(handles_buf);
-                w.usize(count);
-            }
-            Call::Mint { source, badge, budget } => {
-                match source {
-                    MintSource::Message(id) => {
-                        w.u32(1);
-                        w.u64(id);
-                    }
-                    MintSource::Handle(h) => {
-                        w.u32(2);
-                        w.u64(h.0.into());
+
+            /// The call in registers `a0..=a7` (kernel side). Every malformed encoding is an
+            /// error (crate docs, Decoding); what is left is the kernel's to check.
+            pub fn decode(regs: &[u64; REGS]) -> Result<Call, Error> {
+                let mut r = Reader::regs(regs);
+                let number = Number::from_raw(r.raw()).ok_or(Error::InvalidArgument)?;
+                let call = match number {
+                    $( Number::$variant => Call::$variant $({ $($field: Arg::read(&mut r)?),* })?, )*
+                };
+                r.finish()?;
+                if let Call::Random { len, .. } = call {
+                    if len > MAX_RANDOM {
+                        return Err(Error::TooLarge);
                     }
                 }
-                w.u64(badge);
-                w.u32(Handle::raw(budget) as u32);
-            }
-            Call::Call { endpoint, body_buf, lend: buffer, timeout }
-            | Call::Send { endpoint, body_buf, transfer: buffer, timeout } => {
-                handle(w, endpoint);
-                w.usize(body_buf);
-                pages(w, buffer);
-                w.u64(timeout);
-            }
-            Call::Receive { from, timeout, max_transfer, record } => {
-                w.u32(Handle::raw(from) as u32);
-                w.u64(timeout);
-                w.usize(max_transfer);
-                w.usize(record);
-            }
-            Call::Reply { msg_id, body_buf } => {
-                w.u64(msg_id);
-                w.usize(body_buf);
-            }
-            Call::HandleClose { handle: h }
-            | Call::BudgetDestroy { budget: h }
-            | Call::BudgetUsage { budget: h } => handle(w, h),
-            Call::BudgetCreate { parent, spec_buf } => {
-                handle(w, parent);
-                w.usize(spec_buf);
-            }
-            Call::Random { buf, len } => {
-                w.usize(buf);
-                w.usize(len);
-            }
-            Call::SystemReset { device, kind } => {
-                handle(w, device);
-                w.u32(kind as u32);
+                Ok(call)
             }
         }
-    }
+    };
+}
 
-    /// The call in registers `a0..=a7` (kernel side). Every malformed encoding is an error; see
-    /// the crate docs for what is checked here and what is left to the kernel.
-    pub fn decode<R: Register>(regs: &[R; REGS]) -> Result<Call, Error> {
-        let mut r = Reader::new(regs);
-        let number = Number::from_raw(r.raw()).ok_or(Error::InvalidArgument)?;
-        let handle = |r: &mut Reader<R>| Handle::from_raw(r.raw());
-        let flags = |r: &mut Reader<R>| MemFlags::from_bits(r.u32()?).ok_or(Error::InvalidArgument);
-        let pages = |r: &mut Reader<R>| -> Result<Option<Pages>, Error> {
-            let p = Pages { addr: r.usize()?, npages: r.usize()? };
-            Ok(if p.addr == 0 && p.npages == 0 { None } else { Some(p) })
-        };
-        let call = match number {
-            Number::MapAnon => Call::MapAnon { len: r.usize()?, flags: flags(&mut r)? },
-            Number::Unmap => Call::Unmap { addr: r.usize()?, len: r.usize()? },
-            Number::SetFlags => Call::SetFlags { addr: r.usize()?, len: r.usize()?, flags: flags(&mut r)? },
-            Number::MapDevice => Call::MapDevice { device: handle(&mut r)? },
-            Number::DmaAlloc => Call::DmaAlloc { device: handle(&mut r)?, npages: r.usize()? },
-            Number::ThreadCreate => Call::ThreadCreate { entry: r.usize()?, sp: r.usize()?, arg: r.usize()? },
-            Number::ThreadExit => Call::ThreadExit,
-            Number::ProcessExit => Call::ProcessExit { code: r.u32()? },
-            Number::ProcessCreate => {
-                Call::ProcessCreate { budget: handle(&mut r)?, exit_endpoint: handle(&mut r)? }
-            }
-            Number::ProcessMap => Call::ProcessMap {
-                process: handle(&mut r)?,
-                src: r.usize()?,
-                dst: r.usize()?,
-                len: r.usize()?,
-                flags: flags(&mut r)?,
-            },
-            Number::ProcessStart => Call::ProcessStart {
-                process: handle(&mut r)?,
-                entry: r.usize()?,
-                sp: r.usize()?,
-                handles_buf: r.usize()?,
-                count: r.usize()?,
-            },
-            Number::EndpointCreate => Call::EndpointCreate,
-            Number::Mint => {
-                let tag = r.raw();
-                let value = r.u64();
-                let source = match tag {
-                    1 => MintSource::Message(value),
-                    2 => MintSource::Handle(Handle::from_raw(value)?),
-                    _ => return Err(Error::InvalidArgument),
-                };
-                Call::Mint { source, badge: r.u64(), budget: Handle::from_raw_optional(r.raw())? }
-            }
-            Number::Call => Call::Call {
-                endpoint: handle(&mut r)?,
-                body_buf: r.usize()?,
-                lend: pages(&mut r)?,
-                timeout: r.u64(),
-            },
-            Number::Send => Call::Send {
-                endpoint: handle(&mut r)?,
-                body_buf: r.usize()?,
-                transfer: pages(&mut r)?,
-                timeout: r.u64(),
-            },
-            Number::Receive => Call::Receive {
-                from: Handle::from_raw_optional(r.raw())?,
-                timeout: r.u64(),
-                max_transfer: r.usize()?,
-                record: r.usize()?,
-            },
-            Number::Reply => Call::Reply { msg_id: r.u64(), body_buf: r.usize()? },
-            Number::HandleClose => Call::HandleClose { handle: handle(&mut r)? },
-            Number::BudgetCreate => Call::BudgetCreate { parent: handle(&mut r)?, spec_buf: r.usize()? },
-            Number::BudgetDestroy => Call::BudgetDestroy { budget: handle(&mut r)? },
-            Number::BudgetUsage => Call::BudgetUsage { budget: handle(&mut r)? },
-            Number::TimeNow => Call::TimeNow,
-            Number::Random => Call::Random { buf: r.usize()?, len: r.usize()? },
-            Number::SystemReset => {
-                let device = handle(&mut r)?;
-                let kind = match r.raw() {
-                    1 => ResetKind::PowerOff,
-                    2 => ResetKind::Reboot,
-                    _ => return Err(Error::InvalidArgument),
-                };
-                Call::SystemReset { device, kind }
-            }
-        };
-        r.finish()?;
-        Ok(call)
-    }
+calls! {
+    /// -> `Addr`
+    MapAnon = 1 "map_anon" { len: usize, flags: MemFlags };
+    Unmap = 2 "unmap" { addr: usize, len: usize };
+    SetFlags = 3 "set_flags" { addr: usize, len: usize, flags: MemFlags };
+    /// -> `Addr`
+    MapDevice = 4 "map_device" { device: Handle };
+    /// -> `Dma`
+    DmaAlloc = 5 "dma_alloc" { device: Handle, npages: usize };
+    /// -> `Tid`
+    ThreadCreate = 6 "thread_create" { entry: usize, sp: usize, arg: usize };
+    /// Does not return.
+    ThreadExit = 7 "thread_exit";
+    /// Does not return.
+    ProcessExit = 8 "process_exit" { code: u32 };
+    /// -> `Handle`
+    ProcessCreate = 9 "process_create" { budget: Handle, exit_endpoint: Handle };
+    ProcessMap = 10 "process_map" { process: Handle, src: usize, dst: usize, len: usize, flags: MemFlags };
+    /// `handles_rec` holds `count` slots, one handle each ([`Handle::from_raw`]), copied into the
+    /// child's slots 1..=count.
+    ProcessStart = 11 "process_start" { process: Handle, entry: usize, sp: usize, handles_rec: usize, count: u32 };
+    /// -> `Handle`
+    EndpointCreate = 12 "endpoint_create";
+    /// -> `Handle`. The badge is never 0 (0 is the receive right).
+    Mint = 13 "mint" { source: MintSource, badge: NonZeroU64, budget: Option<Handle> };
+    /// `body_rec` is a [`Body`](crate::Body): the request going in, the reply coming out.
+    /// `timeout` is relative µs; [`FOREVER`](crate::FOREVER) never expires.
+    Call = 14 "call" { endpoint: Handle, body_rec: usize, lend: Option<Pages>, timeout: u64 };
+    /// `body_rec` is a [`Body`](crate::Body). `timeout` is relative µs; `FOREVER` never expires.
+    Send = 15 "send" { endpoint: Handle, body_rec: usize, transfer: Option<Pages>, timeout: u64 };
+    /// `from` is a badge-0 endpoint, an IRQ, or none (sleep). `timeout` is relative µs; `FOREVER`
+    /// never expires. `max_transfer` is in pages. The kernel writes a
+    /// [`Received`](crate::Received) to `received_rec`.
+    Receive = 16 "receive" { from: Option<Handle>, timeout: u64, max_transfer: usize, received_rec: usize };
+    /// `body_rec` is a [`Body`](crate::Body).
+    Reply = 17 "reply" { msg_id: u64, body_rec: usize };
+    HandleClose = 18 "handle_close" { handle: Handle };
+    /// `spec_rec` is a [`BudgetSpec`](crate::BudgetSpec). -> `Handle`
+    BudgetCreate = 19 "budget_create" { parent: Handle, spec_rec: usize };
+    BudgetDestroy = 20 "budget_destroy" { budget: Handle };
+    /// -> `Usage`
+    BudgetUsage = 21 "budget_usage" { budget: Handle };
+    /// -> `Time`
+    TimeNow = 22 "time_now";
+    /// The kernel writes `len` random bytes (at most [`MAX_RANDOM`](crate::MAX_RANDOM), else
+    /// `TooLarge`) to `bytes`, which needs no alignment.
+    Random = 23 "random" { bytes: usize, len: usize };
+    SystemReset = 24 "system_reset" { device: Handle, kind: ResetKind };
 }
