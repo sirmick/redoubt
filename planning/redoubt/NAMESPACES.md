@@ -25,7 +25,7 @@ minus its ambient parts.
   library and again in every server, so it never climbs above a held root.
 - 9P messages travel in lent buffers of at most `msize` (WIRE.md).
 - **Every 9P endpoint also serves typed operations**: a request whose word 0 is 0 is 9P, anything
-  else is a typed opcode (WIRE.md). Every 9P server serves `ninep-common`:
+  else is a typed opcode (WIRE.md). Every 9P server serves `ninep_common`:
 
   ```
   | Opcode | Message | Fields | Reply |

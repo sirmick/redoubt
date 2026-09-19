@@ -323,7 +323,7 @@ The same three roles, attacking v3 and pinning interfaces for a swarm build. Fou
   and one purpose.
 - **Round 4, formats** (2026-09-19, answers 75, 83, 97, 98, 101): the startup block is one typed
   message (`startup`) decoded by `redoubt-wire`, replacing a second framing format whose CRCs
-  protected nothing; every 9P endpoint serves `ninep-common` (`new_connection`, `disconnect`);
+  protected nothing; every 9P endpoint serves `ninep_common` (`new_connection`, `disconnect`);
   both tables are shown fenced until WP-R1b generates them, so the drift test stays green. `init`
   reports blame in one typed message whose table WP-S2 writes; every milestone 1 typed message is
   a `call`; the steward `call`s a reader budget, which fills its lend.
@@ -398,4 +398,5 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   and rv64 build case, two fuzz targets. The review found fid tables shared by every copy of a
   handle, server work done before admission, allocation failure killing the server, and a 32-bit
   overflow in the startup parser; all fixed. Runs on the kernel after WP-K2.
-
+- **`ninep-common` renamed `ninep_common`** (2026-09-19, editorial, from WP-W2): protocol names are
+  snake_case identifiers (WIRE.md, Tables); the table's marker must be one.
