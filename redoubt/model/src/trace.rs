@@ -174,14 +174,6 @@ impl Names {
         if t == FOREVER { "forever".to_string() } else { format!("{t}") }
     }
 
-    fn class(c: u64) -> String {
-        match Class::from_raw(c) {
-            Some(Class::User) => "user".into(),
-            Some(Class::System) => "system".into(),
-            None => format!("{c}"),
-        }
-    }
-
     fn call(&self, pid: u64, c: &Syscall) -> String {
         use Syscall as S;
         let a = |x: u64| self.addr(pid, x);
@@ -196,7 +188,7 @@ impl Names {
             S::MapDevice { h: x } => h(*x),
             S::DmaAlloc { h: x, npages } => format!("{} {npages}", h(*x)),
             S::ThreadCreate { entry, sp, arg } => format!("{entry:#x} {sp:#x} {arg}"),
-            S::ThreadExit | S::EndpointCreate | S::TimeNow => String::new(),
+            S::ThreadExit | S::EndpointCreate | S::TimeNow | S::Random => String::new(),
             S::ProcessExit { code } => format!("{code}"),
             S::ProcessCreate { budget, exit_endpoint } => format!("{} {}", h(*budget), h(*exit_endpoint)),
             S::ProcessMap { process, src, dst, len, flags } => {
@@ -229,17 +221,16 @@ impl Names {
                 format!("{} {} {max_transfer}", x.map_or("-".to_string(), h), Names::time(*timeout))
             }
             S::Reply { msg_id, words: w, handles } => format!("m:{msg_id} {} {}", words(w), hs(handles)),
+            S::Serve { msg_id } => format!("m:{msg_id}"),
             S::HandleClose { h: x } | S::BudgetDestroy { h: x } | S::BudgetUsage { h: x } => h(*x),
-            S::BudgetCreate { parent, pages, processes, weight, class, labels, account, deadline } => {
+            S::BudgetCreate { parent, pages, processes, weight, first, labels, account, deadline } => {
                 format!(
-                    "{} {pages} {processes} {weight} {} {} {account} {}",
+                    "{} {pages} {processes} {weight} {first} {} {account} {}",
                     h(*parent),
-                    Names::class(*class),
                     Names::list(labels.iter().map(|l| format!("{l}"))),
                     Names::time(*deadline)
                 )
             }
-            S::Random { len } => format!("{len}"),
             S::SystemReset { h: x, kind } => format!("{} {kind}", h(*x)),
         };
         if args.is_empty() { c.name().to_string() } else { format!("{} {args}", c.name()) }
@@ -305,7 +296,7 @@ impl Names {
                 cause.name(),
                 Names::list(blamed_labels.iter().map(|l| format!("{l}")))
             ),
-            Ret::BadgeClosed { badge } => format!("ok closed badge={badge}"),
+            Ret::Abandoned { msg_id } => format!("ok abandoned m:{msg_id}"),
             Ret::Usage(c) => {
                 format!(
                     "ok usage [{},{},{},{},{},{}]",
@@ -318,7 +309,7 @@ impl Names {
                 )
             }
             Ret::Time(t) => format!("ok time tm:{t}"),
-            Ret::Random { len } => format!("ok random {len}"),
+            Ret::Random => "ok random".into(),
             Ret::Word(w) => format!("ok word {w}"),
         }
     }
@@ -350,17 +341,8 @@ fn boot_lines(boot: &Boot) -> Vec<String> {
             limits(boot.users)
         ),
         format!(
-            "costs budget={} process={} thread={} endpoint={} handles_per_page={} page_table={} open_call={} \
-             exit_slot={} badge_slots_per_page={}",
-            c.budget,
-            c.process,
-            c.thread,
-            c.endpoint,
-            c.handles_per_page,
-            c.page_table,
-            c.open_call,
-            c.exit_slot,
-            c.badge_slots_per_page
+            "costs budget={} process={} thread={} endpoint={} handles_per_page={} page_table={} open_call={}",
+            c.budget, c.process, c.thread, c.endpoint, c.handles_per_page, c.page_table, c.open_call
         ),
     ];
     for d in &boot.devices {
@@ -470,14 +452,6 @@ fn range(t: &Token) -> Result<Option<Buffer>, String> {
     }
 }
 
-fn class(t: &Token) -> Result<u64, String> {
-    match t {
-        Token::Word("user") => Ok(Class::User.raw()),
-        Token::Word("system") => Ok(Class::System.raw()),
-        t => value(t),
-    }
-}
-
 /// The system call on a `do` line (tokens after `do p:N t:N`, up to `->`).
 pub fn parse_call(t: &[Token]) -> Result<Syscall, String> {
     use Syscall as S;
@@ -527,13 +501,14 @@ pub fn parse_call(t: &[Token]) -> Result<Syscall, String> {
         },
         "receive" => S::Receive { h: opt(0)?, timeout: v(1)?, max_transfer: v(2)? },
         "reply" => S::Reply { msg_id: v(0)?, words: words(n(1)?)?, handles: list(n(2)?)? },
+        "serve" => S::Serve { msg_id: v(0)? },
         "handle_close" => S::HandleClose { h: v(0)? },
         "budget_create" => S::BudgetCreate {
             parent: v(0)?,
             pages: v(1)?,
             processes: v(2)?,
             weight: v(3)?,
-            class: class(n(4)?)?,
+            first: v(4)?,
             labels: list(n(5)?)?,
             account: v(6)?,
             deadline: v(7)?,
@@ -541,7 +516,7 @@ pub fn parse_call(t: &[Token]) -> Result<Syscall, String> {
         "budget_destroy" => S::BudgetDestroy { h: v(0)? },
         "budget_usage" => S::BudgetUsage { h: v(0)? },
         "time_now" => S::TimeNow,
-        "random" => S::Random { len: v(0)? },
+        "random" => S::Random,
         "system_reset" => S::SystemReset { h: v(0)?, kind: v(1)? },
         other => return Err(format!("unknown call {other}")),
     })
@@ -601,8 +576,6 @@ pub fn parse(text: &str) -> Result<(Boot, Vec<Op>), String> {
                     handles_per_page: field(&t, "handles_per_page")?,
                     page_table: field(&t, "page_table")?,
                     open_call: field(&t, "open_call")?,
-                    exit_slot: field(&t, "exit_slot")?,
-                    badge_slots_per_page: field(&t, "badge_slots_per_page")?,
                 }
             }
             Some(Token::Word("device")) => boot.devices.push(match t.get(1) {

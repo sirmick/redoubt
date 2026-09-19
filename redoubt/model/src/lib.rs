@@ -1,5 +1,5 @@
 //! The executable security model of Redoubt (WP-M0): KERNEL-SPEC.md's objects, system calls,
-//! errors, rules R1-R12 and invariants I1-I14, with the same names and arguments; the steward's
+//! errors, rules R1-R12 and invariants I1-I15, with the same names and arguments; the steward's
 //! milestone 1 policy above it; property tests over random operation sequences; and the trace
 //! format the kernel's conformance test replays.
 //!

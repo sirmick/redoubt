@@ -14,7 +14,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::kernel::{Backing, DeviceKind, INIT_PID, Kernel, MapState, MsgKind, Object, ROOT, SYSTEM, USERS};
+use crate::kernel::{Backing, DeviceKind, INIT_PID, Kernel, MapState, Object, ROOT, SYSTEM, USERS};
 use crate::spec::*;
 use crate::syscall::*;
 
@@ -250,14 +250,20 @@ impl Gen {
                 timeout: self.any(),
                 max_transfer: self.any(),
             },
-            15 => S::Reply { msg_id: self.any(), words: w, handles: self.any_list() },
+            15 => {
+                if self.rng.pct(50) {
+                    S::Reply { msg_id: self.any(), words: w, handles: self.any_list() }
+                } else {
+                    S::Serve { msg_id: self.any() }
+                }
+            }
             16 => S::HandleClose { h: self.any() },
             17 => S::BudgetCreate {
                 parent: self.any(),
                 pages: self.any(),
                 processes: self.any(),
                 weight: self.any(),
-                class: self.any(),
+                first: self.any(),
                 labels: self.any_list(),
                 account: self.any(),
                 deadline: self.any(),
@@ -266,7 +272,7 @@ impl Gen {
             19 => S::BudgetUsage { h: self.any() },
             20 => S::TimeNow,
             21 => S::SystemReset { h: self.any(), kind: self.any() },
-            22 => S::Random { len: self.any() },
+            22 => S::Random,
             _ => S::ThreadCreate { entry: 0, sp: 0, arg: 0 },
         }
     }
@@ -313,7 +319,7 @@ impl Gen {
         // Principals under `users`, one budget under `system`, one nested budget.
         if made.len() < self.principals as usize + 2 && step < 16 {
             let i = made.len() as u64;
-            let (parent, class, account, processes) = if i < self.principals {
+            let (parent, class, account, processes): (u64, Class, u64, u64) = if i < self.principals {
                 (USERS, Class::User, 1001 + i, 3)
             } else if i == self.principals {
                 (SYSTEM, Class::System, 0, 2)
@@ -328,12 +334,13 @@ impl Gen {
                 labels.push(self.rng.pick(&LABEL_POOL).unwrap());
             }
             let free = k.budgets[&parent].pages_limit.saturating_sub(k.budgets[&parent].pages_used);
+            // The system budget is `first` now and then (init is, and `system` is class system).
             return sys(Syscall::BudgetCreate {
                 parent: budget_h(parent)?,
                 pages: (free / 3).clamp(8, 120),
                 processes,
                 weight: self.rng.range(20, 100),
-                class: class.raw(),
+                first: (class == Class::System && self.rng.pct(30)) as u64,
                 labels,
                 account,
                 deadline: if self.rng.pct(15) { k.now + self.rng.range(SLICE, 40 * SLICE) } else { FOREVER },
@@ -574,11 +581,7 @@ impl Gen {
                 });
             }
         }
-        let call = k.threads[&tid]
-            .serving
-            .iter()
-            .copied()
-            .find(|m| k.msgs.get(m).is_some_and(|x| x.kind == MsgKind::Call));
+        let call = k.threads[&tid].serving.first().and_then(|m| k.msgs.get(m)).map(|m| m.rid);
         if let Some(m) = call.filter(|_| !self.hoard) {
             return Some(Op::Sys {
                 pid,
@@ -691,12 +694,27 @@ impl Gen {
 
     fn syscall(&mut self, k: &Kernel, pid: u64, tid: u64) -> Syscall {
         let t = &k.threads[&tid];
-        // A thread that serves a call usually answers it (and now and then "answers" a send).
-        if let Some(m) = self.rng.pick(&t.serving) {
-            if self.rng.pct(if k.msgs.get(&m).is_some_and(|x| x.kind == MsgKind::Call) { 45 } else { 10 }) {
+        // The ids its process knows its open calls by.
+        let open: Vec<u64> = t.serving.iter().filter_map(|m| k.msgs.get(m)).map(|m| m.rid).collect();
+        // A thread holding calls usually answers one, or now and then turns to another (`serve`),
+        // or answers an id that is not its open call (a stale or a send's id).
+        if let Some(m) = self.rng.pick(&open) {
+            let r = self.rng.below(100);
+            if r < 40 {
                 let handles = self.some_handles(k, pid, 2);
                 return Syscall::Reply { msg_id: m, words: [self.rng.below(9); WORDS], handles };
             }
+            if r < 50 {
+                return Syscall::Serve { msg_id: m };
+            }
+        }
+        if self.rng.pct(2) {
+            let m = self.rng.range(0, 8);
+            return if self.rng.pct(50) {
+                Syscall::Reply { msg_id: m, words: [0; WORDS], handles: vec![] }
+            } else {
+                Syscall::Serve { msg_id: m }
+            };
         }
         let is_endpoint = |h: &crate::kernel::Handle| matches!(h.object, Object::Endpoint(_));
         let is_budget = |h: &crate::kernel::Handle| matches!(h.object, Object::Budget(_));
@@ -757,7 +775,18 @@ impl Gen {
             }
             31..=33 => Syscall::EndpointCreate,
             34..=38 => {
-                let serving = self.rng.pick(&t.serving).filter(|_| self.rng.pct(70));
+                // Now and then another thread's open call (mint takes only the caller's own).
+                let others: Vec<u64> = k
+                    .msgs
+                    .values()
+                    .filter(|m| m.server.is_some_and(|s| s.0 == pid && s.1 != tid))
+                    .map(|m| m.rid)
+                    .collect();
+                let serving = if self.rng.pct(15) {
+                    self.rng.pick(&others)
+                } else {
+                    self.rng.pick(&open).filter(|_| self.rng.pct(70))
+                };
                 let source = if let Some(m) = serving {
                     MintSource::Message(m)
                 } else if self.rng.pct(5) {
@@ -817,9 +846,7 @@ impl Gen {
                 Syscall::BudgetDestroy { h }
             }
             90..=92 => Syscall::BudgetUsage { h: self.handle(k, pid, is_budget) },
-            93..=94 => Syscall::Random {
-                len: if self.rng.pct(90) { self.rng.below(65) } else { self.rng.range(65, 1000) },
-            },
+            93..=94 => Syscall::Random,
             95 => {
                 if self.rng.pct(3) {
                     Syscall::SystemReset {
@@ -845,13 +872,12 @@ impl Gen {
             Some(Object::Budget(b)) => k.budgets.get(&b),
             _ => None,
         };
-        let (free, free_proc, free_w, labels, class) = pb.map_or((10, 1, 10, vec![], Class::User), |b| {
+        let (free, free_proc, free_w, labels) = pb.map_or((10, 1, 10, vec![]), |b| {
             (
                 b.pages_limit.saturating_sub(b.pages_used),
                 b.processes_limit.saturating_sub(b.processes_used),
                 b.weight.saturating_sub(b.weight_used),
                 b.labels.clone(),
-                b.class,
             )
         });
         let scope = self.rng.pct(15);
@@ -875,17 +901,11 @@ impl Gen {
         if self.rng.pct(3) {
             labels = (0..9).collect();
         }
-        let class = match self.rng.below(20) {
-            0 => 0,
-            1..=3 => Class::System.raw(),
-            4 => 3,
-            _ => {
-                if self.rng.pct(70) {
-                    Class::User.raw()
-                } else {
-                    class.raw()
-                }
-            }
+        // `first` now and then, and an invalid flag rarely.
+        let first = match self.rng.below(40) {
+            0 => 2,
+            1..=4 => 1,
+            _ => 0,
         };
         let deadline = match self.rng.below(10) {
             0 => k.now + self.rng.range(1, 30 * SLICE),
@@ -897,7 +917,7 @@ impl Gen {
             pages,
             processes,
             weight,
-            class,
+            first,
             labels,
             account: self.rng.pick(&ACCOUNT_POOL).unwrap(),
             deadline,

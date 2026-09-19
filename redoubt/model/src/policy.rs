@@ -3,17 +3,19 @@
 //!
 //! | Property | Statement | Source |
 //! | --- | --- | --- |
-//! | P1 sessions | a session's budget is under its principal's (a sub-agent's under its agent's), with its account; labels are none or one the principal owns | CONTAINMENT.md, "Sessions and vaults" |
+//! | P1 sessions | a session's budget is carved from its principal's fixed sub-budget for its label set (a sub-agent's from its agent's), with its account; labels are none or one the principal owns | CONTAINMENT.md, "Sessions and vaults"; QUESTIONS 89 |
 //! | P2 login | a login used one of the principal's login keys, never one `keyd` holds | CAPABILITIES.md, "The powerbox and approvals" |
 //! | P3 approvals | an approval came through `approve@box` with the approver's approval key, named the frozen content's hash, and granted no label the approver lacks | CAPABILITIES.md, "Binding", "Limits and labels" |
 //! | P4 screens | an approver sees only its own requests, labelled ones only if it owns every label; rendered text is printable ASCII with capped free text; a labelled request shows none of its free text | CAPABILITIES.md, "Rendering"; QUESTIONS 34, 35 |
-//! | P5 cap | at most `PENDING_CAP` pending requests per (account, label set), all of live sessions | CONTAINMENT.md, "The shared server library"; QUESTIONS 17 |
+//! | P5 cap | at most `PENDING_CAP` pending requests per (account, label set), all of live sessions; a session holds at most its fair share | CONTAINMENT.md, "The shared server library"; QUESTIONS 17, 90 |
 //! | P6 declassification | what is copied out is exactly the snapshot taken at submission, read through a reader budget carrying exactly the item's label | CONTAINMENT.md, "Declassification"; QUESTIONS 54 |
-//! | P7 blame | an (account, label set)'s sessions are logged out exactly when three server crashes blamed on it (by the kernel's exit notices) fall within ten minutes; no other sessions are touched | CONTAINMENT.md, "Crash blame"; INIT.md; QUESTIONS 48 |
+//! | P7 blame | an (account, label set)'s sessions are logged out exactly when three server crashes blamed on it (by the kernel's exit notices) fall within ten minutes; no other sessions are touched; no session of it starts for the next ten minutes | CONTAINMENT.md, "Crash blame"; INIT.md; QUESTIONS 48, 91 |
 //! | P8 labelled sessions | a labelled session starts nothing; it only submits requests | CONTAINMENT.md, "The shared server library" (steward) |
-//! | P11 writes | every write to an item is by a session with exactly the item's labels | CONTAINMENT.md, `check`; QUESTIONS 51 |
 //! | P9 leases | an agent's budget has a deadline at most `MAX_LEASE` away; a sub-agent sits in its agent's budget and ends no later; an expired lease is gone | CAPABILITIES.md, "Agents"; QUESTIONS 33 |
-//! | P10 non-interference | a vault session's work (item writes, requests, calls to a shared server) changes nothing an unlabelled session observes: its results, and the usage of every principal's and `users`' budget | PLAN.md, attack suite "no leaky state"; CONTAINMENT.md |
+//! | P10 non-interference | a vault session's work (item writes, requests, calls to a shared server) changes nothing an unlabelled session observes: its results, the usage of `users`, of every principal's budget and unlabelled sub-budget, and the audit records an unlabelled reader may read | PLAN.md, attack suite "no leaky state"; CONTAINMENT.md; QUESTIONS 89, 92 |
+//! | P11 writes | every write to an item is by a session with exactly the item's labels | CONTAINMENT.md, `check`; QUESTIONS 51 |
+//! | P12 system budgets | only `init` and the steward hold a handle to a system-class budget; a session's connection to the server is narrowed to a revocation scope inside its session | QUESTIONS 79, 80 |
+//! | P13 leases end | a lease's sponsor can always end it | CAPABILITIES.md; QUESTIONS 90 |
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
@@ -93,6 +95,11 @@ pub enum PolicyOp {
     /// The session's process calls the server.
     Work {
         session: u64,
+    },
+    /// Session `by` ends agent session `lease`.
+    EndLease {
+        by: u64,
+        lease: u64,
     },
     /// The server answers everything waiting.
     Serve,
@@ -211,15 +218,31 @@ pub fn random_op(st: &Steward, subs: &[ReqRef], rng: &mut Rng) -> PolicyOp {
         }
         61..=62 => PolicyOp::KeydAdd { key: rng.pick(&ALL_KEYS).unwrap() },
         63..=64 => PolicyOp::Usage { principal },
-        65..=79 => PolicyOp::Work { session: session(rng) },
-        80..=83 => PolicyOp::Serve,
-        84..=85 => PolicyOp::Hold,
-        86..=87 => PolicyOp::Crash,
-        88..=91 => PolicyOp::CrashServing { session: session(rng) },
+        65..=76 => PolicyOp::Work { session: session(rng) },
+        77..=79 => PolicyOp::Serve,
+        80..=81 => PolicyOp::Hold,
+        82..=83 => PolicyOp::Crash,
+        84..=88 => PolicyOp::CrashServing { session: session(rng) },
+        89..=91 => {
+            // Usually an agent and a session of its principal.
+            let agents: Vec<u64> =
+                st.sessions.values().filter(|s| s.kind == SessionKind::Agent).map(|s| s.id).collect();
+            let lease = rng.pick(&agents).unwrap_or_else(|| session(rng));
+            let p = st.sessions.get(&lease).map(|s| s.principal);
+            let mine: Vec<u64> = st
+                .sessions
+                .values()
+                .filter(|s| Some(s.principal) == p && s.labels.is_empty())
+                .map(|s| s.id)
+                .collect();
+            let by = if rng.pct(80) { rng.pick(&mine).unwrap_or_else(|| session(rng)) } else { session(rng) };
+            PolicyOp::EndLease { by, lease }
+        }
         _ => PolicyOp::Tick {
-            dt: match rng.below(3) {
+            // Minutes half the time, so that crash blame's ten-minute window is crossed.
+            dt: match rng.below(4) {
                 0 => rng.range(1, 50) * SLICE,
-                1 => rng.range(1, 4) * 60_000_000,
+                1 | 2 => rng.range(1, 6) * 60_000_000,
                 _ => rng.range(1, 400) * SLICE,
             },
         },
@@ -241,9 +264,10 @@ pub struct Run {
     pub ghost_requests: BTreeMap<u64, (u64, Option<Vec<u8>>)>,
     /// Blame times per (account, label set).
     pub ghost_blames: BTreeMap<(u64, Vec<u64>), Vec<u64>>,
-    /// The account and labels of the newest message the server holds open (from what `hold`
-    /// returned), if any.
+    /// The account and labels of the call the server works on (from what `hold` returned), if any.
     held: Option<(u64, Vec<u64>)>,
+    /// (account, label set)s logged out, and when their lockout ends (P7; QUESTIONS 91).
+    pub ghost_locked: BTreeMap<(u64, Vec<u64>), u64>,
     pub per_session: BTreeMap<u64, u64>,
 }
 
@@ -259,6 +283,7 @@ impl Run {
             ghost_requests: BTreeMap::new(),
             ghost_blames: BTreeMap::new(),
             held: None,
+            ghost_locked: BTreeMap::new(),
             per_session: BTreeMap::new(),
         }
     }
@@ -314,6 +339,13 @@ impl Run {
                     _ => None,
                 };
                 let r = self.st.submit(*session, content.clone(), reason);
+                if r.is_ok() && self.st.pending_by(*session) > self.st.share(*session) {
+                    return Err(format!(
+                        "P5: session {session} holds {} pending requests, over its fair share {}",
+                        self.st.pending_by(*session),
+                        self.st.share(*session)
+                    ));
+                }
                 if let Ok(id) = r {
                     let nth = *self.per_session.entry(*session).or_default();
                     self.per_session.insert(*session, nth + 1);
@@ -391,15 +423,26 @@ impl Run {
                 format!("{:?}", self.st.usage(h))
             }
             PolicyOp::Work { session } => format!("{:?}", self.st.work(*session)),
+            PolicyOp::EndLease { by, lease } => {
+                let sponsor = match (self.st.sessions.get(by), self.st.sessions.get(lease)) {
+                    (Some(b), Some(l)) => {
+                        b.labels.is_empty() && l.kind == SessionKind::Agent && b.principal == l.principal
+                    }
+                    _ => false,
+                };
+                let r = self.st.end_lease(*by, *lease);
+                if sponsor && (r.is_err() || self.st.sessions.contains_key(lease)) {
+                    return Err(format!("P13: session {by} could not end its agent {lease}: {r:?}"));
+                }
+                format!("{r:?}")
+            }
             PolicyOp::Serve => {
                 self.st.serve();
                 self.held = None;
                 String::from("ok")
             }
             PolicyOp::Hold => {
-                if let Some(m) = self.st.hold() {
-                    self.held = Some((m.account, m.labels));
-                }
+                self.held = self.st.hold().map(|m| (m.account, m.labels));
                 String::from("ok")
             }
             PolicyOp::Crash => {
@@ -411,9 +454,7 @@ impl Run {
             PolicyOp::CrashServing { session } => {
                 let r = self.st.work(*session);
                 self.st.poll();
-                if let Some(m) = self.st.hold() {
-                    self.held = Some((m.account, m.labels));
-                }
+                self.held = self.st.hold().map(|m| (m.account, m.labels));
                 let held = self.held.take().unwrap_or_default();
                 self.st.crash_server();
                 self.check_blame(held, now, audit_from, &sessions_before)?;
@@ -425,6 +466,14 @@ impl Run {
             }
         };
         self.st.poll();
+        // P7: no session of a logged-out (account, label set) starts within its window.
+        for s in self.st.sessions.values() {
+            let key = (self.st.principals[s.principal].spec.account, s.labels.clone());
+            let locked = self.ghost_locked.get(&key).is_some_and(|until| now < *until);
+            if locked && !sessions_before.contains_key(&s.id) {
+                return Err(format!("P7: session {} of {key:?} started while it was locked out", s.id));
+            }
+        }
         self.check(audit_from)?;
         Ok(obs)
     }
@@ -463,18 +512,20 @@ impl Run {
         let logout = times.len() >= BLAME_COUNT;
         if logout {
             times.clear();
+            self.ghost_locked.insert((account, labels.clone()), now + BLAME_WINDOW);
         }
         let principal = self.st.principals.iter().position(|p| p.spec.account == account);
         for (id, s) in before {
             let mine = Some(s.principal) == principal && s.labels == labels;
-            let alive = self.st.sessions.contains_key(id) || !self.st.k.budgets.contains_key(&s.budget);
+            // Gone, and not by its lease running out: ended by the steward.
             let still = self.st.sessions.contains_key(id);
+            let ended = !still && s.deadline.is_none_or(|d| d > self.st.k.now);
             if mine && logout && still {
                 return Err(format!(
                     "P7: account {account} with labels {labels:?} blamed 3 times in 10 minutes, session {id} survived"
                 ));
             }
-            if (!mine || !logout) && !alive {
+            if (!mine || !logout) && ended {
                 return Err(format!(
                     "P7: blaming account {account} ended session {id} of principal {}",
                     s.principal
@@ -496,8 +547,17 @@ impl Run {
             if !under || b.account != p.spec.account || b.labels != s.labels {
                 return Err(format!("P1: session {}'s budget is not its principal's", s.id));
             }
-            if s.kind == SessionKind::Login && b.parent != Some(p.budget) {
-                return Err(format!("P1: login session {} is not directly under its principal", s.id));
+            // Carved from the principal's sub-budget for its label set, or (a sub-agent) from an
+            // agent's budget of the same principal.
+            let sub = p.subs.get(&s.labels).map(|x| x.0);
+            let in_agent = st.sessions.values().any(|a| {
+                a.kind == SessionKind::Agent && a.principal == s.principal && Some(a.budget) == b.parent
+            });
+            if b.parent != sub && !(s.kind == SessionKind::Agent && in_agent) {
+                return Err(format!(
+                    "P1: session {} with labels {:?} is not carved from its principal's sub-budget for them",
+                    s.id, s.labels
+                ));
             }
             if s.labels.len() > 1 || !s.labels.iter().all(|l| p.spec.owned_labels.contains(l)) {
                 return Err(format!(
@@ -507,6 +567,33 @@ impl Run {
             }
             if s.kind == SessionKind::Agent && b.deadline.is_none_or(|d| d <= st.k.now) {
                 return Err(format!("P9: agent session {} has no future deadline", s.id));
+            }
+        }
+        // P12: only init and the steward hold system budgets; connections are narrowed to scopes.
+        for p in st.k.processes.values() {
+            if p.pid == crate::kernel::INIT_PID || p.pid == st.me.pid {
+                continue;
+            }
+            for h in p.handles.values() {
+                if let crate::kernel::Object::Budget(b) = h.object {
+                    if st.k.budgets.get(&b).is_some_and(|x| x.class == crate::spec::Class::System) {
+                        return Err(format!("P12: process {} holds system-class budget {b}", p.pid));
+                    }
+                }
+            }
+        }
+        for s in st.sessions.values() {
+            let Some(p) = st.k.processes.get(&s.pid) else { continue };
+            for h in p.handles.values().filter(|h| matches!(h.object, crate::kernel::Object::Endpoint(_))) {
+                let stamp = st.k.budgets.get(&h.stamp);
+                let scope =
+                    stamp.is_some_and(|x| x.pages_limit == 0 && x.processes_limit == 0 && x.weight == 0);
+                if !scope || !st.k.is_descendant_or_self(h.stamp, s.budget) {
+                    return Err(format!(
+                        "P12: session {}'s connection is stamped {}, not a scope in its session",
+                        s.id, h.stamp
+                    ));
+                }
             }
         }
         let mut pending: BTreeMap<(u64, Vec<u64>), usize> = BTreeMap::new();
@@ -526,7 +613,7 @@ impl Run {
                 {
                     return Err(format!("P2: login to principal {principal} with key {key}"));
                 }
-                Audit::Approved { id, principal, key, hash } => {
+                Audit::Approved { id, principal, key, hash, .. } => {
                     let spec = &st.principals[*principal].spec;
                     let Some((want, _)) = self.ghost_requests.get(id) else {
                         return Err(format!("P3: approved request {id} was never submitted"));
@@ -658,6 +745,7 @@ pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<
                 with.st.sessions.get(session).is_some_and(|s| s.labels.is_empty())
             }
             PolicyOp::Login { label, .. } => label.is_none(),
+            PolicyOp::EndLease { by, .. } => with.st.sessions.get(by).is_some_and(|s| s.labels.is_empty()),
             PolicyOp::Approve { .. } | PolicyOp::Deny { .. } | PolicyOp::Usage { .. } => true,
             _ => false,
         };
@@ -681,8 +769,16 @@ pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<
                 )));
             }
         }
-        // The steward's slot 1 is `users`.
-        let shared: Vec<u64> = core::iter::once(1).chain(with.st.principals.iter().map(|p| p.h)).collect();
+        // What an unlabelled reader may read of the audit file (QUESTIONS 92).
+        let (x, y) = (format!("{:?}", with.st.audit_view(&[])), format!("{:?}", without.st.audit_view(&[])));
+        if x != y {
+            return Err(fail(format!("P10: the unlabelled audit view depends on the vault's work (op {i})")));
+        }
+        // The steward's slot 1 is `users`; each principal's top budget and unlabelled sub-budget.
+        let shared: Vec<u64> = core::iter::once(1)
+            .chain(with.st.principals.iter().map(|p| p.h))
+            .chain(with.st.principals.iter().filter_map(|p| p.subs.get(&Vec::new()).map(|s| s.1)))
+            .collect();
         for h in shared {
             let (x, y) = (with.st.usage(h), without.st.usage(h));
             if x != y {

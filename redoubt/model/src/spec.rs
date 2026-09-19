@@ -16,7 +16,7 @@ pub const MAX_THREADS: u64 = 31;
 pub const MAX_LABELS: usize = 8;
 /// Budget tree depth, root = 0.
 pub const MAX_DEPTH: u64 = 8;
-/// Blocked senders per (account, label set) per endpoint (R2; owner's answer to QUESTIONS 17).
+/// Queued messages per group (R2) per endpoint.
 pub const WAIT_CAP: u64 = 16;
 /// Stride scheduling numerator.
 pub const STRIDE: u64 = 1 << 20;
@@ -24,10 +24,6 @@ pub const STRIDE: u64 = 1 << 20;
 pub const SLICE: u64 = 10_000;
 /// A timeout that never expires.
 pub const FOREVER: u64 = u64::MAX;
-/// `random`: `len` at most this (QUESTIONS 15).
-pub const MAX_RANDOM: u64 = 64;
-/// The latest a budget deadline may be, from now (QUESTIONS 33): 24 hours.
-pub const MAX_LEASE: u64 = 24 * 3600 * 1_000_000;
 /// Taken-but-unreplied calls per process (QUESTIONS 2, as answered).
 pub const MAX_OPEN_CALLS: u64 = 64;
 /// Handles in `process_start`'s list (QUESTIONS 10).
@@ -109,24 +105,6 @@ impl Error {
 pub enum Class {
     User,
     System,
-}
-
-impl Class {
-    /// Encoding of the `class` argument of `budget_create` (`redoubt-sys` tags from 1).
-    pub fn from_raw(v: u64) -> Option<Class> {
-        match v {
-            1 => Some(Class::User),
-            2 => Some(Class::System),
-            _ => None,
-        }
-    }
-
-    pub fn raw(self) -> u64 {
-        match self {
-            Class::User => 1,
-            Class::System => 2,
-        }
-    }
 }
 
 /// `cause` of an exit notice.

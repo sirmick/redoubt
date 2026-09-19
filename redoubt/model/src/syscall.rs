@@ -108,6 +108,10 @@ pub enum Syscall {
         words: [u64; WORDS],
         handles: Vec<u64>,
     },
+    /// `serve(msg_id)`: the open call becomes the thread's current call.
+    Serve {
+        msg_id: u64,
+    },
     HandleClose {
         h: u64,
     },
@@ -116,7 +120,8 @@ pub enum Syscall {
         pages: u64,
         processes: u64,
         weight: u64,
-        class: u64,
+        /// The `first` flag: 0 or 1 (encoding).
+        first: u64,
         labels: Vec<u64>,
         account: u64,
         /// Absolute time in µs; `FOREVER` means none.
@@ -129,9 +134,7 @@ pub enum Syscall {
         h: u64,
     },
     TimeNow,
-    Random {
-        len: u64,
-    },
+    Random,
     SystemReset {
         h: u64,
         kind: u64,
@@ -140,7 +143,7 @@ pub enum Syscall {
 
 /// The calls' names, in KERNEL-SPEC.md's table order (the order of `redoubt-sys`'s numbers,
 /// from 1). The one list of them: [`Syscall::name`], the trace and the tests use it.
-pub const CALL_NAMES: [&str; 24] = [
+pub const CALL_NAMES: [&str; 25] = [
     "map_anon",
     "unmap",
     "set_flags",
@@ -158,6 +161,7 @@ pub const CALL_NAMES: [&str; 24] = [
     "send",
     "receive",
     "reply",
+    "serve",
     "handle_close",
     "budget_create",
     "budget_destroy",
@@ -188,13 +192,14 @@ impl Syscall {
             Syscall::Send { .. } => 15,
             Syscall::Receive { .. } => 16,
             Syscall::Reply { .. } => 17,
-            Syscall::HandleClose { .. } => 18,
-            Syscall::BudgetCreate { .. } => 19,
-            Syscall::BudgetDestroy { .. } => 20,
-            Syscall::BudgetUsage { .. } => 21,
-            Syscall::TimeNow => 22,
-            Syscall::Random { .. } => 23,
-            Syscall::SystemReset { .. } => 24,
+            Syscall::Serve { .. } => 18,
+            Syscall::HandleClose { .. } => 19,
+            Syscall::BudgetCreate { .. } => 20,
+            Syscall::BudgetDestroy { .. } => 21,
+            Syscall::BudgetUsage { .. } => 22,
+            Syscall::TimeNow => 23,
+            Syscall::Random => 24,
+            Syscall::SystemReset { .. } => 25,
         }
     }
 
@@ -212,7 +217,9 @@ pub enum MsgKind {
     Send,
 }
 
-/// A delivered message, as `receive` returns it (KERNEL-SPEC.md, Messages).
+/// A delivered message, as `receive` returns it (KERNEL-SPEC.md, Messages). `msg_id` is unique
+/// within the receiving process; a handle revoked while the message was queued arrives as 0
+/// (R10).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Message {
     pub kind: MsgKind,
@@ -273,19 +280,17 @@ pub enum Ret {
         blamed_account: u64,
         blamed_labels: Vec<u64>,
     },
-    /// The last handle with this badge to the endpoint was closed or destroyed (QUESTIONS 53).
-    BadgeClosed {
-        badge: u64,
+    /// The open call `msg_id`, held by the receiving thread, was abandoned (R3).
+    Abandoned {
+        msg_id: u64,
     },
     Usage(Counters),
     Time(u64),
     /// A user load (not a system call): the word read.
     Word(u64),
-    /// `random`: the model does not produce the bytes (they are the kernel's CSPRNG output and
-    /// cannot be compared), only how many there are.
-    Random {
-        len: u64,
-    },
+    /// `random`'s u64: the model does not produce it (it is the kernel's CSPRNG output and cannot
+    /// be compared).
+    Random,
 }
 
 /// What a step did for the thread that made it.

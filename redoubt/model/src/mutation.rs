@@ -5,52 +5,59 @@
 //! the spec (its Messages, Process, Budget or Handle paragraphs, a call's checks), an owner's
 //! answer to planning/redoubt/QUESTIONS.md, or the steward's policy. `tests/mutations.rs` runs the
 //! property tests against every mutation and requires each to be caught; every rule R1-R12 has
-//! at least one.
+//! at least one. Several came from the red team's reviews, which named the breaks the tests missed.
 
 /// One deliberate break. [`Mutation::rule`] names what it breaks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Mutation {
-    // R1. Label check.
+    // R1. Flow.
     /// Messages between user budgets are delivered whatever their labels.
     R1SkipLabelCheck,
     /// Exit notices are delivered whatever the receiver's labels.
     R1ExitNoticeIgnoresLabels,
-    /// `budget_usage` skips the label check for user-class callers too (the system-class
-    /// exemption of QUESTIONS 8, extended to everyone).
+    /// `budget_usage` skips the label check for user-class callers too.
     R1UsageIgnoresLabels,
-    /// `budget_usage` is exempt when the *target* is system class, not the caller (red team).
+    /// `budget_usage` is exempt when the *target* is system class, not the caller.
     R1UsageExemptBySystemTarget,
-    /// An exit notice is exempt when the *exiting* budget is system class, not the owner (red
-    /// team).
+    /// An exit notice is exempt when the *exiting* budget is system class, not the owner.
     R1ExitExemptBySystemExiting,
     /// R1 compares the sender with the budget of the thread waiting in `receive`, not with the
-    /// endpoint's owner (red team).
+    /// endpoint's owner.
     R1ChecksReceiverNotOwner,
-    /// R1 takes the sender's class from the stamp of the handle it sends through (red team): a
-    /// system sender is refused by a labelled user endpoint.
+    /// R1 takes the sender's class from the stamp of the handle it sends through: a system sender
+    /// is refused by a labelled user endpoint.
     R1SenderClassFromStamp,
     // R2. Fair waiting.
     /// Blocked senders are served oldest first across all senders.
     R2FifoAcrossAccounts,
     /// No `WAIT_CAP`.
     R2NoWaitCap,
-    /// `WAIT_CAP` and the round-robin are keyed by account alone, not (account, label set)
-    /// (QUESTIONS 17).
+    /// Groups are keyed by account alone, not (account, label set) (QUESTIONS 17).
     R2KeyByAccountOnly,
-    /// R2's key takes the labels of the handle's stamp budget, not the sender's (red team).
+    /// Groups take the labels of the handle's stamp budget, not the sender's.
     R2KeyByStampLabels,
-    // R3. Lends outlive their lender.
+    /// Every account-0 sender shares one group (QUESTIONS 87).
+    R2SystemCallersShareGroup,
+    // R3. Lends and abandoned calls.
     /// An abandoned lend is unmapped from the server at once.
     R3UnmapAbandonedLend,
-    /// An abandoned lend stays charged to the (possibly dead) caller's budget.
+    /// An abandoned lend stays charged to the caller, and the server's charge ends.
     R3ChargeStaysWithCaller,
-    // R4. Transfer opt-in.
+    /// An abandoned call's holder is never told (QUESTIONS 81).
+    AbandonNoticeMissing,
+    /// An abandoned-call notice is delivered again on every `receive` (QUESTIONS 81; I15).
+    AbandonNoticeRepeated,
+    // R4. Delivery.
     /// Transfers are delivered whatever `max_transfer` says.
     R4IgnoreMaxTransfer,
-    /// R4b: the caller of a dead server gets an empty reply instead of `Dead` (red team).
-    R4bDeadServerFakesReply,
-    /// R4a: `MAX_OPEN_CALLS` is counted per thread, not per process (red team).
+    /// A delivery the receiver cannot pay for goes through anyway, over its limit (QUESTIONS 72).
+    R4OverdrawOnDelivery,
+    /// R4a: `MAX_OPEN_CALLS` is counted per thread, not per process.
     R4aOpenCallsPerThread,
+    /// R4a: a process at `MAX_OPEN_CALLS` takes nothing, sends and notices included (QUESTIONS 81).
+    R4aFullTakesNothing,
+    /// R4b: the caller of a dead server gets an empty reply instead of `Dead`.
+    R4bDeadServerFakesReply,
     // R5. Interrupts.
     /// A firing IRQ source is not masked.
     R5NoMaskOnFire,
@@ -59,20 +66,20 @@ pub enum Mutation {
     // R6. Charging.
     /// A parent's usage also counts its children's live usage (not only their limits).
     R6ChargeAncestors,
-    /// A revocation scope's own object is charged to itself.
-    R6ScopeChargedToItself,
+    /// A budget's own page is charged to itself, not its parent (QUESTIONS 76).
+    R6OwnPageChargedToItself,
     /// Endpoints cost nothing.
     R6EndpointsFree,
     /// Page-table pages cost nothing (QUESTIONS 13).
     R6PageTablesFree,
     /// Open calls cost nothing (QUESTIONS 2).
     R6OpenCallsFree,
-    /// The exit slot is not charged to the creator (QUESTIONS 7).
-    R6ExitSlotFree,
-    /// The exit slot is charged to the child's budget, not the creator's (red team).
-    R6ExitSlotChargedToChild,
-    /// Badge slots cost nothing (QUESTIONS 53).
-    R6BadgeSlotsFree,
+    /// Process objects cost nothing (QUESTIONS 74).
+    R6ProcessObjectFree,
+    /// The process object is charged to the budget the process runs in, not its creator's.
+    R6ProcessObjectChargedToBudget,
+    /// A lend is charged to its caller only, not to the receiver as well (QUESTIONS 70).
+    R6LendChargedOnce,
     // R7. Carving.
     /// Children may be carved beyond the parent's free limits.
     R7NoCarveCheck,
@@ -94,16 +101,20 @@ pub enum Mutation {
     R10KeepCarvedLimits,
     /// Destroying a budget does not kill its descendants' processes.
     R10SpareDescendantProcesses,
-    /// Pending exit notices whose slot's payer is destroyed stay queued (red team).
+    /// Pending exit notices whose process object's payer is destroyed stay queued.
     R10ExitNoticesOutlivePayer,
     /// Queued messages sent through a revoked handle, or to a destroyed endpoint, are not failed
-    /// (red team X17; QUESTIONS 30). The two cases are one: every handle to an endpoint is
-    /// stamped with its owner or a descendant (R9), and an endpoint is destroyed only with its
-    /// owner, so a message to a destroyed endpoint was always sent through a revoked handle.
+    /// (QUESTIONS 30). The two cases are one: every handle to an endpoint is stamped with its
+    /// owner or a descendant (R9), and an endpoint is destroyed only with its owner.
     R10RevokedMessageDelivered,
     /// Taken calls sent through a revoked handle, or to a destroyed endpoint, keep their caller
     /// waiting for the reply (QUESTIONS 30).
     R10RevokedCallAnswered,
+    /// A revoked handle in a queued message is dropped from the list instead of arriving as 0
+    /// (QUESTIONS 86).
+    R10SweptHandlesDropped,
+    /// Destroying a creator's budget leaves the processes it created running (QUESTIONS 74).
+    R10CreatorDeathSparesProcess,
     // R11. Memory.
     /// Reused pages are not zeroed.
     R11NoZeroing,
@@ -112,59 +123,63 @@ pub enum Mutation {
     /// A lent page stays mapped in the lender during the call.
     R11LendStaysMapped,
     // R12. Scheduling.
-    /// User-class budgets compete with system-class ones.
-    R12NoClassOrder,
+    /// Budgets without `first` compete with `first` ones (QUESTIONS 84).
+    R12NoFirstOrder,
     /// Pass advances by runtime, whatever the weight.
     R12IgnoreWeight,
     /// A waking budget keeps its old pass (banks credit while asleep).
     R12WakeBanksCredit,
-    // KERNEL-SPEC.md, Messages: what the kernel attaches, and exit notices.
+    // KERNEL-SPEC.md, Messages: what the kernel attaches, and notices.
     /// Messages carry no labels.
     MsgNoLabels,
     /// Every delivered message has badge 0.
     MsgBadgeZero,
     /// Messages carry account 0.
     MsgAccountZero,
+    /// Message ids come from one counter shared by every process (QUESTIONS 88).
+    MsgIdsGlobal,
     /// An exit notice is dropped when no receiver waits on the exit endpoint.
     ExitNoticeDroppedIfNoReceiver,
-    /// A fault blames nobody (red team).
+    /// A fault blames nobody.
     BlameNobody,
-    /// A fault blames the oldest open call of the thread, not the most recently taken (red team;
-    /// QUESTIONS 37).
-    BlameOldestCall,
+    /// A fault blames the thread's most recently taken open call, not its current call
+    /// (QUESTIONS 82).
+    BlameNewestCall,
     /// `process_exit` while holding open calls is reported `exited`, blaming nobody (QUESTIONS 55).
     ExitWithOpenCallsNotFaulted,
-    /// No badge notice when a badge's last handle goes (QUESTIONS 53).
-    BadgeNoticeMissing,
-    /// Badge notices ignore the label rule (QUESTIONS 53; R1).
-    BadgeNoticeIgnoresLabels,
-    // KERNEL-SPEC.md, Process: the account a thread serves (crash blame).
-    /// `receive` never records the account of the message it delivers.
-    ServedAccountNeverSet,
-    /// A delivered `send` sets the serving account (QUESTIONS 31: only calls do).
-    SendSetsServedAccount,
-    // KERNEL-SPEC.md, Budget: deadlines.
+    // KERNEL-SPEC.md, Process: the current call.
+    /// Taking a call does not make it current.
+    CurrentNeverSet,
+    /// `receive` leaves the current call in place when it returns something else.
+    ReceiveKeepsCurrent,
+    /// `serve` does not change the current call.
+    ServeIgnored,
+    // KERNEL-SPEC.md, Budget: deadlines, class, `first`.
     /// Budget deadlines never fire.
     BudgetDeadlineIgnored,
+    /// A child takes its creator's class, not its parent's (QUESTIONS 73).
+    ClassNotInherited,
+    /// A caller without `first` may create a `first` budget (QUESTIONS 103).
+    FirstFromNonFirstCaller,
+    /// "Adding labels needs a system-class caller" checks the parent's class.
+    LabelsAddedByParentClass,
     // KERNEL-SPEC.md, Handle: badge 0 is the receive right.
     /// `receive` accepts a minted (badge != 0) endpoint handle.
     ReceiveWithBadgedHandle,
-    // `mint`: a message source must be one the caller serves.
-    /// `mint` accepts any message id, served or not.
+    /// `process_create` accepts a badged exit endpoint (QUESTIONS 93).
+    ExitEndpointBadged,
+    // `mint`: a message source must be an open call of the caller's thread.
+    /// `mint` accepts an open call of any thread of the process.
     MintFromUnservedMessage,
     // Open calls (QUESTIONS 2).
     /// No `MAX_OPEN_CALLS` limit.
     OpenCallsUnlimited,
-    /// A new `receive` forgets the thread's open calls (the red team's X11).
+    /// A new `receive` forgets the thread's open calls.
     ReceiveDropsOpenCalls,
-    // Budget and process creation rules from the owner's answers.
-    /// A user-class caller may create a system-class child (QUESTIONS 9).
-    SystemChildFromUserCaller,
-    /// A budget with weight 0 may hold a process (QUESTIONS 12).
+    // QUESTIONS 12.
+    /// A budget with weight 0 may hold a process.
     ProcessInWeightlessBudget,
-    /// "Adding labels needs a system-class caller" checks the parent's class (red team).
-    LabelsAddedByParentClass,
-    // The steward's policy (CONTAINMENT.md, CAPABILITIES.md).
+    // The steward's policy (CONTAINMENT.md, CAPABILITIES.md, INIT.md).
     /// A vault session may carry a label its principal does not own.
     PolicyVaultWithoutOwnership,
     /// `approve` does not check the request's content hash.
@@ -175,16 +190,25 @@ pub enum Mutation {
     PolicyNoPendingCap,
     /// The pending cap is per account, not per (account, label set) (QUESTIONS 17).
     PolicyCapPerAccount,
+    /// One session may take a whole bucket's pending requests (no fair share; QUESTIONS 90).
+    PolicyNoFairShare,
+    /// Ending a lease is subject to its sponsor's pending cap (QUESTIONS 90).
+    PolicyEndLeaseAdmitted,
     /// Declassification copies the item as it is now, not the snapshot.
     PolicyDeclassifyLive,
+    /// Declassification reads the item as the steward, with no reader budget (QUESTIONS 54).
+    PolicyDeclassifyWithoutReader,
     /// Crashes are blamed without the 10-minute window.
     PolicyBlameNoWindow,
+    /// Crash blame is counted per account, not per (account, label set) (QUESTIONS 48).
+    PolicyBlamePerAccount,
+    /// A logout does not refuse new sessions for the window (QUESTIONS 91).
+    PolicyNoLockout,
     /// Request ids are a global counter (visible to unlabelled observers).
     PolicySequentialIds,
     /// Login accepts a key `keyd` holds.
     PolicyLoginWithKeydKey,
-    /// An agent's sub-agent is carved from the sponsor, with a lease outliving the agent's
-    /// (QUESTIONS 33).
+    /// An agent's sub-agent is carved from the sponsor, with a lease outliving the agent's.
     PolicySubAgentOutlivesAgent,
     /// No `MAX_LEASE`.
     PolicyUnboundedLease,
@@ -192,18 +216,24 @@ pub enum Mutation {
     PolicyDeadSessionRequestsKept,
     /// Rendered text passes non-ASCII (bidi and format) characters (QUESTIONS 34).
     PolicyRenderNotWhitelisted,
-    /// Crash blame is counted per account, not per (account, label set) (QUESTIONS 48).
-    PolicyBlamePerAccount,
     /// A labelled request's free text (reason, note) is shown on the approval screen (QUESTIONS 35).
     PolicyLabelledFreeTextShown,
     /// A session may write an item whose labels contain its own (write up; QUESTIONS 51).
     PolicyWriteUp,
-    /// Declassification reads the item as the steward, with no reader budget (QUESTIONS 54).
-    PolicyDeclassifyWithoutReader,
+    /// The server is started holding a system-class budget handle (QUESTIONS 79).
+    PolicyServerHoldsSystemBudget,
+    /// A session's connection is narrowed to its session budget, not to a revocation scope
+    /// (QUESTIONS 80).
+    PolicyNarrowToSessionBudget,
+    /// Sessions of every label set are carved from the principal's unlabelled sub-budget
+    /// (QUESTIONS 89).
+    PolicyCarveFromUnlabelled,
+    /// Audit records are read without their labels (QUESTIONS 92).
+    PolicyAuditUnfiltered,
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 79] = {
+    pub const ALL: [Mutation; 95] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -217,21 +247,26 @@ impl Mutation {
             R2NoWaitCap,
             R2KeyByAccountOnly,
             R2KeyByStampLabels,
+            R2SystemCallersShareGroup,
             R3UnmapAbandonedLend,
             R3ChargeStaysWithCaller,
+            AbandonNoticeMissing,
+            AbandonNoticeRepeated,
             R4IgnoreMaxTransfer,
-            R4bDeadServerFakesReply,
+            R4OverdrawOnDelivery,
             R4aOpenCallsPerThread,
+            R4aFullTakesNothing,
+            R4bDeadServerFakesReply,
             R5NoMaskOnFire,
             R5NoUnmaskOnReceive,
             R6ChargeAncestors,
-            R6ScopeChargedToItself,
+            R6OwnPageChargedToItself,
             R6EndpointsFree,
             R6PageTablesFree,
             R6OpenCallsFree,
-            R6ExitSlotFree,
-            R6ExitSlotChargedToChild,
-            R6BadgeSlotsFree,
+            R6ProcessObjectFree,
+            R6ProcessObjectChargedToBudget,
+            R6LendChargedOnce,
             R7NoCarveCheck,
             R8AccountFromArgument,
             R9ReceivedHandleRestamped,
@@ -243,48 +278,59 @@ impl Mutation {
             R10ExitNoticesOutlivePayer,
             R10RevokedMessageDelivered,
             R10RevokedCallAnswered,
+            R10SweptHandlesDropped,
+            R10CreatorDeathSparesProcess,
             R11NoZeroing,
             R11SetFlagsAllowsWx,
             R11LendStaysMapped,
-            R12NoClassOrder,
+            R12NoFirstOrder,
             R12IgnoreWeight,
             R12WakeBanksCredit,
             MsgNoLabels,
             MsgBadgeZero,
             MsgAccountZero,
+            MsgIdsGlobal,
             ExitNoticeDroppedIfNoReceiver,
             BlameNobody,
-            BlameOldestCall,
+            BlameNewestCall,
             ExitWithOpenCallsNotFaulted,
-            BadgeNoticeMissing,
-            BadgeNoticeIgnoresLabels,
-            ServedAccountNeverSet,
-            SendSetsServedAccount,
+            CurrentNeverSet,
+            ReceiveKeepsCurrent,
+            ServeIgnored,
             BudgetDeadlineIgnored,
+            ClassNotInherited,
+            FirstFromNonFirstCaller,
+            LabelsAddedByParentClass,
             ReceiveWithBadgedHandle,
+            ExitEndpointBadged,
             MintFromUnservedMessage,
             OpenCallsUnlimited,
             ReceiveDropsOpenCalls,
-            SystemChildFromUserCaller,
             ProcessInWeightlessBudget,
-            LabelsAddedByParentClass,
             PolicyVaultWithoutOwnership,
             PolicyApproveIgnoresHash,
             PolicyShowLabelledToAll,
             PolicyNoPendingCap,
             PolicyCapPerAccount,
+            PolicyNoFairShare,
+            PolicyEndLeaseAdmitted,
             PolicyDeclassifyLive,
+            PolicyDeclassifyWithoutReader,
             PolicyBlameNoWindow,
+            PolicyBlamePerAccount,
+            PolicyNoLockout,
             PolicySequentialIds,
             PolicyLoginWithKeydKey,
             PolicySubAgentOutlivesAgent,
             PolicyUnboundedLease,
             PolicyDeadSessionRequestsKept,
             PolicyRenderNotWhitelisted,
-            PolicyBlamePerAccount,
             PolicyLabelledFreeTextShown,
             PolicyWriteUp,
-            PolicyDeclassifyWithoutReader,
+            PolicyServerHoldsSystemBudget,
+            PolicyNarrowToSessionBudget,
+            PolicyCarveFromUnlabelled,
+            PolicyAuditUnfiltered,
         ]
     };
 
@@ -300,18 +346,28 @@ impl Mutation {
             | R1ExitExemptBySystemExiting
             | R1ChecksReceiverNotOwner
             | R1SenderClassFromStamp => "R1",
-            R2FifoAcrossAccounts | R2NoWaitCap | R2KeyByAccountOnly | R2KeyByStampLabels => "R2",
-            R3UnmapAbandonedLend | R3ChargeStaysWithCaller => "R3",
-            R4IgnoreMaxTransfer | R4bDeadServerFakesReply | R4aOpenCallsPerThread => "R4",
+            R2FifoAcrossAccounts
+            | R2NoWaitCap
+            | R2KeyByAccountOnly
+            | R2KeyByStampLabels
+            | R2SystemCallersShareGroup => "R2",
+            R3UnmapAbandonedLend | R3ChargeStaysWithCaller | AbandonNoticeMissing | AbandonNoticeRepeated => {
+                "R3"
+            }
+            R4IgnoreMaxTransfer
+            | R4OverdrawOnDelivery
+            | R4aOpenCallsPerThread
+            | R4aFullTakesNothing
+            | R4bDeadServerFakesReply => "R4",
             R5NoMaskOnFire | R5NoUnmaskOnReceive => "R5",
             R6ChargeAncestors
-            | R6ScopeChargedToItself
+            | R6OwnPageChargedToItself
             | R6EndpointsFree
             | R6PageTablesFree
             | R6OpenCallsFree
-            | R6ExitSlotFree
-            | R6ExitSlotChargedToChild
-            | R6BadgeSlotsFree => "R6",
+            | R6ProcessObjectFree
+            | R6ProcessObjectChargedToBudget
+            | R6LendChargedOnce => "R6",
             R7NoCarveCheck => "R7",
             R8AccountFromArgument => "R8",
             R9ReceivedHandleRestamped | R9MintStampsCaller | R9MsgStampIsSenderBudget => "R9",
@@ -320,26 +376,28 @@ impl Mutation {
             | R10SpareDescendantProcesses
             | R10ExitNoticesOutlivePayer
             | R10RevokedMessageDelivered
-            | R10RevokedCallAnswered => "R10",
+            | R10RevokedCallAnswered
+            | R10SweptHandlesDropped
+            | R10CreatorDeathSparesProcess => "R10",
             R11NoZeroing | R11SetFlagsAllowsWx | R11LendStaysMapped => "R11",
-            R12NoClassOrder | R12IgnoreWeight | R12WakeBanksCredit => "R12",
+            R12NoFirstOrder | R12IgnoreWeight | R12WakeBanksCredit => "R12",
             MsgNoLabels
             | MsgBadgeZero
             | MsgAccountZero
+            | MsgIdsGlobal
             | ExitNoticeDroppedIfNoReceiver
             | BlameNobody
-            | BlameOldestCall
-            | ExitWithOpenCallsNotFaulted
-            | BadgeNoticeMissing
-            | BadgeNoticeIgnoresLabels => "Messages",
-            ServedAccountNeverSet | SendSetsServedAccount => "Process",
-            BudgetDeadlineIgnored => "Budget",
+            | BlameNewestCall
+            | ExitWithOpenCallsNotFaulted => "Messages",
+            CurrentNeverSet | ReceiveKeepsCurrent => "Process",
+            ServeIgnored => "serve",
+            BudgetDeadlineIgnored | ClassNotInherited => "Budget",
+            FirstFromNonFirstCaller | LabelsAddedByParentClass => "budget_create",
             ReceiveWithBadgedHandle => "Handle",
+            ExitEndpointBadged => "process_create",
             MintFromUnservedMessage => "mint",
             OpenCallsUnlimited | ReceiveDropsOpenCalls => "QUESTIONS 2",
-            SystemChildFromUserCaller => "QUESTIONS 9",
             ProcessInWeightlessBudget => "QUESTIONS 12",
-            LabelsAddedByParentClass => "budget_create",
             _ => "policy",
         }
     }

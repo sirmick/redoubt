@@ -4,7 +4,7 @@
 //! | --- | --- |
 //! | [`kernel_sequence`] | I1-I9, I11-I13 and the rule checks after every step of a random sequence |
 //! | [`budget_lifecycle`] | I10: create a budget, use it, destroy it; everyone else's counters are unchanged |
-//! | [`scheduler_fairness`] | R12: class order, and each budget's share over every interval it was runnable |
+//! | [`scheduler_fairness`] | R12: `first` budgets first, and each budget's share over every interval it was runnable |
 //! | `policy::steward_policy` | the steward's M1 policy (steward.rs) |
 //! | `policy::steward_noninterference` | the policy's non-interference property |
 //!
@@ -22,7 +22,7 @@ use crate::invariants::Checker;
 use crate::kernel::{Boot, Kernel};
 use crate::mutation::Mutation;
 use crate::sched::Scheduler;
-use crate::spec::{Class, SLICE};
+use crate::spec::SLICE;
 use crate::syscall::Op;
 
 /// A property that did not hold.
@@ -106,6 +106,10 @@ pub fn epilogue(k: &Kernel) -> Vec<Op> {
     use crate::syscall::Syscall;
     let mut k = k.clone();
     let mut ops = Vec::new();
+    // A halted machine takes no more events.
+    if k.halted.is_some() {
+        return ops;
+    }
     let go = |k: &mut Kernel, op: Op, ops: &mut Vec<Op>| {
         if k.step(&op).is_some() {
             ops.push(op);
@@ -263,7 +267,7 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
             let s = step(k, Op::Sys { pid, tid, call: recv }, ops)?;
             match s.outcome {
                 crate::syscall::Outcome::Done(Ok(
-                    crate::syscall::Ret::ExitNotice { .. } | crate::syscall::Ret::BadgeClosed { .. },
+                    crate::syscall::Ret::ExitNotice { .. } | crate::syscall::Ret::Abandoned { .. },
                 )) => {}
                 crate::syscall::Outcome::Done(Err(crate::spec::Error::Timeout)) => return Ok(true),
                 _ => return Ok(false),
@@ -281,7 +285,7 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
         pages: gen.rng.range(4, free / 2 + 3),
         processes: 1,
         weight: gen.rng.range(0, pb.weight - pb.weight_used),
-        class: Class::User.raw().min(pb.class.raw()),
+        first: 0,
         labels: pb.labels.clone(),
         account: 0,
         deadline: crate::spec::FOREVER,
@@ -338,9 +342,10 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
         return Ok(());
     }
     step(&mut k, Op::Sys { pid, tid, call: Syscall::BudgetDestroy { h: bh } }, &mut ops)?;
-    // The child's processes' exit slots were charged to their creators (QUESTIONS 7) and stay
-    // until the notices are received: the creator receives them (README spec problem 1). A message arriving instead
-    // changes the creator's state, and the sequence proves nothing.
+    // The child's processes' objects are charged to their creator (QUESTIONS 74) and stay until
+    // their notices are received (I10: "once its processes' exit notices are received or
+    // dropped"): the creator receives them. A message arriving instead changes the creator's state,
+    // and the sequence proves nothing.
     if !drain(&mut k, &mut ops, &mut step)? {
         return Ok(());
     }
@@ -405,24 +410,22 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
             _ => None,
         })
     };
-    let budget = |pages, processes, weight, class: Class, labels: alloc::vec::Vec<u64>, account, parent| {
-        Syscall::BudgetCreate {
+    let budget =
+        |pages, processes, weight, labels: alloc::vec::Vec<u64>, account, parent| Syscall::BudgetCreate {
             parent,
             pages,
             processes,
             weight,
-            class: class.raw(),
+            first: 0,
             labels,
             account,
             deadline: FOREVER,
-        }
-    };
+        };
     // init's slots: 1 root, 2 system, 3 users, 4 the Reset device.
     let e =
         handle(&run(&mut k, INIT_PID, 1, Syscall::EndpointCreate)?).ok_or_else(|| fail("endpoint".into()))?;
     let (system_h, users_h) = (2, 3);
-    let hs =
-        handle(&run(&mut k, INIT_PID, 1, budget(200, 2, 500, Class::System, alloc::vec![], 0, system_h))?);
+    let hs = handle(&run(&mut k, INIT_PID, 1, budget(200, 2, 500, alloc::vec![], 0, system_h))?);
     let hs = hs.ok_or_else(|| fail("server budget".into()))?;
     let ps =
         handle(&run(&mut k, INIT_PID, 1, Syscall::ProcessCreate { budget: hs, exit_endpoint: e })?).unwrap();
@@ -440,23 +443,12 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
     // Bob: two label sets of account 1002 (two R2 groups); Alice: account 1001.
     let senders = if rng.pct(20) { 10_000 } else { rng.range(40, 2_000) };
     let procs = senders.div_ceil(31);
-    let hb = handle(&run(
-        &mut k,
-        INIT_PID,
-        1,
-        budget(50_000, procs + 2, 4_000, Class::User, alloc::vec![], 1002, users_h),
-    )?)
-    .unwrap();
-    let hb2 = handle(&run(
-        &mut k,
-        INIT_PID,
-        1,
-        budget(20_000, procs / 2 + 1, 1_000, Class::User, alloc::vec![7], 0, hb),
-    )?)
-    .unwrap();
-    let ha =
-        handle(&run(&mut k, INIT_PID, 1, budget(100, 2, 1_000, Class::User, alloc::vec![], 1001, users_h))?)
+    let hb =
+        handle(&run(&mut k, INIT_PID, 1, budget(50_000, procs + 2, 4_000, alloc::vec![], 1002, users_h))?)
             .unwrap();
+    let hb2 = handle(&run(&mut k, INIT_PID, 1, budget(20_000, procs / 2 + 1, 1_000, alloc::vec![7], 0, hb))?)
+        .unwrap();
+    let ha = handle(&run(&mut k, INIT_PID, 1, budget(100, 2, 1_000, alloc::vec![], 1001, users_h))?).unwrap();
     type Runner<'a> = dyn FnMut(&mut Kernel, u64, u64, Syscall) -> Result<crate::kernel::Step, Failure> + 'a;
     let mint = |k: &mut Kernel, run: &mut Runner, into: u64| {
         run(
@@ -487,7 +479,8 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
         bobs.push(t);
         run(&mut k, INIT_PID, 1, Syscall::HandleClose { h: me })?;
     }
-    // The crowd: other accounts, one process each, WAIT_CAP threads calling.
+    // The crowd: other accounts, one process each, WAIT_CAP threads calling. The first two have
+    // account 0, so each is its own group only by its budget id (QUESTIONS 87).
     // At least three, so that more than MAX_OPEN_CALLS calls can queue.
     let crowd = rng.range(3, 8);
     let mut crowd_threads = Vec::new();
@@ -496,7 +489,7 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
             &mut k,
             INIT_PID,
             1,
-            budget(200, 1, 10, Class::User, alloc::vec![], 2000 + i, users_h),
+            budget(200, 1, 10, alloc::vec![], if i < 2 { 0 } else { 2000 + i }, users_h),
         )?)
         .unwrap();
         let mc = mint(&mut k, &mut run, hc)?.unwrap();
@@ -532,7 +525,9 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
                 Outcome::Done(Ok(Ret::Tid(t))) => t,
                 _ => break,
             };
-            run(&mut k, pid, tid, call.clone())?;
+            if run(&mut k, pid, tid, call.clone())?.outcome == Outcome::Done(Err(Error::Busy)) {
+                return Err(fail(format!("R2: crowd process {pid} got Busy within its own group's cap")));
+            }
             tid = next;
         }
     }
@@ -585,7 +580,7 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
         let s = run(&mut k, spid, stid, Syscall::Receive { h: Some(1), timeout: 0, max_transfer: 0 })?;
         let Outcome::Done(Ok(Ret::Message(m))) = s.outcome else { continue };
         turns += 1;
-        if Some(m.msg_id) == alice_msg {
+        if alice_msg.is_some() && m.account == 1001 {
             alice_served = true;
             if turns > groups {
                 return Err(fail(format!(
@@ -605,15 +600,34 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
     if alice_msg.is_some() && !alice_served {
         return Err(fail(String::from("I11: Alice's call was never taken")));
     }
+    // A process at MAX_OPEN_CALLS takes no calls but still takes sends (R4a; QUESTIONS 81).
+    if k.open_calls(spid) >= crate::spec::MAX_OPEN_CALLS {
+        let send = Syscall::Send {
+            h: e,
+            words: [9; WORDS],
+            handles: alloc::vec![],
+            transfer: None,
+            timeout: FOREVER,
+        };
+        run(&mut k, INIT_PID, 1, send)?;
+        let s = run(&mut k, spid, stid, Syscall::Receive { h: Some(1), timeout: 0, max_transfer: 0 })?;
+        if !matches!(s.outcome, Outcome::Done(Ok(Ret::Message(ref m))) if m.kind == crate::syscall::MsgKind::Send)
+        {
+            return Err(fail(format!(
+                "R4a: a server at MAX_OPEN_CALLS did not take a send: {:?}",
+                s.outcome
+            )));
+        }
+    }
     checker.check(&k).map_err(fail)?;
     Ok(())
 }
 
-/// R12: random budgets (classes, weights, spinners and sleepers) under the scheduler alone.
-/// Checks at every pick that a user budget never runs while a system budget is runnable, and
-/// for every user budget that is runnable throughout (a spinner), over every interval: it
-/// received at least its weight's share of the user-class CPU time, less a bound of a few
-/// slices. Sleepers do what RESOURCES.md's attack test describes: sleep (sometimes long), then
+/// R12: random budgets (`first` or not, weights, spinners and sleepers) under the scheduler alone.
+/// Checks at every pick that a budget without `first` never runs while a `first` budget is
+/// runnable, and for every other budget that is runnable throughout (a spinner), over every
+/// interval: it received at least its weight's share of the others' CPU time, less a bound of a
+/// few slices. Sleepers do what RESOURCES.md's attack test describes: sleep (sometimes long), then
 /// run a burst, so a budget that could bank credit while asleep would take it back in the burst.
 ///
 /// The bound: stride keeps every runnable budget's pass within one slice's stride of the lowest,
@@ -632,7 +646,8 @@ pub fn fairness_run(seed: u64, mutation: Option<Mutation>) -> Result<u64, Failur
     let mut s = Scheduler { mutation, ..Scheduler::default() };
     let n = rng.range(2, 6);
     struct B {
-        class: Class,
+        /// Marked `first` (runs before the others, R12).
+        first: bool,
         weight: u64,
         spinner: bool,
         /// Until when a sleeper sleeps (it is runnable when 0).
@@ -645,11 +660,11 @@ pub fn fairness_run(seed: u64, mutation: Option<Mutation>) -> Result<u64, Failur
     }
     let mut bs = Vec::new();
     for id in 1..=n {
-        let class = if rng.pct(20) { Class::System } else { Class::User };
+        let first = rng.pct(20);
         let weight = rng.range(1, 100);
-        let spinner = class == Class::User && (id == 1 || rng.pct(50));
-        s.add_budget(id, class, weight);
-        bs.push(B { class, weight, spinner, asleep_until: 0, burst: rng.range(1, 5), runtime: 0, best: 0 });
+        let spinner = !first && (id == 1 || rng.pct(50));
+        s.add_budget(id, first, weight);
+        bs.push(B { first, weight, spinner, asleep_until: 0, burst: rng.range(1, 5), runtime: 0, best: 0 });
     }
     // Every budget has one thread (tid = budget id); all start runnable.
     for id in 1..=n {
@@ -658,14 +673,14 @@ pub fn fairness_run(seed: u64, mutation: Option<Mutation>) -> Result<u64, Failur
     let mut now = 0u64;
     let mut user_time = 0u64;
     let mut worst = 0u64;
-    let total_user_weight: u64 = bs.iter().filter(|b| b.class == Class::User).map(|b| b.weight).sum();
-    let w_min = bs.iter().filter(|b| b.class == Class::User).map(|b| b.weight).min().unwrap_or(1);
+    let total_user_weight: u64 = bs.iter().filter(|b| !b.first).map(|b| b.weight).sum();
+    let w_min = bs.iter().filter(|b| !b.first).map(|b| b.weight).min().unwrap_or(1);
     for _ in 0..rng.range(100, 1500) {
         // Wake sleepers whose time has come, each for a burst.
         for (i, b) in bs.iter_mut().enumerate() {
             if !b.spinner && b.asleep_until != 0 && b.asleep_until <= now {
                 b.asleep_until = 0;
-                b.burst = if b.class == Class::System { rng.range(1, 3) } else { rng.range(1, 150) };
+                b.burst = if b.first { rng.range(1, 3) } else { rng.range(1, 150) };
                 s.wake(i as u64 + 1, i as u64 + 1);
             }
         }
@@ -680,15 +695,15 @@ pub fn fairness_run(seed: u64, mutation: Option<Mutation>) -> Result<u64, Failur
             continue;
         };
         let i = (id - 1) as usize;
-        if bs[i].class == Class::User && bs.iter().any(|b| b.class == Class::System && b.asleep_until == 0) {
-            return Err(fail(format!("R12: user budget {id} ran while a system budget was runnable")));
+        if !bs[i].first && bs.iter().any(|b| b.first && b.asleep_until == 0) {
+            return Err(fail(format!("R12: budget {id} ran while a `first` budget was runnable")));
         }
         // A full slice, or the tail of a burst.
         let run = if bs[i].spinner || bs[i].burst > 1 { SLICE } else { rng.range(1, SLICE) };
         now += run;
         s.charge(id, run);
         bs[i].runtime += run;
-        if bs[i].class == Class::User {
+        if !bs[i].first {
             user_time += run;
         }
         if !bs[i].spinner {
@@ -702,7 +717,7 @@ pub fn fairness_run(seed: u64, mutation: Option<Mutation>) -> Result<u64, Failur
         }
         // The share check, for always-runnable user budgets.
         for (j, b) in bs.iter_mut().enumerate() {
-            if !b.spinner || b.class != Class::User {
+            if !b.spinner || b.first {
                 continue;
             }
             let d = b.runtime as i128 * total_user_weight as i128 - b.weight as i128 * user_time as i128;

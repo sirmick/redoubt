@@ -1,22 +1,24 @@
-//! KERNEL-SPEC.md's invariants I1-I14, checked on the kernel model's state after every step.
+//! KERNEL-SPEC.md's invariants I1-I15, checked on the kernel model's state after every step.
 //!
 //! Each check recomputes what should be true from the objects themselves and from ghost records
 //! (ghost.rs: taken from handle tables, budget objects and call arguments at the event), never from
 //! the counters and derived fields the kernel keeps, so that a wrong update anywhere shows up here.
-//! I10 is a property of a pair of calls and is checked by `check::budget_lifecycle`; I11's
-//! record-keeping is in ghost.rs (`Ghost::took`); I14 is "the model never panics", which the
-//! property runner checks by catching panics.
+//! A thread's wait state counts as primary: whether a caller still waits for its reply is read
+//! from the caller thread, not from the kernel's message record. I10 is a property of a pair of
+//! calls and is checked by `check::budget_lifecycle`; I11's record-keeping is in ghost.rs
+//! (`Ghost::took`); I14 is "the model never panics", which the property runner checks by catching
+//! panics.
 //!
 //! Some checks are the direct statement of a rule (R2's cap, R3's lend staying with the server,
-//! R4's opt-in, R4a's limit); they are named after the rule.
+//! R4's delivery, R4a's limit); they are named after the rule.
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::ghost::{Blame, Flow, Key};
-use crate::kernel::{Backing, Handle, Kernel, MapState, MsgKind, Object, Origin, ROOT, Wait};
+use crate::ghost::{Blame, Flow, Key, group};
+use crate::kernel::{Backing, Handle, Kernel, MapState, MsgKind, Object, Origin, ROOT, USERS, Wait};
 use crate::spec::*;
 use crate::syscall::{MintSource, Ret};
 
@@ -30,51 +32,18 @@ macro_rules! ensure {
     };
 }
 
-/// Where the handles with each non-zero badge to each endpoint are: (endpoint, badge) -> the
-/// label set of each holder (a process's budget, or a message's sender), from the ghost's records.
-type Holders = BTreeMap<(u64, u64), Vec<Vec<u64>>>;
-
-fn holders(k: &Kernel) -> Holders {
-    let mut out: Holders = BTreeMap::new();
-    for p in k.processes.values() {
-        for h in p.handles.values().chain(p.exit_endpoint.iter()) {
-            if let (Object::Endpoint(e), true) = (h.object, h.badge != 0) {
-                out.entry((e, h.badge)).or_default().push(k.ghost.labels(p.budget));
-            }
-        }
-    }
-    for m in k.msgs.values() {
-        let labels = k.ghost.sent.get(&m.id).map_or(Vec::new(), |s| s.labels.clone());
-        for h in &m.handles {
-            if let (Object::Endpoint(e), true) = (h.object, h.badge != 0) {
-                out.entry((e, h.badge)).or_default().push(labels.clone());
-            }
-        }
-    }
-    out
-}
-
-fn pending_badges(k: &Kernel) -> BTreeSet<(u64, u64)> {
-    k.endpoints
-        .values()
-        .flat_map(|e| e.badges.iter().filter(|(_, s)| s.pending).map(|(b, _)| (e.id, *b)))
-        .collect()
-}
-
 /// The checker, with what it remembers between steps: the frames that existed after the last
 /// step, so that a frame appearing now is known to be newly handed out (I9: it must read zero),
-/// whatever the kernel's allocator believes; and who held each badge, so that a badge whose last
-/// handle went is known to be owed a notice (QUESTIONS 53).
+/// whatever the kernel's allocator believes; and the abandoned calls already reported (I15).
 #[derive(Clone, Debug, Default)]
 pub struct Checker {
     frames: BTreeSet<u64>,
-    badges: Holders,
-    pending: BTreeSet<(u64, u64)>,
+    reported: BTreeSet<u64>,
 }
 
 impl Checker {
     pub fn new(k: &Kernel) -> Checker {
-        Checker { frames: k.frames.keys().copied().collect(), badges: holders(k), pending: pending_badges(k) }
+        Checker { frames: k.frames.keys().copied().collect(), reported: BTreeSet::new() }
     }
 
     /// Every check, in invariant order. The error names the invariant (or rule) and what broke.
@@ -87,95 +56,146 @@ impl Checker {
         i1_i2_i3_i4_handles(k)?;
         i5_charging(k)?;
         i6_i8_budgets(k)?;
-        flows(k)?;
+        self.flows(k)?;
         self.i9_memory(k)?;
-        self.badge_notices(k)?;
         r2_r3_messages(k)?;
+        self.i15_abandoned(k)?;
+        r4_delivery(k)?;
         exits_owed(k)?;
         i13_timeouts(k)?;
         Ok(())
     }
 
-    /// Badge slots and notices (QUESTIONS 53; I7, I15): each endpoint's slots count exactly the
-    /// handles with their badge, and a slot is pending exactly when none is left; a badge whose
-    /// last handle went this step is owed a notice if every holder it had after the last step
-    /// passes the exit notices' label rule (the kernel judges the last one to go), and is owed none
-    /// if none does; a notice is delivered only when no handle with its badge exists.
-    fn badge_notices(&mut self, k: &Kernel) -> Check {
-        let now = holders(k);
-        for e in k.endpoints.values() {
-            for (b, s) in &e.badges {
-                let n = now.get(&(e.id, *b)).map_or(0, |v| v.len() as u64);
-                ensure!(
-                    s.count == n,
-                    "Messages: badge {b} of endpoint {} counts {} handles, there are {n}",
-                    e.id,
-                    s.count
-                );
-                if n == 0 {
+    /// What the step did, judged against the ghost's records:
+    /// - a delivered message is the one sent: its kind, badge, account, labels and handles are
+    ///   what the sender's handles and budget gave (Messages), a handle revoked meanwhile arriving
+    ///   as 0 and every other keeping its stamp (R9, R10); it went to a thread receiving through a
+    ///   badge-0 handle to its endpoint (I4); between user budgets only equal label sets flow, the
+    ///   receiver being the endpoint's owner (I7, R1); no transfer exceeds `max_transfer` (R4);
+    /// - exit notices and usage reads flow only to ⊇ label sets or to a system-class budget, and a
+    ///   notice reports what the ghost expects (I7; Messages);
+    /// - a refusal (`LabelDenied` for a message or a usage read) happens only when R1 says so;
+    /// - `Busy` for R2's cap only when the sender's group is full;
+    /// - a minted handle's endpoint is one the minter holds a receive right to, or an open call of
+    ///   its thread arrived on, with that source's default stamp (mint, R9);
+    /// - a caller gets a reply only when its server replied (R4b), and not through a revoked
+    ///   handle (R10);
+    /// - an abandoned-call notice goes to the thread holding the call, once (I15).
+    fn flows(&mut self, k: &Kernel) -> Check {
+        for f in &k.ghost.flows {
+            match f {
+                Flow::Delivered { tid, id, msg, via } => delivered(k, *tid, *id, msg, via)?,
+                Flow::Exit { pid, from, to_class, to, got, want } => {
                     ensure!(
-                        s.pending,
-                        "Messages: badge {b} of endpoint {} kept a slot with no handle or notice",
-                        e.id
+                        *to_class == Class::System || superset(to, from),
+                        "I7: an exit notice of {from:?} reached {to:?}"
                     );
-                } else {
                     ensure!(
-                        !s.pending,
-                        "I15: a notice for badge {b} of endpoint {} is pending while it has handles",
-                        e.id
+                        want.as_ref() == Some(got),
+                        "Messages: the exit notice of process {pid} reports {got:?}, it should report {want:?}"
                     );
                 }
+                Flow::Usage { from, to_class, to } => ensure!(
+                    *to_class == Class::System || superset(to, from),
+                    "I7: usage of {from:?} read by {to:?}"
+                ),
+                Flow::UsageDenied { from, to_class, to } => ensure!(
+                    *to_class == Class::User && !superset(to, from),
+                    "R1: usage of {from:?} refused to a {to_class:?} caller with {to:?}"
+                ),
+                Flow::LabelDenied { from_class, from, to_class, to } => ensure!(
+                    *from_class == Class::User && *to_class == Class::User && from != to,
+                    "R1: a {from_class:?} sender with {from:?} refused by a {to_class:?} owner with {to:?}"
+                ),
+                Flow::Busy { endpoint, key } => {
+                    let queued = k.endpoints.get(endpoint).map_or(0, |e| {
+                        e.queue.values().flatten().filter(|m| ghost_key(k, **m).as_ref() == Some(key)).count()
+                    });
+                    ensure!(
+                        queued as u64 >= WAIT_CAP,
+                        "R2: a sender of {key:?} got Busy on endpoint {endpoint} with {queued} of its group waiting"
+                    );
+                }
+                Flow::Minted { pid, tid, endpoint, via, default_stamp } => match via {
+                    MintSource::Handle(h) => {
+                        let hd = k.processes.get(pid).and_then(|p| p.handles.get(h));
+                        ensure!(
+                            hd.is_some_and(|x| x.object == Object::Endpoint(*endpoint)
+                                && x.badge == 0
+                                && x.stamp == *default_stamp),
+                            "mint: process {pid} minted from handle {h}, not a receive right to endpoint {endpoint} \
+                             stamped {default_stamp}"
+                        );
+                    }
+                    MintSource::Message(rid) => {
+                        let m = k.ghost.rids.get(&(*pid, *rid));
+                        let open = m.is_some_and(|m| k.ghost.served.get(tid).is_some_and(|v| v.contains(m)));
+                        let s = m.and_then(|m| k.ghost.sent.get(m));
+                        ensure!(
+                            open && s.is_some_and(|s| s.endpoint == *endpoint && s.stamp == *default_stamp),
+                            "mint: thread {tid} minted from message {rid}, which is not its open call or came on \
+                             another endpoint or stamp"
+                        );
+                    }
+                },
+                Flow::Woken { tid, result: Ok(Ret::Reply { .. }) } => {
+                    let replied = k.ghost.flows.iter().any(|g| match g {
+                        Flow::Replied { msg } => k.ghost.sent.get(msg).is_some_and(|s| s.sender_tid == *tid),
+                        _ => false,
+                    });
+                    ensure!(replied, "R4b: thread {tid} got a reply its server never sent");
+                }
+                Flow::Replied { msg } => {
+                    let caller = k.ghost.sent.get(msg).map(|s| s.sender_tid);
+                    let answered = k.ghost.flows.iter().any(
+                        |g| matches!(g, Flow::Woken { tid, result: Ok(Ret::Reply { .. }) } if Some(*tid) == caller),
+                    );
+                    let stamp = k.ghost.sent.get(msg).map_or(0, |s| s.stamp);
+                    ensure!(
+                        !answered || k.budgets.contains_key(&stamp),
+                        "R10: the reply to {msg}, sent through a revoked handle, reached its caller"
+                    );
+                }
+                // (A thread that died later in the step took its calls with it.)
+                Flow::AbandonNotice { tid, msg } if k.threads.contains_key(tid) => {
+                    ensure!(
+                        k.ghost.served.get(tid).is_some_and(|v| v.contains(msg)),
+                        "I15: thread {tid} was told of abandoned call {msg}, which it does not hold"
+                    );
+                    ensure!(
+                        !awaited(k, *msg),
+                        "I15: thread {tid} was told call {msg} was abandoned; its caller waits"
+                    );
+                    ensure!(
+                        self.reported.insert(*msg),
+                        "I15: thread {tid} was told twice that call {msg} was abandoned"
+                    );
+                }
+                Flow::Woken { .. } | Flow::AbandonNotice { .. } => {}
             }
         }
-        for (e, b) in now.keys() {
-            ensure!(
-                k.endpoints.get(e).is_some_and(|x| x.badges.contains_key(b)),
-                "Messages: badge {b} of endpoint {e} has handles but no slot"
-            );
-        }
-        let delivered: BTreeSet<(u64, u64)> = k
-            .ghost
-            .flows
-            .iter()
-            .filter_map(|f| match f {
-                Flow::BadgeClosed { endpoint, badge } => Some((*endpoint, *badge)),
-                _ => None,
-            })
-            .collect();
-        for ((e, b), was) in &self.badges {
-            let Some(ep) = k.endpoints.get(e) else { continue };
-            if now.contains_key(&(*e, *b)) {
+        Ok(())
+    }
+
+    /// I15: an abandoned call (taken, its caller no longer waiting, still open) is reported to the
+    /// thread holding it: once it waits in `receive` on the call's endpoint, it has been told.
+    fn i15_abandoned(&mut self, k: &Kernel) -> Check {
+        self.reported.retain(|m| k.msgs.contains_key(m));
+        for m in k.msgs.values() {
+            let Some((_, stid)) = m.server else { continue };
+            if m.kind != MsgKind::Call || awaited(k, m.id) || self.reported.contains(&m.id) {
                 continue;
             }
-            let owner = &k.budgets[&ep.owner];
-            let to = k.ghost.labels(owner.id);
-            let pass = |l: &Vec<u64>| owner.class == Class::System || superset(&to, l);
-            let notice = ep.badges.get(b).is_some_and(|s| s.pending) || delivered.contains(&(*e, *b));
-            if was.iter().all(pass) {
-                ensure!(
-                    notice,
-                    "Messages: the last handle with badge {b} to endpoint {e} went, and no notice is owed"
-                );
-            }
-            if !was.iter().any(pass) {
-                ensure!(
-                    !notice,
-                    "I7: a notice for badge {b} of endpoint {e} is owed to {to:?} from holders {was:?}"
-                );
-            }
-        }
-        for (e, b) in &delivered {
-            ensure!(
-                !now.contains_key(&(*e, *b)),
-                "I15: a notice for badge {b} of endpoint {e} arrived while it has handles"
+            let waiting_here = k.threads.get(&stid).is_some_and(
+                |t| matches!(t.wait, Some(Wait::Receive { endpoint, .. }) if endpoint == m.endpoint),
             );
             ensure!(
-                self.pending.contains(&(*e, *b)) || self.badges.contains_key(&(*e, *b)),
-                "I15: a notice for badge {b} of endpoint {e} that was never owed"
+                !waiting_here,
+                "I15: thread {stid} receives on endpoint {} and was never told its call {} was abandoned",
+                m.endpoint,
+                m.id
             );
         }
-        self.pending = pending_badges(k);
-        self.badges = now;
         Ok(())
     }
 
@@ -239,9 +259,10 @@ impl Checker {
                     "frame {f} lent in by a message not served by {spid}"
                 );
                 let m = m.unwrap();
-                let want = if m.caller_waiting { m.sender_budget } else { k.budget_of(*spid).unwrap() };
+                let waiting = awaited(k, *mid);
+                let want = if waiting { m.sender_budget } else { k.budget_of(*spid).unwrap() };
                 ensure!(fr.payer == want, "R3: lent frame {f} is charged to {}, not {want}", fr.payer);
-                if m.caller_waiting {
+                if waiting {
                     ensure!(
                         s.lent_out.iter().any(|(pid, x)| *pid == m.sender_pid && x == mid),
                         "I9: frame {f} lent by a waiting caller that no longer reserves it"
@@ -271,6 +292,90 @@ pub fn check(k: &Kernel) -> Check {
     Checker::new(k).check(k)
 }
 
+/// Does some thread wait for the reply to call `mid`? (Read from the caller threads.)
+fn awaited(k: &Kernel, mid: u64) -> bool {
+    k.threads.values().any(|t| t.wait == Some(Wait::Reply(mid)))
+}
+
+/// A delivered message against the ghost's record of how it was sent (see `Checker::flows`).
+fn delivered(
+    k: &Kernel,
+    tid: u64,
+    id: u64,
+    msg: &crate::syscall::Message,
+    via: &Option<crate::ghost::Receiving>,
+) -> Check {
+    let Some(s) = k.ghost.sent.get(&id) else {
+        return Err(format!("Messages: thread {tid} got message {id}, which was never sent"));
+    };
+    ensure!(
+        msg.kind == s.kind && msg.badge == s.badge && msg.account == s.account && msg.labels == s.labels,
+        "Messages: message {id} arrived as {:?} badge {} account {} labels {:?}; it was sent as {:?} badge {} account \
+         {} labels {:?}",
+        msg.kind,
+        msg.badge,
+        msg.account,
+        msg.labels,
+        s.kind,
+        s.badge,
+        s.account,
+        s.labels
+    );
+    ensure!(
+        msg.handles.len() == s.handles.len(),
+        "R10: message {id} arrived with {} handles, it was sent with {}",
+        msg.handles.len(),
+        s.handles.len()
+    );
+    let pid = k.threads.get(&tid).map(|t| t.pid);
+    for (i, (h, sent)) in msg.handles.iter().zip(&s.handles).enumerate() {
+        // Closed while queued: revoked (its stamp destroyed), or its object destroyed.
+        let live = match sent.object {
+            Object::Budget(b) => k.budgets.contains_key(&b),
+            Object::Process(p) => k.processes.contains_key(&p),
+            Object::Endpoint(e) => k.endpoints.contains_key(&e),
+            Object::Device(d) => k.devices.contains_key(&d),
+        };
+        let closed = !k.budgets.contains_key(&sent.stamp) || !live;
+        let stamp = sent.stamp;
+        ensure!(
+            (*h == NO_HANDLE) == closed,
+            "R10: handle {i} of message {id} arrived as {h}; it was {}closed",
+            if closed { "" } else { "not " }
+        );
+        if *h != NO_HANDLE {
+            let hd = pid.and_then(|p| k.processes.get(&p)).and_then(|p| p.handles.get(h));
+            ensure!(
+                hd.is_some_and(|x| x.stamp == stamp),
+                "R9: handle {i} of message {id} arrived as {h}, not stamped {stamp}"
+            );
+        }
+    }
+    let Some(via) = via else {
+        return Err(format!("I4: thread {tid} got message {id} without receiving"));
+    };
+    ensure!(
+        via.handle.badge == 0 && via.handle.object == Object::Endpoint(s.endpoint),
+        "I4: thread {tid} received message {id} through {:?}",
+        via.handle
+    );
+    if s.sender_class == Class::User && s.owner_class == Class::User {
+        ensure!(
+            s.labels == s.owner_labels,
+            "I7: a message flowed between user label sets {:?} and {:?}",
+            s.labels,
+            s.owner_labels
+        );
+    }
+    let pages = msg.buffer.filter(|b| b.kind == crate::syscall::BufferKind::Transfer).map_or(0, |b| b.pages);
+    ensure!(
+        pages <= via.max_transfer,
+        "R4: {pages} pages transferred to a receiver that allowed {}",
+        via.max_transfer
+    );
+    Ok(())
+}
+
 /// Every handle anywhere: (where, handle).
 fn all_handles(k: &Kernel) -> Vec<(String, Handle)> {
     let mut out = Vec::new();
@@ -283,23 +388,24 @@ fn all_handles(k: &Kernel) -> Vec<(String, Handle)> {
         }
     }
     for m in k.msgs.values() {
-        for h in &m.handles {
+        for h in m.handles.iter().flatten() {
             out.push((format!("message {}", m.id), *h));
         }
     }
     out
 }
 
-/// R2's key of a message, from the ghost's record of how it was sent.
+/// R2's group of a message, from the ghost's record of how it was sent.
 fn ghost_key(k: &Kernel, m: u64) -> Option<Key> {
-    k.ghost.sent.get(&m).map(|s| (s.account, s.labels.clone()))
+    k.ghost.sent.get(&m).map(|s| group(s.account, s.labels.clone(), s.sender_budget))
 }
 
 /// The object graph is well formed and alive: every process's budget, every thread's process,
-/// every queued message and waiting receiver exist and agree; a thread blocked in `send`, `call`
-/// or waiting for a reply waits on something that still exists (R10: calls to a destroyed
-/// endpoint fail); no budget outlives its deadline; the scheduler's runnable threads are exactly
-/// the runnable threads.
+/// every queued message and waiting receiver exist and agree; a queued message is in its sender's
+/// group and was sent through a live handle (R2, R10); a thread blocked in `send`, `call` or
+/// waiting for a reply waits on something that still exists (R10); no budget outlives its
+/// deadline; a process's object is paid by a live budget, and its exit endpoint is a receive right
+/// (QUESTIONS 74, 93); the scheduler's runnable threads are exactly the runnable threads.
 fn structure(k: &Kernel) -> Check {
     for p in k.processes.values() {
         ensure!(
@@ -307,6 +413,17 @@ fn structure(k: &Kernel) -> Check {
             "R10: process {} lives in destroyed budget {}",
             p.pid,
             p.budget
+        );
+        let slot = k.ghost.slots.get(&p.pid);
+        ensure!(
+            slot.is_some_and(|s| k.budgets.contains_key(&s.payer)),
+            "R10: process {} runs, but the budget its object is charged to is destroyed",
+            p.pid
+        );
+        ensure!(
+            slot.is_some_and(|s| s.badge == 0),
+            "process_create: process {}'s exit endpoint is a badged handle",
+            p.pid
         );
         ensure!(p.started || p.threads.is_empty(), "process {} has threads before it started", p.pid);
         for t in &p.threads {
@@ -365,7 +482,7 @@ fn structure(k: &Kernel) -> Check {
         for n in &e.exits {
             ensure!(
                 k.budgets.contains_key(&n.payer),
-                "R10: the exit notice of process {} on endpoint {} outlived its slot's payer {}",
+                "R10: the exit notice of process {} on endpoint {} outlived its object's payer {}",
                 n.pid,
                 e.id,
                 n.payer
@@ -400,7 +517,7 @@ fn structure(k: &Kernel) -> Check {
             Some(Wait::Reply(m)) => {
                 let msg = k.msgs.get(&m);
                 ensure!(
-                    msg.is_some_and(|x| x.caller_waiting && x.sender_tid == t.tid),
+                    msg.is_some_and(|x| x.sender_tid == t.tid && x.server.is_some()),
                     "thread {} waits for a reply to message {m}, which is not in flight",
                     t.tid
                 );
@@ -431,14 +548,15 @@ fn structure(k: &Kernel) -> Check {
             _ => {}
         }
     }
-    // Scheduler bookkeeping: each budget's class and weight, and exactly its runnable threads.
+    // Scheduler bookkeeping: each budget's `first` flag and weight, and exactly its runnable
+    // threads.
     for (b, e) in &k.sched.budgets {
         let Some(bx) = k.budgets.get(b) else {
             return Err(format!("R12: scheduler keeps destroyed budget {b}"));
         };
         ensure!(
-            e.class == bx.class && e.weight == bx.weight,
-            "R12: scheduler has budget {b}'s class or weight wrong"
+            e.first == bx.first && e.weight == bx.weight,
+            "R12: scheduler has budget {b}'s first flag or weight wrong"
         );
         for t in &e.runnable {
             ensure!(
@@ -458,10 +576,10 @@ fn structure(k: &Kernel) -> Check {
     Ok(())
 }
 
-/// What each thread serves (R4a, QUESTIONS 2): exactly the messages the ghost saw delivered to it
-/// and not yet replied to; every taken call is served by exactly one live thread; a process holds
-/// at most `MAX_OPEN_CALLS`; the account a thread records is the newest served message's, as the
-/// sender's budget gave it (Process; README choice 7).
+/// What each thread serves (R4a): exactly the calls the ghost saw delivered to it and not yet
+/// replied to; its current call is the one the ghost saw it take or `serve` last, none after a
+/// `receive` returned anything else (QUESTIONS 82); every taken call is served by exactly one live
+/// thread; a process holds at most `MAX_OPEN_CALLS`.
 fn serving(k: &Kernel) -> Check {
     let mut servers: BTreeMap<u64, u64> = BTreeMap::new();
     for t in k.threads.values() {
@@ -477,13 +595,12 @@ fn serving(k: &Kernel) -> Check {
             );
             *servers.entry(*m).or_default() += 1;
         }
-        let newest = k.ghost.served.get(&t.tid).and_then(|v| v.last()).and_then(|m| k.ghost.sent.get(m));
-        let account = newest.map_or(0, |s| s.account);
+        let current = k.ghost.current.get(&t.tid).copied();
         ensure!(
-            t.account == account,
-            "Process: thread {} records account {}, it serves {account}'s",
+            t.current == current,
+            "Process: thread {}'s current call is {:?}, it should be {current:?}",
             t.tid,
-            t.account
+            t.current
         );
     }
     for m in k.msgs.values().filter(|m| m.server.is_some()) {
@@ -551,44 +668,40 @@ fn page_tables(space: &BTreeMap<u64, crate::kernel::Mapping>) -> u64 {
 }
 
 /// I5 and R6: recompute every budget's usage from the objects charged to it (the cost table:
-/// budgets, processes, page tables, threads, handle tables, endpoints, frames, open calls, exit
-/// slots); usage fits the limits except for R3's lends, at most `MAX_LEND_PAGES` per open call;
-/// children's limits plus own objects fit.
+/// budgets' own pages to their parents, process objects to their creators while the process
+/// runs or its notice waits, page tables, threads, handle tables, endpoints, frames, open calls,
+/// and lends to their receivers while the caller waits); usage fits the limits, always (QUESTIONS
+/// 70); children's limits and own pages plus its own objects fit.
 fn i5_charging(k: &Kernel) -> Check {
     let c = k.costs;
     let mut pages: BTreeMap<u64, u64> = BTreeMap::new();
     let mut procs: BTreeMap<u64, u64> = BTreeMap::new();
-    let mut open: BTreeMap<u64, u64> = BTreeMap::new();
-    let mut r3: BTreeMap<u64, u64> = BTreeMap::new();
     let mut add = |b: u64, n: u64| *pages.entry(b).or_default() += n;
     for b in k.budgets.values() {
-        // A budget's own object is charged to itself, a revocation scope's to its parent.
-        add(b.id, if b.is_scope() { 0 } else { c.budget });
         if let Some(p) = b.parent {
-            add(p, if b.is_scope() { c.budget } else { b.pages_limit });
+            add(p, c.budget + b.pages_limit);
             *procs.entry(p).or_default() += b.processes_limit;
         }
     }
     for p in k.processes.values() {
         add(
             p.budget,
-            c.process
-                + page_tables(&p.space) * c.page_table
+            page_tables(&p.space) * c.page_table
                 + k.table_pages(p.handles.len() as u64)
                 + p.threads.len() as u64 * c.thread,
         );
         *procs.entry(p.budget).or_default() += 1;
     }
-    // Exit slots, as the ghost recorded them at `process_create`: charged to the creator's budget
-    // while the process lives and while its notice waits (QUESTIONS 7).
+    // Process objects, as the ghost recorded them at `process_create`: charged to the creator's
+    // budget while the process runs and while its notice waits (QUESTIONS 74).
     for (pid, s) in &k.ghost.slots {
         let waiting = k.ghost.owed.get(pid).is_some_and(|o| k.endpoints.contains_key(&o.endpoint));
         if k.budgets.contains_key(&s.payer) && (k.processes.contains_key(pid) || waiting) {
-            add(s.payer, c.exit_slot);
+            add(s.payer, c.process);
         }
     }
     for e in k.endpoints.values() {
-        add(e.owner, c.endpoint + (e.badges.len() as u64).div_ceil(c.badge_slots_per_page));
+        add(e.owner, c.endpoint);
     }
     for f in k.frames.values() {
         add(f.payer, 1);
@@ -597,9 +710,8 @@ fn i5_charging(k: &Kernel) -> Check {
         let Some((spid, _)) = m.server else { continue };
         let Some(sb) = k.budget_of(spid) else { continue };
         add(sb, c.open_call);
-        *open.entry(sb).or_default() += 1;
-        if let (false, Some(b)) = (m.caller_waiting, &m.buffer) {
-            *r3.entry(sb).or_default() += b.frames.len() as u64;
+        if awaited(k, m.id) {
+            add(sb, k.ghost.sent.get(&m.id).map_or(0, |s| s.lent_pages));
         }
     }
     for b in k.budgets.values() {
@@ -624,18 +736,12 @@ fn i5_charging(k: &Kernel) -> Check {
             b.id,
             b.weight_used
         );
-        let lent = r3.get(&b.id).copied().unwrap_or(0);
         ensure!(
-            b.pages_used - lent.min(b.pages_used) <= b.pages_limit,
-            "I5: budget {} uses {} of {} pages (R3 lends: {lent})",
+            b.pages_used <= b.pages_limit,
+            "I5: budget {} uses {} of {} pages",
             b.id,
             b.pages_used,
             b.pages_limit
-        );
-        ensure!(
-            lent <= MAX_LEND_PAGES * open.get(&b.id).copied().unwrap_or(0),
-            "I5: budget {} holds {lent} R3 pages, more than MAX_LEND_PAGES per open call",
-            b.id
         );
         ensure!(b.processes_used <= b.processes_limit, "I5: budget {} over its process limit", b.id);
         ensure!(b.weight_used <= b.weight, "I5: budget {} carved more weight than it has", b.id);
@@ -647,8 +753,8 @@ fn i5_charging(k: &Kernel) -> Check {
 }
 
 /// I6: labels never change, contain the parent's, and only a system-class creator adds labels.
-/// I8: class(child) <= class(parent), and only a system-class caller creates a system-class
-/// budget; the account is the parent's unless that is 0. I12: budget ids ascend.
+/// I8: class(child) = class(parent); only a `first` creator makes a `first` budget, and only in a
+/// system-class parent; the account is the parent's unless that is 0. I12: budget ids ascend.
 fn i6_i8_budgets(k: &Kernel) -> Check {
     for b in k.budgets.values() {
         ensure!(
@@ -675,14 +781,14 @@ fn i6_i8_budgets(k: &Kernel) -> Check {
             b.id,
             b.depth
         );
-        if b.class == Class::System {
+        let Some(p) = b.parent.and_then(|p| k.budgets.get(&p)) else { continue };
+        if b.first {
             ensure!(
-                k.ghost.creator_class.get(&b.id) == Some(&Class::System),
-                "I8: system-class budget {} was created by a user-class caller",
+                k.ghost.creator_first.get(&b.id) == Some(&true) && p.class == Class::System,
+                "I8: budget {} is `first` without a `first` creator and a system-class parent",
                 b.id
             );
         }
-        let Some(p) = b.parent.and_then(|p| k.budgets.get(&p)) else { continue };
         ensure!(superset(&b.labels, &p.labels), "I6: budget {} lacks its parent's labels", b.id);
         if b.labels != p.labels {
             ensure!(
@@ -691,7 +797,15 @@ fn i6_i8_budgets(k: &Kernel) -> Check {
                 b.id
             );
         }
-        ensure!(b.class <= p.class, "I8: budget {} outranks its parent's class", b.id);
+        // `users`, which the kernel makes class user under `root`, is the one exception (README
+        // spec problem 9).
+        ensure!(
+            b.class == p.class || b.id == USERS,
+            "I8: budget {} has class {:?}, its parent {:?}",
+            b.id,
+            b.class,
+            p.class
+        );
         if p.account != 0 {
             ensure!(
                 b.account == p.account,
@@ -706,148 +820,9 @@ fn i6_i8_budgets(k: &Kernel) -> Check {
     Ok(())
 }
 
-/// What the step did, judged against the ghost's records:
-/// - a delivered message is the one sent: its kind, badge, account and labels are what the
-///   sender's handle and budget gave (Messages); it went to a thread receiving through a badge-0
-///   handle to its endpoint (I4); between user budgets only equal label sets flow, the receiver
-///   being the endpoint's owner (I7, R1); no transfer exceeds `max_transfer` (R4);
-/// - exit notices and usage reads flow only to ⊇ label sets or to a system-class budget (I7);
-/// - `Busy` for R2's cap only when the sender's (account, label set) group is full;
-/// - a minted handle's endpoint is one the minter holds a receive right to, or a message it
-///   serves arrived on, with that source's default stamp (mint, R9).
-fn flows(k: &Kernel) -> Check {
-    for f in &k.ghost.flows {
-        match f {
-            Flow::Delivered { tid, msg, via } => {
-                let Some(s) = k.ghost.sent.get(&msg.msg_id) else {
-                    return Err(format!(
-                        "Messages: thread {tid} got message {}, which was never sent",
-                        msg.msg_id
-                    ));
-                };
-                ensure!(
-                    msg.kind == s.kind
-                        && msg.badge == s.badge
-                        && msg.account == s.account
-                        && msg.labels == s.labels,
-                    "Messages: message {} arrived as {:?} badge {} account {} labels {:?}; it was sent as {:?} \
-                     badge {} account {} labels {:?}",
-                    msg.msg_id,
-                    msg.kind,
-                    msg.badge,
-                    msg.account,
-                    msg.labels,
-                    s.kind,
-                    s.badge,
-                    s.account,
-                    s.labels
-                );
-                let Some(via) = via else {
-                    return Err(format!("I4: thread {tid} got message {} without receiving", msg.msg_id));
-                };
-                ensure!(
-                    via.handle.badge == 0 && via.handle.object == Object::Endpoint(s.endpoint),
-                    "I4: thread {tid} received message {} through {:?}",
-                    msg.msg_id,
-                    via.handle
-                );
-                if s.sender_class == Class::User && s.owner_class == Class::User {
-                    ensure!(
-                        s.labels == s.owner_labels,
-                        "I7: a message flowed between user label sets {:?} and {:?}",
-                        s.labels,
-                        s.owner_labels
-                    );
-                }
-                let pages = msg
-                    .buffer
-                    .filter(|b| b.kind == crate::syscall::BufferKind::Transfer)
-                    .map_or(0, |b| b.pages);
-                ensure!(
-                    pages <= via.max_transfer,
-                    "R4: {pages} pages transferred to a receiver that allowed {}",
-                    via.max_transfer
-                );
-            }
-            Flow::Exit { pid, from, to_class, to, got, want } => {
-                ensure!(
-                    *to_class == Class::System || superset(to, from),
-                    "I7: an exit notice of {from:?} reached {to:?}"
-                );
-                ensure!(
-                    want.as_ref() == Some(got),
-                    "Messages: the exit notice of process {pid} reports {got:?}, it should report {want:?}"
-                );
-            }
-            Flow::Usage { from, to_class, to } => ensure!(
-                *to_class == Class::System || superset(to, from),
-                "I7: usage of {from:?} read by {to:?}"
-            ),
-            Flow::UsageDenied { from, to_class, to } => ensure!(
-                *to_class == Class::User && !superset(to, from),
-                "R1: usage of {from:?} refused to a {to_class:?} caller with {to:?}"
-            ),
-            Flow::LabelDenied { from_class, from, to_class, to } => ensure!(
-                *from_class == Class::User && *to_class == Class::User && from != to,
-                "R1: a {from_class:?} sender with {from:?} refused by a {to_class:?} owner with {to:?}"
-            ),
-            Flow::Woken { tid, result: Ok(Ret::Reply { .. }) } => {
-                let replied = k.ghost.flows.iter().any(|g| match g {
-                    Flow::Replied { msg } => k.ghost.sent.get(msg).is_some_and(|s| s.sender_tid == *tid),
-                    _ => false,
-                });
-                ensure!(replied, "R4b: thread {tid} got a reply its server never sent");
-            }
-            Flow::Replied { msg } => {
-                let caller = k.ghost.sent.get(msg).map(|s| s.sender_tid);
-                let answered = k.ghost.flows.iter().any(
-                    |g| matches!(g, Flow::Woken { tid, result: Ok(Ret::Reply { .. }) } if Some(*tid) == caller),
-                );
-                let stamp = k.ghost.sent.get(msg).map_or(0, |s| s.stamp);
-                ensure!(
-                    !answered || k.budgets.contains_key(&stamp),
-                    "R10: the reply to {msg}, sent through a revoked handle, reached its caller"
-                );
-            }
-            Flow::Woken { .. } | Flow::BadgeClosed { .. } => {}
-            Flow::Busy { endpoint, key } => {
-                let queued = k.endpoints.get(endpoint).map_or(0, |e| {
-                    e.queue.values().flatten().filter(|m| ghost_key(k, **m).as_ref() == Some(key)).count()
-                });
-                ensure!(
-                    queued as u64 >= WAIT_CAP,
-                    "R2: a sender of {key:?} got Busy on endpoint {endpoint} with {queued} of its group waiting"
-                );
-            }
-            Flow::Minted { pid, tid, endpoint, via, default_stamp } => match via {
-                MintSource::Handle(h) => {
-                    let hd = k.processes.get(pid).and_then(|p| p.handles.get(h));
-                    ensure!(
-                        hd.is_some_and(|x| x.object == Object::Endpoint(*endpoint)
-                            && x.badge == 0
-                            && x.stamp == *default_stamp),
-                        "mint: process {pid} minted from handle {h}, not a receive right to endpoint {endpoint} stamped \
-                         {default_stamp}"
-                    );
-                }
-                MintSource::Message(m) => {
-                    let served = k.ghost.served.get(tid).is_some_and(|v| v.contains(m));
-                    let s = k.ghost.sent.get(m);
-                    ensure!(
-                        served && s.is_some_and(|s| s.endpoint == *endpoint && s.stamp == *default_stamp),
-                        "mint: thread {tid} minted from message {m}, which it does not serve or which came on another \
-                         endpoint or stamp"
-                    );
-                }
-            },
-        }
-    }
-    Ok(())
-}
-
-/// R2: at most `WAIT_CAP` blocked senders per (account, label set) group per endpoint, grouped by
-/// the ghost's record of each sender. R3: a server keeps a lent buffer mapped until it replies,
-/// even when its caller is gone.
+/// R2: at most `WAIT_CAP` queued messages per group per endpoint, grouped by the ghost's record of
+/// each sender. R3: a server keeps a lent buffer mapped until it replies, even when its caller is
+/// gone.
 fn r2_r3_messages(k: &Kernel) -> Check {
     for e in k.endpoints.values() {
         let mut groups: BTreeMap<Key, u64> = BTreeMap::new();
@@ -880,8 +855,37 @@ fn r2_r3_messages(k: &Kernel) -> Check {
     Ok(())
 }
 
-/// Exit notices (Messages; R1; R10; QUESTIONS 7, 37, 55): every notice the ghost saw owed, whose
-/// endpoint still exists, waits on it (receiving it clears it) if its slot's payer lives, and is
+/// R4 and R4a: nothing deliverable waits while a receiver waits for it. After every step, a thread
+/// waiting in `receive` on an endpoint has no exit notice pending there, and every message queued
+/// there is a call its process cannot take (it holds `MAX_OPEN_CALLS`): a message it could take
+/// would have been delivered or refused.
+fn r4_delivery(k: &Kernel) -> Check {
+    for e in k.endpoints.values() {
+        let Some(r) = e.receivers.front() else { continue };
+        ensure!(
+            e.exits.is_empty(),
+            "Messages: an exit notice waits on endpoint {} while thread {r} receives",
+            e.id
+        );
+        for r in &e.receivers {
+            let pid = k.threads[r].pid;
+            let full = k.open_calls(pid) >= MAX_OPEN_CALLS;
+            for m in e.queue.values().flatten() {
+                let call = k.ghost.sent.get(m).is_some_and(|s| s.kind == MsgKind::Call);
+                ensure!(
+                    call && full,
+                    "R4a: message {m} waits on endpoint {} while thread {r} (holding {} open calls) receives there",
+                    e.id,
+                    k.open_calls(pid)
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Exit notices (Messages; R1; R10; QUESTIONS 55, 74, 82): every notice the ghost saw owed, whose
+/// endpoint still exists, waits on it (receiving it clears it) if its object's payer lives, and is
 /// gone if the payer does not; it reports what the ghost expects; and every waiting notice is
 /// owed.
 fn exits_owed(k: &Kernel) -> Check {
@@ -891,7 +895,7 @@ fn exits_owed(k: &Kernel) -> Check {
         if !k.budgets.contains_key(&o.payer) {
             ensure!(
                 n.is_none(),
-                "R10: the exit notice of process {pid} outlived its slot's payer {}",
+                "R10: the exit notice of process {pid} outlived its object's payer {}",
                 o.payer
             );
             continue;

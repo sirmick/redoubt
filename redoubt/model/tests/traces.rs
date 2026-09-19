@@ -6,9 +6,9 @@ mod common;
 
 use redoubt_model::check;
 use redoubt_model::gen::Gen;
-use redoubt_model::kernel::{Boot, Kernel};
+use redoubt_model::kernel::{Boot, Kernel, Note};
 use redoubt_model::mutation::Mutation;
-use redoubt_model::spec::{Class, FLAG_R, FLAG_W, FOREVER, PAGE_SIZE};
+use redoubt_model::spec::{FLAG_R, FLAG_W, FOREVER, PAGE_SIZE};
 use redoubt_model::syscall::{Buffer, MintSource, Op, Syscall};
 use redoubt_model::trace;
 
@@ -50,7 +50,7 @@ fn traces_round_trip() {
 /// R12 (scheduling shows only in timing; WP-K5's tests), and `R5NoMaskOnFire` (a source left
 /// unmasked re-fires into the kernel, but since `receive` unmasks and a pending line fires then
 /// anyway, every result is the same; the model's own R5 check catches it, and WP-K3 must test
-/// the mask directly). `OpenCallsUnlimited` needs a flood to reach the limit (`check::flood`).
+/// the mask directly). The three breaks of `MAX_OPEN_CALLS` need a flood to reach the limit (`check::flood`).
 #[test]
 fn a_rule_breaking_kernel_fails_replay() {
     common::quiet_panics();
@@ -72,7 +72,7 @@ fn a_rule_breaking_kernel_fails_replay() {
             || *m == Mutation::R5NoMaskOnFire
             // Random sequences never reach MAX_OPEN_CALLS; the flood family does (its traces are
             // the ones to replay for R4a).
-            || *m == Mutation::OpenCallsUnlimited
+            || matches!(m, Mutation::OpenCallsUnlimited | Mutation::R4aOpenCallsPerThread | Mutation::R4aFullTakesNothing)
     };
     for m in Mutation::ALL.into_iter().filter(|m| !invisible(m)) {
         let detected = texts.iter().position(|text| {
@@ -90,61 +90,71 @@ fn a_rule_breaking_kernel_fails_replay() {
 }
 
 /// The example in traces/: a client lends two pages to a server, its budget is destroyed while
-/// the server holds them (R3), and the server keeps the pages until it replies.
+/// the server holds them (R3), and the server keeps the pages until it replies. PIDs are drawn at
+/// random, so the ops are built on a model as they go.
 fn lender_dies_mid_call() -> Vec<Op> {
+    let mut k = Kernel::boot(&Boot::default(), None).unwrap();
+    let mut ops = Vec::new();
+    let mut go = |k: &mut Kernel, op: Op| {
+        let s = k.step(&op).unwrap();
+        ops.push(op);
+        s.notes.iter().find_map(|n| match n {
+            Note::Thread { pid, tid } => Some((*pid, *tid)),
+            _ => None,
+        })
+    };
     let init = |call| Op::Sys { pid: 1, tid: 1, call };
-    let server = |call| Op::Sys { pid: 2, tid: 2, call };
-    let client = |call| Op::Sys { pid: 3, tid: 3, call };
     // init's slots: 1 root, 2 system, 3 users, 4-8 the devices; new handles from 9.
-    let budget = |parent, class: Class, account| Syscall::BudgetCreate {
+    let budget = |parent, account| Syscall::BudgetCreate {
         parent,
         pages: 32,
         processes: 1,
         weight: 50,
-        class: class.raw(),
+        first: 0,
         labels: vec![],
         account,
         deadline: FOREVER,
     };
     let buf = 0x10_0000_0000; // the model's first kernel-chosen address
-    vec![
-        init(Syscall::EndpointCreate),                                 // h:9
-        init(budget(3, Class::User, 1001)),                            // h:10 alice
-        init(budget(2, Class::System, 0)),                             // h:11 server
-        init(Syscall::ProcessCreate { budget: 11, exit_endpoint: 9 }), // h:12
-        init(Syscall::ProcessStart { process: 12, entry: 0x1000, sp: 0x2000, arg: 0, handles: vec![9] }),
-        init(Syscall::Mint { source: MintSource::Handle(9), badge: 5, budget: Some(10) }), // h:13
-        init(Syscall::ProcessCreate { budget: 10, exit_endpoint: 9 }),                     // h:14
-        init(Syscall::ProcessStart { process: 14, entry: 0x1000, sp: 0x2000, arg: 0, handles: vec![13] }),
-        server(Syscall::Receive { h: Some(1), timeout: FOREVER, max_transfer: 0 }),
-        client(Syscall::MapAnon { len: 2 * PAGE_SIZE, flags: FLAG_R | FLAG_W }),
-        Op::Write { pid: 3, tid: 3, addr: buf, value: 42 },
-        client(Syscall::Call {
-            h: 1,
-            words: [1, 2, 3, 4],
-            handles: vec![],
-            lend: Some(Buffer { addr: buf, npages: 2 }),
-            timeout: FOREVER,
-        }),
-        Op::Read { pid: 2, tid: 2, addr: buf },
-        Op::Write { pid: 2, tid: 2, addr: buf, value: 99 },
-        init(Syscall::BudgetDestroy { h: 10 }),
-        Op::Read { pid: 2, tid: 2, addr: buf },
-        init(Syscall::BudgetUsage { h: 11 }),
-        server(Syscall::Reply { msg_id: 1, words: [0; 4], handles: vec![] }),
-        init(Syscall::BudgetUsage { h: 11 }),
-        server(Syscall::Receive { h: Some(1), timeout: 0, max_transfer: 0 }),
-    ]
+    go(&mut k, init(Syscall::EndpointCreate)); // h:9
+    go(&mut k, init(budget(3, 1001))); // h:10 alice
+    go(&mut k, init(budget(2, 0))); // h:11 server
+    go(&mut k, init(Syscall::ProcessCreate { budget: 11, exit_endpoint: 9 })); // h:12
+    let start = Syscall::ProcessStart { process: 12, entry: 0x1000, sp: 0x2000, arg: 0, handles: vec![9] };
+    let (sp, st) = go(&mut k, init(start)).unwrap();
+    go(&mut k, init(Syscall::Mint { source: MintSource::Handle(9), badge: 5, budget: Some(10) })); // h:13
+    go(&mut k, init(Syscall::ProcessCreate { budget: 10, exit_endpoint: 9 })); // h:14
+    let start = Syscall::ProcessStart { process: 14, entry: 0x1000, sp: 0x2000, arg: 0, handles: vec![13] };
+    let (cp, ct) = go(&mut k, init(start)).unwrap();
+    let server = |call| Op::Sys { pid: sp, tid: st, call };
+    let client = |call| Op::Sys { pid: cp, tid: ct, call };
+    go(&mut k, server(Syscall::Receive { h: Some(1), timeout: FOREVER, max_transfer: 0 }));
+    go(&mut k, client(Syscall::MapAnon { len: 2 * PAGE_SIZE, flags: FLAG_R | FLAG_W }));
+    go(&mut k, Op::Write { pid: cp, tid: ct, addr: buf, value: 42 });
+    let lend = Some(Buffer { addr: buf, npages: 2 });
+    go(&mut k, client(Syscall::Call { h: 1, words: [1, 2, 3, 4], handles: vec![], lend, timeout: FOREVER }));
+    go(&mut k, Op::Read { pid: sp, tid: st, addr: buf });
+    go(&mut k, Op::Write { pid: sp, tid: st, addr: buf, value: 99 });
+    go(&mut k, init(Syscall::BudgetUsage { h: 11 }));
+    go(&mut k, init(Syscall::BudgetDestroy { h: 10 }));
+    go(&mut k, Op::Read { pid: sp, tid: st, addr: buf });
+    go(&mut k, init(Syscall::BudgetUsage { h: 11 }));
+    go(&mut k, server(Syscall::Receive { h: Some(1), timeout: 0, max_transfer: 0 }));
+    go(&mut k, server(Syscall::Reply { msg_id: 1, words: [0; 4], handles: vec![] }));
+    go(&mut k, init(Syscall::BudgetUsage { h: 11 }));
+    go(&mut k, server(Syscall::Receive { h: Some(1), timeout: 0, max_transfer: 0 }));
+    ops
 }
 
 const EXAMPLE: &str = include_str!("../traces/lender-dies-mid-call.trace");
 
 const COMMENT: &str = "\
-# R3, lends outlive their lender: a client in alice's budget lends two pages to a system server;
-# init destroys alice's budget while the server holds them. The server still reads its buffer,
-# the pages are charged to the server's budget (its usage is 10 pages, not 5: the two lent pages,
-# the open call, and the two page-table pages mapping them) until its reply, which is
-# discarded, and then freed. The client's exit notice (killed) is waiting on the endpoint.
+# R3, lends and abandoned calls: a client in alice's budget lends two pages to a system server;
+# init destroys alice's budget while the server holds them. While the call is open the lent pages
+# are charged to both sides (the server's usage counts them, with the open call and the two
+# page-table pages mapping them); once the caller is gone, to the server only. The server still
+# reads its buffer, is told the call was abandoned, replies (the reply is discarded) and the pages
+# are freed. The client's exit notice (killed) is waiting on the endpoint.
 # Written by tests/traces.rs (REDOUBT_MODEL_BLESS=1 rewrites it); format: README.md.
 ";
 

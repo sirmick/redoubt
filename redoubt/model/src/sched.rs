@@ -1,23 +1,22 @@
-//! R12. Scheduling: two strictly ordered classes, one flat stride queue over budgets per class,
-//! round-robin threads within a budget.
+//! R12. Scheduling: budgets marked `first` run before all others; one flat stride queue over
+//! the `first` budgets and one over all the others; round-robin threads within a budget.
 //!
 //! The kernel model tells the scheduler when a thread becomes runnable ([`Scheduler::wake`]) or
 //! stops being runnable ([`Scheduler::block`]), asks it what to run ([`Scheduler::pick`]) and
 //! reports how long that ran ([`Scheduler::charge`]). Ties in pass go to the lower budget id (the
 //! spec does not order them; any fixed order satisfies it).
 //!
-//! A budget with weight 0 never runs: its stride would be infinite. The spec allows weight 0 only
-//! as part of a revocation scope, which has no processes, but a budget with pages and processes
-//! and weight 0 can be created; its threads simply never run.
+//! A budget with weight 0 never runs: its stride would be infinite, and a weight-0 budget holds
+//! no process (QUESTIONS 12).
 
 use alloc::collections::{BTreeMap, VecDeque};
 
 use crate::mutation::Mutation;
-use crate::spec::{Class, SLICE, STRIDE};
+use crate::spec::{SLICE, STRIDE};
 
 #[derive(Clone, Debug)]
 pub struct Entry {
-    pub class: Class,
+    pub first: bool,
     pub weight: u64,
     pub pass: u64,
     /// Runnable threads, in round-robin order; the front one runs next.
@@ -35,19 +34,19 @@ impl Scheduler {
         self.mutation == Some(m)
     }
 
-    pub fn add_budget(&mut self, id: u64, class: Class, weight: u64) {
-        self.budgets.insert(id, Entry { class, weight, pass: 0, runnable: VecDeque::new() });
+    pub fn add_budget(&mut self, id: u64, first: bool, weight: u64) {
+        self.budgets.insert(id, Entry { first, weight, pass: 0, runnable: VecDeque::new() });
     }
 
     pub fn remove_budget(&mut self, id: u64) {
         self.budgets.remove(&id);
     }
 
-    /// The lowest pass among budgets of `class` that could run, other than `except`.
-    fn min_pass(&self, class: Class, except: u64) -> Option<u64> {
+    /// The lowest pass among budgets on the same side of `first` that could run, other than `except`.
+    fn min_pass(&self, first: bool, except: u64) -> Option<u64> {
         self.budgets
             .iter()
-            .filter(|(id, e)| **id != except && e.class == class && e.weight > 0 && !e.runnable.is_empty())
+            .filter(|(id, e)| **id != except && e.first == first && e.weight > 0 && !e.runnable.is_empty())
             .map(|(_, e)| e.pass)
             .min()
     }
@@ -60,8 +59,8 @@ impl Scheduler {
             return;
         }
         let was_asleep = e.runnable.is_empty();
-        let class = e.class;
-        let min = self.min_pass(class, budget);
+        let first = e.first;
+        let min = self.min_pass(first, budget);
         let banks = self.broken(Mutation::R12WakeBanksCredit);
         let e = self.budgets.get_mut(&budget).unwrap();
         if was_asleep && !banks {
@@ -79,16 +78,16 @@ impl Scheduler {
         }
     }
 
-    /// What runs next: system-class budgets before user-class ones; within the class, the lowest
+    /// What runs next: `first` budgets before the others; within each side, the lowest
     /// pass; within the budget, the front of its round-robin queue.
     pub fn pick(&self) -> Option<(u64, u64)> {
-        let ignore_class = self.broken(Mutation::R12NoClassOrder);
+        let ignore_first = self.broken(Mutation::R12NoFirstOrder);
         self.budgets
             .iter()
             .filter(|(_, e)| e.weight > 0 && !e.runnable.is_empty())
             .min_by_key(|(id, e)| {
-                let class_rank = if ignore_class || e.class == Class::System { 0 } else { 1 };
-                (class_rank, e.pass, **id)
+                let rank = if ignore_first || e.first { 0 } else { 1 };
+                (rank, e.pass, **id)
             })
             .map(|(id, e)| (*id, e.runnable[0]))
     }
