@@ -202,9 +202,18 @@ impl Syscall {
     }
 }
 
+/// How a message was sent. `receive` returns it (QUESTIONS 1): a `call`'s message is owed a
+/// reply and may carry a lend; a `send`'s may carry a transfer and cannot be replied to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MsgKind {
+    Call,
+    Send,
+}
+
 /// A delivered message, as `receive` returns it (KERNEL-SPEC.md, Messages).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Message {
+    pub kind: MsgKind,
     pub msg_id: u64,
     pub badge: u64,
     pub account: u64,

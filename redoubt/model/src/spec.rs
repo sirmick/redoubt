@@ -16,7 +16,7 @@ pub const MAX_THREADS: u64 = 31;
 pub const MAX_LABELS: usize = 8;
 /// Budget tree depth, root = 0.
 pub const MAX_DEPTH: u64 = 8;
-/// Blocked senders per account per endpoint.
+/// Blocked senders per (account, label set) per endpoint (R2; owner's answer to QUESTIONS 17).
 pub const WAIT_CAP: u64 = 16;
 /// Stride scheduling numerator.
 pub const STRIDE: u64 = 1 << 20;
@@ -24,8 +24,15 @@ pub const STRIDE: u64 = 1 << 20;
 pub const SLICE: u64 = 10_000;
 /// A timeout that never expires.
 pub const FOREVER: u64 = u64::MAX;
-/// `random`: "`len` at most 64". The spec states the number but does not name it.
-pub const RANDOM_MAX_LEN: u64 = 64;
+/// `random`: `len` at most this (QUESTIONS 15).
+pub const MAX_RANDOM: u64 = 64;
+/// Taken-but-unreplied calls per process (QUESTIONS 2, as answered).
+pub const MAX_OPEN_CALLS: u64 = 64;
+/// Handles in `process_start`'s list (QUESTIONS 10).
+pub const MAX_START_HANDLES: usize = 64;
+/// "No handle" in an optional-handle slot, and never a handle index (QUESTIONS 10). The ABI's
+/// sentinel; this is the one place the model names it.
+pub const NO_HANDLE: u64 = 0;
 
 /// Encoding: the page size. KERNEL-SPEC.md counts memory in pages without stating a size;
 /// both Sv32 and Sv39 use 4 KiB base pages.
@@ -143,17 +150,19 @@ pub const RESET_POWER_OFF: u64 = 1;
 pub const RESET_REBOOT: u64 = 2;
 
 /// Encoding: the largest value of the ABI's 32-bit fields (exit code, pid, tid, weight, process
-/// counts) and of a handle index; `u32::MAX` itself is "no handle" in a register.
+/// counts) and of a handle index.
 pub const U32_MAX: u64 = u32::MAX as u64;
 
-/// The counters `budget_usage` returns. The spec says "counters"; like `redoubt-sys`, the model
-/// returns the page and process limits with their usage (R6).
+/// The counters `budget_usage` returns (QUESTIONS 11): each carved limit with its usage (R6, R7).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct Counters {
     pub pages_limit: u64,
-    pub pages_used: u64,
+    pub pages_usage: u64,
     pub processes_limit: u64,
-    pub processes_used: u64,
+    pub processes_usage: u64,
+    pub weight_limit: u64,
+    /// Weight carved out to children.
+    pub weight_usage: u64,
 }
 
 /// `true` if `outer ⊇ inner`; both are sorted and deduplicated.
