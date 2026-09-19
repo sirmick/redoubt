@@ -639,7 +639,7 @@ fn error_rows() {
     assert!(lacks(Number::Random, &[TooLarge, BadHandle, OutOfMemory]));
     assert!(lacks(Number::TimeNow, &[BadHandle, OutOfMemory]));
     assert!(lacks(Number::ThreadExit, &[BadHandle, OutOfMemory]));
-    // QUESTIONS.md 102 (pending): every call adding a handle to its caller's table.
+    // Answer 102: every call that adds a handle to its caller's table.
     for n in [Number::ProcessCreate, Number::EndpointCreate, Number::Mint, Number::BudgetCreate] {
         assert!(has(n, &[OutOfMemory, TooLarge]), "{n:?}");
     }
