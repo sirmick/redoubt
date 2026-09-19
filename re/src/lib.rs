@@ -28,6 +28,11 @@ use regex_automata::{Anchored, Input};
 
 type R = Result<Term, Exception>;
 
+/// Largest compiled automaton a pattern may produce, in bytes.
+const NFA_SIZE_LIMIT: usize = 1 << 20;
+/// Memory for the lazy DFA's cache, per pattern.
+const CACHE_CAPACITY: usize = 1 << 20;
+
 pub static NATIVES: &[NativeSpec] = &[
     ("re", "compile", 1, compile),
     ("re", "compile", 2, compile),
@@ -36,6 +41,7 @@ pub static NATIVES: &[NativeSpec] = &[
     ("re", "internal_run", 4, run),
     ("re", "inspect", 2, inspect),
     ("re", "version", 0, version),
+    ("re", "import", 1, import),
 ];
 
 /// A compiled pattern (the resource inside `{re_pattern, Groups, Unicode, CrLf, Resource}`).
@@ -214,7 +220,16 @@ fn build(pattern: &[u8], f: Flags) -> Result<Compiled, (String, usize)> {
     let pattern = translate(&pattern);
     let regex = Regex::builder()
         .syntax(cfg)
-        .configure(Regex::config().utf8_empty(f.unicode))
+        // Bound what a pattern may cost to compile and run: a hostile `(a{1000}){1000}` is an
+        // error, not a large allocation.
+        .configure(
+            Regex::config()
+                .utf8_empty(f.unicode)
+                .nfa_size_limit(Some(NFA_SIZE_LIMIT))
+                .onepass_size_limit(Some(NFA_SIZE_LIMIT))
+                .hybrid_cache_capacity(CACHE_CAPACITY)
+                .dfa_size_limit(Some(NFA_SIZE_LIMIT)),
+        )
         .build(&pattern)
         .map_err(|e| (format!("{e}"), 0))?;
     let names = regex.group_info().pattern_names(regex_automata::PatternID::ZERO).map(|n| n.map(String::from)).collect();
@@ -240,21 +255,58 @@ fn compiled_of(t: &Term) -> Option<&Compiled> {
     }
 }
 
-/// `compile(Regexp[, Options])` → `{ok, MP}` or `{error, {Reason, Position}}`.
+/// `compile(Regexp[, Options])` → `{ok, MP}` or `{error, {Reason, Position}}`. With `export`,
+/// `MP` is `{re_exported_pattern, Header, Source, Options, Bytecode}`, as in OTP 28.1; here the
+/// bytecode is empty, and `import/1` compiles from the source.
 pub fn compile(c: &mut Ctx, a: &[Term]) -> R {
     let mut f = Flags::default();
-    if let Some(opts) = a.get(1) {
-        for o in opts.to_vec().ok_or_else(|| c.badarg())? {
-            if !compile_option(&mut f, &o) {
-                return Err(c.badarg());
-            }
+    let mut export = false;
+    let opts = match a.get(1) {
+        Some(o) => o.to_vec().ok_or_else(|| c.badarg())?,
+        None => Vec::new(),
+    };
+    for o in &opts {
+        if atom(o) == Some("export") {
+            export = true;
+        } else if !compile_option(&mut f, o) {
+            return Err(c.badarg());
         }
     }
     let pattern = text(&a[0], f.unicode).ok_or_else(|| c.badarg())?;
     Ok(match build(&pattern, f) {
+        Ok(_) if export => {
+            let exported = Term::tuple(alloc::vec![
+                c.atom("re_exported_pattern"),
+                Term::binary(b"beamlet"),
+                Term::binary(&pattern),
+                a[1].clone(),
+                Term::binary(&[]),
+            ]);
+            Term::tuple(alloc::vec![c.ok(), exported])
+        }
         Ok(compiled) => Term::tuple(alloc::vec![c.ok(), mp_term(c, compiled)]),
         Err((msg, pos)) => error_tuple(c, &msg, pos),
     })
+}
+
+/// `import(Exported)`: compile the pattern from the source an exported pattern carries (the
+/// fallback OTP documents for a node that cannot use the exporter's bytecode, as here).
+pub fn import(c: &mut Ctx, a: &[Term]) -> R {
+    let Some([tag, _header, source, opts, _code]) = a[0].as_tuple() else { return Err(c.badarg()) };
+    if atom(tag) != Some("re_exported_pattern") {
+        return Err(c.badarg());
+    }
+    let mut f = Flags::default();
+    for o in opts.to_vec().ok_or_else(|| c.badarg())? {
+        if atom(&o) != Some("export") && !compile_option(&mut f, &o) {
+            return Err(c.badarg());
+        }
+    }
+    let pattern = text(source, f.unicode).ok_or_else(|| c.badarg())?;
+    match build(&pattern, f) {
+        Ok(compiled) => Ok(mp_term(c, compiled)),
+        Err(_) => Err(c.badarg()),
+    }
 }
 
 // ---- run ----
