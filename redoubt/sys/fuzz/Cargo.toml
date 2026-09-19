@@ -1,0 +1,25 @@
+[package]
+name = "redoubt-sys-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Host-only and out of the main workspace (its own workspace below), so the fuzzer's nightly
+# toolchain and libfuzzer never touch the kernel build. Run from this directory:
+#     cargo fuzz run decode
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+redoubt-sys = { path = ".." }
+
+[[bin]]
+name = "decode"
+path = "fuzz_targets/decode.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]
