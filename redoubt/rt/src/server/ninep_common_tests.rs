@@ -159,6 +159,57 @@ fn a_disconnect_frees_its_fids_and_every_connection_minted_under_it() {
     assert_eq!(t.disconnect(&mut k, &a, id1), Err(NOT_YOURS));
 }
 
+/// Red team C1: a disconnect frees a whole subtree in place, however its connections were
+/// interleaved with others when minted, and leaves no connection under one that is gone.
+#[test]
+fn a_disconnect_frees_an_interleaved_subtree_and_leaves_no_orphan() {
+    let (mut t, mut k) = (T::new(), FakeKernel::new());
+    let (a, b) = (alice(), caller(2, 2002, &[]));
+    let (ca, ida) = t.connect(&mut k, &a, "", 0).unwrap();
+    let (cb, _) = t.connect(&mut k, &b, "", 0).unwrap();
+    let (ca1, _) = t.connect(&mut k, &through(&a, ca), "", 0).unwrap();
+    let (cb1, _) = t.connect(&mut k, &through(&b, cb), "", 0).unwrap();
+    let (ca1a, _) = t.connect(&mut k, &through(&a, ca1), "", 0).unwrap();
+    let (ca2, _) = t.connect(&mut k, &through(&a, ca), "", 0).unwrap();
+    let (cb2, _) = t.connect(&mut k, &through(&b, cb1), "", 0).unwrap();
+    // (Alice's share holds four connections: half the bucket's eight.)
+    for c in [ca, ca1, ca1a, ca2] {
+        t.attach(&through(&a, c), 0, "");
+    }
+    t.disconnect(&mut k, &a, ida).unwrap();
+    let left: Vec<u64> = t.server.fs.grants.iter().map(|(badge, _, _)| *badge).collect();
+    assert_eq!(left, [cb, cb1, cb2]);
+    assert_eq!(t.server.connections(), 3);
+    assert_eq!(t.server.admission().held(AdmitKey::of(&a), Resource::Files), 0);
+    assert_eq!(t.server.admission().held(AdmitKey::of(&a), Resource::State), 0);
+    for gone in [ca, ca1, ca1a, ca2] {
+        assert_eq!(t.connect(&mut k, &through(&a, gone), "", 0), Err(REFUSED));
+    }
+    // B's subtree is whole and still works.
+    t.attach(&through(&b, cb2), 0, "");
+}
+
+/// Red team: connections an agent mints for itself add fids to one share, never new shares.
+#[test]
+fn self_minting_does_not_multiply_the_share() {
+    let (mut t, mut k) = (T::new(), FakeKernel::new());
+    let steward = caller(9, 0, &[]);
+    let (agent_conn, _) = t.connect(&mut k, &steward, "", 0).unwrap();
+    let agent = caller(agent_conn, 1001, &[]);
+    let mut chain = vec![agent_conn];
+    while let Ok((c, _)) = t.connect(&mut k, &through(&agent, *chain.last().unwrap()), "", 0) {
+        chain.push(c);
+    }
+    assert!(chain.len() >= 2);
+    for &c in &chain {
+        t.attach(&through(&agent, c), 0, "");
+    }
+    let key = AdmitKey::of(&agent);
+    let held = t.server.admission().held(key, Resource::Files);
+    assert_eq!(held, chain.len() as u32);
+    assert_eq!(t.server.admission().held_by(key, agent_conn, Resource::Files), held);
+}
+
 #[test]
 fn a_strangers_id_is_refused_like_one_that_does_not_exist() {
     let (mut t, mut k) = (T::new(), FakeKernel::new());
