@@ -1,27 +1,178 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-use core::fmt;
+//! Physmap memory management for RISC-V, both Sv39 (rv64) and Sv32 (rv32).
+//!
+//! Page tables are never mapped into a window. All of physical RAM is mapped
+//! supervisor-only at `PHYSMAP_BASE`, and tables are walked in software starting from a
+//! root. See `planning/xous64/MEMORY-LAYOUT.md`. Everything width-specific (the level
+//! count, entries per table, VPN width and `satp` layout) lives in the `paging` crate,
+//! reached here through `sv39`; this file is written in terms of `LEVELS`, `vpn()` and
+//! `leaf_size()` and so is identical for both modes.
+//!
+//! All page-table memory is accessed through that typed layer; this file contains policy,
+//! not pointer arithmetic. Functions that take a bare virtual address operate on the
+//! currently active address space.
 
 use ::riscv::register::satp;
 use xous_kernel::{MemoryFlags, PID, arch::*};
 
 pub use super::mmu_flags::MMUFlags;
 use super::mmu_flags::{translate_flags, untranslate_flags};
+use super::sv39::{self, Pte, Slot, Table, window};
 use crate::arch::process::InitialProcess;
 use crate::mem::MemoryManager;
 
 extern "C" {
-    pub fn flush_mmu();
+    #[link_name = "flush_mmu"]
+    fn sfence_vma();
 }
 
-unsafe fn zeropage(s: *mut u32) {
-    let page = core::slice::from_raw_parts_mut(s, PAGE_SIZE / core::mem::size_of::<u32>());
-    page.fill(0);
+/// Flush every cached translation on this hart.
+fn flush_tlb() {
+    // SAFETY: `flush_mmu` (asm.rs) is a bare `sfence.vma; ret`. Dropping cached
+    // translations is always sound; at worst it costs page-table walks.
+    unsafe { sfence_vma() };
 }
+
+/// First root entry belonging to the kernel half of the address space.
+const ROOT_KERNEL_START: usize = sv39::ENTRIES / 2;
+/// Root entry holding per-process kernel data. Everything else in the kernel half is shared.
+const ROOT_PROCESS_AREA: usize = sv39::vpn(PROCESS_AREA, sv39::LEVELS - 1);
 
 /// Extract the PID (stored as the ASID) from a raw `satp` value.
-pub fn pid_from_satp(satp: usize) -> usize { (satp >> 22) & ((1 << 9) - 1) }
+pub fn pid_from_satp(satp: usize) -> usize { sv39::satp_pid(satp) }
+
+fn make_satp(pid: PID, root_phys: usize) -> usize { sv39::make_satp(pid.get() as usize, root_phys) }
+
+/// The root table of the address space that `satp` names.
+fn root_of(satp: usize) -> Table {
+    assert!(sv39::satp_is_active(satp), "address space is not allocated");
+    // SAFETY: a `satp` value with the mode bits set comes from the loader or from
+    // `MemoryMapping::allocate()`, both of which store the address of a root page table.
+    unsafe { Table::at(window(), sv39::satp_root(satp)) }
+}
+
+fn current_root() -> Table { root_of(satp::read().bits()) }
+
+/// Find the leaf (4 KiB) entry for `virt` under `root`.
+///
+/// If `alloc` is given, missing intermediate tables are allocated on behalf of that PID.
+/// Otherwise a missing table is reported as `BadAddress`.
+fn walk(
+    root: Table,
+    virt: usize,
+    mut alloc: Option<(&mut MemoryManager, PID)>,
+) -> Result<Slot, xous_kernel::Error> {
+    if !sv39::is_canonical(virt) {
+        return Err(xous_kernel::Error::BadAddress);
+    }
+    let mut table = root;
+    for level in (1..sv39::LEVELS).rev() {
+        let index = sv39::vpn(virt, level);
+        table = match table.child(index) {
+            Some(child) => child,
+            // A superpage (the physmap). These are never edited at 4 KiB granularity.
+            None if table.get(index).is_leaf() => return Err(xous_kernel::Error::BadAddress),
+            None => {
+                let Some((mm, pid)) = alloc.as_mut() else {
+                    return Err(xous_kernel::Error::BadAddress);
+                };
+                let frame = mm.alloc_page(*pid)?;
+                // SAFETY: `alloc_page` returns a RAM frame that was free until now.
+                unsafe { table.slot(index).install_table(frame) }
+            }
+        };
+    }
+    Ok(table.slot(sv39::vpn(virt, 0)))
+}
+
+fn map_page_in(
+    root: Table,
+    mm: &mut MemoryManager,
+    pid: PID,
+    phys: usize,
+    virt: usize,
+    flags: MMUFlags,
+) -> Result<(), xous_kernel::Error> {
+    assert!(virt & (PAGE_SIZE - 1) == 0);
+    assert!(phys & (PAGE_SIZE - 1) == 0);
+    check_permissions(flags)?;
+    let slot = walk(root, virt, Some((mm, pid)))?;
+    if slot.get().is_valid() {
+        klog!("Page {:08x} already allocated!", virt);
+        return Err(xous_kernel::Error::MemoryInUse);
+    }
+    slot.set(Pte::leaf(phys, flags));
+    Ok(())
+}
+
+/// Refuse mappings that the page-table layer would reject outright. These flags come
+/// from syscall arguments, so a bad combination is the caller's error, not a kernel bug.
+fn check_permissions(flags: MMUFlags) -> Result<(), xous_kernel::Error> {
+    let permissions = flags & (MMUFlags::R | MMUFlags::W | MMUFlags::X);
+    // W^X: no page is ever writable and executable at once.
+    if permissions.is_empty() || permissions.contains(MMUFlags::W | MMUFlags::X) {
+        return Err(xous_kernel::Error::InvalidArgument);
+    }
+    Ok(())
+}
+
+/// Visit every occupied leaf under `table`, a table at `level` whose first entry maps
+/// virtual address `base`. "Occupied" means a valid leaf or a lent page (the `S` bit set
+/// with `VALID` cleared); reservations are skipped, matching the original walk. Recurses
+/// through valid intermediate tables, so it works for any `LEVELS` (Sv32 and Sv39).
+fn for_each_leaf(table: Table, level: usize, base: usize, f: &mut impl FnMut(usize, Pte)) {
+    for index in 0..sv39::ENTRIES {
+        let pte = table.get(index);
+        let virt = base + index * sv39::leaf_size(level);
+        if level == 0 {
+            if pte.is_valid() || pte.has(MMUFlags::S) {
+                f(virt, pte);
+            }
+        } else if let Some(child) = table.child(index) {
+            for_each_leaf(child, level - 1, virt, f);
+        }
+    }
+}
+
+/// The entry that translates `virt` under `root`, at whatever level it is found.
+fn lookup(root: Table, virt: usize) -> Option<Pte> {
+    let mut table = root;
+    for level in (0..sv39::LEVELS).rev() {
+        let pte = table.get(sv39::vpn(virt, level));
+        if pte.is_leaf() {
+            return Some(pte);
+        }
+        table = table.child(sv39::vpn(virt, level))?;
+    }
+    None
+}
+
+/// Check W^X over the kernel's own mappings: no kernel page is writable and executable,
+/// and no executable kernel frame has a writable alias in the physmap. Returns the
+/// number of executable pages checked. The loader is supposed to guarantee this; the
+/// kernel refuses to run if it did not.
+pub fn verify_kernel_wx() -> usize {
+    let root = current_root();
+    let root_index = sv39::vpn(KERNEL_AREA, sv39::LEVELS - 1);
+    let Some(sub) = root.child(root_index) else { panic!("kernel area is not mapped") };
+    let base = root_index * sv39::leaf_size(sv39::LEVELS - 1);
+    let mut executable = 0;
+    for_each_leaf(sub, sv39::LEVELS - 2, base, &mut |_virt, pte| {
+        if !pte.has(MMUFlags::X) {
+            return;
+        }
+        executable += 1;
+        assert!(!pte.has(MMUFlags::W), "kernel page {:#x} is writable and executable", pte.phys());
+        let alias = lookup(root, PHYSMAP_BASE + pte.phys()).expect("kernel frame is missing from the physmap");
+        assert!(!alias.has(MMUFlags::W), "kernel code frame {:#x} is writable through the physmap", pte.phys());
+        assert!(!alias.has(MMUFlags::X), "the physmap must never be executable");
+    });
+    executable
+}
+
+fn user_flag(pid: PID) -> MMUFlags { if pid.get() != 1 { MMUFlags::USER } else { MMUFlags::NONE } }
 
 #[derive(Copy, Clone, Default, PartialEq)]
 pub struct MemoryMapping {
@@ -32,153 +183,67 @@ impl core::fmt::Debug for MemoryMapping {
     fn fmt(&self, fmt: &mut core::fmt::Formatter) -> core::result::Result<(), core::fmt::Error> {
         write!(
             fmt,
-            "(satp: 0x{:08x}, mode: {}, ASID: {}, PPN: {:08x})",
+            "(satp: {:#x}, ASID: {}, root: {:#x})",
             self.satp,
-            self.satp >> 31,
-            self.satp >> 22 & ((1 << 9) - 1),
-            (self.satp & ((1 << 22) - 1)) << 12,
+            sv39::satp_pid(self.satp),
+            sv39::satp_root(self.satp),
         )
     }
 }
 
 /// Controls MMU configurations.
 impl MemoryMapping {
-    /// Create a new MemoryMapping with the given SATP value.
-    /// Note that the SATP contains a physical address.
-    /// The specified address MUST be mapped to `PAGE_TABLE_ROOT_OFFSET`.
-    // pub fn set(&mut self, root_addr: usize, pid: PID) {
-    //     self.satp: 0x8000_0000 | (((pid as usize) << 22) & (((1 << 9) - 1) << 22)) | (root_addr >> 12)
-    // }
+    /// # Safety
+    /// `satp` must name a root page table, as built by the loader.
     #[allow(dead_code)]
     pub unsafe fn from_raw(&mut self, satp: usize) { self.satp = satp; }
 
+    /// # Safety
+    /// `init` must be a process description produced by the loader.
     pub unsafe fn from_init_process(&mut self, init: InitialProcess) { self.satp = init.satp; }
 
-    /// Allocate a brand-new memory mapping. When this memory mapping is created,
-    /// it will be ready to use in a new process, however it will have no actual
-    /// program code. It will, however, have the following pages mapped:
+    /// Allocate a brand-new memory mapping. The new address space contains:
     ///
-    ///     1. The kernel will be mapped to superpage 1023, meaning the kernel can switch to this process and
-    ///        do things.
-    ///     2. A page will be allocated for superpage 1022, to contain pages for process-specific code.
-    ///     3. A page will be allocated for superpage 1021, to contain pages for managing pages.
-    ///     4. The root pagetable will be allocated and mapped at 0xff800000, ensuring new superpages can be
-    ///        allocated.
-    ///     5. A context page will be allocated at 0xff801000, ensuring the process can actually be run.
-    ///     6. Individual pagetable mappings are mapped at 0xff400000
-    /// At the end of this operation, the following mapping will take place. Note that
-    /// names are repeated in the chart below to indicate they are the same page
-    /// represented multiple times. Items in brackets are offsets (in `usize`-words)
-    /// from the start of the page. For example, offset 1023 on the root pagetable
-    /// (address 4092) contains an entry that points to the kernel superpage.
-    ///                         +----------------+
-    ///                         | Root Pagetable |
-    ///                         |      root      |
-    ///                         +----------------+
-    ///                                  |
-    ///                  +---------------+-------------------+------------------+
-    ///                  |                                   |                  |
-    ///               [1021]                              [1022]             [1023]
-    ///                  v                                   v                  v
-    ///          +--------------+                    +--------------+       +--------+
-    ///          | Level 0/1021 |                    | Level 0/1022 |       | Kernel |
-    ///          |   pages_l0   |                    |  process_l0  |       |        |
-    ///          +--------------+                    +--------------+       +--------+
-    ///                  |                                   |
-    ///          +-------+---------+                     +---+-----------+
-    ///          |                 |                     |               |
-    ///       [1021]            [1022]                  [0]             [1]
-    ///          v                 v                     v               v
-    ///  +--------------+  +--------------+     +----------------+  +---------+
-    ///  | Level 0/1021 |  | Level 0/1022 |     | Root Pagetable |  | Context |
-    ///  +--------------+  +--------------+     +----------------+  +---------+
-    pub unsafe fn allocate(&mut self, pid: PID) -> Result<(), xous_kernel::Error> {
+    ///     1. Every shared kernel root entry (physmap and kernel), copied from the current root.
+    ///     2. `ProcessImpl` pages at `THREAD_CONTEXT_AREA`, so the process can be run.
+    ///
+    /// All pages, including the page tables themselves, are owned by `pid`, so they are
+    /// released along with everything else when the process is destroyed.
+    pub fn allocate(&mut self, pid: PID) -> Result<(), xous_kernel::Error> {
         if self.satp != 0 {
             return Err(xous_kernel::Error::MemoryInUse);
         }
 
-        let current_pid = crate::arch::process::current_pid();
+        crate::mem::MemoryManager::with_mut(|mm| {
+            let root_phys = mm.alloc_page(pid)?;
+            // SAFETY: `alloc_page` returns a RAM frame that was free until now.
+            let root = unsafe { Table::new_in(window(), root_phys) };
 
-        crate::mem::MemoryManager::with_mut(|memory_manager| {
-            // Address of the root pagetable
-            let root_temp_virt = memory_manager.map_zeroed_page(current_pid, false)?;
-            let root_phys = super::mem::virt_to_phys(root_temp_virt as usize).unwrap() as usize;
-            let root_virt = PAGE_TABLE_ROOT_OFFSET;
-            let root_vpn0 = (root_virt as usize >> 12) & ((1 << 10) - 1);
-            let root_ppn = ((root_phys >> 12) << 10) | FLG_VALID | FLG_R | FLG_W | FLG_D | FLG_A;
+            let current = current_root();
+            for index in (ROOT_KERNEL_START..sv39::ENTRIES).filter(|index| *index != ROOT_PROCESS_AREA) {
+                root.slot(index).copy_from(current.slot(index));
+            }
 
-            // Superpage that points to all other pagetables
-            let pages_l0_temp_virt = memory_manager.map_zeroed_page(current_pid, false)?;
-            let pages_l0_virt = PAGE_TABLE_OFFSET + 4096 * 1021;
-            let pages_l0_phys = super::mem::virt_to_phys(pages_l0_temp_virt as usize)? as usize;
-            let pages_l0_vpn0 = (pages_l0_virt as usize >> 12) & ((1 << 10) - 1);
-            let pages_l0_ppn = ((pages_l0_phys >> 12) << 10) | FLG_VALID | FLG_R | FLG_W | FLG_D | FLG_A;
+            for page in 0..crate::arch::process::PROCESS_IMPL_PAGES {
+                let context_phys = mm.alloc_page(pid)?;
+                // SAFETY: a freshly allocated frame, as above.
+                unsafe { window().zero_frame(context_phys) };
+                let virt = THREAD_CONTEXT_AREA + page * PAGE_SIZE;
+                map_page_in(root, mm, pid, context_phys, virt, MMUFlags::R | MMUFlags::W)?;
+            }
 
-            // Superpage that points to process-specific pages
-            let process_l0_temp_virt = memory_manager.map_zeroed_page(current_pid, false)?;
-            let process_l0_virt = PAGE_TABLE_OFFSET + 4096 * 1022;
-            let process_l0_phys = super::mem::virt_to_phys(process_l0_temp_virt as usize)? as usize;
-            let process_l0_vpn0 = (process_l0_virt as usize >> 12) & ((1 << 10) - 1);
-            let process_l0_ppn = ((process_l0_phys >> 12) << 10) | FLG_VALID | FLG_R | FLG_W | FLG_D | FLG_A;
-
-            // Context switch information containing all thread information.
-            let context_temp_virt = memory_manager.map_zeroed_page(current_pid, false)?;
-            let context_virt = THREAD_CONTEXT_AREA;
-            let context_phys = super::mem::virt_to_phys(context_temp_virt as usize)? as usize;
-            let context_vpn0 = (context_virt as usize >> 12) & ((1 << 10) - 1);
-            let context_ppn = ((context_phys >> 12) << 10) | FLG_VALID | FLG_R | FLG_W | FLG_D | FLG_A;
-
-            // Map the kernel into the new process mapping so we can continue
-            // execution when it is activated. We can copy this value from our
-            // current pagetable mapping.
-            let krn_pg1023_ptr = (PAGE_TABLE_ROOT_OFFSET as *const usize).add(1023).read_volatile();
-            root_temp_virt.add(1023).write_volatile(krn_pg1023_ptr);
-
-            // Map the process superpage into itself.
-            root_temp_virt
-                .add(PAGE_TABLE_ROOT_OFFSET >> 22)
-                .write_volatile((process_l0_phys >> 12) << 10 | FLG_VALID);
-
-            // Map the pagetable superpage into itself.
-            root_temp_virt
-                .add(PAGE_TABLE_OFFSET >> 22)
-                .write_volatile((pages_l0_phys >> 12) << 10 | FLG_VALID);
-
-            // Map the root pagetable and the context page into the new process
-            process_l0_temp_virt.add(root_vpn0).write_volatile(root_ppn);
-            process_l0_temp_virt.add(context_vpn0).write_volatile(context_ppn);
-
-            // Add the the pagetable superpage to the l0 pagetable.
-            pages_l0_temp_virt.add(process_l0_vpn0).write_volatile(process_l0_ppn);
-            pages_l0_temp_virt.add(pages_l0_vpn0).write_volatile(pages_l0_ppn);
-
-            // Mark the four pages as being owned by the new process
-            memory_manager.move_page_raw(root_phys as *mut usize, pid)?;
-            memory_manager.move_page_raw(pages_l0_phys as *mut usize, pid)?;
-            memory_manager.move_page_raw(process_l0_phys as *mut usize, pid)?;
-            memory_manager.move_page_raw(context_phys as *mut usize, pid)?;
-
-            // Unmap our copies of the four pages
-            unmap_page_inner(memory_manager, root_temp_virt as usize)?;
-            unmap_page_inner(memory_manager, pages_l0_temp_virt as usize)?;
-            unmap_page_inner(memory_manager, process_l0_temp_virt as usize)?;
-            unmap_page_inner(memory_manager, context_temp_virt as usize)?;
-
-            // Construct a dummy SATP that we will use to hand memory to the new process.
-            self.satp = 0x8000_0000 | ((pid.get() as usize) << 22) | (root_phys as usize >> 12);
+            self.satp = make_satp(pid, root_phys);
             Ok(())
-        })?;
-
-        Ok(())
+        })
     }
 
-    /// Get the currently active memory mapping.  Note that the actual root pages
-    /// may be found at virtual address `PAGE_TABLE_ROOT_OFFSET`.
+    /// Get the currently active memory mapping.
     pub fn current() -> MemoryMapping { MemoryMapping { satp: satp::read().bits() } }
 
     /// Get the "PID" (actually, ASID) from the current mapping
-    pub fn get_pid(&self) -> Option<PID> { PID::new((self.satp >> 22 & ((1 << 9) - 1)) as _) }
+    pub fn get_pid(&self) -> Option<PID> { PID::new(pid_from_satp(self.satp) as _) }
 
+    #[allow(dead_code)]
     pub fn is_allocated(&self) -> bool { self.get_pid().is_some() }
 
     pub fn is_kernel(&self) -> bool { self.get_pid().map(|v| v.get() == 1).unwrap_or(false) }
@@ -189,280 +254,122 @@ impl MemoryMapping {
     /// As such, this will only have an observable effect once code returns
     /// to userspace.
     pub fn activate(self) -> Result<(), xous_kernel::Error> {
-        // unsafe { flush_mmu() }; // redundant - adds 9% time to context switch benchmark when present!
-        satp::write(self.satp);
-        unsafe { flush_mmu() };
+        let _ = root_of(self.satp); // refuses an unallocated mapping
+        // SAFETY: every address space shares the kernel's root entries (see `allocate`),
+        // so the code, stack and data in use right now stay mapped across the switch.
+        unsafe { satp::write(satp::Satp::from_bits(self.satp)) };
+        flush_tlb();
         Ok(())
     }
 
+    /// Call `f(virt, pte)` for every valid or shared 4 KiB leaf in the user half.
+    fn for_each_user_leaf(&self, mut f: impl FnMut(usize, Pte)) {
+        let root = root_of(self.satp);
+        for index in 0..ROOT_KERNEL_START {
+            let Some(child) = root.child(index) else { continue };
+            let base = index * sv39::leaf_size(sv39::LEVELS - 1);
+            for_each_leaf(child, sv39::LEVELS - 2, base, &mut f);
+        }
+    }
+
+    /// Call `f` with the physical frame of every page this address space has lent out
+    /// (a leaf with the shared bit set).
+    pub fn for_each_lent_frame(&self, mut f: impl FnMut(usize)) {
+        self.for_each_user_leaf(|_virt, pte| {
+            if pte.has(MMUFlags::S) {
+                f(pte.phys());
+            }
+        });
+    }
+
     #[allow(dead_code)]
-    pub fn phys_to_virt(&self, phys: usize) -> Result<Option<u32>, xous_kernel::Error> {
-        let mut found = None;
-        let l1_pt = unsafe { &mut (*(PAGE_TABLE_ROOT_OFFSET as *mut RootPageTable)) };
-        if phys & PAGE_SIZE - 1 != 0 {
+    pub fn phys_to_virt(&self, phys: usize) -> Result<Option<usize>, xous_kernel::Error> {
+        if phys & (PAGE_SIZE - 1) != 0 {
             return Err(xous_kernel::Error::BadAlignment);
         }
-        for (i, l1_entry) in l1_pt.entries.iter().enumerate() {
-            if *l1_entry == 0 {
-                continue;
+        let mut found = None;
+        let mut twice = false;
+        self.for_each_user_leaf(|virt, pte| {
+            if pte.phys() == phys {
+                twice |= found.is_some();
+                found = Some(virt);
             }
-            let _superpage_addr = i as u32 * (1 << 22);
-
-            // Page 1023 is only available to PID1
-            if i == 1023 && !self.is_kernel() {
-                continue;
-            }
-            let l0_pt = unsafe { &mut (*((PAGE_TABLE_OFFSET + i * 4096) as *mut LeafPageTable)) };
-            for (j, l0_entry) in l0_pt.entries.iter().enumerate() {
-                if *l0_entry & 0x7 == 0 {
-                    continue;
-                }
-                let _page_addr = j as u32 * (1 << 12);
-                let virt_addr = _superpage_addr + _page_addr;
-                let phys_addr = (*l0_entry >> 10) << 12;
-                let valid = (l0_entry & MMUFlags::VALID.bits()) != 0;
-                let shared = (l0_entry & MMUFlags::S.bits()) != 0;
-                if phys_addr == phys && (valid || shared) {
-                    if found.is_none() {
-                        found = Some(virt_addr);
-                    } else {
-                        println!("Page is mapped twice within process {:08x}!", phys_addr);
-                        return Err(xous_kernel::Error::MemoryInUse);
-                    }
-                }
-            }
+        });
+        if twice {
+            println!("Page is mapped twice within process {:08x}!", phys);
+            return Err(xous_kernel::Error::MemoryInUse);
         }
         Ok(found)
     }
 
     pub fn print_map(&self) {
-        if !self.is_allocated() {
-            println!("Process isn't allocated!");
-            return;
-        }
-        #[cfg(feature = "dump-kernel-pages")]
-        // stash the current process space so we know where to return to after dumping kernel pages
-        let pid = self.get_pid().map(|v| v.get()).unwrap_or(0);
-        println!("Memory Maps for PID {}:", self.get_pid().map(|v| v.get()).unwrap_or(0));
-        let l1_pt = unsafe { &mut (*(PAGE_TABLE_ROOT_OFFSET as *mut RootPageTable)) };
-        for (i, l1_entry) in l1_pt.entries.iter().enumerate() {
-            if *l1_entry == 0 {
-                continue;
-            }
-            let _superpage_addr = i as u32 * (1 << 22);
-            #[cfg(all(feature = "swap", feature = "renode"))]
-            // skip printing the mem-mapped swap for renode targets in swap debug, makes the PT dumps a lot
-            // more compact
-            if _superpage_addr & 0xF000_0000 == 0xA000_0000 {
-                continue;
-            }
-            println!(
-                "    {:4} Superpage for {:08x} @ {:08x} (flags: {:?})",
-                i,
-                _superpage_addr,
-                (*l1_entry >> 10) << 12,
-                MMUFlags::from_bits(l1_entry & 0x3ff).unwrap()
-            );
-
-            // Page 1023 is only available to PID1
-            if i == 1023 && !self.is_kernel() {
-                // switch to kernel space if kernel dumps are requested
-                #[cfg(feature = "dump-kernel-pages")]
-                crate::services::SystemServices::with(|ss| {
-                    ss.get_process(PID::new(1).unwrap()).unwrap().mapping.activate().unwrap();
-                });
-                #[cfg(not(feature = "dump-kernel-pages"))]
-                {
-                    println!("        <unavailable>");
-                    continue;
-                }
-            }
-            // let l0_pt_addr = ((l1_entry >> 10) << 12) as *const u32;
-            let l0_pt = unsafe { &mut (*((PAGE_TABLE_OFFSET + i * 4096) as *mut LeafPageTable)) };
-            for (j, l0_entry) in l0_pt.entries.iter().enumerate() {
-                if *l0_entry & 0x7 == 0 {
-                    continue;
-                }
-                let _page_addr = j as u32 * (1 << 12);
-                println!(
-                    "        {:4} {:08x} -> {:08x} (flags: {:?})",
-                    j,
-                    _superpage_addr + _page_addr,
-                    (*l0_entry >> 10) << 12,
-                    MMUFlags::from_bits(l0_entry & 0x3ff).unwrap()
-                );
-            }
-            // return to the original process space from kernel space
-            #[cfg(feature = "dump-kernel-pages")]
-            if i == 1023 && pid != 1 {
-                crate::services::SystemServices::with(|ss| {
-                    ss.get_process(PID::new(pid).unwrap()).unwrap().mapping.activate().unwrap();
-                });
-            }
-        }
+        println!("Memory Maps for PID {}:", pid_from_satp(self.satp));
+        self.for_each_user_leaf(|virt, pte| {
+            println!("    {:016x} -> {:010x} ({:?})", virt, pte.phys(), pte.flags());
+        });
         println!("End of map");
     }
 
+    /// Reserve `addr` for demand paging: the leaf entry gets its permission bits but not `VALID`,
+    /// and `ensure_page_exists_inner()` backs it with a real page on first touch.
     pub fn reserve_address(
         &mut self,
         mm: &mut MemoryManager,
         addr: usize,
         flags: MemoryFlags,
     ) -> Result<(), xous_kernel::Error> {
-        let vpn1 = (addr >> 22) & ((1 << 10) - 1);
-        let vpn0 = (addr >> 12) & ((1 << 10) - 1);
-
-        let l1_pt = unsafe { &mut (*(PAGE_TABLE_ROOT_OFFSET as *mut RootPageTable)) };
-        let l0pt_virt = PAGE_TABLE_OFFSET + vpn1 * PAGE_SIZE;
-
-        // println!("Reserving memory address {:08x} with flags {:?}", addr, flags);
-        // Allocate a new level 1 pagetable entry if one doesn't exist.
-        if l1_pt.entries[vpn1] & MMUFlags::VALID.bits() == 0 {
-            let pid = crate::arch::current_pid();
-            // Allocate a fresh page
-            #[cfg(not(feature = "swap"))]
-            let l0pt_phys = mm.alloc_page(pid)?;
-            #[cfg(feature = "swap")]
-            let l0pt_phys = mm.alloc_page_oomable(pid, None)?;
-
-            // Mark this entry as a leaf node (WRX as 0), and indicate
-            // it is a valid page by setting "V".
-            l1_pt.entries[vpn1] = ((l0pt_phys >> 12) << 10) | MMUFlags::VALID.bits();
-            unsafe { flush_mmu() };
-
-            // Map the new physical page to the virtual page, so we can access it.
-            map_page_inner(mm, pid, l0pt_phys, l0pt_virt, MemoryFlags::W | MemoryFlags::R, false)?;
-
-            // Zero-out the new page
-            let page_addr = l0pt_virt as *mut usize;
-            unsafe { zeropage(page_addr as *mut u32) };
-        }
-
-        let l0_pt = &mut unsafe { &mut (*(l0pt_virt as *mut LeafPageTable)) };
-        let current_mapping = l0_pt.entries[vpn0];
-        if current_mapping & 1 == 1 {
+        let slot = walk(current_root(), addr, Some((mm, crate::arch::current_pid())))?;
+        if slot.get().is_valid() {
             // can't double-reserve pages
             return Err(xous_kernel::Error::ShareViolation);
         }
-        l0_pt.entries[vpn0] = translate_flags(flags).bits();
+        let flags = translate_flags(flags);
+        check_permissions(flags)?;
+        slot.set(Pte::reservation(flags));
         Ok(())
     }
 
     pub fn unreserve_address(&self, addr: usize) -> Result<(), xous_kernel::Error> {
-        let vpn1 = (addr >> 22) & ((1 << 10) - 1);
-        let vpn0 = (addr >> 12) & ((1 << 10) - 1);
-
-        let l1_pt = unsafe { &mut (*(PAGE_TABLE_ROOT_OFFSET as *mut RootPageTable)) };
-        if l1_pt.entries[vpn1] & MMUFlags::VALID.bits() == 0 {
+        let Ok(slot) = walk(current_root(), addr, None) else {
             // No leaf table, so nothing was ever reserved here.
             return Ok(());
-        }
-
-        let l0pt_virt = PAGE_TABLE_OFFSET + vpn1 * PAGE_SIZE;
-        let l0_pt = unsafe { &mut (*(l0pt_virt as *mut LeafPageTable)) };
-
+        };
         // Refuse to touch a live mapping. Only undo reservations.
-        // This works under the assumption that the flags going into reserve_address don't already include the
-        // valid bit, which I believe is correct because reservations can't mark a page as valid as it
-        // hasn't been zero'd yet.
-        if l0_pt.entries[vpn0] & MMUFlags::VALID.bits() != 0 {
+        if slot.get().is_valid() {
             return Err(xous_kernel::Error::ShareViolation);
         }
-
-        l0_pt.entries[vpn0] = 0;
+        slot.set(Pte::EMPTY);
         Ok(())
     }
 }
 
 pub const DEFAULT_MEMORY_MAPPING: MemoryMapping = MemoryMapping { satp: 0 };
 
-/// A single RISC-V page table entry.  In order to resolve an address,
-/// we need two entries: the top level, followed by the lower level.
-struct RootPageTable {
-    entries: [usize; 1024],
-}
-
-struct LeafPageTable {
-    entries: [usize; 1024],
-}
-
-impl fmt::Display for RootPageTable {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, entry) in self.entries.iter().enumerate() {
-            if *entry != 0 {
-                writeln!(
-                    f,
-                    "    {:4} {:08x} -> {:08x} ({})",
-                    i,
-                    (entry >> 10) << 12,
-                    i * (1 << 22),
-                    entry & 0xff
-                )?;
-            }
-        }
-        Ok(())
-    }
-}
-
-impl fmt::Display for LeafPageTable {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (i, entry) in self.entries.iter().enumerate() {
-            if *entry != 0 {
-                writeln!(
-                    f,
-                    "    {:4} {:08x} -> {:08x} ({})",
-                    i,
-                    (entry >> 10) << 12,
-                    i * (1 << 10),
-                    entry & 0xff
-                )?;
-            }
-        }
-        Ok(())
-    }
-}
+/// Call `f` with the physical frame of every page the current process has lent out.
+pub fn for_each_lent_frame(f: impl FnMut(usize)) { MemoryMapping::current().for_each_lent_frame(f); }
 
 /// When we allocate pages, they are owned by the kernel so we can zero
 /// them out.  After that is done, hand the page to the user.
 pub fn hand_page_to_user(virt: *mut u8) -> Result<(), xous_kernel::Error> {
-    let virt = virt as usize;
-    let vpn1 = (virt >> 22) & ((1 << 10) - 1);
-    let vpn0 = (virt >> 12) & ((1 << 10) - 1);
-    let vpo = virt & ((1 << 12) - 1);
-
-    assert!(vpn1 < 1024);
-    assert!(vpn0 < 1024);
-    assert!(vpo < 4096);
-
-    // The root (l1) pagetable is defined to be mapped into our virtual
-    // address space at this address.
-    let l1_pt = unsafe { &mut (*(PAGE_TABLE_ROOT_OFFSET as *mut RootPageTable)) };
-    let l1_pt = &mut l1_pt.entries;
-
-    // Subsequent pagetables are defined as being mapped starting at
-    // PAGE_TABLE_OFFSET
-    let l0pt_virt = PAGE_TABLE_OFFSET + vpn1 * PAGE_SIZE;
-    let l0_pt = &mut unsafe { &mut (*(l0pt_virt as *mut LeafPageTable)) };
-
-    // If the level 1 pagetable doesn't exist, then this address isn't valid.
-    if l1_pt[vpn1] & MMUFlags::VALID.bits() == 0 {
+    let slot = walk(current_root(), virt as usize, None)?;
+    if !slot.get().is_valid() {
         return Err(xous_kernel::Error::BadAddress);
     }
-
-    // Ensure the entry hasn't already been mapped.
-    if l0_pt.entries[vpn0] & 1 == 0 {
-        return Err(xous_kernel::Error::BadAddress);
-    }
-
-    // Add the USER flag to the entry
-    l0_pt.entries[vpn0] |= MMUFlags::USER.bits();
-    unsafe { flush_mmu() };
-
+    slot.set(slot.get().with(MMUFlags::USER));
+    flush_tlb();
     Ok(())
 }
 
-/// Map the given page to the specified process table.  If necessary,
-/// allocate a new page.
+/// Make a reserved (not yet valid) page a user page once it is backed.
+pub fn mark_page_user(virt: usize) -> Result<(), xous_kernel::Error> {
+    let slot = walk(current_root(), virt, None)?;
+    slot.set(slot.get().with(MMUFlags::USER));
+    flush_tlb();
+    Ok(())
+}
+
+/// Map the given page into the current address space.  If necessary,
+/// allocate new page tables on behalf of `pid`.
 ///
 /// # Errors
 ///
@@ -475,116 +382,13 @@ pub fn map_page_inner(
     req_flags: MemoryFlags,
     map_user: bool,
 ) -> Result<(), xous_kernel::Error> {
-    let ppn1 = (phys >> 22) & ((1 << 12) - 1);
-    let ppn0 = (phys >> 12) & ((1 << 10) - 1);
-    let ppo = phys & ((1 << 12) - 1);
-
-    let vpn1 = (virt >> 22) & ((1 << 10) - 1);
-    let vpn0 = (virt >> 12) & ((1 << 10) - 1);
-    let vpo = virt & ((1 << 12) - 1);
-
     let flags = translate_flags(req_flags) | if map_user { MMUFlags::USER } else { MMUFlags::NONE };
-
-    assert!(ppn1 < 4096);
-    assert!(ppn0 < 1024);
-    assert!(ppo < 4096);
-    assert!(vpn1 < 1024);
-    assert!(vpn0 < 1024);
-    assert!(vpo < 4096);
-    assert!((virt & 0xfff) == 0);
-
-    // The root (l1) pagetable is defined to be mapped into our virtual
-    // address space at 0xff80_0000.
-    let l1_pt = PAGE_TABLE_ROOT_OFFSET as *mut usize;
-
-    // Subsequent pagetables are defined as being mapped starting at
-    // offset 0xff40_0000.
-    let l0_pt = (PAGE_TABLE_OFFSET + vpn1 * PAGE_SIZE) as *mut usize;
-
-    // Allocate a new level 1 pagetable entry if one doesn't exist.
-    if unsafe { l1_pt.add(vpn1).read_volatile() } & MMUFlags::VALID.bits() == 0 {
-        // Allocate a fresh page for the level 1 page table.
-        #[cfg(not(feature = "swap"))]
-        let l0_pt_phys = mm.alloc_page(pid)?;
-        #[cfg(feature = "swap")]
-        let l0_pt_phys = mm.alloc_page_oomable(pid, None)?;
-
-        // Mark this entry as a leaf node (WRX as 0), and indicate
-        // it is a valid page by setting "V".
-        unsafe {
-            l1_pt.add(vpn1).write_volatile(((l0_pt_phys >> 12) << 10) | MMUFlags::VALID.bits());
-            flush_mmu();
-        }
-
-        // Map the new physical page to the virtual page, so we can access it.
-        map_page_inner(mm, pid, l0_pt_phys, l0_pt as usize, MemoryFlags::W | MemoryFlags::R, false)?;
-
-        // Zero-out the new page
-        unsafe { zeropage(l0_pt as *mut u32) };
-    }
-
-    // Ensure the entry hasn't already been mapped.
-    if unsafe { l0_pt.add(vpn0).read_volatile() } & 1 != 0 {
-        klog!("Page {:08x} already allocated!", virt);
-        return Err(xous_kernel::Error::MemoryInUse);
-    }
-    unsafe {
-        l0_pt.add(vpn0).write_volatile(
-            (ppn1 << 20) | (ppn0 << 10) | (flags | MMUFlags::VALID | MMUFlags::D | MMUFlags::A).bits(),
-        )
-    };
-    unsafe { flush_mmu() };
-
+    map_page_in(current_root(), mm, pid, phys, virt, flags)?;
+    flush_tlb();
     Ok(())
 }
 
-/// Make a reserved (not yet valid) page a user page once it is backed.
-pub fn mark_page_user(virt: usize) -> Result<(), xous_kernel::Error> {
-    let pte = pagetable_entry(virt)?;
-    unsafe {
-        pte.write_volatile(pte.read_volatile() | MMUFlags::USER.bits());
-        flush_mmu();
-    }
-    Ok(())
-}
-
-/// Call `f` with the physical frame of every page the current process has lent out
-/// (a leaf with the shared bit set).
-pub fn for_each_lent_frame(mut f: impl FnMut(usize)) {
-    let l1_pt = unsafe { &(*(PAGE_TABLE_ROOT_OFFSET as *const RootPageTable)) };
-    for (i, l1_entry) in l1_pt.entries.iter().enumerate() {
-        // Skip empty superpages and the kernel superpage (1023).
-        if *l1_entry & MMUFlags::VALID.bits() == 0 || i == 1023 {
-            continue;
-        }
-        let l0_pt = unsafe { &(*((PAGE_TABLE_OFFSET + i * PAGE_SIZE) as *const LeafPageTable)) };
-        for l0_entry in l0_pt.entries.iter() {
-            if *l0_entry & MMUFlags::S.bits() != 0 {
-                f((*l0_entry >> 10) << 12);
-            }
-        }
-    }
-}
-
-/// Get the pagetable entry for a given address, or `Err()` if the address is invalid
-pub fn pagetable_entry(addr: usize) -> Result<*mut usize, xous_kernel::Error> {
-    if addr & 3 != 0 {
-        return Err(xous_kernel::Error::BadAlignment);
-    }
-    let vpn1 = (addr >> 22) & ((1 << 10) - 1);
-    let vpn0 = (addr >> 12) & ((1 << 10) - 1);
-    assert!(vpn1 < 1024);
-    assert!(vpn0 < 1024);
-
-    let l1_pt = unsafe { &(*(PAGE_TABLE_ROOT_OFFSET as *mut RootPageTable)) };
-    let l1_pte = l1_pt.entries[vpn1];
-    if l1_pte & MMUFlags::VALID.bits() == 0 {
-        return Err(xous_kernel::Error::BadAddress);
-    }
-    Ok((PAGE_TABLE_OFFSET + vpn1 * PAGE_SIZE + vpn0 * 4) as *mut usize)
-}
-
-/// Ummap the given page from the specified process table.  Never allocate a new
+/// Ummap the given page from the current address space.  Never allocate a new
 /// page.
 ///
 /// # Returns
@@ -595,12 +399,13 @@ pub fn pagetable_entry(addr: usize) -> Result<*mut usize, xous_kernel::Error> {
 ///
 /// * BadAddress - Address was not already mapped.
 pub fn unmap_page_inner(_mm: &mut MemoryManager, virt: usize) -> Result<usize, xous_kernel::Error> {
-    let entry = pagetable_entry(virt)?;
-
-    let phys = (unsafe { entry.read_volatile() } >> 10) << 12;
-    unsafe { entry.write_volatile(0) };
-    unsafe { flush_mmu() };
-
+    if virt & 3 != 0 {
+        return Err(xous_kernel::Error::BadAlignment);
+    }
+    let slot = walk(current_root(), virt, None)?;
+    let phys = slot.get().phys();
+    slot.set(Pte::EMPTY);
+    flush_tlb();
     Ok(phys)
 }
 
@@ -613,48 +418,31 @@ pub fn move_page_inner(
     dest_space: &MemoryMapping,
     dest_addr: *mut u8,
 ) -> Result<(), xous_kernel::Error> {
-    let entry = pagetable_entry(src_addr as usize)?;
-    let previous_entry = unsafe { entry.read_volatile() };
-    if previous_entry & MMUFlags::VALID.bits() == 0 {
+    let src = walk(root_of(src_space.satp), src_addr as usize, None)?;
+    let previous = src.get();
+    if !previous.is_valid() {
         return Err(xous_kernel::Error::BadAddress);
     }
     // Invalidate the old entry
-    unsafe { entry.write_volatile(0) };
-    unsafe { flush_mmu() };
+    src.set(Pte::EMPTY);
 
-    dest_space.activate()?;
-    let phys = previous_entry >> 10 << 12;
-    let flags = untranslate_flags(previous_entry);
-
-    let result = map_page_inner(mm, dest_pid, phys, dest_addr as usize, flags, dest_pid.get() != 1);
-
-    // Switch back to the original address space and return
-    src_space.activate().unwrap();
+    let flags = translate_flags(untranslate_flags(previous.flags().bits())) | user_flag(dest_pid);
+    let result = map_page_in(root_of(dest_space.satp), mm, dest_pid, previous.phys(), dest_addr as usize, flags);
+    flush_tlb();
     result
 }
 
 /// Determine if a virtual page has been lent.
-#[allow(dead_code)] // used by check_ram in some configs
 pub fn page_is_lent(src_addr: *mut u8) -> bool {
-    pagetable_entry(src_addr as usize)
-        .map_or(false, |v| unsafe { v.read_volatile() } & MMUFlags::S.bits() != 0)
+    walk(current_root(), src_addr as usize, None).is_ok_and(|slot| slot.get().has(MMUFlags::S))
 }
 
-/// Mark the given virtual address as being lent.  If `writable`, clear the
-/// `valid` bit so that this process can't accidentally write to this page while
-/// it is lent.
-///
-/// This uses the `RWS` fields to keep track of the following pieces of information:
-///
-/// * **PTE[8]**: This is set to `1` indicating the page is lent
-/// * **PTE[9]**: This is `1` if the page was previously writable
-///
-/// # Returns
+/// Mark the given virtual address as being lent: clear `VALID`, so that this process
+/// cannot touch the page while it is lent, and set `S` to remember that it is lent.
 ///
 /// # Errors
 ///
-/// * **BadAlignment**: The page isn't 4096-bytes aligned
-/// * **BadAddress**: The page isn't allocated
+/// * **ShareViolation**: Tried to share a page that is not ours, or is already shared
 pub fn lend_page_inner(
     mm: &mut MemoryManager,
     src_space: &MemoryMapping,
@@ -664,47 +452,23 @@ pub fn lend_page_inner(
     dest_addr: *mut u8,
     mutable: bool,
 ) -> Result<usize, xous_kernel::Error> {
-    //klog!("***lend - src: {:08x} dest: {:08x}***", src_addr as u32, dest_addr as u32);
-    let entry = pagetable_entry(src_addr as usize)?;
-    let current_entry = unsafe { entry.read_volatile() };
-    let phys = (current_entry >> 10) << 12;
+    let src = walk(root_of(src_space.satp), src_addr as usize, None)?;
+    let current = src.get();
+    let phys = current.phys();
 
-    // If we try to share a page that's not ours, that's just wrong.
-    if current_entry & MMUFlags::VALID.bits() == 0 {
-        // klog!("Not valid");
+    // Sharing a page that is not ours, or that is already shared, is a violation.
+    if !current.is_valid() || current.has(MMUFlags::S) {
         return Err(xous_kernel::Error::ShareViolation);
     }
+    src.set(current.without(MMUFlags::VALID).with(MMUFlags::S));
 
-    // If we try to share a page that's already shared, that's a sharing
-    // violation.
-    if current_entry & MMUFlags::S.bits() != 0 {
-        // klog!("Already shared");
-        return Err(xous_kernel::Error::ShareViolation);
+    let mut new_flags = MMUFlags::R | user_flag(dest_pid);
+    if mutable && current.has(MMUFlags::W) {
+        new_flags |= MMUFlags::W;
     }
 
-    // Strip the `VALID` flag, and set the `SHARED` flag.
-    let new_entry = (current_entry & !MMUFlags::VALID.bits()) | MMUFlags::S.bits();
-    unsafe { entry.write_volatile(new_entry) };
-
-    // Ensure the change takes effect.
-    unsafe { flush_mmu() };
-
-    // Mark the page as Writable in new process space if it's writable here.
-    let new_flags = if mutable && (new_entry & MMUFlags::W.bits()) != 0 {
-        MemoryFlags::R | MemoryFlags::W
-    } else {
-        MemoryFlags::R
-    };
-
-    // Switch to the new address space and map the page
-    dest_space.activate()?;
-    let result = map_page_inner(mm, dest_pid, phys, dest_addr as usize, new_flags, dest_pid.get() != 1);
-    unsafe { flush_mmu() };
-
-    // Switch back to our process space
-    src_space.activate().unwrap();
-
-    // Return the new address.
+    let result = map_page_in(root_of(dest_space.satp), mm, dest_pid, phys, dest_addr as usize, new_flags);
+    flush_tlb();
     result.map(|_| phys)
 }
 
@@ -717,223 +481,82 @@ pub fn return_page_inner(
     dest_space: &MemoryMapping,
     dest_addr: *mut u8,
 ) -> Result<usize, xous_kernel::Error> {
-    //klog!("***return - src: {:08x} dest: {:08x}***", src_addr as u32, dest_addr as u32);
-    let src_entry = pagetable_entry(src_addr as usize)?;
-    let src_entry_value = unsafe { src_entry.read_volatile() };
-    let phys = (src_entry_value >> 10) << 12;
+    let src = walk(root_of(src_space.satp), src_addr as usize, None)?;
+    let phys = src.get().phys();
 
     // If the page is not valid in this program, we can't return it.
-    if src_entry_value & MMUFlags::VALID.bits() == 0 {
+    if !src.get().is_valid() {
         return Err(xous_kernel::Error::ShareViolation);
     }
+    src.set(Pte::EMPTY);
 
-    // Mark the page as `Free`, which unmaps it.
-    unsafe { src_entry.write_volatile(0) };
-    unsafe { flush_mmu() };
-
-    // Switch to the destination address space
-    dest_space.activate()?;
-    let dest_entry = pagetable_entry(dest_addr as usize).expect("page wasn't lent in destination space");
-    let dest_entry_value = unsafe { dest_entry.read_volatile() };
-
-    // If the page wasn't marked as `Shared` in the destination address space,
-    // treat that as an error.
-    if dest_entry_value & MMUFlags::S.bits() == 0 {
-        panic!("page wasn't shared in destination space");
-    }
-
-    #[cfg(feature = "swap")]
-    // Clear the `SHARED` bit, and set the `VALID` bit.
-    unsafe {
-        dest_entry.write_volatile(dest_entry_value & !(MMUFlags::S).bits() | MMUFlags::VALID.bits())
-    };
-    #[cfg(not(feature = "swap"))]
-    // Clear the `SHARED` and `PREVIOUSLY-WRITABLE` bits, and set the `VALID` bit.
-    unsafe {
-        dest_entry
-            .write_volatile(dest_entry_value & !(MMUFlags::S | MMUFlags::P).bits() | MMUFlags::VALID.bits())
-    };
-
-    unsafe { flush_mmu() };
-
-    // Swap back to our previous address space
-    src_space.activate().unwrap();
+    let dest = walk(root_of(dest_space.satp), dest_addr as usize, None)
+        .expect("page wasn't lent in destination space");
+    // If the page wasn't marked as `Shared` in the destination address space, bail.
+    assert!(dest.get().has(MMUFlags::S), "page wasn't shared in destination space");
+    dest.set(dest.get().without(MMUFlags::S | MMUFlags::P).with(MMUFlags::VALID));
+    flush_tlb();
     Ok(phys)
 }
 
-pub fn virt_to_phys(virt: usize) -> Result<usize, xous_kernel::Error> {
-    let vpn1 = (virt >> 22) & ((1 << 10) - 1);
-    let vpn0 = (virt >> 12) & ((1 << 10) - 1);
-
-    // The root (l1) pagetable is defined to be mapped into our virtual
-    // address space at this address.
-    let l1_pt = unsafe { &mut (*(PAGE_TABLE_ROOT_OFFSET as *mut RootPageTable)) };
-    let l1_pt = &mut l1_pt.entries;
-
-    // Subsequent pagetables are defined as being mapped starting at
-    // offset 0x0020_0004, so 4 must be added to the ppn1 value.
-    let l0pt_virt = PAGE_TABLE_OFFSET + vpn1 * PAGE_SIZE;
-    let l0_pt = &mut unsafe { &mut (*(l0pt_virt as *mut LeafPageTable)) };
-
-    // If the level 1 pagetable doesn't exist, then this address is invalid
-    if l1_pt[vpn1] & MMUFlags::VALID.bits() == 0 {
-        return Err(xous_kernel::Error::BadAddress);
-    }
-
-    // If the page is "Valid" but shared, issue a sharing violation
-    if l0_pt.entries[vpn0] & MMUFlags::S.bits() != 0 {
+fn checked_phys(pte: Pte) -> Result<usize, xous_kernel::Error> {
+    // If the page is "Valid" but shared, issue a sharing violation.
+    if pte.has(MMUFlags::S) {
         return Err(xous_kernel::Error::ShareViolation);
     }
-
-    // Ensure the entry hasn't already been mapped.
-    if l0_pt.entries[vpn0] & MMUFlags::VALID.bits() == 0 {
-        // The memory has been reserved, but isn't pointing anywhere yet.
-        if l0_pt.entries[vpn0] != 0 {
-            return Err(xous_kernel::Error::MemoryInUse);
-        }
-
-        // The address hasn't been allocated
-        return Err(xous_kernel::Error::BadAddress);
+    if !pte.is_valid() {
+        // Reserved for demand paging, but not yet backed by a page.
+        return Err(if pte.is_empty() { xous_kernel::Error::BadAddress } else { xous_kernel::Error::MemoryInUse });
     }
-    Ok((l0_pt.entries[vpn0] >> 10) << 12)
+    Ok(pte.phys())
 }
 
-#[allow(dead_code)] // used on rv64 / by some configs
+pub fn virt_to_phys(virt: usize) -> Result<usize, xous_kernel::Error> {
+    checked_phys(walk(current_root(), virt, None)?.get())
+}
+
+/// Translate `virt` in the address space of `pid`. No address space switch is needed.
+#[allow(dead_code)]
 pub fn virt_to_phys_pid(pid: PID, virt: usize) -> Result<usize, xous_kernel::Error> {
-    use crate::services::SystemServices;
-
-    let current_pid = SystemServices::with(|ss| ss.current_pid());
-
-    /// Ensures switching back to the source memory space whenever this function returns
-    /// in successful and error cases
-    struct SwitchBackGuard(PID);
-    impl Drop for SwitchBackGuard {
-        fn drop(&mut self) {
-            SystemServices::with(|ss| {
-                let p = ss.get_process(self.0).expect("current process");
-                p.mapping.activate().ok();
-            });
-        }
-    }
-
-    let _guard = SwitchBackGuard(current_pid);
-
-    SystemServices::with(|ss| {
-        let target_process = ss.get_process(pid).or_else(|_| Err(xous_kernel::Error::InvalidPID))?;
-        target_process.mapping.activate().or_else(|_| Err(xous_kernel::Error::InvalidPID))?;
-
-        virt_to_phys(virt)
-    })
+    let mapping = crate::services::SystemServices::with(|ss| {
+        ss.get_process(pid).map(|p| p.mapping).or(Err(xous_kernel::Error::InvalidPID))
+    })?;
+    checked_phys(walk(root_of(mapping.satp), virt, None)?.get())
 }
 
+/// Back a reserved (demand-paged) address with a real, zeroed page.
 pub fn ensure_page_exists_inner(address: usize) -> Result<usize, xous_kernel::Error> {
     // Disallow mapping memory outside of user land
     if !MemoryMapping::current().is_kernel() && address >= USER_AREA_END {
         return Err(xous_kernel::Error::OutOfMemory);
     }
-    let virt = address & !0xfff;
-    let entry = crate::arch::mem::pagetable_entry(virt).or(Err(xous_kernel::Error::BadAddress))?;
-    // let entry = crate::arch::mem::pagetable_entry(virt).or_else(|e| {
-    //     // klog!("Error in mem: {:?}", e);
-    //     panic!("Page doesn't exist: {:08x}", address);
-    //     Err(xous_kernel::Error::BadAddress)
-    // })?;
-    let current_entry = unsafe { entry.read_volatile() };
+    let virt = address & !(PAGE_SIZE - 1);
+    let slot = walk(current_root(), virt, None).or(Err(xous_kernel::Error::BadAddress))?;
+    let reservation = slot.get();
 
-    let flags = current_entry & 0x3ff;
-
-    #[cfg(not(feature = "swap"))]
-    if flags & MMUFlags::VALID.bits() != 0 {
+    if reservation.is_valid() {
         return Ok(address);
     }
-    #[cfg(feature = "swap")]
-    if (flags & MMUFlags::VALID.bits() != 0) && (flags & MMUFlags::P.bits() == 0) {
-        return Ok(address);
-    }
-
-    // If the flags are nonzero, but the "Valid" bit is not 1 and
-    // the page isn't shared, then this is a reserved page. Allocate
-    // a real page to back it and resume execution.
-    if flags == 0 || (flags & MMUFlags::S.bits()) != 0 {
+    // The page is either unreserved, or lent out to another process.
+    if reservation.is_empty() || reservation.has(MMUFlags::S) {
         return Err(xous_kernel::Error::BadAddress);
     }
 
-    #[cfg(not(feature = "swap"))]
     let new_page = MemoryManager::with_mut(|mm| {
         mm.alloc_page(crate::arch::process::current_pid()).expect("Couldn't allocate new page")
     });
-    #[cfg(feature = "swap")]
-    let new_page = MemoryManager::with_mut(|mm| {
-        mm.alloc_page_oomable(crate::arch::process::current_pid(), Some(virt))
-            .expect("Couldn't allocate new page")
-    });
-
-    let ppn1 = (new_page >> 22) & ((1 << 12) - 1);
-    let ppn0 = (new_page >> 12) & ((1 << 10) - 1);
-    unsafe {
-        #[cfg(feature = "swap")]
-        if flags & MMUFlags::P.bits() != 0 {
-            // page is swapped; fill page, map and return
-            crate::swap::Swap::with_mut(|s| {
-                s.swap_reentrant_syscall(xous_kernel::SysCall::SwapOp(
-                    crate::swap::SwapAbi::RetrievePage as usize,
-                    virt,
-                    new_page,
-                    0,
-                    0,
-                    0,
-                    0,
-                ))
-            });
-            *entry =
-                (ppn1 << 20) | (ppn0 << 10) | ((flags & !MMUFlags::P.bits()) | crate::arch::mem::FLG_VALID);
-            #[cfg(feature = "debug-swap")]
-            if flags & MMUFlags::S.bits() != 0 {
-                println!(
-                    "ensure_page_exists_inner(): fetched a page with S bit set. new entry: {:x} prev entry: {:x}",
-                    *entry, current_entry
-                );
-            }
-            flush_mmu();
-            return Ok(new_page);
-        } else {
-            // page is reserved: simply zero it out
-            // Map the page to our process
-            *entry =
-                (ppn1 << 20) | (ppn0 << 10) | (flags | FLG_VALID /* valid */ | FLG_D /* D */ | FLG_A/* A */);
-            flush_mmu();
-            zeropage(virt as *mut u32);
-        }
-
-        #[cfg(not(feature = "swap"))]
-        {
-            *entry =
-                (ppn1 << 20) | (ppn0 << 10) | (flags | FLG_VALID /* valid */ | FLG_D /* D */ | FLG_A/* A */);
-            flush_mmu();
-            // Zero-out the page
-            zeropage(virt as *mut u32);
-        }
-
-        // Move the page into userspace
-        *entry = (ppn1 << 20)
-            | (ppn0 << 10)
-            | (flags | FLG_VALID /* valid */ | FLG_U /* USER */ | FLG_D /* D */ | FLG_A/* A */);
-        flush_mmu();
-    };
+    // Zero through the physmap before the page becomes visible to the process.
+    // SAFETY: `alloc_page` returns a RAM frame that was free until now.
+    unsafe { window().zero_frame(new_page) };
+    slot.set(Pte::leaf(new_page, reservation.flags() | MMUFlags::USER));
+    flush_tlb();
 
     Ok(new_page)
 }
 
 /// Determine whether a virtual address has been mapped
 pub fn address_available(virt: usize) -> bool {
-    if let Err(e) = virt_to_phys(virt) {
-        // If the value is a `BadAddress`, then that means that address is not valid
-        // and is therefore available
-        e == xous_kernel::Error::BadAddress
-    } else {
-        // If the address is not an error, then it is not available and shouldn't be used.
-        false
-    }
+    virt_to_phys(virt).is_err_and(|e| e == xous_kernel::Error::BadAddress)
 }
 
 /// Get the `MemoryFlags` for the requested virtual address. The address must
@@ -944,245 +567,43 @@ pub fn address_available(virt: usize) -> bool {
 /// * **None**: The page is not valid or is shared
 /// * **Some(MemoryFlags)**: The translated sharing permissions of the given flags
 pub fn page_flags(virt: usize) -> Option<MemoryFlags> {
-    let vpn1 = (virt >> 22) & ((1 << 10) - 1);
-    let vpn0 = (virt >> 12) & ((1 << 10) - 1);
-
-    // The root (l1) pagetable is defined to be mapped into our virtual
-    // address space at this address.
-    let l1_pt = unsafe { &mut (*(PAGE_TABLE_ROOT_OFFSET as *mut RootPageTable)) };
-    let l1_pt = &mut l1_pt.entries;
-
-    // Subsequent pagetables are defined as being mapped starting at
-    // offset 0x0020_0004, so 4 must be added to the ppn1 value.
-    let l0pt_virt = PAGE_TABLE_OFFSET + vpn1 * PAGE_SIZE;
-    let l0_pt = &mut unsafe { &mut (*(l0pt_virt as *mut LeafPageTable)) };
-
-    // If the level 1 pagetable doesn't exist, then this address is invalid
-    if l1_pt[vpn1] & MMUFlags::VALID.bits() == 0 {
+    let pte = walk(current_root(), virt, None).ok()?.get();
+    if pte.has(MMUFlags::S) {
         return None;
     }
-
-    let mmu_flags = l0_pt.entries[vpn0];
-
-    // If the page is "Valid" but shared, issue a sharing violation
-    if mmu_flags & MMUFlags::S.bits() != 0 {
-        return None;
+    let mut flags = MemoryFlags::empty();
+    for (bit, flag) in [(MMUFlags::R, MemoryFlags::R), (MMUFlags::W, MemoryFlags::W), (MMUFlags::X, MemoryFlags::X)] {
+        if pte.has(bit) {
+            flags = flags | flag;
+        }
     }
-
-    let mut return_flags = MemoryFlags::empty();
-
-    if mmu_flags & MMUFlags::R.bits() != 0 {
-        return_flags = return_flags | MemoryFlags::R;
-    }
-
-    if mmu_flags & MMUFlags::W.bits() != 0 {
-        return_flags = return_flags | MemoryFlags::W;
-    }
-
-    if mmu_flags & MMUFlags::X.bits() != 0 {
-        return_flags = return_flags | MemoryFlags::X;
-    }
-
-    if return_flags.is_empty() { None } else { Some(return_flags) }
+    (!flags.is_empty()).then_some(flags)
 }
 
+/// Remove permissions from a page. Permissions can only be dropped, never added.
 pub fn update_page_flags(virt: usize, flags: MemoryFlags) -> Result<(), xous_kernel::Error> {
-    // The resulting flags must actually be valid
+    // Stripping every permission would turn the entry into a pointer to another table.
     if (flags & (MemoryFlags::R | MemoryFlags::W | MemoryFlags::X)).is_empty() {
         return Err(xous_kernel::Error::MemoryInUse);
     }
 
-    let vpn1 = (virt >> 22) & ((1 << 10) - 1);
-    let vpn0 = (virt >> 12) & ((1 << 10) - 1);
-
-    // The root (l1) pagetable is defined to be mapped into our virtual
-    // address space at this address.
-    let l1_pt = unsafe { &mut (*(PAGE_TABLE_ROOT_OFFSET as *mut RootPageTable)) };
-    let l1_pt = &mut l1_pt.entries;
-
-    // Subsequent pagetables are defined as being mapped starting at
-    // offset 0x0020_0004, so 4 must be added to the ppn1 value.
-    let l0pt_virt = PAGE_TABLE_OFFSET + vpn1 * PAGE_SIZE;
-    let l0_pt = &mut unsafe { &mut (*(l0pt_virt as *mut LeafPageTable)) };
-
-    // If the level 1 pagetable doesn't exist, then this address is invalid
-    if l1_pt[vpn1] & MMUFlags::VALID.bits() == 0 {
-        return Err(xous_kernel::Error::OutOfMemory);
-    }
-
-    let mut mmu_flags = l0_pt.entries[vpn0];
-
-    // If the page is "Valid" but shared, issue a sharing violation
-    if mmu_flags & MMUFlags::S.bits() != 0 {
+    let slot = walk(current_root(), virt, None).or(Err(xous_kernel::Error::OutOfMemory))?;
+    let mut pte = slot.get();
+    if pte.has(MMUFlags::S) {
         return Err(xous_kernel::Error::ShareViolation);
     }
 
-    // Strip the flags as requested
-    if (flags & MemoryFlags::X).is_empty() {
-        if mmu_flags & MMUFlags::X.bits() != 0 {
-            mmu_flags = mmu_flags & !MMUFlags::X.bits();
-        }
-    } else if mmu_flags & MMUFlags::X.bits() == 0 {
-        // Ensure we're not adding flags back
-        return Err(xous_kernel::Error::ShareViolation);
-    }
-
-    // Strip the flags as requested
-    if (flags & MemoryFlags::R).is_empty() {
-        if mmu_flags & MMUFlags::R.bits() != 0 {
-            mmu_flags = mmu_flags & !MMUFlags::R.bits();
-        }
-    } else if mmu_flags & MMUFlags::R.bits() == 0 {
-        // Ensure we're not adding flags back
-        return Err(xous_kernel::Error::ShareViolation);
-    }
-
-    // Strip the flags as requested
-    if (flags & MemoryFlags::W).is_empty() {
-        if mmu_flags & MMUFlags::W.bits() != 0 {
-            mmu_flags = mmu_flags & !MMUFlags::W.bits();
-        }
-    } else if mmu_flags & MMUFlags::W.bits() == 0 {
-        // Ensure we're not adding flags back
-        return Err(xous_kernel::Error::ShareViolation);
-    }
-
-    // Update the MMU
-    l0_pt.entries[vpn0] = mmu_flags;
-
-    Ok(())
-}
-
-#[cfg(feature = "swap")]
-/// Takes in the target PID and virtual address to evict. Performs the unmapping, release from
-/// the target, and re-mapping into the swapper's memory space. Returns a pointer to the
-/// data in the swapper's virtual memory space
-pub fn evict_page_inner(target_pid: PID, vaddr: usize) -> Result<usize, xous_kernel::Error> {
-    use crate::services::SystemServices;
-    SystemServices::with(|system_services| {
-        // swap to the target memory space
-        let target_map = system_services.get_process(target_pid).unwrap().mapping;
-        target_map.activate().unwrap();
-
-        // get the PTE in the target memory space
-        let entry = match pagetable_entry(vaddr as usize) {
-            Ok(addr) => addr,
-            Err(e) => {
-                #[cfg(feature = "debug-swap")]
-                {
-                    crate::arch::mem::MemoryMapping::current().print_map();
-                    let vpn1 = (vaddr >> 22) & ((1 << 10) - 1);
-                    let l1_pt = unsafe { &(*(PAGE_TABLE_ROOT_OFFSET as *mut RootPageTable)) };
-                    let l1_pte = l1_pt.entries[vpn1];
-                    println!(
-                        "evict_page_inner() PTE lookup error. vaddr in PID{}: {:x}, bad l1 pte: {:x}, err {:?}",
-                        target_pid.get(),
-                        vaddr,
-                        l1_pte,
-                        e
-                    );
-                }
-                let swapper_pid = PID::new(xous_kernel::SWAPPER_PID).unwrap();
-                let swapper_map = system_services.get_process(swapper_pid).unwrap().mapping;
-                swapper_map.activate()?;
-                return Err(e);
-            }
-        };
-        let target_pte = unsafe { entry.read_volatile() };
-        let target_paddr = (target_pte >> 10) << 12;
-
-        #[cfg(feature = "debug-swap-verbose")]
-        println!(
-            "-- evict[{}]: {:08x} -> {:08x} (flags: {:?}), count {}",
-            target_pid.get(),
-            vaddr,
-            target_paddr,
-            MMUFlags::from_bits(target_pte & 0x3ff).unwrap(),
-            unsafe { MemoryManager::with(|mm| mm.get_timestamp(target_paddr)) }
-        );
-
-        // mark the page as "touched" even if the eviction checks fail: the page is definitely not LRU if
-        // it's not swappable.
-        MemoryManager::with_mut(|mm| mm.touch(target_paddr));
-
-        // sanity check
-        if (target_pte & MMUFlags::VALID.bits() == 0) || (target_pte & MMUFlags::P.bits() != 0) {
-            // return us to the swapper PID -- this call can only originate in the swapper
-            #[cfg(feature = "debug-swap")]
-            {
-                // crate::arch::mem::MemoryMapping::current().print_map();
-                println!(
-                    "evict_page_inner() failed sanity check. PTE: {:x?} paddr: {:x} vaddr in PID{}: {:x}",
-                    target_pte,
-                    target_paddr,
-                    target_pid.get(),
-                    vaddr
-                );
-            }
-            let swapper_pid = PID::new(xous_kernel::SWAPPER_PID).unwrap();
-            let swapper_map = system_services.get_process(swapper_pid).unwrap().mapping;
-            swapper_map.activate()?;
-            return Err(xous_kernel::Error::BadAddress);
-        }
-        // don't allow swapping of kernel pages
-        if target_pte & MMUFlags::USER.bits() == 0 {
-            let swapper_pid = PID::new(xous_kernel::SWAPPER_PID).unwrap();
-            let swapper_map = system_services.get_process(swapper_pid).unwrap().mapping;
-            swapper_map.activate()?;
-            return Err(xous_kernel::Error::AccessDenied);
-        }
-        if target_pte & MMUFlags::S.bits() != 0 {
-            let swapper_pid = PID::new(xous_kernel::SWAPPER_PID).unwrap();
-            let swapper_map = system_services.get_process(swapper_pid).unwrap().mapping;
-            swapper_map.activate()?;
+    for (requested, bit) in
+        [(MemoryFlags::X, MMUFlags::X), (MemoryFlags::R, MMUFlags::R), (MemoryFlags::W, MMUFlags::W)]
+    {
+        if (flags & requested).is_empty() {
+            pte = pte.without(bit);
+        } else if !pte.has(bit) {
             return Err(xous_kernel::Error::ShareViolation);
         }
+    }
 
-        // clear the valid bit, mark as swapped, preserve all other flags, remove physical address
-        let new_pte = (target_pte & !MMUFlags::VALID.bits() & 0x3FFusize) | MMUFlags::P.bits();
-        unsafe { entry.write_volatile(new_pte) };
-
-        // switch into the swapper memory space
-        let swapper_pid = PID::new(xous_kernel::SWAPPER_PID).unwrap();
-        let swapper_map = system_services.get_process(swapper_pid).unwrap().mapping;
-        swapper_map.activate()?;
-        let payload_virt = MemoryManager::with_mut(|mm| {
-            let payload_virt = mm
-                .find_virtual_address(core::ptr::null_mut(), PAGE_SIZE, xous_kernel::MemoryType::Messages)
-                .expect("couldn't find virtual address in swapper space for target page")
-                as usize;
-            let _result = map_page_inner(
-                mm,
-                swapper_pid,
-                target_paddr,
-                payload_virt,
-                MemoryFlags::R | MemoryFlags::W, // write flag needed because encryption is in-place
-                true,
-            );
-            payload_virt
-        });
-        Ok(payload_virt)
-    })
-}
-
-#[cfg(feature = "swap")]
-pub fn map_page_to_swapper(paddr: usize) -> Result<usize, xous_kernel::Error> {
-    use crate::services::SystemServices;
-    SystemServices::with(|system_services| {
-        let swapper_pid = PID::new(xous_kernel::SWAPPER_PID).unwrap();
-        // swap to the swapper space
-        let swapper_map = system_services.get_process(swapper_pid).unwrap().mapping;
-        swapper_map.activate()?;
-
-        let payload_virt = MemoryManager::with_mut(|mm| {
-            let payload_virt = mm
-                .find_virtual_address(core::ptr::null_mut(), PAGE_SIZE, xous_kernel::MemoryType::Messages)
-                .expect("couldn't find virtual address in swapper space for target page")
-                as usize;
-            let _result =
-                map_page_inner(mm, swapper_pid, paddr, payload_virt, MemoryFlags::R | MemoryFlags::W, true);
-            payload_virt
-        });
-        Ok(payload_virt)
-    })
+    slot.set(pte);
+    flush_tlb();
+    Ok(())
 }
