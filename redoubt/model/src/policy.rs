@@ -6,11 +6,12 @@
 //! | P1 sessions | a session's budget is under its principal's (a sub-agent's under its agent's), with its account; labels are none or one the principal owns | CONTAINMENT.md, "Sessions and vaults" |
 //! | P2 login | a login used one of the principal's login keys, never one `keyd` holds | CAPABILITIES.md, "The powerbox and approvals" |
 //! | P3 approvals | an approval came through `approve@box` with the approver's approval key, named the frozen content's hash, and granted no label the approver lacks | CAPABILITIES.md, "Binding", "Limits and labels" |
-//! | P4 screens | an approver sees only its own requests, labelled ones only if it owns every label; rendered text is printable ASCII with capped free text | CAPABILITIES.md, "Rendering"; QUESTIONS 34 |
+//! | P4 screens | an approver sees only its own requests, labelled ones only if it owns every label; rendered text is printable ASCII with capped free text; a labelled request shows none of its free text | CAPABILITIES.md, "Rendering"; QUESTIONS 34, 35 |
 //! | P5 cap | at most `PENDING_CAP` pending requests per (account, label set), all of live sessions | CONTAINMENT.md, "The shared server library"; QUESTIONS 17 |
-//! | P6 declassification | what is copied out is exactly the snapshot taken at submission | CONTAINMENT.md, "Declassification" |
-//! | P7 blame | an account is logged out exactly when three server crashes blamed on it (by the kernel's exit notices) fall within ten minutes; no other account's sessions are touched | CONTAINMENT.md, "Crash blame"; INIT.md |
+//! | P6 declassification | what is copied out is exactly the snapshot taken at submission, read through a reader budget carrying exactly the item's label | CONTAINMENT.md, "Declassification"; QUESTIONS 54 |
+//! | P7 blame | an (account, label set)'s sessions are logged out exactly when three server crashes blamed on it (by the kernel's exit notices) fall within ten minutes; no other sessions are touched | CONTAINMENT.md, "Crash blame"; INIT.md; QUESTIONS 48 |
 //! | P8 labelled sessions | a labelled session starts nothing; it only submits requests | CONTAINMENT.md, "The shared server library" (steward) |
+//! | P11 writes | every write to an item is by a session with exactly the item's labels | CONTAINMENT.md, `check`; QUESTIONS 51 |
 //! | P9 leases | an agent's budget has a deadline at most `MAX_LEASE` away; a sub-agent sits in its agent's budget and ends no later; an expired lease is gone | CAPABILITIES.md, "Agents"; QUESTIONS 33 |
 //! | P10 non-interference | a vault session's work (item writes, requests, calls to a shared server) changes nothing an unlabelled session observes: its results, and the usage of every principal's and `users`' budget | PLAN.md, attack suite "no leaky state"; CONTAINMENT.md |
 
@@ -60,6 +61,7 @@ pub enum PolicyOp {
     },
     WriteItem {
         session: u64,
+        label: u64,
         item: u64,
         bytes: Vec<u8>,
     },
@@ -182,7 +184,7 @@ pub fn random_op(st: &Steward, subs: &[ReqRef], rng: &mut Rng) -> PolicyOp {
         22..=28 => {
             let len = if rng.pct(85) { rng.below(40) } else { rng.range(200, 300) };
             let bytes = (0..len).map(|_| if rng.pct(97) { b'a' + rng.below(26) as u8 } else { 7 }).collect();
-            PolicyOp::WriteItem { session: session(rng), item: rng.below(3), bytes }
+            PolicyOp::WriteItem { session: session(rng), label: rng.range(7, 9), item: rng.below(3), bytes }
         }
         29..=43 => {
             let content = match rng.below(3) {
@@ -237,10 +239,11 @@ pub struct Run {
     pub subs: Vec<ReqRef>,
     /// Request id -> (hash from the steward's screen at submission, declassified bytes then).
     pub ghost_requests: BTreeMap<u64, (u64, Option<Vec<u8>>)>,
-    /// Blame times per account.
-    pub ghost_blames: BTreeMap<u64, Vec<u64>>,
-    /// The account of the message the server holds open (from what `hold` returned), if any.
-    held: Option<u64>,
+    /// Blame times per (account, label set).
+    pub ghost_blames: BTreeMap<(u64, Vec<u64>), Vec<u64>>,
+    /// The account and labels of the newest message the server holds open (from what `hold`
+    /// returned), if any.
+    held: Option<(u64, Vec<u64>)>,
     pub per_session: BTreeMap<u64, u64>,
 }
 
@@ -299,8 +302,8 @@ impl Run {
                 }
                 format!("{r:?}")
             }
-            PolicyOp::WriteItem { session, item, bytes } => {
-                format!("{:?}", self.st.write_item(*session, *item, bytes.clone()))
+            PolicyOp::WriteItem { session, label, item, bytes } => {
+                format!("{:?}", self.st.write_item(*session, *label, *item, bytes.clone()))
             }
             PolicyOp::Submit { session, content, reason } => {
                 // What a snapshot must contain, read from the vault before the steward acts.
@@ -342,6 +345,23 @@ impl Run {
                             r.id, r.text
                         ));
                     }
+                    // A labelled request shows only text the steward generates (QUESTIONS 35).
+                    let note = match &req.content {
+                        Content::Note { what } => what.clone(),
+                        _ => String::new(),
+                    };
+                    for free in [&req.reason, &note] {
+                        let shown = sanitize(free, FIELD_CAP, true);
+                        if !req.labels.is_empty()
+                            && !shown.is_empty()
+                            && r.text.contains(&format!("\"{shown}\""))
+                        {
+                            return Err(format!(
+                                "P4: labelled request {} shows its free text: {:?}",
+                                r.id, r.text
+                            ));
+                        }
+                    }
                 }
                 format!("{} requests", screen.len())
             }
@@ -378,25 +398,25 @@ impl Run {
             }
             PolicyOp::Hold => {
                 if let Some(m) = self.st.hold() {
-                    self.held = Some(m.account);
+                    self.held = Some((m.account, m.labels));
                 }
                 String::from("ok")
             }
             PolicyOp::Crash => {
-                let account = self.held.take().unwrap_or(0);
+                let held = self.held.take().unwrap_or_default();
                 self.st.crash_server();
-                self.check_blame(account, now, audit_from, &sessions_before)?;
+                self.check_blame(held, now, audit_from, &sessions_before)?;
                 String::from("ok")
             }
             PolicyOp::CrashServing { session } => {
                 let r = self.st.work(*session);
                 self.st.poll();
                 if let Some(m) = self.st.hold() {
-                    self.held = Some(m.account);
+                    self.held = Some((m.account, m.labels));
                 }
-                let account = self.held.take().unwrap_or(0);
+                let held = self.held.take().unwrap_or_default();
                 self.st.crash_server();
-                self.check_blame(account, now, audit_from, &sessions_before)?;
+                self.check_blame(held, now, audit_from, &sessions_before)?;
                 format!("{r:?}")
             }
             PolicyOp::Tick { dt } => {
@@ -409,24 +429,27 @@ impl Run {
         Ok(obs)
     }
 
-    /// P7: the crash was blamed on `account` (the account of the message the server held), and
-    /// sessions were logged out exactly when three such blames fall within ten minutes.
+    /// P7: the crash was blamed on `held` (the account and labels of the newest message the server
+    /// held), and sessions of that account and label set were logged out exactly when three such
+    /// blames fall within ten minutes.
     fn check_blame(
         &mut self,
-        account: u64,
+        held: (u64, Vec<u64>),
         now: u64,
         audit_from: usize,
         before: &BTreeMap<u64, Session>,
     ) -> Result<(), String> {
-        let blamed: Vec<u64> = self.st.audit[audit_from..]
+        let (account, labels) = held;
+        let blamed: Vec<(u64, Vec<u64>)> = self.st.audit[audit_from..]
             .iter()
             .filter_map(|a| match a {
-                Audit::Blamed { account, .. } => Some(*account),
+                Audit::Blamed { account, labels, .. } => Some((*account, labels.clone())),
                 _ => None,
             })
             .collect();
-        if account != 0 && !blamed.contains(&account) {
-            return Err(format!("P7: the server crashed serving account {account}, which was not blamed"));
+        let key = (account, labels.clone());
+        if account != 0 && !blamed.contains(&key) {
+            return Err(format!("P7: the server crashed serving {key:?}, which was not blamed"));
         }
         if account == 0 && !blamed.is_empty() {
             return Err(format!("P7: a crash serving nobody blamed {blamed:?}"));
@@ -434,7 +457,7 @@ impl Run {
         if account == 0 {
             return Ok(());
         }
-        let times = self.ghost_blames.entry(account).or_default();
+        let times = self.ghost_blames.entry(key).or_default();
         times.push(now);
         times.retain(|t| now - *t < BLAME_WINDOW);
         let logout = times.len() >= BLAME_COUNT;
@@ -443,12 +466,12 @@ impl Run {
         }
         let principal = self.st.principals.iter().position(|p| p.spec.account == account);
         for (id, s) in before {
-            let mine = Some(s.principal) == principal;
+            let mine = Some(s.principal) == principal && s.labels == labels;
             let alive = self.st.sessions.contains_key(id) || !self.st.k.budgets.contains_key(&s.budget);
             let still = self.st.sessions.contains_key(id);
             if mine && logout && still {
                 return Err(format!(
-                    "P7: account {account} blamed 3 times in 10 minutes, session {id} survived"
+                    "P7: account {account} with labels {labels:?} blamed 3 times in 10 minutes, session {id} survived"
                 ));
             }
             if (!mine || !logout) && !alive {
@@ -533,13 +556,25 @@ impl Run {
                         ));
                     }
                 }
-                Audit::Declassified { id, bytes, .. } => {
+                Audit::Declassified { id, bytes, label, reader } => {
                     let want = self.ghost_requests.get(id).and_then(|(_, b)| b.clone());
                     if want.as_ref() != Some(bytes) {
                         return Err(format!(
                             "P6: declassified {bytes:?}, the snapshot at submission was {want:?}"
                         ));
                     }
+                    // The kernel's own record of the reader budget (QUESTIONS 54).
+                    let labels = st.k.ghost.labels_at_creation.get(reader);
+                    if labels != Some(&vec![*label]) {
+                        return Err(format!(
+                            "P6: item of label {label} read through budget {reader} with labels {labels:?}"
+                        ));
+                    }
+                }
+                Audit::Wrote { session, labels, label } if labels != &vec![*label] => {
+                    return Err(format!(
+                        "P11: session {session} with labels {labels:?} wrote an item of {label}"
+                    ));
                 }
                 _ => {}
             }

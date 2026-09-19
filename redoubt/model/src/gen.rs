@@ -218,6 +218,7 @@ impl Gen {
                 process: self.any(),
                 entry: self.any(),
                 sp: self.any(),
+                arg: self.any(),
                 handles: self.any_list(),
             },
             10 => S::EndpointCreate,
@@ -320,8 +321,10 @@ impl Gen {
                 // An agent-like budget under the first principal: its labels, maybe one more.
                 (*made.first().unwrap_or(&USERS), Class::User, self.rng.pick(&ACCOUNT_POOL).unwrap(), 1)
             };
+            // Labelled budgets of both classes, so that the label rules are judged against
+            // system-class targets too.
             let mut labels = k.budgets[&parent].labels.clone();
-            if class == Class::User && self.rng.pct(40) {
+            if self.rng.pct(if class == Class::User { 40 } else { 50 }) {
                 labels.push(self.rng.pick(&LABEL_POOL).unwrap());
             }
             let free = k.budgets[&parent].pages_limit.saturating_sub(k.budgets[&parent].pages_used);
@@ -377,12 +380,22 @@ impl Gen {
             if self.rng.pct(40) {
                 hs.push(self.rng.pick(&endpoints)?);
             }
-            // Now and then a user process that holds the system budget (QUESTIONS 9 says it still
-            // cannot make system-class children).
-            if k.budgets[&b].class == Class::User && self.rng.pct(20) {
-                hs.push(budget_h(SYSTEM)?);
+            // Now and then a user process that holds a system-class budget: `system` (QUESTIONS 9
+            // says it still cannot make system-class children), or the one init made, which may be
+            // labelled (`budget_usage` must refuse it then).
+            if k.budgets[&b].class == Class::User && self.rng.pct(30) {
+                let made_system =
+                    made.iter().copied().find(|x| *x != SYSTEM && k.budgets[x].class == Class::System);
+                let target = if self.rng.pct(50) { made_system.unwrap_or(SYSTEM) } else { SYSTEM };
+                hs.push(budget_h(target)?);
             }
-            return sys(Syscall::ProcessStart { process: ph, entry: 0x1000, sp: 0x2000, handles: hs });
+            return sys(Syscall::ProcessStart {
+                process: ph,
+                entry: 0x1000,
+                sp: 0x2000,
+                arg: 0x1000_0000,
+                handles: hs,
+            });
         }
         None
     }
@@ -473,6 +486,7 @@ impl Gen {
                             process: *i,
                             entry: 0,
                             sp: 0,
+                            arg: 0,
                             handles: vec![budget_h(b)?, hi],
                         },
                     );
@@ -733,7 +747,13 @@ impl Gen {
             27..=30 => {
                 let process = self.handle(k, pid, |h| matches!(h.object, Object::Process(_)));
                 let handles = self.some_handles(k, pid, 5);
-                Syscall::ProcessStart { process, entry: 0x1000, sp: 0x2000, handles }
+                Syscall::ProcessStart {
+                    process,
+                    entry: 0x1000,
+                    sp: 0x2000,
+                    arg: self.rng.below(3) * PAGE_SIZE,
+                    handles,
+                }
             }
             31..=33 => Syscall::EndpointCreate,
             34..=38 => {

@@ -15,10 +15,10 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::ghost::{Flow, Key};
+use crate::ghost::{Blame, Flow, Key};
 use crate::kernel::{Backing, Handle, Kernel, MapState, MsgKind, Object, Origin, ROOT, Wait};
 use crate::spec::*;
-use crate::syscall::MintSource;
+use crate::syscall::{MintSource, Ret};
 
 type Check = Result<(), String>;
 
@@ -30,17 +30,51 @@ macro_rules! ensure {
     };
 }
 
+/// Where the handles with each non-zero badge to each endpoint are: (endpoint, badge) -> the
+/// label set of each holder (a process's budget, or a message's sender), from the ghost's records.
+type Holders = BTreeMap<(u64, u64), Vec<Vec<u64>>>;
+
+fn holders(k: &Kernel) -> Holders {
+    let mut out: Holders = BTreeMap::new();
+    for p in k.processes.values() {
+        for h in p.handles.values().chain(p.exit_endpoint.iter()) {
+            if let (Object::Endpoint(e), true) = (h.object, h.badge != 0) {
+                out.entry((e, h.badge)).or_default().push(k.ghost.labels(p.budget));
+            }
+        }
+    }
+    for m in k.msgs.values() {
+        let labels = k.ghost.sent.get(&m.id).map_or(Vec::new(), |s| s.labels.clone());
+        for h in &m.handles {
+            if let (Object::Endpoint(e), true) = (h.object, h.badge != 0) {
+                out.entry((e, h.badge)).or_default().push(labels.clone());
+            }
+        }
+    }
+    out
+}
+
+fn pending_badges(k: &Kernel) -> BTreeSet<(u64, u64)> {
+    k.endpoints
+        .values()
+        .flat_map(|e| e.badges.iter().filter(|(_, s)| s.pending).map(|(b, _)| (e.id, *b)))
+        .collect()
+}
+
 /// The checker, with what it remembers between steps: the frames that existed after the last
 /// step, so that a frame appearing now is known to be newly handed out (I9: it must read zero),
-/// whatever the kernel's allocator believes.
+/// whatever the kernel's allocator believes; and who held each badge, so that a badge whose last
+/// handle went is known to be owed a notice (QUESTIONS 53).
 #[derive(Clone, Debug, Default)]
 pub struct Checker {
     frames: BTreeSet<u64>,
+    badges: Holders,
+    pending: BTreeSet<(u64, u64)>,
 }
 
 impl Checker {
     pub fn new(k: &Kernel) -> Checker {
-        Checker { frames: k.frames.keys().copied().collect() }
+        Checker { frames: k.frames.keys().copied().collect(), badges: holders(k), pending: pending_badges(k) }
     }
 
     /// Every check, in invariant order. The error names the invariant (or rule) and what broke.
@@ -55,9 +89,93 @@ impl Checker {
         i6_i8_budgets(k)?;
         flows(k)?;
         self.i9_memory(k)?;
+        self.badge_notices(k)?;
         r2_r3_messages(k)?;
         exits_owed(k)?;
         i13_timeouts(k)?;
+        Ok(())
+    }
+
+    /// Badge slots and notices (QUESTIONS 53; I7, I15): each endpoint's slots count exactly the
+    /// handles with their badge, and a slot is pending exactly when none is left; a badge whose
+    /// last handle went this step is owed a notice if every holder it had after the last step
+    /// passes the exit notices' label rule (the kernel judges the last one to go), and is owed none
+    /// if none does; a notice is delivered only when no handle with its badge exists.
+    fn badge_notices(&mut self, k: &Kernel) -> Check {
+        let now = holders(k);
+        for e in k.endpoints.values() {
+            for (b, s) in &e.badges {
+                let n = now.get(&(e.id, *b)).map_or(0, |v| v.len() as u64);
+                ensure!(
+                    s.count == n,
+                    "Messages: badge {b} of endpoint {} counts {} handles, there are {n}",
+                    e.id,
+                    s.count
+                );
+                if n == 0 {
+                    ensure!(
+                        s.pending,
+                        "Messages: badge {b} of endpoint {} kept a slot with no handle or notice",
+                        e.id
+                    );
+                } else {
+                    ensure!(
+                        !s.pending,
+                        "I15: a notice for badge {b} of endpoint {} is pending while it has handles",
+                        e.id
+                    );
+                }
+            }
+        }
+        for (e, b) in now.keys() {
+            ensure!(
+                k.endpoints.get(e).is_some_and(|x| x.badges.contains_key(b)),
+                "Messages: badge {b} of endpoint {e} has handles but no slot"
+            );
+        }
+        let delivered: BTreeSet<(u64, u64)> = k
+            .ghost
+            .flows
+            .iter()
+            .filter_map(|f| match f {
+                Flow::BadgeClosed { endpoint, badge } => Some((*endpoint, *badge)),
+                _ => None,
+            })
+            .collect();
+        for ((e, b), was) in &self.badges {
+            let Some(ep) = k.endpoints.get(e) else { continue };
+            if now.contains_key(&(*e, *b)) {
+                continue;
+            }
+            let owner = &k.budgets[&ep.owner];
+            let to = k.ghost.labels(owner.id);
+            let pass = |l: &Vec<u64>| owner.class == Class::System || superset(&to, l);
+            let notice = ep.badges.get(b).is_some_and(|s| s.pending) || delivered.contains(&(*e, *b));
+            if was.iter().all(pass) {
+                ensure!(
+                    notice,
+                    "Messages: the last handle with badge {b} to endpoint {e} went, and no notice is owed"
+                );
+            }
+            if !was.iter().any(pass) {
+                ensure!(
+                    !notice,
+                    "I7: a notice for badge {b} of endpoint {e} is owed to {to:?} from holders {was:?}"
+                );
+            }
+        }
+        for (e, b) in &delivered {
+            ensure!(
+                !now.contains_key(&(*e, *b)),
+                "I15: a notice for badge {b} of endpoint {e} arrived while it has handles"
+            );
+            ensure!(
+                self.pending.contains(&(*e, *b)) || self.badges.contains_key(&(*e, *b)),
+                "I15: a notice for badge {b} of endpoint {e} that was never owed"
+            );
+        }
+        self.pending = pending_badges(k);
+        self.badges = now;
         Ok(())
     }
 
@@ -222,9 +340,19 @@ fn structure(k: &Kernel) -> Check {
             for m in q {
                 let msg = k.msgs.get(m);
                 ensure!(
-                    msg.is_some_and(|x| &x.key() == key && x.endpoint == e.id && x.server.is_none())
-                        || msg.is_some_and(|x| (x.account, Vec::new()) == *key && x.endpoint == e.id),
+                    msg.is_some_and(|x| &x.key == key && x.endpoint == e.id && x.server.is_none()),
                     "endpoint {} queues bad message {m}",
+                    e.id
+                );
+                ensure!(
+                    ghost_key(k, *m).as_ref() == Some(key),
+                    "R2: endpoint {} queues message {m} as {key:?}, its sender is {:?}",
+                    e.id,
+                    ghost_key(k, *m)
+                );
+                ensure!(
+                    k.ghost.sent.get(m).is_some_and(|s| k.budgets.contains_key(&s.stamp)),
+                    "R10: endpoint {} still queues message {m}, sent through a revoked handle",
                     e.id
                 );
                 let msg = msg.unwrap();
@@ -233,6 +361,15 @@ fn structure(k: &Kernel) -> Check {
                     "queued message {m}'s sender is not waiting for it"
                 );
             }
+        }
+        for n in &e.exits {
+            ensure!(
+                k.budgets.contains_key(&n.payer),
+                "R10: the exit notice of process {} on endpoint {} outlived its slot's payer {}",
+                n.pid,
+                e.id,
+                n.payer
+            );
         }
         for r in &e.receivers {
             ensure!(
@@ -268,6 +405,11 @@ fn structure(k: &Kernel) -> Check {
                     t.tid
                 );
                 let msg = msg.unwrap();
+                ensure!(
+                    k.ghost.sent.get(&m).is_some_and(|s| k.budgets.contains_key(&s.stamp)),
+                    "R10: thread {} still waits for a reply to {m}, sent through a revoked handle",
+                    t.tid
+                );
                 ensure!(
                     k.endpoints.contains_key(&msg.endpoint),
                     "R10: thread {} waits for a reply through destroyed endpoint {}",
@@ -436,15 +578,17 @@ fn i5_charging(k: &Kernel) -> Check {
                 + p.threads.len() as u64 * c.thread,
         );
         *procs.entry(p.budget).or_default() += 1;
-        if let Some(payer) = p.exit_payer {
-            add(payer, c.exit_slot);
+    }
+    // Exit slots, as the ghost recorded them at `process_create`: charged to the creator's budget
+    // while the process lives and while its notice waits (QUESTIONS 7).
+    for (pid, s) in &k.ghost.slots {
+        let waiting = k.ghost.owed.get(pid).is_some_and(|o| k.endpoints.contains_key(&o.endpoint));
+        if k.budgets.contains_key(&s.payer) && (k.processes.contains_key(pid) || waiting) {
+            add(s.payer, c.exit_slot);
         }
     }
     for e in k.endpoints.values() {
-        add(e.owner, c.endpoint);
-        for n in &e.exits {
-            add(n.payer, c.exit_slot);
-        }
+        add(e.owner, c.endpoint + (e.badges.len() as u64).div_ceil(c.badge_slots_per_page));
     }
     for f in k.frames.values() {
         add(f.payer, 1);
@@ -625,14 +769,47 @@ fn flows(k: &Kernel) -> Check {
                     via.max_transfer
                 );
             }
-            Flow::Exit { from, to_class, to } => ensure!(
-                *to_class == Class::System || superset(to, from),
-                "I7: an exit notice of {from:?} reached {to:?}"
-            ),
+            Flow::Exit { pid, from, to_class, to, got, want } => {
+                ensure!(
+                    *to_class == Class::System || superset(to, from),
+                    "I7: an exit notice of {from:?} reached {to:?}"
+                );
+                ensure!(
+                    want.as_ref() == Some(got),
+                    "Messages: the exit notice of process {pid} reports {got:?}, it should report {want:?}"
+                );
+            }
             Flow::Usage { from, to_class, to } => ensure!(
                 *to_class == Class::System || superset(to, from),
                 "I7: usage of {from:?} read by {to:?}"
             ),
+            Flow::UsageDenied { from, to_class, to } => ensure!(
+                *to_class == Class::User && !superset(to, from),
+                "R1: usage of {from:?} refused to a {to_class:?} caller with {to:?}"
+            ),
+            Flow::LabelDenied { from_class, from, to_class, to } => ensure!(
+                *from_class == Class::User && *to_class == Class::User && from != to,
+                "R1: a {from_class:?} sender with {from:?} refused by a {to_class:?} owner with {to:?}"
+            ),
+            Flow::Woken { tid, result: Ok(Ret::Reply { .. }) } => {
+                let replied = k.ghost.flows.iter().any(|g| match g {
+                    Flow::Replied { msg } => k.ghost.sent.get(msg).is_some_and(|s| s.sender_tid == *tid),
+                    _ => false,
+                });
+                ensure!(replied, "R4b: thread {tid} got a reply its server never sent");
+            }
+            Flow::Replied { msg } => {
+                let caller = k.ghost.sent.get(msg).map(|s| s.sender_tid);
+                let answered = k.ghost.flows.iter().any(
+                    |g| matches!(g, Flow::Woken { tid, result: Ok(Ret::Reply { .. }) } if Some(*tid) == caller),
+                );
+                let stamp = k.ghost.sent.get(msg).map_or(0, |s| s.stamp);
+                ensure!(
+                    !answered || k.budgets.contains_key(&stamp),
+                    "R10: the reply to {msg}, sent through a revoked handle, reached its caller"
+                );
+            }
+            Flow::Woken { .. } | Flow::BadgeClosed { .. } => {}
             Flow::Busy { endpoint, key } => {
                 let queued = k.endpoints.get(endpoint).map_or(0, |e| {
                     e.queue.values().flatten().filter(|m| ghost_key(k, **m).as_ref() == Some(key)).count()
@@ -703,19 +880,44 @@ fn r2_r3_messages(k: &Kernel) -> Check {
     Ok(())
 }
 
-/// Exit notices (Messages; R1; QUESTIONS 7): every notice the ghost saw owed, whose endpoint and
-/// payer still exist, is waiting on its endpoint (it has not been received: that clears it).
+/// Exit notices (Messages; R1; R10; QUESTIONS 7, 37, 55): every notice the ghost saw owed, whose
+/// endpoint still exists, waits on it (receiving it clears it) if its slot's payer lives, and is
+/// gone if the payer does not; it reports what the ghost expects; and every waiting notice is
+/// owed.
 fn exits_owed(k: &Kernel) -> Check {
     for (pid, o) in &k.ghost.owed {
         let Some(e) = k.endpoints.get(&o.endpoint) else { continue };
+        let n = e.exits.iter().find(|n| n.pid == *pid);
         if !k.budgets.contains_key(&o.payer) {
+            ensure!(
+                n.is_none(),
+                "R10: the exit notice of process {pid} outlived its slot's payer {}",
+                o.payer
+            );
             continue;
         }
+        let Some(n) = n else {
+            return Err(format!(
+                "Messages: the exit notice of process {pid} is missing from endpoint {}",
+                o.endpoint
+            ));
+        };
+        let got = Blame { cause: n.cause, account: n.blamed_account, labels: n.blamed_labels.clone() };
         ensure!(
-            e.exits.iter().any(|n| n.pid == *pid),
-            "Messages: the exit notice of process {pid} is missing from endpoint {}",
-            o.endpoint
+            got == o.want,
+            "Messages: the exit notice of process {pid} reports {got:?}, it should report {:?}",
+            o.want
         );
+    }
+    for e in k.endpoints.values() {
+        for n in &e.exits {
+            ensure!(
+                k.ghost.owed.get(&n.pid).is_some_and(|o| o.endpoint == e.id),
+                "I7: endpoint {} holds an exit notice of process {} that is not owed to it",
+                e.id,
+                n.pid
+            );
+        }
     }
     Ok(())
 }

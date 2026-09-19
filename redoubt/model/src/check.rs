@@ -262,7 +262,9 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
             let recv = Syscall::Receive { h: Some(e), timeout: 0, max_transfer: 0 };
             let s = step(k, Op::Sys { pid, tid, call: recv }, ops)?;
             match s.outcome {
-                crate::syscall::Outcome::Done(Ok(crate::syscall::Ret::ExitNotice { .. })) => {}
+                crate::syscall::Outcome::Done(Ok(
+                    crate::syscall::Ret::ExitNotice { .. } | crate::syscall::Ret::BadgeClosed { .. },
+                )) => {}
                 crate::syscall::Outcome::Done(Err(crate::spec::Error::Timeout)) => return Ok(true),
                 _ => return Ok(false),
             }
@@ -300,7 +302,8 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
             &mut ops,
         )?;
         if let crate::syscall::Outcome::Done(Ok(crate::syscall::Ret::Handle(proc_h))) = s.outcome {
-            let start = Syscall::ProcessStart { process: proc_h, entry: 0, sp: 0, handles: alloc::vec![bh] };
+            let start =
+                Syscall::ProcessStart { process: proc_h, entry: 0, sp: 0, arg: 0, handles: alloc::vec![bh] };
             step(&mut k, Op::Sys { pid, tid, call: start }, &mut ops)?;
         }
     }
@@ -359,8 +362,9 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
 /// groups) run up to 31 threads each, every thread calling with no timeout; a crowd of up to
 /// eight other accounts queues `WAIT_CAP` calls each; Alice makes one call in the middle of the
 /// flood. Most of Bob's calls get `Busy` (R2's cap per group); Alice's call must be taken within
-/// as many receives as there are groups (I11). Half the seeds' servers hoard: they receive
-/// without replying, so open calls pile up to `MAX_OPEN_CALLS` (R4a).
+/// as many receives as there are groups (I11). The server receives with two threads in turn; half
+/// the seeds' servers hoard: they receive without replying, so open calls pile up to
+/// `MAX_OPEN_CALLS` for the process, spread over both threads (R4a counts per process).
 ///
 /// Up to 10,000 senders per seed, so the invariants are checked every 512 steps and at the end
 /// (ghost violations are recorded as they happen and reported at the next check).
@@ -426,9 +430,13 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
         &mut k,
         INIT_PID,
         1,
-        Syscall::ProcessStart { process: ps, entry: 0, sp: 0, handles: alloc::vec![e] },
+        Syscall::ProcessStart { process: ps, entry: 0, sp: 0, arg: 0, handles: alloc::vec![e] },
     )?)
     .unwrap();
+    let stid2 = match run(&mut k, spid, stid, Syscall::ThreadCreate { entry: 0, sp: 0, arg: 0 })?.outcome {
+        Outcome::Done(Ok(Ret::Tid(t))) => t,
+        _ => return Err(fail("the server's second thread".into())),
+    };
     // Bob: two label sets of account 1002 (two R2 groups); Alice: account 1001.
     let senders = if rng.pct(20) { 10_000 } else { rng.range(40, 2_000) };
     let procs = senders.div_ceil(31);
@@ -472,7 +480,7 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
             &mut k,
             INIT_PID,
             1,
-            Syscall::ProcessStart { process: p, entry: 0, sp: 0, handles: alloc::vec![me] },
+            Syscall::ProcessStart { process: p, entry: 0, sp: 0, arg: 0, handles: alloc::vec![me] },
         )?) else {
             break;
         };
@@ -480,7 +488,8 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
         run(&mut k, INIT_PID, 1, Syscall::HandleClose { h: me })?;
     }
     // The crowd: other accounts, one process each, WAIT_CAP threads calling.
-    let crowd = rng.range(0, 8);
+    // At least three, so that more than MAX_OPEN_CALLS calls can queue.
+    let crowd = rng.range(3, 8);
     let mut crowd_threads = Vec::new();
     for i in 0..crowd {
         let hc = handle(&run(
@@ -497,7 +506,7 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
             &mut k,
             INIT_PID,
             1,
-            Syscall::ProcessStart { process: p, entry: 0, sp: 0, handles: alloc::vec![mc] },
+            Syscall::ProcessStart { process: p, entry: 0, sp: 0, arg: 0, handles: alloc::vec![mc] },
         )?)
         .unwrap();
         crowd_threads.push(t);
@@ -509,7 +518,7 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
         &mut k,
         INIT_PID,
         1,
-        Syscall::ProcessStart { process: pa, entry: 0, sp: 0, handles: alloc::vec![me] },
+        Syscall::ProcessStart { process: pa, entry: 0, sp: 0, arg: 0, handles: alloc::vec![me] },
     )?)
     .unwrap();
     // The flood: each of Bob's threads calls once; each process spawns its next thread first.
@@ -571,7 +580,8 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
     let groups = 3 + crowd;
     let mut turns = 0;
     let mut alice_served = false;
-    for _ in 0..(groups * crate::spec::WAIT_CAP + 80) {
+    for i in 0..(groups * crate::spec::WAIT_CAP + 80) {
+        let stid = if i % 2 == 0 { stid } else { stid2 };
         let s = run(&mut k, spid, stid, Syscall::Receive { h: Some(1), timeout: 0, max_transfer: 0 })?;
         let Outcome::Done(Ok(Ret::Message(m))) = s.outcome else { continue };
         turns += 1;

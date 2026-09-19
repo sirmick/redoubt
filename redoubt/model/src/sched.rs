@@ -13,7 +13,7 @@
 use alloc::collections::{BTreeMap, VecDeque};
 
 use crate::mutation::Mutation;
-use crate::spec::{Class, STRIDE};
+use crate::spec::{Class, SLICE, STRIDE};
 
 #[derive(Clone, Debug)]
 pub struct Entry {
@@ -96,6 +96,15 @@ impl Scheduler {
     /// The front thread of `budget` ran for `runtime` µs and was descheduled: pass += runtime x
     /// `STRIDE` / weight, and the thread goes to the back of its budget's queue.
     pub fn charge(&mut self, budget: u64, runtime: u64) {
+        self.charge_runs(budget, runtime, 1);
+    }
+
+    /// `charge(budget, SLICE)` `n` times over, at once.
+    pub fn charge_slices(&mut self, budget: u64, n: u64) {
+        self.charge_runs(budget, SLICE, n);
+    }
+
+    fn charge_runs(&mut self, budget: u64, runtime: u64, n: u64) {
         let ignore_weight = self.broken(Mutation::R12IgnoreWeight);
         let Some(e) = self.budgets.get_mut(&budget) else { return };
         if e.weight == 0 {
@@ -103,9 +112,15 @@ impl Scheduler {
         }
         let weight = if ignore_weight { 1 } else { e.weight };
         let step = (runtime as u128 * STRIDE as u128 / weight as u128).min(u64::MAX as u128) as u64;
-        e.pass = e.pass.saturating_add(step);
-        if let Some(t) = e.runnable.pop_front() {
-            e.runnable.push_back(t);
+        e.pass = e.pass.saturating_add(step.saturating_mul(n));
+        if !e.runnable.is_empty() {
+            let k = (n % e.runnable.len() as u64) as usize;
+            e.runnable.rotate_left(k);
         }
+    }
+
+    /// How many budgets have a thread that could run.
+    pub fn runnable_budgets(&self) -> usize {
+        self.budgets.values().filter(|e| e.weight > 0 && !e.runnable.is_empty()).count()
     }
 }

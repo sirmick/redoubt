@@ -18,6 +18,17 @@ pub enum Mutation {
     /// `budget_usage` skips the label check for user-class callers too (the system-class
     /// exemption of QUESTIONS 8, extended to everyone).
     R1UsageIgnoresLabels,
+    /// `budget_usage` is exempt when the *target* is system class, not the caller (red team).
+    R1UsageExemptBySystemTarget,
+    /// An exit notice is exempt when the *exiting* budget is system class, not the owner (red
+    /// team).
+    R1ExitExemptBySystemExiting,
+    /// R1 compares the sender with the budget of the thread waiting in `receive`, not with the
+    /// endpoint's owner (red team).
+    R1ChecksReceiverNotOwner,
+    /// R1 takes the sender's class from the stamp of the handle it sends through (red team): a
+    /// system sender is refused by a labelled user endpoint.
+    R1SenderClassFromStamp,
     // R2. Fair waiting.
     /// Blocked senders are served oldest first across all senders.
     R2FifoAcrossAccounts,
@@ -26,6 +37,8 @@ pub enum Mutation {
     /// `WAIT_CAP` and the round-robin are keyed by account alone, not (account, label set)
     /// (QUESTIONS 17).
     R2KeyByAccountOnly,
+    /// R2's key takes the labels of the handle's stamp budget, not the sender's (red team).
+    R2KeyByStampLabels,
     // R3. Lends outlive their lender.
     /// An abandoned lend is unmapped from the server at once.
     R3UnmapAbandonedLend,
@@ -34,6 +47,10 @@ pub enum Mutation {
     // R4. Transfer opt-in.
     /// Transfers are delivered whatever `max_transfer` says.
     R4IgnoreMaxTransfer,
+    /// R4b: the caller of a dead server gets an empty reply instead of `Dead` (red team).
+    R4bDeadServerFakesReply,
+    /// R4a: `MAX_OPEN_CALLS` is counted per thread, not per process (red team).
+    R4aOpenCallsPerThread,
     // R5. Interrupts.
     /// A firing IRQ source is not masked.
     R5NoMaskOnFire,
@@ -52,6 +69,10 @@ pub enum Mutation {
     R6OpenCallsFree,
     /// The exit slot is not charged to the creator (QUESTIONS 7).
     R6ExitSlotFree,
+    /// The exit slot is charged to the child's budget, not the creator's (red team).
+    R6ExitSlotChargedToChild,
+    /// Badge slots cost nothing (QUESTIONS 53).
+    R6BadgeSlotsFree,
     // R7. Carving.
     /// Children may be carved beyond the parent's free limits.
     R7NoCarveCheck,
@@ -73,10 +94,16 @@ pub enum Mutation {
     R10KeepCarvedLimits,
     /// Destroying a budget does not kill its descendants' processes.
     R10SpareDescendantProcesses,
-    /// Destroying an endpoint leaves its queued senders blocked.
-    R10QueuedSendersNotFailed,
-    /// Destroying an endpoint leaves the calls in flight to it waiting.
-    R10InFlightCallsNotFailed,
+    /// Pending exit notices whose slot's payer is destroyed stay queued (red team).
+    R10ExitNoticesOutlivePayer,
+    /// Queued messages sent through a revoked handle, or to a destroyed endpoint, are not failed
+    /// (red team X17; QUESTIONS 30). The two cases are one: every handle to an endpoint is
+    /// stamped with its owner or a descendant (R9), and an endpoint is destroyed only with its
+    /// owner, so a message to a destroyed endpoint was always sent through a revoked handle.
+    R10RevokedMessageDelivered,
+    /// Taken calls sent through a revoked handle, or to a destroyed endpoint, keep their caller
+    /// waiting for the reply (QUESTIONS 30).
+    R10RevokedCallAnswered,
     // R11. Memory.
     /// Reused pages are not zeroed.
     R11NoZeroing,
@@ -100,9 +127,22 @@ pub enum Mutation {
     MsgAccountZero,
     /// An exit notice is dropped when no receiver waits on the exit endpoint.
     ExitNoticeDroppedIfNoReceiver,
+    /// A fault blames nobody (red team).
+    BlameNobody,
+    /// A fault blames the oldest open call of the thread, not the most recently taken (red team;
+    /// QUESTIONS 37).
+    BlameOldestCall,
+    /// `process_exit` while holding open calls is reported `exited`, blaming nobody (QUESTIONS 55).
+    ExitWithOpenCallsNotFaulted,
+    /// No badge notice when a badge's last handle goes (QUESTIONS 53).
+    BadgeNoticeMissing,
+    /// Badge notices ignore the label rule (QUESTIONS 53; R1).
+    BadgeNoticeIgnoresLabels,
     // KERNEL-SPEC.md, Process: the account a thread serves (crash blame).
     /// `receive` never records the account of the message it delivers.
     ServedAccountNeverSet,
+    /// A delivered `send` sets the serving account (QUESTIONS 31: only calls do).
+    SendSetsServedAccount,
     // KERNEL-SPEC.md, Budget: deadlines.
     /// Budget deadlines never fire.
     BudgetDeadlineIgnored,
@@ -122,6 +162,8 @@ pub enum Mutation {
     SystemChildFromUserCaller,
     /// A budget with weight 0 may hold a process (QUESTIONS 12).
     ProcessInWeightlessBudget,
+    /// "Adding labels needs a system-class caller" checks the parent's class (red team).
+    LabelsAddedByParentClass,
     // The steward's policy (CONTAINMENT.md, CAPABILITIES.md).
     /// A vault session may carry a label its principal does not own.
     PolicyVaultWithoutOwnership,
@@ -150,21 +192,36 @@ pub enum Mutation {
     PolicyDeadSessionRequestsKept,
     /// Rendered text passes non-ASCII (bidi and format) characters (QUESTIONS 34).
     PolicyRenderNotWhitelisted,
+    /// Crash blame is counted per account, not per (account, label set) (QUESTIONS 48).
+    PolicyBlamePerAccount,
+    /// A labelled request's free text (reason, note) is shown on the approval screen (QUESTIONS 35).
+    PolicyLabelledFreeTextShown,
+    /// A session may write an item whose labels contain its own (write up; QUESTIONS 51).
+    PolicyWriteUp,
+    /// Declassification reads the item as the steward, with no reader budget (QUESTIONS 54).
+    PolicyDeclassifyWithoutReader,
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 58] = {
+    pub const ALL: [Mutation; 79] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
             R1ExitNoticeIgnoresLabels,
             R1UsageIgnoresLabels,
+            R1UsageExemptBySystemTarget,
+            R1ExitExemptBySystemExiting,
+            R1ChecksReceiverNotOwner,
+            R1SenderClassFromStamp,
             R2FifoAcrossAccounts,
             R2NoWaitCap,
             R2KeyByAccountOnly,
+            R2KeyByStampLabels,
             R3UnmapAbandonedLend,
             R3ChargeStaysWithCaller,
             R4IgnoreMaxTransfer,
+            R4bDeadServerFakesReply,
+            R4aOpenCallsPerThread,
             R5NoMaskOnFire,
             R5NoUnmaskOnReceive,
             R6ChargeAncestors,
@@ -173,6 +230,8 @@ impl Mutation {
             R6PageTablesFree,
             R6OpenCallsFree,
             R6ExitSlotFree,
+            R6ExitSlotChargedToChild,
+            R6BadgeSlotsFree,
             R7NoCarveCheck,
             R8AccountFromArgument,
             R9ReceivedHandleRestamped,
@@ -181,8 +240,9 @@ impl Mutation {
             R10KeepForeignHandles,
             R10KeepCarvedLimits,
             R10SpareDescendantProcesses,
-            R10QueuedSendersNotFailed,
-            R10InFlightCallsNotFailed,
+            R10ExitNoticesOutlivePayer,
+            R10RevokedMessageDelivered,
+            R10RevokedCallAnswered,
             R11NoZeroing,
             R11SetFlagsAllowsWx,
             R11LendStaysMapped,
@@ -193,7 +253,13 @@ impl Mutation {
             MsgBadgeZero,
             MsgAccountZero,
             ExitNoticeDroppedIfNoReceiver,
+            BlameNobody,
+            BlameOldestCall,
+            ExitWithOpenCallsNotFaulted,
+            BadgeNoticeMissing,
+            BadgeNoticeIgnoresLabels,
             ServedAccountNeverSet,
+            SendSetsServedAccount,
             BudgetDeadlineIgnored,
             ReceiveWithBadgedHandle,
             MintFromUnservedMessage,
@@ -201,6 +267,7 @@ impl Mutation {
             ReceiveDropsOpenCalls,
             SystemChildFromUserCaller,
             ProcessInWeightlessBudget,
+            LabelsAddedByParentClass,
             PolicyVaultWithoutOwnership,
             PolicyApproveIgnoresHash,
             PolicyShowLabelledToAll,
@@ -214,42 +281,65 @@ impl Mutation {
             PolicyUnboundedLease,
             PolicyDeadSessionRequestsKept,
             PolicyRenderNotWhitelisted,
+            PolicyBlamePerAccount,
+            PolicyLabelledFreeTextShown,
+            PolicyWriteUp,
+            PolicyDeclassifyWithoutReader,
         ]
     };
 
-    /// What it breaks: "R1".."R12", a spec paragraph or call, "QUESTIONS n", or "policy".
+    /// What it breaks: "R1".."R12" (R4a and R4b count as R4), a spec paragraph or call,
+    /// "QUESTIONS n", or "policy".
     pub fn rule(self) -> &'static str {
         use Mutation::*;
         match self {
-            R1SkipLabelCheck | R1ExitNoticeIgnoresLabels | R1UsageIgnoresLabels => "R1",
-            R2FifoAcrossAccounts | R2NoWaitCap | R2KeyByAccountOnly => "R2",
+            R1SkipLabelCheck
+            | R1ExitNoticeIgnoresLabels
+            | R1UsageIgnoresLabels
+            | R1UsageExemptBySystemTarget
+            | R1ExitExemptBySystemExiting
+            | R1ChecksReceiverNotOwner
+            | R1SenderClassFromStamp => "R1",
+            R2FifoAcrossAccounts | R2NoWaitCap | R2KeyByAccountOnly | R2KeyByStampLabels => "R2",
             R3UnmapAbandonedLend | R3ChargeStaysWithCaller => "R3",
-            R4IgnoreMaxTransfer => "R4",
+            R4IgnoreMaxTransfer | R4bDeadServerFakesReply | R4aOpenCallsPerThread => "R4",
             R5NoMaskOnFire | R5NoUnmaskOnReceive => "R5",
             R6ChargeAncestors
             | R6ScopeChargedToItself
             | R6EndpointsFree
             | R6PageTablesFree
             | R6OpenCallsFree
-            | R6ExitSlotFree => "R6",
+            | R6ExitSlotFree
+            | R6ExitSlotChargedToChild
+            | R6BadgeSlotsFree => "R6",
             R7NoCarveCheck => "R7",
             R8AccountFromArgument => "R8",
             R9ReceivedHandleRestamped | R9MintStampsCaller | R9MsgStampIsSenderBudget => "R9",
             R10KeepForeignHandles
             | R10KeepCarvedLimits
             | R10SpareDescendantProcesses
-            | R10QueuedSendersNotFailed
-            | R10InFlightCallsNotFailed => "R10",
+            | R10ExitNoticesOutlivePayer
+            | R10RevokedMessageDelivered
+            | R10RevokedCallAnswered => "R10",
             R11NoZeroing | R11SetFlagsAllowsWx | R11LendStaysMapped => "R11",
             R12NoClassOrder | R12IgnoreWeight | R12WakeBanksCredit => "R12",
-            MsgNoLabels | MsgBadgeZero | MsgAccountZero | ExitNoticeDroppedIfNoReceiver => "Messages",
-            ServedAccountNeverSet => "Process",
+            MsgNoLabels
+            | MsgBadgeZero
+            | MsgAccountZero
+            | ExitNoticeDroppedIfNoReceiver
+            | BlameNobody
+            | BlameOldestCall
+            | ExitWithOpenCallsNotFaulted
+            | BadgeNoticeMissing
+            | BadgeNoticeIgnoresLabels => "Messages",
+            ServedAccountNeverSet | SendSetsServedAccount => "Process",
             BudgetDeadlineIgnored => "Budget",
             ReceiveWithBadgedHandle => "Handle",
             MintFromUnservedMessage => "mint",
             OpenCallsUnlimited | ReceiveDropsOpenCalls => "QUESTIONS 2",
             SystemChildFromUserCaller => "QUESTIONS 9",
             ProcessInWeightlessBudget => "QUESTIONS 12",
+            LabelsAddedByParentClass => "budget_create",
             _ => "policy",
         }
     }

@@ -6,7 +6,7 @@
 # Written by tests/traces.rs (REDOUBT_MODEL_BLESS=1 rewrites it); format: README.md.
 redoubt-model-trace 1
 boot root=[1024,24,1000] system=[256,8,250] users=[512,12,500]
-costs budget=1 process=1 thread=1 endpoint=1 handles_per_page=128 page_table=1 open_call=1 exit_slot=1
+costs budget=1 process=1 thread=1 endpoint=1 handles_per_page=128 page_table=1 open_call=1 exit_slot=1 badge_slots_per_page=128
 device mmio base=0x10000000 pages=1 dma=0
 device mmio base=0x10001000 pages=1 dma=1
 device irq n=10
@@ -18,12 +18,12 @@ do p:1 t:1 budget_create h:3 32 1 50 user [] 1001 forever -> ok h:10
 do p:1 t:1 budget_create h:2 32 1 50 system [] 0 forever -> ok h:11
 do p:1 t:1 process_create h:11 h:9 -> ok h:12
 note process p:1 h:12 p:2
-do p:1 t:1 process_start h:12 0x1000 0x2000 [h:9] -> ok
+do p:1 t:1 process_start h:12 0x1000 0x2000 0x0 [h:9] -> ok
 note thread p:2 t:2
 do p:1 t:1 mint h:9 5 h:10 -> ok h:13
 do p:1 t:1 process_create h:10 h:9 -> ok h:14
 note process p:1 h:14 p:3
-do p:1 t:1 process_start h:14 0x1000 0x2000 [h:13] -> ok
+do p:1 t:1 process_start h:14 0x1000 0x2000 0x0 [h:13] -> ok
 note thread p:3 t:3
 do p:2 t:2 receive h:1 forever 0 -> blocked
 do p:3 t:3 map_anon 0x2000 3 -> ok a:0x1000000000
@@ -37,4 +37,4 @@ read p:2 t:2 a:0x1000000000+0x0 -> ok word 99
 do p:1 t:1 budget_usage h:11 -> ok usage [32,10,1,1,50,0]
 do p:2 t:2 reply m:1 [0,0,0,0] [] -> ok
 do p:1 t:1 budget_usage h:11 -> ok usage [32,5,1,1,50,0]
-do p:2 t:2 receive h:1 0 0 -> ok exit p:3 cause=killed code=0 blamed=0
+do p:2 t:2 receive h:1 0 0 -> ok exit p:3 cause=killed code=0 blamed=0 blamed_labels=[]

@@ -69,10 +69,12 @@ pub enum Syscall {
         len: u64,
         flags: u64,
     },
+    /// `arg` is the address of the child's startup page, 0 for none (QUESTIONS 40).
     ProcessStart {
         process: u64,
         entry: u64,
         sp: u64,
+        arg: u64,
         handles: Vec<u64>,
     },
     EndpointCreate,
@@ -262,11 +264,18 @@ pub enum Ret {
     Interrupt {
         h: u64,
     },
+    /// `blamed_labels` is the label set of the blamed call's sender: blame is keyed by
+    /// (account, label set) (QUESTIONS 48).
     ExitNotice {
         pid: u64,
         cause: Cause,
         code: u64,
         blamed_account: u64,
+        blamed_labels: Vec<u64>,
+    },
+    /// The last handle with this badge to the endpoint was closed or destroyed (QUESTIONS 53).
+    BadgeClosed {
+        badge: u64,
     },
     Usage(Counters),
     Time(u64),

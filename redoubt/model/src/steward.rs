@@ -35,15 +35,16 @@ use crate::syscall::{Message, MintSource, Op, Outcome, Ret, Syscall};
 
 /// Pending approval requests per (account, label set) (CAPABILITIES.md; QUESTIONS 17).
 pub const PENDING_CAP: usize = 4;
-/// Crash blame: this many crashes blamed on one account within `BLAME_WINDOW` log it out.
+/// Crash blame: this many crashes blamed on one (account, label set) within `BLAME_WINDOW` log
+/// out its sessions (QUESTIONS 48).
 pub const BLAME_COUNT: usize = 3;
 pub const BLAME_WINDOW: u64 = 10 * 60 * 1_000_000;
 /// Declassification refuses items over this many bytes (CONTAINMENT.md: "a size cap").
 pub const DECLASSIFY_MAX: usize = 256;
 /// Every rendered free-text field is cut to this many characters.
 pub const FIELD_CAP: usize = 64;
-/// The longest lease (QUESTIONS 33, pending; 24 hours).
-pub const MAX_LEASE: u64 = 24 * 3600 * 1_000_000;
+/// The longest lease (KERNEL-SPEC.md's constant; the steward's policy, not a kernel check).
+pub use crate::spec::MAX_LEASE;
 /// What a login session or an agent's lease gets, carved from its parent.
 pub const SESSION: Limits = Limits { pages: 40, processes: 1, weight: 5 };
 pub const AGENT: Limits = Limits { pages: 40, processes: 2, weight: 4 };
@@ -149,8 +150,10 @@ pub struct Request {
     /// The requesting session's labels.
     pub labels: Vec<u64>,
     pub content: Content,
-    /// Declassification: the item as it was at submission.
+    /// Declassification: the item as it was at submission, and the reader budget it was read
+    /// through.
     pub snapshot: Option<Vec<u8>>,
+    pub reader: u64,
     pub reason: String,
     /// Binds the approval to exactly this content.
     pub hash: u64,
@@ -175,14 +178,56 @@ pub struct Channel {
 /// The audit file: append-only, written only by the steward.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Audit {
-    Login { session: u64, principal: usize, key: u64, labels: Vec<u64> },
-    AgentStarted { session: u64, sponsor: usize, parent: u64, labels: Vec<u64>, deadline: u64 },
-    Submitted { id: u64, account: u64 },
-    Approved { id: u64, principal: usize, key: u64, hash: u64 },
-    Denied { id: u64, principal: usize },
-    Declassified { id: u64, label: u64, bytes: Vec<u8> },
-    Blamed { account: u64, at: u64 },
-    LoggedOut { account: u64, at: u64 },
+    Login {
+        session: u64,
+        principal: usize,
+        key: u64,
+        labels: Vec<u64>,
+    },
+    AgentStarted {
+        session: u64,
+        sponsor: usize,
+        parent: u64,
+        labels: Vec<u64>,
+        deadline: u64,
+    },
+    Submitted {
+        id: u64,
+        account: u64,
+    },
+    Approved {
+        id: u64,
+        principal: usize,
+        key: u64,
+        hash: u64,
+    },
+    Denied {
+        id: u64,
+        principal: usize,
+    },
+    /// `reader` is the budget the snapshot was read through (QUESTIONS 54).
+    Declassified {
+        id: u64,
+        label: u64,
+        bytes: Vec<u8>,
+        reader: u64,
+    },
+    /// A session wrote an item of `label`.
+    Wrote {
+        session: u64,
+        labels: Vec<u64>,
+        label: u64,
+    },
+    Blamed {
+        account: u64,
+        labels: Vec<u64>,
+        at: u64,
+    },
+    LoggedOut {
+        account: u64,
+        labels: Vec<u64>,
+        at: u64,
+    },
 }
 
 /// A process the steward runs or watches: (pid, a tid).
@@ -210,10 +255,14 @@ pub struct Steward {
     pub vault: BTreeMap<(u64, u64), Vec<u8>>,
     /// What declassification copied out, in order: (label, bytes).
     pub declassified: Vec<(u64, Vec<u8>)>,
-    pub blames: BTreeMap<u64, Vec<u64>>,
+    /// Blame times per (account, label set).
+    pub blames: BTreeMap<(u64, Vec<u64>), Vec<u64>>,
     pub audit: Vec<Audit>,
     /// Sessions started so far, per principal (drives session ids and names).
     started: BTreeMap<usize, u64>,
+    /// The badge of the next session's connection to the server: each session gets its own
+    /// (CAPABILITIES.md, one badge, one client).
+    next_badge: u64,
     secret: u64,
     counter: u64,
 }
@@ -323,7 +372,7 @@ impl Steward {
         let e = handle(run(&mut k, init, Syscall::EndpointCreate)?.0)?;
         // init's slots: 1 root, 2 system, 3 users. The steward gets users (1) and system (2).
         let ph = handle(run(&mut k, init, Syscall::ProcessCreate { budget: 2, exit_endpoint: e })?.0)?;
-        let start = Syscall::ProcessStart { process: ph, entry: 0, sp: 0, handles: vec![3, 2] };
+        let start = Syscall::ProcessStart { process: ph, entry: 0, sp: 0, arg: 0, handles: vec![3, 2] };
         let me = started(run(&mut k, init, start)?.1)?;
         let mut st = Steward {
             mutation,
@@ -341,6 +390,7 @@ impl Steward {
             blames: BTreeMap::new(),
             audit: Vec::new(),
             started: BTreeMap::new(),
+            next_badge: 1,
             secret,
             counter: 0,
         };
@@ -370,11 +420,15 @@ impl Steward {
     /// with the steward's exit endpoint. INIT.md: a restarted server receives on the same endpoint.
     fn start_server(&mut self) -> Res<()> {
         let ph = handle(self.sys(Syscall::ProcessCreate { budget: 2, exit_endpoint: self.exits })?)?;
-        let start = Syscall::ProcessStart { process: ph, entry: 0, sp: 0, handles: vec![self.srv] };
+        let start = Syscall::ProcessStart { process: ph, entry: 0, sp: 0, arg: 0, handles: vec![self.srv] };
         let (_, notes) = run(&mut self.k, self.me, start)?;
         self.server = started(notes)?;
         self.sys(Syscall::HandleClose { h: ph })?;
         Ok(())
+    }
+
+    fn budget_create_labelled(&mut self, parent: u64, l: Limits, labels: &[u64], deadline: u64) -> Res<u64> {
+        self.budget_create(parent, l, labels, 0, deadline)
     }
 
     fn budget_create(
@@ -418,10 +472,10 @@ impl Steward {
     pub fn poll(&mut self) {
         loop {
             match self.sys(Syscall::Receive { h: Some(self.exits), timeout: 0, max_transfer: 0 }) {
-                Ok(Ret::ExitNotice { pid, blamed_account, .. }) => {
+                Ok(Ret::ExitNotice { pid, blamed_account, blamed_labels, .. }) => {
                     if pid == self.server.pid {
-                        // INIT.md: init passes each exit notice's blamed account to the steward.
-                        self.blame(blamed_account);
+                        // INIT.md: init passes each exit notice's blame to the steward.
+                        self.blame(blamed_account, blamed_labels);
                         let _ = self.start_server();
                     }
                 }
@@ -461,7 +515,9 @@ impl Steward {
         let h = self.budget_create(parent, l, &labels, 0, deadline)?;
         let budget = self.budget_id(h);
         let process = self.sys(Syscall::ProcessCreate { budget: h, exit_endpoint: self.exits });
-        let mint = self.sys(Syscall::Mint { source: MintSource::Handle(self.srv), badge: 1, budget: None });
+        let badge = self.next_badge;
+        self.next_badge += 1;
+        let mint = self.sys(Syscall::Mint { source: MintSource::Handle(self.srv), badge, budget: None });
         let (ph, mh) = match (process, mint) {
             (Ok(Ret::Handle(ph)), Ok(Ret::Handle(mh))) => (ph, mh),
             (p, m) => {
@@ -469,7 +525,7 @@ impl Steward {
                 return Err(p.and(m).err().unwrap_or(Denied::Kernel(Error::Dead)));
             }
         };
-        let start = Syscall::ProcessStart { process: ph, entry: 0, sp: 0, handles: vec![mh] };
+        let start = Syscall::ProcessStart { process: ph, entry: 0, sp: 0, arg: 0, handles: vec![mh] };
         let pid = run(&mut self.k, self.me, start).and_then(|(_, n)| started(n)).map(|p| p.pid);
         let _ = self.sys(Syscall::HandleClose { h: mh });
         let _ = self.sys(Syscall::HandleClose { h: ph });
@@ -574,12 +630,41 @@ impl Steward {
         Ok(id)
     }
 
-    /// A vault session writes an item in its label's volume (no write down: only its own label).
-    pub fn write_item(&mut self, session: u64, item: u64, bytes: Vec<u8>) -> Res<()> {
+    /// A session writes item `item` of label `label`'s volume. Every write needs equal labels
+    /// (QUESTIONS 51: no write down, and no blind write up), so only a vault session carrying
+    /// exactly that label writes there.
+    pub fn write_item(&mut self, session: u64, label: u64, item: u64, bytes: Vec<u8>) -> Res<()> {
         let s = self.sessions.get(&session).ok_or(Denied::UnknownSession)?;
-        let [label] = s.labels[..] else { return Err(Denied::NotOwner) };
+        let allowed = if self.broken(Mutation::PolicyWriteUp) {
+            s.labels.iter().all(|l| *l == label)
+        } else {
+            s.labels == [label]
+        };
+        if !allowed {
+            return Err(Denied::NotOwner);
+        }
+        let labels = s.labels.clone();
         self.vault.insert((label, item), bytes);
+        self.audit.push(Audit::Wrote { session, labels, label });
         Ok(())
+    }
+
+    /// Read item `item` of `label` through a short-lived reader budget carrying exactly that
+    /// label, which the steward creates and destroys (QUESTIONS 54): the steward itself stays
+    /// unlabelled. Returns the bytes and the reader's budget id. The model reads the volume
+    /// directly; the reader budget stands for the process that would.
+    fn read_item(&mut self, label: u64, item: u64) -> Res<(Vec<u8>, u64)> {
+        let bytes = self.vault.get(&(label, item)).cloned().unwrap_or_default();
+        if self.broken(Mutation::PolicyDeclassifyWithoutReader) {
+            return Ok((bytes, 0));
+        }
+        // Under `users` (the steward's slot 1): one page for its own object, a deadline.
+        let l = Limits { pages: self.k.costs.budget, processes: 0, weight: 0 };
+        let deadline = self.k.now.saturating_add(crate::spec::SLICE);
+        let h = self.budget_create_labelled(1, l, &[label], deadline)?;
+        let reader = self.budget_id(h);
+        self.sys(Syscall::BudgetDestroy { h })?;
+        Ok((bytes, reader))
     }
 
     // -------------------------------------------------------------------------------------------
@@ -619,18 +704,24 @@ impl Steward {
             let recv = Syscall::Receive { h: Some(1), timeout: 0, max_transfer: 0 };
             match self.k.step(&Op::Sys { pid: s.pid, tid: s.tid, call: recv }).map(|x| x.outcome) {
                 Some(Outcome::Done(Ok(Ret::Message(m)))) => reply(&mut self.k, m.msg_id),
+                // A session's connection is gone; the model's server keeps no per-client state.
+                Some(Outcome::Done(Ok(Ret::BadgeClosed { .. }))) => {}
                 _ => break,
             }
         }
     }
 
-    /// The server takes one waiting message and keeps it open (it is working on it).
+    /// The server takes one waiting message and keeps it open (it is working on it), passing over
+    /// badge notices.
     pub fn hold(&mut self) -> Option<Message> {
         let s = self.server;
         let recv = Syscall::Receive { h: Some(1), timeout: 0, max_transfer: 0 };
-        match self.k.step(&Op::Sys { pid: s.pid, tid: s.tid, call: recv }).map(|x| x.outcome) {
-            Some(Outcome::Done(Ok(Ret::Message(m)))) => Some(m),
-            _ => None,
+        loop {
+            match self.k.step(&Op::Sys { pid: s.pid, tid: s.tid, call: recv.clone() }).map(|x| x.outcome) {
+                Some(Outcome::Done(Ok(Ret::Message(m)))) => return Some(m),
+                Some(Outcome::Done(Ok(Ret::BadgeClosed { .. }))) => {}
+                _ => return None,
+            }
         }
     }
 
@@ -664,6 +755,7 @@ impl Steward {
         if !s.labels.iter().all(|l| owned.contains(l)) {
             return Err(Denied::NotOwner);
         }
+        let mut reader = 0;
         let snapshot = match &content {
             Content::AgentWithLabel { label, .. } if !owned.contains(label) => return Err(Denied::NotOwner),
             Content::AgentWithLabel { lease, .. } if !self.lease_ok(*lease) => return Err(Denied::BadLease),
@@ -672,7 +764,8 @@ impl Steward {
                 if !owned.contains(label) || !s.labels.contains(label) {
                     return Err(Denied::NotOwner);
                 }
-                let bytes = self.vault.get(&(*label, *item)).cloned().unwrap_or_default();
+                let (bytes, r) = self.read_item(*label, *item)?;
+                reader = r;
                 if bytes.len() > DECLASSIFY_MAX {
                     return Err(Denied::TooBig);
                 }
@@ -713,6 +806,7 @@ impl Steward {
                 labels: s.labels.clone(),
                 content,
                 snapshot,
+                reader,
                 reason: String::from(reason),
                 hash,
             },
@@ -735,6 +829,8 @@ impl Steward {
                 continue;
             }
             let who = sanitize(&self.principals[r.approver].spec.name, FIELD_CAP, wl);
+            let free_text_withheld =
+                !r.labels.is_empty() && !self.broken(Mutation::PolicyLabelledFreeTextShown);
             let session = self.sessions.get(&r.session).map_or(String::from("(ended)"), |s| s.name.clone());
             let what = match &r.content {
                 Content::AgentWithLabel { label, lease } => {
@@ -747,13 +843,26 @@ impl Steward {
                         .map(|b| sanitize(&String::from_utf8_lossy(b), DECLASSIFY_MAX, wl));
                     format!("declassify item {item} of label {label}: \"{}\"", shown.unwrap_or_default())
                 }
-                Content::Note { what } => sanitize(what, FIELD_CAP, wl),
+                // A labelled requester's free text is not shown (QUESTIONS 35): it could carry
+                // the vault out; only declassification may.
+                Content::Note { .. } if free_text_withheld => {
+                    String::from("a note (text withheld: labelled session)")
+                }
+                Content::Note { what } => {
+                    format!("a note (untrusted): \"{}\"", sanitize(what, FIELD_CAP, wl))
+                }
             };
-            let text = format!(
-                "request from {who} ({session}, labels {:?}): {what}; reason (untrusted): \"{}\"",
-                r.labels,
-                sanitize(&r.reason, FIELD_CAP, wl)
-            );
+            let reason = if free_text_withheld {
+                String::from("reason withheld (labelled session)")
+            } else {
+                format!("reason (untrusted): \"{}\"", sanitize(&r.reason, FIELD_CAP, wl))
+            };
+            let kind = self
+                .sessions
+                .get(&r.session)
+                .map_or("session", |s| if s.kind == SessionKind::Agent { "agent" } else { "session" });
+            let text =
+                format!("request from {who} ({kind} {session}, labels {:?}): {what}; {reason}", r.labels);
             out.push(Rendered { id: r.id, hash: r.hash, labels: r.labels.clone(), text });
         }
         out
@@ -814,7 +923,7 @@ impl Steward {
                     None => self.vault.get(&(label, item)).cloned().unwrap_or_default(),
                 };
                 self.declassified.push((label, bytes.clone()));
-                self.audit.push(Audit::Declassified { id, label, bytes });
+                self.audit.push(Audit::Declassified { id, label, bytes, reader: r.reader });
             }
             Content::Note { .. } => {}
         }
@@ -834,16 +943,20 @@ impl Steward {
     // -------------------------------------------------------------------------------------------
     // Crash blame (CONTAINMENT.md): from the kernel's exit notices of the server (`poll`).
 
-    /// Three crashes blamed on one account within ten minutes log that account out: every
-    /// session and agent of it is destroyed. Account 0 (nothing being served) blames nobody.
-    fn blame(&mut self, account: u64) {
+    /// Three crashes blamed on one (account, label set) within ten minutes log out that account's
+    /// sessions with that label set, and their agents (QUESTIONS 48: keyed by label set too, so a
+    /// vault crashing a shared server cannot log out its owner's unlabelled sessions). Account 0
+    /// (nothing being served) blames nobody.
+    fn blame(&mut self, account: u64, labels: Vec<u64>) {
         if account == 0 {
             return;
         }
         let now = self.k.now;
-        self.audit.push(Audit::Blamed { account, at: now });
+        self.audit.push(Audit::Blamed { account, labels: labels.clone(), at: now });
         let window = !self.broken(Mutation::PolicyBlameNoWindow);
-        let times = self.blames.entry(account).or_default();
+        let per_account = self.broken(Mutation::PolicyBlamePerAccount);
+        let key = (account, if per_account { Vec::new() } else { labels.clone() });
+        let times = self.blames.entry(key).or_default();
         times.push(now);
         if window {
             times.retain(|t| now - *t < BLAME_WINDOW);
@@ -854,12 +967,13 @@ impl Steward {
                 .sessions
                 .values()
                 .filter(|s| self.principals[s.principal].spec.account == account)
+                .filter(|s| per_account || s.labels == labels)
                 .map(|s| s.id)
                 .collect();
             for s in doomed {
                 let _ = self.end_session(s);
             }
-            self.audit.push(Audit::LoggedOut { account, at: now });
+            self.audit.push(Audit::LoggedOut { account, labels, at: now });
         }
     }
 

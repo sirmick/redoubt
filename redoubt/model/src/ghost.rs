@@ -12,8 +12,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::kernel::{Endpoint, Handle, MsgKind};
-use crate::spec::Class;
-use crate::syscall::{Message, MintSource};
+use crate::spec::{Cause, Class, Error};
+use crate::syscall::{Message, MintSource, Ret};
 
 /// R2's key (QUESTIONS 17): blocked senders are grouped, capped and served round-robin by
 /// (account, label set).
@@ -24,6 +24,7 @@ pub type Key = (u64, Vec<u64>);
 pub struct Sent {
     pub kind: MsgKind,
     pub sender_budget: u64,
+    pub sender_tid: u64,
     pub sender_class: Class,
     /// The sender budget's labels, from the ghost record made when the budget was created.
     pub labels: Vec<u64>,
@@ -46,11 +47,37 @@ pub struct Receiving {
     pub max_transfer: u64,
 }
 
-/// An exit notice the kernel owes: to endpoint `endpoint`, paid for by budget `payer`.
+/// What an exit notice reports: its cause, and whom it blames.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Blame {
+    pub cause: Cause,
+    pub account: u64,
+    pub labels: Vec<u64>,
+}
+
+impl Blame {
+    /// `killed`, blaming nobody: what R10 reports.
+    pub fn killed() -> Blame {
+        Blame { cause: Cause::Killed, account: 0, labels: Vec::new() }
+    }
+}
+
+/// A process's exit slot as `process_create` made it: who pays (the caller's budget, read from
+/// the caller's process object), and the exit endpoint handle it named.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Slot {
+    pub payer: u64,
+    pub endpoint: u64,
+    pub stamp: u64,
+}
+
+/// An exit notice the kernel owes: to endpoint `endpoint`, paid for by budget `payer`, reporting
+/// `want`.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Owed {
     pub endpoint: u64,
     pub payer: u64,
+    pub want: Blame,
 }
 
 /// Something the kernel did in the current step that a check must judge.
@@ -58,16 +85,28 @@ pub struct Owed {
 pub enum Flow {
     /// A message was delivered to thread `tid`, which was receiving as `via` said.
     Delivered { tid: u64, msg: Message, via: Option<Receiving> },
-    /// An exit notice of a budget with labels `from` reached a receiver on an endpoint owned by a
-    /// budget of class `to_class` with labels `to`.
-    Exit { from: Vec<u64>, to_class: Class, to: Vec<u64> },
+    /// The exit notice of process `pid`, a budget with labels `from`, reached a receiver on an
+    /// endpoint owned by a budget of class `to_class` with labels `to`, reporting `got`; the ghost
+    /// expected `want` (none if it did not expect the notice).
+    Exit { pid: u64, from: Vec<u64>, to_class: Class, to: Vec<u64>, got: Blame, want: Option<Blame> },
     /// `budget_usage` of a budget with labels `from` by a caller with class and labels `to`.
     Usage { from: Vec<u64>, to_class: Class, to: Vec<u64> },
+    /// `budget_usage` refused (`LabelDenied`), with the same fields.
+    UsageDenied { from: Vec<u64>, to_class: Class, to: Vec<u64> },
+    /// A sender of class and labels `from` got `LabelDenied` from an endpoint whose owner has class
+    /// and labels `to` (R1).
+    LabelDenied { from_class: Class, from: Vec<u64>, to_class: Class, to: Vec<u64> },
     /// A sender got `Busy` (R2's cap) on endpoint `endpoint` for key `key`.
     Busy { endpoint: u64, key: Key },
     /// `mint` by thread `tid` of process `pid` made a handle to `endpoint` with default stamp
     /// `default_stamp`.
     Minted { pid: u64, tid: u64, endpoint: u64, via: MintSource, default_stamp: u64 },
+    /// Blocked thread `tid` was woken with `result`.
+    Woken { tid: u64, result: Result<Ret, Error> },
+    /// Call `msg` was replied to by a thread the ghost saw take it.
+    Replied { msg: u64 },
+    /// A badge notice for `badge` was delivered on `endpoint`.
+    BadgeClosed { endpoint: u64, badge: u64 },
 }
 
 /// I11: while a key's oldest message waits on an endpoint, how often each other key has been
@@ -103,9 +142,13 @@ pub struct Ghost {
     pub sent: BTreeMap<u64, Sent>,
     /// Pending receives on endpoints, by thread.
     pub receiving: BTreeMap<u64, Receiving>,
-    /// Messages delivered to each thread that it still serves: calls until its reply, a `send`
-    /// until the thread takes another message.
+    /// Calls delivered to each thread and not yet replied to (its open calls), in the order it
+    /// took them. A `send` is never served (QUESTIONS 31).
     pub served: BTreeMap<u64, Vec<u64>>,
+    /// Each process's exit slot, by pid (none for `init`).
+    pub slots: BTreeMap<u64, Slot>,
+    /// What a dying process's notice must report, recorded when it began to die.
+    pub exit_expect: BTreeMap<u64, Blame>,
     /// Exit notices owed, by the exiting pid.
     pub owed: BTreeMap<u64, Owed>,
     /// Violations found while a step ran (the checks run after it).
@@ -130,21 +173,43 @@ impl Ghost {
         self.labels_at_creation.get(&b).cloned().unwrap_or_default()
     }
 
-    /// A message was delivered to `tid`: it now serves it, and a `send` it served before is done.
+    /// A message was delivered to `tid`: a call, as the ghost recorded it when sent, becomes its
+    /// newest open call.
     pub fn delivered(&mut self, tid: u64, msg: &Message) {
-        let sent = &self.sent;
-        let list = self.served.entry(tid).or_default();
-        list.retain(|m| sent.get(m).is_some_and(|s| s.kind == MsgKind::Call));
-        list.push(msg.msg_id);
+        if self.sent.get(&msg.msg_id).is_some_and(|s| s.kind == MsgKind::Call) {
+            self.served.entry(tid).or_default().push(msg.msg_id);
+        }
         let via = self.receiving.remove(&tid);
         self.flows.push(Flow::Delivered { tid, msg: msg.clone(), via });
     }
 
-    /// `tid` replied to `msg`.
+    /// `tid` replied to `msg`, which must be one of its open calls.
     pub fn replied(&mut self, tid: u64, msg: u64) {
-        if let Some(l) = self.served.get_mut(&tid) {
-            l.retain(|m| *m != msg);
+        let l = self.served.entry(tid).or_default();
+        if !l.contains(&msg) {
+            self.violations.push(format!("R4a: thread {tid} replied to {msg}, which it does not serve"));
         }
+        l.retain(|m| *m != msg);
+        self.flows.push(Flow::Replied { msg });
+    }
+
+    /// Process `pid` begins to die through thread `tid` (a fault if `fault`, else an exit); its
+    /// threads are `threads`. Its notice must say `faulted` if it faulted or holds open calls
+    /// (QUESTIONS 55), blaming the account and labels of `tid`'s most recently taken open call
+    /// (QUESTIONS 37, 48); otherwise `exited`, blaming nobody.
+    pub fn exiting(&mut self, pid: u64, tid: u64, threads: &[u64], fault: bool) {
+        let open = threads.iter().any(|t| self.served.get(t).is_some_and(|v| !v.is_empty()));
+        let blame = if fault || open {
+            let newest = self.served.get(&tid).and_then(|v| v.last()).and_then(|m| self.sent.get(m));
+            Blame {
+                cause: Cause::Faulted,
+                account: newest.map_or(0, |s| s.account),
+                labels: newest.map_or(Vec::new(), |s| s.labels.clone()),
+            }
+        } else {
+            Blame { cause: Cause::Exited, account: 0, labels: Vec::new() }
+        };
+        self.exit_expect.insert(pid, blame);
     }
 
     pub fn thread_gone(&mut self, tid: u64) {

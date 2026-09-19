@@ -202,8 +202,8 @@ impl Names {
             S::ProcessMap { process, src, dst, len, flags } => {
                 format!("{} {} {} {len:#x} {flags}", h(*process), a(*src), a(*dst))
             }
-            S::ProcessStart { process, entry, sp, handles } => {
-                format!("{} {entry:#x} {sp:#x} {}", h(*process), hs(handles))
+            S::ProcessStart { process, entry, sp, arg, handles } => {
+                format!("{} {entry:#x} {sp:#x} {} {}", h(*process), a(*arg), hs(handles))
             }
             S::Mint { source, badge, budget } => {
                 let src = match source {
@@ -300,9 +300,12 @@ impl Names {
                 )
             }
             Ret::Interrupt { h: x } => format!("ok interrupt {}", h(*x)),
-            Ret::ExitNotice { pid, cause, code, blamed_account } => {
-                format!("ok exit p:{pid} cause={} code={code} blamed={blamed_account}", cause.name())
-            }
+            Ret::ExitNotice { pid, cause, code, blamed_account, blamed_labels } => format!(
+                "ok exit p:{pid} cause={} code={code} blamed={blamed_account} blamed_labels={}",
+                cause.name(),
+                Names::list(blamed_labels.iter().map(|l| format!("{l}")))
+            ),
+            Ret::BadgeClosed { badge } => format!("ok closed badge={badge}"),
             Ret::Usage(c) => {
                 format!(
                     "ok usage [{},{},{},{},{},{}]",
@@ -348,7 +351,7 @@ fn boot_lines(boot: &Boot) -> Vec<String> {
         ),
         format!(
             "costs budget={} process={} thread={} endpoint={} handles_per_page={} page_table={} open_call={} \
-             exit_slot={}",
+             exit_slot={} badge_slots_per_page={}",
             c.budget,
             c.process,
             c.thread,
@@ -356,7 +359,8 @@ fn boot_lines(boot: &Boot) -> Vec<String> {
             c.handles_per_page,
             c.page_table,
             c.open_call,
-            c.exit_slot
+            c.exit_slot,
+            c.badge_slots_per_page
         ),
     ];
     for d in &boot.devices {
@@ -496,7 +500,9 @@ pub fn parse_call(t: &[Token]) -> Result<Syscall, String> {
         "process_exit" => S::ProcessExit { code: v(0)? },
         "process_create" => S::ProcessCreate { budget: v(0)?, exit_endpoint: v(1)? },
         "process_map" => S::ProcessMap { process: v(0)?, src: v(1)?, dst: v(2)?, len: v(3)?, flags: v(4)? },
-        "process_start" => S::ProcessStart { process: v(0)?, entry: v(1)?, sp: v(2)?, handles: list(n(3)?)? },
+        "process_start" => {
+            S::ProcessStart { process: v(0)?, entry: v(1)?, sp: v(2)?, arg: v(3)?, handles: list(n(4)?)? }
+        }
         "endpoint_create" => S::EndpointCreate,
         "mint" => {
             let source = match n(0)? {
@@ -596,6 +602,7 @@ pub fn parse(text: &str) -> Result<(Boot, Vec<Op>), String> {
                     page_table: field(&t, "page_table")?,
                     open_call: field(&t, "open_call")?,
                     exit_slot: field(&t, "exit_slot")?,
+                    badge_slots_per_page: field(&t, "badge_slots_per_page")?,
                 }
             }
             Some(Token::Word("device")) => boot.devices.push(match t.get(1) {

@@ -29,7 +29,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::ghost::{Flow, Ghost, Key, Owed, Receiving, Sent};
+use crate::ghost::{Blame, Flow, Ghost, Key, Owed, Receiving, Sent, Slot};
 use crate::mutation::Mutation;
 use crate::sched::Scheduler;
 use crate::spec::*;
@@ -56,10 +56,13 @@ pub struct Costs {
     pub open_call: u64,
     /// One exit slot, charged to the creator at `process_create` (QUESTIONS 7).
     pub exit_slot: u64,
+    /// An endpoint's badge slots cost its owner one page per this many (rounded up; QUESTIONS 53).
+    pub badge_slots_per_page: u64,
 }
 
 impl Default for Costs {
-    /// The owner's cost table (QUESTIONS 13): one page per object, 128 handles per table page.
+    /// The owner's cost table (QUESTIONS 13, 53): one page per object, 128 handles or badge slots
+    /// per page.
     fn default() -> Costs {
         Costs {
             budget: 1,
@@ -70,9 +73,14 @@ impl Default for Costs {
             page_table: 1,
             open_call: 1,
             exit_slot: 1,
+            badge_slots_per_page: 128,
         }
     }
 }
+
+/// The most any one object may cost in a boot configuration, and the most handles or badge slots
+/// a page may hold: a hostile trace's `costs` line must not make the kernel's sums overflow.
+pub const MAX_COST: u64 = 1 << 16;
 
 /// A device object the loader creates from the device tree (KERNEL-SPEC.md, Device).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,10 +131,11 @@ impl Default for Boot {
 }
 
 impl Boot {
-    /// The boot the property tests use: the default, with 8 handles per table page so that
-    /// handle-table growth (and its charge) happens in short sequences.
+    /// The boot the property tests use: the default, with 8 handles per table page and 2 badge
+    /// slots per page, so that growth of both (and its charge) happens in short sequences.
     pub fn testing() -> Boot {
-        Boot { costs: Costs { handles_per_page: 8, ..Costs::default() }, ..Boot::default() }
+        let costs = Costs { handles_per_page: 8, badge_slots_per_page: 2, ..Costs::default() };
+        Boot { costs, ..Boot::default() }
     }
 }
 
@@ -136,8 +145,14 @@ impl Boot {
 fn check_boot(b: &Boot) -> Result<(), String> {
     use alloc::format;
     let c = b.costs;
-    if c.handles_per_page == 0 {
-        return Err("boot: handles_per_page must be at least 1".into());
+    let each = [c.budget, c.process, c.thread, c.endpoint, c.page_table, c.open_call, c.exit_slot];
+    if each.iter().any(|x| *x > MAX_COST) {
+        return Err(format!("boot: an object may cost at most {MAX_COST} pages"));
+    }
+    for per_page in [c.handles_per_page, c.badge_slots_per_page] {
+        if per_page == 0 || per_page > MAX_COST {
+            return Err(format!("boot: handles and badge slots per page must be 1..={MAX_COST}"));
+        }
     }
     if b.devices.len() > 64 {
         return Err("boot: at most 64 devices".into());
@@ -326,12 +341,11 @@ pub struct Thread {
     pub wait: Option<Wait>,
     /// When the blocking call times out; `None` for `FOREVER`.
     pub deadline: Option<u64>,
-    /// The messages this thread serves, oldest first: its open calls (QUESTIONS 2), and the last
-    /// `send` it took until it takes another message (README choice 6).
+    /// Its open calls, in the order it took them (QUESTIONS 2, 37). A `send` is never an open
+    /// call (QUESTIONS 31).
     pub serving: Vec<u64>,
-    /// "The account of the message it is serving (0 when none): set when `receive` delivers a
-    /// message, cleared by `reply`" (KERNEL-SPEC.md, Process). With several open calls it is the
-    /// account of the newest message still served (README choice 7).
+    /// The serving account: the account of its most recently taken call still open, 0 when none
+    /// (KERNEL-SPEC.md, Process).
     pub account: u64,
 }
 
@@ -345,8 +359,8 @@ pub struct InFlight {
     pub receiver_vpn: Option<u64>,
 }
 
-/// A message from the moment it is sent until it is finished with (a `call`'s until its reply; a
-/// `send`'s until its receiving thread takes another message).
+/// A message from the moment it is sent until it is finished with (a `call`'s until its reply, a
+/// `send`'s until it is delivered).
 #[derive(Clone, Debug)]
 pub struct Msg {
     pub id: u64,
@@ -361,7 +375,11 @@ pub struct Msg {
     pub stamp: u64,
     pub account: u64,
     pub labels: Vec<u64>,
+    /// The R2 group it is queued under (QUESTIONS 17).
+    pub key: Key,
     pub words: [u64; WORDS],
+    /// Copies of the handles it carries, until it is delivered (then they are in the receiver's
+    /// table) or discarded.
     pub handles: Vec<Handle>,
     pub buffer: Option<InFlight>,
     /// `(pid, tid)` of the thread that took it; `None` while queued.
@@ -372,23 +390,28 @@ pub struct Msg {
     pub open_payer: Option<u64>,
 }
 
-impl Msg {
-    /// R2's key: (account, label set) (QUESTIONS 17).
-    pub fn key(&self) -> Key {
-        (self.account, self.labels.clone())
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExitNotice {
     pub pid: u64,
     pub cause: Cause,
     pub code: u64,
     pub blamed_account: u64,
+    /// The labels of the blamed call's sender (QUESTIONS 48).
+    pub blamed_labels: Vec<u64>,
     /// The exiting process's budget.
     pub budget: u64,
     /// Who paid for the slot (QUESTIONS 7).
     pub payer: u64,
+}
+
+/// An endpoint's record of one non-zero badge (QUESTIONS 53; KERNEL-SPEC.md, Endpoint).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct BadgeSlot {
+    /// Handles with this badge to the endpoint, in every table, exit reference and message not
+    /// yet received.
+    pub count: u64,
+    /// A badge notice waits to be received.
+    pub pending: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -404,6 +427,8 @@ pub struct Endpoint {
     pub receivers: VecDeque<u64>,
     /// Exit notices not yet received.
     pub exits: VecDeque<ExitNotice>,
+    /// Badge slots, by badge.
+    pub badges: BTreeMap<u64, BadgeSlot>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -473,6 +498,9 @@ pub struct Kernel {
     next_msg: u64,
     wakes: Vec<Wake>,
     notes: Vec<Note>,
+    /// Endpoints where something became deliverable during the step; matched with their
+    /// receivers once the step's other effects are done (README choice 26).
+    to_pump: BTreeSet<u64>,
 }
 
 type R<T> = Result<T, Error>;
@@ -577,6 +605,7 @@ impl Kernel {
             next_msg: 1,
             wakes: Vec::new(),
             notes: Vec::new(),
+            to_pump: BTreeSet::new(),
         };
         let c = k.costs;
         let (r, s, u) = (boot.root, boot.system, boot.users);
@@ -683,6 +712,21 @@ impl Kernel {
             as u64
     }
 
+    /// R4a: does thread `tid` of process `pid` stand at `MAX_OPEN_CALLS`?
+    fn open_calls_full(&self, pid: u64, tid: u64) -> bool {
+        let open = if self.broken(Mutation::R4aOpenCallsPerThread) {
+            self.threads.get(&tid).map_or(0, |t| t.serving.len() as u64)
+        } else {
+            self.open_calls(pid)
+        };
+        open >= MAX_OPEN_CALLS && !self.broken(Mutation::OpenCallsUnlimited)
+    }
+
+    /// Pages `n` badge slots of one endpoint cost its owner (R6; QUESTIONS 53).
+    pub fn badge_slot_pages(&self, n: u64) -> u64 {
+        if self.broken(Mutation::R6BadgeSlotsFree) { 0 } else { n.div_ceil(self.costs.badge_slots_per_page) }
+    }
+
     /// The earliest time something is due (a timeout or a budget deadline).
     pub fn next_event(&self) -> Option<u64> {
         let t = self.threads.values().filter(|t| t.wait.is_some()).filter_map(|t| t.deadline).min();
@@ -699,10 +743,13 @@ impl Kernel {
         self.next_event().map_or(slice_end, |e| e.min(slice_end))
     }
 
-    /// R2's key for a sender in budget `b` (QUESTIONS 17).
-    fn key_of(&self, account: u64, labels: &[u64]) -> Key {
+    /// R2's key for a message with the sender's `account` and `labels`, sent through a handle
+    /// stamped `stamp` (QUESTIONS 17).
+    fn queue_key(&self, account: u64, labels: &[u64], stamp: u64) -> Key {
         if self.broken(Mutation::R2KeyByAccountOnly) {
             (account, Vec::new())
+        } else if self.broken(Mutation::R2KeyByStampLabels) {
+            (account, self.labels_of(stamp))
         } else {
             (account, labels.to_vec())
         }
@@ -857,12 +904,12 @@ impl Kernel {
     fn remove_handle(&mut self, pid: u64, h: u64) {
         let Some(p) = self.processes.get_mut(&pid) else { return };
         let n0 = p.handles.len() as u64;
-        if p.handles.remove(&h).is_none() {
-            return;
-        }
+        let Some(hd) = p.handles.remove(&h) else { return };
         let budget = p.budget;
         let shrink = self.table_pages(n0) - self.table_pages(n0 - 1);
         self.uncharge(budget, shrink);
+        let labels = self.labels_of(budget);
+        self.release(&[hd], &labels);
     }
 
     /// Close every handle matching `pred`, wherever it is: process tables, messages in flight,
@@ -876,13 +923,79 @@ impl Kernel {
                 self.remove_handle(pid, i);
             }
             let p = self.processes.get_mut(&pid).unwrap();
-            if p.exit_endpoint.as_ref().is_some_and(&pred) {
+            if let Some(x) = p.exit_endpoint.filter(&pred) {
                 p.exit_endpoint = None;
+                let labels = self.labels_of(self.processes[&pid].budget);
+                self.release(&[x], &labels);
             }
         }
-        for m in self.msgs.values_mut() {
-            m.handles.retain(|h| !pred(h));
+        let mids: Vec<u64> = self.msgs.keys().copied().collect();
+        for mid in mids {
+            let m = self.msgs.get_mut(&mid).unwrap();
+            let (gone, kept): (Vec<Handle>, Vec<Handle>) = m.handles.iter().partition(|h| pred(h));
+            m.handles = kept;
+            let labels = m.labels.clone();
+            self.release(&gone, &labels);
         }
+    }
+
+    /// A budget's labels (none if it is gone).
+    fn labels_of(&self, b: u64) -> Vec<u64> {
+        self.budgets.get(&b).map_or(Vec::new(), |x| x.labels.clone())
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Badge slots (QUESTIONS 53; KERNEL-SPEC.md, Endpoint and Messages).
+
+    /// Handles `hs` came into being (a copy, or a received handle): count the badged ones.
+    fn hold(&mut self, hs: &[Handle]) {
+        for h in hs {
+            let Object::Endpoint(e) = h.object else { continue };
+            if h.badge == 0 {
+                continue;
+            }
+            if let Some(slot) = self.endpoints.get_mut(&e).and_then(|x| x.badges.get_mut(&h.badge)) {
+                slot.count += 1;
+            }
+        }
+    }
+
+    /// Handles `hs` are gone; `holder` is the label set of the budget of the process whose table
+    /// held them last (for a message, its sender's; README choice 25). A badge whose count
+    /// reaches 0 gets its notice, under the exit notices' label rule (R1), or is freed.
+    fn release(&mut self, hs: &[Handle], holder: &[u64]) {
+        for h in hs {
+            let Object::Endpoint(e) = h.object else { continue };
+            let Some(ep) = self.endpoints.get_mut(&e) else { continue };
+            let owner = ep.owner;
+            let Some(slot) = ep.badges.get_mut(&h.badge) else { continue };
+            slot.count = slot.count.saturating_sub(1);
+            if slot.count > 0 {
+                continue;
+            }
+            let o = &self.budgets[&owner];
+            let allowed = o.class == Class::System
+                || superset(&o.labels, holder)
+                || self.broken(Mutation::BadgeNoticeIgnoresLabels);
+            if allowed && !self.broken(Mutation::BadgeNoticeMissing) {
+                self.endpoints.get_mut(&e).unwrap().badges.get_mut(&h.badge).unwrap().pending = true;
+                self.poke(e);
+            } else {
+                self.free_badge_slot(e, h.badge);
+            }
+        }
+    }
+
+    /// Free badge slot `badge` of endpoint `e`, uncharging its owner.
+    fn free_badge_slot(&mut self, e: u64, badge: u64) {
+        let Some(ep) = self.endpoints.get_mut(&e) else { return };
+        let n = ep.badges.len() as u64;
+        if ep.badges.remove(&badge).is_none() {
+            return;
+        }
+        let owner = ep.owner;
+        let shrink = self.badge_slot_pages(n) - self.badge_slot_pages(n - 1);
+        self.uncharge(owner, shrink);
     }
 
     // ---------------------------------------------------------------------------------------
@@ -1016,10 +1129,23 @@ impl Kernel {
         if !matches!(result, Ok(Ret::Message(_))) {
             self.ghost.receiving.remove(&tid);
         }
+        self.ghost.flows.push(Flow::Woken { tid, result: result.clone() });
         self.wakes.push(Wake { pid, tid, result });
     }
 
-    /// The account a thread records: of the newest message it still serves (README choice 7).
+    /// Something may be deliverable on `e`: match it with receivers at the end of the step.
+    fn poke(&mut self, e: u64) {
+        self.to_pump.insert(e);
+    }
+
+    /// Deliver whatever became deliverable (delivery can make more so, through a refused transfer).
+    fn settle(&mut self) {
+        while let Some(e) = self.to_pump.pop_first() {
+            self.pump(e);
+        }
+    }
+
+    /// The serving account: of the most recently taken call still open (KERNEL-SPEC.md, Process).
     fn recompute_account(&mut self, tid: u64) {
         let account =
             self.threads[&tid].serving.last().and_then(|m| self.msgs.get(m)).map_or(0, |m| m.account);
@@ -1047,7 +1173,7 @@ impl Kernel {
     /// Remove a queued message from its endpoint's queue.
     fn unqueue(&mut self, mid: u64) {
         let Some(m) = self.msgs.get(&mid) else { return };
-        let (e, key) = (m.endpoint, self.key_of(m.account, &m.labels));
+        let (e, key) = (m.endpoint, m.key.clone());
         if let Some(ep) = self.endpoints.get_mut(&e) {
             if let Some(q) = ep.queue.get_mut(&key) {
                 q.retain(|x| *x != mid);
@@ -1058,11 +1184,19 @@ impl Kernel {
         }
     }
 
-    /// A queued message fails: its sender gets `err` and its buffer back.
-    fn fail_sender(&mut self, mid: u64, err: Error) {
+    /// A queued message is withdrawn: out of its queue, its buffer back to its sender, and the
+    /// handles it carried gone. Returns it.
+    fn discard(&mut self, mid: u64) -> Option<Msg> {
         self.unqueue(mid);
         self.return_buffer(mid);
-        if let Some(m) = self.msgs.remove(&mid) {
+        let m = self.msgs.remove(&mid)?;
+        self.release(&m.handles, &m.labels);
+        Some(m)
+    }
+
+    /// A queued message fails: its sender gets `err` and its buffer back.
+    fn fail_sender(&mut self, mid: u64, err: Error) {
+        if let Some(m) = self.discard(mid) {
             self.wake(m.sender_tid, Err(err));
         }
     }
@@ -1131,7 +1265,7 @@ impl Kernel {
     /// A queued message is refused in its turn: its key counts as served (R2) and the sender
     /// fails with `err`.
     fn refuse(&mut self, e: u64, mid: u64, err: Error) {
-        let key = self.key_of(self.msgs[&mid].account, &self.msgs[&mid].labels);
+        let key = self.msgs[&mid].key.clone();
         self.ghost.took(e, &key, &self.endpoints[&e]);
         self.endpoints.get_mut(&e).unwrap().cursor = Some(key);
         self.fail_sender(mid, err);
@@ -1155,7 +1289,8 @@ impl Kernel {
     }
 
     /// Match waiting receivers on `e` with what is pending there, until one side runs out.
-    /// Exit notices come before messages (README choice 8).
+    /// Notices come before messages (KERNEL-SPEC.md, Messages): exit notices in the order they were
+    /// queued, then badge notices in badge order (README choice 8).
     fn pump(&mut self, e: u64) {
         loop {
             let Some(ep) = self.endpoints.get(&e) else { return };
@@ -1169,54 +1304,69 @@ impl Kernel {
                 // The label check was made when the notice was queued (R1; QUESTIONS 4, 8).
                 self.endpoints.get_mut(&e).unwrap().receivers.pop_front();
                 self.release_exit_slot(n.payer);
-                self.ghost.owed.remove(&n.pid);
-                let o = &self.budgets[&owner];
+                let want = self.ghost.owed.remove(&n.pid).map(|o| o.want);
+                let got =
+                    Blame { cause: n.cause, account: n.blamed_account, labels: n.blamed_labels.clone() };
                 self.ghost.flows.push(Flow::Exit {
+                    pid: n.pid,
                     from: self.ghost.labels(n.budget),
-                    to_class: o.class,
+                    to_class: self.budgets[&owner].class,
                     to: self.ghost.labels(owner),
+                    got,
+                    want,
                 });
                 let ret = Ret::ExitNotice {
                     pid: n.pid,
                     cause: n.cause,
                     code: n.code,
                     blamed_account: n.blamed_account,
+                    blamed_labels: n.blamed_labels,
                 };
                 self.wake(rtid, Ok(ret));
                 continue;
             }
 
+            let pending = self.endpoints[&e].badges.iter().find(|(_, s)| s.pending).map(|(b, _)| *b);
+            if let Some(badge) = pending {
+                // The label check was made when the last handle went (R1; QUESTIONS 53). A pending
+                // notice means no handle is left, so the slot goes with it.
+                self.endpoints.get_mut(&e).unwrap().receivers.pop_front();
+                self.free_badge_slot(e, badge);
+                self.ghost.flows.push(Flow::BadgeClosed { endpoint: e, badge });
+                self.wake(rtid, Ok(Ret::BadgeClosed { badge }));
+                continue;
+            }
+
             let Some(mid) = self.next_sender(e) else { return };
             let m = self.msgs[&mid].clone();
-            let transfer = match (&m.kind, &m.buffer) {
-                (MsgKind::Send, Some(b)) => b.frames.len() as u64,
-                _ => 0,
-            };
+            let pages = m.buffer.as_ref().map_or(0, |b| b.frames.len() as u64);
+            let transfer = if m.kind == MsgKind::Send { pages } else { 0 };
             // R4: a transfer larger than the receiver opted into is refused; move on.
             if transfer > max_transfer && !self.broken(Mutation::R4IgnoreMaxTransfer) {
                 self.refuse(e, mid, Error::Refused);
                 continue;
             }
-            // Transferred pages become the receiver's; if its budget cannot hold them, the
-            // transfer is refused like an unrequested one (R4; QUESTIONS 5).
-            if transfer > 0 && m.sender_budget != rbudget && self.free_pages(rbudget) < transfer {
+            // Where the buffer would be mapped, and the page tables that needs.
+            let va = if pages > 0 { self.alloc_va(rpid, pages).ok() } else { None };
+            let tables = va.map_or(0, |rv| self.tables_needed(rpid, rv..rv + pages));
+            // Transferred pages become the receiver's: if its budget cannot hold them and the page
+            // tables to map them, the transfer is refused like an unrequested one (R4; QUESTIONS 5,
+            // 44).
+            let frames = if m.sender_budget != rbudget { transfer } else { 0 };
+            if transfer > 0 && (va.is_none() || self.free_pages(rbudget) < frames.saturating_add(tables)) {
                 self.refuse(e, mid, Error::Refused);
                 continue;
             }
             // A process holds at most MAX_OPEN_CALLS open calls (R4a): a receiver that was waiting
-            // when its process reached the limit gets `Busy`, and the call stays queued (README
-            // choice 24, spec problem 3).
-            if m.kind == MsgKind::Call
-                && self.open_calls(rpid) >= MAX_OPEN_CALLS
-                && !self.broken(Mutation::OpenCallsUnlimited)
-            {
+            // when its process reached the limit gets `Busy`, and the call stays queued.
+            if m.kind == MsgKind::Call && self.open_calls_full(rpid, rtid) {
                 self.endpoints.get_mut(&e).unwrap().receivers.pop_front();
                 self.wake(rtid, Err(Error::Busy));
                 continue;
             }
-            // The receiver pays for the handles it receives, the open call and the page tables
-            // of the buffer's mapping. If it cannot, its receive fails and the message stays
-            // queued (R4a; for a send's handles and page tables, README choice 10 and spec problem 2).
+            // The receiver pays for the handles it receives, the open call and the page tables of
+            // a lend's mapping. If it cannot, its receive fails and the message stays queued (R4,
+            // R4a).
             let mut hs = m.handles.clone();
             if self.broken(Mutation::R9ReceivedHandleRestamped) {
                 for h in &mut hs {
@@ -1230,35 +1380,26 @@ impl Kernel {
             } else {
                 0
             };
-            let va = match &m.buffer {
-                Some(b) => self.alloc_va(rpid, b.frames.len() as u64).map(Some),
-                None => Ok(None),
-            };
-            let tables = match (&va, &m.buffer) {
-                (Ok(Some(rv)), Some(b)) => self.tables_needed(rpid, *rv..*rv + b.frames.len() as u64),
-                _ => 0,
-            };
-            let frames = if m.sender_budget != rbudget { transfer } else { 0 };
-            let need = growth + open + tables + frames;
-            if self.free_pages(rbudget) < need || va.is_err() {
+            let need = growth.saturating_add(open).saturating_add(tables).saturating_add(frames);
+            if self.free_pages(rbudget) < need || (pages > 0 && va.is_none()) {
                 self.endpoints.get_mut(&e).unwrap().receivers.pop_front();
                 self.wake(rtid, Err(Error::OutOfMemory));
                 continue;
             }
-            let va = va.unwrap();
 
             // Deliver.
-            let key = self.key_of(m.account, &m.labels);
+            let key = m.key.clone();
             self.ghost.took(e, &key, &self.endpoints[&e]);
             self.unqueue(mid);
             let ep = self.endpoints.get_mut(&e).unwrap();
             ep.cursor = Some(key);
             ep.receivers.pop_front();
+            // The message's copies of its handles move into the receiver's table.
             let installed = self.install(rpid, &hs).expect("room checked above");
+            self.msgs.get_mut(&mid).unwrap().handles.clear();
             self.add_usage(rbudget, open + tables);
             let mut received = None;
             if let (Some(buf), Some(rv)) = (&m.buffer, va) {
-                let n = buf.frames.len() as u64;
                 match m.kind {
                     MsgKind::Call => {
                         for (i, f) in buf.frames.iter().enumerate() {
@@ -1281,43 +1422,40 @@ impl Kernel {
                             };
                             self.map_page(rpid, rv + i as u64, map);
                         }
-                        for i in 0..n {
+                        for i in 0..pages {
                             self.unmap_page(m.sender_pid, buf.sender_vpn + i);
                         }
                         for f in &buf.frames {
                             self.frames.get_mut(f).unwrap().payer = rbudget;
                         }
-                        self.uncharge(m.sender_budget, n);
-                        self.add_usage(rbudget, n);
+                        self.uncharge(m.sender_budget, pages);
+                        self.add_usage(rbudget, pages);
                     }
                 }
                 let kind = if m.kind == MsgKind::Call { BufferKind::Lend } else { BufferKind::Transfer };
-                received = Some(Received { kind, addr: rv * PAGE_SIZE, pages: n });
+                received = Some(Received { kind, addr: rv * PAGE_SIZE, pages });
             }
-            // The receiving thread now serves this message; a `send` it served before is done.
-            let old: Vec<u64> = self.threads[&rtid].serving.clone();
-            for o in old {
-                if self.msgs.get(&o).is_some_and(|x| x.kind == MsgKind::Send) {
-                    self.msgs.remove(&o);
-                }
-            }
-            let set_account = !self.broken(Mutation::ServedAccountNeverSet);
-            let msgs = &self.msgs;
+            // A call becomes the receiving thread's newest open call; a send is done with
+            // (QUESTIONS 31).
             let t = self.threads.get_mut(&rtid).unwrap();
-            t.serving.retain(|x| msgs.contains_key(x));
-            t.serving.push(mid);
-            if set_account {
-                t.account = m.account;
-            }
-            let mm = self.msgs.get_mut(&mid).unwrap();
-            mm.server = Some((rpid, rtid));
-            if m.kind == MsgKind::Call {
-                mm.open_payer = Some(rbudget);
-            }
-            if let Some(b) = mm.buffer.as_mut() {
-                b.receiver_vpn = va;
-                if m.kind == MsgKind::Send {
-                    mm.buffer = None; // transferred: no longer in flight
+            match m.kind {
+                MsgKind::Call => {
+                    t.serving.push(mid);
+                    if self.mutation != Some(Mutation::ServedAccountNeverSet) {
+                        t.account = m.account;
+                    }
+                    let mm = self.msgs.get_mut(&mid).unwrap();
+                    mm.server = Some((rpid, rtid));
+                    mm.open_payer = Some(rbudget);
+                    if let Some(b) = mm.buffer.as_mut() {
+                        b.receiver_vpn = va;
+                    }
+                }
+                MsgKind::Send => {
+                    if self.mutation == Some(Mutation::SendSetsServedAccount) {
+                        t.account = m.account;
+                    }
+                    self.msgs.remove(&mid);
                 }
             }
             let msg = Message {
@@ -1351,9 +1489,7 @@ impl Kernel {
         let Some(t) = self.threads.get(&tid).cloned() else { return };
         match t.wait {
             Some(Wait::Send(mid)) => {
-                self.unqueue(mid);
-                self.return_buffer(mid);
-                self.msgs.remove(&mid);
+                self.discard(mid);
             }
             Some(Wait::Reply(mid)) => self.abandon(mid),
             Some(Wait::Receive { endpoint, .. }) => {
@@ -1393,7 +1529,12 @@ impl Kernel {
             if m.caller_waiting {
                 let caller = m.sender_tid;
                 self.unmap_lend_in_server(mid, false);
-                self.wake(caller, Err(err));
+                let r = if self.broken(Mutation::R4bDeadServerFakesReply) {
+                    Ok(Ret::Reply { words: [0; WORDS], handles: Vec::new() })
+                } else {
+                    Err(err)
+                };
+                self.wake(caller, r);
             } else {
                 self.unmap_lend_in_server(mid, true);
             }
@@ -1409,9 +1550,12 @@ impl Kernel {
     }
 
     /// A process ends: its threads, address space and handle table are freed, every handle naming
-    /// it is closed, and its exit notice goes to its exit endpoint.
-    fn end_process(&mut self, pid: u64, cause: Cause, code: u64, blamed_account: u64) {
+    /// it is closed, and its exit notice, reporting `blame` and `code`, goes to its exit endpoint.
+    fn end_process(&mut self, pid: u64, code: u64, blame: Blame) {
         let Some(p) = self.processes.get(&pid) else { return };
+        // Ghost: what the notice must report: a kill, unless the process began to die by an exit
+        // or a fault (`Ghost::exiting`).
+        let want = self.ghost.exit_expect.remove(&pid).unwrap_or_else(Blame::killed);
         let tids: Vec<u64> = p.threads.iter().copied().collect();
         for tid in tids {
             self.end_thread(tid);
@@ -1433,7 +1577,33 @@ impl Kernel {
         if let Some(b) = self.budgets.get_mut(&p.budget) {
             b.processes_used = b.processes_used.saturating_sub(1);
         }
+        let labels = self.labels_of(p.budget);
+        let table: Vec<Handle> = p.handles.values().copied().collect();
+        self.release(&table, &labels);
         self.sweep(|h| h.object == Object::Process(pid));
+        // Ghost: the notice is owed if its slot's payer, the exit endpoint and the stamp of the
+        // handle naming it are alive, and the label rule allows it, judged from the ghost's records.
+        if let Some(s) = self.ghost.slots.get(&pid).copied() {
+            let live = self.budgets.contains_key(&s.payer)
+                && self.budgets.contains_key(&s.stamp)
+                && self.endpoints.contains_key(&s.endpoint);
+            if live {
+                let owner = self.endpoints[&s.endpoint].owner;
+                let rule = self.budgets[&owner].class == Class::System
+                    || superset(&self.ghost.labels(owner), &self.ghost.labels(p.budget));
+                if rule {
+                    self.ghost.owed.insert(pid, Owed { endpoint: s.endpoint, payer: s.payer, want });
+                }
+            }
+        }
+        self.queue_exit_notice(&p, code, blame);
+        if let Some(x) = p.exit_endpoint {
+            self.release(&[x], &labels);
+        }
+    }
+
+    /// The exit notice of process `p`, which has just ended.
+    fn queue_exit_notice(&mut self, p: &Process, code: u64, blame: Blame) {
         let Some(payer) = p.exit_payer.filter(|b| self.budgets.contains_key(b)) else { return };
         let e = match p.exit_endpoint.map(|h| h.object) {
             Some(Object::Endpoint(e)) if self.endpoints.contains_key(&e) => e,
@@ -1446,25 +1616,32 @@ impl Kernel {
         // budget's, or whose owner is system class (QUESTIONS 4, 8); otherwise it is dropped.
         let owner = self.endpoints[&e].owner;
         let (oc, ol) = (self.budgets[&owner].class, self.budgets[&owner].labels.clone());
-        let exiting = self.budgets.get(&p.budget).map(|b| b.labels.clone()).unwrap_or_default();
-        let allowed = oc == Class::System
-            || superset(&ol, &exiting)
+        let exiting = self.budgets.get(&p.budget);
+        let exempt = if self.broken(Mutation::R1ExitExemptBySystemExiting) {
+            exiting.is_some_and(|b| b.class == Class::System)
+        } else {
+            oc == Class::System
+        };
+        let allowed = exempt
+            || superset(&ol, &exiting.map(|b| b.labels.clone()).unwrap_or_default())
             || self.broken(Mutation::R1ExitNoticeIgnoresLabels);
-        // Ghost: the notice is owed if the rule allows it, judged from the ghost's labels.
-        let ghost_allowed =
-            oc == Class::System || superset(&self.ghost.labels(owner), &self.ghost.labels(p.budget));
-        if ghost_allowed {
-            self.ghost.owed.insert(pid, Owed { endpoint: e, payer });
-        }
         let dropped =
             self.broken(Mutation::ExitNoticeDroppedIfNoReceiver) && self.endpoints[&e].receivers.is_empty();
         if !allowed || dropped {
             self.release_exit_slot(payer);
             return;
         }
-        let n = ExitNotice { pid, cause, code, blamed_account, budget: p.budget, payer };
+        let n = ExitNotice {
+            pid: p.pid,
+            cause: blame.cause,
+            code,
+            blamed_account: blame.account,
+            blamed_labels: blame.labels,
+            budget: p.budget,
+            payer,
+        };
         self.endpoints.get_mut(&e).unwrap().exits.push_back(n);
-        self.pump(e);
+        self.poke(e);
     }
 
     /// Destroy an endpoint: blocked senders and receivers get `Dead`; taken calls in flight fail
@@ -1476,7 +1653,7 @@ impl Kernel {
         let receivers: Vec<u64> = ep.receivers.iter().copied().collect();
         let exits: Vec<ExitNotice> = ep.exits.iter().cloned().collect();
         let owner = ep.owner;
-        if !self.broken(Mutation::R10QueuedSendersNotFailed) {
+        if !self.broken(Mutation::R10RevokedMessageDelivered) {
             for mid in queued {
                 self.fail_sender(mid, Error::Dead);
             }
@@ -1493,14 +1670,16 @@ impl Kernel {
             .filter(|m| m.endpoint == e && m.kind == MsgKind::Call && m.caller_waiting && m.server.is_some())
             .map(|m| m.id)
             .collect();
-        if !self.broken(Mutation::R10InFlightCallsNotFailed) {
+        if !self.broken(Mutation::R10RevokedCallAnswered) {
             for mid in in_flight {
                 let caller = self.msgs[&mid].sender_tid;
                 self.abandon(mid);
                 self.wake(caller, Err(Error::Dead));
             }
         }
-        self.endpoints.remove(&e);
+        // Its badge slots, and any badge notices pending, go with it.
+        let slots = self.endpoints.remove(&e).map_or(0, |x| x.badges.len() as u64);
+        self.uncharge(owner, self.badge_slot_pages(slots));
         if !self.broken(Mutation::R6EndpointsFree) {
             self.uncharge(owner, self.costs.endpoint);
         }
@@ -1532,7 +1711,7 @@ impl Kernel {
             }
             let pids: Vec<u64> = self.processes.values().filter(|p| p.budget == *x).map(|p| p.pid).collect();
             for pid in pids {
-                self.end_process(pid, Cause::Killed, 0, 0);
+                self.end_process(pid, 0, Blame::killed());
             }
         }
         let eps: Vec<u64> =
@@ -1541,8 +1720,31 @@ impl Kernel {
             self.destroy_endpoint(e);
         }
         // Exit slots the doomed budgets paid for go with them (QUESTIONS 7; README choice 21).
-        for ep in self.endpoints.values_mut() {
-            ep.exits.retain(|n| !doomed.contains(&n.payer));
+        if !self.broken(Mutation::R10ExitNoticesOutlivePayer) {
+            for ep in self.endpoints.values_mut() {
+                ep.exits.retain(|n| !doomed.contains(&n.payer));
+            }
+        }
+        // Revocation reaches messages already sent through a doomed stamp (QUESTIONS 30): a queued
+        // one fails its sender with `Dead`; a taken call fails its caller with `Dead` at once and
+        // stays open at its server, its lend kept as in R3 and its reply discarded.
+        let revoked: Vec<(u64, bool)> = self
+            .msgs
+            .values()
+            .filter(|m| doomed.contains(&m.stamp))
+            .map(|m| (m.id, m.server.is_some()))
+            .collect();
+        for (mid, taken) in revoked {
+            if !taken && !self.broken(Mutation::R10RevokedMessageDelivered) {
+                self.fail_sender(mid, Error::Dead);
+            } else if taken
+                && self.msgs[&mid].caller_waiting
+                && !self.broken(Mutation::R10RevokedCallAnswered)
+            {
+                let caller = self.msgs[&mid].sender_tid;
+                self.abandon(mid);
+                self.wake(caller, Err(Error::Dead));
+            }
         }
         for p in self.processes.values_mut() {
             if p.exit_payer.is_some_and(|x| doomed.contains(&x)) {
@@ -1594,7 +1796,10 @@ impl Kernel {
             let next = match (t, b) {
                 (Some(x), Some(y)) => x.min(y),
                 (Some(x), None) | (None, Some(x)) => x,
-                (None, None) => return,
+                (None, None) => {
+                    self.settle();
+                    return;
+                }
             };
             match next {
                 (_, 0, tid) => self.time_out(tid),
@@ -1608,9 +1813,7 @@ impl Kernel {
         let Some(wait) = self.threads.get(&tid).and_then(|t| t.wait) else { return };
         match wait {
             Wait::Send(mid) => {
-                self.unqueue(mid);
-                self.return_buffer(mid);
-                self.msgs.remove(&mid);
+                self.discard(mid);
             }
             // R3: the server keeps the lend, charged to it, until its reply.
             Wait::Reply(mid) => self.abandon(mid),
@@ -1638,6 +1841,17 @@ impl Kernel {
         let end = self.now.saturating_add(dt);
         while self.now < end {
             let pick = self.sched.pick();
+            // With one budget runnable and nothing due, every whole slice until the next event
+            // goes to it alike: charge them at once (the same passes as slice by slice), so that a
+            // long tick costs the model no more than a short one.
+            let until = self.next_event().filter(|e| *e > self.now).map_or(end, |e| e.min(end));
+            let slices = (until - self.now) / SLICE;
+            if let Some((b, _)) = pick.filter(|_| slices > 1 && self.sched.runnable_budgets() == 1) {
+                self.now += slices * SLICE;
+                self.sched.charge_slices(b, slices);
+                self.expire();
+                continue;
+            }
             let mut run = end - self.now;
             if pick.is_some() {
                 run = run.min(SLICE);
@@ -1747,6 +1961,7 @@ impl Kernel {
                 Outcome::Done(Ok(Ret::Unit))
             }
         };
+        self.settle();
         self.expire();
         // A call that blocked and was answered within this same step returns its answer
         // directly (for example `receive` with a message waiting, or a timeout of 0).
@@ -1772,10 +1987,39 @@ impl Kernel {
         })
     }
 
+    /// Thread `tid` of `pid` faults: the process ends `faulted`.
     fn fault(&mut self, pid: u64, tid: u64) {
-        // Blame: the account the faulting thread was serving.
-        let blamed = self.threads.get(&tid).map_or(0, |t| t.account);
-        self.end_process(pid, Cause::Faulted, 0, blamed);
+        self.exit_as(pid, tid, 0, true);
+    }
+
+    /// Process `pid` ends through thread `tid`: by a fault if `fault`, else by an exit with
+    /// `code`. It is reported `faulted` if it faulted or holds open calls (QUESTIONS 55), blaming
+    /// the sender of `tid`'s most recently taken call still open (QUESTIONS 37, 48); otherwise
+    /// `exited`.
+    fn exit_as(&mut self, pid: u64, tid: u64, code: u64, fault: bool) {
+        let Some(p) = self.processes.get(&pid) else { return };
+        let threads: Vec<u64> = p.threads.iter().copied().collect();
+        self.ghost.exiting(pid, tid, &threads, fault);
+        let open = self.open_calls(pid) > 0 && !self.broken(Mutation::ExitWithOpenCallsNotFaulted);
+        let serving = self.threads.get(&tid).map_or(&[][..], |t| &t.serving[..]);
+        let blamed = if self.broken(Mutation::BlameNobody) {
+            None
+        } else if self.broken(Mutation::BlameOldestCall) {
+            serving.first()
+        } else {
+            serving.last()
+        };
+        let blamed = blamed.and_then(|m| self.msgs.get(m));
+        let blame = if fault || open {
+            Blame {
+                cause: Cause::Faulted,
+                account: blamed.map_or(0, |m| m.account),
+                labels: blamed.map_or(Vec::new(), |m| m.labels.clone()),
+            }
+        } else {
+            Blame { cause: Cause::Exited, account: 0, labels: Vec::new() }
+        };
+        self.end_process(pid, code, blame);
     }
 
     fn access(&mut self, pid: u64, tid: u64, addr: u64, need: u64, value: Option<u64>) -> Outcome {
@@ -1817,7 +2061,7 @@ impl Kernel {
                 self.thread_exit(pid, tid);
                 Outcome::Gone
             }
-            S::ProcessExit { code } => match self.process_exit(pid, *code) {
+            S::ProcessExit { code } => match self.process_exit(pid, tid, *code) {
                 Ok(()) => Outcome::Gone,
                 Err(e) => done(Err(e)),
             },
@@ -1827,8 +2071,8 @@ impl Kernel {
             S::ProcessMap { process, src, dst, len, flags } => {
                 done(self.process_map(pid, *process, *src, *dst, *len, *flags).map(|_| Ret::Unit))
             }
-            S::ProcessStart { process, entry, sp, handles } => {
-                done(self.process_start(pid, *process, *entry, *sp, handles).map(|_| Ret::Unit))
+            S::ProcessStart { process, entry, sp, arg, handles } => {
+                done(self.process_start(pid, *process, *entry, *sp, *arg, handles).map(|_| Ret::Unit))
             }
             S::EndpointCreate => done(self.endpoint_create(pid).map(Ret::Handle)),
             S::Mint { source, badge, budget } => {
@@ -1968,20 +2212,21 @@ impl Kernel {
     }
 
     /// `thread_exit`. The last thread's exit ends the process as `process_exit(0)` would (README
-    /// choice 16).
+    /// choice 16), `faulted` if it holds open calls.
     pub fn thread_exit(&mut self, pid: u64, tid: u64) {
-        self.end_thread(tid);
-        if self.processes.get(&pid).is_some_and(|p| p.threads.is_empty()) {
-            self.end_process(pid, Cause::Exited, 0, 0);
+        if self.processes.get(&pid).is_some_and(|p| p.threads.len() == 1) {
+            self.exit_as(pid, tid, 0, false);
+        } else {
+            self.end_thread(tid);
         }
     }
 
-    /// `process_exit(code)`: exit notice `exited`.
-    pub fn process_exit(&mut self, pid: u64, code: u64) -> R<()> {
+    /// `process_exit(code)`: exit notice `exited`, or `faulted` while the process holds open calls.
+    pub fn process_exit(&mut self, pid: u64, tid: u64, code: u64) -> R<()> {
         if code > U32_MAX {
             return Err(Error::InvalidArgument);
         }
-        self.end_process(pid, Cause::Exited, code, 0);
+        self.exit_as(pid, tid, code, false);
         Ok(())
     }
 
@@ -1992,7 +2237,7 @@ impl Kernel {
         let budget = decode_handle(budget)?;
         let exit_endpoint = decode_handle(exit_endpoint)?;
         let b = self.lookup_budget(pid, budget)?;
-        let (_, exit) = self.lookup_endpoint(pid, exit_endpoint)?;
+        let (endpoint, exit) = self.lookup_endpoint(pid, exit_endpoint)?;
         let bx = &self.budgets[&b];
         // A budget with weight 0 cannot hold a process (QUESTIONS 12).
         if bx.weight == 0 && !self.broken(Mutation::ProcessInWeightlessBudget) {
@@ -2005,7 +2250,8 @@ impl Kernel {
         self.charge(b, object)?;
         let caller_budget = self.budget_of(pid).unwrap();
         let slot = if self.broken(Mutation::R6ExitSlotFree) { 0 } else { self.costs.exit_slot };
-        if let Err(e) = self.charge(caller_budget, slot) {
+        let payer = if self.broken(Mutation::R6ExitSlotChargedToChild) { b } else { caller_budget };
+        if let Err(e) = self.charge(payer, slot) {
             self.uncharge(b, object);
             return Err(e);
         }
@@ -2028,20 +2274,24 @@ impl Kernel {
                 space: BTreeMap::new(),
                 tables: BTreeMap::new(),
                 exit_endpoint: Some(exit),
-                exit_payer: Some(caller_budget),
+                exit_payer: Some(payer),
             },
         );
         match self.install(pid, &[h]) {
             Ok(v) => {
                 self.next_pid += 1;
                 self.budgets.get_mut(&b).unwrap().processes_used += 1;
+                self.hold(&[exit]);
+                // Ghost: the slot is the caller's, read from its process object.
+                let slot = Slot { payer: self.processes[&pid].budget, endpoint, stamp: exit.stamp };
+                self.ghost.slots.insert(child, slot);
                 self.notes.push(Note::Process { creator: pid, h: v[0], pid: child });
                 Ok(v[0])
             }
             Err(e) => {
                 self.processes.remove(&child);
                 self.uncharge(b, object);
-                self.uncharge(caller_budget, slot);
+                self.uncharge(payer, slot);
                 Err(e)
             }
         }
@@ -2080,10 +2330,19 @@ impl Kernel {
         Ok(())
     }
 
-    /// `process_start(h(process), entry, sp, handles)`: not started; handles copied into slots
-    /// 1..n (at most `MAX_START_HANDLES`, QUESTIONS 10). The child's table and first thread are
-    /// charged to the child's budget.
-    pub fn process_start(&mut self, pid: u64, process: u64, _entry: u64, _sp: u64, handles: &[u64]) -> R<()> {
+    /// `process_start(h(process), entry, sp, arg, handles)`: not started; handles copied into
+    /// slots 1..n (at most `MAX_START_HANDLES`, QUESTIONS 10). The child's table and first thread
+    /// are charged to the child's budget. `arg` (the startup page's address, QUESTIONS 40) is not
+    /// checked; it reaches the first thread, which the model does not run.
+    pub fn process_start(
+        &mut self,
+        pid: u64,
+        process: u64,
+        _entry: u64,
+        _sp: u64,
+        _arg: u64,
+        handles: &[u64],
+    ) -> R<()> {
         let process = decode_handle(process)?;
         if handles.len() > MAX_START_HANDLES {
             return Err(Error::TooLarge);
@@ -2105,6 +2364,7 @@ impl Kernel {
             self.uncharge(b, self.costs.thread);
             return Err(e);
         }
+        self.hold(&hs);
         self.processes.get_mut(&child).unwrap().started = true;
         let tid = self.new_thread(child);
         self.notes.push(Note::Thread { pid: child, tid });
@@ -2128,6 +2388,7 @@ impl Kernel {
                 cursor: None,
                 receivers: VecDeque::new(),
                 exits: VecDeque::new(),
+                badges: BTreeMap::new(),
             },
         );
         match self.install(pid, &[h]) {
@@ -2152,10 +2413,14 @@ impl Kernel {
         badge: u64,
         budget: Option<u64>,
     ) -> R<u64> {
-        // Decoding, in register order: the source, the badge (0 is refused, QUESTIONS 15), the
-        // optional budget.
-        if let MintSource::Handle(h) = source {
-            decode_handle(h)?;
+        // Decoding, in register order: the source (a message id of 0 is malformed), the badge (0
+        // is refused, QUESTIONS 15), the optional budget.
+        match source {
+            MintSource::Handle(h) => {
+                decode_handle(h)?;
+            }
+            MintSource::Message(0) => return Err(Error::InvalidArgument),
+            MintSource::Message(_) => {}
         }
         if badge == 0 {
             return Err(Error::InvalidArgument);
@@ -2205,7 +2470,24 @@ impl Kernel {
             stamp,
             origin: Origin::Minted { default_stamp: default },
         };
-        let out = self.install(pid, &[h])?[0];
+        // Resources: a new badge's slot, charged to the endpoint's owner (QUESTIONS 53), then the
+        // caller's table.
+        let owner = self.endpoints[&e].owner;
+        let n = self.endpoints[&e].badges.len() as u64;
+        let new_slot = !self.endpoints[&e].badges.contains_key(&badge);
+        let growth = if new_slot { self.badge_slot_pages(n + 1) - self.badge_slot_pages(n) } else { 0 };
+        self.charge(owner, growth)?;
+        let out = match self.install(pid, &[h]) {
+            Ok(v) => v[0],
+            Err(err) => {
+                self.uncharge(owner, growth);
+                return Err(err);
+            }
+        };
+        // A mint of a badge whose notice is pending withdraws the notice.
+        let slot = self.endpoints.get_mut(&e).unwrap().badges.entry(badge).or_default();
+        slot.pending = false;
+        slot.count += 1;
         self.ghost.flows.push(Flow::Minted { pid, tid, endpoint: e, via: source, default_stamp: default });
         Ok(out)
     }
@@ -2230,7 +2512,7 @@ impl Kernel {
         for x in handles {
             decode_handle(*x)?;
         }
-        let (e, _) = self.lookup_endpoint(pid, h)?;
+        let (e, via) = self.lookup_endpoint(pid, h)?;
         let mut hs = Vec::new();
         for x in handles {
             hs.push(self.lookup(pid, *x)?);
@@ -2252,17 +2534,36 @@ impl Kernel {
         // R1: between two user budgets, only equal label sets; the receiving side is the
         // endpoint's owner (QUESTIONS 4; README spec problem 4).
         let sender = &self.budgets[&self.budget_of(pid).unwrap()];
-        let owner = &self.budgets[&self.endpoints[&e].owner];
-        if sender.class == Class::User
+        let owner_id = self.endpoints[&e].owner;
+        let mut owner = &self.budgets[&owner_id];
+        if self.broken(Mutation::R1ChecksReceiverNotOwner) {
+            if let Some(r) = self.endpoints[&e].receivers.front() {
+                owner = &self.budgets[&self.budget_of(self.threads[r].pid).unwrap()];
+            }
+        }
+        let sender_class = if self.broken(Mutation::R1SenderClassFromStamp) {
+            self.budgets.get(&via.stamp).map_or(sender.class, |b| b.class)
+        } else {
+            sender.class
+        };
+        if sender_class == Class::User
             && owner.class == Class::User
             && sender.labels != owner.labels
             && !self.broken(Mutation::R1SkipLabelCheck)
         {
+            // Ghost: the refusal, as the sender's and the owner's budget objects describe them.
+            let owner = &self.budgets[&owner_id];
+            self.ghost.flows.push(Flow::LabelDenied {
+                from_class: sender.class,
+                from: self.ghost.labels(sender.id),
+                to_class: owner.class,
+                to: self.ghost.labels(owner_id),
+            });
             return Err(Error::LabelDenied);
         }
         let account = if self.broken(Mutation::MsgAccountZero) { 0 } else { sender.account };
         let labels = if self.broken(Mutation::MsgNoLabels) { Vec::new() } else { sender.labels.clone() };
-        let key = self.key_of(account, &labels);
+        let key = self.queue_key(account, &labels, via.stamp);
         let waiting = self.endpoints[&e].queue.get(&key).map_or(0, |q| q.len() as u64);
         if waiting >= WAIT_CAP && !self.broken(Mutation::R2NoWaitCap) {
             // Ghost: the key as the sender's budget object gives it.
@@ -2306,6 +2607,7 @@ impl Kernel {
             Sent {
                 kind,
                 sender_budget: b,
+                sender_tid: tid,
                 sender_class: bx.class,
                 labels: self.ghost.labels(b),
                 account: bx.account,
@@ -2332,7 +2634,9 @@ impl Kernel {
             }
             InFlight { sender_vpn: first, frames, receiver_vpn: None }
         });
-        let key = self.key_of(account, &labels);
+        let key = self.queue_key(account, &labels, hd.stamp);
+        // The message carries copies of the handles.
+        self.hold(&hs);
         self.msgs.insert(
             id,
             Msg {
@@ -2346,6 +2650,7 @@ impl Kernel {
                 stamp,
                 account,
                 labels,
+                key: key.clone(),
                 words,
                 handles: hs,
                 buffer,
@@ -2356,7 +2661,7 @@ impl Kernel {
         );
         self.endpoints.get_mut(&e).unwrap().queue.entry(key).or_default().push_back(id);
         self.block(tid, Wait::Send(id), timeout);
-        self.pump(e);
+        self.poke(e);
         Outcome::Blocked
     }
 
@@ -2424,7 +2729,7 @@ impl Kernel {
                     return Outcome::Done(Err(Error::NotPermitted));
                 }
                 // At most MAX_OPEN_CALLS open calls per process (QUESTIONS 2).
-                if self.open_calls(pid) >= MAX_OPEN_CALLS && !self.broken(Mutation::OpenCallsUnlimited) {
+                if self.open_calls_full(pid, tid) {
                     return Outcome::Done(Err(Error::Busy));
                 }
                 if self.broken(Mutation::ReceiveDropsOpenCalls) {
@@ -2433,7 +2738,7 @@ impl Kernel {
                 self.ghost.receiving.insert(tid, Receiving { handle: hd, max_transfer });
                 self.block(tid, Wait::Receive { endpoint: e, h, max_transfer }, timeout);
                 self.endpoints.get_mut(&e).unwrap().receivers.push_back(tid);
-                self.pump(e);
+                self.poke(e);
                 Outcome::Blocked
             }
             Object::Device(d) if matches!(self.devices[&d].kind, DeviceKind::Irq { .. }) => {
@@ -2464,6 +2769,10 @@ impl Kernel {
     /// `reply(msg_id, words, handles)`: caller is serving `msg_id`, which came by `call` (a
     /// `send` cannot be replied to, QUESTIONS 1); returns the lend.
     pub fn reply(&mut self, pid: u64, tid: u64, msg_id: u64, words: [u64; WORDS], handles: &[u64]) -> R<()> {
+        // Decoding: the message id register (0 is malformed), then the body.
+        if msg_id == 0 {
+            return Err(Error::InvalidArgument);
+        }
         if handles.len() > MAX_MSG_HANDLES {
             return Err(Error::TooLarge);
         }
@@ -2493,7 +2802,10 @@ impl Kernel {
         // The caller pays for the handles it receives; if it cannot, its call fails with
         // `OutOfMemory` (the server's reply still succeeds; README choice 11).
         let result = match self.install(m.sender_pid, &hs) {
-            Ok(installed) => Ok(Ret::Reply { words, handles: installed }),
+            Ok(installed) => {
+                self.hold(&hs);
+                Ok(Ret::Reply { words, handles: installed })
+            }
             Err(e) => Err(e),
         };
         self.wake(m.sender_tid, result);
@@ -2559,7 +2871,8 @@ impl Kernel {
         if !superset(&labels, &px.labels) {
             return Err(Error::LabelDenied);
         }
-        if labels != px.labels && caller_class != Class::System {
+        let adder = if self.broken(Mutation::LabelsAddedByParentClass) { px.class } else { caller_class };
+        if labels != px.labels && adder != Class::System {
             return Err(Error::ClassDenied);
         }
         // R6/R7: carve from the parent's free limits.
@@ -2626,8 +2939,17 @@ impl Kernel {
         let b = self.lookup_budget(pid, h)?;
         let caller = &self.budgets[&self.budget_of(pid).unwrap()];
         let target = &self.budgets[&b];
-        let exempt = caller.class == Class::System || self.broken(Mutation::R1UsageIgnoresLabels);
+        let exempt = if self.broken(Mutation::R1UsageExemptBySystemTarget) {
+            target.class == Class::System
+        } else {
+            caller.class == Class::System || self.broken(Mutation::R1UsageIgnoresLabels)
+        };
         if !exempt && !superset(&caller.labels, &target.labels) {
+            self.ghost.flows.push(Flow::UsageDenied {
+                from: self.ghost.labels(target.id),
+                to_class: caller.class,
+                to: self.ghost.labels(caller.id),
+            });
             return Err(Error::LabelDenied);
         }
         self.ghost.flows.push(Flow::Usage {

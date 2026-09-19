@@ -112,10 +112,10 @@ fn lender_dies_mid_call() -> Vec<Op> {
         init(budget(3, Class::User, 1001)),                            // h:10 alice
         init(budget(2, Class::System, 0)),                             // h:11 server
         init(Syscall::ProcessCreate { budget: 11, exit_endpoint: 9 }), // h:12
-        init(Syscall::ProcessStart { process: 12, entry: 0x1000, sp: 0x2000, handles: vec![9] }),
+        init(Syscall::ProcessStart { process: 12, entry: 0x1000, sp: 0x2000, arg: 0, handles: vec![9] }),
         init(Syscall::Mint { source: MintSource::Handle(9), badge: 5, budget: Some(10) }), // h:13
         init(Syscall::ProcessCreate { budget: 10, exit_endpoint: 9 }),                     // h:14
-        init(Syscall::ProcessStart { process: 14, entry: 0x1000, sp: 0x2000, handles: vec![13] }),
+        init(Syscall::ProcessStart { process: 14, entry: 0x1000, sp: 0x2000, arg: 0, handles: vec![13] }),
         server(Syscall::Receive { h: Some(1), timeout: FOREVER, max_transfer: 0 }),
         client(Syscall::MapAnon { len: 2 * PAGE_SIZE, flags: FLAG_R | FLAG_W }),
         Op::Write { pid: 3, tid: 3, addr: buf, value: 42 },
@@ -190,7 +190,12 @@ fn hostile_traces_are_refused_cleanly() {
         format!("redoubt-model-trace 1\nboot root=[{}] system=[1,1,1] users=[1,1,1]\n", "9,".repeat(10_000)),
         "redoubt-model-trace 1\nboot root=[0,0,0] system=[0,0,0] users=[0,0,0]\n".to_string(),
         "redoubt-model-trace 1\ncosts budget=1 process=1 thread=1 endpoint=1 handles_per_page=0 page_table=1 \
-         open_call=1 exit_slot=1\n"
+         open_call=1 exit_slot=1 badge_slots_per_page=1\n"
+            .to_string(),
+        // Costs whose sums would overflow (the red team's panics at `tables_needed` and at a
+        // delivery's page count).
+        "redoubt-model-trace 1\ncosts budget=1 process=1 thread=1 endpoint=1 handles_per_page=1 \
+         page_table=18446744073709551615 open_call=18446744073709551615 exit_slot=1 badge_slots_per_page=1\n"
             .to_string(),
         "redoubt-model-trace 1\ntick 18446744073709551615\n".to_string(),
         "redoubt-model-trace 1\ndo p:1 t:1 random 18446744073709551615 -> ok\n".to_string(),

@@ -26,6 +26,8 @@ pub const SLICE: u64 = 10_000;
 pub const FOREVER: u64 = u64::MAX;
 /// `random`: `len` at most this (QUESTIONS 15).
 pub const MAX_RANDOM: u64 = 64;
+/// The latest a budget deadline may be, from now (QUESTIONS 33): 24 hours.
+pub const MAX_LEASE: u64 = 24 * 3600 * 1_000_000;
 /// Taken-but-unreplied calls per process (QUESTIONS 2, as answered).
 pub const MAX_OPEN_CALLS: u64 = 64;
 /// Handles in `process_start`'s list (QUESTIONS 10).
