@@ -31,6 +31,7 @@ paging = { path = "../redoubt/paging" }
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(ci)', 'cfg(baremetal)'] }
 
 [features]
+smp = [] # multi-hart: KernelCell becomes a spinlock (the big kernel lock)
 
 # Capabilities. Boards select these; code keys on them rather than on the CPU's XLEN.
 # See "Hardware abstraction" in planning/redoubt/PLAN.md.
