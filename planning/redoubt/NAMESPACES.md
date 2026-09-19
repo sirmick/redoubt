@@ -77,7 +77,10 @@ power-loss safety, small enough to read. (Rust is required by tenet 3, so it is 
   on the target. (`littlefs2` on crates.io wraps the C library: not used.)
 - **Metadata** in littlefs custom attributes: what 9P `stat` needs (mtime, qid version). No owners
   or permission bits: access is by capability.
-- **Accepted limits:** large directories and files scale poorly; data is not checksummed.
+- **Accepted limits:** large directories and files scale poorly; data is not checksummed. For
+  milestone 1 also: no wear levelling (virtio disks do their own), no superblock expansion, and a
+  file's attributes and its data are two commits, not one (WP-D2 asks for an atomic attribute commit
+  if it needs one).
 - **Rejected:** RedoxFS (no published spec, one implementation, format churn); ext4 as the native
   filesystem (too large).
 - **Harness:** fuzzed images, crash injection at every block write, model-based tests against an

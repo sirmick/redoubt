@@ -33,15 +33,17 @@ Two primitives, each with a timeout (KERNEL-SPEC.md, Messages):
   a maximum; the pages' owner and payer change together. Handing pages over and waiting for an answer
   is a `send` then a `call`.
 - **No kernel queue.** A sender waits until the receiver takes its message; waiting senders are
-  served round-robin by account, and each account may have only a few waiting per endpoint, so
-  thousands of threads from one account cannot starve another.
+  served round-robin by account and label set, and each may have only a few waiting per endpoint,
+  so thousands of threads from one account cannot starve another (CONTAINMENT.md says why the label
+  set counts too).
 - **Every message carries the caller's badge, account and labels.** Servers use them for admission
   and label checks (CONTAINMENT.md). The raw budget id does not travel.
 - **The other side going away** (death or timeout) never corrupts a server: a lent buffer stays with
   the server, charged to it, until it replies.
-- **Exit notices.** Whoever creates a process names an endpoint and receives one exit notice there.
-  There are no death subscriptions. There is no per-process kill: a process that must be killable on
-  its own gets its own budget, and killing it means destroying that budget.
+- **Exit notices.** Whoever creates a process names an endpoint and receives one exit notice there;
+  the creator pays for the notice when it creates the process. There are no death subscriptions.
+  There is no per-process kill: a process that must be killable on its own gets its own budget, and
+  killing it means destroying that budget.
 - **Interrupts** are received like messages: a driver thread waits on its IRQ handle.
 
 ## Minting and revocation
@@ -128,8 +130,9 @@ declassification). Most things need none.
   marked untrusted.
 - **Binding.** Each request has a random 64-bit id and a hash of its exact content; approving
   confirms both. The request is frozen until answered; any change makes it a new request.
-- **Limits and labels.** Each account has a cap on pending requests. A request from a labelled budget
-  is shown only to principals owning every label it carries; otherwise it is refused at submission.
+- **Limits and labels.** Each (account, label set) has a cap on pending requests. A request from a
+  labelled budget is shown only to principals owning every label it carries; otherwise it is refused
+  at submission.
 - **Milestone 1** has one approval path: `ssh approve@box` with the person's own SSH key. An approval
   grants no more than the approver holds.
 - **Later:** high-stakes approvals in a fresh `ssh approve-hs@box` connection that accepts only the

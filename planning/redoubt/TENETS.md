@@ -79,7 +79,9 @@ loader, kernel) and hold it in their head. It should read like a textbook exampl
 - Assembly is limited to what the language cannot express: trap entry and exit, context switch, the
   first instructions after reset. It is written as `global_asm!`/`asm!` inside Rust sources, never as
   separate prebuilt objects.
-- No C, no C toolchain in the build, no binary blobs, no bindings to C libraries.
+- No C, no C toolchain in the build, no binary blobs, no bindings to C libraries. One exception, on
+  the host only: **test oracles and fuzz drivers** (the littlefs C reference, libFuzzer) may be C or
+  C++, in crates outside the workspace build, never linked into anything that runs on the machine.
 - The build is one toolchain (`rustc` + `cargo`), pinned, and reproducible.
 
 ## 4. Open, auditable standards

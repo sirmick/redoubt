@@ -56,7 +56,10 @@ Same low 10 PTE flag bits; the physical page number starts at bit 10 in both. So
 | `satp` ASID | bits 22..30 | bits 44..59 |
 | canonical addresses | all 32 bits | sign-extended at bit 38 |
 
-Code keys on `target_pointer_width` only for these, the saved-context size and the trap assembly.
+Code keys on `target_pointer_width` only for these, the saved-context size, the trap assembly, and
+the ABI's register encoding (PLAN.md). The last needs none in practice: a 64-bit argument always
+takes two 32-bit register halves on both widths (KERNEL-SPEC.md, ABI), so `redoubt-sys` has no width
+`cfg` at all.
 
 ## satp, PTEs, W^X
 - `satp` = mode | (PID as ASID) | root PPN. All decoding goes through `arch::mem` helpers.

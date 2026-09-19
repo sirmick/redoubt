@@ -50,19 +50,24 @@ One strict JSON file (WIRE.md) in the signed bundle; `init`'s only input. Entrie
 | `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), device names, volume, the endpoints it receives on, the endpoints it is handed, and arguments |
 | `principals` | milestone 1 only: each principal's name, SSH public keys for login and approval, budget, account, owned labels, home (volume and path), and network scope (IP prefixes and ports) |
 
+Each field has one JSON type (WIRE.md): 64-bit quantities (label ids, accounts, page and byte sizes,
+deadlines) are decimal strings; small counts (processes, weights, depths, restart limits) and ports
+are numbers. A value of the wrong JSON type is an error.
+
 Example fragment:
 ```json
 { "servers": [ { "name": "fsd:data", "program": "fsd", "volume": "data",
-                 "budget": { "pages": "4096", "processes": "1", "weight": "100" },
+                 "budget": { "pages": "4096", "processes": 1, "weight": 100 },
                  "receives": ["fsd:data"], "handed": ["blkd"] } ],
   "principals": [ { "name": "alice", "account": "1001", "labels": ["alice-secrets"],
                     "ssh_keys": ["ssh-ed25519 AAAA..."], "home": "data:/home/alice",
-                    "net": [ { "prefix": "0.0.0.0/0", "ports": ["22", "443"] } ] } ] }
+                    "net": [ { "prefix": "0.0.0.0/0", "ports": [22, 443] } ] } ] }
 ```
 
 ## Restarts and reboots
-- **Restart:** a server that exits is restarted on the same endpoint. Calls in flight and blocked
-  senders get `Dead`; in milestone 1 clients see the error and retry. (Milestone 2: the namespace
+- **Restart:** a server that exits is restarted on the same endpoint. Calls it had taken get `Dead`
+  (in milestone 1 clients see the error and retry); senders still blocked on the endpoint wait and
+  are served by the restarted server (KERNEL-SPEC.md, R4b). (Milestone 2: the namespace
   library re-walks from the root, so most programs see only a hiccup.)
 - **Blame:** each exit notice names the account the faulting thread was serving; three crashes blamed
   on the same account within 10 minutes log that account out (CONTAINMENT.md).
@@ -94,8 +99,9 @@ waiting (`pkg` from milestone 2). IEx evaluates any Elixir, with exactly the ses
 It runs on the UART console before SSH exists.
 
 ## Startup block
-Before a process runs, its parent installs its handles in its table and maps one ordinary page into
-it, holding tagged entries (the kernel argument block's tag format):
+Before a process runs, its parent installs its handles in its table (`process_start` copies them
+into slots 1..n, at most `MAX_START_HANDLES`; handle 0 is never a handle) and maps one ordinary page
+into it, holding tagged entries (the kernel argument block's tag format):
 - the namespace table (`"/"` -> handle 3, `"/dev/cons"` -> handle 4, ...);
 - named service handles (`"keys"`, `"powerbox"`), and device handles for drivers;
 - arguments, and its budget handle.

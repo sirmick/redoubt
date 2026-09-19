@@ -9,11 +9,14 @@ a lease, contained. Every property backed by an attack test (PLAN.md).
 ## How to read a work package
 Each package (WP) has:
 - **Reads:** the design it implements. The spec wins over anything else; rules are cited as R1-R12
-  and invariants as I1-I14 (KERNEL-SPEC.md).
+  (with R4a and R4b) and invariants as I1-I14 (KERNEL-SPEC.md).
 - **Delivers:** the crates, programs or changes it produces, and the paths it may write.
 - **Accepted when:** its tests. A package is done when these pass in `cargo testbench` (and the
   model's property tests, where named), a reviewer has checked it against the spec, and STATUS.md
   is updated. Every security property it touches has an **attack case** that tries to break it.
+  An attack case asserts its outcome through the system (the kernel, the victim, or a clean
+  power-off), never through the attacker's own output: the console does not say who wrote a line,
+  so a hostile program can print its own PASSED line.
 - **Needs:** the packages that must be done first.
 - **Size:** S (a few hundred lines), M (up to ~1.5k), L (more).
 
@@ -25,7 +28,11 @@ not needed.
 - **Widths:** milestone 1 is built and booted on rv64. rv32 must keep **compiling** (kernel, loader,
   `redoubt-sys`, `redoubt-rt`, servers): a build check in the bench, no rv32 boots. Width-specific
   code only in paging geometry, trap entry and saved context, and the ABI's register encoding
-  (PLAN.md).
+  (PLAN.md); `redoubt-sys` needs none, since both widths share one register layout (KERNEL-SPEC.md,
+  ABI).
+- **Typed-message tables:** each server package (WP-D1, WP-D2, WP-D3, WP-S1, WP-S2, WP-S3) writes
+  the tables of the protocols its server serves into that server's note, in WIRE.md's format, with a
+  HISTORY.md line: a small design addition, reviewed as one.
 
 ## Work packages
 
@@ -52,9 +59,10 @@ not needed.
 
 **WP-A1. System call ABI crate.** Size S.
 - Reads: KERNEL-SPEC.md (system calls, messages, errors).
-- Delivers: `redoubt-sys`: call numbers, argument and result register encodings for both widths, the
-  error enum, and a host round-trip test for every call and error (like `xous`'s `Result` test).
-- Accepted when: round-trip tests pass for both widths' encodings; the names match WP-M0 exactly.
+- Delivers: `redoubt-sys`: call numbers, argument and result register encodings (one layout for
+  both widths), the error enum, and a host round-trip test for every call and error (like `xous`'s
+  `Result` test).
+- Accepted when: round-trip tests pass; the names match WP-M0 exactly.
 - Needs: WP-M0's call list (can start from KERNEL-SPEC.md directly).
 
 **WP-L1. littlefs in pure Rust.** Size L.
@@ -74,24 +82,30 @@ not needed.
 
 ### Track K: the kernel (one integrator at a time; see "Hotspots")
 **WP-K1. Budgets and handle tables.** Size L.
-- Reads: KERNEL-SPEC.md objects (Budget, Handle), R6-R10, `budget_*`, `handle_close`, `time_now`, `random`.
-- Delivers: budget objects with page and process accounting, carving, accounts, deadlines recorded
-  (enforced by WP-K5), destruction sweeping stamped handles; per-process handle tables charged in
-  pages; 64-bit never-reused ids.
+- Reads: KERNEL-SPEC.md objects (Budget, Handle, the cost table), R6-R10, `budget_*`,
+  `handle_close`, `time_now`, `random`; errors and the order of checks.
+- Delivers: budget objects with page, process and weight accounting, carving, accounts, deadlines
+  recorded (enforced by WP-K5), destruction sweeping stamped handles; per-process handle tables
+  charged in pages (confirming the cost table's 128 handles per page, or changing it); 64-bit
+  never-reused ids.
 - Accepted when: kernel cases for R6-R10 and I2, I5, I8, I10, I12; attack cases: carve beyond the
   parent, exhaust handle tables, destroy while handles are held elsewhere, forge a handle index.
 - Needs: WP-A1.
 
 **WP-K2. Endpoints and messages.** Size L.
-- Reads: KERNEL-SPEC.md Endpoint, Messages, R1-R4, `endpoint_create`, `mint`, `call`, `send`,
+- Reads: KERNEL-SPEC.md Endpoint, Messages, R1-R4b, `endpoint_create`, `mint`, `call`, `send`,
   `receive`, `reply`.
-- Delivers: endpoints; the four IPC calls with lend and transfer; `mint` with stamps; badge-0
-  receive rights; the label check; fair waiting by account; lends that outlive their lender;
-  transfer opt-in.
-- Accepted when: kernel cases for R1-R4 and I3, I4, I7, I9, I11; attack cases: steal a receive
+- Delivers: endpoints; the four IPC calls with lend and transfer; `receive` reporting a call or a
+  send; open calls (up to `MAX_OPEN_CALLS` per process, each charged a page); `mint` with stamps;
+  badge-0 receive rights; the label check against the endpoint's owner; fair waiting by (account,
+  label set); lends that outlive their lender; transfer opt-in; `Dead` for the calls a dying server
+  had taken.
+- Accepted when: kernel cases for R1-R4b and I3, I4, I7, I9, I11; attack cases: steal a receive
   right, mint badge 0, mint into a foreign budget, unequal-label call, 10,000 blocked senders with
-  another account still served in turn, lender destroyed mid-call with the server surviving,
-  unrequested transfer.
+  another account still served in turn, a vault-labelled sender filling its `WAIT_CAP` with its
+  owner's unlabelled sender unaffected, open calls beyond `MAX_OPEN_CALLS`, reply to a send, lender
+  destroyed mid-call with the server surviving, unrequested transfer, a transfer beyond the
+  receiver's free pages.
 - Needs: WP-K1.
 
 **WP-K3. Device objects and interrupts.** Size M.
@@ -105,9 +119,13 @@ not needed.
 **WP-K4. Process creation and exit.** Size M.
 - Reads: KERNEL-SPEC.md Process, `process_*`, exit notices, R10; PACKAGES.md (launching); INIT.md.
 - Delivers: `process_create`/`process_map`/`process_start`; exit notices with cause and blamed
-  account; per-thread current-message account; the boot loader loading only the kernel and `init`.
-- Accepted when: kernel cases for exit notices (all three causes), blamed account on a server fault;
-  attack cases: map into a started process, W+X through `process_map`, oversize handle list;
+  account, their slots charged to the creator; per-thread current-message account; the boot loader
+  loading only the kernel and `init`.
+- Accepted when: kernel cases for exit notices (all three causes, and a labelled process's notice
+  reaching a system-class `init`), blamed account on a server fault; attack cases: map into a
+  started process, W+X through `process_map`, a handle list over `MAX_START_HANDLES`, a process in a
+  weight-0 budget, creating and killing processes whose notices nobody receives (bounded by the
+  creator's own budget);
   `bench-bundle-file` becomes a clean boot in which a guest reads its `[[file]]` entry back (today
   the loader refuses data entries).
 - Needs: WP-K2.
@@ -129,6 +147,7 @@ not needed.
 - Needs: WP-K1 to WP-K5, WP-R1.
 
 **WP-C1. Model conformance.** Size M.
+- Reads: KERNEL-SPEC.md, errors and the order of checks (the model conforms to them).
 - Delivers: a bench case replaying WP-M0 traces on the real kernel and comparing every result;
   a system-call fuzzer program (random and hostile arguments; I14).
 - Accepted when: 10^5 model traces replay with identical results; the fuzzer runs
@@ -234,9 +253,8 @@ steward; rejects keys `keyd` holds; each channel labelled with its session's lab
 ### Track E: the milestone
 **WP-E1. Alice's agent and the attack suite.** Size M.
 - Delivers: the scripted hostile agent and the scripted hostile user (Bob), and every case in
-  PLAN.md's milestone 1 attack suite not already delivered by the packages above. An attack's
-  failure is asserted by the system (the kernel, the victim, or a clean power-off), never by a
-  line the attacker itself prints: the console does not say who wrote a line.
+  PLAN.md's milestone 1 attack suite not already delivered by the packages above, each asserted
+  through the system (How to read a work package).
 - Accepted when: the whole suite passes, and **milestone 1 is declared done** in STATUS.md.
 - Needs: everything above.
 

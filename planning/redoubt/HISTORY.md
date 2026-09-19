@@ -157,6 +157,62 @@ The same three roles, attacking v3 and pinning interfaces for a swarm build. Fou
   bench fast. rv32 returns as a small goal after milestone 3. Width-specific code stays confined to
   paging geometry, trap entry and saved context, and the ABI's register encoding; 64-bit values are
   `u64`, never `usize`. rv32 keeps compiling (a build check, no boots) so the abstraction cannot rot.
+- **IPC semantics pinned** (2026-09-19, owner answers 1-6, QUESTIONS.md): `receive` says whether a
+  message is a `call` or a `send`, and `reply` to a send is refused, because a server that guessed
+  wrong would strand a caller. A thread may hold several **open calls**, up to `MAX_OPEN_CALLS` = 64
+  per process, each charged a page, `Busy` beyond (changed from one per thread: `consoled` and
+  `ipd` hold a request open per terminal or socket, and 31 threads would cap them at 31 clients);
+  I5's R3 bound is per open call. Message ids are non-zero and never reused. R1 checks against the
+  endpoint's owner, so the check no longer depends on which thread takes the message. A transfer
+  the receiver's budget cannot hold is `Refused`, like one over `max_transfer`. A dying server
+  fails only the calls it had taken; queued senders wait for the restart (INIT.md had said
+  otherwise; KERNEL-SPEC.md was right, since endpoints outlive servers).
+- **Objects and costs pinned** (2026-09-19, answers 7-13, 15, 16): a cost table in KERNEL-SPEC.md
+  (one page per budget, process, thread, endpoint, open call and exit slot; page tables per page;
+  handle tables one page per 128 handles, changed from the guessed 256 since a handle is 24-32
+  bytes; WP-K1 confirms), so `budget_usage` and `OutOfMemory` compare between model and kernel.
+  The exit slot is a page charged to the creator at `process_create`: `killed` notices outlive the
+  budget that died, and before this nothing paid for them. System-class receivers see labelled
+  exit notices and usage (else `init` and the steward could not see agents crash); creating a
+  system-class budget needs a system-class caller, like adding labels. Handle 0 is "none";
+  `MAX_START_HANDLES` = 64 and `MAX_RANDOM` = 64 are named constants. `budget_usage` returns the
+  weight limit and carved weight (R7 carves weight). A weight-0 budget holds no process (R12
+  divides by weight). Records are 8-byte aligned; deadlines absolute, timeouts saturating. A 64-bit
+  argument always takes two 32-bit registers on both widths: one layout, and no width `cfg` in
+  `redoubt-sys`.
+- **Errors and the order of checks in KERNEL-SPEC.md** (2026-09-19, answer 14, changed): WP-C1
+  compares exact errors, so the order is normative. Copied from the model's README into the spec
+  (the spec owns it; the model conforms), with corrections where the model disagreed with the ABI
+  or the answers: W+X, a badge of 0, a malformed page range and a misaligned record are decoding
+  errors (`InvalidArgument`); an over-long `random` or `process_start` list is `TooLarge`;
+  `LabelDenied` comes before `Busy` in `call` (R1 is now decided at send time); `receive` checks
+  the object's kind before its badge; `mint`'s and `process_map`'s checks follow the general
+  stages; a too-deep budget is `TooLarge` at the argument stage.
+- **Caps keyed by (account, label set); steward ids unpredictable** (2026-09-19, answers 17, 18):
+  a vault session and its owner's unlabelled session share an account, so a per-account cap (the
+  steward's pending requests, `WAIT_CAP`, R2's turns) was a channel out of the vault; the model's
+  10^6 run found it reaching the owner's budget usage. Every id the steward hands out is keyed
+  random, not only request ids: sequential session ids told every principal how many sessions the
+  others started.
+- **Typed-message tables, replies and JSON types** (2026-09-19, answers 19-23, 27): WIRE.md adopts
+  WP-W1's table format with a `Reply` column and a per-protocol error table; word 0 of a reply is a
+  status (so opcode 0 is reserved); a message is buffer-shaped if its request or its reply needs a
+  buffer, because `reply` carries only words and reply data can travel only in the lend (a `blkd`
+  read's 12-byte request would otherwise go inline and have no lend to answer in). Inline fields
+  pack four bytes per word, the same on both widths; compound values are `bytes`; typed operations
+  written into a 9P file are the opcode then the buffer encoding. JSON member names compare byte for
+  byte. Each server package writes its own table. JSON: no "either" (changed): the schema fixes
+  each field's type, 64-bit quantities strings and small counts numbers, so one value has one
+  spelling; INIT.md's example fixed.
+- **Tenet 3 amended** (2026-09-19, answer 24): host-only test oracles and fuzz drivers (the
+  littlefs C reference, libFuzzer) may be C or C++, in crates outside the workspace build, never
+  linked into anything that runs on the machine. Differential testing against the reference
+  implementation is what makes a from-scratch littlefs trustworthy. littlefs's milestone 1 limits
+  accepted (answer 25, NAMESPACES.md).
+- **Attacks asserted by the system** (2026-09-19, answer 26): every attack case, not only WP-E1's,
+  asserts its outcome through the kernel, the victim or a clean power-off, never the attacker's
+  own output: the console does not say who wrote a line, so a hostile program could print its own
+  PASSED line.
 
 ## Milestone 1 build (from 2026-09-19)
 One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.

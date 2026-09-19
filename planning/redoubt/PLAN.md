@@ -29,7 +29,8 @@ Build one thin vertical slice toward it:
 8. **Alice's agent** under a lease, and the attack suite below.
 
 ### Milestone 1 attack suite
-Deterministic programs in the test bench.
+Deterministic programs in the test bench; each outcome is asserted by the system (kernel, victim or
+a clean power-off), never by the attacker's own output (BUILD-PLAN.md).
 - **Scripted hostile agent** (Alice's leased agent): cannot read outside `/work` or reach the
   network; a labelled agent reaches no uncleared sink; lease expiry destroys everything, including
   handles it passed on; its approval requests cannot spoof the approval screen (control characters,
