@@ -9,6 +9,7 @@ members = [
   "loader",
   "xous-rs",
   "redoubt/paging",
+  "redoubt/rt",
   "redoubt/sys",
   "redoubt/littlefs",
   "redoubt/test-programs",
