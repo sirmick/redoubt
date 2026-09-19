@@ -13,6 +13,7 @@ otp_lib="$(dirname "$(dirname "$(command -v erl)")")/lib"
 stdlib=( "$otp_lib"/stdlib-*/ebin )
 elixir_lib="$(dirname "$(dirname "$(command -v elixir)")")/lib"
 elixir_ebin="$elixir_lib/elixir/ebin"
+"$root/tools/build-lib" --check
 cargo build --quiet --release --manifest-path "$root/Cargo.toml" -p beamlet
 beamlet="$root/target/release/beamlet"
 timeout_s="${DIFFTEST_TIMEOUT:-10}"
@@ -28,7 +29,7 @@ for suite in "${suites[@]}"; do
     mkdir -p "$out"
     # Recompile (and re-run the oracle) only when sources changed.
     stamp="$out/.stamp"
-    if [ ! -f "$stamp" ] || [ -n "$(find "$src" -name '*.erl' -newer "$stamp" -print -quit)" ]; then
+    if [ ! -f "$stamp" ] || [ -n "$(find "$src" \( -name '*.erl' -o -name '*.ex' -o -name SKIP \) -newer "$stamp" -print -quit)" ]; then
         rm -f "$out"/*.beam "$out"/*.expected
         : > "$out/erlc.log"
         shopt -s nullglob

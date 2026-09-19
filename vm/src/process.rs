@@ -109,6 +109,8 @@ pub struct Process {
     pub pending_exit: Option<Term>,
     /// Reductions left in this time slice.
     pub budget: usize,
+    /// Reductions used since the process started (`process_info(P, reductions)`).
+    pub reductions: u64,
 }
 
 impl Process {
@@ -142,6 +144,7 @@ impl Process {
             group_leader: None,
             pending_exit: None,
             budget: 0,
+            reductions: 0,
         }
     }
 }

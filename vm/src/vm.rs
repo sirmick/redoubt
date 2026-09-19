@@ -44,13 +44,22 @@ pub struct System {
     pub platform: Box<dyn Platform>,
     pub limits: Limits,
     pub ets: crate::ets::Tables,
+    /// Process aliases: references that work as send destinations while active.
+    pub aliases: BTreeMap<Ref, Alias>,
+    /// The VM's own environment variables (`os:getenv/1`). Empty at start: the host's
+    /// environment is not visible unless an embedder puts it here.
+    pub env: BTreeMap<String, String>,
+    /// `persistent_term`: VM-wide terms, written rarely and read often.
+    pub persistent: BTreeMap<crate::term::MapKey, Term>,
     pub atom_table: AtomTable,
     pub atoms: Atoms,
     modules: BTreeMap<String, Rc<Module>>,
     natives: bif::Registry,
     pub(crate) run_queue: VecDeque<Pid>,
-    /// Receive timeouts, ordered by deadline.
-    timers: BTreeSet<(u64, Pid)>,
+    /// Everything waiting for a time: receive timeouts and message timers, by deadline.
+    timers: BTreeSet<(u64, Timer)>,
+    /// Message timers (`send_after`, `start_timer`) by reference: deadline, target, message.
+    pub(crate) message_timers: BTreeMap<Ref, (u64, Term, Term)>,
     next_ref: u64,
     pub(crate) registered: BTreeMap<String, Pid>,
     pub(crate) procs: ProcTable,
@@ -59,7 +68,17 @@ pub struct System {
     /// Final results of processes someone is waiting for through [`Vm::run`].
     results: BTreeMap<Pid, Result<Term, Exception>>,
     watched: BTreeSet<Pid>,
+    /// The group leader of processes that do not inherit one: the console I/O server.
+    pub(crate) default_group_leader: Option<Pid>,
 }
+
+/// Erlang modules every VM has, built from `vm/lib/*.erl` by `tools/build-lib`: the console
+/// I/O server, and a small `logger` in place of the kernel application's.
+const EMBEDDED: &[&[u8]] = &[
+    include_bytes!("../lib/beamlet_io.beam"),
+    include_bytes!("../lib/logger.beam"),
+    include_bytes!("../lib/error_logger.beam"),
+];
 
 enum Slot {
     Free { serial: u32 },
@@ -155,6 +174,35 @@ impl ProcTable {
 
 }
 
+/// Most message timers the VM keeps at once (`system_limit` beyond).
+pub const MAX_MESSAGE_TIMERS: usize = 1 << 16;
+
+/// Something waiting for a deadline.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum Timer {
+    /// A process in `receive ... after`.
+    Receive(Pid),
+    /// A message timer, by reference.
+    Message(Ref),
+}
+
+/// An active alias: who receives messages sent to it, and when it stops working.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Alias {
+    pub owner: Pid,
+    pub mode: AliasMode,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AliasMode {
+    /// Until `unalias/1`.
+    Explicit,
+    /// Until the monitor it came with is removed or fires.
+    Demonitor,
+    /// Like `Demonitor`, and also after the first message arrives through it.
+    ReplyDemonitor,
+}
+
 /// An exit signal in flight. `kill` means "kill unconditionally" only when sent by `exit/2`;
 /// a linked process that dies with reason `kill` sends an ordinary, trappable signal.
 pub(crate) struct ExitSignal {
@@ -189,20 +237,44 @@ impl Vm {
                 platform,
                 limits,
                 ets: crate::ets::Tables::default(),
+                persistent: BTreeMap::new(),
+                env: BTreeMap::new(),
+                aliases: BTreeMap::new(),
                 atom_table,
                 atoms,
                 modules: BTreeMap::new(),
                 natives,
                 run_queue: VecDeque::new(),
                 timers: BTreeSet::new(),
+                message_timers: BTreeMap::new(),
                 next_ref: 1,
                 registered: BTreeMap::new(),
                 procs: ProcTable::new(),
                 exits: VecDeque::new(),
                 results: BTreeMap::new(),
                 watched: BTreeSet::new(),
+                default_group_leader: None,
             },
         }
+        .boot()
+    }
+
+    /// Start the console I/O servers, `user` and `standard_error`.
+    fn boot(mut self) -> Vm {
+        for module in EMBEDDED {
+            self.sys.load(module).expect("embedded modules load");
+        }
+        let user_name = self.atom("user");
+        let user = self.spawn("beamlet_io", "start", alloc::vec![user_name]).expect("spawn user");
+        let stderr = self.atom("standard_error");
+        let err = self.spawn("beamlet_io", "start", alloc::vec![stderr]).expect("spawn standard_error");
+        for pid in [user, err] {
+            if let Some(p) = self.sys.procs.get_mut(pid) {
+                p.group_leader = Some(user);
+            }
+        }
+        self.sys.default_group_leader = Some(user);
+        self
     }
 
     /// Load a module from `.beam` bytes, replacing any module of the same name.
@@ -325,7 +397,8 @@ impl System {
             .procs
             .allocate()
             .ok_or_else(|| Exception::error(Term::Atom(self.atoms.system_limit.clone())))?;
-        let p = Process::new(pid, entry, args);
+        let mut p = Process::new(pid, entry, args);
+        p.group_leader = self.default_group_leader;
         self.procs.put(Box::new(p));
         self.run_queue.push_back(pid);
         Ok(pid)
@@ -338,12 +411,42 @@ impl System {
         }
     }
 
+    /// Start a message timer: at `deadline`, send `msg` to `to` (a pid or registered name).
+    pub fn start_message_timer(&mut self, deadline: u64, to: Term, msg: Term) -> Option<Ref> {
+        if self.message_timers.len() >= MAX_MESSAGE_TIMERS {
+            return None;
+        }
+        let r = self.make_ref();
+        self.message_timers.insert(r, (deadline, to, msg));
+        self.timers.insert((deadline, Timer::Message(r)));
+        Some(r)
+    }
+
+    /// Cancel a message timer; its deadline if it was still pending.
+    pub fn cancel_message_timer(&mut self, r: Ref) -> Option<u64> {
+        let (deadline, _, _) = self.message_timers.remove(&r)?;
+        self.timers.remove(&(deadline, Timer::Message(r)));
+        Some(deadline)
+    }
+
+    /// Send to a pid or a registered name; silently nothing if there is no such process.
+    fn send_to_term(&mut self, to: &Term, msg: Term) {
+        let pid = match to {
+            Term::Pid(p) => Some(*p),
+            Term::Atom(name) => self.registered.get(name.as_str()).copied(),
+            _ => None,
+        };
+        if let Some(pid) = pid {
+            self.send(pid, msg);
+        }
+    }
+
     pub fn arm_timer(&mut self, pid: Pid, deadline: u64) {
-        self.timers.insert((deadline, pid));
+        self.timers.insert((deadline, Timer::Receive(pid)));
     }
 
     pub fn cancel_timer(&mut self, pid: Pid, deadline: u64) {
-        self.timers.remove(&(deadline, pid));
+        self.timers.remove(&(deadline, Timer::Receive(pid)));
     }
 
     pub fn now_us(&mut self) -> u64 {
@@ -395,11 +498,20 @@ impl System {
             return;
         }
         let now = self.platform.monotonic_us();
-        while let Some(&(deadline, pid)) = self.timers.first() {
+        while let Some(&(deadline, timer)) = self.timers.first() {
             if deadline > now {
                 break;
             }
             self.timers.pop_first();
+            let pid = match timer {
+                Timer::Receive(pid) => pid,
+                Timer::Message(r) => {
+                    if let Some((_, to, msg)) = self.message_timers.remove(&r) {
+                        self.send_to_term(&to, msg);
+                    }
+                    continue;
+                }
+            };
             if let Some(p) = self.procs.get_mut(pid) {
                 if p.timer == Some(deadline) {
                     p.timer = None;
@@ -430,6 +542,7 @@ impl System {
         if let Some(t) = p.timer {
             self.cancel_timer(pid, t);
         }
+        self.aliases.retain(|_, a| a.owner != pid);
         if let Some(name) = &p.registered_name {
             self.registered.remove(name.as_str());
         }
@@ -449,6 +562,10 @@ impl System {
             ]);
             if let Some(w) = self.procs.get_mut(*watcher) {
                 w.monitors.remove(r);
+            }
+            // A monitor's alias ends when the monitor fires.
+            if self.aliases.get(r).is_some_and(|a| a.mode != AliasMode::Explicit) {
+                self.aliases.remove(r);
             }
             self.send(*watcher, msg);
         }
