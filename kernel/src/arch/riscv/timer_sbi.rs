@@ -5,7 +5,7 @@
 
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use riscv::register::sie;
+use riscv::register::{scounteren, sie};
 
 /// The timer is presented to userspace as this interrupt. PLIC source 0 does not exist.
 pub const IRQ: usize = xous_kernel::arch::platform_call::TIMER_IRQ;
@@ -23,15 +23,9 @@ pub fn init() {
     if let Some(arg) = crate::args::KernelArguments::get().iter().find(|a| a.name == u32::from_le_bytes(*b"Time")) {
         TIMEBASE.store((arg.data[0] as u64 | (arg.data[1] as u64) << 32) as usize, Ordering::Relaxed);
     }
-    // Let userspace read the `time` CSR directly, via `scounteren.TM` (bit 1 of CSR 0x106).
-    // SAFETY: this exposes a read-only counter to U-mode and has no memory effect. The rv32
-    // `riscv` crate predates `scounteren`, so the CSR is written directly there.
-    unsafe {
-        #[cfg(target_arch = "riscv64")]
-        riscv::register::scounteren::set_tm();
-        #[cfg(target_arch = "riscv32")]
-        core::arch::asm!("csrrs zero, 0x106, {0}", in(reg) 1usize << 1);
-    }
+    // Let userspace read the `time` CSR directly, via `scounteren.TM`.
+    // SAFETY: this exposes a read-only counter to U-mode and has no memory effect.
+    unsafe { scounteren::set_tm() };
 }
 
 /// Mask or unmask the supervisor timer interrupt at the hart.

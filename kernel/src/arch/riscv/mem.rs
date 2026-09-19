@@ -256,16 +256,8 @@ impl MemoryMapping {
     pub fn activate(self) -> Result<(), xous_kernel::Error> {
         let _ = root_of(self.satp); // refuses an unallocated mapping
         // SAFETY: every address space shares the kernel's root entries (see `allocate`), so
-        // the code, stack and data in use right now stay mapped across the switch. The two
-        // `riscv` crate versions take `satp` differently (0.16 wants a `Satp`, the rv32
-        // 0.5.6 fork a raw `usize`, and mismarks its `write` as safe, hence the allow).
-        #[allow(unused_unsafe)]
-        unsafe {
-            #[cfg(target_arch = "riscv64")]
-            satp::write(satp::Satp::from_bits(self.satp));
-            #[cfg(target_arch = "riscv32")]
-            satp::write(self.satp);
-        }
+        // the code, stack and data in use right now stay mapped across the switch.
+        unsafe { satp::write(satp::Satp::from_bits(self.satp)) };
         flush_tlb();
         Ok(())
     }
