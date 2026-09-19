@@ -75,7 +75,7 @@ struct Posix {
     /// Programs started behind ports, if `--exec` allows it.
     programs: Option<programs::Programs>,
     /// Whether the console output so far ends mid-line (after a prompt, say).
-    mid_line: std::rc::Rc<std::cell::Cell<bool>>,
+    mid_line: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Read stdin on its own thread, so the VM never blocks on it.
@@ -183,7 +183,8 @@ impl Platform for Posix {
         let _ = out.write_all(bytes);
         let _ = out.flush();
         if let Some(&last) = bytes.last() {
-            self.mid_line.set(last != b'\n');
+            self.mid_line
+                .store(last != b'\n', std::sync::atomic::Ordering::Relaxed);
         }
     }
 
@@ -353,7 +354,7 @@ fn main() -> ExitCode {
         }
     }
     let has_root = root.is_some();
-    let mid_line = std::rc::Rc::new(std::cell::Cell::new(false));
+    let mid_line = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let (sender, events) = std::sync::mpsc::channel();
     let programs = exec.then(|| programs::Programs::new(sender.clone()));
     let platform = Posix {
@@ -425,7 +426,7 @@ fn main() -> ExitCode {
         }
     }
     // The result goes on a line of its own, even after a prompt.
-    if mid_line.get() {
+    if mid_line.load(std::sync::atomic::Ordering::Relaxed) {
         println!();
     }
     match result {

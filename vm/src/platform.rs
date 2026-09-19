@@ -11,8 +11,9 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-/// Services the host operating system provides to one VM instance.
-pub trait Platform {
+/// Services the host operating system provides to one VM instance. With several schedulers
+/// (the `std` feature) it is used from any of their threads, one at a time.
+pub trait Platform: crate::sync::Sendable {
     /// Monotonic time in microseconds since an arbitrary fixed point. Never goes backwards.
     fn monotonic_us(&mut self) -> u64;
 
