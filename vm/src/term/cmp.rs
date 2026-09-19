@@ -53,7 +53,8 @@ impl Heap {
             (Term::Atom(x), Term::Atom(y)) => x == y,
             (Term::Int(x), Term::Int(y)) => x == y,
             (Term::Nil, Term::Nil) => true,
-            (Term::Atom(_) | Term::Int(_) | Term::Nil, _) | (_, Term::Atom(_) | Term::Int(_) | Term::Nil) => false,
+            (Term::Atom(_) | Term::Int(_) | Term::Nil, _)
+            | (_, Term::Atom(_) | Term::Int(_) | Term::Nil) => false,
             _ => self.cmp_exact(a, b) == Ordering::Equal,
         }
     }
@@ -97,7 +98,10 @@ pub fn compare(ha: &Heap, a: Term, hb: &Heap, b: Term, exact: bool) -> Ordering 
                 Ordering::Equal
             }
             (Term::Tuple(_), Term::Tuple(_)) => {
-                let (x, y) = (ha.as_tuple(a).expect("a tuple"), hb.as_tuple(b).expect("a tuple"));
+                let (x, y) = (
+                    ha.as_tuple(a).expect("a tuple"),
+                    hb.as_tuple(b).expect("a tuple"),
+                );
                 if x.len() == y.len() {
                     push_pairs(&mut work, x.iter().copied(), y.iter().copied(), exact);
                 }
@@ -105,10 +109,23 @@ pub fn compare(ha: &Heap, a: Term, hb: &Heap, b: Term, exact: bool) -> Ordering 
             }
             (Term::Map(_), Term::Map(_)) => {
                 // Size first, then all keys in key order (always exactly), then the values.
-                let (x, y) = (ha.map_entries(a).expect("a map"), hb.map_entries(b).expect("a map"));
+                let (x, y) = (
+                    ha.map_entries(a).expect("a map"),
+                    hb.map_entries(b).expect("a map"),
+                );
                 if x.len() == y.len() {
-                    push_pairs(&mut work, x.iter().map(|e| e.1), y.iter().map(|e| e.1), exact);
-                    push_pairs(&mut work, x.iter().map(|e| e.0), y.iter().map(|e| e.0), true);
+                    push_pairs(
+                        &mut work,
+                        x.iter().map(|e| e.1),
+                        y.iter().map(|e| e.1),
+                        exact,
+                    );
+                    push_pairs(
+                        &mut work,
+                        x.iter().map(|e| e.0),
+                        y.iter().map(|e| e.0),
+                        true,
+                    );
                 }
                 x.len().cmp(&y.len())
             }
@@ -116,7 +133,8 @@ pub fn compare(ha: &Heap, a: Term, hb: &Heap, b: Term, exact: bool) -> Ordering 
                 let (x, y) = (ha.as_fun(a).expect("a fun"), hb.as_fun(b).expect("a fun"));
                 let o = compare_fun_heads(&x, &y);
                 if o == Ordering::Equal {
-                    if let (FunView::Local { env: e1, .. }, FunView::Local { env: e2, .. }) = (x, y) {
+                    if let (FunView::Local { env: e1, .. }, FunView::Local { env: e2, .. }) = (x, y)
+                    {
                         push_pairs(&mut work, e1.iter().copied(), e2.iter().copied(), exact);
                     }
                 }
@@ -157,12 +175,19 @@ fn compare_one(ha: &Heap, a: Term, hb: &Heap, b: Term, exact: bool) -> Ordering 
         // References and resources share one counter, so a reference with a resource's id is
         // that resource written out and read back (`term_to_binary`): the same reference, as
         // BEAM's magic references are.
-        (Term::Ref(_) | Term::Resource(_), Term::Ref(_) | Term::Resource(_)) => ref_id(ha, a).cmp(&ref_id(hb, b)),
+        (Term::Ref(_) | Term::Resource(_), Term::Ref(_) | Term::Resource(_)) => {
+            ref_id(ha, a).cmp(&ref_id(hb, b))
+        }
         // Creation order, as BEAM's pids compare (the serial is one counter for the VM).
         (Term::Pid(x), Term::Pid(y)) => (x.serial, x.index).cmp(&(y.serial, y.index)),
         (Term::Nil, Term::Nil) => Ordering::Equal,
-        (Term::Bits(_), Term::Bits(_)) => compare_bits(&ha.as_bits(a).expect("bits"), &hb.as_bits(b).expect("bits")),
-        (Term::Match(_), Term::Match(_)) => ha.as_match(a).map(|m| m.1).cmp(&hb.as_match(b).map(|m| m.1)),
+        (Term::Bits(_), Term::Bits(_)) => {
+            compare_bits(&ha.as_bits(a).expect("bits"), &hb.as_bits(b).expect("bits"))
+        }
+        (Term::Match(_), Term::Match(_)) => ha
+            .as_match(a)
+            .map(|m| m.1)
+            .cmp(&hb.as_match(b).map(|m| m.1)),
         (Term::Match(_), _) => Ordering::Less,
         (_, Term::Match(_)) => Ordering::Greater,
         _ => compare_numbers(ha, a, hb, b, exact),
@@ -181,7 +206,10 @@ fn compare_bits(x: &Bits, y: &Bits) -> Ordering {
     let n = x.len.min(y.len);
     let bytes = n / 8;
     if x.offset.is_multiple_of(8) && y.offset.is_multiple_of(8) {
-        let (xs, ys) = (&x.data[x.offset / 8..x.offset / 8 + bytes], &y.data[y.offset / 8..y.offset / 8 + bytes]);
+        let (xs, ys) = (
+            &x.data[x.offset / 8..x.offset / 8 + bytes],
+            &y.data[y.offset / 8..y.offset / 8 + bytes],
+        );
         let o = xs.cmp(ys);
         if o != Ordering::Equal {
             return o;
@@ -207,15 +235,41 @@ fn compare_bits(x: &Bits, y: &Bits) -> Ordering {
 fn compare_fun_heads(x: &FunView, y: &FunView) -> Ordering {
     match (x, y) {
         (
-            FunView::Export { module: m1, function: f1, arity: a1 },
-            FunView::Export { module: m2, function: f2, arity: a2 },
-        ) => m1.as_str().cmp(m2.as_str()).then_with(|| f1.as_str().cmp(f2.as_str())).then(a1.cmp(a2)),
+            FunView::Export {
+                module: m1,
+                function: f1,
+                arity: a1,
+            },
+            FunView::Export {
+                module: m2,
+                function: f2,
+                arity: a2,
+            },
+        ) => m1
+            .as_str()
+            .cmp(m2.as_str())
+            .then_with(|| f1.as_str().cmp(f2.as_str()))
+            .then(a1.cmp(a2)),
         (FunView::Local { .. }, FunView::Export { .. }) => Ordering::Less,
         (FunView::Export { .. }, FunView::Local { .. }) => Ordering::Greater,
         (
-            FunView::Local { module: m1, index: i1, env: e1, .. },
-            FunView::Local { module: m2, index: i2, env: e2, .. },
-        ) => m1.as_str().cmp(m2.as_str()).then(i1.cmp(i2)).then(e1.len().cmp(&e2.len())),
+            FunView::Local {
+                module: m1,
+                index: i1,
+                env: e1,
+                ..
+            },
+            FunView::Local {
+                module: m2,
+                index: i2,
+                env: e2,
+                ..
+            },
+        ) => m1
+            .as_str()
+            .cmp(m2.as_str())
+            .then(i1.cmp(i2))
+            .then(e1.len().cmp(&e2.len())),
     }
 }
 

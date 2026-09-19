@@ -48,16 +48,46 @@ pub(crate) fn alg(t: &Term) -> Option<Alg> {
 macro_rules! with_hash {
     ($alg:expr, $H:ident => $body:expr) => {
         match $alg {
-            Alg::Md5 => { type $H = md5::Md5; $body }
-            Alg::Sha1 => { type $H = sha1::Sha1; $body }
-            Alg::Sha224 => { type $H = sha2::Sha224; $body }
-            Alg::Sha256 => { type $H = sha2::Sha256; $body }
-            Alg::Sha384 => { type $H = sha2::Sha384; $body }
-            Alg::Sha512 => { type $H = sha2::Sha512; $body }
-            Alg::Sha3_224 => { type $H = sha3::Sha3_224; $body }
-            Alg::Sha3_256 => { type $H = sha3::Sha3_256; $body }
-            Alg::Sha3_384 => { type $H = sha3::Sha3_384; $body }
-            Alg::Sha3_512 => { type $H = sha3::Sha3_512; $body }
+            Alg::Md5 => {
+                type $H = md5::Md5;
+                $body
+            }
+            Alg::Sha1 => {
+                type $H = sha1::Sha1;
+                $body
+            }
+            Alg::Sha224 => {
+                type $H = sha2::Sha224;
+                $body
+            }
+            Alg::Sha256 => {
+                type $H = sha2::Sha256;
+                $body
+            }
+            Alg::Sha384 => {
+                type $H = sha2::Sha384;
+                $body
+            }
+            Alg::Sha512 => {
+                type $H = sha2::Sha512;
+                $body
+            }
+            Alg::Sha3_224 => {
+                type $H = sha3::Sha3_224;
+                $body
+            }
+            Alg::Sha3_256 => {
+                type $H = sha3::Sha3_256;
+                $body
+            }
+            Alg::Sha3_384 => {
+                type $H = sha3::Sha3_384;
+                $body
+            }
+            Alg::Sha3_512 => {
+                type $H = sha3::Sha3_512;
+                $body
+            }
         }
     };
 }
@@ -79,9 +109,21 @@ pub fn hash_info(c: &mut Ctx, a: &[Term]) -> R {
         return Err(badarg(c, 0, "Bad digest type"));
     };
     let mut m: Vec<(Term, Term)> = Vec::new();
-    { let k = c.atom("type"); let v = Term::Int(nid); m.push((k, v)); }
-    { let k = c.atom("size"); let v = Term::Int(size as i64); m.push((k, v)); }
-    { let k = c.atom("block_size"); let v = Term::Int(block as i64); m.push((k, v)); }
+    {
+        let k = c.atom("type");
+        let v = Term::Int(nid);
+        m.push((k, v));
+    }
+    {
+        let k = c.atom("size");
+        let v = Term::Int(size as i64);
+        m.push((k, v));
+    }
+    {
+        let k = c.atom("block_size");
+        let v = Term::Int(block as i64);
+        m.push((k, v));
+    }
     Ok(c.map_from(m))
 }
 
@@ -145,7 +187,9 @@ pub fn hash_init(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 pub fn hash_update(c: &mut Ctx, a: &[Term]) -> R {
-    let Some(state) = resource_ref::<HashState>(c, &a[0]) else { return Err(badarg(c, 0, "Bad state")) };
+    let Some(state) = resource_ref::<HashState>(c, &a[0]) else {
+        return Err(badarg(c, 0, "Bad state"));
+    };
     let HashState(h) = &*state;
     let mut h = h.clone();
     let data = bytes(c, a, 1, "data")?;
@@ -154,7 +198,9 @@ pub fn hash_update(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 pub fn hash_final(c: &mut Ctx, a: &[Term]) -> R {
-    let Some(state) = resource_ref::<HashState>(c, &a[0]) else { return Err(badarg(c, 0, "Bad state")) };
+    let Some(state) = resource_ref::<HashState>(c, &a[0]) else {
+        return Err(badarg(c, 0, "Bad state"));
+    };
     let HashState(h) = &*state;
     let out: Vec<u8> = each_hasher!(h.clone(), x => x.finalize().to_vec());
     Ok(bin(c, &out))
@@ -220,15 +266,19 @@ pub fn mac_init(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn mac_update(c: &mut Ctx, a: &[Term]) -> R {
     let data = bytes(c, a, 1, "text")?;
-    let Some(state) = resource_ref::<RefCell<MacState>>(c, &a[0]) else { return Err(badarg(c, 0, "Bad ref")) };
+    let Some(state) = resource_ref::<RefCell<MacState>>(c, &a[0]) else {
+        return Err(badarg(c, 0, "Bad ref"));
+    };
     match &mut *state.borrow_mut() {
         MacState::Hmac(_, _, buf) | MacState::Poly1305(_, buf) => buf.extend_from_slice(&data),
     }
-    Ok(a[0].clone())
+    Ok(a[0])
 }
 
 pub fn mac_final(c: &mut Ctx, a: &[Term]) -> R {
-    let Some(state) = resource_ref::<RefCell<MacState>>(c, &a[0]) else { return Err(badarg(c, 0, "Bad ref")) };
+    let Some(state) = resource_ref::<RefCell<MacState>>(c, &a[0]) else {
+        return Err(badarg(c, 0, "Bad ref"));
+    };
     let out = match &*state.borrow() {
         MacState::Hmac(h, key, buf) => hmac(*h, key, buf),
         MacState::Poly1305(key, buf) => {
@@ -244,10 +294,17 @@ pub fn pbkdf2_hmac(c: &mut Ctx, a: &[Term]) -> R {
     let h = hash_arg(c, a, 0)?;
     let pass = bytes(c, a, 1, "password")?;
     let salt = bytes(c, a, 2, "salt")?;
-    let iter = a[3].as_i64().and_then(|i| u32::try_from(i).ok()).filter(|i| *i > 0);
-    let Some(iter) = iter else { return Err(badarg(c, 3, "Bad iteration count")) };
+    let iter = a[3]
+        .as_i64()
+        .and_then(|i| u32::try_from(i).ok())
+        .filter(|i| *i > 0);
+    let Some(iter) = iter else {
+        return Err(badarg(c, 3, "Bad iteration count"));
+    };
     let len = a[4].as_usize().filter(|l| *l <= 1 << 20);
-    let Some(len) = len else { return Err(badarg(c, 4, "Bad key length")) };
+    let Some(len) = len else {
+        return Err(badarg(c, 4, "Bad key length"));
+    };
     let mut out = alloc::vec![0u8; len];
     with_hash!(h, H => pbkdf2::pbkdf2::<SimpleHmac<H>>(&pass, &salt, iter, &mut out).expect("HMAC takes any key"));
     Ok(bin(c, &out))

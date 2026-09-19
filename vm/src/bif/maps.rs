@@ -117,7 +117,10 @@ pub fn values(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn to_list(c: &mut Ctx, a: &[Term]) -> R {
     let m = map(c, &a[0])?;
-    let pairs: Vec<Term> = entries(c, m).into_iter().map(|(k, v)| c.tuple(&[k, v])).collect();
+    let pairs: Vec<Term> = entries(c, m)
+        .into_iter()
+        .map(|(k, v)| c.tuple(&[k, v]))
+        .collect();
     Ok(c.list(pairs))
 }
 
@@ -158,7 +161,10 @@ pub fn map_next(c: &mut Ctx, a: &[Term]) -> R {
         if !matches!(a[2], Term::Nil | Term::Cons(_)) || !a[0].is_integer() {
             return Err(c.badarg());
         }
-        let pairs: Vec<Term> = entries(c, m).into_iter().map(|(k, v)| c.tuple(&[k, v])).collect();
+        let pairs: Vec<Term> = entries(c, m)
+            .into_iter()
+            .map(|(k, v)| c.tuple(&[k, v]))
+            .collect();
         return Ok(c.list_with_tail(pairs, a[2]));
     }
     let keys: Term = match a[0] {

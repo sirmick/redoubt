@@ -33,7 +33,11 @@ pub struct HostDir {
 impl HostDir {
     /// A file system whose `/` is the host directory `dir`.
     pub fn new(dir: &str) -> std::io::Result<HostDir> {
-        let mut fs = HostDir { mounts: Vec::new(), open: BTreeMap::new(), next: 1 };
+        let mut fs = HostDir {
+            mounts: Vec::new(),
+            open: BTreeMap::new(),
+            next: 1,
+        };
         fs.mount("/", dir, false)?;
         Ok(fs)
     }
@@ -44,7 +48,12 @@ impl HostDir {
         let host = std::fs::canonicalize(dir)?;
         let dir = Dir::open_ambient_dir(dir, cap_std::ambient_authority())?;
         self.mounts.retain(|m| m.at != at);
-        self.mounts.push(Mount { at, host, dir, read_only });
+        self.mounts.push(Mount {
+            at,
+            host,
+            dir,
+            read_only,
+        });
         self.mounts.sort_by_key(|m| std::cmp::Reverse(m.at.len()));
         Ok(())
     }
@@ -58,7 +67,11 @@ impl HostDir {
             .min_by_key(|(_, rest)| rest.components().count())
             .and_then(|(m, rest)| {
                 let rest = rest.to_str()?;
-                Some(if m.at == "/" { format!("/{rest}") } else { format!("{}/{rest}", m.at) })
+                Some(if m.at == "/" {
+                    format!("/{rest}")
+                } else {
+                    format!("{}/{rest}", m.at)
+                })
             })
     }
 
@@ -67,7 +80,11 @@ impl HostDir {
     pub fn host_path(&self, path: &str) -> Result<std::path::PathBuf, FileError> {
         let path = self.walk(path, true)?;
         let (m, inner) = self.at(&path);
-        Ok(if inner == "." { m.host.clone() } else { m.host.join(inner) })
+        Ok(if inner == "." {
+            m.host.clone()
+        } else {
+            m.host.join(inner)
+        })
     }
 
     /// The mount a VM path (`/a/b`, already normalized) is in, and the path within it.
@@ -75,9 +92,19 @@ impl HostDir {
         let m = self
             .mounts
             .iter()
-            .find(|m| m.at == "/" || path == m.at || path.strip_prefix(m.at.as_str()).is_some_and(|r| r.starts_with('/')))
+            .find(|m| {
+                m.at == "/"
+                    || path == m.at
+                    || path
+                        .strip_prefix(m.at.as_str())
+                        .is_some_and(|r| r.starts_with('/'))
+            })
             .expect("/ is always mounted");
-        let inner = if m.at == "/" { path } else { &path[m.at.len()..] };
+        let inner = if m.at == "/" {
+            path
+        } else {
+            &path[m.at.len()..]
+        };
         let inner = match inner.trim_start_matches('/') {
             "" => ".",
             p => p,
@@ -91,7 +118,11 @@ impl HostDir {
     /// 40 links is `eloop`. The result names no links (save the last, if not followed), so
     /// cap-std never has to follow one; it still refuses anything that would leave a mount.
     fn walk(&self, path: &str, follow_last: bool) -> Result<String, FileError> {
-        let mut todo: std::collections::VecDeque<String> = path.split('/').filter(|c| !c.is_empty()).map(String::from).collect();
+        let mut todo: std::collections::VecDeque<String> = path
+            .split('/')
+            .filter(|c| !c.is_empty())
+            .map(String::from)
+            .collect();
         let mut done: Vec<String> = Vec::new();
         let mut links = 0;
         while let Some(c) = todo.pop_front() {
@@ -109,7 +140,9 @@ impl HostDir {
             }
             let here = format!("/{}", done.join("/"));
             let (m, inner) = self.at(&here);
-            let Ok(meta) = m.dir.symlink_metadata(inner) else { continue };
+            let Ok(meta) = m.dir.symlink_metadata(inner) else {
+                continue;
+            };
             if !meta.file_type().is_symlink() {
                 continue;
             }
@@ -239,7 +272,10 @@ metadata_like!(std::fs::Metadata, std::os::unix::fs::MetadataExt);
 impl Files for HostDir {
     fn open(&mut self, path: &str, mode: OpenMode) -> Result<u64, FileError> {
         let mut o = OpenOptions::new();
-        o.read(mode.read).write(mode.write && !mode.append).append(mode.append).truncate(mode.truncate);
+        o.read(mode.read)
+            .write(mode.write && !mode.append)
+            .append(mode.append)
+            .truncate(mode.truncate);
         if mode.exclusive {
             o.create_new(true);
         } else {
@@ -274,7 +310,10 @@ impl Files for HostDir {
 
     fn pread(&mut self, handle: u64, offset: u64, len: usize) -> Result<Vec<u8>, FileError> {
         let mut buf = vec![0; len];
-        let n = self.file(handle)?.read_at(&mut buf, offset).map_err(error)?;
+        let n = self
+            .file(handle)?
+            .read_at(&mut buf, offset)
+            .map_err(error)?;
         buf.truncate(n);
         Ok(buf)
     }
@@ -322,9 +361,17 @@ impl Files for HostDir {
             names.push(entry.map_err(error)?.file_name().as_bytes().to_vec());
         }
         // Mount points directly inside this directory appear in it.
-        let prefix = if path == "/" { String::from("/") } else { format!("{path}/") };
+        let prefix = if path == "/" {
+            String::from("/")
+        } else {
+            format!("{path}/")
+        };
         for mount in &self.mounts {
-            if let Some(name) = mount.at.strip_prefix(prefix.as_str()).filter(|n| !n.is_empty() && !n.contains('/')) {
+            if let Some(name) = mount
+                .at
+                .strip_prefix(prefix.as_str())
+                .filter(|n| !n.is_empty() && !n.contains('/'))
+            {
                 if !names.iter().any(|n| n == name.as_bytes()) {
                     names.push(name.as_bytes().to_vec());
                 }
@@ -361,8 +408,12 @@ impl Files for HostDir {
     }
 
     fn set_times(&mut self, path: &str, atime: i64, mtime: i64) -> Result<(), FileError> {
-        let at = |secs: i64| std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_secs(secs.max(0) as u64));
-        let (Some(a), Some(m)) = (at(atime), at(mtime)) else { return Err(FileError::Einval) };
+        let at = |secs: i64| {
+            std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_secs(secs.max(0) as u64))
+        };
+        let (Some(a), Some(m)) = (at(atime), at(mtime)) else {
+            return Err(FileError::Einval);
+        };
         // By host path, which works whatever the file's mode (opening it first would not); the
         // path names no links, having been walked.
         let path = self.walk(path, true)?;
@@ -371,7 +422,8 @@ impl Files for HostDir {
             return Err(FileError::Erofs);
         }
         use fs_set_times::SystemTimeSpec::Absolute;
-        fs_set_times::set_times(mount.host.join(inner), Some(Absolute(a)), Some(Absolute(m))).map_err(error)
+        fs_set_times::set_times(mount.host.join(inner), Some(Absolute(a)), Some(Absolute(m)))
+            .map_err(error)
     }
 
     fn set_permissions(&mut self, path: &str, mode: u32) -> Result<(), FileError> {
@@ -382,7 +434,11 @@ impl Files for HostDir {
         if m.read_only {
             return Err(FileError::Erofs);
         }
-        std::fs::set_permissions(m.host.join(inner), std::os::unix::fs::PermissionsExt::from_mode(mode)).map_err(error)
+        std::fs::set_permissions(
+            m.host.join(inner),
+            std::os::unix::fs::PermissionsExt::from_mode(mode),
+        )
+        .map_err(error)
     }
 
     fn make_symlink(&mut self, target: &[u8], link: &str) -> Result<(), FileError> {
@@ -418,7 +474,8 @@ mod tests {
     struct Scratch(std::path::PathBuf);
     impl Scratch {
         fn new(name: &str) -> Scratch {
-            let p = std::env::temp_dir().join(format!("beamlet-files-{name}-{}", std::process::id()));
+            let p =
+                std::env::temp_dir().join(format!("beamlet-files-{name}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&p);
             std::fs::create_dir_all(p.join("root")).unwrap();
             Scratch(p)
@@ -438,7 +495,10 @@ mod tests {
         std::os::unix::fs::symlink("../secret", s.0.join("root/rel")).unwrap();
         std::os::unix::fs::symlink("..", s.0.join("root/up")).unwrap();
         let mut fs = HostDir::new(s.0.join("root").to_str().unwrap()).unwrap();
-        let read = OpenMode { read: true, ..OpenMode::default() };
+        let read = OpenMode {
+            read: true,
+            ..OpenMode::default()
+        };
         // Links are followed within the VM's name space: none of them reaches the secret.
         for p in ["/abs", "/rel", "/up/secret"] {
             assert!(fs.open(p, read).is_err(), "{p}");
@@ -464,11 +524,20 @@ mod tests {
         std::fs::create_dir_all(s.0.join("lib/kernel")).unwrap();
         std::fs::write(s.0.join("lib/kernel/k.hrl"), b"x").unwrap();
         let mut fs = HostDir::new(s.0.join("root").to_str().unwrap()).unwrap();
-        fs.mount("/otp", s.0.join("lib").to_str().unwrap(), true).unwrap();
-        let read = OpenMode { read: true, ..OpenMode::default() };
+        fs.mount("/otp", s.0.join("lib").to_str().unwrap(), true)
+            .unwrap();
+        let read = OpenMode {
+            read: true,
+            ..OpenMode::default()
+        };
         let h = fs.open("/otp/kernel/k.hrl", read).unwrap();
         assert_eq!(fs.read(h, 10).unwrap(), b"x");
-        let w = OpenMode { write: true, create: true, truncate: true, ..OpenMode::default() };
+        let w = OpenMode {
+            write: true,
+            create: true,
+            truncate: true,
+            ..OpenMode::default()
+        };
         assert_eq!(fs.open("/otp/kernel/new", w), Err(FileError::Erofs));
         assert_eq!(fs.make_dir("/otp/d"), Err(FileError::Erofs));
         assert!(fs.list_dir("/").unwrap().contains(&b"otp".to_vec()));
@@ -484,11 +553,24 @@ mod tests {
         let s = Scratch::new("rt");
         let mut fs = HostDir::new(s.0.join("root").to_str().unwrap()).unwrap();
         fs.make_dir("/d").unwrap();
-        let w = OpenMode { write: true, create: true, truncate: true, ..OpenMode::default() };
+        let w = OpenMode {
+            write: true,
+            create: true,
+            truncate: true,
+            ..OpenMode::default()
+        };
         let h = fs.open("/d/f", w).unwrap();
         fs.write(h, b"hello world").unwrap();
         fs.close(h);
-        let h = fs.open("/d/f", OpenMode { read: true, ..OpenMode::default() }).unwrap();
+        let h = fs
+            .open(
+                "/d/f",
+                OpenMode {
+                    read: true,
+                    ..OpenMode::default()
+                },
+            )
+            .unwrap();
         assert_eq!(fs.pread(h, 6, 100).unwrap(), b"world");
         assert_eq!(fs.read(h, 5).unwrap(), b"hello");
         assert_eq!(fs.seek(h, SeekFrom::End(-1)).unwrap(), 10);
@@ -499,7 +581,12 @@ mod tests {
         fs.rename("/d/f", "/g").unwrap();
         fs.del_dir("/d").unwrap();
         assert_eq!(fs.info("/g", true).unwrap().size, 11);
-        let excl = OpenMode { write: true, create: true, exclusive: true, ..OpenMode::default() };
+        let excl = OpenMode {
+            write: true,
+            create: true,
+            exclusive: true,
+            ..OpenMode::default()
+        };
         assert_eq!(fs.open("/g", excl), Err(FileError::Eexist));
     }
 }

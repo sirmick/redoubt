@@ -58,7 +58,13 @@ impl PartialOrd for Key {
 }
 impl Ord for Key {
     fn cmp(&self, other: &Self) -> Ordering {
-        compare(self.term.heap(), self.term.term(), other.term.heap(), other.term.term(), !self.arith)
+        compare(
+            self.term.heap(),
+            self.term.term(),
+            other.term.heap(),
+            other.term.term(),
+            !self.arith,
+        )
     }
 }
 
@@ -91,7 +97,10 @@ fn weigh_all(objs: &[OwnedTerm]) -> u64 {
 impl Table {
     /// `t`, a term of `heap`, as a key of this table.
     pub fn key(&self, heap: &Heap, t: Term) -> Key {
-        Key { term: OwnedTerm::new(heap, t), arith: self.kind == Kind::OrderedSet }
+        Key {
+            term: OwnedTerm::new(heap, t),
+            arith: self.kind == Kind::OrderedSet,
+        }
     }
 
     /// The key of `obj` (a term of `heap`), if it is a tuple long enough to have one.
@@ -128,7 +137,7 @@ impl Table {
                 *slot = alloc::vec![obj];
             }
             Kind::Bag => {
-                if !slot.iter().any(|o| *o == obj) {
+                if !slot.contains(&obj) {
                     slot.push(obj);
                     self.count += 1;
                     self.words += w;
@@ -159,7 +168,9 @@ impl Table {
 
     /// Remove objects exactly equal to `obj`. Returns how many went.
     pub fn remove_object(&mut self, key: &Key, obj: &OwnedTerm) -> usize {
-        let Some(slot) = self.objects.get_mut(key) else { return 0 };
+        let Some(slot) = self.objects.get_mut(key) else {
+            return 0;
+        };
         let before = slot.len();
         let mut freed = 0;
         slot.retain(|o| {
@@ -210,7 +221,10 @@ impl Table {
     /// The key after `key` (which need not be in the table).
     pub fn next(&self, key: &Key) -> Option<&Key> {
         use core::ops::Bound::{Excluded, Unbounded};
-        self.objects.range((Excluded(key), Unbounded)).next().map(|(k, _)| k)
+        self.objects
+            .range((Excluded(key), Unbounded))
+            .next()
+            .map(|(k, _)| k)
     }
 
     pub fn prev(&self, key: &Key) -> Option<&Key> {
@@ -275,7 +289,10 @@ impl Tables {
         if self.by_name.contains_key(name.as_str()) {
             return Err(TableError::NameTaken);
         }
-        let t = self.by_tid.get_mut(&tid).expect("caller resolved the table");
+        let t = self
+            .by_tid
+            .get_mut(&tid)
+            .expect("caller resolved the table");
         if t.named {
             self.by_name.remove(t.name.as_str());
             self.by_name.insert(name.as_str().into(), tid);
@@ -286,7 +303,11 @@ impl Tables {
 
     /// Tables owned by `pid`, for cleanup when it dies.
     pub fn owned_by(&self, pid: Pid) -> Vec<u64> {
-        self.by_tid.values().filter(|t| t.owner == pid).map(|t| t.tid).collect()
+        self.by_tid
+            .values()
+            .filter(|t| t.owner == pid)
+            .map(|t| t.tid)
+            .collect()
     }
 
     pub fn tids(&self) -> Vec<u64> {
@@ -415,8 +436,14 @@ pub fn parse_spec(heap: &Heap, ms: Term) -> Option<Vec<Clause>> {
     let mut out = Vec::new();
     for item in heap.list_iter(ms) {
         let item = item.ok()?;
-        let &[head, guards, body] = heap.as_tuple(item)? else { return None };
-        out.push(Clause { head, guards: heap.to_vec(guards)?, body: heap.to_vec(body)? });
+        let &[head, guards, body] = heap.as_tuple(item)? else {
+            return None;
+        };
+        out.push(Clause {
+            head,
+            guards: heap.to_vec(guards)?,
+            body: heap.to_vec(body)?,
+        });
     }
     Some(out)
 }
@@ -425,17 +452,72 @@ pub fn parse_spec(heap: &Heap, ms: Term) -> Option<Vec<Clause>> {
 /// Anything with side effects (sending, spawning, exiting) is refused.
 pub fn guard_function_allowed(name: &str, arity: usize) -> bool {
     const ALLOWED: &[(&str, usize)] = &[
-        ("is_atom", 1), ("is_binary", 1), ("is_bitstring", 1), ("is_boolean", 1), ("is_float", 1),
-        ("is_function", 1), ("is_function", 2), ("is_integer", 1), ("is_list", 1), ("is_map", 1),
-        ("is_map_key", 2), ("is_number", 1), ("is_pid", 1), ("is_port", 1), ("is_reference", 1),
-        ("is_tuple", 1), ("is_record", 2), ("is_record", 3), ("abs", 1), ("element", 2), ("hd", 1),
-        ("tl", 1), ("length", 1), ("size", 1), ("tuple_size", 1), ("map_size", 1), ("map_get", 2),
-        ("byte_size", 1), ("bit_size", 1), ("binary_part", 3), ("float", 1), ("trunc", 1),
-        ("round", 1), ("floor", 1), ("ceil", 1), ("min", 2), ("max", 2), ("node", 0), ("node", 1),
-        ("self", 0), ("not", 1), ("and", 2), ("or", 2), ("xor", 2), ("+", 2), ("-", 2), ("*", 2),
-        ("/", 2), ("div", 2), ("rem", 2), ("band", 2), ("bor", 2), ("bxor", 2), ("bnot", 1),
-        ("bsl", 2), ("bsr", 2), ("-", 1), ("+", 1), ("==", 2), ("/=", 2), ("=:=", 2), ("=/=", 2),
-        ("<", 2), (">", 2), ("=<", 2), (">=", 2),
+        ("is_atom", 1),
+        ("is_binary", 1),
+        ("is_bitstring", 1),
+        ("is_boolean", 1),
+        ("is_float", 1),
+        ("is_function", 1),
+        ("is_function", 2),
+        ("is_integer", 1),
+        ("is_list", 1),
+        ("is_map", 1),
+        ("is_map_key", 2),
+        ("is_number", 1),
+        ("is_pid", 1),
+        ("is_port", 1),
+        ("is_reference", 1),
+        ("is_tuple", 1),
+        ("is_record", 2),
+        ("is_record", 3),
+        ("abs", 1),
+        ("element", 2),
+        ("hd", 1),
+        ("tl", 1),
+        ("length", 1),
+        ("size", 1),
+        ("tuple_size", 1),
+        ("map_size", 1),
+        ("map_get", 2),
+        ("byte_size", 1),
+        ("bit_size", 1),
+        ("binary_part", 3),
+        ("float", 1),
+        ("trunc", 1),
+        ("round", 1),
+        ("floor", 1),
+        ("ceil", 1),
+        ("min", 2),
+        ("max", 2),
+        ("node", 0),
+        ("node", 1),
+        ("self", 0),
+        ("not", 1),
+        ("and", 2),
+        ("or", 2),
+        ("xor", 2),
+        ("+", 2),
+        ("-", 2),
+        ("*", 2),
+        ("/", 2),
+        ("div", 2),
+        ("rem", 2),
+        ("band", 2),
+        ("bor", 2),
+        ("bxor", 2),
+        ("bnot", 1),
+        ("bsl", 2),
+        ("bsr", 2),
+        ("-", 1),
+        ("+", 1),
+        ("==", 2),
+        ("/=", 2),
+        ("=:=", 2),
+        ("=/=", 2),
+        ("<", 2),
+        (">", 2),
+        ("=<", 2),
+        (">=", 2),
     ];
     ALLOWED.contains(&(name, arity))
 }

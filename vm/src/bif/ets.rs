@@ -27,7 +27,11 @@ fn table_id(c: &Ctx, id: &Term, write: bool) -> Result<u64, Exception> {
     };
     let tid = c.sys.ets.resolve(*id).ok_or_else(|| because("id"))?;
     let t = c.sys.ets.get(tid).expect("resolved");
-    let allowed = if write { t.may_write(c.p.pid) } else { t.may_read(c.p.pid) };
+    let allowed = if write {
+        t.may_write(c.p.pid)
+    } else {
+        t.may_read(c.p.pid)
+    };
     if allowed {
         Ok(tid)
     } else {
@@ -48,7 +52,11 @@ fn table_mut<'c>(c: &'c mut Ctx, id: &Term) -> Result<&'c mut Table, Exception> 
 /// Copies of `objs` on the caller's heap, as a list.
 fn objects_out(c: &mut Ctx, tid: u64, key: &Key) -> Term {
     let t = c.sys.ets.get(tid).expect("resolved");
-    let copies: Vec<Term> = t.lookup(key).iter().map(|o| o.copy_into(&mut c.p.heap)).collect();
+    let copies: Vec<Term> = t
+        .lookup(key)
+        .iter()
+        .map(|o| o.copy_into(&mut c.p.heap))
+        .collect();
     c.p.heap.list(copies)
 }
 
@@ -62,8 +70,11 @@ fn table_term(t: &Table) -> Term {
 }
 
 pub fn new(c: &mut Ctx, a: &[Term]) -> R {
-    let Term::Atom(name) = a[0] else { return Err(c.badarg()) };
-    let (mut kind, mut access, mut keypos, mut named, mut heir) = (Kind::Set, Access::Protected, 1usize, false, None);
+    let Term::Atom(name) = a[0] else {
+        return Err(c.badarg());
+    };
+    let (mut kind, mut access, mut keypos, mut named, mut heir) =
+        (Kind::Set, Access::Protected, 1usize, false, None);
     for o in c.list_arg(a[1])? {
         match (o, c.heap().as_tuple(o)) {
             (Term::Atom(x), _) => match x.as_str() {
@@ -82,15 +93,35 @@ pub fn new(c: &mut Ctx, a: &[Term]) -> R {
             (_, Some(&[Term::Atom(k), v])) if k.as_str() == "keypos" => {
                 keypos = v.as_usize().filter(|p| *p >= 1).ok_or_else(|| c.badarg())?;
             }
-            (_, Some(&[Term::Atom(k), Term::Atom(none)])) if k.as_str() == "heir" && none.as_str() == "none" => heir = None,
-            (_, Some(&[Term::Atom(k), Term::Pid(p), data])) if k.as_str() == "heir" => heir = Some((p, c.own(data))),
+            (_, Some(&[Term::Atom(k), Term::Atom(none)]))
+                if k.as_str() == "heir" && none.as_str() == "none" =>
+            {
+                heir = None
+            }
+            (_, Some(&[Term::Atom(k), Term::Pid(p), data])) if k.as_str() == "heir" => {
+                heir = Some((p, c.own(data)))
+            }
             (_, Some(&[Term::Atom(k), _]))
-                if matches!(k.as_str(), "read_concurrency" | "write_concurrency" | "decentralized_counters") => {}
+                if matches!(
+                    k.as_str(),
+                    "read_concurrency" | "write_concurrency" | "decentralized_counters"
+                ) => {}
             _ => return Err(c.badarg()),
         }
     }
     let tid = c.sys.make_ref().0;
-    let t = Table::new(tid, c.p.pid, ets::Options { name, named, kind, access, keypos, heir });
+    let t = Table::new(
+        tid,
+        c.p.pid,
+        ets::Options {
+            name,
+            named,
+            kind,
+            access,
+            keypos,
+            heir,
+        },
+    );
     let id = table_term(&t);
     c.sys.ets.create(t).map_err(|e| match e {
         ets::TableError::NameTaken => c.badarg(),
@@ -171,7 +202,10 @@ pub fn member(c: &mut Ctx, a: &[Term]) -> R {
 /// `lookup_element(Tab, Key, Pos)` and `lookup_element(Tab, Key, Pos, Default)`.
 pub fn lookup_element(c: &mut Ctx, a: &[Term]) -> R {
     let tid = table_id(c, &a[0], false)?;
-    let pos = a[2].as_usize().filter(|p| *p >= 1).ok_or_else(|| c.badarg())?;
+    let pos = a[2]
+        .as_usize()
+        .filter(|p| *p >= 1)
+        .ok_or_else(|| c.badarg())?;
     let t = c.sys.ets.get(tid).expect("resolved");
     let kind = t.kind;
     let objs = t.lookup(&t.key(&c.p.heap, a[1]));
@@ -180,7 +214,11 @@ pub fn lookup_element(c: &mut Ctx, a: &[Term]) -> R {
     }
     let mut elems = Vec::new();
     for o in objs {
-        let e = o.heap().as_tuple(o.term()).and_then(|e| e.get(pos - 1)).copied();
+        let e = o
+            .heap()
+            .as_tuple(o.term())
+            .and_then(|e| e.get(pos - 1))
+            .copied();
         let Some(e) = e else { return Err(c.badarg()) };
         elems.push(crate::term::copy(o.heap(), e, &mut c.p.heap));
     }
@@ -212,7 +250,9 @@ pub fn delete(c: &mut Ctx, a: &[Term]) -> R {
 pub fn delete_object(c: &mut Ctx, a: &[Term]) -> R {
     let tid = table_id(c, &a[0], true)?;
     let t = c.sys.ets.get_mut(tid).expect("resolved");
-    let Some(k) = t.key_of(&c.p.heap, a[1]) else { return Err(c.badarg()) };
+    let Some(k) = t.key_of(&c.p.heap, a[1]) else {
+        return Err(c.badarg());
+    };
     let obj = OwnedTerm::new(&c.p.heap, a[1]);
     t.remove_object(&k, &obj);
     Ok(Term::Atom(c.sys.atoms.true_))
@@ -234,7 +274,12 @@ pub fn internal_delete_all(c: &mut Ctx, a: &[Term]) -> R {
 
 /// One `update_counter` operation on `obj` (on the caller's heap): `Incr`, `{Pos, Incr}` or
 /// `{Pos, Incr, Threshold, SetValue}`. Returns the new object and the new counter value.
-fn counter_op(c: &mut Ctx, obj: &Term, keypos: usize, op: &Term) -> Result<(Term, Term), Exception> {
+fn counter_op(
+    c: &mut Ctx,
+    obj: &Term,
+    keypos: usize,
+    op: &Term,
+) -> Result<(Term, Term), Exception> {
     let (pos, incr, limit) = match (op, c.heap().as_tuple(*op)) {
         // A bare increment updates the element after the key.
         (Term::Int(_) | Term::Big(_), _) => (keypos + 1, *op, None),
@@ -243,7 +288,12 @@ fn counter_op(c: &mut Ctx, obj: &Term, keypos: usize, op: &Term) -> Result<(Term
         _ => return Err(c.badarg()),
     };
     let mut elems = c.tuple_elems(*obj).ok_or_else(|| c.badarg())?;
-    if pos == keypos || pos == 0 || pos > elems.len() || !elems[pos - 1].is_integer() || !incr.is_integer() {
+    if pos == keypos
+        || pos == 0
+        || pos > elems.len()
+        || !elems[pos - 1].is_integer()
+        || !incr.is_integer()
+    {
         return Err(c.badarg());
     }
     let mut new = super::arith::add(c, &[elems[pos - 1], incr])?;
@@ -302,7 +352,11 @@ pub fn update_counter(c: &mut Ctx, a: &[Term]) -> R {
     } else {
         t.insert(key, obj);
     }
-    Ok(if many { c.list(results) } else { results.pop().expect("one op") })
+    Ok(if many {
+        c.list(results)
+    } else {
+        results.pop().expect("one op")
+    })
 }
 
 /// `update_element(Tab, Key, {Pos, Value} | [{Pos, Value}])`: `false` if there is no object.
@@ -340,7 +394,11 @@ pub fn update_element(c: &mut Ctx, a: &[Term]) -> R {
 // ---- traversal ----
 
 /// A key found in table `tid` (by `find`), copied to the caller's heap, or `'$end_of_table'`.
-fn key_out(c: &mut Ctx, tid: u64, find: impl Fn(&Table, &crate::term::Heap) -> Option<Key>) -> Term {
+fn key_out(
+    c: &mut Ctx,
+    tid: u64,
+    find: impl Fn(&Table, &crate::term::Heap) -> Option<Key>,
+) -> Term {
     let t = c.sys.ets.get(tid).expect("resolved");
     match find(t, &c.p.heap) {
         Some(k) => k.term.copy_into(&mut c.p.heap),
@@ -372,10 +430,16 @@ pub fn prev(c: &mut Ctx, a: &[Term]) -> R {
 
 /// `first_lookup/1` and friends: `{Key, Objects}` for the key `find` gives, or
 /// `'$end_of_table'`.
-fn with_objects(c: &mut Ctx, id: &Term, find: impl Fn(&Table, &crate::term::Heap) -> Option<Key>) -> R {
+fn with_objects(
+    c: &mut Ctx,
+    id: &Term,
+    find: impl Fn(&Table, &crate::term::Heap) -> Option<Key>,
+) -> R {
     let tid = table_id(c, id, false)?;
     let t = c.sys.ets.get(tid).expect("resolved");
-    let Some(k) = find(t, &c.p.heap) else { return Ok(end_of_table(c)) };
+    let Some(k) = find(t, &c.p.heap) else {
+        return Ok(end_of_table(c));
+    };
     let key = k.term.copy_into(&mut c.p.heap);
     let objs = objects_out(c, tid, &k);
     Ok(c.tuple(&[key, objs]))
@@ -410,7 +474,9 @@ fn eval(c: &mut Ctx, e: Term, obj: Term, b: &Bindings, depth: usize) -> Option<T
     Some(match e {
         Term::Atom(a) if a.as_str() == "$_" => obj,
         Term::Atom(a) if a.as_str() == "$$" => ets::all_bindings(c.heap_mut(), b),
-        Term::Atom(a) if ets::variable(&a).is_some() => *b.get(&ets::variable(&a).expect("checked"))?,
+        Term::Atom(a) if ets::variable(&a).is_some() => {
+            *b.get(&ets::variable(&a).expect("checked"))?
+        }
         Term::Cons(_) => {
             let mut items = Vec::new();
             let mut tail = Term::Nil;
@@ -451,7 +517,14 @@ fn eval(c: &mut Ctx, e: Term, obj: Term, b: &Bindings, depth: usize) -> Option<T
     })
 }
 
-fn call(c: &mut Ctx, f: &str, args: &[Term], obj: Term, b: &Bindings, depth: usize) -> Option<Term> {
+fn call(
+    c: &mut Ctx,
+    f: &str,
+    args: &[Term],
+    obj: Term,
+    b: &Bindings,
+    depth: usize,
+) -> Option<Term> {
     match f {
         "andalso" | "orelse" => {
             // Short-circuit, left to right.
@@ -548,7 +621,11 @@ fn chunk(c: &mut Ctx, mut results: Vec<Term>, limit: usize, from_end: bool) -> T
         return end_of_table(c);
     }
     let n = limit.min(results.len());
-    let chunk: Vec<Term> = if from_end { results.split_off(results.len() - n) } else { results.drain(..n).collect() };
+    let chunk: Vec<Term> = if from_end {
+        results.split_off(results.len() - n)
+    } else {
+        results.drain(..n).collect()
+    };
     let cont = if results.is_empty() {
         end_of_table(c)
     } else {
@@ -583,7 +660,11 @@ pub fn select3(c: &mut Ctx, a: &[Term]) -> R {
 pub fn select_reverse3(c: &mut Ctx, a: &[Term]) -> R {
     let n = limit(c, &a[2])?;
     let from_end = hash_table(c, &a[0])?;
-    let all = if from_end { select(c, &a[..2])? } else { select_reverse(c, &a[..2])? };
+    let all = if from_end {
+        select(c, &a[..2])?
+    } else {
+        select_reverse(c, &a[..2])?
+    };
     let all = c.heap().to_vec(all).expect("a list");
     Ok(chunk(c, all, n, from_end))
 }
@@ -611,7 +692,9 @@ pub fn select1(c: &mut Ctx, a: &[Term]) -> R {
         return Ok(end_of_table(c));
     }
     match c.heap().as_tuple(a[0]) {
-        Some(&[Term::Atom(tag), rest, Term::Int(n), from_end]) if tag.as_str() == "$beamlet_select" && n >= 1 => {
+        Some(&[Term::Atom(tag), rest, Term::Int(n), from_end])
+            if tag.as_str() == "$beamlet_select" && n >= 1 =>
+        {
             let rest = c.list_arg(rest)?;
             let from_end = from_end.is_atom(&c.sys.atoms.true_);
             Ok(chunk(c, rest, n as usize, from_end))
@@ -629,7 +712,10 @@ pub fn select_reverse(c: &mut Ctx, a: &[Term]) -> R {
 pub fn select_count(c: &mut Ctx, a: &[Term]) -> R {
     let s = spec(c, &a[1])?;
     let found = select_all(c, &a[0], &s)?;
-    let n = found.iter().filter(|(_, r)| r.is_atom(&c.sys.atoms.true_)).count();
+    let n = found
+        .iter()
+        .filter(|(_, r)| r.is_atom(&c.sys.atoms.true_))
+        .count();
     Ok(Term::Int(n as i64))
 }
 
@@ -637,7 +723,11 @@ pub fn internal_select_delete(c: &mut Ctx, a: &[Term]) -> R {
     let s = spec(c, &a[1])?;
     let tid = table_id(c, &a[0], true)?;
     let found = select_all(c, &a[0], &s)?;
-    let doomed: Vec<Term> = found.into_iter().filter(|(_, r)| r.is_atom(&c.sys.atoms.true_)).map(|(o, _)| o).collect();
+    let doomed: Vec<Term> = found
+        .into_iter()
+        .filter(|(_, r)| r.is_atom(&c.sys.atoms.true_))
+        .map(|(o, _)| o)
+        .collect();
     let t = c.sys.ets.get_mut(tid).expect("resolved");
     let mut n = 0;
     for o in doomed {
@@ -653,12 +743,20 @@ pub fn select_replace(c: &mut Ctx, a: &[Term]) -> R {
     let s = spec(c, &a[1])?;
     let tid = table_id(c, &a[0], true)?;
     let found = select_all(c, &a[0], &s)?;
-    let owned: Vec<(OwnedTerm, OwnedTerm)> = found.into_iter().map(|(old, new)| (c.own(old), c.own(new))).collect();
+    let owned: Vec<(OwnedTerm, OwnedTerm)> = found
+        .into_iter()
+        .map(|(old, new)| (c.own(old), c.own(new)))
+        .collect();
     room_for(c, owned.iter().map(|(_, new)| new))?;
     let t = c.sys.ets.get_mut(tid).expect("resolved");
     let mut n = 0;
     for (old, new) in owned {
-        let (Some(k_old), Some(k_new)) = (t.key_of(old.heap(), old.term()), t.key_of(new.heap(), new.term())) else { continue };
+        let (Some(k_old), Some(k_new)) = (
+            t.key_of(old.heap(), old.term()),
+            t.key_of(new.heap(), new.term()),
+        ) else {
+            continue;
+        };
         if k_old == k_new {
             t.remove_object(&k_old, &old);
             t.insert(k_new, new);
@@ -670,7 +768,11 @@ pub fn select_replace(c: &mut Ctx, a: &[Term]) -> R {
 
 fn pattern_spec(c: &mut Ctx, pattern: &Term, body: &str) -> Vec<Clause> {
     let b = c.atom(body);
-    alloc::vec![Clause { head: *pattern, guards: Vec::new(), body: alloc::vec![b] }]
+    alloc::vec![Clause {
+        head: *pattern,
+        guards: Vec::new(),
+        body: alloc::vec![b]
+    }]
 }
 
 /// `match(Tab, Pattern)`: the bindings of each match, as lists.
@@ -693,7 +795,8 @@ pub fn match_spec_compile(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 pub fn is_compiled_ms(c: &mut Ctx, a: &[Term]) -> R {
-    let ok = matches!(c.heap().as_tuple(a[0]), Some(&[Term::Atom(tag), _]) if tag.as_str() == "$ms");
+    let ok =
+        matches!(c.heap().as_tuple(a[0]), Some(&[Term::Atom(tag), _]) if tag.as_str() == "$ms");
     Ok(c.bool(ok))
 }
 
@@ -713,7 +816,15 @@ pub fn match_spec_run_r(c: &mut Ctx, a: &[Term]) -> R {
 
 fn info_value(c: &mut Ctx, t_id: u64, item: &str) -> Option<Term> {
     let t = c.sys.ets.get(t_id)?;
-    let (name, named, kind, access, keypos, owner, size) = (t.name, t.named, t.kind, t.access, t.keypos, t.owner, t.size());
+    let (name, named, kind, access, keypos, owner, size) = (
+        t.name,
+        t.named,
+        t.kind,
+        t.access,
+        t.keypos,
+        t.owner,
+        t.size(),
+    );
     let heir = t.heir.as_ref().map(|(p, _)| *p);
     let tid = t.tid;
     Some(match item {
@@ -738,21 +849,37 @@ fn info_value(c: &mut Ctx, t_id: u64, item: &str) -> Option<Term> {
             Some(p) => Term::Pid(p),
             None => c.atom("none"),
         },
-        "compressed" | "read_concurrency" | "write_concurrency" | "decentralized_counters" => c.bool(false),
+        "compressed" | "read_concurrency" | "write_concurrency" | "decentralized_counters" => {
+            c.bool(false)
+        }
         _ => return None,
     })
 }
 
 pub fn info(c: &mut Ctx, a: &[Term]) -> R {
     let Some(tid) = c.sys.ets.resolve(a[0]) else {
-        return if matches!(a[0], Term::Atom(_) | Term::Ref(_)) { Ok(Term::Atom(c.sys.atoms.undefined)) } else { Err(c.badarg()) };
+        return if matches!(a[0], Term::Atom(_) | Term::Ref(_)) {
+            Ok(Term::Atom(c.sys.atoms.undefined))
+        } else {
+            Err(c.badarg())
+        };
     };
     match a.get(1) {
         Some(Term::Atom(item)) => info_value(c, tid, item.as_str()).ok_or_else(|| c.badarg()),
         Some(_) => Err(c.badarg()),
         None => {
             let mut out = Vec::new();
-            for item in ["id", "name", "named_table", "type", "protection", "keypos", "owner", "size", "heir"] {
+            for item in [
+                "id",
+                "name",
+                "named_table",
+                "type",
+                "protection",
+                "keypos",
+                "owner",
+                "size",
+                "heir",
+            ] {
                 let v = info_value(c, tid, item).expect("known item");
                 let k = c.atom(item);
                 out.push(c.tuple(&[k, v]));
@@ -770,7 +897,9 @@ pub fn whereis(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 pub fn rename(c: &mut Ctx, a: &[Term]) -> R {
-    let Term::Atom(name) = a[1] else { return Err(c.badarg()) };
+    let Term::Atom(name) = a[1] else {
+        return Err(c.badarg());
+    };
     let tid = table_id(c, &a[0], true)?;
     c.sys.ets.rename(tid, name).map_err(|_| c.badarg())?;
     Ok(a[1])
@@ -779,7 +908,9 @@ pub fn rename(c: &mut Ctx, a: &[Term]) -> R {
 /// Transfer a table to a new owner, which receives `{'ETS-TRANSFER', Tab, FromPid, Data}`
 /// (`data` a term of the caller's heap).
 pub(crate) fn transfer(c: &mut Ctx, tid: u64, to: Pid, data: Term) {
-    let Some(t) = c.sys.ets.get_mut(tid) else { return };
+    let Some(t) = c.sys.ets.get_mut(tid) else {
+        return;
+    };
     let from = t.owner;
     t.owner = to;
     let id = table_term(t);
@@ -790,7 +921,9 @@ pub(crate) fn transfer(c: &mut Ctx, tid: u64, to: Pid, data: Term) {
 
 pub fn give_away(c: &mut Ctx, a: &[Term]) -> R {
     let tid = c.sys.ets.resolve(a[0]).ok_or_else(|| c.badarg())?;
-    let Term::Pid(to) = a[1] else { return Err(c.badarg()) };
+    let Term::Pid(to) = a[1] else {
+        return Err(c.badarg());
+    };
     let owner = c.sys.ets.get(tid).expect("resolved").owner;
     if owner != c.p.pid || to == c.p.pid || !c.sys.procs.is_alive(to) {
         return Err(c.badarg());
@@ -811,8 +944,14 @@ pub fn setopts(c: &mut Ctx, a: &[Term]) -> R {
     };
     for o in opts {
         let heir = match c.heap().as_tuple(o) {
-            Some(&[Term::Atom(k), Term::Atom(none)]) if k.as_str() == "heir" && none.as_str() == "none" => None,
-            Some(&[Term::Atom(k), Term::Pid(p), data]) if k.as_str() == "heir" => Some((p, c.own(data))),
+            Some(&[Term::Atom(k), Term::Atom(none)])
+                if k.as_str() == "heir" && none.as_str() == "none" =>
+            {
+                None
+            }
+            Some(&[Term::Atom(k), Term::Pid(p), data]) if k.as_str() == "heir" => {
+                Some((p, c.own(data)))
+            }
             _ => return Err(c.badarg()),
         };
         c.sys.ets.get_mut(tid).expect("resolved").heir = heir;

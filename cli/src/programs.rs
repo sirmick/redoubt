@@ -38,7 +38,11 @@ pub struct Programs {
 
 impl Programs {
     pub fn new(events: Sender<Event>) -> Programs {
-        Programs { events, running: BTreeMap::new(), next: 1 }
+        Programs {
+            events,
+            running: BTreeMap::new(),
+            next: 1,
+        }
     }
 
     /// Whether any program may still send events.
@@ -47,7 +51,11 @@ impl Programs {
     }
 
     /// Start `spawn`, with `host` mapping VM paths to host paths.
-    pub fn spawn(&mut self, spawn: &Spawn, host: impl Fn(&str) -> Result<PathBuf, FileError>) -> Result<Spawned, FileError> {
+    pub fn spawn(
+        &mut self,
+        spawn: &Spawn,
+        host: impl Fn(&str) -> Result<PathBuf, FileError>,
+    ) -> Result<Spawned, FileError> {
         let mut cmd = match &spawn.program {
             // As BEAM runs `{spawn, Command}`.
             Program::Shell(line) => {
@@ -64,15 +72,25 @@ impl Programs {
                 cmd
             }
         };
-        cmd.env_clear().envs(spawn.env.iter().map(|(k, v)| (k, v))).current_dir(host(&spawn.cwd)?);
-        cmd.stdin(if spawn.input { Stdio::piped() } else { Stdio::null() });
+        cmd.env_clear()
+            .envs(spawn.env.iter().map(|(k, v)| (k, v)))
+            .current_dir(host(&spawn.cwd)?);
+        cmd.stdin(if spawn.input {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        });
         let merged = if spawn.output && spawn.stderr_to_stdout {
             let (reader, writer) = std::io::pipe().map_err(crate::files::error)?;
             cmd.stdout(writer.try_clone().map_err(crate::files::error)?);
             cmd.stderr(writer);
             Some(reader)
         } else {
-            cmd.stdout(if spawn.output { Stdio::piped() } else { Stdio::null() });
+            cmd.stdout(if spawn.output {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            });
             None
         };
         let mut child = cmd.spawn().map_err(crate::files::error)?;
@@ -95,7 +113,10 @@ impl Programs {
         });
         let output: Option<Box<dyn Read + Send>> = match merged {
             Some(reader) => Some(Box::new(reader)),
-            None => child.stdout.take().map(|o| Box::new(o) as Box<dyn Read + Send>),
+            None => child
+                .stdout
+                .take()
+                .map(|o| Box::new(o) as Box<dyn Read + Send>),
         };
         let closed = Arc::new(AtomicBool::new(false));
         let (events, stop) = (self.events.clone(), closed.clone());
@@ -118,7 +139,9 @@ impl Programs {
                 send(ProgramEvent::Eof);
             }
             let status = match child.wait() {
-                Ok(s) => s.code().unwrap_or_else(|| 128 + std::os::unix::process::ExitStatusExt::signal(&s).unwrap_or(0)),
+                Ok(s) => s.code().unwrap_or_else(|| {
+                    128 + std::os::unix::process::ExitStatusExt::signal(&s).unwrap_or(0)
+                }),
                 Err(_) => 128,
             };
             send(ProgramEvent::Exit(status));

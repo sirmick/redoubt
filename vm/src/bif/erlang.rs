@@ -36,7 +36,11 @@ pub fn is_function(c: &mut Ctx, a: &[Term]) -> R {
 }
 pub fn is_function2(c: &mut Ctx, a: &[Term]) -> R {
     let arity = a[1].as_usize().ok_or_else(|| c.badarg())?;
-    Ok(c.bool(c.heap().as_fun(a[0]).is_some_and(|f| f.arity() as usize == arity)))
+    Ok(c.bool(
+        c.heap()
+            .as_fun(a[0])
+            .is_some_and(|f| f.arity() as usize == arity),
+    ))
 }
 pub fn is_integer(c: &mut Ctx, a: &[Term]) -> R {
     Ok(c.bool(a[0].is_integer()))
@@ -90,13 +94,19 @@ pub fn setelement(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 pub fn tuple_size(c: &mut Ctx, a: &[Term]) -> R {
-    Ok(Term::Int(c.heap().as_tuple(a[0]).ok_or_else(|| c.badarg())?.len() as i64))
+    Ok(Term::Int(
+        c.heap().as_tuple(a[0]).ok_or_else(|| c.badarg())?.len() as i64,
+    ))
 }
 
 pub fn size(c: &mut Ctx, a: &[Term]) -> R {
     match a[0] {
-        Term::Tuple(_) => Ok(Term::Int(c.heap().as_tuple(a[0]).expect("a tuple").len() as i64)),
-        Term::Bits(_) => Ok(Term::Int((c.heap().bit_len(a[0]).expect("bits") / 8) as i64)),
+        Term::Tuple(_) => Ok(Term::Int(
+            c.heap().as_tuple(a[0]).expect("a tuple").len() as i64
+        )),
+        Term::Bits(_) => Ok(Term::Int(
+            (c.heap().bit_len(a[0]).expect("bits") / 8) as i64,
+        )),
         _ => Err(c.badarg()),
     }
 }
@@ -148,11 +158,17 @@ pub fn list_to_tuple(c: &mut Ctx, a: &[Term]) -> R {
 // ---- lists ----
 
 pub fn hd(c: &mut Ctx, a: &[Term]) -> R {
-    c.heap().as_cons(a[0]).map(|(h, _)| h).ok_or_else(|| c.badarg())
+    c.heap()
+        .as_cons(a[0])
+        .map(|(h, _)| h)
+        .ok_or_else(|| c.badarg())
 }
 
 pub fn tl(c: &mut Ctx, a: &[Term]) -> R {
-    c.heap().as_cons(a[0]).map(|(_, t)| t).ok_or_else(|| c.badarg())
+    c.heap()
+        .as_cons(a[0])
+        .map(|(_, t)| t)
+        .ok_or_else(|| c.badarg())
 }
 
 pub fn length(c: &mut Ctx, a: &[Term]) -> R {
@@ -190,15 +206,25 @@ fn bits(c: &Ctx, t: &Term) -> Result<Bits, Exception> {
 }
 
 fn binary(c: &Ctx, t: &Term) -> Result<Bits, Exception> {
-    c.heap().as_bits(*t).filter(Bits::is_binary).ok_or_else(|| c.badarg())
+    c.heap()
+        .as_bits(*t)
+        .filter(Bits::is_binary)
+        .ok_or_else(|| c.badarg())
 }
 
 pub fn byte_size(c: &mut Ctx, a: &[Term]) -> R {
-    Ok(Term::Int(c.heap().bit_len(a[0]).ok_or_else(|| c.badarg())?.div_ceil(8) as i64))
+    Ok(Term::Int(
+        c.heap()
+            .bit_len(a[0])
+            .ok_or_else(|| c.badarg())?
+            .div_ceil(8) as i64,
+    ))
 }
 
 pub fn bit_size(c: &mut Ctx, a: &[Term]) -> R {
-    Ok(Term::Int(c.heap().bit_len(a[0]).ok_or_else(|| c.badarg())? as i64))
+    Ok(Term::Int(
+        c.heap().bit_len(a[0]).ok_or_else(|| c.badarg())? as i64
+    ))
 }
 
 /// `binary_part(Bin, {Start, Length})`.
@@ -216,10 +242,16 @@ pub fn binary_part(c: &mut Ctx, a: &[Term]) -> R {
         _ => return Err(c.badarg()),
     };
     // A negative length counts back from `start`.
-    let (lo, hi) = if len >= 0 { (start, start.checked_add(len)) } else { (start + len, Some(start)) };
+    let (lo, hi) = if len >= 0 {
+        (start, start.checked_add(len))
+    } else {
+        (start + len, Some(start))
+    };
     let size = (b.len / 8) as i64;
     match hi {
-        Some(hi) if lo >= 0 && hi <= size => Ok(c.bits(b.slice(lo as usize * 8, (hi - lo) as usize * 8))),
+        Some(hi) if lo >= 0 && hi <= size => {
+            Ok(c.bits(b.slice(lo as usize * 8, (hi - lo) as usize * 8)))
+        }
         _ => Err(c.badarg()),
     }
 }
@@ -242,7 +274,11 @@ pub fn split_binary(c: &mut Ctx, a: &[Term]) -> R {
 fn list_to_string(c: &Ctx, t: &Term) -> Result<String, Exception> {
     let mut s = String::new();
     for item in c.heap().list_iter(*t) {
-        let ch = item.ok().and_then(|x| x.as_i64()).and_then(|i| u32::try_from(i).ok()).and_then(char::from_u32);
+        let ch = item
+            .ok()
+            .and_then(|x| x.as_i64())
+            .and_then(|i| u32::try_from(i).ok())
+            .and_then(char::from_u32);
         s.push(ch.ok_or_else(|| c.badarg())?);
     }
     Ok(s)
@@ -262,11 +298,19 @@ pub fn atom_to_list(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn atom_to_binary(c: &mut Ctx, a: &[Term]) -> R {
     let atom = atom_arg(c, &a[0])?;
-    if a.len() == 2 && !(a[1].is_atom(&c.sys.atoms.latin1) || a[1].is_atom(&c.sys.atoms.unicode) || a[1].is_atom(&c.sys.atoms.utf8)) {
+    if a.len() == 2
+        && !(a[1].is_atom(&c.sys.atoms.latin1)
+            || a[1].is_atom(&c.sys.atoms.unicode)
+            || a[1].is_atom(&c.sys.atoms.utf8))
+    {
         return Err(c.badarg());
     }
     if a.len() == 2 && a[1].is_atom(&c.sys.atoms.latin1) {
-        let bytes: Option<Vec<u8>> = atom.as_str().chars().map(|ch| u8::try_from(ch as u32).ok()).collect();
+        let bytes: Option<Vec<u8>> = atom
+            .as_str()
+            .chars()
+            .map(|ch| u8::try_from(ch as u32).ok())
+            .collect();
         let bytes = bytes.ok_or_else(|| c.badarg())?;
         return Ok(c.binary(&bytes));
     }
@@ -302,7 +346,9 @@ fn binary_text(c: &Ctx, a: &[Term]) -> Result<String, Exception> {
     if a.len() == 2 && a[1].is_atom(&c.sys.atoms.latin1) {
         Ok(bytes.iter().map(|&b| b as char).collect())
     } else {
-        core::str::from_utf8(&bytes).map(|s| s.to_string()).map_err(|_| c.badarg())
+        core::str::from_utf8(&bytes)
+            .map(|s| s.to_string())
+            .map_err(|_| c.badarg())
     }
 }
 
@@ -437,7 +483,9 @@ pub fn dt_same(_c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn binary_to_integer(c: &mut Ctx, a: &[Term]) -> R {
     let b = binary(c, &a[0])?;
-    let s = core::str::from_utf8(&b.to_bytes()).map_err(|_| c.badarg())?.to_string();
+    let s = core::str::from_utf8(&b.to_bytes())
+        .map_err(|_| c.badarg())?
+        .to_string();
     let r = radix(c, a)?;
     parse_integer(c, &s, r)
 }
@@ -481,7 +529,10 @@ pub fn binary_to_list3(c: &mut Ctx, a: &[Term]) -> R {
     let size = b.len / 8;
     match (a[1].as_usize(), a[2].as_usize()) {
         (Some(s), Some(e)) if s >= 1 && s <= e && e <= size => {
-            let v: Vec<Term> = b.to_bytes()[s - 1..e].iter().map(|&x| Term::Int(x as i64)).collect();
+            let v: Vec<Term> = b.to_bytes()[s - 1..e]
+                .iter()
+                .map(|&x| Term::Int(x as i64))
+                .collect();
             Ok(c.list(v))
         }
         _ => Err(c.badarg()),
@@ -562,7 +613,11 @@ pub fn list_to_bitstring(c: &mut Ctx, a: &[Term]) -> R {
 /// `iolist_to_iovec(IoData)`: a list of binaries with the same bytes. One binary suffices.
 pub fn iolist_to_iovec(c: &mut Ctx, a: &[Term]) -> R {
     let bin = iolist_to_binary(c, a)?;
-    Ok(if c.heap().bit_len(bin) == Some(0) { Term::Nil } else { c.list([bin]) })
+    Ok(if c.heap().bit_len(bin) == Some(0) {
+        Term::Nil
+    } else {
+        c.list([bin])
+    })
 }
 
 pub fn iolist_size(c: &mut Ctx, a: &[Term]) -> R {
@@ -588,7 +643,9 @@ pub fn is_record(c: &mut Ctx, a: &[Term]) -> R {
         Some(t) => Some(t.as_usize().ok_or_else(|| c.badarg())?),
     };
     let ok = match c.heap().as_tuple(a[0]) {
-        Some(t) => !t.is_empty() && c.heap().eq_exact(t[0], a[1]) && size.is_none_or(|s| s == t.len()),
+        Some(t) => {
+            !t.is_empty() && c.heap().eq_exact(t[0], a[1]) && size.is_none_or(|s| s == t.len())
+        }
         None => false,
     };
     Ok(c.bool(ok))
@@ -676,9 +733,9 @@ fn parse_float(c: &Ctx, s: &str) -> R {
         Some(i) => (&body[..i], Some(&body[i + 1..])),
         None => (body, None),
     };
-    let ok_mantissa = mantissa
-        .split_once('.')
-        .is_some_and(|(w, f)| !w.is_empty() && !f.is_empty() && (w.chars().chain(f.chars())).all(|ch| ch.is_ascii_digit()));
+    let ok_mantissa = mantissa.split_once('.').is_some_and(|(w, f)| {
+        !w.is_empty() && !f.is_empty() && (w.chars().chain(f.chars())).all(|ch| ch.is_ascii_digit())
+    });
     let ok_exponent = exponent.is_none_or(|e| {
         let d = e.strip_prefix(['+', '-']).unwrap_or(e);
         !d.is_empty() && d.chars().all(|ch| ch.is_ascii_digit())
@@ -699,7 +756,9 @@ pub fn list_to_float(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn binary_to_float(c: &mut Ctx, a: &[Term]) -> R {
     let b = binary(c, &a[0])?;
-    let s = core::str::from_utf8(&b.to_bytes()).map_err(|_| c.badarg())?.to_string();
+    let s = core::str::from_utf8(&b.to_bytes())
+        .map_err(|_| c.badarg())?
+        .to_string();
     parse_float(c, &s)
 }
 
@@ -715,14 +774,17 @@ pub fn term_to_binary(c: &mut Ctx, a: &[Term]) -> R {
             match (o, c.heap().as_tuple(o)) {
                 (Term::Atom(x), _) if x.as_str() == "compressed" => level = 6,
                 (Term::Atom(x), _) if x.as_str() == "deterministic" || x.as_str() == "local" => {}
-                (_, Some(&[Term::Atom(k), Term::Int(l @ 0..=9)])) if k.as_str() == "compressed" => level = l as u8,
+                (_, Some(&[Term::Atom(k), Term::Int(l @ 0..=9)])) if k.as_str() == "compressed" => {
+                    level = l as u8
+                }
                 (_, Some(&[Term::Atom(k), Term::Int(0..=2)])) if k.as_str() == "minor_version" => {}
                 _ => return Err(c.badarg()),
             }
         }
     }
     let sys = &*c.sys;
-    let bytes = crate::etf::encode_compressed(&c.p.heap, a[0], level, &|m| sys.loaded_md5(m)).map_err(|_| c.badarg())?;
+    let bytes = crate::etf::encode_compressed(&c.p.heap, a[0], level, &|m| sys.loaded_md5(m))
+        .map_err(|_| c.badarg())?;
     Ok(c.binary(&bytes))
 }
 
@@ -735,7 +797,9 @@ pub fn term_to_iovec(c: &mut Ctx, a: &[Term]) -> R {
 /// `external_size(Term)`: how many bytes `term_to_binary` would produce.
 pub fn external_size(c: &mut Ctx, a: &[Term]) -> R {
     let b = term_to_binary(c, a)?;
-    Ok(Term::Int((c.heap().bit_len(b).expect("a binary") / 8) as i64))
+    Ok(Term::Int(
+        (c.heap().bit_len(b).expect("a binary") / 8) as i64,
+    ))
 }
 
 /// `string:list_to_float(String)`: the float at the start of `String` and the rest, as
@@ -751,7 +815,11 @@ pub fn string_list_to_float(c: &mut Ctx, a: &[Term]) -> R {
         rest = tail;
     }
     let digits = |s: &[u8], i: usize| i + s[i..].iter().take_while(|b| b.is_ascii_digit()).count();
-    let mut i = if matches!(chars.first(), Some(b'+' | b'-')) { 1 } else { 0 };
+    let mut i = if matches!(chars.first(), Some(b'+' | b'-')) {
+        1
+    } else {
+        0
+    };
     let int_end = digits(&chars, i);
     let mut end = None;
     if int_end > i && chars.get(int_end) == Some(&b'.') {
@@ -760,7 +828,11 @@ pub fn string_list_to_float(c: &mut Ctx, a: &[Term]) -> R {
             end = Some(frac_end);
             i = frac_end;
             if matches!(chars.get(i), Some(b'e' | b'E')) {
-                let j = if matches!(chars.get(i + 1), Some(b'+' | b'-')) { i + 2 } else { i + 1 };
+                let j = if matches!(chars.get(i + 1), Some(b'+' | b'-')) {
+                    i + 2
+                } else {
+                    i + 1
+                };
                 let exp_end = digits(&chars, j);
                 if exp_end > j {
                     end = Some(exp_end);
@@ -774,7 +846,9 @@ pub fn string_list_to_float(c: &mut Ctx, a: &[Term]) -> R {
     };
     let Some(end) = end else { return no_float(c) };
     let text = core::str::from_utf8(&chars[..end]).expect("ASCII");
-    let Ok(f) = text.parse::<f64>() else { return no_float(c) };
+    let Ok(f) = text.parse::<f64>() else {
+        return no_float(c);
+    };
     if !f.is_finite() {
         return no_float(c);
     }
@@ -800,7 +874,8 @@ pub fn binary_to_term(c: &mut Ctx, a: &[Term]) -> R {
             }
         }
     }
-    let (t, n) = crate::etf::decode_prefix(&bytes, &mut c.sys.atom_table, &mut c.p.heap, safe).map_err(|_| c.badarg())?;
+    let (t, n) = crate::etf::decode_prefix(&bytes, &mut c.sys.atom_table, &mut c.p.heap, safe)
+        .map_err(|_| c.badarg())?;
     if used {
         return Ok(c.tuple(&[t, Term::Int(n as i64)]));
     }
@@ -836,7 +911,11 @@ pub fn flat_size(c: &mut Ctx, a: &[Term]) -> R {
             Term::Tuple(_) => {
                 let e = h.as_tuple(t).expect("a tuple");
                 work.extend(e.iter().copied());
-                if e.is_empty() { 0 } else { 1 + e.len() as u64 }
+                if e.is_empty() {
+                    0
+                } else {
+                    1 + e.len() as u64
+                }
             }
             Term::Map(_) => {
                 let entries = h.map_entries(t).expect("a map");
@@ -849,7 +928,11 @@ pub fn flat_size(c: &mut Ctx, a: &[Term]) -> R {
             }
             Term::Bits(_) => {
                 let bytes = h.bit_len(t).expect("bits").div_ceil(8) as u64;
-                if bytes <= 64 { 2 + bytes.div_ceil(8) } else { 8 }
+                if bytes <= 64 {
+                    2 + bytes.div_ceil(8)
+                } else {
+                    8
+                }
             }
             Term::Fun(_) => match h.as_fun(t).expect("a fun") {
                 crate::term::FunView::Export { .. } => 2,

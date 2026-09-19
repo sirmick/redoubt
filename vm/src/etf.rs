@@ -62,8 +62,19 @@ pub fn decode(bytes: &[u8], atoms: &mut AtomTable, heap: &mut Heap) -> Result<Te
 
 /// Decode the term at the start of `bytes`; also return how many bytes it used. With `safe`,
 /// an atom that does not already exist is an error rather than a new atom.
-pub fn decode_prefix(bytes: &[u8], atoms: &mut AtomTable, heap: &mut Heap, safe: bool) -> Result<(Term, usize), EtfError> {
-    let mut r = Reader { bytes, pos: 0, atoms, heap, safe };
+pub fn decode_prefix(
+    bytes: &[u8],
+    atoms: &mut AtomTable,
+    heap: &mut Heap,
+    safe: bool,
+) -> Result<(Term, usize), EtfError> {
+    let mut r = Reader {
+        bytes,
+        pos: 0,
+        atoms,
+        heap,
+        safe,
+    };
     if r.u8()? != VERSION {
         return Err(EtfError::BadTag(bytes[0]));
     }
@@ -71,7 +82,13 @@ pub fn decode_prefix(bytes: &[u8], atoms: &mut AtomTable, heap: &mut Heap, safe:
         r.pos = 2;
         let size = r.u32()?;
         let (inflated, used) = inflate(&bytes[r.pos..], size)?;
-        let mut inner = Reader { bytes: &inflated, pos: 0, atoms: r.atoms, heap: r.heap, safe };
+        let mut inner = Reader {
+            bytes: &inflated,
+            pos: 0,
+            atoms: r.atoms,
+            heap: r.heap,
+            safe,
+        };
         let t = inner.term(0)?;
         if inner.pos != inflated.len() {
             return Err(EtfError::Malformed);
@@ -91,7 +108,8 @@ fn inflate(input: &[u8], size: usize) -> Result<(Vec<u8>, usize), EtfError> {
         return Err(EtfError::Malformed);
     }
     let mut out = alloc::vec![0u8; size];
-    let flags = inflate_flags::TINFL_FLAG_PARSE_ZLIB_HEADER | inflate_flags::TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF;
+    let flags = inflate_flags::TINFL_FLAG_PARSE_ZLIB_HEADER
+        | inflate_flags::TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF;
     let mut state = alloc::boxed::Box::<DecompressorOxide>::default();
     let (status, used, written) = decompress(&mut state, input, &mut out, 0, flags);
     match status {
@@ -156,7 +174,9 @@ impl<'a> Reader<'a, '_> {
 
     fn u64(&mut self) -> Result<u64, EtfError> {
         let b = self.take(8)?;
-        Ok(u64::from_be_bytes(b.try_into().map_err(|_| EtfError::Malformed)?))
+        Ok(u64::from_be_bytes(
+            b.try_into().map_err(|_| EtfError::Malformed)?,
+        ))
     }
 
     fn remaining(&self) -> usize {
@@ -193,17 +213,31 @@ impl<'a> Reader<'a, '_> {
                 Term::Float(f)
             }
             110 | 111 => {
-                let n = if tag == 110 { self.u8()? as usize } else { self.u32()? };
+                let n = if tag == 110 {
+                    self.u8()? as usize
+                } else {
+                    self.u32()?
+                };
                 // Any non-zero sign byte means negative, as BEAM reads it.
-                let sign = if self.u8()? == 0 { Sign::Plus } else { Sign::Minus };
+                let sign = if self.u8()? == 0 {
+                    Sign::Plus
+                } else {
+                    Sign::Minus
+                };
                 let digits = self.take(n)?;
                 self.heap.big(BigInt::from_bytes_le(sign, digits))
             }
             118 | 119 | 100 | 115 => {
-                let n = if tag == 119 || tag == 115 { self.u8()? as usize } else { self.u16()? };
+                let n = if tag == 119 || tag == 115 {
+                    self.u8()? as usize
+                } else {
+                    self.u16()?
+                };
                 let raw = self.take(n)?;
                 let text: alloc::string::String = if tag == 118 || tag == 119 {
-                    core::str::from_utf8(raw).map_err(|_| EtfError::BadAtom)?.into()
+                    core::str::from_utf8(raw)
+                        .map_err(|_| EtfError::BadAtom)?
+                        .into()
                 } else {
                     // Latin-1: each byte is one code point.
                     raw.iter().map(|&b| b as char).collect()
@@ -216,7 +250,11 @@ impl<'a> Reader<'a, '_> {
                 Term::Atom(atom)
             }
             104 | 105 => {
-                let n = if tag == 104 { self.u8()? as usize } else { self.u32()? };
+                let n = if tag == 104 {
+                    self.u8()? as usize
+                } else {
+                    self.u32()?
+                };
                 self.check_count(n, 1)?;
                 let mut elems = Vec::with_capacity(n);
                 for _ in 0..n {
@@ -253,7 +291,11 @@ impl<'a> Reader<'a, '_> {
                     return Err(EtfError::Malformed);
                 }
                 let data = self.take(n)?;
-                let bits = crate::term::Bits { data: alloc::sync::Arc::new(data.to_vec()), offset: 0, len: (n - 1) * 8 + last_bits };
+                let bits = crate::term::Bits {
+                    data: alloc::sync::Arc::new(data.to_vec()),
+                    offset: 0,
+                    len: (n - 1) * 8 + last_bits,
+                };
                 self.heap.bits(bits)
             }
             116 => {
@@ -281,7 +323,11 @@ impl<'a> Reader<'a, '_> {
                 self.local_node(depth)?;
                 let index = self.u32()? as u32;
                 let serial = self.u32()? as u32;
-                if tag == 88 { self.take(4)? } else { self.take(1)? };
+                if tag == 88 {
+                    self.take(4)?
+                } else {
+                    self.take(1)?
+                };
                 Term::Pid(crate::term::Pid::process(index, serial))
             }
             // V4_PORT_EXT: this node's ports, the id holding the slot and serial (see `encode`).
@@ -289,7 +335,11 @@ impl<'a> Reader<'a, '_> {
                 self.local_node(depth)?;
                 let id = self.u64()?;
                 self.take(4)?;
-                Term::Pid(crate::term::Pid { index: (id >> 32) as u32, serial: id as u32, port: true })
+                Term::Pid(crate::term::Pid {
+                    index: (id >> 32) as u32,
+                    serial: id as u32,
+                    port: true,
+                })
             }
             // NEWER_REFERENCE_EXT and NEW_REFERENCE_EXT, laid out as `encode` writes them.
             90 | 114 => {
@@ -298,12 +348,18 @@ impl<'a> Reader<'a, '_> {
                     return Err(EtfError::Malformed);
                 }
                 self.local_node(depth)?;
-                if tag == 90 { self.take(4)? } else { self.take(1)? };
+                if tag == 90 {
+                    self.take(4)?
+                } else {
+                    self.take(1)?
+                };
                 let mut ids = [0u64; 5];
                 for id in ids.iter_mut().take(n) {
                     *id = self.u32()? as u64;
                 }
-                Term::Ref(crate::term::Ref((ids[0] & 0x3ffff) | (ids[1] << 18) | (ids[2] << 50)))
+                Term::Ref(crate::term::Ref(
+                    (ids[0] & 0x3ffff) | (ids[1] << 18) | (ids[2] << 50),
+                ))
             }
             // NEW_FUN_EXT. In safe mode a fun is refused: it names code to run.
             112 if !self.safe => {
@@ -315,7 +371,9 @@ impl<'a> Reader<'a, '_> {
                 let num_free = self.u32()?;
                 self.check_count(num_free, 1)?;
                 let module = self.atom(depth)?;
-                let (Term::Int(_), Term::Int(uniq)) = (self.term(depth + 1)?, self.term(depth + 1)?) else {
+                let (Term::Int(_), Term::Int(uniq)) =
+                    (self.term(depth + 1)?, self.term(depth + 1)?)
+                else {
                     return Err(EtfError::Malformed);
                 };
                 if !matches!(self.term(depth + 1)?, Term::Pid(_)) {
@@ -331,7 +389,10 @@ impl<'a> Reader<'a, '_> {
                 let uniq = u32::try_from(uniq).map_err(|_| EtfError::Malformed)?;
                 // The name is not in the external format; the module's fun table has it, if
                 // the module is loaded now (and matches), else it is left unknown.
-                let name = self.atoms.intern("-unknown-fun-").map_err(|_| EtfError::BadAtom)?;
+                let name = self
+                    .atoms
+                    .intern("-unknown-fun-")
+                    .map_err(|_| EtfError::BadAtom)?;
                 self.heap.fun_local(module, index, arity, uniq, name, &env)
             }
             // Ports, the old float format and distribution headers are not accepted.
@@ -341,7 +402,11 @@ impl<'a> Reader<'a, '_> {
 
     /// A node name that must be this VM's own ([`NODE`]).
     fn local_node(&mut self, depth: usize) -> Result<(), EtfError> {
-        if self.atom(depth)?.as_str() == NODE { Ok(()) } else { Err(EtfError::Malformed) }
+        if self.atom(depth)?.as_str() == NODE {
+            Ok(())
+        } else {
+            Err(EtfError::Malformed)
+        }
     }
 
     fn atom(&mut self, depth: usize) -> Result<crate::atom::Atom, EtfError> {
@@ -376,7 +441,11 @@ enum Work {
 
 /// Encode `t`. `md5_of` gives the checksum of a loaded module, which identifies its local funs;
 /// a fun of a module that is no longer loaded is written with a zero checksum.
-pub fn encode_with(heap: &Heap, t: Term, md5_of: &dyn Fn(&crate::atom::Atom) -> Option<[u8; 16]>) -> Result<Vec<u8>, EncodeError> {
+pub fn encode_with(
+    heap: &Heap,
+    t: Term,
+    md5_of: &dyn Fn(&crate::atom::Atom) -> Option<[u8; 16]>,
+) -> Result<Vec<u8>, EncodeError> {
     let mut out = alloc::vec![VERSION];
     let mut work = alloc::vec![Work::Term(t)];
     while let Some(w) = work.pop() {
@@ -458,7 +527,11 @@ pub fn encode_with(heap: &Heap, t: Term, md5_of: &dyn Fn(&crate::atom::Atom) -> 
                 out.extend_from_slice(&bytes);
             }
             Term::Fun(_) => match heap.as_fun(t).expect("a fun") {
-                FunView::Export { module, function, arity } => {
+                FunView::Export {
+                    module,
+                    function,
+                    arity,
+                } => {
                     out.push(113);
                     encode_atom(&mut out, module.as_str());
                     encode_atom(&mut out, function.as_str());
@@ -466,7 +539,14 @@ pub fn encode_with(heap: &Heap, t: Term, md5_of: &dyn Fn(&crate::atom::Atom) -> 
                 }
                 // NEW_FUN_EXT: Size, Arity, Uniq (module MD5), Index, NumFree, Module,
                 // OldIndex, OldUniq, Pid (the creator; not tracked here), then the free variables.
-                FunView::Local { module, index, arity, env, uniq, .. } => {
+                FunView::Local {
+                    module,
+                    index,
+                    arity,
+                    env,
+                    uniq,
+                    ..
+                } => {
                     out.push(112);
                     let at = out.len();
                     out.extend_from_slice(&[0; 4]);
@@ -513,7 +593,9 @@ pub fn encode_with(heap: &Heap, t: Term, md5_of: &dyn Fn(&crate::atom::Atom) -> 
                 let id = heap.as_resource(t).expect("a resource").id;
                 work.push(Work::Term(Term::Ref(crate::term::Ref(id))))
             }
-            Term::Match(_) | Term::Node(_) | Term::Header(_) | Term::OffHeap(_) => return Err(EncodeError::Unsupported),
+            Term::Match(_) | Term::Node(_) | Term::Header(_) | Term::OffHeap(_) => {
+                return Err(EncodeError::Unsupported)
+            }
         }
     }
     Ok(out)
@@ -574,7 +656,10 @@ mod tests {
         let cases: &[(&[u8], &str)] = &[
             (&[131, 97, 42], "42"),
             (&[131, 98, 255, 255, 255, 255], "-1"),
-            (&[131, 110, 8, 0, 0, 0, 0, 0, 0, 0, 0, 128], "9223372036854775808"),
+            (
+                &[131, 110, 8, 0, 0, 0, 0, 0, 0, 0, 0, 128],
+                "9223372036854775808",
+            ),
             (&[131, 70, 63, 248, 0, 0, 0, 0, 0, 0], "1.5"),
             (&[131, 119, 2, 111, 107], "ok"),
             (&[131, 106], "[]"),
@@ -584,7 +669,12 @@ mod tests {
             (&[131, 109, 0, 0, 0, 2, 1, 2], "<<1,2>>"),
             (&[131, 77, 0, 0, 0, 1, 3, 160], "<<5:3>>"),
             (&[131, 116, 0, 0, 0, 1, 119, 1, 107, 97, 1], "#{k => 1}"),
-            (&[131, 113, 119, 5, 108, 105, 115, 116, 115, 119, 3, 109, 97, 112, 97, 2], "fun lists:map/2"),
+            (
+                &[
+                    131, 113, 119, 5, 108, 105, 115, 116, 115, 119, 3, 109, 97, 112, 97, 2,
+                ],
+                "fun lists:map/2",
+            ),
         ];
         for (bytes, want) in cases {
             assert_eq!(dec(bytes).unwrap(), *want, "decoding {bytes:?}");
@@ -607,7 +697,9 @@ mod tests {
             &[131, 109, 0, 0, 0, 2, 1, 2],
             &[131, 77, 0, 0, 0, 1, 3, 160],
             &[131, 116, 0, 0, 0, 1, 119, 1, 107, 97, 1],
-            &[131, 113, 119, 5, 108, 105, 115, 116, 115, 119, 3, 109, 97, 112, 97, 2],
+            &[
+                131, 113, 119, 5, 108, 105, 115, 116, 115, 119, 3, 109, 97, 112, 97, 2,
+            ],
         ];
         for bytes in cases {
             let mut h = heap();
@@ -621,7 +713,10 @@ mod tests {
         let mut atoms = AtomTable::new();
         let mut h = heap();
         let bytes = [131, 119, 3, 110, 101, 119];
-        assert_eq!(decode_prefix(&bytes, &mut atoms, &mut h, true).err(), Some(EtfError::BadAtom));
+        assert_eq!(
+            decode_prefix(&bytes, &mut atoms, &mut h, true).err(),
+            Some(EtfError::BadAtom)
+        );
         assert!(atoms.existing("new").is_none());
         assert!(decode_prefix(&bytes, &mut atoms, &mut h, false).is_ok());
         assert!(decode_prefix(&bytes, &mut atoms, &mut h, true).is_ok());
@@ -635,21 +730,36 @@ mod tests {
         assert_eq!(dec(&[131, 98, 0, 0]).err(), Some(EtfError::Truncated));
         assert_eq!(dec(&[131, 97, 1, 0]).err(), Some(EtfError::TrailingBytes));
         // A list claiming 4 billion elements must fail before allocating.
-        assert_eq!(dec(&[131, 108, 255, 255, 255, 255, 106]).err(), Some(EtfError::Truncated));
+        assert_eq!(
+            dec(&[131, 108, 255, 255, 255, 255, 106]).err(),
+            Some(EtfError::Truncated)
+        );
         // NaN is not an Erlang float.
-        assert_eq!(dec(&[131, 70, 127, 248, 0, 0, 0, 0, 0, 0]).err(), Some(EtfError::BadFloat));
+        assert_eq!(
+            dec(&[131, 70, 127, 248, 0, 0, 0, 0, 0, 0]).err(),
+            Some(EtfError::BadFloat)
+        );
         // Invalid UTF-8 in an atom.
         assert_eq!(dec(&[131, 119, 1, 0xff]).err(), Some(EtfError::BadAtom));
         // Bit binary with 0 or 9 bits in the last byte.
-        assert_eq!(dec(&[131, 77, 0, 0, 0, 1, 0, 0]).err(), Some(EtfError::Malformed));
-        assert_eq!(dec(&[131, 77, 0, 0, 0, 1, 9, 0]).err(), Some(EtfError::Malformed));
+        assert_eq!(
+            dec(&[131, 77, 0, 0, 0, 1, 0, 0]).err(),
+            Some(EtfError::Malformed)
+        );
+        assert_eq!(
+            dec(&[131, 77, 0, 0, 0, 1, 9, 0]).err(),
+            Some(EtfError::Malformed)
+        );
     }
 
     #[test]
     fn local_pids_and_refs_round_trip() {
         let mut atoms = AtomTable::new();
         let mut h = heap();
-        for t in [Term::Pid(crate::term::Pid::process(77, 3)), Term::Ref(crate::term::Ref(0x1234_5678_9abc_def0))] {
+        for t in [
+            Term::Pid(crate::term::Pid::process(77, 3)),
+            Term::Ref(crate::term::Ref(0x1234_5678_9abc_def0)),
+        ] {
             let bytes = encode(&h, t).unwrap();
             let back = decode(&bytes, &mut atoms, &mut h).unwrap();
             assert_eq!(h.show(back).to_string(), h.show(t).to_string());
@@ -673,13 +783,21 @@ mod tests {
         let back = decode(&packed, &mut atoms, &mut h).unwrap();
         assert!(h.eq_exact(back, t));
         // Small terms are left alone.
-        assert_eq!(encode_compressed(&h, Term::Nil, 6, &|_| None).unwrap(), encode(&h, Term::Nil).unwrap());
+        assert_eq!(
+            encode_compressed(&h, Term::Nil, 6, &|_| None).unwrap(),
+            encode(&h, Term::Nil).unwrap()
+        );
         // A lying size, a truncated stream, and a claimed size the input could never produce.
         let mut lie = packed.clone();
         lie[5] ^= 1;
         assert!(decode(&lie, &mut atoms, &mut h).is_err());
         assert!(decode(&packed[..packed.len() - 3], &mut atoms, &mut h).is_err());
-        assert!(decode(&[131, 80, 0x7f, 0xff, 0xff, 0xff, 0x78, 0x9c], &mut atoms, &mut h).is_err());
+        assert!(decode(
+            &[131, 80, 0x7f, 0xff, 0xff, 0xff, 0x78, 0x9c],
+            &mut atoms,
+            &mut h
+        )
+        .is_err());
     }
 
     #[test]
