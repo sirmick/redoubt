@@ -2,6 +2,8 @@
 //! system calls): `new_connection` and `disconnect`, admission and fair shares of minted
 //! connections, the file server's grant and disconnect hooks, and hostile requests.
 
+use core::num::NonZeroU64;
+
 use super::*;
 
 /// A kernel for `answer_common`: mints handles 100, 101, ... and remembers the badges.
