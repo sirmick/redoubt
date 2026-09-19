@@ -94,8 +94,12 @@ needs no Erlang toolchain; `tools/build-lib --check` keeps them honest):
   waits, an otherwise idle VM sleeps in `Platform::idle(None)`, which returns when input
   arrives. Prompts are repeated for each line of a multi-line `get_until`, as OTP's `user` does,
   so IEx's transcript matches BEAM's.
-- `logger` and `error_logger`: stand-ins for the kernel's. Level filtering, and reports printed
-  to `standard_error`, formatted by their own `report_cb` as OTP does. No handlers.
+- Logging is OTP's own `logger`, started at boot as a release does it (`beamlet_kernel`:
+  `logger_server`, the kernel's logger configuration, `logger_sup`, the default handler), so
+  handlers, filters and formatters (Elixir's Logger, ExUnit's `capture_log`) behave as on BEAM.
+  An uncaught error or throw is reported to it as BEAM's emulator reports it. This adds about
+  5 ms to boot. When the platform has no kernel `logger`, small stand-ins (`vm/lib/logger.erl`,
+  `error_logger.erl`: level filtering, reports printed to `standard_error`) are loaded instead.
 
 Other BEAM-internal modules (`init`, `erts_internal`, `code`, `net_kernel`, `persistent_term`,
 `os`) are answered by natives. The environment (`os:getenv`) is the VM's own and starts empty:

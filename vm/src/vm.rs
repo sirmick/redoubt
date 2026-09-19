@@ -150,13 +150,16 @@ pub(crate) struct Stats {
 /// I/O server, and a small `logger` in place of the kernel application's.
 const EMBEDDED: &[&[u8]] = &[
     include_bytes!("../lib/beamlet_io.beam"),
-    include_bytes!("../lib/logger.beam"),
-    include_bytes!("../lib/error_logger.beam"),
     include_bytes!("../lib/application.beam"),
     include_bytes!("../lib/gen_tcp.beam"),
     include_bytes!("../lib/beamlet_tcp.beam"),
     include_bytes!("../lib/beamlet_code.beam"),
+    include_bytes!("../lib/beamlet_kernel.beam"),
 ];
+
+/// Stand-ins for the kernel's `logger` and `error_logger`, loaded only when the platform does
+/// not provide OTP's own (which then starts at boot, see `beamlet_kernel`).
+const LOGGER_FALLBACK: &[&[u8]] = &[include_bytes!("../lib/logger.beam"), include_bytes!("../lib/error_logger.beam")];
 
 enum Slot {
     Free,
@@ -391,6 +394,12 @@ impl Vm {
         for module in EMBEDDED {
             self.sys.load(module).expect("embedded modules load");
         }
+        let real_logger = self.sys.platform.load_module("logger").is_some() && self.sys.platform.load_module("logger_sup").is_some();
+        if !real_logger {
+            for module in LOGGER_FALLBACK {
+                self.sys.load(module).expect("embedded modules load");
+            }
+        }
         let user_name = self.atom("user");
         let user = self.spawn("beamlet_io", "start", alloc::vec![user_name]).expect("spawn user");
         let stderr = self.atom("standard_error");
@@ -406,6 +415,11 @@ impl Vm {
         // answers `get_cwd`, which compilers ask for; file operations fail with `enotsup`.
         if let Ok(pid) = self.spawn("file_server", "start", Vec::new()) {
             let _ = self.run_bounded(pid, 100_000);
+        }
+        if real_logger {
+            if let Ok(pid) = self.spawn("beamlet_kernel", "start", Vec::new()) {
+                let _ = self.run_bounded(pid, 1_000_000);
+            }
         }
         self
     }
@@ -812,6 +826,32 @@ impl System {
         self.send(reader, Term::tuple(alloc::vec![tag, msg]));
     }
 
+    /// Send `{log, error, "Error in process ~p with exit value:~n~p~n", [Pid, Reason], Meta}` to
+    /// the `logger` process, if one is running, with the metadata BEAM gives these reports.
+    fn report_crash(&mut self, p: &Process, reason: Term) {
+        let Some(&logger) = self.registered.get("logger") else { return };
+        let atom = |s: &mut Self, name: &str| Term::Atom(s.atom(name));
+        let format = "Error in process ~p with exit value:~n~p~n";
+        let format = Term::list(format.chars().map(|c| Term::Int(c as i64)).collect::<Vec<_>>());
+        let mut el = crate::term::Map::new();
+        el.insert(crate::term::MapKey(atom(self, "emulator")), Term::Atom(self.atoms.true_.clone()));
+        el.insert(crate::term::MapKey(atom(self, "tag")), atom(self, "error"));
+        let time = self.platform.system_time_us().unwrap_or(0) as i64;
+        let mut meta = crate::term::Map::new();
+        meta.insert(crate::term::MapKey(atom(self, "error_logger")), Term::map(el));
+        meta.insert(crate::term::MapKey(atom(self, "gl")), Term::Pid(p.group_leader.unwrap_or(p.pid)));
+        meta.insert(crate::term::MapKey(atom(self, "pid")), Term::Pid(p.pid));
+        meta.insert(crate::term::MapKey(atom(self, "time")), Term::Int(time));
+        let msg = Term::tuple(alloc::vec![
+            atom(self, "log"),
+            atom(self, "error"),
+            format,
+            Term::list(alloc::vec![Term::Pid(p.pid), reason]),
+            Term::map(meta),
+        ]);
+        self.send(logger, msg);
+    }
+
     /// Close the files `pid` opened.
     fn close_files(&mut self, pid: Pid) {
         let handles: Vec<u64> = self.files.iter().filter(|(_, &o)| o == pid).map(|(&h, _)| h).collect();
@@ -838,6 +878,10 @@ impl System {
         };
         if let Some(t) = p.timer {
             self.cancel_timer(pid, t);
+        }
+        // An uncaught error (or throw) is reported to the logger, as BEAM's emulator does.
+        if matches!(&result, Err(e) if e.class != Class::Exit) {
+            self.report_crash(&p, reason.clone());
         }
         self.aliases.retain(|_, a| a.owner != pid);
         self.close_files(pid);

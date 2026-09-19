@@ -404,8 +404,21 @@ pub fn init_get_arguments(_c: &mut Ctx, _a: &[Term]) -> R {
     Ok(Term::Nil)
 }
 
-pub fn init_get_argument(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(Term::Atom(c.sys.atoms.error.clone()))
+/// `init:get_argument(Flag)`: `home` is the VM's `HOME`, `root` its OTP root (see
+/// `code:root_dir/0`); there are no other command-line flags.
+pub fn init_get_argument(c: &mut Ctx, a: &[Term]) -> R {
+    let value = match &a[0] {
+        Term::Atom(f) if f.as_str() == "home" => c.sys.env.get("HOME").cloned(),
+        Term::Atom(f) if f.as_str() == "root" && !c.sys.lib_roots.is_empty() => match super::code::root_dir(c, &[])?.to_vec() {
+            Some(chars) => Some(chars.iter().filter_map(|t| t.as_i64().and_then(|i| char::from_u32(i as u32))).collect()),
+            None => None,
+        },
+        _ => None,
+    };
+    Ok(match value {
+        Some(v) => Term::tuple(alloc::vec![c.ok(), Term::list(alloc::vec![Term::list(alloc::vec![string(&v)])])]),
+        None => Term::Atom(c.sys.atoms.error.clone()),
+    })
 }
 
 pub fn init_get_status(c: &mut Ctx, _a: &[Term]) -> R {
