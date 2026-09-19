@@ -93,6 +93,8 @@ const EMBEDDED: &[&[u8]] = &[
     include_bytes!("../lib/logger.beam"),
     include_bytes!("../lib/error_logger.beam"),
     include_bytes!("../lib/application.beam"),
+    include_bytes!("../lib/gen_tcp.beam"),
+    include_bytes!("../lib/beamlet_tcp.beam"),
 ];
 
 enum Slot {
