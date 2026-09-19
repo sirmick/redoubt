@@ -1,17 +1,29 @@
-description = "No ambient authority: an ungranted process gets no device page or interrupt; the victim that owns them says so"
+description = "No ambient authority: an ungranted process is refused the UART, the power-off device and interrupts, and the UART's owner still hears its input"
 arch = ["rv64"]
 kind = "boot"
 # PID 2 log-server is the victim: it owns the UART and (granted here) irq 10, and claims both
 # before any client can run. PID 3 grant-attack has no grants and uses whatever it manages to
-# take (see its source).
+# take (see its source): a raw BREACH line on the UART, a power-off, or keeping irq 10.
 programs = ["log-server", "grant-attack"]
 timeout_secs = 20
-# The verdict is the victim's own, unprefixed line: it still receives input sent after every
-# attempt, so nobody took irq 10 or powered the machine off. A raw BREACH line could only come
-# from a process that owns the UART. The attacker's lines are only progress (`attempts done`)
-# and breach reports (forbidden).
-expect = ['^\[server\] claimed irq 10$', '^\[pid 3\] \[grant\] attempts done$', "^\\[server\\] irq 10: received 'y'$"]
+expect = [
+    # Victim, unforgeable: an unprefixed line comes only from log-server's fixed templates
+    # (console::Line), and no client request can make it print this one.
+    '^\[server\] claimed irq 10$',
+    # Progress, the attacker's report: refused, and for the right reason (not, say, InterruptInUse).
+    '^\[pid 3\] \[grant\] mapping the UART -> Err\(AccessDenied\)$',
+    '^\[pid 3\] \[grant\] mapping the power-off device -> Err\(AccessDenied\)$',
+    '^\[pid 3\] \[grant\] claiming irq 10 -> Err\(AccessDenied\)$',
+    '^\[pid 3\] \[grant\] attempts done$',
+    # The verdict, the victim's: it still hears input sent after every attempt, so nobody took
+    # irq 10 or powered off. Unforgeable: only log-server's interrupt handler prints this
+    # template, and only for a byte that arrived on the UART.
+    "^\\[server\\] irq 10: received 'y'$",
+]
 forbid = ['BREACH']
+# No off-console backstop: the victim's evidence arrives in its interrupt handler, which
+# cannot make the blocking call the checker needs. bench-attack-forgery shows the verdict line
+# cannot be printed by a client.
 
 [[input]]
 after = '^\[pid 3\] \[grant\] attempts done$'

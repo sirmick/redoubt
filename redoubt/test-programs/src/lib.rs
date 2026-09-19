@@ -6,6 +6,8 @@
 //! behind it.
 //!
 //! Convention: a test program ends by logging `<NAME> TEST PASSED` or `<NAME> TEST FAILED`.
+//! An attack program ends with `attempts done` instead: its own verdict would count for nothing
+//! (redoubt/README.md, "Writing an attack case").
 
 #![no_std]
 
@@ -99,20 +101,21 @@ pub fn park() -> ! {
 }
 
 /// The attack checker (`attack-checker`): the party that ends an attack case. An attacker's
-/// own output can never pass a case, because the attacker could print anything; so when an
-/// attacker has made its attempts it tells the checker, and the checker (whose lines log-server
-/// marks with the checker's PID) reports that the system is still serving and powers off.
+/// own output can never pass a case, because the attacker could print anything; so a victim
+/// whose verdict is in (or, with no victim, the attacker when done) reports to the checker, and
+/// the checker (whose lines log-server marks with the checker's PID) names the reporter, says
+/// the system is still serving, and powers off.
 /// See redoubt/README.md, "Writing an attack case".
 pub mod checker {
     use xous::Message;
 
     /// Well-known address of the checker's server.
     pub const ADDRESS: &[u8; 16] = b"redoubt-checker!";
-    /// BlockingScalar: the sender has finished its attempts.
+    /// BlockingScalar: the sender reports (a victim's verdict is in, or an attacker is done).
     pub const DONE: usize = 1;
 
-    /// Tell the checker this process has finished its attempts. Blocks until it has answered,
-    /// which it does just before powering off.
+    /// Report to the checker, which names this process and powers off. Blocks until it has
+    /// answered, which it does just before powering off.
     pub fn done() {
         let sid = xous::SID::from_bytes(ADDRESS).unwrap();
         let cid = xous::connect(sid).expect("couldn't connect to the attack checker");
@@ -132,6 +135,8 @@ pub mod mem {
     pub const DONE: usize = 2;
     /// What the victim writes into the pages it frees.
     pub const SECRET: &[u8; 8] = b"SECRET!!";
+    /// How many pages the victim fills with the secret and frees.
+    pub const SECRET_PAGES: usize = 64;
 }
 
 /// Protocol for the use-after-free attack test (`uaf-*` binaries). A "holder" server

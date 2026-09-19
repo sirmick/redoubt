@@ -114,6 +114,8 @@ not needed.
   mask-on-fire; DMA allocation returning physical addresses.
 - Accepted when: `uart-irq` rewritten on IRQ receive; attack cases: map an MMIO range without its
   handle, receive on an IRQ handle not held, name RAM by physical address.
+- Also: `irq-attack` rewritten for IRQ handles, its verdict from a victim holding the handle;
+  today its out-of-range and double-claim attempts prove only survival.
 - Needs: WP-K1 (and WP-K2 for `receive`).
 
 **WP-K4. Process creation and exit.** Size M.
@@ -128,6 +130,8 @@ not needed.
   creator's own budget);
   `bench-bundle-file` becomes a clean boot in which a guest reads its `[[file]]` entry back (today
   the loader refuses data entries).
+- Also: `wx` re-based on exit notices (a checker launches the attacker and takes the verdict
+  from the kernel's notice), replacing today's survival-only verdict.
 - Needs: WP-K2.
 
 **WP-K5. Timer, timeouts and preemption.** Size M.

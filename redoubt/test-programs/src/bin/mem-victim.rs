@@ -9,13 +9,11 @@
 use test_programs::{log, mem, Logger};
 use xous::{MemoryFlags, Message};
 
-/// How many pages to leave the secret in: more than the attacker's first allocations need.
-const SECRET_PAGES: usize = 64;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
-    for _ in 0..SECRET_PAGES {
+    for _ in 0..mem::SECRET_PAGES {
         let page = xous::map_memory(None, None, 4096, MemoryFlags::R | MemoryFlags::W).expect("couldn't map a page");
         // SAFETY: the kernel just mapped this page, writable, for this process alone.
         let bytes = unsafe { core::slice::from_raw_parts_mut(page.as_mut_ptr(), page.len()) };
@@ -24,7 +22,7 @@ pub extern "C" fn _start() -> ! {
         }
         xous::unmap_memory(page).expect("couldn't free a page");
     }
-    log!(logger, "[mem-victim] left the secret in {} freed pages", SECRET_PAGES);
+    log!(logger, "[mem-victim] left the secret in {} freed pages", mem::SECRET_PAGES);
 
     // The server exists only now, so the attacker's first request comes after the pages are freed.
     let sid = xous::create_server_with_address(mem::VICTIM_ADDRESS).expect("couldn't create the victim's server");
@@ -51,6 +49,11 @@ pub extern "C" fn _start() -> ! {
                     log!(logger, "[mem-victim] BREACH: {} of {} pages from PID {} held data", dirty, checked, sender);
                 }
                 xous::return_scalar(envelope.sender, 0).ok();
+                if dirty == 0 {
+                    // Off the console too: the checker names this PID and powers off, so a
+                    // forged verdict line alone cannot pass the case.
+                    test_programs::checker::done();
+                }
             }
             _ => {}
         }
