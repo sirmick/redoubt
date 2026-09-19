@@ -38,7 +38,7 @@ census (below), implement what changed, run the differential suite.
 | File | What |
 | --- | --- |
 | `platform.rs` | The whole OS interface: clock, idle, console, random bytes, code loading. |
-| `term.rs`, `atom.rs` | Values, their order and their `~w` printing; the atom table. |
+| `term/`, `atom.rs` | Terms on per-process heaps: building, reading, order, copying, GC, `~w` printing; the atom table. |
 | `loader.rs`, `etf.rs`, `module.rs` | `.beam` parsing and validation; the external term format. |
 | `vm.rs` | Module registry, process table, scheduler, exit signals, timers. |
 | `interp.rs` | The instruction loop, one `match` arm per opcode. |
@@ -47,41 +47,13 @@ census (below), implement what changed, run the differential suite.
 
 `cli/` is the POSIX embedding: `beamlet [-pa DIR]... MODULE [FUNCTION]`.
 
-## Terms
-(Being rebuilt on the `heaps` branch as stage 1 of concurrency option B, chosen 2026-09-19;
-see "Heaps" below. Until it lands on `main`, what follows describes `main`.)
-
-Terms are a Rust `enum`; compound terms are reference-counted (`Rc`). Erlang terms are immutable
-and acyclic, so reference counting frees exactly the garbage, with no tracing collector and no
-per-process heap. Costs we accept:
-- Slower than BEAM's bump allocation and copying collector.
-- Messages share structure between processes instead of being copied. That is invisible to Erlang
-  code (terms are immutable) but it means per-process memory is measured, not read off a heap;
-  see Resource limits.
-- Long lists are dropped iteratively (`impl Drop for Cons`) so dropping cannot overflow the stack.
-
-Integers are `i64` and move to `BigInt` (`num-bigint`) only on overflow, and back when they fit, so
-each integer has one representation. Bignums are capped at 2^24 bits (`system_limit` beyond).
-
-Maps are persistent AVL trees (`pmap.rs`, about 200 lines) ordered by the exact term order.
-Versions share nodes, so `maps:put` on a map someone else still holds copies O(log n) nodes,
-not the whole map (a plain `BTreeMap` made building a map quadratic: 13x slower on a 1000-key
-fold). BEAM's iteration order for atom keys depends on atom-table indices and is unspecified;
-ours is always term order. The differential harness prints maps with `~kw` (ordered) so
-outputs compare, and tests must not depend on raw iteration order.
-
-Nothing recurses on the Rust stack over a term's depth: dropping (`drop_flat`), comparing and
-printing use explicit work lists. A million-level nested tuple, list or map is fine.
-
-A match context (`Term::Match`) is internal: it exists only between `bs_start_match*` and the end
-of a binary match, as in BEAM.
-
-## Heaps (concurrency option B, stage 1; decided 2026-09-19)
+## Terms and heaps (concurrency option B; decided 2026-09-19)
 Goal: concurrency equal to Erlang on Linux (all cores, per-process GC, copied messages), in safe
-Rust. `Rc` terms can never move between threads without `unsafe`, so terms move into
-per-process heaps. Stages: (1) heaps, copying and GC on one scheduler, every test still green;
-(2) several schedulers; (3) dirty schedulers for long natives.
-- **A term is a 16-byte `Copy` value** (`heap::Term`). Immediates: integers (`i64`), floats,
+Rust. Reference-counted (`Rc`) terms, the first design, can never move between threads without
+`unsafe`, so terms live on per-process heaps. Stages: (1) heaps, copying and GC on one
+scheduler, every test still green (done); (2) several schedulers; (3) dirty schedulers for long
+natives.
+- **A term is a 16-byte `Copy` value** (`term::Term`). Immediates: integers (`i64`), floats,
   atoms (a leaked, interned `&'static` name: atoms are never freed, as in BEAM), `[]`, pids,
   references. Everything else is a `Ptr` to an object: a heap *space* and an index.
 - **A heap is a `Vec<Term>`** (objects are a header cell followed by their cells; a list cell is
@@ -97,18 +69,35 @@ per-process heaps. Stages: (1) heaps, copying and GC on one scheduler, every tes
   the source's own space. Messages are copied into the receiver's heap on send; everything kept
   outside a process (ETS objects, monitor names, exit reasons, message timers, results) is an
   `OwnedTerm`: a small heap of its own plus its root.
-- **GC:** Cheney copying collection of a process's heap at a safe point between instructions,
-  when the heap outgrows a threshold (then set from the live size). The roots are everything the
-  process holds: X and Y registers, the mailbox, the dictionary, a pending exit. Natives never
-  see a collection, so they may hold terms in locals. Off-heap `Arc`s that no longer appear are
-  dropped with the old heap, which frees binaries exactly as reference counting did.
-- **Memory is exact:** a process's memory is its heap and off-heap sizes, read, not measured.
+- **GC:** Cheney copying collection of a process's heap at a safe point between instructions.
+  The roots are everything the process holds: X and Y registers, the mailbox, the dictionary, a
+  pending exit. Natives never see a collection, so they may hold terms in locals. A collection
+  runs when the heap has grown by as much as the last one scanned (what survived plus the roots,
+  at least 1024 cells), so collecting costs a constant share of the work however deep the stack;
+  or when it references twice the off-heap bytes that survived (at least 1 MiB), as BEAM's
+  virtual heap does, because a large binary costs the heap only a cell. Off-heap `Arc`s that no
+  longer appear are dropped with the old heap.
 - **Order-based structures** (maps, ETS keys, the dictionary) compare terms through their heaps.
-  Maps are persistent AVL trees whose nodes are heap objects; iteration stays in term order.
 - **Deep terms** stay iterative everywhere: copying, comparing, printing and GC use work lists or
-  Cheney's scan, never Rust recursion.
+  Cheney's scan, never Rust recursion. A million-level nested tuple, list or map is fine.
+- **Writable binaries**: `bs_create_bin` with `private_append` appends in place when the heap's
+  off-heap entry is the only reference and the binary ends at the end of its bytes, so building
+  a binary by appending is linear.
 
-## Processes and scheduling## Processes and scheduling
+Integers are `i64` and move to `BigInt` (`num-bigint`) only on overflow, and back when they fit, so
+each integer has one representation. Bignums are capped at 2^24 bits (`system_limit` beyond).
+
+Maps are persistent AVL trees (`term/map.rs`) whose nodes are heap objects, ordered by the exact
+term order. Versions share nodes, so `maps:put` on a map someone else still holds copies O(log n)
+nodes, not the whole map (a plain `BTreeMap` made building a map quadratic). BEAM's iteration
+order for atom keys depends on atom-table indices and is unspecified; ours is always term order.
+The differential harness prints maps with `~kw` (ordered) so outputs compare, and tests must not
+depend on raw iteration order.
+
+A match context (`Term::Match`) is internal: it exists only between `bs_start_match*` and the end
+of a binary match, as in BEAM.
+
+## Processes and scheduling
 One VM runs on one thread. Processes live in a slot table; a pid carries a serial number so a
 stale pid never reaches a process that reused the slot. The scheduler is round-robin with a
 budget of 2000 reductions (calls) per slice. Receive timeouts are a `BTreeSet` of deadlines; when
@@ -163,15 +152,11 @@ it. Every limit fails closed: the offender is ended, nothing is silently lost.
   receiver with `{system_limit, message_queue}`, untrappably. Dropping it instead would break
   protocols silently (a TCP stream with a hole in it); a process that far behind is broken.
 - **Process memory** (`max_heap_words`, default 2^27 words, and BEAM's `max_heap_size` via
-  `process_flag/2` or `spawn_opt/4`, which can only lower it): measured, since terms are
-  reference counted rather than on per-process heaps. `memory::process` walks registers, stack,
-  mailbox and dictionary in BEAM's units (`erts_debug:flat_size` words), counting each shared node
-  once, so a term built with sharing costs what it really costs; off-heap binaries (over 64
-  bytes) are counted by buffer. The walk stops once over budget. It runs at the end of a time
-  slice once the process has used half its last size in reductions, so its cost is a constant
-  share of the process's own work, like a copying collector's; between measurements a process
-  can overshoot by a bounded factor. Over the limit, the process is killed with reason `killed`
-  (BEAM's behaviour); `kill => false` is accepted but does nothing (no report is logged).
+  `process_flag/2` or `spawn_opt/4`, which can only lower it): read off the heap
+  (`memory::process`: heap cells, two words each, and the off-heap bytes it references). Checked
+  at the end of each time slice; a process over a limit is collected first and killed only if
+  what is live is still over, with reason `killed` (BEAM's behaviour). `kill => false` is
+  accepted but does nothing (no report is logged).
   `process_info(P, memory | heap_size | max_heap_size)` and `erlang:memory/0,1` report the
   measurements (`code` is not tracked).
 - **ETS** (`max_ets_words`, default 2^27 words, for all tables of the VM together): tables keep a
