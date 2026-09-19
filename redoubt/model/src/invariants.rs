@@ -15,7 +15,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::ghost::Flow;
-use crate::kernel::{Backing, Handle, Kernel, MapState, MsgKind, Object, Origin, Wait};
+use crate::kernel::{Backing, Handle, Kernel, MapState, MsgKind, Object, Origin, ROOT, Wait};
 use crate::spec::*;
 
 type Check = Result<(), String>;
@@ -91,20 +91,7 @@ fn structure(k: &Kernel) -> Check {
         );
     }
     for b in k.budgets.values() {
-        if let Some(p) = b.parent {
-            ensure!(
-                k.budgets.get(&p).is_some_and(|x| x.children.contains(&b.id)),
-                "budget {} lost its parent",
-                b.id
-            );
-        }
-        for c in &b.children {
-            ensure!(
-                k.budgets.get(c).is_some_and(|x| x.parent == Some(b.id)),
-                "budget {} lists stray child {c}",
-                b.id
-            );
-        }
+        ensure!(b.parent.is_none_or(|p| k.budgets.contains_key(&p)), "R10: budget {} lost its parent", b.id);
     }
     for e in k.endpoints.values() {
         ensure!(
@@ -168,9 +155,15 @@ fn structure(k: &Kernel) -> Check {
             );
         }
     }
-    // Scheduler bookkeeping: runnable threads are exactly those queued in their budget.
+    // Scheduler bookkeeping: each budget's class and weight, and exactly its runnable threads.
     for (b, e) in &k.sched.budgets {
-        ensure!(k.budgets.contains_key(b), "R12: scheduler keeps destroyed budget {b}");
+        let Some(bx) = k.budgets.get(b) else {
+            return Err(format!("R12: scheduler keeps destroyed budget {b}"));
+        };
+        ensure!(
+            e.class == bx.class && e.weight == bx.weight,
+            "R12: scheduler has budget {b}'s class or weight wrong"
+        );
         for t in &e.runnable {
             ensure!(
                 k.threads.get(t).is_some_and(|x| x.wait.is_none() && k.budget_of(x.pid) == Some(*b)),
@@ -208,7 +201,7 @@ fn i1_i2_i3_i4_handles(k: &Kernel) -> Check {
         ensure!(live, "I1: {at} names dead object {:?}", h.object);
         ensure!(k.budgets.contains_key(&h.stamp), "I2: {at} is stamped with destroyed budget {}", h.stamp);
         match h.origin {
-            Origin::Boot => ensure!(h.stamp == k.root, "R9: {at}: a boot handle stamped {}", h.stamp),
+            Origin::Boot => ensure!(h.stamp == ROOT, "R9: {at}: a boot handle stamped {}", h.stamp),
             Origin::Created { by } => {
                 ensure!(h.stamp == by, "R9: {at}: created by budget {by}, stamped {}", h.stamp)
             }
@@ -281,7 +274,7 @@ fn i5_charging(k: &Kernel) -> Check {
             b.id,
             b.processes_used
         );
-        let weights: u64 = b.children.iter().map(|c| k.budgets[c].weight).sum();
+        let weights: u64 = k.children(b.id).iter().map(|c| k.budgets[c].weight).sum();
         ensure!(
             b.weight_used == weights,
             "R7: budget {} says {} weight carved, children have {weights}",

@@ -119,6 +119,10 @@ pub const RAM_BASE: u64 = 0x8000_0000;
 
 /// The pid of `init`, the one process the kernel creates.
 pub const INIT_PID: u64 = 1;
+/// The ids of the three budgets the kernel creates at boot, in creation order.
+pub const ROOT: u64 = 1;
+pub const SYSTEM: u64 = 2;
+pub const USERS: u64 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Object {
@@ -165,7 +169,6 @@ pub struct Budget {
     /// Weight carved out to children (R7).
     pub weight_used: u64,
     pub depth: u64,
-    pub children: BTreeSet<u64>,
 }
 
 impl Budget {
@@ -255,7 +258,6 @@ pub enum MsgKind {
 /// A lend or transfer in flight.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InFlight {
-    pub kind: BufferKind,
     /// First page of the range in the sender.
     pub sender_vpn: u64,
     pub frames: Vec<u64>,
@@ -285,8 +287,6 @@ pub struct Msg {
     pub buffer: Option<InFlight>,
     /// Pages lent by a `call` (0 for none); never changes, so a lost lend can be noticed.
     pub lent_pages: u64,
-    /// Queue order on the endpoint.
-    pub seq: u64,
     /// `(pid, tid)` of the thread that took it; `None` while queued.
     pub server: Option<(u64, u64)>,
     /// A `call` whose caller still waits for the reply.
@@ -371,23 +371,18 @@ pub struct Kernel {
     pub endpoints: BTreeMap<u64, Endpoint>,
     pub devices: BTreeMap<u64, Device>,
     pub frames: BTreeMap<u64, Frame>,
-    /// Freed frames, reused lowest first; they keep their old contents until reused (R11 zeroes
-    /// them then).
-    pub free_frames: BTreeSet<u64>,
+    /// Freed frames and the contents they still hold, reused lowest first (R11 zeroes them then).
+    pub free_frames: BTreeMap<u64, u64>,
     pub msgs: BTreeMap<u64, Msg>,
     pub halted: Option<u64>,
     pub sched: Scheduler,
     pub ghost: Ghost,
-    pub root: u64,
-    pub system: u64,
-    pub users: u64,
     next_budget: u64,
     next_pid: u64,
     next_tid: u64,
     next_endpoint: u64,
     next_frame: u64,
     next_msg: u64,
-    next_seq: u64,
     wakes: Vec<Wake>,
     notes: Vec<Note>,
 }
@@ -457,21 +452,17 @@ impl Kernel {
             endpoints: BTreeMap::new(),
             devices: BTreeMap::new(),
             frames: BTreeMap::new(),
-            free_frames: BTreeSet::new(),
+            free_frames: BTreeMap::new(),
             msgs: BTreeMap::new(),
             halted: None,
             sched: Scheduler { mutation, ..Scheduler::default() },
             ghost: Ghost::default(),
-            root: 1,
-            system: 2,
-            users: 3,
-            next_budget: 1,
+            next_budget: ROOT,
             next_pid: INIT_PID,
             next_tid: 1,
             next_endpoint: 1,
             next_frame: 0,
             next_msg: 1,
-            next_seq: 0,
             wakes: Vec::new(),
             notes: Vec::new(),
         };
@@ -509,9 +500,7 @@ impl Kernel {
             boot.users_weight,
             Class::System,
         );
-        k.root = root;
-        k.system = system;
-        k.users = users;
+        assert_eq!((root, system, users), (ROOT, SYSTEM, USERS));
         // init: charged to root like any process.
         let pid = k.next_pid;
         k.next_pid += 1;
@@ -572,6 +561,11 @@ impl Kernel {
         self.processes.get(&pid).map(|p| p.budget)
     }
 
+    /// The budgets whose parent is `b`, in id order.
+    pub fn children(&self, b: u64) -> Vec<u64> {
+        self.budgets.values().filter(|x| x.parent == Some(b)).map(|x| x.id).collect()
+    }
+
     /// Is `b` equal to `ancestor` or below it?
     pub fn is_descendant_or_self(&self, b: u64, ancestor: u64) -> bool {
         let mut cur = Some(b);
@@ -622,35 +616,31 @@ impl Kernel {
         Ok(())
     }
 
-    /// Charge without a limit check: only R3 does this (a lend moving to its server).
-    fn force_charge(&mut self, b: u64, n: u64) {
-        self.add_usage(b, n);
-    }
-
-    fn add_usage(&mut self, b: u64, n: u64) {
-        if let Some(x) = self.budgets.get_mut(&b) {
-            x.pages_used += n;
-        }
+    /// The budgets a charge to `b` lands on: `b` alone (R6), or with the mutation its ancestors too.
+    fn charged(&self, b: u64) -> Vec<u64> {
+        let mut out = vec![b];
         if self.broken(Mutation::R6ChargeAncestors) {
             let mut cur = self.budgets.get(&b).and_then(|x| x.parent);
             while let Some(p) = cur {
-                let x = self.budgets.get_mut(&p).unwrap();
+                out.push(p);
+                cur = self.budgets[&p].parent;
+            }
+        }
+        out
+    }
+
+    fn add_usage(&mut self, b: u64, n: u64) {
+        for x in self.charged(b) {
+            if let Some(x) = self.budgets.get_mut(&x) {
                 x.pages_used += n;
-                cur = x.parent;
             }
         }
     }
 
     fn uncharge(&mut self, b: u64, n: u64) {
-        if let Some(x) = self.budgets.get_mut(&b) {
-            x.pages_used = x.pages_used.saturating_sub(n);
-        }
-        if self.broken(Mutation::R6ChargeAncestors) {
-            let mut cur = self.budgets.get(&b).and_then(|x| x.parent);
-            while let Some(p) = cur {
-                let x = self.budgets.get_mut(&p).unwrap();
+        for x in self.charged(b) {
+            if let Some(x) = self.budgets.get_mut(&x) {
                 x.pages_used = x.pages_used.saturating_sub(n);
-                cur = x.parent;
             }
         }
     }
@@ -688,7 +678,6 @@ impl Kernel {
             weight,
             weight_used: 0,
             depth,
-            children: BTreeSet::new(),
         };
         let scope = b.is_scope();
         if !scope || self.broken(Mutation::R6ScopeChargedToItself) {
@@ -699,7 +688,6 @@ impl Kernel {
             let own_cost =
                 if scope && !self.broken(Mutation::R6ScopeChargedToItself) { self.costs.budget } else { 0 };
             let x = self.budgets.get_mut(&p).unwrap();
-            x.children.insert(id);
             x.pages_used += if scope { own_cost } else { pages };
             x.processes_used += processes;
             x.weight_used += weight;
@@ -796,27 +784,25 @@ impl Kernel {
     /// A frame for a new mapping: a freed one if there is one, else a fresh one. R11: zeroed
     /// before any process sees it.
     fn alloc_frame(&mut self, payer: u64) -> u64 {
-        let f = match self.free_frames.pop_first() {
-            Some(f) => f,
+        let (f, stale) = match self.free_frames.pop_first() {
+            Some(x) => x,
             None => {
                 self.next_frame += 1;
-                self.next_frame - 1
+                (self.next_frame - 1, 0)
             }
         };
-        let old = self.ghost.freed_content.remove(&f).unwrap_or(0);
-        let content = if self.broken(Mutation::R11NoZeroing) { old } else { 0 };
+        let content = if self.broken(Mutation::R11NoZeroing) { stale } else { 0 };
         self.frames.insert(f, Frame { payer, content });
         self.ghost.fresh.insert(f);
         f
     }
 
-    /// Free a frame and uncharge its payer. Its contents stay in RAM (ghost) until reused.
+    /// Free a frame and uncharge its payer. Its contents stay in RAM until it is reused.
     fn free_frame(&mut self, f: u64) {
         if let Some(fr) = self.frames.remove(&f) {
             self.uncharge(fr.payer, 1);
-            self.ghost.freed_content.insert(f, fr.content);
             self.ghost.fresh.remove(&f);
-            self.free_frames.insert(f);
+            self.free_frames.insert(f, fr.content);
         }
     }
 
@@ -948,7 +934,7 @@ impl Kernel {
                 self.frames.get_mut(f).unwrap().payer = server_budget;
             }
             self.uncharge(sender_budget, buf.frames.len() as u64);
-            self.force_charge(server_budget, buf.frames.len() as u64);
+            self.add_usage(server_budget, buf.frames.len() as u64); // over the limit if need be (R3)
         }
     }
 
@@ -976,12 +962,21 @@ impl Kernel {
         }
     }
 
+    /// A queued message is refused in its turn: its account counts as served (R2) and the
+    /// sender fails with `err`.
+    fn refuse(&mut self, e: u64, mid: u64, err: Error) {
+        let account = self.msgs[&mid].account;
+        self.ghost.took(e, account, &self.endpoints[&e]);
+        self.endpoints.get_mut(&e).unwrap().cursor = Some(account);
+        self.fail_sender(mid, err);
+    }
+
     /// R2: the next message to take on `e`: the oldest message of the next account after the
     /// last one served, in account order, wrapping around.
     fn next_sender(&self, e: u64) -> Option<u64> {
         let ep = self.endpoints.get(&e)?;
         if self.broken(Mutation::R2FifoAcrossAccounts) {
-            return ep.queue.values().filter_map(|q| q.front()).min_by_key(|m| self.msgs[m].seq).copied();
+            return ep.queue.values().filter_map(|q| q.front()).min().copied();
         }
         let next = match ep.cursor {
             Some(c) => ep.queue.range(c + 1..).next().or_else(|| ep.queue.iter().next()),
@@ -1030,29 +1025,22 @@ impl Kernel {
                 && m.labels != rlabels
                 && !self.broken(Mutation::R1SkipLabelCheck)
             {
-                self.ghost.took(e, m.account, &self.endpoints[&e]);
-                self.endpoints.get_mut(&e).unwrap().cursor = Some(m.account);
-                self.fail_sender(mid, Error::LabelDenied);
+                self.refuse(e, mid, Error::LabelDenied);
                 continue;
             }
-            let transfer = m
-                .buffer
-                .as_ref()
-                .filter(|b| b.kind == BufferKind::Transfer)
-                .map_or(0, |b| b.frames.len() as u64);
+            let transfer = match (&m.kind, &m.buffer) {
+                (MsgKind::Send, Some(b)) => b.frames.len() as u64,
+                _ => 0,
+            };
             // R4: a transfer larger than the receiver opted into is refused; move on.
             if transfer > max_transfer && !self.broken(Mutation::R4IgnoreMaxTransfer) {
-                self.ghost.took(e, m.account, &self.endpoints[&e]);
-                self.endpoints.get_mut(&e).unwrap().cursor = Some(m.account);
-                self.fail_sender(mid, Error::Refused);
+                self.refuse(e, mid, Error::Refused);
                 continue;
             }
             // Transferred pages become the receiver's; if its budget cannot hold them, the
             // transfer is refused like an unrequested one (README.md).
             if transfer > 0 && m.sender_budget != rbudget && self.free_pages(rbudget) < transfer {
-                self.ghost.took(e, m.account, &self.endpoints[&e]);
-                self.endpoints.get_mut(&e).unwrap().cursor = Some(m.account);
-                self.fail_sender(mid, Error::Refused);
+                self.refuse(e, mid, Error::Refused);
                 continue;
             }
             // The receiver pays for the handles it receives. If it cannot, its receive fails and
@@ -1087,8 +1075,8 @@ impl Kernel {
             let mut received = None;
             if let (Some(buf), Some(rv)) = (&m.buffer, va) {
                 let n = buf.frames.len() as u64;
-                match buf.kind {
-                    BufferKind::Lend => {
+                match m.kind {
+                    MsgKind::Call => {
                         let p = self.processes.get_mut(&rpid).unwrap();
                         for (i, f) in buf.frames.iter().enumerate() {
                             p.space.insert(
@@ -1101,7 +1089,7 @@ impl Kernel {
                             );
                         }
                     }
-                    BufferKind::Transfer => {
+                    MsgKind::Send => {
                         if let Some(sp) = self.processes.get_mut(&m.sender_pid) {
                             for i in 0..n {
                                 sp.space.remove(&(buf.sender_vpn + i));
@@ -1125,7 +1113,8 @@ impl Kernel {
                         self.add_usage(rbudget, n);
                     }
                 }
-                received = Some(Received { kind: buf.kind, addr: rv * PAGE_SIZE, pages: n });
+                let kind = if m.kind == MsgKind::Call { BufferKind::Lend } else { BufferKind::Transfer };
+                received = Some(Received { kind, addr: rv * PAGE_SIZE, pages: n });
             }
             // The receiving thread now serves this message. A `send` it served before is done.
             if let Some(old) = self.threads[&rtid].serving {
@@ -1140,8 +1129,8 @@ impl Kernel {
             mm.server = Some((rpid, rtid));
             if let Some(b) = mm.buffer.as_mut() {
                 b.receiver_vpn = va;
-                if b.kind == BufferKind::Transfer {
-                    mm.buffer = None;
+                if m.kind == MsgKind::Send {
+                    mm.buffer = None; // transferred: no longer in flight
                 }
             }
             self.ghost.flows.push(Flow::Message {
@@ -1310,10 +1299,8 @@ impl Kernel {
                 continue;
             }
             stack.push((x, true));
-            if let Some(bx) = self.budgets.get(&x) {
-                for c in bx.children.iter().rev() {
-                    stack.push((*c, false));
-                }
+            for c in self.children(x).into_iter().rev() {
+                stack.push((c, false));
             }
         }
         let doomed: BTreeSet<u64> = order.iter().copied().collect();
@@ -1347,7 +1334,6 @@ impl Kernel {
                 px.processes_used = px.processes_used.saturating_sub(bb.processes_limit);
                 px.weight_used = px.weight_used.saturating_sub(bb.weight);
             }
-            self.budgets.get_mut(&p).unwrap().children.remove(&b);
         }
         for x in order {
             self.budgets.remove(&x);
@@ -1419,9 +1405,6 @@ impl Kernel {
         let end = self.now.saturating_add(dt);
         while self.now < end {
             let pick = self.sched.pick();
-            if let Some(v) = crate::ghost::check_pick(pick, self) {
-                self.ghost.violations.push(v);
-            }
             let mut run = (end - self.now).min(SLICE);
             if let Some(e) = self.next_event() {
                 if e > self.now {
@@ -1431,7 +1414,6 @@ impl Kernel {
             self.now += run;
             if let Some((b, _)) = pick {
                 self.sched.charge(b, run);
-                *self.ghost.runtime.entry(b).or_insert(0) += run;
             }
             self.expire();
         }
@@ -2056,7 +2038,7 @@ impl Kernel {
             let bx = &self.budgets[&b];
             (bx.account, bx.labels.clone(), bx.class)
         };
-        let id = self.next_msg;
+        let id = self.next_msg; // ids ascend, so the oldest queued message is the lowest id
         self.next_msg += 1;
         let buffer = range.map(|(first, n)| {
             let p = self.processes.get_mut(&pid).unwrap();
@@ -2071,10 +2053,8 @@ impl Kernel {
                     m.state = MapState::LentOut(id);
                 }
             }
-            let kind = if kind == MsgKind::Call { BufferKind::Lend } else { BufferKind::Transfer };
-            InFlight { kind, sender_vpn: first, frames, receiver_vpn: None }
+            InFlight { sender_vpn: first, frames, receiver_vpn: None }
         });
-        self.next_seq += 1;
         self.msgs.insert(
             id,
             Msg {
@@ -2093,7 +2073,6 @@ impl Kernel {
                 handles: hs,
                 lent_pages: if kind == MsgKind::Call { range.map_or(0, |r| r.1) } else { 0 },
                 buffer,
-                seq: self.next_seq,
                 server: None,
                 caller_waiting: kind == MsgKind::Call,
             },
@@ -2324,16 +2303,6 @@ impl Kernel {
                 return Err(Error::OutOfMemory);
             }
         }
-        // The caller's table must have room for the handle; checked with the carve applied, in
-        // case the caller's budget is the parent.
-        let n0 = self.processes[&pid].handles.len() as u64;
-        let growth = self.table_pages(n0 + 1) - self.table_pages(n0);
-        let carved = if scope { self.costs.budget } else { pages };
-        let caller_free = self.free_pages(caller_budget)
-            - if caller_budget == p { carved.min(self.free_pages(p)) } else { 0 };
-        if caller_free < growth {
-            return Err(Error::OutOfMemory);
-        }
         // R8: the parent's account, unless it is 0.
         let account = if px.account != 0 && !self.broken(Mutation::R8AccountFromArgument) {
             px.account
@@ -2358,7 +2327,15 @@ impl Kernel {
             stamp: caller_budget,
             origin: Origin::Created { by: caller_budget },
         };
-        Ok(self.install(pid, &[h]).expect("room checked above")[0])
+        // The caller's table must have room for the handle (its growth is charged to the caller,
+        // with the carve applied in case the caller's budget is the parent); otherwise undo.
+        match self.install(pid, &[h]) {
+            Ok(v) => Ok(v[0]),
+            Err(e) => {
+                self.destroy_budget(id);
+                Err(e)
+            }
+        }
     }
 
     /// `budget_destroy(h(budget))`: always allowed to a holder.

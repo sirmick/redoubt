@@ -298,10 +298,3 @@ pub enum Op {
         dt: u64,
     },
 }
-
-/// The result of a user memory access.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Access {
-    Ok(u64),
-    Fault,
-}

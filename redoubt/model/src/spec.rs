@@ -93,10 +93,6 @@ impl Error {
             Error::Dead => "Dead",
         }
     }
-
-    pub fn from_name(s: &str) -> Option<Error> {
-        Error::ALL.iter().copied().find(|e| e.name() == s)
-    }
 }
 
 /// Budget class. `user < system` (the derived order is the spec's order).
@@ -139,10 +135,6 @@ impl Cause {
             Cause::Faulted => "faulted",
             Cause::Killed => "killed",
         }
-    }
-
-    pub fn from_name(s: &str) -> Option<Cause> {
-        [Cause::Exited, Cause::Faulted, Cause::Killed].into_iter().find(|c| c.name() == s)
     }
 }
 

@@ -14,7 +14,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::kernel::{Backing, DeviceKind, INIT_PID, Kernel, MapState, MsgKind, Object};
+use crate::kernel::{Backing, DeviceKind, INIT_PID, Kernel, MapState, MsgKind, Object, ROOT, SYSTEM, USERS};
 use crate::spec::*;
 use crate::syscall::*;
 
@@ -274,18 +274,18 @@ impl Gen {
             .budgets
             .keys()
             .copied()
-            .filter(|b| *b != k.root && *b != k.system && *b != k.users && budget_h(*b).is_some())
+            .filter(|b| *b != ROOT && *b != SYSTEM && *b != USERS && budget_h(*b).is_some())
             .collect();
         // Principals under `users`, one budget under `system`, one nested budget.
         if made.len() < self.principals as usize + 2 && step < 16 {
             let i = made.len() as u64;
             let (parent, class, account, processes) = if i < self.principals {
-                (k.users, Class::User, 1001 + i, 3)
+                (USERS, Class::User, 1001 + i, 3)
             } else if i == self.principals {
-                (k.system, Class::System, 0, 2)
+                (SYSTEM, Class::System, 0, 2)
             } else {
                 // An agent-like budget under the first principal: its labels, maybe one more.
-                (*made.first().unwrap_or(&k.users), Class::User, self.rng.pick(&ACCOUNT_POOL).unwrap(), 1)
+                (*made.first().unwrap_or(&USERS), Class::User, self.rng.pick(&ACCOUNT_POOL).unwrap(), 1)
             };
             let mut labels = k.budgets[&parent].labels.clone();
             if class == Class::User && self.rng.pct(40) {
@@ -614,7 +614,7 @@ impl Gen {
             77..=86 => self.budget_create(k, pid),
             87..=89 => {
                 // Destroying `root` ends the world; keep it rare.
-                let h = self.handle(k, pid, |h| is_budget(h) && (h.object != Object::Budget(k.root)));
+                let h = self.handle(k, pid, |h| is_budget(h) && (h.object != Object::Budget(ROOT)));
                 Syscall::BudgetDestroy { h }
             }
             90..=92 => Syscall::BudgetUsage { h: self.handle(k, pid, is_budget) },

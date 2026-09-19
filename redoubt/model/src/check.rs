@@ -95,7 +95,7 @@ pub const EPILOGUE_HANDLES: u64 = 64;
 /// Not visible even so: a budget's account (it travels only in messages), and an IRQ source's
 /// mask (it shows only as a later interrupt); traces meant to check those must exercise them.
 pub fn epilogue(k: &Kernel) -> Vec<Op> {
-    use crate::kernel::{INIT_PID, MapState, Object};
+    use crate::kernel::{INIT_PID, MapState, Object, ROOT, SYSTEM, USERS};
     use crate::spec::{FLAG_R, PAGE_SIZE};
     use crate::syscall::Syscall;
     let mut ops = Vec::new();
@@ -119,7 +119,7 @@ pub fn epilogue(k: &Kernel) -> Vec<Op> {
     }
     if let Some((pid, tid)) = actors.iter().copied().find(|(p, _)| *p == INIT_PID) {
         for (i, h) in &k.processes[&pid].handles {
-            if matches!(h.object, Object::Budget(b) if b != k.root && b != k.system && b != k.users) {
+            if matches!(h.object, Object::Budget(b) if b != ROOT && b != SYSTEM && b != USERS) {
                 ops.push(Op::Sys { pid, tid, call: Syscall::BudgetDestroy { h: *i } });
             }
         }

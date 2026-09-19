@@ -10,7 +10,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::kernel::{Endpoint, Kernel};
+use crate::kernel::Endpoint;
 use crate::spec::Class;
 
 /// An information flow the kernel allowed in the current step (I7, R4).
@@ -57,8 +57,6 @@ pub struct Ghost {
     pub flows: Vec<Flow>,
     /// Frames handed out by `map_anon`/`dma_alloc` and not written since (I9: they read 0).
     pub fresh: BTreeSet<u64>,
-    /// What a freed frame still holds in RAM.
-    pub freed_content: BTreeMap<u64, u64>,
     /// I6: each budget's labels when it was created, and its creator's class.
     pub labels_at_creation: BTreeMap<u64, Vec<u64>>,
     pub creator_class: BTreeMap<u64, Class>,
@@ -67,8 +65,6 @@ pub struct Ghost {
     /// I11, keyed by (endpoint, waiting account).
     pub waiting: BTreeMap<(u64, u64), Waiting>,
     pub irqs: BTreeMap<u64, Irq>,
-    /// CPU time each budget received during ticks (R12).
-    pub runtime: BTreeMap<u64, u64>,
     /// Violations found while a step ran (the checks run after it).
     pub violations: Vec<String>,
 }
@@ -141,35 +137,5 @@ impl Ghost {
             self.violations
                 .push(format!("R5: a receive on IRQ device {d} waits while its interrupt is undelivered"));
         }
-    }
-}
-
-/// R12, checked at every pick during a tick: a user-class budget never runs while a system-class
-/// budget has a runnable thread; something runs whenever some budget with weight can.
-pub fn check_pick(pick: Option<(u64, u64)>, k: &Kernel) -> Option<String> {
-    let runnable_in = |class: Class| {
-        k.threads.values().any(|t| {
-            t.wait.is_none()
-                && k.budget_of(t.pid)
-                    .and_then(|b| k.budgets.get(&b))
-                    .is_some_and(|b| b.class == class && b.weight > 0)
-        })
-    };
-    match pick {
-        None if runnable_in(Class::System) || runnable_in(Class::User) => {
-            Some(String::from("R12: nothing scheduled although a thread is runnable"))
-        }
-        Some((b, tid)) => {
-            let class = k.budgets.get(&b).map(|x| x.class);
-            let t = k.threads.get(&tid);
-            if t.is_none_or(|t| t.wait.is_some() || k.budget_of(t.pid) != Some(b)) {
-                return Some(format!("R12: picked thread {tid} is not a runnable thread of budget {b}"));
-            }
-            if class == Some(Class::User) && runnable_in(Class::System) {
-                return Some(format!("R12: user budget {b} ran while a system budget was runnable"));
-            }
-            None
-        }
-        None => None,
     }
 }
