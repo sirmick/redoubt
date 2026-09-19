@@ -10,6 +10,7 @@ use xous_kernel::{
 };
 
 use crate::arch;
+#[cfg(baremetal)]
 use crate::cell::KernelCell;
 use crate::arch::mem::MemoryMapping;
 pub use crate::arch::process::Process as ArchProcess;
@@ -278,10 +279,6 @@ impl Process {
         self.state = ProcessState::Free;
         Ok(())
     }
-
-    /// Reveal state for debugging outside the crate.
-    #[cfg(all(feature = "debug-swap-verbose", baremetal))]
-    pub fn state(&self) -> ProcessState { self.state }
 }
 
 #[cfg(not(baremetal))]
@@ -474,20 +471,6 @@ impl SystemServices {
             if entry.state != ProcessState::Free {
                 continue;
             }
-            #[cfg(feature = "swap")]
-            if idx == xous_kernel::SWAPPER_PID as usize {
-                // don't allow re-allocation of the swapper PID. It has special privileges, if it crashes,
-                // it shall remain empty forever.
-                continue;
-            }
-            #[cfg(feature = "bao1x")]
-            if idx == 3 {
-                // don't allow re-allocation of PID 3 on all Baochip-1x targets. This is because PID 3 is the
-                // very special keystore process, which has elevated privileges in hardware to
-                // access secret data slots. This seals off an attack where an adversary crashes PID 3 and
-                // then tries to start a new process in its place.
-                continue;
-            }
             entry_idx = Some(idx);
             new_pid = Some(pid_from_usize(idx + 1)?);
             entry.pid = new_pid.unwrap();
@@ -552,35 +535,6 @@ impl SystemServices {
     }
 
     pub fn current_pid(&self) -> PID { arch::process::current_pid() }
-
-    /// Must be called from the swapper's context. Resets the runnable states of the swapper.
-    #[cfg(feature = "swap")]
-    pub fn finish_swap(&mut self) {
-        let current_pid = self.current_pid();
-        let current = self.get_process_mut(current_pid).expect("couldn't get current PID");
-        current.state = match current.state {
-            ProcessState::Running(0) => ProcessState::Sleeping,
-            ProcessState::Running(x) => ProcessState::Ready(x),
-            y => panic!("current process was {:?}, not 'Running(_)'", y),
-        };
-    }
-
-    #[cfg(feature = "swap")]
-    pub fn swap_resume_to_userspace(&mut self, pid: PID, tid: TID) -> Result<(), xous_kernel::Error> {
-        let process = self.get_process_mut(pid)?;
-        // Ensure the new context is available to be run
-        let available_threads = match process.state {
-            ProcessState::Ready(x) if x & 1 << tid != 0 => x & !(1 << tid),
-            // If we're currently debugging the process, return to its parent.
-            // This can happen when the process handles a debug interrupt.
-            other => panic!(
-                "process {} was in an invalid state {:?} -- thread {} not available to run",
-                pid, other, tid
-            ),
-        };
-        process.state = ProcessState::Running(available_threads);
-        Ok(())
-    }
 
     /// Create a stack frame in the specified process and jump to it.
     /// 1. Pause the current process and switch to the new one

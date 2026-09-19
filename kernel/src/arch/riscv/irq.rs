@@ -9,14 +9,10 @@ use xous_kernel::{PID, SysCall, TID};
 use crate::arch::current_pid;
 use crate::arch::exception::RiscvException;
 use crate::arch::mem::MemoryMapping;
-#[cfg(feature = "swap")]
-use crate::arch::process::RETURN_FROM_SWAPPER;
 use crate::arch::process::{EXIT_THREAD, RETURN_FROM_ISR, Thread};
 use crate::arch::process::{Process as ArchProcess, RETURN_FROM_EXCEPTION_HANDLER};
 use crate::cell::KernelCell;
 use crate::services::SystemServices;
-#[cfg(feature = "swap")]
-use crate::swap::Swap;
 
 extern "Rust" {
     fn _xous_syscall_return_result(args: &[usize; 8], context: &Thread) -> !;
@@ -83,9 +79,6 @@ pub fn enable_all_irqs() {
 
 // Indicate when we handle an IRQ
 static HANDLING_IRQ: AtomicBool = AtomicBool::new(false);
-
-#[cfg(feature = "swap")]
-pub fn is_handling_irq() -> bool { HANDLING_IRQ.load(Ordering::SeqCst) }
 
 /// The (PID, TID) to resume after an interrupt handler returns. Set when an interrupt
 /// redirects into a userspace handler, cleared when it finishes.
@@ -346,80 +339,9 @@ pub extern "C" fn trap_handler(
                 crate::arch::syscall::resume(current_pid().get() == 1, process.current_thread())
             });
         }
-        #[cfg(feature = "swap")]
-        RiscvException::InstructionPageFault(RETURN_FROM_SWAPPER, _offset) => {
-            /* #[cfg(feature = "debug-swap")]
-            {
-                let pid = crate::arch::process::current_pid();
-                let hardware_pid = crate::arch::mem::pid_from_satp(riscv::register::satp::read().bits());
-                println!("IPF RFS from PID{}, hw{}, offset {:x}", pid.get(), hardware_pid, _offset);
-            } */
-            // Cleanup after the swapper
-            if crate::arch::process::current_pid().get() != xous_kernel::SWAPPER_PID {
-                // Not the swapper - illegal branch. Fall through to containment.
-            } else {
-                let response = Swap::with_mut(|s|
-                    // safety: this is safe because on return from swapper, we're in the swapper's memory space.
-                    // SAFETY: swap-only; runs inside the swapper's own interrupt context.
-                    unsafe { s.exit_blocking_call() })
-                .unwrap_or_else(xous_kernel::Result::Error);
-
-                #[cfg(feature = "debug-swap-verbose")]
-                {
-                    // debugging
-                    SystemServices::with(|ss| {
-                        let hardware_pid = crate::arch::mem::pid_from_satp(riscv::register::satp::read().bits());
-                        let current = ss.get_process(current_pid()).unwrap();
-                        let state = current.state();
-                        ArchProcess::with_current(|p| {
-                            println!(
-                                "Swapper userspace handler returning to PID{}(hw{})-{:?} with result {:?}; tid {}, sepc {:x}\n{:x?}",
-                                current.pid.get(),
-                                hardware_pid,
-                                state,
-                                response,
-                                p.current_tid(),
-                                p.current_thread().sepc,
-                                p.current_thread().registers,
-                            );
-                        });
-                    });
-                }
-
-                ArchProcess::with_current_mut(|p| {
-                    let thread = p.current_thread();
-                    #[cfg(feature = "debug-swap-verbose")]
-                    println!(
-                        "Swapper syscall returning to address {:08x} in pid {}.{}",
-                        thread.sepc,
-                        p.pid().get(),
-                        p.current_tid(),
-                    );
-                    // this is necessary because ClearMemoryNow diverges on this path instead of
-                    // cleaning exiting out of its entry point. Means every thunk out has to check
-                    // this special case, even though it's rare...
-                    Swap::with_mut(|s| s.clearmem_restore_irq());
-                    return_result(&response, thread);
-                });
-            }
-        }
 
         // Handle faulted instruction pages, because we can now actually have instruction pages that are
         // swapped out.
-        #[cfg(feature = "swap")]
-        RiscvException::InstructionPageFault(_pc, addr) => {
-            #[cfg(all(feature = "debug-print", feature = "print-panics"))]
-            println!("IPF swap KERNEL({}): RISC-V fault: {} @ {:08x}, addr {:08x} - ", pid, ex, _pc, addr);
-            crate::arch::mem::ensure_page_exists_inner(addr)
-                .map(|_new_page| {
-                    #[cfg(all(feature = "debug-print", feature = "print-panics"))]
-                    println!("IPF Handing page {:08x} to process", _new_page);
-                    ArchProcess::with_current_mut(|process| {
-                        crate::arch::syscall::resume(current_pid().get() == 1, process.current_thread())
-                    });
-                })
-                .ok(); // If this fails, fall through.
-        }
 
         _ => {
             println!("!!! Unrecognized exception: {:x?}", ex);

@@ -1245,7 +1245,7 @@ fn increase_heap_rejects_absurd_delta() {
 
 #[cfg(test)]
 mod queue_capacity_tests {
-    use xous_kernel::{MemoryRange, Message, PID, SID};
+    use xous_kernel::{Message, PID, SID};
 
     use crate::server::Server;
 

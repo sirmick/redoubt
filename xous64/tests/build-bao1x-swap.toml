@@ -1,5 +1,0 @@
-description = "The rv32 bao1x kernel with swap still compiles (it cannot be booted under QEMU)"
-arch = ["rv32"]
-kind = "build"
-package = "xous-kernel"
-features = ["bao1x", "board-baosec"]

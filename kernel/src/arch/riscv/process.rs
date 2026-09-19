@@ -455,7 +455,6 @@ impl Process {
         Ok(return_value)
     }
 
-    #[cfg(not(feature = "bao1x"))]
     pub fn print_all_threads(&self) {
         let process = process_impl();
         for (tid_idx, &thread) in process.threads.iter().enumerate() {

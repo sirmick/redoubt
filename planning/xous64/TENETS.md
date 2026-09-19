@@ -101,6 +101,13 @@ system, held to the same standard of simplicity as the kernel.
   arguments, messages) gets a fuzz target.
 - A test that is flaky is a bug, in the test or in the system, and is fixed rather than retried.
 
+## 7. Devices speak virtio
+Drivers are virtio, unless the device is trivial (a UART, an RTC: small, no DMA). A driver that does
+DMA is either inside the TCB, because the hardware has no IOMMU, or confined by an IOMMU; the kernel
+supports both, and says which one a platform is in. On real, messy hardware we do not write drivers:
+we reserve cores for this OS and let Linux run the hardware, serving virtio to us, and we treat it
+as a hostile device as far as the hardware lets us. Design: IO-ARCHITECTURE.md.
+
 ## Where we stand against these (updated 2026-09-18, after the first hardening pass)
 Honest baseline, so progress is measurable. Numbers are for the rv64 build. `cargo testbench` enforces
 the ones marked (enforced).
@@ -117,3 +124,4 @@ the ones marked (enforced).
 | 4 Standards | Good: SBI, PLIC, Sv39, device tree, ELF, tar, virtio planned. The kernel argument block is a home-grown format, documented in BOOT.md. |
 | 5 Dependencies | Kernel 21 crates + `sv39`, loader 12. None audited or vendored. `fdt` panics on input it dislikes (hit once already). |
 | 6 Tested | (enforced) 13 cases, ~3 s: ipc, timer, uart-irq, rng, all-together, kernel-wx, and attack tests wx, irq-attack, loader-rejects-kernel-address/-entry, plus the unsafe ratchet and an rv32 build check. `irq-attack` found and now guards a real upstream bug (any process could panic the kernel with `FreeInterrupt(32)`). rv64 only; one firmware; no fuzzing; the kernel's hosted unit tests are not wired in. |
+| 7 Virtio | Direction agreed (IO-ARCHITECTURE.md), nothing built. Only driver today is the trivial ns16550 UART. No DMA grants, no IOMMU backend, no Linux partition yet. |
