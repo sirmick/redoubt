@@ -36,6 +36,8 @@ exclude = [
   # workspace build and are never linked into anything that runs on the machine).
   "redoubt/littlefs/diff",
   "redoubt/littlefs/fuzz",
+  # Host-only fuzz targets for redoubt-rt (see redoubt/rt/fuzz/Cargo.toml).
+  "redoubt/rt/fuzz",
 ]
 
 [profile.release]
