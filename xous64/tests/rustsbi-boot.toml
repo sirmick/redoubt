@@ -1,0 +1,10 @@
+description = "The same loader and bundle boot under pure-Rust firmware (RustSBI), not just OpenSBI"
+arch = ["rv64"]
+kind = "boot"
+firmware = "rustsbi"
+programs = ["log-server", "ipc-client"]
+expect = ['bundle signature ok', 'KMAIN \(clean boot\)', 'IPC TEST PASSED']
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]
