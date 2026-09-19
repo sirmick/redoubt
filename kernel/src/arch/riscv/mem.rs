@@ -999,6 +999,7 @@ pub fn virt_to_phys(virt: usize) -> Result<usize, xous_kernel::Error> {
     Ok((l0_pt.entries[vpn0] >> 10) << 12)
 }
 
+#[allow(dead_code)] // used on rv64 / by some configs
 pub fn virt_to_phys_pid(pid: PID, virt: usize) -> Result<usize, xous_kernel::Error> {
     use crate::services::SystemServices;
 

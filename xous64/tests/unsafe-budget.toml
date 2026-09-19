@@ -2,6 +2,8 @@ description = "Ratchet on `unsafe` in the trusted computing base, and on unsafe 
 kind = "unsafe-budget"
 
 # Budgets only go down. Raising one needs a justification in the commit that does it.
+# Every component is at max_undocumented = 0: all `unsafe` in the kernel and loader now
+# carries a SAFETY comment or a `# Safety` doc. Keep it that way.
 # Only code that runs on rv64 is counted; see TENETS.md for the baseline.
 
 [[budget]]
@@ -41,5 +43,5 @@ paths = [
     "kernel/src/main.rs", "kernel/src/mem.rs", "kernel/src/services.rs", "kernel/src/server.rs",
     "kernel/src/syscall.rs", "kernel/src/irq.rs", "kernel/src/args.rs", "kernel/src/io.rs",
 ]
-max_unsafe = 39
-max_undocumented = 36
+max_unsafe = 36
+max_undocumented = 0

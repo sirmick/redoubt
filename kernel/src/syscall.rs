@@ -885,6 +885,7 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
 
                 if !phys_ptr.is_null() {
                     if mm.is_main_memory(phys_ptr) {
+                        // SAFETY: `range` was just mapped into this process from main RAM; zeroing it before use is sound.
                         unsafe { core::ptr::write_bytes(range.as_mut_ptr(), 0, range.len()) };
                     }
                     for offset in
@@ -1007,6 +1008,7 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
         }
         SysCall::Yield => do_yield(pid, tid),
         SysCall::ReturnToParent(_pid, _cpuid) => {
+            // SAFETY: the block only calls the (unsafe-ABI) set_isr_return_pair; the state access itself is checked.
             unsafe {
                 if let Some((parent_pid, parent_ctx)) = SWITCHTO_CALLER.with(|c| c.take()) {
                     crate::arch::irq::set_isr_return_pair(parent_pid, parent_ctx)
@@ -1416,6 +1418,7 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                         .unwrap();
                     });
                     // USERSPACE_BUFFER now aliases to the physical page handed to us by the userspace.
+                    // SAFETY: USERSPACE_BUFFER now aliases the physical page the caller handed us, mapped for this access.
                     let page_buf = unsafe { PageBuf::from_raw_ptr_mut(xous_kernel::arch::USERSPACE_BUFFER) };
                     // don't assume the userspace did this correctly
                     page_buf.clear();

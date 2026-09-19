@@ -112,7 +112,7 @@ the ones marked (enforced).
 | 2 W^X | **Holds** (enforced). `sv39::Pte::leaf` cannot express a W+X mapping; syscalls asking for one get `InvalidArgument`; the physmap alias of kernel code is read-only; the kernel verifies all of this over its own address space at boot and refuses to run otherwise. Tests: `wx`, `kernel-wx`. Known gap: user code pages still have a writable alias in the (kernel-only) physmap. |
 | 2 Verified boot | **Missing.** The boot bundle is not authenticated. |
 | 2 Fail closed | RNG seed: yes, loader and kernel both refuse to run without one. Not yet testable, because QEMU always provides a seed; needs device-tree injection in the bench. |
-| 2 `unsafe` budget | (enforced) New code is fully justified: `sv39` 12 uses / 0 unjustified, loader 13 / 0, Sv39+SBI+PLIC backends 15 / 0. Inherited code is not: RISC-V arch layer 35 / 35, kernel core 82 / 81. Was 211 / 211 in total before the pass. |
+| 2 `unsafe` budget | (enforced) **Every `unsafe` in the kernel and loader now carries a SAFETY justification.** Totals: sv39 12, loader 14, Sv39+SBI+PLIC 15, arch 12, core 36 -- all with 0 undocumented. Was 211 uses / 211 undocumented at the start. The ratchet holds it at 0 undocumented and totals only fall. |
 | 3 All Rust | Kernel and loader: yes, no C toolchain on rv64. **Firmware is OpenSBI (C) in M-mode**; RustSBI builds and boots us but its device tree trips our parser (see PLAN.md). rv32 still links prebuilt assembly objects. |
 | 4 Standards | Good: SBI, PLIC, Sv39, device tree, ELF, tar, virtio planned. The kernel argument block is a home-grown format, documented in BOOT.md. |
 | 5 Dependencies | Kernel 21 crates + `sv39`, loader 12. None audited or vendored. `fdt` panics on input it dislikes (hit once already). |
