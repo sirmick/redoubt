@@ -25,7 +25,7 @@ pub const INITIAL_TID: TID = 2;
 pub const IRQ_TID: TID = 0;
 
 use xous_kernel::arch::PAGE_SIZE;
-use xous_kernel::{PID, ProcessInit, ProcessStartup, TID, ThreadInit};
+use xous_kernel::{PID, TID, ThreadInit};
 
 use crate::cell::KernelCell;
 use crate::services::ProcessInner;
@@ -471,46 +471,6 @@ impl Process {
     pub fn print_thread(_tid: TID, _thread: &Thread) {
         println!("Thread {}:", _tid);
         print!("{}", _thread);
-    }
-
-    /// Create a brand-new process. The memory space must already be set up.
-    pub fn create(
-        pid: PID,
-        init_data: ProcessInit,
-        services: &mut crate::SystemServices,
-    ) -> Result<ProcessStartup, xous_kernel::Error> {
-        let current_pid = current_pid();
-
-        services.get_process(pid)?.mapping.activate()?;
-        let server_id = services.create_server_id()?;
-        let server_id_array = server_id.to_array();
-
-        // klog!("previous process init was {:x?}", init_data);
-        let initial_thread = ThreadInit::new(
-            init_data.start.get(),
-            init_data.stack,
-            server_id_array[0] as _,
-            server_id_array[1] as _,
-            server_id_array[2] as _,
-            server_id_array[3] as _,
-        );
-
-        Self::setup_process(pid, initial_thread).unwrap();
-
-        services.create_server_with_address(pid, server_id, false)?;
-
-        // klog!("activating parent process {}", current_pid.get());
-        services.get_process(current_pid)?.mapping.activate()?;
-        // klog!("connecting to server in parent process");
-        let cid = services.connect_process_to_server(current_pid, server_id)?;
-
-        services.send_memory(
-            init_data.text.as_ptr() as *mut usize,
-            pid,
-            init_data.text_destination.get() as *mut usize,
-            init_data.text.len(),
-        )?;
-        Ok(ProcessStartup::new(pid, cid))
     }
 
     pub fn destroy(pid: PID) -> Result<(), xous_kernel::Error> {

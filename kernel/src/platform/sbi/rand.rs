@@ -31,3 +31,6 @@ pub fn init() {
 }
 
 pub fn get_u32() -> u32 { RNG.with(|rng| rng.as_mut().expect("kernel rng used before init").next_u32()) }
+
+/// Fill `bytes` from the kernel's CSPRNG (the `random` call).
+pub fn fill(bytes: &mut [u8]) { RNG.with(|rng| rng.as_mut().expect("kernel rng used before init").fill_bytes(bytes)) }

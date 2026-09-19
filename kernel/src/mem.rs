@@ -78,7 +78,23 @@ pub struct MemoryManager {
     /// Memory outside RAM that processes may claim: memory-mapped devices.
     #[cfg(baremetal)]
     extra_regions: &'static [MemoryRangeExtra],
+    /// Budgets and the per-process ledger that charges them (`budget.rs`), and the handle tables
+    /// (`handle.rs`). Here, beside the ownership table, because a frame changing owner is what
+    /// most charges are.
+    #[cfg(baremetal)]
+    pub objects: crate::budget::Objects,
 }
+
+/// Owner, in the ownership table, of frames that hold kernel objects (budgets, handle-table
+/// pages). No process has this PID (there are `MAX_PROCESS_COUNT` of them), so such a frame is
+/// never mapped into a process, and `release_all_memory_for_process` never frees one.
+#[cfg(baremetal)]
+pub const OBJECT_OWNER: PID = match PID::new(255) {
+    Some(pid) => pid,
+    None => unreachable!(),
+};
+#[cfg(baremetal)]
+const _: () = assert!(crate::arch::process::MAX_PROCESS_COUNT < 255);
 #[cfg(baremetal)]
 type RamAllocation = Option<PID>;
 
@@ -106,6 +122,8 @@ impl MemoryManager {
             extra_allocations: &mut [],
             #[cfg(baremetal)]
             extra_regions: &[],
+            #[cfg(baremetal)]
+            objects: crate::budget::Objects::new(),
         }
     }
 
@@ -218,63 +236,75 @@ impl MemoryManager {
         owned_bytes
     }
 
-    #[cfg(all(baremetal, feature = "debug-print"))]
-    #[allow(dead_code)]
-    pub fn print_ownership(&self) {
-        // SAFETY: a plain length calculation; the block is historical and touches only owned fields.
-        println!("Ownership ({} bytes in all):", unsafe {
-            self.allocations.len() + self.extra_allocations.len()
-        });
-
-        let mut offset = 0;
-        // SAFETY: `ram_name` is an ASCII tag, so viewing its bytes as UTF-8 is valid.
-        unsafe {
-            // First, we build a &[u8]...
-            let name_bytes = self.ram_name.to_le_bytes();
-            // ... and then convert that slice into a string slice
-            let _ram_name = core::str::from_utf8_unchecked(&name_bytes);
-            println!(
-                "    Region {} ({:08x}) {:08x} - {:08x} {} bytes:",
-                _ram_name,
-                self.ram_name,
-                self.ram_start,
-                self.ram_start + self.ram_size,
-                self.ram_size
-            );
-        };
-
-        offset = 0;
-
-        // Go through additional regions looking for this address, and claim it
-        // if it's not in use.
-        // SAFETY: reads only owned fields; the block is historical debug output.
-        unsafe {
-            for region in self.extra_regions.iter() {
-                println!("    Region {}:", region);
-                for o in 0..(region.mem_size as usize) / PAGE_SIZE {
-                    if let Some(allocation) = self.extra_allocations[offset + o] {
-                        println!(
-                            "        {:08x} => {}",
-                            (region.mem_start as usize) + o * PAGE_SIZE,
-                            allocation.get()
-                        )
-                    }
-                }
-                offset += region.mem_size as usize / PAGE_SIZE;
-            }
-        }
-    }
-
-    /// Allocate a single page to the given process. DOES NOT ZERO THE PAGE!!!
-    /// This function CANNOT zero the page, as it hasn't been mapped yet.
+    /// Allocate a single page to the given process, charged to its budget (R6): `OutOfMemory` if
+    /// the budget cannot pay. DOES NOT ZERO THE PAGE!!! This function CANNOT zero the page, as
+    /// it hasn't been mapped yet.
     #[cfg(baremetal)]
     pub fn alloc_page(&mut self, pid: PID) -> Result<usize, xous_kernel::Error> {
+        let index = self.alloc_frame(pid)?;
+        if self.charge_frame(pid).is_err() {
+            self.allocations[index] = None;
+            return Err(xous_kernel::Error::OutOfMemory);
+        }
+        Ok(self.ram_start + index * PAGE_SIZE)
+    }
+
+    /// Allocate a page to `pid` without charging it: only for the frames holding a process's
+    /// saved contexts, which are the process and thread objects the cost table charges for.
+    #[cfg(baremetal)]
+    #[allow(dead_code)] // WP-K4's `process_create`, through `MemoryMapping::allocate`
+    pub fn alloc_context_page(&mut self, pid: PID) -> Result<usize, xous_kernel::Error> {
+        Ok(self.ram_start + self.alloc_frame(pid)? * PAGE_SIZE)
+    }
+
+    /// Take a free frame for `owner`; its index in the ownership table.
+    #[cfg(baremetal)]
+    fn alloc_frame(&mut self, owner: PID) -> Result<usize, xous_kernel::Error> {
         // First fit. (The previous next-fit search computed its starting point with `max`
         // where `min` was meant, so it always scanned from the start anyway.)
         let index =
             self.allocations.iter().position(Option::is_none).ok_or(xous_kernel::Error::OutOfMemory)?;
-        self.allocations[index] = Some(pid);
-        Ok(self.ram_start + index * PAGE_SIZE)
+        self.allocations[index] = Some(owner);
+        Ok(index)
+    }
+
+    /// A zeroed frame for a kernel object, owned by `OBJECT_OWNER`. The caller charges it to the
+    /// budget the cost table names. `OutOfMemory` only if RAM itself is exhausted.
+    #[cfg(baremetal)]
+    pub fn alloc_object_frame(&mut self) -> Result<u32, redoubt_sys::Error> {
+        let index = self.alloc_frame(OBJECT_OWNER).map_err(|_| redoubt_sys::Error::OutOfMemory)?;
+        let phys = self.ram_start + index * PAGE_SIZE;
+        for offset in (0..PAGE_SIZE).step_by(8) {
+            crate::kframe::write(phys, offset, 0);
+        }
+        Ok(index as u32)
+    }
+
+    #[cfg(baremetal)]
+    pub fn free_object_frame(&mut self, frame: u32) {
+        self.object_phys(frame);
+        self.allocations[frame as usize] = None;
+    }
+
+    /// The physical address of kernel-object frame `frame`. A frame that is not one means a
+    /// stale reference to a freed object: a violated invariant (I1), so the kernel stops.
+    #[cfg(baremetal)]
+    pub fn object_phys(&self, frame: u32) -> usize {
+        let frame = frame as usize;
+        assert!(self.allocations.get(frame) == Some(&Some(OBJECT_OWNER)), "I1: {} is no object frame", frame);
+        self.ram_start + frame * PAGE_SIZE
+    }
+
+    /// RAM frames owned by `pid` in the ownership table.
+    #[cfg(baremetal)]
+    pub fn ram_frames_owned_by(&self, pid: PID) -> usize {
+        self.allocations.iter().filter(|owner| **owner == Some(pid)).count()
+    }
+
+    /// RAM frames not owned by `pid`: free, or some process's.
+    #[cfg(baremetal)]
+    pub fn ram_frames_not_owned_by(&self, pid: PID) -> u64 {
+        self.allocations.iter().filter(|owner| **owner != Some(pid)).count() as u64
     }
 
     /// Find a virtual address in the current process that is big enough
@@ -796,7 +826,27 @@ impl MemoryManager {
         // Happy path: The address is in main RAM
         if self.is_main_memory(addr as *mut u8) {
             offset += (addr - self.ram_start) / PAGE_SIZE;
-            return action_inner(&mut self.allocations[offset], pid, action, false, addr);
+            let before = self.allocations[offset];
+            action_inner(&mut self.allocations[offset], pid, action, false, addr)?;
+            // A RAM frame changing owner changes who pays for it (R6). The new owner's budget
+            // may refuse; then nothing changes.
+            let after = self.allocations[offset];
+            if before != after {
+                // Uncharge first, so a move between two processes of one budget nets to nothing.
+                if let Some(old) = before {
+                    self.uncharge_frame(old);
+                }
+                if let Some(new) = after {
+                    if self.charge_frame(new).is_err() {
+                        self.allocations[offset] = before;
+                        if let Some(old) = before {
+                            self.charge_frame(old).expect("re-charging the page just uncharged");
+                        }
+                        return Err(xous_kernel::Error::OutOfMemory);
+                    }
+                }
+            }
+            return Ok(());
         }
 
         offset = 0;
@@ -860,7 +910,7 @@ impl MemoryManager {
     /// # Safety
     /// Only sound as the final step of destroying `pid`: after this, frames it owned may
     /// be handed to other processes, so `pid` must never run again.
-    pub unsafe fn release_all_memory_for_process(&mut self, pid: PID) {
+    pub unsafe fn release_all_memory_for_process(&mut self, pid: PID, space: &MemoryMapping) {
         #[cfg(baremetal)]
         {
             let kernel = PID::new(1).unwrap();
@@ -868,9 +918,10 @@ impl MemoryManager {
             // Pass 1: a frame this process has lent out is still mapped in the borrower.
             // Reparent it to the kernel so the frame is not reused while the borrower holds
             // it; it is freed when the borrower returns it. Which frames are lent is read
-            // from this process's own page table (its address space is active here), where
-            // the "shared" bit actually lives -- not guessed from a physical address.
-            crate::arch::mem::for_each_lent_frame(|phys| {
+            // from this process's own page table, where the "shared" bit actually lives --
+            // not guessed from a physical address. (INTERIM: the kernel then holds such a
+            // frame uncharged; WP-K2's lends charge it to the borrower instead, R3.)
+            space.for_each_lent_frame(|phys| {
                 if self.is_main_memory(phys as *mut u8) {
                     let idx = (phys - self.ram_start) / PAGE_SIZE;
                     {
@@ -892,9 +943,11 @@ impl MemoryManager {
                     self.extra_allocations[idx] = None;
                 }
             }
+            // Both passes took RAM frames away from `pid`.
+            self.uncharge_all_frames(pid);
         }
         #[cfg(not(baremetal))]
-        let _ = pid;
+        let _ = (pid, space);
     }
 
     /// Adjust the flags on the given memory range. This allows for stripping flags from a memory

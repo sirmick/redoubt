@@ -38,11 +38,13 @@ fn flush_tlb() {
 /// First root entry belonging to the kernel half of the address space.
 const ROOT_KERNEL_START: usize = physmap::ENTRIES / 2;
 /// Root entry holding per-process kernel data. Everything else in the kernel half is shared.
+#[allow(dead_code)] // `allocate`
 const ROOT_PROCESS_AREA: usize = physmap::vpn(PROCESS_AREA, physmap::LEVELS - 1);
 
 /// Extract the PID (stored as the ASID) from a raw `satp` value.
 pub fn pid_from_satp(satp: usize) -> usize { physmap::satp_pid(satp) }
 
+#[allow(dead_code)] // `allocate`
 fn make_satp(pid: PID, root_phys: usize) -> usize { physmap::make_satp(pid.get() as usize, root_phys) }
 
 /// The root table of the address space that `satp` names.
@@ -234,6 +236,7 @@ impl MemoryMapping {
     ///
     /// All pages, including the page tables themselves, are owned by `pid`, so they are
     /// released along with everything else when the process is destroyed.
+    #[allow(dead_code)] // WP-K4's `process_create`
     pub fn allocate(&mut self, pid: PID) -> Result<(), xous_kernel::Error> {
         if self.satp != 0 {
             return Err(xous_kernel::Error::MemoryInUse);
@@ -250,7 +253,8 @@ impl MemoryMapping {
             }
 
             for page in 0..crate::arch::process::PROCESS_IMPL_PAGES {
-                let context_phys = mm.alloc_page(pid)?;
+                // The process and thread objects: charged as such, not as frames (budget.rs).
+                let context_phys = mm.alloc_context_page(pid)?;
                 // SAFETY: a freshly allocated frame, as above.
                 unsafe { window().zero_frame(context_phys) };
                 let virt = THREAD_CONTEXT_AREA + page * PAGE_SIZE;
@@ -369,9 +373,6 @@ impl MemoryMapping {
 }
 
 pub const DEFAULT_MEMORY_MAPPING: MemoryMapping = MemoryMapping { satp: 0 };
-
-/// Call `f` with the physical frame of every page the current process has lent out.
-pub fn for_each_lent_frame(f: impl FnMut(usize)) { MemoryMapping::current().for_each_lent_frame(f); }
 
 /// When we allocate pages, they are owned by the kernel so we can zero
 /// them out.  After that is done, hand the page to the user.
@@ -582,6 +583,33 @@ pub fn ensure_page_exists_inner(mm: &mut MemoryManager, address: usize) -> Resul
     flush_tlb();
 
     Ok(new_page)
+}
+
+/// The frame behind user address `virt` of the current address space, if the process may read
+/// it (and, with `write`, write it) there: a system call about to copy a record in or a result
+/// out. A page reserved but not yet backed is backed first, as the process's own touch would
+/// (charged to it, so this can be `OutOfMemory`); anything else (unmapped, lent out, kernel,
+/// no permission) is `InvalidArgument`.
+pub fn user_frame(mm: &mut MemoryManager, virt: usize, write: bool) -> Result<usize, redoubt_sys::Error> {
+    use redoubt_sys::Error;
+    if virt >= USER_AREA_END {
+        return Err(Error::InvalidArgument);
+    }
+    let page = virt & !(PAGE_SIZE - 1);
+    let slot = walk(current_root(), page, None).map_err(|_| Error::InvalidArgument)?;
+    let pte = slot.get();
+    if !pte.is_valid() && !pte.is_empty() && !pte.has(MMUFlags::S) {
+        ensure_page_exists_inner(mm, page).map_err(|e| match e {
+            xous_kernel::Error::OutOfMemory => Error::OutOfMemory,
+            _ => Error::InvalidArgument,
+        })?;
+    }
+    let pte = slot.get();
+    let wanted = MMUFlags::VALID | MMUFlags::USER | if write { MMUFlags::W } else { MMUFlags::R };
+    if !pte.has(wanted) || pte.has(MMUFlags::S) {
+        return Err(Error::InvalidArgument);
+    }
+    Ok(pte.phys())
 }
 
 /// Determine whether a virtual address has been mapped

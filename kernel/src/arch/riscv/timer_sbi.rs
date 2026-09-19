@@ -23,6 +23,7 @@ pub fn init() {
     if let Some(arg) = crate::args::KernelArguments::get().iter().find(|a| a.name == u32::from_le_bytes(*b"Time")) {
         TIMEBASE.store((arg.data[0] as u64 | (arg.data[1] as u64) << 32) as usize, Ordering::Relaxed);
     }
+    BOOT_TICKS.with(|t| *t = riscv::register::time::read64());
     // Let userspace read the `time` CSR directly, via `scounteren.TM`.
     // SAFETY: this exposes a read-only counter to U-mode and has no memory effect.
     unsafe { scounteren::set_tm() };
@@ -39,6 +40,18 @@ fn set_interrupt_enabled(enabled: bool) {
 
 /// Ticks of the `time` CSR per second, or 0 if the loader did not report it.
 pub fn timebase() -> u64 { TIMEBASE.load(Ordering::Relaxed) as u64 }
+
+/// The `time` CSR when the kernel started, so that `now_us` counts from boot.
+static BOOT_TICKS: crate::cell::KernelCell<u64> = crate::cell::KernelCell::new(0);
+
+/// Monotonic microseconds since boot (KERNEL-SPEC.md, `time_now`).
+pub fn now_us() -> u64 {
+    let ticks = riscv::register::time::read64().saturating_sub(BOOT_TICKS.with(|t| *t));
+    // Whole seconds, then the remainder: no 128-bit arithmetic, and no overflow while the
+    // remainder (below the timebase, which fits in 32 bits) times 10^6 fits in 64 bits.
+    let hz = timebase().max(1);
+    (ticks / hz) * 1_000_000 + (ticks % hz) * 1_000_000 / hz
+}
 
 /// Whether `irq` is the timer, rather than a source on the interrupt controller.
 pub fn owns(irq: usize) -> bool { irq == IRQ }

@@ -5,9 +5,9 @@ use core::num::NonZeroU8;
 
 use xous_kernel::arch::*;
 // use core::mem;
-use xous_kernel::{
-    CID, Error, MemoryAddress, Message, PID, ProcessInit, SID, TID, ThreadInit, pid_from_usize,
-};
+use xous_kernel::{CID, Error, MemoryAddress, Message, PID, SID, TID, ThreadInit};
+#[cfg(not(baremetal))]
+use xous_kernel::{ProcessInit, pid_from_usize};
 
 use crate::arch;
 use crate::arch::mem::MemoryMapping;
@@ -265,9 +265,14 @@ impl Process {
 
         println!("[!] Terminating process with PID {}", self.pid);
 
-        // Free all associated memory pages
-        // SAFETY: called only here, as the final teardown step for a process that will not run again.
-        unsafe { crate::mem::MemoryManager::with_mut(|mm| mm.release_all_memory_for_process(self.pid)) };
+        // Free all associated memory pages, and give its budget back what the process had
+        // charged to it (budget.rs).
+        crate::mem::MemoryManager::with_mut(|mm| {
+            // SAFETY: called only here, as the final teardown step for a process that will not run again.
+            unsafe { mm.release_all_memory_for_process(self.pid, &self.mapping) };
+            #[cfg(baremetal)]
+            mm.process_ended(self.pid);
+        });
 
         // Free all claimed IRQs
         crate::irq::release_interrupts_for_pid(self.pid);
@@ -475,7 +480,9 @@ impl SystemServices {
     }
 
     /// Add a new entry to the process table. This results in a new address space
-    /// and a new PID, though the process is in the state `Setup()`.
+    /// and a new PID, though the process is in the state `Setup()`. Hosted only: on bare metal
+    /// processes come from the loader until WP-K4's `process_create`.
+    #[cfg(not(baremetal))]
     pub fn create_process(
         &mut self,
         init_process: ProcessInit,
@@ -1324,6 +1331,11 @@ impl SystemServices {
                 })? as *mut usize;
             src_mapping.activate().expect("Couldn't switch back to source mapping");
             prepare_destination(mm, &dest_mapping, dest_pid, dest_virt as usize, len)?;
+            // The pages become the destination's, and its budget's to pay for (R6): check that
+            // it can, so that the moves below cannot fail on it either.
+            if !mm.can_take_frames(current_pid, dest_pid, (len / PAGE_SIZE) as u64) {
+                return Err(xous_kernel::Error::OutOfMemory);
+            }
 
             let mut error = None;
 
@@ -1616,7 +1628,14 @@ impl SystemServices {
         let mut arch_process = ArchProcess::current();
         let new_tid = arch_process.find_free_thread().ok_or(xous_kernel::Error::ThreadNotAvailable)?;
 
-        arch_process.setup_thread(new_tid, thread_init)?;
+        // A thread costs its budget a page (R6).
+        #[cfg(baremetal)]
+        crate::mem::MemoryManager::with_mut(|mm| mm.thread_created(pid))
+            .map_err(|_| xous_kernel::Error::OutOfMemory)?;
+        arch_process.setup_thread(new_tid, thread_init).inspect_err(|_| {
+            #[cfg(baremetal)]
+            crate::mem::MemoryManager::with_mut(|mm| mm.thread_ended(pid));
+        })?;
 
         // klog!("KERNEL({}): Created new thread {}", pid, new_tid);
 
@@ -1652,7 +1671,13 @@ impl SystemServices {
 
         // Destroy the thread at a hardware level
         let mut arch_process = ArchProcess::current();
-        let return_value = arch_process.destroy_thread(tid).unwrap_or_default();
+        let return_value = match arch_process.destroy_thread(tid) {
+            Ok(value) => {
+                crate::mem::MemoryManager::with_mut(|mm| mm.thread_ended(pid));
+                value
+            }
+            Err(_) => 0,
+        };
 
         // If there's another thread waiting on the return value of this thread,
         // wake it up and set its return value.
@@ -2101,15 +2126,33 @@ impl SystemServices {
         // 4. Mark all "Borrowed" memory as "Free-when-returned". That way, if we've shared memory to a
         //    Server, it will be reclaimed by the system when it comes back
 
+        self.release_servers_of(target_pid)?;
+
+        let process = self.get_process_mut(target_pid)?;
+        process.activate()?;
+        let parent_pid = process.ppid;
+        process.terminate()?;
+
+        self.switch_to_thread(parent_pid, None).unwrap();
+
+        Ok(parent_pid)
+    }
+
+    /// Steps 1 and 2 of ending process `target`: tombstone every connection to its servers,
+    /// drop every message it has queued at others' servers, and free its server entries.
+    /// Leaves whichever address space it visited last active.
+    fn release_servers_of(&mut self, target: PID) -> Result<(), xous_kernel::Error> {
         // 1. Find all servers associated with this PID and remove them.
         for (idx, server) in self.servers.iter_mut().enumerate() {
             if let Some(server) = server {
-                if server.pid == target_pid {
+                if server.pid == target {
                     // This is our server, so look through the connection map of each
                     // process to determine if this connection needs to be replaced
                     // with a tombstone.
                     for process in self.processes.iter() {
-                        if process.free() {
+                        // A process that has not run yet has no connections, and cannot be
+                        // activated before its first run sets up its kernel state.
+                        if process.free() || matches!(process.state, ProcessState::Setup(_)) {
                             continue;
                         }
                         process.activate()?;
@@ -2130,7 +2173,7 @@ impl SystemServices {
                 process.activate().unwrap();
                 // Look through this server's memory space to determine if this process
                 // is mentioned there as having some memory lent out.
-                server.discard_messages_for_pid(target_pid);
+                server.discard_messages_for_pid(target);
             }
         }
 
@@ -2138,20 +2181,26 @@ impl SystemServices {
         #[allow(clippy::manual_flatten)]
         for server in self.servers.iter_mut() {
             if let Some(server_inner) = server {
-                if server_inner.pid == target_pid {
+                if server_inner.pid == target {
                     *server = None;
                 }
             }
         }
+        Ok(())
+    }
 
-        let process = self.get_process_mut(target_pid)?;
-        process.activate()?;
-        let parent_pid = process.ppid;
-        process.terminate()?;
-
-        self.switch_to_thread(parent_pid, None).unwrap();
-
-        Ok(parent_pid)
+    /// End process `target` on behalf of the running process (R10 kills the processes of a
+    /// destroyed budget), which keeps running: the same teardown as `terminate_process`, then
+    /// the running process's address space is active again. `target` must not be the running
+    /// process.
+    #[cfg(baremetal)]
+    pub fn kill_process(&mut self, target: PID) -> Result<(), xous_kernel::Error> {
+        let current = self.current_pid();
+        assert!(target != current, "kill_process on the running process");
+        self.release_servers_of(target)?;
+        // `terminate` needs no address space: it names the target's mapping itself.
+        self.get_process_mut(target)?.terminate()?;
+        self.get_process(current)?.activate()
     }
 
     /// Calls the provided function with the current inner process state.

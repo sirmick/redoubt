@@ -42,7 +42,10 @@ name = "kernel: core"
 paths = [
     "kernel/src/main.rs", "kernel/src/mem.rs", "kernel/src/services.rs", "kernel/src/server.rs",
     "kernel/src/syscall.rs", "kernel/src/irq.rs", "kernel/src/args.rs", "kernel/src/io.rs",
+    "kernel/src/budget.rs", "kernel/src/handle.rs", "kernel/src/kframe.rs", "kernel/src/redoubt.rs",
 ]
+# WP-K1: kframe.rs's three (words of kernel-object frames and of records, through the physmap)
+# replace mem.rs's three needless ones in the deleted `print_ownership`; the total is unchanged.
 max_unsafe = 24
 max_undocumented = 0
 
