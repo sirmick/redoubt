@@ -90,7 +90,7 @@ struct InitialProcess {
 extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     println!();
     let xlen = core::mem::size_of::<usize>() * 8;
-    println!("loader64: Xous rv{} loader, boot hart {}", xlen, hart_id);
+    println!("loader: Xous rv{} loader, boot hart {}", xlen, hart_id);
 
     // SAFETY: the SBI boot protocol passes the device-tree address in `a1`.
     let platform = unsafe { Platform::read(dtb) };
@@ -329,7 +329,7 @@ fn shutdown() -> ! {
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    println!("loader64 PANIC: {}", info);
+    println!("loader PANIC: {}", info);
     shutdown()
 }
 

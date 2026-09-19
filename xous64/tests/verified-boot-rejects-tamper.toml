@@ -5,7 +5,7 @@ programs = ["log-server"]
 timeout_secs = 20
 tamper_bundle = true
 default_forbid = false      # the loader is supposed to panic here
-expect = ['loader64 PANIC', 'signature is invalid']
+expect = ['loader PANIC', 'signature is invalid']
 forbid = ['KMAIN', 'bundle signature ok']
 
 [[grant]]

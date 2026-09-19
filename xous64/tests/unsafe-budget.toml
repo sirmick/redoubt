@@ -14,7 +14,7 @@ max_undocumented = 0
 
 [[budget]]
 name = "loader"
-paths = ["loader64/src"]
+paths = ["loader/src"]
 max_unsafe = 17 # +3: fdt-rs DevTree::from_raw_pointer, the static index buffer, and Platform::read
 max_undocumented = 0
 
