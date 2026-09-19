@@ -27,7 +27,7 @@ Elixir over them. That splits userland in two, and the halves are unequal:
 | `serve/1`, `reply/2` | requests arrive as messages carrying badge, account and labels |
 | `budget_create/1`, `budget_destroy/1`, `budget_usage/1` | `deadline` makes it a lease |
 | `labels/0` | this VM's fixed label set |
-| `process_create/2`, `process_start/3` | launching programs (question 133) |
+| `process_create/2`, `process_start/3` | launching programs (question 135) |
 
 Handles are resource terms: unforgeable, collected, never serialisable. **A copy of a handle is the
 same connection** (one badge, one client), so passing one to another process inside the VM is
@@ -71,12 +71,12 @@ version, and nothing else, so:
 | --- | --- |
 | `File.cp`, `cp_r` | client-side read and write loops; no server-side copy; across volumes is fine |
 | `File.rename`, same directory | `wstat` with a new name: the only rename 9P2000 has |
-| `File.rename`, across directories | not expressible today (question 127) |
+| `File.rename`, across directories | not expressible today (question 129) |
 | `File.rename`, across volumes | copy and remove, never atomic |
-| `File.chmod`, `chown` | no mode or owner bits exist: access is by capability (question 128) |
-| `File.stat` | mode, uid, gid and atime have no source and would be synthesised (question 128) |
+| `File.chmod`, `chown` | no mode or owner bits exist: access is by capability (question 130) |
+| `File.stat` | mode, uid, gid and atime have no source and would be synthesised (question 130) |
 | `File.ln_s`, `ln` | no symlinks in plain 9P2000; the POSIX platform resolves them, so platforms differ |
-| `File.rm` of an open file | succeeds by design: an "in use" refusal would be a channel (question 129) |
+| `File.rm` of an open file | succeeds by design: an "in use" refusal would be a channel (question 131) |
 | directory listing | a read of a directory fid; entries the caller cannot read are omitted |
 
 ## Pipes and standard I/O
@@ -89,10 +89,10 @@ starting it. What follows from the primitives:
 - **Labels work out**: a user-level server has no label exemption, and sessions are per label set,
   so a session's shell serves its own children's pipes; piping across label sets fails, as it
   should.
-- **Distinct names per stream are required** (question 130): Plan 9 sends all three streams to
+- **Distinct names per stream are required** (question 132): Plan 9 sends all three streams to
   `/dev/cons` and redirects by duplicating file descriptors, which do not exist here.
 
-Who serves a pipe is question 131. A zero-copy alternative (children `send` pages to each other
+Who serves a pipe is question 133. A zero-copy alternative (children `send` pages to each other
 over an endpoint, with the kernel's unqueued send as flow control) is not 9P, so a program could not
 read its input as a file; not taken.
 
@@ -119,7 +119,7 @@ Every authority the child gets is on that call. Notes that shape the API:
 - At most `MAX_START_HANDLES` (64) handles, namespace entries included.
 - Signatures gate only authority the steward *adds*: running one's own code within one's own
   authority needs none (PACKAGES.md).
-- Each launch copies the program image; there is no shared text and no demand paging (question 132).
+- Each launch copies the program image; there is no shared text and no demand paging (question 134).
 
 ## Labels and capabilities in Elixir
 A VM's label set is fixed when its budget is created, so `Redoubt.Label.self/0` is a read-only fact.

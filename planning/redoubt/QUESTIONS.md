@@ -5,7 +5,8 @@ so each needs your decision; the answer goes into the named note with a HISTORY.
 **Rec** is the orchestrator's recommendation. Reply with numbers, e.g. "all Rec except 7: ...".
 
 **1-119 answered 2026-09-19** (ANSWERS.md, six tranches; each "Answered" line says where the
-answer now lives). **Open: 127-128** (from WP-K2, at the end). The round-4 answers revised 56 (handle kinds are checked by
+answer now lives). **Open: 120-126** (from WP-S1), **127-128** (from WP-K2) and **129-137** (userland,
+USERLAND.md), at the end. The round-4 answers revised 56 (handle kinds are checked by
 use) and replaced 57 and 58 (by 82); the last tranche replaced 103 (no `first` flag and no strict
 priority: one stride queue for every budget).
 
@@ -1020,30 +1021,30 @@ point to change the IPC design. Several items interact; the cross-references say
 ## Userland: the Elixir interface (USERLAND.md)
 
 Raised while sketching USERLAND.md (2026-09-19). None blocks milestone 1's step 2 (Elixir printing
-on the box); 130 and 131 block the shell's pipelines, 133 blocks launching from Elixir.
+on the box); 132 and 133 block the shell's pipelines, 135 blocks launching from Elixir.
 
-127. **Rename across directories.** Plain 9P2000 renames only within one directory (`wstat` with a
+129. **Rename across directories.** Plain 9P2000 renames only within one directory (`wstat` with a
      new name), so `File.rename("/a/x", "/b/x")` cannot be expressed, and build tools lean on it.
      *Rec:* `fsd` serves a typed `rename(dir_fid, name, dir_fid, name)` alongside 9P (every 9P
      endpoint already serves typed operations), atomic within a volume; across volumes stays copy
      and remove, reported like POSIX `EXDEV`.
      *Alt:* copy and remove everywhere, non-atomic, and a crash mid-rename leaves both or neither.
 
-128. **What `File.stat` reports, and what `chmod` does.** There are no mode, owner or atime fields
+130. **What `File.stat` reports, and what `chmod` does.** There are no mode, owner or atime fields
      anywhere below (access is by capability; littlefs keeps mtime and qid version).
      *Rec:* synthesise a fixed mode for `stat`, report mtime and size honestly, and let `chmod` and
      `chown` succeed as no-ops: Mix and escript tooling call `chmod` on scripts, and failing there
      breaks tools for no security gain, since the bits mean nothing.
      *Alt:* `:enotsup` for both, which is honest and breaks tools.
 
-129. **A fid held across a remove.** NAMESPACES.md says a remove succeeds while another connection
+131. **A fid held across a remove.** NAMESPACES.md says a remove succeeds while another connection
      holds a fid, because an "in use" refusal would be a channel between connections. It does not
      say what the holder then sees.
      *Rec:* the fid keeps serving the unlinked file until clunked (POSIX behaviour, and littlefs's
      copy-on-write makes it cheap); a fresh walk gets `:enoent`.
      *Alt:* subsequent operations on the fid fail, which is simpler in `fsd` but surprising.
 
-130. **Names for standard input, output and error.** Plan 9 sends all three to `/dev/cons` and
+132. **Names for standard input, output and error.** Plan 9 sends all three to `/dev/cons` and
      redirects by duplicating file descriptors; Redoubt has no descriptor table and no inheritance,
      so a pipeline needs distinct names bound per child, or `b`'s output goes into the pipe it is
      reading.
@@ -1051,34 +1052,34 @@ on the box); 130 and 131 block the shell's pipelines, 133 blocks launching from 
      to all three for an interactive child.
      *Alt:* `/fd/0`, `/fd/1`, `/fd/2` (closer to Plan 9's `/fd`), same mechanism.
 
-131. **Who serves a pipe.** A pipe is a 9P file somebody serves (there is no pipe object).
+133. **Who serves a pipe.** A pipe is a 9P file somebody serves (there is no pipe object).
      *Rec:* the session's shell VM serves it, which needs `serve`/`reply` natives and the
      server-side 9P codec in beamlet; `System.cmd` capturing output needs the same machinery, so it
      is paid for once.
      *Alt:* a tiny `piped` server per session: bulk bytes stay out of the shell VM, at the cost of
      another server package and its startup block.
 
-132. **Copying the program image on every launch.** The launcher copies the ELF into fresh pages
+134. **Copying the program image on every launch.** The launcher copies the ELF into fresh pages
      charged to the child (PACKAGES.md); there is no shared text and no demand paging. A pipeline of
      small tools does not care; beamlet VMs are megabytes and we start one per session and per
      agent.
      *Rec:* accept it for milestone 1, and record it as the reason the steward may cache a VM image;
      ask WP-R2 whether the stub can map image pages read-only from a shared cache instead.
 
-133. **Launching from Elixir.** Milestone 1's shell must start native programs, which needs
+135. **Launching from Elixir.** Milestone 1's shell must start native programs, which needs
      `process_create`, `process_map` and `process_start` as beamlet natives, and the startup block
      written from Elixir.
      *Rec:* natives for the three calls plus a `startup` block writer in Rust (the encoder exists in
      `redoubt-wire`); the namespace and handles come from the Elixir call, so the policy stays in
      Elixir and the encoding stays in Rust.
 
-134. **Where the Elixir side lives.** The natives are in beamlet; the modules over them
+136. **Where the Elixir side lives.** The natives are in beamlet; the modules over them
      (`Redoubt.Namespace`, `Redoubt.Process`, `Redoubt.Budget`, ...) could be embedded in the VM
      (`redoubt/beamlet/vm/lib`, always present) or a Mix package loaded from the boot bundle.
      *Rec:* a Mix package in `redoubt/elixir/`, so it versions with the system and not with the VM;
      only what the VM needs at boot stays embedded.
 
-135. **Two error vocabularies.** `File` expects POSIX atoms (`:enoent`, `:eacces`); Redoubt has
+137. **Two error vocabularies.** `File` expects POSIX atoms (`:enoent`, `:eacces`); Redoubt has
      `refused`, `not_yours`, label refusals and budget errors.
      *Rec:* Redoubt errors keep their own atoms everywhere, and the `File`/`prim_file` shim maps
      them to POSIX atoms at that boundary only, so OTP code sees what it expects and new code sees

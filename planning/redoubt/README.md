@@ -30,6 +30,7 @@ and the steward, 9P namespaces, packages, storage and network servers). Order: [
 | [KERNEL-SPEC.md](KERNEL-SPEC.md) | The precise kernel: objects and their costs, system calls, messages, rules, errors and the order of checks, constants, invariants. |
 | [INIT.md](INIT.md) | After the kernel: init, the boot manifest, the steward, keyd, sshd, restarts, the startup block; the worked example. |
 | [NAMESPACES.md](NAMESPACES.md) | 9P, per-process namespaces, `/dev/cons`, `/net`, filesystem servers, littlefs. |
+| [USERLAND.md](USERLAND.md) | The Elixir interface: beamlet's natives, file I/O, pipes, launching, the shell. |
 | [WIRE.md](WIRE.md) | Byte layouts: 9P's encoding for every message, the typed-message table format and replies, strict JSON for files people write. |
 | [PACKAGES.md](PACKAGES.md) | Launching and the loader stub, what is signed, signer trust, per-principal packages, system updates. |
 | [IO-ARCHITECTURE.md](IO-ARCHITECTURE.md) | Drivers (virtio), DMA, storage and network stacks; the "Later" designs. |

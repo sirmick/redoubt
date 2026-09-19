@@ -126,8 +126,9 @@ geometry, trap entry and saved context, and the ABI's register encoding; anywher
 - Report the two upstream bugs to betrusted-io/xous-core (HISTORY.md).
 - Retarget `std::fs` on the Xous target from PDDB (Xous's key-value store) to `fsd`.
 
-## Userland API (a future USERLAND.md; milestone 3)
-Deliberately deferred; build what is designed first. Points already agreed:
+## Userland API (USERLAND.md; milestone 3)
+Deliberately deferred; build what is designed first. Sketched in USERLAND.md, with its open
+questions (129-137). Points already agreed:
 - No libc. Rust `std`'s Xous backend is retargeted (namespace + 9P for files, kernel time and
   threads, `/net` sockets); `no_std` programs use a thin syscall crate plus client crates. Crates
   that bind the `libc` crate will not build (accepted).
