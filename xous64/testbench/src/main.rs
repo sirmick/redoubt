@@ -119,6 +119,26 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+/// Resolve a case's firmware choice to a `-bios` value. "rustsbi" looks for the Prototyper
+/// binary via RUSTSBI_PROTOTYPER or the default clone path, and is skipped if absent.
+fn resolve_firmware(case_firmware: Option<&str>, cli_default: &str) -> Result<String, String> {
+    match case_firmware {
+        None | Some("opensbi") => Ok(cli_default.to_string()),
+        Some("rustsbi") => {
+            let path = std::env::var("RUSTSBI_PROTOTYPER").unwrap_or_else(|_| {
+                concat!(env!("CARGO_MANIFEST_DIR"),
+                    "/../../../rustsbi/target/riscv64gc-unknown-none-elf/release/rustsbi-prototyper").to_string()
+            });
+            if std::path::Path::new(&path).exists() {
+                Ok(path)
+            } else {
+                Err(format!("RustSBI Prototyper not found ({path}); build it or set RUSTSBI_PROTOTYPER"))
+            }
+        }
+        Some(other) => Err(format!("unknown firmware {other:?}")),
+    }
+}
+
 /// Build the kernel, the loader and `programs` for `target`, and pack them into `bundle`.
 fn prepare(
     builder: &Builder,
@@ -192,7 +212,11 @@ fn run_case(
     for smp in &boot.smp {
         let run_started = Instant::now();
         let log = logs.join(format!("{}-{}-smp{}.log", case.name, target.name, smp));
-        let image = Image { machine, firmware, loader: &loader, bundle: &bundle, smp: *smp };
+        let firmware = match resolve_firmware(boot.firmware.as_deref(), firmware) {
+            Ok(fw) => fw,
+            Err(why) => return Ok(vec![(String::new(), Outcome::Skip(why), 0.0)]),
+        };
+        let image = Image { machine, firmware: &firmware, loader: &loader, bundle: &bundle, smp: *smp };
         let outcome = match qemu::run(&image, boot, &log)? {
             Verdict::Fail(why) => Outcome::Fail(why),
             Verdict::Pass(_) if boot.distinct_across_boots.is_empty() => Outcome::Pass,

@@ -84,6 +84,9 @@ pub struct Boot {
     /// Corrupt the bundle after signing, to test that the loader rejects it.
     #[serde(default)]
     pub tamper_bundle: bool,
+    /// Firmware to boot under: "opensbi" (default) or "rustsbi". A case naming "rustsbi"
+    /// is skipped where that firmware binary is not available.
+    pub firmware: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
