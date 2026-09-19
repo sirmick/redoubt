@@ -4,7 +4,7 @@
 //! Do not edit: change the tables and run `cargo run -p redoubt-wire-gen`.
 
 use crate::codec::{Error, Reader, Writer};
-use crate::typed::{self, Layout, Words};
+use crate::typed::{self, HandleKind, Layout, Words};
 
 /// `ping`: opcode 1, inline; reply [`PingReply`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,14 +76,20 @@ pub struct Blob<'a> {
 pub struct BlobReply {}
 
 /// `grant`: opcode 7, inline; reply [`GrantReply`].
-/// Handle slots: `range`, `reply`.
+///
+/// Handle slots: `range` (slot 0, endpoint), `reply` (slot 1, endpoint).
+/// Kinds are documentation, checked by use: a handle of the wrong kind gets `WrongObject`
+/// on first use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Grant {
     pub pages: u32,
 }
 
 /// The reply to [`Grant`].
-/// Handle slots: `key`.
+///
+/// Handle slots: `key` (slot 0, budget).
+/// Kinds are documentation, checked by use: a handle of the wrong kind gets `WrongObject`
+/// on first use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GrantReply {}
 
@@ -101,7 +107,10 @@ pub struct ReadReply<'a> {
 }
 
 /// `last`: opcode 4294967295, buffer; reply [`LastReply`].
-/// Handle slots: `key`.
+///
+/// Handle slots: `key` (slot 0, process).
+/// Kinds are documentation, checked by use: a handle of the wrong kind gets `WrongObject`
+/// on first use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Last<'a> {
     pub note: &'a str,
@@ -154,6 +163,22 @@ impl<'a> Message<'a> {
             Message::Grant(_) => &["range", "reply"],
             Message::Read(_) => &[],
             Message::Last(_) => &["key"],
+        }
+    }
+
+    /// The kind of object each handle must name, by slot: documentation from the table, not
+    /// checked on receipt (a handle of the wrong kind gets `WrongObject` on first use).
+    pub fn handle_kinds(&self) -> &'static [HandleKind] {
+        match self {
+            Message::Ping(_) => &[],
+            Message::Pong(_) => &[],
+            Message::Small(_) => &[],
+            Message::Wide(_) => &[],
+            Message::Named(_) => &[],
+            Message::Blob(_) => &[],
+            Message::Grant(_) => &[HandleKind::Endpoint, HandleKind::Endpoint],
+            Message::Read(_) => &[],
+            Message::Last(_) => &[HandleKind::Process],
         }
     }
 
@@ -299,6 +324,22 @@ impl<'a> Reply<'a> {
         }
     }
 
+    /// The kind of object each handle must name, by slot: documentation from the table, not
+    /// checked on receipt (a handle of the wrong kind gets `WrongObject` on first use).
+    pub fn handle_kinds(&self) -> &'static [HandleKind] {
+        match self {
+            Reply::Ping(_) => &[],
+            Reply::Pong(_) => &[],
+            Reply::Small(_) => &[],
+            Reply::Wide(_) => &[],
+            Reply::Named(_) => &[],
+            Reply::Blob(_) => &[],
+            Reply::Grant(_) => &[HandleKind::Budget],
+            Reply::Read(_) => &[],
+            Reply::Last(_) => &[],
+        }
+    }
+
     /// The opcode of the request this replies to.
     fn opcode(&self) -> u32 {
         match self {
@@ -374,9 +415,11 @@ impl<'a> Reply<'a> {
     }
 }
 
-/// The protocol's error codes: word 0 of an error reply.
+/// The protocol's error codes: word 0 of an error reply. Code 1, `Malformed`, is every
+/// protocol's: a request that does not decode (WIRE.md, Errors).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
+    Malformed,
     NotFound,
     Denied,
     LastError,
@@ -385,16 +428,18 @@ pub enum ErrorCode {
 impl ErrorCode {
     pub fn code(self) -> u32 {
         match self {
-            ErrorCode::NotFound => 1,
-            ErrorCode::Denied => 2,
+            ErrorCode::Malformed => 1,
+            ErrorCode::NotFound => 2,
+            ErrorCode::Denied => 3,
             ErrorCode::LastError => 4294967295,
         }
     }
 
     pub fn from_code(code: u32) -> Option<Self> {
         match code {
-            1 => Some(ErrorCode::NotFound),
-            2 => Some(ErrorCode::Denied),
+            1 => Some(ErrorCode::Malformed),
+            2 => Some(ErrorCode::NotFound),
+            3 => Some(ErrorCode::Denied),
             4294967295 => Some(ErrorCode::LastError),
             _ => None,
         }

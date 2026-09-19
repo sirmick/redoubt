@@ -73,18 +73,20 @@ reply 6 0 0 0 0 0 - blob
 reply 7 1 0 0 0 0 - grant
 reply 8 0 0 9 0 0 0500000068656c6c6f read data=b:68656c6c6f
 reply ffffffff 0 0 c 0 0 ffffffffffffffff07000000 last n=18446744073709551615 m=7
-failed 1 0 1 0 0 0 - not_found
-failed 8 0 2 0 0 0 - denied
+# Code 1 is `malformed` in every protocol; the table's own codes start at 2.
+failed 1 0 1 0 0 0 - malformed
+failed 1 0 2 0 0 0 - not_found
+failed 8 0 3 0 0 0 - denied
 failed ffffffff 0 ffffffff 0 0 0 - last_error
 # An error reply's buffer is ignored (the lend comes back as it was).
-failed 1 0 1 0 0 0 ffff not_found
+failed 1 0 2 0 0 0 ffff not_found
 
 badreply 0 0 0 0 0 0 - BadOpcode
 badreply 9 0 1 0 0 0 - BadOpcode
 badreply 1 0 100000000 0 0 0 - BadWords
 badreply 1 0 1 0 0 5 - BadWords
 badreply 1 1 1 0 0 0 - BadHandles
-badreply 1 0 3 0 0 0 - BadStatus
+badreply 1 0 4 0 0 0 - BadStatus
 badreply 7 0 0 0 0 0 - BadHandles
 badreply 3 0 0 deadbeef 1 0 - Trailing
 badreply 1 0 0 0 0 0 00 UnexpectedBuffer
