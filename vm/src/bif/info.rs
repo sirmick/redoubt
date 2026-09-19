@@ -187,6 +187,18 @@ pub fn ensure_modules_loaded(c: &mut Ctx, a: &[Term]) -> R {
     })
 }
 
+/// `code:load_binary(Module, File, Binary)`: load a module from bytes (e.g. fresh from the
+/// compiler). The same loader checks apply as for modules from the platform.
+pub fn load_binary(c: &mut Ctx, a: &[Term]) -> R {
+    let Term::Atom(m) = &a[0] else { return Err(c.badarg()) };
+    let bytes = a[2].iodata_bytes().ok_or_else(|| c.badarg())?;
+    match c.sys.load_bytes(&bytes) {
+        Ok(name) if &name == m => Ok(Term::tuple(alloc::vec![c.atom("module"), a[0].clone()])),
+        Ok(_) => Ok(Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.error.clone()), c.atom("badfile")])),
+        Err(_) => Ok(Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.error.clone()), c.atom("badfile")])),
+    }
+}
+
 pub fn all_loaded(c: &mut Ctx, _a: &[Term]) -> R {
     let file = c.atom("loaded");
     Ok(Term::list(

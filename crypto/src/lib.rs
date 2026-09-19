@@ -101,6 +101,9 @@ pub static NATIVES: &[NativeSpec] = &[
     ("crypto", "pkey_crypt_nif", 6, pk::crypt),
     ("crypto", "privkey_to_pubkey_nif", 2, pk::privkey_to_pubkey),
     ("crypto", "rsa_generate_key_nif", 2, pk::rsa_generate_key),
+    // erlang:md5/1 (used by the compiler for module checksums). Provisional home: it belongs
+    // in the VM, which would then need its own MD5.
+    ("erlang", "md5", 1, hash::erlang_md5),
     // ASN.1 BER splitting, for public_key's certificate and key codecs.
     ("asn1rt_nif", "decode_ber_tlv_raw", 1, asn1::decode_ber_tlv),
     ("asn1rt_nif", "encode_ber_tlv", 1, asn1::encode_ber_tlv),

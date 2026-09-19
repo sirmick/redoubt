@@ -357,6 +357,7 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("code", "ensure_loaded", 1, info::ensure_loaded),
     ("code", "is_loaded", 1, info::is_loaded),
     ("code", "all_loaded", 0, info::all_loaded),
+    ("code", "load_binary", 3, info::load_binary),
     ("code", "ensure_modules_loaded", 1, info::ensure_modules_loaded),
     ("erlang", "pid_to_list", 1, info::pid_to_list),
     ("erlang", "list_to_pid", 1, info::list_to_pid),
