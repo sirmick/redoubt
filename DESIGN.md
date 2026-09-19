@@ -108,7 +108,7 @@ enforced access, heirs, match specifications restricted to pure guard functions)
   uncatchably. Nothing in the VM panics on bad input.
 - Resource limits, each failing with `system_limit` (or killing the process, for the stack):
   atoms 2^20, atom length 255, processes 2^16, mailbox 2^16 messages, stack 2^20 Y registers,
-  bignums 2^24 bits, binaries 2^32 bits, tuples from `make_tuple` 2^24, ETF nesting 256.
+  bignums 2^24 bits, binaries 2^30 bits (a per-VM `Limits` setting), tuples from `make_tuple` 2^24, ETF nesting 256.
 
 ## Testing
 - **Unit tests** (`cargo test`): formats and parsers, with vectors taken from the real BEAM.

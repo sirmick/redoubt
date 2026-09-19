@@ -296,7 +296,7 @@ mod tests {
         let mut snapshots: Vec<(PMap<u32, u32>, BTreeMap<u32, u32>)> = Vec::new();
         for step in 0..20_000u32 {
             let k = (rng.next() % 500) as u32;
-            if rng.next() % 3 == 0 {
+            if rng.next().is_multiple_of(3) {
                 assert_eq!(map.remove(&k), model.remove(&k));
             } else {
                 assert_eq!(map.insert(k, step), model.insert(k, step));
