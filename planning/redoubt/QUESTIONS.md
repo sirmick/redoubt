@@ -4,8 +4,8 @@ Raised by the wave 1 packages and their reviews (2026-09-19). Each touches the f
 so each needs your decision; the answer goes into the named note with a HISTORY.md entry.
 **Rec** is the orchestrator's recommendation. Reply with numbers, e.g. "all Rec except 7: ...".
 
-**1-55 answered 2026-09-19** (ANSWERS.md, two tranches; each "Answered" line says where the
-answer now lives). **Open: 56-68 and 69-101** (design review round 4, at the end). They block
+**1-68 answered 2026-09-19** (ANSWERS.md, three tranches; each "Answered" line says where the
+answer now lives). **Open: 69-101 only** (design review round 4, at the end). They block
 WP-A2 (the ABI records) and WP-K2 (endpoints), which have not started.
 
 ## Kernel: messages and IPC (KERNEL-SPEC.md)
@@ -466,24 +466,32 @@ protocols alike, so `redoubt/wire/tables/example.md`'s code 1 is renumbered when
     or "check by use", where a wrong kind shows up as `WrongObject` on first use and the table's
     kind is documentation.
     *Rec:* the record carries kinds. It's four small tags, and receivers need them anyway.
+    **Answered:** KERNEL-SPEC.md, Messages and ABI (each handle's kind in `receive`'s record);
+    WIRE.md, Tables.
 
 57. **Which call a fault blames.** The editor read answers 37 and 31 as "the most recently taken
     call that is still open". The other reading is "the most recently taken call, even if
     replied to". The model uses the first. *Rec:* still open.
+    **Answered:** decided: still open, as KERNEL-SPEC.md, Process (serving account) already says.
 
 58. **A panic in a thread with no open calls, while another thread of the process holds them.**
     Blame is per thread, so the notice says `faulted` but blames no one.
     *Rec:* blame falls back to the process's most recently taken open call.
+    **Answered:** changed: blame nobody, no fallback; KERNEL-SPEC.md, Messages (exit notices);
+    CONTAINMENT.md, Crash blame.
 
 59. **When a revoked call fails (answer 30).** The caller gets `Dead` at once, not when the
     server replies, to match answer 49. *Rec:* at once, as written.
+    **Answered:** as written; KERNEL-SPEC.md, R10.
 
 60. **Answer 44: handles against pages.** The editor's reading: pages and their page tables are
     refused with `Refused` (R4), and handles get `OutOfMemory` with the message staying queued.
     *Rec:* accept.
+    **Answered:** as written; KERNEL-SPEC.md, R4.
 
 61. **Answer 48 adds a field.** Keying blame by label set needs `blamed_labels` in the exit
     notice, which the answers didn't state. *Rec:* accept.
+    **Answered:** as written; KERNEL-SPEC.md, Messages (exit notices).
 
 62. **The badge notice's details (answer 53) are the editor's.** They cover:
     - a badge slot costs 1 page per 128 slots, to be confirmed by the kernel implementer;
@@ -493,26 +501,34 @@ protocols alike, so `redoubt/wire/tables/example.md`'s code 1 is renumbered when
     - notices come before messages.
 
     *Rec:* accept, with the cost figure confirmed in K2.
+    **Answered:** as written; KERNEL-SPEC.md, Endpoint, Messages, the cost table; BUILD-PLAN.md,
+    WP-K2 confirms the cost.
 
 63. **Does the kernel enforce `MAX_LEASE`?** The spec says only the steward does; the model's
     comment implies the kernel does. *Rec:* the steward only. The kernel knows deadlines, not
     leases.
+    **Answered:** KERNEL-SPEC.md, Constants and Budget (`deadline`).
 
 64. **Startup-block `Hndl` names** follow `startup.rs` (non-empty, no NUL), not INIT.md's
     manifest name rule. *Rec:* apply the same name rule to both, for one rule in one place.
+    **Answered:** INIT.md, Startup block (`Hndl`); BUILD-PLAN.md, WP-R1b.
 
 65. **Where the loader stub finds the ELF image** is unspecified (PACKAGES.md). *Rec:* the image
     is a named entry in the startup block (`Hndl` or a new tag) pointing at pages the parent
     mapped. R2 defines it and PACKAGES.md states it.
+    **Answered:** PACKAGES.md, Launching; INIT.md, Startup block; BUILD-PLAN.md, WP-R2.
 
 66. **R10's reach into in-flight messages, and badge slots, are placed in WP-K2**, not WP-K1,
     because K1 has no endpoints or messages. *Rec:* accept.
+    **Answered:** BUILD-PLAN.md, WP-K1 and WP-K2 (already so).
 
 67. **INIT.md's worked example** doesn't show the vault session's read access to its owner's
     unlabelled volume (which answer 51 relies on). *Rec:* add it.
+    **Answered:** INIT.md, Worked example (Scenarios, Vault).
 
 68. **KERNEL-SPEC.md says "five kinds" of objects but lists four.** *Rec:* fix the count
     (editorial).
+    **Answered:** KERNEL-SPEC.md, Objects; CAPABILITIES.md, Handles.
 
 ## Design review round 4 (Fable red team, simplifier and editor over answers 1-55)
 
@@ -720,9 +736,8 @@ point to change the IPC design. Several items interact; the cross-references say
 
 ### The earlier open questions, revisited
 
-- **56 (handle kinds):** the simplifier recommends "check by use" (`WrongObject` on first use),
-  with the table's kind as documentation, rather than kinds in `receive`'s record. *Revised Rec:*
-  check by use.
+- **56 (handle kinds):** the simplifier recommended "check by use" (`WrongObject` on first use).
+  Decided by answer 56: kinds in the record.
 - **57 and 58:** replaced by item 82 (`serve`, with no fallback).
 - **62 (badge-notice details):** moot if 69 is accepted. Otherwise, the "last holder" is undefined
   when the last copy was in a discarded message: use the sender's budget.

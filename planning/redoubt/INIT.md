@@ -110,8 +110,9 @@ Before a process runs, its parent installs its handles in its table (`process_st
 into slots 1..n, at most `MAX_START_HANDLES`; handle 0 is never a handle) and maps one ordinary page
 into it, read-only (`process_map`), holding the block below. **`process_start`'s `arg` is that
 page's address** (page-aligned; 0 = no block), which the child's first thread receives
-(KERNEL-SPEC.md); there is no fixed address. The program image travels separately (PACKAGES.md,
-launching). No environment variables, nothing inherited. Configuration is files in the namespace.
+(KERNEL-SPEC.md); there is no fixed address. The program image travels in its own pages, which the
+block names (PACKAGES.md, launching; its tag is defined with the loader stub). No environment
+variables, nothing inherited. Configuration is files in the namespace.
 
 **Format.** The kernel argument block's framing (BOOT.md): little-endian `u32` words. Each entry is
 a 4-byte ASCII tag, one word holding a CRC-16/X-25 of the entry's data in its low half and the data
@@ -122,7 +123,7 @@ zero-padded to a whole word; an entry's length is exactly what its fields need.
 | --- | --- | --- |
 | `SBlk` | version (1), block length in words (this entry included), handle count n | the header: first, exactly once |
 | `NmSp` | handle, string | a namespace entry: a clean absolute path (`/`, `/dev/cons`: no `.`, `..`, empty component or trailing `/`) and the connection it resolves to |
-| `Hndl` | handle, string | a named handle (a non-empty name without NUL): services (`keys`, `powerbox`), device handles for drivers, the process's budget as `budget` |
+| `Hndl` | handle, string | a named handle, its name following the manifest's name rule (Names, above): services (`keys`, `powerbox`), device handles for drivers, the process's budget as `budget` |
 | `Argv` | string | one argument (may be empty), in block order |
 
 Rules: the block is at most one page; handles are 1..=n, n ≤ `MAX_START_HANDLES`; paths are unique
@@ -165,8 +166,10 @@ listen on the network.
 
 **Scenarios:**
 - `cat notes.txt`: 9P on her `/` handle; `fsd` admits her by her account and label set.
-- Vault: `ssh alice+secrets@box` gives a session labelled `{alice-secrets}` that can read
-  `fsd:alice-secrets`, has no `/net`, and prints only to its own channel.
+- Vault: `ssh alice+secrets@box` gives a session labelled `{alice-secrets}` that reads and writes
+  `fsd:alice-secrets`, reads (never writes) her home on the unlabelled `fsd:data`, which is how
+  data enters the vault (`check`: a read needs the volume's labels ⊆ the session's), has no `/net`,
+  and prints only to its own channel.
 - Agent: own principal and VM, a 2-hour lease, `/work` only, no `/net`. The bench's scripted hostile
   agent tries to escape (PLAN.md, milestone 1 attack suite); each attempt is refused. Its escalations
   wait for Alice in `ssh approve@box`; lease expiry destroys its budget and everything it passed on.

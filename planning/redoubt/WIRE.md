@@ -37,8 +37,9 @@ by that server's work package with a HISTORY.md line (BUILD-PLAN.md). A line hol
 - **Types:** `u8`, `u16`, `u32`, `u64`, `string` (`u16` length + UTF-8), `bytes` (`u32` length +
   bytes), and `handle[N] KIND` (the handle in slot N; slots are numbered from 0 in order, carry no
   bytes, and a message has at most `MAX_MSG_HANDLES`). `KIND` is the object the handle must name:
-  `endpoint`, `budget`, `process`, `mmio`, `irq` or `reset` (KERNEL-SPEC.md, Objects). The generator
-  puts the kind in the codec's docs and emits a helper that checks it, so no receiver has to guess.
+  `endpoint`, `budget`, `process`, `mmio`, `irq` or `reset` (KERNEL-SPEC.md, Objects). `receive`
+  reports each received handle's kind (KERNEL-SPEC.md, Messages); the generator puts the kind in the
+  codec's docs and emits a helper that checks it against that report, so no receiver has to guess.
 - **Compound values** (a label set, an IP prefix) are a `bytes` field whose inner layout is stated
   under the table, in the same encoding. Milestone 1 adds no other types.
 - **Errors.** Each protocol has an error table, marked by a line `<!-- wire-errors: NAME -->` and

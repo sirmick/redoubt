@@ -113,8 +113,12 @@ budgets (their agents go with them) and records it in the audit file. Keyed by t
 for the reason caps are (below): a vault session crashing a shared server must not log out its
 owner's unlabelled sessions, which would be a channel out of the vault. Bystanders are not blamed:
 only the one most recent call counts, not every call the thread holds open (a `consoled` thread
-holds many readers' calls). Stated limit: a request that corrupts a server which crashes later,
-while serving someone else, blames the wrong account; the consequence is a logout, not data loss.
+holds many readers' calls). A thread that fails holding no open call blames nobody, even when other
+threads of its process hold calls: falling back to one of theirs would blame a bystander. Such a
+crash counts only toward the restart limit and, past it, the reboot (INIT.md). Stated limits: a
+request that corrupts a server which crashes later, while serving someone else, blames the wrong
+account, and one that crashes an idle thread later blames nobody; the consequence is a logout or a
+restart, not data loss.
 Restart and reboot rules: INIT.md.
 
 ## Covert and timing channels
