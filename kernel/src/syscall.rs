@@ -880,6 +880,17 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                     return Ok(xous_kernel::Result::MemoryRange(range));
                 }
 
+                // Default deny for device memory: a non-null physical address outside main
+                // RAM is a device claim, allowed only if the bundle granted it (tenet 2).
+                #[cfg(baremetal)]
+                if !phys_ptr.is_null() && !mm.is_main_memory(phys_ptr) {
+                    let base = phys_ptr as usize;
+                    if !crate::grants::may_map_device(pid, base, size.get()) {
+                        klog!("PID {} denied device {:08x}", pid.get(), base);
+                        return Err(xous_kernel::Error::AccessDenied);
+                    }
+                }
+
                 let range =
                     mm.map_range(phys_ptr, virt_ptr, size.get(), pid, req_flags, MemoryType::Default)?;
 

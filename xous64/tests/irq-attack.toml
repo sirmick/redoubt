@@ -3,3 +3,11 @@ arch = ["rv64", "rv32"]
 kind = "boot"
 programs = ["log-server", "irq-attack"]
 expect = ['ok: irq 0x20: free -> Err', 'ok: irq 0xffffffffffffffff', 'ok: double claim', 'IRQ ATTACK TEST PASSED']
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]
+
+[[grant]]
+program = "irq-attack"
+irq = [6]

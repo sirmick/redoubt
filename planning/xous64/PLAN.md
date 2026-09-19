@@ -151,8 +151,10 @@ Open, in rough priority order:
       remaining `static mut` globals to `KernelCell` (SWITCHTO_CALLER, PREVIOUS_PAIR, PROCESS_TABLE,
       MEMORY_ALLOCATIONS, ...), then justify what is left. The ratchet in `xous64/tests/unsafe-budget.toml`
       records progress.
-- [ ] **Ambient authority**: design device grants (who may claim which MMIO region / IRQ), e.g. a
-      manifest in the boot bundle enforced by the kernel. Today it is first come, first served.
+- [x] **Ambient authority (devices)**: default-deny device grants. A manifest in the boot bundle
+      (`grants` entry) lists each process's allowed MMIO regions and IRQs; the loader emits `Grnt`
+      tags; the kernel enforces at MapMemory (device pages) and ClaimInterrupt. Design: DEVICE-GRANTS.md.
+      Tests: `grant-attack`. Open: server-ID capabilities lack revocation; no runtime grant delegation.
 - [ ] Delete what we do not run (tenet 1), pending the rv32 decision: swap, gdb stub, ARM, Precursor
       and bao1x platforms, the Sv32 window code, prebuilt blobs.
 - [ ] Bench: inject a device tree, to test fail-closed paths (no rng-seed, no memory node, junk).

@@ -7,3 +7,8 @@ expect = ["claimed irq 10", "irq 10: received 'x'", "irq 10: received 'y'", "irq
 [[input]]
 after = "claimed irq 10"
 send = "xyz"
+
+[[grant]]
+program = "uart-echo"
+mmio = ["0x10000000:0x1000"]
+irq = [10]

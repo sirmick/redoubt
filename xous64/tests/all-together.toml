@@ -4,3 +4,11 @@ kind = "boot"
 programs = ["log-server", "ipc-client", "timer-test"]
 smp = [1, 2]
 expect = ["IPC TEST PASSED", "TIMER TEST PASSED"]
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]
+
+[[grant]]
+program = "timer-test"
+irq = [0]

@@ -4,3 +4,7 @@ kind = "boot"
 programs = ["log-server", "rng-test"]
 expect = ['rng-seed: \d+ bytes', 'Kernel RNG seeded from the loader', 'RNG TEST PASSED']
 distinct_across_boots = ['first server id: (.*)']
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]

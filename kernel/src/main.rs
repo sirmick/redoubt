@@ -19,6 +19,7 @@ mod arch;
 #[macro_use]
 mod args;
 mod cell;
+mod grants;
 mod io;
 mod irq;
 mod macros;

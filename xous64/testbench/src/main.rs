@@ -68,7 +68,7 @@ fn main() -> Result<()> {
             .iter()
             .map(|p| if p.contains('/') { Program::Path { path: p.into() } } else { Program::TestProgram(p.clone()) })
             .collect();
-        let bundle = prepare(&builder, target, machine, &programs, &[], &logs.join("interactive.tar"))?;
+        let bundle = prepare(&builder, target, machine, &programs, &[], "", &logs.join("interactive.tar"))?;
         let loader = builder.artifact(target, machine.loader_package);
         let image = Image { machine, firmware: &args.firmware, loader: &loader, bundle: &bundle, smp: args.smp };
         return image.run_interactive();
@@ -126,6 +126,7 @@ fn prepare(
     machine: &Machine,
     programs: &[Program],
     extra_kernel_features: &[String],
+    manifest: &str,
     bundle: &std::path::Path,
 ) -> Result<PathBuf> {
     let mut features: Vec<String> = machine.kernel_features.iter().map(|f| f.to_string()).collect();
@@ -133,7 +134,7 @@ fn prepare(
     builder.cargo_build(target, "xous-kernel", &features)?;
     builder.cargo_build(target, machine.loader_package, &[])?;
     let programs = programs.iter().map(|p| builder.program(target, p)).collect::<Result<Vec<_>>>()?;
-    build::bundle(bundle, &builder.artifact(target, "xous-kernel"), &programs)?;
+    build::bundle(bundle, &builder.artifact(target, "xous-kernel"), &programs, manifest)?;
     Ok(bundle.to_path_buf())
 }
 
@@ -179,7 +180,8 @@ fn run_case(
 
     // Build everything once, then boot it once per hart count.
     let bundle = logs.join(format!("{}-{}.tar", case.name, target.name));
-    let bundle = match prepare(builder, target, machine, &boot.programs, &boot.kernel_features, &bundle) {
+    let manifest = boot.grant.iter().flat_map(|g| g.manifest_lines()).collect::<Vec<_>>().join("\n");
+    let bundle = match prepare(builder, target, machine, &boot.programs, &boot.kernel_features, &manifest, &bundle) {
         Ok(bundle) => bundle,
         Err(e) => return Ok(vec![(String::new(), Outcome::Fail(format!("{e:#}")), elapsed(started))]),
     };
