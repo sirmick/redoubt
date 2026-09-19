@@ -1,0 +1,6 @@
+These test modules are copied unmodified from AtomVM (https://github.com/atomvm/AtomVM),
+tests/erlang_tests/, commit 0220c78. Copyright the AtomVM contributors, licensed under
+Apache-2.0 OR LGPL-2.1-or-later; used here under Apache-2.0.
+
+Each exports start/0. The differential harness runs it on the real BEAM and on beamlet and
+compares results. Tests that only exercise AtomVM-specific APIs fail identically on both.

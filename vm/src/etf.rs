@@ -1,8 +1,12 @@
-//! The external term format (`term_to_binary/1`), decoding side.
+//! The external term format (`term_to_binary/1`, `binary_to_term/1`).
 //!
-//! Used for module literals now and for `binary_to_term/1` later, so it treats its input as
-//! hostile: every length is checked against the bytes that remain, nothing is preallocated from
-//! an untrusted count, and nesting depth is bounded so a crafted term cannot exhaust the stack.
+//! Decoding reads module literals and untrusted binaries, so it treats its input as hostile:
+//! every length is checked against the bytes that remain, nothing is preallocated from an
+//! untrusted count, and nesting depth is bounded so a crafted term cannot exhaust the stack.
+//! In `safe` mode it also refuses to create atoms.
+//!
+//! Encoding writes what OTP 28 writes, byte for byte, except that maps are always in key order
+//! (as with `term_to_binary(T, [deterministic])`). It uses a work list, not recursion.
 
 use alloc::rc::Rc;
 use alloc::vec::Vec;
@@ -43,21 +47,29 @@ const VERSION: u8 = 131;
 
 /// Decode one complete term (with its version byte) that must fill all of `bytes`.
 pub fn decode(bytes: &[u8], atoms: &mut AtomTable) -> Result<Term, EtfError> {
-    let mut r = Reader { bytes, pos: 0, atoms };
+    let (t, used) = decode_prefix(bytes, atoms, false)?;
+    if used != bytes.len() {
+        return Err(EtfError::TrailingBytes);
+    }
+    Ok(t)
+}
+
+/// Decode the term at the start of `bytes`; also return how many bytes it used. With `safe`,
+/// an atom that does not already exist is an error rather than a new atom.
+pub fn decode_prefix(bytes: &[u8], atoms: &mut AtomTable, safe: bool) -> Result<(Term, usize), EtfError> {
+    let mut r = Reader { bytes, pos: 0, atoms, safe };
     if r.u8()? != VERSION {
         return Err(EtfError::BadTag(bytes[0]));
     }
     let t = r.term(0)?;
-    if r.pos != bytes.len() {
-        return Err(EtfError::TrailingBytes);
-    }
-    Ok(t)
+    Ok((t, r.pos))
 }
 
 struct Reader<'a, 'b> {
     bytes: &'a [u8],
     pos: usize,
     atoms: &'b mut AtomTable,
+    safe: bool,
 }
 
 impl<'a> Reader<'a, '_> {
@@ -128,13 +140,16 @@ impl<'a> Reader<'a, '_> {
             118 | 119 | 100 | 115 => {
                 let n = if tag == 119 || tag == 115 { self.u8()? as usize } else { self.u16()? };
                 let raw = self.take(n)?;
-                let atom = if tag == 118 || tag == 119 {
-                    let s = core::str::from_utf8(raw).map_err(|_| EtfError::BadAtom)?;
-                    self.atoms.intern(s)?
+                let text: alloc::string::String = if tag == 118 || tag == 119 {
+                    core::str::from_utf8(raw).map_err(|_| EtfError::BadAtom)?.into()
                 } else {
                     // Latin-1: each byte is one code point.
-                    let s: alloc::string::String = raw.iter().map(|&b| b as char).collect();
-                    self.atoms.intern(&s)?
+                    raw.iter().map(|&b| b as char).collect()
+                };
+                let atom = if self.safe {
+                    self.atoms.existing(&text).ok_or(EtfError::BadAtom)?
+                } else {
+                    self.atoms.intern(&text)?
                 };
                 Term::Atom(atom)
             }
@@ -210,6 +225,151 @@ impl<'a> Reader<'a, '_> {
     }
 }
 
+// ---- encoding ----
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncodeError {
+    /// Local funs, match contexts: things this VM cannot (yet) serialize.
+    Unsupported,
+}
+
+/// The node name this VM reports; pids and references are encoded with it.
+pub const NODE: &str = "nonode@nohost";
+
+pub fn encode(t: &Term) -> Result<Vec<u8>, EncodeError> {
+    let mut out = alloc::vec![VERSION];
+    let mut work = alloc::vec![t.clone()];
+    while let Some(t) = work.pop() {
+        match &t {
+            Term::Int(i) => encode_int(&mut out, *i),
+            Term::Big(b) => encode_big(&mut out, b),
+            Term::Float(f) => {
+                out.push(70);
+                out.extend_from_slice(&f.to_be_bytes());
+            }
+            Term::Atom(a) => encode_atom(&mut out, a.as_str()),
+            Term::Nil => out.push(106),
+            Term::Cons(_) => {
+                // A proper list of bytes up to 65535 long is a STRING_EXT, as in BEAM.
+                let mut items = Vec::new();
+                let mut tail = Term::Nil;
+                for item in t.list_iter() {
+                    match item {
+                        Ok(x) => items.push(x),
+                        Err(x) => tail = x,
+                    }
+                }
+                let bytes: Option<Vec<u8>> = items
+                    .iter()
+                    .map(|x| x.as_i64().and_then(|i| u8::try_from(i).ok()))
+                    .collect();
+                match bytes {
+                    Some(b) if matches!(tail, Term::Nil) && b.len() <= 0xffff => {
+                        out.push(107);
+                        out.extend_from_slice(&(b.len() as u16).to_be_bytes());
+                        out.extend_from_slice(&b);
+                    }
+                    _ => {
+                        out.push(108);
+                        out.extend_from_slice(&(items.len() as u32).to_be_bytes());
+                        work.push(tail);
+                        work.extend(items.into_iter().rev());
+                    }
+                }
+            }
+            Term::Tuple(elems) => {
+                if elems.len() <= 255 {
+                    out.extend_from_slice(&[104, elems.len() as u8]);
+                } else {
+                    out.push(105);
+                    out.extend_from_slice(&(elems.len() as u32).to_be_bytes());
+                }
+                work.extend(elems.iter().rev().cloned());
+            }
+            Term::Map(m) => {
+                out.push(116);
+                out.extend_from_slice(&(m.len() as u32).to_be_bytes());
+                for (k, v) in m.iter().rev() {
+                    work.push(v.clone());
+                    work.push(k.0.clone());
+                }
+            }
+            Term::Bits(b) => {
+                let bytes = b.to_bytes();
+                if b.is_binary() {
+                    out.push(109);
+                    out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+                } else {
+                    out.push(77);
+                    out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+                    out.push((b.len % 8) as u8);
+                }
+                out.extend_from_slice(&bytes);
+            }
+            Term::Fun(f) => match &**f {
+                Fun::Export { module, function, arity } => {
+                    out.push(113);
+                    encode_atom(&mut out, module.as_str());
+                    encode_atom(&mut out, function.as_str());
+                    encode_int(&mut out, *arity as i64);
+                }
+                Fun::Local { .. } => return Err(EncodeError::Unsupported),
+            },
+            Term::Pid(p) => {
+                out.push(88);
+                encode_atom(&mut out, NODE);
+                out.extend_from_slice(&p.index.to_be_bytes());
+                out.extend_from_slice(&p.serial.to_be_bytes());
+                out.extend_from_slice(&0u32.to_be_bytes());
+            }
+            Term::Ref(r) => {
+                out.push(90);
+                out.extend_from_slice(&3u16.to_be_bytes());
+                encode_atom(&mut out, NODE);
+                out.extend_from_slice(&0u32.to_be_bytes());
+                out.extend_from_slice(&((r.0 & 0x3ffff) as u32).to_be_bytes());
+                out.extend_from_slice(&((r.0 >> 18) as u32).to_be_bytes());
+                out.extend_from_slice(&((r.0 >> 50) as u32).to_be_bytes());
+            }
+            Term::Match(_) => return Err(EncodeError::Unsupported),
+        }
+    }
+    Ok(out)
+}
+
+fn encode_int(out: &mut Vec<u8>, i: i64) {
+    if (0..=255).contains(&i) {
+        out.extend_from_slice(&[97, i as u8]);
+    } else if let Ok(i) = i32::try_from(i) {
+        out.push(98);
+        out.extend_from_slice(&i.to_be_bytes());
+    } else {
+        encode_big(out, &BigInt::from(i));
+    }
+}
+
+fn encode_big(out: &mut Vec<u8>, b: &BigInt) {
+    let (sign, digits) = b.to_bytes_le();
+    if digits.len() <= 255 {
+        out.extend_from_slice(&[110, digits.len() as u8]);
+    } else {
+        out.push(111);
+        out.extend_from_slice(&(digits.len() as u32).to_be_bytes());
+    }
+    out.push(if sign == Sign::Minus { 1 } else { 0 });
+    out.extend_from_slice(&digits);
+}
+
+fn encode_atom(out: &mut Vec<u8>, a: &str) {
+    if a.len() <= 255 {
+        out.extend_from_slice(&[119, a.len() as u8]);
+    } else {
+        out.push(118);
+        out.extend_from_slice(&(a.len() as u16).to_be_bytes());
+    }
+    out.extend_from_slice(a.as_bytes());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,6 +401,40 @@ mod tests {
         for (bytes, want) in cases {
             assert_eq!(dec(bytes).unwrap().to_string(), *want, "decoding {bytes:?}");
         }
+    }
+
+    /// Encoding reproduces OTP's bytes for every decodable test vector.
+    #[test]
+    fn encodes_like_otp() {
+        let cases: &[&[u8]] = &[
+            &[131, 97, 42],
+            &[131, 98, 255, 255, 255, 255],
+            &[131, 110, 8, 0, 0, 0, 0, 0, 0, 0, 0, 128],
+            &[131, 70, 63, 248, 0, 0, 0, 0, 0, 0],
+            &[131, 119, 2, 111, 107],
+            &[131, 106],
+            &[131, 107, 0, 2, 104, 105],
+            &[131, 108, 0, 0, 0, 1, 97, 1, 97, 2],
+            &[131, 104, 2, 97, 1, 119, 1, 97],
+            &[131, 109, 0, 0, 0, 2, 1, 2],
+            &[131, 77, 0, 0, 0, 1, 3, 160],
+            &[131, 116, 0, 0, 0, 1, 119, 1, 107, 97, 1],
+            &[131, 113, 119, 5, 108, 105, 115, 116, 115, 119, 3, 109, 97, 112, 97, 2],
+        ];
+        for bytes in cases {
+            let t = dec(bytes).unwrap();
+            assert_eq!(encode(&t).unwrap(), *bytes, "re-encoding {t}");
+        }
+    }
+
+    #[test]
+    fn safe_mode_creates_no_atoms() {
+        let mut atoms = AtomTable::new();
+        let bytes = [131, 119, 3, 110, 101, 119];
+        assert_eq!(decode_prefix(&bytes, &mut atoms, true).err(), Some(EtfError::BadAtom));
+        assert!(atoms.existing("new").is_none());
+        assert!(decode_prefix(&bytes, &mut atoms, false).is_ok());
+        assert!(decode_prefix(&bytes, &mut atoms, true).is_ok());
     }
 
     #[test]

@@ -13,10 +13,13 @@ use crate::term::Term;
 use crate::vm::System;
 
 mod arith;
+mod binary;
 mod erlang;
 mod lists;
 mod maps;
+mod math;
 mod proc;
+mod unicode;
 
 pub use proc::send;
 
@@ -126,6 +129,72 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("erlang", "iolist_to_binary", 1, erlang::list_to_binary),
     ("erlang", "iolist_size", 1, erlang::iolist_size),
     ("erlang", "display", 1, erlang::display),
+    ("erts_debug", "flat_size", 1, erlang::flat_size),
+    ("erlang", "is_record", 2, erlang::is_record),
+    ("erlang", "is_record", 3, erlang::is_record),
+    ("erlang", "insert_element", 3, erlang::insert_element),
+    ("erlang", "delete_element", 2, erlang::delete_element),
+    ("erlang", "float_to_list", 2, erlang::float_to_list2),
+    ("erlang", "float_to_binary", 2, erlang::float_to_binary2),
+    ("erlang", "list_to_float", 1, erlang::list_to_float),
+    ("erlang", "binary_to_float", 1, erlang::binary_to_float),
+    ("erlang", "term_to_binary", 1, erlang::term_to_binary),
+    ("erlang", "term_to_binary", 2, erlang::term_to_binary),
+    ("erlang", "binary_to_term", 1, erlang::binary_to_term),
+    ("erlang", "binary_to_term", 2, erlang::binary_to_term),
+    // binary (the native half of the OTP module).
+    ("binary", "at", 2, binary::at),
+    ("binary", "first", 1, binary::first),
+    ("binary", "last", 1, binary::last),
+    ("binary", "part", 2, binary::part),
+    ("binary", "part", 3, binary::part),
+    ("binary", "copy", 1, binary::copy),
+    ("binary", "copy", 2, binary::copy),
+    ("binary", "bin_to_list", 1, binary::bin_to_list),
+    ("binary", "bin_to_list", 2, binary::bin_to_list),
+    ("binary", "bin_to_list", 3, binary::bin_to_list),
+    ("binary", "list_to_bin", 1, binary::list_to_bin),
+    ("binary", "encode_unsigned", 1, binary::encode_unsigned),
+    ("binary", "encode_unsigned", 2, binary::encode_unsigned),
+    ("binary", "decode_unsigned", 1, binary::decode_unsigned),
+    ("binary", "decode_unsigned", 2, binary::decode_unsigned),
+    ("binary", "compile_pattern", 1, binary::compile_pattern),
+    ("binary", "match", 2, binary::match_),
+    ("binary", "match", 3, binary::match_),
+    ("binary", "matches", 2, binary::matches),
+    ("binary", "matches", 3, binary::matches),
+    ("binary", "split", 2, binary::split),
+    ("binary", "split", 3, binary::split),
+    ("binary", "longest_common_prefix", 1, binary::longest_common_prefix),
+    ("binary", "longest_common_suffix", 1, binary::longest_common_suffix),
+    // math.
+    ("math", "sin", 1, math::sin),
+    ("math", "cos", 1, math::cos),
+    ("math", "tan", 1, math::tan),
+    ("math", "asin", 1, math::asin),
+    ("math", "acos", 1, math::acos),
+    ("math", "atan", 1, math::atan),
+    ("math", "atan2", 2, math::atan2),
+    ("math", "sinh", 1, math::sinh),
+    ("math", "cosh", 1, math::cosh),
+    ("math", "tanh", 1, math::tanh),
+    ("math", "asinh", 1, math::asinh),
+    ("math", "acosh", 1, math::acosh),
+    ("math", "atanh", 1, math::atanh),
+    ("math", "exp", 1, math::exp),
+    ("math", "log", 1, math::log),
+    ("math", "log2", 1, math::log2),
+    ("math", "log10", 1, math::log10),
+    ("math", "pow", 2, math::pow),
+    ("math", "sqrt", 1, math::sqrt),
+    ("math", "erf", 1, math::erf),
+    ("math", "erfc", 1, math::erfc),
+    ("math", "floor", 1, math::floor),
+    ("math", "ceil", 1, math::ceil),
+    ("math", "fmod", 2, math::fmod),
+    // unicode (the native half of the OTP module).
+    ("unicode", "characters_to_list", 2, unicode::characters_to_list),
+    ("unicode", "characters_to_binary", 2, unicode::characters_to_binary),
     // Maps.
     ("erlang", "map_size", 1, maps::map_size),
     ("erlang", "map_get", 2, maps::get),
@@ -191,6 +260,19 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("erlang", "yield", 0, proc::yield_),
     ("erlang", "function_exported", 3, proc::function_exported),
     ("erlang", "module_loaded", 1, proc::module_loaded),
+    ("erlang", "spawn_opt", 2, proc::spawn_opt2),
+    ("erlang", "spawn_opt", 4, proc::spawn_opt4),
+    ("erlang", "system_info", 1, proc::system_info),
+    ("erlang", "nif_error", 1, proc::nif_error),
+    ("erlang", "nif_error", 2, proc::nif_error),
+    ("erlang", "garbage_collect", 0, proc::garbage_collect),
+    ("erlang", "erase", 0, proc::erase_all),
+    ("erlang", "unique_integer", 0, proc::unique_integer),
+    ("erlang", "unique_integer", 1, proc::unique_integer),
+    ("erlang", "timestamp", 0, proc::timestamp),
+    ("erlang", "make_fun", 3, proc::make_fun),
+    ("erlang", "fun_info", 2, proc::fun_info),
+    ("erts_internal", "cmp_term", 2, proc::cmp_term),
 ];
 
 /// Function name to the natives of that name, by arity.

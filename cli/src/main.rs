@@ -1,6 +1,7 @@
 //! `beamlet`: run BEAM code on a POSIX host.
 //!
 //!     beamlet [-pa DIR]... MODULE [FUNCTION]
+//!     beamlet --check FILE.beam...      validate files with the loader and report errors
 //!
 //! Loads modules on demand from the `-pa` directories (in order), calls `MODULE:FUNCTION()`
 //! (default `start`) in a new process, and prints its result with `~w` formatting:
@@ -68,7 +69,29 @@ fn usage() -> ExitCode {
     ExitCode::from(2)
 }
 
+/// Load each file and print `ok` or the loader's error.
+fn check(files: &[String]) -> ExitCode {
+    let mut failed = false;
+    for f in files {
+        let result = std::fs::read(f)
+            .map_err(|e| format!("{e}"))
+            .and_then(|b| beamlet_vm::loader::load(&b, &mut beamlet_vm::atom::AtomTable::new()).map_err(|e| format!("{e:?}")));
+        match result {
+            Ok(m) => println!("{f}: ok ({}, {} instructions)", m.name.as_str(), m.code.len()),
+            Err(e) => {
+                println!("{f}: {e}");
+                failed = true;
+            }
+        }
+    }
+    if failed { ExitCode::from(1) } else { ExitCode::SUCCESS }
+}
+
 fn main() -> ExitCode {
+    let all: Vec<String> = std::env::args().skip(1).collect();
+    if all.first().map(String::as_str) == Some("--check") {
+        return check(&all[1..]);
+    }
     let mut args = std::env::args().skip(1);
     let mut code_path = Vec::new();
     let mut positional = Vec::new();

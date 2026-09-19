@@ -191,6 +191,19 @@ fn jump(p: &mut Process, target: Option<u32>) -> R {
     }
 }
 
+/// A match context seen from outside the match: the bits not yet matched. BEAM lets code pass a
+/// context to BIFs and type tests, which treat it this way (in OTP 28 a context *is* a
+/// sub-bitstring whose start advances as matching proceeds).
+fn as_value(t: Term) -> Term {
+    match t {
+        Term::Match(m) => {
+            let pos = m.pos.get();
+            Term::Bits(m.bits.slice(pos, m.bits.len - pos))
+        }
+        t => t,
+    }
+}
+
 fn error_tuple(tag: &crate::atom::Atom, value: Term) -> Exception {
     Exception::error(Term::tuple(alloc::vec![Term::Atom(tag.clone()), value]))
 }
@@ -251,7 +264,7 @@ fn deallocate(p: &mut Process) -> R {
 
 /// Call a native and put its result in x0 (for `call_ext*`) or `dest`.
 fn call_native(sys: &mut System, p: &mut Process, n: Native, arity: usize) -> R<Term> {
-    let args: Vec<Term> = p.x[..arity].to_vec();
+    let args: Vec<Term> = p.x[..arity].iter().cloned().map(as_value).collect();
     let mut ctx = Ctx { sys, p };
     Ok(n(&mut ctx, &args)?)
 }
@@ -551,7 +564,7 @@ fn step(sys: &mut System, p: &mut Process) -> R<Flow> {
             })?;
             let mut args = Vec::with_capacity(nargs);
             for i in 0..nargs {
-                args.push(src(p, ins, first + 1 + i)?);
+                args.push(as_value(src(p, ins, first + 1 + i)?));
             }
             let result = n(&mut Ctx { sys, p }, &args);
             match result {
@@ -671,7 +684,7 @@ fn step(sys: &mut System, p: &mut Process) -> R<Flow> {
         op::IS_INTEGER | op::IS_FLOAT | op::IS_NUMBER | op::IS_ATOM | op::IS_PID | op::IS_REFERENCE | op::IS_PORT
         | op::IS_NIL | op::IS_BINARY | op::IS_LIST | op::IS_NONEMPTY_LIST | op::IS_TUPLE | op::IS_FUNCTION
         | op::IS_BOOLEAN | op::IS_MAP | op::IS_BITSTR => {
-            let t = src(p, ins, 1)?;
+            let t = as_value(src(p, ins, 1)?);
             let ok = match ins.op {
                 op::IS_INTEGER => t.is_integer(),
                 op::IS_FLOAT => matches!(t, Term::Float(_)),

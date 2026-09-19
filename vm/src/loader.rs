@@ -362,10 +362,11 @@ struct Compact<'a> {
     pos: usize,
 }
 
-/// A decoded compact value: small ones as `i64`, anything larger (up to 2^128) as `i128`.
+/// A decoded compact value: small ones as `i64`, anything larger (the compiler inlines integers
+/// up to 2^128) as a bignum.
 enum Value {
     Small(i64),
-    Wide(i128),
+    Wide(num_bigint::BigInt),
 }
 
 impl Compact<'_> {
@@ -419,28 +420,11 @@ impl Compact<'_> {
             k => k as usize + 2,
         };
         let bytes = self.take(n)?;
-        let negative = bytes[0] & 0x80 != 0;
-        // Sign-extend a big-endian two's-complement number of up to 17 bytes into i128.
-        let significant = if n > 16 {
-            // A 17-byte value is a 128-bit magnitude with a sign byte in front.
-            let (sign, rest) = bytes.split_at(n - 16);
-            if sign.iter().any(|&s| s != if negative { 0xff } else { 0 }) {
-                return Err(LoadError::Malformed("operand too large"));
-            }
-            rest
-        } else {
-            bytes
-        };
-        let mut v: i128 = if negative { -1 } else { 0 };
-        for &byte in significant {
-            v = (v << 8) | byte as i128;
-        }
-        if n > 16 && ((v < 0) != negative) {
-            return Err(LoadError::Malformed("operand too large"));
-        }
-        Ok((tag, match i64::try_from(v) {
-            Ok(v) => Value::Small(v),
-            Err(_) => Value::Wide(v),
+        // Big-endian two's complement.
+        let v = num_bigint::BigInt::from_signed_bytes_be(bytes);
+        Ok((tag, match num_traits::ToPrimitive::to_i64(&v) {
+            Some(v) => Value::Small(v),
+            None => Value::Wide(v),
         }))
     }
 
@@ -465,12 +449,12 @@ impl Compact<'_> {
             TAG_U => match value {
                 Value::Small(v) => Arg::U(u64::try_from(v).map_err(|_| LoadError::Malformed("negative"))?),
                 // Only bs_match patterns carry unsigned values this wide; they are read as numbers.
-                Value::Wide(v) if v >= 0 => Arg::Const(Term::from_i128(v)),
+                Value::Wide(v) if v.sign() != num_bigint::Sign::Minus => Arg::Const(Term::big(v)),
                 Value::Wide(_) => return Err(LoadError::Malformed("negative")),
             },
             TAG_I | TAG_H => match value {
                 Value::Small(v) => Arg::Const(Term::Int(v)),
-                Value::Wide(v) => Arg::Const(Term::from_i128(v)),
+                Value::Wide(v) => Arg::Const(Term::big(v)),
             },
             TAG_A => match small(&value)? {
                 0 => Arg::Const(Term::Nil),

@@ -5,11 +5,14 @@
 #   tools/difftest [SUITE...]      default: every directory under tests/
 #
 # Results go to build/difftest/<suite>/. Exit status is non-zero if any test differs.
+# tests/<suite>/SKIP lists modules that test features left out by design, with the reason.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 . "$root/tools/env.sh"
 otp_lib="$(dirname "$(dirname "$(command -v erl)")")/lib"
 stdlib=( "$otp_lib"/stdlib-*/ebin )
+elixir_lib="$(dirname "$(dirname "$(command -v elixir)")")/lib"
+elixir_ebin="$elixir_lib/elixir/ebin"
 cargo build --quiet --release --manifest-path "$root/Cargo.toml" -p beamlet
 beamlet="$root/target/release/beamlet"
 timeout_s="${DIFFTEST_TIMEOUT:-10}"
@@ -19,7 +22,7 @@ if [ ${#suites[@]} -eq 0 ]; then
     for d in "$root"/tests/*/; do suites+=("$(basename "$d")"); done
 fi
 
-total=0; pass=0; fail=0; failed=()
+total=0; pass=0; fail=0; skip=0; failed=()
 for suite in "${suites[@]}"; do
     src="$root/tests/$suite"; out="$root/build/difftest/$suite"
     mkdir -p "$out"
@@ -28,17 +31,24 @@ for suite in "${suites[@]}"; do
     if [ ! -f "$stamp" ] || [ -n "$(find "$src" -name '*.erl' -newer "$stamp" -print -quit)" ]; then
         rm -f "$out"/*.beam "$out"/*.expected
         : > "$out/erlc.log"
+        shopt -s nullglob
         for f in "$src"/*.erl; do erlc -o "$out" "$f" 2>> "$out/erlc.log" || echo "erlc failed: $f" >> "$out/erlc.log"; done
-        escript "$root/tools/expect.escript" "$out"
+        for f in "$src"/*.ex; do elixirc -o "$out" "$f" >> "$out/erlc.log" 2>&1 || echo "elixirc failed: $f" >> "$out/erlc.log"; done
+        # Only top-level test modules have start/0; nested modules (structs) are not tests.
+        ERL_LIBS="$elixir_lib" escript "$root/tools/expect.escript" "$out"
         touch "$stamp"
     fi
     shopt -s nullglob
     for exp in "$out"/*.expected; do
         m="$(basename "$exp" .expected)"
+        if [ -f "$src/SKIP" ] && grep -qE "^$m[[:space:]]" "$src/SKIP"; then
+            skip=$((skip + 1)); continue
+        fi
         total=$((total + 1))
-        got="$(timeout "$timeout_s" "$beamlet" -pa "$out" -pa "${stdlib[0]}" "$m" 2>&1 || echo "EXIT $?")"
+        got="$(timeout "$timeout_s" "$beamlet" -pa "$out" -pa "${stdlib[0]}" -pa "$elixir_ebin" "$m" 2>&1 || echo "EXIT $?")"
         printf '%s\n' "$got" > "$out/$m.got"
-        if [ "$got" == "$(cat "$exp")" ]; then
+        # The result is the last line; anything before it is the program's own console output.
+        if [ "$(printf '%s\n' "$got" | tail -n 1)" == "$(cat "$exp")" ]; then
             pass=$((pass + 1))
         else
             fail=$((fail + 1)); failed+=("$suite/$m")
@@ -47,7 +57,7 @@ for suite in "${suites[@]}"; do
 done
 for f in "${failed[@]}"; do
     s="${f%%/*}"; m="${f#*/}"
-    printf 'FAIL %-40s want %s\n     %-40s got  %s\n' "$f" "$(head -c 200 "$root/build/difftest/$s/$m.expected")" "" "$(head -c 200 "$root/build/difftest/$s/$m.got")"
+    printf 'FAIL %-40s want %s\n     %-40s got  %s\n' "$f" "$(head -c 200 "$root/build/difftest/$s/$m.expected")" "" "$(tail -n 1 "$root/build/difftest/$s/$m.got" | head -c 200)"
 done
-echo "difftest: $pass/$total passed, $fail failed"
+echo "difftest: $pass/$total passed, $fail failed, $skip skipped by design"
 [ "$fail" -eq 0 ]

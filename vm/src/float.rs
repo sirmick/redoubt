@@ -1,20 +1,40 @@
 //! Float to text, matching `float_to_list(F, [short])` (and hence `~w` / `~p`).
 //!
-//! Rust's `{:e}` formatting already produces the shortest digit string that reads back as the
-//! same double, which is what OTP gets from Ryu. What remains is OTP's choice between fixed and
-//! scientific layout, ported from `erts/emulator/ryu/to_chars.h`.
+//! OTP finds the shortest digit string that reads back as the same double with Ryu; so do we,
+//! through the `ryu` crate, so that ties break the same way. What remains is OTP's choice
+//! between fixed and scientific layout, ported from `erts/emulator/ryu/to_chars.h`.
 
 use alloc::format;
 use alloc::string::String;
 
+/// The shortest round-tripping decimal for a finite `x >= 0`: `(digits, exponent)` with
+/// `x = digits * 10^exponent` and no trailing zeros in `digits` ("0" for zero).
+fn shortest(x: f64) -> (String, i32) {
+    let mut buf = ryu::Buffer::new();
+    let s = buf.format_finite(x);
+    let (mantissa, exp) = match s.split_once('e') {
+        Some((m, e)) => (m, e.parse::<i32>().expect("ryu writes an integer exponent")),
+        None => (s, 0),
+    };
+    let (whole, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let mut digits: String = whole.chars().chain(frac.chars()).collect();
+    let mut exp = exp - frac.len() as i32;
+    let lead = digits.len() - digits.trim_start_matches('0').len();
+    digits.drain(..lead);
+    while digits.len() > 1 && digits.ends_with('0') {
+        digits.pop();
+        exp += 1;
+    }
+    if digits.is_empty() || digits == "0" {
+        return (String::from("0"), 0);
+    }
+    (digits, exp)
+}
+
 pub fn format_short(x: f64) -> String {
-    let sci = format!("{:e}", x.abs());
-    let (mantissa, exp) = sci.split_once('e').expect("{:e} always has an exponent");
-    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
-    let sci_exp: i32 = exp.parse().expect("{:e} exponent is an integer");
+    let (digits, ryu_exp) = shortest(x.abs());
     let olength = digits.len() as i32;
-    // Ryu's representation: value = digits * 10^ryu_exp.
-    let ryu_exp = sci_exp - (olength - 1);
+    let sci_exp = ryu_exp + olength - 1;
     let output: u64 = digits.parse().expect("at most 17 digits");
 
     let (lower, upper) = if olength == 1 {
@@ -90,6 +110,11 @@ mod tests {
             (5.0e-324, "5.0e-324"),
             (9007199254740992.0, "9.007199254740992e15"),
             (9007199254740994.0, "9.007199254740994e15"),
+            // A tie between two shortest candidates: Ryu, like OTP, rounds to even.
+            (2.9802322387695312e-8, "2.9802322387695312e-8"),
+            (1.0e23, "1.0e23"),
+            (9.0e-265, "9.0e-265"),
+            (0.30000000000000004, "0.30000000000000004"),
         ] {
             assert_eq!(format_short(x), s, "formatting {x:e}");
         }
