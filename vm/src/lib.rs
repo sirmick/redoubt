@@ -22,6 +22,7 @@ pub mod atom;
 pub mod bif;
 pub mod bits;
 pub mod etf;
+pub mod ets;
 pub mod float;
 pub mod interp;
 pub mod loader;

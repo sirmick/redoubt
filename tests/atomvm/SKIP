@@ -32,3 +32,4 @@ test_gc                       heap sizes
 test_min_heap_size            heap sizes
 test_refc_binaries            heap sizes
 test_throw_call_ext_last      heap sizes
+test_ets                      ports (used as table keys); ETS itself is covered by tests/erlang/ets_test.erl

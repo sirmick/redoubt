@@ -15,6 +15,7 @@ use crate::vm::System;
 mod arith;
 mod binary;
 mod erlang;
+mod ets;
 mod info;
 mod lists;
 mod maps;
@@ -274,6 +275,50 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("erlang", "make_fun", 3, proc::make_fun),
     ("erlang", "fun_info", 2, proc::fun_info),
     ("erts_internal", "cmp_term", 2, proc::cmp_term),
+    // ets (the native half of the OTP module).
+    ("ets", "new", 2, ets::new),
+    ("ets", "insert", 2, ets::insert),
+    ("ets", "insert_new", 2, ets::insert_new),
+    ("ets", "lookup", 2, ets::lookup),
+    ("ets", "lookup_element", 3, ets::lookup_element),
+    ("ets", "lookup_element", 4, ets::lookup_element),
+    ("ets", "member", 2, ets::member),
+    ("ets", "delete", 1, ets::delete),
+    ("ets", "delete", 2, ets::delete),
+    ("ets", "delete_object", 2, ets::delete_object),
+    ("ets", "take", 2, ets::take),
+    ("ets", "internal_delete_all", 2, ets::internal_delete_all),
+    ("ets", "update_counter", 3, ets::update_counter),
+    ("ets", "update_counter", 4, ets::update_counter),
+    ("ets", "update_element", 3, ets::update_element),
+    ("ets", "first", 1, ets::first),
+    ("ets", "last", 1, ets::last),
+    ("ets", "next", 2, ets::next),
+    ("ets", "prev", 2, ets::prev),
+    ("ets", "first_lookup", 1, ets::first_lookup),
+    ("ets", "last_lookup", 1, ets::last_lookup),
+    ("ets", "next_lookup", 2, ets::next_lookup),
+    ("ets", "prev_lookup", 2, ets::prev_lookup),
+    ("ets", "match", 2, ets::match_),
+    ("ets", "match_object", 2, ets::match_object),
+    ("ets", "select", 1, ets::select1),
+    ("ets", "select", 2, ets::select),
+    ("ets", "select", 3, ets::select3),
+    ("ets", "select_reverse", 2, ets::select_reverse),
+    ("ets", "select_count", 2, ets::select_count),
+    ("ets", "select_replace", 2, ets::select_replace),
+    ("ets", "internal_select_delete", 2, ets::internal_select_delete),
+    ("ets", "match_spec_compile", 1, ets::match_spec_compile),
+    ("ets", "is_compiled_ms", 1, ets::is_compiled_ms),
+    ("ets", "match_spec_run_r", 3, ets::match_spec_run_r),
+    ("ets", "info", 1, ets::info),
+    ("ets", "info", 2, ets::info),
+    ("ets", "whereis", 1, ets::whereis),
+    ("ets", "rename", 2, ets::rename),
+    ("ets", "give_away", 3, ets::give_away),
+    ("ets", "setopts", 2, ets::setopts),
+    ("ets", "safe_fixtable", 2, ets::safe_fixtable),
+    ("ets", "all", 0, ets::all),
     // Introspection.
     ("erlang", "processes", 0, info::processes),
     ("erlang", "process_info", 1, info::process_info1),
