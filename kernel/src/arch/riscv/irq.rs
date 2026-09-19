@@ -422,10 +422,7 @@ pub extern "C" fn trap_handler(
         }
 
         _ => {
-            #[cfg(not(any(feature = "precursor", feature = "renode")))]
             println!("!!! Unrecognized exception: {:x?}", ex);
-            #[cfg(any(feature = "precursor", feature = "renode"))]
-            panic!("!!! Unrecognized exception: {:x?}", ex);
         }
     }
 
@@ -465,14 +462,6 @@ pub extern "C" fn trap_handler(
     // For now, let's halt the whole system instead so that it becomes
     // immediately obvious that we screwed up. On hardware this will trigger
     // a watchdog reset.
-    #[cfg(not(any(feature = "precursor", feature = "renode")))]
-    println!(
-        "{}: CPU Exception on PID {}: {}",
-        if is_kernel_failure { "!!! KERNEL FAILURE !!!" } else { "PROGRAM HALT" },
-        pid,
-        ex
-    );
-    #[cfg(any(feature = "precursor", feature = "renode"))]
     println!(
         "{}: CPU Exception on PID {}: {}",
         if is_kernel_failure { "!!! KERNEL FAILURE !!!" } else { "PROGRAM HALT" },
