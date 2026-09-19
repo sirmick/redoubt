@@ -48,8 +48,10 @@ static BLOCK: BlockCell = BlockCell(UnsafeCell::new(HartBlock { satp: 0, sp: 0, 
 /// the kernel maps read-only, and the first spill would fault. Only its address is taken here;
 /// the secondary hart is its sole user.
 const STACK_WORDS: usize = 1024;
-/// 16-byte aligned, as the RISC-V psABI requires of `sp`.
+/// 16-byte aligned, as the RISC-V psABI requires of `sp`. Only its address and size are used
+/// here; the secondary hart reaches the words themselves through `sp`.
 #[repr(align(16))]
+#[allow(dead_code)]
 struct Stack([usize; STACK_WORDS]);
 static mut SECONDARY_STACK: Stack = Stack([0; STACK_WORDS]);
 
