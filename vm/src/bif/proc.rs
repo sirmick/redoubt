@@ -1,5 +1,6 @@
 //! Exceptions, processes, messages, links, monitors, names, the process dictionary and time.
 
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use super::Ctx;
@@ -812,6 +813,139 @@ pub fn dflag_unicode_io(c: &mut Ctx, _a: &[Term]) -> R {
 /// `io:printable_range()`: which characters `~p` prints as text. BEAM's default is `latin1`.
 pub fn printable_range(c: &mut Ctx, _a: &[Term]) -> R {
     Ok(Term::Atom(c.sys.atoms.latin1.clone()))
+}
+
+// ---- the VM as a whole ----
+
+/// `halt()`, `halt(Status)`, `halt(Status, Options)`: stop the VM. A string status (a crash
+/// slogan) or `abort` stops it with status 1.
+pub fn halt(c: &mut Ctx, a: &[Term]) -> R {
+    let status = match a.first() {
+        None => 0,
+        Some(Term::Int(n)) if *n >= 0 => *n,
+        Some(Term::Atom(x)) if x.as_str() == "abort" => 1,
+        Some(t) if t.to_vec().is_some() => 1,
+        _ => return Err(c.badarg()),
+    };
+    if let Some(opts) = a.get(1) {
+        opts.to_vec().ok_or_else(|| c.badarg())?;
+    }
+    c.sys.halted = Some(status);
+    // Nothing more of this process runs.
+    c.p.pending_exit = Some(c.atom("kill"));
+    Ok(c.ok())
+}
+
+/// `erlang:statistics(Item)` for the items that mean something here. Run time is wall time
+/// since the VM started: there is no separate CPU clock.
+pub fn statistics(c: &mut Ctx, a: &[Term]) -> R {
+    let Term::Atom(item) = &a[0] else { return Err(c.badarg()) };
+    let pair = |x: u64, y: u64| Term::tuple(alloc::vec![Term::Int(x as i64), Term::Int(y as i64)]);
+    let now = c.sys.platform.monotonic_us() - c.sys.stats.start_us;
+    let queue = c.sys.run_queue.len() as i64;
+    Ok(match item.as_str() {
+        "runtime" | "wall_clock" => {
+            let last = if item.as_str() == "runtime" { &mut c.sys.stats.last_runtime_us } else { &mut c.sys.stats.last_wall_us };
+            let since = now - core::mem::replace(last, now);
+            pair(now / 1000, since / 1000)
+        }
+        "reductions" | "exact_reductions" => {
+            // The running process's current slice is counted too.
+            let total = c.sys.stats.reductions + (crate::vm::TIME_SLICE - c.p.budget.min(crate::vm::TIME_SLICE)) as u64;
+            let since = total - core::mem::replace(&mut c.sys.stats.last_reductions, total);
+            pair(total, since)
+        }
+        "context_switches" => pair(c.sys.stats.context_switches, 0),
+        "garbage_collection" => Term::tuple(alloc::vec![Term::Int(0), Term::Int(0), Term::Int(0)]),
+        "io" => {
+            let (i, o) = (c.atom("input"), c.atom("output"));
+            Term::tuple(alloc::vec![
+                Term::tuple(alloc::vec![i, Term::Int(0)]),
+                Term::tuple(alloc::vec![o, Term::Int(0)]),
+            ])
+        }
+        "run_queue" | "total_run_queue_lengths" | "total_run_queue_lengths_all" => Term::Int(queue),
+        "run_queue_lengths" | "run_queue_lengths_all" => Term::list(alloc::vec![Term::Int(queue)]),
+        "total_active_tasks" | "total_active_tasks_all" => Term::Int(queue + 1),
+        "active_tasks" | "active_tasks_all" => Term::list(alloc::vec![Term::Int(queue + 1)]),
+        "scheduler_wall_time" | "scheduler_wall_time_all" | "microstate_accounting" => {
+            Term::Atom(c.sys.atoms.undefined.clone())
+        }
+        _ => return Err(c.badarg()),
+    })
+}
+
+pub fn registered(c: &mut Ctx, _a: &[Term]) -> R {
+    let names: Vec<String> = c.sys.registered.keys().cloned().collect();
+    Ok(Term::list(names.iter().map(|n| c.atom(n)).collect::<Vec<_>>()))
+}
+
+/// `get_keys()`: the process dictionary's keys; `get_keys(Value)`: those whose value is
+/// exactly `Value`.
+pub fn get_keys(c: &mut Ctx, a: &[Term]) -> R {
+    let keys = c.p.dictionary.iter().filter(|(_, v)| a.first().is_none_or(|w| v.eq_exact(w))).map(|(k, _)| k.0.clone());
+    Ok(Term::list(keys.collect::<Vec<_>>()))
+}
+
+/// `now()`: `{MegaSecs, Secs, MicroSecs}` of the system clock, strictly increasing.
+pub fn now(c: &mut Ctx, _a: &[Term]) -> R {
+    let us = wall_us(c)?.max(c.sys.stats.last_now_us + 1);
+    c.sys.stats.last_now_us = us;
+    Ok(Term::tuple(alloc::vec![
+        Term::Int((us / 1_000_000_000_000) as i64),
+        Term::Int((us / 1_000_000 % 1_000_000) as i64),
+        Term::Int((us % 1_000_000) as i64),
+    ]))
+}
+
+/// `time_offset()` and `time_offset(Unit)`: system time minus monotonic time.
+pub fn time_offset(c: &mut Ctx, a: &[Term]) -> R {
+    let per = match a.first() {
+        Some(u) => unit_per_second(c, u)?,
+        None => 1_000_000_000,
+    };
+    let offset = wall_us(c)? as i128 - c.sys.now_us() as i128;
+    Ok(Term::from_i128(offset * per as i128 / 1_000_000))
+}
+
+/// `bump_reductions(N)`: use up `N` reductions of this time slice.
+pub fn bump_reductions(c: &mut Ctx, a: &[Term]) -> R {
+    let n = a[0].as_usize().ok_or_else(|| c.badarg())?;
+    c.p.budget = c.p.budget.saturating_sub(n).max(1);
+    Ok(c.bool(true))
+}
+
+/// `link(Pid, Options)`: the options (`priority`, OTP 28) do not change anything here.
+pub fn link2(c: &mut Ctx, a: &[Term]) -> R {
+    a[1].to_vec().ok_or_else(|| c.badarg())?;
+    link(c, &a[..1])
+}
+
+pub fn pre_loaded(_c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(Term::Nil)
+}
+
+/// `persistent_term:put_new(Key, Value)`: store a new key. A key already there is `ok` if it
+/// holds the same value, `badarg` otherwise.
+pub fn pt_put_new(c: &mut Ctx, a: &[Term]) -> R {
+    match c.sys.persistent.get(&MapKey(a[0].clone())) {
+        Some(v) if v.eq_exact(&a[1]) => Ok(c.ok()),
+        Some(_) => Err(c.badarg()),
+        None => pt_put(c, a),
+    }
+}
+
+/// `persistent_term:info()`: `#{count, memory}`.
+pub fn pt_info(c: &mut Ctx, _a: &[Term]) -> R {
+    let count = c.sys.persistent.len() as i64;
+    let mut words = 0u64;
+    for (k, v) in &c.sys.persistent {
+        words += crate::ets::weigh(&k.0) + crate::ets::weigh(v);
+    }
+    let mut map = crate::term::Map::new();
+    map.insert(MapKey(c.atom("count")), Term::Int(count));
+    map.insert(MapKey(c.atom("memory")), Term::Int((words * 8) as i64));
+    Ok(Term::map(map))
 }
 
 pub fn false_1(c: &mut Ctx, _a: &[Term]) -> R {

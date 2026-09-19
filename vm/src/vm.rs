@@ -104,6 +104,26 @@ pub struct System {
     pub(crate) cwd: String,
     /// Open files: platform handle, and the process that opened it.
     pub(crate) files: BTreeMap<u64, Pid>,
+    /// Set by `erlang:halt`: the VM stops with this status.
+    pub(crate) halted: Option<i64>,
+    pub(crate) stats: Stats,
+}
+
+/// Counters behind `erlang:statistics/1`.
+#[derive(Default)]
+pub(crate) struct Stats {
+    /// Monotonic time when the VM started.
+    pub start_us: u64,
+    /// Reductions of every process so far, living or not.
+    pub reductions: u64,
+    /// Time slices run.
+    pub context_switches: u64,
+    /// What `statistics(runtime | wall_clock | reductions)` last returned, for "since last call".
+    pub last_runtime_us: u64,
+    pub last_wall_us: u64,
+    pub last_reductions: u64,
+    /// The last `erlang:now/0`, which must strictly increase.
+    pub last_now_us: u64,
 }
 
 /// Erlang modules every VM has, built from `vm/lib/*.erl` by `tools/build-lib`: the console
@@ -279,6 +299,8 @@ pub(crate) struct ExitSignal {
 pub enum RunError {
     /// The watched process is still alive but nothing can run and no timer is pending.
     Deadlock,
+    /// A process called `erlang:halt/0,1,2` with this status. Nothing runs after it.
+    Halted(i64),
 }
 
 pub struct Vm {
@@ -324,6 +346,8 @@ impl Vm {
                 default_group_leader: None,
                 cwd: "/".into(),
                 files: BTreeMap::new(),
+                halted: None,
+                stats: Stats::default(),
             },
         }
         .boot()
@@ -331,6 +355,7 @@ impl Vm {
 
     /// Start the console I/O servers, `user` and `standard_error`.
     fn boot(mut self) -> Vm {
+        self.sys.stats.start_us = self.sys.platform.monotonic_us();
         for module in EMBEDDED {
             self.sys.load(module).expect("embedded modules load");
         }
@@ -371,6 +396,9 @@ impl Vm {
     pub fn run(&mut self, pid: Pid) -> Result<Result<Term, Exception>, RunError> {
         self.sys.watched.insert(pid);
         loop {
+            if let Some(status) = self.sys.halted {
+                return Err(RunError::Halted(status));
+            }
             if let Some(r) = self.sys.results.remove(&pid) {
                 self.sys.watched.remove(&pid);
                 return Ok(r);
@@ -386,6 +414,9 @@ impl Vm {
     pub fn run_bounded(&mut self, pid: Pid, max_steps: usize) -> Option<Result<Result<Term, Exception>, RunError>> {
         self.sys.watched.insert(pid);
         for _ in 0..max_steps {
+            if let Some(status) = self.sys.halted {
+                return Some(Err(RunError::Halted(status)));
+            }
             if let Some(r) = self.sys.results.remove(&pid) {
                 self.sys.watched.remove(&pid);
                 return Some(Ok(r));
@@ -584,7 +615,10 @@ impl System {
             return true;
         }
         p.budget = TIME_SLICE;
+        let before = p.reductions;
         let mut stop = interp::run(self, &mut p);
+        self.stats.reductions += p.reductions - before;
+        self.stats.context_switches += 1;
         if matches!(stop, Stop::Yield | Stop::Wait) && self.over_memory(&mut p) {
             stop = Stop::Exit(Err(Exception::exit(Term::Atom(self.atoms.killed.clone()))));
         }

@@ -110,6 +110,22 @@ pub fn make_tuple(c: &mut Ctx, a: &[Term]) -> R {
     }
 }
 
+/// `make_tuple(Arity, Default, [{Position, Value}])`: later entries win.
+pub fn make_tuple3(c: &mut Ctx, a: &[Term]) -> R {
+    let Term::Tuple(t) = make_tuple(c, &a[..2])? else { unreachable!("make_tuple returns a tuple") };
+    let mut elems = t.to_vec();
+    for init in a[2].to_vec().ok_or_else(|| c.badarg())? {
+        match init.as_tuple() {
+            Some([pos, v]) => match pos.as_usize() {
+                Some(p) if p >= 1 && p <= elems.len() => elems[p - 1] = v.clone(),
+                _ => return Err(c.badarg()),
+            },
+            _ => return Err(c.badarg()),
+        }
+    }
+    Ok(Term::tuple(elems))
+}
+
 pub fn append_element(c: &mut Ctx, a: &[Term]) -> R {
     let mut v = tuple(c, &a[0])?.to_vec();
     v.push(a[1].clone());
@@ -190,6 +206,14 @@ pub fn byte_size(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn bit_size(c: &mut Ctx, a: &[Term]) -> R {
     Ok(Term::Int(bits(c, &a[0])?.len as i64))
+}
+
+/// `binary_part(Bin, {Start, Length})`.
+pub fn binary_part2(c: &mut Ctx, a: &[Term]) -> R {
+    match a[1].as_tuple() {
+        Some([s, l]) => binary_part(c, &[a[0].clone(), s.clone(), l.clone()]),
+        _ => Err(c.badarg()),
+    }
 }
 
 pub fn binary_part(c: &mut Ctx, a: &[Term]) -> R {
@@ -685,6 +709,64 @@ pub fn term_to_binary(c: &mut Ctx, a: &[Term]) -> R {
     }
     let bytes = crate::etf::encode(&a[0]).map_err(|_| c.badarg())?;
     Ok(Term::binary(&bytes))
+}
+
+/// `term_to_iovec(Term)`: the external format as a list of binaries (one, here).
+pub fn term_to_iovec(c: &mut Ctx, a: &[Term]) -> R {
+    Ok(Term::list(alloc::vec![term_to_binary(c, a)?]))
+}
+
+/// `external_size(Term)`: how many bytes `term_to_binary` would produce.
+pub fn external_size(c: &mut Ctx, a: &[Term]) -> R {
+    match term_to_binary(c, a)? {
+        Term::Bits(b) => Ok(Term::Int((b.len / 8) as i64)),
+        _ => unreachable!("term_to_binary returns a binary"),
+    }
+}
+
+/// `string:list_to_float(String)`: the float at the start of `String` and the rest, as
+/// `{Float, Rest}`, or `{error, no_float}`. The float needs digits on both sides of the point.
+pub fn string_list_to_float(c: &mut Ctx, a: &[Term]) -> R {
+    let mut chars = Vec::new();
+    let mut rest = &a[0];
+    while let Term::Cons(cell) = rest {
+        match cell.head {
+            Term::Int(ch) if (0..128).contains(&ch) => chars.push(ch as u8),
+            _ => break,
+        }
+        rest = &cell.tail;
+    }
+    let digits = |s: &[u8], i: usize| i + s[i..].iter().take_while(|b| b.is_ascii_digit()).count();
+    let mut i = if matches!(chars.first(), Some(b'+' | b'-')) { 1 } else { 0 };
+    let int_end = digits(&chars, i);
+    let mut end = None;
+    if int_end > i && chars.get(int_end) == Some(&b'.') {
+        let frac_end = digits(&chars, int_end + 1);
+        if frac_end > int_end + 1 {
+            end = Some(frac_end);
+            i = frac_end;
+            if matches!(chars.get(i), Some(b'e' | b'E')) {
+                let j = if matches!(chars.get(i + 1), Some(b'+' | b'-')) { i + 2 } else { i + 1 };
+                let exp_end = digits(&chars, j);
+                if exp_end > j {
+                    end = Some(exp_end);
+                }
+            }
+        }
+    }
+    let no_float = |c: &mut Ctx| Ok(Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.error.clone()), c.atom("no_float")]));
+    let Some(end) = end else { return no_float(c) };
+    let text = core::str::from_utf8(&chars[..end]).expect("ASCII");
+    let Ok(f) = text.parse::<f64>() else { return no_float(c) };
+    if !f.is_finite() {
+        return no_float(c);
+    }
+    let mut tail = &a[0];
+    for _ in 0..end {
+        let Term::Cons(cell) = tail else { unreachable!("counted") };
+        tail = &cell.tail;
+    }
+    Ok(Term::tuple(alloc::vec![Term::Float(f), tail.clone()]))
 }
 
 /// `binary_to_term(Bin)` and `binary_to_term(Bin, Options)` with `safe` (create no atoms) and
