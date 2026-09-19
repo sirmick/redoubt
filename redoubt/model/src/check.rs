@@ -18,7 +18,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::gen::{Gen, Rng};
-use crate::invariants;
+use crate::invariants::Checker;
 use crate::kernel::{Boot, Kernel};
 use crate::mutation::Mutation;
 use crate::sched::Scheduler;
@@ -42,10 +42,11 @@ pub const SEQUENCE_LEN: usize = 150;
 /// at their point (possible after shrinking) are skipped.
 pub fn replay(boot: &Boot, ops: &[Op], mutation: Option<Mutation>) -> Result<(), String> {
     let mut k = Kernel::boot(boot, mutation)?;
-    invariants::check(&k)?;
+    let mut checker = Checker::new(&k);
+    checker.check(&k)?;
     for op in ops {
         if k.step(op).is_some() {
-            invariants::check(&k)?;
+            checker.check(&k)?;
         }
     }
     Ok(())
@@ -53,7 +54,8 @@ pub fn replay(boot: &Boot, ops: &[Op], mutation: Option<Mutation>) -> Result<(),
 
 /// A random sequence from boot, with every invariant checked after each step.
 pub fn kernel_sequence(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
-    let mut k = Kernel::boot(&Boot::default(), mutation).expect("the default boot is valid");
+    let mut k = Kernel::boot(&Boot::testing(), mutation).expect("the testing boot is valid");
+    let mut checker = Checker::new(&k);
     let mut gen = Gen::new(seed);
     let mut ops = Vec::new();
     let fail = |message: String, ops: &Vec<Op>| Failure {
@@ -62,7 +64,7 @@ pub fn kernel_sequence(seed: u64, mutation: Option<Mutation>) -> Result<(), Fail
         message,
         ops: ops.clone(),
     };
-    invariants::check(&k).map_err(|m| fail(m, &ops))?;
+    checker.check(&k).map_err(|m| fail(m, &ops))?;
     for _ in 0..SEQUENCE_LEN {
         // Stop when nothing can happen any more (halted, or every thread blocked for ever).
         if k.halted.is_some() || (k.runnable().is_empty() && k.next_event().is_none()) {
@@ -73,7 +75,7 @@ pub fn kernel_sequence(seed: u64, mutation: Option<Mutation>) -> Result<(), Fail
         if k.step(&op).is_none() {
             return Err(fail(format!("generator produced an illegal op: {op:?}"), &ops));
         }
-        invariants::check(&k).map_err(|m| fail(m, &ops))?;
+        checker.check(&k).map_err(|m| fail(m, &ops))?;
     }
     Ok(())
 }
@@ -168,7 +170,8 @@ pub fn shrink(boot: &Boot, ops: &[Op], mutation: Option<Mutation>) -> Vec<Op> {
 pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
     use crate::kernel::Object;
     use crate::syscall::Syscall;
-    let mut k = Kernel::boot(&Boot::default(), mutation).expect("the default boot is valid");
+    let mut k = Kernel::boot(&Boot::testing(), mutation).expect("the testing boot is valid");
+    let mut checker = Checker::new(&k);
     let mut gen = Gen::new(seed);
     let mut ops = Vec::new();
     let fail = |message: String, ops: &Vec<Op>| Failure {
@@ -177,10 +180,10 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
         message,
         ops: ops.clone(),
     };
-    let step = |k: &mut Kernel, op: Op, ops: &mut Vec<Op>| -> Result<crate::kernel::Step, Failure> {
+    let mut step = |k: &mut Kernel, op: Op, ops: &mut Vec<Op>| -> Result<crate::kernel::Step, Failure> {
         ops.push(op.clone());
         let s = k.step(&op).ok_or_else(|| fail(format!("illegal op {op:?}"), ops))?;
-        invariants::check(k).map_err(|m| fail(m, ops))?;
+        checker.check(k).map_err(|m| fail(m, ops))?;
         Ok(s)
     };
     for _ in 0..gen.rng.range(20, 60) {
@@ -207,6 +210,29 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
     let snapshot = |k: &Kernel| -> Vec<(u64, u64, u64, u64)> {
         k.budgets.values().map(|b| (b.id, b.pages_used, b.processes_used, b.weight_used)).collect()
     };
+    // (A receive right, so that the creator can receive the child's exit notice at the end; it
+    // receives what is already pending first, so that only the child's notice is left then.)
+    let exit = k.processes[&pid]
+        .handles
+        .iter()
+        .find(|(_, h)| matches!(h.object, Object::Endpoint(_)) && h.badge == 0)
+        .map(|(i, _)| *i);
+    type StepFn<'a> = dyn FnMut(&mut Kernel, Op, &mut Vec<Op>) -> Result<crate::kernel::Step, Failure> + 'a;
+    let drain = |k: &mut Kernel, ops: &mut Vec<Op>, step: &mut StepFn| -> Result<bool, Failure> {
+        let Some(e) = exit else { return Ok(true) };
+        loop {
+            let recv = Syscall::Receive { h: Some(e), timeout: 0, max_transfer: 0 };
+            let s = step(k, Op::Sys { pid, tid, call: recv }, ops)?;
+            match s.outcome {
+                crate::syscall::Outcome::Done(Ok(crate::syscall::Ret::ExitNotice { .. })) => {}
+                crate::syscall::Outcome::Done(Err(crate::spec::Error::Timeout)) => return Ok(true),
+                _ => return Ok(false),
+            }
+        }
+    };
+    if !drain(&mut k, &mut ops, &mut step)? {
+        return Ok(());
+    }
     let before = snapshot(&k);
     let pb = &k.budgets[&parent];
     let free = pb.pages_limit - pb.pages_used;
@@ -229,11 +255,6 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
     };
     // Start one process in the child with only the child's handle, if there is an endpoint to
     // name as its exit endpoint.
-    let exit = k.processes[&pid]
-        .handles
-        .iter()
-        .find(|(_, h)| matches!(h.object, Object::Endpoint(_)))
-        .map(|(i, _)| *i);
     if let Some(e) = exit {
         let s = step(
             &mut k,
@@ -276,6 +297,12 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
         return Ok(());
     }
     step(&mut k, Op::Sys { pid, tid, call: Syscall::BudgetDestroy { h: bh } }, &mut ops)?;
+    // The child's processes' exit slots were charged to their creators (QUESTIONS 7) and stay
+    // until the notices are received: the creator receives them. A message arriving instead
+    // changes the creator's state, and the sequence proves nothing.
+    if !drain(&mut k, &mut ops, &mut step)? {
+        return Ok(());
+    }
     let after = snapshot(&k);
     if before != after {
         return Err(fail(

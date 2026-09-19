@@ -56,8 +56,8 @@ pub struct Owed {
 /// Something the kernel did in the current step that a check must judge.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Flow {
-    /// A message was delivered to thread `tid`.
-    Delivered { tid: u64, msg: Message },
+    /// A message was delivered to thread `tid`, which was receiving as `via` said.
+    Delivered { tid: u64, msg: Message, via: Option<Receiving> },
     /// An exit notice of a budget with labels `from` reached a receiver on an endpoint owned by a
     /// budget of class `to_class` with labels `to`.
     Exit { from: Vec<u64>, to_class: Class, to: Vec<u64> },
@@ -136,8 +136,8 @@ impl Ghost {
         let list = self.served.entry(tid).or_default();
         list.retain(|m| sent.get(m).is_some_and(|s| s.kind == MsgKind::Call));
         list.push(msg.msg_id);
-        self.receiving.remove(&tid);
-        self.flows.push(Flow::Delivered { tid, msg: msg.clone() });
+        let via = self.receiving.remove(&tid);
+        self.flows.push(Flow::Delivered { tid, msg: msg.clone(), via });
     }
 
     /// `tid` replied to `msg`.

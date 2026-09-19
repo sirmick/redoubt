@@ -32,6 +32,8 @@ pub enum NameKind {
     Tid,
     Msg,
     Phys,
+    /// `tm:N`: a time the kernel read (`time_now`); compared only for monotonicity.
+    Time,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,11 +49,11 @@ pub enum Token<'a> {
     None,
     /// `forever`: `FOREVER`.
     Forever,
-    /// `[x,y,...]`.
+    /// `[x,y,...]`: a list of simple tokens.
     List(Vec<Token<'a>>),
-    /// `BASE@PAGES`: a lend or transfer range.
+    /// `BASE@PAGES`: a lend or transfer range; `BASE` is a number or a name.
     Range(alloc::boxed::Box<Token<'a>>, u64),
-    /// `key=value`.
+    /// `key=value`: the value is a simple token or a list.
     Field(&'a str, alloc::boxed::Box<Token<'a>>),
     /// Anything else: a call name, a keyword, an error name.
     Word(&'a str),
@@ -61,39 +63,23 @@ fn int(s: &str) -> Option<u64> {
     if let Some(h) = s.strip_prefix("0x") { u64::from_str_radix(h, 16).ok() } else { s.parse().ok() }
 }
 
-/// One token.
-pub fn token(s: &str) -> Result<Token<'_>, String> {
+/// A simple token: `-`, `forever`, a number, a name or a word. Never a list, field or range.
+fn simple(s: &str) -> Result<Token<'_>, String> {
     if s == "-" {
         return Ok(Token::None);
     }
     if s == "forever" {
         return Ok(Token::Forever);
     }
-    if let Some(inner) = s.strip_prefix('[').and_then(|x| x.strip_suffix(']')) {
-        if inner.is_empty() {
-            return Ok(Token::List(Vec::new()));
-        }
-        return inner.split(',').map(token).collect::<Result<Vec<_>, _>>().map(Token::List);
-    }
-    if let Some((k, v)) = s.split_once('=') {
-        return Ok(Token::Field(k, alloc::boxed::Box::new(token(v)?)));
-    }
-    if let Some((base, pages)) = s.split_once('@') {
-        let pages = int(pages).ok_or_else(|| format!("bad page count in {s}"))?;
-        return Ok(Token::Range(alloc::boxed::Box::new(token(base)?), pages));
+    if s.contains(['[', ']', ',', '=', '@']) {
+        return Err(format!("`{s}`: lists, fields and ranges do not nest"));
     }
     if let Some(n) = int(s) {
         return Ok(Token::Int(n));
     }
-    let name = |kind, rest: &str| -> Result<Token<'_>, String> {
-        let (v, off) = match rest.split_once('+') {
-            Some((v, o)) => (v, int(o).ok_or_else(|| format!("bad offset in {s}"))?),
-            None => (rest, 0),
-        };
-        Ok(Token::Name { kind, value: int(v).ok_or_else(|| format!("bad name {s}"))?, offset: off })
-    };
     for (prefix, kind) in [
         ("pa:", NameKind::Phys),
+        ("tm:", NameKind::Time),
         ("h:", NameKind::Handle),
         ("a:", NameKind::Addr),
         ("p:", NameKind::Pid),
@@ -101,10 +87,44 @@ pub fn token(s: &str) -> Result<Token<'_>, String> {
         ("m:", NameKind::Msg),
     ] {
         if let Some(rest) = s.strip_prefix(prefix) {
-            return name(kind, rest);
+            let (v, off) = match rest.split_once('+') {
+                Some((v, o)) => (v, int(o).ok_or_else(|| format!("bad offset in {s}"))?),
+                None => (rest, 0),
+            };
+            let value = int(v).ok_or_else(|| format!("bad name {s}"))?;
+            value.checked_add(off).ok_or_else(|| format!("{s} overflows"))?;
+            return Ok(Token::Name { kind, value, offset: off });
         }
     }
     Ok(Token::Word(s))
+}
+
+fn list_token(s: &str) -> Option<Result<Token<'_>, String>> {
+    let inner = s.strip_prefix('[')?.strip_suffix(']')?;
+    if inner.is_empty() {
+        return Some(Ok(Token::List(Vec::new())));
+    }
+    Some(inner.split(',').map(simple).collect::<Result<Vec<_>, _>>().map(Token::List))
+}
+
+/// One token. Nesting is fixed and shallow (a field's value may be a list; a list holds simple
+/// tokens), so a hostile line cannot make the parser recurse.
+pub fn token(s: &str) -> Result<Token<'_>, String> {
+    if let Some(l) = list_token(s) {
+        return l;
+    }
+    if let Some((k, v)) = s.split_once('=') {
+        let v = match list_token(v) {
+            Some(l) => l?,
+            None => simple(v)?,
+        };
+        return Ok(Token::Field(k, alloc::boxed::Box::new(v)));
+    }
+    if let Some((base, pages)) = s.split_once('@') {
+        let pages = int(pages).ok_or_else(|| format!("bad page count in {s}"))?;
+        return Ok(Token::Range(alloc::boxed::Box::new(simple(base)?), pages));
+    }
+    simple(s)
 }
 
 /// A line's tokens, split at single spaces. `->` separates an event from its result.
@@ -124,8 +144,10 @@ struct Names {
 }
 
 impl Names {
+    /// A handle index is a name; 0 ("no handle") and values that cannot be indices are
+    /// literals (they fail at decoding, the same on every kernel).
     fn handle(v: u64) -> String {
-        if v < U32_MAX { format!("h:{v}") } else { format!("{v}") }
+        if v != NO_HANDLE && v <= U32_MAX { format!("h:{v}") } else { format!("{v}") }
     }
 
     fn addr(&self, pid: u64, a: u64) -> String {
@@ -267,7 +289,8 @@ impl Names {
                     }
                 };
                 format!(
-                    "ok message m:{} badge={} account={} labels={} words={} handles={} buffer={buffer}",
+                    "ok message {} m:{} badge={} account={} labels={} words={} handles={} buffer={buffer}",
+                    if m.kind == MsgKind::Call { "call" } else { "send" },
                     m.msg_id,
                     m.badge,
                     m.account,
@@ -282,11 +305,16 @@ impl Names {
             }
             Ret::Usage(c) => {
                 format!(
-                    "ok usage [{},{},{},{}]",
-                    c.pages_limit, c.pages_used, c.processes_limit, c.processes_used
+                    "ok usage [{},{},{},{},{},{}]",
+                    c.pages_limit,
+                    c.pages_usage,
+                    c.processes_limit,
+                    c.processes_usage,
+                    c.weight_limit,
+                    c.weight_usage
                 )
             }
-            Ret::Time(t) => format!("ok time {t}"),
+            Ret::Time(t) => format!("ok time tm:{t}"),
             Ret::Random { len } => format!("ok random {len}"),
             Ret::Word(w) => format!("ok word {w}"),
         }
@@ -319,8 +347,16 @@ fn boot_lines(boot: &Boot) -> Vec<String> {
             limits(boot.users)
         ),
         format!(
-            "costs budget={} process={} thread={} endpoint={} handles_per_page={}",
-            c.budget, c.process, c.thread, c.endpoint, c.handles_per_page
+            "costs budget={} process={} thread={} endpoint={} handles_per_page={} page_table={} open_call={} \
+             exit_slot={}",
+            c.budget,
+            c.process,
+            c.thread,
+            c.endpoint,
+            c.handles_per_page,
+            c.page_table,
+            c.open_call,
+            c.exit_slot
         ),
     ];
     for d in &boot.devices {
@@ -557,6 +593,9 @@ pub fn parse(text: &str) -> Result<(Boot, Vec<Op>), String> {
                     thread: field(&t, "thread")?,
                     endpoint: field(&t, "endpoint")?,
                     handles_per_page: field(&t, "handles_per_page")?,
+                    page_table: field(&t, "page_table")?,
+                    open_call: field(&t, "open_call")?,
+                    exit_slot: field(&t, "exit_slot")?,
                 }
             }
             Some(Token::Word("device")) => boot.devices.push(match t.get(1) {

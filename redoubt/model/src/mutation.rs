@@ -226,7 +226,11 @@ impl Mutation {
             R3UnmapAbandonedLend | R3ChargeStaysWithCaller => "R3",
             R4IgnoreMaxTransfer => "R4",
             R5NoMaskOnFire | R5NoUnmaskOnReceive => "R5",
-            R6ChargeAncestors | R6ScopeChargedToItself | R6EndpointsFree | R6PageTablesFree | R6OpenCallsFree
+            R6ChargeAncestors
+            | R6ScopeChargedToItself
+            | R6EndpointsFree
+            | R6PageTablesFree
+            | R6OpenCallsFree
             | R6ExitSlotFree => "R6",
             R7NoCarveCheck => "R7",
             R8AccountFromArgument => "R8",

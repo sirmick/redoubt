@@ -28,7 +28,7 @@ fn every_call_and_error_is_reached() {
     for seed in 0..5000u64 {
         // The call each blocked thread is in, so its later result counts for that call.
         let mut blocked: std::collections::BTreeMap<u64, &'static str> = Default::default();
-        let mut k = Kernel::boot(&Boot::default(), None).unwrap();
+        let mut k = Kernel::boot(&Boot::testing(), None).unwrap();
         let mut g = Gen::new(seed);
         for _ in 0..150 {
             if k.halted.is_some() {

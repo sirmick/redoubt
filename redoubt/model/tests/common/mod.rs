@@ -84,7 +84,7 @@ pub fn run(name: &'static str, f: Family, n: u64, mutation: Option<Mutation>) ->
 pub fn explain(f: &Failure, mutation: Option<Mutation>) -> String {
     let mut s = format!("{} seed {}: {}", f.family, f.seed, f.message);
     if !f.ops.is_empty() {
-        let boot = Boot::default();
+        let boot = Boot::testing();
         let small = catch_unwind(AssertUnwindSafe(|| check::shrink(&boot, &f.ops, mutation)))
             .unwrap_or(f.ops.clone());
         let why = check::replay(&boot, &small, mutation).err().unwrap_or_default();

@@ -13,7 +13,7 @@ use redoubt_model::syscall::{Buffer, MintSource, Op, Syscall};
 use redoubt_model::trace;
 
 fn random_ops(seed: u64) -> Vec<Op> {
-    let mut k = Kernel::boot(&Boot::default(), None).unwrap();
+    let mut k = Kernel::boot(&Boot::testing(), None).unwrap();
     let mut g = Gen::new(seed);
     let mut ops = Vec::new();
     for _ in 0..150 {
@@ -31,9 +31,9 @@ fn random_ops(seed: u64) -> Vec<Op> {
 fn traces_round_trip() {
     for seed in 0..3000 {
         let ops = random_ops(seed);
-        let text = trace::record(&Boot::default(), &ops, None).unwrap();
+        let text = trace::record(&Boot::testing(), &ops, None).unwrap();
         let (boot, parsed) = trace::parse(&text).unwrap_or_else(|e| panic!("seed {seed}: {e}\n{text}"));
-        assert_eq!(boot, Boot::default());
+        assert_eq!(boot, Boot::testing());
         assert_eq!(parsed, ops, "seed {seed}: parsing changed the ops\n{text}");
         trace::check(&text, None).unwrap_or_else(|e| panic!("seed {seed}: {e}"));
         for line in text.lines() {
@@ -57,12 +57,12 @@ fn a_rule_breaking_kernel_fails_replay() {
     let texts: Vec<String> = (0..2000)
         .map(|seed| {
             let mut ops = random_ops(seed);
-            let mut k = Kernel::boot(&Boot::default(), None).unwrap();
+            let mut k = Kernel::boot(&Boot::testing(), None).unwrap();
             for op in &ops {
                 k.step(op);
             }
             ops.extend(check::epilogue(&k));
-            trace::record(&Boot::default(), &ops, None).unwrap()
+            trace::record(&Boot::testing(), &ops, None).unwrap()
         })
         .collect();
     let mut missed = Vec::new();

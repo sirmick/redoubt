@@ -68,6 +68,8 @@ pub struct Gen {
     tried: Vec<u64>,
     flood: u32,
     flood_endpoint: Option<u64>,
+    /// During a flood, receivers take calls and never reply (open calls pile up, R4a).
+    hoard: bool,
     /// A thread bomb in progress: (process, steps left).
     bomb: Option<(u64, u32)>,
 }
@@ -78,7 +80,16 @@ impl Gen {
         let principals = rng.range(2, 3);
         // One sequence in five skips the setup and starts from bare `init`.
         let setup = if rng.pct(20) { u32::MAX } else { 0 };
-        Gen { rng, setup, principals, tried: Vec::new(), flood: 0, flood_endpoint: None, bomb: None }
+        Gen {
+            rng,
+            setup,
+            principals,
+            tried: Vec::new(),
+            flood: 0,
+            flood_endpoint: None,
+            hoard: false,
+            bomb: None,
+        }
     }
 
     /// The next op for this state. Always one the model accepts as a legal event (`step` returns
@@ -110,6 +121,13 @@ impl Gen {
         if self.flood == 0 && self.rng.pct(2) {
             self.flood = self.rng.range(20, 60) as u32;
             self.flood_endpoint = None;
+            self.hoard = self.rng.pct(30);
+        }
+        // Destroy something while messages are in flight to or from it (R3, R10).
+        if self.rng.pct(3) {
+            if let Some(op) = self.destroy_in_flight(k, &runnable) {
+                return op;
+            }
         }
         if self.flood > 0 {
             self.flood -= 1;
@@ -344,9 +362,37 @@ impl Gen {
             if self.rng.pct(40) {
                 hs.push(self.rng.pick(&endpoints)?);
             }
+            // Now and then a user process that holds the system budget (QUESTIONS 9 says it still
+            // cannot make system-class children).
+            if k.budgets[&b].class == Class::User && self.rng.pct(20) {
+                hs.push(budget_h(SYSTEM)?);
+            }
             return sys(Syscall::ProcessStart { process: ph, entry: 0x1000, sp: 0x2000, handles: hs });
         }
         None
+    }
+
+    /// A thread holding a handle to the budget that owns the endpoint of a message in flight, or
+    /// to the budget of its sender, destroys that budget (R10's "calls in flight fail"; R3's
+    /// lender dying mid-call).
+    fn destroy_in_flight(&mut self, k: &Kernel, runnable: &[(u64, u64)]) -> Option<Op> {
+        let msgs: Vec<u64> = k.msgs.keys().copied().collect();
+        let m = &k.msgs[&self.rng.pick(&msgs)?];
+        let target = if self.rng.pct(50) { k.endpoints.get(&m.endpoint)?.owner } else { m.sender_budget };
+        if target == ROOT {
+            return None;
+        }
+        let holders: Vec<(u64, u64, u64)> = runnable
+            .iter()
+            .filter_map(|(pid, tid)| {
+                let p = &k.processes[pid];
+                let h =
+                    p.handles.iter().find(|(_, h)| h.object == Object::Budget(target)).map(|(i, _)| *i)?;
+                Some((*pid, *tid, h))
+            })
+            .collect();
+        let (pid, tid, h) = self.rng.pick(&holders)?;
+        Some(Op::Sys { pid, tid, call: Syscall::BudgetDestroy { h } })
     }
 
     // -------------------------------------------------------------------------------------------
@@ -378,16 +424,24 @@ impl Gen {
             .find(|(_, h)| h.object == Object::Endpoint(target) && h.badge == 0)
             .map(|(i, _)| *i);
         if let Some(h) = h_recv {
-            if self.rng.pct(20) {
+            if self.rng.pct(if self.hoard { 45 } else { 20 }) {
                 return Some(Op::Sys {
                     pid,
                     tid,
-                    call: Syscall::Receive { h: Some(h), timeout: 0, max_transfer: 1 },
+                    call: Syscall::Receive {
+                        h: Some(h),
+                        timeout: if self.hoard { FOREVER } else { 0 },
+                        max_transfer: 1,
+                    },
                 });
             }
         }
-        let serving = k.threads[&tid].serving;
-        if let Some(m) = serving.filter(|m| k.msgs.get(m).is_some_and(|x| x.kind == MsgKind::Call)) {
+        let call = k.threads[&tid]
+            .serving
+            .iter()
+            .copied()
+            .find(|m| k.msgs.get(m).is_some_and(|x| x.kind == MsgKind::Call));
+        if let Some(m) = call.filter(|_| !self.hoard) {
             return Some(Op::Sys {
                 pid,
                 tid,
@@ -417,10 +471,11 @@ impl Gen {
         let p = &k.processes[&pid];
         let good: Vec<u64> = p.handles.iter().filter(|(_, h)| want(h)).map(|(i, _)| *i).collect();
         if good.is_empty() || self.rng.pct(8) {
-            return match self.rng.below(4) {
-                0 => 0,
+            return match self.rng.below(5) {
+                0 => NO_HANDLE,
                 1 => U32_MAX + self.rng.below(3),
                 2 => self.rng.range(1, 40),
+                3 => U32_MAX - self.rng.below(2),
                 _ => *p.handles.keys().next().unwrap_or(&1),
             };
         }
@@ -498,8 +553,8 @@ impl Gen {
 
     fn syscall(&mut self, k: &Kernel, pid: u64, tid: u64) -> Syscall {
         let t = &k.threads[&tid];
-        // A thread that serves a call usually answers it.
-        if let Some(m) = t.serving {
+        // A thread that serves a call usually answers it (and now and then "answers" a send).
+        if let Some(m) = self.rng.pick(&t.serving) {
             if self.rng.pct(if k.msgs.get(&m).is_some_and(|x| x.kind == MsgKind::Call) { 45 } else { 10 }) {
                 let handles = self.some_handles(k, pid, 2);
                 return Syscall::Reply { msg_id: m, words: [self.rng.below(9); WORDS], handles };
@@ -558,7 +613,7 @@ impl Gen {
             }
             31..=33 => Syscall::EndpointCreate,
             34..=38 => {
-                let serving = t.serving.filter(|_| self.rng.pct(50));
+                let serving = self.rng.pick(&t.serving).filter(|_| self.rng.pct(70));
                 let source = if let Some(m) = serving {
                     MintSource::Message(m)
                 } else if self.rng.pct(5) {
