@@ -38,8 +38,9 @@ steward:  principals, sessions and agents (beamlet VMs)
 - **Only `init` and the steward ever hold a handle to a system-class budget.** A server's startup
   block carries no `budget` handle, and a manifest that grants a server one is refused: a
   compromised `ipd` holding its budget could create system-class children with any labels and any
-  account. `init`, the steward and the drivers run in `first` budgets (RESOURCES.md); every other
-  server runs in the stride queue at its manifest weight.
+  account. Every budget shares one stride queue (RESOURCES.md): `init`, the steward and the drivers
+  run at the large weights the manifest gives them, every other server at its ordinary manifest
+  weight. Nothing runs ahead of the queue.
 - The physical console is labelled with no labels. From milestone 2 the first owner is enrolled on
   it at first boot (a trusted path) and uses it for approvals.
 
@@ -52,12 +53,19 @@ One strict JSON file (WIRE.md) in the signed bundle; `init`'s only input. Entrie
 | `devices` | each device object's name, its device-tree node path, and whether it may do DMA |
 | `labels` | each label's name, owner principal and 64-bit id |
 | `volumes` | each volume's name, `blkd` partition and label set |
-| `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight; `first` for drivers only), device names, volume, the endpoints it receives on, the endpoints it is handed, and arguments (never its own budget) |
+| `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), device names, volume, the endpoints it receives on, the endpoints it is handed, and arguments (never its own budget) |
 | `principals` | milestone 1 only: each principal's name, SSH public keys for login and approval, budget, account, owned labels, the label sets it works under (each gets a fixed sub-budget of the principal's budget: pages, processes, weight), home (volume and path), and network scope (IP prefixes and ports) |
 
 Each field has one JSON type (WIRE.md): 64-bit quantities (label ids, accounts, page and byte sizes,
 deadlines) are decimal strings; small counts (processes, weights, depths, restart limits) and ports
 are numbers. A value of the wrong JSON type is an error.
+
+**Weights.** One stride queue serves everyone (RESOURCES.md), so the manifest's weights are the
+whole scheduling policy. `init`, the steward and the drivers (`consoled`, `blkd`, `netd`) get
+weights an order of magnitude above a session's — 1000 against a user's 100 — so that they are
+served promptly without running ahead of the queue; the servers that work for users (`bootfsd`,
+`fsd:*`, `ipd:*`, `keyd`, `sshd`) get ordinary weights and bound the work of one request. The
+weights carve the system budget, like every other limit (R7).
 
 **Names.** Every name in the manifest (devices, labels, volumes, servers, endpoints, principals) is
 1-64 bytes of `[a-z0-9_:+-]`, starting with a letter (`fsd:data`, `alice+secrets`), and the
@@ -92,8 +100,9 @@ Example fragment:
   launching (PACKAGES.md), and, from milestone 2, packages, trust lists and profiles. It appends the
   audit log to a file only it can write (a separate audit server is deferred). It parses the most
   untrusted input in the system (every agent's requests), so it holds no keys and never parses an ELF.
-  It filters requests by labels (CONTAINMENT.md). It runs `first`, so logout and ending a lease stay
-  responsive, and therefore bounds the work any one request can cause and relies on its caps. At
+  It filters requests by labels (CONTAINMENT.md). Its manifest weight is large, which is what keeps
+  logout and ending a lease responsive; it bounds the work any one request can cause and relies on
+  its caps. At
   boot it splits each principal's budget into the fixed sub-budgets the manifest names, one per
   label set, and carves sessions and leases from them. It passes a server a narrowing budget only
   as a revocation scope created for that purpose, never a budget that holds processes
@@ -129,10 +138,13 @@ page's address** (page-aligned; 0 = no block), which the child's first thread re
 block names (PACKAGES.md, launching; its fields are defined with the loader stub). No environment
 variables, nothing inherited. Configuration is files in the namespace.
 
-**Format.** The block is one typed message (WIRE.md), `startup`, laid out in the page as a typed
-operation written into a file is: the opcode as a `u32`, then the buffer-shape encoding of its
-fields. `redoubt-wire` decodes it; there is no second framing format and no checksum (the parent
-writes the block and could write any checksum too).
+**Format.** The page starts with a `u32` byte length, then the block: one typed message (WIRE.md),
+`startup`, laid out as a typed operation written into a file is (the opcode as a `u32`, then the
+buffer-shape encoding of its fields). The length counts the message's bytes, not itself, and the
+decoder reads exactly that many: a typed message carries no overall length of its own, and the
+decoder refuses trailing bytes, so without the length the block could not be read out of a page
+(question 112). `redoubt-wire` decodes it; there is no second framing format and no checksum (the
+parent writes the block and could write any checksum too).
 
 <!-- wire: startup -->
 | Opcode | Message | Fields | Reply |
@@ -152,7 +164,8 @@ writes the block and could write any checksum too).
   for drivers, and, for a session or agent only (never a server), its own budget as `budget`.
 - `argv` is a sequence of `string`s, the arguments in order (each may be empty).
 
-Rules: the block is at most one page; handles are 1..=n, n ≤ `MAX_START_HANDLES`; paths are unique
+Rules: the length and the message it counts fit in one page; handles are 1..=n, n ≤
+`MAX_START_HANDLES`; paths are unique
 among `namespace` entries and names among `handles` entries; each `bytes` field holds whole entries
 and nothing else; the rest of the page after the message is not read. A block breaking any rule is
 refused whole. The parent may be hostile, so the child decodes defensively; `redoubt-rt` also
@@ -178,7 +191,8 @@ kernel
 `{}` and `{alice-secrets}` are the fixed sub-budgets the steward splits each principal's budget
 into at boot, one per label set (CONTAINMENT.md); sessions and leases of one (principal, label set)
 sit together under one, and are ended together.
-CPU weights: alice 100, bob 100; the agent 20, carved from Alice's. The agent shares Alice's account.
+CPU weights: alice 100, bob 100; the agent 20, carved from Alice's. The agent shares Alice's
+account. `init`, the steward and the drivers are 1000 each in one queue with them (RESOURCES.md).
 
 **Login:** `ipd:lan` delivers port 22 only to `sshd` (sole holder of "listen TCP 22"); `keyd` signs
 with the host key (never in `sshd`'s memory); `sshd` asks the steward whose key it is (the steward

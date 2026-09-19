@@ -41,9 +41,12 @@ minus its ambient parts.
   `new_connection` mints a connection rooted at `root`, a path relative to the caller's own root
   (empty for the same root; it never climbs above it), and returns it with a random connection id.
   `quota` is the byte quota the new root gets, carved from the granter's own (0: no quota of its
-  own, it shares the granter's). The file server decides what a byte costs and whether the carve
-  fits; the shared library only passes the number on, so a server that meters nothing ignores it
-  (questions 117 and 118). `disconnect` frees the connection with that id and every connection
+  own, it shares the granter's). **Bytes are metered by the file server, not by the shared
+  library**: the library calls the server's two hooks, one when a connection is granted and one
+  when it is disconnected, and `fsd` decides there what a byte costs, whether the carve fits, and
+  what comes back; a server that meters nothing (`bootfsd`, `consoled`, `ipd`) implements neither
+  hook and the number is passed on unused. `quota` stays on the wire for all of them, so a granter
+  writes the same request whoever serves it (questions 117 and 118). `disconnect` frees the connection with that id and every connection
   minted under it, and returns its quota; only the holder of the id can name it (CAPABILITIES.md,
   disconnect). `refused` (code 3) answers a `new_connection` whose root does not exist or the
   caller cannot read, or whose cap, quota or server refuses it; `malformed` (code 1) stays for a
@@ -97,7 +100,10 @@ and refuses labelled callers. Elixir wraps the tree in `gen_tcp`-like modules.
 - **Admission** is per (account, label set), with a fair share per badge inside it, and per badge
   for account 0 (the shared server library); a `disconnect` frees a client's fids.
 - **A byte quota per attach root**, so Bob filling the `data` volume cannot make Alice's saves
-  fail: each root a connection is minted at has its own quota, set by whoever granted it.
+  fail: each root a connection is minted at has its own quota, set by whoever granted it in
+  `new_connection`'s `quota` field and carved from the granter's own. `fsd` meters it behind the
+  shared library's grant and disconnect hooks; the library holds no byte counters (questions 117
+  and 118).
 - **Robust to a bad disk:** crash-consistent and robust to bad metadata, and fuzzed for it. Disk
   encryption is deferred (IO-ARCHITECTURE.md, Later).
 - **Crash:** clients see errors, `init` restarts it (INIT.md), copy-on-write keeps the volume

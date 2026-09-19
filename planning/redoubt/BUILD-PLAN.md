@@ -34,9 +34,9 @@ not needed.
 - **Typed-message tables:** each server package (WP-D1, WP-D2, WP-D3, WP-S1, WP-S2, WP-S3) writes
   the tables of the protocols its server serves into that server's note, in WIRE.md's format, with a
   HISTORY.md line: a small design addition, reviewed as one.
-- **The owner's answers 1-101** (QUESTIONS.md) are in the notes. Packages built before an answer
-  that changes them get a follow-up package below (WP-A2, WP-W2, WP-M1, WP-R1b) rather than a
-  silent edit.
+- **The owner's answers 1-119** (QUESTIONS.md) are in the notes; nothing is open. Packages built
+  before an answer that changes them get a follow-up package below (WP-A2, WP-A3, WP-W2, WP-W3,
+  WP-M1, WP-R1b) rather than a silent edit.
 
 ## Work packages
 
@@ -58,10 +58,12 @@ not needed.
 - Reads: KERNEL-SPEC.md as changed by answers 28-101: R2 (groups, system callers by budget), R3
   (lends charged to both sides, abandoned calls and their notice), R4 (delivery or `Refused`), R4a
   (at the limit no calls are taken), R4b, R10 (messages in flight, handles in queued messages
-  swept), R11, R12 (`first`); open calls, the current call and `serve`; exit notices with
-  `blamed_labels`, held by the process object charged to its creator; a budget's own page charged
-  to its parent; class inherited; `random` as one `u64`; message ids per receiving process and
-  random PIDs; a badge-0 exit endpoint; I2, I5 (unconditional), I7, I8, I10, I11, I12, I15 (new).
+  swept), R11, R12 (one stride queue over every budget, no class or flag ordering: answer 103);
+  `MAX_HANDLES` and the handle table charged per table page in use (questions 102, 111, 116); open
+  calls, the current call and `serve`; exit notices with `blamed_labels`, held by the process
+  object charged to its creator; a budget's own page charged to its parent; class inherited;
+  `random` as one `u64`; message ids per receiving process and random PIDs; a badge-0 exit
+  endpoint; I2, I5 (unconditional), I7, I8, I10, I11, I12, I15 (new).
   CONTAINMENT.md (`check`, metadata as reads, `admit` per badge for account 0 with a fair share per
   badge, reader budgets answering a call, blame per (account, label set) ending every budget of it,
   fixed sub-budgets per label set); CAPABILITIES.md (`MAX_LEASE` as steward policy, nested
@@ -72,7 +74,9 @@ not needed.
   abandoned call never reported, a lend charged to one side only, a delivery failing `receive`
   instead of `Refused`, blame of a call other than the current one, blame falling back to another
   thread's call, a revoked handle inside a queued message delivered, a badged exit endpoint
-  accepted, a class argument honoured).
+  accepted, a class argument honoured, a budget scheduled ahead of the queue, a handle table
+  charged by its highest handle rather than by the pages in use, handles past `MAX_HANDLES`
+  admitted).
 - Accepted when: as WP-M0, at 10^6 sequences, adding I15 and the new mutations.
 - Needs: WP-M0.
 
@@ -94,7 +98,19 @@ not needed.
   answer 98).
 - Accepted when: the drift test covers kinds and `Malformed`; a table with an unknown kind or its
   own code 1 fails generation; the Elixir codec round-trips the new vectors.
-- Needs: WP-W1.
+- Needs: WP-W1. Merged (`3715363a9`).
+
+**WP-W3. The 9P opcode floor, and records that are already backed (answers 113, 115).** Size S.
+- Reads: WIRE.md (Messages, Tables), KERNEL-SPEC.md (ABI, Records; the order of checks, stage 1).
+- Delivers: in `redoubt/wire/`: the `<!-- wire: NAME ninep -->` marker for a protocol served on a
+  9P endpoint, whose opcodes must start at 16 (`ninep_common` reserves 1-15 there); a marked table
+  using a lower opcode is refused by the generator. In `redoubt-rt`: every record buffer touched
+  before it is passed to the kernel, since decoding never allocates and an untouched reserved page
+  is `InvalidArgument`.
+- Accepted when: the drift test covers the marker; a marked table with an opcode below 16 fails
+  generation, and an unmarked one still starts at 1; a host test passes the kernel a record in an
+  untouched page and sees `InvalidArgument`, and the runtime's own paths never do.
+- Needs: WP-W2, WP-R1b.
 
 **WP-A1. System call ABI crate.** Size S.
 - Reads: KERNEL-SPEC.md (system calls, messages, errors).
@@ -115,7 +131,19 @@ not needed.
   `OutOfMemory` from `receive`, `NotPermitted` for a badged exit endpoint).
 - Accepted when: round-trip and malformed-input tests for every changed call and record; the fuzz
   target rerun; names match WP-M1.
-- Needs: WP-A1. Before WP-K2 and WP-R1b use the new records.
+- Needs: WP-A1. Before WP-K2 and WP-R1b use the new records. Merged (`c98034520`); `budget_create`'s
+  `first` flag, which it added, is removed again by WP-A3.
+
+**WP-A3. The ABI drops `first` (answer 103).** Size S.
+- Reads: KERNEL-SPEC.md (`budget_create` and its error row, Budget, R12, I8).
+- Delivers: `redoubt-sys`: `budget_create`'s record without the `first` flag — the slot is removed
+  and the fields after it move up, so the record is one slot shorter — and its error row without
+  `ClassDenied`; `MAX_HANDLES`'s `TooLarge` on a call that would exceed it, and `OutOfMemory` on a
+  reply whose handles do not fit (questions 102, 107, 116); the debug assertions that check each
+  call's errors updated to match.
+- Accepted when: round-trip and malformed-input tests for `budget_create`'s record; no encoding
+  carries a priority or class argument; the fuzz target rerun; names match WP-M1.
+- Needs: WP-A2. Before WP-K2, which removes the flag from the kernel.
 
 **WP-L1. littlefs in pure Rust.** Size L.
 - Reads: NAMESPACES.md (filesystem section), littlefs `SPEC.md`.
@@ -155,14 +183,15 @@ not needed.
   `handle_close`, `time_now`, `random`; errors and the order of checks. (What R10 does to messages
   needs endpoints: WP-K2.)
 - Delivers: budget objects with page, process and weight accounting, carving, accounts, deadlines
-  recorded (enforced by WP-K5), class inherited from the parent, the `first` flag recorded
-  (scheduled by WP-K5), a budget's own page charged to its parent, destruction sweeping stamped
-  handles; per-process handle tables charged in pages (confirming the cost table's 128 handles per
-  page, or changing it); 64-bit never-reused budget ids; `random` returning one `u64`.
+  recorded (enforced by WP-K5), class inherited from the parent, a budget's own page charged to its
+  parent, destruction sweeping stamped handles; per-process handle tables charged in pages
+  (confirming the cost table's 128 handles per page, or changing it), at most `MAX_HANDLES` a
+  process (question 102); 64-bit never-reused budget ids; `random` returning one `u64`.
 - Accepted when: kernel cases for R6-R10 and I2, I5, I8, I10, I12; attack cases: carve beyond the
-  parent, exhaust handle tables, destroy while handles are held elsewhere, forge a handle index, a
-  user-class caller asking for `first`.
-- Needs: WP-A1 (WP-A2 for the new `budget_create` and `random`).
+  parent, exhaust handle tables, a table filled to `MAX_HANDLES` refused with `TooLarge`, destroy
+  while handles are held elsewhere, forge a handle index.
+- Needs: WP-A1 (WP-A2 for the new `budget_create` and `random`). Merged (`e1d2c6216`); the `first`
+  flag it recorded is removed by WP-K2 (answer 103).
 
 **WP-K2. Endpoints and messages.** Size L.
 - Reads: KERNEL-SPEC.md Endpoint, Process (open calls, the current call), Messages (abandoned-call
@@ -175,9 +204,14 @@ not needed.
   from an open call of the caller's thread; badge-0 receive rights; the label check against the
   endpoint's owner; fair waiting by (account, label set), and by budget for account 0, `WAIT_CAP`
   counting queued messages only; delivery only when the receiver can pay for everything the message
-  brings, `Refused` to the sender otherwise; transfer opt-in; `Dead` for the calls a dying server
-  had taken; R10's reach into messages in flight and into handles inside queued messages (K1 has no
-  messages to test it with); message ids unique per receiving process.
+  brings, `Refused` to the sender otherwise, handles that would take the receiver past
+  `MAX_HANDLES` among the costs it cannot pay, and a reply's handles that do not fit the caller
+  dropped (0 in their slots) with the reply delivered and `OutOfMemory` returned (questions 107,
+  116); transfer opt-in; `Dead` for the calls a dying server had taken; R10's reach into messages in
+  flight and into handles inside queued messages (K1 has no messages to test it with); message ids
+  unique per receiving process.
+- Also: the `first` flag removed from the kernel's `budget_create` (answer 103; K1 built it, WP-A3
+  drops it from the ABI). Nothing schedules on class or on a flag; R12's one queue is WP-K5's.
 - Accepted when: kernel cases for R1-R4b and I3, I4, I7, I9, I11, I15; attack cases: steal a receive
   right, mint badge 0, mint into a foreign budget, unequal-label call, 10,000 sender threads
   attempting to call with another account still served in turn, a vault-labelled sender filling its
@@ -186,9 +220,12 @@ not needed.
   parked with short timeouts (each reported abandoned once, freed by its reply), reply to a send,
   `serve` on a call the thread does not hold, lender destroyed mid-call with the server surviving,
   unrequested transfer, a message the receiver cannot pay for (`Refused` to its sender; `receive`
-  unaffected), a revoked handle's queued message and taken call (no reply handle reaches the
-  sender), a revoked handle inside a queued message arriving as 0, `mint` from a `send`'s id.
-- Needs: WP-K1, WP-A2.
+  unaffected), a message whose handles would take the receiver past `MAX_HANDLES` (`Refused`), a
+  caller at `MAX_HANDLES` getting its reply without its handles and `OutOfMemory`, a revoked
+  handle's queued message and taken call (no reply handle reaches the sender), a revoked handle
+  inside a queued message arriving as 0, `mint` from a `send`'s id;
+  `budget_create` takes no flag, so no argument of any call asks to run ahead of the queue.
+- Needs: WP-K1, WP-A2, WP-A3.
 
 **WP-K3. Device objects and interrupts.** Size M.
 - Reads: KERNEL-SPEC.md Device, R5, R11, `map_device`, `dma_alloc`, `system_reset`; DEVICE-GRANTS.md.
@@ -229,11 +266,14 @@ not needed.
 **WP-K5. Timer, timeouts and preemption.** Size M.
 - Reads: KERNEL-SPEC.md R12, timeouts, deadlines; RESOURCES.md.
 - Delivers: the kernel-owned timer; timeouts on `call`/`send`/`receive`; budget deadlines enforced;
-  stride scheduling over budgets, `first` budgets before all others; `rdtime` readable from user
-  mode.
+  **one stride queue over every runnable budget** — no priority tier, no class ordering, no flag
+  (answer 103) — with a waking budget re-entering at the current minimum pass; `rdtime` readable
+  from user mode.
 - Accepted when: a spinning budget cannot delay another beyond its weight; a sleeping-waking budget
-  cannot exceed its share; a system-class server without `first` busy on one user's requests delays
-  other users only by its weight; every blocking call returns by its timeout (I13); a deadline
+  cannot exceed its share; a system-class server busy on one user's requests delays other users only
+  by its weight; **a driver woken by an interrupt runs within about one `SLICE` while user budgets
+  spin** (the stated cost of one queue, RESOURCES.md), and a large-weight server keeps its share
+  under that load; every blocking call returns by its timeout (I13); a deadline
   destroys its budget; the old IRQ-0 timer path and `timer` case are gone.
 - Needs: WP-K2.
 
@@ -285,7 +325,7 @@ not needed.
   minted under it; a stranger's id refused; an unasked handle closed; an agent flooding a bucket
   leaving its sponsor's share; a parked call resumed under `serve`); the startup-message fuzz
   target.
-- Needs: WP-R1, WP-A2, WP-W2.
+- Needs: WP-R1, WP-A2, WP-W2. Merged (`86117e7af`).
 
 **WP-R2. Loader stub.** Size S.
 - Reads: PACKAGES.md (launching), INIT.md (startup block).
@@ -300,14 +340,15 @@ not needed.
 **WP-R3. init and the boot manifest.** Size M.
 - Reads: INIT.md (all), WIRE.md (JSON).
 - Delivers: `init`: reads the manifest (refusing names outside INIT.md's name rule, and any grant of
-  a server's own budget), builds the budget tree (`first` for itself, the steward and the drivers),
-  hands out device handles, starts every system server through the stub, restarts with the rate
+  a server's own budget), builds the budget tree with the manifest's weights (large for itself, the
+  steward and the drivers; ordinary for the servers that work for users: answer 103), hands out
+  device handles, starts every system server through the stub, restarts with the rate
   limit, passes crash blame by (account, label set) to the steward (the typed message whose table
   WP-S2 writes), reboot as last resort; the boot loader loading only the kernel and `init`, once
   `init` can start every bundle program through the stub.
-- Accepted when: the milestone 1 manifest boots every server; a manifest with a bad name, or one
-  granting a server its budget, is refused; no server's startup block holds a budget handle; a
-  crashing server restarts on the same endpoint; blame case: 3 crashes blamed on one (account,
+- Accepted when: the milestone 1 manifest boots every server, each in a budget carrying the weight
+  the manifest names; a manifest with a bad name, or one granting a server its budget, is refused;
+  no server's startup block holds a budget handle; a crashing server restarts on the same endpoint; blame case: 3 crashes blamed on one (account,
   label set) produce the steward signal naming that (account, label set) and no other (a vault
   session's crashes name its label set, not its owner's empty one; what the steward then destroys
   is WP-S2's case); more than 5 restarts in 60 s reboots.
@@ -344,13 +385,17 @@ block-range handles, validation of every ring index and length.
 - Needs: WP-R1b, WP-K3.
 
 **WP-D2. fsd.** Size M. 9P over littlefs on a block range; one label set per volume from the
-manifest; a byte quota per attach root; `admit` and `check` on every request (writes need equal
-labels; a walk or `stat` is a read; directory reads list only readable entries); relies only on
+manifest; **the byte quotas, metered here and nowhere else** (question 118): `new_connection`'s
+`quota` carved from the granter's root through the shared library's grant hook, and returned
+through its disconnect hook, with the library holding no byte counters; `admit` and `check` on
+every request (writes need equal labels; a walk or `stat` is a read; directory reads list only
+readable entries); relies only on
 `blkd`'s contract (IO-ARCHITECTURE.md).
 - Accepted when: 9P conformance; per-volume label cases (read up, write down and write up all
   refused, `Tcreate` in a labelled directory from an unlabelled caller revealing nothing);
   admission per (account, label set), and a client's fids freed by its launcher's `disconnect`; a
-  byte quota per attach root (Bob filling the volume does not fail Alice's saves); a remove while
+  byte quota per attach root (Bob filling the volume does not fail Alice's saves; a quota larger
+  than the granter's free quota is `refused`, and a `disconnect` gives it back); a remove while
   another connection holds a fid succeeds; the no-leaky-state observer sees no change, qid versions
   included, from a vault writer.
 - Needs: WP-D1, WP-L1, WP-R1b.
@@ -392,16 +437,19 @@ bytes; never holds keys that authenticate a person to the box; constant-time sig
   declassification by snapshot, the steward `call`ing a short-lived reader budget with the item's
   labels, which fills its lend; on the third blamed crash of an (account, label set), every budget
   of it destroyed and new sessions refused until the window passes; the typed message by which
-  `init` reports blame, its table written into INIT.md; the work of any one request bounded;
-  `check` on its own records.
+  `init` reports blame, its table written into INIT.md; the work of any one request bounded, since
+  the steward's promptness now rests on its large manifest weight in the one queue and on nothing
+  else (answer 103); `check` on its own records.
 - Accepted when: the model's policy traces (WP-M0) replay against it; approval cases (bidi and
   format characters escaped, swapped requests refused, labelled requests shown only to label
   owners and without their free text, their notifications reaching no unlabelled channel, floods
   capped); a lease request over `MAX_LEASE` refused; a sub-agent dies with its agent's lease; no
   reader budget outlives its declassification; an agent flooding the steward and `fsd` does not
   stop Alice opening a file and ending its lease; after three blamed crashes Bob's sessions and
-  leases of that label set are gone and a new login is refused within the window; no server can
-  destroy a session; a vault session's leases do not change the unlabelled sub-budget's free limits.
+  leases of that label set are gone and a new login is refused within the window; a logout and an
+  ended lease still complete promptly while every user budget spins (its weight, not an order); no
+  server can destroy a session; a vault session's leases do not change the unlabelled sub-budget's
+  free limits.
 - Needs: WP-R3, WP-B1, WP-D2.
 
 **WP-S3. sshd.** Size M. `sunset`-based; host key through `keyd`; user authentication through the
@@ -424,10 +472,10 @@ this `sshd` in milestone 1, a stated residual).
 
 ## Order
 ```
-merged:                  W1  L1  T1  T1b  A1  K0  R1
-start now, in parallel:  M0 -> M1;  A2 (after A1);  W2 (after W1)
-kernel, serialized:      K1 -> K2 (after A2) -> K3 -> K4 -> K5 -> K6 (after R1b)
-runtime:                 R1 -> R1b (after A2, W2) -> R2 (after K4) -> R3 (after K3, K5)
+merged:                  W1  W2  L1  T1  T1b  A1  A2  K0  K1  R1  R1b
+start now, in parallel:  M0 -> M1;  A3 (after A2);  W3 (after W2, R1b)
+kernel, serialized:      K2 (after A3) -> K3 -> K4 -> K5 -> K6 (after R1b)
+runtime:                 R2 (after K4) -> R3 (after K3, K5)
                          R4 (after R1b, K3)
 beamlet:                 B1 (after R1b, R4) -> B2 (after R3)
 storage and network:     D1 (after R1b, K3) -> D2 (after L1);  D3 (after R1b, K3, W2)
@@ -435,9 +483,10 @@ security:                S1 (after R1b);  S2 (after R3, B1, D2);  S3 (after D3, 
 conformance:             C1 (after M1, K5, T1)
 milestone:               E1 (after all)
 ```
-**The owner's round-4 answers** (QUESTIONS.md 56-101), which A2, W2, M1, R1b and K2 waited on, are
-in the notes. The critical path is the kernel track (K1 to K5), then R3, S2 and S3;
-A2 must land before K2.
+**The owner's answers 1-119** (QUESTIONS.md) are all in the notes; nothing is open. Answers
+102-119 add A3 and W3 and change K2, K5, M1, R3, D2 and S2. The critical path is the kernel track
+(K2 to K5), then R3, S2 and S3; A3 must land before K2, which removes the `first` flag the merged
+K1 built.
 Everything off that path (model, codecs, littlefs, bench, drivers, beamlet's platform) can proceed
 in parallel. SWARM.md's waves follow this order.
 
