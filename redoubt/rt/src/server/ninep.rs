@@ -86,7 +86,7 @@ use redoubt_wire::proto::ninep_common::{ErrorCode, NewConnectionReply, Reply};
 
 use super::admit::{Admission, AdmitKey, Limits, Resource, Unsized};
 use super::label::{Access, check};
-use super::typed::Outcome;
+use super::typed::{Outcome, finish};
 use crate::ipc::{Caller, Request, Words};
 use crate::path;
 
@@ -393,7 +393,9 @@ impl<S: FileServer> NineServer<S> {
 
     /// Handles one call and replies to it: 9P, or `ninep_common`; any other opcode is malformed.
     pub fn serve(&mut self, request: Request) -> Result<(), Error> {
-        self.serve_with(request, |_, request| reply_closing(request, &MALFORMED, &Handles::new()))
+        self.serve_with(request, |_, request| {
+            finish(request, &Outcome { words: MALFORMED, send: Handles::new(), close: Handles::new() })
+        })
     }
 
     /// Handles one call and replies to it: 9P and `ninep_common` here, and a typed opcode above
@@ -422,27 +424,17 @@ impl<S: FileServer> NineServer<S> {
                     None => MALFORMED,
                 }
             };
-            return reply_closing(request, &words, &handles);
+            return finish(request, &Outcome { words, send: Handles::new(), close: handles });
         }
         if !NINEP_COMMON_OPCODES.contains(&words[0]) {
             return own(self, request);
         }
         if missing {
-            return reply_closing(request, &MALFORMED, &handles);
+            return finish(request, &Outcome { words: MALFORMED, send: Handles::new(), close: handles });
         }
         let mut kernel = Kernel(request.id());
         let outcome = self.answer_common(&caller, &words, &handles, request.lend(), &mut kernel);
-        // Handles that do not travel are closed before the reply, so the caller never sees the
-        // server's table holding them; those that travel, once the reply has copied them.
-        let (sending, now): (&[Handle], &[Handle]) = (outcome.send.as_slice(), outcome.close.as_slice());
-        for handle in now.iter().filter(|h| !sending.contains(h)) {
-            let _ = crate::handle::close(*handle);
-        }
-        let sent = request.reply(&outcome.words, sending).map_err(|(e, _)| e);
-        for handle in now.iter().filter(|h| sending.contains(h)) {
-            let _ = crate::handle::close(*handle);
-        }
-        sent
+        finish(request, &outcome)
     }
 
     /// Answers a `ninep_common` request without replying: its outcome, the reply's fields
@@ -1053,16 +1045,6 @@ impl<S: FileServer> NineServer<S> {
             self.drop_fid(conn.key.client, conn.share, fid);
         }
     }
-}
-
-/// Closes `close` (what the request brought), then replies with `words` and no handles.
-fn reply_closing(request: Request, words: &Words, close: &Handles) -> Result<(), Error> {
-    // Closed first, so the caller never sees the server's table holding them.
-    for handle in close.as_slice() {
-        let _ = crate::handle::close(*handle);
-    }
-    // Words and no handles always encode, so the request cannot come back.
-    request.reply(words, &[]).map_err(|(e, _)| e)
 }
 
 /// Refuses unknown mode bits, and anything but plain reading for a directory.

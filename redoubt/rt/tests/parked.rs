@@ -36,7 +36,7 @@ fn serve(ep: Endpoint) -> (u32, u32) {
         match ep.receive(timeout, 0) {
             Ok(Event::Call(request)) if request.words[0] == WAIT => {
                 let badge = request.caller.badge;
-                if let Err(refused) = parked.park(request, badge, badge, now, FOREVER) {
+                if let Err(refused) = parked.park(request, badge, badge, now) {
                     refused.0.reply(&[9, 0, 0, 0], &[]).unwrap();
                 }
             }
@@ -134,7 +134,7 @@ fn parking_is_admitted_per_bucket_and_share() {
         while let Ok(event) = ep.receive(FOREVER, 0) {
             if let Event::Call(request) = event {
                 let now = handle::time_now().unwrap();
-                if let Err(back) = parked.park(request, 7, (), now, FOREVER) {
+                if let Err(back) = parked.park(request, 7, (), now) {
                     back.0.reply(&[9, 0, 0, 0], &[]).unwrap();
                     refused += 1;
                     if refused == 1 {
@@ -194,7 +194,7 @@ fn an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end() {
                     }
                 }
                 _ => {
-                    if let Err(back) = parked.park(request, share, (), now, FOREVER) {
+                    if let Err(back) = parked.park(request, share, (), now) {
                         back.0.reply(&[9, 0, 0, 0], &[]).unwrap();
                     }
                 }

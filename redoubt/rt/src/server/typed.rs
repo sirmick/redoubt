@@ -175,8 +175,20 @@ pub fn answer<P: Protocol, S: TypedServer<P>>(
 pub fn serve_call<P: Protocol, S: TypedServer<P>>(server: &mut S, mut request: Request) -> Result<(), Error> {
     let (caller, words, handles) = (request.caller, request.words, request.handles);
     let outcome = answer::<P, S>(server, &caller, &words, &handles, request.lend());
-    let sent = request.reply(&outcome.words, outcome.send.as_slice()).map_err(|(e, _)| e);
-    for handle in outcome.close.as_slice() {
+    finish(request, &outcome)
+}
+
+/// Replies to `request` as `outcome` says, and closes what it says to close: handles that do not
+/// travel before the reply, so that a caller holding its reply knows the server no longer holds
+/// them; handles that travel once the reply has copied them. The one place a call is finished,
+/// for 9P, `ninep_common` and typed protocols alike.
+pub fn finish(request: Request, outcome: &Outcome) -> Result<(), Error> {
+    let (send, close) = (outcome.send.as_slice(), outcome.close.as_slice());
+    for handle in close.iter().filter(|h| !send.contains(h)) {
+        let _ = crate::handle::close(*handle);
+    }
+    let sent = request.reply(&outcome.words, send).map_err(|(e, _)| e);
+    for handle in close.iter().filter(|h| send.contains(h)) {
         let _ = crate::handle::close(*handle);
     }
     sent
