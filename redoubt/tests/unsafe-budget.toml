@@ -51,3 +51,9 @@ name = "redoubt-sys (system call ABI): the ecall stub"
 paths = ["redoubt/sys/src"]
 max_unsafe = 1
 max_undocumented = 0
+
+[[budget]]
+name = "redoubt-rt (native runtime): the heap's free lists, page buffers and lends, the startup page"
+paths = ["redoubt/rt/src"]
+max_unsafe = 9
+max_undocumented = 0

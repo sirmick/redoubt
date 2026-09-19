@@ -1,0 +1,11 @@
+[package]
+name = "redoubt-rt"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "The native runtime for Redoubt programs: startup, handles, IPC, heap, panics, and the shared server library"
+
+# Only our own crates: the runtime is linked into every native server (TENETS.md 5).
+[dependencies]
+redoubt-sys = { path = "../sys" }
+redoubt-wire = { path = "../wire" }
