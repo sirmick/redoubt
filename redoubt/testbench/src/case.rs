@@ -80,6 +80,9 @@ pub struct Boot {
     pub smp: Vec<u32>,
     #[serde(default = "default_timeout")]
     pub timeout_secs: f64,
+    /// Guest RAM in MiB (QEMU `-m`); default `target::DEFAULT_MEMORY_MIB`. Small for cases
+    /// that exhaust RAM on purpose, so they take milliseconds.
+    pub memory_mib: Option<u32>,
     /// Regular expressions that must each match a console line, in this order.
     pub expect: Vec<String>,
     /// Regular expressions that must never match.

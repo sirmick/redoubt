@@ -44,6 +44,8 @@ pub struct Image<'a> {
     pub loader: &'a Path,
     pub bundle: &'a Path,
     pub smp: u32,
+    /// Guest RAM in MiB.
+    pub memory_mib: u32,
     /// Extra QEMU arguments attaching devices (`virtio_devices`).
     pub devices: &'a [String],
 }
@@ -54,6 +56,7 @@ impl Image<'_> {
         qemu.args(self.machine.qemu_args)
             .args(["-bios", self.firmware])
             .args(["-smp", &self.smp.to_string()])
+            .args(["-m", &format!("{}M", self.memory_mib)])
             .arg("-kernel")
             .arg(self.loader)
             .arg("-initrd")

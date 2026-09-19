@@ -21,7 +21,7 @@ pub const TARGETS: &[Target] = &[
         triple: "riscv64imac-unknown-none-elf",
         machine: Ok(Machine {
             qemu: "qemu-system-riscv64",
-            qemu_args: &["-machine", "virt", "-m", "256M"],
+            qemu_args: &["-machine", "virt"],
             loader_package: "loader",
             kernel_features: &["qemu-virt"],
         }),
@@ -31,11 +31,14 @@ pub const TARGETS: &[Target] = &[
         triple: "riscv32imac-unknown-none-elf",
         machine: Ok(Machine {
             qemu: "qemu-system-riscv32",
-            qemu_args: &["-machine", "virt", "-m", "256M"],
+            qemu_args: &["-machine", "virt"],
             loader_package: "loader",
             kernel_features: &["qemu-virt"],
         }),
     },
 ];
+
+/// RAM for a boot whose case does not set `memory_mib`.
+pub const DEFAULT_MEMORY_MIB: u32 = 256;
 
 pub fn find(name: &str) -> Option<&'static Target> { TARGETS.iter().find(|t| t.name == name) }
