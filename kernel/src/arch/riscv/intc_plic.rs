@@ -88,14 +88,11 @@ pub fn enable_all_irqs() {
 
 /// Claim the highest-priority pending interrupt. Returned as a bitmask with at most one
 /// bit set, which is what the generic IRQ dispatcher expects.
-pub fn pending() -> usize {
-    match plic().claim(context()) {
-        Some(irq) => {
-            CLAIMED.store(irq.get(), Ordering::Relaxed);
-            1 << irq.get()
-        }
-        None => 0,
-    }
+pub fn pending() -> Option<usize> {
+    plic().claim(context()).map(|irq| {
+        CLAIMED.store(irq.get(), Ordering::Relaxed);
+        irq.get() as usize
+    })
 }
 
 /// For debug output: 1 if external interrupts are unmasked at the hart.

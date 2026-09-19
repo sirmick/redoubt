@@ -8,9 +8,11 @@ use xous_kernel::{MemoryAddress, PID};
 use crate::arch;
 use crate::cell::KernelCell;
 
-/// Interrupts are numbered `0..MAX_IRQS`. The arch layer reports pending interrupts as a
-/// bitmask, so this cannot exceed the width of a `usize`.
-const MAX_IRQS: usize = 32;
+/// Interrupts are numbered `0..MAX_IRQS`: IRQ 0 is the hart timer (TIMER.md) and 1..=1023
+/// are PLIC sources (the PLIC's 10-bit source-id space, so any source fits). The arch
+/// layer reports one pending interrupt at a time (`arch::intc::pending()`), so this is a
+/// plain table index, not a bitmask, and is not bounded by the width of a `usize`.
+const MAX_IRQS: usize = 1024;
 
 /// A handler is a function in the owning process, plus the argument it asked for.
 type Handler = (PID, MemoryAddress, Option<MemoryAddress>);
@@ -21,33 +23,31 @@ static IRQ_HANDLERS: KernelCell<[Option<Handler>; MAX_IRQS]> = KernelCell::new([
 /// come straight from syscall arguments, so they must never index the table.
 fn handler(irq: usize) -> Option<Handler> { IRQ_HANDLERS.with(|handlers| handlers.get(irq).copied().flatten()) }
 
+/// Dispatch the single interrupt the arch layer claimed. Redirects into the owning
+/// process's handler, or masks the source if nobody owns it (an unexpected IRQ).
 #[cfg(baremetal)]
-pub fn handle(irqs_pending: usize) -> Result<xous_kernel::Result, xous_kernel::Error> {
+pub fn handle(irq: usize) -> Result<xous_kernel::Result, xous_kernel::Error> {
     use crate::services::SystemServices;
-    for irq_no in (0..MAX_IRQS).filter(|irq_no| irqs_pending & (1 << irq_no) != 0) {
-        let Some((pid, f, arg)) = handler(irq_no) else {
-            klog!("[!] Masked an unhandled IRQ #{:?}", irq_no);
-            // If there is no handler, mask this interrupt to prevent an IRQ storm.
-            // This is considered an error.
-            arch::irq::disable_irq(irq_no);
-            continue;
-        };
-        return SystemServices::with_mut(|ss| {
-            // Disable all other IRQs and redirect into userspace
-            arch::irq::disable_all_irqs();
-            klog!("Making a callback to PID{}: {:x?} ({:08x}, {:x?})", pid, f, irq_no as usize, arg);
-            ss.make_callback_to(
-                pid,
-                f.get() as *mut usize,
-                crate::services::CallbackType::Interrupt(
-                    irq_no,
-                    arg.map(|x| x.get() as *mut usize).unwrap_or(core::ptr::null_mut::<usize>()),
-                ),
-            )
-            .map(|_| xous_kernel::Result::ResumeProcess)
-        });
-    }
-    Ok(xous_kernel::Result::ResumeProcess)
+    let Some((pid, f, arg)) = handler(irq) else {
+        klog!("[!] Masked an unhandled IRQ #{}", irq);
+        // No handler: mask the source so it cannot storm. This is an error.
+        arch::irq::disable_irq(irq);
+        return Ok(xous_kernel::Result::ResumeProcess);
+    };
+    SystemServices::with_mut(|ss| {
+        // Disable all other IRQs and redirect into userspace.
+        arch::irq::disable_all_irqs();
+        klog!("Making a callback to PID{}: {:x?} ({:08x}, {:x?})", pid, f, irq, arg);
+        ss.make_callback_to(
+            pid,
+            f.get() as *mut usize,
+            crate::services::CallbackType::Interrupt(
+                irq,
+                arg.map(|x| x.get() as *mut usize).unwrap_or(core::ptr::null_mut::<usize>()),
+            ),
+        )
+        .map(|_| xous_kernel::Result::ResumeProcess)
+    })
 }
 
 #[allow(dead_code)] // needed to silence a hosted mode warning
