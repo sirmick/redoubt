@@ -108,16 +108,29 @@ pub fn load(bytes: &[u8], atoms: &mut AtomTable) -> Result<Module> {
                 arity: arity_total,
                 entry: resolve(e[2] as usize)?,
                 num_free,
+                uniq: e[5],
             });
         }
     }
 
+    let mut lines = match chunk(b"Line") {
+        Some(d) => line_chunk(d, name.as_str())?,
+        None => crate::module::Lines::default(),
+    };
     let mut code = code;
     let mut functions = Vec::new();
     for (pc, ins) in code.iter_mut().enumerate() {
         // Rewrite label numbers into code indices.
         resolve_labels(&mut ins.args, &resolve, label_count)?;
         check_operands(ins, &imports, &funs, &literals, strings.len())?;
+        if ins.op == opcodes::LINE {
+            match ins.args.first() {
+                Some(Arg::U(item)) if (*item as usize) < lines.items.len().max(1) => {
+                    lines.marks.push((pc as u32, *item as u32));
+                }
+                _ => return Err(LoadError::Malformed("line item out of range")),
+            }
+        }
         if ins.op == opcodes::FUNC_INFO {
             if let [_, Arg::Const(Term::Atom(f)), Arg::U(a)] = &ins.args[..] {
                 functions.push(FunctionInfo { start: pc as u32, name: f.clone(), arity: arity(*a as usize)? });
@@ -127,7 +140,47 @@ pub fn load(bytes: &[u8], atoms: &mut AtomTable) -> Result<Module> {
         }
     }
 
-    Ok(Module { name, imports, exports, funs, literals, strings, code, functions })
+    let attributes = chunk(b"Attr").unwrap_or(&[]).to_vec();
+    let compile_info = chunk(b"CInf").unwrap_or(&[]).to_vec();
+    Ok(Module { name, imports, exports, funs, literals, strings, code, functions, lines, attributes, compile_info })
+}
+
+/// Parse the `Line` chunk (see `parse_line_chunk` in BEAM's `beam_file.c`).
+fn line_chunk(d: &[u8], module: &str) -> Result<crate::module::Lines> {
+    let mut r = Compact { bytes: d, pos: 0 };
+    let version = r.word()?;
+    if version != 0 {
+        // A newer format: stack traces lose their locations, nothing else is affected.
+        return Ok(crate::module::Lines::default());
+    }
+    let _flags = r.word()?;
+    let _instruction_count = r.word()?;
+    let item_count = r.word()? as usize;
+    let name_count = r.word()? as usize;
+    if item_count > d.len() || name_count > d.len() {
+        return Err(LoadError::Malformed("Line counts"));
+    }
+    let mut items = alloc::vec![(0u32, 0u32)];
+    let mut file = 0u32;
+    while items.len() <= item_count {
+        match r.tag_and_value()? {
+            (TAG_A, f) => {
+                file = u32::try_from(f).ok().filter(|f| *f as usize <= name_count).ok_or(LoadError::Malformed("Line file"))?;
+            }
+            (TAG_I, line) => {
+                items.push((file, u32::try_from(line).map_err(|_| LoadError::Malformed("Line number"))?));
+            }
+            _ => return Err(LoadError::Malformed("Line item")),
+        }
+    }
+    let as_list = |s: &str| Term::list(s.chars().map(|ch| Term::Int(ch as i64)).collect::<Vec<_>>());
+    let mut files = alloc::vec![as_list(&alloc::format!("{module}.erl"))];
+    for _ in 0..name_count {
+        let len = u16::from_be_bytes(r.take(2)?.try_into().unwrap()) as usize;
+        let name = core::str::from_utf8(r.take(len)?).map_err(|_| LoadError::Malformed("Line file name"))?;
+        files.push(as_list(name));
+    }
+    Ok(crate::module::Lines { files, items, marks: Vec::new() })
 }
 
 /// Split the IFF container into `(id, data)` chunks.

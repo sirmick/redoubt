@@ -163,11 +163,20 @@ fn find(hay: &[u8], pats: &[Vec<u8>], from: usize, until: usize) -> Option<(usiz
     })
 }
 
+/// The elements of an options list. Like BEAM, an improper tail ends the list and is ignored
+/// (`[global | foo]` means `[global]`).
+fn options(c: &Ctx, t: &Term) -> Result<Vec<Term>, Exception> {
+    if !matches!(t, Term::Nil | Term::Cons(_)) {
+        return Err(c.badarg());
+    }
+    Ok(t.list_iter().map_while(|x| x.ok()).collect())
+}
+
 /// `{scope, {Start, Length}}` from an options list, or the whole binary.
 fn scope(c: &Ctx, opts: Option<&Term>, size: usize) -> Result<(usize, usize), Exception> {
     let Some(opts) = opts else { return Ok((0, size)) };
     let mut range = (0, size);
-    for o in opts.to_vec().ok_or_else(|| c.badarg())? {
+    for o in options(c, opts)? {
         match o.as_tuple() {
             Some([Term::Atom(tag), part]) if tag.as_str() == "scope" => match part.as_tuple() {
                 Some([s, l]) => range = part_range(c, s, l, size)?,
@@ -218,7 +227,7 @@ pub fn split(c: &mut Ctx, a: &[Term]) -> R {
     let (mut global, mut trim, mut trim_all) = (false, false, false);
     let mut scope_opts = Vec::new();
     if let Some(opts) = a.get(2) {
-        for o in opts.to_vec().ok_or_else(|| c.badarg())? {
+        for o in options(c, opts)? {
             match &o {
                 Term::Atom(x) if x.as_str() == "global" => global = true,
                 Term::Atom(x) if x.as_str() == "trim" => trim = true,

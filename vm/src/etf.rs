@@ -129,11 +129,8 @@ impl<'a> Reader<'a, '_> {
             }
             110 | 111 => {
                 let n = if tag == 110 { self.u8()? as usize } else { self.u32()? };
-                let sign = match self.u8()? {
-                    0 => Sign::Plus,
-                    1 => Sign::Minus,
-                    _ => return Err(EtfError::Malformed),
-                };
+                // Any non-zero sign byte means negative, as BEAM reads it.
+                let sign = if self.u8()? == 0 { Sign::Plus } else { Sign::Minus };
                 let digits = self.take(n)?;
                 Term::big(BigInt::from_bytes_le(sign, digits))
             }

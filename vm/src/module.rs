@@ -29,6 +29,8 @@ pub struct FunEntry {
     pub arity: u32,
     pub entry: u32,
     pub num_free: u32,
+    /// The compiler's hash of the fun's code, shown in `#Fun<Module.Index.Uniq>`.
+    pub uniq: u32,
 }
 
 /// Where a function starts, for error reports and stack traces.
@@ -74,6 +76,22 @@ pub struct Module {
     pub code: Vec<Instr>,
     /// Functions in code order.
     pub functions: Vec<FunctionInfo>,
+    /// Source locations, for stack traces. See [`Module::location`].
+    pub lines: Lines,
+    /// The `Attr` and `CInf` chunks (external term format), for `module_info/1`.
+    pub attributes: Vec<u8>,
+    pub compile_info: Vec<u8>,
+}
+
+/// The `Line` chunk: which source line each `line` instruction marks.
+#[derive(Default)]
+pub struct Lines {
+    /// File names; index 0 is the implicit `<module>.erl`.
+    pub files: Vec<Term>,
+    /// Location items: `(file index, line)`. Item 0 is "no location".
+    pub items: Vec<(u32, u32)>,
+    /// `(code index, item)` of every `line` instruction, in code order.
+    pub marks: Vec<(u32, u32)>,
 }
 
 impl Module {
@@ -82,6 +100,17 @@ impl Module {
             .iter()
             .find(|e| &e.function == function && e.arity == arity)
             .map(|e| e.entry)
+    }
+
+    /// The source location of code index `pc`: the last `line` instruction at or before it.
+    pub fn location(&self, pc: u32) -> Option<(&Term, u32)> {
+        let i = self.lines.marks.partition_point(|(at, _)| *at <= pc).checked_sub(1)?;
+        let item = self.lines.marks[i].1 as usize;
+        if item == 0 {
+            return None;
+        }
+        let &(file, line) = self.lines.items.get(item)?;
+        Some((self.lines.files.get(file as usize)?, line))
     }
 
     /// The function containing code index `pc`.

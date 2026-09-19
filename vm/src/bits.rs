@@ -204,21 +204,13 @@ fn finish_int(v: BigInt, size: usize, signed: bool) -> Term {
     }
 }
 
-/// Encode `f` in `size` bits (16, 32 or 64).
+/// Encode `f` in `size` bits (16, 32 or 64). As in BEAM, a value too large for a 16- or
+/// 32-bit float is written as infinity (such a segment cannot be matched back into a float).
 pub fn push_float(out: &mut Builder, f: f64, size: usize, little: bool) -> bool {
     let bytes: Vec<u8> = match size {
         64 => f.to_bits().to_be_bytes().to_vec(),
-        32 => {
-            let g = f as f32;
-            if g.is_infinite() {
-                return false;
-            }
-            g.to_bits().to_be_bytes().to_vec()
-        }
-        16 => match f16_bits(f) {
-            Some(h) => h.to_be_bytes().to_vec(),
-            None => return false,
-        },
+        32 => (f as f32).to_bits().to_be_bytes().to_vec(),
+        16 => f16_bits(f).to_be_bytes().to_vec(),
         _ => return false,
     };
     if little {
@@ -254,35 +246,32 @@ pub fn read_float(b: &Bits, pos: usize, size: usize, little: bool) -> Option<f64
     f.is_finite().then_some(f)
 }
 
-/// IEEE 754 half precision, round to nearest even. `None` if it overflows.
-fn f16_bits(f: f64) -> Option<u16> {
+/// IEEE 754 half precision, round to nearest even; infinity if it overflows.
+fn f16_bits(f: f64) -> u16 {
     let x = f as f32; // f64 -> f32 rounds once; f32 -> f16 below rounds again (as BEAM does)
     let bits = x.to_bits();
     let sign = ((bits >> 16) & 0x8000) as u16;
     let exp = ((bits >> 23) & 0xff) as i32;
     let man = bits & 0x7f_ffff;
+    const INFINITY: u16 = 0x7c00;
     if exp == 0xff {
-        return None;
+        return sign | INFINITY;
     }
     let e = exp - 127 + 15;
     if e >= 0x1f {
-        return None;
+        return sign | INFINITY;
     }
     if e <= 0 {
         if e < -10 {
-            return Some(sign);
+            return sign;
         }
         let m = (man | 0x80_0000) >> (1 - e);
         let round = (m & 0x1fff) > 0x1000 || ((m & 0x1fff) == 0x1000 && (m & 0x2000) != 0);
-        return Some(sign | ((m >> 13) as u16 + round as u16));
+        return sign | ((m >> 13) as u16 + round as u16);
     }
     let round = (man & 0x1fff) > 0x1000 || ((man & 0x1fff) == 0x1000 && (man & 0x2000) != 0);
-    let h = ((e as u32) << 10) | (man >> 13);
-    let h = h + round as u32;
-    if h >= 0x7c00 {
-        return None;
-    }
-    Some(sign | h as u16)
+    let h = (((e as u32) << 10) | (man >> 13)) + round as u32;
+    sign | h.min(INFINITY as u32) as u16
 }
 
 fn f16_to_f64(h: u16) -> f64 {
@@ -410,7 +399,12 @@ mod tests {
         let mut b = Builder::new();
         assert!(push_float(&mut b, 1.5, 16, false));
         assert_eq!(b.finish().to_string(), "<<62,0>>");
+        // Too big for 32 bits: written as infinity, as BEAM does.
         let mut b = Builder::new();
-        assert!(!push_float(&mut b, 1.0e300, 32, false));
+        assert!(push_float(&mut b, 1.0e300, 32, false));
+        assert_eq!(b.finish().to_string(), "<<127,128,0,0>>");
+        let mut b = Builder::new();
+        assert!(push_float(&mut b, -1.0e300, 16, false));
+        assert_eq!(b.finish().to_string(), "<<252,0>>");
     }
 }
