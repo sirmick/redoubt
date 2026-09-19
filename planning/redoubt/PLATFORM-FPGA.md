@@ -15,28 +15,35 @@ in a host machine that builds and serves them.
   are descriptors in a VRAM command ring plus a doorbell over PCIe peer-to-peer; completions are
   written into a card A hardware channel.
 
+## Trust assumptions
+The FPGA is "the secure configuration" only if these hold:
+- **The host cannot change the card.** The bitstream loads from on-card flash with host write access
+  disabled. A host that can reload the bitstream owns the card, whatever the DMA windows say;
+  otherwise the host is in the TCB (like Linux in the partition mode).
+- **DMA window registers are reachable only from the kernel**, never through a PCIe BAR.
+- **The shared L2 is partitioned** between cores by the RTL; until it is, cross-core cache timing is
+  a stated residual channel (CONTAINMENT.md).
+
 ## What Redoubt needs
 - **DMA confinement in RTL.** Bus masters (devices, PCIe inbound, the GPU) can reach **only channel
   B**, never main memory. Per-master base/bound windows inside channel B keep devices out of each
-  other's buffers. This gives the essential half of an IOMMU by construction; a DMA driver can then
-  corrupt only its own buffers (IO-ARCHITECTURE.md, DMA).
-- **Virtio from the host.** The host serves virtio devices over PCIe, as QEMU does in development.
-  The host is a DMA master into the card, so the channel-B rule covers it: it sees only DMA buffers,
-  and `blockd` encryption and end-to-end TLS/SSH mean those hold ciphertext.
+  other's buffers: the essential half of an IOMMU by construction (IO-ARCHITECTURE.md, DMA).
+- **Virtio from the host.** The host serves virtio devices over PCIe, as QEMU does in development. As
+  a DMA master into the card it is covered by the channel-B rule, and end-to-end TLS/SSH keep network
+  data opaque to it.
 - **One budget per core.** The 4 hardware threads of a core share an L1, the classic cross-thread
-  side channel. The scheduler runs all threads of a core in one budget, or idles them (like Linux
-  core scheduling), so the RTL has to isolate only core from core, plus flush on a core's switch
-  between budgets. The kernel tells the hardware when it switches domains.
+  side channel. The scheduler runs all threads of a core in one budget or idles them, so the RTL
+  isolates only core from core and flushes when a core switches budgets. The kernel tells the
+  hardware when it switches.
+- **`keyd` on its own core** once there is SMP.
 - **Hardware channels are devices.** Each channel endpoint is reached through a handle, granted like
-  any device. They also serve as doorbells between harts. Custom instructions are a vendor extension
+  any device; they also serve as doorbells between harts. Custom instructions are a vendor extension
   (tenet 4): only behind a capability feature, with the MMIO path kept.
 - **GPU isolation.** Each launch sees only its budget's VRAM window (base/bound registers set by the
-  GPU driver per launch), or the GPU serves one budget at a time with VRAM scrubbed between them.
-  GPU contexts are handles owned by budgets.
-- **Local inference as a label sink.** A model running on card B keeps data on the machine, so its
-  gateway can be cleared for labels an external API never is (CONTAINMENT.md).
-- **Coarse time for user mode** can also be enforced in hardware, backing the kernel rule
-  (RESOURCES.md, Clocks).
+  GPU driver per launch), or the GPU serves one budget at a time with VRAM scrubbed between them. GPU
+  contexts are handles owned by budgets.
+- **Local inference as a label sink.** A model running on card B keeps data on the machine, so it can
+  be cleared for labels an external API never is (CONTAINMENT.md).
 - **Root of trust.** A boot ROM in the bitstream that verifies the loader closes the "loader itself
   is unverified" gap (VERIFIED-BOOT.md).
 - **Approval button (option).** A physical approval button or small display on the card would be a

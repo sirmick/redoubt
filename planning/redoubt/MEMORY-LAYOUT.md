@@ -65,7 +65,8 @@ Code keys on `target_pointer_width` only for these, the saved-context size and t
 - `paging::Pte::leaf` cannot express a writable and executable mapping; the kernel re-checks its
   own address space at boot and refuses to run otherwise (tests `wx`, `kernel-wx`).
 
-## SMP notes (recorded so the layout does not paint us into a corner)
-- The exception stack and "current context" are global today; both must become per-hart:
-  `sscratch` points at a per-hart block holding the hart's trap stack and current (PID, TID).
-- Unmap, lend and return must shoot down remote TLBs (SBI RFENCE, by ASID) before a page is reused.
+## Accepted trade-offs
+- The physmap makes all RAM kernel-addressable, including a writable alias of user code pages.
+- Every map and unmap does a global `sfence.vma`.
+- Kernel entry relies on the firmware delegating instruction page faults to S-mode (BOOT.md).
+- For SMP, the exception stack and "current context" must become per-hart (PLAN.md, SMP).

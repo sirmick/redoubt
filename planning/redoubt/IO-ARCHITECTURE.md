@@ -1,7 +1,8 @@
 # I/O architecture: drivers, storage, networking
 
 Designed, not built (except the ns16550 UART in test programs). Owns: the driver model, DMA, the
-storage and network stacks, and the deferred ("Later") I/O designs. Tenet 7 is the summary.
+storage and network stacks, the platforms, and the deferred ("Later") I/O designs. Tenet 7 is the
+summary.
 
 ## The rule
 Drivers are virtio, unless the device is trivial. A DMA driver is inside the TCB unless the hardware
@@ -17,19 +18,19 @@ Every platform presents the same contract: virtio-mmio devices, a standard inter
 
 | Platform | Who serves virtio | DMA confinement | Role |
 | --- | --- | --- | --- |
-| QEMU `virt` | QEMU | none | development, the test bench |
-| FPGA cards (PLATFORM-FPGA.md) | the host over PCIe, or device logic on the card | RTL: devices reach only the DMA memory channel | the secure configuration |
+| QEMU `virt`, rv32 and rv64 | QEMU | none | development, the test bench |
+| FPGA cards (PLATFORM-FPGA.md) | the host over PCIe, or device logic on the card | RTL: devices reach only the DMA memory channel | the secure configuration, under its stated assumptions |
 | Messy SoC (e.g. Orange Pi RV2) | Linux on reserved cores | none; Linux is in the TCB | Later |
 
 ## Driver model
 - **A driver is an unprivileged server.** The kernel keeps only the interrupt controller, the timer
   and SBI.
 - **Resources are handed in, not discovered.** The loader reads the device tree; the boot manifest
-  assigns each driver its MMIO region, IRQ and DMA authority, as handles in its startup block
-  (today: loader-emitted grants, DEVICE-GRANTS.md). Drivers do not parse the device tree or hardcode
-  addresses.
-- **The server graph is declared.** The manifest says who holds a connection to whom (`fsd` holds
-  `blockd`'s partition; the shell holds a directory handle). No lookup by name.
+  assigns each driver its device objects (an MMIO range, with a DMA flag if it may do DMA; an IRQ),
+  as handles in its startup block (today: loader-emitted grants, DEVICE-GRANTS.md). Drivers do not
+  parse the device tree or hardcode addresses.
+- **The server graph is declared** in the boot manifest (`fsd` holds a `blkd` partition; the shell
+  holds a directory handle). No lookup by name.
 - **Trivial drivers** are the only non-virtio ones: UART (ns16550), RTC (goldfish), and devices of
   similar size with no DMA. They are fully untrusted.
 - **Crate:** `virtio-drivers` (rcore-os, pure Rust, `no_std`) under a thin server per device,
@@ -39,28 +40,26 @@ Every platform presents the same contract: virtio-mmio devices, a standard inter
   target driven by a malicious device model.
 
 ### DMA
-- **Driver in the TCB (no confinement).** A DMA allocation call returns physically contiguous,
-  zeroed pages and their physical address, only to a process holding a DMA handle. Clients lend
-  pages to the driver and the driver copies into its own DMA buffers, so client pages never reach
-  the device. A DMA driver is trusted like the kernel: it is kept tiny and audited.
-- **Driver confined (hardware).** On the FPGA, devices can reach only the DMA memory channel, and
+- **Driver in the TCB (no confinement).** A DMA allocation call, allowed only with an MMIO handle
+  carrying the DMA flag, returns physically contiguous, zeroed pages and their physical address.
+  Clients lend pages to the driver and the driver copies into its own DMA buffers, so client pages
+  never reach the device. A DMA driver is trusted like the kernel: kept tiny and audited.
+- **Driver confined (hardware).** On the FPGA, devices reach only the DMA memory channel, and
   per-master windows keep devices out of each other's buffers (PLATFORM-FPGA.md). The kernel
   allocates each driver's DMA pages from its window; the driver can then corrupt only its own
   buffers. The same handles describe both modes.
 
 ## Storage
-`blkd (virtio-blk) -> blockd -> fsd -> clients`
-- **`blockd`:** partitions, cache, block-range capabilities (a filesystem sees only its partition),
-  and per-block authenticated encryption (AEAD) with a Merkle root, keyed through `keyd`, so a
-  hostile disk cannot read or tamper undetected.
-- **`fsd`:** littlefs, 9P, one per volume (NAMESPACES.md).
+`blkd (virtio-blk, partition table) -> fsd -> clients`
+- **`blkd`:** the driver, the partition table, and block-range handles (a filesystem sees only its
+  partition).
+- **`fsd`:** littlefs, 9P, one per volume, labels per volume (NAMESPACES.md).
 - **Every on-disk parser is attack surface** and gets a fuzz target.
 
 ## Networking
 `netd (virtio-net) -> ipd -> clients (9P /net)`
-- **Interface capability:** the one link-layer type, "send and receive Ethernet frames". NICs, stack
-  instances and (later) VLANs and the router all attach through it, so topology is manifest wiring
-  and the Later designs are pure additions.
+- **Interface capability:** the one link-layer type, "send and receive Ethernet frames". Everything
+  that moves frames attaches through it, so the Later designs add servers, not mechanisms.
 - **`ipd`:** `smoltcp` (`no_std`, fuzzed). **One instance per network or trust domain**: a TCP bug
   reached from an untrusted network cannot touch another network's stack. Serves `/net`.
 - **Firewalling is mostly structural.** Egress: a process connects only where its socket capability
@@ -70,26 +69,38 @@ Every platform presents the same contract: virtio-mmio devices, a standard inter
 
 ## The Elixir boundary (beamlet)
 beamlet's `Platform` trait is one asynchronous 9P client: directories, files, sockets and the
-console are namespace walks, seen by BEAM code as unforgeable resource terms. OTP's `:crypto` is a C
-NIF upstream; beamlet implements its natives in Rust (RustCrypto). Design: beamlet's DESIGN.md.
+console are namespace walks, seen by BEAM code as unforgeable resource terms. The kernel has no
+queued sends, so the VM gets its asynchrony from a small pool of I/O threads, each making one
+blocking call. OTP's `:crypto` is a C NIF upstream; beamlet implements it in Rust (RustCrypto).
+Design: beamlet's DESIGN.md.
 
 ## Later (designed, deferred)
 Kept so they are not redesigned from scratch; each carries its review findings.
 
+### Disk encryption
+Per-block authenticated encryption (AEAD) with a Merkle root, keyed through `keyd`, in `blkd` or a
+server above it, so a hostile disk can neither read nor tamper undetected. Deferred: on QEMU the host
+is the disk and is trusted, and on the FPGA the host is the root of trust (PLATFORM-FPGA.md); it
+returns with a platform whose disk is outside the trust boundary.
+
+### LLM gateway (`gatewayd`)
+Holds API keys, meters token and money budgets per principal, logs calls; a label sink cleared for
+nothing (an on-box model can be cleared for labels). Agents hold a handle to it, never a key.
+
 ### Browser GUI (`webd`)
 The GUI follows sirmick/wash's shape (not its Go code): a desktop in the browser over one WebSocket,
 a per-user router multiplexing channels to app processes, window state held by the server. `webd`
-(Rust) terminates TLS (`rustls` with a pure-Rust crypto provider), authenticates with passkeys, and
-routes each user's WebSocket to their session; the router and apps are Elixir in the session VM, so
-the OS itself contains no graphics code.
+(Rust) terminates TLS (`rustls` with a pure-Rust crypto provider), authenticates, and routes each
+user's WebSocket to their session; the router and apps are Elixir in the session VM, so the OS itself
+contains no graphics code.
 - **Finding:** the desktop is drawn by the untrusted session VM, and a passkey signs a hash the user
   never sees, so the browser can show one request while approving another. The GUI may **notify**
   that an approval is waiting; it never approves (CAPABILITIES.md).
 
 ### Link layer and routing (`linkd`, `routerd`)
 - **`linkd`:** per NIC; 802.1Q tag and untag, each VLAN presented as its own interface capability; a
-  small L2/L3 allowlist and rate limiter before any stack parses a byte; egress priority queues
-  (QoS) keyed by the capability the traffic came from; DSCP marking.
+  small L2/L3 allowlist and rate limiter before any stack parses a byte; egress priority queues (QoS)
+  keyed by the capability the traffic came from; DSCP marking.
 - **`routerd`:** holds several interface capabilities and forwards between them: longest-prefix
   match, TTL, ARP/NDP, stateful filtering and NAT for forwarded traffic. Data plane in Rust (our own,
   or Netstack3's portable core if it earns its size). The control plane of a router shared between
@@ -107,7 +118,7 @@ For messy SoCs (e.g. the Orange Pi RV2, SpacemiT K1: no IOMMU, no hypervisor ext
 - **Doorbells:** SBI IPIs do not cross domains. Start with polling; later a hardware mailbox or a
   small SBI extension.
 - The firmware (OpenSBI, C) enforces the partition; whether RustSBI supports domains is unchecked.
-- Testable on QEMU: OpenSBI domains work on `virt`.
+  Testable on QEMU: OpenSBI domains work on `virt`.
 
 ### IOMMU and IOPMP
 A RISC-V IOMMU backend (QEMU `iommu-sys=on`, QEMU 10 or later; open RTL exists) or IOPMP
@@ -115,7 +126,5 @@ A RISC-V IOMMU backend (QEMU `iommu-sys=on`, QEMU 10 or later; open RTL exists) 
 On our FPGA the DMA memory channel may make both unnecessary.
 
 ## Prior art
-QNX Neutrino (drivers as processes, interrupts as messages, an SMMU manager service; but a global
-path namespace and drivers loaded into stack processes), seL4's driver framework and driver VMs, Xen
-driver domains, OpenAMP/rpmsg (virtio over shared memory), Jailhouse and Bao (static partitioning),
-Hubris (build-time task graph).
+QNX Neutrino, seL4's driver framework and driver VMs, Xen driver domains, OpenAMP/rpmsg, Jailhouse,
+Bao, Hubris.
