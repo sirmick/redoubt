@@ -21,6 +21,7 @@ expect = [
     '^\[pid 3\] \[server\] mint badge 77 ok true, badge 0 -> Err\(InvalidArgument\)$',
     '^\[pid 3\] \[server\] echo badge 77 account 0 labels 0 fresh id true$',
     '^\[pid 3\] \[server\] serve stranger Err\(InvalidArgument\), serve 0 Err\(InvalidArgument\), serve mine Ok\(\(\)\)$',
+    '^\[pid 3\] \[server\] the held-back abandoned call was reported 1 time\(s\)$',
     '^\[pid 4\] \[ipc\] 64 calls abandoned, 64 notices, \d+ open before, \d+ after$',
     '^\[pid 3\] \[server\] replying with 2 handles$',
     '^\[pid 3\] \[server\] MAX_OPEN_CALLS reached: 64 open calls$',
@@ -29,7 +30,7 @@ expect = [
 ]
 # A call replied to twice, or a notice delivered twice, would say so; so would any check in the
 # client. PANIC is always forbidden.
-forbid = ['\[ipc\] FAIL', 'replied twice', 'REDOUBT-IPC TEST FAILED']
+forbid = ['\[ipc\] FAIL', 'replied twice', 'reported \d+ times, FAIL', 'REDOUBT-IPC TEST FAILED']
 
 [[grant]]
 program = "log-server"
