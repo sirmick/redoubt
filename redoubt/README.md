@@ -62,7 +62,9 @@ unknown field or table is an error, so a misspelling cannot silently drop a chec
 coverage for a configuration the bench does not (or cannot yet) boot.
 
 In-guest programs print through `log-server` (`test_programs::Logger`) and finish with
-`<NAME> TEST PASSED` or `<NAME> TEST FAILED`.
+`<NAME> TEST PASSED` or `<NAME> TEST FAILED`. `log-server` starts every line it prints for a
+client with `[pid N] `, N being the sender's PID as the kernel reports it; lines without that
+prefix come from the kernel, the loader, `log-server` itself or a program that owns the UART.
 
 ## Poking at it by hand
 
@@ -90,11 +92,39 @@ the always-forbidden list, and list what must not happen instead (`forbid = ['KM
 `distinct_across_boots = ['id: (.*)']` (one capture group) boots twice and requires the captured
 text to differ.
 
-Attack programs need nothing special: a hostile program is an ordinary `programs` entry (a
-test-programs binary such as `grant-attack`, or `{ package, bin }` from any crate) that reports
-what it tried and ends with `<NAME> PASSED`/`FAILED`. Hostile *data* for a program to use, such as
-a malformed ELF for a parent to launch, is a `[[file]]` entry (below), which takes the same
-sources, corrupted ones included.
+A hostile program is an ordinary `programs` entry (a test-programs binary such as
+`grant-attack`, or `{ package, bin }` from any crate); how its case must judge it is below.
+Hostile *data* for a program to use, such as a malformed ELF for a parent to launch, is a
+`[[file]]` entry (below), which takes the same sources, corrupted ones included.
+
+## Writing an attack case
+
+**The rule:** an attack case passes only on a line the attacker cannot write. The console does
+not say who wrote a line, and an attacker can print anything, including another program's
+`PASSED`. So the verdict comes from the system: the kernel or the loader, a victim, a checker,
+or a clean power-off (TENETS.md 6; the owner's answer to QUESTIONS.md 26).
+
+The pattern:
+- **Anchor every verdict pattern** with `^`, and pin it to its writer: `^\[pid 4\] ...` for a
+  program's line (PIDs follow `programs`, from 2), or no `[pid` prefix for the kernel's, the
+  loader's or `log-server`'s own. A relayed line always starts with its sender's prefix, so it
+  cannot match either.
+- **The attacker's lines** may be required as progress (`^\[pid 3\] ... attempts done`) and
+  forbidden as breach evidence (`BREACH`, `FAIL`), but never be the verdict.
+- **Give the verdict to a party the attacker does not control:**
+  - the kernel or the loader refusing (`loader-rejects-*`, `kernel-wx`), with `KMAIN` or a
+    later stage forbidden so no program ever ran;
+  - a victim that owns what is attacked and still has it afterwards (`grant-attack`: log-server
+    still receives the UART input sent after every attempt; `uaf-lent-page`: the holder reads
+    its page back);
+  - `attack-checker`, which the attacker tells when it is done (`test_programs::checker::done()`)
+    and which then says, under its own PID, that the kernel still serves, and powers off; with
+    `poweroff = true` the case also needs that clean power-off.
+- **Make the attacker use what it gets**, so a breach shows where the attacker cannot hide or
+  fake it (a raw line on a UART it should not own, a power-off, a victim that stops hearing).
+
+What `attack-checker` asserts is only that the system survived. Where a case can say more only
+once a later package lands (process creation and exit notices, WP-K4), its case file says so.
 
 ## Files in the bundle
 

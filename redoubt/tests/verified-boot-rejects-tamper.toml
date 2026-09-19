@@ -5,7 +5,9 @@ programs = ["log-server"]
 timeout_secs = 20
 tamper_bundle = true
 allow_panic = true          # the loader is supposed to panic here
-expect = ['loader PANIC', 'signature is invalid']
+# The verdict is the loader's own: nothing from the bundle runs (KMAIN is forbidden), so no
+# program can print it. Anchored, so a relayed `[pid N]` line could not match either.
+expect = ['^loader PANIC', 'signature is invalid']
 forbid = ['KMAIN', 'bundle signature ok']
 
 [[grant]]
