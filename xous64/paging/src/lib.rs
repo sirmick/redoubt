@@ -1,4 +1,8 @@
-//! Typed RISC-V Sv39 page tables.
+//! Typed RISC-V page tables, for both Sv32 (rv32) and Sv39 (rv64).
+//!
+//! The two modes share the low ten PTE flag bits and the PPN position (bit 10); they
+//! differ only in level count, entries per table, VPN width, and the `satp` fields, which
+//! are `cfg(target_pointer_width)` constants below.
 //!
 //! This crate is the only code that touches page-table memory, for both the loader and
 //! the kernel. Everything above it manipulates `Pte` values through `Table` and `Slot`
@@ -30,10 +34,35 @@
 use core::ptr::NonNull;
 
 pub const PAGE_SIZE: usize = 4096;
-pub const ENTRIES: usize = 512;
-pub const LEVELS: usize = 3;
+
+// Mode-specific parameters. Sv32: 2 levels of 1024 entries, 10 VPN bits, satp mode bit 31,
+// 9-bit ASID. Sv39: 3 levels of 512 entries, 9 VPN bits, satp mode 8<<60, 16-bit ASID.
+#[cfg(target_pointer_width = "32")]
+mod mode {
+    pub const LEVELS: usize = 2;
+    pub const ENTRIES: usize = 1024;
+    pub const VPN_BITS: usize = 10;
+    pub const SATP_MODE: usize = 1 << 31;
+    pub const SATP_ASID_SHIFT: usize = 22;
+    pub const SATP_ASID_MASK: usize = (1 << 9) - 1;
+    pub const SATP_PPN_MASK: usize = (1 << 22) - 1;
+}
+#[cfg(target_pointer_width = "64")]
+mod mode {
+    pub const LEVELS: usize = 3;
+    pub const ENTRIES: usize = 512;
+    pub const VPN_BITS: usize = 9;
+    pub const SATP_MODE: usize = 8 << 60;
+    pub const SATP_ASID_SHIFT: usize = 44;
+    pub const SATP_ASID_MASK: usize = (1 << 16) - 1;
+    pub const SATP_PPN_MASK: usize = (1 << 44) - 1;
+}
+pub use mode::*;
+
+pub const ENTRIES: usize = mode::ENTRIES;
+pub const LEVELS: usize = mode::LEVELS;
 /// Bytes mapped by one root entry, which is also the size of the largest leaf.
-pub const GIGAPAGE: usize = 1 << 30;
+pub const LARGEST_LEAF: usize = leaf_size(LEVELS - 1);
 
 bitflags::bitflags! {
     /// The low ten bits of an entry. `S` and `P` are the two bits the architecture leaves
@@ -217,14 +246,32 @@ impl Slot {
     }
 }
 
-/// Bytes mapped by a leaf in a table at `level` (0 = 4 KiB, 1 = 2 MiB, 2 = 1 GiB).
-pub const fn leaf_size(level: usize) -> usize { PAGE_SIZE << (9 * level) }
+/// Bytes mapped by a leaf in a table at `level` (0 = 4 KiB).
+pub const fn leaf_size(level: usize) -> usize { PAGE_SIZE << (VPN_BITS * level) }
 
-/// Index into the table at `level` (2 = root) for `virt`.
-pub const fn vpn(virt: usize, level: usize) -> usize { (virt >> (12 + 9 * level)) & (ENTRIES - 1) }
+/// Index into the table at `level` (root = LEVELS-1) for `virt`.
+pub const fn vpn(virt: usize, level: usize) -> usize { (virt >> (12 + VPN_BITS * level)) & (ENTRIES - 1) }
 
-/// Sv39 addresses are 39 bits, sign-extended.
+/// Whether `virt` is a usable virtual address. Sv39 requires sign-extension above bit 38;
+/// every 32-bit address is valid under Sv32.
+#[cfg(target_pointer_width = "64")]
 pub fn is_canonical(virt: usize) -> bool {
     let upper = virt >> 38;
     upper == 0 || upper == (1 << 26) - 1
 }
+#[cfg(target_pointer_width = "32")]
+pub fn is_canonical(_virt: usize) -> bool { true }
+
+/// Build a `satp` value for `pid` (as the ASID) and the root table at `root_phys`.
+pub fn make_satp(pid: usize, root_phys: usize) -> usize {
+    SATP_MODE | ((pid & SATP_ASID_MASK) << SATP_ASID_SHIFT) | (root_phys >> 12)
+}
+
+/// The PID (stored as the ASID) in a `satp` value.
+pub fn satp_pid(satp: usize) -> usize { (satp >> SATP_ASID_SHIFT) & SATP_ASID_MASK }
+
+/// The root table's physical address in a `satp` value.
+pub fn satp_root(satp: usize) -> usize { (satp & SATP_PPN_MASK) << 12 }
+
+/// Whether `satp` names an allocated (paging-enabled) address space.
+pub fn satp_is_active(satp: usize) -> bool { satp & SATP_MODE != 0 }

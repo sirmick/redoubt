@@ -1,18 +1,17 @@
 //! Sv39 address space construction. See `planning/xous64/MEMORY-LAYOUT.md`.
 //!
-//! Page-table memory is only touched through the `sv39` crate, which the kernel uses too.
+//! Page-table memory is only touched through the `paging` crate, which the kernel uses too.
 
-use sv39::{PteFlags, Slot, Table, Window, ENTRIES, GIGAPAGE};
+use paging::{PteFlags, Slot, Table, Window, ENTRIES, LARGEST_LEAF, LEVELS};
 use xous::arch::{PHYSMAP_BASE, PROCESS_AREA};
 
 use crate::alloc::{PageAllocator, Pid};
 use crate::PAGE_SIZE;
 
-pub use sv39::PteFlags as Pte;
+pub use paging::PteFlags as Pte;
 
-const SATP_MODE_SV39: usize = 8 << 60;
 const ROOT_KERNEL_START: usize = ENTRIES / 2;
-const ROOT_PROCESS_AREA: usize = sv39::vpn(PROCESS_AREA, 2);
+const ROOT_PROCESS_AREA: usize = paging::vpn(PROCESS_AREA, LEVELS - 1);
 
 fn window() -> Window {
     // SAFETY: the loader runs with address translation off from entry until it hands over
@@ -42,9 +41,9 @@ impl AddressSpace {
         let ram = alloc.ram();
         // The physmap is data: readable and writable, never executable.
         let flags = PteFlags::R | PteFlags::W | PteFlags::GLOBAL;
-        for giga in (ram.start / GIGAPAGE)..ram.end.div_ceil(GIGAPAGE) {
-            let phys = giga * GIGAPAGE;
-            root.slot(sv39::vpn(PHYSMAP_BASE + phys, 2)).set(sv39::Pte::leaf(phys, flags));
+        for giga in (ram.start / LARGEST_LEAF)..ram.end.div_ceil(LARGEST_LEAF) {
+            let phys = giga * LARGEST_LEAF;
+            root.slot(paging::vpn(PHYSMAP_BASE + phys, LEVELS - 1)).set(paging::Pte::leaf(phys, flags));
         }
         let kernel_l1 = alloc.alloc(pid);
         // SAFETY: `alloc` returns a RAM frame that nothing else uses.
@@ -61,13 +60,13 @@ impl AddressSpace {
         AddressSpace { root_phys, root, pid }
     }
 
-    pub fn satp(&self) -> usize { SATP_MODE_SV39 | (self.pid as usize) << 44 | self.root_phys >> 12 }
+    pub fn satp(&self) -> usize { paging::make_satp(self.pid as usize, self.root_phys) }
 
     fn leaf_slot(&self, alloc: &mut PageAllocator, virt: usize) -> Slot {
-        assert!(sv39::is_canonical(virt), "{virt:#x} is not a canonical Sv39 address");
+        assert!(paging::is_canonical(virt), "{virt:#x} is not a canonical Sv39 address");
         let mut table = self.root;
-        for level in [2, 1] {
-            let index = sv39::vpn(virt, level);
+        for level in (1..LEVELS).rev() {
+            let index = paging::vpn(virt, level);
             table = match table.child(index) {
                 Some(child) => child,
                 None => {
@@ -78,7 +77,7 @@ impl AddressSpace {
                 }
             };
         }
-        table.slot(sv39::vpn(virt, 0))
+        table.slot(paging::vpn(virt, 0))
     }
 
     /// Physical page backing `virt`, if one is mapped.
@@ -94,7 +93,7 @@ impl AddressSpace {
         let slot = self.leaf_slot(alloc, virt);
         let existing = slot.get();
         assert!(!existing.is_valid() || existing.phys() == phys, "{virt:#x} is already mapped");
-        slot.set(sv39::Pte::leaf(phys, flags | existing.flags()));
+        slot.set(paging::Pte::leaf(phys, flags | existing.flags()));
     }
 
     /// Make the physmap's view of the frame at `phys` read-only.
@@ -105,9 +104,9 @@ impl AddressSpace {
     pub fn write_protect_in_physmap(&self, alloc: &mut PageAllocator, phys: usize) {
         let virt = PHYSMAP_BASE + phys;
         let mut table = self.root;
-        for level in [2, 1] {
-            let slot = table.slot(sv39::vpn(virt, level));
-            table = match table.child(sv39::vpn(virt, level)) {
+        for level in (1..LEVELS).rev() {
+            let slot = table.slot(paging::vpn(virt, level));
+            table = match table.child(paging::vpn(virt, level)) {
                 Some(child) => child,
                 None => {
                     // Replace this superpage with a table of the next size down that maps
@@ -119,21 +118,21 @@ impl AddressSpace {
                     let child = unsafe { slot.install_table(frame) };
                     let flags = superpage.flags() - PteFlags::VALID;
                     for index in 0..ENTRIES {
-                        let part = superpage.phys() + index * sv39::leaf_size(level - 1);
-                        child.slot(index).set(sv39::Pte::leaf(part, flags));
+                        let part = superpage.phys() + index * paging::leaf_size(level - 1);
+                        child.slot(index).set(paging::Pte::leaf(part, flags));
                     }
                     child
                 }
             };
         }
-        let slot = table.slot(sv39::vpn(virt, 0));
+        let slot = table.slot(paging::vpn(virt, 0));
         slot.set(slot.get().without(PteFlags::W));
     }
 
     /// Reserve a page for demand paging: permissions without `VALID`. The kernel backs
     /// it with memory on first touch.
     pub fn reserve(&self, alloc: &mut PageAllocator, virt: usize, flags: PteFlags) {
-        self.leaf_slot(alloc, virt).set(sv39::Pte::reservation(flags));
+        self.leaf_slot(alloc, virt).set(paging::Pte::reservation(flags));
     }
 
     /// Allocate and map `count` pages ending at `top`.

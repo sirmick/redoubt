@@ -97,7 +97,7 @@ members = [
   "kernel",
   "loader",
   "loader64",
-  "xous64/sv39",
+  "xous64/paging",
   "xous64/test-programs",
   "xous64/testbench",
   "libs/bio-lib",

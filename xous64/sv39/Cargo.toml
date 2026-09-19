@@ -1,9 +1,0 @@
-[package]
-name = "sv39"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
-description = "Typed RISC-V Sv39 page tables: the one place page-table memory is touched"
-
-[dependencies]
-bitflags = "2"
