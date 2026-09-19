@@ -158,3 +158,10 @@ The same three roles, attacking v3 and pinning interfaces for a swarm build. Fou
   paging geometry, trap entry and saved context, and the ABI's register encoding; 64-bit values are
   `u64`, never `usize`. rv32 keeps compiling (a build check, no boots) so the abstraction cannot rot.
 
+## Milestone 1 build (from 2026-09-19)
+One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
+- **WP-T1 bench extensions** (`987bacbed`): SSH sessions driven through host OpenSSH (checked-in
+  test keys, pinned host keys, real exit statuses), virtio disk and net per case, bundle data
+  entries, `poweroff`, `allow_panic`, `must_fail` self-checks. The red team found seven ways to
+  make the bench pass wrongly (among them a loopback sshd that gave any local user a shell, and
+  the console no longer being read after the last expect); all fixed, each with a `must_fail` case.
