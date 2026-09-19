@@ -148,3 +148,13 @@ The same three roles, attacking v3 and pinning interfaces for a swarm build. Fou
 1. Separation and containment: Alice and Bob over SSH, Alice's leased agent contained.
 2. Install, share, persist: packages, projects, reboot memory, A/B updates.
 3. Self-hosted development: a real agent harness, compilers on the box, the server APIs.
+
+## After the freeze (spec changes, each with its reason)
+- **`random` system call added** (2026-09-19): user processes had no source of randomness, but
+  beamlet, `keyd` and `sshd` need one. Chosen over a per-process seed in the startup block, which
+  would spread randomness across every launcher and risk a parent reusing its seed for a child.
+- **rv32 deferred** (2026-09-19): milestones 1 to 3 are claimed and booted on rv64 only, to keep the
+  bench fast. rv32 returns as a small goal after milestone 3. Width-specific code stays confined to
+  paging geometry, trap entry and saved context, and the ABI's register encoding; 64-bit values are
+  `u64`, never `usize`. rv32 keeps compiling (a build check, no boots) so the abstraction cannot rot.
+

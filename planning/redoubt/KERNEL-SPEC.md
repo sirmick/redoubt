@@ -164,6 +164,7 @@ the kernel panic.
 | `budget_destroy` | h(budget) | always allowed to a holder |
 | `budget_usage` | h(budget) -> counters | caller's labels ⊇ target's |
 | `time_now` | -> µs | - |
+| `random` | len -> bytes | `len` at most 64; bytes from the kernel's CSPRNG (seeded at boot, BOOT.md) |
 | `system_reset` | h(Reset), kind | Reset device handle |
 
 **`mint(source, badge, budget?)`** creates a handle to an endpoint with `badge != 0`.
