@@ -8,6 +8,7 @@ use xous_kernel::arch::USER_AREA_END;
 use xous_kernel::*;
 
 use crate::arch;
+use crate::cell::KernelCell;
 use crate::arch::process::Process as ArchProcess;
 use crate::irq::{interrupt_claim, interrupt_free};
 use crate::mem::MemoryManager;
@@ -28,7 +29,7 @@ use crate::swap::{Swap, SwapAbi};
  back to the kernel, e.g. (PID,TID) = (1,1)
 */
 /// This is the PID/TID of the last person that called SwitchTo
-static mut SWITCHTO_CALLER: Option<(PID, TID)> = None;
+static SWITCHTO_CALLER: KernelCell<Option<(PID, TID)>> = KernelCell::new(None);
 
 /// When a process is switched to, take note of the original PID and TID.
 /// That way we know whether to give the process its full quantum when
@@ -49,7 +50,7 @@ enum ExecutionType {
 }
 
 #[cfg(baremetal)]
-pub fn reset_switchto_caller() { unsafe { *(&mut *(&raw mut SWITCHTO_CALLER)) = None }; }
+pub fn reset_switchto_caller() { SWITCHTO_CALLER.with(|c| *c = None); }
 
 fn retry_syscall(pid: PID, tid: TID) -> SysCallResult {
     if cfg!(baremetal) {
@@ -66,9 +67,8 @@ fn do_yield(_pid: PID, tid: TID) -> SysCallResult {
         return Ok(xous_kernel::Result::Ok);
     }
 
-    let (parent_pid, parent_ctx) = unsafe {
-        (&mut *(&raw mut SWITCHTO_CALLER)).take().expect("yielded when no parent context was present")
-    };
+    let (parent_pid, parent_ctx) =
+        SWITCHTO_CALLER.with(|c| c.take()).expect("yielded when no parent context was present");
     //println!("\n\r ***YIELD CALLED***");
     SystemServices::with_mut(|ss| {
         // TODO: Advance thread
@@ -298,7 +298,7 @@ fn send_message(pid: PID, tid: TID, cid: CID, message: Message) -> SysCallResult
                     let envelope = MessageEnvelope { sender: sender.into(), body: message };
 
                     // If it's not runnable (e.g. it's being debugged), switch to the parent.
-                    let (ppid, ptid) = unsafe { (&mut *(&raw mut SWITCHTO_CALLER)).take().unwrap() };
+                    let (ppid, ptid) = SWITCHTO_CALLER.with(|c| c.take()).unwrap();
                     klog!(
                         "Activating Server parent process (server is blocked) and switching away from Client"
                     );
@@ -406,7 +406,7 @@ fn send_message(pid: PID, tid: TID, cid: CID, message: Message) -> SysCallResult
                 // println!("Returning to parent");
                 let process = ss.get_process(pid).expect("Can't get current process");
                 let ppid = process.ppid;
-                unsafe { SWITCHTO_CALLER = None };
+                SWITCHTO_CALLER.with(|c| *c = None);
                 let result = ss
                     .activate_process_thread(tid, ppid, 0, false, PostActivateOp::None)
                     .map(|_| Ok(xous_kernel::Result::ResumeProcess))
@@ -795,7 +795,7 @@ fn receive_message(pid: PID, tid: TID, sid: SID, blocking: ExecutionType) -> Sys
 
         // For baremetal targets, switch away from this process.
         if cfg!(baremetal) {
-            unsafe { SWITCHTO_CALLER = None };
+            SWITCHTO_CALLER.with(|c| *c = None);
             let ppid = ss.get_process(pid).expect("Can't get current process").ppid;
             // TODO: Advance thread
             let result = ss
@@ -987,14 +987,14 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
             Ok(xous_kernel::Result::MemoryRange(unsafe { MemoryRange::new(start, length).unwrap() }))
         }
         SysCall::SwitchTo(new_pid, new_tid) => SystemServices::with_mut(|ss| {
-            unsafe {
+            SWITCHTO_CALLER.with(|caller| {
                 assert!(
-                    (&mut *(&raw mut SWITCHTO_CALLER)).is_none(),
+                    caller.is_none(),
                     "SWITCHTO_CALLER was {:?} and not None, indicating SwitchTo was called twice",
-                    (&mut *(&raw mut SWITCHTO_CALLER)),
+                    caller,
                 );
-                *(&mut *(&raw mut SWITCHTO_CALLER)) = Some((pid, tid));
-            }
+                *caller = Some((pid, tid));
+            });
             // println!(
             //     "Activating process thread {} in pid {} coming from pid {} thread {}",
             //     new_context, new_pid, pid, tid
@@ -1013,7 +1013,7 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
         SysCall::Yield => do_yield(pid, tid),
         SysCall::ReturnToParent(_pid, _cpuid) => {
             unsafe {
-                if let Some((parent_pid, parent_ctx)) = (&mut *(&raw mut SWITCHTO_CALLER)).take() {
+                if let Some((parent_pid, parent_ctx)) = SWITCHTO_CALLER.with(|c| c.take()) {
                     crate::arch::irq::set_isr_return_pair(parent_pid, parent_ctx)
                 }
             };
@@ -1024,7 +1024,7 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
         SysCall::WaitEvent => SystemServices::with_mut(|ss| {
             let process = ss.get_process(pid).expect("Can't get current process");
             let ppid = process.ppid;
-            unsafe { *(&mut *(&raw mut SWITCHTO_CALLER)) = None };
+            SWITCHTO_CALLER.with(|c| *c = None);
             // TODO: Advance thread
             if cfg!(baremetal) {
                 let result = ss
@@ -1108,7 +1108,7 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
             ss.unschedule_thread(pid, tid)?;
             ss.terminate_process(pid)?;
             // Clear out `SWITCHTO_CALLER` since we're resuming the parent process.
-            unsafe { SWITCHTO_CALLER = None };
+            SWITCHTO_CALLER.with(|c| *c = None);
             Ok(xous_kernel::Result::ResumeProcess)
         }),
         SysCall::Shutdown => SystemServices::with_mut(|ss| ss.shutdown().map(|_| xous_kernel::Result::Ok)),
@@ -1157,7 +1157,7 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                 // Successfully joining a thread causes this thread to sleep while the parent process
                 // is resumed. This is the same as a `Yield`
                 if ret == xous_kernel::Result::ResumeProcess {
-                    unsafe { SWITCHTO_CALLER = None };
+                    SWITCHTO_CALLER.with(|c| *c = None);
                 }
                 ret
             })

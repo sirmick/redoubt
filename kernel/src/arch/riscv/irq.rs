@@ -13,6 +13,7 @@ use crate::arch::mem::MemoryMapping;
 use crate::arch::process::RETURN_FROM_SWAPPER;
 use crate::arch::process::{EXIT_THREAD, RETURN_FROM_ISR, Thread};
 use crate::arch::process::{Process as ArchProcess, RETURN_FROM_EXCEPTION_HANDLER};
+use crate::cell::KernelCell;
 use crate::services::SystemServices;
 #[cfg(feature = "swap")]
 use crate::swap::Swap;
@@ -83,12 +84,14 @@ static HANDLING_IRQ: AtomicBool = AtomicBool::new(false);
 #[cfg(feature = "swap")]
 pub fn is_handling_irq() -> bool { HANDLING_IRQ.load(Ordering::SeqCst) }
 
-static mut PREVIOUS_PAIR: Option<(PID, TID)> = None;
+/// The (PID, TID) to resume after an interrupt handler returns. Set when an interrupt
+/// redirects into a userspace handler, cleared when it finishes.
+static PREVIOUS_PAIR: KernelCell<Option<(PID, TID)>> = KernelCell::new(None);
 
-pub unsafe fn set_isr_return_pair(pid: PID, tid: TID) { PREVIOUS_PAIR = Some((pid, tid)); }
+pub unsafe fn set_isr_return_pair(pid: PID, tid: TID) { PREVIOUS_PAIR.with(|p| *p = Some((pid, tid))); }
 
 #[cfg(feature = "gdb-stub")]
-pub unsafe fn take_isr_return_pair() -> Option<(PID, TID)> { (&mut *(&raw mut PREVIOUS_PAIR)).take() }
+pub unsafe fn take_isr_return_pair() -> Option<(PID, TID)> { PREVIOUS_PAIR.with(|p| p.take()) }
 
 /// Finish a pending ISR. Return `false` if there was none.
 fn finish_isr() -> bool {
@@ -100,7 +103,7 @@ fn finish_isr() -> bool {
     // we're in an interrupt context, it is safe to access this
     // global variable.
     let (previous_pid, previous_context) =
-        unsafe { (&mut *(&raw mut PREVIOUS_PAIR)).take().expect("got RETURN_FROM_ISR with no previous PID") };
+        PREVIOUS_PAIR.with(|p| p.take()).expect("got RETURN_FROM_ISR with no previous PID");
     // println!(
     //     "ISR: Resuming previous pair of ({}, {})",
     //     previous_pid, previous_context
@@ -225,7 +228,7 @@ pub extern "C" fn trap_handler(
             });
 
             let response =
-                crate::syscall::handle(pid, tid, unsafe { (&mut *(&raw mut PREVIOUS_PAIR)).is_some() }, call)
+                crate::syscall::handle(pid, tid, PREVIOUS_PAIR.with(|p| p.is_some()), call)
                     .unwrap_or_else(xous_kernel::Result::Error);
 
             // println!("Syscall Result: {:?}", response);
@@ -256,20 +259,12 @@ pub extern "C" fn trap_handler(
             #[cfg(not(feature = "sbi"))]
             let irqs_pending = intc::pending();
 
-            // Safe to access globals since interrupts are disabled
-            // when this function runs.
-            unsafe {
-                if (&mut *(&raw mut PREVIOUS_PAIR)).is_none() {
-                    let tid = crate::arch::process::current_tid();
-                    // This is pretty verbose, so leave it commented out unless we're debugging a process
-                    // transition
-                    // #[cfg(feature = "debug-print")]
-                    // if pid.get() != 1 {
-                    //    println!("Hardware IRQ set PID{:?}, TID{:?}", pid, tid);
-                    // }
-                    *(&mut *(&raw mut PREVIOUS_PAIR)) = Some((pid, tid));
+            // Remember who to resume once the userspace handler returns.
+            PREVIOUS_PAIR.with(|previous| {
+                if previous.is_none() {
+                    *previous = Some((pid, crate::arch::process::current_tid()));
                 }
-            }
+            });
             HANDLING_IRQ.store(true, Ordering::Relaxed);
             crate::irq::handle(irqs_pending).expect("Couldn't handle IRQ");
             ArchProcess::with_current_mut(|process| {
