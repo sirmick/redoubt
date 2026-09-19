@@ -281,25 +281,6 @@ impl Process {
         &process.threads[tid]
     }
 
-    #[cfg(feature = "gdb-stub")]
-    pub fn for_each_thread_mut<F>(&self, mut op: F)
-    where
-        F: FnMut(TID, &Thread),
-    {
-        let process = process_impl();
-        for (idx, thread) in process.threads.iter_mut().enumerate() {
-            // Ignore threads that have no PC, and ignore the ISR thread
-            if thread.sepc == 0 {
-                continue;
-            }
-            if idx == IRQ_TID {
-                op(IRQ_TID_SENTINAL, thread);
-            } else {
-                op(idx, thread);
-            }
-        }
-    }
-
     pub fn find_free_thread(&self) -> Option<TID> {
         let process = process_impl();
         let start_tid = process.last_tid_allocated as usize;

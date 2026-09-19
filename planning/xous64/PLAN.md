@@ -155,8 +155,11 @@ Open, in rough priority order:
       (`grants` entry) lists each process's allowed MMIO regions and IRQs; the loader emits `Grnt`
       tags; the kernel enforces at MapMemory (device pages) and ClaimInterrupt. Design: DEVICE-GRANTS.md.
       Tests: `grant-attack`. Open: server-ID capabilities lack revocation; no runtime grant delegation.
-- [ ] Delete what we do not run (tenet 1), pending the rv32 decision: swap, gdb stub, ARM, Precursor
-      and bao1x platforms, the Sv32 window code, prebuilt blobs.
+- [x] Deleted ARM/x86 ports and the in-kernel gdb stub (7k lines, 6k a redundant disassembler; an
+      ambient backdoor). Debugging is now QEMU's gdb stub for kernel/loader, a userspace debug server
+      later for OS-level. Design: DEBUGGING.md. `cargo testbench --run <p> --debug` starts QEMU paused.
+- [ ] Still to delete when rv32 is re-homed: swap, Precursor + bao1x platforms, the Sv32 window code,
+      prebuilt asm blobs.
 - [ ] Bench: inject a device tree, to test fail-closed paths (no rng-seed, no memory node, junk).
 - [x] **Pure-Rust firmware works (tenet 3).** loader64 now boots identically under OpenSBI and RustSBI
       Prototyper, verified with the ipc bundle. The blocker was NOT RustSBI: it emits a valid device
