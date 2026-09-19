@@ -151,8 +151,10 @@ Example fragment:
   milestone 1. Milestone 2 seals them to the machine and generates them at first boot instead of
   shipping them in an image.
 - **sshd:** the SSH front door (`sunset`: `no_std`, no allocation, by dropbear's author). It asks the
-  steward to authenticate users and start sessions, and asks `keyd` to sign with the host key. It
-  rejects any login key that `keyd` holds. It serves `ssh approve@box`, in which only the steward
+  steward to authenticate users and start sessions, and asks `keyd` to sign with the host key,
+  through a root badge the **manifest** hands it (the steward never holds the host key's badge,
+  and could not pass one on). It rejects any login key that `keyd` holds, by asking `keyd`
+  `holds`. It serves `ssh approve@box`, in which only the steward
   talks. Its state is per channel, and each channel carries its session's labels; it is the one sink
   cleared for a label, on the channel the label's owner authenticated (CONTAINMENT.md), and in
   milestone 1 `approve@` shares it with every other channel (a stated residual; milestone 2 gives
@@ -209,21 +211,44 @@ is milestone 2.
 **It never holds a key that authenticates a person to the box** (CAPABILITIES.md, approvals). No
 purpose signs an SSH user-authentication request, and `keyd` itself refuses any purpose outside the
 table. That a manifest does not hand `keyd` a key it also lists as a principal's login or approval
-key is checked where both lists are read, in `init` (BUILD-PLAN.md, WP-R3); `holds` is the
-operation with which `init`, the steward and `sshd` ask.
+key is checked in `init` (BUILD-PLAN.md, WP-R3), by **one mechanism and no other**: `init` asks
+`keyd`, through a root badge, `holds` for each public key the manifest lists for a principal, and
+refuses the manifest if any is held. `init` never derives a public key from a seed itself — it
+would need the signature scheme's arithmetic to do it, and a second place that turns seeds into
+keys is a second place that can be wrong about which key is which. The same call is how `init`
+refuses a manifest that gives `keyd` the key the loader verifies the bundle with (answer 120), and
+how `sshd` refuses a login with a key `keyd` holds.
 
 **Messages.** A typed protocol, not 9P: `keyd` serves six fixed operations and no namespace, and a
 file server's read and write would be the export this protocol must not have. Every request is
-admitted and label-checked; a badge that names no key, names another key's purpose, or fails the
-label check gets `not_permitted`, which says no more than that.
+label-checked and resolved to one key and one purpose before `keyd` does any work for it; a badge
+that names no key, names another key's purpose, or fails the label check gets `not_permitted`,
+which says no more than that. **Admission counts grants, and only grants** — they are the one
+thing a client can make `keyd` hold. `keyd` parks no call and keeps no other per-client state, so
+a flood of signing requests makes it grow by nothing; what bounds that flood is the kernel's fair
+waiting per (account, label set) (R2, CONTAINMENT.md) and the bound on one request's work below.
+
+**Bounds.** At most 16 keys; a transcript part at most 16 KiB and an audit record at most 8 KiB,
+so the work of one request is bounded by a number stated here rather than by the buffer that
+carried it; at most 8 live grants per (account, label set), across at most 16 of those at once,
+which is what `keyd`'s budget covers with every bucket at its cap (CONTAINMENT.md, answer 85).
+
+**What each error answers.** `malformed` (code 1, as in every protocol): the request did not
+decode, or its lengths are ones no sender could mean — a transcript with an empty part, or an
+ephemeral key that is not a 32-byte Curve25519 point. `not_permitted`: the badge names no key,
+names a key whose purpose does not allow this operation, fails the label check, is a granted badge
+asking to grant, or named an id it did not receive — one answer for all of them, so a refusal says
+only "not you". `too_many`: a cap is reached — a record or transcript part over its bound, or a
+bucket or share with no room for another grant. `failed`: `keyd` could not do the work — no memory
+for a record, no randomness for an id, or the kernel refused to mint. None of them says which.
 
 <!-- wire: keyd -->
 | Opcode | Message | Fields | Reply |
 | --- | --- | --- | --- |
 | 1 | `sign_ssh_exchange` | `v_c: bytes`, `v_s: bytes`, `i_c: bytes`, `i_s: bytes`, `q_c: bytes`, `q_s: bytes`, `k: bytes` | `signature: bytes` |
 | 2 | `sign_record` | `record: bytes` | `signature: bytes` |
-| 3 | `public_key` | - | `algorithm: string`, `key: bytes` |
-| 4 | `holds` | `algorithm: string`, `key: bytes` | `held: u32` |
+| 3 | `public_key` | - | `key: bytes` |
+| 4 | `holds` | `key: bytes` | `held: u32` |
 | 5 | `grant` | - | `id: u64`, `capability: handle[0] endpoint` |
 | 6 | `release` | `id: u64` | - |
 
@@ -253,10 +278,15 @@ label check gets `not_permitted`, which says no more than that.
   longer than 32 bytes can be what a `keyd` signature covers. Package signing (PACKAGES.md) gets
   its own domain here when it lands, and until then `init` should also refuse a manifest that
   gives `keyd` the key the loader verifies the bundle with (WP-R3, with the login-key check).
-- `public_key` returns `ssh-ed25519` and the 32 raw public-key bytes of the key the badge names.
-  `holds` answers 1 if `keyd` holds that public key and 0 if not, for a key the asker already has;
-  public keys are published (the host key goes to every client that connects), so this reveals
-  nothing, and it is how `sshd` refuses a login with a key `keyd` holds.
+- `public_key` returns the 32 raw public-key bytes of the key the badge names. Neither it nor
+  `holds` carries an algorithm name: the box has one signature scheme (VERIFIED-BOOT.md), and
+  `sshd` frames `ssh-ed25519` itself, which it must do anyway. A second scheme would be a new
+  message, not a string to branch on. `holds` answers 1 if `keyd` holds that public key and 0 if
+  not, for a key the asker already has; public keys are published (the host key goes to every
+  client that connects), so this reveals nothing, and it is how `init` and `sshd` ask whether a
+  key is one of `keyd`'s. **Residual:** it answers about every key, not only the badge's, because
+  that is the question its askers have; when keys carry labels (milestone 2) it needs a `check`
+  per key rather than the badge's alone.
 - `grant` mints a fresh capability with the caller's own key and purpose, the way `new_connection`
   does for 9P, because **a launcher never passes its own connection to a child**: the steward asks
   for one per session or lease rather than copying its own. It is stamped like the handle the
@@ -266,6 +296,21 @@ label check gets `not_permitted`, which says no more than that.
   argument to get wrong.
 - There is **no operation that returns a private key, or any function of one but a signature**, and
   none that adds, replaces or removes a key.
+
+**Stated residuals.**
+- `sign_ssh_exchange` hands `keyd` the session's shared secret `K`, because the exchange hash is
+  computed over it and `keyd` computes that hash itself. So a compromised `keyd` does not only
+  speak as the box: it can derive any session's keys and read the traffic. Having `sshd` pass the
+  finished hash instead would avoid it, and would also turn the host key into an oracle that signs
+  any 32 bytes, which is the property this design exists to keep; so the secret reaching `keyd`
+  stands, and `keyd` is written to be small enough to read.
+- The seeds live in `init`'s memory and in the bundle image, at the same trust as the bundle
+  itself, which verified boot authenticates. `bootfsd` serves only the entries the manifest marks
+  public, never the manifest (answer 123), so no session can read them. Milestone 2 generates the
+  keys on the box at first boot and seals them to the machine, and then no seed is in a manifest
+  at all.
+- `holds` answers about every key, not only the badge's. When keys carry labels (milestone 2) it
+  needs a `check` per key rather than the badge's alone.
 
 ## The shell
 A session's shell is **IEx** (Elixir's interactive shell) on beamlet, with a small Redoubt helpers

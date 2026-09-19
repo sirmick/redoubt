@@ -90,7 +90,7 @@ enum Answered {
 #[derive(Debug, PartialEq, Eq)]
 enum OwnedReply {
     Signature(Vec<u8>),
-    PublicKey(String, Vec<u8>),
+    PublicKey(Vec<u8>),
     Holds(u32),
     Granted(u64, Vec<Handle>),
     Released,
@@ -147,7 +147,7 @@ fn decode(opcode: u32, outcome: &Outcome, buf: &[u8]) -> Answered {
         Ok(Ok(reply)) => Answered::Ok(match reply {
             Reply::SignSshExchange(r) => OwnedReply::Signature(r.signature.to_vec()),
             Reply::SignRecord(r) => OwnedReply::Signature(r.signature.to_vec()),
-            Reply::PublicKey(r) => OwnedReply::PublicKey(r.algorithm.into(), r.key.to_vec()),
+            Reply::PublicKey(r) => OwnedReply::PublicKey(r.key.to_vec()),
             Reply::Holds(r) => OwnedReply::Holds(r.held),
             Reply::Grant(r) => OwnedReply::Granted(r.id, handles.to_vec()),
             Reply::Release(_) => OwnedReply::Released,
@@ -239,20 +239,17 @@ fn public_key_and_holds_answer_for_the_key_the_badge_names() {
     };
     assert_eq!(
         ask_public(&mut s, &mut k, HOST_BADGE),
-        Answered::Ok(OwnedReply::PublicKey(ALGORITHM.into(), host_public.clone()))
+        Answered::Ok(OwnedReply::PublicKey(host_public.clone()))
     );
-    assert_eq!(
-        ask_public(&mut s, &mut k, AUDIT_BADGE),
-        Answered::Ok(OwnedReply::PublicKey(ALGORITHM.into(), audit_public))
-    );
-    let holds = |s: &mut KeyServer, k: &mut FakeKernel, algorithm: &str, key: &[u8]| {
-        ask(s, k, &caller(HOST_BADGE, 0, &[]), &Message::Holds(Holds { algorithm, key }), &[])
+    assert_eq!(ask_public(&mut s, &mut k, AUDIT_BADGE), Answered::Ok(OwnedReply::PublicKey(audit_public)));
+    let holds = |s: &mut KeyServer, k: &mut FakeKernel, key: &[u8]| {
+        ask(s, k, &caller(HOST_BADGE, 0, &[]), &Message::Holds(Holds { key }), &[])
     };
-    assert_eq!(holds(&mut s, &mut k, ALGORITHM, &host_public), Answered::Ok(OwnedReply::Holds(1)));
+    assert_eq!(holds(&mut s, &mut k, &host_public), Answered::Ok(OwnedReply::Holds(1)));
     let login = login_key();
-    assert_eq!(holds(&mut s, &mut k, ALGORITHM, &login), Answered::Ok(OwnedReply::Holds(0)));
-    assert_eq!(holds(&mut s, &mut k, "ssh-rsa", &host_public), Answered::Ok(OwnedReply::Holds(0)));
-    assert_eq!(holds(&mut s, &mut k, ALGORITHM, b""), Answered::Ok(OwnedReply::Holds(0)));
+    assert_eq!(holds(&mut s, &mut k, &login), Answered::Ok(OwnedReply::Holds(0)));
+    assert_eq!(holds(&mut s, &mut k, b""), Answered::Ok(OwnedReply::Holds(0)));
+    assert_eq!(holds(&mut s, &mut k, &host_public[..31]), Answered::Ok(OwnedReply::Holds(0)));
 }
 
 /// The public half of the key a person logs in with: never in `keyd`.
@@ -324,7 +321,7 @@ fn a_relayed_ssh_user_auth_blob_is_never_what_gets_signed() {
     ssh_string(b"ssh-connection", &mut blob);
     ssh_string(b"publickey", &mut blob);
     blob.push(1);
-    ssh_string(ALGORITHM.as_bytes(), &mut blob);
+    ssh_string(crate::keys::ALGORITHM.as_bytes(), &mut blob);
     ssh_string(&[0xab; 32], &mut blob);
 
     let host_public = *s.keys().get(0).unwrap().public();
@@ -351,7 +348,6 @@ fn a_relayed_ssh_user_auth_blob_is_never_what_gets_signed() {
         SignSshExchange { v_c: &blob, ..base },
         SignSshExchange { i_c: &blob, ..base },
         SignSshExchange { i_s: &blob, ..base },
-        SignSshExchange { q_c: &blob, ..base },
         SignSshExchange { k: &blob, ..base },
     ];
     for attempt in attempts {
@@ -361,6 +357,11 @@ fn a_relayed_ssh_user_auth_blob_is_never_what_gets_signed() {
         for len in [0, 1, 32, 36, blob.len()] {
             assert!(!verifies(&host_public, &blob[..len], signature_of(&answered)), "len {len}");
         }
+    }
+
+    // Into an ephemeral key it does not even go: those are Curve25519 points, 32 bytes.
+    for wrong in [SignSshExchange { q_c: &blob, ..base }, SignSshExchange { q_s: &blob, ..base }] {
+        assert_eq!(ask(&mut s, &mut k, &host, &Message::SignSshExchange(wrong), &[]), Answered::Malformed);
     }
 
     // And the caller cannot name another host key in the transcript: `keyd` puts its own in.
@@ -409,7 +410,7 @@ fn nothing_in_the_protocol_returns_a_key() {
         Message::SignSshExchange(transcript()),
         Message::SignRecord(SignRecord { record: b"record" }),
         Message::PublicKey(PublicKeyRequest {}),
-        Message::Holds(Holds { algorithm: ALGORITHM, key: &[0; 32] }),
+        Message::Holds(Holds { key: &[0; 32] }),
         Message::Grant(Grant {}),
         Message::Release(Release { id: 1 }),
     ];
@@ -482,7 +483,7 @@ fn no_request_can_put_a_key_into_keyd() {
         &Message::SignSshExchange(SignSshExchange { q_c: &login, ..transcript() }),
         &[],
     );
-    ask(&mut s, &mut k, &host, &Message::Holds(Holds { algorithm: ALGORITHM, key: &login }), &[]);
+    ask(&mut s, &mut k, &host, &Message::Holds(Holds { key: &login }), &[]);
     for opcode in 0..64u32 {
         let mut words = [0u64; 4];
         words[0] = u64::from(opcode);
@@ -493,9 +494,9 @@ fn no_request_can_put_a_key_into_keyd() {
     let after: Vec<Vec<u8>> =
         (0..s.keys().len()).map(|i| s.keys().get(i).unwrap().public().to_vec()).collect();
     assert_eq!(before, after, "the key set never changes");
-    assert!(!s.keys().holds(ALGORITHM, &login), "the login key is still not held");
+    assert!(!s.keys().holds(&login), "the login key is still not held");
     assert_eq!(
-        ask(&mut s, &mut k, &host, &Message::Holds(Holds { algorithm: ALGORITHM, key: &login }), &[]),
+        ask(&mut s, &mut k, &host, &Message::Holds(Holds { key: &login }), &[]),
         Answered::Ok(OwnedReply::Holds(0))
     );
 }
@@ -766,7 +767,7 @@ fn a_labelled_caller_reads_but_does_not_sign() {
         Answered::Ok(OwnedReply::PublicKey(..))
     ));
     assert!(matches!(
-        ask(&mut s, &mut k, &vault, &Message::Holds(Holds { algorithm: ALGORITHM, key: &[0; 32] }), &[]),
+        ask(&mut s, &mut k, &vault, &Message::Holds(Holds { key: &[0; 32] }), &[]),
         Answered::Ok(OwnedReply::Holds(0))
     ));
     for request in [

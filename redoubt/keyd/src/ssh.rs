@@ -50,9 +50,24 @@ pub struct Transcript<'a> {
     pub k: &'a [u8],
 }
 
-/// A transcript part was longer than [`MAX_PART`].
+/// The ephemeral public keys of `curve25519-sha256` (RFC 8731), in bytes. The hash being
+/// SHA-256 already pins the key exchange to that one; checking the length here means a
+/// transcript that is not one of its is refused rather than hashed.
+pub const EPHEMERAL_LEN: usize = 32;
+
+/// Why a transcript was not hashed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TooLong;
+pub enum BadTranscript {
+    /// A part was longer than [`MAX_PART`]: a bound on the work of one request, not a shape.
+    TooLong,
+    /// Not a shape RFC 8731 could have produced: an empty part, or an ephemeral key that is not
+    /// [`EPHEMERAL_LEN`] bytes. Nothing in an SSH key exchange is empty — the identification
+    /// strings begin `SSH-2.0-`, the `KEXINIT` payloads carry the algorithm lists, and `K` is a
+    /// shared secret whose `mpint` body is empty only for zero, which no honest exchange
+    /// produces. Refusing these is what stops a caller having a hash over nothing signed: the
+    /// transcript `keyd` hashes is one a real exchange could have made.
+    BadShape,
+}
 
 /// The host key blob SSH names `K_S`: `string "ssh-ed25519" || string <public key>`, 51 bytes.
 pub const HOST_KEY_BLOB_LEN: usize = 4 + 11 + 4 + PUBLIC_KEY_LEN;
@@ -76,7 +91,7 @@ pub fn host_key_blob(public: &[u8; PUBLIC_KEY_LEN]) -> [u8; HOST_KEY_BLOB_LEN] {
 pub fn exchange_hash(
     transcript: &Transcript<'_>,
     public: &[u8; PUBLIC_KEY_LEN],
-) -> Result<[u8; sha256::DIGEST], TooLong> {
+) -> Result<[u8; sha256::DIGEST], BadTranscript> {
     let parts = [
         transcript.v_c,
         transcript.v_s,
@@ -87,7 +102,13 @@ pub fn exchange_hash(
         transcript.k,
     ];
     if parts.iter().any(|part| part.len() > MAX_PART) {
-        return Err(TooLong);
+        return Err(BadTranscript::TooLong);
+    }
+    let shape = parts.iter().all(|part| !part.is_empty())
+        && transcript.q_c.len() == EPHEMERAL_LEN
+        && transcript.q_s.len() == EPHEMERAL_LEN;
+    if !shape {
+        return Err(BadTranscript::BadShape);
     }
     let blob = host_key_blob(public);
     let mut hash = Sha256::new();
@@ -190,16 +211,59 @@ mod tests {
         let base = Transcript { v_c: b"abcd", v_s: b"efgh", ..sample() };
         let slid = Transcript { v_c: b"abc", v_s: b"defgh", ..sample() };
         assert_ne!(exchange_hash(&base, &PUBLIC).unwrap(), exchange_hash(&slid, &PUBLIC).unwrap());
-        // Empty parts are fine and still distinguishable.
-        let empty = Transcript { v_c: b"", v_s: b"abcdefgh", ..sample() };
-        assert_ne!(exchange_hash(&empty, &PUBLIC).unwrap(), exchange_hash(&base, &PUBLIC).unwrap());
+        // The same across the boundary `K_S` sits on, which the caller does not supply: moving
+        // bytes from `I_S` into `Q_C` is not open to it, but shortening `I_S` still shows.
+        let short = Transcript { i_s: b"server kexini", ..sample() };
+        assert_ne!(exchange_hash(&short, &PUBLIC).unwrap(), exchange_hash(&sample(), &PUBLIC).unwrap());
     }
 
     #[test]
     fn one_requests_work_is_bounded() {
         let long = vec![0u8; MAX_PART + 1];
-        assert_eq!(exchange_hash(&Transcript { i_c: &long, ..sample() }, &PUBLIC), Err(TooLong));
+        assert_eq!(
+            exchange_hash(&Transcript { i_c: &long, ..sample() }, &PUBLIC),
+            Err(BadTranscript::TooLong)
+        );
         let ok = vec![0u8; MAX_PART];
         assert!(exchange_hash(&Transcript { i_c: &ok, ..sample() }, &PUBLIC).is_ok());
+    }
+
+    /// A transcript no key exchange could have produced is refused rather than hashed: the red
+    /// team's all-empty one, and an ephemeral key that is not a Curve25519 point's length.
+    #[test]
+    fn a_transcript_no_exchange_could_make_is_refused() {
+        let empty = Transcript { v_c: b"", v_s: b"", i_c: b"", i_s: b"", q_c: b"", q_s: b"", k: b"" };
+        assert_eq!(exchange_hash(&empty, &PUBLIC), Err(BadTranscript::BadShape));
+        // Each part on its own: every one of the seven must be there.
+        let s = sample();
+        let blanked: [Transcript; 7] = [
+            Transcript { v_c: b"", ..s },
+            Transcript { v_s: b"", ..s },
+            Transcript { i_c: b"", ..s },
+            Transcript { i_s: b"", ..s },
+            Transcript { q_c: b"", ..s },
+            Transcript { q_s: b"", ..s },
+            Transcript { k: b"", ..s },
+        ];
+        for (i, t) in blanked.iter().enumerate() {
+            assert_eq!(exchange_hash(t, &PUBLIC), Err(BadTranscript::BadShape), "part {i}");
+        }
+        // The ephemeral keys are Curve25519 points: 32 bytes, no more and no less.
+        for len in [1, 31, 33, 64] {
+            let wrong = vec![0xcdu8; len];
+            assert_eq!(
+                exchange_hash(&Transcript { q_c: &wrong, ..s }, &PUBLIC),
+                Err(BadTranscript::BadShape)
+            );
+            assert_eq!(
+                exchange_hash(&Transcript { q_s: &wrong, ..s }, &PUBLIC),
+                Err(BadTranscript::BadShape)
+            );
+        }
+        // `K` is an mpint body, whose length an exchange does vary: any non-empty one is taken.
+        for len in [1, 31, 32, 33] {
+            let k = vec![0x01u8; len];
+            assert!(exchange_hash(&Transcript { k: &k, ..s }, &PUBLIC).is_ok(), "K of {len}");
+        }
     }
 }

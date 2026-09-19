@@ -24,10 +24,13 @@ pub const RECEIVE_FAILED: u32 = 3;
 /// The limits in this build do not fit the budget or the open-call headroom: a build-time
 /// mistake, caught at the only moment it can be.
 pub const BAD_LIMITS: u32 = 4;
-/// A key argument was not `name,purpose,seed`, named an unknown purpose, repeated a name or a
-/// public key, or there were too many. `keyd` does not start: a key it cannot read is a key it
-/// cannot sign with, and serving without it would look like the key simply not existing
-/// (TENETS.md 2, fail closed and loudly).
+/// A key argument was refused ([`redoubt_keyd::keys::KeyError`]): not `name,purpose,seed`, a
+/// name outside the manifest's rule, an unknown purpose, a seed that is not 64 lower-case hex
+/// digits, an all-zero seed (the one value `ed25519-compact` panics on), a repeated name, two
+/// keys with the same public key, or more than [`redoubt_keyd::keys::MAX_KEYS`]. `keyd` does
+/// not start on any of them: a key it cannot read is a key it cannot sign with, and serving
+/// without it would look like the key simply not existing (TENETS.md 2, fail closed and
+/// loudly).
 pub const BAD_KEYS: u32 = 5;
 /// The kernel would not give a random word. `keyd`'s first granted badge is drawn from one
 /// (answer 126), and a predictable one is a hole across a restart, so it does not start

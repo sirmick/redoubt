@@ -156,16 +156,10 @@ fn a_signature_round_trips_over_the_real_ipc_path() {
         assert!(verifies(&public, &audit_digest(record), &signature));
         assert!(!verifies(&public, record, &signature));
         // The key is here, and a key that is not is not.
-        assert_eq!(
-            ask(capability, &Message::Holds(Holds { algorithm: "ssh-ed25519", key: &public })),
-            Ok(vec![1])
-        );
+        assert_eq!(ask(capability, &Message::Holds(Holds { key: &public })), Ok(vec![1]));
         let mut other = public.clone();
         other[0] ^= 1;
-        assert_eq!(
-            ask(capability, &Message::Holds(Holds { algorithm: "ssh-ed25519", key: &other })),
-            Ok(vec![0])
-        );
+        assert_eq!(ask(capability, &Message::Holds(Holds { key: &other })), Ok(vec![0]));
     });
     assert_eq!(keyd.stop(), 0, "and it exits cleanly when its endpoint goes");
 }
