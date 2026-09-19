@@ -418,4 +418,6 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   by use); code 1 is `Malformed` in every protocol, reserved by the generator, so a protocol's own
   codes start at 2 and an error table may be empty (`example` renumbered). Vectors run on the BEAM
   and on beamlet; fuzzed. The review found nothing exploitable.
-
+- **A revoked handle is 0 in its slot** (2026-09-19, editorial, from the WP-A2 review): R10 already
+  says such a handle arrives as 0; KERNEL-SPEC.md's ABI section now says the slot keeps its position,
+  so `receive`'s record carries a 0 there and decoders accept it.

@@ -300,6 +300,8 @@ and must match this note. These rules of the encoding are part of the spec:
   fills only `kind` (it arrives only on the IRQ handle `receive` named). An exit notice puts `pid`,
   `cause` and `code` in words 0-2, `blamed_account` in `account` and `blamed_labels` in `labels`. An
   abandoned-call notice puts the call's id in `msg_id`. `Timeout` is an error, not a record.
+  A handle that R10 revoked while its message was queued is 0 in its slot, so a message's handle
+  slots keep their positions (WIRE.md names handles by slot).
 - **Decoding refuses W+X flags and a `mint` badge of 0**; the kernel's mapping and minting code
   refuse them again (R11, I3), so neither rests on one check.
 
