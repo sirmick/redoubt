@@ -440,6 +440,11 @@ impl Vm {
         }
     }
 
+    /// Set a variable of the VM's own environment (`os:getenv/1`), which starts empty.
+    pub fn setenv(&mut self, name: &str, value: &str) {
+        self.sys.env.insert(String::from(name), String::from(value));
+    }
+
     /// Add a directory of the VM's file system where applications live (`App-Vsn/ebin`,
     /// `App-Vsn/priv`, `App-Vsn/include`), searched by `code:lib_dir/1`.
     pub fn add_lib_root(&mut self, dir: &str) {

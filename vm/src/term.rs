@@ -635,7 +635,8 @@ fn compare_one(a: &Term, b: &Term, exact: bool) -> Ordering {
         (Term::Resource(x), Term::Resource(y)) => x.id.cmp(&y.id),
         (Term::Ref(x), Term::Resource(y)) => x.0.cmp(&y.id).then(Ordering::Less),
         (Term::Resource(x), Term::Ref(y)) => x.id.cmp(&y.0).then(Ordering::Greater),
-        (Term::Pid(x), Term::Pid(y)) => (x.index, x.serial).cmp(&(y.index, y.serial)),
+        // Creation order, as BEAM's pids compare (the serial is one counter for the VM).
+        (Term::Pid(x), Term::Pid(y)) => (x.serial, x.index).cmp(&(y.serial, y.index)),
         (Term::Nil, Term::Nil) => Ordering::Equal,
         (Term::Bits(x), Term::Bits(y)) => compare_bits(x, y),
         (Term::Match(x), Term::Match(y)) => x.pos.get().cmp(&y.pos.get()),
