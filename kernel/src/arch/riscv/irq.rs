@@ -23,12 +23,14 @@ extern "Rust" {
 /// The result is serialized with `to_args()` rather than by reinterpreting the enum's
 /// memory as eight registers. The two only coincide when every field is exactly one
 /// register wide, which is not the case on rv64 (e.g. a `SID` is four `u32`s).
-fn return_result(result: &xous_kernel::Result, context: &Thread) -> ! {
-    let args = result.to_args();
+fn return_result(result: &xous_kernel::Result, context: &Thread) -> ! { return_registers(&result.to_args(), context) }
+
+/// Resume `context` with `a0..=a7` = `args`.
+fn return_registers(args: &[usize; 8], context: &Thread) -> ! {
     // SAFETY: `_xous_syscall_return_result` (asm) writes `args` into the return registers
     // and resumes `context` with `sret`. Both point at valid, kernel-owned data and it
     // does not return.
-    unsafe { _xous_syscall_return_result(&args, context) }
+    unsafe { _xous_syscall_return_result(args, context) }
 }
 
 /// The interrupt controller backend. Every backend provides `enable_irq`, `disable_irq`,
@@ -215,6 +217,20 @@ pub extern "C" fn trap_handler(
                 p.current_thread_mut().sepc += 4;
                 p.current_tid()
             });
+            // A Redoubt call (redoubt-sys): its numbers start above every legacy one.
+            if a0 >= redoubt_sys::NUMBER_BASE as usize {
+                let regs = [a0, a1, a2, a3, a4, a5, a6, a7].map(|r| r as u64);
+                let in_irq = PREVIOUS_PAIR.with(|p| p.is_some());
+                match crate::redoubt::handle(pid, tid, in_irq, &regs) {
+                    // Every result register holds at most 32 bits or one `usize` (redoubt-sys).
+                    crate::redoubt::Outcome::Return(out) => ArchProcess::with_current_mut(|p| {
+                        return_registers(&out.map(|r| r as usize), p.current_thread())
+                    }),
+                    crate::redoubt::Outcome::Resume => ArchProcess::with_current_mut(|p| {
+                        crate::arch::syscall::resume(current_pid().get() == 1, p.current_thread())
+                    }),
+                }
+            }
             let call = SysCall::from_args(a0, a1, a2, a3, a4, a5, a6, a7).unwrap_or_else(|_| {
                 ArchProcess::with_current_mut(|p| {
                     return_result(

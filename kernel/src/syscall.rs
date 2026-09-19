@@ -1066,6 +1066,10 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                 }
             })
         }),
+        // The legacy `CreateProcess` is gone on bare metal: it made processes outside every
+        // budget (R6), no program uses it, and WP-K4 brings `process_create`. It falls through to
+        // `UnhandledSyscall` below.
+        #[cfg(not(baremetal))]
         SysCall::CreateProcess(process_init) => SystemServices::with_mut(|ss| {
             ss.create_process(process_init).map(xous_kernel::Result::NewProcess)
         }),

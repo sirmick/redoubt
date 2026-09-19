@@ -1,0 +1,608 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Budgets (KERNEL-SPEC.md, Budget; R6-R10) and the per-process accounts that charge them.
+//!
+//! # Where things live
+//! Every budget occupies one RAM frame of its own, allocated to `mem::OBJECT_OWNER`: that frame *is*
+//! the page the cost table charges for it, so budgets need no kernel-static table whose size
+//! another budget could exhaust (R7: an allocation fails only on the caller's own budget). A
+//! budget is named by its frame's index in the page-ownership table ([`BudgetFrame`]); the tree
+//! is linked through the frames (parent, first child, next sibling).
+//!
+//! The per-process side ([`Account`]: which budget pays, how many threads and frames, the handle
+//! table) is a fixed array indexed by PID, because PIDs are a fixed pool anyway (processes are
+//! carved from `root`'s limit like pages, so that pool cannot be exhausted across budgets either).
+//!
+//! All of this is part of the [`MemoryManager`]: charging happens where frames change hands
+//! (`alloc_page`, the ownership table), so the ledger must be reachable there without taking a
+//! second kernel lock.
+//!
+//! # What is charged (the cost table)
+//! A budget's own object 1 page, always to its parent (answer 76); a process 1; a
+//! thread 1; each page-table page and each mapped RAM frame 1 (counted as frames change owner,
+//! `mem.rs`); each handle-table page 1 (`handle.rs`). The frames holding a process's saved
+//! contexts (`ProcessImpl`) are the physical form of the process and thread objects and are not
+//! charged again.
+
+use redoubt_sys::{BudgetSpec, Class, Error, FOREVER, MAX_DEPTH, MAX_LABELS, Usage};
+use xous_kernel::PID;
+
+use crate::arch::process::MAX_PROCESS_COUNT;
+use crate::handle::{Handle, HandleTable, Object};
+use crate::kframe;
+use crate::mem::MemoryManager;
+
+/// A budget, named by the index of its frame in the page-ownership table.
+pub type BudgetFrame = u32;
+
+/// The cost table (KERNEL-SPEC.md, What objects cost), in pages.
+pub const BUDGET_PAGES: u64 = 1;
+pub const PROCESS_PAGES: u64 = 1;
+pub const THREAD_PAGES: u64 = 1;
+
+/// The weight `root` starts with. Weights only matter relative to each other (R12), so any
+/// value works; this one leaves room to carve.
+const ROOT_WEIGHT: u32 = 1000;
+
+/// A budget as the kernel works with it. It lives in its frame as words (`load`, `store`).
+#[derive(Clone, Copy)]
+pub struct Budget {
+    pub id: u64,
+    pub parent: Option<BudgetFrame>,
+    pub first_child: Option<BudgetFrame>,
+    pub next_sibling: Option<BudgetFrame>,
+    pub depth: u32,
+    pub class: Class,
+    /// Set by `budget_destroy` on the whole subtree before it tears anything down (R10).
+    pub dying: bool,
+    pub labels: [u64; MAX_LABELS],
+    pub nlabels: usize,
+    pub account: u64,
+    /// Absolute µs since boot; `FOREVER` for none. Recorded here; WP-K5 enforces it.
+    pub deadline: u64,
+    pub pages_limit: u64,
+    pub pages_used: u64,
+    pub processes_limit: u32,
+    pub processes_used: u32,
+    pub weight_limit: u32,
+    /// The children's weight limits (R7).
+    pub weight_carved: u32,
+}
+
+impl Budget {
+    fn labels(&self) -> &[u64] { &self.labels[..self.nlabels] }
+
+    fn free_pages(&self) -> u64 { self.pages_limit.saturating_sub(self.pages_used) }
+
+    fn free_processes(&self) -> u32 { self.processes_limit.saturating_sub(self.processes_used) }
+
+    fn free_weight(&self) -> u32 { self.weight_limit.saturating_sub(self.weight_carved) }
+}
+
+/// First word of every budget frame, so that a frame read as a budget that is not one is caught.
+const MAGIC: u64 = u64::from_le_bytes(*b"budget\0\0");
+/// Words a budget takes in its frame: `load` and `store` below.
+const WORDS: usize = 10 + MAX_LABELS;
+
+fn link(frame: Option<BudgetFrame>) -> u64 { frame.map_or(0, |f| u64::from(f) + 1) }
+
+fn unlink(word: u64) -> Option<BudgetFrame> { (word as u32).checked_sub(1) }
+
+/// One process's side of the ledger. The kernel (PID 1) has none: it has no budget.
+#[derive(Clone, Copy)]
+pub struct Account {
+    pub budget: Option<BudgetFrame>,
+    pub threads: u64,
+    /// RAM frames owned by the process and charged to its budget (page tables and mapped pages).
+    pub frames: u64,
+    pub handles: HandleTable,
+}
+
+impl Account {
+    const NONE: Account = Account { budget: None, threads: 0, frames: 0, handles: HandleTable::EMPTY };
+}
+
+pub struct Objects {
+    /// The next budget id. Ids are never reused (I12); a `u64` cannot run out.
+    next_id: u64,
+    accounts: [Account; MAX_PROCESS_COUNT],
+}
+
+impl Objects {
+    pub const fn new() -> Objects { Objects { next_id: 1, accounts: [Account::NONE; MAX_PROCESS_COUNT] } }
+}
+
+fn account_index(pid: PID) -> Option<usize> {
+    let index = usize::from(pid.get()) - 1;
+    (index < MAX_PROCESS_COUNT).then_some(index)
+}
+
+/// `a ⊇ b`, both sorted.
+fn superset(a: &[u64], b: &[u64]) -> bool { b.iter().all(|x| a.binary_search(x).is_ok()) }
+
+impl MemoryManager {
+    // --- Frames of kernel objects -----------------------------------------------------------
+
+    pub fn budget(&self, frame: BudgetFrame) -> Budget {
+        let phys = self.object_phys(frame);
+        let w = |i: usize| kframe::read(phys, i * 8);
+        // A budget frame that does not hold a budget means a stale reference survived R10's
+        // sweep: a violated invariant (I1), so the kernel stops rather than trust the frame.
+        assert!(w(0) == MAGIC, "I1: frame {} holds no budget", frame);
+        let class = match (w(3) >> 40) as u8 {
+            1 => Class::User,
+            2 => Class::System,
+            _ => panic!("I1: budget frame {} is corrupt", frame),
+        };
+        let mut labels = [0; MAX_LABELS];
+        for (i, label) in labels.iter_mut().enumerate() {
+            *label = w(10 + i);
+        }
+        Budget {
+            id: w(1),
+            parent: unlink(w(2)),
+            first_child: unlink(w(2) >> 32),
+            next_sibling: unlink(w(3)),
+            depth: (w(3) >> 32) as u8 as u32,
+            class,
+            dying: (w(3) >> 48) as u8 != 0,
+            labels,
+            nlabels: usize::from((w(3) >> 56) as u8).min(MAX_LABELS),
+            account: w(4),
+            deadline: w(5),
+            pages_limit: w(6),
+            pages_used: w(7),
+            processes_limit: w(8) as u32,
+            processes_used: (w(8) >> 32) as u32,
+            weight_limit: w(9) as u32,
+            weight_carved: (w(9) >> 32) as u32,
+        }
+    }
+
+    pub fn store(&mut self, frame: BudgetFrame, b: &Budget) {
+        let phys = self.object_phys(frame);
+        let mut words = [0u64; WORDS];
+        words[0] = MAGIC;
+        words[1] = b.id;
+        words[2] = link(b.parent) | link(b.first_child) << 32;
+        words[3] = link(b.next_sibling)
+            | u64::from(b.depth as u8) << 32
+            | (b.class as u64) << 40
+            | u64::from(b.dying) << 48
+            | (b.nlabels as u64) << 56;
+        words[4] = b.account;
+        words[5] = b.deadline;
+        words[6] = b.pages_limit;
+        words[7] = b.pages_used;
+        words[8] = u64::from(b.processes_limit) | u64::from(b.processes_used) << 32;
+        words[9] = u64::from(b.weight_limit) | u64::from(b.weight_carved) << 32;
+        words[10..].copy_from_slice(&b.labels);
+        for (i, word) in words.iter().enumerate() {
+            kframe::write(phys, i * 8, *word);
+        }
+    }
+
+    // --- Charging (R6) ------------------------------------------------------------------------
+
+    /// Charge `pages` to budget `frame`; `OutOfMemory` over its limit (and while R3 holds it
+    /// over, for every new allocation).
+    pub fn charge(&mut self, frame: BudgetFrame, pages: u64) -> Result<(), Error> {
+        let mut b = self.budget(frame);
+        if pages > b.free_pages() {
+            return Err(Error::OutOfMemory);
+        }
+        b.pages_used += pages;
+        self.store(frame, &b);
+        Ok(())
+    }
+
+    pub fn uncharge(&mut self, frame: BudgetFrame, pages: u64) {
+        let mut b = self.budget(frame);
+        // Returning more than was charged is a bookkeeping bug (I5); stop rather than wrap.
+        b.pages_used = b.pages_used.checked_sub(pages).expect("I5: budget usage underflow");
+        self.store(frame, &b);
+    }
+
+    pub fn account(&self, pid: PID) -> Option<&Account> {
+        account_index(pid).map(|i| &self.objects.accounts[i]).filter(|a| a.budget.is_some())
+    }
+
+    pub fn account_mut(&mut self, pid: PID) -> Option<&mut Account> {
+        let accounts = &mut self.objects.accounts;
+        account_index(pid).map(move |i| &mut accounts[i]).filter(|a| a.budget.is_some())
+    }
+
+    /// The budget process `pid` lives in; `None` for the kernel.
+    pub fn budget_of(&self, pid: PID) -> Option<BudgetFrame> { self.account(pid).and_then(|a| a.budget) }
+
+    /// A RAM frame became `pid`'s: charge it to `pid`'s budget, if it has one.
+    pub fn charge_frame(&mut self, pid: PID) -> Result<(), Error> {
+        if let Some(budget) = self.budget_of(pid) {
+            self.charge(budget, 1)?;
+            self.account_mut(pid).expect("account").frames += 1;
+        }
+        Ok(())
+    }
+
+    /// A RAM frame stopped being `pid`'s.
+    pub fn uncharge_frame(&mut self, pid: PID) {
+        if let Some(budget) = self.budget_of(pid) {
+            let account = self.account_mut(pid).expect("account");
+            account.frames = account.frames.checked_sub(1).expect("I5: frame count underflow");
+            self.uncharge(budget, 1);
+        }
+    }
+
+    /// Whether `n` frames of `from`'s can become `to`'s: the budget paying for them changes
+    /// only if the two live in different budgets.
+    pub fn can_take_frames(&self, from: PID, to: PID, n: u64) -> bool {
+        match self.budget_of(to) {
+            None => true,
+            Some(to_budget) if self.budget_of(from) == Some(to_budget) => true,
+            Some(to_budget) => n <= self.budget(to_budget).free_pages(),
+        }
+    }
+
+    /// Every frame of `pid`'s was just freed at once (`release_all_memory_for_process`).
+    pub fn uncharge_all_frames(&mut self, pid: PID) {
+        if let Some(budget) = self.budget_of(pid) {
+            let frames = core::mem::take(&mut self.account_mut(pid).expect("account").frames);
+            self.uncharge(budget, frames);
+        }
+    }
+
+    // --- Processes and threads ------------------------------------------------------------------
+
+    /// Put new process `pid`, with its first thread, in `budget`: one process from its process
+    /// limit, and the process and thread objects from its pages. Nothing changes on an error.
+    pub fn process_created(&mut self, pid: PID, budget: BudgetFrame) -> Result<(), Error> {
+        let index = account_index(pid).ok_or(Error::InvalidArgument)?;
+        let mut b = self.budget(budget);
+        // A weight-0 budget holds no process (R12).
+        if b.weight_limit == 0 {
+            return Err(Error::InvalidArgument);
+        }
+        if b.free_processes() == 0 {
+            return Err(Error::OutOfProcesses);
+        }
+        if PROCESS_PAGES + THREAD_PAGES > b.free_pages() {
+            return Err(Error::OutOfMemory);
+        }
+        b.processes_used += 1;
+        b.pages_used += PROCESS_PAGES + THREAD_PAGES;
+        self.store(budget, &b);
+        self.objects.accounts[index] = Account { budget: Some(budget), threads: 1, ..Account::NONE };
+        Ok(())
+    }
+
+    /// Everything the process still has charged goes back to its budget. Its frames were
+    /// released just before (`uncharge_all_frames`); its handle table goes here.
+    pub fn process_ended(&mut self, pid: PID) {
+        let Some(budget) = self.budget_of(pid) else { return };
+        self.close_all_handles(pid);
+        let account = self.account_mut(pid).expect("account");
+        let pages = PROCESS_PAGES + account.threads * THREAD_PAGES + account.frames;
+        *account = Account::NONE;
+        self.uncharge(budget, pages);
+        let mut b = self.budget(budget);
+        b.processes_used = b.processes_used.checked_sub(1).expect("I5: process count underflow");
+        self.store(budget, &b);
+    }
+
+    pub fn thread_created(&mut self, pid: PID) -> Result<(), Error> {
+        if let Some(budget) = self.budget_of(pid) {
+            self.charge(budget, THREAD_PAGES)?;
+            self.account_mut(pid).expect("account").threads += 1;
+        }
+        Ok(())
+    }
+
+    pub fn thread_ended(&mut self, pid: PID) {
+        if let Some(budget) = self.budget_of(pid) {
+            let account = self.account_mut(pid).expect("account");
+            account.threads = account.threads.checked_sub(1).expect("I5: thread count underflow");
+            self.uncharge(budget, THREAD_PAGES);
+        }
+    }
+
+    // --- Boot -----------------------------------------------------------------------------------
+
+    /// Create `root`, `system` and `users` and put the loader's processes in `system`.
+    ///
+    /// INTERIM (until WP-K4 loads only `init`, and WP-R3's `init` builds the tree from the boot
+    /// manifest): the sizes are computed here rather than read from the argument block. `root`
+    /// gets every RAM page the kernel did not keep at boot, every PID but the kernel's, and all
+    /// the weight; `system` a quarter of each (RESOURCES.md's default), `users` the rest. Every
+    /// loader-started process is charged to `system`, and the first one (PID 2) gets handles to
+    /// the three budgets in slots 1-3, stamped with `root`, as `init` will.
+    ///
+    /// A loader bundle whose processes do not fit in `system` cannot run under the rules, so the
+    /// kernel refuses to boot (fail closed).
+    pub fn boot_budgets(&mut self, loader_pids: &[PID]) {
+        let kernel = crate::services::KERNEL_PID;
+        let pages = self.ram_frames_not_owned_by(kernel);
+        let processes = (MAX_PROCESS_COUNT - 1) as u32;
+        let quarter = |x: u64| x / 4;
+        let root = self.boot_budget(None, Class::System, pages, processes, ROOT_WEIGHT);
+        let sys_pages = quarter(pages);
+        let sys_processes = processes / 4;
+        let sys_weight = ROOT_WEIGHT / 4;
+        let system = self.boot_budget(Some(root), Class::System, sys_pages, sys_processes, sys_weight);
+        // Root pays for the two budgets' own pages; its own is the kernel's.
+        let users_pages = pages - 2 * BUDGET_PAGES - sys_pages;
+        let users = self.boot_budget(
+            Some(root),
+            Class::User,
+            users_pages,
+            processes - sys_processes,
+            ROOT_WEIGHT - sys_weight,
+        );
+        for pid in loader_pids {
+            let frames = self.ram_frames_owned_by(*pid) as u64
+                - crate::arch::process::PROCESS_IMPL_PAGES as u64;
+            self.process_created(*pid, system).expect("boot: the loader's processes do not fit in system");
+            self.charge(system, frames).expect("boot: the loader's processes do not fit in system");
+            self.account_mut(*pid).expect("account").frames = frames;
+        }
+        if let Some(first) = loader_pids.first() {
+            for budget in [root, system, users] {
+                let id = self.budget(budget).id;
+                let handle = Handle { object: Object::Budget { frame: budget, id }, badge: 0, stamp: root };
+                self.install_handle(*first, handle).expect("boot: no room for the first program's handles");
+            }
+        }
+        println!("Budgets: root {} pages, system {} (the loader's processes), users {}", pages, sys_pages, users_pages);
+    }
+
+    fn boot_budget(
+        &mut self,
+        parent: Option<BudgetFrame>,
+        class: Class,
+        pages: u64,
+        processes: u32,
+        weight: u32,
+    ) -> BudgetFrame {
+        let spec = BudgetSpec {
+            pages,
+            processes,
+            weight,
+            class,
+            labels: Default::default(),
+            account: 0,
+            deadline: FOREVER,
+        };
+        self.new_budget(parent, &spec, &[]).expect("boot: no frame for a boot budget")
+    }
+
+    // --- The calls --------------------------------------------------------------------------------
+
+    /// Create the budget object (after every check): its frame, its id, its place in the tree;
+    /// its own object and its limits charged to the parent (R6, R7; answer 76). The class is the
+    /// caller's to choose: `budget_create` passes the parent's (answer 73), boot the spec's.
+    fn new_budget(
+        &mut self,
+        parent: Option<BudgetFrame>,
+        spec: &BudgetSpec,
+        labels: &[u64],
+    ) -> Result<BudgetFrame, Error> {
+        let frame = self.alloc_object_frame()?;
+        let id = self.objects.next_id;
+        self.objects.next_id = id.checked_add(1).expect("I12: budget ids exhausted");
+        let mut label_array = [0; MAX_LABELS];
+        label_array[..labels.len()].copy_from_slice(labels);
+        let parent_budget = parent.map(|p| self.budget(p));
+        let b = Budget {
+            id,
+            parent,
+            first_child: None,
+            next_sibling: parent_budget.and_then(|p| p.first_child),
+            depth: parent_budget.map_or(0, |p| p.depth + 1),
+            class: spec.class,
+            dying: false,
+            labels: label_array,
+            nlabels: labels.len(),
+            account: spec.account,
+            deadline: spec.deadline,
+            pages_limit: spec.pages,
+            pages_used: 0,
+            processes_limit: spec.processes,
+            processes_used: 0,
+            weight_limit: spec.weight,
+            weight_carved: 0,
+        };
+        self.store(frame, &b);
+        if let (Some(p), Some(mut pb)) = (parent, parent_budget) {
+            pb.first_child = Some(frame);
+            pb.pages_used += BUDGET_PAGES + spec.pages;
+            pb.processes_used += spec.processes;
+            pb.weight_carved += spec.weight;
+            self.store(p, &pb);
+        }
+        Ok(frame)
+    }
+
+    /// `budget_create(h(parent), spec) -> h`, after decoding. The checks follow KERNEL-SPEC.md's
+    /// row for `budget_create`, in order.
+    pub fn budget_create(&mut self, pid: PID, parent: u32, spec: &BudgetSpec) -> Result<u32, Error> {
+        let caller = self.budget_of(pid).ok_or(Error::NotPermitted)?;
+        let pf = self.budget_handle(pid, parent)?;
+        let p = self.budget(pf);
+        let caller_class = self.budget(caller).class;
+        if p.depth as usize + 1 >= MAX_DEPTH {
+            return Err(Error::TooLarge);
+        }
+        // A child's class is its parent's (answer 73), so the spec's class is not read.
+        // TODO(WP-A2): the ABI still carries a class slot (decoded, so it must be a valid tag),
+        // which A2 removes.
+        let mut labels = [0; MAX_LABELS];
+        let given = spec.labels.as_slice();
+        labels[..given.len()].copy_from_slice(given);
+        let labels = &mut labels[..given.len()];
+        labels.sort_unstable();
+        let mut n = 0;
+        for i in 0..labels.len() {
+            if n == 0 || labels[i] != labels[n - 1] {
+                labels[n] = labels[i];
+                n += 1;
+            }
+        }
+        let labels = &labels[..n];
+        if !superset(labels, p.labels()) {
+            return Err(Error::LabelDenied);
+        }
+        if labels != p.labels() && caller_class != Class::System {
+            return Err(Error::ClassDenied);
+        }
+        // R6, R7: the parent pays the child's own page and carves its limits (answer 76: a
+        // revocation scope, with zero limits, is no special case).
+        if spec.pages.checked_add(BUDGET_PAGES).is_none_or(|pages| pages > p.free_pages()) {
+            return Err(Error::OutOfMemory);
+        }
+        if spec.processes > p.free_processes() {
+            return Err(Error::OutOfProcesses);
+        }
+        // No error names weight; the spec's stated exception.
+        if spec.weight > p.free_weight() {
+            return Err(Error::InvalidArgument);
+        }
+        // R8: the parent's account, unless it is 0; then the creator's choice.
+        let account = if p.account != 0 { p.account } else { spec.account };
+        let child = self.new_budget(Some(pf), &BudgetSpec { account, class: p.class, ..*spec }, labels)?;
+        let id = self.budget(child).id;
+        // R9: stamped with the caller's budget. The table may have to grow, charged to the caller
+        // after the carve (the caller's budget may be the parent); if it cannot, undo.
+        let handle = Handle { object: Object::Budget { frame: child, id }, badge: 0, stamp: caller };
+        self.install_handle(pid, handle).inspect_err(|_| {
+            self.mark_dying(child);
+            self.free_dying(child);
+        })
+    }
+
+    /// `budget_usage(h) -> counters`, after decoding.
+    pub fn budget_usage(&self, pid: PID, h: u32) -> Result<Usage, Error> {
+        let caller = self.budget(self.budget_of(pid).ok_or(Error::NotPermitted)?);
+        let frame = self.budget_handle(pid, h)?;
+        let target = self.budget(frame);
+        // A user-class caller reads only budgets whose labels its own contain (R1, I7).
+        if caller.class != Class::System && !superset(caller.labels(), target.labels()) {
+            return Err(Error::LabelDenied);
+        }
+        Ok(Usage {
+            pages_limit: target.pages_limit,
+            pages_usage: target.pages_used,
+            processes_limit: target.processes_limit,
+            processes_usage: target.processes_used,
+            weight_limit: target.weight_limit,
+            weight_carved: target.weight_carved,
+        })
+    }
+
+    // --- Destruction (R10) ------------------------------------------------------------------------
+
+    /// First step of `budget_destroy(h)`: check the handle and mark the budget and everything
+    /// below it dying. The caller then kills every process in a dying budget
+    /// (`process_is_doomed`), and finishes with [`MemoryManager::destroy_marked`].
+    pub fn destroy_begin(&mut self, pid: PID, h: u32) -> Result<BudgetFrame, Error> {
+        let frame = self.budget_handle(pid, h)?;
+        self.mark_dying(frame);
+        Ok(frame)
+    }
+
+    /// Whether `pid` lives in a budget that is being destroyed.
+    pub fn process_is_doomed(&self, pid: PID) -> bool { self.budget_of(pid).is_some_and(|b| self.budget(b).dying) }
+
+    /// Last step of `budget_destroy`, once the doomed budgets' processes are gone: close every
+    /// handle naming a doomed budget or stamped with one, in every table (R10, I2); free the
+    /// budgets, descendants first; give the parent back what `top` carved from it (I10).
+    pub fn destroy_marked(&mut self, top: BudgetFrame) {
+        self.sweep_handles(|mm, h| {
+            let names_doomed = match h.object {
+                Object::Budget { frame, .. } => mm.budget(frame).dying,
+            };
+            names_doomed || mm.budget(h.stamp).dying
+        });
+        self.free_dying(top);
+    }
+
+    fn mark_dying(&mut self, top: BudgetFrame) {
+        self.walk(top, |mm, f| {
+            let mut b = mm.budget(f);
+            b.dying = true;
+            mm.store(f, &b);
+        });
+    }
+
+    /// Free `top` and everything below it (all marked dying, with no processes and no handles
+    /// left), and return `top`'s carve to its parent.
+    fn free_dying(&mut self, top: BudgetFrame) {
+        let b = self.budget(top);
+        if let Some(p) = b.parent {
+            let mut pb = self.budget(p);
+            let carved = BUDGET_PAGES + b.pages_limit;
+            pb.pages_used = pb.pages_used.checked_sub(carved).expect("I5: carve underflow");
+            pb.processes_used = pb.processes_used.checked_sub(b.processes_limit).expect("I5: carve underflow");
+            pb.weight_carved = pb.weight_carved.checked_sub(b.weight_limit).expect("I5: carve underflow");
+            // Unlink `top` from its siblings.
+            if pb.first_child == Some(top) {
+                pb.first_child = b.next_sibling;
+            } else {
+                let mut cur = pb.first_child;
+                while let Some(c) = cur {
+                    let mut cb = self.budget(c);
+                    if cb.next_sibling == Some(top) {
+                        cb.next_sibling = b.next_sibling;
+                        self.store(c, &cb);
+                        break;
+                    }
+                    cur = cb.next_sibling;
+                }
+            }
+            self.store(p, &pb);
+        }
+        // Descendants first (post-order), so each frame is read before it is freed.
+        let mut cur = top;
+        'down: loop {
+            while let Some(child) = self.budget(cur).first_child {
+                cur = child;
+            }
+            loop {
+                let b = self.budget(cur);
+                self.free_object_frame(cur);
+                if cur == top {
+                    break 'down;
+                }
+                match b.next_sibling {
+                    Some(sibling) => {
+                        cur = sibling;
+                        continue 'down;
+                    }
+                    // The parent's children are all freed now; free the parent next.
+                    None => cur = b.parent.expect("a descendant has a parent"),
+                }
+            }
+        }
+    }
+
+    /// Visit `top` and every budget below it, parents before children.
+    fn walk(&mut self, top: BudgetFrame, mut visit: impl FnMut(&mut Self, BudgetFrame)) {
+        let mut cur = top;
+        loop {
+            visit(self, cur);
+            if let Some(child) = self.budget(cur).first_child {
+                cur = child;
+                continue;
+            }
+            loop {
+                if cur == top {
+                    return;
+                }
+                let b = self.budget(cur);
+                if let Some(sibling) = b.next_sibling {
+                    cur = sibling;
+                    break;
+                }
+                cur = b.parent.expect("a descendant has a parent");
+            }
+        }
+    }
+}

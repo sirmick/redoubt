@@ -869,6 +869,7 @@ dependencies = [
 name = "test-programs"
 version = "0.1.0"
 dependencies = [
+ "redoubt-sys",
  "uart_16550",
  "xous",
 ]
@@ -1249,6 +1250,7 @@ dependencies = [
  "plic",
  "rand",
  "rand_chacha",
+ "redoubt-sys",
  "riscv",
  "sbi-rt",
  "stats_alloc",

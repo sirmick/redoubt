@@ -14,14 +14,22 @@ mod arch;
 
 #[macro_use]
 mod args;
+#[cfg(baremetal)]
+mod budget;
 mod cell;
 #[cfg(baremetal)]
 mod grants;
+#[cfg(baremetal)]
+mod handle;
 mod io;
 mod irq;
+#[cfg(baremetal)]
+mod kframe;
 mod macros;
 mod mem;
 mod platform;
+#[cfg(baremetal)]
+mod redoubt;
 mod server;
 mod services;
 mod syscall;
@@ -51,6 +59,18 @@ pub unsafe extern "C" fn init(
         mm.init_from_memory(rpt_offset, xpt_offset, &args).expect("couldn't initialize memory manager")
     });
     SystemServices::with_mut(|system_services| system_services.init_from_memory(init_offset, &args));
+
+    // The budget tree, with the loader's processes in `system` (budget.rs, `boot_budgets`).
+    let mut loader_pids = [services::KERNEL_PID; services::MAX_PROCESS_COUNT];
+    let count = SystemServices::with(|ss| {
+        let mut count = 0;
+        for process in ss.processes.iter().filter(|p| !p.free() && p.pid != services::KERNEL_PID) {
+            loader_pids[count] = process.pid;
+            count += 1;
+        }
+        count
+    });
+    crate::mem::MemoryManager::with_mut(|mm| mm.boot_budgets(&loader_pids[..count]));
 
     // Now that the memory manager is set up, perform any architecture and
     // platform specific initializations.
