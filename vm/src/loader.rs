@@ -142,7 +142,7 @@ pub fn load(bytes: &[u8], atoms: &mut AtomTable) -> Result<Module> {
 
     let attributes = chunk(b"Attr").unwrap_or(&[]).to_vec();
     let compile_info = chunk(b"CInf").unwrap_or(&[]).to_vec();
-    Ok(Module { name, imports, exports, funs, literals, strings, code, functions, lines, attributes, compile_info })
+    Ok(Module { name, imports, exports, funs, literals, strings, code, functions, lines, body_natives: Vec::new(), attributes, compile_info })
 }
 
 /// Parse the `Line` chunk (see `parse_line_chunk` in BEAM's `beam_file.c`).

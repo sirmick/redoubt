@@ -328,7 +328,8 @@ pub fn encode(t: &Term) -> Result<Vec<u8>, EncodeError> {
                 out.extend_from_slice(&((r.0 >> 18) as u32).to_be_bytes());
                 out.extend_from_slice(&((r.0 >> 50) as u32).to_be_bytes());
             }
-            Term::Match(_) => return Err(EncodeError::Unsupported),
+            // A resource stands for native memory; it cannot leave the VM.
+            Term::Match(_) | Term::Resource(_) => return Err(EncodeError::Unsupported),
         }
     }
     Ok(out)

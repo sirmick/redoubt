@@ -33,6 +33,9 @@ pub struct Ctx<'a> {
 
 pub type Native = fn(&mut Ctx, &[Term]) -> Result<Term, Exception>;
 
+/// A native an embedder adds: `(module, function, arity, implementation)`.
+pub type NativeSpec = (&'static str, &'static str, u32, Native);
+
 /// `(module, function, arity, implementation)`.
 const TABLE: &[(&str, &str, u32, Native)] = &[
     // Arithmetic and comparison (the operators).
@@ -385,9 +388,10 @@ pub struct Registry {
 }
 
 impl Registry {
-    pub fn new() -> Registry {
+    /// The built-in natives plus the embedder's `extra` ones (such as `beamlet-crypto`'s).
+    pub fn new(extra: &[NativeSpec]) -> Registry {
         let mut by_module: BTreeMap<&'static str, Functions> = BTreeMap::new();
-        for &(m, f, a, n) in TABLE {
+        for &(m, f, a, n) in TABLE.iter().chain(extra) {
             let arities = by_module.entry(m).or_default().entry(f).or_default();
             assert!(arities.iter().all(|(x, _)| *x != a), "{m}:{f}/{a} is listed twice");
             arities.push((a, n));
@@ -412,7 +416,7 @@ impl Registry {
 
 impl Default for Registry {
     fn default() -> Self {
-        Self::new()
+        Self::new(&[])
     }
 }
 

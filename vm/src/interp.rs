@@ -589,7 +589,16 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
     let a = &sys.atoms;
 
     match ins.op {
-        op::LABEL | op::LINE | op::EXECUTABLE_LINE | op::DEBUG_LINE | op::NIF_START | op::TEST_HEAP => {}
+        // `on_load` marks the function BEAM runs after loading (usually to call load_nif). This
+        // VM does not run it: natives it provides replace stub bodies at load instead.
+        op::LABEL | op::LINE | op::EXECUTABLE_LINE | op::DEBUG_LINE | op::NIF_START | op::TEST_HEAP | op::ON_LOAD => {}
+
+        crate::module::NATIVE_BODY => {
+            let &(n, ref name, arity) = module.body_natives.get(u(ins, 0)?).ok_or(Fault::BadCode("native body"))?;
+            let r = call_native(sys, p, n, (&module.name, name), arity as usize)?;
+            p.x[0] = r;
+            return Ok(do_return(p));
+        }
 
         op::FUNC_INFO => {
             // Reached when no clause of the function matched.
@@ -777,7 +786,7 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
                 op::IS_NUMBER => t.is_number(),
                 op::IS_ATOM => matches!(t, Term::Atom(_)),
                 op::IS_PID => matches!(t, Term::Pid(_)),
-                op::IS_REFERENCE => matches!(t, Term::Ref(_)),
+                op::IS_REFERENCE => matches!(t, Term::Ref(_) | Term::Resource(_)),
                 op::IS_PORT => false,
                 op::IS_NIL => matches!(t, Term::Nil),
                 op::IS_BINARY => bits_like(t, true),

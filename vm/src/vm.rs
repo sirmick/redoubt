@@ -42,6 +42,16 @@ impl Default for Limits {
     }
 }
 
+/// How an embedder sets up a VM.
+#[derive(Default)]
+pub struct Config {
+    pub limits: Limits,
+    /// Natives beyond the built-in ones, e.g. `beamlet_crypto::NATIVES`. A native whose
+    /// module and function also exist in a loaded module replaces that function's body, the
+    /// way `erlang:load_nif/2` does in BEAM.
+    pub natives: &'static [bif::NativeSpec],
+}
+
 /// Everything but the process table. The running process is borrowed separately, so native
 /// functions get `&mut System` and `&mut Process` at the same time.
 pub struct System {
@@ -233,9 +243,15 @@ impl Vm {
     }
 
     pub fn with_limits(platform: Box<dyn Platform>, limits: Limits) -> Vm {
+        Vm::with_config(platform, Config { limits, natives: &[] })
+    }
+
+    /// A VM with resource limits and extra natives chosen by the embedder.
+    pub fn with_config(platform: Box<dyn Platform>, config: Config) -> Vm {
+        let limits = config.limits;
         let mut atom_table = AtomTable::new();
         let atoms = Atoms::new(&mut atom_table);
-        let natives = bif::Registry::new();
+        let natives = bif::Registry::new(config.natives);
         Vm {
             sys: System {
                 platform,
@@ -345,6 +361,19 @@ impl System {
         let mut module = loader::load(bytes, &mut self.atom_table)?;
         for imp in &mut module.imports {
             imp.native = self.natives.get(&imp.module, &imp.function, imp.arity);
+        }
+        // Functions implemented natively (NIF stubs like `crypto:hash_nif/2`): replace each
+        // body's entry, the `label` right after `func_info`, with a call to the native. Local
+        // calls, exports and funs all enter through that label.
+        let functions = module.functions.clone();
+        for f in &functions {
+            let Some(n) = self.natives.get(&module.name, &f.name, f.arity) else { continue };
+            let entry = f.start as usize + 1;
+            if module.code.get(entry).is_some_and(|i| i.op == crate::opcodes::LABEL) {
+                let index = module.body_natives.len() as u64;
+                module.body_natives.push((n, f.name.clone(), f.arity));
+                module.code[entry] = crate::module::Instr { op: crate::module::NATIVE_BODY, args: alloc::vec![crate::module::Arg::U(index)] };
+            }
         }
         let name = module.name.clone();
         self.modules.insert(name.as_str().to_string(), Rc::new(module));

@@ -182,8 +182,27 @@ pub fn bnot(ctx: &mut Ctx, a: &[Term]) -> R {
     }
 }
 
+/// `X bsl N` on small integers, if the result fits in an `i64`.
+fn shift_small(x: i64, n: i64, left: bool) -> Option<i64> {
+    let n = if left { n } else { n.checked_neg()? };
+    if n >= 0 {
+        // Shifting left is safe while no significant bit (or the sign) is shifted out.
+        let n = u32::try_from(n).ok().filter(|n| *n < 64)?;
+        let r = x.checked_shl(n)?;
+        (r >> n == x).then_some(r)
+    } else {
+        // Arithmetic right shift; everything shifted out leaves 0 or -1.
+        Some(x >> n.unsigned_abs().min(63))
+    }
+}
+
 /// `X bsl N`; a negative `N` shifts right.
 fn shift(ctx: &mut Ctx, x: &Term, n: &Term, left: bool) -> R {
+    if let (Term::Int(xi), Term::Int(ni)) = (x, n) {
+        if let Some(r) = shift_small(*xi, *ni, left) {
+            return Ok(Term::Int(r));
+        }
+    }
     let (Some(x), Some(n)) = (x.as_bigint(), n.as_bigint()) else {
         return Err(ctx.badarith());
     };
