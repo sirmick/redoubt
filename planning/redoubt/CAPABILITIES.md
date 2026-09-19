@@ -47,9 +47,9 @@ The kernel knows processes, handles and resource containers. Nothing about users
    2 hours, 1 GB disk, 10 CPU-minutes". Quotas come from resource accounting (PLAN backlog 3).
 5. **Assume every agent is compromised** by something it read. The goal is a bounded blast radius:
    a hijacked agent can do what its current capabilities allow, until its lease ends, and nothing more.
-6. **Exfiltration is queryable.** Policy can refuse, by default, any principal holding both
-   secret-read and unrestricted egress. (Later: drop sensitive capabilities after an agent reads
-   untrusted content, a simple information-flow rule.)
+6. **Information containment by labels** (CONTAINMENT.md): data carries secrecy labels, reading
+   taints, sinks check clearance, only owners declassify. Capabilities bound what an agent can do;
+   labels bound what it can leak.
 7. **No credentials in agent memory.** Agents hold a capability to an **LLM gateway** (which holds
    the API key, meters token and money budgets, logs calls) and sign through the key server.
 8. **Runtime:** each agent session is its own beamlet VM (one VM = one trust domain); sub-agents with
