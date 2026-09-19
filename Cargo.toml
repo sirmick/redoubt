@@ -1,12 +1,12 @@
 [workspace]
 default-members = [
   "kernel",
-  "loader64",
+  "loader",
   "xous64/testbench",
 ]
 members = [
   "kernel",
-  "loader64",
+  "loader",
   "xous-rs",
   "xous64/paging",
   "xous64/test-programs",

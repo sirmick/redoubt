@@ -22,7 +22,7 @@ pub const TARGETS: &[Target] = &[
         machine: Ok(Machine {
             qemu: "qemu-system-riscv64",
             qemu_args: &["-machine", "virt", "-m", "256M"],
-            loader_package: "loader64",
+            loader_package: "loader",
             kernel_features: &["qemu-virt"],
         }),
     },
@@ -32,7 +32,7 @@ pub const TARGETS: &[Target] = &[
         machine: Ok(Machine {
             qemu: "qemu-system-riscv32",
             qemu_args: &["-machine", "virt", "-m", "256M"],
-            loader_package: "loader64",
+            loader_package: "loader",
             kernel_features: &["qemu-virt"],
         }),
     },
