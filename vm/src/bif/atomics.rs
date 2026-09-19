@@ -37,7 +37,7 @@ fn new(c: &mut Ctx, size: &Term, signed: bool) -> R {
         }
         _ => return Err(c.badarg()),
     };
-    let id = c.sys.make_ref().0;
+    let id = c.sys().make_ref().0;
     let a = Atomics {
         signed,
         cells: Lock::new(alloc::vec![0; n]),

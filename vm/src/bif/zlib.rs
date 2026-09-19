@@ -178,7 +178,7 @@ pub fn open(c: &mut Ctx, _a: &[Term]) -> R {
         codec: Lock::new(Codec::None),
         stash: Lock::new(None),
     };
-    let id = c.sys.make_ref().0;
+    let id = c.sys().make_ref().0;
     Ok(c.heap_mut().resource(Resource {
         id,
         value: Box::new(s),

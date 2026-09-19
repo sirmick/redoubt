@@ -364,9 +364,9 @@ pub fn ge(ctx: &mut Ctx, a: &[Term]) -> R {
 }
 
 fn boolean(ctx: &Ctx, t: &Term) -> Result<bool, Exception> {
-    if t.is_atom(&ctx.sys.atoms.true_) {
+    if t.is_atom(&ctx.atoms.true_) {
         Ok(true)
-    } else if t.is_atom(&ctx.sys.atoms.false_) {
+    } else if t.is_atom(&ctx.atoms.false_) {
         Ok(false)
     } else {
         Err(ctx.badarg())

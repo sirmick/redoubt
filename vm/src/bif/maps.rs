@@ -13,14 +13,14 @@ fn map(c: &mut Ctx, t: &Term) -> Result<Term, Exception> {
     match t {
         Term::Map(_) => Ok(*t),
         _ => {
-            let tag = c.sys.atoms.badmap;
+            let tag = c.atoms.badmap;
             Err(c.error_with(&tag, *t))
         }
     }
 }
 
 fn badkey(c: &mut Ctx, k: &Term) -> Exception {
-    let tag = c.sys.atoms.badkey;
+    let tag = c.atoms.badkey;
     c.error_with(&tag, *k)
 }
 
@@ -51,7 +51,7 @@ pub fn find(c: &mut Ctx, a: &[Term]) -> R {
     let m = map(c, &a[1])?;
     Ok(match c.heap().map_get(m, a[0]) {
         Some(v) => c.ok_tuple(v),
-        None => Term::Atom(c.sys.atoms.error),
+        None => Term::Atom(c.atoms.error),
     })
 }
 
@@ -82,7 +82,7 @@ pub fn take(c: &mut Ctx, a: &[Term]) -> R {
             let rest = c.heap_mut().map_remove(m, a[0]);
             Ok(c.tuple(&[v, rest]))
         }
-        None => Ok(Term::Atom(c.sys.atoms.error)),
+        None => Ok(Term::Atom(c.atoms.error)),
     }
 }
 
@@ -156,7 +156,7 @@ pub fn map_next(c: &mut Ctx, a: &[Term]) -> R {
         Term::Map(_) => a[1],
         _ => return Err(c.badarg()),
     };
-    let iterator = a[2].is_atom(&c.sys.atom("iterator"));
+    let iterator = a[2].is_atom(&c.sys().atom("iterator"));
     if !iterator {
         if !matches!(a[2], Term::Nil | Term::Cons(_)) || !a[0].is_integer() {
             return Err(c.badarg());

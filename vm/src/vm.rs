@@ -90,7 +90,7 @@ pub struct System {
     pub(crate) generations: Arc<crate::sched::Generations>,
     pub atom_table: AtomTable,
     pub atoms: Atoms,
-    modules: BTreeMap<String, Arc<Module>>,
+    modules: BTreeMap<String, &'static Module>,
     natives: bif::Registry,
     pub(crate) run_queue: VecDeque<Pid>,
     /// Everything waiting for a time: receive timeouts and message timers, by deadline.
@@ -143,10 +143,15 @@ pub struct System {
     pub(crate) stats: Stats,
     /// Schedulers the VM runs on (`erlang:system_info(schedulers)`).
     pub(crate) schedulers: usize,
+    /// Schedulers allowed to run (`system_flag(schedulers_online, N)`): helpers numbered from
+    /// this one up park until it is raised.
+    pub(crate) schedulers_online: usize,
     /// Schedulers in a time slice just now.
     pub(crate) running: usize,
     /// Schedulers waiting for work.
     pub(crate) sleepers: usize,
+    /// Helper schedulers parked while offline (`schedulers_online`).
+    pub(crate) parked: usize,
     /// Wake every sleeping scheduler when the lock is next released: a run's result arrived,
     /// the VM halted, or the run is over.
     pub(crate) wake_all: bool,
@@ -547,8 +552,10 @@ impl Vm {
                 resolved: BTreeMap::new(),
                 stats: Stats::default(),
                 schedulers: 1,
+                schedulers_online: 1,
                 running: 0,
                 sleepers: 0,
+                parked: 0,
                 wake_all: false,
                 stopping: false,
                 stuck: false,
@@ -659,8 +666,8 @@ impl Vm {
         #[cfg(feature = "std")]
         if helpers > 0 {
             return std::thread::scope(|scope| {
-                for _ in 0..helpers {
-                    scope.spawn(|| help(sys, wakeup));
+                for index in 1..=helpers {
+                    scope.spawn(move || help(sys, wakeup, index));
                 }
                 let result = drive(sys, wakeup, pid);
                 sys.lock().stopping = true;
@@ -676,7 +683,9 @@ impl Vm {
     /// ever one.
     #[cfg(feature = "std")]
     pub fn set_schedulers(&mut self, n: usize) {
-        self.sys.get_mut().schedulers = n.max(1);
+        let sys = self.sys.get_mut();
+        sys.schedulers = n.max(1);
+        sys.schedulers_online = sys.schedulers;
     }
 
     /// Set a variable of the VM's own environment (`os:getenv/1`), which starts empty.
@@ -719,6 +728,7 @@ impl Vm {
         let sys = self.sys.get_mut();
         sys.watched.insert(pid);
         sys.stuck = false;
+        sys.stopping = false;
         let mut sched = Sched::new(&self.sys, &self.wakeup);
         for _ in 0..max_steps {
             if let Some(done) = sched.lock().result(pid) {
@@ -737,6 +747,17 @@ impl Vm {
 }
 
 impl System {
+    /// Keep the just-spawned `child` of `parent` (the running process) off the run queue until
+    /// the parent's time slice ends. With several schedulers another one would otherwise start
+    /// it at once, and code like `monitor(process, spawn(F))` relies on the parent getting
+    /// there first, as it does on BEAM (a new process goes to its parent's scheduler).
+    pub(crate) fn hold_back(&mut self, parent: &mut Process, child: Pid) {
+        if self.schedulers > 1 && self.run_queue.back() == Some(&child) {
+            self.run_queue.pop_back();
+            parent.spawned.push(child);
+        }
+    }
+
     /// Whether a scheduler with nothing to run should wait for others to make work.
     pub(crate) fn should_sleep(&self) -> bool {
         self.run_queue.is_empty()
@@ -750,18 +771,21 @@ impl System {
     /// How the run for `pid` ended, if it has: the VM halted, `pid` finished, or nothing can
     /// run again.
     fn result(&mut self, pid: Pid) -> Option<Result<Outcome, RunError>> {
-        if let Some(status) = self.halted {
-            return Some(Err(RunError::Halted(status)));
-        }
-        if let Some(r) = self.results.remove(&pid) {
+        let done = if let Some(status) = self.halted {
+            Err(RunError::Halted(status))
+        } else if let Some(r) = self.results.remove(&pid) {
             self.watched.remove(&pid);
-            return Some(Ok(r));
-        }
-        if self.stuck {
+            Ok(r)
+        } else if self.stuck {
             self.stuck = false;
-            return Some(Err(RunError::Deadlock));
-        }
-        None
+            Err(RunError::Deadlock)
+        } else {
+            return None;
+        };
+        // The run is over: helper schedulers stop (and none blocks in the platform first).
+        self.stopping = true;
+        self.wake_all = true;
+        Some(done)
     }
 
     /// Intern an atom the VM needs. Only for names from code or the embedder, which are short.
@@ -828,15 +852,15 @@ impl System {
         }
         let name = module.name;
         self.modules
-            .insert(name.as_str().to_string(), Arc::new(module));
+            .insert(name.as_str().to_string(), Box::leak(Box::new(module)));
         self.code_changed();
         Ok(name)
     }
 
     /// The module named `name`, loading it through the platform on first use.
-    pub fn module(&mut self, name: &Atom) -> Option<Arc<Module>> {
+    pub fn module(&mut self, name: &Atom) -> Option<&'static Module> {
         if let Some(m) = self.modules.get(name.as_str()) {
-            return Some(m.clone());
+            return Some(*m);
         }
         if RUNTIME_MODULES.contains(&name.as_str()) {
             return None;
@@ -991,8 +1015,16 @@ impl System {
         self.send_with(to, |heap| copy(src, msg, heap));
     }
 
-    /// Queue a message for `to`, built by `build` on its heap.
+    /// Queue a message for `to`, built by `build` on a heap of its own.
     pub fn send_with(&mut self, to: Pid, build: impl FnOnce(&mut Heap) -> Term) {
+        if self.procs.is_alive(to) {
+            let fragment = OwnedTerm::build(&self.literals, build);
+            self.send_owned(to, fragment);
+        }
+    }
+
+    /// Queue `fragment` for `to` (dropped if `to` is not alive).
+    pub fn send_owned(&mut self, to: Pid, fragment: OwnedTerm) {
         let Some(inbox) = self.procs.inbox(to) else {
             return;
         };
@@ -1007,7 +1039,7 @@ impl System {
             });
             return;
         }
-        inbox.push_back(OwnedTerm::build(&self.literals, build));
+        inbox.push_back(fragment);
         if let Some(p) = self.procs.get_mut(to) {
             if p.state == State::Waiting {
                 p.state = State::Runnable;
@@ -1102,6 +1134,11 @@ impl System {
             if self.running > 0 {
                 return Next::Sleep;
             }
+            // A run's result (or a halt) waits to be collected, or the run is over: do not block
+            // in the platform.
+            if !self.results.is_empty() || self.halted.is_some() || self.stopping {
+                return Next::Again;
+            }
             // Nothing running either: sleep until the next timer or console input, or give up
             // if nothing can ever arrive.
             return match self.timers.first() {
@@ -1138,6 +1175,7 @@ impl System {
     fn finish(&mut self, mut p: Box<Process>, before: u64, mut stop: Stop) {
         let pid = p.pid;
         self.running -= 1;
+        self.run_queue.extend(p.spawned.drain(..));
         self.procs.settle(&mut p);
         self.stats.reductions += p.reductions - before;
         if let Some(profile) = &mut self.profile {
@@ -1547,17 +1585,24 @@ fn drive(sys: &Lock<System>, wakeup: &Wakeup, pid: Pid) -> Result<Outcome, RunEr
             return done;
         }
         if !schedule(&mut sched) {
-            return Err(RunError::Deadlock);
+            // Nothing can run: the run is over, with a result if another scheduler ended it.
+            return sched.lock().result(pid).unwrap_or(Err(RunError::Deadlock));
         }
     }
 }
 
 /// A helper scheduler: schedule until the run is over.
 #[cfg(feature = "std")]
-fn help(sys: &Lock<System>, wakeup: &Wakeup) {
+fn help(sys: &Lock<System>, wakeup: &Wakeup, index: usize) {
     let mut sched = Sched::new(sys, wakeup);
-    while !sched.lock().stopping {
-        if !schedule(&mut sched) {
+    loop {
+        // Park while offline, or while the run's result waits for the main scheduler to
+        // collect it, until the count is raised or the run is over.
+        sched.park_while(|s| {
+            !s.stopping
+                && (index >= s.schedulers_online || !s.results.is_empty() || s.halted.is_some())
+        });
+        if sched.lock().stopping || !schedule(&mut sched) {
             return;
         }
     }

@@ -1,7 +1,6 @@
 //! A process: registers, stack, mailbox and the bookkeeping for links and monitors.
 
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
-use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -10,10 +9,12 @@ use crate::loader::{FLOAT_REGS, X_REGS};
 use crate::module::Module;
 use crate::term::{Heap, Literals, OwnedTerm, Pid, Ref, Term};
 
-/// A code address: an instruction in a module.
-#[derive(Clone)]
+/// A code address: an instruction in a module. Loaded modules live as long as the VM (a
+/// replaced version is never freed, as its literals are not), so an address is a plain copy:
+/// calls and returns touch no reference counts shared between schedulers.
+#[derive(Clone, Copy)]
 pub struct Cp {
-    pub module: Arc<Module>,
+    pub module: &'static Module,
     pub pc: u32,
 }
 
@@ -257,6 +258,9 @@ pub struct Process {
     pub retry: bool,
     /// The native call to make again, with its arguments still in the x registers.
     pub resume: Option<crate::interp::Resume>,
+    /// Processes this one spawned during its time slice, which join the run queue when the
+    /// slice ends (with several schedulers; see [`crate::vm::System::hold_back`]).
+    pub spawned: Vec<Pid>,
 
     pub links: BTreeSet<Pid>,
     /// Monitors this process holds, by reference: the monitored process.
@@ -313,6 +317,7 @@ impl Process {
             timed_out: false,
             retry: false,
             resume: None,
+            spawned: Vec::new(),
             links: BTreeSet::new(),
             monitors: BTreeMap::new(),
             monitored_by: BTreeMap::new(),

@@ -22,7 +22,7 @@ use crate::vm::{Limits, System, Target};
 /// What finding code needs: a scheduler asks through its caches, natives ask the system.
 pub trait Code {
     fn atoms(&self) -> &Atoms;
-    fn module(&mut self, name: &Atom) -> Option<Arc<Module>>;
+    fn module(&mut self, name: &Atom) -> Option<&'static Module>;
     fn resolve(&mut self, module: &Atom, function: &Atom, arity: u32) -> Option<Target>;
 }
 
@@ -30,7 +30,7 @@ impl Code for System {
     fn atoms(&self) -> &Atoms {
         &self.atoms
     }
-    fn module(&mut self, name: &Atom) -> Option<Arc<Module>> {
+    fn module(&mut self, name: &Atom) -> Option<&'static Module> {
         System::module(self, name)
     }
     fn resolve(&mut self, module: &Atom, function: &Atom, arity: u32) -> Option<Target> {
@@ -42,7 +42,7 @@ impl Code for Sched<'_> {
     fn atoms(&self) -> &Atoms {
         &self.atoms
     }
-    fn module(&mut self, name: &Atom) -> Option<Arc<Module>> {
+    fn module(&mut self, name: &Atom) -> Option<&'static Module> {
         Sched::module(self, name)
     }
     fn resolve(&mut self, module: &Atom, function: &Atom, arity: u32) -> Option<Target> {
@@ -94,6 +94,16 @@ impl<'v> Sched<'v> {
         }
     }
 
+    /// Wait while `parked` holds, checking it under the lock so no wakeup is missed.
+    pub fn park_while(&self, parked: impl Fn(&System) -> bool) {
+        let mut sys = self.sys.lock();
+        while parked(&sys) {
+            sys.parked += 1;
+            sys = self.wakeup.wait(sys);
+            sys.parked -= 1;
+        }
+    }
+
     /// Wait until there may be something for this scheduler to do. Checked under the lock, so
     /// a wakeup cannot be missed between deciding to sleep and sleeping.
     pub fn sleep(&self) {
@@ -135,7 +145,7 @@ impl<'v> Sched<'v> {
         Some(t)
     }
 
-    pub fn module(&mut self, name: &Atom) -> Option<Arc<Module>> {
+    pub fn module(&mut self, name: &Atom) -> Option<&'static Module> {
         self.lock().module(name)
     }
 
@@ -185,11 +195,17 @@ impl core::ops::DerefMut for SysGuard<'_> {
 
 impl Drop for SysGuard<'_> {
     fn drop(&mut self) {
-        if self.guard.sleepers > 0 {
-            if self.guard.wake_all {
-                self.guard.wake_all = false;
+        let s = &mut *self.guard;
+        if s.wake_all {
+            s.wake_all = false;
+            if s.sleepers + s.parked > 0 {
                 self.wakeup.wake_all();
-            } else if !self.guard.run_queue.is_empty() {
+            }
+        } else if s.sleepers > 0 && !s.run_queue.is_empty() {
+            // Parked schedulers wait on the same condvar and would swallow a single wakeup.
+            if s.parked > 0 {
+                self.wakeup.wake_all();
+            } else {
                 self.wakeup.wake_one();
             }
         }

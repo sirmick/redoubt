@@ -365,7 +365,8 @@ fn main() -> ExitCode {
     let has_root = root.is_some();
     let mid_line = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let (sender, events) = std::sync::mpsc::channel();
-    let programs = exec.then(|| programs::Programs::new(sender.clone()));
+    let alive = programs::Alive::default();
+    let programs = exec.then(|| programs::Programs::new(sender.clone(), alive.clone()));
     let platform = Posix {
         start: Instant::now(),
         code_path,
@@ -435,12 +436,8 @@ fn main() -> ExitCode {
             );
         }
     }
-    // The result goes on a line of its own, even after a prompt.
-    if mid_line.load(std::sync::atomic::Ordering::Relaxed) {
-        println!();
-    }
-    match result {
-        Ok(Ok(value)) => println!("{value}"),
+    let line = match &result {
+        Ok(Ok(value)) => Some(value.to_string()),
         Ok(Err(e)) => {
             if std::env::var_os("BEAMLET_DEBUG").is_some() {
                 match &e.trace {
@@ -448,8 +445,20 @@ fn main() -> ExitCode {
                     None => eprintln!("stacktrace: []"),
                 }
             }
-            println!("{}", exception(&mut vm, e.class, &e.reason))
+            Some(exception(&mut vm, e.class, &e.reason).to_string())
         }
+        Err(_) => None,
+    };
+    // Programs the VM started go with it: dropping it closes their input. Wait (briefly) for
+    // them to exit, so nothing of theirs comes after the result.
+    drop(vm);
+    alive.wait(std::time::Duration::from_secs(1));
+    // The result goes on a line of its own, even after a prompt.
+    if mid_line.load(std::sync::atomic::Ordering::Relaxed) {
+        println!();
+    }
+    match result {
+        Ok(_) => println!("{}", line.expect("a result")),
         Err(beamlet_vm::vm::RunError::Halted(status)) => {
             return ExitCode::from(status.clamp(0, 255) as u8)
         }

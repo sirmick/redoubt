@@ -30,16 +30,38 @@ struct Running {
     closed: Arc<AtomicBool>,
 }
 
+/// How many started programs have not yet exited, for waiting until they have.
+#[derive(Clone, Default)]
+pub struct Alive(Arc<(std::sync::Mutex<usize>, std::sync::Condvar)>);
+
+impl Alive {
+    fn add(&self, n: isize) {
+        let (count, changed) = &*self.0;
+        let mut c = count.lock().unwrap_or_else(|e| e.into_inner());
+        *c = c.saturating_add_signed(n);
+        changed.notify_all();
+    }
+
+    /// Wait until every program has exited, or `limit` has passed.
+    pub fn wait(&self, limit: std::time::Duration) {
+        let (count, changed) = &*self.0;
+        let c = count.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = changed.wait_timeout_while(c, limit, |c| *c > 0);
+    }
+}
+
 pub struct Programs {
     events: Sender<Event>,
+    alive: Alive,
     running: BTreeMap<u64, Running>,
     next: u64,
 }
 
 impl Programs {
-    pub fn new(events: Sender<Event>) -> Programs {
+    pub fn new(events: Sender<Event>, alive: Alive) -> Programs {
         Programs {
             events,
+            alive,
             running: BTreeMap::new(),
             next: 1,
         }
@@ -120,6 +142,8 @@ impl Programs {
         };
         let closed = Arc::new(AtomicBool::new(false));
         let (events, stop) = (self.events.clone(), closed.clone());
+        let alive = self.alive.clone();
+        alive.add(1);
         std::thread::spawn(move || {
             let send = |e: ProgramEvent| events.send(Event::Program(handle, e)).is_ok();
             if let Some(mut output) = output {
@@ -144,6 +168,7 @@ impl Programs {
                 }),
                 Err(_) => 128,
             };
+            alive.add(-1);
             send(ProgramEvent::Exit(status));
         });
         self.running.insert(handle, Running { input, closed });

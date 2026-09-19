@@ -7,10 +7,10 @@
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
-use crate::atom::Atom;
+use crate::atom::{Atom, Atoms};
 use crate::process::{Exception, Process};
+use crate::sched::{Sched, SysGuard};
 use crate::term::{Bits, Heap, OwnedTerm, Term};
-use crate::vm::System;
 
 mod arith;
 mod atomics;
@@ -54,10 +54,29 @@ impl<T> Held<T> {
     }
 }
 
-/// Context for a native call: the VM and the calling process.
+/// Context for a native call: the calling process, and the VM.
 pub struct Ctx<'a> {
-    pub sys: &'a mut System,
     pub p: &'a mut Process,
+    /// The atoms the VM names. Reading them takes no lock.
+    pub atoms: &'a Atoms,
+    sched: &'a Sched<'a>,
+}
+
+impl<'a> Ctx<'a> {
+    pub fn new(sched: &'a Sched<'a>, p: &'a mut Process) -> Ctx<'a> {
+        Ctx {
+            p,
+            atoms: &sched.atoms,
+            sched,
+        }
+    }
+
+    /// The VM's shared state, locked until the guard is dropped (for a temporary, the end of
+    /// the statement). A native that never calls this runs without the lock, in parallel with
+    /// other schedulers. Never call it while holding its guard: that is a bug, and panics.
+    pub fn sys(&self) -> SysGuard<'a> {
+        self.sched.lock()
+    }
 }
 
 pub type Native = fn(&mut Ctx, &[Term]) -> Result<Term, Exception>;
@@ -782,7 +801,7 @@ impl Default for Registry {
 
 impl Ctx<'_> {
     pub fn badarg(&self) -> Exception {
-        Exception::error(Term::Atom(self.sys.atoms.badarg))
+        Exception::error(Term::Atom(self.atoms.badarg))
     }
 
     /// `badarg`, with the `cause` BEAM gives in its `error_info` (see [`Exception::cause`]).
@@ -793,23 +812,23 @@ impl Ctx<'_> {
     }
 
     pub fn badarith(&self) -> Exception {
-        Exception::error(Term::Atom(self.sys.atoms.badarith))
+        Exception::error(Term::Atom(self.atoms.badarith))
     }
 
     pub fn system_limit(&self) -> Exception {
-        Exception::error(Term::Atom(self.sys.atoms.system_limit))
+        Exception::error(Term::Atom(self.atoms.system_limit))
     }
 
     pub fn bool(&self, b: bool) -> Term {
         Term::Atom(if b {
-            self.sys.atoms.true_
+            self.atoms.true_
         } else {
-            self.sys.atoms.false_
+            self.atoms.false_
         })
     }
 
     pub fn atom(&mut self, name: &str) -> Term {
-        Term::Atom(self.sys.atom(name))
+        Term::Atom(self.sys().atom(name))
     }
 
     /// An error `{Tag, Value}`, e.g. `{badkey, K}`.
@@ -819,7 +838,7 @@ impl Ctx<'_> {
     }
 
     pub fn ok(&self) -> Term {
-        Term::Atom(self.sys.atoms.ok)
+        Term::Atom(self.atoms.ok)
     }
 
     // ---- terms on the calling process's heap ----
@@ -890,7 +909,7 @@ impl Ctx<'_> {
 
     /// `{error, Reason}`.
     pub fn error_tuple(&mut self, reason: Term) -> Term {
-        let e = Term::Atom(self.sys.atoms.error);
+        let e = Term::Atom(self.atoms.error);
         self.p.heap.tuple(&[e, reason])
     }
 
@@ -914,7 +933,7 @@ impl Ctx<'_> {
 
     /// A new resource holding `value`, with a fresh id.
     pub fn new_resource<T: core::any::Any + crate::sync::Shared>(&mut self, value: T) -> Term {
-        let id = self.sys.make_ref().0;
+        let id = self.sys().make_ref().0;
         self.p.heap.resource(crate::term::Resource {
             id,
             value: alloc::boxed::Box::new(value),

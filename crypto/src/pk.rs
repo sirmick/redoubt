@@ -22,7 +22,7 @@ fn key32(c: &mut Ctx, b: &[u8], arg: i64) -> Result<[u8; 32], E> {
 
 /// A private key argument: a binary, or `undefined` to generate one.
 fn private_or_random(c: &mut Ctx, a: &[Term], i: usize, len: usize) -> Result<Vec<u8>, E> {
-    if a[i].is_atom(&c.sys.atoms.undefined) {
+    if a[i].is_atom(&c.atoms.undefined) {
         random_bytes(c, len)
     } else {
         bytes(c, a, i, "private key")
@@ -118,7 +118,7 @@ pub fn ec_generate_key(c: &mut Ctx, a: &[Term]) -> R {
     let cv = curve(c, &a[0], 0)?;
     with_curve!(cv, C => {
         let size = <elliptic_curve::FieldBytes<C>>::default().len();
-        let secret = if a[1].is_atom(&c.sys.atoms.undefined) {
+        let secret = if a[1].is_atom(&c.atoms.undefined) {
             // A random scalar: retry the (astronomically rare) out-of-range draw.
             let mut found = None;
             for _ in 0..8 {
@@ -176,7 +176,7 @@ fn dh_params(c: &mut Ctx, t: &Term, arg: i64) -> Result<(BigUint, BigUint), E> {
 /// `dh_generate_key_nif(PrivKey, [P, G], Mpint, Len)` → `{Public, Private}`.
 pub fn dh_generate_key(c: &mut Ctx, a: &[Term]) -> R {
     let (p, g) = dh_params(c, &a[1], 1)?;
-    let private = if a[0].is_atom(&c.sys.atoms.undefined)
+    let private = if a[0].is_atom(&c.atoms.undefined)
         || c.heap().iodata_bytes(a[0]).is_some_and(|b| b.is_empty())
     {
         // A private exponent in [2, p - 2], from as many random bytes as p has plus 8, so the
