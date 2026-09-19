@@ -447,6 +447,8 @@ impl MemoryManager {
         let system = boot(self, Some(root), Class::System, sys_pages, sys_processes, sys_weight);
         let users = boot(self, Some(root), Class::User, users_pages, processes - sys_processes, ROOT_WEIGHT - sys_weight);
         let mut first = None;
+        let mut bundle = [None; MAX_PROCESS_COUNT];
+        let mut nbundle = 0;
         for index in 2..=MAX_PROCESS_COUNT {
             let pid = PID::new(index as u8).expect("PIDs start at 1");
             let frames = self.ram_frames_owned_by(pid) as u64;
@@ -454,6 +456,8 @@ impl MemoryManager {
                 continue;
             }
             first.get_or_insert(pid);
+            bundle[nbundle] = Some(pid);
+            nbundle += 1;
             let frames = frames - crate::arch::process::PROCESS_IMPL_PAGES as u64;
             self.process_created(pid, system).expect("boot: the loader's processes do not fit in system");
             self.charge(system, frames).expect("boot: the loader's processes do not fit in system");
@@ -467,7 +471,32 @@ impl MemoryManager {
                 self.install_handle(first, handle).expect("boot: no room for the first program's handles");
             }
         }
+        self.boot_endpoint(system, &bundle[..nbundle]);
         println!("Budgets: root {} pages, system {} (the loader's processes), users {}", pages, sys_pages, users_pages);
+    }
+
+    /// INTERIM (until WP-K4's `process_start` passes handles and WP-R3's `init` hands out
+    /// endpoints from the boot manifest): one endpoint for the bundle's programs to talk over,
+    /// because nothing else can put a Redoubt handle in a second process yet.
+    ///
+    /// The **second** program gets the receive right (badge 0, handle 1) and every later one a
+    /// handle badged with its own PID, so a server can tell its clients apart. The first
+    /// program's table is left exactly as `init`'s will be: `root`, `system` and `users`.
+    fn boot_endpoint(&mut self, system: BudgetFrame, bundle: &[Option<PID>]) {
+        let Some(Some(server)) = bundle.get(1).copied() else { return };
+        let Ok(frame) = self.alloc_object_frame() else { return };
+        self.charge(system, crate::endpoint::ENDPOINT_PAGES).expect("boot: system cannot pay for the endpoint");
+        let id = self.next_object_id();
+        let owner = BudgetRef { frame: system, id: self.budget(system).id };
+        let endpoint = crate::handle::EndpointRef { frame, id };
+        self.store_endpoint(frame, &crate::endpoint::Endpoint { id, owner, cursor: None });
+        for pid in bundle.iter().skip(1).flatten() {
+            // The receive right for the server; a badge for each client, its own PID, which
+            // `mint` never produces as 0 (I3).
+            let badge = if *pid == server { 0 } else { u64::from(pid.get()) };
+            let handle = Handle { object: Object::Endpoint(endpoint), badge, stamp: owner };
+            self.install_handle(*pid, handle).expect("boot: no room for a program's endpoint handle");
+        }
     }
 
     // --- The calls --------------------------------------------------------------------------------

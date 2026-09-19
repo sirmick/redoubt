@@ -1,0 +1,36 @@
+description = "Endpoints and messages (WP-K2) across address spaces: a call with words, handles and a lend; a transfer and one the receiver never asked for (R4); the badge, account and labels the kernel attaches; minting and receive rights (I3, I4); WAIT_CAP per group (R2); abandoned calls reported once and freed by their reply (R3, I15); MAX_OPEN_CALLS with sends still delivered (R4a) (checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# Built with the checks on (redoubt/README.md, "Debug assertions").
+debug_assertions = true
+# PID 2 log-server (the loader's first program: it holds root, system and users, and does not
+# use them); PID 3 redoubt-server, which the kernel gives the boot endpoint's receive right;
+# PID 4 redoubt-client, badged 4; PID 5 redoubt-filler, badged 5. See kernel budget.rs,
+# `boot_endpoint` (INTERIM, until WP-K4's process_start passes handles).
+programs = ["log-server", "redoubt-server", "redoubt-client", "redoubt-filler"]
+timeout_secs = 60
+# The lines that matter are the server's and the client's own checks. A client cannot forge the
+# server's lines: log-server prefixes every relayed line with the sender's PID as the kernel
+# reports it (bench-attack-forgery), so `^\[pid 3\]` is the server and nobody else. The badge,
+# account and label count the server prints are what the kernel attached to the message.
+expect = [
+    '^\[pid 3\] \[server\] holding the boot endpoint$',
+    '^\[pid 3\] \[server\] echo badge 4 account 0 labels 0 fresh id true$',
+    '^\[pid 3\] \[server\] lend 1 pages, word 20816$',
+    '^\[pid 3\] \[server\] send \d+ badge 4 tag 7 transfer Some\(1\) word Some\(12648430\)$',
+    '^\[pid 3\] \[server\] mint badge 77 ok true, badge 0 -> Err\(InvalidArgument\)$',
+    '^\[pid 3\] \[server\] echo badge 77 account 0 labels 0 fresh id true$',
+    '^\[pid 3\] \[server\] serve stranger Err\(InvalidArgument\), serve 0 Err\(InvalidArgument\), serve mine Ok\(\(\)\)$',
+    '^\[pid 4\] \[ipc\] 64 calls abandoned, 64 notices, \d+ open before, \d+ after$',
+    '^\[pid 3\] \[server\] replying with 2 handles$',
+    '^\[pid 3\] \[server\] MAX_OPEN_CALLS reached: 64 open calls$',
+    '^\[pid 3\] \[server\] send \d+ badge 4 tag 99 transfer None word None$',
+    '^\[pid 4\] REDOUBT-IPC TEST PASSED$',
+]
+# A call replied to twice, or a notice delivered twice, would say so; so would any check in the
+# client. PANIC is always forbidden.
+forbid = ['\[ipc\] FAIL', 'replied twice', 'REDOUBT-IPC TEST FAILED']
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]

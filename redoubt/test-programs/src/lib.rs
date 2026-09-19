@@ -126,6 +126,36 @@ pub mod checker {
     }
 }
 
+/// Protocol for the Redoubt IPC cases (WP-K2): `redoubt-server` answers `redoubt-client` over
+/// the boot endpoint the kernel gives the bundle's programs. The opcode is word 0 of a call.
+pub mod redoubt_ipc {
+    pub mod op {
+        /// Reply with the badge, account and label count the kernel attached.
+        pub const ECHO: usize = 1;
+        /// A lend: read its first word, write it back plus one, report the page count.
+        pub const LEND: usize = 2;
+        /// Take this call and do not reply: an open call (R4a).
+        pub const KEEP: usize = 3;
+        /// Reply to every parked call, each after `serve`.
+        pub const DRAIN: usize = 4;
+        /// Set the `max_transfer` the server's next `receive` names (R4).
+        pub const MAX_TRANSFER: usize = 5;
+        /// `mint` from this call's message id with the badge in word 1, and return the handle.
+        pub const MINT_BACK: usize = 6;
+        /// Reply carrying word 1 minted handles.
+        pub const REPLY_HANDLES: usize = 7;
+        /// `serve` a message id this thread does not hold.
+        pub const SERVE_BAD: usize = 8;
+        /// Start filling the server's own open calls, one caller thread at a time, until its
+        /// process holds `MAX_OPEN_CALLS` (R4a).
+        pub const SELF_FILL: usize = 9;
+        /// Report the abandoned notices, parked calls and sends the server has seen.
+        pub const COUNTS: usize = 10;
+        /// The last call of the script.
+        pub const DONE: usize = 11;
+    }
+}
+
 /// Protocol for the memory attack test (`mem-attack`, `mem-victim`). The victim leaves a secret
 /// in pages it frees; the attacker lends it every page it gets, and the victim, not the
 /// attacker, says whether any of them held data. See `redoubt/tests/mem-attack.toml`.
