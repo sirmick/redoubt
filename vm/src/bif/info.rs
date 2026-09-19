@@ -542,6 +542,127 @@ pub fn crc32(c: &mut Ctx, a: &[Term]) -> R {
     Ok(Term::Int(crc32_update(old, &b.to_bytes()) as i64))
 }
 
+/// Adler-32 (RFC 1950), as zlib.
+fn adler32_update(adler: u32, bytes: &[u8]) -> u32 {
+    const BASE: u32 = 65521;
+    let (mut a, mut b) = (adler & 0xffff, adler >> 16);
+    // 5552 bytes at a time keep the sums from overflowing (zlib's NMAX).
+    for chunk in bytes.chunks(5552) {
+        for &x in chunk {
+            a += x as u32;
+            b += a;
+        }
+        a %= BASE;
+        b %= BASE;
+    }
+    (b << 16) | a
+}
+
+pub fn adler32(c: &mut Ctx, a: &[Term]) -> R {
+    let (old, data) = match a {
+        [data] => (1, data),
+        [old, data] => (old.as_i64().and_then(|v| u32::try_from(v).ok()).ok_or_else(|| c.badarg())?, data),
+        _ => return Err(c.badarg()),
+    };
+    let bin = super::erlang::iolist_to_binary(c, core::slice::from_ref(data))?;
+    let Term::Bits(b) = bin else { return Err(c.badarg()) };
+    Ok(Term::Int(adler32_update(old, &b.to_bytes()) as i64))
+}
+
+/// Arguments of the `*_combine` functions: two checksums and a length.
+fn combine_args(c: &Ctx, a: &[Term]) -> Result<(u32, u32, u64), Exception> {
+    let word = |t: &Term| t.as_i64().and_then(|v| u32::try_from(v).ok());
+    match (word(&a[0]), word(&a[1]), a[2].as_i64().and_then(|v| u64::try_from(v).ok())) {
+        (Some(x), Some(y), Some(n)) => Ok((x, y, n)),
+        _ => Err(c.badarg()),
+    }
+}
+
+/// `adler32_combine(A1, A2, Size2)`: the checksum of two concatenated inputs (zlib's method).
+pub fn adler32_combine(c: &mut Ctx, a: &[Term]) -> R {
+    const BASE: u64 = 65521;
+    let (a1, a2, len2) = combine_args(c, a)?;
+    let (a1, a2) = (a1 as u64, a2 as u64);
+    let rem = len2 % BASE;
+    let mut sum1 = a1 & 0xffff;
+    let mut sum2 = rem * sum1 % BASE;
+    sum1 += (a2 & 0xffff) + BASE - 1;
+    sum2 += ((a1 >> 16) & 0xffff) + ((a2 >> 16) & 0xffff) + BASE - rem;
+    if sum1 >= BASE {
+        sum1 -= BASE;
+    }
+    if sum1 >= BASE {
+        sum1 -= BASE;
+    }
+    if sum2 >= BASE << 1 {
+        sum2 -= BASE << 1;
+    }
+    if sum2 >= BASE {
+        sum2 -= BASE;
+    }
+    Ok(Term::Int((sum1 | (sum2 << 16)) as i64))
+}
+
+/// `a * b` modulo the CRC-32 polynomial, in its reflected representation (zlib's `multmodp`).
+fn crc_multmodp(a: u32, mut b: u32) -> u32 {
+    let mut m: u32 = 1 << 31;
+    let mut p = 0;
+    loop {
+        if a & m != 0 {
+            p ^= b;
+            if a & (m - 1) == 0 {
+                return p;
+            }
+        }
+        m >>= 1;
+        b = if b & 1 != 0 { (b >> 1) ^ 0xEDB8_8320 } else { b >> 1 };
+    }
+}
+
+/// `x^(n * 2^k)` modulo the polynomial (zlib's `x2nmodp`).
+fn crc_x2nmodp(mut n: u64, mut k: u32) -> u32 {
+    let mut p: u32 = 1 << 31;
+    while n != 0 {
+        if n & 1 != 0 {
+            // x^(2^k), by squaring x (which is 1 << 30) k times.
+            let mut x2k: u32 = 1 << 30;
+            for _ in 0..(k % 32) {
+                x2k = crc_multmodp(x2k, x2k);
+            }
+            p = crc_multmodp(x2k, p);
+        }
+        n >>= 1;
+        k += 1;
+    }
+    p
+}
+
+/// `crc32_combine(C1, C2, Size2)`: the CRC of two concatenated inputs (zlib's method).
+pub fn crc32_combine(c: &mut Ctx, a: &[Term]) -> R {
+    let (c1, c2, len2) = combine_args(c, a)?;
+    Ok(Term::Int((crc_multmodp(crc_x2nmodp(len2, 3), c1) ^ c2) as i64))
+}
+
+/// `os:getpid()`: the VM has no host process number of its own to report.
+pub fn os_getpid(_c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(string("1"))
+}
+
+/// `os:env()`: the VM's environment as `{Name, Value}` pairs.
+pub fn os_env(c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(Term::list(c.sys.env.iter().map(|(k, v)| Term::tuple(alloc::vec![string(k), string(v)])).collect::<Vec<_>>()))
+}
+
+/// `binary:referenced_byte_size(Bin)`: the size of the buffer `Bin` is a window into. As in
+/// BEAM, a binary of 64 bytes or less counts as its own copy (BEAM copies such small ones).
+pub fn referenced_byte_size(c: &mut Ctx, a: &[Term]) -> R {
+    match &a[0] {
+        Term::Bits(b) if b.is_binary() && b.len / 8 <= 64 => Ok(Term::Int((b.len / 8) as i64)),
+        Term::Bits(b) if b.is_binary() => Ok(Term::Int(b.data.len() as i64)),
+        _ => Err(c.badarg()),
+    }
+}
+
 // ---- erlang:memory ----
 
 /// The categories of `erlang:memory/0`, in its order.

@@ -161,6 +161,7 @@ fn main() -> ExitCode {
             }
             println!("{}", exception(&mut vm, e.class, e.reason))
         }
+        Err(beamlet_vm::vm::RunError::Halted(status)) => return ExitCode::from(status.clamp(0, 255) as u8),
         Err(e) => {
             eprintln!("beamlet: {e:?}");
             return ExitCode::from(1);
