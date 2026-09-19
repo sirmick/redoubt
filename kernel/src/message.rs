@@ -501,7 +501,11 @@ pub fn mint(pid: PID, tid: TID, source: MintSource, badge: u64, budget: Option<u
                 if !mm.is_live_endpoint(call.endpoint) || !mm.is_live_budget(call.stamp) {
                     return Err(Error::Dead);
                 }
-                (call.endpoint, call.stamp, call.badge)
+                // The badge that matters is the *handle* source's; a message source carries
+                // none (KERNEL-SPEC.md, `mint`: only "a handle source's badge not 0" is
+                // `NotPermitted`). A server answers a badged call by minting under its own
+                // receive right, which is the whole point of minting from a message.
+                (call.endpoint, call.stamp, 0)
             }
             MintSource::Handle(h) => {
                 let (e, handle) = mm.endpoint_handle(pid, h.index())?;
@@ -1322,6 +1326,7 @@ fn destroy_endpoint(ss: &mut SystemServices, frame: u32) {
 /// the scheduler's idle branch, where it also keeps the hart out of `wfi` while a deadline is
 /// pending (`main.rs`): polling is not free, but nothing can sleep through a timeout.
 pub fn expire(ss: &mut SystemServices) -> bool {
+    let mut answered = false;
     loop {
         let now = crate::arch::irq::timer::now_us();
         let due = MemoryManager::with(|mm| {
@@ -1331,15 +1336,19 @@ pub fn expire(ss: &mut SystemServices) -> bool {
             })
         });
         let Some((pid, tid, wait, open)) = due else {
-            return MemoryManager::with(|mm| {
+            // A thread this answered is runnable again, so the caller must look for work
+            // before it idles; so must a finite deadline that has not passed yet.
+            let pending = MemoryManager::with(|mm| {
                 find_thread(mm, |mm, pid, tid| {
                     let s = slot(mm, pid, tid);
                     (s.wait != Wait::None && s.deadline != u64::MAX).then_some(())
                 })
                 .is_some()
             });
+            return answered || pending;
         };
         time_out(ss, pid, tid, wait, open);
+        answered = true;
     }
 }
 
