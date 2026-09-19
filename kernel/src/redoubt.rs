@@ -57,7 +57,7 @@ fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
         }),
         Call::BudgetDestroy { budget } => budget_destroy(pid, tid, budget.index()),
         Call::BudgetUsage { budget, usage_rec } => MemoryManager::with_mut(|mm| {
-            let frames = writable_record::<USAGE_SLOTS>(mm, usage_rec)?;
+            let frames = record_frames::<USAGE_SLOTS>(mm, usage_rec, true)?;
             let usage = mm.budget_usage(pid, budget.index())?;
             write_record(usage_rec, &frames, &usage.encode());
             Ok(Some(Return::Nothing))
@@ -66,7 +66,7 @@ fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
         Call::Random { bytes, len } => MemoryManager::with_mut(|mm| {
             let mut frames = [0usize; MAX_RANDOM];
             for (i, frame) in frames.iter_mut().enumerate().take(len) {
-                *frame = user_frame(mm, bytes.checked_add(i).ok_or(Error::InvalidArgument)?, true)?;
+                *frame = crate::arch::mem::user_frame(mm, bytes.checked_add(i).ok_or(Error::InvalidArgument)?, true)?;
             }
             let mut random = [0u8; MAX_RANDOM];
             crate::platform::rand::fill(&mut random[..len]);
@@ -110,11 +110,6 @@ fn budget_destroy(pid: PID, tid: TID, h: u32) -> Result<Option<Return>, Error> {
     })
 }
 
-/// The frame behind `addr` in the caller's address space, for reading or (with `write`) writing.
-fn user_frame(mm: &mut MemoryManager, addr: usize, write: bool) -> Result<usize, Error> {
-    crate::arch::mem::user_frame(mm, addr, write)
-}
-
 /// The frames behind each slot of an `N`-slot record at `addr`: aligned, and all the caller's
 /// own memory, readable (and, with `write`, writable). Checked in full before any slot is used.
 fn record_frames<const N: usize>(mm: &mut MemoryManager, addr: usize, write: bool) -> Result<[usize; N], Error> {
@@ -124,7 +119,7 @@ fn record_frames<const N: usize>(mm: &mut MemoryManager, addr: usize, write: boo
     let mut frames = [0; N];
     for (i, frame) in frames.iter_mut().enumerate() {
         let slot = addr.checked_add(i * 8).ok_or(Error::InvalidArgument)?;
-        *frame = user_frame(mm, slot, write)?;
+        *frame = crate::arch::mem::user_frame(mm, slot, write)?;
     }
     Ok(frames)
 }
@@ -133,11 +128,6 @@ fn record_frames<const N: usize>(mm: &mut MemoryManager, addr: usize, write: boo
 fn read_record<const N: usize>(mm: &mut MemoryManager, addr: usize) -> Result<[u64; N], Error> {
     let frames = record_frames::<N>(mm, addr, false)?;
     Ok(core::array::from_fn(|i| kframe::read(frames[i], (addr + i * 8) % xous_kernel::arch::PAGE_SIZE)))
-}
-
-/// Check an `N`-slot output record (the decoding stage), returning its frames for `write_record`.
-fn writable_record<const N: usize>(mm: &mut MemoryManager, addr: usize) -> Result<[usize; N], Error> {
-    record_frames::<N>(mm, addr, true)
 }
 
 fn write_record<const N: usize>(addr: usize, frames: &[usize; N], slots: &[u64; N]) {
