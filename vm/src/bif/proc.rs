@@ -135,21 +135,27 @@ pub fn spawn_link_fun(c: &mut Ctx, a: &[Term]) -> R {
 
 // ---- messages ----
 
-/// Resolve a send destination: a pid, a registered name, or `{Name, Node}` for this node.
-fn destination(c: &mut Ctx, t: &Term) -> Result<Pid, Exception> {
+/// Where a send goes: `Ok(Some(pid))`, or `Ok(None)` for `{Name, Node}` naming no process here
+/// (another node, which is never connected, or a name nobody has): such messages are dropped,
+/// as BEAM drops them. A bare name nobody has is `badarg`, as in BEAM.
+fn destination(c: &mut Ctx, t: &Term) -> Result<Option<Pid>, Exception> {
     match t {
-        Term::Pid(p) => Ok(*p),
-        Term::Atom(name) => c.sys.registered.get(name.as_str()).copied().ok_or_else(|| c.badarg()),
-        Term::Tuple(t) if t.len() == 2 => {
-            let local = t[1].as_tuple().is_none() && matches!(&t[1], Term::Atom(n) if n.as_str() == "nonode@nohost");
-            if local {
-                destination(c, &t[0])
-            } else {
-                Err(c.badarg())
+        Term::Pid(p) => Ok(Some(*p)),
+        Term::Atom(name) => c.sys.registered.get(name.as_str()).copied().map(Some).ok_or_else(|| c.badarg()),
+        Term::Tuple(t) if t.len() == 2 => match (&t[0], &t[1]) {
+            (Term::Atom(name), Term::Atom(node)) if node.as_str() == crate::etf::NODE => {
+                Ok(c.sys.registered.get(name.as_str()).copied())
             }
-        }
+            (Term::Atom(_), Term::Atom(_)) => Ok(None),
+            _ => Err(c.badarg()),
+        },
         _ => Err(c.badarg()),
     }
+}
+
+/// Whether `t` is `{Name, Node}` for a node other than this one.
+fn remote(t: &Term) -> bool {
+    matches!(t.as_tuple(), Some([Term::Atom(_), Term::Atom(n)]) if n.as_str() != crate::etf::NODE)
 }
 
 /// Send `msg` to `to`, which may be the running process itself.
@@ -175,15 +181,19 @@ pub fn send(c: &mut Ctx, a: &[Term]) -> R {
         }
         return Ok(a[1].clone());
     }
-    let to = destination(c, &a[0])?;
-    send_to(c, to, a[1].clone());
+    if let Some(to) = destination(c, &a[0])? {
+        send_to(c, to, a[1].clone());
+    }
     Ok(a[1].clone())
 }
 
-/// `send(Dest, Msg, Options)`: `noconnect` and `nosuspend` only matter between nodes, so this
-/// is a plain send that returns `ok`.
+/// `send(Dest, Msg, Options)`: `noconnect` and `nosuspend` only matter between nodes; a send
+/// to another node with `noconnect` returns `noconnect` (no node is ever connected).
 pub fn send3(c: &mut Ctx, a: &[Term]) -> R {
-    a[2].to_vec().ok_or_else(|| c.badarg())?;
+    let opts = a[2].to_vec().ok_or_else(|| c.badarg())?;
+    if remote(&a[0]) && opts.iter().any(|o| matches!(o, Term::Atom(x) if x.as_str() == "noconnect")) {
+        return Ok(c.atom("noconnect"));
+    }
     send(c, &a[..2])?;
     Ok(c.ok())
 }
@@ -314,10 +324,23 @@ fn monitor_tagged(c: &mut Ctx, a: &[Term], tag: Option<Term>) -> R {
     }
     let r = c.sys.make_ref();
     // A monitor by name reports `{Name, Node}` in its 'DOWN' message, as BEAM does.
-    let (target, alive, object) = match &a[1] {
-        Term::Pid(p) => (Some(*p), *p == c.p.pid || c.sys.procs.is_alive(*p), a[1].clone()),
-        Term::Atom(name) => {
-            let object = Term::tuple(alloc::vec![a[1].clone(), c.atom(crate::etf::NODE)]);
+    // By name: `Name` or `{Name, Node}`. This node is not distributed, so naming another node
+    // is `badarg`, as in BEAM.
+    let by_name = match &a[1] {
+        Term::Atom(name) => Some((name.clone(), true)),
+        Term::Tuple(t) => match &t[..] {
+            [Term::Atom(name), Term::Atom(node)] if node.as_str() == crate::etf::NODE => Some((name.clone(), true)),
+            _ => return Err(c.badarg()),
+        },
+        _ => None,
+    };
+    let (target, alive, object) = match (&a[1], by_name) {
+        (Term::Pid(p), _) => (Some(*p), *p == c.p.pid || c.sys.procs.is_alive(*p), a[1].clone()),
+        (_, Some((name, _))) => {
+            let object = match &a[1] {
+                Term::Tuple(_) => a[1].clone(),
+                _ => Term::tuple(alloc::vec![a[1].clone(), c.atom(crate::etf::NODE)]),
+            };
             match c.sys.registered.get(name.as_str()) {
                 Some(p) => (Some(*p), true, object),
                 None => (None, false, object),
@@ -388,6 +411,10 @@ pub fn exit2(c: &mut Ctx, a: &[Term]) -> R {
         exit_self(c, a[1].clone());
     } else {
         c.sys.exits.push_back(crate::vm::ExitSignal { target: pid, from: c.p.pid, reason: a[1].clone(), from_link: false, forced: false });
+        // End the caller's time slice: the signal is delivered before it runs again, so what
+        // it does next (process_info, is_process_alive, ...) sees the effect, as BEAM's signal
+        // ordering between two processes guarantees.
+        c.p.budget = c.p.budget.min(1);
     }
     Ok(Term::Atom(c.sys.atoms.true_.clone()))
 }

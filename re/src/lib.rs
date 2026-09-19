@@ -160,6 +160,9 @@ fn translate(p: &str) -> String {
                 'h' if !in_class => out.push_str("[ \\t]"),
                 'h' => out.push_str(" \\t"),
                 'R' if !in_class => out.push_str("(?:\\r\\n|\\n|\\r|\\x0B|\\x0C)"),
+                // In PCRE an escaped non-alphanumeric is itself; Rust reads `\<` and `\>` as word
+                // boundaries.
+                '<' | '>' => out.push(next),
                 // `\p{Lu}`, `\x{263A}`, `\g{1}`...: the braces belong to the escape.
                 'p' | 'P' | 'x' | 'o' | 'g' | 'k' if chars.get(i + 2) == Some(&'{') => {
                     let end = chars[i + 2..].iter().position(|&c| c == '}').map_or(chars.len(), |e| i + 2 + e + 1);
@@ -833,5 +836,6 @@ mod tests {
         assert_eq!(translate("a{}b{,}c{x}"), "a\\{}b\\{,}c\\{x}");
         assert_eq!(translate("[{]"), "[{]");
         assert_eq!(translate("\\p{Lu}\\P{Latin}\\x{263A}{2}"), "\\p{Lu}\\P{Latin}\\x{263A}{2}");
+        assert_eq!(translate("#Function\\<.+\\>"), "#Function<.+>");
     }
 }

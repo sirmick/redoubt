@@ -261,6 +261,10 @@ capabilities (xous-core `planning/redoubt/NAMESPACES.md`). beamlet follows that:
   learn its host's name (`inet:gethostname/0` is `localhost`).
 - **Regular expressions** (`re/`, crate `beamlet-re`): OTP's `re` over `regex-automata`. Matching
   is linear-time for every pattern, so hostile patterns cannot cause runaway backtracking.
+  The rule: a pattern either means what it means in PCRE or fails to compile; it never
+  silently matches something else. So where the same text means different things in the two
+  dialects it is translated (a trailing `$` also matching before a final newline, `\<` and
+  `\>` as literals, literal `{`), and missing features are compile errors, not emulations.
   Backreferences and lookaround in general do not compile. A lookbehind at the start of a
   pattern and a lookahead at its end (with no top-level `|`) are supported by checking them
   around each match, which covers Elixir's own `(?<!\\)\|` and `^(?=.+)`; unlike PCRE, a failed

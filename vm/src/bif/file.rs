@@ -287,9 +287,13 @@ pub fn read_link(c: &mut Ctx, a: &[Term]) -> R {
     })
 }
 
+/// `get_cwd_nif()`: `{error, enoent}` if the directory has since been removed, as `getcwd` says.
 pub fn get_cwd(c: &mut Ctx, _a: &[Term]) -> R {
-    let cwd = Term::binary(c.sys.cwd.as_bytes());
-    Ok(ok_with(c, cwd))
+    let cwd = c.sys.cwd.clone();
+    if let Some(Err(e)) = c.sys.platform.files().map(|f| f.info(&cwd, true)) {
+        return Ok(error(c, e));
+    }
+    Ok(ok_with(c, Term::binary(cwd.as_bytes())))
 }
 
 /// `set_cwd_nif(Path)`: this VM's working directory, which must be a directory.

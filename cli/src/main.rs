@@ -237,6 +237,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     }
+    let has_root = root.is_some();
     let mid_line = std::rc::Rc::new(std::cell::Cell::new(false));
     let platform = Posix { start: Instant::now(), code_path, files: root, input: None, stash: None, mid_line: mid_line.clone() };
     // Natives are 'static slices; join the crates' tables once.
@@ -246,6 +247,10 @@ fn main() -> ExitCode {
     let mut vm = Vm::with_config(Box::new(platform), config);
     for dir in &libs {
         vm.add_lib_root(dir);
+    }
+    // With a file system, the VM's home is its root (the host's is not visible).
+    if has_root {
+        vm.setenv("HOME", "/");
     }
     let string = |s: &str| Term::list(s.chars().map(|c| Term::Int(c as i64)).collect::<Vec<_>>());
     let call_args = match args {
