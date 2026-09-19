@@ -277,6 +277,7 @@ impl MemoryManager {
         for offset in (0..PAGE_SIZE).step_by(8) {
             crate::kframe::write(phys, offset, 0);
         }
+        self.objects.high_frame = self.objects.high_frame.max(index as u32);
         Ok(index as u32)
     }
 
@@ -286,25 +287,28 @@ impl MemoryManager {
         self.allocations[frame as usize] = None;
     }
 
+    /// Whether RAM frame `frame` holds a kernel object.
+    #[cfg(baremetal)]
+    pub fn is_object_frame(&self, frame: u32) -> bool {
+        self.allocations.get(frame as usize) == Some(&Some(OBJECT_OWNER))
+    }
+
     /// The physical address of kernel-object frame `frame`. A frame that is not one means a
     /// stale reference to a freed object: a violated invariant (I1), so the kernel stops.
     #[cfg(baremetal)]
     pub fn object_phys(&self, frame: u32) -> usize {
-        let frame = frame as usize;
-        assert!(self.allocations.get(frame) == Some(&Some(OBJECT_OWNER)), "I1: {} is no object frame", frame);
-        self.ram_start + frame * PAGE_SIZE
+        assert!(self.is_object_frame(frame), "I1: {} is no object frame", frame);
+        self.ram_start + frame as usize * PAGE_SIZE
     }
+
+    /// RAM frames in the ownership table.
+    #[cfg(baremetal)]
+    pub fn ram_frames(&self) -> u64 { self.allocations.len() as u64 }
 
     /// RAM frames owned by `pid` in the ownership table.
     #[cfg(baremetal)]
     pub fn ram_frames_owned_by(&self, pid: PID) -> usize {
         self.allocations.iter().filter(|owner| **owner == Some(pid)).count()
-    }
-
-    /// RAM frames not owned by `pid`: free, or some process's.
-    #[cfg(baremetal)]
-    pub fn ram_frames_not_owned_by(&self, pid: PID) -> u64 {
-        self.allocations.iter().filter(|owner| **owner != Some(pid)).count() as u64
     }
 
     /// Find a virtual address in the current process that is big enough
