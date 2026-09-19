@@ -22,7 +22,7 @@ done
 for app in elixir logger eex iex ex_unit mix; do path="$path -pa $elixir_lib/$app/ebin"; done
 out="${ELIXIR_TESTS_OUT:-$root/build/elixir-tests}"; mkdir -p "$out"
 erlc -o "$out" "$root/tools/exunit.erl"
-[ -n "${BEAMLET:-}" ] || cargo build --quiet --release --manifest-path "$root/Cargo.toml" -p beamlet
+beamlet="${BEAMLET:-$("$root/tools/build-beamlet")}" || exit 2   # RE_ENGINE=rust: see tools/build-beamlet
 files=("$@")
 if [ ${#files[@]} -eq 0 ]; then
     while IFS= read -r f; do files+=("${f#"$src/$testdir/"}"); done < <(find "$src/$testdir" -name '*_test.exs' | sort)
@@ -35,7 +35,7 @@ for f in "${files[@]}"; do
         continue
     fi
     log="$out/${f//\//_}.out"
-    timeout "${TEST_TIMEOUT:-300}" "${BEAMLET:-$root/target/release/beamlet}" --root "$src" \
+    timeout "${TEST_TIMEOUT:-300}" "$beamlet" --root "$src" \
         --mount "/otp=$otp_lib:ro" --mount "/elixir=$elixir_lib:ro" --lib /otp --lib /elixir -pa "$out" $path \
         exunit run /lib/elixir test/elixir/test_helper.exs "test/elixir/$f" > "$log" 2>&1
     result="$(tail -n 1 "$log")"

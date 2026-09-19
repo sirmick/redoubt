@@ -10,6 +10,8 @@
 
 #![no_std]
 #![forbid(unsafe_code)]
+// Under `pcre2` the translating engine is compiled but unused.
+#![cfg_attr(feature = "pcre2", allow(dead_code))]
 
 extern crate alloc;
 
@@ -46,14 +48,26 @@ pub static NATIVES: &[NativeSpec] = &[
 
 /// A compiled pattern (the resource inside `{re_pattern, Groups, Unicode, CrLf, Resource}`).
 struct Compiled {
-    regex: Regex,
-    /// A lookbehind at the start of the pattern and a lookahead at its end (see [`split_edges`]),
-    /// checked around each match of `regex`.
-    behind: Option<Edge>,
-    ahead: Option<Edge>,
+    engine: Engine,
     unicode: bool,
     /// Group names by index (index 0, the whole match, has none).
     names: Vec<Option<String>>,
+}
+
+/// What matches a compiled pattern.
+enum Engine {
+    /// The default: `regex-automata`, on the translated pattern.
+    Automata {
+        regex: Regex,
+        /// A lookbehind at the start of the pattern and a lookahead at its end (see
+        /// [`split_edges`]), checked around each match of `regex`.
+        behind: Option<Edge>,
+        ahead: Option<Edge>,
+    },
+    /// With the `pcre2` feature: real PCRE2, for testing against BEAM without the dialect
+    /// differences. It is C, so never in a default build.
+    #[cfg(feature = "pcre2")]
+    Pcre(pcre2::bytes::Regex),
 }
 
 /// A lookaround assertion at the edge of a pattern: its body, and whether it is negative.
@@ -77,6 +91,8 @@ struct Flags {
     anchored: bool,
     /// `$` matches only at the very end (not also before a final newline).
     dollar_endonly: bool,
+    /// Unicode classes for `\d`, `\w` and so on (always so here; PCRE2 needs asking).
+    ucp: bool,
 }
 
 fn atom(t: &Term) -> Option<&str> {
@@ -99,7 +115,8 @@ fn compile_option(f: &mut Flags, o: &Term) -> bool {
         // Accepted with no effect here: optimisation hints, and PCRE behaviours this engine
         // has anyway (UCP classes under `unicode`, no start optimisation to disable).
         Some("dollar_endonly") => f.dollar_endonly = true,
-        Some("ucp" | "no_start_optimize" | "no_auto_capture" | "never_utf" | "dupnames"
+        Some("ucp") => f.ucp = true,
+        Some("no_start_optimize" | "no_auto_capture" | "never_utf" | "dupnames"
             | "firstline" | "bsr_anycrlf" | "bsr_unicode" | "report_errors") => {}
         _ => match o.as_tuple() {
             Some([k, v]) if atom(k) == Some("newline") => f.crlf = matches!(atom(v), Some("crlf" | "anycrlf" | "any")),
@@ -112,11 +129,8 @@ fn compile_option(f: &mut Flags, o: &Term) -> bool {
 /// Bytes of a subject or pattern: a binary is used as it is; a list is characters (encoded as
 /// UTF-8 under `unicode`, else as Latin-1 bytes).
 fn text(t: &Term, unicode: bool) -> Option<Vec<u8>> {
-    if let Some(b) = t.iodata_bytes() {
-        return Some(b);
-    }
-    if !unicode {
-        return None;
+    if !unicode || matches!(t, Term::Bits(_)) {
+        return t.iodata_bytes();
     }
     let mut s = String::new();
     let mut work = alloc::vec![t.clone()];
@@ -143,9 +157,12 @@ fn text(t: &Term, unicode: bool) -> Option<Vec<u8>> {
 ///   `&&`, `--` and `~~` are Rust set operators: escape them (POSIX `[:name:]` classes stay);
 /// - `\e` (escape), `\h` (horizontal space) and `\R` (any line break) have no Rust spelling.
 ///
+/// - `\d`, `\s`, `\w` and `\b` are ASCII-only in PCRE unless `ucp` asks for Unicode
+///   (`ascii_classes`), where Rust's follow the `unicode` flag.
+///
 /// Constructs with no equivalent at all (backreferences, lookaround) are left alone, and the
 /// regex parser rejects them.
-fn translate(p: &str) -> String {
+fn translate(p: &str, ascii_classes: bool) -> String {
     let mut out = String::with_capacity(p.len());
     let chars: Vec<char> = p.chars().collect();
     let mut i = 0;
@@ -163,6 +180,17 @@ fn translate(p: &str) -> String {
                 // In PCRE an escaped non-alphanumeric is itself; Rust reads `\<` and `\>` as word
                 // boundaries.
                 '<' | '>' => out.push(next),
+                'd' | 'D' | 's' | 'S' | 'w' | 'W' if ascii_classes => {
+                    let name = match next.to_ascii_lowercase() {
+                        'd' => "digit",
+                        's' => "space",
+                        _ => "word",
+                    };
+                    let neg = if next.is_ascii_uppercase() { "^" } else { "" };
+                    let class = format!("[:{neg}{name}:]");
+                    if in_class { out.push_str(&class) } else { out.push_str(&format!("[{class}]")) }
+                }
+                'b' | 'B' if ascii_classes && !in_class => out.push_str(&format!("(?-u:\\{next})")),
                 // `\p{Lu}`, `\x{263A}`, `\g{1}`...: the braces belong to the escape.
                 'p' | 'P' | 'x' | 'o' | 'g' | 'k' if chars.get(i + 2) == Some(&'{') => {
                     let end = chars[i + 2..].iter().position(|&c| c == '}').map_or(chars.len(), |e| i + 2 + e + 1);
@@ -253,6 +281,67 @@ fn quantifier(s: &[char]) -> Option<(usize, bool)> {
 }
 
 fn build(pattern: &[u8], f: Flags) -> Result<Compiled, (String, usize)> {
+    #[cfg(feature = "pcre2")]
+    return build_pcre(pattern, f);
+    #[cfg(not(feature = "pcre2"))]
+    build_automata(pattern, f)
+}
+
+/// Compile with PCRE2 itself. The crate has no `dollar_endonly` switch, so `$` is rewritten to
+/// `\z`, which is what it then means outside multiline mode.
+#[cfg(feature = "pcre2")]
+fn build_pcre(pattern: &[u8], f: Flags) -> Result<Compiled, (String, usize)> {
+    let mut p = String::new();
+    let mut raw = String::new();
+    if f.ungreedy {
+        p.push_str("(?U)");
+    }
+    if f.unicode {
+        raw.push_str(core::str::from_utf8(pattern).map_err(|e| (String::from("invalid UTF-8 string"), e.valid_up_to()))?);
+    } else {
+        for &b in pattern {
+            if b < 0x80 { raw.push(b as char) } else { raw.push_str(&format!("\\x{{{b:02x}}}")) }
+        }
+    }
+    if f.dollar_endonly && !f.multiline {
+        let (mut escaped, mut in_class) = (false, false);
+        for ch in raw.chars() {
+            match ch {
+                '$' if !escaped && !in_class => p.push_str("\\z"),
+                _ => p.push(ch),
+            }
+            match ch {
+                '[' if !escaped => in_class = true,
+                ']' if !escaped => in_class = false,
+                _ => {}
+            }
+            escaped = ch == '\\' && !escaped;
+        }
+    } else {
+        p.push_str(&raw);
+    }
+    let prefix = if f.ungreedy { 4 } else { 0 };
+    let regex = pcre2::bytes::RegexBuilder::new()
+        .caseless(f.caseless)
+        .multi_line(f.multiline)
+        .dotall(f.dotall)
+        .extended(f.extended)
+        .crlf(f.crlf)
+        .utf(f.unicode)
+        .ucp(f.unicode && f.ucp)
+        .jit_if_available(true)
+        .build(&p)
+        .map_err(|e| {
+            let text = alloc::string::ToString::to_string(&e);
+            let msg = text.split_once(": ").map_or(text.as_str(), |(_, m)| m);
+            let msg = msg.split_once("offset ").and_then(|(_, r)| r.split_once(": ")).map_or(msg, |(_, m)| m);
+            (String::from(msg), e.offset().unwrap_or(0).saturating_sub(prefix))
+        })?;
+    let names = regex.capture_names().to_vec();
+    Ok(Compiled { engine: Engine::Pcre(regex), unicode: f.unicode, names })
+}
+
+fn build_automata(pattern: &[u8], f: Flags) -> Result<Compiled, (String, usize)> {
     let pattern = if f.unicode {
         core::str::from_utf8(pattern).map_err(|e| (String::from("invalid UTF-8 string"), e.valid_up_to()))?.into()
     } else {
@@ -279,7 +368,7 @@ fn build(pattern: &[u8], f: Flags) -> Result<Compiled, (String, usize)> {
     let original_len = pattern.chars().count();
     let (core, behind, ahead) = split_edges(&pattern, !f.multiline && !f.dollar_endonly);
     let edge = |body: &str, negative: bool, behind: bool| -> Result<Edge, (String, usize)> {
-        let body = translate(body);
+        let body = translate(body, f.unicode && !f.ucp);
         // A lookbehind is matched against the text just before the match, ending there.
         let text = if behind { format!("(?:{body})\\z") } else { body.clone() };
         let regex = regex_for(&text, cfg, f, original_len)?;
@@ -300,10 +389,10 @@ fn build(pattern: &[u8], f: Flags) -> Result<Compiled, (String, usize)> {
     };
     let behind = behind.map(|(b, neg)| edge(&b, neg, true)).transpose()?;
     let ahead = ahead.map(|(a, neg)| edge(&a, neg, false)).transpose()?;
-    let pattern = translate(&core);
+    let pattern = translate(&core, f.unicode && !f.ucp);
     let regex = regex_for(&pattern, cfg, f, original_len)?;
     let names = regex.group_info().pattern_names(regex_automata::PatternID::ZERO).map(|n| n.map(String::from)).collect();
-    Ok(Compiled { regex, behind, ahead, unicode: f.unicode, names })
+    Ok(Compiled { engine: Engine::Automata { regex, behind, ahead }, unicode: f.unicode, names })
 }
 
 /// Compile translated pattern text with the limits every pattern gets.
@@ -613,17 +702,22 @@ type Groups = Vec<Option<(usize, usize)>>;
 /// The leftmost match at or after `at` (only at `at` if anchored). `skip_empty_at` rejects an
 /// empty match at that position (PCRE's NOTEMPTY_ATSTART); `no_empty` rejects all empty ones.
 fn find(re: &Compiled, subject: &[u8], at: usize, anchored: bool, skip_empty_at: Option<usize>, no_empty: bool) -> Option<Groups> {
-    let mut caps = re.regex.create_captures();
+    let (regex, behind, ahead) = match &re.engine {
+        Engine::Automata { regex, behind, ahead } => (regex, behind, ahead),
+        #[cfg(feature = "pcre2")]
+        Engine::Pcre(regex) => return find_pcre(re, regex, subject, at, anchored, skip_empty_at, no_empty),
+    };
+    let mut caps = regex.create_captures();
     let mut start = at;
     loop {
         if start > subject.len() {
             return None;
         }
         let input = Input::new(subject).range(start..).anchored(if anchored { Anchored::Yes } else { Anchored::No });
-        re.regex.search_captures(&input, &mut caps);
+        regex.search_captures(&input, &mut caps);
         let m = caps.get_match()?;
         let empty = m.start() == m.end();
-        let rejected = (empty && (no_empty || skip_empty_at == Some(m.start()))) || !edges_hold(re, subject, m.start(), m.end());
+        let rejected = (empty && (no_empty || skip_empty_at == Some(m.start()))) || !edges_hold(behind, ahead, subject, m.start(), m.end());
         if !rejected {
             let n = caps.group_len();
             return Some((0..n).map(|g| caps.get_group(g).map(|s| (s.start, s.end))).collect());
@@ -636,16 +730,42 @@ fn find(re: &Compiled, subject: &[u8], at: usize, anchored: bool, skip_empty_at:
     }
 }
 
-/// Whether the edge lookarounds of `re` hold around a match from `start` to `end`.
-fn edges_hold(re: &Compiled, subject: &[u8], start: usize, end: usize) -> bool {
-    if let Some(b) = &re.behind {
+/// [`find`] with PCRE2. Anchoring and rejected empty matches are checked after the search (the
+/// crate has no match options), which is close to, not exactly, PCRE's own handling.
+#[cfg(feature = "pcre2")]
+#[allow(clippy::too_many_arguments)]
+fn find_pcre(re: &Compiled, regex: &pcre2::bytes::Regex, subject: &[u8], at: usize, anchored: bool, skip_empty_at: Option<usize>, no_empty: bool) -> Option<Groups> {
+    let mut locs = regex.capture_locations();
+    let mut start = at;
+    loop {
+        if start > subject.len() {
+            return None;
+        }
+        let m = regex.captures_read_at(&mut locs, subject, start).ok()??;
+        if anchored && m.start() != at {
+            return None;
+        }
+        let empty = m.start() == m.end();
+        if !(empty && (no_empty || skip_empty_at == Some(m.start()))) {
+            return Some((0..locs.len()).map(|g| locs.get(g)).collect());
+        }
+        if anchored {
+            return None;
+        }
+        start = m.start() + char_len(re, subject, m.start());
+    }
+}
+
+/// Whether the edge lookarounds hold around a match from `start` to `end`.
+fn edges_hold(behind: &Option<Edge>, ahead: &Option<Edge>, subject: &[u8], start: usize, end: usize) -> bool {
+    if let Some(b) = behind {
         let window = &subject[start.saturating_sub(b.max_len)..start];
         let found = b.regex.search(&Input::new(window)).is_some();
         if found == b.negative {
             return false;
         }
     }
-    if let Some(a) = &re.ahead {
+    if let Some(a) = ahead {
         let found = a.regex.search(&Input::new(subject).range(end..).anchored(Anchored::Yes)).is_some();
         if found == a.negative {
             return false;
@@ -818,24 +938,25 @@ mod tests {
 
     #[test]
     fn pcre_spellings() {
-        assert_eq!(translate("[[\\]()#;?]*"), "[\\[\\]()#;?]*");
-        assert_eq!(translate("[[:alpha:]]+"), "[[:alpha:]]+");
-        assert_eq!(translate("[]a]"), "[]a]");
-        assert_eq!(translate("[^]a]"), "[^]a]");
-        assert_eq!(translate("[a&&b]"), "[a&\\&b]");
-        assert_eq!(translate("\\e\\h"), "\\x1B[ \\t]");
-        assert_eq!(translate("a[b-c]d"), "a[b-c]d");
+        assert_eq!(translate("[[\\]()#;?]*", false), "[\\[\\]()#;?]*");
+        assert_eq!(translate("[[:alpha:]]+", false), "[[:alpha:]]+");
+        assert_eq!(translate("[]a]", false), "[]a]");
+        assert_eq!(translate("[^]a]", false), "[^]a]");
+        assert_eq!(translate("[a&&b]", false), "[a&\\&b]");
+        assert_eq!(translate("\\e\\h", false), "\\x1B[ \\t]");
+        assert_eq!(translate("a[b-c]d", false), "a[b-c]d");
     }
 
     #[test]
     fn braces_are_quantifiers_only_when_counted() {
-        assert_eq!(translate("a{2}b{2,}c{2,5}"), "a{2}b{2,}c{2,5}");
-        assert_eq!(translate("x{,3}"), "x{0,3}");
-        assert_eq!(translate("{atom, keyword}"), "\\{atom, keyword}");
-        assert_eq!(translate("%\\{\\}"), "%\\{\\}");
-        assert_eq!(translate("a{}b{,}c{x}"), "a\\{}b\\{,}c\\{x}");
-        assert_eq!(translate("[{]"), "[{]");
-        assert_eq!(translate("\\p{Lu}\\P{Latin}\\x{263A}{2}"), "\\p{Lu}\\P{Latin}\\x{263A}{2}");
-        assert_eq!(translate("#Function\\<.+\\>"), "#Function<.+>");
+        assert_eq!(translate("a{2}b{2,}c{2,5}", false), "a{2}b{2,}c{2,5}");
+        assert_eq!(translate("x{,3}", false), "x{0,3}");
+        assert_eq!(translate("{atom, keyword}", false), "\\{atom, keyword}");
+        assert_eq!(translate("%\\{\\}", false), "%\\{\\}");
+        assert_eq!(translate("a{}b{,}c{x}", false), "a\\{}b\\{,}c\\{x}");
+        assert_eq!(translate("[{]", false), "[{]");
+        assert_eq!(translate("\\p{Lu}\\P{Latin}\\x{263A}{2}", false), "\\p{Lu}\\P{Latin}\\x{263A}{2}");
+        assert_eq!(translate("#Function\\<.+\\>", false), "#Function<.+>");
+        assert_eq!(translate("\\w+\\b[\\d\\S]", true), "[[:word:]]+(?-u:\\b)[[:digit:][:^space:]]");
     }
 }

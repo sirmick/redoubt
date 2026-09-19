@@ -272,12 +272,18 @@ capabilities (xous-core `planning/redoubt/NAMESPACES.md`). beamlet follows that:
   The rule: a pattern either means what it means in PCRE or fails to compile; it never
   silently matches something else. So where the same text means different things in the two
   dialects it is translated (a trailing `$` also matching before a final newline, `\<` and
-  `\>` as literals, literal `{`), and missing features are compile errors, not emulations.
+  `\>` as literals, literal `{`, `\d`/`\s`/`\w`/`\b` ASCII-only unless `ucp`), and missing
+  features are compile errors, not emulations.
   Backreferences and lookaround in general do not compile. A lookbehind at the start of a
   pattern and a lookahead at its end (with no top-level `|`) are supported by checking them
   around each match, which covers Elixir's own `(?<!\\)\|` and `^(?=.+)`; unlike PCRE, a failed
   lookahead does not make the engine try a shorter match at the same place. Compile errors use
-  PCRE's messages. Lexical differences between PCRE and Rust syntax are translated. `re:replace/split` are OTP's code.
+  PCRE's messages. `re:replace/split` are OTP's code.
+  For testing only, the `pcre2` feature (`cargo build -p beamlet --features pcre2`) puts real
+  PCRE2 (C, vendored) behind the same API, so differential runs against BEAM measure the VM and
+  not the regex dialect. The test tools (`tools/difftest`, `tools/elixir-tests`) use it by
+  default via `tools/build-beamlet`; `RE_ENGINE=rust` tests the default engine, and
+  `tests/<suite>/SKIP.<engine>` lists what holds with only one of them. Never in a shipped build.
 - End-to-end: OTP's `ssl` (TLS 1.2/1.3) and `ssh` (daemon and client) run unmodified between
   processes of one VM over the loopback (`tests/ssltests`, `tests/nettests`), matching BEAM.
 

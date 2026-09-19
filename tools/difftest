@@ -5,7 +5,8 @@
 #   tools/difftest [SUITE...]      default: every directory under tests/
 #
 # Results go to build/difftest/<suite>/. Exit status is non-zero if any test differs.
-# tests/<suite>/SKIP lists modules that test features left out by design, with the reason.
+# tests/<suite>/SKIP lists modules that test features left out by design, with the reason;
+# tests/<suite>/SKIP.<engine> those that only hold with one regex engine (RE_ENGINE).
 # tests/<suite>/<Module>.stdin, if present, is the console input for that module, on both VMs.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -19,8 +20,7 @@ sslpath=""; for app in ssl ssh erts kernel compiler syntax_tools; do sslpath="$s
 elixir_lib="$(dirname "$(dirname "$(command -v elixir)")")/lib"
 elixir_ebin="$elixir_lib/elixir/ebin -pa $elixir_lib/logger/ebin -pa $elixir_lib/eex/ebin -pa $elixir_lib/iex/ebin"
 "$root/tools/build-lib" --check
-cargo build --quiet --release --manifest-path "$root/Cargo.toml" -p beamlet
-beamlet="$root/target/release/beamlet"
+beamlet="${BEAMLET:-$("$root/tools/build-beamlet")}"   # RE_ENGINE=rust: see tools/build-beamlet
 timeout_s="${DIFFTEST_TIMEOUT:-10}"
 
 suites=("$@")
@@ -34,7 +34,7 @@ for suite in "${suites[@]}"; do
     mkdir -p "$out"
     # Recompile (and re-run the oracle) only when sources changed.
     stamp="$out/.stamp"
-    if [ ! -f "$stamp" ] || [ -n "$(find "$src" \( -name '*.erl' -o -name '*.ex' -o -name SKIP -o -name '*.stdin' \) -newer "$stamp" -print -quit)" ]; then
+    if [ ! -f "$stamp" ] || [ -n "$(find "$src" \( -name '*.erl' -o -name '*.ex' -o -name 'SKIP*' -o -name '*.stdin' \) -newer "$stamp" -print -quit)" ]; then
         rm -f "$out"/*.beam "$out"/*.expected
         : > "$out/erlc.log"
         shopt -s nullglob
@@ -56,7 +56,7 @@ for suite in "${suites[@]}"; do
     shopt -s nullglob
     for exp in "$out"/*.expected; do
         m="$(basename "$exp" .expected)"
-        if [ -f "$src/SKIP" ] && grep -qE "^$m[[:space:]]" "$src/SKIP"; then
+        if grep -qsE "^$m[[:space:]]" "$src/SKIP" "$src/SKIP.${RE_ENGINE:-pcre2}"; then
             skip=$((skip + 1)); continue
         fi
         total=$((total + 1))

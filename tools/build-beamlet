@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Build the beamlet binary the test tools run, and print its path.
+#
+# By default the tools test with real PCRE2 behind `re` (the `pcre2` feature), so regex dialect
+# differences from BEAM do not show up as failures; RE_ENGINE=rust tests the default all-Rust
+# engine instead. The PCRE2 build goes to its own target directory, so target/release keeps the
+# default build.
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+case "${RE_ENGINE:-pcre2}" in
+    pcre2) target="$root/target/pcre2"; features=(--features pcre2) ;;
+    rust) target="$root/target"; features=() ;;
+    *) echo "RE_ENGINE must be pcre2 or rust" >&2; exit 2 ;;
+esac
+# The vendored PCRE2 (10.46; BEAM bundles 10.47), not whatever the system has.
+PCRE2_SYS_STATIC=1 CARGO_TARGET_DIR="$target" cargo build --quiet --release --manifest-path "$root/Cargo.toml" -p beamlet "${features[@]}"
+echo "$target/release/beamlet"
