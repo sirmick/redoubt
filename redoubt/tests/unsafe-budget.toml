@@ -47,7 +47,9 @@ paths = [
 # WP-K1: kframe.rs's three (words of kernel-object frames and of records, through the physmap)
 # replace mem.rs's three needless ones in the deleted `print_ownership`; the total is unchanged.
 # WP-A2: -1, kframe.rs's `write_byte` (its one user, the old byte-writing `random`, is gone).
-max_unsafe = 23
+# WP-K0b: -1, mem.rs reads the loader's `MREx` table through a safe slice of words instead of
+# casting it to a struct it is not aligned for.
+max_unsafe = 22
 max_undocumented = 0
 
 [[budget]]
