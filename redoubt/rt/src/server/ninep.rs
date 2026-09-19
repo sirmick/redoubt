@@ -1,36 +1,58 @@
 //! A 9P2000 server skeleton (NAMESPACES.md): it keeps the protocol state (connections, fids,
-//! paths, open modes, directory offsets) and applies every rule that does not depend on what the
-//! files are; a [`FileServer`] supplies the files.
+//! open modes, directory offsets) and applies every rule that does not depend on what the files
+//! are; a [`FileServer`] supplies the files. `src/bin/echo-server.rs` is the model server.
 //!
 //! **On the wire.** A 9P request is a `call` whose words are all zero ([`WORDS_9P`]) with the
 //! T-message at the start of its lend; the reply's words are all zero and the R-message is
-//! written at the start of the same lend. A call with other words, or with no lend, gets
-//! [`NO_MESSAGE`] and nothing in the lend. Handles sent with a 9P call are closed unread.
+//! written at the start of the same lend. A call with other words, or with no lend, is
+//! malformed: its reply is status 1 ([`MALFORMED`]), as for every typed protocol (answers 41 and
+//! 42), and nothing is written in the lend. Handles sent with a 9P call are closed unread.
+//!
+//! **Connections.** One badge is one client. The rule (answer 50): a launcher never passes its
+//! own connection to a child; each child gets a fresh connection from the server. As a second
+//! line of defence, a connection is keyed by (badge, account, label set), so holders of a copied
+//! handle in different accounts or label sets never share fids or a `Tversion`. When the last
+//! handle with a badge is closed, the kernel tells the endpoint's owner (answer 53), and
+//! [`NineServer::badge_closed`] frees everything that badge held.
 //!
 //! **What the skeleton guarantees a [`FileServer`]**, whatever the client sends:
-//! - Connections are keyed by badge (one connection = one endpoint handle); fids are per connection, at most
-//!   [`MAX_FIDS`] each, and each fid is charged to its creator's account ([`Admission`],
-//!   [`Resource::Files`]).
+//! - At most [`MAX_FIDS`] fids per connection, each charged to its client's (account, label set)
+//!   ([`Admission`], [`Resource::Files`]); both limits are checked before the server is asked to attach or
+//!   walk.
 //! - Every fid is looked up; no request reaches the server for a fid that does not exist.
-//! - Walk names are valid path components ([`path::valid_name`]); `..` is resolved lexically against the
-//!   fid's path from its attach root, by re-walking from the root, so it never climbs above it, and a fid is
-//!   never more than [`path::MAX_DEPTH`] below its root.
+//! - Walk names are valid path components ([`path::valid_name`]). A fid keeps the node and qid of every step
+//!   from its attach root, so `..` is the step before, never a question to the server; at the root it stays
+//!   at the root. A fid is at most [`path::MAX_COMPONENTS`] below its root.
 //! - Only directories are walked from or created in; directories are opened only for reading; reads need a
-//!   fid opened for reading and writes one opened for writing.
-//! - [`check`] on every request: `Read` for attach, walk, stat, read and opening for reading; `Write` for
-//!   writing, create, remove and opening for writing or truncation.
+//!   fid opened for reading, writes one opened for writing.
 //! - `offset + count` never overflows; a read asks for at most what fits the caller's lend and the msize; a
 //!   directory read continues only from where the last one ended.
+//!
+//! **Labels** ([`check`], on every request, against [`FileServer::labels`] of the object named):
+//! - `Read` on the attach root; on the directory walked from, and on every node walked into (a qid is a read,
+//!   answer 52); on the node for `Tstat`, `Tread` and opening for reading; on every directory entry listed
+//!   (entries the caller cannot read are left out).
+//! - `Write` (equal label sets, answer 51) on the node for `Twrite`, opening for writing, truncation
+//!   (`OTRUNC`) and `Tremove`, and on the directory for `Tcreate`.
+//!
+//! **Protocol corners.** `Tversion` is accepted at any time and clunks every fid of the
+//! connection; it is not required first, since the msize is fixed. `Tauth` is refused (access
+//! is by capability). `Twstat` is refused. `Tflush` is answered at once: requests are handled one
+//! at a time, so none is ever in flight to flush.
+//!
+//! **Memory.** Every allocation a request makes fails cleanly with an `Rerror` ("out of memory")
+//! rather than killing the server. A server's budget needs headroom beyond its own use: lends
+//! whose callers died stay charged to it until it replies (R3), up to `MAX_OPEN_CALLS` ×
+//! `MAX_LEND_PAGES` pages (1024), and while that pushes it over its limit its allocations fail.
 
-use alloc::collections::BTreeMap;
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use redoubt_sys::Error;
 use redoubt_wire::MSIZE;
 use redoubt_wire::codec::Writer;
 pub use redoubt_wire::ninep::Qid;
-use redoubt_wire::ninep::{Body, IOHDRSZ, Message, NOFID, NOTAG, Qids, Stat, VERSION};
+use redoubt_wire::ninep::{Body, IOHDRSZ, MAXWELEM, Message, NOFID, NOTAG, Qids, Stat, VERSION};
 
 use super::admit::{Admission, AdmitKey, Limits, Resource};
 use super::label::{Access, check};
@@ -39,8 +61,7 @@ use crate::path;
 
 /// The words of a 9P request and of its reply.
 pub const WORDS_9P: Words = [0; 4];
-/// The words of a reply that carries no R-message: the call was not a 9P request.
-pub const NO_MESSAGE: Words = [1, 0, 0, 0];
+pub use super::MALFORMED;
 /// Fids per connection.
 pub const MAX_FIDS: usize = 64;
 /// `Qid::kind` of a directory.
@@ -73,6 +94,7 @@ impl NineError {
     pub const NOT_OPEN: NineError = NineError("fid not open for this");
     pub const NOT_SUPPORTED: NineError = NineError("not supported");
     pub const NO_AUTH: NineError = NineError("authentication not required");
+    pub const NO_MEMORY: NineError = NineError("out of memory");
     pub const PERMISSION: NineError = NineError("permission denied");
     pub const TOO_DEEP: NineError = NineError("path too deep");
     pub const TOO_MANY: NineError = NineError("too many open files");
@@ -81,7 +103,7 @@ impl NineError {
 }
 
 /// What `Tstat` and directory reads report about a file.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FileStat {
     pub qid: Qid,
     /// Permission bits (informational: access is by capability) and [`DMDIR`].
@@ -112,7 +134,9 @@ impl FileStat {
 /// The files. Every method is called only as the module docs promise; each one still treats
 /// offsets and data as the client's.
 pub trait FileServer {
-    /// A file or directory the server can find again: what a fid refers to.
+    /// A file or directory the server can find again: what a fid rests on. A plain value that
+    /// holds no resource: the skeleton copies nodes freely (a fid keeps one per step from its
+    /// root) and drops them without telling the server.
     type Node: Clone;
 
     /// The root of a new attach through the caller's badge (which grant it is).
@@ -148,13 +172,14 @@ pub trait FileServer {
 
     fn stat(&mut self, caller: &Caller, node: &Self::Node) -> Result<FileStat, NineError>;
 
-    /// The `index`th entry of the directory `dir`, or `None` past the last.
+    /// The `index`th entry of the directory `dir` and its stat, or `None` past the last. The
+    /// skeleton lists only entries the caller may read.
     fn dir_entry(
         &mut self,
         caller: &Caller,
         dir: &Self::Node,
         index: u64,
-    ) -> Result<Option<FileStat>, NineError>;
+    ) -> Result<Option<(Self::Node, FileStat)>, NineError>;
 
     /// Creates `name` in `dir` and opens it with `mode`.
     fn create(
@@ -172,65 +197,96 @@ pub trait FileServer {
         Err(NineError::NOT_SUPPORTED)
     }
 
-    /// A fid on `node` went away: clunked, removed, or reset by `Tversion`.
+    /// A fid went away (clunked, removed, or reset by `Tversion`); `node` is the one it rested on.
+    /// Only that node is clunked: nodes passed on a walk, and nodes a failed request produced, are
+    /// simply dropped, which is why a node must hold no resource.
     fn clunk(&mut self, _node: &Self::Node) {}
+}
+
+/// Whose a connection is: the badge it came through and the client using it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ConnKey {
+    badge: u64,
+    client: AdmitKey,
+}
+
+impl ConnKey {
+    fn of(caller: &Caller) -> ConnKey { ConnKey { badge: caller.badge, client: AdmitKey::of(caller) } }
 }
 
 /// One fid's state.
 struct Fid<N> {
-    /// Whose account it is charged to.
-    owner: AdmitKey,
-    root: (N, Qid),
-    /// Components from the root to `node`: the lexical path `..` is resolved against.
-    path: Vec<String>,
-    node: N,
-    qid: Qid,
+    /// Every step from the attach root (first) to where the fid rests (last); never empty.
+    steps: Vec<(N, Qid)>,
     /// The mode it was opened with, if it is open.
     open: Option<u8>,
     /// Where the next directory read continues: (byte offset, entry index).
     dir_next: (u64, u64),
 }
 
-impl<N> Fid<N> {
-    fn is_dir(&self) -> bool { self.qid.kind & QTDIR != 0 }
+impl<N: Clone> Fid<N> {
+    fn here(&self) -> &(N, Qid) { self.steps.last().expect("a fid always has its root") }
+
+    fn node(&self) -> N { self.here().0.clone() }
+
+    fn is_dir(&self) -> bool { self.here().1.kind & QTDIR != 0 }
 }
 
-/// What a request comes to, before it is written back as an R-message.
-enum Answer {
-    /// The msize, and whether the version is ours (else the reply says "unknown").
-    Version(u32, bool),
-    Attach(Qid),
-    Walk(Vec<Qid>),
-    Open(Qid),
-    Create(Qid),
-    /// The data is the first n bytes of the scratch buffer.
-    Read(usize),
-    Write(u32),
-    Clunk,
-    Remove,
-    Stat(FileStat),
-    Flush,
+/// A connection's fids, by number.
+type Fids<N> = Vec<(u32, Fid<N>)>;
+
+/// A copy of `steps`, allocated fallibly.
+fn copy_steps<N: Clone>(steps: &[(N, Qid)]) -> Result<Vec<(N, Qid)>, NineError> {
+    let mut copy = Vec::new();
+    copy.try_reserve(steps.len() + 1).map_err(|_| NineError::NO_MEMORY)?;
+    copy.extend_from_slice(steps);
+    Ok(copy)
 }
 
 /// Serves 9P for a [`FileServer`].
 pub struct NineServer<S: FileServer> {
     pub fs: S,
-    /// Fid tables by badge; a connection with no fids has no entry.
-    conns: BTreeMap<u64, BTreeMap<u32, Fid<S::Node>>>,
+    /// Fid tables by connection; a connection with no fids has no entry. Plain vectors, searched
+    /// linearly, so every growth can fail cleanly (`try_reserve`).
+    conns: Vec<(ConnKey, Fids<S::Node>)>,
     admission: Admission,
-    /// Where read data is gathered before it is written into the lend: the request is decoded
-    /// from the lend, so the reply cannot be built there until the request is done with.
+    /// Where a reply's data is gathered before it is written into the lend: the request is
+    /// decoded from the lend, so the reply cannot be built there until the request is done with.
     scratch: Vec<u8>,
+    /// The last `Tstat`'s answer, for the same reason.
+    stat: FileStat,
 }
 
 impl<S: FileServer> NineServer<S> {
-    /// Serves `fs`; `limits.files` bounds the fids one account holds across all connections.
+    /// Serves `fs`; `limits.files` bounds the fids one client (account, label set) holds across
+    /// all its connections.
     pub fn new(fs: S, limits: Limits) -> NineServer<S> {
-        NineServer { fs, conns: BTreeMap::new(), admission: Admission::new(limits), scratch: Vec::new() }
+        NineServer {
+            fs,
+            conns: Vec::new(),
+            admission: Admission::new(limits),
+            scratch: Vec::new(),
+            stat: FileStat::default(),
+        }
     }
 
-    /// Fids open on the connection with `badge`.
-    pub fn fids(&self, badge: u64) -> usize { self.conns.get(&badge).map_or(0, BTreeMap::len) }
+    /// Fids open on the caller's connection.
+    pub fn fids(&self, caller: &Caller) -> usize {
+        self.conn(&ConnKey::of(caller)).map_or(0, |i| self.conns[i].1.len())
+    }
+
+    /// The last handle with `badge` is gone (the kernel's notice, answer 53): every connection
+    /// through it is over, so its fids are clunked and their charges released. The notice's
+    /// receive result arrives with a `redoubt-sys` update; a server's receive loop calls this
+    /// when it gets one.
+    pub fn badge_closed(&mut self, badge: u64) {
+        while let Some(i) = self.conns.iter().position(|(key, _)| key.badge == badge) {
+            let (key, fids) = self.conns.swap_remove(i);
+            for (_, fid) in fids {
+                self.drop_fid(&key, fid);
+            }
+        }
+    }
 
     /// Handles one call and replies to it.
     pub fn serve(&mut self, mut request: Request) -> Result<(), Error> {
@@ -238,15 +294,17 @@ impl<S: FileServer> NineServer<S> {
         for handle in request.handles.as_slice() {
             let _ = crate::handle::close(*handle);
         }
-        if request.words != WORDS_9P {
-            return request.reply(&NO_MESSAGE, &[]);
-        }
-        let caller = request.caller;
-        let words = match self.answer_in_place(&caller, request.lend()) {
-            Some(()) => WORDS_9P,
-            None => NO_MESSAGE,
+        let words = if request.words != WORDS_9P {
+            MALFORMED
+        } else {
+            let caller = request.caller;
+            match self.answer_in_place(&caller, request.lend()) {
+                Some(()) => WORDS_9P,
+                None => MALFORMED,
+            }
         };
-        request.reply(&words, &[])
+        // Words and no handles always encode, so the request cannot come back.
+        request.reply(&words, &[]).map_err(|(e, _)| e)
     }
 
     /// Reads the T-message at the front of `lend` and writes the R-message over it; `None` if
@@ -254,7 +312,7 @@ impl<S: FileServer> NineServer<S> {
     pub fn answer_in_place(&mut self, caller: &Caller, lend: &mut [u8]) -> Option<()> {
         // Room for the reply: the lend, within the msize. Read data is bounded by it.
         let room = lend.len().min(MSIZE);
-        let (tag, answer) = match Message::decode(lend) {
+        let (tag, reply) = match Message::decode(lend) {
             Ok(message) => (message.tag, self.answer(caller, message.body, room)),
             // The tag, if the header is there, so the client can match the error.
             Err(_) => {
@@ -263,90 +321,67 @@ impl<S: FileServer> NineServer<S> {
             }
         };
         let lend = &mut lend[..room];
-        let written = match &answer {
-            Ok(answer) => self.encode(tag, answer, lend),
-            Err(e) => Message { tag, body: Body::Rerror { ename: e.0 } }.encode(lend),
-        };
-        match written {
-            Ok(_) => Some(()),
-            // The answer did not fit the lend: say so if even that fits.
-            Err(_) => {
-                Message { tag, body: Body::Rerror { ename: "reply too large" } }.encode(lend).ok().map(|_| ())
-            }
+        let body = reply.unwrap_or_else(|e| Body::Rerror { ename: e.0 });
+        if (Message { tag, body }).encode(lend).is_ok() {
+            return Some(());
         }
+        // The answer did not fit the lend: say so if even that fits.
+        Message { tag, body: Body::Rerror { ename: "reply too large" } }.encode(lend).ok().map(|_| ())
     }
 
-    fn encode(&self, tag: u16, answer: &Answer, out: &mut [u8]) -> Result<usize, redoubt_wire::Error> {
-        let body = match answer {
-            Answer::Version(msize, known) => {
-                Body::Rversion { msize: *msize, version: if *known { VERSION } else { "unknown" } }
-            }
-            Answer::Attach(qid) => Body::Rattach { qid: *qid },
-            Answer::Walk(qids) => Body::Rwalk { qids: Qids::new(qids)? },
-            Answer::Open(qid) => Body::Ropen { qid: *qid, iounit: 0 },
-            Answer::Create(qid) => Body::Rcreate { qid: *qid, iounit: 0 },
-            Answer::Read(n) => Body::Rread { data: self.scratch.get(..*n).unwrap_or(&[]) },
-            Answer::Write(count) => Body::Rwrite { count: *count },
-            Answer::Clunk => Body::Rclunk,
-            Answer::Remove => Body::Rremove,
-            Answer::Stat(stat) => Body::Rstat { stat: stat.wire() },
-            Answer::Flush => Body::Rflush,
-        };
-        Message { tag, body }.encode(out)
-    }
-
-    fn answer(&mut self, caller: &Caller, body: Body<'_>, room: usize) -> Result<Answer, NineError> {
+    /// The R-message for `body`; a reply's data borrows the server's scratch space.
+    fn answer<'s>(&'s mut self, caller: &Caller, body: Body<'_>, room: usize) -> Result<Body<'s>, NineError> {
+        let key = ConnKey::of(caller);
         match body {
             Body::Tversion { msize, version } => {
                 // A new session on this connection: every fid on it goes (intro(5), version).
-                if let Some(fids) = self.conns.remove(&caller.badge) {
+                if let Some(i) = self.conn(&key) {
+                    let (_, fids) = self.conns.swap_remove(i);
                     for (_, fid) in fids {
-                        self.drop_fid(fid);
+                        self.drop_fid(&key, fid);
                     }
                 }
                 // A version we do not speak is answered "unknown" (intro(5), version).
-                Ok(Answer::Version(msize.min(MSIZE as u32), version.starts_with(VERSION)))
+                let version = if version.starts_with(VERSION) { VERSION } else { "unknown" };
+                Ok(Body::Rversion { msize: msize.min(MSIZE as u32), version })
             }
             Body::Tauth { .. } => Err(NineError::NO_AUTH),
             Body::Tattach { fid, afid, aname, .. } => {
                 if afid != NOFID {
                     return Err(NineError::NO_AUTH);
                 }
-                self.check_new_fid(caller, fid)?;
-                let (node, qid) = self.fs.attach(caller, aname)?;
-                self.check_labels(caller, &node, Access::Read)?;
-                let root = (node.clone(), qid);
-                let fid_state = Fid {
-                    owner: AdmitKey::of(caller),
-                    root,
-                    path: Vec::new(),
-                    node,
-                    qid,
-                    open: None,
-                    dir_next: (0, 0),
-                };
-                self.insert_fid(caller, fid, fid_state)?;
-                Ok(Answer::Attach(qid))
+                self.reserve_fid(&key, fid)?;
+                let attached = self.fs.attach(caller, aname).and_then(|(node, qid)| {
+                    self.may_read(caller, &node)?;
+                    let mut steps = Vec::new();
+                    steps.try_reserve(1).map_err(|_| NineError::NO_MEMORY)?;
+                    steps.push((node, qid));
+                    Ok((Fid { steps, open: None, dir_next: (0, 0) }, qid))
+                });
+                let (state, qid) = self.unreserve_on_error(&key, attached)?;
+                self.insert_fid(&key, fid, state)?;
+                Ok(Body::Rattach { qid })
             }
-            Body::Twalk { fid, newfid, wnames } => self.walk(caller, fid, newfid, wnames.as_slice()),
+            Body::Twalk { fid, newfid, wnames } => {
+                let mut qids = [Qid::default(); MAXWELEM];
+                let n = self.walk(caller, fid, newfid, wnames.as_slice(), &mut qids)?;
+                Ok(Body::Rwalk { qids: Qids::new(&qids[..n]).map_err(|_| NineError::BAD_MESSAGE)? })
+            }
             Body::Topen { fid, mode } => {
-                let f = self.fid(caller, fid)?;
+                let f = self.fid(&key, fid)?;
                 if f.open.is_some() {
                     return Err(NineError::IS_OPEN);
                 }
-                let access = open_access(mode, f.is_dir())?;
-                let node = f.node.clone();
-                for a in access.iter().flatten() {
-                    self.check_labels(caller, &node, *a)?;
-                }
+                let node = f.node();
+                self.check_open(caller, &node, mode, f.is_dir())?;
                 let qid = self.fs.open(caller, &node, mode)?;
-                let f = self.fid_mut(caller, fid)?;
+                let f = self.fid_mut(&key, fid)?;
                 f.open = Some(mode);
                 f.dir_next = (0, 0);
-                Ok(Answer::Open(qid))
+                Ok(Body::Ropen { qid, iounit: 0 })
             }
             Body::Tcreate { fid, name, perm, mode } => {
-                let f = self.fid(caller, fid)?;
+                let f = self.fid(&key, fid)?;
                 if f.open.is_some() {
                     return Err(NineError::IS_OPEN);
                 }
@@ -356,139 +391,147 @@ impl<S: FileServer> NineServer<S> {
                 if !path::valid_name(name) {
                     return Err(NineError::BAD_NAME);
                 }
-                if f.path.len() >= path::MAX_DEPTH {
+                if f.steps.len() > path::MAX_COMPONENTS {
                     return Err(NineError::TOO_DEEP);
                 }
-                open_access(mode, perm & DMDIR != 0)?;
-                let dir = f.node.clone();
+                let dir = f.node();
                 self.check_labels(caller, &dir, Access::Write)?;
+                check_mode(mode, perm & DMDIR != 0)?;
+                self.fid_mut(&key, fid)?.steps.try_reserve(1).map_err(|_| NineError::NO_MEMORY)?;
                 let (node, qid) = self.fs.create(caller, &dir, name, perm, mode)?;
-                let f = self.fid_mut(caller, fid)?;
-                f.path.push(name.to_string());
-                f.node = node;
-                f.qid = qid;
+                let f = self.fid_mut(&key, fid)?;
+                f.steps.push((node, qid));
                 f.open = Some(mode);
                 f.dir_next = (0, 0);
-                Ok(Answer::Create(qid))
+                Ok(Body::Rcreate { qid, iounit: 0 })
             }
-            Body::Tread { fid, offset, count } => self.read(caller, fid, offset, count, room),
+            Body::Tread { fid, offset, count } => {
+                let n = self.read(caller, fid, offset, count, room)?;
+                Ok(Body::Rread { data: self.scratch.get(..n).unwrap_or(&[]) })
+            }
             Body::Twrite { fid, offset, data } => {
-                let f = self.fid(caller, fid)?;
+                let f = self.fid(&key, fid)?;
                 if !f.open.is_some_and(|m| matches!(m & 3, mode::OWRITE | mode::ORDWR)) {
                     return Err(NineError::NOT_OPEN);
                 }
                 offset.checked_add(data.len() as u64).ok_or(NineError::BAD_OFFSET)?;
-                let node = f.node.clone();
+                let node = f.node();
                 self.check_labels(caller, &node, Access::Write)?;
                 let n = self.fs.write(caller, &node, offset, data)?;
                 // A server claiming more than it was given is a bug; do not pass it on.
-                let n = u32::try_from(n)
+                let count = u32::try_from(n)
                     .ok()
                     .filter(|n| *n as usize <= data.len())
                     .ok_or(NineError::BAD_MESSAGE)?;
-                Ok(Answer::Write(n))
+                Ok(Body::Rwrite { count })
             }
             Body::Tclunk { fid } => {
-                let f = self.remove_fid(caller, fid)?;
-                self.drop_fid(f);
-                Ok(Answer::Clunk)
+                let f = self.remove_fid(&key, fid)?;
+                self.drop_fid(&key, f);
+                Ok(Body::Rclunk)
             }
             Body::Tremove { fid } => {
                 // The fid goes whether or not the remove succeeds (intro(5), remove).
-                let f = self.remove_fid(caller, fid)?;
+                let f = self.remove_fid(&key, fid)?;
+                let node = f.node();
                 let result = self
-                    .check_labels(caller, &f.node, Access::Write)
-                    .and_then(|()| self.fs.remove(caller, &f.node));
-                self.drop_fid(f);
-                result.map(|()| Answer::Remove)
+                    .check_labels(caller, &node, Access::Write)
+                    .and_then(|()| self.fs.remove(caller, &node));
+                self.drop_fid(&key, f);
+                result.map(|()| Body::Rremove)
             }
             Body::Tstat { fid } => {
-                let node = self.fid(caller, fid)?.node.clone();
+                let node = self.fid(&key, fid)?.node();
                 self.check_labels(caller, &node, Access::Read)?;
-                Ok(Answer::Stat(self.fs.stat(caller, &node)?))
+                self.stat = self.fs.stat(caller, &node)?;
+                Ok(Body::Rstat { stat: self.stat.wire() })
             }
             Body::Twstat { .. } => Err(NineError::NOT_SUPPORTED),
-            // Requests are answered one at a time, so none is ever in flight to flush.
-            Body::Tflush { .. } => Ok(Answer::Flush),
+            Body::Tflush { .. } => Ok(Body::Rflush),
             // R-messages travel only from servers.
             _ => Err(NineError::BAD_MESSAGE),
         }
     }
 
-    fn walk(&mut self, caller: &Caller, fid: u32, newfid: u32, names: &[&str]) -> Result<Answer, NineError> {
-        let f = self.fid(caller, fid)?;
+    /// Walks `newfid` from `fid` along `names` and writes the qids walked into `qids`; returns
+    /// how many (fewer than `names` if a later name failed; then `newfid` is unchanged, intro(5)).
+    fn walk(
+        &mut self,
+        caller: &Caller,
+        fid: u32,
+        newfid: u32,
+        names: &[&str],
+        qids: &mut [Qid; MAXWELEM],
+    ) -> Result<usize, NineError> {
+        let key = ConnKey::of(caller);
+        let f = self.fid(&key, fid)?;
         if f.open.is_some() {
             return Err(NineError::IS_OPEN);
         }
-        if newfid != fid {
-            self.check_new_fid(caller, newfid)?;
+        let mut steps = copy_steps(&f.steps)?;
+        let charged = newfid != fid;
+        if charged {
+            self.reserve_fid(&key, newfid)?;
         }
-        let (root, mut path, mut node, mut qid) = (f.root.clone(), f.path.clone(), f.node.clone(), f.qid);
-        let mut qids = Vec::new();
+        let mut walked = 0;
         for name in names {
-            let step = self.step(caller, &root, &mut path, &node, qid, name);
-            match step {
-                Ok((next, next_qid)) => {
-                    node = next;
-                    qid = next_qid;
-                    qids.push(qid);
+            match self.step(caller, &mut steps, name) {
+                Ok(qid) => {
+                    // The codec caps a walk at MAXWELEM names, so this is always in range.
+                    let Some(slot) = qids.get_mut(walked) else { break };
+                    *slot = qid;
+                    walked += 1;
                 }
-                // The first name failing is an error; a later one ends the walk short, and
-                // `newfid` is not changed (intro(5), walk).
-                Err(e) if qids.is_empty() => return Err(e),
-                Err(_) => return Ok(Answer::Walk(qids)),
+                // The first name failing is an error; a later one ends the walk short.
+                Err(e) => {
+                    if charged {
+                        self.admission.release(key.client, Resource::Files);
+                    }
+                    return if walked == 0 { Err(e) } else { Ok(walked) };
+                }
             }
         }
-        let owner = AdmitKey::of(caller);
-        let walked = Fid { owner, root, path, node, qid, open: None, dir_next: (0, 0) };
-        if newfid == fid {
-            let f = self.fid_mut(caller, fid)?;
-            // Keep the original owner: the fid's charge stays where it was made.
-            *f = Fid { owner: f.owner, ..walked };
+        if charged {
+            self.insert_fid(&key, newfid, Fid { steps, open: None, dir_next: (0, 0) })?;
         } else {
-            self.insert_fid(caller, newfid, walked)?;
+            self.fid_mut(&key, fid)?.steps = steps;
         }
-        Ok(Answer::Walk(qids))
+        Ok(walked)
     }
 
-    /// One walk step from `node` (at `path`, with `qid`) by `name`; updates `path`.
+    /// One walk step by `name` from where `steps` ends; returns the new qid.
     fn step(
         &mut self,
         caller: &Caller,
-        root: &(S::Node, Qid),
-        path: &mut Vec<String>,
-        node: &S::Node,
-        qid: Qid,
+        steps: &mut Vec<(S::Node, Qid)>,
         name: &str,
-    ) -> Result<(S::Node, Qid), NineError> {
+    ) -> Result<Qid, NineError> {
+        let (dir, qid) = steps.last().cloned().ok_or(NineError::UNKNOWN_FID)?;
         if qid.kind & QTDIR == 0 {
             return Err(NineError::NOT_DIR);
         }
-        self.check_labels(caller, node, Access::Read)?;
+        self.check_labels(caller, &dir, Access::Read)?;
         if name == ".." {
-            // Lexically: drop the last component and walk the rest again from the root, so the
-            // server is never asked for a parent and the root is as high as it goes.
-            let mut up = path.clone();
-            up.pop();
-            let (mut node, mut qid) = root.clone();
-            for component in &up {
-                self.check_labels(caller, &node, Access::Read)?;
-                (node, qid) = self.fs.walk(caller, &node, component)?;
+            // The step before, as it was walked; at the root, the root.
+            if steps.len() > 1 {
+                steps.pop();
             }
-            *path = up;
-            return Ok((node, qid));
+            return steps.last().map(|(_, qid)| *qid).ok_or(NineError::UNKNOWN_FID);
         }
         if !path::valid_name(name) {
             return Err(NineError::BAD_NAME);
         }
-        if path.len() >= path::MAX_DEPTH {
+        if steps.len() > path::MAX_COMPONENTS {
             return Err(NineError::TOO_DEEP);
         }
-        let next = self.fs.walk(caller, node, name)?;
-        path.push(name.to_string());
-        Ok(next)
+        steps.try_reserve(1).map_err(|_| NineError::NO_MEMORY)?;
+        let (node, qid) = self.fs.walk(caller, &dir, name)?;
+        self.may_read(caller, &node)?;
+        steps.push((node, qid));
+        Ok(qid)
     }
 
+    /// Reads into the scratch buffer; how many bytes.
     fn read(
         &mut self,
         caller: &Caller,
@@ -496,21 +539,23 @@ impl<S: FileServer> NineServer<S> {
         offset: u64,
         count: u32,
         room: usize,
-    ) -> Result<Answer, NineError> {
-        let f = self.fid(caller, fid)?;
+    ) -> Result<usize, NineError> {
+        let key = ConnKey::of(caller);
+        let f = self.fid(&key, fid)?;
         if !f.open.is_some_and(|m| matches!(m & 3, mode::OREAD | mode::ORDWR | mode::OEXEC)) {
             return Err(NineError::NOT_OPEN);
         }
         // Never more than the reply can carry, whatever the client asked.
         let count = (count as usize).min(room.saturating_sub(IOHDRSZ));
         offset.checked_add(count as u64).ok_or(NineError::BAD_OFFSET)?;
-        let (node, is_dir, dir_next) = (f.node.clone(), f.is_dir(), f.dir_next);
+        let (node, is_dir, dir_next) = (f.node(), f.is_dir(), f.dir_next);
         self.check_labels(caller, &node, Access::Read)?;
         self.scratch.clear();
+        self.scratch.try_reserve(count).map_err(|_| NineError::NO_MEMORY)?;
         self.scratch.resize(count, 0);
         if !is_dir {
             let n = self.fs.read(caller, &node, offset, &mut self.scratch)?;
-            return if n <= count { Ok(Answer::Read(n)) } else { Err(NineError::BAD_MESSAGE) };
+            return if n <= count { Ok(n) } else { Err(NineError::BAD_MESSAGE) };
         }
         // A directory read starts at 0 or continues exactly where the last one ended
         // (intro(5), read); the entry index behind that offset is ours, never the client's.
@@ -520,9 +565,11 @@ impl<S: FileServer> NineServer<S> {
             _ => return Err(NineError::BAD_OFFSET),
         };
         let mut w = Writer::new(&mut self.scratch);
-        // Each entry takes bytes or ends the loop, so it runs at most `count` times.
-        while let Some(stat) = self.fs.dir_entry(caller, &node, index)? {
-            if stat.wire().write_entry(&mut w).is_err() {
+        // Each entry is left out, takes bytes, or ends the loop: it ends by the directory's end or
+        // by `count`.
+        while let Some((entry, stat)) = self.fs.dir_entry(caller, &node, index)? {
+            let readable = check(caller.labels.as_slice(), self.fs.labels(&entry), Access::Read).is_ok();
+            if readable && stat.wire().write_entry(&mut w).is_err() {
                 if w.position() == 0 {
                     return Err(NineError::TOO_SMALL);
                 }
@@ -531,66 +578,120 @@ impl<S: FileServer> NineServer<S> {
             index += 1;
         }
         let n = w.position();
-        self.fid_mut(caller, fid)?.dir_next = (offset + n as u64, index);
-        Ok(Answer::Read(n))
+        self.fid_mut(&key, fid)?.dir_next = (offset + n as u64, index);
+        Ok(n)
+    }
+
+    /// The label check for opening with `mode` (and the mode's own rules).
+    fn check_open(&self, caller: &Caller, node: &S::Node, mode: u8, is_dir: bool) -> Result<(), NineError> {
+        check_mode(mode, is_dir)?;
+        if matches!(mode & 3, mode::OREAD | mode::ORDWR | mode::OEXEC) {
+            self.check_labels(caller, node, Access::Read)?;
+        }
+        if matches!(mode & 3, mode::OWRITE | mode::ORDWR) || mode & mode::OTRUNC != 0 {
+            self.check_labels(caller, node, Access::Write)?;
+        }
+        Ok(())
+    }
+
+    /// A node's qid reaches the caller only if the caller may read the node: answer 52, "a qid
+    /// is a read". The one place walks and attaches enforce it.
+    fn may_read(&self, caller: &Caller, node: &S::Node) -> Result<(), NineError> {
+        self.check_labels(caller, node, Access::Read)
     }
 
     fn check_labels(&self, caller: &Caller, node: &S::Node, access: Access) -> Result<(), NineError> {
         check(caller.labels.as_slice(), self.fs.labels(node), access).map_err(|_| NineError::PERMISSION)
     }
 
-    fn fid(&self, caller: &Caller, fid: u32) -> Result<&Fid<S::Node>, NineError> {
-        self.conns.get(&caller.badge).and_then(|fids| fids.get(&fid)).ok_or(NineError::UNKNOWN_FID)
+    fn conn(&self, key: &ConnKey) -> Option<usize> { self.conns.iter().position(|(k, _)| k == key) }
+
+    fn fid(&self, key: &ConnKey, fid: u32) -> Result<&Fid<S::Node>, NineError> {
+        let conn = self.conn(key).ok_or(NineError::UNKNOWN_FID)?;
+        self.conns[conn]
+            .1
+            .iter()
+            .find(|(f, _)| *f == fid)
+            .map(|(_, state)| state)
+            .ok_or(NineError::UNKNOWN_FID)
     }
 
-    fn fid_mut(&mut self, caller: &Caller, fid: u32) -> Result<&mut Fid<S::Node>, NineError> {
-        self.conns.get_mut(&caller.badge).and_then(|fids| fids.get_mut(&fid)).ok_or(NineError::UNKNOWN_FID)
+    fn fid_mut(&mut self, key: &ConnKey, fid: u32) -> Result<&mut Fid<S::Node>, NineError> {
+        let conn = self.conn(key).ok_or(NineError::UNKNOWN_FID)?;
+        let fids = &mut self.conns[conn].1;
+        fids.iter_mut().find(|(f, _)| *f == fid).map(|(_, state)| state).ok_or(NineError::UNKNOWN_FID)
     }
 
-    fn check_new_fid(&self, caller: &Caller, fid: u32) -> Result<(), NineError> {
-        if fid == NOFID || self.fid(caller, fid).is_ok() {
+    /// Checks that `fid` can be added to the connection and charges it to the client: all before
+    /// the server does any work for it. Undone by `insert_fid` failing or `unreserve_on_error`.
+    fn reserve_fid(&mut self, key: &ConnKey, fid: u32) -> Result<(), NineError> {
+        if fid == NOFID || self.fid(key, fid).is_ok() {
             return Err(NineError::FID_IN_USE);
         }
-        if self.fids(caller.badge) >= MAX_FIDS {
+        if self.conn(key).is_some_and(|i| self.conns[i].1.len() >= MAX_FIDS) {
             return Err(NineError::TOO_MANY);
         }
-        Ok(())
+        self.admission.admit(key.client, Resource::Files).map_err(|_| NineError::TOO_MANY)
     }
 
-    /// Adds a new fid, charged to the caller's account.
-    fn insert_fid(&mut self, caller: &Caller, fid: u32, state: Fid<S::Node>) -> Result<(), NineError> {
-        self.check_new_fid(caller, fid)?;
-        self.admission.admit(state.owner, Resource::Files).map_err(|_| NineError::TOO_MANY)?;
-        self.conns.entry(caller.badge).or_default().insert(fid, state);
-        Ok(())
+    fn unreserve_on_error<T>(&mut self, key: &ConnKey, result: Result<T, NineError>) -> Result<T, NineError> {
+        if result.is_err() {
+            self.admission.release(key.client, Resource::Files);
+        }
+        result
     }
 
-    fn remove_fid(&mut self, caller: &Caller, fid: u32) -> Result<Fid<S::Node>, NineError> {
-        let fids = self.conns.get_mut(&caller.badge).ok_or(NineError::UNKNOWN_FID)?;
-        let state = fids.remove(&fid).ok_or(NineError::UNKNOWN_FID)?;
+    /// Adds a reserved fid; on failure (no memory) its reservation is released.
+    fn insert_fid(&mut self, key: &ConnKey, fid: u32, state: Fid<S::Node>) -> Result<(), NineError> {
+        let conn = match self.conn(key) {
+            Some(conn) => Ok(conn),
+            None => self.conns.try_reserve(1).map(|()| {
+                self.conns.push((*key, Vec::new()));
+                self.conns.len() - 1
+            }),
+        };
+        let fids = conn.and_then(|conn| {
+            let fids = &mut self.conns[conn].1;
+            fids.try_reserve(1).map(|()| fids)
+        });
+        match fids {
+            Ok(fids) => {
+                fids.push((fid, state));
+                Ok(())
+            }
+            Err(_) => {
+                // A connection pushed above with no fids must not stay.
+                self.conns.retain(|(_, fids)| !fids.is_empty());
+                self.admission.release(key.client, Resource::Files);
+                Err(NineError::NO_MEMORY)
+            }
+        }
+    }
+
+    fn remove_fid(&mut self, key: &ConnKey, fid: u32) -> Result<Fid<S::Node>, NineError> {
+        let conn = self.conn(key).ok_or(NineError::UNKNOWN_FID)?;
+        let fids = &mut self.conns[conn].1;
+        let index = fids.iter().position(|(f, _)| *f == fid).ok_or(NineError::UNKNOWN_FID)?;
+        let (_, state) = fids.swap_remove(index);
         if fids.is_empty() {
-            self.conns.remove(&caller.badge);
+            self.conns.swap_remove(conn);
         }
         Ok(state)
     }
 
-    /// A fid is gone: release its charge and tell the server.
-    fn drop_fid(&mut self, fid: Fid<S::Node>) {
-        self.admission.release(fid.owner, Resource::Files);
-        self.fs.clunk(&fid.node);
+    /// A fid is gone: release its charge and clunk the node it rested on.
+    fn drop_fid(&mut self, key: &ConnKey, fid: Fid<S::Node>) {
+        self.admission.release(key.client, Resource::Files);
+        self.fs.clunk(&fid.node());
     }
 }
 
-/// The accesses opening with `mode` needs (read, write), or `BAD_MODE`: unknown bits, and
-/// anything but plain reading for a directory, are refused.
-fn open_access(mode: u8, is_dir: bool) -> Result<[Option<Access>; 2], NineError> {
+/// Refuses unknown mode bits, and anything but plain reading for a directory.
+fn check_mode(mode: u8, is_dir: bool) -> Result<(), NineError> {
     if mode & !(3 | mode::OTRUNC) != 0 || (is_dir && mode != mode::OREAD) {
         return Err(NineError::BAD_MODE);
     }
-    let read = matches!(mode & 3, mode::OREAD | mode::ORDWR | mode::OEXEC).then_some(Access::Read);
-    let write =
-        (matches!(mode & 3, mode::OWRITE | mode::ORDWR) || mode & mode::OTRUNC != 0).then_some(Access::Write);
-    Ok([read, write])
+    Ok(())
 }
 
 #[cfg(test)]

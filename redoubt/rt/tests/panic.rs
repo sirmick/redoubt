@@ -40,7 +40,9 @@ impl FileServer for Console {
 
     fn stat(&mut self, _: &Caller, _: &()) -> Result<FileStat, NineError> { Err(NineError::NOT_SUPPORTED) }
 
-    fn dir_entry(&mut self, _: &Caller, _: &(), _: u64) -> Result<Option<FileStat>, NineError> { Ok(None) }
+    fn dir_entry(&mut self, _: &Caller, _: &(), _: u64) -> Result<Option<((), FileStat)>, NineError> {
+        Ok(None)
+    }
 }
 
 #[test]
@@ -65,7 +67,7 @@ fn a_panic_is_reported_on_the_console_once() {
     let block = StartupBuilder::new(cons.index()).namespace("/dev/cons", cons).finish().unwrap();
     let code = f.run(program, move || {
         let startup = Startup::parse(&block).unwrap();
-        redoubt_rt::init(&startup);
+        redoubt_rt::start::note_console(&startup);
         redoubt_rt::start::report_panic(format_args!("boom at {}", 42));
         // A second panic (say, while reporting the first) prints nothing more.
         redoubt_rt::start::report_panic(format_args!("again"));

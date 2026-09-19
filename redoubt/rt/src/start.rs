@@ -1,5 +1,12 @@
 //! A program's first and last moments: the entry point, the startup block, exit codes, and the
 //! panic handler.
+//!
+//! The startup page's address arrives in the first argument register (`a0`): `process_start`'s
+//! argument (answer 40), passed on by the loader stub.
+//!
+//! A panic exits through `process_exit` with [`exit::PANIC`]. If the process holds open calls
+//! then, the kernel counts it as a fault and blames the account of the call taken most recently
+//! (answers 37 and 55), so a crash on hostile input is blamed however the process died.
 
 use core::fmt::{self, Write};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -37,7 +44,7 @@ const PANIC_TIMEOUT: u64 = 1_000_000;
 #[macro_export]
 macro_rules! entry {
     ($main:path) => {
-        /// The entry point: the loader stub jumps here with the startup block's address in `a0`.
+        /// The entry point: the loader stub jumps here with the startup page's address in `a0`.
         #[cfg(target_os = "none")]
         #[no_mangle]
         pub extern "C" fn _start(startup: usize) -> ! { $crate::start($main, startup) }
@@ -55,7 +62,7 @@ pub fn start(main: fn(&Startup<'static>) -> u32, block: usize) -> ! {
         Ok(startup) => startup,
         Err(_) => crate::handle::process_exit(exit::BAD_STARTUP),
     };
-    init(&startup);
+    note_console(&startup);
     crate::handle::process_exit(main(&startup))
 }
 
@@ -78,7 +85,7 @@ fn startup_block(addr: usize) -> Result<Startup<'static>, crate::startup::Startu
 
 /// Records what the runtime needs from the startup block: the console, for panic reports.
 /// [`start`] calls it; host tests call it themselves.
-pub fn init(startup: &Startup) {
+pub fn note_console(startup: &Startup) {
     if let Some((_, console)) = startup.namespace().find(|(path, _)| *path == "/dev/cons") {
         CONSOLE.store(console.index(), Ordering::Relaxed);
     }

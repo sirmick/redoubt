@@ -13,7 +13,11 @@ use super::*;
 /// A tree of files, each with its own labels (a real `fsd` has one set per volume).
 struct MemFs {
     nodes: Vec<MemNode>,
-    clunked: usize,
+    /// Every node clunked, in order.
+    clunked: Vec<usize>,
+    /// Calls to `attach` and `walk`: the work a request made the server do.
+    attaches: usize,
+    walks: usize,
 }
 
 struct MemNode {
@@ -27,9 +31,9 @@ struct MemNode {
 
 impl MemFs {
     /// `/`, `/a/`, `/a/b/`, `/a/b/f` ("deep"), `/notes` ("hello, world"), `/vault/` and
-    /// `/vault/key` (labelled 7).
+    /// `/vault/key` (labelled 7), and `/secret`: a labelled file in the unlabelled root.
     fn new() -> MemFs {
-        let mut fs = MemFs { nodes: Vec::new(), clunked: 0 };
+        let mut fs = MemFs { nodes: Vec::new(), clunked: Vec::new(), attaches: 0, walks: 0 };
         fs.add("", 0, true, b"", &[]);
         let a = fs.add("a", 0, true, b"", &[]);
         let b = fs.add("b", a, true, b"", &[]);
@@ -37,6 +41,7 @@ impl MemFs {
         fs.add("notes", 0, false, b"hello, world", &[]);
         let vault = fs.add("vault", 0, true, b"", &[7]);
         fs.add("key", vault, false, b"secret", &[7]);
+        fs.add("secret", 0, false, b"top secret", &[7]);
         fs
     }
 
@@ -72,9 +77,11 @@ impl FileServer for MemFs {
     type Node = usize;
 
     fn attach(&mut self, _: &Caller, aname: &str) -> Result<(usize, Qid), NineError> {
+        self.attaches += 1;
         let root = match aname {
             "" => 0,
             "a" => 1,
+            "vault" => 5,
             _ => return Err(NineError::NOT_FOUND),
         };
         Ok((root, self.qid(root)))
@@ -84,6 +91,7 @@ impl FileServer for MemFs {
 
     fn walk(&mut self, _: &Caller, dir: &usize, name: &str) -> Result<(usize, Qid), NineError> {
         assert!(path::valid_name(name), "the skeleton passed {name:?}");
+        self.walks += 1;
         let found = self.children(*dir).find(|&i| self.nodes[i].name == name);
         found.map(|n| (n, self.qid(n))).ok_or(NineError::NOT_FOUND)
     }
@@ -115,9 +123,14 @@ impl FileServer for MemFs {
 
     fn stat(&mut self, _: &Caller, node: &usize) -> Result<FileStat, NineError> { Ok(self.stat_of(*node)) }
 
-    fn dir_entry(&mut self, _: &Caller, dir: &usize, index: u64) -> Result<Option<FileStat>, NineError> {
+    fn dir_entry(
+        &mut self,
+        _: &Caller,
+        dir: &usize,
+        index: u64,
+    ) -> Result<Option<(usize, FileStat)>, NineError> {
         let n = self.children(*dir).nth(index as usize);
-        Ok(n.map(|n| self.stat_of(n)))
+        Ok(n.map(|n| (n, self.stat_of(n))))
     }
 
     fn create(
@@ -145,7 +158,7 @@ impl FileServer for MemFs {
         Ok(())
     }
 
-    fn clunk(&mut self, _: &usize) { self.clunked += 1; }
+    fn clunk(&mut self, node: &usize) { self.clunked.push(*node); }
 }
 
 struct T {
@@ -242,7 +255,7 @@ fn attach_walk_open_read_write() {
     assert_eq!(t.err(&a, Body::Tread { fid: 1, offset: 0, count: 1 }), "unknown fid");
     // Walking with no names clones the fid.
     assert_eq!(t.walk(&a, 0, 2, &[]), Vec::<u64>::new());
-    assert_eq!(t.server.fids(ALICE), 2);
+    assert_eq!(t.server.fids(&alice()), 2);
 }
 
 #[test]
@@ -281,7 +294,7 @@ fn walk_names_are_components() {
     }
     // A file cannot be walked from.
     assert_eq!(t.walk(&a, 0, 1, &["notes", "x"]), vec![4]);
-    assert_eq!(t.server.fids(ALICE), 1, "no failed walk left a fid");
+    assert_eq!(t.server.fids(&alice()), 1, "no failed walk left a fid");
     // An open fid cannot be walked.
     t.walk(&a, 0, 1, &["notes"]);
     t.open(&a, 1, mode::OREAD).unwrap();
@@ -295,7 +308,7 @@ fn depth_is_bounded() {
     t.attach(&a, 0, "");
     // Build a chain of directories one level at a time, as deep as allowed.
     t.walk(&a, 0, 1, &[]);
-    for level in 0..path::MAX_DEPTH {
+    for level in 0..path::MAX_COMPONENTS {
         let name = alloc::format!("d{level}");
         let reply = t.rpc(&a, Body::Tcreate { fid: 1, name: &name, perm: DMDIR | 0o755, mode: mode::OREAD });
         assert!(matches!(reply, Body::Rcreate { .. }), "level {level}: {reply:?}");
@@ -338,11 +351,11 @@ fn fids_are_bounded_per_connection_and_per_account() {
     // Clunking gives the charge back; Tversion clunks every fid of the connection.
     t.clunk(&a2, 0);
     t.attach(&a2, 10, "");
-    let clunked = t.server.fs.clunked;
+    let clunked = t.server.fs.clunked.len();
     assert!(matches!(t.rpc(&a, Body::Tversion { msize: 1 << 20, version: "9P2000" }),
         Body::Rversion { msize, version: "9P2000" } if msize == MSIZE as u32));
-    assert_eq!(t.server.fids(ALICE), 0);
-    assert_eq!(t.server.fs.clunked, clunked + MAX_FIDS);
+    assert_eq!(t.server.fids(&alice()), 0);
+    assert_eq!(t.server.fs.clunked.len(), clunked + MAX_FIDS);
     t.attach(&a2, 11, "");
     // Fid numbers are checked: in use, and NOFID.
     assert_eq!(
@@ -367,15 +380,27 @@ fn labels_are_checked_on_every_request() {
     let mut t = T::new();
     let plain = alice();
     let vault = caller(9, 1001, &[7]);
-    // An unlabelled caller cannot read the labelled directory: not even walk into it.
+    // An unlabelled caller cannot walk into what it cannot read: a qid is a read (question 52).
     t.attach(&plain, 0, "");
-    assert_eq!(t.walk(&plain, 0, 1, &["vault"]), vec![5]);
+    for names in [&["vault"][..], &["secret"], &["a", "..", "vault", "key"]] {
+        let wnames = Names::new(names).unwrap();
+        let reply = t.rpc(&plain, Body::Twalk { fid: 0, newfid: 1, wnames });
+        assert!(
+            matches!(reply, Body::Rerror { ename: "permission denied" })
+                || matches!(reply, Body::Rwalk { .. }),
+            "{names:?}: {reply:?}"
+        );
+        if let Body::Rwalk { qids } = reply {
+            // Walked short, never into the vault; the partial walk left no fid.
+            assert!(qids.as_slice().iter().all(|q| q.path != 5 && q.path != 6 && q.path != 7), "{names:?}");
+        }
+        assert_eq!(t.err(&plain, Body::Tclunk { fid: 1 }), "unknown fid");
+    }
+    // Nor attach to a labelled root.
     assert_eq!(
-        t.err(&plain, Body::Twalk { fid: 1, newfid: 2, wnames: Names::new(&["key"]).unwrap() }),
+        t.err(&plain, Body::Tattach { fid: 5, afid: NOFID, uname: "", aname: "vault" }),
         "permission denied"
     );
-    assert_eq!(t.err(&plain, Body::Tstat { fid: 1 }), "permission denied");
-    assert_eq!(t.open(&plain, 1, mode::OREAD), Err("permission denied".into()));
     // The labelled caller reads it, and may also read what is unlabelled (no read up only).
     t.attach(&vault, 0, "");
     assert_eq!(t.walk(&vault, 0, 1, &["vault", "key"]), vec![5, 6]);
@@ -393,16 +418,142 @@ fn labels_are_checked_on_every_request() {
     );
     assert_eq!(t.err(&vault, Body::Tremove { fid: 3 }), "permission denied");
     assert_eq!(t.server.fs.nodes[4].data, b"hello, world");
-    // Writing up is allowed: the unlabelled caller may create in the vault only if it can
-    // read the directory, which it cannot; but a write into a labelled file it holds is fine.
+    // Writing where its labels are equal is fine.
     t.walk(&vault, 0, 4, &["vault", "key"]);
     t.open(&vault, 4, mode::OWRITE).unwrap();
     assert_eq!(t.rpc(&vault, Body::Twrite { fid: 4, offset: 0, data: b"S" }), Body::Rwrite { count: 1 });
-    // A labelled caller using a fid made by an unlabelled one on the same connection is still
-    // checked as itself.
-    let shared = caller(ALICE, 1001, &[7]);
-    t.walk(&plain, 0, 9, &["notes"]);
-    assert_eq!(t.open(&shared, 9, mode::OWRITE), Err("permission denied".into()));
+}
+
+#[test]
+fn an_unlabelled_caller_cannot_reach_labelled_data_to_destroy_or_probe_it() {
+    // Red team: with no read check on walked-into nodes, an unlabelled caller truncated,
+    // overwrote and removed /secret, planted files in /vault, and used Tcreate's "file exists"
+    // as an existence oracle there. It can no longer get a fid on either.
+    let mut t = T::new();
+    let plain = alice();
+    t.attach(&plain, 0, "");
+    for target in ["secret", "vault"] {
+        let wnames = Names::new(&[target]).unwrap();
+        assert_eq!(t.err(&plain, Body::Twalk { fid: 0, newfid: 1, wnames }), "permission denied");
+    }
+    assert_eq!(t.server.fs.nodes[7].data, b"top secret");
+    assert!(!t.server.fs.nodes[7].removed);
+    assert_eq!(t.server.fs.children(5).count(), 1, "nothing planted in the vault");
+}
+
+#[test]
+fn labelled_metadata_does_not_flow_down() {
+    // Red team: a walk's qid and a directory listing's stats showed an unlabelled caller each
+    // write to a labelled file (a covert channel out of the vault).
+    let mut t = T::new();
+    let plain = alice();
+    let vault = caller(2, 1001, &[7]);
+    t.attach(&plain, 0, "");
+    t.attach(&vault, 0, "");
+    t.walk(&vault, 0, 1, &["secret"]);
+    t.open(&vault, 1, mode::OWRITE).unwrap();
+    assert_eq!(t.rpc(&vault, Body::Twrite { fid: 1, offset: 0, data: b"x" }), Body::Rwrite { count: 1 });
+    assert_eq!(
+        t.err(&plain, Body::Twalk { fid: 0, newfid: 9, wnames: Names::new(&["secret"]).unwrap() }),
+        "permission denied"
+    );
+    // The listing of / leaves out what the caller cannot read.
+    t.walk(&plain, 0, 2, &[]);
+    t.open(&plain, 2, mode::OREAD).unwrap();
+    let listing = t.read(&plain, 2, 0, 8192).unwrap();
+    let names: Vec<String> =
+        redoubt_wire::ninep::stats(&listing).map(|s| String::from(s.unwrap().name)).collect();
+    assert_eq!(names, ["a", "notes"]);
+}
+
+#[test]
+fn copies_of_one_badge_in_other_accounts_or_label_sets_share_nothing() {
+    // Red team: fid tables keyed by badge alone let a holder of a copied handle read, clunk,
+    // exhaust and Tversion-wipe another client's fids.
+    let mut t = T::new();
+    let alice = caller(42, 1001, &[]);
+    let others = [caller(42, 2002, &[]), caller(42, 1001, &[7])];
+    t.attach(&alice, 0, "");
+    t.walk(&alice, 0, 1, &["notes"]);
+    t.open(&alice, 1, mode::OREAD).unwrap();
+    for other in &others {
+        assert_eq!(t.err(other, Body::Tread { fid: 1, offset: 0, count: 5 }), "unknown fid");
+        assert_eq!(t.err(other, Body::Tclunk { fid: 1 }), "unknown fid");
+        t.attach(other, 0, "");
+        for fid in 100..100 + MAX_FIDS as u32 - 1 {
+            t.walk(other, 0, fid, &[]);
+        }
+        let _ = t.rpc(other, Body::Tversion { msize: 8192, version: "9P2000" });
+    }
+    assert_eq!(t.server.fids(&alice), 2);
+    assert_eq!(t.read(&alice, 1, 0, 5).unwrap(), b"hello");
+    t.walk(&alice, 0, 7, &[]);
+}
+
+#[test]
+fn only_the_node_a_fid_rests_on_is_clunked() {
+    let mut t = T::new();
+    let a = alice();
+    t.attach(&a, 0, "");
+    // A walk in place moves the fid; the nodes passed are values, dropped without a clunk.
+    t.walk(&a, 0, 0, &["a", "b", "f"]);
+    t.clunk(&a, 0);
+    assert_eq!(t.server.fs.clunked, [3]);
+    // Remove and Tversion clunk what the fids rest on, once each.
+    t.attach(&a, 0, "");
+    t.walk(&a, 0, 1, &["notes"]);
+    t.walk(&a, 0, 2, &["a"]);
+    assert_eq!(t.rpc(&a, Body::Tremove { fid: 1 }), Body::Rremove);
+    let _ = t.rpc(&a, Body::Tversion { msize: 8192, version: "9P2000" });
+    assert_eq!(t.server.fs.clunked[..2], [3, 4]);
+    let mut rest = t.server.fs.clunked[2..].to_vec();
+    rest.sort();
+    assert_eq!(rest, [0, 1]);
+}
+
+#[test]
+fn dot_dot_costs_no_server_work_and_admission_comes_first() {
+    // Red team: `..` re-walked from the root (16 of them at depth 64 cost ~1000 server walks),
+    // and attach and walk ran before admission refused them.
+    let mut t = T::with_limit(4);
+    let a = alice();
+    t.attach(&a, 0, "");
+    t.walk(&a, 0, 1, &["a", "b"]);
+    let walks = t.server.fs.walks;
+    assert_eq!(t.walk(&a, 1, 2, &[".."; 16]), vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(t.server.fs.walks, walks, "`..` asked the server nothing");
+    t.walk(&a, 0, 3, &[]);
+    // The account is at its limit of 4: nothing more reaches the server.
+    let (attaches, walks) = (t.server.fs.attaches, t.server.fs.walks);
+    for _ in 0..10 {
+        assert_eq!(
+            t.err(&a, Body::Tattach { fid: 50, afid: NOFID, uname: "", aname: "" }),
+            "too many open files"
+        );
+        let wnames = Names::new(&["a", "b", "f"]).unwrap();
+        assert_eq!(t.err(&a, Body::Twalk { fid: 0, newfid: 51, wnames }), "too many open files");
+    }
+    assert_eq!((t.server.fs.attaches, t.server.fs.walks), (attaches, walks));
+    // A walk in place needs no new fid, so it still works at the limit.
+    assert_eq!(t.walk(&a, 3, 3, &["a"]), vec![1]);
+}
+
+#[test]
+fn a_short_reply_leaves_the_rest_of_the_lend_alone() {
+    // Nothing from another client, or from the server's scratch, lands past the reply.
+    let mut t = T::new();
+    let (alice, bob) = (alice(), caller(2, 2002, &[]));
+    t.attach(&alice, 0, "");
+    t.walk(&alice, 0, 1, &["notes"]);
+    t.open(&alice, 1, mode::OREAD).unwrap();
+    t.read(&alice, 1, 0, 100).unwrap();
+    let mut lend = vec![0xaa; 4096];
+    Message { tag: 1, body: Body::Tattach { fid: 0, afid: NOFID, uname: "", aname: "" } }
+        .encode(&mut lend)
+        .unwrap();
+    t.server.answer_in_place(&bob, &mut lend).unwrap();
+    let n = redoubt_wire::ninep::message_size(&lend).unwrap();
+    assert!(lend[n..].iter().all(|b| *b == 0xaa));
 }
 
 #[test]
@@ -450,15 +601,18 @@ fn directory_reads() {
         redoubt_wire::ninep::stats(data).map(|s| String::from(s.unwrap().name)).collect()
     };
     let all = t.read(&a, 0, 0, 8192).unwrap();
-    assert_eq!(names(&all), ["a", "notes", "vault"]);
+    assert_eq!(names(&all), ["a", "notes"], "labelled entries are left out");
     // Read one entry at a time: each read continues where the last ended.
     let one = t.read(&a, 0, 0, 60).unwrap();
     assert_eq!(names(&one), ["a"]);
     let two = t.read(&a, 0, one.len() as u64, 60).unwrap();
     assert_eq!(names(&two), ["notes"]);
-    let three = t.read(&a, 0, (one.len() + two.len()) as u64, 60).unwrap();
-    assert_eq!(names(&three), ["vault"]);
-    assert_eq!(t.read(&a, 0, (one.len() + two.len() + three.len()) as u64, 60).unwrap(), b"");
+    assert_eq!(t.read(&a, 0, (one.len() + two.len()) as u64, 60).unwrap(), b"");
+    // The labelled caller sees every entry.
+    let v = caller(9, 1001, &[7]);
+    t.attach(&v, 0, "");
+    t.open(&v, 0, mode::OREAD).unwrap();
+    assert_eq!(names(&t.read(&v, 0, 0, 8192).unwrap()), ["a", "notes", "vault", "secret"]);
     // Any other offset is refused, and too small a count for one entry is an error.
     assert_eq!(t.read(&a, 0, 1, 60), Err("bad offset".into()));
     assert_eq!(t.read(&a, 0, 0, 10), Err("count too small".into()));
@@ -562,4 +716,49 @@ fn random_requests_never_panic() {
         }
         let _ = t.server.answer_in_place(&a, &mut buf);
     }
+}
+
+#[test]
+fn a_closed_badge_frees_its_fids_and_admission() {
+    // Answer 53: when the last handle with a badge goes, the server frees what it held, so a
+    // crashed client does not keep its account's quota.
+    let mut t = T::with_limit(3);
+    let (a, other) = (alice(), caller(2, 1001, &[]));
+    t.attach(&a, 0, "");
+    t.walk(&a, 0, 1, &["notes"]);
+    t.attach(&other, 0, "");
+    assert_eq!(
+        t.err(&other, Body::Tattach { fid: 1, afid: NOFID, uname: "", aname: "" }),
+        "too many open files"
+    );
+    t.server.badge_closed(ALICE);
+    assert_eq!(t.server.fids(&a), 0);
+    let mut clunked = t.server.fs.clunked.clone();
+    clunked.sort();
+    assert_eq!(clunked, [0, 4]);
+    t.attach(&other, 1, "");
+    t.attach(&other, 2, "");
+    assert_eq!(t.server.fids(&other), 3);
+}
+
+#[test]
+fn every_write_needs_equal_labels() {
+    // Answer 51: no blind write-up. A caller with more labels than the object may read it but
+    // write nothing into it.
+    let mut t = T::new();
+    let both = caller(3, 1001, &[7, 8]);
+    t.attach(&both, 0, "");
+    t.walk(&both, 0, 1, &["vault", "key"]);
+    t.open(&both, 1, mode::OREAD).unwrap();
+    for mode in [mode::OWRITE, mode::ORDWR, mode::OREAD | mode::OTRUNC] {
+        t.walk(&both, 0, 2, &["vault", "key"]);
+        assert_eq!(t.open(&both, 2, mode), Err("permission denied".into()), "{mode:#x}");
+        t.clunk(&both, 2);
+    }
+    t.walk(&both, 0, 2, &["vault"]);
+    let create = Body::Tcreate { fid: 2, name: "n", perm: 0o644, mode: mode::OWRITE };
+    assert_eq!(t.err(&both, create), "permission denied");
+    t.walk(&both, 0, 3, &["vault", "key"]);
+    assert_eq!(t.err(&both, Body::Tremove { fid: 3 }), "permission denied");
+    assert_eq!(t.server.fs.nodes[6].data, b"secret");
 }

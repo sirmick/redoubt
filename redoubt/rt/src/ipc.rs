@@ -229,13 +229,28 @@ impl Request {
         mint(MintSource::Message(self.id), badge, budget)
     }
 
-    /// Replies, which returns the lend to the caller. If the words or handles cannot be encoded
-    /// (more than `MAX_MSG_HANDLES` handles, or on rv32 a word wider than 32 bits) nothing is
-    /// sent and the error comes back: the call then stays open until this process exits, so
-    /// servers reply with words their protocol defines (typed replies always fit).
-    pub fn reply(self, words: &Words, handles: &[Handle]) -> Result<(), Error> {
-        let rec = Record::<BODY_SLOTS>(body(words, handles)?.encode());
-        nothing(syscall(&Call::Reply { msg_id: self.id, body_rec: rec.addr() }))
+    /// Replies, which returns the lend to the caller.
+    ///
+    /// The handles are **copied** into the caller (KERNEL-SPEC.md, Messages): this process keeps
+    /// its own, and must close any it does not mean to keep (a handle minted for the caller,
+    /// say), or its handle table grows by one per reply.
+    ///
+    /// On failure the request comes back with the error, so the server can still answer it:
+    /// words or handles that cannot be encoded (more than `MAX_MSG_HANDLES` handles, or on rv32 a
+    /// word wider than 32 bits) are refused before anything is sent. A request dropped unanswered
+    /// keeps its caller waiting and its open-call slot taken.
+    // The error carries the request back by value, which is its purpose; it is not boxed
+    // because boxing allocates, and a server short of memory must still be able to answer.
+    #[allow(clippy::result_large_err)]
+    pub fn reply(self, words: &Words, handles: &[Handle]) -> Result<(), (Error, Request)> {
+        let rec = match body(words, handles) {
+            Ok(body) => Record::<BODY_SLOTS>(body.encode()),
+            Err(e) => return Err((e, self)),
+        };
+        match nothing(syscall(&Call::Reply { msg_id: self.id, body_rec: rec.addr() })) {
+            Ok(()) => Ok(()),
+            Err(e) => Err((e, self)),
+        }
     }
 }
 

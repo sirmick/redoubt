@@ -2,13 +2,74 @@
 //! hand it to the server, and reply with the encoded reply or an error status.
 //!
 //! The generated modules share a shape (`Message::decode`, `Reply::encode`, `ErrorCode::encode`)
-//! but no trait, so a server names its protocol by implementing [`Protocol`], a few lines
-//! (the tests show `example`'s).
+//! but no trait, so a server names its protocol by implementing [`Protocol`], a few lines.
+//! Typed messages are served as calls; a protocol's one-way messages (`send`) are few enough that
+//! each server decodes them itself.
+//!
+//! ```
+//! use redoubt_rt::abi::{Handle, Handles};
+//! use redoubt_rt::ipc::{Caller, Words};
+//! use redoubt_rt::server::typed::{Answer, Protocol, TypedServer, answer};
+//! use redoubt_rt::wire::Error as WireError;
+//! use redoubt_rt::wire::proto::example::{ErrorCode, Message, Reply, Small, SmallReply};
+//!
+//! /// The protocol, named once.
+//! struct Example;
+//!
+//! impl Protocol for Example {
+//!     type Error = ErrorCode;
+//!     type Reply<'a> = Reply<'a>;
+//!     type Request<'a> = Message<'a>;
+//!
+//!     fn decode<'a>(
+//!         words: &Words,
+//!         buf: &'a [u8],
+//!         handles: usize,
+//!     ) -> Result<Message<'a>, WireError> {
+//!         Message::decode(words, buf, handles)
+//!     }
+//!
+//!     fn encode_reply(reply: &Reply<'_>, buf: &mut [u8]) -> Result<Words, WireError> {
+//!         reply.encode(buf)
+//!     }
+//!
+//!     fn error_words(error: ErrorCode) -> Words { error.encode() }
+//! }
+//!
+//! /// A server that adds.
+//! struct Adder;
+//!
+//! impl TypedServer<Example> for Adder {
+//!     fn handle<'s>(
+//!         &'s mut self,
+//!         _caller: &Caller,
+//!         request: Message<'_>,
+//!         _handles: &[Handle],
+//!     ) -> Result<Answer<Reply<'s>>, ErrorCode> {
+//!         match request {
+//!             Message::Small(Small { a, b }) => {
+//!                 Ok(Answer::new(Reply::Small(SmallReply { c: u32::from(a) + u32::from(b) })))
+//!             }
+//!             _ => Err(ErrorCode::NotFound),
+//!         }
+//!     }
+//! }
+//!
+//! // In the receive loop: `Event::Call(request) => serve_call::<Example, _>(&mut adder, request)`.
+//! // `answer` is the same without the system calls:
+//! let caller = Caller { badge: 1, account: 1, labels: Default::default() };
+//! let words = Message::Small(Small { a: 2, b: 40 }).encode(&mut []).unwrap();
+//! let outcome = answer::<Example, _>(&mut Adder, &caller, &words, &Handles::new(), &mut []);
+//! assert_eq!(
+//!     Reply::decode(3, &outcome.words, &[], 0),
+//!     Ok(Ok(Reply::Small(SmallReply { c: 42 })))
+//! );
+//! ```
 
 use redoubt_sys::{Error, Handle, Handles};
 use redoubt_wire::Error as WireError;
 
-use crate::ipc::{Caller, Delivery, Request, Words};
+use crate::ipc::{Caller, Request, Words};
 
 /// A generated protocol: its request, reply and error types and their codecs.
 pub trait Protocol {
@@ -27,6 +88,21 @@ pub trait Protocol {
     fn error_words(error: Self::Error) -> Words;
 }
 
+/// A successful answer: the reply, the handles that go with it, and what happens to them here.
+pub struct Answer<R> {
+    pub reply: R,
+    /// Copied into the caller with the reply (KERNEL-SPEC.md, Messages).
+    pub handles: Handles,
+    /// Close `handles` here once the reply is sent: true for handles made for the caller (a
+    /// minted connection), false for handles the server keeps using.
+    pub close_after_reply: bool,
+}
+
+impl<R> Answer<R> {
+    /// A reply with no handles.
+    pub fn new(reply: R) -> Answer<R> { Answer { reply, handles: Handles::new(), close_after_reply: false } }
+}
+
 /// A server of protocol `P`.
 pub trait TypedServer<P: Protocol> {
     /// Answers one request. `handles` came with it, in its table's slots (the codec checked
@@ -37,59 +113,57 @@ pub trait TypedServer<P: Protocol> {
         caller: &Caller,
         request: P::Request<'_>,
         handles: &[Handle],
-    ) -> Result<(P::Reply<'s>, Handles), P::Error>;
-
-    /// The error that answers a request that does not decode, or whose reply does not fit the
-    /// caller's lend. WIRE.md gives no protocol-independent code for this, so each protocol's
-    /// error table needs one.
-    fn malformed(&self) -> P::Error;
+    ) -> Result<Answer<P::Reply<'s>>, P::Error>;
 }
 
-/// The reply to a request: the words, the handles, and (for a buffer-shaped reply) the fields
-/// written into `buf`. Makes no system call: [`serve_call`] wraps it. The second element is the
-/// handles to close: the request's if it did not decode (the server never saw them), or the
-/// reply's if the reply did not fit `buf` (they cannot travel without it).
+/// What to do with one request: reply with `words` and `send`, then close `close`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Outcome {
+    pub words: Words,
+    pub send: Handles,
+    /// The request's handles if it did not decode (the server never saw them), the reply's if
+    /// the reply did not fit the lend (they cannot travel without it), or the reply's after it
+    /// is sent if the server asked for that.
+    pub close: Handles,
+}
+
+/// The outcome of a request; a buffer-shaped reply's fields are written into `buf`. Makes no
+/// system call: [`serve_call`] wraps it.
 pub fn answer<P: Protocol, S: TypedServer<P>>(
     server: &mut S,
     caller: &Caller,
     words: &Words,
     handles: &Handles,
     buf: &mut [u8],
-) -> ((Words, Handles), Handles) {
-    let malformed = P::error_words(server.malformed());
-    let request = match P::decode(words, buf, handles.as_slice().len()) {
-        Ok(request) => request,
-        Err(_) => return ((malformed, Handles::new()), *handles),
+) -> Outcome {
+    let none = Handles::new();
+    // A request that does not decode, or whose reply does not fit the lend, is malformed:
+    // status 1 in every protocol (answer 42).
+    let malformed = super::MALFORMED;
+    let Ok(request) = P::decode(words, buf, handles.as_slice().len()) else {
+        return Outcome { words: malformed, send: none, close: *handles };
     };
     match server.handle(caller, request, handles.as_slice()) {
-        Ok((reply, reply_handles)) => match P::encode_reply(&reply, buf) {
-            Ok(words) => ((words, reply_handles), Handles::new()),
-            Err(_) => ((malformed, Handles::new()), reply_handles),
+        Ok(answer) => match P::encode_reply(&answer.reply, buf) {
+            Ok(words) => {
+                let close = if answer.close_after_reply { answer.handles } else { none };
+                Outcome { words, send: answer.handles, close }
+            }
+            Err(_) => Outcome { words: malformed, send: none, close: answer.handles },
         },
-        Err(code) => ((P::error_words(code), Handles::new()), Handles::new()),
+        Err(code) => Outcome { words: P::error_words(code), send: none, close: none },
     }
 }
 
-/// Answers a `call` of protocol `P` and replies.
+/// Answers a `call` of protocol `P`, replies, and closes what the outcome says to close.
 pub fn serve_call<P: Protocol, S: TypedServer<P>>(server: &mut S, mut request: Request) -> Result<(), Error> {
     let (caller, words, handles) = (request.caller, request.words, request.handles);
-    let ((words, reply_handles), to_close) =
-        answer::<P, S>(server, &caller, &words, &handles, request.lend());
-    for handle in to_close.as_slice() {
+    let outcome = answer::<P, S>(server, &caller, &words, &handles, request.lend());
+    let sent = request.reply(&outcome.words, outcome.send.as_slice()).map_err(|(e, _)| e);
+    for handle in outcome.close.as_slice() {
         let _ = crate::handle::close(*handle);
     }
-    request.reply(&words, reply_handles.as_slice())
-}
-
-/// Handles a `send` of protocol `P`: the fields are in the transfer, and there is no reply, so
-/// any handles the server put in one are closed with the rest.
-pub fn serve_send<P: Protocol, S: TypedServer<P>>(server: &mut S, delivery: Delivery) {
-    let Delivery { caller, words, handles, mut transfer } = delivery;
-    let buf: &mut [u8] = transfer.as_deref_mut().unwrap_or(&mut []);
-    let ((_, reply_handles), to_close) = answer::<P, S>(server, &caller, &words, &handles, buf);
-    for handle in reply_handles.as_slice().iter().chain(to_close.as_slice()) {
-        let _ = crate::handle::close(*handle);
-    }
+    sent
 }
 
 #[cfg(test)]

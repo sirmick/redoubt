@@ -1,6 +1,7 @@
-//! The label check (CONTAINMENT.md, the shared server library): no read up, no write down.
-//! System servers are exempt from the kernel's check (R1) and apply this one to every request,
-//! using the label set the kernel attached to the message.
+//! The label check (CONTAINMENT.md, the shared server library; answer 51): no read up, and
+//! writes only between equal label sets. There is no blind write-up: data enters a vault by the
+//! vault session reading it down from where it is. System servers are exempt from the kernel's check (R1) and
+//! apply this one to every request, using the label set the kernel attached to the message.
 
 /// What a request does to an object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,13 +16,13 @@ pub enum Access {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Denied;
 
-/// **No read up**: read only if the object's labels ⊆ the caller's. **No write down**: write only
-/// if the caller's labels ⊆ the object's. Label sets are compared as sets: order and repeats do
-/// not matter.
+/// **Read** only if the object's labels ⊆ the caller's (no read up). **Write** only if the
+/// object's labels = the caller's (no write down, and no write up). Label sets are compared as
+/// sets: order and repeats do not matter.
 pub fn check(caller_labels: &[u64], object_labels: &[u64], access: Access) -> Result<(), Denied> {
     let allowed = match access {
         Access::Read => subset(object_labels, caller_labels),
-        Access::Write => subset(caller_labels, object_labels),
+        Access::Write => subset(object_labels, caller_labels) && subset(caller_labels, object_labels),
     };
     if allowed { Ok(()) } else { Err(Denied) }
 }
@@ -68,11 +69,7 @@ mod tests {
                 o.is_subset(&c),
                 "{caller:?} read {object:?}"
             );
-            assert_eq!(
-                check(&caller, &object, Access::Write).is_ok(),
-                c.is_subset(&o),
-                "{caller:?} write {object:?}"
-            );
+            assert_eq!(check(&caller, &object, Access::Write).is_ok(), c == o, "{caller:?} write {object:?}");
         }
     }
 
@@ -83,18 +80,20 @@ mod tests {
             let (a, b, x) = (rng.labels(), rng.labels(), rng.labels());
             let read = |c: &[u64], o: &[u64]| check(c, o, Access::Read).is_ok();
             let write = |c: &[u64], o: &[u64]| check(c, o, Access::Write).is_ok();
-            // Reading and writing the same object needs exactly its label set.
-            assert_eq!(read(&a, &b) && write(&a, &b), set(&a) == set(&b));
-            // Everyone may read an unlabelled object and write into their own labels.
+            // Writing needs exactly the object's label set, and whoever may write may also read.
+            assert_eq!(write(&a, &b), set(&a) == set(&b));
+            assert!(!write(&a, &b) || read(&a, &b));
+            // Everyone may read an unlabelled object and read and write their own labels.
             assert!(read(&a, &[]) && read(&a, &a) && write(&a, &a));
-            // A labelled caller can never write where an unlabelled one can read: no write down.
+            // No write down and no write up: a labelled caller writes nothing unlabelled, and an
+            // unlabelled caller writes nothing labelled.
             if !set(&a).is_empty() {
-                assert!(!write(&a, &[]));
+                assert!(!write(&a, &[]) && !write(&[], &a));
             }
-            // Duality: a may write into b exactly when b may read what a holds.
-            assert_eq!(write(&a, &b), read(&b, &a));
+            // Writing is symmetric: a may write b's objects exactly when b may write a's.
+            assert_eq!(write(&a, &b), write(&b, &a));
             // Information cannot flow from a to x through b by a write then a read unless a
-            // could read-flow to x directly (transitivity of ⊆).
+            // could read-flow to x directly.
             if write(&a, &b) && read(&x, &b) {
                 assert!(read(&x, &a), "{a:?} -> {b:?} -> {x:?}");
             }

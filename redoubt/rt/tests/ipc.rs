@@ -37,6 +37,9 @@ fn call_lend_and_reply() {
         // A handle to the same endpoint, minted from the message, goes back in the reply.
         let minted = request.mint(nz(77), None).unwrap();
         request.reply(&[1, 2, 3, u64::from(u32::MAX)], &[minted.handle(), brought]).unwrap();
+        // The reply carried copies: ours are still here, and are not ours to keep.
+        minted.close().unwrap();
+        redoubt_rt::handle::close(brought).unwrap();
         0
     });
 
