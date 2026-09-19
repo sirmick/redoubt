@@ -1,0 +1,10 @@
+[package]
+name = "beamlet-re"
+description = "OTP's re module for beamlet, on regex-automata (linear-time, no backtracking)"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+beamlet-vm = { path = "../vm" }
+regex-automata = { version = "0.4.18", default-features = false, features = ["alloc", "syntax", "meta", "nfa-pikevm", "nfa-backtrack", "hybrid", "unicode", "perf-inline"] }

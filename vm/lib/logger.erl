@@ -26,6 +26,9 @@
 
 %% ---- levels ----
 
+%% `none` logs nothing, `all` everything, as in OTP's logger.
+level_number(none) -> -1;
+level_number(all) -> 8;
 level_number(Level) -> index(Level, ?LEVELS, 0).
 
 index(X, [X | _], N) -> N;

@@ -122,7 +122,10 @@ fn main() -> ExitCode {
     };
 
     let platform = Posix { start: Instant::now(), code_path };
-    let config = beamlet_vm::vm::Config { natives: beamlet_crypto::NATIVES, ..Default::default() };
+    // Natives are 'static slices; join the crates' tables once.
+    let natives: &'static [beamlet_vm::bif::NativeSpec] =
+        Box::leak([beamlet_crypto::NATIVES, beamlet_re::NATIVES].concat().into_boxed_slice());
+    let config = beamlet_vm::vm::Config { natives, ..Default::default() };
     let mut vm = Vm::with_config(Box::new(platform), config);
     let pid = match vm.spawn(&module, &function, Vec::new()) {
         Ok(pid) => pid,

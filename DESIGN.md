@@ -189,6 +189,27 @@ capabilities (xous-core `planning/xous64/NAMESPACES.md`). beamlet follows that:
 - Still open: mailbox overflow (below) must be settled before real sockets, since an active-mode
   socket can fill a mailbox and silent drops would corrupt a TCP stream.
 
+## Applications, networking, regular expressions
+- **Applications** (`vm/lib/application.erl`): a small controller. It reads `.app` files through
+  `Platform::load_app`, starts dependencies in order, calls `mod` callbacks, and keeps
+  environments. `kernel` and `stdlib` count as running from boot; their start callbacks never
+  run. No application masters, takeover or start types. Enough for `ssl`, `ssh` and Mix-built
+  Elixir applications.
+- **Runtime modules**: `erlang.beam` and `erts_internal.beam` from erts load normally (their NIF
+  stubs are replaced by natives), but modules that only work on BEAM's C runtime (`init`,
+  `prim_*`, `erl_prim_loader`, tracing) are on a never-load list (`vm::RUNTIME_MODULES`).
+- **TCP** (`vm/lib/gen_tcp.erl`, `vm/lib/beamlet_tcp.erl`): `gen_tcp` is replaced by a front for one
+  backend whose sockets are `{'$inet', beamlet_tcp, Pid}`, so OTP's `inet` works on them
+  unchanged. The backend is a loopback network inside the VM; there is no other network unless
+  the platform provides one (on Xous: a backend talking to the network server). A VM does not
+  learn its host's name (`inet:gethostname/0` is `localhost`).
+- **Regular expressions** (`re/`, crate `beamlet-re`): OTP's `re` over `regex-automata`. Matching
+  is linear-time for every pattern, so hostile patterns cannot cause runaway backtracking.
+  PCRE-only constructs (backreferences, lookaround) do not compile; lexical differences between
+  PCRE and Rust syntax are translated. `re:replace/split` are OTP's code.
+- End-to-end: OTP's `ssl` (TLS 1.2/1.3) and `ssh` (daemon and client) run unmodified between
+  processes of one VM over the loopback (`tests/ssltests`, `tests/nettests`), matching BEAM.
+
 ## Open questions
 - Mailbox overflow currently drops messages silently. Kill the receiver instead (fail closed), or
   backpressure sockets? Must be decided before real sockets land.
