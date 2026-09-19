@@ -2,7 +2,7 @@
 %% VM ended the offender. Only BIFs are used: the tests load no OTP modules. Rebuild: erlc +deterministic -o vm/tests/fixtures vm/tests/src/limits.erl
 -module(limits).
 -export([mailbox/0, mailbox_self/0, heap/0, heap_flag/0, heap_spawn_opt/0, heap_ok/0,
-         ets/0, memory/0]).
+         ets/0, memory/0, no_programs/0]).
 
 %% Another process floods a receiver that never reads.
 mailbox() ->
@@ -55,3 +55,7 @@ memory() ->
     Procs = erlang:memory(processes),
     {memory, M} = process_info(self(), memory),
     {is_integer(Total), Procs =< Total, M > 0}.
+
+%% Starting a program is a capability the platform grants; without it, open_port fails.
+no_programs() ->
+    try open_port({spawn, "true"}, []) catch C:R -> {C, R} end.

@@ -1,19 +1,14 @@
 # Elixir test files, or single tests, that cannot pass on beamlet by design. tools/elixir-tests
 # reports them separately. One per line: FILE[:TEST NAME] then the reason after " -- ".
-regex_test.exs -- a backreference; the linear-time regex engine has none (the file cannot load)
+# (tools/elixir-tests.skip.<engine> lists those that hold with only one regex engine.)
 application_test.exs:application directory -- expects Elixir compiled inside its source checkout
 code_test.exs -- inspects BEAM's code_server process, which does not exist here
-kernel/cli_test.exs -- runs the elixir/elixirc/iex executables through the OS
+kernel/cli_test.exs -- runs the elixir and iex executables (the real BEAM) by shell command lines naming the VM's paths, which the host's shell does not see
 kernel/dialyzer_test.exs -- runs dialyzer, an OTP tool not run here
-port_test.exs -- ports: the VM has no OS processes
-system_test.exs -- runs OS commands and ports
-string/chars_test.exs:port -- needs a port; the VM has none
-protocol_test.exs:protocol implementations without any -- needs a port
-protocol/consolidation_test.exs:consolidated implementations without fallback to any -- needs a port
-kernel_test.exs:doctest Kernel.is_port/1 (54) -- needs a port
-file_test.exs:cp cp_r skips sockets and other special files -- creates a Unix socket through the OS
-file_test.exs:copy copy with ram io_device -- ram files use a port driver; there are no ports
+system_test.exs:argv/0 -- runs bin/elixir (the real BEAM) by a shell command line naming a VM path, which the host's shell does not see
+system_test.exs:os signals -- sends a Unix signal to the VM's own OS process; OS signals are not delivered to the VM
+port_test.exs:info/1,2 with registered name -- opens a UDP socket (gen_udp); the VM has no UDP
+file_test.exs:cp cp_r skips sockets and other special files -- creates a Unix-domain socket (gen_tcp, local); the VM has none
 kernel/errors_test.exs:macros error stacktrace -- known: frames of macros run by erl_eval differ (not by design; open)
 kernel/errors_test.exs:macros interpreted function clause stacktrace -- known: as above (open)
 exception_test.exs:binary constructor error info on binary concatenation -- error message detail for binary construction not reproduced
-option_parser_test.exs:types parse! raises an exception for invalid regex patterns -- expects PCRE's exact message and position

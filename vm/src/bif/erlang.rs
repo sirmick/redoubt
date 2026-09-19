@@ -51,10 +51,10 @@ pub fn is_number(c: &mut Ctx, a: &[Term]) -> R {
     Ok(c.bool(a[0].is_number()))
 }
 pub fn is_pid(c: &mut Ctx, a: &[Term]) -> R {
-    Ok(c.bool(matches!(a[0], Term::Pid(_))))
+    Ok(c.bool(matches!(a[0], Term::Pid(p) if !p.port)))
 }
-pub fn is_port(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(c.bool(false))
+pub fn is_port(c: &mut Ctx, a: &[Term]) -> R {
+    Ok(c.bool(matches!(a[0], Term::Pid(p) if p.port)))
 }
 pub fn is_reference(c: &mut Ctx, a: &[Term]) -> R {
     Ok(c.bool(matches!(a[0], Term::Ref(_) | Term::Resource(_))))

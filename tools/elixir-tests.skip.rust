@@ -1,0 +1,3 @@
+# With RE_ENGINE=rust (the default, all-Rust regex engine): tests that need PCRE itself.
+regex_test.exs -- a backreference; the linear-time regex engine has none (the file cannot load)
+option_parser_test.exs:types parse! raises an exception for invalid regex patterns -- expects PCRE's exact message and position

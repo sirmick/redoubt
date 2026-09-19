@@ -319,9 +319,16 @@ pub fn unlink(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 fn monitor_tagged(c: &mut Ctx, a: &[Term], tag: Option<Term>) -> R {
-    if !a[0].is_atom(&c.sys.atoms.process) {
+    // `process` or `port`: the kind of what is monitored, which must match.
+    let port = match &a[0] {
+        Term::Atom(k) if k.as_str() == "process" => false,
+        Term::Atom(k) if k.as_str() == "port" => true,
+        _ => return Err(c.badarg()),
+    };
+    if matches!(&a[1], Term::Pid(p) if p.port != port) {
         return Err(c.badarg());
     }
+    let kind = a[0].clone();
     let r = c.sys.make_ref();
     // A monitor by name reports `{Name, Node}` in its 'DOWN' message, as BEAM does.
     // By name: `Name` or `{Name, Node}`. This node is not distributed, so naming another node
@@ -342,7 +349,8 @@ fn monitor_tagged(c: &mut Ctx, a: &[Term], tag: Option<Term>) -> R {
                 _ => Term::tuple(alloc::vec![a[1].clone(), c.atom(crate::etf::NODE)]),
             };
             match c.sys.registered.get(name.as_str()) {
-                Some(p) => (Some(*p), true, object),
+                Some(p) if p.port == port => (Some(*p), true, object),
+                Some(_) => return Err(c.badarg()),
                 None => (None, false, object),
             }
         }
@@ -360,7 +368,7 @@ fn monitor_tagged(c: &mut Ctx, a: &[Term], tag: Option<Term>) -> R {
             let msg = Term::tuple(alloc::vec![
                 tag.unwrap_or_else(|| Term::Atom(c.sys.atoms.down.clone())),
                 Term::Ref(r),
-                Term::Atom(c.sys.atoms.process.clone()),
+                kind,
                 object,
                 Term::Atom(c.sys.atoms.noproc.clone()),
             ]);
@@ -516,7 +524,7 @@ pub(crate) fn max_heap_term(table: &mut crate::atom::AtomTable, atoms: &crate::a
 }
 
 pub fn is_process_alive(c: &mut Ctx, a: &[Term]) -> R {
-    let pid = pid_arg(c, &a[0])?;
+    let pid = pid_arg(c, &a[0]).ok().filter(|p| !p.port).ok_or_else(|| c.badarg())?;
     let alive = pid == c.p.pid || c.sys.procs.is_alive(pid);
     Ok(c.bool(alive))
 }
@@ -1176,7 +1184,7 @@ pub fn fun_info(c: &mut Ctx, a: &[Term]) -> R {
         (Fun::Local { uniq, .. }, "uniq") => Term::Int(*uniq as i64),
         (Fun::Local { module, .. }, "new_uniq") => Term::binary(&c.sys.loaded_md5(module).unwrap_or([0; 16])),
         // Funs do not record their creator; BEAM reports the same for funs it did not track.
-        (Fun::Local { .. }, "pid") => Term::Pid(Pid { serial: 0, index: 0 }),
+        (Fun::Local { .. }, "pid") => Term::Pid(Pid::process(0, 0)),
         (Fun::Local { .. }, "refc") => Term::Int(1),
         (Fun::Export { .. }, "pid" | "index" | "new_index" | "uniq" | "new_uniq" | "refc") => {
             Term::Atom(c.sys.atoms.undefined.clone())

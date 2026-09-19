@@ -26,7 +26,7 @@ fn text_of(c: &Ctx, t: &Term) -> Result<String, Exception> {
 // ---- processes ----
 
 pub fn processes(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(Term::list(c.sys.procs.pids().into_iter().map(Term::Pid).collect::<Vec<_>>()))
+    Ok(Term::list(c.sys.procs.pids().into_iter().filter(|p| !p.port).map(Term::Pid).collect::<Vec<_>>()))
 }
 
 /// One `process_info` item, or `None` for an item this VM does not track. Takes the atom
@@ -103,6 +103,9 @@ fn info_item(table: &mut AtomTable, atoms: &Atoms, p: &Process, running: bool, d
 /// Memory items (`memory`, `heap_size`, ...) are measured when asked for: see `memory.rs`.
 pub fn process_info(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Pid(pid) = a[0] else { return Err(c.badarg()) };
+    if pid.port {
+        return Err(c.badarg());
+    }
     let single = matches!(a[1], Term::Atom(_) | Term::Tuple(_));
     let items: Vec<Term> = if single { alloc::vec![a[1].clone()] } else { a[1].to_vec().ok_or_else(|| c.badarg())? };
     let running = pid == c.p.pid;
@@ -298,6 +301,9 @@ pub fn get_module_info(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn pid_to_list(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Pid(p) = a[0] else { return Err(c.badarg()) };
+    if p.port {
+        return Err(c.badarg());
+    }
     Ok(string(&alloc::format!("<0.{}.{}>", p.index, p.serial)))
 }
 
@@ -310,14 +316,19 @@ pub fn list_to_pid(c: &mut Ctx, a: &[Term]) -> R {
         .and_then(|s| s.strip_suffix('>'))
         .and_then(|s| s.split('.').map(|n| n.parse().ok()).collect::<Option<Vec<u32>>>());
     match parts.as_deref() {
-        Some([0, index, serial]) => Ok(Term::Pid(Pid { index: *index, serial: *serial })),
+        Some([0, index, serial]) => Ok(Term::Pid(Pid::process(*index, *serial))),
         _ => Err(c.badarg()),
     }
 }
 
 pub fn ref_to_list(c: &mut Ctx, a: &[Term]) -> R {
-    let Term::Ref(r) = a[0] else { return Err(c.badarg()) };
-    Ok(string(&alloc::format!("#Ref<0.0.0.{}>", r.0)))
+    // A resource is a reference to Erlang code, and prints as one.
+    let id = match &a[0] {
+        Term::Ref(r) => r.0,
+        Term::Resource(r) => r.id,
+        _ => return Err(c.badarg()),
+    };
+    Ok(string(&alloc::format!("#Ref<0.0.0.{id}>")))
 }
 
 pub fn fun_to_list(c: &mut Ctx, a: &[Term]) -> R {

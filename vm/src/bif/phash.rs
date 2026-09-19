@@ -20,6 +20,7 @@ const HCONST_2: u32 = 0x3c6e_f372;
 const HCONST_3: u32 = 0xdaa6_6d2b;
 const HCONST_4: u32 = 0x78dd_e6e4;
 const HCONST_5: u32 = 0x1715_609d;
+const HCONST_6: u32 = 0xb54c_da56;
 const HCONST_7: u32 = 0x5384_540f;
 const HCONST_9: u32 = 0x8ff3_4781;
 const HCONST_10: u32 = 0x2e2a_c13a;
@@ -249,6 +250,7 @@ pub fn make_hash2(t: &Term) -> u32 {
                     work.extend(env.iter().rev().map(Work::Term));
                 }
             },
+            Term::Pid(p) if p.port => hash1(&mut hash, p.serial, HCONST_6),
             Term::Pid(p) => hash1(&mut hash, p.index, HCONST_5),
             Term::Ref(r) => hash1(&mut hash, r.0 as u32, HCONST_7),
             Term::Resource(r) => hash1(&mut hash, r.id as u32, HCONST_7),

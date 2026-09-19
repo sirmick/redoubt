@@ -194,10 +194,21 @@ impl Drop for Fun {
 
 /// A process identifier: an index into the VM's process table plus a serial number, so a stale
 /// pid never names a newer process that reuses the slot.
+///
+/// A port is a process too (one running the embedded driver `beamlet_port`), marked `port`: to
+/// Erlang code it is a port (`#Port<0.N>`, `is_port`, ordered before pids), and links,
+/// monitors, exit signals and registered names work for it as they do for any process.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Pid {
     pub serial: u32,
     pub index: u32,
+    pub port: bool,
+}
+
+impl Pid {
+    pub const fn process(index: u32, serial: u32) -> Pid {
+        Pid { serial, index, port: false }
+    }
 }
 
 /// A reference, unique within one VM.
@@ -522,6 +533,7 @@ fn type_rank(t: &Term) -> u8 {
         Term::Atom(_) => 1,
         Term::Ref(_) | Term::Resource(_) => 2,
         Term::Fun(_) => 3,
+        Term::Pid(p) if p.port => 4,
         Term::Pid(_) => 5,
         Term::Tuple(_) => 6,
         Term::Map(_) => 7,
@@ -636,8 +648,11 @@ fn compare_one(a: &Term, b: &Term, exact: bool) -> Ordering {
         (Term::Atom(x), Term::Atom(y)) => x.as_str().cmp(y.as_str()),
         (Term::Ref(x), Term::Ref(y)) => x.cmp(y),
         (Term::Resource(x), Term::Resource(y)) => x.id.cmp(&y.id),
-        (Term::Ref(x), Term::Resource(y)) => x.0.cmp(&y.id).then(Ordering::Less),
-        (Term::Resource(x), Term::Ref(y)) => x.id.cmp(&y.0).then(Ordering::Greater),
+        // References and resources share one counter, so a reference with a resource's id is
+        // that resource written out and read back (`term_to_binary`): the same reference, as
+        // BEAM's magic references are.
+        (Term::Ref(x), Term::Resource(y)) => x.0.cmp(&y.id),
+        (Term::Resource(x), Term::Ref(y)) => x.id.cmp(&y.0),
         // Creation order, as BEAM's pids compare (the serial is one counter for the VM).
         (Term::Pid(x), Term::Pid(y)) => (x.serial, x.index).cmp(&(y.serial, y.index)),
         (Term::Nil, Term::Nil) => Ordering::Equal,
@@ -856,6 +871,7 @@ fn write_leaf(f: &mut fmt::Formatter<'_>, t: &Term) -> fmt::Result {
             }
             Fun::Local { module, index, uniq, .. } => write!(f, "#Fun<{}.{}.{}>", module.as_str(), index, uniq),
         },
+        Term::Pid(p) if p.port => write!(f, "#Port<0.{}>", p.serial),
         Term::Pid(p) => write!(f, "<0.{}.{}>", p.index, p.serial),
         Term::Ref(r) => write!(f, "#Ref<0.0.0.{}>", r.0),
         Term::Resource(r) => write!(f, "#Ref<0.0.0.{}>", r.id),

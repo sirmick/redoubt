@@ -852,7 +852,7 @@ pub fn run(c: &mut Ctx, a: &[Term]) -> R {
         None => Vec::new(),
     };
     let mut flags = Flags::default();
-    let o = run_options(c, &opts, &mut flags)?;
+    let mut o = run_options(c, &opts, &mut flags)?;
     // A pattern given as text is compiled with the compile options among the run options.
     let owned;
     let re = match compiled_of(&a[1]) {
@@ -871,6 +871,10 @@ pub fn run(c: &mut Ctx, a: &[Term]) -> R {
         return Err(c.badarg());
     }
     let anchored = o.anchored || flags.anchored;
+    // `all_names` with no named groups captures nothing: the result is `match`, as for `none`.
+    if matches!(o.spec, Spec::AllNames) && re.names.iter().all(Option::is_none) {
+        o.spec = Spec::None;
+    }
     if !o.global {
         let skip = o.notempty_atstart.then_some(o.offset);
         return Ok(match find(re, &subject, o.offset, anchored, skip, o.notempty) {
