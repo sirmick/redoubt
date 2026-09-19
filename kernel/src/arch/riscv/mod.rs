@@ -64,6 +64,9 @@ pub fn init() {
     #[cfg(target_arch = "riscv64")]
     println!("W^X verified: {} executable kernel pages, none writable under any alias", mem::verify_kernel_wx());
 
+    // SAFETY: enabling supervisor software and external interrupts. The kernel runs with
+    // sstatus.SIE clear, so these are only actually taken once execution returns to
+    // userspace, where the trap handler is ready for them.
     unsafe {
         sie::set_ssoft();
         sie::set_sext();
@@ -77,6 +80,7 @@ pub fn idle() -> bool {
     // is available.
     #[cfg(any(feature = "bao1x", feature = "renode"))]
     // "traditional" path for stopping a clock
+    // SAFETY: `wfi` merely parks the hart until an interrupt is pending.
     unsafe {
         riscv::asm::wfi()
     };
@@ -98,6 +102,8 @@ pub fn idle() -> bool {
     // These interrupts are handled by userspace, so code execution will
     // immediately jump to the interrupt handler and return here after
     // all interrupts have been handled.
+    // SAFETY: briefly enabling then disabling interrupts lets any pending interrupt drain
+    // into its userspace handler. The kernel holds no borrow across this window.
     unsafe {
         sstatus::set_sie();
         sstatus::clear_sie();
