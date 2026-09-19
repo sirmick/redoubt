@@ -5,7 +5,7 @@ so each needs your decision; the answer goes into the named note with a HISTORY.
 **Rec** is the orchestrator's recommendation. Reply with numbers, e.g. "all Rec except 7: ...".
 
 **1-101 answered 2026-09-19** (ANSWERS.md, four tranches; each "Answered" line says where the
-answer now lives). **Open: 102-116** (at the end: K1's handle limit, and the design editor's choices in applying 56-101). The round-4 answers revised 56 (handle
+answer now lives). **Open: 102-117** (at the end: K1's handle limit, and the design editor's choices in applying 56-101). The round-4 answers revised 56 (handle
 kinds are checked by use) and replaced 57 and 58 (by 82).
 
 ## Kernel: messages and IPC (KERNEL-SPEC.md)
@@ -876,3 +876,18 @@ point to change the IPC design. Several items interact; the cross-references say
      *Rec:* the same as any cost the receiver can't pay (answer 72): a message is `Refused` to its
      sender. A reply's handles that don't fit give the caller `OutOfMemory` (question 107's rule),
      and the reply is still delivered, without them.
+
+## From the runtime follow-up (WP-R1b)
+
+117. **Two additions to `ninep_common`, made while implementing it.**
+     - `new_connection` gains `quota: u64`. NAMESPACES.md says a root's byte quota is "set by
+       whoever granted it", and grants happen through `new_connection`.
+     - The error table gains `3 refused`, for a `new_connection` refused because the root doesn't
+       exist, permission is denied, a cap is reached or the quota is exceeded. `Malformed` would
+       be wrong for those. Code 2 stays free for question 114's `not_yours`.
+
+     Also, beyond the spec's "fair share per badge": a connection a client mints for itself counts
+     in the share of the connection it came through, so an agent can't escape its share by minting
+     badges.
+     *Rec:* accept all three. NAMESPACES.md describes `quota` and `refused`, and CONTAINMENT.md's
+     fair-share sentence adds the minting rule.
