@@ -1,0 +1,13 @@
+description = "Bench self-check: a forbidden line right after the last expected one still fails the case"
+arch = ["rv64"]
+kind = "boot"
+programs = ["log-server"]
+# The kernel prints its KMAIN banner straight after the RNG line, within the bench's grace
+# period, so reading must not stop at the last expect.
+expect = ['Kernel RNG seeded from the loader']
+forbid = ['KMAIN']
+must_fail = '^forbidden output /KMAIN/: KMAIN'
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]

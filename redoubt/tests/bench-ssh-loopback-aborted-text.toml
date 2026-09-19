@@ -1,0 +1,13 @@
+description = "Bench self-check: a failure whose text happens to end in \"aborted\" is still reported"
+kind = "ssh-loopback"
+timeout_secs = 20
+authorized = ["alice"]
+must_fail = '^session alice: step 2: forbidden output /aborted/: job aborted$'
+
+[[session]]
+user = "alice"
+forbid = ['aborted']
+steps = [
+    { send = "echo job aborted; echo done\n" },
+    { expect = '^done$' },
+]

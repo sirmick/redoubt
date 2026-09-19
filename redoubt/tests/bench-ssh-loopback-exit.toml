@@ -1,0 +1,9 @@
+description = "Bench self-check: a session that never logs in fails on ssh's exit status, even with no steps"
+kind = "ssh-loopback"
+timeout_secs = 20
+authorized = ["alice"]
+must_fail = '^session mallory: at the end: ssh exited \(status 255\), expected 0; last output: .*Permission denied \(publickey\)\.$'
+
+[[session]]
+user = "mallory"
+steps = []

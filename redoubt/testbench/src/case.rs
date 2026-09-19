@@ -1,8 +1,9 @@
 //! The on-disk format of a test case (`redoubt/tests/*.toml`).
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use serde::Deserialize;
 
 /// Output that fails any boot test, on top of the case's own `forbid` list.
@@ -31,23 +32,28 @@ pub enum Kind {
     Build(Build),
     /// A ratchet on `unsafe` in the trusted computing base. Not a boot; reads the sources.
     UnsafeBudget(UnsafeBudget),
-    /// SSH sessions against an OpenSSH server the bench starts on the host. Not a boot: it
-    /// checks the bench's SSH client and session runner against a known-good server.
+    /// SSH sessions against an OpenSSH server run on the host. Not a boot: it checks the
+    /// bench's SSH client and session runner against a known-good server.
     SshLoopback(SshLoopback),
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SshLoopback {
-    /// Test keys (`ssh.rs`) the host server accepts.
+    /// Test keys (`redoubt/tests/keys/`) the server accepts.
     pub authorized: Vec<String>,
     pub session: Vec<Session>,
     #[serde(default = "default_timeout")]
-    pub timeout_secs: u64,
+    pub timeout_secs: f64,
+    /// The host key the sessions expect, as an OpenSSH public key line. Defaults to the
+    /// server's own (`loopback-host`); a self-check sets another to see the check fail.
+    pub host_key: Option<String>,
     /// See `Boot::must_fail`.
     pub must_fail: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UnsafeBudget {
     pub budget: Vec<Budget>,
 }
@@ -65,6 +71,7 @@ pub struct Budget {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Boot {
     /// Initial processes, in PID order starting at PID 2.
     pub programs: Vec<Program>,
@@ -72,16 +79,19 @@ pub struct Boot {
     #[serde(default = "default_smp")]
     pub smp: Vec<u32>,
     #[serde(default = "default_timeout")]
-    pub timeout_secs: u64,
+    pub timeout_secs: f64,
     /// Regular expressions that must each match a console line, in this order.
     pub expect: Vec<String>,
     /// Regular expressions that must never match.
     #[serde(default)]
     pub forbid: Vec<String>,
-    /// Set to false for cases that provoke a panic on purpose. `ALWAYS_FORBIDDEN` is
-    /// then not applied, only the case's own `forbid` list.
-    #[serde(default = "default_true")]
-    pub default_forbid: bool,
+    /// For cases that provoke a panic on purpose: drops `PANIC` from `ALWAYS_FORBIDDEN`.
+    #[serde(default)]
+    pub allow_panic: bool,
+    /// The guest must power off after the last `expect` (and the sessions), with no forbidden
+    /// line before it. Without this the bench watches the console for `GRACE` more, then stops.
+    #[serde(default)]
+    pub poweroff: bool,
     /// Regular expressions with one capture group. The case is booted twice, and what
     /// each captures must differ between the two boots (for randomness, ASLR, ...).
     #[serde(default)]
@@ -98,8 +108,7 @@ pub struct Boot {
     /// Corrupt the bundle after signing, to test that the loader rejects it.
     #[serde(default)]
     pub tamper_bundle: bool,
-    /// Firmware to boot under: "opensbi" (default) or "rustsbi". A case naming "rustsbi"
-    /// is skipped where that firmware binary is not available.
+    /// Firmware to boot under: "opensbi" (default) or "rustsbi".
     pub firmware: Option<String>,
     /// Data entries added to the bundle after the programs: a trace, a manifest, a hostile image.
     #[serde(default)]
@@ -108,11 +117,10 @@ pub struct Boot {
     pub disk: Option<Disk>,
     /// A virtio-net device on QEMU's user-mode network.
     pub net: Option<Net>,
-    /// SSH sessions, run once every `expect` has matched, while the guest keeps running.
+    /// SSH sessions to the guest's port 22, run once every `expect` has matched, while the
+    /// console is still watched.
     #[serde(default)]
     pub session: Vec<Session>,
-    /// Results the guest reports on the console, compared with a file.
-    pub results: Option<Results>,
     /// The case passes only if the bench fails it for a reason matching this regular
     /// expression: self-checks proving that a bench feature can fail (TENETS.md 6).
     pub must_fail: Option<String>,
@@ -130,32 +138,28 @@ pub struct BundleFile {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Disk {
-    /// Size in KiB (a whole number of 512-byte sectors).
+    /// Size in KiB (a whole number of 512-byte sectors). The disk starts zeroed.
     pub size_kib: u64,
-    /// Initial contents, relative to the workspace root, copied to the start of the disk.
-    pub image: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Net {
-    /// Guest TCP ports reachable from the host. The bench picks a free host port for each.
+    /// Guest TCP ports reachable from the host (default: none). Sessions need 22.
     #[serde(default)]
     pub forward: Vec<u16>,
+    /// The guest's SSH host key, as an OpenSSH public key line. If set, sessions refuse any
+    /// other; if not, they accept whatever key the guest presents.
+    pub host_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Session {
-    /// Names the session in messages and in its log's file name. Defaults to `user`.
-    pub name: Option<String>,
-    /// The login name, e.g. `alice+secrets`.
+    /// The login name, e.g. `alice+secrets`. Unique within a case; it also names the log.
     pub user: String,
-    /// The test key (`ssh.rs`) to log in with. Defaults to `user` up to any `+`.
+    /// The test key to log in with. Defaults to `user` up to any `+`.
     pub key: Option<String>,
-    /// The guest port to connect to; it must be in `net.forward`. (Unused by ssh-loopback.)
-    #[serde(default = "default_ssh_port")]
-    pub port: u16,
     /// Ask the server for a terminal, as an interactive user's ssh does.
     #[serde(default)]
     pub pty: bool,
@@ -166,38 +170,26 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn name(&self) -> &str { self.name.as_deref().unwrap_or(&self.user) }
-
     pub fn key(&self) -> &str { self.key.as_deref().unwrap_or_else(|| self.user.split('+').next().unwrap()) }
 }
 
-/// One step of a session. A session runs its steps in order.
+/// One step of a session. A session runs its steps in order; unless the last one is `exit`,
+/// the bench then ends the session as `{ exit = 0 }` does.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Step {
     /// Type this. Include the `\n`.
     Send(String),
     /// Wait until the output not consumed by an earlier `expect` matches this regular
-    /// expression, and consume it up to the end of the match. ssh's own messages count as
-    /// output, and when ssh exits the bench appends the line `[ssh exited: N]`.
+    /// expression (multi-line mode), and consume it up to the end of the match. ssh's own
+    /// messages count as output.
     Expect(String),
     /// Record that this session got here, for other sessions to `wait` for.
     Mark(String),
     /// Wait until some session has recorded this mark.
     Wait(String),
-    /// Close the session's input (end of file). The value must be `true`.
-    Close(bool),
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Results {
-    /// A regular expression with one capture group. Each console line it matches reports
-    /// one result: the captured text.
-    pub pattern: String,
-    /// The expected results, one per line, relative to the workspace root. Compared once
-    /// every `expect` has matched (and every session finished): same count, text and order.
-    pub expected: PathBuf,
+    /// Close the session's input, read its output until ssh exits, and require this status.
+    Exit(i32),
 }
 
 #[derive(Debug, Deserialize)]
@@ -229,6 +221,7 @@ impl Grant {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Build {
     pub package: String,
     #[serde(default)]
@@ -257,7 +250,7 @@ pub enum Corruption {
     SegmentVaddr(String),
     /// Set the entry point to this virtual address (hex).
     Entry(String),
-    /// Cut the file to this many bytes: a malformed image.
+    /// Cut the file to this many bytes (fewer than it has): a malformed image.
     Truncate(usize),
 }
 
@@ -269,52 +262,60 @@ pub struct Input {
     pub send: String,
 }
 
-fn default_true() -> bool { true }
-
 fn default_smp() -> Vec<u32> { vec![1] }
 
-fn default_timeout() -> u64 { 60 }
-
-fn default_ssh_port() -> u16 { 22 }
+fn default_timeout() -> f64 { 60.0 }
 
 impl Case {
     pub fn load(path: &Path) -> Result<Case> {
         let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         let mut case: Case = toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         case.name = path.file_stem().unwrap().to_string_lossy().into_owned();
-        match &case.kind {
+        case.check().with_context(|| format!("in {}", path.display()))?;
+        Ok(case)
+    }
+
+    /// Catch mistakes before booting anything, where they would otherwise show up only as a
+    /// timeout or a confusing failure.
+    fn check(&self) -> Result<()> {
+        match &self.kind {
             Kind::Boot(boot) => {
-                let forwarded = boot.net.as_ref().map_or(&[][..], |net| &net.forward[..]);
-                check_sessions(&boot.session, Some(forwarded))
+                for pattern in &boot.distinct_across_boots {
+                    let groups = regex::Regex::new(pattern)?.captures_len();
+                    ensure!(groups >= 2, "distinct_across_boots /{pattern}/ needs a capture group");
+                }
+                if !boot.session.is_empty() {
+                    ensure!(boot.net.as_ref().is_some_and(|n| n.forward.contains(&22)), "sessions need net.forward = [22]");
+                }
+                check_sessions(&boot.session)
             }
-            Kind::SshLoopback(loopback) => check_sessions(&loopback.session, None),
+            Kind::SshLoopback(loopback) => check_sessions(&loopback.session),
             _ => Ok(()),
         }
-        .with_context(|| format!("in {}", path.display()))?;
-        Ok(case)
     }
 }
 
-/// Catch mistakes in a scenario before booting anything: unforwarded ports, duplicate
-/// session names, and marks nobody sets (which would only show up as a timeout).
-/// `forwarded` is None for a loopback case, which has no guest ports.
-fn check_sessions(sessions: &[Session], forwarded: Option<&[u16]>) -> Result<()> {
-    let mut names = std::collections::HashSet::new();
-    let marks: std::collections::HashSet<&str> = sessions
+/// Session users name log files, so they are unique and plain; every mark waited for is set.
+fn check_sessions(sessions: &[Session]) -> Result<()> {
+    let mut users = HashSet::new();
+    let marks: HashSet<&str> = sessions
         .iter()
         .flat_map(|s| &s.steps)
         .filter_map(|step| if let Step::Mark(mark) = step { Some(mark.as_str()) } else { None })
         .collect();
     for session in sessions {
-        let name = session.name();
-        anyhow::ensure!(names.insert(name), "two sessions are named {name:?}");
-        if let Some(forwarded) = forwarded {
-            anyhow::ensure!(forwarded.contains(&session.port), "session {name}: port {} is not in net.forward", session.port);
-        }
-        for step in &session.steps {
+        let user = session.user.as_str();
+        ensure!(
+            !user.is_empty() && user.bytes().all(|b| b.is_ascii_alphanumeric() || b"_+-".contains(&b)),
+            "session user {user:?}: use letters, digits, '_', '+' and '-'"
+        );
+        ensure!(users.insert(user), "two sessions log in as {user:?}");
+        for (number, step) in session.steps.iter().enumerate() {
             match step {
-                Step::Wait(mark) => anyhow::ensure!(marks.contains(mark.as_str()), "session {name} waits for mark {mark:?}, which no session sets"),
-                Step::Close(close) => anyhow::ensure!(*close, "session {name}: `close` must be true"),
+                Step::Wait(mark) => {
+                    ensure!(marks.contains(mark.as_str()), "session {user} waits for mark {mark:?}, which no session sets")
+                }
+                Step::Exit(_) => ensure!(number + 1 == session.steps.len(), "session {user}: `exit` must be the last step"),
                 _ => {}
             }
         }

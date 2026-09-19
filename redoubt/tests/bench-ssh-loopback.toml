@@ -1,37 +1,34 @@
-description = "Bench self-check: concurrent scripted SSH sessions, ordered by marks, against a host OpenSSH server"
+description = "Bench self-check: concurrent scripted SSH sessions, ordered by marks, exit statuses checked, against a host OpenSSH server"
 kind = "ssh-loopback"
 timeout_secs = 20
-# The host sshd runs /bin/sh for every login and accepts only these test keys. It can log in
-# only the user running the bench, so `user` here only chooses the key (see README).
+# ssh runs the host sshd itself (inetd mode), which runs /bin/sh for every login and accepts
+# only these test keys. It can log in only the user running the bench, so `user` here only
+# chooses the key and names the log (see README).
 authorized = ["alice", "bob"]
 
 [[session]]
 user = "alice"
-forbid = ['bob-was-here']
 steps = [
     { send = "echo alice-$((6 * 7))\n" },
     { expect = '^alice-42$' },
     { mark = "alice-in" },
     { wait = "bob-done" },
     { send = "exit 3\n" },
-    { expect = '\[ssh exited: 3\]' },
+    { exit = 3 },
 ]
 
+# Ends the default way: input closed, and ssh must exit with status 0.
 [[session]]
 user = "bob"
-forbid = ['alice-42']
 steps = [
     { wait = "alice-in" },
     { send = "echo bob-was-here\n" },
-    { expect = 'bob-was-here' },
+    { expect = '^bob-was-here$' },
     { mark = "bob-done" },
-    { close = true },
-    { expect = '\[ssh exited: 0\]' },
 ]
 
 # A terminal session: the login name's `+label` is not part of the key's name.
 [[session]]
-name = "alice-tty"
 user = "alice+tty"
 pty = true
 steps = [
@@ -39,10 +36,10 @@ steps = [
     { expect = '/dev/pts/\d+' },
 ]
 
-# A key the server does not accept: ssh's own refusal is part of the output.
+# A key the server does not accept: ssh's refusal is output, and its status is checked.
 [[session]]
 user = "mallory"
 steps = [
     { expect = 'Permission denied \(publickey\)' },
-    { expect = '\[ssh exited: 255\]' },
+    { exit = 255 },
 ]

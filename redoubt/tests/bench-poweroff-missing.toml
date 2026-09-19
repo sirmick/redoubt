@@ -1,0 +1,12 @@
+description = "Bench self-check: `poweroff = true` fails a guest that passes its expectations but never powers off"
+arch = ["rv64"]
+kind = "boot"
+programs = ["log-server", "ipc-client"]
+timeout_secs = 0.5
+expect = ['IPC TEST PASSED']
+poweroff = true
+must_fail = '^timed out waiting for the guest to power off$'
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]

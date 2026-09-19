@@ -13,7 +13,9 @@ use test_programs::{log, Logger};
 use xous::{MemoryAddress, MemoryFlags};
 
 /// QEMU `virt`'s virtio-mmio transports: eight slots of 0x1000 bytes. A real driver would
-/// read these from the device tree.
+/// read these from the device tree. QEMU fills them from the top down: the first `-device`
+/// on its command line (the bench adds the disk before the network card) takes the highest
+/// slot, so this program, scanning upwards, reports the network card first.
 const VIRTIO_BASE: usize = 0x1000_1000;
 const VIRTIO_SLOTS: usize = 8;
 /// QEMU `virt`'s test device ("sifive,test0"): writing 0x5555 powers off.
@@ -67,8 +69,8 @@ pub extern "C" fn _start() -> ! {
     }
     log!(logger, "[virtio] {} device(s); powering off", found);
 
-    // Stop here rather than idle, so a case expecting a device that is missing fails at once
-    // instead of at its timeout.
+    // Stop here rather than idle: a case expecting a device that is missing fails at once
+    // instead of at its timeout, and `poweroff = true` cases get a clean end to check.
     let poweroff = xous::map_memory(MemoryAddress::new(POWEROFF), None, 4096, MemoryFlags::R | MemoryFlags::W)
         .expect("couldn't map the power-off device");
     // SAFETY: `poweroff` maps the test device's page; its first register is 32 bits wide.

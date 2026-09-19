@@ -47,10 +47,9 @@ struct Args {
     /// With --run, start QEMU paused with a gdb stub on :1234 (see planning/redoubt/DEBUGGING.md).
     #[arg(long)]
     debug: bool,
-    /// Print the public half of the SSH test key NAME (for a boot manifest) and write its
-    /// private half for a manual `ssh -i`.
-    #[arg(long, value_name = "NAME")]
-    ssh_key: Option<String>,
+    /// Report a case whose firmware or OpenSSH is missing as SKIP instead of FAIL.
+    #[arg(long)]
+    allow_skip: bool,
     /// Show cargo's output.
     #[arg(long, short)]
     verbose: bool,
@@ -82,11 +81,10 @@ fn main() -> Result<()> {
         let image = Image { machine, firmware: &args.firmware, loader: &loader, bundle: &bundle, smp: args.smp, devices: &[] };
         return image.run_interactive(args.debug);
     }
-    if let Some(name) = &args.ssh_key {
-        println!("{}", ssh::public_key(name)?);
-        println!("private key: {}", ssh::key_file(&logs.join("ssh"), name)?.display());
-        return Ok(());
-    }
+    // Something the host lacks. A skip would make the run look greener than it is.
+    let missing = |why: String| {
+        if args.allow_skip { Outcome::Skip(why) } else { Outcome::Fail(format!("{why} (--allow-skip to skip)")) }
+    };
 
     let mut paths: Vec<_> = std::fs::read_dir(workspace.join("redoubt/tests"))?
         .filter_map(|e| Some(e.ok()?.path()))
@@ -114,14 +112,20 @@ fn main() -> Result<()> {
         }
         if let Kind::SshLoopback(loopback) = &case.kind {
             let started = Instant::now();
-            let outcome = ssh_loopback(case, loopback, &logs).unwrap_or_else(|e| Outcome::Fail(format!("{e:#}")));
-            let outcome = judge(loopback.must_fail.as_deref(), outcome)?;
+            let outcome = match ssh_available(true) {
+                Err(why) => missing(why),
+                Ok(()) => match ssh_loopback(&workspace, case, loopback, &logs) {
+                    Ok(outcome) => judge(loopback.must_fail.as_deref(), outcome)?,
+                    // The bench's own trouble is never what a `must_fail` is waiting for.
+                    Err(e) => Outcome::Fail(format!("bench error: {e:#}")),
+                },
+            };
             failures += report(&case.name, outcome, started.elapsed().as_secs_f32());
             continue;
         }
         for arch in case.arch.iter().filter(|a| args.arch.as_ref().is_none_or(|only| only == *a)) {
             let target = target::find(arch).with_context(|| format!("{}: unknown arch {arch:?}", case.name))?;
-            for (variant, outcome, seconds) in run_case(&builder, case, target, &args.firmware, &logs)? {
+            for (variant, outcome, seconds) in run_case(&builder, case, target, &args.firmware, &logs, &missing)? {
                 failures += report(&format!("{} [{}{}]", case.name, target.name, variant), outcome, seconds);
             }
         }
@@ -147,15 +151,28 @@ fn report(label: &str, outcome: Outcome, seconds: f32) -> usize {
 
 /// The RustSBI Prototyper binary for `target`, or an error naming where it was looked for.
 /// Overridable per width with RUSTSBI_PROTOTYPER (rv64) / RUSTSBI_PROTOTYPER_RV32 (rv32).
+/// By default it is looked for in a `rustsbi` checkout beside this repository's main checkout,
+/// found through git so that a worktree resolves to the same place.
 fn rustsbi_prototyper(target: &Target) -> Result<String, String> {
-    let base = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../rustsbi/target");
     let (env, arch) = if target.triple.starts_with("riscv64") {
         ("RUSTSBI_PROTOTYPER", "riscv64gc-unknown-none-elf")
     } else {
         ("RUSTSBI_PROTOTYPER_RV32", "riscv32imac-unknown-none-elf")
     };
-    let path =
-        std::env::var(env).unwrap_or_else(|_| format!("{base}/{arch}/release/rustsbi-prototyper"));
+    let path = match std::env::var(env) {
+        Ok(path) => path,
+        Err(_) => {
+            let common = Command::new("git")
+                .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+                .current_dir(env!("CARGO_MANIFEST_DIR"))
+                .output()
+                .map_err(|e| format!("running git to find the RustSBI checkout: {e}"))?;
+            // The common directory is the main checkout's `.git`; rustsbi sits beside the checkout.
+            let common = PathBuf::from(String::from_utf8_lossy(&common.stdout).trim());
+            let siblings = common.parent().and_then(Path::parent).ok_or("cannot locate the main checkout")?;
+            format!("{}/rustsbi/target/{arch}/release/rustsbi-prototyper", siblings.display())
+        }
+    };
     if std::path::Path::new(&path).exists() {
         Ok(path)
     } else {
@@ -165,7 +182,7 @@ fn rustsbi_prototyper(target: &Target) -> Result<String, String> {
 
 /// Resolve a case's firmware choice to a `-bios` value. rv64 defaults to QEMU's bundled
 /// OpenSBI; QEMU ships none for rv32, so rv32 always boots under RustSBI. A case may force
-/// "rustsbi"; the boot is skipped if that binary is absent.
+/// "rustsbi". A binary that is absent fails the case (or, with --allow-skip, skips it).
 fn resolve_firmware(case_firmware: Option<&str>, cli_default: &str, target: &Target) -> Result<String, String> {
     let rv64 = target.triple.starts_with("riscv64");
     match case_firmware {
@@ -216,13 +233,16 @@ fn compare_boots(boot: &case::Boot, first: &[Option<String>], second: &[Option<S
     Outcome::Pass
 }
 
-/// Run one case on one target. A boot case yields one result per `smp` entry.
+
+/// Run one case on one target. A boot case yields one result per `smp` entry. `missing` turns
+/// something the host lacks into a failure or, with --allow-skip, a skip.
 fn run_case(
     builder: &Builder,
     case: &Case,
     target: &'static Target,
     firmware: &str,
-    logs: &std::path::Path,
+    logs: &Path,
+    missing: &dyn Fn(String) -> Outcome,
 ) -> Result<Vec<(String, Outcome, f32)>> {
     let started = Instant::now();
     let elapsed = |since: Instant| since.elapsed().as_secs_f32();
@@ -242,26 +262,23 @@ fn run_case(
         Ok(machine) => machine,
         Err(why) => return Ok(vec![(String::new(), Outcome::Skip(why.to_string()), 0.0)]),
     };
-
+    let firmware = match resolve_firmware(boot.firmware.as_deref(), firmware, target) {
+        Ok(firmware) => firmware,
+        Err(why) => return Ok(vec![(String::new(), missing(why), 0.0)]),
+    };
     if !boot.session.is_empty() {
-        if let Err(why) = ssh_available() {
-            return Ok(vec![(String::new(), Outcome::Skip(why), 0.0)]);
+        if let Err(why) = ssh_available(false) {
+            return Ok(vec![(String::new(), missing(why), 0.0)]);
         }
     }
 
-    // Build everything once, then boot it once per hart count.
+    // Build everything once, then boot it once per hart count. A build failure is the bench's
+    // or the code's problem, never what a `must_fail` is waiting for, so it is not judged.
     let bundle = logs.join(format!("{}-{}.tar", case.name, target.name));
     let manifest = boot.grant.iter().flat_map(|g| g.manifest_lines()).collect::<Vec<_>>().join("\n");
-    let prepared = prepare(builder, target, machine, &boot.programs, &boot.file, &boot.kernel_features, &manifest, boot.tamper_bundle, &bundle);
-    let expected_results = match &boot.results {
-        Some(results) => std::fs::read_to_string(builder.workspace.join(&results.expected))
-            .with_context(|| format!("reading {}", results.expected.display()))
-            .map(|text| text.lines().map(str::to_string).collect()),
-        None => Ok(Vec::new()),
-    };
-    let (bundle, expected_results) = match (prepared, expected_results) {
-        (Ok(bundle), Ok(expected)) => (bundle, expected),
-        (Err(e), _) | (_, Err(e)) => return Ok(vec![(String::new(), Outcome::Fail(format!("{e:#}")), elapsed(started))]),
+    let bundle = match prepare(builder, target, machine, &boot.programs, &boot.file, &boot.kernel_features, &manifest, boot.tamper_bundle, &bundle) {
+        Ok(bundle) => bundle,
+        Err(e) => return Ok(vec![(String::new(), Outcome::Fail(format!("{e:#}")), elapsed(started))]),
     };
 
     let loader = builder.artifact(target, machine.loader_package);
@@ -269,15 +286,11 @@ fn run_case(
     for smp in &boot.smp {
         let run_started = Instant::now();
         let log = logs.join(format!("{}-{}-smp{}.log", case.name, target.name, smp));
-        let firmware = match resolve_firmware(boot.firmware.as_deref(), firmware, target) {
-            Ok(fw) => fw,
-            Err(why) => return Ok(vec![(String::new(), Outcome::Skip(why), 0.0)]),
-        };
         // Every boot gets fresh devices: a new disk, new host ports.
         let boot_once = |log: &Path| -> Result<Verdict> {
-            let (devices, forwards) = qemu::virtio_devices(boot, &builder.workspace, &log.with_extension("img"))?;
+            let (devices, forwards) = qemu::virtio_devices(boot, &log.with_extension("img"))?;
             let image = Image { machine, firmware: &firmware, loader: &loader, bundle: &bundle, smp: *smp, devices: &devices };
-            qemu::run(&image, boot, &forwards, &expected_results, log)
+            qemu::run(&image, boot, &builder.workspace, &forwards, log)
         };
         let outcome = match boot_once(&log)? {
             Verdict::Fail(why) => Outcome::Fail(why),
@@ -295,8 +308,8 @@ fn run_case(
     Ok(results)
 }
 
-/// Apply a case's `must_fail`: then the case passes only if the bench failed it, and for the
-/// named reason, so a self-check cannot pass by failing for some unrelated reason.
+/// Apply a case's `must_fail` to the verdict of its run: then the case passes only if the run
+/// failed, and for the named reason, so a self-check cannot pass by failing for some other one.
 fn judge(must_fail: Option<&str>, outcome: Outcome) -> Result<Outcome> {
     let Some(pattern) = must_fail else { return Ok(outcome) };
     let pattern = regex::Regex::new(pattern).with_context(|| format!("bad regular expression {pattern:?}"))?;
@@ -308,29 +321,26 @@ fn judge(must_fail: Option<&str>, outcome: Outcome) -> Result<Outcome> {
     })
 }
 
-/// SSH sessions need OpenSSH's client (and loopback cases its server) on the host.
-fn ssh_available() -> Result<(), String> {
+/// SSH sessions need OpenSSH's client, and loopback cases its server, on the host.
+fn ssh_available(server_too: bool) -> Result<(), String> {
     match Command::new(ssh::SSH).arg("-V").stderr(Stdio::null()).status() {
-        Ok(status) if status.success() => Ok(()),
-        _ => Err(format!("OpenSSH's `{}` is not installed", ssh::SSH)),
+        Ok(status) if status.success() => {}
+        _ => return Err(format!("OpenSSH's `{}` is not installed", ssh::SSH)),
     }
+    if server_too && !Path::new(ssh::SSHD).exists() {
+        return Err(format!("OpenSSH's server {} is not installed", ssh::SSHD));
+    }
+    Ok(())
 }
 
-/// Run an `ssh-loopback` case: its sessions against a host sshd accepting its keys.
-fn ssh_loopback(case: &Case, loopback: &case::SshLoopback, logs: &Path) -> Result<Outcome> {
-    if let Err(why) = ssh_available() {
-        return Ok(Outcome::Skip(why));
-    }
-    if !Path::new(ssh::SSHD).exists() {
-        return Ok(Outcome::Skip(format!("OpenSSH's server {} is not installed", ssh::SSHD)));
-    }
-    let deadline = Instant::now() + std::time::Duration::from_secs(loopback.timeout_secs);
-    let sshd = ssh::start_loopback(&logs.join("ssh"), &case.name, &loopback.authorized)?;
-    let user = Command::new("id").arg("-un").output().context("running id -un")?;
-    let user = String::from_utf8(user.stdout)?.trim().to_string();
-    let server = ssh::Server::Loopback { port: sshd.port, user };
+/// Run an `ssh-loopback` case: its sessions against a host sshd accepting its keys. An error
+/// is the bench's own trouble; the outcome is the sessions' verdict.
+fn ssh_loopback(workspace: &Path, case: &Case, loopback: &case::SshLoopback, logs: &Path) -> Result<Outcome> {
+    let deadline = Instant::now() + std::time::Duration::from_secs_f64(loopback.timeout_secs);
+    let server =
+        ssh::loopback(workspace, &logs.join("ssh"), &case.name, &loopback.authorized, loopback.host_key.as_deref())?;
     let abort = std::sync::atomic::AtomicBool::new(false);
-    Ok(match ssh::run(&loopback.session, &server, logs, &case.name, deadline, &abort)? {
+    Ok(match ssh::run(workspace, &loopback.session, &server, logs, &case.name, deadline, &abort)? {
         None => Outcome::Pass,
         Some(why) => Outcome::Fail(why),
     })
