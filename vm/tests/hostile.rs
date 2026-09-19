@@ -138,7 +138,7 @@ fn mutants_never_panic() {
         let mut modules = BTreeMap::new();
         modules.insert(module_name.clone(), bytes.clone());
         // Small limits keep each run fast; the limits themselves are what is being tested.
-        let limits = Limits { max_binary_bits: 1 << 20, max_stack_slots: 1 << 16 };
+        let limits = Limits { max_binary_bits: 1 << 20, max_stack_slots: 1 << 16, ..Limits::default() };
         let mut vm = Vm::with_limits(Box::new(TestPlatform { now: 0, modules }), limits);
         if let Ok(pid) = vm.spawn(&module_name, "start", Vec::new()) {
             // A mutant may loop forever; that is fine, as long as it does not crash the VM.
@@ -172,7 +172,7 @@ fn jump_loops_are_preempted() {
 fn empty_frames_count_against_the_stack() {
     let mut modules = BTreeMap::new();
     modules.insert("exceptions".to_string(), include_bytes!("fixtures/regress-frames.beam").to_vec());
-    let limits = Limits { max_binary_bits: 1 << 20, max_stack_slots: 1 << 20 };
+    let limits = Limits { max_binary_bits: 1 << 20, max_stack_slots: 1 << 20, ..Limits::default() };
     let mut vm = Vm::with_limits(Box::new(TestPlatform { now: 0, modules }), limits);
     let pid = vm.spawn("exceptions", "start", Vec::new()).unwrap();
     let r = vm.run_bounded(pid, 100_000).expect("finished");

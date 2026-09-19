@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 
 use super::Ctx;
 use crate::interp;
-use crate::process::{Class, Exception};
+use crate::process::{Class, Exception, MaxHeap};
 use crate::term::{MapKey, Pid, Term};
 
 type R = Result<Term, Exception>;
@@ -130,7 +130,9 @@ fn destination(c: &mut Ctx, t: &Term) -> Result<Pid, Exception> {
 /// Send `msg` to `to`, which may be the running process itself.
 pub fn send_to(c: &mut Ctx, to: Pid, msg: Term) {
     if to == c.p.pid {
-        crate::vm::deliver(c.p, msg, &mut c.sys.run_queue);
+        if !crate::vm::deliver(c.p, msg, &mut c.sys.run_queue, c.sys.limits.max_mailbox) {
+            c.p.pending_exit = Some(crate::vm::mailbox_full(&mut c.sys.atom_table, &c.sys.atoms));
+        }
     } else {
         c.sys.send(to, msg);
     }
@@ -356,7 +358,7 @@ pub fn exit2(c: &mut Ctx, a: &[Term]) -> R {
     if pid == c.p.pid {
         exit_self(c, a[1].clone());
     } else {
-        c.sys.exits.push_back(crate::vm::ExitSignal { target: pid, from: c.p.pid, reason: a[1].clone(), from_link: false });
+        c.sys.exits.push_back(crate::vm::ExitSignal { target: pid, from: c.p.pid, reason: a[1].clone(), from_link: false, forced: false });
     }
     Ok(Term::Atom(c.sys.atoms.true_.clone()))
 }
@@ -373,7 +375,54 @@ pub fn process_flag(c: &mut Ctx, a: &[Term]) -> R {
         let old = core::mem::replace(&mut c.p.trap_exit, new);
         return Ok(c.bool(old));
     }
+    if matches!(&a[0], Term::Atom(f) if f.as_str() == "max_heap_size") {
+        let new = parse_max_heap(c, &a[1])?;
+        let old = core::mem::replace(&mut c.p.max_heap, new);
+        return Ok(max_heap_term(&mut c.sys.atom_table, &c.sys.atoms, old));
+    }
     Err(c.badarg())
+}
+
+/// A `max_heap_size` setting: a size in words, or a map of `size`, `kill`, `error_logger` and
+/// `include_shared_binaries` (keys left out take their defaults).
+fn parse_max_heap(c: &Ctx, v: &Term) -> Result<MaxHeap, Exception> {
+    let size = |t: &Term| t.as_usize().map(|n| n as u64).ok_or_else(|| c.badarg());
+    let flag = |t: &Term| match t {
+        Term::Atom(a) if *a == c.sys.atoms.true_ => Ok(true),
+        Term::Atom(a) if *a == c.sys.atoms.false_ => Ok(false),
+        _ => Err(c.badarg()),
+    };
+    let mut m = MaxHeap::default();
+    match v {
+        Term::Map(map) => {
+            for (k, v) in map.iter() {
+                match &k.0 {
+                    Term::Atom(a) if a.as_str() == "size" => m.size = size(v)?,
+                    Term::Atom(a) if a.as_str() == "kill" => m.kill = flag(v)?,
+                    Term::Atom(a) if a.as_str() == "error_logger" => m.error_logger = flag(v)?,
+                    Term::Atom(a) if a.as_str() == "include_shared_binaries" => m.include_shared_binaries = flag(v)?,
+                    _ => return Err(c.badarg()),
+                }
+            }
+        }
+        other => m.size = size(other)?,
+    }
+    Ok(m)
+}
+
+/// A `max_heap_size` setting as `process_flag/2` and `process_info/2` report it.
+pub(crate) fn max_heap_term(table: &mut crate::atom::AtomTable, atoms: &crate::atom::Atoms, m: MaxHeap) -> Term {
+    let b = |v: bool| Term::Atom(if v { atoms.true_.clone() } else { atoms.false_.clone() });
+    let mut map = crate::term::Map::new();
+    for (k, v) in [
+        ("error_logger", b(m.error_logger)),
+        ("include_shared_binaries", b(m.include_shared_binaries)),
+        ("kill", b(m.kill)),
+        ("size", Term::Int(m.size as i64)),
+    ] {
+        map.insert(MapKey(Term::Atom(table.intern(k).expect("short atom"))), v);
+    }
+    Term::map(map)
 }
 
 pub fn is_process_alive(c: &mut Ctx, a: &[Term]) -> R {
@@ -647,17 +696,20 @@ pub fn module_loaded(c: &mut Ctx, a: &[Term]) -> R {
 
 // ---- spawn_opt ----
 
-/// `spawn_opt(Fun, Options)` and `spawn_opt(M, F, A, Options)`. Supported options: `link` and
-/// `monitor`. Tuning options (`min_heap_size`, `priority`, ...) are accepted and ignored: this
-/// VM has no per-process heaps and one priority.
+/// `spawn_opt(Fun, Options)` and `spawn_opt(M, F, A, Options)`. Supported options: `link`,
+/// `monitor` and `max_heap_size`. Tuning options (`min_heap_size`, `priority`, ...) are accepted
+/// and ignored: this VM has no per-process heaps and one priority.
 fn spawn_with(c: &mut Ctx, entry: crate::process::Cp, args: Vec<Term>, opts: &Term) -> R {
     let opts = opts.to_vec().ok_or_else(|| c.badarg())?;
-    let (mut link, mut monitor) = (false, false);
+    let (mut link, mut monitor, mut max_heap) = (false, false, None);
     for o in &opts {
         match o {
             Term::Atom(a) if a.as_str() == "link" => link = true,
             Term::Atom(a) if a.as_str() == "monitor" => monitor = true,
             Term::Tuple(t) if !t.is_empty() && matches!(&t[0], Term::Atom(a) if a.as_str() == "monitor") => monitor = true,
+            Term::Tuple(t) if t.len() == 2 && matches!(&t[0], Term::Atom(a) if a.as_str() == "max_heap_size") => {
+                max_heap = Some(parse_max_heap(c, &t[1])?);
+            }
             Term::Tuple(t) if t.len() == 2 => {}
             _ => return Err(c.badarg()),
         }
@@ -666,6 +718,9 @@ fn spawn_with(c: &mut Ctx, entry: crate::process::Cp, args: Vec<Term>, opts: &Te
         Term::Pid(p) => p,
         _ => unreachable!("do_spawn returns a pid"),
     };
+    if let (Some(m), Some(p)) = (max_heap, c.sys.procs.get_mut(pid)) {
+        p.max_heap = m;
+    }
     if !monitor {
         return Ok(Term::Pid(pid));
     }

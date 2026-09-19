@@ -85,8 +85,11 @@ fn info_item(table: &mut AtomTable, atoms: &Atoms, p: &Process, running: bool, i
             Term::list(entries)
         }
         "stack_size" => Term::Int((p.stack.len() + p.frames.len()) as i64),
-        // Terms are reference counted, not kept on per-process heaps: nothing to report.
-        "heap_size" | "total_heap_size" | "min_heap_size" | "memory" => Term::Int(0),
+        // Measured now (see `memory`): the words the process holds, each shared term once.
+        "heap_size" | "total_heap_size" => Term::Int(crate::memory::process(p, u64::MAX).words as i64),
+        "memory" => Term::Int((crate::memory::process(p, u64::MAX).words * 8) as i64),
+        "min_heap_size" => Term::Int(233),
+        "max_heap_size" => super::proc::max_heap_term(table, atoms, p.max_heap),
         "current_function" => match p.pc.module.function_at(p.pc.pc) {
             Some(f) => Term::tuple(alloc::vec![
                 Term::Atom(p.pc.module.name.clone()),
@@ -107,7 +110,7 @@ fn info_item(table: &mut AtomTable, atoms: &Atoms, p: &Process, running: bool, i
 }
 
 /// `process_info(Pid, Item)` and `process_info(Pid, [Item])`. `undefined` for a dead process.
-/// Items about memory (`heap_size`, `memory`, ...) raise `badarg`: there are no per-process heaps.
+/// Memory items (`memory`, `heap_size`, ...) are measured when asked for: see `memory.rs`.
 pub fn process_info(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Pid(pid) = a[0] else { return Err(c.badarg()) };
     let single = matches!(a[1], Term::Atom(_) | Term::Tuple(_));
@@ -444,6 +447,57 @@ pub fn crc32(c: &mut Ctx, a: &[Term]) -> R {
     let bin = super::erlang::iolist_to_binary(c, core::slice::from_ref(data))?;
     let Term::Bits(b) = bin else { return Err(c.badarg()) };
     Ok(Term::Int(crc32_update(old, &b.to_bytes()) as i64))
+}
+
+// ---- erlang:memory ----
+
+/// The categories of `erlang:memory/0`, in its order.
+const MEMORY_TYPES: [&str; 9] =
+    ["total", "processes", "processes_used", "system", "atom", "atom_used", "binary", "code", "ets"];
+
+/// Bytes in use per category of `erlang:memory/0`, from each process's last measurement (the
+/// caller's is taken now) and the ETS tables' running totals. `code` is not tracked (0), and
+/// atoms are estimated from their count.
+fn memory_values(c: &mut Ctx) -> [u64; 9] {
+    let current = crate::memory::process(c.p, u64::MAX);
+    let (mut procs, mut binary) = (current.words, current.binary_bytes);
+    for pid in c.sys.procs.pids() {
+        if let Some(p) = c.sys.procs.get_mut(pid) {
+            procs += p.usage.words.max(crate::memory::PROCESS_WORDS);
+            binary += p.usage.binary_bytes;
+        }
+    }
+    let processes = procs * 8;
+    let atom = c.sys.atom_table.len() as u64 * 16;
+    let ets = c.sys.ets.words() * 8;
+    let code = 0;
+    let system = atom + binary + code + ets;
+    [processes + system, processes, processes, system, atom, atom, binary, code, ets]
+}
+
+pub fn memory0(c: &mut Ctx, _a: &[Term]) -> R {
+    let values = memory_values(c);
+    let items: Vec<Term> =
+        MEMORY_TYPES.iter().zip(values).map(|(k, v)| Term::tuple(alloc::vec![c.atom(k), Term::Int(v as i64)])).collect();
+    Ok(Term::list(items))
+}
+
+/// `erlang:memory(Type)` and `erlang:memory([Type])`.
+pub fn memory1(c: &mut Ctx, a: &[Term]) -> R {
+    let values = memory_values(c);
+    let value = |c: &Ctx, t: &Term| match t {
+        Term::Atom(k) => MEMORY_TYPES.iter().position(|m| *m == k.as_str()).map(|i| Term::Int(values[i] as i64)).ok_or_else(|| c.badarg()),
+        _ => Err(c.badarg()),
+    };
+    if let Term::Atom(_) = &a[0] {
+        return value(c, &a[0]);
+    }
+    let types = a[0].to_vec().ok_or_else(|| c.badarg())?;
+    let mut out = Vec::new();
+    for t in &types {
+        out.push(Term::tuple(alloc::vec![t.clone(), value(c, t)?]));
+    }
+    Ok(Term::list(out))
 }
 
 #[cfg(test)]
