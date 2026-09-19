@@ -498,10 +498,10 @@ impl Run {
         }
         for e in &st.audit[audit_from..] {
             match e {
-                Audit::Login { principal, key, .. } => {
-                    if !st.principals[*principal].spec.login_keys.contains(key) || st.keyd.contains(key) {
-                        return Err(format!("P2: login to principal {principal} with key {key}"));
-                    }
+                Audit::Login { principal, key, .. }
+                    if !st.principals[*principal].spec.login_keys.contains(key) || st.keyd.contains(key) =>
+                {
+                    return Err(format!("P2: login to principal {principal} with key {key}"));
                 }
                 Audit::Approved { id, principal, key, hash } => {
                     let spec = &st.principals[*principal].spec;

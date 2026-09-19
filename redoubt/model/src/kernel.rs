@@ -1198,13 +1198,14 @@ impl Kernel {
                 continue;
             }
             // Transferred pages become the receiver's; if its budget cannot hold them, the
-            // transfer is refused like an unrequested one (README choice 10; QUESTIONS 5).
+            // transfer is refused like an unrequested one (R4; QUESTIONS 5).
             if transfer > 0 && m.sender_budget != rbudget && self.free_pages(rbudget) < transfer {
                 self.refuse(e, mid, Error::Refused);
                 continue;
             }
-            // A process holds at most MAX_OPEN_CALLS open calls (QUESTIONS 2): the receiver gets
-            // `Busy` and the call stays queued.
+            // A process holds at most MAX_OPEN_CALLS open calls (R4a): a receiver that was waiting
+            // when its process reached the limit gets `Busy`, and the call stays queued (README
+            // choice 24, spec problem 3).
             if m.kind == MsgKind::Call
                 && self.open_calls(rpid) >= MAX_OPEN_CALLS
                 && !self.broken(Mutation::OpenCallsUnlimited)
@@ -1215,7 +1216,7 @@ impl Kernel {
             }
             // The receiver pays for the handles it receives, the open call and the page tables
             // of the buffer's mapping. If it cannot, its receive fails and the message stays
-            // queued (README choice 11).
+            // queued (R4a; for a send's handles and page tables, README choice 10 and spec problem 2).
             let mut hs = m.handles.clone();
             if self.broken(Mutation::R9ReceivedHandleRestamped) {
                 for h in &mut hs {
@@ -1345,7 +1346,7 @@ impl Kernel {
     // Ending things: threads, processes, endpoints, budgets (R10).
 
     /// A thread ends. What it waited for is withdrawn; what it was serving is finished: a caller
-    /// still waiting gets `Dead` and its lend back (README choice 13); an abandoned lend is freed.
+    /// still waiting gets `Dead` and its lend back; an abandoned lend is freed (R4b).
     fn end_thread(&mut self, tid: u64) {
         let Some(t) = self.threads.get(&tid).cloned() else { return };
         match t.wait {
@@ -1467,7 +1468,7 @@ impl Kernel {
     }
 
     /// Destroy an endpoint: blocked senders and receivers get `Dead`; taken calls in flight fail
-    /// with `Dead` (their lends stay with the server as in R3; README choice 14); pending exit
+    /// with `Dead` (their lends stay with the server as in R3; README choice 14, spec problem 7); pending exit
     /// notices are dropped.
     fn destroy_endpoint(&mut self, e: u64) {
         let Some(ep) = self.endpoints.get(&e) else { return };
@@ -2249,7 +2250,7 @@ impl Kernel {
             }
         };
         // R1: between two user budgets, only equal label sets; the receiving side is the
-        // endpoint's owner (QUESTIONS 4).
+        // endpoint's owner (QUESTIONS 4; README spec problem 4).
         let sender = &self.budgets[&self.budget_of(pid).unwrap()];
         let owner = &self.budgets[&self.endpoints[&e].owner];
         if sender.class == Class::User

@@ -145,8 +145,7 @@ pub fn epilogue(k: &Kernel) -> Vec<Op> {
         }
     }
     // 3. Revocation, one budget at a time.
-    loop {
-        let Some(init) = k.processes.get(&INIT_PID) else { break };
+    while let Some(init) = k.processes.get(&INIT_PID) {
         let Some(tid) = init.threads.iter().copied().find(|t| k.threads[t].wait.is_none()) else { break };
         let Some(h) = init
             .handles
@@ -337,7 +336,7 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
     }
     step(&mut k, Op::Sys { pid, tid, call: Syscall::BudgetDestroy { h: bh } }, &mut ops)?;
     // The child's processes' exit slots were charged to their creators (QUESTIONS 7) and stay
-    // until the notices are received: the creator receives them. A message arriving instead
+    // until the notices are received: the creator receives them (README spec problem 1). A message arriving instead
     // changes the creator's state, and the sequence proves nothing.
     if !drain(&mut k, &mut ops, &mut step)? {
         return Ok(());
@@ -450,18 +449,16 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
     let ha =
         handle(&run(&mut k, INIT_PID, 1, budget(100, 2, 1_000, Class::User, alloc::vec![], 1001, users_h))?)
             .unwrap();
-    let mint =
-        |k: &mut Kernel,
-         run: &mut dyn FnMut(&mut Kernel, u64, u64, Syscall) -> Result<crate::kernel::Step, Failure>,
-         into: u64| {
-            run(
-                k,
-                INIT_PID,
-                1,
-                Syscall::Mint { source: crate::syscall::MintSource::Handle(e), badge: 1, budget: Some(into) },
-            )
-            .map(|s| handle(&s))
-        };
+    type Runner<'a> = dyn FnMut(&mut Kernel, u64, u64, Syscall) -> Result<crate::kernel::Step, Failure> + 'a;
+    let mint = |k: &mut Kernel, run: &mut Runner, into: u64| {
+        run(
+            k,
+            INIT_PID,
+            1,
+            Syscall::Mint { source: crate::syscall::MintSource::Handle(e), badge: 1, budget: Some(into) },
+        )
+        .map(|s| handle(&s))
+    };
     let mut bobs = Vec::new();
     for i in 0..procs {
         let hbud = if i % 2 == 1 { hb2 } else { hb };
