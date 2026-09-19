@@ -11,11 +11,15 @@
 //! (alignment, then lying in the caller's own memory, then their slots); then the call's own
 //! checks, which live with the objects (`budget.rs`, `handle.rs`).
 //!
-//! Built so far (WP-K1): `handle_close`, `budget_create`, `budget_destroy`, `budget_usage`,
-//! `time_now`, `random`. Every other call decodes, then gets `InvalidArgument` until its package
-//! builds it (WP-K2 to WP-K5).
+//! Built so far (WP-K1, WP-K2): `handle_close`, `budget_create`, `budget_destroy`,
+//! `budget_usage`, `time_now`, `random`, `endpoint_create`, `mint`, `call`, `send`, `receive`,
+//! `reply`, `serve`. Every other call decodes, then gets `InvalidArgument` until its package
+//! builds it (WP-K3 to WP-K5).
 
-use redoubt_sys::{BUDGET_SPEC_SLOTS, BudgetSpec, Call, Error, Number, REGS, Return, USAGE_SLOTS, encode_result};
+use redoubt_sys::{
+    BUDGET_SPEC_SLOTS, BudgetSpec, Call, Error, Number, REGS, Return, USAGE_SLOTS,
+    encode_result,
+};
 use xous_kernel::{PID, TID};
 
 use crate::kframe;
@@ -33,7 +37,14 @@ pub enum Outcome {
 pub fn handle(pid: PID, tid: TID, in_irq: bool, regs: &[u64; REGS]) -> Outcome {
     // A legacy interrupt callback runs on borrowed time inside another process's quantum; it
     // gets none of these calls. (INTERIM: WP-K3 replaces callbacks with IRQ handles.)
-    let result = if in_irq { Err(Error::NotPermitted) } else { Call::decode(regs).and_then(|c| dispatch(pid, tid, c)) };
+    // I13, until WP-K5 arms the timer: every deadline that has passed is answered before this
+    // call is, so a blocking call returns by its timeout as soon as anything enters the kernel.
+    if !in_irq {
+        SystemServices::with_mut(crate::message::expire);
+    }
+
+    let result =
+        if in_irq { Err(Error::NotPermitted) } else { Call::decode(regs).and_then(|c| dispatch(pid, tid, c)) };
     // Every error a call returns is in its row of the spec's error table (`Number::can_return`).
     // The interim refusal of legacy callbacks is outside the table, and an unknown number has no
     // row (it is `InvalidArgument`).
@@ -63,16 +74,38 @@ fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
         Call::BudgetUsage { budget, usage_rec } => MemoryManager::with_mut(|mm| {
             let frames = record_frames::<USAGE_SLOTS>(usage_rec, true)?;
             let usage = mm.budget_usage(pid, budget.index())?;
-            write_record(usage_rec, &frames, &usage.encode());
+            write_record_to(usage_rec, &frames, &usage.encode());
             Ok(Some(Return::Nothing))
         }),
+        Call::EndpointCreate => MemoryManager::with_mut(|mm| {
+            let handle = mm.endpoint_create(pid)?;
+            Ok(Some(Return::Handle(redoubt_sys::Handle::new(handle).expect("indices start at 1"))))
+        }),
+        Call::Mint { source, badge, budget } => {
+            let handle = crate::message::mint(pid, tid, source, badge.get(), budget.map(|h| h.index()))?;
+            Ok(Some(Return::Handle(redoubt_sys::Handle::new(handle).expect("indices start at 1"))))
+        }
+        Call::Call { endpoint, body_rec, lend, timeout } => SystemServices::with_mut(|ss| {
+            crate::message::call(ss, pid, tid, endpoint.index(), body_rec, lend, timeout)
+        }),
+        Call::Send { endpoint, body_rec, transfer, timeout } => SystemServices::with_mut(|ss| {
+            crate::message::send(ss, pid, tid, endpoint.index(), body_rec, transfer, timeout)
+        }),
+        Call::Receive { from, timeout, max_transfer, received_rec } => SystemServices::with_mut(|ss| {
+            let from = from.map(|h| h.index());
+            crate::message::receive(ss, pid, tid, from, timeout, max_transfer, received_rec)
+        }),
+        Call::Reply { msg_id, body_rec } => SystemServices::with_mut(|ss| {
+            crate::message::reply(ss, pid, tid, msg_id.get(), body_rec).map(done)
+        }),
+        Call::Serve { msg_id } => crate::message::serve(pid, tid, msg_id.get()).map(done),
         Call::TimeNow => Ok(Some(Return::Time(crate::arch::irq::timer::now_us()))),
         Call::Random => {
             let mut bytes = [0u8; 8];
             crate::platform::rand::fill(&mut bytes);
             Ok(Some(Return::Random(u64::from_le_bytes(bytes))))
         }
-        // Decoded, not built yet (WP-K2 to WP-K5; `serve` and the abandoned-call notice are K2's).
+        // Decoded, not built yet (WP-K3 to WP-K5).
         _ => Err(Error::InvalidArgument),
     }
 }
@@ -101,6 +134,9 @@ fn budget_destroy(pid: PID, tid: TID, h: u32) -> Result<Option<Return>, Error> {
             ss.terminate_process(pid).expect("the caller exists");
             crate::syscall::reset_switchto_caller();
         }
+        // R10 reaches messages in flight: the endpoints the subtree owns are destroyed, and
+        // every message sent through a handle stamped with it fails its sender with `Dead`.
+        crate::message::budgets_dying(ss);
         MemoryManager::with_mut(|mm| mm.destroy_marked(top));
         Ok(if caller_doomed { None } else { Some(Return::Nothing) })
     })
@@ -121,13 +157,27 @@ fn record_frames<const N: usize>(addr: usize, write: bool) -> Result<[usize; N],
 }
 
 /// Copy in an `N`-slot input record.
-fn read_record<const N: usize>(addr: usize) -> Result<[u64; N], Error> {
+pub fn read_record<const N: usize>(addr: usize) -> Result<[u64; N], Error> {
     let frames = record_frames::<N>(addr, false)?;
     Ok(core::array::from_fn(|i| kframe::read(frames[i], (addr + i * 8) % xous_kernel::arch::PAGE_SIZE)))
 }
 
-fn write_record<const N: usize>(addr: usize, frames: &[usize; N], slots: &[u64; N]) {
+fn write_record_to<const N: usize>(addr: usize, frames: &[usize; N], slots: &[u64; N]) {
     for i in 0..N {
         kframe::write(frames[i], (addr + i * 8) % xous_kernel::arch::PAGE_SIZE, slots[i]);
     }
+}
+
+/// Copy out an `N`-slot output record: `receive`'s and the reply `call` writes back. The
+/// receiving process's address space must be the active one.
+pub fn write_record<const N: usize>(addr: usize, slots: &[u64; N]) -> Result<(), Error> {
+    let frames = record_frames::<N>(addr, true)?;
+    write_record_to(addr, &frames, slots);
+    Ok(())
+}
+
+/// Check an `N`-slot output record without writing it, so that `receive` refuses a record it
+/// could not fill before it blocks on one.
+pub fn check_record<const N: usize>(addr: usize) -> Result<(), Error> {
+    record_frames::<N>(addr, true).map(|_| ())
 }

@@ -275,7 +275,6 @@ fn sample_specs() -> Vec<BudgetSpec> {
             pages: 0,
             processes: 0,
             weight: 0,
-            first: false,
             labels: Labels::new(),
             account: 0,
             deadline: FOREVER,
@@ -284,7 +283,6 @@ fn sample_specs() -> Vec<BudgetSpec> {
             pages: BIG,
             processes: 4,
             weight: 20,
-            first: true,
             labels: labels(MAX_LABELS as u64),
             account: !BIG,
             deadline: BIG,
@@ -306,7 +304,8 @@ fn records_round_trip() {
     }
     let usage = sample_usage();
     assert_eq!(Usage::decode(&usage.encode()), Ok(usage));
-    assert_eq!(sample_specs()[1].encode()[3], 1, "first");
+    // The spec has no scheduling flag (answer 103): slot 3 is the label count.
+    assert_eq!(sample_specs()[1].encode()[3], MAX_LABELS as u64, "labels");
 }
 
 #[test]
@@ -453,13 +452,12 @@ fn malformed_records_are_refused() {
         assert_eq!(ReceivedBody::decode(&slots), Err(error), "received body slot {slot} = {value}");
     }
 
-    // BudgetSpec: a `first` that is no flag, too many labels, a stray label slot, wide fields.
+    // BudgetSpec: too many labels, a stray label slot, wide fields.
     let spec = sample_specs()[0];
     for (slot, value, error) in [
-        (3, 2, Error::InvalidArgument),
-        (3, u64::MAX, Error::InvalidArgument),
-        (4, MAX_LABELS as u64 + 1, Error::TooLarge),
-        (5, 1, Error::InvalidArgument),
+        (3, MAX_LABELS as u64 + 1, Error::TooLarge),
+        (3, u64::MAX, Error::TooLarge),
+        (4, 1, Error::InvalidArgument),
         (1, 1 << 32, Error::InvalidArgument),
         (2, 1 << 32, Error::InvalidArgument),
     ] {
@@ -612,7 +610,7 @@ fn random_records() {
     assert!(decoded[1..].iter().all(|n| *n > 100), "decoded per kind: {decoded:?}");
 }
 
-/// Each call's error row (KERNEL-SPEC.md, the error table), where answers 72-105 changed it.
+/// Each call's error row (KERNEL-SPEC.md, the error table), where answers 72-119 changed it.
 #[test]
 fn error_rows() {
     use Error::*;
@@ -622,9 +620,10 @@ fn error_rows() {
         // Decoding's general error, for every call (a non-zero unused register).
         assert!(n.can_return(InvalidArgument), "{n:?}");
     }
-    assert!(has(Number::Call, &[Refused, LabelDenied, Busy, Timeout, Dead, TooLarge]));
-    // QUESTIONS.md 116 (pending): a reply's handles that do not fit arrive as 0, no error.
-    assert!(lacks(Number::Call, &[OutOfMemory, NotPermitted]));
+    // A reply's handles that do not fit the caller arrive as 0 and its `call` is `OutOfMemory`
+    // (answers 107 and 116); `TooLarge` here means only a lend over `MAX_LEND_PAGES`.
+    assert!(has(Number::Call, &[Refused, LabelDenied, Busy, Timeout, Dead, TooLarge, OutOfMemory]));
+    assert!(lacks(Number::Call, &[NotPermitted]));
     assert!(has(Number::Send, &[Refused, LabelDenied, Busy, Timeout, Dead]));
     assert!(lacks(Number::Send, &[OutOfMemory, NotPermitted]));
     assert!(has(Number::Receive, &[BadHandle, WrongObject, NotPermitted, Timeout, Dead]));

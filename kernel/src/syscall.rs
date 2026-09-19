@@ -50,6 +50,15 @@ enum ExecutionType {
 #[cfg(baremetal)]
 pub fn reset_switchto_caller() { SWITCHTO_CALLER.with(|c| *c = None); }
 
+/// After a blocking Redoubt call switched away, point the scheduler back at the thread whose
+/// quantum this is, exactly as `do_yield` does for the legacy calls.
+#[cfg(baremetal)]
+pub fn restore_last_thread(ss: &mut SystemServices) {
+    if let Some(pid) = PID::new(ORIGINAL_PID.load(Relaxed)) {
+        ss.set_last_thread(pid, ORIGINAL_TID.load(Relaxed)).ok();
+    }
+}
+
 fn retry_syscall(pid: PID, tid: TID) -> SysCallResult {
     if cfg!(baremetal) {
         arch::process::Process::with_current_mut(|p| p.retry_instruction(tid))?;

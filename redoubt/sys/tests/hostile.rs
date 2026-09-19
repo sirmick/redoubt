@@ -164,26 +164,27 @@ fn numbers_never_alias_legacy() {
     assert_eq!(Number::from_raw(1 << 32 | u64::from(Number::Random as u32)), None, "high bits alias");
 }
 
-/// `first` accepts exactly 0 and 1.
+/// A budget spec carries no scheduling flag (answer 103): the slot that held one is the label
+/// count, and a count over `MAX_LABELS` is `TooLarge`, however large.
 #[test]
-fn first_flag_is_a_bit() {
+fn a_budget_spec_asks_for_no_place_in_the_queue() {
     let spec = BudgetSpec {
         pages: 1,
         processes: 0,
         weight: 0,
-        first: false,
         labels: Labels::new(),
         account: 0,
         deadline: FOREVER,
     };
-    for v in [2u64, 3, 0xff, 1 << 31, 1 << 32, 1 << 63, u64::MAX] {
+    for v in [MAX_LABELS as u64 + 1, 0xff, 1 << 31, 1 << 32, 1 << 63, u64::MAX] {
         let mut slots = spec.encode();
         slots[3] = v;
-        assert_eq!(BudgetSpec::decode(&slots), Err(Error::InvalidArgument), "first = {v:#x}");
+        assert_eq!(BudgetSpec::decode(&slots), Err(Error::TooLarge), "labels = {v:#x}");
     }
     let mut slots = spec.encode();
     slots[3] = 1;
-    assert_eq!(BudgetSpec::decode(&slots).map(|s| s.first), Ok(true));
+    slots[4] = 7;
+    assert_eq!(BudgetSpec::decode(&slots).map(|s| s.labels.as_slice().to_vec()), Ok(std::vec![7]));
 }
 
 /// Huge counts and tags: errors, never overflow or panic.
@@ -193,7 +194,7 @@ fn huge_counts_and_tags() {
     body[WORDS] = u64::MAX;
     assert_eq!(Body::decode(&body), Err(Error::TooLarge));
     let mut spec = [0u64; BUDGET_SPEC_SLOTS];
-    spec[4] = u64::MAX;
+    spec[3] = u64::MAX;
     spec[BUDGET_SPEC_SLOTS - 1] = FOREVER;
     assert_eq!(BudgetSpec::decode(&spec), Err(Error::TooLarge));
     let start = Number::ProcessStart as u64;
@@ -258,7 +259,6 @@ fn bit_flips_never_alias() {
         pages: BIG,
         processes: 4,
         weight: 20,
-        first: true,
         labels: Labels::from_slice(&[1, 2, 3]).unwrap(),
         account: 5,
         deadline: BIG,
