@@ -53,13 +53,39 @@ One loader serves both widths; paging comes from the width-generic `paging` crat
 4. Builds the kernel address space (physmap, kernel ELF, stacks, `ProcessImpl` pages) and one address
    space per initial process. Every ELF segment and entry point is range-checked: programs must lie
    in the user area, the kernel in the kernel area.
-5. Writes the kernel argument block: tagged entries with 64-bit payloads on both widths:
-   `XArg` v2 (RAM start and size), `MREx` (MMIO regions), `Plic`, `Seed` (RNG seed), `Time`
-   (timebase), `Grnt` (device grants), and `IniE` (initial process entry) and `PNam` (process name)
-   per process. The kernel parses 64-bit fields through `u64`, never `usize`.
+5. Writes the kernel argument block (below) and the initial-process table: one page holding one
+   `InitialProcess` record (satp, entry point, stack pointer, environment block) per process,
+   kernel first. A bundle with more processes than the kernel has room for (64) is refused.
 6. Enters the kernel without an identity mapping: `stvec` = kernel entry, then `csrw satp`. The next
    fetch faults and the hart traps straight to the kernel entry with a0-a3 and sp intact. All
    pointers handed to the kernel are physmap addresses.
+
+## The kernel argument block
+A page-aligned buffer of 32-bit words (`ARGS_PAGES` = 4 pages), built by `loader/src/args.rs` and
+read by `kernel/src/args.rs`. It opens with `XArg` and is a sequence of tags:
+
+    tag: u32 (four ASCII bytes)   crc16: u16   words: u16   data: [u32; words]
+
+Everything is word-aligned and nothing else is: the kernel reads the block as words and never
+casts a tag's data to a struct, because a struct with a `u64` field needs 8-byte alignment that
+the block does not promise (a misaligned `MREx` cast was WP-K0b's bug). The same loader binary
+serves both widths, so every address and size is two words, low word first; the kernel narrows
+them through `u64` with a checked conversion (`args::wide`), so a value that does not fit a
+`usize` stops the boot instead of being truncated.
+
+The iterator stops at a header that does not fit, and refuses a tag whose data would run past the
+end of the block, so a truncated or malformed block cannot make the kernel read outside it.
+
+| Tag    | Data                                                                     |
+| ------ | ------------------------------------------------------------------------ |
+| `XArg` | total block size in words, version (2), RAM start (2 words), RAM size (2), RAM name |
+| `MREx` | MMIO regions, six words each: start (2), size (2), name, padding. Sizes are whole pages |
+| `Plic` | PLIC base (2 words), size (2), this hart's S-mode context                 |
+| `Seed` | RNG seed (32 bytes); a kernel with no `Seed` panics                       |
+| `Time` | timebase in ticks per second (2 words)                                    |
+| `Grnt` | one per granted process: pid, MMIO count, IRQ count, then the regions (four words each) and IRQs (DEVICE-GRANTS.md) |
+| `IniE` | one per initial process; today only counted, to size the process table    |
+| `PNam` | one per initial process: pid, name length in bytes, then the name, padded to a word. `process_name` walks these records within the tag's own length |
 
 **Decided change** (PACKAGES.md, launching): the loader will verify the bundle and load only the
 kernel and `init`; `init` launches every other process through the loader stub, from the bundle's
