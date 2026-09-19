@@ -7,7 +7,7 @@ so each needs your decision; the answer goes into the named note with a HISTORY.
 **1-55 answered 2026-09-19** (ANSWERS.md, in two tranches; each "Answered" line says
 where the answer now lives). No question is open.
 
-Blocking: **K1 cannot start until 1-16 are settled** (they fix the ABI, `redoubt-sys`).
+Blocking: (History: K1 waited on 1-16.) (they fix the ABI, `redoubt-sys`).
 17-26 block later packages only.
 
 ## Kernel: messages and IPC (KERNEL-SPEC.md)
@@ -515,3 +515,217 @@ protocols alike, so `redoubt/wire/tables/example.md`'s code 1 is renumbered when
 
 68. **KERNEL-SPEC.md says "five kinds" of objects but lists four.** *Rec:* fix the count
     (editorial).
+
+## Design review round 4 (Fable red team, simplifier and editor over answers 1-55)
+
+The reviewers read the whole design as it stands after answers 1-55. The items below need the
+owner. Editorial fixes and build-plan corrections are being applied separately (HISTORY.md).
+**Timing:** A2 (the ABI records), W2 and K2 (endpoints) haven't started, so this is the cheapest
+point to change the IPC design. Several items interact; the cross-references say where.
+
+### Simplifications (the simplifier): each keeps the hole its answer closed
+
+69. **Badge notices out of the kernel** (partly reverses answer 53). *Proposal:* delete the badge
+    slot, the badge notice and I15. A server frees a client's state when told to: its typed
+    connect operation (item 83) returns a random connection id to the launcher, and only the
+    holder of that id can `disconnect(id)`, which frees the connection and everything minted
+    under it. Launchers disconnect a child when they receive its exit notice; the steward does so
+    at logout and at lease expiry.
+    *Stated residual:* a launcher that dies without disconnecting leaks its children's
+    connections, but only until its own connection is freed, and the leak counts against its own
+    (account, label set).
+    *Saves:* an estimated 150-250 lines of the most error-prone new kernel code (a count updated
+    at every handle copy and drop). *Rec:* accept. It keeps the kernel minimal, and every
+    milestone 1 client has a launcher that outlives it.
+
+70. **A lend is charged to both sides while its call is open.** *Proposal:* taking a `call`
+    charges its lent pages, and their page tables, to the receiver as well as the caller. A
+    receiver that can't pay doesn't take the call (item 72). When the call is abandoned, the
+    pages stay with the receiver and are charged only there. This removes the "over its page
+    limit" budget state and I5's exception, so usage ≤ limit becomes unconditional. *Cost:* a
+    server's budget must cover its open lends up front (about 4 MiB for 64 open 9P calls).
+    *Rec:* accept.
+
+71. **Define "abandoned call" once** (editorial). R3, R4b and R10 each restate it; define it in R3.
+    Being applied, with item 70's wording if 70 is accepted.
+
+72. **One way a delivery fails: `Refused` to the sender** (reverses answer 44's "stays queued").
+    *Proposal:* a message is delivered only if the receiver's budget can pay for everything it
+    brings (handles, page tables, lent or transferred pages) and a transfer fits `max_transfer`.
+    Otherwise the sender gets `Refused`, the kernel moves on, and a `receive` never fails for want
+    of pages. The one bit `Refused` reveals is one a sender with a clock already has.
+    *Rec:* accept. It also removes red-team item 85(c)'s stuck-cursor case.
+
+73. **Class is inherited, and `budget_create` takes no class** (alters answer 9).
+    `process_create` and `budget_destroy` already let a holder of a system budget handle act
+    there, so a class check on `budget_create` alone guards one door of three. What actually
+    protects system budgets is never handing them to users (item 79). *Rec:* accept.
+
+74. **The process object is the exit slot** (changes answer 7's mechanism, not its guarantee). A
+    process is charged to its creator, outlives its death until its exit notice is received or
+    dropped, and is freed with the creator's budget (which kills it if it still runs). This
+    removes the exit slot as a separate object. *Rec:* accept.
+
+75. **The startup block as one typed wire message** (alters answer 39's format). The block becomes
+    one WIRE.md message (`namespace`, `handles` and `argv` as `bytes` fields with a stated inner
+    layout), decoded by `redoubt-wire`, instead of a second framing format with CRCs that protect
+    nothing, since the parent writes both. *Saves:* 200-300 lines in `redoubt-rt`. *Rec:* accept;
+    R1b rewrites `startup.rs` anyway.
+
+76. **A budget's own page is always charged to its parent** (a v4 clause of R6). This removes the
+    revocation-scope special case in accounting. *Rec:* accept.
+
+77. **`random` returns one `u64`** (alters answer 15). This drops `MAX_RANDOM`, a buffer and a
+    range check; a 32-byte seed takes four calls. *Rec:* accept.
+
+78. **`MAX_LEASE` out of the kernel spec** (alters answer 33's placement). The kernel never reads
+    it (question 63). The constant moves to CAPABILITIES.md and out of `redoubt-sys`, and the
+    steward still refuses leases over 24 h. *Rec:* accept.
+
+### Holes (the red team): each is a concrete attack against today's wording
+
+79. **Only `init` and the steward ever hold a handle to a system-class budget.** Today every
+    server's startup block includes its budget. A compromised `ipd` could then create
+    system-class children with any labels and any account: forged admission and blame in Alice's
+    name, and a labelled reader. *Rec:* server startup blocks omit `budget`, a manifest that
+    grants one is refused, and an attack test checks it.
+
+80. **A narrowing handle is always a revocation scope.** To mint a connection narrowed to a
+    child's budget, a server must hold that budget handle, and a budget handle is a destroy
+    right, so a compromised `fsd` could end every session. *Rec:* the steward passes servers only
+    scopes created for that purpose, never a budget that holds processes. Attack test: a server
+    can't destroy a session.
+
+81. **Open calls can be pinned, and a server is never told a call was abandoned** (High). Bob
+    parks 64 lent calls at `ipd`, each with a 1 µs timeout. `ipd` hits `MAX_OPEN_CALLS`, and
+    `receive` then returns `Busy` for everything on its endpoint, including `netd`'s frames. Every
+    SSH session dies. *Options:*
+    - (a) An abandoned-call notice. The flag lives in the open call's own page, the server
+      replies to free it, and at the limit `receive` refuses only calls, still delivering sends
+      and notices.
+    - (b) A call's timeout applies only until the server takes it. After that the caller waits
+      for the reply or the server's death, so abandoning needs the caller's death, which is
+      bounded by its process limit. This changes I13's wording.
+    - Either way, `admit`'s caps must sum to less than `MAX_OPEN_CALLS` with headroom, and parked
+      calls get a server-side deadline.
+
+    *Rec:* (a), which also answers "how does a server learn a caller is gone". If you take item
+    69, this is the one kernel notice that stays.
+
+82. **Blame can be steered in event-driven servers** (High; makes 57 and 58 moot). `ipd` and
+    `sshd` park calls and later process an old one when an interrupt or a `send` arrives. The
+    "most recently taken" call is then a bystander's. Bob crashes `ipd` on his own connection
+    while Alice's call is the newest, and Alice is logged out. *Rec:* a new call, `serve(msg_id)`,
+    names which open call the thread is now working on; the server library calls it before
+    resuming a parked call. A thread doing event work with no current call blames nobody, with no
+    fallback (question 58). Attack test: a crash triggered by a `send` while a bystander's call is
+    parked blames nobody.
+
+83. **The fresh-connection operation (answer 50) has no protocol.** *Rec* (the editor's text): a
+    9P endpoint also serves typed operations, where word 0 = 0 is 9P and anything else is an
+    opcode. Every 9P server serves `new_connection` (opcode 2, reply `conn: handle[0] endpoint`),
+    minting a connection rooted at or below the caller's. The table lives in NAMESPACES.md as
+    `ninep-common`, R1b implements it, and R4 serves it. It also carries item 69's connection id.
+
+84. **User work runs at system priority inside servers** (CPU amplification). Bob makes
+    `fsd`/`keyd`/`ipd` do expensive work, and no user budget runs meanwhile. *Rec:* strict
+    system-first ordering only for `init`, the steward and drivers. Servers working for users run
+    in the stride queue with a weight from the manifest, and bound the work of one request. The
+    stated residual: that cost is paid by the server's weight, not the requester's.
+
+85. **Shared pools that aren't carved.**
+    - (a) Bob fills the `data` volume and Alice's saves fail.
+    - (b) Bob floods `fsd` with handles, growing its handle table until `fsd` can't pay.
+    - (c) A vault session loops on fresh connections, using up `fsd`'s budget, which is a channel.
+
+    *Rec:* a byte quota per attach root in `fsd`; the server library closes every handle it didn't
+    ask for; the per-client caps are sized so every bucket at its cap fits the server's budget.
+
+86. **Revocation must reach handles inside queued messages** (R10). Today a revoked handle
+    arrives in a message sent before the revocation, and if a server reuses badges, that's a
+    zombie connection. *Rec:* R10 also sweeps handles in messages not yet received (they arrive as
+    0), and servers never reuse a badge number.
+
+87. **System callers share one fairness group.** R2 groups every account-0 sender as `(0, {})`, so
+    a busy `fsd:data` fills `WAIT_CAP` at `blkd`, and `fsd:alice-secrets` gets `Busy`: a DoS and a
+    channel out of the vault. *Rec:* for account 0, the group key includes the sender's budget id.
+
+88. **Global counters are a channel.** If message ids come from one global counter, one process
+    can see the gaps in them grow with another process's traffic, including a vault's. PIDs do the
+    same at process-creation rate. *Rec:* message ids are unique within the receiving process
+    only; PIDs are drawn at random from free ASIDs; `ps` and `budget` show only the caller's
+    (account, label set).
+
+89. **Carving under one top budget is a channel.** A vault session's leases change Alice's top
+    budget's free limits, which her unlabelled agent can probe. *Rec:* at boot the steward splits
+    each principal's top budget into fixed sub-budgets, one per (principal, label set) named in
+    the manifest.
+
+90. **An agent can lock out its sponsor.** It shares its sponsor's buckets. It fills
+    `(alice, {})`'s caps at the steward and `fsd`, and Alice can't even end the lease, for up to
+    24 h. *Rec:* a fair share per badge within a bucket, with the bucket as the ceiling; ending a
+    lease is always accepted from the sponsor, ahead of admission. Attack test: an agent floods
+    the steward and `fsd`, and Alice still opens a file and ends the lease.
+
+91. **A logout isn't a lockout, and agents survive it.** Bob crashes `fsd:data` three times, is
+    logged out, logs straight back in (or his agent carries on), and three more crashes reboot
+    the box. INIT.md's tree also puts agents beside sessions, not under them. *Rec:* the third
+    blamed crash destroys every budget of that (account, label set), sessions and leases alike,
+    and new sessions are refused until the window passes. INIT.md's tree is reconciled.
+
+92. **The audit file and "an approval is waiting" are unlabelled sinks.** A labelled request's
+    target lands in the audit file, and the notification timing reaches the unlabelled session.
+    *Rec:* audit records carry the request's labels and are read under `check`. A labelled
+    request's notification reaches only channels whose labels ⊇ the request's, plus
+    `approve@box`.
+
+93. **`process_create` accepts a badged exit endpoint**, so anyone can spray exit notices at a
+    server. *Rec:* the exit endpoint must carry badge 0 (`NotPermitted`).
+
+94. **The approval screen shares `sshd` with the most hostile input.**
+    - A `sunset` bug reached from Bob's channel controls the screen.
+    - A network flood delays approvals.
+    - CONTAINMENT.md's "no owner exemption at any sink" contradicts `sshd` carrying a vault channel
+      to its owner.
+
+    *Rec:* state `sshd` as the one sink cleared for a label (only the channel its owner
+    authenticated: a pty session with no forwarding, subsystems or `exec`), and state the
+    milestone 1 residual. Milestone 2 gives `approve@` its own `sshd` instance or the console.
+
+95. **`keys` in a lease is a signature oracle.** A hijacked agent signs SSH user-auth blobs relayed
+    from its peer, so the peer can log in as Alice elsewhere. *Rec:* a lease carries `keys` only
+    if the approval named the key, and a `keyd` badge names one key and one purpose (for SSH, the
+    session identifier `keyd` computed itself), never arbitrary bytes.
+
+### Smaller points needing a decision (the editor)
+
+96. **Badge slots are charged to `init`,** because `init` creates every server's endpoint. This is
+    moot if 69 is accepted. Otherwise, *Rec:* charge the minting process.
+
+97. **`init`'s blame report to the steward has no message table.** *Rec:* one typed message, whose
+    table S2 writes into INIT.md's steward section. Until then, the R3 case expects the logout
+    signal naming (account, label set), and the logout itself is S2's.
+
+98. **A table can't mark a typed message as a `send`.** *Rec:* every milestone 1 typed message is a
+    `call`, and a `kind` column is added when a protocol first needs a transfer.
+
+99. **A deliberate exit with open calls is a blamed fault** (from 55). *Rec:* a server that means to
+    exit replies to every open call first, and the spec says so.
+
+100. **Decoding order.** ANSWERS.md's "`BadHandle`, then `TooLarge`, then `InvalidArgument`" reads as
+     a sequence, but the spec orders errors by register position. *Rec:* confirm that the answer
+     was a classification, and that the spec's positional order stands.
+
+101. **Which way the steward and a reader budget talk** (54). *Rec:* the steward `call`s the reader,
+     which fills the steward's lend with the snapshot. This matches "labelled callers can only
+     submit requests".
+
+### The earlier open questions, revisited
+
+- **56 (handle kinds):** the simplifier recommends "check by use" (`WrongObject` on first use),
+  with the table's kind as documentation, rather than kinds in `receive`'s record. *Revised Rec:*
+  check by use.
+- **57 and 58:** replaced by item 82 (`serve`, with no fallback).
+- **62 (badge-notice details):** moot if 69 is accepted. Otherwise, the "last holder" is undefined
+  when the last copy was in a discarded message: use the sender's budget.
+- **64 (one name rule):** as recommended.
