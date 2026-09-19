@@ -12,5 +12,5 @@ sbi-rt = "0.0.3"
 elf = { version = "0.8", default-features = false }
 tar-no-std = { version = "0.5", default-features = false }
 crc = { version = "3", default-features = false }
-paging = { path = "../xous64/paging" }
+paging = { path = "../redoubt/paging" }
 ed25519-compact = { version = "2", default-features = false }

@@ -1,4 +1,4 @@
-# xous64 timer design
+# redoubt timer design
 
 Status: decided 2026-09-18.
 

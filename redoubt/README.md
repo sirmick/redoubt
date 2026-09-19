@@ -1,6 +1,6 @@
-# xous64
+# redoubt
 
-Fork-specific code for the RV64 / SMP / filesystem work. Plan and design notes: `planning/xous64/`.
+Fork-specific code for the RV64 / SMP / filesystem work. Plan and design notes: `planning/redoubt/`.
 
 | Path              | What                                                                          |
 | ----------------- | ----------------------------------------------------------------------------- |
@@ -55,7 +55,7 @@ In-guest programs print through `log-server` (`test_programs::Logger`) and finis
 ## Other firmware
 
 `--firmware <image>` replaces QEMU's bundled OpenSBI for a test run or for `--run`, e.g. a RustSBI
-Prototyper build. See "Firmware" in `planning/xous64/PLAN.md` for the current state.
+Prototyper build. See "Firmware" in `planning/redoubt/PLAN.md` for the current state.
 
 ## Hostile inputs
 

@@ -8,7 +8,7 @@ kind = "unsafe-budget"
 
 [[budget]]
 name = "paging crate (Sv32/Sv39 page tables)"
-paths = ["xous64/paging/src"]
+paths = ["redoubt/paging/src"]
 max_unsafe = 12
 max_undocumented = 0
 

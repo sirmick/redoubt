@@ -1,6 +1,6 @@
 //! Drives the hart timer the way a ticktimer server would: claim its interrupt, read
 //! the timebase, and re-arm a one-shot deadline from the interrupt handler.
-//! See `planning/xous64/TIMER.md`.
+//! See `planning/redoubt/TIMER.md`.
 
 #![no_std]
 #![no_main]

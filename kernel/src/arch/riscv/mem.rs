@@ -5,7 +5,7 @@
 //!
 //! Page tables are never mapped into a window. All of physical RAM is mapped
 //! supervisor-only at `PHYSMAP_BASE`, and tables are walked in software starting from a
-//! root. See `planning/xous64/MEMORY-LAYOUT.md`. Everything width-specific (the level
+//! root. See `planning/redoubt/MEMORY-LAYOUT.md`. Everything width-specific (the level
 //! count, entries per table, VPN width and `satp` layout) lives in the `paging` crate,
 //! reached here through `physmap`; this file is written in terms of `LEVELS`, `vpn()` and
 //! `leaf_size()` and so is identical for both modes.

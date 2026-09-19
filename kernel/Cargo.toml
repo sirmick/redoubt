@@ -25,7 +25,7 @@ rand = "0.8.5"
 
 [target.'cfg(any(target_arch = "riscv32", target_arch = "riscv64"))'.dependencies]
 riscv = "0.16"
-paging = { path = "../xous64/paging" }
+paging = { path = "../redoubt/paging" }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(ci)', 'cfg(baremetal)'] }
@@ -33,7 +33,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(ci)', 'cfg(baremetal)'] }
 [features]
 
 # Capabilities. Boards select these; code keys on them rather than on the CPU's XLEN.
-# See "Hardware abstraction" in planning/xous64/PLAN.md.
+# See "Hardware abstraction" in planning/redoubt/PLAN.md.
 sbi = ["dep:sbi-rt", "rand_chacha"] # runs in S-mode under SBI firmware (OpenSBI, RustSBI)
 plic = ["dep:plic"]                 # standard RISC-V PLIC; otherwise VexRiscv's interrupt CSRs
 

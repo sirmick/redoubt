@@ -7,7 +7,7 @@ pub const DEFAULT_BASE: usize = 0x6000_0000;
 
 pub const PAGE_SIZE: usize = 4096;
 
-/// Sv32 layout. The physmap design of `planning/xous64/MEMORY-LAYOUT.md` scaled to two
+/// Sv32 layout. The physmap design of `planning/redoubt/MEMORY-LAYOUT.md` scaled to two
 /// levels: the kernel half is the upper 2 GiB (root entries 512..=1023, 4 MiB each), and
 /// RAM is identity-mapped low in it so `PHYSMAP_BASE == PHYSMAP_PHYS_BASE`.
 #[cfg(target_pointer_width = "32")]
@@ -40,7 +40,7 @@ mod layout {
     pub const USER_STACK_TOP: usize = 0x8000_0000;
 }
 
-/// Sv39 layout. See `planning/xous64/MEMORY-LAYOUT.md`.
+/// Sv39 layout. See `planning/redoubt/MEMORY-LAYOUT.md`.
 #[cfg(target_pointer_width = "64")]
 mod layout {
     /// Root entries 0..=255: userspace.
@@ -77,7 +77,7 @@ pub const fn physmap_virt(phys: usize) -> usize {
 }
 
 /// `SysCall::PlatformSpecific` operations on platforms where the kernel runs under SBI
-/// firmware. See `planning/xous64/TIMER.md`.
+/// firmware. See `planning/redoubt/TIMER.md`.
 pub mod platform_call {
     /// The hart timer is delivered as this interrupt. Claim it with `claim_interrupt`.
     pub const TIMER_IRQ: usize = 0;
