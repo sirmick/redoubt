@@ -14,7 +14,7 @@ stdlib=( "$otp_lib"/stdlib-*/ebin )
 cryptolib=( "$otp_lib"/crypto-*/ebin )
 publickeylib=( "$otp_lib"/public_key-*/ebin )
 asn1lib=( "$otp_lib"/asn1-*/ebin )
-sslpath=""; for app in ssl ssh erts kernel compiler; do sslpath="$sslpath -pa $(ls -d "$otp_lib"/$app-*/ebin)"; done
+sslpath=""; for app in ssl ssh erts kernel compiler syntax_tools; do sslpath="$sslpath -pa $(ls -d "$otp_lib"/$app-*/ebin)"; done
 elixir_lib="$(dirname "$(dirname "$(command -v elixir)")")/lib"
 elixir_ebin="$elixir_lib/elixir/ebin -pa $elixir_lib/logger/ebin -pa $elixir_lib/eex/ebin"
 "$root/tools/build-lib" --check

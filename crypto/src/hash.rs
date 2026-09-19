@@ -249,6 +249,12 @@ pub fn pbkdf2_hmac(c: &mut Ctx, a: &[Term]) -> R {
     Ok(bin(&out))
 }
 
+/// `erlang:md5(IoData)`.
+pub fn erlang_md5(c: &mut Ctx, a: &[Term]) -> R {
+    let data = a[0].iodata_bytes().ok_or_else(|| c.badarg())?;
+    Ok(bin(&digest(Alg::Md5, &data)))
+}
+
 /// Constant-time equality of two binaries of the same size.
 pub fn hash_equals(c: &mut Ctx, a: &[Term]) -> R {
     use subtle::ConstantTimeEq;

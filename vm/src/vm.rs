@@ -385,6 +385,11 @@ impl System {
         r
     }
 
+    /// Load a module from bytes, replacing any module of the same name.
+    pub fn load_bytes(&mut self, bytes: &[u8]) -> Result<Atom, LoadError> {
+        self.load(bytes)
+    }
+
     fn load(&mut self, bytes: &[u8]) -> Result<Atom, LoadError> {
         let mut module = loader::load(bytes, &mut self.atom_table)?;
         for imp in &mut module.imports {
