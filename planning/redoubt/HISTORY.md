@@ -442,4 +442,17 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   library for the file server (question 118): `new_connection` gained `quota` and the error
   `refused` (question 117). The review found no exploitable case; it found `disconnect` could
   strand descendants under memory pressure (fixed).
+- **WP-K0b argument-block audit** (`e30d43304`): the kernel cast the loader's `MREx` table to a struct
+  needing 8-byte alignment from data that is always 4 mod 8, so `from_raw_parts` broke its
+  precondition on every boot: undefined behaviour in the trusted base, silent in release. The table
+  is now the tag's words, decoded six at a time with checked narrowing. The audit found three more:
+  `process_name` viewed a name tag as four times its length and read past it; the tag iterator never
+  bounded a tag's data against the block; the initial-process count was tied to the page, not to
+  `MAX_PROCESS_COUNT` (and the loader could wrap a `u8` PID). Booting the SMP spike checked found
+  two latent bugs: the secondary hart's trap vector was a 2-byte-aligned function (a reserved mode)
+  and its stack was in read-only memory. Two of the argument-block bugs are upstream Xous code. The
+  bench gained a `checked` profile and `debug_assertions = true` per case, used by six cases on both
+  widths with a longer listening window, plus a self-check that the checked build really reaches the
+  kernel. Kernel core `unsafe` 23 -> 21. Tenet 6 amended (question 119) to say a checked build of
+  the same sources is not a special build.
 

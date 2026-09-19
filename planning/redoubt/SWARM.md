@@ -64,7 +64,8 @@ merged; the waves show what can run together.
 | A2 | merged | wp-a2 | c98034520 |
 | R1b | merged | wp-r1b | 86117e7af |
 | W2 | merged | wp-w2 | 3715363a9 |
-| K0b | building | wp-k0b | undefined behaviour at kernel/src/mem.rs:207; a debug-assertion kernel boots in the bench |
+| K0b | merged | wp-k0b | e30d43304 |
+| K2 | building | wp-k2 | kernel track |
 | all others | waiting | | see BUILD-PLAN.md "Needs" |
 
 States: `waiting` (needs not merged), `ready`, `building`, `review`, `merged`.

@@ -162,3 +162,25 @@ the steward and drivers get large weights in the manifest instead of running fir
 
 Accepted as recommended: 102 (`MAX_HANDLES` = 4096, `TooLarge`), 104, 105, 106, 107, 108, 109,
 110, 111 (charge table pages in use; the model follows), 112, 113, 114, 115.
+
+---
+
+# Answers to 116-119 (owner, 2026-09-19; confirmed)
+
+**All Rec.**
+
+- **116.** Handles that would take a receiver past `MAX_HANDLES` are the same as any cost it cannot
+  pay: the message is `Refused` to its sender (answer 72). A reply's handles that do not fit give
+  the caller `OutOfMemory` and the reply is delivered without them (question 107).
+- **117.** `new_connection` gains `quota: u64`; the `ninep_common` error table gains `3 refused`
+  (root missing, permission denied, a cap reached, quota exceeded), leaving code 2 for `not_yours`;
+  a connection a client mints for itself counts in the share of the connection it came through, so
+  minting badges cannot escape a fair share. NAMESPACES.md and CONTAINMENT.md say so.
+- **118.** Each server's manifest sizes its bucket count to the (account, label set)s it serves, so
+  the cap does not bind in normal use; CONTAINMENT.md states the residual channel for a server
+  sized smaller. Byte quotas live in `fsd` behind the grant and disconnect hooks, not in the shared
+  library; the `quota` field stays on the wire.
+- **119.** Amend tenet 6 as proposed: a build of the same sources with debug assertions and
+  overflow checks on is not a special build, and the bench boots chosen cases with it. The shipped
+  configuration is still what most cases boot. It has already earned its place (the undefined
+  behaviour in the argument-block read, two latent SMP bugs).
