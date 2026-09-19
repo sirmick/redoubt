@@ -105,6 +105,10 @@ pub struct Boot {
     /// Extra kernel features, e.g. `debug-print`.
     #[serde(default)]
     pub kernel_features: Vec<String>,
+    /// Build the kernel and the loader with debug assertions on, so `core`'s precondition
+    /// checks on raw-pointer calls and every `debug_assert!` run (a failure is a `PANIC`).
+    #[serde(default)]
+    pub debug_assertions: bool,
     /// Device grants written into the bundle's manifest (see DEVICE-GRANTS.md).
     #[serde(default)]
     pub grant: Vec<Grant>,

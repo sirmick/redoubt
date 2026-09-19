@@ -41,6 +41,8 @@ smp = [1, 4]                 # one boot per hart count (default [1])
 memory_mib = 32              # guest RAM (default 256); small for cases that exhaust it on purpose
 timeout_secs = 60            # default 60; fractions allowed
 kernel_features = []         # extra kernel features, e.g. ["debug-print"]
+debug_assertions = false     # true: build the kernel and the loader with debug assertions
+                             # (see "Debug assertions" below)
 expect = ['regex 1', 'regex 2']   # must each match a console line, in this order
 forbid = ['regex']                # must never match; also always forbidden:
                                   # PANIC, TEST FAILED, WARNING: INSECURE
@@ -68,6 +70,26 @@ In-guest programs print through `log-server` (`test_programs::Logger`) and finis
 sender's PID as the kernel reports it, on every path that takes client text (lend or move).
 Lines without that prefix come from the kernel, the loader, `log-server`'s own fixed templates,
 or a program that owns the UART.
+
+## Debug assertions
+
+`debug_assertions = true` in a boot case builds the kernel and the loader — the trusted base,
+not the programs — with `debug-assertions` and `overflow-checks` on, the way the debug profile
+couples them. Then `core`'s preconditions on every raw-pointer call (`slice::from_raw_parts`
+wants an aligned, non-null pointer to initialised memory; `ptr::read`, `copy_nonoverlapping`
+and friends want the same), the kernel's own `debug_assert!`s and every arithmetic overflow
+panic instead of being silent undefined behaviour. A boot that trips one prints `PANIC`, which
+every case forbids, so the case fails.
+
+The checked build is the release profile with those two flags set through the environment, in
+its own target directory (`target/debug-assertions/`), so it never invalidates the ordinary
+release build, and switching between the two rebuilds neither. A handful of cases use it, over
+both widths, rather than all of them, to keep the run short: `budget`,
+`budget-syscall-attack`, `lend-untouched-page`, `ipc`, `all-together` and `smp-spike`.
+
+To check a case that does not set the field, or every case at once, set the flags by hand:
+
+    CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true cargo testbench
 
 ## Poking at it by hand
 
