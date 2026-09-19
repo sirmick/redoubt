@@ -1,0 +1,584 @@
+//! Strict JSON for files people write (WIRE.md): RFC 8259 syntax under the I-JSON profile
+//! (RFC 7493), one parser for the boot manifest, package manifests and configuration.
+//!
+//! The profile, as enforced here:
+//! - the file is at most [`MAX_LEN`] bytes of UTF-8, with no byte-order mark;
+//! - containers nest at most [`MAX_DEPTH`] deep (the top-level value is depth 1);
+//! - no object has two members with the same name (compared after unescaping);
+//! - strings contain no surrogates (so no unpaired `\uD800` escapes) and no Unicode
+//!   noncharacters (RFC 7493 section 2.1);
+//! - numbers are integers of magnitude at most 2^53 - 1 (the I-JSON safe range); larger
+//!   integers (ids, accounts, labels, addresses) are written as decimal strings and read
+//!   with [`Value::as_u64`]. Fractions, exponents and `-0` are refused: no file we read has a
+//!   use for them, so the parser has no floating point;
+//! - unknown members are errors: [`Value::members`] returns a [`Members`] reader that a
+//!   typed decoder takes fields from and then [`Members::finish`]es, which fails on any
+//!   member it did not take.
+//!
+//! The parser is recursive descent; recursion is bounded by `MAX_DEPTH`, and every loop
+//! consumes input, so time is linear in the input (plus a sort per object for duplicates).
+
+use alloc::borrow::Cow;
+use alloc::string::String;
+use alloc::vec::Vec;
+
+/// Largest file accepted.
+pub const MAX_LEN: usize = 64 * 1024;
+/// Deepest nesting accepted.
+pub const MAX_DEPTH: usize = 32;
+/// Largest integer magnitude a JSON number may have: 2^53 - 1.
+pub const MAX_SAFE_INT: i64 = (1 << 53) - 1;
+
+/// A parsed JSON value. Strings borrow from the input unless they contained escapes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Value<'a> {
+    Null,
+    Bool(bool),
+    /// Within `-MAX_SAFE_INT..=MAX_SAFE_INT`.
+    Int(i64),
+    Str(Cow<'a, str>),
+    Array(Vec<Value<'a>>),
+    /// Members in file order; names are unique.
+    Object(Vec<(Cow<'a, str>, Value<'a>)>),
+}
+
+/// Why a file was refused, and the byte offset where it was noticed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Error {
+    pub offset: usize,
+    pub kind: ErrorKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorKind {
+    /// Longer than [`MAX_LEN`].
+    TooLong,
+    /// Not UTF-8, or starts with a byte-order mark.
+    BadUtf8,
+    /// Not JSON: an unexpected byte or the end of input.
+    Syntax,
+    /// A raw control character in a string.
+    ControlCharacter,
+    /// A malformed `\` escape.
+    BadEscape,
+    /// A surrogate or noncharacter code point.
+    BadCodePoint,
+    /// A number with a fraction or exponent, a leading zero, no digits, or `-0`.
+    NotInteger,
+    /// An integer beyond [`MAX_SAFE_INT`] in magnitude.
+    OutOfRange,
+    /// Nested deeper than [`MAX_DEPTH`].
+    TooDeep,
+    /// Two members of one object with the same name.
+    DuplicateMember,
+    /// Bytes after the value.
+    Trailing,
+}
+
+/// Parses one strict JSON document.
+pub fn parse(input: &[u8]) -> Result<Value<'_>, Error> {
+    if input.len() > MAX_LEN {
+        return Err(Error { offset: MAX_LEN, kind: ErrorKind::TooLong });
+    }
+    let text = core::str::from_utf8(input)
+        .map_err(|e| Error { offset: e.valid_up_to(), kind: ErrorKind::BadUtf8 })?;
+    if text.starts_with('\u{feff}') {
+        return Err(Error { offset: 0, kind: ErrorKind::BadUtf8 });
+    }
+    let mut p = Parser { text, pos: 0 };
+    p.skip_ws();
+    let value = p.value(0)?;
+    p.skip_ws();
+    if p.pos != text.len() {
+        return Err(p.err(ErrorKind::Trailing));
+    }
+    Ok(value)
+}
+
+struct Parser<'a> {
+    text: &'a str,
+    pos: usize,
+}
+
+impl<'a> Parser<'a> {
+    fn err(&self, kind: ErrorKind) -> Error {
+        Error { offset: self.pos, kind }
+    }
+
+    fn peek(&self) -> Option<u8> {
+        self.text.as_bytes().get(self.pos).copied()
+    }
+
+    fn next(&mut self) -> Result<u8, Error> {
+        let b = self.peek().ok_or(self.err(ErrorKind::Syntax))?;
+        self.pos += 1;
+        Ok(b)
+    }
+
+    fn expect(&mut self, b: u8) -> Result<(), Error> {
+        if self.peek() == Some(b) {
+            self.pos += 1;
+            Ok(())
+        } else {
+            Err(self.err(ErrorKind::Syntax))
+        }
+    }
+
+    fn skip_ws(&mut self) {
+        while matches!(self.peek(), Some(b' ' | b'\t' | b'\n' | b'\r')) {
+            self.pos += 1;
+        }
+    }
+
+    /// `depth` is the number of containers around this value.
+    fn value(&mut self, depth: usize) -> Result<Value<'a>, Error> {
+        match self.peek() {
+            Some(b'{') => self.object(depth + 1),
+            Some(b'[') => self.array(depth + 1),
+            Some(b'"') => Ok(Value::Str(self.string()?)),
+            Some(b'-' | b'0'..=b'9') => self.number(),
+            Some(b't') => self.literal("true", Value::Bool(true)),
+            Some(b'f') => self.literal("false", Value::Bool(false)),
+            Some(b'n') => self.literal("null", Value::Null),
+            _ => Err(self.err(ErrorKind::Syntax)),
+        }
+    }
+
+    fn literal(&mut self, word: &str, value: Value<'a>) -> Result<Value<'a>, Error> {
+        if self.text.get(self.pos..).is_some_and(|rest| rest.starts_with(word)) {
+            self.pos += word.len();
+            Ok(value)
+        } else {
+            Err(self.err(ErrorKind::Syntax))
+        }
+    }
+
+    fn array(&mut self, depth: usize) -> Result<Value<'a>, Error> {
+        if depth > MAX_DEPTH {
+            return Err(self.err(ErrorKind::TooDeep));
+        }
+        self.expect(b'[')?;
+        let mut items = Vec::new();
+        self.skip_ws();
+        if self.peek() == Some(b']') {
+            self.pos += 1;
+            return Ok(Value::Array(items));
+        }
+        loop {
+            self.skip_ws();
+            items.push(self.value(depth)?);
+            self.skip_ws();
+            match self.next()? {
+                b',' => continue,
+                b']' => return Ok(Value::Array(items)),
+                _ => return Err(Error { offset: self.pos - 1, kind: ErrorKind::Syntax }),
+            }
+        }
+    }
+
+    fn object(&mut self, depth: usize) -> Result<Value<'a>, Error> {
+        if depth > MAX_DEPTH {
+            return Err(self.err(ErrorKind::TooDeep));
+        }
+        let start = self.pos;
+        self.expect(b'{')?;
+        let mut members = Vec::new();
+        self.skip_ws();
+        if self.peek() == Some(b'}') {
+            self.pos += 1;
+            return Ok(Value::Object(members));
+        }
+        loop {
+            self.skip_ws();
+            if self.peek() != Some(b'"') {
+                return Err(self.err(ErrorKind::Syntax));
+            }
+            let name = self.string()?;
+            self.skip_ws();
+            self.expect(b':')?;
+            self.skip_ws();
+            let value = self.value(depth)?;
+            members.push((name, value));
+            self.skip_ws();
+            match self.next()? {
+                b',' => continue,
+                b'}' => break,
+                _ => return Err(Error { offset: self.pos - 1, kind: ErrorKind::Syntax }),
+            }
+        }
+        // Sorting the names finds duplicates in O(n log n); a pairwise check would let a
+        // 64 KiB object of short names cost ~10^8 comparisons.
+        let mut names: Vec<&str> = members.iter().map(|(n, _)| n.as_ref()).collect();
+        names.sort_unstable();
+        if names.windows(2).any(|w| w.first() == w.get(1)) {
+            return Err(Error { offset: start, kind: ErrorKind::DuplicateMember });
+        }
+        Ok(Value::Object(members))
+    }
+
+    /// A string starting at the opening quote. Borrowed if it has no escapes.
+    fn string(&mut self) -> Result<Cow<'a, str>, Error> {
+        self.expect(b'"')?;
+        let mut owned: Option<String> = None;
+        let mut run = self.pos; // start of the unescaped run not yet copied into `owned`
+        loop {
+            let at = self.pos;
+            match self.next()? {
+                b'"' => {
+                    let tail = self.slice(run, at)?;
+                    let s = match owned {
+                        None => Cow::Borrowed(tail),
+                        Some(mut s) => {
+                            s.push_str(tail);
+                            Cow::Owned(s)
+                        }
+                    };
+                    return Ok(s);
+                }
+                b'\\' => {
+                    let s = owned.get_or_insert_with(String::new);
+                    s.push_str(self.slice(run, at)?);
+                    let c = self.escape()?;
+                    s.push(c);
+                    run = self.pos;
+                }
+                0x00..=0x1f => return Err(Error { offset: at, kind: ErrorKind::ControlCharacter }),
+                b if b < 0x80 => {}
+                _ => {
+                    // A multi-byte character: the input is UTF-8, so decode it from the
+                    // text to check for noncharacters and step over its continuation bytes.
+                    let c = self.text.get(at..).and_then(|s| s.chars().next());
+                    let c = c.ok_or(Error { offset: at, kind: ErrorKind::BadUtf8 })?;
+                    if is_noncharacter(c) {
+                        return Err(Error { offset: at, kind: ErrorKind::BadCodePoint });
+                    }
+                    self.pos = at + c.len_utf8();
+                }
+            }
+        }
+    }
+
+    fn slice(&self, from: usize, to: usize) -> Result<&'a str, Error> {
+        // Both ends are at ASCII bytes, so on character boundaries; `get` checks anyway.
+        self.text.get(from..to).ok_or(Error { offset: from, kind: ErrorKind::BadUtf8 })
+    }
+
+    /// The character an escape after `\` stands for.
+    fn escape(&mut self) -> Result<char, Error> {
+        let at = self.pos;
+        let c = match self.next()? {
+            b'"' => '"',
+            b'\\' => '\\',
+            b'/' => '/',
+            b'b' => '\u{8}',
+            b'f' => '\u{c}',
+            b'n' => '\n',
+            b'r' => '\r',
+            b't' => '\t',
+            b'u' => {
+                let unit = self.hex4()?;
+                let code = if (0xd800..0xdc00).contains(&unit) {
+                    // A high surrogate must be followed by an escaped low surrogate.
+                    if self.next()? != b'\\' || self.next()? != b'u' {
+                        return Err(Error { offset: at, kind: ErrorKind::BadCodePoint });
+                    }
+                    let low = self.hex4()?;
+                    if !(0xdc00..0xe000).contains(&low) {
+                        return Err(Error { offset: at, kind: ErrorKind::BadCodePoint });
+                    }
+                    0x10000 + ((unit - 0xd800) << 10) + (low - 0xdc00)
+                } else {
+                    unit
+                };
+                // char::from_u32 refuses lone surrogates (0xdc00..0xe000 here).
+                let c = char::from_u32(code).ok_or(Error { offset: at, kind: ErrorKind::BadCodePoint })?;
+                if is_noncharacter(c) {
+                    return Err(Error { offset: at, kind: ErrorKind::BadCodePoint });
+                }
+                c
+            }
+            _ => return Err(Error { offset: at, kind: ErrorKind::BadEscape }),
+        };
+        Ok(c)
+    }
+
+    fn hex4(&mut self) -> Result<u32, Error> {
+        let mut v = 0;
+        for _ in 0..4 {
+            let at = self.pos;
+            let d = char::from(self.next()?).to_digit(16);
+            v = v * 16 + d.ok_or(Error { offset: at, kind: ErrorKind::BadEscape })?;
+        }
+        Ok(v)
+    }
+
+    fn number(&mut self) -> Result<Value<'a>, Error> {
+        let start = self.pos;
+        let negative = self.peek() == Some(b'-');
+        if negative {
+            self.pos += 1;
+        }
+        let digits = self.pos;
+        let mut magnitude: i64 = 0;
+        while let Some(d @ b'0'..=b'9') = self.peek() {
+            self.pos += 1;
+            magnitude = magnitude
+                .checked_mul(10)
+                .and_then(|m| m.checked_add(i64::from(d - b'0')))
+                .filter(|m| *m <= MAX_SAFE_INT)
+                .ok_or(Error { offset: start, kind: ErrorKind::OutOfRange })?;
+        }
+        let count = self.pos - digits;
+        let leading_zero = count > 1 && self.text.as_bytes().get(digits) == Some(&b'0');
+        // `-0` is JSON, but a second spelling of 0 (and a float to most parsers): refused.
+        let negative_zero = negative && magnitude == 0;
+        let fraction = matches!(self.peek(), Some(b'.' | b'e' | b'E'));
+        if count == 0 || leading_zero || negative_zero || fraction {
+            return Err(Error { offset: start, kind: ErrorKind::NotInteger });
+        }
+        Ok(Value::Int(if negative { -magnitude } else { magnitude }))
+    }
+}
+
+/// Unicode noncharacters: U+FDD0..=U+FDEF and the last two code points of every plane.
+fn is_noncharacter(c: char) -> bool {
+    let c = u32::from(c);
+    (0xfdd0..=0xfdef).contains(&c) || c & 0xfffe == 0xfffe
+}
+
+/// Why a parsed value does not fit the structure a decoder expects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchemaError {
+    /// A required member is absent.
+    Missing(String),
+    /// A member the decoder does not know (WIRE.md: unknown members are errors).
+    Unknown(String),
+    /// A value of the wrong type or out of range; names the member, or `""` for the value
+    /// the decoder was handed.
+    WrongType(String),
+}
+
+impl<'a> Value<'a> {
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Value::Str(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Value::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    pub fn as_array(&self) -> Option<&[Value<'a>]> {
+        match self {
+            Value::Array(items) => Some(items),
+            _ => None,
+        }
+    }
+
+    /// A non-negative integer: a JSON number, or a decimal string (how integers beyond
+    /// 2^53 are written) with no sign, spaces or leading zeros, up to `u64::MAX`.
+    pub fn as_u64(&self) -> Option<u64> {
+        match self {
+            Value::Int(n) => u64::try_from(*n).ok(),
+            Value::Str(s) => {
+                let canonical = s == "0" || (!s.starts_with('0') && !s.is_empty());
+                if !canonical || !s.bytes().all(|b| b.is_ascii_digit()) {
+                    return None;
+                }
+                // Digits only, so the only failure left is overflow.
+                s.parse().ok()
+            }
+            _ => None,
+        }
+    }
+
+    /// The members of an object, for a decoder to take one by one.
+    pub fn members(&self) -> Result<Members<'_, 'a>, SchemaError> {
+        match self {
+            Value::Object(members) => Ok(Members { members, taken: alloc::vec![false; members.len()] }),
+            _ => Err(SchemaError::WrongType(String::new())),
+        }
+    }
+}
+
+/// An object being decoded into a typed structure: take each known member, then
+/// [`finish`](Members::finish), which refuses the object if any member was not taken.
+#[derive(Debug)]
+pub struct Members<'v, 'a> {
+    members: &'v [(Cow<'a, str>, Value<'a>)],
+    taken: Vec<bool>,
+}
+
+impl<'v, 'a> Members<'v, 'a> {
+    /// The member `name`, if present.
+    pub fn optional(&mut self, name: &str) -> Option<&'v Value<'a>> {
+        let members = self.members;
+        let (i, (_, value)) = members.iter().enumerate().find(|(_, (n, _))| n == name)?;
+        if let Some(t) = self.taken.get_mut(i) {
+            *t = true;
+        }
+        Some(value)
+    }
+
+    /// The member `name`, which must be present.
+    pub fn required(&mut self, name: &str) -> Result<&'v Value<'a>, SchemaError> {
+        self.optional(name).ok_or_else(|| SchemaError::Missing(name.into()))
+    }
+
+    /// Succeeds only if every member was taken.
+    pub fn finish(self) -> Result<(), SchemaError> {
+        match self.members.iter().zip(&self.taken).find(|(_, taken)| !**taken) {
+            Some(((name, _), _)) => Err(SchemaError::Unknown(name.as_ref().into())),
+            None => Ok(()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::vec;
+
+    fn kind(input: &str) -> ErrorKind {
+        parse(input.as_bytes()).unwrap_err().kind
+    }
+
+    #[test]
+    fn accepts_json() {
+        let v = parse(r#" { "a": [1, -2, true, false, null, "x\n\u00e9\ud83d\ude00"], "b": {} } "#.as_bytes()).unwrap();
+        assert_eq!(
+            v,
+            Value::Object(vec![
+                (
+                    "a".into(),
+                    Value::Array(vec![
+                        Value::Int(1),
+                        Value::Int(-2),
+                        Value::Bool(true),
+                        Value::Bool(false),
+                        Value::Null,
+                        Value::Str("x\n\u{e9}\u{1f600}".into()),
+                    ])
+                ),
+                ("b".into(), Value::Object(vec![])),
+            ])
+        );
+        assert_eq!(parse(b"0").unwrap(), Value::Int(0));
+        // Found by the json fuzz target (serde_json reads it as the float -0.0): one spelling of 0.
+        assert_eq!(kind("-0"), ErrorKind::NotInteger);
+        assert_eq!(kind("[1, -0]"), ErrorKind::NotInteger);
+        assert_eq!(parse("\"\u{e9}\"".as_bytes()).unwrap(), Value::Str(Cow::Borrowed("\u{e9}")));
+    }
+
+    #[test]
+    fn strings_borrow_unless_escaped() {
+        assert!(matches!(parse(br#""plain""#).unwrap(), Value::Str(Cow::Borrowed("plain"))));
+        assert!(matches!(parse(br#""a\/b""#).unwrap(), Value::Str(Cow::Owned(s)) if s == "a/b"));
+    }
+
+    #[test]
+    fn integers_only_within_2_to_53() {
+        assert_eq!(parse(b"9007199254740991").unwrap(), Value::Int(MAX_SAFE_INT));
+        assert_eq!(parse(b"-9007199254740991").unwrap(), Value::Int(-MAX_SAFE_INT));
+        assert_eq!(kind("9007199254740992"), ErrorKind::OutOfRange);
+        assert_eq!(kind("99999999999999999999999999"), ErrorKind::OutOfRange);
+        assert_eq!(kind("1.0"), ErrorKind::NotInteger);
+        assert_eq!(kind("1e3"), ErrorKind::NotInteger);
+        assert_eq!(kind("01"), ErrorKind::NotInteger);
+        assert_eq!(kind("-"), ErrorKind::NotInteger);
+        assert_eq!(kind("+1"), ErrorKind::Syntax);
+    }
+
+    #[test]
+    fn big_integers_as_strings() {
+        let v = parse(br#"["18446744073709551615", "0", 7, "007", "-1", " 1", "18446744073709551616", -1]"#).unwrap();
+        let got: Vec<Option<u64>> = v.as_array().unwrap().iter().map(Value::as_u64).collect();
+        assert_eq!(got, [Some(u64::MAX), Some(0), Some(7), None, None, None, None, None]);
+    }
+
+    #[test]
+    fn duplicate_members_are_refused() {
+        assert_eq!(kind(r#"{"a":1,"b":2,"a":3}"#), ErrorKind::DuplicateMember);
+        // Compared after unescaping.
+        assert_eq!(kind(r#"{"a":1,"\u0061":2}"#), ErrorKind::DuplicateMember);
+        assert!(parse(br#"[{"a":1},{"a":2}]"#).is_ok());
+    }
+
+    #[test]
+    fn depth_is_bounded() {
+        let ok = "[".repeat(MAX_DEPTH) + &"]".repeat(MAX_DEPTH);
+        assert!(parse(ok.as_bytes()).is_ok());
+        let deep = "[".repeat(MAX_DEPTH + 1) + &"]".repeat(MAX_DEPTH + 1);
+        assert_eq!(kind(&deep), ErrorKind::TooDeep);
+        let deep_obj = r#"{"a":"#.repeat(MAX_DEPTH + 1) + "1" + &"}".repeat(MAX_DEPTH + 1);
+        assert_eq!(kind(&deep_obj), ErrorKind::TooDeep);
+        // Far deeper input fails the same way, without exhausting the stack.
+        assert_eq!(kind(&"[".repeat(60_000)), ErrorKind::TooDeep);
+    }
+
+    #[test]
+    fn size_is_bounded() {
+        let big = alloc::format!("\"{}\"", "a".repeat(MAX_LEN - 2));
+        assert!(parse(big.as_bytes()).is_ok());
+        let too_big = alloc::format!("\"{}\"", "a".repeat(MAX_LEN - 1));
+        assert_eq!(kind(&too_big), ErrorKind::TooLong);
+    }
+
+    #[test]
+    fn text_rules() {
+        assert_eq!(parse(b"\"\xff\"").unwrap_err().kind, ErrorKind::BadUtf8);
+        assert_eq!(kind("\u{feff}{}"), ErrorKind::BadUtf8);
+        assert_eq!(kind("\"a\u{1}\""), ErrorKind::ControlCharacter);
+        assert_eq!(kind("\"a\tb\""), ErrorKind::ControlCharacter);
+        assert_eq!(kind(r#""\ud800""#), ErrorKind::BadCodePoint);
+        assert_eq!(kind(r#""\ud800\u0041""#), ErrorKind::BadCodePoint);
+        assert_eq!(kind(r#""\udc00""#), ErrorKind::BadCodePoint);
+        assert_eq!(kind(r#""\ufdd0""#), ErrorKind::BadCodePoint);
+        assert_eq!(kind(r#""\uffff""#), ErrorKind::BadCodePoint);
+        assert_eq!(kind(r#""\ud83f\udffe""#), ErrorKind::BadCodePoint); // U+1FFFE
+        assert_eq!(kind("\"\u{fffe}\""), ErrorKind::BadCodePoint);
+        assert_eq!(kind("\"\u{10ffff}\""), ErrorKind::BadCodePoint);
+        assert_eq!(kind(r#""\x""#), ErrorKind::BadEscape);
+        assert_eq!(kind(r#""\u12g4""#), ErrorKind::BadEscape);
+        assert_eq!(kind("\"abc"), ErrorKind::Syntax);
+    }
+
+    #[test]
+    fn syntax_errors() {
+        for bad in ["", " ", "[1,]", "{\"a\":1,}", "[1 2]", "{\"a\" 1}", "{1:2}", "tru", "nul", "[", "{}}", "{} {}", "'a'"] {
+            assert!(parse(bad.as_bytes()).is_err(), "{bad:?}");
+        }
+        assert_eq!(kind("{} x"), ErrorKind::Trailing);
+    }
+
+    #[test]
+    fn unknown_members_are_errors() {
+        // The manifest example from INIT.md, decoded the way `init` would decode a server.
+        let v = parse(
+            br#"{ "name": "fsd:data", "program": "fsd", "volume": "data",
+                  "budget": { "pages": "4096", "processes": "1", "weight": "100" },
+                  "receives": ["fsd:data"], "handed": ["blkd"] }"#,
+        )
+        .unwrap();
+        let mut m = v.members().unwrap();
+        assert_eq!(m.required("name").unwrap().as_str(), Some("fsd:data"));
+        let mut budget = m.required("budget").unwrap().members().unwrap();
+        assert_eq!(budget.required("pages").unwrap().as_u64(), Some(4096));
+        assert_eq!(budget.required("processes").unwrap().as_u64(), Some(1));
+        assert_eq!(budget.required("weight").unwrap().as_u64(), Some(100));
+        assert_eq!(budget.finish(), Ok(()));
+        assert!(m.optional("devices").is_none());
+        assert_eq!(m.required("args"), Err(SchemaError::Missing("args".into())));
+        m.required("program").unwrap();
+        m.required("receives").unwrap();
+        m.required("handed").unwrap();
+        // "volume" was never taken.
+        assert_eq!(m.finish(), Err(SchemaError::Unknown("volume".into())));
+        assert_eq!(Value::Int(1).members().err(), Some(SchemaError::WrongType(String::new())));
+    }
+}

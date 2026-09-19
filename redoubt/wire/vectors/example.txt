@@ -1,0 +1,56 @@
+# Test vectors for the `example` protocol (redoubt/wire/tables/example.md), run by the Rust
+# codec (redoubt/wire/tests/vectors.rs) and by the generated Elixir codec on beamlet
+# (redoubt/wire/elixir/test/vectors.exs).
+#
+#   ok  HANDLES W0 W1 W2 W3 BUFFER NAME FIELD=VALUE...
+#       decodes to exactly these fields, and re-encodes to the same words and (for a buffer
+#       message) the first W1 bytes of BUFFER.
+#   bad HANDLES W0 W1 W2 W3 BUFFER ERROR
+#       is refused; ERROR is the Rust codec's `Error` variant (the Elixir codec only has to
+#       refuse).
+#
+# HANDLES is decimal; words and BUFFER are hex (`-` for no buffer). Field values: integers
+# in decimal, strings `s:` and byte arrays `b:` followed by their bytes in hex.
+
+ok 0 1 0 0 0 - ping
+ok 0 2 5060708 1020304 deadbeef - pong seq=72623859790382856 flags=3735928559
+ok 0 2 ffffffff ffffffff ffffffff - pong seq=18446744073709551615 flags=4294967295
+ok 0 3 1234ab 0 0 - small a=171 b=4660
+ok 0 4 d 0 0 01000000000000000200000003 wide a=1 b=2 c=3
+ok 0 5 e 0 0 2a00000008006673643a64617461 named id=42 name=s:6673643a64617461
+ok 0 5 6 0 0 000000000000 named id=0 name=s:
+ok 0 5 11 0 0 070000000b0068c3a96c6c6f20f09f9880 named id=7 name=s:68c3a96c6c6f20f09f9880
+ok 0 6 13 0 0 000000000001000004000000000102ff010078 blob offset=1099511627776 data=b:000102ff label=s:78
+ok 0 6 e 0 0 0000000000000000000000000000 blob offset=0 data=b: label=s:
+ok 2 7 10 0 0 - grant pages=16
+ok 1 ffffffff c 0 0 0a006d6178206f70636f6465 last note=s:6d6178206f70636f6465
+# A lent buffer longer than the message: only the first W1 bytes are the message.
+ok 0 5 6 0 0 000000000000ffff named id=0 name=s:
+
+# Words.
+bad 0 8 0 0 0 - BadOpcode
+bad 0 100000001 0 0 0 - BadWords
+bad 0 2 100000000 0 0 - BadWords
+bad 0 5 6 0 1 2a0000000000 BadWords
+bad 0 5 6 1 0 2a0000000000 BadWords
+bad 0 5 10001 0 0 - BadWords
+# Inline padding must be zero, and an inline message has no buffer.
+bad 0 3 11234ab 0 0 - Trailing
+bad 0 1 0 0 1 - Trailing
+bad 0 1 0 0 0 00 UnexpectedBuffer
+# Handle counts.
+bad 1 1 0 0 0 - BadHandles
+bad 0 7 10 0 0 - BadHandles
+bad 3 7 10 0 0 - BadHandles
+bad 0 ffffffff c 0 0 0a006d6178206f70636f6465 BadHandles
+# Lengths: word 1 beyond the buffer, fields beyond word 1, slack after the fields.
+bad 0 5 7 0 0 2a0000000100 Short
+bad 0 5 0 0 0 - Short
+bad 0 5 7 0 0 2a00000005006162 Short
+bad 0 6 e 0 0 0000000000000000ffffffff0000 Short
+bad 0 4 c 0 0 010000000000000002000000 Short
+bad 0 5 7 0 0 2a000000000000 Trailing
+# UTF-8: an invalid byte, an encoded surrogate, an overlong encoding.
+bad 0 5 7 0 0 2a0000000100ff BadUtf8
+bad 0 5 9 0 0 2a0000000300eda080 BadUtf8
+bad 0 5 8 0 0 2a0000000200c080 BadUtf8
