@@ -1,15 +1,14 @@
 # Debugging
 
-Status: decided 2026-09-18. Tenet 1 (small TCB), tenet 2 (no ambient authority in the kernel).
+Decided; QEMU debugging is built. Tenet 1 (small TCB), tenet 2 (no ambient authority).
 
 ## Principle
 The kernel provides *mechanism*, not a debugger. A debugger is protocol + UI + disassembly;
 none of that belongs in the most privileged code. Debugging is either external (the host)
 or a userspace process holding an explicit capability. There is no debugger in the kernel.
 
-An in-kernel debug stub is, by construction, ambient omnipotence — code in supervisor mode
-that can read and write any process's memory and hijack execution. That is a backdoor. We
-do not compile one in.
+An in-kernel debug stub can read and write any process and hijack execution: ambient
+authority, so there is none.
 
 ## Layers
 
@@ -37,9 +36,9 @@ Our ELFs carry full `.debug_info` even in release, so this is source-level out o
 
 (Plain `gdb` on this host understands riscv64; if a build does not, use `gdb-multiarch`.)
 
-## The future OS-level debugger (deferred to Phase 2+)
+## The future OS-level debugger (deferred)
 When there is userspace worth stepping through, add:
-- **Kernel mechanism**, capability-gated like device grants: `debug_read_mem(pid, addr, len)`,
+- **Kernel mechanism**, reached only through a debug capability (a handle): `debug_read_mem(pid, addr, len)`,
   `debug_write_mem`, `debug_regs(pid, tid)`, `debug_stop/continue(pid)`, `debug_wait_exception(pid)`.
   Expressed in processes/threads/address-spaces, so it spans harts naturally. Only a process
   granted `debug` authority may call it; in production the grant is simply never issued.
@@ -47,12 +46,12 @@ When there is userspace worth stepping through, add:
   `gdb` over whatever transport it is granted. Host `gdb` disassembles; the guest never does.
 
 This is the seL4 / Fuchsia model: minimal rights-gated introspection in the kernel, the
-debugger in userspace. It is multicore-capable, keeps the 7k-line disassembler and the
-protocol out of the TCB, and is not a backdoor because debug authority is a capability.
+debugger in userspace. It is multicore-capable, keeps a disassembler and the
+protocol out of the TCB, and debug authority is a capability like any other.
 
 ## What we removed
-Stock Xous shipped an in-kernel GDB stub (~7,000 lines, of which ~6,000 were a hand-written
-RISC-V disassembler) reached over the Precursor/bao1x UART. It existed to source-debug an
-FPGA device with no QEMU underneath — the opposite of our QEMU-only targets. Deleted: it is
-TCB bloat, a redundant disassembler, and an ambient backdoor. See the commit that removes
-`kernel/src/debug/gdb`.
+Stock Xous shipped an in-kernel GDB stub (about 7,000 lines, about 6,000 of them a hand-written
+RISC-V disassembler) reached over the Precursor UART, to source-debug an FPGA device with no QEMU.
+Deleted: TCB bloat, a redundant disassembler, and ambient authority. On our FPGA target, bring-up
+uses JTAG and the card's trace and performance counters; OS-level debugging uses the userspace
+server above.

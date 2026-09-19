@@ -1,7 +1,7 @@
 # Tenets
 
-Status: draft, 2026-09-18. These outrank the plan. When a change conflicts with a tenet, either the
-change loses or the tenet is amended here first, with the reason written down.
+These outrank every other note. When a change conflicts with a tenet, either the change loses or
+the tenet is amended here first, with the reason written down. Terms: [README.md](README.md).
 
 ## The adversary
 Design for a capable, patient, automated adversary that has read every line of this repository, can
@@ -14,14 +14,13 @@ construction, and no ambient authority.
 
 Out of scope for the software, stated so nobody assumes otherwise: physical attacks,
 microarchitectural side channels (Spectre-class, cache timing), and malicious hardware. These need
-hardware answers; on the FPGA target, side channels are to be handled in the RTL (partitioning,
-flushing on domain switches).
+hardware answers; on the FPGA target, side channels are handled in the RTL, and the hardware plan
+may change to avoid them (PLATFORM-FPGA.md).
 
-**Review model.** Humans *could* review every line; we do not assume they will. The system is
-pressure-tested by adversarial agents from several vendors. So **the design is what must hold up**:
-bugs will exist in every component, and the design must bound what a bug in any one of them can
-reach (a compromised process holds only its own capabilities; a compromised server reaches only its
-clients' data).
+**Review model.** We do not rely on human review. Adversarial agents from several vendors, and real
+attacks, test the system, so **the design, not review, must bound the damage**. Every component will
+have bugs; a compromised process holds only its own capabilities, and a compromised server reaches
+only what its clients entrusted to it (for a shared server, that is every client's data).
 
 ## What this is not
 Said up front, because these are the pressures that erode the tenets below.
@@ -59,6 +58,9 @@ loader, kernel) and hold it in their head. It should read like a textbook exampl
   fallbacks (a guessable RNG seed, a missing signature) are boot failures, not warnings.
 - **`unsafe` is a budget.** Every `unsafe` block states the invariant it relies on. Unsafe code lives
   in few, small modules with safe interfaces. The count is tracked and only goes down without a reason.
+- **The requester can never influence the approval channel.** An approval happens where nothing the
+  requester runs can draw, type or listen (CAPABILITIES.md: approvals are out of band, like 2FA).
+  Any convenience that puts approval inside a session must first amend this tenet.
 - **Tested like it will be attacked.** See tenet 6: every security property has a test that tries to
   break it.
 
@@ -72,7 +74,7 @@ loader, kernel) and hold it in their head. It should read like a textbook exampl
 
 ## 4. Open, auditable standards
 - Hardware interface: ratified RISC-V specifications only (privileged architecture, SBI, PLIC/AIA,
-  Sv39/Sv48, Sstc). No dependence on one vendor's extensions; where a board needs one, it sits
+  Sv32/Sv39, Sstc). No dependence on one vendor's extensions; where a board needs one, it sits
   behind a capability feature and has a standards-based alternative.
 - Machine description: device tree. Devices: virtio where we have the choice.
 - Formats and protocols: published ones with independent implementations (ELF, tar, FAT/ext if we
@@ -111,25 +113,10 @@ system, held to the same standard of simplicity as the kernel.
 
 ## 7. Devices speak virtio
 Drivers are virtio, unless the device is trivial (a UART, an RTC: small, no DMA). A driver that does
-DMA is either inside the TCB, because the hardware has no IOMMU, or confined by an IOMMU; the kernel
-supports both, and says which one a platform is in. On real, messy hardware we do not write drivers:
-we reserve cores for this OS and let Linux run the hardware, serving virtio to us, and we treat it
-as a hostile device as far as the hardware lets us. Design: IO-ARCHITECTURE.md.
+DMA is inside the TCB unless the hardware confines its DMA (an IOMMU, or the FPGA's DMA-only memory
+channel); the platform states which. On messy hardware we write no drivers: we reserve cores for
+Redoubt and let Linux run the hardware and serve virtio to us. There, Linux is in the TCB; we do not
+pretend to contain it. Design: IO-ARCHITECTURE.md.
 
-## Where we stand against these (updated 2026-09-18, after the first hardening pass)
-Honest baseline, so progress is measurable. Numbers are for the rv64 build. `cargo testbench` enforces
-the ones marked (enforced).
-
-| Tenet | Today |
-| --- | --- |
-| 1 Simple | Kernel core + rv64 arch ~10k lines, loader ~750, `sv39` crate ~250, ~40 lines of assembly. All big globals now `KernelCell`, not `static mut`. ARM/x86 and the 7k-line in-kernel gdb stub deleted; kernel ~14k lines. Still carries rv32/Precursor/bao1x/swap, pending the rv32 re-homing. |
-| 2 No ambient authority | Devices: **enforced** (default deny). A process may map a device page or claim an IRQ only if the boot bundle's manifest granted it; the kernel checks at both claim points. Tests: `grant-attack` (denied), and every driver test carries its grant. Design: DEVICE-GRANTS.md. Still open: server-ID capabilities have no revocation, and grants have no runtime delegation (fine until runtime process creation). |
-| 2 W^X | **Holds** (enforced). `sv39::Pte::leaf` cannot express a W+X mapping; syscalls asking for one get `InvalidArgument`; the physmap alias of kernel code is read-only; the kernel verifies all of this over its own address space at boot and refuses to run otherwise. Tests: `wx`, `kernel-wx`. Known gap: user code pages still have a writable alias in the (kernel-only) physmap. |
-| 2 Verified boot | Bundle: **enforced.** The loader verifies an Ed25519 signature (pure-Rust `ed25519-compact`) over the whole bundle and refuses to boot otherwise. Test: `verified-boot-rejects-tamper`. Design: VERIFIED-BOOT.md. Dev key is public (not a secret); a real build swaps it. Open: the loader itself is unverified on QEMU (needs firmware/ROM), no rollback protection or key rotation. |
-| 2 Fail closed | RNG seed and bundle signature: both refuse to run (panic -> power off). Verified boot is tested; the missing-seed path is covered indirectly (it fires if the loader omits the Seed tag). |
-| 2 `unsafe` budget | (enforced) **Every `unsafe` in the kernel and loader now carries a SAFETY justification.** Totals: sv39 12, loader 14, Sv39+SBI+PLIC 15, arch 12, core 36 -- all with 0 undocumented. Was 211 uses / 211 undocumented at the start. The ratchet holds it at 0 undocumented and totals only fall. |
-| 3 All Rust | Kernel and loader: yes, no C toolchain on rv64. Kernel and loader are Rust with ~40 lines of asm, no C toolchain on rv64. **Firmware can now be pure Rust**: loader64 boots identically under OpenSBI and RustSBI (the earlier RustSBI failure was our `fdt` 0.1.5 parser mis-handling a valid tree, fixed by moving to `fdt-rs`). rv32 still links prebuilt asm blobs (to be removed when rv32 is re-homed). rv32 still links prebuilt assembly objects. |
-| 4 Standards | Good: SBI, PLIC, Sv39, device tree, ELF, tar, virtio planned. The kernel argument block is a home-grown format, documented in BOOT.md. |
-| 5 Dependencies | Kernel 21 crates + `sv39`, loader 12. None audited or vendored. `fdt` panics on input it dislikes (hit once already). |
-| 6 Tested | (enforced) 13 cases, ~3 s: ipc, timer, uart-irq, rng, all-together, kernel-wx, and attack tests wx, irq-attack, loader-rejects-kernel-address/-entry, plus the unsafe ratchet and an rv32 build check. `irq-attack` found and now guards a real upstream bug (any process could panic the kernel with `FreeInterrupt(32)`). rv64 only; one firmware; no fuzzing; the kernel's hosted unit tests are not wired in. |
-| 7 Virtio | Direction agreed (IO-ARCHITECTURE.md), nothing built. Only driver today is the trivial ns16550 UART. No DMA grants, no IOMMU backend, no Linux partition yet. |
+## Where we stand
+See [STATUS.md](STATUS.md).

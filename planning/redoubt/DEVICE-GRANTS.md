@@ -1,7 +1,7 @@
 # Device grants (closing ambient authority)
 
-Status: designing, 2026-09-18. Tenet 2: "no ambient authority — a process can touch only
-what it was explicitly given: memory it mapped, connections it holds, devices it was granted."
+Built and enforced; **interim**. Tenet 2: "no ambient authority". Device handles in startup blocks
+replace this mechanism (see "Replacement" below).
 
 ## The hole
 Today any process may `MapMemory` any physical device page, or `ClaimInterrupt` any IRQ,
@@ -13,10 +13,11 @@ authority: authority a process has merely by asking, not by being given.
 - **Default deny.** A userspace process may claim a device page or IRQ only if it was
   granted that exact resource. No grant, no access. (PID 1, the kernel, is exempt.)
 - **Grants are declarative and part of the bundle.** Each process's device needs are
-  listed in a manifest that ships in the boot bundle. The bundle is the trust root (it
-  will be signed; see verified boot), so the manifest is as trusted as the code.
+  listed in a manifest that ships in the boot bundle. The bundle is signed and verified
+  (VERIFIED-BOOT.md), so the manifest is as trusted as the code.
 - **The kernel enforces, at the two claim points**: device `MapMemory` and `ClaimInterrupt`.
-  Main-RAM mappings (heap, stacks, IPC pages) are unaffected — those are not devices.
+  Physical RAM cannot be named at all: `MapMemory` with an explicit physical address inside
+  main RAM is refused, and anonymous pages are zeroed (test `mem-attack`).
 
 This is least privilege: even a trusted driver that is later compromised cannot reach a
 device it was not granted.
@@ -41,9 +42,8 @@ The loader resolves names to PIDs and emits one `Grnt` argument tag per granted 
     then n_mmio * [ base_lo, base_hi, len_lo, len_hi ]   (u32 words, 64-bit values)
     then n_irq  * [ irq ]
 
-Same tag framing as everything else (see BOOT.md). The kernel does not store these; it
-scans the `Grnt` tags on demand at a claim, exactly as `process_name` scans `PNam`. Claims
-are not hot, and this needs no new global or init ordering.
+Same tag framing as everything else (BOOT.md). The kernel keeps no table: at each claim it
+scans the `Grnt` tags (as `process_name` scans `PNam`). Claims are rare, so no new global state.
 
 ## Enforcement
 - `MapMemory(phys, ..)` where `phys` is non-null and outside main RAM: allow only if some
@@ -62,7 +62,9 @@ Existing device-using programs (log-server, uart-echo, the uaf holder) get UART 
 the timer/rng/ipc clients need none. Attack test: a process with no grant is denied both
 the UART page and an IRQ, and the denial is an error, not a crash.
 
-## Not covered here
-- Revocation and dynamic grants (a spawner handing a device to a child at runtime): later,
-  once there is runtime process creation.
-- The manifest's integrity depends on verified boot, which is still open.
+## Replacement (decided)
+MMIO regions, IRQs and DMA authority become kernel objects reached through handles. `init`
+receives all of them and places each driver's handles in its startup block, as the manifest
+says; `MapMemory` of a device and `ClaimInterrupt` take a handle. Then the `grants` file, the
+`Grnt` tags and the claim-time scan are deleted, and devices get delegation and revocation
+from the capability mechanism (CAPABILITIES.md). `xous-names` (name lookup) is deleted too.

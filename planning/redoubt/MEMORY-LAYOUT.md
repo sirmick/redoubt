@@ -1,84 +1,71 @@
-# redoubt virtual memory design (Sv39)
+# Virtual memory (Sv32 and Sv39)
 
-Status: decided 2026-09-18, implementation in progress. Change this file first if the design changes.
+Built, both widths. Owns: the physmap, the address-space split, per-width layouts. Constants live in
+`xous-rs/src/arch/riscv/mem.rs`; the page-table code is the `paging` crate (`redoubt/paging/`), the
+only code that edits page-table entries.
 
-## Decision 1: direct physical map instead of the page-table window
+## Decision 1: a direct physical map
+Stock Xous maps every page table as a data page inside a window (a self-referential trick that works
+with two levels but not three). Redoubt instead maps all of physical RAM once, in the kernel half:
 
-rv32 Xous maps every L0 page table as a data page inside a 4 MiB window (`0xff40_0000`), and the root
-at `0xff80_0000`. The window's own L0 table is mapped into itself. That is neat with two levels. With
-three levels it needs a 1 GiB window for L0 tables, a 2 MiB window for L1 tables, and tables that map
-the windows that map the tables.
+    virt = PHYSMAP_BASE + (phys - PHYSMAP_PHYS_BASE)   (supervisor-only, global, RW, never executable)
 
-redoubt instead maps all of physical RAM once, in the kernel half, with Sv39 gigapages:
-
-    virt = PHYSMAP_BASE + phys          (supervisor-only, global, RW, never executable)
-
-Page tables are then reached as `PHYSMAP_BASE + table_phys`. Consequences:
-- `pagetable_entry()` becomes a plain three-level software walk from `satp.ppn`.
-- Creating a process no longer needs "map temp page, fill in, unmap" sequences.
-- A page table never needs a virtual mapping of its own, so there is no self-referential bootstrap.
-- The kernel can edit another process's tables without switching `satp` (needed for SMP later, where
-  switching the local hart's address space to poke another process is a bad idea).
+Use `physmap_virt(phys)`, never `PHYSMAP_BASE + phys` (the offset is nonzero on rv32).
+Consequences:
+- Page-table walks are plain software walks from `satp`.
+- Creating a process needs no "map temp page, fill in, unmap" sequences.
+- The kernel edits another process's tables without switching `satp` (needed for SMP).
 
 Cost: the kernel can address all RAM, so a kernel arbitrary-write bug is not limited to mapped pages.
 The mapping is S-mode only and `sstatus.SUM` stays clear, so userspace cannot reach it and the kernel
-cannot touch *user* mappings by accident. This is the standard trade on 64-bit kernels; we accept it.
-MMIO is not in the physmap: devices stay explicitly mapped per server, as in stock Xous.
+cannot touch user mappings by accident. The physmap alias of kernel code is read-only. MMIO is not in
+the physmap: devices are mapped explicitly per server.
 
 ## Decision 2: address space split by root entry
+The top root entries are the kernel's and are shared by every address space; creating a process copies
+them from the current root. Those entries are created once by the loader and never change (the
+loader pre-creates the shared intermediate tables, so later kernel mappings, such as the PLIC, appear
+everywhere).
 
-Sv39: 3 levels x 9 bits, root entry = 1 GiB, canonical addresses only.
+| | Sv39 (rv64) | Sv32 (rv32) |
+| --- | --- | --- |
+| Userspace | root 0..=255, below `0x40_0000_0000` | root 0..=511, below `0x8000_0000` |
+| Physmap | root 256..=383 at `0xffff_ffc0_0000_0000`, from physical 0, 1 GiB leaves | root 512..=1019 at `0x8000_0000`, identity (QEMU RAM starts there), 4 MiB leaves |
+| Interrupt controller | `0xffff_ffff_f000_0000` | root 1020..=1021 at `0xff00_0000` |
+| Per-process kernel data | root 510 at `0xffff_ffff_8000_0000` | root 1022 at `0xff80_0000` |
+| Kernel image, stacks, arguments | root 511 at `0xffff_ffff_c000_0000` | root 1023 at `0xffc0_0000` |
 
-| Root idx   | Virtual range                         | Use                                                    | Shared? |
-| ---------- | ------------------------------------- | ------------------------------------------------------ | ------- |
-| 0..=255    | `0x0000_0000_0000_0000`..`0x3f_ffff_ffff` | Userspace (256 GiB)                                 | no      |
-| 256..=383  | `0xffff_ffc0_0000_0000` + phys        | Physmap, up to 128 GiB, gigapage leaves                | yes (G) |
-| 384..=509  | --                                    | Reserved                                               | --      |
-| 510        | `0xffff_ffff_8000_0000`               | Per-process kernel data                                | no      |
-| 511        | `0xffff_ffff_c000_0000`               | Kernel image, stacks, args, kernel MMIO                | yes (G) |
+Per-process kernel data holds `ProcessImpl` at `THREAD_CONTEXT_AREA` (slot 0 is the process header,
+slots 1..=31 are saved thread contexts: 2 pages on rv64, 1 on rv32) and `USERSPACE_BUFFER`
+(temporary; the physmap should replace it). Userspace regions are the same on both widths
+(`DEFAULT_HEAP_BASE = 0x2000_0000`, stack top `0x8000_0000`); spreading out over the rv64 space
+(and ASLR) is a later, userspace-visible change.
 
-Sharing the kernel into a new process = copy root entries 256..=509 and 511 from the current root.
-Those entries are created once by the loader and never change afterwards (the L1 table under 511 is
-shared, so later kernel mappings appear everywhere without touching any root).
+## Sv32 vs Sv39
+Same low 10 PTE flag bits; the physical page number starts at bit 10 in both. So one `usize`-based
+`Pte` and one flag set serve both; only these are width-specific:
 
-### Root 511: kernel (shared)
-Addresses are the rv32 ones sign-extended, so the two ports stay easy to compare:
+| | Sv32 | Sv39 |
+| --- | --- | --- |
+| levels | 2 | 3 |
+| entries per table | 1024 | 512 |
+| VPN bits per level | 10 | 9 |
+| PTE width | 4 B | 8 B |
+| leaf sizes | 4 KiB, 4 MiB | 4 KiB, 2 MiB, 1 GiB |
+| `satp` mode | 1 << 31 | 8 << 60 |
+| `satp` ASID | bits 22..30 | bits 44..59 |
+| canonical addresses | all 32 bits | sign-extended at bit 38 |
 
-| Address                   | Use                                   |
-| ------------------------- | ------------------------------------- |
-| `0xffff_ffff_ffc0_0000`   | Kernel arguments, allocation tables   |
-| `0xffff_ffff_ffcf_0000`   | Kernel console MMIO (if any)          |
-| `0xffff_ffff_ffd0_0000`   | Kernel image + data                   |
-| `0xffff_ffff_fff8_0000`   | Kernel stack top                      |
-| `0xffff_ffff_ffff_0000`   | Exception stack top (boot hart; SMP makes this per-hart) |
+Code keys on `target_pointer_width` only for these, the saved-context size and the trap assembly.
 
-### Root 510: per-process kernel data
-| Address                   | Use                                                           |
-| ------------------------- | ------------------------------------------------------------- |
-| `0xffff_ffff_8000_0000`   | `THREAD_CONTEXT_AREA`: `ProcessImpl`, 2 pages (see below)     |
-| `0xffff_ffff_8010_0000`   | `USERSPACE_BUFFER` (temporary; physmap should replace it)     |
-| `0xffff_ffff_8080_2000`.. | Magic never-mapped return addresses (`RETURN_FROM_ISR`, `EXIT_THREAD`, ...) |
+## satp, PTEs, W^X
+- `satp` = mode | (PID as ASID) | root PPN. All decoding goes through `arch::mem` helpers.
+- Xous's software PTE bits sit in the RSW field on both widths: `S` (lent, bit 8); bit 9 is unused
+  (swap is deleted).
+- `paging::Pte::leaf` cannot express a writable and executable mapping; the kernel re-checks its
+  own address space at boot and refuses to run otherwise (tests `wx`, `kernel-wx`).
 
-`ProcessImpl` on rv64: a saved context is 32 x 8 = 256 bytes. Slot 0 is the process header, padded to
-256 bytes; slots 1..=31 are contexts. 32 x 256 = 8192 bytes = exactly 2 pages. Trap entry computes
-`sp = THREAD_CONTEXT_AREA + (context_nr << 8)` (rv32: `<< 7`).
-
-### Userspace (root 0..=255)
-For now the rv32 constants are kept (`DEFAULT_HEAP_BASE = 0x2000_0000`, stack top `0x8000_0000`, ...)
-so the userspace runtime ports unchanged. `USER_AREA_END = 0x40_0000_0000`. Spreading regions out over
-the 256 GiB (and ASLR) is a later, userspace-visible change.
-
-## satp / ASID
-`satp = (8 << 60) | (pid << 44) | root_ppn`. PID stays the ASID (16 bits available, 8 used). All decoding
-goes through helpers in `arch::mem` rather than open-coded shifts.
-
-## PTE format
-Sv39 PTEs are 64-bit with the PPN at bit 10, same bit positions as Sv32, and Xous's software bits
-(`S` shared = bit 8, `P` swap = bit 9) sit in the RSW field in both. So PTE bit-twiddling code carries
-over; only the walks and the PPN width change. Swap is not ported (feature stays rv32-only).
-
-## SMP notes (Phase 3, recorded here so the layout doesn't paint us into a corner)
-- Exception stack and "current context number" are per-process/global today; both must become per-hart.
-  Plan: `sscratch` points at a per-hart block in root 511 holding the hart's trap stack and current
-  (PID, TID); the context-number slot in `ProcessImpl` moves there.
-- Unmap/lend/return must shoot down remote TLBs (SBI RFENCE, by ASID) before the page is reused.
+## SMP notes (recorded so the layout does not paint us into a corner)
+- The exception stack and "current context" are global today; both must become per-hart:
+  `sscratch` points at a per-hart block holding the hart's trap stack and current (PID, TID).
+- Unmap, lend and return must shoot down remote TLBs (SBI RFENCE, by ASID) before a page is reused.

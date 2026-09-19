@@ -43,10 +43,10 @@ What it is deliberately **not**: the fastest, or compatible with everything.
 | `redoubt/test-programs/` | `no_std` programs injected into test boot bundles |
 | `redoubt/tests/` | TOML test cases and the `unsafe` budget |
 | `libs/flatipc/` | zero-copy IPC |
-| `planning/redoubt/` | the architecture of record — read these first |
+| `planning/redoubt/` | the architecture of record — start at [its index](planning/redoubt/README.md) |
 
-(The userspace above the kernel is [beamlet](planning/redoubt/), a safe-Rust BEAM VM that
-runs an Elixir/OTP userland.)
+(The userspace above the kernel is beamlet, a safe-Rust BEAM VM that runs an Elixir/OTP userland;
+it lives in a sibling repository, `../beamlet`, with its own `DESIGN.md`.)
 
 ## Building and testing
 
@@ -67,4 +67,4 @@ cargo testbench rng
 Redoubt began as Xous by the betrusted.io project; the microkernel design, the syscall ABI,
 and much of `xous-rs` come from there. Redoubt drops Xous's Precursor/Baochip hardware
 support and its 32-bit-only, single-core, PDDB-centric assumptions, and takes the design
-64-bit, SMP-ready, and filesystem-bearing. See `planning/redoubt/` for what changed and why.
+64-bit, SMP-ready, and filesystem-bearing. See `planning/redoubt/HISTORY.md` for what changed and why.
