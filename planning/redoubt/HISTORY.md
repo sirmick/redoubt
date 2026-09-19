@@ -253,4 +253,19 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
 - **CONTAINMENT.md: `admit` counted per (account, label set)** (2026-09-19, editorial, following
   answer 17): the shared server library's admission limits are caps, and answer 17 counts caps per
   (account, label set); the library's description now says so (question 38).
+- **WP-K0 kernel memory panics** (`f7b9fdd16`): three kernel panics reachable from any
+  unprivileged process, and the out-of-memory `expect`s beside them, fixed; the lend and move paths
+  back, check ownership of, and prepare the destination for a whole range before any page moves;
+  lent (S-bit) entries can no longer be unmapped, remapped or reserved over. Found by WP-T1b's
+  audit and K0's own red team. Cases `lend-untouched-page`, `move-borrowed-page`,
+  `return-lent-unmapped`, `syscall-attack`, `touch-beyond-ram`; the bench gained `memory_mib`.
+  Bugs found (the owner decides what goes upstream, privately):
+  - *Lending an untouched page re-entered the memory manager*: `lend_memory`/`send_memory` held the
+    memory manager and called lazy backing, which borrowed it again (a panic on one hart, a
+    deadlock with `smp`); backing also `expect`ed on out-of-memory. Upstream has the same shape as
+    two live `&mut` to one static (undefined behaviour) rather than a panic.
+  - *A server could panic the kernel by moving a page it was only lent*: `send_memory` remapped
+    before learning the frame was the lender's, then panicked. Identical upstream.
+  - *A lender could unmap its own lent page, and the server's return then panicked*
+    (`return_page_inner`'s assert). Identical upstream.
 

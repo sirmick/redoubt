@@ -13,7 +13,7 @@
 
 use core::fmt::Write;
 
-use xous::{MemoryFlags, MemoryRange, MemorySize, Message, CID};
+use xous::{CID, MemoryFlags, MemoryRange, MemorySize, Message};
 
 /// There is no name server yet, so the log server uses a well-known address.
 pub const SERVER_ADDRESS: &[u8; 16] = b"redoubt-ipc-tst!";
@@ -119,7 +119,8 @@ pub mod checker {
     pub fn done() {
         let sid = xous::SID::from_bytes(ADDRESS).unwrap();
         let cid = xous::connect(sid).expect("couldn't connect to the attack checker");
-        xous::send_message(cid, Message::new_blocking_scalar(DONE, 0, 0, 0, 0)).expect("couldn't reach the checker");
+        xous::send_message(cid, Message::new_blocking_scalar(DONE, 0, 0, 0, 0))
+            .expect("couldn't reach the checker");
     }
 }
 
@@ -157,6 +158,25 @@ pub mod uaf {
     pub const VICTIM_SENTINEL: &[u8; 8] = b"VICTIM!!";
     /// The grabber writes this into every page it allocates.
     pub const GRABBER_SENTINEL: &[u8; 8] = b"GRABBER!";
+}
+
+/// Protocol for the move-a-borrowed-page attack test (`move-borrowed*` binaries). See
+/// `redoubt/tests/move-borrowed-page.toml`.
+pub mod move_borrowed {
+    /// Well-known address of the attacking server.
+    pub const ADDRESS: &[u8; 16] = b"redoubt-mv-borrw";
+    /// What the victim writes into the page it lends.
+    pub const VICTIM_TEXT: &str = "victim data";
+}
+
+/// Protocol for the return-a-clobbered-lent-page attack test (`return-lent*` binaries). See
+/// `redoubt/tests/return-lent-unmapped.toml`.
+pub mod return_lent {
+    /// Well-known address of the borrower server.
+    pub const ADDRESS: &[u8; 16] = b"redoubt-ret-lent";
+    /// Fixed user address the lender lends, then attacks from a second thread. Between the
+    /// message region (`0x4000_0000`, one superpage) and the default region (`0x6000_0000`).
+    pub const LENT_ADDR: usize = 0x5000_0000;
 }
 
 /// Wait about `ms` milliseconds, reading the `time` CSR (which the kernel lets U-mode
