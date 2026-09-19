@@ -14,13 +14,16 @@ use redoubt_model::{policy, trace};
 
 pub type Family = fn(u64, Option<Mutation>) -> Result<(), Failure>;
 
-/// Every property family, in the order the mutation check tries them.
-pub const FAMILIES: [(&str, Family); 5] = [
-    ("kernel_sequence", check::kernel_sequence),
-    ("budget_lifecycle", check::budget_lifecycle),
-    ("scheduler_fairness", check::scheduler_fairness),
-    ("steward_policy", policy::steward_policy),
-    ("steward_noninterference", policy::steward_noninterference),
+/// Every property family, in the order the mutation check tries them, with the divisor applied
+/// to the sequence count: a flood seed is a scenario of up to 20,000 steps, so it runs a
+/// thousandth as many seeds.
+pub const FAMILIES: [(&str, Family, u64); 6] = [
+    ("kernel_sequence", check::kernel_sequence, 1),
+    ("budget_lifecycle", check::budget_lifecycle, 1),
+    ("scheduler_fairness", check::scheduler_fairness, 1),
+    ("steward_policy", policy::steward_policy, 1),
+    ("steward_noninterference", policy::steward_noninterference, 1),
+    ("flood", check::flood, 1000),
 ];
 
 /// Sequences per family: `REDOUBT_MODEL_SEQUENCES`, or `default`.

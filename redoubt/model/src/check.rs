@@ -315,6 +315,254 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
     Ok(())
 }
 
+/// The flood (PLAN.md's milestone 1 attack case "endpoint flooding: 10,000 blocked senders on
+/// `fsd`, and Alice is still served in her turn"), on a boot big enough to hold it. A system
+/// server receives on one endpoint; Bob's processes (two label sets of one account, so two R2
+/// groups) run up to 31 threads each, every thread calling with no timeout; a crowd of up to
+/// eight other accounts queues `WAIT_CAP` calls each; Alice makes one call in the middle of the
+/// flood. Most of Bob's calls get `Busy` (R2's cap per group); Alice's call must be taken within
+/// as many receives as there are groups (I11). Half the seeds' servers hoard: they receive
+/// without replying, so open calls pile up to `MAX_OPEN_CALLS` (R4a).
+///
+/// Up to 10,000 senders per seed, so the invariants are checked every 512 steps and at the end
+/// (ghost violations are recorded as they happen and reported at the next check).
+pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
+    use crate::kernel::{DeviceSpec, INIT_PID, Limits, Note};
+    use crate::spec::{Error, FOREVER, WORDS};
+    use crate::syscall::{Outcome, Ret, Syscall};
+    let mut rng = Rng::new(seed);
+    let fail = |message: String| Failure { family: "flood", seed, message, ops: Vec::new() };
+    let boot = Boot {
+        root: Limits { pages: 60_000, processes: 700, weight: 10_000 },
+        system: Limits { pages: 1_000, processes: 10, weight: 1_000 },
+        users: Limits { pages: 55_000, processes: 680, weight: 8_000 },
+        devices: alloc::vec![DeviceSpec::Reset],
+        ..Boot::default()
+    };
+    let mut k = Kernel::boot(&boot, mutation).map_err(fail)?;
+    let mut checker = Checker::new(&k);
+    let mut steps = 0u64;
+    let mut run =
+        |k: &mut Kernel, pid: u64, tid: u64, call: Syscall| -> Result<crate::kernel::Step, Failure> {
+            let s = k
+                .step(&Op::Sys { pid, tid, call })
+                .ok_or_else(|| fail(String::from("illegal flood step")))?;
+            steps += 1;
+            if steps.is_multiple_of(512) {
+                checker.check(k).map_err(fail)?;
+            }
+            Ok(s)
+        };
+    let handle = |s: &crate::kernel::Step| match s.outcome {
+        Outcome::Done(Ok(Ret::Handle(h))) => Some(h),
+        _ => None,
+    };
+    let started = |s: &crate::kernel::Step| {
+        s.notes.iter().find_map(|n| match n {
+            Note::Thread { pid, tid } => Some((*pid, *tid)),
+            _ => None,
+        })
+    };
+    let budget = |pages, processes, weight, class: Class, labels: alloc::vec::Vec<u64>, account, parent| {
+        Syscall::BudgetCreate {
+            parent,
+            pages,
+            processes,
+            weight,
+            class: class.raw(),
+            labels,
+            account,
+            deadline: FOREVER,
+        }
+    };
+    // init's slots: 1 root, 2 system, 3 users, 4 the Reset device.
+    let e =
+        handle(&run(&mut k, INIT_PID, 1, Syscall::EndpointCreate)?).ok_or_else(|| fail("endpoint".into()))?;
+    let (system_h, users_h) = (2, 3);
+    let hs =
+        handle(&run(&mut k, INIT_PID, 1, budget(200, 2, 500, Class::System, alloc::vec![], 0, system_h))?);
+    let hs = hs.ok_or_else(|| fail("server budget".into()))?;
+    let ps =
+        handle(&run(&mut k, INIT_PID, 1, Syscall::ProcessCreate { budget: hs, exit_endpoint: e })?).unwrap();
+    let (spid, stid) = started(&run(
+        &mut k,
+        INIT_PID,
+        1,
+        Syscall::ProcessStart { process: ps, entry: 0, sp: 0, handles: alloc::vec![e] },
+    )?)
+    .unwrap();
+    // Bob: two label sets of account 1002 (two R2 groups); Alice: account 1001.
+    let senders = if rng.pct(20) { 10_000 } else { rng.range(40, 2_000) };
+    let procs = senders.div_ceil(31);
+    let hb = handle(&run(
+        &mut k,
+        INIT_PID,
+        1,
+        budget(50_000, procs + 2, 4_000, Class::User, alloc::vec![], 1002, users_h),
+    )?)
+    .unwrap();
+    let hb2 = handle(&run(
+        &mut k,
+        INIT_PID,
+        1,
+        budget(20_000, procs / 2 + 1, 1_000, Class::User, alloc::vec![7], 0, hb),
+    )?)
+    .unwrap();
+    let ha =
+        handle(&run(&mut k, INIT_PID, 1, budget(100, 2, 1_000, Class::User, alloc::vec![], 1001, users_h))?)
+            .unwrap();
+    let mint =
+        |k: &mut Kernel,
+         run: &mut dyn FnMut(&mut Kernel, u64, u64, Syscall) -> Result<crate::kernel::Step, Failure>,
+         into: u64| {
+            run(
+                k,
+                INIT_PID,
+                1,
+                Syscall::Mint { source: crate::syscall::MintSource::Handle(e), badge: 1, budget: Some(into) },
+            )
+            .map(|s| handle(&s))
+        };
+    let mut bobs = Vec::new();
+    for i in 0..procs {
+        let hbud = if i % 2 == 1 { hb2 } else { hb };
+        let Some(me) = mint(&mut k, &mut run, hbud)? else { break };
+        let Some(p) =
+            handle(&run(&mut k, INIT_PID, 1, Syscall::ProcessCreate { budget: hbud, exit_endpoint: e })?)
+        else {
+            break;
+        };
+        let Some(t) = started(&run(
+            &mut k,
+            INIT_PID,
+            1,
+            Syscall::ProcessStart { process: p, entry: 0, sp: 0, handles: alloc::vec![me] },
+        )?) else {
+            break;
+        };
+        bobs.push(t);
+        run(&mut k, INIT_PID, 1, Syscall::HandleClose { h: me })?;
+    }
+    // The crowd: other accounts, one process each, WAIT_CAP threads calling.
+    let crowd = rng.range(0, 8);
+    let mut crowd_threads = Vec::new();
+    for i in 0..crowd {
+        let hc = handle(&run(
+            &mut k,
+            INIT_PID,
+            1,
+            budget(200, 1, 10, Class::User, alloc::vec![], 2000 + i, users_h),
+        )?)
+        .unwrap();
+        let mc = mint(&mut k, &mut run, hc)?.unwrap();
+        let p = handle(&run(&mut k, INIT_PID, 1, Syscall::ProcessCreate { budget: hc, exit_endpoint: e })?)
+            .unwrap();
+        let t = started(&run(
+            &mut k,
+            INIT_PID,
+            1,
+            Syscall::ProcessStart { process: p, entry: 0, sp: 0, handles: alloc::vec![mc] },
+        )?)
+        .unwrap();
+        crowd_threads.push(t);
+    }
+    let me = mint(&mut k, &mut run, ha)?.unwrap();
+    let pa =
+        handle(&run(&mut k, INIT_PID, 1, Syscall::ProcessCreate { budget: ha, exit_endpoint: e })?).unwrap();
+    let (apid, atid) = started(&run(
+        &mut k,
+        INIT_PID,
+        1,
+        Syscall::ProcessStart { process: pa, entry: 0, sp: 0, handles: alloc::vec![me] },
+    )?)
+    .unwrap();
+    // The flood: each of Bob's threads calls once; each process spawns its next thread first.
+    let call =
+        Syscall::Call { h: 1, words: [0; WORDS], handles: alloc::vec![], lend: None, timeout: FOREVER };
+    for (pid, first) in crowd_threads {
+        let mut tid = first;
+        for _ in 0..crate::spec::WAIT_CAP {
+            let next = match run(&mut k, pid, tid, Syscall::ThreadCreate { entry: 0, sp: 0, arg: 0 })?.outcome
+            {
+                Outcome::Done(Ok(Ret::Tid(t))) => t,
+                _ => break,
+            };
+            run(&mut k, pid, tid, call.clone())?;
+            tid = next;
+        }
+    }
+    let mut busy = 0u64;
+    let mut sent = 0u64;
+    let alice_at = rng.range(0, senders);
+    let mut alice_msg = None;
+    'flood: for (pid, first) in bobs {
+        let mut tid = first;
+        for _ in 0..31 {
+            if sent == alice_at && alice_msg.is_none() {
+                run(&mut k, apid, atid, call.clone())?;
+                alice_msg = k.msgs.values().find(|m| m.sender_tid == atid).map(|m| m.id);
+            }
+            if sent >= senders {
+                break 'flood;
+            }
+            let next = match run(&mut k, pid, tid, Syscall::ThreadCreate { entry: 0, sp: 0, arg: 0 })?.outcome
+            {
+                Outcome::Done(Ok(Ret::Tid(t))) => Some(t),
+                _ => None,
+            };
+            let s = run(&mut k, pid, tid, call.clone())?;
+            sent += 1;
+            if s.outcome == Outcome::Done(Err(Error::Busy)) {
+                busy += 1;
+            }
+            match next {
+                Some(t) => tid = t,
+                None => break,
+            }
+        }
+    }
+    if alice_msg.is_none() {
+        run(&mut k, apid, atid, call.clone())?;
+        alice_msg = k.msgs.values().find(|m| m.sender_tid == atid).map(|m| m.id);
+    }
+    // Two groups of Bob's may queue WAIT_CAP each; everything else got Busy.
+    if sent > 2 * crate::spec::WAIT_CAP && busy + 2 * crate::spec::WAIT_CAP < sent {
+        return Err(fail(format!("R2: of {sent} flooding calls only {busy} got Busy")));
+    }
+    // The server receives (and, unless it hoards, replies); Alice is served within as many turns
+    // as there are groups waiting (Bob's two, the crowd's, and hers).
+    let hoard = rng.pct(50);
+    let groups = 3 + crowd;
+    let mut turns = 0;
+    let mut alice_served = false;
+    for _ in 0..(groups * crate::spec::WAIT_CAP + 80) {
+        let s = run(&mut k, spid, stid, Syscall::Receive { h: Some(1), timeout: 0, max_transfer: 0 })?;
+        let Outcome::Done(Ok(Ret::Message(m))) = s.outcome else { continue };
+        turns += 1;
+        if Some(m.msg_id) == alice_msg {
+            alice_served = true;
+            if turns > groups {
+                return Err(fail(format!(
+                    "I11: Alice's call was taken at receive {turns}, of {groups} groups"
+                )));
+            }
+        }
+        if !hoard {
+            run(
+                &mut k,
+                spid,
+                stid,
+                Syscall::Reply { msg_id: m.msg_id, words: [0; WORDS], handles: alloc::vec![] },
+            )?;
+        }
+    }
+    if alice_msg.is_some() && !alice_served {
+        return Err(fail(String::from("I11: Alice's call was never taken")));
+    }
+    checker.check(&k).map_err(fail)?;
+    Ok(())
+}
+
 /// R12: random budgets (classes, weights, spinners and sleepers) under the scheduler alone.
 /// Checks at every pick that a user budget never runs while a system budget is runnable, and
 /// for every user budget that is runnable throughout (a spinner), over every interval: it

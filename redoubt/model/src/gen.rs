@@ -72,6 +72,11 @@ pub struct Gen {
     hoard: bool,
     /// A thread bomb in progress: (process, steps left).
     bomb: Option<(u64, u32)>,
+    /// The relay after the setup (see `relay_op`): steps left, and the user process and the
+    /// endpoint it created, once chosen.
+    relay: u32,
+    relay_from: Option<(u64, u64)>,
+    relay_sent: bool,
 }
 
 impl Gen {
@@ -80,6 +85,7 @@ impl Gen {
         let principals = rng.range(2, 3);
         // One sequence in five skips the setup and starts from bare `init`.
         let setup = if rng.pct(20) { u32::MAX } else { 0 };
+        let relay = if setup == 0 && rng.pct(70) { 30 } else { 0 };
         Gen {
             rng,
             setup,
@@ -89,6 +95,9 @@ impl Gen {
             flood_endpoint: None,
             hoard: false,
             bomb: None,
+            relay,
+            relay_from: None,
+            relay_sent: false,
         }
     }
 
@@ -100,6 +109,12 @@ impl Gen {
                 return op;
             }
             self.setup = u32::MAX;
+        }
+        while self.relay > 0 {
+            self.relay -= 1;
+            if let Some(op) = self.relay_op(k) {
+                return op;
+            }
         }
         let runnable = k.runnable();
         if runnable.is_empty() || self.rng.pct(6) {
@@ -370,6 +385,115 @@ impl Gen {
             return sys(Syscall::ProcessStart { process: ph, entry: 0x1000, sp: 0x2000, handles: hs });
         }
         None
+    }
+
+    /// The relay: a user process creates an endpoint and sends it to `init`, which starts
+    /// processes in the other budgets it made (labelled ones among them) holding a receive right
+    /// to it and naming it as their exit endpoint. So endpoints owned by user budgets are used
+    /// across label sets (R1 against the owner, QUESTIONS 4; exit notices to a user owner) and
+    /// received outside their owner's budget (R10: calls in flight when the owner is destroyed).
+    fn relay_op(&mut self, k: &Kernel) -> Option<Op> {
+        let init = k.processes.get(&INIT_PID)?;
+        let itid = *init.threads.iter().find(|t| k.threads[t].wait.is_none())?;
+        let sys = |pid, tid, call| Some(Op::Sys { pid, tid, call });
+        // Choose the user process and let it create its endpoint.
+        let (p0, x) = match self.relay_from {
+            Some(r) if k.endpoints.contains_key(&r.1) && k.processes.contains_key(&r.0) => r,
+            Some(_) => return None,
+            None => {
+                let (pid, tid) = k.runnable().into_iter().find(|(pid, _)| {
+                    *pid != INIT_PID
+                        && k.budget_of(*pid).is_some_and(|b| k.budgets[&b].class == Class::User)
+                        && k.processes[pid]
+                            .handles
+                            .values()
+                            .any(|h| matches!(h.object, Object::Endpoint(e) if k.endpoints[&e].owner == ROOT))
+                })?;
+                let b = k.budget_of(pid)?;
+                if let Some(e) = k.endpoints.values().find(|e| e.owner == b) {
+                    self.relay_from = Some((pid, e.id));
+                    return self.relay_op(k);
+                }
+                return sys(pid, tid, Syscall::EndpointCreate);
+            }
+        };
+        let hx = |pid: u64, badge0: bool| {
+            k.processes
+                .get(&pid)?
+                .handles
+                .iter()
+                .find(|(_, h)| h.object == Object::Endpoint(x) && (!badge0 || h.badge == 0))
+                .map(|(i, _)| *i)
+        };
+        // It sends its receive right to init, on an endpoint init owns.
+        if !self.relay_sent {
+            let tid = *k.processes[&p0].threads.iter().find(|t| k.threads[t].wait.is_none())?;
+            let (via, _) = k.processes[&p0]
+                .handles
+                .iter()
+                .find(|(_, h)| matches!(h.object, Object::Endpoint(e) if k.endpoints[&e].owner == ROOT))?;
+            self.relay_sent = true;
+            let call = Syscall::Send {
+                h: *via,
+                words: [7, 0, 0, 0],
+                handles: vec![hx(p0, true)?],
+                transfer: None,
+                timeout: FOREVER,
+            };
+            return sys(p0, tid, call);
+        }
+        // Init receives it.
+        let Some(hi) = hx(INIT_PID, true) else {
+            let recv: Vec<u64> = init
+                .handles
+                .iter()
+                .filter(|(_, h)| {
+                    h.badge == 0 && matches!(h.object, Object::Endpoint(e) if k.endpoints[&e].owner == ROOT)
+                })
+                .map(|(i, _)| *i)
+                .collect();
+            let h = self.rng.pick(&recv)?;
+            return sys(INIT_PID, itid, Syscall::Receive { h: Some(h), timeout: 0, max_transfer: 0 });
+        };
+        // Init starts a process holding it in another budget it made, created with it as the
+        // exit endpoint; one budget at a time.
+        let b0 = k.budget_of(p0)?;
+        let budget_h =
+            |b: u64| init.handles.iter().find(|(_, h)| h.object == Object::Budget(b)).map(|(i, _)| *i);
+        for (i, h) in &init.handles {
+            if let Object::Process(p) = h.object {
+                if !k.processes[&p].started
+                    && k.processes[&p].exit_endpoint.is_some_and(|e| e.object == Object::Endpoint(x))
+                {
+                    let b = k.processes[&p].budget;
+                    return sys(
+                        INIT_PID,
+                        itid,
+                        Syscall::ProcessStart {
+                            process: *i,
+                            entry: 0,
+                            sp: 0,
+                            handles: vec![budget_h(b)?, hi],
+                        },
+                    );
+                }
+            }
+        }
+        let started: Vec<u64> = k
+            .processes
+            .values()
+            .filter(|p| p.exit_endpoint.is_some_and(|e| e.object == Object::Endpoint(x)))
+            .map(|p| p.budget)
+            .collect();
+        let target = k.budgets.values().find(|b| {
+            b.id != b0
+                && b.class == Class::User
+                && b.weight > 0
+                && b.processes_used < b.processes_limit
+                && budget_h(b.id).is_some()
+                && !started.contains(&b.id)
+        })?;
+        sys(INIT_PID, itid, Syscall::ProcessCreate { budget: budget_h(target.id)?, exit_endpoint: hi })
     }
 
     /// A thread holding a handle to the budget that owns the endpoint of a message in flight, or

@@ -25,10 +25,13 @@ fn every_rule_has_a_mutation() {
 fn mutations_are_caught() {
     quiet_panics();
     let mut missed = Vec::new();
-    for m in Mutation::ALL {
+    // `REDOUBT_MODEL_MUTATIONS=R10,Policy` checks only mutations whose name contains one of those.
+    let only = std::env::var("REDOUBT_MODEL_MUTATIONS").unwrap_or_default();
+    let wanted = |m: &Mutation| only.is_empty() || only.split(',').any(|s| format!("{m:?}").contains(s));
+    for m in Mutation::ALL.into_iter().filter(wanted) {
         let mut caught = None;
-        for (name, f) in FAMILIES {
-            if let Some(fail) = run(name, f, sequences(CAP).min(CAP), Some(m)) {
+        for (name, f, divisor) in FAMILIES {
+            if let Some(fail) = run(name, f, sequences(CAP).min(CAP).div_ceil(divisor), Some(m)) {
                 caught = Some(fail);
                 break;
             }

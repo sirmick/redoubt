@@ -12,8 +12,8 @@ mod common;
 use common::*;
 
 fn family(i: usize, default: u64) {
-    let (name, f) = FAMILIES[i];
-    let n = sequences(default);
+    let (name, f, divisor) = FAMILIES[i];
+    let n = sequences(default).div_ceil(divisor);
     if let Some(fail) = run(name, f, n, None) {
         panic!("{}", explain(&fail, None));
     }
@@ -45,11 +45,16 @@ fn steward_noninterference() {
     family(4, 10_000)
 }
 
+#[test]
+fn flood() {
+    family(5, 20_000)
+}
+
 /// The acceptance run: 10^6 sequences of every family.
 #[test]
 #[ignore]
 fn million() {
-    for (i, (name, _)) in FAMILIES.iter().enumerate() {
+    for (i, (name, _, _)) in FAMILIES.iter().enumerate() {
         let t = std::time::Instant::now();
         family(i, 1_000_000);
         eprintln!("{name}: {:.1} s", t.elapsed().as_secs_f64());
