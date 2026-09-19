@@ -23,6 +23,13 @@ because a process can only name indices into its own table. The kernel knows its
   kernel guarantees the badge; the server gives it meaning.
 - **Attenuation** is asking the server to mint a narrower badge. Semantic rights (read-only, a
   subdirectory, a port range) are enforced by the server.
+- **One badge, one client.** Every copy of a handle carries the same badge, and the kernel gives a
+  server no per-process identity, so all holders of a copy share one connection (one 9P fid table).
+  Rule: **a launcher never passes its own connection to a child.** It asks the server for a fresh
+  connection for each child (the server mints one, through a typed "connect" operation) and passes
+  that. Otherwise a hostile agent started by Alice's shell could read, close or wipe her open files.
+  Servers also key per-client state by (badge, account, label set) as a second line of defence
+  (CONTAINMENT.md).
 
 ## IPC
 Two primitives, each with a timeout (KERNEL-SPEC.md, Messages):
@@ -42,6 +49,8 @@ Two primitives, each with a timeout (KERNEL-SPEC.md, Messages):
   the server, charged to it, until it replies.
 - **Exit notices.** Whoever creates a process names an endpoint and receives one exit notice there;
   the creator pays for the notice when it creates the process. There are no death subscriptions.
+- **Badge notices.** A server learns when the last handle with one of its badges is gone (closed, or
+  its holder dead or revoked), and frees that client's state (KERNEL-SPEC.md, Messages).
   There is no per-process kill: a process that must be killable on its own gets its own budget, and
   killing it means destroying that budget.
 - **Interrupts** are received like messages: a driver thread waits on its IRQ handle.
@@ -60,7 +69,9 @@ revokes every handle stamped with it or a descendant, wherever the copies went.
   in it, and its handle is never given to another principal.
 - **Creating a process in a budget** charges it to that budget and attributes it to that budget's
   account.
-- **Leases** are budgets with a kernel deadline; the kernel destroys them when it passes.
+- **Leases** are budgets with a kernel deadline; the kernel destroys them when it passes. A lease
+  is at most `MAX_LEASE` (24 h, KERNEL-SPEC.md); the steward refuses a longer request rather than
+  clamping it silently.
 - **Budget ids are never reused**, so a stale stamp never matches a new budget. Ids identify; only
   handles grant.
 
@@ -88,10 +99,12 @@ share's stamp. Alice un-shares: the scope is destroyed, and `sub` dies with it.
    count against the sponsor's admission limits, and crashes blamed on it log out the sponsor's
    sessions (CONTAINMENT.md). The sponsor answers for its agents.
 3. **Delegation only narrows.** Human -> agent -> sub-agent, each step attenuated, the chain
-   recorded. Agents may spawn sub-agents in child budgets freely; a new durable principal, or a
-   budget with more labels than its parent, needs the steward and an approval.
+   recorded. Agents may spawn sub-agents freely, as budgets **inside their own budget**: an agent
+   holds only its own budget handle, so it cannot create siblings, and destroying the agent's budget
+   (lease expiry) ends its sub-agents with it (R10), whatever their own deadlines. A new durable
+   principal, or a budget with more labels than its parent, needs the steward and an approval.
 4. **Task-scoped leases:** "read `~/project`, write `~/project/out`, connect to `203.0.113.0/24:443`,
-   2 hours, 256 MB, 4 processes, weight 20".
+   2 hours, 256 MB, 4 processes, weight 20", at most `MAX_LEASE`.
 5. **Assume every agent is compromised** by something it read. A hijacked agent can do what its
    capabilities allow, until its lease ends, and nothing more. It can run code it wrote, but never
    with more authority than it holds (PACKAGES.md).
@@ -124,10 +137,14 @@ declassification). Most things need none.
   refuses to enrol a key in both roles; `sshd` rejects authentication with any public key `keyd`
   holds; session network capabilities never include the box's own addresses. Otherwise a hijacked
   session could log in to `approve@box` over loopback, signing with `keyd`, and approve itself.
-- **Rendering.** The steward renders from the structured request: what, where, how long, and the
-  label consequences. Printable text only, control characters stripped, every field length-capped.
-  Names are steward-assigned (`agent-7`); the requester's free-text reason is quoted, escaped and
-  marked untrusted.
+- **Rendering.** The steward renders from the structured request: who is asking (the requester's
+  kind, such as agent or session, and its steward-assigned name, `agent-7`, besides its principal),
+  what, where, how long, and the label consequences. Every rendered field is a whitelist of
+  printable ASCII (0x20-0x7E; anything else is escaped), length-capped: stripping control
+  characters alone would miss bidi and format characters (U+202E, U+2066, U+200B). An unlabelled
+  requester's free-text reason is quoted, escaped and marked untrusted. A **labelled** requester's
+  request shows only text the steward generates (kind, target, size); its free text reaches the
+  screen only through declassification (CONTAINMENT.md).
 - **Binding.** Each request has a random 64-bit id and a hash of its exact content; approving
   confirms both. The request is frozen until answered; any change makes it a new request.
 - **Limits and labels.** Each (account, label set) has a cap on pending requests. A request from a

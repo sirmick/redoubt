@@ -21,10 +21,11 @@ Initial values; changing one is a spec change (HISTORY.md).
 | `MAX_OPEN_CALLS` | 64 | open calls per process (taken by `receive`, not yet replied to) |
 | `MAX_START_HANDLES` | 64 | handles in one `process_start` list |
 | `MAX_RANDOM` | 64 | bytes one `random` call returns |
-| `WAIT_CAP` | 16 | blocked senders per (account, label set) per endpoint |
+| `WAIT_CAP` | 16 | queued messages per (account, label set) per endpoint (R2) |
 | `STRIDE` | 2^20 | stride scheduling numerator |
 | `SLICE` | 10 ms | time slice |
 | `FOREVER` | `u64::MAX` | a timeout that never expires; as a deadline, none |
+| `MAX_LEASE` | 24 h | the longest lease the steward grants: a deadline at most this far ahead (steward policy, not checked by the kernel; CAPABILITIES.md) |
 
 Time is monotonic microseconds since boot (`u64`). Timeouts are relative microseconds, added to the
 current time with saturation (so `FOREVER` never expires). A budget deadline is absolute
@@ -55,17 +56,23 @@ have account 0 and no labels. `init` receives handles to all three.
 exit endpoint handle, an exit slot, a started flag, and its open calls (at most `MAX_OPEN_CALLS`).
 The **exit slot** holds the one exit notice; it is charged to the creator's budget by
 `process_create`, so a notice never allocates. It is freed when the notice is received or dropped,
-or with the creator's budget (R10). Each thread records the account of the message it is serving (0
-when none): set when `receive` delivers a message, cleared by `reply`.
+or with the creator's budget (R10).
 
 An **open call** is a `call` a thread has taken with `receive` and not yet replied to. A thread may
 hold several; its process may hold at most `MAX_OPEN_CALLS`. Each costs a page (below) while it is
-open.
+open. A `send` is never an open call. The kernel records each open call's sender account and labels,
+and the order in which its thread took them. A thread's **serving account** is the account of its
+most recently taken call that is still open (0 when it holds none): whom a fault blames (Messages,
+exit notices).
 
 **Endpoint**: the object clients call and servers receive on. Its **owner** is the budget of the
 process that created it (it is charged there). It holds the threads blocked in `send`/`call` on it,
 grouped by the sender's (account, label set), and a round-robin cursor over those groups. It
-survives the death of processes receiving on it.
+survives the death of processes receiving on it. For each non-zero badge that has a handle to it, the
+endpoint keeps a **badge slot**: how many handles carry that badge (in every table, and in messages
+not yet received), and one pending-notice flag. The `mint` that creates a badge's first handle
+creates its slot, charged to the endpoint's owner; the slot is freed when no handle carries the
+badge and no notice is pending.
 
 **Device**: one of
 - MMIO: a physical range, and a DMA flag;
@@ -91,13 +98,14 @@ badge 0. Handles to budgets, processes and devices carry badge 0.
 | handle table | 1 per 128 handles | the process's budget |
 | open call | 1 while open | the receiving process's budget |
 | exit slot | 1 | the creator's budget (`process_create`'s caller) |
+| badge slots | 1 per 128 slots | the endpoint's owner |
 
 Plus the pages themselves: mapped, lent under R3, or transferred. The handle-table figure assumes a
 handle of 24-32 bytes (object reference, 64-bit badge, 64-bit stamp); WP-K1's implementer confirms
-it, and a different figure is a change to this table. The exit slot is its own page, not part of
-the process's: the process is charged to its budget and dies with it (R10), but its `killed`
-notice must outlive it, paid by someone still alive. One page, like every other object, keeps the
-accounting uniform.
+it, and a different figure is a change to this table; likewise the badge-slot figure (a slot is a
+badge, a count and a flag). The exit slot is its own page, not part of the process's: the process
+is charged to its budget and dies with it (R10), but its `killed` notice must outlive it, paid by
+someone still alive. One page, like every other object, keeps the accounting uniform.
 
 ## Messages
 A message carries:
@@ -117,9 +125,23 @@ non-zero and never reused, so a stale `reply` or `mint` cannot reach a later mes
   buffer, if any, is a transfer);
 - an interrupt: the IRQ handle fired;
 - an exit notice (on an endpoint named as some process's exit endpoint): `(pid, cause, code,
-  blamed_account)`, where `cause` is `exited`, `faulted` or `killed` and `blamed_account` is the
-  account the faulting thread was serving (0 if none);
+  blamed_account, blamed_labels)`, where `cause` is `exited`, `faulted` or `killed`. A
+  `process_exit` while the process holds open calls (a Rust panic, say) is reported `faulted`, like
+  a fault. For `faulted`, `blamed_account` is the serving account of the thread that faulted or
+  called `process_exit`, and `blamed_labels` are the labels of that open call's sender; otherwise
+  `blamed_account` is 0 and `blamed_labels` empty;
+- a **badge notice** (on a badge-0 endpoint handle): `(badge)`: the last handle with that badge to
+  the endpoint was closed or destroyed;
 - `Timeout`.
+
+Notices are returned before messages when both are pending on an endpoint.
+
+**Badge notices.** When a badge slot's count reaches 0 (`handle_close`, a process's death, R10, or a
+message carrying the handle being discarded), the kernel sets the slot's pending flag: a badge has at
+most one pending notice, and a notice never allocates. A `mint` of that badge before the notice is
+received withdraws it. A badge notice follows the exit notices' label rule (R1), with the budget of
+the process whose table held the last handle in place of the exiting budget; one that fails it is
+dropped.
 
 ## Rules
 **R1. Label check.** The receiver is the endpoint's **owner** budget, whichever thread takes the
@@ -127,12 +149,14 @@ message, so the check is decided when the message is sent. When both the sender'
 owner are class `user`, a message is delivered only if their label sets are **equal**; otherwise the
 sender gets `LabelDenied`. When either side is class `system`, the kernel does not check (system
 servers check themselves; CONTAINMENT.md). An exit notice is delivered only if the exit endpoint's
-owner is class `system` or its labels ⊇ the exiting budget's; otherwise it is dropped.
+owner is class `system` or its labels ⊇ the exiting budget's; otherwise it is dropped. Badge
+notices follow the same rule (Messages).
 
 **R2. Fair waiting.** Blocked senders on an endpoint are grouped by the sender budget's (account,
 label set) and served round-robin by group: each `receive` takes the oldest message of the next
-group after the last one served. A group with `WAIT_CAP` senders already blocked on an endpoint gets
-`Busy` immediately. (Keyed by label set too, so a vault session and its owner's unlabelled session,
+group after the last one served. A group with `WAIT_CAP` messages already queued on the endpoint
+gets `Busy` immediately. Only queued messages count (sent, not yet taken): a taken call waiting for
+its reply is bounded by the server's open calls (R4a). (Keyed by label set too, so a vault session and its owner's unlabelled session,
 which share an account, share neither a turn nor a cap: CONTAINMENT.md.)
 
 **R3. Lends outlive their lender.** If the caller dies, or its call times out, after the server took
@@ -142,12 +166,15 @@ the message, the lent pages stay mapped in the server and are **charged to the s
 
 **R4. Transfer opt-in.** A receiver gets transferred pages only if its `receive` named a
 `max_transfer` at least the transfer's size, and its process's budget has the free pages to hold
-them. Otherwise the pending transfer fails its sender with `Refused`, and the kernel moves on to the
+them and the page tables to map them. Otherwise the pending transfer fails its sender with `Refused`, and the kernel moves on to the
 next sender. (`Refused` tells the sender one bit about the receiver's budget, and only a sender the
-receiver chose to accept transfers from.)
+receiver chose to accept transfers from.) A receiver whose budget cannot pay for a message's
+handles gets `OutOfMemory` from `receive`, and the message stays queued, for a `send` as for a
+`call` (R4a).
 
 **R4a. Open calls.** A `receive` on an endpoint while the process holds `MAX_OPEN_CALLS` open calls
-gets `Busy`. Taking a `call` opens it and charges its page to the receiving process's budget; if the
+gets `Busy`, whether it began so or was already waiting when the process reached the limit (other
+threads took calls meanwhile); the call stays queued. Taking a `call` opens it and charges its page to the receiving process's budget; if the
 budget cannot pay for that page, the message's handles or the page tables to map its lend, the
 `receive` gets `OutOfMemory` and the message stays queued. `reply` closes it and frees the page.
 `reply` to a `send`'s message id gets `InvalidArgument`: a send is never an open call.
@@ -162,7 +189,8 @@ IRQ handle unmasks the source when it begins, then returns when `fired` is set (
 is no acknowledge call.
 
 **R6. Charging.** Every kernel object (pages, page tables, handle tables, thread contexts, endpoints,
-budgets, open calls, exit slots) is charged in pages to its owning budget, as the cost table says.
+budgets, open calls, exit slots, badge slots) is charged in pages to its owning budget, as the cost
+table says.
 A budget's own object is charged to itself; a budget with zero limits (a **revocation scope**) is
 charged to its parent. A parent's usage counts its **children's limits**, never their live usage.
 
@@ -178,11 +206,19 @@ caller's budget. A handle received in a message keeps its stamp. For `mint`, see
 **R10. Destruction.** Destroying budget B destroys its descendants first, kills their processes (each
 exit notice has cause `killed`), closes every handle stamped with B or a descendant in every
 process's table, frees every object charged to them, and returns their carved limits to B's parent.
-Calls blocked on a destroyed endpoint, and calls in flight to it, fail with `Dead`.
+Calls blocked on a destroyed endpoint, and calls in flight to it, fail with `Dead`; the lend of a
+call the server had taken stays with it as in R3, charged to it until its `reply` or its death.
+Revocation reaches messages already sent: a queued message sent through a handle stamped with B or
+a descendant fails its sender with `Dead`; a taken call sent through one fails its caller with
+`Dead` at once, and stays open at the server, its lend kept as in R3 and its reply discarded (the
+reply's handles are dropped).
 
 **R11. Memory.** No mapping is ever writable and executable. Every page is zeroed before a process
 first sees it. Userspace never maps RAM by physical address; a DMA driver learns the physical
-address of pages the kernel gave it.
+address of pages the kernel gave it. A page-table page is allocated when a mapping first needs it
+and freed when it maps nothing. The kernel chooses the addresses `map_anon`, `map_device` and
+`dma_alloc` return; nothing may depend on them, and WP-C1 compares usage only in the model's
+placement profile.
 
 **R12. Scheduling.** System-class runnable budgets run before user-class ones. Within a class, one
 flat stride queue over budgets with runnable threads: run the lowest pass; at every deschedule, pass
@@ -206,14 +242,14 @@ the kernel panic.
 | `process_exit` | code | exit notice `exited` |
 | `process_create` | h(budget), h(exit endpoint) -> h(process) | budget's weight not 0; its process and page limits; exit slot charged to the caller |
 | `process_map` | h(process), src, dst, len, flags | process not started; src owned by caller; pages move to the child's budget; not W+X |
-| `process_start` | h(process), entry, sp, handles | not started; at most `MAX_START_HANDLES` handles, copied into slots 1..n |
+| `process_start` | h(process), entry, sp, arg, handles | not started; at most `MAX_START_HANDLES` handles, copied into slots 1..n; `arg` reaches the first thread unchanged, like `thread_create`'s (the startup page's address, 0 = none: INIT.md) |
 | `endpoint_create` | -> h (badge 0) | pages charged |
-| `mint` | source, badge, optional h(budget) -> h | see below |
+| `mint` | source, badge, optional h(budget) -> h | see below; a new badge's slot charged to the endpoint's owner |
 | `call` | h, words, handles, lend, timeout -> reply | endpoint; R1; R2; lend rules |
 | `send` | h, words, handles, transfer, timeout | endpoint; R1; R2; rendezvous |
-| `receive` | h or none, timeout, max_transfer -> message, interrupt, exit notice | badge-0 endpoint, IRQ, or none (sleep); R4a |
+| `receive` | h or none, timeout, max_transfer -> message, interrupt, exit notice, badge notice | badge-0 endpoint, IRQ, or none (sleep); R4, R4a |
 | `reply` | msg_id, words, handles | msg_id is an open call of the caller's thread; returns the lend |
-| `handle_close` | h | - |
+| `handle_close` | h | - (the last handle with a badge sets its notice) |
 | `budget_create` | h(parent), pages, processes, weight, class, labels, account, deadline -> h | R6-R8; class and labels below; depth < `MAX_DEPTH` |
 | `budget_destroy` | h(budget) | always allowed to a holder |
 | `budget_usage` | h(budget) -> counters | caller's budget is class `system`, or its labels ⊇ target's |
@@ -222,8 +258,8 @@ the kernel panic.
 | `system_reset` | h(Reset), kind | Reset device handle |
 
 **`mint(source, badge, budget?)`** creates a handle to an endpoint with `badge != 0`.
-- `source` is either a message id the caller is serving (the new handle is to the endpoint the
-  message arrived on; default stamp = the stamp of the handle the message was sent through), or a
+- `source` is either the message id of an open call of the caller's thread (the new handle is to
+  the endpoint the call arrived on; default stamp = the stamp of the handle the message was sent through), or a
   badge-0 endpoint handle the caller holds (default stamp = that handle's stamp).
 - With no budget handle, the new handle gets the default stamp. With one, the budget must be the
   default stamp or a descendant of it (`NotPermitted` otherwise): a budget handle only narrows.
@@ -247,7 +283,8 @@ and must match this note. These rules of the encoding are part of the spec:
   a 32-bit value or one address or length. `redoubt-sys` therefore has no width `cfg`
   (MEMORY-LAYOUT.md).
 - **Records** (what does not fit in registers: message bodies, a budget's fields, the
-  `process_start` list, what `receive` returns, `budget_usage`'s counters) are arrays of 64-bit little-endian slots at an
+  `process_start` list, what `receive` returns (a notice's kind and fields included),
+  `budget_usage`'s counters) are arrays of 64-bit little-endian slots at an
   8-byte-aligned address in the caller's memory, the same on both widths.
 - **Decoding refuses W+X flags and a `mint` badge of 0**; the kernel's mapping and minting code
   refuse them again (R11, I3), so neither rests on one check.
@@ -272,8 +309,8 @@ executable model and a replayed trace (WP-C1) agree exactly:
    page-aligned, non-empty, in user space and mapped as the call needs (`InvalidArgument`).
 3. **Permission**: `NotPermitted`, `ClassDenied`, `LabelDenied`.
 4. **Resources**: `OutOfMemory`, `OutOfProcesses`, `TooManyThreads`, `Busy`.
-5. **At delivery** (`call`, `send`, `receive`, after blocking or not): `Refused`, `Timeout`,
-   `Dead`, `OutOfMemory`.
+5. **At delivery** (`call`, `send`, `receive`, after blocking or not): `Refused`, `Busy`
+   (`receive` only), `Timeout`, `Dead`, `OutOfMemory`.
 
 Per call, in the order checked. "Then" lists stages 2-5; "each h" is every handle in a list, in
 order. A call that allocates also fails with `OutOfMemory` when the caller's handle table must grow
@@ -291,12 +328,12 @@ and its budget cannot pay (last, after the errors listed).
 | `process_exit` | code: `InvalidArgument` | - |
 | `process_create` | each h: `BadHandle` | `BadHandle`, `WrongObject` (budget), `BadHandle`, `WrongObject` (exit endpoint), `InvalidArgument` (budget weight 0), `OutOfProcesses`, `OutOfMemory` (the budget: process, page tables; then the caller: exit slot) |
 | `process_map` | h: `BadHandle`; flags: `InvalidArgument` | `BadHandle`, `WrongObject`, `InvalidArgument` (src range, not the caller's own RAM; dst range, occupied; flags), `NotPermitted` (started), `OutOfMemory` (the child's budget) |
-| `process_start` | h: `BadHandle`; count over `MAX_START_HANDLES`: `TooLarge`; list: record, each h `BadHandle` | `BadHandle`, `WrongObject`, `BadHandle` (each h), `NotPermitted` (started), `OutOfMemory` (the child's budget: thread, then table) |
+| `process_start` | h: `BadHandle`; `arg`: not checked; count over `MAX_START_HANDLES`: `TooLarge`; list: record, each h `BadHandle` | `BadHandle`, `WrongObject`, `BadHandle` (each h), `NotPermitted` (started), `OutOfMemory` (the child's budget: thread, then table) |
 | `endpoint_create` | - | `OutOfMemory` |
-| `mint` | source: tag `InvalidArgument`, message id 0 `InvalidArgument`, handle `BadHandle`; badge 0: `InvalidArgument`; budget h: `BadHandle` | source: a message id the caller is not serving `InvalidArgument`, its endpoint or stamp gone `Dead`; or a handle `BadHandle`, `WrongObject`; budget: `BadHandle`, `WrongObject`; `NotPermitted` (a handle source's badge not 0), `NotPermitted` (budget not the default stamp or below), `OutOfMemory` |
+| `mint` | source: tag `InvalidArgument`, message id 0 `InvalidArgument`, handle `BadHandle`; badge 0: `InvalidArgument`; budget h: `BadHandle` | source: a message id that is not an open call of the caller's thread (a `send`'s id included) `InvalidArgument`, its endpoint or stamp gone `Dead`; or a handle `BadHandle`, `WrongObject`; budget: `BadHandle`, `WrongObject`; `NotPermitted` (a handle source's badge not 0), `NotPermitted` (budget not the default stamp or below), `OutOfMemory` (a new badge's slot, in the endpoint's owner) |
 | `call` | h: `BadHandle`; lend: exactly one of address and page count 0 is `InvalidArgument`; body: record, count `TooLarge`, each h `BadHandle` | `BadHandle`, `WrongObject` (not an endpoint), `BadHandle` (each h), `TooLarge` (lend over `MAX_LEND_PAGES`), `InvalidArgument` (lend not page-aligned or not the caller's own writable RAM), `LabelDenied` (R1), `Busy` (R2); at delivery: `Timeout`, `Dead`, `OutOfMemory` (the reply's handles do not fit the caller) |
 | `send` | as `call`, with the transfer for the lend | as `call` without the lend limit; at delivery: `Refused` (R4), `Timeout`, `Dead` |
-| `receive` | h (0 = none): `BadHandle`; record | `BadHandle`, `WrongObject` (not an endpoint or IRQ), `NotPermitted` (badge not 0), `Busy` (R4a); at delivery: `Timeout`, `Dead` (endpoint destroyed), `OutOfMemory` (R4a; the message stays queued) |
+| `receive` | h (0 = none): `BadHandle`; record | `BadHandle`, `WrongObject` (not an endpoint or IRQ), `NotPermitted` (badge not 0), `Busy` (R4a); at delivery: `Busy` (R4a: the limit reached while waiting; the call stays queued), `Timeout`, `Dead` (endpoint destroyed), `OutOfMemory` (R4, R4a; the message stays queued) |
 | `reply` | msg_id 0: `InvalidArgument`; body: record, count `TooLarge`, each h `BadHandle` | `InvalidArgument` (msg_id not an open call of the caller's thread, including a `send`'s id), `BadHandle` (each h) |
 | `handle_close` | h: `BadHandle` | `BadHandle` |
 | `budget_create` | h: `BadHandle`; spec: record, labels over `MAX_LABELS` before deduplication `TooLarge`, class tag or a 32-bit field `InvalidArgument` | `BadHandle`, `WrongObject`, `TooLarge` (the child would be at depth `MAX_DEPTH`), `ClassDenied` (class `system`), `LabelDenied` (labels not ⊇ the parent's), `ClassDenied` (labels added), `OutOfMemory` (pages over the parent's free pages, or no free page in the parent for a scope's object), `OutOfProcesses`, `InvalidArgument` (weight over the parent's free weight), `OutOfMemory` (pages fewer than the budget's own object) |
@@ -321,18 +358,23 @@ Numbered for the executable model and the property tests.
    call held by the budget's processes); the children's limits plus its own objects fit in its
    limits.
 6. Labels never change; `labels(child) ⊇ labels(parent)`; only a system-class creator adds labels.
-7. Messages between two user budgets flow only between equal label sets; exit notices and usage
+7. Messages between two user budgets flow only between equal label sets, compared with the
+   endpoint's owner (R1): handing a receive right to another budget is delegation, and a receive
+   right is never handed across label sets (CONTAINMENT.md). Exit notices, badge notices and usage
    reads flow only to ⊇ label sets or to a system-class budget.
 8. `class(child) <= class(parent)`, and only a system-class caller creates a system-class budget;
    `account(child) = account(parent)` unless the parent's is 0.
 9. No page is ever mapped writable and executable; every page is zeroed before a process first sees
    it; a lent page is unmapped from its lender until the call ends.
-10. Creating and then destroying a budget leaves its parent's usage and free limits unchanged.
+10. Creating and then destroying a budget leaves its parent's usage and free limits unchanged, once
+    its processes' exit notices are received or dropped.
 11. With k (account, label set) groups blocked on an endpoint, each group's oldest message is taken
     within k receives.
 12. Budget ids and message ids are never reused; a message id is never 0.
 13. Every blocking call returns by its timeout.
 14. No sequence of system calls, with any arguments, panics the kernel.
+15. A badge notice is delivered only when no handle with that badge to that endpoint exists; a badge
+    has at most one pending notice.
 
 ## Added in milestone 2
 `budget_children(h) -> [h]`, so a restarted steward can enumerate and destroy what it created
