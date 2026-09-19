@@ -1,0 +1,13 @@
+description = "A second hart, started via SBI HSM, contends on the spinlock big-kernel-lock without losing updates"
+arch = ["rv64", "rv32"]
+kind = "boot"
+programs = ["log-server"]
+kernel_features = ["smp"]
+smp = [2]
+timeout_secs = 60
+expect = ['SMP SPIKE:.* OK']
+forbid = ['MISMATCH', 'could not start']
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]

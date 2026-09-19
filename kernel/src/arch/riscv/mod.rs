@@ -12,6 +12,8 @@ mod mmu_flags;
 pub mod panic;
 pub mod process;
 mod physmap;
+#[cfg(all(feature = "smp", feature = "sbi"))]
+pub mod smp;
 pub mod syscall;
 
 pub fn current_pid() -> PID { PID::new(mem::pid_from_satp(satp::read().bits()) as _).unwrap() }

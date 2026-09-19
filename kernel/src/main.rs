@@ -88,6 +88,11 @@ fn next_pid_to_run(last_pid: Option<PID>) -> Option<PID> {
 /// Common main function for baremetal and hosted environments.
 #[no_mangle]
 pub extern "C" fn kmain() {
+    // SMP bring-up spike: start a second hart and validate the spinlock big-kernel-lock
+    // under real cross-hart contention before entering the scheduler. See arch/riscv/smp.rs.
+    #[cfg(all(baremetal, feature = "smp", feature = "sbi"))]
+    crate::arch::smp::run();
+
     // Start performing round-robin on all child processes.
     // Note that at this point, no new direct children of INIT may be created.
     let mut pid = None;
