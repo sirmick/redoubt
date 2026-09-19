@@ -1,6 +1,6 @@
 //! Attacker: hostile arguments to every call WP-K1 built (I14): bad and wide handles, unknown
 //! numbers, non-zero unused registers, records misaligned, at 0, in the kernel, read-only,
-//! straddling into an unmapped page, malformed slot by slot, the largest values; the order in
+//! never touched, straddling into an unmapped page, malformed slot by slot, the largest values; the order in
 //! which the stages report them; then a few thousand calls with arguments drawn from a pool of
 //! hostile values. No argument may panic the kernel. Each targeted attempt's error is printed as
 //! progress; the verdict is the victim's report and the checker's power-off, which a panicked
@@ -32,6 +32,11 @@ pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
     log!(logger, "[attacker] starting");
     let scratch = (&raw mut SCRATCH) as usize;
+    // Decoding never backs an untouched page (QUESTIONS.md 115), so touch every page of SCRATCH.
+    for word in (0..1024).step_by(512) {
+        // SAFETY: an in-bounds word of SCRATCH, this program's own.
+        unsafe { ((&raw mut SCRATCH) as *mut u64).add(word).write_volatile(0) };
+    }
     let text = _start as *const () as usize & !7;
     // A page mapped, then one unmapped right after it.
     let pages = xous::map_memory(None, None, 8192, MemoryFlags::R | MemoryFlags::W).expect("map");
@@ -87,7 +92,10 @@ pub extern "C" fn _start() -> ! {
         call(Number::BudgetCreate, [rd::SYSTEM as usize, at(&spec), 1, 0, 0, 0, 0]),
     ];
     log!(logger, "[i14] budget_create order -> {:?}", order);
+    // A page reserved and never touched: decoding does not back it (QUESTIONS.md 115).
+    let untouched = xous::map_memory(None, None, 4096, MemoryFlags::R | MemoryFlags::W).expect("map");
     let usage = [
+        call(Number::BudgetUsage, [rd::SYSTEM as usize, untouched.as_ptr() as usize, 0, 0, 0, 0, 0]),
         call(Number::BudgetUsage, [rd::SYSTEM as usize, text, 0, 0, 0, 0, 0]),
         call(Number::BudgetUsage, [rd::SYSTEM as usize, scratch + 1, 0, 0, 0, 0, 0]),
         call(Number::BudgetUsage, [rd::SYSTEM as usize, KERNEL, 0, 0, 0, 0, 0]),

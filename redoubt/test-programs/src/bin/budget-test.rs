@@ -1,16 +1,18 @@
-//! Budgets and handle tables as KERNEL-SPEC.md states them (WP-K1): carving and charging (R6,
-//! R7), classes and labels (I8), destruction (R10, I2, I10), the handle table's cost (128
-//! handles a page), usage within limits after every step (I5), `time_now` and `random`, and a
-//! short sequence whose every result the executable model predicts (written out below, for
-//! WP-C1). Must run as the loader's first program, which holds root, system and users in
+//! Budgets and handle tables as KERNEL-SPEC.md states them (WP-K1), as far as a system-class
+//! caller holding the boot budgets can see them: carving and charging (R6, R7), labels added
+//! and sorted (part of I6), depth, destruction and its sweep of this process's own table (R10,
+//! I2, I10), the handle table's cost (128 handles a page), usage within limits after every step
+//! (I5), `time_now` and `random`, and a short sequence whose every result the executable model
+//! predicts (written out below, for WP-C1). Must run as the loader's first program, which holds root, system and users in
 //! handles 1-3 and lives in system.
 //!
 //! What K1 cannot show from userspace, and which case will: accounts (R8) and stamps other than
 //! the caller's (R9) travel only in messages (WP-K2); a process killed by R10 in a budget below
 //! `system` needs `process_create` (WP-K4; `budget-destroy-kills` covers `system` itself); a
 //! user-class caller (the `ClassDenied` for labels, `budget_usage`'s `LabelDenied`) needs a
-//! process in a user budget (WP-K4). Budget ids never being reused (I12) is checked by the
-//! kernel on every handle lookup; the cycles below exercise it.
+//! process in a user budget (WP-K4). Budget ids never being reused (I12) is not visible from
+//! here: the kernel checks ids on every handle lookup, and the cycles below only exercise that
+//! path.
 
 #![no_std]
 #![no_main]
@@ -149,7 +151,7 @@ pub extern "C" fn _start() -> ! {
     let again = expect!(t, rd::create(a, &rd::spec(1, 0, 0)), Ok(6)).unwrap_or(6);
     expect!(t, rd::destroy(again), Ok(()));
 
-    // --- I6, I8: classes and labels ----------------------------------------------------------
+    // --- Classes and labels (part of I6; I8 needs a user-class caller, WP-K4) -------------------
     // A child's class is its parent's (answer 73): the spec's class slot is not read until WP-A2
     // removes it, so asking for `system` under `users` is not refused, and gets a user budget.
     let asked = expect!(t, rd::create(rd::USERS, &labelled(1, &[], Class::System)), Ok(6)).unwrap_or(6);
@@ -265,7 +267,7 @@ pub extern "C" fn _start() -> ! {
     expect!(t, rd::usage(m), Err(Error::BadHandle));
     expect!(t, rd::usage(rd::SYSTEM), Ok(system0));
 
-    // --- I10 and I12 over many cycles: create, nest, destroy; nothing leaks or aliases -------
+    // --- I10 over many cycles: create, nest, destroy; nothing leaks ----------------------------
     for cycle in 0..500u64 {
         let b = rd::create(rd::SYSTEM, &rd::spec(8, 1, 1));
         let c = b.and_then(|b| rd::create(b, &rd::spec(3, 0, 0)));
