@@ -84,24 +84,35 @@ natives.
   off-heap entry is the only reference and the binary ends at the end of its bytes, so building
   a binary by appending is linear.
 
-### Stage 2 plan: several schedulers
-- **Locks without giving up `no_std`:** a small `sync` module with one `Lock<T>` type. With the
-  `std` feature it is `std::sync::Mutex` and schedulers are threads; without it, it is a
-  `RefCell` and there is one scheduler, as now. Redoubt userland has `std`. Sharing is `Arc` in
-  both. `Rc` and `RefCell` go (modules, zlib/crypto/file state, resources: a resource's value
-  becomes `Send + Sync` and keeps mutable state in a `Lock`).
-- **Messages through an inbox:** a sender cannot write into a heap another scheduler may be
-  using, so a message is copied into an `OwnedTerm` (BEAM's heap fragment) and pushed onto the
-  receiver's inbox under the inbox's own lock. The receiver moves its inbox into its heap and
-  mailbox when it runs and when a `receive` finds the mailbox exhausted. Step (a), done first on
-  one scheduler.
-- **Split `System`:** what every instruction reads (atoms, limits, the resolve cache, literal
-  chunks, loaded modules) sits behind its own locks or is immutable once set; the rest (ETS,
-  registry, timers, ports, files, links and monitors) stays one `System` behind one lock, taken
-  only by natives that need it. A running process is owned by its scheduler (taken out of the
-  table), so instructions touch nothing shared. Finer locks later where profiles show contention.
-- **Run queues:** one shared queue at first; per-scheduler queues with stealing only if measured
-  to matter. Reductions still bound each slice.
+### Stage 2: several schedulers (done 2026-09-19)
+- **Locks without giving up `no_std`** (`sync.rs`): one `Lock<T>`. With the `std` feature it is
+  a mutex and schedulers are threads; without it, a `RefCell` and one scheduler. Either way,
+  taking a lock the same thread holds panics (the mutex tracks its owner) rather than
+  deadlocking. Shared values are `Arc`; a resource's value is `Send + Sync` under `std` and
+  keeps mutable state in a `Lock`. Loaded modules are leaked `&'static Module` (as literal chunks
+  already were), so a return address is a plain copy: an `Arc` there made every call and return
+  bounce one cache line between cores.
+- **Messages through an inbox:** a sender never writes into another process's heap. A message
+  is built on a heap of its own (BEAM's heap fragment, copied before any lock is taken) and
+  queued in the receiver's table slot; the receiver appends fragments to its heap (shifting
+  pointers, no graph walk) when a `receive` runs out of messages.
+- **One lock for the rest** (`System`, behind `Lock`): a scheduler (`sched.rs`) runs a process's
+  instructions without it, from its own copies and caches (atoms, limits, literal chunks and
+  resolved calls, checked against generation counters). Natives lock it with `c.sys()` only
+  where they use it: arithmetic, lists, maps and binaries never do. A native that reads and
+  then acts holds one guard across both (spawn and set up, monitor, register, ETS operations,
+  `process_info`), and never calls something that locks again while holding it.
+- **A running process is its scheduler's:** changes other processes make to it (links,
+  monitors, names, group leader, receive timeouts) queue on its slot and apply when its slice
+  ends; exit signals to it wait; reading it (`process_info`) retries: the native asks to be
+  called again and the caller yields.
+- **Run queue:** one shared queue. A spawned process joins it when its parent's slice ends
+  (BEAM puts it on the parent's scheduler), so `monitor(process, spawn(F))` sees it alive.
+  Idle schedulers sleep on a condvar; when none runs, one blocks in `Platform::idle`.
+  `system_flag(schedulers_online, N)` parks the rest. `beamlet --schedulers N` picks the count
+  (default 1). Parallel `fib` on 1/2/4/8 schedulers: 339/167/87/47 ms.
+- **Next:** finer locks (ETS, atoms, the process table) where profiles show contention;
+  stage 3, dirty schedulers for long natives.
 
 Integers are `i64` and move to `BigInt` (`num-bigint`) only on overflow, and back when they fit, so
 each integer has one representation. Bignums are capped at 2^24 bits (`system_limit` beyond).
@@ -117,7 +128,7 @@ A match context (`Term::Match`) is internal: it exists only between `bs_start_ma
 of a binary match, as in BEAM.
 
 ## Processes and scheduling
-One VM runs on one thread. Processes live in a slot table; a pid carries a serial number so a
+One VM runs on one or more scheduler threads (see stage 2 above). Processes live in a slot table; a pid carries a serial number so a
 stale pid never reaches a process that reused the slot. The scheduler is round-robin with a
 budget of 2000 reductions (calls) per slice. Receive timeouts are a `BTreeSet` of deadlines; when
 nothing can run, the VM calls `Platform::idle(next_deadline)`.
