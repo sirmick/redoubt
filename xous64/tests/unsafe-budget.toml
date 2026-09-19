@@ -7,8 +7,8 @@ kind = "unsafe-budget"
 # Only code that runs on rv64 is counted; see TENETS.md for the baseline.
 
 [[budget]]
-name = "sv39 page-table crate"
-paths = ["xous64/sv39/src"]
+name = "paging crate (Sv32/Sv39 page tables)"
+paths = ["xous64/paging/src"]
 max_unsafe = 12
 max_undocumented = 0
 
@@ -34,7 +34,7 @@ paths = [
     "kernel/src/arch/riscv/irq.rs", "kernel/src/arch/riscv/process.rs", "kernel/src/arch/riscv/syscall.rs",
     "kernel/src/arch/riscv/mod.rs", "kernel/src/arch/riscv/exception.rs", "kernel/src/arch/riscv/panic.rs",
 ]
-max_unsafe = 12
+max_unsafe = 10
 max_undocumented = 0
 
 [[budget]]
@@ -43,5 +43,5 @@ paths = [
     "kernel/src/main.rs", "kernel/src/mem.rs", "kernel/src/services.rs", "kernel/src/server.rs",
     "kernel/src/syscall.rs", "kernel/src/irq.rs", "kernel/src/args.rs", "kernel/src/io.rs",
 ]
-max_unsafe = 36
+max_unsafe = 25
 max_undocumented = 0
