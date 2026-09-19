@@ -334,4 +334,12 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   account"; I10's caveat in RESOURCES.md. BUILD-PLAN.md gains the merged WP-K0 and WP-T1b and the
   follow-ups the answers require (WP-A2 ABI, WP-W2 generator, WP-M1 model, WP-R1b runtime), with
   Needs and Order updated; README.md's glossary and "Built today" follow.
+- **WP-R1 `redoubt-rt`** (`8298608af`): the native runtime (startup block, typed handles, IPC
+  helpers, heap, panic handler) and the shared server library (`admit` per (account, label set)
+  and per badge for account 0, `check` with write needing equal labels, a 9P skeleton keyed by
+  (badge, account, label set) that keeps `..` inside the root and treats qids and listings as
+  reads, typed dispatch with status 1 = `Malformed`); host tests against a fake kernel, an rv32
+  and rv64 build case, two fuzz targets. The review found fid tables shared by every copy of a
+  handle, server work done before admission, allocation failure killing the server, and a 32-bit
+  overflow in the startup parser; all fixed. Runs on the kernel after WP-K2.
 

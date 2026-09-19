@@ -59,7 +59,7 @@ merged; the waves show what can run together.
 | A1 | merged | wp-a1 | 44f1780a1 |
 | K0 | merged | wp-k0 | f7b9fdd16 |
 | T1b | merged | wp-t1b | 6cd067a39 |
-| R1 | review | wp-r1 | fix round; also carries WP-R1b (answers 39-42, 50-53) |
+| R1 | merged | wp-r1 | 8298608af (carried the answers 39-42, 50-53 part of R1b) |
 | K1 | building | wp-k1 | kernel track |
 | A2 | waiting | | ABI update for answers 28-55; after the design review round; before K2 |
 | W2 | ready | | generator: handle kinds, Malformed = 1 |
