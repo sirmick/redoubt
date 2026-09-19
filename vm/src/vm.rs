@@ -43,6 +43,7 @@ impl Default for Limits {
 pub struct System {
     pub platform: Box<dyn Platform>,
     pub limits: Limits,
+    pub ets: crate::ets::Tables,
     pub atom_table: AtomTable,
     pub atoms: Atoms,
     modules: BTreeMap<String, Rc<Module>>,
@@ -187,6 +188,7 @@ impl Vm {
             sys: System {
                 platform,
                 limits,
+                ets: crate::ets::Tables::default(),
                 atom_table,
                 atoms,
                 modules: BTreeMap::new(),
@@ -453,6 +455,22 @@ impl System {
         for (r, target) in &p.monitors {
             if let Some(t) = self.procs.get_mut(*target) {
                 t.monitored_by.remove(r);
+            }
+        }
+        // Its ETS tables go to their heirs, or are deleted.
+        for tid in self.ets.owned_by(pid) {
+            let heir = self.ets.get(tid).and_then(|t| t.heir.clone());
+            match heir {
+                Some((to, data)) if to != pid && self.procs.is_alive(to) => {
+                    let t = self.ets.get_mut(tid).expect("listed");
+                    t.owner = to;
+                    let id = if t.named { Term::Atom(t.name.clone()) } else { Term::Ref(Ref(t.tid)) };
+                    let tag = Term::Atom(self.atom("ETS-TRANSFER"));
+                    self.send(to, Term::tuple(alloc::vec![tag, id, Term::Pid(pid), data]));
+                }
+                _ => {
+                    self.ets.delete(tid);
+                }
             }
         }
         if self.watched.contains(&pid) {
