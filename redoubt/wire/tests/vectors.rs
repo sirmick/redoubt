@@ -296,12 +296,6 @@ fn layouts_by_hand() {
     assert_eq!(ErrorCode::Malformed.code(), redoubt_wire::typed::MALFORMED);
     assert_eq!(ErrorCode::from_code(1), Some(ErrorCode::Malformed));
     assert_eq!(ErrorCode::NotFound.code(), 2);
-    // Handle kinds are documentation, generated from the table.
-    use redoubt_wire::typed::HandleKind;
-    assert_eq!(Message::Grant(Grant { pages: 1 }).handle_kinds(), [HandleKind::Endpoint, HandleKind::Endpoint]);
-    assert_eq!(Reply::Grant(GrantReply {}).handle_kinds(), [HandleKind::Budget]);
-    assert_eq!(Message::Last(Last { note: "" }).handle_kinds(), [HandleKind::Process]);
-    assert_eq!(Message::Ping(Ping {}).handle_kinds(), []);
     // The file framing: opcode, then the fields, even for an inline message.
     let n = Message::Small(Small { a: 1, b: 0x0302 }).encode_file(&mut buf).unwrap();
     assert_eq!(buf[..n], [3, 0, 0, 0, 1, 2, 3]);

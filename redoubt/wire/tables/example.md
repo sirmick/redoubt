@@ -28,15 +28,15 @@ Then one row per message:
   as are Rust and Elixir keywords.
 - **Fields:** the request's fields in order, each `` `name: type` ``, separated by commas, or
   `-` for none. Types: `u8`, `u16`, `u32`, `u64`, `string` (`u16` length + UTF-8), `bytes`
-  (`u32` length + bytes), and `handle[N] KIND`: the handle in slot N, which must name an
-  object of kind KIND, one of `endpoint`, `budget`, `process`, `mmio`, `irq` or `reset`
-  (KERNEL-SPEC.md, Objects). Slots are numbered 0, 1, ... in order, at most 4
-  (`MAX_MSG_HANDLES`), and carry no bytes. The kind is required, and an unknown one is
-  refused, but it is documentation: the generator puts it in the codecs' docs and in
-  `handle_kinds()`, and nothing checks it on receipt, since the kernel does not report a
-  received handle's kind. A handle of the wrong kind is found by use: `WrongObject` on its
-  first use (a server may then reply `malformed`). There are no compound types; write a label
-  set or an address as `bytes` and state its inner layout in the note.
+  (`u32` length + bytes), and `handle[N] KIND` (one ASCII space between them): the handle in
+  slot N, which must name an object of kind KIND, one of `endpoint`, `budget`, `process`,
+  `mmio`, `irq` or `reset` (KERNEL-SPEC.md, Objects). Slots are numbered 0, 1, ... in order,
+  at most 4 (`MAX_MSG_HANDLES`), and carry no bytes. The kind is required, and an unknown one
+  is refused, but it is documentation: the generator puts it in the generated codecs' docs
+  only, and nothing checks it on receipt, since the kernel does not report a received
+  handle's kind. A handle of the wrong kind is found by use: `WrongObject` on its first use,
+  and the server replies `malformed`. There are no compound types; write a label set or an
+  address as `bytes` and state its inner layout in the note.
 - **Reply:** the reply's fields in the same form as Fields (with its own handle slots from 0),
   or `-` for a reply that is its status alone.
 

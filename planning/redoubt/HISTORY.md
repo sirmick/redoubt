@@ -413,4 +413,9 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   sizes root, system and users from RAM, every loader process lives in `system`, only the first
   holds the three handles, and a Redoubt call inside a legacy interrupt callback is `NotPermitted`.
   Kernel 11.8k -> 12.9k lines; `unsafe` unchanged. The red team found nothing exploitable.
+- **WP-W2 wire generator** (`3715363a9`): the generator follows answers 28, 41, 42, 56 and 98:
+  `handle[N] KIND` names the object a handle must be (documentation in the generated code, checked
+  by use); code 1 is `Malformed` in every protocol, reserved by the generator, so a protocol's own
+  codes start at 2 and an error table may be empty (`example` renumbered). Vectors run on the BEAM
+  and on beamlet; fuzzed. The review found nothing exploitable.
 

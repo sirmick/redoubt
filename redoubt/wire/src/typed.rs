@@ -127,8 +127,8 @@ pub fn reply_status(words: &Words, handles: usize) -> Result<Option<u32>, Error>
 }
 
 /// The words of an error reply.
-pub fn error_reply(code: u32) -> Words {
-    [u64::from(code), 0, 0, 0]
+pub const fn error_reply(code: u32) -> Words {
+    [code as u64, 0, 0, 0]
 }
 
 /// Encodes a request (`word0` is its opcode) or a reply (`word0` is 0) in its layout's

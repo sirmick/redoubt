@@ -28,7 +28,7 @@ defmodule Redoubt.Wire do
   | `:bad_handles` | `BadHandles` | a handle count other than the layout's |
   | `:unexpected_buffer` | `UnexpectedBuffer` | an inline message with a buffer |
   | `:short` | `Short` | word 1 or a file names more bytes than there are |
-  | `:malformed` | `Short` | the fields end before their layout does |
+  | `:short_fields` | `Short` | the fields end before their layout does |
   | `:bad_utf8` | `BadUtf8` | a string field that is not UTF-8 |
   | `:trailing` | `Trailing` | bytes after the fields, or nonzero inline padding |
   | `:bad_status` | `BadStatus` | an error reply with a code not in the protocol's table |
