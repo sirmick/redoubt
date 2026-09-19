@@ -5,7 +5,6 @@
 //! could be wrong with the code (a Y register outside the frame, an operand of the wrong kind) is
 //! a [`Fault::BadCode`], which ends the process that ran it; it never panics the VM.
 
-use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 
@@ -69,7 +68,7 @@ pub struct Resume {
 
 pub fn run(sys: &mut Sched<'_>, p: &mut Process) -> Stop {
     let mut instructions = 0usize;
-    let mut module = p.pc.module.clone();
+    let mut module = p.pc.module;
     let mut resume = p.resume.take();
     loop {
         instructions += 1;
@@ -78,8 +77,8 @@ pub fn run(sys: &mut Sched<'_>, p: &mut Process) -> Stop {
         }
         // Hold the current module here, so fetching an instruction costs no reference-count
         // traffic; refresh it only when a call or return has moved to another module.
-        if !Arc::ptr_eq(&module, &p.pc.module) {
-            module = p.pc.module.clone();
+        if !core::ptr::eq(module, p.pc.module) {
+            module = p.pc.module;
             // Code loaded since the heap last looked brings literal chunks it must see.
             sys.refresh(p);
         }
@@ -95,7 +94,7 @@ pub fn run(sys: &mut Sched<'_>, p: &mut Process) -> Stop {
                 r.kind,
                 Some(r.native),
             ),
-            None => step(sys, p, &module),
+            None => step(sys, p, module),
         };
         if let Some(reason) = p.pending_exit.take() {
             return Stop::Exit(Err(Exception::exit(reason)));
@@ -269,7 +268,7 @@ fn reduce(p: &mut Process) -> bool {
 
 fn call_code(p: &mut Process, target: Cp, save_return: bool) -> Flow {
     if save_return {
-        p.cp = Some(p.pc.clone());
+        p.cp = Some(p.pc);
     }
     p.pc = target;
     if reduce(p) {
@@ -330,13 +329,7 @@ fn run_native(
     (m, f): (&crate::atom::Atom, &crate::atom::Atom),
     args: &[Term],
 ) -> R<Term> {
-    let result = n(
-        &mut Ctx {
-            sys: &mut sys.lock(),
-            p,
-        },
-        args,
-    );
+    let result = n(&mut Ctx::new(sys, p), args);
     // A native may have made literals (`persistent_term:put`) or loaded code whose literals it
     // returns.
     sys.refresh(p);
@@ -809,8 +802,8 @@ fn stacktrace(sys: &mut Sched<'_>, p: &mut Process, args: Option<Term>) -> Term 
 /// A stack trace of at most `depth` entries, starting at the current function.
 fn trace_here(atoms: &Atoms, depth: usize, p: &mut Process, args: Option<Term>) -> Term {
     let here = p.pc.pc.saturating_sub(1);
-    let module = p.pc.module.clone();
-    let head = trace_entry(atoms, &mut p.heap, &module, here, args);
+    let module = p.pc.module;
+    let head = trace_entry(atoms, &mut p.heap, module, here, args);
     let rest = continuations(atoms, p, depth.saturating_sub(usize::from(head.is_some())));
     match head {
         Some(h) => p.heap.cons(h, rest),
@@ -844,7 +837,7 @@ fn trace_of(atoms: &crate::atom::Atoms, heap: &mut Heap, points: &[Cp]) -> Term 
         entries.extend(trace_entry(
             atoms,
             heap,
-            &cp.module,
+            cp.module,
             cp.pc.saturating_sub(1),
             None,
         ));
@@ -883,7 +876,7 @@ pub(crate) fn where_is(p: &Process, depth: usize) -> alloc::string::String {
 /// at most `n`.
 pub(crate) fn stacktrace_points(p: &Process, n: usize) -> Vec<Cp> {
     let mut points = alloc::vec![Cp {
-        module: p.pc.module.clone(),
+        module: p.pc.module,
         pc: p.pc.pc
     }];
     points.extend(continuation_points(p, n.saturating_sub(1)));
@@ -935,7 +928,7 @@ fn install_handler(p: &mut Process, ins: &Instr) -> R {
         depth,
         y,
         target: Cp {
-            module: p.pc.module.clone(),
+            module: p.pc.module,
             pc,
         },
     });
@@ -958,7 +951,7 @@ fn remove_handler(p: &mut Process, ins: &Instr) -> R {
 
 // ---- the instruction loop ----
 
-fn step(sys: &mut Sched<'_>, p: &mut Process, module: &Arc<Module>) -> R<Flow> {
+fn step(sys: &mut Sched<'_>, p: &mut Process, module: &'static Module) -> R<Flow> {
     let here = p.pc.pc;
     let ins = module
         .code
@@ -1001,10 +994,7 @@ fn step(sys: &mut Sched<'_>, p: &mut Process, module: &Arc<Module>) -> R<Flow> {
 
         op::CALL | op::CALL_LAST | op::CALL_ONLY => {
             let target = label(ins, 1)?.ok_or(Fault::BadCode("call to no label"))?;
-            let cp = Cp {
-                module: module.clone(),
-                pc: target,
-            };
+            let cp = Cp { module, pc: target };
             if ins.op == op::CALL_LAST {
                 deallocate(p)?;
             }
@@ -1425,13 +1415,7 @@ fn step(sys: &mut Sched<'_>, p: &mut Process, module: &Arc<Module>) -> R<Flow> {
         // ---- messages ----
         op::SEND => {
             let (to, msg) = (p.x[0], p.x[1]);
-            p.x[0] = crate::bif::send(
-                &mut Ctx {
-                    sys: &mut sys.lock(),
-                    p,
-                },
-                &[to, msg],
-            )?;
+            p.x[0] = crate::bif::send(&mut Ctx::new(sys, p), &[to, msg])?;
         }
         op::LOOP_REC => {
             if p.save == p.mailbox.len() {

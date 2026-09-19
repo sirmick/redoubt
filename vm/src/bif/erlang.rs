@@ -25,7 +25,7 @@ pub fn is_bitstring(c: &mut Ctx, a: &[Term]) -> R {
     Ok(c.bool(matches!(a[0], Term::Bits(_))))
 }
 pub fn is_boolean(c: &mut Ctx, a: &[Term]) -> R {
-    let b = a[0].is_atom(&c.sys.atoms.true_) || a[0].is_atom(&c.sys.atoms.false_);
+    let b = a[0].is_atom(&c.atoms.true_) || a[0].is_atom(&c.atoms.false_);
     Ok(c.bool(b))
 }
 pub fn is_float(c: &mut Ctx, a: &[Term]) -> R {
@@ -299,13 +299,13 @@ pub fn atom_to_list(c: &mut Ctx, a: &[Term]) -> R {
 pub fn atom_to_binary(c: &mut Ctx, a: &[Term]) -> R {
     let atom = atom_arg(c, &a[0])?;
     if a.len() == 2
-        && !(a[1].is_atom(&c.sys.atoms.latin1)
-            || a[1].is_atom(&c.sys.atoms.unicode)
-            || a[1].is_atom(&c.sys.atoms.utf8))
+        && !(a[1].is_atom(&c.atoms.latin1)
+            || a[1].is_atom(&c.atoms.unicode)
+            || a[1].is_atom(&c.atoms.utf8))
     {
         return Err(c.badarg());
     }
-    if a.len() == 2 && a[1].is_atom(&c.sys.atoms.latin1) {
+    if a.len() == 2 && a[1].is_atom(&c.atoms.latin1) {
         let bytes: Option<Vec<u8>> = atom
             .as_str()
             .chars()
@@ -319,9 +319,10 @@ pub fn atom_to_binary(c: &mut Ctx, a: &[Term]) -> R {
 
 fn make_atom(c: &mut Ctx, s: &str, existing: bool) -> R {
     let atom = if existing {
-        c.sys.atom_table.existing(s).ok_or_else(|| c.badarg())?
+        c.sys().atom_table.existing(s).ok_or_else(|| c.badarg())?
     } else {
-        match c.sys.atom_table.intern(s) {
+        let found = c.sys().atom_table.intern(s);
+        match found {
             Ok(a) => a,
             Err(crate::atom::AtomError::TooLong) => return Err(c.system_limit()),
             Err(crate::atom::AtomError::TableFull) => return Err(c.system_limit()),
@@ -343,7 +344,7 @@ pub fn list_to_existing_atom(c: &mut Ctx, a: &[Term]) -> R {
 fn binary_text(c: &Ctx, a: &[Term]) -> Result<String, Exception> {
     let b = binary(c, &a[0])?;
     let bytes = b.to_bytes();
-    if a.len() == 2 && a[1].is_atom(&c.sys.atoms.latin1) {
+    if a.len() == 2 && a[1].is_atom(&c.atoms.latin1) {
         Ok(bytes.iter().map(|&b| b as char).collect())
     } else {
         core::str::from_utf8(&bytes)
@@ -464,7 +465,7 @@ pub fn internal_list_to_integer(c: &mut Ctx, a: &[Term]) -> R {
 pub fn internal_binary_to_integer(c: &mut Ctx, a: &[Term]) -> R {
     match binary_to_integer(c, a) {
         Ok(n) => Ok(n),
-        Err(e) if e.reason.is_atom(&c.sys.atoms.system_limit) => Ok(c.atom("big")),
+        Err(e) if e.reason.is_atom(&c.atoms.system_limit) => Ok(c.atom("big")),
         Err(_) => Ok(c.atom("badarg")),
     }
 }
@@ -474,7 +475,7 @@ pub fn dt_true(c: &mut Ctx, _a: &[Term]) -> R {
 }
 
 pub fn dt_undefined(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(Term::Atom(c.sys.atoms.undefined))
+    Ok(Term::Atom(c.atoms.undefined))
 }
 
 pub fn dt_same(_c: &mut Ctx, a: &[Term]) -> R {
@@ -578,7 +579,7 @@ fn flatten_iolist(c: &Ctx, t: &Term, bits_ok: bool) -> Result<crate::bits::Build
             }
             _ => return Err(c.badarg()),
         }
-        if out.bit_len() > c.sys.limits.max_binary_bits {
+        if out.bit_len() > c.sys().limits.max_binary_bits {
             return Err(c.system_limit());
         }
     }
@@ -627,8 +628,8 @@ pub fn iolist_size(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn display(c: &mut Ctx, a: &[Term]) -> R {
     let text = alloc::format!("{}\n", c.show(a[0]));
-    c.sys.platform.console_write(text.as_bytes());
-    Ok(Term::Atom(c.sys.atoms.true_))
+    c.sys().platform.console_write(text.as_bytes());
+    Ok(Term::Atom(c.atoms.true_))
 }
 
 // ---- records and tuples ----
@@ -782,8 +783,8 @@ pub fn term_to_binary(c: &mut Ctx, a: &[Term]) -> R {
             }
         }
     }
-    let sys = &*c.sys;
-    let bytes = crate::etf::encode_compressed(&c.p.heap, a[0], level, &|m| sys.loaded_md5(m))
+    // The lock only for looking up a fun's module: encoding runs alongside other schedulers.
+    let bytes = crate::etf::encode_compressed(&c.p.heap, a[0], level, &|m| c.sys().loaded_md5(m))
         .map_err(|_| c.badarg())?;
     Ok(c.binary(&bytes))
 }
@@ -841,7 +842,7 @@ pub fn string_list_to_float(c: &mut Ctx, a: &[Term]) -> R {
         }
     }
     let no_float = |c: &mut Ctx| {
-        let (error, no_float) = (Term::Atom(c.sys.atoms.error), c.atom("no_float"));
+        let (error, no_float) = (Term::Atom(c.atoms.error), c.atom("no_float"));
         Ok(c.tuple(&[error, no_float]))
     };
     let Some(end) = end else { return no_float(c) };
@@ -874,7 +875,7 @@ pub fn binary_to_term(c: &mut Ctx, a: &[Term]) -> R {
             }
         }
     }
-    let (t, n) = crate::etf::decode_prefix(&bytes, &mut c.sys.atom_table, &mut c.p.heap, safe)
+    let (t, n) = crate::etf::decode_prefix(&bytes, &mut c.sys().atom_table, &mut c.p.heap, safe)
         .map_err(|_| c.badarg())?;
     if used {
         return Ok(c.tuple(&[t, Term::Int(n as i64)]));
@@ -895,7 +896,7 @@ pub fn flat_size(c: &mut Ctx, a: &[Term]) -> R {
     let mut words: u64 = 0;
     let mut work = alloc::vec![a[0]];
     while let Some(t) = work.pop() {
-        if words > c.sys.limits.max_heap_words {
+        if words > c.sys().limits.max_heap_words {
             return Err(c.system_limit());
         }
         words += match t {

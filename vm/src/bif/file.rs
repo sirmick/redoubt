@@ -59,8 +59,13 @@ fn done(c: &mut Ctx, r: Result<(), FileError>) -> R {
     })
 }
 
-fn files<'c>(c: &'c mut Ctx) -> Result<&'c mut dyn Files, FileError> {
-    c.sys.platform.files().ok_or(FileError::Enotsup)
+/// Run `f` on the platform's file system, with the system locked only while it runs.
+fn with_files<T>(
+    c: &Ctx,
+    f: impl FnOnce(&mut dyn Files) -> Result<T, FileError>,
+) -> Result<T, FileError> {
+    let mut sys = c.sys();
+    f(sys.platform.files().ok_or(FileError::Enotsup)?)
 }
 
 // ---- names ----
@@ -181,7 +186,7 @@ pub fn resolve(cwd: &str, name: &[u8]) -> Result<String, FileError> {
 /// The platform path an encoded name argument stands for.
 fn path(c: &Ctx, t: &Term) -> Result<Result<String, FileError>, Exception> {
     let b = c.heap().as_bits(*t).ok_or_else(|| c.badarg())?;
-    Ok(resolve(&c.sys.cwd, &b.to_bytes()))
+    Ok(resolve(&c.sys().cwd, &b.to_bytes()))
 }
 
 /// Run `f` on the resolved path, turning a failure into `{error, Reason}`.
@@ -242,7 +247,7 @@ fn info_term(c: &mut Ctx, i: &FileInfo) -> Term {
 pub fn read_info(c: &mut Ctx, a: &[Term]) -> R {
     let follow = !matches!(a[1], Term::Int(0));
     with_path(c, &a[0], |c, p| {
-        let r = files(c).and_then(|f| f.info(p, follow));
+        let r = with_files(c, |f| f.info(p, follow));
         Ok(match r {
             Ok(i) => info_term(c, &i),
             Err(e) => error(c, e),
@@ -252,7 +257,7 @@ pub fn read_info(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn read_handle_info(c: &mut Ctx, a: &[Term]) -> R {
     let h = handle(c, &a[0])?;
-    let r = h.and_then(|h| files(c)?.handle_info(h));
+    let r = h.and_then(|h| with_files(c, |f| f.handle_info(h)));
     Ok(match r {
         Ok(i) => info_term(c, &i),
         Err(e) => error(c, e),
@@ -263,7 +268,7 @@ pub fn read_handle_info(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn list_dir(c: &mut Ctx, a: &[Term]) -> R {
     with_path(c, &a[0], |c, p| {
-        Ok(match files(c).and_then(|f| f.list_dir(p)) {
+        Ok(match with_files(c, |f| f.list_dir(p)) {
             Ok(names) => {
                 let names: Vec<Term> = names
                     .iter()
@@ -285,7 +290,7 @@ pub fn list_dir(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn make_dir(c: &mut Ctx, a: &[Term]) -> R {
     with_path(c, &a[0], |c, p| {
-        let r = files(c).and_then(|f| f.make_dir(p));
+        let r = with_files(c, |f| f.make_dir(p));
         done(c, r)
     })
 }
@@ -293,7 +298,7 @@ pub fn make_dir(c: &mut Ctx, a: &[Term]) -> R {
 /// `del_file_nif(Path)`. A directory is `eperm`, as OTP reports it.
 pub fn del_file(c: &mut Ctx, a: &[Term]) -> R {
     with_path(c, &a[0], |c, p| {
-        let r = files(c).and_then(|f| f.delete(p)).map_err(|e| match e {
+        let r = with_files(c, |f| f.delete(p)).map_err(|e| match e {
             FileError::Eisdir => FileError::Eperm,
             e => e,
         });
@@ -304,7 +309,7 @@ pub fn del_file(c: &mut Ctx, a: &[Term]) -> R {
 /// `del_dir_nif(Path)`. A directory that is not empty is `eexist`, as OTP reports it.
 pub fn del_dir(c: &mut Ctx, a: &[Term]) -> R {
     with_path(c, &a[0], |c, p| {
-        let r = files(c).and_then(|f| f.del_dir(p)).map_err(|e| match e {
+        let r = with_files(c, |f| f.del_dir(p)).map_err(|e| match e {
             FileError::Enotempty => FileError::Eexist,
             e => e,
         });
@@ -316,7 +321,7 @@ pub fn del_dir(c: &mut Ctx, a: &[Term]) -> R {
 pub fn rename(c: &mut Ctx, a: &[Term]) -> R {
     let (from, to) = (path(c, &a[0])?, path(c, &a[1])?);
     let r = from
-        .and_then(|from| to.and_then(|to| files(c)?.rename(&from, &to)))
+        .and_then(|from| to.and_then(|to| with_files(c, |f| f.rename(&from, &to))))
         .map_err(|e| match e {
             FileError::Enotempty => FileError::Eexist,
             e => e,
@@ -326,7 +331,7 @@ pub fn rename(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn read_link(c: &mut Ctx, a: &[Term]) -> R {
     with_path(c, &a[0], |c, p| {
-        Ok(match files(c).and_then(|f| f.read_link(p)) {
+        Ok(match with_files(c, |f| f.read_link(p)) {
             Ok(target) => {
                 let v = &target;
                 let v = c.binary(v);
@@ -339,8 +344,9 @@ pub fn read_link(c: &mut Ctx, a: &[Term]) -> R {
 
 /// `get_cwd_nif()`: `{error, enoent}` if the directory has since been removed, as `getcwd` says.
 pub fn get_cwd(c: &mut Ctx, _a: &[Term]) -> R {
-    let cwd = c.sys.cwd.clone();
-    if let Some(Err(e)) = c.sys.platform.files().map(|f| f.info(&cwd, true)) {
+    let cwd = c.sys().cwd.clone();
+    let gone = c.sys().platform.files().map(|f| f.info(&cwd, true));
+    if let Some(Err(e)) = gone {
         return Ok(error(c, e));
     }
     Ok({
@@ -353,14 +359,12 @@ pub fn get_cwd(c: &mut Ctx, _a: &[Term]) -> R {
 /// `set_cwd_nif(Path)`: this VM's working directory, which must be a directory.
 pub fn set_cwd(c: &mut Ctx, a: &[Term]) -> R {
     with_path(c, &a[0], |c, p| {
-        let r = files(c)
-            .and_then(|f| f.info(p, true))
-            .and_then(|i| match i.kind {
-                FileKind::Directory => Ok(()),
-                _ => Err(FileError::Enotdir),
-            });
+        let r = with_files(c, |f| f.info(p, true)).and_then(|i| match i.kind {
+            FileKind::Directory => Ok(()),
+            _ => Err(FileError::Enotdir),
+        });
         if r.is_ok() {
-            c.sys.cwd = p.into();
+            c.sys().cwd = p.into();
         }
         done(c, r)
     })
@@ -374,7 +378,7 @@ pub fn set_time(c: &mut Ctx, a: &[Term]) -> R {
     };
     let (at, mt) = (*at, *mt);
     with_path(c, &a[0], |c, p| {
-        let r = files(c).and_then(|f| f.set_times(p, at, mt));
+        let r = with_files(c, |f| f.set_times(p, at, mt));
         done(c, r)
     })
 }
@@ -385,7 +389,7 @@ pub fn set_permissions(c: &mut Ctx, a: &[Term]) -> R {
         _ => return Err(c.badarg()),
     };
     with_path(c, &a[0], |c, p| {
-        let r = files(c).and_then(|f| f.set_permissions(p, mode & 0o7777));
+        let r = with_files(c, |f| f.set_permissions(p, mode & 0o7777));
         done(c, r)
     })
 }
@@ -399,14 +403,14 @@ pub fn make_symlink(c: &mut Ctx, a: &[Term]) -> R {
         .to_bytes()
         .into_owned();
     with_path(c, &a[1], |c, p| {
-        let r = files(c).and_then(|f| f.make_symlink(&target, p));
+        let r = with_files(c, |f| f.make_symlink(&target, p));
         done(c, r)
     })
 }
 
 pub fn make_link(c: &mut Ctx, a: &[Term]) -> R {
     let (from, to) = (path(c, &a[0])?, path(c, &a[1])?);
-    let r = from.and_then(|from| to.and_then(|to| files(c)?.make_link(&from, &to)));
+    let r = from.and_then(|from| to.and_then(|to| with_files(c, |f| f.make_link(&from, &to))));
     done(c, r)
 }
 
@@ -448,13 +452,14 @@ pub fn open(c: &mut Ctx, a: &[Term]) -> R {
     // `write` alone empties the file; with `read` or `append` it keeps the contents.
     m.truncate = m.write && !m.read && !m.append;
     with_path(c, &a[0], |c, p| {
-        if c.sys.files.len() >= MAX_OPEN_FILES {
+        let open = c.sys().files.len();
+        if open >= MAX_OPEN_FILES {
             return Ok(error(c, FileError::Emfile));
         }
-        match files(c).and_then(|f| f.open(p, m)) {
+        match with_files(c, |f| f.open(p, m)) {
             Ok(h) => {
                 let owner = c.p.pid;
-                c.sys.files.insert(h, owner);
+                c.sys().files.insert(h, owner);
                 let r = c.new_resource(FileRef {
                     handle: h,
                     open: Lock::new(true),
@@ -473,7 +478,7 @@ fn handle(c: &Ctx, t: &Term) -> Result<Result<u64, FileError>, Exception> {
     if !*f.open.lock() {
         return Ok(Err(FileError::Ebadf));
     }
-    if c.sys.files.get(&f.handle) != Some(&c.p.pid) {
+    if c.sys().files.get(&f.handle) != Some(&c.p.pid) {
         return Err(c.badarg());
     }
     Ok(Ok(f.handle))
@@ -484,17 +489,19 @@ pub fn close(c: &mut Ctx, a: &[Term]) -> R {
     if !core::mem::replace(&mut *f.open.lock(), false) {
         return Ok(error(c, FileError::Einval));
     }
-    c.sys.files.remove(&f.handle);
-    if let Ok(fs) = files(c) {
+    let mut sys = c.sys();
+    sys.files.remove(&f.handle);
+    if let Some(fs) = sys.platform.files() {
         fs.close(f.handle);
     }
+    drop(sys);
     Ok(c.ok())
 }
 
 /// Largest read one call may ask for: what fits in a binary.
 fn read_size(c: &Ctx, t: &Term) -> Result<usize, Exception> {
     let n = t.as_usize().ok_or_else(|| c.badarg())?;
-    Ok(n.min(c.sys.limits.max_binary_bits / 8))
+    Ok(n.min(c.sys().limits.max_binary_bits / 8))
 }
 
 fn data(c: &mut Ctx, r: Result<Vec<u8>, FileError>) -> Term {
@@ -518,7 +525,7 @@ pub fn read(c: &mut Ctx, a: &[Term]) -> R {
             ok_with(c, v)
         });
     }
-    let r = h.and_then(|h| files(c)?.read(h, len));
+    let r = h.and_then(|h| with_files(c, |f| f.read(h, len)));
     Ok(data(c, r))
 }
 
@@ -533,7 +540,7 @@ pub fn pread(c: &mut Ctx, a: &[Term]) -> R {
             ok_with(c, v)
         });
     }
-    let r = h.and_then(|h| files(c)?.pread(h, off, len));
+    let r = h.and_then(|h| with_files(c, |f| f.pread(h, off, len)));
     Ok(data(c, r))
 }
 
@@ -559,7 +566,7 @@ fn iovec(c: &Ctx, t: &Term) -> Result<Vec<u8>, Exception> {
 pub fn write(c: &mut Ctx, a: &[Term]) -> R {
     let h = handle(c, &a[0])?;
     let bytes = iovec(c, &a[1])?;
-    let r = h.and_then(|h| files(c)?.write(h, &bytes));
+    let r = h.and_then(|h| with_files(c, |f| f.write(h, &bytes)));
     done(c, r)
 }
 
@@ -567,7 +574,7 @@ pub fn pwrite(c: &mut Ctx, a: &[Term]) -> R {
     let h = handle(c, &a[0])?;
     let off = offset(c, &a[1])?;
     let bytes = iovec(c, &a[2])?;
-    let r = h.and_then(|h| files(c)?.pwrite(h, off, &bytes));
+    let r = h.and_then(|h| with_files(c, |f| f.pwrite(h, off, &bytes)));
     done(c, r)
 }
 
@@ -586,7 +593,7 @@ pub fn seek(c: &mut Ctx, a: &[Term]) -> R {
         Term::Atom(m) if m.as_str() == "eof" => SeekFrom::End(off),
         _ => return Err(c.badarg()),
     };
-    Ok(match h.and_then(|h| files(c)?.seek(h, to)) {
+    Ok(match h.and_then(|h| with_files(c, |f| f.seek(h, to))) {
         Ok(pos) => {
             let v = pos.into();
             let v = c.big(v);
@@ -598,13 +605,13 @@ pub fn seek(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn sync(c: &mut Ctx, a: &[Term]) -> R {
     let h = handle(c, &a[0])?;
-    let r = h.and_then(|h| files(c)?.sync(h));
+    let r = h.and_then(|h| with_files(c, |f| f.sync(h)));
     done(c, r)
 }
 
 pub fn truncate(c: &mut Ctx, a: &[Term]) -> R {
     let h = handle(c, &a[0])?;
-    let r = h.and_then(|h| files(c)?.truncate(h));
+    let r = h.and_then(|h| with_files(c, |f| f.truncate(h)));
     done(c, r)
 }
 
@@ -643,9 +650,9 @@ pub fn read_whole_file(f: &mut dyn Files, path: &str, max: usize) -> Result<Vec<
 /// `read_file_nif(Path)`: the whole file. Files larger than a binary may be are `enomem`
 /// in BEAM; here `einval` (the file is not read at all).
 pub fn read_file(c: &mut Ctx, a: &[Term]) -> R {
-    let max = c.sys.limits.max_binary_bits / 8;
+    let max = c.sys().limits.max_binary_bits / 8;
     with_path(c, &a[0], |c, p| {
-        let r = files(c).and_then(|f| read_whole_file(f, p, max));
+        let r = with_files(c, |f| read_whole_file(f, p, max));
         Ok(match r {
             Ok(d) => {
                 let v = &d;
@@ -707,7 +714,7 @@ pub fn buffer_write(c: &mut Ctx, a: &[Term]) -> R {
     let data = iovec(c, &a[1])?;
     let b = buffer(c, &a[0])?;
     let mut bytes = b.bytes.lock();
-    if (bytes.len() + data.len()).saturating_mul(8) > c.sys.limits.max_binary_bits {
+    if (bytes.len() + data.len()).saturating_mul(8) > c.sys().limits.max_binary_bits {
         return Err(c.system_limit());
     }
     bytes.extend(data);

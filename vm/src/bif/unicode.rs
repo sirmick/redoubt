@@ -94,7 +94,7 @@ fn finish(c: &mut Ctx, converted: Term, stop: Option<Stop>) -> Term {
     match stop {
         None => converted,
         Some(Stop::Error(rest)) => {
-            let e = [Term::Atom(c.sys.atoms.error), converted, rest];
+            let e = [Term::Atom(c.atoms.error), converted, rest];
             c.tuple(&e)
         }
         Some(Stop::Incomplete(rest)) => {

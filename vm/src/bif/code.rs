@@ -23,11 +23,12 @@ const MAX_PATHS: usize = 1024;
 /// directory the file system has.
 fn directory(c: &mut Ctx, t: &Term) -> Result<Result<String, ()>, Exception> {
     let name = super::file::name_bytes(c.heap(), *t).ok_or_else(|| c.badarg())?;
-    let Ok(path) = super::file::resolve(&c.sys.cwd, &name) else {
+    let cwd = c.sys().cwd.clone();
+    let Ok(path) = super::file::resolve(&cwd, &name) else {
         return Ok(Err(()));
     };
     let is_dir = c
-        .sys
+        .sys()
         .platform
         .files()
         .and_then(|f| f.info(&path, true).ok())
@@ -40,26 +41,26 @@ fn add(c: &mut Ctx, t: &Term, front: bool) -> Result<bool, Exception> {
         return Ok(false);
     };
     remove(c, &dir);
-    if c.sys.code_path.len() >= MAX_PATHS {
+    if c.sys().code_path.len() >= MAX_PATHS {
         return Err(c.system_limit());
     }
     if front {
-        c.sys.code_path.insert(0, dir);
-        c.sys.platform_at += 1;
+        c.sys().code_path.insert(0, dir);
+        c.sys().platform_at += 1;
     } else {
-        c.sys.code_path.push(dir);
+        c.sys().code_path.push(dir);
     }
     Ok(true)
 }
 
 /// Take `dir` off the path: whether it was on it.
 fn remove(c: &mut Ctx, dir: &str) -> bool {
-    let Some(i) = c.sys.code_path.iter().position(|p| p == dir) else {
+    let Some(i) = c.sys().code_path.iter().position(|p| p == dir) else {
         return false;
     };
-    c.sys.code_path.remove(i);
-    if i < c.sys.platform_at {
-        c.sys.platform_at -= 1;
+    c.sys().code_path.remove(i);
+    if i < c.sys().platform_at {
+        c.sys().platform_at -= 1;
     }
     true
 }
@@ -69,7 +70,7 @@ fn added(c: &mut Ctx, ok: bool) -> Term {
         c.bool(true)
     } else {
         {
-            let e = [Term::Atom(c.sys.atoms.error), c.atom("bad_directory")];
+            let e = [Term::Atom(c.atoms.error), c.atom("bad_directory")];
             c.tuple(&e)
         }
     }
@@ -105,7 +106,8 @@ pub fn add_pathsz(c: &mut Ctx, a: &[Term]) -> R {
 /// `del_path(Dir)`: `true` if it was on the path.
 pub fn del_path(c: &mut Ctx, a: &[Term]) -> R {
     let name = super::file::name_bytes(c.heap(), a[0]).ok_or_else(|| c.badarg())?;
-    let Ok(dir) = super::file::resolve(&c.sys.cwd, &name) else {
+    let cwd = c.sys().cwd.clone();
+    let Ok(dir) = super::file::resolve(&cwd, &name) else {
         return Ok(c.bool(false));
     };
     let removed = remove(c, &dir);
@@ -120,7 +122,7 @@ pub fn del_paths(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 pub fn get_path(c: &mut Ctx, _a: &[Term]) -> R {
-    let paths = c.sys.code_path.clone();
+    let paths = c.sys().code_path.clone();
     let v: Vec<Term> = paths.iter().map(|p| c.string(p)).collect();
     Ok(c.list(v))
 }
@@ -139,8 +141,8 @@ pub fn set_path(c: &mut Ctx, a: &[Term]) -> R {
         return Err(c.system_limit());
     }
     // A path set whole comes after the platform's modules.
-    c.sys.code_path = paths;
-    c.sys.platform_at = 0;
+    c.sys().code_path = paths;
+    c.sys().platform_at = 0;
     Ok(c.bool(true))
 }
 
@@ -153,18 +155,23 @@ pub fn which(c: &mut Ctx, a: &[Term]) -> R {
     if crate::vm::RUNTIME_MODULES.contains(&m.as_str()) {
         return Ok(c.atom("non_existing"));
     }
-    if c.sys.is_loaded(m) {
-        if let Some(file) = c.sys.module_files.get(m.as_str()).cloned() {
+    if c.sys().is_loaded(m) {
+        let found = c.sys().module_files.get(m.as_str()).cloned();
+        if let Some(file) = found {
             return Ok(c.copy_in(&file));
         }
     }
     let name = String::from(m.as_str());
-    Ok(match c.sys.locate_module(&name) {
+    let found = c.sys().locate_module(&name);
+    Ok(match found {
         Some(Found::Path(path, _)) => c.string(&path),
-        Some(Found::Platform(_)) => match c.sys.platform.module_file(&name) {
-            Some(path) => c.string(&path),
-            None => c.atom("preloaded"),
-        },
+        Some(Found::Platform(_)) => {
+            let file = c.sys().platform.module_file(&name);
+            match file {
+                Some(path) => c.string(&path),
+                None => c.atom("preloaded"),
+            }
+        }
         None => c.atom("non_existing"),
     })
 }
@@ -175,16 +182,17 @@ pub fn which(c: &mut Ctx, a: &[Term]) -> R {
 pub fn all_available(c: &mut Ctx, _a: &[Term]) -> R {
     let mut seen = alloc::collections::BTreeSet::new();
     let mut out = Vec::new();
-    for m in c.sys.loaded_modules() {
+    let loaded = c.sys().loaded_modules();
+    for m in loaded {
         seen.insert(String::from(m.as_str()));
         out.push({
             let e = [c.string(m.as_str()), c.atom("preloaded"), c.bool(true)];
             c.tuple(&e)
         });
     }
-    let dirs = c.sys.code_path.clone();
+    let dirs = c.sys().code_path.clone();
     for dir in dirs {
-        let Some(names) = c.sys.platform.files().and_then(|f| f.list_dir(&dir).ok()) else {
+        let Some(names) = c.sys().platform.files().and_then(|f| f.list_dir(&dir).ok()) else {
             continue;
         };
         for n in names {
@@ -216,8 +224,9 @@ pub fn all_available(c: &mut Ctx, _a: &[Term]) -> R {
 /// The directory of application `app`: `Root/App` or the highest `Root/App-Vsn` in the first
 /// lib root that has one.
 fn lib_dir_of(c: &mut Ctx, app: &str) -> Option<String> {
-    let roots = c.sys.lib_roots.clone();
-    let files = c.sys.platform.files()?;
+    let mut sys = c.sys();
+    let roots = sys.lib_roots.clone();
+    let files = sys.platform.files()?;
     for root in roots {
         let Ok(names) = files.list_dir(&root) else {
             continue;
@@ -262,7 +271,7 @@ fn app_name(c: &Ctx, t: &Term) -> Result<String, Exception> {
 
 fn bad_name(c: &mut Ctx) -> Term {
     {
-        let e = [Term::Atom(c.sys.atoms.error), c.atom("bad_name")];
+        let e = [Term::Atom(c.atoms.error), c.atom("bad_name")];
         c.tuple(&e)
     }
 }
@@ -292,7 +301,7 @@ pub fn priv_dir(c: &mut Ctx, a: &[Term]) -> R {
 
 /// `root_dir()`: the parent of the first lib root (OTP's installation directory), or `/`.
 pub fn root_dir(c: &mut Ctx, _a: &[Term]) -> R {
-    let root = c.sys.lib_roots.first().map(|r| {
+    let root = c.sys().lib_roots.first().map(|r| {
         let r = r.trim_end_matches('/');
         match r.rfind('/') {
             Some(0) | None => String::from("/"),
@@ -304,17 +313,20 @@ pub fn root_dir(c: &mut Ctx, _a: &[Term]) -> R {
 
 /// Load `bytes` as `module` and remember the file it came from.
 fn load_from(c: &mut Ctx, module: &crate::atom::Atom, bytes: &[u8], file: Term) -> Term {
-    match c.sys.load_bytes(bytes) {
+    let found = c.sys().load_bytes(bytes);
+    match found {
         Ok(name) if &name == module => {
             let file = c.own(file);
-            c.sys.module_files.insert(String::from(name.as_str()), file);
+            c.sys()
+                .module_files
+                .insert(String::from(name.as_str()), file);
             {
                 let e = [c.atom("module"), Term::Atom(name)];
                 c.tuple(&e)
             }
         }
         Ok(_) | Err(_) => {
-            let e = [Term::Atom(c.sys.atoms.error), c.atom("badfile")];
+            let e = [Term::Atom(c.atoms.error), c.atom("badfile")];
             c.tuple(&e)
         }
     }
@@ -326,20 +338,22 @@ pub fn load_file(c: &mut Ctx, a: &[Term]) -> R {
         return Err(c.badarg());
     };
     let m = *m;
-    Ok(match c.sys.locate_module(m.as_str()) {
+    let found = c.sys().locate_module(m.as_str());
+    Ok(match found {
         Some(Found::Path(path, bytes)) => {
             let file = c.string(&path);
             load_from(c, &m, &bytes, file)
         }
         Some(Found::Platform(bytes)) => {
-            let file = match c.sys.platform.module_file(m.as_str()) {
+            let file = c.sys().platform.module_file(m.as_str());
+            let file = match file {
                 Some(p) => c.string(&p),
                 None => c.atom("preloaded"),
             };
             load_from(c, &m, &bytes, file)
         }
         None => {
-            let e = [Term::Atom(c.sys.atoms.error), c.atom("nofile")];
+            let e = [Term::Atom(c.atoms.error), c.atom("nofile")];
             c.tuple(&e)
         }
     })
@@ -349,16 +363,17 @@ pub fn load_file(c: &mut Ctx, a: &[Term]) -> R {
 pub fn load_abs(c: &mut Ctx, a: &[Term]) -> R {
     let name = super::file::name_bytes(c.heap(), a[0]).ok_or_else(|| c.badarg())?;
     let nofile = |c: &mut Ctx| {
-        let e = [Term::Atom(c.sys.atoms.error), c.atom("nofile")];
+        let e = [Term::Atom(c.atoms.error), c.atom("nofile")];
         c.tuple(&e)
     };
-    let Ok(path) = super::file::resolve(&c.sys.cwd, &name) else {
+    let cwd = c.sys().cwd.clone();
+    let Ok(path) = super::file::resolve(&cwd, &name) else {
         return Ok(nofile(c));
     };
     let file = alloc::format!("{path}.beam");
-    let max = c.sys.limits.max_binary_bits / 8;
+    let max = c.sys().limits.max_binary_bits / 8;
     let bytes = match c
-        .sys
+        .sys()
         .platform
         .files()
         .map(|f| super::read_whole_file(f, &file, max))
@@ -368,10 +383,10 @@ pub fn load_abs(c: &mut Ctx, a: &[Term]) -> R {
     };
     let module = path.rsplit('/').next().unwrap_or("");
     let Some(m) = c
-        .sys
+        .sys()
         .atom_table
         .existing(module)
-        .or_else(|| c.sys.atom_table.intern(module).ok())
+        .or_else(|| c.sys().atom_table.intern(module).ok())
     else {
         return Ok(nofile(c));
     };

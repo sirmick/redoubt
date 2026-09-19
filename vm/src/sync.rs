@@ -9,27 +9,77 @@
 mod imp {
     extern crate std;
 
-    /// Exclusive access to a `T` for the holder of the guard.
-    pub struct Lock<T>(std::sync::Mutex<T>);
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Exclusive access to a `T` for the holder of the guard. Taking a lock this thread already
+    /// holds is a bug in the VM: it panics (as the one-scheduler `RefCell` does) rather than
+    /// deadlocking.
+    pub struct Lock<T> {
+        inner: std::sync::Mutex<T>,
+        /// The thread holding it (see [`me`]), or 0.
+        owner: AtomicUsize,
+    }
+
+    /// This thread, as a number: the address of a thread-local.
+    fn me() -> usize {
+        std::thread_local!(static ID: u8 = const { 0 });
+        ID.with(|id| id as *const u8 as usize)
+    }
 
     impl<T> Lock<T> {
         pub const fn new(value: T) -> Lock<T> {
-            Lock(std::sync::Mutex::new(value))
+            Lock {
+                inner: std::sync::Mutex::new(value),
+                owner: AtomicUsize::new(0),
+            }
         }
 
         /// Wait for exclusive access. A panic while holding a lock does not poison it: the VM
         /// never panics on purpose, and a value left half-changed is no worse than losing it.
         pub fn lock(&self) -> Guard<'_, T> {
-            self.0.lock().unwrap_or_else(|e| e.into_inner())
+            let me = me();
+            assert!(
+                self.owner.load(Ordering::Relaxed) != me,
+                "a lock taken twice by one thread"
+            );
+            let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            self.owner.store(me, Ordering::Relaxed);
+            Guard {
+                guard: Some(guard),
+                owner: &self.owner,
+            }
         }
 
         /// Access through an exclusive reference, which needs no locking.
         pub fn get_mut(&mut self) -> &mut T {
-            self.0.get_mut().unwrap_or_else(|e| e.into_inner())
+            self.inner.get_mut().unwrap_or_else(|e| e.into_inner())
         }
     }
 
-    pub type Guard<'a, T> = std::sync::MutexGuard<'a, T>;
+    pub struct Guard<'a, T> {
+        /// Always `Some`, except while a [`Wakeup::wait`] has released it.
+        guard: Option<std::sync::MutexGuard<'a, T>>,
+        owner: &'a AtomicUsize,
+    }
+
+    impl<T> core::ops::Deref for Guard<'_, T> {
+        type Target = T;
+        fn deref(&self) -> &T {
+            self.guard.as_ref().expect("held")
+        }
+    }
+
+    impl<T> core::ops::DerefMut for Guard<'_, T> {
+        fn deref_mut(&mut self) -> &mut T {
+            self.guard.as_mut().expect("held")
+        }
+    }
+
+    impl<T> Drop for Guard<'_, T> {
+        fn drop(&mut self) {
+            self.owner.store(0, Ordering::Relaxed);
+        }
+    }
 
     /// Where idle schedulers wait for work.
     #[derive(Default)]
@@ -37,8 +87,13 @@ mod imp {
 
     impl Wakeup {
         /// Release `guard`, wait to be woken, and lock again.
-        pub fn wait<'a, T>(&self, guard: Guard<'a, T>) -> Guard<'a, T> {
-            self.0.wait(guard).unwrap_or_else(|e| e.into_inner())
+        pub fn wait<'a, T>(&self, mut guard: Guard<'a, T>) -> Guard<'a, T> {
+            let inner = guard.guard.take().expect("held");
+            guard.owner.store(0, Ordering::Relaxed);
+            let inner = self.0.wait(inner).unwrap_or_else(|e| e.into_inner());
+            guard.owner.store(me(), Ordering::Relaxed);
+            guard.guard = Some(inner);
+            guard
         }
 
         pub fn wake_one(&self) {
@@ -88,7 +143,7 @@ mod imp {
 
     /// Where idle schedulers wait for work: with one scheduler, nobody ever waits.
     #[derive(Default)]
-    pub struct Wakeup;
+    pub struct Wakeup(());
 
     impl Wakeup {
         pub fn wait<'a, T>(&self, guard: Guard<'a, T>) -> Guard<'a, T> {

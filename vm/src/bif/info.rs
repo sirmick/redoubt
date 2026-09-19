@@ -27,7 +27,7 @@ fn text_of(c: &Ctx, t: &Term) -> Result<String, Exception> {
 
 pub fn processes(c: &mut Ctx, _a: &[Term]) -> R {
     let pids: Vec<Term> = c
-        .sys
+        .sys()
         .procs
         .pids()
         .into_iter()
@@ -116,7 +116,9 @@ fn info_item(
         }
         "stack_size" => Term::Int((p.stack.len() + p.frames.len()) as i64),
         // Read off the heap: what the process holds, garbage not yet collected included.
-        "heap_size" | "total_heap_size" => Term::Int(crate::memory::process(p).words as i64),
+        // As BEAM: the heap block, which changes only when the heap is collected (the
+        // collection threshold, two words a cell). `memory` is what is in use.
+        "heap_size" | "total_heap_size" => Term::Int((p.gc_at * 2) as i64),
         "memory" => Term::Int((crate::memory::process(p).total_words() * 8) as i64),
         "min_heap_size" => Term::Int(233),
         "max_heap_size" => super::proc::max_heap_term(table, atoms, out, p.max_heap),
@@ -152,28 +154,31 @@ pub fn process_info(c: &mut Ctx, a: &[Term]) -> R {
     if pid.port {
         return Err(c.badarg());
     }
-    if pid != c.p.pid && c.sys.procs.is_running(pid) {
-        return c.retry();
-    }
     let single = matches!(a[1], Term::Atom(_) | Term::Tuple(_));
     let items: Vec<Term> = if single {
         alloc::vec![a[1]]
     } else {
         c.heap().to_vec(a[1]).ok_or_else(|| c.badarg())?
     };
+    // One lock for all of it: the process read cannot start running meanwhile.
+    let mut guard = c.sys();
+    let sys = &mut *guard;
     let running = pid == c.p.pid;
+    if !running && sys.procs.is_running(pid) {
+        drop(guard);
+        return c.retry();
+    }
     // Messages still in the inbox count, and are listed, as queued.
     if running {
-        c.sys.receive_pending(c.p);
+        sys.receive_pending(c.p);
     } else {
-        c.sys.receive_pending_of(pid);
+        sys.receive_pending_of(pid);
     }
-    let depth = c.sys.backtrace_depth;
-    let registered_name = Term::Atom(c.sys.atom("registered_name"));
+    let depth = sys.backtrace_depth;
+    let registered_name = Term::Atom(sys.atom("registered_name"));
     // Built on a heap of its own, then copied to the caller's (which may be the process read).
-    let mut out = Heap::new(&c.sys.literals);
+    let mut out = Heap::new(&sys.literals);
     let result = {
-        let sys = &mut *c.sys;
         let (table, atoms) = (&mut sys.atom_table, &sys.atoms);
         let p: &Process = if running {
             c.p
@@ -225,7 +230,7 @@ pub fn process_info1(c: &mut Ctx, a: &[Term]) -> R {
 pub fn loaded(c: &mut Ctx, _a: &[Term]) -> R {
     Ok({
         let v = c
-            .sys
+            .sys()
             .loaded_modules()
             .into_iter()
             .map(Term::Atom)
@@ -239,13 +244,14 @@ pub fn ensure_loaded(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Atom(m) = &a[0] else {
         return Err(c.badarg());
     };
-    Ok(match c.sys.module(m) {
+    let module = c.sys().module(m);
+    Ok(match module {
         Some(_) => {
             let e = [c.atom("module"), a[0]];
             c.tuple(&e)
         }
         None => {
-            let e = [Term::Atom(c.sys.atoms.error), c.atom("nofile")];
+            let e = [Term::Atom(c.atoms.error), c.atom("nofile")];
             c.tuple(&e)
         }
     })
@@ -257,9 +263,9 @@ pub fn is_loaded(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Atom(m) = &a[0] else {
         return Err(c.badarg());
     };
-    Ok(if c.sys.is_loaded(m) {
+    Ok(if c.sys().is_loaded(m) {
         {
-            let e = [Term::Atom(c.sys.atoms.file), c.atom("loaded")];
+            let e = [Term::Atom(c.atoms.file), c.atom("loaded")];
             c.tuple(&e)
         }
     } else {
@@ -274,7 +280,7 @@ pub fn ensure_modules_loaded(c: &mut Ctx, a: &[Term]) -> R {
         let Term::Atom(name) = &m else {
             return Err(c.badarg());
         };
-        if c.sys.module(name).is_none() {
+        if c.sys().module(name).is_none() {
             missing.push({
                 let e = [m, c.atom("nofile")];
                 c.tuple(&e)
@@ -285,7 +291,7 @@ pub fn ensure_modules_loaded(c: &mut Ctx, a: &[Term]) -> R {
         c.ok()
     } else {
         {
-            let e = [Term::Atom(c.sys.atoms.error), {
+            let e = [Term::Atom(c.atoms.error), {
                 let v = missing;
                 c.list(v)
             }];
@@ -301,11 +307,12 @@ pub fn load_binary(c: &mut Ctx, a: &[Term]) -> R {
         return Err(c.badarg());
     };
     let bytes = c.heap().iodata_bytes(a[2]).ok_or_else(|| c.badarg())?;
-    let error = Term::Atom(c.sys.atoms.error);
-    match c.sys.load_bytes(&bytes) {
+    let error = Term::Atom(c.atoms.error);
+    let found = c.sys().load_bytes(&bytes);
+    match found {
         Ok(name) if name == m => {
             let file = c.own(a[1]);
-            c.sys.module_files.insert(String::from(m.as_str()), file);
+            c.sys().module_files.insert(String::from(m.as_str()), file);
             let module = c.atom("module");
             Ok(c.tuple(&[module, a[0]]))
         }
@@ -322,7 +329,7 @@ pub fn code_delete(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Atom(m) = &a[0] else {
         return Err(c.badarg());
     };
-    let gone = c.sys.delete_module(m);
+    let gone = c.sys().delete_module(m);
     Ok(c.bool(gone))
 }
 
@@ -331,10 +338,10 @@ pub fn delete_module(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Atom(m) = &a[0] else {
         return Err(c.badarg());
     };
-    Ok(if c.sys.delete_module(m) {
+    Ok(if c.sys().delete_module(m) {
         c.bool(true)
     } else {
-        Term::Atom(c.sys.atoms.undefined)
+        Term::Atom(c.atoms.undefined)
     })
 }
 
@@ -355,10 +362,11 @@ pub fn get_object_code(c: &mut Ctx, a: &[Term]) -> R {
         return Err(c.badarg());
     };
     if crate::vm::RUNTIME_MODULES.contains(&m.as_str()) {
-        return Ok(Term::Atom(c.sys.atoms.error));
+        return Ok(Term::Atom(c.atoms.error));
     }
     let name = String::from(m.as_str());
-    let found = match c.sys.locate_module(&name) {
+    let located = c.sys().locate_module(&name);
+    let found = match located {
         Some(crate::vm::Found::Platform(bytes)) => Some((alloc::format!("{name}.beam"), bytes)),
         Some(crate::vm::Found::Path(path, bytes)) => Some((path, bytes)),
         None => None,
@@ -375,13 +383,13 @@ pub fn get_object_code(c: &mut Ctx, a: &[Term]) -> R {
             ];
             c.tuple(&e)
         }
-        None => Term::Atom(c.sys.atoms.error),
+        None => Term::Atom(c.atoms.error),
     })
 }
 
 pub fn all_loaded(c: &mut Ctx, _a: &[Term]) -> R {
     let file = c.atom("loaded");
-    let mods = c.sys.loaded_modules();
+    let mods = c.sys().loaded_modules();
     let v: Vec<Term> = mods
         .into_iter()
         .map(|m| c.tuple(&[Term::Atom(m), file]))
@@ -394,12 +402,12 @@ pub fn get_module_info(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Atom(name) = &a[0] else {
         return Err(c.badarg());
     };
-    let m = c.sys.module(name).ok_or_else(|| c.badarg())?;
+    let m = c.sys().module(name).ok_or_else(|| c.badarg())?;
     let decode = |c: &mut Ctx, bytes: &[u8]| -> Term {
         if bytes.is_empty() {
             return Term::Nil;
         }
-        crate::etf::decode(bytes, &mut c.sys.atom_table, &mut c.p.heap).unwrap_or(Term::Nil)
+        crate::etf::decode(bytes, &mut c.sys().atom_table, &mut c.p.heap).unwrap_or(Term::Nil)
     };
     let item = |c: &mut Ctx, key: &str| -> Option<Term> {
         Some(match key {
@@ -512,8 +520,8 @@ pub fn display_string(c: &mut Ctx, a: &[Term]) -> R {
         Some(b) if b.is_binary() => b.to_bytes().into_owned(),
         _ => text_of(c, s)?.into_bytes(),
     };
-    c.sys.platform.console_write(&text);
-    Ok(Term::Atom(c.sys.atoms.true_))
+    c.sys().platform.console_write(&text);
+    Ok(Term::Atom(c.atoms.true_))
 }
 
 pub fn system_version(c: &mut Ctx, _a: &[Term]) -> R {
@@ -529,15 +537,16 @@ pub fn system_version(c: &mut Ctx, _a: &[Term]) -> R {
 
 pub fn getenv(c: &mut Ctx, a: &[Term]) -> R {
     let name = text_of(c, &a[0])?;
-    Ok(match c.sys.env.get(&name).cloned() {
+    let value = c.sys().env.get(&name).cloned();
+    Ok(match value {
         Some(v) => c.string(&v),
-        None => a.get(1).copied().unwrap_or(Term::Atom(c.sys.atoms.false_)),
+        None => a.get(1).copied().unwrap_or(Term::Atom(c.atoms.false_)),
     })
 }
 
 pub fn getenv_all(c: &mut Ctx, _a: &[Term]) -> R {
     let vars: Vec<String> = c
-        .sys
+        .sys()
         .env
         .iter()
         .map(|(k, v)| alloc::format!("{k}={v}"))
@@ -551,14 +560,14 @@ pub fn putenv(c: &mut Ctx, a: &[Term]) -> R {
     if name.is_empty() || name.contains('=') {
         return Err(c.badarg());
     }
-    c.sys.env.insert(name, value);
-    Ok(Term::Atom(c.sys.atoms.true_))
+    c.sys().env.insert(name, value);
+    Ok(Term::Atom(c.atoms.true_))
 }
 
 pub fn unsetenv(c: &mut Ctx, a: &[Term]) -> R {
     let name = text_of(c, &a[0])?;
-    c.sys.env.remove(&name);
-    Ok(Term::Atom(c.sys.atoms.true_))
+    c.sys().env.remove(&name);
+    Ok(Term::Atom(c.atoms.true_))
 }
 
 // ---- beamlet: the VM's own API ----
@@ -569,9 +578,10 @@ pub fn app_spec(c: &mut Ctx, a: &[Term]) -> R {
         return Err(c.badarg());
     };
     let name = String::from(app.as_str());
-    Ok(match c.sys.platform.load_app(&name) {
+    let app = c.sys().platform.load_app(&name);
+    Ok(match app {
         Some(b) => c.binary(&b),
-        None => Term::Atom(c.sys.atoms.error),
+        None => Term::Atom(c.atoms.error),
     })
 }
 
@@ -598,8 +608,8 @@ pub fn init_get_arguments(_c: &mut Ctx, _a: &[Term]) -> R {
 /// `code:root_dir/0`); there are no other command-line flags.
 pub fn init_get_argument(c: &mut Ctx, a: &[Term]) -> R {
     let value = match &a[0] {
-        Term::Atom(f) if f.as_str() == "home" => c.sys.env.get("HOME").cloned(),
-        Term::Atom(f) if f.as_str() == "root" && !c.sys.lib_roots.is_empty() => {
+        Term::Atom(f) if f.as_str() == "home" => c.sys().env.get("HOME").cloned(),
+        Term::Atom(f) if f.as_str() == "root" && !c.sys().lib_roots.is_empty() => {
             let root = super::code::root_dir(c, &[])?;
             c.heap().to_vec(root).map(|chars| {
                 chars
@@ -617,7 +627,7 @@ pub fn init_get_argument(c: &mut Ctx, a: &[Term]) -> R {
             let outer = c.list([inner]);
             c.ok_tuple(outer)
         }
-        None => Term::Atom(c.sys.atoms.error),
+        None => Term::Atom(c.atoms.error),
     })
 }
 
@@ -668,7 +678,11 @@ fn datetime(c: &mut Ctx, secs: i64) -> Term {
 /// `universaltime()` as `{{Y, M, D}, {H, Mi, S}}`. `localtime()` is the same: the VM has no time
 /// zone (the platform could supply one later).
 pub fn universaltime(c: &mut Ctx, _a: &[Term]) -> R {
-    let us = c.sys.platform.system_time_us().ok_or_else(|| c.badarg())?;
+    let us = c
+        .sys()
+        .platform
+        .system_time_us()
+        .ok_or_else(|| c.badarg())?;
     Ok(datetime(c, (us / 1_000_000) as i64))
 }
 
@@ -958,7 +972,7 @@ pub fn os_getpid(c: &mut Ctx, _a: &[Term]) -> R {
 /// `os:env()`: the VM's environment as `{Name, Value}` pairs.
 pub fn os_env(c: &mut Ctx, _a: &[Term]) -> R {
     let vars: Vec<(String, String)> = c
-        .sys
+        .sys()
         .env
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
@@ -987,7 +1001,7 @@ pub fn referenced_byte_size(c: &mut Ctx, a: &[Term]) -> R {
 /// `{beamlet_console, Bytes}` messages and finally `{beamlet_console, eof}`. For the `user` I/O
 /// server; there is one reader per VM, and the last caller wins.
 pub fn console_subscribe(c: &mut Ctx, _a: &[Term]) -> R {
-    c.sys.console_reader = Some(c.p.pid);
+    c.sys().console_reader = Some(c.p.pid);
     Ok(c.ok())
 }
 
@@ -1012,15 +1026,17 @@ const MEMORY_TYPES: [&str; 9] = [
 fn memory_values(c: &mut Ctx) -> [u64; 9] {
     let current = crate::memory::process(c.p);
     let (mut procs, mut binary) = (current.words, current.binary_bytes);
-    for pid in c.sys.procs.pids() {
-        if let Some(usage) = c.sys.procs.usage(pid).filter(|_| pid != c.p.pid) {
+    let sys = c.sys();
+    for pid in sys.procs.pids() {
+        if let Some(usage) = sys.procs.usage(pid).filter(|_| pid != c.p.pid) {
             procs += usage.words;
             binary += usage.binary_bytes;
         }
     }
     let processes = procs * 8;
-    let atom = c.sys.atom_table.len() as u64 * 16;
-    let ets = c.sys.ets.words() * 8;
+    let atom = sys.atom_table.len() as u64 * 16;
+    let ets = sys.ets.words() * 8;
+    drop(sys);
     let code = 0;
     let system = atom + binary + code + ets;
     [

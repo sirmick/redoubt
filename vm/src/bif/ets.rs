@@ -7,26 +7,32 @@ use super::Ctx;
 use crate::ets::{self, Access, Bindings, Clause, Key, Kind, Table};
 use crate::process::Exception;
 use crate::term::{OwnedTerm, Pid, Ref, Term};
+use crate::vm::System;
 
 type R = Result<Term, Exception>;
 
 /// How deeply a match specification's guard and body expressions may nest.
 const MAX_EXPR_DEPTH: usize = 64;
 
-fn end_of_table(c: &mut Ctx) -> Term {
-    c.atom("$end_of_table")
+// Each native holds the system lock (`c.sys()`) as one guard for as long as it uses tables, and
+// passes it to the helpers here; nothing that takes the lock again (`c.atom`, another native,
+// `send_to`) runs while it is held.
+
+fn end_of_table(sys: &mut System) -> Term {
+    Term::Atom(sys.atom("$end_of_table"))
 }
 
-/// The table `id` names, if the caller may read it (or, with `write`, change it). The error's
-/// cause is `id` for no such table and `access` for a table the caller may not use, as in BEAM.
-fn table_id(c: &Ctx, id: &Term, write: bool) -> Result<u64, Exception> {
+/// The table `id` names, if process `pid` may read it (or, with `write`, change it). The
+/// error's cause is `id` for no such table and `access` for a table the caller may not use, as
+/// in BEAM.
+fn table_id(c: &Ctx, sys: &System, id: &Term, write: bool) -> Result<u64, Exception> {
     let because = |cause: &str| {
         let mut e = c.badarg();
-        e.cause = c.sys.atom_table.existing(cause).map(Term::Atom);
+        e.cause = sys.atom_table.existing(cause).map(Term::Atom);
         e
     };
-    let tid = c.sys.ets.resolve(*id).ok_or_else(|| because("id"))?;
-    let t = c.sys.ets.get(tid).expect("resolved");
+    let tid = sys.ets.resolve(*id).ok_or_else(|| because("id"))?;
+    let t = sys.ets.get(tid).expect("resolved");
     let allowed = if write {
         t.may_write(c.p.pid)
     } else {
@@ -39,19 +45,19 @@ fn table_id(c: &Ctx, id: &Term, write: bool) -> Result<u64, Exception> {
     }
 }
 
-fn table<'c>(c: &'c Ctx, id: &Term) -> Result<&'c Table, Exception> {
-    let tid = table_id(c, id, false)?;
-    Ok(c.sys.ets.get(tid).expect("resolved"))
+fn table<'s>(c: &Ctx, sys: &'s System, id: &Term) -> Result<&'s Table, Exception> {
+    let tid = table_id(c, sys, id, false)?;
+    Ok(sys.ets.get(tid).expect("resolved"))
 }
 
-fn table_mut<'c>(c: &'c mut Ctx, id: &Term) -> Result<&'c mut Table, Exception> {
-    let tid = table_id(c, id, true)?;
-    Ok(c.sys.ets.get_mut(tid).expect("resolved"))
+fn table_mut<'s>(c: &Ctx, sys: &'s mut System, id: &Term) -> Result<&'s mut Table, Exception> {
+    let tid = table_id(c, sys, id, true)?;
+    Ok(sys.ets.get_mut(tid).expect("resolved"))
 }
 
-/// Copies of `objs` on the caller's heap, as a list.
-fn objects_out(c: &mut Ctx, tid: u64, key: &Key) -> Term {
-    let t = c.sys.ets.get(tid).expect("resolved");
+/// Copies of the objects under `key` on the caller's heap, as a list.
+fn objects_out(c: &mut Ctx, sys: &System, tid: u64, key: &Key) -> Term {
+    let t = sys.ets.get(tid).expect("resolved");
     let copies: Vec<Term> = t
         .lookup(key)
         .iter()
@@ -109,7 +115,8 @@ pub fn new(c: &mut Ctx, a: &[Term]) -> R {
             _ => return Err(c.badarg()),
         }
     }
-    let tid = c.sys.make_ref().0;
+    let mut sys = c.sys();
+    let tid = sys.make_ref().0;
     let t = Table::new(
         tid,
         c.p.pid,
@@ -123,7 +130,7 @@ pub fn new(c: &mut Ctx, a: &[Term]) -> R {
         },
     );
     let id = table_term(&t);
-    c.sys.ets.create(t).map_err(|e| match e {
+    sys.ets.create(t).map_err(|e| match e {
         ets::TableError::NameTaken => c.badarg(),
         ets::TableError::TooMany => c.system_limit(),
     })?;
@@ -132,7 +139,12 @@ pub fn new(c: &mut Ctx, a: &[Term]) -> R {
 
 /// The objects `insert` was given: one tuple or a list of them, each with a key, copied out of
 /// the caller's heap. Raises `system_limit` if they would take ETS past `Limits::max_ets_words`.
-fn objects(c: &Ctx, t: &Table, arg: &Term) -> Result<Vec<(Key, OwnedTerm)>, Exception> {
+fn objects(
+    c: &Ctx,
+    sys: &System,
+    t: &Table,
+    arg: &Term,
+) -> Result<Vec<(Key, OwnedTerm)>, Exception> {
     let list = match arg {
         Term::Tuple(_) => alloc::vec![*arg],
         _ => c.list_arg(*arg)?,
@@ -142,14 +154,18 @@ fn objects(c: &Ctx, t: &Table, arg: &Term) -> Result<Vec<(Key, OwnedTerm)>, Exce
         let k = t.key_of(c.heap(), o).ok_or_else(|| c.badarg())?;
         out.push((k, c.own(o)));
     }
-    room_for(c, out.iter().map(|(_, o)| o))?;
+    room_for(c, sys, out.iter().map(|(_, o)| o))?;
     Ok(out)
 }
 
 /// `system_limit` unless ETS has room for `objs` besides what it holds. Objects they would
 /// replace are not credited: near the limit, an overwrite may be refused.
-fn room_for<'t>(c: &Ctx, objs: impl Iterator<Item = &'t OwnedTerm>) -> Result<(), Exception> {
-    let room = c.sys.limits.max_ets_words.saturating_sub(c.sys.ets.words());
+fn room_for<'t>(
+    c: &Ctx,
+    sys: &System,
+    objs: impl Iterator<Item = &'t OwnedTerm>,
+) -> Result<(), Exception> {
+    let room = sys.limits.max_ets_words.saturating_sub(sys.ets.words());
     let mut need: u64 = 0;
     for o in objs {
         need = need.saturating_add(ets::weigh(o));
@@ -161,23 +177,25 @@ fn room_for<'t>(c: &Ctx, objs: impl Iterator<Item = &'t OwnedTerm>) -> Result<()
 }
 
 pub fn insert(c: &mut Ctx, a: &[Term]) -> R {
+    let mut sys = c.sys();
     let objs = {
-        let t = table(c, &a[0])?;
-        objects(c, t, &a[1])?
+        let t = table(c, &sys, &a[0])?;
+        objects(c, &sys, t, &a[1])?
     };
-    let t = table_mut(c, &a[0])?;
+    let t = table_mut(c, &mut sys, &a[0])?;
     for (k, o) in objs {
         t.insert(k, o);
     }
-    Ok(Term::Atom(c.sys.atoms.true_))
+    Ok(Term::Atom(c.atoms.true_))
 }
 
 pub fn insert_new(c: &mut Ctx, a: &[Term]) -> R {
+    let mut sys = c.sys();
     let objs = {
-        let t = table(c, &a[0])?;
-        objects(c, t, &a[1])?
+        let t = table(c, &sys, &a[0])?;
+        objects(c, &sys, t, &a[1])?
     };
-    let t = table_mut(c, &a[0])?;
+    let t = table_mut(c, &mut sys, &a[0])?;
     if objs.iter().any(|(k, _)| t.contains(k)) {
         return Ok(c.bool(false));
     }
@@ -188,25 +206,28 @@ pub fn insert_new(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 pub fn lookup(c: &mut Ctx, a: &[Term]) -> R {
-    let tid = table_id(c, &a[0], false)?;
-    let key = c.sys.ets.get(tid).expect("resolved").key(&c.p.heap, a[1]);
-    Ok(objects_out(c, tid, &key))
+    let sys = c.sys();
+    let tid = table_id(c, &sys, &a[0], false)?;
+    let key = sys.ets.get(tid).expect("resolved").key(&c.p.heap, a[1]);
+    Ok(objects_out(c, &sys, tid, &key))
 }
 
 pub fn member(c: &mut Ctx, a: &[Term]) -> R {
-    let t = table(c, &a[0])?;
+    let sys = c.sys();
+    let t = table(c, &sys, &a[0])?;
     let found = t.contains(&t.key(c.heap(), a[1]));
     Ok(c.bool(found))
 }
 
 /// `lookup_element(Tab, Key, Pos)` and `lookup_element(Tab, Key, Pos, Default)`.
 pub fn lookup_element(c: &mut Ctx, a: &[Term]) -> R {
-    let tid = table_id(c, &a[0], false)?;
+    let sys = c.sys();
+    let tid = table_id(c, &sys, &a[0], false)?;
     let pos = a[2]
         .as_usize()
         .filter(|p| *p >= 1)
         .ok_or_else(|| c.badarg())?;
-    let t = c.sys.ets.get(tid).expect("resolved");
+    let t = sys.ets.get(tid).expect("resolved");
     let kind = t.kind;
     let objs = t.lookup(&t.key(&c.p.heap, a[1]));
     if objs.is_empty() {
@@ -230,37 +251,39 @@ pub fn lookup_element(c: &mut Ctx, a: &[Term]) -> R {
 
 /// `delete(Tab)` deletes the table (owner only); `delete(Tab, Key)` deletes objects.
 pub fn delete(c: &mut Ctx, a: &[Term]) -> R {
+    let mut sys = c.sys();
     if a.len() == 1 {
-        let tid = c.sys.ets.resolve(a[0]).ok_or_else(|| c.badarg())?;
-        if c.sys.ets.get(tid).expect("resolved").owner != c.p.pid
-            && c.sys.ets.get(tid).expect("resolved").access != Access::Public
-        {
+        let tid = sys.ets.resolve(a[0]).ok_or_else(|| c.badarg())?;
+        let t = sys.ets.get(tid).expect("resolved");
+        if t.owner != c.p.pid && t.access != Access::Public {
             return Err(c.badarg());
         }
-        c.sys.ets.delete(tid);
+        sys.ets.delete(tid);
     } else {
-        let tid = table_id(c, &a[0], true)?;
-        let t = c.sys.ets.get_mut(tid).expect("resolved");
+        let tid = table_id(c, &sys, &a[0], true)?;
+        let t = sys.ets.get_mut(tid).expect("resolved");
         let k = t.key(&c.p.heap, a[1]);
         t.remove(&k);
     }
-    Ok(Term::Atom(c.sys.atoms.true_))
+    Ok(Term::Atom(c.atoms.true_))
 }
 
 pub fn delete_object(c: &mut Ctx, a: &[Term]) -> R {
-    let tid = table_id(c, &a[0], true)?;
-    let t = c.sys.ets.get_mut(tid).expect("resolved");
+    let mut sys = c.sys();
+    let tid = table_id(c, &sys, &a[0], true)?;
+    let t = sys.ets.get_mut(tid).expect("resolved");
     let Some(k) = t.key_of(&c.p.heap, a[1]) else {
         return Err(c.badarg());
     };
     let obj = OwnedTerm::new(&c.p.heap, a[1]);
     t.remove_object(&k, &obj);
-    Ok(Term::Atom(c.sys.atoms.true_))
+    Ok(Term::Atom(c.atoms.true_))
 }
 
 pub fn take(c: &mut Ctx, a: &[Term]) -> R {
-    let tid = table_id(c, &a[0], true)?;
-    let t = c.sys.ets.get_mut(tid).expect("resolved");
+    let mut sys = c.sys();
+    let tid = table_id(c, &sys, &a[0], true)?;
+    let t = sys.ets.get_mut(tid).expect("resolved");
     let k = t.key(&c.p.heap, a[1]);
     let gone = t.remove(&k);
     let copies: Vec<Term> = gone.iter().map(|o| o.copy_into(&mut c.p.heap)).collect();
@@ -268,7 +291,8 @@ pub fn take(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 pub fn internal_delete_all(c: &mut Ctx, a: &[Term]) -> R {
-    let n = table_mut(c, &a[0])?.clear();
+    let mut sys = c.sys();
+    let n = table_mut(c, &mut sys, &a[0])?.clear();
     Ok(Term::Int(n as i64))
 }
 
@@ -314,8 +338,9 @@ fn counter_op(
 
 /// `update_counter(Tab, Key, Op | [Op])` and `update_counter(Tab, Key, Op, Default)`.
 pub fn update_counter(c: &mut Ctx, a: &[Term]) -> R {
-    let tid = table_id(c, &a[0], true)?;
-    let t = c.sys.ets.get(tid).expect("resolved");
+    let mut sys = c.sys();
+    let tid = table_id(c, &sys, &a[0], true)?;
+    let t = sys.ets.get(tid).expect("resolved");
     let (keypos, kind) = (t.keypos, t.kind);
     let key = t.key(&c.p.heap, a[1]);
     let current = t.lookup(&key).first().map(|o| o.copy_into(&mut c.p.heap));
@@ -346,7 +371,7 @@ pub fn update_counter(c: &mut Ctx, a: &[Term]) -> R {
         results.push(v);
     }
     let obj = c.own(obj);
-    let t = c.sys.ets.get_mut(tid).expect("resolved");
+    let t = sys.ets.get_mut(tid).expect("resolved");
     if t.contains(&key) {
         t.replace(&key, obj);
     } else {
@@ -361,15 +386,16 @@ pub fn update_counter(c: &mut Ctx, a: &[Term]) -> R {
 
 /// `update_element(Tab, Key, {Pos, Value} | [{Pos, Value}])`: `false` if there is no object.
 pub fn update_element(c: &mut Ctx, a: &[Term]) -> R {
-    let tid = table_id(c, &a[0], true)?;
-    let t = c.sys.ets.get(tid).expect("resolved");
+    let mut sys = c.sys();
+    let tid = table_id(c, &sys, &a[0], true)?;
+    let t = sys.ets.get(tid).expect("resolved");
     if !matches!(t.kind, Kind::Set | Kind::OrderedSet) {
         return Err(c.badarg());
     }
     let key = t.key(&c.p.heap, a[1]);
     let keypos = t.keypos;
     let Some(obj) = t.lookup(&key).first().map(|o| o.copy_into(&mut c.p.heap)) else {
-        return Ok(Term::Atom(c.sys.atoms.false_));
+        return Ok(Term::Atom(c.atoms.false_));
     };
     let changes = match a[2] {
         Term::Tuple(_) => alloc::vec![a[2]],
@@ -387,45 +413,39 @@ pub fn update_element(c: &mut Ctx, a: &[Term]) -> R {
     }
     let new = c.tuple(&e);
     let new = c.own(new);
-    c.sys.ets.get_mut(tid).expect("resolved").replace(&key, new);
-    Ok(Term::Atom(c.sys.atoms.true_))
+    sys.ets.get_mut(tid).expect("resolved").replace(&key, new);
+    Ok(Term::Atom(c.atoms.true_))
 }
 
 // ---- traversal ----
 
 /// A key found in table `tid` (by `find`), copied to the caller's heap, or `'$end_of_table'`.
-fn key_out(
-    c: &mut Ctx,
-    tid: u64,
-    find: impl Fn(&Table, &crate::term::Heap) -> Option<Key>,
-) -> Term {
-    let t = c.sys.ets.get(tid).expect("resolved");
-    match find(t, &c.p.heap) {
+fn key_out(c: &mut Ctx, id: &Term, find: impl Fn(&Table, &crate::term::Heap) -> Option<Key>) -> R {
+    let mut sys = c.sys();
+    let tid = table_id(c, &sys, id, false)?;
+    let t = sys.ets.get(tid).expect("resolved");
+    Ok(match find(t, &c.p.heap) {
         Some(k) => k.term.copy_into(&mut c.p.heap),
-        None => end_of_table(c),
-    }
+        None => end_of_table(&mut sys),
+    })
 }
 
 pub fn first(c: &mut Ctx, a: &[Term]) -> R {
-    let tid = table_id(c, &a[0], false)?;
-    Ok(key_out(c, tid, |t, _| t.first().cloned()))
+    key_out(c, &a[0], |t, _| t.first().cloned())
 }
 
 pub fn last(c: &mut Ctx, a: &[Term]) -> R {
-    let tid = table_id(c, &a[0], false)?;
-    Ok(key_out(c, tid, |t, _| t.last().cloned()))
+    key_out(c, &a[0], |t, _| t.last().cloned())
 }
 
 pub fn next(c: &mut Ctx, a: &[Term]) -> R {
-    let tid = table_id(c, &a[0], false)?;
     let k = a[1];
-    Ok(key_out(c, tid, |t, h| t.next(&t.key(h, k)).cloned()))
+    key_out(c, &a[0], |t, h| t.next(&t.key(h, k)).cloned())
 }
 
 pub fn prev(c: &mut Ctx, a: &[Term]) -> R {
-    let tid = table_id(c, &a[0], false)?;
     let k = a[1];
-    Ok(key_out(c, tid, |t, h| t.prev(&t.key(h, k)).cloned()))
+    key_out(c, &a[0], |t, h| t.prev(&t.key(h, k)).cloned())
 }
 
 /// `first_lookup/1` and friends: `{Key, Objects}` for the key `find` gives, or
@@ -435,13 +455,14 @@ fn with_objects(
     id: &Term,
     find: impl Fn(&Table, &crate::term::Heap) -> Option<Key>,
 ) -> R {
-    let tid = table_id(c, id, false)?;
-    let t = c.sys.ets.get(tid).expect("resolved");
+    let mut sys = c.sys();
+    let tid = table_id(c, &sys, id, false)?;
+    let t = sys.ets.get(tid).expect("resolved");
     let Some(k) = find(t, &c.p.heap) else {
-        return Ok(end_of_table(c));
+        return Ok(end_of_table(&mut sys));
     };
     let key = k.term.copy_into(&mut c.p.heap);
-    let objs = objects_out(c, tid, &k);
+    let objs = objects_out(c, &sys, tid, &k);
     Ok(c.tuple(&[key, objs]))
 }
 
@@ -531,10 +552,10 @@ fn call(
             let stop_on = f == "orelse";
             for x in args {
                 let v = eval(c, *x, obj, b, depth + 1)?;
-                if v.is_atom(&c.sys.atoms.true_) == stop_on {
+                if v.is_atom(&c.atoms.true_) == stop_on {
                     return Some(c.bool(stop_on));
                 }
-                if !v.is_atom(&c.sys.atoms.true_) && !v.is_atom(&c.sys.atoms.false_) {
+                if !v.is_atom(&c.atoms.true_) && !v.is_atom(&c.atoms.false_) {
                     return None;
                 }
             }
@@ -545,9 +566,12 @@ fn call(
             for x in args {
                 vals.push(eval(c, *x, obj, b, depth + 1)?);
             }
-            let erlang = c.sys.atoms.erlang;
-            let fname = c.sys.atom(f);
-            let n = c.sys.native(&erlang, &fname, args.len() as u32)?;
+            let erlang = c.atoms.erlang;
+            let n = {
+                let mut sys = c.sys();
+                let fname = sys.atom(f);
+                sys.native(&erlang, &fname, args.len() as u32)?
+            };
             n(c, &vals).ok()
         }
         _ => None,
@@ -564,7 +588,7 @@ fn run_spec(c: &mut Ctx, spec: &[Clause], obj: Term) -> Option<Term> {
         }
         let mut guards_pass = true;
         for g in &clause.guards {
-            if !eval(c, *g, obj, &b, 0).is_some_and(|v| v.is_atom(&c.sys.atoms.true_)) {
+            if !eval(c, *g, obj, &b, 0).is_some_and(|v| v.is_atom(&c.atoms.true_)) {
                 guards_pass = false;
                 break;
             }
@@ -593,9 +617,13 @@ fn spec(c: &Ctx, t: &Term) -> Result<Vec<Clause>, Exception> {
 /// Objects of `id` for which `spec` gives a result, with those results, in key order. Each
 /// object is copied to the caller's heap to be matched there.
 fn select_all(c: &mut Ctx, id: &Term, spec: &[Clause]) -> Result<Vec<(Term, Term)>, Exception> {
-    let tid = table_id(c, id, false)?;
-    let t = c.sys.ets.get(tid).expect("resolved");
-    let objs: Vec<Term> = t.all().map(|o| o.copy_into(&mut c.p.heap)).collect();
+    // Copied out under the lock; matched after it is released (guards call natives).
+    let objs: Vec<Term> = {
+        let sys = c.sys();
+        let tid = table_id(c, &sys, id, false)?;
+        let t = sys.ets.get(tid).expect("resolved");
+        t.all().map(|o| o.copy_into(&mut c.p.heap)).collect()
+    };
     let mut out = Vec::new();
     for o in objs {
         if let Some(r) = run_spec(c, spec, o) {
@@ -618,7 +646,7 @@ pub fn select(c: &mut Ctx, a: &[Term]) -> R {
 /// show, which BEAM does not promise either.
 fn chunk(c: &mut Ctx, mut results: Vec<Term>, limit: usize, from_end: bool) -> Term {
     if results.is_empty() {
-        return end_of_table(c);
+        return end_of_table(&mut c.sys());
     }
     let n = limit.min(results.len());
     let chunk: Vec<Term> = if from_end {
@@ -627,7 +655,7 @@ fn chunk(c: &mut Ctx, mut results: Vec<Term>, limit: usize, from_end: bool) -> T
         results.drain(..n).collect()
     };
     let cont = if results.is_empty() {
-        end_of_table(c)
+        end_of_table(&mut c.sys())
     } else {
         let tag = c.atom("$beamlet_select");
         let rest = c.list(results);
@@ -644,7 +672,8 @@ fn limit(c: &Ctx, t: &Term) -> Result<usize, Exception> {
 
 /// Whether chunks of a traversal of table `id` come from the end (hash tables).
 fn hash_table(c: &Ctx, id: &Term) -> Result<bool, Exception> {
-    Ok(table(c, id)?.kind != Kind::OrderedSet)
+    let sys = c.sys();
+    Ok(table(c, &sys, id)?.kind != Kind::OrderedSet)
 }
 
 /// `select(Tab, MS, Limit)`.
@@ -688,15 +717,16 @@ pub fn match_object3(c: &mut Ctx, a: &[Term]) -> R {
 
 /// `select(Continuation)` (also `match/1`, `match_object/1`, `select_reverse/1`).
 pub fn select1(c: &mut Ctx, a: &[Term]) -> R {
-    if a[0].is_atom(&c.sys.atom("$end_of_table")) {
-        return Ok(end_of_table(c));
+    let end = end_of_table(&mut c.sys());
+    if c.heap().eq_exact(a[0], end) {
+        return Ok(end);
     }
     match c.heap().as_tuple(a[0]) {
         Some(&[Term::Atom(tag), rest, Term::Int(n), from_end])
             if tag.as_str() == "$beamlet_select" && n >= 1 =>
         {
             let rest = c.list_arg(rest)?;
-            let from_end = from_end.is_atom(&c.sys.atoms.true_);
+            let from_end = from_end.is_atom(&c.atoms.true_);
             Ok(chunk(c, rest, n as usize, from_end))
         }
         _ => Err(c.badarg()),
@@ -714,21 +744,24 @@ pub fn select_count(c: &mut Ctx, a: &[Term]) -> R {
     let found = select_all(c, &a[0], &s)?;
     let n = found
         .iter()
-        .filter(|(_, r)| r.is_atom(&c.sys.atoms.true_))
+        .filter(|(_, r)| r.is_atom(&c.atoms.true_))
         .count();
     Ok(Term::Int(n as i64))
 }
 
 pub fn internal_select_delete(c: &mut Ctx, a: &[Term]) -> R {
     let s = spec(c, &a[1])?;
-    let tid = table_id(c, &a[0], true)?;
+    let tid = table_id(c, &c.sys(), &a[0], true)?;
     let found = select_all(c, &a[0], &s)?;
     let doomed: Vec<Term> = found
         .into_iter()
-        .filter(|(_, r)| r.is_atom(&c.sys.atoms.true_))
+        .filter(|(_, r)| r.is_atom(&c.atoms.true_))
         .map(|(o, _)| o)
         .collect();
-    let t = c.sys.ets.get_mut(tid).expect("resolved");
+    let mut sys = c.sys();
+    let Some(t) = sys.ets.get_mut(tid) else {
+        return Ok(Term::Int(0));
+    };
     let mut n = 0;
     for o in doomed {
         let k = t.key_of(&c.p.heap, o).expect("stored objects have keys");
@@ -741,14 +774,17 @@ pub fn internal_select_delete(c: &mut Ctx, a: &[Term]) -> R {
 /// keep the key. Returns the number replaced.
 pub fn select_replace(c: &mut Ctx, a: &[Term]) -> R {
     let s = spec(c, &a[1])?;
-    let tid = table_id(c, &a[0], true)?;
+    let tid = table_id(c, &c.sys(), &a[0], true)?;
     let found = select_all(c, &a[0], &s)?;
     let owned: Vec<(OwnedTerm, OwnedTerm)> = found
         .into_iter()
         .map(|(old, new)| (c.own(old), c.own(new)))
         .collect();
-    room_for(c, owned.iter().map(|(_, new)| new))?;
-    let t = c.sys.ets.get_mut(tid).expect("resolved");
+    let mut sys = c.sys();
+    room_for(c, &sys, owned.iter().map(|(_, new)| new))?;
+    let Some(t) = sys.ets.get_mut(tid) else {
+        return Ok(Term::Int(0));
+    };
     let mut n = 0;
     for (old, new) in owned {
         let (Some(k_old), Some(k_new)) = (
@@ -815,7 +851,8 @@ pub fn match_spec_run_r(c: &mut Ctx, a: &[Term]) -> R {
 // ---- table information and ownership ----
 
 fn info_value(c: &mut Ctx, t_id: u64, item: &str) -> Option<Term> {
-    let t = c.sys.ets.get(t_id)?;
+    let sys = c.sys();
+    let t = sys.ets.get(t_id)?;
     let (name, named, kind, access, keypos, owner, size) = (
         t.name,
         t.named,
@@ -827,6 +864,7 @@ fn info_value(c: &mut Ctx, t_id: u64, item: &str) -> Option<Term> {
     );
     let heir = t.heir.as_ref().map(|(p, _)| *p);
     let tid = t.tid;
+    drop(sys);
     Some(match item {
         "name" => Term::Atom(name),
         "named_table" => c.bool(named),
@@ -857,9 +895,10 @@ fn info_value(c: &mut Ctx, t_id: u64, item: &str) -> Option<Term> {
 }
 
 pub fn info(c: &mut Ctx, a: &[Term]) -> R {
-    let Some(tid) = c.sys.ets.resolve(a[0]) else {
+    let tid = c.sys().ets.resolve(a[0]);
+    let Some(tid) = tid else {
         return if matches!(a[0], Term::Atom(_) | Term::Ref(_)) {
-            Ok(Term::Atom(c.sys.atoms.undefined))
+            Ok(Term::Atom(c.atoms.undefined))
         } else {
             Err(c.badarg())
         };
@@ -890,9 +929,10 @@ pub fn info(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 pub fn whereis(c: &mut Ctx, a: &[Term]) -> R {
-    Ok(match c.sys.ets.resolve(a[0]) {
+    let tid = c.sys().ets.resolve(a[0]);
+    Ok(match tid {
         Some(tid) if matches!(a[0], Term::Atom(_)) => Term::Ref(Ref(tid)),
-        _ => Term::Atom(c.sys.atoms.undefined),
+        _ => Term::Atom(c.atoms.undefined),
     })
 }
 
@@ -900,44 +940,56 @@ pub fn rename(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Atom(name) = a[1] else {
         return Err(c.badarg());
     };
-    let tid = table_id(c, &a[0], true)?;
-    c.sys.ets.rename(tid, name).map_err(|_| c.badarg())?;
+    let mut sys = c.sys();
+    let tid = table_id(c, &sys, &a[0], true)?;
+    sys.ets.rename(tid, name).map_err(|_| c.badarg())?;
     Ok(a[1])
 }
 
 /// Transfer a table to a new owner, which receives `{'ETS-TRANSFER', Tab, FromPid, Data}`
 /// (`data` a term of the caller's heap).
 pub(crate) fn transfer(c: &mut Ctx, tid: u64, to: Pid, data: Term) {
-    let Some(t) = c.sys.ets.get_mut(tid) else {
-        return;
+    let (from, id) = {
+        let mut sys = c.sys();
+        let Some(t) = sys.ets.get_mut(tid) else {
+            return;
+        };
+        let from = t.owner;
+        t.owner = to;
+        (from, table_term(t))
     };
-    let from = t.owner;
-    t.owner = to;
-    let id = table_term(t);
     let tag = c.atom("ETS-TRANSFER");
     let msg = c.tuple(&[tag, id, Term::Pid(from), data]);
     super::proc::send_to(c, to, msg);
 }
 
 pub fn give_away(c: &mut Ctx, a: &[Term]) -> R {
-    let tid = c.sys.ets.resolve(a[0]).ok_or_else(|| c.badarg())?;
     let Term::Pid(to) = a[1] else {
         return Err(c.badarg());
     };
-    let owner = c.sys.ets.get(tid).expect("resolved").owner;
-    if owner != c.p.pid || to == c.p.pid || !c.sys.procs.is_alive(to) {
-        return Err(c.badarg());
-    }
+    let tid = {
+        let sys = c.sys();
+        let tid = sys.ets.resolve(a[0]).ok_or_else(|| c.badarg())?;
+        let owner = sys.ets.get(tid).expect("resolved").owner;
+        if owner != c.p.pid || to == c.p.pid || !sys.procs.is_alive(to) {
+            return Err(c.badarg());
+        }
+        tid
+    };
     transfer(c, tid, to, a[2]);
-    Ok(Term::Atom(c.sys.atoms.true_))
+    Ok(Term::Atom(c.atoms.true_))
 }
 
 /// `setopts(Tab, Opts)`: only `{heir, ...}` is supported (by the owner).
 pub fn setopts(c: &mut Ctx, a: &[Term]) -> R {
-    let tid = c.sys.ets.resolve(a[0]).ok_or_else(|| c.badarg())?;
-    if c.sys.ets.get(tid).expect("resolved").owner != c.p.pid {
-        return Err(c.badarg());
-    }
+    let tid = {
+        let sys = c.sys();
+        let tid = sys.ets.resolve(a[0]).ok_or_else(|| c.badarg())?;
+        if sys.ets.get(tid).expect("resolved").owner != c.p.pid {
+            return Err(c.badarg());
+        }
+        tid
+    };
     let opts = match a[1] {
         Term::Tuple(_) => alloc::vec![a[1]],
         other => c.list_arg(other)?,
@@ -954,21 +1006,24 @@ pub fn setopts(c: &mut Ctx, a: &[Term]) -> R {
             }
             _ => return Err(c.badarg()),
         };
-        c.sys.ets.get_mut(tid).expect("resolved").heir = heir;
+        c.sys().ets.get_mut(tid).expect("resolved").heir = heir;
     }
-    Ok(Term::Atom(c.sys.atoms.true_))
+    Ok(Term::Atom(c.atoms.true_))
 }
 
 pub fn safe_fixtable(c: &mut Ctx, a: &[Term]) -> R {
-    table(c, &a[0])?;
-    Ok(Term::Atom(c.sys.atoms.true_))
+    table(c, &c.sys(), &a[0])?;
+    Ok(Term::Atom(c.atoms.true_))
 }
 
 pub fn all(c: &mut Ctx, _a: &[Term]) -> R {
-    let mut out = Vec::new();
-    for tid in c.sys.ets.tids() {
-        let t = c.sys.ets.get(tid).expect("listed");
-        out.push(table_term(t));
-    }
+    let out: Vec<Term> = {
+        let sys = c.sys();
+        sys.ets
+            .tids()
+            .into_iter()
+            .map(|tid| table_term(sys.ets.get(tid).expect("listed")))
+            .collect()
+    };
     Ok(c.list(out))
 }

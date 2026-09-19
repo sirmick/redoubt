@@ -81,7 +81,7 @@ pub fn copy(c: &mut Ctx, a: &[Term]) -> R {
         None => 1,
         Some(t) => t.as_usize().ok_or_else(|| c.badarg())?,
     };
-    if bytes.len().saturating_mul(n).saturating_mul(8) > c.sys.limits.max_binary_bits {
+    if bytes.len().saturating_mul(n).saturating_mul(8) > c.sys().limits.max_binary_bits {
         return Err(c.system_limit());
     }
     Ok(c.binary(&bytes.repeat(n)))
@@ -115,8 +115,8 @@ pub fn encode_unsigned(c: &mut Ctx, a: &[Term]) -> R {
         .as_bigint(a[0])
         .filter(|v| v.sign() != Sign::Minus)
         .ok_or_else(|| c.badarg())?;
-    let little = a.get(1).is_some_and(|e| e.is_atom(&c.sys.atoms.little));
-    if a.len() == 2 && !little && !a[1].is_atom(&c.sys.atoms.big) {
+    let little = a.get(1).is_some_and(|e| e.is_atom(&c.atoms.little));
+    if a.len() == 2 && !little && !a[1].is_atom(&c.atoms.big) {
         return Err(c.badarg());
     }
     let mut bytes = if little {
@@ -132,8 +132,8 @@ pub fn encode_unsigned(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn decode_unsigned(c: &mut Ctx, a: &[Term]) -> R {
     let bytes = bytes_of(c, &a[0])?;
-    let little = a.get(1).is_some_and(|e| e.is_atom(&c.sys.atoms.little));
-    if a.len() == 2 && !little && !a[1].is_atom(&c.sys.atoms.big) {
+    let little = a.get(1).is_some_and(|e| e.is_atom(&c.atoms.little));
+    if a.len() == 2 && !little && !a[1].is_atom(&c.atoms.big) {
         return Err(c.badarg());
     }
     Ok(c.big(if little {

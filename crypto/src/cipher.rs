@@ -288,7 +288,7 @@ fn options(c: &mut Ctx, t: &Term, arg: i64) -> Result<(bool, Padding), Exception
     if is_true(c, t) {
         return Ok((true, Padding::Undefined));
     }
-    if t.is_atom(&c.sys.atoms.false_) {
+    if t.is_atom(&c.atoms.false_) {
         return Ok((false, Padding::Undefined));
     }
     let Some(opts) = c.heap().to_vec(*t) else {
@@ -301,7 +301,7 @@ fn options(c: &mut Ctx, t: &Term, arg: i64) -> Result<(bool, Padding), Exception
                 let v = &v;
                 if is_true(c, v) {
                     encrypt = true;
-                } else if v.is_atom(&c.sys.atoms.false_) {
+                } else if v.is_atom(&c.atoms.false_) {
                     encrypt = false;
                 } else {
                     return Err(badarg(c, arg, "Bad encrypt option"));
@@ -682,7 +682,7 @@ pub fn aead_one_time(c: &mut Ctx, a: &[Term]) -> R {
             let e = [bin(c, &out), bin(c, &tag)];
             c.tuple(&e)
         }),
-        (_, Some(_)) => Ok(Term::Atom(c.sys.atoms.error)),
+        (_, Some(_)) => Ok(Term::Atom(c.atoms.error)),
         (out, None) => Ok(bin(c, &out)),
     }
 }
@@ -730,11 +730,11 @@ pub fn aead_with_state(c: &mut Ctx, a: &[Term]) -> R {
         return Ok(bin(c, &out));
     }
     if input.len() < tag_len {
-        return Ok(Term::Atom(c.sys.atoms.error));
+        return Ok(Term::Atom(c.atoms.error));
     }
     let tag = input.split_off(input.len() - tag_len);
     match aead_run(c, mode, &key, &iv, input, &aad, Err(tag))? {
         (out, None) => Ok(bin(c, &out)),
-        _ => Ok(Term::Atom(c.sys.atoms.error)),
+        _ => Ok(Term::Atom(c.atoms.error)),
     }
 }
