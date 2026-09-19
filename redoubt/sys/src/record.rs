@@ -32,16 +32,31 @@ impl Slot for Handle {
     fn from_slot(raw: u64) -> Result<Self, Error> { Handle::from_raw(raw) }
 }
 
-/// At most `N` items. Only the first `len` mean anything: equality compares those, and a
+/// A handle as it arrives in a message or a reply: 0 is `None`, a handle revoked while its
+/// message was in flight (R10), or one the receiver could not take (QUESTIONS.md 116, pending).
+/// It keeps its slot, so the handles after it keep their positions (WIRE.md numbers them).
+impl Slot for Option<Handle> {
+    const FILL: Self = None;
+
+    fn to_slot(self) -> u64 { self.map_or(0, Handle::to_raw) }
+
+    fn from_slot(raw: u64) -> Result<Self, Error> {
+        if raw == 0 { Ok(None) } else { Handle::from_raw(raw).map(Some) }
+    }
+}
+
+/// At most `N` items. Only the first `len` mean anything: equality and `Debug` see those, and a
 /// record's unused slots are always written as 0.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub struct List<T, const N: usize> {
     items: [T; N],
     len: usize,
 }
 
-/// The handles a message carries.
+/// The handles a message carries, as sent: every one a handle.
 pub type Handles = List<Handle, MAX_MSG_HANDLES>;
+/// The handles a message or a reply carries, as received: a slot may be 0 (`None`).
+pub type ReceivedHandles = List<Option<Handle>, MAX_MSG_HANDLES>;
 /// A budget's labels, as sent: the kernel sorts and deduplicates them.
 pub type Labels = List<u64, MAX_LABELS>;
 
@@ -99,6 +114,10 @@ impl<T: Slot, const N: usize> PartialEq for List<T, N> {
 
 impl<T: Slot, const N: usize> Eq for List<T, N> {}
 
+impl<T: Slot + core::fmt::Debug, const N: usize> core::fmt::Debug for List<T, N> {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result { self.as_slice().fmt(f) }
+}
+
 impl<T: Slot, const N: usize> Default for List<T, N> {
     fn default() -> Self { List::new() }
 }
@@ -106,24 +125,38 @@ impl<T: Slot, const N: usize> Default for List<T, N> {
 /// Slots in a [`Body`]: the words, the handle count, the handles.
 pub const BODY_SLOTS: usize = WORDS + 1 + MAX_MSG_HANDLES;
 
-/// What a message carries besides its buffer: sent by `call` (and the reply written back over
-/// it), `send` and `reply`, and delivered inside [`Message`].
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub struct Body {
+/// What a message carries besides its buffer, with handles of type `H`: [`Body`] as sent,
+/// [`ReceivedBody`] as received.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BodyOf<H: Slot> {
     pub words: [usize; WORDS],
-    pub handles: Handles,
+    pub handles: List<H, MAX_MSG_HANDLES>,
 }
 
-impl Body {
+/// A body as sent: by `call` (the request), `send` and `reply`. Every handle is one; a slot of 0
+/// within the count is `BadHandle`.
+pub type Body = BodyOf<Handle>;
+
+/// A body as received: inside a [`Message`], and the reply `call` writes back over its request.
+/// A handle slot within the count may be 0 (`None`): the handle was revoked while the message was
+/// in flight (R10), or, in a reply, did not fit the caller's table (QUESTIONS.md 116, pending: the
+/// reply is still delivered, without it). Slots past the count are still 0.
+pub type ReceivedBody = BodyOf<Option<Handle>>;
+
+impl<H: Slot> Default for BodyOf<H> {
+    fn default() -> Self { BodyOf { words: [0; WORDS], handles: List::new() } }
+}
+
+impl<H: Slot> BodyOf<H> {
     pub fn encode(&self) -> [u64; BODY_SLOTS] {
         let mut slots = [0; BODY_SLOTS];
         self.write(&mut Writer::record(&mut slots));
         slots
     }
 
-    pub fn decode(slots: &[u64; BODY_SLOTS]) -> Result<Body, Error> {
+    pub fn decode(slots: &[u64; BODY_SLOTS]) -> Result<Self, Error> {
         let mut r = Reader::record(slots);
-        let body = Body::read(&mut r)?;
+        let body = Self::read(&mut r)?;
         r.finish()?;
         Ok(body)
     }
@@ -135,12 +168,12 @@ impl Body {
         self.handles.write(w);
     }
 
-    fn read(r: &mut Reader) -> Result<Body, Error> {
+    fn read(r: &mut Reader) -> Result<Self, Error> {
         let mut words = [0; WORDS];
         for word in &mut words {
             *word = r.usize()?;
         }
-        Ok(Body { words, handles: Handles::read(r)? })
+        Ok(BodyOf { words, handles: List::read(r)? })
     }
 }
 
@@ -193,7 +226,8 @@ pub struct Message {
     pub badge: u64,
     pub account: u64,
     pub labels: Labels,
-    pub body: Body,
+    /// Words and handles; a handle revoked in flight arrives as `None` (R10).
+    pub body: ReceivedBody,
 }
 
 /// How a message was sent, and the buffer it brought, as mapped in the receiver: record kind 1
@@ -212,10 +246,11 @@ pub struct ExitNotice {
     pub pid: u32,
     pub cause: Cause,
     pub code: u32,
-    /// For `Faulted`: the account of the sender of the current call of the thread that failed.
-    /// 0 when nobody is blamed, and always for `Exited` and `Killed`.
+    /// For `Faulted`: the account of the sender of the current call of the thread that failed;
+    /// 0 when nobody is blamed, and for `Exited` and `Killed`. That is the kernel's rule
+    /// (KERNEL-SPEC.md, Messages): the type holds any value, and decoding does not check it.
     pub blamed_account: u64,
-    /// That sender's labels; empty whenever nobody is blamed.
+    /// That sender's labels; empty whenever nobody is blamed (the kernel's rule, as above).
     pub blamed_labels: Labels,
 }
 
@@ -237,9 +272,13 @@ struct Fields {
     account: u64,
     labels: Labels,
     words: [u64; WORDS],
-    handles: Handles,
+    handles: ReceivedHandles,
     pages: Option<Pages>,
 }
+
+/// Where the fields lie: `account` is slot 3, word 0 follows the labels.
+const ACCOUNT: usize = 3;
+const WORD0: usize = 4 + 1 + MAX_LABELS;
 
 impl Fields {
     fn write(&self, w: &mut Writer) {
@@ -269,7 +308,7 @@ impl Fields {
             account,
             labels,
             words,
-            handles: Handles::read(r)?,
+            handles: ReceivedHandles::read(r)?,
             pages: Pages::read(r)?,
         })
     }
@@ -311,15 +350,32 @@ impl Received {
 
     /// Userspace side. The kernel is trusted to write a valid record; decoding still rejects a
     /// malformed one (crate docs, Decoding) rather than panicking.
+    ///
+    /// The kind comes first. A notice fills one run of slots (none for an interrupt), and every
+    /// slot outside it must be 0, checked before any field is read: a stray value there, a list's
+    /// count included, is `InvalidArgument`. Then the fields are read, each checked as its type
+    /// requires (a list's count over its capacity `TooLarge`, a handle wider than 32 bits
+    /// `BadHandle`, anything else malformed `InvalidArgument`).
     pub fn decode(slots: &[u64; RECEIVED_SLOTS]) -> Result<Received, Error> {
+        let filled = match slots[0] {
+            CALL | SEND => 1..RECEIVED_SLOTS,
+            INTERRUPT => 1..1,
+            // `blamed_account`, `blamed_labels`, words 0-2.
+            EXIT => ACCOUNT..WORD0 + 3,
+            ABANDONED => 1..2,
+            _ => return Err(Error::InvalidArgument),
+        };
+        if slots.iter().enumerate().skip(1).any(|(i, slot)| *slot != 0 && !filled.contains(&i)) {
+            return Err(Error::InvalidArgument);
+        }
         let mut r = Reader::record(slots);
         let f = Fields::read(&mut r)?;
         r.finish()?;
         let msg_id = NonZeroU64::new(f.msg_id).ok_or(Error::InvalidArgument);
         let u32_of = |raw: u64| u32::try_from(raw).map_err(|_| Error::InvalidArgument);
-        let received = match f.kind {
+        Ok(match f.kind {
             CALL | SEND => {
-                let mut body = Body { words: [0; WORDS], handles: f.handles };
+                let mut body = ReceivedBody { words: [0; WORDS], handles: f.handles };
                 for (word, raw) in body.words.iter_mut().zip(f.words) {
                     *word = usize::try_from(raw).map_err(|_| Error::InvalidArgument)?;
                 }
@@ -344,16 +400,9 @@ impl Received {
                 blamed_account: f.account,
                 blamed_labels: f.labels,
             }),
-            ABANDONED => Received::Abandoned(msg_id?),
-            _ => return Err(Error::InvalidArgument),
-        };
-        // Each kind took only the fields it uses, and every other field must be 0 or empty, so
-        // that a record has one encoding. Re-encoding writes exactly those fields as 0, so
-        // comparing the whole record checks them all.
-        if received.encode() != *slots {
-            return Err(Error::InvalidArgument);
-        }
-        Ok(received)
+            // ABANDONED: the only kind left, the match above having refused the rest.
+            _ => Received::Abandoned(msg_id?),
+        })
     }
 }
 

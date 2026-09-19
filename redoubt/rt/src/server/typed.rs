@@ -7,7 +7,7 @@
 //! each server decodes them itself.
 //!
 //! ```
-//! use redoubt_rt::abi::{Handle, Handles};
+//! use redoubt_rt::abi::{Handle, Handles, ReceivedHandles};
 //! use redoubt_rt::ipc::{Caller, Words};
 //! use redoubt_rt::server::typed::{Answer, Protocol, TypedServer, answer};
 //! use redoubt_rt::wire::Error as WireError;
@@ -59,14 +59,15 @@
 //! // `answer` is the same without the system calls:
 //! let caller = Caller { badge: 1, account: 1, labels: Default::default() };
 //! let words = Message::Small(Small { a: 2, b: 40 }).encode(&mut []).unwrap();
-//! let outcome = answer::<Example, _>(&mut Adder, &caller, &words, &Handles::new(), &mut []);
+//! let outcome =
+//!     answer::<Example, _>(&mut Adder, &caller, &words, &ReceivedHandles::new(), &mut []);
 //! assert_eq!(
 //!     Reply::decode(3, &outcome.words, &[], 0),
 //!     Ok(Ok(Reply::Small(SmallReply { c: 42 })))
 //! );
 //! ```
 
-use redoubt_sys::{Error, Handle, Handles};
+use redoubt_sys::{Error, Handle, Handles, ReceivedHandles};
 use redoubt_wire::Error as WireError;
 
 use crate::ipc::{Caller, Request, Words};
@@ -121,10 +122,21 @@ pub trait TypedServer<P: Protocol> {
 pub struct Outcome {
     pub words: Words,
     pub send: Handles,
-    /// The request's handles if it did not decode (the server never saw them), the reply's if
+    /// The request's handles if it did not decode or one was missing (the server never saw
+    /// them), the reply's if
     /// the reply did not fit the lend (they cannot travel without it), or the reply's after it
     /// is sent if the server asked for that.
     pub close: Handles,
+}
+
+/// The handles, if every slot holds one; otherwise, as the error, the ones that do.
+fn present(handles: &ReceivedHandles) -> Result<Handles, Handles> {
+    let mut list = Handles::new();
+    for handle in handles.as_slice().iter().flatten() {
+        // Cannot fail: the two lists have the same capacity.
+        let _ = list.push(*handle);
+    }
+    if list.as_slice().len() == handles.as_slice().len() { Ok(list) } else { Err(list) }
 }
 
 /// The outcome of a request; a buffer-shaped reply's fields are written into `buf`. Makes no
@@ -133,15 +145,19 @@ pub fn answer<P: Protocol, S: TypedServer<P>>(
     server: &mut S,
     caller: &Caller,
     words: &Words,
-    handles: &Handles,
+    handles: &ReceivedHandles,
     buf: &mut [u8],
 ) -> Outcome {
     let none = Handles::new();
-    // A request that does not decode, or whose reply does not fit the lend, is malformed:
-    // status 1 in every protocol (answer 42).
+    // A request that does not decode, whose reply does not fit the lend, or missing a handle
+    // (revoked on its way: R10) is malformed: status 1 in every protocol (answer 42; WIRE.md).
     let malformed = super::MALFORMED;
+    let handles = match present(handles) {
+        Ok(handles) => handles,
+        Err(present) => return Outcome { words: malformed, send: none, close: present },
+    };
     let Ok(request) = P::decode(words, buf, handles.as_slice().len()) else {
-        return Outcome { words: malformed, send: none, close: *handles };
+        return Outcome { words: malformed, send: none, close: handles };
     };
     match server.handle(caller, request, handles.as_slice()) {
         Ok(answer) => match P::encode_reply(&answer.reply, buf) {
