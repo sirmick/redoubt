@@ -6,8 +6,10 @@ and in human-written files. One convention for every message, one for every file
 ## Messages: 9P's convention
 - **9P** is plain 9P2000 (no `.u` or `.L` extensions) with a fixed `msize` of 64 KiB, which is
   `MAX_LEND_PAGES` (KERNEL-SPEC.md). A 9P message travels in a lent buffer, and the call's four
-  words are all zero, in the request and in a successful reply. A request with any other words, or
-  with no lend, is refused with reply status 1 (`Malformed`, below).
+  words are all zero, in the request and in a successful reply. A request with word 0 = 0 and any
+  other non-zero word, or with no lend, is refused with reply status 1 (`Malformed`, below). A
+  request whose word 0 is not 0 is a typed operation on the same endpoint: every 9P server serves
+  `ninep-common` (`new_connection`, `disconnect`; NAMESPACES.md).
 - **Typed messages** (everything that is not 9P: `blkd` <-> `fsd`, the steward, `keyd`, `sshd`
   <-> steward, `ipd`'s connect and listen operations) use **9P's own encoding**: little-endian
   fixed-size integers (`u8`, `u16`, `u32`, `u64`), strings as `u16` length + UTF-8, byte arrays as
@@ -37,16 +39,18 @@ by that server's work package with a HISTORY.md line (BUILD-PLAN.md). A line hol
 - **Types:** `u8`, `u16`, `u32`, `u64`, `string` (`u16` length + UTF-8), `bytes` (`u32` length +
   bytes), and `handle[N] KIND` (the handle in slot N; slots are numbered from 0 in order, carry no
   bytes, and a message has at most `MAX_MSG_HANDLES`). `KIND` is the object the handle must name:
-  `endpoint`, `budget`, `process`, `mmio`, `irq` or `reset` (KERNEL-SPEC.md, Objects). `receive`
-  reports each received handle's kind (KERNEL-SPEC.md, Messages); the generator puts the kind in the
-  codec's docs and emits a helper that checks it against that report, so no receiver has to guess.
+  `endpoint`, `budget`, `process`, `mmio`, `irq` or `reset` (KERNEL-SPEC.md, Objects). The kind is
+  documentation, put in the codec's docs by the generator: the kernel does not report a received
+  handle's kind, so a handle of the wrong kind is found by use (`WrongObject` on first use).
 - **Compound values** (a label set, an IP prefix) are a `bytes` field whose inner layout is stated
   under the table, in the same encoding. Milestone 1 adds no other types.
+- **Every milestone 1 typed message is a `call`.** A table has no column saying so; a `kind` column
+  is added when a protocol first needs a `send` (a transfer).
 - **Errors.** Each protocol has an error table, marked by a line `<!-- wire-errors: NAME -->` and
   headed `| Code | Error |`: codes unique, each with a name. **Code 1 is `Malformed` in every
-  protocol**, and in a 9P call's reply status: a request that does not decode (unknown opcode,
-  wrong shape, bad lengths, a missing or wrong-kind handle). The generator reserves it and adds it
-  to every table; a protocol's own codes start at 2.
+  protocol**, and in a 9P call's reply status: a request that does not decode (unknown opcode, wrong
+  shape, bad lengths, a missing handle, or one found to be of the wrong kind). The generator
+  reserves it and adds it to every table; a protocol's own codes start at 2.
 
 ### Layout in a message
 - **Word 0** of a request is its opcode. **Word 0 of a reply is its status**: 0 = ok, otherwise a
@@ -65,6 +69,9 @@ by that server's work package with a HISTORY.md line (BUILD-PLAN.md). A line hol
 - **Typed operations written into a 9P file** (`ipd`'s `/net/tcp/N/ctl`, NAMESPACES.md): a file's
   contents have no words, so each operation is one `Twrite` whose data is the opcode as a `u32`
   followed by the buffer-shape encoding of its fields.
+- **The startup block** (INIT.md) is one typed message laid out the same way in its page: the
+  opcode as a `u32`, then the buffer-shape encoding of its fields. It is decoded by `redoubt-wire`
+  like any other message.
 
 ## Files people write: strict JSON
 The boot manifest (INIT.md), package manifests (PACKAGES.md) and configuration are JSON under the

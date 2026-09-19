@@ -33,8 +33,9 @@ Decentralized information flow control in the Flume/HiStar style, with labels fi
   processes exit). A parent's usage counts its children's limits, never their live usage, so a
   labelled child cannot signal through its parent's counters.
 - **Sinks** (servers whose output leaves a principal or the machine: `ipd`, later `gatewayd`) are
-  cleared for nothing by default, and refuse labelled callers. A local model on the FPGA's GPU card
-  can be cleared for a label, because the data stays on the machine.
+  cleared for nothing by default, and refuse labelled callers. The one exception is `sshd`, cleared
+  for a label only on the channel its owner authenticated (Sessions and vaults). A local model on
+  the FPGA's GPU card can be cleared for a label, because the data stays on the machine.
 - **User-level servers** get no exemption: a vault session cannot call an unlabelled user server.
   Something like a local model server runs one instance per label, or in the system class.
 - **Defaults.** The steward mounts known-sensitive places (`~/.ssh`, credential directories) on the
@@ -49,10 +50,11 @@ Only a label's owner declassifies, one item at a time, after a high-stakes appro
 1. The steward **snapshots** the item when the request is submitted, and hashes the snapshot. The
    steward is unlabelled and cannot read the item, so it creates a short-lived **reader budget**
    carrying exactly the item's labels (a deadline; creating it needs the system class, which the
-   steward has), which reads the item and returns the snapshot to the steward. The steward is class
-   `system`, so R1 does not stop that message. There is no standing universal reader, and the
-   steward itself stays unlabelled. Any other labelled read the steward needs (a labelled volume's
-   `stat`) goes the same way.
+   steward has). The steward `call`s the reader, which reads the item and fills the steward's lend
+   with the snapshot, so a labelled budget only ever answers a request, never starts one. The
+   steward is class `system`, so R1 does not stop that call. There is no standing universal reader,
+   and the steward itself stays unlabelled. Any other labelled read the steward needs (a labelled
+   volume's `stat`) goes the same way.
 2. The approval shows **all** of it. Items over a size cap, or not printable text, are refused.
 3. On approval, the steward copies exactly that snapshot to an unlabelled volume.
 
@@ -68,7 +70,11 @@ system can prevent that.
   local models, and reaches no external sink.
 - **Each SSH channel is labelled with its session's labels** (`alice@` -> none, `alice+X@` ->
   `{alice-X}`), and `sshd` applies `check` (below) to them. A vault session's output reaches only its
-  own channel, which the steward opened for the label's owner. There is no owner exemption at any sink.
+  own channel, which the steward opened for the label's owner. **`sshd` is the one sink cleared for
+  a label**, and only for that channel: a pty session its owner authenticated, with no forwarding,
+  no subsystems and no `exec`. No other sink has an owner exemption. Stated milestone 1 residual:
+  that channel, every other channel and `approve@box` share one `sshd`, so a `sunset` bug reached
+  from any channel reaches them all (CAPABILITIES.md, approvals).
 - Vault data can appear in one other place: the approval screen, for its owner (declassification).
   A labelled session's other requests show only text the steward generates (kind, target, size);
   its free text (a reason, a note) reaches the screen only through declassification
@@ -80,10 +86,13 @@ system can prevent that.
 Every system server that serves more than one account links one small library of two functions:
 - **`admit(badge, account, labels)`**: limits on in-flight requests, open files and per-client
   state, per (account, label set). Accounts, not badges or budgets, because both of those are cheap
-  to create; with the label set, because caps are counted that way (below). Account 0 (every
-  system-class caller) is admitted per badge, so one daemon cannot fill a bucket the steward needs.
-  When the kernel's badge notice says a badge's last handle is gone (KERNEL-SPEC.md, Messages), the
-  library frees that badge's state (fids, admission slots), so a dead client's quota comes back.
+  to create; with the label set, because caps are counted that way (below). Within a bucket each
+  badge gets a fair share, with the bucket as the ceiling, so an agent cannot lock out its sponsor,
+  who shares its bucket. Account 0 (every system-class caller) is admitted per badge, so one daemon
+  cannot fill a bucket the steward needs. The caps are sized so that every bucket at its cap fits
+  the server's budget, and so that the open calls they allow sum to less than `MAX_OPEN_CALLS` with
+  headroom; a parked call gets a server-side deadline. A `disconnect` (CAPABILITIES.md) frees a
+  connection's state (fids, admission slots), so a dead client's quota comes back.
 - **`check(caller_labels, object_labels, read | write)`**: a read needs the object's labels ⊆ the
   caller's (*no read up*); a write needs them **equal** (no write down, and no blind write up: a
   write up could truncate or remove what the writer cannot read, and `Tcreate`'s "exists" error
@@ -94,7 +103,12 @@ Every system server that serves more than one account links one small library of
 - **One connection per client.** A 9P connection is a badge; its fid table is keyed by (badge,
   account, label set), and launchers never pass their own connection on (CAPABILITIES.md).
 - **Replies come from the taking thread.** A `reply` names an open call of the replying thread
-  (KERNEL-SPEC.md), so an event-driven server replies from the thread that took the call.
+  (KERNEL-SPEC.md), so an event-driven server replies from the thread that took the call. Before
+  resuming work on a parked call, the library calls `serve(msg_id)`, so a crash blames that call;
+  an abandoned-call notice makes it reply at once, freeing the call.
+- **Handles and badges.** The library closes every handle a request carries that the protocol did
+  not ask for, so a client cannot grow a server's handle table. A server never reuses a badge
+  number, so a handle revoked in flight never reaches a later connection.
 
 Each server's note states what its objects and state are, so that nothing a labelled caller
 influences is visible to a caller without that label:
@@ -102,25 +116,30 @@ influences is visible to a caller without that label:
 - `ipd`: a sink; refuses labelled callers (IO-ARCHITECTURE.md).
 - `sshd`: state is per channel; each channel labelled with its session (above).
 - **steward**: applies `check` to its own records. Labelled callers can only submit requests.
-  Every id it hands out (request and session ids, and any other) is unpredictable: random 64-bit,
-  keyed, never a counter, which would tell every principal how many the others made.
+  Every id it hands out (request and session ids, connection ids, and any other) is unpredictable:
+  random 64-bit, keyed, never a counter, which would tell every principal how many the others made.
+  Audit records carry the request's labels and are read under `check`. Ending a lease is always
+  accepted from the sponsor, ahead of admission. It runs first (RESOURCES.md), so it bounds the
+  work any one request can cause and relies on its caps.
 
 ## Crash blame
 A server that faults, or exits while it holds open calls (a panic), reports in its exit notice the
-account and labels of the **most recently taken call still open on the thread that failed**
-(KERNEL-SPEC.md, the serving account); a `send` is never blamed, since it is never open. `init`
-passes them to the steward. **Three crashes blamed on the same (account, label set) within 10
-minutes log out that account's sessions with that label set:** the steward destroys those session
-budgets (their agents go with them) and records it in the audit file. Keyed by the label set too,
-for the reason caps are (below): a vault session crashing a shared server must not log out its
-owner's unlabelled sessions, which would be a channel out of the vault. Bystanders are not blamed:
-only the one most recent call counts, not every call the thread holds open (a `consoled` thread
-holds many readers' calls). A thread that fails holding no open call blames nobody, even when other
-threads of its process hold calls: falling back to one of theirs would blame a bystander. Such a
-crash counts only toward the restart limit and, past it, the reboot (INIT.md). Stated limits: a
-request that corrupts a server which crashes later, while serving someone else, blames the wrong
-account, and one that crashes an idle thread later blames nobody; the consequence is a logout or a
-restart, not data loss.
+account and labels of the **current call of the thread that failed** (KERNEL-SPEC.md): the call it
+took most recently, or the one it named with `serve` when it resumed a parked call. A `send` is
+never blamed, since it is never open, and a thread doing event work (a send, an interrupt) has no
+current call. `init` passes the blame to the steward. **Three crashes blamed on the same (account,
+label set) within 10 minutes destroy every budget of that (account, label set)**, sessions and
+leases alike (their agents go with them), and the steward refuses new sessions for it until the
+window passes, recording both in the audit file. A logout alone would not stop a principal logging
+straight back in, or its agent carrying on. Keyed by the label set too, for the reason caps are
+(below): a vault session crashing a shared server must not end its owner's unlabelled sessions,
+which would be a channel out of the vault. Bystanders are not blamed: only the current call counts,
+not every call the thread holds open (a `consoled` thread holds many readers' calls), and a thread
+that fails with no current call blames nobody, even when other threads of its process hold calls.
+Such a crash counts only toward the restart limit and, past it, the reboot (INIT.md). Stated
+limits: a request that corrupts a server which crashes later, while serving someone else, blames
+the wrong account, and one that crashes an idle thread later blames nobody; the consequence is a
+logout or a restart, not data loss.
 Restart and reboot rules: INIT.md.
 
 ## Covert and timing channels
@@ -137,9 +156,22 @@ perfect clock (TENETS.md).
 - **Caps are counted per (account, label set), not per account.** A vault session and its owner's
   unlabelled session share an account; a shared cap (the steward's pending requests, the kernel's
   `WAIT_CAP` and R2's turns, `admit`'s limits, crash blame) would let the vault signal by filling
-  it.
+  it. System callers (account 0) are grouped by budget as well, so a busy `fsd:data` cannot fill
+  `blkd`'s `WAIT_CAP` for `fsd:alice-secrets`.
+- **No global counters.** Message ids are unique only within the receiving process, and PIDs are
+  drawn at random, so no process sees another's traffic or creation rate in the gaps; `ps` and
+  `budget` show only the caller's own (account, label set).
+- **Fixed sub-budgets per label set.** At boot the steward splits each principal's top budget into
+  fixed sub-budgets, one per (principal, label set) named in the manifest. A vault session's leases
+  are carved from its own sub-budget, so they never change what the unlabelled side can carve.
+- **Notifications and audit.** A labelled request's "approval waiting" notification reaches only
+  channels whose labels ⊇ the request's, and `approve@box`; audit records are read under `check`.
+- **Server CPU.** A server working for users runs in the stride queue at its manifest weight and
+  bounds the work of one request (RESOURCES.md). Stated residual: that work is paid by the server's
+  weight, not the requester's; for the steward, which runs first, by the steward.
 - **Residual, stated:** memory bandwidth, and the shared L2 across cores until the RTL partitions it;
-  shared-server caches and the disk (a vault's reads warm a cache the unlabelled session can time).
+  shared-server caches and the disk (a vault's reads warm a cache the unlabelled session can time);
+  server CPU (above).
   On QEMU and ordinary hardware, none of the microarchitectural channels are closed.
 
 ## The executable security model

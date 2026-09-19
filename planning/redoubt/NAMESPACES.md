@@ -19,11 +19,26 @@ minus its ambient parts.
 - Fids are per connection: a fid cannot be named from another connection. A copied handle is the
   **same** connection (the same badge, so the same fids), which is why a launcher never passes its
   own connection on and gets each child a fresh one (CAPABILITIES.md, one badge, one client). To
-  delegate a subtree, the holder asks the server to mint a new connection rooted there and sends
-  that handle.
+  delegate a subtree, the holder asks the server for a new connection rooted there
+  (`new_connection`, below) and sends that handle.
 - `..` is resolved lexically (Plan 9's rule): the path is cleaned before lookup, in the client
   library and again in every server, so it never climbs above a held root.
 - 9P messages travel in lent buffers of at most `msize` (WIRE.md).
+- **Every 9P endpoint also serves typed operations**: a request whose word 0 is 0 is 9P, anything
+  else is a typed opcode (WIRE.md). Every 9P server serves `ninep-common`:
+
+  ```
+  | Opcode | Message | Fields | Reply |
+  | --- | --- | --- | --- |
+  | 2 | `new_connection` | `root: string` | `conn: handle[0] endpoint`, `id: u64` |
+  | 3 | `disconnect` | `id: u64` | - |
+  ```
+
+  `new_connection` mints a connection rooted at `root`, a path relative to the caller's own root
+  (empty for the same root; it never climbs above it), and returns it with a random connection id.
+  `disconnect` frees the connection with that id and every connection minted under it; only the
+  holder of the id can name it (CAPABILITIES.md, disconnect). The table is fenced until the package
+  that generates its codec (BUILD-PLAN.md, WP-R1b) unfences it and adds its wire marker.
 - The 9P codec parses untrusted bytes, so it is written once, shared by every server, and fuzzed.
   Independent 9P implementations give differential tests.
 
@@ -69,8 +84,10 @@ and refuses labelled callers. Elixir wraps the tree in `gen_tcp`-like modules.
   entries it can read. Its state is per volume. There are no per-file labels.
 - **A remove succeeds while another connection holds a fid on the file.** An "in use" refusal would
   be a channel between connections.
-- **Admission** is per (account, label set), and per badge for account 0 (the shared server
-  library); a badge notice frees a dead client's fids.
+- **Admission** is per (account, label set), with a fair share per badge inside it, and per badge
+  for account 0 (the shared server library); a `disconnect` frees a client's fids.
+- **A byte quota per attach root**, so Bob filling the `data` volume cannot make Alice's saves
+  fail: each root a connection is minted at has its own quota, set by whoever granted it.
 - **Robust to a bad disk:** crash-consistent and robust to bad metadata, and fuzzed for it. Disk
   encryption is deferred (IO-ARCHITECTURE.md, Later).
 - **Crash:** clients see errors, `init` restarts it (INIT.md), copy-on-write keeps the volume
