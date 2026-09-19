@@ -63,7 +63,8 @@ system can prevent that.
   labelled volumes.
 - **A vault session carries exactly one label.** `ssh alice+X@box` opens a session labelled
   `{alice-X}`, only if the authenticated person owns that label. It reads and writes `fsd:alice-X`,
-  runs local tools and local models, and reaches no external sink.
+  may read (never write) unlabelled volumes, which is how data enters the vault, runs local tools and
+  local models, and reaches no external sink.
 - **Each SSH channel is labelled with its session's labels** (`alice@` -> none, `alice+X@` ->
   `{alice-X}`), and `sshd` applies `check` (below) to them. A vault session's output reaches only its
   own channel, which the steward opened for the label's owner. There is no owner exemption at any sink.

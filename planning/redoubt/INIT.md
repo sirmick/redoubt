@@ -164,7 +164,7 @@ Neither can name the other's home, `/system`, `fsd:alice-secrets`, the host key 
 listen on the network.
 
 **Scenarios:**
-- `cat notes.txt`: 9P on her `/` handle; `fsd` admits her by her account.
+- `cat notes.txt`: 9P on her `/` handle; `fsd` admits her by her account and label set.
 - Vault: `ssh alice+secrets@box` gives a session labelled `{alice-secrets}` that can read
   `fsd:alice-secrets`, has no `/net`, and prints only to its own channel.
 - Agent: own principal and VM, a 2-hour lease, `/work` only, no `/net`. The bench's scripted hostile
@@ -175,8 +175,8 @@ listen on the network.
   unaffected.
 - Bob fully compromises his VM (a beamlet bug): he holds Bob's capabilities, nothing more. Going
   further needs a bug in a server he talks to (`fsd`, `ipd`, `keyd`, the steward) or the kernel.
-- Bob crashes `fsd:data` three times: each exit notice blames his account, so he is logged out;
-  Alice, busy throughout, is not.
+- Bob crashes `fsd:data` three times: each exit notice blames his account (the call the failing
+  thread took most recently), so he is logged out; Alice, busy throughout, is not.
 
 **Weak spot:** users are separated everywhere except inside shared servers, where a server bug reaches
 every client's data. Where it matters, give each user their own `fsd` instance (own partition) or

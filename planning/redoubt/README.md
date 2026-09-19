@@ -9,8 +9,12 @@ reason recorded in HISTORY.md.
 under OpenSBI or RustSBI; a loader that verifies an Ed25519-signed boot bundle and builds Sv32/Sv39
 address spaces; W^X enforced and checked at boot; default-deny device grants; physical RAM never
 nameable by address; a two-hart SMP spike behind the `smp` feature; a QEMU test bench with attack
-tests. In the sibling beamlet repository: a BEAM
-VM that runs Elixir, its compiler and IEx over a console. See [STATUS.md](STATUS.md).
+tests. Milestone 1 so far (BUILD-PLAN.md): the system call ABI crate `redoubt-sys`; the wire codecs
+`redoubt-wire` and their generator; littlefs in pure Rust; the bench's SSH sessions, virtio disk and
+network, and attack verdicts taken from the system; fixes for three kernel panics reachable from
+any process (WP-K0). None of the new crates is used by the kernel yet. In the sibling beamlet
+repository: a BEAM VM that runs Elixir, its compiler and IEx over a console. See
+[STATUS.md](STATUS.md).
 **Designed, not built:** everything from capabilities onward (handles, IPC, budgets, labels, init
 and the steward, 9P namespaces, packages, storage and network servers). Order: [PLAN.md](PLAN.md).
 
@@ -95,13 +99,17 @@ Sessions and agents are beamlet VMs in user budgets, not servers.
 - **Endpoint**: the kernel object clients call; it outlives the server process receiving on it.
 - **call / send**: the two IPC primitives (CAPABILITIES.md). **Lend**: map a buffer into the
   receiver for the length of a call. **Transfer**: give pages to the receiver for good. **Open
-  call**: a call a server has taken and not yet replied to.
+  call**: a call a server has taken and not yet replied to. **Serving account**: the account of a
+  thread's most recently taken open call; whom a crash blames (KERNEL-SPEC.md).
 - **Budget**: a kernel container every process lives in; it pays for and bounds everything, carries
-  labels, a deadline and an account (RESOURCES.md). **Lease**: a budget with a deadline.
-  **Revocation scope**: a budget with zero limits, used only to be destroyed. **Account**: a 64-bit
-  number on a principal's top budget, inherited below it and carried by every message; the unit of
-  admission and crash blame. **Pass / stride**: the per-budget counters of stride scheduling.
-- **Exit notice**: the one message a process's creator receives when it exits, faults or is killed.
+  labels, a deadline and an account (RESOURCES.md). **Lease**: a budget with a deadline, at most
+  `MAX_LEASE`. **Revocation scope**: a budget with zero limits, used only to be destroyed.
+  **Account**: a 64-bit number on a principal's top budget, inherited below it and carried by every
+  message; with the label set, the unit of admission and crash blame (CONTAINMENT.md). **Pass /
+  stride**: the per-budget counters of stride scheduling.
+- **Exit notice**: the one message a process's creator receives when it exits, faults or is killed;
+  a fault names the blamed account and labels. **Badge notice**: the kernel telling an endpoint that
+  the last handle with one of its badges is gone, so the server frees that client's state.
 - **Principal**: an accountable identity (a human, an agent, or a project). **Sponsor**: the
   principal accountable for another. **Session**: processes started from a principal's
   capabilities. **Vault session**: `ssh alice+X@box`, a session carrying exactly the label
@@ -113,12 +121,14 @@ Sessions and agents are beamlet VMs in user budgets, not servers.
   used as an SSH `sk-` key with user verification, for `ssh approve-hs@box`.
 - **Label**: an information-flow tag on budgets and volumes (CONTAINMENT.md); the approach is
   **DIFC** (decentralized information flow control). **Sink**: a server whose output leaves a
-  principal or the machine. **Declassify**: the label owner releasing one item.
+  principal or the machine. **Declassify**: the label owner releasing one item. **Reader budget**:
+  a short-lived budget the steward creates with exactly an item's labels, to read it for
+  declassification (the steward itself stays unlabelled).
 - **Manifest**: (1) the **boot manifest**, strict JSON in the boot bundle: servers, devices,
   budgets, volumes, labels and (milestone 1) principals (INIT.md); (2) a **package manifest**, the
   contents and requested capabilities of a package (PACKAGES.md). Today's bundle has instead a
-  `grants` entry (DEVICE-GRANTS.md). **Startup block**: the page a parent writes for a new process:
-  its namespace table, service handles, arguments (INIT.md).
+  `grants` entry (DEVICE-GRANTS.md). **Startup block**: the page a parent writes for a new process,
+  whose address `process_start` passes it: its namespace table, named handles, arguments (INIT.md).
 - **Loader stub**: the small, system-signed flat binary every process starts as; it parses and maps
   its own ELF (PACKAGES.md). Not the S-mode boot loader.
 - **Milestone**: one of the three build goals in PLAN.md (1: separation and containment; 2: install,
@@ -126,7 +136,8 @@ Sessions and agents are beamlet VMs in user budgets, not servers.
 - **Profile**: a principal's chosen package versions, kept by the steward (PACKAGES.md). **Trust
   list**: the signing keys whose code a principal runs.
 - **9P** (9P2000): Plan 9's file protocol. **fid**: a 9P handle to a file within one connection.
-  **qid**: 9P's file identity and version.
+  **qid**: 9P's file identity and version. **`Malformed`**: reply status 1, in every protocol and in
+  9P calls: the request did not decode (WIRE.md).
 - **beamlet**: the safe-Rust BEAM VM running the Elixir userland (sibling repository). **IEx**:
   Elixir's interactive shell. **OTP**: Erlang's standard library. **NIF**: a BEAM native function.
 - **LPM** (longest-prefix match): IP route lookup. **VLAN** (802.1Q): tagged virtual LANs.

@@ -60,7 +60,8 @@ Every platform presents the same contract: virtio-mmio devices, a standard inter
   sectors; requests complete in order; a torn write persists a prefix of the write, never an
   arbitrary subset of its units (as raw flash may); `sync` returns only after virtio-blk's flush
   has completed, so it is never acknowledged before the data is durable. `blkd` issues a flush on
-  every `sync`, and `fsd` relies on nothing more. The residue (littlefs does not checksum data): NAMESPACES.md.
+  every `sync`, and `fsd` relies on nothing more. The residue (littlefs does not checksum data):
+  NAMESPACES.md.
 - **`fsd`:** littlefs, 9P, one per volume, labels per volume (NAMESPACES.md).
 - **Every on-disk parser is attack surface** and gets a fuzz target.
 
@@ -70,7 +71,8 @@ Every platform presents the same contract: virtio-mmio devices, a standard inter
   that moves frames attaches through it, so the Later designs add servers, not mechanisms.
 - **`ipd`:** `smoltcp` (`no_std`, fuzzed). **One instance per network or trust domain**: a TCP bug
   reached from an untrusted network cannot touch another network's stack. Serves `/net`
-  (NAMESPACES.md). A sink: it refuses labelled callers, and admits per account (CONTAINMENT.md).
+  (NAMESPACES.md). A sink: it refuses labelled callers, and admits through the shared server
+  library (CONTAINMENT.md).
 - **Firewalling is mostly structural.** Egress: a process connects only where its socket capability
   allows (IP prefix and port). Ingress: nothing listens without a listen capability.
 - **TLS and SSH are end to end**, so drivers and stacks carry ciphertext. `sshd` is Rust (INIT.md);

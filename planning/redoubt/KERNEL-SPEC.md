@@ -156,8 +156,9 @@ notices follow the same rule (Messages).
 label set) and served round-robin by group: each `receive` takes the oldest message of the next
 group after the last one served. A group with `WAIT_CAP` messages already queued on the endpoint
 gets `Busy` immediately. Only queued messages count (sent, not yet taken): a taken call waiting for
-its reply is bounded by the server's open calls (R4a). (Keyed by label set too, so a vault session and its owner's unlabelled session,
-which share an account, share neither a turn nor a cap: CONTAINMENT.md.)
+its reply is bounded by the server's open calls (R4a). (Keyed by label set too, so a vault session
+and its owner's unlabelled session, which share an account, share neither a turn nor a cap:
+CONTAINMENT.md.)
 
 **R3. Lends outlive their lender.** If the caller dies, or its call times out, after the server took
 the message, the lent pages stay mapped in the server and are **charged to the server's budget until
@@ -166,23 +167,24 @@ the message, the lent pages stay mapped in the server and are **charged to the s
 
 **R4. Transfer opt-in.** A receiver gets transferred pages only if its `receive` named a
 `max_transfer` at least the transfer's size, and its process's budget has the free pages to hold
-them and the page tables to map them. Otherwise the pending transfer fails its sender with `Refused`, and the kernel moves on to the
-next sender. (`Refused` tells the sender one bit about the receiver's budget, and only a sender the
-receiver chose to accept transfers from.) A receiver whose budget cannot pay for a message's
-handles gets `OutOfMemory` from `receive`, and the message stays queued, for a `send` as for a
-`call` (R4a).
+them and the page tables to map them. Otherwise the pending transfer fails its sender with
+`Refused`, and the kernel moves on to the next sender. (`Refused` tells the sender one bit about
+the receiver's budget, and only a sender the receiver chose to accept transfers from.) A receiver
+whose budget cannot pay for a message's handles gets `OutOfMemory` from `receive`, and the message
+stays queued, for a `send` as for a `call` (R4a).
 
 **R4a. Open calls.** A `receive` on an endpoint while the process holds `MAX_OPEN_CALLS` open calls
 gets `Busy`, whether it began so or was already waiting when the process reached the limit (other
-threads took calls meanwhile); the call stays queued. Taking a `call` opens it and charges its page to the receiving process's budget; if the
-budget cannot pay for that page, the message's handles or the page tables to map its lend, the
-`receive` gets `OutOfMemory` and the message stays queued. `reply` closes it and frees the page.
-`reply` to a `send`'s message id gets `InvalidArgument`: a send is never an open call.
+threads took calls meanwhile); the call stays queued. Taking a `call` opens it and charges its page
+to the receiving process's budget; if the budget cannot pay for that page, the message's handles or
+the page tables to map its lend, the `receive` gets `OutOfMemory` and the message stays queued.
+`reply` closes it and frees the page. `reply` to a `send`'s message id gets `InvalidArgument`: a
+send is never an open call.
 
 **R4b. A server dies.** When a thread or process exits, faults or is killed holding open calls, each
-of their callers gets `Dead` and its lend back; a lend whose caller had already died (R3) is freed.
-Senders still blocked on the endpoint keep waiting: the endpoint survives, and a restarted server
-receives them (INIT.md).
+of their callers gets `Dead` and its lend back; a lend whose caller had already died or been failed
+(R3, R10) is freed. Senders still blocked on the endpoint keep waiting: the endpoint survives, and a
+restarted server receives them (INIT.md).
 
 **R5. Interrupts.** When an IRQ fires, the kernel masks the source and sets `fired`. `receive` on the
 IRQ handle unmasks the source when it begins, then returns when `fired` is set (clearing it). There
@@ -190,9 +192,9 @@ is no acknowledge call.
 
 **R6. Charging.** Every kernel object (pages, page tables, handle tables, thread contexts, endpoints,
 budgets, open calls, exit slots, badge slots) is charged in pages to its owning budget, as the cost
-table says.
-A budget's own object is charged to itself; a budget with zero limits (a **revocation scope**) is
-charged to its parent. A parent's usage counts its **children's limits**, never their live usage.
+table says. A budget's own object is charged to itself; a budget with zero limits (a **revocation
+scope**) is charged to its parent. A parent's usage counts its **children's limits**, never their
+live usage.
 
 **R7. Carving.** A child's page, process and weight limits come out of the parent's free limits: the
 children never add up to more than the parent. Allocation fails only on the caller's own budget.
@@ -239,7 +241,7 @@ the kernel panic.
 | `dma_alloc` | h(MMIO), npages -> addr, phys | DMA flag; pages charged; contiguous; zeroed |
 | `thread_create` | entry, sp, arg -> tid | pages charged; fewer than `MAX_THREADS` |
 | `thread_exit` | - | - |
-| `process_exit` | code | exit notice `exited` |
+| `process_exit` | code | exit notice `exited`, or `faulted` while the process holds open calls |
 | `process_create` | h(budget), h(exit endpoint) -> h(process) | budget's weight not 0; its process and page limits; exit slot charged to the caller |
 | `process_map` | h(process), src, dst, len, flags | process not started; src owned by caller; pages move to the child's budget; not W+X |
 | `process_start` | h(process), entry, sp, arg, handles | not started; at most `MAX_START_HANDLES` handles, copied into slots 1..n; `arg` reaches the first thread unchanged, like `thread_create`'s (the startup page's address, 0 = none: INIT.md) |
@@ -259,8 +261,8 @@ the kernel panic.
 
 **`mint(source, badge, budget?)`** creates a handle to an endpoint with `badge != 0`.
 - `source` is either the message id of an open call of the caller's thread (the new handle is to
-  the endpoint the call arrived on; default stamp = the stamp of the handle the message was sent through), or a
-  badge-0 endpoint handle the caller holds (default stamp = that handle's stamp).
+  the endpoint the call arrived on; default stamp = the stamp of the handle the call was sent
+  through), or a badge-0 endpoint handle the caller holds (default stamp = that handle's stamp).
 - With no budget handle, the new handle gets the default stamp. With one, the budget must be the
   default stamp or a descendant of it (`NotPermitted` otherwise): a budget handle only narrows.
 

@@ -13,8 +13,8 @@ Build one thin vertical slice toward it:
    tests; handed to red-team agents.
 1. **Kernel, to KERNEL-SPEC.md:** handles, endpoints, `call`/`send`/`receive`/`reply` with lend and
    transfer, `mint`, budgets, device objects and IRQ receive, `process_create`/`process_map`/
-   `process_start`, exit notices. Replaces SID connects, scalar message kinds, `ClaimInterrupt`,
-   device grants and name lookup.
+   `process_start`, exit and badge notices. Replaces SID connects, scalar message kinds,
+   `ClaimInterrupt`, device grants and name lookup.
 2. **beamlet on Redoubt**, printing from Elixir over the console.
 3. **IEx on the UART console:** an interactive Elixir shell on the box, before SSH exists.
 4. **init, the boot manifest, the startup block and the loader stub** (INIT.md, PACKAGES.md); the
@@ -49,10 +49,14 @@ a clean power-off), never by the attacker's own output (BUILD-PLAN.md).
     qids or directory listings while a vault session works, and cannot write, truncate, create or
     remove anything in the vault's volume;
   - hostile launch: a malformed ELF or startup block from a user parent hurts only the child;
-  - approval flood: requests hit the per-account cap; the steward and Alice's approval screen are
-    unaffected.
+  - approval flood: requests hit the per-(account, label set) cap; the steward and Alice's approval
+    screen are unaffected;
+  - admission: a crashed or killed client's fids and quota come back when its badge notice arrives,
+    and a system daemon filling its admission slots does not lock out the steward (account 0 is
+    admitted per badge).
 - **Kernel cases:** revocation by budget (mint into a revocation scope, destroy it, the handles are
-  dead everywhere); the budget, scheduler and timer tests in RESOURCES.md.
+  dead everywhere, and messages already sent through them fail and get no reply's handles); the
+  budget, scheduler and timer tests in RESOURCES.md.
 
 ## After milestone 1
 - **The real-agent harness ("escape room")** comes first, alongside milestone 2: a real LLM agent on

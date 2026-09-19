@@ -44,8 +44,8 @@ by that server's work package with a HISTORY.md line (BUILD-PLAN.md). A line hol
 - **Errors.** Each protocol has an error table, marked by a line `<!-- wire-errors: NAME -->` and
   headed `| Code | Error |`: codes unique, each with a name. **Code 1 is `Malformed` in every
   protocol**, and in a 9P call's reply status: a request that does not decode (unknown opcode,
-  wrong shape, bad lengths, a missing or wrong-kind handle). The generator reserves it and adds it to every table; a
-  protocol's own codes start at 2.
+  wrong shape, bad lengths, a missing or wrong-kind handle). The generator reserves it and adds it
+  to every table; a protocol's own codes start at 2.
 
 ### Layout in a message
 - **Word 0** of a request is its opcode. **Word 0 of a reply is its status**: 0 = ok, otherwise a

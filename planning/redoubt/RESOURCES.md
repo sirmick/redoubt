@@ -25,7 +25,8 @@ rule:
 - **Top level:** `root -> system [default 25% of RAM, set in the boot manifest] + users [the rest]`.
 - **Bounded depth**, because revocation and "is this a descendant" walk ancestors.
 - **The kernel never panics and never kills an innocent process to make room.**
-- **Destroying a budget returns everything**; a lease is a budget with a deadline.
+- **Destroying a budget returns everything** (the exit slots its creator paid for, once their
+  notices are received); a lease is a budget with a deadline, at most `MAX_LEASE` (CAPABILITIES.md).
 
 ## Scheduling
 ### Two classes, strictly ordered
@@ -71,4 +72,5 @@ budget exceed its total; swapped pages encrypted and authenticated; the system b
 - A memory hog gets `OutOfMemory`; the system budget is untouched.
 - A transfer to a server that did not opt in fails; the server's budget is untouched.
 - A lender that dies mid-call leaves the server running; the pages are freed at its reply.
-- Lease expiry reclaims everything; the parent's usage returns to what it was.
+- Lease expiry reclaims everything; the parent's usage returns to what it was once the exit notices
+  are received (I10).
