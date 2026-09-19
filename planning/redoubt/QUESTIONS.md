@@ -5,8 +5,8 @@ so each needs your decision; the answer goes into the named note with a HISTORY.
 **Rec** is the orchestrator's recommendation. Reply with numbers, e.g. "all Rec except 7: ...".
 
 **1-126 answered 2026-09-19** (ANSWERS.md, seven tranches; each "Answered" line says where the
-answer now lives). **Open: 127-128** (from WP-K2) and **129-137** (userland, USERLAND.md), at the
-end. The round-4 answers revised 56 (handle kinds are checked by use) and replaced 57 and 58 (by
+answer now lives). **Open: 127-128** and **138-140** (from WP-K2) and **129-137** (userland,
+USERLAND.md), at the end. The round-4 answers revised 56 (handle kinds are checked by use) and replaced 57 and 58 (by
 82); a later tranche replaced 103 (no `first` flag and no strict priority: one stride queue for
 every budget); the tranche for 120-126 accepted every recommendation and added one change to what
 ships: the boot bundle's signature gets its own domain now (VERIFIED-BOOT.md).
@@ -1104,3 +1104,24 @@ on the box); 132 and 133 block the shell's pipelines, 135 blocks launching from 
      *Rec:* Redoubt errors keep their own atoms everywhere, and the `File`/`prim_file` shim maps
      them to POSIX atoms at that boundary only, so OTP code sees what it expects and new code sees
      the truth.
+
+138. **A transfer within one budget.** R4 counts a message's transferred pages among what the
+     receiving budget must be able to pay. But a transfer between two processes of one budget moves
+     nothing between budgets: usage is unchanged, so the kernel charges nothing and delivers even
+     with no free pages, while the spec as written would refuse it. WP-C1's replay would catch the
+     difference.
+     *Rec:* say so in R4: a transfer costs the receiving budget only what it does not already pay
+     for, so one within a budget is free; a lend is charged to both sides even within a budget (R3).
+
+139. **Notices after an endpoint is destroyed.** Destroying an endpoint abandons the calls taken
+     through it, but the notice can never be offered there, and the server's `receive` gets `Dead`.
+     R3 says the holding thread gets a notice, and I15 says exactly once.
+     *Rec:* KERNEL-SPEC.md says `Dead` from `receive` is the server's cue to reply to every open
+     call it took there; no notice follows, because the endpoint it would arrive on is gone.
+
+140. **Lending pages the caller reserved but never touched.** The ABI refuses an untouched
+     *record*, but a `call`'s lend of untouched pages is backed and charged to the caller first, as
+     `map_anon` would. A caller that cannot pay gets `InvalidArgument`, since `call`'s row has no
+     `OutOfMemory`.
+     *Rec:* state it in R3 or the `call` row, so the model and the kernel agree for WP-C1.
+
