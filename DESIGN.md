@@ -110,9 +110,14 @@ natives.
   (BEAM puts it on the parent's scheduler), so `monitor(process, spawn(F))` sees it alive.
   Idle schedulers sleep on a condvar; when none runs, one blocks in `Platform::idle`.
   `system_flag(schedulers_online, N)` parks the rest. `beamlet --schedulers N` picks the count
-  (default 1). Parallel `fib` on 1/2/4/8 schedulers: 339/167/87/47 ms.
-- **Next:** finer locks (ETS, atoms, the process table) where profiles show contention;
-  stage 3, dirty schedulers for long natives.
+  (default 1). Parallel `fib` on 1/2/4/8 schedulers: 339/167/87/47 ms; eight concurrent
+  compiles of `lists.erl`: 29.3/18.2/10.3/6.1 s, with lock contention 1.6% of the profile at 8
+  (the rest of the lost CPU is the allocator and memory traffic).
+- **The platform has its own lock** (after the system lock, never before), so file and
+  console I/O does not hold up other schedulers' natives.
+- **Next:** finer locks (ETS, atoms, the process table) if profiles come to show contention;
+  stage 3, dirty schedulers for long natives (with several schedulers a long native only
+  occupies its own).
 
 Integers are `i64` and move to `BigInt` (`num-bigint`) only on overflow, and back when they fit, so
 each integer has one representation. Bignums are capped at 2^24 bits (`system_limit` beyond).
