@@ -6,7 +6,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-beamlet-vm = { path = "../vm" }
+beamlet-vm = { path = "../vm", features = ["std"] }
 beamlet-crypto = { path = "../crypto" }
 beamlet-re = { path = "../re" }
 cap-std = "3"

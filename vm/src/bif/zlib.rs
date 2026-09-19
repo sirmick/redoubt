@@ -7,10 +7,10 @@
 //! Not provided: preset dictionaries (`deflateSetDictionary`, `inflateSetDictionary`, raising
 //! `not_supported`) and compression strategies other than the default (accepted, ignored).
 
+use crate::sync::Lock;
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
-use core::cell::{Cell, RefCell};
 
 use miniz_oxide::deflate::core::{
     compress, create_comp_flags_from_zip_params, CompressorOxide, TDEFLFlush, TDEFLStatus,
@@ -85,13 +85,13 @@ enum Codec {
 }
 
 struct Stream {
-    owner: Cell<Pid>,
-    input: RefCell<VecDeque<u8>>,
+    owner: Lock<Pid>,
+    input: Lock<VecDeque<u8>>,
     /// Output made but not yet handed out (it comes out a chunk at a time).
-    output: RefCell<VecDeque<u8>>,
-    codec: RefCell<Codec>,
+    output: Lock<VecDeque<u8>>,
+    codec: Lock<Codec>,
     /// Kept outside the heap of whoever set it.
-    stash: RefCell<Option<OwnedTerm>>,
+    stash: Lock<Option<OwnedTerm>>,
 }
 
 /// A stream held through its resource (so the caller's heap stays free for building results).
@@ -119,7 +119,7 @@ fn stream(c: &mut Ctx, t: &Term) -> Result<StreamRef, Exception> {
         .cloned()
         .ok_or_else(|| c.badarg())?;
     let s = StreamRef(r);
-    if s.owner.get() != c.p.pid {
+    if *s.owner.lock() != c.p.pid {
         return Err(raise(c, "not_on_controlling_process"));
     }
     Ok(s)
@@ -172,11 +172,11 @@ fn gzip_header_len(h: &[u8]) -> Result<Option<usize>, ()> {
 
 pub fn open(c: &mut Ctx, _a: &[Term]) -> R {
     let s = Stream {
-        owner: Cell::new(c.p.pid),
-        input: RefCell::new(VecDeque::new()),
-        output: RefCell::new(VecDeque::new()),
-        codec: RefCell::new(Codec::None),
-        stash: RefCell::new(None),
+        owner: Lock::new(c.p.pid),
+        input: Lock::new(VecDeque::new()),
+        output: Lock::new(VecDeque::new()),
+        codec: Lock::new(Codec::None),
+        stash: Lock::new(None),
     };
     let id = c.sys.make_ref().0;
     Ok(c.heap_mut().resource(Resource {
@@ -187,9 +187,9 @@ pub fn open(c: &mut Ctx, _a: &[Term]) -> R {
 
 pub fn close(c: &mut Ctx, a: &[Term]) -> R {
     let s = stream(c, &a[0])?;
-    *s.codec.borrow_mut() = Codec::None;
-    s.input.borrow_mut().clear();
-    s.output.borrow_mut().clear();
+    *s.codec.lock() = Codec::None;
+    s.input.lock().clear();
+    s.output.lock().clear();
     Ok(c.ok())
 }
 
@@ -198,7 +198,7 @@ pub fn set_controller(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Pid(p) = a[1] else {
         return Err(c.badarg());
     };
-    s.owner.set(p);
+    *s.owner.lock() = p;
     Ok(c.ok())
 }
 
@@ -216,12 +216,12 @@ pub fn deflate_init(c: &mut Ctx, a: &[Term]) -> R {
     if !matches!(bits.abs(), 8..=15) {
         return Err(c.badarg());
     }
-    if !matches!(*s.codec.borrow(), Codec::None) {
+    if !matches!(*s.codec.lock(), Codec::None) {
         return Err(raise(c, "already_initialized"));
     }
     let flags = create_comp_flags_from_zip_params(level as i32, bits as i32, 0);
     let core = Box::new(CompressorOxide::new(flags));
-    *s.codec.borrow_mut() = Codec::Deflate(Deflater {
+    *s.codec.lock() = Codec::Deflate(Deflater {
         core,
         gzip,
         header_done: false,
@@ -249,10 +249,10 @@ pub fn inflate_init(c: &mut Ctx, a: &[Term]) -> R {
         40..=47 => Wrap::Detect,
         _ => return Err(c.badarg()),
     };
-    if !matches!(*s.codec.borrow(), Codec::None) {
+    if !matches!(*s.codec.lock(), Codec::None) {
         return Err(raise(c, "already_initialized"));
     }
-    *s.codec.borrow_mut() = Codec::Inflate(new_inflater(wrap, after_end));
+    *s.codec.lock() = Codec::Inflate(new_inflater(wrap, after_end));
     Ok(c.ok())
 }
 
@@ -284,7 +284,7 @@ pub fn enqueue(c: &mut Ctx, a: &[Term]) -> R {
             _ => return Err(c.badarg()),
         }
     }
-    let mut input = s.input.borrow_mut();
+    let mut input = s.input.lock();
     if input.len() + data.len() > MAX_QUEUED {
         return Err(c.system_limit());
     }
@@ -294,7 +294,7 @@ pub fn enqueue(c: &mut Ctx, a: &[Term]) -> R {
 
 /// Take up to `n` queued input bytes.
 fn take_input(s: &Stream, n: usize) -> Vec<u8> {
-    let mut input = s.input.borrow_mut();
+    let mut input = s.input.lock();
     let n = n.min(input.len());
     input.drain(..n).collect()
 }
@@ -302,10 +302,10 @@ fn take_input(s: &Stream, n: usize) -> Vec<u8> {
 /// Hand out up to `chunk` bytes of output: `{finished, Out}` when nothing more is waiting and
 /// the chunk was not filled, else `{continue, Out}`.
 fn chunk(c: &mut Ctx, s: &Stream, chunk: usize) -> Term {
-    let mut output = s.output.borrow_mut();
+    let mut output = s.output.lock();
     let n = chunk.min(output.len());
     let bytes: Vec<u8> = output.drain(..n).collect();
-    let done = output.is_empty() && s.input.borrow().is_empty() && n < chunk;
+    let done = output.is_empty() && s.input.lock().is_empty() && n < chunk;
     drop(output);
     let out = if bytes.is_empty() {
         Term::Nil
@@ -330,7 +330,7 @@ pub fn deflate(c: &mut Ctx, a: &[Term]) -> R {
         4 => TDEFLFlush::Finish,
         _ => return Err(c.badarg()),
     };
-    let mut codec = s.codec.borrow_mut();
+    let mut codec = s.codec.lock();
     let Codec::Deflate(d) = &mut *codec else {
         return Err(raise(c, "not_initialized"));
     };
@@ -357,7 +357,7 @@ pub fn deflate(c: &mut Ctx, a: &[Term]) -> R {
             return Err(raise(c, "stream_error"));
         }
     }
-    if s.input.borrow().is_empty() && flush != TDEFLFlush::None && !d.finished {
+    if s.input.lock().is_empty() && flush != TDEFLFlush::None && !d.finished {
         loop {
             let (status, _, made) = compress(&mut d.core, &[], &mut buf, flush);
             out.extend_from_slice(&buf[..made]);
@@ -377,7 +377,7 @@ pub fn deflate(c: &mut Ctx, a: &[Term]) -> R {
         }
     }
     drop(codec);
-    s.output.borrow_mut().extend(out);
+    s.output.lock().extend(out);
     Ok(chunk(c, &s, out_chunk))
 }
 
@@ -388,16 +388,16 @@ pub fn inflate_nif(c: &mut Ctx, a: &[Term]) -> R {
         int(c, &a[1])?.max(1) as usize,
         int(c, &a[2])?.max(1) as usize,
     );
-    let mut codec = s.codec.borrow_mut();
+    let mut codec = s.codec.lock();
     let Codec::Inflate(inf) = &mut *codec else {
         return Err(raise(c, "not_initialized"));
     };
     // Data after the end of the stream.
-    if inf.ended && !s.input.borrow().is_empty() {
+    if inf.ended && !s.input.lock().is_empty() {
         match inf.after_end {
             AfterEnd::Error => return Err(raise(c, "data_error")),
             AfterEnd::Reset => *inf = new_inflater(inf.initial, inf.after_end),
-            AfterEnd::Cut => s.input.borrow_mut().clear(),
+            AfterEnd::Cut => s.input.lock().clear(),
         }
     }
     // Produce until the chunk is full or the input is used up.
@@ -405,13 +405,13 @@ pub fn inflate_nif(c: &mut Ctx, a: &[Term]) -> R {
     let mut buf = alloc::vec![0u8; out_chunk];
     let mut consumed_total = 0;
     while out.len() < out_chunk && !inf.ended && consumed_total < in_chunk {
-        let avail = s.input.borrow().len();
+        let avail = s.input.lock().len();
         if avail == 0 {
             break;
         }
         // Frames (gzip header and trailer) are gathered byte by byte from the queue.
         if matches!(inf.wrap, Wrap::Detect) {
-            let first = s.input.borrow()[0];
+            let first = s.input.lock()[0];
             inf.wrap = if first == 0x1f {
                 Wrap::Gzip
             } else {
@@ -423,7 +423,7 @@ pub fn inflate_nif(c: &mut Ctx, a: &[Term]) -> R {
             continue;
         }
         if inf.wrap == Wrap::Gzip && !matches!(inf.stage, GzipStage::Body) {
-            let b = s.input.borrow_mut().pop_front().expect("available");
+            let b = s.input.lock().pop_front().expect("available");
             consumed_total += 1;
             inf.frame.push(b);
             match inf.stage {
@@ -450,12 +450,12 @@ pub fn inflate_nif(c: &mut Ctx, a: &[Term]) -> R {
             continue;
         }
         let input: Vec<u8> = {
-            let q = s.input.borrow();
+            let q = s.input.lock();
             q.iter().take(in_chunk - consumed_total).copied().collect()
         };
         let room = out_chunk - out.len();
         let r = inflate(&mut inf.state, &input, &mut buf[..room], MZFlush::None);
-        s.input.borrow_mut().drain(..r.bytes_consumed);
+        s.input.lock().drain(..r.bytes_consumed);
         consumed_total += r.bytes_consumed;
         let made = &buf[..r.bytes_written];
         if inf.wrap == Wrap::Gzip {
@@ -481,14 +481,14 @@ pub fn inflate_nif(c: &mut Ctx, a: &[Term]) -> R {
         }
     }
     drop(codec);
-    s.output.borrow_mut().extend(out);
+    s.output.lock().extend(out);
     Ok(chunk(c, &s, out_chunk))
 }
 
 /// `deflateReset_nif` and `inflateReset_nif`: start a new stream with the same settings.
 pub fn reset(c: &mut Ctx, a: &[Term]) -> R {
     let s = stream(c, &a[0])?;
-    let mut codec = s.codec.borrow_mut();
+    let mut codec = s.codec.lock();
     match &mut *codec {
         Codec::Deflate(d) => {
             d.core.reset();
@@ -498,21 +498,21 @@ pub fn reset(c: &mut Ctx, a: &[Term]) -> R {
         Codec::None => return Err(raise(c, "not_initialized")),
     }
     drop(codec);
-    s.input.borrow_mut().clear();
-    s.output.borrow_mut().clear();
+    s.input.lock().clear();
+    s.output.lock().clear();
     Ok(c.ok())
 }
 
 /// `deflateEnd_nif`: `data_error` if the stream was used and not finished, as in zlib.
 pub fn deflate_end(c: &mut Ctx, a: &[Term]) -> R {
     let s = stream(c, &a[0])?;
-    let bad = match &*s.codec.borrow() {
+    let bad = match &*s.codec.lock() {
         Codec::Deflate(d) => d.used && !d.finished,
         _ => return Err(raise(c, "not_initialized")),
     };
-    *s.codec.borrow_mut() = Codec::None;
-    s.input.borrow_mut().clear();
-    s.output.borrow_mut().clear();
+    *s.codec.lock() = Codec::None;
+    s.input.lock().clear();
+    s.output.lock().clear();
     if bad {
         return Err(raise(c, "data_error"));
     }
@@ -522,13 +522,13 @@ pub fn deflate_end(c: &mut Ctx, a: &[Term]) -> R {
 /// `inflateEnd_nif`: `data_error` unless the whole stream was read.
 pub fn inflate_end(c: &mut Ctx, a: &[Term]) -> R {
     let s = stream(c, &a[0])?;
-    let bad = match &*s.codec.borrow() {
-        Codec::Inflate(i) => !i.ended || !s.input.borrow().is_empty(),
+    let bad = match &*s.codec.lock() {
+        Codec::Inflate(i) => !i.ended || !s.input.lock().is_empty(),
         _ => return Err(raise(c, "not_initialized")),
     };
-    *s.codec.borrow_mut() = Codec::None;
-    s.input.borrow_mut().clear();
-    s.output.borrow_mut().clear();
+    *s.codec.lock() = Codec::None;
+    s.input.lock().clear();
+    s.output.lock().clear();
     if bad {
         return Err(raise(c, "data_error"));
     }
@@ -540,7 +540,7 @@ pub fn deflate_params(c: &mut Ctx, a: &[Term]) -> R {
     let s = stream(c, &a[0])?;
     let level = int(c, &a[1])?;
     let level = if level < 0 { 6 } else { level.min(9) } as u8;
-    match &mut *s.codec.borrow_mut() {
+    match &mut *s.codec.lock() {
         Codec::Deflate(d) => d.core.set_compression_level_raw(level),
         _ => return Err(raise(c, "not_initialized")),
     }
@@ -554,7 +554,7 @@ pub fn not_supported(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn get_stash(c: &mut Ctx, a: &[Term]) -> R {
     let s = stream(c, &a[0])?;
-    let stash = s.stash.borrow().clone();
+    let stash = s.stash.lock().clone();
     Ok(match stash {
         Some(t) => {
             let t = c.copy_in(&t);
@@ -566,16 +566,16 @@ pub fn get_stash(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn set_stash(c: &mut Ctx, a: &[Term]) -> R {
     let s = stream(c, &a[0])?;
-    if s.stash.borrow().is_some() {
+    if s.stash.lock().is_some() {
         return Err(raise(c, "error"));
     }
-    *s.stash.borrow_mut() = Some(c.own(a[1]));
+    *s.stash.lock() = Some(c.own(a[1]));
     Ok(c.ok())
 }
 
 pub fn clear_stash(c: &mut Ctx, a: &[Term]) -> R {
     let s = stream(c, &a[0])?;
-    if s.stash.borrow_mut().take().is_none() {
+    if s.stash.lock().take().is_none() {
         return Err(raise(c, "error"));
     }
     Ok(c.ok())

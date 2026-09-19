@@ -201,10 +201,10 @@ impl OffHeap {
 }
 
 /// A resource: a unique id (from the VM's reference counter) and the native value. Natives
-/// that need to change their state keep it in a `RefCell` inside `value`.
+/// that need to change their state keep it in a [`crate::sync::Lock`] inside `value`.
 pub struct Resource {
     pub id: u64,
-    pub value: Box<dyn core::any::Any>,
+    pub value: Box<crate::sync::AnyShared>,
 }
 
 impl Resource {

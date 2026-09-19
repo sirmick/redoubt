@@ -5,7 +5,6 @@
 
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
-use alloc::rc::Rc;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -87,7 +86,7 @@ pub struct System {
     pub literals: Literals,
     pub atom_table: AtomTable,
     pub atoms: Atoms,
-    modules: BTreeMap<String, Rc<Module>>,
+    modules: BTreeMap<String, Arc<Module>>,
     natives: bif::Registry,
     pub(crate) run_queue: VecDeque<Pid>,
     /// Everything waiting for a time: receive timeouts and message timers, by deadline.
@@ -671,13 +670,13 @@ impl System {
         }
         let name = module.name;
         self.modules
-            .insert(name.as_str().to_string(), Rc::new(module));
+            .insert(name.as_str().to_string(), Arc::new(module));
         self.resolved.clear();
         Ok(name)
     }
 
     /// The module named `name`, loading it through the platform on first use.
-    pub fn module(&mut self, name: &Atom) -> Option<Rc<Module>> {
+    pub fn module(&mut self, name: &Atom) -> Option<Arc<Module>> {
         if let Some(m) = self.modules.get(name.as_str()) {
             return Some(m.clone());
         }
