@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use riscv::register::{satp, sie, sstatus};
+use xous_kernel::PID;
 
 #[cfg(target_arch = "riscv64")]
 mod asm64;
@@ -10,55 +11,15 @@ pub mod irq;
 #[cfg_attr(target_arch = "riscv64", path = "mem_sv39.rs")]
 pub mod mem;
 mod mmu_flags;
-#[cfg(target_arch = "riscv64")]
-mod sv39;
 pub mod panic;
 pub mod process;
+#[cfg(target_arch = "riscv64")]
+mod sv39;
 pub mod syscall;
-
-#[cfg(any(feature = "precursor", feature = "renode"))]
-use utralib::generated::*;
-#[cfg(not(any(feature = "precursor", feature = "renode")))]
-use xous_kernel::PID;
-#[cfg(any(feature = "precursor", feature = "renode"))]
-use xous_kernel::{MemoryFlags, MemoryType, PID};
-
-#[cfg(any(feature = "precursor", feature = "renode"))]
-use crate::mem::MemoryManager;
-
-#[cfg(any(feature = "precursor", feature = "renode"))]
-pub const WFI_KERNEL: Wfi = Wfi {
-    // the manually chosen virtual address has to be in the top 4MiB as it is the only page shared among all
-    // processes
-    base: 0xffcd_0000 as *mut usize, /* see https://github.com/betrusted-io/xous-core/blob/master/docs/memory.md */
-};
-
-#[cfg(any(feature = "precursor", feature = "renode"))]
-pub struct Wfi {
-    pub base: *mut usize,
-}
 
 pub fn current_pid() -> PID { PID::new(mem::pid_from_satp(satp::read().bits()) as _).unwrap() }
 
 pub fn init() {
-    #[cfg(any(feature = "precursor", feature = "renode"))]
-    MemoryManager::with_mut(|memory_manager| {
-        memory_manager
-            .map_range(
-                utra::wfi::HW_WFI_BASE as *mut u8,
-                ((WFI_KERNEL.base as u32) & !4095) as *mut u8,
-                4096,
-                PID::new(1).unwrap(),
-                MemoryFlags::R | MemoryFlags::W,
-                MemoryType::Default,
-            )
-            .expect("unable to map WFI")
-    });
-    #[cfg(any(feature = "precursor", feature = "renode"))]
-    let mut wfi_kernel_csr = CSR::new(WFI_KERNEL.base as *mut u32);
-    #[cfg(any(feature = "precursor", feature = "renode"))]
-    wfi_kernel_csr.wfo(utra::wfi::IGNORE_LOCKED_IGNORE_LOCKED, 1);
-
     irq::init();
 
     #[cfg(target_arch = "riscv64")]
@@ -73,40 +34,23 @@ pub fn init() {
     }
 }
 
-/// Put the core to sleep until an interrupt hits. Returns `true`
-/// to indicate the kernel should not exit.
+/// Put the core to sleep until an interrupt hits. Returns `true` to indicate the kernel
+/// should not exit.
 pub fn idle() -> bool {
-    // Issue `wfi`. This will return as soon as an external interrupt
-    // is available.
-    #[cfg(any(feature = "bao1x", feature = "renode"))]
-    // "traditional" path for stopping a clock
-    // SAFETY: `wfi` merely parks the hart until an interrupt is pending.
+    // Park the hart until an interrupt is pending.
+    // SAFETY: `wfi` has no memory effect. (`unsafe` on the vendored rv32 riscv crate,
+    // a safe no-op wrapper on the rv64 one.)
+    #[allow(unused_unsafe)]
     unsafe {
         riscv::asm::wfi()
     };
 
-    #[cfg(any(feature = "precursor"))]
-    {
-        let mut wfi_kernel_csr = CSR::new(WFI_KERNEL.base as *mut u32);
-        // this invokes Precusor-SoC specific path to gate clocks:
-        // 1. ignore_locked prevents the chip from going into reset if the PLL goes unlocked
-        wfi_kernel_csr.wfo(utra::wfi::IGNORE_LOCKED_IGNORE_LOCKED, 1);
-        // 2. wfi gates all the clocks (stops them) until a SoC-defined interrupt comes in
-        wfi_kernel_csr.wfo(utra::wfi::WFI_WFI, 1);
-    }
-
-    // Enable interrupts temporarily in Supervisor mode, allowing them
-    // to drain. Aside from this brief instance, interrupts are
-    // disabled when running in Supervisor mode.
-    //
-    // These interrupts are handled by userspace, so code execution will
-    // immediately jump to the interrupt handler and return here after
-    // all interrupts have been handled.
-    // SAFETY: briefly enabling then disabling interrupts lets any pending interrupt drain
-    // into its userspace handler. The kernel holds no borrow across this window.
+    // Briefly enable interrupts in Supervisor mode so any pending one drains into its
+    // userspace handler; otherwise interrupts stay disabled while in Supervisor mode.
+    // SAFETY: the kernel holds no borrow across this window.
     unsafe {
         sstatus::set_sie();
         sstatus::clear_sie();
-    };
+    }
     true
 }

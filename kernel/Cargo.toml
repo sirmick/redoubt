@@ -58,9 +58,7 @@ plic = ["dep:plic"]                 # standard RISC-V PLIC; otherwise VexRiscv's
 # Boards. Everything else about these machines comes from the device tree at boot.
 qemu-virt = ["sbi", "plic"]
 
-precursor = ["utralib/precursor"]
 hosted = ["utralib/hosted"]
-renode = ["utralib/renode"]
 
 debug-print = []
 print-panics = []

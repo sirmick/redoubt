@@ -1,5 +1,0 @@
-description = "The original rv32 Precursor kernel still compiles (it cannot be booted under QEMU)"
-arch = ["rv32"]
-kind = "build"
-package = "xous-kernel"
-features = ["precursor", "utralib/precursor-pvt"]
