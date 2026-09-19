@@ -10,6 +10,7 @@ members = [
   "xous-rs",
   "redoubt/paging",
   "redoubt/sys",
+  "redoubt/littlefs",
   "redoubt/test-programs",
   "redoubt/testbench",
   "redoubt/wire",
@@ -29,6 +30,10 @@ exclude = [
   "planning/",
   # Host-only fuzz targets, built by cargo-fuzz (see redoubt/wire/fuzz/Cargo.toml).
   "redoubt/wire/fuzz",
+  # Host-only littlefs test crates: the C reference as an oracle, and the fuzzer. They must
+  # never enter a normal build (TENETS.md 3: no C toolchain in the build).
+  "redoubt/littlefs/diff",
+  "redoubt/littlefs/fuzz",
 ]
 
 [profile.release]
