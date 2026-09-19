@@ -50,7 +50,7 @@ by that server's work package with a HISTORY.md line (BUILD-PLAN.md). A line hol
   headed `| Code | Error |`: codes unique, each with a name. **Code 1 is `Malformed` in every
   protocol**, and in a 9P call's reply status: a request that does not decode (unknown opcode, wrong
   shape, bad lengths, a missing handle, or one found to be of the wrong kind). The generator
-  reserves it and adds it to every table; a protocol's own codes start at 2.
+  reserves it and adds it to every table; a protocol's own codes start at 2, and a protocol with no errors of its own has an error table with no rows.
 
 ### Layout in a message
 - **Word 0** of a request is its opcode. **Word 0 of a reply is its status**: 0 = ok, otherwise a
