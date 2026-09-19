@@ -94,6 +94,27 @@ pub trait Files {
         let _ = path;
         Err(FileError::Einval)
     }
+    /// Set access and modification times (seconds since the Unix epoch).
+    fn set_times(&mut self, path: &str, atime: i64, mtime: i64) -> Result<(), FileError> {
+        let _ = (path, atime, mtime);
+        Err(FileError::Enotsup)
+    }
+    /// Set the permission bits.
+    fn set_permissions(&mut self, path: &str, mode: u32) -> Result<(), FileError> {
+        let _ = (path, mode);
+        Err(FileError::Enotsup)
+    }
+    /// Make a symbolic link at `link` whose target is `target`, stored as given (not resolved:
+    /// a link is resolved when followed, by the platform, which must keep it inside the root).
+    fn make_symlink(&mut self, target: &[u8], link: &str) -> Result<(), FileError> {
+        let _ = (target, link);
+        Err(FileError::Enotsup)
+    }
+    /// Make a hard link `new` to the file `existing`.
+    fn make_link(&mut self, existing: &str, new: &str) -> Result<(), FileError> {
+        let _ = (existing, new);
+        Err(FileError::Enotsup)
+    }
 }
 
 /// How to open a file, from Erlang's modes (`read`, `write`, `append`, `exclusive`).

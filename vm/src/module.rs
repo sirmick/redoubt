@@ -114,6 +114,19 @@ pub struct Lines {
 }
 
 impl Module {
+    /// The function named by `-on_load(F/0)`: the compiler marks its body with an `on_load`
+    /// instruction.
+    pub fn on_load(&self) -> Option<Atom> {
+        self.on_load_entry().map(|(name, _)| name)
+    }
+
+    /// The on_load function's name and entry (the label after its `func_info`).
+    pub fn on_load_entry(&self) -> Option<(Atom, u32)> {
+        let pc = self.code.iter().position(|i| i.op == crate::opcodes::ON_LOAD)?;
+        let f = self.function_at(pc as u32).filter(|f| f.arity == 0)?;
+        Some((f.name.clone(), f.start + 1))
+    }
+
     pub fn export(&self, function: &Atom, arity: u32) -> Option<u32> {
         self.exports
             .iter()

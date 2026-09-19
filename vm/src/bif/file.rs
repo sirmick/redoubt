@@ -306,7 +306,45 @@ pub fn set_cwd(c: &mut Ctx, a: &[Term]) -> R {
     })
 }
 
-/// NIFs for things the VM does not offer (links, ownership, permissions, times, raw handles):
+/// `set_time_nif(Path, ATime, MTime, CTime)`: times in POSIX seconds (the change time cannot be
+/// set and is ignored, as on BEAM).
+pub fn set_time(c: &mut Ctx, a: &[Term]) -> R {
+    let (Term::Int(at), Term::Int(mt)) = (&a[1], &a[2]) else { return Err(c.badarg()) };
+    let (at, mt) = (*at, *mt);
+    with_path(c, &a[0], |c, p| {
+        let r = files(c).and_then(|f| f.set_times(p, at, mt));
+        done(c, r)
+    })
+}
+
+pub fn set_permissions(c: &mut Ctx, a: &[Term]) -> R {
+    let mode = match a[1] {
+        Term::Int(m) => u32::try_from(m).map_err(|_| c.badarg())?,
+        _ => return Err(c.badarg()),
+    };
+    with_path(c, &a[0], |c, p| {
+        let r = files(c).and_then(|f| f.set_permissions(p, mode & 0o7777));
+        done(c, r)
+    })
+}
+
+/// `make_soft_link_nif(Target, Link)`: the target is stored as written.
+pub fn make_symlink(c: &mut Ctx, a: &[Term]) -> R {
+    let Term::Bits(target) = &a[0] else { return Err(c.badarg()) };
+    let target = target.to_bytes().into_owned();
+    with_path(c, &a[1], |c, p| {
+        let r = files(c).and_then(|f| f.make_symlink(&target, p));
+        done(c, r)
+    })
+}
+
+pub fn make_link(c: &mut Ctx, a: &[Term]) -> R {
+    let (from, to) = (path(c, &a[0])?, path(c, &a[1])?);
+    let r = from.and_then(|from| to.and_then(|to| files(c)?.make_link(&from, &to)));
+    done(c, r)
+}
+
+/// NIFs for things the VM does not offer (ownership, raw handles, Windows device paths):
 /// `{error, enotsup}`, which `file:write_file_info/2` tolerates.
 pub fn not_supported(c: &mut Ctx, _a: &[Term]) -> R {
     Ok(error(c, FileError::Enotsup))

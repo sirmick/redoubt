@@ -223,6 +223,32 @@ impl Files for HostDir {
         self.root.rename(rel(from), &self.root, rel(to)).map_err(error)
     }
 
+    fn set_times(&mut self, path: &str, atime: i64, mtime: i64) -> Result<(), FileError> {
+        let at = |secs: i64| std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_secs(secs.max(0) as u64));
+        let (Some(a), Some(m)) = (at(atime), at(mtime)) else { return Err(FileError::Einval) };
+        let times = std::fs::FileTimes::new().set_accessed(a).set_modified(m);
+        let file = match self.root.open(rel(path)) {
+            Ok(f) => f.into_std(),
+            // Directories cannot be opened as files; open them as directories.
+            Err(_) => self.root.open_dir(rel(path)).map_err(error)?.into_std_file(),
+        };
+        file.set_times(times).map_err(error)
+    }
+
+    fn set_permissions(&mut self, path: &str, mode: u32) -> Result<(), FileError> {
+        use cap_std::fs::PermissionsExt;
+        self.root.set_permissions(rel(path), cap_std::fs::Permissions::from_mode(mode)).map_err(error)
+    }
+
+    fn make_symlink(&mut self, target: &[u8], link: &str) -> Result<(), FileError> {
+        let target = std::path::Path::new(std::ffi::OsStr::from_bytes(target));
+        self.root.symlink(target, rel(link)).map_err(error)
+    }
+
+    fn make_link(&mut self, existing: &str, new: &str) -> Result<(), FileError> {
+        self.root.hard_link(rel(existing), &self.root, rel(new)).map_err(error)
+    }
+
     fn read_link(&mut self, path: &str) -> Result<Vec<u8>, FileError> {
         let target = self.root.read_link(rel(path)).map_err(error)?;
         Ok(target.as_os_str().as_bytes().to_vec())
