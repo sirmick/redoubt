@@ -247,7 +247,7 @@ and must match this note. These rules of the encoding are part of the spec:
   a 32-bit value or one address or length. `redoubt-sys` therefore has no width `cfg`
   (MEMORY-LAYOUT.md).
 - **Records** (what does not fit in registers: message bodies, a budget's fields, the
-  `process_start` list, what `receive` returns) are arrays of 64-bit little-endian slots at an
+  `process_start` list, what `receive` returns, `budget_usage`'s counters) are arrays of 64-bit little-endian slots at an
   8-byte-aligned address in the caller's memory, the same on both widths.
 - **Decoding refuses W+X flags and a `mint` badge of 0**; the kernel's mapping and minting code
   refuse them again (R11, I3), so neither rests on one check.
@@ -264,7 +264,9 @@ executable model and a replayed trace (WP-C1) agree exactly:
    output, then its slots in order). A required handle that is 0 or does not fit in 32 bits is
    `BadHandle`; a list longer than its limit is `TooLarge`; anything else malformed (an unknown call
    number, tag or flag bit, W+X flags, a value too wide for its field, a non-zero unused register or
-   slot, a misaligned record) is `InvalidArgument`.
+   slot, a misaligned record, a message id or badge of 0) is `InvalidArgument`. Each register is
+   checked in full when it is reached, a list's count against its limit included; unused registers
+   come after the last argument.
 2. **Kernel argument checks**, argument by argument: a handle exists (`BadHandle`) and names the
    right kind of object (`WrongObject`); a size is within its fixed limit (`TooLarge`); a range is
    page-aligned, non-empty, in user space and mapped as the call needs (`InvalidArgument`).
@@ -291,15 +293,15 @@ and its budget cannot pay (last, after the errors listed).
 | `process_map` | h: `BadHandle`; flags: `InvalidArgument` | `BadHandle`, `WrongObject`, `InvalidArgument` (src range, not the caller's own RAM; dst range, occupied; flags), `NotPermitted` (started), `OutOfMemory` (the child's budget) |
 | `process_start` | h: `BadHandle`; count over `MAX_START_HANDLES`: `TooLarge`; list: record, each h `BadHandle` | `BadHandle`, `WrongObject`, `BadHandle` (each h), `NotPermitted` (started), `OutOfMemory` (the child's budget: thread, then table) |
 | `endpoint_create` | - | `OutOfMemory` |
-| `mint` | source: tag `InvalidArgument`, handle `BadHandle`; badge 0: `InvalidArgument`; budget h: `BadHandle` | source: a message id the caller is not serving `InvalidArgument`, its endpoint or stamp gone `Dead`; or a handle `BadHandle`, `WrongObject`; budget: `BadHandle`, `WrongObject`; `NotPermitted` (a handle source's badge not 0), `NotPermitted` (budget not the default stamp or below), `OutOfMemory` |
+| `mint` | source: tag `InvalidArgument`, message id 0 `InvalidArgument`, handle `BadHandle`; badge 0: `InvalidArgument`; budget h: `BadHandle` | source: a message id the caller is not serving `InvalidArgument`, its endpoint or stamp gone `Dead`; or a handle `BadHandle`, `WrongObject`; budget: `BadHandle`, `WrongObject`; `NotPermitted` (a handle source's badge not 0), `NotPermitted` (budget not the default stamp or below), `OutOfMemory` |
 | `call` | h: `BadHandle`; lend: exactly one of address and page count 0 is `InvalidArgument`; body: record, count `TooLarge`, each h `BadHandle` | `BadHandle`, `WrongObject` (not an endpoint), `BadHandle` (each h), `TooLarge` (lend over `MAX_LEND_PAGES`), `InvalidArgument` (lend not page-aligned or not the caller's own writable RAM), `LabelDenied` (R1), `Busy` (R2); at delivery: `Timeout`, `Dead`, `OutOfMemory` (the reply's handles do not fit the caller) |
 | `send` | as `call`, with the transfer for the lend | as `call` without the lend limit; at delivery: `Refused` (R4), `Timeout`, `Dead` |
 | `receive` | h (0 = none): `BadHandle`; record | `BadHandle`, `WrongObject` (not an endpoint or IRQ), `NotPermitted` (badge not 0), `Busy` (R4a); at delivery: `Timeout`, `Dead` (endpoint destroyed), `OutOfMemory` (R4a; the message stays queued) |
-| `reply` | body: record, count `TooLarge`, each h `BadHandle` | `InvalidArgument` (msg_id not an open call of the caller's thread, including a `send`'s id), `BadHandle` (each h) |
+| `reply` | msg_id 0: `InvalidArgument`; body: record, count `TooLarge`, each h `BadHandle` | `InvalidArgument` (msg_id not an open call of the caller's thread, including a `send`'s id), `BadHandle` (each h) |
 | `handle_close` | h: `BadHandle` | `BadHandle` |
 | `budget_create` | h: `BadHandle`; spec: record, labels over `MAX_LABELS` before deduplication `TooLarge`, class tag or a 32-bit field `InvalidArgument` | `BadHandle`, `WrongObject`, `TooLarge` (the child would be at depth `MAX_DEPTH`), `ClassDenied` (class `system`), `LabelDenied` (labels not ⊇ the parent's), `ClassDenied` (labels added), `OutOfMemory` (pages over the parent's free pages, or no free page in the parent for a scope's object), `OutOfProcesses`, `InvalidArgument` (weight over the parent's free weight), `OutOfMemory` (pages fewer than the budget's own object) |
 | `budget_destroy` | h: `BadHandle` | `BadHandle`, `WrongObject` |
-| `budget_usage` | h: `BadHandle` | `BadHandle`, `WrongObject`, `LabelDenied` (a user-class caller whose labels ⊉ the target's) |
+| `budget_usage` | h: `BadHandle`; counters: record (written) | `BadHandle`, `WrongObject`, `LabelDenied` (a user-class caller whose labels ⊉ the target's) |
 | `time_now` | - | - |
 | `random` | len over `MAX_RANDOM`: `TooLarge` | `InvalidArgument` (the bytes not the caller's own writable memory) |
 | `system_reset` | h: `BadHandle`; kind: `InvalidArgument` | `BadHandle`, `WrongObject` (not the Reset device) |

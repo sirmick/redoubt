@@ -221,3 +221,7 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   entries, `poweroff`, `allow_panic`, `must_fail` self-checks. The red team found seven ways to
   make the bench pass wrongly (among them a loopback sshd that gave any local user a shell, and
   the console no longer being read after the last expect); all fixed, each with a `must_fail` case.
+- **KERNEL-SPEC.md corrections from WP-A1** (2026-09-19, editorial, following answers 3, 11 and
+  14): message id 0 is a decoding error in `reply` and `mint`; `budget_usage` returns its six
+  counters in a record (they do not fit the result registers); stage 1 checks each register in
+  full when it reaches it, a list count included, and unused registers last.
