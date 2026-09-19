@@ -41,6 +41,10 @@ const USER_STACK_PAGES: usize = 32;
 /// The ABI wants 16-byte stack alignment; leave one slot free at the very top.
 const STACK_PADDING: usize = 16;
 const ARGS_PAGES: usize = 4;
+/// Processes the kernel has room for, its own included (`MAX_PROCESS_COUNT` in
+/// `kernel/src/arch/riscv/process.rs`). A `Pid` is a byte, so this also keeps `count + 1`
+/// from wrapping.
+const MAX_PROCESSES: usize = 64;
 
 // The `.bss`-zeroing loop is the only width-specific part: store one XLEN word per step.
 #[cfg(target_arch = "riscv64")]
@@ -217,6 +221,11 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
         if name == "grants" {
             continue;
         }
+        assert!(
+            count < MAX_PROCESSES,
+            "the boot bundle has more than the {} processes the kernel has room for",
+            MAX_PROCESSES
+        );
         let pid = count as Pid + 1;
 
         let space = AddressSpace::new_user(&mut alloc, pid, &kernel);

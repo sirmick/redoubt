@@ -387,13 +387,18 @@ impl SystemServices {
                     init_count += 1;
                 }
             }
-            // The loader writes the table into one page, one record per process (BOOT.md), so
-            // a count that does not fit means the kernel and the loader disagree.
-            let capacity = xous_kernel::arch::PAGE_SIZE / size_of::<crate::arch::process::InitialProcess>();
+            // The loader writes the table into one page, one record per process (BOOT.md), and
+            // refuses a bundle with more processes than the kernel has room for. This is the
+            // kernel's side of that check: a count beyond either limit means the two disagree,
+            // and the boot stops here rather than at an index somewhere later.
+            let capacity = (xous_kernel::arch::PAGE_SIZE
+                / size_of::<crate::arch::process::InitialProcess>())
+            .min(crate::arch::process::MAX_PROCESS_COUNT);
             assert!(
                 init_count <= capacity,
-                "the initial-process table does not hold {} processes",
-                init_count
+                "the loader reported {} initial processes, room is {}",
+                init_count,
+                capacity
             );
             // SAFETY: `base` is that page, which the loader allocated, zeroed and filled with
             // one `InitialProcess` per process; it is page-aligned, so aligned for the record,
