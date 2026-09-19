@@ -87,7 +87,11 @@ pub fn run(sys: &mut System, p: &mut Process) -> Stop {
             }
             Err(Fault::BadCode(what)) => {
                 // Name the offending instruction, so a report points at the code.
-                let op = p.pc.pc.checked_sub(1).and_then(|pc| p.pc.module.code.get(pc as usize)).map(|i| i.op);
+                let op =
+                    p.pc.pc
+                        .checked_sub(1)
+                        .and_then(|pc| p.pc.module.code.get(pc as usize))
+                        .map(|i| i.op);
                 let name = crate::opcodes::OPCODES[op.unwrap_or(0) as usize].name;
                 let parts = [
                     Term::Atom(sys.atom("bad_code")),
@@ -99,7 +103,10 @@ pub fn run(sys: &mut System, p: &mut Process) -> Stop {
                 return Stop::Exit(Err(Exception::error(reason)));
             }
             Err(Fault::Limit(what)) => {
-                let parts = [Term::Atom(sys.atoms.system_limit), Term::Atom(sys.atom(what))];
+                let parts = [
+                    Term::Atom(sys.atoms.system_limit),
+                    Term::Atom(sys.atom(what)),
+                ];
                 let reason = p.heap.tuple(&parts);
                 return Stop::Exit(Err(Exception::exit(reason)));
             }
@@ -135,7 +142,10 @@ fn list(ins: &Instr, i: usize) -> R<&[Arg]> {
 }
 
 fn y_slot(p: &Process, y: u16) -> R<usize> {
-    let f = p.frames.last().ok_or(Fault::BadCode("Y register without a frame"))?;
+    let f = p
+        .frames
+        .last()
+        .ok_or(Fault::BadCode("Y register without a frame"))?;
     if (y as usize) < f.size {
         Ok(f.base + y as usize)
     } else {
@@ -266,12 +276,19 @@ fn allocate(p: &mut Process, size: usize, max_stack: usize) -> R {
     }
     let base = p.stack.len();
     p.stack.resize(base + size, Term::Nil);
-    p.frames.push(Frame { base, size, cp: p.cp.take() });
+    p.frames.push(Frame {
+        base,
+        size,
+        cp: p.cp.take(),
+    });
     Ok(())
 }
 
 fn deallocate(p: &mut Process) -> R {
-    let f = p.frames.pop().ok_or(Fault::BadCode("deallocate without a frame"))?;
+    let f = p
+        .frames
+        .pop()
+        .ok_or(Fault::BadCode("deallocate without a frame"))?;
     p.stack.truncate(f.base);
     p.cp = f.cp;
     // A handler whose frame is gone can never be reached again.
@@ -298,13 +315,19 @@ fn run_native(
         Ok(t) => Ok(t),
         Err(mut e) => {
             let raiser = m == &sys.atoms.erlang
-                && matches!(f.as_str(), "error" | "exit" | "throw" | "raise" | "nif_error");
+                && matches!(
+                    f.as_str(),
+                    "error" | "exit" | "throw" | "raise" | "nif_error"
+                );
             if e.trace.is_none() && !raiser {
                 // As BEAM does for its BIFs, name the module that can explain the error
                 // (`erl_error` and Elixir turn `badarg` into "not a list" and the like).
                 let location = match (e.class, error_formatter(m.as_str())) {
                     (crate::process::Class::Error, Some(formatter)) => {
-                        let mut pairs = alloc::vec![(Term::Atom(sys.atom("module")), Term::Atom(sys.atom(formatter)))];
+                        let mut pairs = alloc::vec![(
+                            Term::Atom(sys.atom("module")),
+                            Term::Atom(sys.atom(formatter))
+                        )];
                         if let Some(cause) = e.cause.take() {
                             pairs.push((Term::Atom(sys.atom("cause")), cause));
                         }
@@ -331,7 +354,9 @@ fn run_native(
 /// `beam_common.c` assigns them.
 fn error_formatter(module: &str) -> Option<&'static str> {
     Some(match module {
-        "erlang" | "erts_internal" | "atomics" | "counters" | "persistent_term" => "erl_erts_errors",
+        "erlang" | "erts_internal" | "atomics" | "counters" | "persistent_term" => {
+            "erl_erts_errors"
+        }
         "code" | "os" => "erl_kernel_errors",
         "binary" | "ets" | "lists" | "maps" | "math" | "re" | "unicode" => "erl_stdlib_errors",
         _ => return None,
@@ -339,7 +364,13 @@ fn error_formatter(module: &str) -> Option<&'static str> {
 }
 
 /// Call a native on x0.. and return its result.
-fn call_native(sys: &mut System, p: &mut Process, n: Native, mf: (&crate::atom::Atom, &crate::atom::Atom), arity: usize) -> R<Term> {
+fn call_native(
+    sys: &mut System,
+    p: &mut Process,
+    n: Native,
+    mf: (&crate::atom::Atom, &crate::atom::Atom),
+    arity: usize,
+) -> R<Term> {
     let mut args = [Term::Nil; 255];
     for (i, slot) in args.iter_mut().enumerate().take(arity) {
         *slot = as_value(&mut p.heap, p.x[i]);
@@ -348,7 +379,12 @@ fn call_native(sys: &mut System, p: &mut Process, n: Native, mf: (&crate::atom::
 }
 
 /// The code and x registers for calling `fun` (a term of `heap`) with `args`.
-pub(crate) fn fun_entry(sys: &mut System, heap: &mut Heap, fun: Term, mut args: Vec<Term>) -> Result<(Cp, Vec<Term>), Exception> {
+pub(crate) fn fun_entry(
+    sys: &mut System,
+    heap: &mut Heap,
+    fun: Term,
+    mut args: Vec<Term>,
+) -> Result<(Cp, Vec<Term>), Exception> {
     let Some(f) = heap.as_fun(fun) else {
         return Err(error_tuple(heap, &sys.atoms.badfun, fun));
     };
@@ -358,20 +394,40 @@ pub(crate) fn fun_entry(sys: &mut System, heap: &mut Heap, fun: Term, mut args: 
         return Err(error_tuple(heap, &sys.atoms.badarity, info));
     }
     match f {
-        FunView::Local { module, index, env, uniq, arity, .. } => {
+        FunView::Local {
+            module,
+            index,
+            env,
+            uniq,
+            arity,
+            ..
+        } => {
             let env = env.to_vec();
-            let Some(m) = sys.module(&module) else { return Err(Exception::error(Term::Atom(sys.atoms.undef))) };
+            let Some(m) = sys.module(&module) else {
+                return Err(Exception::error(Term::Atom(sys.atoms.undef)));
+            };
             // A fun from another version of the module (or decoded from a binary) must match
             // this version's fun table, or it is a bad fun.
-            let entry = m
-                .funs
-                .get(index as usize)
-                .filter(|e| e.uniq == uniq && e.num_free as usize == env.len() && e.arity == arity + e.num_free);
-            let Some(entry) = entry.map(|e| e.entry) else { return Err(error_tuple(heap, &sys.atoms.badfun, fun)) };
+            let entry = m.funs.get(index as usize).filter(|e| {
+                e.uniq == uniq && e.num_free as usize == env.len() && e.arity == arity + e.num_free
+            });
+            let Some(entry) = entry.map(|e| e.entry) else {
+                return Err(error_tuple(heap, &sys.atoms.badfun, fun));
+            };
             args.extend(env);
-            Ok((Cp { module: m, pc: entry }, args))
+            Ok((
+                Cp {
+                    module: m,
+                    pc: entry,
+                },
+                args,
+            ))
         }
-        FunView::Export { module, function, arity } => match sys.resolve(&module, &function, arity) {
+        FunView::Export {
+            module,
+            function,
+            arity,
+        } => match sys.resolve(&module, &function, arity) {
             Some(Target::Code(cp)) => Ok((cp, args)),
             _ => Err(Exception::error(Term::Atom(sys.atoms.undef))),
         },
@@ -389,7 +445,14 @@ enum Kind {
 
 /// Enter `module:function/arity` with arguments already in x registers. `native` is the
 /// implementation if the caller already knows it is a native (resolved at load time).
-fn call_mfa(sys: &mut System, p: &mut Process, m: &crate::atom::Atom, f: &crate::atom::Atom, arity: usize, kind: Kind) -> R<Flow> {
+fn call_mfa(
+    sys: &mut System,
+    p: &mut Process,
+    m: &crate::atom::Atom,
+    f: &crate::atom::Atom,
+    arity: usize,
+    kind: Kind,
+) -> R<Flow> {
     call_mfa_with(sys, p, m, f, arity, kind, None)
 }
 
@@ -416,10 +479,13 @@ fn call_mfa_with(
     // be exported (for beamlet_code, as BEAM's code server uses it).
     if m == &sys.atoms.erlang && f.as_str() == "call_on_load_function" && arity == 1 {
         let entry = match p.x[0] {
-            Term::Atom(name) => sys.module(&name).and_then(|md| md.on_load_entry().map(|(_, pc)| Cp { module: md, pc })),
+            Term::Atom(name) => sys
+                .module(&name)
+                .and_then(|md| md.on_load_entry().map(|(_, pc)| Cp { module: md, pc })),
             _ => None,
         };
-        let entry = entry.ok_or_else(|| Fault::Raise(Exception::error(Term::Atom(sys.atoms.badarg))))?;
+        let entry =
+            entry.ok_or_else(|| Fault::Raise(Exception::error(Term::Atom(sys.atoms.badarg))))?;
         if kind == Kind::Last {
             deallocate(p)?;
         }
@@ -431,7 +497,10 @@ fn call_mfa_with(
         let args: Vec<Term> = p.x[..3].to_vec();
         let loaded = run_native(sys, p, crate::bif::load_binary, (m, f), &args)?;
         let on_load = match p.heap.as_tuple(loaded) {
-            Some(&[_, Term::Atom(name)]) => sys.module(&name).and_then(|md| md.on_load()).map(|f| (name, f)),
+            Some(&[_, Term::Atom(name)]) => sys
+                .module(&name)
+                .and_then(|md| md.on_load())
+                .map(|f| (name, f)),
             _ => None,
         };
         let Some((module, function)) = on_load else {
@@ -499,11 +568,17 @@ fn call_mfa_with(
             // As in BEAM, the missing function heads the stack trace, with its arguments.
             let args = p.x[..arity].to_vec();
             let args = p.heap.list(args);
-            let missing = p.heap.tuple(&[Term::Atom(*m), Term::Atom(*f), args, Term::Nil]);
+            let missing = p
+                .heap
+                .tuple(&[Term::Atom(*m), Term::Atom(*f), args, Term::Nil]);
             let mut e = Exception::error(Term::Atom(sys.atoms.undef));
             // A tail call has already left the calling function, so the trace starts at its
             // caller (as in BEAM).
-            let rest = if kind == Kind::Call { stacktrace(sys, p, None) } else { continuations(sys, p, sys.backtrace_depth) };
+            let rest = if kind == Kind::Call {
+                stacktrace(sys, p, None)
+            } else {
+                continuations(sys, p, sys.backtrace_depth)
+            };
             e.trace = Some(p.heap.cons(missing, rest));
             Err(Fault::Raise(e))
         }
@@ -532,8 +607,14 @@ fn hibernate(sys: &mut System, p: &mut Process, arity: usize, kind: Kind) -> R<F
         });
     }
     let badarg = || Fault::Raise(Exception::error(Term::Atom(sys.atoms.badarg)));
-    let (Term::Atom(m), Term::Atom(f)) = (p.x[0], p.x[1]) else { return Err(badarg()) };
-    let args = p.heap.to_vec(p.x[2]).filter(|a| a.len() <= 255).ok_or_else(badarg)?;
+    let (Term::Atom(m), Term::Atom(f)) = (p.x[0], p.x[1]) else {
+        return Err(badarg());
+    };
+    let args = p
+        .heap
+        .to_vec(p.x[2])
+        .filter(|a| a.len() <= 255)
+        .ok_or_else(badarg)?;
     let Some(Target::Code(cp)) = sys.resolve(&m, &f, args.len() as u32) else {
         return Err(Fault::Raise(Exception::error(Term::Atom(sys.atoms.undef))));
     };
@@ -563,7 +644,10 @@ fn bad_apply(sys: &mut System, p: &mut Process, m: Term, f: Term, args: Term) ->
 /// `erlang:apply(Fun, Args)` or `erlang:apply(M, F, Args)` with its arguments in x0..
 fn apply(sys: &mut System, p: &mut Process, arity: usize, kind: Kind) -> R<Flow> {
     let args_term = p.x[arity - 1];
-    let args = p.heap.to_vec(args_term).ok_or_else(|| Fault::Raise(Exception::error(Term::Atom(sys.atoms.badarg))))?;
+    let args = p
+        .heap
+        .to_vec(args_term)
+        .ok_or_else(|| Fault::Raise(Exception::error(Term::Atom(sys.atoms.badarg))))?;
     if args.len() > 255 {
         return Err(Fault::Raise(Exception::error(Term::Atom(sys.atoms.badarg))));
     }
@@ -584,7 +668,12 @@ fn apply(sys: &mut System, p: &mut Process, arity: usize, kind: Kind) -> R<Flow>
 
 fn call_fun(sys: &mut System, p: &mut Process, fun: Term, args: Vec<Term>, kind: Kind) -> R<Flow> {
     // An export fun of a native: call the native directly.
-    if let Some(FunView::Export { module, function, arity }) = p.heap.as_fun(fun) {
+    if let Some(FunView::Export {
+        module,
+        function,
+        arity,
+    }) = p.heap.as_fun(fun)
+    {
         if arity as usize == args.len() {
             let n = args.len();
             for (i, a) in args.into_iter().enumerate() {
@@ -639,7 +728,13 @@ fn cooked(heap: &Heap, raw: Term) -> Term {
 
 /// A trace entry `{M, F, ArityOrArgs, Location}` for code index `pc` of `m`, on `heap`. What it
 /// holds comes from the module (atoms, and file names that are literals), so any heap will do.
-fn trace_entry(atoms: &crate::atom::Atoms, heap: &mut Heap, m: &Module, pc: u32, args: Option<Term>) -> Option<Term> {
+fn trace_entry(
+    atoms: &crate::atom::Atoms,
+    heap: &mut Heap,
+    m: &Module,
+    pc: u32,
+    args: Option<Term>,
+) -> Option<Term> {
     let f = m.function_at(pc)?;
     let location = match m.location(pc) {
         Some((file, line)) => {
@@ -649,7 +744,12 @@ fn trace_entry(atoms: &crate::atom::Atoms, heap: &mut Heap, m: &Module, pc: u32,
         }
         None => Term::Nil,
     };
-    Some(heap.tuple(&[Term::Atom(m.name), Term::Atom(f.name), args.unwrap_or(Term::Int(f.arity as i64)), location]))
+    Some(heap.tuple(&[
+        Term::Atom(m.name),
+        Term::Atom(f.name),
+        args.unwrap_or(Term::Int(f.arity as i64)),
+        location,
+    ]))
 }
 
 /// A stack trace: the current function, then the functions that will be returned to.
@@ -657,7 +757,12 @@ fn stacktrace(sys: &mut System, p: &mut Process, args: Option<Term>) -> Term {
     let here = p.pc.pc.saturating_sub(1);
     let module = p.pc.module.clone();
     let head = trace_entry(&sys.atoms, &mut p.heap, &module, here, args);
-    let rest = continuations(sys, p, sys.backtrace_depth.saturating_sub(usize::from(head.is_some())));
+    let rest = continuations(
+        sys,
+        p,
+        sys.backtrace_depth
+            .saturating_sub(usize::from(head.is_some())),
+    );
     match head {
         Some(h) => p.heap.cons(h, rest),
         None => rest,
@@ -678,14 +783,22 @@ fn continuations(sys: &mut System, p: &mut Process, n: usize) -> Term {
 
 /// The places `p` will return to, innermost first, at most `n`.
 fn continuation_points(p: &Process, n: usize) -> Vec<Cp> {
-    let conts = p.cp.iter().chain(p.frames.iter().rev().take(n).filter_map(|f| f.cp.as_ref()));
+    let conts =
+        p.cp.iter()
+            .chain(p.frames.iter().rev().take(n).filter_map(|f| f.cp.as_ref()));
     conts.take(n).cloned().collect()
 }
 
 fn trace_of(atoms: &crate::atom::Atoms, heap: &mut Heap, points: &[Cp]) -> Term {
     let mut entries = Vec::new();
     for cp in points {
-        entries.extend(trace_entry(atoms, heap, &cp.module, cp.pc.saturating_sub(1), None));
+        entries.extend(trace_entry(
+            atoms,
+            heap,
+            &cp.module,
+            cp.pc.saturating_sub(1),
+            None,
+        ));
     }
     heap.list(entries)
 }
@@ -693,14 +806,25 @@ fn trace_of(atoms: &crate::atom::Atoms, heap: &mut Heap, points: &[Cp]) -> Term 
 /// Where `p` is, as text: its current function and up to `depth - 1` callers.
 pub(crate) fn where_is(p: &Process, depth: usize) -> alloc::string::String {
     let mut out = alloc::string::String::new();
-    let conts = core::iter::once(&p.pc).chain(p.cp.iter()).chain(p.frames.iter().rev().filter_map(|f| f.cp.as_ref()));
+    let conts = core::iter::once(&p.pc)
+        .chain(p.cp.iter())
+        .chain(p.frames.iter().rev().filter_map(|f| f.cp.as_ref()));
     for (i, cp) in conts.take(depth).enumerate() {
-        let pc = if i == 0 { cp.pc } else { cp.pc.saturating_sub(1) };
+        let pc = if i == 0 {
+            cp.pc
+        } else {
+            cp.pc.saturating_sub(1)
+        };
         if let Some(f) = cp.module.function_at(pc) {
             if !out.is_empty() {
                 out.push_str(" < ");
             }
-            out.push_str(&alloc::format!("{}:{}/{}", cp.module.name.as_str(), f.name.as_str(), f.arity));
+            out.push_str(&alloc::format!(
+                "{}:{}/{}",
+                cp.module.name.as_str(),
+                f.name.as_str(),
+                f.arity
+            ));
         }
     }
     out
@@ -709,14 +833,21 @@ pub(crate) fn where_is(p: &Process, depth: usize) -> alloc::string::String {
 /// The places `current_stacktrace` reports for `p`: where it is, then what it will return to,
 /// at most `n`.
 pub(crate) fn stacktrace_points(p: &Process, n: usize) -> Vec<Cp> {
-    let mut points = alloc::vec![Cp { module: p.pc.module.clone(), pc: p.pc.pc }];
+    let mut points = alloc::vec![Cp {
+        module: p.pc.module.clone(),
+        pc: p.pc.pc
+    }];
     points.extend(continuation_points(p, n.saturating_sub(1)));
     points
 }
 
 /// `process_info(P, current_stacktrace)` from [`stacktrace_points`], on `heap`, with source
 /// locations.
-pub(crate) fn current_stacktrace(atoms: &crate::atom::Atoms, heap: &mut Heap, points: &[Cp]) -> Term {
+pub(crate) fn current_stacktrace(
+    atoms: &crate::atom::Atoms,
+    heap: &mut Heap,
+    points: &[Cp],
+) -> Term {
     trace_of(atoms, heap, points)
 }
 
@@ -751,7 +882,14 @@ fn install_handler(p: &mut Process, ins: &Instr) -> R {
     put(p, &Arg::Y(y), Term::Nil)?;
     let pc = label(ins, 1)?.ok_or(Fault::BadCode("try/catch without a label"))?;
     let depth = p.frames.len();
-    p.handlers.push(Handler { depth, y, target: Cp { module: p.pc.module.clone(), pc } });
+    p.handlers.push(Handler {
+        depth,
+        y,
+        target: Cp {
+            module: p.pc.module.clone(),
+            pc,
+        },
+    });
     Ok(())
 }
 
@@ -773,17 +911,29 @@ fn remove_handler(p: &mut Process, ins: &Instr) -> R {
 
 fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
     let here = p.pc.pc;
-    let ins = module.code.get(here as usize).ok_or(Fault::BadCode("pc outside the code"))?;
+    let ins = module
+        .code
+        .get(here as usize)
+        .ok_or(Fault::BadCode("pc outside the code"))?;
     p.pc.pc = here + 1;
     let a = &sys.atoms;
 
     match ins.op {
         // `on_load` marks the function BEAM runs after loading (usually to call load_nif). This
         // VM does not run it: natives it provides replace stub bodies at load instead.
-        op::LABEL | op::LINE | op::EXECUTABLE_LINE | op::DEBUG_LINE | op::NIF_START | op::TEST_HEAP | op::ON_LOAD => {}
+        op::LABEL
+        | op::LINE
+        | op::EXECUTABLE_LINE
+        | op::DEBUG_LINE
+        | op::NIF_START
+        | op::TEST_HEAP
+        | op::ON_LOAD => {}
 
         crate::module::NATIVE_BODY => {
-            let &(n, name, arity) = module.body_natives.get(u(ins, 0)?).ok_or(Fault::BadCode("native body"))?;
+            let &(n, name, arity) = module
+                .body_natives
+                .get(u(ins, 0)?)
+                .ok_or(Fault::BadCode("native body"))?;
             let r = call_native(sys, p, n, (&module.name, &name), arity as usize)?;
             p.x[0] = r;
             return Ok(do_return(p));
@@ -802,7 +952,10 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
 
         op::CALL | op::CALL_LAST | op::CALL_ONLY => {
             let target = label(ins, 1)?.ok_or(Fault::BadCode("call to no label"))?;
-            let cp = Cp { module: module.clone(), pc: target };
+            let cp = Cp {
+                module: module.clone(),
+                pc: target,
+            };
             if ins.op == op::CALL_LAST {
                 deallocate(p)?;
             }
@@ -841,7 +994,9 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
             if imp.arity as usize != nargs {
                 return Err(Fault::BadCode("BIF import arity"));
             }
-            let n = imp.native.ok_or_else(|| Fault::Raise(Exception::error(Term::Atom(sys.atoms.undef))))?;
+            let n = imp
+                .native
+                .ok_or_else(|| Fault::Raise(Exception::error(Term::Atom(sys.atoms.undef))))?;
             // At most three arguments: a stack array, not an allocation per guard BIF.
             let mut args = [Term::Nil, Term::Nil, Term::Nil];
             for (i, slot) in args.iter_mut().enumerate().take(nargs) {
@@ -866,7 +1021,10 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
         }
         op::TRIM => {
             let n = u(ins, 0)?;
-            let f = p.frames.last_mut().ok_or(Fault::BadCode("trim without a frame"))?;
+            let f = p
+                .frames
+                .last_mut()
+                .ok_or(Fault::BadCode("trim without a frame"))?;
             if n > f.size {
                 return Err(Fault::BadCode("trim more than the frame"));
             }
@@ -876,7 +1034,9 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
             // Handlers name Y registers of this frame; renumber them.
             let depth = p.frames.len();
             for h in p.handlers.iter_mut().filter(|h| h.depth == depth) {
-                h.y = h.y.checked_sub(n as u16).ok_or(Fault::BadCode("trim removed a try register"))?;
+                h.y =
+                    h.y.checked_sub(n as u16)
+                        .ok_or(Fault::BadCode("trim removed a try register"))?;
             }
         }
 
@@ -897,12 +1057,18 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
             dst(p, ins, 2, t)?;
         }
         op::GET_LIST => {
-            let (hd, tl) = p.heap.as_cons(val(p, ins, 0)?).ok_or(Fault::BadCode("get_list on a non-list"))?;
+            let (hd, tl) = p
+                .heap
+                .as_cons(val(p, ins, 0)?)
+                .ok_or(Fault::BadCode("get_list on a non-list"))?;
             dst(p, ins, 1, hd)?;
             dst(p, ins, 2, tl)?;
         }
         op::GET_HD | op::GET_TL => {
-            let (hd, tl) = p.heap.as_cons(val(p, ins, 0)?).ok_or(Fault::BadCode("get_hd/get_tl on a non-list"))?;
+            let (hd, tl) = p
+                .heap
+                .as_cons(val(p, ins, 0)?)
+                .ok_or(Fault::BadCode("get_hd/get_tl on a non-list"))?;
             dst(p, ins, 1, if ins.op == op::GET_HD { hd } else { tl })?;
         }
         op::PUT_TUPLE2 => {
@@ -915,7 +1081,11 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
         }
         op::GET_TUPLE_ELEMENT => {
             let i = u(ins, 1)?;
-            let e = *p.heap.as_tuple(val(p, ins, 0)?).and_then(|t| t.get(i)).ok_or(Fault::BadCode("get_tuple_element"))?;
+            let e = *p
+                .heap
+                .as_tuple(val(p, ins, 0)?)
+                .and_then(|t| t.get(i))
+                .ok_or(Fault::BadCode("get_tuple_element"))?;
             dst(p, ins, 2, e)?;
         }
         op::SET_TUPLE_ELEMENT => {
@@ -924,8 +1094,14 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
             let v = src(p, ins, 0)?;
             let t = src(p, ins, 1)?;
             let i = u(ins, 2)?;
-            let mut elems = p.heap.as_tuple(t).ok_or(Fault::BadCode("set_tuple_element"))?.to_vec();
-            *elems.get_mut(i).ok_or(Fault::BadCode("set_tuple_element index"))? = v;
+            let mut elems = p
+                .heap
+                .as_tuple(t)
+                .ok_or(Fault::BadCode("set_tuple_element"))?
+                .to_vec();
+            *elems
+                .get_mut(i)
+                .ok_or(Fault::BadCode("set_tuple_element index"))? = v;
             let t = p.heap.tuple(&elems);
             dst(p, ins, 1, t)?;
         }
@@ -937,9 +1113,15 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
                 _ => return Err(Fault::BadCode("update_record on a mismatched tuple")),
             };
             for pair in list(ins, 4)?.chunks(2) {
-                let [Arg::U(pos), v] = pair else { return Err(Fault::BadCode("update_record list")) };
-                let pos = (*pos as usize).checked_sub(1).ok_or(Fault::BadCode("update_record index"))?;
-                *elems.get_mut(pos).ok_or(Fault::BadCode("update_record index"))? = get(p, v)?;
+                let [Arg::U(pos), v] = pair else {
+                    return Err(Fault::BadCode("update_record list"));
+                };
+                let pos = (*pos as usize)
+                    .checked_sub(1)
+                    .ok_or(Fault::BadCode("update_record index"))?;
+                *elems
+                    .get_mut(pos)
+                    .ok_or(Fault::BadCode("update_record index"))? = get(p, v)?;
             }
             let t = p.heap.tuple(&elems);
             dst(p, ins, 3, t)?;
@@ -961,17 +1143,35 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
                 jump(p, label(ins, 0)?)?;
             }
         }
-        op::IS_INTEGER | op::IS_FLOAT | op::IS_NUMBER | op::IS_ATOM | op::IS_PID | op::IS_REFERENCE | op::IS_PORT
-        | op::IS_NIL | op::IS_BINARY | op::IS_LIST | op::IS_NONEMPTY_LIST | op::IS_TUPLE | op::IS_FUNCTION
-        | op::IS_BOOLEAN | op::IS_MAP | op::IS_BITSTR => {
+        op::IS_INTEGER
+        | op::IS_FLOAT
+        | op::IS_NUMBER
+        | op::IS_ATOM
+        | op::IS_PID
+        | op::IS_REFERENCE
+        | op::IS_PORT
+        | op::IS_NIL
+        | op::IS_BINARY
+        | op::IS_LIST
+        | op::IS_NONEMPTY_LIST
+        | op::IS_TUPLE
+        | op::IS_FUNCTION
+        | op::IS_BOOLEAN
+        | op::IS_MAP
+        | op::IS_BITSTR => {
             let t = val(p, ins, 1)?;
             let heap = &p.heap;
             // A match context counts as the bitstring it is matching.
             let bits_like = |t: &Term, whole_bytes: bool| match t {
-                Term::Bits(_) => !whole_bytes || heap.bit_len(*t).is_some_and(|n| n.is_multiple_of(8)),
+                Term::Bits(_) => {
+                    !whole_bytes || heap.bit_len(*t).is_some_and(|n| n.is_multiple_of(8))
+                }
                 Term::Match(_) => {
                     !whole_bytes
-                        || heap.as_match(*t).and_then(|(b, pos)| Some(heap.bit_len(b)? - pos)).is_some_and(|n| n.is_multiple_of(8))
+                        || heap
+                            .as_match(*t)
+                            .and_then(|(b, pos)| Some(heap.bit_len(b)? - pos))
+                            .is_some_and(|n| n.is_multiple_of(8))
                 }
                 _ => false,
             };
@@ -1022,7 +1222,9 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
             let v = val(p, ins, 0)?;
             let mut target = label(ins, 1)?;
             for pair in list(ins, 2)?.chunks(2) {
-                let [Arg::Const(c), Arg::Label(l)] = pair else { return Err(Fault::BadCode("select_val list")) };
+                let [Arg::Const(c), Arg::Label(l)] = pair else {
+                    return Err(Fault::BadCode("select_val list"));
+                };
                 if p.heap.eq_exact(v, *c) {
                     target = *l;
                     break;
@@ -1031,10 +1233,16 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
             jump(p, target)?;
         }
         op::SELECT_TUPLE_ARITY => {
-            let n = p.heap.as_tuple(val(p, ins, 0)?).map(|t| t.len()).ok_or(Fault::BadCode("select_tuple_arity on a non-tuple"))?;
+            let n = p
+                .heap
+                .as_tuple(val(p, ins, 0)?)
+                .map(|t| t.len())
+                .ok_or(Fault::BadCode("select_tuple_arity on a non-tuple"))?;
             let mut target = label(ins, 1)?;
             for pair in list(ins, 2)?.chunks(2) {
-                let [Arg::U(arity), Arg::Label(l)] = pair else { return Err(Fault::BadCode("select_tuple_arity list")) };
+                let [Arg::U(arity), Arg::Label(l)] = pair else {
+                    return Err(Fault::BadCode("select_tuple_arity list"));
+                };
                 if *arity as usize == n {
                     target = *l;
                     break;
@@ -1121,7 +1329,14 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
             if env.len() != entry.num_free as usize {
                 return Err(Fault::BadCode("make_fun3 environment size"));
             }
-            let fun = p.heap.fun_local(module.name, index as u32, entry.arity - entry.num_free, entry.uniq, entry.function, &env);
+            let fun = p.heap.fun_local(
+                module.name,
+                index as u32,
+                entry.arity - entry.num_free,
+                entry.uniq,
+                entry.function,
+                &env,
+            );
             dst(p, ins, 1, fun)?;
         }
         op::CALL_FUN => {
@@ -1150,7 +1365,11 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
                 let args = p.heap.list(args);
                 return Err(bad_apply(sys, p, m, f, args));
             };
-            let kind = if ins.op == op::APPLY { Kind::Call } else { Kind::Last };
+            let kind = if ins.op == op::APPLY {
+                Kind::Call
+            } else {
+                Kind::Last
+            };
             return call_mfa(sys, p, &m, &f, arity, kind);
         }
 
@@ -1231,7 +1450,9 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
                 return Err(Fault::Raise(error_tuple(heap, &badmap, map)));
             }
             for pair in list(ins, 4)?.chunks(2) {
-                let [k, v] = pair else { return Err(Fault::BadCode("map pairs")) };
+                let [k, v] = pair else {
+                    return Err(Fault::BadCode("map pairs"));
+                };
                 let (k, v) = (get(p, k)?, get(p, v)?);
                 if ins.op == op::PUT_MAP_EXACT && p.heap.map_get(map, k).is_none() {
                     match label(ins, 0)? {
@@ -1255,7 +1476,9 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
                 return Err(Fault::BadCode("get_map_elements on a non-map"));
             }
             for pair in list(ins, 2)?.chunks(2) {
-                let [k, d] = pair else { return Err(Fault::BadCode("map pairs")) };
+                let [k, d] = pair else {
+                    return Err(Fault::BadCode("map pairs"));
+                };
                 let k = get(p, k)?;
                 match p.heap.map_get(map, k) {
                     Some(v) => put(p, d, v)?,
@@ -1288,7 +1511,9 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
                 put(p, &d, Term::Float(f))?;
             }
             (s, Arg::FloatReg(r)) => {
-                let Term::Float(f) = get(p, s)? else { return Err(Fault::BadCode("fmove of a non-float")) };
+                let Term::Float(f) = get(p, s)? else {
+                    return Err(Fault::BadCode("fmove of a non-float"));
+                };
                 p.f[*r as usize] = f;
             }
             _ => return Err(Fault::BadCode("fmove operands")),
@@ -1347,18 +1572,31 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
             dst(p, ins, 3, state)?;
         }
         op::BS_GET_POSITION => {
-            let (_, pos) = p.heap.as_match(src(p, ins, 0)?).ok_or(Fault::BadCode("bs_get_position"))?;
+            let (_, pos) = p
+                .heap
+                .as_match(src(p, ins, 0)?)
+                .ok_or(Fault::BadCode("bs_get_position"))?;
             dst(p, ins, 1, Term::Int(pos as i64))?;
         }
         op::BS_SET_POSITION => {
             let state = src(p, ins, 0)?;
-            let (bits, _) = p.heap.as_match(state).ok_or(Fault::BadCode("bs_set_position"))?;
-            let len = p.heap.bit_len(bits).ok_or(Fault::BadCode("bs_set_position"))?;
-            let pos = src(p, ins, 1)?.as_usize().filter(|x| *x <= len).ok_or(Fault::BadCode("bs_set_position"))?;
+            let (bits, _) = p
+                .heap
+                .as_match(state)
+                .ok_or(Fault::BadCode("bs_set_position"))?;
+            let len = p
+                .heap
+                .bit_len(bits)
+                .ok_or(Fault::BadCode("bs_set_position"))?;
+            let pos = src(p, ins, 1)?
+                .as_usize()
+                .filter(|x| *x <= len)
+                .ok_or(Fault::BadCode("bs_set_position"))?;
             p.heap.set_match_pos(state, pos);
         }
         op::BS_GET_TAIL => {
-            let (bits, pos) = match_bits(&p.heap, src(p, ins, 0)?).ok_or(Fault::BadCode("bs_get_tail"))?;
+            let (bits, pos) =
+                match_bits(&p.heap, src(p, ins, 0)?).ok_or(Fault::BadCode("bs_get_tail"))?;
             let t = p.heap.bits(bits.slice(pos, bits.len - pos));
             dst(p, ins, 1, t)?;
         }
@@ -1375,9 +1613,19 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
             };
             dst(p, ins, 3, state)?;
         }
-        op::BS_GET_INTEGER2 | op::BS_GET_FLOAT2 | op::BS_GET_BINARY2 | op::BS_SKIP_BITS2 | op::BS_TEST_TAIL2
-        | op::BS_TEST_UNIT | op::BS_MATCH_STRING | op::BS_GET_UTF8 | op::BS_GET_UTF16 | op::BS_GET_UTF32
-        | op::BS_SKIP_UTF8 | op::BS_SKIP_UTF16 | op::BS_SKIP_UTF32 => return bs_get(sys, p, ins, module),
+        op::BS_GET_INTEGER2
+        | op::BS_GET_FLOAT2
+        | op::BS_GET_BINARY2
+        | op::BS_SKIP_BITS2
+        | op::BS_TEST_TAIL2
+        | op::BS_TEST_UNIT
+        | op::BS_MATCH_STRING
+        | op::BS_GET_UTF8
+        | op::BS_GET_UTF16
+        | op::BS_GET_UTF32
+        | op::BS_SKIP_UTF8
+        | op::BS_SKIP_UTF16
+        | op::BS_SKIP_UTF32 => return bs_get(sys, p, ins, module),
 
         _ => return Err(Fault::BadCode("opcode not implemented")),
     }
@@ -1388,11 +1636,15 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
 
 fn flags_little(sys: &System, heap: &Heap, flags: Term) -> bool {
     // Flags come as a list of atoms; `native` is little-endian on every target we support.
-    heap.list_iter(flags).flatten().any(|f| f.is_atom(&sys.atoms.little) || f.is_atom(&sys.atoms.native))
+    heap.list_iter(flags)
+        .flatten()
+        .any(|f| f.is_atom(&sys.atoms.little) || f.is_atom(&sys.atoms.native))
 }
 
 fn flags_signed(sys: &System, heap: &Heap, flags: Term) -> bool {
-    heap.list_iter(flags).flatten().any(|f| f.is_atom(&sys.atoms.signed))
+    heap.list_iter(flags)
+        .flatten()
+        .any(|f| f.is_atom(&sys.atoms.signed))
 }
 
 fn bs_create_bin(sys: &mut System, p: &mut Process, ins: &Instr, module: &Module) -> R<Flow> {
@@ -1408,11 +1660,19 @@ fn bs_create_bin(sys: &mut System, p: &mut Process, ins: &Instr, module: &Module
     // `Heap::take_for_append`). This turns a binary comprehension from quadratic into linear.
     // The other segments are built first, so a failure leaves the base untouched.
     let mut base = None;
-    if let [Arg::Const(Term::Atom(ty)), _, Arg::U(unit), _, src @ (Arg::X(_) | Arg::Y(_)), size, rest @ ..] = segments {
+    if let [Arg::Const(Term::Atom(ty)), _, Arg::U(unit), _, src @ (Arg::X(_) | Arg::Y(_)), size, rest @ ..] =
+        segments
+    {
         // Only without a fail label: with one, the code there could still read the register.
-        if fail.is_none() && ty.as_str() == "private_append" && matches!(size, Arg::Const(t) if t.is_atom(&sys.atoms.all)) {
+        if fail.is_none()
+            && ty.as_str() == "private_append"
+            && matches!(size, Arg::Const(t) if t.is_atom(&sys.atoms.all))
+        {
             let t = get(p, src)?;
-            if p.heap.bit_len(t).is_some_and(|len| *unit <= 1 || len % *unit as usize == 0) {
+            if p.heap
+                .bit_len(t)
+                .is_some_and(|len| *unit <= 1 || len % *unit as usize == 0)
+            {
                 base = Some(t);
                 segments = rest;
             }
@@ -1453,7 +1713,11 @@ fn bs_create_bin(sys: &mut System, p: &mut Process, ins: &Instr, module: &Module
                 let f = match v {
                     Term::Float(f) => Some(f),
                     Term::Int(i) => Some(i as f64),
-                    Term::Big(_) => p.heap.as_big(v).and_then(num_traits::ToPrimitive::to_f64).filter(|f| f.is_finite()),
+                    Term::Big(_) => p
+                        .heap
+                        .as_big(v)
+                        .and_then(num_traits::ToPrimitive::to_f64)
+                        .filter(|f| f.is_finite()),
                     _ => None,
                 };
                 match (f, size_t.as_usize()) {
@@ -1511,7 +1775,9 @@ fn bs_create_bin(sys: &mut System, p: &mut Process, ins: &Instr, module: &Module
             break;
         }
         if base_len + out.bit_len() > max_bits {
-            return Err(Fault::Raise(Exception::error(Term::Atom(sys.atoms.system_limit))));
+            return Err(Fault::Raise(Exception::error(Term::Atom(
+                sys.atoms.system_limit,
+            ))));
         }
     }
     if !ok {
@@ -1553,30 +1819,39 @@ fn bs_create_bin(sys: &mut System, p: &mut Process, ins: &Instr, module: &Module
 fn bs_match(sys: &mut System, p: &mut Process, ins: &Instr) -> R<Flow> {
     let fail = label(ins, 0)?;
     let state = src(p, ins, 1)?;
-    let (bits, mut pos) = match_bits(&p.heap, state).ok_or(Fault::BadCode("bs_match without a match state"))?;
+    let (bits, mut pos) =
+        match_bits(&p.heap, state).ok_or(Fault::BadCode("bs_match without a match state"))?;
     let bits = &bits;
     let cmds = list(ins, 2)?;
     let mut i = 0;
     let take = |i: &mut usize, n: usize| -> R<&[Arg]> {
-        let s = cmds.get(*i..*i + n).ok_or(Fault::BadCode("bs_match command list"))?;
+        let s = cmds
+            .get(*i..*i + n)
+            .ok_or(Fault::BadCode("bs_match command list"))?;
         *i += n;
         Ok(s)
     };
     let failed = loop {
         let Some(cmd) = cmds.get(i) else { break false };
         i += 1;
-        let Arg::Const(Term::Atom(name)) = cmd else { return Err(Fault::BadCode("bs_match command")) };
+        let Arg::Const(Term::Atom(name)) = cmd else {
+            return Err(Fault::BadCode("bs_match command"));
+        };
         let remaining = bits.len - pos;
         match name.as_str() {
             "ensure_at_least" => {
-                let [Arg::U(stride), Arg::U(unit)] = take(&mut i, 2)? else { return Err(Fault::BadCode("ensure_at_least")) };
+                let [Arg::U(stride), Arg::U(unit)] = take(&mut i, 2)? else {
+                    return Err(Fault::BadCode("ensure_at_least"));
+                };
                 let (stride, unit) = (*stride as usize, (*unit as usize).max(1));
                 if remaining < stride || !(remaining - stride).is_multiple_of(unit) {
                     break true;
                 }
             }
             "ensure_exactly" => {
-                let [Arg::U(stride)] = take(&mut i, 1)? else { return Err(Fault::BadCode("ensure_exactly")) };
+                let [Arg::U(stride)] = take(&mut i, 1)? else {
+                    return Err(Fault::BadCode("ensure_exactly"));
+                };
                 if remaining != *stride as usize {
                     break true;
                 }
@@ -1597,7 +1872,10 @@ fn bs_match(sys: &mut System, p: &mut Process, ins: &Instr) -> R<Flow> {
                     break true;
                 }
                 let t = if name.as_str() == "integer" {
-                    let (signed, little) = (flags_signed(sys, &p.heap, flags), flags_little(sys, &p.heap, flags));
+                    let (signed, little) = (
+                        flags_signed(sys, &p.heap, flags),
+                        flags_little(sys, &p.heap, flags),
+                    );
                     bits::read_integer(&mut p.heap, bits, pos, n, signed, little)
                 } else {
                     p.heap.bits(bits.slice(pos, n))
@@ -1607,7 +1885,9 @@ fn bs_match(sys: &mut System, p: &mut Process, ins: &Instr) -> R<Flow> {
                 put(p, &d, t)?;
             }
             "get_tail" => {
-                let [_live, _unit, d] = take(&mut i, 3)? else { return Err(Fault::BadCode("get_tail")) };
+                let [_live, _unit, d] = take(&mut i, 3)? else {
+                    return Err(Fault::BadCode("get_tail"));
+                };
                 // The rest, without moving the position: code may go on matching from here
                 // (a `with` keeps the tail for its `else` and reads on), as in BEAM.
                 let t = p.heap.bits(bits.slice(pos, remaining));
@@ -1615,8 +1895,12 @@ fn bs_match(sys: &mut System, p: &mut Process, ins: &Instr) -> R<Flow> {
                 put(p, &d, t)?;
             }
             "=:=" => {
-                let [_live, size, value] = take(&mut i, 3)? else { return Err(Fault::BadCode("=:=")) };
-                let n = num_operand(p, size)?.as_usize().ok_or(Fault::BadCode("=:= size"))?;
+                let [_live, size, value] = take(&mut i, 3)? else {
+                    return Err(Fault::BadCode("=:="));
+                };
+                let n = num_operand(p, size)?
+                    .as_usize()
+                    .ok_or(Fault::BadCode("=:= size"))?;
                 if n > remaining {
                     break true;
                 }
@@ -1628,7 +1912,9 @@ fn bs_match(sys: &mut System, p: &mut Process, ins: &Instr) -> R<Flow> {
                 pos += n;
             }
             "skip" => {
-                let [Arg::U(stride)] = take(&mut i, 1)? else { return Err(Fault::BadCode("skip")) };
+                let [Arg::U(stride)] = take(&mut i, 1)? else {
+                    return Err(Fault::BadCode("skip"));
+                };
                 let n = *stride as usize;
                 if n > remaining {
                     break true;
@@ -1663,7 +1949,8 @@ fn seg_flags(sys: &System, heap: &Heap, a: &Arg) -> (bool, bool) {
 fn bs_get(sys: &mut System, p: &mut Process, ins: &Instr, module: &Module) -> R<Flow> {
     let fail = label(ins, 0)?;
     let state = src(p, ins, 1)?;
-    let (bits, pos) = match_bits(&p.heap, state).ok_or(Fault::BadCode("binary match without a match state"))?;
+    let (bits, pos) =
+        match_bits(&p.heap, state).ok_or(Fault::BadCode("binary match without a match state"))?;
     let bits = &bits;
     let remaining = bits.len - pos;
     // Some(result, bits consumed) on success, None to take the fail label.
@@ -1687,13 +1974,27 @@ fn bs_get(sys: &mut System, p: &mut Process, ins: &Instr, module: &Module) -> R<
                     Some(n) => Some(n),
                     // A negative or non-integer size: BEAM fails the match (or raises badarg).
                     None if size.is_integer() => None,
-                    None => return Err(Fault::Raise(Exception::error(Term::Atom(sys.atoms.badarg)))),
+                    None => {
+                        return Err(Fault::Raise(Exception::error(Term::Atom(sys.atoms.badarg))))
+                    }
                 }
             };
             match n {
                 Some(n) if n <= remaining => match ins.op {
-                    op::BS_GET_INTEGER2 => Some((Some(bits::read_integer(&mut p.heap, bits, pos, n, signed, little)), n)),
-                    op::BS_GET_FLOAT2 => bits::read_float(bits, pos, n, little).map(|f| (Some(Term::Float(f)), n)),
+                    op::BS_GET_INTEGER2 => Some((
+                        Some(bits::read_integer(
+                            &mut p.heap,
+                            bits,
+                            pos,
+                            n,
+                            signed,
+                            little,
+                        )),
+                        n,
+                    )),
+                    op::BS_GET_FLOAT2 => {
+                        bits::read_float(bits, pos, n, little).map(|f| (Some(Term::Float(f)), n))
+                    }
                     op::BS_GET_BINARY2 => Some((Some(p.heap.bits(bits.slice(pos, n))), n)),
                     _ => Some((None, n)),
                 },
@@ -1716,13 +2017,20 @@ fn bs_get(sys: &mut System, p: &mut Process, ins: &Instr, module: &Module) -> R<
                 .checked_add(n.div_ceil(8))
                 .and_then(|end| module.strings.get(offset..end))
                 .ok_or(Fault::BadCode("bs_match_string range"))?;
-            let want = Bits { data: alloc::sync::Arc::new(bytes.to_vec()), offset: 0, len: n };
+            let want = Bits {
+                data: alloc::sync::Arc::new(bytes.to_vec()),
+                offset: 0,
+                len: n,
+            };
             let ok = n <= remaining && (0..n).all(|i| bits.bit(pos + i) == want.bit(i));
             ok.then_some((None, n))
         }
-        op::BS_GET_UTF8 | op::BS_SKIP_UTF8 => {
-            bits::read_utf8(bits, pos).map(|(cp, n)| ((ins.op == op::BS_GET_UTF8).then_some(Term::Int(cp as i64)), n))
-        }
+        op::BS_GET_UTF8 | op::BS_SKIP_UTF8 => bits::read_utf8(bits, pos).map(|(cp, n)| {
+            (
+                (ins.op == op::BS_GET_UTF8).then_some(Term::Int(cp as i64)),
+                n,
+            )
+        }),
         op::BS_GET_UTF16 | op::BS_SKIP_UTF16 | op::BS_GET_UTF32 | op::BS_SKIP_UTF32 => {
             let get = matches!(ins.op, op::BS_GET_UTF16 | op::BS_GET_UTF32);
             let (little, _) = seg_flags(sys, &p.heap, arg(ins, 3)?);
@@ -1754,11 +2062,21 @@ fn bs_get(sys: &mut System, p: &mut Process, ins: &Instr, module: &Module) -> R<
     Ok(Flow::Next)
 }
 
-fn read_utf16(heap: &mut Heap, bits: &Bits, pos: usize, remaining: usize, little: bool) -> Option<(u32, usize)> {
+fn read_utf16(
+    heap: &mut Heap,
+    bits: &Bits,
+    pos: usize,
+    remaining: usize,
+    little: bool,
+) -> Option<(u32, usize)> {
     if remaining < 16 {
         return None;
     }
-    let mut unit = |at: usize| bits::read_integer(heap, bits, at, 16, false, little).as_i64().map(|v| v as u16);
+    let mut unit = |at: usize| {
+        bits::read_integer(heap, bits, at, 16, false, little)
+            .as_i64()
+            .map(|v| v as u16)
+    };
     let first = unit(pos)?;
     if !(0xD800..0xE000).contains(&first) {
         return char::from_u32(first as u32).map(|c| (c as u32, 16));

@@ -23,7 +23,7 @@ pub struct Atom(&'static String);
 
 impl Atom {
     pub fn as_str(&self) -> &str {
-        &self.0
+        self.0
     }
 
     /// An atom outside any table, for unit tests.
@@ -49,7 +49,7 @@ impl Eq for Atom {}
 
 impl fmt::Debug for Atom {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(self.0)
     }
 }
 
@@ -67,7 +67,9 @@ pub struct AtomTable {
 
 impl AtomTable {
     pub fn new() -> AtomTable {
-        AtomTable { by_name: BTreeMap::new() }
+        AtomTable {
+            by_name: BTreeMap::new(),
+        }
     }
 
     /// The atom named `name`, creating it if needed.

@@ -23,7 +23,9 @@ struct Error(&'static str, usize);
 /// `Tag` is the class in bits 16-17 and the tag number below; `Value` is a binary (primitive)
 /// or a list of TLVs (constructed, including indefinite length).
 pub fn decode_ber_tlv(c: &mut Ctx, a: &[Term]) -> R {
-    let Some(input) = c.heap().iodata_bytes(a[0]) else { return Err(c.badarg()) };
+    let Some(input) = c.heap().iodata_bytes(a[0]) else {
+        return Err(c.badarg());
+    };
     let mut pos = 0;
     match decode(c.heap_mut(), &input, &mut pos, input.len(), 0) {
         Ok(t) => {
@@ -39,7 +41,13 @@ pub fn decode_ber_tlv(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 /// Decode one TLV starting at `*pos`, not reading past `end`.
-fn decode(h: &mut Heap, b: &[u8], pos: &mut usize, end: usize, depth: usize) -> Result<Term, Error> {
+fn decode(
+    h: &mut Heap,
+    b: &[u8],
+    pos: &mut usize,
+    end: usize,
+    depth: usize,
+) -> Result<Term, Error> {
     if depth > MAX_DEPTH {
         return Err(Error("unknown", *pos));
     }
@@ -138,10 +146,18 @@ fn encode(h: &Heap, t: &Term, out: &mut Vec<u8>, depth: usize) -> Option<()> {
     if depth > MAX_DEPTH {
         return None;
     }
-    let &[tag, value] = h.as_tuple(*t)? else { return None };
+    let &[tag, value] = h.as_tuple(*t)? else {
+        return None;
+    };
     let tag = u32::try_from(tag.as_i64()?).ok()?;
     let (constructed, content) = match value {
-        Term::Bits(_) => (false, h.as_bits(value).filter(|b| b.is_binary())?.to_bytes().into_owned()),
+        Term::Bits(_) => (
+            false,
+            h.as_bits(value)
+                .filter(|b| b.is_binary())?
+                .to_bytes()
+                .into_owned(),
+        ),
         Term::Nil | Term::Cons(_) => {
             let mut inner = Vec::new();
             for item in h.list_iter(value) {
@@ -171,7 +187,11 @@ fn encode(h: &Heap, t: &Term, out: &mut Vec<u8>, depth: usize) -> Option<()> {
     if len < 128 {
         out.push(len as u8);
     } else {
-        let bytes: Vec<u8> = (len as u64).to_be_bytes().into_iter().skip_while(|b| *b == 0).collect();
+        let bytes: Vec<u8> = (len as u64)
+            .to_be_bytes()
+            .into_iter()
+            .skip_while(|b| *b == 0)
+            .collect();
         out.push(0x80 | bytes.len() as u8);
         out.extend(bytes);
     }
@@ -183,7 +203,10 @@ fn encode(h: &Heap, t: &Term, out: &mut Vec<u8>, depth: usize) -> Option<()> {
 mod tests {
     use super::*;
 
-    const CERTS: &[&[u8]] = &[include_bytes!("../tests/fixtures/rsa-root.der"), include_bytes!("../tests/fixtures/ec-root.der")];
+    const CERTS: &[&[u8]] = &[
+        include_bytes!("../tests/fixtures/rsa-root.der"),
+        include_bytes!("../tests/fixtures/ec-root.der"),
+    ];
 
     fn heap() -> Heap {
         Heap::new(&Default::default())
@@ -192,7 +215,8 @@ mod tests {
     fn roundtrip(bytes: &[u8]) {
         let mut pos = 0;
         let mut h = heap();
-        let t = decode(&mut h, bytes, &mut pos, bytes.len(), 0).unwrap_or_else(|_| panic!("decodes"));
+        let t =
+            decode(&mut h, bytes, &mut pos, bytes.len(), 0).unwrap_or_else(|_| panic!("decodes"));
         assert_eq!(pos, bytes.len());
         let mut out = Vec::new();
         encode(&h, &t, &mut out, 0).expect("encodes");

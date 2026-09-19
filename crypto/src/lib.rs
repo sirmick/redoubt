@@ -57,12 +57,27 @@ pub static NATIVES: &[NativeSpec] = &[
     ("crypto", "kdf_algorithms", 0, info::empty_list),
     ("crypto", "mac_algorithms", 0, info::mac_algorithms),
     ("crypto", "curve_algorithms", 0, info::curve_algorithms),
-    ("crypto", "rsa_opts_algorithms", 0, info::rsa_opts_algorithms),
+    (
+        "crypto",
+        "rsa_opts_algorithms",
+        0,
+        info::rsa_opts_algorithms,
+    ),
     ("crypto", "hash_info_nif", 1, hash::hash_info),
     ("crypto", "cipher_info_nif", 1, cipher::cipher_info),
     // Random numbers.
-    ("crypto", "strong_rand_bytes_nif", 1, info::strong_rand_bytes),
-    ("crypto", "strong_rand_range_nif", 1, info::strong_rand_range),
+    (
+        "crypto",
+        "strong_rand_bytes_nif",
+        1,
+        info::strong_rand_bytes,
+    ),
+    (
+        "crypto",
+        "strong_rand_range_nif",
+        1,
+        info::strong_rand_range,
+    ),
     ("crypto", "rand_uniform_nif", 2, info::rand_uniform),
     ("crypto", "rand_seed_nif", 1, info::rand_seed),
     // Hashes, MACs, key derivation.
@@ -109,7 +124,8 @@ pub static NATIVES: &[NativeSpec] = &[
 /// turns into `error:{Id, {File, Line}, Msg}` with the offending argument marked. `arg` is
 /// 0-based, as in the C NIFs; `-1` means no particular argument.
 fn nif_error(c: &mut Ctx, id: &str, arg: i64, msg: &str) -> Exception {
-    let [file, line, argn, id] = ["c_file_name", "c_file_line_num", "c_function_arg_num", id].map(|n| c.atom(n));
+    let [file, line, argn, id] =
+        ["c_file_name", "c_file_line_num", "c_function_arg_num", id].map(|n| c.atom(n));
     let name = c.string("beamlet_crypto");
     let info = c.map_from([(file, name), (line, Term::Int(0)), (argn, Term::Int(arg))]);
     let msg = c.string(msg);
@@ -177,7 +193,8 @@ impl KeystreamRng {
     fn new(c: &mut Ctx) -> Result<KeystreamRng, Exception> {
         use chacha20::cipher::KeyIvInit;
         let key = random_bytes(c, 32)?;
-        let rng = chacha20::ChaCha20::new_from_slices(&key, &[0u8; 12]).expect("fixed key and nonce sizes");
+        let rng = chacha20::ChaCha20::new_from_slices(&key, &[0u8; 12])
+            .expect("fixed key and nonce sizes");
         Ok(KeystreamRng(rng))
     }
 }

@@ -28,17 +28,31 @@ fn new(c: &mut Ctx, size: &Term, signed: bool) -> R {
     let n = match size {
         Term::Int(n) if *n >= 1 && (*n as u64) <= MAX_SIZE as u64 => *n as usize,
         Term::Int(n) if *n >= 1 => return Err(c.system_limit()),
-        Term::Big(_) if c.heap().as_big(*size).is_some_and(|b| b.sign() == num_bigint::Sign::Plus) => return Err(c.system_limit()),
+        Term::Big(_)
+            if c.heap()
+                .as_big(*size)
+                .is_some_and(|b| b.sign() == num_bigint::Sign::Plus) =>
+        {
+            return Err(c.system_limit())
+        }
         _ => return Err(c.badarg()),
     };
     let id = c.sys.make_ref().0;
-    let a = Atomics { signed, cells: RefCell::new(alloc::vec![0; n]) };
-    Ok(c.heap_mut().resource(Resource { id, value: alloc::boxed::Box::new(a) }))
+    let a = Atomics {
+        signed,
+        cells: RefCell::new(alloc::vec![0; n]),
+    };
+    Ok(c.heap_mut().resource(Resource {
+        id,
+        value: alloc::boxed::Box::new(a),
+    }))
 }
 
 /// `erts_internal:atomics_new(Arity, EncodedOpts)`: bit 0 of the options is `signed`.
 pub fn atomics_new(c: &mut Ctx, a: &[Term]) -> R {
-    let Term::Int(opts) = a[1] else { return Err(c.badarg()) };
+    let Term::Int(opts) = a[1] else {
+        return Err(c.badarg());
+    };
     new(c, &a[0], opts & 1 != 0)
 }
 
@@ -52,7 +66,10 @@ pub fn counters_new(c: &mut Ctx, a: &[Term]) -> R {
 fn cell(c: &Ctx, r: &Term, ix: &Term) -> Result<(alloc::sync::Arc<Resource>, usize), Exception> {
     let res = c.heap().as_resource(*r).ok_or_else(|| c.badarg())?.clone();
     let a = res.get::<Atomics>().ok_or_else(|| c.badarg())?;
-    let i = ix.as_usize().filter(|&i| i >= 1 && i <= a.cells.borrow().len()).ok_or_else(|| c.badarg())?;
+    let i = ix
+        .as_usize()
+        .filter(|&i| i >= 1 && i <= a.cells.borrow().len())
+        .ok_or_else(|| c.badarg())?;
     Ok((res, i - 1))
 }
 
@@ -61,7 +78,11 @@ fn atomics(r: &Resource) -> &Atomics {
 }
 
 fn to_term(c: &mut Ctx, a: &Atomics, v: u64) -> Term {
-    if a.signed { Term::Int(v as i64) } else { c.big(BigInt::from(v)) }
+    if a.signed {
+        Term::Int(v as i64)
+    } else {
+        c.big(BigInt::from(v))
+    }
 }
 
 /// An integer argument, however large.
@@ -77,8 +98,16 @@ fn integer(c: &Ctx, t: &Term) -> Option<i128> {
 fn value(c: &Ctx, a: &Atomics, t: &Term) -> Result<u64, Exception> {
     let n = integer(c, t);
     let n = n.ok_or_else(|| c.badarg())?;
-    let ok = if a.signed { i64::try_from(n).is_ok() } else { u64::try_from(n).is_ok() };
-    if ok { Ok(n as u64) } else { Err(c.badarg()) }
+    let ok = if a.signed {
+        i64::try_from(n).is_ok()
+    } else {
+        u64::try_from(n).is_ok()
+    };
+    if ok {
+        Ok(n as u64)
+    } else {
+        Err(c.badarg())
+    }
 }
 
 /// An increment: any integer that fits in 64 bits either way; it wraps like the cell does.
@@ -148,10 +177,17 @@ pub fn compare_exchange(c: &mut Ctx, a: &[Term]) -> R {
 
 /// `info(Ref)`: `#{size, max, min, memory}` for atomics, `#{size, memory}` for counters.
 fn info(c: &mut Ctx, a: &[Term], counters: bool) -> R {
-    let res = c.heap().as_resource(a[0]).ok_or_else(|| c.badarg())?.clone();
+    let res = c
+        .heap()
+        .as_resource(a[0])
+        .ok_or_else(|| c.badarg())?
+        .clone();
     let at = res.get::<Atomics>().ok_or_else(|| c.badarg())?;
     let n = at.cells.borrow().len();
-    let mut items: Vec<(&str, Term)> = alloc::vec![("size", Term::Int(n as i64)), ("memory", Term::Int((n * 8 + 32) as i64))];
+    let mut items: Vec<(&str, Term)> = alloc::vec![
+        ("size", Term::Int(n as i64)),
+        ("memory", Term::Int((n * 8 + 32) as i64))
+    ];
     if !counters {
         let (min, max) = if at.signed {
             (Term::Int(i64::MIN), Term::Int(i64::MAX))

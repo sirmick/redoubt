@@ -114,10 +114,14 @@ fn compile_option(h: &Heap, f: &mut Flags, o: &Term) -> bool {
         // has anyway (UCP classes under `unicode`, no start optimisation to disable).
         Some("dollar_endonly") => f.dollar_endonly = true,
         Some("ucp") => f.ucp = true,
-        Some("no_start_optimize" | "no_auto_capture" | "never_utf" | "dupnames"
-            | "firstline" | "bsr_anycrlf" | "bsr_unicode" | "report_errors") => {}
+        Some(
+            "no_start_optimize" | "no_auto_capture" | "never_utf" | "dupnames" | "firstline"
+            | "bsr_anycrlf" | "bsr_unicode" | "report_errors",
+        ) => {}
         _ => match h.as_tuple(*o) {
-            Some(&[k, v]) if atom(&k) == Some("newline") => f.crlf = matches!(atom(&v), Some("crlf" | "anycrlf" | "any")),
+            Some(&[k, v]) if atom(&k) == Some("newline") => {
+                f.crlf = matches!(atom(&v), Some("crlf" | "anycrlf" | "any"))
+            }
             _ => return false,
         },
     }
@@ -190,12 +194,19 @@ fn translate(p: &str, ascii_classes: bool) -> String {
                     };
                     let neg = if next.is_ascii_uppercase() { "^" } else { "" };
                     let class = format!("[:{neg}{name}:]");
-                    if in_class { out.push_str(&class) } else { out.push_str(&format!("[{class}]")) }
+                    if in_class {
+                        out.push_str(&class)
+                    } else {
+                        out.push_str(&format!("[{class}]"))
+                    }
                 }
                 'b' | 'B' if ascii_classes && !in_class => out.push_str(&format!("(?-u:\\{next})")),
                 // `\p{Lu}`, `\x{263A}`, `\g{1}`...: the braces belong to the escape.
                 'p' | 'P' | 'x' | 'o' | 'g' | 'k' if chars.get(i + 2) == Some(&'{') => {
-                    let end = chars[i + 2..].iter().position(|&c| c == '}').map_or(chars.len(), |e| i + 2 + e + 1);
+                    let end = chars[i + 2..]
+                        .iter()
+                        .position(|&c| c == '}')
+                        .map_or(chars.len(), |e| i + 2 + e + 1);
                     out.extend(&chars[i..end]);
                     i = end;
                     continue;
@@ -214,7 +225,8 @@ fn translate(p: &str, ascii_classes: bool) -> String {
                 ']' if i > class_start => in_class = false,
                 '[' if chars.get(i + 1) == Some(&':') => {
                     // A POSIX class: copy through its closing `:]`.
-                    let end = (i + 2..chars.len().saturating_sub(1)).find(|&j| chars[j] == ':' && chars[j + 1] == ']');
+                    let end = (i + 2..chars.len().saturating_sub(1))
+                        .find(|&j| chars[j] == ':' && chars[j + 1] == ']');
                     if let Some(end) = end {
                         out.extend(&chars[i..end + 2]);
                         i = end + 2;
@@ -299,10 +311,17 @@ fn build_pcre(pattern: &[u8], f: Flags) -> Result<Compiled, (String, usize)> {
         p.push_str("(?U)");
     }
     if f.unicode {
-        raw.push_str(core::str::from_utf8(pattern).map_err(|e| (String::from("invalid UTF-8 string"), e.valid_up_to()))?);
+        raw.push_str(
+            core::str::from_utf8(pattern)
+                .map_err(|e| (String::from("invalid UTF-8 string"), e.valid_up_to()))?,
+        );
     } else {
         for &b in pattern {
-            if b < 0x80 { raw.push(b as char) } else { raw.push_str(&format!("\\x{{{b:02x}}}")) }
+            if b < 0x80 {
+                raw.push(b as char)
+            } else {
+                raw.push_str(&format!("\\x{{{b:02x}}}"))
+            }
         }
     }
     if f.dollar_endonly && !f.multiline {
@@ -336,16 +355,28 @@ fn build_pcre(pattern: &[u8], f: Flags) -> Result<Compiled, (String, usize)> {
         .map_err(|e| {
             let text = alloc::string::ToString::to_string(&e);
             let msg = text.split_once(": ").map_or(text.as_str(), |(_, m)| m);
-            let msg = msg.split_once("offset ").and_then(|(_, r)| r.split_once(": ")).map_or(msg, |(_, m)| m);
-            (String::from(msg), e.offset().unwrap_or(0).saturating_sub(prefix))
+            let msg = msg
+                .split_once("offset ")
+                .and_then(|(_, r)| r.split_once(": "))
+                .map_or(msg, |(_, m)| m);
+            (
+                String::from(msg),
+                e.offset().unwrap_or(0).saturating_sub(prefix),
+            )
         })?;
     let names = regex.capture_names().to_vec();
-    Ok(Compiled { engine: Engine::Pcre(regex), unicode: f.unicode, names })
+    Ok(Compiled {
+        engine: Engine::Pcre(regex),
+        unicode: f.unicode,
+        names,
+    })
 }
 
 fn build_automata(pattern: &[u8], f: Flags) -> Result<Compiled, (String, usize)> {
     let pattern = if f.unicode {
-        core::str::from_utf8(pattern).map_err(|e| (String::from("invalid UTF-8 string"), e.valid_up_to()))?.into()
+        core::str::from_utf8(pattern)
+            .map_err(|e| (String::from("invalid UTF-8 string"), e.valid_up_to()))?
+            .into()
     } else {
         // Latin-1: every byte is a character; escape the non-ASCII ones as bytes.
         let mut p = String::new();
@@ -372,7 +403,11 @@ fn build_automata(pattern: &[u8], f: Flags) -> Result<Compiled, (String, usize)>
     let edge = |body: &str, negative: bool, behind: bool| -> Result<Edge, (String, usize)> {
         let body = translate(body, f.unicode && !f.ucp);
         // A lookbehind is matched against the text just before the match, ending there.
-        let text = if behind { format!("(?:{body})\\z") } else { body.clone() };
+        let text = if behind {
+            format!("(?:{body})\\z")
+        } else {
+            body.clone()
+        };
         let regex = regex_for(&text, cfg, f, original_len)?;
         let max_len = if behind {
             let hir = regex_syntax::ParserBuilder::new()
@@ -383,22 +418,45 @@ fn build_automata(pattern: &[u8], f: Flags) -> Result<Compiled, (String, usize)>
                 .build()
                 .parse(&body)
                 .map_err(|_| (String::from("lookbehind assertion is not fixed length"), 0))?;
-            hir.properties().maximum_len().ok_or((String::from("lookbehind assertion is not fixed length"), 0))?
+            hir.properties()
+                .maximum_len()
+                .ok_or((String::from("lookbehind assertion is not fixed length"), 0))?
         } else {
             0
         };
-        Ok(Edge { regex, negative, max_len })
+        Ok(Edge {
+            regex,
+            negative,
+            max_len,
+        })
     };
     let behind = behind.map(|(b, neg)| edge(&b, neg, true)).transpose()?;
     let ahead = ahead.map(|(a, neg)| edge(&a, neg, false)).transpose()?;
     let pattern = translate(&core, f.unicode && !f.ucp);
     let regex = regex_for(&pattern, cfg, f, original_len)?;
-    let names = regex.group_info().pattern_names(regex_automata::PatternID::ZERO).map(|n| n.map(String::from)).collect();
-    Ok(Compiled { engine: Engine::Automata { regex, behind, ahead }, unicode: f.unicode, names })
+    let names = regex
+        .group_info()
+        .pattern_names(regex_automata::PatternID::ZERO)
+        .map(|n| n.map(String::from))
+        .collect();
+    Ok(Compiled {
+        engine: Engine::Automata {
+            regex,
+            behind,
+            ahead,
+        },
+        unicode: f.unicode,
+        names,
+    })
 }
 
 /// Compile translated pattern text with the limits every pattern gets.
-fn regex_for(pattern: &str, cfg: syntax::Config, f: Flags, len: usize) -> Result<Regex, (String, usize)> {
+fn regex_for(
+    pattern: &str,
+    cfg: syntax::Config,
+    f: Flags,
+    len: usize,
+) -> Result<Regex, (String, usize)> {
     Regex::builder()
         .syntax(cfg)
         // Bound what a pattern may cost to compile and run: a hostile `(a{1000}){1000}` is an
@@ -425,7 +483,10 @@ fn regex_for(pattern: &str, cfg: syntax::Config, f: Flags, len: usize) -> Result
 ///
 /// With `pcre_dollar`, a `$` ending the pattern becomes the lookahead `\n?\z`: outside multiline
 /// mode PCRE's `$` also matches before a final newline, where Rust's matches only at the end.
-fn split_edges(p: &str, pcre_dollar: bool) -> (String, Option<(String, bool)>, Option<(String, bool)>) {
+fn split_edges(
+    p: &str,
+    pcre_dollar: bool,
+) -> (String, Option<(String, bool)>, Option<(String, bool)>) {
     let chars: Vec<char> = p.chars().collect();
     let whole = || (String::from(p), None, None);
     // Top-level groups (start, end) and whether there is a top-level `|`.
@@ -478,10 +539,18 @@ fn split_edges(p: &str, pcre_dollar: bool) -> (String, Option<(String, bool)>, O
     let text = |a: usize, b: usize| chars[a..b].iter().collect::<String>();
     let kind = |(s, _): (usize, usize)| -> Option<(bool, bool)> {
         // (is lookbehind, is negative)
-        match chars.get(s + 1..s + 4).map(|c| c.iter().collect::<String>()).as_deref() {
+        match chars
+            .get(s + 1..s + 4)
+            .map(|c| c.iter().collect::<String>())
+            .as_deref()
+        {
             Some("?<=") => Some((true, false)),
             Some("?<!") => Some((true, true)),
-            _ => match chars.get(s + 1..s + 3).map(|c| c.iter().collect::<String>()).as_deref() {
+            _ => match chars
+                .get(s + 1..s + 3)
+                .map(|c| c.iter().collect::<String>())
+                .as_deref()
+            {
                 Some("?=") => Some((false, false)),
                 Some("?!") => Some((false, true)),
                 _ => None,
@@ -497,7 +566,10 @@ fn split_edges(p: &str, pcre_dollar: bool) -> (String, Option<(String, bool)>, O
             from = g.1 + 1;
         }
     }
-    if let Some(&g) = groups.last().filter(|g| g.1 + 1 == chars.len() && g.0 >= from) {
+    if let Some(&g) = groups
+        .last()
+        .filter(|g| g.1 + 1 == chars.len() && g.0 >= from)
+    {
         if let Some((false, neg)) = kind(g) {
             ahead = Some((text(g.0 + 3, g.1), neg));
             to = g.0;
@@ -526,13 +598,24 @@ fn pcre_error(e: &regex_automata::meta::BuildError, len: usize) -> (String, usiz
         K::ClassUnclosed => ("missing terminating ] for character class", len),
         K::GroupUnclosed => ("missing closing parenthesis", len),
         K::GroupUnopened => ("unmatched closing parenthesis", at),
-        K::RepetitionMissing => ("quantifier does not follow a repeatable item", (err.span().start.offset + 1).min(len)),
-        K::RepetitionCountInvalid => ("numbers out of order in {} quantifier", at.saturating_sub(1)),
-        K::RepetitionCountUnclosed | K::RepetitionCountDecimalEmpty => ("missing } after quantifier", at),
+        K::RepetitionMissing => (
+            "quantifier does not follow a repeatable item",
+            (err.span().start.offset + 1).min(len),
+        ),
+        K::RepetitionCountInvalid => (
+            "numbers out of order in {} quantifier",
+            at.saturating_sub(1),
+        ),
+        K::RepetitionCountUnclosed | K::RepetitionCountDecimalEmpty => {
+            ("missing } after quantifier", at)
+        }
         K::EscapeUnexpectedEof => ("\\ at end of pattern", len),
         K::EscapeUnrecognized => ("unrecognized character follows \\", at),
         K::ClassRangeInvalid => ("range out of order in character class", at),
-        K::GroupNameDuplicate { .. } => ("two named subpatterns have the same name (PCRE2_DUPNAMES not set)", (at + 1).min(len)),
+        K::GroupNameDuplicate { .. } => (
+            "two named subpatterns have the same name (PCRE2_DUPNAMES not set)",
+            (at + 1).min(len),
+        ),
         K::GroupNameInvalid | K::GroupNameEmpty => ("subpattern name expected", at),
         K::UnsupportedBackreference => ("backreferences are not supported", at),
         K::UnsupportedLookAround => ("lookaround assertions are not supported", at),
@@ -552,7 +635,13 @@ fn mp_term(c: &mut Ctx, compiled: Compiled) -> Term {
     let unicode = compiled.unicode as i64;
     let res = c.new_resource(compiled);
     let tag = c.atom("re_pattern");
-    c.tuple(&[tag, Term::Int(groups), Term::Int(unicode), Term::Int(0), res])
+    c.tuple(&[
+        tag,
+        Term::Int(groups),
+        Term::Int(unicode),
+        Term::Int(0),
+        res,
+    ])
 }
 
 fn compiled_of(c: &Ctx, t: &Term) -> Option<Held<Compiled>> {
@@ -598,7 +687,9 @@ pub fn compile(c: &mut Ctx, a: &[Term]) -> R {
 /// `import(Exported)`: compile the pattern from the source an exported pattern carries (the
 /// fallback OTP documents for a node that cannot use the exporter's bytecode, as here).
 pub fn import(c: &mut Ctx, a: &[Term]) -> R {
-    let Some(&[tag, _header, source, opts, _code]) = c.heap().as_tuple(a[0]) else { return Err(c.badarg()) };
+    let Some(&[tag, _header, source, opts, _code]) = c.heap().as_tuple(a[0]) else {
+        return Err(c.badarg());
+    };
     if atom(&tag) != Some("re_exported_pattern") {
         return Err(c.badarg());
     }
@@ -663,8 +754,12 @@ fn run_options(c: &Ctx, opts: &[Term], flags: &mut Flags) -> Result<RunOpts, Exc
             Some("notempty_atstart") => r.notempty_atstart = true,
             Some("notbol" | "noteol" | "report_errors") => {}
             _ => match h.as_tuple(*o) {
-                Some(&[k, v]) if atom(&k) == Some("offset") => r.offset = v.as_usize().ok_or_else(|| c.badarg())?,
-                Some(&[k, v]) if matches!(atom(&k), Some("match_limit" | "match_limit_recursion")) => {
+                Some(&[k, v]) if atom(&k) == Some("offset") => {
+                    r.offset = v.as_usize().ok_or_else(|| c.badarg())?
+                }
+                Some(&[k, v])
+                    if matches!(atom(&k), Some("match_limit" | "match_limit_recursion")) =>
+                {
                     // Matching is linear here; limits have nothing to bound.
                     v.as_usize().ok_or_else(|| c.badarg())?;
                 }
@@ -705,11 +800,24 @@ type Groups = Vec<Option<(usize, usize)>>;
 
 /// The leftmost match at or after `at` (only at `at` if anchored). `skip_empty_at` rejects an
 /// empty match at that position (PCRE's NOTEMPTY_ATSTART); `no_empty` rejects all empty ones.
-fn find(re: &Compiled, subject: &[u8], at: usize, anchored: bool, skip_empty_at: Option<usize>, no_empty: bool) -> Option<Groups> {
+fn find(
+    re: &Compiled,
+    subject: &[u8],
+    at: usize,
+    anchored: bool,
+    skip_empty_at: Option<usize>,
+    no_empty: bool,
+) -> Option<Groups> {
     let (regex, behind, ahead) = match &re.engine {
-        Engine::Automata { regex, behind, ahead } => (regex, behind, ahead),
+        Engine::Automata {
+            regex,
+            behind,
+            ahead,
+        } => (regex, behind, ahead),
         #[cfg(feature = "pcre2")]
-        Engine::Pcre(regex) => return find_pcre(re, regex, subject, at, anchored, skip_empty_at, no_empty),
+        Engine::Pcre(regex) => {
+            return find_pcre(re, regex, subject, at, anchored, skip_empty_at, no_empty)
+        }
     };
     let mut caps = regex.create_captures();
     let mut start = at;
@@ -717,14 +825,23 @@ fn find(re: &Compiled, subject: &[u8], at: usize, anchored: bool, skip_empty_at:
         if start > subject.len() {
             return None;
         }
-        let input = Input::new(subject).range(start..).anchored(if anchored { Anchored::Yes } else { Anchored::No });
+        let input = Input::new(subject).range(start..).anchored(if anchored {
+            Anchored::Yes
+        } else {
+            Anchored::No
+        });
         regex.search_captures(&input, &mut caps);
         let m = caps.get_match()?;
         let empty = m.start() == m.end();
-        let rejected = (empty && (no_empty || skip_empty_at == Some(m.start()))) || !edges_hold(behind, ahead, subject, m.start(), m.end());
+        let rejected = (empty && (no_empty || skip_empty_at == Some(m.start())))
+            || !edges_hold(behind, ahead, subject, m.start(), m.end());
         if !rejected {
             let n = caps.group_len();
-            return Some((0..n).map(|g| caps.get_group(g).map(|s| (s.start, s.end))).collect());
+            return Some(
+                (0..n)
+                    .map(|g| caps.get_group(g).map(|s| (s.start, s.end)))
+                    .collect(),
+            );
         }
         if anchored {
             return None;
@@ -738,7 +855,15 @@ fn find(re: &Compiled, subject: &[u8], at: usize, anchored: bool, skip_empty_at:
 /// crate has no match options), which is close to, not exactly, PCRE's own handling.
 #[cfg(feature = "pcre2")]
 #[allow(clippy::too_many_arguments)]
-fn find_pcre(re: &Compiled, regex: &pcre2::bytes::Regex, subject: &[u8], at: usize, anchored: bool, skip_empty_at: Option<usize>, no_empty: bool) -> Option<Groups> {
+fn find_pcre(
+    re: &Compiled,
+    regex: &pcre2::bytes::Regex,
+    subject: &[u8],
+    at: usize,
+    anchored: bool,
+    skip_empty_at: Option<usize>,
+    no_empty: bool,
+) -> Option<Groups> {
     let mut locs = regex.capture_locations();
     let mut start = at;
     loop {
@@ -761,7 +886,13 @@ fn find_pcre(re: &Compiled, regex: &pcre2::bytes::Regex, subject: &[u8], at: usi
 }
 
 /// Whether the edge lookarounds hold around a match from `start` to `end`.
-fn edges_hold(behind: &Option<Edge>, ahead: &Option<Edge>, subject: &[u8], start: usize, end: usize) -> bool {
+fn edges_hold(
+    behind: &Option<Edge>,
+    ahead: &Option<Edge>,
+    subject: &[u8],
+    start: usize,
+    end: usize,
+) -> bool {
     if let Some(b) = behind {
         let window = &subject[start.saturating_sub(b.max_len)..start];
         let found = b.regex.search(&Input::new(window)).is_some();
@@ -770,7 +901,10 @@ fn edges_hold(behind: &Option<Edge>, ahead: &Option<Edge>, subject: &[u8], start
         }
     }
     if let Some(a) = ahead {
-        let found = a.regex.search(&Input::new(subject).range(end..).anchored(Anchored::Yes)).is_some();
+        let found = a
+            .regex
+            .search(&Input::new(subject).range(end..).anchored(Anchored::Yes))
+            .is_some();
         if found == a.negative {
             return false;
         }
@@ -792,7 +926,13 @@ fn char_len(re: &Compiled, s: &[u8], i: usize) -> usize {
     .min(s.len() - i)
 }
 
-fn capture_term(c: &mut Ctx, re: &Compiled, subject: &[u8], span: Option<(usize, usize)>, kind: Kind) -> Term {
+fn capture_term(
+    c: &mut Ctx,
+    re: &Compiled,
+    subject: &[u8],
+    span: Option<(usize, usize)>,
+    kind: Kind,
+) -> Term {
     match (kind, span) {
         (Kind::Index, Some((s, e))) => c.tuple(&[Term::Int(s as i64), Term::Int((e - s) as i64)]),
         (Kind::Index, None) => c.tuple(&[Term::Int(-1), Term::Int(0)]),
@@ -801,7 +941,9 @@ fn capture_term(c: &mut Ctx, re: &Compiled, subject: &[u8], span: Option<(usize,
         (Kind::List, Some((s, e))) => {
             let bytes = &subject[s..e];
             let chars: Vec<Term> = if re.unicode {
-                core::str::from_utf8(bytes).map(|t| t.chars().map(|ch| Term::Int(ch as i64)).collect()).unwrap_or_default()
+                core::str::from_utf8(bytes)
+                    .map(|t| t.chars().map(|ch| Term::Int(ch as i64)).collect())
+                    .unwrap_or_default()
             } else {
                 bytes.iter().map(|&b| Term::Int(b as i64)).collect()
             };
@@ -812,7 +954,13 @@ fn capture_term(c: &mut Ctx, re: &Compiled, subject: &[u8], span: Option<(usize,
 }
 
 /// The captures of one match, as the capture spec asks.
-fn captures(c: &mut Ctx, re: &Compiled, subject: &[u8], g: &Groups, o: &RunOpts) -> Result<Term, Exception> {
+fn captures(
+    c: &mut Ctx,
+    re: &Compiled,
+    subject: &[u8],
+    g: &Groups,
+    o: &RunOpts,
+) -> Result<Term, Exception> {
     // As in PCRE, `all` stops at the last group that matched.
     let last_set = g.iter().rposition(|x| x.is_some()).unwrap_or(0);
     let indices: Vec<Option<usize>> = match &o.spec {
@@ -821,7 +969,12 @@ fn captures(c: &mut Ctx, re: &Compiled, subject: &[u8], g: &Groups, o: &RunOpts)
         Spec::First => alloc::vec![Some(0)],
         Spec::None => Vec::new(),
         Spec::AllNames => {
-            let mut named: Vec<(&str, usize)> = re.names.iter().enumerate().filter_map(|(i, n)| n.as_deref().map(|n| (n, i))).collect();
+            let mut named: Vec<(&str, usize)> = re
+                .names
+                .iter()
+                .enumerate()
+                .filter_map(|(i, n)| n.as_deref().map(|n| (n, i)))
+                .collect();
             named.sort();
             named.into_iter().map(|(_, i)| Some(i)).collect()
         }
@@ -830,10 +983,20 @@ fn captures(c: &mut Ctx, re: &Compiled, subject: &[u8], g: &Groups, o: &RunOpts)
             for it in items {
                 let idx = match it {
                     Term::Int(i) => usize::try_from(*i).ok().filter(|i| *i < g.len()),
-                    Term::Atom(a) => re.names.iter().position(|n| n.as_deref() == Some(a.as_str())),
+                    Term::Atom(a) => re
+                        .names
+                        .iter()
+                        .position(|n| n.as_deref() == Some(a.as_str())),
                     other => {
-                        let name = c.heap().iodata_bytes(*other).and_then(|b| String::from_utf8(b).ok());
-                        name.and_then(|n| re.names.iter().position(|x| x.as_deref() == Some(n.as_str())))
+                        let name = c
+                            .heap()
+                            .iodata_bytes(*other)
+                            .and_then(|b| String::from_utf8(b).ok());
+                        name.and_then(|n| {
+                            re.names
+                                .iter()
+                                .position(|x| x.as_deref() == Some(n.as_str()))
+                        })
                     }
                 };
                 v.push(idx);
@@ -843,7 +1006,15 @@ fn captures(c: &mut Ctx, re: &Compiled, subject: &[u8], g: &Groups, o: &RunOpts)
     };
     let items: Vec<Term> = indices
         .into_iter()
-        .map(|i| capture_term(c, re, subject, i.and_then(|i| g.get(i).copied().flatten()), o.kind))
+        .map(|i| {
+            capture_term(
+                c,
+                re,
+                subject,
+                i.and_then(|i| g.get(i).copied().flatten()),
+                o.kind,
+            )
+        })
         .collect();
     Ok(c.list(items))
 }
@@ -883,15 +1054,17 @@ pub fn run(c: &mut Ctx, a: &[Term]) -> R {
     }
     if !o.global {
         let skip = o.notempty_atstart.then_some(o.offset);
-        return Ok(match find(re, &subject, o.offset, anchored, skip, o.notempty) {
-            None => c.atom("nomatch"),
-            Some(_) if matches!(o.spec, Spec::None) => c.atom("match"),
-            Some(g) => {
-                let caps = captures(c, re, &subject, &g, &o)?;
-                let tag = c.atom("match");
-                c.tuple(&[tag, caps])
-            }
-        });
+        return Ok(
+            match find(re, &subject, o.offset, anchored, skip, o.notempty) {
+                None => c.atom("nomatch"),
+                Some(_) if matches!(o.spec, Spec::None) => c.atom("match"),
+                Some(g) => {
+                    let caps = captures(c, re, &subject, &g, &o)?;
+                    let tag = c.atom("match");
+                    c.tuple(&[tag, caps])
+                }
+            },
+        );
     }
     // Global: after an empty match, look for a non-empty one anchored at the same place, then
     // move on a character (PCRE's documented loop).
@@ -900,13 +1073,23 @@ pub fn run(c: &mut Ctx, a: &[Term]) -> R {
     let mut after_empty = false;
     while pos <= subject.len() {
         let found = if after_empty {
-            find(re, &subject, pos, true, Some(pos), o.notempty)
-                .or_else(|| {
-                    let next = pos + char_len(re, &subject, pos);
-                    (next <= subject.len()).then(|| find(re, &subject, next, anchored, None, o.notempty)).flatten()
-                })
+            find(re, &subject, pos, true, Some(pos), o.notempty).or_else(|| {
+                let next = pos + char_len(re, &subject, pos);
+                (next <= subject.len())
+                    .then(|| find(re, &subject, next, anchored, None, o.notempty))
+                    .flatten()
+            })
         } else {
-            find(re, &subject, pos, anchored, o.notempty_atstart.then_some(o.offset).filter(|_| all.is_empty()), o.notempty)
+            find(
+                re,
+                &subject,
+                pos,
+                anchored,
+                o.notempty_atstart
+                    .then_some(o.offset)
+                    .filter(|_| all.is_empty()),
+                o.notempty,
+            )
         };
         let Some(g) = found else { break };
         let (s, e) = g[0].expect("a match has group 0");
@@ -931,7 +1114,9 @@ pub fn run(c: &mut Ctx, a: &[Term]) -> R {
 
 /// `inspect(MP, namelist)` → `{namelist, [Name]}`, names sorted as PCRE lists them.
 pub fn inspect(c: &mut Ctx, a: &[Term]) -> R {
-    let Some(re) = compiled_of(c, &a[0]) else { return Err(c.badarg()) };
+    let Some(re) = compiled_of(c, &a[0]) else {
+        return Err(c.badarg());
+    };
     if atom(&a[1]) != Some("namelist") {
         return Err(c.badarg());
     }
@@ -970,8 +1155,14 @@ mod tests {
         assert_eq!(translate("%\\{\\}", false), "%\\{\\}");
         assert_eq!(translate("a{}b{,}c{x}", false), "a\\{}b\\{,}c\\{x}");
         assert_eq!(translate("[{]", false), "[{]");
-        assert_eq!(translate("\\p{Lu}\\P{Latin}\\x{263A}{2}", false), "\\p{Lu}\\P{Latin}\\x{263A}{2}");
+        assert_eq!(
+            translate("\\p{Lu}\\P{Latin}\\x{263A}{2}", false),
+            "\\p{Lu}\\P{Latin}\\x{263A}{2}"
+        );
         assert_eq!(translate("#Function\\<.+\\>", false), "#Function<.+>");
-        assert_eq!(translate("\\w+\\b[\\d\\S]", true), "[[:word:]]+(?-u:\\b)[[:digit:][:^space:]]");
+        assert_eq!(
+            translate("\\w+\\b[\\d\\S]", true),
+            "[[:word:]]+(?-u:\\b)[[:digit:][:^space:]]"
+        );
     }
 }

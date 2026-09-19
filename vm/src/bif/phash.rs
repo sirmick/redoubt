@@ -174,7 +174,11 @@ pub fn make_hash2(heap: &Heap, t: Term) -> u32 {
             }
             Term::Big(_) => {
                 let b = heap.as_big(t).expect("a bignum");
-                hash_digits(&mut hash, b.sign() == Sign::Minus, b.magnitude().iter_u64_digits())
+                hash_digits(
+                    &mut hash,
+                    b.sign() == Sign::Minus,
+                    b.magnitude().iter_u64_digits(),
+                )
             }
             Term::Float(f) => {
                 // -0.0 hashes as 0.0.
@@ -241,16 +245,31 @@ pub fn make_hash2(heap: &Heap, t: Term) -> u32 {
                     // Sizes are truncated to 32 bits, as BEAM does for compatibility.
                     hash = block_hash(&bytes[..whole], k);
                     if rest_bits > 0 {
-                        hash2(&mut hash, rest_bits, (bytes[whole] >> (8 - rest_bits)) as u32, HCONST_15);
+                        hash2(
+                            &mut hash,
+                            rest_bits,
+                            (bytes[whole] >> (8 - rest_bits)) as u32,
+                            HCONST_15,
+                        );
                     }
                 }
             }
             Term::Fun(_) => match heap.as_fun(t).expect("a fun") {
-                FunView::Export { module, function, arity } => {
+                FunView::Export {
+                    module,
+                    function,
+                    arity,
+                } => {
                     hash2(&mut hash, arity, atom_hash(&module), HCONST);
                     hash1(&mut hash, atom_hash(&function), HCONST_14);
                 }
-                FunView::Local { module, index, env, uniq, .. } => {
+                FunView::Local {
+                    module,
+                    index,
+                    env,
+                    uniq,
+                    ..
+                } => {
                     hash2(&mut hash, env.len() as u32, atom_hash(&module), HCONST);
                     hash2(&mut hash, index, uniq, HCONST);
                     work.extend(env.iter().rev().copied().map(Work::Term));
@@ -259,7 +278,11 @@ pub fn make_hash2(heap: &Heap, t: Term) -> u32 {
             Term::Pid(p) if p.port => hash1(&mut hash, p.serial, HCONST_6),
             Term::Pid(p) => hash1(&mut hash, p.index, HCONST_5),
             Term::Ref(r) => hash1(&mut hash, r.0 as u32, HCONST_7),
-            Term::Resource(_) => hash1(&mut hash, heap.as_resource(t).map_or(0, |r| r.id) as u32, HCONST_7),
+            Term::Resource(_) => hash1(
+                &mut hash,
+                heap.as_resource(t).map_or(0, |r| r.id) as u32,
+                HCONST_7,
+            ),
             Term::Match(_) | Term::Node(_) | Term::Header(_) | Term::OffHeap(_) => {}
         }
     }
@@ -268,7 +291,9 @@ pub fn make_hash2(heap: &Heap, t: Term) -> u32 {
 
 /// `phash2(Term)`: a hash in `0..2^27`.
 pub fn phash2_1(c: &mut Ctx, a: &[Term]) -> R {
-    Ok(Term::Int((make_hash2(c.heap(), a[0]) & ((1 << 27) - 1)) as i64))
+    Ok(Term::Int(
+        (make_hash2(c.heap(), a[0]) & ((1 << 27) - 1)) as i64,
+    ))
 }
 
 /// `phash2(Term, Range)`: a hash in `0..Range`, for `Range` in `1..=2^32`.
@@ -277,7 +302,9 @@ pub fn phash2_2(c: &mut Ctx, a: &[Term]) -> R {
         Term::Int(r @ 1..=0x1_0000_0000) => r as u64,
         _ => return Err(c.badarg()),
     };
-    Ok(Term::Int((make_hash2(c.heap(), a[0]) as u64 % range) as i64))
+    Ok(Term::Int(
+        (make_hash2(c.heap(), a[0]) as u64 % range) as i64,
+    ))
 }
 
 #[cfg(test)]

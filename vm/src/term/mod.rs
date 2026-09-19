@@ -18,9 +18,6 @@
 //! Nothing recurses on the Rust stack over a term's depth: copying, comparing, printing and
 //! collecting use work lists or Cheney's scan.
 
-// Resources are not yet `Send`: that comes with several schedulers (DESIGN.md, "Heaps").
-#![allow(clippy::arc_with_non_send_sync)]
-
 mod cmp;
 mod copy;
 mod gc;
@@ -58,7 +55,11 @@ pub struct Pid {
 
 impl Pid {
     pub const fn process(index: u32, serial: u32) -> Pid {
-        Pid { serial, index, port: false }
+        Pid {
+            serial,
+            index,
+            port: false,
+        }
     }
 }
 
@@ -76,7 +77,10 @@ pub struct Ptr {
 
 impl Ptr {
     fn own(index: usize) -> Ptr {
-        Ptr { space: 0, index: u32::try_from(index).expect("a heap is under 2^32 cells") }
+        Ptr {
+            space: 0,
+            index: u32::try_from(index).expect("a heap is under 2^32 cells"),
+        }
     }
 
     fn at(self) -> usize {
@@ -213,7 +217,11 @@ pub struct Bits {
 
 impl Bits {
     pub fn from_bytes(bytes: &[u8]) -> Bits {
-        Bits { data: Arc::new(bytes.to_vec()), offset: 0, len: bytes.len() * 8 }
+        Bits {
+            data: Arc::new(bytes.to_vec()),
+            offset: 0,
+            len: bytes.len() * 8,
+        }
     }
 
     /// Whether this is a binary (a whole number of bytes).
@@ -255,7 +263,11 @@ impl Bits {
     /// The sub-window of `len` bits starting `start` bits into this one. Caller checks bounds.
     pub fn slice(&self, start: usize, len: usize) -> Bits {
         debug_assert!(start + len <= self.len);
-        Bits { data: self.data.clone(), offset: self.offset + start, len }
+        Bits {
+            data: self.data.clone(),
+            offset: self.offset + start,
+            len,
+        }
     }
 }
 
@@ -276,7 +288,11 @@ pub enum FunView<'h> {
         /// The captured free variables.
         env: &'h [Term],
     },
-    Export { module: Atom, function: Atom, arity: u32 },
+    Export {
+        module: Atom,
+        function: Atom,
+        arity: u32,
+    },
 }
 
 impl FunView<'_> {
@@ -322,7 +338,9 @@ impl Literals {
     /// terms that point into it. The heap should hold only what `roots` reach.
     pub fn add(&mut self, heap: Heap, roots: &mut [Term]) -> u32 {
         let space = u32::try_from(self.0.len() + 1).expect("under 2^32 literal chunks");
-        let Heap { mut terms, offheap, .. } = heap;
+        let Heap {
+            mut terms, offheap, ..
+        } = heap;
         let relocate = |t: &mut Term| {
             if let Some(p) = t.ptr_mut() {
                 if p.space == 0 {
@@ -416,18 +434,31 @@ impl Term {
 
     /// Whether this is a term with parts (so comparing or copying it must look inside).
     fn is_container(&self) -> bool {
-        matches!(self, Term::Cons(_) | Term::Tuple(_) | Term::Map(_) | Term::Fun(_))
+        matches!(
+            self,
+            Term::Cons(_) | Term::Tuple(_) | Term::Map(_) | Term::Fun(_)
+        )
     }
 }
 
 impl Heap {
     pub fn new(lits: &Literals) -> Heap {
-        Heap { terms: Vec::new(), offheap: Vec::new(), offheap_bytes: 0, lits: lits.clone() }
+        Heap {
+            terms: Vec::new(),
+            offheap: Vec::new(),
+            offheap_bytes: 0,
+            lits: lits.clone(),
+        }
     }
 
     /// A heap with room for `cells` cells.
     pub fn with_capacity(lits: &Literals, cells: usize) -> Heap {
-        Heap { terms: Vec::with_capacity(cells), offheap: Vec::new(), offheap_bytes: 0, lits: lits.clone() }
+        Heap {
+            terms: Vec::with_capacity(cells),
+            offheap: Vec::new(),
+            offheap_bytes: 0,
+            lits: lits.clone(),
+        }
     }
 
     /// Cells in use.
@@ -474,12 +505,16 @@ impl Heap {
     /// The header and cells of the object at `p`.
     fn object(&self, p: Ptr) -> (Header, &[Term]) {
         let (terms, _) = self.space(p.space);
-        let Term::Header(h) = terms[p.at()] else { unreachable!("an object starts with a header") };
+        let Term::Header(h) = terms[p.at()] else {
+            unreachable!("an object starts with a header")
+        };
         (h, &terms[p.at() + 1..p.at() + 1 + h.len as usize])
     }
 
     fn off(&self, space: u32, t: Term) -> &OffHeap {
-        let Term::OffHeap(i) = t else { unreachable!("an off-heap cell") };
+        let Term::OffHeap(i) = t else {
+            unreachable!("an off-heap cell")
+        };
         &self.space(space).1[i as usize]
     }
 
@@ -500,22 +535,34 @@ impl Heap {
     pub fn as_bits(&self, t: Term) -> Option<Bits> {
         let Term::Bits(p) = t else { return None };
         let cells = self.object(p).1;
-        let OffHeap::Bytes(data) = self.off(p.space, cells[0]) else { unreachable!("bytes") };
-        let (Term::Int(offset), Term::Int(len)) = (cells[1], cells[2]) else { unreachable!("sizes") };
-        Some(Bits { data: data.clone(), offset: offset as usize, len: len as usize })
+        let OffHeap::Bytes(data) = self.off(p.space, cells[0]) else {
+            unreachable!("bytes")
+        };
+        let (Term::Int(offset), Term::Int(len)) = (cells[1], cells[2]) else {
+            unreachable!("sizes")
+        };
+        Some(Bits {
+            data: data.clone(),
+            offset: offset as usize,
+            len: len as usize,
+        })
     }
 
     /// The length in bits, if `t` is a bitstring (without touching the bytes).
     pub fn bit_len(&self, t: Term) -> Option<usize> {
         let Term::Bits(p) = t else { return None };
-        let Term::Int(len) = self.object(p).1[2] else { unreachable!("sizes") };
+        let Term::Int(len) = self.object(p).1[2] else {
+            unreachable!("sizes")
+        };
         Some(len as usize)
     }
 
     /// The value, if `t` is a bignum.
     pub fn as_big(&self, t: Term) -> Option<&BigInt> {
         let Term::Big(p) = t else { return None };
-        let OffHeap::Big(b) = self.off(p.space, self.object(p).1[0]) else { unreachable!("bignum") };
+        let OffHeap::Big(b) = self.off(p.space, self.object(p).1[0]) else {
+            unreachable!("bignum")
+        };
         Some(b)
     }
 
@@ -548,13 +595,19 @@ impl Heap {
                 name: atom(cells[4]),
                 env: &cells[5..],
             },
-            _ => FunView::Export { module: atom(cells[0]), function: atom(cells[1]), arity: int(cells[2]) },
+            _ => FunView::Export {
+                module: atom(cells[0]),
+                function: atom(cells[1]),
+                arity: int(cells[2]),
+            },
         })
     }
 
     pub fn as_resource(&self, t: Term) -> Option<&Arc<Resource>> {
         let Term::Resource(p) = t else { return None };
-        let OffHeap::Resource(r) = self.off(p.space, self.object(p).1[0]) else { unreachable!("resource") };
+        let OffHeap::Resource(r) = self.off(p.space, self.object(p).1[0]) else {
+            unreachable!("resource")
+        };
         Some(r)
     }
 
@@ -562,7 +615,9 @@ impl Heap {
     pub fn as_match(&self, t: Term) -> Option<(Term, usize)> {
         let Term::Match(p) = t else { return None };
         let cells = self.object(p).1;
-        let Term::Int(pos) = cells[1] else { unreachable!("a position") };
+        let Term::Int(pos) = cells[1] else {
+            unreachable!("a position")
+        };
         Some((cells[0], pos as usize))
     }
 
@@ -659,12 +714,22 @@ impl Heap {
     }
 
     /// A proper list of `items`.
-    pub fn list(&mut self, items: impl IntoIterator<Item = Term, IntoIter: DoubleEndedIterator>) -> Term {
+    pub fn list(
+        &mut self,
+        items: impl IntoIterator<Item = Term, IntoIter: DoubleEndedIterator>,
+    ) -> Term {
         self.list_with_tail(items, Term::Nil)
     }
 
-    pub fn list_with_tail(&mut self, items: impl IntoIterator<Item = Term, IntoIter: DoubleEndedIterator>, tail: Term) -> Term {
-        items.into_iter().rev().fold(tail, |acc, t| self.cons(t, acc))
+    pub fn list_with_tail(
+        &mut self,
+        items: impl IntoIterator<Item = Term, IntoIter: DoubleEndedIterator>,
+        tail: Term,
+    ) -> Term {
+        items
+            .into_iter()
+            .rev()
+            .fold(tail, |acc, t| self.cons(t, acc))
     }
 
     /// A string as a list of characters.
@@ -675,7 +740,10 @@ impl Heap {
 
     pub fn bits(&mut self, b: Bits) -> Term {
         let data = self.push_offheap(OffHeap::Bytes(b.data));
-        Term::Bits(self.push_object(Kind::Bits, &[data, Term::Int(b.offset as i64), Term::Int(b.len as i64)]))
+        Term::Bits(self.push_object(
+            Kind::Bits,
+            &[data, Term::Int(b.offset as i64), Term::Int(b.len as i64)],
+        ))
     }
 
     pub fn binary(&mut self, bytes: &[u8]) -> Term {
@@ -705,7 +773,15 @@ impl Heap {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn fun_local(&mut self, module: Atom, index: u32, arity: u32, uniq: u32, name: Atom, env: &[Term]) -> Term {
+    pub fn fun_local(
+        &mut self,
+        module: Atom,
+        index: u32,
+        arity: u32,
+        uniq: u32,
+        name: Atom,
+        env: &[Term],
+    ) -> Term {
         let mut cells = alloc::vec![
             Term::Atom(module),
             Term::Int(index as i64),
@@ -718,7 +794,14 @@ impl Heap {
     }
 
     pub fn fun_export(&mut self, module: Atom, function: Atom, arity: u32) -> Term {
-        Term::Fun(self.push_object(Kind::FunExport, &[Term::Atom(module), Term::Atom(function), Term::Int(arity as i64)]))
+        Term::Fun(self.push_object(
+            Kind::FunExport,
+            &[
+                Term::Atom(module),
+                Term::Atom(function),
+                Term::Int(arity as i64),
+            ],
+        ))
     }
 
     pub fn resource(&mut self, r: Resource) -> Term {
@@ -741,10 +824,16 @@ impl Heap {
         if p.space != 0 {
             return None;
         }
-        let (Term::OffHeap(i), Term::Int(0), Term::Int(len)) = (self.terms[p.at() + 1], self.terms[p.at() + 2], self.terms[p.at() + 3]) else {
+        let (Term::OffHeap(i), Term::Int(0), Term::Int(len)) = (
+            self.terms[p.at() + 1],
+            self.terms[p.at() + 2],
+            self.terms[p.at() + 3],
+        ) else {
             return None;
         };
-        let OffHeap::Bytes(arc) = &mut self.offheap[i as usize] else { return None };
+        let OffHeap::Bytes(arc) = &mut self.offheap[i as usize] else {
+            return None;
+        };
         let bytes = Arc::get_mut(arc)?;
         if (len as usize).div_ceil(8) != bytes.len() {
             return None;
@@ -758,9 +847,14 @@ impl Heap {
     /// [`Heap::take_for_append`].
     pub fn finish_append(&mut self, entry: u32, bytes: Vec<u8>, len: usize) -> Term {
         self.offheap_bytes += bytes.len();
-        let OffHeap::Bytes(arc) = &mut self.offheap[entry as usize] else { unreachable!("taken for appending") };
+        let OffHeap::Bytes(arc) = &mut self.offheap[entry as usize] else {
+            unreachable!("taken for appending")
+        };
         *Arc::get_mut(arc).expect("taken for appending") = bytes;
-        Term::Bits(self.push_object(Kind::Bits, &[Term::OffHeap(entry), Term::Int(0), Term::Int(len as i64)]))
+        Term::Bits(self.push_object(
+            Kind::Bits,
+            &[Term::OffHeap(entry), Term::Int(0), Term::Int(len as i64)],
+        ))
     }
 
     /// A match state over the bitstring `bits`, at `pos`.

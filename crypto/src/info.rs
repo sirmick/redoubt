@@ -24,11 +24,31 @@ pub fn info_lib(c: &mut Ctx, _a: &[Term]) -> R {
 
 pub fn info_nif(c: &mut Ctx, _a: &[Term]) -> R {
     let mut m: Vec<(Term, Term)> = Vec::new();
-    { let k = c.atom("compile_type"); let v = c.atom("normal"); m.push((k, v)); }
-    { let k = c.atom("link_type"); let v = c.atom("static"); m.push((k, v)); }
-    { let k = c.atom("cryptolib_version_compiled"); let v = c.string("beamlet-crypto 0.1.0"); m.push((k, v)); }
-    { let k = c.atom("cryptolib_version_linked"); let v = c.string("beamlet-crypto 0.1.0"); m.push((k, v)); }
-    { let k = c.atom("fips_provider_available"); let v = c.bool(false); m.push((k, v)); }
+    {
+        let k = c.atom("compile_type");
+        let v = c.atom("normal");
+        m.push((k, v));
+    }
+    {
+        let k = c.atom("link_type");
+        let v = c.atom("static");
+        m.push((k, v));
+    }
+    {
+        let k = c.atom("cryptolib_version_compiled");
+        let v = c.string("beamlet-crypto 0.1.0");
+        m.push((k, v));
+    }
+    {
+        let k = c.atom("cryptolib_version_linked");
+        let v = c.string("beamlet-crypto 0.1.0");
+        m.push((k, v));
+    }
+    {
+        let k = c.atom("fips_provider_available");
+        let v = c.bool(false);
+        m.push((k, v));
+    }
     Ok(c.map_from(m))
 }
 
@@ -63,17 +83,30 @@ pub fn mac_algorithms(c: &mut Ctx, _a: &[Term]) -> R {
 }
 
 pub fn curve_algorithms(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(atoms(c, &["secp256r1", "prime256v1", "secp384r1", "x25519", "ed25519"]))
+    Ok(atoms(
+        c,
+        &["secp256r1", "prime256v1", "secp384r1", "x25519", "ed25519"],
+    ))
 }
 
 pub fn rsa_opts_algorithms(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(atoms(c, &["rsa_pkcs1_pss_padding", "rsa_pss_saltlen", "rsa_mgf1_md", "rsa_pkcs1_padding"]))
+    Ok(atoms(
+        c,
+        &[
+            "rsa_pkcs1_pss_padding",
+            "rsa_pss_saltlen",
+            "rsa_mgf1_md",
+            "rsa_pkcs1_padding",
+        ],
+    ))
 }
 
 /// `strong_rand_bytes_nif(N)`: `false` (which crypto.erl turns into `low_entropy`) if the
 /// platform has no secure random source.
 pub fn strong_rand_bytes(c: &mut Ctx, a: &[Term]) -> R {
-    let Some(n) = a[0].as_usize().filter(|n| *n <= 1 << 24) else { return Err(badarg(c, 0, "Bad length")) };
+    let Some(n) = a[0].as_usize().filter(|n| *n <= 1 << 24) else {
+        return Err(badarg(c, 0, "Bad length"));
+    };
     match random_bytes(c, n) {
         Ok(b) => Ok(bin(c, &b)),
         Err(_) => Ok(c.bool(false)),
@@ -114,7 +147,9 @@ pub fn rand_uniform(c: &mut Ctx, a: &[Term]) -> R {
         (b.len() >= 4).then(|| BigUint::from_bytes_be(&b[4..]))
     }
     let (from, to) = (bytes(c, a, 0, "from")?, bytes(c, a, 1, "to")?);
-    let (Some(from), Some(to)) = (mpint(&from), mpint(&to)) else { return Err(badarg(c, 0, "Bad range")) };
+    let (Some(from), Some(to)) = (mpint(&from), mpint(&to)) else {
+        return Err(badarg(c, 0, "Bad range"));
+    };
     if to <= from {
         return Err(badarg(c, 1, "Bad range"));
     }

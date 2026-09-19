@@ -38,11 +38,17 @@ struct FileRef {
 
 fn error(c: &mut Ctx, e: FileError) -> Term {
     let reason = c.atom(e.name());
-    { let e = [c.atom("error"), reason]; c.tuple(&e) }
+    {
+        let e = [c.atom("error"), reason];
+        c.tuple(&e)
+    }
 }
 
 fn ok_with(c: &mut Ctx, v: Term) -> Term {
-    { let e = [c.ok(), v]; c.tuple(&e) }
+    {
+        let e = [c.ok(), v];
+        c.tuple(&e)
+    }
 }
 
 /// `ok` or `{error, Reason}`.
@@ -62,7 +68,10 @@ fn files<'c>(c: &'c mut Ctx) -> Result<&'c mut dyn Files, FileError> {
 /// `internal_name2native(Name)`: a name (a string, possibly deep, or a binary) as UTF-8 bytes.
 pub fn name2native(c: &mut Ctx, a: &[Term]) -> R {
     let bytes = native_name(c.heap(), a[0]).ok_or_else(|| c.badarg())?;
-    Ok({ let v = &bytes; c.binary(v) })
+    Ok({
+        let v = &bytes;
+        c.binary(v)
+    })
 }
 
 /// A file name argument (string, deep list, binary or atom) as UTF-8 bytes.
@@ -106,7 +115,10 @@ pub fn native2name(c: &mut Ctx, a: &[Term]) -> R {
     let b = c.heap().as_bits(a[0]).ok_or_else(|| c.badarg())?;
     match core::str::from_utf8(&b.to_bytes()) {
         Ok(s) => Ok(c.string(s)),
-        Err(_) => Ok({ let e = [c.atom("error"), c.atom("ignore")]; c.tuple(&e) }),
+        Err(_) => Ok({
+            let e = [c.atom("error"), c.atom("ignore")];
+            c.tuple(&e)
+        }),
     }
 }
 
@@ -120,7 +132,10 @@ pub fn normalize_utf8(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn is_translatable(c: &mut Ctx, a: &[Term]) -> R {
     let ok = match &a[0] {
-        Term::Bits(_) => c.heap().as_bits(a[0]).is_some_and(|b| core::str::from_utf8(&b.to_bytes()).is_ok()),
+        Term::Bits(_) => c
+            .heap()
+            .as_bits(a[0])
+            .is_some_and(|b| core::str::from_utf8(&b.to_bytes()).is_ok()),
         _ => true,
     };
     Ok(c.bool(ok))
@@ -193,22 +208,34 @@ fn info_term(c: &mut Ctx, i: &FileInfo) -> Term {
         (false, false) => "none",
     };
     let int = |n: i64| Term::Int(n);
-    { let e = [
-        c.atom("file_info"),
-        { let v = i.size.into(); c.big(v) },
-        c.atom(kind),
-        c.atom(access),
-        int(i.atime),
-        int(i.mtime),
-        int(i.ctime),
-        int(i.mode as i64),
-        { let v = i.links.into(); c.big(v) },
-        int(0),
-        int(0),
-        { let v = i.inode.into(); c.big(v) },
-        int(i.uid as i64),
-        int(i.gid as i64),
-    ]; c.tuple(&e) }
+    {
+        let e = [
+            c.atom("file_info"),
+            {
+                let v = i.size.into();
+                c.big(v)
+            },
+            c.atom(kind),
+            c.atom(access),
+            int(i.atime),
+            int(i.mtime),
+            int(i.ctime),
+            int(i.mode as i64),
+            {
+                let v = i.links.into();
+                c.big(v)
+            },
+            int(0),
+            int(0),
+            {
+                let v = i.inode.into();
+                c.big(v)
+            },
+            int(i.uid as i64),
+            int(i.gid as i64),
+        ];
+        c.tuple(&e)
+    }
 }
 
 /// `read_info_nif(Path, FollowLinks)`: a `#file_info{}` with POSIX times, or `{error, R}`.
@@ -238,8 +265,18 @@ pub fn list_dir(c: &mut Ctx, a: &[Term]) -> R {
     with_path(c, &a[0], |c, p| {
         Ok(match files(c).and_then(|f| f.list_dir(p)) {
             Ok(names) => {
-                let names: Vec<Term> = names.iter().map(|n| { let v = n; c.binary(v) }).collect();
-                { let v = names; let v = c.list(v); ok_with(c, v) }
+                let names: Vec<Term> = names
+                    .iter()
+                    .map(|n| {
+                        let v = n;
+                        c.binary(v)
+                    })
+                    .collect();
+                {
+                    let v = names;
+                    let v = c.list(v);
+                    ok_with(c, v)
+                }
             }
             Err(e) => error(c, e),
         })
@@ -278,17 +315,23 @@ pub fn del_dir(c: &mut Ctx, a: &[Term]) -> R {
 /// `rename_nif(From, To)`. Onto a directory that is not empty is `eexist`, as OTP reports it.
 pub fn rename(c: &mut Ctx, a: &[Term]) -> R {
     let (from, to) = (path(c, &a[0])?, path(c, &a[1])?);
-    let r = from.and_then(|from| to.and_then(|to| files(c)?.rename(&from, &to))).map_err(|e| match e {
-        FileError::Enotempty => FileError::Eexist,
-        e => e,
-    });
+    let r = from
+        .and_then(|from| to.and_then(|to| files(c)?.rename(&from, &to)))
+        .map_err(|e| match e {
+            FileError::Enotempty => FileError::Eexist,
+            e => e,
+        });
     done(c, r)
 }
 
 pub fn read_link(c: &mut Ctx, a: &[Term]) -> R {
     with_path(c, &a[0], |c, p| {
         Ok(match files(c).and_then(|f| f.read_link(p)) {
-            Ok(target) => { let v = &target; let v = c.binary(v); ok_with(c, v) },
+            Ok(target) => {
+                let v = &target;
+                let v = c.binary(v);
+                ok_with(c, v)
+            }
             Err(e) => error(c, e),
         })
     })
@@ -300,16 +343,22 @@ pub fn get_cwd(c: &mut Ctx, _a: &[Term]) -> R {
     if let Some(Err(e)) = c.sys.platform.files().map(|f| f.info(&cwd, true)) {
         return Ok(error(c, e));
     }
-    Ok({ let v = cwd.as_bytes(); let v = c.binary(v); ok_with(c, v) })
+    Ok({
+        let v = cwd.as_bytes();
+        let v = c.binary(v);
+        ok_with(c, v)
+    })
 }
 
 /// `set_cwd_nif(Path)`: this VM's working directory, which must be a directory.
 pub fn set_cwd(c: &mut Ctx, a: &[Term]) -> R {
     with_path(c, &a[0], |c, p| {
-        let r = files(c).and_then(|f| f.info(p, true)).and_then(|i| match i.kind {
-            FileKind::Directory => Ok(()),
-            _ => Err(FileError::Enotdir),
-        });
+        let r = files(c)
+            .and_then(|f| f.info(p, true))
+            .and_then(|i| match i.kind {
+                FileKind::Directory => Ok(()),
+                _ => Err(FileError::Enotdir),
+            });
         if r.is_ok() {
             c.sys.cwd = p.into();
         }
@@ -320,7 +369,9 @@ pub fn set_cwd(c: &mut Ctx, a: &[Term]) -> R {
 /// `set_time_nif(Path, ATime, MTime, CTime)`: times in POSIX seconds (the change time cannot be
 /// set and is ignored, as on BEAM).
 pub fn set_time(c: &mut Ctx, a: &[Term]) -> R {
-    let (Term::Int(at), Term::Int(mt)) = (&a[1], &a[2]) else { return Err(c.badarg()) };
+    let (Term::Int(at), Term::Int(mt)) = (&a[1], &a[2]) else {
+        return Err(c.badarg());
+    };
     let (at, mt) = (*at, *mt);
     with_path(c, &a[0], |c, p| {
         let r = files(c).and_then(|f| f.set_times(p, at, mt));
@@ -341,7 +392,12 @@ pub fn set_permissions(c: &mut Ctx, a: &[Term]) -> R {
 
 /// `make_soft_link_nif(Target, Link)`: the target is stored as written.
 pub fn make_symlink(c: &mut Ctx, a: &[Term]) -> R {
-    let target = c.heap().as_bits(a[0]).ok_or_else(|| c.badarg())?.to_bytes().into_owned();
+    let target = c
+        .heap()
+        .as_bits(a[0])
+        .ok_or_else(|| c.badarg())?
+        .to_bytes()
+        .into_owned();
     with_path(c, &a[1], |c, p| {
         let r = files(c).and_then(|f| f.make_symlink(&target, p));
         done(c, r)
@@ -374,7 +430,8 @@ pub fn open(c: &mut Ctx, a: &[Term]) -> R {
                 "append" => m.append = true,
                 "exclusive" => m.exclusive = true,
                 // Options `prim_file` or `file` handle themselves, or hints.
-                "binary" | "raw" | "read_ahead" | "delayed_write" | "sync" | "compressed" | "ram" | "directory" => {}
+                "binary" | "raw" | "read_ahead" | "delayed_write" | "sync" | "compressed"
+                | "ram" | "directory" => {}
                 _ => return Err(c.badarg()),
             },
             Term::Tuple(_) => {}
@@ -398,7 +455,10 @@ pub fn open(c: &mut Ctx, a: &[Term]) -> R {
             Ok(h) => {
                 let owner = c.p.pid;
                 c.sys.files.insert(h, owner);
-                let r = c.new_resource(FileRef { handle: h, open: Cell::new(true) });
+                let r = c.new_resource(FileRef {
+                    handle: h,
+                    open: Cell::new(true),
+                });
                 Ok(ok_with(c, r))
             }
             Err(e) => Ok(error(c, e)),
@@ -440,7 +500,11 @@ fn read_size(c: &Ctx, t: &Term) -> Result<usize, Exception> {
 fn data(c: &mut Ctx, r: Result<Vec<u8>, FileError>) -> Term {
     match r {
         Ok(d) if d.is_empty() => c.atom("eof"),
-        Ok(d) => { let v = &d; let v = c.binary(v); ok_with(c, v) },
+        Ok(d) => {
+            let v = &d;
+            let v = c.binary(v);
+            ok_with(c, v)
+        }
         Err(e) => error(c, e),
     }
 }
@@ -448,7 +512,11 @@ fn data(c: &mut Ctx, r: Result<Vec<u8>, FileError>) -> Term {
 pub fn read(c: &mut Ctx, a: &[Term]) -> R {
     let (h, len) = (handle(c, &a[0])?, read_size(c, &a[1])?);
     if len == 0 {
-        return Ok({ let v = &[]; let v = c.binary(v); ok_with(c, v) });
+        return Ok({
+            let v = &[];
+            let v = c.binary(v);
+            ok_with(c, v)
+        });
     }
     let r = h.and_then(|h| files(c)?.read(h, len));
     Ok(data(c, r))
@@ -459,7 +527,11 @@ pub fn pread(c: &mut Ctx, a: &[Term]) -> R {
     let off = offset(c, &a[1])?;
     let len = read_size(c, &a[2])?;
     if len == 0 {
-        return Ok({ let v = &[]; let v = c.binary(v); ok_with(c, v) });
+        return Ok({
+            let v = &[];
+            let v = c.binary(v);
+            ok_with(c, v)
+        });
     }
     let r = h.and_then(|h| files(c)?.pread(h, off, len));
     Ok(data(c, r))
@@ -502,7 +574,9 @@ pub fn pwrite(c: &mut Ctx, a: &[Term]) -> R {
 /// `seek_nif(FileRef, bof | cur | eof, Offset)`: `{ok, NewPosition}`.
 pub fn seek(c: &mut Ctx, a: &[Term]) -> R {
     let h = handle(c, &a[0])?;
-    let Term::Int(off) = a[2] else { return Err(c.badarg()) };
+    let Term::Int(off) = a[2] else {
+        return Err(c.badarg());
+    };
     let to = match &a[1] {
         Term::Atom(m) if m.as_str() == "bof" => match u64::try_from(off) {
             Ok(o) => SeekFrom::Start(o),
@@ -513,7 +587,11 @@ pub fn seek(c: &mut Ctx, a: &[Term]) -> R {
         _ => return Err(c.badarg()),
     };
     Ok(match h.and_then(|h| files(c)?.seek(h, to)) {
-        Ok(pos) => { let v = pos.into(); let v = c.big(v); ok_with(c, v) },
+        Ok(pos) => {
+            let v = pos.into();
+            let v = c.big(v);
+            ok_with(c, v)
+        }
         Err(e) => error(c, e),
     })
 }
@@ -542,7 +620,13 @@ pub fn read_whole_file(f: &mut dyn Files, path: &str, max: usize) -> Result<Vec<
     if size > max as u64 {
         return Err(FileError::Einval);
     }
-    let h = f.open(path, OpenMode { read: true, ..OpenMode::default() })?;
+    let h = f.open(
+        path,
+        OpenMode {
+            read: true,
+            ..OpenMode::default()
+        },
+    )?;
     let mut out = Vec::new();
     let r = loop {
         match f.read(h, 1 << 16) {
@@ -563,7 +647,11 @@ pub fn read_file(c: &mut Ctx, a: &[Term]) -> R {
     with_path(c, &a[0], |c, p| {
         let r = files(c).and_then(|f| read_whole_file(f, p, max));
         Ok(match r {
-            Ok(d) => { let v = &d; let v = c.binary(v); ok_with(c, v) },
+            Ok(d) => {
+                let v = &d;
+                let v = c.binary(v);
+                ok_with(c, v)
+            }
             Err(e) => error(c, e),
         })
     })
@@ -582,7 +670,10 @@ fn buffer(c: &Ctx, t: &Term) -> Result<super::Held<Buffer>, Exception> {
 }
 
 pub fn buffer_new(c: &mut Ctx, _a: &[Term]) -> R {
-    let b = Buffer { bytes: RefCell::new(VecDeque::new()), locked: Cell::new(false) };
+    let b = Buffer {
+        bytes: RefCell::new(VecDeque::new()),
+        locked: Cell::new(false),
+    };
     Ok(c.new_resource(b))
 }
 
@@ -606,7 +697,10 @@ pub fn buffer_copying_read(c: &mut Ctx, a: &[Term]) -> R {
         return Err(c.badarg());
     }
     let out: Vec<u8> = bytes.drain(..n).collect();
-    Ok({ let v = &out; c.binary(v) })
+    Ok({
+        let v = &out;
+        c.binary(v)
+    })
 }
 
 pub fn buffer_write(c: &mut Ctx, a: &[Term]) -> R {
@@ -666,7 +760,10 @@ mod tests {
         assert_eq!(resolve("/", b"a/b").unwrap(), "/a/b");
         assert_eq!(resolve("/home", b"x").unwrap(), "/home/x");
         assert_eq!(resolve("/home", b"/x").unwrap(), "/x");
-        assert_eq!(resolve("/home", b"../../../etc/passwd").unwrap(), "/etc/passwd");
+        assert_eq!(
+            resolve("/home", b"../../../etc/passwd").unwrap(),
+            "/etc/passwd"
+        );
         assert_eq!(resolve("/a/b", b"./c/./../d//e/").unwrap(), "/a/b/d/e");
         assert_eq!(resolve("/a", b"..").unwrap(), "/");
         assert_eq!(resolve("/", b"").unwrap_err(), FileError::Enoent);

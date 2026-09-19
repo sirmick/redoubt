@@ -89,7 +89,11 @@ pub trait Programs {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Program {
     Shell(String),
-    Executable { path: String, arg0: Option<String>, args: Vec<String> },
+    Executable {
+        path: String,
+        arg0: Option<String>,
+        args: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

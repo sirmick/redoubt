@@ -18,7 +18,13 @@ pub struct Import {
 
 impl core::fmt::Debug for Import {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}:{}/{}", self.module.as_str(), self.function.as_str(), self.arity)
+        write!(
+            f,
+            "{}:{}/{}",
+            self.module.as_str(),
+            self.function.as_str(),
+            self.arity
+        )
     }
 }
 
@@ -122,9 +128,12 @@ impl Module {
 
     /// The on_load function's name and entry (the label after its `func_info`).
     pub fn on_load_entry(&self) -> Option<(Atom, u32)> {
-        let pc = self.code.iter().position(|i| i.op == crate::opcodes::ON_LOAD)?;
+        let pc = self
+            .code
+            .iter()
+            .position(|i| i.op == crate::opcodes::ON_LOAD)?;
         let f = self.function_at(pc as u32).filter(|f| f.arity == 0)?;
-        Some((f.name.clone(), f.start + 1))
+        Some((f.name, f.start + 1))
     }
 
     pub fn export(&self, function: &Atom, arity: u32) -> Option<u32> {
@@ -136,7 +145,11 @@ impl Module {
 
     /// The source location of code index `pc`: the last `line` instruction at or before it.
     pub fn location(&self, pc: u32) -> Option<(&Term, u32)> {
-        let i = self.lines.marks.partition_point(|(at, _)| *at <= pc).checked_sub(1)?;
+        let i = self
+            .lines
+            .marks
+            .partition_point(|(at, _)| *at <= pc)
+            .checked_sub(1)?;
         let item = self.lines.marks[i].1 as usize;
         if item == 0 {
             return None;

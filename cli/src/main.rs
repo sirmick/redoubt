@@ -30,10 +30,12 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, Sender};
 
-use beamlet_vm::platform::{ConsoleInput, Platform, PlatformError, ProgramEvent, Programs, Spawn, Spawned};
-use programs::Event;
+use beamlet_vm::platform::{
+    ConsoleInput, Platform, PlatformError, ProgramEvent, Programs, Spawn, Spawned,
+};
 use beamlet_vm::term::OwnedTerm;
 use beamlet_vm::{Class, Term, Vm};
+use programs::Event;
 
 impl Posix {
     /// The first `name` in the code path. Names come from module and application atoms:
@@ -47,7 +49,10 @@ impl Posix {
         if name.is_empty() || name.contains(['/', '\\', '\0']) || name.starts_with('.') {
             return None;
         }
-        self.code_path.iter().map(|dir| dir.join(name)).find(|p| p.is_file())
+        self.code_path
+            .iter()
+            .map(|dir| dir.join(name))
+            .find(|p| p.is_file())
     }
 }
 
@@ -126,7 +131,10 @@ impl Platform for Posix {
     }
 
     fn system_time_us(&mut self) -> Option<u64> {
-        SystemTime::now().duration_since(UNIX_EPOCH).ok().map(|d| d.as_micros() as u64)
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_micros() as u64)
     }
 
     fn idle(&mut self, deadline: Option<u64>) {
@@ -135,7 +143,8 @@ impl Platform for Posix {
         if !self.console.is_empty() || !self.program_events.is_empty() {
             return;
         }
-        let wait = deadline.map(|d| std::time::Duration::from_micros(d.saturating_sub(self.monotonic_us())));
+        let wait = deadline
+            .map(|d| std::time::Duration::from_micros(d.saturating_sub(self.monotonic_us())));
         match wait {
             Some(w) => {
                 if let Ok(event) = self.events.recv_timeout(w) {
@@ -199,11 +208,17 @@ impl Platform for Posix {
     }
 
     fn files(&mut self) -> Option<&mut dyn beamlet_vm::platform::Files> {
-        self.files.as_mut().map(|f| f as &mut dyn beamlet_vm::platform::Files)
+        self.files
+            .as_mut()
+            .map(|f| f as &mut dyn beamlet_vm::platform::Files)
     }
 
     fn programs(&mut self) -> Option<&mut dyn Programs> {
-        if self.programs.is_some() { Some(self) } else { None }
+        if self.programs.is_some() {
+            Some(self)
+        } else {
+            None
+        }
     }
 }
 
@@ -242,21 +257,28 @@ fn usage() -> ExitCode {
 fn check(files: &[String]) -> ExitCode {
     let mut failed = false;
     for f in files {
-        let result = std::fs::read(f)
-            .map_err(|e| format!("{e}"))
-            .and_then(|b| {
-                let mut lits = beamlet_vm::term::Literals::default();
-                beamlet_vm::loader::load(&b, &mut beamlet_vm::atom::AtomTable::new(), &mut lits).map_err(|e| format!("{e:?}"))
-            });
+        let result = std::fs::read(f).map_err(|e| format!("{e}")).and_then(|b| {
+            let mut lits = beamlet_vm::term::Literals::default();
+            beamlet_vm::loader::load(&b, &mut beamlet_vm::atom::AtomTable::new(), &mut lits)
+                .map_err(|e| format!("{e:?}"))
+        });
         match result {
-            Ok(m) => println!("{f}: ok ({}, {} instructions)", m.name.as_str(), m.code.len()),
+            Ok(m) => println!(
+                "{f}: ok ({}, {} instructions)",
+                m.name.as_str(),
+                m.code.len()
+            ),
             Err(e) => {
                 println!("{f}: {e}");
                 failed = true;
             }
         }
     }
-    if failed { ExitCode::from(1) } else { ExitCode::SUCCESS }
+    if failed {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 fn main() -> ExitCode {
@@ -290,7 +312,10 @@ fn main() -> ExitCode {
                 Some(dir) => libs.push(dir),
                 None => return usage(),
             },
-            "--root" => match args.next().map(|d| files::HostDir::new(&d).map_err(|e| (d, e))) {
+            "--root" => match args
+                .next()
+                .map(|d| files::HostDir::new(&d).map_err(|e| (d, e)))
+            {
                 Some(Ok(dir)) => root = Some(dir),
                 Some(Err((d, e))) => {
                     eprintln!("beamlet: --root {d}: {e}");
@@ -345,9 +370,15 @@ fn main() -> ExitCode {
         mid_line: mid_line.clone(),
     };
     // Natives are 'static slices; join the crates' tables once.
-    let natives: &'static [beamlet_vm::bif::NativeSpec] =
-        Box::leak([beamlet_crypto::NATIVES, beamlet_re::NATIVES].concat().into_boxed_slice());
-    let config = beamlet_vm::vm::Config { natives, ..Default::default() };
+    let natives: &'static [beamlet_vm::bif::NativeSpec] = Box::leak(
+        [beamlet_crypto::NATIVES, beamlet_re::NATIVES]
+            .concat()
+            .into_boxed_slice(),
+    );
+    let config = beamlet_vm::vm::Config {
+        natives,
+        ..Default::default()
+    };
     let mut vm = Vm::with_config(Box::new(platform), config);
     for dir in &libs {
         vm.add_lib_root(dir);
@@ -375,7 +406,9 @@ fn main() -> ExitCode {
         }
     };
     // BEAMLET_PROFILE=N: print the N hottest places (sampled once per time slice) at exit.
-    let profile = std::env::var("BEAMLET_PROFILE").ok().and_then(|n| n.parse::<usize>().ok());
+    let profile = std::env::var("BEAMLET_PROFILE")
+        .ok()
+        .and_then(|n| n.parse::<usize>().ok());
     if profile.is_some() {
         vm.enable_profile();
     }
@@ -385,7 +418,10 @@ fn main() -> ExitCode {
         let total: u64 = samples.iter().map(|s| s.0).sum();
         eprintln!("profile: {total} samples");
         for (count, place) in samples.iter().take(n) {
-            eprintln!("{:6.2}% {count:6} {place}", 100.0 * *count as f64 / total.max(1) as f64);
+            eprintln!(
+                "{:6.2}% {count:6} {place}",
+                100.0 * *count as f64 / total.max(1) as f64
+            );
         }
     }
     // The result goes on a line of its own, even after a prompt.
@@ -403,7 +439,9 @@ fn main() -> ExitCode {
             }
             println!("{}", exception(&mut vm, e.class, &e.reason))
         }
-        Err(beamlet_vm::vm::RunError::Halted(status)) => return ExitCode::from(status.clamp(0, 255) as u8),
+        Err(beamlet_vm::vm::RunError::Halted(status)) => {
+            return ExitCode::from(status.clamp(0, 255) as u8)
+        }
         Err(e) => {
             eprintln!("beamlet: {e:?}");
             return ExitCode::from(1);

@@ -12,7 +12,9 @@ use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use core::cell::{Cell, RefCell};
 
-use miniz_oxide::deflate::core::{compress, create_comp_flags_from_zip_params, CompressorOxide, TDEFLFlush, TDEFLStatus};
+use miniz_oxide::deflate::core::{
+    compress, create_comp_flags_from_zip_params, CompressorOxide, TDEFLFlush, TDEFLStatus,
+};
 use miniz_oxide::inflate::stream::{inflate, InflateState};
 use miniz_oxide::{DataFormat, MZError, MZFlush, MZStatus};
 
@@ -110,7 +112,12 @@ fn raise(c: &mut Ctx, what: &str) -> Exception {
 
 /// The stream an argument names, if the caller controls it.
 fn stream(c: &mut Ctx, t: &Term) -> Result<StreamRef, Exception> {
-    let r = c.heap().as_resource(*t).filter(|r| r.get::<Stream>().is_some()).cloned().ok_or_else(|| c.badarg())?;
+    let r = c
+        .heap()
+        .as_resource(*t)
+        .filter(|r| r.get::<Stream>().is_some())
+        .cloned()
+        .ok_or_else(|| c.badarg())?;
     let s = StreamRef(r);
     if s.owner.get() != c.p.pid {
         return Err(raise(c, "not_on_controlling_process"));
@@ -141,7 +148,9 @@ fn gzip_header_len(h: &[u8]) -> Result<Option<usize>, ()> {
     let mut n = 10;
     if flags & 4 != 0 {
         // FEXTRA: a two-byte length, then that many bytes.
-        let Some(len) = h.get(n..n + 2) else { return Ok(None) };
+        let Some(len) = h.get(n..n + 2) else {
+            return Ok(None);
+        };
         n += 2 + u16::from_le_bytes([len[0], len[1]]) as usize;
     }
     for flag in [8, 16] {
@@ -170,7 +179,10 @@ pub fn open(c: &mut Ctx, _a: &[Term]) -> R {
         stash: RefCell::new(None),
     };
     let id = c.sys.make_ref().0;
-    Ok(c.heap_mut().resource(Resource { id, value: Box::new(s) }))
+    Ok(c.heap_mut().resource(Resource {
+        id,
+        value: Box::new(s),
+    }))
 }
 
 pub fn close(c: &mut Ctx, a: &[Term]) -> R {
@@ -183,7 +195,9 @@ pub fn close(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn set_controller(c: &mut Ctx, a: &[Term]) -> R {
     let s = stream(c, &a[0])?;
-    let Term::Pid(p) = a[1] else { return Err(c.badarg()) };
+    let Term::Pid(p) = a[1] else {
+        return Err(c.badarg());
+    };
     s.owner.set(p);
     Ok(c.ok())
 }
@@ -194,7 +208,11 @@ pub fn deflate_init(c: &mut Ctx, a: &[Term]) -> R {
     let level = int(c, &a[1])?;
     let bits = int(c, &a[3])?;
     let level = if level < 0 { 6 } else { level.min(9) };
-    let (gzip, bits) = if bits > 15 { (true, -(bits - 16)) } else { (false, bits) };
+    let (gzip, bits) = if bits > 15 {
+        (true, -(bits - 16))
+    } else {
+        (false, bits)
+    };
     if !matches!(bits.abs(), 8..=15) {
         return Err(c.badarg());
     }
@@ -203,7 +221,15 @@ pub fn deflate_init(c: &mut Ctx, a: &[Term]) -> R {
     }
     let flags = create_comp_flags_from_zip_params(level as i32, bits as i32, 0);
     let core = Box::new(CompressorOxide::new(flags));
-    *s.codec.borrow_mut() = Codec::Deflate(Deflater { core, gzip, header_done: false, crc: 0, size: 0, used: false, finished: false });
+    *s.codec.borrow_mut() = Codec::Deflate(Deflater {
+        core,
+        gzip,
+        header_done: false,
+        crc: 0,
+        size: 0,
+        used: false,
+        finished: false,
+    });
     Ok(c.ok())
 }
 
@@ -231,7 +257,11 @@ pub fn inflate_init(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 fn new_inflater(wrap: Wrap, after_end: AfterEnd) -> Inflater {
-    let format = if wrap == Wrap::Zlib { DataFormat::Zlib } else { DataFormat::Raw };
+    let format = if wrap == Wrap::Zlib {
+        DataFormat::Zlib
+    } else {
+        DataFormat::Raw
+    };
     Inflater {
         state: InflateState::new_boxed(format),
         initial: wrap,
@@ -301,7 +331,9 @@ pub fn deflate(c: &mut Ctx, a: &[Term]) -> R {
         _ => return Err(c.badarg()),
     };
     let mut codec = s.codec.borrow_mut();
-    let Codec::Deflate(d) = &mut *codec else { return Err(raise(c, "not_initialized")) };
+    let Codec::Deflate(d) = &mut *codec else {
+        return Err(raise(c, "not_initialized"));
+    };
     let mut out = Vec::new();
     if d.gzip && !d.header_done {
         out.extend_from_slice(&GZIP_HEADER);
@@ -352,9 +384,14 @@ pub fn deflate(c: &mut Ctx, a: &[Term]) -> R {
 /// `inflate_nif(Z, InputChunk, OutputChunk, Flush)`.
 pub fn inflate_nif(c: &mut Ctx, a: &[Term]) -> R {
     let s = stream(c, &a[0])?;
-    let (in_chunk, out_chunk) = (int(c, &a[1])?.max(1) as usize, int(c, &a[2])?.max(1) as usize);
+    let (in_chunk, out_chunk) = (
+        int(c, &a[1])?.max(1) as usize,
+        int(c, &a[2])?.max(1) as usize,
+    );
     let mut codec = s.codec.borrow_mut();
-    let Codec::Inflate(inf) = &mut *codec else { return Err(raise(c, "not_initialized")) };
+    let Codec::Inflate(inf) = &mut *codec else {
+        return Err(raise(c, "not_initialized"));
+    };
     // Data after the end of the stream.
     if inf.ended && !s.input.borrow().is_empty() {
         match inf.after_end {
@@ -375,7 +412,11 @@ pub fn inflate_nif(c: &mut Ctx, a: &[Term]) -> R {
         // Frames (gzip header and trailer) are gathered byte by byte from the queue.
         if matches!(inf.wrap, Wrap::Detect) {
             let first = s.input.borrow()[0];
-            inf.wrap = if first == 0x1f { Wrap::Gzip } else { Wrap::Zlib };
+            inf.wrap = if first == 0x1f {
+                Wrap::Gzip
+            } else {
+                Wrap::Zlib
+            };
             if inf.wrap == Wrap::Zlib {
                 inf.state = InflateState::new_boxed(DataFormat::Zlib);
             }

@@ -13,191 +13,931 @@ pub const MAX_OPCODE: u8 = 184;
 
 /// Indexed by opcode number. Index 0 is not an opcode.
 pub static OPCODES: [Op; 185] = [
-    Op { name: "", arity: 0, deprecated: true },
-    Op { name: "label", arity: 1, deprecated: false }, // 1
-    Op { name: "func_info", arity: 3, deprecated: false }, // 2
-    Op { name: "int_code_end", arity: 0, deprecated: false }, // 3
-    Op { name: "call", arity: 2, deprecated: false }, // 4
-    Op { name: "call_last", arity: 3, deprecated: false }, // 5
-    Op { name: "call_only", arity: 2, deprecated: false }, // 6
-    Op { name: "call_ext", arity: 2, deprecated: false }, // 7
-    Op { name: "call_ext_last", arity: 3, deprecated: false }, // 8
-    Op { name: "bif0", arity: 2, deprecated: false }, // 9
-    Op { name: "bif1", arity: 4, deprecated: false }, // 10
-    Op { name: "bif2", arity: 5, deprecated: false }, // 11
-    Op { name: "allocate", arity: 2, deprecated: false }, // 12
-    Op { name: "allocate_heap", arity: 3, deprecated: false }, // 13
-    Op { name: "allocate_zero", arity: 2, deprecated: true }, // 14
-    Op { name: "allocate_heap_zero", arity: 3, deprecated: true }, // 15
-    Op { name: "test_heap", arity: 2, deprecated: false }, // 16
-    Op { name: "init", arity: 1, deprecated: true }, // 17
-    Op { name: "deallocate", arity: 1, deprecated: false }, // 18
-    Op { name: "return", arity: 0, deprecated: false }, // 19
-    Op { name: "send", arity: 0, deprecated: false }, // 20
-    Op { name: "remove_message", arity: 0, deprecated: false }, // 21
-    Op { name: "timeout", arity: 0, deprecated: false }, // 22
-    Op { name: "loop_rec", arity: 2, deprecated: false }, // 23
-    Op { name: "loop_rec_end", arity: 1, deprecated: false }, // 24
-    Op { name: "wait", arity: 1, deprecated: false }, // 25
-    Op { name: "wait_timeout", arity: 2, deprecated: false }, // 26
-    Op { name: "m_plus", arity: 4, deprecated: true }, // 27
-    Op { name: "m_minus", arity: 4, deprecated: true }, // 28
-    Op { name: "m_times", arity: 4, deprecated: true }, // 29
-    Op { name: "m_div", arity: 4, deprecated: true }, // 30
-    Op { name: "int_div", arity: 4, deprecated: true }, // 31
-    Op { name: "int_rem", arity: 4, deprecated: true }, // 32
-    Op { name: "int_band", arity: 4, deprecated: true }, // 33
-    Op { name: "int_bor", arity: 4, deprecated: true }, // 34
-    Op { name: "int_bxor", arity: 4, deprecated: true }, // 35
-    Op { name: "int_bsl", arity: 4, deprecated: true }, // 36
-    Op { name: "int_bsr", arity: 4, deprecated: true }, // 37
-    Op { name: "int_bnot", arity: 3, deprecated: true }, // 38
-    Op { name: "is_lt", arity: 3, deprecated: false }, // 39
-    Op { name: "is_ge", arity: 3, deprecated: false }, // 40
-    Op { name: "is_eq", arity: 3, deprecated: false }, // 41
-    Op { name: "is_ne", arity: 3, deprecated: false }, // 42
-    Op { name: "is_eq_exact", arity: 3, deprecated: false }, // 43
-    Op { name: "is_ne_exact", arity: 3, deprecated: false }, // 44
-    Op { name: "is_integer", arity: 2, deprecated: false }, // 45
-    Op { name: "is_float", arity: 2, deprecated: false }, // 46
-    Op { name: "is_number", arity: 2, deprecated: false }, // 47
-    Op { name: "is_atom", arity: 2, deprecated: false }, // 48
-    Op { name: "is_pid", arity: 2, deprecated: false }, // 49
-    Op { name: "is_reference", arity: 2, deprecated: false }, // 50
-    Op { name: "is_port", arity: 2, deprecated: false }, // 51
-    Op { name: "is_nil", arity: 2, deprecated: false }, // 52
-    Op { name: "is_binary", arity: 2, deprecated: false }, // 53
-    Op { name: "is_constant", arity: 2, deprecated: true }, // 54
-    Op { name: "is_list", arity: 2, deprecated: false }, // 55
-    Op { name: "is_nonempty_list", arity: 2, deprecated: false }, // 56
-    Op { name: "is_tuple", arity: 2, deprecated: false }, // 57
-    Op { name: "test_arity", arity: 3, deprecated: false }, // 58
-    Op { name: "select_val", arity: 3, deprecated: false }, // 59
-    Op { name: "select_tuple_arity", arity: 3, deprecated: false }, // 60
-    Op { name: "jump", arity: 1, deprecated: false }, // 61
-    Op { name: "catch", arity: 2, deprecated: false }, // 62
-    Op { name: "catch_end", arity: 1, deprecated: false }, // 63
-    Op { name: "move", arity: 2, deprecated: false }, // 64
-    Op { name: "get_list", arity: 3, deprecated: false }, // 65
-    Op { name: "get_tuple_element", arity: 3, deprecated: false }, // 66
-    Op { name: "set_tuple_element", arity: 3, deprecated: false }, // 67
-    Op { name: "put_string", arity: 3, deprecated: true }, // 68
-    Op { name: "put_list", arity: 3, deprecated: false }, // 69
-    Op { name: "put_tuple", arity: 2, deprecated: true }, // 70
-    Op { name: "put", arity: 1, deprecated: true }, // 71
-    Op { name: "badmatch", arity: 1, deprecated: false }, // 72
-    Op { name: "if_end", arity: 0, deprecated: false }, // 73
-    Op { name: "case_end", arity: 1, deprecated: false }, // 74
-    Op { name: "call_fun", arity: 1, deprecated: false }, // 75
-    Op { name: "make_fun", arity: 3, deprecated: true }, // 76
-    Op { name: "is_function", arity: 2, deprecated: false }, // 77
-    Op { name: "call_ext_only", arity: 2, deprecated: false }, // 78
-    Op { name: "bs_start_match", arity: 2, deprecated: true }, // 79
-    Op { name: "bs_get_integer", arity: 5, deprecated: true }, // 80
-    Op { name: "bs_get_float", arity: 5, deprecated: true }, // 81
-    Op { name: "bs_get_binary", arity: 5, deprecated: true }, // 82
-    Op { name: "bs_skip_bits", arity: 4, deprecated: true }, // 83
-    Op { name: "bs_test_tail", arity: 2, deprecated: true }, // 84
-    Op { name: "bs_save", arity: 1, deprecated: true }, // 85
-    Op { name: "bs_restore", arity: 1, deprecated: true }, // 86
-    Op { name: "bs_init", arity: 2, deprecated: true }, // 87
-    Op { name: "bs_final", arity: 2, deprecated: true }, // 88
-    Op { name: "bs_put_integer", arity: 5, deprecated: true }, // 89
-    Op { name: "bs_put_binary", arity: 5, deprecated: true }, // 90
-    Op { name: "bs_put_float", arity: 5, deprecated: true }, // 91
-    Op { name: "bs_put_string", arity: 2, deprecated: true }, // 92
-    Op { name: "bs_need_buf", arity: 1, deprecated: true }, // 93
-    Op { name: "fclearerror", arity: 0, deprecated: true }, // 94
-    Op { name: "fcheckerror", arity: 1, deprecated: true }, // 95
-    Op { name: "fmove", arity: 2, deprecated: false }, // 96
-    Op { name: "fconv", arity: 2, deprecated: false }, // 97
-    Op { name: "fadd", arity: 4, deprecated: false }, // 98
-    Op { name: "fsub", arity: 4, deprecated: false }, // 99
-    Op { name: "fmul", arity: 4, deprecated: false }, // 100
-    Op { name: "fdiv", arity: 4, deprecated: false }, // 101
-    Op { name: "fnegate", arity: 3, deprecated: false }, // 102
-    Op { name: "make_fun2", arity: 1, deprecated: true }, // 103
-    Op { name: "try", arity: 2, deprecated: false }, // 104
-    Op { name: "try_end", arity: 1, deprecated: false }, // 105
-    Op { name: "try_case", arity: 1, deprecated: false }, // 106
-    Op { name: "try_case_end", arity: 1, deprecated: false }, // 107
-    Op { name: "raise", arity: 2, deprecated: false }, // 108
-    Op { name: "bs_init2", arity: 6, deprecated: true }, // 109
-    Op { name: "bs_bits_to_bytes", arity: 3, deprecated: true }, // 110
-    Op { name: "bs_add", arity: 5, deprecated: true }, // 111
-    Op { name: "apply", arity: 1, deprecated: false }, // 112
-    Op { name: "apply_last", arity: 2, deprecated: false }, // 113
-    Op { name: "is_boolean", arity: 2, deprecated: false }, // 114
-    Op { name: "is_function2", arity: 3, deprecated: false }, // 115
-    Op { name: "bs_start_match2", arity: 5, deprecated: true }, // 116
-    Op { name: "bs_get_integer2", arity: 7, deprecated: false }, // 117
-    Op { name: "bs_get_float2", arity: 7, deprecated: false }, // 118
-    Op { name: "bs_get_binary2", arity: 7, deprecated: false }, // 119
-    Op { name: "bs_skip_bits2", arity: 5, deprecated: false }, // 120
-    Op { name: "bs_test_tail2", arity: 3, deprecated: false }, // 121
-    Op { name: "bs_save2", arity: 2, deprecated: true }, // 122
-    Op { name: "bs_restore2", arity: 2, deprecated: true }, // 123
-    Op { name: "gc_bif1", arity: 5, deprecated: false }, // 124
-    Op { name: "gc_bif2", arity: 6, deprecated: false }, // 125
-    Op { name: "bs_final2", arity: 2, deprecated: true }, // 126
-    Op { name: "bs_bits_to_bytes2", arity: 2, deprecated: true }, // 127
-    Op { name: "put_literal", arity: 2, deprecated: true }, // 128
-    Op { name: "is_bitstr", arity: 2, deprecated: false }, // 129
-    Op { name: "bs_context_to_binary", arity: 1, deprecated: true }, // 130
-    Op { name: "bs_test_unit", arity: 3, deprecated: false }, // 131
-    Op { name: "bs_match_string", arity: 4, deprecated: false }, // 132
-    Op { name: "bs_init_writable", arity: 0, deprecated: false }, // 133
-    Op { name: "bs_append", arity: 8, deprecated: true }, // 134
-    Op { name: "bs_private_append", arity: 6, deprecated: true }, // 135
-    Op { name: "trim", arity: 2, deprecated: false }, // 136
-    Op { name: "bs_init_bits", arity: 6, deprecated: true }, // 137
-    Op { name: "bs_get_utf8", arity: 5, deprecated: false }, // 138
-    Op { name: "bs_skip_utf8", arity: 4, deprecated: false }, // 139
-    Op { name: "bs_get_utf16", arity: 5, deprecated: false }, // 140
-    Op { name: "bs_skip_utf16", arity: 4, deprecated: false }, // 141
-    Op { name: "bs_get_utf32", arity: 5, deprecated: false }, // 142
-    Op { name: "bs_skip_utf32", arity: 4, deprecated: false }, // 143
-    Op { name: "bs_utf8_size", arity: 3, deprecated: true }, // 144
-    Op { name: "bs_put_utf8", arity: 3, deprecated: true }, // 145
-    Op { name: "bs_utf16_size", arity: 3, deprecated: true }, // 146
-    Op { name: "bs_put_utf16", arity: 3, deprecated: true }, // 147
-    Op { name: "bs_put_utf32", arity: 3, deprecated: true }, // 148
-    Op { name: "on_load", arity: 0, deprecated: false }, // 149
-    Op { name: "recv_mark", arity: 1, deprecated: true }, // 150
-    Op { name: "recv_set", arity: 1, deprecated: true }, // 151
-    Op { name: "gc_bif3", arity: 7, deprecated: false }, // 152
-    Op { name: "line", arity: 1, deprecated: false }, // 153
-    Op { name: "put_map_assoc", arity: 5, deprecated: false }, // 154
-    Op { name: "put_map_exact", arity: 5, deprecated: false }, // 155
-    Op { name: "is_map", arity: 2, deprecated: false }, // 156
-    Op { name: "has_map_fields", arity: 3, deprecated: false }, // 157
-    Op { name: "get_map_elements", arity: 3, deprecated: false }, // 158
-    Op { name: "is_tagged_tuple", arity: 4, deprecated: false }, // 159
-    Op { name: "build_stacktrace", arity: 0, deprecated: false }, // 160
-    Op { name: "raw_raise", arity: 0, deprecated: false }, // 161
-    Op { name: "get_hd", arity: 2, deprecated: false }, // 162
-    Op { name: "get_tl", arity: 2, deprecated: false }, // 163
-    Op { name: "put_tuple2", arity: 2, deprecated: false }, // 164
-    Op { name: "bs_get_tail", arity: 3, deprecated: false }, // 165
-    Op { name: "bs_start_match3", arity: 4, deprecated: false }, // 166
-    Op { name: "bs_get_position", arity: 3, deprecated: false }, // 167
-    Op { name: "bs_set_position", arity: 2, deprecated: false }, // 168
-    Op { name: "swap", arity: 2, deprecated: false }, // 169
-    Op { name: "bs_start_match4", arity: 4, deprecated: false }, // 170
-    Op { name: "make_fun3", arity: 3, deprecated: false }, // 171
-    Op { name: "init_yregs", arity: 1, deprecated: false }, // 172
-    Op { name: "recv_marker_bind", arity: 2, deprecated: false }, // 173
-    Op { name: "recv_marker_clear", arity: 1, deprecated: false }, // 174
-    Op { name: "recv_marker_reserve", arity: 1, deprecated: false }, // 175
-    Op { name: "recv_marker_use", arity: 1, deprecated: false }, // 176
-    Op { name: "bs_create_bin", arity: 6, deprecated: false }, // 177
-    Op { name: "call_fun2", arity: 3, deprecated: false }, // 178
-    Op { name: "nif_start", arity: 0, deprecated: false }, // 179
-    Op { name: "badrecord", arity: 1, deprecated: false }, // 180
-    Op { name: "update_record", arity: 5, deprecated: false }, // 181
-    Op { name: "bs_match", arity: 3, deprecated: false }, // 182
-    Op { name: "executable_line", arity: 2, deprecated: false }, // 183
-    Op { name: "debug_line", arity: 4, deprecated: false }, // 184
+    Op {
+        name: "",
+        arity: 0,
+        deprecated: true,
+    },
+    Op {
+        name: "label",
+        arity: 1,
+        deprecated: false,
+    }, // 1
+    Op {
+        name: "func_info",
+        arity: 3,
+        deprecated: false,
+    }, // 2
+    Op {
+        name: "int_code_end",
+        arity: 0,
+        deprecated: false,
+    }, // 3
+    Op {
+        name: "call",
+        arity: 2,
+        deprecated: false,
+    }, // 4
+    Op {
+        name: "call_last",
+        arity: 3,
+        deprecated: false,
+    }, // 5
+    Op {
+        name: "call_only",
+        arity: 2,
+        deprecated: false,
+    }, // 6
+    Op {
+        name: "call_ext",
+        arity: 2,
+        deprecated: false,
+    }, // 7
+    Op {
+        name: "call_ext_last",
+        arity: 3,
+        deprecated: false,
+    }, // 8
+    Op {
+        name: "bif0",
+        arity: 2,
+        deprecated: false,
+    }, // 9
+    Op {
+        name: "bif1",
+        arity: 4,
+        deprecated: false,
+    }, // 10
+    Op {
+        name: "bif2",
+        arity: 5,
+        deprecated: false,
+    }, // 11
+    Op {
+        name: "allocate",
+        arity: 2,
+        deprecated: false,
+    }, // 12
+    Op {
+        name: "allocate_heap",
+        arity: 3,
+        deprecated: false,
+    }, // 13
+    Op {
+        name: "allocate_zero",
+        arity: 2,
+        deprecated: true,
+    }, // 14
+    Op {
+        name: "allocate_heap_zero",
+        arity: 3,
+        deprecated: true,
+    }, // 15
+    Op {
+        name: "test_heap",
+        arity: 2,
+        deprecated: false,
+    }, // 16
+    Op {
+        name: "init",
+        arity: 1,
+        deprecated: true,
+    }, // 17
+    Op {
+        name: "deallocate",
+        arity: 1,
+        deprecated: false,
+    }, // 18
+    Op {
+        name: "return",
+        arity: 0,
+        deprecated: false,
+    }, // 19
+    Op {
+        name: "send",
+        arity: 0,
+        deprecated: false,
+    }, // 20
+    Op {
+        name: "remove_message",
+        arity: 0,
+        deprecated: false,
+    }, // 21
+    Op {
+        name: "timeout",
+        arity: 0,
+        deprecated: false,
+    }, // 22
+    Op {
+        name: "loop_rec",
+        arity: 2,
+        deprecated: false,
+    }, // 23
+    Op {
+        name: "loop_rec_end",
+        arity: 1,
+        deprecated: false,
+    }, // 24
+    Op {
+        name: "wait",
+        arity: 1,
+        deprecated: false,
+    }, // 25
+    Op {
+        name: "wait_timeout",
+        arity: 2,
+        deprecated: false,
+    }, // 26
+    Op {
+        name: "m_plus",
+        arity: 4,
+        deprecated: true,
+    }, // 27
+    Op {
+        name: "m_minus",
+        arity: 4,
+        deprecated: true,
+    }, // 28
+    Op {
+        name: "m_times",
+        arity: 4,
+        deprecated: true,
+    }, // 29
+    Op {
+        name: "m_div",
+        arity: 4,
+        deprecated: true,
+    }, // 30
+    Op {
+        name: "int_div",
+        arity: 4,
+        deprecated: true,
+    }, // 31
+    Op {
+        name: "int_rem",
+        arity: 4,
+        deprecated: true,
+    }, // 32
+    Op {
+        name: "int_band",
+        arity: 4,
+        deprecated: true,
+    }, // 33
+    Op {
+        name: "int_bor",
+        arity: 4,
+        deprecated: true,
+    }, // 34
+    Op {
+        name: "int_bxor",
+        arity: 4,
+        deprecated: true,
+    }, // 35
+    Op {
+        name: "int_bsl",
+        arity: 4,
+        deprecated: true,
+    }, // 36
+    Op {
+        name: "int_bsr",
+        arity: 4,
+        deprecated: true,
+    }, // 37
+    Op {
+        name: "int_bnot",
+        arity: 3,
+        deprecated: true,
+    }, // 38
+    Op {
+        name: "is_lt",
+        arity: 3,
+        deprecated: false,
+    }, // 39
+    Op {
+        name: "is_ge",
+        arity: 3,
+        deprecated: false,
+    }, // 40
+    Op {
+        name: "is_eq",
+        arity: 3,
+        deprecated: false,
+    }, // 41
+    Op {
+        name: "is_ne",
+        arity: 3,
+        deprecated: false,
+    }, // 42
+    Op {
+        name: "is_eq_exact",
+        arity: 3,
+        deprecated: false,
+    }, // 43
+    Op {
+        name: "is_ne_exact",
+        arity: 3,
+        deprecated: false,
+    }, // 44
+    Op {
+        name: "is_integer",
+        arity: 2,
+        deprecated: false,
+    }, // 45
+    Op {
+        name: "is_float",
+        arity: 2,
+        deprecated: false,
+    }, // 46
+    Op {
+        name: "is_number",
+        arity: 2,
+        deprecated: false,
+    }, // 47
+    Op {
+        name: "is_atom",
+        arity: 2,
+        deprecated: false,
+    }, // 48
+    Op {
+        name: "is_pid",
+        arity: 2,
+        deprecated: false,
+    }, // 49
+    Op {
+        name: "is_reference",
+        arity: 2,
+        deprecated: false,
+    }, // 50
+    Op {
+        name: "is_port",
+        arity: 2,
+        deprecated: false,
+    }, // 51
+    Op {
+        name: "is_nil",
+        arity: 2,
+        deprecated: false,
+    }, // 52
+    Op {
+        name: "is_binary",
+        arity: 2,
+        deprecated: false,
+    }, // 53
+    Op {
+        name: "is_constant",
+        arity: 2,
+        deprecated: true,
+    }, // 54
+    Op {
+        name: "is_list",
+        arity: 2,
+        deprecated: false,
+    }, // 55
+    Op {
+        name: "is_nonempty_list",
+        arity: 2,
+        deprecated: false,
+    }, // 56
+    Op {
+        name: "is_tuple",
+        arity: 2,
+        deprecated: false,
+    }, // 57
+    Op {
+        name: "test_arity",
+        arity: 3,
+        deprecated: false,
+    }, // 58
+    Op {
+        name: "select_val",
+        arity: 3,
+        deprecated: false,
+    }, // 59
+    Op {
+        name: "select_tuple_arity",
+        arity: 3,
+        deprecated: false,
+    }, // 60
+    Op {
+        name: "jump",
+        arity: 1,
+        deprecated: false,
+    }, // 61
+    Op {
+        name: "catch",
+        arity: 2,
+        deprecated: false,
+    }, // 62
+    Op {
+        name: "catch_end",
+        arity: 1,
+        deprecated: false,
+    }, // 63
+    Op {
+        name: "move",
+        arity: 2,
+        deprecated: false,
+    }, // 64
+    Op {
+        name: "get_list",
+        arity: 3,
+        deprecated: false,
+    }, // 65
+    Op {
+        name: "get_tuple_element",
+        arity: 3,
+        deprecated: false,
+    }, // 66
+    Op {
+        name: "set_tuple_element",
+        arity: 3,
+        deprecated: false,
+    }, // 67
+    Op {
+        name: "put_string",
+        arity: 3,
+        deprecated: true,
+    }, // 68
+    Op {
+        name: "put_list",
+        arity: 3,
+        deprecated: false,
+    }, // 69
+    Op {
+        name: "put_tuple",
+        arity: 2,
+        deprecated: true,
+    }, // 70
+    Op {
+        name: "put",
+        arity: 1,
+        deprecated: true,
+    }, // 71
+    Op {
+        name: "badmatch",
+        arity: 1,
+        deprecated: false,
+    }, // 72
+    Op {
+        name: "if_end",
+        arity: 0,
+        deprecated: false,
+    }, // 73
+    Op {
+        name: "case_end",
+        arity: 1,
+        deprecated: false,
+    }, // 74
+    Op {
+        name: "call_fun",
+        arity: 1,
+        deprecated: false,
+    }, // 75
+    Op {
+        name: "make_fun",
+        arity: 3,
+        deprecated: true,
+    }, // 76
+    Op {
+        name: "is_function",
+        arity: 2,
+        deprecated: false,
+    }, // 77
+    Op {
+        name: "call_ext_only",
+        arity: 2,
+        deprecated: false,
+    }, // 78
+    Op {
+        name: "bs_start_match",
+        arity: 2,
+        deprecated: true,
+    }, // 79
+    Op {
+        name: "bs_get_integer",
+        arity: 5,
+        deprecated: true,
+    }, // 80
+    Op {
+        name: "bs_get_float",
+        arity: 5,
+        deprecated: true,
+    }, // 81
+    Op {
+        name: "bs_get_binary",
+        arity: 5,
+        deprecated: true,
+    }, // 82
+    Op {
+        name: "bs_skip_bits",
+        arity: 4,
+        deprecated: true,
+    }, // 83
+    Op {
+        name: "bs_test_tail",
+        arity: 2,
+        deprecated: true,
+    }, // 84
+    Op {
+        name: "bs_save",
+        arity: 1,
+        deprecated: true,
+    }, // 85
+    Op {
+        name: "bs_restore",
+        arity: 1,
+        deprecated: true,
+    }, // 86
+    Op {
+        name: "bs_init",
+        arity: 2,
+        deprecated: true,
+    }, // 87
+    Op {
+        name: "bs_final",
+        arity: 2,
+        deprecated: true,
+    }, // 88
+    Op {
+        name: "bs_put_integer",
+        arity: 5,
+        deprecated: true,
+    }, // 89
+    Op {
+        name: "bs_put_binary",
+        arity: 5,
+        deprecated: true,
+    }, // 90
+    Op {
+        name: "bs_put_float",
+        arity: 5,
+        deprecated: true,
+    }, // 91
+    Op {
+        name: "bs_put_string",
+        arity: 2,
+        deprecated: true,
+    }, // 92
+    Op {
+        name: "bs_need_buf",
+        arity: 1,
+        deprecated: true,
+    }, // 93
+    Op {
+        name: "fclearerror",
+        arity: 0,
+        deprecated: true,
+    }, // 94
+    Op {
+        name: "fcheckerror",
+        arity: 1,
+        deprecated: true,
+    }, // 95
+    Op {
+        name: "fmove",
+        arity: 2,
+        deprecated: false,
+    }, // 96
+    Op {
+        name: "fconv",
+        arity: 2,
+        deprecated: false,
+    }, // 97
+    Op {
+        name: "fadd",
+        arity: 4,
+        deprecated: false,
+    }, // 98
+    Op {
+        name: "fsub",
+        arity: 4,
+        deprecated: false,
+    }, // 99
+    Op {
+        name: "fmul",
+        arity: 4,
+        deprecated: false,
+    }, // 100
+    Op {
+        name: "fdiv",
+        arity: 4,
+        deprecated: false,
+    }, // 101
+    Op {
+        name: "fnegate",
+        arity: 3,
+        deprecated: false,
+    }, // 102
+    Op {
+        name: "make_fun2",
+        arity: 1,
+        deprecated: true,
+    }, // 103
+    Op {
+        name: "try",
+        arity: 2,
+        deprecated: false,
+    }, // 104
+    Op {
+        name: "try_end",
+        arity: 1,
+        deprecated: false,
+    }, // 105
+    Op {
+        name: "try_case",
+        arity: 1,
+        deprecated: false,
+    }, // 106
+    Op {
+        name: "try_case_end",
+        arity: 1,
+        deprecated: false,
+    }, // 107
+    Op {
+        name: "raise",
+        arity: 2,
+        deprecated: false,
+    }, // 108
+    Op {
+        name: "bs_init2",
+        arity: 6,
+        deprecated: true,
+    }, // 109
+    Op {
+        name: "bs_bits_to_bytes",
+        arity: 3,
+        deprecated: true,
+    }, // 110
+    Op {
+        name: "bs_add",
+        arity: 5,
+        deprecated: true,
+    }, // 111
+    Op {
+        name: "apply",
+        arity: 1,
+        deprecated: false,
+    }, // 112
+    Op {
+        name: "apply_last",
+        arity: 2,
+        deprecated: false,
+    }, // 113
+    Op {
+        name: "is_boolean",
+        arity: 2,
+        deprecated: false,
+    }, // 114
+    Op {
+        name: "is_function2",
+        arity: 3,
+        deprecated: false,
+    }, // 115
+    Op {
+        name: "bs_start_match2",
+        arity: 5,
+        deprecated: true,
+    }, // 116
+    Op {
+        name: "bs_get_integer2",
+        arity: 7,
+        deprecated: false,
+    }, // 117
+    Op {
+        name: "bs_get_float2",
+        arity: 7,
+        deprecated: false,
+    }, // 118
+    Op {
+        name: "bs_get_binary2",
+        arity: 7,
+        deprecated: false,
+    }, // 119
+    Op {
+        name: "bs_skip_bits2",
+        arity: 5,
+        deprecated: false,
+    }, // 120
+    Op {
+        name: "bs_test_tail2",
+        arity: 3,
+        deprecated: false,
+    }, // 121
+    Op {
+        name: "bs_save2",
+        arity: 2,
+        deprecated: true,
+    }, // 122
+    Op {
+        name: "bs_restore2",
+        arity: 2,
+        deprecated: true,
+    }, // 123
+    Op {
+        name: "gc_bif1",
+        arity: 5,
+        deprecated: false,
+    }, // 124
+    Op {
+        name: "gc_bif2",
+        arity: 6,
+        deprecated: false,
+    }, // 125
+    Op {
+        name: "bs_final2",
+        arity: 2,
+        deprecated: true,
+    }, // 126
+    Op {
+        name: "bs_bits_to_bytes2",
+        arity: 2,
+        deprecated: true,
+    }, // 127
+    Op {
+        name: "put_literal",
+        arity: 2,
+        deprecated: true,
+    }, // 128
+    Op {
+        name: "is_bitstr",
+        arity: 2,
+        deprecated: false,
+    }, // 129
+    Op {
+        name: "bs_context_to_binary",
+        arity: 1,
+        deprecated: true,
+    }, // 130
+    Op {
+        name: "bs_test_unit",
+        arity: 3,
+        deprecated: false,
+    }, // 131
+    Op {
+        name: "bs_match_string",
+        arity: 4,
+        deprecated: false,
+    }, // 132
+    Op {
+        name: "bs_init_writable",
+        arity: 0,
+        deprecated: false,
+    }, // 133
+    Op {
+        name: "bs_append",
+        arity: 8,
+        deprecated: true,
+    }, // 134
+    Op {
+        name: "bs_private_append",
+        arity: 6,
+        deprecated: true,
+    }, // 135
+    Op {
+        name: "trim",
+        arity: 2,
+        deprecated: false,
+    }, // 136
+    Op {
+        name: "bs_init_bits",
+        arity: 6,
+        deprecated: true,
+    }, // 137
+    Op {
+        name: "bs_get_utf8",
+        arity: 5,
+        deprecated: false,
+    }, // 138
+    Op {
+        name: "bs_skip_utf8",
+        arity: 4,
+        deprecated: false,
+    }, // 139
+    Op {
+        name: "bs_get_utf16",
+        arity: 5,
+        deprecated: false,
+    }, // 140
+    Op {
+        name: "bs_skip_utf16",
+        arity: 4,
+        deprecated: false,
+    }, // 141
+    Op {
+        name: "bs_get_utf32",
+        arity: 5,
+        deprecated: false,
+    }, // 142
+    Op {
+        name: "bs_skip_utf32",
+        arity: 4,
+        deprecated: false,
+    }, // 143
+    Op {
+        name: "bs_utf8_size",
+        arity: 3,
+        deprecated: true,
+    }, // 144
+    Op {
+        name: "bs_put_utf8",
+        arity: 3,
+        deprecated: true,
+    }, // 145
+    Op {
+        name: "bs_utf16_size",
+        arity: 3,
+        deprecated: true,
+    }, // 146
+    Op {
+        name: "bs_put_utf16",
+        arity: 3,
+        deprecated: true,
+    }, // 147
+    Op {
+        name: "bs_put_utf32",
+        arity: 3,
+        deprecated: true,
+    }, // 148
+    Op {
+        name: "on_load",
+        arity: 0,
+        deprecated: false,
+    }, // 149
+    Op {
+        name: "recv_mark",
+        arity: 1,
+        deprecated: true,
+    }, // 150
+    Op {
+        name: "recv_set",
+        arity: 1,
+        deprecated: true,
+    }, // 151
+    Op {
+        name: "gc_bif3",
+        arity: 7,
+        deprecated: false,
+    }, // 152
+    Op {
+        name: "line",
+        arity: 1,
+        deprecated: false,
+    }, // 153
+    Op {
+        name: "put_map_assoc",
+        arity: 5,
+        deprecated: false,
+    }, // 154
+    Op {
+        name: "put_map_exact",
+        arity: 5,
+        deprecated: false,
+    }, // 155
+    Op {
+        name: "is_map",
+        arity: 2,
+        deprecated: false,
+    }, // 156
+    Op {
+        name: "has_map_fields",
+        arity: 3,
+        deprecated: false,
+    }, // 157
+    Op {
+        name: "get_map_elements",
+        arity: 3,
+        deprecated: false,
+    }, // 158
+    Op {
+        name: "is_tagged_tuple",
+        arity: 4,
+        deprecated: false,
+    }, // 159
+    Op {
+        name: "build_stacktrace",
+        arity: 0,
+        deprecated: false,
+    }, // 160
+    Op {
+        name: "raw_raise",
+        arity: 0,
+        deprecated: false,
+    }, // 161
+    Op {
+        name: "get_hd",
+        arity: 2,
+        deprecated: false,
+    }, // 162
+    Op {
+        name: "get_tl",
+        arity: 2,
+        deprecated: false,
+    }, // 163
+    Op {
+        name: "put_tuple2",
+        arity: 2,
+        deprecated: false,
+    }, // 164
+    Op {
+        name: "bs_get_tail",
+        arity: 3,
+        deprecated: false,
+    }, // 165
+    Op {
+        name: "bs_start_match3",
+        arity: 4,
+        deprecated: false,
+    }, // 166
+    Op {
+        name: "bs_get_position",
+        arity: 3,
+        deprecated: false,
+    }, // 167
+    Op {
+        name: "bs_set_position",
+        arity: 2,
+        deprecated: false,
+    }, // 168
+    Op {
+        name: "swap",
+        arity: 2,
+        deprecated: false,
+    }, // 169
+    Op {
+        name: "bs_start_match4",
+        arity: 4,
+        deprecated: false,
+    }, // 170
+    Op {
+        name: "make_fun3",
+        arity: 3,
+        deprecated: false,
+    }, // 171
+    Op {
+        name: "init_yregs",
+        arity: 1,
+        deprecated: false,
+    }, // 172
+    Op {
+        name: "recv_marker_bind",
+        arity: 2,
+        deprecated: false,
+    }, // 173
+    Op {
+        name: "recv_marker_clear",
+        arity: 1,
+        deprecated: false,
+    }, // 174
+    Op {
+        name: "recv_marker_reserve",
+        arity: 1,
+        deprecated: false,
+    }, // 175
+    Op {
+        name: "recv_marker_use",
+        arity: 1,
+        deprecated: false,
+    }, // 176
+    Op {
+        name: "bs_create_bin",
+        arity: 6,
+        deprecated: false,
+    }, // 177
+    Op {
+        name: "call_fun2",
+        arity: 3,
+        deprecated: false,
+    }, // 178
+    Op {
+        name: "nif_start",
+        arity: 0,
+        deprecated: false,
+    }, // 179
+    Op {
+        name: "badrecord",
+        arity: 1,
+        deprecated: false,
+    }, // 180
+    Op {
+        name: "update_record",
+        arity: 5,
+        deprecated: false,
+    }, // 181
+    Op {
+        name: "bs_match",
+        arity: 3,
+        deprecated: false,
+    }, // 182
+    Op {
+        name: "executable_line",
+        arity: 2,
+        deprecated: false,
+    }, // 183
+    Op {
+        name: "debug_line",
+        arity: 4,
+        deprecated: false,
+    }, // 184
 ];
 
 pub const LABEL: u8 = 1;

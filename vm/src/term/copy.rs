@@ -15,7 +15,11 @@ pub fn copy(src: &Heap, t: Term, dst: &mut Heap) -> Term {
         return t;
     }
     let start = dst.terms.len();
-    let mut c = Copier { src, moved: BTreeMap::new(), offheap: BTreeMap::new() };
+    let mut c = Copier {
+        src,
+        moved: BTreeMap::new(),
+        offheap: BTreeMap::new(),
+    };
     let root = c.evacuate(dst, t);
     let mut i = start;
     while i < dst.terms.len() {
@@ -23,9 +27,11 @@ pub fn copy(src: &Heap, t: Term, dst: &mut Heap) -> Term {
         match cell {
             Term::Header(_) => {}
             Term::OffHeap(j) => {
-                let k = *c.offheap.entry(j).or_insert_with(|| match dst.push_offheap(src.offheap[j as usize].clone()) {
-                    Term::OffHeap(k) => k,
-                    _ => unreachable!(),
+                let k = *c.offheap.entry(j).or_insert_with(|| {
+                    match dst.push_offheap(src.offheap[j as usize].clone()) {
+                        Term::OffHeap(k) => k,
+                        _ => unreachable!(),
+                    }
                 });
                 dst.terms[i] = Term::OffHeap(k);
             }
@@ -61,7 +67,8 @@ impl Copier<'_> {
                     Term::Header(h) => 1 + h.len as usize,
                     _ => 2, // a list cell
                 };
-                dst.terms.extend_from_slice(&self.src.terms[from..from + len]);
+                dst.terms
+                    .extend_from_slice(&self.src.terms[from..from + len]);
                 let new = Ptr::own(at).index;
                 self.moved.insert(p.index, new);
                 new
@@ -98,8 +105,14 @@ impl OwnedTerm {
 
     /// A term that is an immediate or a literal (so needs no heap).
     pub fn immediate(t: Term) -> OwnedTerm {
-        debug_assert!(t.ptr().is_none_or(|p| p.space != 0), "a term with objects of its own");
-        OwnedTerm { heap: Heap::new(&Literals::default()), root: t }
+        debug_assert!(
+            t.ptr().is_none_or(|p| p.space != 0),
+            "a term with objects of its own"
+        );
+        OwnedTerm {
+            heap: Heap::new(&Literals::default()),
+            root: t,
+        }
     }
 
     pub fn term(&self) -> Term {
@@ -153,6 +166,11 @@ impl fmt::Debug for OwnedTerm {
 
 impl Clone for Heap {
     fn clone(&self) -> Heap {
-        Heap { terms: self.terms.clone(), offheap: self.offheap.clone(), offheap_bytes: self.offheap_bytes, lits: self.lits.clone() }
+        Heap {
+            terms: self.terms.clone(),
+            offheap: self.offheap.clone(),
+            offheap_bytes: self.offheap_bytes,
+            lits: self.lits.clone(),
+        }
     }
 }

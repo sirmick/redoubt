@@ -23,7 +23,10 @@ impl Default for Builder {
 
 impl Builder {
     pub fn new() -> Builder {
-        Builder { bytes: Vec::new(), len: 0 }
+        Builder {
+            bytes: Vec::new(),
+            len: 0,
+        }
     }
 
     /// Continue building on `bits` without copying it, if nothing else holds its bytes and it
@@ -36,7 +39,11 @@ impl Builder {
                 Ok(bytes) => return Builder { bytes, len },
                 Err(shared) => {
                     let mut b = Builder::new();
-                    b.push_bits(&Bits { data: shared, offset: 0, len });
+                    b.push_bits(&Bits {
+                        data: shared,
+                        offset: 0,
+                        len,
+                    });
                     return b;
                 }
             }
@@ -173,7 +180,11 @@ impl Builder {
     }
 
     pub fn into_bits(self) -> Bits {
-        Bits { data: Arc::new(self.bytes), offset: 0, len: self.len }
+        Bits {
+            data: Arc::new(self.bytes),
+            offset: 0,
+            len: self.len,
+        }
     }
 
     /// The bytes and length in bits.
@@ -189,7 +200,14 @@ impl Builder {
 }
 
 /// Read `size` bits at `pos` of `b` as an integer.
-pub fn read_integer(heap: &mut Heap, b: &Bits, pos: usize, size: usize, signed: bool, little: bool) -> Term {
+pub fn read_integer(
+    heap: &mut Heap,
+    b: &Bits,
+    pos: usize,
+    size: usize,
+    signed: bool,
+    little: bool,
+) -> Term {
     if size == 0 {
         return Term::Int(0);
     }
@@ -430,7 +448,11 @@ mod tests {
             b.push_small(v, size, little);
             let bits = b.into_bits();
             let mut h = Heap::new(&Default::default());
-            assert_eq!(read_integer(&mut h, &bits, 0, size, signed, little).as_i64(), Some(v), "{v} {size} {signed} {little}");
+            assert_eq!(
+                read_integer(&mut h, &bits, 0, size, signed, little).as_i64(),
+                Some(v),
+                "{v} {size} {signed} {little}"
+            );
         }
     }
 

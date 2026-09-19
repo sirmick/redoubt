@@ -140,19 +140,44 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("erlang", "atom_to_binary", 1, erlang::atom_to_binary),
     ("erlang", "atom_to_binary", 2, erlang::atom_to_binary),
     ("erlang", "list_to_atom", 1, erlang::list_to_atom),
-    ("erlang", "list_to_existing_atom", 1, erlang::list_to_existing_atom),
+    (
+        "erlang",
+        "list_to_existing_atom",
+        1,
+        erlang::list_to_existing_atom,
+    ),
     ("erlang", "binary_to_atom", 1, erlang::binary_to_atom),
     ("erlang", "binary_to_atom", 2, erlang::binary_to_atom),
-    ("erlang", "binary_to_existing_atom", 1, erlang::binary_to_existing_atom),
-    ("erlang", "binary_to_existing_atom", 2, erlang::binary_to_existing_atom),
+    (
+        "erlang",
+        "binary_to_existing_atom",
+        1,
+        erlang::binary_to_existing_atom,
+    ),
+    (
+        "erlang",
+        "binary_to_existing_atom",
+        2,
+        erlang::binary_to_existing_atom,
+    ),
     ("erlang", "integer_to_list", 1, erlang::integer_to_list),
     ("erlang", "integer_to_list", 2, erlang::integer_to_list),
     ("erlang", "integer_to_binary", 1, erlang::integer_to_binary),
     ("erlang", "integer_to_binary", 2, erlang::integer_to_binary),
     ("erlang", "list_to_integer", 1, erlang::list_to_integer),
     ("erlang", "list_to_integer", 2, erlang::list_to_integer),
-    ("erts_internal", "list_to_integer", 2, erlang::internal_list_to_integer),
-    ("erts_internal", "binary_to_integer", 2, erlang::internal_binary_to_integer),
+    (
+        "erts_internal",
+        "list_to_integer",
+        2,
+        erlang::internal_list_to_integer,
+    ),
+    (
+        "erts_internal",
+        "binary_to_integer",
+        2,
+        erlang::internal_binary_to_integer,
+    ),
     ("erlang", "binary_to_integer", 1, erlang::binary_to_integer),
     ("erlang", "binary_to_integer", 2, erlang::binary_to_integer),
     ("erlang", "float_to_list", 1, erlang::float_to_list),
@@ -202,8 +227,18 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("binary", "matches", 3, binary::matches),
     ("binary", "split", 2, binary::split),
     ("binary", "split", 3, binary::split),
-    ("binary", "longest_common_prefix", 1, binary::longest_common_prefix),
-    ("binary", "longest_common_suffix", 1, binary::longest_common_suffix),
+    (
+        "binary",
+        "longest_common_prefix",
+        1,
+        binary::longest_common_prefix,
+    ),
+    (
+        "binary",
+        "longest_common_suffix",
+        1,
+        binary::longest_common_suffix,
+    ),
     // math.
     ("math", "sin", 1, math::sin),
     ("math", "cos", 1, math::cos),
@@ -230,8 +265,18 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("math", "ceil", 1, math::ceil),
     ("math", "fmod", 2, math::fmod),
     // unicode (the native half of the OTP module).
-    ("unicode", "characters_to_list", 2, unicode::characters_to_list),
-    ("unicode", "characters_to_binary", 2, unicode::characters_to_binary),
+    (
+        "unicode",
+        "characters_to_list",
+        2,
+        unicode::characters_to_list,
+    ),
+    (
+        "unicode",
+        "characters_to_binary",
+        2,
+        unicode::characters_to_binary,
+    ),
     ("unicode", "bin_is_7bit", 1, unicode::bin_is_7bit),
     // Maps.
     ("erlang", "map_size", 1, maps::map_size),
@@ -399,7 +444,12 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("ets", "match_object", 1, ets::select1),
     ("ets", "select_count", 2, ets::select_count),
     ("ets", "select_replace", 2, ets::select_replace),
-    ("ets", "internal_select_delete", 2, ets::internal_select_delete),
+    (
+        "ets",
+        "internal_select_delete",
+        2,
+        ets::internal_select_delete,
+    ),
     ("ets", "match_spec_compile", 1, ets::match_spec_compile),
     ("ets", "is_compiled_ms", 1, ets::is_compiled_ms),
     ("ets", "match_spec_run_r", 3, ets::match_spec_run_r),
@@ -415,7 +465,12 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("erlang", "processes", 0, info::processes),
     ("erlang", "process_info", 1, info::process_info1),
     ("erlang", "process_info", 2, info::process_info),
-    ("file", "native_name_encoding", 0, file::native_name_encoding),
+    (
+        "file",
+        "native_name_encoding",
+        0,
+        file::native_name_encoding,
+    ),
     // The console is not a terminal (no line editing, no ANSI colours) until a platform says so.
     ("prim_tty", "isatty", 1, proc::false_1),
     // Dynamic-trace tags, as BEAM built without VM probes has them.
@@ -428,7 +483,12 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("erlang", "dt_append_vm_tag_data", 1, erlang::dt_same),
     ("prim_file", "internal_name2native", 1, file::name2native),
     ("prim_file", "internal_native2name", 1, file::native2name),
-    ("prim_file", "internal_normalize_utf8", 1, file::normalize_utf8),
+    (
+        "prim_file",
+        "internal_normalize_utf8",
+        1,
+        file::normalize_utf8,
+    ),
     ("prim_file", "is_translatable", 1, file::is_translatable),
     ("prim_file", "open_nif", 2, file::open),
     ("prim_file", "close_nif", 1, file::close),
@@ -442,7 +502,12 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("prim_file", "truncate_nif", 1, file::truncate),
     ("prim_file", "advise_nif", 4, file::advise),
     ("prim_file", "allocate_nif", 3, file::not_supported),
-    ("prim_file", "read_handle_info_nif", 1, file::read_handle_info),
+    (
+        "prim_file",
+        "read_handle_info_nif",
+        1,
+        file::read_handle_info,
+    ),
     ("prim_file", "read_file_nif", 1, file::read_file),
     ("prim_file", "read_info_nif", 2, file::read_info),
     ("prim_file", "list_dir_nif", 1, file::list_dir),
@@ -462,14 +527,24 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("prim_file", "altname_nif", 1, file::not_supported),
     ("prim_file", "get_handle_nif", 1, file::not_supported),
     ("prim_file", "file_desc_to_ref_nif", 1, file::not_supported),
-    ("prim_file", "ipread_s32bu_p32bu_nif", 3, file::not_supported),
+    (
+        "prim_file",
+        "ipread_s32bu_p32bu_nif",
+        3,
+        file::not_supported,
+    ),
     ("prim_buffer", "new", 0, file::buffer_new),
     ("prim_buffer", "size", 1, file::buffer_size),
     ("prim_buffer", "peek_head", 1, file::buffer_peek_head),
     ("prim_buffer", "copying_read", 2, file::buffer_copying_read),
     ("prim_buffer", "write", 2, file::buffer_write),
     ("prim_buffer", "skip", 2, file::buffer_skip),
-    ("prim_buffer", "find_byte_index", 2, file::buffer_find_byte_index),
+    (
+        "prim_buffer",
+        "find_byte_index",
+        2,
+        file::buffer_find_byte_index,
+    ),
     ("prim_buffer", "try_lock", 1, file::buffer_try_lock),
     ("prim_buffer", "unlock", 1, file::buffer_unlock),
     ("erlang", "phash2", 1, phash::phash2_1),
@@ -526,7 +601,12 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("os", "env", 0, info::os_env),
     ("os", "perf_counter", 0, proc::monotonic_time),
     ("string", "list_to_float", 1, erlang::string_list_to_float),
-    ("binary", "referenced_byte_size", 1, info::referenced_byte_size),
+    (
+        "binary",
+        "referenced_byte_size",
+        1,
+        info::referenced_byte_size,
+    ),
     ("zlib", "open_nif", 0, zlib::open),
     ("zlib", "close_nif", 1, zlib::close),
     ("zlib", "set_controller_nif", 2, zlib::set_controller),
@@ -561,7 +641,12 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("code", "soft_purge", 1, info::soft_purge),
     ("erlang", "delete_module", 1, info::delete_module),
     ("erlang", "check_old_code", 1, proc::false_1),
-    ("code", "ensure_modules_loaded", 1, info::ensure_modules_loaded),
+    (
+        "code",
+        "ensure_modules_loaded",
+        1,
+        info::ensure_modules_loaded,
+    ),
     ("code", "add_patha", 1, code::add_patha),
     ("code", "add_pathz", 1, code::add_pathz),
     ("code", "add_path", 1, code::add_pathz),
@@ -594,14 +679,39 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("erlang", "display_string", 1, info::display_string),
     ("erlang", "display_string", 2, info::display_string),
     ("erlang", "universaltime", 0, info::universaltime),
-    ("erlang", "posixtime_to_universaltime", 1, info::posixtime_to_universaltime),
-    ("erlang", "universaltime_to_posixtime", 1, info::universaltime_to_posixtime),
+    (
+        "erlang",
+        "posixtime_to_universaltime",
+        1,
+        info::posixtime_to_universaltime,
+    ),
+    (
+        "erlang",
+        "universaltime_to_posixtime",
+        1,
+        info::universaltime_to_posixtime,
+    ),
     ("erlang", "localtime", 0, info::universaltime),
     ("erlang", "date", 0, info::date),
     ("erlang", "time", 0, info::time),
-    ("erlang", "universaltime_to_localtime", 1, info::same_datetime),
-    ("erlang", "localtime_to_universaltime", 1, info::same_datetime),
-    ("erlang", "localtime_to_universaltime", 2, info::same_datetime),
+    (
+        "erlang",
+        "universaltime_to_localtime",
+        1,
+        info::same_datetime,
+    ),
+    (
+        "erlang",
+        "localtime_to_universaltime",
+        1,
+        info::same_datetime,
+    ),
+    (
+        "erlang",
+        "localtime_to_universaltime",
+        2,
+        info::same_datetime,
+    ),
     ("erlang", "crc32", 1, info::crc32),
     ("erlang", "crc32", 2, info::crc32),
     ("beamlet", "app_spec", 1, info::app_spec),
@@ -638,7 +748,10 @@ impl Registry {
         let mut by_module: BTreeMap<&'static str, Functions> = BTreeMap::new();
         for &(m, f, a, n) in TABLE.iter().chain(extra) {
             let arities = by_module.entry(m).or_default().entry(f).or_default();
-            assert!(arities.iter().all(|(x, _)| *x != a), "{m}:{f}/{a} is listed twice");
+            assert!(
+                arities.iter().all(|(x, _)| *x != a),
+                "{m}:{f}/{a} is listed twice"
+            );
             arities.push((a, n));
         }
         Registry { by_module }
@@ -669,7 +782,7 @@ impl Default for Registry {
 
 impl Ctx<'_> {
     pub fn badarg(&self) -> Exception {
-        Exception::error(Term::Atom(self.sys.atoms.badarg.clone()))
+        Exception::error(Term::Atom(self.sys.atoms.badarg))
     }
 
     /// `badarg`, with the `cause` BEAM gives in its `error_info` (see [`Exception::cause`]).
@@ -680,15 +793,19 @@ impl Ctx<'_> {
     }
 
     pub fn badarith(&self) -> Exception {
-        Exception::error(Term::Atom(self.sys.atoms.badarith.clone()))
+        Exception::error(Term::Atom(self.sys.atoms.badarith))
     }
 
     pub fn system_limit(&self) -> Exception {
-        Exception::error(Term::Atom(self.sys.atoms.system_limit.clone()))
+        Exception::error(Term::Atom(self.sys.atoms.system_limit))
     }
 
     pub fn bool(&self, b: bool) -> Term {
-        Term::Atom(if b { self.sys.atoms.true_.clone() } else { self.sys.atoms.false_.clone() })
+        Term::Atom(if b {
+            self.sys.atoms.true_
+        } else {
+            self.sys.atoms.false_
+        })
     }
 
     pub fn atom(&mut self, name: &str) -> Term {
@@ -724,11 +841,18 @@ impl Ctx<'_> {
         self.p.heap.cons(head, tail)
     }
 
-    pub fn list(&mut self, items: impl IntoIterator<Item = Term, IntoIter: DoubleEndedIterator>) -> Term {
+    pub fn list(
+        &mut self,
+        items: impl IntoIterator<Item = Term, IntoIter: DoubleEndedIterator>,
+    ) -> Term {
         self.p.heap.list(items)
     }
 
-    pub fn list_with_tail(&mut self, items: impl IntoIterator<Item = Term, IntoIter: DoubleEndedIterator>, tail: Term) -> Term {
+    pub fn list_with_tail(
+        &mut self,
+        items: impl IntoIterator<Item = Term, IntoIter: DoubleEndedIterator>,
+        tail: Term,
+    ) -> Term {
         self.p.heap.list_with_tail(items, tail)
     }
 
@@ -774,13 +898,19 @@ impl Ctx<'_> {
     pub fn resource<T: 'static>(&self, t: Term) -> Option<Held<T>> {
         let r = self.p.heap.as_resource(t)?;
         r.get::<T>()?;
-        Some(Held { r: r.clone(), _t: core::marker::PhantomData })
+        Some(Held {
+            r: r.clone(),
+            _t: core::marker::PhantomData,
+        })
     }
 
     /// A new resource holding `value`, with a fresh id.
     pub fn new_resource<T: 'static>(&mut self, value: T) -> Term {
         let id = self.sys.make_ref().0;
-        self.p.heap.resource(crate::term::Resource { id, value: alloc::boxed::Box::new(value) })
+        self.p.heap.resource(crate::term::Resource {
+            id,
+            value: alloc::boxed::Box::new(value),
+        })
     }
 
     /// A copy of a term kept outside the process.

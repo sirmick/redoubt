@@ -63,16 +63,36 @@ pub struct Exception {
 
 impl Exception {
     pub fn error(reason: Term) -> Exception {
-        Exception { class: Class::Error, reason, trace: None, cause: None }
+        Exception {
+            class: Class::Error,
+            reason,
+            trace: None,
+            cause: None,
+        }
     }
     pub fn exit(reason: Term) -> Exception {
-        Exception { class: Class::Exit, reason, trace: None, cause: None }
+        Exception {
+            class: Class::Exit,
+            reason,
+            trace: None,
+            cause: None,
+        }
     }
     pub fn throw(reason: Term) -> Exception {
-        Exception { class: Class::Throw, reason, trace: None, cause: None }
+        Exception {
+            class: Class::Throw,
+            reason,
+            trace: None,
+            cause: None,
+        }
     }
     pub fn with_trace(class: Class, reason: Term, trace: Term) -> Exception {
-        Exception { class, reason, trace: Some(trace), cause: None }
+        Exception {
+            class,
+            reason,
+            trace: Some(trace),
+            cause: None,
+        }
     }
 }
 
@@ -119,7 +139,12 @@ pub struct MaxHeap {
 
 impl Default for MaxHeap {
     fn default() -> MaxHeap {
-        MaxHeap { size: 0, kill: true, error_logger: true, include_shared_binaries: false }
+        MaxHeap {
+            size: 0,
+            kill: true,
+            error_logger: true,
+            include_shared_binaries: false,
+        }
     }
 }
 
@@ -144,7 +169,8 @@ pub struct Dictionary {
 
 impl Dictionary {
     fn find(&self, heap: &Heap, key: Term) -> Result<usize, usize> {
-        self.entries.binary_search_by(|(k, _)| heap.cmp_exact(*k, key))
+        self.entries
+            .binary_search_by(|(k, _)| heap.cmp_exact(*k, key))
     }
 
     pub fn get(&self, heap: &Heap, key: Term) -> Option<Term> {

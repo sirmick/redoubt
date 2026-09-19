@@ -15,6 +15,11 @@
 // Terms used as map keys contain a `Cell` only inside match states, which the compiler never
 // lets code use as values, so their ordering cannot change while they are in a map.
 #![allow(clippy::mutable_key_type)]
+// Heaps hold resources, which are not `Send` until the VM runs on several schedulers (DESIGN.md,
+// Heaps, stage 2); until then every `Arc` stays on one thread.
+#![allow(clippy::arc_with_non_send_sync)]
+// An `OwnedException` is large, but only returned when a process fails to start.
+#![allow(clippy::result_large_err)]
 
 extern crate alloc;
 

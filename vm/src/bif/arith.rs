@@ -36,7 +36,10 @@ fn num(ctx: &Ctx, t: &Term) -> Result<Num, Exception> {
 fn to_f64(ctx: &Ctx, n: &Num) -> Result<f64, Exception> {
     match n {
         Num::F(f) => Ok(*f),
-        Num::I(i) => i.to_f64().filter(|f| f.is_finite()).ok_or_else(|| ctx.badarith()),
+        Num::I(i) => i
+            .to_f64()
+            .filter(|f| f.is_finite())
+            .ok_or_else(|| ctx.badarith()),
     }
 }
 
@@ -52,7 +55,10 @@ fn big(ctx: &mut Ctx, b: BigInt) -> R {
     if b.bits() > MAX_BIG_BITS {
         return Err(ctx.system_limit());
     }
-    Ok({ let v = b; ctx.big(v) })
+    Ok({
+        let v = b;
+        ctx.big(v)
+    })
 }
 
 /// Shared shape of `+`, `-`, `*`: an `i64` fast path, else bignum or float.
@@ -139,7 +145,10 @@ pub fn rem(ctx: &mut Ctx, a: &[Term]) -> R {
 
 pub fn neg(ctx: &mut Ctx, a: &[Term]) -> R {
     match &a[0] {
-        Term::Int(i) => Ok(i.checked_neg().map(Term::Int).unwrap_or_else(|| { let v = -BigInt::from(*i); ctx.big(v) })),
+        Term::Int(i) => Ok(i.checked_neg().map(Term::Int).unwrap_or_else(|| {
+            let v = -BigInt::from(*i);
+            ctx.big(v)
+        })),
         Term::Big(_) => {
             let v = -ctx.heap().as_big(a[0]).expect("a bignum").clone();
             Ok(ctx.big(v))
@@ -151,13 +160,18 @@ pub fn neg(ctx: &mut Ctx, a: &[Term]) -> R {
 
 pub fn plus(ctx: &mut Ctx, a: &[Term]) -> R {
     if a[0].is_number() {
-        Ok(a[0].clone())
+        Ok(a[0])
     } else {
         Err(ctx.badarith())
     }
 }
 
-fn bitwise(ctx: &mut Ctx, a: &[Term], small: fn(i64, i64) -> i64, bigop: fn(&BigInt, &BigInt) -> BigInt) -> R {
+fn bitwise(
+    ctx: &mut Ctx,
+    a: &[Term],
+    small: fn(i64, i64) -> i64,
+    bigop: fn(&BigInt, &BigInt) -> BigInt,
+) -> R {
     if let (Term::Int(x), Term::Int(y)) = (&a[0], &a[1]) {
         return Ok(Term::Int(small(*x, *y)));
     }
@@ -247,7 +261,10 @@ pub fn bsr(ctx: &mut Ctx, a: &[Term]) -> R {
 
 pub fn abs(ctx: &mut Ctx, a: &[Term]) -> R {
     match &a[0] {
-        Term::Int(i) => Ok(i.checked_abs().map(Term::Int).unwrap_or_else(|| { let v = BigInt::from(*i).abs(); ctx.big(v) })),
+        Term::Int(i) => Ok(i.checked_abs().map(Term::Int).unwrap_or_else(|| {
+            let v = BigInt::from(*i).abs();
+            ctx.big(v)
+        })),
         Term::Big(_) => {
             let v = ctx.heap().as_big(a[0]).expect("a bignum").abs();
             Ok(ctx.big(v))
@@ -274,7 +291,7 @@ fn whole(ctx: &mut Ctx, f: f64) -> R {
 
 fn rounding(ctx: &mut Ctx, a: &[Term], op: fn(f64) -> f64) -> R {
     match &a[0] {
-        Term::Int(_) | Term::Big(_) => Ok(a[0].clone()),
+        Term::Int(_) | Term::Big(_) => Ok(a[0]),
         Term::Float(f) => whole(ctx, op(*f)),
         _ => Err(ctx.badarg()),
     }
@@ -299,11 +316,19 @@ pub fn ceil(ctx: &mut Ctx, a: &[Term]) -> R {
 
 pub fn max(ctx: &mut Ctx, a: &[Term]) -> R {
     // On equal values the first argument wins, as in Erlang.
-    Ok(if ctx.heap().cmp_term(a[1], a[0]) == Ordering::Greater { a[1].clone() } else { a[0].clone() })
+    Ok(if ctx.heap().cmp_term(a[1], a[0]) == Ordering::Greater {
+        a[1]
+    } else {
+        a[0]
+    })
 }
 
 pub fn min(ctx: &mut Ctx, a: &[Term]) -> R {
-    Ok(if ctx.heap().cmp_term(a[1], a[0]) == Ordering::Less { a[1].clone() } else { a[0].clone() })
+    Ok(if ctx.heap().cmp_term(a[1], a[0]) == Ordering::Less {
+        a[1]
+    } else {
+        a[0]
+    })
 }
 
 pub fn eq(ctx: &mut Ctx, a: &[Term]) -> R {

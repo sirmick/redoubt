@@ -11,7 +11,12 @@ fn arg(c: &Ctx, t: &Term) -> Result<f64, Exception> {
     match t {
         Term::Float(f) => Ok(*f),
         Term::Int(i) => Ok(*i as f64),
-        Term::Big(_) => c.heap().as_big(*t).and_then(num_traits::ToPrimitive::to_f64).filter(|f| f.is_finite()).ok_or_else(|| c.badarg()),
+        Term::Big(_) => c
+            .heap()
+            .as_big(*t)
+            .and_then(num_traits::ToPrimitive::to_f64)
+            .filter(|f| f.is_finite())
+            .ok_or_else(|| c.badarg()),
         _ => Err(c.badarg()),
     }
 }
