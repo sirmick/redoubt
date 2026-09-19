@@ -238,6 +238,18 @@ pub fn page() -> usize {
     at
 }
 
+/// `npages` contiguous pages of this process's own memory, all touched.
+pub fn many_pages(npages: usize) -> usize {
+    let flags = xous::MemoryFlags::R | xous::MemoryFlags::W;
+    let range = xous::map_memory(None, None, npages * 4096, flags).expect("map pages");
+    let at = range.as_mut_ptr() as usize;
+    for i in 0..npages {
+        // SAFETY: the first word of each page of a range this process just mapped read-write.
+        unsafe { ((at + i * 4096) as *mut u64).write_volatile(0) };
+    }
+    at
+}
+
 /// The first word of a page this process can read.
 pub fn peek(at: usize) -> u64 {
     // SAFETY: the caller passes a page mapped in this process; a `u64` read of its first word.

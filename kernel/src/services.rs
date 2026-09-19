@@ -766,7 +766,9 @@ impl SystemServices {
                 12, 18, 6, 11, 5, 10, 9,
             ];
 
-            MULTIPLY_DEBRUIJN_BIT_POSITION[((!v.wrapping_sub(1) & v) * 0x077CB531) >> 27]
+            // The multiply is a hash: it is meant to wrap, so say so, or a checked build
+            // panics here instead of scheduling (redoubt/README.md, "Debug assertions").
+            MULTIPLY_DEBRUIJN_BIT_POSITION[((!v.wrapping_sub(1) & v).wrapping_mul(0x077CB531)) >> 27]
         }
         // If there's only one thread runnable, run that one
         if thread_mask == 0 {
@@ -1715,14 +1717,15 @@ impl SystemServices {
         let current_pid = self.current_pid();
         assert_eq!(pid, current_pid);
 
+        // R4b: whatever this thread was waiting for is withdrawn, and every call it holds
+        // open fails its caller with `Dead`, before the thread's own state goes. It runs first,
+        // because a caller it wakes is one of the runnable threads read just below.
+        crate::message::thread_ending(self, pid, tid);
+
         let mut waiting_threads = match self.get_process_mut(pid)?.state {
             ProcessState::Running(x) => x,
             state => panic!("Process was in an invalid state: {:?}", state),
         };
-
-        // R4b: whatever this thread was waiting for is withdrawn, and every call it holds
-        // open fails its caller with `Dead`, before the thread's own state goes.
-        crate::message::thread_ending(self, pid, tid);
 
         // Destroy the thread at a hardware level
         let mut arch_process = ArchProcess::current();
