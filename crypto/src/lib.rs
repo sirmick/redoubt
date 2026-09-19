@@ -12,7 +12,7 @@
 //! raises `notsup`, and `crypto:supports/1` lists exactly what is here:
 //! - hashes: MD5, SHA-1, SHA-2 (224/256/384/512), SHA-3 (224/256/384/512);
 //! - MACs: HMAC over those hashes, Poly1305; PBKDF2-HMAC;
-//! - ciphers: AES-128/192/256 in CTR, CBC and ECB modes, ChaCha20;
+//! - ciphers: AES-128/192/256 in CTR, CBC, ECB and CFB (128- and 8-bit feedback) modes, ChaCha20;
 //!   AEAD: AES-128/256-GCM, ChaCha20-Poly1305;
 //! - key agreement: X25519, ECDH on P-256 and P-384, finite-field Diffie-Hellman;
 //! - signatures: Ed25519, ECDSA on P-256 and P-384, RSA (PKCS #1 v1.5 and PSS);
