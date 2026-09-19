@@ -8,7 +8,6 @@
 use core::fmt;
 
 use crate::args::KernelArguments;
-#[cfg(not(feature = "bao1x"))]
 use crate::io::SerialRead;
 use crate::io::SerialWrite;
 
@@ -69,7 +68,6 @@ pub fn init(serial: &'static mut dyn SerialWrite) {
         println!("    {}", arg);
     }
 
-    #[cfg(not(feature = "bao1x"))]
     {
         println!("=== Kernel Debug Shell Available ====");
         print_help();
@@ -81,7 +79,6 @@ pub fn init(serial: &'static mut dyn SerialWrite) {
 ///
 /// This should be called when a serial interface has new data, for example,
 /// on an interrupt.
-#[cfg(not(feature = "bao1x"))]
 pub fn process_characters<R: SerialRead>(serial: &mut R) {
     while let Some(b) = serial.getc() {
         println!("> {}", b as char);
@@ -89,7 +86,6 @@ pub fn process_characters<R: SerialRead>(serial: &mut R) {
     }
 }
 
-#[cfg(not(feature = "bao1x"))]
 fn handle_character(b: u8) {
     use crate::services::ArchProcess;
 
@@ -227,7 +223,6 @@ fn handle_character(b: u8) {
     }
 }
 
-#[cfg(not(feature = "bao1x"))]
 fn print_help() {
     println!("Xous Kernel Debug");
     println!("key | command");

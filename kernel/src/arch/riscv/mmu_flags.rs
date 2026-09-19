@@ -35,26 +35,16 @@ pub fn translate_flags(req_flags: MemoryFlags) -> MMUFlags {
     // Vexii implement A-flag. In this case, we should not just be setting every
     // readable page to "A", we should add a handler in the IRQ handler that sets "A"
     // when the page is actually read.
-    #[cfg(not(feature = "vexii-test"))]
     if req_flags & xous_kernel::MemoryFlags::R == xous_kernel::MemoryFlags::R {
         flags |= MMUFlags::R;
-    }
-    #[cfg(feature = "vexii-test")]
-    if req_flags & xous_kernel::MemoryFlags::R == xous_kernel::MemoryFlags::R {
-        flags |= MMUFlags::R | MMUFlags::A;
     }
 
     // TODO for vex-ii:
     // Vexii implement D-flag. In this case, we should not just be setting every
     // writeable page to "D", we should add a handler in the IRQ handler that sets "D"
     // when the page is actually writte.
-    #[cfg(not(feature = "vexii-test"))]
     if req_flags & xous_kernel::MemoryFlags::W == xous_kernel::MemoryFlags::W {
         flags |= MMUFlags::W;
-    }
-    #[cfg(feature = "vexii-test")]
-    if req_flags & xous_kernel::MemoryFlags::W == xous_kernel::MemoryFlags::W {
-        flags |= MMUFlags::W | MMUFlags::D;
     }
 
     if req_flags & xous_kernel::MemoryFlags::X == xous_kernel::MemoryFlags::X {

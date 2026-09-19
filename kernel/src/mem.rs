@@ -7,8 +7,6 @@ use xous_kernel::{MemoryFlags, MemoryRange, PID, arch::*};
 
 pub use crate::arch::mem::MemoryMapping;
 use crate::arch::process::Process;
-#[cfg(feature = "swap")]
-use crate::swap::SwapAlloc;
 
 #[derive(Debug)]
 // below suppresses warning from unused Move argument in hosted mode
@@ -78,10 +76,7 @@ pub struct MemoryManager {
     #[cfg(baremetal)]
     extra_regions: &'static [MemoryRangeExtra],
 }
-
-#[cfg(all(baremetal, feature = "swap"))]
-type RamAllocation = SwapAlloc;
-#[cfg(all(baremetal, not(feature = "swap")))]
+#[cfg(baremetal)]
 type RamAllocation = Option<PID>;
 
 impl Default for MemoryManager {
@@ -94,67 +89,6 @@ std::thread_local!(static MEMORY_MANAGER: core::cell::RefCell<MemoryManager> = c
 #[cfg(baremetal)]
 static MEMORY_MANAGER: crate::cell::KernelCell<MemoryManager> =
     crate::cell::KernelCell::new(MemoryManager::default_hack());
-
-#[cfg(feature = "swap")]
-/// Epoch rollover handling -- two options:
-///   - Fast epoch rollover, but long-lasting performance impact: just reset all counters to 0, and let the
-///     system re-discover LRU order based on usage patterns again
-///   - Slow epoch rollover, with no performance impact: go through all pages and "compact" the count down to
-///     the lowest level, resetting the epoch counter to the next available epoch. LRU patterns are
-///     maintained, but the search could take a long time.
-///
-/// In this implementation, we go with the slow epoch rollover, under the theory that (a) the
-/// actual size of the list to normalize is "small" (few hundred to thousands of
-/// entries) compared to the cost of re-discovering the LRU order by swapping out (e.g.
-/// encrypting and decrypting) 4096-byte pages. The implementation itself could be more
-/// efficient if we could, for example, make a full copy of the table, but we don't
-/// want to blow out the kernel stack or allocate a static structure for temporary
-/// data, so the entire algorithm is implemented with about a dozen entries of scratch
-/// space, iterating over the list until every item is renormalized.
-///
-/// The code is in the `mem` crate instead of `swap`, because it has to directly access the locally scoped
-/// MEM_ALLOCATIONS variable. The loop is likewise marked unsafe, because it accesses this static mut.
-pub fn renormalize_allocs(mm: &mut MemoryManager) -> u32 {
-    #[cfg(feature = "debug-swap-verbose")]
-    for (i, alloc) in mm.allocations.iter().enumerate() {
-        if alloc.get_raw_vpn() != 0 || alloc.get_timestamp() != 0 {
-            println!("  {:x}: {:08x}[{:x}]", i, alloc.get_raw_vpn(), alloc.get_timestamp());
-        }
-    }
-    // min_search_limit tracks the window of values we can renormalize in a single pass.
-    // It is guaranteed to increase by exactly RENORM_PASS_SIZE every pass, except for the final pass.
-    let mut min_search_limit = 0;
-    loop {
-        let mut ms = crate::utils::MinSet::new();
-        for d in mm.allocations.iter() {
-            if d.get_timestamp() >= min_search_limit {
-                ms.insert(d.get_timestamp());
-            }
-        }
-        // remap elements in d that match the minset
-        for d in mm.allocations.iter_mut() {
-            if let Some(i) = ms.index_of(d.get_timestamp()) {
-                d.set_timestamp(i as u32 + min_search_limit);
-            }
-        }
-        min_search_limit += crate::utils::RENORM_PASS_SIZE as u32;
-        if ms.max() == u32::MAX {
-            break;
-        }
-    }
-    #[cfg(feature = "debug-swap-verbose")]
-    for (i, alloc) in mm.allocations.iter().enumerate() {
-        if alloc.get_raw_vpn() != 0 || alloc.get_timestamp() != 0 {
-            println!("  {:x}: {:08x}[{:x}]", i, alloc.get_raw_vpn(), alloc.get_timestamp());
-        }
-    }
-    mm.allocations.iter().max().unwrap().get_timestamp()
-}
-
-/// Initialize the memory map.
-/// This will go through memory and map anything that the kernel is
-/// using to process 1, then allocate a pagetable for this process
-/// and place it at the usual offset.  The MMU will not be enabled yet,
 /// as the process entry has not yet been created.
 impl MemoryManager {
     const fn default_hack() -> Self {
@@ -264,24 +198,8 @@ impl MemoryManager {
         for range in self.extra_regions.iter() {
             extra_size += range.mem_size as usize / PAGE_SIZE;
         }
-        #[cfg(feature = "swap")]
-        // SAFETY: the loader placed a `mem_size`-entry runtime page table (RPT) at `rpt_base` (see BOOT.md).
-        unsafe {
-            self.allocations = slice::from_raw_parts_mut(rpt_base as *mut SwapAlloc, mem_size);
-            crate::swap::Swap::with_mut(|s| {
-                s.init_rpt(
-                    rpt_base,
-                    ((mem_size * core::mem::size_of::<loader::swap::SwapAlloc>() + PAGE_SIZE - 1)
-                        & !(PAGE_SIZE - 1))
-                        / PAGE_SIZE,
-                )
-            });
-        }
-        #[cfg(not(feature = "swap"))]
-        // SAFETY: as above; a `mem_size`-entry ownership table at `rpt_base`.
-        unsafe {
-            self.allocations = slice::from_raw_parts_mut(rpt_base as *mut Option<PID>, mem_size)
-        };
+        // SAFETY: the loader placed a `mem_size`-entry ownership table at `rpt_base`.
+        unsafe { self.allocations = slice::from_raw_parts_mut(rpt_base as *mut Option<PID>, mem_size) };
         // SAFETY: the loader placed an `extra_size`-entry table at `xpt_base` for the extra regions.
         unsafe { self.extra_allocations = slice::from_raw_parts_mut(xpt_base as *mut Option<PID>, extra_size) }
         Ok(())
@@ -293,19 +211,12 @@ impl MemoryManager {
     pub fn ram_used_by(&self, pid: PID) -> usize {
         let mut owned_bytes = 0;
         #[cfg(baremetal)]
-        #[cfg(not(feature = "swap"))]
         for owner in &self.allocations[0..self.ram_size / PAGE_SIZE] {
             if owner == &Some(pid) {
                 owned_bytes += PAGE_SIZE;
             }
         }
         #[cfg(baremetal)]
-        #[cfg(feature = "swap")]
-        for owner in &self.allocations[0..self.ram_size / PAGE_SIZE] {
-            if owner.is_pid(pid) {
-                owned_bytes += PAGE_SIZE;
-            }
-        }
         owned_bytes
     }
 
@@ -333,14 +244,6 @@ impl MemoryManager {
                 self.ram_size
             );
         };
-        #[cfg(feature = "swap")]
-        for o in 0..self.ram_size / PAGE_SIZE {
-            println!(
-                "        {:08x} => {:?}",
-                self.ram_size + o * PAGE_SIZE,
-                self.allocations[offset + o].get_pid()
-            );
-        }
 
         offset = 0;
 
@@ -367,85 +270,12 @@ impl MemoryManager {
     /// Allocate a single page to the given process. DOES NOT ZERO THE PAGE!!!
     /// This function CANNOT zero the page, as it hasn't been mapped yet.
     #[cfg(baremetal)]
-    #[cfg(not(feature = "swap"))]
     pub fn alloc_page(&mut self, pid: PID) -> Result<usize, xous_kernel::Error> {
         // First fit. (The previous next-fit search computed its starting point with `max`
         // where `min` was meant, so it always scanned from the start anyway.)
         let index = self.allocations.iter().position(Option::is_none).ok_or(xous_kernel::Error::OutOfMemory)?;
         self.allocations[index] = Some(pid);
         Ok(self.ram_start + index * PAGE_SIZE)
-    }
-
-    #[cfg(baremetal)]
-    #[cfg(feature = "swap")]
-    // Take a physical address and indicate that it's been queried so it doesn't get suggested as LRU any time
-    // soon. Addresses outside of RAM are just ignored.
-    pub fn touch(&mut self, paddr: usize) {
-        if paddr >= self.ram_start && paddr < self.ram_start + self.ram_size {
-            // SAFETY: swap-only. `touch` is SwapAlloc bookkeeping, accessed with interrupts off on one hart.
-            unsafe {
-                self.allocations[(paddr - self.ram_start) / PAGE_SIZE].touch();
-            }
-        }
-    }
-
-    #[cfg(baremetal)]
-    #[cfg(feature = "swap")]
-    pub fn memory_size(&self) -> usize { self.ram_size }
-
-    #[cfg(feature = "debug-swap")]
-    #[allow(dead_code)]
-    // SAFETY: swap-only. Returns the RPT address for the swapper; reads an owned field.
-    pub fn rpt_base(&self) -> usize { unsafe { self.allocations.as_ptr() as usize } }
-
-    #[cfg(feature = "debug-swap")]
-    #[allow(dead_code)]
-    /// This function is "improper" in that it returns a bogus value if the memory allocations are
-    /// out of range, but its purpose is only for debugging. This is not suitable for use in any
-    /// other context.
-    /// # Safety
-    /// Swap-only. The caller must hold the swap invariants (single hart, interrupts off).
-    pub unsafe fn get_timestamp(&self, paddr: usize) -> u32 {
-        if paddr >= self.ram_start && paddr < self.ram_start + self.ram_size {
-            // SAFETY: swap-only. `get_timestamp` reads SwapAlloc bookkeeping under the caller's contract.
-            unsafe {
-                self.allocations[(paddr - self.ram_start) / PAGE_SIZE].get_timestamp()
-            }
-        } else {
-            0xDEAD_BEEF
-        }
-    }
-
-    #[cfg(baremetal)]
-    #[cfg(feature = "swap")]
-    /// Similar to alloc_page(), but this implementation takes the vaddr being allocated so we
-    /// can do more detailed bookkeeping on least recently used pages.
-    pub fn alloc_page_oomable(
-        &mut self,
-        pid: PID,
-        vaddr: Option<usize>,
-    ) -> Result<usize, xous_kernel::Error> {
-        loop {
-            // Go through all RAM pages looking for a free page.
-            // println!("Allocating page for PID {}", pid);
-            // First fit, as in the non-swap `alloc_page`.
-            if let Some(index) = self.allocations.iter().position(|allocation| allocation.is_none()) {
-                // SAFETY: inherited; `SwapAlloc::update` is unsafe upstream without a stated contract.
-                unsafe { self.allocations[index].update(Some(pid), vaddr) };
-                return Ok(self.ram_start + index * PAGE_SIZE);
-            }
-            crate::swap::Swap::with_mut(|s| {
-                s.swap_reentrant_syscall(xous_kernel::SysCall::SwapOp(
-                    crate::swap::SwapAbi::HardOom as usize,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                    0,
-                ))
-            });
-        }
     }
 
     /// Find a virtual address in the current process that is big enough
@@ -567,10 +397,7 @@ impl MemoryManager {
                 as usize;
 
         // Grab the next available page.  This claims it for this process.
-        #[cfg(not(feature = "swap"))]
         let phys = self.alloc_page(pid)?;
-        #[cfg(feature = "swap")]
-        let phys = self.alloc_page_oomable(pid, Some(virt))?;
 
         // Actually perform the map.  At this stage, every physical page should be owned by us.
         if let Err(e) = crate::arch::mem::map_page_inner(
@@ -622,18 +449,8 @@ impl MemoryManager {
     /// Peripheral memory currently only exists on the bao1x target.
     #[allow(dead_code)]
     pub fn is_peripheral_ram(&self, _phys: usize) -> bool {
-        #[cfg(feature = "bao1x")]
-        let ret = _phys >= utralib::HW_IFRAM0_MEM
-            && _phys < utralib::HW_IFRAM0_MEM + utralib::HW_IFRAM0_MEM_LEN + utralib::HW_IFRAM1_MEM_LEN;
-        #[cfg(not(feature = "bao1x"))]
         let ret = false;
         ret
-    }
-
-    #[cfg(feature = "memmap-flash")]
-    pub fn is_mapped_flash(&self, virt: *mut u8) -> bool {
-        // true if the address starts with the bitmask of the virtual start of the MMAP region
-        (virt as usize & xous_kernel::arch::MMAP_VIRT_BASE) == xous_kernel::arch::MMAP_VIRT_BASE
     }
 
     /// Attempt to map the given physical address into the virtual address space
@@ -703,8 +520,6 @@ impl MemoryManager {
             // Device RAM allocation: search for contiguous block of physical RAM so we can share
             // the pages with e.g. DMA or other hardware resources.
             let pages_to_claim = size / PAGE_SIZE; // this is correct because only page-sized requests are allowed.
-            #[cfg(feature = "debug-swap")]
-            println!("Device RAM request. Searching for {} contiguous pages.", pages_to_claim);
 
             // Safety: is it safe to iterate through MEMORY_ALLOCATIONS like this? I'm not actually sure.
             // I suppose we could end up in trouble if the kernel is interrupted and the allocation table
@@ -732,8 +547,6 @@ impl MemoryManager {
                 if current_run >= pages_to_claim {
                     // success!
                     phys = start * PAGE_SIZE + self.ram_start;
-                    #[cfg(feature = "debug-swap")]
-                    println!("Block found starting at {:x}", phys);
                 } else {
                     return Err(xous_kernel::Error::OutOfMemory);
                 }
@@ -753,18 +566,8 @@ impl MemoryManager {
                 }
                 return Err(err);
             } else {
-                #[cfg(feature = "swap")]
-                if device_ram {
-                    let offset = (claim_phys - self.ram_start) / PAGE_SIZE;
-                    #[cfg(feature = "debug-swap")]
-                    println!("Address {:x} marked as wired", claim_phys);
-                    self.allocations[offset].set_wired();
-                }
             }
         }
-
-        #[cfg(feature = "debug-swap")]
-        println!("Mapping pa {:x} | va {:x} region of {} bytes", phys, virt as usize, size);
         // Actually perform the map.  At this stage, every physical page should be owned by us.
         for offset in (0..size).step_by(PAGE_SIZE) {
             if let Err(e) = crate::arch::mem::map_page_inner(
@@ -779,8 +582,6 @@ impl MemoryManager {
                     crate::arch::mem::unmap_page_inner(self, unmap_offset + virt as usize).ok();
                     self.release_page((unmap_offset + phys) as *mut usize, pid).ok();
                 }
-                #[cfg(feature = "debug-swap")]
-                println!("Error encountered in map_page_inner at last stage of mapping; releasing all pages");
                 return Err(e);
             }
         }
@@ -800,8 +601,6 @@ impl MemoryManager {
             }
 
             // sanity check it
-            #[cfg(feature = "debug-swap-verbose")]
-            crate::arch::mem::MemoryMapping::current().print_map();
         }
 
         crate::mem::memory_range(virt as usize, size)
@@ -985,60 +784,6 @@ impl MemoryManager {
             }
             Ok(())
         }
-        #[cfg(feature = "swap")]
-        fn action_inner_tracking(
-            owner_addr: &mut SwapAlloc,
-            pid: PID,
-            action: ClaimReleaseMove,
-            addr: usize,
-        ) -> Result<(), xous_kernel::Error> {
-            if let Some(current_pid) = owner_addr.get_pid() {
-                if current_pid != pid {
-                    // klog!(
-                    //     "In claim_or_release({}, {}, {:?}) -- addr is owned by {} not {}",
-                    //     owner_addr.map(|v| v.get()).unwrap_or_default(),
-                    //     pid,
-                    //     action,
-                    //     current_pid,
-                    //     pid
-                    // );
-                    if let ClaimReleaseMove::Move(existing_pid) = action {
-                        if existing_pid != current_pid {
-                            return Err(xous_kernel::Error::MemoryInUse);
-                        }
-                    } else {
-                        println!("ERR: {:?} != {:?}", current_pid, pid);
-                        return Err(xous_kernel::Error::MemoryInUse);
-                    }
-                }
-            }
-            match action {
-                ClaimReleaseMove::Claim => {
-                    if owner_addr.is_none() {
-                        // SAFETY: swap-only. `SwapAlloc::update` records ownership; single hart, interrupts off.
-                        unsafe { owner_addr.update(Some(pid), Some(addr)) };
-                    } else {
-                        // even self-claims should be denied
-                        println!(
-                            "ERR: swap claim already in use by {:x}({:?}) (requester: {:?})",
-                            owner_addr.get_raw_vpn(),
-                            owner_addr.get_pid(),
-                            pid
-                        );
-                        return Err(xous_kernel::Error::MemoryInUse);
-                    }
-                }
-                ClaimReleaseMove::Move(_) => {
-                    // SAFETY: swap-only, as above.
-                    unsafe { owner_addr.update(Some(pid), Some(addr)) };
-                }
-                ClaimReleaseMove::Release => {
-                    // SAFETY: swap-only, as above.
-                    unsafe { owner_addr.update(None, None) };
-                }
-            }
-            Ok(())
-        }
 
         let addr = addr as usize;
 
@@ -1051,10 +796,7 @@ impl MemoryManager {
         // Happy path: The address is in main RAM
         if self.is_main_memory(addr as *mut u8) {
             offset += (addr - self.ram_start) / PAGE_SIZE;
-            #[cfg(not(feature = "swap"))]
             return action_inner(&mut self.allocations[offset], pid, action, false, addr);
-            #[cfg(feature = "swap")]
-            return action_inner_tracking(&mut self.allocations[offset], pid, action, addr);
         }
 
         offset = 0;
@@ -1089,12 +831,6 @@ impl MemoryManager {
 
     /// Mark a given address as no longer being owned by the specified process ID
     fn release_page(&mut self, addr: *mut usize, pid: PID) -> Result<(), xous_kernel::Error> {
-        self.claim_release_move(addr, pid, ClaimReleaseMove::Release)
-    }
-
-    #[cfg(feature = "swap")]
-    /// Same as `release_page`, but with public visibility when the `swap` feature is active
-    pub fn release_page_swap(&mut self, addr: *mut usize, pid: PID) -> Result<(), xous_kernel::Error> {
         self.claim_release_move(addr, pid, ClaimReleaseMove::Release)
     }
 
@@ -1140,12 +876,9 @@ impl MemoryManager {
             crate::arch::mem::for_each_lent_frame(|phys| {
                 if self.is_main_memory(phys as *mut u8) {
                     let idx = (phys - self.ram_start) / PAGE_SIZE;
-                    #[cfg(not(feature = "swap"))]
                     {
                         self.allocations[idx] = Some(kernel);
                     }
-                    #[cfg(feature = "swap")]
-                    self.allocations[idx].reparent(kernel);
                 } else if let Some(idx) = self.extra_index(phys) {
                     self.extra_allocations[idx] = Some(kernel);
                 }
@@ -1153,13 +886,8 @@ impl MemoryManager {
 
             // Pass 2: free every frame still owned by this process.
             for idx in 0..self.allocations.len() {
-                #[cfg(not(feature = "swap"))]
                 if self.allocations[idx] == Some(pid) {
                     self.allocations[idx] = None;
-                }
-                #[cfg(feature = "swap")]
-                if self.allocations[idx].is_pid(pid) {
-                    self.allocations[idx].update(None, None);
                 }
             }
             for idx in 0..self.extra_allocations.len() {
@@ -1213,7 +941,7 @@ impl MemoryManager {
         Ok(())
     }
 
-    #[cfg(all(baremetal, any(target_arch = "riscv32", target_arch = "riscv64"), not(feature = "bao1x")))]
+    #[cfg(all(baremetal, any(target_arch = "riscv32", target_arch = "riscv64")))]
     pub fn check_for_duplicates(&self) {
         use crate::services::SystemServices;
 
@@ -1241,9 +969,6 @@ impl MemoryManager {
                         Ok(Some(virt)) => {
                             let allocation_offset = (phys - self.ram_start) / PAGE_SIZE;
                             let existing_owner = &self.allocations[allocation_offset];
-                            #[cfg(feature = "swap")]
-                            let eo = &existing_owner.get_pid();
-                            #[cfg(not(feature = "swap"))]
                             let eo = existing_owner;
                             if eo != &Some(pid) {
                                 let is_lent = {

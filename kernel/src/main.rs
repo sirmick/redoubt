@@ -19,6 +19,7 @@ mod arch;
 #[macro_use]
 mod args;
 mod cell;
+#[cfg(baremetal)]
 mod grants;
 mod io;
 mod irq;
@@ -29,9 +30,6 @@ mod server;
 mod services;
 mod syscall;
 mod utils;
-
-#[cfg(feature = "swap")]
-mod swap;
 
 use services::SystemServices;
 use xous_kernel::*;
@@ -147,5 +145,5 @@ pub extern "C" fn kmain() {
 
 /// The main entrypoint when run in hosted mode. When running in embedded mode,
 /// this function does not exist.
-#[cfg(all(not(baremetal)))]
+#[cfg(not(baremetal))]
 fn main() { kmain(); }
