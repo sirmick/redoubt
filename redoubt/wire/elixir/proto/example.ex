@@ -7,9 +7,7 @@ defmodule Redoubt.Wire.Proto.Example do
   Codec for the `example` protocol. A request or reply is `{name, fields}`, with `fields` a
   map holding exactly the table's non-handle fields; an error reply decodes to
   `{:failed, error}`; `:malformed` (code 1) is every protocol's error for a request that
-  does not decode. Handle kinds in `layout/1` are documentation, checked by use (a
-  handle of the wrong kind gets `WrongObject` on first use). Framing and errors:
-  `Redoubt.Wire`.
+  does not decode. Framing and errors: `Redoubt.Wire`.
   """
   alias Redoubt.Wire, as: W
 
@@ -45,8 +43,15 @@ defmodule Redoubt.Wire.Proto.Example do
 
   @doc """
   A message's layout: `{opcode, shape, fields, handles, reply}`, where `fields` lists
-  `{name, type}` in order, `handles` lists `{name, kind}` by slot, and `reply` is
+  `{name, type}` in order, `handles` lists the handles' names by slot, and `reply` is
   `{fields, handles}`.
+
+  Handle kinds, from the table: documentation, checked by use (a handle of the wrong kind
+  gets `WrongObject` on first use).
+
+  - `grant`: `range` (slot 0, endpoint), `reply` (slot 1, endpoint)
+  - `grant` reply: `key` (slot 0, budget)
+  - `last`: `key` (slot 0, process)
   """
   def layout(:ping), do: {1, :inline, [], [], {[], []}}
   def layout(:pong), do: {2, :inline, [{:seq, :u64}, {:flags, :u32}], [], {[], []}}
@@ -54,9 +59,9 @@ defmodule Redoubt.Wire.Proto.Example do
   def layout(:wide), do: {4, :buffer, [{:a, :u64}, {:b, :u32}, {:c, :u8}], [], {[], []}}
   def layout(:named), do: {5, :buffer, [{:id, :u32}, {:name, :string}], [], {[{:id, :u32}], []}}
   def layout(:blob), do: {6, :buffer, [{:offset, :u64}, {:data, :bytes}, {:label, :string}], [], {[], []}}
-  def layout(:grant), do: {7, :inline, [{:pages, :u32}], [{:range, :endpoint}, {:reply, :endpoint}], {[], [{:key, :budget}]}}
+  def layout(:grant), do: {7, :inline, [{:pages, :u32}], [:range, :reply], {[], [:key]}}
   def layout(:read), do: {8, :buffer, [{:offset, :u64}, {:count, :u32}], [], {[{:data, :bytes}], []}}
-  def layout(:last), do: {4294967295, :buffer, [{:note, :string}], [{:key, :process}], {[{:n, :u64}, {:m, :u32}], []}}
+  def layout(:last), do: {4294967295, :buffer, [{:note, :string}], [:key], {[{:n, :u64}, {:m, :u32}], []}}
   def layout(_), do: nil
 
   @doc "Encodes a request: `{:ok, words, buffer}` or `{:error, reason}`."
@@ -119,5 +124,5 @@ defmodule Redoubt.Wire.Proto.Example do
   defp read(:reply, 8, <<n_data::little-32, v_data::binary-size(n_data), rest::binary>>), do: {:ok, :read, %{data: v_data}, rest}
   defp read(:request, 4294967295, <<n_note::little-16, v_note::binary-size(n_note), rest::binary>>), do: W.utf8([v_note], {:ok, :last, %{note: v_note}, rest})
   defp read(:reply, 4294967295, <<v_n::little-64, v_m::little-32, rest::binary>>), do: {:ok, :last, %{n: v_n, m: v_m}, rest}
-  defp read(_, _, _), do: {:error, :malformed}
+  defp read(_, _, _), do: {:error, :short_fields}
 end

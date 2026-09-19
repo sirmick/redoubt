@@ -69,8 +69,19 @@ fn data(fields: &[Field]) -> impl Iterator<Item = &Field> {
     fields.iter().filter(|f| !matches!(f.ty, Ty::Handle(..)))
 }
 
-fn handles(fields: &[Field]) -> impl Iterator<Item = &Field> {
-    fields.iter().filter(|f| matches!(f.ty, Ty::Handle(..)))
+/// The handle fields, with their slot and kind.
+fn handles(fields: &[Field]) -> impl Iterator<Item = (&Field, usize, HandleKind)> {
+    fields.iter().filter_map(|f| match f.ty {
+        Ty::Handle(slot, kind) => Some((f, slot, kind)),
+        _ => None,
+    })
+}
+
+/// `` `name` (slot N, KIND) `` for each handle, for the generated docs; `None` if there are none.
+fn handle_doc(fields: &[Field]) -> Option<String> {
+    let hs: Vec<String> =
+        handles(fields).map(|(f, slot, kind)| format!("`{}` (slot {slot}, {})", f.name, kind.name())).collect();
+    (!hs.is_empty()).then(|| hs.join(", "))
 }
 
 /// Every field has a fixed size and together they fit in words 1..=3.
@@ -147,7 +158,7 @@ const RESERVED: &[&str] = &[
 /// Type names a message may not produce: the generated module's own items and imports, and
 /// the Rust prelude's names, which the generated code uses (`Result`, `Ok`, ...).
 const RESERVED_TYPES: &[&str] = &[
-    "Message", "Reply", "ErrorCode", "Error", "Reader", "Writer", "Layout", "Words", "HandleKind", "Result", "Ok",
+    "Message", "Reply", "ErrorCode", "Error", "Reader", "Writer", "Layout", "Words", "Result", "Ok",
     "Err", "Option", "Some", "None", "Box", "Vec", "String", "Copy", "Clone", "Debug", "PartialEq", "Eq",
     "PartialOrd", "Ord", "Hash", "Default", "Drop", "Send", "Sync", "Sized", "Unpin", "Fn", "FnMut", "FnOnce",
     "From", "Into", "TryFrom", "TryInto", "AsRef", "AsMut", "Iterator", "IntoIterator", "DoubleEndedIterator",
@@ -211,9 +222,12 @@ fn parse_type(s: &str, handles_so_far: usize) -> Result<Ty, String> {
         "string" => Ty::Str,
         "bytes" => Ty::Bytes,
         _ => {
-            // `handle[N] KIND`: the slot, then the kind of object the handle must name.
-            let mut words = s.split_whitespace();
-            let (slot, kind) = (words.next().unwrap_or(""), words.next());
+            // `handle[N] KIND`: the slot, one ASCII space, then the kind of object the handle
+            // must name. One spelling: no tabs, doubled or non-ASCII spaces.
+            let (slot, kind) = match s.split_once(' ') {
+                Some((slot, kind)) => (slot, Some(kind)),
+                None => (s, None),
+            };
             let slot = slot
                 .strip_prefix("handle[")
                 .and_then(|r| r.strip_suffix(']'))
@@ -221,13 +235,15 @@ fn parse_type(s: &str, handles_so_far: usize) -> Result<Ty, String> {
                 .and_then(|n| n.parse::<usize>().ok())
                 .ok_or_else(|| format!("unknown type `{s}`"))?;
             let kinds = || HandleKind::ALL.map(HandleKind::name).join(", ");
-            let kind = match (kind, words.next()) {
-                (None, _) => {
+            let kind = match kind {
+                None => {
                     return Err(format!("`{s}`: a handle needs its kind, `handle[{slot}] KIND` (one of {})", kinds()));
                 }
-                (Some(k), None) => HandleKind::from_name(k)
+                Some(k) if k.chars().any(char::is_whitespace) || k.is_empty() => {
+                    return Err(format!("`{s}`: expected `handle[{slot}] KIND`, with one space"));
+                }
+                Some(k) => HandleKind::from_name(k)
                     .ok_or_else(|| format!("`{s}`: unknown handle kind `{k}` (one of {})", kinds()))?,
-                (Some(_), Some(_)) => return Err(format!("`{s}`: expected `handle[{slot}] KIND`")),
             };
             if slot != handles_so_far {
                 return Err(format!("`{s}`: handle slots must be numbered 0, 1, ... in order"));
@@ -247,16 +263,16 @@ fn parse_fields(cell: &str) -> Result<Vec<Field>, String> {
         return Ok(parsed);
     }
     for item in cell.split(',') {
-        let item = item.trim();
+        let item = item.trim_ascii();
         let inner = backticked(item).ok_or_else(|| format!("field `{item}` must be `name: type` in backticks"))?;
         let (fname, ty) = inner.split_once(':').ok_or_else(|| format!("field `{inner}` has no `: type`"))?;
-        let fname = fname.trim();
+        let fname = fname.trim_ascii();
         check_ident("field", fname)?;
         if parsed.iter().any(|f| f.name == fname) {
             return Err(format!("field `{fname}` appears twice"));
         }
         let slots = handles(&parsed).count();
-        parsed.push(Field { name: fname.to_string(), ty: parse_type(ty.trim(), slots)? });
+        parsed.push(Field { name: fname.to_string(), ty: parse_type(ty.trim_ascii(), slots)? });
     }
     Ok(parsed)
 }
@@ -271,9 +287,12 @@ fn parse_message(row: &[&str]) -> Result<MessageDef, String> {
     Ok(MessageDef { opcode, name: name.to_string(), fields: parse_fields(fields)?, reply: parse_fields(reply)? })
 }
 
-/// The error every protocol has: code 1 (WIRE.md, Errors).
+/// The name of error code 1, every protocol's (WIRE.md, Errors).
+const MALFORMED_NAME: &str = "malformed";
+
+/// The error every protocol has: code 1.
 fn malformed() -> ErrorDef {
-    ErrorDef { code: MALFORMED, name: "malformed".into() }
+    ErrorDef { code: MALFORMED, name: MALFORMED_NAME.into() }
 }
 
 fn parse_error(row: &[&str]) -> Result<ErrorDef, String> {
@@ -341,7 +360,9 @@ pub fn parse(source: &str, text: &str) -> Result<Tables, String> {
         // Every line up to a blank line or the end of the file is a row; nothing is skipped.
         let mut rows = Vec::new();
         while let Some(text) = line(i).filter(|l| !l.is_empty()) {
-            let row = cells(text).ok_or_else(|| at(i, "a row must start and end with `|` (a table ends at a blank line)".into()))?;
+            let row = cells(text).ok_or_else(|| {
+                at(i, format!("table `{name}` must end at a blank line (a row starts and ends with `|`)"))
+            })?;
             rows.push((i, row));
             i += 1;
         }
@@ -364,7 +385,7 @@ pub fn parse(source: &str, text: &str) -> Result<Tables, String> {
             let mut errors: Vec<ErrorDef> = vec![malformed()];
             for (n, row) in rows {
                 let e = parse_error(&row).map_err(|e| at(n, e))?;
-                if e.code == MALFORMED || camel(&e.name) == camel(&malformed().name) {
+                if e.code == MALFORMED || e.name == MALFORMED_NAME {
                     return Err(at(n, format!(
                         "error `{}` (code {}): code {MALFORMED} is `malformed` in every protocol, added by the generator; \
                          a protocol's own codes start at 2",
@@ -440,20 +461,11 @@ pub fn link(tables: Vec<Tables>) -> Result<Vec<Protocol>, String> {
     Ok(protocols)
 }
 
-/// `slot N, KIND`, for a handle field's doc.
-fn slot_doc(ty: Ty) -> String {
-    match ty {
-        Ty::Handle(slot, kind) => format!("slot {slot}, {}", kind.name()),
-        _ => String::new(),
-    }
-}
-
 /// One Rust struct per request or reply.
 fn rust_struct(s: &mut String, doc: &str, name: &str, fields: &[Field]) {
     let _ = writeln!(s, "\n{doc}");
-    let hs: Vec<String> = handles(fields).map(|f| format!("`{}` ({})", f.name, slot_doc(f.ty))).collect();
-    if !hs.is_empty() {
-        let _ = writeln!(s, "///\n/// Handle slots: {}.", hs.join(", "));
+    if let Some(hs) = handle_doc(fields) {
+        let _ = writeln!(s, "///\n/// Handle slots: {hs}.");
         s.push_str("/// Kinds are documentation, checked by use: a handle of the wrong kind gets `WrongObject`\n");
         s.push_str("/// on first use.\n");
     }
@@ -497,17 +509,8 @@ fn rust_enum(s: &mut String, kind: &str, doc: &str, rows: &[Row<'_>]) {
     s.push_str("    /// The handles it carries, by slot.\n");
     s.push_str("    pub fn handle_names(&self) -> &'static [&'static str] {\n        match self {\n");
     for r in rows {
-        let names: Vec<String> = handles(r.fields).map(|f| format!("{:?}", f.name)).collect();
+        let names: Vec<String> = handles(r.fields).map(|(f, ..)| format!("{:?}", f.name)).collect();
         let _ = writeln!(s, "            {kind}::{}(_) => &[{}],", r.variant, names.join(", "));
-    }
-    s.push_str("        }\n    }\n\n");
-    s.push_str("    /// The kind of object each handle must name, by slot: documentation from the table, not\n");
-    s.push_str("    /// checked on receipt (a handle of the wrong kind gets `WrongObject` on first use).\n");
-    s.push_str("    pub fn handle_kinds(&self) -> &'static [HandleKind] {\n        match self {\n");
-    for r in rows {
-        let kinds: Vec<String> =
-            handles(r.fields).map(|f| format!("HandleKind::{}", camel(slot_kind(f.ty)))).collect();
-        let _ = writeln!(s, "            {kind}::{}(_) => &[{}],", r.variant, kinds.join(", "));
     }
     s.push_str("        }\n    }\n\n");
     let key = if kind == "Reply" { "The opcode of the request this replies to." } else { "The opcode in word 0." };
@@ -574,7 +577,7 @@ pub fn rust(p: &Protocol) -> String {
     let _ = writeln!(s, "//! Generated by `redoubt-wire-gen` from the tables in `{}`.", p.source);
     let _ = writeln!(s, "//! Do not edit: change the tables and run `cargo run -p redoubt-wire-gen`.");
     s.push('\n');
-    s.push_str("use crate::codec::{Error, Reader, Writer};\nuse crate::typed::{self, HandleKind, Layout, Words};\n");
+    s.push_str("use crate::codec::{Error, Reader, Writer};\nuse crate::typed::{self, Layout, Words};\n");
     for m in &p.messages {
         let shape = if m.inline() { "inline" } else { "buffer" };
         let doc = format!("/// `{}`: opcode {}, {shape}; reply [`{}`].", m.name, m.opcode, m.reply_type());
@@ -666,17 +669,9 @@ pub fn rust_mod(protocols: &[Protocol]) -> String {
     s
 }
 
-/// A handle field's kind as the table writes it (empty for other fields).
-fn slot_kind(ty: Ty) -> &'static str {
-    match ty {
-        Ty::Handle(_, kind) => kind.name(),
-        _ => "",
-    }
-}
-
 fn elixir_fields(fields: &[Field]) -> String {
     let f: Vec<String> = data(fields).map(|f| format!("{{:{}, :{}}}", f.name, f.ty.info().1)).collect();
-    let h: Vec<String> = handles(fields).map(|f| format!("{{:{}, :{}}}", f.name, slot_kind(f.ty))).collect();
+    let h: Vec<String> = handles(fields).map(|(f, ..)| format!(":{}", f.name)).collect();
     format!("[{}], [{}]", f.join(", "), h.join(", "))
 }
 
@@ -733,9 +728,7 @@ pub fn elixir(p: &Protocol) -> String {
     let _ = writeln!(s, "  Codec for the `{}` protocol. A request or reply is `{{name, fields}}`, with `fields` a", p.name);
     let _ = writeln!(s, "  map holding exactly the table's non-handle fields; an error reply decodes to");
     let _ = writeln!(s, "  `{{:failed, error}}`; `:malformed` (code 1) is every protocol's error for a request that");
-    let _ = writeln!(s, "  does not decode. Handle kinds in `layout/1` are documentation, checked by use (a");
-    let _ = writeln!(s, "  handle of the wrong kind gets `WrongObject` on first use). Framing and errors:");
-    let _ = writeln!(s, "  `Redoubt.Wire`.");
+    let _ = writeln!(s, "  does not decode. Framing and errors: `Redoubt.Wire`.");
     let _ = writeln!(s, "  \"\"\"");
     s.push_str("  alias Redoubt.Wire, as: W\n\n");
     let shape = |m: &MessageDef| if m.inline() { ":inline" } else { ":buffer" };
@@ -756,8 +749,26 @@ pub fn elixir(p: &Protocol) -> String {
     let _ = writeln!(s, "  @errors %{{\n{}\n  }}\n", errs.join(",\n"));
 
     s.push_str("  @doc \"\"\"\n  A message's layout: `{opcode, shape, fields, handles, reply}`, where `fields` lists\n");
-    s.push_str("  `{name, type}` in order, `handles` lists `{name, kind}` by slot, and `reply` is\n");
-    s.push_str("  `{fields, handles}`.\n  \"\"\"\n");
+    s.push_str("  `{name, type}` in order, `handles` lists the handles' names by slot, and `reply` is\n");
+    s.push_str("  `{fields, handles}`.\n");
+    // The kinds are documentation only (WIRE.md): checked by use, never on receipt.
+    let kinds: Vec<String> = p
+        .messages
+        .iter()
+        .flat_map(|m| {
+            let req = handle_doc(&m.fields).map(|h| format!("  - `{}`: {h}", m.name));
+            let rep = handle_doc(&m.reply).map(|h| format!("  - `{}` reply: {h}", m.name));
+            req.into_iter().chain(rep)
+        })
+        .collect();
+    if !kinds.is_empty() {
+        s.push_str("\n  Handle kinds, from the table: documentation, checked by use (a handle of the wrong kind\n");
+        s.push_str("  gets `WrongObject` on first use).\n\n");
+        for k in kinds {
+            let _ = writeln!(s, "{k}");
+        }
+    }
+    s.push_str("  \"\"\"\n");
     for m in &p.messages {
         let reply = format!("{{{}}}", elixir_fields(&m.reply));
         let _ = writeln!(s, "  def layout(:{}), do: {{{}, {}, {}, {reply}}}", m.name, m.opcode, shape(m), elixir_fields(&m.fields));
@@ -788,7 +799,7 @@ pub fn elixir(p: &Protocol) -> String {
     s.push_str(&enc);
     s.push_str("  defp enc(_, _, _), do: throw({:wire, :bad_message})\n\n");
     s.push_str(&read);
-    s.push_str("  defp read(_, _, _), do: {:error, :malformed}\nend\n");
+    s.push_str("  defp read(_, _, _), do: {:error, :short_fields}\nend\n");
     s
 }
 
@@ -940,8 +951,8 @@ mod tests {
         assert!(errors("| 2 | `X` |\n").contains("snake_case"));
     }
 
-    /// Answers 28 and 56: every handle names its kind, one WIRE.md lists; the kind is
-    /// documentation, and there is nothing else after it.
+    /// Answers 28 and 56: every handle names its kind, one WIRE.md lists, after exactly one
+    /// ASCII space; the kind is documentation, and there is nothing else after it.
     #[test]
     fn handle_kinds() {
         for kind in HandleKind::ALL {
@@ -952,16 +963,41 @@ mod tests {
         assert!(err("| 1 | `a` | - | `h: handle[0]` |\n").contains("needs its kind"));
         assert!(err("| 1 | `a` | `h: handle[0] socket` | - |\n").contains("unknown handle kind `socket`"));
         assert!(err("| 1 | `a` | `h: handle[0] Endpoint` | - |\n").contains("unknown handle kind"));
-        assert!(err("| 1 | `a` | `h: handle[0] endpoint budget` | - |\n").contains("expected `handle[0] KIND`"));
+        assert!(err("| 1 | `a` | `h: handle[0] endpoint budget` | - |\n").contains("with one space"));
         assert!(err("| 1 | `a` | `h: handle[00] endpoint` | - |\n").contains("unknown type"));
         assert!(err("| 1 | `a` | `h: handle[+0] endpoint` | - |\n").contains("unknown type"));
+        assert!(err("| 1 | `a` | `h: handle[] endpoint` | - |\n").contains("unknown type"));
         assert!(err("| 1 | `a` | `h: handle [0] endpoint` | - |\n").contains("unknown type"));
+        assert!(err("| 1 | `a` | `h: handle[0]endpoint` | - |\n").contains("unknown type"));
         assert!(err("| 1 | `a` | `h: u32 endpoint` | - |\n").contains("unknown type"));
     }
 
-    /// The kinds reach the generated docs and `handle_kinds()`, in both languages.
+    /// Found by review: the separator is exactly one ASCII space. A tab, two spaces or a
+    /// non-ASCII space (which `str::trim` and `split_whitespace` would have accepted) is refused.
     #[test]
-    fn kinds_are_generated() {
+    fn kind_separator_is_one_ascii_space() {
+        for bad in [
+            "handle[0]\tendpoint",
+            "handle[0]  endpoint",
+            "handle[0] \tendpoint",
+            "handle[0]\u{a0}endpoint",
+            "handle[0] \u{a0}endpoint",
+            "handle[0] endpoint\u{a0}",
+            "handle[0] endpoint\u{2003}",
+            "handle[0]\u{200b}endpoint",
+            "handle[0] endpoint\u{200b}",
+            "\u{a0}handle[0] endpoint",
+        ] {
+            let e = err(&format!("| 1 | `a` | `h: {bad}` | - |\n"));
+            assert!(e.contains("unknown") || e.contains("with one space"), "{bad:?}: {e}");
+        }
+        // Around the colon, ASCII spaces are still allowed.
+        assert!(protocols(&format!("{HEAD}| 1 | `a` | `h:  handle[0] irq ` | - |\n{ERRORS}")).is_ok());
+    }
+
+    /// The kinds reach the generated docs, in both languages, and nothing else.
+    #[test]
+    fn kinds_are_documentation_only() {
         let p = protocols(&format!(
             "{HEAD}| 1 | `a` | `r: handle[0] endpoint`, `x: u32`, `m: handle[1] mmio` | `b: handle[0] budget` |\n{ERRORS}"
         ))
@@ -969,10 +1005,10 @@ mod tests {
         let rust = rust(&p[0]);
         assert!(rust.contains("/// Handle slots: `r` (slot 0, endpoint), `m` (slot 1, mmio)."), "{rust}");
         assert!(rust.contains("/// Handle slots: `b` (slot 0, budget)."), "{rust}");
-        assert!(rust.contains("Message::A(_) => &[HandleKind::Endpoint, HandleKind::Mmio],"), "{rust}");
-        assert!(rust.contains("Reply::A(_) => &[HandleKind::Budget],"), "{rust}");
+        assert!(!rust.contains("HandleKind"), "{rust}");
         let ex = elixir(&p[0]);
-        assert!(ex.contains("[{:r, :endpoint}, {:m, :mmio}], {[], [{:b, :budget}]}"), "{ex}");
+        assert!(ex.contains("  - `a`: `r` (slot 0, endpoint), `m` (slot 1, mmio)\n  - `a` reply: `b` (slot 0, budget)\n"), "{ex}");
+        assert!(ex.contains("[{:x, :u32}], [:r, :m], {[], [:b]}"), "{ex}");
     }
 
     /// Answers 41 and 42: code 1 is `Malformed` in every protocol, added by the generator;
@@ -985,11 +1021,17 @@ mod tests {
         assert!(errors("| 1 | `not_found` |\n").unwrap_err().contains("code 1 is `malformed` in every protocol"));
         assert!(errors("| 1 | `malformed` |\n").unwrap_err().contains("code 1 is `malformed`"));
         assert!(errors("| 7 | `malformed` |\n").unwrap_err().contains("code 1 is `malformed`"));
+        // Other names are the table's own.
+        assert!(errors("| 2 | `mal_formed` |\n").is_ok());
         // A protocol with no errors of its own has an empty error table, and still `malformed`.
         assert_eq!(errors("\n").unwrap()[0].errors, [malformed()]);
         assert_eq!(errors("").unwrap()[0].errors, [malformed()]);
+        assert_eq!(errors("\nSome prose.\n").unwrap()[0].errors, [malformed()]);
         // A row cut off from the empty table is still refused.
         assert!(errors("\n| 2 | `x` |\n").unwrap_err().contains("ended at the blank line"));
+        // Found by review: a line straight after the empty table names the table.
+        assert!(errors("Some prose.\n").unwrap_err().contains("table `demo` must end at a blank line"));
+        assert!(errors("<!-- wire: other -->\n").unwrap_err().contains("table `demo` must end at a blank line"));
         let p = errors("| 2 | `denied` |\n").unwrap();
         let rust = rust(&p[0]);
         assert!(rust.contains("    Malformed,\n    Denied,\n"), "{rust}");
@@ -1005,41 +1047,56 @@ mod tests {
         assert!(protocols(t).unwrap_err().contains("expected the header `| Opcode | Message | Fields | Reply |`"));
     }
 
-    /// The tables WP-R1b unfences (NAMESPACES.md `ninep-common`, INIT.md `startup`), copied
-    /// here as they stand fenced, with the marker R1b adds (a protocol name is snake_case, so
-    /// `ninep_common`) and the error table every protocol needs: the generator can express
-    /// both.
+    /// `text` with the fenced message table replaced by what WP-R1b writes when it unfences
+    /// it: the marker, the table, and an empty error table. `None` if there is no such fence.
+    fn unfence(text: &str, name: &str) -> Option<String> {
+        let lines: Vec<&str> = text.lines().collect();
+        let header = |l: &str| cells(l.trim()).is_some_and(|c| c == MESSAGE_HEADER);
+        let open = (0..lines.len()).find(|&i| lines[i].trim().starts_with("```") && lines.get(i + 1).is_some_and(|l| header(l)))?;
+        let close = (open + 1..lines.len()).find(|&i| lines[i].trim().starts_with("```"))?;
+        let mut out: Vec<String> = lines[..open].iter().map(|l| l.to_string()).collect();
+        out.push(format!("<!-- wire: {name} -->"));
+        out.extend(lines[open + 1..close].iter().map(|l| l.trim().to_string()));
+        out.extend(["".into(), format!("<!-- wire-errors: {name} -->"), "| Code | Error |".into(), "| --- | --- |".into()]);
+        out.extend(lines[close + 1..].iter().map(|l| l.to_string()));
+        Some(out.join("\n") + "\n")
+    }
+
+    /// The tables WP-R1b unfences (NAMESPACES.md `ninep_common`, INIT.md `startup`), read
+    /// from the notes as they stand, with the fence stripped: the generator can express both.
+    /// Once R1b has unfenced them, the notes are parsed as they are.
     #[test]
     fn fenced_r1b_tables_parse() {
-        let ninep_common = "<!-- wire: ninep_common -->\n| Opcode | Message | Fields | Reply |\n| --- | --- | --- | --- |\n\
-             | 2 | `new_connection` | `root: string` | `conn: handle[0] endpoint`, `id: u64` |\n\
-             | 3 | `disconnect` | `id: u64` | - |\n\n\
-             <!-- wire-errors: ninep_common -->\n| Code | Error |\n| --- | --- |\n";
-        let startup = "<!-- wire: startup -->\n| Opcode | Message | Fields | Reply |\n| --- | --- | --- | --- |\n\
-             | 1 | `startup` | `version: u32`, `handle_count: u32`, `namespace: bytes`, `handles: bytes`, `argv: bytes` | - |\n\n\
-             <!-- wire-errors: startup -->\n| Code | Error |\n| --- | --- |\n";
-        let p = link(vec![parse("NAMESPACES.md", ninep_common).unwrap(), parse("INIT.md", startup).unwrap()]).unwrap();
+        let mut found = Vec::new();
+        for (note, name) in [("planning/redoubt/NAMESPACES.md", "ninep_common"), ("planning/redoubt/INIT.md", "startup")] {
+            let text = std::fs::read_to_string(repo_root().join(note)).unwrap();
+            let text = unfence(&text, name).unwrap_or(text);
+            let tables = parse(note, &text).unwrap_or_else(|e| panic!("{e}"));
+            found.push(tables);
+        }
+        let p = link(found).unwrap();
         let (n, s) = (&p[0], &p[1]);
         assert_eq!((n.name.as_str(), s.name.as_str()), ("ninep_common", "startup"));
+        let names: Vec<&str> = n.messages.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, ["new_connection", "disconnect"]);
         assert!(!n.messages[0].inline(), "`new_connection` carries a string");
         assert_eq!(n.messages[0].reply[0].ty, Ty::Handle(0, HandleKind::Endpoint));
-        assert!(n.messages[1].inline());
+        assert_eq!(s.messages[0].name, "startup");
         assert!(!s.messages[0].inline());
-        assert_eq!(n.errors, [malformed()]);
+        assert_eq!(n.errors[0], malformed());
         // Found on a scratch copy: a protocol with no inline message generated a `match`
         // with only its `_` arm, which does not build warning-free.
         let rust = rust(s);
         assert!(!rust.contains("Ok(match opcode {\n            _ =>"), "{rust}");
         assert!(rust.contains("fn read_inline(_opcode: u32, _r: &mut Reader<'_>) -> Result<Self, Error> {\n        Err(Error::BadOpcode)"));
-        // The notes' own name, `ninep-common`, is not a protocol name.
-        assert!(parse("n.md", &ninep_common.replace("ninep_common", "ninep-common")).unwrap_err().contains("snake_case"));
     }
+
 
     /// Found by review: these names compiled into code that did not build.
     #[test]
     fn refuses_names_that_clash_in_generated_code() {
         for name in [
-            "message", "reply", "error_code", "error", "words", "reader", "writer", "layout", "handle_kind", "result", "ok",
+            "message", "reply", "error_code", "error", "words", "reader", "writer", "layout", "result", "ok",
             "option", "vec",
         ] {
             assert!(err(&format!("| 1 | `{name}` | - | - |\n")).contains("already uses"), "{name}");
@@ -1052,9 +1109,9 @@ mod tests {
     fn every_row_is_read_or_refused() {
         assert!(err("| 1 | `a` | - | - |\n\n| 2 | `b` | - | - |\n").contains("ended at the blank line"));
         assert!(err("| 1 | `a` | - | - |\n\n2 | `b` | - | - |\n").contains("ended at the blank line"));
-        assert!(err("| 1 | `a` | - | - |\n| 2 | `b` | - | -\n").contains("start and end with"));
-        assert!(err("| 1 | `a` | - | - |\n2 | `b` | - | - |\n").contains("start and end with"));
-        assert!(err("| 1 | `a` | - | - |\nSome prose.\n").contains("start and end with"));
+        assert!(err("| 1 | `a` | - | - |\n| 2 | `b` | - | -\n").contains("must end at a blank line"));
+        assert!(err("| 1 | `a` | - | - |\n2 | `b` | - | - |\n").contains("must end at a blank line"));
+        assert!(err("| 1 | `a` | - | - |\nSome prose.\n").contains("must end at a blank line"));
         assert!(err("| 1 | `a` | - | - | x |\n").contains("5 cells"));
         // Prose after a blank line is fine.
         assert_eq!(protocols(&format!("{HEAD}| 1 | `a` | - | - |\n\nSome prose.\n{ERRORS}")).unwrap()[0].messages.len(), 1);

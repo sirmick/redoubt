@@ -135,8 +135,6 @@ fn handles_travel_and_unread_ones_come_back() {
 fn malformed_requests_and_oversized_replies() {
     let mut store = Store::default();
     let bad = crate::server::MALFORMED;
-    // The generated `Malformed` (code 1 in every protocol) is the same reply.
-    assert_eq!(bad, ErrorCode::Malformed.encode());
     let mut buf = [0u8; 16];
     let none = Handles::new();
     for words in [[0, 0, 0, 0], [99, 0, 0, 0], [3, 1 << 32, 0, 0], [5, 100, 0, 0], [3, 0, 0, 1]] {

@@ -4,7 +4,7 @@
 //! Do not edit: change the tables and run `cargo run -p redoubt-wire-gen`.
 
 use crate::codec::{Error, Reader, Writer};
-use crate::typed::{self, HandleKind, Layout, Words};
+use crate::typed::{self, Layout, Words};
 
 /// `ping`: opcode 1, inline; reply [`PingReply`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,22 +166,6 @@ impl<'a> Message<'a> {
         }
     }
 
-    /// The kind of object each handle must name, by slot: documentation from the table, not
-    /// checked on receipt (a handle of the wrong kind gets `WrongObject` on first use).
-    pub fn handle_kinds(&self) -> &'static [HandleKind] {
-        match self {
-            Message::Ping(_) => &[],
-            Message::Pong(_) => &[],
-            Message::Small(_) => &[],
-            Message::Wide(_) => &[],
-            Message::Named(_) => &[],
-            Message::Blob(_) => &[],
-            Message::Grant(_) => &[HandleKind::Endpoint, HandleKind::Endpoint],
-            Message::Read(_) => &[],
-            Message::Last(_) => &[HandleKind::Process],
-        }
-    }
-
     /// The opcode in word 0.
     fn opcode(&self) -> u32 {
         match self {
@@ -319,22 +303,6 @@ impl<'a> Reply<'a> {
             Reply::Named(_) => &[],
             Reply::Blob(_) => &[],
             Reply::Grant(_) => &["key"],
-            Reply::Read(_) => &[],
-            Reply::Last(_) => &[],
-        }
-    }
-
-    /// The kind of object each handle must name, by slot: documentation from the table, not
-    /// checked on receipt (a handle of the wrong kind gets `WrongObject` on first use).
-    pub fn handle_kinds(&self) -> &'static [HandleKind] {
-        match self {
-            Reply::Ping(_) => &[],
-            Reply::Pong(_) => &[],
-            Reply::Small(_) => &[],
-            Reply::Wide(_) => &[],
-            Reply::Named(_) => &[],
-            Reply::Blob(_) => &[],
-            Reply::Grant(_) => &[HandleKind::Budget],
             Reply::Read(_) => &[],
             Reply::Last(_) => &[],
         }
