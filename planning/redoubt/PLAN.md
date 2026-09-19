@@ -51,6 +51,20 @@ After the north star: SMP (the FPGA has 32 hardware threads), then the Later des
 - `littlefs` in pure Rust, differentially tested against the C reference on the host.
 - Retarget `std::fs` on the Xous target from PDDB (Xous's key-value store) to `fsd`.
 
+## Userland API (designed after the north-star build: USERLAND.md)
+Deliberately deferred; build what is designed first. Points already agreed in discussion:
+- No libc. Rust `std`'s Xous backend is retargeted (namespace + 9P for files, kernel time and
+  threads, `/net` sockets); `no_std` programs use a thin syscall crate plus client crates. Crates
+  that bind the `libc` crate will not build (accepted).
+- Each server publishes three layers: its protocol (owned by its note: 9P tree plus typed
+  messages), a `no_std` Rust client crate taking a handle, and an Elixir binding written in pure
+  Elixir over a fixed set of beamlet natives (handles as terms, user syscalls, `call`/`send`, a 9P
+  client and server). No per-server natives in the VM.
+- One encoding for every typed message in the system; candidates CBOR (leaning) or restricted ETF.
+- Shell layer to design: launching native programs from Elixir (`System.cmd`/`Port`), pipes and
+  standard I/O (the shell VM serves 9P `/dev/cons` to its children), namespaces, budgets, labels
+  and agents from Elixir, the steward client, IEx helpers or a command mode.
+
 ## SMP (after the north star)
 - OpenSBI picks the boot hart at random; never assume hart 0.
 - Secondary hart bring-up via SBI HSM; per-hart trap stack and current (PID, TID) via `sscratch`.
