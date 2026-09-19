@@ -1,93 +1,77 @@
-# Containment: information flow, covert channels, and a testable model
+# Containment: labels, covert channels, shared servers, the model
 
-Status: agreed direction, 2026-09-18. Nothing here is built yet. Builds on CAPABILITIES.md.
+Designed, not built. Owns: information-flow labels, covert channels, admission in shared servers,
+the system signing key, the executable security model. Capabilities: CAPABILITIES.md.
 
-Capabilities contain *authority*: what a process can do. Agents also need *information*
-containment: what a process can leak, including through authority it legitimately holds (the LLM
-gateway, an allowed `git push`). This is the confinement problem (Lampson, 1973). This note is the
-design answer.
+Capabilities contain *authority*: what a process can do. Agents also need *information* containment:
+what a process can leak, including through authority it legitimately holds (`gatewayd`, an allowed
+`git push`). This is the confinement problem (Lampson, 1973).
 
-## Information-flow labels
-Decentralized information flow control, as in HiStar, Flume and Asbestos.
-- **Labels on data.** A secrecy label (e.g. `alice-secrets`) is attached to data by its owner: files
-  and directories in fs servers, key material in keyd, message payloads.
-- **Taint on read.** A process that reads labelled data carries that label from then on. Labels live
-  on processes and budgets; the kernel propagates them on IPC and handle transfer (a message from a
-  tainted process taints its receiver unless the receiver is cleared for the label).
-- **Sinks check clearance.** A tainted process may write only to sinks cleared for all its labels.
-  Servers that talk to the outside world (ip stacks, the LLM gateway, sshd/webd output to other
-  principals) are sinks with explicit clearances; by default an external sink is cleared for nothing.
-- **Only the owner declassifies**, as an explicit, audited act (a powerbox request with the tier
-  rules of CAPABILITIES.md).
-- **Effect for agents:** a confined agent that reads `~/secrets` loses the gateway and `/net` for
-  that data automatically; the powerbox shows the consequence of an approval ("lets data labelled
-  alice-secrets leave via github.com"), not only the request.
-- **Integrity labels** (the dual, later): data from untrusted sources (web content, model output)
-  carries a low-integrity label; high-integrity sinks (system config, signing) refuse it without an
-  endorsement. This is the structural answer to prompt injection reaching privileged actions.
-- Replaces the static "exfiltration query" in CAPABILITIES.md, which fails once a principal reads a
-  secret and is then granted egress.
+## Labels (static per budget)
+Decentralized information flow control, in the Flume/HiStar style, with labels fixed per budget.
+- **Data carries secrecy labels**, set by its owner: files and directories in `fsd`, key material in
+  `keyd`. A label is a name such as `alice-secrets`.
+- **A budget's label set is fixed when the budget is created** and never changes. It is both what the
+  budget may read and what it is assumed to have read. Child budgets inherit their parent's labels.
+- **Reading above your labels fails.** There is no taint at run time: an unlabelled agent that
+  stumbles on labelled data gets an error and keeps its network access. Nobody can taint someone
+  else by planting labelled data.
+- **The kernel checks one thing:** a message from budget A to budget B is delivered only if
+  labels(A) is a subset of labels(B). This closes proxies and siblings.
+- **Storage stamps the writer's labels** on what it writes (littlefs custom attributes), so
+  anything a labelled budget writes needs the same labels to read back. Copies keep their labels.
+- **Sinks check labels.** Servers whose output leaves a principal or the machine (`ipd`, `gatewayd`,
+  output to other principals) refuse budgets carrying labels they are not cleared for. An external
+  sink is cleared for nothing by default. A local model (on the FPGA's GPU card) can be a sink
+  cleared for a label, because the data stays on the machine.
+- **Only the owner declassifies**, per item, as an audited, high-stakes powerbox approval. There is
+  no standing clearance for a whole label.
+- **Defaults.** The steward labels known-sensitive places by default: `~/.ssh`, credential files,
+  `.env` files, anything `keyd` manages. Labels protect only labelled data; secrets belong in `keyd`.
+- **In practice:** an agent that must read secrets is *started* with that label (the powerbox
+  decides up front) and so cannot reach external sinks. "Read first, decide later" needs a new budget.
+- **Deferred:** dynamic taint-on-read (rejected for now: accidental reads cut agents off, labelled
+  data can be planted on others, and siblings started before the read leak). Integrity labels (the
+  dual: low-integrity data such as model output cannot reach high-integrity sinks such as system
+  configuration without endorsement). Build either when needed.
 
-Kernel cost: a small label set per process and budget, a subset check on IPC and handle transfer.
-Label meaning lives in userspace; the kernel only compares sets. HiStar showed this fits a small kernel.
+Kernel cost: an immutable label set per budget and a subset check per cross-budget message.
 
 ## Covert channels
-They never reach zero. The goal: low bandwidth, stated, audited; the rest handled in RTL on the
-FPGA target. Channels our own design created, and their fixes:
+They never reach zero. The goal: low bandwidth, stated, audited; the rest is handled in hardware
+(PLATFORM-FPGA.md).
 
 | Channel | Fix |
 | --- | --- |
-| Shared content-addressed store: add a blob, probe for it | A principal sees only its own profile's closure; existence of others' blobs is not observable |
-| Overcommitted budgets: allocation failure reveals a sibling's usage | Confined principals get hard reservations, not overcommit |
-| Shared fs metadata (free space, `statfs`, 9P versions) | Confined agents get their own volume |
-| High-resolution time (`rdtime` readable from U-mode) | The kernel can disable it per process (`scounteren`), trap and return a coarse clock, as browsers do |
-| CPU contention between budgets | Stride shares are fixed per budget; the remainder is an RTL/partitioning concern |
+| Shared store: add a blob, probe for it | Adding is always charged in full and answered the same way, whether or not the blob exists; a principal sees only its own profile's closure |
+| Budget allocation failures revealing others' use | No overcommit anywhere (RESOURCES.md): success depends only on your own budget |
+| Shared fs metadata (free space, 9P versions) | Budgets that hold secret labels get their own volume |
+| High-resolution time | User mode cannot read `time`; user processes get 1 ms time from the kernel (RESOURCES.md) |
+| CPU and cache contention | Fixed stride shares per budget; all hardware threads of a core run one budget; the rest is RTL |
 
-## Availability in shared servers
-Donation charges server CPU to the caller, but server threads and queue slots are shared: one
-client flooding `fs:data` can make others wait. The shared server library gives each badge an
-admission limit (queue slots, in-flight requests); the bench gets a flooding test.
+## Shared servers: admission and crashes
+- **Limits are per budget, not per badge.** Badges are free to mint, so per-badge limits multiply
+  away. The shared server library limits each caller budget's queue slots, in-flight requests, open
+  files and per-client state, using the budget id the kernel attaches to every message.
+- **Crash quarantine.** If a server crashes while handling a request, `init` quarantines the caller's
+  budget (drops its connection to that server, notifies its sponsor) before counting the crash
+  toward a reboot. One principal cannot reboot the machine by crashing a shared server. Attribution
+  can be wrong; quarantine is reversible, a reboot loop is not.
+- The bench gets a flooding test and a deliberate-crash test.
 
 ## System signing key
 One key owning every machine is a single point of failure. System packages need **M-of-N
-signatures**, builds are **reproducible** and confirmed by independent builders, and updates have
-**rollback protection** (VERIFIED-BOOT.md's open items).
+signatures**; builds are **reproducible** and confirmed by independent builders; updates have
+**rollback protection**. (Today's loader checks one development key: VERIFIED-BOOT.md.)
 
-## Control files
-Plan 9 style `ctl` files would make every server write a text parser. Instead: one specified
-grammar and one shared, fuzzed parser (or typed binary control messages). No server parses control
-text on its own.
-
-## The trusted path (accepted limitation)
-The browser GUI puts a browser in the human's approval path; a compromised page can show one
-request and have the user approve another. We accept this for routine approvals. In exchange, the
-OS contains no graphics code at all. High-stakes approvals can use a device with its own trusted
-display (the board console, or a Precursor) when one is available; not required.
-
-## An executable security model, first
+## The executable security model
 The design is what must hold, so it gets its own attack surface before the kernel does: a small
-executable model (~1-2k lines, Rust; or TLA+/Alloy) of capabilities, minting and derivation,
-revocation, budgets, labels and the powerbox. Invariants, checked by model checking and property
-tests and attacked by red-team agents from several vendors writing counterexample traces:
+Rust crate modelling handles, stamps, minting, revocation, budgets, labels and the powerbox, with
+property tests over random operation sequences. Red-team agents from several vendors attack it by
+writing counterexample sequences. Invariants:
 - a principal never holds a capability not derived from its grants;
-- revocation removes everything it is meant to (budget-level rule, below);
-- data labelled L never reaches a sink not cleared for L without the owner declassifying;
-- budgets never go negative; destroying one returns everything.
-The kernel is then built to the model, and the bench checks conformance against it.
-
-## Revocation of derived capabilities: by budget, not by derivation tree (decided)
-A server may mint a new, narrower capability D in answer to a request made through C. D is not a
-copy of C, so revoking C does not reach D. Options were a kernel derivation tree (seL4-style),
-servers checking C's liveness on every use, or revocation at the budget level. **Decided: budget
-level**, as the simplest mechanism that fits the tenets.
-- **Every capability records the budget it was minted into** (the recipient's budget at mint time),
-  and keeps it when copied or transferred.
-- **Destroying a budget revokes every capability minted into it or its descendants, wherever the
-  copies went.** A lease ending, an agent being revoked or a session ending therefore removes
-  everything granted to or obtained by that principal, including anything it passed to others.
-- **Revoking one capability** kills it and its copies only. Things obtained through it survive until
-  the budget ends. Taking back *one* grant mid-task is coarse by design: end the lease (or give
-  agents short leases and renew them).
-- Kernel cost: one field per capability and a sweep on budget destruction. No derivation tree.
-- Model invariant: after budget B is destroyed, no process holds a capability minted into B or any
-  descendant of B.
+- after budget B is destroyed, no handle stamped with B or a descendant exists;
+- data labelled L never reaches a budget or sink not cleared for L without the owner declassifying;
+- budget usage never exceeds its limit; children's limits never exceed the parent's; destroying a
+  budget returns everything.
+The kernel is built to the model, and the bench checks conformance against it.
