@@ -1,12 +1,15 @@
 //! Atoms, interned per VM.
 //!
-//! An [`Atom`] is a shared string. Interning makes equality a pointer comparison; ordering
-//! compares text, as Erlang's term order requires. Atoms are never freed, so the table is
-//! bounded: creating atoms from untrusted data is a classic way to exhaust a BEAM node, and here
-//! it fails with `system_limit` instead.
+//! An [`Atom`] is a handle to an interned name. Interning makes equality a pointer comparison;
+//! ordering compares text, as Erlang's term order requires. Atoms are never freed (as in BEAM),
+//! so a name is allocated once and leaked, which makes an atom a `Copy` value that can live in a
+//! term anywhere, with no table at hand to read its name. The table is bounded: creating atoms
+//! from untrusted data is a classic way to exhaust a BEAM node, and here it fails with
+//! `system_limit` instead.
 
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
-use alloc::rc::Rc;
+use alloc::string::String;
 use core::fmt;
 
 /// Most atoms any one VM may hold. Stock BEAM defaults to 1,048,576.
@@ -14,9 +17,9 @@ pub const MAX_ATOMS: usize = 1 << 20;
 /// Longest atom in characters, as in stock BEAM.
 pub const MAX_ATOM_CHARS: usize = 255;
 
-/// A thin pointer (`Rc<String>`, not the two-word `Rc<str>`), which keeps `Term` two words.
-#[derive(Clone)]
-pub struct Atom(Rc<alloc::string::String>);
+/// A thin pointer (to a `String`, not the two-word `str`), which keeps `Term` two words.
+#[derive(Clone, Copy)]
+pub struct Atom(&'static String);
 
 impl Atom {
     pub fn as_str(&self) -> &str {
@@ -26,14 +29,14 @@ impl Atom {
     /// A number that identifies this atom (its allocation: atoms are interned and never freed),
     /// for cheap keys.
     pub fn id(&self) -> usize {
-        Rc::as_ptr(&self.0) as *const u8 as usize
+        self.0 as *const String as usize
     }
 }
 
 impl PartialEq for Atom {
     fn eq(&self, other: &Self) -> bool {
         // Every Atom comes from one interner, so equal text means the same allocation.
-        Rc::ptr_eq(&self.0, &other.0)
+        core::ptr::eq(self.0, other.0)
     }
 }
 impl Eq for Atom {}
@@ -53,7 +56,7 @@ pub enum AtomError {
 }
 
 pub struct AtomTable {
-    by_name: BTreeMap<Rc<str>, Atom>,
+    by_name: BTreeMap<&'static str, Atom>,
 }
 
 impl AtomTable {
@@ -64,7 +67,7 @@ impl AtomTable {
     /// The atom named `name`, creating it if needed.
     pub fn intern(&mut self, name: &str) -> Result<Atom, AtomError> {
         if let Some(a) = self.by_name.get(name) {
-            return Ok(a.clone());
+            return Ok(*a);
         }
         if name.chars().count() > MAX_ATOM_CHARS {
             return Err(AtomError::TooLong);
@@ -72,14 +75,15 @@ impl AtomTable {
         if self.by_name.len() >= MAX_ATOMS {
             return Err(AtomError::TableFull);
         }
-        let atom = Atom(Rc::new(name.into()));
-        self.by_name.insert(Rc::from(name), atom.clone());
+        let name: &'static String = Box::leak(Box::new(String::from(name)));
+        let atom = Atom(name);
+        self.by_name.insert(name.as_str(), atom);
         Ok(atom)
     }
 
     /// The atom named `name` if it already exists (`list_to_existing_atom`).
     pub fn existing(&self, name: &str) -> Option<Atom> {
-        self.by_name.get(name).cloned()
+        self.by_name.get(name).copied()
     }
 
     pub fn len(&self) -> usize {
