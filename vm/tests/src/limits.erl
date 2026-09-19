@@ -2,7 +2,7 @@
 %% VM ended the offender. Only BIFs are used: the tests load no OTP modules. Rebuild: erlc +deterministic -o vm/tests/fixtures vm/tests/src/limits.erl
 -module(limits).
 -export([mailbox/0, mailbox_self/0, heap/0, heap_flag/0, heap_spawn_opt/0, heap_ok/0,
-         ets/0, memory/0, no_programs/0]).
+         ets/0, memory/0, no_programs/0, garbage/0, binary_garbage/0]).
 
 %% Another process floods a receiver that never reads.
 mailbox() ->
@@ -59,3 +59,25 @@ memory() ->
 %% Starting a program is a capability the platform grants; without it, open_port fails.
 no_programs() ->
     try open_port({spawn, "true"}, []) catch C:R -> {C, R} end.
+
+%% Garbage is collected: making a lot of it leaves a small heap, and what is live survives.
+garbage() ->
+    Keep = make(1000, []),
+    churn(200000),
+    {heap_size, H} = process_info(self(), heap_size),
+    {H < 200000, length(Keep)}.
+
+churn(0) -> ok;
+churn(N) -> _ = make(10, []), churn(N - 1).
+
+make(0, Acc) -> Acc;
+make(N, Acc) -> make(N - 1, [{N, N} | Acc]).
+
+%% Large binaries nothing refers to any more are freed with the heap that held them.
+binary_garbage() ->
+    bins(2000),
+    {memory, M} = process_info(self(), memory),
+    M < 10000000.
+
+bins(0) -> ok;
+bins(N) -> _ = binary:copy(<<0>>, 100000), bins(N - 1).

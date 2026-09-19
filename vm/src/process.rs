@@ -191,12 +191,18 @@ impl Dictionary {
 /// Cells a heap may grow to before its first collection.
 pub const MIN_HEAP_CELLS: usize = 1024;
 
+/// Off-heap binary bytes a heap may reference before its first collection. Large binaries
+/// cost the heap only a cell or two, so they get a budget of their own (BEAM's virtual heap).
+pub const MIN_BINARY_BYTES: usize = 1 << 20;
+
 pub struct Process {
     pub pid: Pid,
     /// Every term this process holds is on this heap (or a literal).
     pub heap: Heap,
     /// Collect when the heap reaches this many cells.
     pub gc_at: usize,
+    /// Or when it references this many off-heap binary bytes.
+    pub gc_bytes_at: usize,
     pub x: Vec<Term>,
     pub f: Vec<f64>,
     /// Y registers of all frames, innermost last.
@@ -258,6 +264,7 @@ impl Process {
         Process {
             pid,
             gc_at: MIN_HEAP_CELLS.max(heap.len() * 2),
+            gc_bytes_at: MIN_BINARY_BYTES.max(heap.offheap_bytes() * 2),
             heap,
             x,
             f: vec![0.0; FLOAT_REGS],
@@ -296,7 +303,7 @@ impl Process {
     /// Collect the heap if it has outgrown its threshold. Called only between instructions,
     /// when every term the process holds is in one of the places listed here.
     pub fn maybe_collect(&mut self) {
-        if self.heap.len() >= self.gc_at {
+        if self.heap.len() >= self.gc_at || self.heap.offheap_bytes() >= self.gc_bytes_at {
             self.collect();
         }
     }
@@ -321,8 +328,12 @@ impl Process {
             gc.root(t);
         }
         gc.finish();
-        // Grow in proportion to what survived, so collection costs a constant share of the work.
-        self.gc_at = MIN_HEAP_CELLS.max(self.heap.len() * 2);
+        // Allow as much new allocation as the collection had to scan (what survived and the
+        // roots), so collecting costs a constant share of the work however deep the stack is.
+        let roots = self.x.len() + self.stack.len() + self.mailbox.len() + self.dictionary.len();
+        let live = self.heap.len();
+        self.gc_at = live + MIN_HEAP_CELLS.max(live + roots);
+        self.gc_bytes_at = MIN_BINARY_BYTES.max(self.heap.offheap_bytes() * 2);
     }
 
     /// Refresh the heap's view of the literal chunks (after code was loaded).

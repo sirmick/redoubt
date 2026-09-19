@@ -101,3 +101,13 @@ fn memory_is_reported() {
 fn programs_need_the_platform_to_grant_them() {
     assert_eq!(run("no_programs", small()), "{error,eacces}");
 }
+
+#[test]
+fn garbage_is_collected_and_live_data_survives() {
+    assert_eq!(run("garbage", Limits::default()), "{true,1000}");
+}
+
+#[test]
+fn unreferenced_binaries_are_freed() {
+    assert_eq!(run("binary_garbage", Limits::default()), "true");
+}
