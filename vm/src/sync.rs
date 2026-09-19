@@ -28,6 +28,10 @@ mod imp {
     pub trait Shared: Send + Sync {}
     impl<T: Send + Sync + ?Sized> Shared for T {}
 
+    /// Values that may move between schedulers.
+    pub trait Sendable: Send {}
+    impl<T: Send + ?Sized> Sendable for T {}
+
     /// A value of any type that may be shared between schedulers (a resource's value).
     pub type AnyShared = dyn core::any::Any + Send + Sync;
 }
@@ -53,11 +57,15 @@ mod imp {
     pub trait Shared {}
     impl<T: ?Sized> Shared for T {}
 
+    /// Values that may move between schedulers: with one scheduler, any.
+    pub trait Sendable {}
+    impl<T: ?Sized> Sendable for T {}
+
     /// A value of any type (a resource's value).
     pub type AnyShared = dyn core::any::Any;
 }
 
-pub use imp::{AnyShared, Lock, Shared};
+pub use imp::{AnyShared, Lock, Sendable, Shared};
 
 impl<T: Default> Default for Lock<T> {
     fn default() -> Lock<T> {
@@ -77,4 +85,5 @@ fn assert_thread_safe() {
     shared::<crate::module::Module>();
     moves::<crate::term::Heap>();
     moves::<crate::process::Process>();
+    moves::<crate::vm::System>();
 }
