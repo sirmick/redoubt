@@ -13,3 +13,5 @@ num-integer = { version = "0.1", default-features = false }
 libm = "0.2"
 # Ryu shortest float formatting: the algorithm OTP itself uses, so ties round identically.
 ryu = "1"
+# Pure-Rust deflate/inflate (zlib format): compressed external terms and the zlib module.
+miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }

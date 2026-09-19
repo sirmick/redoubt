@@ -45,6 +45,13 @@ impl From<AtomError> for EtfError {
 
 const VERSION: u8 = 131;
 
+/// The tag of a compressed term: `131, 80, UncompressedSize:32, ZlibData`.
+const COMPRESSED: u8 = 80;
+
+/// Largest uncompressed size accepted for a compressed term. Deflate expands at most about
+/// 1032:1, so a size is also refused if the input is too short to produce it.
+const MAX_INFLATED: usize = 1 << 27;
+
 /// Decode one complete term (with its version byte) that must fill all of `bytes`.
 pub fn decode(bytes: &[u8], atoms: &mut AtomTable) -> Result<Term, EtfError> {
     let (t, used) = decode_prefix(bytes, atoms, false)?;
@@ -61,8 +68,56 @@ pub fn decode_prefix(bytes: &[u8], atoms: &mut AtomTable, safe: bool) -> Result<
     if r.u8()? != VERSION {
         return Err(EtfError::BadTag(bytes[0]));
     }
+    if bytes.get(1) == Some(&COMPRESSED) {
+        r.pos = 2;
+        let size = r.u32()?;
+        let (inflated, used) = inflate(&bytes[r.pos..], size)?;
+        let mut inner = Reader { bytes: &inflated, pos: 0, atoms: r.atoms, safe };
+        let t = inner.term(0)?;
+        if inner.pos != inflated.len() {
+            return Err(EtfError::Malformed);
+        }
+        return Ok((t, r.pos + used));
+    }
     let t = r.term(0)?;
     Ok((t, r.pos))
+}
+
+/// Inflate a zlib stream that must produce exactly `size` bytes; also return how many input
+/// bytes it used.
+fn inflate(input: &[u8], size: usize) -> Result<(Vec<u8>, usize), EtfError> {
+    use miniz_oxide::inflate::core::{decompress, inflate_flags, DecompressorOxide};
+    use miniz_oxide::inflate::TINFLStatus;
+    if size > MAX_INFLATED || size > input.len().saturating_mul(1032).saturating_add(64) {
+        return Err(EtfError::Malformed);
+    }
+    let mut out = alloc::vec![0u8; size];
+    let flags = inflate_flags::TINFL_FLAG_PARSE_ZLIB_HEADER | inflate_flags::TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF;
+    let mut state = alloc::boxed::Box::<DecompressorOxide>::default();
+    let (status, used, written) = decompress(&mut state, input, &mut out, 0, flags);
+    match status {
+        TINFLStatus::Done if written == size => Ok((out, used)),
+        TINFLStatus::NeedsMoreInput => Err(EtfError::Truncated),
+        _ => Err(EtfError::Malformed),
+    }
+}
+
+/// Encode `t` compressed at zlib level `level` (0-9), as `term_to_binary(T, [compressed])`
+/// does: only if that makes it smaller.
+pub fn encode_compressed(t: &Term, level: u8) -> Result<Vec<u8>, EncodeError> {
+    let plain = encode(t)?;
+    if level == 0 {
+        return Ok(plain);
+    }
+    let body = &plain[1..];
+    let packed = miniz_oxide::deflate::compress_to_vec_zlib(body, level.min(9));
+    if packed.len() + 6 >= plain.len() {
+        return Ok(plain);
+    }
+    let mut out = alloc::vec![VERSION, COMPRESSED];
+    out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+    out.extend_from_slice(&packed);
+    Ok(out)
 }
 
 struct Reader<'a, 'b> {
@@ -494,6 +549,24 @@ mod tests {
         other.extend_from_slice(b"a@b.c");
         other.extend_from_slice(&[0; 12]);
         assert!(decode(&other, &mut atoms).is_err());
+    }
+
+    #[test]
+    fn compressed_terms_round_trip() {
+        let mut atoms = AtomTable::new();
+        let t = Term::list((0..500).map(|i| Term::Int(i % 7)).collect::<Vec<_>>());
+        let packed = encode_compressed(&t, 6).unwrap();
+        assert_eq!(packed[1], COMPRESSED);
+        assert!(packed.len() < encode(&t).unwrap().len());
+        assert_eq!(decode(&packed, &mut atoms).unwrap().to_string(), t.to_string());
+        // Small terms are left alone.
+        assert_eq!(encode_compressed(&Term::Nil, 6).unwrap(), encode(&Term::Nil).unwrap());
+        // A lying size, a truncated stream, and a claimed size the input could never produce.
+        let mut lie = packed.clone();
+        lie[5] ^= 1;
+        assert!(decode(&lie, &mut atoms).is_err());
+        assert!(decode(&packed[..packed.len() - 3], &mut atoms).is_err());
+        assert!(decode(&[131, 80, 0x7f, 0xff, 0xff, 0xff, 0x78, 0x9c], &mut atoms).is_err());
     }
 
     #[test]

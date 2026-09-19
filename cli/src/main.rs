@@ -18,7 +18,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use beamlet_vm::platform::{Platform, PlatformError};
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
+
+use beamlet_vm::platform::{ConsoleInput, Platform, PlatformError};
 use beamlet_vm::{Class, Term, Vm};
 
 impl Posix {
@@ -38,6 +40,33 @@ struct Posix {
     start: Instant,
     code_path: Vec<PathBuf>,
     files: Option<files::HostDir>,
+    /// Console input from a thread reading stdin, started when the VM first asks for input.
+    input: Option<Receiver<ConsoleInput>>,
+    /// Input that arrived while `idle` was waiting, for the next `console_read`.
+    stash: Option<ConsoleInput>,
+    /// Whether the console output so far ends mid-line (after a prompt, say).
+    mid_line: std::rc::Rc<std::cell::Cell<bool>>,
+}
+
+/// Read stdin on its own thread, so the VM never blocks on it.
+fn stdin_reader() -> Receiver<ConsoleInput> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        use std::io::Read;
+        let mut buf = [0u8; 4096];
+        let mut stdin = std::io::stdin().lock();
+        loop {
+            let msg = match stdin.read(&mut buf) {
+                Ok(0) | Err(_) => ConsoleInput::Eof,
+                Ok(n) => ConsoleInput::Data(buf[..n].to_vec()),
+            };
+            let end = msg == ConsoleInput::Eof;
+            if tx.send(msg).is_err() || end {
+                return;
+            }
+        }
+    });
+    rx
 }
 
 impl Platform for Posix {
@@ -50,12 +79,38 @@ impl Platform for Posix {
     }
 
     fn idle(&mut self, deadline: Option<u64>) {
-        // With no deadline there is nothing to wait for: this platform has no external events.
-        if let Some(d) = deadline {
-            let now = self.monotonic_us();
-            if d > now {
-                std::thread::sleep(std::time::Duration::from_micros(d - now));
+        // The only external event is console input; without a reader there is only the clock.
+        let wait = deadline.map(|d| std::time::Duration::from_micros(d.saturating_sub(self.monotonic_us())));
+        match (&self.input, self.stash.is_some()) {
+            (Some(rx), false) => {
+                let got = match wait {
+                    Some(w) => rx.recv_timeout(w),
+                    None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
+                };
+                self.stash = Some(match got {
+                    Ok(msg) => msg,
+                    Err(RecvTimeoutError::Timeout) => ConsoleInput::Nothing,
+                    Err(RecvTimeoutError::Disconnected) => ConsoleInput::Eof,
+                });
             }
+            (Some(_), true) => {}
+            (None, _) => {
+                if let Some(w) = wait {
+                    std::thread::sleep(w);
+                }
+            }
+        }
+    }
+
+    fn console_read(&mut self) -> ConsoleInput {
+        if let Some(msg) = self.stash.take() {
+            return msg;
+        }
+        let rx = self.input.get_or_insert_with(stdin_reader);
+        match rx.try_recv() {
+            Ok(msg) => msg,
+            Err(std::sync::mpsc::TryRecvError::Empty) => ConsoleInput::Nothing,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => ConsoleInput::Eof,
         }
     }
 
@@ -63,6 +118,9 @@ impl Platform for Posix {
         let mut out = std::io::stdout().lock();
         let _ = out.write_all(bytes);
         let _ = out.flush();
+        if let Some(&last) = bytes.last() {
+            self.mid_line.set(last != b'\n');
+        }
     }
 
     fn random(&mut self, buf: &mut [u8]) -> Result<(), PlatformError> {
@@ -140,7 +198,8 @@ fn main() -> ExitCode {
         _ => return usage(),
     };
 
-    let platform = Posix { start: Instant::now(), code_path, files: root };
+    let mid_line = std::rc::Rc::new(std::cell::Cell::new(false));
+    let platform = Posix { start: Instant::now(), code_path, files: root, input: None, stash: None, mid_line: mid_line.clone() };
     // Natives are 'static slices; join the crates' tables once.
     let natives: &'static [beamlet_vm::bif::NativeSpec] =
         Box::leak([beamlet_crypto::NATIVES, beamlet_re::NATIVES].concat().into_boxed_slice());
@@ -153,7 +212,12 @@ fn main() -> ExitCode {
             return ExitCode::SUCCESS;
         }
     };
-    match vm.run(pid) {
+    let result = vm.run(pid);
+    // The result goes on a line of its own, even after a prompt.
+    if mid_line.get() {
+        println!();
+    }
+    match result {
         Ok(Ok(value)) => println!("{value}"),
         Ok(Err(e)) => {
             if std::env::var_os("BEAMLET_DEBUG").is_some() {

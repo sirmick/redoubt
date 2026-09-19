@@ -663,6 +663,14 @@ pub fn referenced_byte_size(c: &mut Ctx, a: &[Term]) -> R {
     }
 }
 
+/// `beamlet:console_subscribe()`: make the caller the receiver of console input, as
+/// `{beamlet_console, Bytes}` messages and finally `{beamlet_console, eof}`. For the `user` I/O
+/// server; there is one reader per VM, and the last caller wins.
+pub fn console_subscribe(c: &mut Ctx, _a: &[Term]) -> R {
+    c.sys.console_reader = Some(c.p.pid);
+    Ok(c.ok())
+}
+
 // ---- erlang:memory ----
 
 /// The categories of `erlang:memory/0`, in its order.

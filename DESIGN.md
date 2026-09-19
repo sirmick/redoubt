@@ -86,9 +86,14 @@ BEAM's scan of the stack for catch tags). The "raw" stack trace in x2 is `{Class
 Some of what BEAM does in C, or in the kernel application, is here a small Erlang module in
 `vm/lib/`, compiled by `tools/build-lib` and embedded in the VM (checked in, so building the VM
 needs no Erlang toolchain; `tools/build-lib --check` keeps them honest):
-- `beamlet_io`: the I/O protocol server behind `io:format` and `IO.puts`. Started at boot as
-  `user` and `standard_error`; the group leader of every process. Output goes through
-  `Platform::console_write`. No input yet.
+- `beamlet_io`: the I/O protocol server behind `io:format`, `io:get_line`, `io:read`, `IO.puts`
+  and `IO.gets`. Started at boot as `user` and `standard_error`; the group leader of every
+  process. Output goes through `Platform::console_write`. Input requests queue and are served
+  from a buffer; when it runs dry the server subscribes (`beamlet:console_subscribe/0`) and the
+  VM forwards what `Platform::console_read` (non-blocking) returns as messages. While a reader
+  waits, an otherwise idle VM sleeps in `Platform::idle(None)`, which returns when input
+  arrives. Prompts are repeated for each line of a multi-line `get_until`, as OTP's `user` does,
+  so IEx's transcript matches BEAM's.
 - `logger` and `error_logger`: stand-ins for the kernel's. Level filtering, and reports printed
   to `standard_error`, formatted by their own `report_cb` as OTP does. No handlers.
 
@@ -201,7 +206,25 @@ into (`Config::natives`), so the core VM and its trusted base stay small.
   cipher mode and padding, AEAD, and fixed-key key agreement and signature matches byte for
   byte; a hostile-argument test makes 20k calls with generated junk.
 
-## I/O: one 9P client, asynchronous (decided 2026-09-18, not built)
+## Files (`Platform::files`, `vm/src/bif/file.rs`)
+OTP's own `file`, `file_server` and `file_io_server` run unchanged; the VM implements only the
+NIFs of `prim_file` and `prim_buffer`, over a `Files` trait the platform may provide.
+- Names are resolved inside the VM: relative to the VM's own working directory
+  (`file:set_cwd/1` changes it for this VM only), `.` and `..` resolved lexically, so no name
+  climbs above `/`. What `/` is, is the platform's choice. The platform must still refuse
+  escapes the VM cannot see (symbolic links).
+- An open file belongs to the process that opened it; it is closed when that process exits.
+  At most 1024 open files per VM (`emfile`). Links, ownership, permissions and times cannot be
+  changed (`enotsup`, which `write_file_info` tolerates).
+- `file_server_2` starts at boot only when the platform has a file system.
+- POSIX: `beamlet --root DIR` exposes one directory through `cap-std`, which refuses symbolic
+  links out of it (a unit test tries). Without `--root`, `file` calls fail with `enotsup`.
+- The `Files` trait is synchronous and file-shaped, a first step towards the design below: its
+  operations are 9P's (walk+open, read, write, stat, clunk, create, remove, wstat for rename),
+  so a Xous platform implements it with a 9P client, and it can later fold into the one
+  asynchronous interface without changing the Erlang side.
+
+## I/O: one 9P client, asynchronous (decided 2026-09-18; files and console built as steps)
 On xous64 every user-facing service speaks 9P2000 and a process's namespace is a table of
 capabilities (xous-core `planning/xous64/NAMESPACES.md`). beamlet follows that:
 - **`Platform` grows one generic I/O interface, a 9P client**, not per-service methods: attach,
@@ -238,7 +261,21 @@ capabilities (xous-core `planning/xous64/NAMESPACES.md`). beamlet follows that:
 - End-to-end: OTP's `ssl` (TLS 1.2/1.3) and `ssh` (daemon and client) run unmodified between
   processes of one VM over the loopback (`tests/ssltests`, `tests/nettests`), matching BEAM.
 
+## Compiler, IEx, hashing
+- Elixir's compiler runs on the VM (`Code.compile_string`, `Code.eval_string`; difftest
+  `CompilerTest`), and so does OTP's Erlang compiler. The code, atom, export and literal chunks
+  it produces are identical to BEAM's; chunks written with `term_to_binary(_, [compressed])`
+  (debug info, docs) differ in bytes because deflate implementations differ (`miniz_oxide`
+  here), and decode to the same terms. Compressed terms are decoded with the claimed size
+  bounded (at most 128 MiB, and no more than the input could inflate to).
+- `process_flag(error_handler, M)` is honoured: a call to a missing function becomes
+  `M:undefined_function/3`, which Elixir's parallel compiler uses to wait for modules.
+- IEx's read-eval-print loop runs over the console (`IEx.Server.run/1`; difftest `IexTest`,
+  whose transcript matches BEAM's). `Code.fetch_docs` reads OTP's compressed docs chunks.
+- `erlang:phash2/1,2` is BEAM's `make_hash2`, bit for bit (difftest `phash`), because Elixir's
+  type checker and user code key things on it.
+
 ## Open questions
-- Local funs cannot be serialized (`term_to_binary`); `erlang:phash2/1,2` is missing.
-- Console input for the I/O server.
+- Local funs cannot be serialized (`term_to_binary`).
+- The `zlib` module (only compressed external terms are supported).
 - Name.
