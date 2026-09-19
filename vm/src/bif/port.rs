@@ -418,13 +418,17 @@ pub fn port_connect(c: &mut Ctx, a: &[Term]) -> R {
     }
     if new == c.p.pid {
         c.p.links.insert(port);
-    } else if let Some(p) = c.sys.procs.get_mut(new) {
-        p.links.insert(port);
+    } else {
+        c.sys.procs.update(new, move |p| {
+            p.links.insert(port);
+        });
     }
     if port == c.p.pid {
         c.p.links.insert(new);
-    } else if let Some(p) = c.sys.procs.get_mut(port) {
-        p.links.insert(new);
+    } else {
+        c.sys.procs.update(port, move |p| {
+            p.links.insert(new);
+        });
     }
     Ok(Term::Atom(c.sys.atoms.true_))
 }
@@ -513,6 +517,9 @@ pub fn port_info1(c: &mut Ctx, a: &[Term]) -> R {
     if !c.sys.ports.contains_key(&port) {
         return Ok(c.atom("undefined"));
     }
+    if c.sys.procs.is_running(port) && port != c.p.pid {
+        return c.retry();
+    }
     let mut items = Vec::new();
     // A registered port gives its name first, as BEAM's does.
     if let Some(name) = info_item(c, port, "registered_name").filter(|n| !matches!(n, Term::Nil)) {
@@ -539,6 +546,9 @@ pub fn port_info2(c: &mut Ctx, a: &[Term]) -> R {
     let item = *item;
     if !c.sys.ports.contains_key(&port) {
         return Ok(c.atom("undefined"));
+    }
+    if c.sys.procs.is_running(port) && port != c.p.pid {
+        return c.retry();
     }
     match info_item(c, port, item.as_str()) {
         // A port with no registered name answers `[]`, as BEAM's does.

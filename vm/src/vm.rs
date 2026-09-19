@@ -17,7 +17,7 @@ use crate::module::Module;
 use crate::platform::{ConsoleInput, Platform};
 use crate::process::{Class, Cp, Exception, Process, State};
 use crate::sched::Sched;
-use crate::sync::Lock;
+use crate::sync::{Lock, Sendable};
 use crate::term::{copy, Heap, Literals, OwnedTerm, Pid, Ref, Term};
 
 /// Reductions (calls) a process may run before it is preempted.
@@ -202,6 +202,12 @@ pub(crate) struct ProcTable {
     /// its own (BEAM's heap fragments): a sender never writes into another process's heap, so
     /// the receiver may be running on another scheduler.
     inboxes: Vec<VecDeque<OwnedTerm>>,
+    /// Changes to each slot's process made while a scheduler was running it (links, monitors,
+    /// names, group leader), applied when its time slice ends.
+    deferred: Vec<Vec<Deferred>>,
+    /// Each slot's memory use as of the end of its last time slice, for reports about a
+    /// process a scheduler is running.
+    usage: Vec<crate::memory::Usage>,
     free: Vec<u32>,
     live: usize,
     /// The serial of the next process. One counter for the whole table, so pids order by
@@ -215,6 +221,8 @@ impl ProcTable {
         ProcTable {
             slots: Vec::new(),
             inboxes: Vec::new(),
+            deferred: Vec::new(),
+            usage: Vec::new(),
             free: Vec::new(),
             live: 0,
             next_serial: 0,
@@ -233,6 +241,8 @@ impl ProcTable {
             None => {
                 self.slots.push(Slot::Free);
                 self.inboxes.push(VecDeque::new());
+                self.deferred.push(Vec::new());
+                self.usage.push(Default::default());
                 (self.slots.len() - 1) as u32
             }
         };
@@ -273,8 +283,52 @@ impl ProcTable {
         }
     }
 
-    fn put(&mut self, p: Box<Process>) {
+    /// Whether a scheduler is running `pid` just now.
+    pub(crate) fn is_running(&self, pid: Pid) -> bool {
+        matches!(self.slots.get(pid.index as usize), Some(Slot::Running { pid: r }) if *r == pid)
+    }
+
+    /// Change process `pid`: now if it is in the table, or when its time slice ends if a
+    /// scheduler is running it. `false` if there is no such process.
+    pub(crate) fn update(
+        &mut self,
+        pid: Pid,
+        f: impl FnOnce(&mut Process) + Sendable + 'static,
+    ) -> bool {
+        let index = pid.index as usize;
+        match self.slots.get_mut(index) {
+            Some(Slot::Present(p)) if p.pid == pid => {
+                f(p);
+                true
+            }
+            Some(Slot::Running { pid: r }) if *r == pid => {
+                self.deferred[index].push(Box::new(f));
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Apply the changes made to `p` while it ran.
+    fn settle(&mut self, p: &mut Process) {
+        for f in core::mem::take(&mut self.deferred[p.pid.index as usize]) {
+            f(p);
+        }
+    }
+
+    /// Memory use of `pid` (a process in the table, or as of the end of its last time slice).
+    pub(crate) fn usage(&self, pid: Pid) -> Option<crate::memory::Usage> {
+        match self.slots.get(pid.index as usize)? {
+            Slot::Present(p) if p.pid == pid => Some(crate::memory::process(p)),
+            Slot::Running { pid: r } if *r == pid => Some(self.usage[pid.index as usize]),
+            _ => None,
+        }
+    }
+
+    fn put(&mut self, mut p: Box<Process>) {
+        self.settle(&mut p);
         let index = p.pid.index as usize;
+        self.usage[index] = crate::memory::process(&p);
         self.slots[index] = Slot::Present(p);
     }
 
@@ -323,6 +377,7 @@ impl ProcTable {
 
     fn release(&mut self, pid: Pid) {
         self.inboxes[pid.index as usize].clear();
+        self.deferred[pid.index as usize].clear();
         self.slots[pid.index as usize] = Slot::Free;
         self.free.push(pid.index);
         self.live -= 1;
@@ -1015,6 +1070,7 @@ impl System {
     /// The end of `p`'s time slice, which began with `before` reductions and ended with `stop`.
     fn finish(&mut self, mut p: Box<Process>, before: u64, mut stop: Stop) {
         let pid = p.pid;
+        self.procs.settle(&mut p);
         self.stats.reductions += p.reductions - before;
         if let Some(profile) = &mut self.profile {
             *profile.entry(crate::interp::where_is(&p, 3)).or_default() += 1;
@@ -1094,6 +1150,14 @@ impl System {
                         self.run_queue.push_back(pid);
                     }
                 }
+            } else {
+                // Running: unless the receive ended meanwhile, it times out when it next waits.
+                self.procs.update(pid, move |p| {
+                    if p.timer == Some(deadline) {
+                        p.timer = None;
+                        p.timed_out = true;
+                    }
+                });
             }
         }
     }
@@ -1211,9 +1275,9 @@ impl System {
             self.registered.remove(name.as_str());
         }
         for &other in &p.links {
-            if let Some(o) = self.procs.get_mut(other) {
+            self.procs.update(other, move |o| {
                 o.links.remove(&pid);
-            }
+            });
             self.exits.push_back(ExitSignal {
                 target: other,
                 from: pid,
@@ -1237,28 +1301,29 @@ impl System {
             },
         ) in &p.monitored_by
         {
-            if let Some(w) = self.procs.get_mut(*watcher) {
-                w.monitors.remove(r);
-            }
+            let r = *r;
+            self.procs.update(*watcher, move |w| {
+                w.monitors.remove(&r);
+            });
             // A monitor's alias ends when the monitor fires.
             if self
                 .aliases
-                .get(r)
+                .get(&r)
                 .is_some_and(|a| a.mode != AliasMode::Explicit)
             {
-                self.aliases.remove(r);
+                self.aliases.remove(&r);
             }
             self.send_with(*watcher, |h| {
                 let tag = tag.as_ref().map_or(down, |t| t.copy_into(h));
                 let object = object.copy_into(h);
                 let reason = reason.copy_into(h);
-                h.tuple(&[tag, Term::Ref(*r), kind, object, reason])
+                h.tuple(&[tag, Term::Ref(r), kind, object, reason])
             });
         }
-        for (r, target) in &p.monitors {
-            if let Some(t) = self.procs.get_mut(*target) {
-                t.monitored_by.remove(r);
-            }
+        for (&r, target) in &p.monitors {
+            self.procs.update(*target, move |t| {
+                t.monitored_by.remove(&r);
+            });
         }
         // Its ETS tables go to their heirs, or are deleted.
         for tid in self.ets.owned_by(pid) {
@@ -1300,15 +1365,22 @@ impl System {
 
     /// Deliver queued exit signals. A signal either becomes an `{'EXIT', From, Reason}` message
     /// (the target traps exits), is ignored (reason `normal`), or kills the target.
+    /// A signal to a process that another scheduler is running waits, in order, until its time
+    /// slice ends.
     fn deliver_exits(&mut self) {
-        while let Some(ExitSignal {
-            target,
-            from,
-            reason,
-            from_link,
-            forced,
-        }) = self.exits.pop_front()
-        {
+        let mut later = VecDeque::new();
+        while let Some(signal) = self.exits.pop_front() {
+            if self.procs.is_running(signal.target) {
+                later.push_back(signal);
+                continue;
+            }
+            let ExitSignal {
+                target,
+                from,
+                reason,
+                from_link,
+                forced,
+            } = signal;
             if forced {
                 if let Some(mut p) = self.procs.take(target) {
                     let reason = reason.copy_into(&mut p.heap);
@@ -1338,6 +1410,7 @@ impl System {
                 self.terminate(p, Err(Exception::exit(reason)));
             }
         }
+        self.exits = later;
     }
 }
 
@@ -1379,6 +1452,12 @@ pub(crate) fn deliver(
     }
     true
 }
+
+/// A change to a process that a scheduler is running, made when its time slice ends.
+#[cfg(feature = "std")]
+pub(crate) type Deferred = Box<dyn FnOnce(&mut Process) + Send>;
+#[cfg(not(feature = "std"))]
+pub(crate) type Deferred = Box<dyn FnOnce(&mut Process)>;
 
 /// What a scheduler does next.
 enum Next {

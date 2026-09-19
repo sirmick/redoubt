@@ -252,6 +252,11 @@ pub struct Process {
     pub timeout_pc: u32,
     /// Set by the scheduler when the timer has fired; consumed by `wait_timeout`.
     pub timed_out: bool,
+    /// Set by a native that cannot finish yet (it needs a process another scheduler is
+    /// running): the call is made again when this process next runs.
+    pub retry: bool,
+    /// The native call to make again, with its arguments still in the x registers.
+    pub resume: Option<crate::interp::Resume>,
 
     pub links: BTreeSet<Pid>,
     /// Monitors this process holds, by reference: the monitored process.
@@ -306,6 +311,8 @@ impl Process {
             timer: None,
             timeout_pc: 0,
             timed_out: false,
+            retry: false,
+            resume: None,
             links: BTreeSet::new(),
             monitors: BTreeMap::new(),
             monitored_by: BTreeMap::new(),

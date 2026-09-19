@@ -152,6 +152,9 @@ pub fn process_info(c: &mut Ctx, a: &[Term]) -> R {
     if pid.port {
         return Err(c.badarg());
     }
+    if pid != c.p.pid && c.sys.procs.is_running(pid) {
+        return c.retry();
+    }
     let single = matches!(a[1], Term::Atom(_) | Term::Tuple(_));
     let items: Vec<Term> = if single {
         alloc::vec![a[1]]
@@ -1010,8 +1013,7 @@ fn memory_values(c: &mut Ctx) -> [u64; 9] {
     let current = crate::memory::process(c.p);
     let (mut procs, mut binary) = (current.words, current.binary_bytes);
     for pid in c.sys.procs.pids() {
-        if let Some(p) = c.sys.procs.get_mut(pid) {
-            let usage = crate::memory::process(p);
+        if let Some(usage) = c.sys.procs.usage(pid).filter(|_| pid != c.p.pid) {
             procs += usage.words;
             binary += usage.binary_bytes;
         }

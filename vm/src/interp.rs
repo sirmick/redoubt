@@ -9,7 +9,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 
-use crate::atom::Atoms;
+use crate::atom::{Atom, Atoms};
 use crate::bif::{Ctx, Native};
 use crate::bits::{self, Builder};
 use crate::loader::{MAX_Y_REGS, X_REGS};
@@ -58,9 +58,19 @@ enum Flow {
 /// jumps; this bound keeps such code from holding the scheduler forever.
 pub const MAX_INSTRUCTIONS_PER_SLICE: usize = 200_000;
 
+/// A native call to make again (see [`Process::retry`]).
+pub struct Resume {
+    native: Native,
+    module: Atom,
+    function: Atom,
+    arity: usize,
+    kind: Kind,
+}
+
 pub fn run(sys: &mut Sched<'_>, p: &mut Process) -> Stop {
     let mut instructions = 0usize;
     let mut module = p.pc.module.clone();
+    let mut resume = p.resume.take();
     loop {
         instructions += 1;
         if instructions > MAX_INSTRUCTIONS_PER_SLICE {
@@ -75,7 +85,18 @@ pub fn run(sys: &mut Sched<'_>, p: &mut Process) -> Stop {
         }
         // Between instructions every term the process holds is a root, so this is a safe point.
         p.maybe_collect();
-        let result = step(sys, p, &module);
+        let result = match resume.take() {
+            Some(r) => call_mfa_with(
+                sys,
+                p,
+                &r.module,
+                &r.function,
+                r.arity,
+                r.kind,
+                Some(r.native),
+            ),
+            None => step(sys, p, &module),
+        };
         if let Some(reason) = p.pending_exit.take() {
             return Stop::Exit(Err(Exception::exit(reason)));
         }
@@ -445,7 +466,7 @@ pub(crate) fn fun_entry(
 /// How a call continues: `Call` saves a return address, `Last` deallocates the frame first,
 /// `Only` is a tail call from a function without a frame.
 #[derive(Clone, Copy, PartialEq)]
-enum Kind {
+pub(crate) enum Kind {
     Call,
     Last,
     Only,
@@ -534,6 +555,18 @@ fn call_mfa_with(
     match target {
         Some(Target::Native(n)) => {
             let r = call_native(sys, p, n, (m, f), arity)?;
+            if p.retry {
+                // The arguments are still in the x registers: call again next time slice.
+                p.retry = false;
+                p.resume = Some(Resume {
+                    native: n,
+                    module: *m,
+                    function: *f,
+                    arity,
+                    kind,
+                });
+                return Ok(Flow::Stop(Stop::Yield));
+            }
             p.x[0] = r;
             let yielded = reduce(p);
             let flow = match kind {
