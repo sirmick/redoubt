@@ -44,10 +44,9 @@ pub fn init() {
         println!("No PLIC reported by the loader; external interrupts are unavailable");
         return;
     };
-    // The loader stores addresses as two 32-bit words. Rebuild as u64 (avoiding a `<< 32`
-    // that would overflow a 32-bit usize) and narrow; a PLIC's MMIO fits in 32 bits on rv32.
-    let base = (arg.data[0] as u64 | (arg.data[1] as u64) << 32) as usize;
-    let size = (arg.data[2] as u64 | (arg.data[3] as u64) << 32) as usize;
+    // The loader stores addresses as two 32-bit words; `args::wide` narrows them.
+    let base = crate::args::wide(arg.data, 0);
+    let size = crate::args::wide(arg.data, 2);
     CONTEXT.store(arg.data[4] as usize, Ordering::Relaxed);
 
     crate::mem::MemoryManager::with_mut(|mm| {
