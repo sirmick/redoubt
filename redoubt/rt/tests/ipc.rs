@@ -113,9 +113,7 @@ fn timeouts_dead_endpoints_and_refusals() {
         assert_eq!(other.call(&[0; 4], &[], None, 1000), Err(Error::Timeout));
         let t0 = handle::time_now().unwrap();
         assert!(handle::time_now().unwrap() >= t0);
-        let mut bytes = [0u8; 200];
-        handle::random(&mut bytes).unwrap();
-        assert!(bytes.iter().any(|b| *b != 0));
+        assert_ne!(handle::random_u64().unwrap(), handle::random_u64().unwrap());
         // Closing a handle makes it unusable.
         other.close().unwrap();
         assert_eq!(Endpoint::from_handle(badged).call(&[0; 4], &[], None, 0), Err(Error::BadHandle));

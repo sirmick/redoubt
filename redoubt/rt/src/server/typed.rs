@@ -130,7 +130,7 @@ pub struct Outcome {
 }
 
 /// The handles, if every slot holds one; otherwise, as the error, the ones that do.
-fn present(handles: &ReceivedHandles) -> Result<Handles, Handles> {
+pub(crate) fn present(handles: &ReceivedHandles) -> Result<Handles, Handles> {
     let mut list = Handles::new();
     for handle in handles.as_slice().iter().flatten() {
         // Cannot fail: the two lists have the same capacity.

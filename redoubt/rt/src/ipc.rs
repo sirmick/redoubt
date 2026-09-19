@@ -158,6 +158,12 @@ impl Endpoint {
     }
 }
 
+/// `mint` from the open call `id` of this thread, with the default stamp (for a server that
+/// holds the call's id but not its [`Request`], which the lend is borrowed from).
+pub(crate) fn mint_from_message(id: NonZeroU64, badge: NonZeroU64) -> Result<Endpoint, Error> {
+    mint(MintSource::Message(id), badge, None)
+}
+
 fn mint(source: MintSource, badge: NonZeroU64, budget: Option<&Budget>) -> Result<Endpoint, Error> {
     let call = Call::Mint { source, badge, budget: budget.map(Budget::handle) };
     handle(syscall(&call)).map(Endpoint::from_handle)
@@ -173,8 +179,10 @@ pub enum Event {
     /// The IRQ handle `receive` named fired.
     Interrupt,
     Exit(ExitNotice),
-    /// The open call with this id, held by this thread, was abandoned: its caller is gone (R3).
-    /// Reply to its [`Request`] to free it; the reply reaches nobody.
+    /// An abandoned-call notice (KERNEL-SPEC.md, R3): the open call with this id, which this
+    /// thread holds, lost its caller. It stays open, holding one of the process's
+    /// `MAX_OPEN_CALLS`, until this thread replies to it; the reply reaches nobody.
+    /// [`crate::server::parked::Parked::abandoned`] does that for a parked call.
     Abandoned(NonZeroU64),
 }
 
@@ -239,7 +247,8 @@ impl Request {
 
     /// Makes this the thread's current call (`serve`): the one a fault of this thread blames,
     /// until it replies to it or takes another. `receive` sets it already; an event-driven server
-    /// calls this when it resumes work on a call it took earlier.
+    /// calls this when it resumes work on a call it took earlier (a parked call:
+    /// [`crate::server::parked`] does it).
     pub fn serve(&self) -> Result<(), Error> { nothing(syscall(&Call::Serve { msg_id: self.id })) }
 
     /// Replies, which returns the lend to the caller.

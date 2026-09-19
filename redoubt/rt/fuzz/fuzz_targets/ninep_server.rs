@@ -1,16 +1,24 @@
 //! The 9P server skeleton on hostile request sequences, from several clients (badges, accounts,
 //! label sets) against a small labelled tree. Each input is a sequence of requests: most are
 //! well-formed messages built from the bytes (so the fuzzer reaches the protocol logic), some are
-//! raw bytes. Checked: nothing panics; every reply decodes; the server is never handed a bad
-//! walk name, and never sees more than `MAX_FIDS` fids on a connection.
+//! raw bytes; some are `ninep_common`'s `new_connection` and `disconnect`, and later requests
+//! come through the connections they minted. One of the server's own badges has a byte quota.
+//! Checked: nothing panics; every reply decodes; the server is never handed a bad walk name, and
+//! never sees more than `MAX_FIDS` fids on a connection; no bucket holds more than its limits;
+//! a minted badge is never minted twice; a stranger's `disconnect` never succeeds.
 #![no_main]
 
+use std::num::NonZeroU64;
+
 use libfuzzer_sys::fuzz_target;
-use redoubt_rt::abi::Labels;
+use redoubt_rt::abi::{Error, Handle, Handles, Labels};
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::path;
-use redoubt_rt::server::Limits;
-use redoubt_rt::server::ninep::{DMDIR, FileServer, FileStat, MAX_FIDS, NineError, NineServer, QTDIR, Qid};
+use redoubt_rt::server::ninep::{
+    DMDIR, FIRST_MINTED_BADGE, FileServer, FileStat, MAX_FIDS, Minter, NineError, NineServer, QTDIR, Qid,
+    ninep_common,
+};
+use redoubt_rt::server::{AdmitKey, Limits, Resource};
 use redoubt_rt::wire::ninep::{Body, Message, NOFID, Names};
 
 /// name, parent, directory, labels
@@ -77,7 +85,11 @@ impl FileServer for Tree {
         Ok(n)
     }
 
-    fn stat(&mut self, _: &Caller, node: &usize) -> Result<FileStat, NineError> { Ok(stat(*node)) }
+    fn stat(&mut self, _: &Caller, node: &usize) -> Result<FileStat, NineError> {
+        Ok(FileStat { length: self.data[*node].len() as u64, ..stat(*node) })
+    }
+
+    fn quota(&mut self, badge: u64) -> u64 { if badge == 2 { 3000 } else { u64::MAX } }
 
     fn dir_entry(
         &mut self,
@@ -114,25 +126,78 @@ impl Input<'_> {
 
 const NAMES: [&str; 8] = ["a", "b", "f", "..", "vault", "key", "", "x/y"];
 
+const LIMITS: Limits = Limits { buckets: 6, in_flight: 0, files: 20, state: 6 };
+
+/// Mints handles by number and draws ids from a xorshift; remembers every badge minted.
+struct Kernel {
+    minted: Vec<u64>,
+    rng: u64,
+}
+
+impl Minter for Kernel {
+    fn mint(&mut self, badge: NonZeroU64) -> Result<Handle, Error> {
+        assert!(badge.get() >= FIRST_MINTED_BADGE && !self.minted.contains(&badge.get()), "badge reused");
+        self.minted.push(badge.get());
+        Ok(Handle::new(1).unwrap())
+    }
+
+    fn random(&mut self) -> Result<u64, Error> {
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 7;
+        self.rng ^= self.rng << 17;
+        Ok(self.rng)
+    }
+}
+
 fuzz_target!(|data: &[u8]| {
-    let mut server =
-        NineServer::new(Tree { data: Default::default() }, Limits { in_flight: 1, files: 20, state: 1 });
+    let mut server = NineServer::new(Tree { data: Default::default() }, LIMITS).unwrap();
+    let mut kernel = Kernel { minted: Vec::new(), rng: 0x2545_f491_4f6c_dd1d };
+    // Connection ids handed out, with who asked for each.
+    let mut ids: Vec<(u64, Caller)> = Vec::new();
     let mut input = Input(data);
     let mut lend = vec![0u8; 8192];
     while let Some(op) = input.byte() {
         let who = input.byte().unwrap_or(0);
         let labels: &[u64] = [&[][..], &[7], &[7, 8], &[8]][(who >> 2) as usize % 4];
-        let caller = Caller {
-            badge: u64::from(who & 3),
-            account: u64::from(who >> 6),
-            labels: Labels::from_slice(labels).unwrap(),
+        // The server's own badges 0-2, or one it minted (or never minted).
+        let badge = match who & 3 {
+            3 if !kernel.minted.is_empty() => kernel.minted[usize::from(who >> 4) % kernel.minted.len()],
+            3 => FIRST_MINTED_BADGE + 5,
+            small => u64::from(small),
         };
+        let caller =
+            Caller { badge, account: u64::from(who >> 6), labels: Labels::from_slice(labels).unwrap() };
         let fid = u32::from(input.byte().unwrap_or(0) % 70);
         let arg = input.word().unwrap_or(0);
         let room = 64 + (arg as usize % 8000);
         let names: Vec<&str> =
             (0..(arg >> 8) % 5).map(|i| NAMES[((arg >> (12 + 3 * i)) % 8) as usize]).collect();
-        let body = match op % 12 {
+        let body = match op % 14 {
+            12 => {
+                let root = ["", "a", "a/b", "..", "vault", "a/b/f", "nope"][arg as usize % 7];
+                let quota = [0, 1, 1000, u64::MAX][(arg >> 4) as usize % 4];
+                let message = ninep_common::Message::NewConnection(ninep_common::NewConnection { root, quota });
+                let words = message.encode(&mut lend).unwrap();
+                let outcome = server.answer_common(&caller, &words, &Handles::new(), &mut lend, &mut kernel);
+                if outcome.words[0] == 0 {
+                    let reply = ninep_common::Reply::decode(2, &outcome.words, &lend, 1).expect("the reply decodes");
+                    let Ok(ninep_common::Reply::NewConnection(reply)) = reply else { panic!("{reply:?}") };
+                    ids.push((reply.id, caller));
+                }
+                continue;
+            }
+            13 => {
+                let (id, owner) = ids.get(fid as usize % (ids.len() + 1)).copied().unwrap_or((u64::from(arg), caller));
+                let message = ninep_common::Message::Disconnect(ninep_common::Disconnect { id });
+                let words = message.encode(&mut []).unwrap();
+                let outcome = server.answer_common(&caller, &words, &Handles::new(), &mut [], &mut kernel);
+                if outcome.words[0] == 0 {
+                    // Only the connection that asked for the id, in the same account and labels.
+                    assert_eq!((owner.badge, AdmitKey::of(&owner)), (caller.badge, AdmitKey::of(&caller)));
+                    ids.retain(|(i, _)| *i != id);
+                }
+                continue;
+            }
             0 => {
                 // Raw bytes, with a plausible size field half the time.
                 let len = (arg as usize >> 4) % 300;
@@ -176,8 +241,12 @@ fuzz_target!(|data: &[u8]| {
             Message::decode(lend).expect("every reply decodes");
         }
         assert!(server.fids(&caller) <= MAX_FIDS);
-        if op % 97 == 96 {
-            server.badge_closed(caller.badge);
-        }
+        let admission = server.admission();
+        let key = AdmitKey::of(&caller);
+        assert!(admission.held(key, Resource::Files) <= LIMITS.files);
+        assert!(admission.held(key, Resource::State) <= LIMITS.state);
+        assert!(admission.keys() <= LIMITS.buckets as usize);
+        assert!(server.connections() <= (LIMITS.buckets * LIMITS.state) as usize);
+        let _ = server.quota_free(&caller);
     }
 });

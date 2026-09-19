@@ -134,11 +134,14 @@ operation written into a file is: the opcode as a `u32`, then the buffer-shape e
 fields. `redoubt-wire` decodes it; there is no second framing format and no checksum (the parent
 writes the block and could write any checksum too).
 
-```
+<!-- wire: startup -->
 | Opcode | Message | Fields | Reply |
 | --- | --- | --- | --- |
 | 1 | `startup` | `version: u32`, `handle_count: u32`, `namespace: bytes`, `handles: bytes`, `argv: bytes` | - |
-```
+
+<!-- wire-errors: startup -->
+| Code | Error |
+| --- | --- |
 
 - `version` is 1; `handle_count` is n, the number of handles `process_start` installed.
 - `namespace` is a sequence of entries, each `handle: u32`, `path: string`: a clean absolute path

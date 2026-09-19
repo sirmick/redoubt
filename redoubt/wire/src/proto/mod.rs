@@ -4,3 +4,5 @@
 //! `cargo run -p redoubt-wire-gen`.
 
 pub mod example;
+pub mod ninep_common;
+pub mod startup;

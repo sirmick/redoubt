@@ -5,8 +5,9 @@
 //! argument (answer 40), passed on by the loader stub.
 //!
 //! A panic exits through `process_exit` with [`exit::PANIC`]. If the process holds open calls
-//! then, the kernel counts it as a fault and blames the account of the call taken most recently
-//! (answers 37 and 55), so a crash on hostile input is blamed however the process died.
+//! then, the kernel counts it as a fault and blames the sender of the panicking thread's current
+//! call (answer 82: the call it took last, or the parked call it named with `serve`), so a crash
+//! on hostile input is blamed however the process died.
 
 use core::fmt::{self, Write};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};

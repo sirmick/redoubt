@@ -159,7 +159,13 @@ impl FileServer for MemFs {
     }
 
     fn clunk(&mut self, node: &usize) { self.clunked.push(*node); }
+
+    fn quota(&mut self, badge: u64) -> u64 { if badge == QUOTA_BADGE { QUOTA } else { u64::MAX } }
 }
+
+/// The server's own badge whose root has a byte quota, and the quota.
+const QUOTA_BADGE: u64 = 7;
+const QUOTA: u64 = 100;
 
 struct T {
     server: NineServer<MemFs>,
@@ -177,9 +183,10 @@ fn alice() -> Caller { caller(ALICE, 1001, &[]) }
 impl T {
     fn new() -> T { T::with_limit(1000) }
 
+    /// A server whose buckets may hold `files` fids each; a lone share holds half of that.
     fn with_limit(files: u32) -> T {
-        let limits = Limits { in_flight: 1, files, state: 1 };
-        T { server: NineServer::new(MemFs::new(), limits), buf: vec![0; MSIZE] }
+        let limits = Limits { buckets: 8, in_flight: 0, files, state: 8 };
+        T { server: NineServer::new(MemFs::new(), limits).unwrap(), buf: vec![0; MSIZE] }
     }
 
     /// Sends `body` as `who` with a lend of `lend` bytes; the reply's body.
@@ -326,7 +333,7 @@ fn depth_is_bounded() {
 
 #[test]
 fn fids_are_bounded_per_connection_and_per_account() {
-    let mut t = T::with_limit(MAX_FIDS as u32 + 10);
+    let mut t = T::with_limit(2 * MAX_FIDS as u32);
     let a = alice();
     t.attach(&a, 0, "");
     for fid in 1..MAX_FIDS as u32 {
@@ -336,13 +343,14 @@ fn fids_are_bounded_per_connection_and_per_account() {
         t.err(&a, Body::Twalk { fid: 0, newfid: 999, wnames: Names::new(&[]).unwrap() }),
         "too many open files"
     );
-    // The same account on another connection has only what is left of its account's limit.
+    // The same account on another connection has its fair share of the account's limit: a
+    // third of it, with alice holding fids too.
     let a2 = caller(2, 1001, &[]);
-    for fid in 0..10 {
+    for fid in 0..42 {
         t.attach(&a2, fid, "");
     }
     assert_eq!(
-        t.err(&a2, Body::Tattach { fid: 10, afid: NOFID, uname: "", aname: "" }),
+        t.err(&a2, Body::Tattach { fid: 42, afid: NOFID, uname: "", aname: "" }),
         "too many open files"
     );
     // Another account is not affected.
@@ -350,16 +358,20 @@ fn fids_are_bounded_per_connection_and_per_account() {
     t.attach(&b, 0, "");
     // Clunking gives the charge back; Tversion clunks every fid of the connection.
     t.clunk(&a2, 0);
-    t.attach(&a2, 10, "");
+    t.attach(&a2, 42, "");
     let clunked = t.server.fs.clunked.len();
     assert!(matches!(t.rpc(&a, Body::Tversion { msize: 1 << 20, version: "9P2000" }),
         Body::Rversion { msize, version: "9P2000" } if msize == MSIZE as u32));
     assert_eq!(t.server.fids(&alice()), 0);
     assert_eq!(t.server.fs.clunked.len(), clunked + MAX_FIDS);
-    t.attach(&a2, 11, "");
+    // Alone again in its bucket, a2's share is half of it.
+    t.attach(&a2, 43, "");
+    t.attach(&a2, 11 + 1000, "");
+    let a2_fids = t.server.fids(&a2) as u32;
+    assert_eq!(t.server.admission().held(AdmitKey::of(&a2), Resource::Files), a2_fids);
     // Fid numbers are checked: in use, and NOFID.
     assert_eq!(
-        t.err(&a2, Body::Tattach { fid: 11, afid: NOFID, uname: "", aname: "" }),
+        t.err(&a2, Body::Tattach { fid: 43, afid: NOFID, uname: "", aname: "" }),
         "fid already in use"
     );
     assert_eq!(
@@ -515,7 +527,7 @@ fn only_the_node_a_fid_rests_on_is_clunked() {
 fn dot_dot_costs_no_server_work_and_admission_comes_first() {
     // Red team: `..` re-walked from the root (16 of them at depth 64 cost ~1000 server walks),
     // and attach and walk ran before admission refused them.
-    let mut t = T::with_limit(4);
+    let mut t = T::with_limit(8);
     let a = alice();
     t.attach(&a, 0, "");
     t.walk(&a, 0, 1, &["a", "b"]);
@@ -523,7 +535,7 @@ fn dot_dot_costs_no_server_work_and_admission_comes_first() {
     assert_eq!(t.walk(&a, 1, 2, &[".."; 16]), vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     assert_eq!(t.server.fs.walks, walks, "`..` asked the server nothing");
     t.walk(&a, 0, 3, &[]);
-    // The account is at its limit of 4: nothing more reaches the server.
+    // The account is at its share of 4: nothing more reaches the server.
     let (attaches, walks) = (t.server.fs.attaches, t.server.fs.walks);
     for _ in 0..10 {
         assert_eq!(
@@ -719,29 +731,6 @@ fn random_requests_never_panic() {
 }
 
 #[test]
-fn a_closed_badge_frees_its_fids_and_admission() {
-    // Answer 53: when the last handle with a badge goes, the server frees what it held, so a
-    // crashed client does not keep its account's quota.
-    let mut t = T::with_limit(3);
-    let (a, other) = (alice(), caller(2, 1001, &[]));
-    t.attach(&a, 0, "");
-    t.walk(&a, 0, 1, &["notes"]);
-    t.attach(&other, 0, "");
-    assert_eq!(
-        t.err(&other, Body::Tattach { fid: 1, afid: NOFID, uname: "", aname: "" }),
-        "too many open files"
-    );
-    t.server.badge_closed(ALICE);
-    assert_eq!(t.server.fids(&a), 0);
-    let mut clunked = t.server.fs.clunked.clone();
-    clunked.sort();
-    assert_eq!(clunked, [0, 4]);
-    t.attach(&other, 1, "");
-    t.attach(&other, 2, "");
-    assert_eq!(t.server.fids(&other), 3);
-}
-
-#[test]
 fn every_write_needs_equal_labels() {
     // Answer 51: no blind write-up. A caller with more labels than the object may read it but
     // write nothing into it.
@@ -762,3 +751,6 @@ fn every_write_needs_equal_labels() {
     assert_eq!(t.err(&both, Body::Tremove { fid: 3 }), "permission denied");
     assert_eq!(t.server.fs.nodes[6].data, b"secret");
 }
+
+#[path = "ninep_common_tests.rs"]
+mod common;

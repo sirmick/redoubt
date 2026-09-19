@@ -4,7 +4,8 @@
 //! What it does and does not do:
 //! - One request at a time, in one lent buffer of the client's own; the buffer bounds each read and write
 //!   ([`Client::iounit`]).
-//! - Only what native programs use today: version, attach, walk, open, read, write, clunk.
+//! - Only what native programs use today: version, attach, walk, open, read, write, clunk; and
+//!   `ninep_common`'s `new_connection` and `disconnect`, for launchers.
 //! - A walk is one `Twalk`: at most `MAXWELEM` (16) components after cleaning; a longer path is refused
 //!   (`BadPath`) rather than split, so a failed walk never leaves a fid behind.
 //! - The server is not trusted: a reply must decode, carry the request's tag and be the matching R-message,
@@ -14,6 +15,7 @@
 
 use redoubt_sys::Error;
 use redoubt_wire::ninep::{Body, IOHDRSZ, Message, NOFID, NOTAG, Names, Qid, VERSION};
+use redoubt_wire::proto::ninep_common;
 
 use crate::handle::Endpoint;
 use crate::ipc::Buffer;
@@ -74,9 +76,7 @@ impl Client {
         Message { tag, body }.encode(&mut self.buf)?;
         let reply = self.endpoint.call(&WORDS_9P, &[], Some(&mut self.buf), self.timeout)?;
         // No 9P reply carries handles: close any a hostile server sent, before anything else.
-        for handle in reply.handles.as_slice().iter().flatten() {
-            let _ = crate::handle::close(*handle);
-        }
+        close_all(reply.handles.as_slice());
         if reply.words != WORDS_9P || !reply.handles.as_slice().is_empty() {
             return Err(ClientError::Unexpected);
         }
@@ -152,10 +152,57 @@ impl Client {
         }
     }
 
+    /// `new_connection`: a fresh connection to this server rooted at `root` (relative to this
+    /// connection's root; it never climbs above it), with `quota` bytes carved from this
+    /// connection's quota (0 shares it). Returns the connection and its id, which only this
+    /// connection may `disconnect`. What a launcher gives each child (INIT.md, launching gives
+    /// fresh connections).
+    pub fn new_connection(&mut self, root: &str, quota: u64) -> Result<(Endpoint, u64), ClientError> {
+        let request = ninep_common::Message::NewConnection(ninep_common::NewConnection { root, quota });
+        let words = request.encode(&mut self.buf)?;
+        let reply = self.endpoint.call(&words, &[], Some(&mut self.buf), self.timeout)?;
+        let handles = reply.handles.as_slice();
+        match ninep_common::Reply::decode(2, &reply.words, &self.buf, handles.len()) {
+            Ok(Ok(ninep_common::Reply::NewConnection(r))) => match handles {
+                [Some(conn)] => Ok((Endpoint::from_handle(*conn), r.id)),
+                _ => Err(ClientError::Unexpected),
+            },
+            // An error reply carries no handles, and a malformed one may carry any: close them.
+            result => {
+                close_all(handles);
+                match result {
+                    Ok(Err(_)) | Err(redoubt_wire::Error::BadStatus) => Err(ClientError::Remote),
+                    _ => Err(ClientError::Unexpected),
+                }
+            }
+        }
+    }
+
+    /// `disconnect`: frees the connection with `id`, which this connection received from
+    /// [`Client::new_connection`], and every connection minted under it.
+    pub fn disconnect(&mut self, id: u64) -> Result<(), ClientError> {
+        let words = ninep_common::Message::Disconnect(ninep_common::Disconnect { id }).encode(&mut [])?;
+        let reply = self.endpoint.call(&words, &[], None, self.timeout)?;
+        close_all(reply.handles.as_slice());
+        match ninep_common::Reply::decode(3, &reply.words, &[], reply.handles.as_slice().len()) {
+            Ok(Ok(_)) => Ok(()),
+            Ok(Err(_)) | Err(redoubt_wire::Error::BadStatus) => Err(ClientError::Remote),
+            Err(_) => Err(ClientError::Unexpected),
+        }
+    }
+
     pub fn clunk(&mut self, fid: u32) -> Result<(), ClientError> {
         match self.rpc(Body::Tclunk { fid })? {
             Body::Rclunk => Ok(()),
             _ => Err(ClientError::Unexpected),
         }
+    }
+}
+
+/// Closes every handle a reply brought that the client will not keep; a slot that arrived
+/// empty (revoked on its way) has nothing to close.
+fn close_all(handles: &[Option<redoubt_sys::Handle>]) {
+    for handle in handles.iter().flatten() {
+        let _ = crate::handle::close(*handle);
     }
 }

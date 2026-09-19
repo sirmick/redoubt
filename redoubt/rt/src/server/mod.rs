@@ -1,17 +1,20 @@
 //! The shared server library (CONTAINMENT.md): what every system server serving more than one
 //! account links, so that admission and the label check are written once.
 //!
-//! - [`admit`]: per-account limits on what a client holds in the server.
+//! - [`admit`]: per-(account, label set) limits on what a client holds in the server, with a fair share per
+//!   badge.
 //! - [`check`]: no read up, no write down.
 //! - [`ninep`]: a 9P2000 server skeleton that applies both, and keeps `..` inside a fid's root.
 //! - [`typed`]: typed-message dispatch over the generated codecs.
+//! - [`parked`]: calls held open for later, each with a deadline, resumed under `serve`.
 
 pub mod admit;
 pub mod label;
 pub mod ninep;
+pub mod parked;
 pub mod typed;
 
-pub use admit::{Admission, AdmitKey, Limits, Refused, Resource};
+pub use admit::{Admission, AdmitKey, Cost, Limits, Refused, Resource, Unsized};
 
 /// The reply words of a malformed request, in 9P calls and every typed protocol alike: status 1,
 /// `Malformed` (answers 41 and 42), which the wire generator reserves in every error table.
