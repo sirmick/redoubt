@@ -1,0 +1,20 @@
+description = "R4b and R4's Refused (WP-K2): a server thread that exits holding an open call gives its caller Dead and its lend back intact, the endpoint survives for the next server, and a message the receiving budget cannot pay for is Refused to its sender while the receiver keeps waiting (checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# Built with the checks on (redoubt/README.md, "Debug assertions").
+debug_assertions = true
+# PID 2 redoubt-dead: it must be the loader's first program, the one holding root, system and
+# users, since the Refused step carves system's free pages away. PID 3 log-server.
+programs = ["redoubt-dead", "log-server"]
+timeout_secs = 30
+expect = [
+    '^\[pid 2\] \[dead\] server took a call with a lend of Some\(1\) pages, and exits$',
+    '^\[pid 2\] \[dead\] system down to \d+ free pages$',
+    '^\[pid 2\] \[dead\] second server took a message with 16 lent pages$',
+    '^\[pid 2\] REDOUBT-DEAD TEST PASSED$',
+]
+forbid = ['\[dead\] FAIL', 'REDOUBT-DEAD TEST FAILED']
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]

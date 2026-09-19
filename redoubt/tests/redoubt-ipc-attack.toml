@@ -1,0 +1,36 @@
+description = "Hostile use of the Redoubt IPC calls (WP-K2): stealing a receive right, minting badge 0 or from handles and message ids the thread does not hold, replying to and serving other threads' calls, lending memory that is not the sender's or not writable or already transferred, a transfer over the receiver's max_transfer, and a flood: errors, and a victim that still holds its receive right (attack, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# Built with the checks on (redoubt/README.md, "Debug assertions").
+debug_assertions = true
+# PID 2 log-server (the loader's first program); PID 3 redoubt-victim, which the kernel gives
+# the boot endpoint's receive right; PID 4 redoubt-attack, badged 4; PID 5 attack-checker.
+programs = ["log-server", "redoubt-victim", "redoubt-attack", "attack-checker"]
+timeout_secs = 60
+# Each attempt's error is pinned as progress, so a refusal for the wrong reason fails. The
+# verdict is the victim's -- it is still receiving on a right nobody took -- and the checker's
+# clean power-off, which a panicked kernel never reaches. `log-server` prefixes every relayed
+# line with the sender's PID as the kernel reports it (bench-attack-forgery), so the attacker
+# (pid 4) cannot write a `^\[pid 3\]` or `^\[pid 5\]` line.
+expect = [
+    '^\[pid 3\] \[victim\] holding the boot endpoint.s receive right$',
+    '^\[pid 4\] \[attacker\] the victim answers: Ok\(2\)$',
+    '^\[pid 4\] \[attacker\] receive rights -> \[Some\(NotPermitted\), Some\(InvalidArgument\), Some\(NotPermitted\), Some\(BadHandle\), Some\(BadHandle\), Some\(BadHandle\)\]$',
+    '^\[pid 4\] \[attacker\] foreign message ids -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\)\]$',
+    '^\[pid 3\] \[victim\] a send.s id: reply Err\(InvalidArgument\), mint Err\(InvalidArgument\)$',
+    '^\[pid 4\] \[attacker\] buffers -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(TooLarge\), Some\(InvalidArgument\), Some\(Refused\)\]$',
+    '^\[pid 4\] \[attacker\] attempts done$',
+    '^\[pid 3\] \[victim\] served \d+ calls and \d+ sends after the attack$',
+    '^\[pid 3\] \[victim\] the receive right is still mine$',
+    '^\[pid 5\] \[checker\] PID 3 reported; the kernel still serves',
+]
+forbid = ['BREACH']
+poweroff = true
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]
+
+[[grant]]
+program = "attack-checker"
+mmio = ["0x100000:0x1000"]
