@@ -234,4 +234,10 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   the notes' tables to Rust and Elixir codecs; vectors run on the BEAM and on beamlet; fuzzed.
   Reviews found uncompilable generated names, silently dropped table rows and half-written
   directory entries; all fixed. No server tables exist yet (each server package writes its own).
+- **WP-T1b attack verdicts** (`6cd067a39`): every attack case takes its verdict from the system
+  (answer 26): `log-server` prints client bytes only through one sink that prefixes each line with
+  the sender's PID from the kernel, victims and an `attack-checker` give the verdicts, and
+  `bench-attack-forgery` keeps forgery closed. The review found the first version still printed
+  moved pages raw, so any client could forge a victim's verdict; fixed and re-checked. The audit
+  also found the lend-untouched-page kernel panic (WP-K0).
 
