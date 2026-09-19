@@ -232,6 +232,44 @@ fn reads_and_upgrades_version_2_0() {
     assert_eq!(c.list("/").unwrap().len(), 2);
 }
 
+/// The program size is not on disk: each side may use its own on the same image (forward
+/// CRCs record the size they cover).
+#[test]
+fn program_sizes_differ_between_mounts() {
+    let rust = Config { block_size: 512, block_count: 1024, prog_size: 16 };
+    let mut rng = Rng(77);
+    let mut ram = Ram::new(rust);
+    Filesystem::format(&mut ram, rust).unwrap();
+    let mut model = Tree::new();
+    model.insert(String::new(), Node::Dir { attrs: BTreeMap::new() });
+    let mut image = ram.data;
+    for round in 0..40 {
+        let c_prog = [1, 8, 64, 128][round % 4];
+        let rust_prog = [16, 4, 512, 32][round % 4];
+        let mut ops = Vec::new();
+        while ops.len() < 8 {
+            if let Some(op) = generate(&mut rng, &model, NAMES.len(), 32) {
+                apply_model(&mut model, &op);
+                ops.push(op);
+            }
+        }
+        let c = CConfig { block_size: 512, block_count: 1024, prog_size: c_prog, block_cycles: -1, disk_version: 0 };
+        if round % 2 == 0 {
+            let cfg = Config { prog_size: rust_prog, ..rust };
+            let mut ram = Ram::from_image(cfg, image);
+            let mut fs = Filesystem::mount(&mut ram, cfg).unwrap();
+            ops.iter().for_each(|op| apply_rust_ok(&mut fs, op));
+            drop(fs);
+            image = ram.data;
+        } else {
+            let mut fs = CFs::mount(c, image).unwrap();
+            ops.iter().for_each(|op| apply_c(&mut fs, op));
+            image = fs.into_image();
+        }
+        check_both(c, &image, &model, &format!("round {round}"));
+    }
+}
+
 #[test]
 fn geometries() {
     let tiny = CConfig { block_size: 128, block_count: 16384, prog_size: 1, block_cycles: -1, disk_version: 0 };
