@@ -439,12 +439,10 @@ impl MemoryManager {
     /// drives the need to potentially unmap it, as it may need to be handed off between drivers
     /// that are mutually exclusive in use.
     ///
-    /// Peripheral memory currently only exists on the bao1x target.
+    /// No platform we target (QEMU virt) has peripheral RAM, so this is always false; it is
+    /// kept as the extension point for one that does.
     #[allow(dead_code)]
-    pub fn is_peripheral_ram(&self, _phys: usize) -> bool {
-        let ret = false;
-        ret
-    }
+    pub fn is_peripheral_ram(&self, _phys: usize) -> bool { false }
 
     /// Attempt to map the given physical address into the virtual address space
     /// of this process.

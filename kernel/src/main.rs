@@ -25,7 +25,6 @@ mod platform;
 mod server;
 mod services;
 mod syscall;
-mod utils;
 
 use services::SystemServices;
 use xous_kernel::*;
