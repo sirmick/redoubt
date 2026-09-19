@@ -1063,24 +1063,6 @@ impl MemoryManager {
         for region in self.extra_regions {
             if addr >= (region.mem_start as usize) && addr < (region.mem_start + region.mem_size) as usize
             {
-                // -------------------------------
-                // FIXME: workaround to allow to share the same UART peripheral
-                //        between the kernel and xous-log processes
-                #[cfg(feature = "atsama5d27")]
-                {
-                    let uart_base = crate::platform::atsama5d2::uart::HW_UART_BASE as usize;
-                    if pid.get() != 1
-                        && (addr == uart_base
-                            || addr == uart_base + 0x1000
-                            || addr == uart_base + 0x2000
-                            || addr == uart_base + 0x3000)
-                    {
-                        klog!("[!] UART sharing workaround used for {:08x} address", addr);
-                        return Ok(());
-                    }
-                }
-                // -------------------------------
-
                 offset += (addr - (region.mem_start as usize)) / PAGE_SIZE;
                 if self.is_peripheral_ram(offset) {
                     // don't allow aliasing of peripheral RAM, because peripheral RAM can be unmapped

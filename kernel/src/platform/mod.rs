@@ -4,9 +4,6 @@
 #[cfg(any(feature = "precursor", feature = "renode"))]
 pub mod precursor;
 
-#[cfg(any(feature = "atsama5d27"))]
-pub mod atsama5d2;
-
 #[cfg(any(any(feature = "bao1x")))]
 pub mod bao1x;
 
@@ -33,9 +30,6 @@ pub fn early_init() {
 pub fn init() {
     #[cfg(any(feature = "precursor", feature = "renode"))]
     self::precursor::init();
-
-    #[cfg(any(feature = "atsama5d27"))]
-    self::atsama5d2::init();
 
     #[cfg(any(feature = "bao1x"))]
     self::bao1x::init();

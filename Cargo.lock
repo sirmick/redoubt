@@ -259,7 +259,6 @@ name = "armv7"
 version = "0.2.1"
 source = "git+https://github.com/Foundation-Devices/armv7.git?branch=update#e37a72f420a5e6633d9f7802c7fd094ccf8ca1f9"
 dependencies = [
- "critical-section",
  "tock-registers",
 ]
 
@@ -8692,11 +8691,9 @@ dependencies = [
 name = "xous-kernel"
 version = "0.9.38"
 dependencies = [
- "armv7",
  "bao1x-api 0.1.4",
  "bao1x-hal",
  "bitflags 1.3.2",
- "critical-section",
  "crossbeam-channel",
  "gdbstub",
  "gdbstub_arch",

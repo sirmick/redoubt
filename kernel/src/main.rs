@@ -5,7 +5,7 @@
 #![cfg_attr(baremetal, no_std)]
 
 #[cfg(baremetal)]
-#[cfg_attr(not(any(target_arch = "arm", target_arch = "riscv64")), macro_use)]
+#[cfg_attr(not(target_arch = "riscv64"), macro_use)]
 extern crate bitflags;
 
 #[macro_use]
