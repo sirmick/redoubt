@@ -85,50 +85,89 @@ pub const EPILOGUE_HANDLES: u64 = 64;
 
 /// Probes that make the model's state visible in results, for the end of a conformance trace.
 /// Comparing results alone misses a kernel whose state has diverged but not yet shown it (a
-/// handle that should have been revoked but was never used again), so each process with a
-/// runnable thread, in pid order, reads one word of every readable page it has mapped
-/// (contents, zeroing, lends) and the usage of every budget it holds a handle to (charging);
-/// then `init`, if runnable, destroys every budget it holds other than `root`, `system` and
-/// `users` (revocation); then each of those processes that is still alive closes every handle
-/// index from 1 to `EPILOGUE_HANDLES` (`Ok` or `BadHandle` shows its table, and so the stamps).
-/// Ops of processes that died on the way are not legal events and `trace::record` leaves them
-/// out.
+/// handle that should have been revoked but was never used again), so the epilogue, planned on a
+/// copy of `k` step by step:
+/// 1. lets time pass until every blocked call with a finite timeout has returned (so its thread
+///    can probe too);
+/// 2. has each process with a runnable thread, in pid order, read one word of every readable page
+///    it has mapped (contents, zeroing, lends) and the usage of every budget it holds a handle to
+///    (charging);
+/// 3. has `init` destroy the budgets it made, one at a time, reading the usage of every budget it
+///    still holds after each (revocation, R10's returned limits);
+/// 4. has each process still alive with a runnable thread close every handle index from 1 to
+///    `EPILOGUE_HANDLES` (`Ok` or `BadHandle` shows its table, and so the stamps).
 ///
-/// Not visible even so: a budget's account (it travels only in messages), and an IRQ source's
-/// mask (it shows only as a later interrupt); traces meant to check those must exercise them.
+/// Not visible even so: a thread blocked for ever, a budget's account (it travels only in
+/// messages), and an IRQ source's mask (it shows only as a later interrupt); traces meant to check
+/// those must exercise them.
 pub fn epilogue(k: &Kernel) -> Vec<Op> {
-    use crate::kernel::{INIT_PID, MapState, Object, ROOT, SYSTEM, USERS};
+    use crate::kernel::{INIT_PID, MAX_TICK, MapState, Object, ROOT, SYSTEM, USERS};
     use crate::spec::{FLAG_R, PAGE_SIZE};
     use crate::syscall::Syscall;
+    let mut k = k.clone();
     let mut ops = Vec::new();
-    let mut actors = Vec::new();
-    for (pid, tid) in k.runnable() {
-        if actors.iter().any(|(p, _)| *p == pid) {
-            continue;
+    let go = |k: &mut Kernel, op: Op, ops: &mut Vec<Op>| {
+        if k.step(&op).is_some() {
+            ops.push(op);
         }
-        actors.push((pid, tid));
-        let p = &k.processes[&pid];
+    };
+    let one_thread_each = |k: &Kernel| {
+        let mut out: Vec<(u64, u64)> = Vec::new();
+        for (pid, tid) in k.runnable() {
+            if !out.iter().any(|(p, _)| *p == pid) {
+                out.push((pid, tid));
+            }
+        }
+        out
+    };
+    // 1. Blocked calls with a timeout return.
+    let last = k.threads.values().filter(|t| t.wait.is_some()).filter_map(|t| t.deadline).max();
+    if let Some(d) = last {
+        let dt = d.saturating_sub(k.now).clamp(1, MAX_TICK);
+        go(&mut k, Op::Tick { dt }, &mut ops);
+    }
+    // 2. Pages and usage.
+    for (pid, tid) in one_thread_each(&k) {
+        let Some(p) = k.processes.get(&pid) else { continue };
+        let mut probes = Vec::new();
         for (v, m) in &p.space {
             if m.flags & FLAG_R != 0 && matches!(m.state, MapState::Own | MapState::LentIn(_)) {
-                ops.push(Op::Read { pid, tid, addr: v * PAGE_SIZE });
+                probes.push(Op::Read { pid, tid, addr: v * PAGE_SIZE });
             }
         }
         for (i, h) in &p.handles {
             if matches!(h.object, Object::Budget(_)) {
-                ops.push(Op::Sys { pid, tid, call: Syscall::BudgetUsage { h: *i } });
+                probes.push(Op::Sys { pid, tid, call: Syscall::BudgetUsage { h: *i } });
             }
         }
-    }
-    if let Some((pid, tid)) = actors.iter().copied().find(|(p, _)| *p == INIT_PID) {
-        for (i, h) in &k.processes[&pid].handles {
-            if matches!(h.object, Object::Budget(b) if b != ROOT && b != SYSTEM && b != USERS) {
-                ops.push(Op::Sys { pid, tid, call: Syscall::BudgetDestroy { h: *i } });
-            }
+        for op in probes {
+            go(&mut k, op, &mut ops);
         }
     }
-    for (pid, tid) in actors {
+    // 3. Revocation, one budget at a time.
+    loop {
+        let Some(init) = k.processes.get(&INIT_PID) else { break };
+        let Some(tid) = init.threads.iter().copied().find(|t| k.threads[t].wait.is_none()) else { break };
+        let Some(h) = init
+            .handles
+            .iter()
+            .find(|(_, h)| matches!(h.object, Object::Budget(b) if b != ROOT && b != SYSTEM && b != USERS))
+            .map(|(i, _)| *i)
+        else {
+            break;
+        };
+        go(&mut k, Op::Sys { pid: INIT_PID, tid, call: Syscall::BudgetDestroy { h } }, &mut ops);
+        let held: Vec<u64> = k.processes.get(&INIT_PID).map_or(Vec::new(), |p| {
+            p.handles.iter().filter(|(_, h)| matches!(h.object, Object::Budget(_))).map(|(i, _)| *i).collect()
+        });
+        for h in held {
+            go(&mut k, Op::Sys { pid: INIT_PID, tid, call: Syscall::BudgetUsage { h } }, &mut ops);
+        }
+    }
+    // 4. Handle tables.
+    for (pid, tid) in one_thread_each(&k) {
         for i in 1..=EPILOGUE_HANDLES {
-            ops.push(Op::Sys { pid, tid, call: Syscall::HandleClose { h: i } });
+            go(&mut k, Op::Sys { pid, tid, call: Syscall::HandleClose { h: i } }, &mut ops);
         }
     }
     ops

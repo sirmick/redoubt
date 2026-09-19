@@ -25,3 +25,17 @@ pub mod spec;
 pub mod steward;
 pub mod syscall;
 pub mod trace;
+
+/// I14's tests run in release builds; the workspace keeps overflow checks on for this crate there
+/// (root Cargo.toml), so an arithmetic overflow in the model is a panic the runner catches.
+#[cfg(test)]
+mod tests {
+    extern crate std;
+
+    #[test]
+    fn overflow_checks_are_on() {
+        let x: u64 = core::hint::black_box(u64::MAX);
+        let r = std::panic::catch_unwind(|| x + 1);
+        assert!(r.is_err(), "overflow checks are off for redoubt-model");
+    }
+}

@@ -50,6 +50,11 @@ incremental = true
 #panic = "abort" # Remove panic output, which can reduce file size
 opt-level = "s" # z,s: Optimize for size instead of performance; 1 for easier debugging; comment out for "best performance" (but in Rust 1.72 this causes regressions)
 
+# The executable model's I14 ("nothing panics the kernel") is tested in release builds; overflow
+# checks keep an arithmetic overflow a panic there, as in debug.
+[profile.release.package.redoubt-model]
+overflow-checks = true
+
 # prefer hardware-accelerated versions of services
 [patch.crates-io]
 [patch.crates-io.getrandom]

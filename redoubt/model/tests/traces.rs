@@ -50,7 +50,7 @@ fn traces_round_trip() {
 /// R12 (scheduling shows only in timing; WP-K5's tests), and `R5NoMaskOnFire` (a source left
 /// unmasked re-fires into the kernel, but since `receive` unmasks and a pending line fires then
 /// anyway, every result is the same; the model's own R5 check catches it, and WP-K3 must test
-/// the mask directly).
+/// the mask directly). `OpenCallsUnlimited` needs a flood to reach the limit (`check::flood`).
 #[test]
 fn a_rule_breaking_kernel_fails_replay() {
     common::quiet_panics();
@@ -66,8 +66,14 @@ fn a_rule_breaking_kernel_fails_replay() {
         })
         .collect();
     let mut missed = Vec::new();
-    let invisible =
-        |m: &Mutation| m.rule() == "policy" || m.rule() == "R12" || *m == Mutation::R5NoMaskOnFire;
+    let invisible = |m: &Mutation| {
+        m.rule() == "policy"
+            || m.rule() == "R12"
+            || *m == Mutation::R5NoMaskOnFire
+            // Random sequences never reach MAX_OPEN_CALLS; the flood family does (its traces are
+            // the ones to replay for R4a).
+            || *m == Mutation::OpenCallsUnlimited
+    };
     for m in Mutation::ALL.into_iter().filter(|m| !invisible(m)) {
         let detected = texts.iter().position(|text| {
             matches!(std::panic::catch_unwind(|| trace::check(text, Some(m))), Ok(Err(_)) | Err(_))
@@ -136,7 +142,8 @@ const EXAMPLE: &str = include_str!("../traces/lender-dies-mid-call.trace");
 const COMMENT: &str = "\
 # R3, lends outlive their lender: a client in alice's budget lends two pages to a system server;
 # init destroys alice's budget while the server holds them. The server still reads its buffer,
-# the pages are charged to the server's budget (its usage is 6 pages, not 4) until its reply, which is
+# the pages are charged to the server's budget (its usage is 10 pages, not 5: the two lent pages,
+# the open call, and the two page-table pages mapping them) until its reply, which is
 # discarded, and then freed. The client's exit notice (killed) is waiting on the endpoint.
 # Written by tests/traces.rs (REDOUBT_MODEL_BLESS=1 rewrites it); format: README.md.
 ";
@@ -151,4 +158,71 @@ fn the_example_trace_is_what_the_model_does() {
     let body: String = EXAMPLE.lines().filter(|l| !l.starts_with('#')).map(|l| format!("{l}\n")).collect();
     assert_eq!(body, text, "the model's trace changed; rerun with REDOUBT_MODEL_BLESS=1 to rewrite traces/");
     trace::check(EXAMPLE, None).unwrap();
+}
+
+/// A replayer reads traces from outside: hostile text must give an error, never a panic or a
+/// hang. Recorded traces are damaged at random (a token replaced by something hostile, lines
+/// dropped or duplicated) and replayed on the model; plus a few fixed worst cases.
+#[test]
+fn hostile_traces_are_refused_cleanly() {
+    let hostile = [
+        "18446744073709551615",
+        "h:18446744073709551615+18446744073709551615",
+        "a:0xffffffffffffffff+0x10",
+        "[1,[2,[3]]]",
+        "k=[a=b]",
+        "x@18446744073709551615",
+        "@",
+        "=",
+        "[",
+        "]",
+        "-",
+        "forever",
+        "tm:1",
+        "m:0",
+        "h:0",
+        "0",
+    ];
+    let fixed = [
+        String::new(),
+        "redoubt-model-trace 1\n".to_string(),
+        format!("redoubt-model-trace 1\n{}\n", "[".repeat(100_000)),
+        format!("redoubt-model-trace 1\nboot root=[{}] system=[1,1,1] users=[1,1,1]\n", "9,".repeat(10_000)),
+        "redoubt-model-trace 1\nboot root=[0,0,0] system=[0,0,0] users=[0,0,0]\n".to_string(),
+        "redoubt-model-trace 1\ncosts budget=1 process=1 thread=1 endpoint=1 handles_per_page=0 page_table=1 \
+         open_call=1 exit_slot=1\n"
+            .to_string(),
+        "redoubt-model-trace 1\ntick 18446744073709551615\n".to_string(),
+        "redoubt-model-trace 1\ndo p:1 t:1 random 18446744073709551615 -> ok\n".to_string(),
+    ];
+    for text in &fixed {
+        let r = std::panic::catch_unwind(|| trace::check(text, None));
+        assert!(matches!(r, Ok(Err(_))), "{:?}: {r:?}", &text[..text.len().min(80)]);
+    }
+    let mut rng = redoubt_model::gen::Rng::new(99);
+    for seed in 0..500 {
+        let text = trace::record(&Boot::testing(), &random_ops(seed), None).unwrap();
+        let mut lines: Vec<String> = text.lines().map(String::from).collect();
+        for _ in 0..rng.range(1, 4) {
+            let i = rng.below(lines.len() as u64) as usize;
+            match rng.below(3) {
+                0 => {
+                    let mut t: Vec<String> = lines[i].split(' ').map(String::from).collect();
+                    let j = rng.below(t.len() as u64) as usize;
+                    t[j] = hostile[rng.below(hostile.len() as u64) as usize].to_string();
+                    lines[i] = t.join(" ");
+                }
+                1 => {
+                    lines.remove(i);
+                }
+                _ => {
+                    let l = lines[i].clone();
+                    lines.insert(i, l);
+                }
+            }
+        }
+        let damaged = lines.join("\n");
+        let r = std::panic::catch_unwind(|| trace::check(&damaged, None));
+        assert!(r.is_ok(), "seed {seed}: the replayer panicked on\n{damaged}");
+    }
 }
