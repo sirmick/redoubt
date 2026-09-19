@@ -102,18 +102,27 @@ fn corrupt_elf(elf: &mut [u8], corruption: &Corruption) -> Result<()> {
 }
 
 /// Pack the boot bundle: a ustar archive with the kernel first, then the programs in PID order.
-pub fn bundle(path: &Path, kernel: &Path, programs: &[(String, PathBuf)]) -> Result<()> {
+pub fn bundle(path: &Path, kernel: &Path, programs: &[(String, PathBuf)], manifest: &str) -> Result<()> {
     let file = std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
     let mut archive = tar::Builder::new(file);
     let entries = std::iter::once(("kernel".to_string(), kernel.to_path_buf())).chain(programs.iter().cloned());
     for (name, elf) in entries {
         let data = std::fs::read(&elf).with_context(|| format!("reading {}", elf.display()))?;
-        let mut header = tar::Header::new_ustar();
-        header.set_size(data.len() as u64);
-        header.set_mode(0o755);
-        header.set_cksum();
-        archive.append_data(&mut header, &name, data.as_slice())?;
+        append(&mut archive, &name, &data)?;
+    }
+    // The device-grant manifest, if any, rides in the bundle as a `grants` entry.
+    if !manifest.is_empty() {
+        append(&mut archive, "grants", manifest.as_bytes())?;
     }
     archive.finish()?;
+    Ok(())
+}
+
+fn append<W: std::io::Write>(archive: &mut tar::Builder<W>, name: &str, data: &[u8]) -> Result<()> {
+    let mut header = tar::Header::new_ustar();
+    header.set_size(data.len() as u64);
+    header.set_mode(0o755);
+    header.set_cksum();
+    archive.append_data(&mut header, name, data)?;
     Ok(())
 }

@@ -8,3 +8,11 @@ expect = [
     '\[timer\] tick 5',
     'TIMER TEST PASSED',
 ]
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]
+
+[[grant]]
+program = "timer-test"
+irq = [0]

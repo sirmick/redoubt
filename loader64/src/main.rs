@@ -13,6 +13,7 @@
 
 mod alloc;
 mod args;
+mod grants;
 mod image;
 mod paging;
 
@@ -168,6 +169,12 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     // reserved in the allocator so nothing overwrites it, and it is only read.
     let bundle = unsafe { core::slice::from_raw_parts(bundle.start as *const u8, bundle.len()) };
     let archive = TarArchiveRef::new(bundle).expect("boot bundle is not a tar archive");
+    // The device-grant manifest, if present, is a `grants` entry (not a process).
+    let manifest = archive
+        .entries()
+        .find(|e| e.filename().as_str() == Ok("grants"))
+        .and_then(|e| core::str::from_utf8(e.data()).ok())
+        .unwrap_or("");
     let mut entries = archive.entries();
 
     // The kernel is PID 1 and the first entry of the bundle.
@@ -189,9 +196,12 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
 
     let mut count = 1;
     for entry in entries {
-        let pid = count as Pid + 1;
         let name = entry.filename();
         let name = name.as_str().unwrap_or("?");
+        if name == "grants" {
+            continue;
+        }
+        let pid = count as Pid + 1;
 
         let space = AddressSpace::new_user(&mut alloc, pid, &kernel);
         let entrypoint = image::load_elf(&mut alloc, &space, pid, entry.data(), PAGE_SIZE..USER_AREA_END, true);
@@ -220,6 +230,8 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
         args.word(name.len() as u32);
         args.bytes(name.as_bytes());
         args.end();
+
+        grants::emit(&mut args, manifest, name, pid);
     }
     processes[0] = kernel_process;
     args.finish(ram.start, ram.len(), b"sram");

@@ -78,6 +78,37 @@ pub struct Boot {
     /// Extra kernel features, e.g. `debug-print`.
     #[serde(default)]
     pub kernel_features: Vec<String>,
+    /// Device grants written into the bundle's manifest (see DEVICE-GRANTS.md).
+    #[serde(default)]
+    pub grant: Vec<Grant>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Grant {
+    /// The program (bundle file name) these grants apply to.
+    pub program: String,
+    /// MMIO regions as "hex-base:hex-len", e.g. "0x10000000:0x1000".
+    #[serde(default)]
+    pub mmio: Vec<String>,
+    /// Interrupt numbers.
+    #[serde(default)]
+    pub irq: Vec<u32>,
+}
+
+impl Grant {
+    /// The manifest lines for this grant (see DEVICE-GRANTS.md).
+    pub fn manifest_lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        for region in &self.mmio {
+            let (base, len) = region.split_once(':').unwrap_or((region, "0x1000"));
+            lines.push(format!("{} mmio {} {}", self.program, base, len));
+        }
+        for irq in &self.irq {
+            lines.push(format!("{} irq {}", self.program, irq));
+        }
+        lines
+    }
 }
 
 #[derive(Debug, Deserialize)]

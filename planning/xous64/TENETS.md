@@ -108,7 +108,7 @@ the ones marked (enforced).
 | Tenet | Today |
 | --- | --- |
 | 1 Simple | Kernel ~9,700 lines, loader ~600, `sv39` crate ~230, 41 lines of assembly. Still carries rv32/Precursor/ARM/swap/gdb code we do not run. Globals are moving to `KernelCell`; most are still `static mut`. |
-| 2 No ambient authority | **Violated.** Any process may claim any unclaimed MMIO region or IRQ, including QEMU's power-off device. Server IDs are capabilities with no revocation. Needs a design. |
+| 2 No ambient authority | Devices: **enforced** (default deny). A process may map a device page or claim an IRQ only if the boot bundle's manifest granted it; the kernel checks at both claim points. Tests: `grant-attack` (denied), and every driver test carries its grant. Design: DEVICE-GRANTS.md. Still open: server-ID capabilities have no revocation, and grants have no runtime delegation (fine until runtime process creation). |
 | 2 W^X | **Holds** (enforced). `sv39::Pte::leaf` cannot express a W+X mapping; syscalls asking for one get `InvalidArgument`; the physmap alias of kernel code is read-only; the kernel verifies all of this over its own address space at boot and refuses to run otherwise. Tests: `wx`, `kernel-wx`. Known gap: user code pages still have a writable alias in the (kernel-only) physmap. |
 | 2 Verified boot | **Missing.** The boot bundle is not authenticated. |
 | 2 Fail closed | RNG seed: yes, loader and kernel both refuse to run without one. Not yet testable, because QEMU always provides a seed; needs device-tree injection in the bench. |

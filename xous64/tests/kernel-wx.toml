@@ -3,3 +3,7 @@ arch = ["rv64"]
 kind = "boot"
 programs = ["log-server"]
 expect = ['W\^X verified: [1-9]\d* executable kernel pages, none writable under any alias', 'PID 2 listening']
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]

@@ -68,6 +68,11 @@ pub fn interrupt_claim(
     f: MemoryAddress,
     arg: Option<MemoryAddress>,
 ) -> Result<(), xous_kernel::Error> {
+    // Default deny: a process may claim only interrupts the bundle granted it.
+    #[cfg(baremetal)]
+    if !crate::grants::may_claim_irq(pid, irq) {
+        return Err(xous_kernel::Error::AccessDenied);
+    }
     IRQ_HANDLERS.with(|handlers| {
         let slot = handlers.get_mut(irq).ok_or(xous_kernel::Error::InterruptNotFound)?;
         if slot.is_some() {

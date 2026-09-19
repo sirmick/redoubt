@@ -1,0 +1,16 @@
+description = "No ambient authority: an ungranted process is denied every device page and interrupt"
+arch = ["rv64"]
+kind = "boot"
+programs = ["log-server", "grant-attack"]
+expect = [
+    'ok: mapping the UART -> Err\(AccessDenied\)',
+    'ok: mapping the power-off device -> Err\(AccessDenied\)',
+    'ok: anonymous RAM still maps -> Ok',
+    'ok: claiming irq 10 -> Err\(AccessDenied\)',
+    'GRANT ATTACK PASSED',
+]
+
+# grant-attack itself gets nothing; log-server needs the UART to print.
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]

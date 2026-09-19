@@ -6,3 +6,11 @@ timeout_secs = 30
 # The holder prints "UAF TEST FAILED" if it sees the grabber's data; that contains
 # "TEST FAILED", which the bench always forbids. So the safe outcome is the only pass.
 expect = ['\[holder\] holding page', '\[grabber\] stamped', 'UAF TEST PASSED']
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]
+
+[[grant]]
+program = "uaf-holder"
+mmio = ["0x10000000:0x1000"]

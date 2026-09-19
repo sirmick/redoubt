@@ -14,3 +14,7 @@ expect = [
     "ok: moved page's address is free again",
     'IPC TEST PASSED',
 ]
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]
