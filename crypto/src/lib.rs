@@ -178,7 +178,7 @@ fn resource_ref<T: Any>(c: &Ctx, t: &Term) -> Option<Held<T>> {
 /// `n` bytes from the platform's secure source, or an error: never a weaker fallback.
 fn random_bytes(c: &mut Ctx, n: usize) -> Result<Vec<u8>, Exception> {
     let mut buf = alloc::vec![0u8; n];
-    let found = c.sys().platform.random(&mut buf);
+    let found = c.platform().random(&mut buf);
     match found {
         Ok(()) => Ok(buf),
         Err(_) => Err(nif_error(c, "error", -1, "No secure random source")),
