@@ -45,3 +45,9 @@ paths = [
 ]
 max_unsafe = 24
 max_undocumented = 0
+
+[[budget]]
+name = "redoubt-sys (system call ABI): the ecall stub"
+paths = ["redoubt/sys/src"]
+max_unsafe = 1
+max_undocumented = 0
