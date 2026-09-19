@@ -21,15 +21,17 @@ pub fn invoke(thread: &mut Thread, supervisor: bool, pc: usize, sp: usize, ret_a
 }
 
 fn set_supervisor(supervisor: bool) {
-    if supervisor {
-        unsafe { sstatus::set_spp(sstatus::SPP::Supervisor) };
-    } else {
-        unsafe { sstatus::set_spp(sstatus::SPP::User) };
+    // SAFETY: sets sstatus.SPP, which only chooses the privilege mode the next `sret`
+    // returns to. It has no effect until `resume` issues that `sret`.
+    unsafe {
+        sstatus::set_spp(if supervisor { sstatus::SPP::Supervisor } else { sstatus::SPP::User });
     }
 }
 
 pub fn resume(supervisor: bool, thread: &Thread) -> ! {
-    // `unsafe` on the upstream `riscv` crate (rv64), safe on the vendored one (rv32).
+    // SAFETY: sets sepc, the address `sret` will resume at. Harmless until the `sret` in
+    // `_xous_resume_context`. (`unsafe` on the upstream `riscv` crate used for rv64, a
+    // no-op wrapper on the vendored rv32 one.)
     #[allow(unused_unsafe)]
     unsafe {
         sepc::write(thread.sepc)
@@ -44,6 +46,9 @@ pub fn resume(supervisor: bool, thread: &Thread) -> ! {
         thread.registers[1],
         thread.sepc,
     );
+    // SAFETY: `_xous_resume_context` (asm) restores all registers from this thread's saved
+    // register block and `sret`s. `thread.registers` is that block, and sepc/sstatus were
+    // just set to match. It does not return.
     unsafe { _xous_resume_context(thread.registers.as_ptr()) };
 }
 
@@ -61,6 +66,9 @@ pub fn kernel_syscall(call: xous_kernel::SysCall) -> xous_kernel::SysCallResult 
 #[cfg(feature = "sbi")]
 pub fn kernel_syscall(call: xous_kernel::SysCall) -> xous_kernel::SysCallResult {
     let mut args = call.as_args();
+    // SAFETY: this hand-crafts the CSR state of an `ecall`-from-S-mode trap and jumps to
+    // the trap vector, so the kernel takes its own syscall exactly as hardware would
+    // deliver it. sepc points just past the block, so the handler resumes here.
     unsafe {
         core::arch::asm!(
             // The handler resumes at sepc + 4, as if stepping over a 4-byte `ecall`.

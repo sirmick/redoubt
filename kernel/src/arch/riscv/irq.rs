@@ -29,6 +29,9 @@ extern "Rust" {
 /// register wide, which is not the case on rv64 (e.g. a `SID` is four `u32`s).
 fn return_result(result: &xous_kernel::Result, context: &Thread) -> ! {
     let args = result.to_args();
+    // SAFETY: `_xous_syscall_return_result` (asm) writes `args` into the return registers
+    // and resumes `context` with `sret`. Both point at valid, kernel-owned data and it
+    // does not return.
     unsafe { _xous_syscall_return_result(&args, context) }
 }
 
@@ -88,9 +91,20 @@ pub fn is_handling_irq() -> bool { HANDLING_IRQ.load(Ordering::SeqCst) }
 /// redirects into a userspace handler, cleared when it finishes.
 static PREVIOUS_PAIR: KernelCell<Option<(PID, TID)>> = KernelCell::new(None);
 
+/// Record who to resume after an interrupt handler returns.
+///
+/// # Safety
+/// The operation is sound on its own; `unsafe` is a cross-architecture ABI marker (the
+/// arm and hosted backends share the signature). Callers coordinate ISR return state and
+/// must pair this with exactly one `take_isr_return_pair`.
 pub unsafe fn set_isr_return_pair(pid: PID, tid: TID) { PREVIOUS_PAIR.with(|p| *p = Some((pid, tid))); }
 
 #[cfg(feature = "gdb-stub")]
+/// Take the pending ISR return target, if any.
+///
+/// # Safety
+/// As for [`set_isr_return_pair`]: `unsafe` is a cross-architecture ABI marker; the
+/// operation itself is sound.
 pub unsafe fn take_isr_return_pair() -> Option<(PID, TID)> { PREVIOUS_PAIR.with(|p| p.take()) }
 
 /// Finish a pending ISR. Return `false` if there was none.
@@ -354,6 +368,7 @@ pub extern "C" fn trap_handler(
             } else {
                 let response = Swap::with_mut(|s|
                     // safety: this is safe because on return from swapper, we're in the swapper's memory space.
+                    // SAFETY: swap-only; runs inside the swapper's own interrupt context.
                     unsafe { s.exit_blocking_call() })
                 .unwrap_or_else(xous_kernel::Result::Error);
 
