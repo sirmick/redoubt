@@ -290,10 +290,10 @@ impl Swap {
             // safety: this happens only within an exception handler, with interrupts disabled, and thus there
             // should no concurrent access to the underlying data structure. The function itself
             // promises not to create page faults, as it is coded to use only limited stack allocations.
-            self.epoch = unsafe {
-                crate::mem::renormalize_allocs()
-                // enable interrupts after renormalize
-            };
+            // NOTE(xous64): untested since the memory manager moved behind `KernelCell`. If this
+            // is ever reached while the memory manager is already borrowed, it panics rather
+            // than aliasing it as the old `static mut` silently did.
+            self.epoch = crate::mem::MemoryManager::with_mut(crate::mem::renormalize_allocs);
             sim_write(sim_backing);
             // the returned value is the greatest used epoch timestamp, so we have to add one for correctness
             self.epoch += 1;

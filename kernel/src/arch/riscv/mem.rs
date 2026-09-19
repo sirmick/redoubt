@@ -1284,7 +1284,7 @@ pub fn evict_page_inner(target_pid: PID, vaddr: usize) -> Result<usize, xous_ker
 
         // mark the page as "touched" even if the eviction checks fail: the page is definitely not LRU if
         // it's not swappable.
-        MemoryManager::with(|mm| mm.touch(target_paddr));
+        MemoryManager::with_mut(|mm| mm.touch(target_paddr));
 
         // sanity check
         if (target_pte & MMUFlags::VALID.bits() == 0) || (target_pte & MMUFlags::P.bits() != 0) {
