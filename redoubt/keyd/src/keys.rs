@@ -113,11 +113,12 @@ impl Key {
     ///
     /// **Constant time** rests on `ed25519-compact` 2.4.2, read at this version
     /// (`src/ed25519.rs`, `src/edwards25519.rs`, `src/field25519.rs`, `src/sha512.rs`):
-    /// - the secret scalar is used only by `ge_scalarmult_base`, a fixed 64-iteration loop that scans all
-    ///   sixteen precomputed points every time and selects one with an arithmetic mask (`Fe::maybe_set`:
-    ///   `self ^= mask & (self ^ other)`), so there is no secret-dependent branch and no secret-dependent
-    ///   memory index;
-    /// - `sc_reduce` and `sc_muladd` are straight-line 64-bit arithmetic over fixed limbs;
+    /// - the only place a secret scalar meets a curve operation is `ge_scalarmult_base`, a fixed 64-iteration
+    ///   loop that scans all sixteen precomputed points every time and selects one with an arithmetic mask
+    ///   (`Fe::maybe_set`: `self ^= mask & (self ^ other)`), so there is no secret-dependent branch and no
+    ///   secret-dependent memory index;
+    /// - the two secret scalars (the expanded key and the nonce) are also operands of `sc_muladd`, and
+    ///   `sc_muladd` and `sc_reduce` are straight-line 64-bit arithmetic over fixed limbs;
     /// - the field arithmetic is fiat-crypto's generated, formally verified code, which is branch-free by
     ///   construction;
     /// - SHA-512's only branches are on how many bytes are buffered, which is a length, and the lengths here

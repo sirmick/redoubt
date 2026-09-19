@@ -13,6 +13,12 @@
 //! output. An SSH user-authentication signature is over `string session_id`, a byte, then the
 //! user name, service and key — at least 36 bytes before the user name starts. No 32-byte
 //! string is one, whatever the transcript was.
+//!
+//! What a holder of this badge *can* do, stated so the guarantee is not read as wider than it
+//! is: complete an SSH key exchange as this box, with any peer, for as long as it holds the
+//! capability. That is what a host-key capability is for, and it is why the steward grants one
+//! only to `sshd`; `keys` in a lease names the key the approval named (CAPABILITIES.md,
+//! agents 7), and an approval for the host key is an approval to speak as the box.
 
 use crate::keys::{ALGORITHM, PUBLIC_KEY_LEN};
 use crate::sha256::{self, Sha256};

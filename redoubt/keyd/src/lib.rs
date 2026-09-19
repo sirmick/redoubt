@@ -14,9 +14,13 @@
 //! 1. **There is no export.** No operation in the protocol returns a private key, or any function of one but
 //!    a signature; and none adds, replaces or removes a key. A caller cannot ask for something the protocol
 //!    cannot say.
-//! 2. **No caller chooses the bytes that are signed.** Each purpose fixes them: an SSH exchange hash `keyd`
-//!    computed, over a transcript naming `keyd`'s own public key; or an audit record under a fixed domain
-//!    string, with its length. So a badge that leaks is not a signature oracle (answer 95).
+//! 2. **No caller chooses the bytes that are signed.** Every signature `keyd` makes is over exactly 32 bytes,
+//!    and those 32 bytes are always a digest `keyd` computed itself: an SSH exchange hash over a transcript
+//!    naming `keyd`'s own public key, or the SHA-256 of a fixed domain string, a length and the record. So a
+//!    badge that leaks is not a signature oracle (answer 95), and no container that covers longer messages —
+//!    a boot bundle's tar, a package, an SSH user-authentication request — can be what a `keyd` signature
+//!    covers. What a badge *does* give its holder is the purpose it names: an `ssh_host` badge speaks as the
+//!    box in a key exchange, which is what it is for.
 //! 3. **No key here authenticates a person to the box.** There is no enrolment operation at all — keys come
 //!    only from the signed manifest — and no purpose that signs an SSH user-authentication request. The check
 //!    that the manifest does not list one key as both a principal's login key and a `keyd` key belongs to
