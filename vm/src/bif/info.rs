@@ -32,7 +32,17 @@ pub fn processes(c: &mut Ctx, _a: &[Term]) -> R {
 /// One `process_info` item, or `None` for an item this VM does not track. Takes the atom
 /// table and the process separately so it works both for the running process (borrowed by the
 /// caller) and for one in the process table.
-fn info_item(table: &mut AtomTable, atoms: &Atoms, p: &Process, running: bool, item: &str) -> Option<Term> {
+fn info_item(table: &mut AtomTable, atoms: &Atoms, p: &Process, running: bool, item: &Term) -> Option<Term> {
+    // `{dictionary, Key}`: one entry of the process dictionary.
+    if let Some([Term::Atom(k), key]) = item.as_tuple() {
+        if k.as_str() == "dictionary" {
+            let v = p.dictionary.get(&crate::term::MapKey(key.clone())).cloned();
+            return Some(v.unwrap_or_else(|| Term::Atom(atoms.undefined.clone())));
+        }
+        return None;
+    }
+    let Term::Atom(item) = item else { return None };
+    let item = item.as_str();
     let pids = |set: &mut dyn Iterator<Item = Pid>| Term::list(set.map(Term::Pid).collect::<Vec<_>>());
     let bool = |b: bool| Term::Atom(if b { atoms.true_.clone() } else { atoms.false_.clone() });
     let mut atom = |name: &str| Term::Atom(table.intern(name).expect("short atom"));
@@ -56,6 +66,18 @@ fn info_item(table: &mut AtomTable, atoms: &Atoms, p: &Process, running: bool, i
             p.dictionary.iter().map(|(k, v)| Term::tuple(alloc::vec![k.0.clone(), v.clone()])).collect::<Vec<_>>(),
         ),
         "group_leader" => Term::Pid(p.group_leader.unwrap_or(p.pid)),
+        "reductions" => Term::Int(p.reductions as i64),
+        "stack_size" => Term::Int((p.stack.len() + p.frames.len()) as i64),
+        // Terms are reference counted, not kept on per-process heaps: nothing to report.
+        "heap_size" | "total_heap_size" | "min_heap_size" | "memory" => Term::Int(0),
+        "current_function" => match p.pc.module.function_at(p.pc.pc) {
+            Some(f) => Term::tuple(alloc::vec![
+                Term::Atom(p.pc.module.name.clone()),
+                Term::Atom(f.name.clone()),
+                Term::Int(f.arity as i64),
+            ]),
+            None => Term::Atom(atoms.undefined.clone()),
+        },
         "status" => atom(if running {
             "running"
         } else if p.state == State::Waiting {
@@ -71,7 +93,7 @@ fn info_item(table: &mut AtomTable, atoms: &Atoms, p: &Process, running: bool, i
 /// Items about memory (`heap_size`, `memory`, ...) raise `badarg`: there are no per-process heaps.
 pub fn process_info(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Pid(pid) = a[0] else { return Err(c.badarg()) };
-    let single = matches!(a[1], Term::Atom(_));
+    let single = matches!(a[1], Term::Atom(_) | Term::Tuple(_));
     let items: Vec<Term> = if single { alloc::vec![a[1].clone()] } else { a[1].to_vec().ok_or_else(|| c.badarg())? };
     let running = pid == c.p.pid;
     let sys = &mut *c.sys;
@@ -86,11 +108,10 @@ pub fn process_info(c: &mut Ctx, a: &[Term]) -> R {
     };
     let mut out = Vec::new();
     for item in &items {
-        let Term::Atom(name) = item else { return Err(Exception::error(Term::Atom(atoms.badarg.clone()))) };
-        let value = info_item(table, atoms, p, running, name.as_str())
+        let value = info_item(table, atoms, p, running, item)
             .ok_or_else(|| Exception::error(Term::Atom(atoms.badarg.clone())))?;
         // Asked for alone, an unnamed process's `registered_name` is just `[]`.
-        if single && name.as_str() == "registered_name" && matches!(value, Term::Nil) {
+        if single && item.is_atom(&table.intern("registered_name").expect("short atom")) && matches!(value, Term::Nil) {
             return Ok(Term::Nil);
         }
         out.push(Term::tuple(alloc::vec![item.clone(), value]));
@@ -130,6 +151,22 @@ pub fn is_loaded(c: &mut Ctx, a: &[Term]) -> R {
         Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.file.clone()), c.atom("loaded")])
     } else {
         c.bool(false)
+    })
+}
+
+/// `code:ensure_modules_loaded(Modules)`: `ok`, or `{error, [{Module, nofile}]}`.
+pub fn ensure_modules_loaded(c: &mut Ctx, a: &[Term]) -> R {
+    let mut missing = Vec::new();
+    for m in a[0].to_vec().ok_or_else(|| c.badarg())? {
+        let Term::Atom(name) = &m else { return Err(c.badarg()) };
+        if c.sys.module(name).is_none() {
+            missing.push(Term::tuple(alloc::vec![m.clone(), c.atom("nofile")]));
+        }
+    }
+    Ok(if missing.is_empty() {
+        c.ok()
+    } else {
+        Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.error.clone()), Term::list(missing)])
     })
 }
 
@@ -235,6 +272,51 @@ pub fn system_version(c: &mut Ctx, _a: &[Term]) -> R {
         super::proc::OTP_RELEASE,
         super::proc::ERTS_VERSION
     )))
+}
+
+// ---- environment (the VM's own; see `System::env`) ----
+
+pub fn getenv(c: &mut Ctx, a: &[Term]) -> R {
+    let name = text_of(c, &a[0])?;
+    Ok(match c.sys.env.get(&name) {
+        Some(v) => string(v),
+        None => a.get(1).cloned().unwrap_or_else(|| Term::Atom(c.sys.atoms.false_.clone())),
+    })
+}
+
+pub fn getenv_all(c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(Term::list(c.sys.env.iter().map(|(k, v)| string(&alloc::format!("{k}={v}"))).collect::<Vec<_>>()))
+}
+
+pub fn putenv(c: &mut Ctx, a: &[Term]) -> R {
+    let (name, value) = (text_of(c, &a[0])?, text_of(c, &a[1])?);
+    if name.is_empty() || name.contains('=') {
+        return Err(c.badarg());
+    }
+    c.sys.env.insert(name, value);
+    Ok(Term::Atom(c.sys.atoms.true_.clone()))
+}
+
+pub fn unsetenv(c: &mut Ctx, a: &[Term]) -> R {
+    let name = text_of(c, &a[0])?;
+    c.sys.env.remove(&name);
+    Ok(Term::Atom(c.sys.atoms.true_.clone()))
+}
+
+// ---- init (a preloaded module in BEAM; its queries answered here) ----
+
+/// A VM has no command line: no arguments, no flags.
+pub fn init_get_arguments(_c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(Term::Nil)
+}
+
+pub fn init_get_argument(c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(Term::Atom(c.sys.atoms.error.clone()))
+}
+
+pub fn init_get_status(c: &mut Ctx, _a: &[Term]) -> R {
+    let started = c.atom("started");
+    Ok(Term::tuple(alloc::vec![started.clone(), started]))
 }
 
 // ---- time of day ----

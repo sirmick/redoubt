@@ -212,6 +212,7 @@ fn error_tuple(tag: &crate::atom::Atom, value: Term) -> Exception {
 
 /// Count one reduction. Returns `true` when the time slice is used up.
 fn reduce(p: &mut Process) -> bool {
+    p.reductions += 1;
     p.budget = p.budget.saturating_sub(1);
     p.budget == 0
 }

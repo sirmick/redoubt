@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Compile the Erlang modules the VM embeds (vm/lib/*.erl) into vm/lib/*.beam with the pinned
+# compiler. The .beam files are checked in, so building the VM needs no Erlang toolchain;
+# `tools/build-lib --check` fails if any of them is out of date.
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+. "$root/tools/env.sh"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+# +deterministic: no paths or timestamps in the output, so rebuilding is byte-identical.
+erlc +deterministic -o "$tmp" "$root"/vm/lib/*.erl
+status=0
+for b in "$tmp"/*.beam; do
+    dest="$root/vm/lib/$(basename "$b")"
+    if [ "${1:-}" == "--check" ]; then
+        cmp -s "$b" "$dest" || { echo "out of date: $dest (run tools/build-lib)"; status=1; }
+    else
+        cp "$b" "$dest"
+    fi
+done
+exit $status

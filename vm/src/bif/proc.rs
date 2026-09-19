@@ -65,6 +65,7 @@ pub fn make_ref(c: &mut Ctx, _a: &[Term]) -> R {
 fn do_spawn(c: &mut Ctx, entry: crate::process::Cp, args: Vec<Term>, link: bool) -> R {
     let pid = c.sys.spawn_at(entry, args)?;
     if let Some(p) = c.sys.procs.get_mut(pid) {
+        // A child inherits its parent's group leader.
         p.group_leader = c.p.group_leader.or(Some(c.p.pid));
         if link {
             p.links.insert(c.p.pid);
@@ -136,9 +137,89 @@ pub fn send_to(c: &mut Ctx, to: Pid, msg: Term) {
 }
 
 pub fn send(c: &mut Ctx, a: &[Term]) -> R {
+    // A reference is a destination while it is an active alias; otherwise the message is
+    // dropped, as for a dead pid.
+    if let Term::Ref(r) = &a[0] {
+        if let Some(alias) = c.sys.aliases.get(r).copied() {
+            if alias.mode == crate::vm::AliasMode::ReplyDemonitor {
+                c.sys.aliases.remove(r);
+            }
+            send_to(c, alias.owner, a[1].clone());
+        }
+        return Ok(a[1].clone());
+    }
     let to = destination(c, &a[0])?;
     send_to(c, to, a[1].clone());
     Ok(a[1].clone())
+}
+
+/// `send(Dest, Msg, Options)`: `noconnect` and `nosuspend` only matter between nodes, so this
+/// is a plain send that returns `ok`.
+pub fn send3(c: &mut Ctx, a: &[Term]) -> R {
+    a[2].to_vec().ok_or_else(|| c.badarg())?;
+    send(c, &a[..2])?;
+    Ok(c.ok())
+}
+
+// ---- aliases ----
+
+fn alias_mode(c: &Ctx, opts: &Term) -> Result<Option<crate::vm::AliasMode>, Exception> {
+    use crate::vm::AliasMode;
+    let mut mode = None;
+    for o in opts.to_vec().ok_or_else(|| c.badarg())? {
+        match o.as_tuple() {
+            Some([Term::Atom(k), Term::Atom(v)]) if k.as_str() == "alias" => {
+                mode = Some(match v.as_str() {
+                    "explicit_unalias" => AliasMode::Explicit,
+                    "demonitor" => AliasMode::Demonitor,
+                    "reply_demonitor" => AliasMode::ReplyDemonitor,
+                    _ => return Err(c.badarg()),
+                });
+            }
+            _ => return Err(c.badarg()),
+        }
+    }
+    Ok(mode)
+}
+
+/// `alias()` and `alias(Options)`: a reference that routes messages to the caller.
+pub fn alias(c: &mut Ctx, a: &[Term]) -> R {
+    let mode = match a.first() {
+        Some(opts) => {
+            let opts = opts.to_vec().ok_or_else(|| c.badarg())?;
+            // alias/1 takes plain atoms: explicit_unalias or reply.
+            if opts.iter().any(|o| matches!(o, Term::Atom(x) if x.as_str() == "reply")) {
+                crate::vm::AliasMode::ReplyDemonitor
+            } else if opts.iter().all(|o| matches!(o, Term::Atom(x) if x.as_str() == "explicit_unalias")) {
+                crate::vm::AliasMode::Explicit
+            } else {
+                return Err(c.badarg());
+            }
+        }
+        None => crate::vm::AliasMode::Explicit,
+    };
+    let r = c.sys.make_ref();
+    c.sys.aliases.insert(r, crate::vm::Alias { owner: c.p.pid, mode });
+    Ok(Term::Ref(r))
+}
+
+pub fn unalias(c: &mut Ctx, a: &[Term]) -> R {
+    let Term::Ref(r) = a[0] else { return Err(c.badarg()) };
+    let owned = c.sys.aliases.get(&r).is_some_and(|al| al.owner == c.p.pid);
+    if owned {
+        c.sys.aliases.remove(&r);
+    }
+    Ok(c.bool(owned))
+}
+
+/// `monitor(process, Target, Options)`: supports `{alias, Mode}`.
+pub fn monitor3(c: &mut Ctx, a: &[Term]) -> R {
+    let mode = alias_mode(c, &a[2])?;
+    let r = monitor(c, &a[..2])?;
+    if let (Some(mode), Term::Ref(r)) = (mode, &r) {
+        c.sys.aliases.insert(*r, crate::vm::Alias { owner: c.p.pid, mode });
+    }
+    Ok(r)
 }
 
 // ---- links, monitors, exit signals ----
@@ -238,6 +319,9 @@ pub fn demonitor(c: &mut Ctx, a: &[Term]) -> R {
         if let Some(t) = c.sys.procs.get_mut(pid) {
             t.monitored_by.remove(&r);
         }
+    }
+    if c.sys.aliases.get(&r).is_some_and(|al| al.owner == c.p.pid && al.mode != crate::vm::AliasMode::Explicit) {
+        c.sys.aliases.remove(&r);
     }
     Ok(Term::Atom(c.sys.atoms.true_.clone()))
 }
@@ -358,6 +442,134 @@ pub fn erase(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn group_leader(c: &mut Ctx, _a: &[Term]) -> R {
     Ok(Term::Pid(c.p.group_leader.unwrap_or(c.p.pid)))
+}
+
+/// `group_leader(Leader, Pid)`: make `Leader` the group leader of `Pid`.
+pub fn set_group_leader(c: &mut Ctx, a: &[Term]) -> R {
+    let (Term::Pid(leader), Term::Pid(pid)) = (&a[0], &a[1]) else { return Err(c.badarg()) };
+    if *pid == c.p.pid {
+        c.p.group_leader = Some(*leader);
+    } else {
+        let badarg = c.badarg();
+        c.sys.procs.get_mut(*pid).ok_or(badarg)?.group_leader = Some(*leader);
+    }
+    Ok(Term::Atom(c.sys.atoms.true_.clone()))
+}
+
+// ---- timers ----
+
+/// The deadline for `Time` (milliseconds, relative unless `{abs, true}`), in platform time.
+fn timer_deadline(c: &mut Ctx, time: &Term, opts: Option<&Term>) -> Result<u64, Exception> {
+    let ms = time.as_i64().filter(|t| (0..=u32::MAX as i64).contains(t)).ok_or_else(|| c.badarg())? as u64;
+    let mut abs = false;
+    if let Some(opts) = opts {
+        for o in opts.to_vec().ok_or_else(|| c.badarg())? {
+            match o.as_tuple() {
+                Some([Term::Atom(k), v]) if k.as_str() == "abs" => abs = v.is_atom(&c.sys.atoms.true_),
+                _ => return Err(c.badarg()),
+            }
+        }
+    }
+    let now = c.sys.now_us();
+    Ok(if abs { ms.saturating_mul(1000) } else { now.saturating_add(ms * 1000) })
+}
+
+fn timer_target(c: &Ctx, t: &Term) -> Result<Term, Exception> {
+    match t {
+        Term::Pid(_) | Term::Atom(_) => Ok(t.clone()),
+        _ => Err(c.badarg()),
+    }
+}
+
+/// `start_timer(Time, Dest, Msg[, Opts])`: after `Time` ms, `Dest` gets `{timeout, Ref, Msg}`.
+pub fn start_timer(c: &mut Ctx, a: &[Term]) -> R {
+    let deadline = timer_deadline(c, &a[0], a.get(3))?;
+    let to = timer_target(c, &a[1])?;
+    // The message carries the timer's own reference, so reserve it first.
+    let r = c.sys.start_message_timer(deadline, to.clone(), Term::Nil).ok_or_else(|| c.system_limit())?;
+    let msg = Term::tuple(alloc::vec![c.atom("timeout"), Term::Ref(r), a[2].clone()]);
+    c.sys.message_timers.insert(r, (deadline, to, msg));
+    Ok(Term::Ref(r))
+}
+
+/// `send_after(Time, Dest, Msg[, Opts])`: after `Time` ms, `Dest` gets `Msg`.
+pub fn send_after(c: &mut Ctx, a: &[Term]) -> R {
+    let deadline = timer_deadline(c, &a[0], a.get(3))?;
+    let to = timer_target(c, &a[1])?;
+    let r = c.sys.start_message_timer(deadline, to, a[2].clone()).ok_or_else(|| c.system_limit())?;
+    Ok(Term::Ref(r))
+}
+
+fn remaining_ms(c: &mut Ctx, deadline: Option<u64>) -> Term {
+    match deadline {
+        Some(d) => Term::Int((d.saturating_sub(c.sys.now_us()) / 1000) as i64),
+        None => c.bool(false),
+    }
+}
+
+/// `cancel_timer(Ref[, Opts])`: milliseconds that were left, or `false`. With `{async, true}` the
+/// answer comes as a message `{cancel_timer, Ref, Result}`; with `{info, false}` there is none.
+pub fn cancel_timer(c: &mut Ctx, a: &[Term]) -> R {
+    let Term::Ref(r) = a[0] else { return Err(c.badarg()) };
+    let (mut asynchronous, mut info) = (false, true);
+    if let Some(opts) = a.get(1) {
+        for o in opts.to_vec().ok_or_else(|| c.badarg())? {
+            match o.as_tuple() {
+                Some([Term::Atom(k), v]) if k.as_str() == "async" => asynchronous = v.is_atom(&c.sys.atoms.true_),
+                Some([Term::Atom(k), v]) if k.as_str() == "info" => info = v.is_atom(&c.sys.atoms.true_),
+                _ => return Err(c.badarg()),
+            }
+        }
+    }
+    let left = c.sys.cancel_message_timer(r);
+    let result = remaining_ms(c, left);
+    if asynchronous {
+        if info {
+            let msg = Term::tuple(alloc::vec![c.atom("cancel_timer"), Term::Ref(r), result]);
+            send_to(c, c.p.pid, msg);
+        }
+        return Ok(c.ok());
+    }
+    Ok(if info { result } else { c.ok() })
+}
+
+pub fn read_timer(c: &mut Ctx, a: &[Term]) -> R {
+    let Term::Ref(r) = a[0] else { return Err(c.badarg()) };
+    let deadline = c.sys.message_timers.get(&r).map(|(d, _, _)| *d);
+    Ok(remaining_ms(c, deadline))
+}
+
+// ---- persistent_term ----
+
+/// Most keys `persistent_term` may hold; it is VM-wide state any process can grow.
+const MAX_PERSISTENT_TERMS: usize = 1 << 16;
+
+pub fn pt_put(c: &mut Ctx, a: &[Term]) -> R {
+    let key = MapKey(a[0].clone());
+    if !c.sys.persistent.contains_key(&key) && c.sys.persistent.len() >= MAX_PERSISTENT_TERMS {
+        return Err(c.system_limit());
+    }
+    c.sys.persistent.insert(key, a[1].clone());
+    Ok(c.ok())
+}
+
+/// `get(Key)` (`badarg` if absent) and `get(Key, Default)`.
+pub fn pt_get(c: &mut Ctx, a: &[Term]) -> R {
+    match c.sys.persistent.get(&MapKey(a[0].clone())) {
+        Some(v) => Ok(v.clone()),
+        None => a.get(1).cloned().ok_or_else(|| c.badarg()),
+    }
+}
+
+pub fn pt_get_all(c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(Term::list(
+        c.sys.persistent.iter().map(|(k, v)| Term::tuple(alloc::vec![k.0.clone(), v.clone()])).collect::<Vec<_>>(),
+    ))
+}
+
+pub fn pt_erase(c: &mut Ctx, a: &[Term]) -> R {
+    let existed = c.sys.persistent.remove(&MapKey(a[0].clone())).is_some();
+    Ok(c.bool(existed))
 }
 
 // ---- time ----
@@ -502,6 +714,17 @@ pub fn system_info(c: &mut Ctx, a: &[Term]) -> R {
     })
 }
 
+/// `net_kernel:dflag_unicode_io(Pid)`: whether an I/O server understands Unicode requests.
+/// Asked by `io` before every request; all servers here are local and Unicode-capable.
+pub fn dflag_unicode_io(c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(Term::Atom(c.sys.atoms.true_.clone()))
+}
+
+/// `io:printable_range()`: which characters `~p` prints as text. BEAM's default is `latin1`.
+pub fn printable_range(c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(Term::Atom(c.sys.atoms.latin1.clone()))
+}
+
 pub fn nif_error(_c: &mut Ctx, a: &[Term]) -> R {
     Err(Exception::error(a[0].clone()))
 }
@@ -575,6 +798,20 @@ pub fn fun_info(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 /// `erts_internal:cmp_term/2`: the exact term order (`1` and `1.0` differ), as -1, 0 or 1.
+/// `fun_info_mfa(Fun)`: `{Module, Function, Arity}` of the code behind a fun.
+pub fn fun_info_mfa(c: &mut Ctx, a: &[Term]) -> R {
+    use crate::term::Fun;
+    let Term::Fun(f) = &a[0] else { return Err(c.badarg()) };
+    let (m, name) = match &**f {
+        Fun::Export { module, function, .. } => (module.clone(), function.clone()),
+        Fun::Local { module, index, .. } => {
+            let md = c.sys.module(module).ok_or_else(|| c.badarg())?;
+            (module.clone(), md.funs.get(*index as usize).ok_or_else(|| c.badarg())?.function.clone())
+        }
+    };
+    Ok(Term::tuple(alloc::vec![Term::Atom(m), Term::Atom(name), Term::Int(f.arity() as i64)]))
+}
+
 pub fn cmp_term(_c: &mut Ctx, a: &[Term]) -> R {
     Ok(Term::Int(match a[0].cmp_exact(&a[1]) {
         core::cmp::Ordering::Less => -1,
