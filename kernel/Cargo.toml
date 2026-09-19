@@ -14,13 +14,9 @@ stats_alloc = { version = "0.1.8", optional = true }
 xous-kernel = { package = "xous", version = "0.9.70", features = [
     "forget-memory-messages",
 ] }
-utralib = { version = "0.1.27", optional = true, default-features = false }
 rand_chacha = { version = "0.3.1", optional = true, default-features = false }
 sbi-rt = { version = "0.0.3", optional = true }
 plic = { version = "0.0.3", optional = true, features = ["primitive-id"] }
-bao1x-hal = { path = "../libs/bao1x-hal", optional = true, default-features = false }
-bao1x-api = { path = "../libs/bao1x-api", optional = true }
-loader = { path = "../loader", optional = true, features = ["swap"] }
 [target.'cfg(any(windows,unix))'.dev-dependencies]
 xous-kernel = { package = "xous", version = "0.9.70", features = [
     "forget-memory-messages",
@@ -42,13 +38,6 @@ paging = { path = "../xous64/paging" }
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(ci)', 'cfg(baremetal)'] }
 
 [features]
-vexii-test = []                                                    # integration test for vexii, not a production configuration
-bao1x = ["utralib/bao1x", "rand_chacha", "raw-trng"]
-verilator-only = []
-board-baosec = ["bao1x-hal/kernel-baosec", "memmap-flash", "swap"]
-board-baosor = ["bao1x-hal/kernel-baosor"]
-board-dabao = ["bao1x-hal/kernel-dabao"]
-hosted-baosec = []
 
 # Capabilities. Boards select these; code keys on them rather than on the CPU's XLEN.
 # See "Hardware abstraction" in planning/xous64/PLAN.md.
@@ -58,7 +47,6 @@ plic = ["dep:plic"]                 # standard RISC-V PLIC; otherwise VexRiscv's
 # Boards. Everything else about these machines comes from the device tree at boot.
 qemu-virt = ["sbi", "plic"]
 
-hosted = ["utralib/hosted"]
 
 debug-print = []
 print-panics = []
@@ -66,12 +54,6 @@ dump-kernel-pages = []                              # include kernel pages in pa
 report-memory = ["stats_alloc"]
 wrap-print = []
 big-heap = []                                       # Cause heaps to start at 12 MM instead of 512 kB
-v2p = ["xous-kernel/v2p"]
-swap = ["xous-kernel/swap", "loader/swap"]
-memmap-flash = []
-debug-swap = []
-debug-swap-verbose = []
-raw-trng = ["xous-kernel/raw-trng"]
 # this is somewhat unsafe because it introduces more attack surface for the kernel by allowing the
 # userspace to hand it a random page from the caller's virtual memory space, and populate it with debug information
 debug-proc = []
