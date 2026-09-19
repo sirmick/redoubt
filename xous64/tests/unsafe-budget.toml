@@ -15,7 +15,7 @@ max_undocumented = 0
 [[budget]]
 name = "loader"
 paths = ["loader64/src"]
-max_unsafe = 14 # +1: splitting physmap superpages to write-protect kernel code installs a table
+max_unsafe = 17 # +3: fdt-rs DevTree::from_raw_pointer, the static index buffer, and Platform::read
 max_undocumented = 0
 
 [[budget]]
