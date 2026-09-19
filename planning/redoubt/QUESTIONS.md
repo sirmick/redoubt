@@ -800,3 +800,37 @@ point to change the IPC design. Several items interact; the cross-references say
      *Rec:* a constant `MAX_HANDLES` = 4096 in KERNEL-SPEC.md. A call that would exceed it gets
      `TooLarge`, which is distinguishable from a budget running out of pages, and C1 then compares
      like with like.
+
+## From applying answers 56-101 (the design editor's choices; each needs confirming)
+
+103. **How answer 84 works: a `first` flag on budgets.** Your answer gave the policy but no
+     mechanism. The editor added a budget flag `first`, set at `budget_create` in place of the old
+     class argument. Only a caller that is itself `first` can set it, and only under a
+     system-class parent; `root` and `system` have it. R12 runs `first` budgets before the stride
+     queue. This is the largest thing the editor invented. *Rec:* confirm.
+
+104. **Where the abandoned-call notice (81) is delivered.** It is delivered once, on the holding
+     thread's next `receive` on the endpoint the call came in on. A thread that never receives
+     there again never gets it. *Rec:* confirm, and the server library makes each serving thread
+     keep receiving.
+
+105. **"At `MAX_OPEN_CALLS`, refuse only calls" (81).** The editor reads this as: calls stay
+     queued and R2 skips them, sends and notices still arrive, and `receive` no longer returns
+     `Busy`. *Rec:* confirm.
+
+106. **PIDs under answer 74.** A finished process keeps its PID until its notice is received, but
+     stops counting against its budget's process limit when it dies. *Rec:* confirm.
+
+107. **The reply side of answer 72.** A `reply` whose handles don't fit the caller still gives
+     the caller `OutOfMemory`, since 72 speaks only of `receive`. *Rec:* confirm.
+
+108. **The new message layouts (75, 83) are the editor's.** They are the fields of the `startup`
+     message and the `ninep-common` table: `disconnect` as opcode 3, and a `root: string` in
+     `new_connection`. Both are fenced until WP-R1b generates them. *Rec:* confirm; R1b may
+     adjust the layouts, recorded in HISTORY.md.
+
+109. **The new I15.** Every abandoned call is reported exactly once and stays open until replied
+     to. It reuses the number the badge-notice invariant had. *Rec:* confirm.
+
+110. **58 under 82.** A thread with no current call blames nobody, with no fallback. *Rec:* as
+     written.
