@@ -49,29 +49,29 @@ pub struct KernelArgument {
     pub data: &'static [u32],
 }
 
-impl KernelArgument {
-    pub fn new(base: *const u32, offset: usize) -> Self {
-        // SAFETY: `base` is the argument block and `offset` is a tag boundary within it
-        // (the iterator only ever advances by whole tags). A tag is name, size, then data.
-        unsafe {
-            let name = base.add(offset / 4).read();
-            let size = (base.add(offset / 4 + 1) as *const u16).add(1).read() as usize;
-            let data = core::slice::from_raw_parts(base.add(offset / 4 + 2), size);
-            KernelArgument { name, size: size * 4, data }
-        }
-    }
-}
-
 impl Iterator for KernelArgumentsIterator {
     type Item = KernelArgument;
 
+    /// Reads the tag at the current offset: name, then size (the upper half of the second
+    /// word, counted in words), then that many data words.
     fn next(&mut self) -> Option<Self::Item> {
-        if self.offset >= self.size {
-            None
-        } else {
-            let new_arg = KernelArgument::new(self.base, self.offset);
-            self.offset += new_arg.size + 8;
-            Some(new_arg)
+        // A tag is its two header words and its data; a header that does not fit ends the block.
+        if self.offset + 8 > self.size {
+            return None;
+        }
+        let words_left = (self.size - self.offset - 8) / 4;
+        // SAFETY: `self.base` is the argument block the loader built and `self.offset` a tag
+        // boundary within it: this is the only place the offset moves, and it moves by whole
+        // tags. The header therefore lies in the block, and the data slice does too, because
+        // the assertion keeps its length within the `words_left` words the block still has.
+        // The block is word-aligned, initialised and lives as long as the kernel.
+        unsafe {
+            let name = self.base.add(self.offset / 4).read();
+            let size = (self.base.add(self.offset / 4 + 1) as *const u16).add(1).read() as usize;
+            assert!(size <= words_left, "args: a tag's data runs past the end of the argument block");
+            let data = core::slice::from_raw_parts(self.base.add(self.offset / 4 + 2), size);
+            self.offset += size * 4 + 8;
+            Some(KernelArgument { name, size: size * 4, data })
         }
     }
 }

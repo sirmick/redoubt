@@ -387,7 +387,17 @@ impl SystemServices {
                     init_count += 1;
                 }
             }
-            // SAFETY: the loader wrote `init_count` InitialProcess records starting at `base` (see BOOT.md).
+            // The loader writes the table into one page, one record per process (BOOT.md), so
+            // a count that does not fit means the kernel and the loader disagree.
+            let capacity = xous_kernel::arch::PAGE_SIZE / size_of::<crate::arch::process::InitialProcess>();
+            assert!(
+                init_count <= capacity,
+                "the initial-process table does not hold {} processes",
+                init_count
+            );
+            // SAFETY: `base` is that page, which the loader allocated, zeroed and filled with
+            // one `InitialProcess` per process; it is page-aligned, so aligned for the record,
+            // and `init_count` records fit within it.
             unsafe {
                 core::slice::from_raw_parts(base as *const crate::arch::process::InitialProcess, init_count)
             }
@@ -2288,15 +2298,14 @@ impl SystemServices {
             if arg.name != u32::from_le_bytes(*b"PNam") {
                 continue;
             }
-            // SAFETY: `arg.data` is `arg.size` words of the kernel argument block; viewing them as bytes is
-            // valid.
-            let data = unsafe {
-                let ptr = arg.data.as_ptr();
-                let len = arg.size;
-                core::slice::from_raw_parts(ptr as *const u8, len * 4)
-            };
+            // SAFETY: `arg.data` is the tag's data, `arg.size` bytes (`arg.data.len()` words) of
+            // the kernel argument block. Viewing those same bytes as `u8` keeps the length and
+            // needs no more alignment than the words already have.
+            let data = unsafe { core::slice::from_raw_parts(arg.data.as_ptr() as *const u8, arg.size) };
+            // Each record is a PID word, a length word, then that many bytes, padded to a word.
+            // A record that does not fit in the tag means a malformed block: stop reading it.
             let mut offset = 0;
-            while offset <= arg.size {
+            while offset + 8 <= data.len() {
                 let check_pid =
                     u32::from_le_bytes([data[offset], data[offset + 1], data[offset + 2], data[offset + 3]]);
                 let str_len = u32::from_le_bytes([
@@ -2305,6 +2314,9 @@ impl SystemServices {
                     data[offset + 6],
                     data[offset + 7],
                 ]) as usize;
+                if str_len > data.len() - offset - 8 {
+                    break;
+                }
                 if check_pid == pid.get() as _ {
                     if let Ok(s) = core::str::from_utf8(&data[offset + 8..offset + 8 + str_len]) {
                         return Some(s);
