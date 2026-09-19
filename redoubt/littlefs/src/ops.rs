@@ -31,9 +31,10 @@ pub(crate) fn components(path: &str) -> Result<Vec<&[u8]>, Error> {
     Ok(names)
 }
 
-/// The order new names are inserted in, matching the reference's `lfs_dir_find_match`: bytes
+/// The order of names in a directory, exactly the reference's `lfs_dir_find_match`: bytes
 /// compared over the common length; when one name is a prefix of the other, the longer one
-/// sorts first. Only placement depends on it; lookups scan every entry.
+/// sorts first. A directory is sorted across all its pairs (SPEC.md "0x601 HARDTAIL"), and
+/// lookups rely on it: they stop at the first pair holding a greater name.
 fn name_order(on_disk: &[u8], name: &[u8]) -> Ordering {
     let n = on_disk.len().min(name.len());
     match on_disk[..n].cmp(&name[..n]) {
@@ -55,23 +56,32 @@ impl<D: BlockDevice> Filesystem<D> {
             .filter(move |(id, e)| Some(*id) != moved && is_file_or_dir(e.name_type))
     }
 
-    /// Looks `name` up in the directory whose first pair is `head`. Not found: the last
-    /// pair and the id to insert at.
+    /// Looks `name` up in the directory whose first pair is `head` (the reference's
+    /// `lfs_dir_find`). Not found: the pair and id where it would be inserted to keep the
+    /// directory sorted, which is where the search stopped.
     fn find(&mut self, head: Pair, name: &[u8]) -> Result<Result<(MDir, u16), (MDir, u16)>, Error> {
         let mut pair = head;
         let mut cycle = Cycle::new();
         loop {
             let dir = self.fetch(pair)?;
-            let found = self.visible(&dir).find(|(_, e)| e.name == name).map(|(id, _)| id);
+            let (mut found, mut insert) = (None, None);
+            for (id, e) in self.visible(&dir) {
+                match name_order(&e.name, name) {
+                    Ordering::Equal => found = Some(id),
+                    Ordering::Greater if insert.is_none() => insert = Some(id),
+                    _ => {}
+                }
+            }
             if let Some(id) = found {
                 return Ok(Ok((dir, id)));
             }
-            if !dir.c.split {
-                let id = self
-                    .visible(&dir)
-                    .find(|(_, e)| name_order(&e.name, name) == Ordering::Greater)
-                    .map_or(dir.c.entries.len() as u16, |(id, _)| id);
+            // A greater name here means the name is not in any later pair either.
+            if let Some(id) = insert {
                 return Ok(Err((dir, id)));
+            }
+            if !dir.c.split {
+                let end = dir.c.entries.len() as u16;
+                return Ok(Err((dir, end)));
             }
             cycle.step(&dir.c.tail)?;
             pair = dir.c.tail;
@@ -159,15 +169,30 @@ impl<D: BlockDevice> Filesystem<D> {
         self.mutate(|fs| {
             let (Lookup::Missing { dir, id }, name) = fs.lookup(path)? else { return Err(Error::Exists) };
             fs.check_name(name)?;
-            // The new pair joins the list of all pairs right after `dir` (the last pair of its
-            // parent), in the same commit that names it, so there is never an orphan.
-            let child = fs.new_pair(&Contents::new(dir.c.tail, false))?;
-            fs.commit(dir.pair, &[
+            // The new pair joins the list of all pairs after the last pair of the parent
+            // directory (a hard-tail chain cannot be split).
+            let mut last = dir.clone();
+            let mut cycle = Cycle::new();
+            while last.c.split {
+                cycle.step(&last.c.tail)?;
+                last = fs.fetch(last.c.tail)?;
+            }
+            let child = fs.new_pair(&Contents::new(last.c.tail, false))?;
+            let mut attrs = vec![
                 attr_create(id),
                 attr_name(TYPE_DIR, id, name)?,
                 attr_struct(TYPE_DIRSTRUCT, id, &pair_bytes(child))?,
-                attr_tail(false, child),
-            ])
+            ];
+            if dir.c.split {
+                // Linking and naming are two commits: until the second, the new directory is
+                // an orphan, and the orphan flag says so.
+                fs.prep_orphans(1);
+                fs.commit(last.pair, &[attr_tail(false, child)])?;
+                fs.prep_orphans(-1);
+            } else {
+                attrs.push(attr_tail(false, child));
+            }
+            fs.commit(dir.pair, &attrs)
         })
     }
 
@@ -344,8 +369,15 @@ impl<D: BlockDevice> Filesystem<D> {
     /// Repairs what an interrupted operation left (as any write does), then checks the
     /// whole volume: every pair and file readable, no block used twice, the directory tree
     /// a tree, and every pair on the list either a superblock or reachable from the root.
+    ///
+    /// The orphan repair runs even when the orphan flag is clear: the C reference can leave
+    /// a removed directory on the list with the flag cleared (a relocation during the
+    /// removal resets its orphan count), which only leaks its two blocks, but this finds it.
     pub fn fsck(&mut self) -> Result<(), Error> {
-        self.mutate(|fs| fs.check_volume())
+        self.mutate(|fs| {
+            fs.deorphan()?;
+            fs.check_volume()
+        })
     }
 
     fn check_volume(&mut self) -> Result<(), Error> {
