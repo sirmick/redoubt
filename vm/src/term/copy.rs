@@ -169,6 +169,7 @@ impl Clone for Heap {
         Heap {
             terms: self.terms.clone(),
             offheap: self.offheap.clone(),
+            offheap_index: self.offheap_index.clone(),
             offheap_bytes: self.offheap_bytes,
             lits: self.lits.clone(),
         }
