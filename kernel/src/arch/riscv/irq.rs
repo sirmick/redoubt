@@ -246,24 +246,28 @@ pub extern "C" fn trap_handler(
         RiscvException::UserExternalInterrupt(_)
         | RiscvException::SupervisorExternalInterrupt(_)
         | RiscvException::SupervisorTimerInterrupt(_) => {
+            // The controller (or the timer) claims one interrupt; `None` is a spurious trap
+            // with nothing pending, which we ignore and just resume from.
             #[cfg(feature = "sbi")]
-            let irqs_pending = if let RiscvException::SupervisorTimerInterrupt(_) = ex {
+            let pending = if let RiscvException::SupervisorTimerInterrupt(_) = ex {
                 timer::on_interrupt();
-                1 << timer::IRQ
+                Some(timer::IRQ)
             } else {
                 intc::pending()
             };
             #[cfg(not(feature = "sbi"))]
-            let irqs_pending = intc::pending();
+            let pending = intc::pending();
 
-            // Remember who to resume once the userspace handler returns.
-            PREVIOUS_PAIR.with(|previous| {
-                if previous.is_none() {
-                    *previous = Some((pid, crate::arch::process::current_tid()));
-                }
-            });
-            HANDLING_IRQ.store(true, Ordering::Relaxed);
-            crate::irq::handle(irqs_pending).expect("Couldn't handle IRQ");
+            if let Some(irq) = pending {
+                // Remember who to resume once the userspace handler returns.
+                PREVIOUS_PAIR.with(|previous| {
+                    if previous.is_none() {
+                        *previous = Some((pid, crate::arch::process::current_tid()));
+                    }
+                });
+                HANDLING_IRQ.store(true, Ordering::Relaxed);
+                crate::irq::handle(irq).expect("Couldn't handle IRQ");
+            }
             ArchProcess::with_current_mut(|process| {
                 crate::arch::syscall::resume(current_pid().get() == 1, process.current_thread())
             })
