@@ -111,7 +111,8 @@ fn main() -> ExitCode {
     };
 
     let platform = Posix { start: Instant::now(), code_path };
-    let mut vm = Vm::new(Box::new(platform));
+    let config = beamlet_vm::vm::Config { natives: beamlet_crypto::NATIVES, ..Default::default() };
+    let mut vm = Vm::with_config(Box::new(platform), config);
     let pid = match vm.spawn(&module, &function, Vec::new()) {
         Ok(pid) => pid,
         Err(e) => {

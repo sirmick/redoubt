@@ -68,6 +68,11 @@ pub enum Arg {
     Alloc,
 }
 
+/// A pseudo-opcode no `.beam` file can contain (the loader accepts only up to
+/// [`crate::opcodes::MAX_OPCODE`]): "this function's body is a native", operand 0 indexing
+/// [`Module::body_natives`]. Put in place at load time, like `erlang:load_nif/2`.
+pub const NATIVE_BODY: u8 = 255;
+
 /// A decoded instruction. Operands are in the order of the compiler's `genop.tab`.
 #[derive(Clone, Debug)]
 pub struct Instr {
@@ -87,6 +92,8 @@ pub struct Module {
     pub functions: Vec<FunctionInfo>,
     /// Source locations, for stack traces. See [`Module::location`].
     pub lines: Lines,
+    /// Natives that replace function bodies (see [`NATIVE_BODY`]): native, name, arity.
+    pub body_natives: Vec<(crate::bif::Native, Atom, u32)>,
     /// The `Attr` and `CInf` chunks (external term format), for `module_info/1`.
     pub attributes: Vec<u8>,
     pub compile_info: Vec<u8>,

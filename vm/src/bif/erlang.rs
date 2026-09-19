@@ -57,7 +57,7 @@ pub fn is_port(c: &mut Ctx, _a: &[Term]) -> R {
     Ok(c.bool(false))
 }
 pub fn is_reference(c: &mut Ctx, a: &[Term]) -> R {
-    Ok(c.bool(matches!(a[0], Term::Ref(_))))
+    Ok(c.bool(matches!(a[0], Term::Ref(_) | Term::Resource(_))))
 }
 pub fn is_tuple(c: &mut Ctx, a: &[Term]) -> R {
     Ok(c.bool(matches!(a[0], Term::Tuple(_))))
@@ -672,7 +672,7 @@ pub fn flat_size(_c: &mut Ctx, a: &[Term]) -> R {
                     2 + env.len() as u64
                 }
             },
-            Term::Ref(_) => 3,
+            Term::Ref(_) | Term::Resource(_) => 3,
             Term::Match(_) => 0,
         };
     }

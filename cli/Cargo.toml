@@ -7,3 +7,4 @@ version.workspace = true
 
 [dependencies]
 beamlet-vm = { path = "../vm" }
+beamlet-crypto = { path = "../crypto" }

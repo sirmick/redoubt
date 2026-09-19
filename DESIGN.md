@@ -148,6 +148,31 @@ cell, quadratic binary appends (`private_append` now grows a uniquely owned buff
 and whole-map walks when dropping an old map version. What remains is the interpreter's own
 dispatch and operand decoding; pre-decoding operands would be the next step if it matters.
 
+## Crypto (`crypto/`)
+`beamlet-crypto` implements OTP's `crypto` NIFs in pure Rust, so the real `crypto.erl` (and on
+top of it `public_key`, `ssl`, `ssh`) runs unmodified. It is a separate crate the embedder opts
+into (`Config::natives`), so the core VM and its trusted base stay small.
+- Mechanism: when a module loads, any function with a registered native gets its body replaced
+  by that native, as `erlang:load_nif/2` does. `-on_load` functions are not run. Native state
+  (hash, MAC, cipher contexts) lives in resource terms, which are references to Erlang code.
+- Algorithms: what modern TLS and SSH need, listed in `crypto/src/lib.rs`; `supports/1`
+  reports exactly those, so `ssl`/`ssh` negotiate only what is here. Others raise `notsup`.
+- Dependencies: RustCrypto (`sha1`, `sha2`, `sha3`, `md-5`, `hmac`, `aes`, `ctr`, `aes-gcm`,
+  `chacha20`, `chacha20poly1305`, `poly1305`, `pbkdf2`, `p256`, `p384`, `ecdsa`, `rsa`) and
+  dalek (`x25519-dalek`, `ed25519-dalek`). All pure Rust, `no_std`. Notes: `rsa` is the stable
+  0.9 line, which has a known timing side channel in decryption (RUSTSEC-2023-0071; side
+  channels are out of scope for now, see TENETS) and uses the previous `digest` generation,
+  hence `sha1`/`sha2` 0.10 alongside 0.11. `cpufeatures` declares `libc` FFI for CPU detection
+  on hosts; nothing in it is C.
+- Randomness: only `Platform::random`. RSA key generation and padding draw from a ChaCha20
+  keystream keyed from the platform per operation; everything else takes bytes directly.
+  Failure to get randomness fails the operation.
+- ECDSA signatures are deterministic (RFC 6979). Errors use the C NIFs' error shape, so
+  `crypto.erl` reports them the same way.
+- Tested differentially against OTP's crypto on OpenSSL (`tests/cryptotests`): every hash, MAC,
+  cipher mode and padding, AEAD, and fixed-key key agreement and signature matches byte for
+  byte; a hostile-argument test makes 20k calls with generated junk.
+
 ## Open questions
 - Mailbox overflow currently drops messages silently. Kill the receiver instead?
 - Per-process memory limits with shared (reference-counted) terms.

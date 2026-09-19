@@ -11,6 +11,7 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 . "$root/tools/env.sh"
 otp_lib="$(dirname "$(dirname "$(command -v erl)")")/lib"
 stdlib=( "$otp_lib"/stdlib-*/ebin )
+cryptolib=( "$otp_lib"/crypto-*/ebin )
 elixir_lib="$(dirname "$(dirname "$(command -v elixir)")")/lib"
 elixir_ebin="$elixir_lib/elixir/ebin"
 "$root/tools/build-lib" --check
@@ -47,7 +48,7 @@ for suite in "${suites[@]}"; do
             skip=$((skip + 1)); continue
         fi
         total=$((total + 1))
-        got="$(timeout "$timeout_s" "$beamlet" -pa "$out" -pa "${stdlib[0]}" -pa "$elixir_ebin" "$m" 2>&1 || echo "EXIT $?")"
+        got="$(timeout "$timeout_s" "$beamlet" -pa "$out" -pa "${stdlib[0]}" -pa "${cryptolib[0]}" -pa "$elixir_ebin" "$m" 2>&1 || echo "EXIT $?")"
         printf '%s\n' "$got" > "$out/$m.got"
         # The result is the last line; anything before it is the program's own console output.
         if [ "$(printf '%s\n' "$got" | tail -n 1)" == "$(cat "$exp")" ]; then
@@ -59,7 +60,8 @@ for suite in "${suites[@]}"; do
 done
 for f in "${failed[@]}"; do
     s="${f%%/*}"; m="${f#*/}"
-    printf 'FAIL %-40s want %s\n     %-40s got  %s\n' "$f" "$(head -c 200 "$root/build/difftest/$s/$m.expected")" "" "$(tail -n 1 "$root/build/difftest/$s/$m.got" | head -c 200)"
+    printf 'FAIL %s\n' "$f"
+    escript "$root/tools/termdiff.escript" "$root/build/difftest/$s/$m.expected" "$root/build/difftest/$s/$m.got" 2>&1 | head -40
 done
 echo "difftest: $pass/$total passed, $fail failed, $skip skipped by design"
 [ "$fail" -eq 0 ]

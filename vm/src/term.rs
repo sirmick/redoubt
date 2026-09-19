@@ -40,9 +40,26 @@ pub enum Term {
     Fun(Rc<Fun>),
     Pid(Pid),
     Ref(Ref),
+    /// A native object (a hash state, a cipher context, ...) held by Erlang code. Opaque to
+    /// Erlang: it is a reference as far as type tests and ordering go, as in BEAM.
+    Resource(Rc<Resource>),
     /// A binary match in progress (internal: created by `bs_start_match4`, never visible to
     /// Erlang code as a value, which the compiler guarantees).
     Match(Rc<MatchState>),
+}
+
+/// A resource: a unique id (from the VM's reference counter) and the native value. Natives
+/// that need to change their state keep it in a `RefCell` inside `value`.
+pub struct Resource {
+    pub id: u64,
+    pub value: alloc::boxed::Box<dyn core::any::Any>,
+}
+
+impl Resource {
+    /// The value, if it is a `T`.
+    pub fn get<T: 'static>(&self) -> Option<&T> {
+        self.value.downcast_ref::<T>()
+    }
 }
 
 /// The state of a binary match: the bits being matched and how far matching has got.
@@ -396,6 +413,38 @@ impl Term {
         ListIter { cur: self.clone() }
     }
 
+    /// The bytes of iodata: a binary, or a possibly nested list of bytes and binaries ending in
+    /// `[]` or a binary. `None` for anything else (including bitstrings).
+    pub fn iodata_bytes(&self) -> Option<Vec<u8>> {
+        let mut out = Vec::new();
+        let mut work = alloc::vec![self.clone()];
+        while let Some(t) = work.pop() {
+            match t {
+                Term::Nil => {}
+                Term::Bits(b) if b.is_binary() => out.extend_from_slice(&b.to_bytes()),
+                Term::Cons(c) => {
+                    match &c.head {
+                        Term::Int(i) if (0..=255).contains(i) => {
+                            out.push(*i as u8);
+                            work.push(c.tail.clone());
+                            continue;
+                        }
+                        h @ (Term::Nil | Term::Cons(_) | Term::Bits(_)) => {
+                            work.push(c.tail.clone());
+                            work.push(h.clone());
+                        }
+                        _ => return None,
+                    }
+                    if !matches!(c.tail, Term::Nil | Term::Cons(_) | Term::Bits(_)) {
+                        return None;
+                    }
+                }
+                _ => return None,
+            }
+        }
+        Some(out)
+    }
+
     /// The elements of a proper list, or `None` if this is not a proper list.
     pub fn to_vec(&self) -> Option<Vec<Term>> {
         let mut out = Vec::new();
@@ -468,7 +517,7 @@ fn type_rank(t: &Term) -> u8 {
     match t {
         Term::Int(_) | Term::Big(_) | Term::Float(_) => 0,
         Term::Atom(_) => 1,
-        Term::Ref(_) => 2,
+        Term::Ref(_) | Term::Resource(_) => 2,
         Term::Fun(_) => 3,
         Term::Pid(_) => 5,
         Term::Tuple(_) => 6,
@@ -583,6 +632,9 @@ fn compare_one(a: &Term, b: &Term, exact: bool) -> Ordering {
     match (a, b) {
         (Term::Atom(x), Term::Atom(y)) => x.as_str().cmp(y.as_str()),
         (Term::Ref(x), Term::Ref(y)) => x.cmp(y),
+        (Term::Resource(x), Term::Resource(y)) => x.id.cmp(&y.id),
+        (Term::Ref(x), Term::Resource(y)) => x.0.cmp(&y.id).then(Ordering::Less),
+        (Term::Resource(x), Term::Ref(y)) => x.id.cmp(&y.0).then(Ordering::Greater),
         (Term::Pid(x), Term::Pid(y)) => (x.index, x.serial).cmp(&(y.index, y.serial)),
         (Term::Nil, Term::Nil) => Ordering::Equal,
         (Term::Bits(x), Term::Bits(y)) => compare_bits(x, y),
@@ -802,6 +854,7 @@ fn write_leaf(f: &mut fmt::Formatter<'_>, t: &Term) -> fmt::Result {
         },
         Term::Pid(p) => write!(f, "<0.{}.{}>", p.index, p.serial),
         Term::Ref(r) => write!(f, "#Ref<0.0.0.{}>", r.0),
+        Term::Resource(r) => write!(f, "#Ref<0.0.0.{}>", r.id),
         Term::Match(_) => f.write_str("#MatchState<>"),
         Term::Cons(_) | Term::Tuple(_) | Term::Map(_) => unreachable!("containers are handled by write_term"),
     }
