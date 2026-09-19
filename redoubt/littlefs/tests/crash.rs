@@ -5,109 +5,87 @@
 
 mod common;
 
+use common::ops::*;
 use common::*;
-use littlefs::{BlockDevice, Config, Error, Filesystem, OpenOptions, SeekFrom};
+use littlefs::{BlockDevice, Config, Error, Filesystem};
 
-type Op = Box<dyn Fn(&mut Filesystem<&mut Ram>) -> Result<(), Error>>;
+/// Each operation must be one atomic filesystem call as far as the disk goes. Creating a
+/// file commits its (empty) entry on open, so a new file is written as two operations: an
+/// empty write (the creation) and the write proper.
+fn create(path: &str) -> Op { Op::Write { path: path.into(), data: Vec::new() } }
 
-fn patch(path: &'static str, at: u32, data: Vec<u8>) -> Op {
-    Box::new(move |fs| {
-        let h = fs.open(path, OpenOptions { write: true, ..Default::default() })?;
-        fs.seek(h, SeekFrom::Start(at))?;
-        fs.write(h, &data)?;
-        fs.close(h)
-    })
-}
+fn write(path: &str, data: Vec<u8>) -> Op { Op::Write { path: path.into(), data } }
 
-fn truncate(path: &'static str, size: u32) -> Op {
-    Box::new(move |fs| {
-        let h = fs.open(path, OpenOptions { write: true, ..Default::default() })?;
-        fs.truncate(h, size)?;
-        fs.close(h)
-    })
-}
+fn patch(path: &str, at: u32, data: Vec<u8>) -> Op { Op::Patch { path: path.into(), at, data, cut: None } }
 
-/// Each operation must be one atomic filesystem call as far as the disk goes: creating a file
-/// commits its (empty) entry on open, so creating and filling are two operations.
-fn create(path: String) -> Op {
-    Box::new(move |fs| {
-        let h = fs.open(&path, OpenOptions { write: true, create_new: true, ..Default::default() })?;
-        fs.close(h)
-    })
-}
+fn truncate(path: &str, size: u32) -> Op { Op::Patch { path: path.into(), at: 0, data: Vec::new(), cut: Some(size) } }
 
-fn fill(path: String, data: Vec<u8>) -> Op {
-    Box::new(move |fs| {
-        let h = fs.open(&path, OpenOptions { write: true, truncate: true, ..Default::default() })?;
-        fs.write(h, &data)?;
-        fs.close(h)
-    })
-}
+fn mkdir(path: &str) -> Op { Op::Mkdir(path.into()) }
+
+fn remove(path: &str) -> Op { Op::Remove(path.into()) }
+
+fn rename(from: &str, to: &str) -> Op { Op::Rename(from.into(), to.into()) }
 
 fn workload() -> Vec<Op> {
     let mut rng = Rng(7);
-    let mut ops: Vec<Op> = vec![
-        create("/a".into()),
-        fill("/a".into(), rng.bytes(20)),
-        create("/big".into()),
-        fill("/big".into(), rng.bytes(3000)),
-        Box::new(|fs| fs.mkdir("/d")),
-        Box::new(|fs| fs.mkdir("/d/e")),
-        create("/d/f".into()),
-        fill("/d/f".into(), rng.bytes(500)),
-        Box::new(|fs| fs.rename("/big", "/d/big")),
-        Box::new(|fs| fs.set_attr("/d/f", 1, b"mtime")),
-        Box::new(|fs| fs.set_attr("/", 2, b"root attribute")),
-        Box::new(|fs| fs.rename("/d/f", "/g")),
+    let mut ops = vec![
+        create("/a"),
+        write("/a", rng.bytes(20)),
+        create("/big"),
+        write("/big", rng.bytes(3000)),
+        mkdir("/d"),
+        mkdir("/d/e"),
+        create("/d/f"),
+        write("/d/f", rng.bytes(500)),
+        rename("/big", "/d/big"),
+        Op::SetAttr("/d/f".into(), 1, b"mtime".to_vec()),
+        Op::SetAttr(String::new(), 2, b"root attribute".to_vec()),
+        rename("/d/f", "/g"),
         patch("/d/big", 1000, rng.bytes(700)),
         patch("/a", 20, rng.bytes(40)),
         truncate("/d/big", 100),
         truncate("/a", 5),
-        Box::new(|fs| fs.remove("/d/e")),
+        remove("/d/e"),
     ];
     // Enough entries to split /d over several pairs, then remove them to drop the pairs.
     for i in 0..24 {
-        ops.push(create(format!("/d/n{i:02}")));
-        ops.push(fill(format!("/d/n{i:02}"), rng.bytes(i * 37 % 300)));
+        ops.push(create(&format!("/d/n{i:02}")));
+        ops.push(write(&format!("/d/n{i:02}"), rng.bytes(i * 37 % 300)));
     }
     // A directory created in the first pair of a split directory is linked into the list of
     // pairs and named in two commits (an orphan in between).
-    ops.push(Box::new(|fs| fs.mkdir("/d/m")));
-    ops.push(Box::new(|fs| fs.mkdir("/d/zz")));
-    for i in 0..24 {
-        ops.push(Box::new(move |fs| fs.remove(&format!("/d/n{i:02}"))));
-    }
-    ops.push(Box::new(|fs| fs.remove("/d/m")));
-    ops.extend::<Vec<Op>>(vec![
-        Box::new(|fs| fs.rename("/d", "/d2")),
-        Box::new(|fs| fs.rename("/a", "/g")),
-        Box::new(|fs| fs.mkdir("/y")),
-        Box::new(|fs| fs.mkdir("/z")),
-        Box::new(|fs| fs.rename("/y", "/z")),
-        Box::new(|fs| fs.remove_attr("/", 2)),
-        Box::new(|fs| fs.remove("/d2/big")),
+    ops.push(mkdir("/d/m"));
+    ops.push(mkdir("/d/zz"));
+    ops.extend((0..24).map(|i| remove(&format!("/d/n{i:02}"))));
+    ops.extend([
+        remove("/d/m"),
+        rename("/d", "/d2"),
+        rename("/a", "/g"),
+        mkdir("/y"),
+        mkdir("/z"),
+        rename("/y", "/z"),
+        Op::RemoveAttr(String::new(), 2),
+        remove("/d2/big"),
     ]);
     ops
 }
 
-/// A random workload from the shared generator. Writing a new file is split into creating
-/// it and filling it, the two commits it takes.
+/// A random workload from the shared generator, new files created first (see `create`).
 fn random_workload(seed: u64, cfg: Config, len: usize) -> Vec<Op> {
-    use common::ops::{self, generate, Op as Gen};
-    let names = if cfg.block_size < 256 { ops::NAMES.len() - 1 } else { ops::NAMES.len() };
+    let names = if cfg.block_size < 256 { NAMES.len() - 1 } else { NAMES.len() };
     let mut rng = Rng(seed);
     let mut model = Tree::new();
     model.insert(String::new(), Node::Dir { attrs: Default::default() });
-    let mut out: Vec<Op> = Vec::new();
+    let mut out = Vec::new();
     while out.len() < len {
         let Some(op) = generate(&mut rng, &model, names, (cfg.block_size / 16) as u64) else { continue };
-        if let Gen::Write { path, .. } = &op {
+        if let Op::Write { path, .. } = &op {
             if !model.contains_key(path) {
-                out.push(create(path.clone()));
+                out.push(create(path));
             }
         }
-        ops::apply_model(&mut model, &op);
-        out.push(Box::new(move |fs| ops::apply_rust(fs, &op)));
+        apply_model(&mut model, &op);
+        out.push(op);
     }
     out
 }
@@ -126,7 +104,7 @@ fn crash_workload(cfg: Config, ops: Vec<Op>) {
         let mut fs = Filesystem::mount(&mut ram, cfg).unwrap();
         states.push(dump(&mut fs).unwrap());
         for op in &ops {
-            op(&mut fs).unwrap();
+            apply_rust(&mut fs, op).unwrap();
             states.push(dump(&mut fs).unwrap());
         }
         fs.fsck().unwrap();
@@ -141,7 +119,7 @@ fn crash_workload(cfg: Config, ops: Vec<Op>) {
         {
             let mut fs = Filesystem::mount(&mut ram, cfg).unwrap();
             for (k, op) in ops.iter().enumerate() {
-                if op(&mut fs).is_err() {
+                if apply_rust(&mut fs, op).is_err() {
                     failed_at = Some(k);
                     break;
                 }
