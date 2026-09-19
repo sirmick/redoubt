@@ -29,8 +29,11 @@ pub enum Error {
     BadWords,
     /// An inline message arrived with a buffer.
     UnexpectedBuffer,
-    /// The message carries a different number of handles than its layout names.
+    /// The message carries a different number of handles than its layout names (or has
+    /// handles where none can travel: an error reply, a message written into a file).
     BadHandles,
+    /// An error reply whose status is not in the protocol's error table.
+    BadStatus,
     /// A 9P walk with more than `MAXWELEM` (16) names or qids.
     TooManyElements,
 }

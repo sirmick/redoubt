@@ -593,6 +593,9 @@ version = "0.1.0"
 [[package]]
 name = "redoubt-wire-gen"
 version = "0.1.0"
+dependencies = [
+ "redoubt-wire",
+]
 
 [[package]]
 name = "redox_syscall"
