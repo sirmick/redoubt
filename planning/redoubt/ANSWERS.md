@@ -114,3 +114,30 @@ idle thread later without anyone being blamed.
 Accepted as recommended: 56 (`receive`'s record carries each handle's kind), 59, 60, 61, 62 (the
 badge-slot cost confirmed in K2), 63 (the steward enforces `MAX_LEASE`; the kernel knows only
 deadlines), 64, 65, 66, 67, 68.
+
+---
+
+# Answers to 69-101 and the revisited 56, 57, 58, 62, 64 (owner, 2026-09-19; confirmed)
+
+**All Rec, with 81 option (a) and a note on 84.**
+
+**81. Pinned open calls: option (a).** An abandoned-call notice (the flag lives in the open call's
+own page; the server replies to free it), and at `MAX_OPEN_CALLS` `receive` refuses only calls,
+still delivering sends and notices. Not (b): letting a call's timeout lapse once taken would let a
+hostile server pin a caller until the server dies, the hole round 3 closed with timeouts. Also as
+recommended: `admit`'s caps sum to less than `MAX_OPEN_CALLS` with headroom, and parked calls get a
+server-side deadline. With 69 accepted, this is the one kernel notice besides exit notices.
+
+**84. User work inside servers: accept, with a note on the steward.** Servers doing work for users
+run in the stride queue with a manifest weight and bound one request's work. The steward keeps
+strict system-first ordering (so logout and ending a lease stay responsive, item 90), but it also
+works for users: it must bound the work any single request can cause and rely on its per-account
+caps, and CONTAINMENT.md states the residual (steward work is paid by the steward, not the
+requester).
+
+Accepted as recommended: 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 82, 83, 85, 86, 87, 88,
+89, 90, 91, 92, 93, 94, 95, 96 (moot with 69), 97, 98, 99, 100 (the answer-14 order was a
+classification; the spec's positional order stands), 101.
+
+Revisited: 56 revised Rec accepted (check handle kinds by use; the table's kind is documentation);
+57 and 58 are replaced by 82 (`serve(msg_id)`, no fallback); 62 is moot with 69; 64 as recommended.
