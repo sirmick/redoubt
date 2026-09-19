@@ -751,46 +751,44 @@ impl<S: FileServer> NineServer<S> {
 
     /// `disconnect(id)` from `caller`: frees the connection and every connection minted under
     /// it. `Err` if the caller did not receive `id`.
+    ///
+    /// It allocates nothing, so it cannot stop halfway. `minted` is in mint order (entries are
+    /// only ever appended, and removed with `remove`, never `swap_remove`), and a connection is
+    /// minted after the one it was minted through, so every descendant comes after the one
+    /// named. That one goes first; then one forward pass frees each connection whose parent was
+    /// minted here and is gone, which by then is exactly its descendants.
     fn disconnect(&mut self, caller: &Caller, id: u64) -> Result<(), ()> {
         let requester = ConnKey::of(caller);
-        let top =
-            self.minted.iter().find(|m| m.id == id && m.requester == requester).map(|m| m.badge).ok_or(())?;
-        // Everything minted under it, found by walking the parent links up to it.
-        let mut doomed: Vec<u64> = Vec::new();
-        for m in &self.minted {
-            let mut badge = m.badge;
-            for _ in 0..=self.minted.len() {
-                if badge == top {
-                    // No memory to list one more: free what is listed; the rest stays, still
-                    // under a connection that is gone, and is freed by a later disconnect.
-                    if doomed.try_reserve(1).is_ok() {
-                        doomed.push(m.badge);
-                    }
-                    break;
-                }
-                match self.minted.iter().find(|p| p.badge == badge) {
-                    Some(p) => badge = p.parent,
-                    None => break,
-                }
+        let mut i = self.minted.iter().position(|m| m.id == id && m.requester == requester).ok_or(())?;
+        self.forget_at(i);
+        while i < self.minted.len() {
+            let parent = self.minted[i].parent;
+            if parent >= FIRST_MINTED_BADGE && !self.minted[..i].iter().any(|m| m.badge == parent) {
+                self.forget_at(i);
+            } else {
+                i += 1;
             }
-        }
-        for badge in doomed {
-            self.forget(badge);
         }
         Ok(())
     }
 
-    /// Frees one minted connection: its fids, its admission, the file server's record of it. Not
-    /// its children.
+    /// Frees the minted connection with `badge` (see [`NineServer::forget_at`]).
     fn forget(&mut self, badge: u64) {
-        while let Some(i) = self.conns.iter().position(|c| c.key.badge == badge) {
+        if let Some(i) = self.minted.iter().position(|m| m.badge == badge) {
+            self.forget_at(i);
+        }
+    }
+
+    /// Frees the minted connection at `index`: its fids, its admission, the file server's record
+    /// of it. Not its children. Keeps `minted` in mint order.
+    fn forget_at(&mut self, index: usize) {
+        let m = self.minted.remove(index);
+        while let Some(i) = self.conns.iter().position(|c| c.key.badge == m.badge) {
             let conn = self.conns.swap_remove(i);
             self.drop_fids(conn);
         }
-        let Some(i) = self.minted.iter().position(|m| m.badge == badge) else { return };
-        let m = self.minted.swap_remove(i);
         self.admission.release(m.requester.client, m.requester_share, Resource::State);
-        self.fs.disconnected(badge);
+        self.fs.disconnected(m.badge);
     }
 
     /// Walks `newfid` from `fid` along `names` and writes the qids walked into `qids`; returns
