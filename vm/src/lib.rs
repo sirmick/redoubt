@@ -29,6 +29,7 @@ pub mod loader;
 pub mod module;
 pub mod opcodes;
 pub mod platform;
+pub mod pmap;
 pub mod process;
 pub mod term;
 pub mod vm;

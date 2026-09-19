@@ -7,7 +7,6 @@
 //! Terms can nest arbitrarily deep (`{{{...}}}` a million levels down is legal Erlang), so nothing
 //! here recurses on the Rust stack: dropping, comparing and printing all use explicit work lists.
 
-use alloc::collections::BTreeMap;
 use alloc::rc::Rc;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
@@ -18,6 +17,7 @@ use num_traits::float::FloatCore;
 use num_traits::{FromPrimitive, ToPrimitive, Zero};
 
 use crate::atom::Atom;
+use crate::pmap::PMap;
 
 /// An Erlang term.
 #[derive(Clone)]
@@ -90,7 +90,7 @@ fn drop_flat(mut work: Vec<Term>) {
             }
             Term::Map(rc) => {
                 if let Ok(mut m) = Rc::try_unwrap(rc) {
-                    for (k, v) in core::mem::take(&mut m.0) {
+                    for (k, v) in core::mem::take(&mut m.0).into_unique_entries() {
                         work.push(k.0);
                         work.push(v);
                     }
@@ -132,7 +132,7 @@ impl Drop for Map {
     fn drop(&mut self) {
         if !self.0.is_empty() {
             let mut work = Vec::with_capacity(self.0.len() * 2);
-            for (k, v) in core::mem::take(&mut self.0) {
+            for (k, v) in core::mem::take(&mut self.0).into_unique_entries() {
                 work.push(k.0);
                 work.push(v);
             }
@@ -163,18 +163,19 @@ pub struct Pid {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Ref(pub u64);
 
-/// A map, ordered by the exact term order of its keys. See DESIGN.md on iteration order.
+/// A map, ordered by the exact term order of its keys (see DESIGN.md on iteration order).
+/// Persistent: versions share structure, so updating a map others still hold is O(log n).
 #[derive(Clone, Default)]
-pub struct Map(BTreeMap<MapKey, Term>);
+pub struct Map(PMap<MapKey, Term>);
 
 impl Map {
     pub fn new() -> Map {
-        Map(BTreeMap::new())
+        Map(PMap::new())
     }
 }
 
 impl core::ops::Deref for Map {
-    type Target = BTreeMap<MapKey, Term>;
+    type Target = PMap<MapKey, Term>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
