@@ -1555,8 +1555,9 @@ fn bs_match(sys: &mut System, p: &mut Process, ins: &Instr) -> R<Flow> {
             }
             "get_tail" => {
                 let [_live, _unit, d] = take(&mut i, 3)? else { return Err(Fault::BadCode("get_tail")) };
+                // The rest, without moving the position: code may go on matching from here
+                // (a `with` keeps the tail for its `else` and reads on), as in BEAM.
                 let t = Term::bits(bits.slice(pos, remaining));
-                pos = bits.len;
                 let d = d.clone();
                 put(p, &d, t)?;
             }

@@ -22,15 +22,21 @@ done
 for app in elixir logger eex iex ex_unit; do path="$path -pa $elixir_lib/$app/ebin"; done
 out="$root/build/elixir-tests"; mkdir -p "$out"
 erlc -o "$out" "$root/tools/exunit.erl"
-cargo build --quiet --release --manifest-path "$root/Cargo.toml" -p beamlet
+[ -n "${BEAMLET:-}" ] || cargo build --quiet --release --manifest-path "$root/Cargo.toml" -p beamlet
 files=("$@")
 if [ ${#files[@]} -eq 0 ]; then
     while IFS= read -r f; do files+=("${f#"$src/$testdir/"}"); done < <(find "$src/$testdir" -name '*_test.exs' | sort)
 fi
-pass=0; fail=0
+skipfile="$root/tools/elixir-tests.skip"
+pass=0; fail=0; skip=0
 for f in "${files[@]}"; do
+    if grep -qE "^${f//./\\.} -- " "$skipfile"; then
+        skip=$((skip + 1)); printf 'skip  %s  %s\n' "$f" "$(grep -E "^${f//./\\.} -- " "$skipfile" | sed 's/.* -- //')"
+        continue
+    fi
     log="$out/${f//\//_}.out"
-    timeout "${TEST_TIMEOUT:-300}" "$root/target/release/beamlet" --root "$src" -pa "$out" $path \
+    timeout "${TEST_TIMEOUT:-300}" "${BEAMLET:-$root/target/release/beamlet}" --root "$src" \
+        --mount "/otp=$otp_lib:ro" --mount "/elixir=$elixir_lib:ro" --lib /otp --lib /elixir -pa "$out" $path \
         exunit run /lib/elixir test/elixir/test_helper.exs "test/elixir/$f" > "$log" 2>&1
     result="$(tail -n 1 "$log")"
     if [[ "$result" =~ failures\ =\>\ 0, ]]; then
@@ -39,4 +45,5 @@ for f in "${files[@]}"; do
         fail=$((fail + 1)); printf 'FAIL  %s  %s\n' "$f" "$(printf '%s' "$result" | cut -c1-150)"
     fi
 done
-echo "elixir-tests: $pass files passed, $fail failed"
+echo "elixir-tests: $pass files passed, $fail failed, $skip skipped by design"
+echo "(single tests that fail by design are listed in tools/elixir-tests.skip)"

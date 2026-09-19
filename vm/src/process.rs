@@ -123,6 +123,17 @@ impl Default for MaxHeap {
     }
 }
 
+/// A monitor on a process, as the monitored process keeps it.
+#[derive(Clone)]
+pub struct Monitor {
+    /// Who is watching.
+    pub watcher: Pid,
+    /// How the watcher named the process (a pid, or `{Name, Node}`), for the message.
+    pub object: Term,
+    /// The first element of the message: `'DOWN'`, or the `{tag, Tag}` option of `monitor/3`.
+    pub tag: Option<Term>,
+}
+
 pub struct Process {
     pub pid: Pid,
     pub x: Vec<Term>,
@@ -153,7 +164,7 @@ pub struct Process {
     pub monitors: BTreeMap<Ref, Pid>,
     /// Monitors on this process, by reference: the watching process, and how it named this one
     /// (a pid, or `{Name, Node}` for a monitor taken by registered name), for its `'DOWN'`.
-    pub monitored_by: BTreeMap<Ref, (Pid, Term)>,
+    pub monitored_by: BTreeMap<Ref, Monitor>,
     pub trap_exit: bool,
     pub registered_name: Option<Atom>,
     pub dictionary: BTreeMap<MapKey, Term>,
