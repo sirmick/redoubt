@@ -1,32 +1,33 @@
 //! The system calls and their argument registers (KERNEL-SPEC.md, System calls).
 
-use core::num::{NonZeroU64, NonZeroUsize};
+use core::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
 use crate::regs::{REGS, Reader, Writer};
-use crate::{Error, MAX_RANDOM};
+use crate::{Error, MAX_RANDOM, MAX_START_HANDLES};
 
-/// An index into the calling process's handle table. `u32::MAX` is never an index: in a register
-/// it means "no handle".
+/// An index into the calling process's handle table. Index 0 is never allocated: in a register
+/// or slot it means "no handle" (KERNEL-SPEC.md, Handle).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Handle(pub(crate) u32);
+pub struct Handle(pub(crate) NonZeroU32);
 
 impl Handle {
-    const NONE: u64 = u32::MAX as u64;
-
-    /// `None` for `u32::MAX`, which is reserved.
+    /// `None` for 0, which is never an index.
     pub const fn new(index: u32) -> Option<Handle> {
-        if index == u32::MAX { None } else { Some(Handle(index)) }
+        match NonZeroU32::new(index) {
+            Some(index) => Some(Handle(index)),
+            None => None,
+        }
     }
 
-    pub const fn index(self) -> u32 { self.0 }
+    pub const fn index(self) -> u32 { self.0.get() }
 
     /// The handle as a register or record slot.
-    pub const fn to_raw(self) -> u64 { self.0 as u64 }
+    pub const fn to_raw(self) -> u64 { self.0.get() as u64 }
 
     /// A handle from a register or record slot (the `process_start` list); anything that is not
-    /// an index is `BadHandle`.
+    /// an index (0, or wider than 32 bits) is `BadHandle`.
     pub fn from_raw(raw: u64) -> Result<Handle, Error> {
-        if raw < Handle::NONE { Ok(Handle(raw as u32)) } else { Err(Error::BadHandle) }
+        u32::try_from(raw).ok().and_then(Handle::new).ok_or(Error::BadHandle)
     }
 }
 
@@ -87,7 +88,7 @@ impl Pages {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MintSource {
     /// A message id the caller is serving.
-    Message(u64),
+    Message(NonZeroU64),
     /// A badge-0 endpoint handle the caller holds.
     Handle(Handle),
 }
@@ -123,7 +124,8 @@ impl Arg for u64 {
     fn read(r: &mut Reader) -> Result<Self, Error> { r.u64() }
 }
 
-/// A badge: `mint` never creates badge 0 (the receive right), so 0 does not decode.
+/// A badge or a message id: neither is ever 0 (badge 0 is the receive right; message ids start
+/// at 1), so 0 does not decode.
 impl Arg for NonZeroU64 {
     fn write(&self, w: &mut Writer) { w.u64(self.get()) }
 
@@ -131,17 +133,17 @@ impl Arg for NonZeroU64 {
 }
 
 impl Arg for Handle {
-    fn write(&self, w: &mut Writer) { w.u32(self.0) }
+    fn write(&self, w: &mut Writer) { w.u32(self.index()) }
 
     fn read(r: &mut Reader) -> Result<Self, Error> { Handle::from_raw(r.raw()) }
 }
 
 impl Arg for Option<Handle> {
-    fn write(&self, w: &mut Writer) { w.u32(self.map_or(u32::MAX, |h| h.0)) }
+    fn write(&self, w: &mut Writer) { w.u32(self.map_or(0, Handle::index)) }
 
     fn read(r: &mut Reader) -> Result<Self, Error> {
         let raw = r.raw();
-        if raw == Handle::NONE { Ok(None) } else { Handle::from_raw(raw).map(Some) }
+        if raw == 0 { Ok(None) } else { Handle::from_raw(raw).map(Some) }
     }
 }
 
@@ -162,7 +164,7 @@ impl Arg for Option<Pages> {
 impl Arg for MintSource {
     fn write(&self, w: &mut Writer) {
         let (tag, value) = match *self {
-            MintSource::Message(id) => (1, id),
+            MintSource::Message(id) => (1, id.get()),
             MintSource::Handle(h) => (2, h.to_raw()),
         };
         w.u32(tag);
@@ -173,7 +175,7 @@ impl Arg for MintSource {
         let tag = r.raw();
         let value = r.u64()?;
         match tag {
-            1 => Ok(MintSource::Message(value)),
+            1 => Ok(MintSource::Message(NonZeroU64::new(value).ok_or(Error::InvalidArgument)?)),
             2 => Ok(MintSource::Handle(Handle::from_raw(value)?)),
             _ => Err(Error::InvalidArgument),
         }
@@ -238,12 +240,17 @@ macro_rules! calls {
                 let call = match number {
                     $( Number::$variant => Call::$variant $({ $($field: Arg::read(&mut r)?),* })?, )*
                 };
-                r.finish()?;
-                if let Call::Random { len, .. } = call {
-                    if len > MAX_RANDOM {
-                        return Err(Error::TooLarge);
-                    }
+                // Bounded counts are each their call's last argument, so checking them here, before
+                // the unused registers, keeps the first error in register order.
+                let too_large = match call {
+                    Call::Random { len, .. } => len > MAX_RANDOM,
+                    Call::ProcessStart { count, .. } => count as usize > MAX_START_HANDLES,
+                    _ => false,
+                };
+                if too_large {
+                    return Err(Error::TooLarge);
                 }
+                r.finish()?;
                 Ok(call)
             }
         }
@@ -268,8 +275,9 @@ calls! {
     /// -> `Handle`
     ProcessCreate = 9 "process_create" { budget: Handle, exit_endpoint: Handle };
     ProcessMap = 10 "process_map" { process: Handle, src: usize, dst: usize, len: usize, flags: MemFlags };
-    /// `handles_rec` holds `count` slots, one handle each ([`Handle::from_raw`]), copied into the
-    /// child's slots 1..=count.
+    /// `handles_rec` holds `count` slots (at most [`MAX_START_HANDLES`](crate::MAX_START_HANDLES),
+    /// else `TooLarge`), one handle each ([`Handle::from_raw`]), copied into the child's slots
+    /// 1..=count.
     ProcessStart = 11 "process_start" { process: Handle, entry: usize, sp: usize, handles_rec: usize, count: u32 };
     /// -> `Handle`
     EndpointCreate = 12 "endpoint_create";
@@ -284,14 +292,16 @@ calls! {
     /// never expires. `max_transfer` is in pages. The kernel writes a
     /// [`Received`](crate::Received) to `received_rec`.
     Receive = 16 "receive" { from: Option<Handle>, timeout: u64, max_transfer: usize, received_rec: usize };
-    /// `body_rec` is a [`Body`](crate::Body).
-    Reply = 17 "reply" { msg_id: u64, body_rec: usize };
+    /// `body_rec` is a [`Body`](crate::Body). A reply to a `send`'s message is the kernel's
+    /// `InvalidArgument`.
+    Reply = 17 "reply" { msg_id: NonZeroU64, body_rec: usize };
     HandleClose = 18 "handle_close" { handle: Handle };
     /// `spec_rec` is a [`BudgetSpec`](crate::BudgetSpec). -> `Handle`
     BudgetCreate = 19 "budget_create" { parent: Handle, spec_rec: usize };
     BudgetDestroy = 20 "budget_destroy" { budget: Handle };
-    /// -> `Usage`
-    BudgetUsage = 21 "budget_usage" { budget: Handle };
+    /// The kernel writes a [`Usage`](crate::Usage) to `usage_rec` (six counters do not fit in
+    /// the result registers).
+    BudgetUsage = 21 "budget_usage" { budget: Handle, usage_rec: usize };
     /// -> `Time`
     TimeNow = 22 "time_now";
     /// The kernel writes `len` random bytes (at most [`MAX_RANDOM`](crate::MAX_RANDOM), else

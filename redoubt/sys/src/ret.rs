@@ -7,7 +7,8 @@ use crate::{Error, Handle, Number};
 /// A successful call's value.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Return {
-    /// Calls with no value, and those whose result is in memory (`call`, `receive`, `random`).
+    /// Calls with no value, and those whose result is in memory (`call`, `receive`, `budget_usage`,
+    /// `random`).
     Nothing,
     /// `map_anon`, `map_device`.
     Addr(usize),
@@ -18,19 +19,8 @@ pub enum Return {
     Tid(u32),
     /// `process_create`, `endpoint_create`, `mint`, `budget_create`.
     Handle(Handle),
-    /// `budget_usage`.
-    Usage(Usage),
     /// `time_now`: microseconds since boot.
     Time(u64),
-}
-
-/// `budget_usage`'s counters, in register order.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Usage {
-    pub pages_limit: u64,
-    pub pages_usage: u64,
-    pub processes_limit: u32,
-    pub processes_usage: u32,
 }
 
 /// The registers `a0..=a7` for a call's outcome (kernel side).
@@ -50,12 +40,6 @@ pub fn encode_result(result: &Result<Return, Error>) -> [u64; REGS] {
                 }
                 Return::Tid(tid) => w.u32(tid),
                 Return::Handle(h) => w.u32(h.index()),
-                Return::Usage(u) => {
-                    w.u64(u.pages_limit);
-                    w.u64(u.pages_usage);
-                    w.u32(u.processes_limit);
-                    w.u32(u.processes_usage);
-                }
                 Return::Time(time) => w.u64(time),
             }
         }
@@ -81,12 +65,6 @@ pub fn decode_result(number: Number, regs: &[u64; REGS]) -> Result<Return, Error
         Number::ProcessCreate | Number::EndpointCreate | Number::Mint | Number::BudgetCreate => {
             Return::Handle(Handle::from_raw(r.raw())?)
         }
-        Number::BudgetUsage => Return::Usage(Usage {
-            pages_limit: r.u64()?,
-            pages_usage: r.u64()?,
-            processes_limit: r.u32()?,
-            processes_usage: r.u32()?,
-        }),
         Number::TimeNow => Return::Time(r.u64()?),
         Number::Unmap
         | Number::SetFlags
@@ -100,6 +78,7 @@ pub fn decode_result(number: Number, regs: &[u64; REGS]) -> Result<Return, Error
         | Number::Reply
         | Number::HandleClose
         | Number::BudgetDestroy
+        | Number::BudgetUsage
         | Number::Random
         | Number::SystemReset => Return::Nothing,
     };

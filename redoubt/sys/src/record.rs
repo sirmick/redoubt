@@ -3,6 +3,8 @@
 //! to and decodes from its array; decoding rejects every malformed array with an error and never
 //! panics.
 
+use core::num::{NonZeroU32, NonZeroU64};
+
 use crate::regs::{Reader, Writer};
 use crate::{Error, Handle, MAX_LABELS, MAX_MSG_HANDLES, Pages, WORDS};
 
@@ -23,7 +25,7 @@ impl Slot for u64 {
 }
 
 impl Slot for Handle {
-    const FILL: Self = Handle(0);
+    const FILL: Self = Handle(NonZeroU32::MAX);
 
     fn to_slot(self) -> u64 { self.to_raw() }
 
@@ -143,7 +145,7 @@ impl Body {
 }
 
 /// Slots in a [`Received`] record; the longest kind is a message: kind, id, badge, account,
-/// labels (count and `MAX_LABELS`), body, buffer (kind, address, pages).
+/// labels (count and `MAX_LABELS`), body, message kind, buffer (address, pages).
 pub const RECEIVED_SLOTS: usize = 4 + 1 + MAX_LABELS + BODY_SLOTS + 3;
 
 /// What `receive` returns, written by the kernel to the call's `received_rec`. `Timeout` is an
@@ -161,22 +163,22 @@ pub enum Received {
 /// Messages); the handles are indices in the receiver's own table.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Message {
-    pub msg_id: u64,
+    pub msg_id: NonZeroU64,
     pub badge: u64,
     pub account: u64,
     pub labels: Labels,
     pub body: Body,
-    pub buffer: Option<Buffer>,
+    pub kind: MessageKind,
 }
 
-/// The buffer a message brought, as mapped in the receiver. In slots: kind (0 none, 1 lend,
-/// 2 transfer), then the [`Pages`] (0, 0 for none).
+/// How a message was sent, and the buffer it brought, as mapped in the receiver. In slots: the
+/// kind (1 call, 2 send), then the [`Pages`] ((0, 0) for none).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Buffer {
-    /// Lent by a `call`; returned to the caller by `reply`.
-    Lend(Pages),
-    /// Transferred by a `send`; the receiver's for good.
-    Transfer(Pages),
+pub enum MessageKind {
+    /// By `call`: a reply is owed. The lend, if any, returns to the caller at `reply`.
+    Call { lend: Option<Pages> },
+    /// By `send`: no reply. The transfer, if any, is the receiver's for good.
+    Send { transfer: Option<Pages> },
 }
 
 /// A process's exit, on the endpoint its creator named.
@@ -203,15 +205,14 @@ impl Received {
         match self {
             Received::Message(m) => {
                 w.u64(1);
-                w.u64(m.msg_id);
+                w.u64(m.msg_id.get());
                 w.u64(m.badge);
                 w.u64(m.account);
                 m.labels.write(w);
                 m.body.write(w);
-                let (kind, pages) = match m.buffer {
-                    None => (0, None),
-                    Some(Buffer::Lend(pages)) => (1, Some(pages)),
-                    Some(Buffer::Transfer(pages)) => (2, Some(pages)),
+                let (kind, pages) = match m.kind {
+                    MessageKind::Call { lend } => (1, lend),
+                    MessageKind::Send { transfer } => (2, transfer),
                 };
                 w.u64(kind);
                 Pages::write(pages, w);
@@ -238,16 +239,16 @@ impl Received {
         let r = &mut reader;
         let received = match r.raw() {
             1 => {
-                let (msg_id, badge, account) = (r.u64()?, r.u64()?, r.u64()?);
+                let msg_id = NonZeroU64::new(r.u64()?).ok_or(Error::InvalidArgument)?;
+                let (badge, account) = (r.u64()?, r.u64()?);
                 let labels = Labels::read(r)?;
                 let body = Body::read(r)?;
-                let buffer = match (r.raw(), Pages::read(r)?) {
-                    (0, None) => None,
-                    (1, Some(pages)) => Some(Buffer::Lend(pages)),
-                    (2, Some(pages)) => Some(Buffer::Transfer(pages)),
+                let kind = match (r.raw(), Pages::read(r)?) {
+                    (1, lend) => MessageKind::Call { lend },
+                    (2, transfer) => MessageKind::Send { transfer },
                     _ => return Err(Error::InvalidArgument),
                 };
-                Received::Message(Message { msg_id, badge, account, labels, body, buffer })
+                Received::Message(Message { msg_id, badge, account, labels, body, kind })
             }
             2 => Received::Interrupt(Handle::from_raw(r.raw())?),
             3 => {
@@ -316,5 +317,49 @@ impl BudgetSpec {
             BudgetSpec { pages, processes, weight, class, labels, account: r.u64()?, deadline: r.u64()? };
         r.finish()?;
         Ok(spec)
+    }
+}
+
+/// Slots in a [`Usage`] record.
+pub const USAGE_SLOTS: usize = 6;
+
+/// What `budget_usage` writes to its `usage_rec`, in slot order (KERNEL-SPEC.md, `budget_usage`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Usage {
+    pub pages_limit: u64,
+    pub pages_usage: u64,
+    pub processes_limit: u32,
+    pub processes_usage: u32,
+    pub weight_limit: u32,
+    /// Weight carved out to children (R7); the free weight is `weight_limit - weight_carved`.
+    pub weight_carved: u32,
+}
+
+impl Usage {
+    pub fn encode(&self) -> [u64; USAGE_SLOTS] {
+        let mut slots = [0; USAGE_SLOTS];
+        let w = &mut Writer::record(&mut slots);
+        w.u64(self.pages_limit);
+        w.u64(self.pages_usage);
+        w.u32(self.processes_limit);
+        w.u32(self.processes_usage);
+        w.u32(self.weight_limit);
+        w.u32(self.weight_carved);
+        slots
+    }
+
+    /// Userspace side; a malformed record is an error, never a panic.
+    pub fn decode(slots: &[u64; USAGE_SLOTS]) -> Result<Usage, Error> {
+        let mut r = Reader::record(slots);
+        let usage = Usage {
+            pages_limit: r.u64()?,
+            pages_usage: r.u64()?,
+            processes_limit: r.u32()?,
+            processes_usage: r.u32()?,
+            weight_limit: r.u32()?,
+            weight_carved: r.u32()?,
+        };
+        r.finish()?;
+        Ok(usage)
     }
 }
