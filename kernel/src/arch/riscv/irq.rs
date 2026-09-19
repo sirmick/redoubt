@@ -35,13 +35,11 @@ fn return_result(result: &xous_kernel::Result, context: &Thread) -> ! {
 /// `disable_all_irqs`, `enable_all_irqs`, `pending` and `mask`; add a new controller
 /// (AIA, CLIC, ...) as another file and capability feature.
 #[cfg_attr(feature = "plic", path = "intc_plic.rs")]
-#[cfg_attr(not(feature = "plic"), path = "intc_vexriscv.rs")]
 mod intc;
 
 /// The hart timer backend, for platforms where the timer is a CPU resource rather than
 /// a device that userspace can own. See `planning/xous64/TIMER.md`.
 #[cfg_attr(feature = "sbi", path = "timer_sbi.rs")]
-#[cfg_attr(not(feature = "sbi"), path = "timer_none.rs")]
 pub mod timer;
 
 pub fn init() {
