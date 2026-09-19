@@ -48,14 +48,16 @@ static BLOCK: BlockCell = BlockCell(UnsafeCell::new(HartBlock { satp: 0, sp: 0, 
 /// the kernel maps read-only, and the first spill would fault. Only its address is taken here;
 /// the secondary hart is its sole user.
 const STACK_WORDS: usize = 1024;
-static mut SECONDARY_STACK: [usize; STACK_WORDS] = [0; STACK_WORDS];
+/// 16-byte aligned, as the RISC-V psABI requires of `sp`.
+#[repr(align(16))]
+struct Stack([usize; STACK_WORDS]);
+static mut SECONDARY_STACK: Stack = Stack([0; STACK_WORDS]);
 
 #[cfg(target_arch = "riscv64")]
 core::arch::global_asm!(
     r#"
     .section .text
     .global _smp_secondary_start
-    .global _smp_secondary_land
 _smp_secondary_start:              // a0 = hartid, a1 = &HartBlock (physical, MMU off)
     ld      t0, 0(a1)              // satp
     ld      sp, 8(a1)              // sp (virtual; only used after paging is on)
@@ -64,19 +66,13 @@ _smp_secondary_start:              // a0 = hartid, a1 = &HartBlock (physical, MM
     sfence.vma
     csrw    satp, t0               // paging on; the next physical fetch faults to stvec
     unimp
-
-    .balign 4                      // stvec's low two bits are its mode: the target must be 4-aligned
-_smp_secondary_land:               // virtual, MMU on; a0 = hartid still
-    tail    {main}
-"#,
-    main = sym secondary_main
+"#
 );
 #[cfg(target_arch = "riscv32")]
 core::arch::global_asm!(
     r#"
     .section .text
     .global _smp_secondary_start
-    .global _smp_secondary_land
 _smp_secondary_start:              // a0 = hartid, a1 = &HartBlock (physical, MMU off)
     lw      t0, 0(a1)              // satp
     lw      sp, 4(a1)              // sp
@@ -85,8 +81,17 @@ _smp_secondary_start:              // a0 = hartid, a1 = &HartBlock (physical, MM
     sfence.vma
     csrw    satp, t0               // paging on; the next physical fetch faults to stvec
     unimp
+"#
+);
 
-    .balign 4                      // stvec's low two bits are its mode: the target must be 4-aligned
+// Where the secondary lands once paging is on, and the same for both widths: `stvec`'s low
+// two bits are its mode, so its target must be 4-byte aligned, which a Rust function under
+// the C extension is not.
+core::arch::global_asm!(
+    r#"
+    .section .text
+    .global _smp_secondary_land
+    .balign 4
 _smp_secondary_land:               // virtual, MMU on; a0 = hartid still
     tail    {main}
 "#,
@@ -119,7 +124,9 @@ extern "C" fn secondary_main(_hartid: usize) -> ! {
 /// Run the spike on the boot hart, after the console and paging are up. Prints one line.
 pub fn run() {
     let satp = riscv::register::satp::read().bits();
-    let sp = &raw const SECONDARY_STACK as usize + STACK_WORDS * core::mem::size_of::<usize>() - 16;
+    // The top of the stack, less one 16-byte slot, as the loader leaves for a user thread.
+    // `Stack` is 16-aligned and a whole number of slots, so `sp` is too.
+    let sp = &raw const SECONDARY_STACK as usize + core::mem::size_of::<Stack>() - 16;
     // Not `secondary_main` itself: a Rust function is only 2-aligned under the C extension.
     let entry = _smp_secondary_land as *const () as usize;
 
