@@ -5,7 +5,7 @@ so each needs your decision; the answer goes into the named note with a HISTORY.
 **Rec** is the orchestrator's recommendation. Reply with numbers, e.g. "all Rec except 7: ...".
 
 **1-119 answered 2026-09-19** (ANSWERS.md, six tranches; each "Answered" line says where the
-answer now lives). **Nothing is open.** The round-4 answers revised 56 (handle kinds are checked by
+answer now lives). **Open: 120-122** (from WP-S1, at the end). The round-4 answers revised 56 (handle kinds are checked by
 use) and replaced 57 and 58 (by 82); the last tranche replaced 103 (no `first` flag and no strict
 priority: one stride queue for every budget).
 
@@ -943,3 +943,29 @@ point to change the IPC design. Several items interact; the cross-references say
      checks on is not a special build: it is the kernel checked harder, and the bench boots chosen
      cases with it)". The shipped configuration is still what most cases boot.
      **Answered:** TENETS.md, tenet 6 (amended with WP-K0b, in the owner's words).
+
+## From keyd (WP-S1)
+
+120. **A domain prefix is not separation from a container that signs raw bytes.** keyd now signs
+     only 32-byte digests it computed itself, which closes it from keyd's side. But
+     VERIFIED-BOOT.md's bundle container is `signature || tar` with no domain, and 25 bytes of
+     domain and length fit inside a ustar header's name field.
+     *Rec:*
+     - the package container (PACKAGES.md) gets its own domain and signs a digest, when package
+       signing lands in milestone 2;
+     - WP-R3's `init` refuses a manifest that gives keyd the key the loader verifies the bundle
+       with, beside the login and approval-key check it already owns. keyd cannot see that itself.
+
+121. **A typed server has no equivalent of `ninep_common` for freeing per-client state.** 9P
+     servers get `new_connection` and `disconnect`; keyd had to invent `grant` and `release` for
+     the same job.
+     *Rec:* WIRE.md states the pattern once: a typed protocol that mints a narrower capability
+     names its grant and release operations, and CONTAINMENT.md says a launcher releases a child's
+     grants when it receives the child's exit notice, as it disconnects its connections.
+
+122. **What manifest arguments mean.** INIT.md's manifest table says a `servers` entry carries
+     "arguments (never its own budget)", but not what they are. keyd has now defined its own
+     (`name,purpose,seed`), in its own note.
+     *Rec:* INIT.md says arguments are opaque strings `init` passes through unchanged, and each
+     server's note defines its own; `init` validates only the count and the encoding.
+
