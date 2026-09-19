@@ -11,7 +11,7 @@
 #![no_std]
 #![no_main]
 
-use test_programs::rd::{self, Error, FOREVER, MessageKind, Received};
+use test_programs::rd::{self, FOREVER, MessageKind, Received};
 use test_programs::redoubt_ipc::op;
 use test_programs::{Logger, checker, log};
 
@@ -69,9 +69,6 @@ pub extern "C" fn _start() -> ! {
         }
     }
 }
-
-#[allow(dead_code)]
-fn unused(_: Error) {}
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! { test_programs::park() }

@@ -663,7 +663,7 @@ pub fn ensure_page_exists_inner(mm: &mut MemoryManager, address: usize) -> Resul
 /// The frame behind user address `virt` of the current address space, if the process may read
 /// it (and, with `write`, write it) there: a system call about to copy a record in or a result
 /// out. Anything else (unmapped, reserved but never touched, lent out, kernel, no permission)
-/// is `InvalidArgument`: decoding never allocates (QUESTIONS.md 115, pending), so a process
+/// is `InvalidArgument`: decoding never allocates (answer 115), so a process
 /// touches its record buffers before a call.
 pub fn user_frame(virt: usize, write: bool) -> Result<usize, redoubt_sys::Error> {
     use redoubt_sys::Error;
