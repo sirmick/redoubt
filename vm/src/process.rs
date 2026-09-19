@@ -1,7 +1,7 @@
 //! A process: registers, stack, mailbox and the bookkeeping for links and monitors.
 
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
-use alloc::rc::Rc;
+use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -13,7 +13,7 @@ use crate::term::{Heap, Literals, OwnedTerm, Pid, Ref, Term};
 /// A code address: an instruction in a module.
 #[derive(Clone)]
 pub struct Cp {
-    pub module: Rc<Module>,
+    pub module: Arc<Module>,
     pub pc: u32,
 }
 

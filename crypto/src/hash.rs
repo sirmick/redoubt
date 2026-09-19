@@ -1,7 +1,7 @@
 //! Hashes, HMAC, Poly1305, PBKDF2 and constant-time comparison.
 
 use alloc::vec::Vec;
-use core::cell::RefCell;
+use beamlet_vm::sync::Lock;
 
 use beamlet_vm::bif::Ctx;
 use beamlet_vm::Term;
@@ -261,25 +261,25 @@ pub fn mac_init(c: &mut Ctx, a: &[Term]) -> R {
         Some("cmac" | "siphash") => return Err(notsup(c, 0, "Unsupported mac algorithm")),
         _ => return Err(badarg(c, 0, "Unknown mac algorithm")),
     };
-    Ok(resource(c, RefCell::new(state)))
+    Ok(resource(c, Lock::new(state)))
 }
 
 pub fn mac_update(c: &mut Ctx, a: &[Term]) -> R {
     let data = bytes(c, a, 1, "text")?;
-    let Some(state) = resource_ref::<RefCell<MacState>>(c, &a[0]) else {
+    let Some(state) = resource_ref::<Lock<MacState>>(c, &a[0]) else {
         return Err(badarg(c, 0, "Bad ref"));
     };
-    match &mut *state.borrow_mut() {
+    match &mut *state.lock() {
         MacState::Hmac(_, _, buf) | MacState::Poly1305(_, buf) => buf.extend_from_slice(&data),
     }
     Ok(a[0])
 }
 
 pub fn mac_final(c: &mut Ctx, a: &[Term]) -> R {
-    let Some(state) = resource_ref::<RefCell<MacState>>(c, &a[0]) else {
+    let Some(state) = resource_ref::<Lock<MacState>>(c, &a[0]) else {
         return Err(badarg(c, 0, "Bad ref"));
     };
-    let out = match &*state.borrow() {
+    let out = match &*state.lock() {
         MacState::Hmac(h, key, buf) => hmac(*h, key, buf),
         MacState::Poly1305(key, buf) => {
             let k = poly1305::Key::try_from(&key[..]).expect("checked at init");

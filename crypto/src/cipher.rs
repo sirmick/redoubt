@@ -5,7 +5,7 @@
 //! (`undefined`, `none`, `pkcs_padding`, `zero`, `random`) behave as in BEAM.
 
 use alloc::vec::Vec;
-use core::cell::RefCell;
+use beamlet_vm::sync::Lock;
 
 use aes::cipher::{
     BlockCipherDecrypt, BlockCipherEncrypt, KeyInit, KeyIvInit, StreamCipher, StreamCipherSeek,
@@ -492,27 +492,27 @@ impl CipherCtx {
     }
 }
 
-fn ctx_arg(c: &mut Ctx, t: &Term) -> Result<beamlet_vm::bif::Held<RefCell<CipherCtx>>, Exception> {
-    resource_ref::<RefCell<CipherCtx>>(c, t).ok_or_else(|| badarg(c, 0, "Bad State"))
+fn ctx_arg(c: &mut Ctx, t: &Term) -> Result<beamlet_vm::bif::Held<Lock<CipherCtx>>, Exception> {
+    resource_ref::<Lock<CipherCtx>>(c, t).ok_or_else(|| badarg(c, 0, "Bad State"))
 }
 
 /// `ng_crypto_init_nif(Cipher, Key, IVec, Options)`.
 pub fn init(c: &mut Ctx, a: &[Term]) -> R {
     let ctx = new_ctx(c, a, 3)?;
-    Ok(resource(c, RefCell::new(ctx)))
+    Ok(resource(c, Lock::new(ctx)))
 }
 
 /// `ng_crypto_update_nif(State, Data)`: the output for `Data`; the state changes in place.
 pub fn update(c: &mut Ctx, a: &[Term]) -> R {
     let data = bytes(c, a, 1, "data")?;
     let ctx = ctx_arg(c, &a[0])?;
-    let out = ctx.borrow_mut().update(&data);
+    let out = ctx.lock().update(&data);
     Ok(bin(c, &out))
 }
 
 pub fn finalize(c: &mut Ctx, a: &[Term]) -> R {
     let ctx = ctx_arg(c, &a[0])?;
-    let mut state = ctx.borrow_mut();
+    let mut state = ctx.lock();
     let out = state.finalize(c)?;
     Ok(bin(c, &out))
 }
@@ -520,7 +520,7 @@ pub fn finalize(c: &mut Ctx, a: &[Term]) -> R {
 pub fn get_data(c: &mut Ctx, a: &[Term]) -> R {
     let ctx = ctx_arg(c, &a[0])?;
     let (size, padded, padding, encrypt) = {
-        let s = ctx.borrow();
+        let s = ctx.lock();
         (s.size, s.padded_size, s.padding, s.encrypt)
     };
     let mut m: Vec<(Term, Term)> = Vec::new();

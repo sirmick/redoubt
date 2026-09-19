@@ -5,7 +5,7 @@
 //! could be wrong with the code (a Y register outside the frame, an operand of the wrong kind) is
 //! a [`Fault::BadCode`], which ends the process that ran it; it never panics the VM.
 
-use alloc::rc::Rc;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 
@@ -66,7 +66,7 @@ pub fn run(sys: &mut System, p: &mut Process) -> Stop {
         }
         // Hold the current module here, so fetching an instruction costs no reference-count
         // traffic; refresh it only when a call or return has moved to another module.
-        if !Rc::ptr_eq(&module, &p.pc.module) {
+        if !Arc::ptr_eq(&module, &p.pc.module) {
             module = p.pc.module.clone();
             // Code loaded since the heap last looked brings literal chunks it must see.
             p.refresh(&sys.literals);
@@ -909,7 +909,7 @@ fn remove_handler(p: &mut Process, ins: &Instr) -> R {
 
 // ---- the instruction loop ----
 
-fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
+fn step(sys: &mut System, p: &mut Process, module: &Arc<Module>) -> R<Flow> {
     let here = p.pc.pc;
     let ins = module
         .code

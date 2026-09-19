@@ -10,10 +10,10 @@
 //!
 //! Every open file belongs to the process that opened it and is closed when that process exits.
 
+use crate::sync::Lock;
 use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::cell::{Cell, RefCell};
 
 use super::Ctx;
 use crate::platform::{FileError, FileInfo, FileKind, Files, OpenMode, SeekFrom};
@@ -31,7 +31,7 @@ const MAX_PATH: usize = 4096;
 /// An open file, as the `FileRef` resource `prim_file` holds.
 struct FileRef {
     handle: u64,
-    open: Cell<bool>,
+    open: Lock<bool>,
 }
 
 // ---- results ----
@@ -457,7 +457,7 @@ pub fn open(c: &mut Ctx, a: &[Term]) -> R {
                 c.sys.files.insert(h, owner);
                 let r = c.new_resource(FileRef {
                     handle: h,
-                    open: Cell::new(true),
+                    open: Lock::new(true),
                 });
                 Ok(ok_with(c, r))
             }
@@ -470,7 +470,7 @@ pub fn open(c: &mut Ctx, a: &[Term]) -> R {
 /// the file may use it (BEAM checks the owner in `prim_file`; the check here backs that up).
 fn handle(c: &Ctx, t: &Term) -> Result<Result<u64, FileError>, Exception> {
     let f = c.resource::<FileRef>(*t).ok_or_else(|| c.badarg())?;
-    if !f.open.get() {
+    if !*f.open.lock() {
         return Ok(Err(FileError::Ebadf));
     }
     if c.sys.files.get(&f.handle) != Some(&c.p.pid) {
@@ -481,7 +481,7 @@ fn handle(c: &Ctx, t: &Term) -> Result<Result<u64, FileError>, Exception> {
 
 pub fn close(c: &mut Ctx, a: &[Term]) -> R {
     let f = c.resource::<FileRef>(a[0]).ok_or_else(|| c.badarg())?;
-    if !f.open.replace(false) {
+    if !core::mem::replace(&mut *f.open.lock(), false) {
         return Ok(error(c, FileError::Einval));
     }
     c.sys.files.remove(&f.handle);
@@ -661,8 +661,8 @@ pub fn read_file(c: &mut Ctx, a: &[Term]) -> R {
 
 /// A byte queue: `prim_file`'s read-ahead buffer.
 struct Buffer {
-    bytes: RefCell<VecDeque<u8>>,
-    locked: Cell<bool>,
+    bytes: Lock<VecDeque<u8>>,
+    locked: Lock<bool>,
 }
 
 fn buffer(c: &Ctx, t: &Term) -> Result<super::Held<Buffer>, Exception> {
@@ -671,20 +671,20 @@ fn buffer(c: &Ctx, t: &Term) -> Result<super::Held<Buffer>, Exception> {
 
 pub fn buffer_new(c: &mut Ctx, _a: &[Term]) -> R {
     let b = Buffer {
-        bytes: RefCell::new(VecDeque::new()),
-        locked: Cell::new(false),
+        bytes: Lock::new(VecDeque::new()),
+        locked: Lock::new(false),
     };
     Ok(c.new_resource(b))
 }
 
 pub fn buffer_size(c: &mut Ctx, a: &[Term]) -> R {
-    Ok(Term::Int(buffer(c, &a[0])?.bytes.borrow().len() as i64))
+    Ok(Term::Int(buffer(c, &a[0])?.bytes.lock().len() as i64))
 }
 
 /// `peek_head(Buffer)`: the buffer's contents, left in place.
 pub fn buffer_peek_head(c: &mut Ctx, a: &[Term]) -> R {
     let b = buffer(c, &a[0])?;
-    let v = Bits::from_bytes(b.bytes.borrow_mut().make_contiguous());
+    let v = Bits::from_bytes(b.bytes.lock().make_contiguous());
     Ok(c.bits(v))
 }
 
@@ -692,7 +692,7 @@ pub fn buffer_peek_head(c: &mut Ctx, a: &[Term]) -> R {
 pub fn buffer_copying_read(c: &mut Ctx, a: &[Term]) -> R {
     let b = buffer(c, &a[0])?;
     let n = a[1].as_usize().ok_or_else(|| c.badarg())?;
-    let mut bytes = b.bytes.borrow_mut();
+    let mut bytes = b.bytes.lock();
     if n > bytes.len() {
         return Err(c.badarg());
     }
@@ -706,7 +706,7 @@ pub fn buffer_copying_read(c: &mut Ctx, a: &[Term]) -> R {
 pub fn buffer_write(c: &mut Ctx, a: &[Term]) -> R {
     let data = iovec(c, &a[1])?;
     let b = buffer(c, &a[0])?;
-    let mut bytes = b.bytes.borrow_mut();
+    let mut bytes = b.bytes.lock();
     if (bytes.len() + data.len()).saturating_mul(8) > c.sys.limits.max_binary_bits {
         return Err(c.system_limit());
     }
@@ -717,7 +717,7 @@ pub fn buffer_write(c: &mut Ctx, a: &[Term]) -> R {
 pub fn buffer_skip(c: &mut Ctx, a: &[Term]) -> R {
     let b = buffer(c, &a[0])?;
     let n = a[1].as_usize().ok_or_else(|| c.badarg())?;
-    let mut bytes = b.bytes.borrow_mut();
+    let mut bytes = b.bytes.lock();
     if n > bytes.len() {
         return Err(c.badarg());
     }
@@ -732,7 +732,7 @@ pub fn buffer_find_byte_index(c: &mut Ctx, a: &[Term]) -> R {
         Term::Int(n @ 0..=255) => n as u8,
         _ => return Err(c.badarg()),
     };
-    let found = b.bytes.borrow().iter().position(|&x| x == needle);
+    let found = b.bytes.lock().iter().position(|&x| x == needle);
     Ok(match found {
         Some(i) => ok_with(c, Term::Int(i as i64)),
         None => c.atom("not_found"),
@@ -741,12 +741,12 @@ pub fn buffer_find_byte_index(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn buffer_try_lock(c: &mut Ctx, a: &[Term]) -> R {
     let b = buffer(c, &a[0])?;
-    let got = !b.locked.replace(true);
+    let got = !core::mem::replace(&mut *b.locked.lock(), true);
     Ok(c.atom(if got { "acquired" } else { "busy" }))
 }
 
 pub fn buffer_unlock(c: &mut Ctx, a: &[Term]) -> R {
-    buffer(c, &a[0])?.locked.set(false);
+    *buffer(c, &a[0])?.locked.lock() = false;
     Ok(c.ok())
 }
 

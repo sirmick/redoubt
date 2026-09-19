@@ -164,7 +164,7 @@ fn is_true(c: &Ctx, t: &Term) -> bool {
 // ---- resources ----
 
 /// Wrap a native value as a resource term.
-fn resource<T: Any>(c: &mut Ctx, value: T) -> Term {
+fn resource<T: Any + beamlet_vm::sync::Shared>(c: &mut Ctx, value: T) -> Term {
     c.new_resource(value)
 }
 

@@ -905,7 +905,7 @@ impl Ctx<'_> {
     }
 
     /// A new resource holding `value`, with a fresh id.
-    pub fn new_resource<T: 'static>(&mut self, value: T) -> Term {
+    pub fn new_resource<T: core::any::Any + crate::sync::Shared>(&mut self, value: T) -> Term {
         let id = self.sys.make_ref().0;
         self.p.heap.resource(crate::term::Resource {
             id,

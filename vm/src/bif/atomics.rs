@@ -4,8 +4,8 @@
 //! Erlang API promises. Values wrap around at 64 bits, as BEAM's do; an array is either signed
 //! (`-2^63..2^63-1`) or unsigned (`0..2^64-1`), and `counters` are always signed.
 
+use crate::sync::Lock;
 use alloc::vec::Vec;
-use core::cell::RefCell;
 
 use num_bigint::BigInt;
 
@@ -20,7 +20,7 @@ const MAX_SIZE: usize = 1 << 24;
 
 struct Atomics {
     signed: bool,
-    cells: RefCell<Vec<u64>>,
+    cells: Lock<Vec<u64>>,
 }
 
 fn new(c: &mut Ctx, size: &Term, signed: bool) -> R {
@@ -40,7 +40,7 @@ fn new(c: &mut Ctx, size: &Term, signed: bool) -> R {
     let id = c.sys.make_ref().0;
     let a = Atomics {
         signed,
-        cells: RefCell::new(alloc::vec![0; n]),
+        cells: Lock::new(alloc::vec![0; n]),
     };
     Ok(c.heap_mut().resource(Resource {
         id,
@@ -68,7 +68,7 @@ fn cell(c: &Ctx, r: &Term, ix: &Term) -> Result<(alloc::sync::Arc<Resource>, usi
     let a = res.get::<Atomics>().ok_or_else(|| c.badarg())?;
     let i = ix
         .as_usize()
-        .filter(|&i| i >= 1 && i <= a.cells.borrow().len())
+        .filter(|&i| i >= 1 && i <= a.cells.lock().len())
         .ok_or_else(|| c.badarg())?;
     Ok((res, i - 1))
 }
@@ -123,14 +123,14 @@ pub fn put(c: &mut Ctx, a: &[Term]) -> R {
     let (res, i) = cell(c, &a[0], &a[1])?;
     let at = atomics(&res);
     let v = value(c, at, &a[2])?;
-    at.cells.borrow_mut()[i] = v;
+    at.cells.lock()[i] = v;
     Ok(c.ok())
 }
 
 pub fn get(c: &mut Ctx, a: &[Term]) -> R {
     let (res, i) = cell(c, &a[0], &a[1])?;
     let at = atomics(&res);
-    let v = at.cells.borrow()[i];
+    let v = at.cells.lock()[i];
     Ok(to_term(c, at, v))
 }
 
@@ -144,7 +144,7 @@ pub fn add_get(c: &mut Ctx, a: &[Term]) -> R {
     let at = atomics(&res);
     let d = incr(c, &a[2])?;
     let v = {
-        let mut cells = at.cells.borrow_mut();
+        let mut cells = at.cells.lock();
         cells[i] = cells[i].wrapping_add(d);
         cells[i]
     };
@@ -155,7 +155,7 @@ pub fn exchange(c: &mut Ctx, a: &[Term]) -> R {
     let (res, i) = cell(c, &a[0], &a[1])?;
     let at = atomics(&res);
     let v = value(c, at, &a[2])?;
-    let old = core::mem::replace(&mut at.cells.borrow_mut()[i], v);
+    let old = core::mem::replace(&mut at.cells.lock()[i], v);
     Ok(to_term(c, at, old))
 }
 
@@ -165,7 +165,7 @@ pub fn compare_exchange(c: &mut Ctx, a: &[Term]) -> R {
     let at = atomics(&res);
     let (expected, desired) = (value(c, at, &a[2])?, value(c, at, &a[3])?);
     let found = {
-        let mut cells = at.cells.borrow_mut();
+        let mut cells = at.cells.lock();
         if cells[i] == expected {
             cells[i] = desired;
             return Ok(c.ok());
@@ -183,7 +183,7 @@ fn info(c: &mut Ctx, a: &[Term], counters: bool) -> R {
         .ok_or_else(|| c.badarg())?
         .clone();
     let at = res.get::<Atomics>().ok_or_else(|| c.badarg())?;
-    let n = at.cells.borrow().len();
+    let n = at.cells.lock().len();
     let mut items: Vec<(&str, Term)> = alloc::vec![
         ("size", Term::Int(n as i64)),
         ("memory", Term::Int((n * 8 + 32) as i64))
