@@ -83,6 +83,13 @@ fn finish(c: &mut Ctx, converted: Term, stop: Option<Stop>) -> Term {
     }
 }
 
+/// `unicode:bin_is_7bit(Bin)`: whether `Bin` is a binary of ASCII bytes (`false` for anything
+/// that is not a binary).
+pub fn bin_is_7bit(c: &mut Ctx, a: &[Term]) -> R {
+    let ascii = matches!(&a[0], Term::Bits(b) if b.is_binary() && b.to_bytes().is_ascii());
+    Ok(c.bool(ascii))
+}
+
 pub fn characters_to_list(c: &mut Ctx, a: &[Term]) -> R {
     let latin1 = in_encoding(c, &a[1])?;
     let mut chars = Vec::new();

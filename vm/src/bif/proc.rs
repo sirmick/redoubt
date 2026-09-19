@@ -375,6 +375,15 @@ pub fn process_flag(c: &mut Ctx, a: &[Term]) -> R {
         let old = core::mem::replace(&mut c.p.trap_exit, new);
         return Ok(c.bool(old));
     }
+    if matches!(&a[0], Term::Atom(f) if f.as_str() == "error_handler") {
+        let Term::Atom(new) = &a[1] else { return Err(c.badarg()) };
+        let new = (new.as_str() != "error_handler").then(|| new.clone());
+        let old = core::mem::replace(&mut c.p.error_handler, new);
+        return Ok(match old {
+            Some(m) => Term::Atom(m),
+            None => c.atom("error_handler"),
+        });
+    }
     if matches!(&a[0], Term::Atom(f) if f.as_str() == "max_heap_size") {
         let new = parse_max_heap(c, &a[1])?;
         let old = core::mem::replace(&mut c.p.max_heap, new);
@@ -771,6 +780,25 @@ pub fn system_info(c: &mut Ctx, a: &[Term]) -> R {
         "system_architecture" => string("beamlet"),
         "system_version" => return super::info::system_version(c, a),
         "os_type" => Term::tuple(alloc::vec![c.atom("unix"), c.atom("beamlet")]),
+        // Every target (x86-64, AArch64, RISC-V) is little-endian; binaries are portable anyway.
+        "endian" => c.atom("little"),
+        "build_type" => c.atom("opt"),
+        "debug_compiled" | "kernel_poll" | "dynamic_trace_probes" => c.bool(false),
+        "threads" | "smp_support" => c.bool(true),
+        "dynamic_trace" => c.atom("none"),
+        "thread_pool_size" | "dirty_cpu_schedulers" | "dirty_io_schedulers" | "dirty_cpu_schedulers_online" => Term::Int(0),
+        "compat_rel" => Term::Int(28),
+        "nif_version" => string("2.17"),
+        "driver_version" => string("3.3"),
+        "time_warp_mode" => c.atom("no_time_warp"),
+        "time_offset" => c.atom("final"),
+        "min_heap_size" => Term::tuple(alloc::vec![c.atom("min_heap_size"), Term::Int(233)]),
+        "fullsweep_after" => Term::tuple(alloc::vec![c.atom("fullsweep_after"), Term::Int(65535)]),
+        "max_heap_size" => {
+            let m = max_heap_term(&mut c.sys.atom_table, &c.sys.atoms, MaxHeap::default());
+            Term::tuple(alloc::vec![c.atom("max_heap_size"), m])
+        }
+        "ets_limit" => Term::Int(crate::ets::MAX_TABLES as i64),
         _ => return Err(c.badarg()),
     })
 }
@@ -784,6 +812,10 @@ pub fn dflag_unicode_io(c: &mut Ctx, _a: &[Term]) -> R {
 /// `io:printable_range()`: which characters `~p` prints as text. BEAM's default is `latin1`.
 pub fn printable_range(c: &mut Ctx, _a: &[Term]) -> R {
     Ok(Term::Atom(c.sys.atoms.latin1.clone()))
+}
+
+pub fn false_1(c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(c.bool(false))
 }
 
 pub fn nif_error(_c: &mut Ctx, a: &[Term]) -> R {

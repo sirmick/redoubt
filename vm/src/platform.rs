@@ -40,6 +40,146 @@ pub trait Platform {
         let _ = app;
         None
     }
+
+    /// The file system this VM may use. The default is none: `file` operations then fail
+    /// with `enotsup`.
+    fn files(&mut self) -> Option<&mut dyn Files> {
+        None
+    }
+}
+
+/// A file system, as the VM's `file` module sees it (through OTP's `prim_file`).
+///
+/// Paths are absolute within the file system the platform chose to expose (`/` is its root,
+/// not necessarily the host's) and already normalized by the VM: no `.` or `..` components, no
+/// empty ones. A platform must still refuse anything that would leave its root, such as a
+/// symbolic link pointing out of it. Handles are the platform's own numbers; the VM closes a
+/// handle when the process that opened it exits.
+///
+/// Calls are synchronous for now. On xous64 this becomes a 9P client (see DESIGN.md), and the
+/// same operations map onto walk/open/read/write/stat/clunk.
+pub trait Files {
+    fn open(&mut self, path: &str, mode: OpenMode) -> Result<u64, FileError>;
+    fn close(&mut self, handle: u64);
+    /// Up to `len` bytes from the current position; empty at end of file.
+    fn read(&mut self, handle: u64, len: usize) -> Result<Vec<u8>, FileError>;
+    /// All of `data`, at the current position (or the end, for a file opened to append).
+    fn write(&mut self, handle: u64, data: &[u8]) -> Result<(), FileError>;
+    /// Up to `len` bytes at `offset`, not moving the position; empty past the end.
+    fn pread(&mut self, handle: u64, offset: u64, len: usize) -> Result<Vec<u8>, FileError>;
+    fn pwrite(&mut self, handle: u64, offset: u64, data: &[u8]) -> Result<(), FileError>;
+    /// Move the position; returns the new one.
+    fn seek(&mut self, handle: u64, to: SeekFrom) -> Result<u64, FileError>;
+    /// Cut the file at the current position.
+    fn truncate(&mut self, handle: u64) -> Result<(), FileError>;
+    fn sync(&mut self, handle: u64) -> Result<(), FileError>;
+    fn handle_info(&mut self, handle: u64) -> Result<FileInfo, FileError>;
+    /// Information about `path`; about a symbolic link itself unless `follow`.
+    fn info(&mut self, path: &str, follow: bool) -> Result<FileInfo, FileError>;
+    /// The names in a directory (not `.` or `..`), as raw bytes.
+    fn list_dir(&mut self, path: &str) -> Result<Vec<Vec<u8>>, FileError>;
+    fn make_dir(&mut self, path: &str) -> Result<(), FileError>;
+    fn delete(&mut self, path: &str) -> Result<(), FileError>;
+    fn del_dir(&mut self, path: &str) -> Result<(), FileError>;
+    fn rename(&mut self, from: &str, to: &str) -> Result<(), FileError>;
+    /// The target of a symbolic link.
+    fn read_link(&mut self, path: &str) -> Result<Vec<u8>, FileError> {
+        let _ = path;
+        Err(FileError::Einval)
+    }
+}
+
+/// How to open a file, from Erlang's modes (`read`, `write`, `append`, `exclusive`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OpenMode {
+    pub read: bool,
+    pub write: bool,
+    pub append: bool,
+    /// Create the file if it does not exist.
+    pub create: bool,
+    /// Fail with `eexist` if it does.
+    pub exclusive: bool,
+    /// Empty it on opening.
+    pub truncate: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SeekFrom {
+    Start(u64),
+    Current(i64),
+    End(i64),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileKind {
+    Regular,
+    Directory,
+    Symlink,
+    Other,
+}
+
+/// What `file:read_file_info/1` reports. Times are seconds since the Unix epoch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileInfo {
+    pub size: u64,
+    pub kind: FileKind,
+    pub readable: bool,
+    pub writable: bool,
+    pub atime: i64,
+    pub mtime: i64,
+    pub ctime: i64,
+    /// Unix permission bits and file type, as `stat` gives them.
+    pub mode: u32,
+    pub links: u64,
+    pub inode: u64,
+    pub uid: u32,
+    pub gid: u32,
+}
+
+/// Why a file operation failed: the POSIX error names Erlang reports (`{error, enoent}`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileError {
+    Eacces,
+    Ebadf,
+    Eexist,
+    Einval,
+    Eio,
+    Eisdir,
+    Eloop,
+    Emfile,
+    Enametoolong,
+    Enoent,
+    Enospc,
+    Enotdir,
+    Enotempty,
+    Enotsup,
+    Eperm,
+    Erofs,
+    Exdev,
+}
+
+impl FileError {
+    pub fn name(self) -> &'static str {
+        match self {
+            FileError::Eacces => "eacces",
+            FileError::Ebadf => "ebadf",
+            FileError::Eexist => "eexist",
+            FileError::Einval => "einval",
+            FileError::Eio => "eio",
+            FileError::Eisdir => "eisdir",
+            FileError::Eloop => "eloop",
+            FileError::Emfile => "emfile",
+            FileError::Enametoolong => "enametoolong",
+            FileError::Enoent => "enoent",
+            FileError::Enospc => "enospc",
+            FileError::Enotdir => "enotdir",
+            FileError::Enotempty => "enotempty",
+            FileError::Enotsup => "enotsup",
+            FileError::Eperm => "eperm",
+            FileError::Erofs => "erofs",
+            FileError::Exdev => "exdev",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -25,7 +25,7 @@ defmodule IoTest do
       e -> Exception.message(e)
     end
     r4 = catch_throw(fn -> throw(:x) end)
-    {s, r1, r2, r3, r4, inspect(%{b: [1, 2], a: "str"}), inspect(1.5), inspect(:atom), inspect('chars'),
+    {s, r1, r2, r3, r4, inspect(%{b: [1, 2], a: "str"}, custom_options: [sort_maps: true]), inspect(1.5), inspect(:atom), inspect('chars'),
      String.pad_leading("7", 3, "0"), String.reverse("abc"), String.split("a,b,,c", ","),
      Integer.parse("42abc"), Float.round(3.14159, 2), :io_lib.format("~p", [[1, 2]]) |> IO.iodata_to_binary()}
   end

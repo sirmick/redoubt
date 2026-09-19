@@ -1,12 +1,17 @@
 //! `beamlet`: run BEAM code on a POSIX host.
 //!
-//!     beamlet [-pa DIR]... MODULE [FUNCTION]
+//!     beamlet [-pa DIR]... [--root DIR] MODULE [FUNCTION]
 //!     beamlet --check FILE.beam...      validate files with the loader and report errors
 //!
 //! Loads modules on demand from the `-pa` directories (in order), calls `MODULE:FUNCTION()`
 //! (default `start`) in a new process, and prints its result with `~w` formatting:
 //! the returned term, or `{'EXCEPTION',Class,Reason}`. The differential test harness compares
 //! this line with what the real BEAM prints for the same call.
+//!
+//! `--root DIR` gives the VM a file system: `DIR` becomes its `/`, and nothing outside it is
+//! reachable. Without it, `file` operations fail with `enotsup`.
+
+mod files;
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -32,6 +37,7 @@ impl Posix {
 struct Posix {
     start: Instant,
     code_path: Vec<PathBuf>,
+    files: Option<files::HostDir>,
 }
 
 impl Platform for Posix {
@@ -73,10 +79,14 @@ impl Platform for Posix {
     fn load_app(&mut self, app: &str) -> Option<Vec<u8>> {
         self.find(&format!("{app}.app"))
     }
+
+    fn files(&mut self) -> Option<&mut dyn beamlet_vm::platform::Files> {
+        self.files.as_mut().map(|f| f as &mut dyn beamlet_vm::platform::Files)
+    }
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: beamlet [-pa DIR]... MODULE [FUNCTION]");
+    eprintln!("usage: beamlet [-pa DIR]... [--root DIR] MODULE [FUNCTION]");
     ExitCode::from(2)
 }
 
@@ -106,8 +116,17 @@ fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let mut code_path = Vec::new();
     let mut positional = Vec::new();
+    let mut root = None;
     while let Some(a) = args.next() {
         match a.as_str() {
+            "--root" => match args.next().map(|d| files::HostDir::new(&d).map_err(|e| (d, e))) {
+                Some(Ok(dir)) => root = Some(dir),
+                Some(Err((d, e))) => {
+                    eprintln!("beamlet: --root {d}: {e}");
+                    return ExitCode::from(2);
+                }
+                None => return usage(),
+            },
             "-pa" => match args.next() {
                 Some(dir) => code_path.push(PathBuf::from(dir)),
                 None => return usage(),
@@ -121,7 +140,7 @@ fn main() -> ExitCode {
         _ => return usage(),
     };
 
-    let platform = Posix { start: Instant::now(), code_path };
+    let platform = Posix { start: Instant::now(), code_path, files: root };
     // Natives are 'static slices; join the crates' tables once.
     let natives: &'static [beamlet_vm::bif::NativeSpec] =
         Box::leak([beamlet_crypto::NATIVES, beamlet_re::NATIVES].concat().into_boxed_slice());

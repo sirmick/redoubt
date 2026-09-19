@@ -130,6 +130,9 @@ pub struct Process {
     /// Reductions used since the process started (`process_info(P, reductions)`).
     pub reductions: u64,
     pub max_heap: MaxHeap,
+    /// The module whose `undefined_function/3` handles calls to missing functions
+    /// (`process_flag(error_handler, M)`); `None` for the default, which raises `undef`.
+    pub error_handler: Option<Atom>,
     /// The last measurement of this process's memory, and `reductions` when it was taken.
     pub usage: crate::memory::Usage,
     pub measured_at: u64,
@@ -168,6 +171,7 @@ impl Process {
             budget: 0,
             reductions: 0,
             max_heap: MaxHeap::default(),
+            error_handler: None,
             usage: crate::memory::Usage::default(),
             measured_at: 0,
         }
