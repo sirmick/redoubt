@@ -477,6 +477,7 @@ pub fn demonitor2(c: &mut Ctx, a: &[Term]) -> R {
     let active = c.p.monitors.contains_key(&r);
     demonitor(c, a)?;
     if flush {
+        c.sys.receive_pending(c.p);
         // Any `{_, Ref, _, _, _}`: the first element may be a custom tag (`monitor/3`).
         let heap = &c.p.heap;
         c.p.mailbox

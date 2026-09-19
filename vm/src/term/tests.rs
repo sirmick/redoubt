@@ -195,3 +195,36 @@ fn slices_share_one_offheap_entry() {
     assert_eq!(dst.offheap_bytes(), 100_010);
     assert_eq!(dst.list_iter(root).count(), 1002);
 }
+
+/// A fragment moved onto a heap that already holds terms reads the same, shares its binary
+/// entries with the heap's, and keeps its sharing.
+#[test]
+fn absorbed_fragments_read_the_same() {
+    let mut h = heap();
+    let big = h.binary(&[3; 1000]);
+    let before = h.tuple(&[Term::Int(1), big]);
+    let bytes = h.as_bits(big).unwrap();
+    let frag = OwnedTerm::build(&Literals::default(), |f| {
+        let shared = f.list([Term::Int(1), Term::Int(2)]);
+        let slice = f.bits(bytes.slice(8, 16));
+        let m = f.map_from([(Term::Int(1), shared)]);
+        let n = f.from_i128(1 << 100);
+        f.tuple(&[shared, shared, slice, m, n])
+    });
+    let text = frag.to_string();
+    let before_text = h.show(before).to_string();
+    let t = frag.absorb_into(&mut h);
+    assert_eq!(h.show(t).to_string(), text);
+    assert_eq!(
+        h.show(before).to_string(),
+        before_text,
+        "what was there is untouched"
+    );
+    let e = h.as_tuple(t).unwrap();
+    assert_eq!(e[0].ptr(), e[1].ptr(), "sharing kept");
+    assert_eq!(
+        h.offheap_bytes(),
+        1000 + 13,
+        "the buffer counts once; the bignum's 13 bytes"
+    );
+}

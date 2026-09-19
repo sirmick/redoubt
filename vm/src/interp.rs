@@ -1379,6 +1379,9 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
             p.x[0] = crate::bif::send(&mut Ctx { sys, p }, &[to, msg])?;
         }
         op::LOOP_REC => {
+            if p.save == p.mailbox.len() {
+                sys.receive_pending(p);
+            }
             if p.save < p.mailbox.len() {
                 let m = p.mailbox[p.save];
                 dst(p, ins, 1, m)?;
