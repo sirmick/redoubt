@@ -41,9 +41,10 @@ pub fn read(phys: usize, offset: usize) -> u64 {
 /// Writes the word at byte `offset` (a multiple of 8) of the frame at `phys`.
 pub fn write(phys: usize, offset: usize, value: u64) {
     let virt = at(phys, offset, 8);
-    // SAFETY: as in `read`. The caller owns what the word means: a kernel object's frame, or a
-    // result the process asked for in memory the caller checked is the process's own and
-    // writable.
+    // SAFETY: as in `read`, and the write cannot reach the kernel's own code or data: every
+    // `phys` passed here is a frame the ownership table handed out (a kernel object's, or a page
+    // of the calling process's that the caller checked is its own and writable), never the kernel
+    // image, whose physmap alias is read-only anyway. The caller owns what the word means.
     unsafe { (virt as *mut u64).write_volatile(value) }
 }
 

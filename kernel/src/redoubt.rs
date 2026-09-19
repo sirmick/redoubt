@@ -51,22 +51,25 @@ fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
             MemoryManager::with_mut(|mm| mm.handle_close(pid, handle.index())).map(done)
         }
         Call::BudgetCreate { parent, spec_rec } => MemoryManager::with_mut(|mm| {
-            let spec = BudgetSpec::decode(&read_record::<BUDGET_SPEC_SLOTS>(mm, spec_rec)?)?;
+            let spec = BudgetSpec::decode(&read_record::<BUDGET_SPEC_SLOTS>(spec_rec)?)?;
             let handle = mm.budget_create(pid, parent.index(), &spec)?;
             Ok(Some(Return::Handle(redoubt_sys::Handle::new(handle).expect("indices start at 1"))))
         }),
         Call::BudgetDestroy { budget } => budget_destroy(pid, tid, budget.index()),
         Call::BudgetUsage { budget, usage_rec } => MemoryManager::with_mut(|mm| {
-            let frames = record_frames::<USAGE_SLOTS>(mm, usage_rec, true)?;
+            let frames = record_frames::<USAGE_SLOTS>(usage_rec, true)?;
             let usage = mm.budget_usage(pid, budget.index())?;
             write_record(usage_rec, &frames, &usage.encode());
             Ok(Some(Return::Nothing))
         }),
         Call::TimeNow => Ok(Some(Return::Time(crate::arch::irq::timer::now_us()))),
-        Call::Random { bytes, len } => MemoryManager::with_mut(|mm| {
+        // TODO(A2): `random` returns one u64 (answer 77); until then it writes `len` bytes.
+        // The memory manager is held (not used) so that no other hart changes the caller's page
+        // tables between finding the frames and writing them.
+        Call::Random { bytes, len } => MemoryManager::with_mut(|_held| {
             let mut frames = [0usize; MAX_RANDOM];
             for (i, frame) in frames.iter_mut().enumerate().take(len) {
-                *frame = crate::arch::mem::user_frame(mm, bytes.checked_add(i).ok_or(Error::InvalidArgument)?, true)?;
+                *frame = crate::arch::mem::user_frame(bytes.checked_add(i).ok_or(Error::InvalidArgument)?, true)?;
             }
             let mut random = [0u8; MAX_RANDOM];
             crate::platform::rand::fill(&mut random[..len]);
@@ -112,21 +115,21 @@ fn budget_destroy(pid: PID, tid: TID, h: u32) -> Result<Option<Return>, Error> {
 
 /// The frames behind each slot of an `N`-slot record at `addr`: aligned, and all the caller's
 /// own memory, readable (and, with `write`, writable). Checked in full before any slot is used.
-fn record_frames<const N: usize>(mm: &mut MemoryManager, addr: usize, write: bool) -> Result<[usize; N], Error> {
+fn record_frames<const N: usize>(addr: usize, write: bool) -> Result<[usize; N], Error> {
     if addr % 8 != 0 {
         return Err(Error::InvalidArgument);
     }
     let mut frames = [0; N];
     for (i, frame) in frames.iter_mut().enumerate() {
         let slot = addr.checked_add(i * 8).ok_or(Error::InvalidArgument)?;
-        *frame = crate::arch::mem::user_frame(mm, slot, write)?;
+        *frame = crate::arch::mem::user_frame(slot, write)?;
     }
     Ok(frames)
 }
 
 /// Copy in an `N`-slot input record.
-fn read_record<const N: usize>(mm: &mut MemoryManager, addr: usize) -> Result<[u64; N], Error> {
-    let frames = record_frames::<N>(mm, addr, false)?;
+fn read_record<const N: usize>(addr: usize) -> Result<[u64; N], Error> {
+    let frames = record_frames::<N>(addr, false)?;
     Ok(core::array::from_fn(|i| kframe::read(frames[i], (addr + i * 8) % xous_kernel::arch::PAGE_SIZE)))
 }
 
