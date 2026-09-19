@@ -206,7 +206,10 @@ Namespaces and launching (`NAMESPACES.md`):
 - [ ] Startup block carries the namespace table.
 - [ ] Launcher server + bare address-space primitive: only when runtime launching is first needed.
 Network:
-- [ ] `virtio-net` driver server; net server on `smoltcp` serving a Plan 9 style `/net` tree over 9P.
+- [ ] Interface capability (frames in/out): the one link-layer type everything attaches through.
+- [ ] `virtio-net` driver server; link server (802.1Q, frame filter, rate limits, egress queues).
+- [ ] IP stack server on `smoltcp`, one instance per network, serving Plan 9 `/net` over 9P.
+- [ ] Mid term: router server (LPM forwarding, stateful filter, NAT); control plane in Elixir.
 - [ ] Key server; beamlet `:crypto` natives in Rust.
 Trivial drivers: ns16550 (done), goldfish RTC.
 Later:

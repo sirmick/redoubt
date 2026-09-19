@@ -63,9 +63,33 @@ spec was a release candidate in 2025; revisit when ratified.
   small specified CoW design of our own. FAT (`fatfs`) only for interop, as a separate untrusted server.
 
 ## Networking
-`virtio-net driver -> net server (smoltcp) -> clients`
+No single Rust stack does VLANs, QoS, firewalling and routing, and on a microkernel none should:
+each concern is its own small server, joined by one interface type.
+
+```
+virtio-net driver -> link server -> IP stack server(s) -> clients (9P /net)
+                          \-> router server (mid term) <-/
+```
+- **Interface capability:** the one link-layer interface type, "send and receive Ethernet frames".
+  NICs (through the link server), VLANs, stack instances and the router all attach through it, so
+  topology is wiring in the manifest, not code.
+- **Link server:** per NIC. 802.1Q tag/untag, each VLAN presented as its own interface capability;
+  a small L2/L3 allowlist and rate limiter before any stack parses a byte; egress priority queues
+  (QoS) keyed by the interface or socket capability the traffic came from, DSCP marking.
+- **IP stack server:** `smoltcp` (no_std, fuzzed; no 802.1Q, no SACK, which the design does not
+  need). **One instance per network or trust domain**: a TCP bug reached from an untrusted network
+  cannot touch the management network's stack. Serves the Plan 9 `/net` tree over 9P.
+- **Firewalling is mostly structural.** Egress: a process connects only where its socket capability
+  allows (per-process policy, which a Unix firewall cannot express). Ingress: nothing listens
+  without a listen capability. What remains is defense in depth and DoS, in the link server.
 - **Socket capabilities are scoped:** "may listen on TCP 22", "may connect to 10.0.0.0/8:443". An
   application without one has no network.
+- **Routing (mid term; designed toward now):** a router server holds several interface capabilities
+  and forwards between them: longest-prefix match, TTL, ARP/NDP, stateful filtering and NAT for
+  forwarded traffic. Endpoint stacks attach to it like any other interface. Data plane in Rust
+  (small of our own, or Netstack3's portable core if it earns its size); **control plane in Elixir**
+  (routing protocols, DHCP server, policy), talking to the data plane over 9P. Keep interface
+  capabilities and the manifest wiring general enough that adding the router changes no other server.
 - **TLS and SSH are end to end** (in the Elixir userland: OTP `:ssh` / `:ssl`), so the driver, the
   stack and anything serving virtio-net carry only ciphertext.
 - **Keys live in a key server.** VMs ask it to sign; they never hold private keys.
