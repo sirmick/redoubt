@@ -1,7 +1,0 @@
-*~
-*.bin
-target/
-apps.uf2
-
-.zig-cache/
-zig-out/
