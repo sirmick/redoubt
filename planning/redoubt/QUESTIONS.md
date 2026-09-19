@@ -5,7 +5,7 @@ so each needs your decision; the answer goes into the named note with a HISTORY.
 **Rec** is the orchestrator's recommendation. Reply with numbers, e.g. "all Rec except 7: ...".
 
 **1-101 answered 2026-09-19** (ANSWERS.md, four tranches; each "Answered" line says where the
-answer now lives). **Open: 102-118** (at the end: K1's handle limit, and the design editor's choices in applying 56-101). The round-4 answers revised 56 (handle
+answer now lives). **Open: 102-119** (at the end: K1's handle limit, and the design editor's choices in applying 56-101). The round-4 answers revised 56 (handle
 kinds are checked by use) and replaced 57 and 58 (by 82).
 
 ## Kernel: messages and IPC (KERNEL-SPEC.md)
@@ -900,3 +900,13 @@ point to change the IPC design. Several items interact; the cross-references say
      sized smaller. Also, byte quotas move out of the shared library and into fsd behind two hooks
      (the grant, and the disconnect), since only fsd meters bytes (WP-D2). The `quota` field
      stays on the wire (question 117).
+
+## From the kernel audit (WP-K0b)
+
+119. **Tenet 6 says "no special test builds" of the kernel, and the bench now boots six cases with
+     debug assertions and overflow checks on.** That build found the undefined behaviour in the
+     argument-block read and two latent SMP bugs, so it earns its place; but the tenet as written
+     forbids it.
+     *Rec:* amend the bullet: "(a build of the same sources with debug assertions and overflow
+     checks on is not a special build: it is the kernel checked harder, and the bench boots chosen
+     cases with it)". The shipped configuration is still what most cases boot.
