@@ -6,12 +6,16 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-beamlet-vm = { path = "../vm", features = ["std"] }
+beamlet-vm = { path = "../vm" }
 beamlet-crypto = { path = "../crypto" }
 beamlet-re = { path = "../re" }
 cap-std = "3"
 fs-set-times = "0.20"
 
 [features]
+default = ["threads"]
+# Several schedulers on threads. Without it the VM is built as it is for a `no_std` embedder
+# (one scheduler, locks that are `RefCell`s), which `--no-default-features` tests end to end.
+threads = ["beamlet-vm/std"]
 # Real PCRE2 (C) behind `re`, for testing against BEAM; never in a default build.
 pcre2 = ["beamlet-re/pcre2"]
