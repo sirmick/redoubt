@@ -6,8 +6,8 @@
 //!
 //! # Registers
 //!
-//! A call is an `ecall` with `a0` = the call's [`Number`] (from [`NUMBER_BASE`] + 1) and its arguments in `a1..=a7`, in the
-//! order listed on each [`Call`] variant. The kernel answers in the same eight registers:
+//! A call is an `ecall` with `a0` = the call's [`Number`] (from [`NUMBER_BASE`] + 1) and its arguments in
+//! `a1..=a7`, in the order listed on each [`Call`] variant. The kernel answers in the same eight registers:
 //! `a0` = 0 and the result in `a1..=a7` (see [`Return`]), or `a0` = an [`Error`] code and
 //! `a1..=a7` = 0. The kernel preserves every register other than `a0..=a7` across the `ecall`.
 //!
@@ -18,14 +18,15 @@
 //! | Argument kind | Registers | Rule |
 //! | --- | --- | --- |
 //! | address, length, word (`usize`) | 1 | |
-//! | 64-bit value (`u64`: ids, badges, accounts, time) | 2: low half, high half | each half fits in 32 bits |
+//! | 64-bit value (`u64`: ids, badges, accounts, time, `random`'s value) | 2: low half, high half | each half fits in 32 bits |
 //! | small value (`u32`: tid, pid, exit code, weight, count) | 1 | must fit in 32 bits |
 //! | [`MemFlags`] | 1 | only `READ`, `WRITE`, `EXECUTE`; never `WRITE` with `EXECUTE` |
 //! | handle | 1 | an index, 1..=`u32::MAX` |
 //! | optional handle | 1 | 0 = none (index 0 is never allocated) |
 //! | message id, badge (`NonZeroU64`) | 2: low half, high half | never 0 |
 //! | optional [`Pages`] (lend, transfer) | 2: address, pages | (0, 0) = none; one of them 0 is invalid |
-//! | enum tag (reset kind, mint source; in records: class, cause, record and message kinds) | 1 | numbered from 1; 0 is never a valid tag |
+//! | enum tag (reset kind, mint source; in records: the record's kind, an exit's cause) | 1 | numbered from 1; 0 is never a valid tag |
+//! | flag (in records: `budget_create`'s `first`) | 1 | 0 or 1 |
 //!
 //! Registers a call does not use must be 0.
 //!
@@ -45,12 +46,15 @@
 //! | Record | Slots | Used by |
 //! | --- | --- | --- |
 //! | [`Body`]: words, handle count, handles | [`BODY_SLOTS`] | `call` (request in, reply out), `send`, `reply` |
-//! | [`Received`]: what `receive` returned | [`RECEIVED_SLOTS`] | `receive` (out) |
-//! | [`BudgetSpec`]: a new budget's fields | [`BUDGET_SPEC_SLOTS`] | `budget_create` (in) |
-//! | [`Usage`]: a budget's six counters | [`USAGE_SLOTS`] | `budget_usage` (out) |
+//! | [`Received`]: kind, msg_id, badge, account, labels, words, handles, buffer, pages; one layout for a message, an interrupt, an exit notice and an abandoned-call notice | [`RECEIVED_SLOTS`] | `receive` (out) |
+//! | [`BudgetSpec`]: pages, processes, weight, first, labels, account, deadline | [`BUDGET_SPEC_SLOTS`] | `budget_create` (in) |
+//! | [`Usage`]: page limit and usage, process limit and usage, weight limit and carved | [`USAGE_SLOTS`] | `budget_usage` (out) |
 //! | handle list: one handle per slot ([`Handle::from_raw`]) | the call's count, at most [`MAX_START_HANDLES`] | `process_start` (in) |
 //!
-//! `random` writes plain bytes (no record, any alignment).
+//! A list in a record (labels, handles) is a count, then its capacity's slots, the unused ones 0.
+//!
+//! A record's page must already be backed: the kernel does not allocate while it decodes, so an
+//! untouched page is `InvalidArgument` (QUESTIONS.md 115, pending; the check is the kernel's).
 //!
 //! Records can overlap the pages a call acts on; the kernel must copy a record in before it
 //! changes those pages, and copy results out only to memory still the caller's. For example a
@@ -64,9 +68,8 @@
 //! (KERNEL-SPEC.md I14). It checks the encoding (unknown numbers, tags and flag bits, values too
 //! wide for their field, lists longer than their array, non-zero unused registers and slots) and
 //! the few rules a single value states by itself: no W+X flags, no badge or message id 0,
-//! `random`'s `len` at most [`MAX_RANDOM`], `process_start`'s count at most
-//! [`MAX_START_HANDLES`]. Everything else (does the handle exist, is the range page-aligned) is
-//! the kernel's check.
+//! `process_start`'s count at most [`MAX_START_HANDLES`]. Everything else (does the handle exist,
+//! is the range page-aligned) is the kernel's check.
 //!
 //! Which error, and in what order, is the spec's (KERNEL-SPEC.md, Errors and the order of checks):
 //! decoding is its stage 1, and this crate implements that stage for registers and slots. In
@@ -75,6 +78,9 @@
 //! `InvalidArgument` for everything else. A record's alignment and whether it lies in the caller's
 //! memory come before its slots and are the kernel's to check. The userspace decoders
 //! ([`decode_result`], [`Received::decode`], [`Usage::decode`]) use the same errors.
+//!
+//! Which errors each call can return at all, its row in the spec's error table, is
+//! [`Number::can_return`].
 
 #![no_std]
 // `deny`, not `forbid`: the `ecall` stub (the only `unsafe` here) must be able to allow it.
@@ -95,8 +101,8 @@ pub use call::{Call, Handle, MemFlags, MintSource, NUMBER_BASE, Number, Pages, R
 pub use ecall::syscall;
 pub use error::Error;
 pub use record::{
-    BODY_SLOTS, BUDGET_SPEC_SLOTS, Body, BudgetSpec, Cause, Class, ExitNotice, Handles, Labels, List,
-    Message, MessageKind, RECEIVED_SLOTS, Received, Slot, USAGE_SLOTS, Usage,
+    BODY_SLOTS, BUDGET_SPEC_SLOTS, Body, BudgetSpec, Cause, ExitNotice, Handles, Labels, List, Message,
+    MessageKind, RECEIVED_SLOTS, Received, Slot, USAGE_SLOTS, Usage,
 };
 pub use regs::REGS;
 pub use ret::{Return, decode_result, encode_result};
@@ -113,7 +119,8 @@ pub const MAX_THREADS: usize = 31;
 pub const MAX_LABELS: usize = 8;
 /// Budget tree depth; the root is at depth 0.
 pub const MAX_DEPTH: usize = 8;
-/// Blocked senders per (account, label set) per endpoint.
+/// Queued messages (sent, not yet taken) per group (R2: (account, label set), and budget for
+/// account 0) per endpoint; `Busy` beyond.
 pub const WAIT_CAP: usize = 16;
 /// Stride scheduling numerator.
 pub const STRIDE: u64 = 1 << 20;
@@ -121,12 +128,15 @@ pub const STRIDE: u64 = 1 << 20;
 pub const SLICE: u64 = 10_000;
 /// A timeout that never expires (microseconds); as a budget deadline, none.
 pub const FOREVER: u64 = u64::MAX;
-/// Calls a process may have taken and not yet replied to; `receive` beyond it is `Busy`.
+/// Open calls per process (taken by `receive`, not yet replied to). At the limit the process
+/// takes no more calls, while sends, interrupts and notices still arrive (R4a).
 pub const MAX_OPEN_CALLS: usize = 64;
 /// Handles one `process_start` copies into the child at most.
 pub const MAX_START_HANDLES: usize = 64;
-/// Bytes one `random` call returns at most (KERNEL-SPEC.md, `random`).
-pub const MAX_RANDOM: usize = 64;
+// QUESTIONS.md 102 (pending): not in KERNEL-SPEC.md's constants yet. The recommendation names it
+// there; a call that would add a handle past it gets `TooLarge` (`Number::can_return`).
+/// Handles one process may hold (the kernel's handle table holds this many).
+pub const MAX_HANDLES: usize = 4096;
 /// The base page, on both Sv32 and Sv39: the unit of lends, transfers and page counts. What each
 /// kernel object costs in pages is KERNEL-SPEC.md's cost table.
 pub const PAGE_SIZE: usize = 4096;

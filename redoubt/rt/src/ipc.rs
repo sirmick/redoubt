@@ -1,5 +1,5 @@
 //! IPC (KERNEL-SPEC.md, Messages; CAPABILITIES.md, IPC): pages to lend and transfer, `call`,
-//! `send`, `receive` and `reply`.
+//! `send`, `receive`, `reply` and `serve`.
 //!
 //! Words are `u64` here, as in `redoubt-wire`, so one layout serves both widths; a word that does
 //! not fit the machine's word is `InvalidArgument` before anything is sent.
@@ -164,13 +164,16 @@ fn mint(source: MintSource, badge: NonZeroU64, budget: Option<&Budget>) -> Resul
 /// What `receive` returned.
 #[derive(Debug)]
 pub enum Event {
-    /// A `call`: reply to it with [`Request::reply`].
+    /// A `call`: reply to it with [`Request::reply`]. It is now this thread's current call.
     Call(Request),
     /// A `send`: nothing to reply.
     Send(Delivery),
-    /// The IRQ handle that fired.
-    Interrupt(Handle),
+    /// The IRQ handle `receive` named fired.
+    Interrupt,
     Exit(ExitNotice),
+    /// The open call with this id, held by this thread, was abandoned: its caller is gone (R3).
+    /// Reply to its [`Request`] to free it; the reply reaches nobody.
+    Abandoned(NonZeroU64),
 }
 
 pub(crate) fn receive_raw(from: Option<Handle>, timeout: u64, max_transfer: usize) -> Result<Event, Error> {
@@ -190,8 +193,9 @@ pub(crate) fn receive_raw(from: Option<Handle>, timeout: u64, max_transfer: usiz
                 }
             }
         }
-        Received::Interrupt(irq) => Event::Interrupt(irq),
+        Received::Interrupt => Event::Interrupt,
         Received::Exit(notice) => Event::Exit(notice),
+        Received::Abandoned(id) => Event::Abandoned(id),
     })
 }
 
@@ -228,6 +232,11 @@ impl Request {
     pub fn mint(&self, badge: NonZeroU64, budget: Option<&Budget>) -> Result<Endpoint, Error> {
         mint(MintSource::Message(self.id), badge, budget)
     }
+
+    /// Makes this the thread's current call (`serve`): the one a fault of this thread blames,
+    /// until it replies to it or takes another. `receive` sets it already; an event-driven server
+    /// calls this when it resumes work on a call it took earlier.
+    pub fn serve(&self) -> Result<(), Error> { nothing(syscall(&Call::Serve { msg_id: self.id })) }
 
     /// Replies, which returns the lend to the caller.
     ///

@@ -121,7 +121,9 @@ pub fn serve(startup: &Startup) -> u32 {
                     let _ = redoubt_rt::handle::close(*handle);
                 }
             }
-            Ok(Event::Interrupt(_) | Event::Exit(_)) => {}
+            // Every call is answered before the next `receive`, so none is ever held to be
+            // abandoned; interrupts and exits are not this endpoint's.
+            Ok(Event::Interrupt | Event::Exit(_) | Event::Abandoned(_)) => {}
             Err(Error::Dead) => return redoubt_rt::exit::OK,
             Err(_) => return RECEIVE_FAILED,
         }

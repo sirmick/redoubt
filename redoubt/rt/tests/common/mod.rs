@@ -19,8 +19,8 @@ use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use redoubt_rt::abi::{
-    BODY_SLOTS, Body, Call, Error, FOREVER, Handle, Handles, Labels, MAX_RANDOM, Message, MessageKind,
-    MintSource, PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, Return,
+    BODY_SLOTS, Body, Call, Error, FOREVER, Handle, Handles, Labels, Message, MessageKind, MintSource,
+    PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, Return,
 };
 
 /// What a handle names. Only endpoints are modelled.
@@ -315,20 +315,12 @@ impl redoubt_rt::HostKernel for Fake {
                 Ok(Return::Nothing)
             }
             Call::TimeNow => Ok(Return::Time(self.boot.elapsed().as_micros() as u64)),
-            Call::Random { bytes, len } => {
-                if len > MAX_RANDOM {
-                    return Err(Error::TooLarge);
-                }
+            Call::Random => {
                 let mut s = self.lock();
-                for i in 0..len {
-                    s.rng ^= s.rng << 13;
-                    s.rng ^= s.rng >> 7;
-                    s.rng ^= s.rng << 17;
-                    // SAFETY: the runtime passes `len` bytes of a live buffer it borrows mutably
-                    // for the call.
-                    unsafe { (bytes as *mut u8).add(i).write(s.rng as u8) };
-                }
-                Ok(Return::Nothing)
+                s.rng ^= s.rng << 13;
+                s.rng ^= s.rng >> 7;
+                s.rng ^= s.rng << 17;
+                Ok(Return::Random(s.rng))
             }
             Call::ProcessExit { code } => {
                 self.lock().exits.insert(pid, code);

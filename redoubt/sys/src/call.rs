@@ -3,7 +3,7 @@
 use core::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
 use crate::regs::{REGS, Reader, Writer};
-use crate::{Error, MAX_RANDOM, MAX_START_HANDLES};
+use crate::{Error, MAX_START_HANDLES};
 
 /// An index into the calling process's handle table. Index 0 is never allocated: in a register
 /// or slot it means "no handle" (KERNEL-SPEC.md, Handle).
@@ -87,7 +87,7 @@ impl Pages {
 /// value as a `u64`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MintSource {
-    /// A message id the caller is serving.
+    /// The message id of an open call of the caller's thread (a `send`'s id is refused).
     Message(NonZeroU64),
     /// A badge-0 endpoint handle the caller holds.
     Handle(Handle),
@@ -195,9 +195,9 @@ impl Arg for ResetKind {
 pub const NUMBER_BASE: u32 = 0x100;
 
 /// The one table of calls. Each entry gives a [`Number`] variant and its value (plus
-/// [`NUMBER_BASE`], it travels in `a0`; 0 is not a call), the spec's name, and the [`Call`] variant's arguments in register
-/// order (`a1` first). From it the macro generates `Number`, `Number::ALL`, `Number::name`,
-/// `Call`, `Call::number`, `Call::encode` and `Call::decode`.
+/// [`NUMBER_BASE`], it travels in `a0`; 0 is not a call), the spec's name, and the [`Call`] variant's
+/// arguments in register order (`a1` first). From it the macro generates `Number`, `Number::ALL`,
+/// `Number::name`, `Call`, `Call::number`, `Call::encode` and `Call::decode`.
 macro_rules! calls {
     ($( $(#[$doc:meta])* $variant:ident = $number:literal $name:literal
         $({ $($field:ident: $ty:ty),* })? ; )*) => {
@@ -247,15 +247,12 @@ macro_rules! calls {
                 let call = match number {
                     $( Number::$variant => Call::$variant $({ $($field: Arg::read(&mut r)?),* })?, )*
                 };
-                // Bounded counts are each their call's last argument, so checking them here, before
-                // the unused registers, keeps the first error in register order.
-                let too_large = match call {
-                    Call::Random { len, .. } => len > MAX_RANDOM,
-                    Call::ProcessStart { count, .. } => count as usize > MAX_START_HANDLES,
-                    _ => false,
-                };
-                if too_large {
-                    return Err(Error::TooLarge);
+                // The one bounded count, `process_start`'s, is its call's last argument, so checking
+                // it here, before the unused registers, keeps the first error in register order.
+                if let Call::ProcessStart { count, .. } = call {
+                    if count as usize > MAX_START_HANDLES {
+                        return Err(Error::TooLarge);
+                    }
                 }
                 r.finish()?;
                 Ok(call)
@@ -282,10 +279,12 @@ calls! {
     /// -> `Handle`
     ProcessCreate = 9 "process_create" { budget: Handle, exit_endpoint: Handle };
     ProcessMap = 10 "process_map" { process: Handle, src: usize, dst: usize, len: usize, flags: MemFlags };
-    /// `handles_rec` holds `count` slots (at most [`MAX_START_HANDLES`](crate::MAX_START_HANDLES),
-    /// else `TooLarge`), one handle each ([`Handle::from_raw`]), copied into the child's slots
-    /// 1..=count.
-    ProcessStart = 11 "process_start" { process: Handle, entry: usize, sp: usize, handles_rec: usize, count: u32 };
+    /// `arg` reaches the child's first thread unchanged, in its first argument register, like
+    /// `thread_create`'s (the startup page's address, 0 = none: INIT.md); the kernel does not
+    /// check it. `handles_rec` holds `count` slots (at most
+    /// [`MAX_START_HANDLES`](crate::MAX_START_HANDLES), else `TooLarge`), one handle each
+    /// ([`Handle::from_raw`]), copied into the child's slots 1..=count.
+    ProcessStart = 11 "process_start" { process: Handle, entry: usize, sp: usize, arg: usize, handles_rec: usize, count: u32 };
     /// -> `Handle`
     EndpointCreate = 12 "endpoint_create";
     /// -> `Handle`. The badge is never 0 (0 is the receive right).
@@ -297,22 +296,25 @@ calls! {
     Send = 15 "send" { endpoint: Handle, body_rec: usize, transfer: Option<Pages>, timeout: u64 };
     /// `from` is a badge-0 endpoint, an IRQ, or none (sleep). `timeout` is relative µs; `FOREVER`
     /// never expires. `max_transfer` is in pages. The kernel writes a
-    /// [`Received`](crate::Received) to `received_rec`.
+    /// [`Received`](crate::Received) to `received_rec`: a message, an interrupt, an exit notice
+    /// or an abandoned-call notice.
     Receive = 16 "receive" { from: Option<Handle>, timeout: u64, max_transfer: usize, received_rec: usize };
-    /// `body_rec` is a [`Body`](crate::Body). A reply to a `send`'s message is the kernel's
-    /// `InvalidArgument`.
+    /// `body_rec` is a [`Body`](crate::Body). `msg_id` must be an open call of the caller's
+    /// thread; a reply to a `send`'s message is the kernel's `InvalidArgument`.
     Reply = 17 "reply" { msg_id: NonZeroU64, body_rec: usize };
-    HandleClose = 18 "handle_close" { handle: Handle };
+    /// `msg_id` (an open call of the caller's thread) becomes the thread's current call: the one
+    /// a fault blames.
+    Serve = 18 "serve" { msg_id: NonZeroU64 };
+    HandleClose = 19 "handle_close" { handle: Handle };
     /// `spec_rec` is a [`BudgetSpec`](crate::BudgetSpec). -> `Handle`
-    BudgetCreate = 19 "budget_create" { parent: Handle, spec_rec: usize };
-    BudgetDestroy = 20 "budget_destroy" { budget: Handle };
+    BudgetCreate = 20 "budget_create" { parent: Handle, spec_rec: usize };
+    BudgetDestroy = 21 "budget_destroy" { budget: Handle };
     /// The kernel writes a [`Usage`](crate::Usage) to `usage_rec` (six counters do not fit in
     /// the result registers).
-    BudgetUsage = 21 "budget_usage" { budget: Handle, usage_rec: usize };
+    BudgetUsage = 22 "budget_usage" { budget: Handle, usage_rec: usize };
     /// -> `Time`
-    TimeNow = 22 "time_now";
-    /// The kernel writes `len` random bytes (at most [`MAX_RANDOM`](crate::MAX_RANDOM), else
-    /// `TooLarge`) to `bytes`, which needs no alignment.
-    Random = 23 "random" { bytes: usize, len: usize };
-    SystemReset = 24 "system_reset" { device: Handle, kind: ResetKind };
+    TimeNow = 23 "time_now";
+    /// -> `Random`: one `u64` from the kernel's CSPRNG.
+    Random = 24 "random";
+    SystemReset = 25 "system_reset" { device: Handle, kind: ResetKind };
 }

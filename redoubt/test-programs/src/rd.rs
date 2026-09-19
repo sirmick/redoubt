@@ -1,7 +1,7 @@
 //! Redoubt system calls (KERNEL-SPEC.md) through `redoubt-sys`, for the budget and handle-table
 //! cases. Records live on the caller's stack, 8-byte aligned by their `[u64; N]` type.
 
-pub use redoubt_sys::{BudgetSpec, Call, Class, Error, FOREVER, Handle, Labels, Number, Return, Usage};
+pub use redoubt_sys::{BudgetSpec, Call, Error, FOREVER, Handle, Labels, Number, Return, Usage};
 use redoubt_sys::USAGE_SLOTS;
 
 /// Handles the kernel gives the loader's first program (kernel budget.rs, `boot_budgets`).
@@ -12,7 +12,7 @@ pub const USERS: u32 = 3;
 pub fn h(index: u32) -> Handle { Handle::new(index).expect("handle 0") }
 
 pub fn spec(pages: u64, processes: u32, weight: u32) -> BudgetSpec {
-    BudgetSpec { pages, processes, weight, class: Class::User, labels: Labels::new(), account: 0, deadline: FOREVER }
+    BudgetSpec { pages, processes, weight, first: false, labels: Labels::new(), account: 0, deadline: FOREVER }
 }
 
 /// `budget_create`; the new handle's index.
@@ -60,8 +60,11 @@ pub fn time_now() -> Result<u64, Error> {
     }
 }
 
-pub fn random(bytes: usize, len: usize) -> Result<(), Error> {
-    redoubt_sys::syscall(&Call::Random { bytes, len }).map(|_| ())
+pub fn random() -> Result<u64, Error> {
+    match redoubt_sys::syscall(&Call::Random)? {
+        Return::Random(value) => Ok(value),
+        _ => Err(Error::InvalidArgument),
+    }
 }
 
 /// A call from raw registers `a0..=a7`, as a hostile program makes it; returns `a0` (0 for

@@ -34,7 +34,22 @@ fn sample_calls() -> Vec<Call> {
         Call::ProcessExit { code: u32::MAX },
         Call::ProcessCreate { budget: h(1), exit_endpoint: h(2) },
         Call::ProcessMap { process: h(5), src: 0x2000_0000, dst: 0x1000, len: 0x4000, flags: MemFlags::NONE },
-        Call::ProcessStart { process: h(5), entry: 0x1000, sp: 0x8000_0000, handles_rec: 0x3000, count: 7 },
+        Call::ProcessStart {
+            process: h(5),
+            entry: 0x1000,
+            sp: 0x8000_0000,
+            arg: 0x4000,
+            handles_rec: 0x3000,
+            count: 7
+        },
+        Call::ProcessStart {
+            process: h(5),
+            entry: 0x1000,
+            sp: 0x8000_0000,
+            arg: 0,
+            handles_rec: 0,
+            count: 0
+        },
         Call::EndpointCreate,
         Call::Mint { source: MintSource::Message(nz(BIG)), badge: nz(!BIG), budget: None },
         Call::Mint { source: MintSource::Handle(h(u32::MAX)), badge: nz(1), budget: Some(h(1)) },
@@ -51,12 +66,14 @@ fn sample_calls() -> Vec<Call> {
         Call::Receive { from: Some(h(1)), timeout: BIG, max_transfer: 16, received_rec: 0x7000 },
         Call::Receive { from: None, timeout: SLICE, max_transfer: 0, received_rec: 0x7000 },
         Call::Reply { msg_id: nz(BIG), body_rec: 0x5000 },
+        Call::Serve { msg_id: nz(BIG) },
+        Call::Serve { msg_id: nz(u64::MAX) },
         Call::HandleClose { handle: h(9) },
         Call::BudgetCreate { parent: h(1), spec_rec: 0x8000 },
         Call::BudgetDestroy { budget: h(10) },
         Call::BudgetUsage { budget: h(11), usage_rec: 0xa000 },
         Call::TimeNow,
-        Call::Random { bytes: 0x9001, len: MAX_RANDOM },
+        Call::Random,
         Call::SystemReset { device: h(12), kind: ResetKind::PowerOff },
         Call::SystemReset { device: h(12), kind: ResetKind::Reboot },
     ]
@@ -72,6 +89,7 @@ fn sample_returns(number: Number) -> Vec<Return> {
             std::vec![Return::Handle(h(1)), Return::Handle(h(u32::MAX))]
         }
         Number::TimeNow => std::vec![Return::Time(0), Return::Time(BIG)],
+        Number::Random => std::vec![Return::Random(0), Return::Random(BIG), Return::Random(u64::MAX)],
         _ => std::vec![Return::Nothing],
     }
 }
@@ -177,11 +195,48 @@ fn sample_received() -> Vec<Received> {
             body: body(MAX_MSG_HANDLES as u32),
             kind: MessageKind::Send { transfer: None },
         }),
-        Received::Interrupt(h(8)),
-        Received::Exit(ExitNotice { pid: 3, cause: Cause::Exited, code: 0, blamed_account: 0 }),
-        Received::Exit(ExitNotice { pid: 4, cause: Cause::Faulted, code: u32::MAX, blamed_account: BIG }),
-        Received::Exit(ExitNotice { pid: 5, cause: Cause::Killed, code: 1, blamed_account: 7 }),
+        Received::Interrupt,
+        exit(3, Cause::Exited, 0, 0, 0),
+        exit(4, Cause::Faulted, u32::MAX, BIG, 3),
+        exit(u32::MAX, Cause::Faulted, 101, 1, MAX_LABELS as u64),
+        exit(4, Cause::Faulted, 101, 0, 0),
+        exit(5, Cause::Killed, 1, 0, 0),
+        Received::Abandoned(nz(BIG)),
+        Received::Abandoned(nz(1)),
     ]
+}
+
+fn exit(pid: u32, cause: Cause, code: u32, blamed_account: u64, nlabels: u64) -> Received {
+    Received::Exit(ExitNotice { pid, cause, code, blamed_account, blamed_labels: labels(nlabels) })
+}
+
+/// The record's one layout: where each kind puts its fields.
+#[test]
+fn received_layout() {
+    const WORD0: usize = 4 + 1 + MAX_LABELS;
+    const HANDLES: usize = WORD0 + WORDS;
+    assert_eq!(RECEIVED_SLOTS, 24);
+    let m = sample_received()[1].encode();
+    assert_eq!(m[..5], [1, BIG, 1, !BIG, 3]);
+    assert_eq!(m[5..8], [BIG, BIG ^ 1, BIG ^ 2]);
+    assert_eq!(m[WORD0..HANDLES], [1, u64::from(u32::MAX), 0, 42]);
+    assert_eq!(m[HANDLES..HANDLES + 3], [2, 1, 8]);
+    assert_eq!(m[RECEIVED_SLOTS - 2..], [0x6000, MAX_LEND_PAGES as u64]);
+    assert_eq!(sample_received()[2].encode()[0], 2, "send");
+    let mut interrupt = [0; RECEIVED_SLOTS];
+    interrupt[0] = 3;
+    assert_eq!(Received::Interrupt.encode(), interrupt);
+    let mut e = [0; RECEIVED_SLOTS];
+    e[0] = 4;
+    e[3] = BIG;
+    e[4] = 3;
+    e[5..8].copy_from_slice(&[BIG, BIG ^ 1, BIG ^ 2]);
+    e[WORD0..WORD0 + 3].copy_from_slice(&[4, 2, u64::from(u32::MAX)]);
+    assert_eq!(exit(4, Cause::Faulted, u32::MAX, BIG, 3).encode(), e);
+    let mut a = [0; RECEIVED_SLOTS];
+    a[0] = 5;
+    a[1] = BIG;
+    assert_eq!(Received::Abandoned(nz(BIG)).encode(), a);
 }
 
 fn sample_usage() -> Usage {
@@ -201,7 +256,7 @@ fn sample_specs() -> Vec<BudgetSpec> {
             pages: 0,
             processes: 0,
             weight: 0,
-            class: Class::User,
+            first: false,
             labels: Labels::new(),
             account: 0,
             deadline: FOREVER,
@@ -210,7 +265,7 @@ fn sample_specs() -> Vec<BudgetSpec> {
             pages: BIG,
             processes: 4,
             weight: 20,
-            class: Class::System,
+            first: true,
             labels: labels(MAX_LABELS as u64),
             account: !BIG,
             deadline: BIG,
@@ -232,7 +287,7 @@ fn records_round_trip() {
     }
     let usage = sample_usage();
     assert_eq!(Usage::decode(&usage.encode()), Ok(usage));
-    assert!(Class::User < Class::System);
+    assert_eq!(sample_specs()[1].encode()[3], 1, "first");
 }
 
 #[test]
@@ -263,8 +318,18 @@ fn malformed_calls_are_refused() {
     assert_eq!(decode([map_anon, 0x1000, 6, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "W+X");
     assert_eq!(decode([map_anon, 0x1000, 7, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "RW+X");
     let random = Number::Random as u64;
-    let too_many = MAX_RANDOM as u64 + 1;
-    assert_eq!(decode([random, 0x9000, too_many, 0, 0, 0, 0, 0]), Err(Error::TooLarge), "random len");
+    assert_eq!(
+        decode([random, 0x9000, 8, 0, 0, 0, 0, 0]),
+        Err(Error::InvalidArgument),
+        "random's old arguments"
+    );
+    assert_eq!(decode([random, 0, 0, 0, 0, 0, 0, 1]), Err(Error::InvalidArgument), "random, a7");
+    assert_eq!(decode([random, 0, 0, 0, 0, 0, 0, 0]), Ok(Call::Random));
+    let serve = Number::Serve as u64;
+    assert_eq!(decode([serve, 0, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "serve id 0");
+    assert_eq!(decode([serve, wide, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "serve, wide half");
+    assert_eq!(decode([serve, 1, 0, 1, 0, 0, 0, 0]), Err(Error::InvalidArgument), "serve, a3");
+    assert_eq!(decode([serve, 0, 1, 0, 0, 0, 0, 0]), Ok(Call::Serve { msg_id: nz(1 << 32) }));
     let call = Number::Call as u64;
     assert_eq!(decode([call, 6, 0x5000, 0x6000, 0, 0, 0, 0]), Err(Error::InvalidArgument), "lend of 0 pages");
     assert_eq!(decode([call, 6, 0x5000, 0, 1, 0, 0, 0]), Err(Error::InvalidArgument), "lend at 0");
@@ -290,12 +355,38 @@ fn malformed_calls_are_refused() {
     let start = Number::ProcessStart as u64;
     let too_many = MAX_START_HANDLES as u64 + 1;
     assert_eq!(
-        decode([start, 1, 0x1000, 0x2000, 0x3000, too_many, 0, 0]),
+        decode([start, 1, 0x1000, 0x2000, 0x4000, 0x3000, too_many, 0]),
         Err(Error::TooLarge),
         "start list"
     );
-    assert_eq!(decode([start, 1, 0x1000, 0x2000, 0x3000, too_many, 1, 0]), Err(Error::TooLarge), "order");
-    assert!(decode([start, 1, 0x1000, 0x2000, 0x3000, MAX_START_HANDLES as u64, 0, 0]).is_ok());
+    assert_eq!(
+        decode([start, 1, 0x1000, 0x2000, 0x4000, 0x3000, too_many, 1]),
+        Err(Error::TooLarge),
+        "order"
+    );
+    assert_eq!(
+        decode([start, 0, 0x1000, 0x2000, 0x4000, 0x3000, too_many, 0]),
+        Err(Error::BadHandle),
+        "order"
+    );
+    assert_eq!(decode([start, 1, 0x1000, 0x2000, 0, 0x3000, 1, 1]), Err(Error::InvalidArgument), "a7");
+    assert_eq!(
+        decode([start, 1, 0x1000, 0x2000, 0, 0x3000, wide, 0]),
+        Err(Error::InvalidArgument),
+        "wide count"
+    );
+    assert_eq!(
+        decode([start, 1, 0x1000, 0x2000, u64::from(u32::MAX), 0x3000, MAX_START_HANDLES as u64, 0]),
+        Ok(Call::ProcessStart {
+            process: h(1),
+            entry: 0x1000,
+            sp: 0x2000,
+            arg: u32::MAX as usize,
+            handles_rec: 0x3000,
+            count: MAX_START_HANDLES as u32
+        }),
+        "arg is not checked"
+    );
     let reset = Number::SystemReset as u64;
     assert_eq!(decode([reset, 1, 3, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "unknown reset kind");
     assert_eq!(decode([reset, 1, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "reset kind 0");
@@ -327,11 +418,11 @@ fn malformed_records_are_refused() {
     slots[WORDS + 1] = 0;
     assert_eq!(Body::decode(&slots), Err(Error::BadHandle));
 
-    // BudgetSpec: unknown class, too many labels, a stray label slot, wide processes.
+    // BudgetSpec: a `first` that is no flag, too many labels, a stray label slot, wide fields.
     let spec = sample_specs()[0];
     for (slot, value, error) in [
-        (3, 0, Error::InvalidArgument),
-        (3, 3, Error::InvalidArgument),
+        (3, 2, Error::InvalidArgument),
+        (3, u64::MAX, Error::InvalidArgument),
         (4, MAX_LABELS as u64 + 1, Error::TooLarge),
         (5, 1, Error::InvalidArgument),
         (1, 1 << 32, Error::InvalidArgument),
@@ -342,33 +433,54 @@ fn malformed_records_are_refused() {
         assert_eq!(BudgetSpec::decode(&slots), Err(error), "spec slot {slot} = {value}");
     }
 
-    // Received: unknown kinds, stray slots after each kind, bad message kinds and page ranges.
-    for kind in [0, 4] {
+    // Received: unknown kinds; each kind with any field it does not use set; bad fields.
+    const WORD0: usize = 4 + 1 + MAX_LABELS;
+    for kind in [0, 6, u64::MAX] {
         let mut slots = [0; RECEIVED_SLOTS];
         slots[0] = kind;
-        assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument));
+        assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "kind {kind}");
     }
-    let mut slots = Received::Interrupt(h(1)).encode();
-    slots[2] = 1;
-    assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument));
-    let exit = Received::Exit(ExitNotice { pid: 1, cause: Cause::Killed, code: 0, blamed_account: 0 });
-    let mut slots = exit.encode();
-    slots[2] = 4;
-    assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "unknown cause");
+    let unused = |r: Received, used: &[usize]| {
+        for slot in (1..RECEIVED_SLOTS).filter(|s| !used.contains(s)) {
+            let mut slots = r.encode();
+            slots[slot] = 1;
+            assert!(Received::decode(&slots).is_err(), "{r:?} with slot {slot} set");
+        }
+    };
+    unused(Received::Interrupt, &[]);
+    unused(Received::Abandoned(nz(BIG)), &[1]);
+    let labels_and_words: Vec<usize> = (3..WORD0 + 3).collect();
+    unused(exit(1, Cause::Killed, 0, 0, 0), &labels_and_words);
+    let mut slots = exit(1, Cause::Killed, 0, 0, 0).encode();
+    for (slot, value, what) in [
+        (WORD0 + 1, 4, "unknown cause"),
+        (WORD0 + 1, 0, "cause 0"),
+        (WORD0, 1 << 32, "wide pid"),
+        (WORD0 + 2, 1 << 32, "wide code"),
+        (4, MAX_LABELS as u64 + 1, "too many labels"),
+    ] {
+        let old = core::mem::replace(&mut slots[slot], value);
+        assert!(Received::decode(&slots).is_err(), "exit: {what}");
+        slots[slot] = old;
+    }
+    let mut slots = Received::Abandoned(nz(1)).encode();
+    slots[1] = 0;
+    assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "abandoned id 0");
     let mut slots = sample_received()[0].encode();
     slots[RECEIVED_SLOTS - 2] = 0x6000;
     assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "an address and no pages");
-    for kind in [0, 3] {
-        let mut slots = sample_received()[0].encode();
-        slots[1] = kind;
-        assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "message kind {kind}");
-    }
     let mut slots = sample_received()[1].encode();
     slots[RECEIVED_SLOTS - 1] = 0;
     assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "a lend of 0 pages");
     let mut slots = sample_received()[0].encode();
-    slots[2] = 0;
+    slots[1] = 0;
     assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "message id 0");
+    let mut slots = sample_received()[0].encode();
+    slots[WORD0 + WORDS] = MAX_MSG_HANDLES as u64 + 1;
+    assert_eq!(Received::decode(&slots), Err(Error::TooLarge), "too many handles");
+    let mut slots = sample_received()[0].encode();
+    slots[WORD0 + WORDS + 1] = 0;
+    assert_eq!(Received::decode(&slots), Err(Error::BadHandle), "handle 0");
 
     // Usage: a counter too wide for its field.
     let mut slots = sample_usage().encode();
@@ -399,27 +511,36 @@ impl Rng {
 }
 
 /// Decoding random registers never panics, and whatever decodes has exactly one encoding: the
-/// registers it came from.
+/// registers it came from. Many decode (checked), so the canonical check has work.
 #[test]
 fn random_registers() {
     let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+    let (mut calls, mut results) = (0, 0);
     for _ in 0..200_000 {
-        let mut regs = [0; REGS].map(|_| rng.value());
-        regs[0] = rng.next() % (CALLS + 2);
+        // Mostly zeros, so calls with few arguments decode often.
+        let mut regs = [0; REGS].map(|_| if rng.next().is_multiple_of(2) { 0 } else { rng.value() });
+        regs[0] = u64::from(NUMBER_BASE) + rng.next() % (CALLS + 2);
         if let Ok(call) = Call::decode(&regs) {
             assert_eq!(call.encode(), regs);
+            calls += 1;
         }
         let number = Number::ALL[(rng.next() % CALLS) as usize];
         regs[0] = rng.next() % (ERRORS + 2);
         if let Ok(value) = decode_result(number, &regs) {
             assert_eq!(encode_result(&Ok(value)), regs);
+            results += 1;
         }
     }
+    assert!(calls > 1000 && results > 100, "{calls} calls and {results} results decoded");
 }
 
+/// Random slots, and valid records with a few slots changed: decoding never panics, and whatever
+/// decodes re-encodes to its input.
 #[test]
 fn random_records() {
     let mut rng = Rng(0xd1b5_4a32_d192_ed03);
+    let valid = sample_received();
+    let mut decoded = [0; 6];
     for _ in 0..200_000 {
         let mut body = [0; BODY_SLOTS].map(|_| rng.value());
         body[WORDS] %= 6;
@@ -433,13 +554,55 @@ fn random_records() {
             assert_eq!(s.encode(), spec);
         }
         let mut received = [0; RECEIVED_SLOTS].map(|_| rng.value());
-        received[0] %= 4;
+        received[0] %= 7;
         if let Ok(r) = Received::decode(&received) {
             assert_eq!(r.encode(), received);
+        }
+        let mut received = valid[(rng.next() % valid.len() as u64) as usize].encode();
+        for _ in 0..rng.next() % 3 {
+            received[(rng.next() % RECEIVED_SLOTS as u64) as usize] = rng.value();
+        }
+        if let Ok(r) = Received::decode(&received) {
+            assert_eq!(r.encode(), received);
+            decoded[received[0] as usize] += 1;
         }
         let usage = [0; USAGE_SLOTS].map(|_| rng.value());
         if let Ok(u) = Usage::decode(&usage) {
             assert_eq!(u.encode(), usage);
         }
+    }
+    assert!(decoded[1..].iter().all(|n| *n > 100), "decoded per kind: {decoded:?}");
+}
+
+/// Each call's error row (KERNEL-SPEC.md, the error table), where answers 72-105 changed it.
+#[test]
+fn error_rows() {
+    use Error::*;
+    let has = |n: Number, errors: &[Error]| errors.iter().all(|e| n.can_return(*e));
+    let lacks = |n: Number, errors: &[Error]| errors.iter().all(|e| !n.can_return(*e));
+    for n in Number::ALL {
+        // Decoding's general error, for every call (a non-zero unused register).
+        assert!(n.can_return(InvalidArgument), "{n:?}");
+    }
+    assert!(has(Number::Call, &[Refused, LabelDenied, Busy, Timeout, Dead, OutOfMemory]));
+    assert!(has(Number::Send, &[Refused, LabelDenied, Busy, Timeout, Dead]));
+    assert!(lacks(Number::Send, &[OutOfMemory, NotPermitted]));
+    assert!(has(Number::Receive, &[BadHandle, WrongObject, NotPermitted, Timeout, Dead]));
+    assert!(lacks(Number::Receive, &[Busy, OutOfMemory, Refused, LabelDenied, TooLarge]));
+    assert!(has(Number::ProcessCreate, &[NotPermitted, OutOfProcesses, OutOfMemory]));
+    assert!(has(Number::ProcessStart, &[TooLarge, BadHandle, NotPermitted, OutOfMemory]));
+    assert!(has(Number::BudgetCreate, &[ClassDenied, LabelDenied, TooLarge, OutOfProcesses]));
+    assert!(lacks(Number::BudgetCreate, &[NotPermitted, Busy]));
+    assert!(has(Number::Mint, &[Dead, NotPermitted]));
+    assert!(has(Number::Reply, &[InvalidArgument, BadHandle, TooLarge]));
+    assert!(lacks(Number::Reply, &[OutOfMemory, Dead, Refused]));
+    assert!(lacks(Number::Serve, &[BadHandle, TooLarge, Dead, NotPermitted]));
+    assert!(lacks(Number::Random, &[TooLarge, BadHandle, OutOfMemory]));
+    assert!(lacks(Number::TimeNow, &[BadHandle, OutOfMemory]));
+    assert!(lacks(Number::ThreadExit, &[BadHandle, OutOfMemory]));
+    // QUESTIONS.md 102 (pending): every call adding a handle to its caller's table.
+    for n in [Number::ProcessCreate, Number::EndpointCreate, Number::Mint, Number::BudgetCreate, Number::Call]
+    {
+        assert!(has(n, &[OutOfMemory, TooLarge]), "{n:?}");
     }
 }

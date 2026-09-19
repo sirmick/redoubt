@@ -31,9 +31,9 @@ use crate::mem::MemoryManager;
 
 /// Handles in one table page: `PAGE_SIZE` / 32 bytes.
 pub const HANDLES_PER_PAGE: usize = 128;
-/// Handles one process may hold (QUESTIONS.md 102, pending): a table is an array of this many
-/// divided by 128 pages. Installing one more is `TooLarge`.
-pub const MAX_HANDLES: usize = 4096;
+/// Handles one process may hold (QUESTIONS.md 102, pending; the ABI's constant): a table is an
+/// array of this many divided by 128 pages. Installing one more is `TooLarge`.
+pub use redoubt_sys::MAX_HANDLES;
 /// Table pages a process may have.
 pub const MAX_HANDLE_PAGES: usize = MAX_HANDLES / HANDLES_PER_PAGE;
 /// Words one handle takes.
