@@ -61,6 +61,7 @@ pub struct Generations {
 
 pub struct Sched<'v> {
     sys: &'v Lock<System>,
+    platform: Arc<Lock<alloc::boxed::Box<dyn crate::platform::Platform>>>,
     wakeup: &'v Wakeup,
     generations: Arc<Generations>,
     pub atoms: Atoms,
@@ -77,6 +78,7 @@ impl<'v> Sched<'v> {
         Sched {
             sys,
             wakeup,
+            platform: s.platform.clone(),
             generations: s.generations.clone(),
             atoms: s.atoms.clone(),
             limits: s.limits,
@@ -92,6 +94,11 @@ impl<'v> Sched<'v> {
             guard: self.sys.lock(),
             wakeup: self.wakeup,
         }
+    }
+
+    /// The platform, locked until the guard is dropped (after the system lock, never before).
+    pub fn platform(&self) -> Guard<'_, alloc::boxed::Box<dyn crate::platform::Platform>> {
+        self.platform.lock()
     }
 
     /// Wait while `parked` holds, checking it under the lock so no wakeup is missed.

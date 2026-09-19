@@ -520,7 +520,7 @@ pub fn display_string(c: &mut Ctx, a: &[Term]) -> R {
         Some(b) if b.is_binary() => b.to_bytes().into_owned(),
         _ => text_of(c, s)?.into_bytes(),
     };
-    c.sys().platform.console_write(&text);
+    c.platform().console_write(&text);
     Ok(Term::Atom(c.atoms.true_))
 }
 
@@ -578,7 +578,7 @@ pub fn app_spec(c: &mut Ctx, a: &[Term]) -> R {
         return Err(c.badarg());
     };
     let name = String::from(app.as_str());
-    let app = c.sys().platform.load_app(&name);
+    let app = c.platform().load_app(&name);
     Ok(match app {
         Some(b) => c.binary(&b),
         None => Term::Atom(c.atoms.error),
@@ -678,11 +678,7 @@ fn datetime(c: &mut Ctx, secs: i64) -> Term {
 /// `universaltime()` as `{{Y, M, D}, {H, Mi, S}}`. `localtime()` is the same: the VM has no time
 /// zone (the platform could supply one later).
 pub fn universaltime(c: &mut Ctx, _a: &[Term]) -> R {
-    let us = c
-        .sys()
-        .platform
-        .system_time_us()
-        .ok_or_else(|| c.badarg())?;
+    let us = c.platform().system_time_us().ok_or_else(|| c.badarg())?;
     Ok(datetime(c, (us / 1_000_000) as i64))
 }
 

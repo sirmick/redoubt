@@ -981,7 +981,7 @@ pub fn monotonic_time1(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 fn wall_us(c: &mut Ctx) -> Result<u64, Exception> {
-    c.sys().platform.system_time_us().ok_or_else(|| c.badarg())
+    c.platform().system_time_us().ok_or_else(|| c.badarg())
 }
 
 pub fn system_time(c: &mut Ctx, _a: &[Term]) -> R {
@@ -1226,10 +1226,8 @@ pub fn statistics(c: &mut Ctx, a: &[Term]) -> R {
         return Err(c.badarg());
     };
     let pair = |c: &mut Ctx, x: u64, y: u64| c.tuple(&[Term::Int(x as i64), Term::Int(y as i64)]);
-    let now = {
-        let mut sys = c.sys();
-        sys.platform.monotonic_us() - sys.stats.start_us
-    };
+    let start = c.sys().stats.start_us;
+    let now = c.platform().monotonic_us() - start;
     let queue = c.sys().run_queue.len() as i64;
     Ok(match item.as_str() {
         "runtime" | "wall_clock" => {
