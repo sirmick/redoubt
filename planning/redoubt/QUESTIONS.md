@@ -5,7 +5,7 @@ so each needs your decision; the answer goes into the named note with a HISTORY.
 **Rec** is the orchestrator's recommendation. Reply with numbers, e.g. "all Rec except 7: ...".
 
 **1-119 answered 2026-09-19** (ANSWERS.md, six tranches; each "Answered" line says where the
-answer now lives). **Open: 120-122** (from WP-S1, at the end). The round-4 answers revised 56 (handle kinds are checked by
+answer now lives). **Open: 120-126** (from WP-S1, at the end). The round-4 answers revised 56 (handle kinds are checked by
 use) and replaced 57 and 58 (by 82); the last tranche replaced 103 (no `first` flag and no strict
 priority: one stride queue for every budget).
 
@@ -968,4 +968,33 @@ point to change the IPC design. Several items interact; the cross-references say
      (`name,purpose,seed`), in its own note.
      *Rec:* INIT.md says arguments are opaque strings `init` passes through unchanged, and each
      server's note defines its own; `init` validates only the count and the encoding.
+
+123. **Where keyd's private seeds live.** WP-S1 takes each key as a manifest argument
+     `name,purpose,seed`, so the seeds sit in the boot manifest: inside the signed but unencrypted
+     bundle (VERIFIED-BOOT.md), which `bootfsd` serves at `/boot` and every session reaches for
+     its modules. Anyone who can read `/boot` can read the box's private keys.
+     *Rec:* `bootfsd` serves only the entries the manifest marks public (programs and module
+     archives), never the manifest itself. INIT.md then states the remaining residual: the seeds
+     live in `init`'s memory and in the bundle image, at the same trust as the bundle, until
+     milestone 2 seals them to the machine.
+
+124. **What `keys` names in a milestone 1 session or lease.** keyd's purposes are `ssh_host` and
+     `audit`, and `grant` mints only the granter's own key and purpose, so the steward can hand a
+     session nothing but audit signing. But INIT.md's worked example gives Alice's session "sign
+     with Alice's keys", and CAPABILITIES.md gives a lease `keys`.
+     *Rec:* no session or lease holds `keys` in milestone 1. The worked example's row goes, and
+     both mentions are marked milestone 2, where a principal's key comes with the one message
+     shape it may sign.
+
+125. **Signed audit records.** keyd has an `audit` purpose, but no note says audit records are
+     signed, or who verifies them.
+     *Rec:* keep it. WP-S2 signs each record it appends and the audit file carries the signatures;
+     verification is an operator tool in milestone 2.
+
+126. **Minted badges after a restart.** Endpoints outlive servers, and a server keeps no state
+     across a restart, so keyd and the 9P skeleton both restart their minted badges at 2^63 while
+     clients still hold handles minted before. The first grants after a restart then match stale
+     handles.
+     *Rec:* a server draws its first minted badge at random above 2^63, from `random`. The
+     skeleton and keyd change together.
 
