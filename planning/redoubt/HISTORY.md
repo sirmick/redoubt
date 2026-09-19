@@ -240,4 +240,14 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   `bench-attack-forgery` keeps forgery closed. The review found the first version still printed
   moved pages raw, so any client could forge a victim's verdict; fixed and re-checked. The audit
   also found the lend-untouched-page kernel panic (WP-K0).
+- **WP-L1 littlefs** (`25ab39296`): littlefs 2.1 in pure Rust (`redoubt/littlefs`: `no_std`, no
+  dependencies, no `unsafe`) for `fsd`, without wear levelling or relocation; model-based,
+  crash-at-every-write (torn writes, torn erases, crashes during repair), hostile-image and fuzz
+  tests, and differential tests against the C reference v2.11.3 in a host-only crate. The review
+  found a real bug: removing a file while a write handle was open let the handle later write into
+  blocks another file had taken (fixed, with the model now holding handles across removes and
+  renames, which found a second bug, a zero-byte write committing a stale copy). The C reference's
+  wear-levelling path fails its own asserts and loses operations on several seeds (recorded in the
+  diff suite; keep `block_cycles` off in C tooling that touches these volumes). The block-device
+  contract the crate relies on is QUESTIONS.md 36.
 

@@ -53,7 +53,7 @@ merged; the waves show what can run together.
 | --- | --- | --- | --- |
 | M0 | review | wp-m0 | |
 | W1 | merged | wp-w1 | d52896bee |
-| L1 | review | wp-l1 | |
+| L1 | merged | wp-l1 | 25ab39296 |
 | T1 | merged | wp-t1 | 987bacbed |
 | A1 | merged | wp-a1 | 44f1780a1 |
 | K0 | building | wp-k0 | fix: lending an untouched page panics the kernel (found by T1b) |
