@@ -2,8 +2,9 @@
 //! implementation, or by both taking turns on the same image, and after each step both must
 //! read back exactly what an in-memory model says the volume holds.
 //!
-//! The reference runs with wear levelling on (so it relocates metadata and grows the
-//! superblock chain, which this crate never does but must read).
+//! Most runs use the reference without wear levelling, as this crate has none. The
+//! wear-levelling runs turn it on (a relocation every 3 erases), so the reference relocates
+//! metadata and grows the superblock chain, which this crate never does but must read.
 
 #[path = "../../tests/common/mod.rs"]
 mod common;

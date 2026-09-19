@@ -2,6 +2,8 @@
 //! requirement is that nothing panics or hangs. Shared by `tests/hostile.rs` and the fuzzer
 //! (which includes this file by path).
 
+#![allow(dead_code)] // each includer uses one of the two rounds
+
 use littlefs::{BlockDevice, FileType, Filesystem, OpenOptions};
 
 /// Walks at most `limit` directories (a hostile tree may loop), reading everything.
@@ -40,6 +42,25 @@ fn walk<D: BlockDevice>(fs: &mut Filesystem<D>, limit: usize) {
             }
         }
     }
+}
+
+/// A quicker round for the fuzzer's `mutate` target, where every input mounts: the read-only
+/// check, a short walk, and one of each kind of write.
+pub fn exercise_light<D: BlockDevice>(fs: &mut Filesystem<D>) {
+    let _ = fs.check();
+    walk(fs, 8);
+    let w = OpenOptions { read: true, write: true, create: true, ..Default::default() };
+    if let Ok(h) = fs.open("/d/f1", w) {
+        let _ = fs.seek(h, 50);
+        let _ = fs.write(h, &[0x5a; 300]);
+        let _ = fs.truncate(h, 200);
+        let _ = fs.close(h);
+    }
+    let _ = fs.mkdir("/fz");
+    let _ = fs.rename("/d/f4", "/fz/g");
+    let _ = fs.set_attr("/fz", 1, b"attr");
+    let _ = fs.remove("/d/f5");
+    let _ = fs.remove("/d/e");
 }
 
 pub fn exercise<D: BlockDevice>(fs: &mut Filesystem<D>) {

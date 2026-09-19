@@ -152,8 +152,13 @@ impl<D: BlockDevice> Filesystem<D> {
         }
     }
 
-    /// Calls `f` with each entry of a directory. There are no directory handles: a caller
-    /// that reads a directory in pieces walks it again and skips what it has seen.
+    /// Calls `f` with each entry of a directory (no `.` or `..`). There are no directory
+    /// handles: a caller that reads a directory in pieces walks it again and skips what it
+    /// has seen.
+    ///
+    /// Names are the medium's bytes, unchecked: a hostile image can hold names no path can
+    /// name (empty, `.`, `..`, containing `/` or NUL; [`Filesystem::check`] reports them).
+    /// Treat them as opaque: never join one into a path that is then resolved.
     pub fn read_dir(&mut self, path: &str, mut f: impl FnMut(&DirEntry)) -> Result<(), Error> {
         self.check_poison()?;
         let mut pair = self.dir_head(path)?;
@@ -176,7 +181,7 @@ impl<D: BlockDevice> Filesystem<D> {
         self.mutate(|fs| {
             let (Lookup::Missing { dir, id }, name) = fs.lookup(path)? else { return Err(Error::Exists) };
             fs.check_name(name)?;
-            // The new pair joins the list of all pairs after the last pair of the parent
+            // The new pair joins the list of pairs after the last pair of the parent
             // directory (a hard-tail chain cannot be split).
             let mut last = dir.clone();
             let mut walk = fs.walk();
@@ -232,7 +237,7 @@ impl<D: BlockDevice> Filesystem<D> {
         Ok(Some(d.pair))
     }
 
-    /// Unlinks a removed directory's pair from the list of all pairs. If power fails before
+    /// Unlinks a removed directory's pair from the list of pairs. If power fails before
     /// this, the orphan flag written with the removal makes the next mount do it.
     fn drop_orphan(&mut self, child: Pair) -> Result<(), Error> {
         self.prep_orphans(-1);
@@ -402,7 +407,7 @@ impl<D: BlockDevice> Filesystem<D> {
             Ok(())
         };
 
-        // Every pair on the list of all pairs, and every file's blocks, exactly once.
+        // Every pair on the list of pairs, and every file's blocks, exactly once.
         let mut listed = BTreeSet::new();
         let mut superblocks = BTreeSet::new();
         let mut tail = [0, 1];

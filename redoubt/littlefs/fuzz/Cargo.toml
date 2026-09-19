@@ -5,7 +5,9 @@ edition = "2021"
 publish = false
 
 # Host-only, and outside the workspace (see the root Cargo.toml `exclude`).
-# Run: cargo +nightly-2026-05-11 fuzz run image   (from redoubt/littlefs)
+# Run from redoubt/littlefs (nightly comes from rust-toolchain.toml):
+#   cargo fuzz run -s none image fuzz/corpus/image fuzz/seeds/image
+#   cargo fuzz run -s none mutate fuzz/corpus/mutate fuzz/seeds/mutate
 [workspace]
 
 [package.metadata]

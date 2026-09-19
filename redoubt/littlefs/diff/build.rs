@@ -1,4 +1,5 @@
-//! Builds the littlefs C reference (v2.11.3, vendored in `c/`, BSD-3-Clause) for the host.
+//! Builds the littlefs C reference (v2.11.3, vendored in `c/` with its SPEC.md and DESIGN.md,
+//! BSD-3-Clause) for the host.
 
 fn main() {
     cc::Build::new()

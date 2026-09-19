@@ -16,13 +16,12 @@ use crate::mdir::*;
 use crate::tag::{self, *};
 use crate::{BlockDevice, Config, Error};
 
-/// Limits this crate writes into new superblocks: the reference's defaults.
+/// Limits this crate writes into new superblocks: the reference's defaults. A name is at
+/// most 255 bytes; a file at most 2^31 - 1 bytes (sizes are signed 32-bit in the reference's
+/// API); an attribute (and so an inline file) at most 1022 bytes, the most a tag can carry.
 const NAME_MAX: u32 = 255;
 const FILE_MAX: u32 = 0x7fff_ffff;
-const ATTR_MAX: u32 = 1022;
-/// The hard limits of the format (tag lengths are 10 bits, file sizes 31).
-const NAME_LIMIT: u32 = 1022;
-const ATTR_LIMIT: u32 = 1022;
+const ATTR_MAX: u32 = MAX_TAG_DATA as u32;
 const MAGIC: &[u8] = b"littlefs";
 
 /// A tag and its data, as a commit carries it.
@@ -494,6 +493,8 @@ impl<D: BlockDevice> Filesystem<D> {
 
         let delta = self.gstate.xor(&self.gdisk).xor(&self.gdelta).without_size();
         c.gdelta = dir.c.gdelta.xor(&delta);
+        // The reference keeps pairs under 0xff entries, compacting (and so splitting) at
+        // that point; this does the same, so each implementation's pairs suit the other.
         let appended = dir.erased && c.entries.len() < 0xff && self.append(&dir, attrs, &delta, &c.gdelta)?;
         if !appended {
             self.compact(&dir, c)?;
@@ -506,6 +507,7 @@ impl<D: BlockDevice> Filesystem<D> {
 
     /// Appends a commit to the current block's log. `Ok(false)`: it does not fit.
     fn append(&mut self, dir: &MDir, attrs: &[Attr], delta: &GState, block_delta: &GState) -> Result<bool, Error> {
+        // Tags may fill the block but for the 8 bytes of the closing CRC tag.
         let mut cb = CommitBuf::new(dir.off, dir.etag, self.block_size - 8);
         let push = |cb: &mut CommitBuf, t: u32, d: &[u8]| match cb.push_tag(t, d) {
             Err(Error::NoSpace) => Ok(false),
@@ -531,6 +533,10 @@ impl<D: BlockDevice> Filesystem<D> {
     /// reference's `lfs_dir_splittingcompact`).
     fn compact(&mut self, dir: &MDir, mut c: Contents) -> Result<(), Error> {
         let bs = self.block_size;
+        // The reference's split rule: keep at most half a block of entries per pair (so the
+        // log has room to grow before the next compaction), and never more than leaves 40
+        // bytes for what a compaction adds: the tail (12), the global state (16), a pending
+        // move's delete (4) and the CRC (8).
         let limit = (bs - 40).min(align_up(bs / 2, self.prog_size));
         loop {
             let end = c.entries.len();
@@ -732,7 +738,8 @@ impl<D: BlockDevice> Filesystem<D> {
         }
         // Zero means "the default"; anything else must be within what the format allows.
         let (name_max, file_max, attr_max) = (field(3), field(4), field(5));
-        if name_max > NAME_LIMIT || file_max > FILE_MAX || attr_max > ATTR_LIMIT {
+        // A superblock may allow longer names than we write, up to what a tag can carry.
+        if name_max > MAX_TAG_DATA as u32 || file_max > FILE_MAX || attr_max > ATTR_MAX {
             return Err(Error::Invalid);
         }
         if name_max != 0 {
@@ -783,10 +790,14 @@ impl<D: BlockDevice> Filesystem<D> {
         Ok(())
     }
 
-    /// Repairs the list of all pairs (the reference's `lfs_fs_deorphan`). Pass 0 fixes
+    /// Repairs the list of pairs (the reference's `lfs_fs_deorphan`). Pass 0 fixes
     /// half-orphans: a directory whose entry points to a pair other than the one on the list
     /// (the reference's relocation moved it). Pass 1 unlinks full orphans: directories on
     /// the list that no entry names (their removal was interrupted).
+    ///
+    /// Cost, on any image: each pass takes at most `block_count` steps, and each step that
+    /// starts a directory searches the whole list for its parent: O(pairs^2) fetches, the
+    /// same bound as the reference. A hostile list cannot make it loop or grow further.
     pub(crate) fn deorphan(&mut self) -> Result<(), Error> {
         for pass in 0..2 {
             // Every step either advances or fixes one pair, and each pair is fixed at most

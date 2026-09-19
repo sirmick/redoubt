@@ -48,6 +48,10 @@ pub(crate) fn le32(b: &[u8]) -> u32 { u32::from_le_bytes([b[0], b[1], b[2], b[3]
 /// On disk: bit 31 of `tag` says "there may be orphans"; its type and id name a pending move
 /// (type 0x4ff: delete `id` in `pair`). The length bits are never written; in memory, like
 /// the C reference, they hold the orphan count.
+///
+/// SPEC.md is stale here: it calls bit 31 a "sync bit" meaning the list of pairs may be out
+/// of sync, and says nothing of the length bits. This follows the reference's code (v2.11.3,
+/// `lfs_fs_preporphans`, `lfs_gstate_hasorphans`), which is what its images contain.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub(crate) struct GState {
     pub tag: u32,
@@ -137,7 +141,7 @@ pub(crate) fn len16(d: &[u8]) -> Result<u16, Error> {
 pub(crate) struct Contents {
     /// Entries in id order.
     pub entries: Vec<Entry>,
-    /// The next pair in the list of all pairs; `split` means it continues this directory
+    /// The next pair in the list of pairs; `split` means it continues this directory
     /// (a hard tail) rather than only threading the list (a soft tail).
     pub tail: Pair,
     pub split: bool,
@@ -394,6 +398,8 @@ impl CommitBuf {
         prog_size: u32,
         read_next: &mut ReadAt,
     ) -> Result<(), Error> {
+        // Room for the forward CRC tag (4 + 8 bytes) and the CRC tag (4 + 4), padded to a
+        // program unit.
         let end = align_up((self.off() + 20).min(block_size), prog_size);
         while self.off() < end {
             // A CRC tag carries at most 0x3fe bytes, so a long pad needs several commits.
