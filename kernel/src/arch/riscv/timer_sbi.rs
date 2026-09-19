@@ -21,7 +21,7 @@ static MASKED: AtomicBool = AtomicBool::new(false);
 
 pub fn init() {
     if let Some(arg) = crate::args::KernelArguments::get().iter().find(|a| a.name == u32::from_le_bytes(*b"Time")) {
-        TIMEBASE.store((arg.data[0] as u64 | (arg.data[1] as u64) << 32) as usize, Ordering::Relaxed);
+        TIMEBASE.store(crate::args::wide(arg.data, 0), Ordering::Relaxed);
     }
     BOOT_TICKS.with(|t| *t = riscv::register::time::read64());
     // Let userspace read the `time` CSR directly, via `scounteren.TM`.

@@ -1,9 +1,6 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-#[cfg(baremetal)]
-use core::convert::TryFrom;
-
 use xous_kernel::{MemoryFlags, MemoryRange, PID, arch::*};
 
 pub use crate::arch::mem::MemoryMapping;
@@ -36,12 +33,14 @@ impl MemoryRangeExtra {
     /// Decode one entry. The table is read word by word rather than cast to a struct: the tag
     /// data is only word-aligned, and a struct with `u64` fields needs 8-byte alignment.
     fn from_words(words: &[u32]) -> Self {
-        let wide = |lo: u32, hi: u32| {
-            usize::try_from(lo as u64 | (hi as u64) << 32).expect("mm: MREx address does not fit a usize")
-        };
-        let start = wide(words[0], words[1]);
-        let size = wide(words[2], words[3]);
+        let start = crate::args::wide(words, 0);
+        let size = crate::args::wide(words, 2);
         assert!(start.checked_add(size).is_some(), "mm: MREx region wraps the address space");
+        // The ownership table has one entry per page of the region, and `extra_index` finds a
+        // page by dividing, so a region that is not a whole number of pages would let an
+        // address at its end index past the entries counted for it. The loader rounds every
+        // region up to a page.
+        assert!(size % PAGE_SIZE == 0, "mm: MREx region is not a whole number of pages");
         MemoryRangeExtra { start, size }
     }
 
@@ -187,11 +186,10 @@ impl MemoryManager {
         );
         assert!(xarg_def.name == u32::from_le_bytes(*b"XArg"), "mm: first tag wasn't XArg");
         // The loader (the same binary for both widths) writes XArg v2: RAM base and size as
-        // 64-bit values, low word first. Rebuild through u64 (a `<< 32` overflows a 32-bit
-        // usize) and narrow; on rv32 the high words are zero because RAM fits in 32 bits.
+        // 64-bit values, low word first (`args::wide` narrows them).
         assert!(xarg_def.data[1] == 2, "mm: XArg had unexpected version");
-        self.ram_start = (xarg_def.data[2] as u64 | (xarg_def.data[3] as u64) << 32) as usize;
-        self.ram_size = (xarg_def.data[4] as u64 | (xarg_def.data[5] as u64) << 32) as usize;
+        self.ram_start = crate::args::wide(xarg_def.data, 2);
+        self.ram_size = crate::args::wide(xarg_def.data, 4);
         self.ram_name = xarg_def.data[6];
 
         let mem_size = self.ram_size / PAGE_SIZE;
@@ -211,10 +209,10 @@ impl MemoryManager {
         for range in self.extra_regions() {
             extra_size += range.size / PAGE_SIZE;
         }
-        // SAFETY: `rpt_base` is the page-aligned, zeroed ownership table the loader built, one
-        // byte per page of RAM, so it holds these `mem_size` entries; every byte is a valid
-        // `Option<PID>` (zero is `None`). The loader owns it for the kernel and hands it over
-        // here, so this is the only reference to it.
+        // SAFETY: `rpt_base` is the page-aligned ownership table the loader built and filled
+        // in, one byte per page of RAM, so it holds these `mem_size` entries; every byte is a
+        // valid `Option<PID>` (zero, an unowned page, is `None`). The loader owns it for the
+        // kernel and hands it over here, so this is the only reference to it.
         unsafe { self.allocations = slice::from_raw_parts_mut(rpt_base as *mut Option<PID>, mem_size) };
         // SAFETY: as above, for the table the loader built for the `MREx` regions: one byte per
         // page of them, which is the `extra_size` just counted from the same table.
@@ -891,11 +889,12 @@ impl MemoryManager {
         self.claim_release_move(addr, pid, ClaimReleaseMove::Release)
     }
 
-    /// Free all memory that belongs to a process. This does not unmap the
-    /// memory from the process, it only marks it as free.
-    /// This is very unsafe because the memory can immediately be re-allocated
-    /// to another process, so only call this as part of destroying a process.
     /// The regions of the loader's `MREx` table, in order.
+    ///
+    /// The iterator walks the `'static` table itself, copied out of `self` first, so it does
+    /// not borrow the memory manager: callers iterate the regions while claiming pages in
+    /// `extra_allocations`. `use<>` states that, keeping `self`'s lifetime out of the
+    /// returned type.
     #[cfg(baremetal)]
     fn extra_regions(&self) -> impl Iterator<Item = MemoryRangeExtra> + use<> {
         let table: &'static [u32] = self.extra_regions;

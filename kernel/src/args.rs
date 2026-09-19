@@ -6,6 +6,7 @@
 //! because they dereference that loader-provided pointer, sound as long as `init` was
 //! given the real argument block, which is the loader's contract.
 
+use core::convert::TryFrom;
 use core::fmt;
 
 use crate::cell::KernelCell;
@@ -49,6 +50,18 @@ pub struct KernelArgument {
     pub data: &'static [u32],
 }
 
+/// The 64-bit value in `words[index..index + 2]` (low word first), narrowed to a `usize`.
+///
+/// The loader is one binary for both widths, so every address and size in the block is two
+/// words wide. Rebuilding through `u64` avoids a `<< 32` that overflows a 32-bit `usize`, and
+/// the conversion is checked: on rv32 the high word is zero for everything a 32-bit machine
+/// can address, so a value that does not fit means the loader and the kernel disagree about
+/// the machine, and the boot stops here instead of running on a truncated address.
+pub fn wide(words: &[u32], index: usize) -> usize {
+    let value = words[index] as u64 | (words[index + 1] as u64) << 32;
+    usize::try_from(value).expect("args: a 64-bit value in the argument block does not fit a usize")
+}
+
 impl Iterator for KernelArgumentsIterator {
     type Item = KernelArgument;
 
@@ -67,7 +80,9 @@ impl Iterator for KernelArgumentsIterator {
         // The block is word-aligned, initialised and lives as long as the kernel.
         unsafe {
             let name = self.base.add(self.offset / 4).read();
-            let size = (self.base.add(self.offset / 4 + 1) as *const u16).add(1).read() as usize;
+            // The second word is the CRC in its low half and the data's length, in words,
+            // in its high half.
+            let size = (self.base.add(self.offset / 4 + 1).read() >> 16) as usize;
             assert!(size <= words_left, "args: a tag's data runs past the end of the argument block");
             let data = core::slice::from_raw_parts(self.base.add(self.offset / 4 + 2), size);
             self.offset += size * 4 + 8;
@@ -79,14 +94,9 @@ impl Iterator for KernelArgumentsIterator {
 impl fmt::Display for KernelArgument {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let tag_name_bytes = self.name.to_le_bytes();
-        // SAFETY: `tag_name_bytes` is a live 4-byte array; the tag name is ASCII by
-        // construction, so treating it as UTF-8 is valid.
-        let s = unsafe {
-            use core::slice;
-            use core::str;
-            let slice = slice::from_raw_parts(tag_name_bytes.as_ptr(), 4);
-            str::from_utf8_unchecked(slice)
-        };
+        // A tag name is four ASCII bytes; anything else is a block the kernel cannot read
+        // anyway, and this is a debug print, so it says so rather than failing.
+        let s = core::str::from_utf8(&tag_name_bytes).unwrap_or("????");
 
         write!(f, "{} ({:08x}, {} bytes):", s, self.name, self.size)?;
         for word in self.data {
