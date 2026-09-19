@@ -14,13 +14,20 @@ use alloc::vec::Vec;
 
 use crate::fs::{attr_create, attr_name, attr_struct, Struct};
 use crate::mdir::{align_up, Pair};
-use crate::ops::Lookup;
+use crate::ops::{names_dir, Lookup};
 use crate::tag::*;
 use crate::{ctz, BlockDevice, Error, Filesystem};
 
 /// An open file. Handles are only meaningful to the filesystem that returned them.
+///
+/// A closed handle's slot is reused by later opens; the generation number makes a stale
+/// handle fail with [`Error::Invalid`] rather than reach the new file. `fsd` still owns the
+/// map from 9P fids to handles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FileHandle(u32);
+pub struct FileHandle {
+    slot: u32,
+    generation: u32,
+}
 
 /// How to open a file. At least one of `read` and `write`; the rest need `write`.
 #[derive(Clone, Copy, Debug, Default)]
@@ -33,15 +40,6 @@ pub struct OpenOptions {
     pub create_new: bool,
     /// Empty the file (committed on the next sync).
     pub truncate: bool,
-    /// Every write goes to the end.
-    pub append: bool,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum SeekFrom {
-    Start(u32),
-    Current(i64),
-    End(i64),
 }
 
 /// Where a file's entry is: `None` once the file was removed while open (its data stays
@@ -67,15 +65,23 @@ pub(crate) struct Writer {
 }
 
 pub(crate) struct OpenFile {
+    generation: u32,
     pub loc: Option<Loc>,
+    /// The entry's name, checked before a sync commits: the handle must still name the
+    /// entry it was opened on.
+    pub name: Vec<u8>,
     read: bool,
     write: bool,
-    append: bool,
     pub pos: u32,
+    /// The contents as of the last flush. While a writer is active this is the old version,
+    /// which the flush copies from after the written range.
     pub content: Content,
     pub writer: Option<Writer>,
     /// Contents differ from what the metadata says: the next sync commits.
     dirty: bool,
+    /// A write-side operation failed: nothing more is committed through this handle, as the
+    /// reference does. Its first error is reported again until it is closed.
+    erred: Option<Error>,
 }
 
 impl OpenFile {
@@ -90,8 +96,8 @@ impl OpenFile {
 
 impl<D: BlockDevice> Filesystem<D> {
     fn slot(&self, h: FileHandle) -> Result<usize, Error> {
-        match self.files.get(h.0 as usize) {
-            Some(Some(_)) => Ok(h.0 as usize),
+        match self.files.get(h.slot as usize) {
+            Some(Some(f)) if f.generation == h.generation => Ok(h.slot as usize),
             _ => Err(Error::Invalid),
         }
     }
@@ -100,34 +106,62 @@ impl<D: BlockDevice> Filesystem<D> {
         self.files.get_mut(i).and_then(Option::as_mut).ok_or(Error::Invalid)
     }
 
+    /// A handle usable for writing: open for writing and not errored.
+    fn writable(&mut self, h: FileHandle) -> Result<usize, Error> {
+        let i = self.slot(h)?;
+        let f = self.file(i)?;
+        match (f.write, f.erred) {
+            (false, _) => Err(Error::Invalid),
+            (true, Some(e)) => Err(e),
+            (true, None) => Ok(i),
+        }
+    }
+
+    /// Runs a write-side step on handle `i`; a failure marks the handle errored.
+    fn on_file<T>(&mut self, i: usize, op: impl FnOnce(&mut Self) -> Result<T, Error>) -> Result<T, Error> {
+        let r = self.mutate(op);
+        if let Err(e) = r {
+            if let Ok(f) = self.file(i) {
+                f.erred.get_or_insert(e);
+            }
+        }
+        r
+    }
+
     pub fn open(&mut self, path: &str, o: OpenOptions) -> Result<FileHandle, Error> {
-        let needs_write = o.create || o.create_new || o.truncate || o.append;
+        let needs_write = o.create || o.create_new || o.truncate;
         if !o.write && (!o.read || needs_write) {
             return Err(Error::Invalid);
         }
-        let f = if o.write {
+        let mut f = if o.write {
             self.mutate(|fs| fs.open_file(path, o))?
         } else {
             self.check_poison()?;
             self.open_file(path, o)?
         };
-        let i = match self.files.iter().position(Option::is_none) {
+        let slot = match self.files.iter().position(Option::is_none) {
             Some(i) => i,
             None => {
                 self.files.push(None);
                 self.files.len() - 1
             }
         };
-        self.files[i] = Some(f);
-        Ok(FileHandle(i as u32))
+        self.file_generation = self.file_generation.wrapping_add(1);
+        f.generation = self.file_generation;
+        self.files[slot] = Some(f);
+        Ok(FileHandle { slot: slot as u32, generation: self.file_generation })
     }
 
     fn open_file(&mut self, path: &str, o: OpenOptions) -> Result<OpenFile, Error> {
-        let (loc, content, dirty) = match self.lookup(path)? {
-            (Lookup::Root, _) => return Err(Error::IsDir),
-            (Lookup::Missing { dir, id }, name) => {
+        let (lookup, name) = self.lookup(path)?;
+        let (loc, content, dirty) = match lookup {
+            Lookup::Root => return Err(Error::IsDir),
+            Lookup::Missing { dir, id } => {
                 if !(o.create || o.create_new) {
                     return Err(Error::NoEntry);
+                }
+                if names_dir(path) {
+                    return Err(Error::NotDir);
                 }
                 self.check_name(name)?;
                 self.commit(dir.pair, &[
@@ -139,7 +173,7 @@ impl<D: BlockDevice> Filesystem<D> {
                 let (Lookup::Found { dir, id }, _) = self.lookup(path)? else { return Err(Error::Corrupt) };
                 (Loc { pair: dir.pair, id }, Content::Inline(Vec::new()), false)
             }
-            (Lookup::Found { dir, id }, _) => {
+            Lookup::Found { dir, id } => {
                 if o.create_new {
                     return Err(Error::Exists);
                 }
@@ -152,13 +186,30 @@ impl<D: BlockDevice> Filesystem<D> {
                 if o.truncate { (loc, Content::Inline(Vec::new()), true) } else { (loc, content, false) }
             }
         };
-        Ok(OpenFile { loc: Some(loc), read: o.read, write: o.write, append: o.append, pos: 0, content, writer: None, dirty })
+        Ok(OpenFile {
+            generation: 0,
+            loc: Some(loc),
+            name: name.to_vec(),
+            read: o.read,
+            write: o.write,
+            pos: 0,
+            content,
+            writer: None,
+            dirty,
+            erred: None,
+        })
     }
 
-    /// Syncs (if open for writing) and forgets the handle, even if the sync fails.
+    /// Syncs (if open for writing) and forgets the handle, even if the sync fails. An errored
+    /// handle commits nothing and reports its error.
     pub fn close(&mut self, h: FileHandle) -> Result<(), Error> {
         let i = self.slot(h)?;
-        let r = if self.file(i)?.write { self.mutate(|fs| fs.sync_file(i)) } else { Ok(()) };
+        let f = self.file(i)?;
+        let r = match (f.write, f.erred) {
+            (true, Some(e)) => Err(e),
+            (true, None) => self.mutate(|fs| fs.sync_file(i)),
+            (false, _) => Ok(()),
+        };
         self.files[i] = None;
         r
     }
@@ -169,7 +220,8 @@ impl<D: BlockDevice> Filesystem<D> {
         if !self.file(i)?.write {
             return Ok(());
         }
-        self.mutate(|fs| fs.sync_file(i))
+        let i = self.writable(h)?;
+        self.on_file(i, |fs| fs.sync_file(i))
     }
 
     pub fn file_size(&mut self, h: FileHandle) -> Result<u32, Error> {
@@ -183,7 +235,8 @@ impl<D: BlockDevice> Filesystem<D> {
             return Err(Error::Invalid);
         }
         if self.file(i)?.writer.is_some() {
-            self.mutate(|fs| fs.flush(i))?;
+            let i = self.writable(h)?;
+            self.on_file(i, |fs| fs.flush(i))?;
         }
         self.check_poison()?;
         let f = self.file(i)?;
@@ -192,25 +245,18 @@ impl<D: BlockDevice> Filesystem<D> {
             return Ok(0);
         }
         let n = buf.len().min((size - pos) as usize);
-        match &f.content {
-            Content::Inline(v) => buf[..n].copy_from_slice(&v[pos as usize..pos as usize + n]),
-            &Content::Ctz { head, size } => self.read_ctz(head, size, pos, &mut buf[..n])?,
-        }
+        self.read_content(i, pos, &mut buf[..n])?;
         self.file(i)?.pos += n as u32;
         Ok(n)
     }
 
+    /// Writes at the handle's position. On failure (typically `NoSpace`) the handle is
+    /// errored: nothing written through it is committed.
     pub fn write(&mut self, h: FileHandle, data: &[u8]) -> Result<usize, Error> {
-        let i = self.slot(h)?;
-        if !self.file(i)?.write {
-            return Err(Error::Invalid);
-        }
-        self.mutate(|fs| {
+        let i = self.writable(h)?;
+        self.on_file(i, |fs| {
             let file_max = fs.file_max;
             let f = fs.file(i)?;
-            if f.append {
-                f.pos = f.size();
-            }
             if f.pos as u64 + data.len() as u64 > file_max as u64 {
                 return Err(Error::FileTooBig);
             }
@@ -225,35 +271,29 @@ impl<D: BlockDevice> Filesystem<D> {
         })
     }
 
-    pub fn seek(&mut self, h: FileHandle, to: SeekFrom) -> Result<u32, Error> {
+    /// Moves the handle's position (9P reads and writes carry absolute offsets). Past the
+    /// end is allowed; a write there fills the gap with zeros.
+    pub fn seek(&mut self, h: FileHandle, pos: u32) -> Result<(), Error> {
         let i = self.slot(h)?;
-        let file_max = self.file_max;
-        let f = self.file(i)?;
-        let pos = match to {
-            SeekFrom::Start(n) => n as i64,
-            SeekFrom::Current(d) => f.pos as i64 + d,
-            SeekFrom::End(d) => f.size() as i64 + d,
-        };
-        if pos < 0 || pos > file_max as i64 {
+        if pos > self.file_max {
             return Err(Error::Invalid);
         }
-        if pos != f.pos as i64 && f.writer.is_some() {
-            self.mutate(|fs| fs.flush(i))?;
+        let f = self.file(i)?;
+        if pos != f.pos && f.writer.is_some() {
+            let i = self.writable(h)?;
+            self.on_file(i, |fs| fs.flush(i))?;
         }
-        self.file(i)?.pos = pos as u32;
-        Ok(pos as u32)
+        self.file(i)?.pos = pos;
+        Ok(())
     }
 
     /// Shrinks or zero-extends a file; the position is kept.
     pub fn truncate(&mut self, h: FileHandle, size: u32) -> Result<(), Error> {
-        let i = self.slot(h)?;
-        if !self.file(i)?.write {
+        let i = self.writable(h)?;
+        if size > self.file_max {
             return Err(Error::Invalid);
         }
-        self.mutate(|fs| {
-            if size > fs.file_max {
-                return Err(Error::Invalid);
-            }
+        self.on_file(i, |fs| {
             let (pos, old) = (fs.file(i)?.pos, fs.file(i)?.size());
             fs.flush(i)?;
             if size < old {
@@ -270,7 +310,8 @@ impl<D: BlockDevice> Filesystem<D> {
                         let (block, _) = fs.ctz_find(head, old, size - 1)?;
                         Content::Ctz { head: block, size }
                     }
-                    Content::Inline(_) => return Err(Error::Corrupt),
+                    // An inline file longer than `inline_max` (another writer's settings).
+                    Content::Inline(v) => Content::Inline(v[..size as usize].to_vec()),
                 };
                 let f = fs.file(i)?;
                 f.content = content;
@@ -324,9 +365,13 @@ impl<D: BlockDevice> Filesystem<D> {
 
     /// Writes at the handle's position (which is at most the file's size).
     fn write_data(&mut self, i: usize, mut data: &[u8]) -> Result<(), Error> {
+        // Writing nothing changes nothing (and must not make the handle commit its view).
+        if data.is_empty() {
+            return Ok(());
+        }
         let (inline_max, bs) = (self.inline_max, self.block_size);
         let f = self.file(i)?;
-        if let Content::Inline(v) = &mut f.content {
+        if let (Content::Inline(v), None) = (&mut f.content, &f.writer) {
             let end = f.pos as usize + data.len();
             if end.max(v.len()) <= inline_max as usize {
                 if v.len() < end {
@@ -372,19 +417,19 @@ impl<D: BlockDevice> Filesystem<D> {
         Ok(())
     }
 
-    /// Moves an inline file that outgrows `inline_max` into its first block.
+    /// Starts moving an inline file that outgrows `inline_max` into blocks: its first block
+    /// holds the bytes before the position; the inline contents stay as the old version, so
+    /// the flush copies whatever lies after the write (an inline file can be longer than our
+    /// `inline_max` if another writer made it).
     fn outline(&mut self, i: usize) -> Result<(), Error> {
         self.alloc_ckpoint();
         let block = self.alloc_block()?;
         let mut buf = vec![0xffu8; self.block_size as usize];
         let f = self.file(i)?;
         let Content::Inline(v) = &f.content else { return Ok(()) };
-        // Bytes past the position are about to be overwritten: this write runs past
-        // `inline_max`, and the file is not longer than that.
         let n = (f.pos as usize).min(v.len());
         buf[..n].copy_from_slice(&v[..n]);
         f.writer = Some(Writer { block, buf, off: n as u32 });
-        f.content = Content::Ctz { head: BLOCK_NULL, size: 0 };
         Ok(())
     }
 
@@ -432,18 +477,18 @@ impl<D: BlockDevice> Filesystem<D> {
             return Ok(());
         }
         let saved = f.pos;
-        let (head, size) = match f.content {
-            Content::Ctz { head, size } => (head, size),
-            Content::Inline(_) => (BLOCK_NULL, 0),
+        let old_size = match &f.content {
+            Content::Ctz { size, .. } => *size,
+            Content::Inline(v) => v.len() as u32,
         };
         let mut tmp = vec![0u8; self.block_size as usize];
         loop {
             let pos = self.file(i)?.pos;
-            if pos >= size {
+            if pos >= old_size {
                 break;
             }
-            let n = (size - pos).min(self.block_size) as usize;
-            self.read_ctz(head, size, pos, &mut tmp[..n])?;
+            let n = (old_size - pos).min(self.block_size) as usize;
+            self.read_content(i, pos, &mut tmp[..n])?;
             self.write_data(i, &tmp[..n])?;
         }
         self.program_writer(i)?;
@@ -465,12 +510,20 @@ impl<D: BlockDevice> Filesystem<D> {
             f.dirty = false;
             return Ok(());
         };
+        let name = f.name.clone();
         let attr = match &f.content {
             Content::Inline(v) => attr_struct(TYPE_INLINESTRUCT, loc.id, v)?,
             &Content::Ctz { head, size } => {
                 attr_struct(TYPE_CTZSTRUCT, loc.id, &[head.to_le_bytes(), size.to_le_bytes()].concat())?
             }
         };
+        // The handle must still name its own entry: committing into anything else would
+        // overwrite another file. (Handles follow every commit; this is the backstop.)
+        let dir = self.fetch(loc.pair)?;
+        match dir.c.entries.get(loc.id as usize) {
+            Some(e) if e.name_type == TYPE_REG && e.name == name => {}
+            _ => return Err(Error::Corrupt),
+        }
         // Data must be durable before the metadata that points at it.
         self.bd_sync()?;
         self.commit(loc.pair, &[attr])?;

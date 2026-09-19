@@ -9,7 +9,7 @@ use core::cmp::Ordering;
 use crate::fs::*;
 use crate::mdir::*;
 use crate::tag::{self, *};
-use crate::{BlockDevice, DirEntry, Error, FileType, Filesystem, Metadata};
+use crate::{BlockDevice, DirEntry, Error, FileType, Filesystem, Health, Metadata};
 
 /// Where a path leads.
 pub(crate) enum Lookup {
@@ -30,6 +30,9 @@ pub(crate) fn components(path: &str) -> Result<Vec<&[u8]>, Error> {
     }
     Ok(names)
 }
+
+/// Whether a path ends in a slash after a name: only a directory can be named that way.
+pub(crate) fn names_dir(path: &str) -> bool { path.ends_with('/') && path.split('/').any(|n| !n.is_empty()) }
 
 /// The order of names in a directory, exactly the reference's `lfs_dir_find_match`: bytes
 /// compared over the common length; when one name is a prefix of the other, the longer one
@@ -100,11 +103,18 @@ impl<D: BlockDevice> Filesystem<D> {
                 _ => return Err(Error::NotDir),
             };
         }
-        Ok((self.find(head, last)?, *last))
+        let found = self.find(head, last)?;
+        if let Lookup::Found { dir, id } = &found {
+            if names_dir(path) && dir.c.entries[*id as usize].name_type != TYPE_DIR {
+                return Err(Error::NotDir);
+            }
+        }
+        Ok((found, *last))
     }
 
     pub(crate) fn check_name(&self, name: &[u8]) -> Result<(), Error> {
-        if name.is_empty() {
+        // A NUL cannot pass through the reference's C-string paths.
+        if name.is_empty() || name.contains(&0) {
             Err(Error::Invalid)
         } else if name.len() as u32 > self.name_max {
             Err(Error::NameTooLong)
@@ -152,7 +162,7 @@ impl<D: BlockDevice> Filesystem<D> {
             let dir = self.fetch(pair)?;
             for (_, e) in self.visible(&dir) {
                 let m = self.metadata(e)?;
-                f(&DirEntry { name: &e.name, kind: m.kind, size: m.size });
+                f(&DirEntry { name: &e.name, meta: m });
             }
             if !dir.c.split {
                 return Ok(());
@@ -273,6 +283,9 @@ impl<D: BlockDevice> Filesystem<D> {
                 orphan = fs.empty_dir(prev)?;
             } else {
                 fs.check_name(newname)?;
+                if names_dir(to) && old.name_type != TYPE_DIR {
+                    return Err(Error::NotDir);
+                }
                 if samepair && newid <= newoldid {
                     newoldid += 1;
                 }
@@ -312,6 +325,7 @@ impl<D: BlockDevice> Filesystem<D> {
                     for i in following {
                         if let Some(Some(f)) = fs.files.get_mut(i) {
                             f.loc = Some(crate::file::Loc { pair: dir.pair, id });
+                            f.name = newname.to_vec();
                         }
                     }
                 }
@@ -363,26 +377,23 @@ impl<D: BlockDevice> Filesystem<D> {
         })
     }
 
-    /// Repairs what an interrupted operation left (as any write does), then checks the
-    /// whole volume: every pair and file readable, no block used twice, the directory tree
-    /// a tree, and every pair on the list either a superblock or reachable from the root.
+    /// Checks the whole volume without writing: every pair and file readable, no block used
+    /// twice, the directory tree a tree, and every name one a path can name.
     ///
-    /// The orphan repair runs even when the orphan flag is clear: the C reference can leave
-    /// a removed directory on the list with the flag cleared (a relocation during the
-    /// removal resets its orphan count), which only leaks its two blocks, but this finds it.
-    pub fn fsck(&mut self) -> Result<(), Error> {
-        self.mutate(|fs| {
-            fs.deorphan()?;
-            fs.check_volume()
-        })
-    }
-
-    fn check_volume(&mut self) -> Result<(), Error> {
+    /// [`Health::NeedsRepair`]: consistent, but with leftovers the first write after mount
+    /// repairs (a half-done rename, orphaned or half-orphaned directories on the list of
+    /// pairs). The C reference leaves the latter even without a power loss when its wear
+    /// levelling relocates metadata during a removal. `Err(Corrupt)`: damaged.
+    pub fn check(&mut self) -> Result<Health, Error> {
+        self.check_poison()?;
+        let mut health = if self.gdisk.has_move() || self.gstate.orphans() != 0 {
+            Health::NeedsRepair
+        } else {
+            Health::Clean
+        };
         let words = (self.block_count as usize).div_ceil(64);
         let mut used = vec![0u64; words];
-        let mut listed = BTreeSet::new();
-        let mut superblocks = BTreeSet::new();
-        let mark = |b: u32, used: &mut Vec<u64>| {
+        let mut mark = |b: u32| {
             let (w, bit) = ((b / 64) as usize, 1u64 << (b % 64));
             if used[w] & bit != 0 {
                 return Err(Error::Corrupt);
@@ -391,25 +402,27 @@ impl<D: BlockDevice> Filesystem<D> {
             Ok(())
         };
 
-        // Every pair on the list, and every file's blocks, exactly once.
+        // Every pair on the list of all pairs, and every file's blocks, exactly once.
+        let mut listed = BTreeSet::new();
+        let mut superblocks = BTreeSet::new();
         let mut tail = [0, 1];
         let mut walk = self.walk();
         while !pair_is_null(&tail) {
             walk.step()?;
             let d = self.fetch(tail)?;
-            mark(d.pair[0], &mut used)?;
-            mark(d.pair[1], &mut used)?;
-            listed.insert(d.pair[0].min(d.pair[1]));
+            mark(d.pair[0])?;
+            mark(d.pair[1])?;
+            let key = sorted(d.pair);
+            listed.insert(key);
             if d.c.entries.first().is_some_and(|e| e.name_type == TYPE_SUPERBLOCK) {
-                superblocks.insert(d.pair[0].min(d.pair[1]));
+                superblocks.insert(key);
             }
             for (_, e) in self.visible(&d) {
+                if !nameable(&e.name) {
+                    return Err(Error::Corrupt);
+                }
                 if let Struct::Ctz { head, size } = self.decode(e)? {
-                    let mut blocks = Vec::new();
-                    self.ctz_blocks(head, size, &mut blocks)?;
-                    for b in blocks {
-                        mark(b, &mut used)?;
-                    }
+                    self.ctz_traverse(head, size, None, &mut mark)?;
                 }
             }
             tail = d.c.tail;
@@ -421,7 +434,7 @@ impl<D: BlockDevice> Filesystem<D> {
         while let Some(head) = todo.pop() {
             let mut pair = head;
             loop {
-                if !reached.insert(pair[0].min(pair[1])) {
+                if !reached.insert(sorted(pair)) {
                     return Err(Error::Corrupt);
                 }
                 let d = self.fetch(pair)?;
@@ -436,7 +449,34 @@ impl<D: BlockDevice> Filesystem<D> {
                 pair = d.c.tail;
             }
         }
-        let unreachable = listed.difference(&reached).any(|p| !superblocks.contains(p));
-        if unreachable || !reached.is_subset(&listed) { Err(Error::Corrupt) } else { Ok(()) }
+
+        // A directory the list does not hold is damage, unless the list holds it under one of
+        // its blocks (a half-orphan). A listed pair the tree does not reach is an orphan.
+        let overlaps_listed = |p: &[u32; 2]| listed.iter().any(|l| pair_overlaps(l, p));
+        for p in reached.difference(&listed) {
+            if !overlaps_listed(p) {
+                return Err(Error::Corrupt);
+            }
+            health = Health::NeedsRepair;
+        }
+        if listed.difference(&reached).any(|p| !superblocks.contains(p)) {
+            health = Health::NeedsRepair;
+        }
+        Ok(health)
+    }
+
+    /// Repairs what the first write after mount repairs, then checks: `Ok` means clean.
+    pub fn fsck(&mut self) -> Result<(), Error> {
+        self.mutate(|_| Ok(()))?;
+        match self.check()? {
+            Health::Clean => Ok(()),
+            Health::NeedsRepair => Err(Error::Corrupt),
+        }
     }
 }
+
+fn sorted(p: Pair) -> Pair { [p[0].min(p[1]), p[0].max(p[1])] }
+
+/// Whether some path can name an entry: not empty, not `.` or `..`, no `/` and no NUL.
+/// Names read back from the medium may be anything; `fsd` must treat them as opaque bytes.
+fn nameable(name: &[u8]) -> bool { !(name.is_empty() || name == b"." || name == b".." || name.contains(&b'/') || name.contains(&0)) }
