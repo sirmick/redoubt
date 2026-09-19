@@ -167,8 +167,9 @@ enrolment, import or export operation for it to hold anything else. An argument 
 `name,purpose,seed`, separated by commas (a comma is outside the name rule, so no field can swallow
 another): `name` under the manifest's name rule, `purpose` from the table below, and `seed` the
 Ed25519 secret seed (RFC 8032) as exactly 64 lower-case hex digits. `keyd` refuses to start on an
-argument it cannot parse, an unknown purpose, a repeated name, or two keys with the same public key
-— fail closed and loudly, since a key it cannot read is a key it cannot sign with.
+argument it cannot parse, an unknown purpose, a repeated name, two keys with the same public key,
+or an all-zero seed — fail closed and loudly, since a key it cannot read is a key it cannot sign
+with. It receives on the endpoint its startup block names `keyd`.
 
 **A badge names one key and one purpose.** The **root badge of the key in argument *i* is *i***
 (from 1), so `init` mints each root capability without asking `keyd` anything, and a restarted
