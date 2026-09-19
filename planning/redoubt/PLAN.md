@@ -18,8 +18,7 @@ Build one thin vertical slice toward it:
 2. **beamlet on Redoubt**, printing from Elixir over the console.
 3. **IEx on the UART console:** an interactive Elixir shell on the box, before SSH exists.
 4. **init, the boot manifest, the startup block and the loader stub** (INIT.md, PACKAGES.md); the
-   boot loader loads only the kernel and `init`; the wire codec and its generator (WIRE.md);
-   `bootfsd` over 9P (the shared 9P codec, fuzzed).
+   boot loader loads only the kernel and `init`; `bootfsd` over 9P (the shared 9P codec, fuzzed).
 5. **The timer and preemption:** kernel-owned timer, timeouts, stride over budgets, the two classes
    (RESOURCES.md).
 6. **Storage and network:** `blkd -> fsd` (littlefs; `fsd:data` and a labelled volume);
@@ -39,15 +38,18 @@ a clean power-off), never by the attacker's own output (BUILD-PLAN.md).
   a fresh one); it cannot slow Bob beyond its weight.
 - **Scripted hostile user** (Bob attacking Alice):
   - system-call fuzzing: any arguments get an error, never a kernel panic;
-  - endpoint flooding: 10,000 blocked senders on `fsd`, and Alice is still served in her turn;
+  - endpoint flooding: 10,000 sender threads attempting to call `fsd`, and Alice is still served in
+    her turn;
+  - vault `WAIT_CAP`: a vault session filling its `WAIT_CAP` on a shared server leaves its owner's
+    unlabelled session's turn and cap unaffected;
   - budget death mid-call: a lender destroyed while `fsd` holds its lent pages, and `fsd` survives;
   - crash blame: Bob crashes `fsd` three times while Alice is busy; Bob is logged out, Alice is not,
     also when `fsd` panics rather than faults and when the crashing thread holds Alice's calls open
     too; a vault session's crashes do not log out its owner's unlabelled session;
   - loopback login: a session connecting to the box's own `sshd` with a `keyd`-held key is refused;
-  - no leaky state: an unlabelled observer sees no change in usage, request ids, file versions,
-    qids or directory listings while a vault session works, and cannot write, truncate, create or
-    remove anything in the vault's volume;
+  - no leaky state: an unlabelled observer sees no change in usage, request and session ids, file
+    versions, qids or directory listings while a vault session works, and cannot write, truncate,
+    create or remove anything in the vault's volume;
   - hostile launch: a malformed ELF or startup block from a user parent hurts only the child;
   - approval flood: requests hit the per-(account, label set) cap; the steward and Alice's approval
     screen are unaffected;
@@ -108,7 +110,6 @@ geometry, trap entry and saved context, and the ABI's register encoding; anywher
 - Bench: inject device trees to test fail-closed paths (no rng-seed, no memory node, junk); wire in
   the kernel's hosted unit tests; fuzz targets for every parser.
 - Report the two upstream bugs to betrusted-io/xous-core (HISTORY.md).
-- `littlefs` in pure Rust, differentially tested against the C reference on the host.
 - Retarget `std::fs` on the Xous target from PDDB (Xous's key-value store) to `fsd`.
 
 ## Userland API (a future USERLAND.md; milestone 3)

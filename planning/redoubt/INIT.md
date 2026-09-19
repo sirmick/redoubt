@@ -74,10 +74,8 @@ Example fragment:
   (in milestone 1 clients see the error and retry); senders still blocked on the endpoint wait and
   are served by the restarted server (KERNEL-SPEC.md, R4b). (Milestone 2: the namespace
   library re-walks from the root, so most programs see only a hiccup.)
-- **Blame:** an exit notice for a fault, or for an exit while holding open calls (a panic), names
-  the account and labels of the failing thread's most recently taken open call; three crashes
-  blamed on the same (account, label set) within 10 minutes log out those sessions
-  (CONTAINMENT.md).
+- **Blame:** each exit notice for a fault names an account and label set; `init` passes them to the
+  steward, whose logout rule is in CONTAINMENT.md (Crash blame).
 - **Reboot:** more than 5 restarts of one server within 60 seconds, not stopped by blame, reboots the
   machine (fail closed).
 - **The steward:** if it dies in milestone 1, `init` destroys and recreates the users budget: every
@@ -103,7 +101,8 @@ Example fragment:
 A session's shell is **IEx** (Elixir's interactive shell) on beamlet, with a small Redoubt helpers
 module: `ls`, `cd` and `cat` over the namespace, `ps`, `budget`, and a notice when an approval is
 waiting (`pkg` from milestone 2). IEx evaluates any Elixir, with exactly the session's capabilities.
-It runs on the UART console before SSH exists.
+It runs on the UART console before SSH exists. In milestone 1 the physical console's IEx exists only
+in the bench build; the system manifest starts no shell on the UART.
 
 ## Startup block
 Before a process runs, its parent installs its handles in its table (`process_start` copies them
@@ -114,9 +113,9 @@ page's address** (page-aligned; 0 = no block), which the child's first thread re
 block names (PACKAGES.md, launching; its tag is defined with the loader stub). No environment
 variables, nothing inherited. Configuration is files in the namespace.
 
-**Format.** The kernel argument block's framing (BOOT.md): little-endian `u32` words. Each entry is
-a 4-byte ASCII tag, one word holding a CRC-16/X-25 of the entry's data in its low half and the data
-length in words in its high half, then the data. A string is a `u32` byte length followed by UTF-8,
+**Format.** The kernel argument block's framing: little-endian `u32` words. Each entry is a 4-byte
+ASCII tag, one word holding a CRC-16/X-25 of the entry's data in its low half and the data length
+in words in its high half, then the data. A string is a `u32` byte length followed by UTF-8,
 zero-padded to a whole word; an entry's length is exactly what its fields need.
 
 | Tag | Data | Meaning |
@@ -170,8 +169,9 @@ listen on the network.
   `fsd:alice-secrets`, reads (never writes) her home on the unlabelled `fsd:data`, which is how
   data enters the vault (`check`: a read needs the volume's labels ⊆ the session's), has no `/net`,
   and prints only to its own channel.
-- Agent: own principal and VM, a 2-hour lease, `/work` only, no `/net`. The bench's scripted hostile
-  agent tries to escape (PLAN.md, milestone 1 attack suite); each attempt is refused. Its escalations
+- Agent: own principal and VM, a 2-hour lease, `/work` only, no `/net`. An agent's namespace never
+  includes its sponsor's `/dev/cons`. The bench's scripted hostile agent tries to escape (PLAN.md,
+  milestone 1 attack suite); each attempt is refused. Its escalations
   wait for Alice in `ssh approve@box`; lease expiry destroys its budget and everything it passed on.
 - Bob spins: he gets his share only. Bob allocates too much: `OutOfMemory` in his budget.
 - Bob's VM crashes: the steward destroys his session budget; `sshd` closes the channel; Alice is

@@ -27,10 +27,11 @@ Decentralized information flow control in the Flume/HiStar style, with labels fi
   owner, not with whichever process receives (KERNEL-SPEC.md, I7), so handing a badge-0 handle to a
   budget with other labels would deliver messages nobody compared with it. Handing one out is
   delegation; a system server that hands one across label sets is buggy, not the kernel.
-- **Budget observation obeys labels.** Reading a budget's usage, or receiving its exit notices, needs
-  the reader's labels ⊇ the target's, unless the reader is class `system` (like the message check:
-  `init` and the steward must see labelled processes exit). A parent's usage counts its children's
-  limits, never their live usage, so a labelled child cannot signal through its parent's counters.
+- **Budget observation obeys labels.** Reading a budget's usage, or receiving its exit notices,
+  needs the reader's (for a notice, the exit endpoint's owner's) labels ⊇ the target's, unless the
+  reader is class `system` (like the message check: `init` and the steward must see labelled
+  processes exit). A parent's usage counts its children's limits, never their live usage, so a
+  labelled child cannot signal through its parent's counters.
 - **Sinks** (servers whose output leaves a principal or the machine: `ipd`, later `gatewayd`) are
   cleared for nothing by default, and refuse labelled callers. A local model on the FPGA's GPU card
   can be cleared for a label, because the data stays on the machine.
@@ -92,6 +93,8 @@ Every system server that serves more than one account links one small library of
   caller can read. Otherwise every vault write would change what an unlabelled caller sees.
 - **One connection per client.** A 9P connection is a badge; its fid table is keyed by (badge,
   account, label set), and launchers never pass their own connection on (CAPABILITIES.md).
+- **Replies come from the taking thread.** A `reply` names an open call of the replying thread
+  (KERNEL-SPEC.md), so an event-driven server replies from the thread that took the call.
 
 Each server's note states what its objects and state are, so that nothing a labelled caller
 influences is visible to a caller without that label:
@@ -100,8 +103,7 @@ influences is visible to a caller without that label:
 - `sshd`: state is per channel; each channel labelled with its session (above).
 - **steward**: applies `check` to its own records. Labelled callers can only submit requests.
   Every id it hands out (request and session ids, and any other) is unpredictable: random 64-bit,
-  keyed, never a counter, which would tell every principal how many the others made. The cap on
-  pending requests is per (account, label set).
+  keyed, never a counter, which would tell every principal how many the others made.
 
 ## Crash blame
 A server that faults, or exits while it holds open calls (a panic), reports in its exit notice the
@@ -136,7 +138,8 @@ perfect clock (TENETS.md).
   unlabelled session share an account; a shared cap (the steward's pending requests, the kernel's
   `WAIT_CAP` and R2's turns, `admit`'s limits, crash blame) would let the vault signal by filling
   it.
-- **Residual, stated:** memory bandwidth, and the shared L2 across cores until the RTL partitions it.
+- **Residual, stated:** memory bandwidth, and the shared L2 across cores until the RTL partitions it;
+  shared-server caches and the disk (a vault's reads warm a cache the unlabelled session can time).
   On QEMU and ordinary hardware, none of the microarchitectural channels are closed.
 
 ## The executable security model
