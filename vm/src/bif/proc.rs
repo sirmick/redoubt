@@ -190,20 +190,18 @@ fn remote(c: &Ctx, t: &Term) -> bool {
     matches!(c.heap().as_tuple(*t), Some(&[Term::Atom(_), Term::Atom(n)]) if n.as_str() != crate::etf::NODE)
 }
 
-/// Send `msg` to `to`, which may be the running process itself.
+/// Send `msg` to `to`, which may be the running process itself. Every message goes through the
+/// receiver's inbox, a message to itself too, as on BEAM: a process that keeps sending itself
+/// messages must not starve the ones others sent before (the mailbox takes in the inbox only
+/// when a receive has looked at everything in it).
 pub fn send_to(c: &mut Ctx, to: Pid, msg: Term) {
-    if to == c.p.pid {
-        let mut guard = c.sys();
-        let sys = &mut *guard;
-        if !crate::vm::deliver(c.p, msg, &mut sys.run_queue, sys.limits.max_mailbox) {
-            let reason = crate::vm::mailbox_full(&mut sys.atom_table, c.atoms);
-            drop(guard);
-            c.p.pending_exit = Some(reason.copy_into(&mut c.p.heap));
-        }
-    } else {
-        // Copied before the lock is taken: other schedulers need not wait for a big message.
-        let fragment = OwnedTerm::new(&c.p.heap, msg);
-        c.sys().send_owned(to, fragment);
+    // Copied before the lock is taken: other schedulers need not wait for a big message.
+    let fragment = OwnedTerm::new(&c.p.heap, msg);
+    let delivered = c.sys().send_owned(to, fragment);
+    if !delivered && to == c.p.pid {
+        // Its own mailbox overflowed: it ends now, not at the end of its time slice.
+        let reason = crate::vm::mailbox_full(&mut c.sys().atom_table, c.atoms);
+        c.p.pending_exit = Some(reason.copy_into(&mut c.p.heap));
     }
 }
 
@@ -538,7 +536,7 @@ pub fn exit2(c: &mut Ctx, a: &[Term]) -> R {
         exit_self(c, a[1]);
     } else {
         let reason = alloc::sync::Arc::new(c.own(a[1]));
-        c.sys().exits.push_back(crate::vm::ExitSignal {
+        c.sys().signal_exit(crate::vm::ExitSignal {
             target: pid,
             from: c.p.pid,
             reason,
@@ -563,6 +561,7 @@ pub fn process_flag(c: &mut Ctx, a: &[Term]) -> R {
             return Err(c.badarg());
         };
         let old = core::mem::replace(&mut c.p.trap_exit, new);
+        c.sys().procs.set_traps(c.p.pid, new);
         return Ok(c.bool(old));
     }
     // Flags that tune BEAM's implementation (distribution buffering, heap sizing, call

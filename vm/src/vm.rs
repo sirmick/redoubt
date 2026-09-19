@@ -226,6 +226,9 @@ pub(crate) struct ProcTable {
     /// Each slot's memory use as of the end of its last time slice, for reports about a
     /// process a scheduler is running.
     usage: Vec<crate::memory::Usage>,
+    /// Whether each slot's process traps exits (its `trap_exit` flag, mirrored here so a
+    /// signal to it can be delivered while it runs).
+    traps: Vec<bool>,
     free: Vec<u32>,
     live: usize,
     /// The serial of the next process. One counter for the whole table, so pids order by
@@ -241,6 +244,7 @@ impl ProcTable {
             inboxes: Vec::new(),
             deferred: Vec::new(),
             usage: Vec::new(),
+            traps: Vec::new(),
             free: Vec::new(),
             live: 0,
             next_serial: 0,
@@ -261,6 +265,7 @@ impl ProcTable {
                 self.inboxes.push(VecDeque::new());
                 self.deferred.push(Vec::new());
                 self.usage.push(Default::default());
+                self.traps.push(false);
                 (self.slots.len() - 1) as u32
             }
         };
@@ -299,6 +304,18 @@ impl ProcTable {
             }
             _ => None,
         }
+    }
+
+    /// Record whether `pid` traps exits (set with its own flag).
+    pub(crate) fn set_traps(&mut self, pid: Pid, traps: bool) {
+        if self.is_alive(pid) {
+            self.traps[pid.index as usize] = traps;
+        }
+    }
+
+    /// Whether `pid` traps exits, if it is alive.
+    fn traps(&self, pid: Pid) -> Option<bool> {
+        self.is_alive(pid).then(|| self.traps[pid.index as usize])
     }
 
     /// Whether a scheduler is running `pid` just now.
@@ -396,6 +413,7 @@ impl ProcTable {
     fn release(&mut self, pid: Pid) {
         self.inboxes[pid.index as usize].clear();
         self.deferred[pid.index as usize].clear();
+        self.traps[pid.index as usize] = false;
         self.slots[pid.index as usize] = Slot::Free;
         self.free.push(pid.index);
         self.live -= 1;
@@ -747,6 +765,24 @@ impl Vm {
 }
 
 impl System {
+    /// Send an exit signal. To a process that traps it, it becomes an `{'EXIT', From, Reason}`
+    /// message at once, in order with the other messages and signals the sender sends (a
+    /// linked process's death and its monitors' `'DOWN'`s reach everyone in the order BEAM
+    /// gives). Signals that end or may end the target are delivered between time slices.
+    pub(crate) fn signal_exit(&mut self, signal: ExitSignal) {
+        let kill = !signal.from_link && signal.reason.term().is_atom(&self.atoms.kill);
+        if signal.forced || kill || self.procs.traps(signal.target) != Some(true) {
+            self.exits.push_back(signal);
+            return;
+        }
+        let exit = Term::Atom(self.atoms.exit_upper);
+        let (from, reason) = (signal.from, signal.reason);
+        self.send_with(signal.target, |h| {
+            let r = reason.copy_into(h);
+            h.tuple(&[exit, Term::Pid(from), r])
+        });
+    }
+
     /// Keep the just-spawned `child` of `parent` (the running process) off the run queue until
     /// the parent's time slice ends. With several schedulers another one would otherwise start
     /// it at once, and code like `monitor(process, spawn(F))` relies on the parent getting
@@ -1023,10 +1059,11 @@ impl System {
         }
     }
 
-    /// Queue `fragment` for `to` (dropped if `to` is not alive).
-    pub fn send_owned(&mut self, to: Pid, fragment: OwnedTerm) {
+    /// Queue `fragment` for `to` (dropped if `to` is not alive). `false` if that overflowed
+    /// `to`'s mailbox, which ends it.
+    pub fn send_owned(&mut self, to: Pid, fragment: OwnedTerm) -> bool {
         let Some(inbox) = self.procs.inbox(to) else {
-            return;
+            return true;
         };
         if inbox.len() >= self.limits.max_mailbox {
             let reason = mailbox_full(&mut self.atom_table, &self.atoms);
@@ -1037,7 +1074,7 @@ impl System {
                 from_link: false,
                 forced: true,
             });
-            return;
+            return false;
         }
         inbox.push_back(fragment);
         if let Some(p) = self.procs.get_mut(to) {
@@ -1046,6 +1083,7 @@ impl System {
                 self.run_queue.push_back(to);
             }
         }
+        true
     }
 
     /// Move the messages waiting for `p` (the running process) into its mailbox. If that
@@ -1384,7 +1422,7 @@ impl System {
             self.procs.update(other, move |o| {
                 o.links.remove(&pid);
             });
-            self.exits.push_back(ExitSignal {
+            self.signal_exit(ExitSignal {
                 target: other,
                 from: pid,
                 reason: reason.clone(),
@@ -1540,24 +1578,6 @@ pub(crate) fn mailbox_full(table: &mut AtomTable, atoms: &Atoms) -> Arc<OwnedTer
     Arc::new(OwnedTerm::build(&Literals::default(), |h| {
         h.tuple(&[limit, queue])
     }))
-}
-
-/// Queue a message. `false` if the mailbox is full: the caller must then end the receiver.
-pub(crate) fn deliver(
-    p: &mut Process,
-    msg: Term,
-    run_queue: &mut VecDeque<Pid>,
-    max_mailbox: usize,
-) -> bool {
-    if p.mailbox.len() >= max_mailbox {
-        return false;
-    }
-    p.mailbox.push_back(msg);
-    if p.state == State::Waiting {
-        p.state = State::Runnable;
-        run_queue.push_back(p.pid);
-    }
-    true
 }
 
 /// A change to a process that a scheduler is running, made when its time slice ends.
