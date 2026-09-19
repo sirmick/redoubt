@@ -1,6 +1,6 @@
-# xous64: RV64 + SMP + filesystem fork
+# redoubt: RV64 + SMP + filesystem fork
 
-Hard fork of xous-core (forked at c025441, 2026-09-15). Branch: `xous64`.
+Hard fork of xous-core (forked at c025441, 2026-09-15). Branch: `redoubt`.
 
 **Read `TENETS.md` first.** It outranks this plan.
 
@@ -8,10 +8,10 @@ Hard fork of xous-core (forked at c025441, 2026-09-15). Branch: `xous64`.
 - Prefer maintained pure-Rust `no_std` crates over hand-rolled code (`sbi-rt`, `riscv`, `fdt`, ...).
   Hand-roll only what is Xous-specific.
 - Keep rv32 building: rv64 code lives in new files selected by `cfg`, shared code goes through helpers.
-- Record design decisions in `planning/xous64/` before or with the code.
-- Run `cargo testbench` before and after kernel or loader changes (about 3 s; see `xous64/README.md`).
-  New kernel behaviour gets a test case in `xous64/tests/` and, if needed, a program in
-  `xous64/test-programs/`.
+- Record design decisions in `planning/redoubt/` before or with the code.
+- Run `cargo testbench` before and after kernel or loader changes (about 3 s; see `redoubt/README.md`).
+  New kernel behaviour gets a test case in `redoubt/tests/` and, if needed, a program in
+  `redoubt/test-programs/`.
 
 ## Hardware abstraction
 CPUs and SoCs differ in ways that have nothing to do with XLEN, so code never uses
@@ -38,7 +38,7 @@ All targets present the same contract: virtio-mmio devices, PLIC, SBI, device tr
 `IO-ARCHITECTURE.md`).
 1. QEMU `virt` (rv64, OpenSBI/RustSBI, ns16550, PLIC, virtio-mmio; later `iommu-sys=on`).
 2. RV64 softcore on an FPGA (e.g. CVA6) with virtio devices and a RISC-V IOMMU: the secure configuration.
-3. Messy SoCs such as the Orange Pi RV2: Linux on reserved cores serves virtio, xous64 on the rest,
+3. Messy SoCs such as the Orange Pi RV2: Linux on reserved cores serves virtio, redoubt on the rest,
    partitioned by OpenSBI domains. No native K1 drivers.
 
 ## Phase 0: platform
@@ -53,14 +53,14 @@ All targets present the same contract: virtio-mmio devices, PLIC, SBI, device tr
 - [ ] Custom userspace target `riscv64gc-unknown-xous-elf` (JSON spec, `-Zbuild-std`, needs nightly).
 
 ## Phase 1: RV64 uniprocessor
-Design: `planning/xous64/MEMORY-LAYOUT.md` (direct physmap instead of the page-table window; address
+Design: `planning/redoubt/MEMORY-LAYOUT.md` (direct physmap instead of the page-table window; address
 space split by root entry). Build: `cargo build -p xous-kernel --target riscv64imac-unknown-none-elf --features qemu-virt`.
 
 **Milestone 2026-09-18: boots to userspace on QEMU virt and passes the IPC test** (`cargo testbench`:
 scalar, blocking scalar with 64-bit values, lend, 1000x lend_mut, move; 1 and 4 harts).
 First reached userspace the same day: loader64 -> kernel (Sv39, SBI console) -> a
 `no_std` process in U-mode that claims the UART MMIO page and prints, then yields millions of times
-through the scheduler. Boot flow: `planning/xous64/BOOT.md`.
+through the scheduler. Boot flow: `planning/redoubt/BOOT.md`.
 
 Kernel (release .text = 54 KiB):
 - [x] Compile census: after widening 11 `target_arch = "riscv32"` gates, the only compile error was the
@@ -78,7 +78,7 @@ Kernel (release .text = 54 KiB):
 - [x] Kernel RNG keyed from `/chosen/rng-seed` via a `Seed` tag (was: the `time` CSR). Test: `rng`.
 - [x] Interrupt controller split into backends: `intc_vexriscv.rs` and `intc_plic.rs` (rustsbi `plic`
       crate, claim in `pending()`, complete in `enable_all_irqs()`, masking via `sie.SEIE`).
-      Verified with `uart-echo` in `xous64/test-programs`: claims UART IRQ 10, handler runs in userspace, returns through
+      Verified with `uart-echo` in `redoubt/test-programs`: claims UART IRQ 10, handler runs in userspace, returns through
       the magic ISR address, PLIC completes and re-arms. Kernel IRQ table is 32 entries; QEMU's PCIe
       INTx are 32-35, so widen it when PCI matters.
 - [x] Fixed: `scause` interrupt causes were matched as `0x8000_000x` (bit 31). The flag is the top bit,
@@ -87,7 +87,7 @@ Kernel (release .text = 54 KiB):
       eight registers, which only works when every field is one word. Now serialized with `to_args()`.
       **Audit for the same class** (struct/enum memory punned as register arrays, `u32` fields in ABI
       types): `xous-rs` message/envelope paths, `xous-ipc`, `std`'s Xous PAL.
-- [x] Hart timer (design: `planning/xous64/TIMER.md`): delivered as IRQ 0, programmed through
+- [x] Hart timer (design: `planning/redoubt/TIMER.md`): delivered as IRQ 0, programmed through
       `PlatformSpecific` calls (allowed from interrupt context), `rdtime` readable from U-mode, backend
       `timer_sbi.rs` / `timer_none.rs`. Verified by `timer-test` (5 one-shot ticks at 20 Hz = 251 ms).
       No time-slice preemption yet; that is a scheduling decision for Phase 3.
@@ -100,10 +100,10 @@ Loader (`loader64`), see BOOT.md:
 
 Userspace:
 - [ ] `riscv64gc-unknown-xous-elf` target spec + `-Zbuild-std`; audit `std`'s Xous PAL and `xous-ipc`.
-- [x] First init process: `uart-echo` in `xous64/test-programs`, `no_std`, `uart_16550` crate over claimed MMIO, echoes
+- [x] First init process: `uart-echo` in `redoubt/test-programs`, `no_std`, `uart_16550` crate over claimed MMIO, echoes
       input from a userspace interrupt handler. Try it: `cargo testbench --run uart-echo`.
-- [x] `xous64/ipc-test`: `no_std` server (owns the UART) + client covering every message type.
-- [x] Building and booting an rv64 bundle lives in the test bench (`xous64/testbench`), not `xtask`.
+- [x] `redoubt/ipc-test`: `no_std` server (owns the UART) + client covering every message type.
+- [x] Building and booting an rv64 bundle lives in the test bench (`redoubt/testbench`), not `xtask`.
 - Exit: minimal server set boots to a UART shell in QEMU.
 
 ### Next up (in order)
@@ -118,7 +118,7 @@ Userspace:
 5. Phase 2 kernel prerequisites, then `virtio-blk` (see Phase 2).
 
 ### Test bench (done 2026-09-18)
-`xous64/testbench`: declarative TOML cases, injects workspace or prebuilt binaries into the boot bundle,
+`redoubt/testbench`: declarative TOML cases, injects workspace or prebuilt binaries into the boot bundle,
 boots QEMU per hart count, feeds console input on triggers, asserts ordered `expect` regexes and
 `forbid` patterns, keeps logs, non-zero exit on failure. Self-checked against timeout, forbidden
 output and missing-program failures. Also: ELF corruption for hostile-input tests, cross-boot
@@ -152,7 +152,7 @@ Open, in rough priority order:
 - [x] Kernel core `unsafe` 82 -> 67: memory manager and its allocation tables moved behind `KernelCell`.
 - [ ] Inherited `unsafe`: RISC-V arch layer 35 and kernel core 67 uses, none justified. Convert the
       remaining `static mut` globals to `KernelCell` (SWITCHTO_CALLER, PREVIOUS_PAIR, PROCESS_TABLE,
-      MEMORY_ALLOCATIONS, ...), then justify what is left. The ratchet in `xous64/tests/unsafe-budget.toml`
+      MEMORY_ALLOCATIONS, ...), then justify what is left. The ratchet in `redoubt/tests/unsafe-budget.toml`
       records progress.
 - [x] **Ambient authority (devices)**: default-deny device grants. A manifest in the boot bundle
       (`grants` entry) lists each process's allowed MMIO regions and IRQs; the loader emits `Grnt`
@@ -214,7 +214,7 @@ Network:
 Trivial drivers: ns16550 (done), goldfish RTC.
 Later:
 - [ ] IOMMU backend (QEMU `iommu-sys`, needs QEMU >= 10; FPGA).
-- [ ] Linux + xous64 partition under OpenSBI domains on QEMU, then the Orange Pi RV2.
+- [ ] Linux + redoubt partition under OpenSBI domains on QEMU, then the Orange Pi RV2.
 - [ ] Retarget `std::fs` on the Xous target from PDDB to the fs server.
 
 ## Decisions without their own note

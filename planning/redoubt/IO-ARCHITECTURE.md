@@ -5,7 +5,7 @@ Status: agreed direction, 2026-09-18. Nothing here is built yet. Tenet 7 is the 
 ## The rule
 Drivers are virtio, unless the device is trivial. A driver's DMA is either inside the TCB (no
 IOMMU) or confined by an IOMMU; the kernel supports both. On real, messy hardware we reserve cores
-for xous64 and let Linux run the hardware, serving virtio to us.
+for redoubt and let Linux run the hardware, serving virtio to us.
 
 Why: one small driver set on every target, the device side is untrusted as far as the hardware can
 enforce, and board-specific complexity (clock trees, pinctrl, PMICs, USB, Wi-Fi) never enters the OS.
@@ -103,21 +103,21 @@ server.
 ## Linux on reserved cores
 For messy SoCs. Not a hypervisor: the K1 does not appear to have the H extension, and none is needed.
 - **Partition with OpenSBI domains.** The device tree assigns harts, RAM and MMIO to a Linux domain
-  and a xous64 domain; PMP stops each domain's harts from touching the other's memory. SBI IPI and
+  and a redoubt domain; PMP stops each domain's harts from touching the other's memory. SBI IPI and
   HSM calls are confined to their own domain.
 - **One shared window** holds the virtio rings and buffers. Linux runs the device side (a small
-  userspace backend over its real drivers); xous64 runs its normal virtio drivers.
+  userspace backend over its real drivers); redoubt runs its normal virtio drivers.
 - **Doorbells:** SBI IPIs do not cross domains. Start with polling; later a hardware mailbox or a
   small SBI extension.
 - **Trust:**
-  - Linux cannot read or write xous64 memory from its CPUs (PMP).
+  - Linux cannot read or write redoubt memory from its CPUs (PMP).
   - Data is protected end to end (block-layer AEAD, TLS/SSH), so Linux sees ciphertext; a
     compromised Linux can deny service, not read or forge data.
-  - **Hole: DMA.** Without an IOMMU, a root-compromised Linux can program a device to write xous64's
+  - **Hole: DMA.** Without an IOMMU, a root-compromised Linux can program a device to write redoubt's
     memory. On such a SoC, Linux is in the TCB for memory integrity. Stated, not hidden.
   - **Hole: firmware.** OpenSBI (C) enforces the partition and is TCB for both sides. Tenet 3 wants
     a Rust firmware with domain support; RustSBI's support is unchecked.
-- **Testable on QEMU:** OpenSBI domains work on `virt`, so Linux + xous64 side by side runs in the
+- **Testable on QEMU:** OpenSBI domains work on `virt`, so Linux + redoubt side by side runs in the
   bench, including a hostile device-side backend.
 
 ## Kernel prerequisites (in order)

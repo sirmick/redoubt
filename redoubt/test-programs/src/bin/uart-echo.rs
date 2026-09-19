@@ -1,4 +1,4 @@
-//! A UART echo driver, and the first userspace program that ran on xous64.
+//! A UART echo driver, and the first userspace program that ran on redoubt.
 //!
 //! It exercises the path from the loader to U-mode and back: ELF loading, the first
 //! context switch, `ecall` traps, claiming device memory that the loader described from

@@ -1,4 +1,4 @@
-//! Programs that run inside Xous under the test bench (`xous64/testbench`).
+//! Programs that run inside Xous under the test bench (`redoubt/testbench`).
 //!
 //! They are `no_std`, because `std` is not ported to rv64 yet, and they print through
 //! `log-server`, which owns the UART. Everything a client prints travels to the server
@@ -14,7 +14,7 @@ use core::fmt::Write;
 use xous::{MemoryFlags, MemoryRange, MemorySize, Message, CID};
 
 /// There is no name server yet, so the log server uses a well-known address.
-pub const SERVER_ADDRESS: &[u8; 16] = b"xous64-ipc-test!";
+pub const SERVER_ADDRESS: &[u8; 16] = b"redoubt-ipc-tst!";
 
 /// Message IDs understood by `log-server`.
 pub mod op {
@@ -100,10 +100,10 @@ pub fn park() -> ! {
 
 /// Protocol for the use-after-free attack test (`uaf-*` binaries). A "holder" server
 /// keeps a page lent to it by a "victim" that then terminates; a "grabber" tries to
-/// reclaim the freed frame. See `xous64/tests/uaf-lent-page.toml`.
+/// reclaim the freed frame. See `redoubt/tests/uaf-lent-page.toml`.
 pub mod uaf {
     /// Well-known address of the holder server.
-    pub const HOLDER_ADDRESS: &[u8; 16] = b"xous64-uaf-holdr";
+    pub const HOLDER_ADDRESS: &[u8; 16] = b"redoubt-uaf-hold";
     /// MutableBorrow: hold this page forever and remember where it is mapped.
     pub const HOLD: usize = 1;
     /// BlockingScalar: reply once a page has been held (a barrier for the victim's terminator thread).

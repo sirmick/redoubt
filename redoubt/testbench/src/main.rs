@@ -1,7 +1,7 @@
 //! The Xous test bench: build a kernel, inject programs, boot it under QEMU, and assert
 //! on what appears on the console.
 //!
-//! Test cases are TOML files in `xous64/tests/` (format: `case.rs`). Run with
+//! Test cases are TOML files in `redoubt/tests/` (format: `case.rs`). Run with
 //! `cargo testbench [FILTER]`. Console logs are kept in `target/testbench/`.
 
 mod budget;
@@ -42,7 +42,7 @@ struct Args {
     /// Hart count for --run.
     #[arg(long, default_value_t = 1)]
     smp: u32,
-    /// With --run, start QEMU paused with a gdb stub on :1234 (see planning/xous64/DEBUGGING.md).
+    /// With --run, start QEMU paused with a gdb stub on :1234 (see planning/redoubt/DEBUGGING.md).
     #[arg(long)]
     debug: bool,
     /// Show cargo's output.
@@ -77,7 +77,7 @@ fn main() -> Result<()> {
         return image.run_interactive(args.debug);
     }
 
-    let mut paths: Vec<_> = std::fs::read_dir(workspace.join("xous64/tests"))?
+    let mut paths: Vec<_> = std::fs::read_dir(workspace.join("redoubt/tests"))?
         .filter_map(|e| Some(e.ok()?.path()))
         .filter(|p| p.extension().is_some_and(|e| e == "toml"))
         .collect();

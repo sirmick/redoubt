@@ -10,7 +10,7 @@
 #   <rustsbi>/target/riscv64gc-unknown-none-elf/release/rustsbi-prototyper
 #   <rustsbi>/target/riscv32imac-unknown-none-elf/release/rustsbi-prototyper
 #
-# The bench (xous64/testbench, resolve_firmware) defaults to a `rustsbi` checkout
+# The bench (redoubt/testbench, resolve_firmware) defaults to a `rustsbi` checkout
 # beside this repo; override with RUSTSBI_PROTOTYPER / RUSTSBI_PROTOTYPER_RV32.
 #
 # No source patch is needed: the pinned commit builds as-is. RustSBI pins its own

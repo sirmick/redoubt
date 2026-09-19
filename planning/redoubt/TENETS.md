@@ -37,7 +37,7 @@ loader, kernel) and hold it in their head. It should read like a textbook exampl
 - Size is budgeted, not just observed. Growing the TCB needs a justification in the commit.
 - Prefer deleting code to adding configuration. Features nobody uses on our targets are removed from
   the fork rather than carried.
-- Every design decision has a short note in `planning/xous64/` that a newcomer can follow.
+- Every design decision has a short note in `planning/redoubt/` that a newcomer can follow.
 
 ## 2. Secure by construction
 - **No ambient authority.** A process can touch only what it was explicitly given: memory it mapped,
@@ -89,7 +89,7 @@ system, held to the same standard of simplicity as the kernel.
 - **One simple harness, real boots.** `cargo testbench` boots the real kernel under QEMU with injected
   programs and asserts on the console. No mocks of the kernel, no special test builds of it. The whole
   suite runs in seconds, so it runs on every change.
-- **Every behaviour has a case.** New kernel or loader behaviour lands with a test in `xous64/tests/`.
+- **Every behaviour has a case.** New kernel or loader behaviour lands with a test in `redoubt/tests/`.
   A bug fix lands with the test that would have caught it.
 - **Attack tests, not just happy paths.** Hostile images, hostile syscall arguments, hostile
   messages, resource exhaustion, malformed device trees. Expected outcome: a clean refusal, never a

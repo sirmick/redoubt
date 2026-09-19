@@ -1,4 +1,4 @@
-//! The on-disk format of a test case (`xous64/tests/*.toml`).
+//! The on-disk format of a test case (`redoubt/tests/*.toml`).
 
 use std::path::{Path, PathBuf};
 

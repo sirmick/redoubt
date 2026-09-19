@@ -38,7 +38,7 @@ fn return_result(result: &xous_kernel::Result, context: &Thread) -> ! {
 mod intc;
 
 /// The hart timer backend, for platforms where the timer is a CPU resource rather than
-/// a device that userspace can own. See `planning/xous64/TIMER.md`.
+/// a device that userspace can own. See `planning/redoubt/TIMER.md`.
 #[cfg_attr(feature = "sbi", path = "timer_sbi.rs")]
 pub mod timer;
 

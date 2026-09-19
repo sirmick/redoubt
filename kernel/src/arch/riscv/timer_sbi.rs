@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Hart timer backend for platforms with SBI firmware, using the SBI TIME extension.
-//! See `planning/xous64/TIMER.md`.
+//! See `planning/redoubt/TIMER.md`.
 
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 

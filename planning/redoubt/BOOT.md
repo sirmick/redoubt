@@ -1,4 +1,4 @@
-# xous64 boot flow
+# redoubt boot flow
 
 Status: working on QEMU `virt` (2026-09-18). `cargo testbench --run <program>...` builds and boots it.
 

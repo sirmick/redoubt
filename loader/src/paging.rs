@@ -1,4 +1,4 @@
-//! Address space construction (Sv32 and Sv39). See `planning/xous64/MEMORY-LAYOUT.md`.
+//! Address space construction (Sv32 and Sv39). See `planning/redoubt/MEMORY-LAYOUT.md`.
 //!
 //! Page-table memory is only touched through the `paging` crate, which the kernel uses too.
 

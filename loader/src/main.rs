@@ -7,7 +7,7 @@
 //!
 //! The loader unpacks the boot bundle (see `image.rs`), builds an address space for the
 //! kernel and for each initial process, describes the machine to the kernel in a tagged
-//! argument block, and enters the kernel. Design notes: `planning/xous64/BOOT.md`.
+//! argument block, and enters the kernel. Design notes: `planning/redoubt/BOOT.md`.
 
 #![no_std]
 #![no_main]
@@ -235,7 +235,7 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
         count += 1;
 
         // The kernel only needs these tags to count processes and to find `.eh_frame`.
-        // TODO(xous64): report the `.eh_frame` address so `std` can unwind.
+        // TODO(redoubt): report the `.eh_frame` address so `std` can unwind.
         args.begin(b"IniE");
         args.word(0);
         args.word(0);

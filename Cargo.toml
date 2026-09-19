@@ -2,15 +2,15 @@
 default-members = [
   "kernel",
   "loader",
-  "xous64/testbench",
+  "redoubt/testbench",
 ]
 members = [
   "kernel",
   "loader",
   "xous-rs",
-  "xous64/paging",
-  "xous64/test-programs",
-  "xous64/testbench",
+  "redoubt/paging",
+  "redoubt/test-programs",
+  "redoubt/testbench",
   "libs/flatipc",
   "libs/flatipc-derive",
   "imports/getrandom",

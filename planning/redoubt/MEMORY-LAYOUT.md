@@ -1,4 +1,4 @@
-# xous64 virtual memory design (Sv39)
+# redoubt virtual memory design (Sv39)
 
 Status: decided 2026-09-18, implementation in progress. Change this file first if the design changes.
 
@@ -9,7 +9,7 @@ at `0xff80_0000`. The window's own L0 table is mapped into itself. That is neat 
 three levels it needs a 1 GiB window for L0 tables, a 2 MiB window for L1 tables, and tables that map
 the windows that map the tables.
 
-xous64 instead maps all of physical RAM once, in the kernel half, with Sv39 gigapages:
+redoubt instead maps all of physical RAM once, in the kernel half, with Sv39 gigapages:
 
     virt = PHYSMAP_BASE + phys          (supervisor-only, global, RW, never executable)
 
