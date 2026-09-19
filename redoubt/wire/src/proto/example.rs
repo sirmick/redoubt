@@ -14,12 +14,16 @@ pub struct Ping {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PingReply {}
 
-/// `pong`: opcode 2, inline; no reply (sent).
+/// `pong`: opcode 2, inline; reply [`PongReply`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pong {
     pub seq: u64,
     pub flags: u32,
 }
+
+/// The reply to [`Pong`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PongReply {}
 
 /// `small`: opcode 3, inline; reply [`SmallReply`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,13 +63,17 @@ pub struct NamedReply {
     pub id: u32,
 }
 
-/// `blob`: opcode 6, buffer; no reply (sent).
+/// `blob`: opcode 6, buffer; reply [`BlobReply`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Blob<'a> {
     pub offset: u64,
     pub data: &'a [u8],
     pub label: &'a str,
 }
+
+/// The reply to [`Blob`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlobReply {}
 
 /// `grant`: opcode 7, inline; reply [`GrantReply`].
 /// Handle slots: `range`, `reply`.
@@ -251,9 +259,11 @@ impl<'a> Message<'a> {
 /// Replies, by the opcode of their request.
 const REPLIES: &[Layout] = &[
     Layout { opcode: 1, inline: true, handles: 0 },
+    Layout { opcode: 2, inline: true, handles: 0 },
     Layout { opcode: 3, inline: true, handles: 0 },
     Layout { opcode: 4, inline: false, handles: 0 },
     Layout { opcode: 5, inline: false, handles: 0 },
+    Layout { opcode: 6, inline: false, handles: 0 },
     Layout { opcode: 7, inline: true, handles: 1 },
     Layout { opcode: 8, inline: false, handles: 0 },
     Layout { opcode: 4294967295, inline: false, handles: 0 },
@@ -263,9 +273,11 @@ const REPLIES: &[Layout] = &[
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reply<'a> {
     Ping(PingReply),
+    Pong(PongReply),
     Small(SmallReply),
     Wide(WideReply),
     Named(NamedReply),
+    Blob(BlobReply),
     Grant(GrantReply),
     Read(ReadReply<'a>),
     Last(LastReply),
@@ -276,9 +288,11 @@ impl<'a> Reply<'a> {
     pub fn handle_names(&self) -> &'static [&'static str] {
         match self {
             Reply::Ping(_) => &[],
+            Reply::Pong(_) => &[],
             Reply::Small(_) => &[],
             Reply::Wide(_) => &[],
             Reply::Named(_) => &[],
+            Reply::Blob(_) => &[],
             Reply::Grant(_) => &["key"],
             Reply::Read(_) => &[],
             Reply::Last(_) => &[],
@@ -289,9 +303,11 @@ impl<'a> Reply<'a> {
     fn opcode(&self) -> u32 {
         match self {
             Reply::Ping(_) => 1,
+            Reply::Pong(_) => 2,
             Reply::Small(_) => 3,
             Reply::Wide(_) => 4,
             Reply::Named(_) => 5,
+            Reply::Blob(_) => 6,
             Reply::Grant(_) => 7,
             Reply::Read(_) => 8,
             Reply::Last(_) => 4294967295,
@@ -301,9 +317,11 @@ impl<'a> Reply<'a> {
     fn write(&self, w: &mut Writer<'_>) -> Result<(), Error> {
         match self {
             Reply::Ping(_) => Ok(()),
+            Reply::Pong(_) => Ok(()),
             Reply::Small(m) => w.u32(m.c),
             Reply::Wide(_) => Ok(()),
             Reply::Named(m) => w.u32(m.id),
+            Reply::Blob(_) => Ok(()),
             Reply::Grant(_) => Ok(()),
             Reply::Read(m) => w.bytes(m.data),
             Reply::Last(m) => {
@@ -316,6 +334,7 @@ impl<'a> Reply<'a> {
     fn read_inline(opcode: u32, r: &mut Reader<'_>) -> Result<Self, Error> {
         Ok(match opcode {
             1 => Reply::Ping(PingReply {}),
+            2 => Reply::Pong(PongReply {}),
             3 => Reply::Small(SmallReply { c: r.u32()? }),
             7 => Reply::Grant(GrantReply {}),
             _ => return Err(Error::BadOpcode),
@@ -325,9 +344,11 @@ impl<'a> Reply<'a> {
     fn read_buffer(opcode: u32, r: &mut Reader<'a>) -> Result<Self, Error> {
         Ok(match opcode {
             1 => Reply::Ping(PingReply {}),
+            2 => Reply::Pong(PongReply {}),
             3 => Reply::Small(SmallReply { c: r.u32()? }),
             4 => Reply::Wide(WideReply {}),
             5 => Reply::Named(NamedReply { id: r.u32()? }),
+            6 => Reply::Blob(BlobReply {}),
             7 => Reply::Grant(GrantReply {}),
             8 => Reply::Read(ReadReply { data: r.bytes()? }),
             4294967295 => Reply::Last(LastReply { n: r.u64()?, m: r.u32()? }),
@@ -335,7 +356,8 @@ impl<'a> Reply<'a> {
         })
     }
 
-    /// Decodes the reply to the request with `opcode`: `Ok(Ok(reply))`, `Ok(Err(code))`
+    /// Decodes the reply to the request with `opcode` (the caller knows what it sent):
+    /// `Ok(Ok(reply))`, `Ok(Err(code))`
     /// for an error reply, or `Err` if the reply is malformed.
     pub fn decode(opcode: u32, words: &Words, buf: &'a [u8], handles: usize) -> Result<Result<Self, ErrorCode>, Error> {
         let layout = typed::layout(REPLIES, opcode)?;

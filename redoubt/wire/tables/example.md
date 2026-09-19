@@ -3,8 +3,8 @@
 Not a real protocol: no server speaks it. It exists so the generated codecs, the test vectors
 (`redoubt/wire/vectors/`) and the fuzz targets exercise every field type, both message shapes,
 replies, error replies and the file framing. Real tables live in the owning server's note
-under `planning/redoubt/` (WIRE.md); each server package writes its own. This note is also the
-guide to writing one.
+under `planning/redoubt/`; each server package writes its own. WIRE.md is the specification;
+this note is the practical guide to writing one, and the generator enforces every rule here.
 
 ## Writing a table
 A protocol is two tables: its messages and its errors.
@@ -31,26 +31,26 @@ Then one row per message:
   (`u32` length + bytes), and `handle[N]`: the handle in slot N. Slots are numbered 0, 1, ...
   in order, at most 4 (`MAX_MSG_HANDLES`), and carry no bytes. There are no compound types;
   write a label set or an address as `bytes` and state its inner layout in the note.
-- **Reply:** `-` for a message with no reply (it is sent with `send`), `ok` for a reply that
-  carries only its status, or the reply's fields in the same form as Fields (with its own
-  handle slots from 0).
+- **Reply:** the reply's fields in the same form as Fields (with its own handle slots from 0),
+  or `-` for a reply that is its status alone. A message sent with `send` gets no reply; its
+  row still has a Reply cell, which is then `-`.
 
 The table ends at the first blank line. Every line before that must be a row; a row-like line
 right after the blank line is refused, so a stray blank line cannot drop rows. Tables inside
 fenced code blocks (like the one above) are ignored.
 
-**Shape.** A message is **inline** if its request's fields and its reply's fields each have a
-fixed size (no `string` or `bytes`) and fit in 12 bytes (words 1-3 at 32 bits, the same on
+**Shape** (WIRE.md, Layout in a message). A message is **inline** if its request's fields
+and its reply's fields each have a fixed size (no `string` or `bytes`) and fit in 12 bytes (words 1-3 at 32 bits, the same on
 both widths); the fields are packed into words 1-3 and there is no buffer. Otherwise it is a
 **buffer** message: the request's fields go in the buffer (a lend when sent with `call`, a
 transfer with `send`) with their length in word 1, and the reply's fields are written back
 into the caller's lend with their length in word 1. A small request whose reply carries data
 (a block read) is therefore a buffer message.
 
-**The error table.** A protocol whose messages have replies needs one, marked
-`<!-- wire-errors: NAME -->` with the header `| Code | Error |`: one row per error, the code
-decimal and nonzero (0 is success), the name snake_case in backticks. An error reply carries
-the code in word 0, zeros in words 1-3, no handles and nothing in the buffer.
+**The error table.** Every protocol has one, marked `<!-- wire-errors: NAME -->` (same NAME)
+with the header `| Code | Error |`: one row per error, the code decimal, from 1, unique (0 is
+success), the name snake_case in backticks and unique. An error reply carries the code in
+word 0, zeros in words 1-3 and no handles; the caller ignores the buffer.
 
 **In a 9P file.** A message written into a file (e.g. an `ipd` `ctl` file) is its opcode as a
 `u32` followed by the buffer-shape encoding of its fields, one per `Twrite`. Messages with
@@ -66,10 +66,10 @@ handles cannot be written into a file.
 <!-- wire: example -->
 | Opcode | Message | Fields | Reply |
 | --- | --- | --- | --- |
-| 1 | `ping` | - | ok |
+| 1 | `ping` | - | - |
 | 2 | `pong` | `seq: u64`, `flags: u32` | - |
 | 3 | `small` | `a: u8`, `b: u16` | `c: u32` |
-| 4 | `wide` | `a: u64`, `b: u32`, `c: u8` | ok |
+| 4 | `wide` | `a: u64`, `b: u32`, `c: u8` | - |
 | 5 | `named` | `id: u32`, `name: string` | `id: u32` |
 | 6 | `blob` | `offset: u64`, `data: bytes`, `label: string` | - |
 | 7 | `grant` | `range: handle[0]`, `reply: handle[1]`, `pages: u32` | `key: handle[0]` |

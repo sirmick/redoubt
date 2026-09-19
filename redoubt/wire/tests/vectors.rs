@@ -72,9 +72,11 @@ fn render_message(m: &Message<'_>) -> String {
 fn render_reply(r: &Reply<'_>) -> String {
     match r {
         Reply::Ping(_) => "ping".into(),
+        Reply::Pong(_) => "pong".into(),
         Reply::Small(r) => format!("small c={}", r.c),
         Reply::Wide(_) => "wide".into(),
         Reply::Named(r) => format!("named id={}", r.id),
+        Reply::Blob(_) => "blob".into(),
         Reply::Grant(_) => "grant".into(),
         Reply::Read(r) => format!("read data={}", b(r.data)),
         Reply::Last(r) => format!("last n={} m={}", r.n, r.m),
@@ -207,9 +209,11 @@ fn hand_built_requests() -> Vec<Message<'static>> {
 fn hand_built_replies() -> Vec<Result<Reply<'static>, ErrorCode>> {
     vec![
         Ok(Reply::Ping(PingReply {})),
+        Ok(Reply::Pong(PongReply {})),
         Ok(Reply::Small(SmallReply { c: 0xdead_beef })),
         Ok(Reply::Wide(WideReply {})),
         Ok(Reply::Named(NamedReply { id: 42 })),
+        Ok(Reply::Blob(BlobReply {})),
         Ok(Reply::Grant(GrantReply {})),
         Ok(Reply::Read(ReadReply { data: b"hello" })),
         Ok(Reply::Last(LastReply { n: u64::MAX, m: 7 })),
@@ -236,7 +240,7 @@ fn hand_built_files() -> Vec<Message<'static>> {
 fn example_vectors() {
     let counts = check_file("example.txt");
     let want: Vec<(&str, usize)> =
-        vec![("bad", 24), ("badfile", 7), ("badreply", 12), ("failed", 4), ("file", 6), ("ok", 14), ("reply", 7)];
+        vec![("bad", 24), ("badfile", 7), ("badreply", 12), ("failed", 4), ("file", 6), ("ok", 14), ("reply", 9)];
     let got: Vec<(&str, usize)> = counts.iter().map(|(k, v)| (k.as_str(), *v)).collect();
     assert_eq!(got, want);
 
@@ -385,7 +389,9 @@ impl Rng {
 
     /// A reply and the opcode of its request.
     fn reply(&mut self) -> (u32, Reply<'static>) {
-        match self.below(7) {
+        match self.below(9) {
+            7 => (2, Reply::Pong(PongReply {})),
+            8 => (6, Reply::Blob(BlobReply {})),
             0 => (1, Reply::Ping(PingReply {})),
             1 => (3, Reply::Small(SmallReply { c: self.int() as u32 })),
             2 => (4, Reply::Wide(WideReply {})),
@@ -605,7 +611,7 @@ fn print_hand_built_lines() {
         let c = Case::Request { handles: m.handle_names().len(), words: w, buf: buf[..len].to_vec() };
         println!("{}", line(&c));
     }
-    let ops = [1, 3, 4, 5, 7, 8, 0xffff_ffff, 1, 8, 0xffff_ffff, 1];
+    let ops = [1, 2, 3, 4, 5, 6, 7, 8, 0xffff_ffff, 1, 8, 0xffff_ffff, 1];
     for (r, op) in hand_built_replies().into_iter().zip(ops) {
         let (w, len, handles) = match r {
             Ok(r) => {

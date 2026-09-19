@@ -24,9 +24,11 @@ defmodule Redoubt.Wire.Proto.Example do
   }
   @replies %{
     1 => {:ping, :inline, 0},
+    2 => {:pong, :inline, 0},
     3 => {:small, :inline, 0},
     4 => {:wide, :buffer, 0},
     5 => {:named, :buffer, 0},
+    6 => {:blob, :buffer, 0},
     7 => {:grant, :inline, 1},
     8 => {:read, :buffer, 0},
     4294967295 => {:last, :buffer, 0}
@@ -39,14 +41,14 @@ defmodule Redoubt.Wire.Proto.Example do
 
   @doc """
   A message's layout: `{opcode, shape, fields, handles, reply}`, where `fields` lists
-  `{name, type}` in order and `reply` is `nil` (no reply) or `{fields, handles}`.
+  `{name, type}` in order and `reply` is `{fields, handles}`.
   """
   def layout(:ping), do: {1, :inline, [], [], {[], []}}
-  def layout(:pong), do: {2, :inline, [{:seq, :u64}, {:flags, :u32}], [], nil}
+  def layout(:pong), do: {2, :inline, [{:seq, :u64}, {:flags, :u32}], [], {[], []}}
   def layout(:small), do: {3, :inline, [{:a, :u8}, {:b, :u16}], [], {[{:c, :u32}], []}}
   def layout(:wide), do: {4, :buffer, [{:a, :u64}, {:b, :u32}, {:c, :u8}], [], {[], []}}
   def layout(:named), do: {5, :buffer, [{:id, :u32}, {:name, :string}], [], {[{:id, :u32}], []}}
-  def layout(:blob), do: {6, :buffer, [{:offset, :u64}, {:data, :bytes}, {:label, :string}], [], nil}
+  def layout(:blob), do: {6, :buffer, [{:offset, :u64}, {:data, :bytes}, {:label, :string}], [], {[], []}}
   def layout(:grant), do: {7, :inline, [{:pages, :u32}], [:range, :reply], {[], [:key]}}
   def layout(:read), do: {8, :buffer, [{:offset, :u64}, {:count, :u32}], [], {[{:data, :bytes}], []}}
   def layout(:last), do: {4294967295, :buffer, [{:note, :string}], [:key], {[{:n, :u64}, {:m, :u32}], []}}
@@ -77,6 +79,7 @@ defmodule Redoubt.Wire.Proto.Example do
   defp enc(:request, :ping, %{} = f) when map_size(f) == 0, do: {1, []}
   defp enc(:reply, :ping, %{} = f) when map_size(f) == 0, do: {1, []}
   defp enc(:request, :pong, %{seq: v_seq, flags: v_flags} = f) when map_size(f) == 2, do: {2, [W.u(v_seq, 64), W.u(v_flags, 32)]}
+  defp enc(:reply, :pong, %{} = f) when map_size(f) == 0, do: {2, []}
   defp enc(:request, :small, %{a: v_a, b: v_b} = f) when map_size(f) == 2, do: {3, [W.u(v_a, 8), W.u(v_b, 16)]}
   defp enc(:reply, :small, %{c: v_c} = f) when map_size(f) == 1, do: {3, [W.u(v_c, 32)]}
   defp enc(:request, :wide, %{a: v_a, b: v_b, c: v_c} = f) when map_size(f) == 3, do: {4, [W.u(v_a, 64), W.u(v_b, 32), W.u(v_c, 8)]}
@@ -84,6 +87,7 @@ defmodule Redoubt.Wire.Proto.Example do
   defp enc(:request, :named, %{id: v_id, name: v_name} = f) when map_size(f) == 2, do: {5, [W.u(v_id, 32), W.str(v_name)]}
   defp enc(:reply, :named, %{id: v_id} = f) when map_size(f) == 1, do: {5, [W.u(v_id, 32)]}
   defp enc(:request, :blob, %{offset: v_offset, data: v_data, label: v_label} = f) when map_size(f) == 3, do: {6, [W.u(v_offset, 64), W.bytes(v_data), W.str(v_label)]}
+  defp enc(:reply, :blob, %{} = f) when map_size(f) == 0, do: {6, []}
   defp enc(:request, :grant, %{pages: v_pages} = f) when map_size(f) == 1, do: {7, [W.u(v_pages, 32)]}
   defp enc(:reply, :grant, %{} = f) when map_size(f) == 0, do: {7, []}
   defp enc(:request, :read, %{offset: v_offset, count: v_count} = f) when map_size(f) == 2, do: {8, [W.u(v_offset, 64), W.u(v_count, 32)]}
@@ -95,6 +99,7 @@ defmodule Redoubt.Wire.Proto.Example do
   defp read(:request, 1, <<rest::binary>>), do: {:ok, :ping, %{}, rest}
   defp read(:reply, 1, <<rest::binary>>), do: {:ok, :ping, %{}, rest}
   defp read(:request, 2, <<v_seq::little-64, v_flags::little-32, rest::binary>>), do: {:ok, :pong, %{seq: v_seq, flags: v_flags}, rest}
+  defp read(:reply, 2, <<rest::binary>>), do: {:ok, :pong, %{}, rest}
   defp read(:request, 3, <<v_a::little-8, v_b::little-16, rest::binary>>), do: {:ok, :small, %{a: v_a, b: v_b}, rest}
   defp read(:reply, 3, <<v_c::little-32, rest::binary>>), do: {:ok, :small, %{c: v_c}, rest}
   defp read(:request, 4, <<v_a::little-64, v_b::little-32, v_c::little-8, rest::binary>>), do: {:ok, :wide, %{a: v_a, b: v_b, c: v_c}, rest}
@@ -102,6 +107,7 @@ defmodule Redoubt.Wire.Proto.Example do
   defp read(:request, 5, <<v_id::little-32, n_name::little-16, v_name::binary-size(n_name), rest::binary>>), do: W.utf8([v_name], {:ok, :named, %{id: v_id, name: v_name}, rest})
   defp read(:reply, 5, <<v_id::little-32, rest::binary>>), do: {:ok, :named, %{id: v_id}, rest}
   defp read(:request, 6, <<v_offset::little-64, n_data::little-32, v_data::binary-size(n_data), n_label::little-16, v_label::binary-size(n_label), rest::binary>>), do: W.utf8([v_label], {:ok, :blob, %{offset: v_offset, data: v_data, label: v_label}, rest})
+  defp read(:reply, 6, <<rest::binary>>), do: {:ok, :blob, %{}, rest}
   defp read(:request, 7, <<v_pages::little-32, rest::binary>>), do: {:ok, :grant, %{pages: v_pages}, rest}
   defp read(:reply, 7, <<rest::binary>>), do: {:ok, :grant, %{}, rest}
   defp read(:request, 8, <<v_offset::little-64, v_count::little-32, rest::binary>>), do: {:ok, :read, %{offset: v_offset, count: v_count}, rest}
