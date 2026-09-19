@@ -1,4 +1,4 @@
-//! Sv39 address space construction. See `planning/xous64/MEMORY-LAYOUT.md`.
+//! Address space construction (Sv32 and Sv39). See `planning/xous64/MEMORY-LAYOUT.md`.
 //!
 //! Page-table memory is only touched through the `paging` crate, which the kernel uses too.
 
@@ -68,7 +68,7 @@ impl AddressSpace {
     pub fn satp(&self) -> usize { paging::make_satp(self.pid as usize, self.root_phys) }
 
     fn leaf_slot(&self, alloc: &mut PageAllocator, virt: usize) -> Slot {
-        assert!(paging::is_canonical(virt), "{virt:#x} is not a canonical Sv39 address");
+        assert!(paging::is_canonical(virt), "{virt:#x} is not a canonical address");
         let mut table = self.root;
         for level in (1..LEVELS).rev() {
             let index = paging::vpn(virt, level);
