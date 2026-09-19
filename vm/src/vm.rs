@@ -92,6 +92,7 @@ const EMBEDDED: &[&[u8]] = &[
     include_bytes!("../lib/beamlet_io.beam"),
     include_bytes!("../lib/logger.beam"),
     include_bytes!("../lib/error_logger.beam"),
+    include_bytes!("../lib/application.beam"),
 ];
 
 enum Slot {
@@ -187,6 +188,31 @@ impl ProcTable {
     }
 
 }
+
+/// BEAM's preloaded modules that only make sense on top of its C runtime (ports, the file
+/// system, the boot process, tracing). This VM does their job itself or not at all, so they are
+/// never loaded, even if found on the code path; calls to them are `undef` unless a native
+/// answers. (`erlang`, `erts_internal`, `persistent_term`, `atomics` and `counters` do load:
+/// their Erlang code is useful and their NIF stubs are replaced by natives.)
+pub const RUNTIME_MODULES: &[&str] = &[
+    "init",
+    "erl_init",
+    "erl_prim_loader",
+    "erl_tracer",
+    "erts_code_purger",
+    "erts_dirty_process_signal_handler",
+    "erts_literal_area_collector",
+    "erts_trace_cleaner",
+    "prim_buffer",
+    "prim_eval",
+    "prim_file",
+    "prim_inet",
+    "prim_net",
+    "prim_socket",
+    "prim_zip",
+    "socket_registry",
+    "zlib",
+];
 
 /// Most message timers the VM keeps at once (`system_limit` beyond).
 pub const MAX_MESSAGE_TIMERS: usize = 1 << 16;
@@ -384,6 +410,9 @@ impl System {
     pub fn module(&mut self, name: &Atom) -> Option<Rc<Module>> {
         if let Some(m) = self.modules.get(name.as_str()) {
             return Some(m.clone());
+        }
+        if RUNTIME_MODULES.contains(&name.as_str()) {
+            return None;
         }
         let bytes = self.platform.load_module(name.as_str())?;
         let loaded = self.load(&bytes).ok()?;

@@ -16,6 +16,17 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use beamlet_vm::platform::{Platform, PlatformError};
 use beamlet_vm::{Class, Term, Vm};
 
+impl Posix {
+    /// The first `name` in the code path. Names come from module and application atoms:
+    /// refuse anything that could leave the directory.
+    fn find(&self, name: &str) -> Option<Vec<u8>> {
+        if name.is_empty() || name.contains(['/', '\\', '\0']) || name.starts_with('.') {
+            return None;
+        }
+        self.code_path.iter().find_map(|dir| std::fs::read(dir.join(name)).ok())
+    }
+}
+
 /// The POSIX platform: a monotonic clock, stdout as the console, `getrandom` via `/dev/urandom`,
 /// and `.beam` files from a search path.
 struct Posix {
@@ -56,11 +67,11 @@ impl Platform for Posix {
     }
 
     fn load_module(&mut self, module: &str) -> Option<Vec<u8>> {
-        // Module names become file names: refuse anything that could leave the directory.
-        if module.is_empty() || module.contains(['/', '\\', '\0']) || module.starts_with('.') {
-            return None;
-        }
-        self.code_path.iter().find_map(|dir| std::fs::read(dir.join(format!("{module}.beam"))).ok())
+        self.find(&format!("{module}.beam"))
+    }
+
+    fn load_app(&mut self, app: &str) -> Option<Vec<u8>> {
+        self.find(&format!("{app}.app"))
     }
 }
 

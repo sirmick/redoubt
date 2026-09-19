@@ -17,7 +17,9 @@
          set_module_level/2, unset_module_level/1, set_application_level/2,
          get_process_metadata/0, set_process_metadata/1, update_process_metadata/1,
          unset_process_metadata/0, add_primary_filter/2, remove_primary_filter/1,
-         add_handler_filter/3, remove_handler_filter/2, i/0, timestamp/0]).
+         add_handler_filter/3, remove_handler_filter/2, i/0, timestamp/0,
+         get_module_level/0, get_module_level/1, unset_application_level/1, get_handler_ids/0,
+         update_formatter_config/2, update_formatter_config/3, get_process_metadata/1]).
 
 -define(LEVELS, [emergency, alert, critical, error, warning, notice, info, debug]).
 -define(KEY, '$beamlet_logger_level').
@@ -128,6 +130,13 @@ set_handler_config(_, _, _) -> ok.
 update_handler_config(_, _) -> ok.
 update_handler_config(_, _, _) -> ok.
 set_module_level(_, _) -> ok.
+%% Module levels are not kept: every module logs at the primary level.
+get_module_level() -> [].
+get_module_level(_) -> [].
+unset_application_level(_) -> ok.
+get_handler_ids() -> [].
+update_formatter_config(_, _) -> ok.
+update_formatter_config(_, _, _) -> ok.
 unset_module_level(_) -> ok.
 set_application_level(_, _) -> ok.
 add_primary_filter(_, _) -> ok.
@@ -140,6 +149,7 @@ i() -> ok.
 
 -define(META, '$logger_metadata$').
 get_process_metadata() -> get(?META).
+get_process_metadata(_Pid) -> undefined.
 set_process_metadata(Meta) when is_map(Meta) -> put(?META, Meta), ok.
 update_process_metadata(Meta) when is_map(Meta) ->
     Old = case get(?META) of undefined -> #{}; M -> M end,

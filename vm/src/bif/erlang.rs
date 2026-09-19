@@ -458,6 +458,15 @@ pub fn list_to_bitstring(c: &mut Ctx, a: &[Term]) -> R {
     Ok(flatten_iolist(c, &a[0], true)?.finish())
 }
 
+/// `iolist_to_iovec(IoData)`: a list of binaries with the same bytes. One binary suffices.
+pub fn iolist_to_iovec(c: &mut Ctx, a: &[Term]) -> R {
+    let bin = iolist_to_binary(c, a)?;
+    Ok(match &bin {
+        Term::Bits(b) if b.len == 0 => Term::Nil,
+        _ => Term::list(alloc::vec![bin]),
+    })
+}
+
 pub fn iolist_size(c: &mut Ctx, a: &[Term]) -> R {
     let b = flatten_iolist(c, &a[0], false)?;
     Ok(Term::Int((b.bit_len() / 8) as i64))

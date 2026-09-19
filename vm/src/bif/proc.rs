@@ -539,6 +539,12 @@ pub fn read_timer(c: &mut Ctx, a: &[Term]) -> R {
     Ok(remaining_ms(c, deadline))
 }
 
+/// `erts_internal:time_unit()` and `perf_counter_unit()`: the native time unit is the
+/// nanosecond.
+pub fn time_unit(_c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(Term::Int(1_000_000_000))
+}
+
 // ---- persistent_term ----
 
 /// Most keys `persistent_term` may hold; it is VM-wide state any process can grow.

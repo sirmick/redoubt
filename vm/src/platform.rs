@@ -33,6 +33,13 @@ pub trait Platform {
     /// The bytes of the `.beam` file for `module`, if this VM may load it. This is the only way
     /// code enters the VM, so it is where a platform enforces signing or an allowlist.
     fn load_module(&mut self, module: &str) -> Option<Vec<u8>>;
+
+    /// The `.app` specification of application `app` (the text of `app.app`), if this VM may
+    /// start it. The default is none: applications are then unavailable.
+    fn load_app(&mut self, app: &str) -> Option<Vec<u8>> {
+        let _ = app;
+        None
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
