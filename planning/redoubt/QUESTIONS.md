@@ -303,3 +303,29 @@ Blocking: **K1 cannot start until 1-16 are settled** (they fix the ABI, `redoubt
     owner's unlabelled session.
     *Rec:* `admit` is keyed by (account, label set) too. CONTAINMENT.md's shared-server-library
     paragraph says so.
+
+## From the runtime (WP-R1)
+
+39. **The startup block's format.** INIT.md says what the block holds, but not its tags or
+    layouts. R1 defined them in `redoubt/rt/src/startup.rs`:
+    - an `SBlk` header (version, length, handle count);
+    - `NmSp`, `Hndl` and `Argv` entries;
+    - the budget handle as a named handle `budget`.
+
+    *Rec:* INIT.md adopts this format and owns it, since it's the contract between every parent
+    and child. The crate implements it.
+
+40. **How a process finds its startup block.** `process_start` takes an entry and a stack only,
+    and nothing says where the startup page is mapped or how the child learns its address.
+    *Rec:* the parent maps the page with `process_map`, and `process_start`'s `arg` register
+    carries its page-aligned address (0 = none). Or, simpler, a fixed address in MEMORY-LAYOUT.md.
+    This affects K4 and R2.
+
+41. **What a 9P call's words are.** WIRE.md says a 9P message travels in a lend, but not what the
+    call's four words hold.
+    *Rec:* the words are all zero in the request and in a successful reply. A request with other
+    words, or with no lend, is refused with a reply status of 1 ("not a 9P message").
+
+42. **A common error code for a malformed typed request.** WIRE.md has no error status that
+    works across protocols, so each server names its own.
+    *Rec:* reserve code 1 in every protocol's error table as `Malformed`. The generator adds it.
