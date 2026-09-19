@@ -113,6 +113,7 @@ const HEADER_PADDING: usize =
     mem::size_of::<Thread>() - (2 * mem::size_of::<usize>() + mem::size_of::<ProcessInner>() + 1);
 
 /// Number of pages `ProcessImpl` occupies at `THREAD_CONTEXT_AREA`: 1 on rv32, 2 on rv64.
+#[allow(dead_code)] // used by the loader handoff on rv64
 pub const PROCESS_IMPL_PAGES: usize = mem::size_of::<ProcessImpl>() / PAGE_SIZE;
 
 // The trap handler in asm indexes contexts as `THREAD_CONTEXT_AREA + (n << log2(size_of::<Thread>()))`.

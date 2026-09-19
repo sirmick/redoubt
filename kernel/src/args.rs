@@ -1,9 +1,18 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
+//! The kernel argument block, produced by the loader (see `planning/xous64/BOOT.md`).
+//! `init` records its address; everything else reads through it. The reads are `unsafe`
+//! because they dereference that loader-provided pointer, sound as long as `init` was
+//! given the real argument block, which is the loader's contract.
+
 use core::fmt;
 
-static mut KERNEL_ARGUMENTS_BASE: *const u32 = 0 as *const u32;
+use crate::cell::KernelCell;
+
+/// Address of the argument block, as a `usize` (a raw pointer is not `Sync`). Set once by
+/// `init`, read-only thereafter.
+static KERNEL_ARGUMENTS_BASE: KernelCell<usize> = KernelCell::new(0);
 
 pub struct KernelArguments {
     pub base: *const u32,
@@ -17,16 +26,21 @@ pub struct KernelArgumentsIterator {
 
 #[allow(dead_code)]
 impl KernelArguments {
-    pub fn get() -> Self { KernelArguments { base: unsafe { KERNEL_ARGUMENTS_BASE } } }
+    pub fn get() -> Self { KernelArguments { base: KERNEL_ARGUMENTS_BASE.with(|b| *b) as *const u32 } }
 
-    pub unsafe fn init(base: *const u32) { KERNEL_ARGUMENTS_BASE = base; }
+    /// # Safety
+    /// `base` must point at the argument block the loader built.
+    pub unsafe fn init(base: *const u32) { KERNEL_ARGUMENTS_BASE.with(|b| *b = base as usize); }
 
     pub fn iter(&self) -> KernelArgumentsIterator {
         KernelArgumentsIterator { base: self.base, size: self.size(), offset: 0 }
     }
 
     /// Get the size of the entire kernel argument structure
-    pub fn size(&self) -> usize { unsafe { self.base.add(2).read() as usize * 4 } }
+    pub fn size(&self) -> usize {
+        // SAFETY: `self.base` is the argument block; word 2 is its total size in words.
+        unsafe { self.base.add(2).read() as usize * 4 }
+    }
 }
 
 pub struct KernelArgument {
@@ -37,10 +51,14 @@ pub struct KernelArgument {
 
 impl KernelArgument {
     pub fn new(base: *const u32, offset: usize) -> Self {
-        let name = unsafe { base.add(offset / 4).read() } as u32;
-        let size = unsafe { (base.add(offset / 4 + 1) as *const u16).add(1).read() } as usize;
-        let data = unsafe { core::slice::from_raw_parts(base.add(offset / 4 + 2), size) };
-        KernelArgument { name, size: size * 4, data }
+        // SAFETY: `base` is the argument block and `offset` is a tag boundary within it
+        // (the iterator only ever advances by whole tags). A tag is name, size, then data.
+        unsafe {
+            let name = base.add(offset / 4).read();
+            let size = (base.add(offset / 4 + 1) as *const u16).add(1).read() as usize;
+            let data = core::slice::from_raw_parts(base.add(offset / 4 + 2), size);
+            KernelArgument { name, size: size * 4, data }
+        }
     }
 }
 
@@ -61,12 +79,12 @@ impl Iterator for KernelArgumentsIterator {
 impl fmt::Display for KernelArgument {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let tag_name_bytes = self.name.to_le_bytes();
+        // SAFETY: `tag_name_bytes` is a live 4-byte array; the tag name is ASCII by
+        // construction, so treating it as UTF-8 is valid.
         let s = unsafe {
             use core::slice;
             use core::str;
-            // First, we build a &[u8]...
             let slice = slice::from_raw_parts(tag_name_bytes.as_ptr(), 4);
-            // ... and then convert that slice into a string slice
             str::from_utf8_unchecked(slice)
         };
 

@@ -282,6 +282,7 @@ impl Process {
         println!("[!] Terminating process with PID {}", self.pid);
 
         // Free all associated memory pages
+        // SAFETY: called only here, as the final teardown step for a process that will not run again.
         unsafe { crate::mem::MemoryManager::with_mut(|mm| mm.release_all_memory_for_process(self.pid)) };
 
         // Free all claimed IRQs
@@ -382,6 +383,7 @@ impl SystemServices {
                     init_count += 1;
                 }
             }
+            // SAFETY: the loader wrote `init_count` InitialProcess records starting at `base` (see BOOT.md).
             unsafe {
                 core::slice::from_raw_parts(base as *const crate::arch::process::InitialProcess, init_count)
             }
@@ -416,6 +418,7 @@ impl SystemServices {
             //     pid - 1,
             //     init,
             // );
+            // SAFETY: `from_init_process` records a loader-built satp; the loader guarantees it names a root table.
             unsafe {
                 process.mapping.from_init_process(*init);
                 process.ppid = KERNEL_PID;
@@ -507,6 +510,7 @@ impl SystemServices {
             entry.state = ProcessState::Allocated;
             // `allocate` is a safe function on Sv39 and an unsafe one on Sv32.
             #[allow(unused_unsafe)]
+            // SAFETY: `allocate` is a safe fn on Sv39 and unsafe on Sv32; the unsafe covers only the latter.
             unsafe {
                 entry.mapping.allocate(new_pid.unwrap()).or(Err(xous_kernel::Error::InternalError))?
             };
@@ -1705,6 +1709,7 @@ impl SystemServices {
         // buf: MemoryRange,
     ) -> Result<*mut usize, xous_kernel::Error> {
         let buf = crate::mem::memory_range(src_virt as usize, len)?;
+        // SAFETY: `buf` is a MemoryRange the caller lent; it describes a mapped, page-aligned region.
         let buf = unsafe { buf.as_slice() };
         let current_pid = self.current_pid();
         {
@@ -2319,6 +2324,8 @@ impl SystemServices {
                 };
 
                 // Ensure we don't switch back to the same process.
+                // SAFETY: take_isr_return_pair is unsafe only as a cross-arch ABI marker; the
+                // operation clears the pending ISR-return target and is sound.
                 unsafe { crate::arch::irq::take_isr_return_pair() };
                 ProcessState::Debug(tids | 1 << current_tid)
             }
@@ -2443,6 +2450,7 @@ impl SystemServices {
             if arg.name != u32::from_le_bytes(*b"PNam") {
                 continue;
             }
+            // SAFETY: `arg.data` is `arg.size` words of the kernel argument block; viewing them as bytes is valid.
             let data = unsafe {
                 let ptr = arg.data.as_ptr();
                 let len = arg.size;

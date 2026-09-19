@@ -265,6 +265,7 @@ impl Server {
         }
 
         #[cfg(baremetal)]
+        // SAFETY: `backing` is a page the kernel just allocated for this server's message queue.
         let queue = unsafe {
             core::slice::from_raw_parts_mut(
                 _backing.as_mut_ptr() as *mut QueuedMessage,

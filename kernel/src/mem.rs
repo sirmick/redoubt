@@ -245,6 +245,7 @@ impl MemoryManager {
         let mut extra_size = 0;
         for tag in args_iter {
             if tag.name == u32::from_le_bytes(*b"MREx") {
+                // SAFETY: the loader placed the MREx tag data here; it is a table of MemoryRangeExtra (see BOOT.md).
                 unsafe {
                     assert!(
                         self.extra_regions.is_empty(),
@@ -264,6 +265,7 @@ impl MemoryManager {
             extra_size += range.mem_size as usize / PAGE_SIZE;
         }
         #[cfg(feature = "swap")]
+        // SAFETY: the loader placed a `mem_size`-entry runtime page table (RPT) at `rpt_base` (see BOOT.md).
         unsafe {
             self.allocations = slice::from_raw_parts_mut(rpt_base as *mut SwapAlloc, mem_size);
             crate::swap::Swap::with_mut(|s| {
@@ -276,9 +278,11 @@ impl MemoryManager {
             });
         }
         #[cfg(not(feature = "swap"))]
+        // SAFETY: as above; a `mem_size`-entry ownership table at `rpt_base`.
         unsafe {
             self.allocations = slice::from_raw_parts_mut(rpt_base as *mut Option<PID>, mem_size)
         };
+        // SAFETY: the loader placed an `extra_size`-entry table at `xpt_base` for the extra regions.
         unsafe { self.extra_allocations = slice::from_raw_parts_mut(xpt_base as *mut Option<PID>, extra_size) }
         Ok(())
     }
@@ -308,11 +312,13 @@ impl MemoryManager {
     #[cfg(all(baremetal, feature = "debug-print"))]
     #[allow(dead_code)]
     pub fn print_ownership(&self) {
+        // SAFETY: a plain length calculation; the block is historical and touches only owned fields.
         println!("Ownership ({} bytes in all):", unsafe {
             self.allocations.len() + self.extra_allocations.len()
         });
 
         let mut offset = 0;
+        // SAFETY: `ram_name` is an ASCII tag, so viewing its bytes as UTF-8 is valid.
         unsafe {
             // First, we build a &[u8]...
             let name_bytes = self.ram_name.to_le_bytes();
@@ -340,6 +346,7 @@ impl MemoryManager {
 
         // Go through additional regions looking for this address, and claim it
         // if it's not in use.
+        // SAFETY: reads only owned fields; the block is historical debug output.
         unsafe {
             for region in self.extra_regions.iter() {
                 println!("    Region {}:", region);
@@ -375,6 +382,7 @@ impl MemoryManager {
     // soon. Addresses outside of RAM are just ignored.
     pub fn touch(&mut self, paddr: usize) {
         if paddr >= self.ram_start && paddr < self.ram_start + self.ram_size {
+            // SAFETY: swap-only. `touch` is SwapAlloc bookkeeping, accessed with interrupts off on one hart.
             unsafe {
                 self.allocations[(paddr - self.ram_start) / PAGE_SIZE].touch();
             }
@@ -387,6 +395,7 @@ impl MemoryManager {
 
     #[cfg(feature = "debug-swap")]
     #[allow(dead_code)]
+    // SAFETY: swap-only. Returns the RPT address for the swapper; reads an owned field.
     pub fn rpt_base(&self) -> usize { unsafe { self.allocations.as_ptr() as usize } }
 
     #[cfg(feature = "debug-swap")]
@@ -394,8 +403,11 @@ impl MemoryManager {
     /// This function is "improper" in that it returns a bogus value if the memory allocations are
     /// out of range, but its purpose is only for debugging. This is not suitable for use in any
     /// other context.
+    /// # Safety
+    /// Swap-only. The caller must hold the swap invariants (single hart, interrupts off).
     pub unsafe fn get_timestamp(&self, paddr: usize) -> u32 {
         if paddr >= self.ram_start && paddr < self.ram_start + self.ram_size {
+            // SAFETY: swap-only. `get_timestamp` reads SwapAlloc bookkeeping under the caller's contract.
             unsafe {
                 self.allocations[(paddr - self.ram_start) / PAGE_SIZE].get_timestamp()
             }
@@ -578,6 +590,7 @@ impl MemoryManager {
         // Zero-out the page
         let range_start = virt;
         let range_end = range_start.wrapping_add(PAGE_SIZE / core::mem::size_of::<usize>());
+        // SAFETY: `bzero` zeroes the page just mapped at `virt`, which the kernel owns until handed out.
         unsafe {
             crate::mem::bzero(range_start, range_end);
         };
@@ -777,6 +790,7 @@ impl MemoryManager {
             // If the kernel uses this to allocate kernel structures, it will fail.
 
             // clear the memory first
+            // SAFETY: zeroes the freshly mapped, kernel-owned pages before they are handed to userspace.
             unsafe { crate::mem::bzero(virt, virt.wrapping_add(size)) };
 
             // now hand it to userspace
@@ -1001,6 +1015,7 @@ impl MemoryManager {
             match action {
                 ClaimReleaseMove::Claim => {
                     if owner_addr.is_none() {
+                        // SAFETY: swap-only. `SwapAlloc::update` records ownership; single hart, interrupts off.
                         unsafe { owner_addr.update(Some(pid), Some(addr)) };
                     } else {
                         // even self-claims should be denied
@@ -1014,9 +1029,11 @@ impl MemoryManager {
                     }
                 }
                 ClaimReleaseMove::Move(_) => {
+                    // SAFETY: swap-only, as above.
                     unsafe { owner_addr.update(Some(pid), Some(addr)) };
                 }
                 ClaimReleaseMove::Release => {
+                    // SAFETY: swap-only, as above.
                     unsafe { owner_addr.update(None, None) };
                 }
             }
@@ -1124,6 +1141,10 @@ impl MemoryManager {
     /// Free all memory that belongs to a process. This does not unmap the memory from the
     /// process, it only marks it as free. Because a freed frame can be re-allocated
     /// immediately, only call this as part of destroying a process.
+    ///
+    /// # Safety
+    /// Only sound as the final step of destroying `pid`: after this, frames it owned may
+    /// be handed to other processes, so `pid` must never run again.
     pub unsafe fn release_all_memory_for_process(&mut self, pid: PID) {
         #[cfg(baremetal)]
         {
@@ -1303,6 +1324,10 @@ impl MemoryManager {
     }
 }
 
+/// Zero the memory in `start..end` with volatile writes.
+///
+/// # Safety
+/// `start..end` must be a single valid, writable, `T`-aligned allocation the caller owns.
 pub unsafe fn bzero<T>(mut start: *mut T, end: *mut T)
 where
     T: Copy,
