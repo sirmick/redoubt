@@ -35,9 +35,9 @@ Five kinds. Every object is charged in pages to one budget (its owner).
 | `parent` | budget | none only for `root` |
 | `class` | `system` or `user` | `class(child) <= class(parent)` (`user < system`) |
 | `labels` | sorted set of u64, at most `MAX_LABELS` | fixed at creation; `labels(child) ⊇ labels(parent)` |
-| `account` | u64, 0 = none | inherited; see Accounts |
+| `account` | u64, 0 = none | inherited (R8) |
 | `deadline` | time or none | when it passes, the kernel destroys the budget |
-| `pages` | limit, usage | every object charged here; see Charging |
+| `pages` | limit, usage | every object charged here (R6) |
 | `processes` | limit, usage | PIDs double as ASIDs |
 | `weight` | u32 | CPU share |
 

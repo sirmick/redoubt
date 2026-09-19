@@ -6,7 +6,7 @@ all of its source.
 
 It is a hard fork of [Xous](https://github.com/betrusted-io/xous-core). The kernel keeps
 Xous's shape — an MMU-backed microkernel where drivers and services are unprivileged
-userspace servers talking over capability IPC — and rebuilds it for 64-bit and 32-bit
+userspace servers talking over IPC — and rebuilds it for 64-bit and 32-bit
 RISC-V on one clean, width-generic code path. The `xous` syscall ABI keeps its name as the
 heritage protocol the userspace runtime speaks.
 
@@ -15,20 +15,23 @@ heritage protocol the userspace runtime speaks.
 - **RV64 (Sv39) and RV32 (Sv32) from one source.** The loader, kernel and page-table crate
   are width-generic; the two ports differ only in width, and both boot QEMU `virt` through
   the same Rust firmware (RustSBI) and the same SBI/PLIC platform.
-- **A microkernel.** The kernel holds only the interrupt controller, the timer, memory and
-  capability IPC. Drivers and the filesystem are unprivileged servers (see the design docs).
+- **A microkernel.** The kernel keeps memory, threads, IPC, interrupt delivery and the timer.
+  Today its IPC still uses Xous's password capabilities; capability handles, budgets and
+  information-flow labels are designed, with drivers and the filesystem as unprivileged
+  servers (see the design docs).
 - **Process isolation is the point.** Every process has its own address space; the kernel
   maps all of physical RAM once (the "physmap") and walks page tables in software, so it
   never switches address spaces to edit another process's tables (needed for SMP).
 - **Secure by construction.** W^X is enforced by the page-table layer and re-verified at
-  boot; the boot bundle is Ed25519-verified; devices are default-deny and handed to drivers
-  by a signed manifest, not discovered. `unsafe` is treated as the number-one code smell and
+  boot; the boot bundle is Ed25519-verified; devices are default-deny and granted to drivers
+  by the signed bundle's `grants` entry, not discovered. `unsafe` is treated as the number-one code smell and
   ratcheted down per component (`redoubt/tests/unsafe-budget.toml`); it only ever decreases.
 - **All Rust, open standards.** Assembly only where it must be; RISC-V, SBI, virtio, 9P.
 - **Tested to death.** `cargo testbench` boots real images under QEMU for both widths and
   asserts on the console, including adversarial cases (tampered bundles, corrupted ELFs,
   syscall attacks). The suite is green on rv32 and rv64, including boots with 2 and 4
-  harts (only the boot hart runs so far; SMP is planned).
+  harts (default builds run only the boot hart; a two-hart spike runs kernel code on a second
+  hart behind the `smp` feature).
 
 What it is deliberately **not**: the fastest, or compatible with everything.
 

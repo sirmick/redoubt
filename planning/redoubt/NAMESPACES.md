@@ -1,26 +1,25 @@
 # Namespaces, 9P and filesystems
 
-Designed, not built. Owns: 9P as the user-facing protocol, per-process namespaces, the network tree,
-filesystem servers, the filesystem choice. Borrows from Plan 9, minus its ambient parts.
+Designed, not built. Owns: 9P as the user-facing protocol, per-process namespaces, the network and
+console trees, filesystem servers, the filesystem choice. Byte layouts: WIRE.md. Borrows from Plan 9,
+minus its ambient parts.
 
 ## Decisions
 1. **Every user-facing service speaks 9P2000**: files, network, console, process information.
-   Native typed messages remain for internal plumbing (the block protocol, driver to server).
+   Typed messages (WIRE.md) remain for internal plumbing (the block protocol, driver to server).
 2. **A namespace is data inside a process**: a table from path prefix to capability. There is no
    kernel mount table and no global VFS server.
 3. **A filesystem is an unprivileged server** (`fsd`), one instance per volume.
-4. **Control messages are typed and binary**, decoded by one shared, fuzzed codec. No server parses
-   text commands.
 
 ## Capabilities are 9P connections
-- A capability to a resource is a connection to a server, attached at a root inside it.
+- **One connection = one endpoint handle**, whose badge names the attach root inside the server.
 - 9P `attach` gives a root fid; every `walk` is relative to a held fid. A server never walks above
   the attach root, so a fid is a directory capability.
 - Fids are per connection and cannot be handed to another process. To delegate a subtree, the
   holder asks the server to mint a new connection rooted there and sends that handle.
 - `..` is resolved lexically (Plan 9's rule): the path is cleaned before lookup, in the client
   library and again in every server, so it never climbs above a held root.
-- 9P messages travel in lent buffers (CAPABILITIES.md, IPC); nothing is copied through a network stack.
+- 9P messages travel in lent buffers of at most `msize` (WIRE.md).
 - The 9P codec parses untrusted bytes, so it is written once, shared by every server, and fuzzed.
   Independent 9P implementations give differential tests.
 
@@ -35,26 +34,39 @@ filesystem servers, the filesystem choice. Borrows from Plan 9, minus its ambien
 - Not borrowed from Plan 9: union mounts, kernel `#` device names (ambient authority), `rfork`
   namespace flags (the table is plain data).
 
+## The console (`/dev/cons`)
+A single file: reads return input bytes, writes send output bytes. `sshd` serves one per SSH channel;
+`consoled` serves the UART's. The channel's labels are its session's (CONTAINMENT.md).
+
 ## The network tree (`/net`)
-`ipd` serves a Plan 9 style tree: a client clones a connection directory, issues typed connect or
-listen operations, then reads and writes the data file. A socket capability is a connection rooted in
-part of that tree. **Its scope is IP prefixes and ports only** ("connect to 10.0.0.0/8 port 443",
-"listen on TCP 22"). DNS runs in the client, so a name-scoped check could only ever see the IP the
-client chose. Elixir wraps the tree in `gen_tcp`-like modules.
+`ipd` serves a Plan 9 style tree:
+```
+/net/tcp/clone        open to get a new connection directory N
+/net/tcp/N/ctl        typed connect / listen / close operations (WIRE.md)
+/net/tcp/N/data       read and write the byte stream
+/net/tcp/N/remote     the peer address
+/net/udp/...          the same shape
+```
+A socket capability is a connection rooted in part of that tree. **Its scope is IP prefixes and
+ports only** ("connect to 10.0.0.0/8 port 443", "listen on TCP 22"). DNS runs in the client, so a
+name-scoped check could only ever see the IP the client chose. Session scopes never include the box's
+own addresses (CAPABILITIES.md). `ipd` is a sink and refuses labelled callers. Elixir wraps the tree
+in `gen_tcp`-like modules.
 
 ## Filesystem servers
 - **Holds:** one block-range handle (a partition from `blkd`). No MMIO, IRQ or DMA.
 - **Serves:** 9P, one connection per client, each rooted where the granting party chose.
 - **One instance per volume.** An untrusted medium gets its own server holding only that medium, so
   a parser exploit reaches that medium and nothing else.
-- **Labels are per volume** (CONTAINMENT.md): a volume has one fixed label set, and `fsd` checks the
-  caller's labels against it on every request (no read up, no write down). There are no per-file labels.
+- **Labels are per volume** (CONTAINMENT.md): each volume has one label set, from the boot manifest
+  or the steward, and `fsd` checks the caller's labels against it on every request (no read up, no
+  write down). Its state is per volume. There are no per-file labels.
+- **Admission** is per account (the shared server library).
 - **Robust to a bad disk:** crash-consistent and robust to bad metadata, and fuzzed for it. Disk
   encryption is deferred (IO-ARCHITECTURE.md, Later).
 - **Crash:** clients see errors, `init` restarts it (INIT.md), copy-on-write keeps the volume
   consistent.
-- **Boot:** the first filesystem is `bootfsd`, a read-only server over the verified boot bundle,
-  mounted at `/boot`.
+- **Boot:** `bootfsd` is a read-only server over the verified boot bundle, mounted at `/boot`.
 
 ### littlefs
 Criteria: a published on-disk format, an independent second implementation to test against,
@@ -63,8 +75,8 @@ power-loss safety, small enough to read. (Rust is required by tenet 3, so it is 
   power-loss safe by design, bounded memory. The C reference runs only on the host, as a test oracle:
   every image either implementation writes must read back identically in the other. Nothing C runs
   on the target. (`littlefs2` on crates.io wraps the C library: not used.)
-- **Metadata** in littlefs custom attributes: what 9P `stat` needs (mtime, qid version) and content
-  signatures. No owners or permission bits: access is by capability.
+- **Metadata** in littlefs custom attributes: what 9P `stat` needs (mtime, qid version). No owners
+  or permission bits: access is by capability.
 - **Accepted limits:** large directories and files scale poorly; data is not checksummed.
 - **Rejected:** RedoxFS (no published spec, one implementation, format churn); ext4 as the native
   filesystem (too large).
@@ -73,7 +85,7 @@ power-loss safety, small enough to read. (Rust is required by tenet 3, so it is 
 
 ## beamlet
 One VM = one process = one namespace. `spawn` stays inside the VM; a new trust domain is a new VM
-started by the steward (`Port` / `System.cmd` map onto that).
+started by the steward (`Port` / `System.cmd` map onto that: USERLAND.md, after milestone 1).
 
 ## Prior art
 Plan 9, Inferno/Styx, Fuchsia, WASI preopens, Capsicum.

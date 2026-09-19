@@ -23,12 +23,13 @@ Every platform presents the same contract: virtio-mmio devices, a standard inter
 | Messy SoC (e.g. Orange Pi RV2) | Linux on reserved cores | none; Linux is in the TCB | Later |
 
 ## Driver model
-- **A driver is an unprivileged server.** The kernel keeps only the interrupt controller, the timer
-  and SBI.
+- **A driver is an unprivileged server.** What the kernel keeps: TENETS.md, tenet 1.
 - **Resources are handed in, not discovered.** The loader reads the device tree; the boot manifest
   assigns each driver its device objects (an MMIO range, with a DMA flag if it may do DMA; an IRQ),
   as handles in its startup block (today: loader-emitted grants, DEVICE-GRANTS.md). Drivers do not
   parse the device tree or hardcode addresses.
+- **Interrupts are received,** not handled: a driver thread waits in `receive` on its IRQ handle; the
+  kernel masks the source when it fires and unmasks it at the next receive (KERNEL-SPEC.md, R5).
 - **The server graph is declared** in the boot manifest (`fsd` holds a `blkd` partition; the shell
   holds a directory handle). No lookup by name.
 - **Trivial drivers** are the only non-virtio ones: UART (ns16550), RTC (goldfish), and devices of
@@ -40,8 +41,10 @@ Every platform presents the same contract: virtio-mmio devices, a standard inter
   target driven by a malicious device model.
 
 ### DMA
-- **Driver in the TCB (no confinement).** A DMA allocation call, allowed only with an MMIO handle
-  carrying the DMA flag, returns physically contiguous, zeroed pages and their physical address.
+- **Driver in the TCB (no confinement).** `dma_alloc`, allowed only with an MMIO handle carrying the
+  DMA flag, returns physically contiguous, zeroed pages and their physical address, to program the
+  device with. A driver is told the physical address of pages the kernel gave it; it can never map
+  RAM by physical address.
   Clients lend pages to the driver and the driver copies into its own DMA buffers, so client pages
   never reach the device. A DMA driver is trusted like the kernel: kept tiny and audited.
 - **Driver confined (hardware).** On the FPGA, devices reach only the DMA memory channel, and
@@ -61,7 +64,8 @@ Every platform presents the same contract: virtio-mmio devices, a standard inter
 - **Interface capability:** the one link-layer type, "send and receive Ethernet frames". Everything
   that moves frames attaches through it, so the Later designs add servers, not mechanisms.
 - **`ipd`:** `smoltcp` (`no_std`, fuzzed). **One instance per network or trust domain**: a TCP bug
-  reached from an untrusted network cannot touch another network's stack. Serves `/net`.
+  reached from an untrusted network cannot touch another network's stack. Serves `/net`
+  (NAMESPACES.md). A sink: it refuses labelled callers, and admits per account (CONTAINMENT.md).
 - **Firewalling is mostly structural.** Egress: a process connects only where its socket capability
   allows (IP prefix and port). Ingress: nothing listens without a listen capability.
 - **TLS and SSH are end to end**, so drivers and stacks carry ciphertext. `sshd` is Rust (INIT.md);
@@ -83,7 +87,7 @@ server above it, so a hostile disk can neither read nor tamper undetected. Defer
 is the disk and is trusted, and on the FPGA the host is the root of trust (PLATFORM-FPGA.md); it
 returns with a platform whose disk is outside the trust boundary.
 
-### LLM gateway (`gatewayd`)
+### LLM gateway (`gatewayd`; milestone 3)
 Holds API keys, meters token and money budgets per principal, logs calls; a label sink cleared for
 nothing (an on-box model can be cleared for labels). Agents hold a handle to it, never a key.
 

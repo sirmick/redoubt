@@ -61,12 +61,15 @@ One loader serves both widths; paging comes from the width-generic `paging` crat
    fetch faults and the hart traps straight to the kernel entry with a0-a3 and sp intact. All
    pointers handed to the kernel are physmap addresses.
 
-**Decided change** (PACKAGES.md, Launching): the loader will verify the bundle and load only the
-kernel and `init`; every other process starts as the loader stub. `IniE`/`PNam` per process and the
-`grants` entry then go.
+**Decided change** (PACKAGES.md, launching): the loader will verify the bundle and load only the
+kernel and `init`; `init` launches every other process through the loader stub, from the bundle's
+pages. `IniE`/`PNam` per process and the `grants` entry then go, replaced by the boot manifest
+(INIT.md).
 
-Only the boot hart runs. Some bench cases boot QEMU with 2 or 4 harts; the extra harts stay parked
-in the firmware; real SMP is later (PLAN.md).
+Default builds run only the boot hart; with 2 or 4 harts the extra harts stay parked in the
+firmware. With the `smp` feature, `arch/riscv/smp.rs` starts a second hart through SBI HSM at a
+position-independent trampoline that turns paging on and enters the kernel (the `smp-spike` case).
+Real SMP scheduling is after milestone 1 (PLAN.md).
 
 ## SBI consequences for the kernel
 - S-mode `ecall` belongs to the firmware. The kernel's syscalls to itself (`SwitchTo` in the main
@@ -87,7 +90,8 @@ trap, not through the PLIC. Today the kernel exposes it to userspace as if it we
 - one-shot: when it fires the kernel masks `sie.STIE` and dispatches IRQ 0; the handler re-arms it.
 
 There is no preemption: threads are rescheduled when messages are delivered or they yield. The
-decided design (the kernel owns the timer) is in RESOURCES.md.
+decided design (the kernel owns the timer; interrupts are received, not handled) is in RESOURCES.md
+and KERNEL-SPEC.md.
 
 ## Fail closed
 - No usable `/chosen/rng-seed` (at least 16 bytes): the loader refuses to boot; a kernel started

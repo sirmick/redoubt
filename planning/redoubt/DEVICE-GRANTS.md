@@ -26,6 +26,7 @@ Bench cases declare grants with `[[grant]]` tables; the bench writes the `grants
 ## Replacement (decided)
 MMIO regions (with a DMA flag) and IRQs become kernel device objects reached through handles. `init`
 receives all of them and places each driver's handles in its startup block, as the boot manifest
-says; mapping a device and claiming an interrupt take a handle. Then the `grants` entry, the `Grnt`
+says (INIT.md); mapping a device takes a handle, and a driver waits for its interrupt with `receive`
+on the IRQ handle (KERNEL-SPEC.md). `ClaimInterrupt` and interrupt handlers go. Then the `grants` entry, the `Grnt`
 tags and the claim-time scan are deleted, and devices get delegation and revocation from the
 capability mechanism (CAPABILITIES.md). `xous-names` (name lookup) is deleted too.

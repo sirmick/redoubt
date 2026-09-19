@@ -53,4 +53,4 @@ The FPGA is "the secure configuration" only if these hold:
 - Which devices sit on card A itself versus served by the host.
 - Per-master window granularity and how the kernel programs it.
 - Whether Vortex needs VRAM windows added, or already isolates contexts.
-- Scale: 32 hardware threads makes SMP the first work after the north star (PLAN.md).
+- Scale: 32 hardware threads makes SMP the first kernel work after milestone 1 (PLAN.md).

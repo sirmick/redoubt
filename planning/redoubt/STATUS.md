@@ -5,8 +5,8 @@ Update this note with each milestone.
 
 | Tenet | Today |
 | --- | --- |
-| 1 Simple | Kernel about 11.4k lines (`kernel/src`); interrupts dispatched one at a time over the PLIC's 1024-source space; loader about 1.1k, `paging` crate about 280. Trap entry and exit are `global_asm!` in `arch/riscv/asm.rs`. Kernel globals are `KernelCell`, not `static mut`; an `smp` feature turns `KernelCell` into a spinlock (host stress-tested; no second hart runs yet). ARM, x86, the in-kernel gdb stub, Precursor, bao1x, VexRiscv, swap and the prebuilt assembly blobs are deleted. |
-| 2 No ambient authority | Devices: (enforced) default deny; a process maps a device page or claims an IRQ only if the bundle's manifest granted it (DEVICE-GRANTS.md, interim). Physical RAM cannot be named by address, and anonymous pages are zeroed. Server connections are still stock Xous password capabilities (128-bit IDs): no handles, badges or revocation yet. |
+| 1 Simple | Kernel about 11.4k lines (`kernel/src`); interrupts dispatched one at a time over the PLIC's 1024-source space; loader about 1.1k, `paging` crate about 280. Trap entry and exit are `global_asm!` in `arch/riscv/asm.rs`. Kernel globals are `KernelCell`, not `static mut`; an `smp` feature turns `KernelCell` into a spinlock: host stress-tested, and a two-hart spike (`smp-spike`) starts a second hart through SBI HSM that runs kernel code and contends on it without losing updates. Default builds run only the boot hart. ARM, x86, the in-kernel gdb stub, Precursor, bao1x, VexRiscv, swap and the prebuilt assembly blobs are deleted. |
+| 2 No ambient authority | Devices: (enforced) default deny; a process maps a device page or claims an IRQ only if the bundle's `grants` entry granted it (DEVICE-GRANTS.md, interim; the boot manifest is designed, INIT.md). Physical RAM cannot be named by address, and anonymous pages are zeroed. Server connections are still stock Xous password capabilities (128-bit IDs): no handles, badges or revocation yet. |
 | 2 W^X | (enforced) `paging::Pte::leaf` cannot express a writable and executable mapping; syscalls asking for one get `InvalidArgument`; the physmap alias of kernel code is read-only; the kernel checks its own address space at boot. Known gap: user code pages have a writable alias in the kernel-only physmap. |
 | 2 Verified boot | (enforced) The loader verifies an Ed25519 signature over the whole bundle and refuses to boot otherwise. One public development key. Open: M-of-N, rollback protection, verifying the loader itself. |
 | 2 Fail closed | No usable RNG seed or a bad bundle signature: refuse to boot. A kernel panic powers off. |
@@ -14,7 +14,7 @@ Update this note with each milestone.
 | 3 All Rust | Kernel and loader: Rust plus `global_asm!`, no C toolchain, on both widths. Firmware can be pure Rust (RustSBI Prototyper; rv32 always uses it). |
 | 4 Standards | SBI, PLIC, Sv32/Sv39, device tree, ELF, ustar. The kernel argument block is our own format, specified in BOOT.md. |
 | 5 Dependencies | Kernel about 20 crates in its dependency tree, loader 8 direct (`fdt-rs`, `sbi-rt`, `elf`, `tar-no-std`, `crc`, `ed25519-compact`, `xous`, `paging`). None vendored or formally audited. |
-| 6 Tested | (enforced) 16 cases, 28 boots across both widths, OpenSBI and RustSBI; attack cases listed below. Host unit test: `cargo test -p xous` round-trips every syscall `Result` variant through its register encoding. No fuzzing yet; the kernel's hosted unit tests are not wired into the bench. |
+| 6 Tested | (enforced) 17 cases, 30 boots across both widths, OpenSBI and RustSBI; attack cases listed below. Host unit test: `cargo test -p xous` round-trips every syscall `Result` variant through its register encoding. No fuzzing yet; the kernel's hosted unit tests are not wired into the bench. |
 | 7 Virtio | Nothing built; the only driver is the ns16550 UART in test programs. |
 
 ## Test cases (`redoubt/tests/`)
@@ -35,4 +35,5 @@ Update this note with each milestone.
 | `loader-rejects-kernel-address` | A program segment in the kernel's range is refused (attack) |
 | `loader-rejects-kernel-entry` | A program entry point in the kernel's range is refused (attack) |
 | `verified-boot-rejects-tamper` | A bundle changed after signing is refused (attack) |
+| `smp-spike` | With the `smp` feature, a second hart started through SBI HSM contends on the spinlock big kernel lock without losing updates |
 | `unsafe-budget` | The `unsafe` ratchet |
