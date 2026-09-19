@@ -174,7 +174,8 @@ impl MemoryManager {
         let mut extra_size = 0;
         for tag in args_iter {
             if tag.name == u32::from_le_bytes(*b"MREx") {
-                // SAFETY: the loader placed the MREx tag data here; it is a table of MemoryRangeExtra (see BOOT.md).
+                // SAFETY: the loader placed the MREx tag data here; it is a table of MemoryRangeExtra (see
+                // BOOT.md).
                 unsafe {
                     assert!(
                         self.extra_regions.is_empty(),
@@ -196,7 +197,9 @@ impl MemoryManager {
         // SAFETY: the loader placed a `mem_size`-entry ownership table at `rpt_base`.
         unsafe { self.allocations = slice::from_raw_parts_mut(rpt_base as *mut Option<PID>, mem_size) };
         // SAFETY: the loader placed an `extra_size`-entry table at `xpt_base` for the extra regions.
-        unsafe { self.extra_allocations = slice::from_raw_parts_mut(xpt_base as *mut Option<PID>, extra_size) }
+        unsafe {
+            self.extra_allocations = slice::from_raw_parts_mut(xpt_base as *mut Option<PID>, extra_size)
+        }
         Ok(())
     }
 
@@ -268,7 +271,8 @@ impl MemoryManager {
     pub fn alloc_page(&mut self, pid: PID) -> Result<usize, xous_kernel::Error> {
         // First fit. (The previous next-fit search computed its starting point with `max`
         // where `min` was meant, so it always scanned from the start anyway.)
-        let index = self.allocations.iter().position(Option::is_none).ok_or(xous_kernel::Error::OutOfMemory)?;
+        let index =
+            self.allocations.iter().position(Option::is_none).ok_or(xous_kernel::Error::OutOfMemory)?;
         self.allocations[index] = Some(pid);
         Ok(self.ram_start + index * PAGE_SIZE)
     }
@@ -309,8 +313,12 @@ impl MemoryManager {
                 ),
             };
 
+            // A request larger than the whole region fits nowhere (and `end - size` would wrap).
+            let Some(last_start) = end.checked_sub(size).filter(|last| *last >= start) else {
+                return Err(xous_kernel::Error::BadAddress);
+            };
             // Look for a sequence of `size` pages that are free.
-            for potential_start in (initial..end - size).step_by(PAGE_SIZE) {
+            for potential_start in (initial..last_start).step_by(PAGE_SIZE) {
                 let mut all_free = true;
                 for check_page in (potential_start..potential_start + size).step_by(PAGE_SIZE) {
                     if !crate::arch::mem::address_available(check_page) {
@@ -659,9 +667,38 @@ impl MemoryManager {
         crate::arch::mem::return_page_inner(self, src_mapping, src_addr, dest_pid, dest_mapping, dest_addr)
     }
 
+    /// Back every demand-paged page of `[address, address + len)` in the current address
+    /// space, so that the range can be lent or moved. Callers hold the memory manager
+    /// already, which is why the backing takes `self` instead of borrowing it again.
     #[cfg(baremetal)]
-    pub fn ensure_page_exists(&mut self, address: usize) -> Result<(), xous_kernel::Error> {
-        crate::arch::mem::ensure_page_exists_inner(address).and(Ok(()))
+    pub fn ensure_range_exists(&mut self, address: usize, len: usize) -> Result<(), xous_kernel::Error> {
+        let end = address.checked_add(len).ok_or(xous_kernel::Error::BadAddress)?;
+        for page in (address..end).step_by(PAGE_SIZE) {
+            crate::arch::mem::ensure_page_exists_inner(self, page)?;
+        }
+        Ok(())
+    }
+
+    /// Refuse to move `[address, address + len)` of the current address space unless every
+    /// page is a frame credited to `pid` in the ownership table. A page `pid` was only lent is
+    /// credited to its lender, not to `pid`, so it fails this check; `move_page` would discover
+    /// the mismatch only after changing the page tables, too late to back out. The pages must
+    /// already be backed (`ensure_range_exists`), so each has a frame to check.
+    #[cfg(baremetal)]
+    pub fn check_owned_range(&self, pid: PID, address: usize, len: usize) -> Result<(), xous_kernel::Error> {
+        let end = address.checked_add(len).ok_or(xous_kernel::Error::BadAddress)?;
+        for page in (address..end).step_by(PAGE_SIZE) {
+            let phys = crate::arch::mem::virt_to_phys(page)?;
+            let owner = if self.is_main_memory(phys as *mut u8) {
+                self.allocations[(phys - self.ram_start) / PAGE_SIZE]
+            } else {
+                self.extra_index(phys).and_then(|index| self.extra_allocations[index])
+            };
+            if owner != Some(pid) {
+                return Err(xous_kernel::Error::ShareViolation);
+            }
+        }
+        Ok(())
     }
 
     /// Claim the given memory for the given process, or release the memory
@@ -766,8 +803,7 @@ impl MemoryManager {
         // Go through additional regions looking for this address, and claim it
         // if it's not in use.
         for region in self.extra_regions {
-            if addr >= (region.mem_start as usize) && addr < (region.mem_start + region.mem_size) as usize
-            {
+            if addr >= (region.mem_start as usize) && addr < (region.mem_start + region.mem_size) as usize {
                 offset += (addr - (region.mem_start as usize)) / PAGE_SIZE;
                 if self.is_peripheral_ram(offset) {
                     // don't allow aliasing of peripheral RAM, because peripheral RAM can be unmapped
@@ -796,8 +832,6 @@ impl MemoryManager {
     fn release_page(&mut self, addr: *mut usize, pid: PID) -> Result<(), xous_kernel::Error> {
         self.claim_release_move(addr, pid, ClaimReleaseMove::Release)
     }
-
-
 
     /// Free all memory that belongs to a process. This does not unmap the
     /// memory from the process, it only marks it as free.

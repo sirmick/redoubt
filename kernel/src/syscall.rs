@@ -8,8 +8,8 @@ use xous_kernel::arch::USER_AREA_END;
 use xous_kernel::*;
 
 use crate::arch;
-use crate::cell::KernelCell;
 use crate::arch::process::Process as ArchProcess;
+use crate::cell::KernelCell;
 use crate::irq::{interrupt_claim, interrupt_free};
 use crate::mem::MemoryManager;
 use crate::server::{SenderID, WaitingMessage};
@@ -937,7 +937,8 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                     (process_inner.mem_heap_base, process_inner.mem_heap_size)
                 });
                 return Ok(xous_kernel::Result::MemoryRange(
-                    // 0-length MemoryRanges are disallowed -- return 4096 as the minimum even though it's a lie.
+                    // 0-length MemoryRanges are disallowed -- return 4096 as the minimum even though it's a
+                    // lie.
                     crate::mem::memory_range(start, if length == 0 { 4096 } else { length }).unwrap(),
                 ));
             }
@@ -958,35 +959,42 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                 })?
             };
 
-            // Mark the new pages as "reserved"
-            MemoryManager::with_mut(|mm| {
-                Ok(xous_kernel::Result::MemoryRange(mm.reserve_range(start, delta, flags)?))
-            })
+            // Mark the new pages as "reserved". If that fails, the heap does not grow: a heap size
+            // counting pages that were never reserved would make `DecreaseHeap` unmap nothing.
+            MemoryManager::with_mut(|mm| mm.reserve_range(start, delta, flags))
+                .inspect_err(|_| {
+                    ArchProcess::with_inner_mut(|process_inner| process_inner.mem_heap_size -= delta)
+                })
+                .map(xous_kernel::Result::MemoryRange)
         }
         SysCall::DecreaseHeap(delta) => {
             if delta & 0xfff != 0 {
                 return Err(xous_kernel::Error::BadAlignment);
             }
-            let (start, length, end) = ArchProcess::with_inner_mut(|process_inner| {
-                // Don't allow decreasing the heap beyond the current allocation
-                if delta >= process_inner.mem_heap_size {
-                    return Err(xous_kernel::Error::OutOfMemory);
-                }
+            let (start, size) = ArchProcess::with_inner(|process_inner| {
+                (process_inner.mem_heap_base, process_inner.mem_heap_size)
+            });
+            // Don't allow decreasing the heap beyond the current allocation
+            if delta >= size {
+                return Err(xous_kernel::Error::OutOfMemory);
+            }
+            let end = start + size;
 
-                let end = process_inner.mem_heap_base + process_inner.mem_heap_size;
-                process_inner.mem_heap_size -= delta;
-                Ok((process_inner.mem_heap_base, process_inner.mem_heap_size, end))
-            })?;
-
-            // Unmap the pages from the heap
+            // Unmap the pages from the heap. A page the process has lent out is refused; the heap
+            // then keeps its size, and the pages unmapped so far are simply gone from it.
             MemoryManager::with_mut(|mm| {
                 for page in ((end - delta)..end).step_by(xous_kernel::arch::PAGE_SIZE) {
-                    mm.unmap_page(page as *mut usize).expect("unable to unmap page");
+                    mm.unmap_page(page as *mut usize)?;
                 }
+                Ok(())
+            })?;
+            let length = ArchProcess::with_inner_mut(|process_inner| {
+                process_inner.mem_heap_size -= delta;
+                process_inner.mem_heap_size
             });
 
             // Return the new size of the heap
-            Ok(xous_kernel::Result::MemoryRange(crate::mem::memory_range(start, length).unwrap()))
+            crate::mem::memory_range(start, length).map(xous_kernel::Result::MemoryRange)
         }
         SysCall::SwitchTo(new_pid, new_tid) => SystemServices::with_mut(|ss| {
             SWITCHTO_CALLER.with(|caller| {
@@ -1014,7 +1022,8 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
         }
         SysCall::Yield => do_yield(pid, tid),
         SysCall::ReturnToParent(_pid, _cpuid) => {
-            // SAFETY: the block only calls the (unsafe-ABI) set_isr_return_pair; the state access itself is checked.
+            // SAFETY: the block only calls the (unsafe-ABI) set_isr_return_pair; the state access itself is
+            // checked.
             unsafe {
                 if let Some((parent_pid, parent_ctx)) = SWITCHTO_CALLER.with(|c| c.take()) {
                     crate::arch::irq::set_isr_return_pair(parent_pid, parent_ctx)
@@ -1191,7 +1200,9 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
         },
 
         #[cfg(feature = "sbi")]
-        SysCall::PlatformSpecific(op, a2, a3, _a4, _a5, _a6, _a7) => crate::platform::sbi::platform_call(pid, op, a2, a3),
+        SysCall::PlatformSpecific(op, a2, a3, _a4, _a5, _a6, _a7) => {
+            crate::platform::sbi::platform_call(pid, op, a2, a3)
+        }
 
         #[cfg(not(feature = "sbi"))]
         SysCall::PlatformSpecific(_a1, _a2, _a3, _a4, _a5, _a6, _a7) => {

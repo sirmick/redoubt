@@ -99,11 +99,32 @@ fn map_page_in(
     assert!(phys & (PAGE_SIZE - 1) == 0);
     check_permissions(flags)?;
     let slot = walk(root, virt, Some((mm, pid)))?;
-    if slot.get().is_valid() {
+    if is_occupied(slot.get()) {
         klog!("Page {:08x} already allocated!", virt);
         return Err(xous_kernel::Error::MemoryInUse);
     }
     slot.set(Pte::leaf(phys, flags));
+    Ok(())
+}
+
+/// A page that is mapped, or lent out (the `S` bit, with `VALID` cleared). A lent page's entry
+/// is the lender's only record of the loan: the borrower's return restores it. So nothing but
+/// that return may overwrite it: not a new mapping, a reservation or an unmap.
+fn is_occupied(pte: Pte) -> bool { pte.is_valid() || pte.has(MMUFlags::S) }
+
+/// Get `virt` in `space` ready for a mapping on behalf of `pid`: allocate the page tables it
+/// needs and check that nothing occupies it. A `map_page_in` there with valid flags then cannot
+/// fail, so a transfer of many pages can prepare them all before it changes anything.
+pub fn prepare_map(
+    mm: &mut MemoryManager,
+    space: &MemoryMapping,
+    pid: PID,
+    virt: usize,
+) -> Result<(), xous_kernel::Error> {
+    let slot = walk(root_of(space.satp), virt, Some((mm, pid)))?;
+    if is_occupied(slot.get()) {
+        return Err(xous_kernel::Error::MemoryInUse);
+    }
     Ok(())
 }
 
@@ -166,7 +187,11 @@ pub fn verify_kernel_wx() -> usize {
         executable += 1;
         assert!(!pte.has(MMUFlags::W), "kernel page {:#x} is writable and executable", pte.phys());
         let alias = lookup(root, physmap_virt(pte.phys())).expect("kernel frame is missing from the physmap");
-        assert!(!alias.has(MMUFlags::W), "kernel code frame {:#x} is writable through the physmap", pte.phys());
+        assert!(
+            !alias.has(MMUFlags::W),
+            "kernel code frame {:#x} is writable through the physmap",
+            pte.phys()
+        );
         assert!(!alias.has(MMUFlags::X), "the physmap must never be executable");
     });
     executable
@@ -319,7 +344,7 @@ impl MemoryMapping {
         flags: MemoryFlags,
     ) -> Result<(), xous_kernel::Error> {
         let slot = walk(current_root(), addr, Some((mm, crate::arch::current_pid())))?;
-        if slot.get().is_valid() {
+        if is_occupied(slot.get()) {
             // can't double-reserve pages
             return Err(xous_kernel::Error::ShareViolation);
         }
@@ -334,8 +359,8 @@ impl MemoryMapping {
             // No leaf table, so nothing was ever reserved here.
             return Ok(());
         };
-        // Refuse to touch a live mapping. Only undo reservations.
-        if slot.get().is_valid() {
+        // Refuse to touch a live or lent mapping. Only undo reservations.
+        if is_occupied(slot.get()) {
             return Err(xous_kernel::Error::ShareViolation);
         }
         slot.set(Pte::EMPTY);
@@ -395,6 +420,9 @@ pub fn unmap_page_inner(_mm: &mut MemoryManager, virt: usize) -> Result<usize, x
         return Err(xous_kernel::Error::BadAlignment);
     }
     let slot = walk(current_root(), virt, None)?;
+    if slot.get().has(MMUFlags::S) {
+        return Err(xous_kernel::Error::ShareViolation);
+    }
     let phys = slot.get().phys();
     slot.set(Pte::EMPTY);
     flush_tlb();
@@ -415,13 +443,12 @@ pub fn move_page_inner(
     if !previous.is_valid() {
         return Err(xous_kernel::Error::BadAddress);
     }
-    // Invalidate the old entry
-    src.set(Pte::EMPTY);
-
+    // Map in the destination first: if that fails, nothing has changed.
     let flags = translate_flags(untranslate_flags(previous.flags().bits())) | user_flag(dest_pid);
-    let result = map_page_in(root_of(dest_space.satp), mm, dest_pid, previous.phys(), dest_addr as usize, flags);
+    map_page_in(root_of(dest_space.satp), mm, dest_pid, previous.phys(), dest_addr as usize, flags)?;
+    src.set(Pte::EMPTY);
     flush_tlb();
-    result
+    Ok(())
 }
 
 /// Determine if a virtual page has been lent.
@@ -452,16 +479,17 @@ pub fn lend_page_inner(
     if !current.is_valid() || current.has(MMUFlags::S) {
         return Err(xous_kernel::Error::ShareViolation);
     }
-    src.set(current.without(MMUFlags::VALID).with(MMUFlags::S));
 
     let mut new_flags = MMUFlags::R | user_flag(dest_pid);
     if mutable && current.has(MMUFlags::W) {
         new_flags |= MMUFlags::W;
     }
 
-    let result = map_page_in(root_of(dest_space.satp), mm, dest_pid, phys, dest_addr as usize, new_flags);
+    // Map in the destination first: if that fails, nothing has changed.
+    map_page_in(root_of(dest_space.satp), mm, dest_pid, phys, dest_addr as usize, new_flags)?;
+    src.set(current.without(MMUFlags::VALID).with(MMUFlags::S));
     flush_tlb();
-    result.map(|_| phys)
+    Ok(phys)
 }
 
 /// Return a page from `src_space` back to `dest_space`.
@@ -475,17 +503,19 @@ pub fn return_page_inner(
 ) -> Result<usize, xous_kernel::Error> {
     let src = walk(root_of(src_space.satp), src_addr as usize, None)?;
     let phys = src.get().phys();
-
-    // If the page is not valid in this program, we can't return it.
+    // Check both ends before changing either: the borrower must hold the page, and the lender's
+    // entry must still record the loan of this very frame. Unmap, map and reserve refuse to
+    // touch a lent entry, so the second check failing means a kernel bug, but it is refused
+    // like the first rather than trusted.
     if !src.get().is_valid() {
         return Err(xous_kernel::Error::ShareViolation);
     }
-    src.set(Pte::EMPTY);
-
     let dest = walk(root_of(dest_space.satp), dest_addr as usize, None)
-        .expect("page wasn't lent in destination space");
-    // If the page wasn't marked as `Shared` in the destination address space, bail.
-    assert!(dest.get().has(MMUFlags::S), "page wasn't shared in destination space");
+        .or(Err(xous_kernel::Error::ShareViolation))?;
+    if !dest.get().has(MMUFlags::S) || dest.get().phys() != phys {
+        return Err(xous_kernel::Error::ShareViolation);
+    }
+    src.set(Pte::EMPTY);
     dest.set(dest.get().without(MMUFlags::S | MMUFlags::P).with(MMUFlags::VALID));
     flush_tlb();
     Ok(phys)
@@ -498,7 +528,11 @@ fn checked_phys(pte: Pte) -> Result<usize, xous_kernel::Error> {
     }
     if !pte.is_valid() {
         // Reserved for demand paging, but not yet backed by a page.
-        return Err(if pte.is_empty() { xous_kernel::Error::BadAddress } else { xous_kernel::Error::MemoryInUse });
+        return Err(if pte.is_empty() {
+            xous_kernel::Error::BadAddress
+        } else {
+            xous_kernel::Error::MemoryInUse
+        });
     }
     Ok(pte.phys())
 }
@@ -517,10 +551,14 @@ pub fn virt_to_phys_pid(pid: PID, virt: usize) -> Result<usize, xous_kernel::Err
 }
 
 /// Back a reserved (demand-paged) address with a real, zeroed page.
-pub fn ensure_page_exists_inner(address: usize) -> Result<usize, xous_kernel::Error> {
+///
+/// Takes the memory manager rather than borrowing it: the lend and move paths reach here
+/// while they already hold it, and a second borrow of the same `KernelCell` panics the
+/// kernel (or, with `smp`, deadlocks). The page-fault handler borrows it for this call.
+pub fn ensure_page_exists_inner(mm: &mut MemoryManager, address: usize) -> Result<usize, xous_kernel::Error> {
     // Disallow mapping memory outside of user land
     if !MemoryMapping::current().is_kernel() && address >= USER_AREA_END {
-        return Err(xous_kernel::Error::OutOfMemory);
+        return Err(xous_kernel::Error::BadAddress);
     }
     let virt = address & !(PAGE_SIZE - 1);
     let slot = walk(current_root(), virt, None).or(Err(xous_kernel::Error::BadAddress))?;
@@ -534,9 +572,9 @@ pub fn ensure_page_exists_inner(address: usize) -> Result<usize, xous_kernel::Er
         return Err(xous_kernel::Error::BadAddress);
     }
 
-    let new_page = MemoryManager::with_mut(|mm| {
-        mm.alloc_page(crate::arch::process::current_pid()).expect("Couldn't allocate new page")
-    });
+    // Out of memory is the process's problem, not the kernel's: the syscall fails, or the
+    // faulting process is terminated.
+    let new_page = mm.alloc_page(crate::arch::process::current_pid())?;
     // Zero through the physmap before the page becomes visible to the process.
     // SAFETY: `alloc_page` returns a RAM frame that was free until now.
     unsafe { window().zero_frame(new_page) };
@@ -564,7 +602,9 @@ pub fn page_flags(virt: usize) -> Option<MemoryFlags> {
         return None;
     }
     let mut flags = MemoryFlags::empty();
-    for (bit, flag) in [(MMUFlags::R, MemoryFlags::R), (MMUFlags::W, MemoryFlags::W), (MMUFlags::X, MemoryFlags::X)] {
+    for (bit, flag) in
+        [(MMUFlags::R, MemoryFlags::R), (MMUFlags::W, MemoryFlags::W), (MMUFlags::X, MemoryFlags::X)]
+    {
         if pte.has(bit) {
             flags = flags | flag;
         }
