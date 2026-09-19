@@ -19,6 +19,9 @@ use crate::target::Machine;
 /// so that a panic right after the last expected line still fails the case. Cases that end
 /// by powering off are instead read to the end (`Boot::poweroff`).
 const GRACE: Duration = Duration::from_millis(50);
+/// The same for a `debug_assertions` case: a check firing a moment after the last expected
+/// line is the whole point of that build, so the window is wide enough to catch it.
+const CHECKED_GRACE: Duration = Duration::from_millis(1000);
 
 pub enum Verdict {
     /// Everything expected appeared. Carries what each `distinct_across_boots` pattern captured.
@@ -230,7 +233,8 @@ pub fn run(image: &Image, boot: &Boot, workspace: &Path, forwards: &[Forward], l
         }
     }
     // Everything expected happened; now the rest of the output must be clean too.
-    let until = if boot.poweroff { deadline } else { Instant::now() + GRACE };
+    let grace = if boot.debug_assertions { CHECKED_GRACE } else { GRACE };
+    let until = if boot.poweroff { deadline } else { Instant::now() + grace };
     loop {
         match console.next(until)? {
             Line::Text(_) => {}

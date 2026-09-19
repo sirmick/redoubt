@@ -1,0 +1,12 @@
+description = "Bench self-check: `debug_assertions = true` really builds the kernel with the checks on"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The kernel prints this line only under `cfg!(debug_assertions)`, so it fails if the checked
+# profile ever stops reaching the build and the other checked cases quietly boot a release kernel.
+debug_assertions = true
+programs = ["log-server"]
+expect = ['^kernel: checks on \(debug assertions, overflow checks\)$']
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]

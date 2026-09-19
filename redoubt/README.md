@@ -41,7 +41,7 @@ smp = [1, 4]                 # one boot per hart count (default [1])
 memory_mib = 32              # guest RAM (default 256); small for cases that exhaust it on purpose
 timeout_secs = 60            # default 60; fractions allowed
 kernel_features = []         # extra kernel features, e.g. ["debug-print"]
-debug_assertions = false     # true: build the kernel and the loader with debug assertions
+debug_assertions = false     # true: build the kernel and the loader with the checks on
                              # (see "Debug assertions" below)
 expect = ['regex 1', 'regex 2']   # must each match a console line, in this order
 forbid = ['regex']                # must never match; also always forbidden:
@@ -74,22 +74,39 @@ or a program that owns the UART.
 ## Debug assertions
 
 `debug_assertions = true` in a boot case builds the kernel and the loader — the trusted base,
-not the programs — with `debug-assertions` and `overflow-checks` on, the way the debug profile
-couples them. Then `core`'s preconditions on every raw-pointer call (`slice::from_raw_parts`
-wants an aligned, non-null pointer to initialised memory; `ptr::read`, `copy_nonoverlapping`
-and friends want the same), the kernel's own `debug_assert!`s and every arithmetic overflow
-panic instead of being silent undefined behaviour. A boot that trips one prints `PANIC`, which
-every case forbids, so the case fails.
+not the programs — with the workspace's `checked` profile: `release` with `debug-assertions`
+and `overflow-checks` on. Then three things that are silent in a release build become a panic,
+which every case forbids as `PANIC`:
 
-The checked build is the release profile with those two flags set through the environment, in
-its own target directory (`target/debug-assertions/`), so it never invalidates the ordinary
-release build, and switching between the two rebuilds neither. A handful of cases use it, over
-both widths, rather than all of them, to keep the run short: `budget`,
-`budget-syscall-attack`, `lend-untouched-page`, `ipc`, `all-together` and `smp-spike`.
+- `core`'s preconditions on raw-pointer calls. `slice::from_raw_parts` wants a non-null,
+  aligned pointer to initialised memory it may read for the whole length; `ptr::read`,
+  `copy_nonoverlapping` and their friends want the same. Breaking one is undefined behaviour,
+  and in a release build nothing says so (WP-K0b found the `MREx` table read through a
+  misaligned pointer this way).
+- The kernel's own `debug_assert!`s. Today that is one: every error a call returns must be in
+  its row of the spec's error table (`kernel/src/redoubt.rs`), which `budget-syscall-attack`
+  exercises over every call and 4000 hostile values.
+- Arithmetic overflow, wherever the kernel or the loader does not use a checked or wrapping
+  operation on purpose.
 
-To check a case that does not set the field, or every case at once, set the flags by hand:
+A checked case also gets a longer grace period after its last `expect` (1 s rather than 50 ms),
+so a check that fires a moment later still fails the case.
 
-    CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true cargo testbench
+Cargo keeps each profile's artifacts apart, so a checked build never invalidates the release
+one and switching between the two rebuilds neither. By hand:
+
+    cargo build --profile checked --target riscv64imac-unknown-none-elf -p xous-kernel --features qemu-virt
+
+A handful of cases use the profile, over both widths, rather than all of them, to keep the run
+short: `budget`, `budget-syscall-attack`, `lend-untouched-page`, `ipc`, `all-together` and
+`smp-spike`. `bench-debug-assertions` is the self-check that the profile really reaches the
+build: the kernel prints one line under `cfg!(debug_assertions)`, that case expects it, and
+`bench-debug-assertions-off` forbids it in an ordinary release boot.
+
+To run a case that does not set the field, or the whole suite, with the checks on, set the two
+flags in the environment (they are separate; the release profile is what the bench builds):
+
+    CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS=true cargo testbench
 
 ## Poking at it by hand
 
