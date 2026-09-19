@@ -158,17 +158,13 @@ Open, in rough priority order:
 - [ ] Delete what we do not run (tenet 1), pending the rv32 decision: swap, gdb stub, ARM, Precursor
       and bao1x platforms, the Sv32 window code, prebuilt blobs.
 - [ ] Bench: inject a device tree, to test fail-closed paths (no rng-seed, no memory node, junk).
-- [ ] **Firmware is C (OpenSBI), in M-mode** (tenet 3). Goal: a pure-Rust firmware. RustSBI Prototyper
-      (HEAD eae4cc7) builds for rv64/rv32 and boots `loader64`, BUT **root-caused blocker**: its device
-      tree re-serialization is lossy. `firmware/prototyper/src/devicetree.rs` models the tree as a
-      partial `Tree` struct (`model`, `cpus`, `soc`, `memory`) and re-emits via `serde_device_tree::ser::to_dtb`
-      to add its firmware reservation, so every unmodeled node is dropped -- including `/chosen`, which
-      carries `linux,initrd-start/end` and `rng-seed`. Result: the loader finds no initrd (and would
-      lose the RNG seed). **Report upstream** (lossy DT round-trip drops /chosen and any unmodeled node).
-      Paths: (a) fix RustSBI to preserve unmodeled nodes / edit the DTB in place; (b) RustSBI payload
-      mode (embeds the payload, no initrd via /chosen -- but still loses rng-seed); (c) another Rust SBI.
-      OpenSBI stays the working firmware meanwhile. Reproduce: boot with `-bios <rustsbi-prototyper>`.
-- [x] **Verified boot**: the loader authenticates the whole bundle with an embedded Ed25519 key
+- [x] **Pure-Rust firmware works (tenet 3).** loader64 now boots identically under OpenSBI and RustSBI
+      Prototyper, verified with the ipc bundle. The blocker was NOT RustSBI: it emits a valid device
+      tree. The bug was ours -- the `fdt` 0.1.5 crate mis-parses RustSBI's re-serialized tree (cannot
+      find `/chosen` or the memory node, panics on a valid tree). Fixed by switching loader64 to the
+      mature `fdt-rs` parser (new `loader64/src/dt.rs`, one-pass `Platform` extraction), which handles
+      both firmwares' trees. Per tenet 5, a parser that fails on a valid tree is a bug in us. RustSBI is
+      not the working firmware in the bench yet (needs `--firmware` wired into more cases), but it boots.- [x] **Verified boot**: the loader authenticates the whole bundle with an embedded Ed25519 key
       (`ed25519-compact`, pure Rust, self-contained) before running any of it; tamper -> fail closed.
       Design: VERIFIED-BOOT.md. Test: `verified-boot-rejects-tamper`. Open: loader itself unverified on
       QEMU (needs firmware/ROM); no rollback protection or key rotation.
