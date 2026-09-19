@@ -1,4 +1,4 @@
-//! Programs that run inside Xous under the test bench (`redoubt/testbench`).
+//! Programs that run inside Redoubt under the test bench (`redoubt/testbench`).
 //!
 //! They are `no_std`, because `std` is not ported to rv64 yet, and they print through
 //! `log-server`, which owns the UART. Everything a client prints travels to the server

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Platform support for any machine where the kernel runs under SBI firmware: QEMU
-//! `virt`, softcores, SBCs. Nothing here is specific to a board or to XLEN.
+//! `virt` and, later, FPGA softcores. Nothing here is specific to a board or to XLEN.
 //!
 //! The kernel owns no devices here. Its console goes through the SBI debug console, and
 //! every real device (UART, virtio, ...) belongs to a userspace server.

@@ -1,6 +1,6 @@
 [package]
 authors = ["Sean Cross <sean@xobs.io>"]
-description = "Core kernel for Xous, including task switching and memory management"
+description = "Redoubt microkernel: task switching, memory management, capability IPC"
 license = "MIT OR Apache-2.0"
 edition = "2018"
 name = "xous-kernel"
@@ -35,7 +35,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(ci)', 'cfg(baremetal)'] }
 # Capabilities. Boards select these; code keys on them rather than on the CPU's XLEN.
 # See "Hardware abstraction" in planning/redoubt/PLAN.md.
 sbi = ["dep:sbi-rt", "rand_chacha"] # runs in S-mode under SBI firmware (OpenSBI, RustSBI)
-plic = ["dep:plic"]                 # standard RISC-V PLIC; otherwise VexRiscv's interrupt CSRs
+plic = ["dep:plic"]                 # standard RISC-V PLIC interrupt controller
 
 # Boards. Everything else about these machines comes from the device tree at boot.
 qemu-virt = ["sbi", "plic"]

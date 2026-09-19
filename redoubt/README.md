@@ -1,13 +1,17 @@
 # redoubt
 
-Fork-specific code for the RV64 / SMP / filesystem work. Plan and design notes: `planning/redoubt/`.
+The Redoubt-specific crates: the page-table library and the test bench. Architecture and
+plans for what comes next: `planning/redoubt/` (start with its `README.md` and `STATUS.md`).
 
 | Path              | What                                                                          |
 | ----------------- | ----------------------------------------------------------------------------- |
-| `../loader64/`    | Loader for SBI + device tree platforms                                        |
-| `test-programs/`  | `no_std` programs that run inside Xous: `log-server`, `ipc-client`, `timer-test`, `uart-echo` |
+| `paging/`         | Typed Sv32/Sv39 page tables — the one place page-table memory is touched (loader + kernel) |
+| `test-programs/`  | `no_std` programs that run inside Redoubt: `log-server`, `rng-test`, `timer-test`, `uart-echo`, `mem-attack` |
 | `testbench/`      | Host tool: builds, injects programs, boots QEMU, asserts on the console       |
 | `tests/`          | Test cases for the bench, one TOML file each                                  |
+
+The kernel is in `../kernel/`, the boot loader (both widths) in `../loader/`, and the `xous`
+syscall ABI in `../xous-rs/`.
 
 ## Running tests
 
@@ -40,8 +44,8 @@ after = "claimed irq 10"
 send = "xyz"
 ```
 
-`kind = "build"` with `package` and `features` only checks that something compiles for the target. It
-covers configurations QEMU cannot boot, such as the Precursor kernel.
+`kind = "build"` with `package` and `features` only checks that something compiles for the target —
+coverage for a configuration the bench does not (or cannot yet) boot.
 
 In-guest programs print through `log-server` (`test_programs::Logger`) and finish with
 `<NAME> TEST PASSED` or `<NAME> TEST FAILED`.
@@ -55,7 +59,8 @@ In-guest programs print through `log-server` (`test_programs::Logger`) and finis
 ## Other firmware
 
 `--firmware <image>` replaces QEMU's bundled OpenSBI for a test run or for `--run`, e.g. a RustSBI
-Prototyper build. See "Firmware" in `planning/redoubt/PLAN.md` for the current state.
+Prototyper build. rv32 has no bundled OpenSBI, so it always boots under RustSBI; run
+`../scripts/fetch-rustsbi.sh` to build both firmwares (see the script's header).
 
 ## Hostile inputs
 

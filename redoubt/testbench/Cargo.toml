@@ -3,7 +3,7 @@ name = "testbench"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "Boots Xous under QEMU with injected programs and asserts on its console output"
+description = "Boots Redoubt under QEMU with injected programs and asserts on its console output"
 
 [dependencies]
 anyhow = "1"

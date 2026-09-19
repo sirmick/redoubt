@@ -1,4 +1,4 @@
-//! The Xous test bench: build a kernel, inject programs, boot it under QEMU, and assert
+//! The Redoubt test bench: build a kernel, inject programs, boot it under QEMU, and assert
 //! on what appears on the console.
 //!
 //! Test cases are TOML files in `redoubt/tests/` (format: `case.rs`). Run with

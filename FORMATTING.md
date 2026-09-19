@@ -1,6 +1,6 @@
 # Formatting Guidelines
 
-All contributions to Xous must comply with two formatting guidelines:
+All contributions to Redoubt must comply with two formatting guidelines:
 
 1. Run `rustfmt` using our `rustfmt.toml` with a nightly toolchain
 2. Remove trailing whitespaces
