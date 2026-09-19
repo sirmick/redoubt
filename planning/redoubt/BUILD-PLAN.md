@@ -198,6 +198,8 @@ not needed.
   handle, receive on an IRQ handle not held, name RAM by physical address.
 - Also: `irq-attack` rewritten for IRQ handles, its verdict from a victim holding the handle;
   today its out-of-range and double-claim attempts prove only survival.
+- Also: `map_anon`, `unmap`, `set_flags` (R11) on the Redoubt path, replacing the legacy memory
+  calls. (Until a call's package runs, it decodes and returns `InvalidArgument`: WP-K1.)
 - Needs: WP-K1 (and WP-K2 for `receive`).
 
 **WP-K4. Process creation and exit.** Size M.
@@ -220,6 +222,8 @@ not needed.
   the loader refuses data entries).
 - Also: `wx` re-based on exit notices (a checker launches the attacker and takes the verdict
   from the kernel's notice), replacing today's survival-only verdict.
+- Also: `thread_create`, `thread_exit`, `process_exit`; the R8, R9 and I8 cases WP-K1 could not
+  stage (a user-class caller needs `process_create`).
 - Needs: WP-K2, WP-A2.
 
 **WP-K5. Timer, timeouts and preemption.** Size M.

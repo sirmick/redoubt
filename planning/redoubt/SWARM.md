@@ -60,7 +60,7 @@ merged; the waves show what can run together.
 | K0 | merged | wp-k0 | f7b9fdd16 |
 | T1b | merged | wp-t1b | 6cd067a39 |
 | R1 | merged | wp-r1 | 8298608af (carried the answers 39-42, 50-53 part of R1b) |
-| K1 | review | wp-k1 | kernel track |
+| K1 | merged | wp-k1 | e1d2c6216 |
 | A2 | waiting | | ABI update for answers 1-101; after the owner confirms 102-110 and reviews the design |
 | W2 | building | wp-w2 | generator: handle kinds, Malformed = 1 |
 | all others | waiting | | see BUILD-PLAN.md "Needs" |
