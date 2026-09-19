@@ -40,9 +40,15 @@ minus its ambient parts.
 
   `new_connection` mints a connection rooted at `root`, a path relative to the caller's own root
   (empty for the same root; it never climbs above it), and returns it with a random connection id.
-  `disconnect` frees the connection with that id and every connection minted under it; only the
-  holder of the id can name it (CAPABILITIES.md, disconnect). The table is fenced until the package
-  that generates its codec (BUILD-PLAN.md, WP-R1b) unfences it and adds its wire marker.
+  `quota` is the byte quota the new root gets, carved from the granter's own (0: no quota of its
+  own, it shares the granter's). The file server decides what a byte costs and whether the carve
+  fits; the shared library only passes the number on, so a server that meters nothing ignores it
+  (questions 117 and 118). `disconnect` frees the connection with that id and every connection
+  minted under it, and returns its quota; only the holder of the id can name it (CAPABILITIES.md,
+  disconnect). `refused` (code 3) answers a `new_connection` whose root does not exist or the
+  caller cannot read, or whose cap, quota or server refuses it; `malformed` (code 1) stays for a
+  request that does not decode, and `not_yours` (code 2) for a `disconnect` naming an id the
+  caller did not receive (question 114).
 - The 9P codec parses untrusted bytes, so it is written once, shared by every server, and fuzzed.
   Independent 9P implementations give differential tests.
 

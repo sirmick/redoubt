@@ -62,7 +62,7 @@ merged; the waves show what can run together.
 | R1 | merged | wp-r1 | 8298608af (carried the answers 39-42, 50-53 part of R1b) |
 | K1 | merged | wp-k1 | e1d2c6216 |
 | A2 | merged | wp-a2 | c98034520 |
-| R1b | building | wp-r1b | round-4 library changes |
+| R1b | merged | wp-r1b | 86117e7af |
 | W2 | merged | wp-w2 | 3715363a9 |
 | K0b | building | wp-k0b | undefined behaviour at kernel/src/mem.rs:207; a debug-assertion kernel boots in the bench |
 | all others | waiting | | see BUILD-PLAN.md "Needs" |

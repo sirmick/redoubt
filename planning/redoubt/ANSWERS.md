@@ -141,3 +141,24 @@ classification; the spec's positional order stands), 101.
 
 Revisited: 56 revised Rec accepted (check handle kinds by use; the table's kind is documentation);
 57 and 58 are replaced by 82 (`serve(msg_id)`, no fallback); 62 is moot with 69; 64 as recommended.
+
+---
+
+# Answers to 102-115 (owner, 2026-09-19; confirmed)
+
+**All Rec, except 103 (replaced).**
+
+**103. No `first` flag; no strict priority at all.** One stride queue for every budget. `init`,
+the steward and drivers get large weights in the manifest instead of running first.
+- A driver woken by an interrupt re-enters at the minimum pass (R12), so it runs within about one
+  `SLICE`; strict priority only matters for a driver that spins, which is a bug to find, not a mode
+  to support.
+- The steward's large weight keeps logout and ending a lease prompt (answers 84, 90).
+- Removes: the `first` flag, the rules for setting it, and the two-tier ordering in R12. Class now
+  means trust only (R1's label-check exemption, `budget_usage`), never scheduling.
+- Stated cost: up to one `SLICE` of latency for drivers and the steward under load.
+- RESOURCES.md, KERNEL-SPEC.md (R12, Budget fields) and INIT.md (manifest weights) change
+  accordingly, with a HISTORY.md entry.
+
+Accepted as recommended: 102 (`MAX_HANDLES` = 4096, `TooLarge`), 104, 105, 106, 107, 108, 109,
+110, 111 (charge table pages in use; the model follows), 112, 113, 114, 115.
