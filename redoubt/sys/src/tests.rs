@@ -130,13 +130,14 @@ fn snake_case(camel: &str) -> String {
 #[test]
 fn numbers_and_codes_are_dense_from_one() {
     for (i, number) in Number::ALL.iter().enumerate() {
-        assert_eq!(*number as u64, i as u64 + 1);
+        assert_eq!(*number as u64, u64::from(NUMBER_BASE) + i as u64 + 1);
         assert_eq!(Number::from_raw(*number as u64), Some(*number));
         // The spec's name, typed once in the table, agrees with the variant's.
         assert_eq!(number.name(), snake_case(&std::format!("{number:?}")));
     }
     assert_eq!(Number::from_raw(0), None);
-    assert_eq!(Number::from_raw(CALLS + 1), None);
+    assert_eq!(Number::from_raw(u64::from(NUMBER_BASE)), None);
+    assert_eq!(Number::from_raw(u64::from(NUMBER_BASE) + CALLS + 1), None);
     for (i, error) in Error::ALL.iter().enumerate() {
         assert_eq!(*error as u64, i as u64 + 1);
         assert_eq!(Error::from_code(*error as u64), Some(*error));
@@ -250,6 +251,8 @@ fn malformed_calls_are_refused() {
     let wide = 1 << 32; // too wide for a 32-bit field (only rv64 registers can hold it)
     assert_eq!(decode([0; REGS]), Err(Error::InvalidArgument), "call number 0");
     assert_eq!(decode([CALLS + 1, 0, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "unknown call");
+    let past_last = u64::from(NUMBER_BASE) + CALLS + 1;
+    assert_eq!(decode([past_last, 0, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "unknown call");
     let map_anon = Number::MapAnon as u64;
     assert_eq!(decode([map_anon, 0x1000, 8, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "unknown flag");
     assert_eq!(

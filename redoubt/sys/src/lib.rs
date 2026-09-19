@@ -6,7 +6,7 @@
 //!
 //! # Registers
 //!
-//! A call is an `ecall` with `a0` = the call's [`Number`] and its arguments in `a1..=a7`, in the
+//! A call is an `ecall` with `a0` = the call's [`Number`] (from [`NUMBER_BASE`] + 1) and its arguments in `a1..=a7`, in the
 //! order listed on each [`Call`] variant. The kernel answers in the same eight registers:
 //! `a0` = 0 and the result in `a1..=a7` (see [`Return`]), or `a0` = an [`Error`] code and
 //! `a1..=a7` = 0. The kernel preserves every register other than `a0..=a7` across the `ecall`.
@@ -90,7 +90,7 @@ mod ret;
 #[cfg(test)]
 mod tests;
 
-pub use call::{Call, Handle, MemFlags, MintSource, Number, Pages, ResetKind};
+pub use call::{Call, Handle, MemFlags, MintSource, NUMBER_BASE, Number, Pages, ResetKind};
 #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
 pub use ecall::syscall;
 pub use error::Error;

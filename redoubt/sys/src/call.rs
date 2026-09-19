@@ -188,16 +188,23 @@ impl Arg for ResetKind {
     fn read(r: &mut Reader) -> Result<Self, Error> { r.tag(&[ResetKind::PowerOff, ResetKind::Reboot]) }
 }
 
-/// The one table of calls. Each entry gives a [`Number`] variant and its value (it travels in
-/// `a0`; 0 is not a call), the spec's name, and the [`Call`] variant's arguments in register
+/// Added to every call's number in the table below. Until WP-K6 deletes the legacy Xous calls,
+/// the kernel serves both interfaces, and the legacy numbers (0..=46, `xous::SysCallNumber`) use
+/// the same register, `a0`; numbers from here up are disjoint from them, so the kernel routes a
+/// call by `a0` alone. WP-K6 can set this to 0.
+pub const NUMBER_BASE: u32 = 0x100;
+
+/// The one table of calls. Each entry gives a [`Number`] variant and its value (plus
+/// [`NUMBER_BASE`], it travels in `a0`; 0 is not a call), the spec's name, and the [`Call`] variant's arguments in register
 /// order (`a1` first). From it the macro generates `Number`, `Number::ALL`, `Number::name`,
 /// `Call`, `Call::number`, `Call::encode` and `Call::decode`.
 macro_rules! calls {
     ($( $(#[$doc:meta])* $variant:ident = $number:literal $name:literal
         $({ $($field:ident: $ty:ty),* })? ; )*) => {
-        /// The call numbers, in KERNEL-SPEC.md's table order.
+        /// The call numbers, in KERNEL-SPEC.md's table order, from [`NUMBER_BASE`] + 1.
         #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-        pub enum Number { $( $variant = $number, )* }
+        #[repr(u32)]
+        pub enum Number { $( $variant = NUMBER_BASE + $number, )* }
 
         impl Number {
             /// Every call, in number order.
