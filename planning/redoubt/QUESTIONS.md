@@ -727,3 +727,13 @@ point to change the IPC design. Several items interact; the cross-references say
 - **62 (badge-notice details):** moot if 69 is accepted. Otherwise, the "last holder" is undefined
   when the last copy was in a discarded message: use the sender's budget.
 - **64 (one name rule):** as recommended.
+
+## From the kernel (WP-K1)
+
+102. **A per-process handle limit.** K1 caps a process's handle table at 32 pages (4096 handles),
+     so the kernel can't be made to allocate an unbounded table. Past that, calls that add a
+     handle get `OutOfMemory`. The spec names no such limit; a budget's page limit bounds the
+     table only indirectly.
+     *Rec:* a constant `MAX_HANDLES` = 4096 in KERNEL-SPEC.md. A call that would exceed it gets
+     `TooLarge`, which is distinguishable from a budget running out of pages, and C1 then compares
+     like with like.
