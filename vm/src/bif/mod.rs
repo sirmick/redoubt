@@ -28,6 +28,7 @@ mod math;
 mod phash;
 mod proc;
 mod unicode;
+mod zlib;
 
 pub use proc::send;
 
@@ -492,6 +493,25 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("os", "perf_counter", 0, proc::monotonic_time),
     ("string", "list_to_float", 1, erlang::string_list_to_float),
     ("binary", "referenced_byte_size", 1, info::referenced_byte_size),
+    ("zlib", "open_nif", 0, zlib::open),
+    ("zlib", "close_nif", 1, zlib::close),
+    ("zlib", "set_controller_nif", 2, zlib::set_controller),
+    ("zlib", "deflateInit_nif", 6, zlib::deflate_init),
+    ("zlib", "deflateSetDictionary_nif", 2, zlib::not_supported),
+    ("zlib", "deflateReset_nif", 1, zlib::reset),
+    ("zlib", "deflateEnd_nif", 1, zlib::deflate_end),
+    ("zlib", "deflateParams_nif", 3, zlib::deflate_params),
+    ("zlib", "deflate_nif", 4, zlib::deflate),
+    ("zlib", "inflateInit_nif", 3, zlib::inflate_init),
+    ("zlib", "inflateSetDictionary_nif", 2, zlib::not_supported),
+    ("zlib", "inflateGetDictionary_nif", 1, zlib::not_supported),
+    ("zlib", "inflateReset_nif", 1, zlib::reset),
+    ("zlib", "inflateEnd_nif", 1, zlib::inflate_end),
+    ("zlib", "inflate_nif", 4, zlib::inflate_nif),
+    ("zlib", "getStash_nif", 1, zlib::get_stash),
+    ("zlib", "clearStash_nif", 1, zlib::clear_stash),
+    ("zlib", "setStash_nif", 2, zlib::set_stash),
+    ("zlib", "enqueue_nif", 2, zlib::enqueue),
     ("erlang", "memory", 0, info::memory0),
     ("erlang", "memory", 1, info::memory1),
     ("erlang", "loaded", 0, info::loaded),

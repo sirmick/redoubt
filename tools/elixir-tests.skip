@@ -17,4 +17,3 @@ kernel/errors_test.exs:macros error stacktrace -- known: frames of macros run by
 kernel/errors_test.exs:macros interpreted function clause stacktrace -- known: as above (open)
 exception_test.exs:binary constructor error info on binary concatenation -- error message detail for binary construction not reproduced
 option_parser_test.exs:types parse! raises an exception for invalid regex patterns -- expects PCRE's exact message and position
-module/types/map_test.exs:Map.update!/3 with unknown function type -- needs the zlib module (not provided yet)

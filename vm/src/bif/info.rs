@@ -530,7 +530,7 @@ pub fn same_datetime(c: &mut Ctx, a: &[Term]) -> R {
 // ---- checksums ----
 
 /// CRC-32 (IEEE 802.3, as zlib), bit by bit: short and obviously correct.
-fn crc32_update(mut crc: u32, bytes: &[u8]) -> u32 {
+pub(crate) fn crc32_update(mut crc: u32, bytes: &[u8]) -> u32 {
     crc = !crc;
     for &b in bytes {
         crc ^= b as u32;

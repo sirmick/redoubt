@@ -279,7 +279,6 @@ pub const RUNTIME_MODULES: &[&str] = &[
     "prim_socket",
     "prim_zip",
     "socket_registry",
-    "zlib",
 ];
 
 /// Most message timers the VM keeps at once (`system_limit` beyond).

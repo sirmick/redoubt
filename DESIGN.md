@@ -223,8 +223,12 @@ NIFs of `prim_file` and `prim_buffer`, over a `Files` trait the platform may pro
 - `file_server_2` starts at boot (about 2 ms) if the platform can load it: without a file
   system, `file:get_cwd/0` (which compilers call) still works and file operations fail with
   `enotsup`.
-- POSIX: `beamlet --root DIR` exposes one directory through `cap-std`, which refuses symbolic
-  links out of it (a unit test tries). Without `--root`, `file` calls fail with `enotsup`.
+- POSIX: `beamlet --root DIR` exposes one directory through `cap-std`; `--mount /AT=DIR[:ro]`
+  adds more, read-only if asked, and `--lib` names directories of applications for
+  `code:lib_dir/1`. Symbolic links are resolved by the platform within the VM's name space
+  (an absolute target starts at the VM's `/`, across mounts; 40 links is `eloop`), and cap-std
+  still refuses anything that would leave a mount (unit tests try). Without `--root`, `file`
+  calls fail with `enotsup`.
 - The `Files` trait is synchronous and file-shaped, a first step towards the design below: its
   operations are 9P's (walk+open, read, write, stat, clunk, create, remove, wstat for rename),
   so a Xous platform implements it with a 9P client, and it can later fold into the one
@@ -277,6 +281,13 @@ capabilities (xous-core `planning/redoubt/NAMESPACES.md`). beamlet follows that:
 - End-to-end: OTP's `ssl` (TLS 1.2/1.3) and `ssh` (daemon and client) run unmodified between
   processes of one VM over the loopback (`tests/ssltests`, `tests/nettests`), matching BEAM.
 
+## zlib (`vm/src/bif/zlib.rs`)
+OTP's `zlib.erl` runs unchanged over its stream NIFs, implemented with `miniz_oxide` (raw
+deflate and the zlib wrapper; gzip headers and trailers are done here, with the CRC checked).
+Output comes a chunk at a time as `zlib.erl` asks, so `safeInflate` bounds what hostile input
+can make one call allocate; queued data is capped per stream. Preset dictionaries are not
+supported (`not_supported`); compression strategies are accepted and ignored.
+
 ## Compiler, IEx, hashing
 - Elixir's compiler runs on the VM (`Code.compile_string`, `Code.eval_string`; difftest
   `CompilerTest`), and so does OTP's Erlang compiler. The code, atom, export and literal chunks
@@ -292,6 +303,4 @@ capabilities (xous-core `planning/redoubt/NAMESPACES.md`). beamlet follows that:
   type checker and user code key things on it.
 
 ## Open questions
-- Local funs cannot be serialized (`term_to_binary`).
-- The `zlib` module (only compressed external terms are supported).
 - Name.
