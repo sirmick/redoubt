@@ -1,0 +1,11 @@
+description = "A process cannot map physical RAM by address (no reading freed frames), and anonymous RAM is zeroed"
+arch = ["rv64", "rv32"]
+kind = "boot"
+programs = ["log-server", "mem-attack"]
+# "MEM ATTACK TEST FAILED" (and any leak report) contains "TEST FAILED", which the bench
+# always forbids, so the safe outcome is the only pass.
+expect = ['\[mem-attack\] anonymous page is zeroed: ok', 'refused \(InvalidArgument\): ok', 'MEM ATTACK TEST PASSED']
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]

@@ -43,5 +43,5 @@ paths = [
     "kernel/src/main.rs", "kernel/src/mem.rs", "kernel/src/services.rs", "kernel/src/server.rs",
     "kernel/src/syscall.rs", "kernel/src/irq.rs", "kernel/src/args.rs", "kernel/src/io.rs",
 ]
-max_unsafe = 25
+max_unsafe = 24
 max_undocumented = 0

@@ -864,11 +864,24 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                 //     phys_ptr as u32, virt_ptr as u32, size, req_flags
                 // );
 
-                // Default deny for device memory: a non-null physical address outside main
-                // RAM is a device claim, allowed only if the bundle granted it (tenet 2).
+                // An explicit physical address is either device MMIO or a bug/attack.
+                //
+                // A process must never name a physical RAM frame: it could point at another
+                // process's freed page and read what was left there. Anonymous RAM comes from
+                // `phys = 0` (which allocates a free frame and zeroes it). So reject any range
+                // that touches main RAM, and default-deny device MMIO unless the boot manifest
+                // granted it (tenet 2). PID 1 (the kernel) is trusted and maps its own memory.
                 #[cfg(baremetal)]
-                if !phys_ptr.is_null() && !mm.is_main_memory(phys_ptr) {
+                if !phys_ptr.is_null() {
                     let base = phys_ptr as usize;
+                    if pid.get() != 1
+                        && (base..base.saturating_add(size.get()))
+                            .step_by(PAGE_SIZE)
+                            .any(|page| mm.is_main_memory(page as *mut u8))
+                    {
+                        klog!("PID {} tried to map physical RAM {:08x} by address", pid.get(), base);
+                        return Err(xous_kernel::Error::InvalidArgument);
+                    }
                     if !crate::grants::may_map_device(pid, base, size.get()) {
                         klog!("PID {} denied device {:08x}", pid.get(), base);
                         return Err(xous_kernel::Error::AccessDenied);
@@ -878,15 +891,13 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                 let range =
                     mm.map_range(phys_ptr, virt_ptr, size.get(), pid, req_flags, MemoryType::Default)?;
 
+                // The only explicit-address mappings that reach here are device MMIO (not
+                // zeroed) and PID 1's own; RAM handed out through `phys = 0` is zeroed by its
+                // own path (a demand-paged fault, or the DMA branch of `map_range`).
                 if !phys_ptr.is_null() {
-                    if mm.is_main_memory(phys_ptr) {
-                        // SAFETY: `range` was just mapped into this process from main RAM; zeroing it before use is sound.
-                        unsafe { core::ptr::write_bytes(range.as_mut_ptr(), 0, range.len()) };
-                    }
                     for offset in
                         (range.as_ptr() as usize..(range.as_ptr() as usize + range.len())).step_by(PAGE_SIZE)
                     {
-                        // println!("Handing page to user");
                         crate::arch::mem::hand_page_to_user(offset as *mut u8)
                             .expect("couldn't hand page to user");
                     }
