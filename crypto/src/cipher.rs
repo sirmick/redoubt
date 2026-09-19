@@ -21,6 +21,9 @@ enum Mode {
     Cbc,
     Ecb,
     Ctr,
+    /// CFB with 128-bit and with 8-bit feedback.
+    Cfb128,
+    Cfb8,
     Gcm,
     ChaCha20,
     ChaCha20Poly1305,
@@ -37,6 +40,13 @@ const CIPHERS: &[(&str, Mode, usize, i64)] = &[
     ("aes_128_ctr", Mode::Ctr, 16, 904),
     ("aes_192_ctr", Mode::Ctr, 24, 905),
     ("aes_256_ctr", Mode::Ctr, 32, 906),
+    ("aes_128_cfb128", Mode::Cfb128, 16, 421),
+    ("aes_192_cfb128", Mode::Cfb128, 24, 425),
+    ("aes_256_cfb128", Mode::Cfb128, 32, 429),
+    // OTP reports the CFB-128 NIDs for CFB-8 too.
+    ("aes_128_cfb8", Mode::Cfb8, 16, 421),
+    ("aes_192_cfb8", Mode::Cfb8, 24, 425),
+    ("aes_256_cfb8", Mode::Cfb8, 32, 429),
     ("aes_128_gcm", Mode::Gcm, 16, 895),
     ("aes_192_gcm", Mode::Gcm, 24, 898),
     ("aes_256_gcm", Mode::Gcm, 32, 901),
@@ -55,7 +65,7 @@ fn lookup(t: &Term) -> Option<(Mode, usize, i64)> {
 
 fn iv_len(m: Mode) -> usize {
     match m {
-        Mode::Cbc | Mode::Ctr | Mode::ChaCha20 => 16,
+        Mode::Cbc | Mode::Ctr | Mode::Cfb128 | Mode::Cfb8 | Mode::ChaCha20 => 16,
         Mode::Ecb => 0,
         Mode::Gcm | Mode::ChaCha20Poly1305 => 12,
     }
@@ -69,6 +79,7 @@ pub fn cipher_info(c: &mut Ctx, a: &[Term]) -> R {
         Mode::Cbc => "cbc_mode",
         Mode::Ecb => "ecb_mode",
         Mode::Ctr => "ctr_mode",
+        Mode::Cfb128 | Mode::Cfb8 => "cfb_mode",
         Mode::Gcm => "gcm_mode",
         Mode::ChaCha20 | Mode::ChaCha20Poly1305 => "stream_cipher",
     };
@@ -126,15 +137,59 @@ enum Stream {
     Ctr192(ctr::Ctr128BE<aes::Aes192>),
     Ctr256(ctr::Ctr128BE<aes::Aes256>),
     ChaCha(chacha20::ChaCha20),
+    Cfb(Cfb),
 }
 
 impl Stream {
     fn apply(&mut self, data: &mut [u8]) {
         match self {
+            Stream::Cfb(s) => s.apply(data),
             Stream::Ctr128(s) => s.apply_keystream(data),
             Stream::Ctr192(s) => s.apply_keystream(data),
             Stream::Ctr256(s) => s.apply_keystream(data),
             Stream::ChaCha(s) => s.apply_keystream(data),
+        }
+    }
+}
+
+/// AES in CFB mode: a stream cipher whose keystream is the encryption of the last ciphertext
+/// (a whole block of it with 128-bit feedback, the last 16 bytes with 8-bit feedback), so it
+/// must know which way it is going.
+struct Cfb {
+    aes: Aes,
+    /// The feedback register: the IV, then ciphertext.
+    register: [u8; BLOCK],
+    /// With 128-bit feedback: the current block of keystream and how much of it is used.
+    keystream: [u8; BLOCK],
+    used: usize,
+    bits8: bool,
+    encrypt: bool,
+}
+
+impl Cfb {
+    fn new(key: &[u8], iv: &[u8], bits8: bool, encrypt: bool) -> Option<Cfb> {
+        Some(Cfb { aes: Aes::new(key)?, register: iv.try_into().ok()?, keystream: [0; BLOCK], used: BLOCK, bits8, encrypt })
+    }
+
+    fn apply(&mut self, data: &mut [u8]) {
+        for b in data {
+            let input = *b;
+            if self.bits8 {
+                let mut ks = self.register;
+                self.aes.encrypt(&mut ks);
+                *b ^= ks[0];
+                self.register.copy_within(1.., 0);
+                self.register[BLOCK - 1] = if self.encrypt { *b } else { input };
+            } else {
+                if self.used == BLOCK {
+                    self.keystream = self.register;
+                    self.aes.encrypt(&mut self.keystream);
+                    self.used = 0;
+                }
+                *b ^= self.keystream[self.used];
+                self.register[self.used] = if self.encrypt { *b } else { input };
+                self.used += 1;
+            }
         }
     }
 }
@@ -227,7 +282,8 @@ fn new_ctx(c: &mut Ctx, a: &[Term], data_opts: usize) -> Result<CipherCtx, Excep
         return Err(badarg(c, 1, "Bad key size"));
     }
     let iv = bytes(c, a, 2, "iv")?;
-    if iv.len() != iv_len(mode) {
+    // ECB has no IV; like OpenSSL, any given is ignored.
+    if iv.len() != iv_len(mode) && mode != Mode::Ecb {
         return Err(badarg(c, 2, "Bad iv size"));
     }
     let (encrypt, padding) = options(c, &a[data_opts], data_opts as i64)?;
@@ -243,6 +299,9 @@ fn new_ctx(c: &mut Ctx, a: &[Term], data_opts: usize) -> Result<CipherCtx, Excep
             let mut s = chacha20::ChaCha20::new_from_slices(&key, &iv[4..]).expect("sizes checked");
             s.seek(counter as u64 * 64);
             Engine::Stream(Stream::ChaCha(s))
+        }
+        Mode::Cfb128 | Mode::Cfb8 => {
+            Engine::Stream(Stream::Cfb(Cfb::new(&key, &iv, mode == Mode::Cfb8, encrypt).expect("sizes checked")))
         }
         Mode::Cbc => Engine::Cbc(Aes::new(&key).expect("size checked"), iv.try_into().expect("size checked")),
         Mode::Ecb => Engine::Ecb(Aes::new(&key).expect("size checked")),
