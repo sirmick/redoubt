@@ -29,25 +29,86 @@ pub enum MintSource {
 /// One system call with its arguments, in KERNEL-SPEC.md's table order and argument order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Syscall {
-    MapAnon { len: u64, flags: u64 },
-    Unmap { addr: u64, len: u64 },
-    SetFlags { addr: u64, len: u64, flags: u64 },
-    MapDevice { h: u64 },
-    DmaAlloc { h: u64, npages: u64 },
-    ThreadCreate { entry: u64, sp: u64, arg: u64 },
+    MapAnon {
+        len: u64,
+        flags: u64,
+    },
+    Unmap {
+        addr: u64,
+        len: u64,
+    },
+    SetFlags {
+        addr: u64,
+        len: u64,
+        flags: u64,
+    },
+    MapDevice {
+        h: u64,
+    },
+    DmaAlloc {
+        h: u64,
+        npages: u64,
+    },
+    ThreadCreate {
+        entry: u64,
+        sp: u64,
+        arg: u64,
+    },
     ThreadExit,
-    ProcessExit { code: u64 },
-    ProcessCreate { budget: u64, exit_endpoint: u64 },
-    ProcessMap { process: u64, src: u64, dst: u64, len: u64, flags: u64 },
-    ProcessStart { process: u64, entry: u64, sp: u64, handles: Vec<u64> },
+    ProcessExit {
+        code: u64,
+    },
+    ProcessCreate {
+        budget: u64,
+        exit_endpoint: u64,
+    },
+    ProcessMap {
+        process: u64,
+        src: u64,
+        dst: u64,
+        len: u64,
+        flags: u64,
+    },
+    ProcessStart {
+        process: u64,
+        entry: u64,
+        sp: u64,
+        handles: Vec<u64>,
+    },
     EndpointCreate,
-    Mint { source: MintSource, badge: u64, budget: Option<u64> },
-    Call { h: u64, words: [u64; WORDS], handles: Vec<u64>, lend: Option<Buffer>, timeout: u64 },
-    Send { h: u64, words: [u64; WORDS], handles: Vec<u64>, transfer: Option<Buffer>, timeout: u64 },
+    Mint {
+        source: MintSource,
+        badge: u64,
+        budget: Option<u64>,
+    },
+    Call {
+        h: u64,
+        words: [u64; WORDS],
+        handles: Vec<u64>,
+        lend: Option<Buffer>,
+        timeout: u64,
+    },
+    Send {
+        h: u64,
+        words: [u64; WORDS],
+        handles: Vec<u64>,
+        transfer: Option<Buffer>,
+        timeout: u64,
+    },
     /// `max_transfer` is in pages (as in `redoubt-sys`).
-    Receive { h: Option<u64>, timeout: u64, max_transfer: u64 },
-    Reply { msg_id: u64, words: [u64; WORDS], handles: Vec<u64> },
-    HandleClose { h: u64 },
+    Receive {
+        h: Option<u64>,
+        timeout: u64,
+        max_transfer: u64,
+    },
+    Reply {
+        msg_id: u64,
+        words: [u64; WORDS],
+        handles: Vec<u64>,
+    },
+    HandleClose {
+        h: u64,
+    },
     BudgetCreate {
         parent: u64,
         pages: u64,
@@ -59,11 +120,20 @@ pub enum Syscall {
         /// Absolute time in µs; `FOREVER` means none.
         deadline: u64,
     },
-    BudgetDestroy { h: u64 },
-    BudgetUsage { h: u64 },
+    BudgetDestroy {
+        h: u64,
+    },
+    BudgetUsage {
+        h: u64,
+    },
     TimeNow,
-    SystemReset { h: u64, kind: u64 },
-    Random { len: u64 },
+    SystemReset {
+        h: u64,
+        kind: u64,
+    },
+    Random {
+        len: u64,
+    },
 }
 
 impl Syscall {
@@ -133,22 +203,37 @@ pub enum Ret {
     Unit,
     Addr(u64),
     /// `dma_alloc`.
-    AddrPhys { addr: u64, phys: u64 },
+    AddrPhys {
+        addr: u64,
+        phys: u64,
+    },
     Tid(u64),
     Handle(u64),
     /// The reply to a `call`: words and the handles installed in the caller's table.
-    Reply { words: [u64; WORDS], handles: Vec<u64> },
+    Reply {
+        words: [u64; WORDS],
+        handles: Vec<u64>,
+    },
     Message(Message),
     /// `receive` on an IRQ handle: the handle that fired.
-    Interrupt { h: u64 },
-    ExitNotice { pid: u64, cause: Cause, code: u64, blamed_account: u64 },
+    Interrupt {
+        h: u64,
+    },
+    ExitNotice {
+        pid: u64,
+        cause: Cause,
+        code: u64,
+        blamed_account: u64,
+    },
     Usage(Counters),
     Time(u64),
     /// A user load (not a system call): the word read.
     Word(u64),
     /// `random`: the model does not produce the bytes (they are the kernel's CSPRNG output and
     /// cannot be compared), only how many there are.
-    Random { len: u64 },
+    Random {
+        len: u64,
+    },
 }
 
 /// What a step did for the thread that made it.
@@ -175,19 +260,43 @@ pub struct Wake {
 /// a legal event and `Kernel::step` returns `None`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Op {
-    Sys { pid: u64, tid: u64, call: Syscall },
+    Sys {
+        pid: u64,
+        tid: u64,
+        call: Syscall,
+    },
     /// A user store of one word; faults unless the page is mapped writable.
-    Write { pid: u64, tid: u64, addr: u64, value: u64 },
+    Write {
+        pid: u64,
+        tid: u64,
+        addr: u64,
+        value: u64,
+    },
     /// A user load of one word; faults unless the page is mapped readable.
-    Read { pid: u64, tid: u64, addr: u64 },
+    Read {
+        pid: u64,
+        tid: u64,
+        addr: u64,
+    },
     /// An instruction fetch; faults unless the page is mapped executable.
-    Exec { pid: u64, tid: u64, addr: u64 },
+    Exec {
+        pid: u64,
+        tid: u64,
+        addr: u64,
+    },
     /// The thread faults (for example an illegal instruction).
-    Fault { pid: u64, tid: u64 },
+    Fault {
+        pid: u64,
+        tid: u64,
+    },
     /// Interrupt line `n` is raised.
-    Irq { n: u64 },
+    Irq {
+        n: u64,
+    },
     /// `dt` microseconds pass; the scheduler runs threads meanwhile (R12).
-    Tick { dt: u64 },
+    Tick {
+        dt: u64,
+    },
 }
 
 /// The result of a user memory access.

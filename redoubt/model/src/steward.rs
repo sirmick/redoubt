@@ -23,7 +23,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::kernel::{Boot, Kernel, Note, Object, INIT_PID};
+use crate::kernel::{Boot, INIT_PID, Kernel, Note, Object};
 use crate::mutation::Mutation;
 use crate::spec::{Class, Counters, Error, FOREVER};
 use crate::syscall::{Op, Outcome, Ret, Syscall};
@@ -247,7 +247,9 @@ pub fn sanitize(s: &str, cap: usize) -> String {
 }
 
 /// Declassifiable: printable ASCII text and newlines.
-fn printable(b: &[u8]) -> bool { b.iter().all(|c| (0x20..0x7f).contains(c) || *c == b'\n') }
+fn printable(b: &[u8]) -> bool {
+    b.iter().all(|c| (0x20..0x7f).contains(c) || *c == b'\n')
+}
 
 impl Steward {
     /// Validate the manifest, boot the kernel model, have `init` start the steward in `system`
@@ -274,7 +276,8 @@ impl Steward {
         let mut k = Kernel::boot(&boot, mutation);
         let init_tid = *k.processes[&INIT_PID].threads.first().unwrap();
         let init = |k: &mut Kernel, call: Syscall| -> Res<(Ret, Vec<Note>)> {
-            let s = k.step(&Op::Sys { pid: INIT_PID, tid: init_tid, call }).ok_or(Denied::Kernel(Error::Dead))?;
+            let s =
+                k.step(&Op::Sys { pid: INIT_PID, tid: init_tid, call }).ok_or(Denied::Kernel(Error::Dead))?;
             match s.outcome {
                 Outcome::Done(Ok(r)) => Ok((r, s.notes)),
                 Outcome::Done(Err(e)) => Err(Denied::Kernel(e)),
@@ -283,12 +286,15 @@ impl Steward {
         };
         let (Ret::Handle(e), _) = init(&mut k, Syscall::EndpointCreate)? else { unreachable!() };
         // init's slots: 1 root, 2 system, 3 users.
-        let (Ret::Handle(ph), _) = init(&mut k, Syscall::ProcessCreate { budget: 2, exit_endpoint: e })? else {
+        let (Ret::Handle(ph), _) = init(&mut k, Syscall::ProcessCreate { budget: 2, exit_endpoint: e })?
+        else {
             unreachable!()
         };
         let (_, notes) =
             init(&mut k, Syscall::ProcessStart { process: ph, entry: 0, sp: 0, handles: vec![3] })?;
-        let Some(Note::Thread { pid, tid }) = notes.first().cloned() else { return Err(Denied::Kernel(Error::Dead)) };
+        let Some(Note::Thread { pid, tid }) = notes.first().cloned() else {
+            return Err(Denied::Kernel(Error::Dead));
+        };
         let mut st = Steward {
             mutation,
             k,
@@ -315,7 +321,9 @@ impl Steward {
         Ok(st)
     }
 
-    fn broken(&self, m: Mutation) -> bool { self.mutation == Some(m) }
+    fn broken(&self, m: Mutation) -> bool {
+        self.mutation == Some(m)
+    }
 
     /// A system call by the steward's thread.
     fn sys(&mut self, call: Syscall) -> Res<Ret> {
@@ -380,9 +388,18 @@ impl Steward {
         self.reconcile();
     }
 
-    pub fn principal(&self, name: &str) -> Option<usize> { self.principals.iter().position(|p| p.spec.name == name) }
+    pub fn principal(&self, name: &str) -> Option<usize> {
+        self.principals.iter().position(|p| p.spec.name == name)
+    }
 
-    fn new_session(&mut self, principal: usize, kind: SessionKind, labels: Vec<u64>, pages: u64, deadline: u64) -> Res<u64> {
+    fn new_session(
+        &mut self,
+        principal: usize,
+        kind: SessionKind,
+        labels: Vec<u64>,
+        pages: u64,
+        deadline: u64,
+    ) -> Res<u64> {
         let parent = self.principals[principal].h;
         let h = self.budget_create(parent, pages, 1, 5, &labels, 0, deadline)?;
         let budget = self.budget_id(h);
@@ -457,7 +474,9 @@ impl Steward {
     // -------------------------------------------------------------------------------------------
     // The powerbox.
 
-    fn pending_of(&self, account: u64) -> usize { self.requests.values().filter(|r| r.account == account).count() }
+    fn pending_of(&self, account: u64) -> usize {
+        self.requests.values().filter(|r| r.account == account).count()
+    }
 
     /// Submit a request. The approver is the requester's principal; a labelled request is
     /// refused unless the approver owns every label on it; a declassification snapshots the item
@@ -509,17 +528,20 @@ impl Steward {
         self.sessions.get_mut(&session).unwrap().submitted += 1;
         let snapshot = if self.broken(Mutation::PolicyDeclassifyLive) { None } else { snapshot };
         let hash = content_hash(&content, &snapshot, reason, &s.labels);
-        self.requests.insert(id, Request {
+        self.requests.insert(
             id,
-            session,
-            account,
-            approver,
-            labels: s.labels.clone(),
-            content,
-            snapshot,
-            reason: String::from(reason),
-            hash,
-        });
+            Request {
+                id,
+                session,
+                account,
+                approver,
+                labels: s.labels.clone(),
+                content,
+                snapshot,
+                reason: String::from(reason),
+                hash,
+            },
+        );
         self.audit.push(Audit::Submitted { id, account });
         Ok(id)
     }
@@ -537,9 +559,12 @@ impl Steward {
             }
             let who = sanitize(&self.principals[r.approver].spec.name, FIELD_CAP);
             let what = match &r.content {
-                Content::AgentWithLabel { label, lease } => format!("start an agent labelled {label} for {lease} us"),
+                Content::AgentWithLabel { label, lease } => {
+                    format!("start an agent labelled {label} for {lease} us")
+                }
                 Content::Declassify { label, item } => {
-                    let shown = r.snapshot.as_ref().map(|b| sanitize(&String::from_utf8_lossy(b), DECLASSIFY_MAX));
+                    let shown =
+                        r.snapshot.as_ref().map(|b| sanitize(&String::from_utf8_lossy(b), DECLASSIFY_MAX));
                     format!("declassify item {item} of label {label}: \"{}\"", shown.unwrap_or_default())
                 }
                 Content::Note { what } => sanitize(what, FIELD_CAP),
@@ -591,8 +616,14 @@ impl Steward {
         match r.content {
             Content::AgentWithLabel { label, lease } => {
                 let deadline = self.k.now.saturating_add(lease.max(1));
-                let sid = self.new_session(ch.principal, SessionKind::Agent, vec![label], AGENT_PAGES, deadline)?;
-                self.audit.push(Audit::AgentStarted { session: sid, sponsor: ch.principal, labels: vec![label], deadline });
+                let sid =
+                    self.new_session(ch.principal, SessionKind::Agent, vec![label], AGENT_PAGES, deadline)?;
+                self.audit.push(Audit::AgentStarted {
+                    session: sid,
+                    sponsor: ch.principal,
+                    labels: vec![label],
+                    deadline,
+                });
             }
             Content::Declassify { label, item } => {
                 let bytes = match r.snapshot {
@@ -650,5 +681,7 @@ impl Steward {
         }
     }
 
-    pub fn keyd_add(&mut self, key: u64) { self.keyd.insert(key); }
+    pub fn keyd_add(&mut self, key: u64) {
+        self.keyd.insert(key);
+    }
 }

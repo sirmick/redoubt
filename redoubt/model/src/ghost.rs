@@ -16,9 +16,22 @@ use crate::spec::Class;
 /// An information flow the kernel allowed in the current step (I7, R4).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Flow {
-    Message { from_class: Class, from: Vec<u64>, to_class: Class, to: Vec<u64>, transfer: u64, max_transfer: u64 },
-    Exit { from: Vec<u64>, to: Vec<u64> },
-    Usage { from: Vec<u64>, to: Vec<u64> },
+    Message {
+        from_class: Class,
+        from: Vec<u64>,
+        to_class: Class,
+        to: Vec<u64>,
+        transfer: u64,
+        max_transfer: u64,
+    },
+    Exit {
+        from: Vec<u64>,
+        to: Vec<u64>,
+    },
+    Usage {
+        from: Vec<u64>,
+        to: Vec<u64>,
+    },
 }
 
 /// I11: while an account's oldest message waits on an endpoint, how often each other account
@@ -61,7 +74,9 @@ pub struct Ghost {
 }
 
 impl Ghost {
-    pub fn begin_step(&mut self) { self.flows.clear(); }
+    pub fn begin_step(&mut self) {
+        self.flows.clear();
+    }
 
     pub fn budget_created(&mut self, id: u64, labels: &[u64], creator: Class) {
         if !self.ever_budgets.insert(id) {
@@ -97,7 +112,9 @@ impl Ghost {
         self.waiting.retain(|(ee, a), _| *ee != e || ep.queue.contains_key(a));
     }
 
-    pub fn irq_raised(&mut self, d: u64) { self.irqs.entry(d).or_default().undelivered = true; }
+    pub fn irq_raised(&mut self, d: u64) {
+        self.irqs.entry(d).or_default().undelivered = true;
+    }
 
     pub fn irq_fired(&mut self, d: u64) {
         let i = self.irqs.entry(d).or_default();
@@ -107,15 +124,20 @@ impl Ghost {
         }
     }
 
-    pub fn irq_receive_begins(&mut self, d: u64) { self.irqs.entry(d).or_default().fires_since_receive = 0; }
+    pub fn irq_receive_begins(&mut self, d: u64) {
+        self.irqs.entry(d).or_default().fires_since_receive = 0;
+    }
 
-    pub fn irq_delivered(&mut self, d: u64) { self.irqs.entry(d).or_default().undelivered = false; }
+    pub fn irq_delivered(&mut self, d: u64) {
+        self.irqs.entry(d).or_default().undelivered = false;
+    }
 
     /// A `receive` on the IRQ blocks or times out: there must be no raised, undelivered
     /// interrupt (it would be lost).
     pub fn irq_not_delivered(&mut self, d: u64) {
         if self.irqs.get(&d).is_some_and(|i| i.undelivered) {
-            self.violations.push(format!("R5: a receive on IRQ device {d} waits while its interrupt is undelivered"));
+            self.violations
+                .push(format!("R5: a receive on IRQ device {d} waits while its interrupt is undelivered"));
         }
     }
 }
@@ -126,7 +148,9 @@ pub fn check_pick(pick: Option<(u64, u64)>, k: &Kernel) -> Option<String> {
     let runnable_in = |class: Class| {
         k.threads.values().any(|t| {
             t.wait.is_none()
-                && k.budget_of(t.pid).and_then(|b| k.budgets.get(&b)).is_some_and(|b| b.class == class && b.weight > 0)
+                && k.budget_of(t.pid)
+                    .and_then(|b| k.budgets.get(&b))
+                    .is_some_and(|b| b.class == class && b.weight > 0)
         })
     };
     match pick {

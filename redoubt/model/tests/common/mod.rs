@@ -25,7 +25,10 @@ pub const FAMILIES: [(&str, Family); 5] = [
 
 /// Sequences per family: `REDOUBT_MODEL_SEQUENCES`, or `default`.
 pub fn sequences(default: u64) -> u64 {
-    std::env::var("REDOUBT_MODEL_SEQUENCES").ok().and_then(|s| s.replace('_', "").parse().ok()).unwrap_or(default)
+    std::env::var("REDOUBT_MODEL_SEQUENCES")
+        .ok()
+        .and_then(|s| s.replace('_', "").parse().ok())
+        .unwrap_or(default)
 }
 
 /// Run seeds `0..n` of `f` on all cores. Returns the failure with the lowest seed found (the
@@ -55,7 +58,12 @@ pub fn run(name: &'static str, f: Family, n: u64, mutation: Option<Mutation>) ->
                                     .cloned()
                                     .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
                                     .unwrap_or_default();
-                                Failure { family: name, seed, message: format!("I14: the model panicked: {what}"), ops: vec![] }
+                                Failure {
+                                    family: name,
+                                    seed,
+                                    message: format!("I14: the model panicked: {what}"),
+                                    ops: vec![],
+                                }
                             }
                         };
                         let mut g = found.lock().unwrap();
@@ -77,12 +85,19 @@ pub fn explain(f: &Failure, mutation: Option<Mutation>) -> String {
     let mut s = format!("{} seed {}: {}", f.family, f.seed, f.message);
     if !f.ops.is_empty() {
         let boot = Boot::default();
-        let small = catch_unwind(AssertUnwindSafe(|| check::shrink(&boot, &f.ops, mutation))).unwrap_or(f.ops.clone());
+        let small = catch_unwind(AssertUnwindSafe(|| check::shrink(&boot, &f.ops, mutation)))
+            .unwrap_or(f.ops.clone());
         let why = check::replay(&boot, &small, mutation).err().unwrap_or_default();
-        s += &format!("\nshrunk to {} ops ({why}); trace:\n{}", small.len(), trace::record(&boot, &small, mutation));
+        s += &format!(
+            "\nshrunk to {} ops ({why}); trace:\n{}",
+            small.len(),
+            trace::record(&boot, &small, mutation)
+        );
     }
     s
 }
 
 /// Silence the default panic message: panics are counted as I14 failures and reported.
-pub fn quiet_panics() { std::panic::set_hook(Box::new(|_| {})); }
+pub fn quiet_panics() {
+    std::panic::set_hook(Box::new(|_| {}));
+}

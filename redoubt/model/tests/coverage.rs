@@ -106,6 +106,9 @@ fn every_call_and_error_is_reached() {
         "interrupt".into(),
         "reply".into(),
     ] {
-        assert!(seen.contains(&format!("wake {w}")) || seen.contains(&format!("receive {w}")), "never delivered: {w}");
+        assert!(
+            seen.contains(&format!("wake {w}")) || seen.contains(&format!("receive {w}")),
+            "never delivered: {w}"
+        );
     }
 }

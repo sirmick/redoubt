@@ -31,13 +31,17 @@ pub struct Scheduler {
 }
 
 impl Scheduler {
-    fn broken(&self, m: Mutation) -> bool { self.mutation == Some(m) }
+    fn broken(&self, m: Mutation) -> bool {
+        self.mutation == Some(m)
+    }
 
     pub fn add_budget(&mut self, id: u64, class: Class, weight: u64) {
         self.budgets.insert(id, Entry { class, weight, pass: 0, runnable: VecDeque::new() });
     }
 
-    pub fn remove_budget(&mut self, id: u64) { self.budgets.remove(&id); }
+    pub fn remove_budget(&mut self, id: u64) {
+        self.budgets.remove(&id);
+    }
 
     /// The lowest pass among budgets of `class` that could run, other than `except`.
     fn min_pass(&self, class: Class, except: u64) -> Option<u64> {

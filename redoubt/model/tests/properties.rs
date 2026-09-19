@@ -21,19 +21,29 @@ fn family(i: usize, default: u64) {
 }
 
 #[test]
-fn kernel_sequences() { family(0, 20_000) }
+fn kernel_sequences() {
+    family(0, 20_000)
+}
 
 #[test]
-fn budget_lifecycles() { family(1, 20_000) }
+fn budget_lifecycles() {
+    family(1, 20_000)
+}
 
 #[test]
-fn scheduler_fairness() { family(2, 20_000) }
+fn scheduler_fairness() {
+    family(2, 20_000)
+}
 
 #[test]
-fn steward_policy() { family(3, 20_000) }
+fn steward_policy() {
+    family(3, 20_000)
+}
 
 #[test]
-fn steward_noninterference() { family(4, 10_000) }
+fn steward_noninterference() {
+    family(4, 10_000)
+}
 
 /// The acceptance run: 10^6 sequences of every family.
 #[test]

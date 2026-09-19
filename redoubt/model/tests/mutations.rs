@@ -34,7 +34,14 @@ fn mutations_are_caught() {
             }
         }
         match caught {
-            Some(f) => eprintln!("{:6} {:32} caught by {} seed {}: {}", m.rule(), format!("{m:?}"), f.family, f.seed, f.message),
+            Some(f) => eprintln!(
+                "{:6} {:32} caught by {} seed {}: {}",
+                m.rule(),
+                format!("{m:?}"),
+                f.family,
+                f.seed,
+                f.message
+            ),
             None => {
                 eprintln!("{:6} {:32} NOT CAUGHT", m.rule(), format!("{m:?}"));
                 missed.push(m);

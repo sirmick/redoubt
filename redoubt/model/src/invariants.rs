@@ -68,10 +68,19 @@ fn all_handles(k: &Kernel) -> Vec<(String, Handle)> {
 /// threads are exactly the runnable threads.
 fn structure(k: &Kernel) -> Check {
     for p in k.processes.values() {
-        ensure!(k.budgets.contains_key(&p.budget), "R10: process {} lives in destroyed budget {}", p.pid, p.budget);
+        ensure!(
+            k.budgets.contains_key(&p.budget),
+            "R10: process {} lives in destroyed budget {}",
+            p.pid,
+            p.budget
+        );
         ensure!(p.started || p.threads.is_empty(), "process {} has threads before it started", p.pid);
         for t in &p.threads {
-            ensure!(k.threads.get(t).is_some_and(|x| x.pid == p.pid), "process {} lists missing thread {t}", p.pid);
+            ensure!(
+                k.threads.get(t).is_some_and(|x| x.pid == p.pid),
+                "process {} lists missing thread {t}",
+                p.pid
+            );
         }
     }
     for t in k.threads.values() {
@@ -83,14 +92,27 @@ fn structure(k: &Kernel) -> Check {
     }
     for b in k.budgets.values() {
         if let Some(p) = b.parent {
-            ensure!(k.budgets.get(&p).is_some_and(|x| x.children.contains(&b.id)), "budget {} lost its parent", b.id);
+            ensure!(
+                k.budgets.get(&p).is_some_and(|x| x.children.contains(&b.id)),
+                "budget {} lost its parent",
+                b.id
+            );
         }
         for c in &b.children {
-            ensure!(k.budgets.get(c).is_some_and(|x| x.parent == Some(b.id)), "budget {} lists stray child {c}", b.id);
+            ensure!(
+                k.budgets.get(c).is_some_and(|x| x.parent == Some(b.id)),
+                "budget {} lists stray child {c}",
+                b.id
+            );
         }
     }
     for e in k.endpoints.values() {
-        ensure!(k.budgets.contains_key(&e.owner), "R10: endpoint {} charged to destroyed budget {}", e.id, e.owner);
+        ensure!(
+            k.budgets.contains_key(&e.owner),
+            "R10: endpoint {} charged to destroyed budget {}",
+            e.id,
+            e.owner
+        );
         for (acct, q) in &e.queue {
             ensure!(!q.is_empty(), "endpoint {} keeps an empty queue", e.id);
             for m in q {
@@ -109,7 +131,9 @@ fn structure(k: &Kernel) -> Check {
         }
         for r in &e.receivers {
             ensure!(
-                k.threads.get(r).is_some_and(|t| matches!(t.wait, Some(Wait::Receive { endpoint, .. }) if endpoint == e.id)),
+                k.threads.get(r).is_some_and(
+                    |t| matches!(t.wait, Some(Wait::Receive { endpoint, .. }) if endpoint == e.id)
+                ),
                 "endpoint {} lists thread {r} as receiving",
                 e.id
             );
@@ -123,7 +147,9 @@ fn structure(k: &Kernel) -> Check {
                 t.tid
             ),
             Some(Wait::Reply(m)) => ensure!(
-                k.msgs.get(&m).is_some_and(|x| x.caller_waiting && x.sender_tid == t.tid && x.server.is_some()),
+                k.msgs
+                    .get(&m)
+                    .is_some_and(|x| x.caller_waiting && x.sender_tid == t.tid && x.server.is_some()),
                 "thread {} waits for a reply to message {m}, which is not in flight",
                 t.tid
             ),
@@ -183,7 +209,9 @@ fn i1_i2_i3_i4_handles(k: &Kernel) -> Check {
         ensure!(k.budgets.contains_key(&h.stamp), "I2: {at} is stamped with destroyed budget {}", h.stamp);
         match h.origin {
             Origin::Boot => ensure!(h.stamp == k.root, "R9: {at}: a boot handle stamped {}", h.stamp),
-            Origin::Created { by } => ensure!(h.stamp == by, "R9: {at}: created by budget {by}, stamped {}", h.stamp),
+            Origin::Created { by } => {
+                ensure!(h.stamp == by, "R9: {at}: created by budget {by}, stamped {}", h.stamp)
+            }
             Origin::Minted { default_stamp } => {
                 ensure!(h.badge != 0, "I3: {at}: minted with badge 0");
                 ensure!(
@@ -240,11 +268,26 @@ fn i5_charging(k: &Kernel) -> Check {
     }
     for b in k.budgets.values() {
         let want = pages.get(&b.id).copied().unwrap_or(0);
-        ensure!(b.pages_used == want, "R6: budget {} says {} pages used, its objects are {want}", b.id, b.pages_used);
+        ensure!(
+            b.pages_used == want,
+            "R6: budget {} says {} pages used, its objects are {want}",
+            b.id,
+            b.pages_used
+        );
         let want = procs.get(&b.id).copied().unwrap_or(0);
-        ensure!(b.processes_used == want, "R6: budget {} says {} processes used, it has {want}", b.id, b.processes_used);
+        ensure!(
+            b.processes_used == want,
+            "R6: budget {} says {} processes used, it has {want}",
+            b.id,
+            b.processes_used
+        );
         let weights: u64 = b.children.iter().map(|c| k.budgets[c].weight).sum();
-        ensure!(b.weight_used == weights, "R7: budget {} says {} weight carved, children have {weights}", b.id, b.weight_used);
+        ensure!(
+            b.weight_used == weights,
+            "R7: budget {} says {} weight carved, children have {weights}",
+            b.id,
+            b.weight_used
+        );
         let lent = r3.get(&b.id).copied().unwrap_or(0);
         ensure!(
             b.pages_used - lent.min(b.pages_used) <= b.pages_limit,
@@ -274,7 +317,11 @@ fn i6_i8_budgets(k: &Kernel) -> Check {
             "I6: budget {}'s labels changed",
             b.id
         );
-        ensure!(b.labels.len() <= MAX_LABELS && b.labels.windows(2).all(|w| w[0] < w[1]), "I6: bad label set on {}", b.id);
+        ensure!(
+            b.labels.len() <= MAX_LABELS && b.labels.windows(2).all(|w| w[0] < w[1]),
+            "I6: bad label set on {}",
+            b.id
+        );
         ensure!(b.depth < MAX_DEPTH, "budget {} is at depth {}", b.id, b.depth);
         let Some(p) = b.parent.and_then(|p| k.budgets.get(&p)) else { continue };
         ensure!(superset(&b.labels, &p.labels), "I6: budget {} lacks its parent's labels", b.id);
@@ -287,7 +334,13 @@ fn i6_i8_budgets(k: &Kernel) -> Check {
         }
         ensure!(b.class <= p.class, "I8: budget {} outranks its parent's class", b.id);
         if p.account != 0 {
-            ensure!(b.account == p.account, "I8: budget {} has account {}, parent {}", b.id, b.account, p.account);
+            ensure!(
+                b.account == p.account,
+                "I8: budget {} has account {}, parent {}",
+                b.id,
+                b.account,
+                p.account
+            );
         }
         ensure!(b.id > p.id, "I12: budget {} is older than its parent", b.id);
     }
@@ -303,9 +356,14 @@ fn i7_flows(k: &Kernel) -> Check {
                 if *from_class == Class::User && *to_class == Class::User {
                     ensure!(from == to, "I7: a message flowed between user label sets {from:?} and {to:?}");
                 }
-                ensure!(transfer <= max_transfer, "R4: {transfer} pages transferred to a receiver that allowed {max_transfer}");
+                ensure!(
+                    transfer <= max_transfer,
+                    "R4: {transfer} pages transferred to a receiver that allowed {max_transfer}"
+                );
             }
-            Flow::Exit { from, to } => ensure!(superset(to, from), "I7: an exit notice of {from:?} reached {to:?}"),
+            Flow::Exit { from, to } => {
+                ensure!(superset(to, from), "I7: an exit notice of {from:?} reached {to:?}")
+            }
             Flow::Usage { from, to } => ensure!(superset(to, from), "I7: usage of {from:?} read by {to:?}"),
         }
     }
@@ -326,7 +384,11 @@ fn i9_memory(k: &Kernel) -> Check {
     let mut seen: BTreeMap<u64, Seen> = BTreeMap::new();
     for p in k.processes.values() {
         for (v, m) in &p.space {
-            ensure!(!(m.flags & FLAG_W != 0 && m.flags & FLAG_X != 0), "I9: page {v:#x} of process {} is W+X", p.pid);
+            ensure!(
+                !(m.flags & FLAG_W != 0 && m.flags & FLAG_X != 0),
+                "I9: page {v:#x} of process {} is W+X",
+                p.pid
+            );
             let Backing::Frame(f) = m.backing else { continue };
             ensure!(k.frames.contains_key(&f), "I9: process {} maps freed frame {f}", p.pid);
             let s = seen.entry(f).or_default();
@@ -338,11 +400,18 @@ fn i9_memory(k: &Kernel) -> Check {
         }
     }
     for f in &k.ghost.fresh {
-        ensure!(k.frames.get(f).is_none_or(|x| x.content == 0), "I9: frame {f} was handed out without being zeroed");
+        ensure!(
+            k.frames.get(f).is_none_or(|x| x.content == 0),
+            "I9: frame {f} was handed out without being zeroed"
+        );
     }
     for (f, fr) in &k.frames {
         let s = seen.remove(f).unwrap_or_default();
-        ensure!(k.budgets.contains_key(&fr.payer), "R6: frame {f} is charged to destroyed budget {}", fr.payer);
+        ensure!(
+            k.budgets.contains_key(&fr.payer),
+            "R6: frame {f} is charged to destroyed budget {}",
+            fr.payer
+        );
         ensure!(
             s.own.len() + s.lent_in.len() <= 1,
             "I9: frame {f} is accessible in several address spaces ({:?} own, {:?} lent in)",
@@ -350,10 +419,17 @@ fn i9_memory(k: &Kernel) -> Check {
             s.lent_in
         );
         if let Some(pid) = s.own.first() {
-            ensure!(k.budget_of(*pid) == Some(fr.payer), "R6: frame {f} owned by process {pid} is charged to {}", fr.payer);
+            ensure!(
+                k.budget_of(*pid) == Some(fr.payer),
+                "R6: frame {f} owned by process {pid} is charged to {}",
+                fr.payer
+            );
         } else if let Some((spid, mid)) = s.lent_in.first() {
             let m = k.msgs.get(mid);
-            ensure!(m.is_some_and(|m| m.server.map(|x| x.0) == Some(*spid)), "frame {f} lent in by a message not served by {spid}");
+            ensure!(
+                m.is_some_and(|m| m.server.map(|x| x.0) == Some(*spid)),
+                "frame {f} lent in by a message not served by {spid}"
+            );
             let m = m.unwrap();
             let want = if m.caller_waiting { m.sender_budget } else { k.budget_of(*spid).unwrap() };
             ensure!(fr.payer == want, "R3: lent frame {f} is charged to {}, not {want}", fr.payer);
@@ -365,8 +441,15 @@ fn i9_memory(k: &Kernel) -> Check {
             }
         } else if let Some((pid, mid)) = s.lent_out.first() {
             let m = k.msgs.get(mid);
-            ensure!(m.is_some_and(|m| m.sender_pid == *pid && m.server.is_none()), "frame {f} lent out with no queued message");
-            ensure!(fr.payer == m.unwrap().sender_budget, "R6: frame {f} in flight is charged to {}", fr.payer);
+            ensure!(
+                m.is_some_and(|m| m.sender_pid == *pid && m.server.is_none()),
+                "frame {f} lent out with no queued message"
+            );
+            ensure!(
+                fr.payer == m.unwrap().sender_budget,
+                "R6: frame {f} in flight is charged to {}",
+                fr.payer
+            );
         } else {
             return Err(format!("R6: frame {f} is charged to {} but mapped nowhere", fr.payer));
         }
@@ -379,7 +462,12 @@ fn i9_memory(k: &Kernel) -> Check {
 fn r2_r3_messages(k: &Kernel) -> Check {
     for e in k.endpoints.values() {
         for (a, q) in &e.queue {
-            ensure!(q.len() as u64 <= WAIT_CAP, "R2: {} senders of account {a} wait on endpoint {}", q.len(), e.id);
+            ensure!(
+                q.len() as u64 <= WAIT_CAP,
+                "R2: {} senders of account {a} wait on endpoint {}",
+                q.len(),
+                e.id
+            );
         }
     }
     for m in k.msgs.values() {
@@ -390,7 +478,9 @@ fn r2_r3_messages(k: &Kernel) -> Check {
         if m.lent_pages == 0 {
             continue;
         }
-        let Some(b) = &m.buffer else { return Err(format!("R3: taken call {} lost its lend before the reply", m.id)) };
+        let Some(b) = &m.buffer else {
+            return Err(format!("R3: taken call {} lost its lend before the reply", m.id));
+        };
         let rv = b.receiver_vpn.unwrap_or(u64::MAX);
         let p = &k.processes[&spid];
         for i in 0..b.frames.len() as u64 {
@@ -409,7 +499,12 @@ fn i13_timeouts(k: &Kernel) -> Check {
     for t in k.threads.values() {
         if t.wait.is_some() {
             if let Some(d) = t.deadline {
-                ensure!(d > k.now, "I13: thread {} is still blocked past its timeout ({d} <= {})", t.tid, k.now);
+                ensure!(
+                    d > k.now,
+                    "I13: thread {} is still blocked past its timeout ({d} <= {})",
+                    t.tid,
+                    k.now
+                );
             }
         }
     }

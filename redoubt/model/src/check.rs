@@ -55,7 +55,12 @@ pub fn kernel_sequence(seed: u64, mutation: Option<Mutation>) -> Result<(), Fail
     let mut k = Kernel::boot(&Boot::default(), mutation);
     let mut gen = Gen::new(seed);
     let mut ops = Vec::new();
-    let fail = |message: String, ops: &Vec<Op>| Failure { family: "kernel_sequence", seed, message, ops: ops.clone() };
+    let fail = |message: String, ops: &Vec<Op>| Failure {
+        family: "kernel_sequence",
+        seed,
+        message,
+        ops: ops.clone(),
+    };
     invariants::check(&k).map_err(|m| fail(m, &ops))?;
     for _ in 0..SEQUENCE_LEN {
         // Stop when nothing can happen any more (halted, or every thread blocked for ever).
@@ -89,7 +94,7 @@ pub const EPILOGUE_HANDLES: u64 = 64;
 /// Not visible even so: a budget's account (it travels only in messages), and an IRQ source's
 /// mask (it shows only as a later interrupt); traces meant to check those must exercise them.
 pub fn epilogue(k: &Kernel) -> Vec<Op> {
-    use crate::kernel::{MapState, Object, INIT_PID};
+    use crate::kernel::{INIT_PID, MapState, Object};
     use crate::spec::{FLAG_R, PAGE_SIZE};
     use crate::syscall::Syscall;
     let mut ops = Vec::new();
@@ -165,8 +170,12 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
     let mut k = Kernel::boot(&Boot::default(), mutation);
     let mut gen = Gen::new(seed);
     let mut ops = Vec::new();
-    let fail =
-        |message: String, ops: &Vec<Op>| Failure { family: "budget_lifecycle", seed, message, ops: ops.clone() };
+    let fail = |message: String, ops: &Vec<Op>| Failure {
+        family: "budget_lifecycle",
+        seed,
+        message,
+        ops: ops.clone(),
+    };
     let step = |k: &mut Kernel, op: Op, ops: &mut Vec<Op>| -> Result<crate::kernel::Step, Failure> {
         ops.push(op.clone());
         let s = k.step(&op).ok_or_else(|| fail(format!("illegal op {op:?}"), ops))?;
@@ -186,7 +195,8 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
         for (i, h) in &k.processes[&pid].handles {
             if let Object::Budget(b) = h.object {
                 let bx = &k.budgets[&b];
-                if bx.pages_limit.saturating_sub(bx.pages_used) >= 8 && bx.processes_limit > bx.processes_used {
+                if bx.pages_limit.saturating_sub(bx.pages_used) >= 8 && bx.processes_limit > bx.processes_used
+                {
                     candidates.push((pid, tid, *i, b));
                 }
             }
@@ -211,7 +221,9 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
     };
     let s = step(&mut k, Op::Sys { pid, tid, call: create }, &mut ops)?;
     let crate::syscall::Outcome::Done(Ok(crate::syscall::Ret::Handle(bh))) = s.outcome else { return Ok(()) };
-    let Some(Object::Budget(child)) = k.processes.get(&pid).and_then(|p| p.handles.get(&bh)).map(|h| h.object) else {
+    let Some(Object::Budget(child)) =
+        k.processes.get(&pid).and_then(|p| p.handles.get(&bh)).map(|h| h.object)
+    else {
         return Ok(());
     };
     // Start one process in the child with only the child's handle, if there is an endpoint to
@@ -222,7 +234,11 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
         .find(|(_, h)| matches!(h.object, Object::Endpoint(_)))
         .map(|(i, _)| *i);
     if let Some(e) = exit {
-        let s = step(&mut k, Op::Sys { pid, tid, call: Syscall::ProcessCreate { budget: bh, exit_endpoint: e } }, &mut ops)?;
+        let s = step(
+            &mut k,
+            Op::Sys { pid, tid, call: Syscall::ProcessCreate { budget: bh, exit_endpoint: e } },
+            &mut ops,
+        )?;
         if let crate::syscall::Outcome::Done(Ok(crate::syscall::Ret::Handle(proc_h))) = s.outcome {
             let start = Syscall::ProcessStart { process: proc_h, entry: 0, sp: 0, handles: alloc::vec![bh] };
             step(&mut k, Op::Sys { pid, tid, call: start }, &mut ops)?;
@@ -241,24 +257,30 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
         let op = loop {
             let op = gen.next_op(&k);
             match &op {
-                Op::Sys { pid, .. } | Op::Write { pid, .. } | Op::Read { pid, .. } | Op::Exec { pid, .. } | Op::Fault { pid, .. }
+                Op::Sys { pid, .. }
+                | Op::Write { pid, .. }
+                | Op::Read { pid, .. }
+                | Op::Exec { pid, .. }
+                | Op::Fault { pid, .. }
                     if inside.iter().any(|(p, _)| p == pid) =>
                 {
-                    break op
+                    break op;
                 }
                 _ => {}
             }
         };
         step(&mut k, op, &mut ops)?;
     }
-    if !k.threads.get(&tid).is_some_and(|t| t.wait.is_none()) || !k.budgets.contains_key(&child) {
+    if k.threads.get(&tid).is_none_or(|t| t.wait.is_some()) || !k.budgets.contains_key(&child) {
         return Ok(());
     }
     step(&mut k, Op::Sys { pid, tid, call: Syscall::BudgetDestroy { h: bh } }, &mut ops)?;
     let after = snapshot(&k);
     if before != after {
         return Err(fail(
-            format!("I10: budget {child} created under {parent} and destroyed changed usage: {before:?} -> {after:?}"),
+            format!(
+                "I10: budget {child} created under {parent} and destroyed changed usage: {before:?} -> {after:?}"
+            ),
             &ops,
         ));
     }
@@ -327,7 +349,12 @@ pub fn fairness_run(seed: u64, mutation: Option<Mutation>) -> Result<u64, Failur
         }
         let Some((id, _)) = s.pick() else {
             // Idle: jump to the next wake-up.
-            now = bs.iter().filter(|b| b.asleep_until != 0).map(|b| b.asleep_until).min().unwrap_or(now + SLICE);
+            now = bs
+                .iter()
+                .filter(|b| b.asleep_until != 0)
+                .map(|b| b.asleep_until)
+                .min()
+                .unwrap_or(now + SLICE);
             continue;
         };
         let i = (id - 1) as usize;
@@ -358,8 +385,9 @@ pub fn fairness_run(seed: u64, mutation: Option<Mutation>) -> Result<u64, Failur
             }
             let d = b.runtime as i128 * total_user_weight as i128 - b.weight as i128 * user_time as i128;
             b.best = b.best.max(d);
-            let bound =
-                (SLICE as i128) * (2 + 2 * b.weight as i128 / w_min as i128 + n as i128) * total_user_weight as i128;
+            let bound = (SLICE as i128)
+                * (2 + 2 * b.weight as i128 / w_min as i128 + n as i128)
+                * total_user_weight as i128;
             worst = worst.max(((b.best - d) * 1000 / bound) as u64);
             if b.best - d > bound {
                 return Err(fail(format!(

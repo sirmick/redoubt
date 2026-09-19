@@ -38,7 +38,11 @@ pub enum NameKind {
 pub enum Token<'a> {
     /// A literal number, decimal or `0x` hex.
     Int(u64),
-    Name { kind: NameKind, value: u64, offset: u64 },
+    Name {
+        kind: NameKind,
+        value: u64,
+        offset: u64,
+    },
     /// `-`: none.
     None,
     /// `forever`: `FOREVER`.
@@ -104,7 +108,9 @@ pub fn token(s: &str) -> Result<Token<'_>, String> {
 }
 
 /// A line's tokens, split at single spaces. `->` separates an event from its result.
-pub fn tokens(line: &str) -> Result<Vec<Token<'_>>, String> { line.split(' ').filter(|t| !t.is_empty()).map(token).collect() }
+pub fn tokens(line: &str) -> Result<Vec<Token<'_>>, String> {
+    line.split(' ').filter(|t| !t.is_empty()).map(token).collect()
+}
 
 // ---------------------------------------------------------------------------------------------
 // Writing.
@@ -118,7 +124,9 @@ struct Names {
 }
 
 impl Names {
-    fn handle(v: u64) -> String { if v < U32_MAX { format!("h:{v}") } else { format!("{v}") } }
+    fn handle(v: u64) -> String {
+        if v < U32_MAX { format!("h:{v}") } else { format!("{v}") }
+    }
 
     fn addr(&self, pid: u64, a: u64) -> String {
         if let Some(r) = self.regions.get(&pid) {
@@ -131,14 +139,18 @@ impl Names {
         format!("{a:#x}")
     }
 
-    fn bind(&mut self, pid: u64, base: u64, pages: u64) { self.regions.entry(pid).or_default().insert(base, pages); }
+    fn bind(&mut self, pid: u64, base: u64, pages: u64) {
+        self.regions.entry(pid).or_default().insert(base, pages);
+    }
 
     fn list(v: impl IntoIterator<Item = String>) -> String {
         let v: Vec<String> = v.into_iter().collect();
         format!("[{}]", v.join(","))
     }
 
-    fn time(t: u64) -> String { if t == FOREVER { "forever".to_string() } else { format!("{t}") } }
+    fn time(t: u64) -> String {
+        if t == FOREVER { "forever".to_string() } else { format!("{t}") }
+    }
 
     fn class(c: u64) -> String {
         match Class::from_raw(c) {
@@ -168,7 +180,9 @@ impl Names {
             S::ProcessMap { process, src, dst, len, flags } => {
                 format!("{} {} {} {len:#x} {flags}", h(*process), a(*src), a(*dst))
             }
-            S::ProcessStart { process, entry, sp, handles } => format!("{} {entry:#x} {sp:#x} {}", h(*process), hs(handles)),
+            S::ProcessStart { process, entry, sp, handles } => {
+                format!("{} {entry:#x} {sp:#x} {}", h(*process), hs(handles))
+            }
             S::Mint { source, badge, budget } => {
                 let src = match source {
                     MintSource::Message(m) => format!("m:{m}"),
@@ -180,20 +194,29 @@ impl Names {
                 format!("{} {} {} {} {}", h(*x), words(w), hs(handles), range(lend), Names::time(*timeout))
             }
             S::Send { h: x, words: w, handles, transfer, timeout } => {
-                format!("{} {} {} {} {}", h(*x), words(w), hs(handles), range(transfer), Names::time(*timeout))
+                format!(
+                    "{} {} {} {} {}",
+                    h(*x),
+                    words(w),
+                    hs(handles),
+                    range(transfer),
+                    Names::time(*timeout)
+                )
             }
             S::Receive { h: x, timeout, max_transfer } => {
                 format!("{} {} {max_transfer}", x.map_or("-".to_string(), h), Names::time(*timeout))
             }
             S::Reply { msg_id, words: w, handles } => format!("m:{msg_id} {} {}", words(w), hs(handles)),
             S::HandleClose { h: x } | S::BudgetDestroy { h: x } | S::BudgetUsage { h: x } => h(*x),
-            S::BudgetCreate { parent, pages, processes, weight, class, labels, account, deadline } => format!(
-                "{} {pages} {processes} {weight} {} {} {account} {}",
-                h(*parent),
-                Names::class(*class),
-                Names::list(labels.iter().map(|l| format!("{l}"))),
-                Names::time(*deadline)
-            ),
+            S::BudgetCreate { parent, pages, processes, weight, class, labels, account, deadline } => {
+                format!(
+                    "{} {pages} {processes} {weight} {} {} {account} {}",
+                    h(*parent),
+                    Names::class(*class),
+                    Names::list(labels.iter().map(|l| format!("{l}"))),
+                    Names::time(*deadline)
+                )
+            }
             S::SystemReset { h: x, kind } => format!("{} {kind}", h(*x)),
             S::Random { len } => format!("{len}"),
         };
@@ -258,7 +281,10 @@ impl Names {
                 format!("ok exit p:{pid} cause={} code={code} blamed={blamed_account}", cause.name())
             }
             Ret::Usage(c) => {
-                format!("ok usage [{},{},{},{}]", c.pages_limit, c.pages_used, c.processes_limit, c.processes_used)
+                format!(
+                    "ok usage [{},{},{},{}]",
+                    c.pages_limit, c.pages_used, c.processes_limit, c.processes_used
+                )
             }
             Ret::Time(t) => format!("ok time {t}"),
             Ret::Random { len } => format!("ok random {len}"),
@@ -302,7 +328,9 @@ fn boot_lines(boot: &Boot) -> Vec<String> {
     ];
     for d in &boot.devices {
         out.push(match d {
-            DeviceSpec::Mmio { base, pages, dma } => format!("device mmio base={base:#x} pages={pages} dma={}", *dma as u8),
+            DeviceSpec::Mmio { base, pages, dma } => {
+                format!("device mmio base={base:#x} pages={pages} dma={}", *dma as u8)
+            }
             DeviceSpec::Irq { n } => format!("device irq n={n}"),
             DeviceSpec::Reset => "device reset".to_string(),
         });
@@ -444,10 +472,20 @@ pub fn parse_call(t: &[Token]) -> Result<Syscall, String> {
             };
             S::Mint { source, badge: v(1)?, budget: opt(2)? }
         }
-        "call" => S::Call { h: v(0)?, words: words(n(1)?)?, handles: list(n(2)?)?, lend: range(n(3)?)?, timeout: v(4)? },
-        "send" => {
-            S::Send { h: v(0)?, words: words(n(1)?)?, handles: list(n(2)?)?, transfer: range(n(3)?)?, timeout: v(4)? }
-        }
+        "call" => S::Call {
+            h: v(0)?,
+            words: words(n(1)?)?,
+            handles: list(n(2)?)?,
+            lend: range(n(3)?)?,
+            timeout: v(4)?,
+        },
+        "send" => S::Send {
+            h: v(0)?,
+            words: words(n(1)?)?,
+            handles: list(n(2)?)?,
+            transfer: range(n(3)?)?,
+            timeout: v(4)?,
+        },
         "receive" => S::Receive { h: opt(0)?, timeout: v(1)?, max_transfer: v(2)? },
         "reply" => S::Reply { msg_id: v(0)?, words: words(n(1)?)?, handles: list(n(2)?)? },
         "handle_close" => S::HandleClose { h: v(0)? },
@@ -492,7 +530,9 @@ pub fn parse(text: &str) -> Result<(Boot, Vec<Op>), String> {
         let (event, _) = line.split_once(" -> ").unwrap_or((line, ""));
         let t = tokens(event).map_err(|e| format!("line {}: {e}", i + 2))?;
         let err = |e: String| format!("line {}: {e}", i + 2);
-        let pt = |j: usize| t.get(j).ok_or_else(|| err("missing pid or tid".into())).and_then(|x| value(x).map_err(err));
+        let pt = |j: usize| {
+            t.get(j).ok_or_else(|| err("missing pid or tid".into())).and_then(|x| value(x).map_err(err))
+        };
         match t.first() {
             Some(Token::Word("boot")) => {
                 boot.ram_pages = field(&t, "ram_pages")?;
@@ -515,15 +555,21 @@ pub fn parse(text: &str) -> Result<(Boot, Vec<Op>), String> {
                 }
             }
             Some(Token::Word("device")) => boot.devices.push(match t.get(1) {
-                Some(Token::Word("mmio")) => {
-                    DeviceSpec::Mmio { base: field(&t, "base")?, pages: field(&t, "pages")?, dma: field(&t, "dma")? != 0 }
-                }
+                Some(Token::Word("mmio")) => DeviceSpec::Mmio {
+                    base: field(&t, "base")?,
+                    pages: field(&t, "pages")?,
+                    dma: field(&t, "dma")? != 0,
+                },
                 Some(Token::Word("irq")) => DeviceSpec::Irq { n: field(&t, "n")? },
                 Some(Token::Word("reset")) => DeviceSpec::Reset,
                 _ => return Err(err("unknown device".into())),
             }),
-            Some(Token::Word("do")) => ops.push(Op::Sys { pid: pt(1)?, tid: pt(2)?, call: parse_call(&t[3..]).map_err(err)? }),
-            Some(Token::Word("write")) => ops.push(Op::Write { pid: pt(1)?, tid: pt(2)?, addr: pt(3)?, value: pt(4)? }),
+            Some(Token::Word("do")) => {
+                ops.push(Op::Sys { pid: pt(1)?, tid: pt(2)?, call: parse_call(&t[3..]).map_err(err)? })
+            }
+            Some(Token::Word("write")) => {
+                ops.push(Op::Write { pid: pt(1)?, tid: pt(2)?, addr: pt(3)?, value: pt(4)? })
+            }
             Some(Token::Word("read")) => ops.push(Op::Read { pid: pt(1)?, tid: pt(2)?, addr: pt(3)? }),
             Some(Token::Word("exec")) => ops.push(Op::Exec { pid: pt(1)?, tid: pt(2)?, addr: pt(3)? }),
             Some(Token::Word("fault")) => ops.push(Op::Fault { pid: pt(1)?, tid: pt(2)? }),

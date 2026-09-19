@@ -50,7 +50,9 @@ pub struct Costs {
 }
 
 impl Default for Costs {
-    fn default() -> Costs { Costs { budget: 1, process: 1, thread: 1, endpoint: 1, handles_per_page: 8 } }
+    fn default() -> Costs {
+        Costs { budget: 1, process: 1, thread: 1, endpoint: 1, handles_per_page: 8 }
+    }
 }
 
 /// A device object the loader creates from the device tree (KERNEL-SPEC.md, Device).
@@ -168,14 +170,19 @@ pub struct Budget {
 
 impl Budget {
     /// A revocation scope: zero limits (R6).
-    pub fn is_scope(&self) -> bool { self.pages_limit == 0 && self.processes_limit == 0 && self.weight == 0 }
+    pub fn is_scope(&self) -> bool {
+        self.pages_limit == 0 && self.processes_limit == 0 && self.weight == 0
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backing {
     Frame(u64),
     /// Page `page` of MMIO device `device`.
-    Device { device: u64, page: u64 },
+    Device {
+        device: u64,
+        page: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -387,10 +394,14 @@ pub struct Kernel {
 
 type R<T> = Result<T, Error>;
 
-fn vpn(addr: u64) -> u64 { addr / PAGE_SIZE }
+fn vpn(addr: u64) -> u64 {
+    addr / PAGE_SIZE
+}
 
 /// Encoding: a register holding a handle must be an index (below `u32::MAX`).
-fn decode_handle(raw: u64) -> R<u64> { if raw < U32_MAX { Ok(raw) } else { Err(Error::BadHandle) } }
+fn decode_handle(raw: u64) -> R<u64> {
+    if raw < U32_MAX { Ok(raw) } else { Err(Error::BadHandle) }
+}
 
 /// Encoding: only the R, W and X bits exist.
 fn decode_flags(flags: u64) -> R<()> {
@@ -400,14 +411,20 @@ fn decode_flags(flags: u64) -> R<()> {
 /// Kernel check of mapping flags: some access, and write only with read (RISC-V has no
 /// write-only pages). W+X is a separate check (R11) so its error is `NotPermitted`.
 fn check_flags(flags: u64) -> R<()> {
-    if flags == 0 || (flags & FLAG_W != 0 && flags & FLAG_R == 0) { Err(Error::InvalidArgument) } else { Ok(()) }
+    if flags == 0 || (flags & FLAG_W != 0 && flags & FLAG_R == 0) {
+        Err(Error::InvalidArgument)
+    } else {
+        Ok(())
+    }
 }
 
-fn is_wx(flags: u64) -> bool { flags & FLAG_W != 0 && flags & FLAG_X != 0 }
+fn is_wx(flags: u64) -> bool {
+    flags & FLAG_W != 0 && flags & FLAG_X != 0
+}
 
 /// A page-aligned, non-empty byte range inside user space; returns (first page, page count).
 fn user_range(addr: u64, len: u64) -> R<(u64, u64)> {
-    if len == 0 || addr % PAGE_SIZE != 0 || len % PAGE_SIZE != 0 {
+    if len == 0 || !addr.is_multiple_of(PAGE_SIZE) || !len.is_multiple_of(PAGE_SIZE) {
         return Err(Error::InvalidArgument);
     }
     let end = addr.checked_add(len).ok_or(Error::InvalidArgument)?;
@@ -459,24 +476,57 @@ impl Kernel {
             notes: Vec::new(),
         };
         let c = k.costs;
-        let root = k.new_budget(None, Class::System, Vec::new(), 0, None, boot.ram_pages, boot.root_processes, boot.root_weight, Class::System);
-        let system = k.new_budget(Some(root), Class::System, Vec::new(), 0, None, boot.system_pages, boot.system_processes, boot.system_weight, Class::System);
-        let users = k.new_budget(Some(root), Class::User, Vec::new(), 0, None, boot.users_pages, boot.users_processes, boot.users_weight, Class::System);
+        let root = k.new_budget(
+            None,
+            Class::System,
+            Vec::new(),
+            0,
+            None,
+            boot.ram_pages,
+            boot.root_processes,
+            boot.root_weight,
+            Class::System,
+        );
+        let system = k.new_budget(
+            Some(root),
+            Class::System,
+            Vec::new(),
+            0,
+            None,
+            boot.system_pages,
+            boot.system_processes,
+            boot.system_weight,
+            Class::System,
+        );
+        let users = k.new_budget(
+            Some(root),
+            Class::User,
+            Vec::new(),
+            0,
+            None,
+            boot.users_pages,
+            boot.users_processes,
+            boot.users_weight,
+            Class::System,
+        );
         k.root = root;
         k.system = system;
         k.users = users;
         // init: charged to root like any process.
         let pid = k.next_pid;
         k.next_pid += 1;
-        k.processes.insert(pid, Process {
+        k.processes.insert(
             pid,
-            budget: root,
-            started: true,
-            threads: BTreeSet::new(),
-            handles: BTreeMap::new(),
-            space: BTreeMap::new(),
-            exit_endpoint: None,
-        });
+            Process {
+                pid,
+                budget: root,
+                started: true,
+                threads: BTreeSet::new(),
+                handles: BTreeMap::new(),
+                space: BTreeMap::new(),
+                exit_endpoint: None,
+            },
+        );
         let r = k.budgets.get_mut(&root).unwrap();
         r.pages_used += c.process;
         r.processes_used += 1;
@@ -505,7 +555,9 @@ impl Kernel {
         k
     }
 
-    fn broken(&self, m: Mutation) -> bool { self.mutation == Some(m) }
+    fn broken(&self, m: Mutation) -> bool {
+        self.mutation == Some(m)
+    }
 
     // ---------------------------------------------------------------------------------------
     // Queries used by the generator, the trace and the property checks.
@@ -518,7 +570,9 @@ impl Kernel {
         self.threads.values().filter(|t| t.wait.is_none()).map(|t| (t.pid, t.tid)).collect()
     }
 
-    pub fn budget_of(&self, pid: u64) -> Option<u64> { self.processes.get(&pid).map(|p| p.budget) }
+    pub fn budget_of(&self, pid: u64) -> Option<u64> {
+        self.processes.get(&pid).map(|p| p.budget)
+    }
 
     /// Is `b` equal to `ancestor` or below it?
     pub fn is_descendant_or_self(&self, b: u64, ancestor: u64) -> bool {
@@ -533,7 +587,9 @@ impl Kernel {
     }
 
     /// Pages a handle table of `n` handles costs.
-    pub fn table_pages(&self, n: u64) -> u64 { n.div_ceil(self.costs.handles_per_page.max(1)) }
+    pub fn table_pages(&self, n: u64) -> u64 {
+        n.div_ceil(self.costs.handles_per_page.max(1))
+    }
 
     /// The earliest time something is due (a timeout or a budget deadline).
     pub fn next_event(&self) -> Option<u64> {
@@ -569,7 +625,9 @@ impl Kernel {
     }
 
     /// Charge without a limit check: only R3 does this (a lend moving to its server).
-    fn force_charge(&mut self, b: u64, n: u64) { self.add_usage(b, n); }
+    fn force_charge(&mut self, b: u64, n: u64) {
+        self.add_usage(b, n);
+    }
 
     fn add_usage(&mut self, b: u64, n: u64) {
         if let Some(x) = self.budgets.get_mut(&b) {
@@ -640,7 +698,8 @@ impl Kernel {
         }
         self.budgets.insert(id, b);
         if let Some(p) = parent {
-            let own_cost = if scope && !self.broken(Mutation::R6ScopeChargedToItself) { self.costs.budget } else { 0 };
+            let own_cost =
+                if scope && !self.broken(Mutation::R6ScopeChargedToItself) { self.costs.budget } else { 0 };
             let x = self.budgets.get_mut(&p).unwrap();
             x.children.insert(id);
             x.pages_used += if scope { own_cost } else { pages };
@@ -953,8 +1012,12 @@ impl Kernel {
                 if superset(&rlabels, &n.labels) || self.broken(Mutation::R1ExitNoticeIgnoresLabels) {
                     self.endpoints.get_mut(&e).unwrap().receivers.pop_front();
                     self.ghost.flows.push(Flow::Exit { from: n.labels.clone(), to: rlabels.clone() });
-                    let ret =
-                        Ret::ExitNotice { pid: n.pid, cause: n.cause, code: n.code, blamed_account: n.blamed_account };
+                    let ret = Ret::ExitNotice {
+                        pid: n.pid,
+                        cause: n.cause,
+                        code: n.code,
+                        blamed_account: n.blamed_account,
+                    };
                     self.wake(rtid, Ok(ret));
                 }
                 continue;
@@ -974,7 +1037,11 @@ impl Kernel {
                 self.fail_sender(mid, Error::LabelDenied);
                 continue;
             }
-            let transfer = m.buffer.as_ref().filter(|b| b.kind == BufferKind::Transfer).map_or(0, |b| b.frames.len() as u64);
+            let transfer = m
+                .buffer
+                .as_ref()
+                .filter(|b| b.kind == BufferKind::Transfer)
+                .map_or(0, |b| b.frames.len() as u64);
             // R4: a transfer larger than the receiver opted into is refused; move on.
             if transfer > max_transfer && !self.broken(Mutation::R4IgnoreMaxTransfer) {
                 self.ghost.took(e, m.account, &self.endpoints[&e]);
@@ -1026,11 +1093,14 @@ impl Kernel {
                     BufferKind::Lend => {
                         let p = self.processes.get_mut(&rpid).unwrap();
                         for (i, f) in buf.frames.iter().enumerate() {
-                            p.space.insert(rv + i as u64, Mapping {
-                                backing: Backing::Frame(*f),
-                                flags: FLAG_R | FLAG_W,
-                                state: MapState::LentIn(mid),
-                            });
+                            p.space.insert(
+                                rv + i as u64,
+                                Mapping {
+                                    backing: Backing::Frame(*f),
+                                    flags: FLAG_R | FLAG_W,
+                                    state: MapState::LentIn(mid),
+                                },
+                            );
                         }
                     }
                     BufferKind::Transfer => {
@@ -1041,11 +1111,14 @@ impl Kernel {
                         }
                         let p = self.processes.get_mut(&rpid).unwrap();
                         for (i, f) in buf.frames.iter().enumerate() {
-                            p.space.insert(rv + i as u64, Mapping {
-                                backing: Backing::Frame(*f),
-                                flags: FLAG_R | FLAG_W,
-                                state: MapState::Own,
-                            });
+                            p.space.insert(
+                                rv + i as u64,
+                                Mapping {
+                                    backing: Backing::Frame(*f),
+                                    flags: FLAG_R | FLAG_W,
+                                    state: MapState::Own,
+                                },
+                            );
                         }
                         for f in &buf.frames {
                             self.frames.get_mut(f).unwrap().payer = rbudget;
@@ -1171,7 +1244,9 @@ impl Kernel {
         let p = self.processes.remove(&pid).unwrap();
         for (_, m) in p.space.iter() {
             if let Backing::Frame(f) = m.backing {
-                if m.state == MapState::Own || matches!(m.state, MapState::LentOut(x) if !self.msgs.contains_key(&x)) {
+                if m.state == MapState::Own
+                    || matches!(m.state, MapState::LentOut(x) if !self.msgs.contains_key(&x))
+                {
                     self.free_frame(f);
                 }
             }
@@ -1254,7 +1329,8 @@ impl Kernel {
                 self.end_process(pid, Cause::Killed, 0, 0);
             }
         }
-        let eps: Vec<u64> = self.endpoints.values().filter(|e| doomed.contains(&e.owner)).map(|e| e.id).collect();
+        let eps: Vec<u64> =
+            self.endpoints.values().filter(|e| doomed.contains(&e.owner)).map(|e| e.id).collect();
         for e in eps {
             self.destroy_endpoint(e);
         }
@@ -1266,9 +1342,11 @@ impl Kernel {
         let bb = self.budgets[&b].clone();
         if let Some(p) = bb.parent {
             if !self.broken(Mutation::R10KeepCarvedLimits) {
-                let scope_cost = if self.broken(Mutation::R6ScopeChargedToItself) { 0 } else { self.costs.budget };
+                let scope_cost =
+                    if self.broken(Mutation::R6ScopeChargedToItself) { 0 } else { self.costs.budget };
                 let px = self.budgets.get_mut(&p).unwrap();
-                px.pages_used = px.pages_used.saturating_sub(if bb.is_scope() { scope_cost } else { bb.pages_limit });
+                px.pages_used =
+                    px.pages_used.saturating_sub(if bb.is_scope() { scope_cost } else { bb.pages_limit });
                 px.processes_used = px.processes_used.saturating_sub(bb.processes_limit);
                 px.weight_used = px.weight_used.saturating_sub(bb.weight);
             }
@@ -1364,7 +1442,11 @@ impl Kernel {
     /// Interrupt line `n` is raised. R5: if the source is unmasked it fires: the kernel masks it
     /// and sets `fired`, and a waiting receiver gets it.
     fn irq(&mut self, n: u64) {
-        let Some(id) = self.devices.values().find(|d| matches!(d.kind, DeviceKind::Irq { n: m, .. } if m == n)).map(|d| d.id)
+        let Some(id) = self
+            .devices
+            .values()
+            .find(|d| matches!(d.kind, DeviceKind::Irq { n: m, .. } if m == n))
+            .map(|d| d.id)
         else {
             return;
         };
@@ -1465,7 +1547,11 @@ impl Kernel {
         // A thread that died later in the step does not receive its earlier wake.
         let threads = &self.threads;
         self.wakes.retain(|w| threads.contains_key(&w.tid));
-        Some(Step { outcome, wakes: core::mem::take(&mut self.wakes), notes: core::mem::take(&mut self.notes) })
+        Some(Step {
+            outcome,
+            wakes: core::mem::take(&mut self.wakes),
+            notes: core::mem::take(&mut self.notes),
+        })
     }
 
     fn fault(&mut self, pid: u64, tid: u64) {
@@ -1500,12 +1586,16 @@ impl Kernel {
         match call {
             S::MapAnon { len, flags } => done(self.map_anon(pid, *len, *flags).map(Ret::Addr)),
             S::Unmap { addr, len } => done(self.unmap(pid, *addr, *len).map(|_| Ret::Unit)),
-            S::SetFlags { addr, len, flags } => done(self.set_flags(pid, *addr, *len, *flags).map(|_| Ret::Unit)),
+            S::SetFlags { addr, len, flags } => {
+                done(self.set_flags(pid, *addr, *len, *flags).map(|_| Ret::Unit))
+            }
             S::MapDevice { h } => done(self.map_device(pid, *h).map(Ret::Addr)),
             S::DmaAlloc { h, npages } => {
                 done(self.dma_alloc(pid, *h, *npages).map(|(addr, phys)| Ret::AddrPhys { addr, phys }))
             }
-            S::ThreadCreate { entry, sp, arg } => done(self.thread_create(pid, *entry, *sp, *arg).map(Ret::Tid)),
+            S::ThreadCreate { entry, sp, arg } => {
+                done(self.thread_create(pid, *entry, *sp, *arg).map(Ret::Tid))
+            }
             S::ThreadExit => {
                 self.thread_exit(pid, tid);
                 Outcome::Gone
@@ -1524,7 +1614,9 @@ impl Kernel {
                 done(self.process_start(pid, *process, *entry, *sp, handles).map(|_| Ret::Unit))
             }
             S::EndpointCreate => done(self.endpoint_create(pid).map(Ret::Handle)),
-            S::Mint { source, badge, budget } => done(self.mint(pid, tid, *source, *badge, *budget).map(Ret::Handle)),
+            S::Mint { source, badge, budget } => {
+                done(self.mint(pid, tid, *source, *badge, *budget).map(Ret::Handle))
+            }
             S::Call { h, words, handles, lend, timeout } => {
                 self.call(pid, tid, *h, *words, handles, *lend, *timeout)
             }
@@ -1537,8 +1629,10 @@ impl Kernel {
             }
             S::HandleClose { h } => done(self.handle_close(pid, *h).map(|_| Ret::Unit)),
             S::BudgetCreate { parent, pages, processes, weight, class, labels, account, deadline } => done(
-                self.budget_create(pid, *parent, *pages, *processes, *weight, *class, labels, *account, *deadline)
-                    .map(Ret::Handle),
+                self.budget_create(
+                    pid, *parent, *pages, *processes, *weight, *class, labels, *account, *deadline,
+                )
+                .map(Ret::Handle),
             ),
             S::BudgetDestroy { h } => match self.budget_destroy(pid, *h) {
                 Ok(()) if !self.threads.contains_key(&tid) => Outcome::Gone,
@@ -1557,7 +1651,7 @@ impl Kernel {
     /// `map_anon(len, flags) -> addr`: pages charged; not W+X; zeroed.
     pub fn map_anon(&mut self, pid: u64, len: u64, flags: u64) -> R<u64> {
         decode_flags(flags)?;
-        if len == 0 || len % PAGE_SIZE != 0 {
+        if len == 0 || !len.is_multiple_of(PAGE_SIZE) {
             return Err(Error::InvalidArgument);
         }
         check_flags(flags)?;
@@ -1576,11 +1670,11 @@ impl Kernel {
         };
         for i in 0..n {
             let f = self.alloc_frame(b);
-            self.processes.get_mut(&pid).unwrap().space.insert(start + i, Mapping {
-                backing: Backing::Frame(f),
-                flags,
-                state: MapState::Own,
-            });
+            self.processes
+                .get_mut(&pid)
+                .unwrap()
+                .space
+                .insert(start + i, Mapping { backing: Backing::Frame(f), flags, state: MapState::Own });
         }
         Ok(start * PAGE_SIZE)
     }
@@ -1623,11 +1717,14 @@ impl Kernel {
         let start = self.alloc_va(pid, pages)?;
         let p = self.processes.get_mut(&pid).unwrap();
         for i in 0..pages {
-            p.space.insert(start + i, Mapping {
-                backing: Backing::Device { device: d, page: i },
-                flags: FLAG_R | FLAG_W,
-                state: MapState::Own,
-            });
+            p.space.insert(
+                start + i,
+                Mapping {
+                    backing: Backing::Device { device: d, page: i },
+                    flags: FLAG_R | FLAG_W,
+                    state: MapState::Own,
+                },
+            );
         }
         Ok(start * PAGE_SIZE)
     }
@@ -1659,11 +1756,10 @@ impl Kernel {
             let f = first + i;
             self.frames.insert(f, Frame { payer: b, content: 0 });
             self.ghost.fresh.insert(f);
-            self.processes.get_mut(&pid).unwrap().space.insert(start + i, Mapping {
-                backing: Backing::Frame(f),
-                flags: FLAG_R | FLAG_W,
-                state: MapState::Own,
-            });
+            self.processes.get_mut(&pid).unwrap().space.insert(
+                start + i,
+                Mapping { backing: Backing::Frame(f), flags: FLAG_R | FLAG_W, state: MapState::Own },
+            );
         }
         Ok((start * PAGE_SIZE, RAM_BASE + first * PAGE_SIZE))
     }
@@ -1710,17 +1806,25 @@ impl Kernel {
         self.charge(b, self.costs.process)?;
         let caller_budget = self.budget_of(pid).unwrap();
         let child = self.next_pid;
-        let h = Handle { object: Object::Process(child), badge: 0, stamp: caller_budget, origin: Origin::Created { by: caller_budget } };
+        let h = Handle {
+            object: Object::Process(child),
+            badge: 0,
+            stamp: caller_budget,
+            origin: Origin::Created { by: caller_budget },
+        };
         // Reserve the pid first so the handle names a live object; undone on failure.
-        self.processes.insert(child, Process {
-            pid: child,
-            budget: b,
-            started: false,
-            threads: BTreeSet::new(),
-            handles: BTreeMap::new(),
-            space: BTreeMap::new(),
-            exit_endpoint: Some(exit),
-        });
+        self.processes.insert(
+            child,
+            Process {
+                pid: child,
+                budget: b,
+                started: false,
+                threads: BTreeSet::new(),
+                handles: BTreeMap::new(),
+                space: BTreeMap::new(),
+                exit_endpoint: Some(exit),
+            },
+        );
         match self.install(pid, &[h]) {
             Ok(v) => {
                 self.next_pid += 1;
@@ -1805,15 +1909,19 @@ impl Kernel {
         let cost = if self.broken(Mutation::R6EndpointsFree) { 0 } else { self.costs.endpoint };
         self.charge(b, cost)?;
         let id = self.next_endpoint;
-        let h = Handle { object: Object::Endpoint(id), badge: 0, stamp: b, origin: Origin::Created { by: b } };
-        self.endpoints.insert(id, Endpoint {
+        let h =
+            Handle { object: Object::Endpoint(id), badge: 0, stamp: b, origin: Origin::Created { by: b } };
+        self.endpoints.insert(
             id,
-            owner: b,
-            queue: BTreeMap::new(),
-            cursor: None,
-            receivers: VecDeque::new(),
-            exits: VecDeque::new(),
-        });
+            Endpoint {
+                id,
+                owner: b,
+                queue: BTreeMap::new(),
+                cursor: None,
+                receivers: VecDeque::new(),
+                exits: VecDeque::new(),
+            },
+        );
         match self.install(pid, &[h]) {
             Ok(v) => {
                 self.next_endpoint += 1;
@@ -1828,7 +1936,14 @@ impl Kernel {
     }
 
     /// `mint(source, badge, budget?) -> h`: a handle to an endpoint with `badge != 0`.
-    pub fn mint(&mut self, pid: u64, tid: u64, source: MintSource, badge: u64, budget: Option<u64>) -> R<u64> {
+    pub fn mint(
+        &mut self,
+        pid: u64,
+        tid: u64,
+        source: MintSource,
+        badge: u64,
+        budget: Option<u64>,
+    ) -> R<u64> {
         if let MintSource::Handle(h) = source {
             decode_handle(h)?;
         }
@@ -1869,7 +1984,12 @@ impl Kernel {
         if self.broken(Mutation::R9MintStampsCaller) {
             stamp = self.budget_of(pid).unwrap();
         }
-        let h = Handle { object: Object::Endpoint(e), badge, stamp, origin: Origin::Minted { default_stamp: default } };
+        let h = Handle {
+            object: Object::Endpoint(e),
+            badge,
+            stamp,
+            origin: Origin::Minted { default_stamp: default },
+        };
         Ok(self.install(pid, &[h])?[0])
     }
 
@@ -1957,26 +2077,29 @@ impl Kernel {
             InFlight { kind, sender_vpn: first, frames, receiver_vpn: None }
         });
         self.next_seq += 1;
-        self.msgs.insert(id, Msg {
+        self.msgs.insert(
             id,
-            kind,
-            sender_pid: pid,
-            sender_tid: tid,
-            sender_budget: b,
-            endpoint: e,
-            badge: hd.badge,
-            stamp: hd.stamp,
-            account,
-            labels,
-            class,
-            words,
-            handles: hs,
-            lent_pages: if kind == MsgKind::Call { range.map_or(0, |r| r.1) } else { 0 },
-            buffer,
-            seq: self.next_seq,
-            server: None,
-            caller_waiting: kind == MsgKind::Call,
-        });
+            Msg {
+                id,
+                kind,
+                sender_pid: pid,
+                sender_tid: tid,
+                sender_budget: b,
+                endpoint: e,
+                badge: hd.badge,
+                stamp: hd.stamp,
+                account,
+                labels,
+                class,
+                words,
+                handles: hs,
+                lent_pages: if kind == MsgKind::Call { range.map_or(0, |r| r.1) } else { 0 },
+                buffer,
+                seq: self.next_seq,
+                server: None,
+                caller_waiting: kind == MsgKind::Call,
+            },
+        );
         self.endpoints.get_mut(&e).unwrap().queue.entry(account).or_default().push_back(id);
         self.block(tid, Wait::Send(id), timeout);
         self.pump(e);
@@ -2020,7 +2143,14 @@ impl Kernel {
     }
 
     /// `receive(h or none, timeout, max_transfer)`: badge-0 endpoint, IRQ, or none (sleep).
-    pub fn receive(&mut self, pid: u64, tid: u64, h: Option<u64>, timeout: u64, max_transfer: u64) -> Outcome {
+    pub fn receive(
+        &mut self,
+        pid: u64,
+        tid: u64,
+        h: Option<u64>,
+        timeout: u64,
+        max_transfer: u64,
+    ) -> Outcome {
         let Some(h) = h else {
             self.block(tid, Wait::Sleep, timeout);
             return Outcome::Blocked;
@@ -2201,15 +2331,35 @@ impl Kernel {
         let n0 = self.processes[&pid].handles.len() as u64;
         let growth = self.table_pages(n0 + 1) - self.table_pages(n0);
         let carved = if scope { self.costs.budget } else { pages };
-        let caller_free = self.free_pages(caller_budget) - if caller_budget == p { carved.min(self.free_pages(p)) } else { 0 };
+        let caller_free = self.free_pages(caller_budget)
+            - if caller_budget == p { carved.min(self.free_pages(p)) } else { 0 };
         if caller_free < growth {
             return Err(Error::OutOfMemory);
         }
         // R8: the parent's account, unless it is 0.
-        let account = if px.account != 0 && !self.broken(Mutation::R8AccountFromArgument) { px.account } else { account };
+        let account = if px.account != 0 && !self.broken(Mutation::R8AccountFromArgument) {
+            px.account
+        } else {
+            account
+        };
         let deadline = if deadline == FOREVER { None } else { Some(deadline) };
-        let id = self.new_budget(Some(p), class, labels, account, deadline, pages, processes, weight, caller_class);
-        let h = Handle { object: Object::Budget(id), badge: 0, stamp: caller_budget, origin: Origin::Created { by: caller_budget } };
+        let id = self.new_budget(
+            Some(p),
+            class,
+            labels,
+            account,
+            deadline,
+            pages,
+            processes,
+            weight,
+            caller_class,
+        );
+        let h = Handle {
+            object: Object::Budget(id),
+            badge: 0,
+            stamp: caller_budget,
+            origin: Origin::Created { by: caller_budget },
+        };
         Ok(self.install(pid, &[h]).expect("room checked above")[0])
     }
 
@@ -2240,7 +2390,9 @@ impl Kernel {
     }
 
     /// `time_now() -> µs`.
-    pub fn time_now(&self) -> u64 { self.now }
+    pub fn time_now(&self) -> u64 {
+        self.now
+    }
 
     /// `system_reset(h(Reset), kind)`: Reset device handle. The machine stops.
     pub fn system_reset(&mut self, pid: u64, h: u64, kind: u64) -> R<()> {
@@ -2257,5 +2409,7 @@ impl Kernel {
     }
 
     /// `random(len) -> bytes`: `len` at most 64.
-    pub fn random(&self, len: u64) -> R<u64> { if len > RANDOM_MAX_LEN { Err(Error::TooLarge) } else { Ok(len) } }
+    pub fn random(&self, len: u64) -> R<u64> {
+        if len > RANDOM_MAX_LEN { Err(Error::TooLarge) } else { Ok(len) }
+    }
 }

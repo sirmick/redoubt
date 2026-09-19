@@ -73,7 +73,11 @@ pub fn manifest() -> Manifest {
         weight: 100,
     };
     Manifest {
-        principals: vec![p("alice", 1001, 11, 12, &[7, 8]), p("bob", 1002, 21, 22, &[9]), p("carol", 1003, 31, 32, &[])],
+        principals: vec![
+            p("alice", 1001, 11, 12, &[7, 8]),
+            p("bob", 1002, 21, 22, &[9]),
+            p("carol", 1003, 31, 32, &[]),
+        ],
         keyd_keys: vec![100, 101],
     }
 }
@@ -133,7 +137,7 @@ pub fn random_op(st: &Steward, subs: &[ReqRef], rng: &mut Rng) -> PolicyOp {
             let key = if rng.pct(85) { good } else { rng.pick(&ALL_KEYS).unwrap() };
             let hash = match rng.below(10) {
                 0 => HashRef::Of(request(rng)),
-                1 => HashRef::Literal(rng.next()),
+                1 => HashRef::Literal(rng.next_u64()),
                 _ => HashRef::Own,
             };
             PolicyOp::Approve { principal, key, request: request(rng), hash }
@@ -142,7 +146,9 @@ pub fn random_op(st: &Steward, subs: &[ReqRef], rng: &mut Rng) -> PolicyOp {
             let key = st.principals[principal].spec.approval_keys[0];
             PolicyOp::Deny { principal, key, request: request(rng) }
         }
-        80..=87 => PolicyOp::Blame { account: if rng.pct(90) { st.principals[principal].spec.account } else { 0 } },
+        80..=87 => {
+            PolicyOp::Blame { account: if rng.pct(90) { st.principals[principal].spec.account } else { 0 } }
+        }
         88..=89 => PolicyOp::KeydAdd { key: rng.pick(&ALL_KEYS).unwrap() },
         90..=91 => PolicyOp::Usage { principal },
         _ => PolicyOp::Tick {
@@ -184,7 +190,9 @@ impl Run {
         }
     }
 
-    fn resolve(&self, r: ReqRef) -> u64 { self.submitted.get(&(r.session, r.nth)).copied().unwrap_or(r.session * 7919 + r.nth) }
+    fn resolve(&self, r: ReqRef) -> u64 {
+        self.submitted.get(&(r.session, r.nth)).copied().unwrap_or(r.session * 7919 + r.nth)
+    }
 
     /// Apply one op, check P1-P9 and the kernel invariants, and return what the caller saw.
     pub fn apply(&mut self, op: &PolicyOp) -> Result<Obs, String> {
@@ -204,11 +212,15 @@ impl Run {
                 }
                 format!("{r:?}")
             }
-            PolicyOp::WriteItem { session, item, bytes } => format!("{:?}", self.st.write_item(*session, *item, bytes.clone())),
+            PolicyOp::WriteItem { session, item, bytes } => {
+                format!("{:?}", self.st.write_item(*session, *item, bytes.clone()))
+            }
             PolicyOp::Submit { session, content, reason } => {
                 // What a snapshot must contain, read from the vault before the steward acts.
                 let expect = match content {
-                    Content::Declassify { label, item } => Some(self.st.vault.get(&(*label, *item)).cloned().unwrap_or_default()),
+                    Content::Declassify { label, item } => {
+                        Some(self.st.vault.get(&(*label, *item)).cloned().unwrap_or_default())
+                    }
                     _ => None,
                 };
                 let r = self.st.submit(*session, content.clone(), reason);
@@ -232,7 +244,10 @@ impl Run {
                     let req = &self.st.requests[&r.id];
                     let visible = req.approver == *principal && req.labels.iter().all(|l| owned.contains(l));
                     if !visible {
-                        return Err(format!("P4: principal {principal} sees request {} labelled {:?}", r.id, r.labels));
+                        return Err(format!(
+                            "P4: principal {principal} sees request {} labelled {:?}",
+                            r.id, r.labels
+                        ));
                     }
                     if r.text.chars().any(|c| c.is_control()) {
                         return Err(format!("P4: rendered request {} contains control characters", r.id));
@@ -271,13 +286,19 @@ impl Run {
                     let principal = self.st.principals.iter().position(|p| p.spec.account == *account);
                     for (id, s) in &sessions_before {
                         let mine = Some(s.principal) == principal;
-                        let alive = self.st.sessions.contains_key(id) || !self.st.k.budgets.contains_key(&s.budget);
+                        let alive =
+                            self.st.sessions.contains_key(id) || !self.st.k.budgets.contains_key(&s.budget);
                         let still = self.st.sessions.contains_key(id);
                         if mine && logout && still {
-                            return Err(format!("P7: account {account} blamed 3 times in 10 minutes, session {id} survived"));
+                            return Err(format!(
+                                "P7: account {account} blamed 3 times in 10 minutes, session {id} survived"
+                            ));
                         }
                         if (!mine || !logout) && !alive {
-                            return Err(format!("P7: blaming account {account} ended session {id} of principal {}", s.principal));
+                            return Err(format!(
+                                "P7: blaming account {account} ended session {id} of principal {}",
+                                s.principal
+                            ));
                         }
                     }
                 }
@@ -312,7 +333,10 @@ impl Run {
                 return Err(format!("P1: session {}'s budget is not its principal's", s.id));
             }
             if s.labels.len() > 1 || !s.labels.iter().all(|l| p.spec.owned_labels.contains(l)) {
-                return Err(format!("P1: session {} carries labels {:?} its principal does not own", s.id, s.labels));
+                return Err(format!(
+                    "P1: session {} carries labels {:?} its principal does not own",
+                    s.id, s.labels
+                ));
             }
             if s.kind == SessionKind::Agent && b.deadline.is_none_or(|d| d <= st.k.now) {
                 return Err(format!("P9: agent session {} has no future deadline", s.id));
@@ -327,10 +351,11 @@ impl Run {
         }
         for e in &st.audit[audit_from..] {
             match e {
-                Audit::Login { principal, key, .. } => {
-                    if !st.principals[*principal].spec.login_keys.contains(key) || st.keyd.contains(key) {
-                        return Err(format!("P2: login to principal {principal} with key {key}"));
-                    }
+                Audit::Login { principal, key, .. }
+                    if (!st.principals[*principal].spec.login_keys.contains(key)
+                        || st.keyd.contains(key)) =>
+                {
+                    return Err(format!("P2: login to principal {principal} with key {key}"));
                 }
                 Audit::Approved { id, principal, key, hash } => {
                     let spec = &st.principals[*principal].spec;
@@ -338,21 +363,30 @@ impl Run {
                         return Err(format!("P3: approved request {id} was never submitted"));
                     };
                     if hash != want {
-                        return Err(format!("P3: request {id} approved with hash {hash:#x}, its content hashes to {want:#x}"));
+                        return Err(format!(
+                            "P3: request {id} approved with hash {hash:#x}, its content hashes to {want:#x}"
+                        ));
                     }
-                    if !spec.approval_keys.contains(key) || spec.login_keys.contains(key) || st.keyd.contains(key) {
+                    if !spec.approval_keys.contains(key)
+                        || spec.login_keys.contains(key)
+                        || st.keyd.contains(key)
+                    {
                         return Err(format!("P3: request {id} approved with key {key}, not an approval key"));
                     }
                 }
-                Audit::AgentStarted { sponsor, labels, .. } => {
-                    if !labels.iter().all(|l| st.principals[*sponsor].spec.owned_labels.contains(l)) {
-                        return Err(format!("P3: an agent labelled {labels:?} started for a principal owning fewer"));
-                    }
+                Audit::AgentStarted { sponsor, labels, .. }
+                    if !labels.iter().all(|l| st.principals[*sponsor].spec.owned_labels.contains(l)) =>
+                {
+                    return Err(format!(
+                        "P3: an agent labelled {labels:?} started for a principal owning fewer"
+                    ));
                 }
                 Audit::Declassified { id, bytes, .. } => {
                     let want = self.ghost_requests.get(id).and_then(|(_, b)| b.clone());
                     if want.as_ref() != Some(bytes) {
-                        return Err(format!("P6: declassified {bytes:?}, the snapshot at submission was {want:?}"));
+                        return Err(format!(
+                            "P6: declassified {bytes:?}, the snapshot at submission was {want:?}"
+                        ));
                     }
                 }
                 _ => {}
@@ -365,7 +399,7 @@ impl Run {
 /// P1-P9: a random sequence of policy operations.
 pub fn steward_policy(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
     let mut rng = Rng::new(seed);
-    let mut run = Run::new(mutation, rng.next());
+    let mut run = Run::new(mutation, rng.next_u64());
     for i in 0..rng.range(20, 120) {
         let op = random_op(&run.st, &run.subs, &mut rng);
         run.apply(&op).map_err(|message| Failure {
@@ -389,8 +423,9 @@ pub fn steward_policy(seed: u64, mutation: Option<Mutation>) -> Result<(), Failu
 /// requests are left out of the sequence; approving is declassifying by design.
 pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
     let mut rng = Rng::new(seed);
-    let secret = rng.next();
-    let fail = |message: String| Failure { family: "steward_noninterference", seed, message, ops: Vec::new() };
+    let secret = rng.next_u64();
+    let fail =
+        |message: String| Failure { family: "steward_noninterference", seed, message, ops: Vec::new() };
     // Build the sequence on a first run, recording which ops are vault work.
     let mut first = Run::new(mutation, secret);
     let mut ops: Vec<(PolicyOp, bool)> = Vec::new();
@@ -398,7 +433,9 @@ pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<
     for _ in 0..rng.range(20, 100) {
         let op = random_op(&first.st, &first.subs, &mut rng);
         let vault = match &op {
-            PolicyOp::WriteItem { session, .. } | PolicyOp::Submit { session, .. } => vault_sessions.contains(session),
+            PolicyOp::WriteItem { session, .. } | PolicyOp::Submit { session, .. } => {
+                vault_sessions.contains(session)
+            }
             // Approving or denying a vault request, blaming, and ending sessions are left out:
             // they are the owner's decisions, not the vault's work.
             PolicyOp::Approve { request, .. } | PolicyOp::Deny { request, .. } => {
@@ -423,11 +460,14 @@ pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<
         ops.push((op, vault));
     }
     // The observer: someone other than the vault owners.
-    let owners: BTreeSet<usize> = vault_sessions.iter().filter_map(|s| first.st.sessions.get(s)).map(|s| s.principal).collect();
+    let owners: BTreeSet<usize> =
+        vault_sessions.iter().filter_map(|s| first.st.sessions.get(s)).map(|s| s.principal).collect();
     let observers: Vec<usize> = (0..first.st.principals.len()).filter(|p| !owners.contains(p)).collect();
     let actor = |r: &Run, op: &PolicyOp| -> Option<usize> {
         match op {
-            PolicyOp::Login { principal, .. } | PolicyOp::Pending { principal } | PolicyOp::Usage { principal } => Some(*principal),
+            PolicyOp::Login { principal, .. }
+            | PolicyOp::Pending { principal }
+            | PolicyOp::Usage { principal } => Some(*principal),
             PolicyOp::Approve { principal, .. } | PolicyOp::Deny { principal, .. } => Some(*principal),
             PolicyOp::EndSession { session }
             | PolicyOp::StartAgent { session, .. }
@@ -447,19 +487,26 @@ pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<
         let b = without.apply(op).map_err(fail)?;
         let observed = who.is_some_and(|p| observers.contains(&p));
         if observed && a != b {
-            return Err(fail(format!("P10: op {i} ({op:?}) showed {a:?} with the vault's work and {b:?} without")));
+            return Err(fail(format!(
+                "P10: op {i} ({op:?}) showed {a:?} with the vault's work and {b:?} without"
+            )));
         }
         // Ids of the observers' own requests.
         for (key, id) in &with.submitted {
             let mine = with.st.sessions.get(&key.0).is_some_and(|s| observers.contains(&s.principal));
             if mine && without.submitted.get(key) != Some(id) {
-                return Err(fail(format!("P10: session {}'s request {} got a different id without the vault's work", key.0, key.1)));
+                return Err(fail(format!(
+                    "P10: session {}'s request {} got a different id without the vault's work",
+                    key.0, key.1
+                )));
             }
         }
         for p in 0..with.st.principals.len() {
             let h = with.st.principals[p].h;
             if with.st.usage(h) != without.st.usage(h) {
-                return Err(fail(format!("P10: principal {p}'s budget usage depends on the vault's work (op {i})")));
+                return Err(fail(format!(
+                    "P10: principal {p}'s budget usage depends on the vault's work (op {i})"
+                )));
             }
         }
     }

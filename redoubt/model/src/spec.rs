@@ -94,7 +94,9 @@ impl Error {
         }
     }
 
-    pub fn from_name(s: &str) -> Option<Error> { Error::ALL.iter().copied().find(|e| e.name() == s) }
+    pub fn from_name(s: &str) -> Option<Error> {
+        Error::ALL.iter().copied().find(|e| e.name() == s)
+    }
 }
 
 /// Budget class. `user < system` (the derived order is the spec's order).
@@ -163,4 +165,6 @@ pub struct Counters {
 }
 
 /// `true` if `outer ⊇ inner`; both are sorted and deduplicated.
-pub fn superset(outer: &[u64], inner: &[u64]) -> bool { inner.iter().all(|l| outer.binary_search(l).is_ok()) }
+pub fn superset(outer: &[u64], inner: &[u64]) -> bool {
+    inner.iter().all(|l| outer.binary_search(l).is_ok())
+}

@@ -66,17 +66,21 @@ fn a_rule_breaking_kernel_fails_replay() {
         })
         .collect();
     let mut missed = Vec::new();
-    let invisible = |m: &Mutation| m.rule() == "policy" || m.rule() == "R12" || *m == Mutation::R5NoMaskOnFire;
+    let invisible =
+        |m: &Mutation| m.rule() == "policy" || m.rule() == "R12" || *m == Mutation::R5NoMaskOnFire;
     for m in Mutation::ALL.into_iter().filter(|m| !invisible(m)) {
-        let detected = texts
-            .iter()
-            .position(|text| matches!(std::panic::catch_unwind(|| trace::check(text, Some(m))), Ok(Err(_)) | Err(_)));
+        let detected = texts.iter().position(|text| {
+            matches!(std::panic::catch_unwind(|| trace::check(text, Some(m))), Ok(Err(_)) | Err(_))
+        });
         eprintln!("{m:?}: the first trace that does not replay is number {detected:?}");
         if detected.is_none() {
             missed.push(m);
         }
     }
-    assert!(missed.is_empty(), "a kernel with these rule breaks replays the model's traces unnoticed: {missed:?}");
+    assert!(
+        missed.is_empty(),
+        "a kernel with these rule breaks replays the model's traces unnoticed: {missed:?}"
+    );
 }
 
 /// The example in traces/: a client lends two pages to a server, its budget is destroyed while
@@ -98,18 +102,24 @@ fn lender_dies_mid_call() -> Vec<Op> {
     };
     let buf = 0x10_0000_0000; // the model's first kernel-chosen address
     vec![
-        init(Syscall::EndpointCreate),                                                        // h:9
-        init(budget(3, Class::User, 1001)),                                                   // h:10 alice
-        init(budget(2, Class::System, 0)),                                                    // h:11 server
-        init(Syscall::ProcessCreate { budget: 11, exit_endpoint: 9 }),                        // h:12
+        init(Syscall::EndpointCreate),                                 // h:9
+        init(budget(3, Class::User, 1001)),                            // h:10 alice
+        init(budget(2, Class::System, 0)),                             // h:11 server
+        init(Syscall::ProcessCreate { budget: 11, exit_endpoint: 9 }), // h:12
         init(Syscall::ProcessStart { process: 12, entry: 0x1000, sp: 0x2000, handles: vec![9] }),
-        init(Syscall::Mint { source: MintSource::Handle(9), badge: 5, budget: Some(10) }),    // h:13
-        init(Syscall::ProcessCreate { budget: 10, exit_endpoint: 9 }),                        // h:14
+        init(Syscall::Mint { source: MintSource::Handle(9), badge: 5, budget: Some(10) }), // h:13
+        init(Syscall::ProcessCreate { budget: 10, exit_endpoint: 9 }),                     // h:14
         init(Syscall::ProcessStart { process: 14, entry: 0x1000, sp: 0x2000, handles: vec![13] }),
         server(Syscall::Receive { h: Some(1), timeout: FOREVER, max_transfer: 0 }),
         client(Syscall::MapAnon { len: 2 * PAGE_SIZE, flags: FLAG_R | FLAG_W }),
         Op::Write { pid: 3, tid: 3, addr: buf, value: 42 },
-        client(Syscall::Call { h: 1, words: [1, 2, 3, 4], handles: vec![], lend: Some(Buffer { addr: buf, npages: 2 }), timeout: FOREVER }),
+        client(Syscall::Call {
+            h: 1,
+            words: [1, 2, 3, 4],
+            handles: vec![],
+            lend: Some(Buffer { addr: buf, npages: 2 }),
+            timeout: FOREVER,
+        }),
         Op::Read { pid: 2, tid: 2, addr: buf },
         Op::Write { pid: 2, tid: 2, addr: buf, value: 99 },
         init(Syscall::BudgetDestroy { h: 10 }),

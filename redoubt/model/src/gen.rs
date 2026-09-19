@@ -14,7 +14,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::kernel::{Backing, DeviceKind, Kernel, MapState, MsgKind, Object, INIT_PID};
+use crate::kernel::{Backing, DeviceKind, INIT_PID, Kernel, MapState, MsgKind, Object};
 use crate::spec::*;
 use crate::syscall::*;
 
@@ -23,9 +23,11 @@ use crate::syscall::*;
 pub struct Rng(u64);
 
 impl Rng {
-    pub fn new(seed: u64) -> Rng { Rng(seed ^ 0x5eed_0f_d0_0b7) }
+    pub fn new(seed: u64) -> Rng {
+        Rng(seed ^ 0x5eed_0fd0_0b70)
+    }
 
-    pub fn next(&mut self) -> u64 {
+    pub fn next_u64(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
         let mut z = self.0;
         z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
@@ -34,13 +36,19 @@ impl Rng {
     }
 
     /// Uniform in `0..n` (0 when `n` is 0).
-    pub fn below(&mut self, n: u64) -> u64 { if n == 0 { 0 } else { self.next() % n } }
+    pub fn below(&mut self, n: u64) -> u64 {
+        if n == 0 { 0 } else { self.next_u64() % n }
+    }
 
     /// Uniform in `lo..=hi`.
-    pub fn range(&mut self, lo: u64, hi: u64) -> u64 { lo + self.below(hi - lo + 1) }
+    pub fn range(&mut self, lo: u64, hi: u64) -> u64 {
+        lo + self.below(hi - lo + 1)
+    }
 
     /// True with probability `percent`/100.
-    pub fn pct(&mut self, percent: u64) -> bool { self.below(100) < percent }
+    pub fn pct(&mut self, percent: u64) -> bool {
+        self.below(100) < percent
+    }
 
     pub fn pick<T: Copy>(&mut self, v: &[T]) -> Option<T> {
         if v.is_empty() { None } else { Some(v[self.below(v.len() as u64) as usize]) }
@@ -121,7 +129,11 @@ impl Gen {
         let pages = k.processes[&pid].space.values().filter(|m| m.state == MapState::Own).count();
         if pages < 4 && self.rng.pct(25) {
             let n = self.rng.range(1, 4);
-            return Op::Sys { pid, tid, call: Syscall::MapAnon { len: n * PAGE_SIZE, flags: FLAG_R | FLAG_W } };
+            return Op::Sys {
+                pid,
+                tid,
+                call: Syscall::MapAnon { len: n * PAGE_SIZE, flags: FLAG_R | FLAG_W },
+            };
         }
         let call = if self.rng.pct(4) { self.hostile_syscall() } else { self.syscall(k, pid, tid) };
         Op::Sys { pid, tid, call }
@@ -137,7 +149,7 @@ impl Gen {
             4 => self.rng.below(8) * PAGE_SIZE,
             5 => (1 << 38) - PAGE_SIZE,
             6 => 1 << self.rng.below(64),
-            _ => self.rng.next(),
+            _ => self.rng.next_u64(),
         }
     }
 
@@ -151,7 +163,8 @@ impl Gen {
     pub fn hostile_syscall(&mut self) -> Syscall {
         use Syscall as S;
         let w = [self.any(), self.any(), self.any(), self.any()];
-        let buf = |g: &mut Gen| if g.rng.pct(50) { None } else { Some(Buffer { addr: g.any(), npages: g.any() }) };
+        let buf =
+            |g: &mut Gen| if g.rng.pct(50) { None } else { Some(Buffer { addr: g.any(), npages: g.any() }) };
         match self.rng.below(24) {
             0 => S::MapAnon { len: self.any(), flags: self.any() },
             1 => S::Unmap { addr: self.any(), len: self.any() },
@@ -161,17 +174,48 @@ impl Gen {
             5 => S::ThreadCreate { entry: self.any(), sp: self.any(), arg: self.any() },
             6 => S::ProcessExit { code: self.any() },
             7 => S::ProcessCreate { budget: self.any(), exit_endpoint: self.any() },
-            8 => S::ProcessMap { process: self.any(), src: self.any(), dst: self.any(), len: self.any(), flags: self.any() },
-            9 => S::ProcessStart { process: self.any(), entry: self.any(), sp: self.any(), handles: self.any_list() },
+            8 => S::ProcessMap {
+                process: self.any(),
+                src: self.any(),
+                dst: self.any(),
+                len: self.any(),
+                flags: self.any(),
+            },
+            9 => S::ProcessStart {
+                process: self.any(),
+                entry: self.any(),
+                sp: self.any(),
+                handles: self.any_list(),
+            },
             10 => S::EndpointCreate,
             11 => {
-                let source = if self.rng.pct(50) { MintSource::Message(self.any()) } else { MintSource::Handle(self.any()) };
+                let source = if self.rng.pct(50) {
+                    MintSource::Message(self.any())
+                } else {
+                    MintSource::Handle(self.any())
+                };
                 let budget = if self.rng.pct(50) { None } else { Some(self.any()) };
                 S::Mint { source, badge: self.any(), budget }
             }
-            12 => S::Call { h: self.any(), words: w, handles: self.any_list(), lend: buf(self), timeout: self.any() },
-            13 => S::Send { h: self.any(), words: w, handles: self.any_list(), transfer: buf(self), timeout: self.any() },
-            14 => S::Receive { h: if self.rng.pct(20) { None } else { Some(self.any()) }, timeout: self.any(), max_transfer: self.any() },
+            12 => S::Call {
+                h: self.any(),
+                words: w,
+                handles: self.any_list(),
+                lend: buf(self),
+                timeout: self.any(),
+            },
+            13 => S::Send {
+                h: self.any(),
+                words: w,
+                handles: self.any_list(),
+                transfer: buf(self),
+                timeout: self.any(),
+            },
+            14 => S::Receive {
+                h: if self.rng.pct(20) { None } else { Some(self.any()) },
+                timeout: self.any(),
+                max_transfer: self.any(),
+            },
             15 => S::Reply { msg_id: self.any(), words: w, handles: self.any_list() },
             16 => S::HandleClose { h: self.any() },
             17 => S::BudgetCreate {
@@ -218,7 +262,8 @@ impl Gen {
             init.handles.iter().filter(|(_, h)| f(h.object) && h.badge == 0).map(|(i, _)| *i).collect()
         };
         let endpoints = handles_of(&|o| matches!(o, Object::Endpoint(_)));
-        let budget_h = |b: u64| init.handles.iter().find(|(_, h)| h.object == Object::Budget(b)).map(|(i, _)| *i);
+        let budget_h =
+            |b: u64| init.handles.iter().find(|(_, h)| h.object == Object::Budget(b)).map(|(i, _)| *i);
         let step = self.setup;
         self.setup += 1;
         // Two shared endpoints.
@@ -281,12 +326,8 @@ impl Gen {
             let b = k.processes[&p].budget;
             // Hand over: its own budget, a badge-0 endpoint (a receive right) or a handle minted
             // into its budget, and sometimes the other endpoint.
-            let minted: Vec<u64> = init
-                .handles
-                .iter()
-                .filter(|(_, h)| h.badge != 0 && h.stamp == b)
-                .map(|(i, _)| *i)
-                .collect();
+            let minted: Vec<u64> =
+                init.handles.iter().filter(|(_, h)| h.badge != 0 && h.stamp == b).map(|(i, _)| *i).collect();
             if minted.is_empty() && self.rng.pct(70) {
                 let e = self.rng.pick(&endpoints)?;
                 return sys(Syscall::Mint {
@@ -324,20 +365,34 @@ impl Gen {
         let holders: Vec<(u64, u64)> = runnable
             .iter()
             .copied()
-            .filter(|(pid, _)| k.processes[pid].handles.values().any(|h| h.object == Object::Endpoint(target)))
+            .filter(|(pid, _)| {
+                k.processes[pid].handles.values().any(|h| h.object == Object::Endpoint(target))
+            })
             .collect();
         let (pid, tid) = self.rng.pick(&holders)?;
         let p = &k.processes[&pid];
         let h_any = p.handles.iter().find(|(_, h)| h.object == Object::Endpoint(target)).map(|(i, _)| *i)?;
-        let h_recv = p.handles.iter().find(|(_, h)| h.object == Object::Endpoint(target) && h.badge == 0).map(|(i, _)| *i);
+        let h_recv = p
+            .handles
+            .iter()
+            .find(|(_, h)| h.object == Object::Endpoint(target) && h.badge == 0)
+            .map(|(i, _)| *i);
         if let Some(h) = h_recv {
             if self.rng.pct(20) {
-                return Some(Op::Sys { pid, tid, call: Syscall::Receive { h: Some(h), timeout: 0, max_transfer: 1 } });
+                return Some(Op::Sys {
+                    pid,
+                    tid,
+                    call: Syscall::Receive { h: Some(h), timeout: 0, max_transfer: 1 },
+                });
             }
         }
         let serving = k.threads[&tid].serving;
         if let Some(m) = serving.filter(|m| k.msgs.get(m).is_some_and(|x| x.kind == MsgKind::Call)) {
-            return Some(Op::Sys { pid, tid, call: Syscall::Reply { msg_id: m, words: [0; WORDS], handles: vec![] } });
+            return Some(Op::Sys {
+                pid,
+                tid,
+                call: Syscall::Reply { msg_id: m, words: [0; WORDS], handles: vec![] },
+            });
         }
         let runnable_here = runnable.iter().filter(|(p, _)| *p == pid).count();
         if runnable_here < 2 && (p.threads.len() as u64) < MAX_THREADS {
@@ -401,7 +456,9 @@ impl Gen {
         let pages: Vec<u64> = p
             .space
             .iter()
-            .filter(|(_, m)| m.state == MapState::Own && matches!(m.backing, Backing::Frame(_)) && want(m.flags))
+            .filter(|(_, m)| {
+                m.state == MapState::Own && matches!(m.backing, Backing::Frame(_)) && want(m.flags)
+            })
             .map(|(v, _)| *v)
             .collect();
         if pages.is_empty() || self.rng.pct(6) {
@@ -413,7 +470,10 @@ impl Gen {
         }
         let first = self.rng.pick(&pages).unwrap();
         let mut n = 1;
-        while n < max && p.space.get(&(first + n)).is_some_and(|m| m.state == MapState::Own && want(m.flags)) && self.rng.pct(60) {
+        while n < max
+            && p.space.get(&(first + n)).is_some_and(|m| m.state == MapState::Own && want(m.flags))
+            && self.rng.pct(60)
+        {
             n += 1;
         }
         if self.rng.pct(4) {
@@ -498,8 +558,9 @@ impl Gen {
             }
             31..=33 => Syscall::EndpointCreate,
             34..=38 => {
-                let source = if t.serving.is_some() && self.rng.pct(50) {
-                    MintSource::Message(t.serving.unwrap())
+                let serving = t.serving.filter(|_| self.rng.pct(50));
+                let source = if let Some(m) = serving {
+                    MintSource::Message(m)
                 } else if self.rng.pct(5) {
                     MintSource::Message(self.rng.range(1, 50))
                 } else {
@@ -530,7 +591,13 @@ impl Gen {
                 } else {
                     None
                 };
-                Syscall::Send { h, words: [self.rng.below(9); WORDS], handles, transfer, timeout: self.timeout() }
+                Syscall::Send {
+                    h,
+                    words: [self.rng.below(9); WORDS],
+                    handles,
+                    transfer,
+                    timeout: self.timeout(),
+                }
             }
             60..=74 => {
                 let h = match self.rng.below(10) {
@@ -551,7 +618,9 @@ impl Gen {
                 Syscall::BudgetDestroy { h }
             }
             90..=92 => Syscall::BudgetUsage { h: self.handle(k, pid, is_budget) },
-            93..=94 => Syscall::Random { len: if self.rng.pct(90) { self.rng.below(65) } else { self.rng.range(65, 1000) } },
+            93..=94 => Syscall::Random {
+                len: if self.rng.pct(90) { self.rng.below(65) } else { self.rng.range(65, 1000) },
+            },
             95 => {
                 if self.rng.pct(3) {
                     Syscall::SystemReset {
@@ -611,7 +680,13 @@ impl Gen {
             0 => 0,
             1..=3 => Class::System.raw(),
             4 => 3,
-            _ => if self.rng.pct(70) { Class::User.raw() } else { class.raw() },
+            _ => {
+                if self.rng.pct(70) {
+                    Class::User.raw()
+                } else {
+                    class.raw()
+                }
+            }
         };
         let deadline = match self.rng.below(10) {
             0 => k.now + self.rng.range(1, 30 * SLICE),
