@@ -421,7 +421,7 @@ impl Result {
             }
             Result::ThreadID(ctx) => [10, *ctx, 0, 0, 0, 0, 0, 0],
             Result::ProcessID(pid) => [11, pid.get() as _, 0, 0, 0, 0, 0, 0],
-            Result::Unimplemented => [21, 0, 0, 0, 0, 0, 0, 0],
+            Result::Unimplemented => [12, 0, 0, 0, 0, 0, 0, 0],
             Result::BlockedProcess => [13, 0, 0, 0, 0, 0, 0, 0],
             Result::Scalar1(a) => [14, *a, 0, 0, 0, 0, 0, 0],
             Result::Scalar2(a, b) => [15, *a, *b, 0, 0, 0, 0, 0],
@@ -537,7 +537,9 @@ impl Result {
                 }
                 _ => return Result::Error(Error::InternalError),
             }),
-            _ => Result::UnknownResult(src[0], src[1], src[2], src[3], src[4], src[5], src[6]),
+            // `to_args` puts the seven fields in slots 1..=7 with `usize::MAX` in slot 0,
+            // so decode them from the same slots (not 0..=6, which would read the sentinel).
+            _ => Result::UnknownResult(src[1], src[2], src[3], src[4], src[5], src[6], src[7]),
         }
     }
 
@@ -634,6 +636,51 @@ impl AllocAdvice {
             AllocAdvice::Free(NonZeroU8::new((a0 >> 24) as u8).unwrap(), a0 << 12, a1 << 12)
         } else {
             AllocAdvice::Allocate(NonZeroU8::new((a0 >> 24) as u8).unwrap(), a0 << 12, a1 << 12)
+        }
+    }
+}
+
+#[cfg(test)]
+mod round_trip {
+    use super::*;
+
+    /// `Result::to_args`/`from_args` are written with opcode *literals* (unlike `SysCall`,
+    /// whose opcodes come from an enum), so a copy-paste can put two variants on one opcode.
+    /// Every result the kernel returns must survive the round trip to the caller unchanged.
+    /// (This caught `Unimplemented` colliding with `Message` on opcode 21.)
+    #[test]
+    fn every_result_round_trips() {
+        let addr = MemoryAddress::new(0x1000).unwrap();
+        let size = MemorySize::new(0x2000).unwrap();
+        let sid = SID::from_u32(1, 2, 3, 4);
+        let scalar = ScalarMessage::from_usize(3, 10, 20, 30, 40);
+        let cases = [
+            Result::Ok,
+            Result::ResumeProcess,
+            Result::RetryCall,
+            Result::None,
+            Result::BlockedProcess,
+            Result::Unimplemented,
+            Result::Error(Error::InternalError),
+            Result::Scalar1(11),
+            Result::Scalar2(11, 22),
+            Result::Scalar5(1, 2, 3, 4, 5),
+            Result::ThreadID(7),
+            Result::ConnectionID(9),
+            Result::ProcessID(PID::new(3).unwrap()),
+            Result::MemoryAddress(addr),
+            Result::MemoryRange(MemoryRange { addr, size }),
+            Result::ServerID(sid),
+            Result::NewServerID(sid, 5),
+            Result::ReadyThreads(1, 2, 3, 4, 5, 6, 7),
+            Result::MemoryReturned(Some(size), None),
+            Result::Message(Message::Scalar(scalar)),
+            Result::UnknownResult(1, 2, 3, 4, 5, 6, 7),
+        ];
+        for case in cases {
+            let args = case.to_args();
+            let decoded = Result::from_args(args);
+            assert_eq!(decoded, case, "{case:?} encoded as {args:?} decoded back to {decoded:?}");
         }
     }
 }
