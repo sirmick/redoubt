@@ -1,0 +1,17 @@
+[package]
+name = "beamlet-re"
+description = "OTP's re module for beamlet, on regex-automata (linear-time, no backtracking)"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+beamlet-vm = { path = "../vm" }
+pcre2 = { version = "0.2.11", optional = true }
+regex-automata = { version = "0.4.18", default-features = false, features = ["alloc", "syntax", "meta", "nfa-pikevm", "nfa-backtrack", "hybrid", "unicode", "perf-inline"] }
+# The parser behind regex-automata (already a dependency of it), for its error kinds: they are
+# reported with PCRE's messages.
+regex-syntax = { version = "0.8.11", default-features = false }
+
+[features]
+pcre2 = ["dep:pcre2"]

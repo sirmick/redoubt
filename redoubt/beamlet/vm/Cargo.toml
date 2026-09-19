@@ -1,0 +1,23 @@
+[package]
+name = "beamlet-vm"
+description = "A small, safe BEAM interpreter (no_std + alloc)"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[features]
+# Several schedulers on threads: locks are mutexes and shared values are `Send + Sync`.
+std = []
+
+[dependencies]
+num-bigint = { version = "0.4", default-features = false }
+num-traits = { version = "0.2", default-features = false }
+num-integer = { version = "0.1", default-features = false }
+# Pure-Rust port of musl libm (rust-lang). Needed because no_std has no float math.
+libm = "0.2"
+# Ryu shortest float formatting: the algorithm OTP itself uses, so ties round identically.
+ryu = "1"
+# Pure-Rust deflate/inflate (zlib format): compressed external terms and the zlib module.
+miniz_oxide = { version = "0.9", default-features = false, features = ["with-alloc"] }
+# RustCrypto MD5: module checksums (BEAM identifies funs by them) and erlang:md5/1.
+md-5 = { version = "0.11", default-features = false }

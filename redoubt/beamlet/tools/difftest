@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Differential test: every tests/<suite>/*.erl is compiled with the pinned erlc, run on the real
+# BEAM (the oracle) and on beamlet, and the two results must be identical.
+#
+#   tools/difftest [SUITE...]      default: every directory under tests/
+#
+# Results go to build/difftest/<suite>/. Exit status is non-zero if any test differs.
+# tests/<suite>/SKIP lists modules that test features left out by design, with the reason;
+# tests/<suite>/SKIP.<engine> those that only hold with one regex engine (RE_ENGINE).
+# tests/<suite>/<Module>.stdin, if present, is the console input for that module, on both VMs;
+# tests/<suite>/<Module>.args, extra beamlet options for it (such as --exec).
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+. "$root/tools/env.sh"
+otp_lib="$(dirname "$(dirname "$(command -v erl)")")/lib"
+stdlib=( "$otp_lib"/stdlib-*/ebin )
+cryptolib=( "$otp_lib"/crypto-*/ebin )
+publickeylib=( "$otp_lib"/public_key-*/ebin )
+asn1lib=( "$otp_lib"/asn1-*/ebin )
+sslpath=""; for app in ssl ssh erts kernel compiler syntax_tools; do sslpath="$sslpath -pa $(ls -d "$otp_lib"/$app-*/ebin)"; done
+elixir_lib="$(dirname "$(dirname "$(command -v elixir)")")/lib"
+elixir_ebin="$elixir_lib/elixir/ebin -pa $elixir_lib/logger/ebin -pa $elixir_lib/eex/ebin -pa $elixir_lib/iex/ebin"
+"$root/tools/build-lib" --check
+beamlet="${BEAMLET:-$("$root/tools/build-beamlet")}"   # RE_ENGINE=rust: see tools/build-beamlet
+timeout_s="${DIFFTEST_TIMEOUT:-20}"
+
+suites=("$@")
+if [ ${#suites[@]} -eq 0 ]; then
+    for d in "$root"/tests/*/; do suites+=("$(basename "$d")"); done
+fi
+
+total=0; pass=0; fail=0; skip=0; failed=(); broken=()
+for suite in "${suites[@]}"; do
+    src="$root/tests/$suite"; out="$root/build/difftest/$suite"
+    mkdir -p "$out"
+    # Recompile (and re-run the oracle) only when sources changed.
+    stamp="$out/.stamp"
+    if [ ! -f "$stamp" ] || [ -n "$(find "$src" \( -name '*.erl' -o -name '*.ex' -o -name 'SKIP*' -o -name '*.stdin' -o -name '*.args' \) -newer "$stamp" -print -quit)" ]; then
+        rm -f "$out"/*.beam "$out"/*.expected
+        : > "$out/erlc.log"
+        shopt -s nullglob
+        for f in "$src"/*.erl; do erlc -o "$out" "$f" 2>> "$out/erlc.log" || echo "erlc failed: $f" >> "$out/erlc.log"; done
+        for f in "$src"/*.ex; do elixirc -o "$out" "$f" >> "$out/erlc.log" 2>&1 || echo "elixirc failed: $f" >> "$out/erlc.log"; done
+        # Only top-level test modules have start/0; nested modules (structs) are not tests.
+        # UTC: beamlet has no time zone, so localtime() is universaltime().
+        TZ=UTC ERL_LIBS="$elixir_lib" escript "$root/tools/expect.escript" "$out"
+        # Tests that read the console run alone on the oracle, with their input.
+        for input in "$src"/*.stdin; do
+            m="$(basename "$input" .stdin)"
+            rm -rf "$out/root/$m"; mkdir -p "$out/root/$m"
+            (cd "$out/root/$m" && TZ=UTC ERL_LIBS="$elixir_lib" erl -noshell -pa "$out" \
+                -eval "R = try '$m':start() catch C:E -> {'EXCEPTION', C, E} end, io:format(\"~n~kw~n\", [R]), halt()." \
+                < "$input" | tail -n 1 > "$out/$m.expected")
+        done
+        touch "$stamp"
+    fi
+    shopt -s nullglob
+    for exp in "$out"/*.expected; do
+        m="$(basename "$exp" .expected)"
+        if grep -qsE "^$m[[:space:]]" "$src/SKIP" "$src/SKIP.${RE_ENGINE:-pcre2}"; then
+            skip=$((skip + 1)); continue
+        fi
+        total=$((total + 1))
+        rm -rf "$out/root/$m"; mkdir -p "$out/root/$m"
+        input=/dev/null; [ -f "$src/$m.stdin" ] && input="$src/$m.stdin"
+        extra=(); [ -f "$src/$m.args" ] && read -r -a extra < "$src/$m.args"
+        got="$(timeout "$timeout_s" "$beamlet" --root "$out/root/$m" "${extra[@]}" -pa "$out" -pa "${stdlib[0]}" -pa "${cryptolib[0]}" -pa "${publickeylib[0]}" -pa "${asn1lib[0]}" $sslpath -pa $elixir_ebin "$m" < "$input" 2>&1 || echo "EXIT $?")"
+        printf '%s\n' "$got" > "$out/$m.got"
+        # The result is the last line; anything before it is the program's own console output.
+        if [ "$(printf '%s\n' "$got" | tail -n 1)" == "$(cat "$exp")" ]; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1)); failed+=("$suite/$m")
+        fi
+    done
+    # A test that did not compile (or has no expected result) must not vanish from the count.
+    while IFS= read -r f; do
+        m="$(basename "$f" | sed 's/\.[^.]*$//')"
+        if grep -qsE "^$m[[:space:]]" "$src/SKIP" "$src/SKIP.${RE_ENGINE:-pcre2}"; then
+            skip=$((skip + 1)); continue
+        fi
+        total=$((total + 1)); fail=$((fail + 1)); broken+=("$suite: $f")
+    done < <(sed -n 's/^erlc failed: //p; s/^elixirc failed: //p' "$out/erlc.log")
+done
+for b in "${broken[@]}"; do printf 'FAIL %s (did not compile, see build/difftest/*/erlc.log)\n' "$b"; done
+for f in "${failed[@]}"; do
+    s="${f%%/*}"; m="${f#*/}"
+    printf 'FAIL %s\n' "$f"
+    escript "$root/tools/termdiff.escript" "$root/build/difftest/$s/$m.expected" "$root/build/difftest/$s/$m.got" 2>&1 | head -40
+done
+echo "difftest: $pass/$total passed, $fail failed, $skip skipped by design"
+[ "$fail" -eq 0 ]

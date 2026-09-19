@@ -1,0 +1,8 @@
+1 + 2
+Enum.map([1, 2, 3], &(&1 * 10))
+defmodule M do
+  def hi(x), do: "hi #{x}"
+end
+M.hi(:there)
+x = 5
+x * x
