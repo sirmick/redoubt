@@ -4,11 +4,9 @@ Raised by the wave 1 packages and their reviews (2026-09-19). Each touches the f
 so each needs your decision; the answer goes into the named note with a HISTORY.md entry.
 **Rec** is the orchestrator's recommendation. Reply with numbers, e.g. "all Rec except 7: ...".
 
-**1-55 answered 2026-09-19** (ANSWERS.md, in two tranches; each "Answered" line says
-where the answer now lives). No question is open.
-
-Blocking: (History: K1 waited on 1-16.) (they fix the ABI, `redoubt-sys`).
-17-26 block later packages only.
+**1-55 answered 2026-09-19** (ANSWERS.md, two tranches; each "Answered" line says where the
+answer now lives). **Open: 56-68 and 69-101** (design review round 4, at the end). They block
+WP-A2 (the ABI records) and WP-K2 (endpoints), which have not started.
 
 ## Kernel: messages and IPC (KERNEL-SPEC.md)
 
