@@ -108,6 +108,10 @@ flags in the environment (they are separate; the release profile is what the ben
 
     CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS=true cargo testbench
 
+That run fails `bench-debug-assertions-off`, which is that case doing its job: it forbids the
+checks line in a boot that is supposed to be an ordinary release build, and here every boot is
+a checked one. Everything else must still pass.
+
 ## Poking at it by hand
 
     cargo testbench --run log-server                  # console on this terminal; Ctrl-A X quits
