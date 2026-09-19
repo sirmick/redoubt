@@ -5,11 +5,13 @@
 //!   badge.
 //! - [`check`]: no read up, no write down.
 //! - [`ninep`]: a 9P2000 server skeleton that applies both, and keeps `..` inside a fid's root.
+//! - [`minted`]: the capabilities a server mints for its clients, and their release.
 //! - [`typed`]: typed-message dispatch over the generated codecs.
 //! - [`parked`]: calls held open for later, each with a deadline, resumed under `serve`.
 
 pub mod admit;
 pub mod label;
+pub mod minted;
 pub mod ninep;
 pub mod parked;
 pub mod typed;

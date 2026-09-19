@@ -73,7 +73,6 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::num::NonZeroU64;
 use core::ops::RangeInclusive;
 
 use redoubt_sys::{Error, Handle, Handles};
@@ -86,6 +85,7 @@ use redoubt_wire::proto::ninep_common::{ErrorCode, NewConnectionReply, Reply};
 
 use super::admit::{Admission, AdmitKey, Limits, Resource, Unsized};
 use super::label::{Access, check};
+use super::minted::{MintError, Minted};
 use super::typed::{Outcome, finish};
 use crate::ipc::{Caller, Request, Words};
 use crate::path;
@@ -99,8 +99,7 @@ pub const MAX_FIDS: usize = 64;
 pub const QTDIR: u8 = 0x80;
 /// `Stat::mode` bit of a directory.
 pub const DMDIR: u32 = 0x8000_0000;
-/// The first badge `new_connection` mints; badges below it are the server's own.
-pub const FIRST_MINTED_BADGE: u64 = 1 << 63;
+pub use super::minted::{FIRST_MINTED_BADGE, Minter};
 
 /// QUESTIONS.md 113 (pending): the typed opcodes `ninep_common` owns on every 9P endpoint. A
 /// server's own protocol on the same endpoint uses opcodes above them; an opcode in this range
@@ -269,27 +268,6 @@ pub trait FileServer {
     fn clunk(&mut self, _node: &Self::Node) {}
 }
 
-/// What the skeleton needs from the kernel to answer `new_connection`, apart so that
-/// [`NineServer::answer_common`] runs in host tests with no system call.
-pub trait Minter {
-    /// A handle to the endpoint the request came in on, with `badge`, stamped like the handle the
-    /// request came through (`mint` from the message: CAPABILITIES.md, minting keeps the stamp).
-    fn mint(&mut self, badge: NonZeroU64) -> Result<Handle, Error>;
-    /// A random `u64` (`random`).
-    fn random(&mut self) -> Result<u64, Error>;
-}
-
-/// The kernel, answering for the request with this message id.
-struct Kernel(NonZeroU64);
-
-impl Minter for Kernel {
-    fn mint(&mut self, badge: NonZeroU64) -> Result<Handle, Error> {
-        Ok(crate::ipc::mint_from_message(self.0, badge)?.handle())
-    }
-
-    fn random(&mut self) -> Result<u64, Error> { crate::handle::random_u64() }
-}
-
 /// Whose a connection's fids are: the badge it came through and the client using it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ConnKey {
@@ -326,19 +304,6 @@ struct Fids<N> {
     fids: Vec<(u32, Fid<N>)>,
 }
 
-/// A connection minted by `new_connection`.
-struct Minted<N> {
-    badge: u64,
-    id: u64,
-    /// Who asked for it: only they may disconnect it.
-    requester: ConnKey,
-    /// The share its [`Resource::State`] charge was taken from.
-    requester_share: u64,
-    /// The badge it was minted through: it goes when that one is disconnected.
-    parent: u64,
-    root: (N, Qid),
-}
-
 /// A copy of `steps`, allocated fallibly.
 fn copy_steps<N: Clone>(steps: &[(N, Qid)]) -> Result<Vec<(N, Qid)>, NineError> {
     let mut copy = Vec::new();
@@ -353,9 +318,8 @@ pub struct NineServer<S: FileServer> {
     /// Fid tables by connection and client; one with no fids has no entry. Plain vectors,
     /// searched linearly, so every growth can fail cleanly (`try_reserve`).
     conns: Vec<Fids<S::Node>>,
-    minted: Vec<Minted<S::Node>>,
-    /// The next badge `new_connection` mints; only goes up.
-    next_badge: u64,
+    /// Connections minted by `new_connection`, each carrying its root (the shared table).
+    minted: Minted<(S::Node, Qid)>,
     admission: Admission,
     /// Where a reply's data is gathered before it is written into the lend: the request is
     /// decoded from the lend, so the reply cannot be built there until the request is done with.
@@ -373,8 +337,7 @@ impl<S: FileServer> NineServer<S> {
         Ok(NineServer {
             fs,
             conns: Vec::new(),
-            minted: Vec::new(),
-            next_badge: FIRST_MINTED_BADGE,
+            minted: Minted::new(),
             admission: Admission::new(limits)?,
             scratch: Vec::new(),
             stat: FileStat::default(),
@@ -433,7 +396,7 @@ impl<S: FileServer> NineServer<S> {
         if missing {
             return finish(request, &Outcome { words: MALFORMED, send: Handles::new(), close: handles });
         }
-        let mut kernel = Kernel(request.id());
+        let mut kernel = super::minted::Kernel(request.id());
         let outcome = self.answer_common(&caller, &words, &handles, request.lend(), &mut kernel);
         finish(request, &outcome)
     }
@@ -641,9 +604,7 @@ impl<S: FileServer> NineServer<S> {
     /// The root the caller's connection attaches at, checked readable.
     fn root(&mut self, caller: &Caller, aname: &str) -> Result<(S::Node, Qid), NineError> {
         let root = if caller.badge >= FIRST_MINTED_BADGE {
-            let conn =
-                self.minted.iter().find(|m| m.badge == caller.badge).ok_or(NineError::NO_CONNECTION)?;
-            conn.root.clone()
+            self.minted.get(caller.badge).cloned().ok_or(NineError::NO_CONNECTION)?
         } else {
             self.fs.attach(caller, aname)?
         };
@@ -653,18 +614,7 @@ impl<S: FileServer> NineServer<S> {
 
     /// The share `caller`'s requests count in: its badge, or, for a connection it minted for
     /// itself, the share of the connection it minted it through.
-    fn share(&self, caller: &Caller) -> u64 {
-        let client = AdmitKey::of(caller);
-        let mut badge = caller.badge;
-        // Each step goes to an older badge, so this ends; the bound is only a backstop.
-        for _ in 0..=self.minted.len() {
-            match self.minted.iter().find(|m| m.badge == badge) {
-                Some(m) if m.requester.client == client => badge = m.parent,
-                _ => break,
-            }
-        }
-        badge
-    }
+    fn share(&self, caller: &Caller) -> u64 { self.minted.share(caller) }
 
     /// `new_connection`: mints a connection rooted at `root` below the caller's own root, asking
     /// the file server to grant it `quota` bytes. Returns the new handle, its id and its badge.
@@ -676,11 +626,11 @@ impl<S: FileServer> NineServer<S> {
         kernel: &mut impl Minter,
     ) -> Result<(Handle, u64, u64), NineError> {
         // Admission first, so a client at its cap makes the server do no work for it.
-        let (requester, share) = (ConnKey::of(caller), self.share(caller));
-        self.admission.admit(requester.client, share, Resource::State).map_err(|_| NineError::TOO_MANY)?;
+        let (client, share) = (AdmitKey::of(caller), self.share(caller));
+        self.admission.admit(client, share, Resource::State).map_err(|_| NineError::TOO_MANY)?;
         let made = self.make_connection(caller, root, quota, kernel, share);
         if made.is_err() {
-            self.admission.release(requester.client, share, Resource::State);
+            self.admission.release(client, share, Resource::State);
         }
         made
     }
@@ -692,7 +642,7 @@ impl<S: FileServer> NineServer<S> {
         root: &str,
         quota: u64,
         kernel: &mut impl Minter,
-        requester_share: u64,
+        share: u64,
     ) -> Result<(Handle, u64, u64), NineError> {
         // `root` is only a path, relative to the caller's root, cleaned so it never climbs above
         // it, and every step is checked as a `Twalk`'s is.
@@ -704,85 +654,52 @@ impl<S: FileServer> NineServer<S> {
             self.step(caller, &mut steps, name)?;
         }
         let new_root = steps.pop().ok_or(NineError::NOT_FOUND)?;
-        let badge = NonZeroU64::new(self.next_badge).filter(|b| b.get() >= FIRST_MINTED_BADGE);
-        let badge = badge.ok_or(NineError::TOO_MANY)?;
-        let id = self.fresh_id(kernel)?;
-        self.minted.try_reserve(1).map_err(|_| NineError::NO_MEMORY)?;
+        let ticket = self.minted.reserve(caller, share, kernel).map_err(|e| match e {
+            MintError::TooMany => NineError::TOO_MANY,
+            MintError::Failed => NineError::NO_ID,
+        })?;
         // The file server has the last word (its quota), before any handle exists.
-        self.fs.minted(caller, badge.get(), &new_root.0, quota)?;
-        let handle = match kernel.mint(badge) {
-            Ok(handle) => handle,
+        let badge = ticket.badge();
+        self.fs.minted(caller, badge, &new_root.0, quota)?;
+        match self.minted.commit(ticket, new_root, kernel) {
+            Ok(made) => Ok(made),
             Err(_) => {
-                self.fs.disconnected(badge.get());
-                return Err(NineError::NO_MEMORY);
-            }
-        };
-        // Never reused, whatever happens to this connection (answer 86).
-        self.next_badge = badge.get().wrapping_add(1);
-        self.minted.push(Minted {
-            badge: badge.get(),
-            id,
-            requester: ConnKey::of(caller),
-            requester_share,
-            parent: caller.badge,
-            root: new_root,
-        });
-        Ok((handle, id, badge.get()))
-    }
-
-    /// A random connection id no live connection has: unpredictable, never a counter
-    /// (CONTAINMENT.md), so it tells nobody how many others were made. `NO_ID` if the kernel's
-    /// randomness fails, or if every draw collided, which needs a broken CSPRNG.
-    fn fresh_id(&self, kernel: &mut impl Minter) -> Result<u64, NineError> {
-        for _ in 0..4 {
-            let id = kernel.random().map_err(|_| NineError::NO_ID)?;
-            if id != 0 && !self.minted.iter().any(|m| m.id == id) {
-                return Ok(id);
+                self.fs.disconnected(badge);
+                Err(NineError::NO_MEMORY)
             }
         }
-        Err(NineError::NO_ID)
     }
 
     /// `disconnect(id)` from `caller`: frees the connection and every connection minted under
-    /// it. `Err` if the caller did not receive `id`.
-    ///
-    /// It allocates nothing, so it cannot stop halfway. `minted` is in mint order (entries are
-    /// only ever appended, and removed with `remove`, never `swap_remove`), and a connection is
-    /// minted after the one it was minted through, so every descendant comes after the one
-    /// named. That one goes first; then one forward pass frees each connection whose parent was
-    /// minted here and is gone, which by then is exactly its descendants.
+    /// it (the shared table's order). `Err` if the caller did not receive `id`.
     fn disconnect(&mut self, caller: &Caller, id: u64) -> Result<(), ()> {
-        let requester = ConnKey::of(caller);
-        let mut i = self.minted.iter().position(|m| m.id == id && m.requester == requester).ok_or(())?;
-        self.forget_at(i);
-        while i < self.minted.len() {
-            let parent = self.minted[i].parent;
-            if parent >= FIRST_MINTED_BADGE && !self.minted[..i].iter().any(|m| m.badge == parent) {
-                self.forget_at(i);
-            } else {
-                i += 1;
+        let Self { minted, conns, admission, fs, .. } = self;
+        minted.disconnect(caller, id, |gone| Self::connection_gone(conns, admission, fs, gone))
+    }
+
+    /// Frees the minted connection with `badge` and everything under it.
+    fn forget(&mut self, badge: u64) {
+        let Self { minted, conns, admission, fs, .. } = self;
+        minted.forget(badge, |gone| Self::connection_gone(conns, admission, fs, gone));
+    }
+
+    /// A minted connection is gone: its fids, its admission, the file server's record of it.
+    fn connection_gone(
+        conns: &mut Vec<Fids<S::Node>>,
+        admission: &mut Admission,
+        fs: &mut S,
+        gone: super::minted::Entry<(S::Node, Qid)>,
+    ) {
+        while let Some(i) = conns.iter().position(|c| c.key.badge == gone.badge) {
+            let conn = conns.swap_remove(i);
+            for (_, fid) in conn.fids {
+                admission.release(conn.key.client, conn.share, Resource::Files);
+                fs.clunk(&fid.node());
             }
         }
-        Ok(())
-    }
-
-    /// Frees the minted connection with `badge` (see [`NineServer::forget_at`]).
-    fn forget(&mut self, badge: u64) {
-        if let Some(i) = self.minted.iter().position(|m| m.badge == badge) {
-            self.forget_at(i);
-        }
-    }
-
-    /// Frees the minted connection at `index`: its fids, its admission, the file server's record
-    /// of it. Not its children. Keeps `minted` in mint order.
-    fn forget_at(&mut self, index: usize) {
-        let m = self.minted.remove(index);
-        while let Some(i) = self.conns.iter().position(|c| c.key.badge == m.badge) {
-            let conn = self.conns.swap_remove(i);
-            self.drop_fids(conn);
-        }
-        self.admission.release(m.requester.client, m.requester_share, Resource::State);
-        self.fs.disconnected(m.badge);
+        let (client, share) = gone.charged_to();
+        admission.release(client, share, Resource::State);
+        fs.disconnected(gone.badge);
     }
 
     /// Walks `newfid` from `fid` along `names` and writes the qids walked into `qids`; returns
@@ -964,7 +881,7 @@ impl<S: FileServer> NineServer<S> {
     /// the server does any work for it. Undone by `insert_fid` failing or `unreserve`.
     fn reserve_fid(&mut self, caller: &Caller, fid: u32) -> Result<(), NineError> {
         let key = ConnKey::of(caller);
-        if caller.badge >= FIRST_MINTED_BADGE && !self.minted.iter().any(|m| m.badge == caller.badge) {
+        if caller.badge >= FIRST_MINTED_BADGE && self.minted.get(caller.badge).is_none() {
             return Err(NineError::NO_CONNECTION);
         }
         if fid == NOFID || self.fid(&key, fid).is_ok() {

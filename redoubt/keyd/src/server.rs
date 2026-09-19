@@ -11,16 +11,16 @@
 //! get `not_permitted`, which says no more than that.
 //!
 //! **Admission** ([`Admission`], CONTAINMENT.md) counts the one thing a client can make `keyd`
-//! hold: capabilities it was granted. Nothing else here outlives a request — `keyd` parks no
-//! calls and keeps no per-caller state — so a flood of signing requests makes `keyd` grow by
-//! nothing, and is bounded by the kernel's own fair waiting per (account, label set) (R2) and
-//! by each request's bounded work ([`crate::ssh::MAX_PART`], [`MAX_RECORD`]).
-
-use alloc::vec::Vec;
-use core::num::NonZeroU64;
+//! hold: capabilities it was granted, which are the shared library's [`Minted`] table, the same
+//! one 9P's `new_connection` and `disconnect` keep. Nothing else here outlives a request —
+//! `keyd` parks no calls and keeps no per-caller state — so a flood of signing requests makes
+//! `keyd` grow by nothing, and is bounded by the kernel's own fair waiting per (account, label
+//! set) (R2) and by each request's bounded work ([`crate::ssh::MAX_PART`], [`MAX_RECORD`]).
 
 use redoubt_rt::abi::{Error, Handle, Handles, ReceivedHandles};
 use redoubt_rt::ipc::{Caller, Request, Words};
+pub use redoubt_rt::server::minted::FIRST_MINTED_BADGE as FIRST_GRANTED_BADGE;
+use redoubt_rt::server::minted::{Kernel, MintError, Minted, Minter};
 use redoubt_rt::server::typed::{Answer, Outcome, Protocol, TypedServer, answer, finish};
 use redoubt_rt::server::{Access, Admission, AdmitKey, Cost, Limits, Resource, Unsized, check};
 use redoubt_rt::wire::Error as WireError;
@@ -48,11 +48,6 @@ pub const AUDIT_DOMAIN: &[u8] = b"redoubt.audit.v1\0";
 /// one request's work is bounded by a number stated here.
 pub const MAX_RECORD: usize = 8 * 1024;
 
-/// The first badge [`KeyServer`] grants; below it are the manifest's root badges (INIT.md).
-/// The same boundary the 9P skeleton uses for minted connections, for the same reason: a root
-/// badge and a granted one can never be confused.
-pub const FIRST_GRANTED_BADGE: u64 = 1 << 63;
-
 /// What a client may hold in `keyd` at once, per (account, label set) (CONTAINMENT.md).
 ///
 /// - `buckets`: the (account, label set)s `keyd` serves at once — `sshd` and the steward (account 0, one
@@ -72,79 +67,16 @@ pub const COST: Cost = Cost { in_flight: 0, file: 0, state: 512 };
 /// (`LIMITS.fits(&COST, BUDGET)`).
 pub const BUDGET: u64 = 256 * 1024;
 
-/// What the server needs from the kernel, apart so that every path can be driven in a host test
-/// with no system call.
-pub trait Kernel {
-    /// A handle to the endpoint the request came in on, with `badge`, **stamped like the handle
-    /// the request came through** (CAPABILITIES.md, minting keeps the stamp), so a granted
-    /// capability dies when what the caller holds dies.
-    fn mint(&mut self, badge: NonZeroU64) -> Result<Handle, Error>;
-    /// A random `u64`, for a grant's id: unpredictable, never a counter (CONTAINMENT.md).
-    fn random(&mut self) -> Result<u64, Error>;
-}
-
-/// The kernel, answering the call `grant` came in on.
-pub struct FromCall<'a>(pub &'a Request);
-
-impl Kernel for FromCall<'_> {
-    fn mint(&mut self, badge: NonZeroU64) -> Result<Handle, Error> {
-        self.0.mint(badge, None).map(|endpoint| endpoint.handle())
-    }
-
-    fn random(&mut self) -> Result<u64, Error> { redoubt_rt::handle::random_u64() }
-}
-
-/// The kernel on the path that reads the caller's lend, where nothing may hold the request, so
-/// minting is impossible here. Only `grant` mints, and [`KeyServer::serve`] answers it on the
-/// other path: the structure, not a check, is what keeps the two apart.
-pub struct NoMint;
-
-impl Kernel for NoMint {
-    fn mint(&mut self, _badge: NonZeroU64) -> Result<Handle, Error> { Err(Error::NotPermitted) }
-
-    fn random(&mut self) -> Result<u64, Error> { redoubt_rt::handle::random_u64() }
-}
-
-/// Who a capability was granted to: the badge it came through and the client that used it. A
-/// second line of defence, as the 9P skeleton's connection key is: only that client may release
-/// it, whoever else holds a copy of the handle.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Holder {
-    badge: u64,
-    client: AdmitKey,
-}
-
-impl Holder {
-    fn of(caller: &Caller) -> Holder { Holder { badge: caller.badge, client: AdmitKey::of(caller) } }
-}
-
-/// One capability `grant` made.
-struct Granted {
-    badge: u64,
-    /// The random id the requester was given; only it may `release` this.
-    id: u64,
-    /// The key (and so the purpose) it names: always the granter's own.
-    key: usize,
-    requester: Holder,
-    /// The share its [`Resource::State`] charge came from.
-    requester_share: u64,
-    /// The badge it was granted through: it goes when that one goes.
-    parent: u64,
-}
-
 /// `keyd`: its keys, the capabilities it has granted, and its admission.
 pub struct KeyServer {
     keys: Keys,
-    /// In grant order: appended, and removed with `remove`, so a capability always sits after
-    /// the one it was granted through ([`KeyServer::release`] relies on that).
-    granted: Vec<Granted>,
-    /// The next badge `grant` mints; only ever goes up, so a badge is never reused (answer 86).
-    next_badge: u64,
+    /// Each granted capability carries the index of the key (and so the purpose) it names:
+    /// always the granter's own.
+    granted: Minted<usize>,
     admission: Admission,
-    /// Where a reply's bytes are held while the reply borrows them: the request is decoded from
-    /// the caller's lend, which the reply is then written over.
+    /// Where a reply's signature is held while the reply borrows it: the request is decoded
+    /// from the caller's lend, which the reply is then written over.
     signature: [u8; SIGNATURE_LEN],
-    public: [u8; crate::keys::PUBLIC_KEY_LEN],
     /// The badge `grant` made while answering the call in hand, so that a reply that never
     /// reaches its caller can be undone: the requester never learns the id, so nothing could
     /// ever `release` it.
@@ -161,11 +93,9 @@ impl KeyServer {
         }
         Ok(KeyServer {
             keys,
-            granted: Vec::new(),
-            next_badge: FIRST_GRANTED_BADGE,
+            granted: Minted::new(),
             admission: Admission::new(limits)?,
             signature: [0; SIGNATURE_LEN],
-            public: [0; crate::keys::PUBLIC_KEY_LEN],
             granted_here: None,
         })
     }
@@ -181,22 +111,10 @@ impl KeyServer {
     pub fn serve(&mut self, mut request: Request) -> Result<(), Error> {
         let (caller, words, handles) = (request.caller, request.words, request.handles);
         self.granted_here = None;
-        // Whether the caller lent anything, read here where the borrow ends at once: the
-        // `grant` path below holds the request itself, and so cannot look at the lend.
-        let lent = !request.lend().is_empty();
-        let outcome = if matches!(redoubt_rt::wire::typed::opcode(&words), Ok(GRANT_OPCODE)) && !lent {
-            // `grant` mints, and a minted handle keeps the caller's stamp only when it is
-            // minted from this very call (CAPABILITIES.md), so the kernel here borrows the
-            // request. `grant` has no fields and an inline reply, so it never needs the lend,
-            // which would borrow the request too. A `grant` that did arrive with a lend is not
-            // an inline message, so it goes the other way and the codec refuses it, like an
-            // inline message with a buffer on any other opcode.
-            let mut kernel = FromCall(&request);
-            answer_with(self, &caller, &words, &handles, &mut [], &mut kernel)
-        } else {
-            let mut kernel = NoMint;
-            answer_with(self, &caller, &words, &handles, request.lend(), &mut kernel)
-        };
+        // Minting from the message id keeps the caller's stamp (CAPABILITIES.md) and borrows
+        // nothing, so the lend is read on the same path as everything else.
+        let mut kernel = Kernel(request.id());
+        let outcome = answer_with(self, &caller, &words, &handles, request.lend(), &mut kernel);
         let sent = finish(request, &outcome);
         // A reply that could not be sent (the caller died, or the kernel refused it) leaves a
         // granted capability nobody can ever name: its id went nowhere, and `release` answers
@@ -212,10 +130,11 @@ impl KeyServer {
 
     /// Frees the granted capability with `badge`, and every capability granted under it.
     fn forget_badge(&mut self, badge: u64) {
-        let found = self.granted.iter().find(|g| g.badge == badge).map(|g| (g.requester, g.id));
-        if let Some((requester, id)) = found {
-            let _ = self.release_as(requester, id);
-        }
+        let admission = &mut self.admission;
+        self.granted.forget(badge, |gone| {
+            let (client, share) = gone.charged_to();
+            admission.release(client, share, Resource::State);
+        });
     }
 
     /// The key and purpose the caller's badge names, or `not_permitted`: a badge that names
@@ -223,27 +142,11 @@ impl KeyServer {
     /// answer, which tells a caller only that this badge is not good here.
     fn resolve(&self, caller: &Caller) -> Result<usize, ErrorCode> {
         let key = if caller.badge >= FIRST_GRANTED_BADGE {
-            self.granted.iter().find(|g| g.badge == caller.badge).map(|g| g.key)
+            self.granted.get(caller.badge).copied()
         } else {
             self.keys.by_root_badge(caller.badge)
         };
         key.ok_or(ErrorCode::NotPermitted)
-    }
-
-    /// The share this caller's requests count in: its own badge, or, for a capability it
-    /// granted itself, the share of the one it granted it through, so granting more badges
-    /// cannot escape a fair share (answer 117, as the 9P skeleton does it).
-    fn share(&self, caller: &Caller) -> u64 {
-        let client = AdmitKey::of(caller);
-        let mut badge = caller.badge;
-        // Each step goes to an older badge, so this ends; the bound is only a backstop.
-        for _ in 0..=self.granted.len() {
-            match self.granted.iter().find(|g| g.badge == badge) {
-                Some(g) if g.requester.client == client => badge = g.parent,
-                _ => break,
-            }
-        }
-        badge
     }
 
     /// Answers one decoded request.
@@ -251,7 +154,7 @@ impl KeyServer {
         &'s mut self,
         caller: &Caller,
         request: Message<'_>,
-        kernel: &mut impl Kernel,
+        kernel: &mut impl Minter,
     ) -> Result<Answer<Reply<'s>>, ErrorCode> {
         let index = self.resolve(caller)?;
         // The label check on every request (CONTAINMENT.md). Signing and granting put the
@@ -270,9 +173,8 @@ impl KeyServer {
             Message::SignSshExchange(m) => self.sign_ssh_exchange(index, &m),
             Message::SignRecord(m) => self.sign_record(index, &m),
             Message::PublicKey(_) => {
-                let public = *self.key(index).public();
-                self.public = public;
-                Ok(Answer::new(Reply::PublicKey(PublicKeyReply { algorithm: ALGORITHM, key: &self.public })))
+                let key = self.key(index).public();
+                Ok(Answer::new(Reply::PublicKey(PublicKeyReply { algorithm: ALGORITHM, key })))
             }
             Message::Holds(Holds { algorithm, key }) => {
                 // It answers about every key, not only the badge's, because that is the
@@ -283,9 +185,43 @@ impl KeyServer {
                 let held = u32::from(self.keys.holds(algorithm, key));
                 Ok(Answer::new(Reply::Holds(HoldsReply { held })))
             }
-            Message::Grant(Grant {}) => self.grant(caller, index, kernel),
+            // `grant`: a fresh capability with the caller's own key and purpose, stamped like
+            // the handle the request came through, so a launcher never passes its own on
+            // (INIT.md). Nothing granted is ever wider than the badge it came through.
+            Message::Grant(Grant {}) => {
+                // Admission first, so a client at its cap makes the server do no work for it.
+                let (client, share) = (AdmitKey::of(caller), self.granted.share(caller));
+                self.admission.admit(client, share, Resource::State).map_err(|_| ErrorCode::TooMany)?;
+                let made = self
+                    .granted
+                    .reserve(caller, share, kernel)
+                    .and_then(|ticket| self.granted.commit(ticket, index, kernel));
+                let (handle, id, badge) = made.map_err(|e| {
+                    self.admission.release(client, share, Resource::State);
+                    match e {
+                        MintError::TooMany => ErrorCode::TooMany,
+                        MintError::Failed => ErrorCode::Failed,
+                    }
+                })?;
+                self.granted_here = Some(badge);
+                let mut handles = Handles::new();
+                // Cannot fail: one handle, and a reply may carry `MAX_MSG_HANDLES`.
+                let _ = handles.push(handle);
+                // The handle was minted for the caller: `keyd` closes its own copy once the
+                // reply has copied it, or its table grows by one per grant.
+                Ok(Answer { reply: Reply::Grant(GrantReply { id }), handles, close_after_reply: true })
+            }
+            // `release(id)`: frees the capability and every capability granted under it, for
+            // the caller that received `id` and nobody else; the same answer whether the id
+            // belongs to somebody else or to nobody, so nothing is revealed.
             Message::Release(Release { id }) => {
-                self.release(caller, id)?;
+                let admission = &mut self.admission;
+                self.granted
+                    .disconnect(caller, id, |gone| {
+                        let (client, share) = gone.charged_to();
+                        admission.release(client, share, Resource::State);
+                    })
+                    .map_err(|_| ErrorCode::NotPermitted)?;
                 Ok(Answer::new(Reply::Release(ReleaseReply {})))
             }
         }
@@ -310,8 +246,7 @@ impl KeyServer {
         let transcript =
             Transcript { v_c: m.v_c, v_s: m.v_s, i_c: m.i_c, i_s: m.i_s, q_c: m.q_c, q_s: m.q_s, k: m.k };
         let hash = ssh::exchange_hash(&transcript, key.public()).map_err(|_| ErrorCode::TooMany)?;
-        let signature = key.sign(&hash);
-        self.signature = signature;
+        self.signature = key.sign(&hash);
         Ok(Answer::new(Reply::SignSshExchange(SignSshExchangeReply { signature: &self.signature })))
     }
 
@@ -327,115 +262,8 @@ impl KeyServer {
         if m.record.len() > MAX_RECORD {
             return Err(ErrorCode::TooMany);
         }
-        let signature = self.key(index).sign(&audit_digest(m.record));
-        self.signature = signature;
+        self.signature = self.key(index).sign(&audit_digest(m.record));
         Ok(Answer::new(Reply::SignRecord(SignRecordReply { signature: &self.signature })))
-    }
-
-    /// `grant`: a fresh capability with the caller's own key and purpose, stamped like the
-    /// handle the request came through, so a launcher never passes its own on (INIT.md).
-    fn grant<'s>(
-        &'s mut self,
-        caller: &Caller,
-        index: usize,
-        kernel: &mut impl Kernel,
-    ) -> Result<Answer<Reply<'s>>, ErrorCode> {
-        // Admission first, so a client at its cap makes the server do no work for it.
-        let (requester, share) = (Holder::of(caller), self.share(caller));
-        self.admission.admit(requester.client, share, Resource::State).map_err(|_| ErrorCode::TooMany)?;
-        match self.make_grant(caller, index, share, kernel) {
-            Ok((id, handle)) => {
-                let mut handles = Handles::new();
-                // Cannot fail: one handle, and a reply may carry `MAX_MSG_HANDLES`.
-                let _ = handles.push(handle);
-                // The handle was minted for the caller: `keyd` closes its own copy once the
-                // reply has copied it, or its table grows by one per grant.
-                Ok(Answer { reply: Reply::Grant(GrantReply { id }), handles, close_after_reply: true })
-            }
-            Err(code) => {
-                self.admission.release(requester.client, share, Resource::State);
-                Err(code)
-            }
-        }
-    }
-
-    /// Mints the capability itself: the new id and the handle, borrowing nothing from `self`,
-    /// so the caller can still give the admission back if this fails.
-    fn make_grant(
-        &mut self,
-        caller: &Caller,
-        index: usize,
-        requester_share: u64,
-        kernel: &mut impl Kernel,
-    ) -> Result<(u64, Handle), ErrorCode> {
-        let badge = NonZeroU64::new(self.next_badge)
-            .filter(|b| b.get() >= FIRST_GRANTED_BADGE)
-            .ok_or(ErrorCode::TooMany)?;
-        let id = self.fresh_id(kernel)?;
-        self.granted.try_reserve(1).map_err(|_| ErrorCode::Failed)?;
-        let handle = kernel.mint(badge).map_err(|_| ErrorCode::Failed)?;
-        // Never reused, whatever happens to this capability (answer 86).
-        self.next_badge = badge.get().wrapping_add(1);
-        self.granted.push(Granted {
-            badge: badge.get(),
-            id,
-            key: index,
-            requester: Holder::of(caller),
-            requester_share,
-            parent: caller.badge,
-        });
-        self.granted_here = Some(badge.get());
-        Ok((id, handle))
-    }
-
-    /// A random id no live capability has (CONTAINMENT.md: never a counter, which would tell
-    /// every principal how many the others made).
-    fn fresh_id(&self, kernel: &mut impl Kernel) -> Result<u64, ErrorCode> {
-        for _ in 0..4 {
-            let id = kernel.random().map_err(|_| ErrorCode::Failed)?;
-            if id != 0 && !self.granted.iter().any(|g| g.id == id) {
-                return Ok(id);
-            }
-        }
-        Err(ErrorCode::Failed)
-    }
-
-    /// `release(id)`: frees the capability and every capability granted under it. `Err` if the
-    /// caller is not the one that received `id` — the same answer whether the id belongs to
-    /// somebody else or to nobody, so nothing is revealed.
-    ///
-    /// It allocates nothing, so it cannot stop halfway. `granted` is in grant order and a
-    /// capability is granted after the one it came through, so every descendant sits after the
-    /// one named: that one goes first, then one forward pass frees each whose parent was
-    /// granted here and is now gone, which by then is exactly its descendants.
-    fn release(&mut self, caller: &Caller, id: u64) -> Result<(), ErrorCode> {
-        self.release_as(Holder::of(caller), id)
-    }
-
-    /// [`KeyServer::release`], with the holder already worked out.
-    fn release_as(&mut self, requester: Holder, id: u64) -> Result<(), ErrorCode> {
-        let mut i = self
-            .granted
-            .iter()
-            .position(|g| g.id == id && g.requester == requester)
-            .ok_or(ErrorCode::NotPermitted)?;
-        self.forget_at(i);
-        while i < self.granted.len() {
-            let parent = self.granted[i].parent;
-            if parent >= FIRST_GRANTED_BADGE && !self.granted[..i].iter().any(|g| g.badge == parent) {
-                self.forget_at(i);
-            } else {
-                i += 1;
-            }
-        }
-        Ok(())
-    }
-
-    /// Frees the capability at `index` and gives its admission back. Not its children. Keeps
-    /// `granted` in grant order.
-    fn forget_at(&mut self, index: usize) {
-        let gone = self.granted.remove(index);
-        self.admission.release(gone.requester.client, gone.requester_share, Resource::State);
     }
 }
 
@@ -457,9 +285,6 @@ pub fn audit_digest(record: &[u8]) -> [u8; crate::sha256::DIGEST] {
     hash.finish()
 }
 
-/// The opcode of `grant`, which [`KeyServer::serve`] answers apart.
-const GRANT_OPCODE: u32 = 5;
-
 /// The protocol, for `redoubt-rt`'s typed dispatch.
 pub struct Keyd;
 
@@ -479,12 +304,12 @@ impl Protocol for Keyd {
 
 /// The server and the kernel together, which is what the dispatch trait needs: `handle` may
 /// borrow only from `self`, and minting needs the kernel.
-struct Serving<'a, 'k, K: Kernel> {
+struct Serving<'a, 'k, K: Minter> {
     server: &'a mut KeyServer,
     kernel: &'k mut K,
 }
 
-impl<K: Kernel> TypedServer<Keyd> for Serving<'_, '_, K> {
+impl<K: Minter> TypedServer<Keyd> for Serving<'_, '_, K> {
     fn handle<'s>(
         &'s mut self,
         caller: &Caller,
@@ -509,7 +334,7 @@ pub fn answer_with(
     words: &Words,
     handles: &ReceivedHandles,
     buf: &mut [u8],
-    kernel: &mut impl Kernel,
+    kernel: &mut impl Minter,
 ) -> Outcome {
     answer::<Keyd, _>(&mut Serving { server, kernel }, caller, words, handles, buf)
 }

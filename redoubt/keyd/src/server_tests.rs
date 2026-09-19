@@ -9,9 +9,11 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::num::NonZeroU64;
 
 use ed25519_compact::{PublicKey, Signature};
 use redoubt_rt::abi::Labels;
+use redoubt_rt::server::{AdmitKey, Resource};
 use redoubt_rt::wire::proto::keyd::{Holds, PublicKey as PublicKeyRequest, SignRecord, SignSshExchange};
 
 use super::*;
@@ -53,7 +55,7 @@ impl FakeKernel {
     }
 }
 
-impl Kernel for FakeKernel {
+impl Minter for FakeKernel {
     fn mint(&mut self, badge: NonZeroU64) -> Result<Handle, Error> {
         if self.mint_fails {
             return Err(Error::OutOfMemory);
