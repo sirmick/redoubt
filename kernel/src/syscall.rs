@@ -198,7 +198,7 @@ fn send_message(pid: PID, tid: TID, cid: CID, message: Message) -> SysCallResult
                     .inspect_err(|_| return_thread(ss, sidx, available_tid))?;
                 Message::Move(MemoryMessage {
                     id: msg.id,
-                    buf: unsafe { MemoryRange::new(new_virt as usize, msg.buf.len()) }.map_err(|e| {
+                    buf: crate::mem::memory_range(new_virt as usize, msg.buf.len()).map_err(|e| {
                         return_thread(ss, sidx, available_tid);
                         e
                     })?,
@@ -218,7 +218,7 @@ fn send_message(pid: PID, tid: TID, cid: CID, message: Message) -> SysCallResult
                     .inspect_err(|_| return_thread(ss, sidx, available_tid))?;
                 Message::MutableBorrow(MemoryMessage {
                     id: msg.id,
-                    buf: unsafe { MemoryRange::new(new_virt as usize, msg.buf.len()) }.map_err(|e| {
+                    buf: crate::mem::memory_range(new_virt as usize, msg.buf.len()).map_err(|e| {
                         return_thread(ss, sidx, available_tid);
                         e
                     })?,
@@ -246,7 +246,7 @@ fn send_message(pid: PID, tid: TID, cid: CID, message: Message) -> SysCallResult
                 // );
                 Message::Borrow(MemoryMessage {
                     id: msg.id,
-                    buf: unsafe { MemoryRange::new(new_virt as usize, msg.buf.len()) }.map_err(|e| {
+                    buf: crate::mem::memory_range(new_virt as usize, msg.buf.len()).map_err(|e| {
                         return_thread(ss, sidx, available_tid);
                         e
                     })?,
@@ -929,15 +929,10 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                 let (start, length) = ArchProcess::with_inner_mut(|process_inner| {
                     (process_inner.mem_heap_base, process_inner.mem_heap_size)
                 });
-                return Ok(xous_kernel::Result::MemoryRange(unsafe {
-                    MemoryRange::new(
-                        start,
-                        // 0-length MemoryRanges are disallowed -- so return 4096 as the minimum in any case,
-                        // even though it's a lie
-                        if length == 0 { 4096 } else { length },
-                    )
-                    .unwrap()
-                }));
+                return Ok(xous_kernel::Result::MemoryRange(
+                    // 0-length MemoryRanges are disallowed -- return 4096 as the minimum even though it's a lie.
+                    crate::mem::memory_range(start, if length == 0 { 4096 } else { length }).unwrap(),
+                ));
             }
 
             let start = {
@@ -984,7 +979,7 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
             });
 
             // Return the new size of the heap
-            Ok(xous_kernel::Result::MemoryRange(unsafe { MemoryRange::new(start, length).unwrap() }))
+            Ok(xous_kernel::Result::MemoryRange(crate::mem::memory_range(start, length).unwrap()))
         }
         SysCall::SwitchTo(new_pid, new_tid) => SystemServices::with_mut(|ss| {
             SWITCHTO_CALLER.with(|caller| {

@@ -590,7 +590,7 @@ impl Server {
         }
 
         if forget {
-            return Ok(WaitingMessage::ForgetMemory(unsafe { MemoryRange::new(server_addr, len) }?));
+            return Ok(WaitingMessage::ForgetMemory(crate::mem::memory_range(server_addr, len)?));
         }
 
         // If a `move` address somehow ends up here, indicate the memory has been moved.
@@ -662,7 +662,7 @@ impl Server {
                             sender: sender.into(),
                             body: xous_kernel::Message::Borrow(xous_kernel::MemoryMessage {
                                 id,
-                                buf: unsafe { MemoryRange::new(server_addr, buf_size).ok() }?,
+                                buf: crate::mem::memory_range(server_addr, buf_size).ok()?,
                                 offset: MemorySize::new(offset),
                                 valid: MemorySize::new(valid),
                             }),
@@ -687,7 +687,7 @@ impl Server {
                             sender: sender.into(),
                             body: xous_kernel::Message::MutableBorrow(xous_kernel::MemoryMessage {
                                 id,
-                                buf: unsafe { MemoryRange::new(server_addr, buf_size).ok() }?,
+                                buf: crate::mem::memory_range(server_addr, buf_size).ok()?,
                                 offset: MemorySize::new(offset),
                                 valid: MemorySize::new(valid),
                             }),
@@ -712,7 +712,7 @@ impl Server {
                             sender: sender.into(),
                             body: xous_kernel::Message::Borrow(xous_kernel::MemoryMessage {
                                 id,
-                                buf: unsafe { MemoryRange::new(server_addr, buf_size).ok() }?,
+                                buf: crate::mem::memory_range(server_addr, buf_size).ok()?,
                                 offset: MemorySize::new(offset),
                                 valid: MemorySize::new(valid),
                             }),
@@ -737,7 +737,7 @@ impl Server {
                             sender: sender.into(),
                             body: xous_kernel::Message::MutableBorrow(xous_kernel::MemoryMessage {
                                 id,
-                                buf: unsafe { MemoryRange::new(server_addr, buf_size).ok() }?,
+                                buf: crate::mem::memory_range(server_addr, buf_size).ok()?,
                                 offset: MemorySize::new(offset),
                                 valid: MemorySize::new(valid),
                             }),
@@ -788,7 +788,7 @@ impl Server {
                         sender: sender.into(),
                         body: xous_kernel::Message::Move(xous_kernel::MemoryMessage {
                             id,
-                            buf: unsafe { MemoryRange::new(server_addr, buf_size).ok() }?,
+                            buf: crate::mem::memory_range(server_addr, buf_size).ok()?,
                             offset: MemorySize::new(offset),
                             valid: MemorySize::new(valid),
                         }),

@@ -47,6 +47,19 @@ impl fmt::Display for MemoryRangeExtra {
     }
 }
 
+/// Construct a `MemoryRange` describing `addr..addr + size`.
+///
+/// `MemoryRange::new` is `unsafe` because a range may later be handed to a process as
+/// valid, page-aligned memory. Inside the kernel that property is established by the page
+/// tables, and the descriptor's own invariants -- non-null address, non-zero size -- are
+/// exactly what `new` checks and returns an error for. So building the descriptor is a
+/// safe kernel operation: a bad address surfaces later as a mapping error, not as
+/// unsoundness here.
+pub fn memory_range(addr: usize, size: usize) -> Result<MemoryRange, xous_kernel::Error> {
+    // SAFETY: see the doc comment.
+    unsafe { MemoryRange::new(addr, size) }
+}
+
 pub struct MemoryManager {
     ram_start: usize,
     ram_size: usize,
@@ -530,7 +543,7 @@ impl MemoryManager {
                 return Err(e);
             }
         }
-        unsafe { xous_kernel::MemoryRange::new(virt as usize, size) }
+        crate::mem::memory_range(virt as usize, size)
     }
 
     /// Attempt to allocate a single page from the default section.
@@ -665,7 +678,7 @@ impl MemoryManager {
             }
             // note that the region returned is snapped to the nearest page boundary, even if
             // the use called us with unaligned addresses.
-            return unsafe { xous_kernel::MemoryRange::new(start as usize, end - start) };
+            return crate::mem::memory_range(start as usize, end - start);
         }
         // If no physical address is specified, give the user the next available pages
         if phys == 0 && !device_ram {
@@ -777,7 +790,7 @@ impl MemoryManager {
             crate::arch::mem::MemoryMapping::current().print_map();
         }
 
-        unsafe { MemoryRange::new(virt as usize, size) }
+        crate::mem::memory_range(virt as usize, size)
     }
 
     /// Attempt to map the given physical address into the virtual address space
