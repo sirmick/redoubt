@@ -13,3 +13,4 @@ elf = { version = "0.8", default-features = false }
 tar-no-std = { version = "0.5", default-features = false }
 crc = { version = "3", default-features = false }
 sv39 = { path = "../xous64/sv39" }
+ed25519-compact = { version = "2", default-features = false }

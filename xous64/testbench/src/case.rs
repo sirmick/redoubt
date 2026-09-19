@@ -81,6 +81,9 @@ pub struct Boot {
     /// Device grants written into the bundle's manifest (see DEVICE-GRANTS.md).
     #[serde(default)]
     pub grant: Vec<Grant>,
+    /// Corrupt the bundle after signing, to test that the loader rejects it.
+    #[serde(default)]
+    pub tamper_bundle: bool,
 }
 
 #[derive(Debug, Deserialize)]

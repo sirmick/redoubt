@@ -14,6 +14,7 @@
 mod alloc;
 mod args;
 mod grants;
+mod verify;
 mod image;
 mod paging;
 
@@ -165,9 +166,11 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
         let page = alloc.alloc(KERNEL_PID) as *mut InitialProcess;
         core::slice::from_raw_parts_mut(page, PAGE_SIZE / core::mem::size_of::<InitialProcess>())
     };
-    // SAFETY: the firmware placed the bundle at this range (from the device tree), it is
+    // SAFETY: the firmware placed the initrd at this range (from the device tree), it is
     // reserved in the allocator so nothing overwrites it, and it is only read.
-    let bundle = unsafe { core::slice::from_raw_parts(bundle.start as *const u8, bundle.len()) };
+    let initrd = unsafe { core::slice::from_raw_parts(bundle.start as *const u8, bundle.len()) };
+    let bundle = verify::authenticated_bundle(initrd);
+    println!("  bundle signature ok ({} bytes)", bundle.len());
     let archive = TarArchiveRef::new(bundle).expect("boot bundle is not a tar archive");
     // The device-grant manifest, if present, is a `grants` entry (not a process).
     let manifest = archive

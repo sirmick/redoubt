@@ -1,0 +1,13 @@
+description = "The loader refuses a boot bundle whose contents were changed after signing"
+arch = ["rv64"]
+kind = "boot"
+programs = ["log-server"]
+timeout_secs = 20
+tamper_bundle = true
+default_forbid = false      # the loader is supposed to panic here
+expect = ['loader64 PANIC', 'signature is invalid']
+forbid = ['KMAIN', 'bundle signature ok']
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]
