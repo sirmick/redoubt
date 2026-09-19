@@ -357,14 +357,14 @@ fn malformed_records_are_refused() {
     assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "an address and no pages");
     for kind in [0, 3] {
         let mut slots = sample_received()[0].encode();
-        slots[RECEIVED_SLOTS - 3] = kind;
+        slots[1] = kind;
         assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "message kind {kind}");
     }
     let mut slots = sample_received()[1].encode();
     slots[RECEIVED_SLOTS - 1] = 0;
     assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "a lend of 0 pages");
     let mut slots = sample_received()[0].encode();
-    slots[1] = 0;
+    slots[2] = 0;
     assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "message id 0");
 
     // Usage: a counter too wide for its field.

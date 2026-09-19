@@ -1,8 +1,8 @@
 //! The Redoubt system call ABI, shared by the kernel and every process.
 //!
 //! The calls, errors and constants are KERNEL-SPEC.md's, under the same names. This crate only
-//! says how they travel: which registers, which records, which numbers. What a call *does* is the
-//! kernel's business.
+//! says how they travel: which registers, which records, which numbers (KERNEL-SPEC.md, ABI: the
+//! spec owns the calls, this crate their encoding). What a call *does* is the kernel's business.
 //!
 //! # Registers
 //!
@@ -68,11 +68,13 @@
 //! [`MAX_START_HANDLES`]. Everything else (does the handle exist, is the range page-aligned) is
 //! the kernel's check.
 //!
-//! Which error, and the order of checks, are KERNEL-SPEC.md's (its error table); decoding comes
-//! first. In summary, decoding reports the first malformed value in register (or slot) order:
-//! `BadHandle` for a handle that is not an index, `TooLarge` for a count above its limit, and
-//! `InvalidArgument` for everything else. The userspace decoders ([`decode_result`],
-//! [`Received::decode`], [`Usage::decode`]) follow the same rule.
+//! Which error, and in what order, is the spec's (KERNEL-SPEC.md, Errors and the order of checks):
+//! decoding is its stage 1, and this crate implements that stage for registers and slots. In
+//! summary: the first malformed value in register (then slot) order wins; `BadHandle` for a
+//! required handle that is 0 or wider than 32 bits, `TooLarge` for a count above its limit,
+//! `InvalidArgument` for everything else. A record's alignment and whether it lies in the caller's
+//! memory come before its slots and are the kernel's to check. The userspace decoders
+//! ([`decode_result`], [`Received::decode`], [`Usage::decode`]) use the same errors.
 
 #![no_std]
 // `deny`, not `forbid`: the `ecall` stub (the only `unsafe` here) must be able to allow it.
@@ -111,13 +113,13 @@ pub const MAX_THREADS: usize = 31;
 pub const MAX_LABELS: usize = 8;
 /// Budget tree depth; the root is at depth 0.
 pub const MAX_DEPTH: usize = 8;
-/// Blocked senders per account per endpoint.
+/// Blocked senders per (account, label set) per endpoint.
 pub const WAIT_CAP: usize = 16;
 /// Stride scheduling numerator.
 pub const STRIDE: u64 = 1 << 20;
 /// The time slice, in microseconds (10 ms).
 pub const SLICE: u64 = 10_000;
-/// A timeout that never expires (microseconds).
+/// A timeout that never expires (microseconds); as a budget deadline, none.
 pub const FOREVER: u64 = u64::MAX;
 /// Calls a process may have taken and not yet replied to; `receive` beyond it is `Busy`.
 pub const MAX_OPEN_CALLS: usize = 64;

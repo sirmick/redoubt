@@ -144,8 +144,9 @@ impl Body {
     }
 }
 
-/// Slots in a [`Received`] record; the longest kind is a message: kind, id, badge, account,
-/// labels (count and `MAX_LABELS`), body, message kind, buffer (address, pages).
+/// Slots in a [`Received`] record; the longest kind is a message: record kind, then the spec's
+/// tuple (KERNEL-SPEC.md, Messages): message kind, id, badge, account, labels (count and
+/// `MAX_LABELS`), body (words, handles), buffer (address, pages).
 pub const RECEIVED_SLOTS: usize = 4 + 1 + MAX_LABELS + BODY_SLOTS + 3;
 
 /// What `receive` returns, written by the kernel to the call's `received_rec`. `Timeout` is an
@@ -163,16 +164,17 @@ pub enum Received {
 /// Messages); the handles are indices in the receiver's own table.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Message {
+    pub kind: MessageKind,
     pub msg_id: NonZeroU64,
     pub badge: u64,
     pub account: u64,
     pub labels: Labels,
     pub body: Body,
-    pub kind: MessageKind,
 }
 
 /// How a message was sent, and the buffer it brought, as mapped in the receiver. In slots: the
-/// kind (1 call, 2 send), then the [`Pages`] ((0, 0) for none).
+/// kind (1 call, 2 send) first, and the [`Pages`] ((0, 0) for none) last, as the spec's tuple
+/// orders them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MessageKind {
     /// By `call`: a reply is owed. The lend, if any, returns to the caller at `reply`.
@@ -204,17 +206,17 @@ impl Received {
         let w = &mut Writer::record(&mut slots);
         match self {
             Received::Message(m) => {
+                let (kind, pages) = match m.kind {
+                    MessageKind::Call { lend } => (1, lend),
+                    MessageKind::Send { transfer } => (2, transfer),
+                };
                 w.u64(1);
+                w.u64(kind);
                 w.u64(m.msg_id.get());
                 w.u64(m.badge);
                 w.u64(m.account);
                 m.labels.write(w);
                 m.body.write(w);
-                let (kind, pages) = match m.kind {
-                    MessageKind::Call { lend } => (1, lend),
-                    MessageKind::Send { transfer } => (2, transfer),
-                };
-                w.u64(kind);
                 Pages::write(pages, w);
             }
             Received::Interrupt(irq) => {
@@ -239,16 +241,19 @@ impl Received {
         let r = &mut reader;
         let received = match r.raw() {
             1 => {
+                // 1 call, 2 send: the pages that go with it come last.
+                let is_call = r.tag(&[true, false])?;
                 let msg_id = NonZeroU64::new(r.u64()?).ok_or(Error::InvalidArgument)?;
                 let (badge, account) = (r.u64()?, r.u64()?);
                 let labels = Labels::read(r)?;
                 let body = Body::read(r)?;
-                let kind = match (r.raw(), Pages::read(r)?) {
-                    (1, lend) => MessageKind::Call { lend },
-                    (2, transfer) => MessageKind::Send { transfer },
-                    _ => return Err(Error::InvalidArgument),
+                let pages = Pages::read(r)?;
+                let kind = if is_call {
+                    MessageKind::Call { lend: pages }
+                } else {
+                    MessageKind::Send { transfer: pages }
                 };
-                Received::Message(Message { msg_id, badge, account, labels, body, kind })
+                Received::Message(Message { kind, msg_id, badge, account, labels, body })
             }
             2 => Received::Interrupt(Handle::from_raw(r.raw())?),
             3 => {
