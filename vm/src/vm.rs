@@ -73,7 +73,9 @@ pub struct Config {
 /// Everything but the process table. The running process is borrowed separately, so native
 /// functions get `&mut System` and `&mut Process` at the same time.
 pub struct System {
-    pub platform: Box<dyn Platform>,
+    /// The platform, behind a lock of its own so file and console I/O need not hold up users of
+    /// the rest of the system. Taken after the system lock, never before it.
+    pub platform: Arc<Lock<Box<dyn Platform>>>,
     pub limits: Limits,
     pub ets: crate::ets::Tables,
     /// Process aliases: references that work as send destinations while active.
@@ -533,7 +535,7 @@ impl Vm {
         let natives = bif::Registry::new(config.natives);
         Vm {
             sys: Lock::new(System {
-                platform,
+                platform: Arc::new(Lock::new(platform)),
                 limits,
                 ets: crate::ets::Tables::default(),
                 persistent: BTreeMap::new(),
@@ -585,20 +587,18 @@ impl Vm {
 
     /// Start the console I/O servers, `user` and `standard_error`.
     fn boot(mut self) -> Vm {
-        self.sys.get_mut().stats.start_us = self.sys.get_mut().platform.monotonic_us();
+        let sys = self.sys.get_mut();
+        sys.stats.start_us = sys.platform.lock().monotonic_us();
         for module in EMBEDDED {
             self.sys
                 .get_mut()
                 .load(module)
                 .expect("embedded modules load");
         }
-        let real_logger = self.sys.get_mut().platform.load_module("logger").is_some()
-            && self
-                .sys
-                .get_mut()
-                .platform
-                .load_module("logger_sup")
-                .is_some();
+        let real_logger = {
+            let mut platform = self.sys.get_mut().platform.lock();
+            platform.load_module("logger").is_some() && platform.load_module("logger_sup").is_some()
+        };
         if !real_logger {
             for module in LOGGER_FALLBACK {
                 self.sys
@@ -919,7 +919,7 @@ impl System {
         if let Some((path, bytes)) = self.find_in_code_path(module, true) {
             return Some(Found::Path(path, bytes));
         }
-        if let Some(bytes) = self.platform.load_module(module) {
+        if let Some(bytes) = self.platform.lock().load_module(module) {
             return Some(Found::Platform(bytes));
         }
         self.find_in_code_path(module, false)
@@ -938,7 +938,8 @@ impl System {
         if dirs.is_empty() {
             return None;
         }
-        let files = self.platform.files()?;
+        let mut platform = self.platform.lock();
+        let files = platform.files()?;
         for dir in dirs {
             let path = alloc::format!("{}/{}.beam", dir.trim_end_matches('/'), module);
             if let Ok(bytes) = crate::bif::read_whole_file(files, &path, max) {
@@ -1158,7 +1159,7 @@ impl System {
     }
 
     pub fn now_us(&mut self) -> u64 {
-        self.platform.monotonic_us()
+        self.platform.lock().monotonic_us()
     }
 
     /// Housekeeping, then the next process to run, taken out of the table.
@@ -1181,11 +1182,11 @@ impl System {
             // if nothing can ever arrive.
             return match self.timers.first() {
                 Some(&(deadline, _)) => {
-                    self.platform.idle(Some(deadline));
+                    self.platform.lock().idle(Some(deadline));
                     Next::Again
                 }
                 None if self.console_reader.is_some() || !self.program_ports.is_empty() => {
-                    self.platform.idle(None);
+                    self.platform.lock().idle(None);
                     Next::Again
                 }
                 None if !self.exits.is_empty() => Next::Again,
@@ -1270,7 +1271,7 @@ impl System {
         if self.timers.is_empty() {
             return;
         }
-        let now = self.platform.monotonic_us();
+        let now = self.platform.lock().monotonic_us();
         while let Some(&(deadline, timer)) = self.timers.first() {
             if deadline > now {
                 break;
@@ -1312,7 +1313,7 @@ impl System {
         let Some(reader) = self.console_reader else {
             return;
         };
-        let input = match self.platform.console_read() {
+        let input = match self.platform.lock().console_read() {
             ConsoleInput::Nothing => return,
             ConsoleInput::Data(bytes) => Some(bytes),
             ConsoleInput::Eof => {
@@ -1352,7 +1353,7 @@ impl System {
         ]
         .map(|n| atom(self, n));
         let true_ = Term::Atom(self.atoms.true_);
-        let time = self.platform.system_time_us().unwrap_or(0) as i64;
+        let time = self.platform.lock().system_time_us().unwrap_or(0) as i64;
         let (pid, leader) = (Term::Pid(p.pid), Term::Pid(p.group_leader.unwrap_or(p.pid)));
         self.send_with(logger, |h| {
             let format = h.string("Error in process ~p with exit value:~n~p~n");
@@ -1379,7 +1380,7 @@ impl System {
             .collect();
         for h in handles {
             self.files.remove(&h);
-            if let Some(f) = self.platform.files() {
+            if let Some(f) = self.platform.lock().files() {
                 f.close(h);
             }
         }

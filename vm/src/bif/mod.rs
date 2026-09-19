@@ -77,6 +77,14 @@ impl<'a> Ctx<'a> {
     pub fn sys(&self) -> SysGuard<'a> {
         self.sched.lock()
     }
+
+    /// The platform, locked until the guard is dropped. Never take the system lock
+    /// (`c.sys()`) while holding it.
+    pub fn platform(
+        &self,
+    ) -> crate::sync::Guard<'a, alloc::boxed::Box<dyn crate::platform::Platform>> {
+        self.sched.platform()
+    }
 }
 
 pub type Native = fn(&mut Ctx, &[Term]) -> Result<Term, Exception>;

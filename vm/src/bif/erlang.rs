@@ -628,7 +628,7 @@ pub fn iolist_size(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn display(c: &mut Ctx, a: &[Term]) -> R {
     let text = alloc::format!("{}\n", c.show(a[0]));
-    c.sys().platform.console_write(text.as_bytes());
+    c.platform().console_write(text.as_bytes());
     Ok(Term::Atom(c.atoms.true_))
 }
 

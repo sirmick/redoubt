@@ -28,8 +28,7 @@ fn directory(c: &mut Ctx, t: &Term) -> Result<Result<String, ()>, Exception> {
         return Ok(Err(()));
     };
     let is_dir = c
-        .sys()
-        .platform
+        .platform()
         .files()
         .and_then(|f| f.info(&path, true).ok())
         .is_some_and(|i| i.kind == FileKind::Directory);
@@ -166,7 +165,7 @@ pub fn which(c: &mut Ctx, a: &[Term]) -> R {
     Ok(match found {
         Some(Found::Path(path, _)) => c.string(&path),
         Some(Found::Platform(_)) => {
-            let file = c.sys().platform.module_file(&name);
+            let file = c.platform().module_file(&name);
             match file {
                 Some(path) => c.string(&path),
                 None => c.atom("preloaded"),
@@ -192,7 +191,7 @@ pub fn all_available(c: &mut Ctx, _a: &[Term]) -> R {
     }
     let dirs = c.sys().code_path.clone();
     for dir in dirs {
-        let Some(names) = c.sys().platform.files().and_then(|f| f.list_dir(&dir).ok()) else {
+        let Some(names) = c.platform().files().and_then(|f| f.list_dir(&dir).ok()) else {
             continue;
         };
         for n in names {
@@ -224,9 +223,9 @@ pub fn all_available(c: &mut Ctx, _a: &[Term]) -> R {
 /// The directory of application `app`: `Root/App` or the highest `Root/App-Vsn` in the first
 /// lib root that has one.
 fn lib_dir_of(c: &mut Ctx, app: &str) -> Option<String> {
-    let mut sys = c.sys();
-    let roots = sys.lib_roots.clone();
-    let files = sys.platform.files()?;
+    let roots = c.sys().lib_roots.clone();
+    let mut platform = c.platform();
+    let files = platform.files()?;
     for root in roots {
         let Ok(names) = files.list_dir(&root) else {
             continue;
@@ -345,7 +344,7 @@ pub fn load_file(c: &mut Ctx, a: &[Term]) -> R {
             load_from(c, &m, &bytes, file)
         }
         Some(Found::Platform(bytes)) => {
-            let file = c.sys().platform.module_file(m.as_str());
+            let file = c.platform().module_file(m.as_str());
             let file = match file {
                 Some(p) => c.string(&p),
                 None => c.atom("preloaded"),
@@ -373,8 +372,7 @@ pub fn load_abs(c: &mut Ctx, a: &[Term]) -> R {
     let file = alloc::format!("{path}.beam");
     let max = c.sys().limits.max_binary_bits / 8;
     let bytes = match c
-        .sys()
-        .platform
+        .platform()
         .files()
         .map(|f| super::read_whole_file(f, &file, max))
     {

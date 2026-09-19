@@ -59,13 +59,13 @@ fn done(c: &mut Ctx, r: Result<(), FileError>) -> R {
     })
 }
 
-/// Run `f` on the platform's file system, with the system locked only while it runs.
+/// Run `f` on the platform's file system, with only the platform locked while it runs.
 fn with_files<T>(
     c: &Ctx,
     f: impl FnOnce(&mut dyn Files) -> Result<T, FileError>,
 ) -> Result<T, FileError> {
-    let mut sys = c.sys();
-    f(sys.platform.files().ok_or(FileError::Enotsup)?)
+    let mut platform = c.platform();
+    f(platform.files().ok_or(FileError::Enotsup)?)
 }
 
 // ---- names ----
@@ -345,7 +345,7 @@ pub fn read_link(c: &mut Ctx, a: &[Term]) -> R {
 /// `get_cwd_nif()`: `{error, enoent}` if the directory has since been removed, as `getcwd` says.
 pub fn get_cwd(c: &mut Ctx, _a: &[Term]) -> R {
     let cwd = c.sys().cwd.clone();
-    let gone = c.sys().platform.files().map(|f| f.info(&cwd, true));
+    let gone = c.platform().files().map(|f| f.info(&cwd, true));
     if let Some(Err(e)) = gone {
         return Ok(error(c, e));
     }
@@ -491,7 +491,7 @@ pub fn close(c: &mut Ctx, a: &[Term]) -> R {
     }
     let mut sys = c.sys();
     sys.files.remove(&f.handle);
-    if let Some(fs) = sys.platform.files() {
+    if let Some(fs) = sys.platform.lock().files() {
         fs.close(f.handle);
     }
     drop(sys);

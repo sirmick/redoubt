@@ -210,8 +210,7 @@ pub fn open_port(c: &mut Ctx, a: &[Term]) -> R {
 
     let entry = driver(c)?;
     let spawned = c
-        .sys()
-        .platform
+        .platform()
         .programs()
         .map_or(Err(FileError::Eacces), |programs| programs.spawn(&spawn));
     let spawned = spawned.map_err(|e| posix(c, e))?;
@@ -284,7 +283,7 @@ fn start_driver(
     let port = match sys.spawn_copy(entry, &c.p.heap, &[settings], true) {
         Ok(port) => port,
         Err(e) => {
-            if let (Some(h), Some(programs)) = (st.handle, sys.platform.programs()) {
+            if let (Some(h), Some(programs)) = (st.handle, sys.platform.lock().programs()) {
                 programs.close(h);
             }
             return Err(e);
@@ -362,10 +361,10 @@ pub fn port_command(c: &mut Ctx, a: &[Term]) -> R {
         st.output += framed.len() as u64;
     }
     match handle {
-        None => sys.platform.console_write(&framed),
+        None => sys.platform.lock().console_write(&framed),
         // A program that has gone away takes no more input; the port learns that from its events.
         Some(h) => {
-            if let Some(programs) = sys.platform.programs() {
+            if let Some(programs) = sys.platform.lock().programs() {
                 let _ = programs.write(h, &framed);
             }
         }
@@ -389,7 +388,7 @@ fn close(c: &mut Ctx, port: Pid) {
     let found = c.sys().ports.remove(&port).and_then(|st| st.handle);
     if let Some(h) = found {
         c.sys().program_ports.remove(&h);
-        if let Some(programs) = c.sys().platform.programs() {
+        if let Some(programs) = c.platform().programs() {
             programs.close(h);
         }
     }
@@ -616,7 +615,11 @@ impl crate::vm::System {
         if self.program_ports.is_empty() {
             return;
         }
-        while let Some((handle, event)) = self.platform.programs().and_then(|p| p.poll()) {
+        loop {
+            let polled = self.platform.lock().programs().and_then(|p| p.poll());
+            let Some((handle, event)) = polled else {
+                break;
+            };
             let Some(&port) = self.program_ports.get(&handle) else {
                 continue;
             };
@@ -643,7 +646,7 @@ impl crate::vm::System {
     pub(crate) fn port_ended(&mut self, port: Pid) {
         if let Some(h) = self.ports.remove(&port).and_then(|st| st.handle) {
             self.program_ports.remove(&h);
-            if let Some(programs) = self.platform.programs() {
+            if let Some(programs) = self.platform.lock().programs() {
                 programs.close(h);
             }
         }
