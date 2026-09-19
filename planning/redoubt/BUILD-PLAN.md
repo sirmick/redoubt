@@ -33,6 +33,9 @@ not needed.
 - **Typed-message tables:** each server package (WP-D1, WP-D2, WP-D3, WP-S1, WP-S2, WP-S3) writes
   the tables of the protocols its server serves into that server's note, in WIRE.md's format, with a
   HISTORY.md line: a small design addition, reviewed as one.
+- **The owner's answers 1-55** (QUESTIONS.md) are in the notes. Packages merged before an answer
+  that changes them get a follow-up package below (WP-A2, WP-W2, WP-M1, WP-R1b) rather than a
+  silent edit.
 
 ## Work packages
 
@@ -48,6 +51,20 @@ not needed.
   in the model, makes at least one property test fail** (so the tests are not vacuous).
 - Needs: nothing. Handed to red-team agents as soon as it passes.
 
+**WP-M1. The model follows answers 28-55.** Size M.
+- Reads: KERNEL-SPEC.md as changed by answers 28-55 (R2, R4, R4a, R10, R11, open calls and the
+  serving account, exit notices with `blamed_labels`, badge slots and notices, `process_start`'s
+  `arg`, I7, I10, I15); CONTAINMENT.md (`check`, metadata as reads, `admit` per badge for account 0,
+  reader budgets, blame per (account, label set)); CAPABILITIES.md (`MAX_LEASE`, nested sub-agents,
+  the approval screen).
+- Delivers: `redoubt/model/` updated: the README's interpretation choices the spec has now settled
+  changed to match or marked settled (6 and 7 change: a `send` is never served or blamed; 8, 10,
+  14, 20, 23, 24 stand), and the open questions it listed closed; mutations for
+  each new rule (a badge notice sent early, a stale notice not withdrawn, blame of an older open
+  call, a revoked message still delivered).
+- Accepted when: as WP-M0, at 10^6 sequences, with I15 and the new mutations.
+- Needs: WP-M0.
+
 **WP-W1. Wire codecs.** Size M.
 - Reads: WIRE.md.
 - Delivers: `redoubt/wire/`: a `no_std` 9P2000 codec; the typed-message table format and a
@@ -55,7 +72,16 @@ not needed.
   Fuzz targets for all three.
 - Accepted when: round-trip tests; fuzzing finds no panics or hangs (1 hour each in CI-equivalent
   runs); the Elixir codec round-trips the same vectors on beamlet.
-- Needs: nothing.
+- Needs: nothing. Merged.
+
+**WP-W2. Wire generator follows answers 28, 41 and 42.** Size S.
+- Reads: WIRE.md (Tables, Layout in a message).
+- Delivers: `redoubt/wire/`: `handle[N] KIND` in the table format, the kind in the generated docs
+  and a generated helper checking it; code 1 `Malformed` reserved and added to every error table
+  (`tables/example.md`'s code 1 renumbered); a table giving code 1 its own meaning refused.
+- Accepted when: the drift test covers kinds and `Malformed`; a table with an unknown kind or its
+  own code 1 fails generation; the Elixir codec round-trips the new vectors.
+- Needs: WP-W1.
 
 **WP-A1. System call ABI crate.** Size S.
 - Reads: KERNEL-SPEC.md (system calls, messages, errors).
@@ -63,7 +89,15 @@ not needed.
   both widths), the error enum, and a host round-trip test for every call and error (like `xous`'s
   `Result` test).
 - Accepted when: round-trip tests pass; the names match WP-M0 exactly.
-- Needs: WP-M0's call list (can start from KERNEL-SPEC.md directly).
+- Needs: WP-M0's call list (can start from KERNEL-SPEC.md directly). Merged.
+
+**WP-A2. ABI follows answers 28-55.** Size S.
+- Reads: KERNEL-SPEC.md (`process_start`, Messages, Constants, the error table).
+- Delivers: `redoubt-sys`: `process_start`'s `arg`; the badge notice as a `receive` result kind;
+  `blamed_labels` in the exit notice record; `MAX_LEASE`; the `receive` row's `Busy` at delivery.
+- Accepted when: round-trip and malformed-input tests for every changed call and record; the fuzz
+  target rerun; names match WP-M1.
+- Needs: WP-A1. Before WP-K2 and WP-R1b use the new records.
 
 **WP-L1. littlefs in pure Rust.** Size L.
 - Reads: NAMESPACES.md (filesystem section), littlefs `SPEC.md`.
@@ -71,19 +105,37 @@ not needed.
 - Accepted when: differential tests against the C reference **on the host only** (images written by
   either read identically in the other); crash injection at every block write leaves a mountable,
   consistent image; fuzzed images never panic.
-- Needs: nothing.
+- Needs: nothing. Merged. It relies only on `blkd`'s contract (IO-ARCHITECTURE.md, Storage).
 
 **WP-T1. Test bench extensions.** Size M.
 - Delivers: in `redoubt/testbench`: an SSH client driving sessions over QEMU port forwarding;
   multi-session scripted scenarios; a virtio-blk image and virtio-net per case; attack programs as
   first-class case inputs; model-trace replay support for WP-C1.
 - Accepted when: a self-check case proves each new feature can fail (TENETS.md 6).
-- Needs: nothing.
+- Needs: nothing. Merged.
+
+**WP-T1b. Attack verdicts from the system.** Size S. (Emerged from answer 26.)
+- Delivers: every existing attack case takes its verdict from the kernel, a victim or an
+  `attack-checker`, never from the attacker's output; `log-server` prefixes every relayed line with
+  the sender's PID from the kernel; `bench-attack-forgery`.
+- Accepted when: `bench-attack-forgery` shows a client cannot forge an unprefixed or another PID's
+  line; `wx` and `irq-attack` are listed as survival-only until WP-K4 and WP-K3.
+- Needs: WP-T1. Merged.
 
 ### Track K: the kernel (one integrator at a time; see "Hotspots")
+**WP-K0. Kernel memory panics.** Size S. (Emerged from WP-T1b's audit.)
+- Delivers: the three kernel panics reachable from any unprivileged process fixed (lending an
+  untouched page, moving a page only lent, a lender unmapping its lent page), and the
+  out-of-memory `expect`s beside them; the lend and move paths check a whole range before any page
+  moves.
+- Accepted when: cases `lend-untouched-page`, `move-borrowed-page`, `return-lent-unmapped`,
+  `syscall-attack`, `touch-beyond-ram`, on 1 and 4 harts.
+- Needs: nothing. Merged.
+
 **WP-K1. Budgets and handle tables.** Size L.
 - Reads: KERNEL-SPEC.md objects (Budget, Handle, the cost table), R6-R10, `budget_*`,
-  `handle_close`, `time_now`, `random`; errors and the order of checks.
+  `handle_close`, `time_now`, `random`; errors and the order of checks. (What R10 does to messages
+  and badge slots needs endpoints: WP-K2.)
 - Delivers: budget objects with page, process and weight accounting, carving, accounts, deadlines
   recorded (enforced by WP-K5), destruction sweeping stamped handles; per-process handle tables
   charged in pages (confirming the cost table's 128 handles per page, or changing it); 64-bit
@@ -93,8 +145,8 @@ not needed.
 - Needs: WP-A1.
 
 **WP-K2. Endpoints and messages.** Size L.
-- Reads: KERNEL-SPEC.md Endpoint, Messages, R1-R4b, `endpoint_create`, `mint`, `call`, `send`,
-  `receive`, `reply`.
+- Reads: KERNEL-SPEC.md Endpoint (badge slots), Messages (badge notices), R1-R4b, R10 (messages
+  in flight), `endpoint_create`, `mint`, `call`, `send`, `receive`, `reply`, `handle_close`.
 - Delivers: endpoints; the four IPC calls with lend and transfer; `receive` reporting a call or a
   send; open calls (up to `MAX_OPEN_CALLS` per process, each charged a page, `Busy` also for a
   receiver already waiting); `mint` with stamps, from an open call of the caller's thread; badge-0
@@ -103,15 +155,16 @@ not needed.
   `WAIT_CAP` counting queued messages only; lends that outlive their lender; transfer opt-in
   (counting page tables); `Dead` for the calls a dying server had taken; R10's reach into messages
   in flight (K1 has no messages to test it with).
-- Accepted when: kernel cases for R1-R4b and I3, I4, I7, I9, I11; attack cases: steal a receive
+- Accepted when: kernel cases for R1-R4b and I3, I4, I7, I9, I11, I15; attack cases: steal a receive
   right, mint badge 0, mint into a foreign budget, unequal-label call, 10,000 blocked senders with
   another account still served in turn, a vault-labelled sender filling its `WAIT_CAP` with its
   owner's unlabelled sender unaffected, open calls beyond `MAX_OPEN_CALLS`, reply to a send, lender
   destroyed mid-call with the server surviving, unrequested transfer, a transfer beyond the
   receiver's free pages, a revoked handle's queued message and taken call (no reply handle reaches
-  the sender), `mint` from a `send`'s id; kernel cases for I15: a badge notice after the last copy
-  closes and not before, one pending per badge, none across unequal labels to a user owner.
-- Needs: WP-K1.
+  the sender), `mint` from a `send`'s id; badge notices: sent after the last copy closes and not
+  before, one pending per badge, withdrawn by a re-mint, dropped across unequal labels to a
+  user-class owner.
+- Needs: WP-K1, WP-A2.
 
 **WP-K3. Device objects and interrupts.** Size M.
 - Reads: KERNEL-SPEC.md Device, R5, R11, `map_device`, `dma_alloc`, `system_reset`; DEVICE-GRANTS.md.
@@ -140,7 +193,7 @@ not needed.
   the loader refuses data entries).
 - Also: `wx` re-based on exit notices (a checker launches the attacker and takes the verdict
   from the kernel's notice), replacing today's survival-only verdict.
-- Needs: WP-K2.
+- Needs: WP-K2, WP-A2.
 
 **WP-K5. Timer, timeouts and preemption.** Size M.
 - Reads: KERNEL-SPEC.md R12, timeouts, deadlines; RESOURCES.md.
@@ -156,15 +209,16 @@ not needed.
   name lookup and `PlatformSpecific` timer calls; old test programs migrated or deleted.
 - Accepted when: the bench passes with no legacy calls; the `unsafe` ratchet is lower than before
   WP-K1; kernel line count reported.
-- Needs: WP-K1 to WP-K5, WP-R1.
+- Needs: WP-K1 to WP-K5, WP-R1b.
 
 **WP-C1. Model conformance.** Size M.
 - Reads: KERNEL-SPEC.md, errors and the order of checks (the model conforms to them).
-- Delivers: a bench case replaying WP-M0 traces on the real kernel and comparing every result;
-  a system-call fuzzer program (random and hostile arguments; I14).
+- Delivers: a bench case replaying WP-M1 traces on the real kernel and comparing every result
+  (usage compared in the model's placement profile, R11); a system-call fuzzer program (random and
+  hostile arguments; I14).
 - Accepted when: 10^5 model traces replay with identical results; the fuzzer runs
   for its budget with no kernel panic.
-- Needs: WP-M0, WP-K1 to WP-K5, WP-T1.
+- Needs: WP-M1, WP-K1 to WP-K5, WP-T1.
 
 ### Track R: user runtime and system servers
 **WP-R1. Native runtime crate.** Size M.
@@ -178,13 +232,27 @@ not needed.
 - Accepted when: unit tests on the host; a bench echo server and client use only this crate.
 - Needs: WP-A1, WP-W1 (and WP-K2 to run on the kernel).
 
+**WP-R1b. The runtime follows answers 39-42 and 50-53.** Size S.
+- Reads: CONTAINMENT.md (the shared server library), INIT.md (Startup block), WIRE.md, KERNEL-SPEC.md
+  (badge notices).
+- Delivers: in `redoubt-rt`: `admit(badge, account, labels)` with account 0 per badge; `check` with
+  write equality; the 9P skeleton treating walks, qids and `stat` as reads, filtering directory
+  reads, keying fids by (badge, account, label set), refusing a 9P call with non-zero words or no
+  lend with `Malformed`, and freeing a badge's fids and slots on its badge notice; the startup block
+  exactly as INIT.md now states it, found through `arg`.
+- Accepted when: host tests for each rule (a blind write up refused, an unreadable walk refused, a
+  listing filtered, a badge notice freeing its fids, two badges of one account not sharing fids);
+  the startup-block fuzz target.
+- Needs: WP-R1, WP-A2, WP-W2.
+
 **WP-R2. Loader stub.** Size S.
 - Reads: PACKAGES.md (launching), INIT.md (startup block).
 - Delivers: the flat-binary stub at its fixed address: parse the ELF from memory, map segments
-  (code executable and read-only), free the image, jump.
+  (code executable and read-only), free the image, jump, passing on the startup page's address it
+  was started with (`arg`).
 - Accepted when: fuzzed ELF images never escape the child (the child faults or exits; nothing else
   is affected); attack case: a hostile ELF from a user parent hurts only the child.
-- Needs: WP-R1, WP-K4.
+- Needs: WP-R1b, WP-K4.
 
 **WP-R3. init and the boot manifest.** Size M.
 - Reads: INIT.md (all), WIRE.md (JSON).
@@ -202,7 +270,7 @@ not needed.
 - Delivers: `bootfsd` (read-only 9P over the verified bundle); `consoled` (UART driver serving
   `/dev/cons` over 9P, IRQ receive).
 - Accepted when: 9P conformance vectors from WP-W1; typing on the UART reaches a 9P reader.
-- Needs: WP-R1, WP-K3.
+- Needs: WP-R1b, WP-K3.
 
 ### Track B: beamlet on Redoubt (parallel with track K once WP-R1 exists)
 **WP-B1. The Redoubt platform for beamlet.** Size M.
@@ -212,7 +280,7 @@ not needed.
   pool of I/O threads.
 - Accepted when: **Elixir prints on the box** (the M1 step 2 milestone); beamlet's differential
   suite subset runs on the box with identical output.
-- Needs: WP-R1, WP-R4.
+- Needs: WP-R1b, WP-R4.
 
 **WP-B2. IEx on the UART console.** Size S.
 - Delivers: an IEx session on the UART; the first Redoubt IEx helpers (`ls`, `cd`, `cat` over 9P).
@@ -224,8 +292,9 @@ not needed.
 **WP-D1. blkd.** Size M. virtio-blk driver (the `virtio-drivers` crate), partition table,
 block-range handles, validation of every ring index and length.
 - Accepted when: block round trips; a hostile-device model (malformed rings) never corrupts other
-  memory or panics blkd.
-- Needs: WP-R1, WP-K3.
+  memory or panics blkd; `blkd`'s contract (IO-ARCHITECTURE.md): a flush on every `sync`, in-order
+  completion, whole-sector writes.
+- Needs: WP-R1b, WP-K3.
 
 **WP-D2. fsd.** Size M. 9P over littlefs on a block range; one label set per volume from the
 manifest; `admit` and `check` on every request (writes need equal labels; a walk or `stat` is a
@@ -235,7 +304,7 @@ read; directory reads list only readable entries); relies only on `blkd`'s contr
   refused, `Tcreate` in a labelled directory from an unlabelled caller revealing nothing);
   admission per (account, label set), and a dead client's fids freed by its badge notice; the
   no-leaky-state observer sees no change, qid versions included, from a vault writer.
-- Needs: WP-D1, WP-L1, WP-R1.
+- Needs: WP-D1, WP-L1, WP-R1b.
 
 **WP-D3. netd and ipd.** Size L. virtio-net driver; `ipd:lan` on `smoltcp` serving `/net` over
 9P with IP-prefix-and-port capabilities that never include the box's own addresses; refuses
@@ -244,12 +313,12 @@ labelled callers.
   prefix, connect to the box's own address, a labelled caller refused. The bench's network is
   QEMU user mode with `restrict=on` (no outside peer); this package adds the peer it needs to the
   bench, with a self-check that the guest reaches nothing else.
-- Needs: WP-R1, WP-K3, WP-W1.
+- Needs: WP-R1b, WP-K3, WP-W2.
 
 ### Track S: security servers
 **WP-S1. keyd.** Size S. Holds keys; signs through a badge-scoped capability; never holds keys
 that authenticate a person to the box; constant-time signing.
-- Needs: WP-R1.
+- Needs: WP-R1b.
 
 **WP-S2. steward (stateless, milestone 1).** Size L.
 - Reads: CAPABILITIES.md, CONTAINMENT.md, INIT.md, PACKAGES.md (launching).
@@ -286,18 +355,20 @@ steward; rejects keys `keyd` holds; each channel labelled with its session's lab
 
 ## Order
 ```
-start now, in parallel:  M0  W1  L1  T1  A1
-kernel, serialized:      K1 -> K2 -> K3 -> K4 -> K5 -> K6
-runtime:                 R1 (after A1, W1) -> R2 (after K4) -> R3 (after K3, K5)
-                         R4 (after R1, K3)
-beamlet:                 B1 (after R1, R4) -> B2 (after R3)
-storage and network:     D1 (after R1, K3) -> D2 (after L1);  D3 (after R1, K3)
-security:                S1 (after R1);  S2 (after R3, B1, D2);  S3 (after D3, S1, S2)
-conformance:             C1 (after M0, K5, T1)
+merged:                  W1  L1  T1  T1b  A1  K0
+start now, in parallel:  M0 -> M1;  A2 (after A1);  W2 (after W1)
+kernel, serialized:      K1 -> K2 (after A2) -> K3 -> K4 -> K5 -> K6 (after R1b)
+runtime:                 R1 (after A1, W1) -> R1b (after A2, W2) -> R2 (after K4) -> R3 (after K3, K5)
+                         R4 (after R1b, K3)
+beamlet:                 B1 (after R1b, R4) -> B2 (after R3)
+storage and network:     D1 (after R1b, K3) -> D2 (after L1);  D3 (after R1b, K3, W2)
+security:                S1 (after R1b);  S2 (after R3, B1, D2);  S3 (after D3, S1, S2)
+conformance:             C1 (after M1, K5, T1)
 milestone:               E1 (after all)
 ```
-The critical path is the kernel track (K1 to K5), then R3, S2 and S3. Everything off that path
-(model, codecs, littlefs, bench, drivers, beamlet's platform) can proceed in parallel.
+The critical path is the kernel track (K1 to K5), then R3, S2 and S3; A2 must land before K2.
+Everything off that path (model, codecs, littlefs, bench, drivers, beamlet's platform) can proceed
+in parallel. SWARM.md's waves follow this order.
 
 ## Hotspots (serialize edits to these)
 - `kernel/src/syscall.rs`, `kernel/src/services.rs`, `kernel/src/mem.rs`,

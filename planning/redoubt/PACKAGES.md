@@ -15,9 +15,11 @@ One mechanism for every process after `init`, at boot or at run time:
 3. It maps the **loader stub** into the process: a flat binary, one code region at a fixed address,
    system-signed and the same for everyone. Mapping it needs no parsing.
 4. It copies the program's ELF bytes into pages and maps them into the process, read-write, as data
-   (`process_map`), then writes the startup block (INIT.md) and starts the process at the stub.
+   (`process_map`), then writes the startup block (INIT.md) into a page mapped read-only, and starts
+   the process at the stub with that page's address as `process_start`'s `arg`.
 5. The stub, running inside the new process's own budget, parses the ELF from memory, maps its
-   segments (code executable and never writable), frees the image pages and jumps to the entry point.
+   segments (code executable and never writable), frees the image pages and jumps to the entry point,
+   passing the startup page's address on.
 
 `init` and the steward copy bytes; they never parse an ELF. A malicious ELF can at most compromise the
 process it was going to become. The stub needs no file access, so `init` starts `bootfsd` and

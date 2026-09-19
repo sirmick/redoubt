@@ -97,7 +97,7 @@ share's stamp. Alice un-shares: the scope is destroyed, and `sub` dies with it.
    has an accountable **sponsor** (a human, or an agent with a human at the top of the chain).
 2. **An agent's budget sits under its sponsor's, so it shares the sponsor's account.** Its requests
    count against the sponsor's admission limits, and crashes blamed on it log out the sponsor's
-   sessions (CONTAINMENT.md). The sponsor answers for its agents.
+   sessions with the same label set (CONTAINMENT.md). The sponsor answers for its agents.
 3. **Delegation only narrows.** Human -> agent -> sub-agent, each step attenuated, the chain
    recorded. Agents may spawn sub-agents freely, as budgets **inside their own budget**: an agent
    holds only its own budget handle, so it cannot create siblings, and destroying the agent's budget

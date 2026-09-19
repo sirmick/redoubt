@@ -326,4 +326,12 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
     before learning the frame was the lender's, then panicked. Identical upstream.
   - *A lender could unmap its own lent page, and the server's return then panicked*
     (`return_page_inner`'s assert). Identical upstream.
+- **Coherence pass over answers 1-55** (2026-09-19, editorial): every note re-read so the two
+  tranches read as one design. Consequences written out where a note still stated the old one: a
+  vault session may read unlabelled volumes (how data enters it, answer 51); `process_exit`'s row
+  and R4b name the panic and revocation cases; the loader stub passes `arg` on (PACKAGES.md);
+  admission, blame and the approval cap per (account, label set) wherever they were still "per
+  account"; I10's caveat in RESOURCES.md. BUILD-PLAN.md gains the merged WP-K0 and WP-T1b and the
+  follow-ups the answers require (WP-A2 ABI, WP-W2 generator, WP-M1 model, WP-R1b runtime), with
+  Needs and Order updated; README.md's glossary and "Built today" follow.
 
