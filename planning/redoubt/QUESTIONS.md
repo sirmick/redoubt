@@ -5,7 +5,7 @@ so each needs your decision; the answer goes into the named note with a HISTORY.
 **Rec** is the orchestrator's recommendation. Reply with numbers, e.g. "all Rec except 7: ...".
 
 **1-101 answered 2026-09-19** (ANSWERS.md, four tranches; each "Answered" line says where the
-answer now lives). **Open: 102-117** (at the end: K1's handle limit, and the design editor's choices in applying 56-101). The round-4 answers revised 56 (handle
+answer now lives). **Open: 102-118** (at the end: K1's handle limit, and the design editor's choices in applying 56-101). The round-4 answers revised 56 (handle
 kinds are checked by use) and replaced 57 and 58 (by 82).
 
 ## Kernel: messages and IPC (KERNEL-SPEC.md)
@@ -891,3 +891,12 @@ point to change the IPC design. Several items interact; the cross-references say
      badges.
      *Rec:* accept all three. NAMESPACES.md describes `quota` and `refused`, and CONTAINMENT.md's
      fair-share sentence adds the minting rule.
+
+118. **Bucket slots are a shared cap.** For its caps to fit its budget, a server tracks at most a
+     fixed number of (account, label set) buckets. A latecomer refused for want of a slot learns
+     that others hold state: a channel CONTAINMENT.md doesn't state.
+     *Rec:* each server's manifest sizes its bucket count to the (account, label set)s it serves,
+     so the cap never binds in normal use, and CONTAINMENT.md states the residual for a server
+     sized smaller. Also, byte quotas move out of the shared library and into fsd behind two hooks
+     (the grant, and the disconnect), since only fsd meters bytes (WP-D2). The `quota` field
+     stays on the wire (question 117).
