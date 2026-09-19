@@ -52,8 +52,8 @@ and acyclic, so reference counting frees exactly the garbage, with no tracing co
 per-process heap. Costs we accept:
 - Slower than BEAM's bump allocation and copying collector.
 - Messages share structure between processes instead of being copied. That is invisible to Erlang
-  code (terms are immutable) but it means per-process memory accounting has to count shared data;
-  see Open questions.
+  code (terms are immutable) but it means per-process memory is measured, not read off a heap;
+  see Resource limits.
 - Long lists are dropped iteratively (`impl Drop for Cons`) so dropping cannot overflow the stack.
 
 Integers are `i64` and move to `BigInt` (`num-bigint`) only on overflow, and back when they fit, so
@@ -107,8 +107,36 @@ enforced access, heirs, match specifications restricted to pure guard functions)
   interpreter then treats remaining malformations as `bad_code`: the process that ran them dies,
   uncatchably. Nothing in the VM panics on bad input.
 - Resource limits, each failing with `system_limit` (or killing the process, for the stack):
-  atoms 2^20, atom length 255, processes 2^16, mailbox 2^16 messages, stack 2^20 Y registers,
-  bignums 2^24 bits, binaries 2^30 bits (a per-VM `Limits` setting), tuples from `make_tuple` 2^24, ETF nesting 256.
+  atoms 2^20, atom length 255, processes 2^16, stack 2^24 Y registers, bignums 2^24 bits,
+  binaries 2^30 bits, tuples from `make_tuple` 2^24, ETF nesting 256. Memory, mailbox and ETS
+  limits: see Resource limits.
+
+## Resource limits (`vm::Limits`, `memory.rs`)
+One VM is one trust domain, but a buggy or hostile process must not take the others down with
+it. Every limit fails closed: the offender is ended, nothing is silently lost.
+- **Mailbox** (`max_mailbox`, default 2^20): a message that would overflow a mailbox kills the
+  receiver with `{system_limit, message_queue}`, untrappably. Dropping it instead would break
+  protocols silently (a TCP stream with a hole in it); a process that far behind is broken.
+- **Process memory** (`max_heap_words`, default 2^27 words, and BEAM's `max_heap_size` via
+  `process_flag/2` or `spawn_opt/4`, which can only lower it): measured, since terms are
+  reference counted rather than on per-process heaps. `memory::process` walks registers, stack,
+  mailbox and dictionary in BEAM's units (`erts_debug:flat_size` words), counting each shared node
+  once, so a term built with sharing costs what it really costs; off-heap binaries (over 64
+  bytes) are counted by buffer. The walk stops once over budget. It runs at the end of a time
+  slice once the process has used half its last size in reductions, so its cost is a constant
+  share of the process's own work, like a copying collector's; between measurements a process
+  can overshoot by a bounded factor. Over the limit, the process is killed with reason `killed`
+  (BEAM's behaviour); `kill => false` is accepted but does nothing (no report is logged).
+  `process_info(P, memory | heap_size | max_heap_size)` and `erlang:memory/0,1` report the
+  measurements (`code` is not tracked).
+- **ETS** (`max_ets_words`, default 2^27 words, for all tables of the VM together): tables keep a
+  running total; an insert that would pass it raises `system_limit`.
+- **CPU**: within a VM, reductions preempt every process (including call-free loops). Between
+  VMs, CPU share is the host scheduler's job (on Xous, the kernel's per-process scheduling); the
+  embedder can also drive a VM in bounded steps (`Vm::run_bounded`).
+- The limits are measurements, not an allocator: a single native that allocates a lot at once
+  (e.g. `binary_to_list` of a large binary) is only caught afterwards. The hard backstop is the
+  embedder's allocator; on Xous, the process's memory quota from the kernel.
 
 ## Testing
 - **Unit tests** (`cargo test`): formats and parsers, with vectors taken from the real BEAM.
@@ -186,8 +214,8 @@ capabilities (xous-core `planning/xous64/NAMESPACES.md`). beamlet follows that:
   Erlang process. `Platform::idle` returns on a timer deadline or a completion.
 - **POSIX platform:** serves the same tree from host files and host sockets, so the differential
   suite exercises `gen_tcp`, `ssl` and `ssh` over real TCP against the real BEAM.
-- Still open: mailbox overflow (below) must be settled before real sockets, since an active-mode
-  socket can fill a mailbox and silent drops would corrupt a TCP stream.
+- Mailbox overflow kills the receiver (Resource limits), so an active-mode socket that outruns its
+  owner ends the owner rather than corrupting the stream.
 
 ## Applications, networking, regular expressions
 - **Applications** (`vm/lib/application.erl`): a small controller. It reads `.app` files through
@@ -211,9 +239,6 @@ capabilities (xous-core `planning/xous64/NAMESPACES.md`). beamlet follows that:
   processes of one VM over the loopback (`tests/ssltests`, `tests/nettests`), matching BEAM.
 
 ## Open questions
-- Mailbox overflow currently drops messages silently. Kill the receiver instead (fail closed), or
-  backpressure sockets? Must be decided before real sockets land.
-- Per-process memory limits with shared (reference-counted) terms.
 - Local funs cannot be serialized (`term_to_binary`); `erlang:phash2/1,2` is missing.
 - Console input for the I/O server.
 - Name.

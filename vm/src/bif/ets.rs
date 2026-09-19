@@ -89,13 +89,29 @@ pub fn new(c: &mut Ctx, a: &[Term]) -> R {
     Ok(id)
 }
 
-/// The objects `insert` was given: one tuple or a list of them, each with a key.
+/// The objects `insert` was given: one tuple or a list of them, each with a key. Raises
+/// `system_limit` if they would take ETS past `Limits::max_ets_words`.
 fn objects(c: &Ctx, t: &Table, arg: &Term) -> Result<Vec<(Key, Term)>, Exception> {
     let list = match arg {
         Term::Tuple(_) => alloc::vec![arg.clone()],
         _ => arg.to_vec().ok_or_else(|| c.badarg())?,
     };
+    room_for(c, list.iter())?;
     list.into_iter().map(|o| t.key_of(&o).map(|k| (k, o)).ok_or_else(|| c.badarg())).collect()
+}
+
+/// `system_limit` unless ETS has room for `objs` besides what it holds. Objects they would
+/// replace are not credited: near the limit, an overwrite may be refused.
+fn room_for<'t>(c: &Ctx, objs: impl Iterator<Item = &'t Term>) -> Result<(), Exception> {
+    let room = c.sys.limits.max_ets_words.saturating_sub(c.sys.ets.words());
+    let mut need: u64 = 0;
+    for o in objs {
+        need = need.saturating_add(ets::weigh(o));
+        if need > room {
+            return Err(c.system_limit());
+        }
+    }
+    Ok(())
 }
 
 pub fn insert(c: &mut Ctx, a: &[Term]) -> R {
@@ -536,6 +552,7 @@ pub fn select_replace(c: &mut Ctx, a: &[Term]) -> R {
     let s = spec(c, &a[1])?;
     table_id(c, &a[0], true)?;
     let found = select_all(c, &a[0], &s)?;
+    room_for(c, found.iter().map(|(_, new)| new))?;
     let t = table_mut(c, &a[0])?;
     let mut n = 0;
     for (old, new) in found {

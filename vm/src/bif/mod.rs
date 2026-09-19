@@ -351,6 +351,8 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("erlang", "processes", 0, info::processes),
     ("erlang", "process_info", 1, info::process_info1),
     ("erlang", "process_info", 2, info::process_info),
+    ("erlang", "memory", 0, info::memory0),
+    ("erlang", "memory", 1, info::memory1),
     ("erlang", "loaded", 0, info::loaded),
     ("erlang", "get_module_info", 1, info::get_module_info),
     ("erlang", "get_module_info", 2, info::get_module_info),

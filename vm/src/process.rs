@@ -70,6 +70,24 @@ impl Exception {
     }
 }
 
+/// A process's own memory limit (`process_flag(max_heap_size, ...)`), as BEAM keeps it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MaxHeap {
+    /// Words; 0 means no limit of its own (the VM-wide one still applies).
+    pub size: u64,
+    /// Kill the process when over; otherwise the limit is only reported.
+    pub kill: bool,
+    pub error_logger: bool,
+    /// Count off-heap binaries against `size` too.
+    pub include_shared_binaries: bool,
+}
+
+impl Default for MaxHeap {
+    fn default() -> MaxHeap {
+        MaxHeap { size: 0, kill: true, error_logger: true, include_shared_binaries: false }
+    }
+}
+
 pub struct Process {
     pub pid: Pid,
     pub x: Vec<Term>,
@@ -111,6 +129,10 @@ pub struct Process {
     pub budget: usize,
     /// Reductions used since the process started (`process_info(P, reductions)`).
     pub reductions: u64,
+    pub max_heap: MaxHeap,
+    /// The last measurement of this process's memory, and `reductions` when it was taken.
+    pub usage: crate::memory::Usage,
+    pub measured_at: u64,
 }
 
 impl Process {
@@ -145,6 +167,9 @@ impl Process {
             pending_exit: None,
             budget: 0,
             reductions: 0,
+            max_heap: MaxHeap::default(),
+            usage: crate::memory::Usage::default(),
+            measured_at: 0,
         }
     }
 }

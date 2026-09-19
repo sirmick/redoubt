@@ -26,6 +26,7 @@ pub mod ets;
 pub mod float;
 pub mod interp;
 pub mod loader;
+pub mod memory;
 pub mod module;
 pub mod opcodes;
 pub mod platform;

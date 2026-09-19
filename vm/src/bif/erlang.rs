@@ -644,11 +644,16 @@ pub fn binary_to_term(c: &mut Ctx, a: &[Term]) -> R {
 
 /// `erts_debug:flat_size(Term)`: the heap words BEAM would use to copy `Term` (64-bit, OTP 28),
 /// ignoring sharing. Calibrated against the real BEAM; see `tests/erlang/flat_size.erl`. Maps
-/// above 32 keys are counted as flat maps, which BEAM does not use for them.
-pub fn flat_size(_c: &mut Ctx, a: &[Term]) -> R {
+/// above 32 keys are counted as flat maps, which BEAM does not use for them. A term whose flat
+/// size passes `Limits::max_heap_words` (possible for one built with sharing, whose flattened
+/// copy could be exponentially larger) raises `system_limit` rather than walking it all.
+pub fn flat_size(c: &mut Ctx, a: &[Term]) -> R {
     let mut words: u64 = 0;
     let mut work = alloc::vec![a[0].clone()];
     while let Some(t) = work.pop() {
+        if words > c.sys.limits.max_heap_words {
+            return Err(c.system_limit());
+        }
         words += match &t {
             Term::Int(_) | Term::Atom(_) | Term::Nil | Term::Pid(_) => 0,
             Term::Big(b) => 1 + b.bits().div_ceil(64),

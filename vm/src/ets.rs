@@ -76,6 +76,19 @@ pub struct Table {
     pub heir: Option<(Pid, Term)>,
     objects: BTreeMap<Key, Vec<Term>>,
     count: usize,
+    /// Memory the objects hold, in words (see [`weigh`]).
+    words: u64,
+}
+
+/// The words an object costs a table: what `memory::Meter` finds in it.
+pub fn weigh(obj: &Term) -> u64 {
+    let mut m = crate::memory::Meter::new(u64::MAX);
+    m.add(obj);
+    m.usage().total_words()
+}
+
+fn weigh_all(objs: &[Term]) -> u64 {
+    objs.iter().map(weigh).sum()
 }
 
 impl Table {
@@ -92,6 +105,11 @@ impl Table {
         self.count
     }
 
+    /// Memory the objects hold, in words.
+    pub fn words(&self) -> u64 {
+        self.words
+    }
+
     pub fn may_read(&self, who: Pid) -> bool {
         self.access != Access::Private || who == self.owner
     }
@@ -103,20 +121,24 @@ impl Table {
     /// Insert one object (already checked to have a key).
     pub fn insert(&mut self, key: Key, obj: Term) {
         let slot = self.objects.entry(key).or_default();
+        let w = weigh(&obj);
         match self.kind {
             Kind::Set | Kind::OrderedSet => {
                 self.count += 1 - slot.len();
+                self.words = self.words.saturating_sub(weigh_all(slot)) + w;
                 *slot = alloc::vec![obj];
             }
             Kind::Bag => {
                 if !slot.iter().any(|o| o.eq_exact(&obj)) {
                     slot.push(obj);
                     self.count += 1;
+                    self.words += w;
                 }
             }
             Kind::DuplicateBag => {
                 slot.push(obj);
                 self.count += 1;
+                self.words += w;
             }
         }
     }
@@ -132,6 +154,7 @@ impl Table {
     pub fn remove(&mut self, key: &Key) -> Vec<Term> {
         let removed = self.objects.remove(key).unwrap_or_default();
         self.count -= removed.len();
+        self.words = self.words.saturating_sub(weigh_all(&removed));
         removed
     }
 
@@ -139,7 +162,15 @@ impl Table {
     pub fn remove_object(&mut self, key: &Key, obj: &Term) -> usize {
         let Some(slot) = self.objects.get_mut(key) else { return 0 };
         let before = slot.len();
-        slot.retain(|o| !o.eq_exact(obj));
+        let mut freed = 0;
+        slot.retain(|o| {
+            let keep = !o.eq_exact(obj);
+            if !keep {
+                freed += weigh(o);
+            }
+            keep
+        });
+        self.words = self.words.saturating_sub(freed);
         let gone = before - slot.len();
         if slot.is_empty() {
             self.objects.remove(key);
@@ -151,6 +182,7 @@ impl Table {
     /// Replace the (single) object under `key`; the key itself must not change.
     pub fn replace(&mut self, key: &Key, obj: Term) {
         if let Some(slot) = self.objects.get_mut(key) {
+            self.words = self.words.saturating_sub(weigh_all(slot)) + weigh(&obj);
             *slot = alloc::vec![obj];
         }
     }
@@ -159,6 +191,7 @@ impl Table {
         let n = self.count;
         self.objects.clear();
         self.count = 0;
+        self.words = 0;
         n
     }
 
@@ -260,6 +293,11 @@ impl Tables {
     pub fn tids(&self) -> Vec<u64> {
         self.by_tid.keys().copied().collect()
     }
+
+    /// Memory all tables hold, in words.
+    pub fn words(&self) -> u64 {
+        self.by_tid.values().map(Table::words).sum()
+    }
 }
 
 /// What `ets:new/2` was asked for.
@@ -285,6 +323,7 @@ impl Table {
             heir: o.heir,
             objects: BTreeMap::new(),
             count: 0,
+            words: 0,
         }
     }
 }

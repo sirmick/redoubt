@@ -22,12 +22,22 @@ use crate::term::{Pid, Ref, Term};
 pub const TIME_SLICE: usize = 2000;
 /// Most processes alive at once. Spawning more raises `system_limit`.
 pub const MAX_PROCESSES: usize = 1 << 16;
-/// Most messages queued for one process. Sends beyond it are dropped (see DESIGN.md).
-pub const MAX_MAILBOX: usize = 1 << 16;
 
 /// Resource limits for one VM, set by the embedder. Exceeding one raises `system_limit`.
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
+    /// Most messages queued for one process. A message that would exceed it kills the receiver
+    /// (reason `{system_limit, message_queue}`): dropping messages silently breaks protocols
+    /// in ways nobody notices, and a process that far behind is broken anyway.
+    pub max_mailbox: usize,
+    /// Most words (BEAM's measure, `erts_debug:flat_size/1`) one process may hold: registers,
+    /// stack, mailbox and dictionary. A process may lower its own limit with
+    /// `process_flag(max_heap_size, ...)`, never raise it above this. Exceeding it kills the
+    /// process (reason `killed`), as BEAM's `max_heap_size` does.
+    pub max_heap_words: u64,
+    /// Most words all ETS tables of the VM may hold together. Inserts beyond it raise
+    /// `system_limit`.
+    pub max_ets_words: u64,
     /// Largest binary or bitstring any one operation may build, in bits.
     pub max_binary_bits: usize,
     /// Most stack slots (Y registers plus one per frame) one process may use. Body recursion
@@ -38,7 +48,13 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Limits {
         // 128 MiB of binary; 16M stack slots (256 MiB of 16-byte terms, plus frames).
-        Limits { max_binary_bits: 1 << 30, max_stack_slots: 1 << 24 }
+        Limits {
+            max_mailbox: 1 << 20,
+            max_heap_words: 1 << 27, // 1 GiB of words
+            max_ets_words: 1 << 27,
+            max_binary_bits: 1 << 30,
+            max_stack_slots: 1 << 24,
+        }
     }
 }
 
@@ -252,6 +268,8 @@ pub(crate) struct ExitSignal {
     pub from: Pid,
     pub reason: Term,
     pub from_link: bool,
+    /// Imposed by the VM (a resource limit): cannot be trapped, and `reason` is used as is.
+    pub forced: bool,
 }
 
 /// Why [`Vm::run`] returned.
@@ -479,7 +497,10 @@ impl System {
     /// Queue `msg` for `to`. Sending to a dead process silently does nothing, as in Erlang.
     pub fn send(&mut self, to: Pid, msg: Term) {
         if let Some(p) = self.procs.get_mut(to) {
-            deliver(p, msg, &mut self.run_queue);
+            if !deliver(p, msg, &mut self.run_queue, self.limits.max_mailbox) {
+                let reason = mailbox_full(&mut self.atom_table, &self.atoms);
+                self.exits.push_back(ExitSignal { target: to, from: to, reason, from_link: false, forced: true });
+            }
         }
     }
 
@@ -545,7 +566,10 @@ impl System {
             return true;
         }
         p.budget = TIME_SLICE;
-        let stop = interp::run(self, &mut p);
+        let mut stop = interp::run(self, &mut p);
+        if matches!(stop, Stop::Yield | Stop::Wait) && self.over_memory(&mut p) {
+            stop = Stop::Exit(Err(Exception::exit(Term::Atom(self.atoms.killed.clone()))));
+        }
         match stop {
             Stop::Yield => {
                 self.procs.put(p);
@@ -563,6 +587,31 @@ impl System {
             Stop::Exit(result) => self.terminate(p, result),
         }
         true
+    }
+
+    /// Measure `p` if it has run long enough since the last measurement, and say whether it
+    /// must be killed for holding too much memory.
+    ///
+    /// Measuring costs time in proportion to what the process holds, so it is done after the
+    /// process has used as many reductions as half its last size in words: the cost stays a
+    /// constant share of the process's own work, as a copying collector's does in BEAM. Between
+    /// measurements a process can outgrow its limit, by a bounded factor for ordinary code.
+    fn over_memory(&mut self, p: &mut Process) -> bool {
+        let interval = (p.usage.words / 2).max(TIME_SLICE as u64);
+        if p.reductions - p.measured_at < interval {
+            return false;
+        }
+        let vm_limit = self.limits.max_heap_words;
+        let own = p.max_heap;
+        let budget = if own.size > 0 { own.size.min(vm_limit) } else { vm_limit };
+        let usage = crate::memory::process(p, budget);
+        p.usage = usage;
+        p.measured_at = p.reductions;
+        if usage.total_words() > vm_limit {
+            return true;
+        }
+        let used = if own.include_shared_binaries { usage.total_words() } else { usage.words };
+        own.size > 0 && used > own.size && own.kill
     }
 
     fn fire_timers(&mut self) {
@@ -622,7 +671,7 @@ impl System {
             if let Some(o) = self.procs.get_mut(other) {
                 o.links.remove(&pid);
             }
-            self.exits.push_back(ExitSignal { target: other, from: pid, reason: reason.clone(), from_link: true });
+            self.exits.push_back(ExitSignal { target: other, from: pid, reason: reason.clone(), from_link: true, forced: false });
         }
         for (r, (watcher, object)) in &p.monitored_by {
             let msg = Term::tuple(alloc::vec![
@@ -672,13 +721,22 @@ impl System {
     /// Deliver queued exit signals. A signal either becomes an `{'EXIT', From, Reason}` message
     /// (the target traps exits), is ignored (reason `normal`), or kills the target.
     fn deliver_exits(&mut self) {
-        while let Some(ExitSignal { target, from, reason, from_link }) = self.exits.pop_front() {
+        while let Some(ExitSignal { target, from, reason, from_link, forced }) = self.exits.pop_front() {
+            if forced {
+                if let Some(p) = self.procs.take(target) {
+                    self.terminate(p, Err(Exception::exit(reason)));
+                }
+                continue;
+            }
             let kill = !from_link && reason.is_atom(&self.atoms.kill);
             let normal = reason.is_atom(&self.atoms.normal);
             let Some(p) = self.procs.get_mut(target) else { continue };
             if p.trap_exit && !kill {
                 let msg = Term::tuple(alloc::vec![Term::Atom(self.atoms.exit_upper.clone()), Term::Pid(from), reason]);
-                deliver(p, msg, &mut self.run_queue);
+                if !deliver(p, msg, &mut self.run_queue, self.limits.max_mailbox) {
+                    let reason = mailbox_full(&mut self.atom_table, &self.atoms);
+                    self.exits.push_back(ExitSignal { target, from: target, reason, from_link: false, forced: true });
+                }
             } else if !normal || from == target {
                 let reason = if kill { Term::Atom(self.atoms.killed.clone()) } else { reason };
                 let p = self.procs.take(target).expect("present");
@@ -689,15 +747,23 @@ impl System {
     }
 }
 
-pub(crate) fn deliver(p: &mut Process, msg: Term, run_queue: &mut VecDeque<Pid>) {
-    if p.mailbox.len() >= MAX_MAILBOX {
-        return;
+/// The exit reason of a process whose mailbox overflowed.
+pub(crate) fn mailbox_full(table: &mut AtomTable, atoms: &Atoms) -> Term {
+    let queue = Term::Atom(table.intern("message_queue").expect("short atom"));
+    Term::tuple(alloc::vec![Term::Atom(atoms.system_limit.clone()), queue])
+}
+
+/// Queue a message. `false` if the mailbox is full: the caller must then end the receiver.
+pub(crate) fn deliver(p: &mut Process, msg: Term, run_queue: &mut VecDeque<Pid>, max_mailbox: usize) -> bool {
+    if p.mailbox.len() >= max_mailbox {
+        return false;
     }
     p.mailbox.push_back(msg);
     if p.state == State::Waiting {
         p.state = State::Runnable;
         run_queue.push_back(p.pid);
     }
+    true
 }
 
 /// What a call resolves to.
