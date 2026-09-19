@@ -14,7 +14,7 @@ jobs, instead of five mechanisms (cgroups, namespaces, revocation lists, securit
 4. **Information flow:** its labels (CONTAINMENT.md).
 5. **Identity for servers:** its account travels with every message.
 
-Eight fields: parent, pages, processes, weight, class, `first`, labels, deadline, plus the account.
+Seven fields: parent, pages, processes, weight, class, labels, deadline, plus the account.
 Why each rule:
 - **Everything costs pages**, including threads, handles, endpoints and budgets themselves, so one
   number bounds every kind of exhaustion. A budget's own page is its parent's, and a process's
@@ -33,25 +33,34 @@ Why each rule:
   notices are received); a lease is a budget with a deadline, at most `MAX_LEASE` (CAPABILITIES.md).
 
 ## Scheduling
-### First, then everyone by weight
-- **First:** `init`, the steward and the drivers, in budgets marked `first` (KERNEL-SPEC.md, R12).
-  They run before everything else. System code is TCB; if it spins, that is our bug and the bench
-  tests it. The steward also works for users, so it bounds the work any one request can cause and
-  relies on its per-(account, label set) caps; it stays first so that logout and ending a lease
-  stay responsive.
-- **Everyone else:** users, agents, applications, and the system servers that work for users
-  (`fsd`, `keyd`, `ipd`, `sshd`, ...), sharing by weight in one stride queue. A server's weight comes
-  from the manifest, and it bounds the work of one request. Were such servers first, Bob could make
-  `fsd` or `keyd` do expensive work and no user budget would run meanwhile.
+### Everyone by weight, in one queue
+- **One stride queue for every budget** (KERNEL-SPEC.md, R12). There is no priority, no second
+  queue and no flag that jumps one: `init`, the steward and the drivers get **large weights in the
+  boot manifest** (INIT.md) instead of running first.
+- **Waking is prompt.** A budget that wakes re-enters at the current minimum pass, so a driver
+  woken by an interrupt runs within about one `SLICE`. Strict priority would only matter for a
+  driver that spins while others are runnable, and that is a bug for the bench to find, not a mode
+  to support.
+- **The steward's weight is large too**, which is what keeps logout and ending a lease responsive.
+  It also works for users, so it bounds the work any one request can cause and relies on its
+  per-(account, label set) caps.
+- **Servers that work for users** (`fsd`, `keyd`, `ipd`, `sshd`, ...) get ordinary manifest weights
+  and bound the work of one request. Were they ahead of everyone, Bob could make `fsd` or `keyd` do
+  expensive work and no user budget would run meanwhile.
+- **Stated cost:** under load, a driver or the steward waits up to one `SLICE` before it runs.
+  That is the price of one queue instead of two; it is bounded, and the bench tests the bound.
 - **Stated residual:** work a server does for a user is paid by the server's weight, not the
   requester's (and the steward's by the steward); CONTAINMENT.md.
-Class (`system` or `user`) decides labels and trust, not order. No numeric priorities. Real-time
-guarantees are a non-goal until something needs them.
+Class (`system` or `user`) means trust, not order: it decides R1's exemption, who may read
+`budget_usage` across labels, who may add labels, and (being inherited) who may create further
+system budgets — and nothing about scheduling (KERNEL-SPEC.md, Objects). No numeric priorities.
+Real-time guarantees are a non-goal until something needs them.
 
-### Stride over budgets
-One flat queue of budgets with runnable threads (KERNEL-SPEC.md, R12). Actual runtime is charged at
-every deschedule, so a thread that runs briefly and sleeps is still charged; a waking budget cannot
-bank credit while asleep, and still runs promptly. Because weight is carved like pages, a budget
+### How stride works
+One flat queue of budgets with runnable threads, and only that one (KERNEL-SPEC.md, R12). Actual
+runtime is charged at every deschedule, so a thread that runs briefly and sleeps is still charged;
+a waking budget cannot bank credit while asleep (its pass is raised to the queue's minimum), and
+for the same reason still runs promptly. Because weight is carved like pages, a budget
 always gets at least its share; idle share is redistributed by weight. Within a budget, threads run
 round-robin.
 
@@ -62,7 +71,7 @@ the caller's quota or lease could hold server locks forever. Add only if measure
 hurts. Until then servers pay for their own CPU, and leases are bounded by deadline and weight.
 
 ### SMP
-One global run queue under the kernel lock first; one budget per core (PLATFORM-FPGA.md). The work
+One global run queue under the kernel lock to begin with; one budget per core (PLATFORM-FPGA.md). The work
 list: PLAN.md.
 
 ## The timer
@@ -81,6 +90,8 @@ budget exceed its total; swapped pages encrypted and authenticated; the system b
 ## Attack tests the bench gains
 - A spinning process cannot delay another budget beyond its share, including by sleeping briefly
   between bursts.
+- A driver woken by an interrupt runs within about one `SLICE` while user budgets spin (the stated
+  cost of one queue), and a large-weight server keeps its share under that load.
 - A thread, endpoint, handle or budget bomb hits its own page limit; other budgets keep creating.
 - A memory hog gets `OutOfMemory`; the system budget is untouched.
 - A transfer to a server that did not opt in fails; the server's budget is untouched.

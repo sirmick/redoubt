@@ -4,9 +4,10 @@ Raised by the wave 1 packages and their reviews (2026-09-19). Each touches the f
 so each needs your decision; the answer goes into the named note with a HISTORY.md entry.
 **Rec** is the orchestrator's recommendation. Reply with numbers, e.g. "all Rec except 7: ...".
 
-**1-101 answered 2026-09-19** (ANSWERS.md, four tranches; each "Answered" line says where the
-answer now lives). **Open: 102-119** (at the end: K1's handle limit, and the design editor's choices in applying 56-101). The round-4 answers revised 56 (handle
-kinds are checked by use) and replaced 57 and 58 (by 82).
+**1-119 answered 2026-09-19** (ANSWERS.md, six tranches; each "Answered" line says where the
+answer now lives). **Nothing is open.** The round-4 answers revised 56 (handle kinds are checked by
+use) and replaced 57 and 58 (by 82); the last tranche replaced 103 (no `first` flag and no strict
+priority: one stride queue for every budget).
 
 ## Kernel: messages and IPC (KERNEL-SPEC.md)
 
@@ -800,6 +801,8 @@ point to change the IPC design. Several items interact; the cross-references say
      *Rec:* a constant `MAX_HANDLES` = 4096 in KERNEL-SPEC.md. A call that would exceed it gets
      `TooLarge`, which is distinguishable from a budget running out of pages, and C1 then compares
      like with like.
+     **Answered:** KERNEL-SPEC.md, Constants (`MAX_HANDLES` = 4096), Handle (`TooLarge` past it),
+     the cost table and I1; BUILD-PLAN.md, WP-A3 and WP-K1.
 
 ## From applying answers 56-101 (the design editor's choices; each needs confirming)
 
@@ -808,32 +811,48 @@ point to change the IPC design. Several items interact; the cross-references say
      class argument. Only a caller that is itself `first` can set it, and only under a
      system-class parent; `root` and `system` have it. R12 runs `first` budgets before the stride
      queue. This is the largest thing the editor invented. *Rec:* confirm.
+     **Answered:** replaced. No `first` flag and no strict priority at all: one stride queue for
+     every budget, with large manifest weights for `init`, the steward and the drivers; class means
+     trust only. KERNEL-SPEC.md (Budget, R12, `budget_create` and its rows, I8), RESOURCES.md
+     (Scheduling), INIT.md (Weights, the steward), CONTAINMENT.md, README.md, PLAN.md;
+     BUILD-PLAN.md WP-A3, WP-K2, WP-K5, WP-M1, WP-R3, WP-S2. Stated cost: up to one `SLICE` of
+     latency for drivers and the steward under load.
 
 104. **Where the abandoned-call notice (81) is delivered.** It is delivered once, on the holding
      thread's next `receive` on the endpoint the call came in on. A thread that never receives
      there again never gets it. *Rec:* confirm, and the server library makes each serving thread
      keep receiving.
+     **Answered:** KERNEL-SPEC.md, Messages (the notice's delivery); CONTAINMENT.md, the shared
+     server library (every serving thread keeps receiving).
 
 105. **"At `MAX_OPEN_CALLS`, refuse only calls" (81).** The editor reads this as: calls stay
      queued and R2 skips them, sends and notices still arrive, and `receive` no longer returns
      `Busy`. *Rec:* confirm.
+     **Answered:** KERNEL-SPEC.md, R4a (no `Busy` for the limit).
 
 106. **PIDs under answer 74.** A finished process keeps its PID until its notice is received, but
      stops counting against its budget's process limit when it dies. *Rec:* confirm.
+     **Answered:** KERNEL-SPEC.md, Process.
 
 107. **The reply side of answer 72.** A `reply` whose handles don't fit the caller still gives
      the caller `OutOfMemory`, since 72 speaks only of `receive`. *Rec:* confirm.
+     **Answered:** with 116: KERNEL-SPEC.md, R4 (a reply is never refused; the handles are dropped)
+     and the `call` error row.
 
 108. **The new message layouts (75, 83) are the editor's.** They are the fields of the `startup`
      message and the `ninep_common` table: `disconnect` as opcode 3, and a `root: string` in
      `new_connection`. Both are fenced until WP-R1b generates them. *Rec:* confirm; R1b may
      adjust the layouts, recorded in HISTORY.md.
+     **Answered:** as written; INIT.md (`startup`) and NAMESPACES.md (`ninep_common`), both as
+     WP-R1b generated them.
 
 109. **The new I15.** Every abandoned call is reported exactly once and stays open until replied
      to. It reuses the number the badge-notice invariant had. *Rec:* confirm.
+     **Answered:** as written; KERNEL-SPEC.md, I15.
 
 110. **58 under 82.** A thread with no current call blames nobody, with no fallback. *Rec:* as
      written.
+     **Answered:** as written; KERNEL-SPEC.md, Messages (exit notices); CONTAINMENT.md, Crash blame.
 
 111. **What a handle table with holes costs.** The kernel charges one page for each table page in
      use. The model charges `ceil(handles / 128)`. With handles 1-129 held and handle 5 closed,
@@ -841,6 +860,7 @@ point to change the IPC design. Several items interact; the cross-references say
      *Rec:* pages in use. It's what the memory actually costs, and handles are never moved to
      compact the table. The cost table says "1 per table page holding a handle", and the model
      follows.
+     **Answered:** KERNEL-SPEC.md, the cost table and the paragraph under it; BUILD-PLAN.md, WP-M1.
 
 ## From the generator update (WP-W2)
 
@@ -849,6 +869,7 @@ point to change the IPC design. Several items interact; the cross-references say
      decoder refuses trailing bytes.
      *Rec:* the page starts with a `u32` byte length, then the `startup` message; the decoder reads
      exactly that many bytes. INIT.md states it.
+     **Answered:** INIT.md, Startup block (Format and Rules); WIRE.md, Layout in a message.
 
 113. **Opcodes on a shared 9P endpoint.** Every 9P server also serves `ninep_common` (opcodes 2 and
      3). WIRE.md doesn't say whether a server may also serve its own typed protocol on the same
@@ -856,10 +877,13 @@ point to change the IPC design. Several items interact; the cross-references say
      *Rec:* `ninep_common` reserves opcodes 1-15 on every 9P endpoint, and a server's own protocol
      on that endpoint uses 16 and up. The generator refuses a table marked as a 9P server's protocol
      (a new `<!-- wire: NAME ninep -->` marker) that uses opcodes below 16.
+     **Answered:** WIRE.md, Messages (the opcode floor) and Tables (the marker); BUILD-PLAN.md,
+     WP-W3.
 
 114. **`disconnect` and a stranger's connection id.** *Rec:* the `ninep_common` error table gains
      code 2, `not_yours`, for a `disconnect` naming an id the caller didn't receive. That makes it
      indistinguishable from an id that doesn't exist, so nothing is revealed.
+     **Answered:** NAMESPACES.md, `ninep_common` (code 2).
 
 115. **A record in a page the caller reserved but never touched.** The kernel backs the page while
      checking the record, charging the caller, so `OutOfMemory` can appear at the decoding stage,
@@ -867,6 +891,8 @@ point to change the IPC design. Several items interact; the cross-references say
      *Rec:* don't allocate while decoding. A record page must already be backed, otherwise
      `InvalidArgument`, and the runtime touches its record buffers first. The decoding stage then
      never allocates, and the error rows stay as written.
+     **Answered:** KERNEL-SPEC.md, ABI (Records) and the order of checks, stage 1; BUILD-PLAN.md,
+     WP-W3.
 
 ## From the ABI update (WP-A2)
 
@@ -876,6 +902,8 @@ point to change the IPC design. Several items interact; the cross-references say
      *Rec:* the same as any cost the receiver can't pay (answer 72): a message is `Refused` to its
      sender. A reply's handles that don't fit give the caller `OutOfMemory` (question 107's rule),
      and the reply is still delivered, without them.
+     **Answered:** KERNEL-SPEC.md, R4 (delivery and replies), Handle, the `call` error row;
+     BUILD-PLAN.md, WP-K2 and WP-A3.
 
 ## From the runtime follow-up (WP-R1b)
 
@@ -891,6 +919,8 @@ point to change the IPC design. Several items interact; the cross-references say
      badges.
      *Rec:* accept all three. NAMESPACES.md describes `quota` and `refused`, and CONTAINMENT.md's
      fair-share sentence adds the minting rule.
+     **Answered:** NAMESPACES.md, `ninep_common` (`quota`, `refused`); CONTAINMENT.md, the shared
+     server library (`admit`, the minted connection's share).
 
 118. **Bucket slots are a shared cap.** For its caps to fit its budget, a server tracks at most a
      fixed number of (account, label set) buckets. A latecomer refused for want of a slot learns
@@ -900,6 +930,8 @@ point to change the IPC design. Several items interact; the cross-references say
      sized smaller. Also, byte quotas move out of the shared library and into fsd behind two hooks
      (the grant, and the disconnect), since only fsd meters bytes (WP-D2). The `quota` field
      stays on the wire (question 117).
+     **Answered:** CONTAINMENT.md (bucket slots; byte quotas belong to the server), NAMESPACES.md
+     (`new_connection` and the filesystem's quota per attach root); BUILD-PLAN.md, WP-D2.
 
 ## From the kernel audit (WP-K0b)
 
@@ -910,3 +942,4 @@ point to change the IPC design. Several items interact; the cross-references say
      *Rec:* amend the bullet: "(a build of the same sources with debug assertions and overflow
      checks on is not a special build: it is the kernel checked harder, and the bench boots chosen
      cases with it)". The shipped configuration is still what most cases boot.
+     **Answered:** TENETS.md, tenet 6 (amended with WP-K0b, in the owner's words).

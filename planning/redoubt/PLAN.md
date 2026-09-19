@@ -19,8 +19,8 @@ Build one thin vertical slice toward it:
 3. **IEx on the UART console:** an interactive Elixir shell on the box, before SSH exists.
 4. **init, the boot manifest, the startup block and the loader stub** (INIT.md, PACKAGES.md); the
    boot loader loads only the kernel and `init`; `bootfsd` over 9P (the shared 9P codec, fuzzed).
-5. **The timer and preemption:** kernel-owned timer, timeouts, stride over budgets, `first` budgets
-   before the rest (RESOURCES.md).
+5. **The timer and preemption:** kernel-owned timer, timeouts, one stride queue over every budget
+   with no priority above it (RESOURCES.md).
 6. **Storage and network:** `blkd -> fsd` (littlefs; `fsd:data` and a labelled volume);
    `netd -> ipd:lan`.
 7. **steward (stateless), keyd and sshd** (Rust): principals from the boot manifest, sessions as

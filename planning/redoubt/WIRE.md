@@ -10,6 +10,11 @@ and in human-written files. One convention for every message, one for every file
   other non-zero word, or with no lend, is refused with reply status 1 (`Malformed`, below). A
   request whose word 0 is not 0 is a typed operation on the same endpoint: every 9P server serves
   `ninep_common` (`new_connection`, `disconnect`; NAMESPACES.md).
+- **Opcodes on a 9P endpoint.** `ninep_common` reserves **opcodes 1-15** there, so it can grow
+  without colliding, and a server's own protocol on the same endpoint starts at **16**. A table
+  marked as a 9P server's protocol (`<!-- wire: NAME ninep -->`) that uses an opcode below 16 is
+  refused by the generator (question 113). A protocol on an endpoint of its own is unaffected and
+  starts at 1.
 - **Typed messages** (everything that is not 9P: `blkd` <-> `fsd`, the steward, `keyd`, `sshd`
   <-> steward, `ipd`'s connect and listen operations) use **9P's own encoding**: little-endian
   fixed-size integers (`u8`, `u16`, `u32`, `u64`), strings as `u16` length + UTF-8, byte arrays as
@@ -23,7 +28,9 @@ and in human-written files. One convention for every message, one for every file
 ### Tables
 Each protocol's table lives in the note of the server that serves it (README.md, Servers), written
 by that server's work package with a HISTORY.md line (BUILD-PLAN.md). A line holding only
-`<!-- wire: NAME -->` names the protocol; the next table is its layout:
+`<!-- wire: NAME -->` names the protocol; the next table is its layout. A protocol served on a 9P
+endpoint is marked `<!-- wire: NAME ninep -->`, and its opcodes start at 16, since `ninep_common`
+reserves 1-15 there (above):
 
 ```
 <!-- wire: example -->
@@ -69,9 +76,11 @@ by that server's work package with a HISTORY.md line (BUILD-PLAN.md). A line hol
 - **Typed operations written into a 9P file** (`ipd`'s `/net/tcp/N/ctl`, NAMESPACES.md): a file's
   contents have no words, so each operation is one `Twrite` whose data is the opcode as a `u32`
   followed by the buffer-shape encoding of its fields.
-- **The startup block** (INIT.md) is one typed message laid out the same way in its page: the
-  opcode as a `u32`, then the buffer-shape encoding of its fields. It is decoded by `redoubt-wire`
-  like any other message.
+- **The startup block** (INIT.md) is one typed message laid out the same way in its page, behind a
+  `u32` byte length: the length, the opcode as a `u32`, then the buffer-shape encoding of its
+  fields. The length is what lets it be read out of a page at all, since a typed message has no
+  overall length and the decoder refuses trailing bytes (question 112). It is decoded by
+  `redoubt-wire` like any other message.
 
 ## Files people write: strict JSON
 The boot manifest (INIT.md), package manifests (PACKAGES.md) and configuration are JSON under the

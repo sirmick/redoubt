@@ -327,6 +327,67 @@ The same three roles, attacking v3 and pinning interfaces for a swarm build. Fou
   both tables are shown fenced until WP-R1b generates them, so the drift test stays green. `init`
   reports blame in one typed message whose table WP-S2 writes; every milestone 1 typed message is
   a `call`; the steward `call`s a reader budget, which fills its lend.
+- **One stride queue, no priority at all** (2026-09-19, answer 103, replacing the editor's `first`
+  flag): the flag is gone, with the rules for setting it, `budget_create`'s argument for it, R12's
+  two-tier ordering and I8's clause about it. Every budget shares one queue by weight; `init`, the
+  steward and the drivers get large manifest weights (1000 against a session's 100) instead of
+  running ahead of everyone. Strict priority bought little that weight does not: a budget woken by
+  an interrupt re-enters at the minimum pass, so a driver runs within about one `SLICE`, and
+  priority would matter only for a driver that spins while others are runnable, which is a bug for
+  the bench to find, not a mode to support. The steward's large weight is what keeps logout and
+  ending a lease prompt (answers 84 and 90); answer 84's text, which gave servers manifest weights,
+  now stands alone. **Stated cost:** under load a driver or the steward waits up to one `SLICE`
+  before it runs, and the bench tests that bound. Class now means trust only — R1's exemption,
+  `budget_usage` across labels, and who may add labels — and never scheduling; KERNEL-SPEC.md
+  (Budget, R12, `budget_create` and its rows, I8), RESOURCES.md, INIT.md, CONTAINMENT.md,
+  README.md and PLAN.md say so.
+- **Answers 102 and 104-111: the kernel's remaining edges** (2026-09-19): `MAX_HANDLES` = 4096 is a
+  constant, and a call that would pass it gets `TooLarge`, which a caller can tell from its budget
+  running out of pages (K1 already caps the table at 32 pages; the spec named no limit). A handle
+  table costs one page per table page holding a handle, holes and all, because that is what the
+  memory costs and handles are never moved to compact the table; the executable model follows (111,
+  which WP-C1's replay would otherwise have caught as a difference). A finished process stops
+  counting against its budget's process limit at once but keeps its PID until its exit notice is
+  received (106). An abandoned-call notice reaches only the thread holding the call, on the
+  endpoint the call came in on, so every serving thread keeps receiving there (104). At
+  `MAX_OPEN_CALLS`, `receive` refuses calls only — they stay queued, R2 skips them, sends,
+  interrupts and notices still arrive, and no `Busy` is returned for the limit (105). The message
+  layouts (108) and I15 (109) stand as written, and a thread with no current call blames nobody,
+  with no fallback (110).
+- **Answers 107 and 116: handles at delivery** (2026-09-19): handles that would take a receiver
+  past `MAX_HANDLES` are a cost it cannot pay like any other, so the message is `Refused` to its
+  sender (answer 72). A reply is never refused, since its caller is blocked and has nowhere to put
+  the error: handles that do not fit the caller, by its pages or by `MAX_HANDLES`, are dropped (0
+  in their slots, as a revoked handle is), the reply is delivered without them, and the `call`
+  returns `OutOfMemory`.
+- **Answers 112-115: formats and decoding** (2026-09-19): the startup page starts with a `u32` byte
+  length, then the `startup` message, because a typed message carries no overall length and the
+  decoder refuses trailing bytes, so the block could not otherwise be read out of its page (112).
+  `ninep_common` reserves opcodes 1-15 on a 9P endpoint and a server's own protocol there starts at
+  16, marked `<!-- wire: NAME ninep -->`; the generator refuses a marked table using a lower opcode
+  (113). `not_yours` is code 2 for a `disconnect` naming an id the caller did not receive, so it
+  looks like an id that does not exist (114). Decoding never allocates: a record in a page the
+  caller reserved but never touched is `InvalidArgument`, not a page the kernel backs and charges
+  mid-decode, so `OutOfMemory` cannot appear at the decoding stage and the error rows stand; the
+  runtime touches its record buffers first (115).
+- **Answers 117-119: quotas, buckets and the checked build** (2026-09-19): `new_connection` carries
+  `quota`, the `ninep_common` error table has `3 refused` (root missing, permission denied, a cap
+  reached, quota exceeded), and a connection a client mints for itself counts in the share of the
+  connection it came through, so minting badges cannot escape a fair share (117; NAMESPACES.md and
+  CONTAINMENT.md, from WP-R1b, completed). Each server's manifest sizes its bucket count to the
+  (account, label set)s it serves, so the cap does not bind in normal use, and CONTAINMENT.md
+  states the residual for a server sized smaller; byte quotas live in `fsd` behind the shared
+  library's grant and disconnect hooks, not in the library, while `quota` stays on the wire, since
+  only `fsd` meters bytes (118; BUILD-PLAN.md WP-D2 says so). Tenet 6's amendment, already made
+  with WP-K0b, is confirmed as the owner worded it: a build of the same sources with debug
+  assertions and overflow checks on is not a special build (119).
+- **BUILD-PLAN.md follows answers 102-119** (2026-09-19): WP-A3 added (the ABI drops
+  `budget_create`'s `first` flag, adds `MAX_HANDLES`'s `TooLarge` and the reply's `OutOfMemory`);
+  WP-W3 added (the generator's `ninep` marker and opcode floor, and the runtime touching record
+  buffers); WP-K2 removes the flag from the kernel and carries the delivery rules; WP-K5 delivers
+  one queue and tests the `SLICE` of latency; WP-M1, WP-R3 (manifest weights), WP-D2 (the byte
+  quotas) and WP-S2 (the steward's weight) follow; the merged packages and the order are updated,
+  and A3 must land before K2.
 
 ## Milestone 1 build (from 2026-09-19)
 One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.

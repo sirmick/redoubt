@@ -108,7 +108,14 @@ Every system server that serves more than one account links one small library:
 - **Replies come from the taking thread.** A `reply` names an open call of the replying thread
   (KERNEL-SPEC.md), so an event-driven server replies from the thread that took the call. Before
   resuming work on a parked call, the library calls `serve(msg_id)`, so a crash blames that call;
-  an abandoned-call notice makes it reply at once, freeing the call.
+  an abandoned-call notice makes it reply at once, freeing the call. A notice reaches only the
+  thread that holds the call, on the endpoint the call came in on, so **every serving thread keeps
+  receiving there**: a thread that parks calls and stops receiving would never be told they were
+  abandoned (question 104).
+- **Byte quotas belong to the server.** The library carries `new_connection`'s `quota` and calls
+  two hooks, one when a connection is granted and one when it is disconnected; it counts no bytes
+  itself. `fsd` implements them (NAMESPACES.md); every other server leaves them empty (question
+  118).
 - **Handles and badges.** The library closes every handle a request carries that the protocol did
   not ask for, so a client cannot grow a server's handle table. A server never reuses a badge
   number, so a handle revoked in flight never reaches a later connection.
@@ -122,8 +129,8 @@ influences is visible to a caller without that label:
   Every id it hands out (request and session ids, connection ids, and any other) is unpredictable:
   random 64-bit, keyed, never a counter, which would tell every principal how many the others made.
   Audit records carry the request's labels and are read under `check`. Ending a lease is always
-  accepted from the sponsor, ahead of admission. It runs first (RESOURCES.md), so it bounds the
-  work any one request can cause and relies on its caps.
+  accepted from the sponsor, ahead of admission. Its manifest weight is large (RESOURCES.md), not a
+  priority above the queue, so it bounds the work any one request can cause and relies on its caps.
 
 ## Crash blame
 A server that faults, or exits while it holds open calls (a panic), reports in its exit notice the
@@ -169,9 +176,10 @@ perfect clock (TENETS.md).
   are carved from its own sub-budget, so they never change what the unlabelled side can carve.
 - **Notifications and audit.** A labelled request's "approval waiting" notification reaches only
   channels whose labels ⊇ the request's, and `approve@box`; audit records are read under `check`.
-- **Server CPU.** A server working for users runs in the stride queue at its manifest weight and
-  bounds the work of one request (RESOURCES.md). Stated residual: that work is paid by the server's
-  weight, not the requester's; for the steward, which runs first, by the steward.
+- **Server CPU.** Every budget runs in the one stride queue at its manifest weight, and a server
+  working for users bounds the work of one request (RESOURCES.md). Stated residual: that work is
+  paid by the server's weight, not the requester's; for the steward, whose weight is large, by the
+  steward.
 - **Bucket slots are the one shared cap.** A server tracks at most a fixed number of
   (account, label set) buckets at once, so that its caps fit its budget; a latecomer refused for
   want of a slot learns that others hold state, between two label sets of one account as much as

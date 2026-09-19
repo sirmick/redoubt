@@ -51,7 +51,8 @@ and the steward, 9P namespaces, packages, storage and network servers). Order: [
 | [HISTORY.md](HISTORY.md) | What was done, bugs found, review rounds. |
 
 ## Servers
-Canonical names, used in every note. Class: `system` runs before everyone else (RESOURCES.md).
+Canonical names, used in every note. Class: `system` is a trust class (the kernel's label checks),
+never a scheduling one; every budget shares one stride queue by weight (RESOURCES.md).
 
 | Name | Role | Class | State |
 | --- | --- | --- | --- |
@@ -106,8 +107,9 @@ Sessions and agents are beamlet VMs in user budgets, not servers.
 - **Budget**: a kernel container every process lives in; it pays for and bounds everything, carries
   labels, a deadline and an account (RESOURCES.md). **Lease**: a budget with a deadline, at most
   `MAX_LEASE` (24 h, a steward constant). **Revocation scope**: a budget with zero limits, used only
-  to be destroyed. **`first`**: a budget flag; `init`, the steward and the drivers run in `first`
-  budgets, before everyone else (RESOURCES.md).
+  to be destroyed. **Class**: `system` or `user`, a budget's trust class (R1's exemption,
+  `budget_usage`, adding labels), never its place in the queue: `init`, the steward and the drivers
+  are scheduled by their large manifest weights like everyone else (RESOURCES.md).
   **Account**: a 64-bit number on a principal's top budget, inherited below it and carried by every
   message; with the label set, the unit of admission and crash blame (CONTAINMENT.md). **Pass /
   stride**: the per-budget counters of stride scheduling.
