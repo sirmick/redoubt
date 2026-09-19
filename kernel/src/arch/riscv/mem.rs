@@ -7,7 +7,7 @@
 //! supervisor-only at `PHYSMAP_BASE`, and tables are walked in software starting from a
 //! root. See `planning/xous64/MEMORY-LAYOUT.md`. Everything width-specific (the level
 //! count, entries per table, VPN width and `satp` layout) lives in the `paging` crate,
-//! reached here through `sv39`; this file is written in terms of `LEVELS`, `vpn()` and
+//! reached here through `physmap`; this file is written in terms of `LEVELS`, `vpn()` and
 //! `leaf_size()` and so is identical for both modes.
 //!
 //! All page-table memory is accessed through that typed layer; this file contains policy,
@@ -19,7 +19,7 @@ use xous_kernel::{MemoryFlags, PID, arch::*};
 
 pub use super::mmu_flags::MMUFlags;
 use super::mmu_flags::{translate_flags, untranslate_flags};
-use super::sv39::{self, Pte, Slot, Table, window};
+use super::physmap::{self, Pte, Slot, Table, window};
 use crate::arch::process::InitialProcess;
 use crate::mem::MemoryManager;
 
@@ -36,21 +36,21 @@ fn flush_tlb() {
 }
 
 /// First root entry belonging to the kernel half of the address space.
-const ROOT_KERNEL_START: usize = sv39::ENTRIES / 2;
+const ROOT_KERNEL_START: usize = physmap::ENTRIES / 2;
 /// Root entry holding per-process kernel data. Everything else in the kernel half is shared.
-const ROOT_PROCESS_AREA: usize = sv39::vpn(PROCESS_AREA, sv39::LEVELS - 1);
+const ROOT_PROCESS_AREA: usize = physmap::vpn(PROCESS_AREA, physmap::LEVELS - 1);
 
 /// Extract the PID (stored as the ASID) from a raw `satp` value.
-pub fn pid_from_satp(satp: usize) -> usize { sv39::satp_pid(satp) }
+pub fn pid_from_satp(satp: usize) -> usize { physmap::satp_pid(satp) }
 
-fn make_satp(pid: PID, root_phys: usize) -> usize { sv39::make_satp(pid.get() as usize, root_phys) }
+fn make_satp(pid: PID, root_phys: usize) -> usize { physmap::make_satp(pid.get() as usize, root_phys) }
 
 /// The root table of the address space that `satp` names.
 fn root_of(satp: usize) -> Table {
-    assert!(sv39::satp_is_active(satp), "address space is not allocated");
+    assert!(physmap::satp_is_active(satp), "address space is not allocated");
     // SAFETY: a `satp` value with the mode bits set comes from the loader or from
     // `MemoryMapping::allocate()`, both of which store the address of a root page table.
-    unsafe { Table::at(window(), sv39::satp_root(satp)) }
+    unsafe { Table::at(window(), physmap::satp_root(satp)) }
 }
 
 fn current_root() -> Table { root_of(satp::read().bits()) }
@@ -64,12 +64,12 @@ fn walk(
     virt: usize,
     mut alloc: Option<(&mut MemoryManager, PID)>,
 ) -> Result<Slot, xous_kernel::Error> {
-    if !sv39::is_canonical(virt) {
+    if !physmap::is_canonical(virt) {
         return Err(xous_kernel::Error::BadAddress);
     }
     let mut table = root;
-    for level in (1..sv39::LEVELS).rev() {
-        let index = sv39::vpn(virt, level);
+    for level in (1..physmap::LEVELS).rev() {
+        let index = physmap::vpn(virt, level);
         table = match table.child(index) {
             Some(child) => child,
             // A superpage (the physmap). These are never edited at 4 KiB granularity.
@@ -84,7 +84,7 @@ fn walk(
             }
         };
     }
-    Ok(table.slot(sv39::vpn(virt, 0)))
+    Ok(table.slot(physmap::vpn(virt, 0)))
 }
 
 fn map_page_in(
@@ -123,9 +123,9 @@ fn check_permissions(flags: MMUFlags) -> Result<(), xous_kernel::Error> {
 /// with `VALID` cleared); reservations are skipped, matching the original walk. Recurses
 /// through valid intermediate tables, so it works for any `LEVELS` (Sv32 and Sv39).
 fn for_each_leaf(table: Table, level: usize, base: usize, f: &mut impl FnMut(usize, Pte)) {
-    for index in 0..sv39::ENTRIES {
+    for index in 0..physmap::ENTRIES {
         let pte = table.get(index);
-        let virt = base + index * sv39::leaf_size(level);
+        let virt = base + index * physmap::leaf_size(level);
         if level == 0 {
             if pte.is_valid() || pte.has(MMUFlags::S) {
                 f(virt, pte);
@@ -139,12 +139,12 @@ fn for_each_leaf(table: Table, level: usize, base: usize, f: &mut impl FnMut(usi
 /// The entry that translates `virt` under `root`, at whatever level it is found.
 fn lookup(root: Table, virt: usize) -> Option<Pte> {
     let mut table = root;
-    for level in (0..sv39::LEVELS).rev() {
-        let pte = table.get(sv39::vpn(virt, level));
+    for level in (0..physmap::LEVELS).rev() {
+        let pte = table.get(physmap::vpn(virt, level));
         if pte.is_leaf() {
             return Some(pte);
         }
-        table = table.child(sv39::vpn(virt, level))?;
+        table = table.child(physmap::vpn(virt, level))?;
     }
     None
 }
@@ -155,11 +155,11 @@ fn lookup(root: Table, virt: usize) -> Option<Pte> {
 /// kernel refuses to run if it did not.
 pub fn verify_kernel_wx() -> usize {
     let root = current_root();
-    let root_index = sv39::vpn(KERNEL_AREA, sv39::LEVELS - 1);
+    let root_index = physmap::vpn(KERNEL_AREA, physmap::LEVELS - 1);
     let Some(sub) = root.child(root_index) else { panic!("kernel area is not mapped") };
-    let base = root_index * sv39::leaf_size(sv39::LEVELS - 1);
+    let base = root_index * physmap::leaf_size(physmap::LEVELS - 1);
     let mut executable = 0;
-    for_each_leaf(sub, sv39::LEVELS - 2, base, &mut |_virt, pte| {
+    for_each_leaf(sub, physmap::LEVELS - 2, base, &mut |_virt, pte| {
         if !pte.has(MMUFlags::X) {
             return;
         }
@@ -185,8 +185,8 @@ impl core::fmt::Debug for MemoryMapping {
             fmt,
             "(satp: {:#x}, ASID: {}, root: {:#x})",
             self.satp,
-            sv39::satp_pid(self.satp),
-            sv39::satp_root(self.satp),
+            physmap::satp_pid(self.satp),
+            physmap::satp_root(self.satp),
         )
     }
 }
@@ -220,7 +220,7 @@ impl MemoryMapping {
             let root = unsafe { Table::new_in(window(), root_phys) };
 
             let current = current_root();
-            for index in (ROOT_KERNEL_START..sv39::ENTRIES).filter(|index| *index != ROOT_PROCESS_AREA) {
+            for index in (ROOT_KERNEL_START..physmap::ENTRIES).filter(|index| *index != ROOT_PROCESS_AREA) {
                 root.slot(index).copy_from(current.slot(index));
             }
 
@@ -267,8 +267,8 @@ impl MemoryMapping {
         let root = root_of(self.satp);
         for index in 0..ROOT_KERNEL_START {
             let Some(child) = root.child(index) else { continue };
-            let base = index * sv39::leaf_size(sv39::LEVELS - 1);
-            for_each_leaf(child, sv39::LEVELS - 2, base, &mut f);
+            let base = index * physmap::leaf_size(physmap::LEVELS - 1);
+            for_each_leaf(child, physmap::LEVELS - 2, base, &mut f);
         }
     }
 
