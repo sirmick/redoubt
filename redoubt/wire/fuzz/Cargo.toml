@@ -1,0 +1,47 @@
+# Fuzz targets for redoubt-wire (TENETS.md 6: fuzz what parses). Host-only; excluded from the
+# workspace. Run with the pinned nightly:
+#
+#   cd redoubt/wire/fuzz
+#   cargo +nightly-2026-05-11 fuzz run ninep  -- -max_total_time=3600
+#   cargo +nightly-2026-05-11 fuzz run typed  -- -max_total_time=3600
+#   cargo +nightly-2026-05-11 fuzz run json   -- -max_total_time=3600
+#
+# Each target also checks the round trip (or, for JSON, agreement with serde_json), so a
+# finding is a panic, a hang, or a disagreement. serde_json is a test oracle only; it is never
+# linked into anything that runs on Redoubt.
+[package]
+name = "redoubt-wire-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = { version = "1", features = ["preserve_order"] }
+redoubt-wire = { path = ".." }
+
+[workspace]
+
+[[bin]]
+name = "ninep"
+path = "fuzz_targets/ninep.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "typed"
+path = "fuzz_targets/typed.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "json"
+path = "fuzz_targets/json.rs"
+test = false
+doc = false
+bench = false

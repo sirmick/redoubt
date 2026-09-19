@@ -1,0 +1,10 @@
+[package]
+name = "redoubt-wire"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Redoubt wire formats (WIRE.md): the 9P2000 codec, typed messages, strict JSON"
+
+# No dependencies: everything here parses untrusted bytes, so it is ours to read in full
+# (TENETS.md 5). `no_std` + `alloc`; only the JSON parser allocates.
+[dependencies]

@@ -12,6 +12,8 @@ members = [
   "redoubt/sys",
   "redoubt/test-programs",
   "redoubt/testbench",
+  "redoubt/wire",
+  "redoubt/wire/gen",
   "libs/flatipc",
   "libs/flatipc-derive",
   "imports/getrandom",
@@ -25,6 +27,8 @@ resolver = "2"
 exclude = [
   # Planning docs and out-of-tree notes; no crates here.
   "planning/",
+  # Host-only fuzz targets, built by cargo-fuzz (see redoubt/wire/fuzz/Cargo.toml).
+  "redoubt/wire/fuzz",
 ]
 
 [profile.release]

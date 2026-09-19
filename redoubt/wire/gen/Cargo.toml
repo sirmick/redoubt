@@ -1,0 +1,12 @@
+[package]
+name = "redoubt-wire-gen"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Generates redoubt-wire's typed-message codecs (Rust and Elixir) from the tables in the design notes"
+
+[[bin]]
+name = "wire-gen"
+path = "src/main.rs"
+
+[dependencies]
