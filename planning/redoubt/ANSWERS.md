@@ -93,3 +93,24 @@ Notes:
   fresh connection. State it in CAPABILITIES.md and INIT.md as a rule, not a convention.
 - **53** adds one kernel notice (last handle with a badge closed). Keep it minimal: same delivery path
   and label rule as exit notices, one pending slot per badge, charged to the endpoint's owner.
+
+---
+
+# Answers to 56-68 (owner, 2026-09-19; confirmed)
+
+**All Rec, except 57 (decided) and 58 (changed).**
+
+**57. Which call a fault blames:** the most recently taken call that is **still open**. This is
+what KERNEL-SPEC.md already says (serving account) and follows answer 31: a replied call is
+finished and no longer carries blame.
+
+**58. A panic in a thread with no open calls, while other threads of the process hold some: blame
+nobody.** Falling back to another thread's most recent open call brings back bystander blame (that
+call's sender did nothing to the faulting thread). The exit notice says `faulted` with
+`blamed_account` 0 and `blamed_labels` empty; the crash counts only toward the restart rate limit
+and, past it, the reboot. Stated residual: corruption left behind by a replied call can crash an
+idle thread later without anyone being blamed.
+
+Accepted as recommended: 56 (`receive`'s record carries each handle's kind), 59, 60, 61, 62 (the
+badge-slot cost confirmed in K2), 63 (the steward enforces `MAX_LEASE`; the kernel knows only
+deadlines), 64, 65, 66, 67, 68.
