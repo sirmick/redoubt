@@ -431,4 +431,15 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   `kframe::write_byte` went (kernel `unsafe` 24 -> 23). The review found received messages could
   not carry a revoked handle (fixed). Found on the way: a debug-assertion kernel does not boot
   (`mem.rs:207`, the loader's memory-region table read against `from_raw_parts`'s rules): WP-K0b.
+- **WP-R1b `redoubt-rt` follows answers 64 and 69-101** (`86117e7af`): the startup block is the `startup`
+  message behind a `u32` length (question 112); `ninep_common` served by the 9P skeleton, with
+  `new_connection` (admission before the walk, a random id, badges never reused) and `disconnect`
+  (a connection and everything minted under it, freed without allocating; a stranger's id refused
+  like one that does not exist); the badge-notice hook gone; a fair share per badge, with a
+  self-minted connection counted in the share it came from; caps sized to fit, with a minimum of
+  two per bucket; parked calls with a server-side deadline, resumed under `serve` and answered at
+  once when abandoned; unasked handles closed before the reply. Byte quotas left the shared
+  library for the file server (question 118): `new_connection` gained `quota` and the error
+  `refused` (question 117). The review found no exploitable case; it found `disconnect` could
+  strand descendants under memory pressure (fixed).
 

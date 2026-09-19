@@ -156,8 +156,7 @@ Rules: the block is at most one page; handles are 1..=n, n ≤ `MAX_START_HANDLE
 among `namespace` entries and names among `handles` entries; each `bytes` field holds whole entries
 and nothing else; the rest of the page after the message is not read. A block breaking any rule is
 refused whole. The parent may be hostile, so the child decodes defensively; `redoubt-rt` also
-writes blocks for launchers. The table is fenced until the package that generates its codec
-(BUILD-PLAN.md, WP-R1b) unfences it and adds its wire marker.
+writes blocks for launchers.
 
 **Launching gives fresh connections.** A launcher never places its own connection to a server in a
 child's block; it asks the server for a fresh connection for the child (`new_connection`,

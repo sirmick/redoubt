@@ -83,12 +83,15 @@ system can prevent that.
   so reaches no external sink. "Read first, decide later" needs a new budget.
 
 ## The shared server library
-Every system server that serves more than one account links one small library of two functions:
+Every system server that serves more than one account links one small library:
 - **`admit(badge, account, labels)`**: limits on in-flight requests, open files and per-client
   state, per (account, label set). Accounts, not badges or budgets, because both of those are cheap
   to create; with the label set, because caps are counted that way (below). Within a bucket each
   badge gets a fair share, with the bucket as the ceiling, so an agent cannot lock out its sponsor,
-  who shares its bucket. Account 0 (every system-class caller) is admitted per badge, so one daemon
+  who shares its bucket. A connection minted through another counts in that connection's share
+  while the same (account, label set) uses it, so minting badges gains nothing; one minted for a
+  client by someone else (the steward, for a lease's agent) is a share of its own (question 117).
+  A cap below two per bucket cannot seat a share and its sponsor, so the library refuses one. Account 0 (every system-class caller) is admitted per badge, so one daemon
   cannot fill a bucket the steward needs. The caps are sized so that every bucket at its cap fits
   the server's budget, and so that the open calls they allow sum to less than `MAX_OPEN_CALLS` with
   headroom; a parked call gets a server-side deadline. A `disconnect` (CAPABILITIES.md) frees a
@@ -169,6 +172,11 @@ perfect clock (TENETS.md).
 - **Server CPU.** A server working for users runs in the stride queue at its manifest weight and
   bounds the work of one request (RESOURCES.md). Stated residual: that work is paid by the server's
   weight, not the requester's; for the steward, which runs first, by the steward.
+- **Bucket slots are the one shared cap.** A server tracks at most a fixed number of
+  (account, label set) buckets at once, so that its caps fit its budget; a latecomer refused for
+  want of a slot learns that others hold state, between two label sets of one account as much as
+  across accounts. Each server's manifest sizes that number to the (account, label set)s it
+  serves, so the cap never binds in normal use; a server sized smaller states it (question 118).
 - **Residual, stated:** memory bandwidth, and the shared L2 across cores until the RTL partitions it;
   shared-server caches and the disk (a vault's reads warm a cache the unlabelled session can time);
   server CPU (above).
