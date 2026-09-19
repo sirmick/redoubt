@@ -48,6 +48,9 @@ census (below), implement what changed, run the differential suite.
 `cli/` is the POSIX embedding: `beamlet [-pa DIR]... MODULE [FUNCTION]`.
 
 ## Terms
+(Being rebuilt on the `heaps` branch as stage 1 of concurrency option B, chosen 2026-09-19;
+see "Heaps" below. Until it lands on `main`, what follows describes `main`.)
+
 Terms are a Rust `enum`; compound terms are reference-counted (`Rc`). Erlang terms are immutable
 and acyclic, so reference counting frees exactly the garbage, with no tracing collector and no
 per-process heap. Costs we accept:
@@ -73,7 +76,39 @@ printing use explicit work lists. A million-level nested tuple, list or map is f
 A match context (`Term::Match`) is internal: it exists only between `bs_start_match*` and the end
 of a binary match, as in BEAM.
 
-## Processes and scheduling
+## Heaps (concurrency option B, stage 1; decided 2026-09-19)
+Goal: concurrency equal to Erlang on Linux (all cores, per-process GC, copied messages), in safe
+Rust. `Rc` terms can never move between threads without `unsafe`, so terms move into
+per-process heaps. Stages: (1) heaps, copying and GC on one scheduler, every test still green;
+(2) several schedulers; (3) dirty schedulers for long natives.
+- **A term is a 16-byte `Copy` value** (`heap::Term`). Immediates: integers (`i64`), floats,
+  atoms (a leaked, interned `&'static` name: atoms are never freed, as in BEAM), `[]`, pids,
+  references. Everything else is a `Ptr` to an object: a heap *space* and an index.
+- **A heap is a `Vec<Term>`** (objects are a header cell followed by their cells; a list cell is
+  two cells, no header) plus an off-heap table of `Arc`s: binary bytes, bignums, resources.
+  Indices, not pointers, so growing the `Vec` moves nothing and nothing needs `unsafe`.
+- **Spaces:** 0 is the heap itself; others are **literal chunks**, immutable and never freed, one
+  per loaded module (and per `persistent_term:put`, as BEAM keeps those in the literal area).
+  Any heap may point into a literal chunk, so literals are never copied, even between processes.
+  A heap holds an `Arc` snapshot of the chunk list; copying into a heap refreshes it.
+  Reloading modules leaks their literals (BEAM copies them into processes on purge; hot code
+  upgrade is a non-goal for now).
+- **Copying** (`copy`): a term moves between heaps by a sharing-preserving copy of the objects in
+  the source's own space. Messages are copied into the receiver's heap on send; everything kept
+  outside a process (ETS objects, monitor names, exit reasons, message timers, results) is an
+  `OwnedTerm`: a small heap of its own plus its root.
+- **GC:** Cheney copying collection of a process's heap at a safe point between instructions,
+  when the heap outgrows a threshold (then set from the live size). The roots are everything the
+  process holds: X and Y registers, the mailbox, the dictionary, a pending exit. Natives never
+  see a collection, so they may hold terms in locals. Off-heap `Arc`s that no longer appear are
+  dropped with the old heap, which frees binaries exactly as reference counting did.
+- **Memory is exact:** a process's memory is its heap and off-heap sizes, read, not measured.
+- **Order-based structures** (maps, ETS keys, the dictionary) compare terms through their heaps.
+  Maps are persistent AVL trees whose nodes are heap objects; iteration stays in term order.
+- **Deep terms** stay iterative everywhere: copying, comparing, printing and GC use work lists or
+  Cheney's scan, never Rust recursion.
+
+## Processes and scheduling## Processes and scheduling
 One VM runs on one thread. Processes live in a slot table; a pid carries a serial number so a
 stale pid never reaches a process that reused the slot. The scheduler is round-robin with a
 budget of 2000 reductions (calls) per slice. Receive timeouts are a `BTreeSet` of deadlines; when
