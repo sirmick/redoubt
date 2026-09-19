@@ -56,6 +56,8 @@ merged; the waves show what can run together.
 | L1 | review | wp-l1 | |
 | T1 | merged | wp-t1 | 987bacbed |
 | A1 | review | wp-a1 | fixing to the answered spec |
+| K0 | building | wp-k0 | fix: lending an untouched page panics the kernel (found by T1b) |
+| T1b | review | wp-t1b | attack cases asserted by the system (answer 26) |
 | all others | waiting | | see BUILD-PLAN.md "Needs" |
 
 States: `waiting` (needs not merged), `ready`, `building`, `review`, `merged`.
