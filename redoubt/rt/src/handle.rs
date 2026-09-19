@@ -7,8 +7,8 @@
 //! copies, and an implicit close would be an easy use-after-close. Close them with `close`.
 
 use redoubt_sys::{
-    BUDGET_SPEC_SLOTS, BudgetSpec, Call, Error, Handle, MAX_RANDOM, MAX_START_HANDLES, MemFlags, ResetKind,
-    Return, USAGE_SLOTS, Usage,
+    BUDGET_SPEC_SLOTS, BudgetSpec, Call, Error, Handle, MAX_START_HANDLES, MemFlags, ResetKind, Return,
+    USAGE_SLOTS, Usage,
 };
 
 use crate::sys::{Record, syscall};
@@ -110,11 +110,19 @@ pub fn time_now() -> Result<u64, Error> {
     }
 }
 
-/// Fills `bytes` from the kernel's CSPRNG, `MAX_RANDOM` bytes per call.
+/// One `u64` from the kernel's CSPRNG.
+pub fn random_u64() -> Result<u64, Error> {
+    match syscall(&Call::Random)? {
+        Return::Random(value) => Ok(value),
+        _ => Err(Error::InvalidArgument),
+    }
+}
+
+/// Fills `bytes` from the kernel's CSPRNG, eight bytes per call.
 pub fn random(bytes: &mut [u8]) -> Result<(), Error> {
-    for chunk in bytes.chunks_mut(MAX_RANDOM) {
-        let (addr, len) = (chunk.as_mut_ptr() as usize, chunk.len());
-        nothing(syscall(&Call::Random { bytes: addr, len }))?;
+    for chunk in bytes.chunks_mut(8) {
+        let value = random_u64()?.to_le_bytes();
+        chunk.copy_from_slice(&value[..chunk.len()]);
     }
     Ok(())
 }
@@ -158,8 +166,10 @@ impl Process {
         nothing(syscall(&Call::ProcessMap { process: self.0, src, dst, len, flags }))
     }
 
-    /// Starts the process at `entry` with stack `sp`; `handles` land in its slots 1..=n.
-    pub fn start(&self, entry: usize, sp: usize, handles: &[Handle]) -> Result<(), Error> {
+    /// Starts the process at `entry` with stack `sp` and `arg` in its first thread's first
+    /// argument register (the startup page's address, 0 for none: INIT.md); `handles` land in its
+    /// slots 1..=n.
+    pub fn start(&self, entry: usize, sp: usize, arg: usize, handles: &[Handle]) -> Result<(), Error> {
         let mut rec = Record([0; MAX_START_HANDLES]);
         let slots = rec.0.get_mut(..handles.len()).ok_or(Error::TooLarge)?;
         for (slot, handle) in slots.iter_mut().zip(handles) {
@@ -167,7 +177,8 @@ impl Process {
         }
         // The length fits: it is at most MAX_START_HANDLES (64).
         let count = handles.len() as u32;
-        nothing(syscall(&Call::ProcessStart { process: self.0, entry, sp, handles_rec: rec.addr(), count }))
+        let call = Call::ProcessStart { process: self.0, entry, sp, arg, handles_rec: rec.addr(), count };
+        nothing(syscall(&call))
     }
 }
 
@@ -188,7 +199,8 @@ impl Irq {
     /// Waits for the interrupt (R5: receiving unmasks the source; there is no acknowledge).
     pub fn wait(&self, timeout: u64) -> Result<(), Error> {
         match crate::ipc::receive_raw(Some(self.0), timeout, 0)? {
-            crate::ipc::Event::Interrupt(irq) if irq == self.0 => Ok(()),
+            // Only the IRQ handle named can fire in this `receive`.
+            crate::ipc::Event::Interrupt => Ok(()),
             _ => Err(Error::InvalidArgument),
         }
     }

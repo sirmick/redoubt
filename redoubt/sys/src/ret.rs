@@ -7,8 +7,8 @@ use crate::{Error, Handle, Number};
 /// A successful call's value.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Return {
-    /// Calls with no value, and those whose result is in memory (`call`, `receive`, `budget_usage`,
-    /// `random`).
+    /// Calls with no value, and those whose result is in memory (`call`, `receive`,
+    /// `budget_usage`).
     Nothing,
     /// `map_anon`, `map_device`.
     Addr(usize),
@@ -21,6 +21,8 @@ pub enum Return {
     Handle(Handle),
     /// `time_now`: microseconds since boot.
     Time(u64),
+    /// `random`: one value from the kernel's CSPRNG.
+    Random(u64),
 }
 
 /// The registers `a0..=a7` for a call's outcome (kernel side).
@@ -41,6 +43,7 @@ pub fn encode_result(result: &Result<Return, Error>) -> [u64; REGS] {
                 Return::Tid(tid) => w.u32(tid),
                 Return::Handle(h) => w.u32(h.index()),
                 Return::Time(time) => w.u64(time),
+                Return::Random(value) => w.u64(value),
             }
         }
     }
@@ -66,6 +69,7 @@ pub fn decode_result(number: Number, regs: &[u64; REGS]) -> Result<Return, Error
             Return::Handle(Handle::from_raw(r.raw())?)
         }
         Number::TimeNow => Return::Time(r.u64()?),
+        Number::Random => Return::Random(r.u64()?),
         Number::Unmap
         | Number::SetFlags
         | Number::ThreadExit
@@ -76,10 +80,10 @@ pub fn decode_result(number: Number, regs: &[u64; REGS]) -> Result<Return, Error
         | Number::Send
         | Number::Receive
         | Number::Reply
+        | Number::Serve
         | Number::HandleClose
         | Number::BudgetDestroy
         | Number::BudgetUsage
-        | Number::Random
         | Number::SystemReset => Return::Nothing,
     };
     r.finish()?;

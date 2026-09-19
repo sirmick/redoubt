@@ -56,10 +56,11 @@ pub extern "C" fn _start() -> ! {
         }
         scratch
     };
-    let mut bad_class = spec;
-    bad_class[3] = 3;
-    let mut zero_class = spec;
-    zero_class[3] = 0;
+    // `first` is a flag (0 or 1), where the class tag once was.
+    let mut two_first = spec;
+    two_first[3] = 2;
+    let mut huge_first = spec;
+    huge_first[3] = u64::MAX;
     let mut nine_labels = spec;
     nine_labels[4] = 9;
     let mut stray_label = spec;
@@ -76,8 +77,8 @@ pub extern "C" fn _start() -> ! {
         create(0),
         create(KERNEL),
         create(end - 8),
-        create(at(&bad_class)),
-        create(at(&zero_class)),
+        create(at(&two_first)),
+        create(at(&huge_first)),
         create(at(&nine_labels)),
         create(at(&stray_label)),
         create(at(&wide_processes)),
@@ -104,20 +105,19 @@ pub extern "C" fn _start() -> ! {
         call(Number::BudgetUsage, [999, scratch, 0, 0, 0, 0, 0]),
     ];
     log!(logger, "[i14] budget_usage -> {:?}", usage);
+    // `random` takes no arguments (answer 77): its old buffer and length are stray registers.
     let random = [
         call(Number::Random, [text, 8, 0, 0, 0, 0, 0]),
-        call(Number::Random, [KERNEL, 8, 0, 0, 0, 0, 0]),
-        call(Number::Random, [usize::MAX - 3, 8, 0, 0, 0, 0, 0]),
-        call(Number::Random, [0, 1, 0, 0, 0, 0, 0]),
-        call(Number::Random, [end - 4, 8, 0, 0, 0, 0, 0]),
-        call(Number::Random, [scratch, 65, 0, 0, 0, 0, 0]),
-        call(Number::Random, [scratch, usize::MAX, 0, 0, 0, 0, 0]),
+        call(Number::Random, [KERNEL, 0, 0, 0, 0, 0, 0]),
+        call(Number::Random, [0, 65, 0, 0, 0, 0, 0]),
+        call(Number::Random, [0, 0, 0, 0, 0, 0, 1]),
+        call(Number::Random, [0, 0, 0, 0, 0, 0, 0]),
     ];
     log!(logger, "[i14] random -> {:?}", random);
     let base = NUMBER_BASE as usize;
     let other = [
         rd::raw_error(rd::raw([base, 0, 0, 0, 0, 0, 0, 0])),
-        rd::raw_error(rd::raw([base + 25, 0, 0, 0, 0, 0, 0, 0])),
+        rd::raw_error(rd::raw([base + Number::ALL.len() + 1, 0, 0, 0, 0, 0, 0, 0])),
         rd::raw_error(rd::raw([usize::MAX, 0, 0, 0, 0, 0, 0, 0])),
         call(Number::TimeNow, [1, 0, 0, 0, 0, 0, 0]),
         call(Number::TimeNow, [0, 0, 0, 0, 0, 0, 1]),
@@ -128,6 +128,9 @@ pub extern "C" fn _start() -> ! {
         // Calls not built yet (WP-K2 to WP-K5) decode, then are refused.
         call(Number::MapAnon, [4096, 3, 0, 0, 0, 0, 0]),
         call(Number::EndpointCreate, [0, 0, 0, 0, 0, 0, 0]),
+        // `serve` decodes (id 0 first), then is refused until WP-K2 builds it.
+        call(Number::Serve, [0, 0, 0, 0, 0, 0, 0]),
+        call(Number::Serve, [1, 0, 0, 0, 0, 0, 0]),
     ];
     log!(logger, "[i14] other -> {:?}", other);
     let sandbox = rd::create(rd::SYSTEM, &rd::spec(200, 0, 0)).expect("sandbox");
@@ -161,10 +164,8 @@ pub extern "C" fn _start() -> ! {
         }
         // Where a call writes, the address is from the pool: every writable address in it is
         // SCRATCH or past the mapped page, never this program's stack or data.
-        match number {
-            Number::Random => args[0] = pool[next() as usize % pool.len()],
-            Number::BudgetUsage => args[1] = pool[next() as usize % pool.len()],
-            _ => {}
+        if number == Number::BudgetUsage {
+            args[1] = pool[next() as usize % pool.len()];
         }
         calls += 1;
         let a0 = rd::raw([rd::number(number), args[0], args[1], args[2], args[3], args[4], args[5], args[6]]);

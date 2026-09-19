@@ -18,7 +18,7 @@
 #![no_main]
 #![allow(unused_must_use)] // `expect!` returns what it checked, for the steps that use it
 
-use test_programs::rd::{self, Class, Error, FOREVER, Labels, Usage};
+use test_programs::rd::{self, Error, FOREVER, Labels, Usage};
 use test_programs::{Logger, log};
 
 struct T {
@@ -79,8 +79,8 @@ fn usage(pl: u64, pu: u64, prl: u32, pru: u32, wl: u32, wc: u32) -> Usage {
     }
 }
 
-fn labelled(pages: u64, labels: &[u64], class: Class) -> rd::BudgetSpec {
-    rd::BudgetSpec { class, labels: Labels::from_slice(labels).unwrap(), ..rd::spec(pages, 0, 0) }
+fn labelled(pages: u64, labels: &[u64], first: bool) -> rd::BudgetSpec {
+    rd::BudgetSpec { first, labels: Labels::from_slice(labels).unwrap(), ..rd::spec(pages, 0, 0) }
 }
 
 /// Fault in 16 KiB of stack below this frame, so later calls grow no stack.
@@ -151,18 +151,29 @@ pub extern "C" fn _start() -> ! {
     let again = expect!(t, rd::create(a, &rd::spec(1, 0, 0)), Ok(6)).unwrap_or(6);
     expect!(t, rd::destroy(again), Ok(()));
 
-    // --- Classes and labels (part of I6; I8 needs a user-class caller, WP-K4) -------------------
-    // A child's class is its parent's (answer 73): the spec's class slot is not read until WP-A2
-    // removes it, so asking for `system` under `users` is not refused, and gets a user budget.
-    let asked = expect!(t, rd::create(rd::USERS, &labelled(1, &[], Class::System)), Ok(6)).unwrap_or(6);
-    expect!(t, rd::destroy(asked), Ok(()));
+    // --- Classes, `first` and labels (part of I6 and I8; the rest needs a user-class or a
+    // non-`first` caller, WP-K4) ------------------------------------------------------------------
+    // A child's class is its parent's (answer 73); `first` needs a `first` caller (this one lives
+    // in `system`, which is) and a system-class parent, so not under `users` (QUESTIONS.md 103).
+    expect!(t, rd::create(rd::USERS, &labelled(1, &[], true)), Err(Error::ClassDenied));
+    let quick = expect!(t, rd::create(a, &labelled(1, &[], true)), Ok(6)).unwrap_or(6);
+    expect!(t, rd::create(quick, &labelled(0, &[], true)), Ok(7));
+    expect!(t, rd::destroy(quick), Ok(()));
+    // `ClassDenied` for `first` comes before the label check: a labelled user-class parent, a
+    // child asking for `first` and dropping the label.
+    let user_lab = expect!(t, rd::create(rd::USERS, &labelled(1, &[9], false)), Ok(6)).unwrap_or(6);
+    expect!(t, rd::create(user_lab, &labelled(0, &[], true)), Err(Error::ClassDenied));
+    expect!(t, rd::create(user_lab, &labelled(0, &[], false)), Err(Error::LabelDenied));
+    expect!(t, rd::destroy(user_lab), Ok(()));
     // A system-class caller may add labels; they are sorted and deduplicated.
-    let lab = expect!(t, rd::create(a, &labelled(20, &[5, 3, 5], Class::User)), Ok(6)).unwrap_or(6);
+    let lab = expect!(t, rd::create(a, &labelled(20, &[5, 3, 5], false)), Ok(6)).unwrap_or(6);
     t.hold(lab);
-    expect!(t, rd::create(lab, &labelled(1, &[3], Class::User)), Err(Error::LabelDenied));
-    expect!(t, rd::create(lab, &labelled(1, &[], Class::User)), Err(Error::LabelDenied));
-    let same = expect!(t, rd::create(lab, &labelled(1, &[5, 3, 5, 3, 5, 3, 5, 3], Class::User)), Ok(7)).unwrap_or(7);
-    let more = expect!(t, rd::create(lab, &labelled(1, &[7, 5, 3], Class::User)), Ok(8)).unwrap_or(8);
+    expect!(t, rd::create(lab, &labelled(1, &[3], false)), Err(Error::LabelDenied));
+    expect!(t, rd::create(lab, &labelled(1, &[], false)), Err(Error::LabelDenied));
+    // A labelled system-class parent takes a `first` child; the label check still applies.
+    expect!(t, rd::create(lab, &labelled(1, &[3], true)), Err(Error::LabelDenied));
+    let same = expect!(t, rd::create(lab, &labelled(1, &[5, 3, 5, 3, 5, 3, 5, 3], false)), Ok(7)).unwrap_or(7);
+    let more = expect!(t, rd::create(lab, &labelled(1, &[7, 5, 3], true)), Ok(8)).unwrap_or(8);
     expect!(t, rd::destroy(more), Ok(()));
     expect!(t, rd::destroy(same), Ok(()));
 
@@ -177,7 +188,7 @@ pub extern "C" fn _start() -> ! {
             expect!(t, rd::create(chain[depth - 1], &rd::spec(pages, 0, 0)), Ok(6 + depth as u32)).unwrap_or(0);
     }
     expect!(t, rd::create(chain[5], &rd::spec(1, 0, 0)), Err(Error::TooLarge));
-    expect!(t, rd::create(chain[5], &labelled(1, &[], Class::System)), Err(Error::TooLarge));
+    expect!(t, rd::create(chain[5], &labelled(1, &[], true)), Err(Error::TooLarge));
     t.i5("depth");
 
     // --- R10, I2, I10: destroy a subtree ----------------------------------------------------
@@ -289,15 +300,14 @@ pub extern "C" fn _start() -> ! {
     test_programs::wait_ms(5);
     let t2 = rd::time_now().unwrap_or(0);
     t.check(t2 >= t1 + 4_000 && t2 < t1 + 1_000_000, format_args!("time_now {} then {}", t1, t2));
-    let mut a1 = [0u8; 64];
-    let mut a2 = [0u8; 65];
-    expect!(t, rd::random(a1.as_mut_ptr() as usize, 64), Ok(()));
-    // Any alignment, and 0 bytes.
-    expect!(t, rd::random(a2.as_mut_ptr() as usize + 1, 64), Ok(()));
-    expect!(t, rd::random(a2.as_mut_ptr() as usize, 0), Ok(()));
-    expect!(t, rd::random(a2.as_mut_ptr() as usize, 65), Err(Error::TooLarge));
-    t.check(a1 != [0; 64] && a1[..] != a2[1..], format_args!("random bytes {:?}", &a1[..8]));
-    t.check(a2[0] == 0, format_args!("random wrote before its buffer"));
+    // `random` returns one u64 (answer 77): eight draws, all different (a repeat among eight
+    // CSPRNG values has probability about 2^-59).
+    let mut draws = [Ok(0); 8];
+    for draw in draws.iter_mut() {
+        *draw = rd::random();
+    }
+    let distinct = draws.iter().enumerate().all(|(i, d)| d.is_ok() && !draws[..i].contains(d));
+    t.check(distinct, format_args!("random values {:x?}", draws));
 
     if t.failed {
         log!(t.logger, "BUDGET TEST FAILED");

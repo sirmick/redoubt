@@ -15,9 +15,7 @@
 //! `time_now`, `random`. Every other call decodes, then gets `InvalidArgument` until its package
 //! builds it (WP-K2 to WP-K5).
 
-use redoubt_sys::{
-    BUDGET_SPEC_SLOTS, BudgetSpec, Call, Error, MAX_RANDOM, REGS, Return, USAGE_SLOTS, encode_result,
-};
+use redoubt_sys::{BUDGET_SPEC_SLOTS, BudgetSpec, Call, Error, REGS, Return, USAGE_SLOTS, encode_result};
 use xous_kernel::{PID, TID};
 
 use crate::kframe;
@@ -63,23 +61,12 @@ fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
             Ok(Some(Return::Nothing))
         }),
         Call::TimeNow => Ok(Some(Return::Time(crate::arch::irq::timer::now_us()))),
-        // TODO(A2): `random` returns one u64 (answer 77); until then it writes `len` bytes.
-        // The memory manager is held (not used) so that no other hart changes the caller's page
-        // tables between finding the frames and writing them.
-        Call::Random { bytes, len } => MemoryManager::with_mut(|_held| {
-            let mut frames = [0usize; MAX_RANDOM];
-            for (i, frame) in frames.iter_mut().enumerate().take(len) {
-                *frame = crate::arch::mem::user_frame(bytes.checked_add(i).ok_or(Error::InvalidArgument)?, true)?;
-            }
-            let mut random = [0u8; MAX_RANDOM];
-            crate::platform::rand::fill(&mut random[..len]);
-            for i in 0..len {
-                let addr = bytes + i;
-                kframe::write_byte(frames[i], addr % xous_kernel::arch::PAGE_SIZE, random[i]);
-            }
-            Ok(Some(Return::Nothing))
-        }),
-        // Decoded, not built yet (WP-K2 to WP-K5).
+        Call::Random => {
+            let mut bytes = [0u8; 8];
+            crate::platform::rand::fill(&mut bytes);
+            Ok(Some(Return::Random(u64::from_le_bytes(bytes))))
+        }
+        // Decoded, not built yet (WP-K2 to WP-K5; `serve` and the abandoned-call notice are K2's).
         _ => Err(Error::InvalidArgument),
     }
 }

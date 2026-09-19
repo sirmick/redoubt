@@ -144,20 +144,44 @@ impl Body {
     }
 }
 
-/// Slots in a [`Received`] record; the longest kind is a message: record kind, then the spec's
-/// tuple (KERNEL-SPEC.md, Messages): message kind, id, badge, account, labels (count and
-/// `MAX_LABELS`), body (words, handles), buffer (address, pages).
-pub const RECEIVED_SLOTS: usize = 4 + 1 + MAX_LABELS + BODY_SLOTS + 3;
+/// Slots in a [`Received`] record, one layout for every kind (KERNEL-SPEC.md, ABI): kind,
+/// message id, badge, account, labels (count and `MAX_LABELS`), body (words, handle count,
+/// handles), buffer (address, pages).
+pub const RECEIVED_SLOTS: usize = 4 + 1 + MAX_LABELS + BODY_SLOTS + 2;
+
+/// The record kinds, in slot 0.
+const CALL: u64 = 1;
+const SEND: u64 = 2;
+const INTERRUPT: u64 = 3;
+const EXIT: u64 = 4;
+const ABANDONED: u64 = 5;
 
 /// What `receive` returns, written by the kernel to the call's `received_rec`. `Timeout` is an
-/// error, not a record. Slot 0 is the kind: 1 message, 2 interrupt, 3 exit notice; then the
-/// variant's fields in declaration order; every slot after them is 0.
+/// error, not a record.
+///
+/// Every kind uses the one layout `(kind, msg_id, badge, account, labels, words, handles,
+/// buffer, pages)`, and a field a kind does not use is 0 or empty. `kind` is 1 `call`, 2 `send`,
+/// 3 `interrupt`, 4 `exit`, 5 `abandoned`:
+///
+/// | Kind | Fields it fills |
+/// | --- | --- |
+/// | `call`, `send` | all of them ([`Message`]) |
+/// | `interrupt` | none (it arrives only on the IRQ handle `receive` named) |
+/// | `exit` | words 0-2: `pid`, `cause`, `code`; `account`: `blamed_account`; `labels`: `blamed_labels` |
+/// | `abandoned` | `msg_id`: the abandoned call's id |
+///
+/// Handles carry no kind here (answer 56): a handle is checked by use (`WrongObject`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Received {
     Message(Message),
-    /// The IRQ handle that fired.
-    Interrupt(Handle),
+    /// The IRQ handle `receive` named fired.
+    Interrupt,
     Exit(ExitNotice),
+    /// The open call with this id, held by the receiving thread, was abandoned (R3): its caller
+    /// is gone. The thread replies to it to free it; the reply reaches nobody. Returned once, by
+    /// the holding thread's next `receive` on the endpoint the call arrived on (QUESTIONS.md 104,
+    /// pending; that is the kernel's choice, and the record does not depend on it).
+    Abandoned(NonZeroU64),
 }
 
 /// A delivered message. The kernel attaches the badge, account, labels and id (KERNEL-SPEC.md,
@@ -172,9 +196,8 @@ pub struct Message {
     pub body: Body,
 }
 
-/// How a message was sent, and the buffer it brought, as mapped in the receiver. In slots: the
-/// kind (1 call, 2 send) first, and the [`Pages`] ((0, 0) for none) last, as the spec's tuple
-/// orders them.
+/// How a message was sent, and the buffer it brought, as mapped in the receiver: record kind 1
+/// or 2, and the [`Pages`] ((0, 0) for none) in the last two slots.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MessageKind {
     /// By `call`: a reply is owed. The lend, if any, returns to the caller at `reply`.
@@ -189,97 +212,157 @@ pub struct ExitNotice {
     pub pid: u32,
     pub cause: Cause,
     pub code: u32,
-    /// The account the faulting thread was serving; 0 if none.
+    /// For `Faulted`: the account of the sender of the current call of the thread that failed.
+    /// 0 when nobody is blamed, and always for `Exited` and `Killed`.
     pub blamed_account: u64,
+    /// That sender's labels; empty whenever nobody is blamed.
+    pub blamed_labels: Labels,
 }
 
+/// Why a process ended, in word 1 of an exit notice.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Cause {
     Exited = 1,
+    /// A fault, or `process_exit` while the process held open calls.
     Faulted = 2,
     Killed = 3,
 }
 
+/// The record's fields as they lie in its slots, before a kind gives them meaning.
+#[derive(Default)]
+struct Fields {
+    kind: u64,
+    msg_id: u64,
+    badge: u64,
+    account: u64,
+    labels: Labels,
+    words: [u64; WORDS],
+    handles: Handles,
+    pages: Option<Pages>,
+}
+
+impl Fields {
+    fn write(&self, w: &mut Writer) {
+        w.u64(self.kind);
+        w.u64(self.msg_id);
+        w.u64(self.badge);
+        w.u64(self.account);
+        self.labels.write(w);
+        for word in self.words {
+            w.u64(word);
+        }
+        self.handles.write(w);
+        Pages::write(self.pages, w);
+    }
+
+    fn read(r: &mut Reader) -> Result<Fields, Error> {
+        let (kind, msg_id, badge, account) = (r.raw(), r.raw(), r.raw(), r.raw());
+        let labels = Labels::read(r)?;
+        let mut words = [0; WORDS];
+        for word in &mut words {
+            *word = r.raw();
+        }
+        Ok(Fields {
+            kind,
+            msg_id,
+            badge,
+            account,
+            labels,
+            words,
+            handles: Handles::read(r)?,
+            pages: Pages::read(r)?,
+        })
+    }
+}
+
 impl Received {
     pub fn encode(&self) -> [u64; RECEIVED_SLOTS] {
-        let mut slots = [0; RECEIVED_SLOTS];
-        let w = &mut Writer::record(&mut slots);
-        match self {
+        let fields = match *self {
             Received::Message(m) => {
                 let (kind, pages) = match m.kind {
-                    MessageKind::Call { lend } => (1, lend),
-                    MessageKind::Send { transfer } => (2, transfer),
+                    MessageKind::Call { lend } => (CALL, lend),
+                    MessageKind::Send { transfer } => (SEND, transfer),
                 };
-                w.u64(1);
-                w.u64(kind);
-                w.u64(m.msg_id.get());
-                w.u64(m.badge);
-                w.u64(m.account);
-                m.labels.write(w);
-                m.body.write(w);
-                Pages::write(pages, w);
+                Fields {
+                    kind,
+                    msg_id: m.msg_id.get(),
+                    badge: m.badge,
+                    account: m.account,
+                    labels: m.labels,
+                    words: m.body.words.map(|w| w as u64),
+                    handles: m.body.handles,
+                    pages,
+                }
             }
-            Received::Interrupt(irq) => {
-                w.u64(2);
-                w.u64(irq.to_raw());
-            }
-            Received::Exit(notice) => {
-                w.u64(3);
-                w.u32(notice.pid);
-                w.u64(notice.cause as u64);
-                w.u32(notice.code);
-                w.u64(notice.blamed_account);
-            }
-        }
+            Received::Interrupt => Fields { kind: INTERRUPT, ..Fields::default() },
+            Received::Exit(n) => Fields {
+                kind: EXIT,
+                account: n.blamed_account,
+                labels: n.blamed_labels,
+                words: [n.pid.into(), n.cause as u64, n.code.into(), 0],
+                ..Fields::default()
+            },
+            Received::Abandoned(id) => Fields { kind: ABANDONED, msg_id: id.get(), ..Fields::default() },
+        };
+        let mut slots = [0; RECEIVED_SLOTS];
+        fields.write(&mut Writer::record(&mut slots));
         slots
     }
 
     /// Userspace side. The kernel is trusted to write a valid record; decoding still rejects a
     /// malformed one (crate docs, Decoding) rather than panicking.
     pub fn decode(slots: &[u64; RECEIVED_SLOTS]) -> Result<Received, Error> {
-        let mut reader = Reader::record(slots);
-        let r = &mut reader;
-        let received = match r.raw() {
-            1 => {
-                // 1 call, 2 send: the pages that go with it come last.
-                let is_call = r.tag(&[true, false])?;
-                let msg_id = NonZeroU64::new(r.u64()?).ok_or(Error::InvalidArgument)?;
-                let (badge, account) = (r.u64()?, r.u64()?);
-                let labels = Labels::read(r)?;
-                let body = Body::read(r)?;
-                let pages = Pages::read(r)?;
-                let kind = if is_call {
-                    MessageKind::Call { lend: pages }
+        let mut r = Reader::record(slots);
+        let f = Fields::read(&mut r)?;
+        r.finish()?;
+        let msg_id = NonZeroU64::new(f.msg_id).ok_or(Error::InvalidArgument);
+        let u32_of = |raw: u64| u32::try_from(raw).map_err(|_| Error::InvalidArgument);
+        let received = match f.kind {
+            CALL | SEND => {
+                let mut body = Body { words: [0; WORDS], handles: f.handles };
+                for (word, raw) in body.words.iter_mut().zip(f.words) {
+                    *word = usize::try_from(raw).map_err(|_| Error::InvalidArgument)?;
+                }
+                let kind = if f.kind == CALL {
+                    MessageKind::Call { lend: f.pages }
                 } else {
-                    MessageKind::Send { transfer: pages }
+                    MessageKind::Send { transfer: f.pages }
                 };
-                Received::Message(Message { kind, msg_id, badge, account, labels, body })
+                let (badge, account, labels) = (f.badge, f.account, f.labels);
+                Received::Message(Message { kind, msg_id: msg_id?, badge, account, labels, body })
             }
-            2 => Received::Interrupt(Handle::from_raw(r.raw())?),
-            3 => {
-                let pid = r.u32()?;
-                let cause = r.tag(&[Cause::Exited, Cause::Faulted, Cause::Killed])?;
-                Received::Exit(ExitNotice { pid, cause, code: r.u32()?, blamed_account: r.u64()? })
-            }
+            INTERRUPT => Received::Interrupt,
+            EXIT => Received::Exit(ExitNotice {
+                pid: u32_of(f.words[0])?,
+                cause: match f.words[1] {
+                    1 => Cause::Exited,
+                    2 => Cause::Faulted,
+                    3 => Cause::Killed,
+                    _ => return Err(Error::InvalidArgument),
+                },
+                code: u32_of(f.words[2])?,
+                blamed_account: f.account,
+                blamed_labels: f.labels,
+            }),
+            ABANDONED => Received::Abandoned(msg_id?),
             _ => return Err(Error::InvalidArgument),
         };
-        reader.finish()?;
+        // Each kind took only the fields it uses, and every other field must be 0 or empty, so
+        // that a record has one encoding. Re-encoding writes exactly those fields as 0, so
+        // comparing the whole record checks them all.
+        if received.encode() != *slots {
+            return Err(Error::InvalidArgument);
+        }
         Ok(received)
     }
 }
 
-/// A budget's class. `User < System` (KERNEL-SPEC.md, Budget).
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub enum Class {
-    User = 1,
-    System = 2,
-}
-
-/// Slots in a [`BudgetSpec`]: pages, processes, weight, class, labels (count and `MAX_LABELS`),
+/// Slots in a [`BudgetSpec`]: pages, processes, weight, first, labels (count and `MAX_LABELS`),
 /// account, deadline.
 pub const BUDGET_SPEC_SLOTS: usize = 4 + 1 + MAX_LABELS + 2;
 
-/// The new budget's fields for `budget_create` (KERNEL-SPEC.md, Budget), in slot order.
+/// The new budget's fields for `budget_create` (KERNEL-SPEC.md, Budget), in slot order. There is
+/// no class: a child's class is its parent's (answer 73).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct BudgetSpec {
     /// Page limit.
@@ -287,13 +370,26 @@ pub struct BudgetSpec {
     /// Process limit.
     pub processes: u32,
     pub weight: u32,
-    pub class: Class,
+    /// Runs before every budget without the flag (R12). Needs the caller's own budget to be
+    /// `first` and the parent to be class `system` (`ClassDenied`).
+    pub first: bool,
     pub labels: Labels,
     /// Honoured only when the parent's account is 0 (R8).
     pub account: u64,
     /// Time (µs since boot) at which the kernel destroys the budget; [`FOREVER`](crate::FOREVER)
     /// for none.
     pub deadline: u64,
+}
+
+// QUESTIONS.md 103 (pending): the `first` flag is the design editor's mechanism for answer 84.
+// Its slot is 0 or 1, anything else `InvalidArgument` (KERNEL-SPEC.md, `budget_create`'s row);
+// a different answer changes this function and `BudgetSpec::first`.
+fn first_flag(raw: u64) -> Result<bool, Error> {
+    match raw {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(Error::InvalidArgument),
+    }
 }
 
 impl BudgetSpec {
@@ -303,23 +399,23 @@ impl BudgetSpec {
         w.u64(self.pages);
         w.u32(self.processes);
         w.u32(self.weight);
-        w.u64(self.class as u64);
+        w.u64(self.first.into());
         self.labels.write(w);
         w.u64(self.account);
         w.u64(self.deadline);
         slots
     }
 
-    /// Kernel side: every malformed spec is an error.
+    /// Kernel side: every malformed spec is an error, the first in slot order.
     pub fn decode(slots: &[u64; BUDGET_SPEC_SLOTS]) -> Result<BudgetSpec, Error> {
         let mut r = Reader::record(slots);
         let pages = r.u64()?;
         let processes = r.u32()?;
         let weight = r.u32()?;
-        let class = r.tag(&[Class::User, Class::System])?;
+        let first = first_flag(r.raw())?;
         let labels = Labels::read(&mut r)?;
         let spec =
-            BudgetSpec { pages, processes, weight, class, labels, account: r.u64()?, deadline: r.u64()? };
+            BudgetSpec { pages, processes, weight, first, labels, account: r.u64()?, deadline: r.u64()? };
         r.finish()?;
         Ok(spec)
     }

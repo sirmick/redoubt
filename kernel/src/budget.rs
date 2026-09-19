@@ -26,7 +26,7 @@
 //! contexts (`ProcessImpl`) are the physical form of the process and thread objects and are not
 //! charged again.
 
-use redoubt_sys::{BudgetSpec, Class, Error, FOREVER, MAX_DEPTH, MAX_LABELS, Usage};
+use redoubt_sys::{BudgetSpec, Error, FOREVER, MAX_DEPTH, MAX_LABELS, Usage};
 use xous_kernel::PID;
 
 use crate::arch::process::MAX_PROCESS_COUNT;
@@ -46,6 +46,13 @@ pub const THREAD_PAGES: u64 = 1;
 /// value works; this one leaves room to carve.
 const ROOT_WEIGHT: u32 = 1000;
 
+/// A budget's class (KERNEL-SPEC.md, Budget): inherited from its parent, so never in the ABI.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Class {
+    User = 1,
+    System = 2,
+}
+
 /// A budget as the kernel works with it. It lives in its frame as words (`load`, `store`).
 #[derive(Clone, Copy)]
 pub struct Budget {
@@ -53,6 +60,8 @@ pub struct Budget {
     pub parent: Option<BudgetFrame>,
     pub depth: u32,
     pub class: Class,
+    /// Runs before every budget without it (R12; WP-K5 schedules by it). Set only at creation.
+    pub first: bool,
     /// Set by `budget_destroy` on the whole subtree before it tears anything down (R10).
     pub dying: bool,
     pub labels: [u64; MAX_LABELS],
@@ -82,7 +91,7 @@ impl Budget {
 /// First word of every budget frame, so that a frame read as a budget that is not one is caught.
 const MAGIC: u64 = u64::from_le_bytes(*b"budget\0\0");
 /// Words a budget takes in its frame, one per field (a frame has 512): `load` and `store` below.
-const WORDS: usize = 15 + MAX_LABELS;
+const WORDS: usize = 16 + MAX_LABELS;
 
 /// One process's side of the ledger. The kernel (PID 1) has none: it has no budget.
 #[derive(Clone, Copy)]
@@ -134,7 +143,7 @@ impl MemoryManager {
         };
         let mut labels = [0; MAX_LABELS];
         for (i, label) in labels.iter_mut().enumerate() {
-            *label = w(15 + i);
+            *label = w(16 + i);
         }
         Budget {
             id: w(1),
@@ -153,6 +162,7 @@ impl MemoryManager {
             processes_used: w(12) as u32,
             weight_limit: w(13) as u32,
             weight_carved: w(14) as u32,
+            first: w(15) != 0,
         }
     }
 
@@ -174,7 +184,8 @@ impl MemoryManager {
         words[12] = u64::from(b.processes_used);
         words[13] = u64::from(b.weight_limit);
         words[14] = u64::from(b.weight_carved);
-        words[15..].copy_from_slice(&b.labels);
+        words[15] = u64::from(b.first);
+        words[16..].copy_from_slice(&b.labels);
         for (i, word) in words.iter().enumerate() {
             kframe::write(phys, i * 8, *word);
         }
@@ -325,9 +336,11 @@ impl MemoryManager {
         // no parent, and its frame is one of the RAM pages counted in its limit, taken for the tree
         // itself.
         let users_pages = pages - 2 * BUDGET_PAGES - sys_pages;
+        // `root` and `system` are class `system` and `first`; `users` is class `user`.
         let boot = |mm: &mut Self, parent, class, pages, processes, weight| {
-            let spec = BudgetSpec { pages, processes, weight, class, labels: Default::default(), account: 0, deadline: FOREVER };
-            mm.new_budget(parent, &spec, &[]).expect("boot: no frame for a boot budget")
+            let first = class == Class::System;
+            let spec = BudgetSpec { pages, processes, weight, first, labels: Default::default(), account: 0, deadline: FOREVER };
+            mm.new_budget(parent, &spec, class, &[]).expect("boot: no frame for a boot budget")
         };
         let root = boot(self, None, Class::System, pages, processes, ROOT_WEIGHT);
         let system = boot(self, Some(root), Class::System, sys_pages, sys_processes, sys_weight);
@@ -360,11 +373,12 @@ impl MemoryManager {
 
     /// Create the budget object (after every check): its frame, its id, its place in the tree;
     /// its own object and its limits charged to the parent (R6, R7; answer 76). The class is the
-    /// caller's to choose: `budget_create` passes the parent's (answer 73), boot the spec's.
+    /// caller's to choose: `budget_create` passes the parent's (answer 73), boot its own.
     fn new_budget(
         &mut self,
         parent: Option<BudgetFrame>,
         spec: &BudgetSpec,
+        class: Class,
         labels: &[u64],
     ) -> Result<BudgetFrame, Error> {
         let frame = self.alloc_object_frame()?;
@@ -377,7 +391,8 @@ impl MemoryManager {
             id,
             parent,
             depth: parent_budget.map_or(0, |p| p.depth + 1),
-            class: spec.class,
+            class,
+            first: spec.first,
             dying: false,
             labels: label_array,
             nlabels: labels.len(),
@@ -412,9 +427,11 @@ impl MemoryManager {
         if p.depth as usize + 1 >= MAX_DEPTH {
             return Err(Error::TooLarge);
         }
-        // A child's class is its parent's (answer 73), so the spec's class is not read.
-        // TODO(A2): the ABI still carries a class slot (decoded, so it must be a valid tag),
-        // which A2 removes.
+        // A child's class is its parent's (answer 73). `first` needs a `first` caller and a
+        // system-class parent (QUESTIONS.md 103, pending: the flag is the editor's mechanism).
+        if spec.first && !(self.budget(caller).first && p.class == Class::System) {
+            return Err(Error::ClassDenied);
+        }
         let mut labels = [0; MAX_LABELS];
         let given = spec.labels.as_slice();
         labels[..given.len()].copy_from_slice(given);
@@ -448,7 +465,7 @@ impl MemoryManager {
         }
         // R8: the parent's account, unless it is 0; then the creator's choice.
         let account = if p.account != 0 { p.account } else { spec.account };
-        let child = self.new_budget(Some(pf), &BudgetSpec { account, class: p.class, ..*spec }, labels)?;
+        let child = self.new_budget(Some(pf), &BudgetSpec { account, ..*spec }, p.class, labels)?;
         let id = self.budget(child).id;
         // R9: stamped with the caller's budget. The table may have to grow, charged to the caller
         // after the carve (the caller's budget may be the parent); if it cannot, undo.
