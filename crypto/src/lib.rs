@@ -18,6 +18,9 @@
 //! - signatures: Ed25519, ECDSA on P-256 and P-384, RSA (PKCS #1 v1.5 and PSS);
 //!   RSA encryption (PKCS #1 v1.5); RSA key generation.
 //!
+//! It also provides `asn1rt_nif`'s BER TLV splitter (`asn1.rs`), which `public_key` needs for
+//! certificates and keys.
+//!
 //! Randomness comes only from the platform (`Platform::random`). If it fails, the operation
 //! fails; nothing falls back to a weaker source.
 
@@ -35,6 +38,7 @@ use beamlet_vm::bif::{Ctx, NativeSpec};
 use beamlet_vm::term::{Map, MapKey, Resource};
 use beamlet_vm::{Exception, Term};
 
+mod asn1;
 mod cipher;
 mod hash;
 mod info;
@@ -97,6 +101,9 @@ pub static NATIVES: &[NativeSpec] = &[
     ("crypto", "pkey_crypt_nif", 6, pk::crypt),
     ("crypto", "privkey_to_pubkey_nif", 2, pk::privkey_to_pubkey),
     ("crypto", "rsa_generate_key_nif", 2, pk::rsa_generate_key),
+    // ASN.1 BER splitting, for public_key's certificate and key codecs.
+    ("asn1rt_nif", "decode_ber_tlv_raw", 1, asn1::decode_ber_tlv),
+    ("asn1rt_nif", "encode_ber_tlv", 1, asn1::encode_ber_tlv),
 ];
 
 // ---- errors, in the shape crypto.erl's ?nif_call expects ----
