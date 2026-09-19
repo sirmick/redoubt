@@ -9,12 +9,14 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 
+use crate::atom::Atoms;
 use crate::bif::{Ctx, Native};
 use crate::bits::{self, Builder};
 use crate::loader::{MAX_Y_REGS, X_REGS};
 use crate::module::{Arg, Instr, Module};
 use crate::opcodes as op;
 use crate::process::{Class, Cp, Exception, Frame, Handler, Process};
+use crate::sched::{Code, Sched};
 use crate::term::{Bits, FunView, Heap, Term};
 use crate::vm::{System, Target};
 
@@ -56,7 +58,7 @@ enum Flow {
 /// jumps; this bound keeps such code from holding the scheduler forever.
 pub const MAX_INSTRUCTIONS_PER_SLICE: usize = 200_000;
 
-pub fn run(sys: &mut System, p: &mut Process) -> Stop {
+pub fn run(sys: &mut Sched<'_>, p: &mut Process) -> Stop {
     let mut instructions = 0usize;
     let mut module = p.pc.module.clone();
     loop {
@@ -69,7 +71,7 @@ pub fn run(sys: &mut System, p: &mut Process) -> Stop {
         if !Arc::ptr_eq(&module, &p.pc.module) {
             module = p.pc.module.clone();
             // Code loaded since the heap last looked brings literal chunks it must see.
-            p.refresh(&sys.literals);
+            sys.refresh(p);
         }
         // Between instructions every term the process holds is a root, so this is a safe point.
         p.maybe_collect();
@@ -301,16 +303,22 @@ fn deallocate(p: &mut Process) -> R {
 /// as in BEAM (`{erlang,element,[5,foo],[]}`), except for the natives whose whole purpose is to
 /// raise (`error/1` and friends), which BEAM leaves out.
 fn run_native(
-    sys: &mut System,
+    sys: &mut Sched<'_>,
     p: &mut Process,
     n: Native,
     (m, f): (&crate::atom::Atom, &crate::atom::Atom),
     args: &[Term],
 ) -> R<Term> {
-    let result = n(&mut Ctx { sys, p }, args);
+    let result = n(
+        &mut Ctx {
+            sys: &mut sys.lock(),
+            p,
+        },
+        args,
+    );
     // A native may have made literals (`persistent_term:put`) or loaded code whose literals it
     // returns.
-    p.refresh(&sys.literals);
+    sys.refresh(p);
     match result {
         Ok(t) => Ok(t),
         Err(mut e) => {
@@ -365,7 +373,7 @@ fn error_formatter(module: &str) -> Option<&'static str> {
 
 /// Call a native on x0.. and return its result.
 fn call_native(
-    sys: &mut System,
+    sys: &mut Sched<'_>,
     p: &mut Process,
     n: Native,
     mf: (&crate::atom::Atom, &crate::atom::Atom),
@@ -380,18 +388,18 @@ fn call_native(
 
 /// The code and x registers for calling `fun` (a term of `heap`) with `args`.
 pub(crate) fn fun_entry(
-    sys: &mut System,
+    sys: &mut impl Code,
     heap: &mut Heap,
     fun: Term,
     mut args: Vec<Term>,
 ) -> Result<(Cp, Vec<Term>), Exception> {
     let Some(f) = heap.as_fun(fun) else {
-        return Err(error_tuple(heap, &sys.atoms.badfun, fun));
+        return Err(error_tuple(heap, &sys.atoms().badfun, fun));
     };
     if f.arity() as usize != args.len() {
         let args = heap.list(args);
         let info = heap.tuple(&[fun, args]);
-        return Err(error_tuple(heap, &sys.atoms.badarity, info));
+        return Err(error_tuple(heap, &sys.atoms().badarity, info));
     }
     match f {
         FunView::Local {
@@ -404,7 +412,7 @@ pub(crate) fn fun_entry(
         } => {
             let env = env.to_vec();
             let Some(m) = sys.module(&module) else {
-                return Err(Exception::error(Term::Atom(sys.atoms.undef)));
+                return Err(Exception::error(Term::Atom(sys.atoms().undef)));
             };
             // A fun from another version of the module (or decoded from a binary) must match
             // this version's fun table, or it is a bad fun.
@@ -412,7 +420,7 @@ pub(crate) fn fun_entry(
                 e.uniq == uniq && e.num_free as usize == env.len() && e.arity == arity + e.num_free
             });
             let Some(entry) = entry.map(|e| e.entry) else {
-                return Err(error_tuple(heap, &sys.atoms.badfun, fun));
+                return Err(error_tuple(heap, &sys.atoms().badfun, fun));
             };
             args.extend(env);
             Ok((
@@ -429,7 +437,7 @@ pub(crate) fn fun_entry(
             arity,
         } => match sys.resolve(&module, &function, arity) {
             Some(Target::Code(cp)) => Ok((cp, args)),
-            _ => Err(Exception::error(Term::Atom(sys.atoms.undef))),
+            _ => Err(Exception::error(Term::Atom(sys.atoms().undef))),
         },
     }
 }
@@ -446,7 +454,7 @@ enum Kind {
 /// Enter `module:function/arity` with arguments already in x registers. `native` is the
 /// implementation if the caller already knows it is a native (resolved at load time).
 fn call_mfa(
-    sys: &mut System,
+    sys: &mut Sched<'_>,
     p: &mut Process,
     m: &crate::atom::Atom,
     f: &crate::atom::Atom,
@@ -457,7 +465,7 @@ fn call_mfa(
 }
 
 fn call_mfa_with(
-    sys: &mut System,
+    sys: &mut Sched<'_>,
     p: &mut Process,
     m: &crate::atom::Atom,
     f: &crate::atom::Atom,
@@ -577,7 +585,8 @@ fn call_mfa_with(
             let rest = if kind == Kind::Call {
                 stacktrace(sys, p, None)
             } else {
-                continuations(sys, p, sys.backtrace_depth)
+                let depth = sys.backtrace_depth();
+                continuations(&sys.atoms, p, depth)
             };
             e.trace = Some(p.heap.cons(missing, rest));
             Err(Fault::Raise(e))
@@ -589,7 +598,7 @@ fn call_mfa_with(
 /// then return `ok`. `erlang:hibernate(M, F, Args)`: the same, but the call stack is
 /// discarded and the process continues with `M:F(Args...)`. (BEAM's loader turns the call in
 /// `erlang:hibernate/0`'s own body into this; run literally, that body calls itself forever.)
-fn hibernate(sys: &mut System, p: &mut Process, arity: usize, kind: Kind) -> R<Flow> {
+fn hibernate(sys: &mut Sched<'_>, p: &mut Process, arity: usize, kind: Kind) -> R<Flow> {
     p.save = 0;
     if arity == 0 {
         p.x[0] = Term::Atom(sys.atoms.ok);
@@ -631,7 +640,7 @@ fn hibernate(sys: &mut System, p: &mut Process, arity: usize, kind: Kind) -> R<F
 
 /// `badarg` for an apply whose module or function is not an atom. As in BEAM, the trace starts
 /// with `erlang:apply/3` and its arguments.
-fn bad_apply(sys: &mut System, p: &mut Process, m: Term, f: Term, args: Term) -> Fault {
+fn bad_apply(sys: &mut Sched<'_>, p: &mut Process, m: Term, f: Term, args: Term) -> Fault {
     let mut e = Exception::error(Term::Atom(sys.atoms.badarg));
     let (erlang, apply) = (Term::Atom(sys.atoms.erlang), Term::Atom(sys.atom("apply")));
     let args = p.heap.list([m, f, args]);
@@ -642,7 +651,7 @@ fn bad_apply(sys: &mut System, p: &mut Process, m: Term, f: Term, args: Term) ->
 }
 
 /// `erlang:apply(Fun, Args)` or `erlang:apply(M, F, Args)` with its arguments in x0..
-fn apply(sys: &mut System, p: &mut Process, arity: usize, kind: Kind) -> R<Flow> {
+fn apply(sys: &mut Sched<'_>, p: &mut Process, arity: usize, kind: Kind) -> R<Flow> {
     let args_term = p.x[arity - 1];
     let args = p
         .heap
@@ -666,7 +675,13 @@ fn apply(sys: &mut System, p: &mut Process, arity: usize, kind: Kind) -> R<Flow>
     call_mfa(sys, p, &m, &f, n, kind)
 }
 
-fn call_fun(sys: &mut System, p: &mut Process, fun: Term, args: Vec<Term>, kind: Kind) -> R<Flow> {
+fn call_fun(
+    sys: &mut Sched<'_>,
+    p: &mut Process,
+    fun: Term,
+    args: Vec<Term>,
+    kind: Kind,
+) -> R<Flow> {
     // An export fun of a native: call the native directly.
     if let Some(FunView::Export {
         module,
@@ -697,7 +712,7 @@ fn call_fun(sys: &mut System, p: &mut Process, fun: Term, args: Vec<Term>, kind:
 
 // ---- exceptions ----
 
-fn class_atom(sys: &System, c: Class) -> Term {
+fn class_atom(sys: &Sched<'_>, c: Class) -> Term {
     Term::Atom(match c {
         Class::Error => sys.atoms.error,
         Class::Exit => sys.atoms.exit,
@@ -705,7 +720,7 @@ fn class_atom(sys: &System, c: Class) -> Term {
     })
 }
 
-fn class_of(sys: &System, t: &Term) -> Option<Class> {
+fn class_of(sys: &Sched<'_>, t: &Term) -> Option<Class> {
     let a = &sys.atoms;
     if t.is_atom(&a.error) {
         Some(Class::Error)
@@ -753,16 +768,17 @@ fn trace_entry(
 }
 
 /// A stack trace: the current function, then the functions that will be returned to.
-fn stacktrace(sys: &mut System, p: &mut Process, args: Option<Term>) -> Term {
+fn stacktrace(sys: &mut Sched<'_>, p: &mut Process, args: Option<Term>) -> Term {
+    let depth = sys.backtrace_depth();
+    trace_here(&sys.atoms, depth, p, args)
+}
+
+/// A stack trace of at most `depth` entries, starting at the current function.
+fn trace_here(atoms: &Atoms, depth: usize, p: &mut Process, args: Option<Term>) -> Term {
     let here = p.pc.pc.saturating_sub(1);
     let module = p.pc.module.clone();
-    let head = trace_entry(&sys.atoms, &mut p.heap, &module, here, args);
-    let rest = continuations(
-        sys,
-        p,
-        sys.backtrace_depth
-            .saturating_sub(usize::from(head.is_some())),
-    );
+    let head = trace_entry(atoms, &mut p.heap, &module, here, args);
+    let rest = continuations(atoms, p, depth.saturating_sub(usize::from(head.is_some())));
     match head {
         Some(h) => p.heap.cons(h, rest),
         None => rest,
@@ -771,14 +787,14 @@ fn stacktrace(sys: &mut System, p: &mut Process, args: Option<Term>) -> Term {
 
 /// The stack trace of a native's caller, as an exception raised there would get it.
 pub(crate) fn caller_stacktrace(sys: &mut System, p: &mut Process) -> Term {
-    stacktrace(sys, p, None)
+    trace_here(&sys.atoms, sys.backtrace_depth, p, None)
 }
 
 /// Up to `n` trace entries for the functions that will be returned to. Looks at no more frames
 /// than entries it keeps: the cost of raising must not grow with the depth of the stack.
-fn continuations(sys: &mut System, p: &mut Process, n: usize) -> Term {
+fn continuations(atoms: &Atoms, p: &mut Process, n: usize) -> Term {
     let points = continuation_points(p, n);
-    trace_of(&sys.atoms, &mut p.heap, &points)
+    trace_of(atoms, &mut p.heap, &points)
 }
 
 /// The places `p` will return to, innermost first, at most `n`.
@@ -852,7 +868,7 @@ pub(crate) fn current_stacktrace(
 }
 
 /// Transfer control to the innermost handler, or end the process if there is none.
-fn raise(sys: &mut System, p: &mut Process, mut e: Exception) -> Option<Stop> {
+fn raise(sys: &mut Sched<'_>, p: &mut Process, mut e: Exception) -> Option<Stop> {
     if e.trace.is_none() {
         e.trace = Some(stacktrace(sys, p, None));
     }
@@ -909,7 +925,7 @@ fn remove_handler(p: &mut Process, ins: &Instr) -> R {
 
 // ---- the instruction loop ----
 
-fn step(sys: &mut System, p: &mut Process, module: &Arc<Module>) -> R<Flow> {
+fn step(sys: &mut Sched<'_>, p: &mut Process, module: &Arc<Module>) -> R<Flow> {
     let here = p.pc.pc;
     let ins = module
         .code
@@ -1376,11 +1392,17 @@ fn step(sys: &mut System, p: &mut Process, module: &Arc<Module>) -> R<Flow> {
         // ---- messages ----
         op::SEND => {
             let (to, msg) = (p.x[0], p.x[1]);
-            p.x[0] = crate::bif::send(&mut Ctx { sys, p }, &[to, msg])?;
+            p.x[0] = crate::bif::send(
+                &mut Ctx {
+                    sys: &mut sys.lock(),
+                    p,
+                },
+                &[to, msg],
+            )?;
         }
         op::LOOP_REC => {
             if p.save == p.mailbox.len() {
-                sys.receive_pending(p);
+                sys.lock().receive_pending(p);
             }
             if p.save < p.mailbox.len() {
                 let m = p.mailbox[p.save];
@@ -1637,20 +1659,20 @@ fn step(sys: &mut System, p: &mut Process, module: &Arc<Module>) -> R<Flow> {
 
 // ---- binary construction ----
 
-fn flags_little(sys: &System, heap: &Heap, flags: Term) -> bool {
+fn flags_little(sys: &Sched<'_>, heap: &Heap, flags: Term) -> bool {
     // Flags come as a list of atoms; `native` is little-endian on every target we support.
     heap.list_iter(flags)
         .flatten()
         .any(|f| f.is_atom(&sys.atoms.little) || f.is_atom(&sys.atoms.native))
 }
 
-fn flags_signed(sys: &System, heap: &Heap, flags: Term) -> bool {
+fn flags_signed(sys: &Sched<'_>, heap: &Heap, flags: Term) -> bool {
     heap.list_iter(flags)
         .flatten()
         .any(|f| f.is_atom(&sys.atoms.signed))
 }
 
-fn bs_create_bin(sys: &mut System, p: &mut Process, ins: &Instr, module: &Module) -> R<Flow> {
+fn bs_create_bin(sys: &mut Sched<'_>, p: &mut Process, ins: &Instr, module: &Module) -> R<Flow> {
     let fail = label(ins, 0)?;
     let segments = list(ins, 5)?;
     if segments.len() % 6 != 0 {
@@ -1819,7 +1841,7 @@ fn bs_create_bin(sys: &mut System, p: &mut Process, ins: &Instr, module: &Module
 // ---- binary matching ----
 
 /// Run the commands of a `bs_match` instruction; on the first failure, jump to its label.
-fn bs_match(sys: &mut System, p: &mut Process, ins: &Instr) -> R<Flow> {
+fn bs_match(sys: &mut Sched<'_>, p: &mut Process, ins: &Instr) -> R<Flow> {
     let fail = label(ins, 0)?;
     let state = src(p, ins, 1)?;
     let (bits, mut pos) =
@@ -1936,7 +1958,7 @@ fn bs_match(sys: &mut System, p: &mut Process, ins: &Instr) -> R<Flow> {
 }
 
 /// Segment flags, given either as a bit set (`field_flags`) or as a list of atoms (`bs_match`).
-fn seg_flags(sys: &System, heap: &Heap, a: &Arg) -> (bool, bool) {
+fn seg_flags(sys: &Sched<'_>, heap: &Heap, a: &Arg) -> (bool, bool) {
     const LITTLE: u64 = 0x02;
     const SIGNED: u64 = 0x04;
     const NATIVE: u64 = 0x10; // little-endian on every target we support
@@ -1949,7 +1971,7 @@ fn seg_flags(sys: &System, heap: &Heap, a: &Arg) -> (bool, bool) {
 
 /// The older single-segment matching instructions (`bs_get_integer2` and friends). Each reads
 /// from the match state in operand 1 and jumps to operand 0 on failure.
-fn bs_get(sys: &mut System, p: &mut Process, ins: &Instr, module: &Module) -> R<Flow> {
+fn bs_get(sys: &mut Sched<'_>, p: &mut Process, ins: &Instr, module: &Module) -> R<Flow> {
     let fail = label(ins, 0)?;
     let state = src(p, ins, 1)?;
     let (bits, pos) =

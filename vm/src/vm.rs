@@ -16,6 +16,8 @@ use crate::loader::{self, LoadError};
 use crate::module::Module;
 use crate::platform::{ConsoleInput, Platform};
 use crate::process::{Class, Cp, Exception, Process, State};
+use crate::sched::Sched;
+use crate::sync::Lock;
 use crate::term::{copy, Heap, Literals, OwnedTerm, Pid, Ref, Term};
 
 /// Reductions (calls) a process may run before it is preempted.
@@ -84,6 +86,8 @@ pub struct System {
     pub persistent: BTreeMap<OwnedTerm, Term>,
     /// The literal chunks: modules' constants and persistent terms.
     pub literals: Literals,
+    /// What schedulers check their caches against: bumped as code and literals change.
+    pub(crate) generations: Arc<crate::sched::Generations>,
     pub atom_table: AtomTable,
     pub atoms: Atoms,
     modules: BTreeMap<String, Arc<Module>>,
@@ -410,7 +414,7 @@ pub enum RunError {
 }
 
 pub struct Vm {
-    pub sys: System,
+    sys: Lock<System>,
 }
 
 impl Vm {
@@ -435,12 +439,13 @@ impl Vm {
         let atoms = Atoms::new(&mut atom_table);
         let natives = bif::Registry::new(config.natives);
         Vm {
-            sys: System {
+            sys: Lock::new(System {
                 platform,
                 limits,
                 ets: crate::ets::Tables::default(),
                 persistent: BTreeMap::new(),
                 literals: Literals::default(),
+                generations: Default::default(),
                 env: BTreeMap::new(),
                 aliases: BTreeMap::new(),
                 atom_table,
@@ -471,31 +476,45 @@ impl Vm {
                 profile: None,
                 resolved: BTreeMap::new(),
                 stats: Stats::default(),
-            },
+            }),
         }
         .boot()
     }
 
     /// Start the console I/O servers, `user` and `standard_error`.
     fn boot(mut self) -> Vm {
-        self.sys.stats.start_us = self.sys.platform.monotonic_us();
+        self.sys.get_mut().stats.start_us = self.sys.get_mut().platform.monotonic_us();
         for module in EMBEDDED {
-            self.sys.load(module).expect("embedded modules load");
+            self.sys
+                .get_mut()
+                .load(module)
+                .expect("embedded modules load");
         }
-        let real_logger = self.sys.platform.load_module("logger").is_some()
-            && self.sys.platform.load_module("logger_sup").is_some();
+        let real_logger = self.sys.get_mut().platform.load_module("logger").is_some()
+            && self
+                .sys
+                .get_mut()
+                .platform
+                .load_module("logger_sup")
+                .is_some();
         if !real_logger {
             for module in LOGGER_FALLBACK {
-                self.sys.load(module).expect("embedded modules load");
+                self.sys
+                    .get_mut()
+                    .load(module)
+                    .expect("embedded modules load");
             }
         }
         // The shell `os:cmd/1` runs commands with (the kernel sets this at start). Programs run
         // outside the VM, so this is the host's shell, whatever the VM's file system holds.
         let key = self.atom("kernel_os_cmd_shell");
-        let mut h = Heap::new(&self.sys.literals);
+        let mut h = Heap::new(&self.sys.get_mut().literals);
         let shell = h.string("/bin/sh");
-        let shell = self.sys.make_literal(&h, shell);
-        self.sys.persistent.insert(OwnedTerm::immediate(key), shell);
+        let shell = self.sys.get_mut().make_literal(&h, shell);
+        self.sys
+            .get_mut()
+            .persistent
+            .insert(OwnedTerm::immediate(key), shell);
         let user_name = self.atom("user");
         let user = self
             .spawn("beamlet_io", "start", |_| alloc::vec![user_name])
@@ -505,11 +524,11 @@ impl Vm {
             .spawn("beamlet_io", "start", |_| alloc::vec![stderr])
             .expect("spawn standard_error");
         for pid in [user, err] {
-            if let Some(p) = self.sys.procs.get_mut(pid) {
+            if let Some(p) = self.sys.get_mut().procs.get_mut(pid) {
                 p.group_leader = Some(user);
             }
         }
-        self.sys.default_group_leader = Some(user);
+        self.sys.get_mut().default_group_leader = Some(user);
         // OTP's file server, which `file` calls for most operations: started now, so that it is
         // registered before any other code runs (about 2 ms). Without a file system it still
         // answers `get_cwd`, which compilers ask for; file operations fail with `enotsup`.
@@ -526,7 +545,7 @@ impl Vm {
 
     /// Load a module from `.beam` bytes, replacing any module of the same name.
     pub fn load(&mut self, bytes: &[u8]) -> Result<Atom, LoadError> {
-        self.sys.load(bytes)
+        self.sys.get_mut().load(bytes)
     }
 
     /// Spawn `module:function(args)` as a new process, loading the module if needed. `args`
@@ -537,11 +556,12 @@ impl Vm {
         function: &str,
         args: impl FnOnce(&mut Heap) -> Vec<Term>,
     ) -> Result<Pid, OwnedException> {
-        let m = self.sys.atom(module);
-        let f = self.sys.atom(function);
-        let mut heap = Heap::new(&self.sys.literals);
+        let m = self.sys.get_mut().atom(module);
+        let f = self.sys.get_mut().atom(function);
+        let mut heap = Heap::new(&self.sys.get_mut().literals);
         let args = args(&mut heap);
         self.sys
+            .get_mut()
             .spawn(&m, &f, heap, args)
             .map_err(|e| OwnedException {
                 class: e.class,
@@ -553,16 +573,13 @@ impl Vm {
     /// Run until process `pid` ends, and return its result: the value its first function
     /// returned, or the exception that ended it.
     pub fn run(&mut self, pid: Pid) -> Result<Outcome, RunError> {
-        self.sys.watched.insert(pid);
+        self.sys.get_mut().watched.insert(pid);
+        let mut sched = Sched::new(&self.sys);
         loop {
-            if let Some(status) = self.sys.halted {
-                return Err(RunError::Halted(status));
+            if let Some(done) = sched.lock().result(pid) {
+                return done;
             }
-            if let Some(r) = self.sys.results.remove(&pid) {
-                self.sys.watched.remove(&pid);
-                return Ok(r);
-            }
-            if !self.sys.step() {
+            if !schedule(&mut sched) {
                 return Err(RunError::Deadlock);
             }
         }
@@ -570,25 +587,29 @@ impl Vm {
 
     /// Set a variable of the VM's own environment (`os:getenv/1`), which starts empty.
     pub fn setenv(&mut self, name: &str, value: &str) {
-        self.sys.env.insert(String::from(name), String::from(value));
+        self.sys
+            .get_mut()
+            .env
+            .insert(String::from(name), String::from(value));
     }
 
     /// Add a directory of the VM's file system where applications live (`App-Vsn/ebin`,
     /// `App-Vsn/priv`, `App-Vsn/include`), searched by `code:lib_dir/1`.
     pub fn add_lib_root(&mut self, dir: &str) {
-        self.sys.lib_roots.push(String::from(dir));
+        self.sys.get_mut().lib_roots.push(String::from(dir));
     }
 
     /// Start sampling where processes are at the end of each time slice (a statistical profile
     /// for finding hot code; see [`Vm::profile`]).
     pub fn enable_profile(&mut self) {
-        self.sys.profile = Some(BTreeMap::new());
+        self.sys.get_mut().profile = Some(BTreeMap::new());
     }
 
     /// The samples so far, most frequent first: `(count, "m:f/a < caller < ...")`.
     pub fn profile(&self) -> Vec<(u64, String)> {
         let mut v: Vec<(u64, String)> = self
             .sys
+            .lock()
             .profile
             .iter()
             .flatten()
@@ -601,16 +622,13 @@ impl Vm {
     /// Like [`Vm::run`], but give up after `max_steps` scheduling steps and return `None`.
     /// For tests that run untrusted code which may legitimately loop forever.
     pub fn run_bounded(&mut self, pid: Pid, max_steps: usize) -> Option<Result<Outcome, RunError>> {
-        self.sys.watched.insert(pid);
+        self.sys.get_mut().watched.insert(pid);
+        let mut sched = Sched::new(&self.sys);
         for _ in 0..max_steps {
-            if let Some(status) = self.sys.halted {
-                return Some(Err(RunError::Halted(status)));
+            if let Some(done) = sched.lock().result(pid) {
+                return Some(done);
             }
-            if let Some(r) = self.sys.results.remove(&pid) {
-                self.sys.watched.remove(&pid);
-                return Some(Ok(r));
-            }
-            if !self.sys.step() {
+            if !schedule(&mut sched) {
                 return Some(Err(RunError::Deadlock));
             }
         }
@@ -618,16 +636,42 @@ impl Vm {
     }
 
     pub fn atom(&mut self, name: &str) -> Term {
-        Term::Atom(self.sys.atom(name))
+        Term::Atom(self.sys.get_mut().atom(name))
     }
 }
 
 impl System {
+    /// How the run for `pid` ended, if it has: the VM halted, or `pid` finished.
+    fn result(&mut self, pid: Pid) -> Option<Result<Outcome, RunError>> {
+        if let Some(status) = self.halted {
+            return Some(Err(RunError::Halted(status)));
+        }
+        let r = self.results.remove(&pid)?;
+        self.watched.remove(&pid);
+        Some(Ok(r))
+    }
+
     /// Intern an atom the VM needs. Only for names from code or the embedder, which are short.
     pub fn atom(&mut self, name: &str) -> Atom {
         self.atom_table
             .intern(name)
             .expect("VM-internal atom names are within limits")
+    }
+
+    /// Loaded code changed: every cache of resolved calls is stale.
+    fn code_changed(&mut self) {
+        self.resolved.clear();
+        self.generations
+            .code
+            .fetch_add(1, core::sync::atomic::Ordering::Release);
+    }
+
+    /// Literal chunks were added: schedulers pick them up on their next check.
+    fn literals_changed(&mut self) {
+        let n = self.literals.chunks();
+        self.generations
+            .literals
+            .store(n, core::sync::atomic::Ordering::Release);
     }
 
     pub fn make_ref(&mut self) -> Ref {
@@ -643,6 +687,7 @@ impl System {
 
     fn load(&mut self, bytes: &[u8]) -> Result<Atom, LoadError> {
         let mut module = loader::load(bytes, &mut self.atom_table, &mut self.literals)?;
+        self.literals_changed();
         for imp in &mut module.imports {
             imp.native = self.natives.get(&imp.module, &imp.function, imp.arity);
         }
@@ -671,7 +716,7 @@ impl System {
         let name = module.name;
         self.modules
             .insert(name.as_str().to_string(), Arc::new(module));
-        self.resolved.clear();
+        self.code_changed();
         Ok(name)
     }
 
@@ -743,7 +788,7 @@ impl System {
     /// running in it finishes (it is reference counted). A later call loads it afresh through
     /// the platform, if the platform has it. `false` if it was not loaded.
     pub fn delete_module(&mut self, name: &Atom) -> bool {
-        self.resolved.clear();
+        self.code_changed();
         self.module_files.remove(name.as_str());
         self.modules.remove(name.as_str()).is_some()
     }
@@ -887,6 +932,7 @@ impl System {
         let mut heap = Heap::new(&Literals::default());
         let mut roots = [copy(src, t, &mut heap)];
         self.literals.add(heap, &mut roots);
+        self.literals_changed();
         roots[0]
     }
 
@@ -932,8 +978,8 @@ impl System {
         self.platform.monotonic_us()
     }
 
-    /// Run one scheduling step. Returns `false` when nothing can ever run again.
-    fn step(&mut self) -> bool {
+    /// Housekeeping, then the next process to run, taken out of the table.
+    fn next(&mut self) -> Next {
         self.deliver_exits();
         self.fire_timers();
         self.poll_console();
@@ -944,26 +990,31 @@ impl System {
             return match self.timers.first() {
                 Some(&(deadline, _)) => {
                     self.platform.idle(Some(deadline));
-                    true
+                    Next::Again
                 }
                 None if self.console_reader.is_some() || !self.program_ports.is_empty() => {
                     self.platform.idle(None);
-                    true
+                    Next::Again
                 }
-                None => !self.exits.is_empty(),
+                None if !self.exits.is_empty() => Next::Again,
+                None => Next::Stuck,
             };
         };
         let Some(mut p) = self.procs.take(pid) else {
-            return true;
+            return Next::Again;
         };
         if p.state != State::Runnable {
             self.procs.put(p);
-            return true;
+            return Next::Again;
         }
         p.budget = TIME_SLICE;
         p.refresh(&self.literals);
-        let before = p.reductions;
-        let mut stop = interp::run(self, &mut p);
+        Next::Run(p)
+    }
+
+    /// The end of `p`'s time slice, which began with `before` reductions and ended with `stop`.
+    fn finish(&mut self, mut p: Box<Process>, before: u64, mut stop: Stop) {
+        let pid = p.pid;
         self.stats.reductions += p.reductions - before;
         if let Some(profile) = &mut self.profile {
             *profile.entry(crate::interp::where_is(&p, 3)).or_default() += 1;
@@ -991,7 +1042,6 @@ impl System {
             }
             Stop::Exit(result) => self.terminate(p, result),
         }
-        true
     }
 
     /// Whether `p` must be killed for holding too much memory. A heap over a limit is collected
@@ -1328,6 +1378,31 @@ pub(crate) fn deliver(
         run_queue.push_back(p.pid);
     }
     true
+}
+
+/// What a scheduler does next.
+enum Next {
+    Run(Box<Process>),
+    /// Nothing to run just now (or housekeeping happened): ask again.
+    Again,
+    /// Nothing can ever run again.
+    Stuck,
+}
+
+/// Run one scheduling step: the next process's time slice, with the system unlocked while its
+/// instructions run. `false` when nothing can ever run again.
+fn schedule(sched: &mut Sched<'_>) -> bool {
+    let next = sched.lock().next();
+    match next {
+        Next::Stuck => false,
+        Next::Again => true,
+        Next::Run(mut p) => {
+            let before = p.reductions;
+            let stop = interp::run(sched, &mut p);
+            sched.lock().finish(p, before, stop);
+            true
+        }
+    }
 }
 
 /// What a call resolves to.

@@ -19,10 +19,17 @@ mod imp {
 
         /// Wait for exclusive access. A panic while holding a lock does not poison it: the VM
         /// never panics on purpose, and a value left half-changed is no worse than losing it.
-        pub fn lock(&self) -> std::sync::MutexGuard<'_, T> {
+        pub fn lock(&self) -> Guard<'_, T> {
             self.0.lock().unwrap_or_else(|e| e.into_inner())
         }
+
+        /// Access through an exclusive reference, which needs no locking.
+        pub fn get_mut(&mut self) -> &mut T {
+            self.0.get_mut().unwrap_or_else(|e| e.into_inner())
+        }
     }
+
+    pub type Guard<'a, T> = std::sync::MutexGuard<'a, T>;
 
     /// Values that may be shared between schedulers.
     pub trait Shared: Send + Sync {}
@@ -48,10 +55,17 @@ mod imp {
 
         /// Exclusive access. With one scheduler nothing else can hold it, unless this code
         /// already does: that is a bug, and panics.
-        pub fn lock(&self) -> core::cell::RefMut<'_, T> {
+        pub fn lock(&self) -> Guard<'_, T> {
             self.0.borrow_mut()
         }
+
+        /// Access through an exclusive reference, which needs no locking.
+        pub fn get_mut(&mut self) -> &mut T {
+            self.0.get_mut()
+        }
     }
+
+    pub type Guard<'a, T> = core::cell::RefMut<'a, T>;
 
     /// Values that may be shared between schedulers: with one scheduler, any.
     pub trait Shared {}
@@ -65,7 +79,7 @@ mod imp {
     pub type AnyShared = dyn core::any::Any;
 }
 
-pub use imp::{AnyShared, Lock, Sendable, Shared};
+pub use imp::{AnyShared, Guard, Lock, Sendable, Shared};
 
 impl<T: Default> Default for Lock<T> {
     fn default() -> Lock<T> {

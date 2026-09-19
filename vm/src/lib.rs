@@ -32,6 +32,7 @@ pub mod module;
 pub mod opcodes;
 pub mod platform;
 pub mod process;
+pub mod sched;
 pub mod sync;
 pub mod term;
 pub mod vm;

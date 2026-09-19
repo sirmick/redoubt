@@ -113,6 +113,7 @@ impl Default for AtomTable {
 macro_rules! common_atoms {
     ($($field:ident = $name:literal),* $(,)?) => {
         /// Atoms the VM refers to by name, so Rust code never interns in a hot path.
+        #[derive(Clone)]
         pub struct Atoms {
             $(pub $field: Atom,)*
         }
