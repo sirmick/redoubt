@@ -195,6 +195,10 @@ enum Slot {
 
 pub(crate) struct ProcTable {
     slots: Vec<Slot>,
+    /// Messages sent to each slot's process and not yet moved onto its heap, each on a heap of
+    /// its own (BEAM's heap fragments): a sender never writes into another process's heap, so
+    /// the receiver may be running on another scheduler.
+    inboxes: Vec<VecDeque<OwnedTerm>>,
     free: Vec<u32>,
     live: usize,
     /// The serial of the next process. One counter for the whole table, so pids order by
@@ -207,6 +211,7 @@ impl ProcTable {
     fn new() -> ProcTable {
         ProcTable {
             slots: Vec::new(),
+            inboxes: Vec::new(),
             free: Vec::new(),
             live: 0,
             next_serial: 0,
@@ -224,6 +229,7 @@ impl ProcTable {
             Some(index) => index,
             None => {
                 self.slots.push(Slot::Free);
+                self.inboxes.push(VecDeque::new());
                 (self.slots.len() - 1) as u32
             }
         };
@@ -285,7 +291,35 @@ impl ProcTable {
             .collect()
     }
 
+    /// The inbox of `pid`, if it is alive.
+    pub(crate) fn inbox(&mut self, pid: Pid) -> Option<&mut VecDeque<OwnedTerm>> {
+        if self.is_alive(pid) {
+            self.inboxes.get_mut(pid.index as usize)
+        } else {
+            None
+        }
+    }
+
+    /// Move the messages waiting in the inbox of `p` (the running process) onto its heap and
+    /// into its mailbox. `false` if that overflows the mailbox: `p` must die.
+    fn receive_pending(&mut self, p: &mut Process, max_mailbox: usize) -> bool {
+        match self.inboxes.get_mut(p.pid.index as usize) {
+            Some(inbox) => absorb(p, inbox, max_mailbox),
+            None => true,
+        }
+    }
+
+    /// `receive_pending` for a process in the table.
+    fn receive_pending_of(&mut self, pid: Pid, max_mailbox: usize) -> bool {
+        let index = pid.index as usize;
+        match (self.slots.get_mut(index), self.inboxes.get_mut(index)) {
+            (Some(Slot::Present(p)), Some(inbox)) if p.pid == pid => absorb(p, inbox, max_mailbox),
+            _ => true,
+        }
+    }
+
     fn release(&mut self, pid: Pid) {
+        self.inboxes[pid.index as usize].clear();
         self.slots[pid.index as usize] = Slot::Free;
         self.free.push(pid.index);
         self.live -= 1;
@@ -802,18 +836,50 @@ impl System {
 
     /// Queue a message for `to`, built by `build` on its heap.
     pub fn send_with(&mut self, to: Pid, build: impl FnOnce(&mut Heap) -> Term) {
+        let Some(inbox) = self.procs.inbox(to) else {
+            return;
+        };
+        if inbox.len() >= self.limits.max_mailbox {
+            let reason = mailbox_full(&mut self.atom_table, &self.atoms);
+            self.exits.push_back(ExitSignal {
+                target: to,
+                from: to,
+                reason,
+                from_link: false,
+                forced: true,
+            });
+            return;
+        }
+        inbox.push_back(OwnedTerm::build(&self.literals, build));
         if let Some(p) = self.procs.get_mut(to) {
-            let msg = build(&mut p.heap);
-            if !deliver(p, msg, &mut self.run_queue, self.limits.max_mailbox) {
-                let reason = mailbox_full(&mut self.atom_table, &self.atoms);
-                self.exits.push_back(ExitSignal {
-                    target: to,
-                    from: to,
-                    reason,
-                    from_link: false,
-                    forced: true,
-                });
+            if p.state == State::Waiting {
+                p.state = State::Runnable;
+                self.run_queue.push_back(to);
             }
+        }
+    }
+
+    /// Move the messages waiting for `p` (the running process) into its mailbox. If that
+    /// overflows it, `p` is ended with `{system_limit, message_queue}` after this instruction.
+    pub(crate) fn receive_pending(&mut self, p: &mut Process) {
+        if !self.procs.receive_pending(p, self.limits.max_mailbox) {
+            let reason = mailbox_full(&mut self.atom_table, &self.atoms);
+            p.pending_exit = Some(reason.copy_into(&mut p.heap));
+        }
+    }
+
+    /// Move the messages waiting for `pid` (a process in the table, or none) into its mailbox,
+    /// so it can be inspected. If that overflows it, the process is ended.
+    pub(crate) fn receive_pending_of(&mut self, pid: Pid) {
+        if !self.procs.receive_pending_of(pid, self.limits.max_mailbox) {
+            let reason = mailbox_full(&mut self.atom_table, &self.atoms);
+            self.exits.push_back(ExitSignal {
+                target: pid,
+                from: pid,
+                reason,
+                from_link: false,
+                forced: true,
+            });
         }
     }
 
@@ -915,7 +981,10 @@ impl System {
             Stop::Wait => {
                 p.state = State::Waiting;
                 // A message may have arrived while it was running (e.g. sent to itself).
-                if p.save < p.mailbox.len() || p.timed_out {
+                if p.save < p.mailbox.len()
+                    || p.timed_out
+                    || self.procs.inbox(pid).is_some_and(|i| !i.is_empty())
+                {
                     p.state = State::Runnable;
                     self.run_queue.push_back(pid);
                 }
@@ -1204,20 +1273,11 @@ impl System {
                 continue;
             };
             if p.trap_exit && !kill {
-                let r = reason.copy_into(&mut p.heap);
-                let msg = p
-                    .heap
-                    .tuple(&[Term::Atom(self.atoms.exit_upper), Term::Pid(from), r]);
-                if !deliver(p, msg, &mut self.run_queue, self.limits.max_mailbox) {
-                    let reason = mailbox_full(&mut self.atom_table, &self.atoms);
-                    self.exits.push_back(ExitSignal {
-                        target,
-                        from: target,
-                        reason,
-                        from_link: false,
-                        forced: true,
-                    });
-                }
+                let exit = Term::Atom(self.atoms.exit_upper);
+                self.send_with(target, |h| {
+                    let r = reason.copy_into(h);
+                    h.tuple(&[exit, Term::Pid(from), r])
+                });
             } else if !normal || from == target {
                 let mut p = self.procs.take(target).expect("present");
                 let reason = if kill {
@@ -1230,6 +1290,18 @@ impl System {
             }
         }
     }
+}
+
+fn absorb(p: &mut Process, inbox: &mut VecDeque<OwnedTerm>, max_mailbox: usize) -> bool {
+    while let Some(m) = inbox.pop_front() {
+        if p.mailbox.len() >= max_mailbox {
+            inbox.clear();
+            return false;
+        }
+        let t = m.absorb_into(&mut p.heap);
+        p.mailbox.push_back(t);
+    }
+    true
 }
 
 /// The exit reason of a process whose mailbox overflowed.

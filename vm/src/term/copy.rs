@@ -1,6 +1,7 @@
 //! Copying terms between heaps, and terms that own their heap.
 
 use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 use core::cmp::Ordering;
 use core::fmt;
 
@@ -131,6 +132,40 @@ impl OwnedTerm {
     /// Memory in 8-byte words.
     pub fn words(&self) -> u64 {
         self.heap.words()
+    }
+
+    /// Move this term onto `dst`: its cells are appended and their pointers shifted, one pass
+    /// with no graph walk (BEAM merges a message's heap fragment the same way). Garbage in the
+    /// fragment comes along and goes at `dst`'s next collection.
+    pub fn absorb_into(self, dst: &mut Heap) -> Term {
+        let OwnedTerm { heap, mut root } = self;
+        dst.refresh(&heap.lits);
+        let base = dst.terms.len();
+        let entries: Vec<u32> = heap
+            .offheap
+            .into_iter()
+            .map(|o| match dst.push_offheap(o) {
+                Term::OffHeap(k) => k,
+                _ => unreachable!("an off-heap cell"),
+            })
+            .collect();
+        let shift = |t: &mut Term| match t {
+            Term::OffHeap(j) => *j = entries[*j as usize],
+            _ => {
+                if let Some(p) = t.ptr_mut() {
+                    if p.space == 0 {
+                        p.index = u32::try_from(base + p.at()).expect("a heap is under 2^32 cells");
+                    }
+                }
+            }
+        };
+        dst.terms.reserve(heap.terms.len());
+        for mut t in heap.terms {
+            shift(&mut t);
+            dst.terms.push(t);
+        }
+        shift(&mut root);
+        root
     }
 }
 

@@ -159,6 +159,12 @@ pub fn process_info(c: &mut Ctx, a: &[Term]) -> R {
         c.heap().to_vec(a[1]).ok_or_else(|| c.badarg())?
     };
     let running = pid == c.p.pid;
+    // Messages still in the inbox count, and are listed, as queued.
+    if running {
+        c.sys.receive_pending(c.p);
+    } else {
+        c.sys.receive_pending_of(pid);
+    }
     let depth = c.sys.backtrace_depth;
     let registered_name = Term::Atom(c.sys.atom("registered_name"));
     // Built on a heap of its own, then copied to the caller's (which may be the process read).
