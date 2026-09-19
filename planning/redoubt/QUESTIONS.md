@@ -268,3 +268,38 @@ Blocking: **K1 cannot start until 1-16 are settled** (they fix the ABI, `redoubt
     printable check. That is a channel out of the vault.
     *Rec:* a labelled session's request shows only fixed, steward-generated text (kind, target,
     size). Any free text goes through the declassification procedure.
+
+## From the littlefs red team
+
+36. **The contract between blkd and fsd.** littlefs's power-loss safety depends on how the block
+    device behaves when a write is torn. It's safe if a torn write persists a prefix and later
+    writes overwrite, as on a disk. It isn't safe if a torn write persists an arbitrary subset
+    of the write's units, as on raw flash, or if `sync` is acknowledged before the data is
+    durable. IO-ARCHITECTURE.md states neither.
+    *Rec:* IO-ARCHITECTURE.md states blkd's contract:
+    - writes overwrite whole sectors;
+    - requests complete in order;
+    - a torn write persists a prefix;
+    - `sync` returns only after virtio-blk's flush completes.
+
+    blkd (WP-D1) implements this with a flush on every `sync`, and fsd relies on nothing more.
+    The known residue (littlefs has no data checksums) goes in NAMESPACES.md's accepted limits.
+
+## From applying the answers
+
+37. **Several open calls per thread (answer 2) against blame and `mint`.** A thread can now hold
+    several open calls, so "the account the thread is serving" (crash blame) and "a message the
+    caller is serving" (`mint`) no longer say which call.
+    *Rec:*
+    - Blame goes to every account with an open call on the faulting thread, sorted and
+      deduplicated, at most `MAX_OPEN_CALLS`. The exit notice carries the first; init gets the
+      list through the steward's blame handling.
+    - `mint` accepts any message id among the caller's open calls. A `send`'s message id is never
+      open (question 31), so it can't be a mint source.
+
+38. **The server library's `admit(account)` has the same shape as question 17.** Answer 17 keyed
+    the kernel and steward caps by (account, label set), but the shared server library still
+    admits per account. A vault session filling fsd's admission slots would show up in its
+    owner's unlabelled session.
+    *Rec:* `admit` is keyed by (account, label set) too. CONTAINMENT.md's shared-server-library
+    paragraph says so.

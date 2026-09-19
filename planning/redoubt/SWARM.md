@@ -55,7 +55,7 @@ merged; the waves show what can run together.
 | W1 | review | wp-w1 | |
 | L1 | review | wp-l1 | |
 | T1 | merged | wp-t1 | 987bacbed |
-| A1 | review | wp-a1 | waits on QUESTIONS.md 1-16 |
+| A1 | review | wp-a1 | fixing to the answered spec |
 | all others | waiting | | see BUILD-PLAN.md "Needs" |
 
 States: `waiting` (needs not merged), `ready`, `building`, `review`, `merged`.
