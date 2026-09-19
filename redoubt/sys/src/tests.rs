@@ -169,6 +169,13 @@ fn body(nhandles: u32) -> Body {
     Body { words: [1, usize::MAX >> 32, 0, 42], handles: Handles::from_slice(&handles).unwrap() }
 }
 
+/// `body(n)` as received, every handle present.
+fn received_body(nhandles: u32) -> ReceivedBody {
+    let b = body(nhandles);
+    let handles: Vec<Option<Handle>> = b.handles.as_slice().iter().map(|h| Some(*h)).collect();
+    ReceivedBody { words: b.words, handles: ReceivedHandles::from_slice(&handles).unwrap() }
+}
+
 fn labels(n: u64) -> Labels { Labels::from_slice(&(0..n).map(|i| BIG ^ i).collect::<Vec<_>>()).unwrap() }
 
 fn sample_received() -> Vec<Received> {
@@ -178,7 +185,7 @@ fn sample_received() -> Vec<Received> {
             badge: 1,
             account: !BIG,
             labels: labels(3),
-            body: body(2),
+            body: received_body(2),
             kind,
         })
     };
@@ -192,8 +199,20 @@ fn sample_received() -> Vec<Received> {
             badge: u64::MAX,
             account: 0,
             labels: labels(MAX_LABELS as u64),
-            body: body(MAX_MSG_HANDLES as u32),
+            body: received_body(MAX_MSG_HANDLES as u32),
             kind: MessageKind::Send { transfer: None },
+        }),
+        Received::Message(Message {
+            msg_id: nz(2),
+            badge: 0,
+            account: 0,
+            labels: Labels::new(),
+            // A handle revoked in flight arrives as 0 and keeps its slot (R10).
+            body: ReceivedBody {
+                words: [0; WORDS],
+                handles: ReceivedHandles::from_slice(&[None, Some(h(3)), None]).unwrap(),
+            },
+            kind: MessageKind::Call { lend: None },
         }),
         Received::Interrupt,
         exit(3, Cause::Exited, 0, 0, 0),
@@ -418,6 +437,22 @@ fn malformed_records_are_refused() {
     slots[WORDS + 1] = 0;
     assert_eq!(Body::decode(&slots), Err(Error::BadHandle));
 
+    // ReceivedBody: the same slots, but 0 within the count is a missing handle, not an error.
+    let mut slots = body(2).encode();
+    slots[WORDS + 1] = 0;
+    let got = ReceivedBody::decode(&slots).unwrap();
+    assert_eq!(got.handles.as_slice(), &[None, Some(h(8))]);
+    assert_eq!(got.encode(), slots);
+    for (slot, value, error) in [
+        (WORDS, MAX_MSG_HANDLES as u64 + 1, Error::TooLarge),
+        (WORDS + 3, 9, Error::InvalidArgument),
+        (WORDS + 1, 1 << 32, Error::BadHandle),
+    ] {
+        let mut slots = body(2).encode();
+        slots[slot] = value;
+        assert_eq!(ReceivedBody::decode(&slots), Err(error), "received body slot {slot} = {value}");
+    }
+
     // BudgetSpec: a `first` that is no flag, too many labels, a stray label slot, wide fields.
     let spec = sample_specs()[0];
     for (slot, value, error) in [
@@ -479,8 +514,11 @@ fn malformed_records_are_refused() {
     slots[WORD0 + WORDS] = MAX_MSG_HANDLES as u64 + 1;
     assert_eq!(Received::decode(&slots), Err(Error::TooLarge), "too many handles");
     let mut slots = sample_received()[0].encode();
-    slots[WORD0 + WORDS + 1] = 0;
-    assert_eq!(Received::decode(&slots), Err(Error::BadHandle), "handle 0");
+    slots[WORD0 + WORDS + 1] = 1 << 32;
+    assert_eq!(Received::decode(&slots), Err(Error::BadHandle), "wide handle");
+    let mut slots = sample_received()[0].encode();
+    slots[WORD0 + WORDS + 3] = 5;
+    assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "a handle past the count");
 
     // Usage: a counter too wide for its field.
     let mut slots = sample_usage().encode();
@@ -584,7 +622,9 @@ fn error_rows() {
         // Decoding's general error, for every call (a non-zero unused register).
         assert!(n.can_return(InvalidArgument), "{n:?}");
     }
-    assert!(has(Number::Call, &[Refused, LabelDenied, Busy, Timeout, Dead, OutOfMemory]));
+    assert!(has(Number::Call, &[Refused, LabelDenied, Busy, Timeout, Dead, TooLarge]));
+    // QUESTIONS.md 116 (pending): a reply's handles that do not fit arrive as 0, no error.
+    assert!(lacks(Number::Call, &[OutOfMemory, NotPermitted]));
     assert!(has(Number::Send, &[Refused, LabelDenied, Busy, Timeout, Dead]));
     assert!(lacks(Number::Send, &[OutOfMemory, NotPermitted]));
     assert!(has(Number::Receive, &[BadHandle, WrongObject, NotPermitted, Timeout, Dead]));
@@ -601,8 +641,7 @@ fn error_rows() {
     assert!(lacks(Number::TimeNow, &[BadHandle, OutOfMemory]));
     assert!(lacks(Number::ThreadExit, &[BadHandle, OutOfMemory]));
     // QUESTIONS.md 102 (pending): every call adding a handle to its caller's table.
-    for n in [Number::ProcessCreate, Number::EndpointCreate, Number::Mint, Number::BudgetCreate, Number::Call]
-    {
+    for n in [Number::ProcessCreate, Number::EndpointCreate, Number::Mint, Number::BudgetCreate] {
         assert!(has(n, &[OutOfMemory, TooLarge]), "{n:?}");
     }
 }

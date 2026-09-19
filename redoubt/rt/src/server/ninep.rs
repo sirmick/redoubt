@@ -291,10 +291,13 @@ impl<S: FileServer> NineServer<S> {
     /// Handles one call and replies to it.
     pub fn serve(&mut self, mut request: Request) -> Result<(), Error> {
         // Handles are no part of 9P; closing them keeps a client from filling our handle table.
-        for handle in request.handles.as_slice() {
+        // A missing one (revoked on its way, R10) makes the request malformed, as in the typed
+        // layer (WIRE.md).
+        let missing = request.handles.as_slice().contains(&None);
+        for handle in request.handles.as_slice().iter().flatten() {
             let _ = crate::handle::close(*handle);
         }
-        let words = if request.words != WORDS_9P {
+        let words = if missing || request.words != WORDS_9P {
             MALFORMED
         } else {
             let caller = request.caller;

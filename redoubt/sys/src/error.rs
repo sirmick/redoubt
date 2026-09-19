@@ -64,7 +64,7 @@ const fn set(errors: &[Error]) -> Errors {
 }
 
 impl Errors {
-    const fn and(self, other: Errors) -> Errors { Errors(self.0 | other.0) }
+    const fn with(self, other: Errors) -> Errors { Errors(self.0 | other.0) }
 }
 
 /// Every call can fail decoding in the general ways of stage 1: a non-zero unused register, a
@@ -73,7 +73,7 @@ const DECODING: Errors = set(&[InvalidArgument]);
 
 /// A call that adds a handle to its caller's table can find the caller's budget unable to pay
 /// for a new table page (KERNEL-SPEC.md, above the error table).
-const ADDS_HANDLE: Errors = set(&[OutOfMemory]).and(HANDLE_LIMIT);
+const ADDS_HANDLE: Errors = set(&[OutOfMemory]).with(HANDLE_LIMIT);
 
 // QUESTIONS.md 102 (pending): a process holds at most `MAX_HANDLES` handles, and a call that
 // would add one more to its caller's table gets `TooLarge`. Under a different answer this set is
@@ -83,9 +83,10 @@ const HANDLE_LIMIT: Errors = set(&[TooLarge]);
 impl Number {
     /// Whether this call can return `error`: the errors of its row in KERNEL-SPEC.md's error
     /// table (in what order they are checked is the spec's), plus decoding's general
-    /// `InvalidArgument`, and `OutOfMemory` for a call that adds a handle to its caller's table.
-    /// The kernel's interim refusals (a call not built yet, or made from a legacy interrupt
-    /// callback) are outside it.
+    /// `InvalidArgument`, and `OutOfMemory` for a call that adds a handle to its caller's table
+    /// (but not `call` for its reply's handles: QUESTIONS.md 116). The kernel's interim refusals
+    /// (a call not built yet, or made from a legacy interrupt callback) are outside it; the
+    /// kernel checks every error it returns against this in debug builds.
     pub fn can_return(self, error: Error) -> bool { self.errors().0 & 1 << error as u32 != 0 }
 
     fn errors(self) -> Errors {
@@ -99,16 +100,19 @@ impl Number {
             Number::ProcessExit => set(&[InvalidArgument]),
             // `NotPermitted`: the exit endpoint's badge is not 0.
             Number::ProcessCreate => {
-                set(&[BadHandle, WrongObject, InvalidArgument, NotPermitted, OutOfProcesses]).and(ADDS_HANDLE)
+                set(&[BadHandle, WrongObject, InvalidArgument, NotPermitted, OutOfProcesses])
+                    .with(ADDS_HANDLE)
             }
             Number::ProcessMap => set(&[BadHandle, WrongObject, InvalidArgument, NotPermitted, OutOfMemory]),
             Number::ProcessStart => set(&[BadHandle, TooLarge, WrongObject, NotPermitted, OutOfMemory]),
             Number::EndpointCreate => ADDS_HANDLE,
             Number::Mint => {
-                set(&[InvalidArgument, BadHandle, Dead, WrongObject, NotPermitted]).and(ADDS_HANDLE)
+                set(&[InvalidArgument, BadHandle, Dead, WrongObject, NotPermitted]).with(ADDS_HANDLE)
             }
-            // QUESTIONS.md 107 (pending): a reply whose handles do not fit the caller is still the
-            // caller's `OutOfMemory`, at delivery; the handles added are the reply's.
+            // QUESTIONS.md 116 (pending): a reply is delivered even when some of its handles do
+            // not fit the caller's table (budget or `MAX_HANDLES`); those slots arrive as 0, so
+            // `call` adds no error for them. Under 107's reading instead, the call is the caller's
+            // `OutOfMemory` (and `TooLarge` past `MAX_HANDLES`): add `.with(ADDS_HANDLE)` below.
             Number::Call => set(&[
                 BadHandle,
                 TooLarge,
@@ -119,8 +123,7 @@ impl Number {
                 Refused,
                 Timeout,
                 Dead,
-            ])
-            .and(ADDS_HANDLE),
+            ]),
             Number::Send => set(&[
                 BadHandle,
                 TooLarge,
@@ -149,12 +152,12 @@ impl Number {
                 OutOfMemory,
                 OutOfProcesses,
             ])
-            .and(ADDS_HANDLE),
+            .with(ADDS_HANDLE),
             Number::BudgetDestroy => set(&[BadHandle, WrongObject]),
             Number::BudgetUsage => set(&[BadHandle, WrongObject, LabelDenied]),
             Number::TimeNow | Number::Random => set(&[]),
             Number::SystemReset => set(&[BadHandle, InvalidArgument, WrongObject]),
         };
-        row.and(DECODING)
+        row.with(DECODING)
     }
 }

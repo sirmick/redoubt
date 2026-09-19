@@ -117,7 +117,7 @@ pub fn serve(startup: &Startup) -> u32 {
             }
             // Nothing here is sent one-way: drop it, and close what it brought.
             Ok(Event::Send(delivery)) => {
-                for handle in delivery.handles.as_slice() {
+                for handle in delivery.handles.as_slice().iter().flatten() {
                     let _ = redoubt_rt::handle::close(*handle);
                 }
             }

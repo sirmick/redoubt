@@ -84,7 +84,12 @@ impl Pages {
 }
 
 /// What `mint` derives the new handle from. Registers: a tag (1 message, 2 handle), then the
-/// value as a `u64`.
+/// value as a `u64` (low half, high half).
+///
+/// Decoding reads the tag register, then both halves, each checked for width when it is read,
+/// and only then looks at the tag. So a low half wider than 32 bits (rv64 only) is
+/// `InvalidArgument` whatever the tag, and with tag 2 a value that needs the high half is
+/// `BadHandle` (a handle wider than 32 bits). The executable model follows this order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MintSource {
     /// The message id of an open call of the caller's thread (a `send`'s id is refused).

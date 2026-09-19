@@ -4,7 +4,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use redoubt_sys::Labels;
+use redoubt_sys::{Labels, ReceivedHandles};
 use redoubt_wire::proto::example::{
     Blob, BlobReply, ErrorCode, Grant, GrantReply, Message, Named, NamedReply, Read, ReadReply, Reply, Small,
     SmallReply,
@@ -83,10 +83,21 @@ fn round_trip(
     handles: &[Handle],
     lend: usize,
 ) -> (Vec<u8>, Words, Handles, Handles) {
+    let handles: Vec<Option<Handle>> = handles.iter().map(|h| Some(*h)).collect();
+    round_trip_received(store, request, &handles, lend)
+}
+
+/// As `round_trip`, with handles as they arrive: `None` for one revoked on its way.
+fn round_trip_received(
+    store: &mut Store,
+    request: Message<'_>,
+    handles: &[Option<Handle>],
+    lend: usize,
+) -> (Vec<u8>, Words, Handles, Handles) {
     let mut buf = vec![0u8; lend.max(64)];
     let words = request.encode(&mut buf).unwrap();
     buf.truncate(lend);
-    let handles = Handles::from_slice(handles).unwrap();
+    let handles = ReceivedHandles::from_slice(handles).unwrap();
     let outcome = answer::<Example, Store>(store, &caller(), &words, &handles, &mut buf);
     (buf, outcome.words, outcome.send, outcome.close)
 }
@@ -129,6 +140,18 @@ fn handles_travel_and_unread_ones_come_back() {
     assert_eq!(words, crate::server::MALFORMED);
     assert!(reply_handles.as_slice().is_empty());
     assert_eq!(unread.as_slice(), &[h(5)]);
+    // A handle revoked on its way arrives as `None`: the request is malformed, the server never
+    // sees it, and the handles that did arrive come back to be closed.
+    let kept = store.kept.len();
+    for handles in [[None, Some(h(6))], [Some(h(5)), None], [None, None]] {
+        let (_, words, reply_handles, unread) =
+            round_trip_received(&mut store, Message::Grant(Grant { pages: 1 }), &handles, 0);
+        assert_eq!(words, crate::server::MALFORMED, "{handles:?}");
+        assert!(reply_handles.as_slice().is_empty());
+        let arrived: Vec<Handle> = handles.iter().flatten().copied().collect();
+        assert_eq!(unread.as_slice(), &arrived[..]);
+    }
+    assert_eq!(store.kept.len(), kept);
 }
 
 #[test]
@@ -136,7 +159,7 @@ fn malformed_requests_and_oversized_replies() {
     let mut store = Store::default();
     let bad = crate::server::MALFORMED;
     let mut buf = [0u8; 16];
-    let none = Handles::new();
+    let none = ReceivedHandles::new();
     for words in [[0, 0, 0, 0], [99, 0, 0, 0], [3, 1 << 32, 0, 0], [5, 100, 0, 0], [3, 0, 0, 1]] {
         let reply = answer::<Example, Store>(&mut store, &caller(), &words, &none, &mut buf).words;
         assert_eq!(reply, bad, "{words:?}");
@@ -163,7 +186,8 @@ fn random_words_never_panic() {
         for (i, b) in buf.iter_mut().enumerate() {
             *b = (x >> (i % 56)) as u8;
         }
-        let handles = Handles::from_slice(&[h(1), h(2), h(3)][..(x >> 40) as usize % 4]).unwrap();
+        let all = [Some(h(1)), None, Some(h(3))];
+        let handles = ReceivedHandles::from_slice(&all[..(x >> 40) as usize % 4]).unwrap();
         let _ = answer::<Example, Store>(&mut store, &caller(), &words, &handles, &mut buf);
     }
 }

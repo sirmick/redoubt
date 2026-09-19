@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use redoubt_rt::abi::{
     BODY_SLOTS, Body, Call, Error, FOREVER, Handle, Handles, Labels, Message, MessageKind, MintSource,
-    PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, Return,
+    PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles, Return,
 };
 
 /// What a handle names. Only endpoints are modelled.
@@ -425,7 +425,9 @@ impl Fake {
                     MessageKind::Send { transfer: p.pages }
                 };
                 self.changed.notify_all();
-                let body = Body { words: p.words, handles: Handles::from_slice(&handles).unwrap() };
+                let handles: Vec<Option<Handle>> = handles.into_iter().map(Some).collect();
+                let body =
+                    ReceivedBody { words: p.words, handles: ReceivedHandles::from_slice(&handles).unwrap() };
                 let message = Message {
                     kind,
                     msg_id: p.id,

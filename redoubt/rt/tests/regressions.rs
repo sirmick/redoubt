@@ -102,7 +102,7 @@ fn typed_replies_close_the_handles_made_for_the_caller() {
             let words = Message::Grant(Grant { pages: 1 }).encode(&mut []).unwrap();
             let reply = ep.call(&words, &[a.handle(), b.handle()], None, FOREVER).unwrap();
             assert_eq!(reply.words, [0; 4]);
-            reply.handles.as_slice().iter().for_each(|h| redoubt_rt::handle::close(*h).unwrap());
+            reply.handles.as_slice().iter().flatten().for_each(|h| redoubt_rt::handle::close(*h).unwrap());
             a.close().unwrap();
             b.close().unwrap();
         }

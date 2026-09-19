@@ -29,7 +29,7 @@ fn call_lend_and_reply() {
         assert_eq!(request.caller.labels.as_slice(), &[3, 1]);
         assert_eq!(request.words, [7, 8, 9, 10]);
         // The handle it brought is ours now; the lend is readable and writable.
-        let brought = request.handles.as_slice()[0];
+        let brought = request.handles.as_slice()[0].unwrap();
         let lend = request.lend();
         assert_eq!(lend.len(), 2 * PAGE_SIZE);
         assert_eq!(&lend[..5], b"hello");

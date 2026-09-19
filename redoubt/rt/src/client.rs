@@ -74,7 +74,7 @@ impl Client {
         Message { tag, body }.encode(&mut self.buf)?;
         let reply = self.endpoint.call(&WORDS_9P, &[], Some(&mut self.buf), self.timeout)?;
         // No 9P reply carries handles: close any a hostile server sent, before anything else.
-        for handle in reply.handles.as_slice() {
+        for handle in reply.handles.as_slice().iter().flatten() {
             let _ = crate::handle::close(*handle);
         }
         if reply.words != WORDS_9P || !reply.handles.as_slice().is_empty() {

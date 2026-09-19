@@ -23,7 +23,7 @@
 //! | [`MemFlags`] | 1 | only `READ`, `WRITE`, `EXECUTE`; never `WRITE` with `EXECUTE` |
 //! | handle | 1 | an index, 1..=`u32::MAX` |
 //! | optional handle | 1 | 0 = none (index 0 is never allocated) |
-//! | message id, badge (`NonZeroU64`) | 2: low half, high half | never 0 |
+//! | message id, badge (`NonZeroU64`) | 2: low half, high half | never 0 as an argument (a received badge may be 0: the receive right's) |
 //! | optional [`Pages`] (lend, transfer) | 2: address, pages | (0, 0) = none; one of them 0 is invalid |
 //! | enum tag (reset kind, mint source; in records: the record's kind, an exit's cause) | 1 | numbered from 1; 0 is never a valid tag |
 //! | flag (in records: `budget_create`'s `first`) | 1 | 0 or 1 |
@@ -45,13 +45,18 @@
 //!
 //! | Record | Slots | Used by |
 //! | --- | --- | --- |
-//! | [`Body`]: words, handle count, handles | [`BODY_SLOTS`] | `call` (request in, reply out), `send`, `reply` |
+//! | [`Body`]: words, handle count, handles | [`BODY_SLOTS`] | `call` (request in), `send`, `reply` |
+//! | [`ReceivedBody`]: the same slots; a handle slot within the count may be 0 | [`BODY_SLOTS`] | `call` (reply out) |
 //! | [`Received`]: kind, msg_id, badge, account, labels, words, handles, buffer, pages; one layout for a message, an interrupt, an exit notice and an abandoned-call notice | [`RECEIVED_SLOTS`] | `receive` (out) |
 //! | [`BudgetSpec`]: pages, processes, weight, first, labels, account, deadline | [`BUDGET_SPEC_SLOTS`] | `budget_create` (in) |
 //! | [`Usage`]: page limit and usage, process limit and usage, weight limit and carved | [`USAGE_SLOTS`] | `budget_usage` (out) |
 //! | handle list: one handle per slot ([`Handle::from_raw`]) | the call's count, at most [`MAX_START_HANDLES`] | `process_start` (in) |
 //!
 //! A list in a record (labels, handles) is a count, then its capacity's slots, the unused ones 0.
+//! Handles going in are all handles. Handles coming out ([`ReceivedHandles`]: in a message, and in
+//! the reply `call` writes back) may have a slot of 0 within the count, which keeps its place: a
+//! handle revoked while its message was in flight (R10), or a reply's handle the caller could not
+//! take (QUESTIONS.md 116, pending).
 //!
 //! A record's page must already be backed: the kernel does not allocate while it decodes, so an
 //! untouched page is `InvalidArgument` (QUESTIONS.md 115, pending; the check is the kernel's).
@@ -75,9 +80,17 @@
 //! decoding is its stage 1, and this crate implements that stage for registers and slots. In
 //! summary: the first malformed value in register (then slot) order wins; `BadHandle` for a
 //! required handle that is 0 or wider than 32 bits, `TooLarge` for a count above its limit,
-//! `InvalidArgument` for everything else. A record's alignment and whether it lies in the caller's
-//! memory come before its slots and are the kernel's to check. The userspace decoders
-//! ([`decode_result`], [`Received::decode`], [`Usage::decode`]) use the same errors.
+//! `InvalidArgument` for everything else. One case needs care: `mint`'s source is a tag and a
+//! 64-bit value in two registers, and each half is checked for width (`InvalidArgument`) when
+//! it is read, before the tag is looked at; so a handle source whose low half is wider than 32
+//! bits (possible only on rv64) is `InvalidArgument`, and one whose high half is not 0 is
+//! `BadHandle`. A record's alignment and whether it lies in the caller's memory come before its
+//! slots and are the kernel's to check.
+//!
+//! The userspace decoders ([`decode_result`], [`Received::decode`], [`ReceivedBody::decode`],
+//! [`Usage::decode`]) use the same errors, with one rule of their own: a `Received` record's kind
+//! is read first, and any non-zero slot outside the fields that kind fills (a list's count
+//! included) is `InvalidArgument` before any field is read.
 //!
 //! Which errors each call can return at all, its row in the spec's error table, is
 //! [`Number::can_return`].
@@ -101,8 +114,8 @@ pub use call::{Call, Handle, MemFlags, MintSource, NUMBER_BASE, Number, Pages, R
 pub use ecall::syscall;
 pub use error::Error;
 pub use record::{
-    BODY_SLOTS, BUDGET_SPEC_SLOTS, Body, BudgetSpec, Cause, ExitNotice, Handles, Labels, List, Message,
-    MessageKind, RECEIVED_SLOTS, Received, Slot, USAGE_SLOTS, Usage,
+    BODY_SLOTS, BUDGET_SPEC_SLOTS, Body, BodyOf, BudgetSpec, Cause, ExitNotice, Handles, Labels, List,
+    Message, MessageKind, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles, Slot, USAGE_SLOTS, Usage,
 };
 pub use regs::REGS;
 pub use ret::{Return, decode_result, encode_result};

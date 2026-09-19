@@ -8,8 +8,8 @@ use core::num::NonZeroU64;
 use core::ops::{Deref, DerefMut};
 
 use redoubt_sys::{
-    BODY_SLOTS, Body, Call, Error, ExitNotice, Handle, Handles, Labels, MemFlags, MessageKind, MintSource,
-    PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, WORDS,
+    BODY_SLOTS, Body, BodyOf, Call, Error, ExitNotice, Handle, Handles, Labels, MemFlags, MessageKind,
+    MintSource, PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles, Slot, WORDS,
 };
 
 use crate::handle::{Budget, Endpoint, handle, nothing};
@@ -91,13 +91,15 @@ fn body(words: &Words, handles: &[Handle]) -> Result<Body, Error> {
     Ok(body)
 }
 
-fn words_of(body: &Body) -> Words { body.words.map(|w| w as u64) }
+fn words_of<H: Slot>(body: &BodyOf<H>) -> Words { body.words.map(|w| w as u64) }
 
 /// The reply to a `call`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Reply {
     pub words: Words,
-    pub handles: Handles,
+    /// Handles the server sent, now in this process's table; `None` for one that could not be
+    /// taken (QUESTIONS.md 116, pending) or was revoked on the way.
+    pub handles: ReceivedHandles,
 }
 
 impl Endpoint {
@@ -126,7 +128,7 @@ impl Endpoint {
         let lend = lend.map(|buffer| buffer.pages);
         let call = Call::Call { endpoint: self.handle(), body_rec: rec.addr_mut(), lend, timeout };
         nothing(syscall(&call))?;
-        let reply = Body::decode(&rec.0)?;
+        let reply = ReceivedBody::decode(&rec.0)?;
         Ok(Reply { words: words_of(&reply), handles: reply.handles })
     }
 
@@ -207,8 +209,10 @@ pub struct Request {
     id: NonZeroU64,
     pub caller: Caller,
     pub words: Words,
-    /// Handles the caller sent, now in this process's table.
-    pub handles: Handles,
+    /// Handles the caller sent, now in this process's table; `None` for one revoked while the
+    /// call was queued (R10), which keeps its slot. A protocol that needs it treats the request
+    /// as `Malformed` (WIRE.md: a missing handle).
+    pub handles: ReceivedHandles,
     lend: Option<Pages>,
 }
 
@@ -268,6 +272,7 @@ impl Request {
 pub struct Delivery {
     pub caller: Caller,
     pub words: Words,
-    pub handles: Handles,
+    /// As in [`Request::handles`].
+    pub handles: ReceivedHandles,
     pub transfer: Option<Buffer>,
 }
