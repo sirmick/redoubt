@@ -32,3 +32,5 @@ start() ->
         try re:run("abc", "(", []) catch error:badarg -> badarg end
     ],
     {Runs, Other}.
+
+%% Not part of start/0's comparison: run by re_hostile:start/0.
