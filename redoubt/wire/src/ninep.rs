@@ -28,37 +28,6 @@ pub const HEADER: usize = 7;
 /// write carries is `MSIZE - IOHDRSZ`.
 pub const IOHDRSZ: usize = 24;
 
-/// Message types (intro(5)). `Terror` (106) is not a message and is refused.
-pub mod kind {
-    pub const TVERSION: u8 = 100;
-    pub const RVERSION: u8 = 101;
-    pub const TAUTH: u8 = 102;
-    pub const RAUTH: u8 = 103;
-    pub const TATTACH: u8 = 104;
-    pub const RATTACH: u8 = 105;
-    pub const RERROR: u8 = 107;
-    pub const TFLUSH: u8 = 108;
-    pub const RFLUSH: u8 = 109;
-    pub const TWALK: u8 = 110;
-    pub const RWALK: u8 = 111;
-    pub const TOPEN: u8 = 112;
-    pub const ROPEN: u8 = 113;
-    pub const TCREATE: u8 = 114;
-    pub const RCREATE: u8 = 115;
-    pub const TREAD: u8 = 116;
-    pub const RREAD: u8 = 117;
-    pub const TWRITE: u8 = 118;
-    pub const RWRITE: u8 = 119;
-    pub const TCLUNK: u8 = 120;
-    pub const RCLUNK: u8 = 121;
-    pub const TREMOVE: u8 = 122;
-    pub const RREMOVE: u8 = 123;
-    pub const TSTAT: u8 = 124;
-    pub const RSTAT: u8 = 125;
-    pub const TWSTAT: u8 = 126;
-    pub const RWSTAT: u8 = 127;
-}
-
 /// A file's server-unique identity: `type[1] vers[4] path[8]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Qid {
@@ -68,7 +37,34 @@ pub struct Qid {
     pub path: u64,
 }
 
-impl Qid {
+/// How one field of a message is read and written. Every field type of every message
+/// below implements it, so the `messages!` table at the end of this file is the whole codec.
+pub trait Field<'a>: Sized {
+    fn read(r: &mut Reader<'a>) -> Result<Self, Error>;
+    fn write(&self, w: &mut Writer<'_>) -> Result<(), Error>;
+}
+
+macro_rules! int_fields {
+    ($($t:ident)*) => {$(
+        impl Field<'_> for $t {
+            fn read(r: &mut Reader<'_>) -> Result<Self, Error> { r.$t() }
+            fn write(&self, w: &mut Writer<'_>) -> Result<(), Error> { w.$t(*self) }
+        }
+    )*};
+}
+int_fields!(u8 u16 u32 u64);
+
+impl<'a> Field<'a> for &'a str {
+    fn read(r: &mut Reader<'a>) -> Result<Self, Error> { r.string() }
+    fn write(&self, w: &mut Writer<'_>) -> Result<(), Error> { w.string(self) }
+}
+
+impl<'a> Field<'a> for &'a [u8] {
+    fn read(r: &mut Reader<'a>) -> Result<Self, Error> { r.bytes() }
+    fn write(&self, w: &mut Writer<'_>) -> Result<(), Error> { w.bytes(self) }
+}
+
+impl Field<'_> for Qid {
     fn read(r: &mut Reader<'_>) -> Result<Self, Error> {
         Ok(Qid { kind: r.u8()?, version: r.u32()?, path: r.u64()? })
     }
@@ -100,8 +96,8 @@ pub struct Stat<'a> {
 }
 
 impl<'a> Stat<'a> {
-    /// Reads one stat, whose leading size must cover exactly its fields.
-    pub fn read(r: &mut Reader<'a>) -> Result<Self, Error> {
+    /// Reads one directory entry: a stat whose leading size covers exactly its fields.
+    pub fn read_entry(r: &mut Reader<'a>) -> Result<Self, Error> {
         let size = usize::from(r.u16()?);
         let mut s = Reader::new(r.take(size)?);
         let stat = Stat {
@@ -121,22 +117,26 @@ impl<'a> Stat<'a> {
         Ok(stat)
     }
 
-    /// Writes one stat with its leading size (so a directory read is these, concatenated).
-    pub fn write(&self, w: &mut Writer<'_>) -> Result<(), Error> {
-        let at = w.position();
-        w.u16(0)?;
-        w.u16(self.kind)?;
-        w.u32(self.dev)?;
-        self.qid.write(w)?;
-        w.u32(self.mode)?;
-        w.u32(self.atime)?;
-        w.u32(self.mtime)?;
-        w.u64(self.length)?;
-        w.string(self.name)?;
-        w.string(self.uid)?;
-        w.string(self.gid)?;
-        w.string(self.muid)?;
-        patch_len16(w, at)
+    /// Writes one directory entry with its leading size (a directory read is these,
+    /// concatenated). Atomic: an entry that does not fit leaves the writer unchanged, so a
+    /// server can fill a read with whole entries until one fails.
+    pub fn write_entry(&self, w: &mut Writer<'_>) -> Result<(), Error> {
+        w.atomic(|w| {
+            let at = w.position();
+            w.u16(0)?;
+            w.u16(self.kind)?;
+            w.u32(self.dev)?;
+            self.qid.write(w)?;
+            w.u32(self.mode)?;
+            w.u32(self.atime)?;
+            w.u32(self.mtime)?;
+            w.u64(self.length)?;
+            w.string(self.name)?;
+            w.string(self.uid)?;
+            w.string(self.gid)?;
+            w.string(self.muid)?;
+            patch_len16(w, at)
+        })
     }
 }
 
@@ -144,23 +144,28 @@ impl<'a> Stat<'a> {
 fn patch_len16(w: &mut Writer<'_>, at: usize) -> Result<(), Error> {
     let start = at.checked_add(2).ok_or(Error::TooLarge)?;
     let len = w.position().checked_sub(start).ok_or(Error::TooLarge)?;
-    w.patch_u16(at, u16::try_from(len).map_err(|_| Error::TooLarge)?)
+    w.patch(at, &u16::try_from(len).map_err(|_| Error::TooLarge)?.to_le_bytes())
 }
 
-/// `stat[n]` in `Rstat` and `Twstat`: a `u16` count, then one stat of exactly that many bytes.
-fn read_stat_field<'a>(r: &mut Reader<'a>) -> Result<Stat<'a>, Error> {
-    let n = usize::from(r.u16()?);
-    let mut s = Reader::new(r.take(n)?);
-    let stat = Stat::read(&mut s)?;
-    s.finish()?;
-    Ok(stat)
-}
+/// As a message field (`stat[n]` in `Rstat` and `Twstat`): a `u16` count, then one stat of
+/// exactly that many bytes. In directory data a stat has no such count: [`Stat::read_entry`].
+impl<'a> Field<'a> for Stat<'a> {
+    fn read(r: &mut Reader<'a>) -> Result<Self, Error> {
+        let n = usize::from(r.u16()?);
+        let mut s = Reader::new(r.take(n)?);
+        let stat = Stat::read_entry(&mut s)?;
+        s.finish()?;
+        Ok(stat)
+    }
 
-fn write_stat_field(w: &mut Writer<'_>, stat: &Stat<'_>) -> Result<(), Error> {
-    let at = w.position();
-    w.u16(0)?;
-    stat.write(w)?;
-    patch_len16(w, at)
+    fn write(&self, w: &mut Writer<'_>) -> Result<(), Error> {
+        w.atomic(|w| {
+            let at = w.position();
+            w.u16(0)?;
+            self.write_entry(w)?;
+            patch_len16(w, at)
+        })
+    }
 }
 
 /// The stats in the data of a directory read, one after another. Iteration stops after the
@@ -184,14 +189,17 @@ impl<'a> Iterator for Stats<'a> {
         if self.failed || self.r.rest().is_empty() {
             return None;
         }
-        let stat = Stat::read(&mut self.r);
+        let stat = Stat::read_entry(&mut self.r);
         self.failed = stat.is_err();
         Some(stat)
     }
 }
 
 /// The names of a `Twalk`: at most [`MAXWELEM`].
-#[derive(Debug, Clone, Copy)]
+///
+/// Equality is derived: sound because the slots past `len` are always `""` (both `new` and
+/// `read` start from an all-default array and the fields are private).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Names<'a> {
     len: usize,
     items: [&'a str; MAXWELEM],
@@ -209,15 +217,27 @@ impl<'a> Names<'a> {
     }
 }
 
-impl PartialEq for Names<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        self.as_slice() == other.as_slice()
+/// `nwname[2] nwname*(wname[s])`.
+impl<'a> Field<'a> for Names<'a> {
+    fn read(r: &mut Reader<'a>) -> Result<Self, Error> {
+        let n = usize::from(r.u16()?);
+        let mut items = [""; MAXWELEM];
+        for name in items.get_mut(..n).ok_or(Error::TooManyElements)? {
+            *name = r.string()?;
+        }
+        Ok(Names { len: n, items })
+    }
+
+    fn write(&self, w: &mut Writer<'_>) -> Result<(), Error> {
+        w.u16(u16::try_from(self.len).map_err(|_| Error::TooManyElements)?)?;
+        self.as_slice().iter().try_for_each(|name| w.string(name))
     }
 }
-impl Eq for Names<'_> {}
 
 /// The qids of an `Rwalk`: at most [`MAXWELEM`].
-#[derive(Debug, Clone, Copy)]
+///
+/// Equality is derived: sound because the slots past `len` are always `Qid::default()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Qids {
     len: usize,
     items: [Qid; MAXWELEM],
@@ -235,78 +255,20 @@ impl Qids {
     }
 }
 
-impl PartialEq for Qids {
-    fn eq(&self, other: &Self) -> bool {
-        self.as_slice() == other.as_slice()
-    }
-}
-impl Eq for Qids {}
-
-/// One 9P2000 message body; field names follow intro(5).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Body<'a> {
-    Tversion { msize: u32, version: &'a str },
-    Rversion { msize: u32, version: &'a str },
-    Tauth { afid: u32, uname: &'a str, aname: &'a str },
-    Rauth { aqid: Qid },
-    Tattach { fid: u32, afid: u32, uname: &'a str, aname: &'a str },
-    Rattach { qid: Qid },
-    Rerror { ename: &'a str },
-    Tflush { oldtag: u16 },
-    Rflush,
-    Twalk { fid: u32, newfid: u32, wnames: Names<'a> },
-    Rwalk { qids: Qids },
-    Topen { fid: u32, mode: u8 },
-    Ropen { qid: Qid, iounit: u32 },
-    Tcreate { fid: u32, name: &'a str, perm: u32, mode: u8 },
-    Rcreate { qid: Qid, iounit: u32 },
-    Tread { fid: u32, offset: u64, count: u32 },
-    Rread { data: &'a [u8] },
-    Twrite { fid: u32, offset: u64, data: &'a [u8] },
-    Rwrite { count: u32 },
-    Tclunk { fid: u32 },
-    Rclunk,
-    Tremove { fid: u32 },
-    Rremove,
-    Tstat { fid: u32 },
-    Rstat { stat: Stat<'a> },
-    Twstat { fid: u32, stat: Stat<'a> },
-    Rwstat,
-}
-
-impl Body<'_> {
-    /// The message's type byte.
-    pub fn kind(&self) -> u8 {
-        use kind::*;
-        match self {
-            Body::Tversion { .. } => TVERSION,
-            Body::Rversion { .. } => RVERSION,
-            Body::Tauth { .. } => TAUTH,
-            Body::Rauth { .. } => RAUTH,
-            Body::Tattach { .. } => TATTACH,
-            Body::Rattach { .. } => RATTACH,
-            Body::Rerror { .. } => RERROR,
-            Body::Tflush { .. } => TFLUSH,
-            Body::Rflush => RFLUSH,
-            Body::Twalk { .. } => TWALK,
-            Body::Rwalk { .. } => RWALK,
-            Body::Topen { .. } => TOPEN,
-            Body::Ropen { .. } => ROPEN,
-            Body::Tcreate { .. } => TCREATE,
-            Body::Rcreate { .. } => RCREATE,
-            Body::Tread { .. } => TREAD,
-            Body::Rread { .. } => RREAD,
-            Body::Twrite { .. } => TWRITE,
-            Body::Rwrite { .. } => RWRITE,
-            Body::Tclunk { .. } => TCLUNK,
-            Body::Rclunk => RCLUNK,
-            Body::Tremove { .. } => TREMOVE,
-            Body::Rremove => RREMOVE,
-            Body::Tstat { .. } => TSTAT,
-            Body::Rstat { .. } => RSTAT,
-            Body::Twstat { .. } => TWSTAT,
-            Body::Rwstat => RWSTAT,
+/// `nwqid[2] nwqid*(qid[13])`.
+impl Field<'_> for Qids {
+    fn read(r: &mut Reader<'_>) -> Result<Self, Error> {
+        let n = usize::from(r.u16()?);
+        let mut items = [Qid::default(); MAXWELEM];
+        for qid in items.get_mut(..n).ok_or(Error::TooManyElements)? {
+            *qid = Qid::read(r)?;
         }
+        Ok(Qids { len: n, items })
+    }
+
+    fn write(&self, w: &mut Writer<'_>) -> Result<(), Error> {
+        w.u16(u16::try_from(self.len).map_err(|_| Error::TooManyElements)?)?;
+        self.as_slice().iter().try_for_each(|qid| qid.write(w))
     }
 }
 
@@ -331,158 +293,92 @@ pub fn message_size(buf: &[u8]) -> Result<usize, Error> {
     Ok(size)
 }
 
-impl<'a> Message<'a> {
-    /// Decodes the message at the front of `buf` (see [`message_size`]).
-    pub fn decode(buf: &'a [u8]) -> Result<Self, Error> {
-        use kind::*;
-        let size = message_size(buf)?;
-        let mut r = Reader::new(buf.get(4..size).ok_or(Error::Short)?);
-        let kind = r.u8()?;
-        let tag = r.u16()?;
-        let body = match kind {
-            TVERSION => Body::Tversion { msize: r.u32()?, version: r.string()? },
-            RVERSION => Body::Rversion { msize: r.u32()?, version: r.string()? },
-            TAUTH => Body::Tauth { afid: r.u32()?, uname: r.string()?, aname: r.string()? },
-            RAUTH => Body::Rauth { aqid: Qid::read(&mut r)? },
-            TATTACH => Body::Tattach {
-                fid: r.u32()?,
-                afid: r.u32()?,
-                uname: r.string()?,
-                aname: r.string()?,
-            },
-            RATTACH => Body::Rattach { qid: Qid::read(&mut r)? },
-            RERROR => Body::Rerror { ename: r.string()? },
-            TFLUSH => Body::Tflush { oldtag: r.u16()? },
-            RFLUSH => Body::Rflush,
-            TWALK => {
-                let fid = r.u32()?;
-                let newfid = r.u32()?;
-                let n = usize::from(r.u16()?);
-                if n > MAXWELEM {
-                    return Err(Error::TooManyElements);
-                }
-                let mut names = [""; MAXWELEM];
-                for name in names.iter_mut().take(n) {
-                    *name = r.string()?;
-                }
-                Body::Twalk { fid, newfid, wnames: Names { len: n, items: names } }
-            }
-            RWALK => {
-                let n = usize::from(r.u16()?);
-                if n > MAXWELEM {
-                    return Err(Error::TooManyElements);
-                }
-                let mut qids = [Qid::default(); MAXWELEM];
-                for qid in qids.iter_mut().take(n) {
-                    *qid = Qid::read(&mut r)?;
-                }
-                Body::Rwalk { qids: Qids { len: n, items: qids } }
-            }
-            TOPEN => Body::Topen { fid: r.u32()?, mode: r.u8()? },
-            ROPEN => Body::Ropen { qid: Qid::read(&mut r)?, iounit: r.u32()? },
-            TCREATE => Body::Tcreate { fid: r.u32()?, name: r.string()?, perm: r.u32()?, mode: r.u8()? },
-            RCREATE => Body::Rcreate { qid: Qid::read(&mut r)?, iounit: r.u32()? },
-            TREAD => Body::Tread { fid: r.u32()?, offset: r.u64()?, count: r.u32()? },
-            RREAD => Body::Rread { data: r.bytes()? },
-            TWRITE => Body::Twrite { fid: r.u32()?, offset: r.u64()?, data: r.bytes()? },
-            RWRITE => Body::Rwrite { count: r.u32()? },
-            TCLUNK => Body::Tclunk { fid: r.u32()? },
-            RCLUNK => Body::Rclunk,
-            TREMOVE => Body::Tremove { fid: r.u32()? },
-            RREMOVE => Body::Rremove,
-            TSTAT => Body::Tstat { fid: r.u32()? },
-            RSTAT => Body::Rstat { stat: read_stat_field(&mut r)? },
-            TWSTAT => Body::Twstat { fid: r.u32()?, stat: read_stat_field(&mut r)? },
-            RWSTAT => Body::Rwstat,
-            _ => return Err(Error::BadType),
-        };
-        r.finish()?;
-        Ok(Message { tag, body })
-    }
+/// Defines [`Body`] and the codec from one table of `Name = type { field: Type, ... }`.
+/// Written out by hand, decode and encode are two 27-arm matches that must agree field for
+/// field; generated from one table, decoding reads the fields in order and encoding writes
+/// them in order, so they cannot disagree and `encode(decode(b)) == b` holds by construction.
+macro_rules! messages {
+    ($($(#[$doc:meta])* $name:ident = $kind:literal $({ $($field:ident : $ty:ty),* })?),* $(,)?) => {
+        /// One 9P2000 message body; field names follow intro(5).
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Body<'a> {
+            $($(#[$doc])* $name $({ $($field: $ty),* })?),*
+        }
 
-    /// Encodes into the front of `out` and returns the message's size. Fails with
-    /// `TooLarge` if `out` is too small or the message would exceed [`MSIZE`].
-    pub fn encode(&self, out: &mut [u8]) -> Result<usize, Error> {
-        let mut w = Writer::new(out);
-        w.u32(0)?; // size, patched below
-        w.u8(self.body.kind())?;
-        w.u16(self.tag)?;
-        match &self.body {
-            Body::Tversion { msize, version } | Body::Rversion { msize, version } => {
-                w.u32(*msize)?;
-                w.string(version)?;
-            }
-            Body::Tauth { afid, uname, aname } => {
-                w.u32(*afid)?;
-                w.string(uname)?;
-                w.string(aname)?;
-            }
-            Body::Rauth { aqid: qid } | Body::Rattach { qid } => qid.write(&mut w)?,
-            Body::Tattach { fid, afid, uname, aname } => {
-                w.u32(*fid)?;
-                w.u32(*afid)?;
-                w.string(uname)?;
-                w.string(aname)?;
-            }
-            Body::Rerror { ename } => w.string(ename)?,
-            Body::Tflush { oldtag } => w.u16(*oldtag)?,
-            Body::Rflush | Body::Rclunk | Body::Rremove | Body::Rwstat => {}
-            Body::Twalk { fid, newfid, wnames } => {
-                w.u32(*fid)?;
-                w.u32(*newfid)?;
-                let names = wnames.as_slice();
-                w.u16(u16::try_from(names.len()).map_err(|_| Error::TooManyElements)?)?;
-                for name in names {
-                    w.string(name)?;
-                }
-            }
-            Body::Rwalk { qids } => {
-                let qids = qids.as_slice();
-                w.u16(u16::try_from(qids.len()).map_err(|_| Error::TooManyElements)?)?;
-                for qid in qids {
-                    qid.write(&mut w)?;
-                }
-            }
-            Body::Topen { fid, mode } => {
-                w.u32(*fid)?;
-                w.u8(*mode)?;
-            }
-            Body::Ropen { qid, iounit } | Body::Rcreate { qid, iounit } => {
-                qid.write(&mut w)?;
-                w.u32(*iounit)?;
-            }
-            Body::Tcreate { fid, name, perm, mode } => {
-                w.u32(*fid)?;
-                w.string(name)?;
-                w.u32(*perm)?;
-                w.u8(*mode)?;
-            }
-            Body::Tread { fid, offset, count } => {
-                w.u32(*fid)?;
-                w.u64(*offset)?;
-                w.u32(*count)?;
-            }
-            Body::Rread { data } => w.bytes(data)?,
-            Body::Twrite { fid, offset, data } => {
-                w.u32(*fid)?;
-                w.u64(*offset)?;
-                w.bytes(data)?;
-            }
-            Body::Rwrite { count } => w.u32(*count)?,
-            Body::Tclunk { fid } | Body::Tremove { fid } | Body::Tstat { fid } => w.u32(*fid)?,
-            Body::Rstat { stat } => write_stat_field(&mut w, stat)?,
-            Body::Twstat { fid, stat } => {
-                w.u32(*fid)?;
-                write_stat_field(&mut w, stat)?;
+        impl Body<'_> {
+            /// The message's type byte.
+            pub fn kind(&self) -> u8 {
+                match self { $(Body::$name { .. } => $kind),* }
             }
         }
-        let size = w.position();
-        if size > MSIZE {
-            return Err(Error::TooLarge);
+
+        impl<'a> Message<'a> {
+            /// Decodes the message at the front of `buf` (see [`message_size`]).
+            pub fn decode(buf: &'a [u8]) -> Result<Self, Error> {
+                let size = message_size(buf)?;
+                let mut r = Reader::new(buf.get(4..size).ok_or(Error::Short)?);
+                let kind = r.u8()?;
+                let tag = r.u16()?;
+                let body = match kind {
+                    $($kind => Body::$name $({ $($field: Field::read(&mut r)?),* })?,)*
+                    _ => return Err(Error::BadType),
+                };
+                r.finish()?;
+                Ok(Message { tag, body })
+            }
+
+            /// Encodes into the front of `out` and returns the message's size. Fails with
+            /// `TooLarge` if `out` is too small or the message would exceed [`MSIZE`]; a
+            /// failed encode leaves the bytes it touched zeroed, never half a message.
+            pub fn encode(&self, out: &mut [u8]) -> Result<usize, Error> {
+                Writer::new(out).atomic(|w| {
+                    w.u32(0)?; // size, patched below
+                    w.u8(self.body.kind())?;
+                    w.u16(self.tag)?;
+                    match &self.body {
+                        $(Body::$name $({ $($field),* })? => { $($(Field::write($field, w)?;)*)? })*
+                    }
+                    let size = w.position();
+                    if size > MSIZE {
+                        return Err(Error::TooLarge);
+                    }
+                    w.patch(0, &u32::try_from(size).map_err(|_| Error::TooLarge)?.to_le_bytes())?;
+                    Ok(size)
+                })
+            }
         }
-        w.patch_u32(0, u32::try_from(size).map_err(|_| Error::TooLarge)?)?;
-        Ok(size)
-    }
+    };
+}
+
+messages! {
+    Tversion = 100 { msize: u32, version: &'a str },
+    Rversion = 101 { msize: u32, version: &'a str },
+    Tauth = 102 { afid: u32, uname: &'a str, aname: &'a str },
+    Rauth = 103 { aqid: Qid },
+    Tattach = 104 { fid: u32, afid: u32, uname: &'a str, aname: &'a str },
+    Rattach = 105 { qid: Qid },
+    /// `Terror` (106) is not a message and is refused.
+    Rerror = 107 { ename: &'a str },
+    Tflush = 108 { oldtag: u16 },
+    Rflush = 109,
+    Twalk = 110 { fid: u32, newfid: u32, wnames: Names<'a> },
+    Rwalk = 111 { qids: Qids },
+    Topen = 112 { fid: u32, mode: u8 },
+    Ropen = 113 { qid: Qid, iounit: u32 },
+    Tcreate = 114 { fid: u32, name: &'a str, perm: u32, mode: u8 },
+    Rcreate = 115 { qid: Qid, iounit: u32 },
+    Tread = 116 { fid: u32, offset: u64, count: u32 },
+    Rread = 117 { data: &'a [u8] },
+    Twrite = 118 { fid: u32, offset: u64, data: &'a [u8] },
+    Rwrite = 119 { count: u32 },
+    Tclunk = 120 { fid: u32 },
+    Rclunk = 121,
+    Tremove = 122 { fid: u32 },
+    Rremove = 123,
+    Tstat = 124 { fid: u32 },
+    Rstat = 125 { stat: Stat<'a> },
+    Twstat = 126 { fid: u32, stat: Stat<'a> },
+    Rwstat = 127,
 }
 
 #[cfg(test)]
@@ -583,6 +479,31 @@ mod tests {
         let m = Message { tag: 0, body: Body::Rread { data: &data[..MSIZE - 11] } };
         assert_eq!(m.encode(&mut out), Ok(MSIZE));
         assert_eq!(m.encode(&mut out[..100]), Err(Error::TooLarge));
+        assert!(out[..100].iter().all(|&b| b == 0), "a failed encode leaves no partial message");
+    }
+
+    #[test]
+    fn a_directory_entry_that_does_not_fit_is_not_written() {
+        let stat = Stat {
+            kind: 0,
+            dev: 0,
+            qid: Qid::default(),
+            mode: 0,
+            atime: 0,
+            mtime: 0,
+            length: 0,
+            name: "hello",
+            uid: "u",
+            gid: "g",
+            muid: "m",
+        };
+        let mut buf = [0u8; 77]; // one entry is 57 bytes: the second fails midway
+        let mut w = Writer::new(&mut buf);
+        stat.write_entry(&mut w).unwrap();
+        assert_eq!(stat.write_entry(&mut w), Err(Error::TooLarge));
+        assert_eq!(w.position(), 57);
+        assert_eq!(stats(&buf[..57]).count(), 1);
+        assert!(buf[57..].iter().all(|&b| b == 0));
     }
 
     #[test]
@@ -602,8 +523,8 @@ mod tests {
         };
         let mut buf = [0u8; 256];
         let mut w = Writer::new(&mut buf);
-        stat.write(&mut w).unwrap();
-        stat.write(&mut w).unwrap();
+        stat.write_entry(&mut w).unwrap();
+        stat.write_entry(&mut w).unwrap();
         let n = w.position();
         let all: Result<alloc::vec::Vec<_>, _> = stats(&buf[..n]).collect();
         assert_eq!(all.unwrap(), [stat, stat]);

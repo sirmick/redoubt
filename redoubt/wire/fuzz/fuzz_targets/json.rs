@@ -7,7 +7,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use redoubt_wire::json::{self, ErrorKind, Value};
+use redoubt_wire::json::{self, ErrorKind, SchemaError, SchemaKind, Value};
 
 fn same(ours: &Value<'_>, theirs: &serde_json::Value) -> bool {
     use serde_json::Value as S;
@@ -27,17 +27,12 @@ fn same(ours: &Value<'_>, theirs: &serde_json::Value) -> bool {
 fn check_members(v: &Value<'_>) {
     match v {
         Value::Object(members) => {
-            let mut m = v.members().unwrap();
-            for (name, _) in members {
-                assert!(m.optional(name).is_some());
-            }
-            assert_eq!(m.finish(), Ok(()));
+            let take_all = v.object(|m| members.iter().try_for_each(|(name, _)| m.optional(name, |_| Ok(())).map(drop)));
+            assert_eq!(take_all, Ok(()));
             if let Some((skipped, _)) = members.first() {
-                let mut m = v.members().unwrap();
-                for (name, _) in members.iter().skip(1) {
-                    m.optional(name);
-                }
-                assert_eq!(m.finish(), Err(json::SchemaError::Unknown(skipped.to_string())));
+                let skip_first = v.object(|m| members.iter().skip(1).try_for_each(|(name, _)| m.optional(name, |_| Ok(())).map(drop)));
+                let unknown = SchemaError { path: skipped.to_string(), kind: SchemaKind::Unknown };
+                assert_eq!(skip_first, Err(unknown));
             }
             members.iter().for_each(|(_, v)| check_members(v));
         }
@@ -54,7 +49,7 @@ fuzz_target!(|data: &[u8]| {
             assert!(same(&ours, &theirs), "values differ: {ours:?} vs {theirs:?}");
             check_members(&ours);
             if let Value::Str(s) = &ours {
-                assert_eq!(ours.as_u64(), s.parse::<u64>().ok().filter(|_| !s.starts_with(['+', '0']) || s.as_ref() == "0"));
+                assert_eq!(ours.u64().ok(), s.parse::<u64>().ok().filter(|_| !s.starts_with(['+', '0']) || s.as_ref() == "0"));
             }
         }
         Err(e) => {

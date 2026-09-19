@@ -1,22 +1,42 @@
 //! Strict JSON for files people write (WIRE.md): RFC 8259 syntax under the I-JSON profile
 //! (RFC 7493), one parser for the boot manifest, package manifests and configuration.
 //!
-//! The profile, as enforced here:
-//! - the file is at most [`MAX_LEN`] bytes of UTF-8, with no byte-order mark;
-//! - containers nest at most [`MAX_DEPTH`] deep (the top-level value is depth 1);
-//! - no object has two members with the same name (compared after unescaping);
-//! - strings contain no surrogates (so no unpaired `\uD800` escapes) and no Unicode
-//!   noncharacters (RFC 7493 section 2.1);
-//! - numbers are integers of magnitude at most 2^53 - 1 (the I-JSON safe range); larger
-//!   integers (ids, accounts, labels, addresses) are written as decimal strings and read
-//!   with [`Value::as_u64`]. Fractions, exponents and `-0` are refused: no file we read has a
-//!   use for them, so the parser has no floating point;
-//! - unknown members are errors: [`Value::members`] returns a [`Members`] reader that a
-//!   typed decoder takes fields from and then [`Members::finish`]es, which fails on any
-//!   member it did not take.
+//! WIRE.md's rules, as enforced here:
+//! - UTF-8 only;
+//! - no object has two members with the same name (compared after unescaping, so `"a"` and
+//!   `"\u0061"` are the same name);
+//! - integers beyond 2^53 are written as strings: a JSON number must lie in
+//!   `-(2^53 - 1)..=2^53 - 1` ([`MAX_SAFE_INT`], I-JSON's safe range; 2^53 itself is
+//!   refused), and [`Value::u64`] reads a decimal string up to `u64::MAX`;
+//! - nesting at most [`MAX_DEPTH`] (32) deep, counting the top-level container as depth 1;
+//! - a file at most [`MAX_LEN`] (64 KiB);
+//! - unknown members are errors: objects are decoded only through [`Value::object`], which
+//!   refuses any member the decoder did not take.
 //!
-//! The parser is recursive descent; recursion is bounded by `MAX_DEPTH`, and every loop
-//! consumes input, so time is linear in the input (plus a sort per object for duplicates).
+//! Stricter than WIRE.md states (each is also I-JSON's advice or removes a second spelling):
+//! - no byte-order mark;
+//! - no surrogates (so no unpaired `\uD800` escape) and no Unicode noncharacters
+//!   (U+FDD0..U+FDEF, U+xFFFE, U+xFFFF), escaped or raw (RFC 7493 section 2.1);
+//! - numbers are integers: fractions, exponents and `-0` are refused, so the parser has no
+//!   floating point and 0 has one spelling;
+//! - a small integer may be a number or a decimal string (`4096` or `"4096"`, as INIT.md's
+//!   example writes it); [`Value::u64`] accepts both, with no sign or leading zeros.
+//!
+//! Errors from typed decoding ([`SchemaError`]) name where they happened, e.g.
+//! `servers[2].budget.pages`.
+//!
+//! Cost, for a caller that must size memory before parsing (`init` parses the boot manifest
+//! before anything else runs; tests/json_limits.rs holds these bounds):
+//! - time is linear in the input: every loop consumes input, plus a sort per object to find
+//!   duplicate names in O(n log n);
+//! - heap: at most 32 bytes per input byte, so 2 MiB for a 64 KiB file. The worst case is a
+//!   flat array of one-byte values (`[0,0,...]`): each 2 input bytes become a 32-byte
+//!   [`Value`], and growing the `Vec` briefly holds the old and new buffers (measured peak
+//!   24x, 1.5 MiB);
+//! - stack: the parser recurses once per container level, bounded by `MAX_DEPTH`. The
+//!   deepest file needs about 56 KiB unoptimised (roughly 1.7 KiB per level) and under
+//!   16 KiB optimised. Input nested deeper fails with `TooDeep` at level 33, before using
+//!   more.
 
 use alloc::borrow::Cow;
 use alloc::string::String;
@@ -346,68 +366,95 @@ fn is_noncharacter(c: char) -> bool {
     (0xfdd0..=0xfdef).contains(&c) || c & 0xfffe == 0xfffe
 }
 
-/// Why a parsed value does not fit the structure a decoder expects.
+/// Why a parsed value does not fit the structure a decoder expects, and where: `path` names
+/// the value from the top, e.g. `servers[2].budget.pages` (empty for the top-level value).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SchemaError {
-    /// A required member is absent.
-    Missing(String),
-    /// A member the decoder does not know (WIRE.md: unknown members are errors).
-    Unknown(String),
-    /// A value of the wrong type or out of range; names the member, or `""` for the value
-    /// the decoder was handed.
-    WrongType(String),
+pub struct SchemaError {
+    pub path: String,
+    pub kind: SchemaKind,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchemaKind {
+    /// A required member is absent (`path` ends with its name).
+    Missing,
+    /// A member the decoder does not know (WIRE.md: unknown members are errors).
+    Unknown,
+    /// A value of the wrong type, or an integer out of range.
+    WrongType,
+}
+
+impl SchemaError {
+    fn new(kind: SchemaKind) -> Self {
+        SchemaError { path: String::new(), kind }
+    }
+
+    /// Prefixes the path with the member or index the error happened inside.
+    fn inside(mut self, segment: &str) -> Self {
+        let sep = if self.path.is_empty() || self.path.starts_with('[') { "" } else { "." };
+        self.path = alloc::format!("{segment}{sep}{}", self.path);
+        self
+    }
+}
+
+/// Typed decoding, for turning a parsed file into a structure. Every accessor fails with
+/// `WrongType` on a value of another type; objects are read only through [`Value::object`],
+/// which refuses members the decoder did not take, so an unknown member cannot be ignored
+/// by forgetting a check.
 impl<'a> Value<'a> {
-    pub fn as_str(&self) -> Option<&str> {
+    pub fn str(&self) -> Result<&str, SchemaError> {
         match self {
-            Value::Str(s) => Some(s),
-            _ => None,
+            Value::Str(s) => Ok(s),
+            _ => Err(SchemaError::new(SchemaKind::WrongType)),
         }
     }
 
-    pub fn as_bool(&self) -> Option<bool> {
+    pub fn bool(&self) -> Result<bool, SchemaError> {
         match self {
-            Value::Bool(b) => Some(*b),
-            _ => None,
-        }
-    }
-
-    pub fn as_array(&self) -> Option<&[Value<'a>]> {
-        match self {
-            Value::Array(items) => Some(items),
-            _ => None,
+            Value::Bool(b) => Ok(*b),
+            _ => Err(SchemaError::new(SchemaKind::WrongType)),
         }
     }
 
     /// A non-negative integer: a JSON number, or a decimal string (how integers beyond
     /// 2^53 are written) with no sign, spaces or leading zeros, up to `u64::MAX`.
-    pub fn as_u64(&self) -> Option<u64> {
-        match self {
+    pub fn u64(&self) -> Result<u64, SchemaError> {
+        let n = match self {
             Value::Int(n) => u64::try_from(*n).ok(),
             Value::Str(s) => {
                 let canonical = s == "0" || (!s.starts_with('0') && !s.is_empty());
-                if !canonical || !s.bytes().all(|b| b.is_ascii_digit()) {
-                    return None;
-                }
-                // Digits only, so the only failure left is overflow.
-                s.parse().ok()
+                // Digits only, so the only failure left for `parse` is overflow.
+                (canonical && s.bytes().all(|b| b.is_ascii_digit())).then(|| s.parse().ok()).flatten()
             }
             _ => None,
-        }
+        };
+        n.ok_or(SchemaError::new(SchemaKind::WrongType))
     }
 
-    /// The members of an object, for a decoder to take one by one.
-    pub fn members(&self) -> Result<Members<'_, 'a>, SchemaError> {
-        match self {
-            Value::Object(members) => Ok(Members { members, taken: alloc::vec![false; members.len()] }),
-            _ => Err(SchemaError::WrongType(String::new())),
+    /// Decodes each item of an array with `decode`.
+    pub fn items<T>(&self, mut decode: impl FnMut(&Value<'a>) -> Result<T, SchemaError>) -> Result<Vec<T>, SchemaError> {
+        let Value::Array(items) = self else { return Err(SchemaError::new(SchemaKind::WrongType)) };
+        let mut out = Vec::with_capacity(items.len());
+        for (i, item) in items.iter().enumerate() {
+            out.push(decode(item).map_err(|e| e.inside(&alloc::format!("[{i}]")))?);
+        }
+        Ok(out)
+    }
+
+    /// Decodes an object: `decode` takes the members it knows from [`Members`]; afterwards
+    /// any member it did not take is an `Unknown` error.
+    pub fn object<'v, T>(&'v self, decode: impl FnOnce(&mut Members<'v, 'a>) -> Result<T, SchemaError>) -> Result<T, SchemaError> {
+        let Value::Object(members) = self else { return Err(SchemaError::new(SchemaKind::WrongType)) };
+        let mut m = Members { members, taken: alloc::vec![false; members.len()] };
+        let value = decode(&mut m)?;
+        match m.members.iter().zip(&m.taken).find(|(_, taken)| !**taken) {
+            Some(((name, _), _)) => Err(SchemaError::new(SchemaKind::Unknown).inside(name)),
+            None => Ok(value),
         }
     }
 }
 
-/// An object being decoded into a typed structure: take each known member, then
-/// [`finish`](Members::finish), which refuses the object if any member was not taken.
+/// The members of an object being decoded by [`Value::object`].
 #[derive(Debug)]
 pub struct Members<'v, 'a> {
     members: &'v [(Cow<'a, str>, Value<'a>)],
@@ -415,27 +462,19 @@ pub struct Members<'v, 'a> {
 }
 
 impl<'v, 'a> Members<'v, 'a> {
-    /// The member `name`, if present.
-    pub fn optional(&mut self, name: &str) -> Option<&'v Value<'a>> {
+    /// Decodes the member `name` with `decode`, if present.
+    pub fn optional<T>(&mut self, name: &str, decode: impl FnOnce(&'v Value<'a>) -> Result<T, SchemaError>) -> Result<Option<T>, SchemaError> {
         let members = self.members;
-        let (i, (_, value)) = members.iter().enumerate().find(|(_, (n, _))| n == name)?;
+        let Some((i, (_, value))) = members.iter().enumerate().find(|(_, (n, _))| n == name) else { return Ok(None) };
         if let Some(t) = self.taken.get_mut(i) {
             *t = true;
         }
-        Some(value)
+        decode(value).map(Some).map_err(|e| e.inside(name))
     }
 
-    /// The member `name`, which must be present.
-    pub fn required(&mut self, name: &str) -> Result<&'v Value<'a>, SchemaError> {
-        self.optional(name).ok_or_else(|| SchemaError::Missing(name.into()))
-    }
-
-    /// Succeeds only if every member was taken.
-    pub fn finish(self) -> Result<(), SchemaError> {
-        match self.members.iter().zip(&self.taken).find(|(_, taken)| !**taken) {
-            Some(((name, _), _)) => Err(SchemaError::Unknown(name.as_ref().into())),
-            None => Ok(()),
-        }
+    /// Decodes the member `name`, which must be present, with `decode`.
+    pub fn required<T>(&mut self, name: &str, decode: impl FnOnce(&'v Value<'a>) -> Result<T, SchemaError>) -> Result<T, SchemaError> {
+        self.optional(name, decode)?.ok_or_else(|| SchemaError::new(SchemaKind::Missing).inside(name))
     }
 }
 
@@ -496,9 +535,10 @@ mod tests {
 
     #[test]
     fn big_integers_as_strings() {
-        let v = parse(br#"["18446744073709551615", "0", 7, "007", "-1", " 1", "18446744073709551616", -1]"#).unwrap();
-        let got: Vec<Option<u64>> = v.as_array().unwrap().iter().map(Value::as_u64).collect();
-        assert_eq!(got, [Some(u64::MAX), Some(0), Some(7), None, None, None, None, None]);
+        let v = parse(br#"["18446744073709551615", "0", 7, "007", "-1", " 1", "18446744073709551616", -1, true]"#).unwrap();
+        let Value::Array(items) = &v else { panic!() };
+        let got: Vec<Option<u64>> = items.iter().map(|v| v.u64().ok()).collect();
+        assert_eq!(got, [Some(u64::MAX), Some(0), Some(7), None, None, None, None, None, None]);
     }
 
     #[test]
@@ -556,29 +596,61 @@ mod tests {
         assert_eq!(kind("{} x"), ErrorKind::Trailing);
     }
 
+    fn err(path: &str, kind: SchemaKind) -> SchemaError {
+        SchemaError { path: path.into(), kind }
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct Budget {
+        pages: u64,
+        processes: u64,
+        weight: u64,
+    }
+
+    fn budget(v: &Value<'_>) -> Result<Budget, SchemaError> {
+        v.object(|m| {
+            Ok(Budget {
+                pages: m.required("pages", Value::u64)?,
+                processes: m.required("processes", Value::u64)?,
+                weight: m.required("weight", Value::u64)?,
+            })
+        })
+    }
+
+    /// Decodes a server entry the way `init` would, taking the members in `known`.
+    fn server(v: &Value<'_>, known: &[&str]) -> Result<Budget, SchemaError> {
+        v.object(|m| {
+            for name in known {
+                m.optional(name, |_| Ok(()))?;
+            }
+            m.required("budget", budget)
+        })
+    }
+
     #[test]
     fn unknown_members_are_errors() {
-        // The manifest example from INIT.md, decoded the way `init` would decode a server.
-        let v = parse(
-            br#"{ "name": "fsd:data", "program": "fsd", "volume": "data",
-                  "budget": { "pages": "4096", "processes": "1", "weight": "100" },
-                  "receives": ["fsd:data"], "handed": ["blkd"] }"#,
-        )
-        .unwrap();
-        let mut m = v.members().unwrap();
-        assert_eq!(m.required("name").unwrap().as_str(), Some("fsd:data"));
-        let mut budget = m.required("budget").unwrap().members().unwrap();
-        assert_eq!(budget.required("pages").unwrap().as_u64(), Some(4096));
-        assert_eq!(budget.required("processes").unwrap().as_u64(), Some(1));
-        assert_eq!(budget.required("weight").unwrap().as_u64(), Some(100));
-        assert_eq!(budget.finish(), Ok(()));
-        assert!(m.optional("devices").is_none());
-        assert_eq!(m.required("args"), Err(SchemaError::Missing("args".into())));
-        m.required("program").unwrap();
-        m.required("receives").unwrap();
-        m.required("handed").unwrap();
-        // "volume" was never taken.
-        assert_eq!(m.finish(), Err(SchemaError::Unknown("volume".into())));
-        assert_eq!(Value::Int(1).members().err(), Some(SchemaError::WrongType(String::new())));
+        // The manifest example from INIT.md.
+        let text = br#"{ "name": "fsd:data", "program": "fsd", "volume": "data",
+                         "budget": { "pages": "4096", "processes": "1", "weight": "100" },
+                         "receives": ["fsd:data"], "handed": ["blkd"] }"#;
+        let v = parse(text).unwrap();
+        let all = ["name", "program", "volume", "receives", "handed"];
+        assert_eq!(server(&v, &all), Ok(Budget { pages: 4096, processes: 1, weight: 100 }));
+        // A member the decoder does not take is refused.
+        assert_eq!(server(&v, &all[1..]), Err(err("name", SchemaKind::Unknown)));
+    }
+
+    #[test]
+    fn schema_errors_name_the_path() {
+        let v = parse(br#"{"servers": [{"budget": {"pages": "1", "processes": "1", "weight": "x"}}]}"#).unwrap();
+        let servers = |v: &Value<'_>| v.object(|m| m.required("servers", |s| s.items(|s| server(s, &[]))));
+        assert_eq!(servers(&v), Err(err("servers[0].budget.weight", SchemaKind::WrongType)));
+        let v = parse(br#"{"servers": [{"budget": {"pages": "1", "processes": "1"}}]}"#).unwrap();
+        assert_eq!(servers(&v), Err(err("servers[0].budget.weight", SchemaKind::Missing)));
+        let v = parse(br#"{"servers": [{"budget": {"pages": "1", "processes": "1", "weight": "1", "cpu": 2}}]}"#).unwrap();
+        assert_eq!(servers(&v), Err(err("servers[0].budget.cpu", SchemaKind::Unknown)));
+        assert_eq!(servers(&Value::Int(1)), Err(err("", SchemaKind::WrongType)));
+        let v = parse(br#"{"servers": {}}"#).unwrap();
+        assert_eq!(servers(&v), Err(err("servers", SchemaKind::WrongType)));
     }
 }

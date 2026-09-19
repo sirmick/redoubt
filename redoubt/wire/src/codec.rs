@@ -154,18 +154,26 @@ impl<'a> Writer<'a> {
         self.put(b)
     }
 
-    /// Overwrites a `u16` written earlier at `at` (a size field known only at the end).
-    pub fn patch_u16(&mut self, at: usize, v: u16) -> Result<(), Error> {
-        let end = at.checked_add(2).ok_or(Error::TooLarge)?;
-        self.buf.get_mut(at..end).ok_or(Error::TooLarge)?.copy_from_slice(&v.to_le_bytes());
+    /// Overwrites bytes written earlier at `at` (a size field known only at the end).
+    pub fn patch(&mut self, at: usize, bytes: &[u8]) -> Result<(), Error> {
+        let end = at.checked_add(bytes.len()).filter(|end| *end <= self.pos).ok_or(Error::TooLarge)?;
+        self.buf.get_mut(at..end).ok_or(Error::TooLarge)?.copy_from_slice(bytes);
         Ok(())
     }
 
-    /// Overwrites a `u32` written earlier at `at`.
-    pub fn patch_u32(&mut self, at: usize, v: u32) -> Result<(), Error> {
-        let end = at.checked_add(4).ok_or(Error::TooLarge)?;
-        self.buf.get_mut(at..end).ok_or(Error::TooLarge)?.copy_from_slice(&v.to_le_bytes());
-        Ok(())
+    /// Runs `write` as one unit: if it fails, the writer is put back where it was and the
+    /// bytes it wrote are zeroed, so a failed write never leaves half an entry for a
+    /// caller to send (a directory read that fills a buffer until an entry does not fit).
+    pub fn atomic<T>(&mut self, write: impl FnOnce(&mut Self) -> Result<T, Error>) -> Result<T, Error> {
+        let start = self.pos;
+        let result = write(self);
+        if result.is_err() {
+            if let Some(partial) = self.buf.get_mut(start..self.pos) {
+                partial.fill(0);
+            }
+            self.pos = start;
+        }
+        result
     }
 }
 
@@ -204,11 +212,24 @@ mod tests {
         let mut buf = [0u8; 3];
         let mut w = Writer::new(&mut buf);
         assert_eq!(w.string("ab"), Err(Error::TooLarge));
-        assert_eq!(w.patch_u32(1, 0), Err(Error::TooLarge));
+        assert_eq!(w.patch(1, &[0; 4]), Err(Error::TooLarge));
         let long = [b'a'; 70_000];
         let mut big = [0u8; 80_000];
         let s = core::str::from_utf8(&long).unwrap();
         assert_eq!(Writer::new(&mut big).string(s), Err(Error::TooLarge));
+    }
+
+    #[test]
+    fn atomic_writes_leave_nothing_on_failure() {
+        let mut buf = [0u8; 6];
+        let mut w = Writer::new(&mut buf);
+        w.u16(0x0101).unwrap();
+        assert_eq!(w.atomic(|w| { w.u16(0x0202)?; w.u32(0x0303_0303) }), Err(Error::TooLarge));
+        assert_eq!(w.position(), 2);
+        assert_eq!(w.atomic(|w| w.u16(0x0404)), Ok(()));
+        // Patching past what was written is refused, even inside the buffer.
+        assert_eq!(w.patch(3, &[9, 9]), Err(Error::TooLarge));
+        assert_eq!(buf, [1, 1, 4, 4, 0, 0]);
     }
 
     #[test]
