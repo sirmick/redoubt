@@ -165,7 +165,7 @@ pub fn verify_kernel_wx() -> usize {
         }
         executable += 1;
         assert!(!pte.has(MMUFlags::W), "kernel page {:#x} is writable and executable", pte.phys());
-        let alias = lookup(root, PHYSMAP_BASE + pte.phys()).expect("kernel frame is missing from the physmap");
+        let alias = lookup(root, physmap_virt(pte.phys())).expect("kernel frame is missing from the physmap");
         assert!(!alias.has(MMUFlags::W), "kernel code frame {:#x} is writable through the physmap", pte.phys());
         assert!(!alias.has(MMUFlags::X), "the physmap must never be executable");
     });

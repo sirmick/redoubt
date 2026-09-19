@@ -122,15 +122,41 @@ pub mod uaf {
 /// read) but yielding between checks. These processes have no timer preemption, so a pure
 /// busy-loop would never let another runnable thread proceed. Used only to order events
 /// between processes that cannot otherwise synchronise.
-pub fn wait_ms(ms: u64) {
-    fn now() -> u64 {
+/// Read the 64-bit `time` CSR. On rv64 that is one `rdtime`; on rv32 `time` is 32 bits, so
+/// combine `rdtimeh`/`rdtime`, retrying if the low word wrapped between the two reads.
+pub fn read_time() -> u64 {
+    #[cfg(target_arch = "riscv64")]
+    {
         let t: u64;
+        // SAFETY: reads a counter CSR; no memory effect.
         unsafe { core::arch::asm!("rdtime {}", out(reg) t) };
         t
     }
+    #[cfg(target_arch = "riscv32")]
+    {
+        let (mut hi, mut lo, mut check): (u32, u32, u32);
+        // SAFETY: reads counter CSRs; no memory effect.
+        unsafe {
+            core::arch::asm!(
+                "1:",
+                "rdtimeh {hi}",
+                "rdtime  {lo}",
+                "rdtimeh {check}",
+                "bne {hi}, {check}, 1b",
+                hi = out(reg) hi,
+                lo = out(reg) lo,
+                check = out(reg) check,
+            );
+        }
+        let _ = check; // scratch: the loop uses it to detect a low-word wrap, Rust does not
+        ((hi as u64) << 32) | lo as u64
+    }
+}
+
+pub fn wait_ms(ms: u64) {
     // QEMU virt runs the timer at 10 MHz.
-    let deadline = now() + ms * 10_000;
-    while now() < deadline {
+    let deadline = read_time() + ms * 10_000;
+    while read_time() < deadline {
         xous::yield_slice();
     }
 }

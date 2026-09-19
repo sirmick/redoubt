@@ -4,7 +4,7 @@ kind = "boot"
 programs = ["log-server", { corrupt = "rng-test", with = { segment-vaddr = "0xffffffffffd00000" } }]
 timeout_secs = 20
 default_forbid = false      # the loader is supposed to panic here
-expect = ['loader64 PANIC', 'ELF segment 0xffffffffffd00000\S* is outside']
+expect = ['loader64 PANIC', 'ELF segment 0xf+d00000\S* is outside']
 forbid = ['KMAIN', 'entering kernel']
 
 [[grant]]

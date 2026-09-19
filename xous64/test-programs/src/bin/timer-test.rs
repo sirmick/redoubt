@@ -18,11 +18,7 @@ static TICKS: AtomicUsize = AtomicUsize::new(0);
 static TICK_INTERVAL: AtomicUsize = AtomicUsize::new(0);
 
 /// The kernel lets userspace read the `time` CSR directly.
-fn now() -> u64 {
-    let time: u64;
-    unsafe { core::arch::asm!("rdtime {}", out(reg) time) };
-    time
-}
+fn now() -> u64 { test_programs::read_time() }
 
 fn set_deadline(deadline: u64) {
     xous::rsyscall(SysCall::PlatformSpecific(TIMER_SET_DEADLINE, deadline as usize, 0, 0, 0, 0, 0))

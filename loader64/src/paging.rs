@@ -3,7 +3,7 @@
 //! Page-table memory is only touched through the `paging` crate, which the kernel uses too.
 
 use paging::{PteFlags, Slot, Table, Window, ENTRIES, LARGEST_LEAF, LEVELS};
-use xous::arch::{PHYSMAP_BASE, PHYSMAP_PHYS_BASE, PROCESS_AREA};
+use xous::arch::{PHYSMAP_PHYS_BASE, PROCESS_AREA};
 
 use crate::alloc::{PageAllocator, Pid};
 use crate::PAGE_SIZE;
@@ -47,7 +47,7 @@ impl AddressSpace {
         let last = ram.end.div_ceil(LARGEST_LEAF);
         for leaf in first..last {
             let phys = leaf * LARGEST_LEAF;
-            let virt = PHYSMAP_BASE + (phys - PHYSMAP_PHYS_BASE);
+            let virt = xous::arch::physmap_virt(phys);
             root.slot(paging::vpn(virt, LEVELS - 1)).set(paging::Pte::leaf(phys, flags));
         }
         let kernel_l1 = alloc.alloc(pid);
@@ -107,7 +107,7 @@ impl AddressSpace {
     /// writable alias of its own code, in breach of W^X. The physmap is built from
     /// gigapages, so the superpages covering `phys` are first split into smaller ones.
     pub fn write_protect_in_physmap(&self, alloc: &mut PageAllocator, phys: usize) {
-        let virt = PHYSMAP_BASE + phys;
+        let virt = xous::arch::physmap_virt(phys);
         let mut table = self.root;
         for level in (1..LEVELS).rev() {
             let slot = table.slot(paging::vpn(virt, level));
@@ -138,6 +138,23 @@ impl AddressSpace {
     /// it with memory on first touch.
     pub fn reserve(&self, alloc: &mut PageAllocator, virt: usize, flags: PteFlags) {
         self.leaf_slot(alloc, virt).set(paging::Pte::reservation(flags));
+    }
+
+    /// Pre-create the intermediate page tables covering `[virt, virt + size)` without
+    /// mapping any leaf. When these tables belong to the shared kernel region and this runs
+    /// before user address spaces copy the kernel's root entries, a leaf the kernel later
+    /// maps into them (its PLIC, say) becomes visible in every address space. On rv64 the
+    /// single shared kernel L1 already spans that region, so this only pre-allocates a
+    /// leaf-level table there; on rv32, where the region crosses several 4 MiB root entries,
+    /// it is what makes those roots shared tables rather than empty copies.
+    pub fn reserve_tables(&self, alloc: &mut PageAllocator, virt: usize, size: usize) {
+        let mut addr = virt;
+        let end = virt + size;
+        while addr < end {
+            // Walking to the leaf slot installs every table above it; the slot is discarded.
+            let _ = self.leaf_slot(alloc, addr);
+            addr += paging::leaf_size(1);
+        }
     }
 
     /// Allocate and map `count` pages ending at `top`.

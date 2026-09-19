@@ -20,10 +20,11 @@ enum ClaimReleaseMove {
 #[allow(dead_code)]
 #[repr(C)]
 pub struct MemoryRangeExtra {
-    // `usize` so that rv64 can describe regions above 4 GiB. The layout on
-    // 32-bit targets is unchanged.
-    mem_start: usize,
-    mem_size: usize,
+    // `u64`, not `usize`: the loader (one binary for both widths) writes every MREx entry
+    // with 64-bit base and size, so the entry is 24 bytes on rv32 too. Consumers narrow
+    // with `as usize`; on rv32 the high words are zero because MMIO fits in 32 bits.
+    mem_start: u64,
+    mem_size: u64,
     mem_tag: u32,
     _padding: u32,
 }
@@ -159,21 +160,13 @@ impl MemoryManager {
             self.extra_regions.len()
         );
         assert!(xarg_def.name == u32::from_le_bytes(*b"XArg"), "mm: first tag wasn't XArg");
-        // XArg v1 describes RAM with 32-bit words. v2 (rv64) uses 64-bit values, low word first.
-        #[cfg(target_pointer_width = "32")]
-        {
-            assert!(xarg_def.data[1] == 1, "mm: XArg had unexpected version");
-            self.ram_start = xarg_def.data[2] as usize;
-            self.ram_size = xarg_def.data[3] as usize;
-            self.ram_name = xarg_def.data[4];
-        }
-        #[cfg(target_pointer_width = "64")]
-        {
-            assert!(xarg_def.data[1] == 2, "mm: XArg had unexpected version");
-            self.ram_start = xarg_def.data[2] as usize | (xarg_def.data[3] as usize) << 32;
-            self.ram_size = xarg_def.data[4] as usize | (xarg_def.data[5] as usize) << 32;
-            self.ram_name = xarg_def.data[6];
-        }
+        // The loader (the same binary for both widths) writes XArg v2: RAM base and size as
+        // 64-bit values, low word first. Rebuild through u64 (a `<< 32` overflows a 32-bit
+        // usize) and narrow; on rv32 the high words are zero because RAM fits in 32 bits.
+        assert!(xarg_def.data[1] == 2, "mm: XArg had unexpected version");
+        self.ram_start = (xarg_def.data[2] as u64 | (xarg_def.data[3] as u64) << 32) as usize;
+        self.ram_size = (xarg_def.data[4] as u64 | (xarg_def.data[5] as u64) << 32) as usize;
+        self.ram_name = xarg_def.data[6];
 
         let mem_size = self.ram_size / PAGE_SIZE;
         let mut extra_size = 0;
