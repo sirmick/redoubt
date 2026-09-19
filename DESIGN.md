@@ -173,8 +173,25 @@ into (`Config::natives`), so the core VM and its trusted base stay small.
   cipher mode and padding, AEAD, and fixed-key key agreement and signature matches byte for
   byte; a hostile-argument test makes 20k calls with generated junk.
 
+## I/O: one 9P client, asynchronous (decided 2026-09-18, not built)
+On xous64 every user-facing service speaks 9P2000 and a process's namespace is a table of
+capabilities (xous-core `planning/xous64/NAMESPACES.md`). beamlet follows that:
+- **`Platform` grows one generic I/O interface, a 9P client**, not per-service methods: attach,
+  walk, open, read, write, clunk, stat on handles the embedder granted. Files are namespace walks,
+  TCP is Plan 9's `/net` (`/net/tcp/clone`, `connect addr!port`, the data file), the console is
+  `/dev/cons`. Framing (packet modes, active modes, line mode) stays in Erlang (`beamlet_tcp`),
+  so the Rust side only moves bytes. Handles are unforgeable resource terms.
+- **I/O is asynchronous.** The VM is one thread, so a blocking read would stop every process. The
+  VM submits a request and continues; the completion arrives later as a message to the requesting
+  Erlang process. `Platform::idle` returns on a timer deadline or a completion.
+- **POSIX platform:** serves the same tree from host files and host sockets, so the differential
+  suite exercises `gen_tcp`, `ssl` and `ssh` over real TCP against the real BEAM.
+- Still open: mailbox overflow (below) must be settled before real sockets, since an active-mode
+  socket can fill a mailbox and silent drops would corrupt a TCP stream.
+
 ## Open questions
-- Mailbox overflow currently drops messages silently. Kill the receiver instead?
+- Mailbox overflow currently drops messages silently. Kill the receiver instead (fail closed), or
+  backpressure sockets? Must be decided before real sockets land.
 - Per-process memory limits with shared (reference-counted) terms.
 - Local funs cannot be serialized (`term_to_binary`); `erlang:phash2/1,2` is missing.
 - Console input for the I/O server.
