@@ -211,9 +211,13 @@ impl MemoryManager {
         for range in self.extra_regions() {
             extra_size += range.size / PAGE_SIZE;
         }
-        // SAFETY: the loader placed a `mem_size`-entry ownership table at `rpt_base`.
+        // SAFETY: `rpt_base` is the page-aligned, zeroed ownership table the loader built, one
+        // byte per page of RAM, so it holds these `mem_size` entries; every byte is a valid
+        // `Option<PID>` (zero is `None`). The loader owns it for the kernel and hands it over
+        // here, so this is the only reference to it.
         unsafe { self.allocations = slice::from_raw_parts_mut(rpt_base as *mut Option<PID>, mem_size) };
-        // SAFETY: the loader placed an `extra_size`-entry table at `xpt_base` for the extra regions.
+        // SAFETY: as above, for the table the loader built for the `MREx` regions: one byte per
+        // page of them, which is the `extra_size` just counted from the same table.
         unsafe {
             self.extra_allocations = slice::from_raw_parts_mut(xpt_base as *mut Option<PID>, extra_size)
         }
