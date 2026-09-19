@@ -41,6 +41,10 @@ pub extern "C" fn _start() -> ! {
     let mut parked = [0u64; rd::MAX_OPEN_CALLS];
     let mut nparked = 0usize;
     let mut notices = 0usize;
+    // I15 says a notice is delivered *once*. Replying at once would hide a second one, since
+    // the reply frees the call; so the first notice is held back over one more `receive`, and
+    // a repeat of it is a failure this server can see.
+    let (mut deferred, mut deferred_seen) = (0u64, 0usize);
     let mut sends = 0usize;
     let mut last_id = 0u64;
     // The `MAX_OPEN_CALLS` step: one caller thread of this server's own at a time, until its
@@ -75,6 +79,17 @@ pub extern "C" fn _start() -> ! {
             Received::Abandoned(id) => {
                 // R3, I15: reported once, and the call stays open until this reply frees it.
                 notices += 1;
+                if deferred == 0 {
+                    // Held back: this call stays open, so the kernel could offer it again.
+                    deferred = id.get();
+                    deferred_seen = 1;
+                    continue;
+                }
+                if id.get() == deferred {
+                    deferred_seen += 1;
+                    log!(logger, "[server] abandoned {} reported {} times, FAIL", deferred, deferred_seen);
+                    continue;
+                }
                 if rd::reply(id.get(), &rd::body([0; rd::WORDS])).is_err() {
                     log!(logger, "[server] abandoned {} -> reply FAILED", id.get());
                 }
@@ -97,6 +112,16 @@ pub extern "C" fn _start() -> ! {
                 continue;
             }
         };
+        // Anything but a notice means the held-back one was offered once and no more.
+        if deferred != 0 {
+            log!(logger, "[server] the held-back abandoned call was reported {} time(s)", deferred_seen);
+            rd::reply(deferred, &rd::body([0; rd::WORDS])).ok();
+            if let Some(at) = parked[..nparked].iter().position(|x| *x == deferred) {
+                parked.copy_within(at + 1..nparked, at);
+                nparked -= 1;
+            }
+            deferred = 0;
+        }
         let id = m.msg_id.get();
         let words = m.body.words;
         // A `send` never owes a reply and never becomes an open call (R4a).
