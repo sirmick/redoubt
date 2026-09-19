@@ -2,82 +2,200 @@
 //! constant-time under the bench's timing check"; CONTAINMENT.md, covert and timing channels;
 //! TENETS.md: assume the attacker has a perfect clock).
 //!
-//! **What it measures.** How long one signature takes, as a function of the two secrets the
-//! signing path touches: the key, and the nonce, which Ed25519 derives from the message. It
-//! times eight different keys over the same message, and eight different messages under the
-//! same key. For each of the eight it takes the **minimum** batch mean over several repeats —
-//! the minimum, because noise can only push a measurement up, so the smallest one seen is the
-//! closest to the work actually done — and then compares the largest of those minima with the
-//! smallest. If the work depended on the secret, the eight would not agree.
+//! **What it measures.** A fixed-versus-random test, as `dudect` does it. Two classes of
+//! sample, interleaved by a deterministic coin so that any drift in the machine falls on both:
+//! class A signs with one fixed key, class B with a key drawn from a pool, and both sign the
+//! same message, so the only thing that differs between the classes is the secret. Each sample
+//! is one signature, timed on its own. The statistic is each class's 10th percentile — low
+//! enough to sit under the scheduler noise, which only ever adds time, and far enough from the
+//! minimum to be steady — and the verdict is how far apart the two percentiles are.
 //!
-//! **What it proves, and what it does not.** It proves that this build of this Ed25519
-//! implementation does not take grossly different amounts of time for different secrets: it
-//! would catch a double-and-add loop that skipped zero bits, a windowed multiply that indexed a
-//! table by secret bits and hit different cache lines, or a hand-rolled decoder branching on
-//! key bytes. It is not a proof of constant time, and it says nothing about
+//! **What it proves, and what it does not.** It resolves a difference of a few per cent of one
+//! signature between the two classes. [`LEAK`] is the control: a signer that does that much
+//! extra work for class B and none for class A, which the same statistic must flag in the same
+//! run. So the threshold is not a guess — the control says what this machine can see, and the
+//! real signer has to be under it. It does not prove constant time, and says nothing about
 //! microarchitectural channels, which TENETS.md puts out of scope for the software. The claim
 //! that the path is constant time rests on reading the code (`keys::Key::sign` says what was
-//! read); this test is what would notice if that stopped being true.
+//! read); this is what would notice if that stopped being true.
 //!
-//! **Why it is not flaky.** The verdict is a ratio of minima, which noise inflates only
-//! upwards and only for the batch it lands in. And the test carries its own control
-//! (TENETS.md 6, "the harness can fail"): a deliberately variable-time signer, whose work
-//! depends on the key's bits, measured by the same code in the same run. The control has to be
-//! flagged, or the test fails whatever the real signer did — so a machine too noisy to tell the
-//! two apart reports that, rather than passing by accident.
+//! **Release only.** A `cargo test` build of `ed25519-compact` is six times slower and its
+//! noise is a different shape, so the test is ignored there, with the reason, rather than
+//! shipping one that cannot fail:
+//!
+//! ```text
+//! cargo test --release -p redoubt-keyd --test timing
+//! ```
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use ed25519_compact::sha512;
 use redoubt_keyd::keys::Keys;
 
-/// Signatures in one batch.
-const BATCH: usize = 25;
-/// How often each secret is measured; the smallest result counts.
-const REPEATS: usize = 7;
-/// The secrets compared against each other.
-const SECRETS: usize = 8;
+/// Samples per class. One signature each, so this is also the work: 2 × [`SAMPLES`] signatures.
+const SAMPLES: usize = 6000;
+/// Keys class B draws from: one short of [`redoubt_keyd::keys::MAX_KEYS`], which is what a
+/// `Keys` will hold, with the fixed key making up the set. They are small enough together that
+/// every one stays in the first-level cache, so the classes differ by their secrets and not by
+/// where the secrets live.
+const POOL: usize = redoubt_keyd::keys::MAX_KEYS - 1;
+/// Samples dropped before the classes are compared, so the first calls do not pay for page
+/// faults and an untrained branch predictor on one class's behalf.
+const WARMUP: usize = 500;
 
-/// How far apart the fastest and the slowest secret may be. A constant-time implementation
-/// lands within a few per cent; the control below is a hundred times outside it, so nothing
-/// sensible sits near this line.
-const SAME: f64 = 1.30;
-/// How far apart the control must be, for this run to count as able to tell the difference.
-const DIFFERENT: f64 = 2.0;
+/// The percentile compared, in per cent: low enough to sit under scheduler noise, which only
+/// ever adds, and far enough from the minimum to be steady.
+const PERCENTILE: usize = 10;
 
-/// Eight seeds: one set bit, all bits set, and six spread between, so a signer whose work
-/// followed the key's bit pattern could not hide. (Not all zero: that is the one seed
-/// `ed25519-compact` panics on, which `Keys` refuses.)
-fn seeds() -> Vec<[u8; 32]> {
-    let mut lowest = [0x00u8; 32];
-    lowest[0] = 0x01;
-    let mut seeds = vec![lowest, [0xffu8; 32]];
-    let mut x = 0x9e37_79b9_7f4a_7c15u64;
-    for _ in 0..SECRETS - 2 {
-        let mut seed = [0u8; 32];
-        for byte in seed.iter_mut() {
-            x ^= x << 13;
-            x ^= x >> 7;
-            x ^= x << 17;
-            *byte = x as u8;
-        }
-        seeds.push(seed);
-    }
-    seeds
-}
+/// How far apart the two classes may be, as a fraction of one signature.
+const SAME: f64 = 0.02;
+/// What the control leaks: a fraction of one signature, for class B only. The check must flag
+/// it, or this run could not have seen a leak of that size and proves nothing.
+const LEAK: f64 = 0.05;
 
 fn hex(seed: &[u8; 32]) -> String { seed.iter().map(|b| format!("{b:02x}")).collect() }
 
-fn keys(seeds: &[[u8; 32]]) -> Keys {
-    let args: Vec<String> =
-        seeds.iter().enumerate().map(|(i, seed)| format!("k{i},audit,{}", hex(seed))).collect();
+/// `POOL` + 1 keys: the fixed one is first, the pool follows.
+fn keys() -> Keys {
+    let mut x = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = move || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x
+    };
+    let args: Vec<String> = (0..=POOL)
+        .map(|i| {
+            let mut seed = [0u8; 32];
+            for byte in seed.iter_mut() {
+                *byte = next() as u8;
+            }
+            format!("k{i},audit,{}", hex(&seed))
+        })
+        .collect();
     Keys::from_args(args.iter().map(String::as_str)).unwrap()
 }
 
-/// Eight 64-byte messages, so the nonce (which Ed25519 derives from the message, and which the
-/// scalar multiplication then uses) differs between them.
-fn messages() -> Vec<[u8; 64]> {
-    (0..SECRETS)
+/// A deterministic coin and index, so a failure reproduces exactly.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+}
+
+/// Runs the two classes interleaved and returns their [`PERCENTILE`] times, in nanoseconds.
+/// `sign` is given the key index to use: 0 for class A, 1..=POOL for class B.
+fn classes(mut sign: impl FnMut(usize)) -> (f64, f64) {
+    let mut rng = Rng(0x2545_f491_4f6c_dd1d);
+    let mut a: Vec<u64> = Vec::with_capacity(SAMPLES);
+    let mut b: Vec<u64> = Vec::with_capacity(SAMPLES);
+    let mut taken = 0;
+    while a.len() < SAMPLES || b.len() < SAMPLES {
+        let r = rng.next();
+        // Class B unless its samples are in; the coin keeps the two interleaved, so a slow
+        // patch of the machine lands on both.
+        let class_b = (r & 1 == 1 || a.len() == SAMPLES) && b.len() < SAMPLES;
+        let index = if class_b { 1 + (r >> 8) as usize % POOL } else { 0 };
+        let start = Instant::now();
+        sign(index);
+        let elapsed = start.elapsed().as_nanos() as u64;
+        taken += 1;
+        if taken > WARMUP {
+            if class_b {
+                b.push(elapsed);
+            } else {
+                a.push(elapsed);
+            }
+        }
+    }
+    (percentile(&mut a), percentile(&mut b))
+}
+
+fn percentile(samples: &mut [u64]) -> f64 {
+    samples.sort_unstable();
+    samples[samples.len() * PERCENTILE / 100] as f64
+}
+
+/// How far apart the classes are, as a fraction of one signature.
+fn apart(a: f64, b: f64) -> f64 { (a - b).abs() / a.min(b) }
+
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "needs the optimised build the box ships: cargo test --release -p redoubt-keyd --test timing"
+)]
+fn signing_takes_the_same_time_whatever_the_key() {
+    let keys = keys();
+    let message = [0x5au8; 64];
+
+    // The control first: a signer that does `LEAK` of a signature more for class B. If the
+    // check cannot see that, this run resolves nothing and says so rather than passing.
+    let one = {
+        let (a, b) = classes(|i| {
+            std::hint::black_box(keys.get(i).unwrap().sign(&message));
+        });
+        a.min(b)
+    };
+    // How many SHA-512 calls that fraction of a signature is worth.
+    let hash_cost = {
+        let start = Instant::now();
+        for _ in 0..1000 {
+            std::hint::black_box(sha512::Hash::hash(message));
+        }
+        start.elapsed().as_nanos() as f64 / 1000.0
+    };
+    let extra = ((one * LEAK) / hash_cost).round().max(1.0) as usize;
+    let (a, b) = classes(|i| {
+        std::hint::black_box(keys.get(i).unwrap().sign(&message));
+        if i != 0 {
+            for _ in 0..extra {
+                std::hint::black_box(sha512::Hash::hash(message));
+            }
+        }
+    });
+    let control = apart(a, b);
+    assert!(
+        control > SAME,
+        "a leak of {:.0}% of a signature was not seen (measured {:.4}, threshold {SAME}): this \
+         machine is too noisy for the measurement to mean anything",
+        LEAK * 100.0,
+        control
+    );
+
+    // Now the real signer, measured the same way.
+    let (a, b) = classes(|i| {
+        std::hint::black_box(keys.get(i).unwrap().sign(&message));
+    });
+    let real = apart(a, b);
+    assert!(
+        real < SAME,
+        "signing time depends on the key: the classes are {:.4} of a signature apart \
+         (threshold {SAME}; the control's {:.0}% leak measured {:.4}). Fixed key {a} ns, random \
+         keys {b} ns at the {PERCENTILE}th percentile.",
+        real,
+        LEAK * 100.0,
+        control
+    );
+}
+
+/// The same, with the secret being the nonce rather than the key. Ed25519 derives the nonce
+/// from the key's prefix and the message, and the scalar multiplication uses it, so different
+/// messages of the same length exercise different secret scalars under one key.
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "needs the optimised build the box ships: cargo test --release -p redoubt-keyd --test timing"
+)]
+fn signing_takes_the_same_time_whatever_the_nonce() {
+    let keys = keys();
+    let key = keys.get(0).unwrap();
+    let fixed = [0x5au8; 64];
+    let messages: Vec<[u8; 64]> = (0..=POOL)
         .map(|i| {
             let mut m = [0u8; 64];
             for (j, byte) in m.iter_mut().enumerate() {
@@ -85,96 +203,15 @@ fn messages() -> Vec<[u8; 64]> {
             }
             m
         })
-        .collect()
-}
-
-/// The smallest batch mean over [`REPEATS`] repeats, for each of `n` cases. The repeats are
-/// interleaved, so a slow patch of the machine falls on every case rather than on one.
-fn minima(n: usize, mut work: impl FnMut(usize)) -> Vec<Duration> {
-    // Warm up: the first calls pay for page faults and branch predictor training.
-    for case in 0..n {
-        for _ in 0..BATCH {
-            work(case);
-        }
-    }
-    let mut best = vec![Duration::MAX; n];
-    for _ in 0..REPEATS {
-        for (case, best) in best.iter_mut().enumerate() {
-            let start = Instant::now();
-            for _ in 0..BATCH {
-                work(case);
-            }
-            *best = (*best).min(start.elapsed() / BATCH as u32);
-        }
-    }
-    best
-}
-
-/// The largest of the minima over the smallest: 1.0 when every case does the same work.
-fn spread(minima: &[Duration]) -> f64 {
-    let slowest = minima.iter().max().unwrap().as_secs_f64();
-    let fastest = minima.iter().min().unwrap().as_secs_f64();
-    assert!(fastest > 0.0, "the clock is too coarse to measure a signature on this machine");
-    slowest / fastest
-}
-
-/// A signer whose work depends on its key, which is what this test exists to catch. It is the
-/// control: the same measurement must flag it, in the same run, or the run proves nothing.
-fn variable_time_sign(seed: &[u8; 32], message: &[u8]) -> [u8; 64] {
-    let mut state = sha512::Hash::hash(seed);
-    for byte in seed {
-        for bit in 0..8 {
-            if (byte >> bit) & 1 == 1 {
-                state = sha512::Hash::hash(state);
-            }
-        }
-    }
-    let mut hasher = sha512::Hash::new();
-    hasher.update(state);
-    hasher.update(message);
-    hasher.finalize()
-}
-
-#[test]
-fn signing_takes_the_same_time_whatever_the_key() {
-    let seeds = seeds();
-    let keys = keys(&seeds);
-    let message = [0x5au8; 64];
-
-    // The control first, so a run that cannot tell the two apart says so before anything else.
-    let control = minima(SECRETS, |case| {
-        std::hint::black_box(variable_time_sign(&seeds[case], &message));
+        .collect();
+    let (a, b) = classes(|i| {
+        let message = if i == 0 { &fixed } else { &messages[i] };
+        std::hint::black_box(key.sign(message));
     });
-    let control_spread = spread(&control);
+    let real = apart(a, b);
     assert!(
-        control_spread > DIFFERENT,
-        "the control, whose work follows its key's bits, was not flagged (spread {control_spread:.3}): \
-         this machine is too noisy for the measurement to mean anything"
+        real < SAME,
+        "signing time depends on the message: the classes are {real:.4} of a signature apart \
+         (threshold {SAME}). Fixed {a} ns, varying {b} ns at the {PERCENTILE}th percentile."
     );
-
-    let real = minima(SECRETS, |case| {
-        std::hint::black_box(keys.get(case).unwrap().sign(&message));
-    });
-    let real_spread = spread(&real);
-    assert!(
-        real_spread < SAME,
-        "signing time depends on the key (spread {real_spread:.3}, control {control_spread:.3}); \
-         minima {real:?}"
-    );
-}
-
-#[test]
-fn signing_takes_the_same_time_whatever_the_nonce() {
-    // Ed25519's nonce comes from the key's prefix and the message, and the scalar
-    // multiplication uses it. Different messages of the same length therefore exercise
-    // different secret scalars, which is the value the multiplication must not leak.
-    let seeds = seeds();
-    let keys = keys(&seeds[..1]);
-    let key = keys.get(0).unwrap();
-    let messages = messages();
-    let real = minima(SECRETS, |case| {
-        std::hint::black_box(key.sign(&messages[case]));
-    });
-    let real_spread = spread(&real);
-    assert!(real_spread < SAME, "signing time depends on the message (spread {real_spread:.3}); {real:?}");
 }
