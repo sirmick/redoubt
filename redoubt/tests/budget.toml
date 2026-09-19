@@ -1,0 +1,12 @@
+description = "Budgets and handle tables (WP-K1): carving and charging (R6, R7), classes and labels (I8), destruction and its sweep (R10, I2, I10), 128 handles per table page, usage within limits (I5), ids over 500 create-destroy cycles (I12), time_now and random, and a model-predicted sequence"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# PID 2 budget-test (the loader's first program: it holds root, system and users); PID 3 log-server.
+programs = ["budget-test", "log-server"]
+timeout_secs = 30
+expect = ['^\[pid 2\] \[budget\] system ', '^\[pid 2\] BUDGET TEST PASSED$']
+forbid = ['\[budget\] FAIL']
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]

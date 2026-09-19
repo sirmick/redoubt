@@ -1,0 +1,31 @@
+description = "Destroying a budget while handles to it and its descendants are held closes every one of them: each stale index is BadHandle, before and after frames and indices are reused (R10, I1, I2; only the holder's own table until WP-K2)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# PID 2 the attacker (the loader's first program, holding root, system and users); PID 3
+# log-server; PID 4 budget-victim, in system beside the attacker; PID 5 attack-checker.
+programs = ["budget-destroy-attack", "log-server", "budget-victim", "attack-checker"]
+timeout_secs = 30
+# A handle that outlived its budget would reach a freed frame, and the kernel stops on that
+# (I1): a PANIC, always forbidden. The verdict is the kernel surviving, the victim's pages and
+# the checker's power-off. The attacker's lines pin that each stale index was refused and the
+# carve returned, as progress.
+expect = [
+    '^\[pid 2\] \[destroy\] held b=4 c=5 d=6 scope=7 e=8; destroy b -> Ok\(\(\)\)$',
+    '^\[pid 2\] \[destroy\] stale index checks refused: 8 of 8$',
+    '^\[pid 2\] \[destroy\] system carve returned: true$',
+    '^\[pid 2\] \[destroy\] e untouched: Ok\(10\)$',
+    '^\[pid 2\] \[destroy\] destroy users -> Ok\(\(\)\), then Err\(BadHandle\)$',
+    '^\[pid 2\] \[destroy\] attempts done$',
+    '^\[pid 4\] \[victim\] mapped and touched 64 pages in system after the attack$',
+    '^\[pid 5\] \[checker\] PID 4 reported; the kernel still serves',
+]
+forbid = ['BREACH']
+poweroff = true
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]
+
+[[grant]]
+program = "attack-checker"
+mmio = ["0x100000:0x1000"]

@@ -8,3 +8,4 @@ description = "no_std programs that run inside Redoubt under the test bench (red
 [dependencies]
 xous = "0.9.70"
 uart_16550 = { version = "0.3", default-features = false }
+redoubt-sys = { path = "../sys" }

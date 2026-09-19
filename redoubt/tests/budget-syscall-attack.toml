@@ -1,0 +1,31 @@
+description = "Hostile arguments to every call WP-K1 built (bad and wide handles, unknown numbers, stray registers, records misaligned, in the kernel, read-only, straddling, malformed), in the spec's order of checks, and 4000 calls over hostile values: errors, never a panic (I14)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# PID 2 the attacker (the loader's first program, holding root, system and users); PID 3
+# log-server; PID 4 budget-victim, in system beside the attacker; PID 5 attack-checker.
+programs = ["budget-syscall-attack", "log-server", "budget-victim", "attack-checker"]
+timeout_secs = 30
+# Each targeted attempt's error is pinned as progress, so a refusal for the wrong reason (or in
+# the wrong order) fails. The verdict is the kernel surviving (PANIC is always forbidden), the
+# victim's pages and the checker's power-off.
+expect = [
+    '^\[pid 2\] \[i14\] budget_create records -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(TooLarge\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(OutOfMemory\), Some\(InvalidArgument\)\]$',
+    '^\[pid 2\] \[i14\] budget_create order -> \[Some\(BadHandle\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(InvalidArgument\)\]$',
+    '^\[pid 2\] \[i14\] budget_usage -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(BadHandle\)\]$',
+    '^\[pid 2\] \[i14\] random -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(TooLarge\), Some\(TooLarge\)\]$',
+    '^\[pid 2\] \[i14\] other -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(BadHandle\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(InvalidArgument\), Some\(InvalidArgument\)\]$',
+    '^\[pid 2\] \[i14\] \d+ random calls: \d+ refused, 0 with an unknown result code$',
+    '^\[pid 2\] \[i14\] attempts done$',
+    '^\[pid 4\] \[victim\] mapped and touched 64 pages in system after the attack$',
+    '^\[pid 5\] \[checker\] PID 4 reported; the kernel still serves',
+]
+forbid = ['BREACH']
+poweroff = true
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]
+
+[[grant]]
+program = "attack-checker"
+mmio = ["0x100000:0x1000"]

@@ -15,6 +15,8 @@ use core::fmt::Write;
 
 use xous::{CID, MemoryFlags, MemoryRange, MemorySize, Message};
 
+pub mod rd;
+
 /// There is no name server yet, so the log server uses a well-known address.
 pub const SERVER_ADDRESS: &[u8; 16] = b"redoubt-ipc-tst!";
 
