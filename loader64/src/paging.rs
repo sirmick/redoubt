@@ -3,7 +3,7 @@
 //! Page-table memory is only touched through the `paging` crate, which the kernel uses too.
 
 use paging::{PteFlags, Slot, Table, Window, ENTRIES, LARGEST_LEAF, LEVELS};
-use xous::arch::{PHYSMAP_BASE, PROCESS_AREA};
+use xous::arch::{PHYSMAP_BASE, PHYSMAP_PHYS_BASE, PROCESS_AREA};
 
 use crate::alloc::{PageAllocator, Pid};
 use crate::PAGE_SIZE;
@@ -41,9 +41,14 @@ impl AddressSpace {
         let ram = alloc.ram();
         // The physmap is data: readable and writable, never executable.
         let flags = PteFlags::R | PteFlags::W | PteFlags::GLOBAL;
-        for giga in (ram.start / LARGEST_LEAF)..ram.end.div_ceil(LARGEST_LEAF) {
-            let phys = giga * LARGEST_LEAF;
-            root.slot(paging::vpn(PHYSMAP_BASE + phys, LEVELS - 1)).set(paging::Pte::leaf(phys, flags));
+        // Map [PHYSMAP_PHYS_BASE, ram.end) at virt = PHYSMAP_BASE + (phys - PHYSMAP_PHYS_BASE),
+        // in leaves of the largest size (gigapage on Sv39, megapage on Sv32).
+        let first = PHYSMAP_PHYS_BASE / LARGEST_LEAF;
+        let last = ram.end.div_ceil(LARGEST_LEAF);
+        for leaf in first..last {
+            let phys = leaf * LARGEST_LEAF;
+            let virt = PHYSMAP_BASE + (phys - PHYSMAP_PHYS_BASE);
+            root.slot(paging::vpn(virt, LEVELS - 1)).set(paging::Pte::leaf(phys, flags));
         }
         let kernel_l1 = alloc.alloc(pid);
         // SAFETY: `alloc` returns a RAM frame that nothing else uses.

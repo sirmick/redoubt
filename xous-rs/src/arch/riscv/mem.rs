@@ -28,8 +28,10 @@ mod layout {
 mod layout {
     /// Root entries 0..=255: userspace.
     pub const USER_AREA_END: usize = 0x40_0000_0000;
-    /// Root entries 256..=383: all of physical memory, `virt = PHYSMAP_BASE + phys`.
+    /// Root entries 256..=383: physical memory `[PHYSMAP_PHYS_BASE, +PHYSMAP_SIZE)` mapped
+    /// at `virt = PHYSMAP_BASE + (phys - PHYSMAP_PHYS_BASE)`. rv64 maps from physical 0.
     pub const PHYSMAP_BASE: usize = 0xffff_ffc0_0000_0000;
+    pub const PHYSMAP_PHYS_BASE: usize = 0;
     pub const PHYSMAP_SIZE: usize = 128 << 30;
     /// Root entry 510: per-process kernel data.
     pub const PROCESS_AREA: usize = 0xffff_ffff_8000_0000;

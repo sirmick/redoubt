@@ -135,23 +135,30 @@ impl Pte {
 /// How the current code reaches physical frames: `virtual = base + physical`.
 #[derive(Copy, Clone)]
 pub struct Window {
-    base: usize,
-    size: usize,
+    /// `virt = offset.wrapping_add(phys)`.
+    offset: usize,
+    /// Physical addresses this window can reach: `[phys_start, phys_end)`.
+    phys_start: usize,
+    phys_end: usize,
 }
 
 impl Window {
+    /// A window mapping physical range `phys` at `virt = offset + phys`.
+    ///
     /// # Safety
-    /// For every RAM frame `phys < size`, `base + phys` must be a valid, writable address
-    /// of that frame for as long as any `Table` created through this window is used.
-    pub const unsafe fn offset(base: usize, size: usize) -> Window { Window { base, size } }
+    /// For every frame in `phys`, `offset.wrapping_add(frame)` must be a valid, writable
+    /// address of that frame for as long as any `Table` from this window is used.
+    pub const unsafe fn new(offset: usize, phys: core::ops::Range<usize>) -> Window {
+        Window { offset, phys_start: phys.start, phys_end: phys.end }
+    }
 
     /// # Safety
     /// Address translation must be off, so that physical addresses can be used directly.
-    pub const unsafe fn identity() -> Window { Window { base: 0, size: usize::MAX } }
+    pub const unsafe fn identity() -> Window { Window { offset: 0, phys_start: 0, phys_end: usize::MAX } }
 
-    fn frame(self, phys: usize) -> NonNull<u8> {
-        assert!(phys < self.size && phys % PAGE_SIZE == 0 && phys != 0, "not a reachable frame");
-        NonNull::new((self.base + phys) as *mut u8).unwrap()
+    fn frame(&self, phys: usize) -> NonNull<u8> {
+        assert!((self.phys_start..self.phys_end).contains(&phys) && phys % PAGE_SIZE == 0, "not a reachable frame");
+        NonNull::new(self.offset.wrapping_add(phys) as *mut u8).unwrap()
     }
 
     /// Fill the RAM frame at `phys` with zeroes.
