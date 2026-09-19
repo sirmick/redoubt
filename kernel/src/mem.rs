@@ -105,6 +105,9 @@ impl Default for MemoryManager {
 #[cfg(not(baremetal))]
 std::thread_local!(static MEMORY_MANAGER: core::cell::RefCell<MemoryManager> = core::cell::RefCell::new(MemoryManager::default()));
 
+/// Lock order: `SystemServices` (services.rs) before `MemoryManager`. Code holding the memory
+/// manager never takes the process table, so charging a budget from deep inside the allocator
+/// (`alloc_page`) needs only this cell; code holding the process table may take this one.
 #[cfg(baremetal)]
 static MEMORY_MANAGER: crate::cell::KernelCell<MemoryManager> =
     crate::cell::KernelCell::new(MemoryManager::default_hack());
@@ -250,7 +253,8 @@ impl MemoryManager {
     }
 
     /// Allocate a page to `pid` without charging it: only for the frames holding a process's
-    /// saved contexts, which are the process and thread objects the cost table charges for.
+    /// saved thread contexts (`ProcessImpl`). The cost table's process page and a page per thread
+    /// already pay for them, so charging the frames too would count them twice.
     #[cfg(baremetal)]
     #[allow(dead_code)] // WP-K4's `process_create`, through `MemoryMapping::allocate`
     pub fn alloc_context_page(&mut self, pid: PID) -> Result<usize, xous_kernel::Error> {
@@ -924,7 +928,8 @@ impl MemoryManager {
             // it; it is freed when the borrower returns it. Which frames are lent is read
             // from this process's own page table, where the "shared" bit actually lives --
             // not guessed from a physical address. (INTERIM: the kernel then holds such a
-            // frame uncharged; WP-K2's lends charge it to the borrower instead, R3.)
+            // frame uncharged; under answer 70, WP-K2's lends are charged to the borrower too
+            // while the call is open, and to it alone once abandoned, R3.)
             space.for_each_lent_frame(|phys| {
                 if self.is_main_memory(phys as *mut u8) {
                     let idx = (phys - self.ram_start) / PAGE_SIZE;

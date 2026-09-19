@@ -30,7 +30,7 @@ use redoubt_sys::{BudgetSpec, Class, Error, FOREVER, MAX_DEPTH, MAX_LABELS, Usag
 use xous_kernel::PID;
 
 use crate::arch::process::MAX_PROCESS_COUNT;
-use crate::handle::{Handle, HandleTable, Object};
+use crate::handle::{BudgetRef, Handle, HandleTable, Object};
 use crate::kframe;
 use crate::mem::MemoryManager;
 
@@ -321,7 +321,9 @@ impl MemoryManager {
         let pages = self.ram_frames() - self.ram_frames_owned_by(crate::services::KERNEL_PID) as u64;
         let processes = (MAX_PROCESS_COUNT - 1) as u32;
         let (sys_pages, sys_processes, sys_weight) = (pages / 4, processes / 4, ROOT_WEIGHT / 4);
-        // Root pays for the two budgets' own pages; its own is the kernel's.
+        // Root pays for the two budgets' own pages. Root's own page is charged to no one: it has
+        // no parent, and its frame is one of the RAM pages counted in its limit, taken for the tree
+        // itself.
         let users_pages = pages - 2 * BUDGET_PAGES - sys_pages;
         let boot = |mm: &mut Self, parent, class, pages, processes, weight| {
             let spec = BudgetSpec { pages, processes, weight, class, labels: Default::default(), account: 0, deadline: FOREVER };
@@ -346,7 +348,8 @@ impl MemoryManager {
         if let Some(first) = first {
             for budget in [root, system, users] {
                 let id = self.budget(budget).id;
-                let handle = Handle { object: Object::Budget { frame: budget, id }, badge: 0, stamp: root };
+                let stamp = BudgetRef { frame: root, id: self.budget(root).id };
+                let handle = Handle { object: Object::Budget(BudgetRef { frame: budget, id }), badge: 0, stamp };
                 self.install_handle(first, handle).expect("boot: no room for the first program's handles");
             }
         }
@@ -400,6 +403,8 @@ impl MemoryManager {
     /// `budget_create(h(parent), spec) -> h`, after decoding. The checks follow KERNEL-SPEC.md's
     /// row for `budget_create`, in order.
     pub fn budget_create(&mut self, pid: PID, parent: u32, spec: &BudgetSpec) -> Result<u32, Error> {
+        // Only the kernel (PID 1) has no account, and it makes no Redoubt calls; `NotPermitted` is
+        // there so that a bug cannot turn into a panic.
         let caller = self.budget_of(pid).ok_or(Error::NotPermitted)?;
         let pf = self.budget_handle(pid, parent)?;
         let p = self.budget(pf);
@@ -408,7 +413,7 @@ impl MemoryManager {
             return Err(Error::TooLarge);
         }
         // A child's class is its parent's (answer 73), so the spec's class is not read.
-        // TODO(WP-A2): the ABI still carries a class slot (decoded, so it must be a valid tag),
+        // TODO(A2): the ABI still carries a class slot (decoded, so it must be a valid tag),
         // which A2 removes.
         let mut labels = [0; MAX_LABELS];
         let given = spec.labels.as_slice();
@@ -447,7 +452,8 @@ impl MemoryManager {
         let id = self.budget(child).id;
         // R9: stamped with the caller's budget. The table may have to grow, charged to the caller
         // after the carve (the caller's budget may be the parent); if it cannot, undo.
-        let handle = Handle { object: Object::Budget { frame: child, id }, badge: 0, stamp: caller };
+        let stamp = BudgetRef { frame: caller, id: self.budget(caller).id };
+        let handle = Handle { object: Object::Budget(BudgetRef { frame: child, id }), badge: 0, stamp };
         self.install_handle(pid, handle).inspect_err(|_| {
             self.return_carve(child);
             self.free_object_frame(child);
@@ -456,6 +462,7 @@ impl MemoryManager {
 
     /// `budget_usage(h) -> counters`, after decoding.
     pub fn budget_usage(&self, pid: PID, h: u32) -> Result<Usage, Error> {
+        // As in `budget_create`: only the kernel has no account.
         let caller = self.budget(self.budget_of(pid).ok_or(Error::NotPermitted)?);
         let frame = self.budget_handle(pid, h)?;
         let target = self.budget(frame);
@@ -518,8 +525,8 @@ impl MemoryManager {
     /// processes and no handles left; nothing reads a dying frame's tree links after this).
     pub fn destroy_marked(&mut self, top: BudgetFrame) {
         self.sweep_handles(|mm, h| {
-            let Object::Budget { frame, .. } = h.object;
-            mm.budget(frame).dying || mm.budget(h.stamp).dying
+            let Object::Budget(object) = h.object;
+            mm.budget_at(object).dying || mm.budget_at(h.stamp).dying
         });
         self.return_carve(top);
         for frame in 0..=self.objects.high_frame {

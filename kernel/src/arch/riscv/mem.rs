@@ -587,24 +587,16 @@ pub fn ensure_page_exists_inner(mm: &mut MemoryManager, address: usize) -> Resul
 
 /// The frame behind user address `virt` of the current address space, if the process may read
 /// it (and, with `write`, write it) there: a system call about to copy a record in or a result
-/// out. A page reserved but not yet backed is backed first, as the process's own touch would
-/// (charged to it, so this can be `OutOfMemory`); anything else (unmapped, lent out, kernel,
-/// no permission) is `InvalidArgument`.
-pub fn user_frame(mm: &mut MemoryManager, virt: usize, write: bool) -> Result<usize, redoubt_sys::Error> {
+/// out. Anything else (unmapped, reserved but never touched, lent out, kernel, no permission)
+/// is `InvalidArgument`: decoding never allocates (QUESTIONS.md 115, pending), so a process
+/// touches its record buffers before a call.
+pub fn user_frame(virt: usize, write: bool) -> Result<usize, redoubt_sys::Error> {
     use redoubt_sys::Error;
     if virt >= USER_AREA_END {
         return Err(Error::InvalidArgument);
     }
     let page = virt & !(PAGE_SIZE - 1);
-    let slot = walk(current_root(), page, None).map_err(|_| Error::InvalidArgument)?;
-    let pte = slot.get();
-    if !pte.is_valid() && !pte.is_empty() && !pte.has(MMUFlags::S) {
-        ensure_page_exists_inner(mm, page).map_err(|e| match e {
-            xous_kernel::Error::OutOfMemory => Error::OutOfMemory,
-            _ => Error::InvalidArgument,
-        })?;
-    }
-    let pte = slot.get();
+    let pte = walk(current_root(), page, None).map_err(|_| Error::InvalidArgument)?.get();
     let wanted = MMUFlags::VALID | MMUFlags::USER | if write { MMUFlags::W } else { MMUFlags::R };
     if !pte.has(wanted) || pte.has(MMUFlags::S) {
         return Err(Error::InvalidArgument);

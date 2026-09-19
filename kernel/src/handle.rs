@@ -5,41 +5,56 @@
 //! holds.
 //!
 //! # Layout, and the cost table's 128
-//! A handle is four 64-bit words (32 bytes): the object (its kind and frame index, then its id),
-//! the badge, and the stamp (the stamping budget's frame). So a 4 KiB page holds exactly
-//! [`HANDLES_PER_PAGE`] = 128 handles, the cost table's figure. Index `i` (from 1; 0 is never
-//! allocated) is slot `(i - 1) % 128` of table page `(i - 1) / 128`, so the first 128 handles
-//! fill the first page.
+//! A handle is four 64-bit words (32 bytes): the object's kind with its frame and the stamping
+//! budget's frame, packed in one word; the object's id; the badge; the stamping budget's id. So a
+//! 4 KiB page holds exactly [`HANDLES_PER_PAGE`] = 128 handles, the cost table's figure. Index `i`
+//! (from 1; 0 is never allocated) is slot `(i - 1) % 128` of table page `(i - 1) / 128`, so the
+//! first 128 handles fill the first page.
 //!
 //! A table page is a RAM frame of its own, allocated when its first handle is installed and
 //! freed when its last is removed, each charged one page to the process's budget. A new handle
 //! takes the lowest free index (as the model does), so a table filled without closing any
-//! handle costs exactly ceil(n / 128) pages; one with holes costs a page per page in use.
+//! handle costs exactly ceil(n / 128) pages; one with holes costs a page per page in use
+//! (QUESTIONS.md 111, pending: see `install_handle`).
 //!
-//! The stamp names a budget by frame, not by id: R10's sweep closes every handle stamped with a
-//! budget before that budget's frame is freed (I2), so a live handle's stamp always names the
-//! live budget that stamped it. Objects carry their id as well, and every lookup checks it.
+//! The object and the stamp each name a budget by frame and by id. R10's sweep closes every
+//! handle naming or stamped with a budget before that budget's frame is freed (I2), so both
+//! frames always hold the budgets named; every path that reads either checks the id, and a
+//! mismatch (a handle that escaped a sweep, naming a reused frame) stops the kernel (I1).
 
 use redoubt_sys::Error;
 use xous_kernel::PID;
 
-use crate::budget::BudgetFrame;
+use crate::budget::{Budget, BudgetFrame};
 use crate::kframe;
 use crate::mem::MemoryManager;
 
 /// Handles in one table page: `PAGE_SIZE` / 32 bytes.
 pub const HANDLES_PER_PAGE: usize = 128;
-/// Table pages a process may have. There must be some bound for the array below; this one allows
-/// 4096 handles per process.
-pub const MAX_HANDLE_PAGES: usize = 32;
+/// Handles one process may hold (QUESTIONS.md 102, pending): a table is an array of this many
+/// divided by 128 pages. Installing one more is `TooLarge`.
+pub const MAX_HANDLES: usize = 4096;
+/// Table pages a process may have.
+pub const MAX_HANDLE_PAGES: usize = MAX_HANDLES / HANDLES_PER_PAGE;
 /// Words one handle takes.
 const HANDLE_WORDS: usize = 4;
 const _: () = assert!(HANDLES_PER_PAGE * HANDLE_WORDS * 8 == xous_kernel::arch::PAGE_SIZE);
+/// Bits of a frame index in a handle's first word. Two fit, with the kind above them, because
+/// the physmap reaches at most 2^25 frames.
+const FRAME_BITS: u32 = 28;
+const _: () = assert!(xous_kernel::arch::PHYSMAP_SIZE / xous_kernel::arch::PAGE_SIZE <= 1 << FRAME_BITS);
+
+/// A budget, named by frame and by id (the id is what the spec's stamp is).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BudgetRef {
+    pub frame: BudgetFrame,
+    pub id: u64,
+}
 
 /// What a handle names. WP-K2 to WP-K4 add endpoints, processes and devices.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Object {
-    Budget { frame: BudgetFrame, id: u64 },
+    Budget(BudgetRef),
 }
 
 /// KERNEL-SPEC.md, Handle = (object, badge, stamp).
@@ -47,7 +62,7 @@ pub enum Object {
 pub struct Handle {
     pub object: Object,
     pub badge: u64,
-    pub stamp: BudgetFrame,
+    pub stamp: BudgetRef,
 }
 
 /// Object kinds in a handle's first word; 0 is an empty slot.
@@ -55,21 +70,35 @@ const KIND_BUDGET: u64 = 1;
 
 impl Handle {
     fn encode(&self) -> [u64; HANDLE_WORDS] {
-        let (kind, index, id) = match self.object {
-            Object::Budget { frame, id } => (KIND_BUDGET, frame, id),
+        let (kind, object) = match self.object {
+            Object::Budget(b) => (KIND_BUDGET, b),
         };
-        [kind | u64::from(index) << 32, id, self.badge, u64::from(self.stamp)]
+        let mask = (1u64 << FRAME_BITS) - 1;
+        let (of, sf) = (u64::from(object.frame), u64::from(self.stamp.frame));
+        assert!(of <= mask && sf <= mask, "frame index out of range");
+        [kind << (2 * FRAME_BITS) | sf << FRAME_BITS | of, object.id, self.badge, self.stamp.id]
     }
 
     fn decode(words: [u64; HANDLE_WORDS]) -> Option<Handle> {
-        let index = (words[0] >> 32) as u32;
-        let object = match words[0] as u32 as u64 {
+        let mask = (1u64 << FRAME_BITS) - 1;
+        let frame = |shift: u32| ((words[0] >> shift) & mask) as u32;
+        let object = match words[0] >> (2 * FRAME_BITS) {
             0 => return None,
-            KIND_BUDGET => Object::Budget { frame: index, id: words[1] },
+            KIND_BUDGET => Object::Budget(BudgetRef { frame: frame(0), id: words[1] }),
             // Only the kernel writes table pages.
             _ => panic!("I1: corrupt handle table"),
         };
-        Some(Handle { object, badge: words[2], stamp: words[3] as u32 })
+        Some(Handle { object, badge: words[2], stamp: BudgetRef { frame: frame(FRAME_BITS), id: words[3] } })
+    }
+}
+
+impl MemoryManager {
+    /// The budget `r` names, which must still be the one it named (I1): a handle that escaped
+    /// R10's sweep would name a frame freed and perhaps reused, and the kernel stops instead.
+    pub fn budget_at(&self, r: BudgetRef) -> Budget {
+        let b = self.budget(r.frame);
+        assert!(b.id == r.id, "I1: a handle names a budget that is gone");
+        b
     }
 }
 
@@ -113,24 +142,26 @@ impl MemoryManager {
         let (page, slot) = position(index).ok_or(Error::BadHandle)?;
         let frame = self.table(pid).and_then(|t| t.pages[page]).ok_or(Error::BadHandle)?;
         let handle = self.read_slot(frame, slot).ok_or(Error::BadHandle)?;
-        // Every live handle names a live object (I1): check the object is the one it named.
+        // Every live handle names a live object, and a live stamp (I1).
         match handle.object {
-            Object::Budget { frame, id } => assert!(self.budget(frame).id == id, "I1: stale budget handle"),
-        }
+            Object::Budget(b) => self.budget_at(b),
+        };
+        self.budget_at(handle.stamp);
         Ok(handle)
     }
 
     /// The budget `pid`'s handle `index` names: `BadHandle`, then `WrongObject`.
     pub fn budget_handle(&self, pid: PID, index: u32) -> Result<BudgetFrame, Error> {
         match self.handle(pid, index)?.object {
-            Object::Budget { frame, .. } => Ok(frame),
+            Object::Budget(b) => Ok(b.frame),
         }
     }
 
     /// Put `handle` at the lowest free index of `pid`'s table. A new table page is charged to
-    /// the process's budget: `OutOfMemory` if it cannot pay, or if the table is at
-    /// `MAX_HANDLE_PAGES`.
+    /// the process's budget (`OutOfMemory` if it cannot pay); a table already holding
+    /// `MAX_HANDLES` gets `TooLarge`.
     pub fn install_handle(&mut self, pid: PID, handle: Handle) -> Result<u32, Error> {
+        // Only the kernel has no account, and it holds no handles (see `budget_create`).
         let budget = self.budget_of(pid).ok_or(Error::NotPermitted)?;
         let table = *self.table(pid).expect("account");
         for page in 0..MAX_HANDLE_PAGES {
@@ -138,6 +169,8 @@ impl MemoryManager {
                 Some(_) if usize::from(table.live[page]) == HANDLES_PER_PAGE => continue,
                 Some(frame) => frame,
                 None => {
+                    // One page per table page in use, charged when the page is first needed and
+                    // returned when it empties (QUESTIONS.md 111, pending).
                     self.charge(budget, 1)?;
                     let frame = self.alloc_object_frame().inspect_err(|_| self.uncharge(budget, 1))?;
                     self.account_mut(pid).expect("account").handles.pages[page] = Some(frame);
@@ -151,7 +184,8 @@ impl MemoryManager {
             self.account_mut(pid).expect("account").handles.live[page] += 1;
             return Ok((page * HANDLES_PER_PAGE + slot + 1) as u32);
         }
-        Err(Error::OutOfMemory)
+        // Past MAX_HANDLES (QUESTIONS.md 102, pending).
+        Err(Error::TooLarge)
     }
 
     /// Remove `pid`'s handle `index`, freeing its table page if it was the page's last.
@@ -161,8 +195,6 @@ impl MemoryManager {
         if self.read_slot(frame, slot).is_none() {
             return;
         }
-        // WP-K2: closing the last handle with a badge sends its endpoint's owner a notice
-        // (QUESTIONS.md 53); that hook goes here and in the sweep, which both come through here.
         self.write_slot(frame, slot, [0; HANDLE_WORDS]);
         let budget = self.budget_of(pid).expect("a table belongs to an account");
         let table = &mut self.account_mut(pid).expect("account").handles;

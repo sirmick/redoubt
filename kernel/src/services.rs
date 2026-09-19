@@ -300,6 +300,7 @@ std::thread_local!(static SYSTEM_SERVICES: core::cell::RefCell<SystemServices> =
     servers: filled_array![None; 128],
 }));
 
+/// Taken before `MEMORY_MANAGER`, never after it: the lock order is stated there (mem.rs).
 #[cfg(baremetal)]
 static SYSTEM_SERVICES: KernelCell<SystemServices> = KernelCell::new(SystemServices {
     processes: [Process {
