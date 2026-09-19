@@ -59,10 +59,15 @@ per-process heap. Costs we accept:
 Integers are `i64` and move to `BigInt` (`num-bigint`) only on overflow, and back when they fit, so
 each integer has one representation. Bignums are capped at 2^24 bits (`system_limit` beyond).
 
-Maps are `BTreeMap`s ordered by the exact term order. BEAM's iteration order for atom keys
-depends on atom-table indices and is unspecified; ours is always term order. The differential
-harness prints maps with `~kw` (ordered) so outputs compare, and tests must not depend on raw
-iteration order.
+Maps are persistent AVL trees (`pmap.rs`, about 200 lines) ordered by the exact term order.
+Versions share nodes, so `maps:put` on a map someone else still holds copies O(log n) nodes,
+not the whole map (a plain `BTreeMap` made building a map quadratic: 13x slower on a 1000-key
+fold). BEAM's iteration order for atom keys depends on atom-table indices and is unspecified;
+ours is always term order. The differential harness prints maps with `~kw` (ordered) so
+outputs compare, and tests must not depend on raw iteration order.
+
+Nothing recurses on the Rust stack over a term's depth: dropping (`drop_flat`), comparing and
+printing use explicit work lists. A million-level nested tuple, list or map is fine.
 
 A match context (`Term::Match`) is internal: it exists only between `bs_start_match*` and the end
 of a binary match, as in BEAM.
@@ -76,6 +81,26 @@ nothing can run, the VM calls `Platform::idle(next_deadline)`.
 Exceptions unwind to the innermost handler recorded by `try`/`catch` (a handler stack, rather than
 BEAM's scan of the stack for catch tags). The "raw" stack trace in x2 is `{Class, Trace}` so the
 `raise` instruction can rethrow with the right class.
+
+## Runtime services in Erlang
+Some of what BEAM does in C, or in the kernel application, is here a small Erlang module in
+`vm/lib/`, compiled by `tools/build-lib` and embedded in the VM (checked in, so building the VM
+needs no Erlang toolchain; `tools/build-lib --check` keeps them honest):
+- `beamlet_io`: the I/O protocol server behind `io:format` and `IO.puts`. Started at boot as
+  `user` and `standard_error`; the group leader of every process. Output goes through
+  `Platform::console_write`. No input yet.
+- `logger` and `error_logger`: stand-ins for the kernel's. Level filtering, and reports printed
+  to `standard_error`, formatted by their own `report_cb` as OTP does. No handlers.
+
+Other BEAM-internal modules (`init`, `erts_internal`, `code`, `net_kernel`, `persistent_term`,
+`os`) are answered by natives. The environment (`os:getenv`) is the VM's own and starts empty:
+the host's is not visible. There is no time zone: `localtime()` is UTC.
+
+## Processes, messages, time
+Links, monitors (including by registered name), aliases (`monitor/3`, `alias/0,1`, as used by
+`gen:call`), exit signals (`exit/2`'s `kill` is untrappable; a link's is not), registered
+names, the process dictionary, `send_after`/`start_timer`, and ETS (`ets.rs`: every table type,
+enforced access, heirs, match specifications restricted to pure guard functions).
 
 ## Validation and failure
 - The loader checks every table index, label, register number and literal before code runs. The
@@ -91,16 +116,26 @@ BEAM's scan of the stack for catch tags). The "raw" stack trace in x2 is `{Class
   on the real BEAM (`tools/expect.escript`) and on beamlet, and the printed results must be
   identical. The real OTP `stdlib` `.beam` files are on beamlet's code path, so every test also
   exercises the loader and interpreter on OTP's own code.
-- **Hostile input**: see `vm/tests/`.
+- **Hostile input** (`vm/tests/hostile.rs`): every truncation of real `.beam` files is
+  rejected; mutation fuzzing (20k rounds by default, 1M soaked) must never panic or hang the VM.
+  It found four bugs, each now a regression test.
+- **Corpora**: `tests/erlang` (ours), `tests/elixir` (Enum, String, structs, GenServer, Agent,
+  Task, Supervisor, IO, exceptions), `tests/atomvm` (AtomVM's 491 modules; `SKIP` lists those
+  that need ports, NIFs or BEAM heap sizes, with reasons).
 
 ## Opcode census
 `tools/census.escript` lists the instructions and imports a set of `.beam` files use. On OTP 28:
 126 opcodes are live (not deprecated); the Elixir standard library uses about 100 of them. The
 loader refuses deprecated opcodes, and the interpreter implements all live ones except `on_load`.
 
+## Performance
+Not a goal, but measured so nothing is gratuitously slow. On one core: `fib(27)` 0.12 s, a
+200k-element `lists:map`/`filter`/`sum` 0.13 s, a 200k-insert map fold 0.25 s, sorting 200k
+integers 0.48 s. BEAM's JIT is roughly 10-30x faster.
+
 ## Open questions
 - Mailbox overflow currently drops messages silently. Kill the receiver instead?
 - Per-process memory limits with shared (reference-counted) terms.
-- Map iteration is quadratic in nothing, but `maps:put` in a loop copies the map when it is
-  shared: consider a persistent map if measurements say so.
+- Local funs cannot be serialized (`term_to_binary`); `erlang:phash2/1,2` is missing.
+- Console input for the I/O server.
 - Name.
