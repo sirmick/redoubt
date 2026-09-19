@@ -1,12 +1,13 @@
-//! Xous loader for RV64 platforms that boot through SBI firmware with a device tree.
+//! Xous loader for RISC-V platforms that boot through SBI firmware with a device tree,
+//! for both rv64 (Sv39) and rv32 (Sv32) — the same binary, width chosen at build time.
 //!
 //! The firmware enters `_start` in S-mode on a single boot hart with the MMU off,
 //! `a0` = hart ID and `a1` = physical address of the flattened device tree. All other
 //! harts stay parked in the firmware until started through the SBI HSM extension.
 //!
-//! The loader unpacks the boot bundle (see `image.rs`), builds an Sv39 address space for
-//! the kernel and for each initial process, describes the machine to the kernel in a
-//! tagged argument block, and enters the kernel. Design notes: `planning/xous64/BOOT.md`.
+//! The loader unpacks the boot bundle (see `image.rs`), builds an address space for the
+//! kernel and for each initial process, describes the machine to the kernel in a tagged
+//! argument block, and enters the kernel. Design notes: `planning/xous64/BOOT.md`.
 
 #![no_std]
 #![no_main]
@@ -88,7 +89,8 @@ struct InitialProcess {
 #[no_mangle]
 extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     println!();
-    println!("loader64: Xous RV64 loader, boot hart {}", hart_id);
+    let xlen = core::mem::size_of::<usize>() * 8;
+    println!("loader64: Xous rv{} loader, boot hart {}", xlen, hart_id);
 
     // SAFETY: the SBI boot protocol passes the device-tree address in `a1`.
     let platform = unsafe { Platform::read(dtb) };
