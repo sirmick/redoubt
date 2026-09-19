@@ -114,6 +114,12 @@ pub struct System {
     /// Directories of the VM's own file system searched for `.beam` files after the platform
     /// (`code:add_patha/1` and friends), in order.
     pub(crate) code_path: Vec<String>,
+    /// Directories of the VM's file system holding applications as `App` or `App-Vsn`
+    /// directories (OTP's `lib`), for `code:lib_dir/1` and `code:priv_dir/1`.
+    pub(crate) lib_roots: Vec<String>,
+    /// For modules loaded from bytes (`code:load_binary/3`, `load_file/1`, `load_abs/1`): the
+    /// file name they were loaded with, which `code:which/1` reports.
+    pub(crate) module_files: BTreeMap<String, Term>,
     /// Samples of where processes are at the end of each time slice (the top few functions),
     /// when profiling is on (`Vm::enable_profile`).
     pub(crate) profile: Option<BTreeMap<String, u64>>,
@@ -369,6 +375,8 @@ impl Vm {
                 console_reader: None,
                 backtrace_depth: 8,
                 code_path: Vec::new(),
+                lib_roots: Vec::new(),
+                module_files: BTreeMap::new(),
                 profile: None,
                 resolved: BTreeMap::new(),
                 stats: Stats::default(),
@@ -430,6 +438,12 @@ impl Vm {
                 return Err(RunError::Deadlock);
             }
         }
+    }
+
+    /// Add a directory of the VM's file system where applications live (`App-Vsn/ebin`,
+    /// `App-Vsn/priv`, `App-Vsn/include`), searched by `code:lib_dir/1`.
+    pub fn add_lib_root(&mut self, dir: &str) {
+        self.sys.lib_roots.push(String::from(dir));
     }
 
     /// Start sampling where processes are at the end of each time slice (a statistical profile
@@ -560,6 +574,7 @@ impl System {
     /// the platform, if the platform has it. `false` if it was not loaded.
     pub fn delete_module(&mut self, name: &Atom) -> bool {
         self.resolved.clear();
+        self.module_files.remove(name.as_str());
         self.modules.remove(name.as_str()).is_some()
     }
 
@@ -833,9 +848,9 @@ impl System {
             }
             self.exits.push_back(ExitSignal { target: other, from: pid, reason: reason.clone(), from_link: true, forced: false });
         }
-        for (r, (watcher, object)) in &p.monitored_by {
+        for (r, crate::process::Monitor { watcher, object, tag }) in &p.monitored_by {
             let msg = Term::tuple(alloc::vec![
-                Term::Atom(self.atoms.down.clone()),
+                tag.clone().unwrap_or_else(|| Term::Atom(self.atoms.down.clone())),
                 Term::Ref(*r),
                 Term::Atom(self.atoms.process.clone()),
                 object.clone(),

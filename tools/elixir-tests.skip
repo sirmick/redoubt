@@ -1,0 +1,13 @@
+# Elixir test files, or single tests, that cannot pass on beamlet by design. tools/elixir-tests
+# reports them separately. One per line: FILE[:TEST NAME] then the reason after " -- ".
+regex_test.exs -- a backreference; the linear-time regex engine has none (the file cannot load)
+application_test.exs:application directory -- expects Elixir compiled inside its source checkout
+code_test.exs -- inspects BEAM's code_server process, which does not exist here
+kernel/cli_test.exs -- runs the elixir/elixirc/iex executables through the OS
+kernel/dialyzer_test.exs -- runs dialyzer, an OTP tool not run here
+port_test.exs -- ports: the VM has no OS processes
+system_test.exs -- runs OS commands and ports
+string/chars_test.exs:port -- needs a port; the VM has none
+protocol_test.exs:protocol implementations without any -- needs a port
+protocol/consolidation_test.exs:consolidated implementations without fallback to any -- needs a port
+kernel_test.exs:doctest Kernel.is_port/1 (54) -- needs a port

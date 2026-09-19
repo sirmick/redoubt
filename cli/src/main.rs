@@ -10,7 +10,9 @@
 //! this line with what the real BEAM prints for the same call.
 //!
 //! `--root DIR` gives the VM a file system: `DIR` becomes its `/`, and nothing outside it is
-//! reachable. Without it, `file` operations fail with `enotsup`.
+//! reachable. Without it, `file` operations fail with `enotsup`. `--mount /AT=DIR[:ro]` shows
+//! another host directory at `/AT` (read-only with `:ro`); `--lib /DIR` names a directory of
+//! the VM's file system holding applications (`App-Vsn/...`) for `code:lib_dir/1`.
 
 mod files;
 
@@ -28,10 +30,15 @@ impl Posix {
     /// The first `name` in the code path. Names come from module and application atoms:
     /// refuse anything that could leave the directory.
     fn find(&self, name: &str) -> Option<Vec<u8>> {
+        std::fs::read(self.locate(name)?).ok()
+    }
+
+    /// The host path of the first `name` in the code path.
+    fn locate(&self, name: &str) -> Option<PathBuf> {
         if name.is_empty() || name.contains(['/', '\\', '\0']) || name.starts_with('.') {
             return None;
         }
-        self.code_path.iter().find_map(|dir| std::fs::read(dir.join(name)).ok())
+        self.code_path.iter().map(|dir| dir.join(name)).find(|p| p.is_file())
     }
 }
 
@@ -139,13 +146,18 @@ impl Platform for Posix {
         self.find(&format!("{app}.app"))
     }
 
+    fn module_file(&mut self, module: &str) -> Option<String> {
+        let host = self.locate(&format!("{module}.beam"))?;
+        self.files.as_ref()?.vm_path(&host)
+    }
+
     fn files(&mut self) -> Option<&mut dyn beamlet_vm::platform::Files> {
         self.files.as_mut().map(|f| f as &mut dyn beamlet_vm::platform::Files)
     }
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: beamlet [-pa DIR]... [--root DIR] MODULE [FUNCTION [ARG...]]");
+    eprintln!("usage: beamlet [-pa DIR]... [--root DIR [--mount /AT=DIR[:ro]]... [--lib /DIR]...] MODULE [FUNCTION [ARG...]]");
     ExitCode::from(2)
 }
 
@@ -176,8 +188,18 @@ fn main() -> ExitCode {
     let mut code_path = Vec::new();
     let mut positional = Vec::new();
     let mut root = None;
+    let mut mounts = Vec::new();
+    let mut libs = Vec::new();
     while let Some(a) = args.next() {
         match a.as_str() {
+            "--mount" => match args.next() {
+                Some(spec) => mounts.push(spec),
+                None => return usage(),
+            },
+            "--lib" => match args.next() {
+                Some(dir) => libs.push(dir),
+                None => return usage(),
+            },
             "--root" => match args.next().map(|d| files::HostDir::new(&d).map_err(|e| (d, e))) {
                 Some(Ok(dir)) => root = Some(dir),
                 Some(Err((d, e))) => {
@@ -200,6 +222,21 @@ fn main() -> ExitCode {
         _ => return usage(),
     };
 
+    for spec in &mounts {
+        let Some(fs) = root.as_mut() else {
+            eprintln!("beamlet: --mount needs --root");
+            return ExitCode::from(2);
+        };
+        let (at, host) = spec.split_once('=').unwrap_or((spec, ""));
+        let (host, ro) = match host.strip_suffix(":ro") {
+            Some(h) => (h, true),
+            None => (host, false),
+        };
+        if let Err(e) = fs.mount(at, host, ro) {
+            eprintln!("beamlet: --mount {spec}: {e}");
+            return ExitCode::from(2);
+        }
+    }
     let mid_line = std::rc::Rc::new(std::cell::Cell::new(false));
     let platform = Posix { start: Instant::now(), code_path, files: root, input: None, stash: None, mid_line: mid_line.clone() };
     // Natives are 'static slices; join the crates' tables once.
@@ -207,6 +244,9 @@ fn main() -> ExitCode {
         Box::leak([beamlet_crypto::NATIVES, beamlet_re::NATIVES].concat().into_boxed_slice());
     let config = beamlet_vm::vm::Config { natives, ..Default::default() };
     let mut vm = Vm::with_config(Box::new(platform), config);
+    for dir in &libs {
+        vm.add_lib_root(dir);
+    }
     let string = |s: &str| Term::list(s.chars().map(|c| Term::Int(c as i64)).collect::<Vec<_>>());
     let call_args = match args {
         Some(a) => vec![Term::list(a.iter().map(|s| string(s)).collect::<Vec<_>>())],

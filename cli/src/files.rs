@@ -1,8 +1,10 @@
-//! The POSIX file system for a VM: one host directory, exposed as the VM's `/`.
+//! The POSIX file system for a VM: host directories mounted into the VM's name space. One is
+//! `/` (`--root`); others appear at their mount points (`--mount /otp=DIR:ro`), read-only if
+//! asked, like the per-process namespaces of the OS this is for.
 //!
-//! Every path is opened relative to that directory through `cap-std`, which refuses anything
-//! that would leave it: `..` past the top (the VM resolves those already) and, what the VM
-//! cannot see, symbolic links pointing outside. An escape attempt fails with `eacces`.
+//! Every path is opened relative to its mount's directory through `cap-std`, which refuses
+//! anything that would leave it: `..` past the top (the VM resolves those already) and, what
+//! the VM cannot see, symbolic links pointing outside. An escape attempt fails with `eacces`.
 
 use std::collections::BTreeMap;
 use std::io::{ErrorKind, Read, Seek, Write};
@@ -12,28 +14,80 @@ use std::os::unix::fs::FileExt;
 use beamlet_vm::platform::{FileError, FileInfo, FileKind, Files, OpenMode, SeekFrom};
 use cap_std::fs::{Dir, MetadataExt, OpenOptions};
 
+struct Mount {
+    /// Where it appears: `/`, or `/otp` (no trailing slash).
+    at: String,
+    /// The host directory, canonical.
+    host: std::path::PathBuf,
+    dir: Dir,
+    read_only: bool,
+}
+
 pub struct HostDir {
-    root: Dir,
+    /// Longest mount point first, so the first match is the most specific.
+    mounts: Vec<Mount>,
     open: BTreeMap<u64, std::fs::File>,
     next: u64,
 }
 
 impl HostDir {
+    /// A file system whose `/` is the host directory `dir`.
     pub fn new(dir: &str) -> std::io::Result<HostDir> {
-        let root = Dir::open_ambient_dir(dir, cap_std::ambient_authority())?;
-        Ok(HostDir { root, open: BTreeMap::new(), next: 1 })
+        let mut fs = HostDir { mounts: Vec::new(), open: BTreeMap::new(), next: 1 };
+        fs.mount("/", dir, false)?;
+        Ok(fs)
+    }
+
+    /// Show host directory `dir` at VM path `at` (absolute, e.g. `/otp`).
+    pub fn mount(&mut self, at: &str, dir: &str, read_only: bool) -> std::io::Result<()> {
+        let at = format!("/{}", at.trim_matches('/'));
+        let host = std::fs::canonicalize(dir)?;
+        let dir = Dir::open_ambient_dir(dir, cap_std::ambient_authority())?;
+        self.mounts.retain(|m| m.at != at);
+        self.mounts.push(Mount { at, host, dir, read_only });
+        self.mounts.sort_by_key(|m| std::cmp::Reverse(m.at.len()));
+        Ok(())
+    }
+
+    /// The VM path of a host file, if some mount shows it (the most specific one).
+    pub fn vm_path(&self, host_file: &std::path::Path) -> Option<String> {
+        let host_file = std::fs::canonicalize(host_file).ok()?;
+        self.mounts
+            .iter()
+            .filter_map(|m| host_file.strip_prefix(&m.host).ok().map(|rest| (m, rest)))
+            .min_by_key(|(_, rest)| rest.components().count())
+            .and_then(|(m, rest)| {
+                let rest = rest.to_str()?;
+                Some(if m.at == "/" { format!("/{rest}") } else { format!("{}/{rest}", m.at) })
+            })
+    }
+
+    /// The mount a VM path (`/a/b`, already normalized) is in, and the path within it.
+    fn at<'p>(&self, path: &'p str) -> (&Mount, &'p str) {
+        let m = self
+            .mounts
+            .iter()
+            .find(|m| m.at == "/" || path == m.at || path.strip_prefix(m.at.as_str()).is_some_and(|r| r.starts_with('/')))
+            .expect("/ is always mounted");
+        let inner = if m.at == "/" { path } else { &path[m.at.len()..] };
+        let inner = match inner.trim_start_matches('/') {
+            "" => ".",
+            p => p,
+        };
+        (m, inner)
+    }
+
+    /// Like [`HostDir::at`], for an operation that changes something.
+    fn at_writable<'p>(&self, path: &'p str) -> Result<(&Dir, &'p str), FileError> {
+        let (m, inner) = self.at(path);
+        if m.read_only {
+            return Err(FileError::Erofs);
+        }
+        Ok((&m.dir, inner))
     }
 
     fn file(&mut self, handle: u64) -> Result<&mut std::fs::File, FileError> {
         self.open.get_mut(&handle).ok_or(FileError::Ebadf)
-    }
-}
-
-/// A VM path (`/a/b`, already normalized) as a path relative to the root.
-fn rel(path: &str) -> &str {
-    match path.trim_start_matches('/') {
-        "" => ".",
-        p => p,
     }
 }
 
@@ -138,7 +192,11 @@ impl Files for HostDir {
         } else {
             o.create(mode.create);
         }
-        let f = self.root.open_with(rel(path), &o).map_err(error)?.into_std();
+        let (m, inner) = self.at(path);
+        if m.read_only && (mode.write || mode.create || mode.truncate || mode.append) {
+            return Err(FileError::Erofs);
+        }
+        let f = m.dir.open_with(inner, &o).map_err(error)?.into_std();
         let h = self.next;
         self.next += 1;
         self.open.insert(h, f);
@@ -195,62 +253,88 @@ impl Files for HostDir {
     }
 
     fn info(&mut self, path: &str, follow: bool) -> Result<FileInfo, FileError> {
-        let m = if follow { self.root.metadata(rel(path)) } else { self.root.symlink_metadata(rel(path)) };
+        let (m, inner) = self.at(path);
+        let m = if follow { m.dir.metadata(inner) } else { m.dir.symlink_metadata(inner) };
         Ok(info(&m.map_err(error)?))
     }
 
     fn list_dir(&mut self, path: &str) -> Result<Vec<Vec<u8>>, FileError> {
+        let (m, inner) = self.at(path);
         let mut names = Vec::new();
-        for entry in self.root.read_dir(rel(path)).map_err(error)? {
+        for entry in m.dir.read_dir(inner).map_err(error)? {
             names.push(entry.map_err(error)?.file_name().as_bytes().to_vec());
+        }
+        // Mount points directly inside this directory appear in it.
+        let prefix = if path == "/" { String::from("/") } else { format!("{path}/") };
+        for mount in &self.mounts {
+            if let Some(name) = mount.at.strip_prefix(prefix.as_str()).filter(|n| !n.is_empty() && !n.contains('/')) {
+                if !names.iter().any(|n| n == name.as_bytes()) {
+                    names.push(name.as_bytes().to_vec());
+                }
+            }
         }
         Ok(names)
     }
 
     fn make_dir(&mut self, path: &str) -> Result<(), FileError> {
-        self.root.create_dir(rel(path)).map_err(error)
+        let (d, inner) = self.at_writable(path)?;
+        d.create_dir(inner).map_err(error)
     }
 
     fn delete(&mut self, path: &str) -> Result<(), FileError> {
-        self.root.remove_file(rel(path)).map_err(error)
+        let (d, inner) = self.at_writable(path)?;
+        d.remove_file(inner).map_err(error)
     }
 
     fn del_dir(&mut self, path: &str) -> Result<(), FileError> {
-        self.root.remove_dir(rel(path)).map_err(error)
+        let (d, inner) = self.at_writable(path)?;
+        d.remove_dir(inner).map_err(error)
     }
 
     fn rename(&mut self, from: &str, to: &str) -> Result<(), FileError> {
-        self.root.rename(rel(from), &self.root, rel(to)).map_err(error)
+        let ((a, from), (b, to)) = (self.at_writable(from)?, self.at_writable(to)?);
+        if !std::ptr::eq(a, b) {
+            return Err(FileError::Exdev);
+        }
+        a.rename(from, b, to).map_err(error)
     }
 
     fn set_times(&mut self, path: &str, atime: i64, mtime: i64) -> Result<(), FileError> {
         let at = |secs: i64| std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_secs(secs.max(0) as u64));
         let (Some(a), Some(m)) = (at(atime), at(mtime)) else { return Err(FileError::Einval) };
         let times = std::fs::FileTimes::new().set_accessed(a).set_modified(m);
-        let file = match self.root.open(rel(path)) {
+        let (d, inner) = self.at_writable(path)?;
+        let file = match d.open(inner) {
             Ok(f) => f.into_std(),
             // Directories cannot be opened as files; open them as directories.
-            Err(_) => self.root.open_dir(rel(path)).map_err(error)?.into_std_file(),
+            Err(_) => d.open_dir(inner).map_err(error)?.into_std_file(),
         };
         file.set_times(times).map_err(error)
     }
 
     fn set_permissions(&mut self, path: &str, mode: u32) -> Result<(), FileError> {
         use cap_std::fs::PermissionsExt;
-        self.root.set_permissions(rel(path), cap_std::fs::Permissions::from_mode(mode)).map_err(error)
+        let (d, inner) = self.at_writable(path)?;
+        d.set_permissions(inner, cap_std::fs::Permissions::from_mode(mode)).map_err(error)
     }
 
     fn make_symlink(&mut self, target: &[u8], link: &str) -> Result<(), FileError> {
         let target = std::path::Path::new(std::ffi::OsStr::from_bytes(target));
-        self.root.symlink(target, rel(link)).map_err(error)
+        let (d, inner) = self.at_writable(link)?;
+        d.symlink(target, inner).map_err(error)
     }
 
     fn make_link(&mut self, existing: &str, new: &str) -> Result<(), FileError> {
-        self.root.hard_link(rel(existing), &self.root, rel(new)).map_err(error)
+        let ((a, existing), (b, new)) = (self.at_writable(existing)?, self.at_writable(new)?);
+        if !std::ptr::eq(a, b) {
+            return Err(FileError::Exdev);
+        }
+        a.hard_link(existing, b, new).map_err(error)
     }
 
     fn read_link(&mut self, path: &str) -> Result<Vec<u8>, FileError> {
-        let target = self.root.read_link(rel(path)).map_err(error)?;
+        let (m, inner) = self.at(path);
+        let target = m.dir.read_link(inner).map_err(error)?;
         Ok(target.as_os_str().as_bytes().to_vec())
     }
 }
@@ -290,6 +374,27 @@ mod tests {
         }
         // The link itself is inside and may be inspected.
         assert_eq!(fs.info("/abs", false).unwrap().kind, FileKind::Symlink);
+    }
+
+    #[test]
+    fn mounts_are_separate_and_may_be_read_only() {
+        let s = Scratch::new("mount");
+        std::fs::create_dir_all(s.0.join("lib/kernel")).unwrap();
+        std::fs::write(s.0.join("lib/kernel/k.hrl"), b"x").unwrap();
+        let mut fs = HostDir::new(s.0.join("root").to_str().unwrap()).unwrap();
+        fs.mount("/otp", s.0.join("lib").to_str().unwrap(), true).unwrap();
+        let read = OpenMode { read: true, ..OpenMode::default() };
+        let h = fs.open("/otp/kernel/k.hrl", read).unwrap();
+        assert_eq!(fs.read(h, 10).unwrap(), b"x");
+        let w = OpenMode { write: true, create: true, truncate: true, ..OpenMode::default() };
+        assert_eq!(fs.open("/otp/kernel/new", w), Err(FileError::Erofs));
+        assert_eq!(fs.make_dir("/otp/d"), Err(FileError::Erofs));
+        assert!(fs.list_dir("/").unwrap().contains(&b"otp".to_vec()));
+        assert_eq!(fs.list_dir("/otp").unwrap(), vec![b"kernel".to_vec()]);
+        // `/otpx` is not inside the `/otp` mount.
+        assert_eq!(fs.info("/otpx", true).unwrap_err(), FileError::Enoent);
+        fs.make_dir("/d").unwrap();
+        assert_eq!(fs.rename("/d", "/otp/d"), Err(FileError::Erofs));
     }
 
     #[test]

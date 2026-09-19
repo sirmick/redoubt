@@ -505,23 +505,77 @@ pub fn select(c: &mut Ctx, a: &[Term]) -> R {
     Ok(Term::list(found.into_iter().map(|(_, r)| r).collect::<Vec<_>>()))
 }
 
-/// `select(Tab, MS, Limit)`: everything in one chunk, then `'$end_of_table'`.
-pub fn select3(c: &mut Ctx, a: &[Term]) -> R {
-    a[2].as_usize().filter(|n| *n >= 1).ok_or_else(|| c.badarg())?;
-    let all = select(c, &a[..2])?;
-    if matches!(all, Term::Nil) {
-        return Ok(end_of_table(c));
+/// Hand out `results` `limit` at a time, as `{Chunk, Continuation}` and finally
+/// `'$end_of_table'`. The chunks come from the end for hash tables (as BEAM's do, which code
+/// such as Elixir's `Module.get_last_attribute/2` relies on) and from the front otherwise.
+/// The results are computed once, when the traversal starts: later changes to the table do not
+/// show, which BEAM does not promise either.
+fn chunk(c: &mut Ctx, mut results: Vec<Term>, limit: usize, from_end: bool) -> Term {
+    if results.is_empty() {
+        return end_of_table(c);
     }
-    let end = end_of_table(c);
-    Ok(Term::tuple(alloc::vec![all, end]))
+    let n = limit.min(results.len());
+    let chunk: Vec<Term> = if from_end { results.split_off(results.len() - n) } else { results.drain(..n).collect() };
+    let cont = if results.is_empty() {
+        end_of_table(c)
+    } else {
+        Term::tuple(alloc::vec![c.atom("$beamlet_select"), Term::list(results), Term::Int(limit as i64), c.bool(from_end)])
+    };
+    Term::tuple(alloc::vec![Term::list(chunk), cont])
 }
 
-/// `select(Continuation)`: this VM always returns everything in the first chunk.
+fn limit(c: &Ctx, t: &Term) -> Result<usize, Exception> {
+    t.as_usize().filter(|n| *n >= 1).ok_or_else(|| c.badarg())
+}
+
+/// Whether chunks of a traversal of table `id` come from the end (hash tables).
+fn hash_table(c: &Ctx, id: &Term) -> Result<bool, Exception> {
+    Ok(table(c, id)?.kind != Kind::OrderedSet)
+}
+
+/// `select(Tab, MS, Limit)`.
+pub fn select3(c: &mut Ctx, a: &[Term]) -> R {
+    let n = limit(c, &a[2])?;
+    let from_end = hash_table(c, &a[0])?;
+    let all = select(c, &a[..2])?.to_vec().expect("a list");
+    Ok(chunk(c, all, n, from_end))
+}
+
+/// `select_reverse(Tab, MS, Limit)`: an ordered set from its last key; a hash table as `select/3`.
+pub fn select_reverse3(c: &mut Ctx, a: &[Term]) -> R {
+    let n = limit(c, &a[2])?;
+    let from_end = hash_table(c, &a[0])?;
+    let all = if from_end { select(c, &a[..2])? } else { select_reverse(c, &a[..2])? };
+    Ok(chunk(c, all.to_vec().expect("a list"), n, from_end))
+}
+
+/// `match(Tab, Pattern, Limit)` and `match_object(Tab, Pattern, Limit)`.
+pub fn match3(c: &mut Ctx, a: &[Term]) -> R {
+    let n = limit(c, &a[2])?;
+    let from_end = hash_table(c, &a[0])?;
+    let all = match_(c, &a[..2])?.to_vec().expect("a list");
+    Ok(chunk(c, all, n, from_end))
+}
+
+pub fn match_object3(c: &mut Ctx, a: &[Term]) -> R {
+    let n = limit(c, &a[2])?;
+    let from_end = hash_table(c, &a[0])?;
+    let all = match_object(c, &a[..2])?.to_vec().expect("a list");
+    Ok(chunk(c, all, n, from_end))
+}
+
+/// `select(Continuation)` (also `match/1`, `match_object/1`, `select_reverse/1`).
 pub fn select1(c: &mut Ctx, a: &[Term]) -> R {
     if a[0].is_atom(&c.sys.atom("$end_of_table")) {
-        Ok(end_of_table(c))
-    } else {
-        Err(c.badarg())
+        return Ok(end_of_table(c));
+    }
+    match a[0].as_tuple() {
+        Some([Term::Atom(tag), rest, Term::Int(n), from_end]) if tag.as_str() == "$beamlet_select" && *n >= 1 => {
+            let rest = rest.to_vec().ok_or_else(|| c.badarg())?;
+            let from_end = from_end.is_atom(&c.sys.atoms.true_);
+            Ok(chunk(c, rest, *n as usize, from_end))
+        }
+        _ => Err(c.badarg()),
     }
 }
 

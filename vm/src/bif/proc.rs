@@ -190,11 +190,12 @@ pub fn send3(c: &mut Ctx, a: &[Term]) -> R {
 
 // ---- aliases ----
 
-fn alias_mode(c: &Ctx, opts: &Term) -> Result<Option<crate::vm::AliasMode>, Exception> {
+fn monitor_options(c: &Ctx, opts: &Term) -> Result<(Option<crate::vm::AliasMode>, Option<Term>), Exception> {
     use crate::vm::AliasMode;
-    let mut mode = None;
+    let (mut mode, mut tag) = (None, None);
     for o in opts.to_vec().ok_or_else(|| c.badarg())? {
         match o.as_tuple() {
+            Some([Term::Atom(k), t]) if k.as_str() == "tag" => tag = Some(t.clone()),
             Some([Term::Atom(k), Term::Atom(v)]) if k.as_str() == "alias" => {
                 mode = Some(match v.as_str() {
                     "explicit_unalias" => AliasMode::Explicit,
@@ -206,7 +207,7 @@ fn alias_mode(c: &Ctx, opts: &Term) -> Result<Option<crate::vm::AliasMode>, Exce
             _ => return Err(c.badarg()),
         }
     }
-    Ok(mode)
+    Ok((mode, tag))
 }
 
 /// `alias()` and `alias(Options)`: a reference that routes messages to the caller.
@@ -240,13 +241,19 @@ pub fn unalias(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 /// `monitor(process, Target, Options)`: supports `{alias, Mode}`.
+/// `monitor(process, Target, Options)`: `{alias, Mode}` and `{tag, Tag}` (the first element of
+/// the message instead of `'DOWN'`).
 pub fn monitor3(c: &mut Ctx, a: &[Term]) -> R {
-    let mode = alias_mode(c, &a[2])?;
-    let r = monitor(c, &a[..2])?;
+    let (mode, tag) = monitor_options(c, &a[2])?;
+    let r = monitor_tagged(c, &a[..2], tag)?;
     if let (Some(mode), Term::Ref(r)) = (mode, &r) {
         c.sys.aliases.insert(*r, crate::vm::Alias { owner: c.p.pid, mode });
     }
     Ok(r)
+}
+
+pub fn monitor(c: &mut Ctx, a: &[Term]) -> R {
+    monitor_tagged(c, a, None)
 }
 
 // ---- links, monitors, exit signals ----
@@ -301,7 +308,7 @@ pub fn unlink(c: &mut Ctx, a: &[Term]) -> R {
     Ok(Term::Atom(c.sys.atoms.true_.clone()))
 }
 
-pub fn monitor(c: &mut Ctx, a: &[Term]) -> R {
+fn monitor_tagged(c: &mut Ctx, a: &[Term], tag: Option<Term>) -> R {
     if !a[0].is_atom(&c.sys.atoms.process) {
         return Err(c.badarg());
     }
@@ -321,14 +328,14 @@ pub fn monitor(c: &mut Ctx, a: &[Term]) -> R {
     match target {
         Some(pid) if alive && pid != c.p.pid => {
             if let Some(t) = c.sys.procs.get_mut(pid) {
-                t.monitored_by.insert(r, (c.p.pid, object));
+                t.monitored_by.insert(r, crate::process::Monitor { watcher: c.p.pid, object, tag });
             }
             c.p.monitors.insert(r, pid);
         }
         Some(pid) if pid == c.p.pid => {} // monitoring yourself never fires
         _ => {
             let msg = Term::tuple(alloc::vec![
-                Term::Atom(c.sys.atoms.down.clone()),
+                tag.unwrap_or_else(|| Term::Atom(c.sys.atoms.down.clone())),
                 Term::Ref(r),
                 Term::Atom(c.sys.atoms.process.clone()),
                 object,
@@ -353,7 +360,7 @@ pub fn demonitor(c: &mut Ctx, a: &[Term]) -> R {
     Ok(Term::Atom(c.sys.atoms.true_.clone()))
 }
 
-/// `demonitor(Ref, Options)`: `flush` drops a `'DOWN'` already queued; `info` makes the result
+/// `demonitor(Ref, Options)`: `flush` drops a down message already queued; `info` makes the result
 /// say whether the monitor was still active (`true`) or had already fired or gone (`false`).
 pub fn demonitor2(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Ref(r) = a[0] else { return Err(c.badarg()) };
@@ -368,11 +375,8 @@ pub fn demonitor2(c: &mut Ctx, a: &[Term]) -> R {
     let active = c.p.monitors.contains_key(&r);
     demonitor(c, a)?;
     if flush {
-        let down = c.sys.atoms.down.clone();
-        c.p.mailbox.retain(|m| match m.as_tuple() {
-            Some([tag, Term::Ref(x), ..]) => !(tag.is_atom(&down) && *x == r),
-            _ => true,
-        });
+        // Any `{_, Ref, _, _, _}`: the first element may be a custom tag (`monitor/3`).
+        c.p.mailbox.retain(|m| !matches!(m.as_tuple(), Some([_, Term::Ref(x), _, _, _]) if *x == r));
         c.p.save = 0;
     }
     Ok(c.bool(!info || active))
@@ -794,7 +798,7 @@ fn spawn_with(c: &mut Ctx, entry: crate::process::Cp, args: Vec<Term>, opts: &Te
     }
     let r = c.sys.make_ref();
     if let Some(t) = c.sys.procs.get_mut(pid) {
-        t.monitored_by.insert(r, (c.p.pid, Term::Pid(pid)));
+        t.monitored_by.insert(r, crate::process::Monitor { watcher: c.p.pid, object: Term::Pid(pid), tag: None });
     }
     c.p.monitors.insert(r, pid);
     Ok(Term::tuple(alloc::vec![Term::Pid(pid), Term::Ref(r)]))

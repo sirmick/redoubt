@@ -47,9 +47,21 @@ pub static NATIVES: &[NativeSpec] = &[
 /// A compiled pattern (the resource inside `{re_pattern, Groups, Unicode, CrLf, Resource}`).
 struct Compiled {
     regex: Regex,
+    /// A lookbehind at the start of the pattern and a lookahead at its end (see [`split_edges`]),
+    /// checked around each match of `regex`.
+    behind: Option<Edge>,
+    ahead: Option<Edge>,
     unicode: bool,
     /// Group names by index (index 0, the whole match, has none).
     names: Vec<Option<String>>,
+}
+
+/// A lookaround assertion at the edge of a pattern: its body, and whether it is negative.
+struct Edge {
+    regex: Regex,
+    negative: bool,
+    /// For a lookbehind: the most bytes its body can match (PCRE requires a bound).
+    max_len: usize,
 }
 
 /// Compile options that change the pattern.
@@ -63,6 +75,8 @@ struct Flags {
     ungreedy: bool,
     crlf: bool,
     anchored: bool,
+    /// `$` matches only at the very end (not also before a final newline).
+    dollar_endonly: bool,
 }
 
 fn atom(t: &Term) -> Option<&str> {
@@ -84,7 +98,8 @@ fn compile_option(f: &mut Flags, o: &Term) -> bool {
         Some("anchored") => f.anchored = true,
         // Accepted with no effect here: optimisation hints, and PCRE behaviours this engine
         // has anyway (UCP classes under `unicode`, no start optimisation to disable).
-        Some("ucp" | "no_start_optimize" | "dollar_endonly" | "no_auto_capture" | "never_utf" | "dupnames"
+        Some("dollar_endonly") => f.dollar_endonly = true,
+        Some("ucp" | "no_start_optimize" | "no_auto_capture" | "never_utf" | "dupnames"
             | "firstline" | "bsr_anycrlf" | "bsr_unicode" | "report_errors") => {}
         _ => match o.as_tuple() {
             Some([k, v]) if atom(k) == Some("newline") => f.crlf = matches!(atom(v), Some("crlf" | "anycrlf" | "any")),
@@ -145,6 +160,13 @@ fn translate(p: &str) -> String {
                 'h' if !in_class => out.push_str("[ \\t]"),
                 'h' => out.push_str(" \\t"),
                 'R' if !in_class => out.push_str("(?:\\r\\n|\\n|\\r|\\x0B|\\x0C)"),
+                // `\p{Lu}`, `\x{263A}`, `\g{1}`...: the braces belong to the escape.
+                'p' | 'P' | 'x' | 'o' | 'g' | 'k' if chars.get(i + 2) == Some(&'{') => {
+                    let end = chars[i + 2..].iter().position(|&c| c == '}').map_or(chars.len(), |e| i + 2 + e + 1);
+                    out.extend(&chars[i..end]);
+                    i = end;
+                    continue;
+                }
                 _ => {
                     out.push(ch);
                     out.push(next);
@@ -252,8 +274,38 @@ fn build(pattern: &[u8], f: Flags) -> Result<Compiled, (String, usize)> {
         .swap_greed(f.ungreedy)
         .crlf(f.crlf);
     let original_len = pattern.chars().count();
-    let pattern = translate(&pattern);
-    let regex = Regex::builder()
+    let (core, behind, ahead) = split_edges(&pattern, !f.multiline && !f.dollar_endonly);
+    let edge = |body: &str, negative: bool, behind: bool| -> Result<Edge, (String, usize)> {
+        let body = translate(body);
+        // A lookbehind is matched against the text just before the match, ending there.
+        let text = if behind { format!("(?:{body})\\z") } else { body.clone() };
+        let regex = regex_for(&text, cfg, f, original_len)?;
+        let max_len = if behind {
+            let hir = regex_syntax::ParserBuilder::new()
+                .unicode(f.unicode)
+                .utf8(f.unicode)
+                .case_insensitive(f.caseless)
+                .multi_line(f.multiline)
+                .build()
+                .parse(&body)
+                .map_err(|_| (String::from("lookbehind assertion is not fixed length"), 0))?;
+            hir.properties().maximum_len().ok_or((String::from("lookbehind assertion is not fixed length"), 0))?
+        } else {
+            0
+        };
+        Ok(Edge { regex, negative, max_len })
+    };
+    let behind = behind.map(|(b, neg)| edge(&b, neg, true)).transpose()?;
+    let ahead = ahead.map(|(a, neg)| edge(&a, neg, false)).transpose()?;
+    let pattern = translate(&core);
+    let regex = regex_for(&pattern, cfg, f, original_len)?;
+    let names = regex.group_info().pattern_names(regex_automata::PatternID::ZERO).map(|n| n.map(String::from)).collect();
+    Ok(Compiled { regex, behind, ahead, unicode: f.unicode, names })
+}
+
+/// Compile translated pattern text with the limits every pattern gets.
+fn regex_for(pattern: &str, cfg: syntax::Config, f: Flags, len: usize) -> Result<Regex, (String, usize)> {
+    Regex::builder()
         .syntax(cfg)
         // Bound what a pattern may cost to compile and run: a hostile `(a{1000}){1000}` is an
         // error, not a large allocation.
@@ -265,10 +317,104 @@ fn build(pattern: &[u8], f: Flags) -> Result<Compiled, (String, usize)> {
                 .hybrid_cache_capacity(CACHE_CAPACITY)
                 .dfa_size_limit(Some(NFA_SIZE_LIMIT)),
         )
-        .build(&pattern)
-        .map_err(|e| pcre_error(&e, original_len))?;
-    let names = regex.group_info().pattern_names(regex_automata::PatternID::ZERO).map(|n| n.map(String::from)).collect();
-    Ok(Compiled { regex, unicode: f.unicode, names })
+        .build(pattern)
+        .map_err(|e| pcre_error(&e, len))
+}
+
+/// Split a lookbehind off the start of `p` and a lookahead off its end, when they stand at the
+/// top level of a pattern without top-level alternatives: `(?<!\\)\|` and `^(?=.+)` (both used by
+/// Elixir itself). The engine has no lookaround, since it would lose the linear-time guarantee,
+/// but at the edges it can be checked around each match instead. Anything else keeps its
+/// lookaround and fails to compile. The lookahead is tried against the leftmost-first match
+/// only: unlike PCRE, a shorter match is not tried when it fails.
+#[allow(clippy::type_complexity)]
+///
+/// With `pcre_dollar`, a `$` ending the pattern becomes the lookahead `\n?\z`: outside multiline
+/// mode PCRE's `$` also matches before a final newline, where Rust's matches only at the end.
+fn split_edges(p: &str, pcre_dollar: bool) -> (String, Option<(String, bool)>, Option<(String, bool)>) {
+    let chars: Vec<char> = p.chars().collect();
+    let whole = || (String::from(p), None, None);
+    // Top-level groups (start, end) and whether there is a top-level `|`.
+    let mut groups = Vec::new();
+    let (mut depth, mut i, mut bar) = (0usize, 0usize, false);
+    let mut open = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' => i += 1,
+            '[' => {
+                // Skip the class: `]` right after `[` or `[^` is literal.
+                let mut j = i + 1;
+                if chars.get(j) == Some(&'^') {
+                    j += 1;
+                }
+                if chars.get(j) == Some(&']') {
+                    j += 1;
+                }
+                while j < chars.len() && chars[j] != ']' {
+                    if chars[j] == '\\' {
+                        j += 1;
+                    }
+                    j += 1;
+                }
+                i = j;
+            }
+            '(' => {
+                if depth == 0 {
+                    open = i;
+                }
+                depth += 1;
+            }
+            ')' => {
+                if depth == 0 {
+                    return whole();
+                }
+                depth -= 1;
+                if depth == 0 {
+                    groups.push((open, i));
+                }
+            }
+            '|' if depth == 0 => bar = true,
+            _ => {}
+        }
+        i += 1;
+    }
+    if depth != 0 || bar {
+        return whole();
+    }
+    let text = |a: usize, b: usize| chars[a..b].iter().collect::<String>();
+    let kind = |(s, _): (usize, usize)| -> Option<(bool, bool)> {
+        // (is lookbehind, is negative)
+        match chars.get(s + 1..s + 4).map(|c| c.iter().collect::<String>()).as_deref() {
+            Some("?<=") => Some((true, false)),
+            Some("?<!") => Some((true, true)),
+            _ => match chars.get(s + 1..s + 3).map(|c| c.iter().collect::<String>()).as_deref() {
+                Some("?=") => Some((false, false)),
+                Some("?!") => Some((false, true)),
+                _ => None,
+            },
+        }
+    };
+    let (mut from, mut to) = (0, chars.len());
+    let mut behind = None;
+    let mut ahead = None;
+    if let Some(&g) = groups.first().filter(|g| g.0 == 0) {
+        if let Some((true, neg)) = kind(g) {
+            behind = Some((text(g.0 + 4, g.1), neg));
+            from = g.1 + 1;
+        }
+    }
+    if let Some(&g) = groups.last().filter(|g| g.1 + 1 == chars.len() && g.0 >= from) {
+        if let Some((false, neg)) = kind(g) {
+            ahead = Some((text(g.0 + 3, g.1), neg));
+            to = g.0;
+        }
+    }
+    let escaped = |i: usize| chars[..i].iter().rev().take_while(|&&c| c == '\\').count() % 2 == 1;
+    if ahead.is_none() && pcre_dollar && to > from && chars[to - 1] == '$' && !escaped(to - 1) {
+        ahead = Some((String::from("\\n?\\z"), false));
+        to -= 1;
+    }
+    (text(from, to), behind, ahead)
 }
 
 /// A compile error as PCRE2 words it (programs match on these messages, e.g. Elixir's tests), with
@@ -474,7 +620,7 @@ fn find(re: &Compiled, subject: &[u8], at: usize, anchored: bool, skip_empty_at:
         re.regex.search_captures(&input, &mut caps);
         let m = caps.get_match()?;
         let empty = m.start() == m.end();
-        let rejected = empty && (no_empty || skip_empty_at == Some(m.start()));
+        let rejected = (empty && (no_empty || skip_empty_at == Some(m.start()))) || !edges_hold(re, subject, m.start(), m.end());
         if !rejected {
             let n = caps.group_len();
             return Some((0..n).map(|g| caps.get_group(g).map(|s| (s.start, s.end))).collect());
@@ -485,6 +631,24 @@ fn find(re: &Compiled, subject: &[u8], at: usize, anchored: bool, skip_empty_at:
         // Look again one character further on.
         start = m.start() + char_len(re, subject, m.start());
     }
+}
+
+/// Whether the edge lookarounds of `re` hold around a match from `start` to `end`.
+fn edges_hold(re: &Compiled, subject: &[u8], start: usize, end: usize) -> bool {
+    if let Some(b) = &re.behind {
+        let window = &subject[start.saturating_sub(b.max_len)..start];
+        let found = b.regex.search(&Input::new(window)).is_some();
+        if found == b.negative {
+            return false;
+        }
+    }
+    if let Some(a) = &re.ahead {
+        let found = a.regex.search(&Input::new(subject).range(end..).anchored(Anchored::Yes)).is_some();
+        if found == a.negative {
+            return false;
+        }
+    }
+    true
 }
 
 /// The length of the character at `i` (1 for Latin-1, or at the end).
@@ -668,5 +832,6 @@ mod tests {
         assert_eq!(translate("%\\{\\}"), "%\\{\\}");
         assert_eq!(translate("a{}b{,}c{x}"), "a\\{}b\\{,}c\\{x}");
         assert_eq!(translate("[{]"), "[{]");
+        assert_eq!(translate("\\p{Lu}\\P{Latin}\\x{263A}{2}"), "\\p{Lu}\\P{Latin}\\x{263A}{2}");
     }
 }

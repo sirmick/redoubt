@@ -8,6 +8,7 @@
 //! Capability discipline: the platform decides what a VM instance may reach. The VM itself holds
 //! no ambient authority (no filesystem, no network, no clock it did not get from here).
 
+use alloc::string::String;
 use alloc::vec::Vec;
 
 /// Services the host operating system provides to one VM instance.
@@ -45,6 +46,13 @@ pub trait Platform {
     /// start it. The default is none: applications are then unavailable.
     fn load_app(&mut self, app: &str) -> Option<Vec<u8>> {
         let _ = app;
+        None
+    }
+
+    /// Where the `.beam` file [`Platform::load_module`] gives for `module` appears in the VM's
+    /// own file system, if it does (for `code:which/1`, and tools that read chunks from it).
+    fn module_file(&mut self, module: &str) -> Option<String> {
+        let _ = module;
         None
     }
 

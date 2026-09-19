@@ -48,7 +48,7 @@ fn info_item(table: &mut AtomTable, atoms: &Atoms, p: &Process, running: bool, d
     let mut atom = |name: &str| Term::Atom(table.intern(name).expect("short atom"));
     Some(match item {
         "links" => pids(&mut p.links.iter().copied()),
-        "monitored_by" => pids(&mut p.monitored_by.values().map(|(w, _)| *w)),
+        "monitored_by" => pids(&mut p.monitored_by.values().map(|m| m.watcher)),
         "monitors" => Term::list(
             p.monitors
                 .values()
@@ -187,7 +187,10 @@ pub fn load_binary(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Atom(m) = &a[0] else { return Err(c.badarg()) };
     let bytes = a[2].iodata_bytes().ok_or_else(|| c.badarg())?;
     match c.sys.load_bytes(&bytes) {
-        Ok(name) if &name == m => Ok(Term::tuple(alloc::vec![c.atom("module"), a[0].clone()])),
+        Ok(name) if &name == m => {
+            c.sys.module_files.insert(String::from(m.as_str()), a[1].clone());
+            Ok(Term::tuple(alloc::vec![c.atom("module"), a[0].clone()]))
+        }
         Ok(_) => Ok(Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.error.clone()), c.atom("badfile")])),
         Err(_) => Ok(Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.error.clone()), c.atom("badfile")])),
     }
@@ -216,15 +219,23 @@ pub fn soft_purge(c: &mut Ctx, _a: &[Term]) -> R {
     Ok(c.bool(true))
 }
 
-/// `code:get_object_code(Module)`: `{Module, Beam, Filename}` from the platform, or `error`.
-/// The file name is nominal (`Module.beam`): where the platform keeps it is its own business.
+/// `code:get_object_code(Module)`: `{Module, Beam, Filename}` from the platform (with a nominal
+/// file name, `Module.beam`: where the platform keeps it is its own business) or else from the
+/// VM's code path, or `error`.
 pub fn get_object_code(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Atom(m) = &a[0] else { return Err(c.badarg()) };
     if crate::vm::RUNTIME_MODULES.contains(&m.as_str()) {
         return Ok(Term::Atom(c.sys.atoms.error.clone()));
     }
-    Ok(match c.sys.platform.load_module(m.as_str()) {
-        Some(bytes) => Term::tuple(alloc::vec![a[0].clone(), Term::binary(&bytes), string(&alloc::format!("{}.beam", m.as_str()))]),
+    let found = match c.sys.platform.load_module(m.as_str()) {
+        Some(bytes) => Some((alloc::format!("{}.beam", m.as_str()), bytes)),
+        None => {
+            let name = String::from(m.as_str());
+            c.sys.find_in_code_path(&name)
+        }
+    };
+    Ok(match found {
+        Some((file, bytes)) => Term::tuple(alloc::vec![a[0].clone(), Term::binary(&bytes), string(&file)]),
         None => Term::Atom(c.sys.atoms.error.clone()),
     })
 }
