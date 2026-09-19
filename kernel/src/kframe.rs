@@ -47,10 +47,3 @@ pub fn write(phys: usize, offset: usize, value: u64) {
     // image, whose physmap alias is read-only anyway. The caller owns what the word means.
     unsafe { (virt as *mut u64).write_volatile(value) }
 }
-
-/// Writes the byte at `offset` of the frame at `phys` (results with no alignment: `random`).
-pub fn write_byte(phys: usize, offset: usize, value: u8) {
-    let virt = at(phys, offset, 1);
-    // SAFETY: as in `write`, for one byte.
-    unsafe { (virt as *mut u8).write_volatile(value) }
-}
