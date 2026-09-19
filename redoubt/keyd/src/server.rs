@@ -29,7 +29,7 @@ use redoubt_rt::wire::proto::keyd::{
     SignRecord, SignRecordReply, SignSshExchange, SignSshExchangeReply,
 };
 
-use crate::keys::{ALGORITHM, Key, Keys, Purpose, SIGNATURE_LEN};
+use crate::keys::{Key, Keys, Purpose, SIGNATURE_LEN};
 use crate::ssh::{self, Transcript};
 
 /// The domain string an audit record is hashed under, so a signature made for one purpose
@@ -182,15 +182,15 @@ impl KeyServer {
             Message::SignRecord(m) => self.sign_record(index, &m),
             Message::PublicKey(_) => {
                 let key = self.key(index).public();
-                Ok(Answer::new(Reply::PublicKey(PublicKeyReply { algorithm: ALGORITHM, key })))
+                Ok(Answer::new(Reply::PublicKey(PublicKeyReply { key })))
             }
-            Message::Holds(Holds { algorithm, key }) => {
+            Message::Holds(Holds { key }) => {
                 // It answers about every key, not only the badge's, because that is the
                 // question `sshd` has: is this login key one of `keyd`'s? The answer is about a
                 // public key the asker already holds, and public keys are published, so it
                 // tells nobody anything they could not learn by connecting. When keys carry
                 // labels (milestone 2) this needs a `check` per key, not the badge's alone.
-                let held = u32::from(self.keys.holds(algorithm, key));
+                let held = u32::from(self.keys.holds(key));
                 Ok(Answer::new(Reply::Holds(HoldsReply { held })))
             }
             // `grant`: a fresh capability with the caller's own key and purpose, stamped like
@@ -274,7 +274,12 @@ impl KeyServer {
         }
         let transcript =
             Transcript { v_c: m.v_c, v_s: m.v_s, i_c: m.i_c, i_s: m.i_s, q_c: m.q_c, q_s: m.q_s, k: m.k };
-        let hash = ssh::exchange_hash(&transcript, key.public()).map_err(|_| ErrorCode::TooMany)?;
+        // A part over the work bound is `too_many`; a transcript no key exchange could have
+        // produced is a bad length, which is `malformed` in every protocol (WIRE.md).
+        let hash = ssh::exchange_hash(&transcript, key.public()).map_err(|e| match e {
+            ssh::BadTranscript::TooLong => ErrorCode::TooMany,
+            ssh::BadTranscript::BadShape => ErrorCode::Malformed,
+        })?;
         self.signature = key.sign(&hash);
         Ok(Answer::new(Reply::SignSshExchange(SignSshExchangeReply { signature: &self.signature })))
     }

@@ -43,14 +43,12 @@ pub struct PublicKey {}
 /// The reply to [`PublicKey`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PublicKeyReply<'a> {
-    pub algorithm: &'a str,
     pub key: &'a [u8],
 }
 
 /// `holds`: opcode 4, buffer; reply [`HoldsReply`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Holds<'a> {
-    pub algorithm: &'a str,
     pub key: &'a [u8],
 }
 
@@ -143,10 +141,7 @@ impl<'a> Message<'a> {
             }
             Message::SignRecord(m) => w.bytes(m.record),
             Message::PublicKey(_) => Ok(()),
-            Message::Holds(m) => {
-                w.string(m.algorithm)?;
-                w.bytes(m.key)
-            }
+            Message::Holds(m) => w.bytes(m.key),
             Message::Grant(_) => Ok(()),
             Message::Release(m) => w.u64(m.id),
         }
@@ -165,7 +160,7 @@ impl<'a> Message<'a> {
             1 => Message::SignSshExchange(SignSshExchange { v_c: r.bytes()?, v_s: r.bytes()?, i_c: r.bytes()?, i_s: r.bytes()?, q_c: r.bytes()?, q_s: r.bytes()?, k: r.bytes()? }),
             2 => Message::SignRecord(SignRecord { record: r.bytes()? }),
             3 => Message::PublicKey(PublicKey {}),
-            4 => Message::Holds(Holds { algorithm: r.string()?, key: r.bytes()? }),
+            4 => Message::Holds(Holds { key: r.bytes()? }),
             5 => Message::Grant(Grant {}),
             6 => Message::Release(Release { id: r.u64()? }),
             _ => return Err(Error::BadOpcode),
@@ -247,10 +242,7 @@ impl<'a> Reply<'a> {
         match self {
             Reply::SignSshExchange(m) => w.bytes(m.signature),
             Reply::SignRecord(m) => w.bytes(m.signature),
-            Reply::PublicKey(m) => {
-                w.string(m.algorithm)?;
-                w.bytes(m.key)
-            }
+            Reply::PublicKey(m) => w.bytes(m.key),
             Reply::Holds(m) => w.u32(m.held),
             Reply::Grant(m) => w.u64(m.id),
             Reply::Release(_) => Ok(()),
@@ -269,7 +261,7 @@ impl<'a> Reply<'a> {
         Ok(match opcode {
             1 => Reply::SignSshExchange(SignSshExchangeReply { signature: r.bytes()? }),
             2 => Reply::SignRecord(SignRecordReply { signature: r.bytes()? }),
-            3 => Reply::PublicKey(PublicKeyReply { algorithm: r.string()?, key: r.bytes()? }),
+            3 => Reply::PublicKey(PublicKeyReply { key: r.bytes()? }),
             4 => Reply::Holds(HoldsReply { held: r.u32()? }),
             5 => Reply::Grant(GrantReply { id: r.u64()? }),
             6 => Reply::Release(ReleaseReply {}),

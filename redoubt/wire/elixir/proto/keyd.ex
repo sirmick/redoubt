@@ -47,8 +47,8 @@ defmodule Redoubt.Wire.Proto.Keyd do
   """
   def layout(:sign_ssh_exchange), do: {1, :buffer, [{:v_c, :bytes}, {:v_s, :bytes}, {:i_c, :bytes}, {:i_s, :bytes}, {:q_c, :bytes}, {:q_s, :bytes}, {:k, :bytes}], [], {[{:signature, :bytes}], []}}
   def layout(:sign_record), do: {2, :buffer, [{:record, :bytes}], [], {[{:signature, :bytes}], []}}
-  def layout(:public_key), do: {3, :buffer, [], [], {[{:algorithm, :string}, {:key, :bytes}], []}}
-  def layout(:holds), do: {4, :buffer, [{:algorithm, :string}, {:key, :bytes}], [], {[{:held, :u32}], []}}
+  def layout(:public_key), do: {3, :buffer, [], [], {[{:key, :bytes}], []}}
+  def layout(:holds), do: {4, :buffer, [{:key, :bytes}], [], {[{:held, :u32}], []}}
   def layout(:grant), do: {5, :inline, [], [], {[{:id, :u64}], [:capability]}}
   def layout(:release), do: {6, :inline, [{:id, :u64}], [], {[], []}}
   def layout(_), do: nil
@@ -80,8 +80,8 @@ defmodule Redoubt.Wire.Proto.Keyd do
   defp enc(:request, :sign_record, %{record: v_record} = f) when map_size(f) == 1, do: {2, [W.bytes(v_record)]}
   defp enc(:reply, :sign_record, %{signature: v_signature} = f) when map_size(f) == 1, do: {2, [W.bytes(v_signature)]}
   defp enc(:request, :public_key, %{} = f) when map_size(f) == 0, do: {3, []}
-  defp enc(:reply, :public_key, %{algorithm: v_algorithm, key: v_key} = f) when map_size(f) == 2, do: {3, [W.str(v_algorithm), W.bytes(v_key)]}
-  defp enc(:request, :holds, %{algorithm: v_algorithm, key: v_key} = f) when map_size(f) == 2, do: {4, [W.str(v_algorithm), W.bytes(v_key)]}
+  defp enc(:reply, :public_key, %{key: v_key} = f) when map_size(f) == 1, do: {3, [W.bytes(v_key)]}
+  defp enc(:request, :holds, %{key: v_key} = f) when map_size(f) == 1, do: {4, [W.bytes(v_key)]}
   defp enc(:reply, :holds, %{held: v_held} = f) when map_size(f) == 1, do: {4, [W.u(v_held, 32)]}
   defp enc(:request, :grant, %{} = f) when map_size(f) == 0, do: {5, []}
   defp enc(:reply, :grant, %{id: v_id} = f) when map_size(f) == 1, do: {5, [W.u(v_id, 64)]}
@@ -94,8 +94,8 @@ defmodule Redoubt.Wire.Proto.Keyd do
   defp read(:request, 2, <<n_record::little-32, v_record::binary-size(n_record), rest::binary>>), do: {:ok, :sign_record, %{record: v_record}, rest}
   defp read(:reply, 2, <<n_signature::little-32, v_signature::binary-size(n_signature), rest::binary>>), do: {:ok, :sign_record, %{signature: v_signature}, rest}
   defp read(:request, 3, <<rest::binary>>), do: {:ok, :public_key, %{}, rest}
-  defp read(:reply, 3, <<n_algorithm::little-16, v_algorithm::binary-size(n_algorithm), n_key::little-32, v_key::binary-size(n_key), rest::binary>>), do: W.utf8([v_algorithm], {:ok, :public_key, %{algorithm: v_algorithm, key: v_key}, rest})
-  defp read(:request, 4, <<n_algorithm::little-16, v_algorithm::binary-size(n_algorithm), n_key::little-32, v_key::binary-size(n_key), rest::binary>>), do: W.utf8([v_algorithm], {:ok, :holds, %{algorithm: v_algorithm, key: v_key}, rest})
+  defp read(:reply, 3, <<n_key::little-32, v_key::binary-size(n_key), rest::binary>>), do: {:ok, :public_key, %{key: v_key}, rest}
+  defp read(:request, 4, <<n_key::little-32, v_key::binary-size(n_key), rest::binary>>), do: {:ok, :holds, %{key: v_key}, rest}
   defp read(:reply, 4, <<v_held::little-32, rest::binary>>), do: {:ok, :holds, %{held: v_held}, rest}
   defp read(:request, 5, <<rest::binary>>), do: {:ok, :grant, %{}, rest}
   defp read(:reply, 5, <<v_id::little-64, rest::binary>>), do: {:ok, :grant, %{id: v_id}, rest}

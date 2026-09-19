@@ -13,9 +13,10 @@
 //! which is what makes a stolen badge useless as a signature oracle (CAPABILITIES.md, Agents 7;
 //! answer 95).
 //!
-//! **Constant time.** Nothing here branches or indexes on key material. Parsing decodes hex with
-//! arithmetic rather than comparisons, comparisons of key bytes are accumulated, and the
-//! signature itself is `ed25519-compact`'s (see [`Key::sign`]).
+//! **Constant time.** Nothing here branches or indexes on *secret* material: the seed is decoded
+//! with arithmetic rather than comparisons, and the signature itself is `ed25519-compact`'s (see
+//! [`Key::sign`]). Public keys are compared with `==`, because they are published: the host key
+//! goes to every client that connects.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -28,7 +29,9 @@ use redoubt_rt::startup::valid_name;
 /// badge space or its startup work unbounded.
 pub const MAX_KEYS: usize = 16;
 
-/// Ed25519 (RFC 8032): the one signature scheme (VERIFIED-BOOT.md, PACKAGES.md).
+/// Ed25519 (RFC 8032): the one signature scheme on the box (VERIFIED-BOOT.md, PACKAGES.md), so
+/// no message of this protocol carries an algorithm name. `sshd` frames `ssh-ed25519` in its own
+/// blobs, which it must do anyway; this is the name it frames.
 pub const ALGORITHM: &str = "ssh-ed25519";
 /// A public key, in bytes.
 pub const PUBLIC_KEY_LEN: usize = 32;
@@ -151,7 +154,7 @@ impl Keys {
                 return Err(KeyError::TooMany);
             }
             let key = parse(arg)?;
-            let clash = keys.iter().any(|k| k.name == key.name || ct_eq(k.public(), key.public()));
+            let clash = keys.iter().any(|k| k.name == key.name || k.public() == key.public());
             if clash {
                 return Err(KeyError::Duplicate);
             }
@@ -180,19 +183,10 @@ impl Keys {
     pub fn labels(&self, _index: usize) -> &[u64] { &[] }
 
     /// Whether any key here has this public key: what `sshd` asks before accepting a login key,
-    /// and what `init` and the steward ask before enrolling one (CAPABILITIES.md, approvals).
-    /// Every key is compared, without a short circuit, so the answer takes the same work
-    /// whichever key matched.
-    pub fn holds(&self, algorithm: &str, public: &[u8]) -> bool {
-        if algorithm != ALGORITHM || public.len() != PUBLIC_KEY_LEN {
-            return false;
-        }
-        let mut found = 0u8;
-        for key in &self.keys {
-            found |= u8::from(ct_eq(key.public(), public));
-        }
-        found != 0
-    }
+    /// and what `init` asks before trusting one (CAPABILITIES.md, approvals). Plain `==`: a
+    /// public key is published, so there is nothing here to compare in constant time, and the
+    /// asker already holds the key it is asking about.
+    pub fn holds(&self, public: &[u8]) -> bool { self.keys.iter().any(|key| key.public()[..] == *public) }
 }
 
 /// `name,purpose,seed`.
@@ -254,19 +248,6 @@ fn nibble(c: u8) -> (u8, u8) {
 fn ge(a: u8, b: u8) -> u8 {
     let borrowed = (u16::from(a).wrapping_sub(u16::from(b)) >> 8) as u8;
     !borrowed
-}
-
-/// Whether two byte strings of the same length are equal, in time that depends only on that
-/// length.
-pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut difference = 0u8;
-    for (x, y) in a.iter().zip(b) {
-        difference |= x ^ y;
-    }
-    difference == 0
 }
 
 #[cfg(test)]
@@ -397,15 +378,14 @@ mod tests {
     #[test]
     fn holds_answers_only_about_keys_that_are_here() {
         let keys = keys();
-        assert!(keys.holds(ALGORITHM, keys.get(0).unwrap().public()));
-        assert!(keys.holds(ALGORITHM, keys.get(1).unwrap().public()));
+        assert!(keys.holds(keys.get(0).unwrap().public()));
+        assert!(keys.holds(keys.get(1).unwrap().public()));
         let mut other = *keys.get(0).unwrap().public();
         other[0] ^= 1;
-        assert!(!keys.holds(ALGORITHM, &other));
-        // Another algorithm, or the wrong length, is simply not held.
-        assert!(!keys.holds("ssh-rsa", keys.get(0).unwrap().public()));
-        assert!(!keys.holds(ALGORITHM, &other[..31]));
-        assert!(!keys.holds(ALGORITHM, &[]));
+        assert!(!keys.holds(&other));
+        // The wrong length is simply not held.
+        assert!(!keys.holds(&other[..31]));
+        assert!(!keys.holds(&[]));
     }
 
     /// The hex decoder is the one place a secret's *bytes* are read while parsing; it must
@@ -430,14 +410,5 @@ mod tests {
         assert_eq!(ge(0, 255), 0);
         let all = "0123456789abcdef".repeat(4);
         assert_eq!(hex_seed(&all).unwrap()[..8], [0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]);
-    }
-
-    #[test]
-    fn ct_eq_is_equality() {
-        assert!(ct_eq(b"", b""));
-        assert!(ct_eq(b"abc", b"abc"));
-        assert!(!ct_eq(b"abc", b"abd"));
-        assert!(!ct_eq(b"abc", b"ab"));
-        assert!(!ct_eq(b"", b"a"));
     }
 }
