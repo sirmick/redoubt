@@ -403,6 +403,44 @@ fn call_mfa_with(
     if m == &sys.atoms.erlang && f.as_str() == "hibernate" && (arity == 0 || arity == 3) {
         return hibernate(sys, p, arity, kind);
     }
+    // erlang:call_on_load_function(Module) calls the module's on_load function, which need not
+    // be exported (for beamlet_code, as BEAM's code server uses it).
+    if m == &sys.atoms.erlang && f.as_str() == "call_on_load_function" && arity == 1 {
+        let entry = match &p.x[0] {
+            Term::Atom(name) => sys.module(name).and_then(|md| md.on_load_entry().map(|(_, pc)| Cp { module: md, pc })),
+            _ => None,
+        };
+        let entry = entry.ok_or_else(|| Fault::Raise(Exception::error(Term::Atom(sys.atoms.badarg.clone()))))?;
+        if kind == Kind::Last {
+            deallocate(p)?;
+        }
+        return Ok(call_code(p, entry, kind == Kind::Call));
+    }
+    // code:load_binary/3 of a module with an on_load function continues in Erlang, which runs
+    // it and unloads the module again if it fails.
+    if m.as_str() == "code" && f.as_str() == "load_binary" && arity == 3 {
+        let args: Vec<Term> = p.x[..3].to_vec();
+        let loaded = run_native(sys, p, crate::bif::load_binary, (m, f), &args)?;
+        let on_load = match loaded.as_tuple() {
+            Some([_, Term::Atom(name)]) => sys.module(name).and_then(|md| md.on_load()).map(|f| (name.clone(), f)),
+            _ => None,
+        };
+        let Some((module, function)) = on_load else {
+            p.x[0] = loaded;
+            return Ok(match kind {
+                Kind::Call => Flow::Next,
+                Kind::Last => {
+                    deallocate(p)?;
+                    do_return(p)
+                }
+                Kind::Only => do_return(p),
+            });
+        };
+        p.x[0] = Term::Atom(module);
+        p.x[1] = Term::Atom(function);
+        let (bm, bf) = (sys.atom("beamlet_code"), sys.atom("run_on_load"));
+        return call_mfa(sys, p, &bm, &bf, 2, kind);
+    }
     let target = match native {
         Some(n) => Some(Target::Native(n)),
         None => sys.resolve(m, f, arity as u32),

@@ -20,6 +20,7 @@ mod erlang;
 mod ets;
 mod file;
 pub(crate) use file::read_whole_file;
+pub(crate) use info::load_binary;
 mod info;
 mod lists;
 mod maps;
@@ -408,11 +409,11 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("prim_file", "get_cwd_nif", 0, file::get_cwd),
     ("prim_file", "set_cwd_nif", 1, file::set_cwd),
     ("prim_file", "get_device_cwd_nif", 1, file::not_supported),
-    ("prim_file", "make_hard_link_nif", 2, file::not_supported),
-    ("prim_file", "make_soft_link_nif", 2, file::not_supported),
+    ("prim_file", "make_hard_link_nif", 2, file::make_link),
+    ("prim_file", "make_soft_link_nif", 2, file::make_symlink),
     ("prim_file", "set_owner_nif", 3, file::not_supported),
-    ("prim_file", "set_permissions_nif", 2, file::not_supported),
-    ("prim_file", "set_time_nif", 4, file::not_supported),
+    ("prim_file", "set_permissions_nif", 2, file::set_permissions),
+    ("prim_file", "set_time_nif", 4, file::set_time),
     ("prim_file", "altname_nif", 1, file::not_supported),
     ("prim_file", "get_handle_nif", 1, file::not_supported),
     ("prim_file", "file_desc_to_ref_nif", 1, file::not_supported),
