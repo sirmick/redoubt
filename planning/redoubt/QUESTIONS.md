@@ -5,7 +5,7 @@ so each needs your decision; the answer goes into the named note with a HISTORY.
 **Rec** is the orchestrator's recommendation. Reply with numbers, e.g. "all Rec except 7: ...".
 
 **1-101 answered 2026-09-19** (ANSWERS.md, four tranches; each "Answered" line says where the
-answer now lives). **Open: 102-114** (at the end: K1's handle limit, and the design editor's choices in applying 56-101). The round-4 answers revised 56 (handle
+answer now lives). **Open: 102-115** (at the end: K1's handle limit, and the design editor's choices in applying 56-101). The round-4 answers revised 56 (handle
 kinds are checked by use) and replaced 57 and 58 (by 82).
 
 ## Kernel: messages and IPC (KERNEL-SPEC.md)
@@ -860,3 +860,10 @@ point to change the IPC design. Several items interact; the cross-references say
 114. **`disconnect` and a stranger's connection id.** *Rec:* the `ninep_common` error table gains
      code 2, `not_yours`, for a `disconnect` naming an id the caller didn't receive. That makes it
      indistinguishable from an id that doesn't exist, so nothing is revealed.
+
+115. **A record in a page the caller reserved but never touched.** The kernel backs the page while
+     checking the record, charging the caller, so `OutOfMemory` can appear at the decoding stage,
+     where the error table doesn't list it.
+     *Rec:* don't allocate while decoding. A record page must already be backed, otherwise
+     `InvalidArgument`, and the runtime touches its record buffers first. The decoding stage then
+     never allocates, and the error rows stay as written.
