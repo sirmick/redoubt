@@ -1,0 +1,9 @@
+[package]
+name = "redoubt-sys"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "The Redoubt system call ABI: call numbers, register and buffer encodings, errors"
+
+# No dependencies: this crate is linked into the kernel and into every process (TENETS.md 5).
+[dependencies]

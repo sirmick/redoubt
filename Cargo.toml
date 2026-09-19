@@ -9,6 +9,7 @@ members = [
   "loader",
   "xous-rs",
   "redoubt/paging",
+  "redoubt/sys",
   "redoubt/test-programs",
   "redoubt/testbench",
   "libs/flatipc",
