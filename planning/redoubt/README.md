@@ -99,20 +99,24 @@ Sessions and agents are beamlet VMs in user budgets, not servers.
 - **Endpoint**: the kernel object clients call; it outlives the server process receiving on it.
 - **call / send**: the two IPC primitives (CAPABILITIES.md). **Lend**: map a buffer into the
   receiver for the length of a call. **Transfer**: give pages to the receiver for good. **Open
-  call**: a call a server has taken and not yet replied to. **Serving account**: the account of a
-  thread's most recently taken open call; whom a crash blames (KERNEL-SPEC.md).
+  call**: a call a server has taken and not yet replied to. **Current call**: the open call a
+  thread is working on (the one it took last, or named with `serve`); whom a crash blames
+  (KERNEL-SPEC.md). **Abandoned call**: an open call whose caller died, timed out or was revoked;
+  the server is told and replies to free it.
 - **Budget**: a kernel container every process lives in; it pays for and bounds everything, carries
   labels, a deadline and an account (RESOURCES.md). **Lease**: a budget with a deadline, at most
-  `MAX_LEASE`. **Revocation scope**: a budget with zero limits, used only to be destroyed.
+  `MAX_LEASE` (24 h, a steward constant). **Revocation scope**: a budget with zero limits, used only
+  to be destroyed. **`first`**: a budget flag; `init`, the steward and the drivers run in `first`
+  budgets, before everyone else (RESOURCES.md).
   **Account**: a 64-bit number on a principal's top budget, inherited below it and carried by every
   message; with the label set, the unit of admission and crash blame (CONTAINMENT.md). **Pass /
   stride**: the per-budget counters of stride scheduling.
 - **Exit notice**: the one message a process's creator receives when it exits, faults or is killed;
-  a fault names the blamed account and labels. **Badge notice**: the kernel telling an endpoint that
-  the last handle with one of its badges is gone, so the server frees that client's state. **Exit
-  slot**: the page a creator pays at `process_create`, so the exit notice never allocates
-  (KERNEL-SPEC.md). **Badge slot**: the endpoint's count of handles carrying one badge, plus its one
-  pending badge notice (KERNEL-SPEC.md).
+  a fault names the blamed account and labels. It lives in the process object, which is charged to
+  the creator and outlives the process until the notice is received, so the notice never allocates
+  (KERNEL-SPEC.md). **Connection id**: the random id a server returns with a new connection; only
+  its holder can `disconnect` it, freeing the connection and everything minted under it
+  (NAMESPACES.md).
 - **Principal**: an accountable identity (a human, an agent, or a project). **Sponsor**: the
   principal accountable for another. **Session**: processes started from a principal's
   capabilities. **Vault session**: `ssh alice+X@box`, a session carrying exactly the label

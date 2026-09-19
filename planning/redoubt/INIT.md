@@ -35,6 +35,11 @@ steward:  principals, sessions and agents (beamlet VMs)
   pages: no file server is needed to start `bootfsd` or anything else.
 - Device authority today: loader-emitted grants (DEVICE-GRANTS.md). Designed: `init` holds every
   device object and places each driver's handles in its startup block.
+- **Only `init` and the steward ever hold a handle to a system-class budget.** A server's startup
+  block carries no `budget` handle, and a manifest that grants a server one is refused: a
+  compromised `ipd` holding its budget could create system-class children with any labels and any
+  account. `init`, the steward and the drivers run in `first` budgets (RESOURCES.md); every other
+  server runs in the stride queue at its manifest weight.
 - The physical console is labelled with no labels. From milestone 2 the first owner is enrolled on
   it at first boot (a trusted path) and uses it for approvals.
 
@@ -47,8 +52,8 @@ One strict JSON file (WIRE.md) in the signed bundle; `init`'s only input. Entrie
 | `devices` | each device object's name, its device-tree node path, and whether it may do DMA |
 | `labels` | each label's name, owner principal and 64-bit id |
 | `volumes` | each volume's name, `blkd` partition and label set |
-| `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), device names, volume, the endpoints it receives on, the endpoints it is handed, and arguments |
-| `principals` | milestone 1 only: each principal's name, SSH public keys for login and approval, budget, account, owned labels, home (volume and path), and network scope (IP prefixes and ports) |
+| `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight; `first` for drivers only), device names, volume, the endpoints it receives on, the endpoints it is handed, and arguments (never its own budget) |
+| `principals` | milestone 1 only: each principal's name, SSH public keys for login and approval, budget, account, owned labels, the label sets it works under (each gets a fixed sub-budget of the principal's budget: pages, processes, weight), home (volume and path), and network scope (IP prefixes and ports) |
 
 Each field has one JSON type (WIRE.md): 64-bit quantities (label ids, accounts, page and byte sizes,
 deadlines) are decimal strings; small counts (processes, weights, depths, restart limits) and ports
@@ -75,7 +80,8 @@ Example fragment:
   are served by the restarted server (KERNEL-SPEC.md, R4b). (Milestone 2: the namespace
   library re-walks from the root, so most programs see only a hiccup.)
 - **Blame:** each exit notice for a fault names an account and label set; `init` passes them to the
-  steward, whose logout rule is in CONTAINMENT.md (Crash blame).
+  steward in one typed message (its table is written with the steward, BUILD-PLAN.md WP-S2), and
+  the steward's rule is in CONTAINMENT.md (Crash blame).
 - **Reboot:** more than 5 restarts of one server within 60 seconds, not stopped by blame, reboots the
   machine (fail closed).
 - **The steward:** if it dies in milestone 1, `init` destroys and recreates the users budget: every
@@ -86,23 +92,33 @@ Example fragment:
   launching (PACKAGES.md), and, from milestone 2, packages, trust lists and profiles. It appends the
   audit log to a file only it can write (a separate audit server is deferred). It parses the most
   untrusted input in the system (every agent's requests), so it holds no keys and never parses an ELF.
-  It filters requests by labels (CONTAINMENT.md).
+  It filters requests by labels (CONTAINMENT.md). It runs `first`, so logout and ending a lease stay
+  responsive, and therefore bounds the work any one request can cause and relies on its caps. At
+  boot it splits each principal's budget into the fixed sub-budgets the manifest names, one per
+  label set, and carves sessions and leases from them. It passes a server a narrowing budget only
+  as a revocation scope created for that purpose, never a budget that holds processes
+  (CAPABILITIES.md).
 - **keyd:** holds the keys the box uses on your behalf (host keys, principals' signing keys); signs
-  on request, never exports. It never holds keys that authenticate a person to the box
-  (CAPABILITIES.md, approvals). Separate from the steward because a leaked key cannot be revoked;
-  authority can.
+  on request, never exports. Each badge names one key and one purpose (for SSH, a signature over the
+  session identifier `keyd` computed itself), never arbitrary bytes. It never holds keys that
+  authenticate a person to the box (CAPABILITIES.md, approvals). Separate from the steward because a
+  leaked key cannot be revoked; authority can.
 - **sshd:** the SSH front door (`sunset`: `no_std`, no allocation, by dropbear's author). It asks the
   steward to authenticate users and start sessions, and asks `keyd` to sign with the host key. It
   rejects any login key that `keyd` holds. It serves `ssh approve@box`, in which only the steward
-  talks. Its state is per channel, and each channel carries its session's labels (CONTAINMENT.md).
+  talks. Its state is per channel, and each channel carries its session's labels; it is the one sink
+  cleared for a label, on the channel the label's owner authenticated (CONTAINMENT.md), and in
+  milestone 1 `approve@` shares it with every other channel (a stated residual; milestone 2 gives
+  `approve@` its own instance or the console).
 - Users' own outbound TLS and SSH (OTP `:ssl`, `:ssh`) run inside their VMs, in userland.
 
 ## The shell
 A session's shell is **IEx** (Elixir's interactive shell) on beamlet, with a small Redoubt helpers
-module: `ls`, `cd` and `cat` over the namespace, `ps`, `budget`, and a notice when an approval is
-waiting (`pkg` from milestone 2). IEx evaluates any Elixir, with exactly the session's capabilities.
-It runs on the UART console before SSH exists. In milestone 1 the physical console's IEx exists only
-in the bench build; the system manifest starts no shell on the UART.
+module: `ls`, `cd` and `cat` over the namespace, `ps` and `budget` (showing only the session's own
+(account, label set)), and a notice when an approval is waiting (`pkg` from milestone 2). IEx
+evaluates any Elixir, with exactly the session's capabilities. It runs on the UART console before
+SSH exists. In milestone 1 the physical console's IEx exists only in the bench build; the system
+manifest starts no shell on the UART.
 
 ## Startup block
 Before a process runs, its parent installs its handles in its table (`process_start` copies them
@@ -110,30 +126,41 @@ into slots 1..n, at most `MAX_START_HANDLES`; handle 0 is never a handle) and ma
 into it, read-only (`process_map`), holding the block below. **`process_start`'s `arg` is that
 page's address** (page-aligned; 0 = no block), which the child's first thread receives
 (KERNEL-SPEC.md); there is no fixed address. The program image travels in its own pages, which the
-block names (PACKAGES.md, launching; its tag is defined with the loader stub). No environment
+block names (PACKAGES.md, launching; its fields are defined with the loader stub). No environment
 variables, nothing inherited. Configuration is files in the namespace.
 
-**Format.** The kernel argument block's framing: little-endian `u32` words. Each entry is a 4-byte
-ASCII tag, one word holding a CRC-16/X-25 of the entry's data in its low half and the data length
-in words in its high half, then the data. A string is a `u32` byte length followed by UTF-8,
-zero-padded to a whole word; an entry's length is exactly what its fields need.
+**Format.** The block is one typed message (WIRE.md), `startup`, laid out in the page as a typed
+operation written into a file is: the opcode as a `u32`, then the buffer-shape encoding of its
+fields. `redoubt-wire` decodes it; there is no second framing format and no checksum (the parent
+writes the block and could write any checksum too).
 
-| Tag | Data | Meaning |
-| --- | --- | --- |
-| `SBlk` | version (1), block length in words (this entry included), handle count n | the header: first, exactly once |
-| `NmSp` | handle, string | a namespace entry: a clean absolute path (`/`, `/dev/cons`: no `.`, `..`, empty component or trailing `/`) and the connection it resolves to |
-| `Hndl` | handle, string | a named handle, its name following the manifest's name rule (Names, above): services (`keys`, `powerbox`), device handles for drivers, the process's budget as `budget` |
-| `Argv` | string | one argument (may be empty), in block order |
+```
+| Opcode | Message | Fields | Reply |
+| --- | --- | --- | --- |
+| 1 | `startup` | `version: u32`, `handle_count: u32`, `namespace: bytes`, `handles: bytes`, `argv: bytes` | - |
+```
+
+- `version` is 1; `handle_count` is n, the number of handles `process_start` installed.
+- `namespace` is a sequence of entries, each `handle: u32`, `path: string`: a clean absolute path
+  (`/`, `/dev/cons`: no `.`, `..`, empty component or trailing `/`) and the connection it resolves
+  to.
+- `handles` is a sequence of entries, each `handle: u32`, `name: string`: a named handle, its name
+  following the manifest's name rule (Names, above): services (`keys`, `powerbox`), device handles
+  for drivers, and, for a session or agent only (never a server), its own budget as `budget`.
+- `argv` is a sequence of `string`s, the arguments in order (each may be empty).
 
 Rules: the block is at most one page; handles are 1..=n, n ≤ `MAX_START_HANDLES`; paths are unique
-among `NmSp` entries and names among `Hndl` entries; nothing follows the last entry within the
-block's length (the rest of the page is not read). A block breaking any rule is refused whole. The
-parent may be hostile, so the child parses defensively; the reference implementation is
-`redoubt/rt/src/startup.rs` (`redoubt-rt`), which also writes blocks for launchers.
+among `namespace` entries and names among `handles` entries; each `bytes` field holds whole entries
+and nothing else; the rest of the page after the message is not read. A block breaking any rule is
+refused whole. The parent may be hostile, so the child decodes defensively; `redoubt-rt` also
+writes blocks for launchers. The table is fenced until the package that generates its codec
+(BUILD-PLAN.md, WP-R1b) unfences it and adds its wire marker.
 
 **Launching gives fresh connections.** A launcher never places its own connection to a server in a
-child's block; it asks the server for a fresh connection for the child and passes that one
-(CAPABILITIES.md, one badge, one client). This is a rule for `init`, the steward and every shell.
+child's block; it asks the server for a fresh connection for the child (`new_connection`,
+NAMESPACES.md) and passes that one (CAPABILITIES.md, one badge, one client). It keeps each
+connection's id and disconnects it when it receives the child's exit notice. This is a rule for
+`init`, the steward and every shell.
 
 ## Worked example: Alice, Bob and Alice's agent (milestone 1)
 ```
@@ -141,16 +168,20 @@ kernel
 └── init (Rust)                                       root
     ├── consoled bootfsd blkd fsd:data fsd:alice-secrets system [reserved]
     │   netd ipd:lan keyd steward sshd
-    ├── session VM alice-1  (IEx)                     users/alice/session-1
-    ├── agent VM alice/researcher [lease 2 h]         users/alice/researcher
-    └── session VM bob-1    (IEx)                     users/bob/session-1
+    ├── session VM alice-1  (IEx)                     users/alice/{}/session-1
+    ├── agent VM alice/researcher [lease 2 h]         users/alice/{}/researcher
+    ├── vault VM alice+secrets-1 (IEx)                users/alice/{alice-secrets}/session-1
+    └── session VM bob-1    (IEx)                     users/bob/{}/session-1
 ```
+`{}` and `{alice-secrets}` are the fixed sub-budgets the steward splits each principal's budget
+into at boot, one per label set (CONTAINMENT.md); sessions and leases of one (principal, label set)
+sit together under one, and are ended together.
 CPU weights: alice 100, bob 100; the agent 20, carved from Alice's. The agent shares Alice's account.
 
 **Login:** `ipd:lan` delivers port 22 only to `sshd` (sole holder of "listen TCP 22"); `keyd` signs
 with the host key (never in `sshd`'s memory); `sshd` asks the steward whose key it is (the steward
-knows the principals from the boot manifest); the steward carves `users/alice/session-1`, builds her
-namespace, and launches beamlet with it; IEx's `.beam` files come from the system bundle.
+knows the principals from the boot manifest); the steward carves `users/alice/{}/session-1`, builds
+her namespace, and launches beamlet with it; IEx's `.beam` files come from the system bundle.
 
 | Name | Alice's session | Bob's session | Enforced by |
 | --- | --- | --- | --- |
@@ -178,8 +209,9 @@ listen on the network.
   unaffected.
 - Bob fully compromises his VM (a beamlet bug): he holds Bob's capabilities, nothing more. Going
   further needs a bug in a server he talks to (`fsd`, `ipd`, `keyd`, the steward) or the kernel.
-- Bob crashes `fsd:data` three times: each exit notice blames his account (the call the failing
-  thread took most recently), so he is logged out; Alice, busy throughout, is not.
+- Bob crashes `fsd:data` three times: each exit notice blames his account and empty label set (the
+  failing thread's current call), so every session and lease under `users/bob/{}` is destroyed and
+  he cannot log in again for 10 minutes; Alice, busy throughout, is not affected.
 
 **Weak spot:** users are separated everywhere except inside shared servers, where a server bug reaches
 every client's data. Where it matters, give each user their own `fsd` instance (own partition) or

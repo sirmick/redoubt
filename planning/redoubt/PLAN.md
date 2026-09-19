@@ -13,14 +13,14 @@ Build one thin vertical slice toward it:
    tests; handed to red-team agents.
 1. **Kernel, to KERNEL-SPEC.md:** handles, endpoints, `call`/`send`/`receive`/`reply` with lend and
    transfer, `mint`, budgets, device objects and IRQ receive, `process_create`/`process_map`/
-   `process_start`, exit and badge notices. Replaces SID connects, scalar message kinds,
-   `ClaimInterrupt`, device grants and name lookup.
+   `process_start`, exit and abandoned-call notices, `serve`. Replaces SID connects, scalar message
+   kinds, `ClaimInterrupt`, device grants and name lookup.
 2. **beamlet on Redoubt**, printing from Elixir over the console.
 3. **IEx on the UART console:** an interactive Elixir shell on the box, before SSH exists.
 4. **init, the boot manifest, the startup block and the loader stub** (INIT.md, PACKAGES.md); the
    boot loader loads only the kernel and `init`; `bootfsd` over 9P (the shared 9P codec, fuzzed).
-5. **The timer and preemption:** kernel-owned timer, timeouts, stride over budgets, the two classes
-   (RESOURCES.md).
+5. **The timer and preemption:** kernel-owned timer, timeouts, stride over budgets, `first` budgets
+   before the rest (RESOURCES.md).
 6. **Storage and network:** `blkd -> fsd` (littlefs; `fsd:data` and a labelled volume);
    `netd -> ipd:lan`.
 7. **steward (stateless), keyd and sshd** (Rust): principals from the boot manifest, sessions as
@@ -35,7 +35,9 @@ a clean power-off), never by the attacker's own output (BUILD-PLAN.md).
   handles it passed on and its sub-agents; a lease over `MAX_LEASE` is refused; its approval
   requests cannot spoof the approval screen (control, bidi and format characters, swapped
   requests), and from a vault carry no free text; it cannot use its sponsor's 9P connection (it got
-  a fresh one); it cannot slow Bob beyond its weight.
+  a fresh one); it cannot slow Bob beyond its weight; flooding the steward and `fsd` it cannot lock
+  out Alice, who still opens a file and ends its lease; `keyd` refuses to sign arbitrary bytes for
+  it (an SSH user-auth blob relayed from its peer).
 - **Scripted hostile user** (Bob attacking Alice):
   - system-call fuzzing: any arguments get an error, never a kernel panic;
   - endpoint flooding: 10,000 sender threads attempting to call `fsd`, and Alice is still served in
@@ -43,22 +45,34 @@ a clean power-off), never by the attacker's own output (BUILD-PLAN.md).
   - vault `WAIT_CAP`: a vault session filling its `WAIT_CAP` on a shared server leaves its owner's
     unlabelled session's turn and cap unaffected;
   - budget death mid-call: a lender destroyed while `fsd` holds its lent pages, and `fsd` survives;
-  - crash blame: Bob crashes `fsd` three times while Alice is busy; Bob is logged out, Alice is not,
-    also when `fsd` panics rather than faults and when the crashing thread holds Alice's calls open
-    too; a vault session's crashes do not log out its owner's unlabelled session;
+  - crash blame: Bob crashes `fsd` three times while Alice is busy; every session and lease of
+    Bob's with that label set ends and he cannot log straight back in, Alice is unaffected, also
+    when `fsd` panics rather than faults and when the crashing thread holds Alice's calls open too;
+    a crash triggered by a `send` while a bystander's call is parked blames nobody; a vault
+    session's crashes do not end its owner's unlabelled session;
+  - pinned open calls: Bob parks 64 lent calls at `ipd` with short timeouts, and `ipd` still
+    receives `netd`'s frames (sends) and frees the abandoned calls; SSH sessions survive;
+  - system fairness: a busy `fsd:data` does not fill `blkd`'s `WAIT_CAP` for `fsd:alice-secrets`;
+  - server CPU: expensive requests to `fsd` delay other users by `fsd`'s weight only;
+  - shared pools: Bob filling the `data` volume does not fail Alice's saves (quota per attach root);
+    flooding `fsd` with handles does not grow its table;
+  - server authority: no server's startup block holds its budget (a manifest granting one is
+    refused), and no server can destroy a session;
+  - badged exit endpoint: `process_create` with a badged exit endpoint is refused;
   - loopback login: a session connecting to the box's own `sshd` with a `keyd`-held key is refused;
-  - no leaky state: an unlabelled observer sees no change in usage, request and session ids, file
-    versions, qids or directory listings while a vault session works, and cannot write, truncate,
+  - no leaky state: an unlabelled observer sees no change in usage, request and session ids, message
+    ids, PIDs, file versions, qids, directory listings, audit records or approval notifications
+    while a vault session works, and cannot write, truncate,
     create or remove anything in the vault's volume;
   - hostile launch: a malformed ELF or startup block from a user parent hurts only the child;
   - approval flood: requests hit the per-(account, label set) cap; the steward and Alice's approval
     screen are unaffected;
-  - admission: a crashed or killed client's fids and quota come back when its badge notice arrives,
-    and a system daemon filling its admission slots does not lock out the steward (account 0 is
+  - admission: a crashed or killed client's fids and quota come back when its launcher disconnects
+    it, and a system daemon filling its admission slots does not lock out the steward (account 0 is
     admitted per badge).
 - **Kernel cases:** revocation by budget (mint into a revocation scope, destroy it, the handles are
-  dead everywhere, and messages already sent through them fail and get no reply's handles); the
-  budget, scheduler and timer tests in RESOURCES.md.
+  dead everywhere, messages already sent through them fail and get no reply's handles, and handles
+  inside queued messages arrive as 0); the budget, scheduler and timer tests in RESOURCES.md.
 
 ## After milestone 1
 - **The real-agent harness ("escape room")** comes first, alongside milestone 2: a real LLM agent on

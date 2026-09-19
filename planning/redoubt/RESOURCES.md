@@ -14,10 +14,14 @@ jobs, instead of five mechanisms (cgroups, namespaces, revocation lists, securit
 4. **Information flow:** its labels (CONTAINMENT.md).
 5. **Identity for servers:** its account travels with every message.
 
-Seven fields: parent, pages, processes, weight, class, labels, deadline, plus the account. Why each
-rule:
+Eight fields: parent, pages, processes, weight, class, `first`, labels, deadline, plus the account.
+Why each rule:
 - **Everything costs pages**, including threads, handles, endpoints and budgets themselves, so one
-  number bounds every kind of exhaustion. Processes are counted separately only because PIDs are
+  number bounds every kind of exhaustion. A budget's own page is its parent's, and a process's
+  object is its creator's (it holds the exit notice, which must outlive the process's budget).
+- **A lend is charged to both sides while its call is open**, so a server's budget covers its open
+  lends up front (about 4 MiB for 64 open 9P calls), a server that cannot pay does not take the
+  call, and no budget is ever over its limit. Processes are counted separately only because PIDs are
   address-space tags, which are scarce on rv32.
 - **Carved, never overcommitted.** Children's limits add up to at most the parent's, so an allocation
   succeeds or fails on the caller's own budget alone and reveals nothing about anyone else. A
@@ -25,15 +29,24 @@ rule:
 - **Top level:** `root -> system [default 25% of RAM, set in the boot manifest] + users [the rest]`.
 - **Bounded depth**, because revocation and "is this a descendant" walk ancestors.
 - **The kernel never panics and never kills an innocent process to make room.**
-- **Destroying a budget returns everything** (the exit slots its creator paid for, once their
+- **Destroying a budget returns everything** (the process objects its creators paid for, once their
   notices are received); a lease is a budget with a deadline, at most `MAX_LEASE` (CAPABILITIES.md).
 
 ## Scheduling
-### Two classes, strictly ordered
-- **System:** driver threads and system servers. Only system-signed code; never granted to users.
-  Runs before everything else. System code is TCB; if it spins, that is our bug and the bench tests it.
-- **Everyone else:** users, agents, applications, sharing by weight.
-No numeric priorities. Real-time guarantees are a non-goal until something needs them.
+### First, then everyone by weight
+- **First:** `init`, the steward and the drivers, in budgets marked `first` (KERNEL-SPEC.md, R12).
+  They run before everything else. System code is TCB; if it spins, that is our bug and the bench
+  tests it. The steward also works for users, so it bounds the work any one request can cause and
+  relies on its per-(account, label set) caps; it stays first so that logout and ending a lease
+  stay responsive.
+- **Everyone else:** users, agents, applications, and the system servers that work for users
+  (`fsd`, `keyd`, `ipd`, `sshd`, ...), sharing by weight in one stride queue. A server's weight comes
+  from the manifest, and it bounds the work of one request. Were such servers first, Bob could make
+  `fsd` or `keyd` do expensive work and no user budget would run meanwhile.
+- **Stated residual:** work a server does for a user is paid by the server's weight, not the
+  requester's (and the steward's by the steward); CONTAINMENT.md.
+Class (`system` or `user`) decides labels and trust, not order. No numeric priorities. Real-time
+guarantees are a non-goal until something needs them.
 
 ### Stride over budgets
 One flat queue of budgets with runnable threads (KERNEL-SPEC.md, R12). Actual runtime is charged at
@@ -71,6 +84,9 @@ budget exceed its total; swapped pages encrypted and authenticated; the system b
 - A thread, endpoint, handle or budget bomb hits its own page limit; other budgets keep creating.
 - A memory hog gets `OutOfMemory`; the system budget is untouched.
 - A transfer to a server that did not opt in fails; the server's budget is untouched.
-- A lender that dies mid-call leaves the server running; the pages are freed at its reply.
+- A lender that dies mid-call leaves the server running; the server gets an abandoned-call notice,
+  and the pages are freed at its reply.
+- A user flooding `fsd` with expensive requests delays other users only by `fsd`'s weight, never
+  every user budget.
 - Lease expiry reclaims everything; the parent's usage returns to what it was once the exit notices
   are received (I10).

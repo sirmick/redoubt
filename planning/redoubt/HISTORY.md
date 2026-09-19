@@ -286,6 +286,47 @@ The same three roles, attacking v3 and pinning interfaces for a swarm build. Fou
   confirmed in WP-K2).
 - **Design review round 4** (2026-09-19; Fable red team, simplifier, editor over answers 1-55):
   editorial fixes applied; owner questions 69-101.
+- **Round 4, the kernel made smaller** (2026-09-19, answers 69-78, 93, 99, 100; the simplifier):
+  badge slots, badge notices and the old I15 are gone (an estimated 150-250 lines of the most
+  error-prone new kernel code); a server frees a client when the launcher, holding the random
+  connection id `new_connection` returned, `disconnect`s it (stated residual: a launcher that dies
+  leaks its children's connections until its own is freed, against its own (account, label set)).
+  A lend is charged to both sides while its call is open, so no budget is ever over its limit and
+  I5 is unconditional; "abandoned call" is defined once (R3). A delivery the receiver cannot pay
+  for is `Refused` to the sender (reversing answer 44's "stays queued"), so `receive` never fails
+  for want of pages. Class is inherited and `budget_create` takes no class: a class check on one
+  door of three guarded nothing. The process object is the exit slot, charged to its creator. A
+  budget's own page is its parent's. `random` returns one `u64`. `MAX_LEASE` is a steward
+  constant in CAPABILITIES.md. The exit endpoint must be badge 0, or anyone could spray notices at
+  a server. A server that means to exit replies to its open calls first. The positional order of
+  checks stands (answer 14's list was a classification). Handle kinds are checked by use
+  (revising answer 56): the kernel reports none, and the table's kind is documentation.
+- **Round 4, holes closed** (2026-09-19, answers 79-92, 94, 95; the red team): open calls could be
+  pinned (Bob parking 64 lent calls at `ipd` stopped `netd`'s frames), so a server is told when a
+  call is abandoned (the flag in the open call's page; it replies to free it), and at
+  `MAX_OPEN_CALLS` it takes no calls but still receives sends and notices (option (a); not letting
+  a taken call's timeout lapse, which would let a hostile server pin its caller, the hole round 3
+  closed with timeouts). Blame in event-driven servers could be steered to a bystander, so a
+  thread's current call is set by `receive` and by a new `serve(msg_id)`, event work blames
+  nobody, and 57/58 are replaced. Only `init` and the steward hold system-class budgets; servers
+  get narrowing handles only as revocation scopes. Revocation sweeps handles inside queued
+  messages; system callers are grouped by budget in R2; message ids are per receiving process and
+  PIDs random, since global counters were channels. `init`, the steward and the drivers run in
+  `first` budgets and servers working for users in the stride queue (84; the steward stays first
+  but bounds each request's work: the `first` flag in `budget_create` is the editor's mechanism
+  for it). Shared pools are carved (a byte quota per attach root, unasked handles closed, caps that
+  fit the server's budget); each principal's budget is split into fixed sub-budgets per label set;
+  an agent gets a fair share per badge and its sponsor can always end its lease; the third blamed
+  crash ends every budget of that (account, label set) and blocks new sessions for the window;
+  audit records and approval notifications carry labels; `sshd` is stated as the one sink cleared
+  for a label, with `approve@`'s shared `sshd` a milestone 1 residual; `keyd` badges name one key
+  and one purpose.
+- **Round 4, formats** (2026-09-19, answers 75, 83, 97, 98, 101): the startup block is one typed
+  message (`startup`) decoded by `redoubt-wire`, replacing a second framing format whose CRCs
+  protected nothing; every 9P endpoint serves `ninep-common` (`new_connection`, `disconnect`);
+  both tables are shown fenced until WP-R1b generates them, so the drift test stays green. `init`
+  reports blame in one typed message whose table WP-S2 writes; every milestone 1 typed message is
+  a `call`; the steward `call`s a reader budget, which fills its lend.
 
 ## Milestone 1 build (from 2026-09-19)
 One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.

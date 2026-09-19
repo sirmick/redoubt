@@ -26,10 +26,16 @@ device object takes one of three forms; KERNEL-SPEC.md) and nothing about users,
 - **One badge, one client.** Every copy of a handle carries the same badge, and the kernel gives a
   server no per-process identity, so all holders of a copy share one connection (one 9P fid table).
   Rule: **a launcher never passes its own connection to a child.** It asks the server for a fresh
-  connection for each child (the server mints one, through a typed "connect" operation) and passes
-  that. Otherwise a hostile agent started by Alice's shell could read, close or wipe her open files.
-  Servers also key per-client state by (badge, account, label set) as a second line of defence
-  (CONTAINMENT.md).
+  connection for each child (`new_connection`, NAMESPACES.md, which mints one and returns it with a
+  random connection id) and passes that. Otherwise a hostile agent started by Alice's shell could
+  read, close or wipe her open files. Servers also key per-client state by (badge, account, label
+  set) as a second line of defence (CONTAINMENT.md).
+- **Disconnect, not a kernel notice.** The kernel does not tell a server when a client's handles
+  are gone. Only the holder of a connection id can `disconnect(id)`, which frees that connection
+  and everything minted under it. A launcher disconnects a child's connections when it receives the
+  child's exit notice; the steward does so at logout and at lease expiry. Stated residual: a
+  launcher that dies without disconnecting leaks its children's connections until its own
+  connection is freed, and the leak counts against its own (account, label set).
 
 ## IPC
 Two primitives, each with a timeout (KERNEL-SPEC.md, Messages):
@@ -45,14 +51,15 @@ Two primitives, each with a timeout (KERNEL-SPEC.md, Messages):
   set counts too).
 - **Every message carries the caller's badge, account and labels.** Servers use them for admission
   and label checks (CONTAINMENT.md). The raw budget id does not travel.
-- **The other side going away** (death or timeout) never corrupts a server: a lent buffer stays with
-  the server, charged to it, until it replies.
-- **Exit notices.** Whoever creates a process names an endpoint and receives one exit notice there;
-  the creator pays for the notice when it creates the process. There are no death subscriptions.
+- **The other side going away** (death, timeout or revocation) never corrupts a server: a lent
+  buffer stays with the server, charged to it, until it replies, and the server is told with an
+  abandoned-call notice, so it replies and frees the call (KERNEL-SPEC.md, R3). A server's budget
+  pays for its open lends while it holds them.
+- **Exit notices.** Whoever creates a process names an endpoint (a badge-0 handle) and receives one
+  exit notice there; the process object, charged to its creator, holds the notice. There are no
+  death subscriptions.
   There is no per-process kill: a process that must be killable on its own gets its own budget, and
   killing it means destroying that budget.
-- **Badge notices.** A server learns when the last handle with one of its badges is gone (closed, or
-  its holder dead or revoked), and frees that client's state (KERNEL-SPEC.md, Messages).
 - **Interrupts** are received like messages: a driver thread waits on its IRQ handle.
 
 ## Minting and revocation
@@ -64,14 +71,18 @@ revokes every handle stamped with it or a descendant, wherever the copies went.
 - **A budget handle can only narrow.** Minting "into" a budget is allowed only for the default stamp
   or a descendant of it. This is how the steward places a principal's capabilities in sub-budgets
   under that principal: it mints through the principal's capabilities, narrowing to a sub-budget.
+  A budget handle is also a destroy right, so **a narrowing handle a server holds is always a
+  revocation scope** created for that purpose, never a budget that holds processes: a compromised
+  `fsd` could otherwise end every session.
 - **Revocation scopes.** To make one grant revocable on its own, mint it into a **revocation scope**:
   a budget with zero limits (no pages, processes or weight), used only to be destroyed. Nothing runs
   in it, and its handle is never given to another principal.
-- **Creating a process in a budget** charges it to that budget and attributes it to that budget's
-  account.
+- **Creating a process in a budget** counts it against that budget's process limit, charges its
+  threads and memory there, and attributes it to that budget's account; the process object itself,
+  which holds the exit notice, is charged to its creator (KERNEL-SPEC.md).
 - **Leases** are budgets with a kernel deadline; the kernel destroys them when it passes. A lease
-  is at most `MAX_LEASE` (24 h, KERNEL-SPEC.md); the steward refuses a longer request rather than
-  clamping it silently.
+  is at most **`MAX_LEASE` = 24 h**, a steward constant (the kernel knows deadlines, not leases); the
+  steward refuses a longer request rather than clamping it silently.
 - **Budget ids are never reused**, so a stale stamp never matches a new budget. Ids identify; only
   handles grant.
 
@@ -96,9 +107,10 @@ share's stamp. Alice un-shares: the scope is destroyed, and `sub` dies with it.
 1. **Own principal, never an impersonation.** Every action is attributable to the agent. Every agent
    has an accountable **sponsor** (a human, or an agent with a human at the top of the chain).
 2. **An agent's budget sits under its sponsor's, so it shares the sponsor's account.** Its requests
-   count against the sponsor's admission limits for its label set, and crashes blamed on it log out
-   the sponsor's sessions with the same label set (CONTAINMENT.md). The sponsor answers for its
-   agents.
+   count against the sponsor's admission limits for its label set, with a fair share per badge
+   inside them, so an agent cannot lock its sponsor out; ending a lease is always accepted from the
+   sponsor, ahead of admission. Three crashes blamed on the agent end every session and lease of the
+   sponsor's with that label set (CONTAINMENT.md). The sponsor answers for its agents.
 3. **Delegation only narrows.** Human -> agent -> sub-agent, each step attenuated, the chain
    recorded. Agents may spawn sub-agents freely, as budgets **inside their own budget**: an agent
    holds only its own budget handle, so it cannot create siblings, and destroying the agent's budget
@@ -111,7 +123,10 @@ share's stamp. Alice un-shares: the scope is destroyed, and `sub` dies with it.
    with more authority than it holds (PACKAGES.md).
 6. **Labels** bound what an agent can leak; capabilities bound what it can do (CONTAINMENT.md).
 7. **No credentials in agent memory.** Agents use keys through `keyd` and, later, models through
-   `gatewayd`, which holds API keys.
+   `gatewayd`, which holds API keys. A lease carries `keys` only if its approval named the key, and
+   a `keyd` badge names one key and one purpose (for SSH, a signature over the session identifier
+   `keyd` computed itself), never arbitrary bytes: otherwise a hijacked agent is a signature oracle
+   that lets its peer log in as its sponsor elsewhere.
 8. **Runtime:** each agent is its own beamlet VM (one VM = one trust domain); sub-agents with
    different authority are separate VMs.
 9. **Everything is audited:** mint, delegate, revoke, approve, lease expiry, with the principal chain.
@@ -153,9 +168,13 @@ declassification). Most things need none.
   confirms both. The request is frozen until answered; any change makes it a new request.
 - **Limits and labels.** Each (account, label set) has a cap on pending requests. A request from a
   labelled budget is shown only to principals owning every label it carries; otherwise it is refused
-  at submission.
+  at submission. Its "approval waiting" notification reaches only channels whose labels ⊇ the
+  request's, and `approve@box`.
 - **Milestone 1** has one approval path: `ssh approve@box` with the person's own SSH key. An approval
-  grants no more than the approver holds.
+  grants no more than the approver holds. Stated milestone 1 residual: `approve@` shares `sshd` with
+  the most hostile input, so a `sunset` bug reached from any channel controls the screen and a
+  network flood delays approvals. Milestone 2 gives `approve@` its own `sshd` instance or the
+  console.
 - **Later:** high-stakes approvals in a fresh `ssh approve-hs@box` connection that accepts only the
   approver credential, a FIDO `sk-` key; `sshd` must check the signature's user-verification flag,
   not just the key type, and `sunset`'s `sk-` support is unverified. A physical approval button or

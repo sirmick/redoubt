@@ -4,9 +4,9 @@ Raised by the wave 1 packages and their reviews (2026-09-19). Each touches the f
 so each needs your decision; the answer goes into the named note with a HISTORY.md entry.
 **Rec** is the orchestrator's recommendation. Reply with numbers, e.g. "all Rec except 7: ...".
 
-**1-68 answered 2026-09-19** (ANSWERS.md, three tranches; each "Answered" line says where the
-answer now lives). **Open: 69-101 only** (design review round 4, at the end). They block
-WP-A2 (the ABI records) and WP-K2 (endpoints), which have not started.
+**1-101 answered 2026-09-19** (ANSWERS.md, four tranches; each "Answered" line says where the
+answer now lives). **Open: 102** (from WP-K1, at the end). The round-4 answers revised 56 (handle
+kinds are checked by use) and replaced 57 and 58 (by 82).
 
 ## Kernel: messages and IPC (KERNEL-SPEC.md)
 
@@ -466,19 +466,21 @@ protocols alike, so `redoubt/wire/tables/example.md`'s code 1 is renumbered when
     or "check by use", where a wrong kind shows up as `WrongObject` on first use and the table's
     kind is documentation.
     *Rec:* the record carries kinds. It's four small tags, and receivers need them anyway.
-    **Answered:** KERNEL-SPEC.md, Messages and ABI (each handle's kind in `receive`'s record);
+    **Answered:** revised with round 4 (the simplifier's check by use): a wrong kind gets
+    `WrongObject` on first use, and the table's kind is documentation; KERNEL-SPEC.md, Handle;
     WIRE.md, Tables.
 
 57. **Which call a fault blames.** The editor read answers 37 and 31 as "the most recently taken
     call that is still open". The other reading is "the most recently taken call, even if
     replied to". The model uses the first. *Rec:* still open.
-    **Answered:** decided: still open, as KERNEL-SPEC.md, Process (serving account) already says.
+    **Answered:** decided: still open; then replaced by 82 (the thread's current call, set by
+    `receive` and `serve`); KERNEL-SPEC.md, Process.
 
 58. **A panic in a thread with no open calls, while another thread of the process holds them.**
     Blame is per thread, so the notice says `faulted` but blames no one.
     *Rec:* blame falls back to the process's most recently taken open call.
-    **Answered:** changed: blame nobody, no fallback; KERNEL-SPEC.md, Messages (exit notices);
-    CONTAINMENT.md, Crash blame.
+    **Answered:** changed: blame nobody, no fallback; kept by 82, which replaces it; KERNEL-SPEC.md,
+    Messages (exit notices); CONTAINMENT.md, Crash blame.
 
 59. **When a revoked call fails (answer 30).** The caller gets `Dead` at once, not when the
     server replies, to match answer 49. *Rec:* at once, as written.
@@ -487,7 +489,8 @@ protocols alike, so `redoubt/wire/tables/example.md`'s code 1 is renumbered when
 60. **Answer 44: handles against pages.** The editor's reading: pages and their page tables are
     refused with `Refused` (R4), and handles get `OutOfMemory` with the message staying queued.
     *Rec:* accept.
-    **Answered:** as written; KERNEL-SPEC.md, R4.
+    **Answered:** as written, then reversed by 72 (every delivery failure is `Refused`);
+    KERNEL-SPEC.md, R4.
 
 61. **Answer 48 adds a field.** Keying blame by label set needs `blamed_labels` in the exit
     notice, which the answers didn't state. *Rec:* accept.
@@ -501,13 +504,12 @@ protocols alike, so `redoubt/wire/tables/example.md`'s code 1 is renumbered when
     - notices come before messages.
 
     *Rec:* accept, with the cost figure confirmed in K2.
-    **Answered:** as written; KERNEL-SPEC.md, Endpoint, Messages, the cost table; BUILD-PLAN.md,
-    WP-K2 confirms the cost.
+    **Answered:** as written, then moot: 69 removed badge notices from the kernel.
 
 63. **Does the kernel enforce `MAX_LEASE`?** The spec says only the steward does; the model's
     comment implies the kernel does. *Rec:* the steward only. The kernel knows deadlines, not
     leases.
-    **Answered:** KERNEL-SPEC.md, Constants and Budget (`deadline`).
+    **Answered:** KERNEL-SPEC.md, Budget (`deadline`); the constant moved to CAPABILITIES.md (78).
 
 64. **Startup-block `Hndl` names** follow `startup.rs` (non-empty, no NUL), not INIT.md's
     manifest name rule. *Rec:* apply the same name rule to both, for one rule in one place.
@@ -516,11 +518,12 @@ protocols alike, so `redoubt/wire/tables/example.md`'s code 1 is renumbered when
 65. **Where the loader stub finds the ELF image** is unspecified (PACKAGES.md). *Rec:* the image
     is a named entry in the startup block (`Hndl` or a new tag) pointing at pages the parent
     mapped. R2 defines it and PACKAGES.md states it.
-    **Answered:** PACKAGES.md, Launching; INIT.md, Startup block; BUILD-PLAN.md, WP-R2.
+    **Answered:** PACKAGES.md, Launching; INIT.md, Startup block (fields of the `startup` message,
+    75); BUILD-PLAN.md, WP-R2.
 
 66. **R10's reach into in-flight messages, and badge slots, are placed in WP-K2**, not WP-K1,
     because K1 has no endpoints or messages. *Rec:* accept.
-    **Answered:** BUILD-PLAN.md, WP-K1 and WP-K2 (already so).
+    **Answered:** BUILD-PLAN.md, WP-K2 (R10's reach into messages; badge slots then removed by 69).
 
 67. **INIT.md's worked example** doesn't show the vault session's read access to its owner's
     unlabelled volume (which answer 51 relies on). *Rec:* add it.
@@ -532,8 +535,8 @@ protocols alike, so `redoubt/wire/tables/example.md`'s code 1 is renumbered when
 
 ## Design review round 4 (Fable red team, simplifier and editor over answers 1-55)
 
-The reviewers read the whole design as it stands after answers 1-55. The items below need the
-owner. Editorial fixes and build-plan corrections are being applied separately (HISTORY.md).
+The reviewers read the whole design as it stands after answers 1-55. The items below were answered
+by the owner (ANSWERS.md, answers to 69-101: all Rec, with 81 option (a) and a note on 84). Editorial fixes and build-plan corrections are being applied separately (HISTORY.md).
 **Timing:** A2 (the ABI records), W2 and K2 (endpoints) haven't started, so this is the cheapest
 point to change the IPC design. Several items interact; the cross-references say where.
 
@@ -551,6 +554,8 @@ point to change the IPC design. Several items interact; the cross-references say
     *Saves:* an estimated 150-250 lines of the most error-prone new kernel code (a count updated
     at every handle copy and drop). *Rec:* accept. It keeps the kernel minimal, and every
     milestone 1 client has a launcher that outlives it.
+    **Answered:** KERNEL-SPEC.md (no badge slot, badge notice or old I15); CAPABILITIES.md, Handles
+    (disconnect); NAMESPACES.md, `ninep-common`; CONTAINMENT.md, `admit`.
 
 70. **A lend is charged to both sides while its call is open.** *Proposal:* taking a `call`
     charges its lent pages, and their page tables, to the receiver as well as the caller. A
@@ -559,9 +564,11 @@ point to change the IPC design. Several items interact; the cross-references say
     limit" budget state and I5's exception, so usage ≤ limit becomes unconditional. *Cost:* a
     server's budget must cover its open lends up front (about 4 MiB for 64 open 9P calls).
     *Rec:* accept.
+    **Answered:** KERNEL-SPEC.md, R3, R6, the cost table, I5 (unconditional); RESOURCES.md, Budgets.
 
 71. **Define "abandoned call" once** (editorial). R3, R4b and R10 each restate it; define it in R3.
     Being applied, with item 70's wording if 70 is accepted.
+    **Answered:** KERNEL-SPEC.md, R3 (defined once; R4b and R10 point to it).
 
 72. **One way a delivery fails: `Refused` to the sender** (reverses answer 44's "stays queued").
     *Proposal:* a message is delivered only if the receiver's budget can pay for everything it
@@ -569,32 +576,42 @@ point to change the IPC design. Several items interact; the cross-references say
     Otherwise the sender gets `Refused`, the kernel moves on, and a `receive` never fails for want
     of pages. The one bit `Refused` reveals is one a sender with a clock already has.
     *Rec:* accept. It also removes red-team item 85(c)'s stuck-cursor case.
+    **Answered:** KERNEL-SPEC.md, R4 (`Refused`; `receive` never fails for want of pages), the error
+    table.
 
 73. **Class is inherited, and `budget_create` takes no class** (alters answer 9).
     `process_create` and `budget_destroy` already let a holder of a system budget handle act
     there, so a class check on `budget_create` alone guards one door of three. What actually
     protects system budgets is never handing them to users (item 79). *Rec:* accept.
+    **Answered:** KERNEL-SPEC.md, Budget, `budget_create`, I8.
 
 74. **The process object is the exit slot** (changes answer 7's mechanism, not its guarantee). A
     process is charged to its creator, outlives its death until its exit notice is received or
     dropped, and is freed with the creator's budget (which kills it if it still runs). This
     removes the exit slot as a separate object. *Rec:* accept.
+    **Answered:** KERNEL-SPEC.md, Process, the cost table, R10; RESOURCES.md.
 
 75. **The startup block as one typed wire message** (alters answer 39's format). The block becomes
     one WIRE.md message (`namespace`, `handles` and `argv` as `bytes` fields with a stated inner
     layout), decoded by `redoubt-wire`, instead of a second framing format with CRCs that protect
     nothing, since the parent writes both. *Saves:* 200-300 lines in `redoubt-rt`. *Rec:* accept;
     R1b rewrites `startup.rs` anyway.
+    **Answered:** INIT.md, Startup block (the `startup` message); WIRE.md, Layout in a message;
+    BUILD-PLAN.md, WP-R1b.
 
 76. **A budget's own page is always charged to its parent** (a v4 clause of R6). This removes the
     revocation-scope special case in accounting. *Rec:* accept.
+    **Answered:** KERNEL-SPEC.md, the cost table, R6, `budget_create`'s errors.
 
 77. **`random` returns one `u64`** (alters answer 15). This drops `MAX_RANDOM`, a buffer and a
     range check; a 32-byte seed takes four calls. *Rec:* accept.
+    **Answered:** KERNEL-SPEC.md, `random`, Constants, ABI.
 
 78. **`MAX_LEASE` out of the kernel spec** (alters answer 33's placement). The kernel never reads
     it (question 63). The constant moves to CAPABILITIES.md and out of `redoubt-sys`, and the
     steward still refuses leases over 24 h. *Rec:* accept.
+    **Answered:** CAPABILITIES.md, Minting and revocation (Leases); KERNEL-SPEC.md, Constants
+    (removed).
 
 ### Holes (the red team): each is a concrete attack against today's wording
 
@@ -603,12 +620,14 @@ point to change the IPC design. Several items interact; the cross-references say
     system-class children with any labels and any account: forged admission and blame in Alice's
     name, and a labelled reader. *Rec:* server startup blocks omit `budget`, a manifest that
     grants one is refused, and an attack test checks it.
+    **Answered:** INIT.md, Boot and The boot manifest; BUILD-PLAN.md, WP-R3; PLAN.md, attack suite.
 
 80. **A narrowing handle is always a revocation scope.** To mint a connection narrowed to a
     child's budget, a server must hold that budget handle, and a budget handle is a destroy
     right, so a compromised `fsd` could end every session. *Rec:* the steward passes servers only
     scopes created for that purpose, never a budget that holds processes. Attack test: a server
     can't destroy a session.
+    **Answered:** CAPABILITIES.md, Minting and revocation; INIT.md, steward; BUILD-PLAN.md, WP-S2.
 
 81. **Open calls can be pinned, and a server is never told a call was abandoned** (High). Bob
     parks 64 lent calls at `ipd`, each with a 1 µs timeout. `ipd` hits `MAX_OPEN_CALLS`, and
@@ -625,6 +644,8 @@ point to change the IPC design. Several items interact; the cross-references say
 
     *Rec:* (a), which also answers "how does a server learn a caller is gone". If you take item
     69, this is the one kernel notice that stays.
+    **Answered:** option (a): KERNEL-SPEC.md, Process, Messages, R3, R4a, I15; CONTAINMENT.md, the
+    shared server library; PLAN.md, attack suite.
 
 82. **Blame can be steered in event-driven servers** (High; makes 57 and 58 moot). `ipd` and
     `sshd` park calls and later process an old one when an interrupt or a `send` arrives. The
@@ -634,18 +655,23 @@ point to change the IPC design. Several items interact; the cross-references say
     resuming a parked call. A thread doing event work with no current call blames nobody, with no
     fallback (question 58). Attack test: a crash triggered by a `send` while a bystander's call is
     parked blames nobody.
+    **Answered:** KERNEL-SPEC.md, Process (the current call), `serve`, Messages (exit notices);
+    CONTAINMENT.md, Crash blame.
 
 83. **The fresh-connection operation (answer 50) has no protocol.** *Rec* (the editor's text): a
     9P endpoint also serves typed operations, where word 0 = 0 is 9P and anything else is an
     opcode. Every 9P server serves `new_connection` (opcode 2, reply `conn: handle[0] endpoint`),
     minting a connection rooted at or below the caller's. The table lives in NAMESPACES.md as
     `ninep-common`, R1b implements it, and R4 serves it. It also carries item 69's connection id.
+    **Answered:** NAMESPACES.md, `ninep-common`; WIRE.md, Messages; CAPABILITIES.md, Handles.
 
 84. **User work runs at system priority inside servers** (CPU amplification). Bob makes
     `fsd`/`keyd`/`ipd` do expensive work, and no user budget runs meanwhile. *Rec:* strict
     system-first ordering only for `init`, the steward and drivers. Servers working for users run
     in the stride queue with a weight from the manifest, and bound the work of one request. The
     stated residual: that cost is paid by the server's weight, not the requester's.
+    **Answered:** accepted with the note on the steward: KERNEL-SPEC.md, Budget (`first`), R12;
+    RESOURCES.md, Scheduling; CONTAINMENT.md, covert channels (Server CPU).
 
 85. **Shared pools that aren't carved.**
     - (a) Bob fills the `data` volume and Alice's saves fail.
@@ -654,47 +680,60 @@ point to change the IPC design. Several items interact; the cross-references say
 
     *Rec:* a byte quota per attach root in `fsd`; the server library closes every handle it didn't
     ask for; the per-client caps are sized so every bucket at its cap fits the server's budget.
+    **Answered:** NAMESPACES.md, Filesystem servers (quota); CONTAINMENT.md, the shared server
+    library.
 
 86. **Revocation must reach handles inside queued messages** (R10). Today a revoked handle
     arrives in a message sent before the revocation, and if a server reuses badges, that's a
     zombie connection. *Rec:* R10 also sweeps handles in messages not yet received (they arrive as
     0), and servers never reuse a badge number.
+    **Answered:** KERNEL-SPEC.md, R10, I2; CONTAINMENT.md, the shared server library (badges never
+    reused).
 
 87. **System callers share one fairness group.** R2 groups every account-0 sender as `(0, {})`, so
     a busy `fsd:data` fills `WAIT_CAP` at `blkd`, and `fsd:alice-secrets` gets `Busy`: a DoS and a
     channel out of the vault. *Rec:* for account 0, the group key includes the sender's budget id.
+    **Answered:** KERNEL-SPEC.md, R2; CONTAINMENT.md, covert channels.
 
 88. **Global counters are a channel.** If message ids come from one global counter, one process
     can see the gaps in them grow with another process's traffic, including a vault's. PIDs do the
     same at process-creation rate. *Rec:* message ids are unique within the receiving process
     only; PIDs are drawn at random from free ASIDs; `ps` and `budget` show only the caller's
     (account, label set).
+    **Answered:** KERNEL-SPEC.md, Messages (message ids), Process (random PIDs), I12; INIT.md, The
+    shell; CONTAINMENT.md.
 
 89. **Carving under one top budget is a channel.** A vault session's leases change Alice's top
     budget's free limits, which her unlabelled agent can probe. *Rec:* at boot the steward splits
     each principal's top budget into fixed sub-budgets, one per (principal, label set) named in
     the manifest.
+    **Answered:** CONTAINMENT.md, covert channels; INIT.md, The boot manifest, steward, worked
+    example.
 
 90. **An agent can lock out its sponsor.** It shares its sponsor's buckets. It fills
     `(alice, {})`'s caps at the steward and `fsd`, and Alice can't even end the lease, for up to
     24 h. *Rec:* a fair share per badge within a bucket, with the bucket as the ceiling; ending a
     lease is always accepted from the sponsor, ahead of admission. Attack test: an agent floods
     the steward and `fsd`, and Alice still opens a file and ends the lease.
+    **Answered:** CAPABILITIES.md, Agents; CONTAINMENT.md, `admit`, steward; PLAN.md, attack suite.
 
 91. **A logout isn't a lockout, and agents survive it.** Bob crashes `fsd:data` three times, is
     logged out, logs straight back in (or his agent carries on), and three more crashes reboot
     the box. INIT.md's tree also puts agents beside sessions, not under them. *Rec:* the third
     blamed crash destroys every budget of that (account, label set), sessions and leases alike,
     and new sessions are refused until the window passes. INIT.md's tree is reconciled.
+    **Answered:** CONTAINMENT.md, Crash blame; INIT.md, worked example (tree reconciled).
 
 92. **The audit file and "an approval is waiting" are unlabelled sinks.** A labelled request's
     target lands in the audit file, and the notification timing reaches the unlabelled session.
     *Rec:* audit records carry the request's labels and are read under `check`. A labelled
     request's notification reaches only channels whose labels ⊇ the request's, plus
     `approve@box`.
+    **Answered:** CONTAINMENT.md, steward and covert channels; CAPABILITIES.md, Limits and labels.
 
 93. **`process_create` accepts a badged exit endpoint**, so anyone can spray exit notices at a
     server. *Rec:* the exit endpoint must carry badge 0 (`NotPermitted`).
+    **Answered:** KERNEL-SPEC.md, `process_create` (`NotPermitted`).
 
 94. **The approval screen shares `sshd` with the most hostile input.**
     - A `sunset` bug reached from Bob's channel controls the screen.
@@ -705,39 +744,48 @@ point to change the IPC design. Several items interact; the cross-references say
     *Rec:* state `sshd` as the one sink cleared for a label (only the channel its owner
     authenticated: a pty session with no forwarding, subsystems or `exec`), and state the
     milestone 1 residual. Milestone 2 gives `approve@` its own `sshd` instance or the console.
+    **Answered:** CONTAINMENT.md, Sessions and vaults; CAPABILITIES.md, Milestone 1; INIT.md, sshd.
 
 95. **`keys` in a lease is a signature oracle.** A hijacked agent signs SSH user-auth blobs relayed
     from its peer, so the peer can log in as Alice elsewhere. *Rec:* a lease carries `keys` only
     if the approval named the key, and a `keyd` badge names one key and one purpose (for SSH, the
     session identifier `keyd` computed itself), never arbitrary bytes.
+    **Answered:** CAPABILITIES.md, Agents (7); INIT.md, keyd; BUILD-PLAN.md, WP-S1.
 
 ### Smaller points needing a decision (the editor)
 
 96. **Badge slots are charged to `init`,** because `init` creates every server's endpoint. This is
     moot if 69 is accepted. Otherwise, *Rec:* charge the minting process.
+    **Answered:** moot with 69.
 
 97. **`init`'s blame report to the steward has no message table.** *Rec:* one typed message, whose
     table S2 writes into INIT.md's steward section. Until then, the R3 case expects the logout
     signal naming (account, label set), and the logout itself is S2's.
+    **Answered:** INIT.md, Restarts and reboots; BUILD-PLAN.md, WP-R3 and WP-S2.
 
 98. **A table can't mark a typed message as a `send`.** *Rec:* every milestone 1 typed message is a
     `call`, and a `kind` column is added when a protocol first needs a transfer.
+    **Answered:** WIRE.md, Tables.
 
 99. **A deliberate exit with open calls is a blamed fault** (from 55). *Rec:* a server that means to
     exit replies to every open call first, and the spec says so.
+    **Answered:** KERNEL-SPEC.md, Messages (exit notices), R4b.
 
 100. **Decoding order.** ANSWERS.md's "`BadHandle`, then `TooLarge`, then `InvalidArgument`" reads as
      a sequence, but the spec orders errors by register position. *Rec:* confirm that the answer
      was a classification, and that the spec's positional order stands.
+     **Answered:** the answer-14 order was a classification; the spec's positional order stands
+     (KERNEL-SPEC.md, Errors and the order of checks).
 
 101. **Which way the steward and a reader budget talk** (54). *Rec:* the steward `call`s the reader,
      which fills the steward's lend with the snapshot. This matches "labelled callers can only
      submit requests".
+     **Answered:** CONTAINMENT.md, Declassification.
 
 ### The earlier open questions, revisited
 
-- **56 (handle kinds):** the simplifier recommended "check by use" (`WrongObject` on first use).
-  Decided by answer 56: kinds in the record.
+- **56 (handle kinds):** the simplifier recommends "check by use" (`WrongObject` on first use).
+  Accepted in the answers to 69-101, revising answer 56.
 - **57 and 58:** replaced by item 82 (`serve`, with no fallback).
 - **62 (badge-notice details):** moot if 69 is accepted. Otherwise, the "last holder" is undefined
   when the last copy was in a discarded message: use the sender's budget.
