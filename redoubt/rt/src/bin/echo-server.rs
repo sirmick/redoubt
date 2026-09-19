@@ -27,6 +27,9 @@ const MAX_DATA: usize = 64 * 1024;
 pub const NO_ENDPOINT: u32 = 2;
 pub const RECEIVE_FAILED: u32 = 3;
 pub const BAD_LIMITS: u32 = 4;
+/// The kernel would not give a random word, and a server's first minted badge must be
+/// unpredictable (answer 126). A server that cannot get one does not start.
+pub const NO_RANDOM: u32 = 5;
 
 /// What admission lets clients hold: sized so that every bucket at its cap fits [`BUDGET`]
 /// (answer 85). The skeleton holds no calls open, so none are admitted in flight.
@@ -118,7 +121,8 @@ impl EchoFs {
 pub fn serve(startup: &Startup) -> u32 {
     let Some(handle) = startup.handle("echo") else { return NO_ENDPOINT };
     let endpoint = Endpoint::from_handle(handle);
-    let Ok(mut server) = NineServer::new(EchoFs::default(), LIMITS) else { return BAD_LIMITS };
+    let Ok(random) = redoubt_rt::handle::random_u64() else { return NO_RANDOM };
+    let Ok(mut server) = NineServer::new(EchoFs::default(), LIMITS, random) else { return BAD_LIMITS };
     loop {
         match endpoint.receive(FOREVER, 0) {
             Ok(Event::Call(request)) => {

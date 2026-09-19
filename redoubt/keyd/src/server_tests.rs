@@ -25,6 +25,10 @@ const AUDIT_SEED: &str = "222222222222222222222222222222222222222222222222222222
 /// A key that is *not* in `keyd`: what a person logs in with.
 const LOGIN_SEED: &str = "3333333333333333333333333333333333333333333333333333333333333333";
 
+/// The word the tests draw the first granted badge from, so a failure reproduces; on the
+/// machine it is one word of the kernel's CSPRNG (answer 126).
+const TEST_RANDOM: u64 = 0x1234_5678_9abc_def0;
+
 /// The root badges, in manifest order (INIT.md).
 const HOST_BADGE: u64 = 1;
 const AUDIT_BADGE: u64 = 2;
@@ -32,7 +36,7 @@ const AUDIT_BADGE: u64 = 2;
 fn server() -> KeyServer {
     let args = [format!("host,ssh_host,{HOST_SEED}"), format!("audit,audit,{AUDIT_SEED}")];
     let keys = Keys::from_args(args.iter().map(String::as_str)).unwrap();
-    KeyServer::new(keys, LIMITS, &COST, BUDGET).unwrap()
+    KeyServer::new(keys, LIMITS, &COST, BUDGET, TEST_RANDOM).unwrap()
 }
 
 fn caller(badge: u64, account: u64, labels: &[u64]) -> Caller {
@@ -574,32 +578,52 @@ fn a_flood_takes_only_the_flooders_share() {
     assert_eq!(s.granted(), held, "signing holds nothing");
 }
 
-/// A capability granted for oneself counts in the share it came from, so granting more badges
-/// is no way round a fair share (answer 117).
+/// **Only a root badge may grant.** A granted capability cannot grant again, so grants never
+/// chain. That is what stops a system-class caller escaping its cap: `admit` keys account 0 by
+/// badge, and `share` folds a capability into its parent's only when the requester and the
+/// caller are the same client, which two badges of account 0 never are — so a chain would open
+/// a fresh bucket per link until `LIMITS.buckets` were spent and nobody could grant at all.
 #[test]
-fn granting_more_badges_does_not_buy_a_bigger_share() {
+fn a_granted_capability_cannot_grant_again() {
     let (mut s, mut k) = (server(), FakeKernel::new());
-    let agent = caller(AUDIT_BADGE, 1001, &[]);
     let grant = Message::Grant(Grant {});
-    let mut badges = vec![];
-    while let Answered::Ok(OwnedReply::Granted(_, _)) = ask(&mut s, &mut k, &agent, &grant, &[]) {
-        badges.push(*k.minted.last().unwrap());
+    let daemon = caller(HOST_BADGE, 0, &[]);
+    let Answered::Ok(OwnedReply::Granted(..)) = ask(&mut s, &mut k, &daemon, &grant, &[]) else {
+        panic!("grant")
+    };
+    let badge = *k.minted.last().unwrap();
+    let through = Caller { badge, ..daemon };
+    // It still does everything its purpose allows, but it cannot make another.
+    assert!(matches!(
+        ask(&mut s, &mut k, &through, &Message::PublicKey(PublicKeyRequest {}), &[]),
+        Answered::Ok(OwnedReply::PublicKey(..))
+    ));
+    assert_eq!(ask(&mut s, &mut k, &through, &grant, &[]), Answered::Err(ErrorCode::NotPermitted));
+
+    // The red team's attack: one account-0 badge chaining grants until every bucket is spent.
+    // It gets no further than its own root badge's share.
+    let mut frontier = vec![HOST_BADGE];
+    let mut made = 0;
+    while let Some(badge) = frontier.pop() {
+        let who = caller(badge, 0, &[]);
+        while let Answered::Ok(OwnedReply::Granted(..)) = ask(&mut s, &mut k, &who, &grant, &[]) {
+            made += 1;
+            frontier.push(*k.minted.last().unwrap());
+            assert!(made < 100, "it should have run out long before this");
+        }
     }
-    // Now ask through each capability it was granted: the charge still lands in the badge it
-    // came from, so the bucket does not grow.
-    let held = s.granted();
-    for badge in badges {
-        let through = Caller { badge, ..agent };
-        assert!(matches!(ask(&mut s, &mut k, &through, &grant, &[]), Answered::Err(ErrorCode::TooMany)));
+    assert_eq!(s.admission().keys(), 1, "one bucket, not sixteen");
+    // And every other client can still grant.
+    for who in [caller(AUDIT_BADGE, 0, &[]), caller(AUDIT_BADGE, 2002, &[]), caller(HOST_BADGE, 3003, &[])] {
+        assert!(matches!(ask(&mut s, &mut k, &who, &grant, &[]), Answered::Ok(OwnedReply::Granted(..))));
     }
-    assert_eq!(s.granted(), held);
 }
 
-/// `grant` and `release`: a fresh capability per client, released by the one that asked for it
-/// and by nobody else, taking everything granted under it with it. Badge numbers never come
-/// back (answer 86).
+/// `grant` and `release`: a fresh capability per client, naming the same key and the same
+/// purpose and no more, released by the one that asked for it and by nobody else. Badge numbers
+/// never come back (answer 86).
 #[test]
-fn granted_capabilities_are_released_with_everything_under_them() {
+fn a_granted_capability_names_the_same_key_and_dies_with_release() {
     let (mut s, mut k) = (server(), FakeKernel::new());
     let steward = caller(AUDIT_BADGE, 0, &[]);
     let grant = Message::Grant(Grant {});
@@ -610,7 +634,7 @@ fn granted_capabilities_are_released_with_everything_under_them() {
     assert_eq!(handles.len(), 1, "the capability travels as a handle");
     let badge = *k.minted.last().unwrap();
     assert!(badge >= FIRST_GRANTED_BADGE, "granted badges are never root badges");
-    // The capability names the same key and purpose, and no more.
+    // The same key and the same purpose, and no other.
     let through = Caller { badge, ..steward };
     assert!(matches!(
         ask(&mut s, &mut k, &through, &Message::SignRecord(SignRecord { record: b"r" }), &[]),
@@ -620,73 +644,94 @@ fn granted_capabilities_are_released_with_everything_under_them() {
         ask(&mut s, &mut k, &through, &Message::SignSshExchange(transcript()), &[]),
         Answered::Err(ErrorCode::NotPermitted)
     ));
-    // A capability granted under it.
-    let Answered::Ok(OwnedReply::Granted(child_id, _)) = ask(&mut s, &mut k, &through, &grant, &[]) else {
-        panic!("grant")
-    };
-    let child_badge = *k.minted.last().unwrap();
-    assert_eq!(s.granted(), 2);
 
-    // A stranger cannot release either of them, and neither can the same client through
-    // another badge: the same answer whether the id is somebody else's or nobody's.
-    for (who, id) in [
-        (caller(AUDIT_BADGE, 2002, &[]), id),
-        (caller(AUDIT_BADGE, 0, &[5]), id),
-        (steward, 0),
-        (steward, id ^ 1),
-    ] {
+    // A stranger cannot release it, and neither can the same client through another badge: the
+    // same answer whether the id is somebody else's or nobody's.
+    for (who, id) in
+        [(caller(AUDIT_BADGE, 2002, &[]), id), (caller(AUDIT_BADGE, 0, &[5]), id), (steward, id ^ 1)]
+    {
         assert_eq!(
             ask(&mut s, &mut k, &who, &Message::Release(Release { id }), &[]),
             Answered::Err(ErrorCode::NotPermitted)
         );
     }
-    assert_eq!(s.granted(), 2, "and nothing was freed by trying");
-    let _ = child_id;
+    assert_eq!(s.granted(), 1, "and nothing was freed by trying");
 
-    // Releasing the first takes the one granted under it with it.
     assert_eq!(
         ask(&mut s, &mut k, &steward, &Message::Release(Release { id }), &[]),
         Answered::Ok(OwnedReply::Released)
     );
     assert_eq!(s.granted(), 0);
-    for dead in [badge, child_badge] {
-        assert_eq!(
-            ask(
-                &mut s,
-                &mut k,
-                &Caller { badge: dead, ..steward },
-                &Message::PublicKey(PublicKeyRequest {}),
-                &[]
-            ),
-            Answered::Err(ErrorCode::NotPermitted)
-        );
-    }
-    // The next grant gets a new badge, never one of those.
+    assert_eq!(
+        ask(&mut s, &mut k, &Caller { badge, ..steward }, &Message::PublicKey(PublicKeyRequest {}), &[]),
+        Answered::Err(ErrorCode::NotPermitted),
+        "the released badge names nothing"
+    );
+    // The next grant gets a new badge, never that one.
     let _ = ask(&mut s, &mut k, &steward, &grant, &[]);
-    let fresh = *k.minted.last().unwrap();
-    assert!(fresh > child_badge, "badges only go up");
+    assert!(*k.minted.last().unwrap() > badge, "badges only go up");
+}
+
+/// **`release(0)` frees everything this caller granted.** A holder that crashed and was
+/// restarted on the same root badge (INIT.md decision 4) knows none of its ids, and only the
+/// holder of an id can name a capability, so without this its share would stay full for the
+/// life of `keyd`. No grant is ever given the id 0, so it can name nothing else.
+#[test]
+fn release_zero_frees_everything_this_caller_granted() {
+    let (mut s, mut k) = (server(), FakeKernel::new());
+    let grant = Message::Grant(Grant {});
+    let steward = caller(AUDIT_BADGE, 0, &[]);
+    let other = caller(HOST_BADGE, 0, &[]);
+    let mut mine = 0;
+    while let Answered::Ok(OwnedReply::Granted(..)) = ask(&mut s, &mut k, &steward, &grant, &[]) {
+        mine += 1;
+    }
+    assert_eq!(mine, LIMITS.state, "account 0 has a bucket of its own, undivided");
+    let Answered::Ok(OwnedReply::Granted(theirs, _)) = ask(&mut s, &mut k, &other, &grant, &[]) else {
+        panic!("grant")
+    };
+    assert_eq!(s.granted(), mine as usize + 1);
+
+    // The steward crashes; `init` restarts it with the same root handle, so the same badge,
+    // account and labels: it asks for everything back.
+    assert_eq!(
+        ask(&mut s, &mut k, &steward, &Message::Release(Release { id: ALL_GRANTS }), &[]),
+        Answered::Ok(OwnedReply::Released)
+    );
+    assert_eq!(s.granted(), 1, "only the other badge's is left");
+    assert_eq!(s.admission().held(AdmitKey::of(&steward), Resource::State), 0, "its slots came back");
+    // And it can grant again, as it could before it died.
+    assert!(matches!(ask(&mut s, &mut k, &steward, &grant, &[]), Answered::Ok(OwnedReply::Granted(..))));
+    // Asking again frees nothing, and never somebody else's.
+    assert_eq!(
+        ask(&mut s, &mut k, &other, &Message::Release(Release { id: ALL_GRANTS }), &[]),
+        Answered::Ok(OwnedReply::Released)
+    );
+    assert_eq!(
+        ask(&mut s, &mut k, &other, &Message::Release(Release { id: theirs }), &[]),
+        Answered::Err(ErrorCode::NotPermitted),
+        "it is gone, and a stale id is still nobody's"
+    );
 }
 
 /// A grant whose reply never reaches its caller is undone. The requester never learns the id,
 /// and `release` answers only the holder of an id, so the record and its admission slot would
 /// otherwise be held for the life of the process; a client could fill its own bucket by dying
-/// mid-grant. `serve` calls this when `finish` says the reply did not go.
+/// mid-grant. `serve` calls this when `finish` says the reply did not go, and the 9P skeleton
+/// does the same with the same table.
 #[test]
 fn a_grant_whose_reply_never_arrives_is_undone() {
     let (mut s, mut k) = (server(), FakeKernel::new());
     let who = caller(AUDIT_BADGE, 1001, &[]);
     let key = AdmitKey::of(&who);
     assert!(matches!(ask(&mut s, &mut k, &who, &Message::Grant(Grant {}), &[]), Answered::Ok(_)));
-    let badge = s.granted_here.expect("the grant records what it made");
-    // And one granted under it, which must go the same way.
-    let through = Caller { badge, ..who };
-    assert!(matches!(ask(&mut s, &mut k, &through, &Message::Grant(Grant {}), &[]), Answered::Ok(_)));
-    assert_eq!(s.granted(), 2);
-    assert_eq!(s.admission().held(key, Resource::State), 2);
+    let badge = s.granted.minted_here().expect("the grant records what it made");
+    assert_eq!(s.granted(), 1);
+    assert_eq!(s.admission().held(key, Resource::State), 1);
 
     s.forget_badge(badge);
-    assert_eq!(s.granted(), 0, "and everything granted under it went too");
-    assert_eq!(s.admission().held(key, Resource::State), 0, "its slots came back");
+    assert_eq!(s.granted(), 0);
+    assert_eq!(s.admission().held(key, Resource::State), 0, "its slot came back");
 }
 
 /// A grant that cannot be minted leaves nothing behind: no record, and the admission it took
@@ -775,15 +820,15 @@ fn one_requests_work_is_bounded() {
 fn the_limits_are_sized_as_containment_says() {
     assert!(LIMITS.fits(&COST, BUDGET));
     let keys = || Keys::from_args([format!("k,audit,{AUDIT_SEED}")].iter().map(String::as_str)).unwrap();
-    assert!(KeyServer::new(keys(), LIMITS, &COST, BUDGET).is_ok());
+    assert!(KeyServer::new(keys(), LIMITS, &COST, BUDGET, TEST_RANDOM).is_ok());
     // Every bucket at its cap: what the budget must cover, and one byte less is refused rather
     // than rounded (answer 85).
     let need = u64::from(LIMITS.buckets) * u64::from(LIMITS.state) * COST.state;
     assert!(need <= BUDGET, "the shipped budget covers the shipped caps");
-    assert!(KeyServer::new(keys(), LIMITS, &COST, need).is_ok());
-    assert!(KeyServer::new(keys(), LIMITS, &COST, need - 1).is_err());
+    assert!(KeyServer::new(keys(), LIMITS, &COST, need, TEST_RANDOM).is_ok());
+    assert!(KeyServer::new(keys(), LIMITS, &COST, need - 1, TEST_RANDOM).is_err());
     // A cap of one cannot seat a share and its sponsor.
-    assert!(KeyServer::new(keys(), Limits { state: 1, ..LIMITS }, &COST, BUDGET).is_err());
+    assert!(KeyServer::new(keys(), Limits { state: 1, ..LIMITS }, &COST, BUDGET, TEST_RANDOM).is_err());
     // `keyd` parks no calls, so it asks for no open calls beyond the ones it is answering.
     assert_eq!(LIMITS.in_flight, 0);
     assert_eq!(LIMITS.open_calls(), 0);

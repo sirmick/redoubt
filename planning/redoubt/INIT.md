@@ -174,8 +174,25 @@ with. It receives on the endpoint its startup block names `keyd`.
 **A badge names one key and one purpose.** The **root badge of the key in argument *i* is *i***
 (from 1), so `init` mints each root capability without asking `keyd` anything, and a restarted
 `keyd` gives the same badges the same meaning from the same arguments, holding no state across the
-restart (decision 5). Badges at or above 2^63 are minted by `grant` at run time, are never reused,
-and are gone after a restart.
+restart (decision 5). Badges at or above 2^63 are minted by `grant` at run time and are never
+reused. What a restart does to them needs saying, because "gone" is not something `keyd` can make
+true: the endpoint outlives the server (decision 4) and a handle granted before the restart is
+still a live handle afterwards, stamped with its requester. What protects it is that **each
+incarnation draws its first granted badge at random above 2^63** (answer 126), so the badges the
+restarted `keyd` gives out are not the ones stale handles carry, and a stale handle names no key —
+`not_permitted`, like any badge `keyd` does not know. A counter that started in the same place
+every time would instead have handed a stale handle whatever the first new client asked for.
+
+**Only a root badge may grant.** A granted capability cannot grant another, so grants never chain.
+Admission keys account 0 by badge (CONTAINMENT.md, because the budget a system caller shares does
+not travel), and a chained grant would open a fresh bucket per link, so one system server could
+spend every bucket `keyd` has and lock out the steward. Milestone 1 needs no chain: only the
+steward and `sshd` hold `keyd` capabilities, both through root badges (answer 124).
+
+**`release(0)` frees everything the caller granted.** A grant is never given the id 0, so it names
+nothing else. It is what a holder asks for when its ids are gone — a server `init` restarted on the
+same root badge knows none of them, and only the holder of an id can name a capability, so without
+it that holder's share would stay full for the life of `keyd`.
 
 | Purpose | Key | The one thing its badge may sign |
 | --- | --- | --- |
