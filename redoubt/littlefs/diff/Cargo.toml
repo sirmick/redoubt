@@ -1,0 +1,18 @@
+[package]
+name = "littlefs-diff"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Host-only: differential tests of the littlefs crate against the C reference"
+
+# Host-only, and outside the workspace (see the root Cargo.toml `exclude`): this crate is the
+# one place a C compiler is used, to build the reference as a test oracle. Nothing here is a
+# dependency of anything that runs on the machine.
+[workspace]
+
+[dependencies]
+littlefs = { path = ".." }
+
+[build-dependencies]
+cc = "1"

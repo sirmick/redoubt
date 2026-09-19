@@ -4,6 +4,8 @@
 
 use std::collections::BTreeMap;
 
+pub mod ops;
+
 use littlefs::{BlockDevice, Config, Error, FileType, Filesystem, OpenOptions};
 
 /// A RAM disk that behaves like flash: erase sets 0xff, programs must hit erased bytes and
@@ -16,14 +18,17 @@ pub struct Ram {
     pub data: Vec<u8>,
     pub budget: Option<u64>,
     pub writes: u64,
+    /// Panic on a program over unerased bytes. Off for hostile images, which can direct a
+    /// correct filesystem there (a crafted forward CRC).
+    pub strict: bool,
 }
 
 impl Ram {
     pub fn new(cfg: Config) -> Ram {
-        Ram { cfg, data: vec![0xff; (cfg.block_size * cfg.block_count) as usize], budget: None, writes: 0 }
+        Ram { cfg, data: vec![0xff; (cfg.block_size * cfg.block_count) as usize], budget: None, writes: 0, strict: true }
     }
 
-    pub fn from_image(cfg: Config, data: Vec<u8>) -> Ram { Ram { cfg, data, budget: None, writes: 0 } }
+    pub fn from_image(cfg: Config, data: Vec<u8>) -> Ram { Ram { cfg, data, budget: None, writes: 0, strict: true } }
 
     fn at(&self, block: u32, off: u32) -> usize { (block * self.cfg.block_size + off) as usize }
 
@@ -50,7 +55,9 @@ impl BlockDevice for Ram {
         assert!(block < self.cfg.block_count && off as usize + data.len() <= self.cfg.block_size as usize);
         assert!(off % self.cfg.prog_size == 0 && data.len() as u32 % self.cfg.prog_size == 0);
         let at = self.at(block, off);
-        assert!(self.data[at..at + data.len()].iter().all(|b| *b == 0xff), "program over unerased bytes");
+        if self.strict {
+            assert!(self.data[at..at + data.len()].iter().all(|b| *b == 0xff), "program over unerased bytes");
+        }
         let torn = self.spend()?;
         let n = if torn { data.len() / 2 } else { data.len() };
         self.data[at..at + n].copy_from_slice(&data[..n]);

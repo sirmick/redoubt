@@ -811,7 +811,7 @@ impl<D: BlockDevice> Filesystem<D> {
     /// half-orphans: a directory whose entry points to a pair other than the one on the list
     /// (the reference's relocation moved it). Pass 1 unlinks full orphans: directories on
     /// the list that no entry names (their removal was interrupted).
-    fn deorphan(&mut self) -> Result<(), Error> {
+    pub(crate) fn deorphan(&mut self) -> Result<(), Error> {
         // Every step either advances or fixes one pair, and each pair is fixed at most once
         // per pass; the bound only matters for a hostile image.
         let limit = 4 * self.block_count as u64 + 16;
