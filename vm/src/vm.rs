@@ -51,7 +51,7 @@ impl Default for Limits {
         // 128 MiB of binary; 16M stack slots (256 MiB of 16-byte terms, plus frames).
         Limits {
             max_mailbox: 1 << 20,
-            max_heap_words: 1 << 27, // 1 GiB of words
+            max_heap_words: 1 << 27, // 1 GiB
             max_ets_words: 1 << 27,
             max_binary_bits: 1 << 30,
             max_stack_slots: 1 << 24,

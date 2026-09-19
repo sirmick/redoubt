@@ -172,3 +172,26 @@ fn iodata() {
     let bad = h.list([Term::Int(300)]);
     assert_eq!(h.iodata_bytes(bad), None);
 }
+
+/// Sub-binaries of one buffer share its entry: its bytes count once, through copying and GC.
+#[test]
+fn slices_share_one_offheap_entry() {
+    let mut h = heap();
+    let whole = h.binary(&[7; 100_000]);
+    let b = h.as_bits(whole).unwrap();
+    let other = h.binary(&[1; 10]);
+    let mut slices: Vec<Term> = (0..1000).map(|i| h.bits(b.slice(i * 8, 800))).collect();
+    slices.push(other);
+    slices.push(h.bits(b.slice(0, 8)));
+    assert_eq!(h.offheap_bytes(), 100_010);
+    let list = h.list(slices);
+    let mut dst = heap();
+    let copied = copy(&h, list, &mut dst);
+    assert_eq!(dst.offheap_bytes(), 100_010);
+    let mut root = copied;
+    let mut gc = dst.collect(0);
+    gc.root(&mut root);
+    gc.finish();
+    assert_eq!(dst.offheap_bytes(), 100_010);
+    assert_eq!(dst.list_iter(root).count(), 1002);
+}

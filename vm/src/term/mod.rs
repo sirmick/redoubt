@@ -27,6 +27,7 @@ mod show;
 mod tests;
 
 use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
@@ -186,6 +187,15 @@ impl OffHeap {
             OffHeap::Bytes(b) => b.len(),
             OffHeap::Big(b) => (b.bits() as usize).div_ceil(8),
             OffHeap::Resource(_) => 64,
+        }
+    }
+
+    /// The address of the shared value: the same for every clone of one `Arc`.
+    fn addr(&self) -> usize {
+        match self {
+            OffHeap::Bytes(b) => Arc::as_ptr(b) as *const u8 as usize,
+            OffHeap::Big(b) => Arc::as_ptr(b) as *const u8 as usize,
+            OffHeap::Resource(r) => Arc::as_ptr(r) as *const u8 as usize,
         }
     }
 }
@@ -364,6 +374,11 @@ impl Literals {
 pub struct Heap {
     terms: Vec<Term>,
     offheap: Vec<OffHeap>,
+    /// Each off-heap value's entry, by its address. One entry per value, however many terms
+    /// refer to it (every sub-binary of a buffer), so its bytes are counted once and a buffer
+    /// only this heap holds is seen to be unique. An address cannot be reused while it is here:
+    /// the entry keeps the value alive.
+    offheap_index: BTreeMap<usize, u32>,
     /// Bytes held off the heap by this heap's own table.
     offheap_bytes: usize,
     lits: Literals,
@@ -446,6 +461,7 @@ impl Heap {
         Heap {
             terms: Vec::new(),
             offheap: Vec::new(),
+            offheap_index: BTreeMap::new(),
             offheap_bytes: 0,
             lits: lits.clone(),
         }
@@ -456,6 +472,7 @@ impl Heap {
         Heap {
             terms: Vec::with_capacity(cells),
             offheap: Vec::new(),
+            offheap_index: BTreeMap::new(),
             offheap_bytes: 0,
             lits: lits.clone(),
         }
@@ -695,10 +712,22 @@ impl Heap {
         Ptr::own(at)
     }
 
+    /// The entry for an off-heap value: its existing one if this heap already refers to it.
     fn push_offheap(&mut self, o: OffHeap) -> Term {
+        let addr = o.addr();
+        // Fast path: slices of one buffer tend to be made one after another.
+        if let Some(last) = self.offheap.last() {
+            if last.addr() == addr {
+                return Term::OffHeap(self.offheap.len() as u32 - 1);
+            }
+        }
+        if let Some(&i) = self.offheap_index.get(&addr) {
+            return Term::OffHeap(i);
+        }
         self.offheap_bytes += o.size();
         let i = u32::try_from(self.offheap.len()).expect("under 2^32 off-heap entries");
         self.offheap.push(o);
+        self.offheap_index.insert(addr, i);
         Term::OffHeap(i)
     }
 

@@ -27,6 +27,7 @@ impl Heap {
     pub fn collect(&mut self, capacity: usize) -> Collector<'_> {
         let from = core::mem::replace(&mut self.terms, Vec::with_capacity(capacity));
         let from_offheap = core::mem::take(&mut self.offheap);
+        self.offheap_index.clear();
         self.offheap_bytes = 0;
         let offheap_moved = alloc::vec![u32::MAX; from_offheap.len()];
         Collector {
