@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 use crate::atom::Atom;
 use crate::loader::{FLOAT_REGS, X_REGS};
 use crate::module::Module;
-use crate::term::{MapKey, Pid, Ref, Term};
+use crate::term::{Heap, Literals, OwnedTerm, Pid, Ref, Term};
 
 /// A code address: an instruction in a module.
 #[derive(Clone)]
@@ -123,19 +123,80 @@ impl Default for MaxHeap {
     }
 }
 
-/// A monitor on a process, as the monitored process keeps it.
+/// A monitor on a process, as the monitored process keeps it (outside its heap: it belongs to
+/// the watcher).
 #[derive(Clone)]
 pub struct Monitor {
     /// Who is watching.
     pub watcher: Pid,
     /// How the watcher named the process (a pid, or `{Name, Node}`), for the message.
-    pub object: Term,
+    pub object: OwnedTerm,
     /// The first element of the message: `'DOWN'`, or the `{tag, Tag}` option of `monitor/3`.
-    pub tag: Option<Term>,
+    pub tag: Option<OwnedTerm>,
 }
+
+/// The process dictionary: entries sorted by the exact order of their keys (terms on the
+/// process's heap), so lookups are binary searches and `get/0` lists them in key order.
+#[derive(Default)]
+pub struct Dictionary {
+    entries: Vec<(Term, Term)>,
+}
+
+impl Dictionary {
+    fn find(&self, heap: &Heap, key: Term) -> Result<usize, usize> {
+        self.entries.binary_search_by(|(k, _)| heap.cmp_exact(*k, key))
+    }
+
+    pub fn get(&self, heap: &Heap, key: Term) -> Option<Term> {
+        self.find(heap, key).ok().map(|i| self.entries[i].1)
+    }
+
+    /// Set `key`; the old value if there was one.
+    pub fn put(&mut self, heap: &Heap, key: Term, value: Term) -> Option<Term> {
+        match self.find(heap, key) {
+            Ok(i) => Some(core::mem::replace(&mut self.entries[i].1, value)),
+            Err(i) => {
+                self.entries.insert(i, (key, value));
+                None
+            }
+        }
+    }
+
+    pub fn remove(&mut self, heap: &Heap, key: Term) -> Option<Term> {
+        self.find(heap, key).ok().map(|i| self.entries.remove(i).1)
+    }
+
+    pub fn entries(&self) -> &[(Term, Term)] {
+        &self.entries
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn take(&mut self) -> Vec<(Term, Term)> {
+        core::mem::take(&mut self.entries)
+    }
+
+    /// The terms, for a collection.
+    pub fn terms_mut(&mut self) -> impl Iterator<Item = &mut Term> {
+        self.entries.iter_mut().flat_map(|(k, v)| [k, v])
+    }
+}
+
+/// Cells a heap may grow to before its first collection.
+pub const MIN_HEAP_CELLS: usize = 1024;
 
 pub struct Process {
     pub pid: Pid,
+    /// Every term this process holds is on this heap (or a literal).
+    pub heap: Heap,
+    /// Collect when the heap reaches this many cells.
+    pub gc_at: usize,
     pub x: Vec<Term>,
     pub f: Vec<f64>,
     /// Y registers of all frames, innermost last.
@@ -149,6 +210,7 @@ pub struct Process {
     pub in_exception: bool,
     pub state: State,
 
+    /// Messages, copied onto the heap when they arrive.
     pub mailbox: VecDeque<Term>,
     /// Index of the next message `loop_rec` looks at.
     pub save: usize,
@@ -167,7 +229,7 @@ pub struct Process {
     pub monitored_by: BTreeMap<Ref, Monitor>,
     pub trap_exit: bool,
     pub registered_name: Option<Atom>,
-    pub dictionary: BTreeMap<MapKey, Term>,
+    pub dictionary: Dictionary,
     pub group_leader: Option<Pid>,
     /// Exit reason delivered while running (e.g. `exit(self(), kill)`), acted on at once.
     pub pending_exit: Option<Term>,
@@ -187,13 +249,16 @@ pub struct Process {
 }
 
 impl Process {
-    pub fn new(pid: Pid, entry: Cp, args: Vec<Term>) -> Process {
+    /// A process that will run `entry` with `args`, which are terms of `heap`.
+    pub fn new(pid: Pid, entry: Cp, heap: Heap, args: Vec<Term>) -> Process {
         let mut x = vec![Term::Nil; X_REGS];
         for (i, a) in args.into_iter().enumerate() {
             x[i] = a;
         }
         Process {
             pid,
+            gc_at: MIN_HEAP_CELLS.max(heap.len() * 2),
+            heap,
             x,
             f: vec![0.0; FLOAT_REGS],
             stack: Vec::new(),
@@ -213,7 +278,7 @@ impl Process {
             monitored_by: BTreeMap::new(),
             trap_exit: false,
             registered_name: None,
-            dictionary: BTreeMap::new(),
+            dictionary: Dictionary::default(),
             group_leader: None,
             pending_exit: None,
             budget: 0,
@@ -224,5 +289,44 @@ impl Process {
             usage: crate::memory::Usage::default(),
             measured_at: 0,
         }
+    }
+}
+
+impl Process {
+    /// Collect the heap if it has outgrown its threshold. Called only between instructions,
+    /// when every term the process holds is in one of the places listed here.
+    pub fn maybe_collect(&mut self) {
+        if self.heap.len() >= self.gc_at {
+            self.collect();
+        }
+    }
+
+    /// Collect the heap now.
+    pub fn collect(&mut self) {
+        let live_guess = self.gc_at / 2;
+        let mut gc = self.heap.collect(live_guess);
+        for t in self.x.iter_mut() {
+            gc.root(t);
+        }
+        for t in self.stack.iter_mut() {
+            gc.root(t);
+        }
+        for t in self.mailbox.iter_mut() {
+            gc.root(t);
+        }
+        for t in self.dictionary.terms_mut() {
+            gc.root(t);
+        }
+        if let Some(t) = self.pending_exit.as_mut() {
+            gc.root(t);
+        }
+        gc.finish();
+        // Grow in proportion to what survived, so collection costs a constant share of the work.
+        self.gc_at = MIN_HEAP_CELLS.max(self.heap.len() * 2);
+    }
+
+    /// Refresh the heap's view of the literal chunks (after code was loaded).
+    pub fn refresh(&mut self, lits: &Literals) {
+        self.heap.refresh(lits);
     }
 }

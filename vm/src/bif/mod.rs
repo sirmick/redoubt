@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 
 use crate::atom::Atom;
 use crate::process::{Exception, Process};
-use crate::term::Term;
+use crate::term::{Bits, Heap, OwnedTerm, Term};
 use crate::vm::System;
 
 mod arith;
@@ -32,6 +32,27 @@ mod unicode;
 mod zlib;
 
 pub use proc::send;
+
+/// A resource a native holds while it works: the `Arc` keeps it alive, so the caller's heap is
+/// free for building the result.
+pub struct Held<T> {
+    r: alloc::sync::Arc<crate::term::Resource>,
+    _t: core::marker::PhantomData<T>,
+}
+
+impl<T: 'static> core::ops::Deref for Held<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        self.r.get::<T>().expect("checked when held")
+    }
+}
+
+impl<T> Held<T> {
+    /// The resource's id (the reference it is to Erlang code).
+    pub fn id(&self) -> u64 {
+        self.r.id
+    }
+}
 
 /// Context for a native call: the VM and the calling process.
 pub struct Ctx<'a> {
@@ -675,11 +696,115 @@ impl Ctx<'_> {
     }
 
     /// An error `{Tag, Value}`, e.g. `{badkey, K}`.
-    pub fn error_with(&self, tag: &Atom, value: Term) -> Exception {
-        Exception::error(Term::tuple(alloc::vec![Term::Atom(tag.clone()), value]))
+    pub fn error_with(&mut self, tag: &Atom, value: Term) -> Exception {
+        let t = self.p.heap.tuple(&[Term::Atom(*tag), value]);
+        Exception::error(t)
     }
 
     pub fn ok(&self) -> Term {
-        Term::Atom(self.sys.atoms.ok.clone())
+        Term::Atom(self.sys.atoms.ok)
+    }
+
+    // ---- terms on the calling process's heap ----
+
+    /// The calling process's heap: every argument is a term of it, and results go on it.
+    pub fn heap(&self) -> &Heap {
+        &self.p.heap
+    }
+
+    pub fn heap_mut(&mut self) -> &mut Heap {
+        &mut self.p.heap
+    }
+
+    pub fn tuple(&mut self, elems: &[Term]) -> Term {
+        self.p.heap.tuple(elems)
+    }
+
+    pub fn cons(&mut self, head: Term, tail: Term) -> Term {
+        self.p.heap.cons(head, tail)
+    }
+
+    pub fn list(&mut self, items: impl IntoIterator<Item = Term, IntoIter: DoubleEndedIterator>) -> Term {
+        self.p.heap.list(items)
+    }
+
+    pub fn list_with_tail(&mut self, items: impl IntoIterator<Item = Term, IntoIter: DoubleEndedIterator>, tail: Term) -> Term {
+        self.p.heap.list_with_tail(items, tail)
+    }
+
+    /// A string as a list of characters.
+    pub fn string(&mut self, s: &str) -> Term {
+        self.p.heap.string(s)
+    }
+
+    pub fn binary(&mut self, bytes: &[u8]) -> Term {
+        self.p.heap.binary(bytes)
+    }
+
+    pub fn bits(&mut self, b: Bits) -> Term {
+        self.p.heap.bits(b)
+    }
+
+    /// An integer, as a bignum only if it needs one.
+    pub fn big(&mut self, b: num_bigint::BigInt) -> Term {
+        self.p.heap.big(b)
+    }
+
+    pub fn from_i128(&mut self, i: i128) -> Term {
+        self.p.heap.from_i128(i)
+    }
+
+    pub fn map_from(&mut self, pairs: impl IntoIterator<Item = (Term, Term)>) -> Term {
+        self.p.heap.map_from(pairs)
+    }
+
+    /// `{ok, V}`.
+    pub fn ok_tuple(&mut self, v: Term) -> Term {
+        let ok = self.ok();
+        self.p.heap.tuple(&[ok, v])
+    }
+
+    /// `{error, Reason}`.
+    pub fn error_tuple(&mut self, reason: Term) -> Term {
+        let e = Term::Atom(self.sys.atoms.error);
+        self.p.heap.tuple(&[e, reason])
+    }
+
+    /// The value of resource `t`, if it is one holding a `T`.
+    pub fn resource<T: 'static>(&self, t: Term) -> Option<Held<T>> {
+        let r = self.p.heap.as_resource(t)?;
+        r.get::<T>()?;
+        Some(Held { r: r.clone(), _t: core::marker::PhantomData })
+    }
+
+    /// A new resource holding `value`, with a fresh id.
+    pub fn new_resource<T: 'static>(&mut self, value: T) -> Term {
+        let id = self.sys.make_ref().0;
+        self.p.heap.resource(crate::term::Resource { id, value: alloc::boxed::Box::new(value) })
+    }
+
+    /// A copy of a term kept outside the process.
+    pub fn copy_in(&mut self, t: &OwnedTerm) -> Term {
+        t.copy_into(&mut self.p.heap)
+    }
+
+    /// A copy of `t` to keep outside the process.
+    pub fn own(&self, t: Term) -> OwnedTerm {
+        OwnedTerm::new(&self.p.heap, t)
+    }
+
+    /// The elements of a proper list, or `badarg`.
+    pub fn list_arg(&self, t: Term) -> Result<Vec<Term>, Exception> {
+        self.p.heap.to_vec(t).ok_or_else(|| self.badarg())
+    }
+
+    /// The elements of a tuple (copied out, so the heap is free for building), or `None`.
+    pub fn tuple_elems(&self, t: Term) -> Option<Vec<Term>> {
+        self.p.heap.as_tuple(t).map(<[Term]>::to_vec)
+    }
+
+    /// Print `t` as `~w` does.
+    pub fn show(&self, t: Term) -> alloc::string::String {
+        alloc::string::ToString::to_string(&self.p.heap.show(t))
     }
 }

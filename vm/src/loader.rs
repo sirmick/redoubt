@@ -13,7 +13,7 @@ use crate::atom::{Atom, AtomTable};
 use crate::etf;
 use crate::module::{Arg, Export, FunEntry, FunctionInfo, Import, Instr, Module};
 use crate::opcodes::{self, MAX_OPCODE, OPCODES};
-use crate::term::Term;
+use crate::term::{Heap, Literals, Term};
 
 /// Number of X registers; operands naming a higher one are rejected.
 pub const X_REGS: usize = 1024;
@@ -50,8 +50,32 @@ impl From<etf::EtfError> for LoadError {
 
 type Result<T> = core::result::Result<T, LoadError>;
 
-/// Parse and validate `bytes` as a module.
-pub fn load(bytes: &[u8], atoms: &mut AtomTable) -> Result<Module> {
+/// Parse and validate `bytes` as a module. Its constants (literals, bignums, file names) become
+/// a new chunk of `lits`.
+pub fn load(bytes: &[u8], atoms: &mut AtomTable, lits: &mut Literals) -> Result<Module> {
+    let mut heap = Heap::new(&Literals::default());
+    let mut module = parse(bytes, atoms, &mut heap)?;
+    let space = lits.add(heap, &mut []);
+    let relocate = |t: &mut Term| crate::term::relocate(t, space);
+    module.literals.iter_mut().for_each(relocate);
+    module.lines.files.iter_mut().for_each(relocate);
+    fn args(a: &mut [Arg], space: u32) {
+        for a in a {
+            match a {
+                Arg::Const(t) => crate::term::relocate(t, space),
+                Arg::List(items) => args(items, space),
+                _ => {}
+            }
+        }
+    }
+    for ins in module.code.iter_mut() {
+        args(&mut ins.args, space);
+    }
+    Ok(module)
+}
+
+/// [`load`], with the constants on `heap` (space 0).
+fn parse(bytes: &[u8], atoms: &mut AtomTable, heap: &mut Heap) -> Result<Module> {
     let chunks = chunks(bytes)?;
     let chunk = |id: &[u8; 4]| chunks.iter().find(|(c, _)| c == id).map(|(_, d)| *d);
     let need = |id: &'static str| chunk(id.as_bytes().try_into().unwrap()).ok_or(LoadError::MissingChunk(id));
@@ -72,13 +96,14 @@ pub fn load(bytes: &[u8], atoms: &mut AtomTable) -> Result<Module> {
     }
 
     let literals = match chunk(b"LitT") {
-        Some(d) => literal_chunk(d, atoms)?,
+        Some(d) => literal_chunk(d, atoms, heap)?,
         None => Vec::new(),
     };
     let strings = chunk(b"StrT").unwrap_or(&[]).to_vec();
 
-    let ctx = Tables { atoms: &atom_table, literals: &literals };
-    let (code, label_count, labels) = code_chunk(need("Code")?, &ctx)?;
+    let mut ctx = Tables { atoms: &atom_table, literals: &literals, heap };
+    let (code, label_count, labels) = code_chunk(need("Code")?, &mut ctx)?;
+    let heap = ctx.heap;
     let resolve = |label: usize| -> Result<u32> {
         match labels.get(label) {
             Some(Some(pc)) => Ok(*pc),
@@ -114,7 +139,7 @@ pub fn load(bytes: &[u8], atoms: &mut AtomTable) -> Result<Module> {
     }
 
     let mut lines = match chunk(b"Line") {
-        Some(d) => line_chunk(d, name.as_str())?,
+        Some(d) => line_chunk(d, name.as_str(), heap)?,
         None => crate::module::Lines::default(),
     };
     let mut code = code;
@@ -122,7 +147,7 @@ pub fn load(bytes: &[u8], atoms: &mut AtomTable) -> Result<Module> {
     for (pc, ins) in code.iter_mut().enumerate() {
         // Rewrite label numbers into code indices.
         resolve_labels(&mut ins.args, &resolve, label_count)?;
-        check_operands(ins, &imports, &funs, &literals, strings.len())?;
+        check_operands(ins, &imports, &funs, strings.len())?;
         if ins.op == opcodes::LINE {
             match ins.args.first() {
                 Some(Arg::U(item)) if (*item as usize) < lines.items.len().max(1) => {
@@ -133,7 +158,7 @@ pub fn load(bytes: &[u8], atoms: &mut AtomTable) -> Result<Module> {
         }
         if ins.op == opcodes::FUNC_INFO {
             if let [_, Arg::Const(Term::Atom(f)), Arg::U(a)] = &ins.args[..] {
-                functions.push(FunctionInfo { start: pc as u32, name: f.clone(), arity: arity(*a as usize)? });
+                functions.push(FunctionInfo { start: pc as u32, name: *f, arity: arity(*a as usize)? });
             } else {
                 return Err(LoadError::Malformed("func_info"));
             }
@@ -182,7 +207,7 @@ fn checksum<'a>(chunk: &impl Fn(&[u8; 4]) -> Option<&'a [u8]>) -> [u8; 16] {
 }
 
 /// Parse the `Line` chunk (see `parse_line_chunk` in BEAM's `beam_file.c`).
-fn line_chunk(d: &[u8], module: &str) -> Result<crate::module::Lines> {
+fn line_chunk(d: &[u8], module: &str, heap: &mut Heap) -> Result<crate::module::Lines> {
     let mut r = Compact { bytes: d, pos: 0 };
     let version = r.word()?;
     if version != 0 {
@@ -209,12 +234,11 @@ fn line_chunk(d: &[u8], module: &str) -> Result<crate::module::Lines> {
             _ => return Err(LoadError::Malformed("Line item")),
         }
     }
-    let as_list = |s: &str| Term::list(s.chars().map(|ch| Term::Int(ch as i64)).collect::<Vec<_>>());
-    let mut files = alloc::vec![as_list(&alloc::format!("{module}.erl"))];
+    let mut files = alloc::vec![heap.string(&alloc::format!("{module}.erl"))];
     for _ in 0..name_count {
         let len = u16::from_be_bytes(r.take(2)?.try_into().unwrap()) as usize;
         let name = core::str::from_utf8(r.take(len)?).map_err(|_| LoadError::Malformed("Line file name"))?;
-        files.push(as_list(name));
+        files.push(heap.string(name));
     }
     Ok(crate::module::Lines { files, items, marks: Vec::new() })
 }
@@ -290,7 +314,7 @@ fn atom_chunk(d: &[u8], atoms: &mut AtomTable) -> Result<Vec<Atom>> {
     Ok(out)
 }
 
-fn literal_chunk(d: &[u8], atoms: &mut AtomTable) -> Result<Vec<Term>> {
+fn literal_chunk(d: &[u8], atoms: &mut AtomTable, heap: &mut Heap) -> Result<Vec<Term>> {
     let mut r = Compact { bytes: d, pos: 0 };
     // OTP 28 writes a zero word here; older compilers wrote the size before zlib compression.
     if r.word()? != 0 {
@@ -303,7 +327,7 @@ fn literal_chunk(d: &[u8], atoms: &mut AtomTable) -> Result<Vec<Term>> {
     let mut out = Vec::with_capacity(count);
     for _ in 0..count {
         let size = r.word()? as usize;
-        out.push(etf::decode(r.take(size)?, atoms)?);
+        out.push(etf::decode(r.take(size)?, atoms, heap)?);
     }
     if r.pos != d.len() {
         return Err(LoadError::Malformed("trailing bytes in LitT"));
@@ -314,12 +338,13 @@ fn literal_chunk(d: &[u8], atoms: &mut AtomTable) -> Result<Vec<Term>> {
 struct Tables<'a> {
     atoms: &'a [Atom],
     literals: &'a [Term],
+    heap: &'a mut Heap,
 }
 
 /// Decode the code chunk. Returns the instructions (with label *numbers* in `Arg::Label`), the
 /// number of labels, and for each label number the index of its `label` instruction.
 #[allow(clippy::type_complexity)]
-fn code_chunk(d: &[u8], t: &Tables) -> Result<(Vec<Instr>, usize, Vec<Option<u32>>)> {
+fn code_chunk(d: &[u8], t: &mut Tables) -> Result<(Vec<Instr>, usize, Vec<Option<u32>>)> {
     let mut r = Compact { bytes: d, pos: 0 };
     let header_size = r.word()? as usize;
     let header_start = r.pos;
@@ -390,7 +415,7 @@ fn resolve_labels(args: &mut [Arg], resolve: &impl Fn(usize) -> Result<u32>, cou
 }
 
 /// Checks that need to know what an operand means: table indices.
-fn check_operands(ins: &Instr, imports: &[Import], funs: &[FunEntry], _lits: &[Term], strings: usize) -> Result<()> {
+fn check_operands(ins: &Instr, imports: &[Import], funs: &[FunEntry], strings: usize) -> Result<()> {
     use opcodes::*;
     let index_at = |i: usize| match ins.args.get(i) {
         Some(Arg::U(n)) => Ok(*n as usize),
@@ -530,7 +555,7 @@ impl Compact<'_> {
         }
     }
 
-    fn operand(&mut self, t: &Tables, depth: usize) -> Result<Arg> {
+    fn operand(&mut self, t: &mut Tables, depth: usize) -> Result<Arg> {
         let (tag, value) = self.tag_and_wide()?;
         let small = |v: &Value| match v {
             Value::Small(v) => Ok(*v),
@@ -544,17 +569,17 @@ impl Compact<'_> {
             TAG_U => match value {
                 Value::Small(v) => Arg::U(u64::try_from(v).map_err(|_| LoadError::Malformed("negative"))?),
                 // Only bs_match patterns carry unsigned values this wide; they are read as numbers.
-                Value::Wide(v) if v.sign() != num_bigint::Sign::Minus => Arg::Const(Term::big(v)),
+                Value::Wide(v) if v.sign() != num_bigint::Sign::Minus => Arg::Const(t.heap.big(v)),
                 Value::Wide(_) => return Err(LoadError::Malformed("negative")),
             },
             TAG_I | TAG_H => match value {
                 Value::Small(v) => Arg::Const(Term::Int(v)),
-                Value::Wide(v) => Arg::Const(Term::big(v)),
+                Value::Wide(v) => Arg::Const(t.heap.big(v)),
             },
             TAG_A => match small(&value)? {
                 0 => Arg::Const(Term::Nil),
                 i => Arg::Const(Term::Atom(
-                    t.atoms.get(i as usize - 1).cloned().ok_or(LoadError::Malformed("atom index out of range"))?,
+                    t.atoms.get(i as usize - 1).copied().ok_or(LoadError::Malformed("atom index out of range"))?,
                 )),
             },
             TAG_X => Arg::X(index(&value, X_REGS)? as u16),
@@ -597,7 +622,7 @@ impl Compact<'_> {
                 }
                 4 => {
                     let i = self.unsigned()? as usize;
-                    Arg::Const(t.literals.get(i).cloned().ok_or(LoadError::Malformed("literal index out of range"))?)
+                    Arg::Const(t.literals.get(i).copied().ok_or(LoadError::Malformed("literal index out of range"))?)
                 }
                 5 => {
                     // A register annotated with a type for the JIT. The type is only a hint.

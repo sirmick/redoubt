@@ -6,14 +6,14 @@ use alloc::vec::Vec;
 use super::Ctx;
 use crate::interp;
 use crate::process::{Class, Exception, MaxHeap};
-use crate::term::{MapKey, Pid, Term};
+use crate::term::{Pid, Term};
 
 type R = Result<Term, Exception>;
 
 // ---- exceptions ----
 
 pub fn error(_c: &mut Ctx, a: &[Term]) -> R {
-    Err(Exception::error(a[0].clone()))
+    Err(Exception::error(a[0]))
 }
 
 /// `error/2` and `error/3`: the extra arguments only annotate the stack trace.
@@ -22,35 +22,38 @@ pub fn error(_c: &mut Ctx, a: &[Term]) -> R {
 /// `error_info` option (used by `erl_error` and Elixir to explain the error) added to its
 /// location.
 pub fn error2(c: &mut Ctx, a: &[Term]) -> R {
-    let mut e = Exception::error(a[0].clone());
+    let mut e = Exception::error(a[0]);
     let trace = crate::interp::caller_stacktrace(c.sys, c.p);
-    let error_info = a.get(2).and_then(|opts| opts.to_vec()).and_then(|opts| {
-        opts.into_iter().find(|o| matches!(o.as_tuple(), Some([Term::Atom(k), _]) if k.as_str() == "error_info"))
+    let h = c.heap();
+    let error_info = a.get(2).and_then(|opts| h.to_vec(*opts)).and_then(|opts| {
+        opts.into_iter().find(|o| matches!(h.as_tuple(*o), Some(&[Term::Atom(k), _]) if k.as_str() == "error_info"))
     });
-    e.trace = Some(match (&trace, a[1].to_vec()) {
-        (Term::Cons(cell), args) => match cell.head.as_tuple() {
-            Some([m, f, arity, location]) => {
-                let args = match args {
-                    Some(list) => Term::list(list),
-                    None => arity.clone(),
-                };
-                let mut loc = location.to_vec().unwrap_or_default();
-                loc.extend(error_info);
-                Term::cons(Term::tuple(alloc::vec![m.clone(), f.clone(), args, Term::list(loc)]), cell.tail.clone())
-            }
-            _ => trace.clone(),
-        },
-        _ => trace.clone(),
+    let args = h.to_vec(a[1]);
+    let top = h.as_cons(trace).and_then(|(head, tail)| Some((h.as_tuple(head)?.to_vec(), tail)));
+    e.trace = Some(match top {
+        Some((entry, tail)) if entry.len() == 4 => {
+            let (m, f, arity, location) = (entry[0], entry[1], entry[2], entry[3]);
+            let args = match args {
+                Some(list) => c.list(list),
+                None => arity,
+            };
+            let mut loc = c.heap().to_vec(location).unwrap_or_default();
+            loc.extend(error_info);
+            let loc = c.list(loc);
+            let head = c.tuple(&[m, f, args, loc]);
+            c.cons(head, tail)
+        }
+        _ => trace,
     });
     Err(e)
 }
 
 pub fn exit(_c: &mut Ctx, a: &[Term]) -> R {
-    Err(Exception::exit(a[0].clone()))
+    Err(Exception::exit(a[0]))
 }
 
 pub fn throw(_c: &mut Ctx, a: &[Term]) -> R {
-    Err(Exception::throw(a[0].clone()))
+    Err(Exception::throw(a[0]))
 }
 
 /// `erlang:raise(Class, Reason, Stacktrace)`. An invalid class makes it return `badarg`.
@@ -59,9 +62,9 @@ pub fn raise(c: &mut Ctx, a: &[Term]) -> R {
         t if t.is_atom(&c.sys.atoms.error) => Class::Error,
         t if t.is_atom(&c.sys.atoms.exit) => Class::Exit,
         t if t.is_atom(&c.sys.atoms.throw) => Class::Throw,
-        _ => return Ok(Term::Atom(c.sys.atoms.badarg.clone())),
+        _ => return Ok(Term::Atom(c.sys.atoms.badarg)),
     };
-    Err(Exception::with_trace(class, a[1].clone(), a[2].clone()))
+    Err(Exception::with_trace(class, a[1], a[2]))
 }
 
 // ---- identity ----
@@ -88,7 +91,7 @@ pub fn make_ref(c: &mut Ctx, _a: &[Term]) -> R {
 // ---- spawning ----
 
 fn do_spawn(c: &mut Ctx, entry: crate::process::Cp, args: Vec<Term>, link: bool) -> R {
-    let pid = c.sys.spawn_at(entry, args)?;
+    let pid = c.sys.spawn_copy(entry, &c.p.heap, &args, false)?;
     if let Some(p) = c.sys.procs.get_mut(pid) {
         // A child inherits its parent's group leader.
         p.group_leader = c.p.group_leader.or(Some(c.p.pid));
@@ -103,13 +106,13 @@ fn do_spawn(c: &mut Ctx, entry: crate::process::Cp, args: Vec<Term>, link: bool)
 }
 
 fn mfa_entry(c: &mut Ctx, a: &[Term]) -> Result<(crate::process::Cp, Vec<Term>), Exception> {
-    let (Term::Atom(m), Term::Atom(f)) = (&a[0], &a[1]) else { return Err(c.badarg()) };
-    let args = a[2].to_vec().ok_or_else(|| c.badarg())?;
-    match c.sys.resolve(m, f, args.len() as u32) {
+    let (Term::Atom(m), Term::Atom(f)) = (a[0], a[1]) else { return Err(c.badarg()) };
+    let args = c.list_arg(a[2])?;
+    match c.sys.resolve(&m, &f, args.len() as u32) {
         Some(crate::vm::Target::Code(cp)) => Ok((cp, args)),
         // Spawning straight into a native, or into code that does not exist. BEAM spawns a
         // process that immediately fails with `undef`; so do we, by pointing it at nothing.
-        _ => Err(Exception::error(Term::Atom(c.sys.atoms.undef.clone()))),
+        _ => Err(Exception::error(Term::Atom(c.sys.atoms.undef))),
     }
 }
 
@@ -124,12 +127,12 @@ pub fn spawn_link(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 pub fn spawn_fun(c: &mut Ctx, a: &[Term]) -> R {
-    let (entry, args) = interp::fun_entry(c.sys, &a[0], Vec::new())?;
+    let (entry, args) = interp::fun_entry(c.sys, &mut c.p.heap, a[0], Vec::new())?;
     do_spawn(c, entry, args, false)
 }
 
 pub fn spawn_link_fun(c: &mut Ctx, a: &[Term]) -> R {
-    let (entry, args) = interp::fun_entry(c.sys, &a[0], Vec::new())?;
+    let (entry, args) = interp::fun_entry(c.sys, &mut c.p.heap, a[0], Vec::new())?;
     do_spawn(c, entry, args, true)
 }
 
@@ -139,14 +142,14 @@ pub fn spawn_link_fun(c: &mut Ctx, a: &[Term]) -> R {
 /// (another node, which is never connected, or a name nobody has): such messages are dropped,
 /// as BEAM drops them. A bare name nobody has is `badarg`, as in BEAM.
 fn destination(c: &mut Ctx, t: &Term) -> Result<Option<Pid>, Exception> {
-    match t {
-        Term::Pid(p) => Ok(Some(*p)),
+    match *t {
+        Term::Pid(p) => Ok(Some(p)),
         Term::Atom(name) => c.sys.registered.get(name.as_str()).copied().map(Some).ok_or_else(|| c.badarg()),
-        Term::Tuple(t) if t.len() == 2 => match (&t[0], &t[1]) {
-            (Term::Atom(name), Term::Atom(node)) if node.as_str() == crate::etf::NODE => {
+        Term::Tuple(_) => match c.heap().as_tuple(*t) {
+            Some(&[Term::Atom(name), Term::Atom(node)]) if node.as_str() == crate::etf::NODE => {
                 Ok(c.sys.registered.get(name.as_str()).copied())
             }
-            (Term::Atom(_), Term::Atom(_)) => Ok(None),
+            Some(&[Term::Atom(_), Term::Atom(_)]) => Ok(None),
             _ => Err(c.badarg()),
         },
         _ => Err(c.badarg()),
@@ -154,18 +157,19 @@ fn destination(c: &mut Ctx, t: &Term) -> Result<Option<Pid>, Exception> {
 }
 
 /// Whether `t` is `{Name, Node}` for a node other than this one.
-fn remote(t: &Term) -> bool {
-    matches!(t.as_tuple(), Some([Term::Atom(_), Term::Atom(n)]) if n.as_str() != crate::etf::NODE)
+fn remote(c: &Ctx, t: &Term) -> bool {
+    matches!(c.heap().as_tuple(*t), Some(&[Term::Atom(_), Term::Atom(n)]) if n.as_str() != crate::etf::NODE)
 }
 
 /// Send `msg` to `to`, which may be the running process itself.
 pub fn send_to(c: &mut Ctx, to: Pid, msg: Term) {
     if to == c.p.pid {
         if !crate::vm::deliver(c.p, msg, &mut c.sys.run_queue, c.sys.limits.max_mailbox) {
-            c.p.pending_exit = Some(crate::vm::mailbox_full(&mut c.sys.atom_table, &c.sys.atoms));
+            let reason = crate::vm::mailbox_full(&mut c.sys.atom_table, &c.sys.atoms);
+            c.p.pending_exit = Some(reason.copy_into(&mut c.p.heap));
         }
     } else {
-        c.sys.send(to, msg);
+        c.sys.send(to, &c.p.heap, msg);
     }
 }
 
@@ -177,21 +181,21 @@ pub fn send(c: &mut Ctx, a: &[Term]) -> R {
             if alias.mode == crate::vm::AliasMode::ReplyDemonitor {
                 c.sys.aliases.remove(r);
             }
-            send_to(c, alias.owner, a[1].clone());
+            send_to(c, alias.owner, a[1]);
         }
-        return Ok(a[1].clone());
+        return Ok(a[1]);
     }
     if let Some(to) = destination(c, &a[0])? {
-        send_to(c, to, a[1].clone());
+        send_to(c, to, a[1]);
     }
-    Ok(a[1].clone())
+    Ok(a[1])
 }
 
 /// `send(Dest, Msg, Options)`: `noconnect` and `nosuspend` only matter between nodes; a send
 /// to another node with `noconnect` returns `noconnect` (no node is ever connected).
 pub fn send3(c: &mut Ctx, a: &[Term]) -> R {
-    let opts = a[2].to_vec().ok_or_else(|| c.badarg())?;
-    if remote(&a[0]) && opts.iter().any(|o| matches!(o, Term::Atom(x) if x.as_str() == "noconnect")) {
+    let opts = c.list_arg(a[2])?;
+    if remote(c, &a[0]) && opts.iter().any(|o| matches!(o, Term::Atom(x) if x.as_str() == "noconnect")) {
         return Ok(c.atom("noconnect"));
     }
     send(c, &a[..2])?;
@@ -203,10 +207,10 @@ pub fn send3(c: &mut Ctx, a: &[Term]) -> R {
 fn monitor_options(c: &Ctx, opts: &Term) -> Result<(Option<crate::vm::AliasMode>, Option<Term>), Exception> {
     use crate::vm::AliasMode;
     let (mut mode, mut tag) = (None, None);
-    for o in opts.to_vec().ok_or_else(|| c.badarg())? {
-        match o.as_tuple() {
-            Some([Term::Atom(k), t]) if k.as_str() == "tag" => tag = Some(t.clone()),
-            Some([Term::Atom(k), Term::Atom(v)]) if k.as_str() == "alias" => {
+    for o in c.list_arg(*opts)? {
+        match c.heap().as_tuple(o) {
+            Some(&[Term::Atom(k), t]) if k.as_str() == "tag" => tag = Some(t),
+            Some(&[Term::Atom(k), Term::Atom(v)]) if k.as_str() == "alias" => {
                 mode = Some(match v.as_str() {
                     "explicit_unalias" => AliasMode::Explicit,
                     "demonitor" => AliasMode::Demonitor,
@@ -224,7 +228,7 @@ fn monitor_options(c: &Ctx, opts: &Term) -> Result<(Option<crate::vm::AliasMode>
 pub fn alias(c: &mut Ctx, a: &[Term]) -> R {
     let mode = match a.first() {
         Some(opts) => {
-            let opts = opts.to_vec().ok_or_else(|| c.badarg())?;
+            let opts = c.list_arg(*opts)?;
             // alias/1 takes plain atoms: explicit_unalias or reply.
             if opts.iter().any(|o| matches!(o, Term::Atom(x) if x.as_str() == "reply")) {
                 crate::vm::AliasMode::ReplyDemonitor
@@ -279,17 +283,17 @@ fn pid_arg(c: &Ctx, t: &Term) -> Result<Pid, Exception> {
 fn exit_self(c: &mut Ctx, reason: Term) {
     let kill = reason.is_atom(&c.sys.atoms.kill);
     if c.p.trap_exit && !kill {
-        let msg = Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.exit_upper.clone()), Term::Pid(c.p.pid), reason]);
+        let msg = c.tuple(&[Term::Atom(c.sys.atoms.exit_upper), Term::Pid(c.p.pid), reason]);
         send_to(c, c.p.pid, msg);
     } else {
-        c.p.pending_exit = Some(if kill { Term::Atom(c.sys.atoms.killed.clone()) } else { reason });
+        c.p.pending_exit = Some(if kill { Term::Atom(c.sys.atoms.killed) } else { reason });
     }
 }
 
 pub fn link(c: &mut Ctx, a: &[Term]) -> R {
     let pid = pid_arg(c, &a[0])?;
     if pid == c.p.pid {
-        return Ok(Term::Atom(c.sys.atoms.true_.clone()));
+        return Ok(Term::Atom(c.sys.atoms.true_));
     }
     match c.sys.procs.get_mut(pid) {
         Some(other) => {
@@ -297,16 +301,16 @@ pub fn link(c: &mut Ctx, a: &[Term]) -> R {
             c.p.links.insert(pid);
         }
         None => {
-            let noproc = Term::Atom(c.sys.atoms.noproc.clone());
+            let noproc = Term::Atom(c.sys.atoms.noproc);
             if c.p.trap_exit {
-                let msg = Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.exit_upper.clone()), Term::Pid(pid), noproc]);
+                let msg = c.tuple(&[Term::Atom(c.sys.atoms.exit_upper), Term::Pid(pid), noproc]);
                 send_to(c, c.p.pid, msg);
             } else {
                 exit_self(c, noproc);
             }
         }
     }
-    Ok(Term::Atom(c.sys.atoms.true_.clone()))
+    Ok(Term::Atom(c.sys.atoms.true_))
 }
 
 pub fn unlink(c: &mut Ctx, a: &[Term]) -> R {
@@ -328,25 +332,28 @@ fn monitor_tagged(c: &mut Ctx, a: &[Term], tag: Option<Term>) -> R {
     if matches!(&a[1], Term::Pid(p) if p.port != port) {
         return Err(c.badarg());
     }
-    let kind = a[0].clone();
+    let kind = a[0];
     let r = c.sys.make_ref();
     // A monitor by name reports `{Name, Node}` in its 'DOWN' message, as BEAM does.
     // By name: `Name` or `{Name, Node}`. This node is not distributed, so naming another node
     // is `badarg`, as in BEAM.
-    let by_name = match &a[1] {
-        Term::Atom(name) => Some((name.clone(), true)),
-        Term::Tuple(t) => match &t[..] {
-            [Term::Atom(name), Term::Atom(node)] if node.as_str() == crate::etf::NODE => Some((name.clone(), true)),
+    let by_name = match a[1] {
+        Term::Atom(name) => Some(name),
+        Term::Tuple(_) => match c.heap().as_tuple(a[1]) {
+            Some(&[Term::Atom(name), Term::Atom(node)]) if node.as_str() == crate::etf::NODE => Some(name),
             _ => return Err(c.badarg()),
         },
         _ => None,
     };
-    let (target, alive, object) = match (&a[1], by_name) {
-        (Term::Pid(p), _) => (Some(*p), *p == c.p.pid || c.sys.procs.is_alive(*p), a[1].clone()),
-        (_, Some((name, _))) => {
-            let object = match &a[1] {
-                Term::Tuple(_) => a[1].clone(),
-                _ => Term::tuple(alloc::vec![a[1].clone(), c.atom(crate::etf::NODE)]),
+    let (target, alive, object) = match (a[1], by_name) {
+        (Term::Pid(p), _) => (Some(p), p == c.p.pid || c.sys.procs.is_alive(p), a[1]),
+        (_, Some(name)) => {
+            let object = match a[1] {
+                Term::Tuple(_) => a[1],
+                _ => {
+                    let node = c.atom(crate::etf::NODE);
+                    c.tuple(&[a[1], node])
+                }
             };
             match c.sys.registered.get(name.as_str()) {
                 Some(p) if p.port == port => (Some(*p), true, object),
@@ -358,20 +365,23 @@ fn monitor_tagged(c: &mut Ctx, a: &[Term], tag: Option<Term>) -> R {
     };
     match target {
         Some(pid) if alive && pid != c.p.pid => {
+            // Kept by the monitored process, outside both heaps.
+            let monitor = crate::process::Monitor { watcher: c.p.pid, object: c.own(object), tag: tag.map(|t| c.own(t)) };
             if let Some(t) = c.sys.procs.get_mut(pid) {
-                t.monitored_by.insert(r, crate::process::Monitor { watcher: c.p.pid, object, tag });
+                t.monitored_by.insert(r, monitor);
             }
             c.p.monitors.insert(r, pid);
         }
         Some(pid) if pid == c.p.pid => {} // monitoring yourself never fires
         _ => {
-            let msg = Term::tuple(alloc::vec![
-                tag.unwrap_or_else(|| Term::Atom(c.sys.atoms.down.clone())),
+            let parts = [
+                tag.unwrap_or(Term::Atom(c.sys.atoms.down)),
                 Term::Ref(r),
                 kind,
                 object,
-                Term::Atom(c.sys.atoms.noproc.clone()),
-            ]);
+                Term::Atom(c.sys.atoms.noproc),
+            ];
+            let msg = c.tuple(&parts);
             send_to(c, c.p.pid, msg);
         }
     }
@@ -388,7 +398,7 @@ pub fn demonitor(c: &mut Ctx, a: &[Term]) -> R {
     if c.sys.aliases.get(&r).is_some_and(|al| al.owner == c.p.pid && al.mode != crate::vm::AliasMode::Explicit) {
         c.sys.aliases.remove(&r);
     }
-    Ok(Term::Atom(c.sys.atoms.true_.clone()))
+    Ok(Term::Atom(c.sys.atoms.true_))
 }
 
 /// `demonitor(Ref, Options)`: `flush` drops a down message already queued; `info` makes the result
@@ -396,7 +406,7 @@ pub fn demonitor(c: &mut Ctx, a: &[Term]) -> R {
 pub fn demonitor2(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Ref(r) = a[0] else { return Err(c.badarg()) };
     let (mut flush, mut info) = (false, false);
-    for o in a[1].to_vec().ok_or_else(|| c.badarg())? {
+    for o in c.list_arg(a[1])? {
         match &o {
             Term::Atom(x) if x.as_str() == "flush" => flush = true,
             Term::Atom(x) if x.as_str() == "info" => info = true,
@@ -407,7 +417,8 @@ pub fn demonitor2(c: &mut Ctx, a: &[Term]) -> R {
     demonitor(c, a)?;
     if flush {
         // Any `{_, Ref, _, _, _}`: the first element may be a custom tag (`monitor/3`).
-        c.p.mailbox.retain(|m| !matches!(m.as_tuple(), Some([_, Term::Ref(x), _, _, _]) if *x == r));
+        let heap = &c.p.heap;
+        c.p.mailbox.retain(|m| !matches!(heap.as_tuple(*m), Some(&[_, Term::Ref(x), _, _, _]) if x == r));
         c.p.save = 0;
     }
     Ok(c.bool(!info || active))
@@ -416,15 +427,16 @@ pub fn demonitor2(c: &mut Ctx, a: &[Term]) -> R {
 pub fn exit2(c: &mut Ctx, a: &[Term]) -> R {
     let pid = pid_arg(c, &a[0])?;
     if pid == c.p.pid {
-        exit_self(c, a[1].clone());
+        exit_self(c, a[1]);
     } else {
-        c.sys.exits.push_back(crate::vm::ExitSignal { target: pid, from: c.p.pid, reason: a[1].clone(), from_link: false, forced: false });
+        let reason = alloc::sync::Arc::new(c.own(a[1]));
+        c.sys.exits.push_back(crate::vm::ExitSignal { target: pid, from: c.p.pid, reason, from_link: false, forced: false });
         // End the caller's time slice: the signal is delivered before it runs again, so what
         // it does next (process_info, is_process_alive, ...) sees the effect, as BEAM's signal
         // ordering between two processes guarantees.
         c.p.budget = c.p.budget.min(1);
     }
-    Ok(Term::Atom(c.sys.atoms.true_.clone()))
+    Ok(Term::Atom(c.sys.atoms.true_))
 }
 
 pub fn process_flag(c: &mut Ctx, a: &[Term]) -> R {
@@ -466,7 +478,7 @@ pub fn process_flag(c: &mut Ctx, a: &[Term]) -> R {
     }
     if matches!(&a[0], Term::Atom(f) if f.as_str() == "error_handler") {
         let Term::Atom(new) = &a[1] else { return Err(c.badarg()) };
-        let new = (new.as_str() != "error_handler").then(|| new.clone());
+        let new = (new.as_str() != "error_handler").then_some(*new);
         let old = core::mem::replace(&mut c.p.error_handler, new);
         return Ok(match old {
             Some(m) => Term::Atom(m),
@@ -476,7 +488,7 @@ pub fn process_flag(c: &mut Ctx, a: &[Term]) -> R {
     if matches!(&a[0], Term::Atom(f) if f.as_str() == "max_heap_size") {
         let new = parse_max_heap(c, &a[1])?;
         let old = core::mem::replace(&mut c.p.max_heap, new);
-        return Ok(max_heap_term(&mut c.sys.atom_table, &c.sys.atoms, old));
+        return Ok(max_heap_term(&mut c.sys.atom_table, &c.sys.atoms, &mut c.p.heap, old));
     }
     Err(c.badarg())
 }
@@ -492,13 +504,13 @@ fn parse_max_heap(c: &Ctx, v: &Term) -> Result<MaxHeap, Exception> {
     };
     let mut m = MaxHeap::default();
     match v {
-        Term::Map(map) => {
-            for (k, v) in map.iter() {
-                match &k.0 {
-                    Term::Atom(a) if a.as_str() == "size" => m.size = size(v)?,
-                    Term::Atom(a) if a.as_str() == "kill" => m.kill = flag(v)?,
-                    Term::Atom(a) if a.as_str() == "error_logger" => m.error_logger = flag(v)?,
-                    Term::Atom(a) if a.as_str() == "include_shared_binaries" => m.include_shared_binaries = flag(v)?,
+        Term::Map(_) => {
+            for (k, v) in c.heap().map_entries(*v).expect("a map") {
+                match k {
+                    Term::Atom(a) if a.as_str() == "size" => m.size = size(&v)?,
+                    Term::Atom(a) if a.as_str() == "kill" => m.kill = flag(&v)?,
+                    Term::Atom(a) if a.as_str() == "error_logger" => m.error_logger = flag(&v)?,
+                    Term::Atom(a) if a.as_str() == "include_shared_binaries" => m.include_shared_binaries = flag(&v)?,
                     _ => return Err(c.badarg()),
                 }
             }
@@ -509,18 +521,18 @@ fn parse_max_heap(c: &Ctx, v: &Term) -> Result<MaxHeap, Exception> {
 }
 
 /// A `max_heap_size` setting as `process_flag/2` and `process_info/2` report it.
-pub(crate) fn max_heap_term(table: &mut crate::atom::AtomTable, atoms: &crate::atom::Atoms, m: MaxHeap) -> Term {
-    let b = |v: bool| Term::Atom(if v { atoms.true_.clone() } else { atoms.false_.clone() });
-    let mut map = crate::term::Map::new();
-    for (k, v) in [
+pub(crate) fn max_heap_term(table: &mut crate::atom::AtomTable, atoms: &crate::atom::Atoms, heap: &mut crate::term::Heap, m: MaxHeap) -> Term {
+    let b = |v: bool| Term::Atom(if v { atoms.true_ } else { atoms.false_ });
+    let pairs: Vec<(Term, Term)> = [
         ("error_logger", b(m.error_logger)),
         ("include_shared_binaries", b(m.include_shared_binaries)),
         ("kill", b(m.kill)),
         ("size", Term::Int(m.size as i64)),
-    ] {
-        map.insert(MapKey(Term::Atom(table.intern(k).expect("short atom"))), v);
-    }
-    Term::map(map)
+    ]
+    .into_iter()
+    .map(|(k, v)| (Term::Atom(table.intern(k).expect("short atom")), v))
+    .collect();
+    heap.map_from(pairs)
 }
 
 pub fn is_process_alive(c: &mut Ctx, a: &[Term]) -> R {
@@ -532,18 +544,18 @@ pub fn is_process_alive(c: &mut Ctx, a: &[Term]) -> R {
 // ---- registered names ----
 
 pub fn register(c: &mut Ctx, a: &[Term]) -> R {
-    let Term::Atom(name) = &a[0] else { return Err(c.badarg()) };
+    let Term::Atom(name) = a[0] else { return Err(c.badarg()) };
     let pid = pid_arg(c, &a[1])?;
-    if name == &c.sys.atoms.undefined || c.sys.registered.contains_key(name.as_str()) {
+    if name == c.sys.atoms.undefined || c.sys.registered.contains_key(name.as_str()) {
         return Err(c.badarg());
     }
     let target = if pid == c.p.pid { Some(&mut *c.p) } else { c.sys.procs.get_mut(pid) };
     match target {
-        Some(p) if p.registered_name.is_none() => p.registered_name = Some(name.clone()),
+        Some(p) if p.registered_name.is_none() => p.registered_name = Some(name),
         _ => return Err(c.badarg()),
     }
     c.sys.registered.insert(name.as_str().into(), pid);
-    Ok(Term::Atom(c.sys.atoms.true_.clone()))
+    Ok(Term::Atom(c.sys.atoms.true_))
 }
 
 pub fn unregister(c: &mut Ctx, a: &[Term]) -> R {
@@ -567,24 +579,24 @@ pub fn whereis(c: &mut Ctx, a: &[Term]) -> R {
 // ---- process dictionary ----
 
 pub fn put(c: &mut Ctx, a: &[Term]) -> R {
-    let old = c.p.dictionary.insert(MapKey(a[0].clone()), a[1].clone());
-    Ok(old.unwrap_or_else(|| Term::Atom(c.sys.atoms.undefined.clone())))
+    let old = c.p.dictionary.put(&c.p.heap, a[0], a[1]);
+    Ok(old.unwrap_or(Term::Atom(c.sys.atoms.undefined)))
 }
 
 pub fn get(c: &mut Ctx, a: &[Term]) -> R {
-    let v = c.p.dictionary.get(&MapKey(a[0].clone())).cloned();
-    Ok(v.unwrap_or_else(|| Term::Atom(c.sys.atoms.undefined.clone())))
+    let v = c.p.dictionary.get(&c.p.heap, a[0]);
+    Ok(v.unwrap_or(Term::Atom(c.sys.atoms.undefined)))
 }
 
 pub fn get_all(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(Term::list(
-        c.p.dictionary.iter().map(|(k, v)| Term::tuple(alloc::vec![k.0.clone(), v.clone()])).collect::<Vec<_>>(),
-    ))
+    let entries = c.p.dictionary.entries().to_vec();
+    let v: Vec<Term> = entries.into_iter().map(|(k, v)| c.tuple(&[k, v])).collect();
+    Ok(c.list(v))
 }
 
 pub fn erase(c: &mut Ctx, a: &[Term]) -> R {
-    let old = c.p.dictionary.remove(&MapKey(a[0].clone()));
-    Ok(old.unwrap_or_else(|| Term::Atom(c.sys.atoms.undefined.clone())))
+    let old = c.p.dictionary.remove(&c.p.heap, a[0]);
+    Ok(old.unwrap_or(Term::Atom(c.sys.atoms.undefined)))
 }
 
 pub fn group_leader(c: &mut Ctx, _a: &[Term]) -> R {
@@ -610,9 +622,9 @@ fn timer_deadline(c: &mut Ctx, time: &Term, opts: Option<&Term>) -> Result<u64, 
     let ms = time.as_i64().filter(|t| (0..=u32::MAX as i64).contains(t)).ok_or_else(|| c.badarg())? as u64;
     let mut abs = false;
     if let Some(opts) = opts {
-        for o in opts.to_vec().ok_or_else(|| c.badarg())? {
-            match o.as_tuple() {
-                Some([Term::Atom(k), v]) if k.as_str() == "abs" => abs = v.is_atom(&c.sys.atoms.true_),
+        for o in c.list_arg(*opts)? {
+            match c.heap().as_tuple(o) {
+                Some(&[Term::Atom(k), v]) if k.as_str() == "abs" => abs = v.is_atom(&c.sys.atoms.true_),
                 _ => return Err(c.badarg()),
             }
         }
@@ -623,7 +635,7 @@ fn timer_deadline(c: &mut Ctx, time: &Term, opts: Option<&Term>) -> Result<u64, 
 
 fn timer_target(c: &Ctx, t: &Term) -> Result<Term, Exception> {
     match t {
-        Term::Pid(_) | Term::Atom(_) => Ok(t.clone()),
+        Term::Pid(_) | Term::Atom(_) => Ok(*t),
         _ => Err(c.badarg()),
     }
 }
@@ -633,8 +645,11 @@ pub fn start_timer(c: &mut Ctx, a: &[Term]) -> R {
     let deadline = timer_deadline(c, &a[0], a.get(3))?;
     let to = timer_target(c, &a[1])?;
     // The message carries the timer's own reference, so reserve it first.
-    let r = c.sys.start_message_timer(deadline, to.clone(), Term::Nil).ok_or_else(|| c.system_limit())?;
-    let msg = Term::tuple(alloc::vec![c.atom("timeout"), Term::Ref(r), a[2].clone()]);
+    let placeholder = crate::term::OwnedTerm::immediate(Term::Nil);
+    let r = c.sys.start_message_timer(deadline, to, placeholder).ok_or_else(|| c.system_limit())?;
+    let timeout = c.atom("timeout");
+    let msg = c.tuple(&[timeout, Term::Ref(r), a[2]]);
+    let msg = c.own(msg);
     c.sys.message_timers.insert(r, (deadline, to, msg));
     Ok(Term::Ref(r))
 }
@@ -643,7 +658,8 @@ pub fn start_timer(c: &mut Ctx, a: &[Term]) -> R {
 pub fn send_after(c: &mut Ctx, a: &[Term]) -> R {
     let deadline = timer_deadline(c, &a[0], a.get(3))?;
     let to = timer_target(c, &a[1])?;
-    let r = c.sys.start_message_timer(deadline, to, a[2].clone()).ok_or_else(|| c.system_limit())?;
+    let msg = c.own(a[2]);
+    let r = c.sys.start_message_timer(deadline, to, msg).ok_or_else(|| c.system_limit())?;
     Ok(Term::Ref(r))
 }
 
@@ -660,10 +676,10 @@ pub fn cancel_timer(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Ref(r) = a[0] else { return Err(c.badarg()) };
     let (mut asynchronous, mut info) = (false, true);
     if let Some(opts) = a.get(1) {
-        for o in opts.to_vec().ok_or_else(|| c.badarg())? {
-            match o.as_tuple() {
-                Some([Term::Atom(k), v]) if k.as_str() == "async" => asynchronous = v.is_atom(&c.sys.atoms.true_),
-                Some([Term::Atom(k), v]) if k.as_str() == "info" => info = v.is_atom(&c.sys.atoms.true_),
+        for o in c.list_arg(*opts)? {
+            match c.heap().as_tuple(o) {
+                Some(&[Term::Atom(k), v]) if k.as_str() == "async" => asynchronous = v.is_atom(&c.sys.atoms.true_),
+                Some(&[Term::Atom(k), v]) if k.as_str() == "info" => info = v.is_atom(&c.sys.atoms.true_),
                 _ => return Err(c.badarg()),
             }
         }
@@ -672,7 +688,8 @@ pub fn cancel_timer(c: &mut Ctx, a: &[Term]) -> R {
     let result = remaining_ms(c, left);
     if asynchronous {
         if info {
-            let msg = Term::tuple(alloc::vec![c.atom("cancel_timer"), Term::Ref(r), result]);
+            let tag = c.atom("cancel_timer");
+            let msg = c.tuple(&[tag, Term::Ref(r), result]);
             send_to(c, c.p.pid, msg);
         }
         return Ok(c.ok());
@@ -698,30 +715,45 @@ pub fn time_unit(_c: &mut Ctx, _a: &[Term]) -> R {
 const MAX_PERSISTENT_TERMS: usize = 1 << 16;
 
 pub fn pt_put(c: &mut Ctx, a: &[Term]) -> R {
-    let key = MapKey(a[0].clone());
+    let key = c.own(a[0]);
     if !c.sys.persistent.contains_key(&key) && c.sys.persistent.len() >= MAX_PERSISTENT_TERMS {
         return Err(c.system_limit());
     }
-    c.sys.persistent.insert(key, a[1].clone());
+    // The value becomes a literal, as in BEAM: reading it copies nothing. (A value replaced is
+    // not freed; BEAM frees it once no process refers to it.)
+    let value = c.sys.make_literal(&c.p.heap, a[1]);
+    c.sys.persistent.insert(key, value);
     Ok(c.ok())
 }
 
 /// `get(Key)` (`badarg` if absent) and `get(Key, Default)`.
 pub fn pt_get(c: &mut Ctx, a: &[Term]) -> R {
-    match c.sys.persistent.get(&MapKey(a[0].clone())) {
-        Some(v) => Ok(v.clone()),
-        None => a.get(1).cloned().ok_or_else(|| c.badarg()),
+    let key = c.own(a[0]);
+    match c.sys.persistent.get(&key).copied() {
+        Some(v) => {
+            c.p.refresh(&c.sys.literals);
+            Ok(v)
+        }
+        None => a.get(1).copied().ok_or_else(|| c.badarg()),
     }
 }
 
 pub fn pt_get_all(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(Term::list(
-        c.sys.persistent.iter().map(|(k, v)| Term::tuple(alloc::vec![k.0.clone(), v.clone()])).collect::<Vec<_>>(),
-    ))
+    c.p.refresh(&c.sys.literals);
+    let entries: Vec<(crate::term::OwnedTerm, Term)> = c.sys.persistent.iter().map(|(k, v)| (k.clone(), *v)).collect();
+    let v: Vec<Term> = entries
+        .into_iter()
+        .map(|(k, v)| {
+            let k = c.copy_in(&k);
+            c.tuple(&[k, v])
+        })
+        .collect();
+    Ok(c.list(v))
 }
 
 pub fn pt_erase(c: &mut Ctx, a: &[Term]) -> R {
-    let existed = c.sys.persistent.remove(&MapKey(a[0].clone())).is_some();
+    let key = c.own(a[0]);
+    let existed = c.sys.persistent.remove(&key).is_some();
     Ok(c.bool(existed))
 }
 
@@ -742,18 +774,20 @@ fn unit_per_second(c: &Ctx, t: &Term) -> Result<u64, Exception> {
     }
 }
 
-fn scaled(us: u64, per_second: u64) -> Term {
-    Term::from_i128(us as i128 * per_second as i128 / 1_000_000)
+fn scaled(c: &mut Ctx, us: u64, per_second: u64) -> Term {
+    c.from_i128(us as i128 * per_second as i128 / 1_000_000)
 }
 
 /// The native time unit is the nanosecond, as on a typical BEAM.
 pub fn monotonic_time(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(scaled(c.sys.now_us(), 1_000_000_000))
+    let now = c.sys.now_us();
+    Ok(scaled(c, now, 1_000_000_000))
 }
 
 pub fn monotonic_time1(c: &mut Ctx, a: &[Term]) -> R {
     let per = unit_per_second(c, &a[0])?;
-    Ok(scaled(c.sys.now_us(), per))
+    let now = c.sys.now_us();
+    Ok(scaled(c, now, per))
 }
 
 fn wall_us(c: &mut Ctx) -> Result<u64, Exception> {
@@ -761,12 +795,14 @@ fn wall_us(c: &mut Ctx) -> Result<u64, Exception> {
 }
 
 pub fn system_time(c: &mut Ctx, _a: &[Term]) -> R {
-    Ok(scaled(wall_us(c)?, 1_000_000_000))
+    let now = wall_us(c)?;
+    Ok(scaled(c, now, 1_000_000_000))
 }
 
 pub fn system_time1(c: &mut Ctx, a: &[Term]) -> R {
     let per = unit_per_second(c, &a[0])?;
-    Ok(scaled(wall_us(c)?, per))
+    let now = wall_us(c)?;
+    Ok(scaled(c, now, per))
 }
 
 pub fn yield_(c: &mut Ctx, _a: &[Term]) -> R {
@@ -798,21 +834,30 @@ pub fn module_loaded(c: &mut Ctx, a: &[Term]) -> R {
 /// `monitor` and `max_heap_size`. Tuning options (`min_heap_size`, `priority`, ...) are accepted
 /// and ignored: this VM has no per-process heaps and one priority.
 fn spawn_with(c: &mut Ctx, entry: crate::process::Cp, args: Vec<Term>, opts: &Term) -> R {
-    let opts = opts.to_vec().ok_or_else(|| c.badarg())?;
+    let opts = c.list_arg(*opts)?;
     let (mut link, mut monitor, mut max_heap, mut priority) = (false, false, None, None);
     for o in &opts {
-        match o {
-            Term::Atom(a) if a.as_str() == "link" => link = true,
-            Term::Atom(a) if a.as_str() == "monitor" => monitor = true,
-            Term::Tuple(t) if !t.is_empty() && matches!(&t[0], Term::Atom(a) if a.as_str() == "monitor") => monitor = true,
-            Term::Tuple(t) if t.len() == 2 && matches!(&t[0], Term::Atom(a) if a.as_str() == "max_heap_size") => {
-                max_heap = Some(parse_max_heap(c, &t[1])?);
+        if let Term::Atom(a) = o {
+            match a.as_str() {
+                "link" => link = true,
+                "monitor" => monitor = true,
+                _ => return Err(c.badarg()),
             }
-            Term::Tuple(t) if t.len() == 2 && matches!(&t[0], Term::Atom(a) if a.as_str() == "priority") => {
-                let Term::Atom(p) = &t[1] else { return Err(c.badarg()) };
+            continue;
+        }
+        let t = c.tuple_elems(*o).ok_or_else(|| c.badarg())?;
+        let key = match t.first() {
+            Some(Term::Atom(a)) => a.as_str(),
+            _ => "",
+        };
+        match (key, &t[..]) {
+            ("monitor", _) => monitor = true,
+            ("max_heap_size", &[_, v]) => max_heap = Some(parse_max_heap(c, &v)?),
+            ("priority", &[_, v]) => {
+                let Term::Atom(p) = v else { return Err(c.badarg()) };
                 priority = Some(crate::process::Priority::from_name(p.as_str()).ok_or_else(|| c.badarg())?);
             }
-            Term::Tuple(t) if t.len() == 2 => {}
+            (_, &[_, _]) => {}
             _ => return Err(c.badarg()),
         }
     }
@@ -833,27 +878,30 @@ fn spawn_with(c: &mut Ctx, entry: crate::process::Cp, args: Vec<Term>, opts: &Te
     }
     let r = c.sys.make_ref();
     if let Some(t) = c.sys.procs.get_mut(pid) {
-        t.monitored_by.insert(r, crate::process::Monitor { watcher: c.p.pid, object: Term::Pid(pid), tag: None });
+        let object = crate::term::OwnedTerm::immediate(Term::Pid(pid));
+        t.monitored_by.insert(r, crate::process::Monitor { watcher: c.p.pid, object, tag: None });
     }
     c.p.monitors.insert(r, pid);
-    Ok(Term::tuple(alloc::vec![Term::Pid(pid), Term::Ref(r)]))
+    Ok(c.tuple(&[Term::Pid(pid), Term::Ref(r)]))
 }
 
 /// `spawn_monitor(Fun)` and `spawn_monitor(M, F, A)`: `{Pid, Ref}`.
 pub fn spawn_monitor1(c: &mut Ctx, a: &[Term]) -> R {
-    let (entry, args) = interp::fun_entry(c.sys, &a[0], Vec::new())?;
-    let monitor = Term::list(alloc::vec![c.atom("monitor")]);
+    let (entry, args) = interp::fun_entry(c.sys, &mut c.p.heap, a[0], Vec::new())?;
+    let m = c.atom("monitor");
+    let monitor = c.list([m]);
     spawn_with(c, entry, args, &monitor)
 }
 
 pub fn spawn_monitor3(c: &mut Ctx, a: &[Term]) -> R {
     let (entry, args) = mfa_entry(c, a)?;
-    let monitor = Term::list(alloc::vec![c.atom("monitor")]);
+    let m = c.atom("monitor");
+    let monitor = c.list([m]);
     spawn_with(c, entry, args, &monitor)
 }
 
 pub fn spawn_opt2(c: &mut Ctx, a: &[Term]) -> R {
-    let (entry, args) = interp::fun_entry(c.sys, &a[0], Vec::new())?;
+    let (entry, args) = interp::fun_entry(c.sys, &mut c.p.heap, a[0], Vec::new())?;
     spawn_with(c, entry, args, &a[1])
 }
 
@@ -868,18 +916,14 @@ pub fn spawn_opt4(c: &mut Ctx, a: &[Term]) -> R {
 pub const OTP_RELEASE: &str = "28";
 pub const ERTS_VERSION: &str = "16.4.0.6";
 
-fn string(s: &str) -> Term {
-    Term::list(s.chars().map(|ch| Term::Int(ch as i64)).collect::<Vec<_>>())
-}
-
 /// `erlang:system_info/1` for the keys portable code asks about. `machine` is `"BEAM"`: this VM
 /// implements BEAM semantics, and code that checks it should take its BEAM path.
 pub fn system_info(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Atom(key) = &a[0] else { return Err(c.badarg()) };
     Ok(match key.as_str() {
-        "machine" => string("BEAM"),
-        "otp_release" => string(OTP_RELEASE),
-        "version" => string(ERTS_VERSION),
+        "machine" => c.string("BEAM"),
+        "otp_release" => c.string(OTP_RELEASE),
+        "version" => c.string(ERTS_VERSION),
         "wordsize" => Term::Int(8),
         "process_count" => Term::Int(c.sys.procs.count() as i64),
         "process_limit" => Term::Int(crate::vm::MAX_PROCESSES as i64),
@@ -888,9 +932,9 @@ pub fn system_info(c: &mut Ctx, a: &[Term]) -> R {
         "port_count" => Term::Int(0),
         "schedulers" | "schedulers_online" | "logical_processors" => Term::Int(1),
         "emu_flavor" => c.atom("emu"),
-        "system_architecture" => string("beamlet"),
+        "system_architecture" => c.string("beamlet"),
         "system_version" => return super::info::system_version(c, a),
-        "os_type" => Term::tuple(alloc::vec![c.atom("unix"), c.atom("beamlet")]),
+        "os_type" => { let e = [c.atom("unix"), c.atom("beamlet")]; c.tuple(&e) },
         // Every target (x86-64, AArch64, RISC-V) is little-endian; binaries are portable anyway.
         "endian" => c.atom("little"),
         "build_type" => c.atom("opt"),
@@ -899,15 +943,16 @@ pub fn system_info(c: &mut Ctx, a: &[Term]) -> R {
         "dynamic_trace" => c.atom("none"),
         "thread_pool_size" | "dirty_cpu_schedulers" | "dirty_io_schedulers" | "dirty_cpu_schedulers_online" => Term::Int(0),
         "compat_rel" => Term::Int(28),
-        "nif_version" => string("2.17"),
-        "driver_version" => string("3.3"),
+        "nif_version" => c.string("2.17"),
+        "driver_version" => c.string("3.3"),
         "time_warp_mode" => c.atom("no_time_warp"),
         "time_offset" => c.atom("final"),
-        "min_heap_size" => Term::tuple(alloc::vec![c.atom("min_heap_size"), Term::Int(233)]),
-        "fullsweep_after" => Term::tuple(alloc::vec![c.atom("fullsweep_after"), Term::Int(65535)]),
+        "min_heap_size" => { let e = [c.atom("min_heap_size"), Term::Int(233)]; c.tuple(&e) },
+        "fullsweep_after" => { let e = [c.atom("fullsweep_after"), Term::Int(65535)]; c.tuple(&e) },
         "max_heap_size" => {
-            let m = max_heap_term(&mut c.sys.atom_table, &c.sys.atoms, MaxHeap::default());
-            Term::tuple(alloc::vec![c.atom("max_heap_size"), m])
+            let m = max_heap_term(&mut c.sys.atom_table, &c.sys.atoms, &mut c.p.heap, MaxHeap::default());
+            let k = c.atom("max_heap_size");
+            c.tuple(&[k, m])
         }
         "ets_limit" => Term::Int(crate::ets::MAX_TABLES as i64),
         "backtrace_depth" => Term::Int(c.sys.backtrace_depth as i64),
@@ -935,11 +980,11 @@ pub fn halt(c: &mut Ctx, a: &[Term]) -> R {
         None => 0,
         Some(Term::Int(n)) if *n >= 0 => *n,
         Some(Term::Atom(x)) if x.as_str() == "abort" => 1,
-        Some(t) if t.to_vec().is_some() => 1,
+        Some(t) if c.heap().to_vec(*t).is_some() => 1,
         _ => return Err(c.badarg()),
     };
     if let Some(opts) = a.get(1) {
-        opts.to_vec().ok_or_else(|| c.badarg())?;
+        c.list_arg(*opts)?;
     }
     c.sys.halted = Some(status);
     // Nothing more of this process runs.
@@ -950,59 +995,61 @@ pub fn halt(c: &mut Ctx, a: &[Term]) -> R {
 /// `erlang:statistics(Item)` for the items that mean something here. Run time is wall time
 /// since the VM started: there is no separate CPU clock.
 pub fn statistics(c: &mut Ctx, a: &[Term]) -> R {
-    let Term::Atom(item) = &a[0] else { return Err(c.badarg()) };
-    let pair = |x: u64, y: u64| Term::tuple(alloc::vec![Term::Int(x as i64), Term::Int(y as i64)]);
+    let Term::Atom(item) = a[0] else { return Err(c.badarg()) };
+    let pair = |c: &mut Ctx, x: u64, y: u64| c.tuple(&[Term::Int(x as i64), Term::Int(y as i64)]);
     let now = c.sys.platform.monotonic_us() - c.sys.stats.start_us;
     let queue = c.sys.run_queue.len() as i64;
     Ok(match item.as_str() {
         "runtime" | "wall_clock" => {
             let last = if item.as_str() == "runtime" { &mut c.sys.stats.last_runtime_us } else { &mut c.sys.stats.last_wall_us };
             let since = now - core::mem::replace(last, now);
-            pair(now / 1000, since / 1000)
+            pair(c, now / 1000, since / 1000)
         }
         "reductions" | "exact_reductions" => {
             // The running process's current slice is counted too.
             let total = c.sys.stats.reductions + (crate::vm::TIME_SLICE - c.p.budget.min(crate::vm::TIME_SLICE)) as u64;
             let since = total - core::mem::replace(&mut c.sys.stats.last_reductions, total);
-            pair(total, since)
+            pair(c, total, since)
         }
-        "context_switches" => pair(c.sys.stats.context_switches, 0),
-        "garbage_collection" => Term::tuple(alloc::vec![Term::Int(0), Term::Int(0), Term::Int(0)]),
+        "context_switches" => {
+            let n = c.sys.stats.context_switches;
+            pair(c, n, 0)
+        }
+        "garbage_collection" => c.tuple(&[Term::Int(0), Term::Int(0), Term::Int(0)]),
         "io" => {
             let (i, o) = (c.atom("input"), c.atom("output"));
-            Term::tuple(alloc::vec![
-                Term::tuple(alloc::vec![i, Term::Int(0)]),
-                Term::tuple(alloc::vec![o, Term::Int(0)]),
-            ])
+            let (i, o) = (c.tuple(&[i, Term::Int(0)]), c.tuple(&[o, Term::Int(0)]));
+            c.tuple(&[i, o])
         }
         "run_queue" | "total_run_queue_lengths" | "total_run_queue_lengths_all" => Term::Int(queue),
-        "run_queue_lengths" | "run_queue_lengths_all" => Term::list(alloc::vec![Term::Int(queue)]),
+        "run_queue_lengths" | "run_queue_lengths_all" => c.list([Term::Int(queue)]),
         "total_active_tasks" | "total_active_tasks_all" => Term::Int(queue + 1),
-        "active_tasks" | "active_tasks_all" => Term::list(alloc::vec![Term::Int(queue + 1)]),
-        "scheduler_wall_time" | "scheduler_wall_time_all" | "microstate_accounting" => {
-            Term::Atom(c.sys.atoms.undefined.clone())
-        }
+        "active_tasks" | "active_tasks_all" => c.list([Term::Int(queue + 1)]),
+        "scheduler_wall_time" | "scheduler_wall_time_all" | "microstate_accounting" => Term::Atom(c.sys.atoms.undefined),
         _ => return Err(c.badarg()),
     })
 }
 
 pub fn registered(c: &mut Ctx, _a: &[Term]) -> R {
     let names: Vec<String> = c.sys.registered.keys().cloned().collect();
-    Ok(Term::list(names.iter().map(|n| c.atom(n)).collect::<Vec<_>>()))
+    let v: Vec<Term> = names.iter().map(|n| c.atom(n)).collect();
+    Ok(c.list(v))
 }
 
 /// `get_keys()`: the process dictionary's keys; `get_keys(Value)`: those whose value is
 /// exactly `Value`.
 pub fn get_keys(c: &mut Ctx, a: &[Term]) -> R {
-    let keys = c.p.dictionary.iter().filter(|(_, v)| a.first().is_none_or(|w| v.eq_exact(w))).map(|(k, _)| k.0.clone());
-    Ok(Term::list(keys.collect::<Vec<_>>()))
+    let h = &c.p.heap;
+    let keys: Vec<Term> =
+        c.p.dictionary.entries().iter().filter(|(_, v)| a.first().is_none_or(|w| h.eq_exact(*v, *w))).map(|(k, _)| *k).collect();
+    Ok(c.list(keys))
 }
 
 /// `now()`: `{MegaSecs, Secs, MicroSecs}` of the system clock, strictly increasing.
 pub fn now(c: &mut Ctx, _a: &[Term]) -> R {
     let us = wall_us(c)?.max(c.sys.stats.last_now_us + 1);
     c.sys.stats.last_now_us = us;
-    Ok(Term::tuple(alloc::vec![
+    Ok(c.tuple(&[
         Term::Int((us / 1_000_000_000_000) as i64),
         Term::Int((us / 1_000_000 % 1_000_000) as i64),
         Term::Int((us % 1_000_000) as i64),
@@ -1016,7 +1063,7 @@ pub fn time_offset(c: &mut Ctx, a: &[Term]) -> R {
         None => 1_000_000_000,
     };
     let offset = wall_us(c)? as i128 - c.sys.now_us() as i128;
-    Ok(Term::from_i128(offset * per as i128 / 1_000_000))
+    Ok(c.from_i128(offset * per as i128 / 1_000_000))
 }
 
 /// `bump_reductions(N)`: use up `N` reductions of this time slice.
@@ -1028,7 +1075,7 @@ pub fn bump_reductions(c: &mut Ctx, a: &[Term]) -> R {
 
 /// `link(Pid, Options)`: the options (`priority`, OTP 28) do not change anything here.
 pub fn link2(c: &mut Ctx, a: &[Term]) -> R {
-    a[1].to_vec().ok_or_else(|| c.badarg())?;
+    c.heap().to_vec(a[1]).ok_or_else(|| c.badarg())?;
     link(c, &a[..1])
 }
 
@@ -1039,9 +1086,16 @@ pub fn pre_loaded(_c: &mut Ctx, _a: &[Term]) -> R {
 /// `persistent_term:put_new(Key, Value)`: store a new key. A key already there is `ok` if it
 /// holds the same value, `badarg` otherwise.
 pub fn pt_put_new(c: &mut Ctx, a: &[Term]) -> R {
-    match c.sys.persistent.get(&MapKey(a[0].clone())) {
-        Some(v) if v.eq_exact(&a[1]) => Ok(c.ok()),
-        Some(_) => Err(c.badarg()),
+    let key = c.own(a[0]);
+    match c.sys.persistent.get(&key).copied() {
+        Some(v) => {
+            c.p.refresh(&c.sys.literals);
+            if c.heap().eq_exact(v, a[1]) {
+                Ok(c.ok())
+            } else {
+                Err(c.badarg())
+            }
+        }
         None => pt_put(c, a),
     }
 }
@@ -1049,14 +1103,10 @@ pub fn pt_put_new(c: &mut Ctx, a: &[Term]) -> R {
 /// `persistent_term:info()`: `#{count, memory}`.
 pub fn pt_info(c: &mut Ctx, _a: &[Term]) -> R {
     let count = c.sys.persistent.len() as i64;
-    let mut words = 0u64;
-    for (k, v) in &c.sys.persistent {
-        words += crate::ets::weigh(&k.0) + crate::ets::weigh(v);
-    }
-    let mut map = crate::term::Map::new();
-    map.insert(MapKey(c.atom("count")), Term::Int(count));
-    map.insert(MapKey(c.atom("memory")), Term::Int((words * 8) as i64));
-    Ok(Term::map(map))
+    // Keys, and values (literals: counted by their own chunks, a cell each at least).
+    let words: u64 = c.sys.persistent.keys().map(|k| k.words() + 2).sum();
+    let (count_k, memory_k) = (c.atom("count"), c.atom("memory"));
+    Ok(c.map_from([(count_k, Term::Int(count)), (memory_k, Term::Int((words * 8) as i64))]))
 }
 
 /// `erlang:system_flag(Flag, Value)`: `backtrace_depth` takes effect; the other flags that
@@ -1076,8 +1126,9 @@ pub fn system_flag(c: &mut Ctx, a: &[Term]) -> R {
         "time_offset" => c.atom("final"),
         "scheduler_wall_time" | "microstate_accounting" | "system_logger" => c.bool(false),
         "max_heap_size" => {
-            let m = max_heap_term(&mut c.sys.atom_table, &c.sys.atoms, MaxHeap::default());
-            Term::tuple(alloc::vec![c.atom("max_heap_size"), m])
+            let m = max_heap_term(&mut c.sys.atom_table, &c.sys.atoms, &mut c.p.heap, MaxHeap::default());
+            let k = c.atom("max_heap_size");
+            c.tuple(&[k, m])
         }
         _ => return Err(c.badarg()),
     })
@@ -1096,10 +1147,9 @@ pub fn nil_any(_c: &mut Ctx, _a: &[Term]) -> R {
 pub fn monitor_node(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Atom(_) = &a[0] else { return Err(c.badarg()) };
     if a[1].is_atom(&c.sys.atoms.true_) {
-        let msg = Term::tuple(alloc::vec![c.atom("nodedown"), a[0].clone()]);
-        if !crate::vm::deliver(c.p, msg, &mut c.sys.run_queue, c.sys.limits.max_mailbox) {
-            c.p.pending_exit = Some(crate::vm::mailbox_full(&mut c.sys.atom_table, &c.sys.atoms));
-        }
+        let tag = c.atom("nodedown");
+        let msg = c.tuple(&[tag, a[0]]);
+        send_to(c, c.p.pid, msg);
     }
     Ok(c.bool(true))
 }
@@ -1113,24 +1163,27 @@ pub fn false_1(c: &mut Ctx, _a: &[Term]) -> R {
 }
 
 pub fn nif_error(_c: &mut Ctx, a: &[Term]) -> R {
-    Err(Exception::error(a[0].clone()))
+    Err(Exception::error(a[0]))
 }
 
 pub fn garbage_collect(c: &mut Ctx, _a: &[Term]) -> R {
-    // Reference counting frees garbage as soon as it is created; there is nothing to collect.
-    Ok(Term::Atom(c.sys.atoms.true_.clone()))
+    // Collection happens between instructions; ask for one at the next (this native's own
+    // locals are not roots, so it cannot collect here).
+    c.p.gc_at = 0;
+    Ok(Term::Atom(c.sys.atoms.true_))
 }
 
 pub fn erase_all(c: &mut Ctx, _a: &[Term]) -> R {
-    let old = core::mem::take(&mut c.p.dictionary);
-    Ok(Term::list(old.into_iter().map(|(k, v)| Term::tuple(alloc::vec![k.0, v])).collect::<Vec<_>>()))
+    let old = c.p.dictionary.take();
+    let v: Vec<Term> = old.into_iter().map(|(k, v)| c.tuple(&[k, v])).collect();
+    Ok(c.list(v))
 }
 
 /// `unique_integer()` and `unique_integer([positive | monotonic])`. References come from a
 /// VM-wide increasing counter, so every result is unique, positive and monotonic.
 pub fn unique_integer(c: &mut Ctx, a: &[Term]) -> R {
     if let Some(opts) = a.first() {
-        for o in opts.to_vec().ok_or_else(|| c.badarg())? {
+        for o in c.list_arg(*opts)? {
             match &o {
                 Term::Atom(x) if matches!(x.as_str(), "positive" | "monotonic") => {}
                 _ => return Err(c.badarg()),
@@ -1142,7 +1195,7 @@ pub fn unique_integer(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn timestamp(c: &mut Ctx, _a: &[Term]) -> R {
     let us = wall_us(c)?;
-    Ok(Term::tuple(alloc::vec![
+    Ok(c.tuple(&[
         Term::Int((us / 1_000_000_000_000) as i64),
         Term::Int((us / 1_000_000 % 1_000_000) as i64),
         Term::Int((us % 1_000_000) as i64),
@@ -1150,67 +1203,75 @@ pub fn timestamp(c: &mut Ctx, _a: &[Term]) -> R {
 }
 
 pub fn make_fun(c: &mut Ctx, a: &[Term]) -> R {
-    let (Term::Atom(m), Term::Atom(f), Some(arity)) = (&a[0], &a[1], a[2].as_usize()) else {
+    let (Term::Atom(m), Term::Atom(f), Some(arity)) = (a[0], a[1], a[2].as_usize()) else {
         return Err(c.badarg());
     };
     if arity > 255 {
         return Err(c.badarg());
     }
-    Ok(Term::Fun(alloc::rc::Rc::new(crate::term::Fun::Export {
-        module: m.clone(),
-        function: f.clone(),
-        arity: arity as u32,
-    })))
+    Ok(c.heap_mut().fun_export(m, f, arity as u32))
 }
 
 pub fn fun_info(c: &mut Ctx, a: &[Term]) -> R {
-    use crate::term::Fun;
-    let (Term::Fun(f), Term::Atom(item)) = (&a[0], &a[1]) else { return Err(c.badarg()) };
-    let value = match (&**f, item.as_str()) {
-        (Fun::Export { module, .. } | Fun::Local { module, .. }, "module") => Term::Atom(module.clone()),
-        (_, "arity") => Term::Int(f.arity() as i64),
-        (Fun::Export { function, .. }, "name") => Term::Atom(function.clone()),
-        (Fun::Local { module, index, uniq, name, .. }, "name") => {
+    use crate::term::FunView;
+    let Term::Atom(item) = a[1] else { return Err(c.badarg()) };
+    let f = c.heap().as_fun(a[0]).ok_or_else(|| c.badarg())?;
+    // Copy out what the answer needs, so the heap is free for building it.
+    let (arity, local) = (f.arity(), match f {
+        FunView::Local { module, index, uniq, name, env, .. } => Some((module, index, uniq, name, env.to_vec())),
+        FunView::Export { .. } => None,
+    });
+    let (module, function) = match f {
+        FunView::Local { module, .. } => (module, None),
+        FunView::Export { module, function, .. } => (module, Some(function)),
+    };
+    let value = match (local, item.as_str()) {
+        (_, "module") => Term::Atom(module),
+        (_, "arity") => Term::Int(arity as i64),
+        (None, "name") => Term::Atom(function.expect("an export fun")),
+        (Some((module, index, uniq, name, _)), "name") => {
             // From the module's fun table when this is still its fun (decoded funs do not
             // carry a name), else the name recorded when the fun was made.
-            let current = c.sys.module(module).and_then(|m| m.funs.get(*index as usize).filter(|e| e.uniq == *uniq).map(|e| e.function.clone()));
-            Term::Atom(current.unwrap_or_else(|| name.clone()))
+            let current = c.sys.module(&module).and_then(|m| m.funs.get(index as usize).filter(|e| e.uniq == uniq).map(|e| e.function));
+            Term::Atom(current.unwrap_or(name))
         }
-        (Fun::Export { .. }, "type") => c.atom("external"),
-        (Fun::Local { .. }, "type") => c.atom("local"),
-        (Fun::Export { .. }, "env") => Term::Nil,
-        (Fun::Local { env, .. }, "env") => Term::list(env.clone()),
-        (Fun::Local { index, .. }, "index" | "new_index") => Term::Int(*index as i64),
-        (Fun::Local { uniq, .. }, "uniq") => Term::Int(*uniq as i64),
-        (Fun::Local { module, .. }, "new_uniq") => Term::binary(&c.sys.loaded_md5(module).unwrap_or([0; 16])),
+        (None, "type") => c.atom("external"),
+        (Some(_), "type") => c.atom("local"),
+        (None, "env") => Term::Nil,
+        (Some((_, _, _, _, env)), "env") => c.list(env),
+        (Some((_, index, ..)), "index" | "new_index") => Term::Int(index as i64),
+        (Some((_, _, uniq, ..)), "uniq") => Term::Int(uniq as i64),
+        (Some((module, ..)), "new_uniq") => {
+            let md5 = c.sys.loaded_md5(&module).unwrap_or([0; 16]);
+            c.binary(&md5)
+        }
         // Funs do not record their creator; BEAM reports the same for funs it did not track.
-        (Fun::Local { .. }, "pid") => Term::Pid(Pid::process(0, 0)),
-        (Fun::Local { .. }, "refc") => Term::Int(1),
-        (Fun::Export { .. }, "pid" | "index" | "new_index" | "uniq" | "new_uniq" | "refc") => {
-            Term::Atom(c.sys.atoms.undefined.clone())
-        }
+        (Some(_), "pid") => Term::Pid(Pid::process(0, 0)),
+        (Some(_), "refc") => Term::Int(1),
+        (None, "pid" | "index" | "new_index" | "uniq" | "new_uniq" | "refc") => Term::Atom(c.sys.atoms.undefined),
         _ => return Err(c.badarg()),
     };
-    Ok(Term::tuple(alloc::vec![a[1].clone(), value]))
+    Ok(c.tuple(&[a[1], value]))
 }
 
 /// `erts_internal:cmp_term/2`: the exact term order (`1` and `1.0` differ), as -1, 0 or 1.
 /// `fun_info_mfa(Fun)`: `{Module, Function, Arity}` of the code behind a fun.
 pub fn fun_info_mfa(c: &mut Ctx, a: &[Term]) -> R {
-    use crate::term::Fun;
-    let Term::Fun(f) = &a[0] else { return Err(c.badarg()) };
-    let (m, name) = match &**f {
-        Fun::Export { module, function, .. } => (module.clone(), function.clone()),
-        Fun::Local { module, index, .. } => {
-            let md = c.sys.module(module).ok_or_else(|| c.badarg())?;
-            (module.clone(), md.funs.get(*index as usize).ok_or_else(|| c.badarg())?.function.clone())
+    use crate::term::FunView;
+    let f = c.heap().as_fun(a[0]).ok_or_else(|| c.badarg())?;
+    let arity = f.arity();
+    let (m, name) = match f {
+        FunView::Export { module, function, .. } => (module, function),
+        FunView::Local { module, index, .. } => {
+            let md = c.sys.module(&module).ok_or_else(|| c.badarg())?;
+            (module, md.funs.get(index as usize).ok_or_else(|| c.badarg())?.function)
         }
     };
-    Ok(Term::tuple(alloc::vec![Term::Atom(m), Term::Atom(name), Term::Int(f.arity() as i64)]))
+    Ok(c.tuple(&[Term::Atom(m), Term::Atom(name), Term::Int(arity as i64)]))
 }
 
-pub fn cmp_term(_c: &mut Ctx, a: &[Term]) -> R {
-    Ok(Term::Int(match a[0].cmp_exact(&a[1]) {
+pub fn cmp_term(c: &mut Ctx, a: &[Term]) -> R {
+    Ok(Term::Int(match c.heap().cmp_exact(a[0], a[1]) {
         core::cmp::Ordering::Less => -1,
         core::cmp::Ordering::Equal => 0,
         core::cmp::Ordering::Greater => 1,

@@ -7,6 +7,7 @@ use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
 use alloc::rc::Rc;
 use alloc::string::{String, ToString};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use crate::atom::{Atom, AtomTable, Atoms};
@@ -16,7 +17,7 @@ use crate::loader::{self, LoadError};
 use crate::module::Module;
 use crate::platform::{ConsoleInput, Platform};
 use crate::process::{Class, Cp, Exception, Process, State};
-use crate::term::{Pid, Ref, Term};
+use crate::term::{copy, Heap, Literals, OwnedTerm, Pid, Ref, Term};
 
 /// Reductions (calls) a process may run before it is preempted.
 pub const TIME_SLICE: usize = 2000;
@@ -79,8 +80,11 @@ pub struct System {
     /// The VM's own environment variables (`os:getenv/1`). Empty at start: the host's
     /// environment is not visible unless an embedder puts it here.
     pub env: BTreeMap<String, String>,
-    /// `persistent_term`: VM-wide terms, written rarely and read often.
-    pub persistent: BTreeMap<crate::term::MapKey, Term>,
+    /// `persistent_term`: VM-wide terms, written rarely and read often. The values are literals
+    /// (each put makes a chunk), so reading one copies nothing, as in BEAM.
+    pub persistent: BTreeMap<OwnedTerm, Term>,
+    /// The literal chunks: modules' constants and persistent terms.
+    pub literals: Literals,
     pub atom_table: AtomTable,
     pub atoms: Atoms,
     modules: BTreeMap<String, Rc<Module>>,
@@ -88,15 +92,16 @@ pub struct System {
     pub(crate) run_queue: VecDeque<Pid>,
     /// Everything waiting for a time: receive timeouts and message timers, by deadline.
     timers: BTreeSet<(u64, Timer)>,
-    /// Message timers (`send_after`, `start_timer`) by reference: deadline, target, message.
-    pub(crate) message_timers: BTreeMap<Ref, (u64, Term, Term)>,
+    /// Message timers (`send_after`, `start_timer`) by reference: deadline, target (a pid or a
+    /// name), message.
+    pub(crate) message_timers: BTreeMap<Ref, (u64, Term, OwnedTerm)>,
     next_ref: u64,
     pub(crate) registered: BTreeMap<String, Pid>,
     pub(crate) procs: ProcTable,
     /// Exit signals waiting to be delivered.
     pub(crate) exits: VecDeque<ExitSignal>,
     /// Final results of processes someone is waiting for through [`Vm::run`].
-    results: BTreeMap<Pid, Result<Term, Exception>>,
+    results: BTreeMap<Pid, Outcome>,
     watched: BTreeSet<Pid>,
     /// The group leader of processes that do not inherit one: the console I/O server.
     pub(crate) default_group_leader: Option<Pid>,
@@ -125,7 +130,7 @@ pub struct System {
     pub(crate) lib_roots: Vec<String>,
     /// For modules loaded from bytes (`code:load_binary/3`, `load_file/1`, `load_abs/1`): the
     /// file name they were loaded with, which `code:which/1` reports.
-    pub(crate) module_files: BTreeMap<String, Term>,
+    pub(crate) module_files: BTreeMap<String, OwnedTerm>,
     /// Samples of where processes are at the end of each time slice (the top few functions),
     /// when profiling is on (`Vm::enable_profile`).
     pub(crate) profile: Option<BTreeMap<String, u64>>,
@@ -330,10 +335,23 @@ pub enum AliasMode {
 pub(crate) struct ExitSignal {
     pub target: Pid,
     pub from: Pid,
-    pub reason: Term,
+    /// Shared by all the signals of one exit.
+    pub reason: Arc<OwnedTerm>,
     pub from_link: bool,
     /// Imposed by the VM (a resource limit): cannot be trapped, and `reason` is used as is.
     pub forced: bool,
+}
+
+/// How a process ended, kept outside it: the value its first function returned, or the
+/// exception that ended it.
+pub type Outcome = Result<OwnedTerm, OwnedException>;
+
+/// An exception that ended a process.
+#[derive(Clone, Debug)]
+pub struct OwnedException {
+    pub class: Class,
+    pub reason: OwnedTerm,
+    pub trace: Option<OwnedTerm>,
 }
 
 /// Why [`Vm::run`] returned.
@@ -370,6 +388,7 @@ impl Vm {
                 limits,
                 ets: crate::ets::Tables::default(),
                 persistent: BTreeMap::new(),
+                literals: Literals::default(),
                 env: BTreeMap::new(),
                 aliases: BTreeMap::new(),
                 atom_table,
@@ -420,12 +439,14 @@ impl Vm {
         // The shell `os:cmd/1` runs commands with (the kernel sets this at start). Programs run
         // outside the VM, so this is the host's shell, whatever the VM's file system holds.
         let key = self.atom("kernel_os_cmd_shell");
-        let shell = Term::list("/bin/sh".chars().map(|c| Term::Int(c as i64)).collect::<Vec<_>>());
-        self.sys.persistent.insert(crate::term::MapKey(key), shell);
+        let mut h = Heap::new(&self.sys.literals);
+        let shell = h.string("/bin/sh");
+        let shell = self.sys.make_literal(&h, shell);
+        self.sys.persistent.insert(OwnedTerm::immediate(key), shell);
         let user_name = self.atom("user");
-        let user = self.spawn("beamlet_io", "start", alloc::vec![user_name]).expect("spawn user");
+        let user = self.spawn("beamlet_io", "start", |_| alloc::vec![user_name]).expect("spawn user");
         let stderr = self.atom("standard_error");
-        let err = self.spawn("beamlet_io", "start", alloc::vec![stderr]).expect("spawn standard_error");
+        let err = self.spawn("beamlet_io", "start", |_| alloc::vec![stderr]).expect("spawn standard_error");
         for pid in [user, err] {
             if let Some(p) = self.sys.procs.get_mut(pid) {
                 p.group_leader = Some(user);
@@ -435,11 +456,11 @@ impl Vm {
         // OTP's file server, which `file` calls for most operations: started now, so that it is
         // registered before any other code runs (about 2 ms). Without a file system it still
         // answers `get_cwd`, which compilers ask for; file operations fail with `enotsup`.
-        if let Ok(pid) = self.spawn("file_server", "start", Vec::new()) {
+        if let Ok(pid) = self.spawn("file_server", "start", |_| Vec::new()) {
             let _ = self.run_bounded(pid, 100_000);
         }
         if real_logger {
-            if let Ok(pid) = self.spawn("beamlet_kernel", "start", Vec::new()) {
+            if let Ok(pid) = self.spawn("beamlet_kernel", "start", |_| Vec::new()) {
                 let _ = self.run_bounded(pid, 1_000_000);
             }
         }
@@ -451,16 +472,23 @@ impl Vm {
         self.sys.load(bytes)
     }
 
-    /// Spawn `module:function(args)` as a new process, loading the module if needed.
-    pub fn spawn(&mut self, module: &str, function: &str, args: Vec<Term>) -> Result<Pid, Exception> {
+    /// Spawn `module:function(args)` as a new process, loading the module if needed. `args`
+    /// builds the arguments on the new process's heap.
+    pub fn spawn(&mut self, module: &str, function: &str, args: impl FnOnce(&mut Heap) -> Vec<Term>) -> Result<Pid, OwnedException> {
         let m = self.sys.atom(module);
         let f = self.sys.atom(function);
-        self.sys.spawn(&m, &f, args)
+        let mut heap = Heap::new(&self.sys.literals);
+        let args = args(&mut heap);
+        self.sys.spawn(&m, &f, heap, args).map_err(|e| OwnedException {
+            class: e.class,
+            reason: OwnedTerm::immediate(e.reason),
+            trace: None,
+        })
     }
 
     /// Run until process `pid` ends, and return its result: the value its first function
     /// returned, or the exception that ended it.
-    pub fn run(&mut self, pid: Pid) -> Result<Result<Term, Exception>, RunError> {
+    pub fn run(&mut self, pid: Pid) -> Result<Outcome, RunError> {
         self.sys.watched.insert(pid);
         loop {
             if let Some(status) = self.sys.halted {
@@ -503,7 +531,7 @@ impl Vm {
 
     /// Like [`Vm::run`], but give up after `max_steps` scheduling steps and return `None`.
     /// For tests that run untrusted code which may legitimately loop forever.
-    pub fn run_bounded(&mut self, pid: Pid, max_steps: usize) -> Option<Result<Result<Term, Exception>, RunError>> {
+    pub fn run_bounded(&mut self, pid: Pid, max_steps: usize) -> Option<Result<Outcome, RunError>> {
         self.sys.watched.insert(pid);
         for _ in 0..max_steps {
             if let Some(status) = self.sys.halted {
@@ -543,7 +571,7 @@ impl System {
     }
 
     fn load(&mut self, bytes: &[u8]) -> Result<Atom, LoadError> {
-        let mut module = loader::load(bytes, &mut self.atom_table)?;
+        let mut module = loader::load(bytes, &mut self.atom_table, &mut self.literals)?;
         for imp in &mut module.imports {
             imp.native = self.natives.get(&imp.module, &imp.function, imp.arity);
         }
@@ -556,11 +584,11 @@ impl System {
             let entry = f.start as usize + 1;
             if module.code.get(entry).is_some_and(|i| i.op == crate::opcodes::LABEL) {
                 let index = module.body_natives.len() as u64;
-                module.body_natives.push((n, f.name.clone(), f.arity));
+                module.body_natives.push((n, f.name, f.arity));
                 module.code[entry] = crate::module::Instr { op: crate::module::NATIVE_BODY, args: alloc::vec![crate::module::Arg::U(index)] };
             }
         }
-        let name = module.name.clone();
+        let name = module.name;
         self.modules.insert(name.as_str().to_string(), Rc::new(module));
         self.resolved.clear();
         Ok(name)
@@ -662,35 +690,46 @@ impl System {
         Some(target)
     }
 
-    pub fn spawn(&mut self, module: &Atom, function: &Atom, args: Vec<Term>) -> Result<Pid, Exception> {
+    /// Spawn `module:function(args)`; `args` are terms of `heap`, which becomes the process's.
+    pub fn spawn(&mut self, module: &Atom, function: &Atom, heap: Heap, args: Vec<Term>) -> Result<Pid, Exception> {
         let entry = match self.resolve(module, function, args.len() as u32) {
             Some(Target::Code(cp)) => cp,
             // Spawning a native directly: run it through a tiny trampoline is not supported yet.
-            _ => return Err(Exception::error(Term::Atom(self.atoms.undef.clone()))),
+            _ => return Err(Exception::error(Term::Atom(self.atoms.undef))),
         };
-        self.spawn_at(entry, args)
+        self.spawn_as(entry, heap, args, false)
     }
 
-    pub fn spawn_at(&mut self, entry: Cp, args: Vec<Term>) -> Result<Pid, Exception> {
-        self.spawn_as(entry, args, false)
+    /// Spawn a process running `entry` with a copy of `args` (terms of `src`).
+    pub fn spawn_copy(&mut self, entry: Cp, src: &Heap, args: &[Term], port: bool) -> Result<Pid, Exception> {
+        let mut heap = Heap::new(&self.literals);
+        let args = args.iter().map(|&a| copy(src, a, &mut heap)).collect();
+        self.spawn_as(entry, heap, args, port)
     }
 
-    /// Start a process, or (`port`) the process behind a new port.
-    pub(crate) fn spawn_as(&mut self, entry: Cp, args: Vec<Term>, port: bool) -> Result<Pid, Exception> {
+    /// Start a process, or (`port`) the process behind a new port; `args` are terms of `heap`.
+    pub(crate) fn spawn_as(&mut self, entry: Cp, heap: Heap, args: Vec<Term>, port: bool) -> Result<Pid, Exception> {
         let pid = self
             .procs
             .allocate(port)
-            .ok_or_else(|| Exception::error(Term::Atom(self.atoms.system_limit.clone())))?;
-        let mut p = Process::new(pid, entry, args);
+            .ok_or_else(|| Exception::error(Term::Atom(self.atoms.system_limit)))?;
+        let mut p = Process::new(pid, entry, heap, args);
         p.group_leader = self.default_group_leader;
         self.procs.put(Box::new(p));
         self.run_queue.push_back(pid);
         Ok(pid)
     }
 
-    /// Queue `msg` for `to`. Sending to a dead process silently does nothing, as in Erlang.
-    pub fn send(&mut self, to: Pid, msg: Term) {
+    /// Queue a copy of `msg` (a term of `src`) for `to`. Sending to a dead process silently does
+    /// nothing, as in Erlang. (The running process is not in the table: see `bif::proc::send_to`.)
+    pub fn send(&mut self, to: Pid, src: &Heap, msg: Term) {
+        self.send_with(to, |heap| copy(src, msg, heap));
+    }
+
+    /// Queue a message for `to`, built by `build` on its heap.
+    pub fn send_with(&mut self, to: Pid, build: impl FnOnce(&mut Heap) -> Term) {
         if let Some(p) = self.procs.get_mut(to) {
+            let msg = build(&mut p.heap);
             if !deliver(p, msg, &mut self.run_queue, self.limits.max_mailbox) {
                 let reason = mailbox_full(&mut self.atom_table, &self.atoms);
                 self.exits.push_back(ExitSignal { target: to, from: to, reason, from_link: false, forced: true });
@@ -698,8 +737,16 @@ impl System {
         }
     }
 
+    /// A copy of `t` (a term of `src`) as a literal: in a chunk of its own, never freed.
+    pub fn make_literal(&mut self, src: &Heap, t: Term) -> Term {
+        let mut heap = Heap::new(&Literals::default());
+        let mut roots = [copy(src, t, &mut heap)];
+        self.literals.add(heap, &mut roots);
+        roots[0]
+    }
+
     /// Start a message timer: at `deadline`, send `msg` to `to` (a pid or registered name).
-    pub fn start_message_timer(&mut self, deadline: u64, to: Term, msg: Term) -> Option<Ref> {
+    pub fn start_message_timer(&mut self, deadline: u64, to: Term, msg: OwnedTerm) -> Option<Ref> {
         if self.message_timers.len() >= MAX_MESSAGE_TIMERS {
             return None;
         }
@@ -717,14 +764,14 @@ impl System {
     }
 
     /// Send to a pid or a registered name; silently nothing if there is no such process.
-    fn send_to_term(&mut self, to: &Term, msg: Term) {
+    fn send_to_term(&mut self, to: &Term, msg: OwnedTerm) {
         let pid = match to {
             Term::Pid(p) => Some(*p),
             Term::Atom(name) => self.registered.get(name.as_str()).copied(),
             _ => None,
         };
         if let Some(pid) = pid {
-            self.send(pid, msg);
+            self.send(pid, msg.heap(), msg.term());
         }
     }
 
@@ -767,6 +814,7 @@ impl System {
             return true;
         }
         p.budget = TIME_SLICE;
+        p.refresh(&self.literals);
         let before = p.reductions;
         let mut stop = interp::run(self, &mut p);
         self.stats.reductions += p.reductions - before;
@@ -775,7 +823,7 @@ impl System {
         }
         self.stats.context_switches += 1;
         if matches!(stop, Stop::Yield | Stop::Wait) && self.over_memory(&mut p) {
-            stop = Stop::Exit(Err(Exception::exit(Term::Atom(self.atoms.killed.clone()))));
+            stop = Stop::Exit(Err(Exception::exit(Term::Atom(self.atoms.killed))));
         }
         match stop {
             Stop::Yield => {
@@ -796,29 +844,22 @@ impl System {
         true
     }
 
-    /// Measure `p` if it has run long enough since the last measurement, and say whether it
-    /// must be killed for holding too much memory.
-    ///
-    /// Measuring costs time in proportion to what the process holds, so it is done after the
-    /// process has used as many reductions as half its last size in words: the cost stays a
-    /// constant share of the process's own work, as a copying collector's does in BEAM. Between
-    /// measurements a process can outgrow its limit, by a bounded factor for ordinary code.
+    /// Whether `p` must be killed for holding too much memory. A heap over a limit is collected
+    /// first: what counts is what is live, as with BEAM's `max_heap_size`.
     fn over_memory(&mut self, p: &mut Process) -> bool {
-        let interval = (p.usage.words / 2).max(TIME_SLICE as u64);
-        if p.reductions - p.measured_at < interval {
-            return false;
-        }
         let vm_limit = self.limits.max_heap_words;
         let own = p.max_heap;
-        let budget = if own.size > 0 { own.size.min(vm_limit) } else { vm_limit };
-        let usage = crate::memory::process(p, budget);
-        p.usage = usage;
-        p.measured_at = p.reductions;
-        if usage.total_words() > vm_limit {
-            return true;
+        let over = |p: &Process| {
+            let usage = crate::memory::process(p);
+            let used = if own.include_shared_binaries { usage.total_words() } else { usage.words };
+            usage.total_words() > vm_limit || (own.size > 0 && used > own.size && own.kill)
+        };
+        if !over(p) {
+            return false;
         }
-        let used = if own.include_shared_binaries { usage.total_words() } else { usage.words };
-        own.size > 0 && used > own.size && own.kill
+        p.collect();
+        p.usage = crate::memory::process(p);
+        over(p)
     }
 
     fn fire_timers(&mut self) {
@@ -857,42 +898,42 @@ impl System {
     /// Pass console input, if any has arrived, to the process reading it.
     fn poll_console(&mut self) {
         let Some(reader) = self.console_reader else { return };
-        let msg = match self.platform.console_read() {
+        let input = match self.platform.console_read() {
             ConsoleInput::Nothing => return,
-            ConsoleInput::Data(bytes) => Term::binary(&bytes),
+            ConsoleInput::Data(bytes) => Some(bytes),
             ConsoleInput::Eof => {
                 self.console_reader = None;
-                Term::Atom(self.atom("eof"))
+                None
             }
         };
-        let tag = Term::Atom(self.atom("beamlet_console"));
-        self.send(reader, Term::tuple(alloc::vec![tag, msg]));
+        let (tag, eof) = (Term::Atom(self.atom("beamlet_console")), Term::Atom(self.atom("eof")));
+        self.send_with(reader, |h| {
+            let msg = match &input {
+                Some(bytes) => h.binary(bytes),
+                None => eof,
+            };
+            h.tuple(&[tag, msg])
+        });
     }
 
     /// Send `{log, error, "Error in process ~p with exit value:~n~p~n", [Pid, Reason], Meta}` to
     /// the `logger` process, if one is running, with the metadata BEAM gives these reports.
-    fn report_crash(&mut self, p: &Process, reason: Term) {
+    fn report_crash(&mut self, p: &Process, reason: &OwnedTerm) {
         let Some(&logger) = self.registered.get("logger") else { return };
         let atom = |s: &mut Self, name: &str| Term::Atom(s.atom(name));
-        let format = "Error in process ~p with exit value:~n~p~n";
-        let format = Term::list(format.chars().map(|c| Term::Int(c as i64)).collect::<Vec<_>>());
-        let mut el = crate::term::Map::new();
-        el.insert(crate::term::MapKey(atom(self, "emulator")), Term::Atom(self.atoms.true_.clone()));
-        el.insert(crate::term::MapKey(atom(self, "tag")), atom(self, "error"));
+        let [emulator, tag, error, error_logger, gl, pid_key, time_key, log] =
+            ["emulator", "tag", "error", "error_logger", "gl", "pid", "time", "log"].map(|n| atom(self, n));
+        let true_ = Term::Atom(self.atoms.true_);
         let time = self.platform.system_time_us().unwrap_or(0) as i64;
-        let mut meta = crate::term::Map::new();
-        meta.insert(crate::term::MapKey(atom(self, "error_logger")), Term::map(el));
-        meta.insert(crate::term::MapKey(atom(self, "gl")), Term::Pid(p.group_leader.unwrap_or(p.pid)));
-        meta.insert(crate::term::MapKey(atom(self, "pid")), Term::Pid(p.pid));
-        meta.insert(crate::term::MapKey(atom(self, "time")), Term::Int(time));
-        let msg = Term::tuple(alloc::vec![
-            atom(self, "log"),
-            atom(self, "error"),
-            format,
-            Term::list(alloc::vec![Term::Pid(p.pid), reason]),
-            Term::map(meta),
-        ]);
-        self.send(logger, msg);
+        let (pid, leader) = (Term::Pid(p.pid), Term::Pid(p.group_leader.unwrap_or(p.pid)));
+        self.send_with(logger, |h| {
+            let format = h.string("Error in process ~p with exit value:~n~p~n");
+            let el = h.map_from([(emulator, true_), (tag, error)]);
+            let meta = h.map_from([(error_logger, el), (gl, leader), (pid_key, pid), (time_key, Term::Int(time))]);
+            let reason = reason.copy_into(h);
+            let args = h.list([pid, reason]);
+            h.tuple(&[log, error, format, args, meta])
+        });
     }
 
     /// Close the files `pid` opened.
@@ -906,25 +947,27 @@ impl System {
         }
     }
 
-    fn terminate(&mut self, p: Box<Process>, result: Result<Term, Exception>) {
+    fn terminate(&mut self, mut p: Box<Process>, result: Result<Term, Exception>) {
         let pid = p.pid;
+        let h = &mut p.heap;
         let reason = match &result {
-            Ok(_) => Term::Atom(self.atoms.normal.clone()),
+            Ok(_) => Term::Atom(self.atoms.normal),
             Err(e) => match e.class {
-                Class::Exit => e.reason.clone(),
-                Class::Error => Term::tuple(alloc::vec![e.reason.clone(), e.trace.clone().unwrap_or(Term::Nil)]),
-                Class::Throw => Term::tuple(alloc::vec![
-                    Term::tuple(alloc::vec![Term::Atom(self.atoms.nocatch.clone()), e.reason.clone()]),
-                    e.trace.clone().unwrap_or(Term::Nil),
-                ]),
+                Class::Exit => e.reason,
+                Class::Error => h.tuple(&[e.reason, e.trace.unwrap_or(Term::Nil)]),
+                Class::Throw => {
+                    let nocatch = h.tuple(&[Term::Atom(self.atoms.nocatch), e.reason]);
+                    h.tuple(&[nocatch, e.trace.unwrap_or(Term::Nil)])
+                }
             },
         };
+        let reason = Arc::new(OwnedTerm::new(&p.heap, reason));
         if let Some(t) = p.timer {
             self.cancel_timer(pid, t);
         }
         // An uncaught error (or throw) is reported to the logger, as BEAM's emulator does.
         if matches!(&result, Err(e) if e.class != Class::Exit) {
-            self.report_crash(&p, reason.clone());
+            self.report_crash(&p, &reason);
         }
         self.aliases.retain(|_, a| a.owner != pid);
         self.close_files(pid);
@@ -943,14 +986,9 @@ impl System {
             }
             self.exits.push_back(ExitSignal { target: other, from: pid, reason: reason.clone(), from_link: true, forced: false });
         }
+        let kind = if pid.port { Term::Atom(self.atom("port")) } else { Term::Atom(self.atoms.process) };
+        let down = Term::Atom(self.atoms.down);
         for (r, crate::process::Monitor { watcher, object, tag }) in &p.monitored_by {
-            let msg = Term::tuple(alloc::vec![
-                tag.clone().unwrap_or_else(|| Term::Atom(self.atoms.down.clone())),
-                Term::Ref(*r),
-                if pid.port { Term::Atom(self.atom("port")) } else { Term::Atom(self.atoms.process.clone()) },
-                object.clone(),
-                reason.clone(),
-            ]);
             if let Some(w) = self.procs.get_mut(*watcher) {
                 w.monitors.remove(r);
             }
@@ -958,7 +996,12 @@ impl System {
             if self.aliases.get(r).is_some_and(|a| a.mode != AliasMode::Explicit) {
                 self.aliases.remove(r);
             }
-            self.send(*watcher, msg);
+            self.send_with(*watcher, |h| {
+                let tag = tag.as_ref().map_or(down, |t| t.copy_into(h));
+                let object = object.copy_into(h);
+                let reason = reason.copy_into(h);
+                h.tuple(&[tag, Term::Ref(*r), kind, object, reason])
+            });
         }
         for (r, target) in &p.monitors {
             if let Some(t) = self.procs.get_mut(*target) {
@@ -972,9 +1015,12 @@ impl System {
                 Some((to, data)) if to != pid && self.procs.is_alive(to) => {
                     let t = self.ets.get_mut(tid).expect("listed");
                     t.owner = to;
-                    let id = if t.named { Term::Atom(t.name.clone()) } else { Term::Ref(Ref(t.tid)) };
+                    let id = if t.named { Term::Atom(t.name) } else { Term::Ref(Ref(t.tid)) };
                     let tag = Term::Atom(self.atom("ETS-TRANSFER"));
-                    self.send(to, Term::tuple(alloc::vec![tag, id, Term::Pid(pid), data]));
+                    self.send_with(to, |h| {
+                        let data = data.copy_into(h);
+                        h.tuple(&[tag, id, Term::Pid(pid), data])
+                    });
                 }
                 _ => {
                     self.ets.delete(tid);
@@ -982,7 +1028,15 @@ impl System {
             }
         }
         if self.watched.contains(&pid) {
-            self.results.insert(pid, result);
+            let outcome = match result {
+                Ok(v) => Ok(OwnedTerm::new(&p.heap, v)),
+                Err(e) => Err(OwnedException {
+                    class: e.class,
+                    reason: OwnedTerm::new(&p.heap, e.reason),
+                    trace: e.trace.map(|t| OwnedTerm::new(&p.heap, t)),
+                }),
+            };
+            self.results.insert(pid, outcome);
         }
         drop(p);
         self.procs.release(pid);
@@ -993,23 +1047,25 @@ impl System {
     fn deliver_exits(&mut self) {
         while let Some(ExitSignal { target, from, reason, from_link, forced }) = self.exits.pop_front() {
             if forced {
-                if let Some(p) = self.procs.take(target) {
+                if let Some(mut p) = self.procs.take(target) {
+                    let reason = reason.copy_into(&mut p.heap);
                     self.terminate(p, Err(Exception::exit(reason)));
                 }
                 continue;
             }
-            let kill = !from_link && reason.is_atom(&self.atoms.kill);
-            let normal = reason.is_atom(&self.atoms.normal);
+            let kill = !from_link && reason.term().is_atom(&self.atoms.kill);
+            let normal = reason.term().is_atom(&self.atoms.normal);
             let Some(p) = self.procs.get_mut(target) else { continue };
             if p.trap_exit && !kill {
-                let msg = Term::tuple(alloc::vec![Term::Atom(self.atoms.exit_upper.clone()), Term::Pid(from), reason]);
+                let r = reason.copy_into(&mut p.heap);
+                let msg = p.heap.tuple(&[Term::Atom(self.atoms.exit_upper), Term::Pid(from), r]);
                 if !deliver(p, msg, &mut self.run_queue, self.limits.max_mailbox) {
                     let reason = mailbox_full(&mut self.atom_table, &self.atoms);
                     self.exits.push_back(ExitSignal { target, from: target, reason, from_link: false, forced: true });
                 }
             } else if !normal || from == target {
-                let reason = if kill { Term::Atom(self.atoms.killed.clone()) } else { reason };
-                let p = self.procs.take(target).expect("present");
+                let mut p = self.procs.take(target).expect("present");
+                let reason = if kill { Term::Atom(self.atoms.killed) } else { reason.copy_into(&mut p.heap) };
                 // Remove it from the run queue lazily: `step` skips pids that are gone.
                 self.terminate(p, Err(Exception::exit(reason)));
             }
@@ -1018,9 +1074,10 @@ impl System {
 }
 
 /// The exit reason of a process whose mailbox overflowed.
-pub(crate) fn mailbox_full(table: &mut AtomTable, atoms: &Atoms) -> Term {
+pub(crate) fn mailbox_full(table: &mut AtomTable, atoms: &Atoms) -> Arc<OwnedTerm> {
     let queue = Term::Atom(table.intern("message_queue").expect("short atom"));
-    Term::tuple(alloc::vec![Term::Atom(atoms.system_limit.clone()), queue])
+    let limit = Term::Atom(atoms.system_limit);
+    Arc::new(OwnedTerm::build(&Literals::default(), |h| h.tuple(&[limit, queue])))
 }
 
 /// Queue a message. `false` if the mailbox is full: the caller must then end the receiver.

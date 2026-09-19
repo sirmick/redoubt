@@ -8,6 +8,9 @@
 //! Access is enforced: a `private` table is usable only by its owner, a `protected` one is
 //! readable by all but writable only by the owner. When the owner dies the table is deleted, or
 //! given to its heir.
+//!
+//! Keys and objects are [`OwnedTerm`]s: copied in on insert and out on lookup, as BEAM copies
+//! them, so a table belongs to no process's heap.
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -15,7 +18,7 @@ use alloc::vec::Vec;
 use core::cmp::Ordering;
 
 use crate::atom::Atom;
-use crate::term::{Pid, Term};
+use crate::term::{compare, Heap, OwnedTerm, Pid, Term};
 
 /// Most tables one VM may have (as BEAM's default `ERL_MAX_ETS_TABLES`, roughly).
 pub const MAX_TABLES: usize = 8192;
@@ -38,7 +41,7 @@ pub enum Access {
 /// A key, ordered exactly or (for `ordered_set`) arithmetically.
 #[derive(Clone)]
 pub struct Key {
-    pub term: Term,
+    pub term: OwnedTerm,
     arith: bool,
 }
 
@@ -55,11 +58,7 @@ impl PartialOrd for Key {
 }
 impl Ord for Key {
     fn cmp(&self, other: &Self) -> Ordering {
-        if self.arith {
-            self.term.cmp_term(&other.term)
-        } else {
-            self.term.cmp_exact(&other.term)
-        }
+        compare(self.term.heap(), self.term.term(), other.term.heap(), other.term.term(), !self.arith)
     }
 }
 
@@ -73,32 +72,32 @@ pub struct Table {
     /// 1-based position of the key in each object.
     pub keypos: usize,
     pub owner: Pid,
-    pub heir: Option<(Pid, Term)>,
-    objects: BTreeMap<Key, Vec<Term>>,
+    pub heir: Option<(Pid, OwnedTerm)>,
+    objects: BTreeMap<Key, Vec<OwnedTerm>>,
     count: usize,
     /// Memory the objects hold, in words (see [`weigh`]).
     words: u64,
 }
 
-/// The words an object costs a table: what `memory::Meter` finds in it.
-pub fn weigh(obj: &Term) -> u64 {
-    let mut m = crate::memory::Meter::new(u64::MAX);
-    m.add(obj);
-    m.usage().total_words()
+/// The words an object costs a table.
+pub fn weigh(obj: &OwnedTerm) -> u64 {
+    obj.words()
 }
 
-fn weigh_all(objs: &[Term]) -> u64 {
+fn weigh_all(objs: &[OwnedTerm]) -> u64 {
     objs.iter().map(weigh).sum()
 }
 
 impl Table {
-    pub fn key(&self, t: Term) -> Key {
-        Key { term: t, arith: self.kind == Kind::OrderedSet }
+    /// `t`, a term of `heap`, as a key of this table.
+    pub fn key(&self, heap: &Heap, t: Term) -> Key {
+        Key { term: OwnedTerm::new(heap, t), arith: self.kind == Kind::OrderedSet }
     }
 
-    /// The key of `obj`, if it is a tuple long enough to have one.
-    pub fn key_of(&self, obj: &Term) -> Option<Key> {
-        obj.as_tuple().and_then(|t| t.get(self.keypos - 1)).map(|k| self.key(k.clone()))
+    /// The key of `obj` (a term of `heap`), if it is a tuple long enough to have one.
+    pub fn key_of(&self, heap: &Heap, obj: Term) -> Option<Key> {
+        let k = *heap.as_tuple(obj)?.get(self.keypos - 1)?;
+        Some(self.key(heap, k))
     }
 
     pub fn size(&self) -> usize {
@@ -119,7 +118,7 @@ impl Table {
     }
 
     /// Insert one object (already checked to have a key).
-    pub fn insert(&mut self, key: Key, obj: Term) {
+    pub fn insert(&mut self, key: Key, obj: OwnedTerm) {
         let slot = self.objects.entry(key).or_default();
         let w = weigh(&obj);
         match self.kind {
@@ -129,7 +128,7 @@ impl Table {
                 *slot = alloc::vec![obj];
             }
             Kind::Bag => {
-                if !slot.iter().any(|o| o.eq_exact(&obj)) {
+                if !slot.iter().any(|o| *o == obj) {
                     slot.push(obj);
                     self.count += 1;
                     self.words += w;
@@ -143,7 +142,7 @@ impl Table {
         }
     }
 
-    pub fn lookup(&self, key: &Key) -> &[Term] {
+    pub fn lookup(&self, key: &Key) -> &[OwnedTerm] {
         self.objects.get(key).map(|v| &v[..]).unwrap_or(&[])
     }
 
@@ -151,7 +150,7 @@ impl Table {
         self.objects.contains_key(key)
     }
 
-    pub fn remove(&mut self, key: &Key) -> Vec<Term> {
+    pub fn remove(&mut self, key: &Key) -> Vec<OwnedTerm> {
         let removed = self.objects.remove(key).unwrap_or_default();
         self.count -= removed.len();
         self.words = self.words.saturating_sub(weigh_all(&removed));
@@ -159,12 +158,12 @@ impl Table {
     }
 
     /// Remove objects exactly equal to `obj`. Returns how many went.
-    pub fn remove_object(&mut self, key: &Key, obj: &Term) -> usize {
+    pub fn remove_object(&mut self, key: &Key, obj: &OwnedTerm) -> usize {
         let Some(slot) = self.objects.get_mut(key) else { return 0 };
         let before = slot.len();
         let mut freed = 0;
         slot.retain(|o| {
-            let keep = !o.eq_exact(obj);
+            let keep = o != obj;
             if !keep {
                 freed += weigh(o);
             }
@@ -180,7 +179,7 @@ impl Table {
     }
 
     /// Replace the (single) object under `key`; the key itself must not change.
-    pub fn replace(&mut self, key: &Key, obj: Term) {
+    pub fn replace(&mut self, key: &Key, obj: OwnedTerm) {
         if let Some(slot) = self.objects.get_mut(key) {
             self.words = self.words.saturating_sub(weigh_all(slot)) + weigh(&obj);
             *slot = alloc::vec![obj];
@@ -196,8 +195,8 @@ impl Table {
     }
 
     /// Every object, in key order.
-    pub fn all(&self) -> Vec<Term> {
-        self.objects.values().flatten().cloned().collect()
+    pub fn all(&self) -> impl Iterator<Item = &OwnedTerm> {
+        self.objects.values().flatten()
     }
 
     pub fn first(&self) -> Option<&Key> {
@@ -248,7 +247,7 @@ impl Tables {
     }
 
     /// Resolve a table identifier: a named table's name, or an unnamed table's reference.
-    pub fn resolve(&self, id: &Term) -> Option<u64> {
+    pub fn resolve(&self, id: Term) -> Option<u64> {
         match id {
             Term::Atom(a) => self.by_name.get(a.as_str()).copied(),
             Term::Ref(r) => self.by_tid.contains_key(&r.0).then_some(r.0),
@@ -307,7 +306,7 @@ pub struct Options {
     pub kind: Kind,
     pub access: Access,
     pub keypos: usize,
-    pub heir: Option<(Pid, Term)>,
+    pub heir: Option<(Pid, OwnedTerm)>,
 }
 
 impl Table {
@@ -342,46 +341,47 @@ pub fn variable(a: &Atom) -> Option<u32> {
     digits.parse().ok()
 }
 
-/// Match `pattern` against `value`, extending `b`. Patterns are ETS match patterns: `'_'` matches
-/// anything, `'$N'` binds (or must equal its earlier binding), everything else matches exactly.
-/// Uses a work list, so deep patterns and values cannot exhaust the Rust stack.
-pub fn pattern_match(pattern: &Term, value: &Term, b: &mut Bindings) -> bool {
-    let mut work = alloc::vec![(pattern.clone(), value.clone())];
+/// Match `pattern` against `value` (both terms of `heap`), extending `b`. Patterns are ETS match
+/// patterns: `'_'` matches anything, `'$N'` binds (or must equal its earlier binding),
+/// everything else matches exactly. Uses a work list, so deep patterns and values cannot
+/// exhaust the Rust stack.
+pub fn pattern_match(heap: &Heap, pattern: Term, value: Term, b: &mut Bindings) -> bool {
+    let mut work = alloc::vec![(pattern, value)];
     while let Some((p, v)) = work.pop() {
-        match &p {
+        match p {
             Term::Atom(a) if a.as_str() == "_" => {}
-            Term::Atom(a) if variable(a).is_some() => {
-                let n = variable(a).expect("checked");
+            Term::Atom(a) if variable(&a).is_some() => {
+                let n = variable(&a).expect("checked");
                 match b.get(&n) {
                     Some(bound) => {
-                        if !bound.eq_exact(&v) {
+                        if !heap.eq_exact(*bound, v) {
                             return false;
                         }
                     }
                     None => {
-                        b.insert(n, v.clone());
+                        b.insert(n, v);
                     }
                 }
             }
-            Term::Tuple(pt) => match v.as_tuple() {
-                Some(vt) if vt.len() == pt.len() => {
-                    work.extend(pt.iter().cloned().zip(vt.iter().cloned()));
+            Term::Tuple(_) => match (heap.as_tuple(p), heap.as_tuple(v)) {
+                (Some(pt), Some(vt)) if vt.len() == pt.len() => {
+                    work.extend(pt.iter().copied().zip(vt.iter().copied()));
                 }
                 _ => return false,
             },
-            Term::Cons(pc) => match &v {
-                Term::Cons(vc) => {
-                    work.push((pc.head.clone(), vc.head.clone()));
-                    work.push((pc.tail.clone(), vc.tail.clone()));
+            Term::Cons(_) => match (heap.as_cons(p), heap.as_cons(v)) {
+                (Some((ph, pt)), Some((vh, vt))) => {
+                    work.push((ph, vh));
+                    work.push((pt, vt));
                 }
                 _ => return false,
             },
-            Term::Map(pm) => match &v {
-                // A map pattern matches a map that has at least its keys.
-                Term::Map(vm) => {
-                    for (k, pv) in pm.iter() {
-                        match vm.get(k) {
-                            Some(vv) => work.push((pv.clone(), vv.clone())),
+            // A map pattern matches a map that has at least its keys.
+            Term::Map(_) => match (heap.map_entries(p), matches!(v, Term::Map(_))) {
+                (Some(entries), true) => {
+                    for (k, pv) in entries {
+                        match heap.map_get(v, k) {
+                            Some(vv) => work.push((pv, vv)),
                             None => return false,
                         }
                     }
@@ -389,7 +389,7 @@ pub fn pattern_match(pattern: &Term, value: &Term, b: &mut Bindings) -> bool {
                 _ => return false,
             },
             _ => {
-                if !p.eq_exact(&v) {
+                if !heap.eq_exact(p, v) {
                     return false;
                 }
             }
@@ -399,8 +399,8 @@ pub fn pattern_match(pattern: &Term, value: &Term, b: &mut Bindings) -> bool {
 }
 
 /// `'$$'`: all bound variables, in number order.
-pub fn all_bindings(b: &Bindings) -> Term {
-    Term::list(b.values().cloned().collect::<Vec<_>>())
+pub fn all_bindings(heap: &mut Heap, b: &Bindings) -> Term {
+    heap.list(b.values().copied().collect::<Vec<_>>())
 }
 
 /// A `{Head, Guards, Body}` clause of a match specification.
@@ -411,12 +411,12 @@ pub struct Clause {
 }
 
 /// Check the shape of a match specification: a list of three-tuples with list guards and body.
-pub fn parse_spec(ms: &Term) -> Option<Vec<Clause>> {
+pub fn parse_spec(heap: &Heap, ms: Term) -> Option<Vec<Clause>> {
     let mut out = Vec::new();
-    for item in ms.list_iter() {
+    for item in heap.list_iter(ms) {
         let item = item.ok()?;
-        let [head, guards, body] = item.as_tuple()? else { return None };
-        out.push(Clause { head: head.clone(), guards: guards.to_vec()?, body: body.to_vec()? });
+        let &[head, guards, body] = heap.as_tuple(item)? else { return None };
+        out.push(Clause { head, guards: heap.to_vec(guards)?, body: heap.to_vec(body)? });
     }
     Some(out)
 }

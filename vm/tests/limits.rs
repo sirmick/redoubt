@@ -39,7 +39,7 @@ impl Platform for TestPlatform {
 /// Run `limits:f()` under `limits` and return its result as text.
 fn run(f: &str, limits: Limits) -> String {
     let mut vm = Vm::with_limits(Box::new(TestPlatform { now: 0 }), limits);
-    let pid = vm.spawn("limits", f, Vec::new()).unwrap();
+    let pid = vm.spawn("limits", f, |_| Vec::new()).unwrap();
     let r = vm.run_bounded(pid, 1_000_000).expect("finished");
     match r.unwrap() {
         Ok(t) => t.to_string(),

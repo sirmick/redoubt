@@ -11,7 +11,7 @@ use num_bigint::Sign;
 use super::Ctx;
 use crate::atom::Atom;
 use crate::process::Exception;
-use crate::term::{Fun, Term};
+use crate::term::{FunView, Heap, Term};
 
 type R = Result<Term, Exception>;
 
@@ -116,16 +116,16 @@ fn hash_digits(hash: &mut u32, negative: bool, digits: impl Iterator<Item = u64>
     }
 }
 
-enum Work<'a> {
-    Term(&'a Term),
+enum Work {
+    Term(Term),
     /// End of a map: restore the enclosing hash and pair accumulator, mixing in this map's pairs.
     MapTail(u32, u32),
     /// End of one key-value pair of a map.
     MapPair,
 }
 
-/// BEAM's `make_hash2`.
-pub fn make_hash2(t: &Term) -> u32 {
+/// BEAM's `make_hash2`, of `t`, a term of `heap`.
+pub fn make_hash2(heap: &Heap, t: Term) -> u32 {
     let mut hash: u32 = 0;
     let mut xor_pairs: u32 = 0;
     let mut work = alloc::vec![Work::Term(t)];
@@ -148,9 +148,9 @@ pub fn make_hash2(t: &Term) -> u32 {
         match t {
             Term::Atom(a) => {
                 if hash == 0 {
-                    hash = atom_hash(a);
+                    hash = atom_hash(&a);
                 } else {
-                    hash1(&mut hash, atom_hash(a), HCONST_3);
+                    hash1(&mut hash, atom_hash(&a), HCONST_3);
                 }
             }
             Term::Nil => {
@@ -161,29 +161,32 @@ pub fn make_hash2(t: &Term) -> u32 {
                 }
             }
             Term::Int(n) => {
-                if (-(1 << 27)..(1 << 27)).contains(n) {
-                    let y = *n as i32;
+                if (-(1 << 27)..(1 << 27)).contains(&n) {
+                    let y = n as i32;
                     if y < 0 {
                         // Negative numbers are mixed twice, as in BEAM.
                         hash1(&mut hash, y.wrapping_neg() as u32, HCONST);
                     }
                     hash1(&mut hash, y as u32, HCONST);
                 } else {
-                    hash_digits(&mut hash, *n < 0, core::iter::once(n.unsigned_abs()));
+                    hash_digits(&mut hash, n < 0, core::iter::once(n.unsigned_abs()));
                 }
             }
-            Term::Big(b) => hash_digits(&mut hash, b.sign() == Sign::Minus, b.magnitude().iter_u64_digits()),
+            Term::Big(_) => {
+                let b = heap.as_big(t).expect("a bignum");
+                hash_digits(&mut hash, b.sign() == Sign::Minus, b.magnitude().iter_u64_digits())
+            }
             Term::Float(f) => {
                 // -0.0 hashes as 0.0.
-                let bits = if *f == 0.0 { 0 } else { f.to_bits() };
+                let bits = if f == 0.0 { 0 } else { f.to_bits() };
                 hash2(&mut hash, (bits >> 32) as u32, bits as u32, HCONST_12);
             }
-            Term::Cons(cell) => {
+            Term::Cons(_) => {
                 // Bytes at the head of a list are packed four to a word.
                 let (mut c, mut sh) = (0u32, 0u32);
-                let mut cur = cell;
+                let mut cur = heap.as_cons(t).expect("a list cell");
                 let rest = loop {
-                    match cur.head {
+                    match cur.0 {
                         Term::Int(b @ 0..=255) => {
                             sh = (sh << 8).wrapping_add(b as u32);
                             if c == 3 {
@@ -193,13 +196,13 @@ pub fn make_hash2(t: &Term) -> u32 {
                             } else {
                                 c += 1;
                             }
-                            match &cur.tail {
-                                Term::Cons(next) => cur = next,
-                                tail => break alloc::vec![tail],
+                            match heap.as_cons(cur.1) {
+                                Some(next) => cur = next,
+                                None => break alloc::vec![cur.1],
                             }
                         }
                         // A head that is not a byte: the tail waits while it is hashed.
-                        _ => break alloc::vec![&cur.tail, &cur.head],
+                        _ => break alloc::vec![cur.1, cur.0],
                     }
                 };
                 if c > 0 {
@@ -207,24 +210,27 @@ pub fn make_hash2(t: &Term) -> u32 {
                 }
                 work.extend(rest.into_iter().map(Work::Term));
             }
-            Term::Tuple(e) => {
+            Term::Tuple(_) => {
+                let e = heap.as_tuple(t).expect("a tuple");
                 hash1(&mut hash, e.len() as u32, HCONST_9);
-                work.extend(e.iter().rev().map(Work::Term));
+                work.extend(e.iter().rev().copied().map(Work::Term));
             }
-            Term::Map(m) => {
-                hash1(&mut hash, m.len() as u32, HCONST_16);
-                if !m.is_empty() {
+            Term::Map(_) => {
+                let entries = heap.map_entries(t).expect("a map");
+                hash1(&mut hash, entries.len() as u32, HCONST_16);
+                if !entries.is_empty() {
                     work.push(Work::MapTail(hash, xor_pairs));
                     hash = 0;
                     xor_pairs = 0;
-                    for (k, v) in m.iter() {
+                    for (k, v) in entries {
                         work.push(Work::MapPair);
                         work.push(Work::Term(v));
-                        work.push(Work::Term(&k.0));
+                        work.push(Work::Term(k));
                     }
                 }
             }
-            Term::Bits(b) => {
+            Term::Bits(_) => {
+                let b = heap.as_bits(t).expect("bits");
                 let k = HCONST_13.wrapping_add(hash);
                 let whole = b.len / 8;
                 let rest_bits = (b.len % 8) as u32;
@@ -239,30 +245,30 @@ pub fn make_hash2(t: &Term) -> u32 {
                     }
                 }
             }
-            Term::Fun(f) => match &**f {
-                Fun::Export { module, function, arity } => {
-                    hash2(&mut hash, *arity, atom_hash(module), HCONST);
-                    hash1(&mut hash, atom_hash(function), HCONST_14);
+            Term::Fun(_) => match heap.as_fun(t).expect("a fun") {
+                FunView::Export { module, function, arity } => {
+                    hash2(&mut hash, arity, atom_hash(&module), HCONST);
+                    hash1(&mut hash, atom_hash(&function), HCONST_14);
                 }
-                Fun::Local { module, index, env, uniq, .. } => {
-                    hash2(&mut hash, env.len() as u32, atom_hash(module), HCONST);
-                    hash2(&mut hash, *index, *uniq, HCONST);
-                    work.extend(env.iter().rev().map(Work::Term));
+                FunView::Local { module, index, env, uniq, .. } => {
+                    hash2(&mut hash, env.len() as u32, atom_hash(&module), HCONST);
+                    hash2(&mut hash, index, uniq, HCONST);
+                    work.extend(env.iter().rev().copied().map(Work::Term));
                 }
             },
             Term::Pid(p) if p.port => hash1(&mut hash, p.serial, HCONST_6),
             Term::Pid(p) => hash1(&mut hash, p.index, HCONST_5),
             Term::Ref(r) => hash1(&mut hash, r.0 as u32, HCONST_7),
-            Term::Resource(r) => hash1(&mut hash, r.id as u32, HCONST_7),
-            Term::Match(_) => {}
+            Term::Resource(_) => hash1(&mut hash, heap.as_resource(t).map_or(0, |r| r.id) as u32, HCONST_7),
+            Term::Match(_) | Term::Node(_) | Term::Header(_) | Term::OffHeap(_) => {}
         }
     }
     hash
 }
 
 /// `phash2(Term)`: a hash in `0..2^27`.
-pub fn phash2_1(_c: &mut Ctx, a: &[Term]) -> R {
-    Ok(Term::Int((make_hash2(&a[0]) & ((1 << 27) - 1)) as i64))
+pub fn phash2_1(c: &mut Ctx, a: &[Term]) -> R {
+    Ok(Term::Int((make_hash2(c.heap(), a[0]) & ((1 << 27) - 1)) as i64))
 }
 
 /// `phash2(Term, Range)`: a hash in `0..Range`, for `Range` in `1..=2^32`.
@@ -271,7 +277,7 @@ pub fn phash2_2(c: &mut Ctx, a: &[Term]) -> R {
         Term::Int(r @ 1..=0x1_0000_0000) => r as u64,
         _ => return Err(c.badarg()),
     };
-    Ok(Term::Int((make_hash2(&a[0]) as u64 % range) as i64))
+    Ok(Term::Int((make_hash2(c.heap(), a[0]) as u64 % range) as i64))
 }
 
 #[cfg(test)]

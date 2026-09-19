@@ -34,12 +34,12 @@ pub fn evp_generate_key(c: &mut Ctx, a: &[Term]) -> R {
             let private = private_or_random(c, a, 1, 32)?;
             let secret = x25519_dalek::StaticSecret::from(key32(c, &private, 1)?);
             let public = x25519_dalek::PublicKey::from(&secret);
-            Ok(Term::tuple(alloc::vec![bin(public.as_bytes()), bin(&private)]))
+            Ok({ let e = [bin(c, public.as_bytes()), bin(c, &private)]; c.tuple(&e) })
         }
         Some("ed25519") => {
             let private = private_or_random(c, a, 1, 32)?;
             let signing = ed25519_dalek::SigningKey::from_bytes(&key32(c, &private, 1)?);
-            Ok(Term::tuple(alloc::vec![bin(signing.verifying_key().as_bytes()), bin(&private)]))
+            Ok({ let e = [bin(c, signing.verifying_key().as_bytes()), bin(c, &private)]; c.tuple(&e) })
         }
         Some("x448" | "ed448") => Err(notsup(c, 0, "Unsupported curve")),
         _ => Err(badarg(c, 0, "Bad curve")),
@@ -59,7 +59,7 @@ pub fn evp_compute_key(c: &mut Ctx, a: &[Term]) -> R {
     if !shared.was_contributory() {
         return Err(nif_error(c, "error", -1, "Can't derive secret"));
     }
-    Ok(bin(shared.as_bytes()))
+    Ok(bin(c, shared.as_bytes()))
 }
 
 // ---- NIST curves: ECDH and ECDSA on P-256 and P-384 ----
@@ -72,7 +72,7 @@ enum Curve {
 
 /// The curve in `{Params, Name}` (crypto.erl's `nif_curve_params/1`), by name.
 fn curve(c: &mut Ctx, t: &Term, arg: i64) -> Result<Curve, E> {
-    let name = t.as_tuple().and_then(|p| p.get(1)).and_then(atom_name);
+    let name = c.heap().as_tuple(*t).and_then(|p| p.get(1)).and_then(atom_name);
     match name {
         Some("secp256r1" | "prime256v1") => Ok(Curve::P256),
         Some("secp384r1") => Ok(Curve::P384),
@@ -115,7 +115,7 @@ pub fn ec_generate_key(c: &mut Ctx, a: &[Term]) -> R {
             elliptic_curve::SecretKey::<C>::from_slice(&padded).map_err(|_| badarg(c, 1, "Couldn't get EC key"))?
         };
         let point = secret.public_key().to_sec1_point(false);
-        Ok(Term::tuple(alloc::vec![bin(point.as_bytes()), bin(&secret.to_bytes())]))
+        Ok({ let e = [bin(c, point.as_bytes()), bin(c, &secret.to_bytes())]; c.tuple(&e) })
     })
 }
 
@@ -127,16 +127,16 @@ pub fn ecdh_compute_key(c: &mut Ctx, a: &[Term]) -> R {
         let public = elliptic_curve::PublicKey::<C>::from_sec1_bytes(&theirs).map_err(|_| badarg(c, 0, "Couldn't get ecpoint"))?;
         let secret = elliptic_curve::SecretKey::<C>::from_slice(&mine).map_err(|_| badarg(c, 2, "Couldn't get EC key"))?;
         let shared = elliptic_curve::ecdh::diffie_hellman(secret.to_nonzero_scalar(), public.as_affine());
-        Ok(bin(shared.raw_secret_bytes()))
+        Ok(bin(c, shared.raw_secret_bytes()))
     })
 }
 
 // ---- finite-field Diffie-Hellman and modular exponentiation ----
 
 fn dh_params(c: &mut Ctx, t: &Term, arg: i64) -> Result<(BigUint, BigUint), E> {
-    let parts = t.to_vec().unwrap_or_default();
-    let p = parts.first().and_then(|x| x.iodata_bytes()).map(|b| BigUint::from_bytes_be(&b));
-    let g = parts.get(1).and_then(|x| x.iodata_bytes()).map(|b| BigUint::from_bytes_be(&b));
+    let parts = c.heap().to_vec(*t).unwrap_or_default();
+    let p = parts.first().and_then(|x| c.heap().iodata_bytes(*x)).map(|b| BigUint::from_bytes_be(&b));
+    let g = parts.get(1).and_then(|x| c.heap().iodata_bytes(*x)).map(|b| BigUint::from_bytes_be(&b));
     match (p, g) {
         (Some(p), Some(g)) if p > BigUint::from(3u32) && !g.is_zero() => Ok((p, g)),
         _ => Err(badarg(c, arg, "Bad DH parameters")),
@@ -146,7 +146,7 @@ fn dh_params(c: &mut Ctx, t: &Term, arg: i64) -> Result<(BigUint, BigUint), E> {
 /// `dh_generate_key_nif(PrivKey, [P, G], Mpint, Len)` → `{Public, Private}`.
 pub fn dh_generate_key(c: &mut Ctx, a: &[Term]) -> R {
     let (p, g) = dh_params(c, &a[1], 1)?;
-    let private = if a[0].is_atom(&c.sys.atoms.undefined) || a[0].iodata_bytes().is_some_and(|b| b.is_empty()) {
+    let private = if a[0].is_atom(&c.sys.atoms.undefined) || c.heap().iodata_bytes(a[0]).is_some_and(|b| b.is_empty()) {
         // A private exponent in [2, p - 2], from as many random bytes as p has plus 8, so the
         // reduction bias is negligible.
         let r = BigUint::from_bytes_be(&random_bytes(c, p.to_bytes_be().len() + 8)?);
@@ -155,7 +155,7 @@ pub fn dh_generate_key(c: &mut Ctx, a: &[Term]) -> R {
         uint(c, a, 0, "private key")?
     };
     let public = g.modpow(&private, &p);
-    Ok(Term::tuple(alloc::vec![bin(&public.to_bytes_be()), bin(&private.to_bytes_be())]))
+    Ok({ let e = [bin(c, &public.to_bytes_be()), bin(c, &private.to_bytes_be())]; c.tuple(&e) })
 }
 
 /// `dh_compute_key_nif(OthersPublic, MyPrivate, [P, G])`.
@@ -167,7 +167,7 @@ pub fn dh_compute_key(c: &mut Ctx, a: &[Term]) -> R {
         return Err(nif_error(c, "error", -1, "Bad public key"));
     }
     let mine = uint(c, a, 1, "private key")?;
-    Ok(bin(&theirs.modpow(&mine, &p).to_bytes_be()))
+    Ok(bin(c, &theirs.modpow(&mine, &p).to_bytes_be()))
 }
 
 /// `mod_exp_nif(Base, Exponent, Modulus, BinHdr)`: with `BinHdr` 4, a 4-byte length prefix.
@@ -181,9 +181,9 @@ pub fn mod_exp(c: &mut Ctx, a: &[Term]) -> R {
         Some(4) => {
             let mut out = (r.len() as u32).to_be_bytes().to_vec();
             out.extend_from_slice(&r);
-            bin(&out)
+            bin(c, &out)
         }
-        _ => bin(&r),
+        _ => bin(c, &r),
     })
 }
 
@@ -197,9 +197,9 @@ fn digest_of(c: &mut Ctx, a: &[Term], type_arg: usize, data_arg: usize) -> Resul
     } else {
         Some(hash::alg(&a[type_arg]).ok_or_else(|| badarg(c, type_arg as i64, "Bad digest type"))?)
     };
-    if let Some([tag, d]) = a[data_arg].as_tuple() {
-        if atom_name(tag) == Some("digest") {
-            return Ok((d.iodata_bytes().ok_or_else(|| badarg(c, data_arg as i64, "Bad digest"))?, alg));
+    if let Some(&[tag, d]) = c.heap().as_tuple(a[data_arg]) {
+        if atom_name(&tag) == Some("digest") {
+            return Ok((c.heap().iodata_bytes(d).ok_or_else(|| badarg(c, data_arg as i64, "Bad digest"))?, alg));
         }
     }
     let data = bytes(c, a, data_arg, "data")?;
@@ -213,15 +213,15 @@ fn digest_of(c: &mut Ctx, a: &[Term], type_arg: usize, data_arg: usize) -> Resul
 pub fn sign(c: &mut Ctx, a: &[Term]) -> R {
     match atom_name(&a[0]) {
         Some("eddsa") => {
-            let key = a[3].to_vec().unwrap_or_default();
+            let key = c.heap().to_vec(a[3]).unwrap_or_default();
             if key.get(1).and_then(atom_name) != Some("ed25519") {
                 return Err(notsup(c, 3, "Unsupported curve"));
             }
-            let private = key.first().and_then(|k| k.iodata_bytes()).ok_or_else(|| badarg(c, 3, "Bad key"))?;
+            let private = key.first().and_then(|k| c.heap().iodata_bytes(*k)).ok_or_else(|| badarg(c, 3, "Bad key"))?;
             let signing = ed25519_dalek::SigningKey::from_bytes(&key32(c, &private, 3)?);
             let msg = bytes(c, a, 2, "data")?;
             use ed25519_dalek::Signer;
-            Ok(bin(&signing.sign(&msg).to_bytes()))
+            Ok(bin(c, &signing.sign(&msg).to_bytes()))
         }
         Some("ecdsa") => {
             let (digest, _) = digest_of(c, a, 1, 2)?;
@@ -231,7 +231,7 @@ pub fn sign(c: &mut Ctx, a: &[Term]) -> R {
                 let key = ecdsa::SigningKey::<C>::from_slice(&private).map_err(|_| badarg(c, 3, "Couldn't get EC key"))?;
                 // RFC 6979 deterministic nonces: no randomness needed, so none can be misused.
                 let sig: ecdsa::Signature<C> = key.sign_prehash(&prehash::<C>(&digest)).map_err(|_| nif_error(c, "error", -1, "Can't sign"))?;
-                Ok(bin(sig.to_der().as_bytes()))
+                Ok(bin(c, sig.to_der().as_bytes()))
             })
         }
         Some("rsa") => {
@@ -246,7 +246,7 @@ pub fn sign(c: &mut Ctx, a: &[Term]) -> R {
             } else {
                 key.sign(rsa::Pkcs1v15Sign::new_unprefixed(), &digest_info(alg, &digest))
             };
-            sig.map(|s| bin(&s)).map_err(|_| nif_error(c, "error", -1, "Can't sign"))
+            sig.map(|s| bin(c, &s)).map_err(|_| nif_error(c, "error", -1, "Can't sign"))
         }
         Some("dss") => Err(notsup(c, 0, "Unsupported algorithm")),
         _ => Err(badarg(c, 0, "Bad algorithm")),
@@ -258,11 +258,11 @@ pub fn verify(c: &mut Ctx, a: &[Term]) -> R {
     let sig = bytes(c, a, 3, "signature")?;
     let ok = match atom_name(&a[0]) {
         Some("eddsa") => {
-            let key = a[4].to_vec().unwrap_or_default();
+            let key = c.heap().to_vec(a[4]).unwrap_or_default();
             if key.get(1).and_then(atom_name) != Some("ed25519") {
                 return Err(notsup(c, 4, "Unsupported curve"));
             }
-            let public = key.first().and_then(|k| k.iodata_bytes()).ok_or_else(|| badarg(c, 4, "Bad key"))?;
+            let public = key.first().and_then(|k| c.heap().iodata_bytes(*k)).ok_or_else(|| badarg(c, 4, "Bad key"))?;
             let msg = bytes(c, a, 2, "data")?;
             let vk = ed25519_dalek::VerifyingKey::from_bytes(&key32(c, &public, 4)?);
             match (vk, <[u8; 64]>::try_from(&sig[..])) {
@@ -314,10 +314,10 @@ fn prehash<C: elliptic_curve::Curve>(digest: &[u8]) -> Vec<u8> {
 
 /// `{Curve, KeyBin}` as crypto.erl's `format_pkey(ecdsa, ...)` makes it.
 fn ec_key(c: &mut Ctx, t: &Term, arg: i64) -> Result<(Curve, Vec<u8>), E> {
-    match t.as_tuple() {
-        Some([params, key]) => {
-            let cv = curve(c, params, arg)?;
-            let k = key.iodata_bytes().ok_or_else(|| badarg(c, arg, "Bad key"))?;
+    match c.heap().as_tuple(*t) {
+        Some(&[params, key]) => {
+            let cv = curve(c, &params, arg)?;
+            let k = c.heap().iodata_bytes(key).ok_or_else(|| badarg(c, arg, "Bad key"))?;
             Ok((cv, k))
         }
         _ => Err(badarg(c, arg, "Bad key")),
@@ -359,16 +359,16 @@ struct RsaOpts {
 impl RsaOpts {
     fn parse(c: &mut Ctx, t: &Term, arg: i64) -> Result<RsaOpts, E> {
         let mut o = RsaOpts { pss: false, salt_len: -1, mgf1: None, padding: None };
-        for item in t.to_vec().ok_or_else(|| badarg(c, arg, "Bad options"))? {
-            match item.as_tuple() {
-                Some([k, v]) => match (atom_name(k), atom_name(v)) {
+        for item in c.heap().to_vec(*t).ok_or_else(|| badarg(c, arg, "Bad options"))? {
+            match c.heap().as_tuple(item) {
+                Some(&[k, v]) => match (atom_name(&k), atom_name(&v)) {
                     (Some("rsa_padding"), Some("rsa_pkcs1_pss_padding")) => o.pss = true,
                     (Some("rsa_padding"), Some("rsa_pkcs1_padding")) => o.padding = Some("pkcs1"),
                     (Some("rsa_padding"), Some("rsa_no_padding")) => o.padding = Some("none"),
                     (Some("rsa_padding"), Some("rsa_pkcs1_oaep_padding")) => o.padding = Some("oaep"),
                     (Some("rsa_padding"), _) => return Err(notsup(c, arg, "Unsupported padding")),
                     (Some("rsa_pss_saltlen"), _) => o.salt_len = v.as_i64().ok_or_else(|| badarg(c, arg, "Bad salt length"))?,
-                    (Some("rsa_mgf1_md"), _) => o.mgf1 = Some(hash::alg(v).ok_or_else(|| badarg(c, arg, "Bad mgf1 digest"))?),
+                    (Some("rsa_mgf1_md"), _) => o.mgf1 = Some(hash::alg(&v).ok_or_else(|| badarg(c, arg, "Bad mgf1 digest"))?),
                     // OAEP label and digest: accepted for the parser's sake; OAEP is refused below.
                     (Some("rsa_oaep_md" | "rsa_oaep_label"), _) => {}
                     _ => return Err(badarg(c, arg, "Bad option")),
@@ -402,14 +402,14 @@ fn with_digest10<T>(alg: Alg, opts: &RsaOpts, f: impl FnOnce(rsa::Pss) -> T) -> 
     })
 }
 
-fn rsa_int(t: &Term) -> Option<rsa::BigUint> {
-    t.iodata_bytes().map(|b| rsa::BigUint::from_bytes_be(&b))
+fn rsa_int(c: &Ctx, t: &Term) -> Option<rsa::BigUint> {
+    c.heap().iodata_bytes(*t).map(|b| rsa::BigUint::from_bytes_be(&b))
 }
 
 /// `[E, N]`, or longer (a private key's list starts the same way).
 fn rsa_public(c: &mut Ctx, t: &Term, arg: i64) -> Result<rsa::RsaPublicKey, E> {
-    let parts = t.to_vec().unwrap_or_default();
-    match (parts.first().and_then(rsa_int), parts.get(1).and_then(rsa_int)) {
+    let parts = c.heap().to_vec(*t).unwrap_or_default();
+    match (parts.first().and_then(|t| rsa_int(c, t)), parts.get(1).and_then(|t| rsa_int(c, t))) {
         (Some(e), Some(n)) => rsa::RsaPublicKey::new(n, e).map_err(|_| badarg(c, arg, "Bad RSA public key")),
         _ => Err(badarg(c, arg, "Bad RSA public key")),
     }
@@ -417,7 +417,7 @@ fn rsa_public(c: &mut Ctx, t: &Term, arg: i64) -> Result<rsa::RsaPublicKey, E> {
 
 /// `[E, N, D]` or `[E, N, D, P1, P2, E1, E2, C]`.
 fn rsa_private(c: &mut Ctx, t: &Term, arg: i64) -> Result<rsa::RsaPrivateKey, E> {
-    let parts: Vec<rsa::BigUint> = t.to_vec().unwrap_or_default().iter().filter_map(rsa_int).collect();
+    let parts: Vec<rsa::BigUint> = c.heap().to_vec(*t).unwrap_or_default().iter().filter_map(|t| rsa_int(c, t)).collect();
     if parts.len() < 3 {
         return Err(badarg(c, arg, "Bad RSA private key"));
     }
@@ -471,7 +471,7 @@ pub fn crypt(c: &mut Ctx, a: &[Term]) -> R {
             }
         }
     };
-    Ok(bin(&out))
+    Ok(bin(c, &out))
 }
 
 /// `privkey_to_pubkey_nif(rsa, [E, N, D | _])` → `[E, N]`.
@@ -481,14 +481,14 @@ pub fn privkey_to_pubkey(c: &mut Ctx, a: &[Term]) -> R {
         return Err(notsup(c, 0, "Unsupported algorithm"));
     }
     let key = rsa_private(c, &a[1], 1)?;
-    Ok(Term::list(alloc::vec![bin(&key.e().to_bytes_be()), bin(&key.n().to_bytes_be())]))
+    Ok({ let v = alloc::vec![bin(c, &key.e().to_bytes_be()), bin(c, &key.n().to_bytes_be())]; c.list(v) })
 }
 
 /// `rsa_generate_key_nif(Bits, PublicExponent)` → `[E, N, D, P1, P2, E1, E2, C]`.
 pub fn rsa_generate_key(c: &mut Ctx, a: &[Term]) -> R {
     use rsa::traits::{PrivateKeyParts, PublicKeyParts};
     let bits = a[0].as_usize().filter(|b| (512..=8192).contains(b)).ok_or_else(|| badarg(c, 0, "Bad modulus size"))?;
-    let e = rsa_int(&a[1]).ok_or_else(|| badarg(c, 1, "Bad exponent"))?;
+    let e = rsa_int(c, &a[1]).ok_or_else(|| badarg(c, 1, "Bad exponent"))?;
     let mut rng = KeystreamRng::new(c)?;
     let key = rsa::RsaPrivateKey::new_with_exp(&mut rng, bits, &e).map_err(|_| nif_error(c, "error", -1, "Key generation failed"))?;
     let primes = key.primes();
@@ -499,5 +499,5 @@ pub fn rsa_generate_key(c: &mut Ctx, a: &[Term]) -> R {
     let dq = d % (q - &one);
     let qinv = key.crt_coefficient().ok_or_else(|| nif_error(c, "error", -1, "Key generation failed"))?;
     let parts = [key.e(), key.n(), d, p, q, &dp, &dq, &qinv];
-    Ok(Term::list(parts.iter().map(|x| bin(&x.to_bytes_be())).collect::<Vec<_>>()))
+    Ok({ let v = parts.iter().map(|x| bin(c, &x.to_bytes_be())).collect::<Vec<_>>(); c.list(v) })
 }

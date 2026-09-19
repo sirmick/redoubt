@@ -4,7 +4,6 @@ use alloc::vec::Vec;
 use core::cell::RefCell;
 
 use beamlet_vm::bif::Ctx;
-use beamlet_vm::term::{Map, MapKey};
 use beamlet_vm::Term;
 use hmac::{KeyInit, Mac, SimpleHmac};
 use sha2::Digest;
@@ -79,17 +78,17 @@ pub fn hash_info(c: &mut Ctx, a: &[Term]) -> R {
     let Some(&(_, _, nid, size, block)) = ALGS.iter().find(|(n, ..)| *n == name) else {
         return Err(badarg(c, 0, "Bad digest type"));
     };
-    let mut m = Map::new();
-    m.insert(MapKey(c.atom("type")), Term::Int(nid));
-    m.insert(MapKey(c.atom("size")), Term::Int(size as i64));
-    m.insert(MapKey(c.atom("block_size")), Term::Int(block as i64));
-    Ok(Term::map(m))
+    let mut m: Vec<(Term, Term)> = Vec::new();
+    { let k = c.atom("type"); let v = Term::Int(nid); m.push((k, v)); }
+    { let k = c.atom("size"); let v = Term::Int(size as i64); m.push((k, v)); }
+    { let k = c.atom("block_size"); let v = Term::Int(block as i64); m.push((k, v)); }
+    Ok(c.map_from(m))
 }
 
 pub fn hash(c: &mut Ctx, a: &[Term]) -> R {
     let h = hash_arg(c, a, 0)?;
     let data = bytes(c, a, 1, "data")?;
-    Ok(bin(&digest(h, &data)))
+    Ok(bin(c, &digest(h, &data)))
 }
 
 // ---- streaming hashes: immutable states, as in OTP (each update makes a new state) ----
@@ -146,7 +145,8 @@ pub fn hash_init(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 pub fn hash_update(c: &mut Ctx, a: &[Term]) -> R {
-    let Some(HashState(h)) = resource_ref::<HashState>(&a[0]) else { return Err(badarg(c, 0, "Bad state")) };
+    let Some(state) = resource_ref::<HashState>(c, &a[0]) else { return Err(badarg(c, 0, "Bad state")) };
+    let HashState(h) = &*state;
     let mut h = h.clone();
     let data = bytes(c, a, 1, "data")?;
     each_hasher!(&mut h, x => Digest::update(x, &data));
@@ -154,9 +154,10 @@ pub fn hash_update(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 pub fn hash_final(c: &mut Ctx, a: &[Term]) -> R {
-    let Some(HashState(h)) = resource_ref::<HashState>(&a[0]) else { return Err(badarg(c, 0, "Bad state")) };
+    let Some(state) = resource_ref::<HashState>(c, &a[0]) else { return Err(badarg(c, 0, "Bad state")) };
+    let HashState(h) = &*state;
     let out: Vec<u8> = each_hasher!(h.clone(), x => x.finalize().to_vec());
-    Ok(bin(&out))
+    Ok(bin(c, &out))
 }
 
 // ---- MACs ----
@@ -188,9 +189,12 @@ pub fn mac(c: &mut Ctx, a: &[Term]) -> R {
     match atom_name(&a[0]) {
         Some("hmac") => {
             let h = hash_arg(c, a, 1)?;
-            Ok(bin(&hmac(h, &key, &data)))
+            Ok(bin(c, &hmac(h, &key, &data)))
         }
-        Some("poly1305") => Ok(bin(&poly1305(c, &key, &data)?)),
+        Some("poly1305") => {
+            let tag = poly1305(c, &key, &data)?;
+            Ok(bin(c, &tag))
+        }
         Some("cmac" | "siphash") => Err(notsup(c, 0, "Unsupported mac algorithm")),
         _ => Err(badarg(c, 0, "Unknown mac algorithm")),
     }
@@ -216,7 +220,7 @@ pub fn mac_init(c: &mut Ctx, a: &[Term]) -> R {
 
 pub fn mac_update(c: &mut Ctx, a: &[Term]) -> R {
     let data = bytes(c, a, 1, "text")?;
-    let Some(state) = resource_ref::<RefCell<MacState>>(&a[0]) else { return Err(badarg(c, 0, "Bad ref")) };
+    let Some(state) = resource_ref::<RefCell<MacState>>(c, &a[0]) else { return Err(badarg(c, 0, "Bad ref")) };
     match &mut *state.borrow_mut() {
         MacState::Hmac(_, _, buf) | MacState::Poly1305(_, buf) => buf.extend_from_slice(&data),
     }
@@ -224,7 +228,7 @@ pub fn mac_update(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 pub fn mac_final(c: &mut Ctx, a: &[Term]) -> R {
-    let Some(state) = resource_ref::<RefCell<MacState>>(&a[0]) else { return Err(badarg(c, 0, "Bad ref")) };
+    let Some(state) = resource_ref::<RefCell<MacState>>(c, &a[0]) else { return Err(badarg(c, 0, "Bad ref")) };
     let out = match &*state.borrow() {
         MacState::Hmac(h, key, buf) => hmac(*h, key, buf),
         MacState::Poly1305(key, buf) => {
@@ -232,7 +236,7 @@ pub fn mac_final(c: &mut Ctx, a: &[Term]) -> R {
             poly1305::Poly1305::new(&k).compute_unpadded(buf).to_vec()
         }
     };
-    Ok(bin(&out))
+    Ok(bin(c, &out))
 }
 
 /// `pbkdf2_hmac_nif(Digest, Pass, Salt, Iter, KeyLen)`.
@@ -246,7 +250,7 @@ pub fn pbkdf2_hmac(c: &mut Ctx, a: &[Term]) -> R {
     let Some(len) = len else { return Err(badarg(c, 4, "Bad key length")) };
     let mut out = alloc::vec![0u8; len];
     with_hash!(h, H => pbkdf2::pbkdf2::<SimpleHmac<H>>(&pass, &salt, iter, &mut out).expect("HMAC takes any key"));
-    Ok(bin(&out))
+    Ok(bin(c, &out))
 }
 
 /// Constant-time equality of two binaries of the same size.
