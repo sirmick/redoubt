@@ -54,6 +54,11 @@ Each field has one JSON type (WIRE.md): 64-bit quantities (label ids, accounts, 
 deadlines) are decimal strings; small counts (processes, weights, depths, restart limits) and ports
 are numbers. A value of the wrong JSON type is an error.
 
+**Names.** Every name in the manifest (devices, labels, volumes, servers, endpoints, principals) is
+1-64 bytes of `[a-z0-9_:+-]`, starting with a letter (`fsd:data`, `alice+secrets`), and the
+manifest decoder refuses any other. Names become endpoint names, volume names and 9P paths, so an
+empty name, a NUL, U+FEFF or a C1 control must never reach them.
+
 Example fragment:
 ```json
 { "servers": [ { "name": "fsd:data", "program": "fsd", "volume": "data",
@@ -69,8 +74,10 @@ Example fragment:
   (in milestone 1 clients see the error and retry); senders still blocked on the endpoint wait and
   are served by the restarted server (KERNEL-SPEC.md, R4b). (Milestone 2: the namespace
   library re-walks from the root, so most programs see only a hiccup.)
-- **Blame:** each exit notice names the account the faulting thread was serving; three crashes blamed
-  on the same account within 10 minutes log that account out (CONTAINMENT.md).
+- **Blame:** an exit notice for a fault, or for an exit while holding open calls (a panic), names
+  the account and labels of the failing thread's most recently taken open call; three crashes
+  blamed on the same (account, label set) within 10 minutes log out those sessions
+  (CONTAINMENT.md).
 - **Reboot:** more than 5 restarts of one server within 60 seconds, not stopped by blame, reboots the
   machine (fail closed).
 - **The steward:** if it dies in milestone 1, `init` destroys and recreates the users budget: every
@@ -101,13 +108,32 @@ It runs on the UART console before SSH exists.
 ## Startup block
 Before a process runs, its parent installs its handles in its table (`process_start` copies them
 into slots 1..n, at most `MAX_START_HANDLES`; handle 0 is never a handle) and maps one ordinary page
-into it, holding tagged entries (the kernel argument block's tag format):
-- the namespace table (`"/"` -> handle 3, `"/dev/cons"` -> handle 4, ...);
-- named service handles (`"keys"`, `"powerbox"`), and device handles for drivers;
-- arguments, and its budget handle.
+into it, read-only (`process_map`), holding the block below. **`process_start`'s `arg` is that
+page's address** (page-aligned; 0 = no block), which the child's first thread receives
+(KERNEL-SPEC.md); there is no fixed address. The program image travels separately (PACKAGES.md,
+launching). No environment variables, nothing inherited. Configuration is files in the namespace.
 
-The program image travels separately (PACKAGES.md, launching). No environment variables, nothing
-inherited. Configuration is files in the namespace.
+**Format.** The kernel argument block's framing (BOOT.md): little-endian `u32` words. Each entry is
+a 4-byte ASCII tag, one word holding a CRC-16/X-25 of the entry's data in its low half and the data
+length in words in its high half, then the data. A string is a `u32` byte length followed by UTF-8,
+zero-padded to a whole word; an entry's length is exactly what its fields need.
+
+| Tag | Data | Meaning |
+| --- | --- | --- |
+| `SBlk` | version (1), block length in words (this entry included), handle count n | the header: first, exactly once |
+| `NmSp` | handle, string | a namespace entry: a clean absolute path (`/`, `/dev/cons`: no `.`, `..`, empty component or trailing `/`) and the connection it resolves to |
+| `Hndl` | handle, string | a named handle (a non-empty name without NUL): services (`keys`, `powerbox`), device handles for drivers, the process's budget as `budget` |
+| `Argv` | string | one argument (may be empty), in block order |
+
+Rules: the block is at most one page; handles are 1..=n, n ≤ `MAX_START_HANDLES`; paths are unique
+among `NmSp` entries and names among `Hndl` entries; nothing follows the last entry within the
+block's length (the rest of the page is not read). A block breaking any rule is refused whole. The
+parent may be hostile, so the child parses defensively; the reference implementation is
+`redoubt/rt/src/startup.rs` (`redoubt-rt`), which also writes blocks for launchers.
+
+**Launching gives fresh connections.** A launcher never places its own connection to a server in a
+child's block; it asks the server for a fresh connection for the child and passes that one
+(CAPABILITIES.md, one badge, one client). This is a rule for `init`, the steward and every shell.
 
 ## Worked example: Alice, Bob and Alice's agent (milestone 1)
 ```

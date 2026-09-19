@@ -5,7 +5,9 @@ and in human-written files. One convention for every message, one for every file
 
 ## Messages: 9P's convention
 - **9P** is plain 9P2000 (no `.u` or `.L` extensions) with a fixed `msize` of 64 KiB, which is
-  `MAX_LEND_PAGES` (KERNEL-SPEC.md). A 9P message travels in a lent buffer.
+  `MAX_LEND_PAGES` (KERNEL-SPEC.md). A 9P message travels in a lent buffer, and the call's four
+  words are all zero, in the request and in a successful reply. A request with any other words, or
+  with no lend, is refused with reply status 1 (`Malformed`, below).
 - **Typed messages** (everything that is not 9P: `blkd` <-> `fsd`, the steward, `keyd`, `sshd`
   <-> steward, `ipd`'s connect and listen operations) use **9P's own encoding**: little-endian
   fixed-size integers (`u8`, `u16`, `u32`, `u64`), strings as `u16` length + UTF-8, byte arrays as
@@ -26,19 +28,24 @@ by that server's work package with a HISTORY.md line (BUILD-PLAN.md). A line hol
 | Opcode | Message | Fields | Reply |
 | --- | --- | --- | --- |
 | 1 | `read` | `block: u64`, `count: u32` | `data: bytes` |
-| 2 | `grant` | `range: handle[0]`, `pages: u32` | - |
+| 2 | `grant` | `range: handle[0] endpoint`, `pages: u32` | - |
 ```
 
 - One row per message type: the opcode (decimal, unique; **0 is reserved**, since word 0 of a reply
   is a status and 0 means ok), the name, the request's fields in order, and the reply's fields in
   order. Each field is `` `name: type` ``; `-` means none (a reply of `-` is its status alone).
 - **Types:** `u8`, `u16`, `u32`, `u64`, `string` (`u16` length + UTF-8), `bytes` (`u32` length +
-  bytes), and `handle[N]` (the handle in slot N; slots are numbered from 0 in order, carry no bytes,
-  and a message has at most `MAX_MSG_HANDLES`).
+  bytes), and `handle[N] KIND` (the handle in slot N; slots are numbered from 0 in order, carry no
+  bytes, and a message has at most `MAX_MSG_HANDLES`). `KIND` is the object the handle must name:
+  `endpoint`, `budget`, `process`, `mmio`, `irq` or `reset` (KERNEL-SPEC.md, Objects). The generator
+  puts the kind in the codec's docs and emits a helper that checks it, so no receiver has to guess.
 - **Compound values** (a label set, an IP prefix) are a `bytes` field whose inner layout is stated
   under the table, in the same encoding. Milestone 1 adds no other types.
 - **Errors.** Each protocol has an error table, marked by a line `<!-- wire-errors: NAME -->` and
-  headed `| Code | Error |`: codes from 1, unique, each with a name.
+  headed `| Code | Error |`: codes unique, each with a name. **Code 1 is `Malformed` in every
+  protocol**, and in a 9P call's reply status: a request that does not decode (unknown opcode,
+  wrong shape, bad lengths, a missing or wrong-kind handle). The generator reserves it and adds it to every table; a
+  protocol's own codes start at 2.
 
 ### Layout in a message
 - **Word 0** of a request is its opcode. **Word 0 of a reply is its status**: 0 = ok, otherwise a

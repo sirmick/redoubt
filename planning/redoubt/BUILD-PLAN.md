@@ -9,7 +9,7 @@ a lease, contained. Every property backed by an attack test (PLAN.md).
 ## How to read a work package
 Each package (WP) has:
 - **Reads:** the design it implements. The spec wins over anything else; rules are cited as R1-R12
-  (with R4a and R4b) and invariants as I1-I14 (KERNEL-SPEC.md).
+  (with R4a and R4b) and invariants as I1-I15 (KERNEL-SPEC.md).
 - **Delivers:** the crates, programs or changes it produces, and the paths it may write.
 - **Accepted when:** its tests. A package is done when these pass in `cargo testbench` (and the
   model's property tests, where named), a reviewer has checked it against the spec, and STATUS.md
@@ -42,7 +42,7 @@ not needed.
 - Delivers: `redoubt/model/`: a host Rust crate implementing every object, system call, error and
   rule of KERNEL-SPEC.md with the same names and arguments; the steward's M1 policy (principals,
   sessions, vault sessions, leases, approvals, declassification) as a layer above it; property
-  tests (random operation sequences) for invariants I1-I14 and the policy's properties; a trace
+  tests (random operation sequences) for invariants I1-I15 and the policy's properties; a trace
   format (a sequence of calls and their expected results) that WP-C1 replays on the real kernel.
 - Accepted when: all property tests pass at 10^6 sequences; **each rule R1-R12, deliberately broken
   in the model, makes at least one property test fail** (so the tests are not vacuous).
@@ -96,16 +96,21 @@ not needed.
 - Reads: KERNEL-SPEC.md Endpoint, Messages, R1-R4b, `endpoint_create`, `mint`, `call`, `send`,
   `receive`, `reply`.
 - Delivers: endpoints; the four IPC calls with lend and transfer; `receive` reporting a call or a
-  send; open calls (up to `MAX_OPEN_CALLS` per process, each charged a page); `mint` with stamps;
-  badge-0 receive rights; the label check against the endpoint's owner; fair waiting by (account,
-  label set); lends that outlive their lender; transfer opt-in; `Dead` for the calls a dying server
-  had taken.
+  send; open calls (up to `MAX_OPEN_CALLS` per process, each charged a page, `Busy` also for a
+  receiver already waiting); `mint` with stamps, from an open call of the caller's thread; badge-0
+  receive rights; badge slots and badge notices (charged to the endpoint's owner, withdrawn by a
+  re-mint); the label check against the endpoint's owner; fair waiting by (account, label set),
+  `WAIT_CAP` counting queued messages only; lends that outlive their lender; transfer opt-in
+  (counting page tables); `Dead` for the calls a dying server had taken; R10's reach into messages
+  in flight (K1 has no messages to test it with).
 - Accepted when: kernel cases for R1-R4b and I3, I4, I7, I9, I11; attack cases: steal a receive
   right, mint badge 0, mint into a foreign budget, unequal-label call, 10,000 blocked senders with
   another account still served in turn, a vault-labelled sender filling its `WAIT_CAP` with its
   owner's unlabelled sender unaffected, open calls beyond `MAX_OPEN_CALLS`, reply to a send, lender
   destroyed mid-call with the server surviving, unrequested transfer, a transfer beyond the
-  receiver's free pages.
+  receiver's free pages, a revoked handle's queued message and taken call (no reply handle reaches
+  the sender), `mint` from a `send`'s id; kernel cases for I15: a badge notice after the last copy
+  closes and not before, one pending per badge, none across unequal labels to a user owner.
 - Needs: WP-K1.
 
 **WP-K3. Device objects and interrupts.** Size M.
@@ -120,11 +125,14 @@ not needed.
 
 **WP-K4. Process creation and exit.** Size M.
 - Reads: KERNEL-SPEC.md Process, `process_*`, exit notices, R10; PACKAGES.md (launching); INIT.md.
-- Delivers: `process_create`/`process_map`/`process_start`; exit notices with cause and blamed
-  account, their slots charged to the creator; per-thread current-message account; the boot loader
-  loading only the kernel and `init`.
+- Delivers: `process_create`/`process_map`/`process_start` (with `arg`, the startup page's address);
+  exit notices with cause, blamed account and blamed labels, their slots charged to the creator; a
+  `process_exit` holding open calls reported `faulted`; each thread's serving account (its most
+  recently taken open call); the boot loader loading only the kernel and `init`.
 - Accepted when: kernel cases for exit notices (all three causes, and a labelled process's notice
-  reaching a system-class `init`), blamed account on a server fault; attack cases: map into a
+  reaching a system-class `init`), blame on a server fault and on a panic with open calls going to
+  the most recent open call only (a thread holding several callers' calls blames one), a `send`
+  never blamed, a child finding its startup block through `arg`; attack cases: map into a
   started process, W+X through `process_map`, a handle list over `MAX_START_HANDLES`, a process in a
   weight-0 budget, creating and killing processes whose notices nobody receives (bounded by the
   creator's own budget);
@@ -160,10 +168,13 @@ not needed.
 
 ### Track R: user runtime and system servers
 **WP-R1. Native runtime crate.** Size M.
-- Delivers: `redoubt-rt`: startup-block parsing, typed handle wrappers, `call`/`send`/`receive`
-  helpers, an allocator over `map_anon`, a panic handler; the shared server library:
-  `admit(account)`, `check(caller_labels, object_labels, read|write)`, a 9P server skeleton and
-  typed-message dispatch (WIRE.md).
+- Delivers: `redoubt-rt`: startup-block parsing and writing (INIT.md, Startup block), typed handle
+  wrappers, `call`/`send`/`receive` helpers, an allocator over `map_anon`, a panic handler; the
+  shared server library (CONTAINMENT.md): `admit(badge, account, labels)` (per (account, label
+  set), per badge for account 0, freed by badge notices), `check(caller_labels, object_labels,
+  read|write)` (read: object ⊆ caller; write: equal), a 9P server skeleton (fids keyed by (badge,
+  account, label set), walks and directory reads checked as reads) and typed-message dispatch
+  (WIRE.md).
 - Accepted when: unit tests on the host; a bench echo server and client use only this crate.
 - Needs: WP-A1, WP-W1 (and WP-K2 to run on the kernel).
 
@@ -177,12 +188,14 @@ not needed.
 
 **WP-R3. init and the boot manifest.** Size M.
 - Reads: INIT.md (all), WIRE.md (JSON).
-- Delivers: `init`: reads the manifest, builds the budget tree, hands out device handles, starts
-  every system server through the stub, restarts with the rate limit, crash blame and the
-  steward logout signal, reboot as last resort.
-- Accepted when: the M1 manifest boots every server; a crashing server restarts on the same
-  endpoint; blame case: 3 crashes blamed on one account logs that account out and nobody else;
-  more than 5 restarts in 60 s reboots.
+- Delivers: `init`: reads the manifest (refusing names outside INIT.md's name rule), builds the
+  budget tree, hands out device handles, starts every system server through the stub, restarts
+  with the rate limit, crash blame by (account, label set) and the steward logout signal, reboot as
+  last resort.
+- Accepted when: the M1 manifest boots every server; a manifest with a bad name is refused; a
+  crashing server restarts on the same endpoint; blame case: 3 crashes blamed on one (account,
+  label set) log out those sessions and nobody else (a vault session's crashes leave its owner's
+  unlabelled session logged in); more than 5 restarts in 60 s reboots.
 - Needs: WP-R2, WP-W1, WP-K3, WP-K5.
 
 **WP-R4. bootfsd and consoled.** Size S.
@@ -215,9 +228,13 @@ block-range handles, validation of every ring index and length.
 - Needs: WP-R1, WP-K3.
 
 **WP-D2. fsd.** Size M. 9P over littlefs on a block range; one label set per volume from the
-manifest; `admit` and `check` on every request.
-- Accepted when: 9P conformance; per-volume label cases (read up and write down refused);
-  admission per account; the no-leaky-state observer sees no change from a vault writer.
+manifest; `admit` and `check` on every request (writes need equal labels; a walk or `stat` is a
+read; directory reads list only readable entries); relies only on `blkd`'s contract
+(IO-ARCHITECTURE.md).
+- Accepted when: 9P conformance; per-volume label cases (read up, write down and write up all
+  refused, `Tcreate` in a labelled directory from an unlabelled caller revealing nothing);
+  admission per (account, label set), and a dead client's fids freed by its badge notice; the
+  no-leaky-state observer sees no change, qid versions included, from a vault writer.
 - Needs: WP-D1, WP-L1, WP-R1.
 
 **WP-D3. netd and ipd.** Size L. virtio-net driver; `ipd:lan` on `smoltcp` serving `/net` over
@@ -236,13 +253,18 @@ that authenticate a person to the box; constant-time signing.
 
 **WP-S2. steward (stateless, milestone 1).** Size L.
 - Reads: CAPABILITIES.md, CONTAINMENT.md, INIT.md, PACKAGES.md (launching).
-- Delivers: principals and SSH keys from the manifest; session budgets and namespaces; launching
-  beamlet VMs through the stub; vault sessions (`alice+X`); leases for agents; the powerbox with
-  rendering, binding, per-account caps and random request ids; declassification by snapshot;
-  logout on blame; no-write-down on its own records.
-- Accepted when: the model's policy traces (WP-M0) replay against it; approval cases (control
-  characters stripped, swapped requests refused, labelled requests shown only to label owners,
-  floods capped).
+- Delivers: principals and SSH keys from the manifest; session budgets and namespaces (a fresh
+  connection per child); launching beamlet VMs through the stub; vault sessions (`alice+X`); leases
+  for agents, at most `MAX_LEASE` (longer requests refused), with sub-agents inside the agent's
+  budget; the powerbox with rendering (printable-ASCII whitelist, the requester's kind and
+  steward-assigned name, only steward-generated text for labelled requesters), binding, caps per
+  (account, label set) and random ids; declassification by snapshot, read through a short-lived
+  reader budget with the item's labels; logout on blame by (account, label set); `check` on its own
+  records.
+- Accepted when: the model's policy traces (WP-M0) replay against it; approval cases (bidi and
+  format characters escaped, swapped requests refused, labelled requests shown only to label
+  owners and without their free text, floods capped); a lease request over `MAX_LEASE` refused; a
+  sub-agent dies with its agent's lease; no reader budget outlives its declassification.
 - Needs: WP-R3, WP-B1, WP-D2.
 
 **WP-S3. sshd.** Size M. `sunset`-based; host key through `keyd`; user authentication through the

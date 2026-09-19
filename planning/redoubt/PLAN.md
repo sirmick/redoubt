@@ -33,16 +33,21 @@ Deterministic programs in the test bench; each outcome is asserted by the system
 a clean power-off), never by the attacker's own output (BUILD-PLAN.md).
 - **Scripted hostile agent** (Alice's leased agent): cannot read outside `/work` or reach the
   network; a labelled agent reaches no uncleared sink; lease expiry destroys everything, including
-  handles it passed on; its approval requests cannot spoof the approval screen (control characters,
-  swapped requests); it cannot slow Bob beyond its weight.
+  handles it passed on and its sub-agents; a lease over `MAX_LEASE` is refused; its approval
+  requests cannot spoof the approval screen (control, bidi and format characters, swapped
+  requests), and from a vault carry no free text; it cannot use its sponsor's 9P connection (it got
+  a fresh one); it cannot slow Bob beyond its weight.
 - **Scripted hostile user** (Bob attacking Alice):
   - system-call fuzzing: any arguments get an error, never a kernel panic;
   - endpoint flooding: 10,000 blocked senders on `fsd`, and Alice is still served in her turn;
   - budget death mid-call: a lender destroyed while `fsd` holds its lent pages, and `fsd` survives;
-  - crash blame: Bob crashes `fsd` three times while Alice is busy; Bob is logged out, Alice is not;
+  - crash blame: Bob crashes `fsd` three times while Alice is busy; Bob is logged out, Alice is not,
+    also when `fsd` panics rather than faults and when the crashing thread holds Alice's calls open
+    too; a vault session's crashes do not log out its owner's unlabelled session;
   - loopback login: a session connecting to the box's own `sshd` with a `keyd`-held key is refused;
-  - no leaky state: an unlabelled observer sees no change in usage, request ids or file versions
-    while a vault session works;
+  - no leaky state: an unlabelled observer sees no change in usage, request ids, file versions,
+    qids or directory listings while a vault session works, and cannot write, truncate, create or
+    remove anything in the vault's volume;
   - hostile launch: a malformed ELF or startup block from a user parent hurts only the child;
   - approval flood: requests hit the per-account cap; the steward and Alice's approval screen are
     unaffected.

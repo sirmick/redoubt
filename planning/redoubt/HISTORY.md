@@ -213,6 +213,64 @@ The same three roles, attacking v3 and pinning interfaces for a swarm build. Fou
   asserts its outcome through the kernel, the victim or a clean power-off, never the attacker's
   own output: the console does not say who wrote a line, so a hostile program could print its own
   PASSED line.
+- **Kernel IPC and revocation** (2026-09-19, owner answers 30-32, 44, 45, 47, 49, 53; QUESTIONS.md):
+  R10 now reaches messages already sent, because a queued or taken message through a revoked handle
+  was still delivered and its reply's handles still reached the sender: a queued one fails with
+  `Dead`, a taken call's caller gets `Dead` at once, and its reply is discarded (lend kept as in R3,
+  as for calls in flight to a destroyed endpoint). `WAIT_CAP` counts queued messages only; a taken
+  call is bounded by open calls. R4 counts the page tables to map a transfer; a message whose
+  handles the receiver cannot pay for stays queued (`OutOfMemory`), for sends as for calls. A
+  receiver already waiting when its process reaches `MAX_OPEN_CALLS` gets `Busy`. Page tables are
+  freed when they map nothing and the kernel chooses addresses, so WP-C1 compares usage in the
+  model's placement profile. **Badge notices** (new): the kernel tells an endpoint when the last
+  handle with a badge is gone, so a server can free a dead client's fids and quota, which until
+  then only a restart released; one pending slot per badge, charged to the endpoint's owner at the
+  `mint` that creates the badge (so the notice never allocates), the exit notices' label rule, new
+  I15.
+- **Blame by the most recent open call, and per (account, label set)** (2026-09-19, answers 31, 37,
+  48, 55; 37 and 55 changed): after answer 2 a thread can hold many open calls, and blaming every
+  one of them would blame everyone waiting on a `consoled` thread when Bob's request crashes it (the
+  bystander problem of round 2). A thread's serving account is its most recently taken call still
+  open; a `send` never sets it, since it cannot be replied to and an idle thread faulting an hour
+  later must not blame its sender. `mint` accepts any open call of the caller's thread. A
+  `process_exit` while holding open calls (a Rust panic, the commonest crash from hostile input) is
+  reported `faulted` and blamed the same way. Exit notices carry the blamed call's labels, and
+  blame, its limit and the logout are keyed by (account, label set), as caps are (answer 17): a
+  vault session crashing a shared server must not log out its owner's unlabelled sessions.
+- **Leases and approvals** (2026-09-19, answers 33-35; 33 clarified): `MAX_LEASE` = 24 h, a new
+  KERNEL-SPEC.md constant the steward applies (a lease of `u64::MAX` meant no deadline); longer
+  requests are refused, not clamped. Sub-agents are budgets inside their agent's budget: an agent
+  holds only its own budget handle, so it cannot start siblings that outlive it and use up its
+  sponsor's processes. The approval screen renders a printable-ASCII whitelist (stripping control
+  characters missed bidi and format characters) and shows the requester's kind and steward-assigned
+  name. A labelled requester's request shows only steward-generated text, since its free text
+  reached the unlabelled screen unchecked: a channel out of the vault.
+- **Containment: reads and writes** (2026-09-19, answers 46, 51, 52, 54; 51 changed, 54
+  clarified): every write needs equal labels, and `check` is read ⇒ object ⊆ caller, write ⇒
+  object = caller. Blind write-up let an unlabelled caller truncate or remove labelled files it
+  could not read, and `Tcreate`'s "exists" revealed names; it is not needed, since data enters a
+  vault by the vault session reading it down. A qid or `stat` is a read, and directory reads list
+  only readable entries, since labelled metadata changing under an unlabelled observer was a
+  covert channel. The steward reads labelled items (declassification) through a short-lived
+  reader budget carrying exactly the item's labels, never a standing universal reader. A receive
+  right is never handed across label sets (I7 states that R1 compares with the endpoint's owner).
+  Account 0 is admitted per badge, so one daemon cannot lock the steward out.
+- **Startup block and launching** (2026-09-19, answers 39, 40, 50): INIT.md adopts WP-R1's block
+  format (`SBlk`, `NmSp`, `Hndl`, `Argv`; `redoubt-rt` implements it), since it is the contract
+  between every parent and child. `process_start` gains `arg`, which carries the startup page's
+  address to the first thread (no fixed address in the layout). A launcher never passes its own
+  connection to a child, but a fresh one: every copy of a handle is the same badge, so Alice's
+  hostile agent shared her 9P fid table. Stated as a rule, not a convention.
+- **Wire** (2026-09-19, answers 28, 29, 41, 42): typed-message tables name each handle's kind
+  (`handle[0] endpoint`), and the generator checks it. Manifest names are 1-64 bytes of
+  `[a-z0-9_:+-]` starting with a letter, since the parser accepted empty names and NUL, U+FEFF or
+  C1 controls, which became endpoint names and 9P paths. Status 1 is `Malformed` in every protocol
+  and in a 9P call's reply, one rule, reserved by the generator; a 9P call's words are all zero in
+  the request and in a successful reply.
+- **Storage** (2026-09-19, answer 36): IO-ARCHITECTURE.md states `blkd`'s contract (whole-sector
+  overwrites, in-order completion, torn writes persist a prefix, `sync` after virtio-blk's flush),
+  which littlefs's power-loss safety depends on and which WP-L1's red team found unstated. littlefs
+  has no data checksums (NAMESPACES.md, accepted limits).
 
 ## Milestone 1 build (from 2026-09-19)
 One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.

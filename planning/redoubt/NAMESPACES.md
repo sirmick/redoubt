@@ -15,8 +15,11 @@ minus its ambient parts.
 - **One connection = one endpoint handle**, whose badge names the attach root inside the server.
 - 9P `attach` gives a root fid; every `walk` is relative to a held fid. A server never walks above
   the attach root, so a fid is a directory capability.
-- Fids are per connection and cannot be handed to another process. To delegate a subtree, the
-  holder asks the server to mint a new connection rooted there and sends that handle.
+- Fids are per connection: a fid cannot be named from another connection. A copied handle is the
+  **same** connection (the same badge, so the same fids), which is why a launcher never passes its
+  own connection on and gets each child a fresh one (CAPABILITIES.md, one badge, one client). To
+  delegate a subtree, the holder asks the server to mint a new connection rooted there and sends
+  that handle.
 - `..` is resolved lexically (Plan 9's rule): the path is cleaned before lookup, in the client
   library and again in every server, so it never climbs above a held root.
 - 9P messages travel in lent buffers of at most `msize` (WIRE.md).
@@ -59,9 +62,12 @@ in `gen_tcp`-like modules.
 - **One instance per volume.** An untrusted medium gets its own server holding only that medium, so
   a parser exploit reaches that medium and nothing else.
 - **Labels are per volume** (CONTAINMENT.md): each volume has one label set, from the boot manifest
-  or the steward, and `fsd` checks the caller's labels against it on every request (no read up, no
-  write down). Its state is per volume. There are no per-file labels.
-- **Admission** is per account (the shared server library).
+  or the steward, and `fsd` checks the caller's labels against it on every request with `check`: a
+  read (a qid and a `stat` included) needs the volume's labels ⊆ the caller's, a write needs them
+  equal. A walk into a node the caller cannot read is refused, and a directory read lists only
+  entries it can read. Its state is per volume. There are no per-file labels.
+- **Admission** is per (account, label set), and per badge for account 0 (the shared server
+  library); a badge notice frees a dead client's fids.
 - **Robust to a bad disk:** crash-consistent and robust to bad metadata, and fuzzed for it. Disk
   encryption is deferred (IO-ARCHITECTURE.md, Later).
 - **Crash:** clients see errors, `init` restarts it (INIT.md), copy-on-write keeps the volume
@@ -77,7 +83,9 @@ power-loss safety, small enough to read. (Rust is required by tenet 3, so it is 
   on the target. (`littlefs2` on crates.io wraps the C library: not used.)
 - **Metadata** in littlefs custom attributes: what 9P `stat` needs (mtime, qid version). No owners
   or permission bits: access is by capability.
-- **Accepted limits:** large directories and files scale poorly; data is not checksummed. For
+- **Accepted limits:** large directories and files scale poorly; data is not checksummed (littlefs
+  checksums metadata only, so a block device that returns wrong data undetected, beyond `blkd`'s
+  contract in IO-ARCHITECTURE.md, can corrupt file contents silently). For
   milestone 1 also: no wear levelling (virtio disks do their own), no superblock expansion, and a
   file's attributes and its data are two commits, not one (WP-D2 asks for an atomic attribute commit
   if it needs one).

@@ -56,6 +56,11 @@ Every platform presents the same contract: virtio-mmio devices, a standard inter
 `blkd (virtio-blk, partition table) -> fsd -> clients`
 - **`blkd`:** the driver, the partition table, and block-range handles (a filesystem sees only its
   partition).
+- **`blkd`'s contract**, which littlefs's power-loss safety rests on: writes overwrite whole
+  sectors; requests complete in order; a torn write persists a prefix of the write, never an
+  arbitrary subset of its units (as raw flash may); `sync` returns only after virtio-blk's flush
+  has completed, so it is never acknowledged before the data is durable. `blkd` issues a flush on
+  every `sync`, and `fsd` relies on nothing more. The residue (littlefs does not checksum data): NAMESPACES.md.
 - **`fsd`:** littlefs, 9P, one per volume, labels per volume (NAMESPACES.md).
 - **Every on-disk parser is attack surface** and gets a fuzz target.
 

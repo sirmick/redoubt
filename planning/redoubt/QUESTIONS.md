@@ -4,8 +4,8 @@ Raised by the wave 1 packages and their reviews (2026-09-19). Each touches the f
 so each needs your decision; the answer goes into the named note with a HISTORY.md entry.
 **Rec** is the orchestrator's recommendation. Reply with numbers, e.g. "all Rec except 7: ...".
 
-**1-27 answered 2026-09-19** (ANSWERS.md; each "Answered" line says where the answer now lives).
-**28-35 are open.**
+**1-55 answered 2026-09-19** (ANSWERS.md, in two tranches; each "Answered" line says
+where the answer now lives). No question is open.
 
 Blocking: **K1 cannot start until 1-16 are settled** (they fix the ABI, `redoubt-sys`).
 17-26 block later packages only.
@@ -215,6 +215,7 @@ Blocking: **K1 cannot start until 1-16 are settled** (they fix the ABI, `redoubt
     nothing tells it which kind to expect.
     *Rec:* the table names the kind, e.g. `range: handle[0] endpoint`. The generator puts the kind
     in the docs, and a generated helper checks it.
+    **Answered:** WIRE.md, Tables (`handle[N] KIND`).
 
 29. **Names in the boot manifest.** The parser correctly accepts any JSON string, including an
     empty one, or one with NUL, U+FEFF or C1 controls. Manifest names become endpoint names,
@@ -225,6 +226,7 @@ Blocking: **K1 cannot start until 1-16 are settled** (they fix the ABI, `redoubt
     normalisation, and that opcode 0 is reserved (it is the reply status "ok", question 20).
     *Partly applied (2026-09-19):* the two WIRE.md sentences went in with answer 20; the INIT.md
     name rule is still open.
+    **Answered:** INIT.md, The boot manifest (Names); the WIRE.md sentences as above.
 
 ## From the model's red team
 
@@ -234,6 +236,8 @@ Blocking: **K1 cannot start until 1-16 are settled** (they fix the ABI, `redoubt
     sender.
     *Rec:* R10 also fails queued messages whose stamp is destroyed, with `Dead`, and discards
     replies to taken calls whose stamp is destroyed (the handles are dropped).
+    **Answered:** KERNEL-SPEC.md, R10 (the taken call's caller gets `Dead` at once; its lend as in
+    R3).
 
 31. **Blame outlives a `send`.** The served account is cleared only by `reply`. A server thread
     that took Bob's `send` and faults an hour later, idle, blames Bob.
@@ -242,10 +246,13 @@ Blocking: **K1 cannot start until 1-16 are settled** (they fix the ABI, `redoubt
     *Also, after answer 2:* a thread may now hold several open calls, so "the account the thread
     is serving" must say which one. KERNEL-SPEC.md still says: set by each delivered message,
     cleared by `reply`. The same word, "serving", decides which message ids `mint` accepts.
+    **Answered:** KERNEL-SPEC.md, Process (open calls and the serving account; a `send` is never
+    open) and `mint`.
 
 32. **What counts as a blocked sender for `WAIT_CAP` (R2)?** Only queued messages, or also callers
     whose message was taken and who now wait for the reply?
     *Rec:* only queued messages. A taken call is bounded by the server's threads (question 2).
+    **Answered:** KERNEL-SPEC.md, R2 and Constants (`WAIT_CAP`).
 
 33. **Leases are chosen by the requester and unbounded.** A powerbox request can ask for
     `lease = u64::MAX`, which saturates to `FOREVER`, meaning no deadline. An agent can also
@@ -254,6 +261,9 @@ Blocking: **K1 cannot start until 1-16 are settled** (they fix the ABI, `redoubt
     *Rec:* a constant `MAX_LEASE` (24 h?). An agent's sub-agents are carved from the agent's own
     budget, and their leases end no later than the agent's. CAPABILITIES.md already implies this
     ("lease expiry destroys everything").
+    **Answered:** clarified: `MAX_LEASE` = 24 h in KERNEL-SPEC.md, Constants; CAPABILITIES.md,
+    Minting and revocation (leases; longer requests refused) and Agents 3 (sub-agents inside the
+    agent's budget, no siblings).
 
 34. **The approval screen.**
     - It must show who is asking: the session kind and a steward-assigned name (`agent-7`), not
@@ -262,12 +272,14 @@ Blocking: **K1 cannot start until 1-16 are settled** (they fix the ABI, `redoubt
 
     *Rec:* rendered fields are a whitelist of printable ASCII, and the requester's kind and name
     are shown.
+    **Answered:** CAPABILITIES.md, The powerbox and approvals (Rendering).
 
 35. **Free text from labelled sessions on the unlabelled approval screen.** A vault session's
     request reason and note (64 characters each) reach `approve@box` with no snapshot, hash or
     printable check. That is a channel out of the vault.
     *Rec:* a labelled session's request shows only fixed, steward-generated text (kind, target,
     size). Any free text goes through the declassification procedure.
+    **Answered:** CAPABILITIES.md, Rendering; CONTAINMENT.md, Sessions and vaults.
 
 ## From the littlefs red team
 
@@ -284,6 +296,8 @@ Blocking: **K1 cannot start until 1-16 are settled** (they fix the ABI, `redoubt
 
     blkd (WP-D1) implements this with a flush on every `sync`, and fsd relies on nothing more.
     The known residue (littlefs has no data checksums) goes in NAMESPACES.md's accepted limits.
+    **Answered:** IO-ARCHITECTURE.md, Storage (`blkd`'s contract); NAMESPACES.md, littlefs
+    (accepted limits).
 
 ## From applying the answers
 
@@ -297,6 +311,10 @@ Blocking: **K1 cannot start until 1-16 are settled** (they fix the ABI, `redoubt
     - `mint` accepts any message id among the caller's open calls. A `send`'s message id is never
       open (question 31), so it can't be a mint source.
 
+    **Answered:** changed: blame goes to the most recently taken open call of the failing thread,
+    one account; KERNEL-SPEC.md, Process (serving account), Messages (exit notices), `mint`;
+    CONTAINMENT.md, Crash blame.
+
 38. **Answered by answer 17** (CONTAINMENT.md: caps are counted per (account, label set); `admit`'s
     limits are caps, and line 65 now says so). **The server library's `admit(account)` has the same shape as question 17.** Answer 17 keyed
     the kernel and steward caps by (account, label set), but the shared server library still
@@ -304,6 +322,7 @@ Blocking: **K1 cannot start until 1-16 are settled** (they fix the ABI, `redoubt
     owner's unlabelled session.
     *Rec:* `admit` is keyed by (account, label set) too. CONTAINMENT.md's shared-server-library
     paragraph says so.
+    **Answered:** by answer 17; CONTAINMENT.md, The shared server library.
 
 ## From the runtime (WP-R1)
 
@@ -315,56 +334,68 @@ Blocking: **K1 cannot start until 1-16 are settled** (they fix the ABI, `redoubt
 
     *Rec:* INIT.md adopts this format and owns it, since it's the contract between every parent
     and child. The crate implements it.
+    **Answered:** INIT.md, Startup block (Format).
 
 40. **How a process finds its startup block.** `process_start` takes an entry and a stack only,
     and nothing says where the startup page is mapped or how the child learns its address.
     *Rec:* the parent maps the page with `process_map`, and `process_start`'s `arg` register
     carries its page-aligned address (0 = none). Or, simpler, a fixed address in MEMORY-LAYOUT.md.
     This affects K4 and R2.
+    **Answered:** the `arg` register, no fixed address; KERNEL-SPEC.md, `process_start`; INIT.md,
+    Startup block.
 
 41. **What a 9P call's words are.** WIRE.md says a 9P message travels in a lend, but not what the
     call's four words hold.
     *Rec:* the words are all zero in the request and in a successful reply. A request with other
     words, or with no lend, is refused with a reply status of 1 ("not a 9P message").
+    **Answered:** WIRE.md, Messages (status 1 = `Malformed`, as in 42).
 
 42. **A common error code for a malformed typed request.** WIRE.md has no error status that
     works across protocols, so each server names its own.
     *Rec:* reserve code 1 in every protocol's error table as `Malformed`. The generator adds it.
+    **Answered:** WIRE.md, Tables (Errors).
 
 ## From the model's second round (WP-M0)
 
 43. **I10's wording, now that exit slots are charged to the creator (answer 7).** Destroying a
     child budget restores the parent's usage only once the `killed` notices are received.
     *Rec:* I10 reads "... unchanged, once its processes' exit notices are received or dropped."
+    **Answered:** KERNEL-SPEC.md, I10.
 
 44. **A send's handles and page tables when the receiver can't pay for them.** Nothing says what
     happens, or whether R4's "free pages to hold them" counts page tables.
     *Rec:* R4's check counts the transferred pages plus the page tables to map them. A receiver
     that can't take the message's handles or pages gets `OutOfMemory` from `receive`, and the
     message stays queued (the model does this).
+    **Answered:** KERNEL-SPEC.md, R4 (page tables counted; handles `OutOfMemory`, message queued).
 
 45. **R4a at delivery.** A thread already waiting in `receive` when its process reaches
     `MAX_OPEN_CALLS` isn't covered.
     *Rec:* that `receive` returns `Busy` and the call stays queued (the model does this).
+    **Answered:** KERNEL-SPEC.md, R4a and the `receive` row.
 
 46. **I7 against R1's owner rule (answer 4).** A receive right handed to a process in another
     budget receives messages whose labels were compared only with the endpoint owner's.
     *Rec:* this is accepted, because handing out a receive right is delegation. I7 says flows are
     checked against the endpoint owner, and CONTAINMENT.md says a receive right must never be
     handed across label sets. A system server that does so is buggy, not the kernel.
+    **Answered:** KERNEL-SPEC.md, I7; CONTAINMENT.md, Labels.
 
 47. **Page-table freeing and address placement.** Both are unstated, and exact `usage` replay
     (WP-C1) depends on them.
     *Rec:* page tables are freed when they map nothing. `map_anon` addresses are the kernel's
     choice, and C1 compares usage only in the model's placement profile.
+    **Answered:** KERNEL-SPEC.md, R11.
 
 48. **Crash blame keyed by account alone.** A vault session that crashes a shared server three
     times logs out its owner's unlabelled sessions too. This is the same leak as question 17.
     *Rec:* blame, its limit and the logout it triggers are keyed by (account, label set).
+    **Answered:** CONTAINMENT.md, Crash blame; KERNEL-SPEC.md, exit notices (`blamed_labels`).
 
 49. **Where lends go when R10 fails calls in flight to a destroyed endpoint.**
     *Rec:* as in R3, the lend stays with the server, charged to it, until its `reply` or its
     death. The model does this.
+    **Answered:** KERNEL-SPEC.md, R10.
 
 Note on 41 and 42: they should share one rule. Status 1 means "malformed" in 9P calls and in typed
 protocols alike, so `redoubt/wire/tables/example.md`'s code 1 is renumbered when this is adopted.
@@ -379,12 +410,16 @@ protocols alike, so `redoubt/wire/tables/example.md`'s code 1 is renumbered when
     connection for each child (a `mint` on the server's side, through a typed "connect" operation)
     and passes that one. CAPABILITIES.md and INIT.md state the rule, and the skeleton also keys
     fids by (badge, account, label set) as a second line of defence.
+    **Answered:** CAPABILITIES.md, Handles (one badge, one client); INIT.md, Startup block;
+    CONTAINMENT.md, The shared server library; NAMESPACES.md.
 
 51. **Writing up destroys.** `check`'s no-write-down lets an unlabelled caller write into a
     labelled volume. It can therefore truncate, overwrite or remove labelled files it can't read,
     and `Tcreate`'s "file exists" error reveals names inside a directory it can't list.
     *Rec:* creating, truncating and removing need the caller's labels to equal the object's. A
     blind write-up is append-only and gets one fixed error text.
+    **Answered:** changed: every write needs equal labels, no blind write-up; CONTAINMENT.md, The
+    shared server library (`check`).
 
 52. **Labelled metadata flows down.** A walk returns the target's qid, including its version, with
     no read check on the target, and a directory read returns every entry's stat. Each vault write
@@ -392,6 +427,7 @@ protocols alike, so `redoubt/wire/tables/example.md`'s code 1 is renumbered when
     *Rec:* a qid is a read. Walking into a node the caller can't read is refused. A directory read
     lists only entries the caller can read, so `dir_entry` returns the node, and the skeleton
     checks it.
+    **Answered:** CONTAINMENT.md, The shared server library (metadata is a read); NAMESPACES.md.
 
 53. **Admission for system callers and dead clients.** Account 0 is "none", so every system-class
     caller shares one admission bucket, and a daemon can lock the steward out. Nothing releases a
@@ -404,16 +440,22 @@ protocols alike, so `redoubt/wire/tables/example.md`'s code 1 is renumbered when
       state.
 
     The notice is a small addition to KERNEL-SPEC.md.
+    **Answered:** KERNEL-SPEC.md, Endpoint (badge slots), Messages (badge notices), the cost table,
+    I15; CONTAINMENT.md, The shared server library (`admit`).
 
 54. **A system-class reader and `check`.** `check` compares label sets only, and a message
     doesn't say the sender's class. So the steward (no labels) can't read a labelled item to
     snapshot it for declassification, or stat a labelled volume.
     *Rec:* declassification reads through the label owner's own session, which the steward
     drives. No universal reader, because the steward stays unlabelled. CONTAINMENT.md states this.
+    **Answered:** clarified: a short-lived reader budget carrying exactly the item's labels;
+    CONTAINMENT.md, Declassification.
 
 55. **Does a panic count toward crash blame?** A Rust panic exits through `process_exit`, which
     gives cause `exited`, not `faulted`. Blame speaks of "the faulting thread", so the most common
     crash from hostile input may never be blamed.
     *Rec:* an exit while the process holds open calls is blamed like a fault. Each open call's
     account is blamed (see question 37).
+    **Answered:** changed: a fault, blamed per 37 (one account, the most recent open call);
+    KERNEL-SPEC.md, Messages (exit notices); CONTAINMENT.md, Crash blame.
 
