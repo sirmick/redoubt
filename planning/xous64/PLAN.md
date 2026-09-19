@@ -198,8 +198,8 @@ Storage:
 - [ ] `virtio-blk` driver server (`virtio-drivers`), hardened against a hostile device side, fuzzed.
 - [ ] Block server: partitions, cache, block-range capabilities, per-block AEAD + Merkle root.
 - [ ] fs server speaking 9P, one per volume (design: `NAMESPACES.md`).
-- [ ] Time-boxed RedoxFS audit (no_std over our block interface, size, fuzz + crash injection);
-      else our own spec'd CoW fs. Same harness judges either.
+- [ ] littlefs format in pure Rust (custom attributes for metadata), differentially tested against
+      the C reference on the host; fuzz + crash injection. Fallback: our own spec'd CoW fs.
 - [ ] Read-only boot-bundle fs server at `/boot`.
 Namespaces and launching (`NAMESPACES.md`):
 - [ ] Shared 9P2000 codec, fuzzed; namespace library (prefix table, lexical `..`); beamlet Platform.
