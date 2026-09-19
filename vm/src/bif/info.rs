@@ -67,6 +67,23 @@ fn info_item(table: &mut AtomTable, atoms: &Atoms, p: &Process, running: bool, i
         ),
         "group_leader" => Term::Pid(p.group_leader.unwrap_or(p.pid)),
         "reductions" => Term::Int(p.reductions as i64),
+        // The current function, then the functions that will be returned to (no locations).
+        "current_stacktrace" => {
+            let conts = core::iter::once(&p.pc).chain(p.cp.iter()).chain(p.frames.iter().rev().filter_map(|f| f.cp.as_ref()));
+            let entries: Vec<Term> = conts
+                .take(8)
+                .filter_map(|cp| {
+                    let f = cp.module.function_at(cp.pc.saturating_sub(1))?;
+                    Some(Term::tuple(alloc::vec![
+                        Term::Atom(cp.module.name.clone()),
+                        Term::Atom(f.name.clone()),
+                        Term::Int(f.arity as i64),
+                        Term::Nil,
+                    ]))
+                })
+                .collect();
+            Term::list(entries)
+        }
         "stack_size" => Term::Int((p.stack.len() + p.frames.len()) as i64),
         // Terms are reference counted, not kept on per-process heaps: nothing to report.
         "heap_size" | "total_heap_size" | "min_heap_size" | "memory" => Term::Int(0),
@@ -303,6 +320,29 @@ pub fn unsetenv(c: &mut Ctx, a: &[Term]) -> R {
     Ok(Term::Atom(c.sys.atoms.true_.clone()))
 }
 
+// ---- beamlet: the VM's own API ----
+
+/// `beamlet:app_spec(App)`: the `.app` file of `App` from the platform, or `error`.
+pub fn app_spec(c: &mut Ctx, a: &[Term]) -> R {
+    let Term::Atom(app) = &a[0] else { return Err(c.badarg()) };
+    let name = String::from(app.as_str());
+    Ok(match c.sys.platform.load_app(&name) {
+        Some(b) => Term::binary(&b),
+        None => Term::Atom(c.sys.atoms.error.clone()),
+    })
+}
+
+/// `inet:gethostname()`: a VM does not learn its host's name (that would be ambient
+/// information); it is `localhost` unless an embedder's native says otherwise.
+pub fn gethostname(c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(Term::tuple(alloc::vec![c.ok(), string("localhost")]))
+}
+
+/// `net_adm:localhost()`: the host name without a resolver domain (there is no resolver).
+pub fn localhost(_c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(string("localhost"))
+}
+
 // ---- init (a preloaded module in BEAM; its queries answered here) ----
 
 /// A VM has no command line: no arguments, no flags.
@@ -345,6 +385,27 @@ pub fn universaltime(c: &mut Ctx, _a: &[Term]) -> R {
         Term::tuple(alloc::vec![Term::Int(y), Term::Int(m as i64), Term::Int(d as i64)]),
         Term::tuple(alloc::vec![Term::Int(t / 3600), Term::Int(t / 60 % 60), Term::Int(t % 60)]),
     ]))
+}
+
+pub fn date(c: &mut Ctx, a: &[Term]) -> R {
+    let now = universaltime(c, a)?;
+    Ok(now.as_tuple().expect("{Date, Time}")[0].clone())
+}
+
+pub fn time(c: &mut Ctx, a: &[Term]) -> R {
+    let now = universaltime(c, a)?;
+    Ok(now.as_tuple().expect("{Date, Time}")[1].clone())
+}
+
+/// Local time is UTC here, so conversions between the two are the identity (after checking
+/// the argument has the right shape).
+pub fn same_datetime(c: &mut Ctx, a: &[Term]) -> R {
+    match a[0].as_tuple() {
+        Some([d, t]) if d.as_tuple().is_some_and(|x| x.len() == 3) && t.as_tuple().is_some_and(|x| x.len() == 3) => {
+            Ok(if a.len() == 1 { a[0].clone() } else { Term::list(alloc::vec![a[0].clone()]) })
+        }
+        _ => Err(c.badarg()),
+    }
 }
 
 // ---- checksums ----

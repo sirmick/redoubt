@@ -14,6 +14,7 @@ stdlib=( "$otp_lib"/stdlib-*/ebin )
 cryptolib=( "$otp_lib"/crypto-*/ebin )
 publickeylib=( "$otp_lib"/public_key-*/ebin )
 asn1lib=( "$otp_lib"/asn1-*/ebin )
+sslpath=""; for app in ssl ssh erts kernel compiler; do sslpath="$sslpath -pa $(ls -d "$otp_lib"/$app-*/ebin)"; done
 elixir_lib="$(dirname "$(dirname "$(command -v elixir)")")/lib"
 elixir_ebin="$elixir_lib/elixir/ebin"
 "$root/tools/build-lib" --check
@@ -50,7 +51,7 @@ for suite in "${suites[@]}"; do
             skip=$((skip + 1)); continue
         fi
         total=$((total + 1))
-        got="$(timeout "$timeout_s" "$beamlet" -pa "$out" -pa "${stdlib[0]}" -pa "${cryptolib[0]}" -pa "${publickeylib[0]}" -pa "${asn1lib[0]}" -pa "$elixir_ebin" "$m" 2>&1 || echo "EXIT $?")"
+        got="$(timeout "$timeout_s" "$beamlet" -pa "$out" -pa "${stdlib[0]}" -pa "${cryptolib[0]}" -pa "${publickeylib[0]}" -pa "${asn1lib[0]}" $sslpath -pa "$elixir_ebin" "$m" 2>&1 || echo "EXIT $?")"
         printf '%s\n' "$got" > "$out/$m.got"
         # The result is the last line; anything before it is the program's own console output.
         if [ "$(printf '%s\n' "$got" | tail -n 1)" == "$(cat "$exp")" ]; then
