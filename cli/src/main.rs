@@ -250,7 +250,7 @@ impl Programs for Posix {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: beamlet [-pa DIR]... [--root DIR [--mount /AT=DIR[:ro]]... [--lib /DIR]...] [--exec] [--env NAME[=VALUE]]... MODULE [FUNCTION [ARG...]]");
+    eprintln!("usage: beamlet [-pa DIR]... [--root DIR [--mount /AT=DIR[:ro]]... [--lib /DIR]...] [--exec] [--schedulers N] [--env NAME[=VALUE]]... MODULE [FUNCTION [ARG...]]");
     ExitCode::from(2)
 }
 
@@ -295,9 +295,18 @@ fn main() -> ExitCode {
     let mut libs = Vec::new();
     let mut exec = false;
     let mut env = Vec::new();
+    // Schedulers (threads): `--schedulers N`, else $BEAMLET_SCHEDULERS (for test tools), else 1.
+    let mut schedulers: usize = std::env::var("BEAMLET_SCHEDULERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--exec" => exec = true,
+            "--schedulers" => match args.next().and_then(|n| n.parse().ok()) {
+                Some(n) => schedulers = n,
+                None => return usage(),
+            },
             "--env" => match args.next() {
                 Some(spec) => env.push(match spec.split_once('=') {
                     Some((k, v)) => (k.to_string(), Some(v.to_string())),
@@ -381,6 +390,7 @@ fn main() -> ExitCode {
         ..Default::default()
     };
     let mut vm = Vm::with_config(Box::new(platform), config);
+    vm.set_schedulers(schedulers);
     for dir in &libs {
         vm.add_lib_root(dir);
     }

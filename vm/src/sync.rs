@@ -31,6 +31,25 @@ mod imp {
 
     pub type Guard<'a, T> = std::sync::MutexGuard<'a, T>;
 
+    /// Where idle schedulers wait for work.
+    #[derive(Default)]
+    pub struct Wakeup(std::sync::Condvar);
+
+    impl Wakeup {
+        /// Release `guard`, wait to be woken, and lock again.
+        pub fn wait<'a, T>(&self, guard: Guard<'a, T>) -> Guard<'a, T> {
+            self.0.wait(guard).unwrap_or_else(|e| e.into_inner())
+        }
+
+        pub fn wake_one(&self) {
+            self.0.notify_one();
+        }
+
+        pub fn wake_all(&self) {
+            self.0.notify_all();
+        }
+    }
+
     /// Values that may be shared between schedulers.
     pub trait Shared: Send + Sync {}
     impl<T: Send + Sync + ?Sized> Shared for T {}
@@ -67,6 +86,20 @@ mod imp {
 
     pub type Guard<'a, T> = core::cell::RefMut<'a, T>;
 
+    /// Where idle schedulers wait for work: with one scheduler, nobody ever waits.
+    #[derive(Default)]
+    pub struct Wakeup;
+
+    impl Wakeup {
+        pub fn wait<'a, T>(&self, guard: Guard<'a, T>) -> Guard<'a, T> {
+            guard
+        }
+
+        pub fn wake_one(&self) {}
+
+        pub fn wake_all(&self) {}
+    }
+
     /// Values that may be shared between schedulers: with one scheduler, any.
     pub trait Shared {}
     impl<T: ?Sized> Shared for T {}
@@ -79,7 +112,7 @@ mod imp {
     pub type AnyShared = dyn core::any::Any;
 }
 
-pub use imp::{AnyShared, Guard, Lock, Sendable, Shared};
+pub use imp::{AnyShared, Guard, Lock, Sendable, Shared, Wakeup};
 
 impl<T: Default> Default for Lock<T> {
     fn default() -> Lock<T> {
