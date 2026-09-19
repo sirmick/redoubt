@@ -23,13 +23,8 @@ xous-kernel = { package = "xous", version = "0.9.70", features = [
 ] }
 rand = "0.8.5"
 
-[target.'cfg(target_arch = "riscv32")'.dependencies]
-riscv = { version = "0.5.6", package = "xous-riscv" }                           # source is in "../imports/riscv-0.5.6"
-
-[target.'cfg(target_arch = "riscv64")'.dependencies]
-riscv = "0.16"
-
 [target.'cfg(any(target_arch = "riscv32", target_arch = "riscv64"))'.dependencies]
+riscv = "0.16"
 paging = { path = "../xous64/paging" }
 
 [lints.rust]
