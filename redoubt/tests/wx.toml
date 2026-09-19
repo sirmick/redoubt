@@ -1,23 +1,25 @@
-description = "W^X through the syscall interface: no writable+executable mapping, errors instead of kernel panics"
+description = "W^X through the syscall interface: no writable+executable mapping, errors instead of kernel panics (verdict: survival only, until WP-K4)"
+# Pending (WP-K4): that each attempt was refused is only the attacker's report. With process
+# creation and exit notices the checker can launch the attacker and learn from the kernel how it
+# ended, e.g. a fault when it jumps into a page it could only make writable.
 arch = ["rv64", "rv32"]
 kind = "boot"
 # PID 3 wx-test attacks; PID 4 attack-checker gives the verdict (README "Writing an attack case").
 programs = ["log-server", "wx-test", "attack-checker"]
-# The attacker's reports, required only as progress: they cannot pass the case on their own.
-# Any refusal it did not get shows as FAIL (forbidden).
 expect = [
+    # Progress, the attacker's report; a refusal it did not get shows as FAIL (forbidden).
     '^\[pid 3\] \[wx\] ok: mapping write\+execute -> Err',
     '^\[pid 3\] \[wx\] ok: mapping no permissions at all -> Err',
     '^\[pid 3\] \[wx\] ok: mapping read\+execute -> Ok',
     '^\[pid 3\] \[wx\] ok: adding execute to a writable page -> Err',
-    # The verdict: the kernel survived every attempt, said by someone other than the attacker.
-    '^\[pid 4\] \[checker\] PID 3 finished its attempts; the kernel still serves',
+    '^\[pid 3\] \[wx\] attempts done$',
+    # The verdict: the kernel survived. Unforgeable: log-server prefixes the checker's line with
+    # its kernel-reported PID 4, and the checker names the reporter as the kernel reports it;
+    # with poweroff the case also needs the checker's clean power-off.
+    '^\[pid 4\] \[checker\] PID 3 reported; the kernel still serves',
 ]
 forbid = ['\] FAIL']
 poweroff = true
-# Pending (WP-K4): that each attempt was refused is still only the attacker's report. With
-# process creation and exit notices the checker can launch the attacker and learn from the
-# kernel how it ended, e.g. a fault when it jumps into a page it could only make writable.
 
 [[grant]]
 program = "log-server"

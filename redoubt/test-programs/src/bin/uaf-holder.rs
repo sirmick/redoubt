@@ -56,6 +56,11 @@ pub extern "C" fn _start() -> ! {
                     log!(logger, "UAF TEST PASSED: freed frame was not reused under the holder");
                 }
                 xous::return_scalar(sender, (&seen == VICTIM_SENTINEL) as usize).ok();
+                if &seen != GRABBER_SENTINEL {
+                    // Off the console too: the checker names this PID and powers off, so a
+                    // forged verdict line alone cannot pass the case.
+                    test_programs::checker::done();
+                }
             }
             other => log!(logger, "[holder] unexpected {:?}", other),
         }

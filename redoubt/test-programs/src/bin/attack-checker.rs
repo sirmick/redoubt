@@ -1,11 +1,13 @@
 //! Ends an attack case from outside the attacker (redoubt/README.md, "Writing an attack
-//! case"). It waits for an attacker to say it has finished its attempts, then reports, under
-//! its own PID, that the kernel is still delivering messages and scheduling it, and powers the
-//! machine off. With `poweroff = true` the case passes only on that clean power-off with no
-//! forbidden line (a kernel panic, a breach an attacker reports) on the way.
+//! case"). Some process reports to it (`test_programs::checker::done()`): a victim once its
+//! verdict is in, or, where there is no victim, the attacker once it has made its attempts.
+//! The checker then says, under its own PID, which PID reported (as the kernel names it) and
+//! that the kernel still delivers messages, and powers the machine off. With `poweroff = true`
+//! a case passes only on that clean power-off, so a forged console line alone cannot pass it,
+//! and its expected line names the reporter, so a report from anyone else does not count.
 //!
-//! It asserts that the system survived the attack, which only it can say; whether each attempt
-//! was refused is still the attacker's own report, used only to fail a case.
+//! Where the attacker reports, the checker asserts only that the system survived; whether each
+//! attempt was refused stays the attacker's own report, used only as progress.
 //! Needs a grant for the power-off device.
 
 #![no_std]
@@ -29,9 +31,9 @@ pub extern "C" fn _start() -> ! {
         if m.id != checker::DONE {
             continue;
         }
-        // The PID comes from the kernel, not from the message: an attacker cannot name another.
-        let attacker = envelope.sender.pid().map_or(0, |pid| pid.get());
-        log!(logger, "[checker] PID {} finished its attempts; the kernel still serves; powering off", attacker);
+        // The PID comes from the kernel, not from the message: nobody can report as another.
+        let reporter = envelope.sender.pid().map_or(0, |pid| pid.get());
+        log!(logger, "[checker] PID {} reported; the kernel still serves; powering off", reporter);
         xous::return_scalar(envelope.sender, 0).ok();
         // SAFETY: `poweroff` maps the test device's page; its first register is 32 bits wide.
         unsafe { (poweroff.as_mut_ptr() as *mut u32).write_volatile(0x5555) };

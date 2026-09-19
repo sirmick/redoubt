@@ -6,7 +6,7 @@ plans for what comes next: `planning/redoubt/` (start with its `README.md` and `
 | Path              | What                                                                          |
 | ----------------- | ----------------------------------------------------------------------------- |
 | `paging/`         | Typed Sv32/Sv39 page tables — the one place page-table memory is touched (loader + kernel) |
-| `test-programs/`  | `no_std` programs that run inside Redoubt, for example `log-server`, `rng-test`, `timer-test`, `uart-echo`, `mem-attack` |
+| `test-programs/`  | `no_std` programs that run inside Redoubt, for example `log-server`, `rng-test`, `timer-test`, `mem-attack` |
 | `testbench/`      | Host tool: builds, injects programs, boots QEMU, asserts on the console and over SSH |
 | `tests/`          | Test cases for the bench, one TOML file each (`data/`: files they read; `keys/`: SSH test keys) |
 
@@ -62,13 +62,15 @@ unknown field or table is an error, so a misspelling cannot silently drop a chec
 coverage for a configuration the bench does not (or cannot yet) boot.
 
 In-guest programs print through `log-server` (`test_programs::Logger`) and finish with
-`<NAME> TEST PASSED` or `<NAME> TEST FAILED`. `log-server` starts every line it prints for a
-client with `[pid N] `, N being the sender's PID as the kernel reports it; lines without that
-prefix come from the kernel, the loader, `log-server` itself or a program that owns the UART.
+`<NAME> TEST PASSED` or `<NAME> TEST FAILED`; attack programs end with `attempts done` instead
+(below). `log-server` starts every line it prints for a client with `[pid N] `, N being the
+sender's PID as the kernel reports it, on every path that takes client text (lend or move).
+Lines without that prefix come from the kernel, the loader, `log-server`'s own fixed templates,
+or a program that owns the UART.
 
 ## Poking at it by hand
 
-    cargo testbench --run uart-echo                   # console on this terminal; Ctrl-A X quits
+    cargo testbench --run log-server                  # console on this terminal; Ctrl-A X quits
     cargo testbench --run log-server ipc-client --smp 4
     cargo testbench --run path/to/some.elf
 
@@ -99,32 +101,39 @@ Hostile *data* for a program to use, such as a malformed ELF for a parent to lau
 
 ## Writing an attack case
 
-**The rule:** an attack case passes only on a line the attacker cannot write. The console does
-not say who wrote a line, and an attacker can print anything, including another program's
-`PASSED`. So the verdict comes from the system: the kernel or the loader, a victim, a checker,
-or a clean power-off (TENETS.md 6; the owner's answer to QUESTIONS.md 26).
+**The rule** (BUILD-PLAN.md, "How to read a work package"): an attack case passes only on a line
+the attacker cannot write. The console does not say who wrote a line, and an attacker can print
+anything, including another program's `PASSED`. So the verdict comes from the system: the
+kernel or the loader, a victim, or a checker's clean power-off.
 
 The pattern:
 - **Anchor every verdict pattern** with `^`, and pin it to its writer: `^\[pid 4\] ...` for a
   program's line (PIDs follow `programs`, from 2), or no `[pid` prefix for the kernel's, the
-  loader's or `log-server`'s own. A relayed line always starts with its sender's prefix, so it
-  cannot match either.
-- **The attacker's lines** may be required as progress (`^\[pid 3\] ... attempts done`) and
-  forbidden as breach evidence (`BREACH`, `FAIL`), but never be the verdict.
+  loader's or a `log-server` template's. A relayed line always starts with its sender's prefix,
+  so it cannot match either; `bench-attack-forgery` checks that for every path. Make sure no
+  `log-server` template a client can trigger (scalars, moved page, unexpected message) matches,
+  and say in a comment beside each verdict why it cannot be forged.
+- **The attacker's lines** may be required as progress (`^\[pid 3\] ... attempts done`, or the
+  error it got, so a refusal for the wrong reason fails) and forbidden as breach evidence
+  (`BREACH`, `FAIL`), but never be the verdict.
 - **Give the verdict to a party the attacker does not control:**
   - the kernel or the loader refusing (`loader-rejects-*`, `kernel-wx`), with `KMAIN` or a
     later stage forbidden so no program ever ran;
-  - a victim that owns what is attacked and still has it afterwards (`grant-attack`: log-server
-    still receives the UART input sent after every attempt; `uaf-lent-page`: the holder reads
-    its page back);
-  - `attack-checker`, which the attacker tells when it is done (`test_programs::checker::done()`)
-    and which then says, under its own PID, that the kernel still serves, and powers off; with
-    `poweroff = true` the case also needs that clean power-off.
+  - a victim that owns what is attacked and still has it afterwards (`grant-attack`,
+    `irq-attack`: log-server still hears UART input sent after every attempt; `mem-attack`,
+    `uaf-lent-page`: the victim inspects the pages). What was refused stays the attacker's
+    report, required as progress;
+  - `attack-checker`: a victim reports to it once its verdict is in (or, with no victim, the
+    attacker once it is done), through `test_programs::checker::done()`; it names the reporter
+    as the kernel reports it, and powers off. Such a case sets `poweroff = true`, so it also
+    needs that clean power-off: a forged console line alone cannot pass it.
 - **Make the attacker use what it gets**, so a breach shows where the attacker cannot hide or
   fake it (a raw line on a UART it should not own, a power-off, a victim that stops hearing).
 
-What `attack-checker` asserts is only that the system survived. Where a case can say more only
-once a later package lands (process creation and exit notices, WP-K4), its case file says so.
+Where the attacker itself reports to the checker, the case shows only that the system survived.
+Where a case can say more only once a later package lands (process creation and exit notices,
+WP-K4; IRQ handles, WP-K3), its case file and BUILD-PLAN.md say so, and its description ends
+with the limit, e.g. "(verdict: survival only, until WP-K4)".
 
 ## Files in the bundle
 

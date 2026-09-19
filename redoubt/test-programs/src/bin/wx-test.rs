@@ -16,7 +16,6 @@ fn map(flags: MemoryFlags) -> Result<xous::Result, xous::Error> {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
-    let mut failures = 0;
 
     let attempts = [
         ("write+execute", MemoryFlags::R | MemoryFlags::W | MemoryFlags::X, false),
@@ -28,7 +27,6 @@ pub extern "C" fn _start() -> ! {
     for (what, flags, allowed) in attempts {
         let result = map(flags);
         let ok = result.is_ok() == allowed;
-        failures += !ok as usize;
         log!(logger, "[wx] {}: mapping {} -> {:?}", if ok { "ok" } else { "FAIL" }, what, result.map(|_| "mapped"));
     }
 
@@ -38,14 +36,9 @@ pub extern "C" fn _start() -> ! {
     unsafe { page.as_mut_ptr().write_volatile(0x13) };
     let result = xous::update_memory_flags(page, MemoryFlags::R | MemoryFlags::X);
     let ok = result.is_err();
-    failures += !ok as usize;
     log!(logger, "[wx] {}: adding execute to a writable page -> {:?}", if ok { "ok" } else { "FAIL" }, result);
 
-    if failures == 0 {
-        log!(logger, "WX TEST PASSED");
-    } else {
-        log!(logger, "WX TEST FAILED: {} failure(s)", failures);
-    }
+    log!(logger, "[wx] attempts done");
     // The verdict is the checker's, not ours (redoubt/README.md, "Writing an attack case").
     test_programs::checker::done();
     test_programs::park()

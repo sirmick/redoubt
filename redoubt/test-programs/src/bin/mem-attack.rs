@@ -5,11 +5,15 @@
 //!   2. A process cannot map a physical RAM frame *by address*: that would let it point at
 //!      another process's freed page and read what was left there.
 //!
-//! `mem-victim` has just freed pages holding its secret. This program takes as many anonymous
-//! pages as the victim freed and more, and tries to map several physical addresses inside main
-//! RAM, and lends every page it gets to the victim. The victim, not this program, says whether
-//! any held data (README "Writing an attack case"); this program's own reports can only fail
-//! the case.
+//! `mem-victim` has just freed pages holding its secret. This program takes twice as many
+//! anonymous pages, tries to map several physical addresses inside main RAM, and lends every
+//! page it gets to the victim. The victim, not this program, says whether any held data (README
+//! "Writing an attack case"); this program's own reports are progress only.
+//!
+//! What this shows is that every page handed out is zero when mapped. It does not show that
+//! the victim's freed frames were among them: this program chooses what to lend and the kernel
+//! chooses which frames to hand out. Reuse of freed frames needs the kernel's knowledge of
+//! physical addresses (the model's invariant I9; kernel cases come with WP-K1/K2).
 
 #![no_std]
 #![no_main]
@@ -20,8 +24,8 @@ use xous::{MemoryAddress, MemoryFlags, MemoryRange, Message, CID};
 /// Physical addresses inside QEMU `virt` main RAM (base 0x8000_0000, 256 MiB, on both
 /// widths). Mapping any of these by explicit address must be refused.
 const RAM_ADDRS: &[usize] = &[0x8000_0000, 0x8100_0000, 0x88ff_f000];
-/// Anonymous pages to take: twice what the victim freed, so its frames are among them if reused.
-const PAGES: usize = 128;
+/// Anonymous pages to take: twice what the victim freed.
+const PAGES: usize = 2 * mem::SECRET_PAGES;
 
 fn lend(victim: CID, page: MemoryRange) {
     xous::send_message(victim, Message::new_lend(mem::CHECK, page, None, None)).expect("couldn't lend to the victim");
@@ -41,8 +45,8 @@ pub extern "C" fn _start() -> ! {
             Ok(page) => {
                 // Touch the page first. Lending a page never touched (the kernel backs anonymous
                 // pages on first use) panics the kernel today ("RefCell already borrowed",
-                // kernel/src/cell.rs): a kernel bug, reported with WP-T1b and left to the kernel
-                // track. Reading does not change what the victim will see.
+                // kernel/src/cell.rs), a kernel bug that SWARM.md K0 is fixing, with its own case.
+                // Remove this when K0 lands. Reading does not change what the victim will see.
                 // SAFETY: the kernel just mapped this page readable for us.
                 unsafe { page.as_ptr().read_volatile() };
                 lend(victim, page);

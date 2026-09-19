@@ -1,14 +1,15 @@
 description = "External interrupt through the PLIC to a userspace handler, with injected console input"
 arch = ["rv64", "rv32"]
 kind = "boot"
-programs = ["uart-echo"]
-expect = ["claimed irq 10", "irq 10: received 'x'", "irq 10: received 'y'", "irq 10: received 'z'"]
+# log-server, granted the UART's interrupt, claims it and echoes every byte that arrives.
+programs = ["log-server"]
+expect = ['^\[server\] claimed irq 10$', "^\\[server\\] irq 10: received 'x'$", "^\\[server\\] irq 10: received 'y'$", "^\\[server\\] irq 10: received 'z'$"]
 
 [[input]]
-after = "claimed irq 10"
+after = '^\[server\] PID 2 listening$'
 send = "xyz"
 
 [[grant]]
-program = "uart-echo"
+program = "log-server"
 mmio = ["0x10000000:0x1000"]
 irq = [10]
