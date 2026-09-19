@@ -1,0 +1,27 @@
+# Tests that exercise features beamlet leaves out by design. One module per line, then why.
+# Anything not listed here must pass (or is a bug to fix).
+
+# Ports to programs run (with --exec, see <Module>.args); these three differ by design.
+echo                          prints a port's number, which BEAM counts apart from pids
+test_close_console_driver     opens AtomVM's "console" driver: on a host, a missing program whose error output races the result
+test_ets                      decodes pids and ports of other nodes (there is no distribution)
+
+# Need files AtomVM's build generates (packs, .hrl data, the JIT target macro); to_hrl is a build script.
+test_add_avm_pack_binary      AtomVM build output
+test_add_avm_pack_file        AtomVM build output
+test_close_avm_pack           AtomVM build output
+test_code_get_object_code     AtomVM build output
+test_code_load_abs            AtomVM build output
+test_code_load_binary         AtomVM build output
+test_stacktrace               AtomVM build output
+to_hrl                        not a test
+
+# zlib's compressed bytes are C zlib's own; miniz_oxide's are valid deflate, but not the same bytes.
+test_zlib_compress            compares compressed bytes with C zlib's
+
+# BEAM's per-process heap: beamlet has no per-process heaps (reference-counted terms).
+memlimit                      heap sizes
+test_gc                       heap sizes
+test_min_heap_size            heap sizes
+test_refc_binaries            heap sizes
+test_throw_call_ext_last      heap sizes

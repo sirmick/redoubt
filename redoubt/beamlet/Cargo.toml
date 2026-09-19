@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = ["vm", "crypto", "re", "cli"]
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"
+version = "0.1.0"
+
+[profile.release]
+debug = true
