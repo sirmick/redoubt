@@ -229,8 +229,8 @@ Kernel-interface-bound first:
    password SIDs, transfer, badges, attenuation, revocation, death notification.
 2. **Principals: users and AI agents as first-class, equal principals** (designed, same note).
 3. **Resource accounting and quotas** (designed: `RESOURCES.md`, budgets).
-4. **Startup block format** (namespace table + granted capabilities).
-5. **Init and supervision**: who is first, who holds root capabilities and when they are dropped.
+4. **Startup block format** (designed: `INIT.md`).
+5. **Init and supervision** (designed: `INIT.md`; all OS-process restarts in Rust init).
 6. **Scheduling** (designed: `RESOURCES.md`, two classes + hierarchical stride + donation).
 System structure: keys and root of trust (key server, sealed storage, disk key); signed A/B updates,
 rollback protection, key rotation.
