@@ -1,15 +1,18 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-//! Sv39 memory management for rv64.
+//! Physmap memory management for RISC-V, both Sv39 (rv64) and Sv32 (rv32).
 //!
-//! Unlike the Sv32 implementation, page tables are never mapped into a window. All of
-//! physical RAM is mapped supervisor-only at `PHYSMAP_BASE`, and tables are walked in
-//! software starting from a root. See `planning/xous64/MEMORY-LAYOUT.md`.
+//! Page tables are never mapped into a window. All of physical RAM is mapped
+//! supervisor-only at `PHYSMAP_BASE`, and tables are walked in software starting from a
+//! root. See `planning/xous64/MEMORY-LAYOUT.md`. Everything width-specific (the level
+//! count, entries per table, VPN width and `satp` layout) lives in the `paging` crate,
+//! reached here through `sv39`; this file is written in terms of `LEVELS`, `vpn()` and
+//! `leaf_size()` and so is identical for both modes.
 //!
-//! All page-table memory is accessed through the typed layer in `sv39.rs`; this file
-//! contains policy, not pointer arithmetic. Functions that take a bare virtual address
-//! operate on the currently active address space, as on rv32.
+//! All page-table memory is accessed through that typed layer; this file contains policy,
+//! not pointer arithmetic. Functions that take a bare virtual address operate on the
+//! currently active address space.
 
 use ::riscv::register::satp;
 use xous_kernel::{MemoryFlags, PID, arch::*};
@@ -32,29 +35,22 @@ fn flush_tlb() {
     unsafe { sfence_vma() };
 }
 
-const SATP_MODE_SV39: usize = 8 << 60;
-const SATP_ASID_SHIFT: usize = 44;
-const SATP_ASID_MASK: usize = 0xffff;
-const SATP_PPN_MASK: usize = (1 << 44) - 1;
-
 /// First root entry belonging to the kernel half of the address space.
 const ROOT_KERNEL_START: usize = sv39::ENTRIES / 2;
 /// Root entry holding per-process kernel data. Everything else in the kernel half is shared.
-const ROOT_PROCESS_AREA: usize = (PROCESS_AREA >> 30) & (sv39::ENTRIES - 1);
+const ROOT_PROCESS_AREA: usize = sv39::vpn(PROCESS_AREA, sv39::LEVELS - 1);
 
 /// Extract the PID (stored as the ASID) from a raw `satp` value.
-pub fn pid_from_satp(satp: usize) -> usize { (satp >> SATP_ASID_SHIFT) & SATP_ASID_MASK }
+pub fn pid_from_satp(satp: usize) -> usize { sv39::satp_pid(satp) }
 
-fn make_satp(pid: PID, root_phys: usize) -> usize {
-    SATP_MODE_SV39 | ((pid.get() as usize) << SATP_ASID_SHIFT) | (root_phys >> 12)
-}
+fn make_satp(pid: PID, root_phys: usize) -> usize { sv39::make_satp(pid.get() as usize, root_phys) }
 
 /// The root table of the address space that `satp` names.
 fn root_of(satp: usize) -> Table {
-    assert!(satp & SATP_MODE_SV39 != 0, "address space is not allocated");
-    // SAFETY: a `satp` value with the Sv39 mode bits set comes from the loader or from
+    assert!(sv39::satp_is_active(satp), "address space is not allocated");
+    // SAFETY: a `satp` value with the mode bits set comes from the loader or from
     // `MemoryMapping::allocate()`, both of which store the address of a root page table.
-    unsafe { Table::at(window(), (satp & SATP_PPN_MASK) << 12) }
+    unsafe { Table::at(window(), sv39::satp_root(satp)) }
 }
 
 fn current_root() -> Table { root_of(satp::read().bits()) }
@@ -122,6 +118,24 @@ fn check_permissions(flags: MMUFlags) -> Result<(), xous_kernel::Error> {
     Ok(())
 }
 
+/// Visit every occupied leaf under `table`, a table at `level` whose first entry maps
+/// virtual address `base`. "Occupied" means a valid leaf or a lent page (the `S` bit set
+/// with `VALID` cleared); reservations are skipped, matching the original walk. Recurses
+/// through valid intermediate tables, so it works for any `LEVELS` (Sv32 and Sv39).
+fn for_each_leaf(table: Table, level: usize, base: usize, f: &mut impl FnMut(usize, Pte)) {
+    for index in 0..sv39::ENTRIES {
+        let pte = table.get(index);
+        let virt = base + index * sv39::leaf_size(level);
+        if level == 0 {
+            if pte.is_valid() || pte.has(MMUFlags::S) {
+                f(virt, pte);
+            }
+        } else if let Some(child) = table.child(index) {
+            for_each_leaf(child, level - 1, virt, f);
+        }
+    }
+}
+
 /// The entry that translates `virt` under `root`, at whatever level it is found.
 fn lookup(root: Table, virt: usize) -> Option<Pte> {
     let mut table = root;
@@ -141,22 +155,20 @@ fn lookup(root: Table, virt: usize) -> Option<Pte> {
 /// kernel refuses to run if it did not.
 pub fn verify_kernel_wx() -> usize {
     let root = current_root();
+    let root_index = sv39::vpn(KERNEL_AREA, sv39::LEVELS - 1);
+    let Some(sub) = root.child(root_index) else { panic!("kernel area is not mapped") };
+    let base = root_index * sv39::leaf_size(sv39::LEVELS - 1);
     let mut executable = 0;
-    let Some(l1) = root.child(sv39::vpn(KERNEL_AREA, 2)) else { panic!("kernel area is not mapped") };
-    for i1 in 0..sv39::ENTRIES {
-        let Some(l0) = l1.child(i1) else { continue };
-        for i0 in 0..sv39::ENTRIES {
-            let pte = l0.get(i0);
-            if !pte.is_leaf() || !pte.has(MMUFlags::X) {
-                continue;
-            }
-            executable += 1;
-            assert!(!pte.has(MMUFlags::W), "kernel page {:#x} is writable and executable", pte.phys());
-            let alias = lookup(root, PHYSMAP_BASE + pte.phys()).expect("kernel frame is missing from the physmap");
-            assert!(!alias.has(MMUFlags::W), "kernel code frame {:#x} is writable through the physmap", pte.phys());
-            assert!(!alias.has(MMUFlags::X), "the physmap must never be executable");
+    for_each_leaf(sub, sv39::LEVELS - 2, base, &mut |_virt, pte| {
+        if !pte.has(MMUFlags::X) {
+            return;
         }
-    }
+        executable += 1;
+        assert!(!pte.has(MMUFlags::W), "kernel page {:#x} is writable and executable", pte.phys());
+        let alias = lookup(root, PHYSMAP_BASE + pte.phys()).expect("kernel frame is missing from the physmap");
+        assert!(!alias.has(MMUFlags::W), "kernel code frame {:#x} is writable through the physmap", pte.phys());
+        assert!(!alias.has(MMUFlags::X), "the physmap must never be executable");
+    });
     executable
 }
 
@@ -171,11 +183,10 @@ impl core::fmt::Debug for MemoryMapping {
     fn fmt(&self, fmt: &mut core::fmt::Formatter) -> core::result::Result<(), core::fmt::Error> {
         write!(
             fmt,
-            "(satp: 0x{:016x}, mode: {}, ASID: {}, root: {:08x})",
+            "(satp: {:#x}, ASID: {}, root: {:#x})",
             self.satp,
-            self.satp >> 60,
-            pid_from_satp(self.satp),
-            (self.satp & SATP_PPN_MASK) << 12,
+            sv39::satp_pid(self.satp),
+            sv39::satp_root(self.satp),
         )
     }
 }
@@ -254,17 +265,10 @@ impl MemoryMapping {
     /// Call `f(virt, pte)` for every valid or shared 4 KiB leaf in the user half.
     fn for_each_user_leaf(&self, mut f: impl FnMut(usize, Pte)) {
         let root = root_of(self.satp);
-        for i2 in 0..ROOT_KERNEL_START {
-            let Some(l1) = root.child(i2) else { continue };
-            for i1 in 0..sv39::ENTRIES {
-                let Some(l0) = l1.child(i1) else { continue };
-                for i0 in 0..sv39::ENTRIES {
-                    let pte = l0.get(i0);
-                    if pte.is_valid() || pte.has(MMUFlags::S) {
-                        f((i2 << 30) | (i1 << 21) | (i0 << 12), pte);
-                    }
-                }
-            }
+        for index in 0..ROOT_KERNEL_START {
+            let Some(child) = root.child(index) else { continue };
+            let base = index * sv39::leaf_size(sv39::LEVELS - 1);
+            for_each_leaf(child, sv39::LEVELS - 2, base, &mut f);
         }
     }
 
