@@ -11,7 +11,6 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let target = env::var("TARGET").unwrap();
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
-    let name = env::var("CARGO_PKG_NAME").unwrap();
 
     // If we're not running on a desktop-class operating system, emit the "baremetal"
     // config setting. This will enable software to do tasks such as
@@ -23,25 +22,16 @@ fn main() {
         println!("Target {} is NOT bare metal", target);
     }
 
-    // For RISC-V and ARM, link in the startup library.
-    if target.starts_with("riscv") || target.starts_with("arm") {
-        // rv64 startup code is `global_asm!` (src/arch/riscv/asm64.rs); only the older
-        // targets link a startup library that was assembled ahead of time.
-        if !target.starts_with("riscv64") {
-            fs::copy(format!("bin/{}.a", target), out_dir.join(format!("lib{}.a", name))).unwrap();
-            println!("cargo:rustc-link-lib=static={}", name);
-            println!("cargo:rerun-if-changed=bin/{}.a", target);
-        }
+    // On RISC-V, startup and trap entry are `global_asm!` (src/arch/riscv/asm.rs) for both
+    // widths, so there is no prebuilt startup library to link: just the linker script.
+    if target.starts_with("riscv") {
         println!("cargo:rustc-link-search={}", out_dir.display());
         println!("cargo:rustc-link-arg=-Tlink.x");
 
-        let linker_file_path = if target.starts_with("arm") {
-            PathBuf::from("src/arch/arm/link.x")
-        } else if target.starts_with("riscv64") {
-            PathBuf::from("link64.x")
-        } else {
-            PathBuf::from("link.x")
-        };
+        // Sv39 (rv64) and Sv32 (rv32) put the kernel at the same virtual addresses, sign-
+        // extended; the two scripts differ only in address width.
+        let linker_file_path =
+            if target.starts_with("riscv64") { PathBuf::from("link64.x") } else { PathBuf::from("link.x") };
         println!("cargo:rerun-if-changed={}", linker_file_path.display());
 
         // Put the linker script somewhere the linker can find it

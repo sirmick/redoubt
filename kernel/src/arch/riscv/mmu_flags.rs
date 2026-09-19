@@ -1,32 +1,13 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-//! Page table entry flags. Sv32 and Sv39 entries use the same low ten bits, including
-//! the two software bits Xous uses for lent (`S`) and swapped (`P`) pages, so this is
-//! shared by `mem.rs` and `mem_sv39.rs`.
+//! Page table entry flags. Sv32 and Sv39 entries use the same low ten bits, including the
+//! two software bits Xous uses for lent (`S`) and swapped (`P`) pages, so the flags are the
+//! `paging` crate's `PteFlags` on both widths, and the loader and kernel agree.
 
 use xous_kernel::MemoryFlags;
 
-// On rv64 the flags are the `sv39` crate's, so that the loader and the kernel agree.
-#[cfg(target_arch = "riscv64")]
 pub use paging::PteFlags as MMUFlags;
-
-#[cfg(not(target_arch = "riscv64"))]
-bitflags! {
-    pub struct MMUFlags: usize {
-        const NONE      = 0b00_0000_0000;
-        const VALID     = 0b00_0000_0001;
-        const R         = 0b00_0000_0010;
-        const W         = 0b00_0000_0100;
-        const X         = 0b00_0000_1000;
-        const USER      = 0b00_0001_0000;
-        const GLOBAL    = 0b00_0010_0000;
-        const A         = 0b00_0100_0000;
-        const D         = 0b00_1000_0000;
-        const S         = 0b01_0000_0000; // Shared page
-        const P         = 0b10_0000_0000; // swaP
-    }
-}
 
 pub fn translate_flags(req_flags: MemoryFlags) -> MMUFlags {
     let mut flags = MMUFlags::NONE;

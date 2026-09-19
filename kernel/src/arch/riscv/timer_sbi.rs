@@ -3,14 +3,17 @@
 //! Hart timer backend for platforms with SBI firmware, using the SBI TIME extension.
 //! See `planning/xous64/TIMER.md`.
 
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use riscv::register::{scounteren, sie};
+use riscv::register::sie;
 
 /// The timer is presented to userspace as this interrupt. PLIC source 0 does not exist.
 pub const IRQ: usize = xous_kernel::arch::platform_call::TIMER_IRQ;
 
-static TIMEBASE: AtomicU64 = AtomicU64::new(0);
+// The timebase is a frequency in Hz, set once at boot and read-only afterwards, so a plain
+// `AtomicUsize` is enough and stays lock-free on rv32 (which has no 64-bit atomics). Any
+// real RISC-V timebase fits in 32 bits.
+static TIMEBASE: AtomicUsize = AtomicUsize::new(0);
 /// A deadline has been set and its interrupt has not been delivered yet.
 static ARMED: AtomicBool = AtomicBool::new(false);
 /// An interrupt handler is running, so the timer interrupt must stay off.
@@ -18,11 +21,17 @@ static MASKED: AtomicBool = AtomicBool::new(false);
 
 pub fn init() {
     if let Some(arg) = crate::args::KernelArguments::get().iter().find(|a| a.name == u32::from_le_bytes(*b"Time")) {
-        TIMEBASE.store(arg.data[0] as u64 | (arg.data[1] as u64) << 32, Ordering::Relaxed);
+        TIMEBASE.store((arg.data[0] as u64 | (arg.data[1] as u64) << 32) as usize, Ordering::Relaxed);
     }
-    // Let userspace read the `time` CSR directly.
-    // SAFETY: this exposes a read-only counter to U-mode and nothing else.
-    unsafe { scounteren::set_tm() };
+    // Let userspace read the `time` CSR directly, via `scounteren.TM` (bit 1 of CSR 0x106).
+    // SAFETY: this exposes a read-only counter to U-mode and has no memory effect. The rv32
+    // `riscv` crate predates `scounteren`, so the CSR is written directly there.
+    unsafe {
+        #[cfg(target_arch = "riscv64")]
+        riscv::register::scounteren::set_tm();
+        #[cfg(target_arch = "riscv32")]
+        core::arch::asm!("csrrs zero, 0x106, {0}", in(reg) 1usize << 1);
+    }
 }
 
 /// Mask or unmask the supervisor timer interrupt at the hart.
@@ -35,7 +44,7 @@ fn set_interrupt_enabled(enabled: bool) {
 }
 
 /// Ticks of the `time` CSR per second, or 0 if the loader did not report it.
-pub fn timebase() -> u64 { TIMEBASE.load(Ordering::Relaxed) }
+pub fn timebase() -> u64 { TIMEBASE.load(Ordering::Relaxed) as u64 }
 
 /// Whether `irq` is the timer, rather than a source on the interrupt controller.
 pub fn owns(irq: usize) -> bool { irq == IRQ }
