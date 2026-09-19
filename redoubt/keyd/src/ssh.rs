@@ -152,6 +152,21 @@ mod tests {
         assert_eq!(&blob[19..], &PUBLIC);
     }
 
+    /// A vector computed by an implementation that is not this one: Python's `hashlib.sha256`
+    /// over the RFC 4253 §8 transcript, assembled by hand there. It pins the framing and the
+    /// hash together, so neither can drift without this failing.
+    #[test]
+    fn the_hash_matches_an_independent_implementation() {
+        let want = "eb4eee0e48a9748231a85d02dcf2f56f394ede4a1a13599b0aae288724af202e";
+        let got = exchange_hash(&sample(), &PUBLIC).unwrap();
+        let digits = b"0123456789abcdef";
+        let hex: alloc::string::String = got
+            .iter()
+            .flat_map(|b| [digits[usize::from(b >> 4)] as char, digits[usize::from(b & 15)] as char])
+            .collect();
+        assert_eq!(hex, want);
+    }
+
     /// The host key is `keyd`'s, not the caller's: two keys never produce the same hash from
     /// the same transcript, so nobody can have a transcript naming another host signed.
     #[test]
