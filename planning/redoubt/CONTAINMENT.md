@@ -70,7 +70,7 @@ executable model (~1-2k lines, Rust; or TLA+/Alloy) of capabilities, minting and
 revocation, budgets, labels and the powerbox. Invariants, checked by model checking and property
 tests and attacked by red-team agents from several vendors writing counterexample traces:
 - a principal never holds a capability not derived from its grants;
-- revocation removes everything it is meant to (the derivation rule is still open: see below);
+- revocation removes everything it is meant to (budget-level rule, below);
 - data labelled L never reaches a sink not cleared for L without the owner declassifying;
 - budgets never go negative; destroying one returns everything.
 The kernel is then built to the model, and the bench checks conformance against it.
