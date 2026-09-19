@@ -1,6 +1,0 @@
-[workspace]
-members = [
-    "packing_codegen",
-    "packing",
-    "packing_tests",
-]
