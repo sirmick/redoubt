@@ -31,7 +31,8 @@ exclude = [
   # Host-only fuzz targets, built by cargo-fuzz (see redoubt/wire/fuzz/Cargo.toml).
   "redoubt/wire/fuzz",
   # Host-only littlefs test crates: the C reference as an oracle, and the fuzzer. They must
-  # never enter a normal build (TENETS.md 3: no C toolchain in the build).
+  # never enter a normal build (TENETS.md 3: host-only oracles and fuzz drivers stay outside the
+  # workspace build and are never linked into anything that runs on the machine).
   "redoubt/littlefs/diff",
   "redoubt/littlefs/fuzz",
 ]

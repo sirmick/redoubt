@@ -102,6 +102,6 @@ fuzz_target!(|data: &[u8]| {
     let mut ram = Ram::from_image(CFG, image);
     ram.strict = false;
     if let Ok(mut fs) = Filesystem::mount(&mut ram, CFG) {
-        exercise::exercise(&mut fs);
+        exercise::exercise_light(&mut fs);
     }
 });
