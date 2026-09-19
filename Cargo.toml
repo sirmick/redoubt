@@ -8,6 +8,7 @@ members = [
   "kernel",
   "loader",
   "xous-rs",
+  "redoubt/keyd",
   "redoubt/paging",
   "redoubt/rt",
   "redoubt/sys",
