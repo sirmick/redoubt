@@ -13,14 +13,37 @@ pub const MMAP_VIRT_BASE: usize = 0xb000_0000;
 
 pub const PAGE_SIZE: usize = 4096;
 
+/// Sv32 layout. The physmap design of `planning/xous64/MEMORY-LAYOUT.md` scaled to two
+/// levels: the kernel half is the upper 2 GiB (root entries 512..=1023, 4 MiB each), and
+/// RAM is identity-mapped low in it so `PHYSMAP_BASE == PHYSMAP_PHYS_BASE`.
 #[cfg(target_pointer_width = "32")]
 mod layout {
-    pub const USER_AREA_END: usize = 0xff00_0000;
+    /// Root entries 0..=511: userspace (`[0, 0x8000_0000)`).
+    pub const USER_AREA_END: usize = 0x8000_0000;
+    /// Root entries 512..=1019: physical RAM `[PHYSMAP_PHYS_BASE, +PHYSMAP_SIZE)` mapped at
+    /// `virt = PHYSMAP_BASE + (phys - PHYSMAP_PHYS_BASE)`, 4 MiB megapage leaves. On QEMU
+    /// `virt` RAM starts at 0x8000_0000, exactly the kernel-half boundary, so the map is the
+    /// identity and `PHYSMAP_BASE == PHYSMAP_PHYS_BASE` (rv64 offsets from physical 0 instead).
+    pub const PHYSMAP_BASE: usize = 0x8000_0000;
+    pub const PHYSMAP_PHYS_BASE: usize = 0x8000_0000;
+    pub const PHYSMAP_SIZE: usize = 0x7f00_0000; // 0x8000_0000..0xff00_0000
+    /// Root entries 1020..=1021: where the kernel maps the platform's interrupt controller
+    /// (up to 8 MiB; a QEMU `virt` PLIC is 6 MiB, which is why this needs two 4 MiB roots).
+    pub const KERNEL_PLIC_BASE: usize = 0xff00_0000;
+    /// Root entry 1022: per-process kernel data.
+    pub const PROCESS_AREA: usize = 0xff80_0000;
+    pub const THREAD_CONTEXT_AREA: usize = PROCESS_AREA;
+    pub const USERSPACE_BUFFER: usize = PROCESS_AREA + 0x10_0000; // 0xff90_0000
+    /// `ProcessImpl` bookkeeping: a saved context is 32 x 4 = 128 bytes, 32 contexts = 1 page.
+    pub const THREAD_CONTEXT_PAGES: usize = 1;
+    /// Root entry 1023: the kernel image, stacks and arguments, shared by every address space.
+    pub const KERNEL_AREA: usize = 0xffc0_0000;
+    pub const KERNEL_STACK_TOP: usize = 0xfff8_0000;
+    pub const KERNEL_STACK_PAGES: usize = 8;
     pub const EXCEPTION_STACK_TOP: usize = 0xffff_0000;
-    pub const PAGE_TABLE_OFFSET: usize = 0xff40_0000;
-    pub const PAGE_TABLE_ROOT_OFFSET: usize = 0xff80_0000;
-    pub const THREAD_CONTEXT_AREA: usize = 0xff80_1000;
-    pub const USERSPACE_BUFFER: usize = 0xff90_0000;
+    pub const EXCEPTION_STACK_PAGES: usize = 8;
+    /// Top of the initial thread's stack in every user process (top of the user half).
+    pub const USER_STACK_TOP: usize = 0x8000_0000;
 }
 
 /// Sv39 layout. See `planning/xous64/MEMORY-LAYOUT.md`.
