@@ -100,6 +100,10 @@ pub struct System {
     watched: BTreeSet<Pid>,
     /// The group leader of processes that do not inherit one: the console I/O server.
     pub(crate) default_group_leader: Option<Pid>,
+    /// This VM's working directory in the platform's file system (`file:get_cwd/0`).
+    pub(crate) cwd: String,
+    /// Open files: platform handle, and the process that opened it.
+    pub(crate) files: BTreeMap<u64, Pid>,
 }
 
 /// Erlang modules every VM has, built from `vm/lib/*.erl` by `tools/build-lib`: the console
@@ -221,9 +225,7 @@ pub const RUNTIME_MODULES: &[&str] = &[
     "erts_dirty_process_signal_handler",
     "erts_literal_area_collector",
     "erts_trace_cleaner",
-    "prim_buffer",
     "prim_eval",
-    "prim_file",
     "prim_inet",
     "prim_net",
     "prim_socket",
@@ -320,6 +322,8 @@ impl Vm {
                 results: BTreeMap::new(),
                 watched: BTreeSet::new(),
                 default_group_leader: None,
+                cwd: "/".into(),
+                files: BTreeMap::new(),
             },
         }
         .boot()
@@ -340,6 +344,13 @@ impl Vm {
             }
         }
         self.sys.default_group_leader = Some(user);
+        // OTP's file server, which `file` calls for most operations: started now, so that it is
+        // registered before any other code runs. Only if the platform has a file system.
+        if self.sys.platform.files().is_some() {
+            if let Ok(pid) = self.spawn("file_server", "start", Vec::new()) {
+                let _ = self.run_bounded(pid, 100_000);
+            }
+        }
         self
     }
 
@@ -451,6 +462,13 @@ impl System {
 
     pub fn is_loaded(&self, name: &Atom) -> bool {
         self.modules.contains_key(name.as_str())
+    }
+
+    /// Unload a module (`code:delete/1`): new calls no longer reach it, while code already
+    /// running in it finishes (it is reference counted). A later call loads it afresh through
+    /// the platform, if the platform has it. `false` if it was not loaded.
+    pub fn delete_module(&mut self, name: &Atom) -> bool {
+        self.modules.remove(name.as_str()).is_some()
     }
 
     /// Names of all loaded modules.
@@ -647,6 +665,17 @@ impl System {
     }
 
     /// End process `p`: tell its links and monitors, then free its slot.
+    /// Close the files `pid` opened.
+    fn close_files(&mut self, pid: Pid) {
+        let handles: Vec<u64> = self.files.iter().filter(|(_, &o)| o == pid).map(|(&h, _)| h).collect();
+        for h in handles {
+            self.files.remove(&h);
+            if let Some(f) = self.platform.files() {
+                f.close(h);
+            }
+        }
+    }
+
     fn terminate(&mut self, p: Box<Process>, result: Result<Term, Exception>) {
         let pid = p.pid;
         let reason = match &result {
@@ -664,6 +693,7 @@ impl System {
             self.cancel_timer(pid, t);
         }
         self.aliases.retain(|_, a| a.owner != pid);
+        self.close_files(pid);
         if let Some(name) = &p.registered_name {
             self.registered.remove(name.as_str());
         }

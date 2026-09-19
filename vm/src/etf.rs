@@ -208,10 +208,37 @@ impl<'a> Reader<'a, '_> {
                 };
                 Term::Fun(Rc::new(Fun::Export { module, function, arity }))
             }
-            // Pids, ports, references, local funs, the old float format, compressed terms and
-            // distribution headers are not accepted yet.
+            // NEW_PID_EXT and PID_EXT: only this node's pids (there is no distribution).
+            88 | 103 => {
+                self.local_node(depth)?;
+                let index = self.u32()? as u32;
+                let serial = self.u32()? as u32;
+                if tag == 88 { self.take(4)? } else { self.take(1)? };
+                Term::Pid(crate::term::Pid { serial, index })
+            }
+            // NEWER_REFERENCE_EXT and NEW_REFERENCE_EXT, laid out as `encode` writes them.
+            90 | 114 => {
+                let n = self.u16()?;
+                if !(1..=5).contains(&n) {
+                    return Err(EtfError::Malformed);
+                }
+                self.local_node(depth)?;
+                if tag == 90 { self.take(4)? } else { self.take(1)? };
+                let mut ids = [0u64; 5];
+                for id in ids.iter_mut().take(n) {
+                    *id = self.u32()? as u64;
+                }
+                Term::Ref(crate::term::Ref((ids[0] & 0x3ffff) | (ids[1] << 18) | (ids[2] << 50)))
+            }
+            // Ports, local funs, the old float format, compressed terms and distribution
+            // headers are not accepted.
             other => return Err(EtfError::BadTag(other)),
         })
+    }
+
+    /// A node name that must be this VM's own ([`NODE`]).
+    fn local_node(&mut self, depth: usize) -> Result<(), EtfError> {
+        if self.atom(depth)?.as_str() == NODE { Ok(()) } else { Err(EtfError::Malformed) }
     }
 
     fn atom(&mut self, depth: usize) -> Result<crate::atom::Atom, EtfError> {
@@ -451,6 +478,22 @@ mod tests {
         // Bit binary with 0 or 9 bits in the last byte.
         assert_eq!(dec(&[131, 77, 0, 0, 0, 1, 0, 0]).err(), Some(EtfError::Malformed));
         assert_eq!(dec(&[131, 77, 0, 0, 0, 1, 9, 0]).err(), Some(EtfError::Malformed));
+    }
+
+    #[test]
+    fn local_pids_and_refs_round_trip() {
+        let mut atoms = AtomTable::new();
+        for t in [Term::Pid(crate::term::Pid { serial: 3, index: 77 }), Term::Ref(crate::term::Ref(0x1234_5678_9abc_def0))] {
+            let bytes = encode(&t).unwrap();
+            let back = decode(&bytes, &mut atoms).unwrap();
+            assert_eq!(back.to_string(), t.to_string());
+        }
+        // Another node's pid is refused.
+        let mut other = alloc::vec![131, 88];
+        other.extend_from_slice(&[119, 5]);
+        other.extend_from_slice(b"a@b.c");
+        other.extend_from_slice(&[0; 12]);
+        assert!(decode(&other, &mut atoms).is_err());
     }
 
     #[test]

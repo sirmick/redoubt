@@ -1,6 +1,8 @@
 #!/usr/bin/env escript
 %% Runs Module:start() on the real BEAM for every .beam in DIR and writes the result, formatted
 %% with ~kw (maps in key order, which beamlet always uses) exactly as `beamlet` prints it, to DIR/Module.expected. The oracle for difftest.
+%% Each test runs with an empty working directory, DIR/root/Module: beamlet gets the same
+%% directory as its file system root (`--root`).
 main([Dir]) ->
     true = code:add_patha(Dir),
     [expect(Dir, M) || F <- filelib:wildcard(filename:join(Dir, "*.beam")),
@@ -13,6 +15,14 @@ has_start(M) ->
     erlang:function_exported(M, start, 0).
 
 expect(Dir, M) ->
+    Root = filename:join([Dir, "root", M]),
+    _ = file:del_dir_r(Root),
+    ok = filelib:ensure_path(Root),
+    {ok, Cwd} = file:get_cwd(),
+    ok = file:set_cwd(Root),
+    try run(Dir, M) after file:set_cwd(Cwd) end.
+
+run(Dir, M) ->
     Self = self(),
     {Pid, Ref} = spawn_monitor(fun() ->
         R = try M:start() catch C:E -> {'EXCEPTION', C, E} end,

@@ -90,6 +90,10 @@ fn info_item(table: &mut AtomTable, atoms: &Atoms, p: &Process, running: bool, i
         "memory" => Term::Int((crate::memory::process(p, u64::MAX).words * 8) as i64),
         "min_heap_size" => Term::Int(233),
         "max_heap_size" => super::proc::max_heap_term(table, atoms, p.max_heap),
+        "error_handler" => match &p.error_handler {
+            Some(m) => Term::Atom(m.clone()),
+            None => atom("error_handler"),
+        },
         "current_function" => match p.pc.module.function_at(p.pc.pc) {
             Some(f) => Term::tuple(alloc::vec![
                 Term::Atom(p.pc.module.name.clone()),
@@ -200,6 +204,42 @@ pub fn load_binary(c: &mut Ctx, a: &[Term]) -> R {
         Ok(_) => Ok(Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.error.clone()), c.atom("badfile")])),
         Err(_) => Ok(Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.error.clone()), c.atom("badfile")])),
     }
+}
+
+/// `code:delete(Module)`: `true` if it was loaded. There is no separate "old code": deleting
+/// unloads at once (see `System::delete_module`), so `purge` has nothing left to do.
+pub fn code_delete(c: &mut Ctx, a: &[Term]) -> R {
+    let Term::Atom(m) = &a[0] else { return Err(c.badarg()) };
+    let gone = c.sys.delete_module(m);
+    Ok(c.bool(gone))
+}
+
+/// `erlang:delete_module(Module)`: `true`, or `undefined` if it was not loaded.
+pub fn delete_module(c: &mut Ctx, a: &[Term]) -> R {
+    let Term::Atom(m) = &a[0] else { return Err(c.badarg()) };
+    Ok(if c.sys.delete_module(m) { c.bool(true) } else { Term::Atom(c.sys.atoms.undefined.clone()) })
+}
+
+/// `code:purge/1`: `false` (no old code is ever kept); `code:soft_purge/1`: `true`.
+pub fn purge(c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(c.bool(false))
+}
+
+pub fn soft_purge(c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(c.bool(true))
+}
+
+/// `code:get_object_code(Module)`: `{Module, Beam, Filename}` from the platform, or `error`.
+/// The file name is nominal (`Module.beam`): where the platform keeps it is its own business.
+pub fn get_object_code(c: &mut Ctx, a: &[Term]) -> R {
+    let Term::Atom(m) = &a[0] else { return Err(c.badarg()) };
+    if crate::vm::RUNTIME_MODULES.contains(&m.as_str()) {
+        return Ok(Term::Atom(c.sys.atoms.error.clone()));
+    }
+    Ok(match c.sys.platform.load_module(m.as_str()) {
+        Some(bytes) => Term::tuple(alloc::vec![a[0].clone(), Term::binary(&bytes), string(&alloc::format!("{}.beam", m.as_str()))]),
+        None => Term::Atom(c.sys.atoms.error.clone()),
+    })
 }
 
 pub fn all_loaded(c: &mut Ctx, _a: &[Term]) -> R {
@@ -389,17 +429,70 @@ fn civil(days: i64) -> (i64, u32, u32) {
     (yoe + era * 400 + i64::from(m <= 2), m, d)
 }
 
+/// Days since 1970-01-01 of a civil date (the inverse of [`civil`]).
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let mp = if m > 2 { m - 3 } else { m + 9 } as i64;
+    let doy = (153 * mp + 2) / 5 + d as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// `{{Y, M, D}, {H, Mi, S}}` for seconds since the Unix epoch.
+fn datetime(secs: i64) -> Term {
+    let (y, m, d) = civil(secs.div_euclid(86_400));
+    let t = secs.rem_euclid(86_400);
+    Term::tuple(alloc::vec![
+        Term::tuple(alloc::vec![Term::Int(y), Term::Int(m as i64), Term::Int(d as i64)]),
+        Term::tuple(alloc::vec![Term::Int(t / 3600), Term::Int(t / 60 % 60), Term::Int(t % 60)]),
+    ])
+}
+
 /// `universaltime()` as `{{Y, M, D}, {H, Mi, S}}`. `localtime()` is the same: the VM has no time
 /// zone (the platform could supply one later).
 pub fn universaltime(c: &mut Ctx, _a: &[Term]) -> R {
     let us = c.sys.platform.system_time_us().ok_or_else(|| c.badarg())?;
-    let secs = (us / 1_000_000) as i64;
-    let (y, m, d) = civil(secs.div_euclid(86_400));
-    let t = secs.rem_euclid(86_400);
-    Ok(Term::tuple(alloc::vec![
-        Term::tuple(alloc::vec![Term::Int(y), Term::Int(m as i64), Term::Int(d as i64)]),
-        Term::tuple(alloc::vec![Term::Int(t / 3600), Term::Int(t / 60 % 60), Term::Int(t % 60)]),
-    ]))
+    Ok(datetime((us / 1_000_000) as i64))
+}
+
+/// Years BEAM's calendar conversions accept.
+const YEARS: core::ops::RangeInclusive<i64> = 0..=9999;
+
+pub fn posixtime_to_universaltime(c: &mut Ctx, a: &[Term]) -> R {
+    let Term::Int(secs) = a[0] else { return Err(c.badarg()) };
+    let t = datetime(secs);
+    match t.as_tuple().and_then(|dt| dt[0].as_tuple().map(|d| d[0].clone())) {
+        Some(Term::Int(y)) if YEARS.contains(&y) => Ok(t),
+        _ => Err(c.badarg()),
+    }
+}
+
+/// `universaltime_to_posixtime({{Y, M, D}, {H, Mi, S}})`, checking that the date exists.
+pub fn universaltime_to_posixtime(c: &mut Ctx, a: &[Term]) -> R {
+    let field = |t: &Term, i: usize| t.as_tuple().filter(|x| x.len() == 3).and_then(|x| match x[i] {
+        Term::Int(n) => Some(n),
+        _ => None,
+    });
+    let parts = a[0].as_tuple().filter(|x| x.len() == 2).and_then(|dt| {
+        Some([field(&dt[0], 0)?, field(&dt[0], 1)?, field(&dt[0], 2)?, field(&dt[1], 0)?, field(&dt[1], 1)?, field(&dt[1], 2)?])
+    });
+    let Some([y, m, d, h, mi, s]) = parts else { return Err(c.badarg()) };
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let month_days = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let valid = YEARS.contains(&y)
+        && (1..=12).contains(&m)
+        && d >= 1
+        && d <= month_days[(m - 1) as usize]
+        && (0..24).contains(&h)
+        && (0..60).contains(&mi)
+        && (0..60).contains(&s);
+    if !valid {
+        return Err(c.badarg());
+    }
+    let days = days_from_civil(y, m as u32, d as u32);
+    Ok(Term::Int(days * 86_400 + h * 3600 + mi * 60 + s))
 }
 
 pub fn date(c: &mut Ctx, a: &[Term]) -> R {
@@ -514,5 +607,9 @@ mod tests {
         assert_eq!(super::civil(0), (1970, 1, 1));
         assert_eq!(super::civil(20_714), (2026, 9, 18));
         assert_eq!(super::civil(-1), (1969, 12, 31));
+        for days in [-800_000, -1, 0, 59, 11_016, 20_714, 2_000_000] {
+            let (y, m, d) = super::civil(days);
+            assert_eq!(super::days_from_civil(y, m, d), days);
+        }
     }
 }

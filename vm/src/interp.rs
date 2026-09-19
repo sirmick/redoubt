@@ -401,6 +401,22 @@ fn call_mfa_with(
             Ok(call_code(p, cp, kind == Kind::Call))
         }
         None => {
+            // A process with its own error handler gets `Handler:undefined_function(M, F, Args)`
+            // instead (Elixir's parallel compiler waits for modules this way). Not when the
+            // handler itself is what is missing.
+            if let Some(h) = p.error_handler.clone().filter(|h| h != m) {
+                let undefined = sys.atom("undefined_function");
+                if let Some(Target::Code(cp)) = sys.resolve(&h, &undefined, 3) {
+                    let args = Term::list(p.x[..arity].to_vec());
+                    p.x[0] = Term::Atom(m.clone());
+                    p.x[1] = Term::Atom(f.clone());
+                    p.x[2] = args;
+                    if kind == Kind::Last {
+                        deallocate(p)?;
+                    }
+                    return Ok(call_code(p, cp, kind == Kind::Call));
+                }
+            }
             // As in BEAM, the missing function heads the stack trace, with its arguments.
             let args = Term::list(p.x[..arity].to_vec());
             let missing = Term::tuple(alloc::vec![Term::Atom(m.clone()), Term::Atom(f.clone()), args, Term::Nil]);

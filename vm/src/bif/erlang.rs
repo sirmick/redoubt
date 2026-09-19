@@ -345,6 +345,76 @@ pub fn list_to_integer(c: &mut Ctx, a: &[Term]) -> R {
     parse_integer(c, &s, r)
 }
 
+/// `erts_internal:list_to_integer(List, Base)`, the helper behind `string:to_integer/1`: the
+/// integer at the start of `List` and the rest, `{Int, Rest}`, or `no_integer`, `not_a_list`,
+/// `badarg` (a bad base) or `big` (past the bignum cap; the caller then raises `system_limit`).
+pub fn internal_list_to_integer(c: &mut Ctx, a: &[Term]) -> R {
+    let atom = |c: &mut Ctx, s: &str| Ok(c.atom(s));
+    let mut list = &a[0];
+    if matches!(list, Term::Nil) {
+        return atom(c, "no_integer");
+    }
+    if !matches!(list, Term::Cons(_)) {
+        return atom(c, "not_a_list");
+    }
+    let base = match a[1] {
+        Term::Int(b @ 2..=36) => b as u32,
+        _ => return atom(c, "badarg"),
+    };
+    let digit = |t: &Term| match t {
+        Term::Int(ch @ 0..=255) => (*ch as u8 as char).to_digit(base),
+        _ => None,
+    };
+    let mut neg = false;
+    if let Term::Cons(cell) = list {
+        if let Term::Int(s @ (43 | 45)) = cell.head {
+            neg = s == 45;
+            list = &cell.tail;
+        }
+    }
+    let mut digits = String::new();
+    while let Term::Cons(cell) = list {
+        let Some(d) = digit(&cell.head) else { break };
+        digits.push(char::from_digit(d, base).expect("a digit"));
+        if digits.len() as u64 > super::arith::MAX_BIG_BITS / 3 {
+            return atom(c, "big");
+        }
+        list = &cell.tail;
+    }
+    if digits.is_empty() {
+        return atom(c, "no_integer");
+    }
+    let mut n = BigInt::from_str_radix(&digits, base).expect("digits");
+    if neg {
+        n = -n;
+    }
+    if n.bits() > super::arith::MAX_BIG_BITS {
+        return atom(c, "big");
+    }
+    Ok(Term::tuple(alloc::vec![Term::big(n), list.clone()]))
+}
+
+/// `erts_internal:binary_to_integer(Bin, Base)`: the integer, or `badarg` or `big`.
+pub fn internal_binary_to_integer(c: &mut Ctx, a: &[Term]) -> R {
+    match binary_to_integer(c, a) {
+        Ok(n) => Ok(n),
+        Err(e) if e.reason.is_atom(&c.sys.atoms.system_limit) => Ok(c.atom("big")),
+        Err(_) => Ok(c.atom("badarg")),
+    }
+}
+
+pub fn dt_true(c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(c.bool(true))
+}
+
+pub fn dt_undefined(c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(Term::Atom(c.sys.atoms.undefined.clone()))
+}
+
+pub fn dt_same(_c: &mut Ctx, a: &[Term]) -> R {
+    Ok(a[0].clone())
+}
+
 pub fn binary_to_integer(c: &mut Ctx, a: &[Term]) -> R {
     let b = binary(c, &a[0])?;
     let s = core::str::from_utf8(&b.to_bytes()).map_err(|_| c.badarg())?.to_string();
