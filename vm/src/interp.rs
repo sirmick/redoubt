@@ -1114,7 +1114,7 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
         }
 
         // ---- binaries ----
-        op::BS_CREATE_BIN => return bs_create_bin(sys, p, ins, &module),
+        op::BS_CREATE_BIN => return bs_create_bin(sys, p, ins, module),
         op::BS_INIT_WRITABLE => p.x[0] = Term::binary(&[]),
         op::BS_START_MATCH4 => {
             let t = src(p, ins, 2)?;
@@ -1160,7 +1160,7 @@ fn step(sys: &mut System, p: &mut Process, module: &Rc<Module>) -> R<Flow> {
         }
         op::BS_GET_INTEGER2 | op::BS_GET_FLOAT2 | op::BS_GET_BINARY2 | op::BS_SKIP_BITS2 | op::BS_TEST_TAIL2
         | op::BS_TEST_UNIT | op::BS_MATCH_STRING | op::BS_GET_UTF8 | op::BS_GET_UTF16 | op::BS_GET_UTF32
-        | op::BS_SKIP_UTF8 | op::BS_SKIP_UTF16 | op::BS_SKIP_UTF32 => return bs_get(sys, p, ins, &module),
+        | op::BS_SKIP_UTF8 | op::BS_SKIP_UTF16 | op::BS_SKIP_UTF32 => return bs_get(sys, p, ins, module),
 
         _ => return Err(Fault::BadCode("opcode not implemented")),
     }
