@@ -18,14 +18,23 @@
 //!   that every bucket at its cap fits the server's budget ([`Limits::fits`]) and the calls they may hold
 //!   open sum to less than `MAX_OPEN_CALLS` with headroom (checked by [`Admission::new`]). A bucket beyond
 //!   that is refused. Stated residual: a server sized for fewer buckets than it serves refuses the
-//!   latecomers, which tells them that others hold state; size a server for every (account, label set) it
-//!   serves.
+//!   latecomers, which tells them that others hold state - across accounts, and between the label sets of one
+//!   account, where it is a channel out of a vault (QUESTIONS.md 118). Sizing closes it: a server's manifest
+//!   sizes its bucket count to the (account, label set)s it serves, so the cap never binds in normal use.
+//! - **Caps big enough for a share to mean anything**: a non-zero cap is at least [`SMALLEST_CAP`], so that
+//!   one badge alone can never fill its bucket (its share is at most half of it) and a second badge - the
+//!   sponsor an agent shares the bucket with - always finds a slot. With three or more badges a bucket can
+//!   still fill, and the last comer waits.
 
 use alloc::vec::Vec;
 
 use redoubt_sys::{MAX_LABELS, MAX_OPEN_CALLS};
 
 use crate::ipc::Caller;
+
+/// The smallest useful non-zero cap: below it, a lone badge's fair share is the whole bucket,
+/// and that badge can lock out every other.
+pub const SMALLEST_CAP: u32 = 2;
 
 /// Open calls a server keeps free beyond what admission lets its buckets hold: the calls it is
 /// answering right now, requests answered ahead of admission (a sponsor ending a lease), and
@@ -127,8 +136,8 @@ impl Limits {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Refused;
 
-/// The limits break the sizing rule: the calls the buckets may hold open would not leave
-/// [`OPEN_CALL_HEADROOM`] of `MAX_OPEN_CALLS`.
+/// The limits break a sizing rule: the calls the buckets may hold open would not leave
+/// [`OPEN_CALL_HEADROOM`] of `MAX_OPEN_CALLS`, or a non-zero cap is below [`SMALLEST_CAP`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Unsized;
 
@@ -143,9 +152,14 @@ pub struct Admission {
 }
 
 impl Admission {
-    /// Admission under `limits`, if they leave the open-call headroom.
+    /// Admission under `limits`, if they leave the open-call headroom and every cap they use is
+    /// big enough for a fair share to mean anything.
     pub fn new(limits: Limits) -> Result<Admission, Unsized> {
         if limits.open_calls() > (MAX_OPEN_CALLS - OPEN_CALL_HEADROOM) as u64 {
+            return Err(Unsized);
+        }
+        let caps = [limits.buckets, limits.in_flight, limits.files, limits.state];
+        if caps.iter().any(|cap| (1..SMALLEST_CAP).contains(cap)) {
             return Err(Unsized);
         }
         Ok(Admission { limits, buckets: Vec::new(), shares: Vec::new() })
@@ -244,6 +258,22 @@ mod tests {
         Limits { buckets: 8, in_flight, files, state }
     }
 
+    /// A cap of one would be a whole bucket for the first badge; the sponsor's guarantee needs
+    /// at least two.
+    #[test]
+    fn caps_are_big_enough_for_a_share_to_mean_anything() {
+        assert!(Admission::new(limits(0, 1, 0)).is_err());
+        assert!(Admission::new(limits(0, 0, 1)).is_err());
+        assert!(Admission::new(limits(1, 2, 2)).is_err());
+        assert!(Admission::new(Limits { buckets: 1, in_flight: 0, files: 2, state: 0 }).is_err());
+        let mut a = Admission::new(limits(0, SMALLEST_CAP, 0)).unwrap();
+        // One badge alone never fills the bucket, so its sponsor still finds a slot.
+        let alice = key(1001);
+        while a.admit(alice, 1, Resource::Files).is_ok() {}
+        assert_eq!(a.held(alice, Resource::Files), 1);
+        assert_eq!(a.admit(alice, 2, Resource::Files), Ok(()));
+    }
+
     #[test]
     fn limits_are_per_key_and_per_resource() {
         // One share per bucket, so the share's cap (half, for the one share that may come) binds.
@@ -264,7 +294,7 @@ mod tests {
 
     #[test]
     fn released_keys_leave_the_table() {
-        let mut a = Admission::new(Limits { buckets: 100, in_flight: 0, files: 1, state: 1 }).unwrap();
+        let mut a = Admission::new(Limits { buckets: 100, in_flight: 0, files: 2, state: 2 }).unwrap();
         for account in 0..100 {
             a.admit(key(account), 1, Resource::Files).unwrap();
         }
@@ -285,9 +315,11 @@ mod tests {
         let owner = caller(9, &[]);
         let vault = caller(9, &[5]);
         assert_ne!(AdmitKey::of(&owner), AdmitKey::of(&vault));
-        let mut a = Admission::new(limits(1, 1, 1)).unwrap();
-        a.admit(AdmitKey::of(&vault), 1, Resource::Files).unwrap();
-        assert_eq!(a.admit(AdmitKey::of(&vault), 2, Resource::Files), Err(Refused));
+        let mut a = Admission::new(limits(0, 4, 4)).unwrap();
+        for _ in 0..2 {
+            a.admit(AdmitKey::of(&vault), 1, Resource::Files).unwrap();
+        }
+        assert_eq!(a.admit(AdmitKey::of(&vault), 1, Resource::Files), Err(Refused), "its share is half");
         assert_eq!(a.admit(AdmitKey::of(&owner), 1, Resource::Files), Ok(()));
         // The badge does not make the key, and the label set is a set: order and repeats do not.
         let other_badge = Caller { badge: 99, ..vault };
@@ -326,15 +358,8 @@ mod tests {
     }
 
     #[test]
-    fn a_share_is_never_refused_for_want_of_a_fair_share_of_one() {
-        let mut a = Admission::new(Limits { buckets: 1, in_flight: 0, files: 1, state: 0 }).unwrap();
-        assert_eq!(a.admit(key(1), 1, Resource::Files), Ok(()));
-        assert_eq!(a.admit(key(1), 2, Resource::Files), Err(Refused), "the bucket is full");
-    }
-
-    #[test]
     fn buckets_are_bounded_so_caps_fit() {
-        let mut a = Admission::new(Limits { buckets: 2, in_flight: 1, files: 1, state: 1 }).unwrap();
+        let mut a = Admission::new(Limits { buckets: 2, in_flight: 2, files: 2, state: 2 }).unwrap();
         a.admit(key(1), 1, Resource::Files).unwrap();
         a.admit(key(2), 1, Resource::Files).unwrap();
         assert_eq!(a.admit(key(3), 1, Resource::Files), Err(Refused));
@@ -344,10 +369,10 @@ mod tests {
 
     #[test]
     fn open_calls_leave_headroom() {
-        let most = (MAX_OPEN_CALLS - OPEN_CALL_HEADROOM) as u32;
-        assert!(Admission::new(Limits { buckets: most, in_flight: 1, files: 1, state: 1 }).is_ok());
-        assert!(Admission::new(Limits { buckets: most + 1, in_flight: 1, files: 1, state: 1 }).is_err());
-        assert!(Admission::new(Limits { buckets: 4, in_flight: most / 4 + 1, files: 0, state: 0 }).is_err());
+        let most = (MAX_OPEN_CALLS - OPEN_CALL_HEADROOM) as u32 / 2;
+        assert!(Admission::new(Limits { buckets: most, in_flight: 2, files: 2, state: 2 }).is_ok());
+        assert!(Admission::new(Limits { buckets: most + 1, in_flight: 2, files: 2, state: 2 }).is_err());
+        assert!(Admission::new(Limits { buckets: 4, in_flight: most / 2 + 2, files: 0, state: 0 }).is_err());
         assert!(
             Admission::new(Limits { buckets: u32::MAX, in_flight: u32::MAX, files: 0, state: 0 }).is_err()
         );
