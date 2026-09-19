@@ -38,6 +38,9 @@ exclude = [
   "redoubt/littlefs/fuzz",
   # Host-only fuzz targets for redoubt-rt (see redoubt/rt/fuzz/Cargo.toml).
   "redoubt/rt/fuzz",
+  # beamlet, the BEAM VM for the Elixir userland: its own workspace (host tools and `no_std`
+  # target crates, its own test toolchain), built by its own `cargo` invocations.
+  "redoubt/beamlet",
 ]
 
 [profile.release]

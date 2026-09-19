@@ -327,7 +327,7 @@ NIFs of `prim_file` and `prim_buffer`, over a `Files` trait the platform may pro
 
 ## I/O: one 9P client, asynchronous (decided 2026-09-18; files and console built as steps)
 On Redoubt every user-facing service speaks 9P2000 and a process's namespace is a table of
-capabilities (xous-core `planning/redoubt/NAMESPACES.md`). beamlet follows that:
+capabilities (`planning/redoubt/NAMESPACES.md`). beamlet follows that:
 - **`Platform` grows one generic I/O interface, a 9P client**, not per-service methods: attach,
   walk, open, read, write, clunk, stat on handles the embedder granted. Files are namespace walks,
   TCP is Plan 9's `/net` (`/net/tcp/clone`, `connect addr!port`, the data file), the console is
