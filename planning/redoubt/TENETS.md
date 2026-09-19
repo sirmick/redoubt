@@ -109,7 +109,9 @@ If it is not tested, it does not work; we just have not found out yet. The harne
 system, held to the same standard of simplicity as the kernel.
 
 - **One simple harness, real boots.** `cargo testbench` boots the real kernel under QEMU with injected
-  programs and asserts on the console. No mocks of the kernel, no special test builds of it. The whole
+  programs and asserts on the console. No mocks of the kernel, no special test builds of it (a build of the same sources with debug
+  assertions and overflow checks on is not a special build: it is the kernel checked harder, and
+  the bench boots chosen cases with it). The whole
   suite runs in seconds, so it runs on every change.
 - **Every behaviour has a case.** New kernel or loader behaviour lands with a test in `redoubt/tests/`.
   A bug fix lands with the test that would have caught it.
