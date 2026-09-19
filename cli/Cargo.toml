@@ -10,3 +10,4 @@ beamlet-vm = { path = "../vm" }
 beamlet-crypto = { path = "../crypto" }
 beamlet-re = { path = "../re" }
 cap-std = "3"
+fs-set-times = "0.20"

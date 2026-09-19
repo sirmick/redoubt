@@ -8,6 +8,8 @@
 -export([start/0]).
 
 start() ->
+    %% The kernel's environment (logger_level => notice, ...), which configures the logger.
+    _ = application:load(kernel),
     %% A release's boot script starts logger_server before the kernel application.
     {ok, Server} = logger_server:start_link(),
     unlink(Server),

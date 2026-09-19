@@ -19,8 +19,8 @@ path=""
 for app in stdlib kernel compiler crypto public_key asn1 ssl ssh erts syntax_tools tools parsetools; do
     path="$path -pa $(ls -d "$otp_lib"/$app-*/ebin)"
 done
-for app in elixir logger eex iex ex_unit; do path="$path -pa $elixir_lib/$app/ebin"; done
-out="$root/build/elixir-tests"; mkdir -p "$out"
+for app in elixir logger eex iex ex_unit mix; do path="$path -pa $elixir_lib/$app/ebin"; done
+out="${ELIXIR_TESTS_OUT:-$root/build/elixir-tests}"; mkdir -p "$out"
 erlc -o "$out" "$root/tools/exunit.erl"
 [ -n "${BEAMLET:-}" ] || cargo build --quiet --release --manifest-path "$root/Cargo.toml" -p beamlet
 files=("$@")

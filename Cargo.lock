@@ -75,6 +75,7 @@ dependencies = [
  "beamlet-re",
  "beamlet-vm",
  "cap-std",
+ "fs-set-times",
 ]
 
 [[package]]
