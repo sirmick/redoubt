@@ -62,8 +62,9 @@ system can prevent that.
 
 ## The shared server library
 Every system server that serves more than one account links one small library of two functions:
-- **`admit(account)`**: per-account limits on in-flight requests, open files and per-client state.
-  Accounts, not badges or budgets, because both of those are cheap to create.
+- **`admit(account, labels)`**: limits on in-flight requests, open files and per-client state, per
+  (account, label set). Accounts, not badges or budgets, because both of those are cheap to create;
+  with the label set, because caps are counted that way (below).
 - **`check(caller_labels, object_labels, read | write)`**: *no read up* (read only if the object's
   labels ⊆ the caller's) and *no write down* (write only if the caller's labels ⊆ the object's).
 

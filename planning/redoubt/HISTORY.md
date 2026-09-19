@@ -250,4 +250,7 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   wear-levelling path fails its own asserts and loses operations on several seeds (recorded in the
   diff suite; keep `block_cycles` off in C tooling that touches these volumes). The block-device
   contract the crate relies on is QUESTIONS.md 36.
+- **CONTAINMENT.md: `admit` counted per (account, label set)** (2026-09-19, editorial, following
+  answer 17): the shared server library's admission limits are caps, and answer 17 counts caps per
+  (account, label set); the library's description now says so (question 38).
 
