@@ -10,7 +10,8 @@
 use redoubt_rt::abi::{FOREVER, Handle, MAX_LEND_PAGES};
 use redoubt_rt::client::Client;
 use redoubt_rt::handle::Endpoint;
-use redoubt_rt::server::ninep::{NO_MESSAGE, mode};
+use redoubt_rt::server::MALFORMED;
+use redoubt_rt::server::ninep::mode;
 use redoubt_rt::startup::Startup;
 
 redoubt_rt::entry!(run);
@@ -64,10 +65,10 @@ fn check(startup: &Startup) -> Result<(), u32> {
         return Err(18);
     }
     echo.clunk(FILE).map_err(|_| 19u32)?;
-    // A call with words that are not 9P's is answered with NO_MESSAGE, not served.
+    // A call with words that are not 9P's is malformed (status 1), not served.
     let endpoint = echo.into_endpoint();
     let reply = endpoint.call(&[1, 2, 3, 4], &[], None, FOREVER).map_err(|_| 20u32)?;
-    if reply.words != NO_MESSAGE {
+    if reply.words != MALFORMED {
         return Err(21);
     }
     Ok(())

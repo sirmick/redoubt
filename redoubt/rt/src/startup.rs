@@ -6,8 +6,8 @@
 //!
 //! The kernel argument block's tag format (BOOT.md, `loader/src/args.rs`): little-endian `u32`
 //! words; each entry is a 4-byte ASCII tag, one word holding a CRC-16/X-25 of its data (low half)
-//! and its data length in words (high half), then the data. INIT.md fixes what the block holds;
-//! the entry layouts below are this crate's:
+//! and its data length in words (high half), then the data. INIT.md owns the format (answer
+//! 39); the entries:
 //!
 //! | Tag | Data | Meaning |
 //! | --- | --- | --- |
@@ -17,12 +17,13 @@
 //! | `Argv` | byte length, argument | one argument, in order |
 //!
 //! Strings are UTF-8, zero-padded to a whole word, and the entry's length must be exactly what
-//! its string needs. Handles are 1..=n. Paths and names are unique. Nothing may follow the last
+//! its string needs. Handles are 1..=n, and n is at most `MAX_START_HANDLES` (what
+//! `process_start` can install). Paths and names are unique. Nothing may follow the last
 //! entry inside the block's length; the rest of the page is not read.
 
 use alloc::vec::Vec;
 
-use redoubt_sys::{Handle, PAGE_SIZE};
+use redoubt_sys::{Handle, MAX_START_HANDLES, PAGE_SIZE};
 
 use crate::path;
 
@@ -65,16 +66,15 @@ enum Entry<'a> {
     Arg(&'a str),
 }
 
-/// A parsed startup block: every accessor reads entries already validated by [`Startup::parse`].
-#[derive(Clone, Copy, Debug)]
+/// A parsed startup block: its entries, validated by [`Startup::parse`].
+#[derive(Clone, Debug)]
 pub struct Startup<'a> {
-    entries: &'a [u8],
-    handles: u32,
+    entries: Vec<Entry<'a>>,
 }
 
 impl<'a> Startup<'a> {
     /// A process started with no block.
-    pub const EMPTY: Startup<'static> = Startup { entries: &[], handles: 0 };
+    pub const EMPTY: Startup<'static> = Startup { entries: Vec::new() };
 
     /// Parses the block at the front of `bytes` (at most [`MAX_BLOCK`] of them are looked at).
     pub fn parse(bytes: &'a [u8]) -> Result<Startup<'a>, StartupError> {
@@ -91,23 +91,25 @@ impl<'a> Startup<'a> {
         if version != VERSION {
             return Err(StartupError::BadVersion);
         }
+        // `process_start` installs at most MAX_START_HANDLES handles, so no more can be named.
+        if handles as usize > MAX_START_HANDLES {
+            return Err(StartupError::BadHandle);
+        }
         let len = usize::try_from(words).ok().and_then(|w| w.checked_mul(4)).ok_or(StartupError::TooLarge)?;
         if len > MAX_BLOCK {
             return Err(StartupError::TooLarge);
         }
-        let entries = bytes.get(HEADER_BYTES..len).ok_or(if len < HEADER_BYTES {
+        let mut rest = bytes.get(HEADER_BYTES..len).ok_or(if len < HEADER_BYTES {
             StartupError::BadLength
         } else {
             StartupError::Short
         })?;
-        let startup = Startup { entries, handles };
-        // Validate every entry, and that no path or name repeats (at most a few hundred entries
-        // fit in a page, so the quadratic check is small).
-        let mut seen: Vec<Entry<'a>> = Vec::new();
-        let mut rest = entries;
+        // Decode every entry once, and check that no path or name repeats (at most a few hundred
+        // entries fit in a page, so the quadratic check is small).
+        let mut entries: Vec<Entry<'a>> = Vec::new();
         while !rest.is_empty() {
-            let entry = startup.entry(&mut rest)?;
-            let repeated = seen.iter().any(|old| match (old, &entry) {
+            let entry = Self::entry(&mut rest, handles)?;
+            let repeated = entries.iter().any(|old| match (old, &entry) {
                 (Entry::Namespace(a, _), Entry::Namespace(b, _))
                 | (Entry::Handle(a, _), Entry::Handle(b, _)) => a == b,
                 _ => false,
@@ -115,16 +117,18 @@ impl<'a> Startup<'a> {
             if repeated {
                 return Err(StartupError::Duplicate);
             }
-            seen.push(entry);
+            // A block holds a few hundred entries at most; no memory for them is a refusal.
+            entries.try_reserve(1).map_err(|_| StartupError::TooLarge)?;
+            entries.push(entry);
         }
-        Ok(startup)
+        Ok(Startup { entries })
     }
 
-    /// Decodes the entry at the front of `rest`.
-    fn entry(&self, rest: &mut &'a [u8]) -> Result<Entry<'a>, StartupError> {
+    /// Decodes the entry at the front of `rest`; handles must be 1..=`handles`.
+    fn entry(rest: &mut &'a [u8], handles: u32) -> Result<Entry<'a>, StartupError> {
         let (tag, data) = raw_entry(rest)?;
         let handle = |raw: u32| match Handle::new(raw) {
-            Some(handle) if raw <= self.handles => Ok(handle),
+            Some(handle) if raw <= handles => Ok(handle),
             _ => Err(StartupError::BadHandle),
         };
         match tag {
@@ -147,12 +151,7 @@ impl<'a> Startup<'a> {
         }
     }
 
-    fn entries(&self) -> impl Iterator<Item = Entry<'a>> + '_ {
-        let mut rest = self.entries;
-        // `parse` validated every entry, so none fails here; stopping at an error keeps even a
-        // broken invariant from looping.
-        core::iter::from_fn(move || if rest.is_empty() { None } else { self.entry(&mut rest).ok() })
-    }
+    fn entries(&self) -> impl Iterator<Item = Entry<'a>> + '_ { self.entries.iter().copied() }
 
     /// The namespace table: (path, handle), in block order.
     pub fn namespace(&self) -> impl Iterator<Item = (&'a str, Handle)> + '_ {
@@ -220,17 +219,22 @@ fn handle_and_string(data: &[u8]) -> Result<(u32, &str), StartupError> {
 
 /// A length word and a zero-padded UTF-8 string that fills the rest of the data exactly.
 fn string(data: &[u8]) -> Result<&str, StartupError> {
-    let len = word(data, 0).ok_or(StartupError::BadLength)? as usize;
+    let len = word(data, 0).ok_or(StartupError::BadLength)?;
     let padded = data.get(4..).unwrap_or(&[]);
-    if len.div_ceil(4) * 4 != padded.len() {
+    if padded_len(len).and_then(|p| usize::try_from(p).ok()) != Some(padded.len()) {
         return Err(StartupError::BadLength);
     }
-    let (text, padding) = padded.split_at(len);
+    // In range: `len` <= its padded length, which is `padded.len()`.
+    let (text, padding) = padded.split_at(len as usize);
     if padding.iter().any(|b| *b != 0) {
         return Err(StartupError::BadString);
     }
     core::str::from_utf8(text).map_err(|_| StartupError::BadString)
 }
+
+/// A string of `len` bytes padded to whole words, in 32-bit arithmetic on both widths (the
+/// length word is 32 bits); `None` if that overflows, as it would on rv32 near `u32::MAX`.
+fn padded_len(len: u32) -> Option<u32> { len.checked_next_multiple_of(4) }
 
 /// CRC-16/X-25 (reflected polynomial 0x8408, initial and final value 0xffff): the kernel
 /// argument block's checksum (the loader's `CRC_16_IBM_SDLC`).
@@ -247,6 +251,10 @@ fn crc16(data: &[u8]) -> u16 {
 
 /// Writes a startup block, for launchers (`init`, the steward) and tests. [`finish`] parses the
 /// result, so a builder can only produce blocks the parser accepts.
+///
+/// **A launcher never passes its own connection to a child** (answer 50): every handle named in a
+/// child's namespace is a fresh connection the server made for that child. A copied connection
+/// would share the launcher's fids and admission with the child.
 ///
 /// [`finish`]: StartupBuilder::finish
 pub struct StartupBuilder {
@@ -295,22 +303,19 @@ impl StartupBuilder {
         if self.bytes.len() > MAX_BLOCK {
             return Err(StartupError::TooLarge);
         }
-        let mut header = StartupBuilder { bytes: Vec::new(), handles: 0 };
         // The length fits: at most MAX_BLOCK / 4 words.
-        header.push(
-            HEADER,
-            &[VERSION, (self.bytes.len() / 4) as u32, self.handles].map(u32::to_le_bytes).concat(),
-        );
-        let mut bytes = self.bytes.clone();
-        bytes[..HEADER_BYTES].copy_from_slice(&header.bytes);
-        Startup::parse(&bytes)?;
-        Ok(bytes)
+        let header = [VERSION, (self.bytes.len() / 4) as u32, self.handles].map(u32::to_le_bytes).concat();
+        let mut block = StartupBuilder { bytes: Vec::new(), handles: 0 };
+        block.push(HEADER, &header);
+        block.bytes.extend_from_slice(&self.bytes[HEADER_BYTES..]);
+        Startup::parse(&block.bytes)?;
+        Ok(block.bytes)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use alloc::string::String;
+
     use alloc::vec;
 
     use super::*;
@@ -374,71 +379,52 @@ mod tests {
                 assert!(Startup::parse(&bad).is_err(), "bit {bit} of byte {at} went unnoticed");
             }
         }
-        let b = |f: &dyn Fn(&mut StartupBuilder)| {
+        // Each builder step the parser must refuse, and why.
+        type Case<'a> = (&'a dyn Fn(&mut StartupBuilder), Option<StartupError>);
+        let cases: [Case; 9] = [
+            (&|s| _ = s.namespace("/", h(3)), Some(StartupError::BadHandle)),
+            (&|s| _ = s.namespace("/a/../b", h(1)), Some(StartupError::BadString)),
+            (&|s| _ = s.namespace("dev", h(1)), Some(StartupError::BadString)),
+            (&|s| _ = s.handle("", h(1)), Some(StartupError::BadString)),
+            (&|s| _ = s.handle("a\0", h(1)), Some(StartupError::BadString)),
+            (&|s| _ = s.handle("x", h(1)).handle("x", h(2)), Some(StartupError::Duplicate)),
+            (&|s| _ = s.namespace("/", h(1)).namespace("/", h(2)), Some(StartupError::Duplicate)),
+            (&|s| _ = s.arg(&"x".repeat(MAX_BLOCK)), Some(StartupError::TooLarge)),
+            // A name and a path may be spelled alike: different tables.
+            (&|s| _ = s.namespace("/", h(1)).handle("/", h(2)), None),
+        ];
+        for (i, (build, expected)) in cases.iter().enumerate() {
             let mut builder = StartupBuilder::new(2);
-            f(&mut builder);
-            builder.finish().err()
-        };
-        assert_eq!(
-            b(&|s| {
-                s.namespace("/", h(3));
-            }),
-            Some(StartupError::BadHandle)
-        );
-        assert_eq!(
-            b(&|s| {
-                s.namespace("/a/../b", h(1));
-            }),
-            Some(StartupError::BadString)
-        );
-        assert_eq!(
-            b(&|s| {
-                s.namespace("dev", h(1));
-            }),
-            Some(StartupError::BadString)
-        );
-        assert_eq!(
-            b(&|s| {
-                s.handle("", h(1));
-            }),
-            Some(StartupError::BadString)
-        );
-        assert_eq!(
-            b(&|s| {
-                s.handle("a\0", h(1));
-            }),
-            Some(StartupError::BadString)
-        );
-        assert_eq!(
-            b(&|s| {
-                s.handle("x", h(1)).handle("x", h(2));
-            }),
-            Some(StartupError::Duplicate)
-        );
-        assert_eq!(
-            b(&|s| {
-                s.namespace("/", h(1)).namespace("/", h(2));
-            }),
-            Some(StartupError::Duplicate)
-        );
-        // A name and a path may be spelled alike: different tables.
-        assert_eq!(
-            b(&|s| {
-                s.namespace("/", h(1)).handle("/", h(2));
-            }),
-            None
-        );
-        let long: String = "x".repeat(MAX_BLOCK);
-        assert_eq!(
-            b(&|s| {
-                s.arg(&long);
-            }),
-            Some(StartupError::TooLarge)
-        );
+            build(&mut builder);
+            assert_eq!(builder.finish().err(), *expected, "case {i}");
+        }
         // An entry after the block's stated length is not part of it; one the length cuts is short.
         let mut cut = good.clone();
         cut.truncate(good.len() - 4);
         assert_eq!(reject(&cut), Some(StartupError::Short));
+    }
+
+    #[test]
+    fn handle_counts_are_what_process_start_can_install() {
+        let most = MAX_START_HANDLES as u32;
+        assert!(StartupBuilder::new(most).handle("last", h(most)).finish().is_ok());
+        assert_eq!(StartupBuilder::new(most + 1).finish().err(), Some(StartupError::BadHandle));
+        assert_eq!(StartupBuilder::new(u32::MAX).finish().err(), Some(StartupError::BadHandle));
+    }
+
+    #[test]
+    fn string_lengths_use_checked_32_bit_arithmetic() {
+        // The length word is 32 bits; rounding it up to whole words must not wrap, as it would
+        // in rv32's `usize` (0xffff_ffff rounded up wraps to 0, matching an empty tail).
+        assert_eq!(padded_len(0), Some(0));
+        assert_eq!(padded_len(5), Some(8));
+        assert_eq!(padded_len(u32::MAX - 3), Some(u32::MAX - 3));
+        assert_eq!(padded_len(u32::MAX - 2), None);
+        assert_eq!(padded_len(u32::MAX), None);
+        // The attack itself: an argument claiming 0xffff_ffff bytes with none present.
+        let mut builder = StartupBuilder::new(0);
+        builder.push(ARG, &u32::MAX.to_le_bytes());
+        assert_eq!(builder.finish().err(), Some(StartupError::BadLength));
     }
 
     #[test]

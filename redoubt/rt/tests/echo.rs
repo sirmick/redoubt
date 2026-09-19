@@ -1,19 +1,20 @@
-//! The echo pair (`examples/echo-server.rs`, `examples/echo-client.rs`), unchanged, as two fake
+//! The echo pair (`src/bin/echo-server.rs`, `src/bin/echo-client.rs`), unchanged, as two fake
 //! processes: each gets a startup block written with `StartupBuilder`, exactly as a launcher
 //! would, and runs its entry function. Then a hostile client attacks the same server.
 
 mod common;
 
-#[path = "../examples/echo-client.rs"]
+#[path = "../src/bin/echo-client.rs"]
 mod echo_client;
-#[path = "../examples/echo-server.rs"]
+#[path = "../src/bin/echo-server.rs"]
 mod echo_server;
 
 use common::fake;
 use redoubt_rt::abi::{FOREVER, Handle, PAGE_SIZE};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::Buffer;
-use redoubt_rt::server::ninep::{NO_MESSAGE, WORDS_9P};
+use redoubt_rt::server::MALFORMED;
+use redoubt_rt::server::ninep::WORDS_9P;
 use redoubt_rt::startup::{Startup, StartupBuilder};
 use redoubt_rt::wire::ninep::{Body, Message};
 
@@ -21,7 +22,7 @@ use redoubt_rt::wire::ninep::{Body, Message};
 fn launch(pid: usize, block: Vec<u8>, main: fn(&Startup) -> u32) -> std::thread::JoinHandle<u32> {
     fake().run(pid, move || {
         let startup = Startup::parse(&block).expect("the launcher's block parses");
-        redoubt_rt::init(&startup);
+        redoubt_rt::start::note_console(&startup);
         main(&startup)
     })
 }
@@ -84,11 +85,11 @@ fn a_hostile_client_does_not_hurt_the_server_or_other_clients() {
             let junk = Endpoint::create().unwrap();
             let reply =
                 ep.call(&[9, 9, 9, 9], &[junk.handle(), junk.handle()], Some(&mut lend), FOREVER).unwrap();
-            assert_eq!(reply.words, NO_MESSAGE);
+            assert_eq!(reply.words, MALFORMED);
             junk.close().unwrap();
         }
         // 9P with no lend at all.
-        assert_eq!(ep.call(&WORDS_9P, &[], None, FOREVER).unwrap().words, NO_MESSAGE);
+        assert_eq!(ep.call(&WORDS_9P, &[], None, FOREVER).unwrap().words, MALFORMED);
         // Garbage in the lend: an Rerror, never a crash.
         let mut x = 0x1234_5678_u64;
         for round in 0..300 {

@@ -12,4 +12,9 @@ pub mod ninep;
 pub mod typed;
 
 pub use admit::{Admission, AdmitKey, Limits, Refused, Resource};
+
+/// The reply words of a malformed request, in 9P calls and every typed protocol alike: status 1,
+/// `Malformed` (answers 41 and 42). Until the wire generator reserves code 1 in every error table,
+/// the `example` protocol's code 1 (`not_found`) collides with it.
+pub const MALFORMED: crate::ipc::Words = [1, 0, 0, 0];
 pub use label::{Access, Denied, check};

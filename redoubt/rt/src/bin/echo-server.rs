@@ -89,8 +89,8 @@ impl FileServer for EchoFs {
 
     fn stat(&mut self, _: &Caller, node: &Node) -> Result<FileStat, NineError> { Ok(self.stat_of(*node)) }
 
-    fn dir_entry(&mut self, _: &Caller, _: &Node, index: u64) -> Result<Option<FileStat>, NineError> {
-        Ok((index == 0).then(|| self.stat_of(Node::Echo)))
+    fn dir_entry(&mut self, _: &Caller, _: &Node, index: u64) -> Result<Option<(Node, FileStat)>, NineError> {
+        Ok((index == 0).then(|| (Node::Echo, self.stat_of(Node::Echo))))
     }
 }
 

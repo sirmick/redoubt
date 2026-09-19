@@ -1,4 +1,5 @@
-//! The heap: a simple allocator over `map_anon` (TENETS.md 1: not fast, obviously correct).
+//! The heap: a simple allocator over `map_anon`, obviously correct rather than fast (TENETS.md:
+//! "Not fast", and tenet 1).
 //!
 //! - **Small blocks** (at most [`MAX_SMALL`] bytes and alignment): eight size classes, the powers of two from
 //!   16 to 2048. A class's free blocks form a singly linked list threaded through the blocks themselves. An

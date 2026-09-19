@@ -7,15 +7,15 @@ use alloc::vec::Vec;
 
 /// The most bytes in one path component.
 pub const MAX_NAME: usize = 255;
-/// The most components in a cleaned path, and the deepest a 9P fid may walk below its root.
-pub const MAX_DEPTH: usize = 64;
+/// The most components in a cleaned path, and the deepest a 9P fid may be below its root.
+pub const MAX_COMPONENTS: usize = 64;
 
 /// Why a path was refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PathError {
     /// A component that is not a [`valid_name`].
     BadName,
-    /// Deeper than [`MAX_DEPTH`].
+    /// Deeper than [`MAX_COMPONENTS`].
     TooDeep,
 }
 
@@ -41,7 +41,7 @@ pub fn clean(path: &str) -> Result<Vec<&str>, PathError> {
                 out.pop();
             }
             name if valid_name(name) => {
-                if out.len() == MAX_DEPTH {
+                if out.len() == MAX_COMPONENTS {
                     return Err(PathError::TooDeep);
                 }
                 out.push(name);
@@ -57,7 +57,7 @@ pub fn clean(path: &str) -> Result<Vec<&str>, PathError> {
 pub fn is_clean_absolute(path: &str) -> bool {
     match path.strip_prefix('/') {
         Some("") => true,
-        Some(rest) => rest.split('/').all(valid_name) && rest.split('/').count() <= MAX_DEPTH,
+        Some(rest) => rest.split('/').all(valid_name) && rest.split('/').count() <= MAX_COMPONENTS,
         None => false,
     }
 }
@@ -84,9 +84,9 @@ mod tests {
         for bad in ["", ".", "..", "a/b", "a\0"] {
             assert!(!valid_name(bad), "{bad:?}");
         }
-        let deep = "a/".repeat(MAX_DEPTH + 1);
+        let deep = "a/".repeat(MAX_COMPONENTS + 1);
         assert_eq!(clean(&deep), Err(PathError::TooDeep));
-        assert_eq!(clean(&"a/".repeat(MAX_DEPTH)).map(|c| c.len()), Ok(MAX_DEPTH));
+        assert_eq!(clean(&"a/".repeat(MAX_COMPONENTS)).map(|c| c.len()), Ok(MAX_COMPONENTS));
     }
 
     #[test]
