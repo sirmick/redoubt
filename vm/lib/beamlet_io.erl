@@ -3,7 +3,8 @@
 %% io:get_line/1, io:read/1 and Elixir's IO.puts/1 and IO.gets/1 work unchanged, and talks to
 %% the platform console.
 %%
-%% Output is written at once. Input requests are served in order from a buffer; when the
+%% Output is written at once, to the console port (`{fd, 0, 1}`, or `{fd, 0, 2}` for
+%% standard_error, as BEAM's `user` opens). Input requests are served in order from a buffer; when the
 %% buffer runs dry the server subscribes to console input (beamlet:console_subscribe/0) and
 %% the VM sends it {beamlet_console, Bytes} as input arrives, then {beamlet_console, eof}.
 %% Output requests are still served while an input request waits, as OTP's `user` does.
@@ -21,6 +22,8 @@
 
 start(Name) ->
     register(Name, self()),
+    Out = case Name of standard_error -> 2; _ -> 1 end,
+    put(console, open_port({fd, 0, Out}, [out, binary])),
     loop(#st{}).
 
 loop(St) ->
@@ -92,7 +95,7 @@ requests([R | Rs], St) ->
 put_chars(Encoding, Chars) ->
     case unicode:characters_to_binary(Chars, in_encoding(Encoding)) of
         Bin when is_binary(Bin) ->
-            erlang:display_string(Bin),
+            port_command(get(console), Bin),
             ok;
         _ ->
             {error, badarg}

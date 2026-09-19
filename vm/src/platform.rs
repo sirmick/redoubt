@@ -61,6 +61,67 @@ pub trait Platform {
     fn files(&mut self) -> Option<&mut dyn Files> {
         None
     }
+
+    /// The programs this VM may start, behind ports (`open_port/2`, and so `os:cmd/1`). The
+    /// default is none: opening such a port then fails with `eacces`. Output from programs is
+    /// an external event: [`Platform::idle`] should return when some arrives.
+    fn programs(&mut self) -> Option<&mut dyn Programs> {
+        None
+    }
+}
+
+/// Running other programs. A program is outside the VM altogether (an OS process with rights
+/// of its own), so this is a large grant, made only when the embedder chooses to.
+pub trait Programs {
+    /// Start a program with its standard input and output connected to the VM.
+    fn spawn(&mut self, spawn: &Spawn) -> Result<Spawned, FileError>;
+    /// Queue bytes for the program's standard input. Must not block.
+    fn write(&mut self, handle: u64, data: &[u8]) -> Result<(), FileError>;
+    /// Stop talking to the program: close its input and forget its output. The program is not
+    /// killed (as in BEAM, it sees end of input and a closed output).
+    fn close(&mut self, handle: u64);
+    /// The next event from any program, if one has arrived. Must not block.
+    fn poll(&mut self) -> Option<(u64, ProgramEvent)>;
+}
+
+/// What to start: a command line for the shell, or an executable file and its arguments. Paths
+/// are the VM's own, absolute; the platform maps them to its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Program {
+    Shell(String),
+    Executable { path: String, arg0: Option<String>, args: Vec<String> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Spawn {
+    pub program: Program,
+    /// The program's whole environment (the VM's, with the port's changes applied).
+    pub env: Vec<(String, String)>,
+    /// Its working directory: a VM path.
+    pub cwd: String,
+    /// Whether the VM writes to its input (else the program's input is empty).
+    pub input: bool,
+    /// Whether the VM reads its output (else the output is discarded).
+    pub output: bool,
+    /// Its error output goes with its output (else wherever the VM's own goes).
+    pub stderr_to_stdout: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Spawned {
+    pub handle: u64,
+    /// The OS process id, if the platform has such a thing.
+    pub os_pid: Option<u64>,
+}
+
+/// Something that happened to a program, in order: output, then its end, then its exit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProgramEvent {
+    Output(Vec<u8>),
+    /// Its output has ended.
+    Eof,
+    /// It has exited: the status, or 128 plus the signal that ended it.
+    Exit(i32),
 }
 
 /// A file system, as the VM's `file` module sees it (through OTP's `prim_file`).

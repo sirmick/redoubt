@@ -96,3 +96,8 @@ fn ets_inserts_past_the_limit_raise() {
 fn memory_is_reported() {
     assert_eq!(run("memory", small()), "{true,true,true}");
 }
+
+#[test]
+fn programs_need_the_platform_to_grant_them() {
+    assert_eq!(run("no_programs", small()), "{error,eacces}");
+}

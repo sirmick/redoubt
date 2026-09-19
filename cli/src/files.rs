@@ -62,6 +62,14 @@ impl HostDir {
             })
     }
 
+    /// The host path a VM path names, its links resolved in the VM's name space (for programs
+    /// the VM starts, which run on the host).
+    pub fn host_path(&self, path: &str) -> Result<std::path::PathBuf, FileError> {
+        let path = self.walk(path, true)?;
+        let (m, inner) = self.at(&path);
+        Ok(if inner == "." { m.host.clone() } else { m.host.join(inner) })
+    }
+
     /// The mount a VM path (`/a/b`, already normalized) is in, and the path within it.
     fn at<'p>(&self, path: &'p str) -> (&Mount, &'p str) {
         let m = self
@@ -136,7 +144,7 @@ impl HostDir {
     }
 }
 
-fn error(e: std::io::Error) -> FileError {
+pub(crate) fn error(e: std::io::Error) -> FileError {
     match e.kind() {
         ErrorKind::NotFound => FileError::Enoent,
         ErrorKind::PermissionDenied => FileError::Eacces,

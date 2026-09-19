@@ -14,7 +14,8 @@ Name: `beamlet` is a working name.
 4. **Fidelity.** Where we implement something, it behaves exactly like the real BEAM. The
    differential test suite checks this.
 
-Non-goals: speed, a JIT, NIFs or ports (foreign code lives in separate OS processes), distribution
+Non-goals: speed, a JIT, NIFs or port drivers (foreign code lives in separate OS processes, which
+ports may reach when the platform grants it: see Ports), distribution
 (for now), hot code upgrade (for now), and running on OTP versions other than the pinned one.
 
 ## Pinned toolchain
@@ -152,13 +153,16 @@ it. Every limit fails closed: the offender is ended, nothing is silently lost.
 - **Differential tests** (`tools/difftest`): each `tests/<suite>/*.erl` exports `start/0`; it runs
   on the real BEAM (`tools/expect.escript`) and on beamlet, and the printed results must be
   identical. The real OTP `stdlib` `.beam` files are on beamlet's code path, so every test also
-  exercises the loader and interpreter on OTP's own code.
+  exercises the loader and interpreter on OTP's own code. `<Module>.stdin` is a test's console
+  input and `<Module>.args` its extra beamlet options (`--exec` for ports). A test that does
+  not compile counts as a failure unless `SKIP` lists it.
 - **Hostile input** (`vm/tests/hostile.rs`): every truncation of real `.beam` files is
   rejected; mutation fuzzing (20k rounds by default, 1M soaked) must never panic or hang the VM.
   It found four bugs, each now a regression test.
 - **Corpora**: `tests/erlang` (ours), `tests/elixir` (Enum, String, structs, GenServer, Agent,
   Task, Supervisor, IO, exceptions), `tests/atomvm` (AtomVM's 491 modules; `SKIP` lists those
-  that need ports, NIFs or BEAM heap sizes, with reasons).
+  that need AtomVM's build output, distribution or BEAM heap sizes, with reasons), and Elixir's
+  own test suite (`tools/elixir-tests`; `tools/elixir-tests.skip` lists what fails by design).
 
 ## Opcode census
 `tools/census.escript` lists the instructions and imports a set of `.beam` files use. On OTP 28:
@@ -218,8 +222,10 @@ NIFs of `prim_file` and `prim_buffer`, over a `Files` trait the platform may pro
   climbs above `/`. What `/` is, is the platform's choice. The platform must still refuse
   escapes the VM cannot see (symbolic links).
 - An open file belongs to the process that opened it; it is closed when that process exits.
-  At most 1024 open files per VM (`emfile`). Links, ownership, permissions and times cannot be
-  changed (`enotsup`, which `write_file_info` tolerates).
+  At most 1024 open files per VM (`emfile`). Times, permissions and links can be changed where
+  the platform allows; ownership cannot (`enotsup`, which `write_file_info` tolerates).
+- Files in memory (`file:open(Data, [ram])`) are `vm/lib/ram_file.erl`, OTP's `ram_file` API
+  over a small server process instead of its C port driver.
 - `file_server_2` starts at boot (about 2 ms) if the platform can load it: without a file
   system, `file:get_cwd/0` (which compilers call) still works and file operations fail with
   `enotsup`.
@@ -233,6 +239,36 @@ NIFs of `prim_file` and `prim_buffer`, over a `Files` trait the platform may pro
   operations are 9P's (walk+open, read, write, stat, clunk, create, remove, wstat for rename),
   so a Xous platform implements it with a 9P client, and it can later fold into the one
   asynchronous interface without changing the Erlang side.
+
+## Ports (`Platform::programs`, `vm/src/bif/port.rs`, `vm/lib/beamlet_port.erl`)
+`open_port/2` with `{spawn, Command}` or `{spawn_executable, File}` starts a program, and so do
+`os:cmd/1,2` and Elixir's `System.cmd/3` and `System.shell/2`, which are OTP's and Elixir's code.
+- **A capability.** Starting programs is the platform's to grant (`Platform::programs`); without
+  it `open_port/2` fails with `eacces`. A program is outside the VM's sandbox altogether (on
+  POSIX, a host process with the user's rights, seeing the host's files), so the CLI grants it
+  only with `--exec`. What the VM does decide: which executable (a path in its own name space,
+  mapped by the platform), the program's environment (the VM's own, which starts with only
+  `HOME`; `--env NAME[=VALUE]` adds to it) and its working directory. A shell command line is
+  the host shell's: VM paths in it mean nothing to the host.
+- **A port is a process** marked as a port in its `Pid`: to Erlang code it is a port
+  (`#Port<0.N>`, `is_port/1`, ordered before pids, V4_PORT_EXT, `erlang:ports/0`), and links,
+  monitors (`'DOWN'` with type `port`), exit signals and registered names are those of
+  processes, with no new machinery. Its code is the embedded driver `beamlet_port`, which frames
+  the program's output (stream, `{line, L}`, `{packet, N}`, `binary`, `eof`, `exit_status`) and
+  handles `{Pid, {command, D}}`, `{Pid, close}` and `{Pid, {connect, New}}`. Writing
+  (`port_command/2`, so data goes before a following close), closing (`port_close/1`, which ends
+  the port before the caller runs again) and `port_info/1,2` are natives. Message order follows
+  BEAM where Erlang and Elixir code depend on it (a last unfinished line after the exit
+  status). There are no port drivers (`{spawn_driver, _}`, `port_control/3` are `badarg`).
+- **The console is a port**, `{fd, 0, 1}` (and `{fd, 0, 2}` for `standard_error`), opened by the
+  `user` I/O server as BEAM's is, for output. Console input still reaches `user` by
+  subscription, so stdin is read only when a process asks for input.
+- POSIX (`cli/src/programs.rs`): `std::process` with a thread per program reading its output
+  and one writing its input (so neither blocks the VM), all feeding the one event channel that
+  console input also uses, which is what `Platform::idle` waits on. Closing a port closes the
+  program's input and stops reading its output; the program is not killed (as in BEAM).
+- Tests: `tests/erlang/ports.erl` (against BEAM), AtomVM's port tests (which spawn `echo`), a
+  VM test that ports need the grant, and Elixir's `System`, `Port` and `os:cmd` tests.
 
 ## I/O: one 9P client, asynchronous (decided 2026-09-18; files and console built as steps)
 On Redoubt every user-facing service speaks 9P2000 and a process's namespace is a table of

@@ -104,6 +104,9 @@ pub struct System {
     pub(crate) cwd: String,
     /// Open files: platform handle, and the process that opened it.
     pub(crate) files: BTreeMap<u64, Pid>,
+    /// Open ports, by the pid of the port's process, and the port behind each program handle.
+    pub(crate) ports: BTreeMap<Pid, crate::bif::port::PortState>,
+    pub(crate) program_ports: BTreeMap<u64, Pid>,
     /// Set by `erlang:halt`: the VM stops with this status.
     pub(crate) halted: Option<i64>,
     /// The process that receives console input (`beamlet:console_subscribe/0`): the `user`
@@ -155,6 +158,8 @@ const EMBEDDED: &[&[u8]] = &[
     include_bytes!("../lib/beamlet_tcp.beam"),
     include_bytes!("../lib/beamlet_code.beam"),
     include_bytes!("../lib/beamlet_kernel.beam"),
+    include_bytes!("../lib/beamlet_port.beam"),
+    include_bytes!("../lib/ram_file.beam"),
 ];
 
 /// Stand-ins for the kernel's `logger` and `error_logger`, loaded only when the platform does
@@ -165,7 +170,7 @@ enum Slot {
     Free,
     Present(Box<Process>),
     /// Taken out by the scheduler while it runs.
-    Running { serial: u32 },
+    Running { pid: Pid },
 }
 
 pub(crate) struct ProcTable {
@@ -183,7 +188,7 @@ impl ProcTable {
         ProcTable { slots: Vec::new(), free: Vec::new(), live: 0, next_serial: 0 }
     }
 
-    fn allocate(&mut self) -> Option<Pid> {
+    fn allocate(&mut self, port: bool) -> Option<Pid> {
         if self.live >= MAX_PROCESSES {
             return None;
         }
@@ -197,8 +202,9 @@ impl ProcTable {
                 (self.slots.len() - 1) as u32
             }
         };
-        self.slots[index as usize] = Slot::Running { serial };
-        Some(Pid { index, serial })
+        let pid = Pid { index, serial, port };
+        self.slots[index as usize] = Slot::Running { pid };
+        Some(pid)
     }
 
     pub(crate) fn get_mut(&mut self, pid: Pid) -> Option<&mut Process> {
@@ -211,7 +217,7 @@ impl ProcTable {
     pub(crate) fn is_alive(&self, pid: Pid) -> bool {
         match self.slots.get(pid.index as usize) {
             Some(Slot::Present(p)) => p.pid == pid,
-            Some(Slot::Running { serial }) => *serial == pid.serial,
+            Some(Slot::Running { pid: running }) => *running == pid,
             _ => false,
         }
     }
@@ -220,7 +226,7 @@ impl ProcTable {
         let slot = self.slots.get_mut(pid.index as usize)?;
         match slot {
             Slot::Present(p) if p.pid == pid => {
-                let Slot::Present(p) = core::mem::replace(slot, Slot::Running { serial: pid.serial }) else {
+                let Slot::Present(p) = core::mem::replace(slot, Slot::Running { pid }) else {
                     unreachable!()
                 };
                 Some(p)
@@ -242,10 +248,9 @@ impl ProcTable {
     pub(crate) fn pids(&self) -> Vec<Pid> {
         self.slots
             .iter()
-            .enumerate()
-            .filter_map(|(i, s)| match s {
+            .filter_map(|s| match s {
                 Slot::Present(p) => Some(p.pid),
-                Slot::Running { serial } => Some(Pid { index: i as u32, serial: *serial }),
+                Slot::Running { pid } => Some(*pid),
                 Slot::Free => None,
             })
             .collect()
@@ -373,6 +378,8 @@ impl Vm {
                 default_group_leader: None,
                 cwd: "/".into(),
                 files: BTreeMap::new(),
+                ports: BTreeMap::new(),
+                program_ports: BTreeMap::new(),
                 halted: None,
                 console_reader: None,
                 backtrace_depth: 8,
@@ -399,6 +406,11 @@ impl Vm {
                 self.sys.load(module).expect("embedded modules load");
             }
         }
+        // The shell `os:cmd/1` runs commands with (the kernel sets this at start). Programs run
+        // outside the VM, so this is the host's shell, whatever the VM's file system holds.
+        let key = self.atom("kernel_os_cmd_shell");
+        let shell = Term::list("/bin/sh".chars().map(|c| Term::Int(c as i64)).collect::<Vec<_>>());
+        self.sys.persistent.insert(crate::term::MapKey(key), shell);
         let user_name = self.atom("user");
         let user = self.spawn("beamlet_io", "start", alloc::vec![user_name]).expect("spawn user");
         let stderr = self.atom("standard_error");
@@ -634,9 +646,14 @@ impl System {
     }
 
     pub fn spawn_at(&mut self, entry: Cp, args: Vec<Term>) -> Result<Pid, Exception> {
+        self.spawn_as(entry, args, false)
+    }
+
+    /// Start a process, or (`port`) the process behind a new port.
+    pub(crate) fn spawn_as(&mut self, entry: Cp, args: Vec<Term>, port: bool) -> Result<Pid, Exception> {
         let pid = self
             .procs
-            .allocate()
+            .allocate(port)
             .ok_or_else(|| Exception::error(Term::Atom(self.atoms.system_limit.clone())))?;
         let mut p = Process::new(pid, entry, args);
         p.group_leader = self.default_group_leader;
@@ -702,6 +719,7 @@ impl System {
         self.deliver_exits();
         self.fire_timers();
         self.poll_console();
+        self.poll_programs();
         let Some(pid) = self.run_queue.pop_front() else {
             // Nothing runnable: sleep until the next timer or console input, or give up if
             // nothing can ever arrive.
@@ -710,7 +728,7 @@ impl System {
                     self.platform.idle(Some(deadline));
                     true
                 }
-                None if self.console_reader.is_some() => {
+                None if self.console_reader.is_some() || !self.program_ports.is_empty() => {
                     self.platform.idle(None);
                     true
                 }
@@ -884,6 +902,9 @@ impl System {
         }
         self.aliases.retain(|_, a| a.owner != pid);
         self.close_files(pid);
+        if pid.port {
+            self.port_ended(pid);
+        }
         if self.console_reader == Some(pid) {
             self.console_reader = None;
         }
@@ -900,7 +921,7 @@ impl System {
             let msg = Term::tuple(alloc::vec![
                 tag.clone().unwrap_or_else(|| Term::Atom(self.atoms.down.clone())),
                 Term::Ref(*r),
-                Term::Atom(self.atoms.process.clone()),
+                if pid.port { Term::Atom(self.atom("port")) } else { Term::Atom(self.atoms.process.clone()) },
                 object.clone(),
                 reason.clone(),
             ]);

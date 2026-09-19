@@ -26,6 +26,7 @@ mod lists;
 mod maps;
 mod math;
 mod phash;
+pub(crate) mod port;
 mod proc;
 mod unicode;
 mod zlib;
@@ -285,7 +286,19 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("erlang", "nodes", 2, proc::nil_any),
     ("erlang", "is_alive", 0, proc::false_1),
     // There are no ports: the VM runs no OS processes or drivers.
-    ("erlang", "ports", 0, proc::nil_any),
+    ("erlang", "ports", 0, port::ports),
+    ("erlang", "open_port", 2, port::open_port),
+    ("erlang", "port_command", 2, port::port_command),
+    ("erlang", "port_command", 3, port::port_command3),
+    ("erlang", "port_close", 1, port::port_close),
+    ("erlang", "port_connect", 2, port::port_connect),
+    ("erlang", "port_info", 1, port::port_info1),
+    ("erlang", "port_info", 2, port::port_info2),
+    ("erlang", "port_control", 3, port::no_driver),
+    ("erlang", "port_call", 2, port::no_driver),
+    ("erlang", "port_call", 3, port::no_driver),
+    ("erlang", "port_to_list", 1, port::port_to_list),
+    ("erlang", "list_to_port", 1, port::list_to_port),
     ("erlang", "monitor_node", 2, proc::monitor_node),
     ("erlang", "monitor_node", 3, proc::monitor_node),
     ("io", "printable_range", 0, proc::printable_range),

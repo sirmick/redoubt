@@ -153,6 +153,11 @@ impl<'a> Reader<'a, '_> {
         Ok(u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize)
     }
 
+    fn u64(&mut self) -> Result<u64, EtfError> {
+        let b = self.take(8)?;
+        Ok(u64::from_be_bytes(b.try_into().map_err(|_| EtfError::Malformed)?))
+    }
+
     fn remaining(&self) -> usize {
         self.bytes.len() - self.pos
     }
@@ -273,7 +278,14 @@ impl<'a> Reader<'a, '_> {
                 let index = self.u32()? as u32;
                 let serial = self.u32()? as u32;
                 if tag == 88 { self.take(4)? } else { self.take(1)? };
-                Term::Pid(crate::term::Pid { serial, index })
+                Term::Pid(crate::term::Pid::process(index, serial))
+            }
+            // V4_PORT_EXT: this node's ports, the id holding the slot and serial (see `encode`).
+            120 => {
+                self.local_node(depth)?;
+                let id = self.u64()?;
+                self.take(4)?;
+                Term::Pid(crate::term::Pid { index: (id >> 32) as u32, serial: id as u32, port: true })
             }
             // NEWER_REFERENCE_EXT and NEW_REFERENCE_EXT, laid out as `encode` writes them.
             90 | 114 => {
@@ -465,6 +477,12 @@ pub fn encode_with(t: &Term, md5_of: &dyn Fn(&crate::atom::Atom) -> Option<[u8; 
                     work.extend(env.iter().rev().cloned().map(Work::Term));
                 }
             },
+            Term::Pid(p) if p.port => {
+                out.push(120);
+                encode_atom(&mut out, NODE);
+                out.extend_from_slice(&((p.index as u64) << 32 | p.serial as u64).to_be_bytes());
+                out.extend_from_slice(&0u32.to_be_bytes());
+            }
             Term::Pid(p) => {
                 out.push(88);
                 encode_atom(&mut out, NODE);
@@ -481,8 +499,11 @@ pub fn encode_with(t: &Term, md5_of: &dyn Fn(&crate::atom::Atom) -> Option<[u8; 
                 out.extend_from_slice(&((r.0 >> 18) as u32).to_be_bytes());
                 out.extend_from_slice(&((r.0 >> 50) as u32).to_be_bytes());
             }
-            // A resource stands for native memory; it cannot leave the VM.
-            Term::Match(_) | Term::Resource(_) => return Err(EncodeError::Unsupported),
+            // A resource (a compiled regex, a hash state, ...) is written as the reference it
+            // is to Erlang code, as BEAM writes its magic references: decoded, it is a plain
+            // reference, and the native state never leaves the VM.
+            Term::Resource(r) => work.push(Work::Term(Term::Ref(crate::term::Ref(r.id)))),
+            Term::Match(_) => return Err(EncodeError::Unsupported),
         }
     }
     Ok(out)
@@ -609,7 +630,7 @@ mod tests {
     #[test]
     fn local_pids_and_refs_round_trip() {
         let mut atoms = AtomTable::new();
-        for t in [Term::Pid(crate::term::Pid { serial: 3, index: 77 }), Term::Ref(crate::term::Ref(0x1234_5678_9abc_def0))] {
+        for t in [Term::Pid(crate::term::Pid::process(77, 3)), Term::Ref(crate::term::Ref(0x1234_5678_9abc_def0))] {
             let bytes = encode(&t).unwrap();
             let back = decode(&bytes, &mut atoms).unwrap();
             assert_eq!(back.to_string(), t.to_string());

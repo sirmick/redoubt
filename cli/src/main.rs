@@ -13,17 +13,25 @@
 //! reachable. Without it, `file` operations fail with `enotsup`. `--mount /AT=DIR[:ro]` shows
 //! another host directory at `/AT` (read-only with `:ro`); `--lib /DIR` names a directory of
 //! the VM's file system holding applications (`App-Vsn/...`) for `code:lib_dir/1`.
+//!
+//! `--exec` lets the VM start host programs behind ports (`open_port/2`, `os:cmd/1`,
+//! `System.cmd/3`). They are not sandboxed: see `programs.rs`. `--env NAME[=VALUE]` sets a
+//! variable in the VM's environment, which starts with only `HOME` (the host's value when no
+//! value is given, e.g. `--env PATH` for programs to be found).
 
 mod files;
+mod programs;
 
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::collections::VecDeque;
+use std::sync::mpsc::{Receiver, Sender};
 
-use beamlet_vm::platform::{ConsoleInput, Platform, PlatformError};
+use beamlet_vm::platform::{ConsoleInput, Platform, PlatformError, ProgramEvent, Programs, Spawn, Spawned};
+use programs::Event;
 use beamlet_vm::{Class, Term, Vm};
 
 impl Posix {
@@ -48,17 +56,24 @@ struct Posix {
     start: Instant,
     code_path: Vec<PathBuf>,
     files: Option<files::HostDir>,
-    /// Console input from a thread reading stdin, started when the VM first asks for input.
-    input: Option<Receiver<ConsoleInput>>,
-    /// Input that arrived while `idle` was waiting, for the next `console_read`.
-    stash: Option<ConsoleInput>,
+    /// Events from the stdin reader thread and from programs' threads.
+    events: Receiver<Event>,
+    sender: Sender<Event>,
+    /// Whether the stdin reader has been started (when the VM first asks for input), and
+    /// whether its input has ended.
+    reading: bool,
+    input_ended: bool,
+    /// Events received but not yet asked for.
+    console: VecDeque<ConsoleInput>,
+    program_events: VecDeque<(u64, ProgramEvent)>,
+    /// Programs started behind ports, if `--exec` allows it.
+    programs: Option<programs::Programs>,
     /// Whether the console output so far ends mid-line (after a prompt, say).
     mid_line: std::rc::Rc<std::cell::Cell<bool>>,
 }
 
 /// Read stdin on its own thread, so the VM never blocks on it.
-fn stdin_reader() -> Receiver<ConsoleInput> {
-    let (tx, rx) = std::sync::mpsc::channel();
+fn stdin_reader(tx: Sender<Event>) {
     std::thread::spawn(move || {
         use std::io::Read;
         let mut buf = [0u8; 4096];
@@ -69,12 +84,39 @@ fn stdin_reader() -> Receiver<ConsoleInput> {
                 Ok(n) => ConsoleInput::Data(buf[..n].to_vec()),
             };
             let end = msg == ConsoleInput::Eof;
-            if tx.send(msg).is_err() || end {
+            if tx.send(Event::Console(msg)).is_err() || end {
                 return;
             }
         }
     });
-    rx
+}
+
+impl Posix {
+    fn take(&mut self, event: Event) {
+        match event {
+            Event::Console(input) => self.console.push_back(input),
+            Event::Program(handle, event) => {
+                if matches!(event, ProgramEvent::Exit(_)) {
+                    if let Some(p) = &mut self.programs {
+                        p.exited(handle);
+                    }
+                }
+                self.program_events.push_back((handle, event));
+            }
+        }
+    }
+
+    /// Take every event that has arrived, without waiting.
+    fn drain(&mut self) {
+        while let Ok(event) = self.events.try_recv() {
+            self.take(event);
+        }
+    }
+
+    /// Whether an event may still arrive.
+    fn expecting(&self) -> bool {
+        (self.reading && !self.input_ended) || self.programs.as_ref().is_some_and(|p| p.any())
+    }
 }
 
 impl Platform for Posix {
@@ -87,38 +129,42 @@ impl Platform for Posix {
     }
 
     fn idle(&mut self, deadline: Option<u64>) {
-        // The only external event is console input; without a reader there is only the clock.
+        // Wake for console input or a program's output, or at the deadline.
+        self.drain();
+        if !self.console.is_empty() || !self.program_events.is_empty() {
+            return;
+        }
         let wait = deadline.map(|d| std::time::Duration::from_micros(d.saturating_sub(self.monotonic_us())));
-        match (&self.input, self.stash.is_some()) {
-            (Some(rx), false) => {
-                let got = match wait {
-                    Some(w) => rx.recv_timeout(w),
-                    None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
-                };
-                self.stash = Some(match got {
-                    Ok(msg) => msg,
-                    Err(RecvTimeoutError::Timeout) => ConsoleInput::Nothing,
-                    Err(RecvTimeoutError::Disconnected) => ConsoleInput::Eof,
-                });
+        match wait {
+            Some(w) => {
+                if let Ok(event) = self.events.recv_timeout(w) {
+                    self.take(event);
+                }
             }
-            (Some(_), true) => {}
-            (None, _) => {
-                if let Some(w) = wait {
-                    std::thread::sleep(w);
+            // Nothing can arrive, so nothing would wake us: return, and the VM gives up.
+            None if !self.expecting() => {}
+            None => {
+                if let Ok(event) = self.events.recv() {
+                    self.take(event);
                 }
             }
         }
     }
 
     fn console_read(&mut self) -> ConsoleInput {
-        if let Some(msg) = self.stash.take() {
-            return msg;
+        if !self.reading {
+            self.reading = true;
+            stdin_reader(self.sender.clone());
         }
-        let rx = self.input.get_or_insert_with(stdin_reader);
-        match rx.try_recv() {
-            Ok(msg) => msg,
-            Err(std::sync::mpsc::TryRecvError::Empty) => ConsoleInput::Nothing,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => ConsoleInput::Eof,
+        self.drain();
+        match self.console.pop_front() {
+            Some(ConsoleInput::Eof) => {
+                self.input_ended = true;
+                ConsoleInput::Eof
+            }
+            Some(input) => input,
+            None if self.input_ended => ConsoleInput::Eof,
+            None => ConsoleInput::Nothing,
         }
     }
 
@@ -154,10 +200,40 @@ impl Platform for Posix {
     fn files(&mut self) -> Option<&mut dyn beamlet_vm::platform::Files> {
         self.files.as_mut().map(|f| f as &mut dyn beamlet_vm::platform::Files)
     }
+
+    fn programs(&mut self) -> Option<&mut dyn Programs> {
+        if self.programs.is_some() { Some(self) } else { None }
+    }
+}
+
+impl Programs for Posix {
+    fn spawn(&mut self, spawn: &Spawn) -> Result<Spawned, beamlet_vm::platform::FileError> {
+        let files = &self.files;
+        // Without --root the VM's paths are the host's.
+        let host = |path: &str| match files {
+            Some(fs) => fs.host_path(path),
+            None => Ok(PathBuf::from(path)),
+        };
+        self.programs.as_mut().expect("--exec").spawn(spawn, host)
+    }
+
+    fn write(&mut self, handle: u64, data: &[u8]) -> Result<(), beamlet_vm::platform::FileError> {
+        self.programs.as_mut().expect("--exec").write(handle, data)
+    }
+
+    fn close(&mut self, handle: u64) {
+        self.programs.as_mut().expect("--exec").close(handle);
+        self.program_events.retain(|(h, _)| *h != handle);
+    }
+
+    fn poll(&mut self) -> Option<(u64, ProgramEvent)> {
+        self.drain();
+        self.program_events.pop_front()
+    }
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: beamlet [-pa DIR]... [--root DIR [--mount /AT=DIR[:ro]]... [--lib /DIR]...] MODULE [FUNCTION [ARG...]]");
+    eprintln!("usage: beamlet [-pa DIR]... [--root DIR [--mount /AT=DIR[:ro]]... [--lib /DIR]...] [--exec] [--env NAME[=VALUE]]... MODULE [FUNCTION [ARG...]]");
     ExitCode::from(2)
 }
 
@@ -190,8 +266,18 @@ fn main() -> ExitCode {
     let mut root = None;
     let mut mounts = Vec::new();
     let mut libs = Vec::new();
+    let mut exec = false;
+    let mut env = Vec::new();
     while let Some(a) = args.next() {
         match a.as_str() {
+            "--exec" => exec = true,
+            "--env" => match args.next() {
+                Some(spec) => env.push(match spec.split_once('=') {
+                    Some((k, v)) => (k.to_string(), Some(v.to_string())),
+                    None => (spec, None),
+                }),
+                None => return usage(),
+            },
             "--mount" => match args.next() {
                 Some(spec) => mounts.push(spec),
                 None => return usage(),
@@ -239,7 +325,21 @@ fn main() -> ExitCode {
     }
     let has_root = root.is_some();
     let mid_line = std::rc::Rc::new(std::cell::Cell::new(false));
-    let platform = Posix { start: Instant::now(), code_path, files: root, input: None, stash: None, mid_line: mid_line.clone() };
+    let (sender, events) = std::sync::mpsc::channel();
+    let programs = exec.then(|| programs::Programs::new(sender.clone()));
+    let platform = Posix {
+        start: Instant::now(),
+        code_path,
+        files: root,
+        events,
+        sender,
+        reading: false,
+        input_ended: false,
+        console: VecDeque::new(),
+        program_events: VecDeque::new(),
+        programs,
+        mid_line: mid_line.clone(),
+    };
     // Natives are 'static slices; join the crates' tables once.
     let natives: &'static [beamlet_vm::bif::NativeSpec] =
         Box::leak([beamlet_crypto::NATIVES, beamlet_re::NATIVES].concat().into_boxed_slice());
@@ -251,6 +351,11 @@ fn main() -> ExitCode {
     // With a file system, the VM's home is its root (the host's is not visible).
     if has_root {
         vm.setenv("HOME", "/");
+    }
+    for (name, value) in env {
+        if let Some(value) = value.or_else(|| std::env::var(&name).ok()) {
+            vm.setenv(&name, &value);
+        }
     }
     let string = |s: &str| Term::list(s.chars().map(|c| Term::Int(c as i64)).collect::<Vec<_>>());
     let call_args = match args {
