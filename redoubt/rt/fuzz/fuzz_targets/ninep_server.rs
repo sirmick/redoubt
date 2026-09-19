@@ -2,7 +2,7 @@
 //! label sets) against a small labelled tree. Each input is a sequence of requests: most are
 //! well-formed messages built from the bytes (so the fuzzer reaches the protocol logic), some are
 //! raw bytes; some are `ninep_common`'s `new_connection` and `disconnect`, and later requests
-//! come through the connections they minted. One of the server's own badges has a byte quota.
+//! come through the connections they minted. The file server refuses some grants.
 //! Checked: nothing panics; every reply decodes; the server is never handed a bad walk name, and
 //! never sees more than `MAX_FIDS` fids on a connection; no bucket holds more than its limits;
 //! a minted badge is never minted twice; a stranger's `disconnect` never succeeds.
@@ -89,7 +89,10 @@ impl FileServer for Tree {
         Ok(FileStat { length: self.data[*node].len() as u64, ..stat(*node) })
     }
 
-    fn quota(&mut self, badge: u64) -> u64 { if badge == 2 { 3000 } else { u64::MAX } }
+    /// Refuses one grant size, as a server metering bytes may.
+    fn minted(&mut self, _: &Caller, _: u64, _: &usize, quota: u64) -> Result<(), NineError> {
+        if quota == 1 { Err(NineError("quota refused")) } else { Ok(()) }
+    }
 
     fn dir_entry(
         &mut self,
@@ -247,6 +250,5 @@ fuzz_target!(|data: &[u8]| {
         assert!(admission.held(key, Resource::State) <= LIMITS.state);
         assert!(admission.keys() <= LIMITS.buckets as usize);
         assert!(server.connections() <= (LIMITS.buckets * LIMITS.state) as usize);
-        let _ = server.quota_free(&caller);
     }
 });

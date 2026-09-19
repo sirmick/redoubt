@@ -19,9 +19,9 @@
 //!   handle revoked in flight never reaches a later connection. The reply carries the handle and a random
 //!   64-bit connection id; the minted connection is charged to the requester's [`Resource::State`].
 //! - `disconnect(id)` frees that connection and every connection minted under it: their fids are clunked,
-//!   their admission released, their quotas returned. Only the connection that asked for the id (the same
-//!   badge, account and label set) may name it (answer 69); anyone else, like an id that does not exist, gets
-//!   the same refusal.
+//!   their admission released, and the file server told ([`FileServer::disconnected`]). Only the connection
+//!   that asked for the id (the same badge, account and label set) may name it (answer 69); anyone else, like
+//!   an id that does not exist, gets the same refusal.
 //! - Badges below [`FIRST_MINTED_BADGE`] are the server's own: whoever set the server up minted them, and
 //!   [`FileServer::attach`] says what each means. A badge at or above it that the skeleton has not minted, or
 //!   has disconnected, is no connection at all.
@@ -36,15 +36,11 @@
 //! gains nothing by minting more connections; a connection someone else minted for it (the
 //! steward, for a lease's agent) is a share of its own.
 //!
-//! **Byte quotas** (answer 85; NAMESPACES.md, Filesystem servers). Each root a connection is
-//! minted at can have its own byte quota, set by whoever granted it: `new_connection`'s `quota`
-//! carves that many bytes from the requester's own quota (0 shares the requester's), and
-//! `disconnect` gives them back, with whatever they hold, to the quota they came from. A server's
-//! own badges have [`FileServer::quota`] (unlimited by default). Under a limited quota the
-//! skeleton charges by file length, from `stat`: a `Twrite` needs room for all it could add and
-//! is charged what it did add; truncation and `Tremove` credit what they freed. Stated limit: bytes are
-//! credited to the quota of the connection that freed them, not the one that wrote them (a server that tracks
-//! owners, like `fsd`, can do better).
+//! **Byte quotas** (answer 85; NAMESPACES.md, Filesystem servers) are the file server's.
+//! QUESTIONS.md 118 (pending): the skeleton only carries `new_connection`'s `quota` to
+//! [`FileServer::minted`], which may refuse the grant, and tells the server when the connection
+//! goes ([`FileServer::disconnected`]). Only `fsd` meters bytes, and it knows what a file costs
+//! on its medium (WP-D2); the skeleton does not.
 //!
 //! **What the skeleton guarantees a [`FileServer`]**, whatever the client sends:
 //! - At most [`MAX_FIDS`] fids per connection, each charged to its client ([`Admission`],
@@ -145,7 +141,6 @@ impl NineError {
     pub const NO_CONNECTION: NineError = NineError("no such connection");
     pub const NO_MEMORY: NineError = NineError("out of memory");
     pub const PERMISSION: NineError = NineError("permission denied");
-    pub const QUOTA: NineError = NineError("quota exceeded");
     pub const TOO_DEEP: NineError = NineError("path too deep");
     pub const TOO_MANY: NineError = NineError("too many open files");
     pub const TOO_SMALL: NineError = NineError("count too small");
@@ -193,9 +188,23 @@ pub trait FileServer {
     /// it is). Connections minted by `new_connection` attach at their own root without asking.
     fn attach(&mut self, caller: &Caller, aname: &str) -> Result<(Self::Node, Qid), NineError>;
 
-    /// The byte quota of the root one of the server's own badges attaches at; unlimited unless
-    /// the server says otherwise.
-    fn quota(&mut self, _badge: u64) -> u64 { u64::MAX }
+    /// A connection is being minted through `caller`'s, with `badge`, rooted at `root`; the
+    /// requester asked for `quota` bytes for it (0: none of its own). A server that meters bytes
+    /// records the grant here and may refuse it; the skeleton then mints nothing and gives the
+    /// requester's admission back.
+    fn minted(
+        &mut self,
+        _caller: &Caller,
+        _badge: u64,
+        _root: &Self::Node,
+        _quota: u64,
+    ) -> Result<(), NineError> {
+        Ok(())
+    }
+
+    /// The connection with `badge`, which [`FileServer::minted`] accepted, is gone: disconnected,
+    /// or its minting failed after `minted` accepted it.
+    fn disconnected(&mut self, _badge: u64) {}
 
     /// The labels of the object `node` belongs to (for `fsd`, its volume's).
     fn labels(&self, node: &Self::Node) -> &[u64];
@@ -327,22 +336,6 @@ struct Minted<N> {
     /// The badge it was minted through: it goes when that one is disconnected.
     parent: u64,
     root: (N, Qid),
-    /// The quota its files are charged to: its own badge if it was given one, else its parent's.
-    pool: u64,
-}
-
-/// A byte quota: `limit` bytes, of which `used` are charged and `carved` given to child quotas.
-struct Pool {
-    id: u64,
-    limit: u64,
-    used: u64,
-    carved: u64,
-    /// The quota it was carved from (none for a server's own badge's).
-    parent: Option<u64>,
-}
-
-impl Pool {
-    fn free(&self) -> u64 { self.limit.saturating_sub(self.used).saturating_sub(self.carved) }
 }
 
 /// A copy of `steps`, allocated fallibly.
@@ -360,7 +353,6 @@ pub struct NineServer<S: FileServer> {
     /// searched linearly, so every growth can fail cleanly (`try_reserve`).
     conns: Vec<Fids<S::Node>>,
     minted: Vec<Minted<S::Node>>,
-    pools: Vec<Pool>,
     /// The next badge `new_connection` mints; only goes up.
     next_badge: u64,
     admission: Admission,
@@ -381,7 +373,6 @@ impl<S: FileServer> NineServer<S> {
             fs,
             conns: Vec::new(),
             minted: Vec::new(),
-            pools: Vec::new(),
             next_badge: FIRST_MINTED_BADGE,
             admission: Admission::new(limits)?,
             scratch: Vec::new(),
@@ -575,14 +566,7 @@ impl<S: FileServer> NineServer<S> {
                 }
                 let node = f.node();
                 self.check_open(caller, &node, mode, f.is_dir())?;
-                // Truncation frees the file's bytes; they are credited once it is done.
-                let metered = if mode & mode::OTRUNC != 0 { self.metered(caller, &node)? } else { None };
                 let qid = self.fs.open(caller, &node, mode)?;
-                if let Some((pool, before)) = metered {
-                    let after = self.fs.stat(caller, &node).map_or(before, |s| s.length);
-                    self.pools[pool].used =
-                        self.pools[pool].used.saturating_sub(before.saturating_sub(after));
-                }
                 let f = self.fid_mut(&key, fid)?;
                 f.open = Some(mode);
                 f.dir_next = (0, 0);
@@ -622,22 +606,10 @@ impl<S: FileServer> NineServer<S> {
                 if !f.open.is_some_and(|m| matches!(m & 3, mode::OWRITE | mode::ORDWR)) {
                     return Err(NineError::NOT_OPEN);
                 }
-                let end = offset.checked_add(data.len() as u64).ok_or(NineError::BAD_OFFSET)?;
+                offset.checked_add(data.len() as u64).ok_or(NineError::BAD_OFFSET)?;
                 let node = f.node();
                 self.check_labels(caller, &node, Access::Write)?;
-                // A quota must hold all the write could add; it is charged what it did add.
-                let metered = self.metered(caller, &node)?;
-                if let Some((pool, before)) = metered {
-                    if self.pools[pool].free() < end.saturating_sub(before) {
-                        return Err(NineError::QUOTA);
-                    }
-                }
                 let n = self.fs.write(caller, &node, offset, data)?;
-                if let Some((pool, before)) = metered {
-                    let after = self.fs.stat(caller, &node).map_or(before, |s| s.length);
-                    self.pools[pool].used =
-                        self.pools[pool].used.saturating_add(after.saturating_sub(before));
-                }
                 // A server claiming more than it was given is a bug; do not pass it on.
                 let count = u32::try_from(n)
                     .ok()
@@ -654,14 +626,9 @@ impl<S: FileServer> NineServer<S> {
                 // The fid goes whether or not the remove succeeds (intro(5), remove).
                 let (fid, share) = self.remove_fid(&key, fid)?;
                 let node = fid.node();
-                let result = self.check_labels(caller, &node, Access::Write).and_then(|()| {
-                    let metered = self.metered(caller, &node)?;
-                    self.fs.remove(caller, &node)?;
-                    if let Some((pool, length)) = metered {
-                        self.pools[pool].used = self.pools[pool].used.saturating_sub(length);
-                    }
-                    Ok(())
-                });
+                let result = self
+                    .check_labels(caller, &node, Access::Write)
+                    .and_then(|()| self.fs.remove(caller, &node));
                 self.drop_fid(key.client, share, fid);
                 result.map(|()| Body::Rremove)
             }
@@ -706,9 +673,8 @@ impl<S: FileServer> NineServer<S> {
         badge
     }
 
-    /// `new_connection`: mints a connection rooted at `root` below the caller's own root, with
-    /// `quota` bytes carved from the caller's quota (0: the caller's quota). Returns the new
-    /// handle, its id and its badge.
+    /// `new_connection`: mints a connection rooted at `root` below the caller's own root, asking
+    /// the file server to grant it `quota` bytes. Returns the new handle, its id and its badge.
     fn new_connection(
         &mut self,
         caller: &Caller,
@@ -745,26 +711,21 @@ impl<S: FileServer> NineServer<S> {
             self.step(caller, &mut steps, name)?;
         }
         let new_root = steps.pop().ok_or(NineError::NOT_FOUND)?;
-        let pool = self.pool(caller.badge)?;
-        if quota > self.pools[pool].free() {
-            return Err(NineError::QUOTA);
-        }
         let badge = NonZeroU64::new(self.next_badge).filter(|b| b.get() >= FIRST_MINTED_BADGE);
         let badge = badge.ok_or(NineError::TOO_MANY)?;
         let id = self.fresh_id(kernel)?;
         self.minted.try_reserve(1).map_err(|_| NineError::NO_MEMORY)?;
-        self.pools.try_reserve(1).map_err(|_| NineError::NO_MEMORY)?;
-        let handle = kernel.mint(badge).map_err(|_| NineError::NO_MEMORY)?;
+        // The file server has the last word (its quota), before any handle exists.
+        self.fs.minted(caller, badge.get(), &new_root.0, quota)?;
+        let handle = match kernel.mint(badge) {
+            Ok(handle) => handle,
+            Err(_) => {
+                self.fs.disconnected(badge.get());
+                return Err(NineError::NO_MEMORY);
+            }
+        };
         // Never reused, whatever happens to this connection (answer 86).
         self.next_badge = badge.get().wrapping_add(1);
-        let own_pool = if quota == 0 {
-            self.pools[pool].id
-        } else {
-            let parent = self.pools[pool].id;
-            self.pools[pool].carved += quota;
-            self.pools.push(Pool { id: badge.get(), limit: quota, used: 0, carved: 0, parent: Some(parent) });
-            badge.get()
-        };
         self.minted.push(Minted {
             badge: badge.get(),
             id,
@@ -772,7 +733,6 @@ impl<S: FileServer> NineServer<S> {
             requester_share,
             parent: caller.badge,
             root: new_root,
-            pool: own_pool,
         });
         Ok((handle, id, badge.get()))
     }
@@ -814,16 +774,14 @@ impl<S: FileServer> NineServer<S> {
                 }
             }
         }
-        // Children before parents (they were minted later), so a child's quota returns to its
-        // parent's before that one returns to its own parent.
-        doomed.sort_unstable_by(|a, b| b.cmp(a));
         for badge in doomed {
             self.forget(badge);
         }
         Ok(())
     }
 
-    /// Frees one minted connection: its fids, its admission, its quota. Not its children.
+    /// Frees one minted connection: its fids, its admission, the file server's record of it. Not
+    /// its children.
     fn forget(&mut self, badge: u64) {
         while let Some(i) = self.conns.iter().position(|c| c.key.badge == badge) {
             let conn = self.conns.swap_remove(i);
@@ -832,51 +790,7 @@ impl<S: FileServer> NineServer<S> {
         let Some(i) = self.minted.iter().position(|m| m.badge == badge) else { return };
         let m = self.minted.swap_remove(i);
         self.admission.release(m.requester.client, m.requester_share, Resource::State);
-        if let Some(p) = self.pools.iter().position(|p| p.id == badge) {
-            let pool = self.pools.swap_remove(p);
-            // Its carving comes back to its parent, and what its files hold stays charged there.
-            if let Some(parent) = self.pools.iter_mut().find(|p| Some(p.id) == pool.parent) {
-                parent.carved = parent.carved.saturating_sub(pool.limit);
-                parent.used = parent.used.saturating_add(pool.used);
-            }
-        }
-    }
-
-    /// The quota a connection's files are charged to, made on first use for one of the server's
-    /// own badges.
-    fn pool(&mut self, badge: u64) -> Result<usize, NineError> {
-        let id = if badge >= FIRST_MINTED_BADGE {
-            self.minted.iter().find(|m| m.badge == badge).map(|m| m.pool).ok_or(NineError::NO_CONNECTION)?
-        } else {
-            badge
-        };
-        if let Some(i) = self.pools.iter().position(|p| p.id == id) {
-            return Ok(i);
-        }
-        if badge >= FIRST_MINTED_BADGE {
-            // A minted connection's quota is its own or its parent's, which outlive it.
-            return Err(NineError::NO_CONNECTION);
-        }
-        self.pools.try_reserve(1).map_err(|_| NineError::NO_MEMORY)?;
-        let limit = self.fs.quota(badge);
-        self.pools.push(Pool { id, limit, used: 0, carved: 0, parent: None });
-        Ok(self.pools.len() - 1)
-    }
-
-    /// For a write, truncation or remove through the caller's connection: its quota and the
-    /// file's length now, or `None` if the quota is unlimited, so a server with no quotas (a
-    /// console) is never asked for a `stat`. A quota whose file length cannot be read refuses.
-    fn metered(&mut self, caller: &Caller, node: &S::Node) -> Result<Option<(usize, u64)>, NineError> {
-        let pool = self.pool(caller.badge)?;
-        if self.pools[pool].limit == u64::MAX {
-            return Ok(None);
-        }
-        Ok(Some((pool, self.fs.stat(caller, node)?.length)))
-    }
-
-    /// Bytes free in the quota the caller's connection writes to.
-    pub fn quota_free(&mut self, caller: &Caller) -> Option<u64> {
-        self.pool(caller.badge).ok().map(|i| self.pools[i].free())
+        self.fs.disconnected(badge);
     }
 
     /// Walks `newfid` from `fid` along `names` and writes the qids walked into `qids`; returns

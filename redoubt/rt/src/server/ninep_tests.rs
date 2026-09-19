@@ -18,6 +18,9 @@ struct MemFs {
     /// Calls to `attach` and `walk`: the work a request made the server do.
     attaches: usize,
     walks: usize,
+    /// (badge, root, quota) of every minted connection the skeleton told us about and has not
+    /// disconnected.
+    grants: Vec<(u64, usize, u64)>,
 }
 
 struct MemNode {
@@ -33,7 +36,8 @@ impl MemFs {
     /// `/`, `/a/`, `/a/b/`, `/a/b/f` ("deep"), `/notes` ("hello, world"), `/vault/` and
     /// `/vault/key` (labelled 7), and `/secret`: a labelled file in the unlabelled root.
     fn new() -> MemFs {
-        let mut fs = MemFs { nodes: Vec::new(), clunked: Vec::new(), attaches: 0, walks: 0 };
+        let mut fs =
+            MemFs { nodes: Vec::new(), clunked: Vec::new(), attaches: 0, walks: 0, grants: Vec::new() };
         fs.add("", 0, true, b"", &[]);
         let a = fs.add("a", 0, true, b"", &[]);
         let b = fs.add("b", a, true, b"", &[]);
@@ -160,12 +164,20 @@ impl FileServer for MemFs {
 
     fn clunk(&mut self, node: &usize) { self.clunked.push(*node); }
 
-    fn quota(&mut self, badge: u64) -> u64 { if badge == QUOTA_BADGE { QUOTA } else { u64::MAX } }
+    /// Every grant reaches the server, which may refuse one; every disconnect too.
+    fn minted(&mut self, _: &Caller, badge: u64, root: &usize, quota: u64) -> Result<(), NineError> {
+        if quota == REFUSED_QUOTA {
+            return Err(NineError("quota refused"));
+        }
+        self.grants.push((badge, *root, quota));
+        Ok(())
+    }
+
+    fn disconnected(&mut self, badge: u64) { self.grants.retain(|(b, _, _)| *b != badge); }
 }
 
-/// The server's own badge whose root has a byte quota, and the quota.
-const QUOTA_BADGE: u64 = 7;
-const QUOTA: u64 = 100;
+/// A quota the test server refuses.
+const REFUSED_QUOTA: u64 = 41;
 
 struct T {
     server: NineServer<MemFs>,
