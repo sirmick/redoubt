@@ -459,3 +459,59 @@ protocols alike, so `redoubt/wire/tables/example.md`'s code 1 is renumbered when
     **Answered:** changed: a fault, blamed per 37 (one account, the most recent open call);
     KERNEL-SPEC.md, Messages (exit notices); CONTAINMENT.md, Crash blame.
 
+
+## From applying answers 28-55 (the design editor)
+
+56. **Handle kinds (answer 28) can't be checked as written.** No system call reports a handle's
+    kind, and `receive` doesn't return one, so a generated helper has nothing to check against.
+    *Options:* `receive`'s record carries each handle's kind; or a small `handle_kind(h)` query;
+    or "check by use", where a wrong kind shows up as `WrongObject` on first use and the table's
+    kind is documentation.
+    *Rec:* the record carries kinds. It's four small tags, and receivers need them anyway.
+
+57. **Which call a fault blames.** The editor read answers 37 and 31 as "the most recently taken
+    call that is still open". The other reading is "the most recently taken call, even if
+    replied to". The model uses the first. *Rec:* still open.
+
+58. **A panic in a thread with no open calls, while another thread of the process holds them.**
+    Blame is per thread, so the notice says `faulted` but blames no one.
+    *Rec:* blame falls back to the process's most recently taken open call.
+
+59. **When a revoked call fails (answer 30).** The caller gets `Dead` at once, not when the
+    server replies, to match answer 49. *Rec:* at once, as written.
+
+60. **Answer 44: handles against pages.** The editor's reading: pages and their page tables are
+    refused with `Refused` (R4), and handles get `OutOfMemory` with the message staying queued.
+    *Rec:* accept.
+
+61. **Answer 48 adds a field.** Keying blame by label set needs `blamed_labels` in the exit
+    notice, which the answers didn't state. *Rec:* accept.
+
+62. **The badge notice's details (answer 53) are the editor's.** They cover:
+    - a badge slot costs 1 page per 128 slots, to be confirmed by the kernel implementer;
+    - a re-mint withdraws a pending notice;
+    - handles in messages not yet received count as held;
+    - the label rule uses the last holder's budget;
+    - notices come before messages.
+
+    *Rec:* accept, with the cost figure confirmed in K2.
+
+63. **Does the kernel enforce `MAX_LEASE`?** The spec says only the steward does; the model's
+    comment implies the kernel does. *Rec:* the steward only. The kernel knows deadlines, not
+    leases.
+
+64. **Startup-block `Hndl` names** follow `startup.rs` (non-empty, no NUL), not INIT.md's
+    manifest name rule. *Rec:* apply the same name rule to both, for one rule in one place.
+
+65. **Where the loader stub finds the ELF image** is unspecified (PACKAGES.md). *Rec:* the image
+    is a named entry in the startup block (`Hndl` or a new tag) pointing at pages the parent
+    mapped. R2 defines it and PACKAGES.md states it.
+
+66. **R10's reach into in-flight messages, and badge slots, are placed in WP-K2**, not WP-K1,
+    because K1 has no endpoints or messages. *Rec:* accept.
+
+67. **INIT.md's worked example** doesn't show the vault session's read access to its owner's
+    unlabelled volume (which answer 51 relies on). *Rec:* add it.
+
+68. **KERNEL-SPEC.md says "five kinds" of objects but lists four.** *Rec:* fix the count
+    (editorial).
