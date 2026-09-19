@@ -10,7 +10,7 @@ mod common;
 
 use common::fake;
 use ed25519_compact::{PublicKey, Signature};
-use redoubt_keyd::server::AUDIT_DOMAIN;
+use redoubt_keyd::server::audit_digest;
 use redoubt_rt::abi::{FOREVER, Handle};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Buffer, Words};
@@ -138,10 +138,7 @@ fn a_signature_round_trips_over_the_real_ipc_path() {
     fake().as_process(steward, || {
         let public = ask(capability, &Message::PublicKey(PublicKeyRequest {})).unwrap();
         let signature = ask(capability, &Message::SignRecord(SignRecord { record })).unwrap();
-        let mut signed = Vec::from(AUDIT_DOMAIN);
-        signed.extend_from_slice(&(record.len() as u64).to_le_bytes());
-        signed.extend_from_slice(record);
-        assert!(verifies(&public, &signed, &signature));
+        assert!(verifies(&public, &audit_digest(record), &signature));
         assert!(!verifies(&public, record, &signature));
         // The key is here, and a key that is not is not.
         assert_eq!(
@@ -237,10 +234,7 @@ fn a_hostile_client_does_not_hurt_keyd_or_other_clients() {
     fake().as_process(steward, || {
         let public = ask(capability, &Message::PublicKey(PublicKeyRequest {})).unwrap();
         let signature = ask(capability, &Message::SignRecord(SignRecord { record: b"still here" })).unwrap();
-        let mut signed = Vec::from(AUDIT_DOMAIN);
-        signed.extend_from_slice(&10u64.to_le_bytes());
-        signed.extend_from_slice(b"still here");
-        assert!(verifies(&public, &signed, &signature));
+        assert!(verifies(&public, &audit_digest(b"still here"), &signature));
     });
     assert_eq!(fake().held(keyd.server).0, handles_before, "no handle of the attacker's stuck");
     assert_eq!(keyd.stop(), 0, "and keyd was alive the whole time");

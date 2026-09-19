@@ -32,10 +32,16 @@ use redoubt_rt::wire::proto::keyd::{
 use crate::keys::{ALGORITHM, Key, Keys, Purpose, SIGNATURE_LEN};
 use crate::ssh::{self, Transcript};
 
-/// The domain string an audit record is signed under, so a signature made for one purpose
-/// cannot be presented as one made for another. It is 17 bytes; an SSH exchange-hash signature
-/// is over exactly 32 bytes of SHA-256 output, which would have to begin with these bytes to be
-/// confusable, and the record's length follows them in any case.
+/// The domain string an audit record is hashed under, so a signature made for one purpose
+/// cannot be presented as one made for another.
+///
+/// The domain alone is not enough, and that is why [`audit_digest`] exists. A prefix in front
+/// of caller bytes only separates protocols whose own messages cannot start with it, and a
+/// signature container that covers raw bytes — the boot bundle's is `signature || tar`, with no
+/// domain of its own (VERIFIED-BOOT.md) — has no such guarantee: 17 bytes of domain and 8 of
+/// length sit inside a `ustar` header's 100-byte name field, and the attacker picks the rest.
+/// So `keyd` does not sign `domain || record` at all: it signs the SHA-256 of it, 32 bytes,
+/// which no container whose messages are longer can ever be.
 pub const AUDIT_DOMAIN: &[u8] = b"redoubt.audit.v1\0";
 
 /// The most an audit record may be: enough for a record the steward writes, small enough that
@@ -139,9 +145,10 @@ pub struct KeyServer {
     /// the caller's lend, which the reply is then written over.
     signature: [u8; SIGNATURE_LEN],
     public: [u8; crate::keys::PUBLIC_KEY_LEN],
-    /// Where a signed message is built. A field rather than a local, so a signing request
-    /// allocates nothing after the first one and needs no 8 KiB of stack.
-    scratch: Vec<u8>,
+    /// The badge `grant` made while answering the call in hand, so that a reply that never
+    /// reaches its caller can be undone: the requester never learns the id, so nothing could
+    /// ever `release` it.
+    granted_here: Option<u64>,
 }
 
 impl KeyServer {
@@ -159,7 +166,7 @@ impl KeyServer {
             admission: Admission::new(limits)?,
             signature: [0; SIGNATURE_LEN],
             public: [0; crate::keys::PUBLIC_KEY_LEN],
-            scratch: Vec::new(),
+            granted_here: None,
         })
     }
 
@@ -173,6 +180,7 @@ impl KeyServer {
     /// Answers one call and replies to it.
     pub fn serve(&mut self, mut request: Request) -> Result<(), Error> {
         let (caller, words, handles) = (request.caller, request.words, request.handles);
+        self.granted_here = None;
         // Whether the caller lent anything, read here where the borrow ends at once: the
         // `grant` path below holds the request itself, and so cannot look at the lend.
         let lent = !request.lend().is_empty();
@@ -189,7 +197,25 @@ impl KeyServer {
             let mut kernel = NoMint;
             answer_with(self, &caller, &words, &handles, request.lend(), &mut kernel)
         };
-        finish(request, &outcome)
+        let sent = finish(request, &outcome);
+        // A reply that could not be sent (the caller died, or the kernel refused it) leaves a
+        // granted capability nobody can ever name: its id went nowhere, and `release` answers
+        // only the holder of an id. Undo it, so a client cannot fill its own bucket by dying
+        // mid-grant.
+        if let Some(badge) = self.granted_here.take() {
+            if sent.is_err() {
+                self.forget_badge(badge);
+            }
+        }
+        sent
+    }
+
+    /// Frees the granted capability with `badge`, and every capability granted under it.
+    fn forget_badge(&mut self, badge: u64) {
+        let found = self.granted.iter().find(|g| g.badge == badge).map(|g| (g.requester, g.id));
+        if let Some((requester, id)) = found {
+            let _ = self.release_as(requester, id);
+        }
     }
 
     /// The key and purpose the caller's badge names, or `not_permitted`: a badge that names
@@ -289,7 +315,7 @@ impl KeyServer {
         Ok(Answer::new(Reply::SignSshExchange(SignSshExchangeReply { signature: &self.signature })))
     }
 
-    /// The audit key's one operation: the domain string, the record's length, then the record.
+    /// The audit key's one operation: a signature over [`audit_digest`] of the record.
     fn sign_record<'s>(
         &'s mut self,
         index: usize,
@@ -301,12 +327,7 @@ impl KeyServer {
         if m.record.len() > MAX_RECORD {
             return Err(ErrorCode::TooMany);
         }
-        self.scratch.clear();
-        self.scratch.try_reserve(AUDIT_DOMAIN.len() + 8 + m.record.len()).map_err(|_| ErrorCode::Failed)?;
-        self.scratch.extend_from_slice(AUDIT_DOMAIN);
-        self.scratch.extend_from_slice(&(m.record.len() as u64).to_le_bytes());
-        self.scratch.extend_from_slice(m.record);
-        let signature = self.key(index).sign(&self.scratch);
+        let signature = self.key(index).sign(&audit_digest(m.record));
         self.signature = signature;
         Ok(Answer::new(Reply::SignRecord(SignRecordReply { signature: &self.signature })))
     }
@@ -363,6 +384,7 @@ impl KeyServer {
             requester_share,
             parent: caller.badge,
         });
+        self.granted_here = Some(badge.get());
         Ok((id, handle))
     }
 
@@ -387,7 +409,11 @@ impl KeyServer {
     /// one named: that one goes first, then one forward pass frees each whose parent was
     /// granted here and is now gone, which by then is exactly its descendants.
     fn release(&mut self, caller: &Caller, id: u64) -> Result<(), ErrorCode> {
-        let requester = Holder::of(caller);
+        self.release_as(Holder::of(caller), id)
+    }
+
+    /// [`KeyServer::release`], with the holder already worked out.
+    fn release_as(&mut self, requester: Holder, id: u64) -> Result<(), ErrorCode> {
         let mut i = self
             .granted
             .iter()
@@ -411,6 +437,24 @@ impl KeyServer {
         let gone = self.granted.remove(index);
         self.admission.release(gone.requester.client, gone.requester_share, Resource::State);
     }
+}
+
+/// What an audit record is signed as: `SHA-256(AUDIT_DOMAIN || length || record)`, the length
+/// being a little-endian `u64`, so a record cannot be extended or split without changing it.
+/// Whoever checks an audit signature computes this the same way.
+///
+/// Hashing it rather than signing it directly is what keeps **every** signature `keyd` makes
+/// exactly 32 bytes long, and always over a digest `keyd` computed itself: this one, or the SSH
+/// exchange hash. A signature container that covers longer messages — the boot bundle's tar, a
+/// package, an SSH user-authentication request — therefore cannot be what a `keyd` signature
+/// covers, whatever the caller put in the record. See [`AUDIT_DOMAIN`] for why a prefix alone
+/// does not give that.
+pub fn audit_digest(record: &[u8]) -> [u8; crate::sha256::DIGEST] {
+    let mut hash = crate::sha256::Sha256::new();
+    hash.update(AUDIT_DOMAIN);
+    hash.update(&(record.len() as u64).to_le_bytes());
+    hash.update(record);
+    hash.finish()
 }
 
 /// The opcode of `grant`, which [`KeyServer::serve`] answers apart.

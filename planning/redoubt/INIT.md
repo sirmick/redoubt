@@ -180,7 +180,10 @@ and are gone after a restart.
 | Purpose | Key | The one thing its badge may sign |
 | --- | --- | --- |
 | `ssh_host` | the box's SSH host key | `sign_ssh_exchange`: the exchange hash `keyd` computes, which is the session identifier |
-| `audit` | the steward's audit key | `sign_record`: an audit record under the audit domain string |
+| `audit` | the steward's audit key | `sign_record`: the digest of an audit record under the audit domain string |
+
+A purpose bounds what a badge can get signed, not what that is worth: an `ssh_host` badge speaks
+as the box in a key exchange, which is what it is for, so the steward grants one only to `sshd`.
 
 `keyd`'s keys carry no labels in milestone 1, so `check` lets anyone read a public key and only an
 unlabelled caller sign: a labelled (vault) session that needs to sign needs a labelled key, which
@@ -223,9 +226,16 @@ label check gets `not_permitted`, which says no more than that.
   derivation; encoding it here would make `keyd`'s work depend on the secret's leading bytes).
   The reply is the raw 64-byte Ed25519 signature; SSH's `string "ssh-ed25519" || string <sig>`
   framing is the caller's.
-- `sign_record` (purpose `audit`) signs `"redoubt.audit.v1\0"`, the record's length as a
-  little-endian `u64`, then the record. The domain string and the length make a signature from one
-  purpose unusable in another protocol, and no operation signs bytes with no domain at all.
+- `sign_record` (purpose `audit`) signs the SHA-256 of `"redoubt.audit.v1\0"`, the record's length
+  as a little-endian `u64`, and the record. **Every signature `keyd` makes is over exactly 32
+  bytes, and those bytes are always a digest `keyd` computed itself** — this one or the exchange
+  hash. A domain string in front of a caller's bytes would not be enough on its own: it separates
+  `keyd`'s purposes from each other, but not from a container that signs raw bytes, and the boot
+  bundle's is `signature || tar` with no domain (VERIFIED-BOOT.md), whose first 100 bytes are a
+  file name the attacker picks. Signing a digest closes that: no container whose messages are
+  longer than 32 bytes can be what a `keyd` signature covers. Package signing (PACKAGES.md) gets
+  its own domain here when it lands, and until then `init` should also refuse a manifest that
+  gives `keyd` the key the loader verifies the bundle with (WP-R3, with the login-key check).
 - `public_key` returns `ssh-ed25519` and the 32 raw public-key bytes of the key the badge names.
   `holds` answers 1 if `keyd` holds that public key and 0 if not, for a key the asker already has;
   public keys are published (the host key goes to every client that connects), so this reveals

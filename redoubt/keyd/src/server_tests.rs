@@ -189,11 +189,17 @@ fn a_signature_round_trips_through_a_badge_scoped_capability() {
     let signature = signature_of(&answered);
     let public = *s.keys().get(1).unwrap().public();
 
-    let mut signed = Vec::from(AUDIT_DOMAIN);
-    signed.extend_from_slice(&(record.len() as u64).to_le_bytes());
-    signed.extend_from_slice(record);
-    assert!(verifies(&public, &signed, signature), "the signature is over the domain and the record");
-    assert!(!verifies(&public, record, signature), "and not over the record alone");
+    let signed = audit_digest(record);
+    assert!(verifies(&public, &signed, signature), "the signature is over the record's audit digest");
+    assert!(!verifies(&public, record, signature), "and not over the record itself");
+    // Every signature `keyd` makes is over 32 bytes it hashed itself, so no container that
+    // covers longer messages — a bundle tar, a package, an SSH user-auth request — can be what
+    // one covers.
+    assert_eq!(signed.len(), 32);
+    let mut preimage = Vec::from(AUDIT_DOMAIN);
+    preimage.extend_from_slice(&(record.len() as u64).to_le_bytes());
+    preimage.extend_from_slice(record);
+    assert!(!verifies(&public, &preimage, signature), "not over the digest's preimage either");
 
     // The SSH host key's operation, the same way: over the exchange hash `keyd` computed.
     let host = caller(HOST_BADGE, 0, &[]);
@@ -288,10 +294,7 @@ fn a_badge_signs_only_its_own_key_and_only_its_own_purpose() {
     let answered = ask(&mut s, &mut k, &audit, &Message::SignRecord(record), &[]);
     let signature = signature_of(&answered);
     let host_public = *s.keys().get(0).unwrap().public();
-    let mut signed = Vec::from(AUDIT_DOMAIN);
-    signed.extend_from_slice(&8u64.to_le_bytes());
-    signed.extend_from_slice(b"anything");
-    assert!(!verifies(&host_public, &signed, signature), "the host key signed nothing here");
+    assert!(!verifies(&host_public, &audit_digest(b"anything"), signature), "the host key signed nothing");
 }
 
 /// **A request to sign arbitrary bytes is refused.** There is no operation that signs bytes as
@@ -660,6 +663,28 @@ fn granted_capabilities_are_released_with_everything_under_them() {
     let _ = ask(&mut s, &mut k, &steward, &grant, &[]);
     let fresh = *k.minted.last().unwrap();
     assert!(fresh > child_badge, "badges only go up");
+}
+
+/// A grant whose reply never reaches its caller is undone. The requester never learns the id,
+/// and `release` answers only the holder of an id, so the record and its admission slot would
+/// otherwise be held for the life of the process; a client could fill its own bucket by dying
+/// mid-grant. `serve` calls this when `finish` says the reply did not go.
+#[test]
+fn a_grant_whose_reply_never_arrives_is_undone() {
+    let (mut s, mut k) = (server(), FakeKernel::new());
+    let who = caller(AUDIT_BADGE, 1001, &[]);
+    let key = AdmitKey::of(&who);
+    assert!(matches!(ask(&mut s, &mut k, &who, &Message::Grant(Grant {}), &[]), Answered::Ok(_)));
+    let badge = s.granted_here.expect("the grant records what it made");
+    // And one granted under it, which must go the same way.
+    let through = Caller { badge, ..who };
+    assert!(matches!(ask(&mut s, &mut k, &through, &Message::Grant(Grant {}), &[]), Answered::Ok(_)));
+    assert_eq!(s.granted(), 2);
+    assert_eq!(s.admission().held(key, Resource::State), 2);
+
+    s.forget_badge(badge);
+    assert_eq!(s.granted(), 0, "and everything granted under it went too");
+    assert_eq!(s.admission().held(key, Resource::State), 0, "its slots came back");
 }
 
 /// A grant that cannot be minted leaves nothing behind: no record, and the admission it took
