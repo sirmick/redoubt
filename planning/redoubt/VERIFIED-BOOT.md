@@ -1,47 +1,34 @@
 # Verified boot
 
-Built and enforced. Tenet 2: "every byte that runs in a privileged mode is authenticated before
-it runs." Without this, the whole security stack is bypassable by editing the boot bundle: the
-device-grant manifest, the code, everything.
+Built and enforced. Tenet 2: "every byte that runs in a privileged mode is authenticated before it
+runs." Owns: the signature and its container. Without it, the whole security stack is bypassable by
+editing the boot bundle.
 
-## Threat and chain of trust
-On a real device the chain is ROM -> firmware -> loader -> bundle, each link verifying the
-next, rooted in a key in ROM/fuses. QEMU loads the loader directly with `-kernel`, so we
-cannot verify the loader itself here (that needs firmware support on real hardware). What
-we can and do verify is the link that matters for running code: **the loader authenticates
-the boot bundle before executing any of it.** A tampered bundle is refused, fail-closed.
+## Chain of trust
+On a real device the chain is ROM -> firmware -> loader -> bundle, each link verifying the next,
+rooted in a key in ROM or fuses. QEMU loads the loader directly with `-kernel`, so the loader itself
+is not verified here. What is verified is the link that matters for running code: **the loader
+authenticates the boot bundle before executing any of it.** A tampered bundle is refused.
 
 ## Signature
-- **Algorithm:** Ed25519 (RFC 8032), via the pure-Rust, self-contained, `no_std`
-  `ed25519-compact` crate.
-- **What is signed:** the entire bundle tar.
-- **Container:** the initrd is `signature (64 bytes) || bundle-tar`. The loader takes the
-  first 64 bytes as the signature and verifies them over the rest.
-- **Key:** the loader embeds one Ed25519 public key (`loader/src/verify.rs`). No algorithm
-  agility. The decided design replaces the single key with M-of-N signatures (CONTAINMENT.md).
+- **Algorithm:** Ed25519 (RFC 8032), via the pure-Rust, self-contained, `no_std` `ed25519-compact`.
+- **Container:** the initrd is `signature (64 bytes) || bundle tar`; the signature covers the whole
+  tar. The loader verifies it before reading the tar, and on failure panics, which powers the machine
+  off via SBI. No unsigned fallback. Packages use the same container (PACKAGES.md).
+- **Key:** the loader embeds one Ed25519 public key (`loader/src/verify.rs`). No algorithm agility.
 
 ## Development key
-The bench signs with a **development** key derived from a fixed, public seed
-(`[0x42; 32]`), so builds are reproducible and anyone can rebuild. Its public key is
-compiled into the loader as `DEV_PUBLIC_KEY`. This key is **not for production**: it is
-published in this repo. A real deployment generates a secret key, keeps it secret, and
-replaces `DEV_PUBLIC_KEY`. The seed being public is the point — it proves the mechanism
-without pretending the dev key is a secret.
-
-## Loader behaviour
-1. Split the initrd into `signature` and `bundle`.
-2. Verify `signature` over `bundle` with `DEV_PUBLIC_KEY`.
-3. On failure: panic (which powers the machine off via SBI). No unsigned fallback.
-4. On success: proceed exactly as before, on `bundle`.
+The bench signs with a key derived from a fixed, public seed (`[0x42; 32]`), so builds are
+reproducible and anyone can rebuild. Its public key is compiled into the loader as `DEV_PUBLIC_KEY`.
+It is **not for production**: a real deployment generates a secret key and replaces it.
 
 ## Testbench
-`bundle()` signs every bundle it builds, so all boot tests exercise the verified path. A
-case may set `tamper_bundle = true` to flip one payload byte after signing; the loader
-must then refuse to boot. Attack test `verified-boot-rejects-tamper` checks that.
+Every bundle the bench builds is signed, so all boot tests exercise the verified path. A case may set
+`tamper_bundle = true` to flip one payload byte after signing; `verified-boot-rejects-tamper` checks
+the loader refuses to boot.
 
 ## Not covered
 - Verifying the loader itself (needs firmware or ROM support; the FPGA's boot ROM can do it,
   PLATFORM-FPGA.md).
-- M-of-N signatures, rollback protection (version pinning), key rotation and revocation
-  (CONTAINMENT.md).
-- Encrypting the bundle (this is integrity/authenticity, not confidentiality).
+- M-of-N signatures, rollback protection and key rotation (PACKAGES.md, system updates).
+- Encrypting the bundle (this is integrity and authenticity, not confidentiality).

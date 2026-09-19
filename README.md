@@ -27,7 +27,8 @@ heritage protocol the userspace runtime speaks.
 - **All Rust, open standards.** Assembly only where it must be; RISC-V, SBI, virtio, 9P.
 - **Tested to death.** `cargo testbench` boots real images under QEMU for both widths and
   asserts on the console, including adversarial cases (tampered bundles, corrupted ELFs,
-  syscall attacks). The suite is green on rv32 and rv64, SMP included.
+  syscall attacks). The suite is green on rv32 and rv64, including boots with 2 and 4
+  harts (only the boot hart runs so far; SMP is planned).
 
 What it is deliberately **not**: the fastest, or compatible with everything.
 
