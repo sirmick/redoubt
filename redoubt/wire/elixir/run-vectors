@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Round-trips redoubt/wire/vectors/example.txt through the generated Elixir codec, on the
+# real BEAM (the oracle) and on beamlet; both must accept every `ok` line exactly and refuse
+# every `bad` line. The Rust codec runs the same file (cargo test -p redoubt-wire).
+#
+#   redoubt/wire/elixir/run-vectors
+#
+# BEAMLET_DIR is the beamlet checkout (default: ../beamlet next to this repository);
+# BEAMLET a prebuilt beamlet binary (default: built from BEAMLET_DIR into a temporary
+# directory, so the beamlet checkout is not written to).
+set -euo pipefail
+wire="$(cd "$(dirname "$0")/.." && pwd)"
+repo="$(cd "$wire/../.." && pwd)"
+beamlet_dir="${BEAMLET_DIR:-$repo/../beamlet}"
+. "$beamlet_dir/tools/env.sh"
+
+out="$(mktemp -d)"
+trap 'rm -rf -- "$out"' EXIT
+elixirc --ignore-module-conflict -o "$out/ebin" "$wire/elixir/wire.ex" "$wire"/elixir/proto/*.ex "$wire/elixir/test/vectors_test.ex" > /dev/null
+
+if [ -z "${BEAMLET:-}" ]; then
+    CARGO_TARGET_DIR="$out/target" cargo build --quiet --release --locked --manifest-path "$beamlet_dir/Cargo.toml" -p beamlet
+    BEAMLET="$out/target/release/beamlet"
+fi
+
+otp_lib="$(dirname "$(dirname "$(command -v erl)")")/lib"
+elixir_lib="$(dirname "$(dirname "$(command -v elixir)")")/lib"
+# OTP's own file modules (kernel's file_server, erts's prim_file) run on beamlet unchanged.
+otp=()
+for app in stdlib kernel erts; do dirs=( "$otp_lib/$app"-*/ebin ); otp+=( -pa "${dirs[0]}" ); done
+
+oracle="$(elixir -pa "$out/ebin" -e 'IO.inspect(Redoubt.Wire.VectorsTest.start(Enum.at(System.argv(), 0)))' "$wire/vectors/example.txt")"
+echo "BEAM:    $oracle"
+got="$("$BEAMLET" --root "$wire/vectors" -pa "$out/ebin" "${otp[@]}" -pa "$elixir_lib/elixir/ebin" Elixir.Redoubt.Wire.VectorsTest start)"
+echo "beamlet: $got"
+
+# BEAM prints Elixir syntax, beamlet Erlang syntax: compare the counts.
+counts() { tr -dc '0-9,' <<< "$1"; }
+case "$oracle" in "{:ok, "*) ;; *) echo "FAIL on BEAM"; exit 1 ;; esac
+case "$got" in "{ok,"*) ;; *) echo "FAIL on beamlet"; exit 1 ;; esac
+if [ "$(counts "$oracle")" != "$(counts "$got")" ]; then
+    echo "FAIL: BEAM and beamlet disagree"
+    exit 1
+fi
+echo "PASS"
