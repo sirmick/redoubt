@@ -2,7 +2,10 @@
 # reports them separately. One per line: FILE[:TEST NAME] then the reason after " -- ".
 # (tools/elixir-tests.skip.<engine> lists those that hold with only one regex engine.)
 application_test.exs:application directory -- expects Elixir compiled inside its source checkout
-code_test.exs -- inspects BEAM's code_server process, which does not exist here
+code_test.exs:prepend_path -- inspects BEAM's code_server process (sys:get_status), which does not exist here
+code_test.exs:append_path -- inspects BEAM's code_server process (sys:get_status), which does not exist here
+code_test.exs:append_paths -- inspects BEAM's code_server process (sys:get_status), which does not exist here
+code_test.exs:prepend_paths -- inspects BEAM's code_server process (sys:get_status), which does not exist here
 kernel/cli_test.exs -- runs the elixir and iex executables (the real BEAM) by shell command lines naming the VM's paths, which the host's shell does not see
 kernel/dialyzer_test.exs -- runs dialyzer, an OTP tool not run here
 system_test.exs:argv/0 -- runs bin/elixir (the real BEAM) by a shell command line naming a VM path, which the host's shell does not see

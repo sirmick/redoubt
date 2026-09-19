@@ -117,6 +117,9 @@ pub struct System {
     /// Directories of the VM's own file system searched for `.beam` files after the platform
     /// (`code:add_patha/1` and friends), in order.
     pub(crate) code_path: Vec<String>,
+    /// Where the platform's modules come in the code path: directories before this index
+    /// (added with `code:add_patha/1`) are searched before the platform, the rest after it.
+    pub(crate) platform_at: usize,
     /// Directories of the VM's file system holding applications as `App` or `App-Vsn`
     /// directories (OTP's `lib`), for `code:lib_dir/1` and `code:priv_dir/1`.
     pub(crate) lib_roots: Vec<String>,
@@ -130,6 +133,13 @@ pub struct System {
     /// a module is loaded or deleted, so it never holds stale code.
     resolved: BTreeMap<(usize, usize, u32), Target>,
     pub(crate) stats: Stats,
+}
+
+/// Where [`System::locate_module`] found a module: a file of the VM's code path, or the
+/// platform.
+pub(crate) enum Found {
+    Path(String, Vec<u8>),
+    Platform(Vec<u8>),
 }
 
 /// Counters behind `erlang:statistics/1`.
@@ -384,6 +394,7 @@ impl Vm {
                 console_reader: None,
                 backtrace_depth: 8,
                 code_path: Vec::new(),
+                platform_at: 0,
                 lib_roots: Vec::new(),
                 module_files: BTreeMap::new(),
                 profile: None,
@@ -563,9 +574,8 @@ impl System {
         if RUNTIME_MODULES.contains(&name.as_str()) {
             return None;
         }
-        let bytes = match self.platform.load_module(name.as_str()) {
-            Some(b) => b,
-            None => self.find_in_code_path(name.as_str())?.1,
+        let bytes = match self.locate_module(name.as_str())? {
+            Found::Path(_, bytes) | Found::Platform(bytes) => bytes,
         };
         let loaded = self.load(&bytes).ok()?;
         if &loaded != name {
@@ -576,12 +586,28 @@ impl System {
         self.modules.get(name.as_str()).cloned()
     }
 
-    /// `Module.beam` from the first directory of the VM's code path that has it: its path and
-    /// its bytes.
-    pub(crate) fn find_in_code_path(&mut self, module: &str) -> Option<(String, Vec<u8>)> {
+    /// Where `module`'s code is, in code path order: the directories added in front of the
+    /// platform's modules, the platform, then the other directories.
+    pub(crate) fn locate_module(&mut self, module: &str) -> Option<Found> {
+        if let Some((path, bytes)) = self.find_in_code_path(module, true) {
+            return Some(Found::Path(path, bytes));
+        }
+        if let Some(bytes) = self.platform.load_module(module) {
+            return Some(Found::Platform(bytes));
+        }
+        self.find_in_code_path(module, false).map(|(path, bytes)| Found::Path(path, bytes))
+    }
+
+    /// `Module.beam` from the first directory of the VM's code path that has it, among those
+    /// before the platform (`front`) or after it: its path and its bytes.
+    fn find_in_code_path(&mut self, module: &str, front: bool) -> Option<(String, Vec<u8>)> {
         let max = self.limits.max_binary_bits / 8;
+        let dirs = if front { &self.code_path[..self.platform_at] } else { &self.code_path[self.platform_at..] };
+        if dirs.is_empty() {
+            return None;
+        }
         let files = self.platform.files()?;
-        for dir in &self.code_path {
+        for dir in dirs {
             let path = alloc::format!("{}/{}.beam", dir.trim_end_matches('/'), module);
             if let Ok(bytes) = crate::bif::read_whole_file(files, &path, max) {
                 return Some((path, bytes));

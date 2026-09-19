@@ -298,6 +298,11 @@ capabilities (xous-core `planning/redoubt/NAMESPACES.md`). beamlet follows that:
 - **Runtime modules**: `erlang.beam` and `erts_internal.beam` from erts load normally (their NIF
   stubs are replaced by natives), but modules that only work on BEAM's C runtime (`init`,
   `prim_*`, `erl_prim_loader`, tracing) are on a never-load list (`vm::RUNTIME_MODULES`).
+- **Code path** (`vm/src/bif/code.rs`): VM state rather than OTP's `code_server`. A module is
+  looked for in path order: directories added with `code:add_patha/1` (in the VM's file
+  system), then the platform's modules, then directories added at the end, as BEAM's order
+  (so a protocol consolidated into a prepended directory replaces Elixir's own). Changing the
+  path grants nothing: the same code can already load any bytes with `code:load_binary/3`.
 - **TCP** (`vm/lib/gen_tcp.erl`, `vm/lib/beamlet_tcp.erl`): `gen_tcp` is replaced by a front for one
   backend whose sockets are `{'$inet', beamlet_tcp, Pid}`, so OTP's `inet` works on them
   unchanged. The backend is a loopback network inside the VM; there is no other network unless

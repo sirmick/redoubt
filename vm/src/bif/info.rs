@@ -230,12 +230,11 @@ pub fn get_object_code(c: &mut Ctx, a: &[Term]) -> R {
     if crate::vm::RUNTIME_MODULES.contains(&m.as_str()) {
         return Ok(Term::Atom(c.sys.atoms.error.clone()));
     }
-    let found = match c.sys.platform.load_module(m.as_str()) {
-        Some(bytes) => Some((alloc::format!("{}.beam", m.as_str()), bytes)),
-        None => {
-            let name = String::from(m.as_str());
-            c.sys.find_in_code_path(&name)
-        }
+    let name = String::from(m.as_str());
+    let found = match c.sys.locate_module(&name) {
+        Some(crate::vm::Found::Platform(bytes)) => Some((alloc::format!("{name}.beam"), bytes)),
+        Some(crate::vm::Found::Path(path, bytes)) => Some((path, bytes)),
+        None => None,
     };
     Ok(match found {
         Some((file, bytes)) => Term::tuple(alloc::vec![a[0].clone(), Term::binary(&bytes), string(&file)]),

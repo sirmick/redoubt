@@ -1,6 +1,9 @@
-//! The code path: directories of the VM's own file system where modules are looked for when the
-//! platform does not have them (`code:add_patha/1`, `code:get_path/0`, ...). OTP keeps this in
-//! the `code_server` process; here it is VM state, and the platform's modules always come first.
+//! The code path: directories of the VM's own file system where modules are looked for, as well
+//! as the platform (`code:add_patha/1`, `code:get_path/0`, ...). OTP keeps this in the
+//! `code_server` process; here it is VM state. Directories added in front (`add_patha`) are
+//! searched before the platform's modules, as in BEAM (so a consolidated protocol written to
+//! one replaces the platform's); the others after them. Code that can change the path can load
+//! any code anyway (`code:load_binary/3`), so this grants nothing.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -9,6 +12,7 @@ use super::Ctx;
 use crate::platform::FileKind;
 use crate::process::Exception;
 use crate::term::Term;
+use crate::vm::Found;
 
 type R = Result<Term, Exception>;
 
@@ -30,17 +34,27 @@ fn directory(c: &mut Ctx, t: &Term) -> Result<Result<String, ()>, Exception> {
 
 fn add(c: &mut Ctx, t: &Term, front: bool) -> Result<bool, Exception> {
     let Ok(dir) = directory(c, t)? else { return Ok(false) };
-    let paths = &mut c.sys.code_path;
-    paths.retain(|p| *p != dir);
-    if paths.len() >= MAX_PATHS {
+    remove(c, &dir);
+    if c.sys.code_path.len() >= MAX_PATHS {
         return Err(c.system_limit());
     }
     if front {
-        paths.insert(0, dir);
+        c.sys.code_path.insert(0, dir);
+        c.sys.platform_at += 1;
     } else {
-        paths.push(dir);
+        c.sys.code_path.push(dir);
     }
     Ok(true)
+}
+
+/// Take `dir` off the path: whether it was on it.
+fn remove(c: &mut Ctx, dir: &str) -> bool {
+    let Some(i) = c.sys.code_path.iter().position(|p| p == dir) else { return false };
+    c.sys.code_path.remove(i);
+    if i < c.sys.platform_at {
+        c.sys.platform_at -= 1;
+    }
+    true
 }
 
 fn added(c: &mut Ctx, ok: bool) -> Term {
@@ -82,9 +96,7 @@ pub fn add_pathsz(c: &mut Ctx, a: &[Term]) -> R {
 pub fn del_path(c: &mut Ctx, a: &[Term]) -> R {
     let name = super::file::name_bytes(&a[0]).ok_or_else(|| c.badarg())?;
     let Ok(dir) = super::file::resolve(&c.sys.cwd, &name) else { return Ok(c.bool(false)) };
-    let before = c.sys.code_path.len();
-    c.sys.code_path.retain(|p| *p != dir);
-    let removed = c.sys.code_path.len() != before;
+    let removed = remove(c, &dir);
     Ok(c.bool(removed))
 }
 
@@ -112,7 +124,9 @@ pub fn set_path(c: &mut Ctx, a: &[Term]) -> R {
     if paths.len() > MAX_PATHS {
         return Err(c.system_limit());
     }
+    // A path set whole comes after the platform's modules.
     c.sys.code_path = paths;
+    c.sys.platform_at = 0;
     Ok(c.bool(true))
 }
 
@@ -128,15 +142,13 @@ pub fn which(c: &mut Ctx, a: &[Term]) -> R {
             return Ok(file.clone());
         }
     }
-    if let Some(path) = c.sys.platform.module_file(m.as_str()) {
-        return Ok(string(&path));
-    }
-    if c.sys.platform.load_module(m.as_str()).is_some() {
-        return Ok(c.atom("preloaded"));
-    }
     let name = String::from(m.as_str());
-    Ok(match c.sys.find_in_code_path(&name) {
-        Some((path, _)) => string(&path),
+    Ok(match c.sys.locate_module(&name) {
+        Some(Found::Path(path, _)) => string(&path),
+        Some(Found::Platform(_)) => match c.sys.platform.module_file(&name) {
+            Some(path) => string(&path),
+            None => c.atom("preloaded"),
+        },
         None => c.atom("non_existing"),
     })
 }
@@ -254,13 +266,12 @@ fn load_from(c: &mut Ctx, module: &crate::atom::Atom, bytes: &[u8], file: Term) 
 pub fn load_file(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Atom(m) = &a[0] else { return Err(c.badarg()) };
     let m = m.clone();
-    if let Some(bytes) = c.sys.platform.load_module(m.as_str()) {
-        let file = c.sys.platform.module_file(m.as_str()).map(|p| string(&p)).unwrap_or_else(|| c.atom("preloaded"));
-        return Ok(load_from(c, &m, &bytes, file));
-    }
-    let name = String::from(m.as_str());
-    Ok(match c.sys.find_in_code_path(&name) {
-        Some((path, bytes)) => load_from(c, &m, &bytes, string(&path)),
+    Ok(match c.sys.locate_module(m.as_str()) {
+        Some(Found::Path(path, bytes)) => load_from(c, &m, &bytes, string(&path)),
+        Some(Found::Platform(bytes)) => {
+            let file = c.sys.platform.module_file(m.as_str()).map(|p| string(&p)).unwrap_or_else(|| c.atom("preloaded"));
+            load_from(c, &m, &bytes, file)
+        }
         None => Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.error.clone()), c.atom("nofile")]),
     })
 }
