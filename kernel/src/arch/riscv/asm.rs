@@ -1,34 +1,68 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-//! Kernel entry, trap entry and context restore for rv64.
+//! Kernel entry, trap entry and context restore, for both rv64 (Sv39) and rv32 (Sv32).
 //!
-//! This is `asm.S` ported to `global_asm!` so that the rv64 build needs no C toolchain
-//! and no prebuilt blobs. Differences from the rv32 version:
-//!
-//! - A saved context is 32 x 8 = 256 bytes, so context N lives at
-//!   `THREAD_CONTEXT_AREA + (N << 8)`.
-//! - Addresses come from `xous_kernel::arch` instead of being repeated as literals.
-//! - There is no suspend/resume entry path; that is specific to the Precursor SoC.
+//! Ported from the original `asm.S` to `global_asm!` so the build needs no C toolchain and
+//! no prebuilt blobs. The two widths differ only mechanically: a saved context is
+//! `32 x size_of::<usize>()` bytes (256 on rv64, 128 on rv32), so context N lives at
+//! `THREAD_CONTEXT_AREA + (N << CTX_SHIFT)`; the load/store width and the reservation-clear
+//! instruction change with the register width. All of that is confined to the small,
+//! `cfg`-gated preamble below; the entry paths are shared. Addresses come from
+//! `xous_kernel::arch` rather than being repeated as literals. There is no suspend/resume
+//! entry path; that was specific to the Precursor SoC.
 
 use core::arch::global_asm;
 
 use xous_kernel::arch::{EXCEPTION_STACK_TOP, THREAD_CONTEXT_AREA};
 
-// The trap handler indexes contexts with a shift.
-const _: () = assert!(core::mem::size_of::<super::process::Thread>() == 1 << 8);
+/// `log2(size of a saved context)`: contexts are indexed by `n << CTX_SHIFT`.
+const CTX_SHIFT: usize = (32 * core::mem::size_of::<usize>()).trailing_zeros() as usize;
 
+// The trap handler indexes contexts with this shift, so a `Thread` must be exactly that big.
+const _: () = assert!(core::mem::size_of::<super::process::Thread>() == 1 << CTX_SHIFT);
+
+// Width-specific macros. The register width sets the load/store and the reservation clear;
+// everything else is shared below. These persist into the following `global_asm!` block.
+#[cfg(target_arch = "riscv64")]
 global_asm!(
     r#"
-// Module-level assembly does not inherit the target's features under LTO.
-.option arch, +a, +c
-
 .macro SAVE reg, slot
     sd      \reg, 8*\slot(sp)
 .endm
 .macro RESTORE reg, slot
     ld      \reg, 8*\slot(sp)
 .endm
+.macro LOADR reg, slot, base
+    ld      \reg, 8*\slot(\base)
+.endm
+.macro CLEAR_RESERVATION
+    sc.d    zero, x1, (sp)
+.endm
+"#
+);
+#[cfg(target_arch = "riscv32")]
+global_asm!(
+    r#"
+.macro SAVE reg, slot
+    sw      \reg, 4*\slot(sp)
+.endm
+.macro RESTORE reg, slot
+    lw      \reg, 4*\slot(sp)
+.endm
+.macro LOADR reg, slot, base
+    lw      \reg, 4*\slot(\base)
+.endm
+.macro CLEAR_RESERVATION
+    sc.w    zero, x1, (sp)
+.endm
+"#
+);
+
+global_asm!(
+    r#"
+// Module-level assembly does not inherit the target's features under LTO.
+.option arch, +a, +c
 
 // Slot N holds register x(N+1): slot 0 = x1 (ra), slot 1 = x2 (sp), ..., slot 30 = x31.
 // Slot 31 holds sepc. x1 and x2 need special handling and are not covered here.
@@ -102,13 +136,6 @@ global_asm!(
     RESTORE x31, 30
 .endm
 
-// An `lr`/`sc` pair in the program being resumed must not succeed across a context
-// switch. The reservation is a hidden bit of hart state; a dummy `sc` clears it. It
-// targets slot 0 with the value already stored there, so it is harmless if it succeeds.
-.macro CLEAR_RESERVATION
-    sc.d    zero, x1, (sp)
-.endm
-
 /*
     Kernel entry point. The loader jumps here in S-mode with the MMU on, `sp` at the top
     of the kernel stack, and the kernel arguments in a0-a3.
@@ -131,9 +158,9 @@ _start:
 _start_trap:
     csrw    sscratch, sp
     li      sp, {context_area}
-    sd      x1, 0(sp)               // Stash x1 in the header's scratch field
-    ld      x1, 8(sp)               // Load the current context number
-    slli    x1, x1, 8               // Each context is 256 bytes
+    SAVE    x1, 0                   // Stash x1 in the header's scratch field
+    RESTORE x1, 1                   // Load the current context number (header slot 1)
+    slli    x1, x1, {ctx_shift}     // Each context is 1 << ctx_shift bytes
     add     sp, sp, x1              // sp = &contexts[current]
 
     SAVE_X3_TO_X31
@@ -143,7 +170,7 @@ _start_trap:
 
     // Save the real x1, which was stashed in the header
     li      t0, {context_area}
-    ld      t1, 0(t0)
+    LOADR   t1, 0, t0              // t1 = header slot 0 (stashed x1)
     SAVE    t1, 0
 
     // Save the real sp
@@ -183,14 +210,14 @@ _xous_syscall_return_result:
     CLEAR_RESERVATION
     RESTORE_X3_TO_X9
 
-    ld      a7, 8*7(a0)
-    ld      a6, 8*6(a0)
-    ld      a5, 8*5(a0)
-    ld      a4, 8*4(a0)
-    ld      a3, 8*3(a0)
-    ld      a2, 8*2(a0)
-    ld      a1, 8*1(a0)
-    ld      a0, 8*0(a0)
+    LOADR   a7, 7, a0
+    LOADR   a6, 6, a0
+    LOADR   a5, 5, a0
+    LOADR   a4, 4, a0
+    LOADR   a3, 3, a0
+    LOADR   a2, 2, a0
+    LOADR   a1, 1, a0
+    LOADR   a0, 0, a0
 
     RESTORE_X18_TO_X31
     RESTORE x2, 1
@@ -203,4 +230,5 @@ flush_mmu:
 "#,
     context_area = const THREAD_CONTEXT_AREA,
     exception_sp = const EXCEPTION_STACK_TOP - 16,
+    ctx_shift = const CTX_SHIFT,
 );

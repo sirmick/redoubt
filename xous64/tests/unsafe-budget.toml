@@ -21,9 +21,9 @@ max_undocumented = 0
 [[budget]]
 name = "kernel: Sv39, SBI and PLIC backends"
 paths = [
-    "kernel/src/arch/riscv/mem_sv39.rs", "kernel/src/arch/riscv/mmu_flags.rs",
+    "kernel/src/arch/riscv/mem.rs", "kernel/src/arch/riscv/mmu_flags.rs",
     "kernel/src/arch/riscv/intc_plic.rs", "kernel/src/arch/riscv/timer_sbi.rs",
-    "kernel/src/arch/riscv/asm64.rs", "kernel/src/platform/sbi",
+    "kernel/src/arch/riscv/asm.rs", "kernel/src/platform/sbi",
 ]
 max_unsafe = 15
 max_undocumented = 0
