@@ -107,7 +107,9 @@ not needed.
 - Delivers: `process_create`/`process_map`/`process_start`; exit notices with cause and blamed
   account; per-thread current-message account; the boot loader loading only the kernel and `init`.
 - Accepted when: kernel cases for exit notices (all three causes), blamed account on a server fault;
-  attack cases: map into a started process, W+X through `process_map`, oversize handle list.
+  attack cases: map into a started process, W+X through `process_map`, oversize handle list;
+  `bench-bundle-file` becomes a clean boot in which a guest reads its `[[file]]` entry back (today
+  the loader refuses data entries).
 - Needs: WP-K2.
 
 **WP-K5. Timer, timeouts and preemption.** Size M.
@@ -199,7 +201,9 @@ manifest; `admit` and `check` on every request.
 9P with IP-prefix-and-port capabilities that never include the box's own addresses; refuses
 labelled callers.
 - Accepted when: TCP connect and listen through `/net`; attack cases: connect outside the granted
-  prefix, connect to the box's own address, a labelled caller refused.
+  prefix, connect to the box's own address, a labelled caller refused. The bench's network is
+  QEMU user mode with `restrict=on` (no outside peer); this package adds the peer it needs to the
+  bench, with a self-check that the guest reaches nothing else.
 - Needs: WP-R1, WP-K3, WP-W1.
 
 ### Track S: security servers
@@ -222,13 +226,17 @@ that authenticate a person to the box; constant-time signing.
 steward; rejects keys `keyd` holds; each channel labelled with its session's labels;
 `ssh approve@box`.
 - Accepted when: `alice@`, `alice+secrets@`, `bob@` and `approve@` sessions work from the bench's
-  SSH client; loopback login with a `keyd` key refused.
+  SSH client, with the box's host key pinned (`net.host_key`); loopback login with a `keyd` key
+  refused. The bench's loopback self-checks log in as one host user, so per-user separation is
+  first tested here.
 - Needs: WP-D3, WP-S1, WP-S2.
 
 ### Track E: the milestone
 **WP-E1. Alice's agent and the attack suite.** Size M.
 - Delivers: the scripted hostile agent and the scripted hostile user (Bob), and every case in
-  PLAN.md's milestone 1 attack suite not already delivered by the packages above.
+  PLAN.md's milestone 1 attack suite not already delivered by the packages above. An attack's
+  failure is asserted by the system (the kernel, the victim, or a clean power-off), never by a
+  line the attacker itself prints: the console does not say who wrote a line.
 - Accepted when: the whole suite passes, and **milestone 1 is declared done** in STATUS.md.
 - Needs: everything above.
 

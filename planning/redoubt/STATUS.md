@@ -14,7 +14,7 @@ Update this note with each milestone.
 | 3 All Rust | Kernel and loader: Rust plus `global_asm!`, no C toolchain, on both widths. Firmware can be pure Rust (RustSBI Prototyper; rv32 always uses it). |
 | 4 Standards | SBI, PLIC, Sv32/Sv39, device tree, ELF, ustar. The kernel argument block is our own format, specified in BOOT.md. |
 | 5 Dependencies | Kernel about 20 crates in its dependency tree, loader 8 direct (`fdt-rs`, `sbi-rt`, `elf`, `tar-no-std`, `crc`, `ed25519-compact`, `xous`, `paging`). None vendored or formally audited. |
-| 6 Tested | (enforced) 17 cases, 30 boots across both widths, OpenSBI and RustSBI; attack cases listed below. Host unit test: `cargo test -p xous` round-trips every syscall `Result` variant through its register encoding. No fuzzing yet; the kernel's hosted unit tests are not wired into the bench. |
+| 6 Tested | (enforced) 29 cases, 42 results across both widths, OpenSBI and RustSBI; attack cases listed below. The harness can fail: each bench feature added for milestone 1 (SSH sessions over host OpenSSH, virtio disk and net, bundle data entries, a required clean power-off) has a self-check, and `must_fail` cases pass only if the bench fails for the stated reason. A missing firmware or OpenSSH fails a case rather than skipping it. Host unit test: `cargo test -p xous` round-trips every syscall `Result` variant through its register encoding. No fuzzing yet; the kernel's hosted unit tests are not wired into the bench. |
 | 7 Virtio | Nothing built; the only driver is the ns16550 UART in test programs. |
 
 ## Test cases (`redoubt/tests/`)
@@ -37,3 +37,5 @@ Update this note with each milestone.
 | `verified-boot-rejects-tamper` | A bundle changed after signing is refused (attack) |
 | `smp-spike` | With the `smp` feature, a second hart started through SBI HSM contends on the spinlock big kernel lock without losing updates |
 | `unsafe-budget` | The `unsafe` ratchet |
+| `loader-rejects-truncated-elf` | A program image cut short inside its program headers is refused (attack) |
+| `bench-*` | The bench's own self-checks: SSH sessions (loopback against host `sshd -i`, and to the guest's forwarded port), virtio devices, bundle data entries, console reading after the last expect, required power-off; the `must_fail` ones pass only when the bench catches the fault |

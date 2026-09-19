@@ -51,11 +51,11 @@ merged; the waves show what can run together.
 ## Claims
 | Package | State | Branch | Notes |
 | --- | --- | --- | --- |
-| M0 | building | wp-m0 | wave 1 |
-| W1 | building | wp-w1 | wave 1 |
-| L1 | building | wp-l1 | wave 1 |
-| T1 | building | wp-t1 | wave 1 |
-| A1 | building | wp-a1 | wave 1 |
+| M0 | review | wp-m0 | |
+| W1 | review | wp-w1 | |
+| L1 | review | wp-l1 | |
+| T1 | merged | wp-t1 | 987bacbed |
+| A1 | review | wp-a1 | waits on QUESTIONS.md 1-16 |
 | all others | waiting | | see BUILD-PLAN.md "Needs" |
 
 States: `waiting` (needs not merged), `ready`, `building`, `review`, `merged`.
