@@ -1,6 +1,6 @@
 //! `ninep_common` on the 9P skeleton, driven through `answer_common` with a fake minter (no
 //! system calls): `new_connection` and `disconnect`, admission and fair shares of minted
-//! connections, byte quotas, and hostile requests.
+//! connections, the file server's grant and disconnect hooks, and hostile requests.
 
 use super::*;
 
