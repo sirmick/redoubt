@@ -225,10 +225,9 @@ Later:
 
 ## Design backlog (not yet designed), in the order we intend to settle them
 Kernel-interface-bound first:
-1. **Capability mechanism** (next; note: `CAPABILITIES.md`): unforgeable handles instead of 128-bit
+1. **Capability mechanism** (designed: `CAPABILITIES.md`, packages: `PACKAGES.md`): unforgeable handles instead of 128-bit
    password SIDs, transfer, badges, attenuation, revocation, death notification.
-2. **Principals: users and AI agents as first-class, equal principals**; delegation, leases,
-   powerbox escalation, audit (same note).
+2. **Principals: users and AI agents as first-class, equal principals** (designed, same note).
 3. **Resource accounting and quotas** (memory, handles, threads, IRQ rates); today there are none.
 4. **Startup block format** (namespace table + granted capabilities).
 5. **Init and supervision**: who is first, who holds root capabilities and when they are dropped.
