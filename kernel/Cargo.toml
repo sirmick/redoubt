@@ -9,7 +9,6 @@ resolver = "2"
 
 # Dependency versions enforced by Cargo.lock.
 [dependencies]
-bitflags = "1.2.1"
 stats_alloc = { version = "0.1.8", optional = true }
 xous-kernel = { package = "xous", version = "0.9.70", features = [
     "forget-memory-messages",
@@ -29,10 +28,9 @@ riscv = { version = "0.5.6", package = "xous-riscv" }                           
 
 [target.'cfg(target_arch = "riscv64")'.dependencies]
 riscv = "0.16"
-paging = { path = "../xous64/paging" }
 
 [target.'cfg(any(target_arch = "riscv32", target_arch = "riscv64"))'.dependencies]
-
+paging = { path = "../xous64/paging" }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(ci)', 'cfg(baremetal)'] }

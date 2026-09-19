@@ -19,7 +19,6 @@ pub fn current_pid() -> PID { PID::new(mem::pid_from_satp(satp::read().bits()) a
 pub fn init() {
     irq::init();
 
-    #[cfg(target_arch = "riscv64")]
     println!("W^X verified: {} executable kernel pages, none writable under any alias", mem::verify_kernel_wx());
 
     // SAFETY: enabling supervisor software and external interrupts. The kernel runs with
