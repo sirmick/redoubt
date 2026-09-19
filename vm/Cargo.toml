@@ -1,0 +1,11 @@
+[package]
+name = "beamlet-vm"
+description = "A small, safe BEAM interpreter (no_std + alloc)"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+num-bigint = { version = "0.4", default-features = false }
+num-traits = { version = "0.2", default-features = false }
+num-integer = { version = "0.1", default-features = false }

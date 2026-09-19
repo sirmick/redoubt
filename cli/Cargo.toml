@@ -1,0 +1,9 @@
+[package]
+name = "beamlet"
+description = "Run BEAM modules on beamlet using the POSIX platform"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+beamlet-vm = { path = "../vm" }
