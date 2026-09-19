@@ -835,6 +835,7 @@ pub fn move_page_inner(
 }
 
 /// Determine if a virtual page has been lent.
+#[allow(dead_code)] // used by check_ram in some configs
 pub fn page_is_lent(src_addr: *mut u8) -> bool {
     pagetable_entry(src_addr as usize)
         .map_or(false, |v| unsafe { v.read_volatile() } & MMUFlags::S.bits() != 0)

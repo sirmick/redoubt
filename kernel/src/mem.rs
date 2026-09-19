@@ -1086,38 +1086,7 @@ impl MemoryManager {
         self.claim_release_move(addr, pid, ClaimReleaseMove::Release)
     }
 
-    /// Convert an offset in the `MEMORY_ALLOCATIONS` array into a physical address.
-    #[cfg(baremetal)]
-    fn allocation_offset_to_address(&self, offset: usize) -> Option<usize> {
-        // If the offset is within the RAM size, simply turn it into
-        // an address.
-        if offset < self.ram_size as usize / PAGE_SIZE {
-            Some(self.ram_start as usize + offset * PAGE_SIZE)
-        } else {
-            // No region was found.
-            None
-        }
-    }
 
-    /// Convert an offset in the `EXTRA_ALLOCATIONS` array into a physical address.
-    #[cfg(baremetal)]
-    fn allocation_offset_to_address_extra(&self, offset: usize) -> Option<usize> {
-        // Loop through all regions looking for the address.
-        // NOTE: This needs to be linear because each memory region has a different length.
-        let mut offset_in_region = offset;
-        for region in self.extra_regions {
-            // If the offset exceeds the current region, skip to the
-            // next region.
-            if offset_in_region >= (region.mem_size as usize / PAGE_SIZE) {
-                offset_in_region -= region.mem_size as usize / PAGE_SIZE;
-                continue;
-            }
-            return Some(region.mem_start as usize + (offset_in_region * PAGE_SIZE));
-        }
-
-        // No region was found.
-        None
-    }
 
     /// Free all memory that belongs to a process. This does not unmap the
     /// memory from the process, it only marks it as free.

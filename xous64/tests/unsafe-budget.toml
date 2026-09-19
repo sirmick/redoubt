@@ -32,8 +32,8 @@ paths = [
     "kernel/src/arch/riscv/irq.rs", "kernel/src/arch/riscv/process.rs", "kernel/src/arch/riscv/syscall.rs",
     "kernel/src/arch/riscv/mod.rs", "kernel/src/arch/riscv/exception.rs", "kernel/src/arch/riscv/panic.rs",
 ]
-max_unsafe = 35
-max_undocumented = 35
+max_unsafe = 32
+max_undocumented = 32
 
 [[budget]]
 name = "kernel: core"
@@ -41,5 +41,5 @@ paths = [
     "kernel/src/main.rs", "kernel/src/mem.rs", "kernel/src/services.rs", "kernel/src/server.rs",
     "kernel/src/syscall.rs", "kernel/src/irq.rs", "kernel/src/args.rs", "kernel/src/io.rs",
 ]
-max_unsafe = 67
-max_undocumented = 65
+max_unsafe = 58
+max_undocumented = 56
