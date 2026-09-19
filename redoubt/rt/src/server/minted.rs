@@ -156,7 +156,18 @@ impl<T> Minted<T> {
     }
 
     /// The share `caller`'s requests count in: its badge, or, for a capability it minted for
-    /// itself, the share of the one it minted it through.
+    /// itself, the share of the one it minted it through (answer 117), so minting more badges
+    /// buys no bigger share. A capability minted *for another client* is a share of its own,
+    /// which is what the steward does for a lease's agent.
+    ///
+    /// **It cannot tell "for itself" from "for another" within account 0.** `AdmitKey` keys
+    /// account 0 by badge (CONTAINMENT.md, because the budget a system caller shares does not
+    /// travel), so a system caller minting for itself looks, through the new badge, like a
+    /// different client: the fold stops and the chain opens a fresh bucket per link. A server
+    /// whose clients can chain must say what stops one of them spending every bucket it has —
+    /// `keyd` allows no chain at all (only a root badge may grant); the 9P skeleton cannot take
+    /// that rule, because minting a connection for a child is how attenuation works there, so
+    /// for it this is an open hole, reported with WP-S1 rather than closed here.
     pub fn share(&self, caller: &Caller) -> u64 {
         let client = AdmitKey::of(caller);
         let mut badge = caller.badge;
