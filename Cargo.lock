@@ -587,6 +587,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "redoubt-model"
+version = "0.1.0"
+
+[[package]]
 name = "redoubt-rt"
 version = "0.1.0"
 dependencies = [

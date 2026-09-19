@@ -12,6 +12,7 @@ members = [
   "redoubt/rt",
   "redoubt/sys",
   "redoubt/littlefs",
+  "redoubt/model",
   "redoubt/test-programs",
   "redoubt/testbench",
   "redoubt/wire",
