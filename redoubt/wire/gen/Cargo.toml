@@ -10,3 +10,5 @@ name = "wire-gen"
 path = "src/main.rs"
 
 [dependencies]
+# For INLINE_BYTES and MAX_MSG_HANDLES, so the generator and the codec cannot disagree.
+redoubt-wire = { path = ".." }

@@ -1,27 +1,84 @@
 # Example protocol (codec conformance fixture)
 
 Not a real protocol: no server speaks it. It exists so the generated codecs, the test vectors
-(`redoubt/wire/vectors/example.txt`) and the fuzz target exercise every field type and both
-message shapes before the servers' own tables exist. Real tables live in the owning server's
-note under `planning/redoubt/` (WIRE.md) and use exactly this format; `redoubt-wire-gen` reads
-both places.
+(`redoubt/wire/vectors/`) and the fuzz targets exercise every field type, both message shapes,
+replies, error replies and the file framing. Real tables live in the owning server's note
+under `planning/redoubt/` (WIRE.md); each server package writes its own. This note is also the
+guide to writing one.
 
-The format: an HTML comment `<!-- wire: NAME -->` on its own line names the protocol, and the
-next table is its layout. One row per message type: the opcode (decimal, unique), the message
-name, and the fields in order, each `` `name: type` ``, or `-` for none. Types: `u8`, `u16`,
-`u32`, `u64`, `string` (`u16` length + UTF-8), `bytes` (`u32` length + bytes), and
-`handle[N]` (the handle in slot N; slots are numbered from 0 in order and carry no bytes).
-Whether a message is inline or goes in a buffer follows from its fields (redoubt-wire's
-`typed` module).
+## Writing a table
+A protocol is two tables: its messages and its errors.
+
+**The message table.** Put a line `<!-- wire: NAME -->` directly above it (blank lines between
+are allowed), where NAME is the protocol's name: snake_case, unique across all notes, and it
+becomes the Rust module `redoubt_wire::proto::NAME` and the Elixir module
+`Redoubt.Wire.Proto.Name`. The header must be exactly:
+
+```
+| Opcode | Message | Fields | Reply |
+| --- | --- | --- | --- |
+```
+
+Then one row per message:
+- **Opcode:** decimal, 1 to 4294967295, no leading zeros, unique in the table. 0 is reserved:
+  word 0 of a reply is a status, and 0 means success.
+- **Message:** the name in backticks, snake_case (`[a-z][a-z0-9_]*`). It becomes a Rust type in
+  CamelCase (`read_block` is `ReadBlock`, its reply `ReadBlockReply`), so names whose type the
+  generated code already uses (`message`, `reply`, `error`, `result`, `ok`, ...) are refused,
+  as are Rust and Elixir keywords.
+- **Fields:** the request's fields in order, each `` `name: type` ``, separated by commas, or
+  `-` for none. Types: `u8`, `u16`, `u32`, `u64`, `string` (`u16` length + UTF-8), `bytes`
+  (`u32` length + bytes), and `handle[N]`: the handle in slot N. Slots are numbered 0, 1, ...
+  in order, at most 4 (`MAX_MSG_HANDLES`), and carry no bytes. There are no compound types;
+  write a label set or an address as `bytes` and state its inner layout in the note.
+- **Reply:** `-` for a message with no reply (it is sent with `send`), `ok` for a reply that
+  carries only its status, or the reply's fields in the same form as Fields (with its own
+  handle slots from 0).
+
+The table ends at the first blank line. Every line before that must be a row; a row-like line
+right after the blank line is refused, so a stray blank line cannot drop rows. Tables inside
+fenced code blocks (like the one above) are ignored.
+
+**Shape.** A message is **inline** if its request's fields and its reply's fields each have a
+fixed size (no `string` or `bytes`) and fit in 12 bytes (words 1-3 at 32 bits, the same on
+both widths); the fields are packed into words 1-3 and there is no buffer. Otherwise it is a
+**buffer** message: the request's fields go in the buffer (a lend when sent with `call`, a
+transfer with `send`) with their length in word 1, and the reply's fields are written back
+into the caller's lend with their length in word 1. A small request whose reply carries data
+(a block read) is therefore a buffer message.
+
+**The error table.** A protocol whose messages have replies needs one, marked
+`<!-- wire-errors: NAME -->` with the header `| Code | Error |`: one row per error, the code
+decimal and nonzero (0 is success), the name snake_case in backticks. An error reply carries
+the code in word 0, zeros in words 1-3, no handles and nothing in the buffer.
+
+**In a 9P file.** A message written into a file (e.g. an `ipd` `ctl` file) is its opcode as a
+`u32` followed by the buffer-shape encoding of its fields, one per `Twrite`. Messages with
+handles cannot be written into a file.
+
+**Generating.** `cargo run -p redoubt-wire-gen` writes `redoubt/wire/src/proto/NAME.rs` and
+`redoubt/wire/elixir/proto/NAME.ex`. The generated files are checked in, and
+`cargo test -p redoubt-wire-gen` fails if they differ from the tables
+(`cargo run -p redoubt-wire-gen -- --check` says which), so a table and its code cannot drift.
+
+## The tables
 
 <!-- wire: example -->
-| Opcode | Message | Fields |
-| --- | --- | --- |
-| 1 | `ping` | - |
-| 2 | `pong` | `seq: u64`, `flags: u32` |
-| 3 | `small` | `a: u8`, `b: u16` |
-| 4 | `wide` | `a: u64`, `b: u32`, `c: u8` |
-| 5 | `named` | `id: u32`, `name: string` |
-| 6 | `blob` | `offset: u64`, `data: bytes`, `label: string` |
-| 7 | `grant` | `range: handle[0]`, `reply: handle[1]`, `pages: u32` |
-| 4294967295 | `last` | `note: string`, `key: handle[0]` |
+| Opcode | Message | Fields | Reply |
+| --- | --- | --- | --- |
+| 1 | `ping` | - | ok |
+| 2 | `pong` | `seq: u64`, `flags: u32` | - |
+| 3 | `small` | `a: u8`, `b: u16` | `c: u32` |
+| 4 | `wide` | `a: u64`, `b: u32`, `c: u8` | ok |
+| 5 | `named` | `id: u32`, `name: string` | `id: u32` |
+| 6 | `blob` | `offset: u64`, `data: bytes`, `label: string` | - |
+| 7 | `grant` | `range: handle[0]`, `reply: handle[1]`, `pages: u32` | `key: handle[0]` |
+| 8 | `read` | `offset: u64`, `count: u32` | `data: bytes` |
+| 4294967295 | `last` | `note: string`, `key: handle[0]` | `n: u64`, `m: u32` |
+
+<!-- wire-errors: example -->
+| Code | Error |
+| --- | --- |
+| 1 | `not_found` |
+| 2 | `denied` |
+| 4294967295 | `last_error` |

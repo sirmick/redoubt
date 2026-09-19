@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Round-trips redoubt/wire/vectors/example.txt through the generated Elixir codec, on the
-# real BEAM (the oracle) and on beamlet; both must accept every `ok` line exactly and refuse
-# every `bad` line. The Rust codec runs the same file (cargo test -p redoubt-wire).
+# Runs the typed-message vector files (redoubt/wire/vectors/example*.txt) through the generated
+# Elixir codec on the real BEAM (the oracle) and on beamlet. Each must accept every accepted
+# line exactly and refuse every refused one, and the two outputs must be identical byte for
+# byte. The Rust codec runs the same files (cargo test -p redoubt-wire).
 #
 #   redoubt/wire/elixir/run-vectors
 #
@@ -29,17 +30,19 @@ elixir_lib="$(dirname "$(dirname "$(command -v elixir)")")/lib"
 otp=()
 for app in stdlib kernel erts; do dirs=( "$otp_lib/$app"-*/ebin ); otp+=( -pa "${dirs[0]}" ); done
 
-oracle="$(elixir -pa "$out/ebin" -e 'IO.inspect(Redoubt.Wire.VectorsTest.start(Enum.at(System.argv(), 0)))' "$wire/vectors/example.txt")"
-echo "BEAM:    $oracle"
-got="$("$BEAMLET" --root "$wire/vectors" -pa "$out/ebin" "${otp[@]}" -pa "$elixir_lib/elixir/ebin" Elixir.Redoubt.Wire.VectorsTest start)"
-echo "beamlet: $got"
-
-# BEAM prints Elixir syntax, beamlet Erlang syntax: compare the counts.
-counts() { tr -dc '0-9,' <<< "$1"; }
-case "$oracle" in "{:ok, "*) ;; *) echo "FAIL on BEAM"; exit 1 ;; esac
-case "$got" in "{ok,"*) ;; *) echo "FAIL on beamlet"; exit 1 ;; esac
-if [ "$(counts "$oracle")" != "$(counts "$got")" ]; then
+# Both print the per-file lines, then the result (`ok` or `failed`) on the last line.
+elixir -pa "$out/ebin" -e 'IO.puts(Redoubt.Wire.VectorsTest.start(Enum.at(System.argv(), 0)))' "$wire/vectors" > "$out/beam.txt"
+"$BEAMLET" --root "$wire/vectors" -pa "$out/ebin" "${otp[@]}" -pa "$elixir_lib/elixir/ebin" \
+    Elixir.Redoubt.Wire.VectorsTest start > "$out/beamlet.txt"
+sed 's/^/BEAM:    /' "$out/beam.txt"
+if ! cmp -s "$out/beam.txt" "$out/beamlet.txt"; then
+    sed 's/^/beamlet: /' "$out/beamlet.txt"
     echo "FAIL: BEAM and beamlet disagree"
+    exit 1
+fi
+echo "beamlet: identical"
+if [ "$(tail -n 1 "$out/beam.txt")" != "ok" ]; then
+    echo "FAIL"
     exit 1
 fi
 echo "PASS"

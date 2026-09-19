@@ -1,16 +1,14 @@
-//! `cargo run -p redoubt-wire-gen` regenerates the typed-message codecs from the tables in
-//! the notes; `-- --check` only reports generated files that are out of date (exit 1).
+//! `cargo run -p redoubt-wire-gen` writes the typed-message codecs from the tables in the
+//! notes; `-- --check` only lists generated files that are out of date (exit 1). The test
+//! `generated_files_are_current` makes the same check on every `cargo test`.
 
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let root = redoubt_wire_gen::repo_root();
-    let check = std::env::args().skip(1).any(|a| a == "--check");
-    let result = if check {
+    let result = if std::env::args().skip(1).any(|a| a == "--check") {
         redoubt_wire_gen::stale(&root).map(|stale| {
-            for path in &stale {
-                eprintln!("stale: {}", path.display());
-            }
+            stale.iter().for_each(|path| eprintln!("stale: {}", path.display()));
             stale.is_empty()
         })
     } else {
@@ -28,19 +26,15 @@ fn main() -> ExitCode {
 
 fn write_all(root: &std::path::Path) -> Result<bool, String> {
     let generated = redoubt_wire_gen::generate(root)?;
-    for stale in redoubt_wire_gen::stale(root)? {
-        let path = root.join(&stale);
-        match generated.iter().find(|(p, _)| *p == stale) {
-            Some((_, contents)) => {
-                if let Some(dir) = path.parent() {
-                    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-                }
-                std::fs::write(&path, contents).map_err(|e| format!("{}: {e}", path.display()))?;
-                println!("wrote {}", stale.display());
-            }
-            // No table produces it any more; deleting is left to a person (who can see why).
-            None => println!("no table generates {}: delete it by hand", stale.display()),
+    for (rel, contents) in &generated {
+        let path = root.join(rel);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
+        std::fs::write(&path, contents).map_err(|e| format!("{}: {e}", path.display()))?;
     }
-    Ok(true)
+    // Deleting is left to a person, who can see why no table generates the file any more.
+    let orphans = redoubt_wire_gen::orphans(root, &generated);
+    orphans.iter().for_each(|path| eprintln!("no table generates {}: delete it by hand", path.display()));
+    Ok(orphans.is_empty())
 }
