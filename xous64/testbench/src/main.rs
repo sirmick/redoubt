@@ -122,22 +122,34 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Resolve a case's firmware choice to a `-bios` value. "rustsbi" looks for the Prototyper
-/// binary via RUSTSBI_PROTOTYPER or the default clone path, and is skipped if absent.
-fn resolve_firmware(case_firmware: Option<&str>, cli_default: &str) -> Result<String, String> {
+/// The RustSBI Prototyper binary for `target`, or an error naming where it was looked for.
+/// Overridable per width with RUSTSBI_PROTOTYPER (rv64) / RUSTSBI_PROTOTYPER_RV32 (rv32).
+fn rustsbi_prototyper(target: &Target) -> Result<String, String> {
+    let base = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../rustsbi/target");
+    let (env, arch) = if target.triple.starts_with("riscv64") {
+        ("RUSTSBI_PROTOTYPER", "riscv64gc-unknown-none-elf")
+    } else {
+        ("RUSTSBI_PROTOTYPER_RV32", "riscv32imac-unknown-none-elf")
+    };
+    let path =
+        std::env::var(env).unwrap_or_else(|_| format!("{base}/{arch}/release/rustsbi-prototyper"));
+    if std::path::Path::new(&path).exists() {
+        Ok(path)
+    } else {
+        Err(format!("RustSBI Prototyper not found ({path}); build it or set {env}"))
+    }
+}
+
+/// Resolve a case's firmware choice to a `-bios` value. rv64 defaults to QEMU's bundled
+/// OpenSBI; QEMU ships none for rv32, so rv32 always boots under RustSBI. A case may force
+/// "rustsbi"; the boot is skipped if that binary is absent.
+fn resolve_firmware(case_firmware: Option<&str>, cli_default: &str, target: &Target) -> Result<String, String> {
+    let rv64 = target.triple.starts_with("riscv64");
     match case_firmware {
-        None | Some("opensbi") => Ok(cli_default.to_string()),
-        Some("rustsbi") => {
-            let path = std::env::var("RUSTSBI_PROTOTYPER").unwrap_or_else(|_| {
-                concat!(env!("CARGO_MANIFEST_DIR"),
-                    "/../../../rustsbi/target/riscv64gc-unknown-none-elf/release/rustsbi-prototyper").to_string()
-            });
-            if std::path::Path::new(&path).exists() {
-                Ok(path)
-            } else {
-                Err(format!("RustSBI Prototyper not found ({path}); build it or set RUSTSBI_PROTOTYPER"))
-            }
-        }
+        Some("rustsbi") => rustsbi_prototyper(target),
+        None | Some("opensbi") if rv64 => Ok(cli_default.to_string()),
+        // rv32: no bundled OpenSBI, so the default firmware is RustSBI.
+        None | Some("opensbi") => rustsbi_prototyper(target),
         Some(other) => Err(format!("unknown firmware {other:?}")),
     }
 }
@@ -215,7 +227,7 @@ fn run_case(
     for smp in &boot.smp {
         let run_started = Instant::now();
         let log = logs.join(format!("{}-{}-smp{}.log", case.name, target.name, smp));
-        let firmware = match resolve_firmware(boot.firmware.as_deref(), firmware) {
+        let firmware = match resolve_firmware(boot.firmware.as_deref(), firmware, target) {
             Ok(fw) => fw,
             Err(why) => return Ok(vec![(String::new(), Outcome::Skip(why), 0.0)]),
         };

@@ -25,8 +25,8 @@ use dt::Platform;
 
 use tar_no_std::TarArchiveRef;
 use xous::arch::{
-    EXCEPTION_STACK_PAGES, EXCEPTION_STACK_TOP, KERNEL_AREA, KERNEL_STACK_PAGES, KERNEL_STACK_TOP,
-    PHYSMAP_BASE, THREAD_CONTEXT_AREA, THREAD_CONTEXT_PAGES, USER_AREA_END, USER_STACK_TOP,
+    EXCEPTION_STACK_PAGES, EXCEPTION_STACK_TOP, KERNEL_AREA, KERNEL_PLIC_BASE, KERNEL_STACK_PAGES,
+    KERNEL_STACK_TOP, THREAD_CONTEXT_AREA, THREAD_CONTEXT_PAGES, USER_AREA_END, USER_STACK_TOP,
 };
 
 use crate::alloc::{PageAllocator, Pid, KERNEL_PID};
@@ -193,6 +193,13 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     kernel.map_stack(&mut alloc, KERNEL_STACK_TOP, KERNEL_STACK_PAGES, kernel_flags);
     kernel.map_stack(&mut alloc, EXCEPTION_STACK_TOP, EXCEPTION_STACK_PAGES, kernel_flags);
     map_context(&mut alloc, &kernel, KERNEL_PID);
+    // Pre-share the tables the kernel will map its interrupt controller into. The kernel
+    // maps the PLIC at runtime, after these root entries have been copied into every user
+    // address space, so the intermediate tables must exist and be shared now (see
+    // AddressSpace::reserve_tables). The PLIC is the only such runtime kernel mapping.
+    if let Some(plic) = &platform.plic {
+        kernel.reserve_tables(&mut alloc, KERNEL_PLIC_BASE, plic.range.len().next_multiple_of(PAGE_SIZE));
+    }
     let kernel_process = InitialProcess {
         satp: kernel.satp(),
         entrypoint: kernel_entry,
@@ -249,10 +256,10 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     // pages owned by PID 1.
     unsafe {
         enter_kernel(
-            PHYSMAP_BASE + args_base,
-            PHYSMAP_BASE + processes.as_ptr() as usize,
-            PHYSMAP_BASE + alloc.rpt_base(),
-            PHYSMAP_BASE + xpt,
+            xous::arch::physmap_virt(args_base),
+            xous::arch::physmap_virt(processes.as_ptr() as usize),
+            xous::arch::physmap_virt(alloc.rpt_base()),
+            xous::arch::physmap_virt(xpt),
             kernel.satp(),
             kernel_entry,
             KERNEL_STACK_TOP - STACK_PADDING,

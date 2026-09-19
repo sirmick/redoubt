@@ -75,6 +75,13 @@ mod layout {
 }
 pub use layout::*;
 
+/// The virtual address at which the kernel's physmap sees physical frame `phys`:
+/// `PHYSMAP_BASE + (phys - PHYSMAP_PHYS_BASE)`. rv64 maps from physical 0
+/// (`PHYSMAP_PHYS_BASE == 0`), so the subtraction matters only on rv32.
+pub const fn physmap_virt(phys: usize) -> usize {
+    PHYSMAP_BASE.wrapping_add(phys.wrapping_sub(PHYSMAP_PHYS_BASE))
+}
+
 /// `SysCall::PlatformSpecific` operations on platforms where the kernel runs under SBI
 /// firmware. See `planning/xous64/TIMER.md`.
 pub mod platform_call {

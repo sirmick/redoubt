@@ -29,7 +29,12 @@ pub const TARGETS: &[Target] = &[
     Target {
         name: "rv32",
         triple: "riscv32imac-unknown-none-elf",
-        machine: Err("no Sv32 support in the SBI loader and no rv32 SBI firmware yet (see PLAN.md)"),
+        machine: Ok(Machine {
+            qemu: "qemu-system-riscv32",
+            qemu_args: &["-machine", "virt", "-m", "256M"],
+            loader_package: "loader64",
+            kernel_features: &["qemu-virt"],
+        }),
     },
 ];
 
