@@ -1,19 +1,20 @@
-description = "Bench self-check: a session reaches the guest's forwarded SSH port through QEMU"
+description = "Bench self-check: a session connects to the host port QEMU forwards to the guest's port 22; nothing answers yet"
 arch = ["rv64"]
 kind = "boot"
 programs = ["log-server"]
-timeout_secs = 2
+timeout_secs = 2.5
 expect = ['PID 2 listening']
 
 [net]
 forward = [22]
 
 # Nothing in the guest speaks TCP yet (netd and sshd come later), so QEMU accepts the
-# connection on the host port and the SSH handshake then gets no answer. Without the forward
-# ssh would be refused at once instead. ssh gives up when the case's time runs out.
+# connection on the host port and the SSH handshake then gets no answer; had the bench used
+# the wrong port, ssh would have been refused at once. ssh gives up half a second before the
+# case's deadline and says why.
 [[session]]
 user = "alice"
-steps = [{ expect = 'Connection timed out during banner exchange' }]
+steps = [{ expect = 'Connection timed out during banner exchange' }, { exit = 255 }]
 
 [[grant]]
 program = "log-server"

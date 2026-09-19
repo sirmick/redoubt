@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use ed25519_compact::{KeyPair, Seed};
 
 use crate::case::{Corruption, Program};
@@ -84,7 +84,10 @@ fn corrupt_elf(elf: &mut Vec<u8>, corruption: &Corruption) -> Result<()> {
     let u16_at = |elf: &[u8], at: usize| u16::from_le_bytes([elf[at], elf[at + 1]]) as usize;
 
     match corruption {
-        Corruption::Truncate(length) => elf.truncate(*length),
+        Corruption::Truncate(length) => {
+            ensure!(*length < elf.len(), "truncate = {length} does not shorten a {}-byte file", elf.len());
+            elf.truncate(*length)
+        }
         Corruption::Entry(address) => put(elf, 0x18, parse(address)?),
         Corruption::SegmentVaddr(address) => {
             // (e_phoff, e_phentsize, e_phnum, p_vaddr within a program header)

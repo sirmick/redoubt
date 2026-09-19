@@ -1,0 +1,12 @@
+description = "Bench self-check: a session refuses a server whose host key is not the one the case names"
+kind = "ssh-loopback"
+timeout_secs = 20
+authorized = ["alice"]
+# The server presents loopback-host's key; the case pins bob's (the way a guest case pins the
+# box's key in net.host_key).
+host_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINaP/Ds30AkdLUuZ9wf5M6Zt+ZM+8y5Ojl6TllLOgm5n"
+must_fail = '^session alice: at the end: ssh exited \(status 255\), expected 0; last output: Host key verification failed\.$'
+
+[[session]]
+user = "alice"
+steps = []

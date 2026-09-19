@@ -1,13 +1,14 @@
-description = "Bench self-check: a session's forbid list fails the case when its output matches"
+description = "Bench self-check: a session's forbid list covers output after its last step, until ssh exits"
 kind = "ssh-loopback"
 timeout_secs = 20
 authorized = ["alice"]
-must_fail = '^session alice: step 2: forbidden output /secret/: the secret$'
+must_fail = '^session alice: at the end: forbidden output /secret/: the secret$'
 
+# The forbidden line comes a moment after the last step has matched.
 [[session]]
 user = "alice"
 forbid = ['secret']
 steps = [
-    { send = "echo the secret; echo done\n" },
-    { expect = 'done' },
+    { send = "echo done; sleep 0.1; echo the secret\n" },
+    { expect = '^done$' },
 ]

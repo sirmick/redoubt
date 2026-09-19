@@ -1,15 +1,15 @@
-description = "Bench self-check: a case's disk and net reach the guest as virtio devices, the disk at its size"
+description = "Bench self-check: a case's disk and net reach the guest as virtio devices, the disk at its size; the guest powers off cleanly"
 arch = ["rv64"]
 kind = "boot"
 programs = ["log-server", "virtio-probe"]
 timeout_secs = 20
 expect = ['network device, mac 52:54:00:12:34:56', 'block device, 8192 sectors', '2 device\(s\)']
+poweroff = true
 
 [disk]
 size_kib = 4096
 
 [net]
-forward = [22]
 
 [[grant]]
 program = "log-server"

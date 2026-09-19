@@ -1,19 +1,20 @@
-description = "Bench self-check: a `file` entry reaches the guest inside the signed bundle, after the programs"
+description = "Bench self-check: the loader finds a [[file]] entry in the signed bundle after the programs (today it refuses it; a clean read-back from WP-K4)"
 arch = ["rv64"]
 kind = "boot"
 programs = ["log-server"]
 timeout_secs = 20
 # Today's loader starts every bundle entry except `grants` as a process, so it refuses a data
-# entry: seeing it try proves the entry arrived, signed, after the programs. When the loader
-# loads only the kernel and init (BUILD-PLAN.md WP-K4), data entries are no longer started, and
-# this case changes to a clean boot in which a guest program reads the entry back.
-default_forbid = false
-expect = ['bundle signature ok', 'PID 2: log-server', 'loader PANIC', 'invalid ELF']
+# entry. Its complaint quotes the entry's first bytes, "DATA" (68, 65, 84, 65), right after
+# loading log-server: the bytes arrived as they were, signed, after the programs. When the
+# loader loads only the kernel and init (WP-K4), this case becomes a clean boot in which a
+# guest program reads the entry back.
+allow_panic = true
+expect = ['bundle signature ok', 'PID 2: log-server', 'loader PANIC', 'invalid ELF: BadMagic\(\[68, 65, 84, 65\]\)']
 forbid = ['KMAIN']
 
 [[file]]
-name = "results"
-from = { path = "redoubt/tests/data/ipc-results.txt" }
+name = "data"
+from = { path = "redoubt/tests/data/bundle-file.txt" }
 
 [[grant]]
 program = "log-server"

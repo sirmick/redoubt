@@ -3,8 +3,8 @@ arch = ["rv64"]
 kind = "boot"
 programs = ["log-server", { corrupt = "rng-test", with = { truncate = 80 } }]
 timeout_secs = 20
-default_forbid = false      # the loader is supposed to panic here
-expect = ['loader PANIC', 'invalid ELF']
+allow_panic = true          # the loader is supposed to panic here
+expect = ['loader PANIC', 'invalid ELF: SliceReadError']   # its program headers lie past the end
 forbid = ['KMAIN', 'entering kernel']
 
 [[grant]]

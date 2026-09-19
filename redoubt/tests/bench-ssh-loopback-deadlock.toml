@@ -1,6 +1,6 @@
 description = "Bench self-check: `wait` really blocks: two sessions waiting for each other time out"
 kind = "ssh-loopback"
-timeout_secs = 1
+timeout_secs = 0.2
 authorized = ["alice", "bob"]
 # Whichever session times out first is reported; the other stops without a report of its own.
 must_fail = '^session (alice|bob): step 1: timed out waiting for mark "(alice|bob)-ready"$'

@@ -4,7 +4,7 @@ kind = "boot"
 programs = ["log-server"]
 timeout_secs = 20
 tamper_bundle = true
-default_forbid = false      # the loader is supposed to panic here
+allow_panic = true          # the loader is supposed to panic here
 expect = ['loader PANIC', 'signature is invalid']
 forbid = ['KMAIN', 'bundle signature ok']
 
