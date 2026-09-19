@@ -101,3 +101,4 @@ tools-bao/.venv/
 # Zig artifacts
 .zig-cache/
 zig-out/
+kernel.map
