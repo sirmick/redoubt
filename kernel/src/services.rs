@@ -3,7 +3,6 @@
 
 use core::num::NonZeroU8;
 
-use xous_kernel::MemoryRange;
 use xous_kernel::arch::*;
 // use core::mem;
 use xous_kernel::{
@@ -452,13 +451,11 @@ impl SystemServices {
                 // end of assumption area
                 process.state = ProcessState::Setup(ThreadInit::new(
                     init.entrypoint as _,
-                    unsafe {
-                        MemoryRange::new(
-                            init.sp - crate::arch::process::DEFAULT_STACK_SIZE,
-                            crate::arch::process::DEFAULT_STACK_SIZE,
-                        )
-                        .unwrap()
-                    },
+                    crate::mem::memory_range(
+                        init.sp - crate::arch::process::DEFAULT_STACK_SIZE,
+                        crate::arch::process::DEFAULT_STACK_SIZE,
+                    )
+                    .unwrap(),
                     arg0,
                     arg1,
                     arg2,
@@ -1707,7 +1704,7 @@ impl SystemServices {
         len: usize,
         // buf: MemoryRange,
     ) -> Result<*mut usize, xous_kernel::Error> {
-        let buf = unsafe { MemoryRange::new(src_virt as usize, len) }?;
+        let buf = crate::mem::memory_range(src_virt as usize, len)?;
         let buf = unsafe { buf.as_slice() };
         let current_pid = self.current_pid();
         {
@@ -1870,12 +1867,12 @@ impl SystemServices {
             if *entry == None {
                 #[cfg(baremetal)]
                 // Allocate a single page for the server queue
-                let backing = crate::mem::MemoryManager::with_mut(|mm| unsafe {
-                    MemoryRange::new(mm.map_zeroed_page(pid, false)? as _, PAGE_SIZE)
+                let backing = crate::mem::MemoryManager::with_mut(|mm| {
+                    crate::mem::memory_range(mm.map_zeroed_page(pid, false)? as _, PAGE_SIZE)
                 })?;
 
                 #[cfg(not(baremetal))]
-                let backing = unsafe { MemoryRange::new(4096, 4096).unwrap() };
+                let backing = crate::mem::memory_range(4096, 4096).unwrap();
 
                 // klog!("initializing new server with backing at {:x?} -- entry is {:?} (connect? {:?})",
                 // backing, *entry, connect); Initialize the server with the given memory

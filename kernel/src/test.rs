@@ -1255,7 +1255,7 @@ mod queue_capacity_tests {
 
     fn make_server() -> Server {
         let mut slot: Option<Server> = None;
-        let backing = unsafe { MemoryRange::new(0x1_0000, 0x1_000) }.unwrap();
+        let backing = crate::mem::memory_range(0x1_0000, 0x1_000).unwrap();
         Server::init(&mut slot, PID::new(3).unwrap(), SID::from_bytes(&[0x12, 0x34]).unwrap(), backing)
             .unwrap();
         slot.unwrap()
