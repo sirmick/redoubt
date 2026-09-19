@@ -1,6 +1,5 @@
-//! Random operations for model-checked workloads: each generated operation is one the model
-//! says succeeds, so any failure is a finding. Shared by the crash tests and the
-//! differential tests.
+//! Operations on a volume, the in-memory model of what they do, and random workloads.
+//! Shared by the model, crash and differential tests.
 
 use std::collections::BTreeMap;
 
@@ -9,8 +8,11 @@ use littlefs::{BlockDevice, Error, Filesystem, OpenOptions, SeekFrom};
 use super::*;
 
 pub const NAMES: [&str; 6] = ["a", "b", "cc", "dir", "e0", "a-rather-long-name-that-fills-metadata-quickly-0123456789"];
+/// File sizes: inline, one block, several blocks.
+pub const SIZES: [usize; 9] = [0, 1, 17, 64, 200, 511, 1000, 3000, 9000];
 
-/// One operation, always one the model says succeeds.
+/// One operation. `Write` creates or replaces a whole file; `Patch` overwrites part of one
+/// (possibly past its end), then truncates it if `cut` says so.
 #[derive(Clone, Debug)]
 pub enum Op {
     Write { path: String, data: Vec<u8> },
@@ -40,8 +42,78 @@ pub fn fresh(rng: &mut Rng, tree: &Tree, names: usize) -> Option<String> {
     (!tree.contains_key(&path)).then_some(path)
 }
 
+/// Every directory on the way to `path` exists and is a directory.
+fn parent_ok(tree: &Tree, path: &str) -> Result<(), Error> {
+    let mut cur = String::new();
+    for name in parent(path).split('/').filter(|n| !n.is_empty()) {
+        cur = format!("{cur}/{name}");
+        match tree.get(&cur) {
+            Some(Node::Dir { .. }) => {}
+            Some(Node::File { .. }) => return Err(Error::NotDir),
+            None => return Err(Error::NoEntry),
+        }
+    }
+    Ok(())
+}
+
+/// What the model says an operation's outcome is.
+pub fn expect(tree: &Tree, op: &Op) -> Result<(), Error> {
+    let is_dir = |p: &str| matches!(tree.get(p), Some(Node::Dir { .. }));
+    match op {
+        Op::Write { path, .. } => {
+            parent_ok(tree, path)?;
+            if is_dir(path) { Err(Error::IsDir) } else { Ok(()) }
+        }
+        Op::Patch { path, .. } => {
+            parent_ok(tree, path)?;
+            match tree.get(path) {
+                Some(Node::Dir { .. }) => Err(Error::IsDir),
+                Some(Node::File { .. }) => Ok(()),
+                None => Err(Error::NoEntry),
+            }
+        }
+        Op::Mkdir(path) => {
+            parent_ok(tree, path)?;
+            if tree.contains_key(path) { Err(Error::Exists) } else { Ok(()) }
+        }
+        Op::Remove(path) => {
+            parent_ok(tree, path)?;
+            if !tree.contains_key(path) {
+                Err(Error::NoEntry)
+            } else if is_dir(path) && !is_empty_dir(tree, path) {
+                Err(Error::NotEmpty)
+            } else {
+                Ok(())
+            }
+        }
+        Op::Rename(from, to) => {
+            parent_ok(tree, from)?;
+            if !tree.contains_key(from) {
+                return Err(Error::NoEntry);
+            }
+            if is_dir(from) && to.starts_with(&format!("{from}/")) {
+                return Err(Error::Invalid);
+            }
+            parent_ok(tree, to)?;
+            match (tree.get(to), is_dir(from)) {
+                _ if to == from => Ok(()),
+                (None, _) => Ok(()),
+                (Some(Node::Dir { .. }), false) => Err(Error::IsDir),
+                (Some(Node::File { .. }), true) => Err(Error::NotDir),
+                (Some(Node::Dir { .. }), true) if !is_empty_dir(tree, to) => Err(Error::NotEmpty),
+                _ => Ok(()),
+            }
+        }
+        Op::SetAttr(path, ..) | Op::RemoveAttr(path, _) => {
+            parent_ok(tree, path)?;
+            if tree.contains_key(path) { Ok(()) } else { Err(Error::NoEntry) }
+        }
+    }
+}
+
+/// A random operation the model says succeeds, so that any failure is a finding.
 pub fn generate(rng: &mut Rng, tree: &Tree, names: usize, max_attr: u64) -> Option<Op> {
-    let sizes = [0usize, 1, 17, 64, 200, 511, 1000, 3000, 9000];
+    let sizes = SIZES;
     let files = |_: &str, v: &Node| matches!(v, Node::File { .. });
     Some(match rng.below(9) {
         0 | 1 => {

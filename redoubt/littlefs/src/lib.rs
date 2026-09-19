@@ -29,8 +29,8 @@
 //! Wear levelling and bad-block relocation (`block_cycles`): `fsd` sits on a virtio disk,
 //! whose device handles both; a failed program or erase is reported, not worked around. As a
 //! consequence this crate never relocates metadata or grows the superblock chain, but it
-//! reads images where the C reference did. No v1 migration, no `fs_grow`, no directory
-//! handles (see [`Filesystem::read_dir`]).
+//! reads images where the C reference did. No v1 migration, no 2.0 upgrade, no `fs_grow`, no
+//! directory handles (see [`Filesystem::read_dir`]).
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -50,8 +50,8 @@ mod tests;
 pub use file::{FileHandle, OpenOptions, SeekFrom};
 pub use fs::Filesystem;
 
-/// The on-disk version this crate writes: major 2, minor 1. It reads 2.0 too, and upgrades a
-/// 2.0 superblock to 2.1 on the first write, like the reference.
+/// The on-disk version this crate reads and writes: major 2, minor 1. Older images (2.0,
+/// which the reference upgrades in place) are refused; nothing here ever wrote one.
 pub const DISK_VERSION: u32 = 0x0002_0001;
 
 /// Storage as littlefs sees it: `block_count` blocks of `block_size` bytes.

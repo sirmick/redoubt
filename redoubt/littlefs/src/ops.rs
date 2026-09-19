@@ -21,9 +21,6 @@ pub(crate) enum Lookup {
     Missing { dir: MDir, id: u16 },
 }
 
-/// A name's entry (`Ok`), or where it would be inserted (`Err`): a pair and an id.
-type Found = Result<(MDir, u16), (MDir, u16)>;
-
 /// Splits a path into names. Empty components (repeated or trailing slashes) are skipped;
 /// `.` and `..` are refused rather than resolved: callers walk one name at a time.
 pub(crate) fn components(path: &str) -> Result<Vec<&[u8]>, Error> {
@@ -62,9 +59,9 @@ impl<D: BlockDevice> Filesystem<D> {
     /// Looks `name` up in the directory whose first pair is `head` (the reference's
     /// `lfs_dir_find`). Not found: the pair and id where it would be inserted to keep the
     /// directory sorted, which is where the search stopped.
-    fn find(&mut self, head: Pair, name: &[u8]) -> Result<Found, Error> {
+    fn find(&mut self, head: Pair, name: &[u8]) -> Result<Lookup, Error> {
         let mut pair = head;
-        let mut cycle = Cycle::new();
+        let mut walk = self.walk();
         loop {
             let dir = self.fetch(pair)?;
             let (mut found, mut insert) = (None, None);
@@ -76,17 +73,17 @@ impl<D: BlockDevice> Filesystem<D> {
                 }
             }
             if let Some(id) = found {
-                return Ok(Ok((dir, id)));
+                return Ok(Lookup::Found { dir, id });
             }
             // A greater name here means the name is not in any later pair either.
             if let Some(id) = insert {
-                return Ok(Err((dir, id)));
+                return Ok(Lookup::Missing { dir, id });
             }
             if !dir.c.split {
-                let end = dir.c.entries.len() as u16;
-                return Ok(Err((dir, end)));
+                let id = dir.c.entries.len() as u16;
+                return Ok(Lookup::Missing { dir, id });
             }
-            cycle.step(&dir.c.tail)?;
+            walk.step()?;
             pair = dir.c.tail;
         }
     }
@@ -97,16 +94,13 @@ impl<D: BlockDevice> Filesystem<D> {
         let Some((last, parents)) = names.split_last() else { return Ok((Lookup::Root, b"")) };
         let mut head = self.root;
         for name in parents {
-            let Ok((dir, id)) = self.find(head, name)? else { return Err(Error::NoEntry) };
+            let Lookup::Found { dir, id } = self.find(head, name)? else { return Err(Error::NoEntry) };
             head = match self.decode(&dir.c.entries[id as usize])? {
                 Struct::Dir(p) => p,
                 _ => return Err(Error::NotDir),
             };
         }
-        Ok(match self.find(head, last)? {
-            Ok((dir, id)) => (Lookup::Found { dir, id }, *last),
-            Err((dir, id)) => (Lookup::Missing { dir, id }, *last),
-        })
+        Ok((self.find(head, last)?, *last))
     }
 
     pub(crate) fn check_name(&self, name: &[u8]) -> Result<(), Error> {
@@ -153,7 +147,7 @@ impl<D: BlockDevice> Filesystem<D> {
     pub fn read_dir(&mut self, path: &str, mut f: impl FnMut(&DirEntry)) -> Result<(), Error> {
         self.check_poison()?;
         let mut pair = self.dir_head(path)?;
-        let mut cycle = Cycle::new();
+        let mut walk = self.walk();
         loop {
             let dir = self.fetch(pair)?;
             for (_, e) in self.visible(&dir) {
@@ -163,7 +157,7 @@ impl<D: BlockDevice> Filesystem<D> {
             if !dir.c.split {
                 return Ok(());
             }
-            cycle.step(&dir.c.tail)?;
+            walk.step()?;
             pair = dir.c.tail;
         }
     }
@@ -175,9 +169,9 @@ impl<D: BlockDevice> Filesystem<D> {
             // The new pair joins the list of all pairs after the last pair of the parent
             // directory (a hard-tail chain cannot be split).
             let mut last = dir.clone();
-            let mut cycle = Cycle::new();
+            let mut walk = fs.walk();
             while last.c.split {
-                cycle.step(&last.c.tail)?;
+                walk.step()?;
                 last = fs.fetch(last.c.tail)?;
             }
             let child = fs.new_pair(&Contents::new(last.c.tail, false))?;
@@ -399,9 +393,9 @@ impl<D: BlockDevice> Filesystem<D> {
 
         // Every pair on the list, and every file's blocks, exactly once.
         let mut tail = [0, 1];
-        let mut cycle = Cycle::new();
+        let mut walk = self.walk();
         while !pair_is_null(&tail) {
-            cycle.step(&tail)?;
+            walk.step()?;
             let d = self.fetch(tail)?;
             mark(d.pair[0], &mut used)?;
             mark(d.pair[1], &mut used)?;

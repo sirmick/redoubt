@@ -47,8 +47,7 @@ pub(crate) fn le32(b: &[u8]) -> u32 { u32::from_le_bytes([b[0], b[1], b[2], b[3]
 ///
 /// On disk: bit 31 of `tag` says "there may be orphans"; its type and id name a pending move
 /// (type 0x4ff: delete `id` in `pair`). The length bits are never written; in memory, like
-/// the C reference, they hold the orphan count (bits 0-8) and "the superblock needs
-/// rewriting" (bit 9).
+/// the C reference, they hold the orphan count.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub(crate) struct GState {
     pub tag: u32,
@@ -81,9 +80,7 @@ impl GState {
         b
     }
 
-    pub fn orphans(&self) -> u16 { tag::size(self.tag) & 0x1ff }
-
-    pub fn needs_superblock(&self) -> bool { tag::size(self.tag) & 0x200 != 0 }
+    pub fn orphans(&self) -> u16 { tag::size(self.tag) }
 
     pub fn has_move(&self) -> bool { tag::type1(self.tag) != 0 }
 
@@ -247,8 +244,6 @@ pub(crate) struct Parsed {
     /// Whether the rest of the block is known to be erased, so a commit can be appended.
     pub erased: bool,
     pub contents: Contents,
-    /// The commit CRCs mixed together, to seed the block allocator (as the reference does).
-    pub seed: u32,
 }
 
 /// A commit that passed its CRC: where it ends and how much of the tag list it covers.
@@ -274,7 +269,6 @@ pub(crate) fn parse_block(data: &[u8], prog_size: u32) -> Result<Option<Parsed>,
     let mut fcrc = None;
     let mut last: Option<Committed> = None;
     let mut maybe_erased = false;
-    let mut seed = 0;
 
     // Each step moves `off` forward by at least 4 bytes, so this ends within bs/4 steps.
     loop {
@@ -305,7 +299,6 @@ pub(crate) fn parse_block(data: &[u8], prog_size: u32) -> Result<Option<Parsed>,
             // The CRC tag's lowest chunk bit flips the valid bit expected of the next commit,
             // so that erased storage after this commit can never parse as a valid tag.
             ptag ^= ((tag::chunk(t) & 1) as u32) << 31;
-            seed = crc32(seed, &crc.to_le_bytes());
             last = Some(Committed { off: end, etag: ptag, ntags: tags.len(), fcrc });
             fcrc = None;
             crc = 0xffff_ffff;
@@ -338,7 +331,7 @@ pub(crate) fn parse_block(data: &[u8], prog_size: u32) -> Result<Option<Parsed>,
             }
             None => false,
         };
-    Ok(Some(Parsed { off: c.off, etag: c.etag, erased, contents, seed }))
+    Ok(Some(Parsed { off: c.off, etag: c.etag, erased, contents }))
 }
 
 /// A commit being built in memory before it is programmed in one go.

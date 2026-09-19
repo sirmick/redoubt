@@ -10,7 +10,7 @@ struct Shim {
 }
 
 extern "C" {
-    fn shim_new(image: *mut u8, bs: u32, count: u32, prog: u32, cycles: i32, version: u32) -> *mut Shim;
+    fn shim_new(image: *mut u8, bs: u32, count: u32, prog: u32, cycles: i32) -> *mut Shim;
     fn shim_free(s: *mut Shim);
     fn shim_format(s: *mut Shim) -> i32;
     fn shim_mount(s: *mut Shim) -> i32;
@@ -18,7 +18,6 @@ extern "C" {
     fn shim_mkdir(s: *mut Shim, path: *const i8) -> i32;
     fn shim_remove(s: *mut Shim, path: *const i8) -> i32;
     fn shim_rename(s: *mut Shim, from: *const i8, to: *const i8) -> i32;
-    fn shim_mkconsistent(s: *mut Shim) -> i32;
     fn shim_setattr(s: *mut Shim, path: *const i8, typ: u8, data: *const u8, len: u32) -> i32;
     fn shim_removeattr(s: *mut Shim, path: *const i8, typ: u8) -> i32;
     fn shim_getattr(s: *mut Shim, path: *const i8, typ: u8, buf: *mut u8, cap: u32) -> i32;
@@ -62,8 +61,6 @@ pub struct CConfig {
     pub prog_size: u32,
     /// Wear levelling: metadata relocation every this many erases (-1: off).
     pub block_cycles: i32,
-    /// On-disk version to write (0: the newest, 2.1).
-    pub disk_version: u32,
 }
 
 impl CFs {
@@ -80,7 +77,6 @@ impl CFs {
                 cfg.block_count,
                 cfg.prog_size,
                 cfg.block_cycles,
-                cfg.disk_version,
             )
         };
         assert!(!shim.is_null());
@@ -127,11 +123,6 @@ impl CFs {
         let (a, b) = (c(from), c(to));
         // SAFETY: as in `mkdir`, for both strings.
         check(unsafe { shim_rename(self.shim, a.as_ptr(), b.as_ptr()) })
-    }
-
-    pub fn mkconsistent(&mut self) -> CResult<()> {
-        // SAFETY: live mounted shim.
-        check(unsafe { shim_mkconsistent(self.shim) })
     }
 
     pub fn set_attr(&mut self, path: &str, typ: u8, data: &[u8]) -> CResult<()> {

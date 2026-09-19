@@ -37,7 +37,7 @@ static int bd_sync(const struct lfs_config *c) {
 }
 
 shim *shim_new(uint8_t *image, uint32_t block_size, uint32_t block_count, uint32_t prog_size,
-        int32_t block_cycles, uint32_t disk_version) {
+        int32_t block_cycles) {
     shim *s = calloc(1, sizeof(shim));
     s->image = image;
     s->cfg.context = s;
@@ -52,7 +52,6 @@ shim *shim_new(uint8_t *image, uint32_t block_size, uint32_t block_count, uint32
     s->cfg.block_cycles = block_cycles;
     s->cfg.cache_size = block_size;
     s->cfg.lookahead_size = 32;
-    s->cfg.disk_version = disk_version;
     return s;
 }
 
@@ -64,7 +63,6 @@ int shim_unmount(shim *s) { return lfs_unmount(&s->lfs); }
 int shim_mkdir(shim *s, const char *path) { return lfs_mkdir(&s->lfs, path); }
 int shim_remove(shim *s, const char *path) { return lfs_remove(&s->lfs, path); }
 int shim_rename(shim *s, const char *from, const char *to) { return lfs_rename(&s->lfs, from, to); }
-int shim_mkconsistent(shim *s) { return lfs_fs_mkconsistent(&s->lfs); }
 
 int shim_setattr(shim *s, const char *path, uint8_t type, const void *data, uint32_t len) {
     return lfs_setattr(&s->lfs, path, type, data, len);

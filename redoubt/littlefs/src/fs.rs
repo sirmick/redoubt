@@ -10,7 +10,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::crc::crc32;
 use crate::ctz;
 use crate::file::{Content, OpenFile};
 use crate::mdir::*;
@@ -39,7 +38,6 @@ pub(crate) struct MDir {
     pub etag: u32,
     pub erased: bool,
     pub c: Contents,
-    seed: u32,
 }
 
 /// A file or directory entry's struct, decoded and checked against the volume.
@@ -49,28 +47,14 @@ pub(crate) enum Struct {
     Ctz { head: u32, size: u32 },
 }
 
-/// Cycle detection on lists of metadata pairs (Brent's algorithm, as the reference): a
-/// hostile image may link pairs in a loop.
-pub(crate) struct Cycle {
-    pair: Pair,
-    i: u32,
-    period: u32,
-}
+/// A budget of steps for a walk along tails. A volume holds at most `block_count / 2`
+/// pairs, so a longer walk has looped: a hostile image may link pairs in a cycle.
+pub(crate) struct Walk(u32);
 
-impl Cycle {
-    pub fn new() -> Cycle { Cycle { pair: PAIR_NULL, i: 1, period: 1 } }
-
-    /// Call with each pair about to be visited.
-    pub fn step(&mut self, next: &Pair) -> Result<(), Error> {
-        if pair_same(next, &self.pair) {
-            return Err(Error::Corrupt);
-        }
-        if self.i == self.period {
-            self.pair = *next;
-            self.i = 0;
-            self.period = self.period.saturating_mul(2);
-        }
-        self.i += 1;
+impl Walk {
+    /// Call before each pair visited.
+    pub fn step(&mut self) -> Result<(), Error> {
+        self.0 = self.0.checked_sub(1).ok_or(Error::Corrupt)?;
         Ok(())
     }
 }
@@ -85,15 +69,12 @@ impl Cycle {
 /// blocks this same operation already took but has not linked in yet.
 #[derive(Default)]
 struct Alloc {
-    start: u32,
+    /// The next block to consider.
     next: u32,
-    size: u32,
+    /// Blocks that may still be considered before the volume must be walked again.
+    left: u32,
     ckpoint: u32,
     used: Vec<u64>,
-}
-
-impl Alloc {
-    fn is_used(&self, n: u32) -> bool { self.used[(n / 64) as usize] & (1 << (n % 64)) != 0 }
 }
 
 /// A mounted littlefs volume on a block device.
@@ -144,7 +125,7 @@ impl<D: BlockDevice> Filesystem<D> {
             gdisk: GState::default(),
             gstate: GState::default(),
             gdelta: GState::default(),
-            alloc: Alloc { used: vec![0; words], ckpoint: block_count, ..Alloc::default() },
+            alloc: Alloc { next: 0, left: 0, ckpoint: block_count, used: vec![0; words] },
             files: Vec::new(),
             commits: 0,
             poisoned: false,
@@ -254,7 +235,6 @@ impl<D: BlockDevice> Filesystem<D> {
                     etag: p.etag,
                     erased: p.erased,
                     c: p.contents,
-                    seed: p.seed,
                 });
             }
         }
@@ -285,12 +265,14 @@ impl<D: BlockDevice> Filesystem<D> {
         }
     }
 
+    pub(crate) fn walk(&self) -> Walk { Walk(self.block_count / 2) }
+
     /// The pair whose tail is `pair`, if any.
     pub(crate) fn pred(&mut self, pair: &Pair) -> Result<Option<MDir>, Error> {
         let mut tail = [0, 1];
-        let mut cycle = Cycle::new();
+        let mut walk = self.walk();
         while !pair_is_null(&tail) {
-            cycle.step(&tail)?;
+            walk.step()?;
             let d = self.fetch(tail)?;
             if pair_overlaps(&d.c.tail, pair) {
                 return Ok(Some(d));
@@ -303,9 +285,9 @@ impl<D: BlockDevice> Filesystem<D> {
     /// Where the directory entry naming the directory at `pair` points, if any entry does.
     fn parent_link(&mut self, pair: &Pair) -> Result<Option<Pair>, Error> {
         let mut tail = [0, 1];
-        let mut cycle = Cycle::new();
+        let mut walk = self.walk();
         while !pair_is_null(&tail) {
-            cycle.step(&tail)?;
+            walk.step()?;
             let d = self.fetch(tail)?;
             let moved = self.gdisk.move_in(&d.pair);
             for (id, e) in d.c.entries.iter().enumerate() {
@@ -329,12 +311,13 @@ impl<D: BlockDevice> Filesystem<D> {
 
     pub(crate) fn alloc_block(&mut self) -> Result<u32, Error> {
         loop {
-            while self.alloc.next < self.alloc.size {
+            while self.alloc.left > 0 {
                 let n = self.alloc.next;
-                self.alloc.next += 1;
-                self.alloc.ckpoint = self.alloc.ckpoint.saturating_sub(1);
-                if !self.alloc.is_used(n) {
-                    return Ok(((self.alloc.start as u64 + n as u64) % self.block_count as u64) as u32);
+                self.alloc.next = (n + 1) % self.block_count;
+                self.alloc.left -= 1;
+                self.alloc.ckpoint -= 1;
+                if self.alloc.used[(n / 64) as usize] & (1 << (n % 64)) == 0 {
+                    return Ok(n);
                 }
             }
             if self.alloc.ckpoint == 0 {
@@ -344,40 +327,31 @@ impl<D: BlockDevice> Filesystem<D> {
         }
     }
 
-    /// Moves the window past what was examined and finds which blocks in it are in use.
+    /// Marks every block in use, and lets the search go on for up to `ckpoint` more blocks.
     fn alloc_scan(&mut self) -> Result<(), Error> {
-        let count = self.block_count as u64;
-        let start = ((self.alloc.start as u64 + self.alloc.next as u64) % count) as u32;
-        let size = self.block_count.min(self.alloc.ckpoint);
-        self.alloc.start = start;
-        self.alloc.next = 0;
-        self.alloc.size = 0;
         let mut used = core::mem::take(&mut self.alloc.used);
-        used.iter_mut().for_each(|w| *w = 0);
+        used.fill(0);
         let r = self.traverse(&mut |b| {
-            let off = ((b as u64 + count - start as u64) % count) as u32;
-            if off < size {
-                used[(off / 64) as usize] |= 1 << (off % 64);
-            }
+            used[(b / 64) as usize] |= 1 << (b % 64);
             Ok(())
         });
         self.alloc.used = used;
-        if r.is_ok() {
-            self.alloc.size = size;
-        }
-        r
+        r?;
+        self.alloc.left = self.block_count.min(self.alloc.ckpoint);
+        Ok(())
     }
 
-    /// Calls `f` with every block in use: all metadata pairs, every file's data blocks, and
-    /// the blocks open files hold (their old contents and what they are writing).
+    /// Calls `f` with every block in use (each one checked to be inside the volume): all
+    /// metadata pairs, every file's data blocks, and the blocks open files hold (their old
+    /// contents and what they are writing).
     fn traverse(&mut self, f: &mut dyn FnMut(u32) -> Result<(), Error>) -> Result<(), Error> {
         let mut tail = [0, 1];
-        let mut cycle = Cycle::new();
+        let mut walk = self.walk();
         while !pair_is_null(&tail) {
-            cycle.step(&tail)?;
+            walk.step()?;
+            let d = self.fetch(tail)?;
             f(tail[0])?;
             f(tail[1])?;
-            let d = self.fetch(tail)?;
             for e in &d.c.entries {
                 if !is_file_or_dir(e.name_type) {
                     continue;
@@ -639,7 +613,7 @@ impl<D: BlockDevice> Filesystem<D> {
             let Some(Some(f)) = self.files.get(i) else { continue };
             let Some(loc) = f.loc else { continue };
             let (mut p, mut id) = (loc.pair, loc.id);
-            let mut cycle = Cycle::new();
+            let mut walk = self.walk();
             loop {
                 let d = self.fetch(p)?;
                 if (id as usize) < d.c.entries.len() || !d.c.split {
@@ -647,7 +621,7 @@ impl<D: BlockDevice> Filesystem<D> {
                     break;
                 }
                 id -= d.c.entries.len() as u16;
-                cycle.step(&d.c.tail)?;
+                walk.step()?;
                 p = d.c.tail;
             }
             if let Some(Some(f)) = self.files.get_mut(i) {
@@ -660,8 +634,8 @@ impl<D: BlockDevice> Filesystem<D> {
     // ---- global state ----
 
     pub(crate) fn prep_orphans(&mut self, delta: i32) {
-        let n = (self.gstate.orphans() as i32 + delta).clamp(0, 0x1ff) as u32;
-        let tag = (self.gstate.tag & !0x1ff) | n;
+        let n = (self.gstate.orphans() as i32 + delta).clamp(0, 0x3ff) as u32;
+        let tag = (self.gstate.tag & !0x3ff) | n;
         // On disk only "there are orphans" survives, in bit 31.
         self.gstate.tag = (tag & 0x7fff_ffff) | if n != 0 { 0x8000_0000 } else { 0 };
     }
@@ -701,38 +675,32 @@ impl<D: BlockDevice> Filesystem<D> {
     pub fn mount(dev: D, cfg: Config) -> Result<Self, Error> {
         let mut fs = Self::new(dev, cfg)?;
         let mut tail = [0, 1];
-        let mut cycle = Cycle::new();
+        let mut walk = fs.walk();
         let mut gstate = GState::default();
-        let mut seed = 0;
-        let mut minor = None;
         while !pair_is_null(&tail) {
-            cycle.step(&tail)?;
+            walk.step()?;
             let d = fs.fetch(tail)?;
-            seed = crc32(seed, &d.seed.to_le_bytes());
             if let Some(e) = d.c.entries.first() {
                 if e.name_type == TYPE_SUPERBLOCK && e.name == MAGIC {
-                    minor = Some(fs.read_superblock(e, cfg)?);
+                    fs.read_superblock(e, cfg)?;
                     fs.root = d.pair;
                 }
             }
             gstate = gstate.xor(&d.c.gdelta);
             tail = d.c.tail;
         }
-        let Some(minor) = minor else { return Err(Error::Corrupt) };
+        if pair_is_null(&fs.root) {
+            return Err(Error::Corrupt);
+        }
 
         // The length bits are never on disk; in memory they count orphans. Bit 31 says there
-        // may be some, so start from one. A 2.0 superblock is rewritten before the first write.
+        // may be some, so start from one.
         let mut g = gstate.without_size();
         if !tag::is_valid(g.tag) {
             g.tag |= 1;
         }
-        if minor < 1 {
-            g.tag |= 0x200;
-        }
         fs.gstate = g;
         fs.gdisk = g;
-        // Start allocating somewhere different on each mount, as the reference does.
-        fs.alloc.start = seed % fs.block_count;
         Ok(fs)
     }
 
@@ -740,14 +708,13 @@ impl<D: BlockDevice> Filesystem<D> {
     /// loss.
     pub fn unmount(self) -> D { self.dev }
 
-    fn read_superblock(&mut self, e: &Entry, cfg: Config) -> Result<u16, Error> {
+    fn read_superblock(&mut self, e: &Entry, cfg: Config) -> Result<(), Error> {
         let Some((TYPE_INLINESTRUCT, d)) = &e.strct else { return Err(Error::Corrupt) };
         if d.len() < 24 {
             return Err(Error::Corrupt);
         }
         let field = |i: usize| le32(&d[4 * i..]);
-        let (major, minor) = ((field(0) >> 16) as u16, field(0) as u16);
-        if major != 2 || minor > 1 || field(1) != cfg.block_size || field(2) != cfg.block_count {
+        if field(0) != crate::DISK_VERSION || field(1) != cfg.block_size || field(2) != cfg.block_count {
             return Err(Error::Invalid);
         }
         // Zero means "the default"; anything else must be within what the format allows.
@@ -765,33 +732,18 @@ impl<D: BlockDevice> Filesystem<D> {
             self.attr_max = attr_max;
             self.inline_max = self.inline_max.min(attr_max);
         }
-        Ok(minor)
-    }
-
-    fn superblock_bytes(&self) -> Vec<u8> {
-        [crate::DISK_VERSION, self.block_size, self.block_count, self.name_max, self.file_max, self.attr_max]
-            .iter()
-            .flat_map(|v| v.to_le_bytes())
-            .collect()
+        Ok(())
     }
 
     fn superblock_entry(&self) -> Entry {
-        Entry {
-            name_type: TYPE_SUPERBLOCK,
-            name: MAGIC.to_vec(),
-            strct: Some((TYPE_INLINESTRUCT, self.superblock_bytes())),
-            attrs: Vec::new(),
-        }
+        let fields = [crate::DISK_VERSION, self.block_size, self.block_count, self.name_max, self.file_max, self.attr_max];
+        let strct = Some((TYPE_INLINESTRUCT, fields.iter().flat_map(|v| v.to_le_bytes()).collect()));
+        Entry { name_type: TYPE_SUPERBLOCK, name: MAGIC.to_vec(), strct, attrs: Vec::new() }
     }
 
     /// Completes what an interrupted operation left behind (the reference's
-    /// `lfs_fs_forceconsistency`): an old superblock version, a half-done rename, orphans.
+    /// `lfs_fs_forceconsistency`): a half-done rename, orphans.
     fn force_consistency(&mut self) -> Result<(), Error> {
-        if self.gstate.needs_superblock() {
-            let sb = attr_struct(TYPE_INLINESTRUCT, 0, &self.superblock_bytes())?;
-            self.commit(self.root, &[sb])?;
-            self.gstate.tag &= !0x200;
-        }
         if self.gdisk.has_move() {
             // A rename created the new entry but did not delete the old one: delete it now.
             if tag::type3(self.gdisk.tag) != TYPE_DELETE {
@@ -812,18 +764,14 @@ impl<D: BlockDevice> Filesystem<D> {
     /// (the reference's relocation moved it). Pass 1 unlinks full orphans: directories on
     /// the list that no entry names (their removal was interrupted).
     pub(crate) fn deorphan(&mut self) -> Result<(), Error> {
-        // Every step either advances or fixes one pair, and each pair is fixed at most once
-        // per pass; the bound only matters for a hostile image.
-        let limit = 4 * self.block_count as u64 + 16;
         for pass in 0..2 {
-            let mut steps = 0u64;
+            // Every step either advances or fixes one pair, and each pair is fixed at most
+            // once per pass: twice the budget of a plain walk.
+            let mut walk = Walk(self.block_count);
             let mut prev: Option<MDir> = None; // before {0, 1}: as if a hard tail led there
             let mut tail = [0, 1];
             while !pair_is_null(&tail) {
-                steps += 1;
-                if steps > limit {
-                    return Err(Error::Corrupt);
-                }
+                walk.step()?;
                 let dir = self.fetch(tail)?;
                 if let Some(p) = prev.as_ref().filter(|p| !p.c.split) {
                     // `dir` starts a directory: some entry should name it.
