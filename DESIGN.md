@@ -84,6 +84,25 @@ natives.
   off-heap entry is the only reference and the binary ends at the end of its bytes, so building
   a binary by appending is linear.
 
+### Stage 2 plan: several schedulers
+- **Locks without giving up `no_std`:** a small `sync` module with one `Lock<T>` type. With the
+  `std` feature it is `std::sync::Mutex` and schedulers are threads; without it, it is a
+  `RefCell` and there is one scheduler, as now. Redoubt userland has `std`. Sharing is `Arc` in
+  both. `Rc` and `RefCell` go (modules, zlib/crypto/file state, resources: a resource's value
+  becomes `Send + Sync` and keeps mutable state in a `Lock`).
+- **Messages through an inbox:** a sender cannot write into a heap another scheduler may be
+  using, so a message is copied into an `OwnedTerm` (BEAM's heap fragment) and pushed onto the
+  receiver's inbox under the inbox's own lock. The receiver moves its inbox into its heap and
+  mailbox when it runs and when a `receive` finds the mailbox exhausted. Step (a), done first on
+  one scheduler.
+- **Split `System`:** what every instruction reads (atoms, limits, the resolve cache, literal
+  chunks, loaded modules) sits behind its own locks or is immutable once set; the rest (ETS,
+  registry, timers, ports, files, links and monitors) stays one `System` behind one lock, taken
+  only by natives that need it. A running process is owned by its scheduler (taken out of the
+  table), so instructions touch nothing shared. Finer locks later where profiles show contention.
+- **Run queues:** one shared queue at first; per-scheduler queues with stealing only if measured
+  to matter. Reductions still bound each slice.
+
 Integers are `i64` and move to `BigInt` (`num-bigint`) only on overflow, and back when they fit, so
 each integer has one representation. Bignums are capped at 2^24 bits (`system_limit` beyond).
 
