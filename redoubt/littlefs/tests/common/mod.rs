@@ -53,7 +53,7 @@ impl BlockDevice for Ram {
 
     fn prog(&mut self, block: u32, off: u32, data: &[u8]) -> Result<(), Error> {
         assert!(block < self.cfg.block_count && off as usize + data.len() <= self.cfg.block_size as usize);
-        assert!(off % self.cfg.prog_size == 0 && data.len() as u32 % self.cfg.prog_size == 0);
+        assert!(off.is_multiple_of(self.cfg.prog_size) && (data.len() as u32).is_multiple_of(self.cfg.prog_size));
         let at = self.at(block, off);
         if self.strict {
             assert!(self.data[at..at + data.len()].iter().all(|b| *b == 0xff), "program over unerased bytes");

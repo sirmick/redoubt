@@ -163,8 +163,8 @@ impl<D: BlockDevice> Filesystem<D> {
     pub(crate) fn bd_prog(&mut self, block: u32, off: u32, data: &[u8]) -> Result<(), Error> {
         if block >= self.block_count
             || off as u64 + data.len() as u64 > self.block_size as u64
-            || off % self.prog_size != 0
-            || data.len() as u32 % self.prog_size != 0
+            || !off.is_multiple_of(self.prog_size)
+            || !(data.len() as u32).is_multiple_of(self.prog_size)
         {
             return Err(Error::Invalid);
         }
