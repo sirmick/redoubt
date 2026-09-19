@@ -262,11 +262,34 @@ fn deallocate(p: &mut Process) -> R {
     Ok(())
 }
 
-/// Call a native and put its result in x0 (for `call_ext*`) or `dest`.
-fn call_native(sys: &mut System, p: &mut Process, n: Native, arity: usize) -> R<Term> {
+/// Call a native with `args`. If it fails, the native and its arguments head the stack trace,
+/// as in BEAM (`{erlang,element,[5,foo],[]}`), except for the natives whose whole purpose is to
+/// raise (`error/1` and friends), which BEAM leaves out.
+fn run_native(
+    sys: &mut System,
+    p: &mut Process,
+    n: Native,
+    (m, f): (&crate::atom::Atom, &crate::atom::Atom),
+    args: Vec<Term>,
+) -> R<Term> {
+    match n(&mut Ctx { sys, p }, &args) {
+        Ok(t) => Ok(t),
+        Err(mut e) => {
+            let raiser = m == &sys.atoms.erlang
+                && matches!(f.as_str(), "error" | "exit" | "throw" | "raise" | "nif_error");
+            if e.trace.is_none() && !raiser {
+                let top = Term::tuple(alloc::vec![Term::Atom(m.clone()), Term::Atom(f.clone()), Term::list(args), Term::Nil]);
+                e.trace = Some(Term::cons(top, stacktrace(sys, p, None)));
+            }
+            Err(Fault::Raise(e))
+        }
+    }
+}
+
+/// Call a native on x0.. and return its result.
+fn call_native(sys: &mut System, p: &mut Process, n: Native, mf: (&crate::atom::Atom, &crate::atom::Atom), arity: usize) -> R<Term> {
     let args: Vec<Term> = p.x[..arity].iter().cloned().map(as_value).collect();
-    let mut ctx = Ctx { sys, p };
-    Ok(n(&mut ctx, &args)?)
+    run_native(sys, p, n, mf, args)
 }
 
 /// The code and x registers for calling `fun` with `args`.
@@ -312,7 +335,7 @@ fn call_mfa(sys: &mut System, p: &mut Process, m: &crate::atom::Atom, f: &crate:
     }
     match sys.resolve(m, f, arity as u32) {
         Some(Target::Native(n)) => {
-            let r = call_native(sys, p, n, arity)?;
+            let r = call_native(sys, p, n, (m, f), arity)?;
             p.x[0] = r;
             let yielded = reduce(p);
             let flow = match kind {
@@ -339,7 +362,10 @@ fn call_mfa(sys: &mut System, p: &mut Process, m: &crate::atom::Atom, f: &crate:
             let args = Term::list(p.x[..arity].to_vec());
             let missing = Term::tuple(alloc::vec![Term::Atom(m.clone()), Term::Atom(f.clone()), args, Term::Nil]);
             let mut e = Exception::error(Term::Atom(sys.atoms.undef.clone()));
-            e.trace = Some(Term::cons(missing, stacktrace(p, None)));
+            // A tail call has already left the calling function, so the trace starts at its
+            // caller (as in BEAM).
+            let rest = if kind == Kind::Call { stacktrace(sys, p, None) } else { continuations(sys, p, TRACE_DEPTH) };
+            e.trace = Some(Term::cons(missing, rest));
             Err(Fault::Raise(e))
         }
     }
@@ -423,37 +449,49 @@ fn cooked(raw: &Term) -> Term {
     }
 }
 
-fn trace_entry(m: &Module, pc: u32, args: Option<Term>) -> Option<Term> {
+fn trace_entry(sys: &mut System, m: &Module, pc: u32, args: Option<Term>) -> Option<Term> {
     let f = m.function_at(pc)?;
+    let location = match m.location(pc) {
+        Some((file, line)) => Term::list(alloc::vec![
+            Term::tuple(alloc::vec![Term::Atom(sys.atoms.file.clone()), file.clone()]),
+            Term::tuple(alloc::vec![Term::Atom(sys.atoms.line.clone()), Term::Int(line as i64)]),
+        ]),
+        None => Term::Nil,
+    };
     Some(Term::tuple(alloc::vec![
         Term::Atom(m.name.clone()),
         Term::Atom(f.name.clone()),
         args.unwrap_or(Term::Int(f.arity as i64)),
-        Term::Nil,
+        location,
     ]))
 }
 
 /// A stack trace: the current function, then the functions that will be returned to.
-fn stacktrace(p: &Process, args: Option<Term>) -> Term {
-    let mut entries = Vec::new();
+fn stacktrace(sys: &mut System, p: &Process, args: Option<Term>) -> Term {
     let here = p.pc.pc.saturating_sub(1);
-    entries.extend(trace_entry(&p.pc.module, here, args));
-    // Look at no more frames than entries we keep: the cost of raising must not grow with the
-    // depth of the stack.
-    let conts = p.cp.iter().chain(p.frames.iter().rev().take(TRACE_DEPTH).filter_map(|f| f.cp.as_ref()));
-    for cp in conts {
-        if entries.len() >= TRACE_DEPTH {
-            break;
-        }
-        entries.extend(trace_entry(&cp.module, cp.pc.saturating_sub(1), None));
+    let head = trace_entry(sys, &p.pc.module, here, args);
+    let rest = continuations(sys, p, TRACE_DEPTH - usize::from(head.is_some()));
+    match head {
+        Some(h) => Term::cons(h, rest),
+        None => rest,
+    }
+}
+
+/// Up to `n` trace entries for the functions that will be returned to. Looks at no more frames
+/// than entries it keeps: the cost of raising must not grow with the depth of the stack.
+fn continuations(sys: &mut System, p: &Process, n: usize) -> Term {
+    let conts = p.cp.iter().chain(p.frames.iter().rev().take(n).filter_map(|f| f.cp.as_ref()));
+    let mut entries = Vec::new();
+    for cp in conts.take(n) {
+        entries.extend(trace_entry(sys, &cp.module, cp.pc.saturating_sub(1), None));
     }
     Term::list(entries)
 }
 
 /// Transfer control to the innermost handler, or end the process if there is none.
-fn raise(sys: &System, p: &mut Process, mut e: Exception) -> Option<Stop> {
+fn raise(sys: &mut System, p: &mut Process, mut e: Exception) -> Option<Stop> {
     if e.trace.is_none() {
-        e.trace = Some(stacktrace(p, None));
+        e.trace = Some(stacktrace(sys, p, None));
     }
     let Some(h) = p.handlers.pop() else {
         return Some(Stop::Exit(Err(e)));
@@ -517,7 +555,7 @@ fn step(sys: &mut System, p: &mut Process) -> R<Flow> {
             let args = Term::list(p.x[..arity].to_vec());
             p.pc.pc = here + 1;
             let mut e = Exception::error(Term::Atom(a.function_clause.clone()));
-            e.trace = Some(stacktrace(p, Some(args)));
+            e.trace = Some(stacktrace(sys, p, Some(args)));
             return Err(Fault::Raise(e));
         }
 
@@ -566,13 +604,12 @@ fn step(sys: &mut System, p: &mut Process) -> R<Flow> {
             for i in 0..nargs {
                 args.push(as_value(src(p, ins, first + 1 + i)?));
             }
-            let result = n(&mut Ctx { sys, p }, &args);
-            match result {
+            let (m, f) = (imp.module.clone(), imp.function.clone());
+            match run_native(sys, p, n, (&m, &f), args) {
                 Ok(t) => dst(p, ins, first + 1 + nargs, t)?,
-                Err(e) => match fail {
-                    Some(l) => jump(p, Some(l))?,
-                    None => return Err(Fault::Raise(e)),
-                },
+                // A guard BIF with a fail label fails the guard instead of raising.
+                Err(Fault::Raise(_)) if fail.is_some() => jump(p, fail)?,
+                Err(e) => return Err(e),
             }
         }
 
@@ -832,6 +869,7 @@ fn step(sys: &mut System, p: &mut Process) -> R<Flow> {
                 index: index as u32,
                 arity: entry.arity - entry.num_free,
                 env,
+                uniq: entry.uniq,
             };
             dst(p, ins, 1, Term::Fun(Rc::new(fun)))?;
         }
@@ -1144,7 +1182,9 @@ fn bs_create_bin(sys: &mut System, p: &mut Process, ins: &Instr, module: &Module
             }
             "binary" | "append" | "private_append" => match get(p, value)? {
                 Term::Bits(b) => {
-                    if size_t.is_atom(&sys.atoms.all) {
+                    // `all` is only a size when written literally; a variable holding the atom
+                    // `all` is a bad size, as in BEAM.
+                    if matches!(size, Arg::Const(t) if t.is_atom(&sys.atoms.all)) {
                         if unit > 1 && b.len % unit != 0 {
                             false
                         } else {

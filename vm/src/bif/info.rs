@@ -1,0 +1,309 @@
+//! Introspection: processes, loaded code, text forms of pids and funs, time of day, checksums.
+
+use alloc::string::String;
+use alloc::vec::Vec;
+
+use super::Ctx;
+use crate::atom::{AtomTable, Atoms};
+use crate::process::{Exception, Process, State};
+use crate::term::{Pid, Term};
+
+type R = Result<Term, Exception>;
+
+fn string(s: &str) -> Term {
+    Term::list(s.chars().map(|ch| Term::Int(ch as i64)).collect::<Vec<_>>())
+}
+
+fn text_of(c: &Ctx, t: &Term) -> Result<String, Exception> {
+    let mut s = String::new();
+    for item in t.list_iter() {
+        let ch = item.ok().and_then(|x| x.as_i64()).and_then(|i| u32::try_from(i).ok()).and_then(char::from_u32);
+        s.push(ch.ok_or_else(|| c.badarg())?);
+    }
+    Ok(s)
+}
+
+// ---- processes ----
+
+pub fn processes(c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(Term::list(c.sys.procs.pids().into_iter().map(Term::Pid).collect::<Vec<_>>()))
+}
+
+/// One `process_info` item, or `None` for an item this VM does not track. Takes the atom
+/// table and the process separately so it works both for the running process (borrowed by the
+/// caller) and for one in the process table.
+fn info_item(table: &mut AtomTable, atoms: &Atoms, p: &Process, running: bool, item: &str) -> Option<Term> {
+    let pids = |set: &mut dyn Iterator<Item = Pid>| Term::list(set.map(Term::Pid).collect::<Vec<_>>());
+    let bool = |b: bool| Term::Atom(if b { atoms.true_.clone() } else { atoms.false_.clone() });
+    let mut atom = |name: &str| Term::Atom(table.intern(name).expect("short atom"));
+    Some(match item {
+        "links" => pids(&mut p.links.iter().copied()),
+        "monitored_by" => pids(&mut p.monitored_by.values().map(|(w, _)| *w)),
+        "monitors" => Term::list(
+            p.monitors
+                .values()
+                .map(|pid| Term::tuple(alloc::vec![Term::Atom(atoms.process.clone()), Term::Pid(*pid)]))
+                .collect::<Vec<_>>(),
+        ),
+        "trap_exit" => bool(p.trap_exit),
+        "registered_name" => match &p.registered_name {
+            Some(n) => Term::Atom(n.clone()),
+            None => Term::Nil,
+        },
+        "message_queue_len" => Term::Int(p.mailbox.len() as i64),
+        "messages" => Term::list(p.mailbox.iter().cloned().collect::<Vec<_>>()),
+        "dictionary" => Term::list(
+            p.dictionary.iter().map(|(k, v)| Term::tuple(alloc::vec![k.0.clone(), v.clone()])).collect::<Vec<_>>(),
+        ),
+        "group_leader" => Term::Pid(p.group_leader.unwrap_or(p.pid)),
+        "status" => atom(if running {
+            "running"
+        } else if p.state == State::Waiting {
+            "waiting"
+        } else {
+            "runnable"
+        }),
+        _ => return None,
+    })
+}
+
+/// `process_info(Pid, Item)` and `process_info(Pid, [Item])`. `undefined` for a dead process.
+/// Items about memory (`heap_size`, `memory`, ...) raise `badarg`: there are no per-process heaps.
+pub fn process_info(c: &mut Ctx, a: &[Term]) -> R {
+    let Term::Pid(pid) = a[0] else { return Err(c.badarg()) };
+    let single = matches!(a[1], Term::Atom(_));
+    let items: Vec<Term> = if single { alloc::vec![a[1].clone()] } else { a[1].to_vec().ok_or_else(|| c.badarg())? };
+    let running = pid == c.p.pid;
+    let sys = &mut *c.sys;
+    let (table, atoms) = (&mut sys.atom_table, &sys.atoms);
+    let p: &Process = if running {
+        c.p
+    } else {
+        match sys.procs.get_mut(pid) {
+            Some(p) => p,
+            None => return Ok(Term::Atom(atoms.undefined.clone())),
+        }
+    };
+    let mut out = Vec::new();
+    for item in &items {
+        let Term::Atom(name) = item else { return Err(Exception::error(Term::Atom(atoms.badarg.clone()))) };
+        let value = info_item(table, atoms, p, running, name.as_str())
+            .ok_or_else(|| Exception::error(Term::Atom(atoms.badarg.clone())))?;
+        // Asked for alone, an unnamed process's `registered_name` is just `[]`.
+        if single && name.as_str() == "registered_name" && matches!(value, Term::Nil) {
+            return Ok(Term::Nil);
+        }
+        out.push(Term::tuple(alloc::vec![item.clone(), value]));
+    }
+    if single {
+        return Ok(out.pop().expect("one item"));
+    }
+    Ok(Term::list(out))
+}
+
+pub fn process_info1(c: &mut Ctx, a: &[Term]) -> R {
+    let items = ["registered_name", "status", "message_queue_len", "links", "dictionary", "trap_exit", "group_leader"];
+    let list = Term::list(items.iter().map(|i| c.atom(i)).collect::<Vec<_>>());
+    process_info(c, &[a[0].clone(), list])
+}
+
+// ---- code ----
+
+pub fn loaded(c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(Term::list(c.sys.loaded_modules().into_iter().map(Term::Atom).collect::<Vec<_>>()))
+}
+
+/// `code:ensure_loaded(M)`: load through the platform if needed.
+pub fn ensure_loaded(c: &mut Ctx, a: &[Term]) -> R {
+    let Term::Atom(m) = &a[0] else { return Err(c.badarg()) };
+    Ok(match c.sys.module(m) {
+        Some(_) => Term::tuple(alloc::vec![c.atom("module"), a[0].clone()]),
+        None => Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.error.clone()), c.atom("nofile")]),
+    })
+}
+
+/// `code:is_loaded(M)`: `{file, Where}` or `false`. Modules come from the platform, so there is
+/// no file name to report.
+pub fn is_loaded(c: &mut Ctx, a: &[Term]) -> R {
+    let Term::Atom(m) = &a[0] else { return Err(c.badarg()) };
+    Ok(if c.sys.is_loaded(m) {
+        Term::tuple(alloc::vec![Term::Atom(c.sys.atoms.file.clone()), c.atom("loaded")])
+    } else {
+        c.bool(false)
+    })
+}
+
+pub fn all_loaded(c: &mut Ctx, _a: &[Term]) -> R {
+    let file = c.atom("loaded");
+    Ok(Term::list(
+        c.sys.loaded_modules().into_iter().map(|m| Term::tuple(alloc::vec![Term::Atom(m), file.clone()])).collect::<Vec<_>>(),
+    ))
+}
+
+/// `erlang:get_module_info(M)` and `get_module_info(M, Key)`, behind every `M:module_info/0,1`.
+pub fn get_module_info(c: &mut Ctx, a: &[Term]) -> R {
+    let Term::Atom(name) = &a[0] else { return Err(c.badarg()) };
+    let m = c.sys.module(name).ok_or_else(|| c.badarg())?;
+    let decode = |c: &mut Ctx, bytes: &[u8]| -> Term {
+        if bytes.is_empty() {
+            return Term::Nil;
+        }
+        crate::etf::decode(bytes, &mut c.sys.atom_table).unwrap_or(Term::Nil)
+    };
+    let item = |c: &mut Ctx, key: &str| -> Option<Term> {
+        Some(match key {
+            "module" => Term::Atom(m.name.clone()),
+            "exports" => Term::list(
+                m.exports
+                    .iter()
+                    .map(|e| Term::tuple(alloc::vec![Term::Atom(e.function.clone()), Term::Int(e.arity as i64)]))
+                    .collect::<Vec<_>>(),
+            ),
+            "functions" => Term::list(
+                m.functions
+                    .iter()
+                    .map(|f| Term::tuple(alloc::vec![Term::Atom(f.name.clone()), Term::Int(f.arity as i64)]))
+                    .collect::<Vec<_>>(),
+            ),
+            "attributes" => decode(c, &m.attributes),
+            "compile" => decode(c, &m.compile_info),
+            "nifs" => Term::Nil,
+            _ => return None,
+        })
+    };
+    match a.get(1) {
+        Some(Term::Atom(key)) => item(c, key.as_str()).ok_or_else(|| c.badarg()),
+        Some(_) => Err(c.badarg()),
+        None => {
+            let keys = ["module", "exports", "attributes", "compile"];
+            let mut out = Vec::new();
+            for k in keys {
+                let v = item(c, k).expect("known key");
+                out.push(Term::tuple(alloc::vec![c.atom(k), v]));
+            }
+            Ok(Term::list(out))
+        }
+    }
+}
+
+// ---- text forms ----
+
+pub fn pid_to_list(c: &mut Ctx, a: &[Term]) -> R {
+    let Term::Pid(p) = a[0] else { return Err(c.badarg()) };
+    Ok(string(&alloc::format!("<0.{}.{}>", p.index, p.serial)))
+}
+
+/// `list_to_pid("<0.I.S>")`. Pids are not capabilities inside one VM (see DESIGN.md), so making
+/// one from text grants nothing new.
+pub fn list_to_pid(c: &mut Ctx, a: &[Term]) -> R {
+    let s = text_of(c, &a[0])?;
+    let parts: Option<Vec<u32>> = s
+        .strip_prefix('<')
+        .and_then(|s| s.strip_suffix('>'))
+        .and_then(|s| s.split('.').map(|n| n.parse().ok()).collect::<Option<Vec<u32>>>());
+    match parts.as_deref() {
+        Some([0, index, serial]) => Ok(Term::Pid(Pid { index: *index, serial: *serial })),
+        _ => Err(c.badarg()),
+    }
+}
+
+pub fn ref_to_list(c: &mut Ctx, a: &[Term]) -> R {
+    let Term::Ref(r) = a[0] else { return Err(c.badarg()) };
+    Ok(string(&alloc::format!("#Ref<0.0.0.{}>", r.0)))
+}
+
+pub fn fun_to_list(c: &mut Ctx, a: &[Term]) -> R {
+    let Term::Fun(_) = &a[0] else { return Err(c.badarg()) };
+    Ok(string(&alloc::format!("{}", a[0])))
+}
+
+/// `display_string(String)` / `display_string(Device, String)`: raw text to the console.
+pub fn display_string(c: &mut Ctx, a: &[Term]) -> R {
+    let s = a.last().expect("one or two arguments");
+    let text = match s {
+        Term::Bits(b) if b.is_binary() => b.to_bytes().into_owned(),
+        _ => text_of(c, s)?.into_bytes(),
+    };
+    c.sys.platform.console_write(&text);
+    Ok(Term::Atom(c.sys.atoms.true_.clone()))
+}
+
+pub fn system_version(c: &mut Ctx, _a: &[Term]) -> R {
+    let _ = c;
+    Ok(string(&alloc::format!(
+        "Erlang/OTP {} [erts-{}] [beamlet] [64-bit]\n",
+        super::proc::OTP_RELEASE,
+        super::proc::ERTS_VERSION
+    )))
+}
+
+// ---- time of day ----
+
+/// Civil date from days since 1970-01-01 (Howard Hinnant's algorithm, proleptic Gregorian).
+fn civil(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (yoe + era * 400 + i64::from(m <= 2), m, d)
+}
+
+/// `universaltime()` as `{{Y, M, D}, {H, Mi, S}}`. `localtime()` is the same: the VM has no time
+/// zone (the platform could supply one later).
+pub fn universaltime(c: &mut Ctx, _a: &[Term]) -> R {
+    let us = c.sys.platform.system_time_us().ok_or_else(|| c.badarg())?;
+    let secs = (us / 1_000_000) as i64;
+    let (y, m, d) = civil(secs.div_euclid(86_400));
+    let t = secs.rem_euclid(86_400);
+    Ok(Term::tuple(alloc::vec![
+        Term::tuple(alloc::vec![Term::Int(y), Term::Int(m as i64), Term::Int(d as i64)]),
+        Term::tuple(alloc::vec![Term::Int(t / 3600), Term::Int(t / 60 % 60), Term::Int(t % 60)]),
+    ]))
+}
+
+// ---- checksums ----
+
+/// CRC-32 (IEEE 802.3, as zlib), bit by bit: short and obviously correct.
+fn crc32_update(mut crc: u32, bytes: &[u8]) -> u32 {
+    crc = !crc;
+    for &b in bytes {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+        }
+    }
+    !crc
+}
+
+/// `crc32(IoData)` and `crc32(OldCrc, IoData)`.
+pub fn crc32(c: &mut Ctx, a: &[Term]) -> R {
+    let (old, data) = match a {
+        [data] => (0, data),
+        [old, data] => (old.as_i64().and_then(|v| u32::try_from(v).ok()).ok_or_else(|| c.badarg())?, data),
+        _ => return Err(c.badarg()),
+    };
+    let bin = super::erlang::iolist_to_binary(c, core::slice::from_ref(data))?;
+    let Term::Bits(b) = bin else { return Err(c.badarg()) };
+    Ok(Term::Int(crc32_update(old, &b.to_bytes()) as i64))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn crc32_matches_zlib() {
+        // Values from erlang:crc32/1,2 on OTP 28.
+        assert_eq!(super::crc32_update(0, b"Hello, World!"), 3_964_322_768);
+        assert_eq!(super::crc32_update(0, b"abc"), 891_568_578);
+    }
+
+    #[test]
+    fn civil_dates() {
+        assert_eq!(super::civil(0), (1970, 1, 1));
+        assert_eq!(super::civil(20_714), (2026, 9, 18));
+        assert_eq!(super::civil(-1), (1969, 12, 31));
+    }
+}

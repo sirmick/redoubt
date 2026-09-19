@@ -35,7 +35,8 @@ for suite in "${suites[@]}"; do
         for f in "$src"/*.erl; do erlc -o "$out" "$f" 2>> "$out/erlc.log" || echo "erlc failed: $f" >> "$out/erlc.log"; done
         for f in "$src"/*.ex; do elixirc -o "$out" "$f" >> "$out/erlc.log" 2>&1 || echo "elixirc failed: $f" >> "$out/erlc.log"; done
         # Only top-level test modules have start/0; nested modules (structs) are not tests.
-        ERL_LIBS="$elixir_lib" escript "$root/tools/expect.escript" "$out"
+        # UTC: beamlet has no time zone, so localtime() is universaltime().
+        TZ=UTC ERL_LIBS="$elixir_lib" escript "$root/tools/expect.escript" "$out"
         touch "$stamp"
     fi
     shopt -s nullglob

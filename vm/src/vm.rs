@@ -133,6 +133,19 @@ impl ProcTable {
         self.live
     }
 
+    /// Every live pid, including the running process's.
+    pub(crate) fn pids(&self) -> Vec<Pid> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| match s {
+                Slot::Present(p) => Some(p.pid),
+                Slot::Running { serial } => Some(Pid { index: i as u32, serial: *serial }),
+                Slot::Free { .. } => None,
+            })
+            .collect()
+    }
+
     fn release(&mut self, pid: Pid) {
         self.slots[pid.index as usize] = Slot::Free { serial: pid.serial };
         self.free.push(pid.index);
@@ -274,6 +287,12 @@ impl System {
 
     pub fn is_loaded(&self, name: &Atom) -> bool {
         self.modules.contains_key(name.as_str())
+    }
+
+    /// Names of all loaded modules.
+    pub fn loaded_modules(&mut self) -> Vec<Atom> {
+        let names: Vec<String> = self.modules.keys().cloned().collect();
+        names.iter().map(|n| self.atom(n)).collect()
     }
 
     pub fn native(&self, module: &Atom, function: &Atom, arity: u32) -> Option<Native> {

@@ -15,6 +15,7 @@ use crate::vm::System;
 mod arith;
 mod binary;
 mod erlang;
+mod info;
 mod lists;
 mod maps;
 mod math;
@@ -126,7 +127,7 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("erlang", "bitstring_to_list", 1, erlang::bitstring_to_list),
     ("erlang", "list_to_binary", 1, erlang::list_to_binary),
     ("erlang", "list_to_bitstring", 1, erlang::list_to_bitstring),
-    ("erlang", "iolist_to_binary", 1, erlang::list_to_binary),
+    ("erlang", "iolist_to_binary", 1, erlang::iolist_to_binary),
     ("erlang", "iolist_size", 1, erlang::iolist_size),
     ("erlang", "display", 1, erlang::display),
     ("erts_debug", "flat_size", 1, erlang::flat_size),
@@ -273,6 +274,30 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("erlang", "make_fun", 3, proc::make_fun),
     ("erlang", "fun_info", 2, proc::fun_info),
     ("erts_internal", "cmp_term", 2, proc::cmp_term),
+    // Introspection.
+    ("erlang", "processes", 0, info::processes),
+    ("erlang", "process_info", 1, info::process_info1),
+    ("erlang", "process_info", 2, info::process_info),
+    ("erlang", "loaded", 0, info::loaded),
+    ("erlang", "get_module_info", 1, info::get_module_info),
+    ("erlang", "get_module_info", 2, info::get_module_info),
+    ("code", "ensure_loaded", 1, info::ensure_loaded),
+    ("code", "is_loaded", 1, info::is_loaded),
+    ("code", "all_loaded", 0, info::all_loaded),
+    ("erlang", "pid_to_list", 1, info::pid_to_list),
+    ("erlang", "list_to_pid", 1, info::list_to_pid),
+    ("erlang", "ref_to_list", 1, info::ref_to_list),
+    ("erlang", "fun_to_list", 1, info::fun_to_list),
+    ("erlang", "display_string", 1, info::display_string),
+    ("erlang", "display_string", 2, info::display_string),
+    ("erlang", "universaltime", 0, info::universaltime),
+    ("erlang", "localtime", 0, info::universaltime),
+    ("erlang", "crc32", 1, info::crc32),
+    ("erlang", "crc32", 2, info::crc32),
+    ("os", "system_time", 0, proc::system_time),
+    ("os", "system_time", 1, proc::system_time1),
+    ("os", "timestamp", 0, proc::timestamp),
+    ("erlang", "garbage_collect", 1, proc::garbage_collect),
 ];
 
 /// Function name to the natives of that name, by arity.

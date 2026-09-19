@@ -435,14 +435,20 @@ fn flatten_iolist(c: &Ctx, t: &Term, bits_ok: bool) -> Result<crate::bits::Build
     Ok(out)
 }
 
+/// `list_to_binary(IoList)`: the argument must be a list.
 pub fn list_to_binary(c: &mut Ctx, a: &[Term]) -> R {
-    if let Term::Bits(b) = &a[0] {
-        return if b.is_binary() { Ok(a[0].clone()) } else { Err(c.badarg()) };
-    }
     if !matches!(a[0], Term::Cons(_) | Term::Nil) {
         return Err(c.badarg());
     }
     Ok(flatten_iolist(c, &a[0], false)?.finish())
+}
+
+/// `iolist_to_binary(IoData)`: like `list_to_binary/1`, but a binary is returned as it is.
+pub fn iolist_to_binary(c: &mut Ctx, a: &[Term]) -> R {
+    match &a[0] {
+        Term::Bits(b) if b.is_binary() => Ok(a[0].clone()),
+        _ => list_to_binary(c, a),
+    }
 }
 
 pub fn list_to_bitstring(c: &mut Ctx, a: &[Term]) -> R {

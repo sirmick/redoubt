@@ -496,6 +496,8 @@ pub fn system_info(c: &mut Ctx, a: &[Term]) -> R {
         "schedulers" | "schedulers_online" | "logical_processors" => Term::Int(1),
         "emu_flavor" => c.atom("emu"),
         "system_architecture" => string("beamlet"),
+        "system_version" => return super::info::system_version(c, a),
+        "os_type" => Term::tuple(alloc::vec![c.atom("unix"), c.atom("beamlet")]),
         _ => return Err(c.badarg()),
     })
 }
@@ -514,8 +516,17 @@ pub fn erase_all(c: &mut Ctx, _a: &[Term]) -> R {
     Ok(Term::list(old.into_iter().map(|(k, v)| Term::tuple(alloc::vec![k.0, v])).collect::<Vec<_>>()))
 }
 
-pub fn unique_integer(c: &mut Ctx, _a: &[Term]) -> R {
-    // References already come from a VM-wide counter; reuse it.
+/// `unique_integer()` and `unique_integer([positive | monotonic])`. References come from a
+/// VM-wide increasing counter, so every result is unique, positive and monotonic.
+pub fn unique_integer(c: &mut Ctx, a: &[Term]) -> R {
+    if let Some(opts) = a.first() {
+        for o in opts.to_vec().ok_or_else(|| c.badarg())? {
+            match &o {
+                Term::Atom(x) if matches!(x.as_str(), "positive" | "monotonic") => {}
+                _ => return Err(c.badarg()),
+            }
+        }
+    }
     Ok(Term::Int(c.sys.make_ref().0 as i64))
 }
 

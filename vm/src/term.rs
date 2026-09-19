@@ -280,6 +280,8 @@ pub enum Fun {
         arity: u32,
         /// The captured free variables.
         env: Vec<Term>,
+        /// The compiler's hash of the fun's code (from the fun table).
+        uniq: u32,
     },
     Export { module: Atom, function: Atom, arity: u32 },
 }
@@ -751,7 +753,7 @@ fn write_leaf(f: &mut fmt::Formatter<'_>, t: &Term) -> fmt::Result {
                 write_atom(f, function.as_str())?;
                 write!(f, "/{arity}")
             }
-            Fun::Local { module, index, .. } => write!(f, "#Fun<{}.{}>", module.as_str(), index),
+            Fun::Local { module, index, uniq, .. } => write!(f, "#Fun<{}.{}.{}>", module.as_str(), index, uniq),
         },
         Term::Pid(p) => write!(f, "<0.{}.{}>", p.index, p.serial),
         Term::Ref(r) => write!(f, "#Ref<0.0.0.{}>", r.0),
