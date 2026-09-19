@@ -32,7 +32,7 @@ current time with saturation (so `FOREVER` never expires). A budget deadline is 
 microseconds since boot.
 
 ## Objects
-Five kinds. Every object is charged in pages to one budget (its owner).
+Four kinds (a device object takes one of three forms). Every object is charged in pages to one budget (its owner).
 
 **Budget**
 
@@ -43,7 +43,7 @@ Five kinds. Every object is charged in pages to one budget (its owner).
 | `class` | `system` or `user` | `class(child) <= class(parent)` (`user < system`) |
 | `labels` | sorted set of u64, at most `MAX_LABELS` | fixed at creation; `labels(child) ⊇ labels(parent)` |
 | `account` | u64, 0 = none | inherited (R8) |
-| `deadline` | time or none | when it passes, the kernel destroys the budget |
+| `deadline` | time or none | when it passes, the kernel destroys the budget; the kernel sets no maximum (the steward enforces `MAX_LEASE`) |
 | `pages` | limit, usage | every object charged here (R6) |
 | `processes` | limit, usage | PIDs double as ASIDs |
 | `weight` | u32 limit, carved | CPU share; carved by children (R7); weight 0 holds no process |
@@ -122,14 +122,18 @@ non-zero and never reused, so a stale `reply` or `mint` cannot reach a later mes
 `receive` returns one of:
 - a message: `(kind, msg_id, badge, account, labels, words, handles, buffer address, page count)`,
   where `kind` is `call` (a reply is owed; the buffer, if any, is a lend) or `send` (no reply; the
-  buffer, if any, is a transfer);
+  buffer, if any, is a transfer), and each handle comes with the kind of object it names
+  (`endpoint`, `budget`, `process`, `mmio`, `irq` or `reset`), so a receiver checks a handle's kind
+  without using it;
 - an interrupt: the IRQ handle fired;
 - an exit notice (on an endpoint named as some process's exit endpoint): `(pid, cause, code,
   blamed_account, blamed_labels)`, where `cause` is `exited`, `faulted` or `killed`. A
   `process_exit` while the process holds open calls (a Rust panic, say) is reported `faulted`, like
   a fault. For `faulted`, `blamed_account` is the serving account of the thread that faulted or
-  called `process_exit`, and `blamed_labels` are the labels of that open call's sender; otherwise
-  `blamed_account` is 0 and `blamed_labels` empty;
+  called `process_exit`, and `blamed_labels` are the labels of that open call's sender. If that
+  thread holds no open call, nobody is blamed, even when other threads of the process hold some
+  (there is no fallback to another thread's calls). When nobody is blamed, and for `exited` and
+  `killed`, `blamed_account` is 0 and `blamed_labels` empty;
 - a **badge notice** (on a badge-0 endpoint handle): `(badge)`: the last handle with that badge to
   the endpoint was closed or destroyed;
 - `Timeout`.
@@ -285,7 +289,8 @@ and must match this note. These rules of the encoding are part of the spec:
   a 32-bit value or one address or length. `redoubt-sys` therefore has no width `cfg`
   (MEMORY-LAYOUT.md).
 - **Records** (what does not fit in registers: message bodies, a budget's fields, the
-  `process_start` list, what `receive` returns (a notice's kind and fields included),
+  `process_start` list, what `receive` returns (each handle's kind, and a notice's kind and fields,
+  included),
   `budget_usage`'s counters) are arrays of 64-bit little-endian slots at an
   8-byte-aligned address in the caller's memory, the same on both widths.
 - **Decoding refuses W+X flags and a `mint` badge of 0**; the kernel's mapping and minting code

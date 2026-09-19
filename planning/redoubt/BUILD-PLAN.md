@@ -33,7 +33,7 @@ not needed.
 - **Typed-message tables:** each server package (WP-D1, WP-D2, WP-D3, WP-S1, WP-S2, WP-S3) writes
   the tables of the protocols its server serves into that server's note, in WIRE.md's format, with a
   HISTORY.md line: a small design addition, reviewed as one.
-- **The owner's answers 1-55** (QUESTIONS.md) are in the notes. Packages merged before an answer
+- **The owner's answers 1-68** (QUESTIONS.md) are in the notes. Packages merged before an answer
   that changes them get a follow-up package below (WP-A2, WP-W2, WP-M1, WP-R1b) rather than a
   silent edit.
 
@@ -51,9 +51,10 @@ not needed.
   in the model, makes at least one property test fail** (so the tests are not vacuous).
 - Needs: nothing. Handed to red-team agents as soon as it passes.
 
-**WP-M1. The model follows answers 28-55.** Size M.
-- Reads: KERNEL-SPEC.md as changed by answers 28-55 (R2, R4, R4a, R10, R11, open calls and the
-  serving account, exit notices with `blamed_labels`, badge slots and notices, `process_start`'s
+**WP-M1. The model follows answers 28-68.** Size M.
+- Reads: KERNEL-SPEC.md as changed by answers 28-68 (R2, R4, R4a, R10, R11, open calls and the
+  serving account, exit notices with `blamed_labels` and no blame for a thread without open calls,
+  handle kinds in `receive`'s record, badge slots and notices, `process_start`'s
   `arg`, I7, I10, I15); CONTAINMENT.md (`check`, metadata as reads, `admit` per badge for account 0,
   reader budgets, blame per (account, label set)); CAPABILITIES.md (`MAX_LEASE`, nested sub-agents,
   the approval screen).
@@ -61,7 +62,7 @@ not needed.
   changed to match or marked settled (6 and 7 change: a `send` is never served or blamed; 8, 10,
   14, 20, 23, 24 stand), and the open questions it listed closed; mutations for
   each new rule (a badge notice sent early, a stale notice not withdrawn, blame of an older open
-  call, a revoked message still delivered).
+  call, blame falling back to another thread's open call, a revoked message still delivered).
 - Accepted when: as WP-M0, at 10^6 sequences, with I15 and the new mutations.
 - Needs: WP-M0.
 
@@ -74,14 +75,14 @@ not needed.
   runs); the Elixir codec round-trips the same vectors on beamlet.
 - Needs: nothing. Merged.
 
-**WP-W2. Wire generator follows answers 28, 41 and 42.** Size S.
+**WP-W2. Wire generator follows answers 28, 41, 42 and 56.** Size S.
 - Reads: WIRE.md (Tables, Layout in a message).
 - Delivers: `redoubt/wire/`: `handle[N] KIND` in the table format, the kind in the generated docs
-  and a generated helper checking it; code 1 `Malformed` reserved and added to every error table
+  and a generated helper checking it against the kind `receive` reports (answer 56); code 1 `Malformed` reserved and added to every error table
   (`tables/example.md`'s code 1 renumbered); a table giving code 1 its own meaning refused.
 - Accepted when: the drift test covers kinds and `Malformed`; a table with an unknown kind or its
   own code 1 fails generation; the Elixir codec round-trips the new vectors.
-- Needs: WP-W1.
+- Needs: WP-W1, WP-A2 (the handle-kind type the helper checks against).
 
 **WP-A1. System call ABI crate.** Size S.
 - Reads: KERNEL-SPEC.md (system calls, messages, errors).
@@ -94,7 +95,8 @@ not needed.
 **WP-A2. ABI follows answers 28-55.** Size S.
 - Reads: KERNEL-SPEC.md (`process_start`, Messages, Constants, the error table).
 - Delivers: `redoubt-sys`: `process_start`'s `arg`; the badge notice as a `receive` result kind;
-  `blamed_labels` in the exit notice record; `MAX_LEASE`; the `receive` row's `Busy` at delivery.
+  each received handle's kind in `receive`'s record (answer 56); `blamed_labels` in the exit notice
+  record; `MAX_LEASE`; the `receive` row's `Busy` at delivery.
 - Accepted when: round-trip and malformed-input tests for every changed call and record; the fuzz
   target rerun; names match WP-M1.
 - Needs: WP-A1. Before WP-K2 and WP-R1b use the new records.
@@ -148,10 +150,10 @@ not needed.
 - Reads: KERNEL-SPEC.md Endpoint (badge slots), Messages (badge notices), R1-R4b, R10 (messages
   in flight), `endpoint_create`, `mint`, `call`, `send`, `receive`, `reply`, `handle_close`.
 - Delivers: endpoints; the four IPC calls with lend and transfer; `receive` reporting a call or a
-  send; open calls (up to `MAX_OPEN_CALLS` per process, each charged a page, `Busy` also for a
+  send, and each received handle's kind; open calls (up to `MAX_OPEN_CALLS` per process, each charged a page, `Busy` also for a
   receiver already waiting); `mint` with stamps, from an open call of the caller's thread; badge-0
   receive rights; badge slots and badge notices (charged to the endpoint's owner, withdrawn by a
-  re-mint); the label check against the endpoint's owner; fair waiting by (account, label set),
+  re-mint; confirming the cost table's 128 slots per page, or changing it); the label check against the endpoint's owner; fair waiting by (account, label set),
   `WAIT_CAP` counting queued messages only; lends that outlive their lender; transfer opt-in
   (counting page tables); `Dead` for the calls a dying server had taken; R10's reach into messages
   in flight (K1 has no messages to test it with).
@@ -185,7 +187,8 @@ not needed.
 - Accepted when: kernel cases for exit notices (all three causes, and a labelled process's notice
   reaching a system-class `init`), blame on a server fault and on a panic with open calls going to
   the most recent open call only (a thread holding several callers' calls blames one), a `send`
-  never blamed, a child finding its startup block through `arg`; attack cases: map into a
+  never blamed, a panic in a thread without open calls blaming nobody while another thread holds
+  some, a child finding its startup block through `arg`; attack cases: map into a
   started process, W+X through `process_map`, a handle list over `MAX_START_HANDLES`, a process in a
   weight-0 budget, creating and killing processes whose notices nobody receives (bounded by the
   creator's own budget);
@@ -239,7 +242,8 @@ not needed.
   write equality; the 9P skeleton treating walks, qids and `stat` as reads, filtering directory
   reads, keying fids by (badge, account, label set), refusing a 9P call with non-zero words or no
   lend with `Malformed`, and freeing a badge's fids and slots on its badge notice; the startup block
-  exactly as INIT.md now states it, found through `arg`.
+  exactly as INIT.md now states it, found through `arg`, with `Hndl` names under the manifest's name
+  rule (answer 64).
 - Accepted when: host tests for each rule (a blind write up refused, an unreadable walk refused, a
   listing filtered, a badge notice freeing its fids, two badges of one account not sharing fids);
   the startup-block fuzz target.
@@ -247,9 +251,10 @@ not needed.
 
 **WP-R2. Loader stub.** Size S.
 - Reads: PACKAGES.md (launching), INIT.md (startup block).
-- Delivers: the flat-binary stub at its fixed address: parse the ELF from memory, map segments
-  (code executable and read-only), free the image, jump, passing on the startup page's address it
-  was started with (`arg`).
+- Delivers: the flat-binary stub at its fixed address: find the ELF image through the startup
+  block's image entry (its tag defined here and added to INIT.md's table, answer 65), parse it from
+  memory, map segments (code executable and read-only), free the image, jump, passing on the startup
+  page's address it was started with (`arg`).
 - Accepted when: fuzzed ELF images never escape the child (the child faults or exits; nothing else
   is affected); attack case: a hostile ELF from a user parent hurts only the child.
 - Needs: WP-R1b, WP-K4.
@@ -356,7 +361,7 @@ steward; rejects keys `keyd` holds; each channel labelled with its session's lab
 ## Order
 ```
 merged:                  W1  L1  T1  T1b  A1  K0
-start now, in parallel:  M0 -> M1;  A2 (after A1);  W2 (after W1)
+start now, in parallel:  M0 -> M1;  A2 (after A1);  W2 (after W1, A2)
 kernel, serialized:      K1 -> K2 (after A2) -> K3 -> K4 -> K5 -> K6 (after R1b)
 runtime:                 R1 (after A1, W1) -> R1b (after A2, W2) -> R2 (after K4) -> R3 (after K3, K5)
                          R4 (after R1b, K3)

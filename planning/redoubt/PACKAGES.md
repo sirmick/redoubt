@@ -16,7 +16,9 @@ One mechanism for every process after `init`, at boot or at run time:
    system-signed and the same for everyone. Mapping it needs no parsing.
 4. It copies the program's ELF bytes into pages and maps them into the process, read-write, as data
    (`process_map`), then writes the startup block (INIT.md) into a page mapped read-only, and starts
-   the process at the stub with that page's address as `process_start`'s `arg`.
+   the process at the stub with that page's address as `process_start`'s `arg`. The startup block
+   names the image (its address and length), so the stub finds it without a fixed address; the
+   entry's tag is defined with the stub (BUILD-PLAN.md, WP-R2) and added to INIT.md's table.
 5. The stub, running inside the new process's own budget, parses the ELF from memory, maps its
    segments (code executable and never writable), frees the image pages and jumps to the entry point,
    passing the startup page's address on.

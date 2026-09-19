@@ -271,6 +271,18 @@ The same three roles, attacking v3 and pinning interfaces for a swarm build. Fou
   overwrites, in-order completion, torn writes persist a prefix, `sync` after virtio-blk's flush),
   which littlefs's power-loss safety depends on and which WP-L1's red team found unstated. littlefs
   has no data checksums (NAMESPACES.md, accepted limits).
+- **Answers 56-68** (2026-09-19; 57 decided, 58 changed): `receive`'s record carries each handle's
+  kind, since no call reported one and the generated helper (answer 28) had nothing to check
+  against. A fault blames the most recently taken call still open (57); a thread that fails with
+  no open call blames nobody even when other threads hold some (58, changed from a fallback to the
+  process's newest open call, which would blame a bystander): such a crash counts only toward the
+  restart limit and the reboot, and corruption left by a replied call can crash an idle thread
+  later unblamed (stated residual). The steward alone enforces `MAX_LEASE`; the kernel knows only
+  deadlines. `Hndl` names follow the manifest's name rule, one rule in one place. The startup block
+  names the program image, with its tag defined by the loader stub's package (WP-R2). INIT.md's
+  worked example shows the vault session reading its owner's unlabelled volume. KERNEL-SPEC.md
+  counts four object kinds. 59-62 and 66 confirm the notes as written (the badge-slot cost is
+  confirmed in WP-K2).
 
 ## Milestone 1 build (from 2026-09-19)
 One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.

@@ -14,8 +14,8 @@ to connect (`TryConnect(SID)`). Knowledge is authority, so:
 
 ## Handles
 A handle is (object, badge, stamp), an index into a kernel-held, per-process table: unforgeable,
-because a process can only name indices into its own table. The kernel knows its five object kinds
-(KERNEL-SPEC.md) and nothing about users, agents or policy.
+because a process can only name indices into its own table. The kernel knows its four object kinds (a
+device object takes one of three forms; KERNEL-SPEC.md) and nothing about users, agents or policy.
 - **No rights bits.** Every handle can be used and copied. Non-transferable handles would not help:
   a holder can proxy. Delegation is bounded by stamps (below) and labels (CONTAINMENT.md).
 - **Badges.** A server mints a handle with a badge; every request through it carries the badge, so
