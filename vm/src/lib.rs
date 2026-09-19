@@ -18,6 +18,8 @@
 #![allow(clippy::result_large_err)]
 
 extern crate alloc;
+#[cfg(feature = "std")]
+extern crate std;
 
 pub mod atom;
 pub mod bif;

@@ -14,7 +14,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use crate::atom::{Atom, Atoms};
 use crate::module::Module;
 use crate::process::Process;
-use crate::sync::{Guard, Lock};
+use crate::sync::{Guard, Lock, Wakeup};
 use crate::term::Pid;
 use crate::term::{Literals, Ref};
 use crate::vm::{Limits, System, Target};
@@ -61,6 +61,7 @@ pub struct Generations {
 
 pub struct Sched<'v> {
     sys: &'v Lock<System>,
+    wakeup: &'v Wakeup,
     generations: Arc<Generations>,
     pub atoms: Atoms,
     pub limits: Limits,
@@ -71,10 +72,11 @@ pub struct Sched<'v> {
 }
 
 impl<'v> Sched<'v> {
-    pub fn new(sys: &'v Lock<System>) -> Sched<'v> {
+    pub fn new(sys: &'v Lock<System>, wakeup: &'v Wakeup) -> Sched<'v> {
         let s = sys.lock();
         Sched {
             sys,
+            wakeup,
             generations: s.generations.clone(),
             atoms: s.atoms.clone(),
             limits: s.limits,
@@ -85,8 +87,22 @@ impl<'v> Sched<'v> {
     }
 
     /// Exclusive access to the system, until the guard is dropped.
-    pub fn lock(&self) -> Guard<'v, System> {
-        self.sys.lock()
+    pub fn lock(&self) -> SysGuard<'v> {
+        SysGuard {
+            guard: self.sys.lock(),
+            wakeup: self.wakeup,
+        }
+    }
+
+    /// Wait until there may be something for this scheduler to do. Checked under the lock, so
+    /// a wakeup cannot be missed between deciding to sleep and sleeping.
+    pub fn sleep(&self) {
+        let mut sys = self.sys.lock();
+        if sys.should_sleep() {
+            sys.sleepers += 1;
+            sys = self.wakeup.wait(sys);
+            sys.sleepers -= 1;
+        }
     }
 
     /// The literal chunks, brought up to date if code or persistent terms added some.
@@ -114,36 +130,68 @@ impl<'v> Sched<'v> {
         if let Some(t) = self.resolved.get(&key) {
             return Some(t.clone());
         }
-        let t = self.sys.lock().resolve(module, function, arity)?;
+        let t = self.lock().resolve(module, function, arity)?;
         self.resolved.insert(key, t.clone());
         Some(t)
     }
 
     pub fn module(&mut self, name: &Atom) -> Option<Arc<Module>> {
-        self.sys.lock().module(name)
+        self.lock().module(name)
     }
 
     pub fn atom(&mut self, name: &str) -> Atom {
-        self.sys.lock().atom(name)
+        self.lock().atom(name)
     }
 
     pub fn backtrace_depth(&self) -> usize {
-        self.sys.lock().backtrace_depth
+        self.lock().backtrace_depth
     }
 
     pub fn now_us(&mut self) -> u64 {
-        self.sys.lock().now_us()
+        self.lock().now_us()
     }
 
     pub fn make_ref(&mut self) -> Ref {
-        self.sys.lock().make_ref()
+        self.lock().make_ref()
     }
 
     pub fn arm_timer(&mut self, pid: Pid, deadline: u64) {
-        self.sys.lock().arm_timer(pid, deadline)
+        self.lock().arm_timer(pid, deadline)
     }
 
     pub fn cancel_timer(&mut self, pid: Pid, deadline: u64) {
-        self.sys.lock().cancel_timer(pid, deadline)
+        self.lock().cancel_timer(pid, deadline)
+    }
+}
+
+/// The system, locked. Releasing it wakes a sleeping scheduler if there is now something to do.
+pub struct SysGuard<'v> {
+    guard: Guard<'v, System>,
+    wakeup: &'v Wakeup,
+}
+
+impl core::ops::Deref for SysGuard<'_> {
+    type Target = System;
+    fn deref(&self) -> &System {
+        &self.guard
+    }
+}
+
+impl core::ops::DerefMut for SysGuard<'_> {
+    fn deref_mut(&mut self) -> &mut System {
+        &mut self.guard
+    }
+}
+
+impl Drop for SysGuard<'_> {
+    fn drop(&mut self) {
+        if self.guard.sleepers > 0 {
+            if self.guard.wake_all {
+                self.guard.wake_all = false;
+                self.wakeup.wake_all();
+            } else if !self.guard.run_queue.is_empty() {
+                self.wakeup.wake_one();
+            }
+        }
     }
 }

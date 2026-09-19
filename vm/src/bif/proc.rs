@@ -1095,7 +1095,9 @@ pub fn system_info(c: &mut Ctx, a: &[Term]) -> R {
         "atom_count" => Term::Int(c.sys.atom_table.len() as i64),
         "atom_limit" => Term::Int(crate::atom::MAX_ATOMS as i64),
         "port_count" => Term::Int(0),
-        "schedulers" | "schedulers_online" | "logical_processors" => Term::Int(1),
+        "schedulers" | "schedulers_online" | "logical_processors" => {
+            Term::Int(c.sys.schedulers as i64)
+        }
         "emu_flavor" => c.atom("emu"),
         "system_architecture" => c.string("beamlet"),
         "system_version" => return super::info::system_version(c, a),
@@ -1169,6 +1171,7 @@ pub fn halt(c: &mut Ctx, a: &[Term]) -> R {
         c.list_arg(*opts)?;
     }
     c.sys.halted = Some(status);
+    c.sys.wake_all = true;
     // Nothing more of this process runs.
     c.p.pending_exit = Some(c.atom("kill"));
     Ok(c.ok())
@@ -1319,7 +1322,8 @@ pub fn system_flag(c: &mut Ctx, a: &[Term]) -> R {
             let n = a[1].as_usize().ok_or_else(|| c.badarg())?.min(1024);
             Term::Int(core::mem::replace(&mut c.sys.backtrace_depth, n) as i64)
         }
-        "schedulers_online" | "dirty_cpu_schedulers_online" => Term::Int(1),
+        "schedulers_online" => Term::Int(c.sys.schedulers as i64),
+        "dirty_cpu_schedulers_online" => Term::Int(1),
         "multi_scheduling" => c.atom("enabled"),
         "min_heap_size" | "min_bin_vheap_size" => Term::Int(233),
         "fullsweep_after" => Term::Int(65535),

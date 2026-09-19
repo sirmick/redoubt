@@ -17,7 +17,7 @@ use crate::module::Module;
 use crate::platform::{ConsoleInput, Platform};
 use crate::process::{Class, Cp, Exception, Process, State};
 use crate::sched::Sched;
-use crate::sync::{Lock, Sendable};
+use crate::sync::{Lock, Sendable, Wakeup};
 use crate::term::{copy, Heap, Literals, OwnedTerm, Pid, Ref, Term};
 
 /// Reductions (calls) a process may run before it is preempted.
@@ -141,6 +141,19 @@ pub struct System {
     /// a module is loaded or deleted, so it never holds stale code.
     resolved: BTreeMap<(usize, usize, u32), Target>,
     pub(crate) stats: Stats,
+    /// Schedulers the VM runs on (`erlang:system_info(schedulers)`).
+    pub(crate) schedulers: usize,
+    /// Schedulers in a time slice just now.
+    pub(crate) running: usize,
+    /// Schedulers waiting for work.
+    pub(crate) sleepers: usize,
+    /// Wake every sleeping scheduler when the lock is next released: a run's result arrived,
+    /// the VM halted, or the run is over.
+    pub(crate) wake_all: bool,
+    /// The run is over: helper schedulers stop.
+    stopping: bool,
+    /// Nothing can ever run again.
+    stuck: bool,
 }
 
 /// Where [`System::locate_module`] found a module: a file of the VM's code path, or the
@@ -470,6 +483,8 @@ pub enum RunError {
 
 pub struct Vm {
     sys: Lock<System>,
+    /// Where schedulers with nothing to do wait.
+    wakeup: Wakeup,
 }
 
 impl Vm {
@@ -531,7 +546,14 @@ impl Vm {
                 profile: None,
                 resolved: BTreeMap::new(),
                 stats: Stats::default(),
+                schedulers: 1,
+                running: 0,
+                sleepers: 0,
+                wake_all: false,
+                stopping: false,
+                stuck: false,
             }),
+            wakeup: Wakeup::default(),
         }
         .boot()
     }
@@ -628,16 +650,33 @@ impl Vm {
     /// Run until process `pid` ends, and return its result: the value its first function
     /// returned, or the exception that ended it.
     pub fn run(&mut self, pid: Pid) -> Result<Outcome, RunError> {
-        self.sys.get_mut().watched.insert(pid);
-        let mut sched = Sched::new(&self.sys);
-        loop {
-            if let Some(done) = sched.lock().result(pid) {
-                return done;
-            }
-            if !schedule(&mut sched) {
-                return Err(RunError::Deadlock);
-            }
+        let sys = self.sys.get_mut();
+        sys.watched.insert(pid);
+        sys.stopping = false;
+        sys.stuck = false;
+        let helpers = sys.schedulers - 1;
+        let (sys, wakeup) = (&self.sys, &self.wakeup);
+        #[cfg(feature = "std")]
+        if helpers > 0 {
+            return std::thread::scope(|scope| {
+                for _ in 0..helpers {
+                    scope.spawn(|| help(sys, wakeup));
+                }
+                let result = drive(sys, wakeup, pid);
+                sys.lock().stopping = true;
+                wakeup.wake_all();
+                result
+            });
         }
+        let _ = helpers;
+        drive(sys, wakeup, pid)
+    }
+
+    /// Run on `n` schedulers (threads), at least one. Without the `std` feature there is only
+    /// ever one.
+    #[cfg(feature = "std")]
+    pub fn set_schedulers(&mut self, n: usize) {
+        self.sys.get_mut().schedulers = n.max(1);
     }
 
     /// Set a variable of the VM's own environment (`os:getenv/1`), which starts empty.
@@ -677,8 +716,10 @@ impl Vm {
     /// Like [`Vm::run`], but give up after `max_steps` scheduling steps and return `None`.
     /// For tests that run untrusted code which may legitimately loop forever.
     pub fn run_bounded(&mut self, pid: Pid, max_steps: usize) -> Option<Result<Outcome, RunError>> {
-        self.sys.get_mut().watched.insert(pid);
-        let mut sched = Sched::new(&self.sys);
+        let sys = self.sys.get_mut();
+        sys.watched.insert(pid);
+        sys.stuck = false;
+        let mut sched = Sched::new(&self.sys, &self.wakeup);
         for _ in 0..max_steps {
             if let Some(done) = sched.lock().result(pid) {
                 return Some(done);
@@ -696,14 +737,31 @@ impl Vm {
 }
 
 impl System {
-    /// How the run for `pid` ended, if it has: the VM halted, or `pid` finished.
+    /// Whether a scheduler with nothing to run should wait for others to make work.
+    pub(crate) fn should_sleep(&self) -> bool {
+        self.run_queue.is_empty()
+            && self.running > 0
+            && self.results.is_empty()
+            && self.halted.is_none()
+            && !self.stopping
+            && !self.stuck
+    }
+
+    /// How the run for `pid` ended, if it has: the VM halted, `pid` finished, or nothing can
+    /// run again.
     fn result(&mut self, pid: Pid) -> Option<Result<Outcome, RunError>> {
         if let Some(status) = self.halted {
             return Some(Err(RunError::Halted(status)));
         }
-        let r = self.results.remove(&pid)?;
-        self.watched.remove(&pid);
-        Some(Ok(r))
+        if let Some(r) = self.results.remove(&pid) {
+            self.watched.remove(&pid);
+            return Some(Ok(r));
+        }
+        if self.stuck {
+            self.stuck = false;
+            return Some(Err(RunError::Deadlock));
+        }
+        None
     }
 
     /// Intern an atom the VM needs. Only for names from code or the embedder, which are short.
@@ -1040,8 +1098,12 @@ impl System {
         self.poll_console();
         self.poll_programs();
         let Some(pid) = self.run_queue.pop_front() else {
-            // Nothing runnable: sleep until the next timer or console input, or give up if
-            // nothing can ever arrive.
+            // Nothing runnable. While other schedulers run, wait for them: they may make work.
+            if self.running > 0 {
+                return Next::Sleep;
+            }
+            // Nothing running either: sleep until the next timer or console input, or give up
+            // if nothing can ever arrive.
             return match self.timers.first() {
                 Some(&(deadline, _)) => {
                     self.platform.idle(Some(deadline));
@@ -1052,7 +1114,11 @@ impl System {
                     Next::Again
                 }
                 None if !self.exits.is_empty() => Next::Again,
-                None => Next::Stuck,
+                None => {
+                    self.stuck = true;
+                    self.wake_all = true;
+                    Next::Stuck
+                }
             };
         };
         let Some(mut p) = self.procs.take(pid) else {
@@ -1064,12 +1130,14 @@ impl System {
         }
         p.budget = TIME_SLICE;
         p.refresh(&self.literals);
+        self.running += 1;
         Next::Run(p)
     }
 
     /// The end of `p`'s time slice, which began with `before` reductions and ended with `stop`.
     fn finish(&mut self, mut p: Box<Process>, before: u64, mut stop: Stop) {
         let pid = p.pid;
+        self.running -= 1;
         self.procs.settle(&mut p);
         self.stats.reductions += p.reductions - before;
         if let Some(profile) = &mut self.profile {
@@ -1358,6 +1426,7 @@ impl System {
                 }),
             };
             self.results.insert(pid, outcome);
+            self.wake_all = true;
         }
         drop(p);
         self.procs.release(pid);
@@ -1462,10 +1531,36 @@ pub(crate) type Deferred = Box<dyn FnOnce(&mut Process)>;
 /// What a scheduler does next.
 enum Next {
     Run(Box<Process>),
+    /// Nothing to run, but other schedulers are running: wait for them.
+    Sleep,
     /// Nothing to run just now (or housekeeping happened): ask again.
     Again,
     /// Nothing can ever run again.
     Stuck,
+}
+
+/// Schedule on this thread until the run for `pid` ends.
+fn drive(sys: &Lock<System>, wakeup: &Wakeup, pid: Pid) -> Result<Outcome, RunError> {
+    let mut sched = Sched::new(sys, wakeup);
+    loop {
+        if let Some(done) = sched.lock().result(pid) {
+            return done;
+        }
+        if !schedule(&mut sched) {
+            return Err(RunError::Deadlock);
+        }
+    }
+}
+
+/// A helper scheduler: schedule until the run is over.
+#[cfg(feature = "std")]
+fn help(sys: &Lock<System>, wakeup: &Wakeup) {
+    let mut sched = Sched::new(sys, wakeup);
+    while !sched.lock().stopping {
+        if !schedule(&mut sched) {
+            return;
+        }
+    }
 }
 
 /// Run one scheduling step: the next process's time slice, with the system unlocked while its
@@ -1475,6 +1570,10 @@ fn schedule(sched: &mut Sched<'_>) -> bool {
     match next {
         Next::Stuck => false,
         Next::Again => true,
+        Next::Sleep => {
+            sched.sleep();
+            true
+        }
         Next::Run(mut p) => {
             let before = p.reductions;
             let stop = interp::run(sched, &mut p);
