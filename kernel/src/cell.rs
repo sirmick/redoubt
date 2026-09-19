@@ -4,6 +4,22 @@
 
 /// A global that the kernel may mutate: the replacement for `static mut`.
 ///
+/// # Why a run-time-checked cell, and not GhostCell or raw pointers
+///
+/// The kernel is single-hart and runs with interrupts disabled, so there is never a
+/// second thread of execution touching these globals. That means the kernel is not
+/// *truly re-entrant*: a nested borrow would be a logic bug (fetching a global twice in
+/// one call chain), not a legitimate need. Genuine re-entrancy -- holding a live `&mut`
+/// and needing another to the same data -- is undefined behaviour in Rust and has no
+/// sound solution at any layer; the one place the kernel re-enters itself on purpose is
+/// the swapper, which is handled explicitly, not through a shared cell.
+///
+/// So the job here is to catch that logic bug, not to permit aliasing. A compile-time
+/// alternative exists (GhostCell / `qcell::LCell`: a branded token carries the mutable
+/// permission), but it gives nothing for the multi-hart future, where this type instead
+/// becomes a spinlock and every global it guards is covered at once. The run-time check
+/// also matches the `RefCell` the hosted build already uses for the same globals.
+///
 /// On bare metal, borrows are checked at run time, so an accidental re-entrant access is
 /// a clean panic rather than two live `&mut` to the same data. When the kernel becomes
 /// multi-hart, this type becomes a spinlock, and every global that goes through it is

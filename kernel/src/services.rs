@@ -11,6 +11,7 @@ use xous_kernel::{
 };
 
 use crate::arch;
+use crate::cell::KernelCell;
 use crate::arch::mem::MemoryMapping;
 pub use crate::arch::process::Process as ArchProcess;
 #[cfg(not(any(windows, unix)))]
@@ -315,8 +316,7 @@ std::thread_local!(static SYSTEM_SERVICES: core::cell::RefCell<SystemServices> =
 }));
 
 #[cfg(baremetal)]
-#[no_mangle]
-static mut SYSTEM_SERVICES: SystemServices = SystemServices {
+static SYSTEM_SERVICES: KernelCell<SystemServices> = KernelCell::new(SystemServices {
     processes: [Process {
         state: ProcessState::Free,
         ppid: KERNEL_PID,
@@ -329,7 +329,7 @@ static mut SYSTEM_SERVICES: SystemServices = SystemServices {
     // Note we can't use MAX_SERVER_COUNT here because of how Rust's
     // macro tokenization works
     servers: filled_array![None; 128],
-};
+});
 
 impl core::fmt::Debug for Process {
     fn fmt(&self, fmt: &mut core::fmt::Formatter) -> core::result::Result<(), core::fmt::Error> {
@@ -351,9 +351,7 @@ impl SystemServices {
         F: FnOnce(&SystemServices) -> R,
     {
         #[cfg(baremetal)]
-        unsafe {
-            f(&*core::ptr::addr_of!(SYSTEM_SERVICES))
-        }
+        return SYSTEM_SERVICES.with(|ss| f(ss));
         #[cfg(not(baremetal))]
         SYSTEM_SERVICES.with(|ss| f(&ss.borrow()))
     }
@@ -363,9 +361,7 @@ impl SystemServices {
         F: FnOnce(&mut SystemServices) -> R,
     {
         #[cfg(baremetal)]
-        unsafe {
-            f(&mut *core::ptr::addr_of_mut!(SYSTEM_SERVICES))
-        }
+        return SYSTEM_SERVICES.with(f);
 
         #[cfg(not(baremetal))]
         SYSTEM_SERVICES.with(|ss| f(&mut ss.borrow_mut()))
