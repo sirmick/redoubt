@@ -703,6 +703,20 @@ impl MemoryManager {
         crate::arch::mem::return_page_inner(self, src_mapping, src_addr, dest_pid, dest_mapping, dest_addr)
     }
 
+    /// A frame changes hands between two processes that are not the running one: a transfer
+    /// (R4) or an abandoned lend (R3). The budgets follow the frame, as they do for every other
+    /// ownership change.
+    #[cfg(baremetal)]
+    pub fn move_frame(&mut self, phys: usize, from: PID, to: PID) -> Result<(), xous_kernel::Error> {
+        self.claim_release_move(phys as *mut usize, to, ClaimReleaseMove::Move(from))
+    }
+
+    /// Free a frame `pid` owns (an abandoned lend the server replied to, R3).
+    #[cfg(baremetal)]
+    pub fn free_frame_of(&mut self, phys: usize, pid: PID) {
+        self.release_page(phys as *mut usize, pid).ok();
+    }
+
     /// Back every demand-paged page of `[address, address + len)` in the current address
     /// space, so that the range can be lent or moved. Callers hold the memory manager
     /// already, which is why the backing takes `self` instead of borrowing it again.

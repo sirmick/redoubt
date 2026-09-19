@@ -17,6 +17,7 @@ mod args;
 #[cfg(baremetal)]
 mod budget;
 mod cell;
+mod endpoint;
 #[cfg(baremetal)]
 mod grants;
 #[cfg(baremetal)]
@@ -27,6 +28,7 @@ mod irq;
 mod kframe;
 mod macros;
 mod mem;
+mod message;
 mod platform;
 #[cfg(baremetal)]
 mod redoubt;
@@ -138,6 +140,13 @@ pub extern "C" fn kmain() {
                 kernel_syscall(xous_kernel::SysCall::SwitchTo(pid, 0)).expect("couldn't switch to pid");
             }
             None => {
+                // I13, until WP-K5 arms the timer: with nothing runnable, the only thing that
+                // can make progress is a Redoubt deadline passing, so answer the ones that have
+                // and keep polling while any is still waiting, rather than sleeping through it.
+                if SystemServices::with_mut(crate::message::expire) {
+                    continue;
+                }
+
                 #[cfg(feature = "debug-print")]
                 klog!("NO RUNNABLE TASKS FOUND, entering idle state");
 

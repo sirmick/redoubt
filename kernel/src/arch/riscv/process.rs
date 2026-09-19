@@ -305,6 +305,15 @@ impl Process {
         }
     }
 
+    /// The Redoubt result registers `a0..=a7` of a thread that was waiting (`redoubt-sys`
+    /// encodes them; the legacy `Result` shape does not fit them).
+    pub fn set_thread_registers(&mut self, thread_nr: TID, regs: &[usize; 8]) {
+        let thread = self.thread_mut(thread_nr);
+        for (src, dest) in regs.iter().zip(thread.registers[9..].iter_mut()) {
+            *dest = *src;
+        }
+    }
+
     pub fn retry_instruction(&mut self, tid: TID) -> Result<(), xous_kernel::Error> {
         let process = process_impl();
         let thread = &mut process.threads[tid];

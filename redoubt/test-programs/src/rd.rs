@@ -12,7 +12,7 @@ pub const USERS: u32 = 3;
 pub fn h(index: u32) -> Handle { Handle::new(index).expect("handle 0") }
 
 pub fn spec(pages: u64, processes: u32, weight: u32) -> BudgetSpec {
-    BudgetSpec { pages, processes, weight, first: false, labels: Labels::new(), account: 0, deadline: FOREVER }
+    BudgetSpec { pages, processes, weight, labels: Labels::new(), account: 0, deadline: FOREVER }
 }
 
 /// `budget_create`; the new handle's index.

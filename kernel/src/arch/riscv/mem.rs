@@ -522,6 +522,81 @@ pub fn return_page_inner(
     Ok(phys)
 }
 
+/// Take `virt` out of `space`, remembering the loan: clear `VALID` so the lender cannot touch
+/// the page, and set `S` so that its entry is the record of the loan (I9). Returns the frame.
+/// This is `lend_page_inner` without the other half: a Redoubt message is taken out of its
+/// sender when it is sent and mapped into its receiver only when someone takes it, which may be
+/// much later or never (`message.rs`).
+pub fn lend_out(space: &MemoryMapping, virt: usize) -> Result<usize, xous_kernel::Error> {
+    let slot = walk(root_of(space.satp), virt, None)?;
+    let pte = slot.get();
+    if !pte.is_valid() || pte.has(MMUFlags::S) {
+        return Err(xous_kernel::Error::ShareViolation);
+    }
+    slot.set(pte.without(MMUFlags::VALID).with(MMUFlags::S));
+    flush_tlb();
+    Ok(pte.phys())
+}
+
+/// The frame behind a page `space` lent out, from the lender's own entry.
+pub fn lent_frame(space: &MemoryMapping, virt: usize) -> Option<usize> {
+    let pte = walk(root_of(space.satp), virt, None).ok()?.get();
+    pte.has(MMUFlags::S).then(|| pte.phys())
+}
+
+/// Give a lent page back to its lender: `VALID` again, `S` cleared (`reply`, or a message that
+/// never went through).
+pub fn lend_back(space: &MemoryMapping, virt: usize) -> Result<(), xous_kernel::Error> {
+    let slot = walk(root_of(space.satp), virt, None)?;
+    let pte = slot.get();
+    if !pte.has(MMUFlags::S) {
+        return Err(xous_kernel::Error::ShareViolation);
+    }
+    slot.set(pte.without(MMUFlags::S).with(MMUFlags::VALID));
+    flush_tlb();
+    Ok(())
+}
+
+/// The lender never gets this page back: a transfer (R4), or a lend whose call was abandoned
+/// (R3). Its entry goes; the frame is the receiver's. Returns the frame.
+pub fn drop_lent(space: &MemoryMapping, virt: usize) -> Result<usize, xous_kernel::Error> {
+    let slot = walk(root_of(space.satp), virt, None)?;
+    let pte = slot.get();
+    if !pte.has(MMUFlags::S) {
+        return Err(xous_kernel::Error::ShareViolation);
+    }
+    slot.set(Pte::EMPTY);
+    flush_tlb();
+    Ok(pte.phys())
+}
+
+/// Map `phys` at `virt` in `space`, readable and writable, for `pid`. A message's buffer is
+/// always lent writable: the client already trusts the server with it (CAPABILITIES.md).
+pub fn map_into(
+    mm: &mut MemoryManager,
+    pid: PID,
+    space: &MemoryMapping,
+    phys: usize,
+    virt: usize,
+) -> Result<(), xous_kernel::Error> {
+    let flags = translate_flags(MemoryFlags::R | MemoryFlags::W) | user_flag(pid);
+    map_page_in(root_of(space.satp), mm, pid, phys, virt, flags)?;
+    flush_tlb();
+    Ok(())
+}
+
+/// Unmap `virt` from `space` without changing who owns the frame: a lend leaving the server.
+pub fn unmap_from(space: &MemoryMapping, virt: usize) -> Result<usize, xous_kernel::Error> {
+    let slot = walk(root_of(space.satp), virt, None)?;
+    let pte = slot.get();
+    if !pte.is_valid() {
+        return Err(xous_kernel::Error::BadAddress);
+    }
+    slot.set(Pte::EMPTY);
+    flush_tlb();
+    Ok(pte.phys())
+}
+
 fn checked_phys(pte: Pte) -> Result<usize, xous_kernel::Error> {
     // If the page is "Valid" but shared, issue a sharing violation.
     if pte.has(MMUFlags::S) {

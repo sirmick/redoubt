@@ -1,4 +1,4 @@
-//! Attacker: hostile arguments to every call WP-K1 built (I14): bad and wide handles, unknown
+//! Attacker: hostile arguments to every call WP-K1 and WP-K2 built (I14): bad and wide handles, unknown
 //! numbers, non-zero unused registers, records misaligned, at 0, in the kernel, read-only,
 //! never touched, straddling into an unmapped page, malformed slot by slot, the largest values; the order in
 //! which the stages report them; then a few thousand calls with arguments drawn from a pool of
@@ -56,15 +56,13 @@ pub extern "C" fn _start() -> ! {
         }
         scratch
     };
-    // `first` is a flag (0 or 1), where the class tag once was.
-    let mut two_first = spec;
-    two_first[3] = 2;
-    let mut huge_first = spec;
-    huge_first[3] = u64::MAX;
+    // Slot 3 is the label count: a spec asks for no place in the queue (answer 103).
     let mut nine_labels = spec;
-    nine_labels[4] = 9;
+    nine_labels[3] = 9;
+    let mut huge_labels = spec;
+    huge_labels[3] = u64::MAX;
     let mut stray_label = spec;
-    stray_label[5] = 7; // count 0, slot non-zero
+    stray_label[4] = 7; // count 0, slot non-zero
     let mut wide_processes = spec;
     wide_processes[1] = 1 << 32;
     let mut huge_pages = spec;
@@ -77,9 +75,8 @@ pub extern "C" fn _start() -> ! {
         create(0),
         create(KERNEL),
         create(end - 8),
-        create(at(&two_first)),
-        create(at(&huge_first)),
         create(at(&nine_labels)),
+        create(at(&huge_labels)),
         create(at(&stray_label)),
         create(at(&wide_processes)),
         create(at(&huge_pages)),
@@ -125,12 +122,23 @@ pub extern "C" fn _start() -> ! {
         call(Number::HandleClose, [999, 0, 0, 0, 0, 0, 0]),
         call(Number::HandleClose, [rd::SYSTEM as usize, 1, 0, 0, 0, 0, 0]),
         call(Number::BudgetDestroy, [999, 0, 0, 0, 0, 0, 0]),
-        // Calls not built yet (WP-K2 to WP-K5) decode, then are refused.
+        // Calls not built yet (WP-K3 to WP-K5) decode, then are refused.
         call(Number::MapAnon, [4096, 3, 0, 0, 0, 0, 0]),
-        call(Number::EndpointCreate, [0, 0, 0, 0, 0, 0, 0]),
-        // `serve` decodes (id 0 first), then is refused until WP-K2 builds it.
+        // `endpoint_create` takes no arguments: a stray register is malformed.
+        call(Number::EndpointCreate, [0, 0, 0, 0, 0, 0, 1]),
+        // `serve` decodes (id 0 first), then finds no such open call of this thread.
         call(Number::Serve, [0, 0, 0, 0, 0, 0, 0]),
         call(Number::Serve, [1, 0, 0, 0, 0, 0, 0]),
+        // `reply` the same, and a body record that is not this program's memory.
+        call(Number::Reply, [0, 0, scratch, 0, 0, 0, 0]),
+        call(Number::Reply, [1, 0, KERNEL, 0, 0, 0, 0]),
+        // `mint`: an unknown source tag, then a message id of 0 under the message tag.
+        call(Number::Mint, [0, 0, 0, 1, 0, 0, 0]),
+        call(Number::Mint, [1, 0, 0, 1, 0, 0, 0]),
+        // `receive` on a budget handle is the wrong kind of object; on 0 it sleeps, and a
+        // timeout of 0 makes that a poll that answers at once.
+        call(Number::Receive, [rd::SYSTEM as usize, 0, 0, 0, scratch, 0, 0]),
+        call(Number::Receive, [0, 0, 0, 0, scratch, 0, 0]),
     ];
     log!(logger, "[i14] other -> {:?}", other);
     let sandbox = rd::create(rd::SYSTEM, &rd::spec(200, 0, 0)).expect("sandbox");
@@ -158,6 +166,27 @@ pub extern "C" fn _start() -> ! {
         if matches!(number, Number::BudgetDestroy | Number::HandleClose) && (1..=3).contains(&args[0]) {
             continue;
         }
+        // An endpoint lives until its owner budget is destroyed (R10), so thousands of them
+        // would eat the pages of `system`, which the victim needs after the attack. The
+        // targeted list above covers `endpoint_create`, whose only argument is that it has none.
+        if number == Number::EndpointCreate {
+            continue;
+        }
+        // A blocking call must not park this thread for a pool timeout of `FOREVER`: with
+        // nothing else runnable, the attack would simply stop. A timeout of 0 makes each one a
+        // poll, so every other argument is still fuzzed. The registers are the timeout's two
+        // halves (redoubt-sys): `call` and `send` carry it in a5 and a6, `receive` in a2, a3.
+        match number {
+            Number::Call | Number::Send => {
+                args[4] = 0;
+                args[5] = 0;
+            }
+            Number::Receive => {
+                args[1] = 0;
+                args[2] = 0;
+            }
+            _ => {}
+        }
         // New budgets come only from the sandbox, so the fuzzing cannot use up `system`.
         if number == Number::BudgetCreate && (1..=3).contains(&args[0]) {
             args[0] = sandbox as usize;
@@ -166,6 +195,9 @@ pub extern "C" fn _start() -> ! {
         // SCRATCH or past the mapped page, never this program's stack or data.
         if number == Number::BudgetUsage {
             args[1] = pool[next() as usize % pool.len()];
+        }
+        if number == Number::Receive {
+            args[4] = pool[next() as usize % pool.len()];
         }
         calls += 1;
         let a0 = rd::raw([rd::number(number), args[0], args[1], args[2], args[3], args[4], args[5], args[6]]);

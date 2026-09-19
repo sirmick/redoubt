@@ -1,4 +1,4 @@
-description = "Hostile arguments to every call WP-K1 built (bad and wide handles, unknown numbers, stray registers, records misaligned, in the kernel, read-only, never touched, straddling, malformed), in the spec's order of checks, and 4000 calls over hostile values: errors, never a panic (I14) (checked build)"
+description = "Hostile arguments to every call WP-K1 and WP-K2 built (bad and wide handles, unknown numbers, stray registers, records misaligned, in the kernel, read-only, never touched, straddling, malformed), in the spec's order of checks, and 4000 calls over hostile values: errors, never a panic (I14) (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 # Built with the checks on (redoubt/README.md, "Debug assertions").
@@ -11,11 +11,11 @@ timeout_secs = 30
 # the wrong order) fails. The verdict is the kernel surviving (PANIC is always forbidden), the
 # victim's pages and the checker's power-off.
 expect = [
-    '^\[pid 2\] \[i14\] budget_create records -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(TooLarge\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(OutOfMemory\), Some\(InvalidArgument\)\]$',
+    '^\[pid 2\] \[i14\] budget_create records -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(TooLarge\), Some\(TooLarge\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(OutOfMemory\), Some\(InvalidArgument\)\]$',
     '^\[pid 2\] \[i14\] budget_create order -> \[Some\(BadHandle\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(InvalidArgument\)\]$',
     '^\[pid 2\] \[i14\] budget_usage -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(BadHandle\)\]$',
     '^\[pid 2\] \[i14\] random -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), None\]$',
-    '^\[pid 2\] \[i14\] other -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(BadHandle\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\)\]$',
+    '^\[pid 2\] \[i14\] other -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(BadHandle\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(WrongObject\), Some\(Timeout\)\]$',
     '^\[pid 2\] \[i14\] \d+ random calls: \d+ refused, 0 with an unknown result code$',
     '^\[pid 2\] \[i14\] attempts done$',
     '^\[pid 4\] \[victim\] mapped and touched 64 pages in system after the attack$',

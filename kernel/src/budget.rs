@@ -29,7 +29,7 @@
 use redoubt_sys::{BudgetSpec, Error, FOREVER, MAX_DEPTH, MAX_LABELS, Usage};
 use xous_kernel::PID;
 
-use crate::arch::process::MAX_PROCESS_COUNT;
+use crate::arch::process::{INITIAL_TID, MAX_PROCESS_COUNT, MAX_THREAD};
 use crate::handle::{BudgetRef, Handle, HandleTable, Object};
 use crate::kframe;
 use crate::mem::MemoryManager;
@@ -60,8 +60,6 @@ pub struct Budget {
     pub parent: Option<BudgetFrame>,
     pub depth: u32,
     pub class: Class,
-    /// Runs before every budget without it (R12; WP-K5 schedules by it). Set only at creation.
-    pub first: bool,
     /// Set by `budget_destroy` on the whole subtree before it tears anything down (R10).
     pub dying: bool,
     pub labels: [u64; MAX_LABELS],
@@ -79,7 +77,10 @@ pub struct Budget {
 }
 
 impl Budget {
-    fn labels(&self) -> &[u64] { &self.labels[..self.nlabels] }
+    /// The labels it actually carries (R1, I6).
+    pub fn labels_of(&self) -> &[u64] { &self.labels[..self.nlabels] }
+
+    fn labels(&self) -> &[u64] { self.labels_of() }
 
     fn free_pages(&self) -> u64 { self.pages_limit.saturating_sub(self.pages_used) }
 
@@ -101,22 +102,46 @@ pub struct Account {
     /// RAM frames owned by the process and charged to its budget (page tables and mapped pages).
     pub frames: u64,
     pub handles: HandleTable,
+    /// Each thread's IPC page (`message.rs`), by frame index; 0 for a thread that has none.
+    /// This *is* the page the cost table charges for a thread: the saved registers live in
+    /// `ProcessImpl`, and everything IPC needs (what the thread waits for, the message it is
+    /// sending, the calls it holds open) lives here, so `call` and `send` never allocate.
+    pub ipc: [u32; MAX_THREAD],
+    /// Open calls this process's threads hold (R4a): at `MAX_OPEN_CALLS` it takes no more.
+    pub open_calls: u32,
+    /// The next message id its threads will hand a sender. Never 0, never reused within this
+    /// process, and from no counter anyone else can see (I12, CONTAINMENT.md).
+    pub next_msg_id: u64,
 }
 
 impl Account {
-    const NONE: Account = Account { budget: None, threads: 0, frames: 0, handles: HandleTable::EMPTY };
+    const NONE: Account = Account {
+        budget: None,
+        threads: 0,
+        frames: 0,
+        handles: HandleTable::EMPTY,
+        ipc: [0; MAX_THREAD],
+        open_calls: 0,
+        next_msg_id: 1,
+    };
 }
 
 pub struct Objects {
-    /// The next budget id. Ids are never reused (I12); a `u64` cannot run out.
+    /// The next object id, shared by budgets and endpoints. Ids are never reused (I12); a
+    /// `u64` cannot run out.
     next_id: u64,
+    /// The next send order number (R2: "the oldest message of the next group"). A `u64` cannot
+    /// run out, and userspace never sees it, so it is no covert channel.
+    next_seq: u64,
     /// The highest frame ever given to a kernel object: where a scan for budgets stops.
     pub high_frame: u32,
     accounts: [Account; MAX_PROCESS_COUNT],
 }
 
 impl Objects {
-    pub const fn new() -> Objects { Objects { next_id: 1, high_frame: 0, accounts: [Account::NONE; MAX_PROCESS_COUNT] } }
+    pub const fn new() -> Objects {
+        Objects { next_id: 1, next_seq: 1, high_frame: 0, accounts: [Account::NONE; MAX_PROCESS_COUNT] }
+    }
 }
 
 fn account_index(pid: PID) -> Option<usize> {
@@ -162,7 +187,6 @@ impl MemoryManager {
             processes_used: w(12) as u32,
             weight_limit: w(13) as u32,
             weight_carved: w(14) as u32,
-            first: w(15) != 0,
         }
     }
 
@@ -184,10 +208,56 @@ impl MemoryManager {
         words[12] = u64::from(b.processes_used);
         words[13] = u64::from(b.weight_limit);
         words[14] = u64::from(b.weight_carved);
-        words[15] = u64::from(b.first);
         words[16..].copy_from_slice(&b.labels);
         for (i, word) in words.iter().enumerate() {
             kframe::write(phys, i * 8, *word);
+        }
+    }
+
+    /// The next never-reused object id (budgets, endpoints).
+    pub fn next_object_id(&mut self) -> u64 {
+        let id = self.objects.next_id;
+        self.objects.next_id = id.checked_add(1).expect("I12: object ids exhausted");
+        id
+    }
+
+    /// The next send order number.
+    pub fn next_seq(&mut self) -> u64 {
+        let seq = self.objects.next_seq;
+        self.objects.next_seq = seq.checked_add(1).expect("send order exhausted");
+        seq
+    }
+
+    /// The next message id process `pid` hands a sender (I12).
+    pub fn next_msg_id(&mut self, pid: PID) -> u64 {
+        let account = self.account_mut(pid).expect("account");
+        let id = account.next_msg_id;
+        account.next_msg_id = id.checked_add(1).expect("I12: message ids exhausted");
+        id
+    }
+
+    /// The frame of thread `tid`'s IPC page, if it has one.
+    pub fn ipc_frame(&self, pid: PID, tid: usize) -> Option<u32> {
+        self.account(pid).and_then(|a| a.ipc.get(tid).copied()).filter(|f| *f != 0)
+    }
+
+    /// Give thread `tid` its IPC page. Its cost is [`THREAD_PAGES`], charged when the thread was
+    /// created, so the frame is already paid for; one missing here would mean the kernel
+    /// over-committed RAM, which `boot_budgets` reserves against, so it stops (fail closed).
+    fn give_ipc_frame(&mut self, pid: PID, tid: usize) {
+        if self.account(pid).is_none() || tid >= MAX_THREAD || self.ipc_frame(pid, tid).is_some() {
+            return;
+        }
+        let frame = self.alloc_object_frame().expect("R6: a thread's page was charged but has no frame");
+        self.account_mut(pid).expect("account").ipc[tid] = frame;
+    }
+
+    /// Take thread `tid`'s IPC page back. Its contents are dead by now: `message.rs` unwinds
+    /// what the thread waited for and the calls it held before the thread goes.
+    fn take_ipc_frame(&mut self, pid: PID, tid: usize) {
+        if let Some(frame) = self.ipc_frame(pid, tid) {
+            self.account_mut(pid).expect("account").ipc[tid] = 0;
+            self.free_object_frame(frame);
         }
     }
 
@@ -219,6 +289,21 @@ impl MemoryManager {
     pub fn account_mut(&mut self, pid: PID) -> Option<&mut Account> {
         let accounts = &mut self.objects.accounts;
         account_index(pid).map(move |i| &mut accounts[i]).filter(|a| a.budget.is_some())
+    }
+
+    /// Pages `frame` may still charge (R6).
+    pub fn free_pages(&self, frame: BudgetFrame) -> u64 { self.budget(frame).free_pages() }
+
+    /// Whether `r` still names the budget it named. Unlike `budget_at`, a stale reference is an
+    /// answer here, not a kernel bug: a message carries handles that R10 may have revoked while
+    /// it waited, and an open call remembers a stamp that may be gone (`mint`'s `Dead`).
+    pub fn is_live_budget(&self, r: BudgetRef) -> bool {
+        self.is_budget_frame(r.frame) && self.budget(r.frame).id == r.id
+    }
+
+    /// Whether `b` is `ancestor` or below it (R9: a budget handle only narrows).
+    pub fn is_at_or_below(&self, b: BudgetFrame, ancestor: BudgetFrame) -> bool {
+        self.below(b, ancestor)
     }
 
     /// The budget process `pid` lives in; `None` for the kernel.
@@ -281,6 +366,8 @@ impl MemoryManager {
         b.pages_used += PROCESS_PAGES + THREAD_PAGES;
         self.store(budget, &b);
         self.objects.accounts[index] = Account { budget: Some(budget), threads: 1, ..Account::NONE };
+        // The first thread's page, charged just above, is its IPC page.
+        self.give_ipc_frame(pid, INITIAL_TID);
         Ok(())
     }
 
@@ -289,6 +376,9 @@ impl MemoryManager {
     pub fn process_ended(&mut self, pid: PID) {
         let Some(budget) = self.budget_of(pid) else { return };
         self.close_all_handles(pid);
+        for tid in 0..MAX_THREAD {
+            self.take_ipc_frame(pid, tid);
+        }
         let account = self.account_mut(pid).expect("account");
         let pages = PROCESS_PAGES + account.threads * THREAD_PAGES + account.frames;
         *account = Account::NONE;
@@ -298,16 +388,18 @@ impl MemoryManager {
         self.store(budget, &b);
     }
 
-    pub fn thread_created(&mut self, pid: PID) -> Result<(), Error> {
+    pub fn thread_created(&mut self, pid: PID, tid: usize) -> Result<(), Error> {
         if let Some(budget) = self.budget_of(pid) {
             self.charge(budget, THREAD_PAGES)?;
             self.account_mut(pid).expect("account").threads += 1;
+            self.give_ipc_frame(pid, tid);
         }
         Ok(())
     }
 
-    pub fn thread_ended(&mut self, pid: PID) {
+    pub fn thread_ended(&mut self, pid: PID, tid: usize) {
         if let Some(budget) = self.budget_of(pid) {
+            self.take_ipc_frame(pid, tid);
             let account = self.account_mut(pid).expect("account");
             account.threads = account.threads.checked_sub(1).expect("I5: thread count underflow");
             self.uncharge(budget, THREAD_PAGES);
@@ -329,17 +421,26 @@ impl MemoryManager {
     /// A loader bundle whose processes do not fit in `system` cannot run under the rules, so the
     /// kernel refuses to boot (fail closed).
     pub fn boot_budgets(&mut self) {
-        let pages = self.ram_frames() - self.ram_frames_owned_by(crate::services::KERNEL_PID) as u64;
+        // Held back from `root`, so that every charged page has a real frame behind it (R7: an
+        // allocation fails only on the caller's own budget, never because the kernel ran out).
+        // A process's own page pays for one frame, but its saved contexts (`ProcessImpl`) take
+        // `PROCESS_IMPL_PAGES`; the thread pages that once covered the difference now each hold
+        // a thread's IPC page (`Account::ipc`). The gap is fixed per process, so reserving it
+        // for every PID at boot covers every process the kernel can ever hold.
+        let per_process = crate::arch::process::PROCESS_IMPL_PAGES as u64 - PROCESS_PAGES;
+        let reserved = per_process * MAX_PROCESS_COUNT as u64;
+        let pages = self.ram_frames() - self.ram_frames_owned_by(crate::services::KERNEL_PID) as u64
+            - reserved;
         let processes = (MAX_PROCESS_COUNT - 1) as u32;
         let (sys_pages, sys_processes, sys_weight) = (pages / 4, processes / 4, ROOT_WEIGHT / 4);
         // Root pays for the two budgets' own pages. Root's own page is charged to no one: it has
         // no parent, and its frame is one of the RAM pages counted in its limit, taken for the tree
         // itself.
         let users_pages = pages - 2 * BUDGET_PAGES - sys_pages;
-        // `root` and `system` are class `system` and `first`; `users` is class `user`.
+        // `root` and `system` are class `system`; `users` is class `user`. Nothing runs before
+        // anything else: one stride queue, and weight decides (answer 103).
         let boot = |mm: &mut Self, parent, class, pages, processes, weight| {
-            let first = class == Class::System;
-            let spec = BudgetSpec { pages, processes, weight, first, labels: Default::default(), account: 0, deadline: FOREVER };
+            let spec = BudgetSpec { pages, processes, weight, labels: Default::default(), account: 0, deadline: FOREVER };
             mm.new_budget(parent, &spec, class, &[]).expect("boot: no frame for a boot budget")
         };
         let root = boot(self, None, Class::System, pages, processes, ROOT_WEIGHT);
@@ -382,8 +483,7 @@ impl MemoryManager {
         labels: &[u64],
     ) -> Result<BudgetFrame, Error> {
         let frame = self.alloc_object_frame()?;
-        let id = self.objects.next_id;
-        self.objects.next_id = id.checked_add(1).expect("I12: budget ids exhausted");
+        let id = self.next_object_id();
         let mut label_array = [0; MAX_LABELS];
         label_array[..labels.len()].copy_from_slice(labels);
         let parent_budget = parent.map(|p| self.budget(p));
@@ -392,7 +492,6 @@ impl MemoryManager {
             parent,
             depth: parent_budget.map_or(0, |p| p.depth + 1),
             class,
-            first: spec.first,
             dying: false,
             labels: label_array,
             nlabels: labels.len(),
@@ -427,11 +526,8 @@ impl MemoryManager {
         if p.depth as usize + 1 >= MAX_DEPTH {
             return Err(Error::TooLarge);
         }
-        // A child's class is its parent's (answer 73). `first` needs a `first` caller and a
-        // system-class parent (QUESTIONS.md 103, pending: the flag is the editor's mechanism).
-        if spec.first && !(self.budget(caller).first && p.class == Class::System) {
-            return Err(Error::ClassDenied);
-        }
+        // A child's class is its parent's (answer 73); nothing else about scheduling is the
+        // caller's to choose (answer 103: one stride queue, ordered by weight).
         let mut labels = [0; MAX_LABELS];
         let given = spec.labels.as_slice();
         labels[..given.len()].copy_from_slice(given);
@@ -501,7 +597,7 @@ impl MemoryManager {
 
     /// Whether `b` is `top` or below it. A subtree is destroyed whole, so every live budget's
     /// parent chain is live.
-    fn below(&self, b: BudgetFrame, top: BudgetFrame) -> bool {
+    pub(crate) fn below(&self, b: BudgetFrame, top: BudgetFrame) -> bool {
         let mut cur = Some(b);
         while let Some(f) = cur {
             if f == top {
@@ -514,7 +610,7 @@ impl MemoryManager {
 
     /// Whether `frame` holds a budget: an object frame that starts with the magic (a handle-table
     /// page starts with a handle's kind, which is below `u32::MAX`, so never the magic).
-    fn is_budget_frame(&self, frame: BudgetFrame) -> bool {
+    pub(crate) fn is_budget_frame(&self, frame: BudgetFrame) -> bool {
         self.is_object_frame(frame) && kframe::read(self.object_phys(frame), 0) == MAGIC
     }
 
@@ -542,8 +638,12 @@ impl MemoryManager {
     /// processes and no handles left; nothing reads a dying frame's tree links after this).
     pub fn destroy_marked(&mut self, top: BudgetFrame) {
         self.sweep_handles(|mm, h| {
-            let Object::Budget(object) = h.object;
-            mm.budget_at(object).dying || mm.budget_at(h.stamp).dying
+            let object_dying = match h.object {
+                Object::Budget(b) => mm.budget_at(b).dying,
+                // An endpoint dies with its owner, so a handle to one is revoked with it.
+                Object::Endpoint(e) => mm.budget_at(mm.endpoint_at(e).owner).dying,
+            };
+            object_dying || mm.budget_at(h.stamp).dying
         });
         self.return_carve(top);
         for frame in 0..=self.objects.high_frame {

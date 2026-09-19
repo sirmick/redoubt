@@ -26,7 +26,6 @@
 //! | message id, badge (`NonZeroU64`) | 2: low half, high half | never 0 as an argument (a received badge may be 0: the receive right's) |
 //! | optional [`Pages`] (lend, transfer) | 2: address, pages | (0, 0) = none; one of them 0 is invalid |
 //! | enum tag (reset kind, mint source; in records: the record's kind, an exit's cause) | 1 | numbered from 1; 0 is never a valid tag |
-//! | flag (in records: `budget_create`'s `first`) | 1 | 0 or 1 |
 //!
 //! Registers a call does not use must be 0.
 //!
@@ -48,7 +47,7 @@
 //! | [`Body`]: words, handle count, handles | [`BODY_SLOTS`] | `call` (request in), `send`, `reply` |
 //! | [`ReceivedBody`]: the same slots; a handle slot within the count may be 0 | [`BODY_SLOTS`] | `call` (reply out) |
 //! | [`Received`]: kind, msg_id, badge, account, labels, words, handles, buffer, pages; one layout for a message, an interrupt, an exit notice and an abandoned-call notice | [`RECEIVED_SLOTS`] | `receive` (out) |
-//! | [`BudgetSpec`]: pages, processes, weight, first, labels, account, deadline | [`BUDGET_SPEC_SLOTS`] | `budget_create` (in) |
+//! | [`BudgetSpec`]: pages, processes, weight, labels, account, deadline | [`BUDGET_SPEC_SLOTS`] | `budget_create` (in) |
 //! | [`Usage`]: page limit and usage, process limit and usage, weight limit and carved | [`USAGE_SLOTS`] | `budget_usage` (out) |
 //! | handle list: one handle per slot ([`Handle::from_raw`]) | the call's count, at most [`MAX_START_HANDLES`] | `process_start` (in) |
 //!
@@ -56,10 +55,10 @@
 //! Handles going in are all handles. Handles coming out ([`ReceivedHandles`]: in a message, and in
 //! the reply `call` writes back) may have a slot of 0 within the count, which keeps its place: a
 //! handle revoked while its message was in flight (R10), or a reply's handle the caller could not
-//! take (QUESTIONS.md 116, pending).
+//! take (answer 116; its `call` then returns `OutOfMemory`).
 //!
 //! A record's page must already be backed: the kernel does not allocate while it decodes, so an
-//! untouched page is `InvalidArgument` (QUESTIONS.md 115, pending; the check is the kernel's).
+//! untouched page is `InvalidArgument` (answer 115; the check is the kernel's).
 //!
 //! Records can overlap the pages a call acts on; the kernel must copy a record in before it
 //! changes those pages, and copy results out only to memory still the caller's. For example a
@@ -146,9 +145,8 @@ pub const FOREVER: u64 = u64::MAX;
 pub const MAX_OPEN_CALLS: usize = 64;
 /// Handles one `process_start` copies into the child at most.
 pub const MAX_START_HANDLES: usize = 64;
-// QUESTIONS.md 102 (pending): not in KERNEL-SPEC.md's constants yet. The recommendation names it
-// there; a call that would add a handle past it gets `TooLarge` (`Number::can_return`).
-/// Handles one process may hold (the kernel's handle table holds this many).
+/// Handles one process may hold (answer 102): a call that would add one past it gets
+/// `TooLarge` (`Number::can_return`), and at delivery it is a cost the receiver cannot pay (R4).
 pub const MAX_HANDLES: usize = 4096;
 /// The base page, on both Sv32 and Sv39: the unit of lends, transfers and page counts. What each
 /// kernel object costs in pages is KERNEL-SPEC.md's cost table.

@@ -14,8 +14,8 @@
 //! A table page is a RAM frame of its own, allocated when its first handle is installed and
 //! freed when its last is removed, each charged one page to the process's budget. A new handle
 //! takes the lowest free index (as the model does), so a table filled without closing any
-//! handle costs exactly ceil(n / 128) pages; one with holes costs a page per page in use
-//! (QUESTIONS.md 111, pending: see `install_handle`).
+//! handle costs exactly ceil(n / 128) pages; one with holes costs a page per page in use, which
+//! is what the memory really costs (answer 111).
 //!
 //! The object and the stamp each name a budget by frame and by id. R10's sweep closes every
 //! handle naming or stamped with a budget before that budget's frame is freed (I2), so both
@@ -31,8 +31,8 @@ use crate::mem::MemoryManager;
 
 /// Handles in one table page: `PAGE_SIZE` / 32 bytes.
 pub const HANDLES_PER_PAGE: usize = 128;
-/// Handles one process may hold (QUESTIONS.md 102, pending; the ABI's constant): a table is an
-/// array of this many divided by 128 pages. Installing one more is `TooLarge`.
+/// Handles one process may hold (answer 102; the ABI's constant): a table is an array of this
+/// many divided by 128 pages. Installing one more is `TooLarge`.
 pub use redoubt_sys::MAX_HANDLES;
 /// Table pages a process may have.
 pub const MAX_HANDLE_PAGES: usize = MAX_HANDLES / HANDLES_PER_PAGE;
@@ -51,10 +51,18 @@ pub struct BudgetRef {
     pub id: u64,
 }
 
-/// What a handle names. WP-K2 to WP-K4 add endpoints, processes and devices.
+/// An endpoint, named by frame and by id, like a budget (`endpoint.rs`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct EndpointRef {
+    pub frame: u32,
+    pub id: u64,
+}
+
+/// What a handle names. WP-K4 adds processes and WP-K3 devices.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Object {
     Budget(BudgetRef),
+    Endpoint(EndpointRef),
 }
 
 /// KERNEL-SPEC.md, Handle = (object, badge, stamp).
@@ -67,24 +75,30 @@ pub struct Handle {
 
 /// Object kinds in a handle's first word; 0 is an empty slot.
 const KIND_BUDGET: u64 = 1;
+const KIND_ENDPOINT: u64 = 2;
 
 impl Handle {
-    fn encode(&self) -> [u64; HANDLE_WORDS] {
-        let (kind, object) = match self.object {
-            Object::Budget(b) => (KIND_BUDGET, b),
+    /// A handle as the four words a table slot holds. `message.rs` keeps copies in the same
+    /// form, in a thread's IPC page.
+    pub fn to_words(&self) -> [u64; HANDLE_WORDS] {
+        let (kind, frame, id) = match self.object {
+            Object::Budget(b) => (KIND_BUDGET, b.frame, b.id),
+            Object::Endpoint(e) => (KIND_ENDPOINT, e.frame, e.id),
         };
         let mask = (1u64 << FRAME_BITS) - 1;
-        let (of, sf) = (u64::from(object.frame), u64::from(self.stamp.frame));
+        let (of, sf) = (u64::from(frame), u64::from(self.stamp.frame));
         assert!(of <= mask && sf <= mask, "frame index out of range");
-        [kind << (2 * FRAME_BITS) | sf << FRAME_BITS | of, object.id, self.badge, self.stamp.id]
+        [kind << (2 * FRAME_BITS) | sf << FRAME_BITS | of, id, self.badge, self.stamp.id]
     }
 
-    fn decode(words: [u64; HANDLE_WORDS]) -> Option<Handle> {
+    /// The handle four words hold; `None` for an empty slot.
+    pub fn from_words(words: [u64; HANDLE_WORDS]) -> Option<Handle> {
         let mask = (1u64 << FRAME_BITS) - 1;
         let frame = |shift: u32| ((words[0] >> shift) & mask) as u32;
         let object = match words[0] >> (2 * FRAME_BITS) {
             0 => return None,
             KIND_BUDGET => Object::Budget(BudgetRef { frame: frame(0), id: words[1] }),
+            KIND_ENDPOINT => Object::Endpoint(EndpointRef { frame: frame(0), id: words[1] }),
             // Only the kernel writes table pages.
             _ => panic!("I1: corrupt handle table"),
         };
@@ -127,7 +141,7 @@ impl MemoryManager {
 
     fn read_slot(&self, frame: u32, slot: usize) -> Option<Handle> {
         let phys = self.object_phys(frame);
-        Handle::decode(core::array::from_fn(|w| kframe::read(phys, slot_offset(slot, w))))
+        Handle::from_words(core::array::from_fn(|w| kframe::read(phys, slot_offset(slot, w))))
     }
 
     fn write_slot(&mut self, frame: u32, slot: usize, words: [u64; HANDLE_WORDS]) {
@@ -144,8 +158,13 @@ impl MemoryManager {
         let handle = self.read_slot(frame, slot).ok_or(Error::BadHandle)?;
         // Every live handle names a live object, and a live stamp (I1).
         match handle.object {
-            Object::Budget(b) => self.budget_at(b),
-        };
+            Object::Budget(b) => {
+                self.budget_at(b);
+            }
+            Object::Endpoint(e) => {
+                self.endpoint_at(e);
+            }
+        }
         self.budget_at(handle.stamp);
         Ok(handle)
     }
@@ -154,6 +173,7 @@ impl MemoryManager {
     pub fn budget_handle(&self, pid: PID, index: u32) -> Result<BudgetFrame, Error> {
         match self.handle(pid, index)?.object {
             Object::Budget(b) => Ok(b.frame),
+            _ => Err(Error::WrongObject),
         }
     }
 
@@ -170,7 +190,7 @@ impl MemoryManager {
                 Some(frame) => frame,
                 None => {
                     // One page per table page in use, charged when the page is first needed and
-                    // returned when it empties (QUESTIONS.md 111, pending).
+                    // returned when it empties (answer 111).
                     self.charge(budget, 1)?;
                     let frame = self.alloc_object_frame().inspect_err(|_| self.uncharge(budget, 1))?;
                     self.account_mut(pid).expect("account").handles.pages[page] = Some(frame);
@@ -180,12 +200,28 @@ impl MemoryManager {
             let slot = (0..HANDLES_PER_PAGE)
                 .find(|slot| self.read_slot(frame, *slot).is_none())
                 .expect("a table page with a free slot");
-            self.write_slot(frame, slot, handle.encode());
+            self.write_slot(frame, slot, handle.to_words());
             self.account_mut(pid).expect("account").handles.live[page] += 1;
             return Ok((page * HANDLES_PER_PAGE + slot + 1) as u32);
         }
-        // Past MAX_HANDLES (QUESTIONS.md 102, pending).
+        // Past MAX_HANDLES (answer 102).
         Err(Error::TooLarge)
+    }
+
+    /// The table pages `pid` would have to buy to hold `extra` more handles, or `None` if they
+    /// would take it past `MAX_HANDLES` (answer 102). Delivery asks before it charges (R4).
+    pub fn table_growth(&self, pid: PID, extra: usize) -> Option<u64> {
+        let table = self.table(pid)?;
+        let mut free = 0;
+        let mut pages = 0;
+        for page in 0..MAX_HANDLE_PAGES {
+            match table.pages[page] {
+                Some(_) => free += HANDLES_PER_PAGE - usize::from(table.live[page]),
+                None => pages += 1,
+            }
+        }
+        let bought = extra.saturating_sub(free).div_ceil(HANDLES_PER_PAGE);
+        (bought <= pages).then_some(bought as u64)
     }
 
     /// Remove `pid`'s handle `index`, freeing its table page if it was the page's last.

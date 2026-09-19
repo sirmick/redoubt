@@ -1001,6 +1001,41 @@ impl SystemServices {
         Ok(())
     }
 
+    /// The address space of `pid`, for the Redoubt memory steps that edit another process's
+    /// page tables without switching to it (`message.rs`).
+    pub fn mapping_of(&self, pid: PID) -> Option<MemoryMapping> {
+        self.get_process(pid).ok().map(|p| p.mapping)
+    }
+
+    /// Make `pid`'s address space the active one, for the steps that must run in it (choosing a
+    /// buffer's address, writing a record into the receiver's own memory).
+    pub fn activate(&self, pid: PID) -> Result<(), xous_kernel::Error> {
+        self.get_process(pid)?.activate()
+    }
+
+    /// Hand a thread the registers a Redoubt call answers with (`redoubt-sys` encodes them, so
+    /// the legacy `Result` shape does not fit). As `set_thread_result`, it visits the target's
+    /// address space and comes back.
+    pub fn set_redoubt_result(
+        &mut self,
+        pid: PID,
+        tid: TID,
+        regs: &[u64; redoubt_sys::REGS],
+    ) -> Result<(), xous_kernel::Error> {
+        // Every register holds at most 32 bits or one `usize` (redoubt-sys).
+        let words = regs.map(|r| r as usize);
+        let current_pid = self.current_pid();
+        if current_pid == pid {
+            ArchProcess::current().set_thread_registers(tid, &words);
+            return Ok(());
+        }
+        self.get_process(pid)?.activate()?;
+        ArchProcess::current().set_thread_registers(tid, &words);
+        self.get_process(current_pid)
+            .expect("couldn't switch back after setting a Redoubt result")
+            .activate()
+    }
+
     /// Resume the given process, picking up exactly where it left off. If the
     /// process is in the Setup state, set it up and then resume.
     ///
@@ -1646,11 +1681,11 @@ impl SystemServices {
 
         // A thread costs its budget a page (R6).
         #[cfg(baremetal)]
-        crate::mem::MemoryManager::with_mut(|mm| mm.thread_created(pid))
+        crate::mem::MemoryManager::with_mut(|mm| mm.thread_created(pid, new_tid))
             .map_err(|_| xous_kernel::Error::OutOfMemory)?;
         arch_process.setup_thread(new_tid, thread_init).inspect_err(|_| {
             #[cfg(baremetal)]
-            crate::mem::MemoryManager::with_mut(|mm| mm.thread_ended(pid));
+            crate::mem::MemoryManager::with_mut(|mm| mm.thread_ended(pid, new_tid));
         })?;
 
         // klog!("KERNEL({}): Created new thread {}", pid, new_tid);
@@ -1685,11 +1720,15 @@ impl SystemServices {
             state => panic!("Process was in an invalid state: {:?}", state),
         };
 
+        // R4b: whatever this thread was waiting for is withdrawn, and every call it holds
+        // open fails its caller with `Dead`, before the thread's own state goes.
+        crate::message::thread_ending(self, pid, tid);
+
         // Destroy the thread at a hardware level
         let mut arch_process = ArchProcess::current();
         let return_value = match arch_process.destroy_thread(tid) {
             Ok(value) => {
-                crate::mem::MemoryManager::with_mut(|mm| mm.thread_ended(pid));
+                crate::mem::MemoryManager::with_mut(|mm| mm.thread_ended(pid, tid));
                 value
             }
             Err(_) => 0,
@@ -2143,6 +2182,9 @@ impl SystemServices {
         //    Server, it will be reclaimed by the system when it comes back
 
         self.release_servers_of(target_pid)?;
+        // R4b: every call its threads hold open fails its caller with `Dead`, and every message
+        // they were sending is withdrawn, before its memory goes.
+        crate::message::process_ending(self, target_pid);
 
         let process = self.get_process_mut(target_pid)?;
         process.activate()?;
@@ -2214,6 +2256,7 @@ impl SystemServices {
         let current = self.current_pid();
         assert!(target != current, "kill_process on the running process");
         self.release_servers_of(target)?;
+        crate::message::process_ending(self, target);
         // `terminate` needs no address space: it names the target's mapping itself.
         self.get_process_mut(target)?.terminate()?;
         self.get_process(current)?.activate()

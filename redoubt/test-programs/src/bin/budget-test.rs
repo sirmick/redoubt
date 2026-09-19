@@ -1,4 +1,4 @@
-//! Budgets and handle tables as KERNEL-SPEC.md states them (WP-K1), as far as a system-class
+//! Budgets and handle tables as KERNEL-SPEC.md states them (WP-K1, with answer 103's queue), as far as a system-class
 //! caller holding the boot budgets can see them: carving and charging (R6, R7), labels added
 //! and sorted (part of I6), depth, destruction and its sweep of this process's own table (R10,
 //! I2, I10), the handle table's cost (128 handles a page), usage within limits after every step
@@ -79,8 +79,8 @@ fn usage(pl: u64, pu: u64, prl: u32, pru: u32, wl: u32, wc: u32) -> Usage {
     }
 }
 
-fn labelled(pages: u64, labels: &[u64], first: bool) -> rd::BudgetSpec {
-    rd::BudgetSpec { first, labels: Labels::from_slice(labels).unwrap(), ..rd::spec(pages, 0, 0) }
+fn labelled(pages: u64, labels: &[u64]) -> rd::BudgetSpec {
+    rd::BudgetSpec { labels: Labels::from_slice(labels).unwrap(), ..rd::spec(pages, 0, 0) }
 }
 
 /// Fault in 16 KiB of stack below this frame, so later calls grow no stack.
@@ -151,29 +151,23 @@ pub extern "C" fn _start() -> ! {
     let again = expect!(t, rd::create(a, &rd::spec(1, 0, 0)), Ok(6)).unwrap_or(6);
     expect!(t, rd::destroy(again), Ok(()));
 
-    // --- Classes, `first` and labels (part of I6 and I8; the rest needs a user-class or a
-    // non-`first` caller, WP-K4) ------------------------------------------------------------------
-    // A child's class is its parent's (answer 73); `first` needs a `first` caller (this one lives
-    // in `system`, which is) and a system-class parent, so not under `users` (QUESTIONS.md 103).
-    expect!(t, rd::create(rd::USERS, &labelled(1, &[], true)), Err(Error::ClassDenied));
-    let quick = expect!(t, rd::create(a, &labelled(1, &[], true)), Ok(6)).unwrap_or(6);
-    expect!(t, rd::create(quick, &labelled(0, &[], true)), Ok(7));
+    // --- Classes and labels (part of I6 and I8; the rest needs a user-class caller, WP-K4) ----
+    // A child's class is its parent's (answer 73), and nothing in a spec asks for a place in the
+    // queue: there is one stride queue, ordered by weight alone (answer 103).
+    let quick = expect!(t, rd::create(a, &labelled(1, &[])), Ok(6)).unwrap_or(6);
+    expect!(t, rd::create(quick, &labelled(0, &[])), Ok(7));
     expect!(t, rd::destroy(quick), Ok(()));
-    // `ClassDenied` for `first` comes before the label check: a labelled user-class parent, a
-    // child asking for `first` and dropping the label.
-    let user_lab = expect!(t, rd::create(rd::USERS, &labelled(1, &[9], false)), Ok(6)).unwrap_or(6);
-    expect!(t, rd::create(user_lab, &labelled(0, &[], true)), Err(Error::ClassDenied));
-    expect!(t, rd::create(user_lab, &labelled(0, &[], false)), Err(Error::LabelDenied));
+    // A labelled user-class parent: a child dropping the label is refused whoever asks.
+    let user_lab = expect!(t, rd::create(rd::USERS, &labelled(1, &[9])), Ok(6)).unwrap_or(6);
+    expect!(t, rd::create(user_lab, &labelled(0, &[])), Err(Error::LabelDenied));
     expect!(t, rd::destroy(user_lab), Ok(()));
     // A system-class caller may add labels; they are sorted and deduplicated.
-    let lab = expect!(t, rd::create(a, &labelled(20, &[5, 3, 5], false)), Ok(6)).unwrap_or(6);
+    let lab = expect!(t, rd::create(a, &labelled(20, &[5, 3, 5])), Ok(6)).unwrap_or(6);
     t.hold(lab);
-    expect!(t, rd::create(lab, &labelled(1, &[3], false)), Err(Error::LabelDenied));
-    expect!(t, rd::create(lab, &labelled(1, &[], false)), Err(Error::LabelDenied));
-    // A labelled system-class parent takes a `first` child; the label check still applies.
-    expect!(t, rd::create(lab, &labelled(1, &[3], true)), Err(Error::LabelDenied));
-    let same = expect!(t, rd::create(lab, &labelled(1, &[5, 3, 5, 3, 5, 3, 5, 3], false)), Ok(7)).unwrap_or(7);
-    let more = expect!(t, rd::create(lab, &labelled(1, &[7, 5, 3], true)), Ok(8)).unwrap_or(8);
+    expect!(t, rd::create(lab, &labelled(1, &[3])), Err(Error::LabelDenied));
+    expect!(t, rd::create(lab, &labelled(1, &[])), Err(Error::LabelDenied));
+    let same = expect!(t, rd::create(lab, &labelled(1, &[5, 3, 5, 3, 5, 3, 5, 3])), Ok(7)).unwrap_or(7);
+    let more = expect!(t, rd::create(lab, &labelled(1, &[7, 5, 3])), Ok(8)).unwrap_or(8);
     expect!(t, rd::destroy(more), Ok(()));
     expect!(t, rd::destroy(same), Ok(()));
 
@@ -188,7 +182,7 @@ pub extern "C" fn _start() -> ! {
             expect!(t, rd::create(chain[depth - 1], &rd::spec(pages, 0, 0)), Ok(6 + depth as u32)).unwrap_or(0);
     }
     expect!(t, rd::create(chain[5], &rd::spec(1, 0, 0)), Err(Error::TooLarge));
-    expect!(t, rd::create(chain[5], &labelled(1, &[], true)), Err(Error::TooLarge));
+    expect!(t, rd::create(chain[5], &labelled(1, &[])), Err(Error::TooLarge));
     t.i5("depth");
 
     // --- R10, I2, I10: destroy a subtree ----------------------------------------------------

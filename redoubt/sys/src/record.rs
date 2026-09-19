@@ -33,8 +33,8 @@ impl Slot for Handle {
 }
 
 /// A handle as it arrives in a message or a reply: 0 is `None`, a handle revoked while its
-/// message was in flight (R10), or one the receiver could not take (QUESTIONS.md 116, pending).
-/// It keeps its slot, so the handles after it keep their positions (WIRE.md numbers them).
+/// message was in flight (R10), or one a reply's caller could not take (answer 116). It keeps its
+/// slot, so the handles after it keep their positions (WIRE.md numbers them).
 impl Slot for Option<Handle> {
     const FILL: Self = None;
 
@@ -139,8 +139,8 @@ pub type Body = BodyOf<Handle>;
 
 /// A body as received: inside a [`Message`], and the reply `call` writes back over its request.
 /// A handle slot within the count may be 0 (`None`): the handle was revoked while the message was
-/// in flight (R10), or, in a reply, did not fit the caller's table (QUESTIONS.md 116, pending: the
-/// reply is still delivered, without it). Slots past the count are still 0.
+/// in flight (R10), or, in a reply, did not fit the caller's table (answer 116: the reply is still
+/// delivered, without it, and the `call` returns `OutOfMemory`). Slots past the count are still 0.
 pub type ReceivedBody = BodyOf<Option<Handle>>;
 
 impl<H: Slot> Default for BodyOf<H> {
@@ -212,8 +212,7 @@ pub enum Received {
     Exit(ExitNotice),
     /// The open call with this id, held by the receiving thread, was abandoned (R3): its caller
     /// is gone. The thread replies to it to free it; the reply reaches nobody. Returned once, by
-    /// the holding thread's next `receive` on the endpoint the call arrived on (QUESTIONS.md 104,
-    /// pending; that is the kernel's choice, and the record does not depend on it).
+    /// the holding thread's next `receive` on the endpoint the call arrived on (answer 104).
     Abandoned(NonZeroU64),
 }
 
@@ -406,12 +405,14 @@ impl Received {
     }
 }
 
-/// Slots in a [`BudgetSpec`]: pages, processes, weight, first, labels (count and `MAX_LABELS`),
+/// Slots in a [`BudgetSpec`]: pages, processes, weight, labels (count and `MAX_LABELS`),
 /// account, deadline.
-pub const BUDGET_SPEC_SLOTS: usize = 4 + 1 + MAX_LABELS + 2;
+pub const BUDGET_SPEC_SLOTS: usize = 3 + 1 + MAX_LABELS + 2;
 
 /// The new budget's fields for `budget_create` (KERNEL-SPEC.md, Budget), in slot order. There is
-/// no class: a child's class is its parent's (answer 73).
+/// no class: a child's class is its parent's (answer 73). There is no scheduling flag either:
+/// every budget is in the one stride queue, and what runs first is a matter of weight
+/// (answer 103).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct BudgetSpec {
     /// Page limit.
@@ -419,26 +420,12 @@ pub struct BudgetSpec {
     /// Process limit.
     pub processes: u32,
     pub weight: u32,
-    /// Runs before every budget without the flag (R12). Needs the caller's own budget to be
-    /// `first` and the parent to be class `system` (`ClassDenied`).
-    pub first: bool,
     pub labels: Labels,
     /// Honoured only when the parent's account is 0 (R8).
     pub account: u64,
     /// Time (µs since boot) at which the kernel destroys the budget; [`FOREVER`](crate::FOREVER)
     /// for none.
     pub deadline: u64,
-}
-
-// QUESTIONS.md 103 (pending): the `first` flag is the design editor's mechanism for answer 84.
-// Its slot is 0 or 1, anything else `InvalidArgument` (KERNEL-SPEC.md, `budget_create`'s row);
-// a different answer changes this function and `BudgetSpec::first`.
-fn first_flag(raw: u64) -> Result<bool, Error> {
-    match raw {
-        0 => Ok(false),
-        1 => Ok(true),
-        _ => Err(Error::InvalidArgument),
-    }
 }
 
 impl BudgetSpec {
@@ -448,7 +435,6 @@ impl BudgetSpec {
         w.u64(self.pages);
         w.u32(self.processes);
         w.u32(self.weight);
-        w.u64(self.first.into());
         self.labels.write(w);
         w.u64(self.account);
         w.u64(self.deadline);
@@ -461,10 +447,8 @@ impl BudgetSpec {
         let pages = r.u64()?;
         let processes = r.u32()?;
         let weight = r.u32()?;
-        let first = first_flag(r.raw())?;
         let labels = Labels::read(&mut r)?;
-        let spec =
-            BudgetSpec { pages, processes, weight, first, labels, account: r.u64()?, deadline: r.u64()? };
+        let spec = BudgetSpec { pages, processes, weight, labels, account: r.u64()?, deadline: r.u64()? };
         r.finish()?;
         Ok(spec)
     }

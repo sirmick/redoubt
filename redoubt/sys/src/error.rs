@@ -75,16 +75,16 @@ const DECODING: Errors = set(&[InvalidArgument]);
 /// for a new table page (KERNEL-SPEC.md, above the error table).
 const ADDS_HANDLE: Errors = set(&[OutOfMemory]).with(HANDLE_LIMIT);
 
-// QUESTIONS.md 102 (pending): a process holds at most `MAX_HANDLES` handles, and a call that
-// would add one more to its caller's table gets `TooLarge`. Under a different answer this set is
-// empty.
+/// A process holds at most `MAX_HANDLES` handles (answer 102), and a call that would add one
+/// more to its caller's table gets `TooLarge`, which the caller can tell from its budget running
+/// out of pages.
 const HANDLE_LIMIT: Errors = set(&[TooLarge]);
 
 impl Number {
     /// Whether this call can return `error`: the errors of its row in KERNEL-SPEC.md's error
     /// table (in what order they are checked is the spec's), plus decoding's general
-    /// `InvalidArgument`, and `OutOfMemory` for a call that adds a handle to its caller's table
-    /// (but not `call` for its reply's handles: QUESTIONS.md 116). The kernel's interim refusals
+    /// `InvalidArgument`, and `OutOfMemory` for a call that adds a handle to its caller's table.
+    /// The kernel's interim refusals
     /// (a call not built yet, or made from a legacy interrupt callback) are outside it; the
     /// kernel checks every error it returns against this in debug builds.
     pub fn can_return(self, error: Error) -> bool { self.errors().0 & 1 << error as u32 != 0 }
@@ -109,10 +109,10 @@ impl Number {
             Number::Mint => {
                 set(&[InvalidArgument, BadHandle, Dead, WrongObject, NotPermitted]).with(ADDS_HANDLE)
             }
-            // QUESTIONS.md 116 (pending): a reply is delivered even when some of its handles do
-            // not fit the caller's table (budget or `MAX_HANDLES`); those slots arrive as 0, so
-            // `call` adds no error for them. Under 107's reading instead, the call is the caller's
-            // `OutOfMemory` (and `TooLarge` past `MAX_HANDLES`): add `.with(ADDS_HANDLE)` below.
+            // A reply is never refused (R4): handles that do not fit the caller, by its pages
+            // or by `MAX_HANDLES`, are dropped (0 in their slots) and the reply arrives without
+            // them, and the `call` returns `OutOfMemory` (answers 107 and 116) -- not `TooLarge`,
+            // which here means only a lend over `MAX_LEND_PAGES`.
             Number::Call => set(&[
                 BadHandle,
                 TooLarge,
@@ -123,6 +123,7 @@ impl Number {
                 Refused,
                 Timeout,
                 Dead,
+                OutOfMemory,
             ]),
             Number::Send => set(&[
                 BadHandle,
@@ -135,8 +136,8 @@ impl Number {
                 Timeout,
                 Dead,
             ]),
-            // QUESTIONS.md 105 (pending): at `MAX_OPEN_CALLS` calls stay queued, so `receive` is
-            // never `Busy`; nor `OutOfMemory`, since a message the receiver cannot pay for is its
+            // At `MAX_OPEN_CALLS` calls stay queued, so `receive` is never `Busy` (answer
+            // 105); nor `OutOfMemory`, since a message the receiver cannot pay for is its
             // sender's `Refused` (R4).
             Number::Receive => set(&[BadHandle, WrongObject, NotPermitted, Timeout, Dead]),
             Number::Reply => set(&[InvalidArgument, TooLarge, BadHandle]),
