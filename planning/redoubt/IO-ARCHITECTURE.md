@@ -114,6 +114,11 @@ and a volume's labels are enforced in `fsd`, which is the one place they are wri
 other per-client state, so a flood of reads makes it grow by nothing; what bounds that flood is the
 kernel's fair waiting per (account, label set) (R2) and the bound on one request below.
 
+**What it is handed.** `blkd`'s startup block names the endpoint it receives on, `blkd`, and two
+device handles: `disk`, the MMIO region (which must carry the DMA flag), and `disk-irq`, its
+interrupt. Those are the manifest's device names; `blkd` parses no device tree and hardcodes no
+address, and without both handles it does not start. It takes no arguments.
+
 **Bounds.** At most 128 partitions; at most 64 sectors (32 KiB) of data in one `read` or `write`,
 so one request's work is a number stated here rather than whatever fits the caller's lend; at most
 8 live grants per (account, label set), across at most 8 of those at once.
@@ -158,6 +163,21 @@ which.
   the request came through, and returns a random id, exactly as `keyd`'s does (WIRE.md, granting
   and releasing). A window wider than the caller's, or one that leaves it, is `not_permitted`;
   nothing granted is ever wider than the badge it came through.
+
+**Stated residuals.**
+- A DMA handle is kernel-level trust, so a compromised `blkd` is a compromised kernel on a
+  platform with no IOMMU. What `blkd` guarantees is the other half: it never *asks* the device for
+  anything outside the pages `dma_alloc` gave it, and nothing the device puts in those pages can
+  corrupt its own memory or stop it answering.
+- **A restart leaves the device pointed at freed frames.** `blkd`'s DMA pages return to the free
+  pool when it dies, and nothing stops a device already programmed with their physical addresses
+  from writing to them; the restarted `blkd` resets the device at bring-up, but only after those
+  frames may already have been handed to somebody else. Closing it needs the kernel to reset a
+  device whose DMA pages are freed, or the hardware to confine it; until then `blkd`'s restart is
+  a hole the same size as trusting `blkd`, which is what tenet 7 already says of it.
+- A device can return wrong bytes for a sector it was asked for, and `blkd` cannot tell: the
+  virtio-blk protocol has no checksum, and littlefs checksums only metadata (NAMESPACES.md). That
+  is the same residual the filesystem already states, and what disk encryption (Later) would close.
 
 ## Networking
 `netd (virtio-net) -> ipd -> clients (9P /net)`

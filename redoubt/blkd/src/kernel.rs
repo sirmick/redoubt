@@ -20,18 +20,22 @@ use redoubt_rt::handle::{Irq, Mmio, time_now};
 
 use crate::queue::DMA_LEN;
 use crate::transport::{Fault, Transport};
-use crate::virtio::reg::SLOT_LEN;
+use crate::virtio::reg;
+
+/// The bytes of a virtio-mmio transport `blkd` reads: through the two configuration words that
+/// hold a block device's capacity (§4.2.2, §5.2.4).
+pub const REGS_NEEDED: usize = reg::CONFIG + 8;
 
 /// One virtio-mmio device as the kernel hands it over: its registers, its DMA region and its
 /// interrupt.
 pub struct Device {
     /// Where `map_device` put the registers.
     regs: usize,
-    /// How many bytes of them may be touched. **The kernel does not report the length of an MMIO
-    /// device** (`map_device` returns an address alone), so this is the one virtio-mmio slot the
-    /// platform defines, and every access is checked against it. A device object smaller than a
-    /// slot would fault rather than read another device's registers, which is the safe direction
-    /// but is not something `blkd` can check; see the work package's report.
+    /// How many bytes of them may be touched: the length `map_device` reported (QUESTIONS.md
+    /// 146), not a number this driver assumed. Every access is checked against it, and
+    /// [`Device::open`] refuses a region too short for the registers virtio-mmio puts a block
+    /// device's configuration in, so `blkd` never reads past the device object it was given and
+    /// never has to guess how big one is.
     regs_len: usize,
     /// Where `dma_alloc` put the region, in this process's address space.
     dma: usize,
@@ -49,10 +53,15 @@ impl Device {
     /// `dma_alloc` is allowed only with an MMIO handle carrying the DMA flag, and returns
     /// physically contiguous, zeroed pages (KERNEL-SPEC.md), which is what the queue's layout
     /// assumes: one run of [`crate::queue::DMA_PAGES`] pages, and the rings starting at zero.
+    /// A region shorter than [`REGS_NEEDED`] is refused here rather than faulted on later: it
+    /// is not a virtio-mmio transport, whatever else it is.
     pub fn open(mmio: &Mmio, irq: Irq) -> Result<Device, Error> {
-        let regs = mmio.map()?;
+        let (regs, regs_len) = mmio.map()?;
+        if regs_len < REGS_NEEDED {
+            return Err(Error::WrongObject);
+        }
         let (dma, dma_phys) = mmio.dma_alloc(crate::queue::DMA_PAGES)?;
-        Ok(Device { regs, regs_len: SLOT_LEN, dma, dma_phys, dma_len: DMA_LEN, irq })
+        Ok(Device { regs, regs_len, dma, dma_phys, dma_len: DMA_LEN, irq })
     }
 
     /// The address of `off` in the register window, if a 32-bit access there is inside it and

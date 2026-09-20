@@ -5,12 +5,17 @@
 //! Everything it can do is in `redoubt-blkd`'s library, so host tests drive the same code against
 //! a hostile fake device and the runtime's fake kernel (`tests/`).
 //!
-//! **Pending on WP-K3.** Device objects, `dma_alloc` and IRQ receive are in review, not merged.
-//! The seam this program needs is `redoubt_blkd::kernel::Device`, which is written and compiles;
-//! what is missing is the startup block naming an `mmio` and an `irq` handle, which is the
-//! designed device authority (`init` holds every device object and places each driver's handles
-//! in its startup block: IO-ARCHITECTURE.md, DEVICE-GRANTS.md). Until then [`serve`] refuses to
-//! start with [`NO_DEVICE`], which is the honest thing for a driver that has no device.
+//! **Its device is handed in, not discovered** (IO-ARCHITECTURE.md, Driver model): the startup
+//! block names two handles, [`DISK`] (the MMIO region, with the DMA flag) and [`DISK_IRQ`] (its
+//! interrupt), which `init` places there from the boot manifest's `devices` list. `blkd` parses
+//! no device tree and hardcodes no address; without both handles it does not start, which is the
+//! honest thing for a driver that has no device.
+//!
+//! **Pending on WP-R3.** WP-K3's device objects, `dma_alloc` and IRQ receive are merged and wired
+//! here. What is still missing is the `init` that reads the boot manifest, creates `blkd`'s
+//! endpoint and writes this startup block (and WP-K4's `process_start`, which puts the handles in
+//! the table), so nothing starts this program yet; until then its behaviour is covered by host
+//! tests against a hostile fake device (`blkd-host-tests`).
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 
@@ -33,8 +38,15 @@ pub const RECEIVE_FAILED: u32 = 3;
 /// The limits in this build do not fit the budget or the open-call headroom: a build-time
 /// mistake, caught at the only moment it can be.
 pub const BAD_LIMITS: u32 = 4;
-/// The startup block named no `mmio` handle, or no `irq` handle, so there is no disk to serve.
+/// The startup block named no [`DISK`] handle, or no [`DISK_IRQ`] handle, so there is no disk to
+/// serve.
 pub const NO_DEVICE: u32 = 5;
+
+/// The startup-block name of the MMIO device object `blkd` drives: the boot manifest's `devices`
+/// entry for the disk, which must carry the DMA flag (IO-ARCHITECTURE.md).
+pub const DISK: &str = "disk";
+/// The startup-block name of that device's interrupt.
+pub const DISK_IRQ: &str = "disk-irq";
 /// The device would not start, or is not a virtio-blk device (`redoubt_blkd::DeviceError`).
 pub const NO_DISK: u32 = 6;
 /// The disk has no usable partition table (`redoubt_blkd::TableError`). Fail closed and loudly:
@@ -49,7 +61,7 @@ pub const NO_RANDOM: u32 = 8;
 /// Serves until the endpoint is destroyed.
 pub fn serve(startup: &Startup) -> u32 {
     let Some(handle) = startup.handle("blkd") else { return NO_ENDPOINT };
-    let (Some(mmio), Some(irq)) = (startup.handle("mmio"), startup.handle("irq")) else {
+    let (Some(mmio), Some(irq)) = (startup.handle(DISK), startup.handle(DISK_IRQ)) else {
         return NO_DEVICE;
     };
     let mmio = Mmio::from_handle(mmio);
