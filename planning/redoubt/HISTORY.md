@@ -577,4 +577,13 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   grants of a dead holder were stuck, and the timing test could not see a 25% leak (rewritten
   fixed-versus-random with a 5% control that must flag). The grant machinery now lives once in
   `redoubt-rt` (`Minted<T>`), shared with the 9P skeleton.
+- **WP-V1 bundle signing domain** (`05955bf86`, answer 120): the loader verifies the boot bundle over
+  `"redoubt.bundle.v1\0" || u64_le(len) || tar`, with `len` measured from the initrd it was handed,
+  hashing the preamble and then the archive in place; the bench signs the same preimage. Both get it
+  from one crate, `redoubt/signing` (no dependencies, no `unsafe`), so the halves cannot drift, and a
+  host test pins the preamble to the bytes VERIFIED-BOOT.md states. A new `host-tests` bench kind
+  runs those tests in the suite, because the one drift a shared crate cannot catch is a typo in the
+  domain itself: changing `v1` to `v2` now fails the bench. The review showed two of the three first
+  cases could never fail (Ed25519 refuses every other message anyway), so only the bare-archive case
+  boots; the domain and length refusals are host assertions.
 

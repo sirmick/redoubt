@@ -67,6 +67,7 @@ merged; the waves show what can run together.
 | K0b | merged | wp-k0b | e30d43304 |
 | K2 | building | wp-k2 | kernel track |
 | S1 | merged | wp-s1 | 14bcc6e9d |
+| V1 | merged | wp-v1 | 05955bf86 |
 | all others | waiting | | see BUILD-PLAN.md "Needs" |
 
 States: `waiting` (needs not merged), `ready`, `building`, `review`, `merged`.

@@ -20,8 +20,10 @@ authenticates the boot bundle before executing any of it.** A tampered bundle is
   never from the signed bytes. **The loader builds that preimage and verifies over it**, before
   reading the tar, and on failure panics, which powers the machine off via SBI. No unsigned
   fallback, and no acceptance of a signature over the archive alone. **The signing tool builds the
-  same preimage** (the bench's bundle builder today, any production signer later); the two are the
-  only places the preimage is constructed.
+  same preimage** (the bench's bundle builder today, any production signer later). Both sides get
+  it from one crate, `redoubt/signing` (`no_std`, no dependencies, `forbid(unsafe_code)`, TCB and
+  counted in the `unsafe` budget), so they cannot drift apart; a host test pins its bytes to the
+  ones stated here, and the bench runs that test, so they cannot drift from this note either.
 - **Domains are prefix-free**, so one key's signature can never be read as another protocol's.
   Every Redoubt signing domain is a NUL-terminated ASCII name followed by the `u64_le` length of
   what it covers: `"redoubt.audit.v1\0" || u64_le(len) || record` in `keyd` (CONTAINMENT.md),
