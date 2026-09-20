@@ -11,6 +11,7 @@ members = [
   "redoubt/keyd",
   "redoubt/paging",
   "redoubt/rt",
+  "redoubt/signing",
   "redoubt/sys",
   "redoubt/littlefs",
   "redoubt/test-programs",

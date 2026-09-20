@@ -115,6 +115,10 @@ pub struct Boot {
     /// Corrupt the bundle after signing, to test that the loader rejects it.
     #[serde(default)]
     pub tamper_bundle: bool,
+    /// What the bundle's signature covers. The default signs the real preimage; the other
+    /// values sign something the loader must refuse (see `Signing`).
+    #[serde(default)]
+    pub sign_bundle: Signing,
     /// Firmware to boot under: "opensbi" (default) or "rustsbi".
     pub firmware: Option<String>,
     /// Data entries added to the bundle after the programs: a trace, a manifest, a hostile image.
@@ -248,6 +252,26 @@ pub enum Program {
     /// A `test-programs` binary, corrupted before injection, for testing how the loader
     /// and kernel cope with hostile images.
     Corrupted { corrupt: String, with: Corruption },
+}
+
+/// What a case's bundle signature is made over. `Domain` is what ships (VERIFIED-BOOT.md); the
+/// rest are forgeries the loader must refuse, each with the right key and a well-formed archive,
+/// differing only in the preimage. They exist so that the domain separation is tested and not
+/// merely written down.
+#[derive(Debug, Default, Deserialize, PartialEq, Eq, Clone, Copy)]
+#[serde(rename_all = "kebab-case")]
+pub enum Signing {
+    /// `"redoubt.bundle.v1\0" || u64_le(len) || tar`: what a real signer builds.
+    #[default]
+    Domain,
+    /// The bare archive, with no domain and no length: what the loader used to accept.
+    BareArchive,
+    /// Another Redoubt domain's preimage (`"redoubt.pkg.v1\0" || u64_le(len) || tar`): a
+    /// signature made by a different protocol holding the same key must not boot a machine.
+    ForeignDomain,
+    /// The bundle domain with a length that is not the archive's. The loader measures the
+    /// archive itself, so only the signer's own count can be wrong.
+    WrongLength,
 }
 
 #[derive(Debug, Deserialize)]
