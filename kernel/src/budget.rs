@@ -421,12 +421,13 @@ impl MemoryManager {
     /// A loader bundle whose processes do not fit in `system` cannot run under the rules, so the
     /// kernel refuses to boot (fail closed).
     pub fn boot_budgets(&mut self) {
-        // Held back from `root`, so that every charged page has a real frame behind it (R7: an
-        // allocation fails only on the caller's own budget, never because the kernel ran out).
-        // A process's own page pays for one frame, but its saved contexts (`ProcessImpl`) take
-        // `PROCESS_IMPL_PAGES`; the thread pages that once covered the difference now each hold
-        // a thread's IPC page (`Account::ipc`). The gap is fixed per process, so reserving it
-        // for every PID at boot covers every process the kernel can ever hold.
+        // INTERIM (QUESTIONS.md 127; until WP-K4 creates processes from userspace and charges
+        // it): held back from `root`, so that every charged page has a real frame behind it (R7:
+        // an allocation fails only on the caller's own budget, never because the kernel ran
+        // out). A process's own page pays for one frame, but its saved contexts (`ProcessImpl`)
+        // take `PROCESS_IMPL_PAGES`; the thread pages that once covered the difference now each
+        // hold a thread's IPC page (`Account::ipc`). The gap is fixed per process, so reserving
+        // it for every PID at boot covers every process the kernel can ever hold.
         let per_process = crate::arch::process::PROCESS_IMPL_PAGES as u64 - PROCESS_PAGES;
         let reserved = per_process * MAX_PROCESS_COUNT as u64;
         let pages = self.ram_frames() - self.ram_frames_owned_by(crate::services::KERNEL_PID) as u64
@@ -484,12 +485,8 @@ impl MemoryManager {
     /// program's table is left exactly as `init`'s will be: `root`, `system` and `users`.
     fn boot_endpoint(&mut self, system: BudgetFrame, bundle: &[Option<PID>]) {
         let Some(Some(server)) = bundle.get(1).copied() else { return };
-        let Ok(frame) = self.alloc_object_frame() else { return };
-        self.charge(system, crate::endpoint::ENDPOINT_PAGES).expect("boot: system cannot pay for the endpoint");
-        let id = self.next_object_id();
-        let owner = BudgetRef { frame: system, id: self.budget(system).id };
-        let endpoint = crate::handle::EndpointRef { frame, id };
-        self.store_endpoint(frame, &crate::endpoint::Endpoint { id, owner, cursor: None });
+        let endpoint = self.new_endpoint(system).expect("boot: system cannot pay for the endpoint");
+        let owner = self.endpoint(endpoint.frame).owner;
         for pid in bundle.iter().skip(1).flatten() {
             // The receive right for the server; a badge for each client, its own PID, which
             // `mint` never produces as 0 (I3).

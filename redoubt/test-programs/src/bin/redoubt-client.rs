@@ -6,10 +6,12 @@
 //! (R3: the lend is unmapped here until the reply, and the server's change is there after it); a
 //! `send` with a transfer, whose pages become the receiver's for good, and one the receiver did
 //! not ask for (`Refused`, R4); the badge, account and labels the kernel attaches, which no
-//! client chooses; `mint` refused on a badged handle and on badge 0, and a receive right that
-//! cannot be stolen (I3, I4); `WAIT_CAP` queued messages per group and `Busy` beyond (R2); every
-//! abandoned call reported once and freed by its reply (R3, I15); `MAX_OPEN_CALLS` with sends
-//! still delivered (R4a); a reply whose handles do not fit (`OutOfMemory`, answers 107 and 116).
+//! client chooses; `mint` refused on a badged handle and on a badge of 0, and a receive right
+//! that cannot be stolen (I3, I4); `WAIT_CAP` queued messages per group and `Busy` beyond (R2);
+//! every abandoned call reported once and freed by its reply (R3, I15); a message whose handle
+//! the receiver's full table cannot take, refused to its sender, and a reply whose handles do
+//! not fit, delivered without them with `OutOfMemory` (answers 107 and 116); `MAX_OPEN_CALLS`
+//! with sends still delivered (R4a).
 //!
 //! The checks this program prints are its own; the lines that only the kernel or the server can
 //! produce are in `redoubt/tests/redoubt-ipc.toml` beside them.
@@ -120,7 +122,9 @@ pub extern "C" fn _start() -> ! {
     // --- Receive rights and minting (I3, I4) -------------------------------------------------
     expect!(t, rd::receive(Some(E), 0, 0).err(), Some(Error::NotPermitted));
     expect!(t, rd::mint_from_handle(E, 7, None).err(), Some(Error::NotPermitted));
-    expect!(t, rd::mint(rd::MintSource::Handle(rd::h(E)), 0, None).err(), Some(Error::InvalidArgument));
+    // A badge of 0 does not even decode, offered in raw registers because the typed call cannot
+    // carry one: the receive right is never minted (I3).
+    expect!(t, rd::mint_raw(2, E as usize, 0, 0, 0), Some(Error::InvalidArgument));
     expect!(t, rd::mint_from_message(1, 7, None).err(), Some(Error::InvalidArgument));
     // A handle the server minted arrives in a reply, badged as the server chose (R9).
     let reply = rd::call_waiting(E, &rd::body([op::MINT_BACK, 77, 0, 0]), None, FOREVER);
@@ -188,6 +192,17 @@ pub extern "C" fn _start() -> ! {
     // The reply still arrives; its handles are dropped and the `call` is `OutOfMemory`.
     let reply = rd::call_waiting(E, &rd::body([op::REPLY_HANDLES, 2, 0, 0]), None, FOREVER);
     expect!(t, reply.err(), Some(Error::OutOfMemory));
+
+    // --- Answer 116: handles the receiver cannot take refuse the message (R4) -----------------
+    // The server fills its own table to `MAX_HANDLES`; a message carrying a handle is then more
+    // than it can pay for, so its *sender* is refused, exactly as for any other cost.
+    let filled = ask(&mut t, op::FILL_TABLE, 0)[1];
+    t.check(filled > 0, format_args!("the server filled its table: {}", filled));
+    let with_handle = rd::send(E, &rd::body_with([0, 12, 0, 0], &[E]), None, FOREVER);
+    expect!(t, with_handle.err(), Some(Error::Refused));
+    // One without a handle costs the same table nothing, and is delivered.
+    expect!(t, rd::send(E, &rd::body([0, 13, 0, 0]), None, FOREVER), Ok(()));
+    expect!(t, ask(&mut t, op::FILL_TABLE, 1)[1], 0);
 
     // --- R4a: at `MAX_OPEN_CALLS` no call is taken, while a send still is ---------------------
     for _ in 0..12 {

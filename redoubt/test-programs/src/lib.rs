@@ -151,8 +151,12 @@ pub mod redoubt_ipc {
         pub const SELF_FILL: usize = 9;
         /// Report the abandoned notices, parked calls and sends the server has seen.
         pub const COUNTS: usize = 10;
+        /// Word 1 = 0: fill the server's own handle table to `MAX_HANDLES`, so that a
+        /// message's handles have nowhere to go and R4 refuses it (answer 116). Word 1 = 1:
+        /// empty it again, so the steps that follow can mint.
+        pub const FILL_TABLE: usize = 11;
         /// The last call of the script.
-        pub const DONE: usize = 11;
+        pub const DONE: usize = 12;
     }
 }
 

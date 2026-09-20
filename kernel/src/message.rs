@@ -10,8 +10,11 @@
 //! for, the message it is sending and the calls it holds open in a page of its own
 //! ([`crate::budget::Account::ipc`]) — the page the cost table already charges for a thread. Two
 //! things follow, and they are the reason for this shape:
-//! - `call` and `send` never allocate, so no argument can make them fail for want of kernel
-//!   memory, which the spec's error rows require (neither can return `OutOfMemory`);
+//! - `call` and `send` allocate no kernel object, so neither can fail for want of one, which
+//!   their error rows require (neither returns `OutOfMemory`; a `call` returns it only for a
+//!   reply's handles, which is the caller's own table). A lend of pages the sender never
+//!   touched is still backed as it is checked, charged to the sender, and that is `unmap`'s
+//!   `OutOfMemory` rather than this path's (question 140);
 //! - nothing a sender does makes the kernel allocate on a receiver's behalf.
 //!
 //! A **taken** call moves out of the sender's page into an open-call page of its own, charged to
@@ -23,8 +26,12 @@
 //! group. The walk is bounded by `MAX_PROCESS_COUNT * MAX_THREAD`, a compile-time constant no
 //! process can influence (TENETS.md: clarity beats speed).
 //!
+//! # Locks
+//! Every entry point takes the scheduler (`ss`) and the memory manager (`mm`) together, borrowed
+//! once by the dispatcher (`redoubt.rs`) in that order; nothing here borrows either again.
+//!
 //! # Timeouts
-//! A blocking call records its deadline, and [`expire`] returns every thread whose deadline has
+//! A blocking call records its deadline, and [`expire`] answers every thread whose deadline has
 //! passed. WP-K5 owns the kernel timer; until it arms one, `redoubt.rs` expires deadlines at
 //! every Redoubt system call, so a timeout lands as soon as anything else enters the kernel.
 
@@ -428,13 +435,37 @@ fn is_running(ss: &SystemServices, pid: PID, tid: TID) -> bool {
 
 /// Hand a thread its result. One that was blocked goes back on the ready list; the thread making
 /// the call was never off it.
-fn wake(ss: &mut SystemServices, pid: PID, tid: TID, result: Result<Return, Error>) {
-    MemoryManager::with(|mm| set_tword(mm, pid, tid, W_WAIT, Wait::None as u64));
+fn wake(ss: &mut SystemServices, mm: &MemoryManager, pid: PID, tid: TID, result: Result<Return, Error>) {
+    set_tword(mm, pid, tid, W_WAIT, Wait::None as u64);
     if !is_running(ss, pid, tid) {
         // A waiting thread belongs to a live process, so this cannot fail.
         ss.ready_thread(pid, tid).expect("a waiting thread belongs to a live process");
     }
     ss.set_redoubt_result(pid, tid, &encode_result(&result)).expect("a waiting thread exists");
+}
+
+/// Write `slots` into `(pid, tid)`'s record, in its own address space, and wake it with
+/// `result`. A record that is no longer the thread's writable memory is `InvalidArgument`: the
+/// record is part of decoding, whose error every call's row carries.
+/// Write a blocked thread's record in its own memory and wake it with `result`, or with the
+/// error the record earned. By the time this runs the message is consumed -- taken from the
+/// queue, its handles installed, its buffer mapped -- so a record that has gone unwritable
+/// since is the receiver's own loss, not the sender's; delivery re-checks it beforehand
+/// (`check_receive_record`) so that this is a narrow race, not the usual way.
+fn answer_record<const N: usize>(
+    ss: &mut SystemServices,
+    mm: &MemoryManager,
+    pid: PID,
+    tid: TID,
+    slots: &[u64; N],
+    result: Result<Return, Error>,
+) {
+    let rec = slot(mm, pid, tid).rec;
+    let here = crate::arch::process::current_pid();
+    let written =
+        ss.activate(pid).map_err(|_| Error::Dead).and_then(|()| crate::redoubt::write_record(rec, slots));
+    ss.activate(here).expect("the running process can be activated");
+    wake(ss, mm, pid, tid, written.and(result));
 }
 
 /// Say what a thread is waiting for, and until when. It does not block yet: the delivery attempt
@@ -448,15 +479,15 @@ fn mark(mm: &MemoryManager, pid: PID, tid: TID, wait: Wait, timeout: u64) {
 /// What a blocking call does once delivery has had its chance: resume with the answer it already
 /// has, time out without ever blocking, or block. `Ok(None)` tells the trap handler to resume
 /// whatever is current now, which is this thread when it was answered (`redoubt.rs`).
-fn settle(ss: &mut SystemServices, pid: PID, tid: TID) -> Result<Option<Return>, Error> {
-    let s = MemoryManager::with(|mm| slot(mm, pid, tid));
+fn settle(ss: &mut SystemServices, mm: &mut MemoryManager, pid: PID, tid: TID) -> Result<Option<Return>, Error> {
+    let s = slot(mm, pid, tid);
     if s.wait == Wait::None {
         // Answered already: its registers hold the result.
         return Ok(None);
     }
     if s.deadline <= crate::arch::irq::timer::now_us() {
         // A deadline that has already passed (a `timeout` of 0 is a poll): never block on it.
-        time_out(ss, pid, tid, s.wait, s.open);
+        fail_wait(ss, mm, pid, tid, Error::Timeout);
         return Err(Error::Timeout);
     }
     let ppid = ss.get_process(pid).expect("the running process").ppid;
@@ -468,111 +499,110 @@ fn settle(ss: &mut SystemServices, pid: PID, tid: TID) -> Result<Option<Return>,
     Ok(None)
 }
 
-/// A blocking call's deadline has passed: unwind what it was waiting for and answer `Timeout`.
-/// R3: a call whose caller times out after a server took it is abandoned.
-fn time_out(ss: &mut SystemServices, pid: PID, tid: TID, wait: Wait, open: u32) {
-    match wait {
-        Wait::Send => withdraw(ss, pid, tid, Err(Error::Timeout)),
-        Wait::Reply => {
-            MemoryManager::with_mut(|mm| abandon(ss, mm, open));
-            wake(ss, pid, tid, Err(Error::Timeout));
-            let e = MemoryManager::with(|mm| open_call_at(mm, open).endpoint);
-            pump(ss, e);
+/// A blocked thread's wait ends without an answer: what it waited for is unwound and it gets
+/// `error`. This is the one meaning of a timeout (I13), of `Refused` (R4), of `Dead` from
+/// revocation or an endpoint's destruction (R10), whatever the thread was waiting for.
+fn fail_wait(ss: &mut SystemServices, mm: &mut MemoryManager, pid: PID, tid: TID, error: Error) {
+    let served = unwind(ss, mm, pid, tid);
+    wake(ss, mm, pid, tid, Err(error));
+    if let Some(e) = served {
+        pump(ss, mm, e);
+    }
+}
+
+/// Undo what `(pid, tid)`'s page says it waits for: a queued message's buffer goes back to it;
+/// a taken call is abandoned (R3). Returns the endpoint of an abandoned call, which is owed a
+/// pump once the thread is dealt with: its server may be waiting there for the notice.
+fn unwind(ss: &SystemServices, mm: &mut MemoryManager, pid: PID, tid: TID) -> Option<EndpointRef> {
+    let s = slot(mm, pid, tid);
+    match s.wait {
+        Wait::Send => {
+            give_buffer_back(ss, mm, pid, tid);
+            None
         }
-        _ => wake(ss, pid, tid, Err(Error::Timeout)),
+        Wait::Reply => {
+            abandon(ss, mm, s.open);
+            Some(open_call_at(mm, s.open).endpoint)
+        }
+        _ => None,
     }
 }
 
 // --- `mint` and `serve` --------------------------------------------------------------------------
 
 /// `mint(source, badge, budget?) -> h` (KERNEL-SPEC.md, `mint`; R9, I3, I4).
-pub fn mint(pid: PID, tid: TID, source: MintSource, badge: u64, budget: Option<u32>) -> Result<u32, Error> {
-    MemoryManager::with_mut(|mm| {
-        // Argument stage: the endpoint and the default stamp, then the budget handle.
-        let (endpoint, default, source_badge) = match source {
-            MintSource::Message(id) => {
-                // A message id that is not an open call of the caller's own thread names
-                // nothing, a `send`'s id included (a send is never open, R4a).
-                let frame = open_call_of(mm, pid, tid, id.get()).ok_or(Error::InvalidArgument)?;
-                let call = open_call_at(mm, frame);
-                // The spec's stated exception: a gone endpoint or stamp is `Dead` here, at the
-                // argument stage. An open call holds its endpoint alive, so in practice only the
-                // stamp can have gone; both are checked, for the same reason.
-                if !mm.is_live_endpoint(call.endpoint) || !mm.is_live_budget(call.stamp) {
-                    return Err(Error::Dead);
-                }
-                // The badge that matters is the *handle* source's; a message source carries
-                // none (KERNEL-SPEC.md, `mint`: only "a handle source's badge not 0" is
-                // `NotPermitted`). A server answers a badged call by minting under its own
-                // receive right, which is the whole point of minting from a message.
-                (call.endpoint, call.stamp, 0)
+pub fn mint(
+    mm: &mut MemoryManager,
+    pid: PID,
+    tid: TID,
+    source: MintSource,
+    badge: u64,
+    budget: Option<u32>,
+) -> Result<u32, Error> {
+    // Argument stage: the endpoint and the default stamp, then the budget handle.
+    let (endpoint, default, source_badge) = match source {
+        MintSource::Message(id) => {
+            // A message id that is not an open call of the caller's own thread names
+            // nothing, a `send`'s id included (a send is never open, R4a).
+            let frame = open_call_of(mm, pid, tid, id.get()).ok_or(Error::InvalidArgument)?;
+            let call = open_call_at(mm, frame);
+            // The spec's stated exception: a gone endpoint or stamp is `Dead` here, at the
+            // argument stage. An open call holds its endpoint alive, so in practice only the
+            // stamp can have gone; both are checked, for the same reason.
+            if !mm.is_live_endpoint(call.endpoint) || !mm.is_live_budget(call.stamp) {
+                return Err(Error::Dead);
             }
-            MintSource::Handle(h) => {
-                let (e, handle) = mm.endpoint_handle(pid, h.index())?;
-                (e, handle.stamp, handle.badge)
-            }
-        };
-        let narrow = match budget {
-            Some(h) => Some(mm.budget_handle(pid, h)?),
-            None => None,
-        };
-        // Permission: only a receive right mints (I4), and a budget handle only narrows (I3).
-        if source_badge != 0 {
+            // The badge that matters is the *handle* source's; a message source carries
+            // none (KERNEL-SPEC.md, `mint`: only "a handle source's badge not 0" is
+            // `NotPermitted`). A server answers a badged call by minting under its own
+            // receive right, which is the whole point of minting from a message.
+            (call.endpoint, call.stamp, 0)
+        }
+        MintSource::Handle(h) => {
+            let (e, handle) = mm.endpoint_handle(pid, h.index())?;
+            (e, handle.stamp, handle.badge)
+        }
+    };
+    // I3: a minted badge is never 0, the receive right's. `redoubt-sys` refuses it while
+    // decoding, so nothing reaches here; it is checked again so that neither check rests on the
+    // other (KERNEL-SPEC.md, ABI).
+    if badge == 0 {
+        return Err(Error::InvalidArgument);
+    }
+    let narrow = match budget {
+        Some(h) => Some(mm.budget_handle(pid, h)?),
+        None => None,
+    };
+    // Permission: only a receive right mints (I4), and a budget handle only narrows (I3).
+    if source_badge != 0 {
+        return Err(Error::NotPermitted);
+    }
+    let mut stamp = default;
+    if let Some(frame) = narrow {
+        if !mm.is_at_or_below(frame, default.frame) {
             return Err(Error::NotPermitted);
         }
-        let mut stamp = default;
-        if let Some(frame) = narrow {
-            if !mm.is_at_or_below(frame, default.frame) {
-                return Err(Error::NotPermitted);
-            }
-            stamp = BudgetRef { frame, id: mm.budget(frame).id };
-        }
-        mm.install_handle(pid, Handle { object: Object::Endpoint(endpoint), badge, stamp })
-    })
+        stamp = BudgetRef { frame, id: mm.budget(frame).id };
+    }
+    mm.install_handle(pid, Handle { object: Object::Endpoint(endpoint), badge, stamp })
 }
 
 /// `serve(msg_id)`: the call becomes the thread's current call, the one a fault blames.
-pub fn serve(pid: PID, tid: TID, msg_id: u64) -> Result<(), Error> {
-    MemoryManager::with_mut(|mm| {
-        let frame = open_call_of(mm, pid, tid, msg_id).ok_or(Error::InvalidArgument)?;
-        set_tword(mm, pid, tid, W_CURRENT, frame_word(frame));
-        Ok(())
-    })
+pub fn serve(mm: &mut MemoryManager, pid: PID, tid: TID, msg_id: u64) -> Result<(), Error> {
+    let frame = open_call_of(mm, pid, tid, msg_id).ok_or(Error::InvalidArgument)?;
+    set_tword(mm, pid, tid, W_CURRENT, frame_word(frame));
+    Ok(())
 }
 
 // --- `call` and `send` ----------------------------------------------------------------------------
 
-/// `call(h, words, handles, lend, timeout) -> reply` (KERNEL-SPEC.md, `call`).
-pub fn call(
-    ss: &mut SystemServices,
-    pid: PID,
-    tid: TID,
-    h: u32,
-    body_rec: usize,
-    lend: Option<Pages>,
-    timeout: u64,
-) -> Result<Option<Return>, Error> {
-    enqueue(ss, pid, tid, MsgKind::Call, h, body_rec, lend, timeout)
-}
-
-/// `send(h, words, handles, transfer, timeout)` (KERNEL-SPEC.md, `send`).
+/// `call(h, words, handles, lend, timeout) -> reply` and `send(h, words, handles, transfer,
+/// timeout)` (KERNEL-SPEC.md): the same checks, in the order of `call`'s row, then the message
+/// is queued and the sender blocks.
+#[allow(clippy::too_many_arguments)]
 pub fn send(
     ss: &mut SystemServices,
-    pid: PID,
-    tid: TID,
-    h: u32,
-    body_rec: usize,
-    transfer: Option<Pages>,
-    timeout: u64,
-) -> Result<Option<Return>, Error> {
-    enqueue(ss, pid, tid, MsgKind::Send, h, body_rec, transfer, timeout)
-}
-
-/// The checks `call` and `send` share, then the message is queued and the sender blocks. The
-/// order is KERNEL-SPEC.md's row for `call`.
-#[allow(clippy::too_many_arguments)]
-fn enqueue(
-    ss: &mut SystemServices,
+    mm: &mut MemoryManager,
     pid: PID,
     tid: TID,
     kind: MsgKind,
@@ -581,80 +611,84 @@ fn enqueue(
     buffer: Option<Pages>,
     timeout: u64,
 ) -> Result<Option<Return>, Error> {
-    let endpoint = MemoryManager::with_mut(|mm| {
-        // Stage 1 finished in `redoubt-sys`; the body record is the rest of it.
-        let body = Body::decode(&crate::redoubt::read_record(body_rec)?)?;
-        // Stage 2, argument by argument.
-        let (endpoint, via) = mm.endpoint_handle(pid, h)?;
-        let mut handles = [None; MAX_MSG_HANDLES];
-        for (i, item) in body.handles.as_slice().iter().enumerate() {
-            handles[i] = Some(mm.handle(pid, item.index())?);
-        }
-        let (buf_addr, buf_pages) = match buffer {
-            None => (0, 0),
-            Some(pages) => {
-                if kind == MsgKind::Call && pages.npages.get() > MAX_LEND_PAGES {
-                    return Err(Error::TooLarge);
-                }
-                check_buffer(mm, pid, pages, kind == MsgKind::Call)?;
-                (pages.addr, pages.npages.get())
+    // Stage 1 finished in `redoubt-sys`; the body record is the rest of it.
+    let body = Body::decode(&crate::redoubt::read_record(body_rec)?)?;
+    // Stage 2, argument by argument.
+    let (endpoint, via) = mm.endpoint_handle(pid, h)?;
+    let (handles, nhandles) = lookup_handles(mm, pid, &body)?;
+    let (buf_addr, buf_pages) = match buffer {
+        None => (0, 0),
+        Some(pages) => {
+            if kind == MsgKind::Call && pages.npages.get() > MAX_LEND_PAGES {
+                return Err(Error::TooLarge);
             }
-        };
-        // Stage 3, R1: between two user budgets the label sets must be equal, and the receiving
-        // side is the endpoint's *owner*, whoever ends up taking the message (I7).
-        let sender_frame = mm.budget_of(pid).ok_or(Error::NotPermitted)?;
-        let sender = mm.budget(sender_frame);
-        let owner = mm.budget_at(mm.endpoint_at(endpoint).owner);
-        if sender.class == Class::User
-            && owner.class == Class::User
-            && sender.labels_of() != owner.labels_of()
-        {
-            return Err(Error::LabelDenied);
+            check_buffer(mm, pid, pages, kind == MsgKind::Call)?;
+            (pages.addr, pages.npages.get())
         }
-        // Stage 4, R2: a group with `WAIT_CAP` messages already queued here gets `Busy`.
-        let group = Group::of(&sender);
-        let mut waiting = 0;
-        find_thread::<()>(mm, |mm, qpid, qtid| {
-            if queued_on(mm, qpid, qtid, endpoint) && group_of(mm, qpid, qtid) == group {
-                waiting += 1;
-            }
-            None
-        });
-        if waiting >= WAIT_CAP {
-            return Err(Error::Busy);
+    };
+    // Stage 3, R1: between two user budgets the label sets must be equal, and the receiving
+    // side is the endpoint's *owner*, whoever ends up taking the message (I7).
+    let sender_frame = mm.budget_of(pid).ok_or(Error::NotPermitted)?;
+    let sender = mm.budget(sender_frame);
+    let owner = mm.budget_at(mm.endpoint_at(endpoint).owner);
+    if sender.class == Class::User && owner.class == Class::User && sender.labels_of() != owner.labels_of() {
+        return Err(Error::LabelDenied);
+    }
+    // Stage 4, R2: a group with `WAIT_CAP` messages already queued here gets `Busy`.
+    let group = Group::of(&sender);
+    let mut waiting = 0;
+    find_thread::<()>(mm, |mm, qpid, qtid| {
+        if queued_on(mm, qpid, qtid, endpoint) && group_of(mm, qpid, qtid) == group {
+            waiting += 1;
         }
-        // Everything is checked: take the buffer out of the sender (I9) and record the message.
-        let mut words = [0; WORDS];
-        for (i, word) in words.iter_mut().enumerate() {
-            *word = body.words[i] as u64;
-        }
-        if buf_pages != 0 {
-            take_buffer(ss, pid, buf_addr, buf_pages);
-        }
-        let m = Msg {
-            kind,
-            badge: via.badge,
-            stamp: via.stamp,
-            sender_budget: BudgetRef { frame: sender_frame, id: sender.id },
-            buf_addr,
-            buf_pages,
-            words,
-            handles,
-            nhandles: body.handles.as_slice().len(),
-        };
-        store_msg(mm, pid, tid, &m);
-        let seq = mm.next_seq();
-        set_tword(mm, pid, tid, W_SEQ, seq);
-        set_tword(mm, pid, tid, W_ENDPOINT, frame_word(endpoint.frame));
-        set_tword(mm, pid, tid, W_ENDPOINT_ID, endpoint.id);
-        set_tword(mm, pid, tid, W_REC, body_rec as u64);
-        Ok(endpoint)
-    })?;
+        None
+    });
+    if waiting >= WAIT_CAP {
+        return Err(Error::Busy);
+    }
+    // Everything is checked: take the buffer out of the sender (I9) and record the message.
+    let mut words = [0; WORDS];
+    for (i, word) in words.iter_mut().enumerate() {
+        *word = body.words[i] as u64;
+    }
+    if buf_pages != 0 {
+        take_buffer(ss, pid, buf_addr, buf_pages);
+    }
+    let m = Msg {
+        kind,
+        badge: via.badge,
+        stamp: via.stamp,
+        sender_budget: BudgetRef { frame: sender_frame, id: sender.id },
+        buf_addr,
+        buf_pages,
+        words,
+        handles,
+        nhandles,
+    };
+    store_msg(mm, pid, tid, &m);
+    let seq = mm.next_seq();
+    set_tword(mm, pid, tid, W_SEQ, seq);
+    set_tword(mm, pid, tid, W_ENDPOINT, frame_word(endpoint.frame));
+    set_tword(mm, pid, tid, W_ENDPOINT_ID, endpoint.id);
+    set_tword(mm, pid, tid, W_REC, body_rec as u64);
     // The sender is queued first, so a receiver taking the message right away finds it waiting
     // and simply answers it: one delivery path, whether a receiver was waiting or not.
-    MemoryManager::with(|mm| mark(mm, pid, tid, Wait::Send, timeout));
-    pump(ss, endpoint);
-    settle(ss, pid, tid)
+    mark(mm, pid, tid, Wait::Send, timeout);
+    pump(ss, mm, endpoint);
+    settle(ss, mm, pid, tid)
+}
+
+/// The handles a body names, looked up in the caller's table in order (`BadHandle`).
+fn lookup_handles(
+    mm: &MemoryManager,
+    pid: PID,
+    body: &Body,
+) -> Result<([Option<Handle>; MAX_MSG_HANDLES], usize), Error> {
+    let mut handles = [None; MAX_MSG_HANDLES];
+    for (i, item) in body.handles.as_slice().iter().enumerate() {
+        handles[i] = Some(mm.handle(pid, item.index())?);
+    }
+    Ok((handles, body.handles.as_slice().len()))
 }
 
 /// A lend or transfer range: page-aligned, non-empty, backed, all the caller's own RAM, and for
@@ -690,8 +724,10 @@ fn take_buffer(ss: &SystemServices, pid: PID, addr: usize, npages: usize) {
 // --- `receive` -------------------------------------------------------------------------------------
 
 /// `receive(h or none, timeout, max_transfer) -> message | notice` (WP-K3 adds interrupts).
+#[allow(clippy::too_many_arguments)]
 pub fn receive(
     ss: &mut SystemServices,
+    mm: &mut MemoryManager,
     pid: PID,
     tid: TID,
     from: Option<u32>,
@@ -699,81 +735,71 @@ pub fn receive(
     max_transfer: usize,
     rec: usize,
 ) -> Result<Option<Return>, Error> {
-    let endpoint = MemoryManager::with_mut(|mm| {
-        // Whatever it returns, the thread has no current call until it takes one (answer 82).
-        set_tword(mm, pid, tid, W_CURRENT, 0);
-        // The record must be the caller's own writable memory before anything else happens.
-        crate::redoubt::check_record::<RECEIVED_SLOTS>(rec)?;
-        let Some(h) = from else { return Ok(None) };
-        let (endpoint, handle) = mm.endpoint_handle(pid, h)?;
-        // I4: only a badge-0 handle is a receive right.
-        if handle.badge != 0 {
-            return Err(Error::NotPermitted);
-        }
-        set_tword(mm, pid, tid, W_ENDPOINT, frame_word(endpoint.frame));
-        set_tword(mm, pid, tid, W_ENDPOINT_ID, endpoint.id);
-        set_tword(mm, pid, tid, W_MAX_TRANSFER, max_transfer as u64);
-        set_tword(mm, pid, tid, W_REC, rec as u64);
-        Ok(Some(endpoint))
-    })?;
-    let Some(endpoint) = endpoint else {
+    // Whatever it returns, the thread has no current call until it takes one (answer 82).
+    set_tword(mm, pid, tid, W_CURRENT, 0);
+    // The record must be the caller's own writable memory before anything else happens.
+    crate::redoubt::check_record::<RECEIVED_SLOTS>(rec)?;
+    let Some(h) = from else {
         // No handle: sleep until the timeout (KERNEL-SPEC.md, `receive`).
-        MemoryManager::with(|mm| mark(mm, pid, tid, Wait::Sleep, timeout));
-        return settle(ss, pid, tid);
+        mark(mm, pid, tid, Wait::Sleep, timeout);
+        return settle(ss, mm, pid, tid);
     };
-    MemoryManager::with(|mm| mark(mm, pid, tid, Wait::Receive, timeout));
-    pump(ss, endpoint);
-    settle(ss, pid, tid)
+    let (endpoint, handle) = mm.endpoint_handle(pid, h)?;
+    // I4: only a badge-0 handle is a receive right.
+    if handle.badge != 0 {
+        return Err(Error::NotPermitted);
+    }
+    set_tword(mm, pid, tid, W_ENDPOINT, frame_word(endpoint.frame));
+    set_tword(mm, pid, tid, W_ENDPOINT_ID, endpoint.id);
+    set_tword(mm, pid, tid, W_MAX_TRANSFER, max_transfer as u64);
+    set_tword(mm, pid, tid, W_REC, rec as u64);
+    mark(mm, pid, tid, Wait::Receive, timeout);
+    pump(ss, mm, endpoint);
+    settle(ss, mm, pid, tid)
 }
 
 // --- Delivery (R2, R4, R4a) --------------------------------------------------------------------
 
 /// Match waiting receivers on `e` with what is pending there, until nothing more can be
 /// delivered. Notices come before messages (KERNEL-SPEC.md, Messages).
-fn pump(ss: &mut SystemServices, e: EndpointRef) {
+fn pump(ss: &mut SystemServices, mm: &mut MemoryManager, e: EndpointRef) {
     loop {
-        if !MemoryManager::with(|mm| mm.is_live_endpoint(e)) {
+        if !mm.is_live_endpoint(e) {
             return;
         }
         // An abandoned-call notice goes to the thread holding the call, on the endpoint the call
         // arrived on (answer 104), before any message.
-        let notice = MemoryManager::with(|mm| {
-            find_thread(mm, |mm, pid, tid| {
-                let s = slot(mm, pid, tid);
-                if s.wait != Wait::Receive || s.endpoint != Some(e) {
-                    return None;
-                }
-                (0..s.ncalls).map(|i| nth_call(mm, pid, tid, i)).find_map(|f| {
-                    let c = open_call_at(mm, f);
-                    (c.flags & F_NOTICE != 0 && c.endpoint == e).then_some((pid, tid, f, c.rid))
-                })
+        let notice = find_thread(mm, |mm, pid, tid| {
+            let s = slot(mm, pid, tid);
+            if s.wait != Wait::Receive || s.endpoint != Some(e) {
+                return None;
+            }
+            (0..s.ncalls).map(|i| nth_call(mm, pid, tid, i)).find_map(|f| {
+                let c = open_call_at(mm, f);
+                (c.flags & F_NOTICE != 0 && c.endpoint == e).then_some((pid, tid, f, c.rid))
             })
         });
         if let Some((pid, tid, frame, rid)) = notice {
             // I15: reported exactly once.
-            MemoryManager::with_mut(|mm| {
-                let mut c = open_call_at(mm, frame);
-                c.flags &= !F_NOTICE;
-                store_open_call(mm, frame, &c);
-            });
+            let mut c = open_call_at(mm, frame);
+            c.flags &= !F_NOTICE;
+            store_open_call(mm, frame, &c);
             let id = NonZeroU64::new(rid).expect("I12: a message id is never 0");
-            finish_receive(ss, pid, tid, &Received::Abandoned(id));
+            answer_record(ss, mm, pid, tid, &Received::Abandoned(id).encode(), Ok(Return::Nothing));
             continue;
         }
         // The first receiver that can take a message, and the message R2 picks for it.
-        let pick = MemoryManager::with(|mm| {
-            find_thread(mm, |mm, rpid, rtid| {
-                let s = slot(mm, rpid, rtid);
-                if s.wait != Wait::Receive || s.endpoint != Some(e) {
-                    return None;
-                }
-                // R4a: a process at `MAX_OPEN_CALLS` takes no calls; sends still arrive.
-                let calls = (mm.account(rpid).map_or(0, |a| a.open_calls) as usize) < MAX_OPEN_CALLS;
-                next_sender(mm, e, calls).map(|(spid, stid)| (rpid, rtid, spid, stid))
-            })
+        let pick = find_thread(mm, |mm, rpid, rtid| {
+            let s = slot(mm, rpid, rtid);
+            if s.wait != Wait::Receive || s.endpoint != Some(e) {
+                return None;
+            }
+            // R4a: a process at `MAX_OPEN_CALLS` takes no calls; sends still arrive.
+            let calls = (mm.account(rpid).map_or(0, |a| a.open_calls) as usize) < MAX_OPEN_CALLS;
+            next_sender(mm, e, calls).map(|(spid, stid)| (rpid, rtid, spid, stid))
         });
         let Some((rpid, rtid, spid, stid)) = pick else { return };
-        deliver(ss, e, rpid, rtid, spid, stid);
+        deliver(ss, mm, e, rpid, rtid, spid, stid);
     }
 }
 
@@ -811,32 +837,63 @@ fn next_sender(mm: &MemoryManager, e: EndpointRef, calls: bool) -> Option<(PID, 
 /// Deliver the message of `(spid, stid)` on `e` to the receiving thread `(rpid, rtid)`, or refuse
 /// it (R4): a delivery the receiving process's budget cannot pay for in full, or a transfer over
 /// `max_transfer`, fails its sender with `Refused` and the receiver keeps waiting.
-fn deliver(ss: &mut SystemServices, e: EndpointRef, rpid: PID, rtid: TID, spid: PID, stid: TID) {
+#[allow(clippy::too_many_arguments)]
+fn deliver(
+    ss: &mut SystemServices,
+    mm: &mut MemoryManager,
+    e: EndpointRef,
+    rpid: PID,
+    rtid: TID,
+    spid: PID,
+    stid: TID,
+) {
+    // The receiver's record must still be its own writable memory. Another of its threads may
+    // have unmapped it while it was blocked, and a receiver that cannot be told what it took
+    // must not take anything: this is a re-check after `receive` decoded the address, not
+    // decoding, so it happens before anything commits. The receiver leaves with the error its
+    // own call earned, and the message stays queued for whoever receives next.
+    if let Err(error) = check_receive_record(ss, rpid, rtid, mm) {
+        fail_wait(ss, mm, rpid, rtid, error);
+        return;
+    }
     // Delivered or refused, the group has had its turn, so one sender cannot hold up the rest.
-    MemoryManager::with_mut(|mm| {
-        let group = group_of(mm, spid, stid);
-        let mut ep = mm.endpoint_at(e);
-        ep.cursor = Some(group);
-        mm.store_endpoint(e.frame, &ep);
-    });
-    let kind = MemoryManager::with(|mm| msg(mm, spid, stid).kind);
-    match MemoryManager::with_mut(|mm| prepare(ss, mm, e, rpid, rtid, spid, stid)) {
-        Err(error) => withdraw(ss, spid, stid, Err(error)),
+    let mut ep = mm.endpoint_at(e);
+    ep.cursor = Some(group_of(mm, spid, stid));
+    mm.store_endpoint(e.frame, &ep);
+    let kind = msg(mm, spid, stid).kind;
+    match prepare(ss, mm, e, rpid, rtid, spid, stid) {
+        Err(error) => fail_wait(ss, mm, spid, stid, error),
         Ok(received) => {
-            finish_receive(ss, rpid, rtid, &Received::Message(received));
+            answer_record(ss, mm, rpid, rtid, &Received::Message(received).encode(), Ok(Return::Nothing));
             match kind {
                 // A `send` is done with; a `call` now waits for its reply.
-                MsgKind::Send => wake(ss, spid, stid, Ok(Return::Nothing)),
-                MsgKind::Call => {
-                    MemoryManager::with(|mm| set_tword(mm, spid, stid, W_WAIT, Wait::Reply as u64))
-                }
+                MsgKind::Send => wake(ss, mm, spid, stid, Ok(Return::Nothing)),
+                MsgKind::Call => set_tword(mm, spid, stid, W_WAIT, Wait::Reply as u64),
             }
         }
     }
 }
 
+/// Whether `(pid, tid)`'s `receive` record is still where it can be written. `InvalidArgument`
+/// is the error a record earns, and every call's row carries it (decoding, stage 1).
+fn check_receive_record(
+    ss: &mut SystemServices,
+    pid: PID,
+    tid: TID,
+    mm: &MemoryManager,
+) -> Result<(), Error> {
+    let rec = slot(mm, pid, tid).rec;
+    let here = crate::arch::process::current_pid();
+    let checked = ss
+        .activate(pid)
+        .map_err(|_| Error::Dead)
+        .and_then(|()| crate::redoubt::check_record::<RECEIVED_SLOTS>(rec));
+    ss.activate(here).expect("the running process can be activated");
+    checked
+}
+
 /// Everything delivery does: first what can fail, then what cannot. On `Err` nothing has changed
-/// but the receiver's page tables, and the sender is refused (R4).
+/// and the sender is refused (R4).
 #[allow(clippy::too_many_arguments)]
 fn prepare(
     ss: &SystemServices,
@@ -855,10 +912,20 @@ fn prepare(
     if m.kind == MsgKind::Send && pages > max_transfer {
         return Err(Error::Refused);
     }
+    // Where the buffer would land in the receiver, and how many page-table pages mapping it
+    // there still needs. Both are questions, not changes: nothing is allocated or charged until
+    // the whole cost is known, so a refused delivery costs the receiver nothing (R4).
+    let mut at = 0;
+    let mut tables = 0;
+    if pages != 0 {
+        at = choose_buffer_address(ss, mm, rpid, pages)?;
+        let space = ss.mapping_of(rpid).ok_or(Error::Refused)?;
+        tables = crate::arch::mem::tables_needed(&space, at, pages) as u64;
+    }
     // Everything the message brings that the receiving budget must pay for: the table pages for
-    // its handles, a call's open-call page, and its lent or transferred pages (R4). The page
-    // tables to map the buffer are charged as they are allocated, below.
-    let live: usize = m.handles[..m.nhandles].iter().filter(|h| is_live(mm, h)).count();
+    // its handles, a call's open-call page, its lent or transferred pages, and the page tables
+    // to map them (R4).
+    let live: usize = m.handles[..m.nhandles].iter().flatten().filter(|h| is_live(mm, **h)).count();
     // Answer 116: handles that would take the receiver past `MAX_HANDLES` refuse the message,
     // like any other cost it cannot pay.
     let growth = mm.table_growth(rpid, live).ok_or(Error::Refused)?;
@@ -870,31 +937,23 @@ fn prepare(
         MsgKind::Send if mm.budget_of(spid) != Some(rbudget) => pages as u64,
         MsgKind::Send => 0,
     };
-    if growth.saturating_add(open).saturating_add(buffer_cost) > mm.free_pages(rbudget) {
+    let need = growth.saturating_add(open).saturating_add(buffer_cost).saturating_add(tables);
+    if need > mm.free_pages(rbudget) {
         return Err(Error::Refused);
     }
-    // Where the buffer lands in the receiver, and the page tables to map it there.
-    let mut at = 0;
+    // From here nothing fails: every page the rest of this function allocates was counted just
+    // above, and the address was free when it was chosen, with the kernel lock held throughout.
     if pages != 0 {
-        at = reserve_buffer(ss, mm, rpid, pages)?;
+        reserve_buffer(ss, mm, rpid, at, pages);
     }
-    // From here nothing fails.
     if m.kind == MsgKind::Call {
         mm.charge(rbudget, OPEN_CALL_PAGES + pages as u64).expect("R4: checked just above");
     }
     let buffer = (pages != 0)
         .then(|| Pages { addr: at, npages: NonZeroUsize::new(pages).expect("a buffer has pages") });
     move_buffer(ss, mm, &m, spid, rpid, at);
-    // The message's copies of its handles move into the receiver's table; one R10 revoked
-    // meanwhile arrives as 0, keeping its slot.
-    let mut slots = ReceivedHandles::new();
-    for item in &m.handles[..m.nhandles] {
-        let index = match item.filter(|h| is_live(mm, &Some(*h))) {
-            Some(h) => AbiHandle::new(mm.install_handle(rpid, h).expect("R4: checked just above")),
-            None => None,
-        };
-        slots.push(index).expect("MAX_MSG_HANDLES");
-    }
+    let (slots, dropped) = install_handles(mm, rpid, &m.handles[..m.nhandles]);
+    assert!(!dropped, "R4: checked just above");
     let rid = mm.next_msg_id(rpid);
     let sender = mm.budget_at(m.sender_budget);
     let mut labels = Labels::new();
@@ -943,8 +1002,7 @@ fn prepare(
 
 /// Whether a handle a message carries still names live objects: R10 may have revoked it while
 /// the message waited.
-fn is_live(mm: &MemoryManager, handle: &Option<Handle>) -> bool {
-    let Some(h) = handle else { return false };
+fn is_live(mm: &MemoryManager, h: Handle) -> bool {
     if !mm.is_live_budget(h.stamp) {
         return false;
     }
@@ -954,17 +1012,37 @@ fn is_live(mm: &MemoryManager, handle: &Option<Handle>) -> bool {
     }
 }
 
-/// Choose where a buffer lands in the receiver and allocate the page tables for it (R4). The
-/// tables are charged to the receiver's budget as they are allocated, so a budget that cannot
-/// pay for them refuses the message like any other cost.
-fn reserve_buffer(
+/// A message's copies of its handles move into `pid`'s table, each keeping its slot: one R10
+/// revoked meanwhile, or one `pid` cannot pay for, is 0 there. Returns whether any was dropped
+/// for want of room.
+fn install_handles(mm: &mut MemoryManager, pid: PID, handles: &[Option<Handle>]) -> (ReceivedHandles, bool) {
+    let mut slots = ReceivedHandles::new();
+    let mut dropped = false;
+    for item in handles {
+        let index = match item.filter(|h| is_live(mm, *h)) {
+            Some(h) => match mm.install_handle(pid, h) {
+                Ok(index) => AbiHandle::new(index),
+                Err(_) => {
+                    dropped = true;
+                    None
+                }
+            },
+            None => None,
+        };
+        slots.push(index).expect("MAX_MSG_HANDLES");
+    }
+    (slots, dropped)
+}
+
+/// Where a buffer would land in the receiver: a free run of `pages` pages in its Messages
+/// region. It only looks; nothing is mapped or charged until the whole cost is known (R4).
+fn choose_buffer_address(
     ss: &SystemServices,
     mm: &mut MemoryManager,
     rpid: PID,
     pages: usize,
 ) -> Result<usize, Error> {
     let here = crate::arch::process::current_pid();
-    let space = ss.mapping_of(rpid).ok_or(Error::Refused)?;
     // `find_virtual_address` reads the receiver's own kernel page, so its space must be active.
     ss.activate(rpid).map_err(|_| Error::Refused)?;
     let found = mm
@@ -972,11 +1050,18 @@ fn reserve_buffer(
         .map(|addr| addr as usize)
         .map_err(|_| Error::Refused);
     ss.activate(here).expect("the running process can be activated");
-    let at = found?;
+    found
+}
+
+/// Allocate the page tables that map the buffer at `at`, charged to the receiver's budget. The
+/// R4 decision counted exactly these, and the address was free when it was chosen, so neither
+/// step can fail here.
+fn reserve_buffer(ss: &SystemServices, mm: &mut MemoryManager, rpid: PID, at: usize, pages: usize) {
+    let space = ss.mapping_of(rpid).expect("the receiving process is alive");
     for i in 0..pages {
-        crate::arch::mem::prepare_map(mm, &space, rpid, at + i * PAGE_SIZE).map_err(|_| Error::Refused)?;
+        crate::arch::mem::prepare_map(mm, &space, rpid, at + i * PAGE_SIZE)
+            .expect("R4: the page tables were counted and charged for just above");
     }
-    Ok(at)
 }
 
 /// Map the buffer into the receiver: a lend stays the sender's (whose entry remembers the loan),
@@ -1001,29 +1086,6 @@ fn move_buffer(ss: &SystemServices, mm: &mut MemoryManager, m: &Msg, spid: PID, 
     }
 }
 
-/// Finish a `receive` for `(pid, tid)`: write the record in its own memory and wake it. A record
-/// that is no longer the receiver's writable memory is `InvalidArgument` — the record is part of
-/// decoding, whose error every call's row carries.
-fn finish_receive(ss: &mut SystemServices, pid: PID, tid: TID, received: &Received) {
-    let rec = MemoryManager::with(|mm| slot(mm, pid, tid).rec);
-    let here = crate::arch::process::current_pid();
-    let written = ss
-        .activate(pid)
-        .map_err(|_| Error::Dead)
-        .and_then(|()| crate::redoubt::write_record(rec, &received.encode()));
-    ss.activate(here).expect("the running process can be activated");
-    wake(ss, pid, tid, written.map(|()| Return::Nothing));
-}
-
-// --- Withdrawing a queued message -----------------------------------------------------------------
-
-/// A queued message is withdrawn: its buffer goes back to its sender, and the sender gets
-/// `result`.
-fn withdraw(ss: &mut SystemServices, pid: PID, tid: TID, result: Result<Return, Error>) {
-    MemoryManager::with_mut(|mm| give_buffer_back(ss, mm, pid, tid));
-    wake(ss, pid, tid, result);
-}
-
 /// Put a queued message's buffer back in its sender's address space.
 fn give_buffer_back(ss: &SystemServices, mm: &MemoryManager, pid: PID, tid: TID) {
     let m = msg(mm, pid, tid);
@@ -1045,78 +1107,43 @@ fn give_buffer_back(ss: &SystemServices, mm: &MemoryManager, pid: PID, tid: TID)
 /// discarded (R3).
 pub fn reply(
     ss: &mut SystemServices,
+    mm: &mut MemoryManager,
     pid: PID,
     tid: TID,
     msg_id: u64,
     body_rec: usize,
 ) -> Result<(), Error> {
-    let (frame, call, handles, nhandles, words) = MemoryManager::with_mut(|mm| {
-        let body = Body::decode(&crate::redoubt::read_record(body_rec)?)?;
-        let frame = open_call_of(mm, pid, tid, msg_id).ok_or(Error::InvalidArgument)?;
-        let mut handles = [None; MAX_MSG_HANDLES];
-        for (i, item) in body.handles.as_slice().iter().enumerate() {
-            handles[i] = Some(mm.handle(pid, item.index())?);
-        }
-        let call = open_call_at(mm, frame);
-        Ok((frame, call, handles, body.handles.as_slice().len(), body.words))
-    })?;
+    let body = Body::decode(&crate::redoubt::read_record(body_rec)?)?;
+    let frame = open_call_of(mm, pid, tid, msg_id).ok_or(Error::InvalidArgument)?;
+    let (handles, nhandles) = lookup_handles(mm, pid, &body)?;
+    let call = open_call_at(mm, frame);
     // The call leaves the thread whatever happens next (I15: an abandoned call stays open until
     // exactly this reply).
-    MemoryManager::with_mut(|mm| {
-        drop_open_call(mm, pid, tid, frame);
-        if call.flags & F_WAITING == 0 {
-            // R3: the reply to an abandoned call reaches nobody, and its lend is freed.
-            free_abandoned_lend(ss, mm, &call);
-        } else {
-            return_lend(ss, mm, &call);
-        }
-        close_call(mm, frame, &call);
-    });
-    poke_receivers(ss, pid);
+    drop_open_call(mm, pid, tid, frame);
+    if call.flags & F_WAITING == 0 {
+        // R3: the reply to an abandoned call reaches nobody, and its lend is freed.
+        free_abandoned_lend(ss, mm, &call);
+    } else {
+        return_lend(ss, &call);
+    }
+    close_call(mm, frame, &call);
+    poke_receivers(ss, mm, pid);
     if call.flags & F_WAITING == 0 {
         return Ok(());
     }
-    // The caller pays for the handles it receives; those that do not fit arrive as 0 and its
-    // call fails with `OutOfMemory`, the reply still delivered (answers 107 and 116).
+    // R4: a reply is never refused. A handle that does not fit the caller -- its budget cannot
+    // pay, or it is at `MAX_HANDLES` -- is dropped, 0 in its slot, and the `call` returns
+    // `OutOfMemory` either way, the reply still delivered (answers 107 and 116).
     let (cpid, ctid) = call.caller;
-    let mut slots = ReceivedHandles::new();
-    let mut failed = None;
-    MemoryManager::with_mut(|mm| {
-        for item in &handles[..nhandles] {
-            let index = match item.filter(|h| is_live(mm, &Some(*h))) {
-                // R4: a reply is never refused. A handle that does not fit the caller -- its
-                // budget cannot pay, or it is at `MAX_HANDLES` -- is dropped, 0 in its slot, and
-                // the `call` returns `OutOfMemory` either way (answers 107 and 116).
-                Some(h) => match mm.install_handle(cpid, h) {
-                    Ok(index) => AbiHandle::new(index),
-                    Err(_) => {
-                        failed = Some(Error::OutOfMemory);
-                        None
-                    }
-                },
-                None => None,
-            };
-            slots.push(index).expect("MAX_MSG_HANDLES");
-        }
-    });
-    let body = ReceivedBody { words, handles: slots };
-    let rec = MemoryManager::with(|mm| slot(mm, cpid, ctid).rec);
-    let here = crate::arch::process::current_pid();
-    let written = ss
-        .activate(cpid)
-        .map_err(|_| Error::Dead)
-        .and_then(|()| crate::redoubt::write_record(rec, &body.encode()));
-    ss.activate(here).expect("the running process can be activated");
-    let result = match (written, failed) {
-        (Err(error), _) | (Ok(()), Some(error)) => Err(error),
-        (Ok(()), None) => Ok(Return::Nothing),
-    };
-    wake(ss, cpid, ctid, result);
+    let (slots, dropped) = install_handles(mm, cpid, &handles[..nhandles]);
+    let result = if dropped { Err(Error::OutOfMemory) } else { Ok(Return::Nothing) };
+    let body = ReceivedBody { words: body.words, handles: slots };
+    answer_record(ss, mm, cpid, ctid, &body.encode(), result);
     Ok(())
 }
 
 /// Give a lend back to the caller (R3: until the reply, it stayed mapped in the server).
-fn return_lend(ss: &SystemServices, _mm: &MemoryManager, call: &OpenCall) {
+fn return_lend(ss: &SystemServices, call: &OpenCall) {
     if call.lend_pages == 0 {
         return;
     }
@@ -1179,7 +1206,10 @@ fn abandon(ss: &SystemServices, mm: &mut MemoryManager, frame: u32) {
     let Some(space) = ss.mapping_of(call.caller.0) else { return };
     for i in 0..call.lend_pages {
         if let Ok(phys) = crate::arch::mem::drop_lent(&space, call.lend_caller + i * PAGE_SIZE) {
-            mm.move_frame(phys, call.caller.0, call.server.0).ok();
+            // The frame is the caller's, and the receiver already paid for it while the call
+            // was open (R3), so the budget it moves to has room for it by construction.
+            mm.move_frame(phys, call.caller.0, call.server.0)
+                .expect("R3: the receiver has paid for this lend since it took the call");
         }
     }
 }
@@ -1188,51 +1218,42 @@ fn abandon(ss: &SystemServices, mm: &mut MemoryManager, frame: u32) {
 
 /// A thread is ending. What it waited for is withdrawn; a caller still waiting on a call it
 /// holds gets `Dead` and its lend back, and an abandoned lend is freed (R4b).
-pub fn thread_ending(ss: &mut SystemServices, pid: PID, tid: TID) {
-    let s = MemoryManager::with(|mm| slot(mm, pid, tid));
-    match s.wait {
-        Wait::Send => MemoryManager::with_mut(|mm| give_buffer_back(ss, mm, pid, tid)),
-        Wait::Reply => MemoryManager::with_mut(|mm| abandon(ss, mm, s.open)),
-        _ => {}
-    }
-    MemoryManager::with(|mm| set_tword(mm, pid, tid, W_WAIT, Wait::None as u64));
+pub fn thread_ending(ss: &mut SystemServices, mm: &mut MemoryManager, pid: PID, tid: TID) {
+    // Not `fail_wait`: a dying thread gets no answer and must not go back on the ready list.
+    let served = unwind(ss, mm, pid, tid);
+    set_tword(mm, pid, tid, W_WAIT, Wait::None as u64);
     // R4b: every call it holds open ends, its caller told.
-    loop {
-        let held =
-            MemoryManager::with(|mm| (slot(mm, pid, tid).ncalls > 0).then(|| nth_call(mm, pid, tid, 0)));
-        let Some(frame) = held else { break };
-        MemoryManager::with_mut(|mm| drop_open_call(mm, pid, tid, frame));
-        finish_served(ss, frame);
+    while slot(mm, pid, tid).ncalls > 0 {
+        let frame = nth_call(mm, pid, tid, 0);
+        drop_open_call(mm, pid, tid, frame);
+        finish_served(ss, mm, frame);
     }
-    if s.wait == Wait::Reply {
+    if let Some(e) = served {
         // A server may be able to take calls again now that this one is gone.
-        let e = MemoryManager::with(|mm| open_call_at(mm, s.open).endpoint);
-        pump(ss, e);
+        pump(ss, mm, e);
     }
 }
 
 /// A served call's server is gone: a waiting caller gets `Dead` and its lend back; an abandoned
 /// lend is freed (R4b).
-fn finish_served(ss: &mut SystemServices, frame: u32) {
-    let call = MemoryManager::with(|mm| open_call_at(mm, frame));
-    MemoryManager::with_mut(|mm| {
-        if call.flags & F_WAITING != 0 {
-            return_lend(ss, mm, &call);
-        } else {
-            free_abandoned_lend(ss, mm, &call);
-        }
-        close_call(mm, frame, &call);
-    });
+fn finish_served(ss: &mut SystemServices, mm: &mut MemoryManager, frame: u32) {
+    let call = open_call_at(mm, frame);
     if call.flags & F_WAITING != 0 {
-        wake(ss, call.caller.0, call.caller.1, Err(Error::Dead));
+        return_lend(ss, &call);
+    } else {
+        free_abandoned_lend(ss, mm, &call);
+    }
+    close_call(mm, frame, &call);
+    if call.flags & F_WAITING != 0 {
+        wake(ss, mm, call.caller.0, call.caller.1, Err(Error::Dead));
     }
 }
 
 /// A process is ending: every one of its threads does (R4b).
-pub fn process_ending(ss: &mut SystemServices, pid: PID) {
+pub fn process_ending(ss: &mut SystemServices, mm: &mut MemoryManager, pid: PID) {
     for tid in 0..MAX_THREAD {
-        if MemoryManager::with(|mm| mm.ipc_frame(pid, tid).is_some()) {
-            thread_ending(ss, pid, tid);
+        if mm.ipc_frame(pid, tid).is_some() {
+            thread_ending(ss, mm, pid, tid);
         }
     }
 }
@@ -1240,83 +1261,57 @@ pub fn process_ending(ss: &mut SystemServices, pid: PID) {
 /// R10, the part that reaches messages: after `budget_destroy` marked a subtree dying and before
 /// its budgets are freed, destroy the endpoints it owns and fail every message sent through a
 /// handle stamped with it.
-pub fn budgets_dying(ss: &mut SystemServices) {
+pub fn budgets_dying(ss: &mut SystemServices, mm: &mut MemoryManager) {
     // Endpoints owned by a dying budget: everything waiting on them gets `Dead`.
-    loop {
-        let doomed = MemoryManager::with(|mm| {
-            (0..=mm.objects.high_frame).find(|frame| {
-                mm.is_endpoint_frame(*frame) && mm.budget_at(mm.endpoint(*frame).owner).dying
-            })
-        });
-        let Some(frame) = doomed else { break };
-        destroy_endpoint(ss, frame);
+    while let Some(frame) = (0..=mm.objects.high_frame)
+        .find(|frame| mm.is_endpoint_frame(*frame) && mm.budget_at(mm.endpoint(*frame).owner).dying)
+    {
+        destroy_endpoint(ss, mm, frame);
     }
     // Revocation reaches messages already sent (R10): a queued one fails its sender with `Dead`;
     // a taken call fails its caller with `Dead` at once and is abandoned (R3).
-    loop {
-        let queued = MemoryManager::with(|mm| {
-            find_thread(mm, |mm, pid, tid| {
-                let s = slot(mm, pid, tid);
-                (s.wait == Wait::Send && mm.budget_at(msg(mm, pid, tid).stamp).dying).then_some((pid, tid))
-            })
-        });
-        let Some((pid, tid)) = queued else { break };
-        withdraw(ss, pid, tid, Err(Error::Dead));
-    }
-    loop {
-        let taken = MemoryManager::with(|mm| {
-            find_thread(mm, |mm, pid, tid| {
-                let s = slot(mm, pid, tid);
-                if s.wait != Wait::Reply {
-                    return None;
-                }
-                mm.budget_at(open_call_at(mm, s.open).stamp).dying.then_some((pid, tid, s.open))
-            })
-        });
-        let Some((pid, tid, frame)) = taken else { break };
-        MemoryManager::with_mut(|mm| abandon(ss, mm, frame));
-        wake(ss, pid, tid, Err(Error::Dead));
-        let e = MemoryManager::with(|mm| open_call_at(mm, frame).endpoint);
-        pump(ss, e);
-    }
+    fail_all(ss, mm, Error::Dead, |mm, pid, tid| {
+        let s = slot(mm, pid, tid);
+        match s.wait {
+            Wait::Send => mm.budget_at(msg(mm, pid, tid).stamp).dying,
+            Wait::Reply => mm.budget_at(open_call_at(mm, s.open).stamp).dying,
+            _ => false,
+        }
+    });
 }
 
-/// Destroy an endpoint (R10): calls in flight that a server took fail with `Dead` and are
-/// abandoned (R3), blocked senders and receivers get `Dead`, and the page goes back to its owner.
-fn destroy_endpoint(ss: &mut SystemServices, frame: u32) {
-    let e = MemoryManager::with(|mm| EndpointRef { frame, id: mm.endpoint(frame).id });
-    loop {
-        let taken = MemoryManager::with(|mm| {
-            find_thread(mm, |mm, pid, tid| {
-                let s = slot(mm, pid, tid);
-                if s.wait != Wait::Reply {
-                    return None;
-                }
-                (open_call_at(mm, s.open).endpoint == e).then_some((pid, tid, s.open))
-            })
-        });
-        let Some((pid, tid, call)) = taken else { break };
-        MemoryManager::with_mut(|mm| abandon(ss, mm, call));
-        wake(ss, pid, tid, Err(Error::Dead));
-    }
-    loop {
-        let waiting = MemoryManager::with(|mm| {
-            find_thread(mm, |mm, pid, tid| {
-                let s = slot(mm, pid, tid);
-                (matches!(s.wait, Wait::Send | Wait::Receive) && s.endpoint == Some(e))
-                    .then_some((pid, tid, s.wait))
-            })
-        });
-        let Some((pid, tid, wait)) = waiting else { break };
-        match wait {
-            Wait::Send => withdraw(ss, pid, tid, Err(Error::Dead)),
-            _ => wake(ss, pid, tid, Err(Error::Dead)),
-        }
-    }
-    MemoryManager::with_mut(|mm| {
-        let owner = mm.endpoint(frame).owner;
-        mm.free_endpoint(frame, owner.frame);
+/// Destroy an endpoint (R10): blocked senders and receivers get `Dead`, then calls in flight
+/// that a server took fail with `Dead` and are abandoned (R3), and the page goes back to its
+/// owner. Receivers go first, so none is offered an abandoned-call notice on the way out.
+fn destroy_endpoint(ss: &mut SystemServices, mm: &mut MemoryManager, frame: u32) {
+    let e = EndpointRef { frame, id: mm.endpoint(frame).id };
+    fail_all(ss, mm, Error::Dead, |mm, pid, tid| {
+        let s = slot(mm, pid, tid);
+        matches!(s.wait, Wait::Send | Wait::Receive) && s.endpoint == Some(e)
     });
+    fail_all(ss, mm, Error::Dead, |mm, pid, tid| {
+        let s = slot(mm, pid, tid);
+        s.wait == Wait::Reply && open_call_at(mm, s.open).endpoint == e
+    });
+    // The handles naming it go first: `budget_destroy`'s later sweep reads every handle's
+    // object, and one naming a freed frame would stop the kernel (I1). Unreachable until a
+    // destroyable budget owns an endpoint (WP-K4), and cheaper than a liveness test on a path
+    // that runs for every handle in the system.
+    mm.sweep_handles(|_, h| matches!(h.object, Object::Endpoint(x) if x == e));
+    let owner = mm.endpoint(frame).owner;
+    mm.free_endpoint(frame, owner.frame);
+}
+
+/// Fail every blocked thread `doomed` picks, one at a time, until none is left.
+fn fail_all(
+    ss: &mut SystemServices,
+    mm: &mut MemoryManager,
+    error: Error,
+    mut doomed: impl FnMut(&MemoryManager, PID, TID) -> bool,
+) {
+    while let Some((pid, tid)) = find_thread(mm, |mm, pid, tid| doomed(mm, pid, tid).then_some((pid, tid))) {
+        fail_wait(ss, mm, pid, tid, error);
+    }
 }
 
 /// I13: every blocking call returns by its timeout. Answer every deadline that has passed, and
@@ -1325,41 +1320,36 @@ fn destroy_endpoint(ss: &mut SystemServices, frame: u32) {
 /// WP-K5 owns the kernel timer. Until it arms one, this runs at every Redoubt system call and in
 /// the scheduler's idle branch, where it also keeps the hart out of `wfi` while a deadline is
 /// pending (`main.rs`): polling is not free, but nothing can sleep through a timeout.
-pub fn expire(ss: &mut SystemServices) -> bool {
+pub fn expire(ss: &mut SystemServices, mm: &mut MemoryManager) -> bool {
     let mut answered = false;
     loop {
         let now = crate::arch::irq::timer::now_us();
-        let due = MemoryManager::with(|mm| {
-            find_thread(mm, |mm, pid, tid| {
-                let s = slot(mm, pid, tid);
-                (s.wait != Wait::None && s.deadline <= now).then_some((pid, tid, s.wait, s.open))
-            })
+        let due = find_thread(mm, |mm, pid, tid| {
+            let s = slot(mm, pid, tid);
+            (s.wait != Wait::None && s.deadline <= now).then_some((pid, tid))
         });
-        let Some((pid, tid, wait, open)) = due else {
+        let Some((pid, tid)) = due else {
             // A thread this answered is runnable again, so the caller must look for work
             // before it idles; so must a finite deadline that has not passed yet.
-            let pending = MemoryManager::with(|mm| {
-                find_thread(mm, |mm, pid, tid| {
-                    let s = slot(mm, pid, tid);
-                    (s.wait != Wait::None && s.deadline != u64::MAX).then_some(())
-                })
-                .is_some()
+            let pending = find_thread(mm, |mm, pid, tid| {
+                let s = slot(mm, pid, tid);
+                (s.wait != Wait::None && s.deadline != u64::MAX).then_some(())
             });
-            return answered || pending;
+            return answered || pending.is_some();
         };
-        time_out(ss, pid, tid, wait, open);
+        fail_wait(ss, mm, pid, tid, Error::Timeout);
         answered = true;
     }
 }
 
 /// After `reply` freed an open call, the process may be able to take calls again (R4a) and an
 /// abandoned-call notice may be waiting: try every endpoint its threads receive on.
-fn poke_receivers(ss: &mut SystemServices, pid: PID) {
+fn poke_receivers(ss: &mut SystemServices, mm: &mut MemoryManager, pid: PID) {
     for tid in 0..MAX_THREAD {
-        let s = MemoryManager::with(|mm| slot(mm, pid, tid));
+        let s = slot(mm, pid, tid);
         if s.wait == Wait::Receive {
             if let Some(e) = s.endpoint {
-                pump(ss, e);
+                pump(ss, mm, e);
             }
         }
     }

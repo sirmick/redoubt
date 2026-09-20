@@ -1720,7 +1720,7 @@ impl SystemServices {
         // R4b: whatever this thread was waiting for is withdrawn, and every call it holds
         // open fails its caller with `Dead`, before the thread's own state goes. It runs first,
         // because a caller it wakes is one of the runnable threads read just below.
-        crate::message::thread_ending(self, pid, tid);
+        crate::mem::MemoryManager::with_mut(|mm| crate::message::thread_ending(self, mm, pid, tid));
 
         let mut waiting_threads = match self.get_process_mut(pid)?.state {
             ProcessState::Running(x) => x,
@@ -2187,7 +2187,7 @@ impl SystemServices {
         self.release_servers_of(target_pid)?;
         // R4b: every call its threads hold open fails its caller with `Dead`, and every message
         // they were sending is withdrawn, before its memory goes.
-        crate::message::process_ending(self, target_pid);
+        crate::mem::MemoryManager::with_mut(|mm| crate::message::process_ending(self, mm, target_pid));
 
         let process = self.get_process_mut(target_pid)?;
         process.activate()?;
@@ -2259,7 +2259,7 @@ impl SystemServices {
         let current = self.current_pid();
         assert!(target != current, "kill_process on the running process");
         self.release_servers_of(target)?;
-        crate::message::process_ending(self, target);
+        crate::mem::MemoryManager::with_mut(|mm| crate::message::process_ending(self, mm, target));
         // `terminate` needs no address space: it names the target's mapping itself.
         self.get_process_mut(target)?.terminate()?;
         self.get_process(current)?.activate()

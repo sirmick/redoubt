@@ -1,0 +1,21 @@
+description = "A receiver carved to exactly the open-call page plus the lent pages, with nothing for the page tables that map the lend: R4 counts those too, so the sender is Refused and the receiver is charged nothing; the kernel used to charge them and then stop on the charge that followed (attack, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# Built with the checks on (redoubt/README.md, "Debug assertions"): the bug was an arithmetic
+# shortfall that a release build would have hidden until the charge itself failed.
+debug_assertions = true
+# PID 2 redoubt-tight: it must be the loader's first program, the one holding root, system and
+# users, since the carve needs a budget handle. PID 3 log-server.
+programs = ["redoubt-tight", "log-server"]
+timeout_secs = 30
+expect = [
+    '^\[pid 2\] \[tight\] system free after the carve: 4 \(want 4\)$',
+    '^\[pid 2\] \[tight\] the tight lend -> Err\(Refused\), 0 pages spent$',
+    '^\[pid 2\] \[tight\] after the hog goes: the same lend -> Ok\(\(\)\)$',
+    '^\[pid 2\] REDOUBT-TIGHT TEST PASSED$',
+]
+forbid = ['REDOUBT-TIGHT TEST FAILED']
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]

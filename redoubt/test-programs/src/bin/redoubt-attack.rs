@@ -36,8 +36,10 @@ pub extern "C" fn _start() -> ! {
     let rights = [
         // Receiving on a badged handle: the one thing a badge can never buy.
         rd::receive(Some(E), 0, 0).err(),
-        // Minting the receive right itself.
-        rd::mint(rd::MintSource::Handle(rd::h(E)), 0, None).err(),
+        // Minting the receive right itself: a badge of 0. It goes in raw registers, because
+        // `Call::Mint`'s badge is a `NonZeroU64` and a typed call would never leave this
+        // program. The kernel refuses it while decoding, and again when it mints (I3).
+        rd::mint_raw(2, E as usize, 0, 0, 0),
         // Minting at all from a handle that is not a receive right.
         rd::mint_from_handle(E, 1, None).err(),
         // Minting from handles this program does not hold.

@@ -51,9 +51,13 @@ pub extern "C" fn _start() -> ! {
     // process holds as many open calls as it may. One process cannot hold that many threads, so
     // `redoubt-client` and `redoubt-filler` supply the rest.
     let (mut filling, mut pending, mut announced) = (false, false, false);
+    // The handles `op::FILL_TABLE` made, so that it can unmake them.
+    let (mut filled_from, mut filled) = (0u32, 0usize);
     loop {
         if filling && !pending && nparked < rd::MAX_OPEN_CALLS {
-            // SAFETY: only this thread writes it, and only before any filler is created.
+            // SAFETY: this thread is the only writer, and it writes the same handle every time,
+            // before creating the thread that reads it. A filler already running reads either
+            // that value or the one it was created with, which are equal.
             unsafe { core::ptr::write_volatile(&raw mut SELF_HANDLE, self_handle(&mut logger)) };
             if xous::create_thread_1(filler, 0).is_ok() {
                 pending = true;
@@ -235,6 +239,28 @@ pub extern "C" fn _start() -> ! {
                     mine
                 );
                 rd::reply(id, &rd::body([op::SERVE_BAD, 0, 0, 0])).ok();
+            }
+            op::FILL_TABLE if words[1] == 0 => {
+                // Answer 116: handles that would take this process past `MAX_HANDLES` are a
+                // cost it cannot pay, so a message carrying one is refused to its sender.
+                // Endpoints are the only object this program can make without a budget handle;
+                // their indices run from the first one upwards, so they are closed the same way.
+                filled_from = rd::endpoint_create().expect("room for one more handle");
+                let mut held = 1;
+                while rd::endpoint_create().is_ok() {
+                    held += 1;
+                }
+                log!(logger, "[server] table full after {} endpoints of my own", held);
+                filled = held;
+                rd::reply(id, &rd::body([op::FILL_TABLE, held, 0, 0])).ok();
+            }
+            op::FILL_TABLE => {
+                for index in filled_from..filled_from + filled as u32 {
+                    rd::close(index).ok();
+                }
+                log!(logger, "[server] table emptied again");
+                filled = 0;
+                rd::reply(id, &rd::body([op::FILL_TABLE, 0, 0, 0])).ok();
             }
             op::DONE => {
                 log!(logger, "[server] done");

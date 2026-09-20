@@ -24,7 +24,13 @@ use xous_kernel::{PID, TID};
 
 use crate::kframe;
 use crate::mem::MemoryManager;
+use crate::message::MsgKind;
 use crate::services::SystemServices;
+
+/// The scheduler and the memory manager together, in the one order the kernel borrows them.
+fn with_both<T>(f: impl FnOnce(&mut SystemServices, &mut MemoryManager) -> T) -> T {
+    SystemServices::with_mut(|ss| MemoryManager::with_mut(|mm| f(ss, mm)))
+}
 
 /// What the trap handler does after a call.
 pub enum Outcome {
@@ -40,7 +46,7 @@ pub fn handle(pid: PID, tid: TID, in_irq: bool, regs: &[u64; REGS]) -> Outcome {
     // I13, until WP-K5 arms the timer: every deadline that has passed is answered before this
     // call is, so a blocking call returns by its timeout as soon as anything enters the kernel.
     if !in_irq {
-        SystemServices::with_mut(crate::message::expire);
+        SystemServices::with_mut(|ss| MemoryManager::with_mut(|mm| crate::message::expire(ss, mm)));
     }
 
     let result =
@@ -81,24 +87,24 @@ fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
             let handle = mm.endpoint_create(pid)?;
             Ok(Some(Return::Handle(redoubt_sys::Handle::new(handle).expect("indices start at 1"))))
         }),
-        Call::Mint { source, badge, budget } => {
-            let handle = crate::message::mint(pid, tid, source, badge.get(), budget.map(|h| h.index()))?;
+        Call::Mint { source, badge, budget } => MemoryManager::with_mut(|mm| {
+            let handle = crate::message::mint(mm, pid, tid, source, badge.get(), budget.map(|h| h.index()))?;
             Ok(Some(Return::Handle(redoubt_sys::Handle::new(handle).expect("indices start at 1"))))
-        }
-        Call::Call { endpoint, body_rec, lend, timeout } => SystemServices::with_mut(|ss| {
-            crate::message::call(ss, pid, tid, endpoint.index(), body_rec, lend, timeout)
         }),
-        Call::Send { endpoint, body_rec, transfer, timeout } => SystemServices::with_mut(|ss| {
-            crate::message::send(ss, pid, tid, endpoint.index(), body_rec, transfer, timeout)
+        Call::Call { endpoint, body_rec, lend, timeout } => with_both(|ss, mm| {
+            crate::message::send(ss, mm, pid, tid, MsgKind::Call, endpoint.index(), body_rec, lend, timeout)
         }),
-        Call::Receive { from, timeout, max_transfer, received_rec } => SystemServices::with_mut(|ss| {
+        Call::Send { endpoint, body_rec, transfer, timeout } => with_both(|ss, mm| {
+            crate::message::send(ss, mm, pid, tid, MsgKind::Send, endpoint.index(), body_rec, transfer, timeout)
+        }),
+        Call::Receive { from, timeout, max_transfer, received_rec } => with_both(|ss, mm| {
             let from = from.map(|h| h.index());
-            crate::message::receive(ss, pid, tid, from, timeout, max_transfer, received_rec)
+            crate::message::receive(ss, mm, pid, tid, from, timeout, max_transfer, received_rec)
         }),
-        Call::Reply { msg_id, body_rec } => SystemServices::with_mut(|ss| {
-            crate::message::reply(ss, pid, tid, msg_id.get(), body_rec).map(done)
+        Call::Reply { msg_id, body_rec } => with_both(|ss, mm| {
+            crate::message::reply(ss, mm, pid, tid, msg_id.get(), body_rec).map(done)
         }),
-        Call::Serve { msg_id } => crate::message::serve(pid, tid, msg_id.get()).map(done),
+        Call::Serve { msg_id } => MemoryManager::with_mut(|mm| crate::message::serve(mm, pid, tid, msg_id.get())).map(done),
         Call::TimeNow => Ok(Some(Return::Time(crate::arch::irq::timer::now_us()))),
         Call::Random => {
             let mut bytes = [0u8; 8];
@@ -136,8 +142,10 @@ fn budget_destroy(pid: PID, tid: TID, h: u32) -> Result<Option<Return>, Error> {
         }
         // R10 reaches messages in flight: the endpoints the subtree owns are destroyed, and
         // every message sent through a handle stamped with it fails its sender with `Dead`.
-        crate::message::budgets_dying(ss);
-        MemoryManager::with_mut(|mm| mm.destroy_marked(top));
+        MemoryManager::with_mut(|mm| {
+            crate::message::budgets_dying(ss, mm);
+            mm.destroy_marked(top);
+        });
         Ok(if caller_doomed { None } else { Some(Return::Nothing) })
     })
 }
