@@ -563,4 +563,18 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   widths with a longer listening window, plus a self-check that the checked build really reaches the
   kernel. Kernel core `unsafe` 23 -> 21. Tenet 6 amended (question 119) to say a checked build of
   the same sources is not a special build.
+- **WP-S1 `keyd`** (`14bcc6e9d`): the key server as a typed protocol over `redoubt-rt`, its tables in
+  INIT.md, keys from the manifest (one per argument, the key in argument i having root badge i), two
+  purposes each with one message shape, and **every signature over a 32-byte digest keyd computed
+  itself** (the RFC 4253 exchange hash with `K_S` from its own key, or the audit digest), so no
+  container that signs longer messages can be what a keyd signature covers. No export operation
+  exists; `grant` mints no wider than the caller and dies with what the caller holds; `release(0)`
+  frees everything a holder granted. Constant time rests on the loader's `ed25519-compact`; SHA-256
+  is written in the crate rather than bringing 27k lines and 123 `unsafe` sites into the process
+  that holds every key. No `unsafe`. The review found a stale grant became a capability for another
+  key after a restart (first minted badge now drawn at random, answer 126, in keyd and the 9P
+  skeleton), a system caller could open a bucket per chained grant (only a root badge may grant),
+  grants of a dead holder were stuck, and the timing test could not see a 25% leak (rewritten
+  fixed-versus-random with a 5% control that must flag). The grant machinery now lives once in
+  `redoubt-rt` (`Minted<T>`), shared with the 9P skeleton.
 
