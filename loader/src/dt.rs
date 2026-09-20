@@ -16,11 +16,26 @@ use fdt_rs::index::{DevTreeIndex, DevTreeIndexNode};
 use fdt_rs::prelude::*;
 
 pub const MAX_MMIO: usize = 32;
+/// Distinct interrupt numbers the loader reports. The PLIC's source space is 10 bits, but a
+/// machine with more wired sources than this would need a bigger argument block anyway.
+pub const MAX_IRQ: usize = 32;
 const MAX_SEED: usize = 64;
 
 pub struct MmioRegion {
     pub range: Range<usize>,
     pub name: [u8; 4],
+    /// The device is a bus master: a driver holding it may call `dma_alloc`
+    /// (KERNEL-SPEC.md, Device; IO-ARCHITECTURE.md, DMA). Nothing in a device tree states
+    /// this in general, so the platform's rule stands here: on the targets Redoubt supports
+    /// the only bus masters are virtio devices, so a node whose `compatible` names virtio
+    /// carries the flag and nothing else does. A platform that confines DMA in hardware
+    /// (PLATFORM-FPGA.md) will state its own rule in the same place.
+    pub dma: bool,
+    /// Whether this is the console the device tree's `/chosen/stdout-path` names.
+    pub console: bool,
+    /// An interrupt controller: reported in `MREx` (the ownership table covers it) but never
+    /// made into a device object, because it is the kernel's.
+    pub kernel_only: bool,
 }
 
 pub struct Plic {
@@ -40,6 +55,13 @@ pub struct Platform {
     pub plic: Option<Plic>,
     pub mmio: [MmioRegion; MAX_MMIO],
     pub mmio_len: usize,
+    /// Every interrupt number wired to a device the loader reports, in ascending order and
+    /// without repeats. The hart timer is not here: it is a CPU resource, not a device
+    /// (BOOT.md).
+    pub irq: [u32; MAX_IRQ],
+    pub irq_len: usize,
+    /// The interrupt of the console named by `/chosen/stdout-path`, if it has one.
+    pub console_irq: Option<u32>,
     pub total_size: usize,
     pub dtb: usize,
 }
@@ -65,6 +87,43 @@ fn cell(bytes: Option<&[u8]>) -> Option<u64> {
 
 fn is_memory(node: &Node) -> bool {
     prop(node, "device_type").map_or(false, |b| b.strip_suffix(b"\0") == Some(b"memory"))
+}
+
+/// Whether the node's `compatible` list contains `needle` as a substring of any entry.
+fn compatible_has(node: &Node, needle: &[u8]) -> bool {
+    prop(node, "compatible").map_or(false, |b| b.windows(needle.len()).any(|w| w == needle))
+}
+
+/// An interrupt controller is the kernel's, never a userspace device: it decides which
+/// source reaches the hart, so a process that could map it would own every interrupt.
+/// The PLIC says so with `interrupt-controller`; the CLINT (the hart's own timer and
+/// software interrupts, which the firmware and the kernel drive) does not, so it is named.
+fn is_interrupt_controller(node: &Node) -> bool {
+    prop(node, "interrupt-controller").is_some() || compatible_has(node, b"clint")
+}
+
+/// The last component of a device-tree path (`/soc/serial@10000000` -> `serial@10000000`),
+/// with any `:options` suffix dropped, as `stdout-path` allows.
+fn last_component(path: &str) -> &str {
+    let path = path.split(':').next().unwrap_or(path);
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// The node name of the console: `/chosen/stdout-path`, resolved through `/aliases` when it
+/// names an alias rather than a path. `None` if the tree does not say.
+fn console_name<'dt>(root: &Node<'_, '_, 'dt>) -> Option<&'dt str> {
+    let chosen = root.children().find(|n| n.name() == Ok("chosen"))?;
+    let raw = prop(&chosen, "stdout-path")?;
+    let path = core::str::from_utf8(raw.strip_suffix(b"\0").unwrap_or(raw)).ok()?;
+    if path.contains('/') {
+        return Some(last_component(path));
+    }
+    // An alias: /aliases/<name> holds the real path.
+    let aliases = root.children().find(|n| n.name() == Ok("aliases"))?;
+    let alias = path.split(':').next().unwrap_or(path);
+    let target = prop(&aliases, alias)?;
+    let target = core::str::from_utf8(target.strip_suffix(b"\0").unwrap_or(target)).ok()?;
+    Some(last_component(target))
 }
 
 impl Platform {
@@ -94,8 +153,17 @@ impl Platform {
             timebase_hz: 0,
             cpu_count: 0,
             plic: None,
-            mmio: core::array::from_fn(|_| MmioRegion { range: 0..0, name: *b"    " }),
+            mmio: core::array::from_fn(|_| MmioRegion {
+                range: 0..0,
+                name: *b"    ",
+                dma: false,
+                console: false,
+                kernel_only: false,
+            }),
             mmio_len: 0,
+            irq: [0; MAX_IRQ],
+            irq_len: 0,
+            console_irq: None,
             total_size,
             dtb,
         };
@@ -125,6 +193,7 @@ impl Platform {
 
         // MMIO device regions: any node with a reg that lies outside RAM. QEMU virt keeps
         // these directly under the root and under /soc, both with the root's cell widths.
+        let console = console_name(&root);
         let soc = root.children().find(|n| n.name() == Ok("soc"));
         let devices = root.children().chain(soc.into_iter().flat_map(|s| s.children()));
         for node in devices {
@@ -140,15 +209,42 @@ impl Platform {
             if size == 0 || (base >= platform.ram.start && base < platform.ram.end) {
                 continue;
             }
+            let name = node.name().unwrap_or("");
+            // An interrupt controller belongs to the kernel, so it is not offered as a device
+            // object; it stays in `MREx` (which the legacy claim path and the ownership table
+            // use) and the kernel maps the PLIC for itself.
+            let kernel_only = is_interrupt_controller(&node);
+            let is_console = console == Some(name);
+            // The interrupts a device raises. `#interrupt-cells` is 1 for the PLIC, which is
+            // the only controller these platforms wire devices to; a wider one would need its
+            // own decoding, so the loader takes the first cell of each entry and no more.
+            if !kernel_only {
+                for entry in prop(&node, "interrupts").into_iter().flat_map(|b| b.chunks_exact(4)) {
+                    let irq = u32::from_be_bytes([entry[0], entry[1], entry[2], entry[3]]);
+                    if is_console {
+                        platform.console_irq.get_or_insert(irq);
+                    }
+                    if !platform.irq[..platform.irq_len].contains(&irq) && platform.irq_len < MAX_IRQ {
+                        platform.irq[platform.irq_len] = irq;
+                        platform.irq_len += 1;
+                    }
+                }
+            }
             if platform.mmio_len < MAX_MMIO {
-                let name = node.name().unwrap_or("");
                 let mut tag = *b"    ";
                 let len = name.len().min(4);
                 tag[..len].copy_from_slice(&name.as_bytes()[..len]);
-                platform.mmio[platform.mmio_len] = MmioRegion { range: base..base + size, name: tag };
+                platform.mmio[platform.mmio_len] = MmioRegion {
+                    range: base..base + size,
+                    name: tag,
+                    dma: !kernel_only && compatible_has(&node, b"virtio"),
+                    console: is_console && !kernel_only,
+                    kernel_only,
+                };
                 platform.mmio_len += 1;
             }
         }
+        platform.irq[..platform.irq_len].sort_unstable();
 
         platform.plic = read_plic(&idx, &root, ac, sc);
         platform
