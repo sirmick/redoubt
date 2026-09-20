@@ -20,12 +20,12 @@ pub const ENTRY_SIZE: u32 = 128;
 /// The LBA the entry array starts at.
 pub const ARRAY_LBA: u64 = 2;
 /// Sectors the array spans: 128 x 128 bytes.
-pub const ARRAY_SECTORS: u64 = (ENTRIES * ENTRY_SIZE / SECTOR_SIZE) as u64;
+const ARRAY_SECTORS: u64 = (ENTRIES * ENTRY_SIZE / SECTOR_SIZE) as u64;
 /// The first LBA a partition may use.
 pub const FIRST_USABLE: u64 = ARRAY_LBA + ARRAY_SECTORS;
 /// Sectors reserved at the end for the backup header and array, which `blkd` never reads but a
 /// real table always has.
-pub const TAIL: u64 = ARRAY_SECTORS + 1;
+const TAIL: u64 = ARRAY_SECTORS + 1;
 
 /// A partition to put in a built image.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
