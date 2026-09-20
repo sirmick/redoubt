@@ -5,7 +5,7 @@ so each needs your decision; the answer goes into the named note with a HISTORY.
 **Rec** is the orchestrator's recommendation. Reply with numbers, e.g. "all Rec except 7: ...".
 
 **1-126 answered 2026-09-19** (ANSWERS.md, seven tranches; each "Answered" line says where the
-answer now lives). **Open: 127-128**, **138-140** (from WP-K2) and **141** (from WP-S1) and **129-137** (userland,
+answer now lives). **Open: 127-128**, **138-140** (from WP-K2) and **141** (from WP-S1) and **142-145** (from WP-K3) and **129-137** (userland,
 USERLAND.md), at the end. The round-4 answers revised 56 (handle kinds are checked by use) and replaced 57 and 58 (by
 82); a later tranche replaced 103 (no `first` flag and no strict priority: one stride queue for
 every budget); the tranche for 120-126 accepted every recommendation and added one change to what
@@ -1135,4 +1135,35 @@ on the box); 132 and 133 block the shell's pipelines, 135 blocks launching from 
      badge, while admission keys by badge as now. That keeps answer 117 (the steward minting for a
      lease's agent is a share of its own) and closes the chain. It costs system-to-system
      delegation its own share, which is the conservative direction.
+
+## From devices and interrupts (WP-K3)
+
+142. **A device object's cost and owner.** The cost table has no Device row, and nothing says which
+     budget owns one. WP-K3 charges one page to the owning budget and revokes it with that budget
+     (R10), like an endpoint.
+     *Rec:* the cost table gains `| device | 1 | its owner |`, the Device object says its owner is
+     the budget that held the handle when the loader handed it out (`init`'s, in practice), and, as
+     for endpoints (question 128), there is no `device_destroy`.
+
+143. **What the loader decides about devices, and what it may not.** WP-K3's loader sets the DMA
+     flag from a node whose `compatible` names virtio, keeps interrupt controllers out of the
+     device list entirely, and refuses the boot on an entry that names RAM or wraps. None of that
+     is written down, and all of it is security-relevant: an interrupt controller as a device
+     object would let its holder mask anyone's interrupts.
+     *Rec:* BOOT.md states all four rules, plus the `Devs` tag's layout, as part of what the loader
+     does.
+
+144. **Two holders of one MMIO handle.** A device handle is copyable, so two processes can both
+     `map_device` the same range. WP-K3 treats the handle as the authority and doesn't track
+     mappings.
+     *Rec:* say so in KERNEL-SPEC.md. A device is shared by whoever was given a handle, exactly
+     like an endpoint; a driver that must be alone is the only holder because `init` gave it out
+     once.
+
+145. **"A page table is freed when it maps nothing" (R11) is not implemented, and no package owns
+     it.** `unmap` returns the pages but not their tables, so a process can strand its own table
+     pages. Charged to itself, so it is bounded, but the rule as written is false.
+     *Rec:* WP-K3's `unmap` frees an empty table, and the cost table's page-table row says when
+     the pages come back. If that is more than a small change, give it to WP-K5 and say so in the
+     rule.
 
