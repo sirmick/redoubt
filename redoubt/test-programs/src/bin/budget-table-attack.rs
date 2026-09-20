@@ -18,6 +18,9 @@ pub extern "C" fn _start() -> ! {
     log!(logger, "[attacker] starting");
     test_programs::wait_ms(20);
     let before = rd::usage(rd::SYSTEM).unwrap().pages_usage;
+    // The first index this program does not already hold: root, system, users and a handle per
+    // device object come first, and how many of those there are is the machine's business.
+    let base = rd::first_free();
     let pool = rd::create(rd::SYSTEM, &rd::spec(5000, 0, 0)).expect("carve");
     let mut last = pool;
     let refusal = loop {
@@ -27,7 +30,11 @@ pub extern "C" fn _start() -> ! {
         }
     };
     let pool_usage = rd::usage(pool).unwrap().pages_usage;
-    log!(logger, "[table] filled to handle {}, then {:?}; the pool paid {} pages", last, refusal, pool_usage);
+    // The scopes are every index from the pool's own to the last: one page each, and the
+    // table stops at MAX_HANDLES whatever the machine handed this program to start with.
+    let one_each = pool_usage == u64::from(rd::MAX_HANDLES as u32 - base) && last == rd::MAX_HANDLES as u32;
+    log!(logger, "[table] filled to handle {}, then {:?}; the pool paid {} pages ({})", last, refusal,
+        pool_usage, if one_each { "one per scope" } else { "FAIL" });
     // Table pages are charged to system: 31 more than the one it had, beyond the pool (5000
     // pages and its own).
     let table_pages = rd::usage(rd::SYSTEM).unwrap().pages_usage - before - 5001;
@@ -39,7 +46,7 @@ pub extern "C" fn _start() -> ! {
     let destroyed = rd::destroy(pool);
     let after = rd::usage(rd::SYSTEM).unwrap().pages_usage;
     log!(logger, "[table] destroyed the pool -> {:?}; system usage back where it was: {}", destroyed, before == after);
-    let gone = (4..=3969).all(|h| rd::usage(h) == Err(Error::BadHandle));
+    let gone = (base..=3969).all(|h| rd::usage(h) == Err(Error::BadHandle));
     log!(logger, "[table] every swept index is empty: {}", gone);
     log!(logger, "[table] attempts done");
     rd::victim::go();

@@ -1,5 +1,6 @@
-//! Attacker: forge handle indices. It holds root, system and users in slots 1-3 and a budget of
-//! its own; it passes every other index it can think of (0, every unused slot of the first
+//! Attacker: forge handle indices. It holds root, system and users in slots 1-3, a handle per
+//! device object (WP-K3), and a budget of its own; it passes every other index it can think of
+//! (0, every unused slot of the first
 //! table page, indices on pages it does not have, which a kernel that dropped the page number
 //! would read as slots 1-3, past the table, wider than 32 bits) to `budget_destroy` and the other
 //! calls. A forged index that reached `system` would destroy it and kill the victim living there;
@@ -40,7 +41,10 @@ pub extern "C" fn _start() -> ! {
             log!(logger, "[forge] index {} -> {:?}", h, results);
         }
     }
-    log!(logger, "[forge] {} of {} calls on forged indices got BadHandle", refused, tried);
+    // How many indices there are to forge depends on how many handles the machine gave this
+    // program to start with, so what the case pins is that every one of them was refused.
+    log!(logger, "[forge] {} of {} calls on forged indices got BadHandle ({})", refused, tried,
+        if refused == tried { "all" } else { "FAIL" });
     // Indices that are not indices at all: 0, and (where registers are wide) above 32 bits.
     let destroy = rd::number(Number::BudgetDestroy);
     // Where registers are 64 bits wide, an index whose low 32 bits name `system`: a kernel that

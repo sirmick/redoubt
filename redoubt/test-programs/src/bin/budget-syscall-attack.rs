@@ -122,8 +122,20 @@ pub extern "C" fn _start() -> ! {
         call(Number::HandleClose, [999, 0, 0, 0, 0, 0, 0]),
         call(Number::HandleClose, [rd::SYSTEM as usize, 1, 0, 0, 0, 0, 0]),
         call(Number::BudgetDestroy, [999, 0, 0, 0, 0, 0, 0]),
-        // Calls not built yet (WP-K3 to WP-K5) decode, then are refused.
-        call(Number::MapAnon, [4096, 3, 0, 0, 0, 0, 0]),
+        // The memory and device calls (WP-K3): a stray register, flags that cannot be decoded
+        // (W+X, an unknown bit), no length, a range that is not the caller's, and handles of
+        // the wrong kind. `system_reset` is offered a budget handle, never the Reset right.
+        call(Number::MapAnon, [4096, 3, 1, 0, 0, 0, 0]),
+        call(Number::MapAnon, [4096, 6, 0, 0, 0, 0, 0]),
+        call(Number::MapAnon, [4096, 8, 0, 0, 0, 0, 0]),
+        call(Number::MapAnon, [0, 3, 0, 0, 0, 0, 0]),
+        call(Number::Unmap, [KERNEL, 4096, 0, 0, 0, 0, 0]),
+        call(Number::SetFlags, [text, 4096, 6, 0, 0, 0, 0]),
+        call(Number::MapDevice, [0, 0, 0, 0, 0, 0, 0]),
+        call(Number::MapDevice, [rd::SYSTEM as usize, 0, 0, 0, 0, 0, 0]),
+        call(Number::DmaAlloc, [999, 1, 0, 0, 0, 0, 0]),
+        call(Number::SystemReset, [rd::SYSTEM as usize, 1, 0, 0, 0, 0, 0]),
+        call(Number::SystemReset, [999, 9, 0, 0, 0, 0, 0]),
         // `endpoint_create` takes no arguments: a stray register is malformed.
         call(Number::EndpointCreate, [0, 0, 0, 0, 0, 0, 1]),
         // `serve` decodes (id 0 first), then finds no such open call of this thread.

@@ -1,15 +1,37 @@
-description = "External interrupt through the PLIC to a userspace handler, with injected console input"
+description = "An external interrupt reaches a driver through `receive` on its IRQ handle (R5: the kernel masks the source and sets `fired`, the next receive unmasks it and returns; no acknowledge call), with the console taken through `map_device` and injected console input (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# log-server, granted the UART's interrupt, claims it and echoes every byte that arrives.
+# Built with the checks on (redoubt/README.md, "Debug assertions").
+debug_assertions = true
+# PID 2 log-server is the bundle's first program, so it holds every device object the loader
+# made (INTERIM, kernel device.rs): it maps the console through its MMIO handle and echoes
+# every byte from a thread blocked in `receive` on the console's IRQ handle. No grants: the
+# handle is the authority now (DEVICE-GRANTS.md, Replacement).
 programs = ["log-server"]
-expect = ['^\[server\] claimed irq 10$', "^\\[server\\] irq 10: received 'x'$", "^\\[server\\] irq 10: received 'y'$", "^\\[server\\] irq 10: received 'z'$"]
+# Three bytes, each typed only after the one before it was echoed, so each needs an interrupt
+# of its own: one byte at a time proves the source is unmasked again by the next `receive`,
+# which sending "xyz" in one go would not (a single interrupt drains the whole FIFO). A kernel
+# that left the source masked echoes nothing at all.
+#
+# What this cannot show: that the kernel *masks* the source when it fires. The console drains
+# its FIFO before receiving again, so a source left unmasked simply does not fire again, and
+# QEMU's PLIC model accepts a completion for a source that has already been disabled, which
+# the specification says to ignore. Both are matters of reading the kernel, not of this case.
+expect = [
+    '^\[server\] holding the console irq$',
+    "^\\[server\\] irq: received 'x'$",
+    "^\\[server\\] irq: received 'y'$",
+    "^\\[server\\] irq: received 'z'$",
+]
 
 [[input]]
 after = '^\[server\] PID 2 listening$'
-send = "xyz"
+send = "x"
 
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]
-irq = [10]
+[[input]]
+after = "^\\[server\\] irq: received 'x'$"
+send = "y"
+
+[[input]]
+after = "^\\[server\\] irq: received 'y'$"
+send = "z"

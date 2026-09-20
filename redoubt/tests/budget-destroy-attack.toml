@@ -10,7 +10,7 @@ timeout_secs = 30
 # the checker's power-off. The attacker's lines pin that each stale index was refused and the
 # carve returned, as progress.
 expect = [
-    '^\[pid 2\] \[destroy\] held b=4 c=5 d=6 scope=7 e=8; destroy b -> Ok\(\(\)\)$',
+    '^\[pid 2\] \[destroy\] held b=\d+ c=\d+ d=\d+ scope=\d+ e=\d+; destroy b -> Ok\(\(\)\)$',
     '^\[pid 2\] \[destroy\] stale index checks refused: 8 of 8$',
     '^\[pid 2\] \[destroy\] system carve returned: true$',
     '^\[pid 2\] \[destroy\] e untouched: Ok\(10\)$',

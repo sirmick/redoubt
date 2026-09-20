@@ -7,11 +7,11 @@ programs = ["log-server", "forger", "attack-checker"]
 timeout_secs = 20
 # Both copies arrive, each line under the forger's prefix; the bare verdict line never does.
 expect = [
-    '^\[pid 3\] \[server\] irq 10: received .y.$',
-    '^\[pid 3\] \[server\] irq 10: received .y.$',
-    '^\[server\] irq 10: received .y.$',
+    '^\[pid 3\] \[server\] irq: received .y.$',
+    '^\[pid 3\] \[server\] irq: received .y.$',
+    '^\[server\] irq: received .y.$',
 ]
-must_fail = '^guest exited while waiting for /\^\\\[server\\\] irq 10: received \.y\.\$/$'
+must_fail = '^guest exited while waiting for /\^\\\[server\\\] irq: received \.y\.\$/$'
 
 [[grant]]
 program = "log-server"
