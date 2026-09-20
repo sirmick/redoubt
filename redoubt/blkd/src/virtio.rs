@@ -32,8 +32,6 @@ pub mod reg {
     pub const QUEUE_DEVICE_HIGH: usize = 0x0a4;
     pub const CONFIG_GENERATION: usize = 0x0fc;
     pub const CONFIG: usize = 0x100;
-    /// One virtio-mmio slot on QEMU `virt`.
-    pub const SLOT_LEN: usize = 0x1000;
 }
 
 /// `"virt"` little-endian: the first register of a virtio-mmio slot.

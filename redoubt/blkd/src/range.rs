@@ -27,9 +27,6 @@ impl Range {
         }
     }
 
-    /// The whole disk, for the table `blkd` reads the partition table through.
-    pub fn whole(disk_sectors: u64) -> Result<Range, NotOnDisk> { Range::new(0, disk_sectors, disk_sectors) }
-
     pub fn first(&self) -> u64 { self.first }
 
     pub fn sectors(&self) -> u64 { self.sectors }

@@ -146,10 +146,15 @@ impl Queue {
             t.reg_write(low, addr as u32)?;
             t.reg_write(high, (addr >> 32) as u32)?;
         }
-        // The rings start zeroed: `dma_alloc` returns zeroed pages (R11), and the device's own
-        // reset put its `used.idx` back to 0, which is what `next_used` expects.
+        // Both rings are zeroed before the queue is made ready, so neither counter starts at a
+        // value this driver did not put there. `dma_alloc` returns zeroed pages (R11) and the
+        // device's own reset puts its `used.idx` back to 0, but writing them is what makes the
+        // starting point this driver's rather than something it is relying on. `avail.flags` of
+        // 0 also means "interrupt me", which is what `complete` waits for.
         t.dma_write_u16(AVAIL_OFF, 0)?;
         t.dma_write_u16(AVAIL_IDX_OFF, 0)?;
+        t.dma_write_u16(USED_OFF, 0)?;
+        t.dma_write_u16(USED_IDX_OFF, 0)?;
         self.next_avail = 0;
         self.next_used = 0;
         t.fence();

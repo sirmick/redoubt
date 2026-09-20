@@ -85,10 +85,6 @@ pub struct Partition {
     pub first_lba: u64,
     /// Sectors in the partition: `last_lba - first_lba + 1`.
     pub sectors: u64,
-    /// The 16-byte partition type GUID, as it sits on the disk.
-    pub type_guid: [u8; 16],
-    /// The 16-byte unique partition GUID, as it sits on the disk.
-    pub unique_guid: [u8; 16],
 }
 
 /// Checks the primary header at LBA 1 and says where the entry array is.
@@ -180,13 +176,13 @@ pub fn partitions(at: &ArrayLocation, array: &[u8]) -> Result<Vec<Partition>, Gp
     for index in 0..at.entries {
         let start = (index as usize) * (at.entry_size as usize);
         let entry = array.get(start..start + MIN_ENTRY_SIZE as usize).ok_or(GptError::BadArray)?;
-        let type_guid: [u8; 16] = entry[..16].try_into().map_err(|_| GptError::BadArray)?;
         // An all-zero type GUID is an unused entry (§5.3.3). Its other fields mean nothing, so
-        // they are not checked: an unused entry cannot become a range.
-        if type_guid == [0; 16] {
+        // they are not checked: an unused entry cannot become a range. The two GUIDs go no
+        // further than this: a volume names its partition by its place in the array (the badge
+        // it is given), not by a name off a medium `blkd` does not trust.
+        if entry[..16] == [0; 16] {
             continue;
         }
-        let unique_guid: [u8; 16] = entry[16..32].try_into().map_err(|_| GptError::BadArray)?;
         let first_lba = u64_at(entry, 32)?;
         let last_lba = u64_at(entry, 40)?;
         if first_lba > last_lba || first_lba < at.first_usable || last_lba > at.last_usable {
@@ -194,7 +190,7 @@ pub fn partitions(at: &ArrayLocation, array: &[u8]) -> Result<Vec<Partition>, Gp
         }
         // `last >= first` and both are inside the usable range, so this cannot overflow.
         let sectors = last_lba - first_lba + 1;
-        let partition = Partition { index, first_lba, sectors, type_guid, unique_guid };
+        let partition = Partition { index, first_lba, sectors };
         // An overlap would let two volumes alias each other's bytes. At most
         // `MAX_PARTITIONS` entries, so the comparison is bounded work.
         if found.iter().any(|other| overlaps(other, &partition)) {
