@@ -138,3 +138,100 @@ fn a_reply_that_cannot_be_encoded_gives_the_request_back() {
     assert_eq!(code.join().unwrap(), 0);
     assert_eq!(server_thread.join().unwrap(), 0);
 }
+
+/// WP-R4: a 9P call the skeleton hands back to be parked has already had whatever handles it
+/// brought closed, and its own list emptied with them, so serving it a second time closes
+/// nothing. Without that, the second serving closes the same table indices — which by then name
+/// whatever the server has opened since.
+#[test]
+fn a_held_9p_call_closes_what_it_brought_exactly_once() {
+    use redoubt_rt::server::Limits;
+    use redoubt_rt::server::ninep::{FileServer, FileStat, NineError, NineServer, Qid, Read, WORDS_9P, mode};
+    use redoubt_rt::wire::ninep::{Body, Message as NineP, NOFID};
+
+    /// One file, which waits for a read until `ready`.
+    struct WaitOnce {
+        ready: bool,
+    }
+
+    impl FileServer for WaitOnce {
+        type Node = ();
+
+        fn attach(&mut self, _: &Caller, _: &str) -> Result<((), Qid), NineError> {
+            Ok(((), Qid { kind: 0, version: 0, path: 0 }))
+        }
+
+        fn labels(&self, _: &()) -> &[u64] { &[] }
+
+        fn walk(&mut self, _: &Caller, _: &(), _: &str) -> Result<((), Qid), NineError> {
+            Err(NineError::NOT_DIR)
+        }
+
+        fn open(&mut self, _: &Caller, _: &(), _: u8) -> Result<Qid, NineError> {
+            Ok(Qid { kind: 0, version: 0, path: 0 })
+        }
+
+        fn read(&mut self, _: &Caller, _: &(), _: u64, out: &mut [u8]) -> Result<Read, NineError> {
+            if !self.ready {
+                return Ok(Read::Wait);
+            }
+            out.first_mut().map(|b| *b = b'!');
+            Ok(Read::Done(1))
+        }
+
+        fn write(&mut self, _: &Caller, _: &(), _: u64, d: &[u8]) -> Result<usize, NineError> { Ok(d.len()) }
+
+        fn stat(&mut self, _: &Caller, _: &()) -> Result<FileStat, NineError> { Ok(FileStat::default()) }
+
+        fn dir_entry(&mut self, _: &Caller, _: &(), _: u64) -> Result<Option<((), FileStat)>, NineError> {
+            Ok(None)
+        }
+    }
+
+    let f = fake();
+    let (server, client) = (f.process(0, &[]), f.process(1001, &[]));
+    let receive = f.endpoint(server);
+    let conn = f.grant(server, receive, client, 1);
+    // A handle the client sends with its 9P read. 9P carries none, so the skeleton closes it.
+    let spare = f.endpoint(client);
+
+    let server_thread = f.run(server, move || {
+        let ep = Endpoint::from_handle(receive);
+        let limits = Limits { buckets: 2, in_flight: 2, files: 4, state: 0 };
+        let mut nine = NineServer::new(WaitOnce { ready: false }, limits, 9).unwrap();
+        let own = |_: &mut NineServer<WaitOnce>, r: redoubt_rt::ipc::Request| {
+            r.reply(&[1, 0, 0, 0], &[]).map_err(|(e, _)| e)
+        };
+        let mut verdict = 0;
+        while let Ok(event) = ep.receive(FOREVER, 0) {
+            let Event::Call(request) = event else { continue };
+            let Ok(Some(held)) = nine.serve_parking(request, own) else { continue };
+            // The client's handle is already closed, so the next handle this server opens takes
+            // its index; if the second serving closed that index too, the count would drop.
+            let mine = Endpoint::create().unwrap();
+            let before = f.held(server).0;
+            nine.fs.ready = true;
+            let _ = nine.serve_parking(held, own);
+            verdict = u32::from(f.held(server).0 == before && mine.close().is_ok());
+        }
+        verdict
+    });
+
+    let read = f.run(client, move || {
+        let mut buf = redoubt_rt::ipc::Buffer::new(1).unwrap();
+        let ep = Endpoint::from_handle(conn);
+        let mut rpc = |body: Body<'_>, handles: &[Handle]| {
+            NineP { tag: 3, body }.encode(&mut buf).unwrap();
+            let reply = ep.call(&WORDS_9P, handles, Some(&mut buf), FOREVER).expect("the call");
+            assert_eq!(reply.words, WORDS_9P);
+            NineP::decode(&buf).unwrap().body.kind()
+        };
+        assert_eq!(rpc(Body::Tattach { fid: 0, afid: NOFID, uname: "", aname: "" }, &[]), 105);
+        assert_eq!(rpc(Body::Topen { fid: 0, mode: mode::OREAD }, &[]), 113);
+        // The read waits, is handed back, and is served again: `Rread`.
+        u32::from(rpc(Body::Tread { fid: 0, offset: 0, count: 8 }, &[spare]))
+    });
+    assert_eq!(read.join().unwrap(), 117, "the held read was answered with an Rread");
+    f.destroy(server, receive);
+    assert_eq!(server_thread.join().unwrap(), 1, "the second serving closed a handle it did not own");
+}
