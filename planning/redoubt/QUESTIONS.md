@@ -5,7 +5,7 @@ so each needs your decision; the answer goes into the named note with a HISTORY.
 **Rec** is the orchestrator's recommendation. Reply with numbers, e.g. "all Rec except 7: ...".
 
 **1-126 answered 2026-09-19** (ANSWERS.md, seven tranches; each "Answered" line says where the
-answer now lives). **Open: 127-128** and **138-140** (from WP-K2) and **129-137** (userland,
+answer now lives). **Open: 127-128**, **138-140** (from WP-K2) and **141** (from WP-S1) and **129-137** (userland,
 USERLAND.md), at the end. The round-4 answers revised 56 (handle kinds are checked by use) and replaced 57 and 58 (by
 82); a later tranche replaced 103 (no `first` flag and no strict priority: one stride queue for
 every budget); the tranche for 120-126 accepted every recommendation and added one change to what
@@ -1124,4 +1124,15 @@ on the box); 132 and 133 block the shell's pipelines, 135 blocks launching from 
      `map_anon` would. A caller that cannot pay gets `InvalidArgument`, since `call`'s row has no
      `OutOfMemory`.
      *Rec:* state it in R3 or the `call` row, so the model and the kernel agree for WP-C1.
+
+141. **A system caller can open a bucket per chained connection in the 9P skeleton.** Admission
+     keys account 0 by badge, and a share folds into its parent's only when the requester's client
+     matches the caller's. So a system client of `fsd` or `blkd` minting connections for itself
+     opens a fresh bucket each time and can spend every bucket the server has, after which nobody
+     gets a new connection. keyd closed its version by letting only a root badge grant, but in 9P
+     minting a connection for a child *is* the attenuation the design wants.
+     *Rec:* fold when the requester's (account, label set) matches the caller's, ignoring the
+     badge, while admission keys by badge as now. That keeps answer 117 (the steward minting for a
+     lease's agent is a share of its own) and closes the chain. It costs system-to-system
+     delegation its own share, which is the conservative direction.
 
