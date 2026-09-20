@@ -386,6 +386,7 @@ dependencies = [
  "elf",
  "fdt-rs",
  "paging",
+ "redoubt-signing",
  "sbi-rt",
  "tar-no-std",
  "xous",
@@ -601,6 +602,10 @@ dependencies = [
  "redoubt-sys",
  "redoubt-wire",
 ]
+
+[[package]]
+name = "redoubt-signing"
+version = "0.1.0"
 
 [[package]]
 name = "redoubt-sys"
@@ -889,6 +894,7 @@ dependencies = [
  "anyhow",
  "clap",
  "ed25519-compact",
+ "redoubt-signing",
  "regex",
  "serde",
  "tar",

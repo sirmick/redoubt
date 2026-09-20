@@ -19,6 +19,14 @@ max_unsafe = 17 # +3: fdt-rs DevTree::from_raw_pointer, the static index buffer,
 max_undocumented = 0
 
 [[budget]]
+# WP-V1: the boot bundle's signature preimage, linked into the loader, so it is TCB. It is
+# `#![forbid(unsafe_code)]`; the budget says so where the rest of the TCB is counted.
+name = "redoubt-signing (signature preimages)"
+paths = ["redoubt/signing/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
 name = "kernel: Sv39, SBI and PLIC backends"
 paths = [
     "kernel/src/arch/riscv/mem.rs", "kernel/src/arch/riscv/mmu_flags.rs",

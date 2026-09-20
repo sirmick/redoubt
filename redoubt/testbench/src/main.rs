@@ -76,7 +76,19 @@ fn main() -> Result<()> {
             .iter()
             .map(|p| if p.contains('/') { Program::Path { path: p.into() } } else { Program::TestProgram(p.clone()) })
             .collect();
-        let bundle = prepare(&builder, target, machine, &programs, &[], &[], "", false, Profile::Release, &logs.join("interactive.tar"))?;
+        let bundle = prepare(
+            &builder,
+            target,
+            machine,
+            &programs,
+            &[],
+            &[],
+            "",
+            false,
+            case::Signing::Domain,
+            Profile::Release,
+            &logs.join("interactive.tar"),
+        )?;
         let loader = builder.artifact(target, machine.loader_package, Profile::Release);
         let image = Image {
             machine,
@@ -214,6 +226,7 @@ fn prepare(
     extra_kernel_features: &[String],
     manifest: &str,
     tamper: bool,
+    signing: case::Signing,
     profile: Profile,
     bundle: &Path,
 ) -> Result<PathBuf> {
@@ -226,7 +239,15 @@ fn prepare(
         .iter()
         .map(|file| Ok((file.name.clone(), builder.program(target, &file.from)?.1)))
         .collect::<Result<Vec<_>>>()?;
-    build::bundle(bundle, &builder.artifact(target, "xous-kernel", profile), &programs, &files, manifest, tamper)?;
+    build::bundle(
+        bundle,
+        &builder.artifact(target, "xous-kernel", profile),
+        &programs,
+        &files,
+        manifest,
+        tamper,
+        signing,
+    )?;
     Ok(bundle.to_path_buf())
 }
 
@@ -296,6 +317,7 @@ fn run_case(
         &boot.kernel_features,
         &manifest,
         boot.tamper_bundle,
+        boot.sign_bundle,
         profile,
         &bundle,
     ) {

@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use anyhow::{bail, ensure, Context, Result};
 use ed25519_compact::{KeyPair, Seed};
 
-use crate::case::{Corruption, Program};
+use crate::case::{Corruption, Program, Signing};
 use crate::target::Target;
 
 pub struct Builder {
@@ -143,7 +143,8 @@ const DEV_SEED: [u8; 32] = [0x42; 32];
 
 /// Build the boot bundle, sign it, and write `signature || tar` to `path`. `files` are data
 /// entries, placed after the programs. If `tamper`, flip one payload byte after signing, so
-/// the loader must reject it.
+/// the loader must reject it. `signing` chooses what the signature covers: the real preimage,
+/// or one of the forgeries a case uses to prove the loader refuses it.
 pub fn bundle(
     path: &Path,
     kernel: &Path,
@@ -151,6 +152,7 @@ pub fn bundle(
     files: &[(String, PathBuf)],
     manifest: &str,
     tamper: bool,
+    signing: Signing,
 ) -> Result<()> {
     let mut archive = tar::Builder::new(Vec::new());
     let entries: Vec<_> =
@@ -171,7 +173,7 @@ pub fn bundle(
     let mut tar = archive.into_inner()?;
 
     let keypair = KeyPair::from_seed(Seed::new(DEV_SEED));
-    let signature = keypair.sk.sign(&tar, None);
+    let signature = keypair.sk.sign(preimage(&tar, signing), None);
     if tamper {
         // Corrupt a payload byte so verification fails, without touching the signature.
         let mid = tar.len() / 2;
@@ -184,6 +186,35 @@ pub fn bundle(
     Ok(())
 }
 
+/// The bytes a case's signature covers. Only `Signing::Domain` ships, and it is built by
+/// `redoubt_signing::bundle_preimage` — the same construction the loader verifies with, so the
+/// signer and the verifier cannot drift apart. The forgeries are spelled out here on purpose:
+/// each is what a signer that did not know about the bundle domain would produce, and the
+/// loader must refuse every one of them (VERIFIED-BOOT.md, Testbench).
+fn preimage(tar: &[u8], signing: Signing) -> Vec<u8> {
+    match signing {
+        Signing::Domain => redoubt_signing::bundle_preimage(tar),
+        // No domain and no length: the container as it stood before answer 120.
+        Signing::BareArchive => tar.to_vec(),
+        // Another Redoubt domain over the same archive: a signature made for packages
+        // (PACKAGES.md) must not boot a machine.
+        Signing::ForeignDomain => {
+            let mut preimage = b"redoubt.pkg.v1\0".to_vec();
+            preimage.extend_from_slice(&(tar.len() as u64).to_le_bytes());
+            preimage.extend_from_slice(tar);
+            preimage
+        }
+        // The right domain with a length that is not the archive's. The loader measures the
+        // archive in the container it reads, so only the signer's count can be wrong.
+        Signing::WrongLength => {
+            let mut preimage = redoubt_signing::BUNDLE_DOMAIN.to_vec();
+            preimage.extend_from_slice(&(tar.len() as u64 + 1).to_le_bytes());
+            preimage.extend_from_slice(tar);
+            preimage
+        }
+    }
+}
+
 fn append<W: std::io::Write>(archive: &mut tar::Builder<W>, name: &str, data: &[u8]) -> Result<()> {
     let mut header = tar::Header::new_ustar();
     header.set_size(data.len() as u64);
@@ -191,4 +222,69 @@ fn append<W: std::io::Write>(archive: &mut tar::Builder<W>, name: &str, data: &[
     header.set_cksum();
     archive.append_data(&mut header, name, data)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The archive these tests sign: any fixed bytes will do, since the loader is handed
+    /// whatever the container holds.
+    const ARCHIVE: &[u8] = b"not really a tar, but signed the same way";
+
+    /// What the bench signs is the documented preimage, and nothing else. The loader hashes
+    /// `redoubt_signing::bundle_preamble(len)` and then the archive; the bench signs
+    /// `redoubt_signing::bundle_preimage(tar)`. Both are asserted here against the bytes
+    /// VERIFIED-BOOT.md spells out, so changing either side alone fails before a case boots.
+    #[test]
+    fn the_signed_bytes_are_the_documented_preimage() {
+        let signed = preimage(ARCHIVE, Signing::Domain);
+
+        let mut expected = b"redoubt.bundle.v1\x00".to_vec();
+        expected.extend_from_slice(&(ARCHIVE.len() as u64).to_le_bytes());
+        expected.extend_from_slice(ARCHIVE);
+        assert_eq!(signed, expected);
+
+        // And what the loader hashes, in its two pieces, is that same run of bytes.
+        let preamble = redoubt_signing::bundle_preamble(ARCHIVE.len() as u64);
+        assert_eq!(&signed[..preamble.len()], &preamble);
+        assert_eq!(&signed[preamble.len()..], ARCHIVE);
+    }
+
+    /// Every forgery a case can ask for differs from the real preimage, so none of them can
+    /// pass by accident, and each differs in the way its name says.
+    #[test]
+    fn the_forgeries_are_not_the_real_preimage() {
+        let real = preimage(ARCHIVE, Signing::Domain);
+
+        assert_eq!(preimage(ARCHIVE, Signing::BareArchive), ARCHIVE);
+        assert_ne!(preimage(ARCHIVE, Signing::BareArchive), real);
+
+        let foreign = preimage(ARCHIVE, Signing::ForeignDomain);
+        assert!(foreign.starts_with(b"redoubt.pkg.v1\x00"));
+        assert_ne!(foreign, real);
+
+        let wrong = preimage(ARCHIVE, Signing::WrongLength);
+        assert!(wrong.starts_with(redoubt_signing::BUNDLE_DOMAIN));
+        assert_eq!(wrong.len(), real.len());
+        assert_ne!(wrong, real);
+    }
+
+    /// The signature itself, for that archive under the development seed: a golden value that
+    /// pins the key, the algorithm and the preimage together. It changes only when the
+    /// signature format does — and then every bundle ever signed stops verifying.
+    #[test]
+    fn golden_signature_over_a_known_archive() {
+        let keypair = KeyPair::from_seed(Seed::new(DEV_SEED));
+        let signature = keypair.sk.sign(preimage(ARCHIVE, Signing::Domain), None);
+        let hex: String = signature.iter().map(|byte| format!("{byte:02x}")).collect();
+        assert_eq!(hex, GOLDEN_SIGNATURE);
+
+        // The same signature over the bare archive is not a signature at all: what the loader
+        // refuses on the machine is refused here too, by the same library.
+        assert!(keypair.pk.verify(preimage(ARCHIVE, Signing::Domain), &signature).is_ok());
+        assert!(keypair.pk.verify(ARCHIVE, &signature).is_err());
+    }
+
+    const GOLDEN_SIGNATURE: &str = "c5807e8b49de09f4a03ed502f87a867aded52a6f0badeca8db993d425d3d457fbf75559b65473006d1355efc665fd79952e5c16b7a9582c5f40dccc432310a04";
 }

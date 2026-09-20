@@ -1,0 +1,13 @@
+[package]
+name = "redoubt-signing"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Redoubt signing domains: the one construction of a signature preimage, shared by verifiers and signers"
+
+[features]
+# Off by default, so the loader links nothing that allocates. A host signer turns it on for
+# `bundle_preimage`, which needs `alloc`.
+alloc = []
+
+[dependencies]

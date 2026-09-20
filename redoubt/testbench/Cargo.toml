@@ -13,3 +13,4 @@ serde = { version = "1", features = ["derive"] }
 tar = { version = "0.4", default-features = false }
 toml = "0.8"
 ed25519-compact = { version = "2", default-features = false }
+redoubt-signing = { path = "../signing", features = ["alloc"] }  # the bundle signature's preimage
