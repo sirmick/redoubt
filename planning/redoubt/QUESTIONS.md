@@ -5,7 +5,7 @@ so each needs your decision; the answer goes into the named note with a HISTORY.
 **Rec** is the orchestrator's recommendation. Reply with numbers, e.g. "all Rec except 7: ...".
 
 **1-126 answered 2026-09-19** (ANSWERS.md, seven tranches; each "Answered" line says where the
-answer now lives). **Open: 127-128**, **138-140** (from WP-K2) and **141** (from WP-S1) and **142-145** (from WP-K3) and **129-137** (userland,
+answer now lives). **Open: 127-128**, **138-140** (from WP-K2) and **141** (from WP-S1) and **142-146** (from WP-K3) and **129-137** (userland,
 USERLAND.md), at the end. The round-4 answers revised 56 (handle kinds are checked by use) and replaced 57 and 58 (by
 82); a later tranche replaced 103 (no `first` flag and no strict priority: one stride queue for
 every budget); the tranche for 120-126 accepted every recommendation and added one change to what
@@ -1166,4 +1166,22 @@ on the box); 132 and 133 block the shell's pipelines, 135 blocks launching from 
      *Rec:* WP-K3's `unmap` frees an empty table, and the cost table's page-table row says when
      the pages come back. If that is more than a small change, give it to WP-K5 and say so in the
      rule.
+
+146. **`map_device` tells a driver nothing about the region it mapped, or which device it is.**
+     The call returns an address and no length, so a virtio driver cannot know how many bytes it
+     has, and nothing tells it which handle is which device: WP-K3's own test identifies the bus
+     master by calling `dma_alloc` on each handle and seeing which succeeds. WP-D1 and WP-D3 hit
+     this at once.
+     *Rec:* `map_device -> addr, len`. Which device a handle names comes from the boot manifest,
+     which gives each driver its handles by name (WP-R3), so the kernel says nothing about it.
+
+     Two additions to earlier questions, from the same review:
+     - **143:** the kernel refuses a `Devs` entry that names RAM, but leaves the interrupt
+       controller to a loader heuristic, although the kernel holds the controller's range in the
+       `Plic` tag. A `Devs` entry naming the PLIC would be mapped into userspace with nothing in
+       the way, and its holder would own every interrupt source. *Rec:* the kernel checks that too.
+     - **144:** revoking a device handle does not unmap the MMIO a holder already mapped, and a
+       device handle is copyable, so a process in another budget keeps register access after the
+       owner budget is destroyed. *Rec:* either unmap on destroy, or say plainly in KERNEL-SPEC.md
+       that a device mapping outlives its handle.
 
