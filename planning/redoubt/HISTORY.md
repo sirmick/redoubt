@@ -586,4 +586,23 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   domain itself: changing `v1` to `v2` now fails the bench. The review showed two of the three first
   cases could never fail (Ed25519 refuses every other message anyway), so only the bare-archive case
   boots; the domain and length refusals are host assertions.
+- **WP-K2 endpoints and messages** (`95788dcd0`): the seven IPC calls beside the legacy interface.
+  There is no message queue: a message is queued exactly while its sender is blocked, so the queue
+  is the set of blocked senders, kept in a page per thread (the page the cost table already charges
+  for a thread) and found by walking them, which R2's round robin must do anyway. An endpoint holds
+  only R2's cursor, so no sender can make the kernel allocate for a receiver. Taken calls move to an
+  open-call page charged to the receiver (R4a); lends are charged to both sides (R3); abandoned
+  calls are flagged in place and offered once (I15); a delivery the receiver cannot pay for is
+  `Refused` to the sender and spends nothing (R4); a reply's handles that do not fit arrive as 0
+  with `OutOfMemory`; R10 reaches queued and taken messages by stamp, and endpoints by owner. Answer
+  103 landed with it: the `first` flag is gone from the kernel and the ABI (WP-A3 folded in). Four
+  bugs its own cases found, among them `mint` from a message checking the message's badge, so every
+  mint from a client's call was refused. The review found a lend to a receiver at its budget's exact
+  minimum panicked the kernel, because the R4 check omitted the page tables it then charged: the
+  kernel now counts them before deciding, so a refused delivery allocates nothing and there is
+  nothing to unwind. Fifteen rule breaks were tested, fourteen caught; the fifteenth (the kernel's
+  second badge-0 check) cannot be caught from userspace by construction, which is the point of
+  having two, and was verified by bypassing the first. Interim until K4 and K5: one boot endpoint,
+  a per-PID page reservation (question 127), and polled deadlines. Kernel 12.9k -> 14.9k lines;
+  `unsafe` unchanged.
 
