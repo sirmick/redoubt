@@ -10,6 +10,7 @@ sign_bundle = "wrong-length"
 allow_panic = true          # the loader is supposed to panic here
 expect = ['^loader PANIC', 'signature is invalid']
 forbid = ['KMAIN', 'bundle signature ok']
+poweroff = true             # and the refusal stops the machine, rather than limping on
 
 [[grant]]
 program = "log-server"
