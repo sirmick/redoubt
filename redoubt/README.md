@@ -47,6 +47,9 @@ expect = ['regex 1', 'regex 2']   # must each match a console line, in this orde
 forbid = ['regex']                # must never match; also always forbidden:
                                   # PANIC, TEST FAILED, WARNING: INSECURE
 poweroff = false             # true: the guest must power off after the last expect
+tamper_bundle = false        # true: flip one bundle byte after signing, so the loader must refuse it
+sign_bare_archive = false    # true: sign the archive alone instead of the preimage of
+                             # VERIFIED-BOOT.md, which the loader must refuse as well
 
 [[input]]                    # type on the console once a line matches `after`
 after = "claimed irq 10"
@@ -63,6 +66,11 @@ unknown field or table is an error, so a misspelling cannot silently drop a chec
 
 `kind = "build"` with `package` and `features` only checks that something compiles for the target —
 coverage for a configuration the bench does not (or cannot yet) boot.
+
+`kind = "host-tests"` with `packages` runs `cargo test` for those workspace crates on the host, for
+what no boot can reach: a constant the loader and the bench share is right in the machine's eyes
+even when it is wrong, so the signing domain's bytes are pinned by a unit test instead
+(`host-tests.toml`).
 
 In-guest programs print through `log-server` (`test_programs::Logger`) and finish with
 `<NAME> TEST PASSED` or `<NAME> TEST FAILED`; attack programs end with `attempts done` instead

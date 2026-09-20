@@ -85,7 +85,7 @@ fn main() -> Result<()> {
             &[],
             "",
             false,
-            case::Signing::Domain,
+            false,
             Profile::Release,
             &logs.join("interactive.tar"),
         )?;
@@ -128,6 +128,16 @@ fn main() -> Result<()> {
                     println!("FAIL  {:<32}        {why}\n      {summary}", case.name);
                 }
             }
+            continue;
+        }
+        if let Kind::HostTests(host) = &case.kind {
+            let started = Instant::now();
+            let outcome = match builder.cargo_test(&host.packages) {
+                Ok(None) => Outcome::Pass,
+                Ok(Some(why)) => Outcome::Fail(format!("host tests failed:\n      {why}")),
+                Err(e) => Outcome::Fail(format!("bench error: {e:#}")),
+            };
+            failures += report(&case.name, outcome, started.elapsed().as_secs_f32());
             continue;
         }
         if let Kind::SshLoopback(loopback) = &case.kind {
@@ -226,7 +236,7 @@ fn prepare(
     extra_kernel_features: &[String],
     manifest: &str,
     tamper: bool,
-    signing: case::Signing,
+    bare_archive: bool,
     profile: Profile,
     bundle: &Path,
 ) -> Result<PathBuf> {
@@ -246,7 +256,7 @@ fn prepare(
         &files,
         manifest,
         tamper,
-        signing,
+        bare_archive,
     )?;
     Ok(bundle.to_path_buf())
 }
@@ -287,7 +297,9 @@ fn run_case(
             return Ok(vec![(String::new(), outcome, elapsed(started))]);
         }
         Kind::Boot(boot) => boot,
-        Kind::UnsafeBudget(_) | Kind::SshLoopback(_) => unreachable!("handled before the per-target loop"),
+        Kind::UnsafeBudget(_) | Kind::SshLoopback(_) | Kind::HostTests(_) => {
+            unreachable!("handled before the per-target loop")
+        }
     };
     let machine = match &target.machine {
         Ok(machine) => machine,
@@ -317,7 +329,7 @@ fn run_case(
         &boot.kernel_features,
         &manifest,
         boot.tamper_bundle,
-        boot.sign_bundle,
+        boot.sign_bare_archive,
         profile,
         &bundle,
     ) {

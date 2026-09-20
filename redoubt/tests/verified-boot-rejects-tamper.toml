@@ -9,6 +9,7 @@ allow_panic = true          # the loader is supposed to panic here
 # program can print it. Anchored, so a relayed `[pid N]` line could not match either.
 expect = ['^loader PANIC', 'signature is invalid']
 forbid = ['KMAIN', 'bundle signature ok']
+poweroff = true             # and the refusal stops the machine, rather than limping on
 
 [[grant]]
 program = "log-server"
