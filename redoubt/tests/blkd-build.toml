@@ -1,0 +1,9 @@
+description = "blkd builds for both widths (BUILD-PLAN.md: rv32 keeps compiling)"
+arch = ["rv64", "rv32"]
+kind = "build"
+# `cargo build -p redoubt-blkd` builds the library and its one bin, `blkd`. Booting it on the box
+# needs WP-K3 (device objects, `dma_alloc`, IRQ receive), WP-K4 and an `init` that can start it
+# from the manifest; until then `blkd`'s behaviour is covered by host tests against a hostile
+# fake device and the runtime's fake kernel (`redoubt/blkd/tests/`, `blkd-host-tests`), and this
+# case covers the configuration the bench cannot boot yet.
+package = "redoubt-blkd"

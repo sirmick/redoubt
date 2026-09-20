@@ -83,3 +83,15 @@ paths = ["redoubt/keyd/src"]
 # WP-S1: none, and the crate says `#![forbid(unsafe_code)]`, so this can only stay at 0.
 max_unsafe = 0
 max_undocumented = 0
+
+[[budget]]
+# WP-D1: `blkd` is a DMA driver, so it is TCB on a platform without DMA confinement (TENETS.md
+# 7). Its four uses of `unsafe` are all in `src/kernel.rs`, the seam to the kernel: a volatile
+# read and a volatile write of an MMIO register, and the same two for a byte of the DMA region.
+# Everything else — the virtqueue, feature negotiation, the partition table, the server — is safe
+# Rust against the `Transport` trait, and the crate says `#![deny(unsafe_code)]` with one
+# `#[allow]` on that module, so the compiler holds the line the budget only counts.
+name = "blkd (virtio-blk driver; DMA, so TCB)"
+paths = ["redoubt/blkd/src"]
+max_unsafe = 4
+max_undocumented = 0

@@ -588,6 +588,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "redoubt-blkd"
+version = "0.1.0"
+dependencies = [
+ "redoubt-rt",
+]
+
+[[package]]
 name = "redoubt-keyd"
 version = "0.1.0"
 dependencies = [

@@ -8,6 +8,7 @@ members = [
   "kernel",
   "loader",
   "xous-rs",
+  "redoubt/blkd",
   "redoubt/keyd",
   "redoubt/paging",
   "redoubt/rt",
@@ -40,6 +41,9 @@ exclude = [
   "redoubt/littlefs/fuzz",
   # Host-only fuzz targets for redoubt-rt (see redoubt/rt/fuzz/Cargo.toml).
   "redoubt/rt/fuzz",
+  # Host-only fuzz targets for redoubt-blkd: the hostile device model, the partition table and
+  # the typed protocol (see redoubt/blkd/fuzz/Cargo.toml).
+  "redoubt/blkd/fuzz",
   # beamlet, the BEAM VM for the Elixir userland: its own workspace (host tools and `no_std`
   # target crates, its own test toolchain), built by its own `cargo` invocations.
   "redoubt/beamlet",
