@@ -347,8 +347,10 @@ impl MemoryManager {
 
     // --- Processes and threads ------------------------------------------------------------------
 
-    /// Put new process `pid`, with its first thread, in `budget`: one process from its process
-    /// limit, and the process and thread objects from its pages. Nothing changes on an error.
+    /// Put new process `pid` in `budget`: one process from its process limit, and an account of
+    /// its own, with no threads yet. Its address space is charged to `budget` frame by frame as
+    /// it is built (`process.rs`, and QUESTIONS.md 127); its object page is the *creator's*, which
+    /// `process_create` charges separately. Nothing changes on an error.
     pub fn process_created(&mut self, pid: PID, budget: BudgetFrame) -> Result<(), Error> {
         let index = account_index(pid).ok_or(Error::InvalidArgument)?;
         let mut b = self.budget(budget);
@@ -359,15 +361,9 @@ impl MemoryManager {
         if b.free_processes() == 0 {
             return Err(Error::OutOfProcesses);
         }
-        if PROCESS_PAGES + THREAD_PAGES > b.free_pages() {
-            return Err(Error::OutOfMemory);
-        }
         b.processes_used += 1;
-        b.pages_used += PROCESS_PAGES + THREAD_PAGES;
         self.store(budget, &b);
-        self.objects.accounts[index] = Account { budget: Some(budget), threads: 1, ..Account::NONE };
-        // The first thread's page, charged just above, is its IPC page.
-        self.give_ipc_frame(pid, INITIAL_TID);
+        self.objects.accounts[index] = Account { budget: Some(budget), ..Account::NONE };
         Ok(())
     }
 
@@ -380,7 +376,7 @@ impl MemoryManager {
             self.take_ipc_frame(pid, tid);
         }
         let account = self.account_mut(pid).expect("account");
-        let pages = PROCESS_PAGES + account.threads * THREAD_PAGES + account.frames;
+        let pages = account.threads * THREAD_PAGES + account.frames;
         *account = Account::NONE;
         self.uncharge(budget, pages);
         let mut b = self.budget(budget);
@@ -421,17 +417,11 @@ impl MemoryManager {
     /// A loader bundle whose processes do not fit in `system` cannot run under the rules, so the
     /// kernel refuses to boot (fail closed).
     pub fn boot_budgets(&mut self) {
-        // INTERIM (QUESTIONS.md 127; until WP-K4 creates processes from userspace and charges
-        // it): held back from `root`, so that every charged page has a real frame behind it (R7:
-        // an allocation fails only on the caller's own budget, never because the kernel ran
-        // out). A process's own page pays for one frame, but its saved contexts (`ProcessImpl`)
-        // take `PROCESS_IMPL_PAGES`; the thread pages that once covered the difference now each
-        // hold a thread's IPC page (`Account::ipc`). The gap is fixed per process, so reserving
-        // it for every PID at boot covers every process the kernel can ever hold.
-        let per_process = crate::arch::process::PROCESS_IMPL_PAGES as u64 - PROCESS_PAGES;
-        let reserved = per_process * MAX_PROCESS_COUNT as u64;
-        let pages = self.ram_frames() - self.ram_frames_owned_by(crate::services::KERNEL_PID) as u64
-            - reserved;
+        // Every RAM page the kernel did not keep for itself. Nothing is held back any more
+        // (QUESTIONS.md 127): a process's saved contexts and its root page table are charged to
+        // the budget it runs in as they are allocated, like any other frame it owns, so every
+        // charged page has a real frame behind it without a reservation.
+        let pages = self.ram_frames() - self.ram_frames_owned_by(crate::services::KERNEL_PID) as u64;
         let processes = (MAX_PROCESS_COUNT - 1) as u32;
         let (sys_pages, sys_processes, sys_weight) = (pages / 4, processes / 4, ROOT_WEIGHT / 4);
         // Root pays for the two budgets' own pages. Root's own page is charged to no one: it has
@@ -459,10 +449,12 @@ impl MemoryManager {
             first.get_or_insert(pid);
             bundle[nbundle] = Some(pid);
             nbundle += 1;
-            let frames = frames - crate::arch::process::PROCESS_IMPL_PAGES as u64;
+            // Everything the loader gave it: its image, its stack, its page tables, its root
+            // table and its saved contexts, all owned by the PID in the ownership table.
             self.process_created(pid, system).expect("boot: the loader's processes do not fit in system");
             self.charge(system, frames).expect("boot: the loader's processes do not fit in system");
             self.account_mut(pid).expect("account").frames = frames;
+            self.thread_created(pid, INITIAL_TID).expect("boot: no page for a program's first thread");
         }
         let stamp = BudgetRef { frame: root, id: self.budget(root).id };
         if let Some(first) = first {
@@ -679,6 +671,8 @@ impl MemoryManager {
                 // revoked with it.
                 Object::Endpoint(e) => mm.budget_at(mm.endpoint_at(e).owner).dying,
                 Object::Device(d) => mm.budget_at(mm.device_at(d).owner).dying,
+                // A process object dies with the budget it is charged to, its creator's (R10).
+                Object::Process(p) => mm.budget_at(mm.process_at(p).creator).dying,
             };
             object_dying || mm.budget_at(h.stamp).dying
         });

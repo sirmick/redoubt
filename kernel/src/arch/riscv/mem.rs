@@ -262,34 +262,32 @@ impl MemoryMapping {
     ///
     /// All pages, including the page tables themselves, are owned by `pid`, so they are
     /// released along with everything else when the process is destroyed.
-    #[allow(dead_code)] // WP-K4's `process_create`
-    pub fn allocate(&mut self, pid: PID) -> Result<(), xous_kernel::Error> {
+    pub fn allocate(&mut self, mm: &mut MemoryManager, pid: PID) -> Result<(), xous_kernel::Error> {
         if self.satp != 0 {
             return Err(xous_kernel::Error::MemoryInUse);
         }
 
-        crate::mem::MemoryManager::with_mut(|mm| {
-            let root_phys = mm.alloc_page(pid)?;
-            // SAFETY: `alloc_page` returns a RAM frame that was free until now.
-            let root = unsafe { Table::new_in(window(), root_phys) };
+        let root_phys = mm.alloc_page(pid)?;
+        // SAFETY: `alloc_page` returns a RAM frame that was free until now.
+        let root = unsafe { Table::new_in(window(), root_phys) };
 
-            let current = current_root();
-            for index in (ROOT_KERNEL_START..physmap::ENTRIES).filter(|index| *index != ROOT_PROCESS_AREA) {
-                root.slot(index).copy_from(current.slot(index));
-            }
+        let current = current_root();
+        for index in (ROOT_KERNEL_START..physmap::ENTRIES).filter(|index| *index != ROOT_PROCESS_AREA) {
+            root.slot(index).copy_from(current.slot(index));
+        }
 
-            for page in 0..crate::arch::process::PROCESS_IMPL_PAGES {
-                // The process and thread objects: charged as such, not as frames (budget.rs).
-                let context_phys = mm.alloc_context_page(pid)?;
-                // SAFETY: a freshly allocated frame, as above.
-                unsafe { window().zero_frame(context_phys) };
-                let virt = THREAD_CONTEXT_AREA + page * PAGE_SIZE;
-                map_page_in(root, mm, pid, context_phys, virt, MMUFlags::R | MMUFlags::W)?;
-            }
+        for page in 0..crate::arch::process::PROCESS_IMPL_PAGES {
+            // The saved thread contexts, charged to the budget the process runs in like every
+            // other frame it owns (QUESTIONS.md 127).
+            let context_phys = mm.alloc_context_page(pid)?;
+            // SAFETY: a freshly allocated frame, as above.
+            unsafe { window().zero_frame(context_phys) };
+            let virt = THREAD_CONTEXT_AREA + page * PAGE_SIZE;
+            map_page_in(root, mm, pid, context_phys, virt, MMUFlags::R | MMUFlags::W)?;
+        }
 
-            self.satp = make_satp(pid, root_phys);
-            Ok(())
-        })
+        self.satp = make_satp(pid, root_phys);
+        Ok(())
     }
 
     /// Get the currently active memory mapping.
@@ -609,6 +607,36 @@ pub fn map_into(
     map_page_in(root_of(space.satp), mm, pid, phys, virt, flags)?;
     flush_tlb();
     Ok(())
+}
+
+/// Map `phys` at `virt` in `space` with exactly `flags`, for `pid`: what `process_map` gives a
+/// child, where the parent chooses the permissions and W^X is checked before we get here (R11).
+pub fn map_into_with(
+    mm: &mut MemoryManager,
+    pid: PID,
+    space: &MemoryMapping,
+    phys: usize,
+    virt: usize,
+    flags: MemoryFlags,
+) -> Result<(), xous_kernel::Error> {
+    let flags = translate_flags(flags) | user_flag(pid);
+    map_page_in(root_of(space.satp), mm, pid, phys, virt, flags)?;
+    flush_tlb();
+    Ok(())
+}
+
+/// Whether `virt` is free in `space`: `address_available`, for an address space that is not the
+/// running one (`process_map` looks into a child that has never run).
+pub fn address_available_in(space: &MemoryMapping, virt: usize) -> bool {
+    debug_assert!(virt < xous_kernel::arch::USER_AREA_END, "process_map checks its range first");
+    match walk(root_of(space.satp), virt, None) {
+        // No leaf table yet, so nothing is mapped there. Inside user space the only other way
+        // `walk` fails is a non-canonical address, which the caller has already ruled out.
+        Err(_) => true,
+        // Not just "not occupied": a reservation is not a mapping but it is a claim on the
+        // address, and `process_map` never overwrites one.
+        Ok(slot) => slot.get().is_empty(),
+    }
 }
 
 /// Unmap `virt` from `space` without changing who owns the frame: a lend leaving the server.

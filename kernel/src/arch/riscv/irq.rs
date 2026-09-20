@@ -429,11 +429,10 @@ pub extern "C" fn trap_handler(
 
     finish_isr();
 
-    // If it's not a failure in the kernel, terminate or debug the current process.
-    SystemServices::with_mut(|ss| {
-        ss.terminate_process(pid).expect("couldn't terminate current process");
-        crate::syscall::reset_switchto_caller();
-    });
+    // If it's not a failure in the kernel, the process faults: it is torn down and its exit
+    // notice, cause `faulted`, blames the sender of the faulting thread's current call
+    // (KERNEL-SPEC.md, Messages; `process.rs`). The code is the RISC-V exception cause.
+    crate::process::faulted(pid, (sc.bits() & 0xff) as u32);
 
     // Resume the parent process.
     ArchProcess::with_current_mut(|process| {

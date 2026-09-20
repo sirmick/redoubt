@@ -402,6 +402,72 @@ impl Process {
         Ok(())
     }
 
+    /// WP-K4: claim the process-table slot of a process `process_create` has just given an
+    /// address space, and make its `ProcessImpl` a valid one. It has no thread yet: nothing can
+    /// run in it until `process_start`.
+    ///
+    /// The process's own address space must be the active one, as `setup_process` requires, so
+    /// that `process_impl()` names *its* saved contexts. `MemoryMapping::allocate` zeroed those
+    /// frames, and all-zeroes is not a valid `ProcessInner` (its `pid` is a `NonZeroU8`), so
+    /// nothing may read them before this runs.
+    pub fn setup_empty_process(pid: PID) {
+        let process = process_impl();
+        assert_eq!(pid, crate::arch::current_pid(), "hardware pid does not match setup pid");
+        let pid_idx = (pid.get() as usize) - 1;
+        PROCESS_TABLE.with(|pt| {
+            assert!(!pt.table[pid_idx], "process {} is already allocated", pid);
+            pt.table[pid_idx] = true;
+        });
+        // By convention thread 0 is the trap thread, so the first ordinary thread is
+        // `INITIAL_TID`; the hardware thread number is one more than the TID.
+        process.hardware_thread = INITIAL_TID + 1;
+        for thread in process.threads.iter_mut() {
+            *thread = Default::default();
+        }
+        process.inner = Default::default();
+        process.inner.pid = pid;
+    }
+
+    /// WP-K4: the first thread of a process `process_start` is starting, at `entry` with stack
+    /// pointer `sp` and one argument. Unlike `setup_process` this reserves no stack: a Redoubt
+    /// process is given every page it has by its parent (`process_map`), so `sp` is an address
+    /// the parent has already mapped and the kernel only loads it.
+    ///
+    /// The process's own address space must be the active one.
+    pub fn setup_first_thread(pid: PID, entry: usize, sp: usize, arg: usize) {
+        let process = process_impl();
+        assert_eq!(pid, crate::arch::current_pid(), "hardware pid does not match setup pid");
+        let thread = &mut process.threads[INITIAL_TID];
+        *thread = Default::default();
+        thread.sepc = entry;
+        thread.registers[1] = sp;
+        thread.registers[9] = arg;
+    }
+
+    /// WP-K4: `thread_create(entry, sp, arg)`. As `setup_thread`, without the legacy
+    /// `ThreadInit`'s stack range: the caller has mapped its own stack and passes `sp`.
+    pub fn setup_redoubt_thread(
+        &mut self,
+        new_tid: TID,
+        entry: usize,
+        sp: usize,
+        arg: usize,
+    ) -> Result<(), xous_kernel::Error> {
+        if sp <= 16 {
+            return Err(xous_kernel::Error::BadAddress);
+        }
+        let pid = self.pid.get();
+        let thread = self.thread_mut(new_tid);
+        for val in &mut thread.registers {
+            *val = 0;
+        }
+        thread.sepc = 0;
+        crate::arch::syscall::invoke(thread, pid == 1, entry, (sp - 16) & !0xf, EXIT_THREAD, &[
+            arg, 0, 0, 0,
+        ]);
+        Ok(())
+    }
+
     pub fn setup_thread(&mut self, new_tid: TID, setup: ThreadInit) -> Result<(), xous_kernel::Error> {
         let entrypoint = setup.call as usize;
         // Create the new context and set it to run in the new address space.

@@ -544,6 +544,88 @@ impl SystemServices {
         return Ok(startup);
     }
 
+    /// WP-K4: give `pid` a slot in the process table and an address space, without a thread.
+    /// The caller has already reserved the process against its budget (`budget.rs`); everything
+    /// the address space takes is charged to that budget as it is allocated.
+    #[cfg(baremetal)]
+    pub fn allocate_process_slot(
+        &mut self,
+        mm: &mut crate::mem::MemoryManager,
+        pid: PID,
+    ) -> Result<(), xous_kernel::Error> {
+        let ppid = self.current_pid();
+        let entry =
+            self.processes.get_mut(pid.get() as usize - 1).ok_or(xous_kernel::Error::ProcessNotFound)?;
+        if entry.state != ProcessState::Free {
+            return Err(xous_kernel::Error::ProcessNotFound);
+        }
+        entry.pid = pid;
+        entry.ppid = ppid;
+        entry.state = ProcessState::Allocated;
+        entry.exception_handler = None;
+        entry.current_thread = INITIAL_TID as TID;
+        entry.previous_thread = INITIAL_TID as TID;
+        entry.mapping.allocate(mm, pid).inspect_err(|_| {
+            entry.state = ProcessState::Free;
+            entry.mapping = Default::default();
+        })
+    }
+
+    /// WP-K4: give back the slot of a process that never started (a `process_create` that failed
+    /// after its address space was made). Its frames have already been released.
+    #[cfg(baremetal)]
+    pub fn free_process_slot(&mut self, pid: PID) {
+        ArchProcess::destroy(pid).ok();
+        if let Some(entry) = self.processes.get_mut(pid.get() as usize - 1) {
+            entry.state = ProcessState::Free;
+            entry.mapping = Default::default();
+        }
+    }
+
+    /// WP-K4: `process_start` has set up the first thread; the process becomes runnable.
+    #[cfg(baremetal)]
+    pub fn start_process(&mut self, pid: PID) -> Result<(), xous_kernel::Error> {
+        let process = self.get_process_mut(pid)?;
+        match process.state {
+            ProcessState::Allocated => {
+                process.state = ProcessState::Ready(1 << INITIAL_TID);
+                Ok(())
+            }
+            _ => Err(xous_kernel::Error::ProcessNotFound),
+        }
+    }
+
+    /// WP-K4: `thread_create(entry, sp, arg) -> tid` (KERNEL-SPEC.md). As `create_thread`,
+    /// without the legacy `ThreadInit`: a Redoubt thread is given a stack pointer, not a stack
+    /// to reserve, and the calling thread keeps running with the new thread's id as its result.
+    #[cfg(baremetal)]
+    pub fn create_redoubt_thread(
+        &mut self,
+        pid: PID,
+        entry: usize,
+        sp: usize,
+        arg: usize,
+    ) -> Result<TID, redoubt_sys::Error> {
+        let process = self.get_process_mut(pid).map_err(|_| redoubt_sys::Error::NotPermitted)?;
+        process.activate().map_err(|_| redoubt_sys::Error::NotPermitted)?;
+        let mut arch_process = ArchProcess::current();
+        let new_tid =
+            arch_process.find_free_thread().ok_or(redoubt_sys::Error::TooManyThreads)?;
+        // A thread costs its budget a page (R6).
+        crate::mem::MemoryManager::with_mut(|mm| mm.thread_created(pid, new_tid))?;
+        arch_process.setup_redoubt_thread(new_tid, entry, sp, arg).map_err(|_| {
+            crate::mem::MemoryManager::with_mut(|mm| mm.thread_ended(pid, new_tid));
+            redoubt_sys::Error::InvalidArgument
+        })?;
+        let process = self.get_process_mut(pid).map_err(|_| redoubt_sys::Error::NotPermitted)?;
+        process.state = match process.state {
+            ProcessState::Running(x) => ProcessState::Running(x | (1 << new_tid)),
+            ProcessState::Ready(x) => ProcessState::Ready(x | (1 << new_tid)),
+            other => panic!("thread_create in a process that is {:?}", other),
+        };
+        Ok(new_tid)
+    }
+
     pub fn get_process(&self, pid: PID) -> Result<&Process, xous_kernel::Error> {
         // PID0 doesn't exist -- process IDs are offset by 1.
         let pid_idx = pid.get() as usize - 1;

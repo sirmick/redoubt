@@ -33,6 +33,8 @@ mod mem;
 mod message;
 mod platform;
 #[cfg(baremetal)]
+mod process;
+#[cfg(baremetal)]
 mod redoubt;
 mod server;
 mod services;
