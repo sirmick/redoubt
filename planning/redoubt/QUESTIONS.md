@@ -5,7 +5,7 @@ so each needs your decision; the answer goes into the named note with a HISTORY.
 **Rec** is the orchestrator's recommendation. Reply with numbers, e.g. "all Rec except 7: ...".
 
 **1-126 answered 2026-09-19** (ANSWERS.md, seven tranches; each "Answered" line says where the
-answer now lives). **Open: 127-128**, **138-140** (from WP-K2) and **141** (from WP-S1) and **142-146** (from WP-K3) and **129-137** (userland,
+answer now lives). **Open: 127-128**, **138-140** (from WP-K2) and **141** (from WP-S1) and **142-146** (from WP-K3) and **147** (from WP-D1) and **129-137** (userland,
 USERLAND.md), at the end. The round-4 answers revised 56 (handle kinds are checked by use) and replaced 57 and 58 (by
 82); a later tranche replaced 103 (no `first` flag and no strict priority: one stride queue for
 every budget); the tranche for 120-126 accepted every recommendation and added one change to what
@@ -1184,4 +1184,19 @@ on the box); 132 and 133 block the shell's pipelines, 135 blocks launching from 
        device handle is copyable, so a process in another budget keeps register access after the
        owner budget is destroyed. *Rec:* either unmap on destroy, or say plainly in KERNEL-SPEC.md
        that a device mapping outlives its handle.
+
+## From blkd (WP-D1)
+
+147. **A driver's restart leaves its device pointed at freed frames.** blkd's DMA pages go back to
+     the free pool when it dies, and nothing stops a device already programmed with their physical
+     addresses from writing into them. The restarted blkd resets the device at bring-up, but only
+     after those frames may already belong to someone else. This is the concrete form of the
+     residual K3 recorded when it said a DMA handle is kernel-level trust.
+     *Rec:* the kernel resets a device whose DMA pages are freed. When a budget holding a DMA
+     device object is destroyed, or a process holding one exits, the kernel writes 0 to that
+     device's status register (a virtio reset) before the frames return to the pool. That is a few
+     lines in `destroy_device`, it needs no device knowledge beyond virtio's reset, and it closes
+     the window without hardware confinement. If you would rather not have the kernel touch a
+     device register, the alternative is to keep a dead driver's DMA frames out of the pool until
+     its successor resets the device, which costs memory instead.
 
