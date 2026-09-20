@@ -66,9 +66,13 @@ merged; the waves show what can run together.
 | W2 | merged | wp-w2 | 3715363a9 |
 | K0b | merged | wp-k0b | e30d43304 |
 | K2 | merged | wp-k2 | 95788dcd0 |
-| K3 | building | wp-k3 | kernel track |
+| K3 | merged | wp-k3 | 12c52c2d7 |
+| K4 | building | wp-k4 | kernel track |
+| R4 | building | wp-r4 | bootfsd and consoled |
+| D3 | building | wp-d3 | netd and ipd |
 | S1 | merged | wp-s1 | 14bcc6e9d |
 | V1 | merged | wp-v1 | 05955bf86 |
+| D1 | building | wp-d1 | blkd; host side first |
 | all others | waiting | | see BUILD-PLAN.md "Needs" |
 
 States: `waiting` (needs not merged), `ready`, `building`, `review`, `merged`.
