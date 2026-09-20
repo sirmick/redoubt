@@ -44,7 +44,9 @@ impl MemoryRangeExtra {
         MemoryRangeExtra { start, size }
     }
 
-    fn contains(&self, addr: usize) -> bool { addr >= self.start && addr - self.start < self.size }
+    fn contains(&self, addr: usize) -> bool {
+        addr >= self.start && addr - self.start < self.size
+    }
 }
 
 /// Construct a `MemoryRange` describing `addr..addr + size`.
@@ -101,7 +103,9 @@ const _: () = assert!(crate::arch::process::MAX_PROCESS_COUNT < 255);
 type RamAllocation = Option<PID>;
 
 impl Default for MemoryManager {
-    fn default() -> Self { Self::default_hack() }
+    fn default() -> Self {
+        Self::default_hack()
+    }
 }
 
 #[cfg(not(baremetal))]
@@ -301,7 +305,9 @@ impl MemoryManager {
 
     /// RAM frames in the ownership table.
     #[cfg(baremetal)]
-    pub fn ram_frames(&self) -> u64 { self.allocations.len() as u64 }
+    pub fn ram_frames(&self) -> u64 {
+        self.allocations.len() as u64
+    }
 
     /// Whether `[base, end)` touches any of RAM. A device object never may (R11: userspace
     /// never names RAM by physical address), so the boot checks every one against this.
@@ -538,7 +544,9 @@ impl MemoryManager {
     /// No platform we target (QEMU virt) has peripheral RAM, so this is always false; it is
     /// kept as the extension point for one that does.
     #[allow(dead_code)]
-    pub fn is_peripheral_ram(&self, _phys: usize) -> bool { false }
+    pub fn is_peripheral_ram(&self, _phys: usize) -> bool {
+        false
+    }
 
     /// Attempt to map the given physical address into the virtual address space
     /// of this process.

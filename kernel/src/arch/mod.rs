@@ -15,4 +15,3 @@ pub use crate::arch::riscv::*;
 mod riscv;
 #[cfg(all(target_arch = "riscv64", not(baremetal)))]
 pub use riscv::*;
-

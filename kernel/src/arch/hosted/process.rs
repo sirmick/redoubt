@@ -43,7 +43,9 @@ struct ProcessImpl {
 }
 
 impl PartialEq for Process {
-    fn eq(&self, other: &Process) -> bool { self.pid == other.pid }
+    fn eq(&self, other: &Process) -> bool {
+        self.pid == other.pid
+    }
 }
 
 struct ProcessTable {
@@ -65,7 +67,9 @@ thread_local!(
     })
 );
 
-pub fn current_pid() -> PID { PROCESS_TABLE.with(|pt| pt.borrow().current) }
+pub fn current_pid() -> PID {
+    PROCESS_TABLE.with(|pt| pt.borrow().current)
+}
 
 pub fn set_current_pid(pid: PID) {
     PROCESS_TABLE.with(|pt| {
@@ -114,7 +118,9 @@ pub struct Thread {
 }
 
 impl Default for Thread {
-    fn default() -> Self { Thread { allocated: false } }
+    fn default() -> Self {
+        Thread { allocated: false }
+    }
 }
 
 // /// Everything required to initialize a process on this platform
@@ -177,7 +183,9 @@ impl Process {
     }
 
     #[allow(dead_code)]
-    pub fn current_tid(&self) -> TID { 1 }
+    pub fn current_tid(&self) -> TID {
+        1
+    }
 
     fn setup_thread_inner(thread: TID, process_table: &mut ProcessTable) {
         let current_pid_idx = process_table.current.get() as usize - 1;
@@ -187,7 +195,9 @@ impl Process {
         process.threads[thread - 1].allocated = true;
     }
 
-    pub fn retry_instruction(&mut self, _tid: TID) -> Result<(), xous_kernel::Error> { Ok(()) }
+    pub fn retry_instruction(&mut self, _tid: TID) -> Result<(), xous_kernel::Error> {
+        Ok(())
+    }
 
     pub fn setup_process(pid: PID, setup: ThreadInit) -> Result<(), xous_kernel::Error> {
         let mut tmp = Process { pid };

@@ -9,7 +9,7 @@
 #![no_std]
 #![no_main]
 
-use test_programs::{log, Logger};
+use test_programs::{Logger, log};
 use xous::{MemoryAddress, MemoryFlags};
 
 /// QEMU `virt`'s virtio-mmio transports: eight slots of 0x1000 bytes. A real driver would
@@ -56,7 +56,13 @@ pub extern "C" fn _start() -> ! {
                 log!(
                     logger,
                     "[virtio] {:#x}: network device, mac {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                    address, low[0], low[1], low[2], low[3], high[0], high[1]
+                    address,
+                    low[0],
+                    low[1],
+                    low[2],
+                    low[3],
+                    high[0],
+                    high[1]
                 );
             }
             2 => {
@@ -71,12 +77,15 @@ pub extern "C" fn _start() -> ! {
 
     // Stop here rather than idle: a case expecting a device that is missing fails at once
     // instead of at its timeout, and `poweroff = true` cases get a clean end to check.
-    let poweroff = xous::map_memory(MemoryAddress::new(POWEROFF), None, 4096, MemoryFlags::R | MemoryFlags::W)
-        .expect("couldn't map the power-off device");
+    let poweroff =
+        xous::map_memory(MemoryAddress::new(POWEROFF), None, 4096, MemoryFlags::R | MemoryFlags::W)
+            .expect("couldn't map the power-off device");
     // SAFETY: `poweroff` maps the test device's page; its first register is 32 bits wide.
     unsafe { (poweroff.as_mut_ptr() as *mut u32).write_volatile(0x5555) };
     test_programs::park()
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! { test_programs::park() }
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    test_programs::park()
+}

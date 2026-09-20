@@ -54,7 +54,9 @@ const E: u32 = rd::BOOT_ENDPOINT;
 /// The endpoint nobody receives on, for the `WAIT_CAP` step. Its handle is this program's.
 static mut SILENT: u32 = 0;
 
-fn words(reply: &rd::ReceivedBody) -> [usize; rd::WORDS] { reply.words }
+fn words(reply: &rd::ReceivedBody) -> [usize; rd::WORDS] {
+    reply.words
+}
 
 fn ask(t: &mut T, code: usize, arg: usize) -> [usize; rd::WORDS] {
     match rd::call_waiting(E, &rd::body([code, arg, 0, 0]), None, FOREVER) {
@@ -101,7 +103,11 @@ pub extern "C" fn _start() -> ! {
     expect!(t, rd::peek(page), 0x5151);
     // A lend of memory that is not this program's is refused too.
     let stranger = rd::pages(0x4000, 1);
-    expect!(t, rd::call(E, &rd::body([op::LEND, 0, 0, 0]), stranger, FOREVER).err(), Some(Error::InvalidArgument));
+    expect!(
+        t,
+        rd::call(E, &rd::body([op::LEND, 0, 0, 0]), stranger, FOREVER).err(),
+        Some(Error::InvalidArgument)
+    );
 
     // --- A transfer (R4): the receiver must have named a `max_transfer` at least its size ----
     let gift = rd::page();
@@ -168,14 +174,25 @@ pub extern "C" fn _start() -> ! {
     // once, and the call stays open until it replies.
     let before = ask(&mut t, op::COUNTS, 0)[2];
     for _ in 0..rd::MAX_OPEN_CALLS {
-        expect!(t, rd::call_waiting(E, &rd::body([op::KEEP, 0, 0, 0]), None, 2_000).err(), Some(Error::Timeout));
+        expect!(
+            t,
+            rd::call_waiting(E, &rd::body([op::KEEP, 0, 0, 0]), None, 2_000).err(),
+            Some(Error::Timeout)
+        );
     }
     let counts = ask(&mut t, op::COUNTS, 0);
     // Every one was reported exactly once, and every reply freed its call, so the server holds
     // no more open calls than the other programs' own parked ones (`redoubt-filler`'s, which
     // keep arriving while this runs, so only the abandoned ones are counted exactly).
     expect!(t, counts[1], rd::MAX_OPEN_CALLS);
-    log!(t.logger, "[ipc] {} calls abandoned, {} notices, {} open before, {} after", rd::MAX_OPEN_CALLS, counts[1], before, counts[2]);
+    log!(
+        t.logger,
+        "[ipc] {} calls abandoned, {} notices, {} open before, {} after",
+        rd::MAX_OPEN_CALLS,
+        counts[1],
+        before,
+        counts[2]
+    );
     t.check(counts[2] <= rd::MAX_OPEN_CALLS, format_args!("open calls after: {}", counts[2]));
 
     // --- A reply whose handles do not fit the caller (answers 107, 116) ----------------------
@@ -229,4 +246,6 @@ pub extern "C" fn _start() -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! { test_programs::park() }
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    test_programs::park()
+}

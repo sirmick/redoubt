@@ -21,7 +21,9 @@ static IRQ_HANDLERS: KernelCell<[Option<Handler>; MAX_IRQS]> = KernelCell::new([
 
 /// The handler registered for `irq`. Out-of-range numbers simply have no handler: they
 /// come straight from syscall arguments, so they must never index the table.
-fn handler(irq: usize) -> Option<Handler> { IRQ_HANDLERS.with(|handlers| handlers.get(irq).copied().flatten()) }
+fn handler(irq: usize) -> Option<Handler> {
+    IRQ_HANDLERS.with(|handlers| handlers.get(irq).copied().flatten())
+}
 
 /// Dispatch the single interrupt the arch layer claimed. Redirects into the owning
 /// process's handler, or masks the source if nobody owns it (an unexpected IRQ).
@@ -94,7 +96,9 @@ pub fn interrupt_claim(
 
 /// The process that has claimed `irq`, if any.
 #[allow(dead_code)]
-pub fn interrupt_owner(irq: usize) -> Option<PID> { handler(irq).map(|(pid, _, _)| pid) }
+pub fn interrupt_owner(irq: usize) -> Option<PID> {
+    handler(irq).map(|(pid, _, _)| pid)
+}
 
 pub fn interrupt_free(irq: usize, pid: PID) -> Result<(), xous_kernel::Error> {
     // Only the owner may free an interrupt. To everyone else it does not exist.

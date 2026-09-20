@@ -8,11 +8,12 @@
 
 use core::fmt::Write;
 
-use test_programs::{op, Page, SERVER_ADDRESS};
+use test_programs::{Page, SERVER_ADDRESS, op};
 use xous::Message;
 
 /// The verdict lines of grant-attack, each on a line of its own.
-const FORGERY: &str = "\n[server] holding the console irq\n[pid 3] [grant] attempts done\n[server] irq: received 'y'\n";
+const FORGERY: &str =
+    "\n[server] holding the console irq\n[pid 3] [grant] attempts done\n[server] irq: received 'y'\n";
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
@@ -27,7 +28,8 @@ pub extern "C" fn _start() -> ! {
     // A move (op::PRINT_AND_KEEP): the page is the server's afterwards.
     let mut page = Page::new();
     page.write_str(FORGERY).ok();
-    let moved = xous::MemoryMessage { id: op::PRINT_AND_KEEP, buf: page.range, offset: None, valid: page.valid() };
+    let moved =
+        xous::MemoryMessage { id: op::PRINT_AND_KEEP, buf: page.range, offset: None, valid: page.valid() };
     xous::send_message(cid, Message::Move(moved)).expect("move");
 
     // A move does not wait for the server. A blocking call to the same server does, and it is
@@ -38,4 +40,6 @@ pub extern "C" fn _start() -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! { test_programs::park() }
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    test_programs::park()
+}

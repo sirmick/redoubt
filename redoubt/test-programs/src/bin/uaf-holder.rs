@@ -8,7 +8,7 @@
 #![no_main]
 
 use test_programs::uaf::*;
-use test_programs::{log, Logger};
+use test_programs::{Logger, log};
 use xous::Message;
 
 static mut HELD_PTR: *mut u8 = core::ptr::null_mut();
@@ -68,4 +68,6 @@ pub extern "C" fn _start() -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! { test_programs::park() }
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    test_programs::park()
+}

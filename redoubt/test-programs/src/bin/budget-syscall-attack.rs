@@ -25,7 +25,9 @@ fn call(n: Number, args: [usize; 7]) -> Option<Error> {
     rd::raw_error(rd::raw([rd::number(n), a[0], a[1], a[2], a[3], a[4], a[5], a[6]]))
 }
 
-fn good_spec() -> [u64; BUDGET_SPEC_SLOTS] { rd::spec(1, 0, 0).encode() }
+fn good_spec() -> [u64; BUDGET_SPEC_SLOTS] {
+    rd::spec(1, 0, 0).encode()
+}
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
@@ -162,8 +164,28 @@ pub extern "C" fn _start() -> ! {
     // have to put a known reset kind in `a2` and zero in `a3..=a7` at the same time: the
     // machine is not powered off by accident here.
     let pool = [
-        0, 1, 2, 3, 4, 7, 8, 64, 65, 0xfff, 0x1000, scratch, scratch + 3, scratch + 4096, text, end - 8, end,
-        KERNEL, u32::MAX as usize, usize::MAX, usize::MAX - 7, 1 << 31,
+        0,
+        1,
+        2,
+        3,
+        4,
+        7,
+        8,
+        64,
+        65,
+        0xfff,
+        0x1000,
+        scratch,
+        scratch + 3,
+        scratch + 4096,
+        text,
+        end - 8,
+        end,
+        KERNEL,
+        u32::MAX as usize,
+        usize::MAX,
+        usize::MAX - 7,
+        1 << 31,
     ];
     let mut seed = 0x9e37_79b9_u32;
     let mut next = || {
@@ -230,4 +252,6 @@ pub extern "C" fn _start() -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! { test_programs::park() }
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    test_programs::park()
+}

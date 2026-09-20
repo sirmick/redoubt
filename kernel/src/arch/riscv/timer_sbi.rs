@@ -20,7 +20,9 @@ static ARMED: AtomicBool = AtomicBool::new(false);
 static MASKED: AtomicBool = AtomicBool::new(false);
 
 pub fn init() {
-    if let Some(arg) = crate::args::KernelArguments::get().iter().find(|a| a.name == u32::from_le_bytes(*b"Time")) {
+    if let Some(arg) =
+        crate::args::KernelArguments::get().iter().find(|a| a.name == u32::from_le_bytes(*b"Time"))
+    {
         TIMEBASE.store(crate::args::wide(arg.data, 0), Ordering::Relaxed);
     }
     BOOT_TICKS.with(|t| *t = riscv::register::time::read64());
@@ -33,13 +35,13 @@ pub fn init() {
 fn set_interrupt_enabled(enabled: bool) {
     // SAFETY: the kernel itself runs with `sstatus.SIE` clear, so this only changes whether
     // the interrupt is taken from U-mode, where the trap handler is ready for it.
-    unsafe {
-        if enabled { sie::set_stimer() } else { sie::clear_stimer() }
-    }
+    unsafe { if enabled { sie::set_stimer() } else { sie::clear_stimer() } }
 }
 
 /// Ticks of the `time` CSR per second, or 0 if the loader did not report it.
-pub fn timebase() -> u64 { TIMEBASE.load(Ordering::Relaxed) as u64 }
+pub fn timebase() -> u64 {
+    TIMEBASE.load(Ordering::Relaxed) as u64
+}
 
 /// The `time` CSR when the kernel started, so that `now_us` counts from boot.
 static BOOT_TICKS: crate::cell::KernelCell<u64> = crate::cell::KernelCell::new(0);
@@ -54,7 +56,9 @@ pub fn now_us() -> u64 {
 }
 
 /// Whether `irq` is the timer, rather than a source on the interrupt controller.
-pub fn owns(irq: usize) -> bool { irq == IRQ }
+pub fn owns(irq: usize) -> bool {
+    irq == IRQ
+}
 
 /// Request an interrupt once `time` reaches `deadline`. Writing a deadline also clears a
 /// pending timer interrupt.

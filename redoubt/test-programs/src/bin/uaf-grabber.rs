@@ -6,7 +6,7 @@
 #![no_main]
 
 use test_programs::uaf::*;
-use test_programs::{log, Logger};
+use test_programs::{Logger, log};
 use xous::{MemoryFlags, Message, SID};
 
 const PAGES: usize = 64;
@@ -26,7 +26,9 @@ pub extern "C" fn _start() -> ! {
         if let Ok(page) = xous::map_memory(None, None, 4096, MemoryFlags::R | MemoryFlags::W) {
             // Touch every page so it is really backed, then stamp it.
             let base = page.as_mut_ptr();
-            unsafe { core::ptr::copy_nonoverlapping(GRABBER_SENTINEL.as_ptr(), base, GRABBER_SENTINEL.len()) };
+            unsafe {
+                core::ptr::copy_nonoverlapping(GRABBER_SENTINEL.as_ptr(), base, GRABBER_SENTINEL.len())
+            };
             grabbed += 1;
         }
     }
@@ -37,4 +39,6 @@ pub extern "C" fn _start() -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! { test_programs::park() }
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    test_programs::park()
+}

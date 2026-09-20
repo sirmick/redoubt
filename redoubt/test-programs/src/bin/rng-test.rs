@@ -5,7 +5,7 @@
 #![no_std]
 #![no_main]
 
-use test_programs::{log, Logger};
+use test_programs::{Logger, log};
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
@@ -23,4 +23,6 @@ pub extern "C" fn _start() -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! { test_programs::park() }
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    test_programs::park()
+}

@@ -57,7 +57,9 @@ pub fn resume(supervisor: bool, thread: &Thread) -> ! {
 /// Without SBI firmware, the loader delegates S-mode `ecall` back to S-mode, so the
 /// kernel can simply `ecall` into its own trap handler.
 #[cfg(not(feature = "sbi"))]
-pub fn kernel_syscall(call: xous_kernel::SysCall) -> xous_kernel::SysCallResult { xous_kernel::rsyscall(call) }
+pub fn kernel_syscall(call: xous_kernel::SysCall) -> xous_kernel::SysCallResult {
+    xous_kernel::rsyscall(call)
+}
 
 /// Make a syscall from inside the kernel (PID 1).
 ///

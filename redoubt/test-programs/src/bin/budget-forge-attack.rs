@@ -43,8 +43,13 @@ pub extern "C" fn _start() -> ! {
     }
     // How many indices there are to forge depends on how many handles the machine gave this
     // program to start with, so what the case pins is that every one of them was refused.
-    log!(logger, "[forge] {} of {} calls on forged indices got BadHandle ({})", refused, tried,
-        if refused == tried { "all" } else { "FAIL" });
+    log!(
+        logger,
+        "[forge] {} of {} calls on forged indices got BadHandle ({})",
+        refused,
+        tried,
+        if refused == tried { "all" } else { "FAIL" }
+    );
     // Indices that are not indices at all: 0, and (where registers are wide) above 32 bits.
     let destroy = rd::number(Number::BudgetDestroy);
     // Where registers are 64 bits wide, an index whose low 32 bits name `system`: a kernel that
@@ -65,4 +70,6 @@ pub extern "C" fn _start() -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! { test_programs::park() }
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    test_programs::park()
+}

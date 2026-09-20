@@ -24,7 +24,16 @@ pub extern "C" fn _start() -> ! {
     let scope = rd::create(d, &rd::spec(0, 0, 0)).expect("scope");
     let e = rd::create(rd::SYSTEM, &rd::spec(10, 0, 0)).expect("e");
     let before = rd::usage(rd::SYSTEM).unwrap();
-    log!(logger, "[destroy] held b={} c={} d={} scope={} e={}; destroy b -> {:?}", b, c, d, scope, e, rd::destroy(b));
+    log!(
+        logger,
+        "[destroy] held b={} c={} d={} scope={} e={}; destroy b -> {:?}",
+        b,
+        c,
+        d,
+        scope,
+        e,
+        rd::destroy(b)
+    );
     let mut stale_ok = 0;
     for round in 0..2 {
         for h in [b, c, d, scope] {
@@ -63,4 +72,6 @@ pub extern "C" fn _start() -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! { test_programs::park() }
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    test_programs::park()
+}

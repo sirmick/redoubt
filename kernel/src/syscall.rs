@@ -48,7 +48,9 @@ enum ExecutionType {
 }
 
 #[cfg(baremetal)]
-pub fn reset_switchto_caller() { SWITCHTO_CALLER.with(|c| *c = None); }
+pub fn reset_switchto_caller() {
+    SWITCHTO_CALLER.with(|c| *c = None);
+}
 
 /// After a blocking Redoubt call switched away, point the scheduler back at the thread whose
 /// quantum this is, exactly as `do_yield` does for the legacy calls.

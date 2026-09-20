@@ -42,10 +42,14 @@ const ROOT_KERNEL_START: usize = physmap::ENTRIES / 2;
 const ROOT_PROCESS_AREA: usize = physmap::vpn(PROCESS_AREA, physmap::LEVELS - 1);
 
 /// Extract the PID (stored as the ASID) from a raw `satp` value.
-pub fn pid_from_satp(satp: usize) -> usize { physmap::satp_pid(satp) }
+pub fn pid_from_satp(satp: usize) -> usize {
+    physmap::satp_pid(satp)
+}
 
 #[allow(dead_code)] // `allocate`
-fn make_satp(pid: PID, root_phys: usize) -> usize { physmap::make_satp(pid.get() as usize, root_phys) }
+fn make_satp(pid: PID, root_phys: usize) -> usize {
+    physmap::make_satp(pid.get() as usize, root_phys)
+}
 
 /// The root table of the address space that `satp` names.
 fn root_of(satp: usize) -> Table {
@@ -55,7 +59,9 @@ fn root_of(satp: usize) -> Table {
     unsafe { Table::at(window(), physmap::satp_root(satp)) }
 }
 
-fn current_root() -> Table { root_of(satp::read().bits()) }
+fn current_root() -> Table {
+    root_of(satp::read().bits())
+}
 
 /// Find the leaf (4 KiB) entry for `virt` under `root`.
 ///
@@ -112,7 +118,9 @@ fn map_page_in(
 /// A page that is mapped, or lent out (the `S` bit, with `VALID` cleared). A lent page's entry
 /// is the lender's only record of the loan: the borrower's return restores it. So nothing but
 /// that return may overwrite it: not a new mapping, a reservation or an unmap.
-fn is_occupied(pte: Pte) -> bool { pte.is_valid() || pte.has(MMUFlags::S) }
+fn is_occupied(pte: Pte) -> bool {
+    pte.is_valid() || pte.has(MMUFlags::S)
+}
 
 /// How many page-table pages `space` still lacks to map the `pages` pages from `virt`, none of
 /// which is mapped yet. R4 counts them among what a receiver must be able to pay for before a
@@ -225,7 +233,9 @@ pub fn verify_kernel_wx() -> usize {
     executable
 }
 
-fn user_flag(pid: PID) -> MMUFlags { if pid.get() != 1 { MMUFlags::USER } else { MMUFlags::NONE } }
+fn user_flag(pid: PID) -> MMUFlags {
+    if pid.get() != 1 { MMUFlags::USER } else { MMUFlags::NONE }
+}
 
 #[derive(Copy, Clone, Default, PartialEq)]
 pub struct MemoryMapping {
@@ -249,11 +259,15 @@ impl MemoryMapping {
     /// # Safety
     /// `satp` must name a root page table, as built by the loader.
     #[allow(dead_code)]
-    pub unsafe fn from_raw(&mut self, satp: usize) { self.satp = satp; }
+    pub unsafe fn from_raw(&mut self, satp: usize) {
+        self.satp = satp;
+    }
 
     /// # Safety
     /// `init` must be a process description produced by the loader.
-    pub unsafe fn from_init_process(&mut self, init: InitialProcess) { self.satp = init.satp; }
+    pub unsafe fn from_init_process(&mut self, init: InitialProcess) {
+        self.satp = init.satp;
+    }
 
     /// Allocate a brand-new memory mapping. The new address space contains:
     ///
@@ -291,15 +305,23 @@ impl MemoryMapping {
     }
 
     /// Get the currently active memory mapping.
-    pub fn current() -> MemoryMapping { MemoryMapping { satp: satp::read().bits() } }
+    pub fn current() -> MemoryMapping {
+        MemoryMapping { satp: satp::read().bits() }
+    }
 
     /// Get the "PID" (actually, ASID) from the current mapping
-    pub fn get_pid(&self) -> Option<PID> { PID::new(pid_from_satp(self.satp) as _) }
+    pub fn get_pid(&self) -> Option<PID> {
+        PID::new(pid_from_satp(self.satp) as _)
+    }
 
     #[allow(dead_code)]
-    pub fn is_allocated(&self) -> bool { self.get_pid().is_some() }
+    pub fn is_allocated(&self) -> bool {
+        self.get_pid().is_some()
+    }
 
-    pub fn is_kernel(&self) -> bool { self.get_pid().map(|v| v.get() == 1).unwrap_or(false) }
+    pub fn is_kernel(&self) -> bool {
+        self.get_pid().map(|v| v.get() == 1).unwrap_or(false)
+    }
 
     /// Set this mapping as the systemwide mapping.
     /// **Note:** This should only be called from an interrupt in the
@@ -763,6 +785,18 @@ pub fn set_user_page_flags(virt: usize, flags: MemoryFlags) -> Result<(), xous_k
 pub fn user_mapping(virt: usize) -> Option<usize> {
     let pte = walk(current_root(), virt, None).ok()?.get();
     (pte.is_valid() && pte.has(MMUFlags::USER) && !pte.has(MMUFlags::S)).then(|| pte.phys())
+}
+
+/// Whether `virt` is already a live mapping of the current address space.
+///
+/// A page fault on one of these is a **permission** fault -- a store to a page that is only
+/// readable, or a fetch from one that is not executable (R11) -- and never a demand-paged page
+/// that wants backing. The trap handler must tell the two apart: `ensure_page_exists_inner`
+/// answers `Ok` for a page that is already valid, so treating a permission fault as a missing
+/// page would resume the faulting instruction, fault again, and spin for ever with the process
+/// making no progress and the kernel printing nothing.
+pub fn is_mapped(virt: usize) -> bool {
+    walk(current_root(), virt, None).is_ok_and(|slot| slot.get().is_valid())
 }
 
 /// Determine whether a virtual address has been mapped

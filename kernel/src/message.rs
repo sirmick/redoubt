@@ -39,9 +39,8 @@ use core::cmp::Ordering;
 use core::num::{NonZeroU64, NonZeroUsize};
 
 use redoubt_sys::{
-    Body, Error, Handle as AbiHandle, Labels, MAX_LABELS, MAX_LEND_PAGES, MAX_MSG_HANDLES,
-    MAX_OPEN_CALLS, Message,
-    MessageKind, MintSource, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles, Return,
+    Body, Error, Handle as AbiHandle, Labels, MAX_LABELS, MAX_LEND_PAGES, MAX_MSG_HANDLES, MAX_OPEN_CALLS,
+    Message, MessageKind, MintSource, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles, Return,
     WAIT_CAP, WORDS, encode_result,
 };
 use xous_kernel::arch::PAGE_SIZE;
@@ -193,9 +192,13 @@ fn set_tword(mm: &MemoryManager, pid: PID, tid: TID, i: usize, value: u64) {
     }
 }
 
-fn frame_of(word: u64) -> Option<u32> { (word as u32).checked_sub(1) }
+fn frame_of(word: u64) -> Option<u32> {
+    (word as u32).checked_sub(1)
+}
 
-fn frame_word(frame: u32) -> u64 { u64::from(frame) + 1 }
+fn frame_word(frame: u32) -> u64 {
+    u64::from(frame) + 1
+}
 
 /// The fixed part of `(pid, tid)`'s IPC page. A thread with no page waits for nothing and holds
 /// nothing, which is what all-zero words say.
@@ -333,7 +336,9 @@ struct OpenCall {
     nlabels: usize,
 }
 
-fn pid_of(word: u64) -> PID { PID::new(word as u8).expect("I1: an open call names no process") }
+fn pid_of(word: u64) -> PID {
+    PID::new(word as u8).expect("I1: an open call names no process")
+}
 
 fn open_call_at(mm: &MemoryManager, frame: u32) -> OpenCall {
     let phys = mm.object_phys(frame);
@@ -423,10 +428,7 @@ fn open_call_of(mm: &MemoryManager, pid: PID, tid: TID, rid: u64) -> Option<u32>
 // --- Walking the threads ---------------------------------------------------------------------------
 
 /// Call `f` for every thread that has an IPC page, until it answers `Some`.
-fn find_thread<T>(
-    mm: &MemoryManager,
-    mut f: impl FnMut(&MemoryManager, PID, TID) -> Option<T>,
-) -> Option<T> {
+fn find_thread<T>(mm: &MemoryManager, mut f: impl FnMut(&MemoryManager, PID, TID) -> Option<T>) -> Option<T> {
     for index in 1..=MAX_PROCESS_COUNT {
         let Some(pid) = PID::new(index as u8) else { continue };
         for tid in 0..MAX_THREAD {
@@ -506,7 +508,12 @@ fn mark(mm: &MemoryManager, pid: PID, tid: TID, wait: Wait, timeout: u64) {
 /// What a blocking call does once delivery has had its chance: resume with the answer it already
 /// has, time out without ever blocking, or block. `Ok(None)` tells the trap handler to resume
 /// whatever is current now, which is this thread when it was answered (`redoubt.rs`).
-fn settle(ss: &mut SystemServices, mm: &mut MemoryManager, pid: PID, tid: TID) -> Result<Option<Return>, Error> {
+fn settle(
+    ss: &mut SystemServices,
+    mm: &mut MemoryManager,
+    pid: PID,
+    tid: TID,
+) -> Result<Option<Return>, Error> {
     let s = slot(mm, pid, tid);
     if s.wait == Wait::None {
         // Answered already: its registers hold the result.
@@ -1104,22 +1111,26 @@ fn prepare(
         // R4a: the call opens, charged to the receiving process's budget, and becomes the
         // thread's current call (answer 82).
         let frame = mm.alloc_object_frame().expect("R4: the open-call page was charged above");
-        store_open_call(mm, frame, &OpenCall {
-            rid,
-            caller: (spid, stid),
-            server: (rpid, rtid),
-            endpoint: e,
-            badge: m.badge,
-            stamp: m.stamp,
-            flags: F_WAITING,
-            lend_caller: m.buf_addr,
-            lend_server: at,
-            lend_pages: pages,
-            payer: BudgetRef { frame: rbudget, id: mm.budget(rbudget).id },
-            account: sender.account,
-            labels: sender.labels,
-            nlabels: sender.nlabels,
-        });
+        store_open_call(
+            mm,
+            frame,
+            &OpenCall {
+                rid,
+                caller: (spid, stid),
+                server: (rpid, rtid),
+                endpoint: e,
+                badge: m.badge,
+                stamp: m.stamp,
+                flags: F_WAITING,
+                lend_caller: m.buf_addr,
+                lend_server: at,
+                lend_pages: pages,
+                payer: BudgetRef { frame: rbudget, id: mm.budget(rbudget).id },
+                account: sender.account,
+                labels: sender.labels,
+                nlabels: sender.nlabels,
+            },
+        );
         push_open_call(mm, rpid, rtid, frame);
         set_tword(mm, rpid, rtid, W_CURRENT, frame_word(frame));
         // The caller now waits for the reply, not for a taker: its page names the open call.

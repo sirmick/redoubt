@@ -9,7 +9,7 @@
 #![no_std]
 #![no_main]
 
-use test_programs::{log, Logger};
+use test_programs::{Logger, log};
 use xous::{MemoryAddress, MemoryFlags, MemoryRange, SysCall};
 
 // Devices on QEMU virt this program was NOT granted.
@@ -76,4 +76,6 @@ pub extern "C" fn _start() -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! { test_programs::park() }
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    test_programs::park()
+}

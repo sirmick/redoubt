@@ -6,7 +6,7 @@
 
 use core::fmt::Write;
 
-use test_programs::{log, op, Logger, Page};
+use test_programs::{Logger, Page, log, op};
 use xous::{MemoryFlags, Message};
 
 #[no_mangle]
@@ -40,7 +40,12 @@ pub extern "C" fn _start() -> ! {
         .expect("couldn't lend_mut");
     let ok = scratch.bytes() == b"LENT MUTABLY ACROSS ADDRESS SPACES";
     failures += !ok as usize;
-    log!(logger, "[ipc] {}: lend_mut returned {:?}", if ok { "ok" } else { "FAIL" }, core::str::from_utf8(scratch.bytes()));
+    log!(
+        logger,
+        "[ipc] {}: lend_mut returned {:?}",
+        if ok { "ok" } else { "FAIL" },
+        core::str::from_utf8(scratch.bytes())
+    );
 
     // Lend the same page many times: every round trip unmaps it here, maps it in the
     // server, and reverses that on return. The mapping must survive.
@@ -63,10 +68,12 @@ pub extern "C" fn _start() -> ! {
     let mut gift = Page::new();
     write!(gift, "this page now belongs to the server").ok();
     let gift_addr = gift.range.as_ptr() as usize;
-    let message = xous::MemoryMessage { id: op::PRINT_AND_KEEP, buf: gift.range, offset: None, valid: gift.valid() };
+    let message =
+        xous::MemoryMessage { id: op::PRINT_AND_KEEP, buf: gift.range, offset: None, valid: gift.valid() };
     xous::send_message(cid, Message::Move(message)).expect("couldn't move");
     // The address must be unmapped here now, so mapping a fresh page there must succeed.
-    let remap = xous::map_memory(None, xous::MemoryAddress::new(gift_addr), 4096, MemoryFlags::R | MemoryFlags::W);
+    let remap =
+        xous::map_memory(None, xous::MemoryAddress::new(gift_addr), 4096, MemoryFlags::R | MemoryFlags::W);
     let ok = remap.is_ok();
     failures += !ok as usize;
     log!(logger, "[ipc] {}: moved page's address is free again", if ok { "ok" } else { "FAIL" });
@@ -80,4 +87,6 @@ pub extern "C" fn _start() -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! { test_programs::park() }
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    test_programs::park()
+}

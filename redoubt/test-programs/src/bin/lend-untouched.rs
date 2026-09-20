@@ -83,4 +83,6 @@ pub extern "C" fn _start() -> ! {
 const HUGE_PAGES: usize = 12 * 1024;
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! { test_programs::park() }
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    test_programs::park()
+}

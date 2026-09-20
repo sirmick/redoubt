@@ -147,7 +147,9 @@ pub extern "C" fn kmain() {
                 // I13, until WP-K5 arms the timer: with nothing runnable, the only thing that
                 // can make progress is a Redoubt deadline passing, so answer the ones that have
                 // and keep polling while any is still waiting, rather than sleeping through it.
-                if SystemServices::with_mut(|ss| mem::MemoryManager::with_mut(|mm| crate::message::expire(ss, mm))) {
+                if SystemServices::with_mut(|ss| {
+                    mem::MemoryManager::with_mut(|mm| crate::message::expire(ss, mm))
+                }) {
                     continue;
                 }
 
@@ -175,4 +177,6 @@ pub extern "C" fn kmain() {
 /// The main entrypoint when run in hosted mode. When running in embedded mode,
 /// this function does not exist.
 #[cfg(not(baremetal))]
-fn main() { kmain(); }
+fn main() {
+    kmain();
+}

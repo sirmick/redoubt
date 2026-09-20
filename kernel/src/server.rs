@@ -50,7 +50,9 @@ pub struct SenderID {
 }
 
 impl SenderID {
-    pub fn new(sidx: usize, idx: usize, pid: Option<PID>) -> Self { SenderID { sidx, idx, pid } }
+    pub fn new(sidx: usize, idx: usize, pid: Option<PID>) -> Self {
+        SenderID { sidx, idx, pid }
+    }
 }
 
 impl From<usize> for SenderID {
@@ -68,11 +70,15 @@ impl From<SenderID> for usize {
 }
 
 impl From<MessageSender> for SenderID {
-    fn from(item: MessageSender) -> SenderID { SenderID::from(item.to_usize()) }
+    fn from(item: MessageSender) -> SenderID {
+        SenderID::from(item.to_usize())
+    }
 }
 
 impl From<SenderID> for MessageSender {
-    fn from(val: SenderID) -> Self { MessageSender::from_usize(val.into()) }
+    fn from(val: SenderID) -> Self {
+        MessageSender::from_usize(val.into())
+    }
 }
 
 #[derive(Debug)]

@@ -142,7 +142,9 @@ impl core::fmt::Debug for ProcessState {
 }
 
 impl Default for ProcessState {
-    fn default() -> ProcessState { ProcessState::Free }
+    fn default() -> ProcessState {
+        ProcessState::Free
+    }
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -249,7 +251,9 @@ impl Process {
     }
 
     /// This process slot is unallocated and may be turn into a process
-    pub fn free(&self) -> bool { matches!(self.state, ProcessState::Free) }
+    pub fn free(&self) -> bool {
+        matches!(self.state, ProcessState::Free)
+    }
 
     pub fn activate(&self) -> Result<(), xous_kernel::Error> {
         crate::arch::process::set_current_pid(self.pid);
@@ -280,6 +284,11 @@ impl Process {
         // Remove this PID from the process table
         ArchProcess::destroy(self.pid)?;
         self.state = ProcessState::Free;
+        // And forget its address space. Until WP-K4 nothing ever reused a PID, so a terminated
+        // process could keep a `satp` naming page tables that had just been freed; now
+        // `process_create` draws PIDs from the free ones, and `MemoryMapping::allocate` refuses
+        // a mapping that still names an address space.
+        self.mapping = Default::default();
         Ok(())
     }
 }
@@ -391,9 +400,8 @@ impl SystemServices {
             // refuses a bundle with more processes than the kernel has room for. This is the
             // kernel's side of that check: a count beyond either limit means the two disagree,
             // and the boot stops here rather than at an index somewhere later.
-            let capacity = (xous_kernel::arch::PAGE_SIZE
-                / size_of::<crate::arch::process::InitialProcess>())
-            .min(crate::arch::process::MAX_PROCESS_COUNT);
+            let capacity = (xous_kernel::arch::PAGE_SIZE / size_of::<crate::arch::process::InitialProcess>())
+                .min(crate::arch::process::MAX_PROCESS_COUNT);
             assert!(
                 init_count <= capacity,
                 "the loader reported {} initial processes, room is {}",
@@ -553,14 +561,16 @@ impl SystemServices {
         mm: &mut crate::mem::MemoryManager,
         pid: PID,
     ) -> Result<(), xous_kernel::Error> {
-        let ppid = self.current_pid();
         let entry =
             self.processes.get_mut(pid.get() as usize - 1).ok_or(xous_kernel::Error::ProcessNotFound)?;
         if entry.state != ProcessState::Free {
             return Err(xous_kernel::Error::ProcessNotFound);
         }
         entry.pid = pid;
-        entry.ppid = ppid;
+        // `ppid` is the legacy "switch back to this when I stop", not a process hierarchy, and
+        // the one process always able to run is the kernel: a creator may itself be blocked when
+        // its child ends. (INTERIM: WP-K5's one stride queue replaces this dance.)
+        entry.ppid = KERNEL_PID;
         entry.state = ProcessState::Allocated;
         entry.exception_handler = None;
         entry.current_thread = INITIAL_TID as TID;
@@ -568,7 +578,11 @@ impl SystemServices {
         entry.mapping.allocate(mm, pid).inspect_err(|_| {
             entry.state = ProcessState::Free;
             entry.mapping = Default::default();
-        })
+        })?;
+        // Only now can the new space be activated: `set_current_pid` refuses a PID the arch's
+        // process table does not hold.
+        ArchProcess::claim(pid);
+        Ok(())
     }
 
     /// WP-K4: give back the slot of a process that never started (a `process_create` that failed
@@ -609,8 +623,7 @@ impl SystemServices {
         let process = self.get_process_mut(pid).map_err(|_| redoubt_sys::Error::NotPermitted)?;
         process.activate().map_err(|_| redoubt_sys::Error::NotPermitted)?;
         let mut arch_process = ArchProcess::current();
-        let new_tid =
-            arch_process.find_free_thread().ok_or(redoubt_sys::Error::TooManyThreads)?;
+        let new_tid = arch_process.find_free_thread().ok_or(redoubt_sys::Error::TooManyThreads)?;
         // A thread costs its budget a page (R6).
         crate::mem::MemoryManager::with_mut(|mm| mm.thread_created(pid, new_tid))?;
         arch_process.setup_redoubt_thread(new_tid, entry, sp, arg).map_err(|_| {
@@ -656,7 +669,9 @@ impl SystemServices {
         }
     }
 
-    pub fn current_pid(&self) -> PID { arch::process::current_pid() }
+    pub fn current_pid(&self) -> PID {
+        arch::process::current_pid()
+    }
 
     /// Create a stack frame in the specified process and jump to it.
     /// 1. Pause the current process and switch to the new one
@@ -1115,9 +1130,7 @@ impl SystemServices {
         }
         self.get_process(pid)?.activate()?;
         ArchProcess::current().set_thread_registers(tid, &words);
-        self.get_process(current_pid)
-            .expect("couldn't switch back after setting a Redoubt result")
-            .activate()
+        self.get_process(current_pid).expect("couldn't switch back after setting a Redoubt result").activate()
     }
 
     /// Resume the given process, picking up exactly where it left off. If the

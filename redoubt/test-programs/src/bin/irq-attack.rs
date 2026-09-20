@@ -24,7 +24,9 @@ const UART_IRQ: usize = 10;
 const RAM: usize = 0x8400_0000;
 
 /// An index no process holds: past every handle this program was given.
-fn unheld() -> u32 { rd::first_free() }
+fn unheld() -> u32 {
+    rd::first_free()
+}
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
@@ -42,8 +44,12 @@ pub extern "C" fn _start() -> ! {
         rd::receive(Some(u32::MAX), 0, 0).err(),
     ];
     let ok = refused.iter().all(|e| *e == Some(Error::BadHandle));
-    log!(logger, "[irq-attack] {}: receive on an irq handle it does not hold -> {:?}",
-        if ok { "ok" } else { "FAIL" }, refused);
+    log!(
+        logger,
+        "[irq-attack] {}: receive on an irq handle it does not hold -> {:?}",
+        if ok { "ok" } else { "FAIL" },
+        refused
+    );
 
     // Mapping the victim's MMIO range without its handle: by handle index, and by physical
     // address through the legacy call, which the grants still deny (DEVICE-GRANTS.md). The
@@ -52,8 +58,13 @@ pub extern "C" fn _start() -> ! {
     let by_address = map_legacy(UART).err();
     let ok = by_index.iter().all(|e| *e == Some(Error::BadHandle))
         && by_address == Some(xous::Error::AccessDenied);
-    log!(logger, "[irq-attack] {}: mapping the console's mmio -> {:?}, by address -> {:?}",
-        if ok { "ok" } else { "FAIL" }, by_index, by_address);
+    log!(
+        logger,
+        "[irq-attack] {}: mapping the console's mmio -> {:?}, by address -> {:?}",
+        if ok { "ok" } else { "FAIL" },
+        by_index,
+        by_address
+    );
 
     // Naming RAM by physical address (R11). The legacy call refuses it outright, and for
     // *that* reason: this program is granted nothing, so a kernel that had dropped the RAM
@@ -63,8 +74,13 @@ pub extern "C" fn _start() -> ! {
     let anon = rd::map_anon(4096, rd::rw());
     let zero = anon.map(rd::peek);
     let ok = ram == Some(xous::Error::InvalidArgument) && zero == Ok(0);
-    log!(logger, "[irq-attack] {}: RAM by address -> {:?}, map_anon first word -> {:?}",
-        if ok { "ok" } else { "FAIL" }, ram, zero);
+    log!(
+        logger,
+        "[irq-attack] {}: RAM by address -> {:?}, map_anon first word -> {:?}",
+        if ok { "ok" } else { "FAIL" },
+        ram,
+        zero
+    );
 
     // A handle of the wrong kind is `WrongObject`, and one that does not exist `BadHandle`,
     // for every device call -- including `system_reset`, which would end the case early.
@@ -80,8 +96,13 @@ pub extern "C" fn _start() -> ! {
     ];
     let ok = wrong.iter().all(|e| *e == Some(Error::WrongObject))
         && absent.iter().all(|e| *e == Some(Error::BadHandle));
-    log!(logger, "[irq-attack] {}: wrong kind -> {:?}, not held -> {:?}",
-        if ok { "ok" } else { "FAIL" }, wrong, absent);
+    log!(
+        logger,
+        "[irq-attack] {}: wrong kind -> {:?}, not held -> {:?}",
+        if ok { "ok" } else { "FAIL" },
+        wrong,
+        absent
+    );
 
     // The legacy interrupt interface, until WP-K6 deletes it: out-of-range numbers, the
     // victim's interrupt, and one claimed twice. No grant covers any of them.
@@ -111,4 +132,6 @@ fn map_legacy(base: usize) -> Result<xous::Result, xous::Error> {
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! { test_programs::park() }
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    test_programs::park()
+}

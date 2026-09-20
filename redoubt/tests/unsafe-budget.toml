@@ -51,7 +51,8 @@ paths = [
     "kernel/src/main.rs", "kernel/src/mem.rs", "kernel/src/services.rs", "kernel/src/server.rs",
     "kernel/src/syscall.rs", "kernel/src/irq.rs", "kernel/src/args.rs", "kernel/src/io.rs",
     "kernel/src/budget.rs", "kernel/src/handle.rs", "kernel/src/kframe.rs", "kernel/src/redoubt.rs",
-    "kernel/src/device.rs",
+    "kernel/src/device.rs", "kernel/src/endpoint.rs", "kernel/src/message.rs", "kernel/src/process.rs",
+    "kernel/src/grants.rs", "kernel/src/macros.rs",
 ]
 # WP-K1: kframe.rs's three (words of kernel-object frames and of records, through the physmap)
 # replace mem.rs's three needless ones in the deleted `print_ownership`; the total is unchanged.
@@ -62,6 +63,10 @@ paths = [
 # WP-K3: device.rs joins the list with none of its own (it reaches frames through kframe.rs
 # and the page tables through arch::mem). -1: the legacy contiguous allocation for a device,
 # which `dma_alloc` replaces, is deleted, and its `bzero` of the freshly mapped pages with it.
+# WP-K4: process.rs joins with none of its own, as do endpoint.rs, message.rs, grants.rs and
+# macros.rs, which WP-K2 and WP-K3 left off the list although they are as much of the kernel as
+# the rest; every one of them is unsafe-free, so the ceiling does not move. Everything the
+# kernel builds now counts except `cell.rs` (three, its own budget below) and the debug shell.
 max_unsafe = 20
 max_undocumented = 0
 

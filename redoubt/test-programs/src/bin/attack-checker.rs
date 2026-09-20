@@ -13,7 +13,7 @@
 #![no_std]
 #![no_main]
 
-use test_programs::{checker, log, Logger};
+use test_programs::{Logger, checker, log};
 use xous::{MemoryAddress, MemoryFlags, Message};
 
 /// QEMU `virt`'s test device ("sifive,test0"): writing 0x5555 powers off.
@@ -22,9 +22,11 @@ const POWEROFF: usize = 0x0010_0000;
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
-    let poweroff = xous::map_memory(MemoryAddress::new(POWEROFF), None, 4096, MemoryFlags::R | MemoryFlags::W)
-        .expect("couldn't map the power-off device");
-    let sid = xous::create_server_with_address(checker::ADDRESS).expect("couldn't create the checker's server");
+    let poweroff =
+        xous::map_memory(MemoryAddress::new(POWEROFF), None, 4096, MemoryFlags::R | MemoryFlags::W)
+            .expect("couldn't map the power-off device");
+    let sid =
+        xous::create_server_with_address(checker::ADDRESS).expect("couldn't create the checker's server");
     loop {
         let envelope = xous::receive_message(sid).expect("couldn't receive");
         let Message::BlockingScalar(m) = &envelope.body else { continue };
@@ -42,4 +44,6 @@ pub extern "C" fn _start() -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! { test_programs::park() }
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    test_programs::park()
+}

@@ -170,7 +170,9 @@ pub struct Process {
     pid: PID,
 }
 
-fn fixup_irq(tid: TID) -> TID { if tid == IRQ_TID_SENTINAL { 0 } else { tid } }
+fn fixup_irq(tid: TID) -> TID {
+    if tid == IRQ_TID_SENTINAL { 0 } else { tid }
+}
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -195,7 +197,9 @@ impl Process {
     }
 
     /// Mark this process as running on the current core
-    pub fn activate(&mut self) -> Result<(), xous_kernel::Error> { Ok(()) }
+    pub fn activate(&mut self) -> Result<(), xous_kernel::Error> {
+        Ok(())
+    }
 
     /// Calls the provided function with the current inner process state.
     pub fn with_inner<F, R>(f: F) -> R
@@ -410,14 +414,20 @@ impl Process {
     /// that `process_impl()` names *its* saved contexts. `MemoryMapping::allocate` zeroed those
     /// frames, and all-zeroes is not a valid `ProcessInner` (its `pid` is a `NonZeroU8`), so
     /// nothing may read them before this runs.
-    pub fn setup_empty_process(pid: PID) {
-        let process = process_impl();
-        assert_eq!(pid, crate::arch::current_pid(), "hardware pid does not match setup pid");
+    /// WP-K4: claim `pid` in the process table, so that its address space can be activated. It
+    /// is a separate step from `setup_empty_process`, which needs that space to be active
+    /// already: `set_current_pid` refuses a PID the table does not hold.
+    pub fn claim(pid: PID) {
         let pid_idx = (pid.get() as usize) - 1;
         PROCESS_TABLE.with(|pt| {
             assert!(!pt.table[pid_idx], "process {} is already allocated", pid);
             pt.table[pid_idx] = true;
         });
+    }
+
+    pub fn setup_empty_process(pid: PID) {
+        let process = process_impl();
+        assert_eq!(pid, crate::arch::current_pid(), "hardware pid does not match setup pid");
         // By convention thread 0 is the trap thread, so the first ordinary thread is
         // `INITIAL_TID`; the hardware thread number is one more than the TID.
         process.hardware_thread = INITIAL_TID + 1;
@@ -462,9 +472,7 @@ impl Process {
             *val = 0;
         }
         thread.sepc = 0;
-        crate::arch::syscall::invoke(thread, pid == 1, entry, (sp - 16) & !0xf, EXIT_THREAD, &[
-            arg, 0, 0, 0,
-        ]);
+        crate::arch::syscall::invoke(thread, pid == 1, entry, (sp - 16) & !0xf, EXIT_THREAD, &[arg, 0, 0, 0]);
         Ok(())
     }
 
@@ -578,16 +586,24 @@ impl Process {
     /// This is used by debugging routines to sanity check state, which are typically #[cfg]'d out
     /// but with complicated overlapping rules that constantly change. Hence, the #[allow(dead_code)].
     #[allow(dead_code)]
-    pub fn pid(&self) -> PID { self.pid }
+    pub fn pid(&self) -> PID {
+        self.pid
+    }
 }
 
 impl Thread {
     /// The current stack pointer for this thread
-    pub fn stack_pointer(&self) -> usize { self.registers[1] }
+    pub fn stack_pointer(&self) -> usize {
+        self.registers[1]
+    }
 
-    pub fn a0(&self) -> usize { self.registers[9] }
+    pub fn a0(&self) -> usize {
+        self.registers[9]
+    }
 
-    pub fn a1(&self) -> usize { self.registers[10] }
+    pub fn a1(&self) -> usize {
+        self.registers[10]
+    }
 }
 
 impl core::fmt::Display for Thread {
@@ -644,6 +660,10 @@ pub fn set_current_pid(pid: PID) {
     });
 }
 
-pub fn current_pid() -> PID { PROCESS_TABLE.with(|pt| pt.current) }
+pub fn current_pid() -> PID {
+    PROCESS_TABLE.with(|pt| pt.current)
+}
 
-pub fn current_tid() -> TID { process_impl().hardware_thread - 1 }
+pub fn current_tid() -> TID {
+    process_impl().hardware_thread - 1
+}

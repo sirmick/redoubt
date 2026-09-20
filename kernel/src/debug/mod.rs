@@ -5,4 +5,3 @@
 mod macros;
 #[cfg(baremetal)]
 pub mod shell;
-

@@ -13,7 +13,9 @@ use crate::io::SerialWrite;
 struct SbiConsole;
 
 impl SerialWrite for SbiConsole {
-    fn putc(&mut self, b: u8) { sbi_rt::console_write_byte(b); }
+    fn putc(&mut self, b: u8) {
+        sbi_rt::console_write_byte(b);
+    }
 }
 
 static mut CONSOLE: SbiConsole = SbiConsole;
@@ -26,7 +28,9 @@ pub fn early_init() {
     crate::debug::shell::init(unsafe { &mut *(&raw mut CONSOLE) });
 }
 
-pub fn init() { rand::init(); }
+pub fn init() {
+    rand::init();
+}
 
 /// `system_reset` through the SBI SRST extension. The firmware does not return from either;
 /// this returns only when it refused (a machine with no SRST implementation), and the caller
@@ -40,7 +44,12 @@ pub fn reset(reboot: bool) {
 }
 
 /// `SysCall::PlatformSpecific` for SBI platforms. Numbers are in `xous::arch::platform_call`.
-pub fn platform_call(pid: xous_kernel::PID, op: usize, a2: usize, _a3: usize) -> Result<xous_kernel::Result, xous_kernel::Error> {
+pub fn platform_call(
+    pid: xous_kernel::PID,
+    op: usize,
+    a2: usize,
+    _a3: usize,
+) -> Result<xous_kernel::Result, xous_kernel::Error> {
     use xous_kernel::arch::platform_call::*;
 
     use crate::arch::irq::timer;

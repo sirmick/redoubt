@@ -7,9 +7,9 @@
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use test_programs::{log, Logger};
-use xous::arch::platform_call::{TIMER_IRQ, TIMER_SET_DEADLINE, TIMER_TIMEBASE};
+use test_programs::{Logger, log};
 use xous::SysCall;
+use xous::arch::platform_call::{TIMER_IRQ, TIMER_SET_DEADLINE, TIMER_TIMEBASE};
 
 const TICKS_WANTED: usize = 5;
 const TICK_HZ: u64 = 20;
@@ -18,7 +18,9 @@ static TICKS: AtomicUsize = AtomicUsize::new(0);
 static TICK_INTERVAL: AtomicUsize = AtomicUsize::new(0);
 
 /// The kernel lets userspace read the `time` CSR directly.
-fn now() -> u64 { test_programs::read_time() }
+fn now() -> u64 {
+    test_programs::read_time()
+}
 
 fn set_deadline(deadline: u64) {
     xous::rsyscall(SysCall::PlatformSpecific(TIMER_SET_DEADLINE, deadline as usize, 0, 0, 0, 0, 0))
@@ -39,7 +41,12 @@ pub extern "C" fn _start() -> ! {
     // Before the interrupt is claimed, the timer is not ours to program.
     let denied = xous::rsyscall(SysCall::PlatformSpecific(TIMER_SET_DEADLINE, 0, 0, 0, 0, 0, 0));
     let access_ok = denied == Err(xous::Error::AccessDenied);
-    log!(logger, "[timer] {}: set-deadline without owning the irq -> {:?}", if access_ok { "ok" } else { "FAIL" }, denied);
+    log!(
+        logger,
+        "[timer] {}: set-deadline without owning the irq -> {:?}",
+        if access_ok { "ok" } else { "FAIL" },
+        denied
+    );
 
     let timebase = match xous::rsyscall(SysCall::PlatformSpecific(TIMER_TIMEBASE, 0, 0, 0, 0, 0, 0)) {
         Ok(xous::Result::Scalar1(hz)) => hz as u64,
@@ -51,7 +58,8 @@ pub extern "C" fn _start() -> ! {
     log!(logger, "[timer] timebase {} Hz, time {}", timebase, now());
     TICK_INTERVAL.store((timebase / TICK_HZ) as usize, Ordering::Relaxed);
 
-    xous::claim_interrupt(TIMER_IRQ, on_tick, core::ptr::null_mut()).expect("couldn't claim the timer interrupt");
+    xous::claim_interrupt(TIMER_IRQ, on_tick, core::ptr::null_mut())
+        .expect("couldn't claim the timer interrupt");
     let start = now();
     set_deadline(start + timebase / TICK_HZ);
 
@@ -68,7 +76,13 @@ pub extern "C" fn _start() -> ! {
     // Five ticks at 20 Hz should take a quarter of a second, give or take emulation.
     let elapsed_ms = (now() - start) * 1000 / timebase.max(1);
     let timing_ok = (200..2000).contains(&elapsed_ms);
-    log!(logger, "[timer] {}: {} ticks in {} ms", if timing_ok { "ok" } else { "FAIL" }, reported, elapsed_ms);
+    log!(
+        logger,
+        "[timer] {}: {} ticks in {} ms",
+        if timing_ok { "ok" } else { "FAIL" },
+        reported,
+        elapsed_ms
+    );
 
     if access_ok && timing_ok && timebase > 0 {
         log!(logger, "TIMER TEST PASSED");
@@ -79,4 +93,6 @@ pub extern "C" fn _start() -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! { test_programs::park() }
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    test_programs::park()
+}

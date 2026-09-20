@@ -33,8 +33,14 @@ pub extern "C" fn _start() -> ! {
     // The scopes are every index from the pool's own to the last: one page each, and the
     // table stops at MAX_HANDLES whatever the machine handed this program to start with.
     let one_each = pool_usage == u64::from(rd::MAX_HANDLES as u32 - base) && last == rd::MAX_HANDLES as u32;
-    log!(logger, "[table] filled to handle {}, then {:?}; the pool paid {} pages ({})", last, refusal,
-        pool_usage, if one_each { "one per scope" } else { "FAIL" });
+    log!(
+        logger,
+        "[table] filled to handle {}, then {:?}; the pool paid {} pages ({})",
+        last,
+        refusal,
+        pool_usage,
+        if one_each { "one per scope" } else { "FAIL" }
+    );
     // Table pages are charged to system: 31 more than the one it had, beyond the pool (5000
     // pages and its own).
     let table_pages = rd::usage(rd::SYSTEM).unwrap().pages_usage - before - 5001;
@@ -45,7 +51,12 @@ pub extern "C" fn _start() -> ! {
     log!(logger, "[table] closed 3969..={}: {}; reopened -> {:?}", last, closed, reopened);
     let destroyed = rd::destroy(pool);
     let after = rd::usage(rd::SYSTEM).unwrap().pages_usage;
-    log!(logger, "[table] destroyed the pool -> {:?}; system usage back where it was: {}", destroyed, before == after);
+    log!(
+        logger,
+        "[table] destroyed the pool -> {:?}; system usage back where it was: {}",
+        destroyed,
+        before == after
+    );
     let gone = (base..=3969).all(|h| rd::usage(h) == Err(Error::BadHandle));
     log!(logger, "[table] every swept index is empty: {}", gone);
     log!(logger, "[table] attempts done");
@@ -54,4 +65,6 @@ pub extern "C" fn _start() -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! { test_programs::park() }
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    test_programs::park()
+}

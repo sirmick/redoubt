@@ -18,8 +18,7 @@
 //! `InvalidArgument` until its package builds it (WP-K4).
 
 use redoubt_sys::{
-    BUDGET_SPEC_SLOTS, BudgetSpec, Call, Error, Number, REGS, Return, USAGE_SLOTS,
-    encode_result,
+    BUDGET_SPEC_SLOTS, BudgetSpec, Call, Error, Number, REGS, Return, USAGE_SLOTS, encode_result,
 };
 use xous_kernel::{PID, TID};
 
@@ -50,8 +49,11 @@ pub fn handle(pid: PID, tid: TID, in_irq: bool, regs: &[u64; REGS]) -> Outcome {
         SystemServices::with_mut(|ss| MemoryManager::with_mut(|mm| crate::message::expire(ss, mm)));
     }
 
-    let result =
-        if in_irq { Err(Error::NotPermitted) } else { Call::decode(regs).and_then(|c| dispatch(pid, tid, c)) };
+    let result = if in_irq {
+        Err(Error::NotPermitted)
+    } else {
+        Call::decode(regs).and_then(|c| dispatch(pid, tid, c))
+    };
     // Every error a call returns is in its row of the spec's error table (`Number::can_return`).
     // The interim refusal of legacy callbacks is outside the table, and an unknown number has no
     // row (it is `InvalidArgument`).
@@ -96,16 +98,28 @@ fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
             crate::message::send(ss, mm, pid, tid, MsgKind::Call, endpoint.index(), body_rec, lend, timeout)
         }),
         Call::Send { endpoint, body_rec, transfer, timeout } => with_both(|ss, mm| {
-            crate::message::send(ss, mm, pid, tid, MsgKind::Send, endpoint.index(), body_rec, transfer, timeout)
+            crate::message::send(
+                ss,
+                mm,
+                pid,
+                tid,
+                MsgKind::Send,
+                endpoint.index(),
+                body_rec,
+                transfer,
+                timeout,
+            )
         }),
         Call::Receive { from, timeout, max_transfer, received_rec } => with_both(|ss, mm| {
             let from = from.map(|h| h.index());
             crate::message::receive(ss, mm, pid, tid, from, timeout, max_transfer, received_rec)
         }),
-        Call::Reply { msg_id, body_rec } => with_both(|ss, mm| {
-            crate::message::reply(ss, mm, pid, tid, msg_id.get(), body_rec).map(done)
-        }),
-        Call::Serve { msg_id } => MemoryManager::with_mut(|mm| crate::message::serve(mm, pid, tid, msg_id.get())).map(done),
+        Call::Reply { msg_id, body_rec } => {
+            with_both(|ss, mm| crate::message::reply(ss, mm, pid, tid, msg_id.get(), body_rec).map(done))
+        }
+        Call::Serve { msg_id } => {
+            MemoryManager::with_mut(|mm| crate::message::serve(mm, pid, tid, msg_id.get())).map(done)
+        }
         Call::MapAnon { len, flags } => {
             MemoryManager::with_mut(|mm| mm.map_anon(pid, len, flags)).map(|at| Some(Return::Addr(at)))
         }
@@ -137,8 +151,7 @@ fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
             Ok(Some(Return::Random(u64::from_le_bytes(bytes))))
         }
         Call::ProcessCreate { budget, exit_endpoint } => with_both(|ss, mm| {
-            let handle =
-                crate::process::process_create(ss, mm, pid, budget.index(), exit_endpoint.index())?;
+            let handle = crate::process::process_create(ss, mm, pid, budget.index(), exit_endpoint.index())?;
             Ok(Some(Return::Handle(redoubt_sys::Handle::new(handle).expect("indices start at 1"))))
         }),
         Call::ProcessMap { process, src, dst, len, flags } => with_both(|ss, mm| {

@@ -6,9 +6,8 @@
 #![no_main]
 
 use test_programs::uaf::*;
-use test_programs::{log, Logger};
-use xous::{MemoryFlags, Message, MemorySize, SID};
-
+use test_programs::{Logger, log};
+use xous::{MemoryFlags, MemorySize, Message, SID};
 
 /// Runs on a second thread: gives the main thread time to lend the page and the holder
 /// time to receive it, then kills this process (including the main thread, which is by
@@ -38,4 +37,6 @@ pub extern "C" fn _start() -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! { test_programs::park() }
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    test_programs::park()
+}

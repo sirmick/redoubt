@@ -146,7 +146,8 @@ pub struct HandleTable {
 }
 
 impl HandleTable {
-    pub const EMPTY: HandleTable = HandleTable { pages: [None; MAX_HANDLE_PAGES], live: [0; MAX_HANDLE_PAGES] };
+    pub const EMPTY: HandleTable =
+        HandleTable { pages: [None; MAX_HANDLE_PAGES], live: [0; MAX_HANDLE_PAGES] };
 }
 
 /// (page, slot) of index `i`, or `None` if `i` cannot be an index (0, or past the last page).
@@ -156,10 +157,14 @@ fn position(index: u32) -> Option<(usize, usize)> {
     (page < MAX_HANDLE_PAGES).then_some((page, i % HANDLES_PER_PAGE))
 }
 
-fn slot_offset(slot: usize, word: usize) -> usize { (slot * HANDLE_WORDS + word) * 8 }
+fn slot_offset(slot: usize, word: usize) -> usize {
+    (slot * HANDLE_WORDS + word) * 8
+}
 
 impl MemoryManager {
-    fn table(&self, pid: PID) -> Option<&HandleTable> { self.account(pid).map(|a| &a.handles) }
+    fn table(&self, pid: PID) -> Option<&HandleTable> {
+        self.account(pid).map(|a| &a.handles)
+    }
 
     fn read_slot(&self, frame: u32, slot: usize) -> Option<Handle> {
         let phys = self.object_phys(frame);
@@ -287,7 +292,9 @@ impl MemoryManager {
     }
 
     /// Remove every handle of a process that is ending.
-    pub fn close_all_handles(&mut self, pid: PID) { self.remove_handles_where(pid, &|_, _| true); }
+    pub fn close_all_handles(&mut self, pid: PID) {
+        self.remove_handles_where(pid, &|_, _| true);
+    }
 
     fn remove_handles_where(&mut self, pid: PID, doomed: &impl Fn(&Self, &Handle) -> bool) {
         for page in 0..MAX_HANDLE_PAGES {

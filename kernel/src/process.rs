@@ -112,11 +112,17 @@ pub struct Proc {
 }
 
 impl Proc {
-    pub fn started(&self) -> bool { self.flags & F_STARTED != 0 }
+    pub fn started(&self) -> bool {
+        self.flags & F_STARTED != 0
+    }
 
-    pub fn alive(&self) -> bool { self.flags & F_ALIVE != 0 }
+    pub fn alive(&self) -> bool {
+        self.flags & F_ALIVE != 0
+    }
 
-    fn notice_owed(&self) -> bool { self.flags & F_NOTICE != 0 }
+    fn notice_owed(&self) -> bool {
+        self.flags & F_NOTICE != 0
+    }
 }
 
 /// R1's sender side for an exit notice, read before the budget it names can go: the class and
@@ -128,9 +134,13 @@ pub struct Flow {
     nlabels: usize,
 }
 
-fn frame_of(word: u64) -> Option<u32> { (word as u32).checked_sub(1) }
+fn frame_of(word: u64) -> Option<u32> {
+    (word as u32).checked_sub(1)
+}
 
-fn frame_word(frame: u32) -> u64 { u64::from(frame) + 1 }
+fn frame_word(frame: u32) -> u64 {
+    u64::from(frame) + 1
+}
 
 impl MemoryManager {
     pub fn process(&self, frame: u32) -> Proc {
@@ -231,10 +241,7 @@ fn random_free_pid(ss: &SystemServices, mm: &MemoryManager) -> Option<PID> {
     let mut bytes = [0u8; 8];
     crate::platform::rand::fill(&mut bytes);
     let nth = (u64::from_le_bytes(bytes) % count as u64) as usize;
-    (2..=MAX_PROCESS_COUNT)
-        .filter_map(|i| PID::new(i as u8))
-        .filter(|pid| free(*pid))
-        .nth(nth)
+    (2..=MAX_PROCESS_COUNT).filter_map(|i| PID::new(i as u8)).filter(|pid| free(*pid)).nth(nth)
 }
 
 // --- `process_create` ---------------------------------------------------------------------------
@@ -276,19 +283,22 @@ pub fn process_create(
         let frame = mm.alloc_object_frame().inspect_err(|_| mm.uncharge(caller_budget, PROCESS_PAGES))?;
         let id = mm.next_object_id();
         let creator = BudgetRef { frame: caller_budget, id: mm.budget(caller_budget).id };
-        mm.store_process(frame, &Proc {
-            id,
-            creator,
-            budget: Some(BudgetRef { frame: target, id: mm.budget(target).id }),
-            pid: child,
-            endpoint: Some(endpoint),
-            flags: F_ALIVE,
-            cause: 0,
-            code: 0,
-            blamed_account: 0,
-            blamed_labels: [0; MAX_LABELS],
-            blamed_nlabels: 0,
-        });
+        mm.store_process(
+            frame,
+            &Proc {
+                id,
+                creator,
+                budget: Some(BudgetRef { frame: target, id: mm.budget(target).id }),
+                pid: child,
+                endpoint: Some(endpoint),
+                flags: F_ALIVE,
+                cause: 0,
+                code: 0,
+                blamed_account: 0,
+                blamed_labels: [0; MAX_LABELS],
+                blamed_nlabels: 0,
+            },
+        );
         // R9: the new handle is stamped with the caller's budget.
         let object = Object::Process(ProcessRef { frame, id });
         mm.install_handle(pid, Handle { object, badge: 0, stamp: creator }).inspect_err(|_| {
@@ -463,9 +473,7 @@ pub fn process_start(
     }
     mm.thread_created(child, INITIAL_TID).expect("process_start: the thread page was counted above");
     let here = crate::arch::process::current_pid();
-    ss.get_process(child)
-        .and_then(|p| p.activate())
-        .expect("a created process can be activated");
+    ss.get_process(child).and_then(|p| p.activate()).expect("a created process can be activated");
     ArchProcess::setup_first_thread(child, entry, sp, arg);
     ss.activate(here).expect("the running process can be activated");
     ss.start_process(child).expect("a created process can be started");
@@ -525,7 +533,9 @@ pub fn faulted(pid: PID, code: u32) {
 
 /// R10: destroying a budget kills the processes running in it. The notice has cause `killed`
 /// (`died` drops it if the object is going too, which [`budgets_dying`] sees to afterwards).
-pub fn killed(ss: &mut SystemServices, victim: PID) { died(ss, victim, INITIAL_TID, Cause::Killed, 0); }
+pub fn killed(ss: &mut SystemServices, victim: PID) {
+    died(ss, victim, INITIAL_TID, Cause::Killed, 0);
+}
 
 /// The one path out of a process, whatever ended it: record the notice, tear the process down,
 /// then deliver the notice or drop it.

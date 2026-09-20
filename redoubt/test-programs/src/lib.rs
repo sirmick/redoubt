@@ -16,6 +16,7 @@ use core::fmt::Write;
 use xous::{CID, MemoryFlags, MemoryRange, MemorySize, Message};
 
 pub mod rd;
+pub mod spawn;
 
 /// There is no name server yet, so the log server uses a well-known address.
 pub const SERVER_ADDRESS: &[u8; 16] = b"redoubt-ipc-tst!";
@@ -47,15 +48,23 @@ impl Page {
         Page { range, len: 0 }
     }
 
-    pub fn clear(&mut self) { self.len = 0; }
+    pub fn clear(&mut self) {
+        self.len = 0;
+    }
 
-    pub fn bytes(&self) -> &[u8] { unsafe { core::slice::from_raw_parts(self.range.as_ptr(), self.len) } }
+    pub fn bytes(&self) -> &[u8] {
+        unsafe { core::slice::from_raw_parts(self.range.as_ptr(), self.len) }
+    }
 
-    pub fn valid(&self) -> Option<MemorySize> { MemorySize::new(self.len) }
+    pub fn valid(&self) -> Option<MemorySize> {
+        MemorySize::new(self.len)
+    }
 }
 
 impl Default for Page {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Write for Page {

@@ -27,11 +27,15 @@ pub struct KernelArgumentsIterator {
 
 #[allow(dead_code)]
 impl KernelArguments {
-    pub fn get() -> Self { KernelArguments { base: KERNEL_ARGUMENTS_BASE.with(|b| *b) as *const u32 } }
+    pub fn get() -> Self {
+        KernelArguments { base: KERNEL_ARGUMENTS_BASE.with(|b| *b) as *const u32 }
+    }
 
     /// # Safety
     /// `base` must point at the argument block the loader built.
-    pub unsafe fn init(base: *const u32) { KERNEL_ARGUMENTS_BASE.with(|b| *b = base as usize); }
+    pub unsafe fn init(base: *const u32) {
+        KERNEL_ARGUMENTS_BASE.with(|b| *b = base as usize);
+    }
 
     pub fn iter(&self) -> KernelArgumentsIterator {
         KernelArgumentsIterator { base: self.base, size: self.size(), offset: 0 }

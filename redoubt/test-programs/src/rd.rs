@@ -4,9 +4,9 @@
 use core::num::{NonZeroU64, NonZeroUsize};
 
 pub use redoubt_sys::{
-    Body, BudgetSpec, Call, Error, FOREVER, Handle, Handles, Labels, MAX_LEND_PAGES, MAX_MSG_HANDLES,
-    MAX_HANDLES, MAX_OPEN_CALLS, MemFlags, Message, MessageKind, MintSource, Number, PAGE_SIZE, Pages,
-    Received, ReceivedBody, ResetKind, Return, Usage, WAIT_CAP, WORDS,
+    Body, BudgetSpec, Call, Cause, Error, ExitNotice, FOREVER, Handle, Handles, Labels, MAX_HANDLES,
+    MAX_LEND_PAGES, MAX_MSG_HANDLES, MAX_OPEN_CALLS, MAX_START_HANDLES, MemFlags, Message, MessageKind,
+    MintSource, Number, PAGE_SIZE, Pages, Received, ReceivedBody, ResetKind, Return, Usage, WAIT_CAP, WORDS,
 };
 use redoubt_sys::{RECEIVED_SLOTS, USAGE_SLOTS};
 
@@ -27,7 +27,9 @@ pub const CONSOLE_IRQ: u32 = 6;
 /// The first device handle beyond the three the order pins.
 pub const OTHER_DEVICES: u32 = 7;
 
-pub fn h(index: u32) -> Handle { Handle::new(index).expect("handle 0") }
+pub fn h(index: u32) -> Handle {
+    Handle::new(index).expect("handle 0")
+}
 
 /// The lowest index this process's handle table does not hold, found by asking: how many
 /// handles a program starts with depends on the machine (a device object per MMIO region and
@@ -86,7 +88,9 @@ pub fn set_flags(addr: usize, len: usize, flags: MemFlags) -> Result<(), Error> 
 }
 
 /// Read-write pages: what almost every caller wants.
-pub fn rw() -> MemFlags { MemFlags::READ | MemFlags::WRITE }
+pub fn rw() -> MemFlags {
+    MemFlags::READ | MemFlags::WRITE
+}
 
 pub fn spec(pages: u64, processes: u32, weight: u32) -> BudgetSpec {
     BudgetSpec { pages, processes, weight, labels: Labels::new(), account: 0, deadline: FOREVER }
@@ -162,10 +166,78 @@ pub fn raw(regs: [usize; 8]) -> usize {
 }
 
 /// A call's number as it travels in `a0`.
-pub fn number(call: Number) -> usize { call as usize }
+pub fn number(call: Number) -> usize {
+    call as usize
+}
 
 /// The error a raw call's `a0` names (`None` for success or an unknown code).
-pub fn raw_error(a0: usize) -> Option<Error> { Error::from_code(a0 as u64) }
+pub fn raw_error(a0: usize) -> Option<Error> {
+    Error::from_code(a0 as u64)
+}
+
+// --- Processes and threads (WP-K4) -------------------------------------------------------
+
+/// `process_create(h(budget), h(exit endpoint)) -> h(process)`.
+pub fn process_create(budget: u32, exit_endpoint: u32) -> Result<u32, Error> {
+    let call = Call::ProcessCreate { budget: h(budget), exit_endpoint: h(exit_endpoint) };
+    match redoubt_sys::syscall(&call)? {
+        Return::Handle(handle) => Ok(handle.index()),
+        _ => Err(Error::InvalidArgument),
+    }
+}
+
+/// `process_map(h(process), src, dst, len, flags)`.
+pub fn process_map(process: u32, src: usize, dst: usize, len: usize, flags: MemFlags) -> Result<(), Error> {
+    redoubt_sys::syscall(&Call::ProcessMap { process: h(process), src, dst, len, flags }).map(|_| ())
+}
+
+/// `process_start(h(process), entry, sp, arg, handles)`: the handles land in the child's
+/// slots 1..n.
+pub fn process_start(
+    process: u32,
+    entry: usize,
+    sp: usize,
+    arg: usize,
+    handles: &[u32],
+) -> Result<(), Error> {
+    let mut list = [0u64; MAX_START_HANDLES];
+    for (slot, index) in list.iter_mut().zip(handles) {
+        *slot = h(*index).to_raw();
+    }
+    start_raw(process, entry, sp, arg, list.as_ptr() as usize, handles.len() as u32)
+}
+
+/// `process_start` with the list at any address and any count (hostile cases).
+pub fn start_raw(
+    process: u32,
+    entry: usize,
+    sp: usize,
+    arg: usize,
+    handles_rec: usize,
+    count: u32,
+) -> Result<(), Error> {
+    let call = Call::ProcessStart { process: h(process), entry, sp, arg, handles_rec, count };
+    redoubt_sys::syscall(&call).map(|_| ())
+}
+
+/// `thread_create(entry, sp, arg) -> tid`.
+pub fn thread_create(entry: usize, sp: usize, arg: usize) -> Result<u32, Error> {
+    match redoubt_sys::syscall(&Call::ThreadCreate { entry, sp, arg })? {
+        Return::Tid(tid) => Ok(tid),
+        _ => Err(Error::InvalidArgument),
+    }
+}
+
+/// `thread_exit()`. Returns only if the kernel refused.
+pub fn thread_exit() -> Result<(), Error> {
+    redoubt_sys::syscall(&Call::ThreadExit).map(|_| ())
+}
+
+/// `process_exit(code)`. Never returns on success.
+pub fn process_exit(code: u32) -> ! {
+    redoubt_sys::syscall(&Call::ProcessExit { code }).ok();
+    crate::park()
+}
 
 // --- Endpoints and messages (WP-K2) ----------------------------------------------------------
 
@@ -195,7 +267,13 @@ pub fn mint(source: MintSource, badge: u64, budget: Option<u32>) -> Result<u32, 
 /// `NonZeroU64` cannot hold one, so a typed call would be refused here rather than there. The
 /// registers are the source's tag and its value's two halves, then the badge's two halves, then
 /// the optional budget handle (`redoubt-sys`).
-pub fn mint_raw(tag: usize, value: usize, badge_low: usize, badge_high: usize, budget: usize) -> Option<Error> {
+pub fn mint_raw(
+    tag: usize,
+    value: usize,
+    badge_low: usize,
+    badge_high: usize,
+    budget: usize,
+) -> Option<Error> {
     raw_error(raw([number(Number::Mint), tag, value, 0, badge_low, badge_high, budget, 0]))
 }
 
@@ -214,12 +292,7 @@ pub fn pages(addr: usize, npages: usize) -> Option<Pages> {
 }
 
 /// `call(h, body, lend, timeout)`: the reply is decoded from the same record.
-pub fn call(
-    endpoint: u32,
-    body: &Body,
-    lend: Option<Pages>,
-    timeout: u64,
-) -> Result<ReceivedBody, Error> {
+pub fn call(endpoint: u32, body: &Body, lend: Option<Pages>, timeout: u64) -> Result<ReceivedBody, Error> {
     let mut rec = body.encode();
     let args = Call::Call { endpoint: h(endpoint), body_rec: rec.as_ptr() as usize, lend, timeout };
     redoubt_sys::syscall(&args)?;
@@ -244,12 +317,7 @@ pub fn call_waiting(
 }
 
 /// `send`, waiting out `Busy`, as `call_waiting` does.
-pub fn send_waiting(
-    endpoint: u32,
-    body: &Body,
-    transfer: Option<Pages>,
-    timeout: u64,
-) -> Result<(), Error> {
+pub fn send_waiting(endpoint: u32, body: &Body, transfer: Option<Pages>, timeout: u64) -> Result<(), Error> {
     loop {
         match send(endpoint, body, transfer, timeout) {
             Err(Error::Busy) => crate::wait_ms(1),
@@ -259,7 +327,9 @@ pub fn send_waiting(
 }
 
 /// The first word of a message's buffer.
-pub fn peek_pages(pages: Pages) -> u64 { peek(pages.addr) }
+pub fn peek_pages(pages: Pages) -> u64 {
+    peek(pages.addr)
+}
 
 /// `send(h, body, transfer, timeout)`.
 pub fn send(endpoint: u32, body: &Body, transfer: Option<Pages>, timeout: u64) -> Result<(), Error> {
@@ -271,12 +341,8 @@ pub fn send(endpoint: u32, body: &Body, transfer: Option<Pages>, timeout: u64) -
 /// `receive(h or none, timeout, max_transfer)`.
 pub fn receive(from: Option<u32>, timeout: u64, max_transfer: usize) -> Result<Received, Error> {
     let mut rec = [0u64; RECEIVED_SLOTS];
-    let args = Call::Receive {
-        from: from.map(h),
-        timeout,
-        max_transfer,
-        received_rec: rec.as_mut_ptr() as usize,
-    };
+    let args =
+        Call::Receive { from: from.map(h), timeout, max_transfer, received_rec: rec.as_mut_ptr() as usize };
     redoubt_sys::syscall(&args)?;
     Received::decode(&rec)
 }
@@ -295,7 +361,9 @@ pub fn serve(msg_id: u64) -> Result<(), Error> {
 }
 
 /// A body of four words and no handles.
-pub fn body(words: [usize; WORDS]) -> Body { Body { words, handles: Handles::new() } }
+pub fn body(words: [usize; WORDS]) -> Body {
+    Body { words, handles: Handles::new() }
+}
 
 /// A body of four words and some handles.
 pub fn body_with(words: [usize; WORDS], handles: &[u32]) -> Body {
@@ -309,8 +377,8 @@ pub fn body_with(words: [usize; WORDS], handles: &[u32]) -> Body {
 /// A page of this process's own memory, for lending and transferring. Touched, so that the
 /// kernel is not asked to back it while it decodes (answer 115).
 pub fn page() -> usize {
-    let range = xous::map_memory(None, None, 4096, xous::MemoryFlags::R | xous::MemoryFlags::W)
-        .expect("map a page");
+    let range =
+        xous::map_memory(None, None, 4096, xous::MemoryFlags::R | xous::MemoryFlags::W).expect("map a page");
     let at = range.as_mut_ptr() as usize;
     // SAFETY: the first word of a page this process just mapped read-write.
     unsafe { (at as *mut u64).write_volatile(0) };

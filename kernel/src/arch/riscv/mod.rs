@@ -10,18 +10,23 @@ pub mod irq;
 pub mod mem;
 mod mmu_flags;
 pub mod panic;
-pub mod process;
 mod physmap;
+pub mod process;
 #[cfg(all(feature = "smp", feature = "sbi"))]
 pub mod smp;
 pub mod syscall;
 
-pub fn current_pid() -> PID { PID::new(mem::pid_from_satp(satp::read().bits()) as _).unwrap() }
+pub fn current_pid() -> PID {
+    PID::new(mem::pid_from_satp(satp::read().bits()) as _).unwrap()
+}
 
 pub fn init() {
     irq::init();
 
-    println!("W^X verified: {} executable kernel pages, none writable under any alias", mem::verify_kernel_wx());
+    println!(
+        "W^X verified: {} executable kernel pages, none writable under any alias",
+        mem::verify_kernel_wx()
+    );
 
     // SAFETY: enabling supervisor software and external interrupts. The kernel runs with
     // sstatus.SIE clear, so these are only actually taken once execution returns to

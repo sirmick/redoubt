@@ -16,7 +16,7 @@
 #![no_std]
 #![no_main]
 
-use test_programs::{op, rd, SERVER_ADDRESS};
+use test_programs::{SERVER_ADDRESS, op, rd};
 use xous::{MemoryAddress, MemoryFlags, MemoryMessage, Message};
 
 use crate::console::{Console, Line};
@@ -85,7 +85,9 @@ mod console {
         }
 
         /// Take whatever arrived on the UART.
-        pub fn receive(&mut self) -> Option<u8> { self.port.try_receive().ok() }
+        pub fn receive(&mut self) -> Option<u8> {
+            self.port.try_receive().ok()
+        }
     }
 }
 
@@ -179,4 +181,6 @@ pub extern "C" fn _start() -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! { test_programs::park() }
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    test_programs::park()
+}

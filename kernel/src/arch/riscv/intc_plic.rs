@@ -35,11 +35,14 @@ fn plic() -> &'static Plic {
     unsafe { &*(KERNEL_PLIC_BASE as *const Plic) }
 }
 
-fn context() -> usize { CONTEXT.load(Ordering::Relaxed) }
+fn context() -> usize {
+    CONTEXT.load(Ordering::Relaxed)
+}
 
 /// Map the PLIC described by the `Plic` kernel argument, if there is one.
 pub fn init() {
-    let Some(arg) = crate::args::KernelArguments::get().iter().find(|a| a.name == u32::from_le_bytes(*b"Plic"))
+    let Some(arg) =
+        crate::args::KernelArguments::get().iter().find(|a| a.name == u32::from_le_bytes(*b"Plic"))
     else {
         println!("No PLIC reported by the loader; external interrupts are unavailable");
         return;
@@ -68,7 +71,9 @@ pub fn enable_irq(irq_no: usize) {
     plic().enable(irq_no as u32, context());
 }
 
-pub fn disable_irq(irq_no: usize) { plic().disable(irq_no as u32, context()); }
+pub fn disable_irq(irq_no: usize) {
+    plic().disable(irq_no as u32, context());
+}
 
 pub fn disable_all_irqs() {
     // SAFETY: masking an interrupt source cannot violate memory safety.
@@ -96,4 +101,6 @@ pub fn pending() -> Option<usize> {
 
 /// For debug output: 1 if external interrupts are unmasked at the hart.
 #[allow(dead_code)]
-pub fn mask() -> usize { sie::read().sext() as usize }
+pub fn mask() -> usize {
+    sie::read().sext() as usize
+}

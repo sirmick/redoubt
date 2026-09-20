@@ -23,7 +23,9 @@ extern "Rust" {
 /// The result is serialized with `to_args()` rather than by reinterpreting the enum's
 /// memory as eight registers. The two only coincide when every field is exactly one
 /// register wide, which is not the case on rv64 (e.g. a `SID` is four `u32`s).
-fn return_result(result: &xous_kernel::Result, context: &Thread) -> ! { return_registers(&result.to_args(), context) }
+fn return_result(result: &xous_kernel::Result, context: &Thread) -> ! {
+    return_registers(&result.to_args(), context)
+}
 
 /// Resume `context` with `a0..=a7` = `args`.
 fn return_registers(args: &[usize; 8], context: &Thread) -> ! {
@@ -90,7 +92,9 @@ static PREVIOUS_PAIR: KernelCell<Option<(PID, TID)>> = KernelCell::new(None);
 /// The operation is sound on its own; `unsafe` is a cross-architecture ABI marker (the
 /// arm and hosted backends share the signature). Callers coordinate ISR return state and
 /// must pair this with exactly one `take_isr_return_pair`.
-pub unsafe fn set_isr_return_pair(pid: PID, tid: TID) { PREVIOUS_PAIR.with(|p| *p = Some((pid, tid))); }
+pub unsafe fn set_isr_return_pair(pid: PID, tid: TID) {
+    PREVIOUS_PAIR.with(|p| *p = Some((pid, tid)));
+}
 
 /// Finish a pending ISR. Return `false` if there was none.
 fn finish_isr() -> bool {
@@ -177,7 +181,9 @@ pub extern "C" fn trap_handler(
 
     // If we were previously in Supervisor mode and we've just tried to write to
     // invalid memory, then we likely blew out the stack.
-    if cfg!(any(target_arch = "riscv32", target_arch = "riscv64")) && sstatus::read().spp() == sstatus::SPP::Supervisor && sc.bits() == 0xf
+    if cfg!(any(target_arch = "riscv32", target_arch = "riscv64"))
+        && sstatus::read().spp() == sstatus::SPP::Supervisor
+        && sc.bits() == 0xf
     {
         let pid = current_pid();
         let ex = RiscvException::from_regs(sc.bits(), sepc::read(), stval::read());
@@ -240,9 +246,8 @@ pub extern "C" fn trap_handler(
                 })
             });
 
-            let response =
-                crate::syscall::handle(pid, tid, PREVIOUS_PAIR.with(|p| p.is_some()), call)
-                    .unwrap_or_else(xous_kernel::Result::Error);
+            let response = crate::syscall::handle(pid, tid, PREVIOUS_PAIR.with(|p| p.is_some()), call)
+                .unwrap_or_else(xous_kernel::Result::Error);
 
             // println!("Syscall Result: {:?}", response);
             ArchProcess::with_current_mut(|p| {
@@ -302,21 +307,29 @@ pub extern "C" fn trap_handler(
         RiscvException::StorePageFault(_pc, addr) | RiscvException::LoadPageFault(_pc, addr) => {
             #[cfg(all(feature = "debug-print", feature = "print-panics"))]
             println!("KERNEL({}): RISC-V fault: {} @ {:08x}, addr {:08x} - ", pid, ex, _pc, addr);
-            crate::mem::MemoryManager::with_mut(|mm| crate::arch::mem::ensure_page_exists_inner(mm, addr))
-                .map(|_new_page| {
-                    ArchProcess::with_current_mut(|process| {
-                        #[cfg(all(feature = "debug-print", feature = "print-panics"))]
-                        println!(
-                            "SPF Handing page {:08x} to pid {} tid {} sepc {:x}",
-                            _new_page,
-                            process.pid().get(),
-                            process.current_tid(),
-                            process.current_thread().sepc,
-                        );
-                        crate::arch::syscall::resume(current_pid().get() == 1, process.current_thread())
-                    });
-                })
-                .ok(); // If this fails, fall through.
+            // A fault on a page that is already mapped is a permission fault, not a missing
+            // page: fall through to the fault path rather than resuming an instruction that
+            // would only fault again (`arch::mem::is_mapped`).
+            crate::mem::MemoryManager::with_mut(|mm| {
+                if crate::arch::mem::is_mapped(addr) {
+                    return Err(xous_kernel::Error::AccessDenied);
+                }
+                crate::arch::mem::ensure_page_exists_inner(mm, addr)
+            })
+            .map(|_new_page| {
+                ArchProcess::with_current_mut(|process| {
+                    #[cfg(all(feature = "debug-print", feature = "print-panics"))]
+                    println!(
+                        "SPF Handing page {:08x} to pid {} tid {} sepc {:x}",
+                        _new_page,
+                        process.pid().get(),
+                        process.current_tid(),
+                        process.current_thread().sepc,
+                    );
+                    crate::arch::syscall::resume(current_pid().get() == 1, process.current_thread())
+                });
+            })
+            .ok(); // If this fails, fall through.
         }
 
         RiscvException::InstructionPageFault(RETURN_FROM_EXCEPTION_HANDLER, _offset) => {
@@ -367,7 +380,6 @@ pub extern "C" fn trap_handler(
 
         // Handle faulted instruction pages, because we can now actually have instruction pages that are
         // swapped out.
-
         _ => {
             println!("!!! Unrecognized exception: {:x?}", ex);
         }

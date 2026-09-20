@@ -52,7 +52,10 @@ unsafe impl<T: Send> Sync for SpinLock<T> {}
 #[cfg(any(test, all(baremetal, feature = "smp")))]
 impl<T> SpinLock<T> {
     pub const fn new(value: T) -> Self {
-        SpinLock { locked: core::sync::atomic::AtomicBool::new(false), value: core::cell::UnsafeCell::new(value) }
+        SpinLock {
+            locked: core::sync::atomic::AtomicBool::new(false),
+            value: core::cell::UnsafeCell::new(value),
+        }
     }
 
     pub fn with<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
@@ -75,7 +78,9 @@ impl<T> SpinLock<T> {
 unsafe impl<T> Sync for KernelCell<T> {}
 
 impl<T> KernelCell<T> {
-    pub const fn new(value: T) -> Self { KernelCell(Inner::new(value)) }
+    pub const fn new(value: T) -> Self {
+        KernelCell(Inner::new(value))
+    }
 
     /// Exclusive access for the duration of `f`. Panics if the cell is already borrowed
     /// (bare metal); blocks if another thread holds it (hosted).

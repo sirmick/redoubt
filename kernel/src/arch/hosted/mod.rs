@@ -40,7 +40,9 @@ thread_local!(static SEND_ADDR: RefCell<Option<Sender<SocketAddr>>> = RefCell::n
 thread_local!(static PID1_KEY: RefCell<[u8; 16]> = RefCell::new([0u8; 16]));
 
 #[cfg(test)]
-pub fn set_pid1_key(new_key: [u8; 16]) { PID1_KEY.with(|p1k| *p1k.borrow_mut() = new_key); }
+pub fn set_pid1_key(new_key: [u8; 16]) {
+    PID1_KEY.with(|p1k| *p1k.borrow_mut() = new_key);
+}
 
 /// Set the network address for this particular thread.
 #[cfg(test)]
@@ -81,7 +83,9 @@ fn generate_pid_key() -> [u8; 16] {
 }
 
 #[allow(dead_code)]
-pub fn current_pid() -> PID { crate::arch::process::current_pid() }
+pub fn current_pid() -> PID {
+    crate::arch::process::current_pid()
+}
 
 /// Each client gets its own connection and its own thread, which is handled here.
 fn handle_connection(

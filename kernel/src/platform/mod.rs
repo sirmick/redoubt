@@ -9,7 +9,9 @@ pub use sbi::rand;
 /// Hosted mode has no platform; random numbers come from the arch (host) layer.
 #[cfg(not(baremetal))]
 pub mod rand {
-    pub fn get_u32() -> u32 { crate::arch::rand::get_u32() }
+    pub fn get_u32() -> u32 {
+        crate::arch::rand::get_u32()
+    }
 }
 
 /// Platform initialization that must not depend on the memory manager or on process
@@ -39,7 +41,6 @@ pub fn reset(reboot: bool) -> ! {
 /// Platform specific initialization.
 #[cfg(not(any(unix, windows)))]
 pub fn init() {
-
     #[cfg(feature = "sbi")]
     self::sbi::init();
 }

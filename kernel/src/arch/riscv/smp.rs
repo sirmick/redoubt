@@ -179,7 +179,11 @@ pub fn run() {
         core::hint::spin_loop();
         spins += 1;
         if spins > 200_000_000 {
-            println!("SMP SPIKE: secondary hart {} wedged (counter so far {})", started, COUNTER.with(|c| *c));
+            println!(
+                "SMP SPIKE: secondary hart {} wedged (counter so far {})",
+                started,
+                COUNTER.with(|c| *c)
+            );
             return;
         }
     }

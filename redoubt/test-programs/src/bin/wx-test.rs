@@ -5,7 +5,7 @@
 #![no_std]
 #![no_main]
 
-use test_programs::{log, Logger};
+use test_programs::{Logger, log};
 use xous::{MemoryFlags, SysCall};
 
 /// Issue a raw `MapMemory`, so that flag combinations the typed API might refuse still reach the kernel.
@@ -27,16 +27,28 @@ pub extern "C" fn _start() -> ! {
     for (what, flags, allowed) in attempts {
         let result = map(flags);
         let ok = result.is_ok() == allowed;
-        log!(logger, "[wx] {}: mapping {} -> {:?}", if ok { "ok" } else { "FAIL" }, what, result.map(|_| "mapped"));
+        log!(
+            logger,
+            "[wx] {}: mapping {} -> {:?}",
+            if ok { "ok" } else { "FAIL" },
+            what,
+            result.map(|_| "mapped")
+        );
     }
 
     // Permissions can be dropped but never added, so a data page cannot become code later.
-    let page = xous::map_memory(None, None, 4096, MemoryFlags::R | MemoryFlags::W).expect("couldn't map a page");
+    let page =
+        xous::map_memory(None, None, 4096, MemoryFlags::R | MemoryFlags::W).expect("couldn't map a page");
     // Touch it first, so that it is a real, backed page rather than a lazy reservation.
     unsafe { page.as_mut_ptr().write_volatile(0x13) };
     let result = xous::update_memory_flags(page, MemoryFlags::R | MemoryFlags::X);
     let ok = result.is_err();
-    log!(logger, "[wx] {}: adding execute to a writable page -> {:?}", if ok { "ok" } else { "FAIL" }, result);
+    log!(
+        logger,
+        "[wx] {}: adding execute to a writable page -> {:?}",
+        if ok { "ok" } else { "FAIL" },
+        result
+    );
 
     log!(logger, "[wx] attempts done");
     // The verdict is the checker's, not ours (redoubt/README.md, "Writing an attack case").
@@ -45,4 +57,6 @@ pub extern "C" fn _start() -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! { test_programs::park() }
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    test_programs::park()
+}

@@ -24,7 +24,9 @@ fn grant_for(pid: PID) -> Option<KernelArgument> {
     grant_tags().find(|arg| arg.data.first() == Some(&(pid.get() as u32)))
 }
 
-fn u64_at(data: &[u32], i: usize) -> u64 { data[i] as u64 | (data[i + 1] as u64) << 32 }
+fn u64_at(data: &[u32], i: usize) -> u64 {
+    data[i] as u64 | (data[i + 1] as u64) << 32
+}
 
 /// May `pid` map the device region `[base, base + len)`? True if a single granted region
 /// contains it. (A device claim must fall entirely within one grant, not straddle two.)

@@ -78,15 +78,25 @@ pub struct Budget {
 
 impl Budget {
     /// The labels it actually carries (R1, I6).
-    pub fn labels_of(&self) -> &[u64] { &self.labels[..self.nlabels] }
+    pub fn labels_of(&self) -> &[u64] {
+        &self.labels[..self.nlabels]
+    }
 
-    fn labels(&self) -> &[u64] { self.labels_of() }
+    fn labels(&self) -> &[u64] {
+        self.labels_of()
+    }
 
-    fn free_pages(&self) -> u64 { self.pages_limit.saturating_sub(self.pages_used) }
+    fn free_pages(&self) -> u64 {
+        self.pages_limit.saturating_sub(self.pages_used)
+    }
 
-    fn free_processes(&self) -> u32 { self.processes_limit.saturating_sub(self.processes_used) }
+    fn free_processes(&self) -> u32 {
+        self.processes_limit.saturating_sub(self.processes_used)
+    }
 
-    fn free_weight(&self) -> u32 { self.weight_limit.saturating_sub(self.weight_carved) }
+    fn free_weight(&self) -> u32 {
+        self.weight_limit.saturating_sub(self.weight_carved)
+    }
 }
 
 /// First word of every budget frame, so that a frame read as a budget that is not one is caught.
@@ -150,7 +160,9 @@ fn account_index(pid: PID) -> Option<usize> {
 }
 
 /// `a ⊇ b`, both sorted.
-fn superset(a: &[u64], b: &[u64]) -> bool { b.iter().all(|x| a.binary_search(x).is_ok()) }
+fn superset(a: &[u64], b: &[u64]) -> bool {
+    b.iter().all(|x| a.binary_search(x).is_ok())
+}
 
 impl MemoryManager {
     // --- Frames of kernel objects -----------------------------------------------------------
@@ -292,7 +304,9 @@ impl MemoryManager {
     }
 
     /// Pages `frame` may still charge (R6).
-    pub fn free_pages(&self, frame: BudgetFrame) -> u64 { self.budget(frame).free_pages() }
+    pub fn free_pages(&self, frame: BudgetFrame) -> u64 {
+        self.budget(frame).free_pages()
+    }
 
     /// Whether `r` still names the budget it named. Unlike `budget_at`, a stale reference is an
     /// answer here, not a kernel bug: a message carries handles that R10 may have revoked while
@@ -307,7 +321,9 @@ impl MemoryManager {
     }
 
     /// The budget process `pid` lives in; `None` for the kernel.
-    pub fn budget_of(&self, pid: PID) -> Option<BudgetFrame> { self.account(pid).and_then(|a| a.budget) }
+    pub fn budget_of(&self, pid: PID) -> Option<BudgetFrame> {
+        self.account(pid).and_then(|a| a.budget)
+    }
 
     /// A RAM frame became `pid`'s: charge it to `pid`'s budget, if it has one.
     pub fn charge_frame(&mut self, pid: PID) -> Result<(), Error> {
@@ -431,12 +447,26 @@ impl MemoryManager {
         // `root` and `system` are class `system`; `users` is class `user`. Nothing runs before
         // anything else: one stride queue, and weight decides (answer 103).
         let boot = |mm: &mut Self, parent, class, pages, processes, weight| {
-            let spec = BudgetSpec { pages, processes, weight, labels: Default::default(), account: 0, deadline: FOREVER };
+            let spec = BudgetSpec {
+                pages,
+                processes,
+                weight,
+                labels: Default::default(),
+                account: 0,
+                deadline: FOREVER,
+            };
             mm.new_budget(parent, &spec, class, &[]).expect("boot: no frame for a boot budget")
         };
         let root = boot(self, None, Class::System, pages, processes, ROOT_WEIGHT);
         let system = boot(self, Some(root), Class::System, sys_pages, sys_processes, sys_weight);
-        let users = boot(self, Some(root), Class::User, users_pages, processes - sys_processes, ROOT_WEIGHT - sys_weight);
+        let users = boot(
+            self,
+            Some(root),
+            Class::User,
+            users_pages,
+            processes - sys_processes,
+            ROOT_WEIGHT - sys_weight,
+        );
         let mut first = None;
         let mut bundle = [None; MAX_PROCESS_COUNT];
         let mut nbundle = 0;
@@ -460,7 +490,8 @@ impl MemoryManager {
         if let Some(first) = first {
             for budget in [root, system, users] {
                 let id = self.budget(budget).id;
-                let handle = Handle { object: Object::Budget(BudgetRef { frame: budget, id }), badge: 0, stamp };
+                let handle =
+                    Handle { object: Object::Budget(BudgetRef { frame: budget, id }), badge: 0, stamp };
                 self.install_handle(first, handle).expect("boot: no room for the first program's handles");
             }
         }
@@ -473,7 +504,10 @@ impl MemoryManager {
         // themselves are charged to, and die with, `system`.
         self.boot_devices(system, first, stamp);
         self.boot_endpoint(system, &bundle[..nbundle]);
-        println!("Budgets: root {} pages, system {} (the loader's processes), users {}", pages, sys_pages, users_pages);
+        println!(
+            "Budgets: root {} pages, system {} (the loader's processes), users {}",
+            pages, sys_pages, users_pages
+        );
     }
 
     /// INTERIM (until WP-K4's `process_start` passes handles and WP-R3's `init` hands out
@@ -657,7 +691,9 @@ impl MemoryManager {
     }
 
     /// Whether `pid` lives in a budget that is being destroyed.
-    pub fn process_is_doomed(&self, pid: PID) -> bool { self.budget_of(pid).is_some_and(|b| self.budget(b).dying) }
+    pub fn process_is_doomed(&self, pid: PID) -> bool {
+        self.budget_of(pid).is_some_and(|b| self.budget(b).dying)
+    }
 
     /// Last step of `budget_destroy`, once the doomed budgets' processes are gone: close every
     /// handle naming a doomed budget or stamped with one, in every table (R10, I2); give the
