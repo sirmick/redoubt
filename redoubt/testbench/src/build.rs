@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use anyhow::{bail, ensure, Context, Result};
 use ed25519_compact::{KeyPair, Seed};
 
-use crate::case::{Corruption, Program, Signing};
+use crate::case::{Corruption, Program};
 use crate::target::Target;
 
 pub struct Builder {
@@ -97,6 +97,28 @@ impl Builder {
     pub fn artifact(&self, target: &Target, name: &str, profile: Profile) -> PathBuf {
         self.out_dir(target, profile).join(name)
     }
+
+    /// `cargo test` for host packages, for the unit tests a boot cannot reach. Returns what
+    /// failed, or `None` if every test passed.
+    pub fn cargo_test(&self, packages: &[String]) -> Result<Option<String>> {
+        let mut cargo = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+        cargo.current_dir(&self.workspace).arg("test");
+        for package in packages {
+            cargo.args(["-p", package]);
+        }
+        if !self.verbose {
+            cargo.arg("--quiet").stdout(Stdio::piped()).stderr(Stdio::piped());
+        }
+        let output = cargo.output().context("running cargo test")?;
+        if output.status.success() {
+            return Ok(None);
+        }
+        // The last lines carry the failed assertion and the test's name; the rest is noise.
+        let out = String::from_utf8_lossy(&output.stdout);
+        let err = String::from_utf8_lossy(&output.stderr);
+        let reason = [out.trim(), err.trim()].map(str::to_string).join("\n");
+        Ok(Some(reason.lines().rev().take(12).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n      ")))
+    }
 }
 
 /// Rewrite one field of a little-endian ELF in place, or cut it short. Handles ELF32 and ELF64.
@@ -143,8 +165,8 @@ const DEV_SEED: [u8; 32] = [0x42; 32];
 
 /// Build the boot bundle, sign it, and write `signature || tar` to `path`. `files` are data
 /// entries, placed after the programs. If `tamper`, flip one payload byte after signing, so
-/// the loader must reject it. `signing` chooses what the signature covers: the real preimage,
-/// or one of the forgeries a case uses to prove the loader refuses it.
+/// the loader must reject it. If `bare_archive`, sign the archive alone instead of the preimage
+/// VERIFIED-BOOT.md states, which the loader must reject too.
 pub fn bundle(
     path: &Path,
     kernel: &Path,
@@ -152,7 +174,7 @@ pub fn bundle(
     files: &[(String, PathBuf)],
     manifest: &str,
     tamper: bool,
-    signing: Signing,
+    bare_archive: bool,
 ) -> Result<()> {
     let mut archive = tar::Builder::new(Vec::new());
     let entries: Vec<_> =
@@ -173,7 +195,7 @@ pub fn bundle(
     let mut tar = archive.into_inner()?;
 
     let keypair = KeyPair::from_seed(Seed::new(DEV_SEED));
-    let signature = keypair.sk.sign(preimage(&tar, signing), None);
+    let signature = keypair.sk.sign(preimage(&tar, bare_archive), None);
     if tamper {
         // Corrupt a payload byte so verification fails, without touching the signature.
         let mid = tar.len() / 2;
@@ -186,33 +208,17 @@ pub fn bundle(
     Ok(())
 }
 
-/// The bytes a case's signature covers. Only `Signing::Domain` ships, and it is built by
-/// `redoubt_signing::bundle_preimage` — the same construction the loader verifies with, so the
-/// signer and the verifier cannot drift apart. The forgeries are spelled out here on purpose:
-/// each is what a signer that did not know about the bundle domain would produce, and the
-/// loader must refuse every one of them (VERIFIED-BOOT.md, Testbench).
-fn preimage(tar: &[u8], signing: Signing) -> Vec<u8> {
-    match signing {
-        Signing::Domain => redoubt_signing::bundle_preimage(tar),
-        // No domain and no length: the container as it stood before answer 120.
-        Signing::BareArchive => tar.to_vec(),
-        // Another Redoubt domain over the same archive: a signature made for packages
-        // (PACKAGES.md) must not boot a machine.
-        Signing::ForeignDomain => {
-            let mut preimage = b"redoubt.pkg.v1\0".to_vec();
-            preimage.extend_from_slice(&(tar.len() as u64).to_le_bytes());
-            preimage.extend_from_slice(tar);
-            preimage
-        }
-        // The right domain with a length that is not the archive's. The loader measures the
-        // archive in the container it reads, so only the signer's count can be wrong.
-        Signing::WrongLength => {
-            let mut preimage = redoubt_signing::BUNDLE_DOMAIN.to_vec();
-            preimage.extend_from_slice(&(tar.len() as u64 + 1).to_le_bytes());
-            preimage.extend_from_slice(tar);
-            preimage
-        }
+/// The bytes a case's signature covers: the preimage `redoubt_signing` defines — the same
+/// construction the loader verifies with, so the signer and the verifier cannot drift apart —
+/// or, for the case that proves the loader refuses it, the bare archive with no domain and no
+/// length, which is what a signer that predates the bundle domain produces (answer 120).
+fn preimage(tar: &[u8], bare_archive: bool) -> Vec<u8> {
+    if bare_archive {
+        return tar.to_vec();
     }
+    let mut preimage = redoubt_signing::bundle_preamble(tar.len() as u64).to_vec();
+    preimage.extend_from_slice(tar);
+    preimage
 }
 
 fn append<W: std::io::Write>(archive: &mut tar::Builder<W>, name: &str, data: &[u8]) -> Result<()> {
@@ -233,12 +239,13 @@ mod tests {
     const ARCHIVE: &[u8] = b"not really a tar, but signed the same way";
 
     /// What the bench signs is the documented preimage, and nothing else. The loader hashes
-    /// `redoubt_signing::bundle_preamble(len)` and then the archive; the bench signs
-    /// `redoubt_signing::bundle_preimage(tar)`. Both are asserted here against the bytes
-    /// VERIFIED-BOOT.md spells out, so changing either side alone fails before a case boots.
+    /// `redoubt_signing::bundle_preamble(len)` and then the archive; the bench writes the same
+    /// two pieces into one buffer. Both are asserted here against the bytes VERIFIED-BOOT.md
+    /// spells out, so changing either side alone fails before a case boots. The bare archive,
+    /// the one forgery a case can ask for, is asserted to be the naked bytes.
     #[test]
     fn the_signed_bytes_are_the_documented_preimage() {
-        let signed = preimage(ARCHIVE, Signing::Domain);
+        let signed = preimage(ARCHIVE, false);
 
         let mut expected = b"redoubt.bundle.v1\x00".to_vec();
         expected.extend_from_slice(&(ARCHIVE.len() as u64).to_le_bytes());
@@ -249,41 +256,43 @@ mod tests {
         let preamble = redoubt_signing::bundle_preamble(ARCHIVE.len() as u64);
         assert_eq!(&signed[..preamble.len()], &preamble);
         assert_eq!(&signed[preamble.len()..], ARCHIVE);
-    }
 
-    /// Every forgery a case can ask for differs from the real preimage, so none of them can
-    /// pass by accident, and each differs in the way its name says.
-    #[test]
-    fn the_forgeries_are_not_the_real_preimage() {
-        let real = preimage(ARCHIVE, Signing::Domain);
-
-        assert_eq!(preimage(ARCHIVE, Signing::BareArchive), ARCHIVE);
-        assert_ne!(preimage(ARCHIVE, Signing::BareArchive), real);
-
-        let foreign = preimage(ARCHIVE, Signing::ForeignDomain);
-        assert!(foreign.starts_with(b"redoubt.pkg.v1\x00"));
-        assert_ne!(foreign, real);
-
-        let wrong = preimage(ARCHIVE, Signing::WrongLength);
-        assert!(wrong.starts_with(redoubt_signing::BUNDLE_DOMAIN));
-        assert_eq!(wrong.len(), real.len());
-        assert_ne!(wrong, real);
+        assert_eq!(preimage(ARCHIVE, true), ARCHIVE);
+        assert_ne!(preimage(ARCHIVE, true), signed);
     }
 
     /// The signature itself, for that archive under the development seed: a golden value that
     /// pins the key, the algorithm and the preimage together. It changes only when the
     /// signature format does — and then every bundle ever signed stops verifying.
+    ///
+    /// The refusals live here rather than in a boot case: Ed25519 accepts exactly the one
+    /// message that was signed, so once the loader boots a real bundle it has already fixed one
+    /// preimage, and a foreign domain or a wrong length is refused for free. Only a second
+    /// acceptance path in the loader could take them, and the bare-archive boot case is what
+    /// catches that.
     #[test]
     fn golden_signature_over_a_known_archive() {
         let keypair = KeyPair::from_seed(Seed::new(DEV_SEED));
-        let signature = keypair.sk.sign(preimage(ARCHIVE, Signing::Domain), None);
+        let signature = keypair.sk.sign(preimage(ARCHIVE, false), None);
         let hex: String = signature.iter().map(|byte| format!("{byte:02x}")).collect();
         assert_eq!(hex, GOLDEN_SIGNATURE);
+        assert!(keypair.pk.verify(preimage(ARCHIVE, false), &signature).is_ok());
 
-        // The same signature over the bare archive is not a signature at all: what the loader
-        // refuses on the machine is refused here too, by the same library.
-        assert!(keypair.pk.verify(preimage(ARCHIVE, Signing::Domain), &signature).is_ok());
+        // The bare archive, with no domain and no length.
         assert!(keypair.pk.verify(ARCHIVE, &signature).is_err());
+
+        // Another Redoubt domain over the same archive: a signature made for packages
+        // (PACKAGES.md) is not a bundle signature.
+        let mut foreign = b"redoubt.pkg.v1\x00".to_vec();
+        foreign.extend_from_slice(&(ARCHIVE.len() as u64).to_le_bytes());
+        foreign.extend_from_slice(ARCHIVE);
+        assert!(keypair.pk.verify(&foreign, &signature).is_err());
+
+        // The right domain with a length that is not the archive's. The loader measures the
+        // archive in the container it reads, so only a signer's own count can be wrong.
+        let mut wrong_length = redoubt_signing::bundle_preamble(ARCHIVE.len() as u64 + 1).to_vec();
+        wrong_length.extend_from_slice(ARCHIVE);
+        assert!(keypair.pk.verify(&wrong_length, &signature).is_err());
     }
 
     const GOLDEN_SIGNATURE: &str = "c5807e8b49de09f4a03ed502f87a867aded52a6f0badeca8db993d425d3d457fbf75559b65473006d1355efc665fd79952e5c16b7a9582c5f40dccc432310a04";
