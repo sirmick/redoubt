@@ -275,10 +275,7 @@ impl MemoryManager {
     #[cfg(baremetal)]
     pub fn alloc_object_frame(&mut self) -> Result<u32, redoubt_sys::Error> {
         let index = self.alloc_frame(OBJECT_OWNER).map_err(|_| redoubt_sys::Error::OutOfMemory)?;
-        let phys = self.ram_start + index * PAGE_SIZE;
-        for offset in (0..PAGE_SIZE).step_by(8) {
-            crate::kframe::write(phys, offset, 0);
-        }
+        crate::kframe::zero(self.ram_start + index * PAGE_SIZE);
         self.objects.high_frame = self.objects.high_frame.max(index as u32);
         Ok(index as u32)
     }
@@ -347,9 +344,7 @@ impl MemoryManager {
         }
         let phys = self.ram_start + start * PAGE_SIZE;
         for page in 0..npages {
-            for offset in (0..PAGE_SIZE).step_by(8) {
-                crate::kframe::write(phys + page * PAGE_SIZE, offset, 0);
-            }
+            crate::kframe::zero(phys + page * PAGE_SIZE);
         }
         Ok(phys)
     }
@@ -561,62 +556,13 @@ impl MemoryManager {
         flags: MemoryFlags,
         kind: xous_kernel::MemoryType,
     ) -> Result<xous_kernel::MemoryRange, xous_kernel::Error> {
-        #[cfg(baremetal)]
-        let mut phys = phys_ptr as usize;
-        #[cfg(not(baremetal))]
         let phys = phys_ptr as usize;
         let virt = self.find_virtual_address(virt_ptr, size, kind)?;
 
-        // Determine if a contiguous chunk of RAM needs to be allocated for a device
-        // This case happens when we don't specify a physical address, but also specify the DEV
-        // flag.
-        let device_ram = (flags & MemoryFlags::DEV == MemoryFlags::DEV) && (phys == 0);
-
-        // If no physical address is specified, give the user the next available pages
-        if phys == 0 && !device_ram {
+        // If no physical address is specified, give the user the next available pages.
+        // Contiguous RAM for a device is `dma_alloc`'s (device.rs), through a device handle.
+        if phys == 0 {
             return self.reserve_range(virt, size, flags);
-        }
-
-        #[cfg(baremetal)]
-        if device_ram {
-            // Device RAM allocation: search for contiguous block of physical RAM so we can share
-            // the pages with e.g. DMA or other hardware resources.
-            let pages_to_claim = size / PAGE_SIZE; // this is correct because only page-sized requests are allowed.
-
-            // Safety: is it safe to iterate through MEMORY_ALLOCATIONS like this? I'm not actually sure.
-            // I suppose we could end up in trouble if the kernel is interrupted and the allocation table
-            // changes, but we don't have a locking mechanism for this sort of thing (yet). Until we have
-            // a better way to do this, it will have to do!
-            let mut range_start: Option<usize> = None;
-            let mut current_run = 0;
-            for (index, entry) in self.allocations.iter().enumerate() {
-                if entry.is_none() {
-                    if let Some(_start) = range_start {
-                        current_run += 1;
-                    } else {
-                        range_start = Some(index);
-                        current_run = 1;
-                    }
-                } else {
-                    range_start = None;
-                    current_run = 0;
-                }
-                if current_run >= pages_to_claim {
-                    break;
-                }
-            }
-            if let Some(start) = range_start {
-                if current_run >= pages_to_claim {
-                    // success!
-                    phys = start * PAGE_SIZE + self.ram_start;
-                } else {
-                    return Err(xous_kernel::Error::OutOfMemory);
-                }
-            } else {
-                // couldn't find a contiguous location large enough; OOM for now.
-                // Punt to userland to clear up memory.
-                return Err(xous_kernel::Error::OutOfMemory);
-            }
         }
 
         // 1. Attempt to claim all physical pages in the range
@@ -646,23 +592,6 @@ impl MemoryManager {
                 }
                 return Err(e);
             }
-        }
-
-        if device_ram {
-            // The assumption is that device_ram pages are only ever allocated by a userspace call.
-            // If the kernel uses this to allocate kernel structures, it will fail.
-
-            // clear the memory first
-            // SAFETY: zeroes the freshly mapped, kernel-owned pages before they are handed to userspace.
-            unsafe { crate::mem::bzero(virt, virt.wrapping_add(size)) };
-
-            // now hand it to userspace
-            for offset in (0..size).step_by(PAGE_SIZE) {
-                crate::arch::mem::hand_page_to_user(virt.wrapping_add(offset))
-                    .expect("couldn't hand page to user");
-            }
-
-            // sanity check it
         }
 
         crate::mem::memory_range(virt as usize, size)
@@ -1207,40 +1136,66 @@ impl MemoryManager {
         if flags.is_empty() || (writable && !readable) {
             return Err(bad);
         }
+        self.map_run(pid, len / PAGE_SIZE, flags, None)
+    }
+
+    /// Map `npages` pages at an address the kernel chooses (R11), with `flags`. `phys` is the
+    /// physical run to map (`map_device`'s registers, `dma_alloc`'s buffer), or `None` for
+    /// fresh RAM: a frame each, charged to `pid`'s budget and zeroed before the mapping exists
+    /// (R6, R11). The one way the kernel maps a range it chose the address of; on any failure
+    /// nothing is left mapped, and a run the caller passed in stays the caller's to free.
+    pub fn map_run(
+        &mut self,
+        pid: PID,
+        npages: usize,
+        flags: MemoryFlags,
+        phys: Option<usize>,
+    ) -> Result<usize, redoubt_sys::Error> {
+        let oom = redoubt_sys::Error::OutOfMemory;
+        let len = npages.checked_mul(PAGE_SIZE).ok_or(oom)?;
         let at = self
             .find_virtual_address(core::ptr::null_mut(), len, xous_kernel::MemoryType::Default)
-            .map_err(|_| redoubt_sys::Error::OutOfMemory)? as usize;
+            .map_err(|_| oom)? as usize;
+        let ours = phys.is_none();
         for offset in (0..len).step_by(PAGE_SIZE) {
-            let done = || (0..offset).step_by(PAGE_SIZE);
-            let Ok(phys) = self.alloc_page(pid) else {
-                self.undo_anon(pid, at, done());
-                return Err(redoubt_sys::Error::OutOfMemory);
+            let frame = match phys {
+                Some(base) => base + offset,
+                None => match self.alloc_page(pid) {
+                    // Zeroed through the physmap, before the mapping exists at all (R11).
+                    Ok(frame) => {
+                        crate::kframe::zero(frame);
+                        frame
+                    }
+                    Err(_) => return Err(self.undo_run(pid, at, offset, ours)),
+                },
             };
-            // Zeroed through the physmap, before the mapping exists at all (R11).
-            for word in (0..PAGE_SIZE).step_by(8) {
-                crate::kframe::write(phys, word, 0);
-            }
-            if crate::arch::mem::map_page_inner(self, pid, phys, at + offset, flags, true).is_err() {
-                self.release_page(phys as *mut usize, pid).ok();
-                self.undo_anon(pid, at, done());
-                return Err(redoubt_sys::Error::OutOfMemory);
+            if crate::arch::mem::map_page_inner(self, pid, frame, at + offset, flags, true).is_err() {
+                if ours {
+                    self.release_page(frame as *mut usize, pid).ok();
+                }
+                return Err(self.undo_run(pid, at, offset, ours));
             }
         }
         Ok(at)
     }
 
-    /// Give back the pages a failed `map_anon` had already mapped.
-    fn undo_anon(&mut self, pid: PID, at: usize, done: impl Iterator<Item = usize>) {
-        for offset in done {
-            if let Ok(phys) = crate::arch::mem::unmap_page_inner(self, at + offset) {
-                self.release_page(phys as *mut usize, pid).ok();
+    /// Give back what a failed `map_run` had already mapped, and the pages it had allocated.
+    fn undo_run(&mut self, pid: PID, at: usize, done: usize, ours: bool) -> redoubt_sys::Error {
+        for offset in (0..done).step_by(PAGE_SIZE) {
+            if let Ok(frame) = crate::arch::mem::unmap_page_inner(self, at + offset) {
+                if ours {
+                    self.release_page(frame as *mut usize, pid).ok();
+                }
             }
         }
+        redoubt_sys::Error::OutOfMemory
     }
 
     /// `unmap(addr, len)`: the whole range must be the caller's own mapping and not lent out
-    /// (I9), checked before any page moves. RAM goes back to the free pool and to the
-    /// caller's budget; a device's pages are not RAM and only lose their mapping.
+    /// (I9), checked before any page moves. A RAM frame goes back to the free pool and to the
+    /// caller's budget; a device's registers are not RAM and only lose their mapping -- the
+    /// MMIO page-ownership table is left alone, as `map_device` left it alone (the handle, not
+    /// a page owner, is the authority there).
     pub fn unmap(&mut self, pid: PID, addr: usize, len: usize) -> Result<(), redoubt_sys::Error> {
         let end = Self::user_range(addr, len)?;
         for page in (addr..end).step_by(PAGE_SIZE) {
@@ -1248,7 +1203,9 @@ impl MemoryManager {
         }
         for page in (addr..end).step_by(PAGE_SIZE) {
             let phys = crate::arch::mem::unmap_page_inner(self, page).expect("checked just above");
-            self.release_page(phys as *mut usize, pid).ok();
+            if self.is_main_memory(phys as *mut u8) {
+                self.release_page(phys as *mut usize, pid).ok();
+            }
         }
         Ok(())
     }
@@ -1294,17 +1251,12 @@ impl MemoryManager {
 /// The ABI's flags as the page-table layer's. There is no W+X: `MemFlags` cannot hold it.
 #[cfg(baremetal)]
 fn redoubt_flags(flags: redoubt_sys::MemFlags) -> MemoryFlags {
-    let mut out = MemoryFlags::FREE;
-    for (bit, flag) in [
-        (redoubt_sys::MemFlags::READ, MemoryFlags::R),
-        (redoubt_sys::MemFlags::WRITE, MemoryFlags::W),
-        (redoubt_sys::MemFlags::EXECUTE, MemoryFlags::X),
-    ] {
-        if flags.bits() & bit.bits() != 0 {
-            out = out | flag;
-        }
-    }
-    out
+    let has = |bit: redoubt_sys::MemFlags, flag| {
+        if flags.bits() & bit.bits() != 0 { flag } else { MemoryFlags::FREE }
+    };
+    has(redoubt_sys::MemFlags::READ, MemoryFlags::R)
+        | has(redoubt_sys::MemFlags::WRITE, MemoryFlags::W)
+        | has(redoubt_sys::MemFlags::EXECUTE, MemoryFlags::X)
 }
 
 /// Zero the memory in `start..end` with volatile writes.

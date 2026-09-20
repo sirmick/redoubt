@@ -82,7 +82,11 @@ fn sample_calls() -> Vec<Call> {
 /// A successful result of the right shape for `number` (several where the shape has variety).
 fn sample_returns(number: Number) -> Vec<Return> {
     match number {
-        Number::MapAnon | Number::MapDevice => std::vec![Return::Addr(0), Return::Addr(0xffff_f000)],
+        Number::MapAnon => std::vec![Return::Addr(0), Return::Addr(0xffff_f000)],
+        Number::MapDevice => std::vec![
+            Return::Mapping { addr: 0, len: 0 },
+            Return::Mapping { addr: 0xffff_f000, len: 0x1000 },
+        ],
         Number::DmaAlloc => std::vec![Return::Dma { addr: 0x2000_0000, phys: BIG }],
         Number::ThreadCreate => std::vec![Return::Tid(MAX_THREADS as u32)],
         Number::ProcessCreate | Number::EndpointCreate | Number::Mint | Number::BudgetCreate => {

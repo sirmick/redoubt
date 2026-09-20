@@ -280,15 +280,7 @@ pub extern "C" fn trap_handler(
                 // `receive` on the handle. Nothing runs in userspace on the way, so there is
                 // no ISR to return from and no pair to remember; completing the claim is all
                 // that is left before resuming whatever was interrupted.
-                if crate::device::irq_wanted(irq) {
-                    // The claim is completed *first*, while the source is still enabled: a
-                    // PLIC silently ignores a completion for a source that is not, and would
-                    // then never raise that source again. `irq_fired` masks it straight
-                    // after, so nothing is delivered in between (the hart takes no trap in
-                    // supervisor mode), and the next `receive` unmasks it.
-                    enable_all_irqs();
-                    crate::device::irq_fired(irq);
-                } else {
+                if !crate::device::irq_fired(irq) {
                     // Remember who to resume once the userspace handler returns.
                     PREVIOUS_PAIR.with(|previous| {
                         if previous.is_none() {

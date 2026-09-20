@@ -1,4 +1,4 @@
-description = "Device objects and the Redoubt memory calls (WP-K3): map_device on an MMIO handle and refused for every other kind; dma_alloc contiguous, zeroed and only with the DMA flag; map_anon zeroed and charged, unmap returning the pages, set_flags dropping and adding permissions without ever W+X (R11); system_reset only through the Reset right, which ends the case (checked build)"
+description = "Device objects and the Redoubt memory calls (WP-K3): map_device on an MMIO handle, with the length of what it mapped (QUESTIONS.md 146), and refused for every other kind; dma_alloc contiguous, zeroed and only with the DMA flag; map_anon zeroed and charged, unmap returning the pages, set_flags dropping and adding permissions without ever W+X (R11); system_reset only through the Reset right, which ends the case (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 # Built with the checks on (redoubt/README.md, "Debug assertions").
@@ -13,12 +13,14 @@ timeout_secs = 30
 # `system_reset`, which only the Reset handle can do.
 expect = [
     '^\[device\] mapped the console$',
-    '^\[device\] ok: a second map_device -> another address$',
+    '^\[device\] ok: a second map_device -> another address, \d+ bytes both times$',
+    '^\[device\] ok: map_device.s length is a whole number of pages$',
     '^\[device\] ok: map_device refuses an irq, the reset right, a budget and an index it does not hold$',
     '^\[device\] ok: map_anon: 3 zeroed pages, writable$',
     '^\[device\] ok: map_anon refuses ',
     '^\[device\] ok: set_flags: read, then read-execute, then read-write again$',
     '^\[device\] ok: set_flags and unmap refuse a range that is not the caller.s own whole pages$',
+    '^\[device\] ok: pages come back zeroed, whatever was written in them before$',
     '^\[device\] ok: map_anon charges its pages to the caller.s budget$',
     '^\[device\] ok: unmap returns every page it took$',
     '^\[device\] ok: dma_alloc on a device with no DMA flag -> NotPermitted$',

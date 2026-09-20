@@ -290,12 +290,21 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
 /// | 2 IRQ | interrupt number | 0 | 0 |
 /// | 3 Reset | 0 | 0 | 0 |
 ///
+/// A second tag, `Ctrl`, lists the interrupt controllers, four words each: base and size, low
+/// word first. The kernel refuses a `Devs` entry that overlaps one, so which ranges userspace
+/// may never reach is the kernel's to enforce and not a `compatible` string's
+/// (QUESTIONS.md 143). The ranges come from the PLIC and CLINT searches, **not** from the
+/// exclusion that keeps them out of the device list: a tree that defeated that exclusion would
+/// otherwise hand the kernel an empty list along with the controller it just offered.
+///
 /// **The order is INTERIM** (WP-K3; WP-R3 removes it). `init` will be told which handle is
 /// which by the boot manifest, but there is no `init` yet: the kernel hands every device
 /// object to the bundle's first program, in this order, so that a test program can name one
 /// without a manifest. Reset first, then the console named by `/chosen/stdout-path` and its
 /// interrupt, then every other region in device-tree order and every other interrupt
-/// ascending.
+/// ascending. Because those three positions are fixed, a machine whose device tree does not
+/// name a console, or names it without an interrupt, is refused here rather than booted with
+/// the indices shifted under a program that pinned them (as a missing RNG seed is refused).
 fn emit_devices(args: &mut args::ArgsBuilder, platform: &Platform) {
     const MMIO: u32 = 1;
     const IRQ: u32 = 2;
@@ -310,35 +319,39 @@ fn emit_devices(args: &mut args::ArgsBuilder, platform: &Platform) {
         let size = r.range.len().next_multiple_of(PAGE_SIZE) as u64;
         entry(args, MMIO, r.range.start as u64, size, r.dma.into());
     }
+    // The controllers, so the kernel can refuse to make a device object of either.
+    args.begin(b"Ctrl");
+    let controllers = platform.plic.as_ref().map(|p| p.range.clone()).into_iter().chain(platform.clint.clone());
+    for range in controllers {
+        args.word64(range.start as u64);
+        args.word64(range.len().next_multiple_of(PAGE_SIZE) as u64);
+    }
+    args.end();
+    let console = platform.mmio().iter().find(|r| r.console && !r.kernel_only);
+    // Fail closed: the three pinned positions must exist, or nothing may pin them.
+    let console = console.expect("the device tree names no console (/chosen/stdout-path)");
+    let console_irq = platform.console_irq.expect("the console in the device tree has no interrupt");
     args.begin(b"Devs");
     // The right to power off or reboot. It is the firmware's (SBI SRST), not a device-tree
     // node, so the loader always reports exactly one.
     entry(args, RESET, 0, 0, 0);
-    let console = platform.mmio().iter().find(|r| r.console && !r.kernel_only);
-    if let Some(region) = console {
-        mmio(args, region);
-    }
-    if let Some(irq) = platform.console_irq {
-        entry(args, IRQ, irq as u64, 0, 0);
-    }
+    mmio(args, console);
+    entry(args, IRQ, console_irq as u64, 0, 0);
     for region in platform.mmio().iter().filter(|r| !r.kernel_only && !r.console) {
         mmio(args, region);
     }
     for &irq in &platform.irq[..platform.irq_len] {
-        if Some(irq) != platform.console_irq {
+        if irq != console_irq {
             entry(args, IRQ, irq as u64, 0, 0);
         }
     }
     args.end();
     println!(
-        "  devices: {} mmio ({} dma), {} irq, console {}",
+        "  devices: {} mmio ({} dma), {} irq, console {:#x}",
         platform.mmio().iter().filter(|r| !r.kernel_only).count(),
         platform.mmio().iter().filter(|r| r.dma).count(),
         platform.irq_len,
-        match console {
-            Some(r) => r.range.start,
-            None => 0,
-        },
+        console.range.start,
     );
 }
 

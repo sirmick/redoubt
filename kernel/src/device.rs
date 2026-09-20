@@ -19,14 +19,29 @@
 //!
 //! # What the kernel keeps out
 //! Two ranges never become device objects, because giving one away would give away everything
-//! else: the interrupt controller (a process that could program the PLIC would own every
-//! source) and any part of RAM (R11: userspace never names RAM by physical address). The
-//! loader leaves the controller out; the kernel refuses to boot on a `Devs` entry that names
-//! RAM or wraps the address space, so a hostile device tree cannot smuggle RAM in as a device.
+//! else: an **interrupt controller** (a process that could program the PLIC would mask and
+//! raise every source, and one that could reach the CLINT would forge timer interrupts) and
+//! any part of **RAM** (R11: userspace never names RAM by physical address). The loader leaves
+//! the controllers out of the device list by reading the device tree, but that is a heuristic
+//! over a tree the kernel does not trust, so **the kernel checks both itself**: it refuses to
+//! boot on a `Devs` entry that overlaps RAM, that overlaps a range the loader reported as the
+//! kernel's (the `Ctrl` tag: the controllers), or that wraps the address space. A device tree
+//! that hid a controller from the loader's *reporting* as well as from its exclusion would
+//! defeat both, and that is the loader's parse to get right (QUESTIONS.md 143).
+//!
+//! # A DMA handle is trust
+//! An MMIO object with the DMA flag lets its holder call `dma_alloc` and program a bus master
+//! with a physical address. On a platform with no IOMMU the device can then write anywhere the
+//! kernel gave it, and those frames go back to the free pool when the holder dies, with nothing
+//! able to stop a device already pointed at them. That is IO-ARCHITECTURE.md's stated position
+//! -- a DMA driver is inside the TCB unless the hardware confines it -- and it means **granting
+//! a DMA handle is granting kernel-level trust**. The boot manifest's rules (INIT.md) are where
+//! that belongs to be written down, so a manifest author cannot hand one to an untrusted
+//! process by accident; the kernel enforces only the flag.
 
 use core::convert::TryFrom;
 
-use redoubt_sys::{Error, PAGE_SIZE, ResetKind};
+use redoubt_sys::{Error, PAGE_SIZE};
 use xous_kernel::PID;
 
 use crate::budget::BudgetFrame;
@@ -147,18 +162,13 @@ impl MemoryManager {
         d
     }
 
-    /// The device `pid`'s handle `index` names: `BadHandle`, then `WrongObject`.
-    pub fn device_handle(&self, pid: PID, index: u32) -> Result<(DeviceRef, Device), Error> {
+    /// The device `pid`'s handle `index` names, which must be of `kind`: `BadHandle`, then
+    /// `WrongObject` (KERNEL-SPEC.md, the order of checks).
+    fn device_of_kind(&self, pid: PID, index: u32, kind: Kind) -> Result<Device, Error> {
         match self.handle(pid, index)?.object {
-            Object::Device(d) => Ok((d, self.device_at(d))),
+            Object::Device(d) if self.device_at(d).kind == kind => Ok(self.device_at(d)),
             _ => Err(Error::WrongObject),
         }
-    }
-
-    /// The device `pid`'s handle `index` names, which must be of `kind`.
-    fn device_of_kind(&self, pid: PID, index: u32, kind: Kind) -> Result<Device, Error> {
-        let (_, d) = self.device_handle(pid, index)?;
-        if d.kind != kind { Err(Error::WrongObject) } else { Ok(d) }
     }
 
     /// The frame of the IRQ object for interrupt `irq`, if the machine has one. The scan is
@@ -209,21 +219,16 @@ impl MemoryManager {
             return;
         };
         assert!(tag.data.len() % ENTRY_WORDS == 0, "Devs is not a whole number of entries");
-        let (mut mmio, mut irqs) = (0, 0);
         for words in tag.data.chunks_exact(ENTRY_WORDS) {
             let d = self.decode_entry(words);
-            match d.kind {
-                Kind::Mmio => mmio += 1,
-                Kind::Irq => irqs += 1,
-                Kind::Reset => {}
-            }
             let device = self.new_device(owner, &d).expect("boot: no room for a device object");
             if let Some(pid) = first {
                 let handle = Handle { object: Object::Device(device), badge: 0, stamp };
                 self.install_handle(pid, handle).expect("boot: no room for a device handle");
             }
         }
-        println!("Devices: {} mmio, {} irq, 1 reset, all held by the first program (INTERIM)", mmio, irqs);
+        let n = tag.data.len() / ENTRY_WORDS;
+        println!("Devices: {} objects, all held by the first program (INTERIM)", n);
     }
 
     /// One `Devs` entry: kind, two 64-bit values (low word first), a flag word (BOOT.md).
@@ -255,6 +260,8 @@ impl MemoryManager {
                 // R11: userspace never names RAM by physical address, so a device object
                 // never does either. Refusing here means no `map_device` has to check.
                 assert!(!self.overlaps_ram(base, end), "Devs: an MMIO region overlaps RAM");
+                // And never an interrupt controller, whatever the device tree called it.
+                assert!(!overlaps_kernel_region(base, end), "Devs: an MMIO region overlaps the kernel's");
                 assert!(usize::try_from(end).is_ok(), "Devs: an MMIO region does not fit a usize");
                 d.kind = Kind::Mmio;
                 d.base = base;
@@ -280,31 +287,46 @@ impl MemoryManager {
 
 /// Words in one `Devs` entry.
 const ENTRY_WORDS: usize = 6;
+/// Words in one `Ctrl` entry: base and size, low word first.
+const CTRL_WORDS: usize = 4;
+
+/// Whether `[base, end)` touches a region the loader kept for the kernel -- the interrupt
+/// controllers (BOOT.md, `Ctrl`). The kernel maps the PLIC for itself and the firmware drives
+/// the CLINT; a device object naming either would hand its holder every interrupt.
+fn overlaps_kernel_region(base: u64, end: u64) -> bool {
+    let tag = crate::args::KernelArguments::get().iter().find(|a| a.name == u32::from_le_bytes(*b"Ctrl"));
+    let Some(tag) = tag else { return false };
+    assert!(tag.data.len() % CTRL_WORDS == 0, "Ctrl is not a whole number of entries");
+    tag.data.chunks_exact(CTRL_WORDS).any(|w| {
+        let value = |i: usize| u64::from(w[i]) | u64::from(w[i + 1]) << 32;
+        let (start, size) = (value(0), value(2));
+        base < start.saturating_add(size) && start < end
+    })
+}
 
 impl MemoryManager {
-    /// `map_device(h(MMIO)) -> addr` (KERNEL-SPEC.md). The whole range, at an address the
-    /// kernel chooses (R11), readable and writable and never executable.
+    /// `map_device(h(MMIO)) -> addr, len` (KERNEL-SPEC.md; QUESTIONS.md 146, pending). The
+    /// whole range, at an address the kernel chooses (R11), readable and writable and never
+    /// executable. The length is what the driver may touch; *which* device it is comes from
+    /// the boot manifest, so the kernel says nothing about it.
     ///
     /// The MMIO page-ownership table is not touched. A device handle may be copied like any
     /// other, so two holders may both map the device; the handle, not a page owner, is the
     /// authority. Nothing is charged for the pages themselves -- they are not RAM -- only for
     /// the page tables that map them, which `alloc_page` charges as it takes them.
-    pub fn map_device(&mut self, pid: PID, h: u32) -> Result<usize, Error> {
+    ///
+    /// **A mapping outlives its handle** (QUESTIONS.md 144). Destroying the owner budget
+    /// revokes every handle to the device (R10), so nobody can map it again or receive its
+    /// interrupt, but a range already mapped stays mapped until its holder unmaps it or dies.
+    /// The kernel keeps no registry of who mapped what, and building one to claw back page
+    /// entries would be a mechanism the design does not otherwise have: a device mapping
+    /// behaves like pages transferred to another process, which revocation does not reach
+    /// either. Whoever hands out a device handle is handing out the device.
+    pub fn map_device(&mut self, pid: PID, h: u32) -> Result<(usize, usize), Error> {
         let d = self.device_of_kind(pid, h, Kind::Mmio)?;
-        let (base, size) = (d.base as usize, d.size as usize);
-        let at = self
-            .find_virtual_address(core::ptr::null_mut(), size, xous_kernel::MemoryType::Default)
-            .map_err(|_| Error::OutOfMemory)? as usize;
         let flags = xous_kernel::MemoryFlags::R | xous_kernel::MemoryFlags::W;
-        for offset in (0..size).step_by(PAGE_SIZE) {
-            if crate::arch::mem::map_page_inner(self, pid, base + offset, at + offset, flags, true).is_err() {
-                for undo in (0..offset).step_by(PAGE_SIZE) {
-                    crate::arch::mem::unmap_page_inner(self, at + undo).ok();
-                }
-                return Err(Error::OutOfMemory);
-            }
-        }
-        Ok(at)
+        let len = d.size as usize;
+        self.map_run(pid, len / PAGE_SIZE, flags, Some(d.base as usize)).map(|at| (at, len))
     }
 
     /// `dma_alloc(h(MMIO), npages) -> addr, phys` (KERNEL-SPEC.md; IO-ARCHITECTURE.md, DMA):
@@ -318,54 +340,48 @@ impl MemoryManager {
         if !d.dma {
             return Err(Error::NotPermitted);
         }
-        let len = npages.checked_mul(PAGE_SIZE).ok_or(Error::OutOfMemory)?;
-        let at = self
-            .find_virtual_address(core::ptr::null_mut(), len, xous_kernel::MemoryType::Default)
-            .map_err(|_| Error::OutOfMemory)? as usize;
         // Charged and zeroed before anything is mapped (R6, R11).
         let phys = self.alloc_contiguous(pid, npages)?;
         let flags = xous_kernel::MemoryFlags::R | xous_kernel::MemoryFlags::W;
-        for i in 0..npages {
-            let offset = i * PAGE_SIZE;
-            if crate::arch::mem::map_page_inner(self, pid, phys + offset, at + offset, flags, true).is_err() {
-                for undo in (0..offset).step_by(PAGE_SIZE) {
-                    crate::arch::mem::unmap_page_inner(self, at + undo).ok();
-                }
+        match self.map_run(pid, npages, flags, Some(phys)) {
+            Ok(at) => Ok((at, phys as u64)),
+            Err(e) => {
                 self.free_frames(pid, phys, npages);
-                return Err(Error::OutOfMemory);
+                Err(e)
             }
         }
-        Ok((at, phys as u64))
     }
 
-    /// `system_reset(h(Reset), kind)`: power off or reboot. Returns only on a refusal.
-    pub fn system_reset(&self, pid: PID, h: u32, kind: ResetKind) -> Result<(), Error> {
-        self.device_of_kind(pid, h, Kind::Reset)?;
-        println!("system_reset: {:?} asked for by PID {}", kind, pid.get());
-        crate::platform::reset(kind == ResetKind::Reboot)
+    /// The `system_reset(h(Reset), kind)` handle check. It only checks: the reset itself is
+    /// the dispatcher's, after it has let go of the memory manager (`redoubt.rs`), because the
+    /// firmware call does not return and a cell held for ever is a spinlock held for ever.
+    pub fn check_reset(&self, pid: PID, h: u32) -> Result<(), Error> {
+        self.device_of_kind(pid, h, Kind::Reset).map(|_| ())
     }
 }
 
-/// Whether a device object owns `irq`, so the trap handler knows whether to take R5's path or
-/// the legacy handler table's (until WP-K6 deletes that). It only looks.
-#[cfg(baremetal)]
-pub fn irq_wanted(irq: usize) -> bool { MemoryManager::with(|mm| mm.irq_device(irq).is_some()) }
-
-/// R5: interrupt `irq` fired. The kernel masks the source and sets `fired`; a thread already
+/// R5: interrupt `irq` fired, if a device object owns it -- the answer the trap handler wants,
+/// so that an interrupt with no device object takes the legacy handler table's path instead
+/// (until WP-K6 deletes that). The kernel masks the source and sets `fired`; a thread already
 /// waiting in `receive` on the handle is answered at once (which clears `fired` again).
 ///
-/// The caller has already completed the interrupt controller's claim (`arch/riscv/irq.rs`).
+/// The interrupt controller's claim is completed *first*, while the source is still enabled: a
+/// PLIC silently ignores a completion for a source that is not, and would then never raise that
+/// source again. The masking below follows straight after, so nothing is delivered in between
+/// (the hart takes no trap in supervisor mode), and the next `receive` unmasks it.
 #[cfg(baremetal)]
-pub fn irq_fired(irq: usize) {
+pub fn irq_fired(irq: usize) -> bool {
     crate::services::SystemServices::with_mut(|ss| {
         MemoryManager::with_mut(|mm| {
-            let Some(frame) = mm.irq_device(irq) else { return };
+            let Some(frame) = mm.irq_device(irq) else { return false };
+            crate::arch::irq::enable_all_irqs();
             let mut d = mm.device(frame);
             d.fired = true;
             d.masked = true;
             mm.store_device(frame, &d);
             crate::arch::irq::disable_irq(irq);
             crate::message::irq_ready(ss, mm, frame);
+            true
         })
     })
 }

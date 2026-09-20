@@ -34,6 +34,10 @@ pub fn h(index: u32) -> Handle { Handle::new(index).expect("handle 0") }
 /// per interrupt), so a program that creates handles of its own works this out instead of
 /// counting on a number. `budget_usage` answers `BadHandle` only for an index that holds
 /// nothing, and writes nothing then.
+///
+/// **INTERIM** with the handles above it (WP-K3): once `process_start` passes a handle list
+/// (WP-K4) and `init` hands each program its own from the boot manifest (WP-R3), a program
+/// is told what it holds and none of this is needed.
 pub fn first_free() -> u32 {
     let mut rec = [0u64; USAGE_SLOTS];
     let at = rec.as_mut_ptr() as usize;
@@ -44,10 +48,10 @@ pub fn first_free() -> u32 {
 
 // --- Devices and memory (WP-K3) ----------------------------------------------------------
 
-/// `map_device(h(MMIO)) -> addr`.
-pub fn map_device(device: u32) -> Result<usize, Error> {
+/// `map_device(h(MMIO)) -> addr, len` (QUESTIONS.md 146, pending).
+pub fn map_device(device: u32) -> Result<(usize, usize), Error> {
     match redoubt_sys::syscall(&Call::MapDevice { device: h(device) })? {
-        Return::Addr(at) => Ok(at),
+        Return::Mapping { addr, len } => Ok((addr, len)),
         _ => Err(Error::InvalidArgument),
     }
 }

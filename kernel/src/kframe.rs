@@ -47,3 +47,10 @@ pub fn write(phys: usize, offset: usize, value: u64) {
     // image, whose physmap alias is read-only anyway. The caller owns what the word means.
     unsafe { (virt as *mut u64).write_volatile(value) }
 }
+
+/// Zeroes the whole frame at `phys`. Every page a process first sees goes through here (R11).
+pub fn zero(phys: usize) {
+    for offset in (0..redoubt_sys::PAGE_SIZE).step_by(8) {
+        write(phys, offset, 0);
+    }
+}
