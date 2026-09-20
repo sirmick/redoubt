@@ -16,17 +16,13 @@ defmodule Redoubt.Wire.Proto.Blkd do
     1 => {:info, :buffer, 0},
     2 => {:read, :buffer, 0},
     3 => {:write, :buffer, 0},
-    4 => {:flush, :inline, 0},
-    5 => {:grant, :buffer, 0},
-    6 => {:release, :inline, 0}
+    4 => {:flush, :inline, 0}
   }
   @replies %{
     1 => {:info, :buffer, 0},
     2 => {:read, :buffer, 0},
     3 => {:write, :buffer, 0},
-    4 => {:flush, :inline, 0},
-    5 => {:grant, :buffer, 1},
-    6 => {:release, :inline, 0}
+    4 => {:flush, :inline, 0}
   }
   @errors %{
     1 => :malformed,
@@ -40,18 +36,11 @@ defmodule Redoubt.Wire.Proto.Blkd do
   A message's layout: `{opcode, shape, fields, handles, reply}`, where `fields` lists
   `{name, type}` in order, `handles` lists the handles' names by slot, and `reply` is
   `{fields, handles}`.
-
-  Handle kinds, from the table: documentation, checked by use (a handle of the wrong kind
-  gets `WrongObject` on first use).
-
-  - `grant` reply: `range` (slot 0, endpoint)
   """
   def layout(:info), do: {1, :buffer, [], [], {[{:sectors, :u64}, {:sector_size, :u32}, {:read_only, :u32}], []}}
   def layout(:read), do: {2, :buffer, [{:sector, :u64}, {:count, :u32}], [], {[{:data, :bytes}], []}}
   def layout(:write), do: {3, :buffer, [{:sector, :u64}, {:data, :bytes}], [], {[], []}}
   def layout(:flush), do: {4, :inline, [], [], {[], []}}
-  def layout(:grant), do: {5, :buffer, [{:sector, :u64}, {:count, :u64}], [], {[{:id, :u64}], [:range]}}
-  def layout(:release), do: {6, :inline, [{:id, :u64}], [], {[], []}}
   def layout(_), do: nil
 
   @doc "Encodes a request: `{:ok, words, buffer}` or `{:error, reason}`."
@@ -84,10 +73,6 @@ defmodule Redoubt.Wire.Proto.Blkd do
   defp enc(:reply, :write, %{} = f) when map_size(f) == 0, do: {3, []}
   defp enc(:request, :flush, %{} = f) when map_size(f) == 0, do: {4, []}
   defp enc(:reply, :flush, %{} = f) when map_size(f) == 0, do: {4, []}
-  defp enc(:request, :grant, %{sector: v_sector, count: v_count} = f) when map_size(f) == 2, do: {5, [W.u(v_sector, 64), W.u(v_count, 64)]}
-  defp enc(:reply, :grant, %{id: v_id} = f) when map_size(f) == 1, do: {5, [W.u(v_id, 64)]}
-  defp enc(:request, :release, %{id: v_id} = f) when map_size(f) == 1, do: {6, [W.u(v_id, 64)]}
-  defp enc(:reply, :release, %{} = f) when map_size(f) == 0, do: {6, []}
   defp enc(_, _, _), do: throw({:wire, :bad_message})
 
   defp read(:request, 1, <<rest::binary>>), do: {:ok, :info, %{}, rest}
@@ -98,9 +83,5 @@ defmodule Redoubt.Wire.Proto.Blkd do
   defp read(:reply, 3, <<rest::binary>>), do: {:ok, :write, %{}, rest}
   defp read(:request, 4, <<rest::binary>>), do: {:ok, :flush, %{}, rest}
   defp read(:reply, 4, <<rest::binary>>), do: {:ok, :flush, %{}, rest}
-  defp read(:request, 5, <<v_sector::little-64, v_count::little-64, rest::binary>>), do: {:ok, :grant, %{sector: v_sector, count: v_count}, rest}
-  defp read(:reply, 5, <<v_id::little-64, rest::binary>>), do: {:ok, :grant, %{id: v_id}, rest}
-  defp read(:request, 6, <<v_id::little-64, rest::binary>>), do: {:ok, :release, %{id: v_id}, rest}
-  defp read(:reply, 6, <<rest::binary>>), do: {:ok, :release, %{}, rest}
   defp read(_, _, _), do: {:error, :short_fields}
 end

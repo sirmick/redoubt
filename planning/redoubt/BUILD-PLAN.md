@@ -405,8 +405,9 @@ not needed.
 - Needs: WP-B1, WP-R3.
 
 ### Track D: storage and network
-**WP-D1. blkd.** Size M. virtio-blk driver (the `virtio-drivers` crate), partition table,
-block-range handles, validation of every ring index and length.
+**WP-D1. blkd.** Size M. virtio-blk driver (its own split virtqueue: `virtio-drivers` was read
+and rejected under tenet 5, IO-ARCHITECTURE.md), partition table, block-range handles, validation
+of every ring index and length.
 - Accepted when: block round trips; a hostile-device model (malformed rings) never corrupts other
   memory or panics blkd; `blkd`'s contract (IO-ARCHITECTURE.md): a flush on every `sync`, in-order
   completion, whole-sector writes.
@@ -428,8 +429,8 @@ readable entries); relies only on
   included, from a vault writer.
 - Needs: WP-D1, WP-L1, WP-R1b.
 
-**WP-D3. netd and ipd.** Size L. virtio-net driver; `ipd:lan` on `smoltcp` serving `/net` over
-9P with IP-prefix-and-port capabilities that never include the box's own addresses; refuses
+**WP-D3. netd and ipd.** Size L. virtio-net driver on `blkd`'s virtqueue rather than a crate
+(IO-ARCHITECTURE.md); `ipd:lan` on `smoltcp` serving `/net` over 9P with IP-prefix-and-port capabilities that never include the box's own addresses; refuses
 labelled callers.
 - Accepted when: TCP connect and listen through `/net`; attack cases: connect outside the granted
   prefix, connect to the box's own address, a labelled caller refused. The bench's network is

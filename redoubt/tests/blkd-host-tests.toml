@@ -1,8 +1,10 @@
-description = "blkd against a hostile virtio-blk device: the acceptance criterion no boot can reach yet"
+description = "blkd against a hostile virtio-blk device: the attacks no boot can ever reach"
 kind = "host-tests"
-# WP-D1's acceptance criterion is about a device that lies, and QEMU's virtio-blk does not. The
-# fake device (`redoubt_blkd::fake`) writes malformed rings, indices out of range, lengths that
-# overflow, descriptors that loop, used entries for requests never sent, and rewrites the region
-# between two of the driver's own reads; 100,000 randomized liars run in the same suite. Nothing
-# here needs a kernel, so it runs as a host test until WP-K3 lands and `blkd` can boot.
+# This stays a host test for good, not until something lands: QEMU's virtio-blk does not lie, and
+# WP-D1's acceptance criterion is entirely about a device that does. The fake device
+# (`redoubt_blkd::fake`) writes malformed rings, indices out of range, lengths that overflow,
+# descriptors that loop, used entries for requests never sent, and rewrites the region between two
+# of the driver's own reads; 100,000 randomized liars run in the same suite, drawn from the same
+# `policy_from` the fuzz targets use. A boot case against a real disk (WP-T1c) proves the seam,
+# not these.
 packages = ["redoubt-blkd"]

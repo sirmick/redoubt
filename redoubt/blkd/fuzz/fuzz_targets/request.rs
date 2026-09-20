@@ -1,73 +1,102 @@
-//! Arbitrary bytes as a typed request to the `blkd` server, from an arbitrary badge and label
-//! set. The claim: every one is answered — with a reply or an error code — and none panics,
-//! makes the server hold state it was not asked for, or reaches a sector outside the range the
-//! badge names.
+//! A **sequence** of arbitrary typed requests against one long-lived `blkd`, from arbitrary
+//! badges and label sets, over a device drawn from the same input. The claims:
+//!
+//! 1. every request is answered — with a reply or an error code — and none panics;
+//! 2. no address outside the DMA region is ever named (`FakeDevice::strayed`);
+//! 3. nothing a client sends makes `blkd` grow: it holds one buffer and one range table, and a
+//!    sequence of any length leaves both the size they started.
+//!
+//! A sequence rather than one request, because the state that could go wrong is what one request
+//! leaves for the next: the DMA buffer, the reply scratch, and whether the device has been marked
+//! broken.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use redoubt_blkd::fake::{FakeDevice, Policy};
+use redoubt_blkd::fake::{FakeDevice, policy_from};
 use redoubt_blkd::image::{Entry, Image};
-use redoubt_blkd::server::{BUDGET, BlockServer, COST, LIMITS, answer_with};
+use redoubt_blkd::server::{BlockServer, answer_with};
 use redoubt_blkd::{Disk, read_partitions};
-use redoubt_rt::abi::{Error, Handle, Labels, ReceivedHandles};
+use redoubt_rt::abi::{Labels, ReceivedHandles};
 use redoubt_rt::ipc::Caller;
-use redoubt_rt::server::minted::Minter;
-use std::num::NonZeroU64;
 
-/// The disk every run starts from: two partitions, the second right after the first.
+/// The disk every run starts from: two partitions, so a badge can name one, the other, an unused
+/// entry, or nothing.
 const FIRST: Entry = Entry { first_lba: 64, last_lba: 1063 };
 const SECOND: Entry = Entry { first_lba: 2048, last_lba: 4095 };
 const SECTORS: u64 = 8192;
+/// The lend a caller makes: `MAX_LEND_PAGES`, 64 KiB (WIRE.md).
+const LEND: usize = 64 * 1024;
 
-struct FakeKernel {
-    next_handle: u32,
-    rng: u64,
-}
+struct Bytes<'a>(&'a [u8]);
 
-impl Minter for FakeKernel {
-    fn mint(&mut self, _badge: NonZeroU64) -> Result<Handle, Error> {
-        self.next_handle = self.next_handle.wrapping_add(1).max(1);
-        Handle::new(self.next_handle).ok_or(Error::OutOfMemory)
+impl Bytes<'_> {
+    fn u8(&mut self) -> u8 {
+        match self.0.split_first() {
+            Some((first, rest)) => {
+                self.0 = rest;
+                *first
+            }
+            None => 0,
+        }
     }
 
-    fn random(&mut self) -> Result<u64, Error> {
-        self.rng ^= self.rng << 13;
-        self.rng ^= self.rng >> 7;
-        self.rng ^= self.rng << 17;
-        Ok(self.rng)
+    fn u64(&mut self) -> u64 {
+        let mut v = [0; 8];
+        v.iter_mut().for_each(|b| *b = self.u8());
+        u64::from_le_bytes(v)
     }
+
+    fn done(&self) -> bool { self.0.is_empty() }
 }
 
 fuzz_target!(|data: &[u8]| {
-    // 4 words of 8 bytes, a badge, an account and a label: 43 bytes of header, then the body.
-    if data.len() < 43 {
-        return;
-    }
-    let word = |i: usize| u64::from_le_bytes(data[i * 8..i * 8 + 8].try_into().expect("eight bytes"));
-    let words = [word(0), word(1), word(2), word(3)];
-    let badge = word(4);
-    let account = u64::from(data[40]);
-    let labels = if data[41] & 1 == 1 { Labels::from_slice(&[u64::from(data[42])]).unwrap() } else { Labels::new() };
-    let body = &data[43..];
-
+    let mut bytes = Bytes(data);
     let image = Image::new(SECTORS, &[FIRST, SECOND]);
     let device = FakeDevice::with_image(image.bytes);
-    device.set_policy(Policy { defer: true, ..Policy::default() });
-    let mut disk = Disk::new(&device).expect("the honest device comes up");
-    let roots = read_partitions(&mut disk).expect("the image carries a table");
-    let mut server =
-        BlockServer::new(disk, roots, LIMITS, &COST, BUDGET, 0x1234_5678).expect("limits that fit");
-    let mut kernel = FakeKernel { next_handle: 100, rng: 0x2545_f491_4f6c_dd1d };
+    device.set_policy(policy_from(&mut || bytes.u8()));
+    // Bring-up and the table are done against whatever device the input chose; a device too
+    // hostile to come up leaves nothing to serve, which is itself the right answer.
+    let Ok(mut disk) = Disk::new(&device) else {
+        assert_eq!(device.strayed(), 0);
+        return;
+    };
+    let Ok(roots) = read_partitions(&mut disk) else {
+        assert_eq!(device.strayed(), 0);
+        return;
+    };
+    let entries = roots.len();
+    let mut server = BlockServer::new(disk, roots);
 
-    // The lend the caller made: 64 KiB, `MAX_LEND_PAGES` (WIRE.md).
-    let mut buf = vec![0u8; 64 * 1024];
-    let n = body.len().min(buf.len());
-    buf[..n].copy_from_slice(&body[..n]);
-    let caller = Caller { badge, account, labels };
-    let _ = answer_with(&mut server, &caller, &words, &ReceivedHandles::new(), &mut buf, &mut kernel);
+    let mut buf = vec![0u8; LEND];
+    // At most 32 requests, so one input is bounded work.
+    for _ in 0..32 {
+        if bytes.done() {
+            break;
+        }
+        // The device may turn between any two requests.
+        device.set_policy(policy_from(&mut || bytes.u8()));
+        let words = [bytes.u64(), bytes.u64(), bytes.u64(), bytes.u64()];
+        let badge = match bytes.u8() % 4 {
+            0 => 1,                    // GPT entry 0
+            1 => 2,                    // GPT entry 1
+            2 => u64::from(bytes.u8()), // often an unused entry, sometimes past the end
+            _ => bytes.u64(),
+        };
+        let account = u64::from(bytes.u8() % 3);
+        let labels = match bytes.u8() % 3 {
+            0 => Labels::new(),
+            n => Labels::from_slice(&[u64::from(n)]).expect("one label fits"),
+        };
+        // The body is whatever is left of the input, capped at the lend.
+        let len = usize::from(bytes.u8()) * 256;
+        buf.iter_mut().for_each(|b| *b = 0);
+        for i in 0..len.min(LEND) {
+            buf[i] = bytes.u8();
+        }
+        let caller = Caller { badge, account, labels };
+        let _ = answer_with(&mut server, &caller, &words, &ReceivedHandles::new(), &mut buf);
 
-    // Whatever it answered, it stayed inside its own region, and it granted at most the one
-    // capability a single request can grant.
-    assert_eq!(device.strayed(), 0);
-    assert!(server.granted() <= 1);
+        assert_eq!(device.strayed(), 0, "an address outside the DMA region was named");
+        assert_eq!(server.roots().len(), entries, "the range table changed size");
+    }
 });

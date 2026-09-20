@@ -45,6 +45,10 @@ pub struct Device {
     dma_phys: u64,
     dma_len: usize,
     irq: Irq,
+    /// The handle the mapping and the DMA region came from. Owned, not borrowed, because both
+    /// live as long as this `Device` does and closing the handle underneath them would leave a
+    /// mapping nothing names.
+    _mmio: Mmio,
 }
 
 impl Device {
@@ -55,13 +59,13 @@ impl Device {
     /// assumes: one run of [`crate::queue::DMA_PAGES`] pages, and the rings starting at zero.
     /// A region shorter than [`REGS_NEEDED`] is refused here rather than faulted on later: it
     /// is not a virtio-mmio transport, whatever else it is.
-    pub fn open(mmio: &Mmio, irq: Irq) -> Result<Device, Error> {
+    pub fn open(mmio: Mmio, irq: Irq) -> Result<Device, Error> {
         let (regs, regs_len) = mmio.map()?;
         if regs_len < REGS_NEEDED {
             return Err(Error::WrongObject);
         }
         let (dma, dma_phys) = mmio.dma_alloc(crate::queue::DMA_PAGES)?;
-        Ok(Device { regs, regs_len, dma, dma_phys, dma_len: DMA_LEN, irq })
+        Ok(Device { regs, regs_len, dma, dma_phys, dma_len: DMA_LEN, irq, _mmio: mmio })
     }
 
     /// The address of `off` in the register window, if a 32-bit access there is inside it and
@@ -104,12 +108,12 @@ impl Transport for Device {
     fn dma_read(&self, off: usize, out: &mut [u8]) -> Result<(), Fault> {
         let at = self.dma_at(off, out.len()).ok_or(Fault::Bounds)?;
         for (i, byte) in out.iter_mut().enumerate() {
-            // SAFETY: `dma_at` checked that `off .. off + out.len()` is inside the region
-            // `dma_alloc` returned, and `i < out.len()`, so `at + i` is inside it too; the region
-            // stays mapped for the life of this process. Volatile because the device writes these
-            // bytes: an ordinary read could be hoisted above the completion check or folded with
-            // an earlier one. Byte at a time, and never aliased with a reference into the region,
-            // so no `&[u8]` of memory the device is writing ever exists.
+            // SAFETY: `dma_at` checked `off .. off + out.len()` against `DMA_LEN` -- this
+            // crate's own constant, the pages `dma_alloc` was asked for, not a length any other
+            // party reported -- and `i < out.len()`, so `at + i` is inside the region, which
+            // stays mapped for the life of this process. Volatile, and a byte at a time, so no
+            // `&[u8]` of memory the device is writing ever exists and no read of it can be
+            // hoisted above the completion check or folded with an earlier one.
             *byte = unsafe { ((at + i) as *const u8).read_volatile() };
         }
         Ok(())
@@ -119,7 +123,7 @@ impl Transport for Device {
         let at = self.dma_at(off, src.len()).ok_or(Fault::Bounds)?;
         for (i, byte) in src.iter().enumerate() {
             // SAFETY: as in `dma_read`; the region is mapped read-write for this process, and
-            // `dma_at` checked that every byte written lies inside it.
+            // `dma_at` checked every byte written against `DMA_LEN`, this crate's own constant.
             unsafe { ((at + i) as *mut u8).write_volatile(*byte) };
         }
         Ok(())
@@ -137,5 +141,9 @@ impl Transport for Device {
         }
     }
 
-    fn now_us(&self) -> u64 { time_now().unwrap_or(0) }
+    /// A clock that fails saturates rather than reads 0: a deadline of `now + timeout` computed
+    /// from 0 would never be reached, and the request timeout is what bounds a device that does
+    /// not answer. `time_now` cannot fail today; this is so that it could without deleting the
+    /// timeout.
+    fn now_us(&self) -> u64 { time_now().unwrap_or(u64::MAX) }
 }

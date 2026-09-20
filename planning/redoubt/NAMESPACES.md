@@ -91,7 +91,11 @@ and refuses labelled callers. Elixir wraps the tree in `gen_tcp`-like modules.
 - **One instance per volume.** An untrusted medium gets its own server holding only that medium, so
   a parser exploit reaches that medium and nothing else.
 - **Labels are per volume** (CONTAINMENT.md): each volume has one label set, from the boot manifest
-  or the steward, and `fsd` checks the caller's labels against it on every request with `check`: a
+  or the steward, and **the `fsd` instance serving it is itself unlabelled** — it enforces the
+  volume's labels on its callers, it does not carry them. A manifest that gives an `fsd` budget
+  labels makes its volume unwritable, because `blkd` needs equal labels for a write and a range
+  carries none (IO-ARCHITECTURE.md); `init` should refuse such a manifest. `fsd` checks the
+  caller's labels against the volume's on every request with `check`: a
   read (a qid and a `stat` included) needs the volume's labels ⊆ the caller's, a write needs them
   equal. A walk into a node the caller cannot read is refused, and a directory read lists only
   entries it can read. Its state is per volume. There are no per-file labels.

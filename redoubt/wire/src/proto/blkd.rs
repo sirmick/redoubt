@@ -50,41 +50,12 @@ pub struct Flush {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FlushReply {}
 
-/// `grant`: opcode 5, buffer; reply [`GrantReply`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Grant {
-    pub sector: u64,
-    pub count: u64,
-}
-
-/// The reply to [`Grant`].
-///
-/// Handle slots: `range` (slot 0, endpoint).
-/// Kinds are documentation, checked by use: a handle of the wrong kind gets `WrongObject`
-/// on first use.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GrantReply {
-    pub id: u64,
-}
-
-/// `release`: opcode 6, inline; reply [`ReleaseReply`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Release {
-    pub id: u64,
-}
-
-/// The reply to [`Release`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ReleaseReply {}
-
 /// Requests by opcode.
 const REQUESTS: &[Layout] = &[
     Layout { opcode: 1, inline: false, handles: 0 },
     Layout { opcode: 2, inline: false, handles: 0 },
     Layout { opcode: 3, inline: false, handles: 0 },
     Layout { opcode: 4, inline: true, handles: 0 },
-    Layout { opcode: 5, inline: false, handles: 0 },
-    Layout { opcode: 6, inline: true, handles: 0 },
 ];
 
 /// Every request of the protocol.
@@ -94,8 +65,6 @@ pub enum Message<'a> {
     Read(Read),
     Write(Write<'a>),
     Flush(Flush),
-    Grant(Grant),
-    Release(Release),
 }
 
 impl<'a> Message<'a> {
@@ -106,8 +75,6 @@ impl<'a> Message<'a> {
             Message::Read(_) => &[],
             Message::Write(_) => &[],
             Message::Flush(_) => &[],
-            Message::Grant(_) => &[],
-            Message::Release(_) => &[],
         }
     }
 
@@ -118,8 +85,6 @@ impl<'a> Message<'a> {
             Message::Read(_) => 2,
             Message::Write(_) => 3,
             Message::Flush(_) => 4,
-            Message::Grant(_) => 5,
-            Message::Release(_) => 6,
         }
     }
 
@@ -135,18 +100,12 @@ impl<'a> Message<'a> {
                 w.bytes(m.data)
             }
             Message::Flush(_) => Ok(()),
-            Message::Grant(m) => {
-                w.u64(m.sector)?;
-                w.u64(m.count)
-            }
-            Message::Release(m) => w.u64(m.id),
         }
     }
 
-    fn read_inline(opcode: u32, r: &mut Reader<'_>) -> Result<Self, Error> {
+    fn read_inline(opcode: u32, _r: &mut Reader<'_>) -> Result<Self, Error> {
         Ok(match opcode {
             4 => Message::Flush(Flush {}),
-            6 => Message::Release(Release { id: r.u64()? }),
             _ => return Err(Error::BadOpcode),
         })
     }
@@ -157,8 +116,6 @@ impl<'a> Message<'a> {
             2 => Message::Read(Read { sector: r.u64()?, count: r.u32()? }),
             3 => Message::Write(Write { sector: r.u64()?, data: r.bytes()? }),
             4 => Message::Flush(Flush {}),
-            5 => Message::Grant(Grant { sector: r.u64()?, count: r.u64()? }),
-            6 => Message::Release(Release { id: r.u64()? }),
             _ => return Err(Error::BadOpcode),
         })
     }
@@ -194,8 +151,6 @@ const REPLIES: &[Layout] = &[
     Layout { opcode: 2, inline: false, handles: 0 },
     Layout { opcode: 3, inline: false, handles: 0 },
     Layout { opcode: 4, inline: true, handles: 0 },
-    Layout { opcode: 5, inline: false, handles: 1 },
-    Layout { opcode: 6, inline: true, handles: 0 },
 ];
 
 /// Every successful reply of the protocol, named after its request.
@@ -205,8 +160,6 @@ pub enum Reply<'a> {
     Read(ReadReply<'a>),
     Write(WriteReply),
     Flush(FlushReply),
-    Grant(GrantReply),
-    Release(ReleaseReply),
 }
 
 impl<'a> Reply<'a> {
@@ -217,8 +170,6 @@ impl<'a> Reply<'a> {
             Reply::Read(_) => &[],
             Reply::Write(_) => &[],
             Reply::Flush(_) => &[],
-            Reply::Grant(_) => &["range"],
-            Reply::Release(_) => &[],
         }
     }
 
@@ -229,8 +180,6 @@ impl<'a> Reply<'a> {
             Reply::Read(_) => 2,
             Reply::Write(_) => 3,
             Reply::Flush(_) => 4,
-            Reply::Grant(_) => 5,
-            Reply::Release(_) => 6,
         }
     }
 
@@ -244,15 +193,12 @@ impl<'a> Reply<'a> {
             Reply::Read(m) => w.bytes(m.data),
             Reply::Write(_) => Ok(()),
             Reply::Flush(_) => Ok(()),
-            Reply::Grant(m) => w.u64(m.id),
-            Reply::Release(_) => Ok(()),
         }
     }
 
     fn read_inline(opcode: u32, _r: &mut Reader<'_>) -> Result<Self, Error> {
         Ok(match opcode {
             4 => Reply::Flush(FlushReply {}),
-            6 => Reply::Release(ReleaseReply {}),
             _ => return Err(Error::BadOpcode),
         })
     }
@@ -263,8 +209,6 @@ impl<'a> Reply<'a> {
             2 => Reply::Read(ReadReply { data: r.bytes()? }),
             3 => Reply::Write(WriteReply {}),
             4 => Reply::Flush(FlushReply {}),
-            5 => Reply::Grant(GrantReply { id: r.u64()? }),
-            6 => Reply::Release(ReleaseReply {}),
             _ => return Err(Error::BadOpcode),
         })
     }

@@ -149,8 +149,8 @@ impl Queue {
         // Both rings are zeroed before the queue is made ready, so neither counter starts at a
         // value this driver did not put there. `dma_alloc` returns zeroed pages (R11) and the
         // device's own reset puts its `used.idx` back to 0, but writing them is what makes the
-        // starting point this driver's rather than something it is relying on. `avail.flags` of
-        // 0 also means "interrupt me", which is what `complete` waits for.
+        // starting point this driver's rather than something it is relying on. `avail.flags` is
+        // written again with every request (`submit`).
         t.dma_write_u16(AVAIL_OFF, 0)?;
         t.dma_write_u16(AVAIL_IDX_OFF, 0)?;
         t.dma_write_u16(USED_OFF, 0)?;
@@ -196,6 +196,10 @@ impl Queue {
             // `next` of the last descriptor is 0 and unread: `NEXT` is clear.
             t.dma_write_u16(at + 14, if last { 0 } else { (i + 1) as u16 })?;
         }
+        // `avail.flags` of 0 means "interrupt me". It is written with every request, not once
+        // at setup, so *everything* the device is told is written fresh each time and a device
+        // that rewrites the available ring cannot leave interrupts suppressed behind it.
+        t.dma_write_u16(AVAIL_OFF, 0)?;
         let slot = usize::from(self.next_avail % QUEUE_SIZE);
         t.dma_write_u16(AVAIL_RING_OFF + slot * 2, HEAD as u16)?;
         // The descriptors must be visible before the index that publishes them (§2.7.13.3).
@@ -220,6 +224,11 @@ impl Queue {
             // the ring is looked at first, and again after every wake.
             t.fence();
             if t.dma_read_u16(USED_IDX_OFF)? != self.next_used {
+                // The device asserted its line whether or not this driver waited for it, and
+                // virtio says the driver acknowledges what it was sent (§4.2.2). The kernel
+                // masking the source until the next `receive` (R5) makes skipping this
+                // survivable; it does not make it right.
+                virtio::ack_interrupt(t)?;
                 break;
             }
             let now = t.now_us();
@@ -227,11 +236,9 @@ impl Queue {
                 return Err(DeviceError::Timeout);
             }
             match t.wait_irq(deadline - now) {
-                Ok(()) => {
-                    // The interrupt is acknowledged whether or not the ring moved: a spurious one
-                    // left unacknowledged would keep the line asserted (§4.2.2).
-                    virtio::ack_interrupt(t)?;
-                }
+                // The interrupt is acknowledged whether or not the ring moved: a spurious one
+                // left unacknowledged would keep the line asserted (§4.2.2).
+                Ok(()) => virtio::ack_interrupt(t)?,
                 Err(crate::transport::Fault::Timeout) => return Err(DeviceError::Timeout),
                 Err(other) => return Err(other.into()),
             }

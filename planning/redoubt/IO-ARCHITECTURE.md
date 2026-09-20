@@ -34,8 +34,10 @@ Every platform presents the same contract: virtio-mmio devices, a standard inter
   holds a directory handle). No lookup by name.
 - **Trivial drivers** are the only non-virtio ones: UART (ns16550), RTC (goldfish), and devices of
   similar size with no DMA. They are fully untrusted.
-- **Crate:** `virtio-drivers` (rcore-os, pure Rust, `no_std`) under a thin server per device,
-  audited as TCB while its driver is.
+- **The virtio driver is ours.** `virtio-drivers` (rcore-os) was read and rejected under tenet 5:
+  maintained and pure Rust, but 13k lines of device classes we do not have behind six dependencies,
+  with an `unsafe` interface. One split virtqueue with one request outstanding is about 500 lines
+  and no dependencies (`blkd`, below); every virtio driver here shares it rather than a crate.
 - **The device side is hostile.** Our virtio drivers validate every ring index, length and
   descriptor chain the device returns, as Linux does for confidential VMs. Each driver gets a fuzz
   target driven by a malicious device model.
@@ -75,8 +77,10 @@ device puts in those pages can corrupt `blkd`'s own memory or stop it answering.
 device exactly one contiguous DMA region — the virtqueue, one request header, one status byte and
 one data buffer — and every physical address it ever writes into a descriptor is that region's base
 plus a constant offset. A client's lent pages never reach the device: `blkd` copies through the
-data buffer in both directions, and copies each completed read out of DMA memory once, with a
-length of its own, before it looks at a byte of it.
+data buffer in both directions, clears the run of it a read will fill before offering the request,
+and copies each completed read out of DMA memory once, with a length of its own, before it looks at
+a byte of it. So a device that writes fewer bytes than it was given hands back zeros, never what
+another client's write left there.
 
 **Nothing the device says is ever used as an index or a length.** The descriptor table and the
 available ring are written fresh from constants for every request and never read back, so a device
@@ -85,10 +89,29 @@ believes. Of the used ring, `blkd` reads three words and checks each against wha
 index must have advanced by exactly one, the entry's id must be the descriptor it submitted, and
 the reported length must not exceed what the device was given. A used entry for a request never
 sent, a jump or a step backwards in the index, a status byte outside the three the specification
-defines, or a completion that never arrives before the deadline, all end the same way: the request
-fails and the device is marked broken, after which `blkd` refuses every request rather than
-trusting a device that has already lied. One request is outstanding at a time, which is what makes
-"requests complete in order" true by construction.
+defines, or a completion that does not arrive within **ten seconds**, all end the same way: the
+request fails and the device is marked broken, after which `blkd` refuses every request rather than
+trusting a device that has already lied. A client's own deadline must be longer than that ten
+seconds, or it gives up on a request `blkd` is still waiting for. One request is outstanding at a
+time, which is what makes "requests complete in order" true by construction.
+
+**The driver is ours, not a crate's.** `virtio-drivers` (rcore-os) was read at 0.13.0 and judged
+under tenet 5, which asks for small, `no_std`, pure Rust, maintained **and read by us**. It is
+maintained and pure Rust, and careful where it matters: it shadows the descriptor table, so a
+device that rewrites the real one cannot steer its walk, and it refuses a used entry whose id is
+not the token awaited. It is not small: 13k lines covering nine device classes we do not have and
+two transports we do not use, behind six dependencies that would enter the TCB with it, and an
+interface that is `unsafe` at every call site and in its `Hal` trait. What a virtio driver here
+needs is one split virtqueue with **one request outstanding**, which is about 500 lines, no
+dependencies, and a stronger property than a shadow table: with one request in flight there is no
+descriptor state to shadow, because the table is rewritten before every request and never read.
+`netd` (WP-D3) inherits this decision rather than re-arguing it.
+
+**Bring-up refuses rather than works around.** `blkd` accepts three feature bits and offers no
+others: `VERSION_1`, `BLK_FLUSH` and `BLK_RO`. **`BLK_FLUSH` is required**: without it `sync`
+could not be honoured and the contract below would be a lie, so a device that does not offer it is
+refused at boot rather than trusted and found out later. Everything else — indirect descriptors,
+event indices, discard, multiqueue — is left unaccepted, so the device may not use any of it.
 
 **Partitions.** `blkd` reads a GPT (UEFI 2.10, §5.3) from LBA 1: the primary header only, checked
 for its signature, its own LBA, a header size in range, both CRC32s, an entry array that lies
@@ -97,42 +120,56 @@ overlap each other. An overlap would let two volumes alias each other's bytes, s
 is refused whole. There is no backup-header fallback and no repair: `blkd` never writes a partition
 table, so a table that does not check out is a refusal, not damage to work around.
 
-**A range is a badge.** **The root badge of partition *i* is *i*** (from 1, in GPT entry order),
-as `keyd`'s is the badge of key *i* (INIT.md), so `init` mints each volume's range from the
-manifest without asking `blkd` anything, and a `blkd` restarted on the same disk gives the same
-badges the same meaning while holding no state across the restart. Badges at or above 2^63 are
-minted by `grant`, which narrows a range to a window inside the caller's own and is the only way a
-range is delegated after boot; **only a root badge may grant**, so grants never chain and one
-system client cannot open a bucket per link (CONTAINMENT.md, admission keys account 0 by badge).
-`release(id)` frees a grant and everything granted under it, for the holder of the id and nobody
-else; `release(0)` frees everything the caller granted, since no grant is ever given the id 0.
+**A disk with no usable table is a boot failure, repeated.** `blkd` exits rather than serve a disk
+it could not read (fail closed and loudly), `init` restarts it, it reads the same disk and exits
+again, and five restarts within sixty seconds reboot the machine (INIT.md). So a corrupt or
+unpartitioned disk is a reboot loop, not a degraded boot. That is deliberate — a volume `blkd`
+cannot find must not look like a volume that is merely empty — and it is a boot-availability
+property WP-R3 must design against, not something `blkd` can decide alone.
+
+**A range is a badge.** **The root badge of GPT entry *i* is *i* + 1**, counting every entry of the
+array, used or not, as `keyd`'s badge is the index of its key argument (INIT.md). So `init` mints
+each volume's range from the manifest's entry number without asking `blkd` anything, a `blkd`
+restarted on the same disk gives the same badges the same meaning while holding no state across the
+restart, and **an unused entry answers to nothing**: a badge naming one is `not_permitted`, exactly
+as a badge past the end is. Counting positions among the *used* entries instead would renumber
+every volume after a gap, and `gdisk` leaves gaps routinely, so `init` would hand a filesystem
+another volume with no error anywhere.
+
+**`blkd` mints nothing.** There is no `grant` and no `release`: every range comes from the boot
+manifest, through a badge `init` minted, and no client of milestone 1 delegates one. A client
+therefore makes `blkd` hold nothing that outlives its request, so there is no admission to keep and
+no per-client state to count; what bounds a flood of reads is the kernel's fair waiting per
+(account, label set) (R2) and the bound on one request below. A narrower range, if something ever
+needs one, is one table row and one `Minted` call in WIRE.md's shape — cheaper to add then than to
+carry untested in a driver that is inside the TCB.
 
 **Ranges carry no labels in milestone 1**, so `check` lets any caller read one and only an
 unlabelled caller write to it: `blkd`'s clients are the `fsd` instances `init` hands a range to,
 and a volume's labels are enforced in `fsd`, which is the one place they are written down
-(NAMESPACES.md). **Admission counts grants, and only grants** — `blkd` parks no call and keeps no
-other per-client state, so a flood of reads makes it grow by nothing; what bounds that flood is the
-kernel's fair waiting per (account, label set) (R2) and the bound on one request below.
+(NAMESPACES.md). **An `fsd` instance is unlabelled whatever its volume's labels are** — it enforces
+them on its callers, it does not carry them — so a boot manifest that gives an `fsd` budget labels
+makes its volume unwritable, because `blkd` would then refuse its writes. `init` should refuse such
+a manifest.
 
 **What it is handed.** `blkd`'s startup block names the endpoint it receives on, `blkd`, and two
 device handles: `disk`, the MMIO region (which must carry the DMA flag), and `disk-irq`, its
 interrupt. Those are the manifest's device names; `blkd` parses no device tree and hardcodes no
 address, and without both handles it does not start. It takes no arguments.
 
-**Bounds.** At most 128 partitions; at most 64 sectors (32 KiB) of data in one `read` or `write`,
-so one request's work is a number stated here rather than whatever fits the caller's lend; at most
-8 live grants per (account, label set), across at most 8 of those at once.
+**Bounds.** At most 128 GPT entries; at most 64 sectors (32 KiB) of data in one `read` or `write`,
+so one request's work is a number stated here rather than whatever fits the caller's lend; ten
+seconds for one request to complete.
 
 **What each error answers.** `malformed` (code 1, as in every protocol): the request did not
-decode, or its lengths are ones no sender could mean — a `write` whose data is empty or not a whole
-number of sectors. `not_permitted`: the badge names no range, the caller's labels fail `check`, a
-granted badge asked to grant, a grant asked for a window outside the caller's range, or a `release`
-named an id the caller did not receive — one answer for all of them, so a refusal says only "not
-you". `out_of_range`: the sectors asked for are not inside the range this badge names.
-`too_many`: a cap is reached — more sectors than one request may carry, a reply that would not fit
-the caller's lend, or a bucket or share with no room for another grant. `failed`: the device failed
-or lied, `blkd` had no memory or no randomness, or the kernel refused to mint. None of them says
-which.
+decode, or its lengths are ones no sender could mean — a `read` of no sectors, or a `write` whose
+data is empty or not a whole number of sectors. `not_permitted`: the badge names no range (past the
+end of the array, or an entry the table does not use), the caller's labels fail `check`, or the
+disk is read-only and the request is a `write` — one answer for all of them, so a refusal says only
+"not you". `out_of_range`: the sectors asked for are not inside the range this badge names.
+`too_many`: a cap is reached — more sectors than one request may carry, or a reply that would not
+fit the caller's lend. `failed`: the device failed, lied, or did not answer in time. None of them
+says which.
 
 <!-- wire: blkd -->
 | Opcode | Message | Fields | Reply |
@@ -141,8 +178,6 @@ which.
 | 2 | `read` | `sector: u64`, `count: u32` | `data: bytes` |
 | 3 | `write` | `sector: u64`, `data: bytes` | - |
 | 4 | `flush` | - | - |
-| 5 | `grant` | `sector: u64`, `count: u64` | `id: u64`, `range: handle[0] endpoint` |
-| 6 | `release` | `id: u64` | - |
 
 <!-- wire-errors: blkd -->
 | Code | Error |
@@ -153,16 +188,16 @@ which.
 | 5 | `failed` |
 
 - `sector` is relative to the range the badge names, never to the disk, so a client cannot express
-  an address outside its own partition; `sector_size` is 512, virtio-blk's unit, and `read_only` is
-  1 when the device refused writes at feature negotiation.
-- `read` and `write` move whole sectors: `count` is 1 to 64, and `write`'s data is that many whole
-  sectors. A `write` is one virtio-blk write of the whole run, so a power failure persists a prefix
-  of it (the contract above), and `flush` is one virtio-blk flush, which returns only when the
-  device says the flush completed. `fsd` calls `flush` for every `sync` and relies on nothing more.
-- `grant` mints a range `sector..sector + count` inside the caller's own, stamped like the handle
-  the request came through, and returns a random id, exactly as `keyd`'s does (WIRE.md, granting
-  and releasing). A window wider than the caller's, or one that leaves it, is `not_permitted`;
-  nothing granted is ever wider than the badge it came through.
+  an address outside its own partition. `info`'s `sectors` is **the range's**, not the disk's, so
+  the number a client is told is the number it may address; `sector_size` is 512, virtio-blk's
+  unit, and `read_only` is 1 when the device refused writes at feature negotiation.
+- `read` and `write` move whole sectors: `count` is 1 to 64 (`count: 0` is `malformed`, since no
+  sender could mean it), and `write`'s data is that many whole sectors. A `write` is one virtio-blk
+  write of the whole run, so a power failure persists a prefix of it (the contract above).
+- `flush` is one virtio-blk flush, which returns only when the device says the flush completed.
+  `fsd` calls `flush` for every `sync` and relies on nothing more. On a **read-only** disk `write`
+  is `not_permitted` and `flush` issues nothing and answers ok: nothing was ever written, so there
+  is nothing to make durable.
 
 **Stated residuals.**
 - A DMA handle is kernel-level trust, so a compromised `blkd` is a compromised kernel on a
@@ -174,7 +209,13 @@ which.
   from writing to them; the restarted `blkd` resets the device at bring-up, but only after those
   frames may already have been handed to somebody else. Closing it needs the kernel to reset a
   device whose DMA pages are freed, or the hardware to confine it; until then `blkd`'s restart is
-  a hole the same size as trusting `blkd`, which is what tenet 7 already says of it.
+  a hole the same size as trusting `blkd`, which is what tenet 7 already says of it
+  (QUESTIONS.md 147).
+- A device that answers slowly, or that re-asserts its interrupt without completing anything, makes
+  `blkd` spend up to its ten seconds on that one request; it wakes rather than sleeps while it
+  does, and the work is paid by `blkd`'s own manifest weight in the one stride queue
+  (CONTAINMENT.md, server CPU). One request is outstanding at a time, so the whole disk waits with
+  it.
 - A device can return wrong bytes for a sector it was asked for, and `blkd` cannot tell: the
   virtio-blk protocol has no checksum, and littlefs checksums only metadata (NAMESPACES.md). That
   is the same residual the filesystem already states, and what disk encryption (Later) would close.

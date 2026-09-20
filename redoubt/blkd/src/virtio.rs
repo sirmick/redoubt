@@ -256,13 +256,18 @@ pub fn capacity(t: &impl Transport) -> Result<u64, DeviceError> {
     Err(DeviceError::Config)
 }
 
-/// Acknowledges whatever interrupt bits are set, and says whether the used-buffer bit (bit 0) was
-/// among them. Only the bits that were read are acknowledged, so a bit the device raises between
-/// the two accesses is not lost.
-pub fn ack_interrupt(t: &impl Transport) -> Result<bool, DeviceError> {
+/// Acknowledges whatever interrupt bits are set. Only the bits that were read are acknowledged,
+/// so a bit the device raises between the two accesses is not lost.
+///
+/// **It is called whether or not the driver waited for the interrupt.** virtio requires the driver
+/// to acknowledge one it was sent (§4.2.2), and a device that completed inside the doorbell write
+/// still asserted its line; the kernel masking the source until the next `receive` (R5) makes
+/// missing this survivable, not correct. Which bits were set is not returned, because nothing
+/// branches on it: the ring is what says whether a request completed.
+pub fn ack_interrupt(t: &impl Transport) -> Result<(), DeviceError> {
     let bits = t.reg_read(reg::INTERRUPT_STATUS)?;
     if bits != 0 {
         t.reg_write(reg::INTERRUPT_ACK, bits)?;
     }
-    Ok(bits & 1 != 0)
+    Ok(())
 }

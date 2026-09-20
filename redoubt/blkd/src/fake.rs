@@ -175,8 +175,6 @@ impl FakeDevice {
 
     pub fn set_policy(&self, policy: Policy) { self.policy.set(policy); }
 
-    pub fn policy(&self) -> Policy { self.policy.get() }
-
     pub fn notified(&self) -> u64 { self.notified.get() }
 
     /// The feature bits the driver wrote back: what it accepted of what was offered.
@@ -204,13 +202,6 @@ impl FakeDevice {
             let n = bytes.len().min(slot.len());
             slot[..n].copy_from_slice(&bytes[..n]);
             slot[n..].fill(0);
-        }
-    }
-
-    /// Writes `bytes` over the disk from `lba`, for planting an entry array.
-    pub fn set_sectors(&self, lba: u64, bytes: &[u8]) {
-        for (i, chunk) in bytes.chunks(SECTOR_SIZE as usize).enumerate() {
-            self.set_sector(lba + i as u64, chunk);
         }
     }
 
@@ -636,3 +627,63 @@ fn half(current: u64, value: u32, high: bool) -> u64 {
         (current & !0xffff_ffff) | u64::from(value)
     }
 }
+
+/// Draws a [`Policy`] from a stream of bytes: **the one place a hostile device is built at
+/// random**, shared by the randomized sweep in `tests/device.rs` and by the `device` and
+/// `request` fuzz targets. A lie added to [`Policy`] and not added here is a lie nothing
+/// exercises, and one place to forget is better than three.
+///
+/// `next` hands out bytes; an exhausted source reads as zeros, so a short input is an honest
+/// device rather than a refusal to run. **Every field draws its bytes whether or not its flag is
+/// set**, so flipping one bit of the input changes one lie rather than shifting every field after
+/// it, which is what lets a fuzzer keep what it has found.
+pub fn policy_from(next: &mut impl FnMut() -> u8) -> Policy {
+    let lies = u32_of(next);
+    let on = |n: u32| (lies >> n) & 1 == 1;
+    let (magic, version, device_id) = (u32_of(next), u32_of(next), u32_of(next));
+    let features = u64_of(next);
+    let queue_num_max = u32_of(next);
+    let capacity = u64_of(next);
+    let used_idx_delta = u32_of(next) as u16;
+    let extra = u16::from(next() % 8);
+    let (used_id, used_len) = (u32_of(next), u32_of(next));
+    let status = next();
+    let spurious = u32::from(next() % 4);
+    let scribble = match next() % 5 {
+        0 => Scribble::Descriptors,
+        1 => Scribble::DescriptorLoop,
+        2 => Scribble::Avail,
+        3 => Scribble::Header,
+        other => Scribble::Whole(other),
+    };
+    Policy {
+        magic: on(0).then_some(magic),
+        version: on(1).then_some(version),
+        device_id: on(2).then_some(device_id),
+        features: on(3).then_some(features),
+        queue_num_max: on(4).then_some(queue_num_max),
+        capacity: on(5).then_some(capacity),
+        config_never_settles: on(6),
+        never_resets: on(7),
+        status_drops_bits: on(8),
+        queue_ready_stuck: on(9),
+        queue_ready_before: on(10),
+        used_idx_delta: on(11).then_some(used_idx_delta),
+        extra_used_entries: if on(12) { extra } else { 0 },
+        used_id: on(13).then_some(used_id),
+        used_len: on(14).then_some(used_len),
+        blk_status: on(15).then_some(status),
+        short_write: on(16),
+        no_interrupt: on(17),
+        never_complete: on(18),
+        spurious_interrupts: if on(19) { spurious } else { 0 },
+        defer: on(20),
+        scribble: on(21).then_some(scribble),
+        scribble_on_every_read: on(22),
+        keep_writing_data: on(23),
+    }
+}
+
+fn u32_of(next: &mut impl FnMut() -> u8) -> u32 { u32::from_le_bytes([next(), next(), next(), next()]) }
+
+fn u64_of(next: &mut impl FnMut() -> u8) -> u64 { u64::from(u32_of(next)) | (u64::from(u32_of(next)) << 32) }

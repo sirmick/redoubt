@@ -78,13 +78,6 @@ pub trait Transport {
         Ok(u32::from_le_bytes(bytes))
     }
 
-    /// The 64-bit little-endian value at `off`.
-    fn dma_read_u64(&self, off: usize) -> Result<u64, Fault> {
-        let mut bytes = [0; 8];
-        self.dma_read(off, &mut bytes)?;
-        Ok(u64::from_le_bytes(bytes))
-    }
-
     fn dma_write_u8(&self, off: usize, value: u8) -> Result<(), Fault> { self.dma_write(off, &[value]) }
 
     fn dma_write_u16(&self, off: usize, value: u16) -> Result<(), Fault> {

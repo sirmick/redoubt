@@ -22,7 +22,7 @@
 extern crate alloc;
 
 use redoubt_blkd::kernel::Device;
-use redoubt_blkd::server::{BUDGET, BlockServer, COST, LIMITS};
+use redoubt_blkd::server::BlockServer;
 use redoubt_blkd::{Disk, read_partitions};
 use redoubt_rt::abi::{Error, FOREVER};
 use redoubt_rt::handle::{Endpoint, Irq, Mmio};
@@ -35,9 +35,6 @@ redoubt_rt::entry!(serve);
 pub const NO_ENDPOINT: u32 = 2;
 /// `receive` failed for a reason other than the endpoint going away.
 pub const RECEIVE_FAILED: u32 = 3;
-/// The limits in this build do not fit the budget or the open-call headroom: a build-time
-/// mistake, caught at the only moment it can be.
-pub const BAD_LIMITS: u32 = 4;
 /// The startup block named no [`DISK`] handle, or no [`DISK_IRQ`] handle, so there is no disk to
 /// serve.
 pub const NO_DEVICE: u32 = 5;
@@ -51,12 +48,10 @@ pub const DISK_IRQ: &str = "disk-irq";
 pub const NO_DISK: u32 = 6;
 /// The disk has no usable partition table (`redoubt_blkd::TableError`). Fail closed and loudly:
 /// a partition `blkd` cannot read is a volume `fsd` cannot mount, and serving without it would
-/// look like the volume simply not existing.
+/// look like the volume simply not existing. `init` restarts `blkd`, which reads the same disk
+/// and exits again, so an unreadable disk is a reboot loop rather than a degraded boot
+/// (IO-ARCHITECTURE.md; INIT.md, restarts and reboots).
 pub const NO_PARTITIONS: u32 = 7;
-/// The kernel would not give a random word. `blkd`'s first granted badge is drawn from one
-/// (answer 126), and a predictable one is a hole across a restart, so it does not start
-/// without it.
-pub const NO_RANDOM: u32 = 8;
 
 /// Serves until the endpoint is destroyed.
 pub fn serve(startup: &Startup) -> u32 {
@@ -64,14 +59,12 @@ pub fn serve(startup: &Startup) -> u32 {
     let (Some(mmio), Some(irq)) = (startup.handle(DISK), startup.handle(DISK_IRQ)) else {
         return NO_DEVICE;
     };
-    let mmio = Mmio::from_handle(mmio);
-    let Ok(device) = Device::open(&mmio, Irq::from_handle(irq)) else { return NO_DEVICE };
+    let Ok(device) = Device::open(Mmio::from_handle(mmio), Irq::from_handle(irq)) else {
+        return NO_DEVICE;
+    };
     let Ok(mut disk) = Disk::new(device) else { return NO_DISK };
     let Ok(roots) = read_partitions(&mut disk) else { return NO_PARTITIONS };
-    let Ok(random) = redoubt_rt::handle::random_u64() else { return NO_RANDOM };
-    let Ok(mut server) = BlockServer::new(disk, roots, LIMITS, &COST, BUDGET, random) else {
-        return BAD_LIMITS;
-    };
+    let mut server = BlockServer::new(disk, roots);
     let endpoint = Endpoint::from_handle(handle);
     loop {
         match endpoint.receive(FOREVER, 0) {

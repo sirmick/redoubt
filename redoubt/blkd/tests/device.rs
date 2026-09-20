@@ -13,7 +13,7 @@
 //! 3. **A refusal, not silence.** A device that lies gets an error and is marked broken; it never returns
 //!    data as if it were good.
 
-use redoubt_blkd::fake::{FakeDevice, Policy, Scribble};
+use redoubt_blkd::fake::{FakeDevice, Policy, Scribble, policy_from};
 use redoubt_blkd::image::{Entry, Image};
 use redoubt_blkd::virtio::{DeviceError, MAX_SECTORS, SECTOR_SIZE, bit, feature};
 use redoubt_blkd::{Disk, read_partitions};
@@ -75,9 +75,11 @@ fn the_partition_table_is_read_through_the_driver() {
     let device = device();
     let mut disk = up(&device).expect("bring-up");
     let roots = read_partitions(&mut disk).expect("a table");
-    assert_eq!(roots.len(), 2);
-    assert_eq!((roots[0].first(), roots[0].sectors()), (64, 1000));
-    assert_eq!((roots[1].first(), roots[1].sectors()), (2048, 2048));
+    // One slot per GPT entry, so a badge names an entry and a gap renumbers nothing.
+    assert_eq!(roots.len(), redoubt_blkd::image::ENTRIES as usize);
+    assert_eq!(roots[0].map(|r| (r.first(), r.sectors())), Some((64, 1000)));
+    assert_eq!(roots[1].map(|r| (r.first(), r.sectors())), Some((2048, 2048)));
+    assert!(roots[2..].iter().all(Option::is_none));
     assert_eq!(device.strayed(), 0);
 }
 
@@ -350,68 +352,31 @@ fn a_read_only_device_refuses_writes() {
 #[test]
 fn a_hundred_thousand_random_liars_never_panic_and_never_stray() {
     let mut state = 0x9e37_79b9_7f4a_7c15u64;
-    let mut next = move || {
+    let mut word = move || {
         state ^= state << 13;
         state ^= state >> 7;
         state ^= state << 17;
         state
     };
+    // `policy_from` is the one place a hostile device is built at random; the fuzz targets draw
+    // from the same function, so a lie cannot be exercised here and missing there.
+    let mut bytes = || (word() & 0xff) as u8;
     for _ in 0..100_000 {
         let device = FakeDevice::new(512);
-        device.set_policy(random_policy(&mut next));
+        device.set_policy(policy_from(&mut bytes));
         let Ok(mut disk) = up(&device) else {
             assert_eq!(device.strayed(), 0);
             continue;
         };
-        device.set_policy(random_policy(&mut next));
+        device.set_policy(policy_from(&mut bytes));
         let mut back = vec![0; SECTOR];
-        let _ = disk.read(next() % 600, &mut back);
-        device.set_policy(random_policy(&mut next));
-        let _ = disk.write(next() % 600, &vec![(next() & 0xff) as u8; SECTOR]);
-        device.set_policy(random_policy(&mut next));
+        let _ = disk.read(u64::from(bytes()) * 3, &mut back);
+        device.set_policy(policy_from(&mut bytes));
+        let _ = disk.write(u64::from(bytes()) * 3, &vec![bytes(); SECTOR]);
+        device.set_policy(policy_from(&mut bytes));
         let _ = disk.flush();
-        device.set_policy(random_policy(&mut next));
+        device.set_policy(policy_from(&mut bytes));
         let _ = read_partitions(&mut disk);
         assert_eq!(device.strayed(), 0);
-    }
-}
-
-/// A policy drawn from `next`, weighted so that most devices are nearly honest and a few lie
-/// about everything at once.
-#[allow(clippy::redundant_closure)] // `next` is a &mut closure; the closure is how it is called twice.
-fn random_policy(next: &mut impl FnMut() -> u64) -> Policy {
-    let word = next();
-    let maybe = |bit: u32| (word >> bit) & 1 == 1;
-    Policy {
-        magic: maybe(0).then(|| next() as u32),
-        version: maybe(1).then(|| next() as u32),
-        device_id: maybe(2).then(|| next() as u32),
-        features: maybe(3).then(|| next()),
-        queue_num_max: maybe(4).then(|| next() as u32),
-        capacity: maybe(5).then(|| next()),
-        config_never_settles: maybe(6),
-        never_resets: maybe(7),
-        status_drops_bits: maybe(8),
-        queue_ready_stuck: maybe(9),
-        queue_ready_before: maybe(10),
-        used_idx_delta: maybe(11).then(|| next() as u16),
-        extra_used_entries: if maybe(12) { (next() % 6) as u16 } else { 0 },
-        used_id: maybe(13).then(|| next() as u32),
-        used_len: maybe(14).then(|| next() as u32),
-        blk_status: maybe(15).then(|| next() as u8),
-        short_write: maybe(16),
-        no_interrupt: maybe(17),
-        never_complete: maybe(18),
-        spurious_interrupts: if maybe(19) { (next() % 4) as u32 } else { 0 },
-        defer: maybe(20),
-        scribble: maybe(21).then(|| match next() % 5 {
-            0 => Scribble::Descriptors,
-            1 => Scribble::DescriptorLoop,
-            2 => Scribble::Avail,
-            3 => Scribble::Header,
-            _ => Scribble::Whole((next() & 0xff) as u8),
-        }),
-        scribble_on_every_read: maybe(22),
-        keep_writing_data: maybe(23),
     }
 }

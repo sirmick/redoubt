@@ -53,13 +53,12 @@ impl<T: Transport> Disk<T> {
 
     pub fn is_broken(&self) -> bool { self.broken }
 
-    pub fn transport(&self) -> &T { &self.transport }
-
     /// Reads `out.len() / 512` sectors from `sector` into `out`.
     ///
     /// `out` is `blkd`'s own buffer, never a client's lend: the reply is encoded from it
     /// afterwards.
     pub fn read(&mut self, sector: u64, out: &mut [u8]) -> Result<(), DeviceError> {
+        self.usable()?;
         let bytes = self.check_span(sector, out.len())?;
         // The data buffer is cleared before the device is asked to fill it, so a device that
         // writes fewer bytes than it was given — or none — hands back zeros rather than what the
@@ -67,18 +66,24 @@ impl<T: Transport> Disk<T> {
         // choose the bytes it returns anyway, but `blkd` itself never passes one client's data to
         // another, and that does not depend on the device at all.
         self.clear_data(bytes)?;
-        let chain = Chain::of(&[
-            Segment { off: HEADER_OFF, len: HEADER_BYTES, device_writes: false },
-            Segment { off: DATA_OFF, len: bytes, device_writes: true },
-            Segment { off: STATUS_OFF, len: 1, device_writes: true },
-        ]);
-        self.transaction(request::IN, sector, &chain)?;
+        self.transaction(
+            request::IN,
+            sector,
+            &[
+                Segment { off: HEADER_OFF, len: HEADER_BYTES, device_writes: false },
+                Segment { off: DATA_OFF, len: bytes, device_writes: true },
+                Segment { off: STATUS_OFF, len: 1, device_writes: true },
+            ],
+        )?;
         // The one read of the device's bytes, with this driver's own length.
         self.transport.dma_read(DATA_OFF, out).map_err(|e| self.break_on(e.into()))
     }
 
     /// Writes `data` (a whole number of sectors) at `sector`.
     pub fn write(&mut self, sector: u64, data: &[u8]) -> Result<(), DeviceError> {
+        // Broken first, and before the payload is copied anywhere: a device that has already
+        // lied is never handed another client's bytes.
+        self.usable()?;
         if self.read_only {
             return Err(DeviceError::ReadOnly);
         }
@@ -86,12 +91,15 @@ impl<T: Transport> Disk<T> {
         // The client's bytes are copied into the DMA buffer here, and the device is given that
         // buffer; the lend they came from is never named to the device.
         self.transport.dma_write(DATA_OFF, data).map_err(|e| self.break_on(e.into()))?;
-        let chain = Chain::of(&[
-            Segment { off: HEADER_OFF, len: HEADER_BYTES, device_writes: false },
-            Segment { off: DATA_OFF, len: bytes, device_writes: false },
-            Segment { off: STATUS_OFF, len: 1, device_writes: true },
-        ]);
-        self.transaction(request::OUT, sector, &chain)
+        self.transaction(
+            request::OUT,
+            sector,
+            &[
+                Segment { off: HEADER_OFF, len: HEADER_BYTES, device_writes: false },
+                Segment { off: DATA_OFF, len: bytes, device_writes: false },
+                Segment { off: STATUS_OFF, len: 1, device_writes: true },
+            ],
+        )
     }
 
     /// Issues virtio-blk's flush and returns only when the device says it completed
@@ -99,15 +107,25 @@ impl<T: Transport> Disk<T> {
     /// durable). `BLK_FLUSH` was required at negotiation, so the device cannot answer `UNSUPP`
     /// without breaking its own word.
     pub fn flush(&mut self) -> Result<(), DeviceError> {
+        // Broken first: a broken read-only device must not answer ok to a `sync`.
+        self.usable()?;
         if self.read_only {
             // Nothing was ever written, so there is nothing to make durable.
             return Ok(());
         }
-        let chain = Chain::of(&[
-            Segment { off: HEADER_OFF, len: HEADER_BYTES, device_writes: false },
-            Segment { off: STATUS_OFF, len: 1, device_writes: true },
-        ]);
-        self.transaction(request::FLUSH, 0, &chain)
+        self.transaction(
+            request::FLUSH,
+            0,
+            &[
+                Segment { off: HEADER_OFF, len: HEADER_BYTES, device_writes: false },
+                Segment { off: STATUS_OFF, len: 1, device_writes: true },
+            ],
+        )
+    }
+
+    /// `Broken` once the device has lied or timed out, and nothing else ever again.
+    fn usable(&self) -> Result<(), DeviceError> {
+        if self.broken { Err(DeviceError::Broken) } else { Ok(()) }
     }
 
     /// `len` as a sector count that fits the disk, this driver's per-request bound and the data
@@ -128,11 +146,9 @@ impl<T: Transport> Disk<T> {
     }
 
     /// One request, start to finish: header, chain, doorbell, completion, status byte.
-    fn transaction(&mut self, kind: u32, sector: u64, chain: &Chain) -> Result<(), DeviceError> {
-        if self.broken {
-            return Err(DeviceError::Broken);
-        }
-        let writable = chain.writable();
+    fn transaction(&mut self, kind: u32, sector: u64, chain: &[Segment]) -> Result<(), DeviceError> {
+        self.usable()?;
+        let writable = writable(chain);
         match self.run(kind, sector, chain, writable) {
             Ok(()) => Ok(()),
             // The device answered with a failure it is entitled to report; it is still speaking
@@ -142,7 +158,7 @@ impl<T: Transport> Disk<T> {
         }
     }
 
-    fn run(&mut self, kind: u32, sector: u64, chain: &Chain, writable: u32) -> Result<(), DeviceError> {
+    fn run(&mut self, kind: u32, sector: u64, chain: &[Segment], writable: u32) -> Result<(), DeviceError> {
         let t = &self.transport;
         // The header is written fresh every time, so whatever the device did to it since the last
         // request is gone before the next one is offered.
@@ -152,7 +168,7 @@ impl<T: Transport> Disk<T> {
         // A status byte of `OK` is never left behind from the last request: if the device writes
         // nothing at all, the value read back is one no device would mean.
         t.dma_write_u8(STATUS_OFF, 0xff)?;
-        self.queue.submit(t, chain.as_slice())?;
+        self.queue.submit(t, chain)?;
         self.queue.complete(t, writable)?;
         let mut status = [0; 1];
         t.dma_read(STATUS_OFF, &mut status)?;
@@ -185,33 +201,9 @@ impl<T: Transport> Disk<T> {
     }
 }
 
-/// The descriptor chain of one request: at most three segments, on the stack, no allocation.
-struct Chain {
-    segments: [Segment; MAX_SEGMENTS],
-    len: usize,
-}
-
-/// Header, data, status: the longest chain `blkd` builds.
-const MAX_SEGMENTS: usize = 3;
-
-impl Chain {
-    /// The chain of `segments`, which is a slice of at most [`MAX_SEGMENTS`] built right here;
-    /// a longer one is a bug in this file and is truncated rather than given to the device.
-    fn of(segments: &[Segment]) -> Chain {
-        let mut chain =
-            Chain { segments: [Segment { off: 0, len: 0, device_writes: false }; MAX_SEGMENTS], len: 0 };
-        for segment in segments.iter().take(MAX_SEGMENTS) {
-            chain.segments[chain.len] = *segment;
-            chain.len += 1;
-        }
-        chain
-    }
-
-    fn as_slice(&self) -> &[Segment] { &self.segments[..self.len] }
-
-    /// The bytes the device was given to write: what the used ring's reported length is checked
-    /// against.
-    fn writable(&self) -> u32 {
-        self.as_slice().iter().filter(|s| s.device_writes).map(|s| s.len).fold(0, u32::saturating_add)
-    }
+/// The bytes the device was given to write: what the used ring's reported length is checked
+/// against. A chain longer than one request needs is refused by `Queue::submit`, which knows the
+/// ring's size, so nothing here has to bound it.
+fn writable(chain: &[Segment]) -> u32 {
+    chain.iter().filter(|s| s.device_writes).map(|s| s.len).fold(0, u32::saturating_add)
 }
