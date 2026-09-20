@@ -115,6 +115,31 @@ and refuses labelled callers. Elixir wraps the tree in `gen_tcp`-like modules.
   not exist", the same answer as for a name the bundle never held, so `/boot` reveals nothing about
   the rest of the bundle. `init` passes the list to `bootfsd` as its arguments (question 123).
 
+#### Filling `/boot`: the `bootfs` protocol
+`bootfsd` holds no bundle and parses no archive: **`init` reads the bundle and hands it the public
+entries' bytes**, so the manifest never enters `bootfsd`'s address space at all and answer 123 holds
+by construction rather than by a filter. The two operations are typed messages on `bootfsd`'s own 9P
+endpoint, so their opcodes start at 16 (WIRE.md; `ninep_common` reserves 1-15):
+
+<!-- wire: bootfs -->
+| Opcode | Message | Fields | Reply |
+| --- | --- | --- | --- |
+| 16 | `add` | `name: string`, `offset: u64`, `data: bytes` | - |
+| 17 | `seal` | - | - |
+
+<!-- wire-errors: bootfs -->
+| Code | Error |
+| --- | --- |
+| 2 | `refused` |
+
+`add` appends `data` to the entry `name`, which must be one the argument list named and `offset`
+must be exactly what has been added to it so far, so a chunk cannot be lost, repeated or reordered;
+an entry larger than one message arrives as several. `seal` ends the setup: after it, `add` and
+`seal` are `refused`, and only then does `/boot` answer walks at all, so no client can read an
+entry that is half written. Both are `refused` from any connection `new_connection` minted, so only
+the holder of the server's founding handle — `init` — can fill `/boot`, and nothing can refill it
+after a client has seen it.
+
 ### littlefs
 Criteria: a published on-disk format, an independent second implementation to test against,
 power-loss safety, small enough to read. (Rust is required by tenet 3, so it is not a criterion.)
