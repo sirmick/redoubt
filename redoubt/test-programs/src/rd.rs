@@ -120,6 +120,14 @@ pub fn mint(source: MintSource, badge: u64, budget: Option<u32>) -> Result<u32, 
     }
 }
 
+/// `mint` from raw registers, the only way to offer the kernel a badge of 0: `Call::Mint`'s
+/// `NonZeroU64` cannot hold one, so a typed call would be refused here rather than there. The
+/// registers are the source's tag and its value's two halves, then the badge's two halves, then
+/// the optional budget handle (`redoubt-sys`).
+pub fn mint_raw(tag: usize, value: usize, badge_low: usize, badge_high: usize, budget: usize) -> Option<Error> {
+    raw_error(raw([number(Number::Mint), tag, value, 0, badge_low, badge_high, budget, 0]))
+}
+
 pub fn mint_from_handle(endpoint: u32, badge: u64, budget: Option<u32>) -> Result<u32, Error> {
     mint(MintSource::Handle(h(endpoint)), badge, budget)
 }

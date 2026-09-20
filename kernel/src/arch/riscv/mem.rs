@@ -114,6 +114,32 @@ fn map_page_in(
 /// that return may overwrite it: not a new mapping, a reservation or an unmap.
 fn is_occupied(pte: Pte) -> bool { pte.is_valid() || pte.has(MMUFlags::S) }
 
+/// How many page-table pages `space` still lacks to map the `pages` pages from `virt`, none of
+/// which is mapped yet. R4 counts them among what a receiver must be able to pay for before a
+/// message is delivered, so they are counted here and allocated only once the message is
+/// certain: nothing is charged for a delivery that is refused.
+///
+/// The range is contiguous and ascending, so one table serves consecutive pages and its index at
+/// its level never recurs after changing; counting each level's index once as it changes
+/// therefore counts each missing table exactly once.
+pub fn tables_needed(space: &MemoryMapping, virt: usize, pages: usize) -> usize {
+    let mut needed = 0;
+    let mut counted = [usize::MAX; physmap::LEVELS];
+    for i in 0..pages {
+        let addr = virt + i * PAGE_SIZE;
+        let mut table = Some(root_of(space.satp));
+        for level in (1..physmap::LEVELS).rev() {
+            let index = physmap::vpn(addr, level);
+            table = table.and_then(|t| t.child(index));
+            if table.is_none() && counted[level] != index {
+                counted[level] = index;
+                needed += 1;
+            }
+        }
+    }
+    needed
+}
+
 /// Get `virt` in `space` ready for a mapping on behalf of `pid`: allocate the page tables it
 /// needs and check that nothing occupies it. A `map_page_in` there with valid flags then cannot
 /// fail, so a transfer of many pages can prepare them all before it changes anything.

@@ -141,22 +141,25 @@ impl MemoryManager {
         e
     }
 
-    /// `endpoint_create() -> h` (badge 0, the receive right; R9 stamps it with the caller's
-    /// budget). One page, charged to the owner (the cost table).
-    pub fn endpoint_create(&mut self, pid: PID) -> Result<u32, Error> {
-        // As in `budget_create`: only the kernel has no account, and it makes no Redoubt calls.
-        let owner = self.budget_of(pid).ok_or(Error::NotPermitted)?;
+    /// A new endpoint owned by `owner`: one page, charged there (the cost table).
+    pub fn new_endpoint(&mut self, owner: BudgetFrame) -> Result<EndpointRef, Error> {
         self.charge(owner, ENDPOINT_PAGES)?;
         let frame = self.alloc_object_frame().inspect_err(|_| self.uncharge(owner, ENDPOINT_PAGES))?;
         let id = self.next_object_id();
-        let owner_ref = BudgetRef { frame: owner, id: self.budget(owner).id };
-        self.store_endpoint(frame, &Endpoint { id, owner: owner_ref, cursor: None });
-        let handle =
-            Handle { object: Object::Endpoint(EndpointRef { frame, id }), badge: 0, stamp: owner_ref };
-        self.install_handle(pid, handle).inspect_err(|_| {
-            self.free_object_frame(frame);
-            self.uncharge(owner, ENDPOINT_PAGES);
-        })
+        let owner = BudgetRef { frame: owner, id: self.budget(owner).id };
+        self.store_endpoint(frame, &Endpoint { id, owner, cursor: None });
+        Ok(EndpointRef { frame, id })
+    }
+
+    /// `endpoint_create() -> h` (badge 0, the receive right; R9 stamps it with the caller's
+    /// budget).
+    pub fn endpoint_create(&mut self, pid: PID) -> Result<u32, Error> {
+        // As in `budget_create`: only the kernel has no account, and it makes no Redoubt calls.
+        let owner = self.budget_of(pid).ok_or(Error::NotPermitted)?;
+        let e = self.new_endpoint(owner)?;
+        let stamp = self.endpoint(e.frame).owner;
+        self.install_handle(pid, Handle { object: Object::Endpoint(e), badge: 0, stamp })
+            .inspect_err(|_| self.free_endpoint(e.frame, owner))
     }
 
     /// The endpoint `pid`'s handle `index` names, with the handle: `BadHandle`, then
