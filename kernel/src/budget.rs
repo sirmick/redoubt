@@ -464,14 +464,18 @@ impl MemoryManager {
             self.charge(system, frames).expect("boot: the loader's processes do not fit in system");
             self.account_mut(pid).expect("account").frames = frames;
         }
+        let stamp = BudgetRef { frame: root, id: self.budget(root).id };
         if let Some(first) = first {
             for budget in [root, system, users] {
                 let id = self.budget(budget).id;
-                let stamp = BudgetRef { frame: root, id: self.budget(root).id };
                 let handle = Handle { object: Object::Budget(BudgetRef { frame: budget, id }), badge: 0, stamp };
                 self.install_handle(first, handle).expect("boot: no room for the first program's handles");
             }
         }
+        // The machine's devices, charged to `system` and given to the first program as `init`
+        // will receive them (INTERIM, `device.rs`). They come after the three budget handles,
+        // so the first program's table is 1-3 budgets, 4.. devices.
+        self.boot_devices(system, first, stamp);
         self.boot_endpoint(system, &bundle[..nbundle]);
         println!("Budgets: root {} pages, system {} (the loader's processes), users {}", pages, sys_pages, users_pages);
     }
@@ -666,8 +670,10 @@ impl MemoryManager {
         self.sweep_handles(|mm, h| {
             let object_dying = match h.object {
                 Object::Budget(b) => mm.budget_at(b).dying,
-                // An endpoint dies with its owner, so a handle to one is revoked with it.
+                // An endpoint, and a device, die with their owner, so a handle to one is
+                // revoked with it.
                 Object::Endpoint(e) => mm.budget_at(mm.endpoint_at(e).owner).dying,
+                Object::Device(d) => mm.budget_at(mm.device_at(d).owner).dying,
             };
             object_dying || mm.budget_at(h.stamp).dying
         });

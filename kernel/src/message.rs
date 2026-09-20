@@ -49,7 +49,7 @@ use xous_kernel::{MemoryFlags, PID, TID};
 use crate::arch::process::{MAX_PROCESS_COUNT, MAX_THREAD};
 use crate::budget::Class;
 use crate::endpoint::Group;
-use crate::handle::{BudgetRef, EndpointRef, Handle, Object};
+use crate::handle::{BudgetRef, DeviceRef, EndpointRef, Handle, Object};
 use crate::kframe;
 use crate::mem::MemoryManager;
 use crate::services::{PostActivateOp, SystemServices};
@@ -89,7 +89,10 @@ const W_HANDLES: usize = W_NHANDLES + 1; // MAX_MSG_HANDLES * 4 words
 const W_NCALLS: usize = W_HANDLES + MAX_MSG_HANDLES * 4;
 const W_CURRENT: usize = W_NCALLS + 1; // open-call frame + 1
 const W_CALLS: usize = W_CURRENT + 1; // MAX_OPEN_CALLS frame numbers
-const THREAD_WORDS: usize = W_CALLS + MAX_OPEN_CALLS;
+/// While in `receive` on an IRQ handle: the device object's frame + 1, and its id.
+const W_IRQ: usize = W_CALLS + MAX_OPEN_CALLS;
+const W_IRQ_ID: usize = W_IRQ + 1;
+const THREAD_WORDS: usize = W_IRQ_ID + 1;
 const _: () = assert!(THREAD_WORDS * 8 <= PAGE_SIZE);
 
 /// What a blocked thread is waiting for.
@@ -105,6 +108,8 @@ pub enum Wait {
     Receive = 3,
     /// In `receive` with no handle: asleep until the timeout (KERNEL-SPEC.md, `receive`).
     Sleep = 4,
+    /// In `receive` on the IRQ handle this page names, until it fires (R5).
+    Irq = 5,
 }
 
 impl Wait {
@@ -115,6 +120,7 @@ impl Wait {
             2 => Wait::Reply,
             3 => Wait::Receive,
             4 => Wait::Sleep,
+            5 => Wait::Irq,
             // Only the kernel writes these pages.
             _ => panic!("I1: corrupt thread IPC page"),
         }
@@ -159,6 +165,8 @@ struct Slot {
     endpoint: Option<EndpointRef>,
     /// While waiting for a reply, the open call's frame.
     open: u32,
+    /// While waiting in `receive` on an IRQ handle, the device object it named.
+    irq: Option<DeviceRef>,
     max_transfer: usize,
     rec: usize,
     ncalls: usize,
@@ -205,6 +213,10 @@ fn slot(mm: &MemoryManager, pid: PID, tid: TID) -> Slot {
             _ => None,
         },
         open: if reply { frame_of(w(W_ENDPOINT)).unwrap_or(0) } else { 0 },
+        irq: match (wait == Wait::Irq, frame_of(w(W_IRQ))) {
+            (true, Some(frame)) => Some(DeviceRef { frame, id: w(W_IRQ_ID) }),
+            _ => None,
+        },
         max_transfer: w(W_MAX_TRANSFER) as usize,
         rec: w(W_REC) as usize,
         ncalls: (w(W_NCALLS) as usize).min(MAX_OPEN_CALLS),
@@ -723,7 +735,71 @@ fn take_buffer(ss: &SystemServices, pid: PID, addr: usize, npages: usize) {
 
 // --- `receive` -------------------------------------------------------------------------------------
 
-/// `receive(h or none, timeout, max_transfer) -> message | notice` (WP-K3 adds interrupts).
+/// `receive(h(IRQ), timeout)` (R5). The source is unmasked when the receive begins, and the
+/// call returns as soon as `fired` is set, clearing it. There is no acknowledge call: the
+/// source stays masked from the moment it fires until the *next* receive, so a driver that is
+/// busy or gone cannot be stormed by its own device.
+fn receive_irq(
+    ss: &mut SystemServices,
+    mm: &mut MemoryManager,
+    pid: PID,
+    tid: TID,
+    device: DeviceRef,
+    timeout: u64,
+    rec: usize,
+) -> Result<Option<Return>, Error> {
+    set_tword(mm, pid, tid, W_IRQ, frame_word(device.frame));
+    set_tword(mm, pid, tid, W_IRQ_ID, device.id);
+    set_tword(mm, pid, tid, W_REC, rec as u64);
+    mark(mm, pid, tid, Wait::Irq, timeout);
+    // Unmask first, then look at `fired`, in the order R5 states. Unmasking a source that is
+    // already asserted makes it fire again at once, which is what a level-triggered device
+    // wants: the kernel masks it again and the next receive is answered immediately.
+    let mut d = mm.device(device.frame);
+    if d.masked {
+        d.masked = false;
+        mm.store_device(device.frame, &d);
+        crate::arch::irq::enable_irq(d.irq as usize);
+    }
+    irq_ready(ss, mm, device.frame);
+    settle(ss, mm, pid, tid)
+}
+
+/// Hand the interrupt to a thread waiting in `receive` on device `frame`, if one is waiting
+/// and the device has fired. Clearing `fired` here is R5's "returns when `fired` is set
+/// (clearing it)", and it happens exactly once per waiting thread.
+pub fn irq_ready(ss: &mut SystemServices, mm: &mut MemoryManager, frame: u32) {
+    if !mm.device(frame).fired {
+        return;
+    }
+    let id = mm.device(frame).id;
+    let waiting = find_thread(mm, |mm, pid, tid| {
+        let s = slot(mm, pid, tid);
+        (s.wait == Wait::Irq && s.irq == Some(DeviceRef { frame, id })).then_some((pid, tid))
+    });
+    let Some((pid, tid)) = waiting else { return };
+    let mut d = mm.device(frame);
+    d.fired = false;
+    mm.store_device(frame, &d);
+    answer_record(ss, mm, pid, tid, &Received::Interrupt.encode(), Ok(Return::Nothing));
+}
+
+/// R10: a device whose owner budget is dying. Everything waiting on it gets `Dead`, its
+/// source is masked so nothing can raise it again, the handles naming it go (I1: the sweep
+/// that follows reads every handle's object), and its page goes back to its owner.
+pub fn destroy_device(ss: &mut SystemServices, mm: &mut MemoryManager, frame: u32) {
+    let id = mm.device(frame).id;
+    let r = DeviceRef { frame, id };
+    fail_all(ss, mm, Error::Dead, |mm, pid, tid| slot(mm, pid, tid).irq == Some(r));
+    let d = mm.device(frame);
+    if d.kind == crate::device::Kind::Irq {
+        crate::arch::irq::disable_irq(d.irq as usize);
+    }
+    mm.sweep_handles(|_, h| matches!(h.object, Object::Device(x) if x == r));
+    mm.free_device(frame);
+}
+
+/// `receive(h or none, timeout, max_transfer) -> message | notice | interrupt`.
 #[allow(clippy::too_many_arguments)]
 pub fn receive(
     ss: &mut SystemServices,
@@ -744,7 +820,17 @@ pub fn receive(
         mark(mm, pid, tid, Wait::Sleep, timeout);
         return settle(ss, mm, pid, tid);
     };
-    let (endpoint, handle) = mm.endpoint_handle(pid, h)?;
+    // `receive` takes a badge-0 endpoint or an IRQ (KERNEL-SPEC.md, `receive`'s row:
+    // `BadHandle`, then `WrongObject`, then `NotPermitted`). A device handle carries badge 0
+    // always, so only the endpoint case can earn `NotPermitted`.
+    let handle = mm.handle(pid, h)?;
+    let endpoint = match handle.object {
+        Object::Endpoint(e) => e,
+        Object::Device(d) if mm.device_at(d).kind == crate::device::Kind::Irq => {
+            return receive_irq(ss, mm, pid, tid, d, timeout, rec);
+        }
+        _ => return Err(Error::WrongObject),
+    };
     // I4: only a badge-0 handle is a receive right.
     if handle.badge != 0 {
         return Err(Error::NotPermitted);
@@ -1009,6 +1095,7 @@ fn is_live(mm: &MemoryManager, h: Handle) -> bool {
     match h.object {
         Object::Budget(b) => mm.is_live_budget(b),
         Object::Endpoint(e) => mm.is_live_endpoint(e),
+        Object::Device(d) => mm.is_live_device(d),
     }
 }
 
@@ -1267,6 +1354,13 @@ pub fn budgets_dying(ss: &mut SystemServices, mm: &mut MemoryManager) {
         .find(|frame| mm.is_endpoint_frame(*frame) && mm.budget_at(mm.endpoint(*frame).owner).dying)
     {
         destroy_endpoint(ss, mm, frame);
+    }
+    // Devices likewise: destroying the budget they are charged to destroys them, and the
+    // machine's devices are then unreachable for good, there being no way to create one.
+    while let Some(frame) = (0..=mm.objects.high_frame)
+        .find(|frame| mm.is_device_frame(*frame) && mm.budget_at(mm.device(*frame).owner).dying)
+    {
+        destroy_device(ss, mm, frame);
     }
     // Revocation reaches messages already sent (R10): a queued one fails its sender with `Dead`;
     // a taken call fails its caller with `Dead` at once and is abandoned (R3).

@@ -307,6 +307,61 @@ impl MemoryManager {
     #[cfg(baremetal)]
     pub fn ram_frames(&self) -> u64 { self.allocations.len() as u64 }
 
+    /// Whether `[base, end)` touches any of RAM. A device object never may (R11: userspace
+    /// never names RAM by physical address), so the boot checks every one against this.
+    #[cfg(baremetal)]
+    pub fn overlaps_ram(&self, base: u64, end: u64) -> bool {
+        let (ram_start, ram_end) = (self.ram_start as u64, (self.ram_start + self.ram_size) as u64);
+        base < ram_end && ram_start < end
+    }
+
+    /// `npages` contiguous free RAM frames, claimed for `pid`, charged to its budget (R6) and
+    /// zeroed through the physmap (R11: before the process can see them). The physical address
+    /// of the first. `dma_alloc` is the only caller: nothing else needs contiguity.
+    ///
+    /// Nothing changes on failure: the frames are taken and charged one at a time and given
+    /// back if any charge fails.
+    #[cfg(baremetal)]
+    pub fn alloc_contiguous(&mut self, pid: PID, npages: usize) -> Result<usize, redoubt_sys::Error> {
+        // First fit over the ownership table, as `alloc_frame` is, with a run to fill.
+        let mut run = 0;
+        let start = self
+            .allocations
+            .iter()
+            .position(|owner| {
+                run = if owner.is_none() { run + 1 } else { 0 };
+                run == npages
+            })
+            .map(|last| last + 1 - npages)
+            .ok_or(redoubt_sys::Error::OutOfMemory)?;
+        for index in start..start + npages {
+            self.allocations[index] = Some(pid);
+            if self.charge_frame(pid).is_err() {
+                self.allocations[index] = None;
+                for undo in start..index {
+                    self.allocations[undo] = None;
+                    self.uncharge_frame(pid);
+                }
+                return Err(redoubt_sys::Error::OutOfMemory);
+            }
+        }
+        let phys = self.ram_start + start * PAGE_SIZE;
+        for page in 0..npages {
+            for offset in (0..PAGE_SIZE).step_by(8) {
+                crate::kframe::write(phys + page * PAGE_SIZE, offset, 0);
+            }
+        }
+        Ok(phys)
+    }
+
+    /// Give `npages` frames of `pid`'s back (`dma_alloc` unwinding).
+    #[cfg(baremetal)]
+    pub fn free_frames(&mut self, pid: PID, phys: usize, npages: usize) {
+        for page in 0..npages {
+            self.release_page((phys + page * PAGE_SIZE) as *mut usize, pid).ok();
+        }
+    }
+
     /// RAM frames owned by `pid` in the ownership table.
     #[cfg(baremetal)]
     pub fn ram_frames_owned_by(&self, pid: PID) -> usize {
@@ -1106,6 +1161,150 @@ impl MemoryManager {
             system_services.get_process(current_pid).unwrap().activate().unwrap();
         })
     }
+}
+
+// --- The Redoubt memory calls (KERNEL-SPEC.md; R11) ------------------------------------------
+//
+// `map_anon`, `unmap` and `set_flags`, which replace the legacy `MapMemory`/`UnmapMemory`/
+// `UpdateMemoryFlags` for Redoubt programs (WP-K6 deletes those). Three rules of R11 shape
+// them: no mapping is ever writable and executable (`Pte::leaf` refuses it, as decoding
+// already did), every page is zeroed before a process first sees it, and **userspace never
+// names an address**: the kernel chooses where each mapping lands, so none of these calls
+// takes a physical address and only `map_anon` returns a virtual one.
+//
+// `map_anon` backs and charges every page at once rather than reserving it for demand paging.
+// The spec's row says "pages charged", and a process that is told it has memory and then
+// faults for want of it has been told a lie; the legacy path's reservations stay where they
+// are, for the legacy path.
+#[cfg(baremetal)]
+impl MemoryManager {
+    /// A range argument: page-aligned, non-empty, and wholly inside user space. Its end.
+    fn user_range(addr: usize, len: usize) -> Result<usize, redoubt_sys::Error> {
+        let bad = redoubt_sys::Error::InvalidArgument;
+        if len == 0 || len % PAGE_SIZE != 0 || addr % PAGE_SIZE != 0 {
+            return Err(bad);
+        }
+        let end = addr.checked_add(len).ok_or(bad)?;
+        if end > USER_AREA_END { Err(bad) } else { Ok(end) }
+    }
+
+    /// `map_anon(len, flags) -> addr`: zeroed pages, charged to the caller's budget, at an
+    /// address the kernel chooses.
+    pub fn map_anon(
+        &mut self,
+        pid: PID,
+        len: usize,
+        flags: redoubt_sys::MemFlags,
+    ) -> Result<usize, redoubt_sys::Error> {
+        let bad = redoubt_sys::Error::InvalidArgument;
+        if len == 0 || len % PAGE_SIZE != 0 {
+            return Err(bad);
+        }
+        let flags = redoubt_flags(flags);
+        // The row's own check: no permission at all, or writable without readable.
+        let writable = flags & MemoryFlags::W == MemoryFlags::W;
+        let readable = flags & MemoryFlags::R == MemoryFlags::R;
+        if flags.is_empty() || (writable && !readable) {
+            return Err(bad);
+        }
+        let at = self
+            .find_virtual_address(core::ptr::null_mut(), len, xous_kernel::MemoryType::Default)
+            .map_err(|_| redoubt_sys::Error::OutOfMemory)? as usize;
+        for offset in (0..len).step_by(PAGE_SIZE) {
+            let done = || (0..offset).step_by(PAGE_SIZE);
+            let Ok(phys) = self.alloc_page(pid) else {
+                self.undo_anon(pid, at, done());
+                return Err(redoubt_sys::Error::OutOfMemory);
+            };
+            // Zeroed through the physmap, before the mapping exists at all (R11).
+            for word in (0..PAGE_SIZE).step_by(8) {
+                crate::kframe::write(phys, word, 0);
+            }
+            if crate::arch::mem::map_page_inner(self, pid, phys, at + offset, flags, true).is_err() {
+                self.release_page(phys as *mut usize, pid).ok();
+                self.undo_anon(pid, at, done());
+                return Err(redoubt_sys::Error::OutOfMemory);
+            }
+        }
+        Ok(at)
+    }
+
+    /// Give back the pages a failed `map_anon` had already mapped.
+    fn undo_anon(&mut self, pid: PID, at: usize, done: impl Iterator<Item = usize>) {
+        for offset in done {
+            if let Ok(phys) = crate::arch::mem::unmap_page_inner(self, at + offset) {
+                self.release_page(phys as *mut usize, pid).ok();
+            }
+        }
+    }
+
+    /// `unmap(addr, len)`: the whole range must be the caller's own mapping and not lent out
+    /// (I9), checked before any page moves. RAM goes back to the free pool and to the
+    /// caller's budget; a device's pages are not RAM and only lose their mapping.
+    pub fn unmap(&mut self, pid: PID, addr: usize, len: usize) -> Result<(), redoubt_sys::Error> {
+        let end = Self::user_range(addr, len)?;
+        for page in (addr..end).step_by(PAGE_SIZE) {
+            self.owned_mapping(pid, page)?;
+        }
+        for page in (addr..end).step_by(PAGE_SIZE) {
+            let phys = crate::arch::mem::unmap_page_inner(self, page).expect("checked just above");
+            self.release_page(phys as *mut usize, pid).ok();
+        }
+        Ok(())
+    }
+
+    /// `set_flags(addr, len, flags)`: the same range rules, then each page gets exactly the
+    /// permissions asked for. W+X cannot be decoded and `Pte::leaf` refuses it again.
+    pub fn set_flags(
+        &mut self,
+        pid: PID,
+        addr: usize,
+        len: usize,
+        flags: redoubt_sys::MemFlags,
+    ) -> Result<(), redoubt_sys::Error> {
+        let bad = redoubt_sys::Error::InvalidArgument;
+        let end = Self::user_range(addr, len)?;
+        let flags = redoubt_flags(flags);
+        if flags.is_empty() {
+            return Err(bad);
+        }
+        for page in (addr..end).step_by(PAGE_SIZE) {
+            self.owned_mapping(pid, page)?;
+        }
+        for page in (addr..end).step_by(PAGE_SIZE) {
+            crate::arch::mem::set_user_page_flags(page, flags).map_err(|_| bad)?;
+        }
+        Ok(())
+    }
+
+    /// The frame behind `page`, which must be a live user mapping of the caller that is not
+    /// lent out and, if it is RAM, is credited to the caller (a lend the caller is holding is
+    /// its lender's, not its own).
+    fn owned_mapping(&self, pid: PID, page: usize) -> Result<usize, redoubt_sys::Error> {
+        let bad = redoubt_sys::Error::InvalidArgument;
+        let phys = crate::arch::mem::user_mapping(page).ok_or(bad)?;
+        let ram = self.is_main_memory(phys as *mut u8);
+        if ram && self.allocations[(phys - self.ram_start) / PAGE_SIZE] != Some(pid) {
+            return Err(bad);
+        }
+        Ok(phys)
+    }
+}
+
+/// The ABI's flags as the page-table layer's. There is no W+X: `MemFlags` cannot hold it.
+#[cfg(baremetal)]
+fn redoubt_flags(flags: redoubt_sys::MemFlags) -> MemoryFlags {
+    let mut out = MemoryFlags::FREE;
+    for (bit, flag) in [
+        (redoubt_sys::MemFlags::READ, MemoryFlags::R),
+        (redoubt_sys::MemFlags::WRITE, MemoryFlags::W),
+        (redoubt_sys::MemFlags::EXECUTE, MemoryFlags::X),
+    ] {
+        if flags.bits() & bit.bits() != 0 {
+            out = out | flag;
+        }
+    }
+    out
 }
 
 /// Zero the memory in `start..end` with volatile writes.
