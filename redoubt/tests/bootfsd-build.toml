@@ -1,0 +1,9 @@
+description = "bootfsd builds for both widths (BUILD-PLAN.md: rv32 keeps compiling)"
+arch = ["rv64", "rv32"]
+kind = "build"
+# `cargo build -p redoubt-bootfsd` builds the library and its one bin, `bootfsd`. Booting it on
+# the box needs WP-K4 and WP-R3 (an `init` that can start it from the manifest and fill `/boot`
+# from the bundle); until then `bootfsd`'s behaviour is covered by host tests against the
+# runtime's fake kernel (`redoubt/bootfsd/tests/`, which include WP-W1's 9P conformance
+# vectors), and this case covers the configuration the bench cannot boot yet.
+package = "redoubt-bootfsd"

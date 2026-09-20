@@ -623,3 +623,23 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   on Opus; Fable's credits had run out. Kernel 14.9k -> 15.6k lines, loader 1.1k -> 1.3k, kernel
   core `unsafe` 21 -> 20 (the legacy contiguous-DMA allocator `dma_alloc` replaces was deleted).
 
+- **WP-R4 bootfsd and consoled**: the first two 9P servers, and the runtime pieces they needed.
+  `bootfsd` holds no bundle and parses no archive: `init` reads it and hands over the public
+  entries' bytes through a new two-message table in NAMESPACES.md (`bootfs`: `add`, `seal`, opcodes
+  16 and 17, since `ninep_common` reserves 1-15 on a 9P endpoint), so the manifest never enters its
+  address space and answer 123 holds by construction rather than by a filter; setup is refused from
+  every minted connection and for good after `seal`. `consoled` is two threads over one UART: one
+  waits on the IRQ handle and sends a word, the other owns the registers, serves 9P and **parks** a
+  read it cannot answer. That joined `Parked` to the 9P skeleton, which parked.rs had flagged as
+  missing: `serve_parking` hands a held request back with its T-message untouched in its own lend,
+  so serving it again answers it and the skeleton keeps nothing meanwhile, and `Parked` now borrows
+  the server's `Admission` instead of owning one, so fids and parked calls share buckets and shares.
+  `FOREVER` as the longest wait means no deadline, which a read waiting on a person needs. The
+  runtime gained `handle::Registers`, a bounds-checked volatile MMIO region (+2 `unsafe` in
+  `redoubt-rt`, 9 -> 11), so both servers — and every driver after them — are
+  `#![forbid(unsafe_code)]`: two `unsafe` in one audited place instead of two per driver. Neither
+  server can be booted until WP-K4 and WP-R3 write a startup block, so the bench runs their host
+  tests against the fake kernel, which WP-R4 taught device objects, `map_device`, `receive` on an
+  IRQ handle and `thread_create`; WP-W1's 9P vectors run against both servers. The case BUILD-PLAN
+  names — typing on the UART reaches a 9P reader — runs there today, through both threads and a
+  fake ns16550.

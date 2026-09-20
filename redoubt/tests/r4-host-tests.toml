@@ -1,0 +1,7 @@
+description = "bootfsd and consoled host tests: the whole programs against the fake kernel, and WP-W1's 9P conformance vectors run against both"
+kind = "host-tests"
+# The two servers cannot be booted until WP-K4 and WP-R3 give them a startup block, so the
+# bench runs their host tests instead of nothing: `/boot` filled and read back byte for byte
+# with the manifest's own name refused exactly as a name that never existed, and typing on a
+# fake ns16550 reaching a 9P reader through a parked call.
+packages = ["redoubt-bootfsd", "redoubt-consoled"]

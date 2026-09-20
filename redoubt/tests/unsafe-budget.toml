@@ -74,12 +74,25 @@ max_undocumented = 0
 [[budget]]
 name = "redoubt-rt (native runtime): the heap's free lists, page buffers and lends, the startup page"
 paths = ["redoubt/rt/src"]
-max_unsafe = 9
+# WP-R4: +2, `handle::Registers`, the one place a driver's MMIO loads and stores live. It is a
+# volatile byte read and a volatile byte write, each bounds-checked against the length
+# `map_device` reported, so `consoled` -- and every driver after it -- needs no `unsafe` of its
+# own and can say `#![forbid(unsafe_code)]`. Two here instead of two per driver.
+max_unsafe = 11
 max_undocumented = 0
 
 [[budget]]
 name = "keyd (holds every private key; signs, never exports)"
 paths = ["redoubt/keyd/src"]
 # WP-S1: none, and the crate says `#![forbid(unsafe_code)]`, so this can only stay at 0.
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
+# WP-R4: the first two 9P servers. Both say `#![forbid(unsafe_code)]`: `bootfsd` never touches
+# memory it was not handed, and `consoled` reaches its UART through `redoubt-rt`'s `Registers`,
+# so neither can raise this from 0 without deleting that line.
+name = "bootfsd and consoled (the first two 9P servers)"
+paths = ["redoubt/bootfsd/src", "redoubt/consoled/src"]
 max_unsafe = 0
 max_undocumented = 0
