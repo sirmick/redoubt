@@ -61,6 +61,12 @@ impl<T: Transport> Disk<T> {
     /// afterwards.
     pub fn read(&mut self, sector: u64, out: &mut [u8]) -> Result<(), DeviceError> {
         let bytes = self.check_span(sector, out.len())?;
+        // The data buffer is cleared before the device is asked to fill it, so a device that
+        // writes fewer bytes than it was given — or none — hands back zeros rather than what the
+        // last request left there, which may have been another client's. A hostile device can
+        // choose the bytes it returns anyway, but `blkd` itself never passes one client's data to
+        // another, and that does not depend on the device at all.
+        self.clear_data(bytes)?;
         let chain = Chain::of(&[
             Segment { off: HEADER_OFF, len: HEADER_BYTES, device_writes: false },
             Segment { off: DATA_OFF, len: bytes, device_writes: true },
@@ -156,6 +162,20 @@ impl<T: Transport> Disk<T> {
             // Not one of the three §5.2.6 defines: the device is not speaking virtio-blk.
             _ => Err(DeviceError::Io),
         }
+    }
+
+    /// Zeroes the first `bytes` of the data buffer, a page at a time so the zeros are a constant
+    /// rather than an allocation.
+    fn clear_data(&mut self, bytes: u32) -> Result<(), DeviceError> {
+        const ZEROS: [u8; 512] = [0; 512];
+        let mut done = 0usize;
+        let total = bytes as usize;
+        while done < total {
+            let n = ZEROS.len().min(total - done);
+            self.transport.dma_write(DATA_OFF + done, &ZEROS[..n]).map_err(|e| self.break_on(e.into()))?;
+            done += n;
+        }
+        Ok(())
     }
 
     /// Marks the device broken and returns the error that did it.

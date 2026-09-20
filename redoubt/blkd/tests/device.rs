@@ -283,6 +283,24 @@ fn lies_that_are_not_protocol_violations_are_still_harmless() {
     }
 }
 
+/// A device that writes fewer bytes than it was given hands back zeros, not what the last
+/// request left in the buffer. `blkd` never passes one client's data to another, and that does
+/// not rest on the device behaving.
+#[test]
+fn a_short_write_reads_back_as_zeros_not_as_the_last_requests_bytes() {
+    let device = device();
+    let mut disk = up(&device).expect("bring-up");
+    // A write leaves a whole sector of 0xaa in the DMA data buffer.
+    let secret = vec![0xaa; SECTOR];
+    disk.write(300, &secret).expect("write");
+    device.set_policy(Policy { short_write: true, ..P });
+    let mut back = vec![0xff; SECTOR];
+    disk.read(400, &mut back).expect("the read itself succeeds");
+    assert!(!back.contains(&0xaa), "the last request's bytes came back");
+    assert!(back[SECTOR / 2..].iter().all(|b| *b == 0), "the unwritten half is not zeroed");
+    assert_eq!(device.strayed(), 0);
+}
+
 /// A request that cannot be one is refused before the device sees it, and does not break the
 /// device: a client asking for too much must not cost anyone else the disk.
 #[test]
