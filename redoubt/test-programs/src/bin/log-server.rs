@@ -106,10 +106,11 @@ fn uart_irq(arg: usize) -> ! {
     let console = unsafe { &mut *(arg as *mut Console) };
     loop {
         match rd::receive(Some(rd::CONSOLE_IRQ), rd::FOREVER, 0) {
-            // One byte per interrupt, deliberately: the FIFO is left asserted, so the next
-            // `receive` must unmask the source and take the interrupt it raises again. On a
-            // kernel that did not mask the source when it fired, the hart would trap on the
-            // still-asserted level for ever and never reach here at all (`uart-irq`).
+            // One byte per interrupt, deliberately: the FIFO is left with data in it, so
+            // every byte needs its own interrupt and the next `receive` must unmask the
+            // source again. (It does not catch a kernel that forgets to *mask* a fired
+            // source: QEMU's 16550 raises the controller once per byte pushed rather than
+            // from a continuing level, so nothing storms. `uart-irq` says so.)
             Ok(rd::Received::Interrupt) => {
                 if let Some(byte) = console.receive() {
                     console.say(Line::Received(byte as char));
