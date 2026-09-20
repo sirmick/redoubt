@@ -705,6 +705,38 @@ pub fn user_frame(virt: usize, write: bool) -> Result<usize, redoubt_sys::Error>
     Ok(pte.phys())
 }
 
+/// `set_flags` (KERNEL-SPEC.md, R11): give a mapped user page exactly the permissions
+/// `flags` asks for, keeping everything else about the entry (its frame, `USER`, the
+/// accessed and dirty bits). Unlike the legacy `update_page_flags`, which only strips, this
+/// may also add one: a program maps a page writable, writes code into it, and then makes it
+/// executable and not writable, which is what W^X asks of it. `Pte::leaf` refuses the
+/// combination that would break W^X, as decoding already did.
+///
+/// A page that is not the caller's own live mapping -- unmapped, reserved but never touched,
+/// or lent out -- is `BadAddress`, which the caller reports as `InvalidArgument`.
+pub fn set_user_page_flags(virt: usize, flags: MemoryFlags) -> Result<(), xous_kernel::Error> {
+    let wanted = translate_flags(flags);
+    check_permissions(wanted)?;
+    let slot = walk(current_root(), virt, None)?;
+    let pte = slot.get();
+    if !pte.is_valid() || pte.has(MMUFlags::S) || !pte.has(MMUFlags::USER) {
+        return Err(xous_kernel::Error::BadAddress);
+    }
+    let keep = pte.flags() - (MMUFlags::R | MMUFlags::W | MMUFlags::X);
+    slot.set(Pte::leaf(pte.phys(), keep | wanted));
+    flush_tlb();
+    Ok(())
+}
+
+/// Whether `virt` is a live, user-visible mapping of the current address space that is not
+/// lent out: what `unmap` and `set_flags` need of every page before either changes one
+/// (WP-K0's rule: check the whole range first). The frame it maps, for the caller to check
+/// who owns it.
+pub fn user_mapping(virt: usize) -> Option<usize> {
+    let pte = walk(current_root(), virt, None).ok()?.get();
+    (pte.is_valid() && pte.has(MMUFlags::USER) && !pte.has(MMUFlags::S)).then(|| pte.phys())
+}
+
 /// Determine whether a virtual address has been mapped
 pub fn address_available(virt: usize) -> bool {
     virt_to_phys(virt).is_err_and(|e| e == xous_kernel::Error::BadAddress)

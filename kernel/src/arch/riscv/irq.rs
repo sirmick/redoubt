@@ -275,14 +275,29 @@ pub extern "C" fn trap_handler(
             let pending = intc::pending();
 
             if let Some(irq) = pending {
-                // Remember who to resume once the userspace handler returns.
-                PREVIOUS_PAIR.with(|previous| {
-                    if previous.is_none() {
-                        *previous = Some((pid, crate::arch::process::current_tid()));
-                    }
-                });
-                HANDLING_IRQ.store(true, Ordering::Relaxed);
-                crate::irq::handle(irq).expect("Couldn't handle IRQ");
+                // R5: an interrupt with a device object is the kernel's to record, not a
+                // callback: it masks the source, sets `fired` and wakes whoever is in
+                // `receive` on the handle. Nothing runs in userspace on the way, so there is
+                // no ISR to return from and no pair to remember; completing the claim is all
+                // that is left before resuming whatever was interrupted.
+                if crate::device::irq_wanted(irq) {
+                    // The claim is completed *first*, while the source is still enabled: a
+                    // PLIC silently ignores a completion for a source that is not, and would
+                    // then never raise that source again. `irq_fired` masks it straight
+                    // after, so nothing is delivered in between (the hart takes no trap in
+                    // supervisor mode), and the next `receive` unmasks it.
+                    enable_all_irqs();
+                    crate::device::irq_fired(irq);
+                } else {
+                    // Remember who to resume once the userspace handler returns.
+                    PREVIOUS_PAIR.with(|previous| {
+                        if previous.is_none() {
+                            *previous = Some((pid, crate::arch::process::current_tid()));
+                        }
+                    });
+                    HANDLING_IRQ.store(true, Ordering::Relaxed);
+                    crate::irq::handle(irq).expect("Couldn't handle IRQ");
+                }
             }
             ArchProcess::with_current_mut(|process| {
                 crate::arch::syscall::resume(current_pid().get() == 1, process.current_thread())

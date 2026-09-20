@@ -28,6 +28,20 @@ pub fn early_init() {
 
 pub fn init() { rand::init(); }
 
+/// `system_reset` through the SBI SRST extension. The firmware does not return from either.
+pub fn reset(reboot: bool) -> ! {
+    if reboot {
+        sbi_rt::system_reset(sbi_rt::ColdReboot, sbi_rt::NoReason);
+    } else {
+        sbi_rt::system_reset(sbi_rt::Shutdown, sbi_rt::NoReason);
+    }
+    // Only reached if the firmware refused (a machine with no SRST implementation).
+    println!("system_reset: the firmware refused; halting");
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
 /// `SysCall::PlatformSpecific` for SBI platforms. Numbers are in `xous::arch::platform_call`.
 pub fn platform_call(pid: xous_kernel::PID, op: usize, a2: usize, _a3: usize) -> Result<xous_kernel::Result, xous_kernel::Error> {
     use xous_kernel::arch::platform_call::*;

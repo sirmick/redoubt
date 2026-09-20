@@ -11,10 +11,11 @@
 //! (alignment, then lying in the caller's own memory, then their slots); then the call's own
 //! checks, which live with the objects (`budget.rs`, `handle.rs`).
 //!
-//! Built so far (WP-K1, WP-K2): `handle_close`, `budget_create`, `budget_destroy`,
+//! Built so far (WP-K1, WP-K2, WP-K3): `handle_close`, `budget_create`, `budget_destroy`,
 //! `budget_usage`, `time_now`, `random`, `endpoint_create`, `mint`, `call`, `send`, `receive`,
-//! `reply`, `serve`. Every other call decodes, then gets `InvalidArgument` until its package
-//! builds it (WP-K3 to WP-K5).
+//! `reply`, `serve`, `map_anon`, `unmap`, `set_flags`, `map_device`, `dma_alloc`,
+//! `system_reset`. Every other call (the `process_*` and `thread_*` family) decodes, then gets
+//! `InvalidArgument` until its package builds it (WP-K4).
 
 use redoubt_sys::{
     BUDGET_SPEC_SLOTS, BudgetSpec, Call, Error, Number, REGS, Return, USAGE_SLOTS,
@@ -105,6 +106,24 @@ fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
             crate::message::reply(ss, mm, pid, tid, msg_id.get(), body_rec).map(done)
         }),
         Call::Serve { msg_id } => MemoryManager::with_mut(|mm| crate::message::serve(mm, pid, tid, msg_id.get())).map(done),
+        Call::MapAnon { len, flags } => {
+            MemoryManager::with_mut(|mm| mm.map_anon(pid, len, flags)).map(|at| Some(Return::Addr(at)))
+        }
+        Call::Unmap { addr, len } => MemoryManager::with_mut(|mm| mm.unmap(pid, addr, len)).map(done),
+        Call::SetFlags { addr, len, flags } => {
+            MemoryManager::with_mut(|mm| mm.set_flags(pid, addr, len, flags)).map(done)
+        }
+        Call::MapDevice { device } => {
+            MemoryManager::with_mut(|mm| mm.map_device(pid, device.index())).map(|at| Some(Return::Addr(at)))
+        }
+        Call::DmaAlloc { device, npages } => MemoryManager::with_mut(|mm| {
+            let (addr, phys) = mm.dma_alloc(pid, device.index(), npages)?;
+            Ok(Some(Return::Dma { addr, phys }))
+        }),
+        // On success this does not return: the machine powers off or reboots.
+        Call::SystemReset { device, kind } => {
+            MemoryManager::with(|mm| mm.system_reset(pid, device.index(), kind)).map(done)
+        }
         Call::TimeNow => Ok(Some(Return::Time(crate::arch::irq::timer::now_us()))),
         Call::Random => {
             let mut bytes = [0u8; 8];

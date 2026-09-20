@@ -58,11 +58,19 @@ pub struct EndpointRef {
     pub id: u64,
 }
 
-/// What a handle names. WP-K4 adds processes and WP-K3 devices.
+/// A device, named by frame and by id, like an endpoint (`device.rs`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct DeviceRef {
+    pub frame: u32,
+    pub id: u64,
+}
+
+/// What a handle names. WP-K4 adds processes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Object {
     Budget(BudgetRef),
     Endpoint(EndpointRef),
+    Device(DeviceRef),
 }
 
 /// KERNEL-SPEC.md, Handle = (object, badge, stamp).
@@ -76,6 +84,7 @@ pub struct Handle {
 /// Object kinds in a handle's first word; 0 is an empty slot.
 const KIND_BUDGET: u64 = 1;
 const KIND_ENDPOINT: u64 = 2;
+const KIND_DEVICE: u64 = 3;
 
 impl Handle {
     /// A handle as the four words a table slot holds. `message.rs` keeps copies in the same
@@ -84,6 +93,7 @@ impl Handle {
         let (kind, frame, id) = match self.object {
             Object::Budget(b) => (KIND_BUDGET, b.frame, b.id),
             Object::Endpoint(e) => (KIND_ENDPOINT, e.frame, e.id),
+            Object::Device(d) => (KIND_DEVICE, d.frame, d.id),
         };
         let mask = (1u64 << FRAME_BITS) - 1;
         let (of, sf) = (u64::from(frame), u64::from(self.stamp.frame));
@@ -99,6 +109,7 @@ impl Handle {
             0 => return None,
             KIND_BUDGET => Object::Budget(BudgetRef { frame: frame(0), id: words[1] }),
             KIND_ENDPOINT => Object::Endpoint(EndpointRef { frame: frame(0), id: words[1] }),
+            KIND_DEVICE => Object::Device(DeviceRef { frame: frame(0), id: words[1] }),
             // Only the kernel writes table pages.
             _ => panic!("I1: corrupt handle table"),
         };
@@ -163,6 +174,9 @@ impl MemoryManager {
             }
             Object::Endpoint(e) => {
                 self.endpoint_at(e);
+            }
+            Object::Device(d) => {
+                self.device_at(d);
             }
         }
         self.budget_at(handle.stamp);

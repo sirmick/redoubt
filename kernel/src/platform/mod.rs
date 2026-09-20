@@ -20,6 +20,23 @@ pub fn early_init() {
     self::sbi::early_init();
 }
 
+/// Power the machine off, or reboot it (`system_reset`; KERNEL-SPEC.md). The kernel owns no
+/// reset device: on every platform we support the firmware does it (SBI SRST), which is also
+/// how a kernel panic ends a test run (BOOT.md).
+#[cfg(baremetal)]
+pub fn reset(reboot: bool) -> ! {
+    #[cfg(feature = "sbi")]
+    self::sbi::reset(reboot);
+    #[cfg(not(feature = "sbi"))]
+    {
+        let _ = reboot;
+        println!("system_reset: no firmware to ask; halting");
+        loop {
+            core::hint::spin_loop();
+        }
+    }
+}
+
 /// Platform specific initialization.
 #[cfg(not(any(unix, windows)))]
 pub fn init() {
