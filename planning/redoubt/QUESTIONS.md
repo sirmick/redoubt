@@ -5,7 +5,7 @@ so each needs your decision; the answer goes into the named note with a HISTORY.
 **Rec** is the orchestrator's recommendation. Reply with numbers, e.g. "all Rec except 7: ...".
 
 **1-126 answered 2026-09-19** (ANSWERS.md, seven tranches; each "Answered" line says where the
-answer now lives). **Open: 127-128**, **138-140** (from WP-K2) and **141** (from WP-S1) and **142-146** (from WP-K3) and **147** (from WP-D1) and **129-137** (userland,
+answer now lives). **Open: 127-128**, **138-140** (from WP-K2) and **141** (from WP-S1) and **142-146** (from WP-K3) and **147** (from WP-D1) and **148-149** (from WP-R4) and **129-137** (userland,
 USERLAND.md), at the end. The round-4 answers revised 56 (handle kinds are checked by use) and replaced 57 and 58 (by
 82); a later tranche replaced 103 (no `first` flag and no strict priority: one stride queue for
 every budget); the tranche for 120-126 accepted every recommendation and added one change to what
@@ -1199,4 +1199,25 @@ on the box); 132 and 133 block the shell's pipelines, 135 blocks launching from 
      the window without hardware confinement. If you would rather not have the kernel touch a
      device register, the alternative is to keep a dead driver's DMA frames out of the pool until
      its successor resets the device, which costs memory instead.
+
+## From bootfsd and consoled (WP-R4)
+
+148. **How the bundle reaches `bootfsd`.** INIT.md says only that `init` passes the public list to
+     `bootfsd` as its arguments. WP-R4 chose that **`bootfsd` never sees the bundle**: `init` reads
+     it and pushes the public bytes over a two-message typed protocol (`bootfs`, opcodes 16 and 17:
+     `add` appends to a name already in its argument list at exactly the offset reached so far,
+     `seal` ends setup and refuses both for ever). Before `seal` the directory is empty; after it
+     nothing can be added, and neither message is accepted on a minted connection, so only `init`'s
+     founding handle can fill `/boot`.
+     *Rec:* accept. Answer 123 then holds by construction rather than by a filter that could be
+     wrong, and the bundle — which carries keyd's seeds until milestone 2 seals them — never enters
+     a server that answers user requests. The table is in NAMESPACES.md, which owns `bootfsd`.
+
+149. **How a device with both an MMIO region and an interrupt is named.** The manifest's `devices`
+     list gives one entry per device object, but a UART or a disk is two objects, and a driver has
+     to find each in its startup block. Three packages have now chosen their own convention: blkd
+     wants `disk` and `disk-irq`, consoled takes `uart` and `uart:irq`.
+     *Rec:* one rule in INIT.md: an MMIO region and its interrupt are separate manifest entries and
+     separate named handles, `NAME` and `NAME-irq`, both under the manifest's name rule (which
+     allows `-` but not `:`). WP-R3 enforces it, and blkd and consoled follow.
 
