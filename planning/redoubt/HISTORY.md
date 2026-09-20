@@ -605,4 +605,21 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   having two, and was verified by bypassing the first. Interim until K4 and K5: one boot endpoint,
   a per-PID page reservation (question 127), and polled deadlines. Kernel 12.9k -> 14.9k lines;
   `unsafe` unchanged.
+- **WP-K3 device objects and interrupts** (`12c52c2d7`): the machine's devices became kernel objects. The
+  loader reads the device tree and describes each MMIO region (with a DMA flag for bus masters),
+  each wired interrupt and the reset right in a `Devs` tag, and reports the interrupt controllers'
+  ranges in a `Ctrl` tag; the kernel makes one page-sized object per entry and refuses to boot on an
+  entry overlapping RAM or a controller. `map_device` maps the whole range and returns its length
+  (question 146), `dma_alloc` returns contiguous zeroed pages and their physical address, the only
+  call that does and only through a DMA handle, and `system_reset` goes through SBI. R5 has no
+  acknowledge call and no handler: the kernel completes the controller's claim while the source is
+  still enabled, masks it, and wakes whoever is in `receive`; the next `receive` unmasks.
+  `map_anon`, `unmap` and `set_flags` landed with them. The review reproduced the one real hole: the
+  controller exclusion was a loader heuristic with no kernel backstop, so a device tree whose PLIC
+  node lacked one property handed the PLIC and CLINT to userspace; the check now lives in the
+  kernel, verified by mutation in both directions. Two halves of R5 remain unprovable on QEMU (its
+  16550 pulses the controller's pending bit rather than holding a level, and its PLIC accepts a
+  completion for a disabled source): `uart-irq` says so rather than claiming a catch. Reviewers ran
+  on Opus; Fable's credits had run out. Kernel 14.9k -> 15.6k lines, loader 1.1k -> 1.3k, kernel
+  core `unsafe` 21 -> 20 (the legacy contiguous-DMA allocator `dma_alloc` replaces was deleted).
 

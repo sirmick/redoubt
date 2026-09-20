@@ -60,8 +60,9 @@ paths = [
 # casting it to a struct it is not aligned for, and args.rs prints a tag name through
 # `str::from_utf8` instead of building a slice by hand.
 # WP-K3: device.rs joins the list with none of its own (it reaches frames through kframe.rs
-# and the page tables through arch::mem), so the total is unchanged.
-max_unsafe = 21
+# and the page tables through arch::mem). -1: the legacy contiguous allocation for a device,
+# which `dma_alloc` replaces, is deleted, and its `bzero` of the freshly mapped pages with it.
+max_unsafe = 20
 max_undocumented = 0
 
 [[budget]]

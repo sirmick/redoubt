@@ -8,22 +8,25 @@ debug_assertions = true
 # every byte from a thread blocked in `receive` on the console's IRQ handle. No grants: the
 # handle is the authority now (DEVICE-GRANTS.md, Replacement).
 programs = ["log-server"]
-# The server reads **one byte per interrupt**, so it leaves the FIFO asserted and every byte
-# needs its own interrupt. That makes both halves of R5 visible:
-#
-# - a kernel whose `receive` does not unmask the source echoes nothing at all;
-# - a kernel that does not mask the source when it fires never gets back to userspace. The
-#   level is still asserted when the trap returns, so the hart traps again at once and for
-#   ever, and the first byte is never echoed.
-#
+# The server reads **one byte per interrupt**, so every byte needs an interrupt of its own and
+# the FIFO is left with data in it. What that pins: a kernel whose `receive` does not unmask
+# the source echoes nothing at all, and one that unmasks only the first time stops after 'x'.
 # The first three bytes are typed one at a time, each only after the one before was echoed;
-# the last two are typed together, so the second is answered from a source that re-asserted
-# while the driver was running rather than from a fresh keystroke.
+# the last two are typed together, so the second is answered from a source that fired while
+# the driver was running rather than from a fresh keystroke.
 #
-# What this still cannot show: that the interrupt controller's claim is completed *before* the
-# source is masked. The PLIC specification says a completion for a source that is not enabled
-# is silently ignored (so the source would never fire again), but QEMU 8.2's model accepts it,
-# and no case can tell the two orders apart on this machine. That one is read, not tested.
+# Two halves of R5 this still does not catch, tried and measured rather than assumed:
+#
+# - **the masking.** A kernel that never masks a fired source was expected to trap for ever on
+#   the still-asserted level and never reach userspace. It does not, here: QEMU's 16550 sets
+#   the controller's pending bit once per byte it pushes rather than from a continuing level,
+#   so with the FIFO unread and the claim completed nothing re-raises. The case passes with the
+#   masking deleted. It would not on hardware that holds the line.
+# - **the completion order.** The PLIC specification says a completion for a source that is not
+#   enabled is silently ignored, so completing after masking would lose the source for good;
+#   QEMU 8.2 accepts it anyway, and no case can tell the two orders apart on this machine.
+#
+# Both are matters of reading the kernel until there is a device model that holds a level.
 expect = [
     '^\[server\] holding the console irq$',
     "^\\[server\\] irq: received 'x'$",
