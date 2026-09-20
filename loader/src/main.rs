@@ -137,6 +137,8 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     }
     args.end();
 
+    emit_devices(&mut args, &platform);
+
     match &platform.plic {
         Some(plic) => {
             println!("  plic: {:#x}, S-mode context {}", plic.range.start, plic.context);
@@ -276,6 +278,68 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
             KERNEL_STACK_TOP - STACK_PADDING,
         )
     }
+}
+
+/// Describe the machine's devices to the kernel, which turns each entry into a device object
+/// (KERNEL-SPEC.md, Device; DEVICE-GRANTS.md, Replacement). One `Devs` tag of fixed six-word
+/// entries: kind, then two 64-bit values (low word first) and a flag word.
+///
+/// | Kind | a | b | flags |
+/// | --- | --- | --- | --- |
+/// | 1 MMIO | physical base | size in bytes, whole pages | bit 0: the device does DMA |
+/// | 2 IRQ | interrupt number | 0 | 0 |
+/// | 3 Reset | 0 | 0 | 0 |
+///
+/// **The order is INTERIM** (WP-K3; WP-R3 removes it). `init` will be told which handle is
+/// which by the boot manifest, but there is no `init` yet: the kernel hands every device
+/// object to the bundle's first program, in this order, so that a test program can name one
+/// without a manifest. Reset first, then the console named by `/chosen/stdout-path` and its
+/// interrupt, then every other region in device-tree order and every other interrupt
+/// ascending.
+fn emit_devices(args: &mut args::ArgsBuilder, platform: &Platform) {
+    const MMIO: u32 = 1;
+    const IRQ: u32 = 2;
+    const RESET: u32 = 3;
+    fn entry(args: &mut args::ArgsBuilder, kind: u32, a: u64, b: u64, flags: u32) {
+        args.word(kind);
+        args.word64(a);
+        args.word64(b);
+        args.word(flags);
+    }
+    fn mmio(args: &mut args::ArgsBuilder, r: &dt::MmioRegion) {
+        let size = r.range.len().next_multiple_of(PAGE_SIZE) as u64;
+        entry(args, MMIO, r.range.start as u64, size, r.dma.into());
+    }
+    args.begin(b"Devs");
+    // The right to power off or reboot. It is the firmware's (SBI SRST), not a device-tree
+    // node, so the loader always reports exactly one.
+    entry(args, RESET, 0, 0, 0);
+    let console = platform.mmio().iter().find(|r| r.console && !r.kernel_only);
+    if let Some(region) = console {
+        mmio(args, region);
+    }
+    if let Some(irq) = platform.console_irq {
+        entry(args, IRQ, irq as u64, 0, 0);
+    }
+    for region in platform.mmio().iter().filter(|r| !r.kernel_only && !r.console) {
+        mmio(args, region);
+    }
+    for &irq in &platform.irq[..platform.irq_len] {
+        if Some(irq) != platform.console_irq {
+            entry(args, IRQ, irq as u64, 0, 0);
+        }
+    }
+    args.end();
+    println!(
+        "  devices: {} mmio ({} dma), {} irq, console {}",
+        platform.mmio().iter().filter(|r| !r.kernel_only).count(),
+        platform.mmio().iter().filter(|r| r.dma).count(),
+        platform.irq_len,
+        match console {
+            Some(r) => r.range.start,
+            None => 0,
+        },
+    );
 }
 
 /// Map the zeroed pages the kernel keeps its per-process state in.
