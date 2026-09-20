@@ -8,20 +8,29 @@ debug_assertions = true
 # every byte from a thread blocked in `receive` on the console's IRQ handle. No grants: the
 # handle is the authority now (DEVICE-GRANTS.md, Replacement).
 programs = ["log-server"]
-# Three bytes, each typed only after the one before it was echoed, so each needs an interrupt
-# of its own: one byte at a time proves the source is unmasked again by the next `receive`,
-# which sending "xyz" in one go would not (a single interrupt drains the whole FIFO). A kernel
-# that left the source masked echoes nothing at all.
+# The server reads **one byte per interrupt**, so it leaves the FIFO asserted and every byte
+# needs its own interrupt. That makes both halves of R5 visible:
 #
-# What this cannot show: that the kernel *masks* the source when it fires. The console drains
-# its FIFO before receiving again, so a source left unmasked simply does not fire again, and
-# QEMU's PLIC model accepts a completion for a source that has already been disabled, which
-# the specification says to ignore. Both are matters of reading the kernel, not of this case.
+# - a kernel whose `receive` does not unmask the source echoes nothing at all;
+# - a kernel that does not mask the source when it fires never gets back to userspace. The
+#   level is still asserted when the trap returns, so the hart traps again at once and for
+#   ever, and the first byte is never echoed.
+#
+# The first three bytes are typed one at a time, each only after the one before was echoed;
+# the last two are typed together, so the second is answered from a source that re-asserted
+# while the driver was running rather than from a fresh keystroke.
+#
+# What this still cannot show: that the interrupt controller's claim is completed *before* the
+# source is masked. The PLIC specification says a completion for a source that is not enabled
+# is silently ignored (so the source would never fire again), but QEMU 8.2's model accepts it,
+# and no case can tell the two orders apart on this machine. That one is read, not tested.
 expect = [
     '^\[server\] holding the console irq$',
     "^\\[server\\] irq: received 'x'$",
     "^\\[server\\] irq: received 'y'$",
     "^\\[server\\] irq: received 'z'$",
+    "^\\[server\\] irq: received 'p'$",
+    "^\\[server\\] irq: received 'q'$",
 ]
 
 [[input]]
@@ -35,3 +44,8 @@ send = "y"
 [[input]]
 after = "^\\[server\\] irq: received 'y'$"
 send = "z"
+
+# Two at once: the second byte is still in the FIFO when the driver receives again.
+[[input]]
+after = "^\\[server\\] irq: received 'z'$"
+send = "pq"

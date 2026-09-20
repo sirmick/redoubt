@@ -44,8 +44,9 @@ fn word(at: usize) -> u64 { rd::peek(at) }
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    // The console's registers, through its device object. Nothing here names an address.
-    let uart = rd::map_device(rd::CONSOLE_MMIO).expect("the console's mmio handle");
+    // The console's registers, through its device object. Nothing here names an address,
+    // and the length comes back with it (QUESTIONS.md 146, pending).
+    let (uart, uart_len) = rd::map_device(rd::CONSOLE_MMIO).expect("the console's mmio handle");
     // SAFETY: `uart` is the console's register page, mapped for this process by the kernel.
     let mut out = Out(unsafe { MmioSerialPort::new(uart) });
     out.0.init();
@@ -56,9 +57,14 @@ pub extern "C" fn _start() -> ! {
     let free = rd::first_free();
 
     // --- map_device ----------------------------------------------------------------------
-    // Mapping the same device twice gives two addresses, both the kernel's choice (R11).
+    // Mapping the same device twice gives two addresses, both the kernel's choice (R11), and
+    // the same length each time: whole pages, and the console's registers fit in one.
     let again = rd::map_device(rd::CONSOLE_MMIO);
-    check!(out, again.is_ok() && again != Ok(uart), "a second map_device -> another address");
+    let same_len = again.map(|(_, len)| len) == Ok(uart_len);
+    check!(out, again.is_ok() && again.map(|(at, _)| at) != Ok(uart) && same_len,
+        "a second map_device -> another address, {} bytes both times", uart_len);
+    check!(out, uart_len >= rd::PAGE_SIZE && uart_len % rd::PAGE_SIZE == 0,
+        "map_device's length is a whole number of pages");
     check!(out, rd::map_device(rd::CONSOLE_IRQ) == Err(Error::WrongObject)
         && rd::map_device(rd::RESET) == Err(Error::WrongObject)
         && rd::map_device(rd::SYSTEM) == Err(Error::WrongObject)
@@ -107,7 +113,9 @@ pub extern "C" fn _start() -> ! {
     let before = rd::usage(rd::SYSTEM).expect("system usage");
     let reused = rd::map_anon(3 * rd::PAGE_SIZE, rd::rw()).expect("map_anon again");
     let charged = rd::usage(rd::SYSTEM).expect("system usage").pages_usage;
-    check!(out, (0..3).all(|i| word(reused + i * rd::PAGE_SIZE) == 0), "pages come back zeroed");
+    // R11's sharp half: a page a process gets never holds what the last one left there.
+    check!(out, (0..3).all(|i| word(reused + i * rd::PAGE_SIZE) == 0),
+        "pages come back zeroed, whatever was written in them before");
     check!(out, charged == before.pages_usage + 3, "map_anon charges its pages to the caller's budget");
     check!(out, rd::unmap(reused, 3 * rd::PAGE_SIZE) == Ok(()), "and go back again");
     let after = rd::usage(rd::SYSTEM).expect("system usage");

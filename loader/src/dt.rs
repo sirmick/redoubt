@@ -53,6 +53,10 @@ pub struct Platform {
     pub timebase_hz: u64,
     pub cpu_count: usize,
     pub plic: Option<Plic>,
+    /// The hart's local interrupt controller (timer and software interrupts), found on its
+    /// own rather than through the device list: the kernel is told this range so that it, not
+    /// the exclusion below, decides that no device object may name it (QUESTIONS.md 143).
+    pub clint: Option<Range<usize>>,
     pub mmio: [MmioRegion; MAX_MMIO],
     pub mmio_len: usize,
     /// Every interrupt number wired to a device the loader reports, in ascending order and
@@ -102,28 +106,16 @@ fn is_interrupt_controller(node: &Node) -> bool {
     prop(node, "interrupt-controller").is_some() || compatible_has(node, b"clint")
 }
 
-/// The last component of a device-tree path (`/soc/serial@10000000` -> `serial@10000000`),
-/// with any `:options` suffix dropped, as `stdout-path` allows.
-fn last_component(path: &str) -> &str {
-    let path = path.split(':').next().unwrap_or(path);
-    path.rsplit('/').next().unwrap_or(path)
-}
-
-/// The node name of the console: `/chosen/stdout-path`, resolved through `/aliases` when it
-/// names an alias rather than a path. `None` if the tree does not say.
+/// The node name of the console: the last component of `/chosen/stdout-path`
+/// (`/soc/serial@10000000:115200` -> `serial@10000000`), with the `:options` suffix dropped.
+/// `None` if the tree does not say, or says it with an `/aliases` name rather than a path:
+/// every machine the bench boots writes the path (tenet 6).
 fn console_name<'dt>(root: &Node<'_, '_, 'dt>) -> Option<&'dt str> {
     let chosen = root.children().find(|n| n.name() == Ok("chosen"))?;
     let raw = prop(&chosen, "stdout-path")?;
     let path = core::str::from_utf8(raw.strip_suffix(b"\0").unwrap_or(raw)).ok()?;
-    if path.contains('/') {
-        return Some(last_component(path));
-    }
-    // An alias: /aliases/<name> holds the real path.
-    let aliases = root.children().find(|n| n.name() == Ok("aliases"))?;
-    let alias = path.split(':').next().unwrap_or(path);
-    let target = prop(&aliases, alias)?;
-    let target = core::str::from_utf8(target.strip_suffix(b"\0").unwrap_or(target)).ok()?;
-    Some(last_component(target))
+    let path = path.split(':').next().unwrap_or(path);
+    path.rsplit('/').next()
 }
 
 impl Platform {
@@ -153,6 +145,7 @@ impl Platform {
             timebase_hz: 0,
             cpu_count: 0,
             plic: None,
+            clint: None,
             mmio: core::array::from_fn(|_| MmioRegion {
                 range: 0..0,
                 name: *b"    ",
@@ -210,6 +203,15 @@ impl Platform {
                 continue;
             }
             let name = node.name().unwrap_or("");
+            // Everything downstream works in whole pages: the page-ownership table indexes a
+            // region by dividing, and a device object may name nothing but whole pages. A
+            // region that does not start on one is dropped here, loudly, so that the kernel's
+            // boot checks stay a check against a hostile argument block rather than a limit on
+            // which machines boot.
+            if base % crate::PAGE_SIZE != 0 {
+                crate::println!("  {} at {:#x} does not start on a page; skipped", name, base);
+                continue;
+            }
             // An interrupt controller belongs to the kernel, so it is not offered as a device
             // object; it stays in `MREx` (which the legacy claim path and the ownership table
             // use) and the kernel maps the PLIC for itself.
@@ -221,6 +223,13 @@ impl Platform {
             if !kernel_only {
                 for entry in prop(&node, "interrupts").into_iter().flat_map(|b| b.chunks_exact(4)) {
                     let irq = u32::from_be_bytes([entry[0], entry[1], entry[2], entry[3]]);
+                    // Source 0 does not exist on a PLIC, and the kernel keeps number 0 for the
+                    // hart timer (BOOT.md), so a node that asks for it is asking for something
+                    // else: a controller with wider cells, or a tree we do not understand.
+                    if irq == 0 {
+                        crate::println!("  {} asks for interrupt 0; skipped", name);
+                        continue;
+                    }
                     if is_console {
                         platform.console_irq.get_or_insert(irq);
                     }
@@ -247,6 +256,11 @@ impl Platform {
         platform.irq[..platform.irq_len].sort_unstable();
 
         platform.plic = read_plic(&idx, &root, ac, sc);
+        platform.clint = idx.nodes().find(|n| compatible_has(n, b"clint")).and_then(|n| {
+            let reg = prop(&n, "reg")?;
+            let base = read_cells(reg, 0, ac) as usize;
+            Some(base..base + read_cells(reg, ac, sc) as usize)
+        });
         platform
     }
 

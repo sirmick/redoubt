@@ -474,7 +474,11 @@ impl MemoryManager {
         }
         // The machine's devices, charged to `system` and given to the first program as `init`
         // will receive them (INTERIM, `device.rs`). They come after the three budget handles,
-        // so the first program's table is 1-3 budgets, 4.. devices.
+        // so the first program's table is 1-3 budgets, 4.. devices. The handles are stamped
+        // with `root`, like the three budget handles, and not with the budget the objects are
+        // charged to: a stamp says which budget's destruction revokes the *handle* (R10), and
+        // these are `init`'s to hand on, so they outlive anything below `root`. The objects
+        // themselves are charged to, and die with, `system`.
         self.boot_devices(system, first, stamp);
         self.boot_endpoint(system, &bundle[..nbundle]);
         println!("Budgets: root {} pages, system {} (the loader's processes), users {}", pages, sys_pages, users_pages);
@@ -486,7 +490,8 @@ impl MemoryManager {
     ///
     /// The **second** program gets the receive right (badge 0, handle 1) and every later one a
     /// handle badged with its own PID, so a server can tell its clients apart. The first
-    /// program's table is left exactly as `init`'s will be: `root`, `system` and `users`.
+    /// program's table is left exactly as `init`'s will be: `root`, `system` and `users`, then
+    /// a handle to every device object the machine has (`device.rs`, `boot_devices`).
     fn boot_endpoint(&mut self, system: BudgetFrame, bundle: &[Option<PID>]) {
         let Some(Some(server)) = bundle.get(1).copied() else { return };
         let endpoint = self.new_endpoint(system).expect("boot: system cannot pay for the endpoint");

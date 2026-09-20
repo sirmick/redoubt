@@ -10,8 +10,13 @@ pub enum Return {
     /// Calls with no value, and those whose result is in memory (`call`, `receive`,
     /// `budget_usage`).
     Nothing,
-    /// `map_anon`, `map_device`.
+    /// `map_anon`.
     Addr(usize),
+    /// `map_device`: where the device's registers are, and how many bytes of them. A driver
+    /// needs the length to know what it may touch; which device the handle names comes from
+    /// the boot manifest, so the kernel says nothing about it.
+    /// QUESTIONS.md 146 (pending).
+    Mapping { addr: usize, len: usize },
     /// `dma_alloc`. `phys` is a `u64` on both widths because Sv32 physical addresses are 34
     /// bits.
     Dma { addr: usize, phys: u64 },
@@ -36,6 +41,10 @@ pub fn encode_result(result: &Result<Return, Error>) -> [u64; REGS] {
             match value {
                 Return::Nothing => {}
                 Return::Addr(addr) => w.usize(addr),
+                Return::Mapping { addr, len } => {
+                    w.usize(addr);
+                    w.usize(len);
+                }
                 Return::Dma { addr, phys } => {
                     w.usize(addr);
                     w.u64(phys);
@@ -62,7 +71,9 @@ pub fn decode_result(number: Number, regs: &[u64; REGS]) -> Result<Return, Error
         return Err(error);
     }
     let value = match number {
-        Number::MapAnon | Number::MapDevice => Return::Addr(r.usize()?),
+        Number::MapAnon => Return::Addr(r.usize()?),
+        // QUESTIONS.md 146 (pending).
+        Number::MapDevice => Return::Mapping { addr: r.usize()?, len: r.usize()? },
         Number::DmaAlloc => Return::Dma { addr: r.usize()?, phys: r.u64()? },
         Number::ThreadCreate => Return::Tid(r.u32()?),
         Number::ProcessCreate | Number::EndpointCreate | Number::Mint | Number::BudgetCreate => {

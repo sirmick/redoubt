@@ -28,17 +28,14 @@ pub fn early_init() {
 
 pub fn init() { rand::init(); }
 
-/// `system_reset` through the SBI SRST extension. The firmware does not return from either.
-pub fn reset(reboot: bool) -> ! {
+/// `system_reset` through the SBI SRST extension. The firmware does not return from either;
+/// this returns only when it refused (a machine with no SRST implementation), and the caller
+/// then fails closed.
+pub fn reset(reboot: bool) {
     if reboot {
         sbi_rt::system_reset(sbi_rt::ColdReboot, sbi_rt::NoReason);
     } else {
         sbi_rt::system_reset(sbi_rt::Shutdown, sbi_rt::NoReason);
-    }
-    // Only reached if the firmware refused (a machine with no SRST implementation).
-    println!("system_reset: the firmware refused; halting");
-    loop {
-        core::hint::spin_loop();
     }
 }
 

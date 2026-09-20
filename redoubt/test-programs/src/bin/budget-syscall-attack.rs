@@ -156,7 +156,11 @@ pub extern "C" fn _start() -> ! {
     let sandbox = rd::create(rd::SYSTEM, &rd::spec(200, 0, 0)).expect("sandbox");
 
     // Random calls over hostile values. Never destroy or close slots 1-3: losing `system` would
-    // kill this program and the victim, which is not the attack.
+    // kill this program and the victim, which is not the attack. `system_reset` is in the
+    // sweep and this program does hold the Reset right, but a call decodes only with every
+    // register it does not use set to zero, so a draw that put the right handle in `a1` would
+    // have to put a known reset kind in `a2` and zero in `a3..=a7` at the same time: the
+    // machine is not powered off by accident here.
     let pool = [
         0, 1, 2, 3, 4, 7, 8, 64, 65, 0xfff, 0x1000, scratch, scratch + 3, scratch + 4096, text, end - 8, end,
         KERNEL, u32::MAX as usize, usize::MAX, usize::MAX - 7, 1 << 31,

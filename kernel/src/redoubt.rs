@@ -113,16 +113,22 @@ fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
         Call::SetFlags { addr, len, flags } => {
             MemoryManager::with_mut(|mm| mm.set_flags(pid, addr, len, flags)).map(done)
         }
-        Call::MapDevice { device } => {
-            MemoryManager::with_mut(|mm| mm.map_device(pid, device.index())).map(|at| Some(Return::Addr(at)))
-        }
+        Call::MapDevice { device } => MemoryManager::with_mut(|mm| {
+            // QUESTIONS.md 146 (pending): the length comes back with the address.
+            let (addr, len) = mm.map_device(pid, device.index())?;
+            Ok(Some(Return::Mapping { addr, len }))
+        }),
         Call::DmaAlloc { device, npages } => MemoryManager::with_mut(|mm| {
             let (addr, phys) = mm.dma_alloc(pid, device.index(), npages)?;
             Ok(Some(Return::Dma { addr, phys }))
         }),
-        // On success this does not return: the machine powers off or reboots.
+        // On success this does not return: the machine powers off or reboots. The memory
+        // manager is let go of first -- the firmware call never comes back, and a kernel cell
+        // held for ever is, with `smp`, a spinlock held for ever.
         Call::SystemReset { device, kind } => {
-            MemoryManager::with(|mm| mm.system_reset(pid, device.index(), kind)).map(done)
+            MemoryManager::with(|mm| mm.check_reset(pid, device.index()))?;
+            println!("system_reset: {:?} asked for by PID {}", kind, pid.get());
+            crate::platform::reset(kind == redoubt_sys::ResetKind::Reboot)
         }
         Call::TimeNow => Ok(Some(Return::Time(crate::arch::irq::timer::now_us()))),
         Call::Random => {

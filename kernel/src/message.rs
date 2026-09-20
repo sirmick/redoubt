@@ -68,10 +68,11 @@ const CALL_MAGIC: u64 = u64::from_le_bytes(*b"opencall");
 const W_WAIT: usize = 1;
 const W_DEADLINE: usize = 2;
 const W_SEQ: usize = 3;
-/// The endpoint's frame + 1 while sending or receiving; the open call's frame + 1 while waiting
-/// for a reply.
-const W_ENDPOINT: usize = 4;
-const W_ENDPOINT_ID: usize = 5;
+/// What the thread is waiting on, as frame + 1 and id: the endpoint while sending or
+/// receiving, the open call while waiting for a reply, the device object while in `receive` on
+/// an IRQ handle (R5). `Wait` says which, so one pair of words serves all three.
+const W_OBJECT: usize = 4;
+const W_OBJECT_ID: usize = 5;
 const W_MAX_TRANSFER: usize = 6;
 /// `receive`'s record, or the record `call` writes its reply back into.
 const W_REC: usize = 7;
@@ -89,10 +90,7 @@ const W_HANDLES: usize = W_NHANDLES + 1; // MAX_MSG_HANDLES * 4 words
 const W_NCALLS: usize = W_HANDLES + MAX_MSG_HANDLES * 4;
 const W_CURRENT: usize = W_NCALLS + 1; // open-call frame + 1
 const W_CALLS: usize = W_CURRENT + 1; // MAX_OPEN_CALLS frame numbers
-/// While in `receive` on an IRQ handle: the device object's frame + 1, and its id.
-const W_IRQ: usize = W_CALLS + MAX_OPEN_CALLS;
-const W_IRQ_ID: usize = W_IRQ + 1;
-const THREAD_WORDS: usize = W_IRQ_ID + 1;
+const THREAD_WORDS: usize = W_CALLS + MAX_OPEN_CALLS;
 const _: () = assert!(THREAD_WORDS * 8 <= PAGE_SIZE);
 
 /// What a blocked thread is waiting for.
@@ -208,13 +206,13 @@ fn slot(mm: &MemoryManager, pid: PID, tid: TID) -> Slot {
         wait,
         deadline: w(W_DEADLINE),
         seq: w(W_SEQ),
-        endpoint: match (reply, frame_of(w(W_ENDPOINT))) {
-            (false, Some(frame)) => Some(EndpointRef { frame, id: w(W_ENDPOINT_ID) }),
-            _ => None,
+        endpoint: match (wait, frame_of(w(W_OBJECT))) {
+            (Wait::Reply | Wait::Irq, _) => None,
+            (_, frame) => frame.map(|frame| EndpointRef { frame, id: w(W_OBJECT_ID) }),
         },
-        open: if reply { frame_of(w(W_ENDPOINT)).unwrap_or(0) } else { 0 },
-        irq: match (wait == Wait::Irq, frame_of(w(W_IRQ))) {
-            (true, Some(frame)) => Some(DeviceRef { frame, id: w(W_IRQ_ID) }),
+        open: if reply { frame_of(w(W_OBJECT)).unwrap_or(0) } else { 0 },
+        irq: match (wait == Wait::Irq, frame_of(w(W_OBJECT))) {
+            (true, Some(frame)) => Some(DeviceRef { frame, id: w(W_OBJECT_ID) }),
             _ => None,
         },
         max_transfer: w(W_MAX_TRANSFER) as usize,
@@ -680,8 +678,8 @@ pub fn send(
     store_msg(mm, pid, tid, &m);
     let seq = mm.next_seq();
     set_tword(mm, pid, tid, W_SEQ, seq);
-    set_tword(mm, pid, tid, W_ENDPOINT, frame_word(endpoint.frame));
-    set_tword(mm, pid, tid, W_ENDPOINT_ID, endpoint.id);
+    set_tword(mm, pid, tid, W_OBJECT, frame_word(endpoint.frame));
+    set_tword(mm, pid, tid, W_OBJECT_ID, endpoint.id);
     set_tword(mm, pid, tid, W_REC, body_rec as u64);
     // The sender is queued first, so a receiver taking the message right away finds it waiting
     // and simply answers it: one delivery path, whether a receiver was waiting or not.
@@ -748,8 +746,8 @@ fn receive_irq(
     timeout: u64,
     rec: usize,
 ) -> Result<Option<Return>, Error> {
-    set_tword(mm, pid, tid, W_IRQ, frame_word(device.frame));
-    set_tword(mm, pid, tid, W_IRQ_ID, device.id);
+    set_tword(mm, pid, tid, W_OBJECT, frame_word(device.frame));
+    set_tword(mm, pid, tid, W_OBJECT_ID, device.id);
     set_tword(mm, pid, tid, W_REC, rec as u64);
     mark(mm, pid, tid, Wait::Irq, timeout);
     // Unmask first, then look at `fired`, in the order R5 states. Unmasking a source that is
@@ -835,8 +833,8 @@ pub fn receive(
     if handle.badge != 0 {
         return Err(Error::NotPermitted);
     }
-    set_tword(mm, pid, tid, W_ENDPOINT, frame_word(endpoint.frame));
-    set_tword(mm, pid, tid, W_ENDPOINT_ID, endpoint.id);
+    set_tword(mm, pid, tid, W_OBJECT, frame_word(endpoint.frame));
+    set_tword(mm, pid, tid, W_OBJECT_ID, endpoint.id);
     set_tword(mm, pid, tid, W_MAX_TRANSFER, max_transfer as u64);
     set_tword(mm, pid, tid, W_REC, rec as u64);
     mark(mm, pid, tid, Wait::Receive, timeout);
@@ -1070,7 +1068,7 @@ fn prepare(
         push_open_call(mm, rpid, rtid, frame);
         set_tword(mm, rpid, rtid, W_CURRENT, frame_word(frame));
         // The caller now waits for the reply, not for a taker: its page names the open call.
-        set_tword(mm, spid, stid, W_ENDPOINT, frame_word(frame));
+        set_tword(mm, spid, stid, W_OBJECT, frame_word(frame));
     }
     let mut words = [0usize; WORDS];
     for (i, word) in words.iter_mut().enumerate() {

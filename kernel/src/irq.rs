@@ -68,6 +68,13 @@ pub fn interrupt_claim(
     f: MemoryAddress,
     arg: Option<MemoryAddress>,
 ) -> Result<(), xous_kernel::Error> {
+    // A source with a device object is R5's, and a handle to it is the only authority over
+    // it (WP-K3): the legacy claim is not a second one. (Both this path and the grants go
+    // with WP-K6.)
+    #[cfg(baremetal)]
+    if crate::mem::MemoryManager::with(|mm| mm.irq_device(irq).is_some()) {
+        return Err(xous_kernel::Error::AccessDenied);
+    }
     // Default deny: a process may claim only interrupts the bundle granted it.
     #[cfg(baremetal)]
     if !crate::grants::may_claim_irq(pid, irq) {

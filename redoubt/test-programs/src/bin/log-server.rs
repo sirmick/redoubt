@@ -106,8 +106,12 @@ fn uart_irq(arg: usize) -> ! {
     let console = unsafe { &mut *(arg as *mut Console) };
     loop {
         match rd::receive(Some(rd::CONSOLE_IRQ), rd::FOREVER, 0) {
+            // One byte per interrupt, deliberately: the FIFO is left asserted, so the next
+            // `receive` must unmask the source and take the interrupt it raises again. On a
+            // kernel that did not mask the source when it fired, the hart would trap on the
+            // still-asserted level for ever and never reach here at all (`uart-irq`).
             Ok(rd::Received::Interrupt) => {
-                while let Some(byte) = console.receive() {
+                if let Some(byte) = console.receive() {
                     console.say(Line::Received(byte as char));
                 }
             }
@@ -119,9 +123,13 @@ fn uart_irq(arg: usize) -> ! {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    // The console's registers: the device handle if this server is the bundle's first program,
-    // else the legacy grant path (until WP-K6 deletes it).
-    let uart = rd::map_device(rd::CONSOLE_MMIO).unwrap_or_else(|_| {
+    // One call decides both: holding the console's MMIO object means this server is the
+    // bundle's first program, so it holds the console's IRQ object too (INTERIM until `init`
+    // hands each program its own handles, WP-R3). A case that runs this server later in the
+    // bundle -- the budget cases do -- falls back to the legacy grant path, which lives until
+    // WP-K6, and echoes nothing.
+    let device = rd::map_device(rd::CONSOLE_MMIO).map(|(at, _len)| at);
+    let uart = device.unwrap_or_else(|_| {
         xous::map_memory(MemoryAddress::new(UART_BASE), None, 4096, MemoryFlags::R | MemoryFlags::W)
             .expect("couldn't claim the UART")
             .as_ptr() as usize
@@ -132,8 +140,8 @@ pub extern "C" fn _start() -> ! {
     // With the console's IRQ handle, echo what arrives on the UART as this server's own lines:
     // grant-attack, irq-attack and uart-irq take their verdict from those. The thread starts
     // before the server exists, so before any client can run its first request.
-    let arg = &mut console as *mut Console as usize;
-    if rd::receive(Some(rd::CONSOLE_IRQ), 0, 0) == Err(rd::Error::Timeout) {
+    if device.is_ok() {
+        let arg = &mut console as *mut Console as usize;
         xous::create_thread_1(uart_irq, arg).expect("couldn't spawn the console's irq thread");
         console.say(Line::ConsoleIrq);
     }

@@ -183,8 +183,15 @@ impl Process {
 }
 
 impl Mmio {
-    /// Maps the device's registers; returns their address.
-    pub fn map(&self) -> Result<usize, Error> { addr(syscall(&Call::MapDevice { device: self.0 })) }
+    /// Maps the device's registers: their address and how many bytes of them
+    /// (QUESTIONS.md 146, pending). Which device this is comes from the boot manifest, not
+    /// from the kernel.
+    pub fn map(&self) -> Result<(usize, usize), Error> {
+        match syscall(&Call::MapDevice { device: self.0 })? {
+            Return::Mapping { addr, len } => Ok((addr, len)),
+            _ => Err(Error::InvalidArgument),
+        }
+    }
 
     /// `npages` contiguous zeroed pages the device may DMA to: (address, physical address).
     pub fn dma_alloc(&self, npages: usize) -> Result<(usize, u64), Error> {

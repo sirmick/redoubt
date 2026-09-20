@@ -6,7 +6,10 @@ debug_assertions = true
 # PID 2 the attacker (the loader's first program, holding root, system, users and every device
 # object); PID 3 log-server; PID 4 budget-victim, in system beside the attacker; PID 5
 # attack-checker. The attacker holds the Reset right, so `system_reset` is offered only handles
-# of other kinds: powering the machine off here would end the case before its verdict.
+# of other kinds: powering the machine off here would end the case before its verdict. The
+# 4000 random calls cannot reach it either -- a call decodes only with every register it does
+# not use set to zero, and `system_reset` needs a live Reset handle in `a1` and a known kind in
+# `a2`, so a value drawn for one register is refused on another.
 programs = ["budget-syscall-attack", "log-server", "budget-victim", "attack-checker"]
 timeout_secs = 30
 # Each targeted attempt's error is pinned as progress, so a refusal for the wrong reason (or in
