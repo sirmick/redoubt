@@ -1,10 +1,12 @@
-description = "Hostile arguments to every call WP-K1 and WP-K2 built (bad and wide handles, unknown numbers, stray registers, records misaligned, in the kernel, read-only, never touched, straddling, malformed), in the spec's order of checks, and 4000 calls over hostile values: errors, never a panic (I14) (checked build)"
+description = "Hostile arguments to every call WP-K1, WP-K2 and WP-K3 built (bad and wide handles, unknown numbers, stray registers, records misaligned, in the kernel, read-only, never touched, straddling, malformed), in the spec's order of checks, and 4000 calls over hostile values: errors, never a panic (I14) (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 # Built with the checks on (redoubt/README.md, "Debug assertions").
 debug_assertions = true
-# PID 2 the attacker (the loader's first program, holding root, system and users); PID 3
-# log-server; PID 4 budget-victim, in system beside the attacker; PID 5 attack-checker.
+# PID 2 the attacker (the loader's first program, holding root, system, users and every device
+# object); PID 3 log-server; PID 4 budget-victim, in system beside the attacker; PID 5
+# attack-checker. The attacker holds the Reset right, so `system_reset` is offered only handles
+# of other kinds: powering the machine off here would end the case before its verdict.
 programs = ["budget-syscall-attack", "log-server", "budget-victim", "attack-checker"]
 timeout_secs = 30
 # Each targeted attempt's error is pinned as progress, so a refusal for the wrong reason (or in
@@ -15,7 +17,7 @@ expect = [
     '^\[pid 2\] \[i14\] budget_create order -> \[Some\(BadHandle\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(InvalidArgument\)\]$',
     '^\[pid 2\] \[i14\] budget_usage -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(BadHandle\)\]$',
     '^\[pid 2\] \[i14\] random -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), None\]$',
-    '^\[pid 2\] \[i14\] other -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(BadHandle\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(WrongObject\), Some\(Timeout\)\]$',
+    '^\[pid 2\] \[i14\] other -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(BadHandle\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(WrongObject\), Some\(BadHandle\), Some\(WrongObject\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(WrongObject\), Some\(Timeout\)\]$',
     '^\[pid 2\] \[i14\] \d+ random calls: \d+ refused, 0 with an unknown result code$',
     '^\[pid 2\] \[i14\] attempts done$',
     '^\[pid 4\] \[victim\] mapped and touched 64 pages in system after the attack$',

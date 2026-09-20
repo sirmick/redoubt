@@ -1,15 +1,16 @@
 description = "No ambient authority: an ungranted process is refused the UART, the power-off device and interrupts, and the UART's owner still hears its input"
 arch = ["rv64"]
 kind = "boot"
-# PID 2 log-server is the victim: it owns the UART and (granted here) irq 10, and claims both
-# before any client can run. PID 3 grant-attack has no grants and uses whatever it manages to
-# take (see its source): a raw BREACH line on the UART, a power-off, or keeping irq 10.
+# PID 2 log-server is the victim: as the bundle's first program it holds the console's device
+# objects and takes both before any client can run. PID 3 grant-attack has no grants and no
+# device handles, and uses whatever it manages to take (see its source): a raw BREACH line on
+# the UART, a power-off, or the UART's interrupt through the legacy claim.
 programs = ["log-server", "grant-attack"]
 timeout_secs = 20
 expect = [
     # Victim, unforgeable: an unprefixed line comes only from log-server's fixed templates
     # (console::Line), and no client request can make it print this one.
-    '^\[server\] claimed irq 10$',
+    '^\[server\] holding the console irq$',
     # Progress, the attacker's report: refused, and for the right reason (not, say, InterruptInUse).
     '^\[pid 3\] \[grant\] mapping the UART -> Err\(AccessDenied\)$',
     '^\[pid 3\] \[grant\] mapping the power-off device -> Err\(AccessDenied\)$',
@@ -18,7 +19,7 @@ expect = [
     # The verdict, the victim's: it still hears input sent after every attempt, so nobody took
     # irq 10 or powered off. Unforgeable: only log-server's interrupt handler prints this
     # template, and only for a byte that arrived on the UART.
-    "^\\[server\\] irq 10: received 'y'$",
+    "^\\[server\\] irq: received 'y'$",
 ]
 forbid = ['BREACH']
 # No off-console backstop: the victim's evidence arrives in its interrupt handler, which
@@ -29,7 +30,3 @@ forbid = ['BREACH']
 after = '^\[pid 3\] \[grant\] attempts done$'
 send = "y"
 
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]
-irq = [10]

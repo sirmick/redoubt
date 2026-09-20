@@ -5,8 +5,8 @@ use core::num::{NonZeroU64, NonZeroUsize};
 
 pub use redoubt_sys::{
     Body, BudgetSpec, Call, Error, FOREVER, Handle, Handles, Labels, MAX_LEND_PAGES, MAX_MSG_HANDLES,
-    MAX_OPEN_CALLS, Message, MessageKind, MintSource, Number, Pages, Received, ReceivedBody, Return,
-    Usage, WAIT_CAP, WORDS,
+    MAX_HANDLES, MAX_OPEN_CALLS, MemFlags, Message, MessageKind, MintSource, Number, PAGE_SIZE, Pages,
+    Received, ReceivedBody, ResetKind, Return, Usage, WAIT_CAP, WORDS,
 };
 use redoubt_sys::{RECEIVED_SLOTS, USAGE_SLOTS};
 
@@ -15,7 +15,74 @@ pub const ROOT: u32 = 1;
 pub const SYSTEM: u32 = 2;
 pub const USERS: u32 = 3;
 
+/// Then every device object the loader made from the device tree, in the loader's order
+/// (kernel `device.rs`, `boot_devices`; BOOT.md, `Devs`). **INTERIM** until `init` reads the
+/// boot manifest (WP-R3): the Reset right first, then the console `/chosen/stdout-path` names
+/// and its interrupt, so a program can name those three without a manifest. Everything after
+/// them depends on the machine, so nothing may assume how many there are: use
+/// [`first_free`] to find where a program's own handles start.
+pub const RESET: u32 = 4;
+pub const CONSOLE_MMIO: u32 = 5;
+pub const CONSOLE_IRQ: u32 = 6;
+/// The first device handle beyond the three the order pins.
+pub const OTHER_DEVICES: u32 = 7;
+
 pub fn h(index: u32) -> Handle { Handle::new(index).expect("handle 0") }
+
+/// The lowest index this process's handle table does not hold, found by asking: how many
+/// handles a program starts with depends on the machine (a device object per MMIO region and
+/// per interrupt), so a program that creates handles of its own works this out instead of
+/// counting on a number. `budget_usage` answers `BadHandle` only for an index that holds
+/// nothing, and writes nothing then.
+pub fn first_free() -> u32 {
+    let mut rec = [0u64; USAGE_SLOTS];
+    let at = rec.as_mut_ptr() as usize;
+    (1..=redoubt_sys::MAX_HANDLES as u32 + 1)
+        .find(|i| usage_raw(*i, at) == Err(Error::BadHandle))
+        .expect("a table with a free index")
+}
+
+// --- Devices and memory (WP-K3) ----------------------------------------------------------
+
+/// `map_device(h(MMIO)) -> addr`.
+pub fn map_device(device: u32) -> Result<usize, Error> {
+    match redoubt_sys::syscall(&Call::MapDevice { device: h(device) })? {
+        Return::Addr(at) => Ok(at),
+        _ => Err(Error::InvalidArgument),
+    }
+}
+
+/// `dma_alloc(h(MMIO), npages) -> addr, phys`.
+pub fn dma_alloc(device: u32, npages: usize) -> Result<(usize, u64), Error> {
+    match redoubt_sys::syscall(&Call::DmaAlloc { device: h(device), npages })? {
+        Return::Dma { addr, phys } => Ok((addr, phys)),
+        _ => Err(Error::InvalidArgument),
+    }
+}
+
+/// `system_reset(h(Reset), kind)`. Returns only if the kernel refused.
+pub fn system_reset(device: u32, kind: ResetKind) -> Result<(), Error> {
+    redoubt_sys::syscall(&Call::SystemReset { device: h(device), kind }).map(|_| ())
+}
+
+/// `map_anon(len, flags) -> addr`.
+pub fn map_anon(len: usize, flags: MemFlags) -> Result<usize, Error> {
+    match redoubt_sys::syscall(&Call::MapAnon { len, flags })? {
+        Return::Addr(at) => Ok(at),
+        _ => Err(Error::InvalidArgument),
+    }
+}
+
+pub fn unmap(addr: usize, len: usize) -> Result<(), Error> {
+    redoubt_sys::syscall(&Call::Unmap { addr, len }).map(|_| ())
+}
+
+pub fn set_flags(addr: usize, len: usize, flags: MemFlags) -> Result<(), Error> {
+    redoubt_sys::syscall(&Call::SetFlags { addr, len, flags }).map(|_| ())
+}
+
+/// Read-write pages: what almost every caller wants.
+pub fn rw() -> MemFlags { MemFlags::READ | MemFlags::WRITE }
 
 pub fn spec(pages: u64, processes: u32, weight: u32) -> BudgetSpec {
     BudgetSpec { pages, processes, weight, labels: Labels::new(), account: 0, deadline: FOREVER }

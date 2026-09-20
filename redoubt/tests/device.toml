@@ -1,0 +1,32 @@
+description = "Device objects and the Redoubt memory calls (WP-K3): map_device on an MMIO handle and refused for every other kind; dma_alloc contiguous, zeroed and only with the DMA flag; map_anon zeroed and charged, unmap returning the pages, set_flags dropping and adding permissions without ever W+X (R11); system_reset only through the Reset right, which ends the case (checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# Built with the checks on (redoubt/README.md, "Debug assertions").
+debug_assertions = true
+# PID 2 device-test is the bundle's first program, so it holds every device object the loader
+# made from the device tree (INTERIM, kernel device.rs). There is no log-server here: only one
+# process can own the UART, and this one maps it through its own handle and prints on it.
+programs = ["device-test"]
+timeout_secs = 30
+# Every check prints "ok" or "FAIL"; FAIL is forbidden, so a check that fails fails the case.
+# The last line is not enough on its own: `poweroff` requires the machine to go down through
+# `system_reset`, which only the Reset handle can do.
+expect = [
+    '^\[device\] mapped the console$',
+    '^\[device\] ok: a second map_device -> another address$',
+    '^\[device\] ok: map_device refuses an irq, the reset right, a budget and an index it does not hold$',
+    '^\[device\] ok: map_anon: 3 zeroed pages, writable$',
+    '^\[device\] ok: map_anon refuses ',
+    '^\[device\] ok: set_flags: read, then read-execute, then read-write again$',
+    '^\[device\] ok: set_flags and unmap refuse a range that is not the caller.s own whole pages$',
+    '^\[device\] ok: map_anon charges its pages to the caller.s budget$',
+    '^\[device\] ok: unmap returns every page it took$',
+    '^\[device\] ok: dma_alloc on a device with no DMA flag -> NotPermitted$',
+    '^\[device\] ok: dma_alloc refuses no pages, an irq, the reset right and an index it does not hold$',
+    '^\[device\] ok: dma_alloc on device handle \d+: 4 zeroed pages, physical address page-aligned$',
+    '^\[device\] ok: a second dma_alloc is a different buffer$',
+    '^\[device\] ok: system_reset refuses every handle but the Reset right$',
+    '^\[device\] DEVICE TEST PASSED$',
+]
+forbid = ['\[device\] FAIL']
+poweroff = true

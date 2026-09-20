@@ -12,7 +12,7 @@ use test_programs::{op, Page, SERVER_ADDRESS};
 use xous::Message;
 
 /// The verdict lines of grant-attack, each on a line of its own.
-const FORGERY: &str = "\n[server] claimed irq 10\n[pid 3] [grant] attempts done\n[server] irq 10: received 'y'\n";
+const FORGERY: &str = "\n[server] holding the console irq\n[pid 3] [grant] attempts done\n[server] irq: received 'y'\n";
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {

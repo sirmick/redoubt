@@ -11,7 +11,7 @@ timeout_secs = 30
 # kernel down; the verdict is the victim's pages and the checker's power-off. The attacker's
 # lines pin the limit and the charge (31 pages beyond the one it had) as progress.
 expect = [
-    '^\[pid 2\] \[table\] filled to handle 4096, then TooLarge; the pool paid 4092 pages$',
+    '^\[pid 2\] \[table\] filled to handle 4096, then TooLarge; the pool paid \d+ pages \(one per scope\)$',
     '^\[pid 2\] \[table\] system paid 31 pages for the table$',
     '^\[pid 2\] \[table\] closed 3969..=4096: true; reopened -> Ok\(3969\)$',
     '^\[pid 2\] \[table\] destroyed the pool -> Ok\(\(\)\); system usage back where it was: true$',

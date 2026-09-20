@@ -1,5 +1,11 @@
 //! Owns the UART and prints on behalf of every other test program. Also the server side of
-//! the IPC test, and, when a case grants it the UART's interrupt, an echo of UART input.
+//! the IPC test, and, when it holds the console's device objects, an echo of UART input.
+//!
+//! It takes the UART through `map_device` on the console MMIO handle and waits for input in
+//! `receive` on the console IRQ handle (KERNEL-SPEC.md, R5: the kernel masks the source when
+//! it fires and the next receive unmasks it; there is no acknowledge call). Those handles are
+//! the kernel's gift to the bundle's **first** program (INTERIM, kernel `device.rs`); in a case
+//! where this server is not first it falls back to the legacy grant path and does not echo.
 //!
 //! Attack cases take their verdict from lines an attacker cannot write (redoubt/README.md,
 //! "Writing an attack case"). So everything this server prints goes through `console::Console`,
@@ -10,14 +16,14 @@
 #![no_std]
 #![no_main]
 
-use test_programs::{op, SERVER_ADDRESS};
+use test_programs::{op, rd, SERVER_ADDRESS};
 use xous::{MemoryAddress, MemoryFlags, MemoryMessage, Message};
 
 use crate::console::{Console, Line};
 
-/// The ns16550 on QEMU's `virt` machine, and its interrupt.
+/// The ns16550 on QEMU's `virt` machine: only for the legacy fallback, where a grant, not a
+/// device handle, is the authority.
 const UART_BASE: usize = 0x1000_0000;
-const UART_IRQ: usize = 10;
 
 mod console {
     use core::fmt::Write;
@@ -32,13 +38,13 @@ mod console {
     /// Every line the server prints in its own name. No variant carries client text.
     pub enum Line {
         Up(u8),
-        ClaimedIrq(usize),
+        ConsoleIrq,
         Listening(u8),
         Scalars([usize; 4]),
         MovedPage(usize),
         Unexpected(usize),
         /// A byte that arrived on the UART (input from the bench), printed escaped.
-        Received(usize, char),
+        Received(char),
     }
 
     impl Console {
@@ -53,12 +59,12 @@ mod console {
             let out = &mut self.port;
             match line {
                 Line::Up(pid) => writeln!(out, "[server] PID {pid} up"),
-                Line::ClaimedIrq(irq) => writeln!(out, "[server] claimed irq {irq}"),
+                Line::ConsoleIrq => writeln!(out, "[server] holding the console irq"),
                 Line::Listening(pid) => writeln!(out, "[server] PID {pid} listening"),
                 Line::Scalars([a, b, c, d]) => writeln!(out, "[server] scalars: {a} {b} {c} {d}"),
                 Line::MovedPage(at) => writeln!(out, "[server] moved page at {at:#x}; its text follows"),
                 Line::Unexpected(id) => writeln!(out, "[server] unexpected message, id {id}"),
-                Line::Received(irq, byte) => writeln!(out, "[server] irq {irq}: received {byte:?}"),
+                Line::Received(byte) => writeln!(out, "[server] irq: received {byte:?}"),
             }
             .ok();
         }
@@ -90,31 +96,46 @@ fn text(msg: &MemoryMessage) -> &str {
     core::str::from_utf8(bytes).unwrap_or("<invalid utf-8>")
 }
 
-/// Runs in interrupt context whenever the UART has received data (only if the claim was granted).
-fn on_uart_irq(_irq: usize, arg: *mut usize) {
-    // SAFETY: `arg` is the `Console` in `_start`'s frame, which never returns. The main loop
-    // may be mid-line when this runs, so a line can be split; cases send input only while
-    // nothing else is printing.
+/// A thread of its own, blocked in `receive` on the console's IRQ handle (R5). It echoes
+/// every byte the bench types, as the server's own line, which is the evidence the attack
+/// cases take their verdict from.
+fn uart_irq(arg: usize) -> ! {
+    // SAFETY: `arg` is the `Console` in `_start`'s frame, which never returns, so the pointer
+    // stays valid. The main thread may be mid-line when a byte arrives, so a line can be
+    // split; cases send input only while nothing else is printing.
     let console = unsafe { &mut *(arg as *mut Console) };
-    while let Some(byte) = console.receive() {
-        console.say(Line::Received(UART_IRQ, byte as char));
+    loop {
+        match rd::receive(Some(rd::CONSOLE_IRQ), rd::FOREVER, 0) {
+            Ok(rd::Received::Interrupt) => {
+                while let Some(byte) = console.receive() {
+                    console.say(Line::Received(byte as char));
+                }
+            }
+            // Nothing else can arrive on an IRQ handle; a refusal means the handle is gone.
+            _ => test_programs::park(),
+        }
     }
 }
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let uart = xous::map_memory(MemoryAddress::new(UART_BASE), None, 4096, MemoryFlags::R | MemoryFlags::W)
-        .expect("couldn't claim the UART");
-    let mut console = Console::new(uart.as_ptr() as usize);
+    // The console's registers: the device handle if this server is the bundle's first program,
+    // else the legacy grant path (until WP-K6 deletes it).
+    let uart = rd::map_device(rd::CONSOLE_MMIO).unwrap_or_else(|_| {
+        xous::map_memory(MemoryAddress::new(UART_BASE), None, 4096, MemoryFlags::R | MemoryFlags::W)
+            .expect("couldn't claim the UART")
+            .as_ptr() as usize
+    });
+    let mut console = Console::new(uart);
     let pid = xous::current_pid().unwrap().get();
     console.say(Line::Up(pid));
-    // Given a grant for the UART's interrupt, echo what arrives on the UART, as this server's
-    // own lines: grant-attack, irq-attack and uart-irq use that. Without the grant the claim is
-    // refused and nothing changes. The claim comes before the server exists, so before any
-    // client can run its first request.
-    let arg = &mut console as *mut Console as *mut usize;
-    if xous::claim_interrupt(UART_IRQ, on_uart_irq, arg).is_ok() {
-        console.say(Line::ClaimedIrq(UART_IRQ));
+    // With the console's IRQ handle, echo what arrives on the UART as this server's own lines:
+    // grant-attack, irq-attack and uart-irq take their verdict from those. The thread starts
+    // before the server exists, so before any client can run its first request.
+    let arg = &mut console as *mut Console as usize;
+    if rd::receive(Some(rd::CONSOLE_IRQ), 0, 0) == Err(rd::Error::Timeout) {
+        xous::create_thread_1(uart_irq, arg).expect("couldn't spawn the console's irq thread");
+        console.say(Line::ConsoleIrq);
     }
     let sid = xous::create_server_with_address(SERVER_ADDRESS).expect("couldn't create server");
     console.say(Line::Listening(pid));

@@ -10,7 +10,7 @@ timeout_secs = 30
 # destroy root or system, and the victim living in system would never report. The verdict is
 # the victim's pages and the checker's power-off; the attacker's counts are progress.
 expect = [
-    '^\[pid 2\] \[forge\] 540 of 540 calls on forged indices got BadHandle$',
+    '^\[pid 2\] \[forge\] \d+ of \d+ calls on forged indices got BadHandle \(all\)$',
     '^\[pid 2\] \[forge\] raw index 0, all ones, 2\^32 \+ 2 -> \[Some\(BadHandle\), Some\(BadHandle\), Some\(BadHandle\)\]$',
     '^\[pid 2\] \[forge\] attempts done$',
     '^\[pid 4\] \[victim\] mapped and touched 64 pages in system after the attack$',
