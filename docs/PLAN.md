@@ -108,7 +108,7 @@ geometry, trap entry and saved context, and the ABI's register encoding; anywher
 ## Working rules
 - Record design decisions in `docs/` before or with the code; keep STATUS.md current.
   Changes to the frozen design need a reason in HISTORY.md.
-- Run `cargo testbench` before and after kernel or loader changes (see `redoubt/README.md`). New
+- Run `cargo testbench` before and after kernel or loader changes (see `docs/testbench.md`). New
   kernel behaviour gets a case in `tests/` and, if needed, a program in
   `tests/programs/`. Every security property gets an attack case.
 - Reuse a crate only if it is small, `no_std`, pure Rust, maintained and read (tenet 5).

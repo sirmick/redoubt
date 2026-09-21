@@ -1,4 +1,4 @@
-//! Ends an attack case from outside the attacker (redoubt/README.md, "Writing an attack
+//! Ends an attack case from outside the attacker (docs/testbench.md, "Writing an attack
 //! case"). Some process reports to it (`test_programs::checker::done()`): a victim once its
 //! verdict is in, or, where there is no victim, the attacker once it has made its attempts.
 //! The checker then says, under its own PID, which PID reported (as the kernel names it) and

@@ -1,7 +1,7 @@
 description = "IPC and timer tests sharing one log server, to catch interference between processes (checked build)"
 arch = ["rv64"]
 kind = "boot"
-# Built with the checks on (redoubt/README.md, "Debug assertions").
+# Built with the checks on (docs/testbench.md, "Debug assertions").
 debug_assertions = true
 programs = ["log-server", "ipc-client", "timer-test"]
 smp = [1, 2]

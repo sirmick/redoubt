@@ -1,6 +1,6 @@
 //! Victim for `move-borrowed`: lends a page to it, and once the lend returns, reads the page
 //! back and reports what it holds. Its report is relayed by `log-server` under the victim's own
-//! PID, so the attacker cannot forge it (redoubt/README.md, "Writing an attack case").
+//! PID, so the attacker cannot forge it (docs/testbench.md, "Writing an attack case").
 
 #![no_std]
 #![no_main]

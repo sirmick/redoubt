@@ -8,7 +8,7 @@
 //! `boot_endpoint`), so it is also the wrong-kind handle every device call is offered.
 //!
 //! Its own reports can only fail the case: the verdict is the victim's
-//! (redoubt/README.md, "Writing an attack case").
+//! (docs/testbench.md, "Writing an attack case").
 
 #![no_std]
 #![no_main]
@@ -94,7 +94,7 @@ pub extern "C" fn _start() -> ! {
     let verdict = if survived { "ok" } else { "FAIL" };
     log!(logger, "[irq-attack] {}: every legacy claim and free refused", verdict);
 
-    // The verdict is the victim's, not ours (redoubt/README.md, "Writing an attack case").
+    // The verdict is the victim's, not ours (docs/testbench.md, "Writing an attack case").
     log!(logger, "[irq-attack] attempts done");
     test_programs::park()
 }

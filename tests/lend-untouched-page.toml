@@ -1,7 +1,7 @@
 description = "Lending, mutably lending or moving anonymous pages never touched is served, a half-mapped range is refused whole, and running past RAM is the caller's error (verdict: survival only) (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# Built with the checks on (redoubt/README.md, "Debug assertions").
+# Built with the checks on (docs/testbench.md, "Debug assertions").
 debug_assertions = true
 # 32 MiB so the lend-past-RAM step (12k pages = 48 MiB) exhausts RAM in milliseconds.
 memory_mib = 32

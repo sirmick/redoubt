@@ -4,7 +4,7 @@ kind = "boot"
 # PID 2 budget-test (the loader's first program: it holds root, system and users); PID 3 log-server.
 programs = ["budget-test", "log-server"]
 timeout_secs = 30
-# Built with the checks on (redoubt/README.md, "Debug assertions").
+# Built with the checks on (docs/testbench.md, "Debug assertions").
 debug_assertions = true
 expect = ['^\[pid 2\] \[budget\] system ', '^\[pid 2\] BUDGET TEST PASSED$']
 forbid = ['\[budget\] FAIL']
