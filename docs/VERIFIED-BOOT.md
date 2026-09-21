@@ -21,7 +21,7 @@ authenticates the boot bundle before executing any of it.** A tampered bundle is
   reading the tar, and on failure panics, which powers the machine off via SBI. No unsigned
   fallback, and no acceptance of a signature over the archive alone. **The signing tool builds the
   same preimage** (the bench's bundle builder today, any production signer later). Both sides get
-  it from one crate, `redoubt/signing` (`no_std`, no dependencies, `forbid(unsafe_code)`, TCB and
+  it from one crate, `libs/signing` (`no_std`, no dependencies, `forbid(unsafe_code)`, TCB and
   counted in the `unsafe` budget), so they cannot drift apart; a host test pins its bytes to the
   ones stated here, and the bench runs that test, so they cannot drift from this note either.
 - **Domains are prefix-free**, so one key's signature can never be read as another protocol's.

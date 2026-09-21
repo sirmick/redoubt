@@ -44,7 +44,7 @@ not needed.
 **WP-M0. Executable security model.** Size L.
 - Reads: KERNEL-SPEC.md (all), CONTAINMENT.md, CAPABILITIES.md (steward policy parts used in
   milestone 1).
-- Delivers: `redoubt/model/`: a host Rust crate implementing every object, system call, error and
+- Delivers: `model/`: a host Rust crate implementing every object, system call, error and
   rule of KERNEL-SPEC.md with the same names and arguments; the steward's milestone 1 policy
   (principals, sessions, vault sessions, leases, approvals, declassification) as a layer above it;
   property tests (random operation sequences) for invariants I1-I14 and the policy's properties; a
@@ -68,7 +68,7 @@ not needed.
   badge, reader budgets answering a call, blame per (account, label set) ending every budget of it,
   fixed sub-budgets per label set); CAPABILITIES.md (`MAX_LEASE` as steward policy, nested
   sub-agents, the approval screen, narrowing handles as revocation scopes, `keys` in leases).
-- Delivers: `redoubt/model/` updated: the README's interpretation choices the spec has now settled
+- Delivers: `model/` updated: the README's interpretation choices the spec has now settled
   changed to match or marked settled (6 and 7 change: a `send` is never served or blamed; 8, 10,
   14, 20, 23, 24 stand), and the open questions it listed closed; mutations for each new rule (an
   abandoned call never reported, a lend charged to one side only, a delivery failing `receive`
