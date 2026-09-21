@@ -3,9 +3,9 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering::Relaxed};
 
-use xous_kernel::arch::PAGE_SIZE;
-use xous_kernel::arch::USER_AREA_END;
-use xous_kernel::*;
+use redoubt_abi::arch::PAGE_SIZE;
+use redoubt_abi::arch::USER_AREA_END;
+use redoubt_abi::*;
 
 use crate::arch;
 use crate::arch::process::Process as ArchProcess;
@@ -64,14 +64,14 @@ fn retry_syscall(pid: PID, tid: TID) -> SysCallResult {
         arch::process::Process::with_current_mut(|p| p.retry_instruction(tid))?;
         do_yield(pid, tid)
     } else {
-        Ok(xous_kernel::Result::RetryCall)
+        Ok(redoubt_abi::Result::RetryCall)
     }
 }
 
 fn do_yield(_pid: PID, tid: TID) -> SysCallResult {
     // If we're not running on bare metal, treat this as a no-op.
     if !cfg!(baremetal) {
-        return Ok(xous_kernel::Result::Ok);
+        return Ok(redoubt_abi::Result::Ok);
     }
 
     let (parent_pid, parent_ctx) =
@@ -81,8 +81,8 @@ fn do_yield(_pid: PID, tid: TID) -> SysCallResult {
         // TODO: Advance thread
         let result = ss
             .activate_process_thread(tid, parent_pid, parent_ctx, true, PostActivateOp::None)
-            .map(|_| Ok(xous_kernel::Result::ResumeProcess))
-            .unwrap_or(Err(xous_kernel::Error::ProcessNotFound));
+            .map(|_| Ok(redoubt_abi::Result::ResumeProcess))
+            .unwrap_or(Err(redoubt_abi::Error::ProcessNotFound));
 
         ss.set_last_thread(PID::new(ORIGINAL_PID.load(Relaxed)).unwrap(), ORIGINAL_TID.load(Relaxed)).ok();
         result
@@ -91,7 +91,7 @@ fn do_yield(_pid: PID, tid: TID) -> SysCallResult {
 
 fn send_message(pid: PID, tid: TID, cid: CID, message: Message) -> SysCallResult {
     SystemServices::with_mut(|ss| {
-        let sidx = ss.sidx_from_cid(cid).ok_or(xous_kernel::Error::ServerNotFound)?;
+        let sidx = ss.sidx_from_cid(cid).ok_or(redoubt_abi::Error::ServerNotFound)?;
 
         let server_pid = ss.server_from_sidx(sidx).expect("server couldn't be located").pid;
 
@@ -188,7 +188,7 @@ fn send_message(pid: PID, tid: TID, cid: CID, message: Message) -> SysCallResult
         };
 
         if !can_deliver {
-            return Err(xous_kernel::Error::ServerQueueFull);
+            return Err(redoubt_abi::Error::ServerQueueFull);
         }
 
         // --- Memory transfer (now guaranteed to be deliverable) ---
@@ -316,11 +316,11 @@ fn send_message(pid: PID, tid: TID, cid: CID, message: Message) -> SysCallResult
                             ptid,
                             false,
                             PostActivateOp::SetThreadResult {
-                                result: xous_kernel::Result::MessageEnvelope(envelope),
+                                result: redoubt_abi::Result::MessageEnvelope(envelope),
                             },
                         )
-                        .map(|_| Ok(xous_kernel::Result::ResumeProcess))
-                        .unwrap_or(Err(xous_kernel::Error::ProcessNotFound));
+                        .map(|_| Ok(redoubt_abi::Result::ResumeProcess))
+                        .unwrap_or(Err(redoubt_abi::Error::ProcessNotFound));
 
                     if result.is_err() {
                         return_thread(ss, sidx, available_tid);
@@ -355,11 +355,11 @@ fn send_message(pid: PID, tid: TID, cid: CID, message: Message) -> SysCallResult
                         Ok(sender_idx) => {
                             let sender = SenderID::new(sidx, sender_idx, Some(pid));
                             let envelope = MessageEnvelope { sender: sender.into(), body: message };
-                            Ok(xous_kernel::Result::MessageEnvelope(envelope))
+                            Ok(redoubt_abi::Result::MessageEnvelope(envelope))
                         }
                         _ => {
                             return_thread(ss, sidx, available_tid);
-                            Err(xous_kernel::Error::ProcessNotFound)
+                            Err(redoubt_abi::Error::ProcessNotFound)
                         }
                     }
                 }
@@ -380,8 +380,8 @@ fn send_message(pid: PID, tid: TID, cid: CID, message: Message) -> SysCallResult
                 klog!("Blocking client, since it sent a blocking message");
                 ss.unschedule_thread(pid, tid)?;
                 ss.switch_to_thread(server_pid, Some(server_tid))?;
-                ss.set_thread_result(server_pid, server_tid, xous_kernel::Result::MessageEnvelope(envelope))
-                    .map(|_| xous_kernel::Result::BlockedProcess)
+                ss.set_thread_result(server_pid, server_tid, redoubt_abi::Result::MessageEnvelope(envelope))
+                    .map(|_| redoubt_abi::Result::BlockedProcess)
             } else if cfg!(baremetal) {
                 klog!(
                     "Setting the return value of the Server ({}:{}) to {:?} and returning to Client",
@@ -389,15 +389,15 @@ fn send_message(pid: PID, tid: TID, cid: CID, message: Message) -> SysCallResult
                     server_tid,
                     envelope
                 );
-                ss.set_thread_result(server_pid, server_tid, xous_kernel::Result::MessageEnvelope(envelope))
-                    .map(|_| xous_kernel::Result::Ok)
+                ss.set_thread_result(server_pid, server_tid, redoubt_abi::Result::MessageEnvelope(envelope))
+                    .map(|_| redoubt_abi::Result::Ok)
             } else {
                 klog!("setting the return value of the Server to {:?} and returning to Client", envelope);
                 // "Switch to" the server PID when not running on bare metal. This ensures
                 // that it's "Running".
                 ss.switch_to_thread(server_pid, Some(server_tid))?;
-                ss.set_thread_result(server_pid, server_tid, xous_kernel::Result::MessageEnvelope(envelope))
-                    .map(|_| xous_kernel::Result::Ok)
+                ss.set_thread_result(server_pid, server_tid, redoubt_abi::Result::MessageEnvelope(envelope))
+                    .map(|_| redoubt_abi::Result::Ok)
             };
         }
         klog!("no threads available in PID {} to handle this message, so queueing", server_pid);
@@ -416,19 +416,19 @@ fn send_message(pid: PID, tid: TID, cid: CID, message: Message) -> SysCallResult
                 SWITCHTO_CALLER.with(|c| *c = None);
                 let result = ss
                     .activate_process_thread(tid, ppid, 0, false, PostActivateOp::None)
-                    .map(|_| Ok(xous_kernel::Result::ResumeProcess))
-                    .unwrap_or(Err(xous_kernel::Error::ProcessNotFound));
+                    .map(|_| Ok(redoubt_abi::Result::ResumeProcess))
+                    .unwrap_or(Err(redoubt_abi::Error::ProcessNotFound));
 
                 ss.set_last_thread(PID::new(ORIGINAL_PID.load(Relaxed)).unwrap(), ORIGINAL_TID.load(Relaxed))
                     .ok();
                 result
             } else {
                 ss.unschedule_thread(pid, tid)?;
-                Ok(xous_kernel::Result::BlockedProcess)
+                Ok(redoubt_abi::Result::BlockedProcess)
             }
         } else {
             // println!("Returning to Client with Ok result");
-            Ok(xous_kernel::Result::Ok)
+            Ok(redoubt_abi::Result::Ok)
         }
     })
 }
@@ -445,9 +445,9 @@ fn return_memory(
     SystemServices::with_mut(|ss| {
         let sender = SenderID::from(sender);
 
-        let server = ss.server_from_sidx_mut(sender.sidx).ok_or(xous_kernel::Error::ServerNotFound)?;
+        let server = ss.server_from_sidx_mut(sender.sidx).ok_or(redoubt_abi::Error::ServerNotFound)?;
         if server.pid != server_pid {
-            return Err(xous_kernel::Error::ServerNotFound);
+            return Err(redoubt_abi::Error::ServerNotFound);
         }
         let result = server.take_waiting_message(sender.idx, Some(&buf))?;
         klog!("waiting message was: {:?}", result);
@@ -456,16 +456,16 @@ fn return_memory(
                 (client_pid, client_ctx, server_addr, client_addr, len)
             }
             WaitingMessage::MovedMemory => {
-                return Ok(xous_kernel::Result::Ok);
+                return Ok(redoubt_abi::Result::Ok);
             }
             WaitingMessage::ForgetMemory(range) => {
                 return MemoryManager::with_mut(|mm| {
-                    let mut result = Ok(xous_kernel::Result::Ok);
+                    let mut result = Ok(redoubt_abi::Result::Ok);
                     let virt = range.as_ptr() as usize;
                     let size = range.len();
                     if cfg!(baremetal) && virt & 0xfff != 0 {
                         klog!("VIRT NOT DIVISIBLE BY 4: {:08x}", virt);
-                        return Err(xous_kernel::Error::BadAlignment);
+                        return Err(redoubt_abi::Error::BadAlignment);
                     }
                     for addr in (virt..(virt + size)).step_by(PAGE_SIZE) {
                         if let Err(e) = mm.unmap_page(addr as *mut usize) {
@@ -479,11 +479,11 @@ fn return_memory(
             }
             WaitingMessage::ScalarMessage(_pid, _tid) => {
                 klog!("WARNING: Tried to wait on a message that was a scalar");
-                return Err(xous_kernel::Error::DoubleFree);
+                return Err(redoubt_abi::Error::DoubleFree);
             }
             WaitingMessage::None => {
                 klog!("WARNING: Tried to wait on a message that didn't exist -- return memory");
-                return Err(xous_kernel::Error::DoubleFree);
+                return Err(redoubt_abi::Error::DoubleFree);
             }
         };
         // println!(
@@ -501,7 +501,7 @@ fn return_memory(
         #[cfg(not(baremetal))]
         let src_virt = buf.as_ptr() as _;
 
-        let return_value = xous_kernel::Result::MemoryReturned(offset, valid);
+        let return_value = redoubt_abi::Result::MemoryReturned(offset, valid);
 
         // Return the memory to the calling process
         ss.return_memory(src_virt, client_pid, client_tid, client_addr.get() as _, len.get())?;
@@ -531,14 +531,14 @@ fn return_memory(
             // In a baremetal environment, the opposite is true -- we instruct
             // the server to resume and return to the client.
             ss.set_thread_result(client_pid, client_tid, return_value)?;
-            Ok(xous_kernel::Result::Ok)
+            Ok(redoubt_abi::Result::Ok)
         } else {
             // Switch away from the server, but leave it as Runnable
             if cfg!(baremetal) {
                 ss.unschedule_thread(server_pid, server_tid)?;
                 ss.ready_thread(server_pid, server_tid)?
             }
-            ss.set_thread_result(server_pid, server_tid, xous_kernel::Result::Ok)?;
+            ss.set_thread_result(server_pid, server_tid, redoubt_abi::Result::Ok)?;
 
             // Switch to the client
             ss.switch_to_thread(client_pid, Some(client_tid))?;
@@ -552,29 +552,29 @@ fn return_result(
     server_tid: TID,
     in_irq: bool,
     sender: MessageSender,
-    return_value: xous_kernel::Result,
+    return_value: redoubt_abi::Result,
 ) -> SysCallResult {
     SystemServices::with_mut(|ss| {
         let sender = SenderID::from(sender);
 
-        let server = ss.server_from_sidx_mut(sender.sidx).ok_or(xous_kernel::Error::ServerNotFound)?;
+        let server = ss.server_from_sidx_mut(sender.sidx).ok_or(redoubt_abi::Error::ServerNotFound)?;
         if server.pid != server_pid {
-            return Err(xous_kernel::Error::ServerNotFound);
+            return Err(redoubt_abi::Error::ServerNotFound);
         }
         let result = server.take_waiting_message(sender.idx, None)?;
         let (client_pid, client_tid) = match result {
             WaitingMessage::ScalarMessage(pid, tid) => (pid, tid),
             WaitingMessage::ForgetMemory(_) => {
                 klog!("WARNING: Tried to wait on a scalar message that was actually forgettingmemory");
-                return Err(xous_kernel::Error::DoubleFree);
+                return Err(redoubt_abi::Error::DoubleFree);
             }
             WaitingMessage::BorrowedMemory(_, _, _, _, _) => {
                 klog!("WARNING: Tried to wait on a scalar message that was actually borrowed memory");
-                return Err(xous_kernel::Error::DoubleFree);
+                return Err(redoubt_abi::Error::DoubleFree);
             }
             WaitingMessage::MovedMemory => {
                 klog!("WARNING: Tried to wait on a scalar message that was actually moved memory");
-                return Err(xous_kernel::Error::DoubleFree);
+                return Err(redoubt_abi::Error::DoubleFree);
             }
             WaitingMessage::None => {
                 klog!(
@@ -584,7 +584,7 @@ fn return_result(
                     if in_irq { "yes" } else { "no" },
                     result
                 );
-                return Err(xous_kernel::Error::DoubleFree);
+                return Err(redoubt_abi::Error::DoubleFree);
             }
         };
 
@@ -610,14 +610,14 @@ fn return_result(
             // In a baremetal environment, the opposite is true -- we instruct
             // the server to resume and return to the client.
             ss.set_thread_result(client_pid, client_tid, return_value)?;
-            Ok(xous_kernel::Result::Ok)
+            Ok(redoubt_abi::Result::Ok)
         } else {
             if cfg!(baremetal) {
                 ss.unschedule_thread(server_pid, server_tid)?;
                 ss.ready_thread(server_pid, server_tid)?
             }
             // Switch away from the server, but leave it as Runnable
-            ss.set_thread_result(server_pid, server_tid, xous_kernel::Result::Ok)?;
+            ss.set_thread_result(server_pid, server_tid, redoubt_abi::Result::Ok)?;
 
             // Switch to the client
             ss.switch_to_thread(client_pid, Some(client_tid))?;
@@ -644,17 +644,17 @@ fn reply_and_receive_next(
         struct MessageResponse {
             pid: PID,
             tid: TID,
-            result: xous_kernel::Result,
+            result: redoubt_abi::Result,
         }
 
         let (result, next_message) = {
-            let server = ss.server_from_sidx_mut(sender.sidx).ok_or(xous_kernel::Error::ServerNotFound)?;
+            let server = ss.server_from_sidx_mut(sender.sidx).ok_or(redoubt_abi::Error::ServerNotFound)?;
             if server.pid != server_pid {
                 println!(
                     "WARNING: PIDs don't match!  The server is from PID {}, but our PID is {}",
                     server.pid, server_pid
                 );
-                return Err(xous_kernel::Error::ServerNotFound);
+                return Err(redoubt_abi::Error::ServerNotFound);
             }
 
             let waiting_message = server.take_waiting_message(sender.idx, None)?;
@@ -673,15 +673,15 @@ fn reply_and_receive_next(
         let response = match result {
             WaitingMessage::ScalarMessage(pid, tid) => {
                 let result = match scalar_type {
-                    1 => xous_kernel::Result::Scalar1(arg1),
-                    2 => xous_kernel::Result::Scalar2(arg1, arg2),
-                    _ => xous_kernel::Result::Scalar5(arg0, arg1, arg2, arg3, arg4),
+                    1 => redoubt_abi::Result::Scalar1(arg1),
+                    2 => redoubt_abi::Result::Scalar2(arg1, arg2),
+                    _ => redoubt_abi::Result::Scalar5(arg0, arg1, arg2, arg3, arg4),
                 };
                 MessageResponse { pid, tid, result }
             }
             WaitingMessage::ForgetMemory(_) => {
                 klog!("WARNING: Tried to wait on a scalar message that was actually forgetting memory");
-                return Err(xous_kernel::Error::DoubleFree);
+                return Err(redoubt_abi::Error::DoubleFree);
             }
             WaitingMessage::BorrowedMemory(pid, tid, _server_addr, client_addr, len) => {
                 #[cfg(baremetal)]
@@ -695,16 +695,16 @@ fn reply_and_receive_next(
                 MessageResponse {
                     pid,
                     tid,
-                    result: xous_kernel::Result::MemoryReturned(MemorySize::new(arg3), MemorySize::new(arg4)),
+                    result: redoubt_abi::Result::MemoryReturned(MemorySize::new(arg3), MemorySize::new(arg4)),
                 }
             }
             WaitingMessage::MovedMemory => {
                 klog!("WARNING: Tried to wait on a scalar message that was actually moved memory");
-                return Err(xous_kernel::Error::DoubleFree);
+                return Err(redoubt_abi::Error::DoubleFree);
             }
             WaitingMessage::None => {
                 klog!("WARNING: Tried to wait on a message that didn't exist -- receive and return scalar");
-                return Err(xous_kernel::Error::DoubleFree);
+                return Err(redoubt_abi::Error::DoubleFree);
             }
         };
         let client_pid = response.pid;
@@ -726,7 +726,7 @@ fn reply_and_receive_next(
                 ss.set_thread_result(response.pid, response.tid, response.result)?;
 
                 // Return the new message envelope to the server
-                Ok(xous_kernel::Result::MessageEnvelope(msg))
+                Ok(redoubt_abi::Result::MessageEnvelope(msg))
             } else {
                 if cfg!(baremetal) {
                     ss.unschedule_thread(server_pid, server_tid)?;
@@ -734,7 +734,7 @@ fn reply_and_receive_next(
                 }
 
                 // When the server is resumed, it will receive this as a return value.
-                ss.set_thread_result(server_pid, server_tid, xous_kernel::Result::MessageEnvelope(msg))?;
+                ss.set_thread_result(server_pid, server_tid, redoubt_abi::Result::MessageEnvelope(msg))?;
 
                 // Switch to the client
                 ss.switch_to_thread(response.pid, Some(response.tid))?;
@@ -751,8 +751,8 @@ fn reply_and_receive_next(
                     false,
                     PostActivateOp::SetThreadResult { result: response.result },
                 )
-                .map(|_| Ok(xous_kernel::Result::ResumeProcess))
-                .unwrap_or(Err(xous_kernel::Error::ProcessNotFound))
+                .map(|_| Ok(redoubt_abi::Result::ResumeProcess))
+                .unwrap_or(Err(redoubt_abi::Error::ProcessNotFound))
             }
             // For hosted targets, simply return `BlockedProcess` indicating we'll make
             // a callback to their socket at a later time.
@@ -763,7 +763,7 @@ fn reply_and_receive_next(
                 ss.set_thread_result(response.pid, response.tid, response.result)?;
 
                 // Indicate that the server should block its process
-                Ok(xous_kernel::Result::BlockedProcess)
+                Ok(redoubt_abi::Result::BlockedProcess)
             }
         }
     })
@@ -773,24 +773,24 @@ fn receive_message(pid: PID, tid: TID, sid: SID, blocking: ExecutionType) -> Sys
     SystemServices::with_mut(|ss| {
         assert!(ss.thread_is_running(pid, tid), "current thread is not running");
         // See if there is a pending message.  If so, return immediately.
-        let sidx = ss.sidx_from_sid(sid, pid).ok_or(xous_kernel::Error::ServerNotFound)?;
-        let server = ss.server_from_sidx_mut(sidx).ok_or(xous_kernel::Error::ServerNotFound)?;
+        let sidx = ss.sidx_from_sid(sid, pid).ok_or(redoubt_abi::Error::ServerNotFound)?;
+        let server = ss.server_from_sidx_mut(sidx).ok_or(redoubt_abi::Error::ServerNotFound)?;
         // server.print_queue();
 
         // Ensure the server is for this PID
         if server.pid != pid {
-            return Err(xous_kernel::Error::ServerNotFound);
+            return Err(redoubt_abi::Error::ServerNotFound);
         }
 
         // If there is a pending message, return it immediately.
         if let Some(msg) = server.take_next_message(sidx) {
             klog!("waiting messages found -- returning {:x?}", msg);
-            return Ok(xous_kernel::Result::MessageEnvelope(msg));
+            return Ok(redoubt_abi::Result::MessageEnvelope(msg));
         }
 
         if blocking == ExecutionType::NonBlocking {
             klog!("nonblocking message -- returning None");
-            return Ok(xous_kernel::Result::None);
+            return Ok(redoubt_abi::Result::None);
         }
 
         // There is no pending message, so return control to the parent
@@ -807,8 +807,8 @@ fn receive_message(pid: PID, tid: TID, sid: SID, blocking: ExecutionType) -> Sys
             // TODO: Advance thread
             let result = ss
                 .activate_process_thread(tid, ppid, 0, false, PostActivateOp::None)
-                .map(|_| Ok(xous_kernel::Result::ResumeProcess))
-                .unwrap_or(Err(xous_kernel::Error::ProcessNotFound));
+                .map(|_| Ok(redoubt_abi::Result::ResumeProcess))
+                .unwrap_or(Err(redoubt_abi::Error::ProcessNotFound));
             ss.set_last_thread(PID::new(ORIGINAL_PID.load(Relaxed)).unwrap(), ORIGINAL_TID.load(Relaxed))
                 .ok();
             result
@@ -816,7 +816,7 @@ fn receive_message(pid: PID, tid: TID, sid: SID, blocking: ExecutionType) -> Sys
         // For hosted targets, simply return `BlockedProcess` indicating we'll make
         // a callback to their socket at a later time.
         else {
-            ss.unschedule_thread(pid, tid).map(|_| xous_kernel::Result::BlockedProcess)
+            ss.unschedule_thread(pid, tid).map(|_| redoubt_abi::Result::BlockedProcess)
         }
     })
 }
@@ -828,7 +828,7 @@ pub fn handle(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallResult 
     #[allow(clippy::let_and_return)]
     let result = if in_irq && !call.can_call_from_interrupt() {
         klog!("[!] Called {:?} that's cannot be called from the interrupt handler!", call);
-        Err(xous_kernel::Error::InvalidSyscall)
+        Err(redoubt_abi::Error::InvalidSyscall)
     } else {
         handle_inner(pid, tid, in_irq, call)
     };
@@ -857,16 +857,16 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                     && virt.is_some_and(|x| {
                         x.get()
                             .checked_add(size.get())
-                            .is_none_or(|end| end >= xous_kernel::arch::USER_AREA_END)
+                            .is_none_or(|end| end >= redoubt_abi::arch::USER_AREA_END)
                     })
                 {
                     klog!("Exceeded user area");
-                    return Err(xous_kernel::Error::BadAddress);
+                    return Err(redoubt_abi::Error::BadAddress);
 
                 // Don't allow mapping non-page values
                 } else if size.get() & (PAGE_SIZE - 1) != 0 {
                     // println!("map: bad alignment of size {:08x}", size);
-                    return Err(xous_kernel::Error::BadAlignment);
+                    return Err(redoubt_abi::Error::BadAlignment);
                 }
                 // println!(
                 //     "Mapping {:08x} -> {:08x} ({} bytes, flags: {:?})",
@@ -889,11 +889,11 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                             .any(|page| mm.is_main_memory(page as *mut u8))
                     {
                         klog!("PID {} tried to map physical RAM {:08x} by address", pid.get(), base);
-                        return Err(xous_kernel::Error::InvalidArgument);
+                        return Err(redoubt_abi::Error::InvalidArgument);
                     }
                     if !crate::grants::may_map_device(pid, base, size.get()) {
                         klog!("PID {} denied device {:08x}", pid.get(), base);
-                        return Err(xous_kernel::Error::AccessDenied);
+                        return Err(redoubt_abi::Error::AccessDenied);
                     }
                 }
 
@@ -912,20 +912,20 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                     }
                 }
 
-                Ok(xous_kernel::Result::MemoryRange(range))
+                Ok(redoubt_abi::Result::MemoryRange(range))
             })
         }
         SysCall::UnmapMemory(range) => MemoryManager::with_mut(|mm| {
-            let mut result = Ok(xous_kernel::Result::Ok);
+            let mut result = Ok(redoubt_abi::Result::Ok);
             let virt = range.as_ptr() as usize;
             let size = range.len();
             if cfg!(baremetal) && virt & 0xfff != 0 {
-                return Err(xous_kernel::Error::BadAlignment);
+                return Err(redoubt_abi::Error::BadAlignment);
             }
             if cfg!(baremetal) && (virt >= USER_AREA_END || virt.saturating_add(size) >= USER_AREA_END) {
                 // don't allow processes to unmap kernel or page table memory; however, these addresses
                 // only have meaning on actual hardware (baremetal), and not in hosted mode.
-                return Err(xous_kernel::Error::BadAddress);
+                return Err(redoubt_abi::Error::BadAddress);
             }
             for addr in (virt..(virt + size)).step_by(PAGE_SIZE) {
                 if let Err(e) = mm.unmap_page(addr as *mut usize) {
@@ -938,14 +938,14 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
         }),
         SysCall::IncreaseHeap(delta, flags) => {
             if delta & 0xfff != 0 {
-                return Err(xous_kernel::Error::BadAlignment);
+                return Err(redoubt_abi::Error::BadAlignment);
             }
             // Special case for a delta of 0 -- just return the current heap size
             if delta == 0 {
                 let (start, length) = ArchProcess::with_inner_mut(|process_inner| {
                     (process_inner.mem_heap_base, process_inner.mem_heap_size)
                 });
-                return Ok(xous_kernel::Result::MemoryRange(
+                return Ok(redoubt_abi::Result::MemoryRange(
                     // 0-length MemoryRanges are disallowed -- return 4096 as the minimum even though it's a
                     // lie.
                     crate::mem::memory_range(start, if length == 0 { 4096 } else { length }).unwrap(),
@@ -957,9 +957,9 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                     let new_size = process_inner
                         .mem_heap_size
                         .checked_add(delta)
-                        .ok_or(xous_kernel::Error::OutOfMemory)?;
+                        .ok_or(redoubt_abi::Error::OutOfMemory)?;
                     if new_size > process_inner.mem_heap_max {
-                        return Err(xous_kernel::Error::OutOfMemory);
+                        return Err(redoubt_abi::Error::OutOfMemory);
                     }
 
                     let start = process_inner.mem_heap_base + process_inner.mem_heap_size;
@@ -974,25 +974,25 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                 .inspect_err(|_| {
                     ArchProcess::with_inner_mut(|process_inner| process_inner.mem_heap_size -= delta)
                 })
-                .map(xous_kernel::Result::MemoryRange)
+                .map(redoubt_abi::Result::MemoryRange)
         }
         SysCall::DecreaseHeap(delta) => {
             if delta & 0xfff != 0 {
-                return Err(xous_kernel::Error::BadAlignment);
+                return Err(redoubt_abi::Error::BadAlignment);
             }
             let (start, size) = ArchProcess::with_inner(|process_inner| {
                 (process_inner.mem_heap_base, process_inner.mem_heap_size)
             });
             // Don't allow decreasing the heap beyond the current allocation
             if delta >= size {
-                return Err(xous_kernel::Error::OutOfMemory);
+                return Err(redoubt_abi::Error::OutOfMemory);
             }
             let end = start + size;
 
             // Unmap the pages from the heap. A page the process has lent out is refused; the heap
             // then keeps its size, and the pages unmapped so far are simply gone from it.
             MemoryManager::with_mut(|mm| {
-                for page in ((end - delta)..end).step_by(xous_kernel::arch::PAGE_SIZE) {
+                for page in ((end - delta)..end).step_by(redoubt_abi::arch::PAGE_SIZE) {
                     mm.unmap_page(page as *mut usize)?;
                 }
                 Ok(())
@@ -1003,7 +1003,7 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
             });
 
             // Return the new size of the heap
-            crate::mem::memory_range(start, length).map(xous_kernel::Result::MemoryRange)
+            crate::mem::memory_range(start, length).map(redoubt_abi::Result::MemoryRange)
         }
         SysCall::SwitchTo(new_pid, new_tid) => SystemServices::with_mut(|ss| {
             SWITCHTO_CALLER.with(|caller| {
@@ -1021,13 +1021,13 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
             let new_tid = ss.activate_process_thread(tid, new_pid, new_tid, true, PostActivateOp::None)?;
             ORIGINAL_PID.store(new_pid.get(), Relaxed);
             ORIGINAL_TID.store(new_tid, Relaxed);
-            Ok(xous_kernel::Result::ResumeProcess)
+            Ok(redoubt_abi::Result::ResumeProcess)
         }),
         SysCall::ClaimInterrupt(no, callback, arg) => {
-            interrupt_claim(no, pid as definitions::PID, callback, arg).map(|_| xous_kernel::Result::Ok)
+            interrupt_claim(no, pid as definitions::PID, callback, arg).map(|_| redoubt_abi::Result::Ok)
         }
         SysCall::FreeInterrupt(no) => {
-            interrupt_free(no, pid as definitions::PID).map(|_| xous_kernel::Result::Ok)
+            interrupt_free(no, pid as definitions::PID).map(|_| redoubt_abi::Result::Ok)
         }
         SysCall::Yield => do_yield(pid, tid),
         SysCall::ReturnToParent(_pid, _cpuid) => {
@@ -1038,7 +1038,7 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                     crate::arch::irq::set_isr_return_pair(parent_pid, parent_ctx)
                 }
             };
-            Ok(xous_kernel::Result::ResumeProcess)
+            Ok(redoubt_abi::Result::ResumeProcess)
         }
         SysCall::ReceiveMessage(sid) => receive_message(pid, tid, sid, ExecutionType::Blocking),
         SysCall::TryReceiveMessage(sid) => receive_message(pid, tid, sid, ExecutionType::NonBlocking),
@@ -1050,13 +1050,13 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
             if cfg!(baremetal) {
                 let result = ss
                     .activate_process_thread(tid, ppid, 0, false, PostActivateOp::None)
-                    .map(|_| Ok(xous_kernel::Result::ResumeProcess))
-                    .unwrap_or(Err(xous_kernel::Error::ProcessNotFound));
+                    .map(|_| Ok(redoubt_abi::Result::ResumeProcess))
+                    .unwrap_or(Err(redoubt_abi::Error::ProcessNotFound));
                 ss.set_last_thread(PID::new(ORIGINAL_PID.load(Relaxed)).unwrap(), ORIGINAL_TID.load(Relaxed))
                     .ok();
                 result
             } else {
-                Ok(xous_kernel::Result::Ok)
+                Ok(redoubt_abi::Result::Ok)
             }
         }),
         SysCall::CreateThread(thread_init) => SystemServices::with_mut(|ss| {
@@ -1065,13 +1065,13 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                 if cfg!(baremetal) {
                     // Immediately switch to the new thread
                     ss.switch_to_thread(pid, Some(new_tid)).expect("couldn't activate new thread");
-                    ss.set_thread_result(pid, tid, xous_kernel::Result::ThreadID(new_tid))
+                    ss.set_thread_result(pid, tid, redoubt_abi::Result::ThreadID(new_tid))
                         .expect("couldn't set new thread ID");
 
                     // Return `ResumeProcess` since we're switching threads
-                    xous_kernel::Result::ResumeProcess
+                    redoubt_abi::Result::ResumeProcess
                 } else {
-                    xous_kernel::Result::ThreadID(new_tid)
+                    redoubt_abi::Result::ThreadID(new_tid)
                 }
             })
         }),
@@ -1080,11 +1080,11 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
         // `UnhandledSyscall` below.
         #[cfg(not(baremetal))]
         SysCall::CreateProcess(process_init) => SystemServices::with_mut(|ss| {
-            ss.create_process(process_init).map(xous_kernel::Result::NewProcess)
+            ss.create_process(process_init).map(redoubt_abi::Result::NewProcess)
         }),
         SysCall::CreateServerWithAddress(name) => SystemServices::with_mut(|ss| {
             const NS_SID: SID = SID::from_u32(
-                u32::from_le_bytes(*b"xous"),
+                u32::from_le_bytes(*b"rdbt"),
                 u32::from_le_bytes(*b"-nam"),
                 u32::from_le_bytes(*b"e-se"),
                 u32::from_le_bytes(*b"rver"),
@@ -1092,38 +1092,38 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
             // This counts on the `name==NS_SID` short-circuiting the NS_TOFU call. Short-circuit evaluation
             // is the specified behavior in Rust, so this should always be correct.
             if name == NS_SID && NS_TOFU.swap(true, Relaxed) {
-                return Err(xous_kernel::Error::ServerExists);
+                return Err(redoubt_abi::Error::ServerExists);
             }
             // note: if create_server_with_address() fails on the legitimate boot, it fails-closed forever.
             // this should never happen - on early boot there is no reason for server creation to fail -
             // so this is a deliberate choice to simplify the check logic.
             ss.create_server_with_address(pid, name, true)
-                .map(|(sid, cid)| xous_kernel::Result::NewServerID(sid, cid))
+                .map(|(sid, cid)| redoubt_abi::Result::NewServerID(sid, cid))
         }),
         SysCall::CreateServer => SystemServices::with_mut(|ss| {
-            ss.create_server(pid, true).map(|(sid, cid)| xous_kernel::Result::NewServerID(sid, cid))
+            ss.create_server(pid, true).map(|(sid, cid)| redoubt_abi::Result::NewServerID(sid, cid))
         }),
         SysCall::CreateServerId => {
-            SystemServices::with_mut(|ss| ss.create_server_id().map(xous_kernel::Result::ServerID))
+            SystemServices::with_mut(|ss| ss.create_server_id().map(redoubt_abi::Result::ServerID))
         }
         SysCall::TryConnect(sid) => {
-            SystemServices::with_mut(|ss| ss.connect_to_server(sid).map(xous_kernel::Result::ConnectionID))
+            SystemServices::with_mut(|ss| ss.connect_to_server(sid).map(redoubt_abi::Result::ConnectionID))
         }
         SysCall::ReturnMemory(sender, buf, offset, valid) => {
             return_memory(pid, tid, in_irq, sender, buf, offset, valid)
         }
         SysCall::ReturnScalar1(sender, arg) => {
-            return_result(pid, tid, in_irq, sender, xous_kernel::Result::Scalar1(arg))
+            return_result(pid, tid, in_irq, sender, redoubt_abi::Result::Scalar1(arg))
         }
         SysCall::ReturnScalar2(sender, arg1, arg2) => {
-            return_result(pid, tid, in_irq, sender, xous_kernel::Result::Scalar2(arg1, arg2))
+            return_result(pid, tid, in_irq, sender, redoubt_abi::Result::Scalar2(arg1, arg2))
         }
         SysCall::ReturnScalar5(sender, arg1, arg2, arg3, arg4, arg5) => return_result(
             pid,
             tid,
             in_irq,
             sender,
-            xous_kernel::Result::Scalar5(arg1, arg2, arg3, arg4, arg5),
+            redoubt_abi::Result::Scalar5(arg1, arg2, arg3, arg4, arg5),
         ),
         SysCall::ReplyAndReceiveNext(sender, a0, a1, a2, a3, a4, scalar_type) => {
             reply_and_receive_next(pid, tid, in_irq, sender, a0, a1, a2, a3, a4, scalar_type)
@@ -1134,29 +1134,29 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
             ss.terminate_process(pid)?;
             // Clear out `SWITCHTO_CALLER` since we're resuming the parent process.
             SWITCHTO_CALLER.with(|c| *c = None);
-            Ok(xous_kernel::Result::ResumeProcess)
+            Ok(redoubt_abi::Result::ResumeProcess)
         }),
-        SysCall::Shutdown => SystemServices::with_mut(|ss| ss.shutdown().map(|_| xous_kernel::Result::Ok)),
-        SysCall::GetProcessId => Ok(xous_kernel::Result::ProcessID(pid)),
-        SysCall::GetThreadId => Ok(xous_kernel::Result::ThreadID(tid)),
+        SysCall::Shutdown => SystemServices::with_mut(|ss| ss.shutdown().map(|_| redoubt_abi::Result::Ok)),
+        SysCall::GetProcessId => Ok(redoubt_abi::Result::ProcessID(pid)),
+        SysCall::GetThreadId => Ok(redoubt_abi::Result::ThreadID(tid)),
 
         SysCall::Connect(sid) => {
             let result = SystemServices::with_mut(|ss| {
-                ss.connect_to_server(sid).map(xous_kernel::Result::ConnectionID)
+                ss.connect_to_server(sid).map(redoubt_abi::Result::ConnectionID)
             });
             match result {
                 Ok(o) => Ok(o),
-                Err(xous_kernel::Error::ServerNotFound) => retry_syscall(pid, tid),
+                Err(redoubt_abi::Error::ServerNotFound) => retry_syscall(pid, tid),
                 Err(e) => Err(e),
             }
         }
         SysCall::ConnectForProcess(pid, sid) => {
             let result = SystemServices::with_mut(|ss| {
-                ss.connect_process_to_server(pid, sid).map(xous_kernel::Result::ConnectionID)
+                ss.connect_process_to_server(pid, sid).map(redoubt_abi::Result::ConnectionID)
             });
             match result {
                 Ok(o) => Ok(o),
-                Err(xous_kernel::Error::ServerNotFound) => retry_syscall(pid, tid),
+                Err(redoubt_abi::Error::ServerNotFound) => retry_syscall(pid, tid),
                 Err(e) => Err(e),
             }
         }
@@ -1164,24 +1164,24 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
             let result = send_message(pid, tid, cid, message);
             match result {
                 Ok(o) => Ok(o),
-                Err(xous_kernel::Error::ServerQueueFull) => retry_syscall(pid, tid),
+                Err(redoubt_abi::Error::ServerQueueFull) => retry_syscall(pid, tid),
                 Err(e) => Err(e),
             }
         }
         SysCall::Disconnect(cid) => {
-            SystemServices::with_mut(|ss| ss.disconnect_from_server(cid).and(Ok(xous_kernel::Result::Ok)))
+            SystemServices::with_mut(|ss| ss.disconnect_from_server(cid).and(Ok(redoubt_abi::Result::Ok)))
         }
         SysCall::DestroyServer(sid) => {
-            SystemServices::with_mut(|ss| ss.destroy_server(pid, sid).and(Ok(xous_kernel::Result::Ok)))
+            SystemServices::with_mut(|ss| ss.destroy_server(pid, sid).and(Ok(redoubt_abi::Result::Ok)))
         }
         SysCall::JoinThread(other_tid) => {
             if other_tid >= crate::arch::process::MAX_THREAD {
-                return Err(xous_kernel::Error::ThreadNotAvailable);
+                return Err(redoubt_abi::Error::ThreadNotAvailable);
             }
             SystemServices::with_mut(|ss| ss.join_thread(pid, tid, other_tid)).map(|ret| {
                 // Successfully joining a thread causes this thread to sleep while the parent process
                 // is resumed. This is the same as a `Yield`
-                if ret == xous_kernel::Result::ResumeProcess {
+                if ret == redoubt_abi::Result::ResumeProcess {
                     SWITCHTO_CALLER.with(|c| *c = None);
                 }
                 ret
@@ -1190,26 +1190,26 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
         SysCall::UpdateMemoryFlags(range, flags, pid) => {
             // We do not yet support modifying flags for other processes.
             if pid.is_some() {
-                return Err(xous_kernel::Error::ProcessNotChild);
+                return Err(redoubt_abi::Error::ProcessNotChild);
             }
 
             MemoryManager::with_mut(|mm| mm.update_memory_flags(range, flags))?;
-            Ok(xous_kernel::Result::Ok)
+            Ok(redoubt_abi::Result::Ok)
         }
         SysCall::AdjustProcessLimit(index, current, new) => match index {
             1 => arch::process::Process::with_inner_mut(|p| {
                 if p.mem_heap_max == current {
                     p.mem_heap_max = new;
                 }
-                Ok(xous_kernel::Result::Scalar2(index, p.mem_heap_max))
+                Ok(redoubt_abi::Result::Scalar2(index, p.mem_heap_max))
             }),
             2 => arch::process::Process::with_inner_mut(|p| {
                 if p.mem_heap_size == current && new < p.mem_heap_max {
                     p.mem_heap_size = new;
                 }
-                Ok(xous_kernel::Result::Scalar2(index, p.mem_heap_size))
+                Ok(redoubt_abi::Result::Scalar2(index, p.mem_heap_size))
             }),
-            _ => Err(xous_kernel::Error::InvalidLimit),
+            _ => Err(redoubt_abi::Error::InvalidLimit),
         },
 
         #[cfg(feature = "sbi")]
@@ -1222,12 +1222,12 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
             unimplemented!("No platform specific calls for this platform")
         }
 
-        /* https://github.com/betrusted-io/xous-core/issues/90
+        /* https://github.com/betrusted-io/xous-core-core/issues/90
         SysCall::SetExceptionHandler(pc, sp) => SystemServices::with_mut(|ss| {
             ss.set_exception_handler(pid, pc, sp)
-                .and(Ok(xous_kernel::Result::Ok))
+                .and(Ok(redoubt_abi::Result::Ok))
         }),
         */
-        _ => Err(xous_kernel::Error::UnhandledSyscall),
+        _ => Err(redoubt_abi::Error::UnhandledSyscall),
     }
 }

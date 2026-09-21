@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+#
+# test -- run the Redoubt boot-test bench. Extra arguments go to the bench
+# (a filter, --list, --verbose, --allow-skip, ...).
+#
+# Usage: ./test [--arch rv32|rv64] [BENCH-ARGS...]
+#   ./test                       both widths, every case
+#   ./test --arch rv64 timer     one width, cases matching "timer"
+#
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+arch=rv64
+args=()
+while (($#)); do
+    case "$1" in
+        -a|--arch) arch="${2:?--arch needs rv32 or rv64}"; shift 2 ;;
+        --arch=*)  arch="${1#*=}"; shift ;;
+        -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+        *)         args+=("$1"); shift ;;
+    esac
+done
+
+if ((${#args[@]})); then
+    exec cargo run --quiet -p testbench -- --arch "$arch" "${args[@]}"
+else
+    exec cargo run --quiet -p testbench -- --arch "$arch"
+fi

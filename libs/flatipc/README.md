@@ -1,6 +1,6 @@
-# Xous Flattened IPC
+# Redoubt Flattened IPC
 
-Zero-copy IPC for Xous via clever type annotations.
+Zero-copy IPC for Redoubt via clever type annotations.
 
 ## Synopsis
 
@@ -36,7 +36,7 @@ let value = SimpleValue::from_ipc(ipc_value);
 ## Using IPC
 
 An important feature is the ability to send the data across process boundaries. Two common operations
-in Xous are `lend` and `lend_mut()`. This detaches the data from the current process and attaches it
+in Redoubt are `lend` and `lend_mut()`. This detaches the data from the current process and attaches it
 to the target process. The target process can then use the data as if it were its own, and will return
 the data and unblock the sender when it returns the message.
 

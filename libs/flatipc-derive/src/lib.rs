@@ -241,7 +241,7 @@ fn generate_ipc_struct(ast: &DeriveInput) -> Result<proc_macro2::TokenStream, pr
     let hash = ast_hash(ast);
 
     let build_message = quote! {
-        use xous::definitions::{MemoryMessage, MemoryAddress, MemoryRange};
+        use redoubt_abi::definitions::{MemoryMessage, MemoryAddress, MemoryRange};
         let mut buf = unsafe { MemoryRange::new(data.as_ptr() as usize, data.len()) }.unwrap();
         let msg = MemoryMessage {
             id: opcode,
@@ -251,10 +251,10 @@ fn generate_ipc_struct(ast: &DeriveInput) -> Result<proc_macro2::TokenStream, pr
         };
     };
 
-    let lend = if cfg!(feature = "xous") {
+    let lend = if cfg!(feature = "redoubt") {
         quote! {
             #build_message
-            xous::send_message(connection, xous::Message::MutableBorrow(msg))?;
+            redoubt_abi::send_message(connection, redoubt_abi::Message::MutableBorrow(msg))?;
         }
     } else {
         quote! {
@@ -262,10 +262,10 @@ fn generate_ipc_struct(ast: &DeriveInput) -> Result<proc_macro2::TokenStream, pr
         }
     };
 
-    let try_lend = if cfg!(feature = "xous") {
+    let try_lend = if cfg!(feature = "redoubt") {
         quote! {
             #build_message
-            xous::try_send_message(connection, xous::Message::MutableBorrow(msg))?;
+            redoubt_abi::try_send_message(connection, redoubt_abi::Message::MutableBorrow(msg))?;
         }
     } else {
         quote! {
@@ -273,10 +273,10 @@ fn generate_ipc_struct(ast: &DeriveInput) -> Result<proc_macro2::TokenStream, pr
         }
     };
 
-    let lend_mut = if cfg!(feature = "xous") {
+    let lend_mut = if cfg!(feature = "redoubt") {
         quote! {
             #build_message
-            xous::send_message(connection, xous::Message::MutableBorrow(msg))?;
+            redoubt_abi::send_message(connection, redoubt_abi::Message::MutableBorrow(msg))?;
         }
     } else {
         quote! {
@@ -284,10 +284,10 @@ fn generate_ipc_struct(ast: &DeriveInput) -> Result<proc_macro2::TokenStream, pr
         }
     };
 
-    let try_lend_mut = if cfg!(feature = "xous") {
+    let try_lend_mut = if cfg!(feature = "redoubt") {
         quote! {
             #build_message
-            xous::try_send_message(connection, xous::Message::MutableBorrow(msg))?;
+            redoubt_abi::try_send_message(connection, redoubt_abi::Message::MutableBorrow(msg))?;
         }
     } else {
         quote! {
@@ -295,9 +295,9 @@ fn generate_ipc_struct(ast: &DeriveInput) -> Result<proc_macro2::TokenStream, pr
         }
     };
 
-    let memory_messages = if cfg!(feature = "xous") {
+    let memory_messages = if cfg!(feature = "redoubt") {
         quote! {
-            fn from_memory_message<'a>(msg: &'a xous::MemoryMessage) -> Option<&'a Self> {
+            fn from_memory_message<'a>(msg: &'a redoubt_abi::MemoryMessage) -> Option<&'a Self> {
                 if msg.buf.len() < core::mem::size_of::< #ipc_ident >() {
                     return None;
                 }
@@ -308,7 +308,7 @@ fn generate_ipc_struct(ast: &DeriveInput) -> Result<proc_macro2::TokenStream, pr
                 unsafe { Some(&*(msg.buf.as_ptr() as *const #ipc_ident)) }
             }
 
-            fn from_memory_message_mut<'a>(msg: &'a mut xous::MemoryMessage) -> Option<&'a mut Self> {
+            fn from_memory_message_mut<'a>(msg: &'a mut redoubt_abi::MemoryMessage) -> Option<&'a mut Self> {
                 if msg.buf.len() < core::mem::size_of::< #ipc_ident >() {
                     return None;
                 }

@@ -6,7 +6,7 @@
 //! reports them in the `Plic` kernel argument. The kernel maps the PLIC for itself, so
 //! no userspace process can claim it.
 //!
-//! The PLIC's claim/complete protocol maps onto Xous's interrupt flow like this: the
+//! The PLIC's claim/complete protocol maps onto Redoubt's interrupt flow like this: the
 //! trap handler calls `pending()`, which claims the highest-priority interrupt. The
 //! PLIC will not raise that source again until it is completed, which happens in
 //! `enable_all_irqs()` once the userspace handler has returned. While a handler runs,
@@ -17,8 +17,8 @@ use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use plic::Plic;
 use riscv::register::sie;
-use xous_kernel::arch::KERNEL_PLIC_BASE;
-use xous_kernel::{MemoryFlags, MemoryType, PID};
+use redoubt_abi::arch::KERNEL_PLIC_BASE;
+use redoubt_abi::{MemoryFlags, MemoryType, PID};
 
 /// Sources are enabled at this priority. The context threshold is 0, so any non-zero
 /// priority is delivered.

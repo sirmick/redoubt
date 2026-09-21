@@ -1,4 +1,4 @@
-//! Boot bundle authentication. See `planning/redoubt/VERIFIED-BOOT.md`.
+//! Boot bundle authentication. See `docs/VERIFIED-BOOT.md`.
 //!
 //! The initrd is `signature (64 bytes) || bundle-tar`. The loader verifies the signature
 //! with one embedded Ed25519 public key and refuses to boot otherwise. What the signature

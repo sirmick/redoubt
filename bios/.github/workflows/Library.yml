@@ -1,0 +1,196 @@
+name: Library
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+env:
+  CARGO_UNSTABLE_SPARSE_REGISTRY: true
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  fmt:
+    name: Rustfmt all packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Rustfmt Check
+        uses: actions-rust-lang/rustfmt@v1
+
+  build-rustsbi:
+    name: Build rustsbi
+    runs-on: ubuntu-latest
+    needs: fmt
+    strategy:
+      matrix:
+        TARGET: [riscv64imac-unknown-none-elf, riscv32imac-unknown-none-elf]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Build (no default features)
+        run: |
+          cargo build --locked -p rustsbi --target ${{ matrix.TARGET }} --verbose
+      - name: Build (machine)
+        run: |
+          cargo build --locked -p rustsbi --target ${{ matrix.TARGET }} --verbose --features "machine"
+      - name: Build (forward)
+        run: |
+          cargo build --locked -p rustsbi --target ${{ matrix.TARGET }} --verbose --features "forward"
+      - name: Build (machine + forward)
+        run: |
+          cargo build --locked -p rustsbi --target ${{ matrix.TARGET }} --verbose --features "machine, forward"
+
+  test-rustsbi:
+    name: Test rustsbi
+    needs: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Run tests (no default features)
+        run: |
+          cargo test --locked -p rustsbi --verbose
+      - name: Run tests (machine)
+        run: |
+          cargo test --locked -p rustsbi --verbose --features "machine"
+      # The `forward` feature requires RISC-V, so it is covered by the target checks below.
+
+  test-riscv-aia:
+    name: Test riscv-aia
+    needs: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Run tests
+        run: cargo test --locked -p riscv-aia --verbose
+
+  test-sbi-spec:
+    name: Test sbi-spec
+    needs: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Run tests
+        run: cargo test --locked -p sbi-spec --verbose
+
+  test-rpmi:
+    name: Test rpmi
+    needs: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Run tests
+        run: cargo test --locked -p rpmi --verbose
+
+  test-penglai:
+    name: Test `penglai` crate
+    needs: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Run tests
+        run: cargo test --locked -p penglai --verbose
+
+  build-sbi-rt:
+    name: Build sbi-rt
+    needs: fmt
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        TARGET: [riscv64imac-unknown-none-elf, riscv32imac-unknown-none-elf]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Build
+        run: |
+          cargo build --locked --target ${{ matrix.TARGET }} --verbose -p sbi-rt
+
+  test-sbi-rt:
+    name: Test sbi-rt
+    needs: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Run tests
+        run: cargo test --locked -p sbi-rt --verbose
+
+  build-sbi-testing:
+    name: Build sbi-testing
+    needs: fmt
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        TARGET: [riscv64imac-unknown-none-elf, riscv32imac-unknown-none-elf]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Build (no default features)
+        run: |
+          cargo build --locked --target ${{ matrix.TARGET }} --verbose -p sbi-testing
+      - name: Build (log)
+        run: |
+          cargo build --locked --target ${{ matrix.TARGET }} --verbose -p sbi-testing --features "log"
+
+  library-compatibility:
+    name: Libraries (${{ matrix.policy }})
+    runs-on: ubuntu-latest
+    needs: fmt
+    strategy:
+      fail-fast: false
+      matrix:
+        policy: [current-stable, msrv]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve Rust toolchain
+        id: rust
+        shell: bash
+        run: |
+          if [[ "${{ matrix.policy }}" == "current-stable" ]]; then
+            version=stable
+          else
+            version="$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)"
+          fi
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Install Rust ${{ steps.rust.outputs.version }}
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ steps.rust.outputs.version }}
+          target: riscv32imac-unknown-none-elf,riscv64imac-unknown-none-elf
+          rustflags: ""
+      - name: Test libraries on the host
+        run: cargo +${{ steps.rust.outputs.version }} test --locked
+      - name: Check all library features on 64-bit RISC-V
+        run: |
+          cargo +${{ steps.rust.outputs.version }} check --locked --all-features --target riscv64imac-unknown-none-elf
+          cargo +${{ steps.rust.outputs.version }} check --locked --all-features --target riscv64imac-unknown-none-elf -p sbi-testing
+      - name: Check supported libraries on 32-bit RISC-V
+        shell: bash
+        run: |
+          version="${{ steps.rust.outputs.version }}"
+          # pmpm and smm require 64-bit atomics and do not support RV32.
+          mapfile -t packages < <(
+            cargo +"$version" metadata --locked --no-deps --format-version 1 |
+              jq -r '.packages[]
+                | select(.manifest_path | test("/library/[^/]+/Cargo.toml$"))
+                | select(.name != "pmpm" and .name != "smm")
+                | .name'
+          )
+          ((${#packages[@]} > 0))
+          package_args=()
+          for package in "${packages[@]}"; do
+            package_args+=(--package "$package")
+          done
+          cargo +"$version" check --locked --all-features --target riscv32imac-unknown-none-elf "${package_args[@]}"

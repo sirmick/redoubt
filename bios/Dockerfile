@@ -1,0 +1,29 @@
+# QEMU >= 9.1 fixes zero-valued CSRRS writes to read-only CSRs.
+FROM ubuntu:26.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PATH=/root/.cargo/bin:${PATH}
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    curl \
+    device-tree-compiler \
+    git \
+    pkg-config \
+    qemu-system-riscv \
+    u-boot-tools \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --no-modify-path --default-toolchain none
+
+COPY rust-toolchain.toml .
+# Install the toolchain, components, and targets declared in rust-toolchain.toml.
+RUN rustc --version
+
+RUN cargo install --locked cargo-binutils@0.4.0
+
+WORKDIR /workspace
+
+CMD ["bash"]

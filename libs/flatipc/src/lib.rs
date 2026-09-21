@@ -1,4 +1,4 @@
-//! Xous supports sending Messages from Clients to Servers. If a message is
+//! Redoubt supports sending Messages from Clients to Servers. If a message is
 //! a `MemoryMessage`, then the Server may respond by updating the buffer
 //! with a response message and returning the buffer.
 //!
@@ -55,7 +55,7 @@
 //! }
 //!
 //! // Connect to an example server
-//! let conn = xous::connect(xous::SID::from_bytes(b"example---server").unwrap())?;
+//! let conn = redoubt_abi::connect(redoubt_abi::SID::from_bytes(b"example---server").unwrap())?;
 //!
 //! // Construct our object
 //! let foo = Foo { a: 1, b: 1234567890 };
@@ -87,9 +87,9 @@
 //! }
 //!
 //! let mut msg_opt = None;
-//! let mut server = xous::create_server_with_sid(b"example---server").unwrap();
+//! let mut server = redoubt_abi::create_server_with_sid(b"example---server").unwrap();
 //! loop {
-//!     let envelope = xous::reply_and_receive_next(server, &mut msg_opt).unwrap();
+//!     let envelope = redoubt_abi::reply_and_receive_next(server, &mut msg_opt).unwrap();
 //!     let Some(msg) = msg_opt else { continue };
 //!
 //!     // Take the memory portion of the message, continuing if it's not a memory message.
@@ -115,13 +115,13 @@ extern crate self as flatipc;
 
 // Allow doing `#[derive(flatipc::Ipc)]` instead of `#[derive(flatipc_derive::Ipc)]`
 pub use flatipc_derive::{Ipc, IpcSafe};
-#[cfg(feature = "xous")]
+#[cfg(feature = "redoubt")]
 mod backend {
-    pub use xous::CID;
-    pub use xous::Error;
+    pub use redoubt_abi::CID;
+    pub use redoubt_abi::Error;
 }
 
-#[cfg(not(feature = "xous"))]
+#[cfg(not(feature = "redoubt"))]
 mod backend {
     pub mod mock;
     pub use mock::CID;
@@ -220,16 +220,16 @@ pub unsafe trait Ipc {
     /// that the correct message is being received.
     fn signature(&self) -> usize;
 
-    #[cfg(feature = "xous")]
-    /// Build an `Ipc` object from a `xous::MemoryMessage`. Verifies the signature and
+    #[cfg(feature = "redoubt")]
+    /// Build an `Ipc` object from a `redoubt_abi::MemoryMessage`. Verifies the signature and
     /// returns `None` if there is no match.
-    fn from_memory_message<'a>(msg: &'a xous::MemoryMessage) -> Option<&'a Self>;
+    fn from_memory_message<'a>(msg: &'a redoubt_abi::MemoryMessage) -> Option<&'a Self>;
 
-    #[cfg(feature = "xous")]
-    /// Build a mutable `Ipc` object from a mutable `xous::MemoryMessage`. Verifies the
+    #[cfg(feature = "redoubt")]
+    /// Build a mutable `Ipc` object from a mutable `redoubt_abi::MemoryMessage`. Verifies the
     /// signature and returns `None` if there is no match. The returned object has a
     /// lifetime that's tied to the `MemoryMessage`.
-    fn from_memory_message_mut<'a>(msg: &'a mut xous::MemoryMessage) -> Option<&'a mut Self>;
+    fn from_memory_message_mut<'a>(msg: &'a mut redoubt_abi::MemoryMessage) -> Option<&'a mut Self>;
 }
 
 /// Objects that have `IntoIpc` may be turned into an object that can be passed

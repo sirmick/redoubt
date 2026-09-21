@@ -5,7 +5,7 @@
 //!
 //! Page tables are never mapped into a window. All of physical RAM is mapped
 //! supervisor-only at `PHYSMAP_BASE`, and tables are walked in software starting from a
-//! root. See `planning/redoubt/MEMORY-LAYOUT.md`. Everything width-specific (the level
+//! root. See `docs/MEMORY-LAYOUT.md`. Everything width-specific (the level
 //! count, entries per table, VPN width and `satp` layout) lives in the `paging` crate,
 //! reached here through `physmap`; this file is written in terms of `LEVELS`, `vpn()` and
 //! `leaf_size()` and so is identical for both modes.
@@ -15,7 +15,7 @@
 //! currently active address space.
 
 use ::riscv::register::satp;
-use xous_kernel::{MemoryFlags, PID, arch::*};
+use redoubt_abi::{MemoryFlags, PID, arch::*};
 
 pub use super::mmu_flags::MMUFlags;
 use super::mmu_flags::{translate_flags, untranslate_flags};
@@ -65,9 +65,9 @@ fn walk(
     root: Table,
     virt: usize,
     mut alloc: Option<(&mut MemoryManager, PID)>,
-) -> Result<Slot, xous_kernel::Error> {
+) -> Result<Slot, redoubt_abi::Error> {
     if !physmap::is_canonical(virt) {
-        return Err(xous_kernel::Error::BadAddress);
+        return Err(redoubt_abi::Error::BadAddress);
     }
     let mut table = root;
     for level in (1..physmap::LEVELS).rev() {
@@ -75,10 +75,10 @@ fn walk(
         table = match table.child(index) {
             Some(child) => child,
             // A superpage (the physmap). These are never edited at 4 KiB granularity.
-            None if table.get(index).is_leaf() => return Err(xous_kernel::Error::BadAddress),
+            None if table.get(index).is_leaf() => return Err(redoubt_abi::Error::BadAddress),
             None => {
                 let Some((mm, pid)) = alloc.as_mut() else {
-                    return Err(xous_kernel::Error::BadAddress);
+                    return Err(redoubt_abi::Error::BadAddress);
                 };
                 let frame = mm.alloc_page(*pid)?;
                 // SAFETY: `alloc_page` returns a RAM frame that was free until now.
@@ -96,14 +96,14 @@ fn map_page_in(
     phys: usize,
     virt: usize,
     flags: MMUFlags,
-) -> Result<(), xous_kernel::Error> {
+) -> Result<(), redoubt_abi::Error> {
     assert!(virt & (PAGE_SIZE - 1) == 0);
     assert!(phys & (PAGE_SIZE - 1) == 0);
     check_permissions(flags)?;
     let slot = walk(root, virt, Some((mm, pid)))?;
     if is_occupied(slot.get()) {
         klog!("Page {:08x} already allocated!", virt);
-        return Err(xous_kernel::Error::MemoryInUse);
+        return Err(redoubt_abi::Error::MemoryInUse);
     }
     slot.set(Pte::leaf(phys, flags));
     Ok(())
@@ -148,21 +148,21 @@ pub fn prepare_map(
     space: &MemoryMapping,
     pid: PID,
     virt: usize,
-) -> Result<(), xous_kernel::Error> {
+) -> Result<(), redoubt_abi::Error> {
     let slot = walk(root_of(space.satp), virt, Some((mm, pid)))?;
     if is_occupied(slot.get()) {
-        return Err(xous_kernel::Error::MemoryInUse);
+        return Err(redoubt_abi::Error::MemoryInUse);
     }
     Ok(())
 }
 
 /// Refuse mappings that the page-table layer would reject outright. These flags come
 /// from syscall arguments, so a bad combination is the caller's error, not a kernel bug.
-fn check_permissions(flags: MMUFlags) -> Result<(), xous_kernel::Error> {
+fn check_permissions(flags: MMUFlags) -> Result<(), redoubt_abi::Error> {
     let permissions = flags & (MMUFlags::R | MMUFlags::W | MMUFlags::X);
     // W^X: no page is ever writable and executable at once.
     if permissions.is_empty() || permissions.contains(MMUFlags::W | MMUFlags::X) {
-        return Err(xous_kernel::Error::InvalidArgument);
+        return Err(redoubt_abi::Error::InvalidArgument);
     }
     Ok(())
 }
@@ -263,9 +263,9 @@ impl MemoryMapping {
     /// All pages, including the page tables themselves, are owned by `pid`, so they are
     /// released along with everything else when the process is destroyed.
     #[allow(dead_code)] // WP-K4's `process_create`
-    pub fn allocate(&mut self, pid: PID) -> Result<(), xous_kernel::Error> {
+    pub fn allocate(&mut self, pid: PID) -> Result<(), redoubt_abi::Error> {
         if self.satp != 0 {
-            return Err(xous_kernel::Error::MemoryInUse);
+            return Err(redoubt_abi::Error::MemoryInUse);
         }
 
         crate::mem::MemoryManager::with_mut(|mm| {
@@ -308,7 +308,7 @@ impl MemoryMapping {
     /// kernel, which should be mapped into every possible address space.
     /// As such, this will only have an observable effect once code returns
     /// to userspace.
-    pub fn activate(self) -> Result<(), xous_kernel::Error> {
+    pub fn activate(self) -> Result<(), redoubt_abi::Error> {
         let _ = root_of(self.satp); // refuses an unallocated mapping
         // SAFETY: every address space shares the kernel's root entries (see `allocate`), so
         // the code, stack and data in use right now stay mapped across the switch.
@@ -338,9 +338,9 @@ impl MemoryMapping {
     }
 
     #[allow(dead_code)]
-    pub fn phys_to_virt(&self, phys: usize) -> Result<Option<usize>, xous_kernel::Error> {
+    pub fn phys_to_virt(&self, phys: usize) -> Result<Option<usize>, redoubt_abi::Error> {
         if phys & (PAGE_SIZE - 1) != 0 {
-            return Err(xous_kernel::Error::BadAlignment);
+            return Err(redoubt_abi::Error::BadAlignment);
         }
         let mut found = None;
         let mut twice = false;
@@ -352,7 +352,7 @@ impl MemoryMapping {
         });
         if twice {
             println!("Page is mapped twice within process {:08x}!", phys);
-            return Err(xous_kernel::Error::MemoryInUse);
+            return Err(redoubt_abi::Error::MemoryInUse);
         }
         Ok(found)
     }
@@ -372,11 +372,11 @@ impl MemoryMapping {
         mm: &mut MemoryManager,
         addr: usize,
         flags: MemoryFlags,
-    ) -> Result<(), xous_kernel::Error> {
+    ) -> Result<(), redoubt_abi::Error> {
         let slot = walk(current_root(), addr, Some((mm, crate::arch::current_pid())))?;
         if is_occupied(slot.get()) {
             // can't double-reserve pages
-            return Err(xous_kernel::Error::ShareViolation);
+            return Err(redoubt_abi::Error::ShareViolation);
         }
         let flags = translate_flags(flags);
         check_permissions(flags)?;
@@ -384,14 +384,14 @@ impl MemoryMapping {
         Ok(())
     }
 
-    pub fn unreserve_address(&self, addr: usize) -> Result<(), xous_kernel::Error> {
+    pub fn unreserve_address(&self, addr: usize) -> Result<(), redoubt_abi::Error> {
         let Ok(slot) = walk(current_root(), addr, None) else {
             // No leaf table, so nothing was ever reserved here.
             return Ok(());
         };
         // Refuse to touch a live or lent mapping. Only undo reservations.
         if is_occupied(slot.get()) {
-            return Err(xous_kernel::Error::ShareViolation);
+            return Err(redoubt_abi::Error::ShareViolation);
         }
         slot.set(Pte::EMPTY);
         Ok(())
@@ -402,10 +402,10 @@ pub const DEFAULT_MEMORY_MAPPING: MemoryMapping = MemoryMapping { satp: 0 };
 
 /// When we allocate pages, they are owned by the kernel so we can zero
 /// them out.  After that is done, hand the page to the user.
-pub fn hand_page_to_user(virt: *mut u8) -> Result<(), xous_kernel::Error> {
+pub fn hand_page_to_user(virt: *mut u8) -> Result<(), redoubt_abi::Error> {
     let slot = walk(current_root(), virt as usize, None)?;
     if !slot.get().is_valid() {
-        return Err(xous_kernel::Error::BadAddress);
+        return Err(redoubt_abi::Error::BadAddress);
     }
     slot.set(slot.get().with(MMUFlags::USER));
     flush_tlb();
@@ -425,7 +425,7 @@ pub fn map_page_inner(
     virt: usize,
     req_flags: MemoryFlags,
     map_user: bool,
-) -> Result<(), xous_kernel::Error> {
+) -> Result<(), redoubt_abi::Error> {
     let flags = translate_flags(req_flags) | if map_user { MMUFlags::USER } else { MMUFlags::NONE };
     map_page_in(current_root(), mm, pid, phys, virt, flags)?;
     flush_tlb();
@@ -442,13 +442,13 @@ pub fn map_page_inner(
 /// # Errors
 ///
 /// * BadAddress - Address was not already mapped.
-pub fn unmap_page_inner(_mm: &mut MemoryManager, virt: usize) -> Result<usize, xous_kernel::Error> {
+pub fn unmap_page_inner(_mm: &mut MemoryManager, virt: usize) -> Result<usize, redoubt_abi::Error> {
     if virt & 3 != 0 {
-        return Err(xous_kernel::Error::BadAlignment);
+        return Err(redoubt_abi::Error::BadAlignment);
     }
     let slot = walk(current_root(), virt, None)?;
     if slot.get().has(MMUFlags::S) {
-        return Err(xous_kernel::Error::ShareViolation);
+        return Err(redoubt_abi::Error::ShareViolation);
     }
     let phys = slot.get().phys();
     slot.set(Pte::EMPTY);
@@ -464,11 +464,11 @@ pub fn move_page_inner(
     dest_pid: PID,
     dest_space: &MemoryMapping,
     dest_addr: *mut u8,
-) -> Result<(), xous_kernel::Error> {
+) -> Result<(), redoubt_abi::Error> {
     let src = walk(root_of(src_space.satp), src_addr as usize, None)?;
     let previous = src.get();
     if !previous.is_valid() {
-        return Err(xous_kernel::Error::BadAddress);
+        return Err(redoubt_abi::Error::BadAddress);
     }
     // Map in the destination first: if that fails, nothing has changed.
     let flags = translate_flags(untranslate_flags(previous.flags().bits())) | user_flag(dest_pid);
@@ -497,14 +497,14 @@ pub fn lend_page_inner(
     dest_space: &MemoryMapping,
     dest_addr: *mut u8,
     mutable: bool,
-) -> Result<usize, xous_kernel::Error> {
+) -> Result<usize, redoubt_abi::Error> {
     let src = walk(root_of(src_space.satp), src_addr as usize, None)?;
     let current = src.get();
     let phys = current.phys();
 
     // Sharing a page that is not ours, or that is already shared, is a violation.
     if !current.is_valid() || current.has(MMUFlags::S) {
-        return Err(xous_kernel::Error::ShareViolation);
+        return Err(redoubt_abi::Error::ShareViolation);
     }
 
     let mut new_flags = MMUFlags::R | user_flag(dest_pid);
@@ -527,7 +527,7 @@ pub fn return_page_inner(
     _dest_pid: PID,
     dest_space: &MemoryMapping,
     dest_addr: *mut u8,
-) -> Result<usize, xous_kernel::Error> {
+) -> Result<usize, redoubt_abi::Error> {
     let src = walk(root_of(src_space.satp), src_addr as usize, None)?;
     let phys = src.get().phys();
     // Check both ends before changing either: the borrower must hold the page, and the lender's
@@ -535,12 +535,12 @@ pub fn return_page_inner(
     // touch a lent entry, so the second check failing means a kernel bug, but it is refused
     // like the first rather than trusted.
     if !src.get().is_valid() {
-        return Err(xous_kernel::Error::ShareViolation);
+        return Err(redoubt_abi::Error::ShareViolation);
     }
     let dest = walk(root_of(dest_space.satp), dest_addr as usize, None)
-        .or(Err(xous_kernel::Error::ShareViolation))?;
+        .or(Err(redoubt_abi::Error::ShareViolation))?;
     if !dest.get().has(MMUFlags::S) || dest.get().phys() != phys {
-        return Err(xous_kernel::Error::ShareViolation);
+        return Err(redoubt_abi::Error::ShareViolation);
     }
     src.set(Pte::EMPTY);
     dest.set(dest.get().without(MMUFlags::S | MMUFlags::P).with(MMUFlags::VALID));
@@ -553,11 +553,11 @@ pub fn return_page_inner(
 /// This is `lend_page_inner` without the other half: a Redoubt message is taken out of its
 /// sender when it is sent and mapped into its receiver only when someone takes it, which may be
 /// much later or never (`message.rs`).
-pub fn lend_out(space: &MemoryMapping, virt: usize) -> Result<usize, xous_kernel::Error> {
+pub fn lend_out(space: &MemoryMapping, virt: usize) -> Result<usize, redoubt_abi::Error> {
     let slot = walk(root_of(space.satp), virt, None)?;
     let pte = slot.get();
     if !pte.is_valid() || pte.has(MMUFlags::S) {
-        return Err(xous_kernel::Error::ShareViolation);
+        return Err(redoubt_abi::Error::ShareViolation);
     }
     slot.set(pte.without(MMUFlags::VALID).with(MMUFlags::S));
     flush_tlb();
@@ -572,11 +572,11 @@ pub fn lent_frame(space: &MemoryMapping, virt: usize) -> Option<usize> {
 
 /// Give a lent page back to its lender: `VALID` again, `S` cleared (`reply`, or a message that
 /// never went through).
-pub fn lend_back(space: &MemoryMapping, virt: usize) -> Result<(), xous_kernel::Error> {
+pub fn lend_back(space: &MemoryMapping, virt: usize) -> Result<(), redoubt_abi::Error> {
     let slot = walk(root_of(space.satp), virt, None)?;
     let pte = slot.get();
     if !pte.has(MMUFlags::S) {
-        return Err(xous_kernel::Error::ShareViolation);
+        return Err(redoubt_abi::Error::ShareViolation);
     }
     slot.set(pte.without(MMUFlags::S).with(MMUFlags::VALID));
     flush_tlb();
@@ -585,11 +585,11 @@ pub fn lend_back(space: &MemoryMapping, virt: usize) -> Result<(), xous_kernel::
 
 /// The lender never gets this page back: a transfer (R4), or a lend whose call was abandoned
 /// (R3). Its entry goes; the frame is the receiver's. Returns the frame.
-pub fn drop_lent(space: &MemoryMapping, virt: usize) -> Result<usize, xous_kernel::Error> {
+pub fn drop_lent(space: &MemoryMapping, virt: usize) -> Result<usize, redoubt_abi::Error> {
     let slot = walk(root_of(space.satp), virt, None)?;
     let pte = slot.get();
     if !pte.has(MMUFlags::S) {
-        return Err(xous_kernel::Error::ShareViolation);
+        return Err(redoubt_abi::Error::ShareViolation);
     }
     slot.set(Pte::EMPTY);
     flush_tlb();
@@ -604,7 +604,7 @@ pub fn map_into(
     space: &MemoryMapping,
     phys: usize,
     virt: usize,
-) -> Result<(), xous_kernel::Error> {
+) -> Result<(), redoubt_abi::Error> {
     let flags = translate_flags(MemoryFlags::R | MemoryFlags::W) | user_flag(pid);
     map_page_in(root_of(space.satp), mm, pid, phys, virt, flags)?;
     flush_tlb();
@@ -612,42 +612,42 @@ pub fn map_into(
 }
 
 /// Unmap `virt` from `space` without changing who owns the frame: a lend leaving the server.
-pub fn unmap_from(space: &MemoryMapping, virt: usize) -> Result<usize, xous_kernel::Error> {
+pub fn unmap_from(space: &MemoryMapping, virt: usize) -> Result<usize, redoubt_abi::Error> {
     let slot = walk(root_of(space.satp), virt, None)?;
     let pte = slot.get();
     if !pte.is_valid() {
-        return Err(xous_kernel::Error::BadAddress);
+        return Err(redoubt_abi::Error::BadAddress);
     }
     slot.set(Pte::EMPTY);
     flush_tlb();
     Ok(pte.phys())
 }
 
-fn checked_phys(pte: Pte) -> Result<usize, xous_kernel::Error> {
+fn checked_phys(pte: Pte) -> Result<usize, redoubt_abi::Error> {
     // If the page is "Valid" but shared, issue a sharing violation.
     if pte.has(MMUFlags::S) {
-        return Err(xous_kernel::Error::ShareViolation);
+        return Err(redoubt_abi::Error::ShareViolation);
     }
     if !pte.is_valid() {
         // Reserved for demand paging, but not yet backed by a page.
         return Err(if pte.is_empty() {
-            xous_kernel::Error::BadAddress
+            redoubt_abi::Error::BadAddress
         } else {
-            xous_kernel::Error::MemoryInUse
+            redoubt_abi::Error::MemoryInUse
         });
     }
     Ok(pte.phys())
 }
 
-pub fn virt_to_phys(virt: usize) -> Result<usize, xous_kernel::Error> {
+pub fn virt_to_phys(virt: usize) -> Result<usize, redoubt_abi::Error> {
     checked_phys(walk(current_root(), virt, None)?.get())
 }
 
 /// Translate `virt` in the address space of `pid`. No address space switch is needed.
 #[allow(dead_code)]
-pub fn virt_to_phys_pid(pid: PID, virt: usize) -> Result<usize, xous_kernel::Error> {
+pub fn virt_to_phys_pid(pid: PID, virt: usize) -> Result<usize, redoubt_abi::Error> {
     let mapping = crate::services::SystemServices::with(|ss| {
-        ss.get_process(pid).map(|p| p.mapping).or(Err(xous_kernel::Error::InvalidPID))
+        ss.get_process(pid).map(|p| p.mapping).or(Err(redoubt_abi::Error::InvalidPID))
     })?;
     checked_phys(walk(root_of(mapping.satp), virt, None)?.get())
 }
@@ -657,13 +657,13 @@ pub fn virt_to_phys_pid(pid: PID, virt: usize) -> Result<usize, xous_kernel::Err
 /// Takes the memory manager rather than borrowing it: the lend and move paths reach here
 /// while they already hold it, and a second borrow of the same `KernelCell` panics the
 /// kernel (or, with `smp`, deadlocks). The page-fault handler borrows it for this call.
-pub fn ensure_page_exists_inner(mm: &mut MemoryManager, address: usize) -> Result<usize, xous_kernel::Error> {
+pub fn ensure_page_exists_inner(mm: &mut MemoryManager, address: usize) -> Result<usize, redoubt_abi::Error> {
     // Disallow mapping memory outside of user land
     if !MemoryMapping::current().is_kernel() && address >= USER_AREA_END {
-        return Err(xous_kernel::Error::BadAddress);
+        return Err(redoubt_abi::Error::BadAddress);
     }
     let virt = address & !(PAGE_SIZE - 1);
-    let slot = walk(current_root(), virt, None).or(Err(xous_kernel::Error::BadAddress))?;
+    let slot = walk(current_root(), virt, None).or(Err(redoubt_abi::Error::BadAddress))?;
     let reservation = slot.get();
 
     if reservation.is_valid() {
@@ -671,7 +671,7 @@ pub fn ensure_page_exists_inner(mm: &mut MemoryManager, address: usize) -> Resul
     }
     // The page is either unreserved, or lent out to another process.
     if reservation.is_empty() || reservation.has(MMUFlags::S) {
-        return Err(xous_kernel::Error::BadAddress);
+        return Err(redoubt_abi::Error::BadAddress);
     }
 
     // Out of memory is the process's problem, not the kernel's: the syscall fails, or the
@@ -714,13 +714,13 @@ pub fn user_frame(virt: usize, write: bool) -> Result<usize, redoubt_sys::Error>
 ///
 /// A page that is not the caller's own live mapping -- unmapped, reserved but never touched,
 /// or lent out -- is `BadAddress`, which the caller reports as `InvalidArgument`.
-pub fn set_user_page_flags(virt: usize, flags: MemoryFlags) -> Result<(), xous_kernel::Error> {
+pub fn set_user_page_flags(virt: usize, flags: MemoryFlags) -> Result<(), redoubt_abi::Error> {
     let wanted = translate_flags(flags);
     check_permissions(wanted)?;
     let slot = walk(current_root(), virt, None)?;
     let pte = slot.get();
     if !pte.is_valid() || pte.has(MMUFlags::S) || !pte.has(MMUFlags::USER) {
-        return Err(xous_kernel::Error::BadAddress);
+        return Err(redoubt_abi::Error::BadAddress);
     }
     let keep = pte.flags() - (MMUFlags::R | MMUFlags::W | MMUFlags::X);
     slot.set(Pte::leaf(pte.phys(), keep | wanted));
@@ -739,7 +739,7 @@ pub fn user_mapping(virt: usize) -> Option<usize> {
 
 /// Determine whether a virtual address has been mapped
 pub fn address_available(virt: usize) -> bool {
-    virt_to_phys(virt).is_err_and(|e| e == xous_kernel::Error::BadAddress)
+    virt_to_phys(virt).is_err_and(|e| e == redoubt_abi::Error::BadAddress)
 }
 
 /// Get the `MemoryFlags` for the requested virtual address. The address must
@@ -766,16 +766,16 @@ pub fn page_flags(virt: usize) -> Option<MemoryFlags> {
 }
 
 /// Remove permissions from a page. Permissions can only be dropped, never added.
-pub fn update_page_flags(virt: usize, flags: MemoryFlags) -> Result<(), xous_kernel::Error> {
+pub fn update_page_flags(virt: usize, flags: MemoryFlags) -> Result<(), redoubt_abi::Error> {
     // Stripping every permission would turn the entry into a pointer to another table.
     if (flags & (MemoryFlags::R | MemoryFlags::W | MemoryFlags::X)).is_empty() {
-        return Err(xous_kernel::Error::MemoryInUse);
+        return Err(redoubt_abi::Error::MemoryInUse);
     }
 
-    let slot = walk(current_root(), virt, None).or(Err(xous_kernel::Error::OutOfMemory))?;
+    let slot = walk(current_root(), virt, None).or(Err(redoubt_abi::Error::OutOfMemory))?;
     let mut pte = slot.get();
     if pte.has(MMUFlags::S) {
-        return Err(xous_kernel::Error::ShareViolation);
+        return Err(redoubt_abi::Error::ShareViolation);
     }
 
     for (requested, bit) in
@@ -784,7 +784,7 @@ pub fn update_page_flags(virt: usize, flags: MemoryFlags) -> Result<(), xous_ker
         if (flags & requested).is_empty() {
             pte = pte.without(bit);
         } else if !pte.has(bit) {
-            return Err(xous_kernel::Error::ShareViolation);
+            return Err(redoubt_abi::Error::ShareViolation);
         }
     }
 

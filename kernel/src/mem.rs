@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-use xous_kernel::{MemoryFlags, MemoryRange, PID, arch::*};
+use redoubt_abi::{MemoryFlags, MemoryRange, PID, arch::*};
 
 pub use crate::arch::mem::MemoryMapping;
 use crate::arch::process::Process;
@@ -55,7 +55,7 @@ impl MemoryRangeExtra {
 /// exactly what `new` checks and returns an error for. So building the descriptor is a
 /// safe kernel operation: a bad address surfaces later as a mapping error, not as
 /// unsoundness here.
-pub fn memory_range(addr: usize, size: usize) -> Result<MemoryRange, xous_kernel::Error> {
+pub fn memory_range(addr: usize, size: usize) -> Result<MemoryRange, redoubt_abi::Error> {
     // SAFETY: see the doc comment.
     unsafe { MemoryRange::new(addr, size) }
 }
@@ -175,7 +175,7 @@ impl MemoryManager {
         rpt_base: usize,
         xpt_base: usize,
         args: &crate::args::KernelArguments,
-    ) -> Result<(), xous_kernel::Error> {
+    ) -> Result<(), redoubt_abi::Error> {
         use core::slice;
         let mut args_iter = args.iter();
         let xarg_def = args_iter.next().expect("mm: no kernel arguments found");
@@ -241,11 +241,11 @@ impl MemoryManager {
     /// the budget cannot pay. DOES NOT ZERO THE PAGE!!! This function CANNOT zero the page, as
     /// it hasn't been mapped yet.
     #[cfg(baremetal)]
-    pub fn alloc_page(&mut self, pid: PID) -> Result<usize, xous_kernel::Error> {
+    pub fn alloc_page(&mut self, pid: PID) -> Result<usize, redoubt_abi::Error> {
         let index = self.alloc_frame(pid)?;
         if self.charge_frame(pid).is_err() {
             self.allocations[index] = None;
-            return Err(xous_kernel::Error::OutOfMemory);
+            return Err(redoubt_abi::Error::OutOfMemory);
         }
         Ok(self.ram_start + index * PAGE_SIZE)
     }
@@ -255,17 +255,17 @@ impl MemoryManager {
     /// already pay for them, so charging the frames too would count them twice.
     #[cfg(baremetal)]
     #[allow(dead_code)] // WP-K4's `process_create`, through `MemoryMapping::allocate`
-    pub fn alloc_context_page(&mut self, pid: PID) -> Result<usize, xous_kernel::Error> {
+    pub fn alloc_context_page(&mut self, pid: PID) -> Result<usize, redoubt_abi::Error> {
         Ok(self.ram_start + self.alloc_frame(pid)? * PAGE_SIZE)
     }
 
     /// Take a free frame for `owner`; its index in the ownership table.
     #[cfg(baremetal)]
-    fn alloc_frame(&mut self, owner: PID) -> Result<usize, xous_kernel::Error> {
+    fn alloc_frame(&mut self, owner: PID) -> Result<usize, redoubt_abi::Error> {
         // First fit. (The previous next-fit search computed its starting point with `max`
         // where `min` was meant, so it always scanned from the start anyway.)
         let index =
-            self.allocations.iter().position(Option::is_none).ok_or(xous_kernel::Error::OutOfMemory)?;
+            self.allocations.iter().position(Option::is_none).ok_or(redoubt_abi::Error::OutOfMemory)?;
         self.allocations[index] = Some(owner);
         Ok(index)
     }
@@ -369,8 +369,8 @@ impl MemoryManager {
         &mut self,
         virt_ptr: *mut u8,
         size: usize,
-        kind: xous_kernel::MemoryType,
-    ) -> Result<*mut u8, xous_kernel::Error> {
+        kind: redoubt_abi::MemoryType,
+    ) -> Result<*mut u8, redoubt_abi::Error> {
         // If we were supplied a perfectly good address, return that.
         if !virt_ptr.is_null() {
             return Ok(virt_ptr);
@@ -379,20 +379,20 @@ impl MemoryManager {
         // let process = Process::current();
         Process::with_inner_mut(|process_inner| {
             let (start, end, initial) = match kind {
-                xous_kernel::MemoryType::Stack => return Err(xous_kernel::Error::BadAddress),
-                xous_kernel::MemoryType::Heap => {
+                redoubt_abi::MemoryType::Stack => return Err(redoubt_abi::Error::BadAddress),
+                redoubt_abi::MemoryType::Heap => {
                     let new_virt = process_inner.mem_heap_base + process_inner.mem_heap_size + PAGE_SIZE;
                     if new_virt + size > process_inner.mem_heap_base + process_inner.mem_heap_max {
-                        return Err(xous_kernel::Error::OutOfMemory);
+                        return Err(redoubt_abi::Error::OutOfMemory);
                     }
                     return Ok(new_virt as *mut u8);
                 }
-                xous_kernel::MemoryType::Default => (
+                redoubt_abi::MemoryType::Default => (
                     process_inner.mem_default_base,
                     process_inner.mem_default_base + 0x1000_0000,
                     process_inner.mem_default_last,
                 ),
-                xous_kernel::MemoryType::Messages => (
+                redoubt_abi::MemoryType::Messages => (
                     process_inner.mem_message_base,
                     process_inner.mem_message_base + 0x40_0000, // Limit to one superpage
                     process_inner.mem_message_last,
@@ -401,7 +401,7 @@ impl MemoryManager {
 
             // A request larger than the whole region fits nowhere (and `end - size` would wrap).
             let Some(last_start) = end.checked_sub(size).filter(|last| *last >= start) else {
-                return Err(xous_kernel::Error::BadAddress);
+                return Err(redoubt_abi::Error::BadAddress);
             };
             // Look for a sequence of `size` pages that are free.
             for potential_start in (initial..last_start).step_by(PAGE_SIZE) {
@@ -414,8 +414,8 @@ impl MemoryManager {
                 }
                 if all_free {
                     match kind {
-                        xous_kernel::MemoryType::Default => process_inner.mem_default_last = potential_start,
-                        xous_kernel::MemoryType::Messages => process_inner.mem_message_last = potential_start,
+                        redoubt_abi::MemoryType::Default => process_inner.mem_default_last = potential_start,
+                        redoubt_abi::MemoryType::Messages => process_inner.mem_message_last = potential_start,
                         other => panic!("invalid kind: {:?}", other),
                     }
                     return Ok(potential_start as *mut u8);
@@ -432,14 +432,14 @@ impl MemoryManager {
                 }
                 if all_free {
                     match kind {
-                        xous_kernel::MemoryType::Default => process_inner.mem_default_last = potential_start,
-                        xous_kernel::MemoryType::Messages => process_inner.mem_message_last = potential_start,
+                        redoubt_abi::MemoryType::Default => process_inner.mem_default_last = potential_start,
+                        redoubt_abi::MemoryType::Messages => process_inner.mem_message_last = potential_start,
                         other => panic!("invalid kind: {:?}", other),
                     }
                     return Ok(potential_start as *mut u8);
                 }
             }
-            Err(xous_kernel::Error::BadAddress)
+            Err(redoubt_abi::Error::BadAddress)
         })
     }
 
@@ -451,17 +451,17 @@ impl MemoryManager {
         virt_ptr: *mut u8,
         size: usize,
         flags: MemoryFlags,
-    ) -> Result<xous_kernel::MemoryRange, xous_kernel::Error> {
+    ) -> Result<redoubt_abi::MemoryRange, redoubt_abi::Error> {
         // If no address was specified, pick the next address that fits
         // in the "default" range
-        let virt = self.find_virtual_address(virt_ptr, size, xous_kernel::MemoryType::Default)? as usize;
+        let virt = self.find_virtual_address(virt_ptr, size, redoubt_abi::MemoryType::Default)? as usize;
 
         if virt & 0xfff != 0 {
-            return Err(xous_kernel::Error::BadAlignment);
+            return Err(redoubt_abi::Error::BadAlignment);
         }
 
         if size & 0xfff != 0 {
-            return Err(xous_kernel::Error::BadAlignment);
+            return Err(redoubt_abi::Error::BadAlignment);
         }
 
         let mut mm = MemoryMapping::current();
@@ -480,9 +480,9 @@ impl MemoryManager {
     /// Attempt to allocate a single page from the default section.
     /// Note that this will be backed by a real page.
     #[cfg(baremetal)]
-    pub fn map_zeroed_page(&mut self, pid: PID, is_user: bool) -> Result<*mut usize, xous_kernel::Error> {
+    pub fn map_zeroed_page(&mut self, pid: PID, is_user: bool) -> Result<*mut usize, redoubt_abi::Error> {
         let virt =
-            self.find_virtual_address(core::ptr::null_mut(), PAGE_SIZE, xous_kernel::MemoryType::Default)?
+            self.find_virtual_address(core::ptr::null_mut(), PAGE_SIZE, redoubt_abi::MemoryType::Default)?
                 as usize;
 
         // Grab the next available page.  This claims it for this process.
@@ -494,7 +494,7 @@ impl MemoryManager {
             pid,
             phys as usize,
             virt as usize,
-            xous_kernel::MemoryFlags::R | xous_kernel::MemoryFlags::W,
+            redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W,
             false,
         ) {
             self.release_page(phys as *mut usize, pid).ok();
@@ -554,8 +554,8 @@ impl MemoryManager {
         size: usize,
         pid: PID,
         flags: MemoryFlags,
-        kind: xous_kernel::MemoryType,
-    ) -> Result<xous_kernel::MemoryRange, xous_kernel::Error> {
+        kind: redoubt_abi::MemoryType,
+    ) -> Result<redoubt_abi::MemoryRange, redoubt_abi::Error> {
         let phys = phys_ptr as usize;
         let virt = self.find_virtual_address(virt_ptr, size, kind)?;
 
@@ -603,7 +603,7 @@ impl MemoryManager {
     /// # Errors
     ///
     /// * MemoryInUse - The specified page is already mapped
-    pub fn unmap_page(&mut self, virt: *mut usize) -> Result<usize, xous_kernel::Error> {
+    pub fn unmap_page(&mut self, virt: *mut usize) -> Result<usize, redoubt_abi::Error> {
         let pid = crate::arch::process::current_pid();
 
         // If the virtual address has an assigned physical address, release that
@@ -626,7 +626,7 @@ impl MemoryManager {
         dest_pid: PID,
         dest_mapping: &MemoryMapping,
         dest_addr: *mut u8,
-    ) -> Result<(), xous_kernel::Error> {
+    ) -> Result<(), redoubt_abi::Error> {
         let phys_addr = crate::arch::mem::virt_to_phys(src_addr as usize)?;
         crate::arch::mem::move_page_inner(self, src_mapping, src_addr, dest_pid, dest_mapping, dest_addr)?;
         self.claim_release_move(phys_addr as *mut usize, dest_pid, ClaimReleaseMove::Move(src_pid))
@@ -635,7 +635,7 @@ impl MemoryManager {
     #[allow(dead_code)]
     /// Move the page in the process mapping listing without manipulating
     /// the pagetables at all.
-    pub fn move_page_raw(&mut self, phys_addr: *mut usize, dest_pid: PID) -> Result<(), xous_kernel::Error> {
+    pub fn move_page_raw(&mut self, phys_addr: *mut usize, dest_pid: PID) -> Result<(), redoubt_abi::Error> {
         self.claim_release_move(
             phys_addr as *mut usize,
             dest_pid,
@@ -656,7 +656,7 @@ impl MemoryManager {
         dest_mapping: &MemoryMapping,
         dest_addr: *mut u8,
         mutable: bool,
-    ) -> Result<usize, xous_kernel::Error> {
+    ) -> Result<usize, redoubt_abi::Error> {
         // If this page is to be writable, detach it from this process.
         // Otherwise, mark it as read-only to prevent a process from modifying
         // the page while it's borrowed.
@@ -680,7 +680,7 @@ impl MemoryManager {
         dest_pid: PID,
         dest_mapping: &MemoryMapping,
         dest_addr: *mut u8,
-    ) -> Result<usize, xous_kernel::Error> {
+    ) -> Result<usize, redoubt_abi::Error> {
         // If this page is to be writable, detach it from this process.
         // Otherwise, mark it as read-only to prevent a process from modifying
         // the page while it's borrowed.
@@ -691,7 +691,7 @@ impl MemoryManager {
     /// (R4) or an abandoned lend (R3). The budgets follow the frame, as they do for every other
     /// ownership change.
     #[cfg(baremetal)]
-    pub fn move_frame(&mut self, phys: usize, from: PID, to: PID) -> Result<(), xous_kernel::Error> {
+    pub fn move_frame(&mut self, phys: usize, from: PID, to: PID) -> Result<(), redoubt_abi::Error> {
         self.claim_release_move(phys as *mut usize, to, ClaimReleaseMove::Move(from))
     }
 
@@ -705,8 +705,8 @@ impl MemoryManager {
     /// space, so that the range can be lent or moved. Callers hold the memory manager
     /// already, which is why the backing takes `self` instead of borrowing it again.
     #[cfg(baremetal)]
-    pub fn ensure_range_exists(&mut self, address: usize, len: usize) -> Result<(), xous_kernel::Error> {
-        let end = address.checked_add(len).ok_or(xous_kernel::Error::BadAddress)?;
+    pub fn ensure_range_exists(&mut self, address: usize, len: usize) -> Result<(), redoubt_abi::Error> {
+        let end = address.checked_add(len).ok_or(redoubt_abi::Error::BadAddress)?;
         for page in (address..end).step_by(PAGE_SIZE) {
             crate::arch::mem::ensure_page_exists_inner(self, page)?;
         }
@@ -719,8 +719,8 @@ impl MemoryManager {
     /// the mismatch only after changing the page tables, too late to back out. The pages must
     /// already be backed (`ensure_range_exists`), so each has a frame to check.
     #[cfg(baremetal)]
-    pub fn check_owned_range(&self, pid: PID, address: usize, len: usize) -> Result<(), xous_kernel::Error> {
-        let end = address.checked_add(len).ok_or(xous_kernel::Error::BadAddress)?;
+    pub fn check_owned_range(&self, pid: PID, address: usize, len: usize) -> Result<(), redoubt_abi::Error> {
+        let end = address.checked_add(len).ok_or(redoubt_abi::Error::BadAddress)?;
         for page in (address..end).step_by(PAGE_SIZE) {
             let phys = crate::arch::mem::virt_to_phys(page)?;
             let owner = if self.is_main_memory(phys as *mut u8) {
@@ -729,7 +729,7 @@ impl MemoryManager {
                 self.extra_index(phys).and_then(|index| self.extra_allocations[index])
             };
             if owner != Some(pid) {
-                return Err(xous_kernel::Error::ShareViolation);
+                return Err(redoubt_abi::Error::ShareViolation);
             }
         }
         Ok(())
@@ -743,7 +743,7 @@ impl MemoryManager {
         _addr: *mut usize,
         _pid: PID,
         _action: ClaimReleaseMove,
-    ) -> Result<(), xous_kernel::Error> {
+    ) -> Result<(), redoubt_abi::Error> {
         Ok(())
     }
 
@@ -753,7 +753,7 @@ impl MemoryManager {
         addr: *mut usize,
         pid: PID,
         action: ClaimReleaseMove,
-    ) -> Result<(), xous_kernel::Error> {
+    ) -> Result<(), redoubt_abi::Error> {
         /// Modify the memory tracking table to note which process owns
         /// the specified address.
         fn action_inner(
@@ -762,7 +762,7 @@ impl MemoryManager {
             action: ClaimReleaseMove,
             allow_alias: bool,
             addr: usize,
-        ) -> Result<(), xous_kernel::Error> {
+        ) -> Result<(), redoubt_abi::Error> {
             if let Some(current_pid) = *owner_addr {
                 if current_pid != pid {
                     // klog!(
@@ -775,10 +775,10 @@ impl MemoryManager {
                     // );
                     if let ClaimReleaseMove::Move(existing_pid) = action {
                         if existing_pid != current_pid {
-                            return Err(xous_kernel::Error::MemoryInUse);
+                            return Err(redoubt_abi::Error::MemoryInUse);
                         }
                     } else {
-                        return Err(xous_kernel::Error::MemoryInUse);
+                        return Err(redoubt_abi::Error::MemoryInUse);
                     }
                 }
             }
@@ -793,7 +793,7 @@ impl MemoryManager {
                                     addr, owner_addr, pid
                                 );
                             } else {
-                                return Err(xous_kernel::Error::MemoryInUse);
+                                return Err(redoubt_abi::Error::MemoryInUse);
                             }
                         }
                         *owner_addr = Some(pid);
@@ -805,7 +805,7 @@ impl MemoryManager {
                                 "ERR: physical address {:x} already used by {:?} (requester: {:?})",
                                 addr, owner_addr, pid
                             );
-                            return Err(xous_kernel::Error::MemoryInUse);
+                            return Err(redoubt_abi::Error::MemoryInUse);
                         }
                     }
                 }
@@ -823,7 +823,7 @@ impl MemoryManager {
 
         // Ensure the address lies on a page boundary
         if cfg!(baremetal) && addr & 0xfff != 0 {
-            return Err(xous_kernel::Error::BadAlignment);
+            return Err(redoubt_abi::Error::BadAlignment);
         }
 
         let mut offset = 0;
@@ -846,7 +846,7 @@ impl MemoryManager {
                         if let Some(old) = before {
                             self.charge_frame(old).expect("re-charging the page just uncharged");
                         }
-                        return Err(xous_kernel::Error::OutOfMemory);
+                        return Err(redoubt_abi::Error::OutOfMemory);
                     }
                 }
             }
@@ -874,16 +874,16 @@ impl MemoryManager {
         //     "mem: unable to claim or release physical address {:08x}",
         //     addr
         // );
-        Err(xous_kernel::Error::BadAddress)
+        Err(redoubt_abi::Error::BadAddress)
     }
 
     /// Mark a given address as being owned by the specified process ID
-    fn claim_page(&mut self, addr: *mut usize, pid: PID) -> Result<(), xous_kernel::Error> {
+    fn claim_page(&mut self, addr: *mut usize, pid: PID) -> Result<(), redoubt_abi::Error> {
         self.claim_release_move(addr, pid, ClaimReleaseMove::Claim)
     }
 
     /// Mark a given address as no longer being owned by the specified process ID
-    fn release_page(&mut self, addr: *mut usize, pid: PID) -> Result<(), xous_kernel::Error> {
+    fn release_page(&mut self, addr: *mut usize, pid: PID) -> Result<(), redoubt_abi::Error> {
         self.claim_release_move(addr, pid, ClaimReleaseMove::Release)
     }
 
@@ -967,33 +967,33 @@ impl MemoryManager {
         &mut self,
         range: MemoryRange,
         flags: MemoryFlags,
-    ) -> Result<(), xous_kernel::Error> {
+    ) -> Result<(), redoubt_abi::Error> {
         let virt = range.as_mut_ptr() as usize;
         let size = range.len();
         if virt & (PAGE_SIZE - 1) != 0 {
-            return Err(xous_kernel::Error::BadAlignment);
+            return Err(redoubt_abi::Error::BadAlignment);
         }
 
         if size & (PAGE_SIZE - 1) != 0 {
-            return Err(xous_kernel::Error::BadAlignment);
+            return Err(redoubt_abi::Error::BadAlignment);
         }
 
         // Pre-check the range to ensure the new flags are valid
         for virt in (virt..(virt + size)).step_by(PAGE_SIZE) {
-            let existing_flags = crate::arch::mem::page_flags(virt).ok_or(xous_kernel::Error::MemoryInUse)?;
+            let existing_flags = crate::arch::mem::page_flags(virt).ok_or(redoubt_abi::Error::MemoryInUse)?;
             // If the new flags add to the range, return an error.
             if !(!existing_flags & flags).is_empty() {
-                return Err(xous_kernel::Error::MemoryInUse);
+                return Err(redoubt_abi::Error::MemoryInUse);
             }
         }
 
         // Now that the flags are validated, perform the update. This is fine as long as
         // we're unicore.
         for virt in (virt..(virt + size)).step_by(PAGE_SIZE) {
-            let existing_flags = crate::arch::mem::page_flags(virt).ok_or(xous_kernel::Error::MemoryInUse)?;
+            let existing_flags = crate::arch::mem::page_flags(virt).ok_or(redoubt_abi::Error::MemoryInUse)?;
             // If the new flags add to the range, return an error.
             if !(!existing_flags & flags).is_empty() {
-                return Err(xous_kernel::Error::MemoryInUse);
+                return Err(redoubt_abi::Error::MemoryInUse);
             }
 
             crate::arch::mem::update_page_flags(virt, flags)?;
@@ -1154,7 +1154,7 @@ impl MemoryManager {
         let oom = redoubt_sys::Error::OutOfMemory;
         let len = npages.checked_mul(PAGE_SIZE).ok_or(oom)?;
         let at = self
-            .find_virtual_address(core::ptr::null_mut(), len, xous_kernel::MemoryType::Default)
+            .find_virtual_address(core::ptr::null_mut(), len, redoubt_abi::MemoryType::Default)
             .map_err(|_| oom)? as usize;
         let ours = phys.is_none();
         for offset in (0..len).step_by(PAGE_SIZE) {

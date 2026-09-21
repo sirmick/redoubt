@@ -1,0 +1,21 @@
+# Cargo build output
+/target
+
+# IntelliJ IDEA directory
+/.idea
+
+# Mac OS X hidden files
+.DS_Store
+
+# MSVC Windows builds of rustc generate these, which store debugging information
+*.pdb
+
+# This part is used by the process files, executable files, image files, etc. 
+*.bin
+
+qemu-logs/
+/.openeuler-aia/
+
+# AI tooling
+.codex
+.humanize

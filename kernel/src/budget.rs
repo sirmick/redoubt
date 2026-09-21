@@ -27,7 +27,7 @@
 //! charged again.
 
 use redoubt_sys::{BudgetSpec, Error, FOREVER, MAX_DEPTH, MAX_LABELS, Usage};
-use xous_kernel::PID;
+use redoubt_abi::PID;
 
 use crate::arch::process::{INITIAL_TID, MAX_PROCESS_COUNT, MAX_THREAD};
 use crate::handle::{BudgetRef, Handle, HandleTable, Object};

@@ -224,7 +224,7 @@ fn handle_character(b: u8) {
 }
 
 fn print_help() {
-    println!("Xous Kernel Debug");
+    println!("Redoubt Kernel Debug");
     println!("key | command");
     println!("--- + -----------------------");
     println!(" h  | print this message");

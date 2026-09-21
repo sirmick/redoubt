@@ -3,21 +3,21 @@ authors = ["Sean Cross <sean@xobs.io>"]
 description = "Redoubt microkernel: task switching, memory management, capability IPC"
 license = "MIT OR Apache-2.0"
 edition = "2018"
-name = "xous-kernel"
+name = "redoubt-kernel"
 version = "0.9.38"
 resolver = "2"
 
 # Dependency versions enforced by Cargo.lock.
 [dependencies]
 stats_alloc = { version = "0.1.8", optional = true }
-xous-kernel = { package = "xous", version = "0.9.70", features = [
+redoubt-abi = { path = "../libs/abi", features = [
     "forget-memory-messages",
 ] }
 rand_chacha = { version = "0.3.1", optional = true, default-features = false }
 sbi-rt = { version = "0.0.3", optional = true }
 plic = { version = "0.0.3", optional = true, features = ["primitive-id"] }
 [target.'cfg(any(windows,unix))'.dev-dependencies]
-xous-kernel = { package = "xous", version = "0.9.70", features = [
+redoubt-abi = { path = "../libs/abi", features = [
     "forget-memory-messages",
     "processes-as-threads",
 ] }
@@ -25,8 +25,8 @@ rand = "0.8.5"
 
 [target.'cfg(any(target_arch = "riscv32", target_arch = "riscv64"))'.dependencies]
 riscv = "0.16"
-paging = { path = "../redoubt/paging" }
-redoubt-sys = { path = "../redoubt/sys" }
+paging = { path = "../libs/paging" }
+redoubt-sys = { path = "../libs/sys" }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(ci)', 'cfg(baremetal)'] }

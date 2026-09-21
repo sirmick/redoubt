@@ -1,104 +1,41 @@
-target
+# Toolchain caches (CARGO_HOME / RUSTUP_HOME live inside the workspace). Keep the cargo
+# config, ignore the rest.
+/.cargo/*
+!/.cargo/config.toml
+/.rustup/
+
+# Build output
+/target
 **/*.rs.bk
-/emulation/peripherals.csproj
-/emulation/obj
-# auto-generated
-services/xous-ticktimer/src/version.rs
-bao1x-boot/boot0/src/version.rs
-bao1x-boot/boot1/src/version.rs
-apps/i18n.json
-services/gam/src/apps.rs
-services/status/src/app_autogen.rs
-services/cram-console/src/app_autogen.rs
-
-# shouldn't be committed
-apps/vault/tools/crypto_data
-tools/v2p.txt
-*nocheckin.bin
-
 *.map
 
-# Emacs
-*~
+# Generated bundle and disk images
+/target/image/
+*.uf2
+*.img
 
-# local utility shellscripts
-update-precursors.sh
-buildpush.ps1
-# local-only routines used to start builds
-/*.ps1
-/*.bat
-/*.sh
-# notes to myself
-/*.txt
-tools/test-backup-analyze.sh
+# Vendored inputs that are large or reconstructible and should not bloat the repo:
+# the OTP/Elixir archives and the BEAM reference sources.
+/toolchains/
+/reference/
+
+# Vendored sub-trees rebuild here
+/bios/target/
+/userland/otp/target/
+/userland/otp/build/
+
+# Fuzz outputs
+libs/*/fuzz/corpus/
+libs/*/fuzz/artifacts/
+libs/*/fuzz/target/
+
+# Editors / misc
+*~
+.vs
+__pycache__/
+*.pyc
 todo.md
 notes/
-# no uf2 files in the root directory
-/*.uf2
-
-# SSH id file for convenience
-/id_pi
-
-# pddb debug files
-tools/pddb-images/
-__pycache__/
-
-# PDDB backup files
-*.pddb
-
-# PDDB for mtxcli (only for testing in hosted mode)
-/kernel/mtxcli
-
-# performance monitoring page table
-tools/ct_data/v2p.txt
-
-# renode will tickle this every time you run it, but you shouldn't commit that back to the tree
-/emulation/linux-server-rootfs.jffs2
-
-# don't record weirdnesses dealing with vscode
-.vscode
-.vs
-settings.json
-
-# Emacs backup files
-*~
-
-# don't commit local modifications to the Renode filesystem template
-emulation/linux-server-rootfs.jffs2
-
-# bloat analyzer reports
-reports/
-
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-*.pyc
-MANIFEST
-
-# Deployment credentials
-signing/credentials
-# Signer target directory
-signing/fido-signer/target
-
-# vscode extension support
-tools-bao/.venv/
-
-# Zig artifacts
-.zig-cache/
-zig-out/
-kernel.map
+# KDevelop project files
+.kdev4/
+*.kdev4

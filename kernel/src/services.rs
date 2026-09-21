@@ -3,11 +3,11 @@
 
 use core::num::NonZeroU8;
 
-use xous_kernel::arch::*;
+use redoubt_abi::arch::*;
 // use core::mem;
-use xous_kernel::{CID, Error, MemoryAddress, Message, PID, SID, TID, ThreadInit};
+use redoubt_abi::{CID, Error, MemoryAddress, Message, PID, SID, TID, ThreadInit};
 #[cfg(not(baremetal))]
-use xous_kernel::{ProcessInit, pid_from_usize};
+use redoubt_abi::{ProcessInit, pid_from_usize};
 
 use crate::arch;
 use crate::arch::mem::MemoryMapping;
@@ -79,7 +79,7 @@ pub struct SystemServices {
 pub enum PostActivateOp<'a> {
     None,
     SetThreadResult {
-        result: xous_kernel::Result,
+        result: redoubt_abi::Result,
     },
     RememberServerMessage {
         sidx: usize,
@@ -251,16 +251,16 @@ impl Process {
     /// This process slot is unallocated and may be turn into a process
     pub fn free(&self) -> bool { matches!(self.state, ProcessState::Free) }
 
-    pub fn activate(&self) -> Result<(), xous_kernel::Error> {
+    pub fn activate(&self) -> Result<(), redoubt_abi::Error> {
         crate::arch::process::set_current_pid(self.pid);
         self.mapping.activate()?;
         let mut current_process = ArchProcess::current();
         current_process.activate()
     }
 
-    pub fn terminate(&mut self) -> Result<(), xous_kernel::Error> {
+    pub fn terminate(&mut self) -> Result<(), redoubt_abi::Error> {
         if self.free() {
-            return Err(xous_kernel::Error::ProcessNotFound);
+            return Err(redoubt_abi::Error::ProcessNotFound);
         }
 
         println!("[!] Terminating process with PID {}", self.pid);
@@ -341,7 +341,7 @@ fn prepare_destination(
     dest_pid: PID,
     dest_virt: usize,
     len: usize,
-) -> Result<(), xous_kernel::Error> {
+) -> Result<(), redoubt_abi::Error> {
     for offset in (0..len).step_by(PAGE_SIZE) {
         arch::mem::prepare_map(mm, dest_mapping, dest_pid, dest_virt + offset)?;
     }
@@ -391,7 +391,7 @@ impl SystemServices {
             // refuses a bundle with more processes than the kernel has room for. This is the
             // kernel's side of that check: a count beyond either limit means the two disagree,
             // and the boot stops here rather than at an index somewhere later.
-            let capacity = (xous_kernel::arch::PAGE_SIZE
+            let capacity = (redoubt_abi::arch::PAGE_SIZE
                 / size_of::<crate::arch::process::InitialProcess>())
             .min(crate::arch::process::MAX_PROCESS_COUNT);
             assert!(
@@ -502,7 +502,7 @@ impl SystemServices {
     pub fn create_process(
         &mut self,
         init_process: ProcessInit,
-    ) -> Result<ProcessStartup, xous_kernel::Error> {
+    ) -> Result<ProcessStartup, redoubt_abi::Error> {
         let mut entry_idx = None;
         let mut new_pid = None;
         let _ppid = crate::arch::process::current_pid();
@@ -520,12 +520,12 @@ impl SystemServices {
             #[allow(unused_unsafe)]
             // SAFETY: `allocate` is a safe fn on Sv39 and unsafe on Sv32; the unsafe covers only the latter.
             unsafe {
-                entry.mapping.allocate(new_pid.unwrap()).or(Err(xous_kernel::Error::InternalError))?
+                entry.mapping.allocate(new_pid.unwrap()).or(Err(redoubt_abi::Error::InternalError))?
             };
             break;
         }
         if entry_idx.is_none() {
-            return Err(xous_kernel::Error::ProcessNotFound);
+            return Err(redoubt_abi::Error::ProcessNotFound);
         }
         let new_pid = new_pid.unwrap();
         let startup = arch::process::Process::create(new_pid, init_process, self).unwrap();
@@ -544,31 +544,31 @@ impl SystemServices {
         return Ok(startup);
     }
 
-    pub fn get_process(&self, pid: PID) -> Result<&Process, xous_kernel::Error> {
+    pub fn get_process(&self, pid: PID) -> Result<&Process, redoubt_abi::Error> {
         // PID0 doesn't exist -- process IDs are offset by 1.
         let pid_idx = pid.get() as usize - 1;
         if pid_idx >= self.processes.len() {
-            return Err(xous_kernel::Error::ProcessNotFound);
+            return Err(redoubt_abi::Error::ProcessNotFound);
         }
         if cfg!(baremetal) && self.processes[pid_idx].mapping.get_pid() != Some(pid) {
-            Err(xous_kernel::Error::ProcessNotFound)
+            Err(redoubt_abi::Error::ProcessNotFound)
         } else if self.processes[pid_idx].state == ProcessState::Free {
-            Err(xous_kernel::Error::ProcessNotFound)
+            Err(redoubt_abi::Error::ProcessNotFound)
         } else {
             Ok(&self.processes[pid_idx])
         }
     }
 
-    pub fn get_process_mut(&mut self, pid: PID) -> Result<&mut Process, xous_kernel::Error> {
+    pub fn get_process_mut(&mut self, pid: PID) -> Result<&mut Process, redoubt_abi::Error> {
         // PID0 doesn't exist -- process IDs are offset by 1.
         let pid_idx = pid.get() as usize - 1;
         if pid_idx >= self.processes.len() {
-            return Err(xous_kernel::Error::ProcessNotFound);
+            return Err(redoubt_abi::Error::ProcessNotFound);
         }
         if cfg!(baremetal) && self.processes[pid_idx].mapping.get_pid() != Some(pid) {
-            Err(xous_kernel::Error::ProcessNotFound)
+            Err(redoubt_abi::Error::ProcessNotFound)
         } else if self.processes[pid_idx].state == ProcessState::Free {
-            Err(xous_kernel::Error::ProcessNotFound)
+            Err(redoubt_abi::Error::ProcessNotFound)
         } else {
             Ok(&mut self.processes[pid_idx])
         }
@@ -581,7 +581,7 @@ impl SystemServices {
     /// 2. Save the process state, if it hasn't already been saved
     /// 3. Run the new process, returning to an illegal instruction
     #[cfg(baremetal)]
-    pub fn finish_callback_and_resume(&mut self, pid: PID, tid: TID) -> Result<(), xous_kernel::Error> {
+    pub fn finish_callback_and_resume(&mut self, pid: PID, tid: TID) -> Result<(), redoubt_abi::Error> {
         // Get the current process (which was the interrupt handler) and mark it
         // as Ready.  Note that the new PID may very well be the same PID.
         {
@@ -642,7 +642,7 @@ impl SystemServices {
         pid: PID,
         pc: *const usize,
         cb_type: CallbackType,
-    ) -> Result<(), xous_kernel::Error> {
+    ) -> Result<(), redoubt_abi::Error> {
         // Get the current process (which was just interrupted) and mark it as
         // "ready to run".  If this function is called when the current process
         // isn't running, that means the system has gotten into an invalid
@@ -717,7 +717,7 @@ impl SystemServices {
         Ok(())
     }
 
-    pub fn runnable(&self, pid: PID, tid: Option<TID>) -> Result<bool, xous_kernel::Error> {
+    pub fn runnable(&self, pid: PID, tid: Option<TID>) -> Result<bool, redoubt_abi::Error> {
         let process = self.get_process(pid)?;
         if let Some(tid) = tid {
             Ok(match process.state {
@@ -736,7 +736,7 @@ impl SystemServices {
 
     /// Mark the specified context as ready to run. If the thread is Sleeping, mark
     /// it as Ready.
-    pub fn ready_thread(&mut self, pid: PID, tid: TID) -> Result<(), xous_kernel::Error> {
+    pub fn ready_thread(&mut self, pid: PID, tid: TID) -> Result<(), redoubt_abi::Error> {
         let process = self.get_process_mut(pid)?;
         // let old_state = process.state;
         process.state = match process.state {
@@ -809,7 +809,7 @@ impl SystemServices {
     /// picked to run next, completely skipping thread 2.
     /// Use `set_last_thread()` when a process' quantum is up in order to tell the scheduler
     /// which thread to use as a reference for picking the next runnable thread.
-    pub fn set_last_thread(&mut self, pid: PID, tid: TID) -> Result<(), xous_kernel::Error> {
+    pub fn set_last_thread(&mut self, pid: PID, tid: TID) -> Result<(), redoubt_abi::Error> {
         let process = self.get_process_mut(pid)?;
 
         match process.state {
@@ -817,9 +817,9 @@ impl SystemServices {
                 process.current_thread = tid;
                 Ok(())
             }
-            ProcessState::Ready(_) | ProcessState::Sleeping => Err(xous_kernel::Error::ThreadNotAvailable),
+            ProcessState::Ready(_) | ProcessState::Sleeping => Err(redoubt_abi::Error::ThreadNotAvailable),
             ProcessState::Running(_) => panic!("thread was still running"),
-            _ => Err(xous_kernel::Error::ProcessNotFound),
+            _ => Err(redoubt_abi::Error::ProcessNotFound),
         }
     }
 
@@ -828,7 +828,7 @@ impl SystemServices {
     /// # Panics
     ///
     /// If the current process is not running, or if it's "Running" but has no free contexts
-    pub fn switch_to_thread(&mut self, pid: PID, tid: Option<TID>) -> Result<(), xous_kernel::Error> {
+    pub fn switch_to_thread(&mut self, pid: PID, tid: Option<TID>) -> Result<(), redoubt_abi::Error> {
         let process = self.get_process_mut(pid)?;
         // klog!(
         //     "switch_to_thread({}:{:?}): Old state was {:?}",
@@ -838,9 +838,9 @@ impl SystemServices {
         // let old_state = process.state;
         // Determine which thread to switch to
         process.state = match process.state {
-            ProcessState::Free => return Err(xous_kernel::Error::ProcessNotFound),
-            ProcessState::Sleeping => return Err(xous_kernel::Error::ProcessNotFound),
-            ProcessState::Allocated => return Err(xous_kernel::Error::ProcessNotFound),
+            ProcessState::Free => return Err(redoubt_abi::Error::ProcessNotFound),
+            ProcessState::Sleeping => return Err(redoubt_abi::Error::ProcessNotFound),
+            ProcessState::Allocated => return Err(redoubt_abi::Error::ProcessNotFound),
             ProcessState::BlockedException(_) => {
                 panic!("tried to switch to an exception handler that was blocked")
             }
@@ -900,7 +900,7 @@ impl SystemServices {
                 // Ensure the specified context is ready to run, or is
                 // currently running.
                 if ready_threads & (1 << new_thread) == 0 {
-                    return Err(xous_kernel::Error::InvalidThread);
+                    return Err(redoubt_abi::Error::InvalidThread);
                 }
 
                 // Activate this process on this CPU
@@ -929,7 +929,7 @@ impl SystemServices {
     /// # Panics
     ///
     /// If the current process is not running.
-    pub fn unschedule_thread(&mut self, pid: PID, tid: TID) -> Result<(), xous_kernel::Error> {
+    pub fn unschedule_thread(&mut self, pid: PID, tid: TID) -> Result<(), redoubt_abi::Error> {
         let process = self.get_process_mut(pid)?;
         // klog!(
         //     "unschedule_thread({}:{}): Old state was {:?}",
@@ -979,8 +979,8 @@ impl SystemServices {
         &mut self,
         pid: PID,
         tid: TID,
-        result: xous_kernel::Result,
-    ) -> Result<(), xous_kernel::Error> {
+        result: redoubt_abi::Result,
+    ) -> Result<(), redoubt_abi::Error> {
         // Temporarily switch into the target process memory space
         // in order to pass the return value.
         let current_pid = self.current_pid();
@@ -1011,7 +1011,7 @@ impl SystemServices {
 
     /// Make `pid`'s address space the active one, for the steps that must run in it (choosing a
     /// buffer's address, writing a record into the receiver's own memory).
-    pub fn activate(&self, pid: PID) -> Result<(), xous_kernel::Error> {
+    pub fn activate(&self, pid: PID) -> Result<(), redoubt_abi::Error> {
         self.get_process(pid)?.activate()
     }
 
@@ -1023,7 +1023,7 @@ impl SystemServices {
         pid: PID,
         tid: TID,
         regs: &[u64; redoubt_sys::REGS],
-    ) -> Result<(), xous_kernel::Error> {
+    ) -> Result<(), redoubt_abi::Error> {
         // Every register holds at most 32 bits or one `usize` (redoubt-sys).
         let words = regs.map(|r| r as usize);
         let current_pid = self.current_pid();
@@ -1053,7 +1053,7 @@ impl SystemServices {
         mut new_tid: TID,
         can_resume: bool,
         lazy_arg: PostActivateOp,
-    ) -> Result<TID, xous_kernel::Error> {
+    ) -> Result<TID, redoubt_abi::Error> {
         let mut sender_idx: Option<usize> = None;
         let previous_pid = self.current_pid();
 
@@ -1075,7 +1075,7 @@ impl SystemServices {
                 match new.state {
                     ProcessState::Free => {
                         klog!("PID {} was free", new_pid);
-                        return Err(xous_kernel::Error::ProcessNotFound);
+                        return Err(redoubt_abi::Error::ProcessNotFound);
                     }
                     ProcessState::Setup(_) | ProcessState::Allocated => new_tid = INITIAL_TID,
                     ProcessState::Exception(_) => {
@@ -1095,7 +1095,7 @@ impl SystemServices {
                                 "process state is {:?}, but new thread {} is not runnable",
                                 new.state, new_tid
                             );
-                            return Err(xous_kernel::Error::ProcessNotFound);
+                            return Err(redoubt_abi::Error::ProcessNotFound);
                         }
                         new.current_thread = new_tid as _;
                     }
@@ -1104,7 +1104,7 @@ impl SystemServices {
                     }
                     ProcessState::Sleeping | ProcessState::BlockedException(_) => {
                         // println!("PID {} was sleeping or being debugged", new_pid);
-                        return Err(xous_kernel::Error::ProcessNotFound);
+                        return Err(redoubt_abi::Error::ProcessNotFound);
                     }
                 }
             }
@@ -1273,7 +1273,7 @@ impl SystemServices {
                 }
 
                 if x & (1 << new_tid) == 0 {
-                    return Err(xous_kernel::Error::ThreadNotAvailable);
+                    return Err(redoubt_abi::Error::ThreadNotAvailable);
                 }
 
                 new.current_thread = new_tid as _;
@@ -1336,21 +1336,21 @@ impl SystemServices {
         dest_pid: PID,
         dest_virt: *mut usize,
         len: usize,
-    ) -> Result<*mut usize, xous_kernel::Error> {
+    ) -> Result<*mut usize, redoubt_abi::Error> {
         if len == 0 {
-            return Err(xous_kernel::Error::BadAddress);
+            return Err(redoubt_abi::Error::BadAddress);
         }
         if len & 0xfff != 0 {
-            return Err(xous_kernel::Error::BadAddress);
+            return Err(redoubt_abi::Error::BadAddress);
         }
         if src_virt as usize & 0xfff != 0 {
-            return Err(xous_kernel::Error::BadAddress);
+            return Err(redoubt_abi::Error::BadAddress);
         }
         if dest_virt as usize & 0xfff != 0 {
-            return Err(xous_kernel::Error::BadAddress);
+            return Err(redoubt_abi::Error::BadAddress);
         }
         if (dest_virt as usize).saturating_add(len) > USER_AREA_END {
-            return Err(xous_kernel::Error::BadAddress);
+            return Err(redoubt_abi::Error::BadAddress);
         }
 
         let current_pid = self.current_pid();
@@ -1377,7 +1377,7 @@ impl SystemServices {
             // Locate an address to fit the new memory.
             dest_mapping.activate()?;
             let dest_virt = mm
-                .find_virtual_address(dest_virt as *mut u8, len, xous_kernel::MemoryType::Messages)
+                .find_virtual_address(dest_virt as *mut u8, len, redoubt_abi::MemoryType::Messages)
                 .map_err(|e| {
                     src_mapping.activate().expect("couldn't undo mapping");
                     e
@@ -1387,7 +1387,7 @@ impl SystemServices {
             // The pages become the destination's, and its budget's to pay for (R6): check that
             // it can, so that the moves below cannot fail on it either.
             if !mm.can_take_frames(current_pid, dest_pid, (len / PAGE_SIZE) as u64) {
-                return Err(xous_kernel::Error::OutOfMemory);
+                return Err(redoubt_abi::Error::OutOfMemory);
             }
 
             let mut error = None;
@@ -1418,7 +1418,7 @@ impl SystemServices {
         _dest_pid: PID,
         _dest_virt: *mut usize,
         _len: usize,
-    ) -> Result<*mut usize, xous_kernel::Error> {
+    ) -> Result<*mut usize, redoubt_abi::Error> {
         Ok(src_virt)
     }
 
@@ -1454,23 +1454,23 @@ impl SystemServices {
         dest_virt: *mut usize,
         len: usize,
         mutable: bool,
-    ) -> Result<*mut usize, xous_kernel::Error> {
+    ) -> Result<*mut usize, redoubt_abi::Error> {
         if len == 0 {
-            return Err(xous_kernel::Error::BadAddress);
+            return Err(redoubt_abi::Error::BadAddress);
         }
         if len & 0xfff != 0 {
-            return Err(xous_kernel::Error::BadAlignment);
+            return Err(redoubt_abi::Error::BadAlignment);
         }
         if src_virt as usize & 0xfff != 0 {
-            return Err(xous_kernel::Error::BadAlignment);
+            return Err(redoubt_abi::Error::BadAlignment);
         }
         if dest_virt as usize & 0xfff != 0 {
-            return Err(xous_kernel::Error::BadAlignment);
+            return Err(redoubt_abi::Error::BadAlignment);
         }
         // Iterators and `ptr.wrapping_add()` operate on `usize` types,
         // which effectively lowers the `len`.
         let usize_len = len / core::mem::size_of::<usize>();
-        let usize_page = xous_kernel::arch::PAGE_SIZE / core::mem::size_of::<usize>();
+        let usize_page = redoubt_abi::arch::PAGE_SIZE / core::mem::size_of::<usize>();
 
         let current_pid = self.current_pid();
         // If it's within the same process, ignore the move operation and
@@ -1489,7 +1489,7 @@ impl SystemServices {
             // Locate an address to fit the new memory.
             dest_mapping.activate()?;
             let dest_virt = mm
-                .find_virtual_address(dest_virt as *mut u8, len, xous_kernel::MemoryType::Messages)
+                .find_virtual_address(dest_virt as *mut u8, len, redoubt_abi::MemoryType::Messages)
                 .map_err(|e| {
                     src_mapping.activate().unwrap();
                     // klog!("Couldn't find a virtual address");
@@ -1543,7 +1543,7 @@ impl SystemServices {
         _dest_virt: *mut usize,
         _len: usize,
         _mutable: bool,
-    ) -> Result<*mut usize, xous_kernel::Error> {
+    ) -> Result<*mut usize, redoubt_abi::Error> {
         Ok(src_virt)
     }
 
@@ -1566,7 +1566,7 @@ impl SystemServices {
         _dest_tid: TID,
         dest_virt: *mut usize,
         len: usize,
-    ) -> Result<*mut usize, xous_kernel::Error> {
+    ) -> Result<*mut usize, redoubt_abi::Error> {
         // klog!(
         //     "Returning from {}:{} to {}:{}",
         //     self.current_pid(),
@@ -1576,19 +1576,19 @@ impl SystemServices {
         // );
         if len == 0 {
             // klog!("No len");
-            return Err(xous_kernel::Error::BadAddress);
+            return Err(redoubt_abi::Error::BadAddress);
         }
         if len & 0xfff != 0 {
             // klog!("len not aligned");
-            return Err(xous_kernel::Error::BadAddress);
+            return Err(redoubt_abi::Error::BadAddress);
         }
         if src_virt as usize & 0xfff != 0 {
             // klog!("Src virt not aligned");
-            return Err(xous_kernel::Error::BadAddress);
+            return Err(redoubt_abi::Error::BadAddress);
         }
         if dest_virt as usize & 0xfff != 0 {
             // klog!("dest virt not aligned");
-            return Err(xous_kernel::Error::BadAddress);
+            return Err(redoubt_abi::Error::BadAddress);
         }
 
         // If memory is getting returned to the kernel, then it is memory that was
@@ -1647,7 +1647,7 @@ impl SystemServices {
         _dest_virt: *mut usize,
         len: usize,
         // buf: MemoryRange,
-    ) -> Result<*mut usize, xous_kernel::Error> {
+    ) -> Result<*mut usize, redoubt_abi::Error> {
         let buf = crate::mem::memory_range(src_virt as usize, len)?;
         // SAFETY: `buf` is a MemoryRange the caller lent; it describes a mapped, page-aligned region.
         let buf = unsafe { buf.as_slice() };
@@ -1674,17 +1674,17 @@ impl SystemServices {
     /// # Errors
     ///
     /// * **ThreadNotAvailable**: The process has used all of its context slots.
-    pub fn create_thread(&mut self, pid: PID, thread_init: ThreadInit) -> Result<TID, xous_kernel::Error> {
+    pub fn create_thread(&mut self, pid: PID, thread_init: ThreadInit) -> Result<TID, redoubt_abi::Error> {
         let process = self.get_process_mut(pid)?;
         process.activate()?;
 
         let mut arch_process = ArchProcess::current();
-        let new_tid = arch_process.find_free_thread().ok_or(xous_kernel::Error::ThreadNotAvailable)?;
+        let new_tid = arch_process.find_free_thread().ok_or(redoubt_abi::Error::ThreadNotAvailable)?;
 
         // A thread costs its budget a page (R6).
         #[cfg(baremetal)]
         crate::mem::MemoryManager::with_mut(|mm| mm.thread_created(pid, new_tid))
-            .map_err(|_| xous_kernel::Error::OutOfMemory)?;
+            .map_err(|_| redoubt_abi::Error::OutOfMemory)?;
         arch_process.setup_thread(new_tid, thread_init).inspect_err(|_| {
             #[cfg(baremetal)]
             crate::mem::MemoryManager::with_mut(|mm| mm.thread_ended(pid, new_tid));
@@ -1713,7 +1713,7 @@ impl SystemServices {
     ///
     /// * **ThreadNotAvailable**: The thread does not exist in this process
     #[cfg(baremetal)]
-    pub fn destroy_thread(&mut self, pid: PID, tid: TID) -> Result<bool, xous_kernel::Error> {
+    pub fn destroy_thread(&mut self, pid: PID, tid: TID) -> Result<bool, redoubt_abi::Error> {
         let current_pid = self.current_pid();
         assert_eq!(pid, current_pid);
 
@@ -1741,11 +1741,11 @@ impl SystemServices {
         // wake it up and set its return value.
         if let Some((waiting_tid, _thread)) = arch_process.find_thread(|waiting_tid, thr| {
             (waiting_threads & (1 << waiting_tid)) == 0 // Thread is waiting (i.e. not ready to run)
-                && thr.a0() == (xous_kernel::SysCallNumber::JoinThread as usize) // Thread called `JoinThread`
+                && thr.a0() == (redoubt_abi::SysCallNumber::JoinThread as usize) // Thread called `JoinThread`
                 && thr.a1() == (tid as usize) // It is waiting on our thread
         }) {
             // Wake up the thread
-            self.set_thread_result(pid, waiting_tid, xous_kernel::Result::Scalar1(return_value))?;
+            self.set_thread_result(pid, waiting_tid, redoubt_abi::Result::Scalar1(return_value))?;
             waiting_threads |= 1 << waiting_tid;
         }
 
@@ -1777,13 +1777,13 @@ impl SystemServices {
         pid: PID,
         tid: TID,
         join_tid: TID,
-    ) -> Result<xous_kernel::Result, xous_kernel::Error> {
+    ) -> Result<redoubt_abi::Result, redoubt_abi::Error> {
         let current_pid = self.current_pid();
         assert_eq!(pid, current_pid);
 
         // We cannot wait on ourselves.
         if tid == join_tid {
-            return Err(xous_kernel::Error::ThreadNotAvailable);
+            return Err(redoubt_abi::Error::ThreadNotAvailable);
         }
 
         // If the target thread exists, put this thread to sleep.
@@ -1792,12 +1792,12 @@ impl SystemServices {
             // The target thread exists -- put this thread to sleep
             let ppid = self.get_process(pid).unwrap().ppid;
             self.activate_process_thread(tid, ppid, 0, false, PostActivateOp::None)
-                .map(|_| Ok(xous_kernel::Result::ResumeProcess))
-                .unwrap_or(Err(xous_kernel::Error::ProcessNotFound))
+                .map(|_| Ok(redoubt_abi::Result::ResumeProcess))
+                .unwrap_or(Err(redoubt_abi::Error::ProcessNotFound))
         } else {
             // The thread does not exist -- continue execution
-            // Err(xous_kernel::Error::ThreadNotAvailable)
-            Ok(xous_kernel::Result::Scalar1(0))
+            // Err(redoubt_abi::Error::ThreadNotAvailable)
+            Ok(redoubt_abi::Result::Scalar1(0))
         }
     }
 
@@ -1814,7 +1814,7 @@ impl SystemServices {
         pid: PID,
         sid: SID,
         connect: bool,
-    ) -> Result<(SID, CID), xous_kernel::Error> {
+    ) -> Result<(SID, CID), redoubt_abi::Error> {
         // klog!(
         //     "looking through server list for free server, connect? {}",
         //     connect
@@ -1823,7 +1823,7 @@ impl SystemServices {
         // TODO: Come up with a way to randomize the server ID
         let ppid = self.get_process(pid)?.ppid.get();
         if ppid != 1 {
-            return Err(xous_kernel::Error::AccessDenied);
+            return Err(redoubt_abi::Error::AccessDenied);
         }
 
         for entry in self.servers.iter_mut() {
@@ -1846,7 +1846,7 @@ impl SystemServices {
                 return Ok((sid, cid));
             }
         }
-        Err(xous_kernel::Error::ServerNotFound)
+        Err(redoubt_abi::Error::ServerNotFound)
     }
 
     /// Generate a new server ID for this process and then create a new server.
@@ -1858,14 +1858,14 @@ impl SystemServices {
     ///
     /// * **OutOfMemory**: A new page could not be assigned to store the server queue.
     /// * **ServerNotFound**: The server queue was full and a free slot could not be found.
-    pub fn create_server(&mut self, pid: PID, connect: bool) -> Result<(SID, CID), xous_kernel::Error> {
+    pub fn create_server(&mut self, pid: PID, connect: bool) -> Result<(SID, CID), redoubt_abi::Error> {
         let sid = self.create_server_id()?;
         self.create_server_with_address(pid, sid, connect)
     }
 
     /// Generate a random server ID and return it to the caller. Doesn't create
     /// any processes.
-    pub fn create_server_id(&mut self) -> Result<SID, xous_kernel::Error> {
+    pub fn create_server_id(&mut self) -> Result<SID, redoubt_abi::Error> {
         let sid = SID::from_u32(
             platform::rand::get_u32(),
             platform::rand::get_u32(),
@@ -1877,7 +1877,7 @@ impl SystemServices {
 
     /// Destroy the provided server ID and disconnect any processes that are
     /// connected.
-    pub fn destroy_server(&mut self, pid: PID, sid: SID) -> Result<(), xous_kernel::Error> {
+    pub fn destroy_server(&mut self, pid: PID, sid: SID) -> Result<(), redoubt_abi::Error> {
         let mut idx_to_destroy = None;
         // Look through the server list for a server that matches this SID
         for (idx, entry) in self.servers.iter().enumerate() {
@@ -1889,13 +1889,13 @@ impl SystemServices {
             }
         }
 
-        let server_idx = idx_to_destroy.ok_or(xous_kernel::Error::ServerNotFound)?;
+        let server_idx = idx_to_destroy.ok_or(redoubt_abi::Error::ServerNotFound)?;
         let server = self.servers[server_idx].take().unwrap();
         // Try to destroy the server. This will fail if the server
         // has any outstanding memory requests.
         server.destroy(self).map_err(|server| {
             self.servers[server_idx] = Some(server);
-            xous_kernel::Error::ServerQueueFull
+            redoubt_abi::Error::ServerQueueFull
         })?;
 
         let pid = crate::arch::process::current_pid();
@@ -1930,7 +1930,7 @@ impl SystemServices {
         &mut self,
         target_pid: PID,
         sid: SID,
-    ) -> Result<CID, xous_kernel::Error> {
+    ) -> Result<CID, redoubt_abi::Error> {
         let original_pid = crate::arch::process::current_pid();
 
         let process = self.get_process_mut(target_pid)?;
@@ -1946,7 +1946,7 @@ impl SystemServices {
 
     /// Allocate a new server ID for this process and return the address. If the
     /// server table is full, return an error.
-    pub fn connect_to_server(&mut self, sid: SID) -> Result<CID, xous_kernel::Error> {
+    pub fn connect_to_server(&mut self, sid: SID) -> Result<CID, redoubt_abi::Error> {
         // Check to see if we've already connected to this server.
         // While doing this, find a free slot in case we haven't
         // yet connected.
@@ -2006,12 +2006,12 @@ impl SystemServices {
                     }
                 }
             }
-            Err(xous_kernel::Error::ServerNotFound) // May also be OutOfMemory if the table is full
+            Err(redoubt_abi::Error::ServerNotFound) // May also be OutOfMemory if the table is full
         })
     }
 
     /// Invalidate the provided connection ID.
-    pub fn disconnect_from_server(&mut self, cid: CID) -> Result<(), xous_kernel::Error> {
+    pub fn disconnect_from_server(&mut self, cid: CID) -> Result<(), redoubt_abi::Error> {
         // Check to see if we've already connected to this server.
         // While doing this, find a free slot in case we haven't
         // yet connected.
@@ -2020,7 +2020,7 @@ impl SystemServices {
         let slot_idx = cid;
         if slot_idx < 2 {
             klog!("CID {} is not valid", cid);
-            return Err(xous_kernel::Error::ServerNotFound);
+            return Err(redoubt_abi::Error::ServerNotFound);
         }
         let slot_idx = (slot_idx - 2) as usize;
         let pid = crate::arch::process::current_pid();
@@ -2029,14 +2029,14 @@ impl SystemServices {
             assert_eq!(pid, process_inner.pid);
             if slot_idx >= process_inner.connection_map.len() {
                 klog!("Slot index exceeds map length");
-                return Err(xous_kernel::Error::ServerNotFound);
+                return Err(redoubt_abi::Error::ServerNotFound);
             }
 
             // If the server ID is None, then we weren't connected in the first place.
             let idx = &mut process_inner.connection_map[slot_idx];
             if idx.is_none() {
                 klog!("IDX[{}] is already None!", slot_idx);
-                return Err(xous_kernel::Error::ServerNotFound);
+                return Err(redoubt_abi::Error::ServerNotFound);
             }
 
             // Nullify this connection ID. It may now be reused.
@@ -2123,10 +2123,10 @@ impl SystemServices {
         thread: TID,
         message: Message,
         original_address: Option<MemoryAddress>,
-    ) -> Result<usize, xous_kernel::Error> {
+    ) -> Result<usize, redoubt_abi::Error> {
         let current_pid = self.current_pid();
         let result = {
-            let server_pid = self.server_from_sidx(sidx).ok_or(xous_kernel::Error::ServerNotFound)?.pid;
+            let server_pid = self.server_from_sidx(sidx).ok_or(redoubt_abi::Error::ServerNotFound)?.pid;
             {
                 let server_process = self.get_process(server_pid)?;
                 server_process.mapping.activate().unwrap();
@@ -2148,8 +2148,8 @@ impl SystemServices {
         current_thread: TID,
         message: &Message,
         client_address: Option<MemoryAddress>,
-    ) -> Result<usize, xous_kernel::Error> {
-        let server_pid = self.server_from_sidx(sidx).ok_or(xous_kernel::Error::ServerNotFound)?.pid;
+    ) -> Result<usize, redoubt_abi::Error> {
+        let server_pid = self.server_from_sidx(sidx).ok_or(redoubt_abi::Error::ServerNotFound)?.pid;
         {
             let server_process = self.get_process(server_pid)?;
             server_process.mapping.activate()?;
@@ -2174,7 +2174,7 @@ impl SystemServices {
     // }
 
     /// Terminate the given process. Returns the process' parent PID.
-    pub fn terminate_process(&mut self, target_pid: PID) -> Result<PID, xous_kernel::Error> {
+    pub fn terminate_process(&mut self, target_pid: PID) -> Result<PID, redoubt_abi::Error> {
         println!("terminate_process: {:?}", target_pid);
         // To terminate a process, we must perform the following:
         //
@@ -2202,7 +2202,7 @@ impl SystemServices {
     /// Steps 1 and 2 of ending process `target`: tombstone every connection to its servers,
     /// drop every message it has queued at others' servers, and free its server entries.
     /// Leaves whichever address space it visited last active.
-    fn release_servers_of(&mut self, target: PID) -> Result<(), xous_kernel::Error> {
+    fn release_servers_of(&mut self, target: PID) -> Result<(), redoubt_abi::Error> {
         // 1. Find all servers associated with this PID and remove them.
         for (idx, server) in self.servers.iter_mut().enumerate() {
             if let Some(server) = server {
@@ -2255,7 +2255,7 @@ impl SystemServices {
     /// the running process's address space is active again. `target` must not be the running
     /// process.
     #[cfg(baremetal)]
-    pub fn kill_process(&mut self, target: PID) -> Result<(), xous_kernel::Error> {
+    pub fn kill_process(&mut self, target: PID) -> Result<(), redoubt_abi::Error> {
         let current = self.current_pid();
         assert!(target != current, "kill_process on the running process");
         self.release_servers_of(target)?;
@@ -2266,7 +2266,7 @@ impl SystemServices {
     }
 
     /// Calls the provided function with the current inner process state.
-    pub fn shutdown(&mut self) -> Result<(), xous_kernel::Error> {
+    pub fn shutdown(&mut self) -> Result<(), redoubt_abi::Error> {
         // Destroy all servers. This will cause all queued messages to be lost.
         for server_idx in 0..self.servers.len() {
             if let Some(server) = self.servers[server_idx].take() {
@@ -2284,7 +2284,7 @@ impl SystemServices {
         Ok(())
     }
 
-    /* https://github.com/betrusted-io/xous-core/issues/90
+    /* https://github.com/betrusted-io/xous-core-core/issues/90
     /// Sets the exception handler for the given process ID. If an exception handler
     /// exists, it will be silently overridden.
     pub fn set_exception_handler(
@@ -2292,7 +2292,7 @@ impl SystemServices {
         pid: PID,
         pc: usize,
         sp: usize,
-    ) -> Result<(), xous_kernel::Error> {
+    ) -> Result<(), redoubt_abi::Error> {
         self.get_process_mut(pid)?.exception_handler = if pc != 0 && sp != 0 {
             Some(ExceptionHandler { pc, sp })
         } else {
@@ -2328,7 +2328,7 @@ impl SystemServices {
     /// Move the current process from an `Exception` state back into a `Running` state
     /// with the current thread being marked as the given tid.
     #[cfg(baremetal)]
-    pub fn finish_exception_handler_and_resume(&mut self, pid: PID) -> Result<(), xous_kernel::Result> {
+    pub fn finish_exception_handler_and_resume(&mut self, pid: PID) -> Result<(), redoubt_abi::Result> {
         let process = self.get_process_mut(pid)?;
         if let ProcessState::Exception(threads) = process.state {
             assert!(threads & (1 << process.previous_thread) != 0);
@@ -2336,7 +2336,7 @@ impl SystemServices {
             process.current_thread = process.previous_thread;
             ArchProcess::current().set_tid(process.current_thread)?;
         } else {
-            return Err(xous_kernel::Error::ThreadNotAvailable.into());
+            return Err(redoubt_abi::Error::ThreadNotAvailable.into());
         }
         Ok(())
     }

@@ -1,0 +1,18 @@
+[package]
+name = "redoubt-keyd"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "keyd: holds every private key on the box, signs through a badge that names one key and one purpose, and never exports"
+
+[[bin]]
+name = "keyd"
+path = "src/bin/keyd.rs"
+
+[dependencies]
+redoubt-rt = { path = "../../libs/rt" }
+# TENETS.md 5: the one outside crate keyd links. Pinned by Cargo.lock at 2.4.2, the same
+# version and the same `default-features = false` the loader already uses for verified boot
+# (VERIFIED-BOOT.md), so the box has one Ed25519 implementation, not two. With the default
+# features off it is `no_std`, pure Rust and has no dependencies at all.
+ed25519-compact = { version = "2", default-features = false }

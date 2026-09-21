@@ -1,0 +1,11 @@
+[package]
+name = "test-programs"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "no_std programs that run inside Redoubt under the test bench (redoubt/testbench)"
+
+[dependencies]
+redoubt-abi = { path = "../../libs/abi" }
+uart_16550 = { version = "0.3", default-features = false }
+redoubt-sys = { path = "../../libs/sys" }

@@ -4,9 +4,9 @@ SPDX-License-Identifier: Apache-2.0
 -->
 
 
-# Xous Kernel
+# Redoubt Kernel
 
-This contains the core kernel for Xous.  It requires a stage 1 loader in
+This contains the core kernel for Redoubt.  It requires a stage 1 loader in
 order to start up, as it assumes the system is already running in
 Supervisor mode.
 
@@ -14,7 +14,7 @@ Supervisor mode.
 
 To build the kernel, you will need a riscv32 target for Rust.  Possible
 targets include `riscv32i-unknown-none-elf`, `riscv32imac-unknown-none-elf`,
-or `riscv32imac-unknown-xous-elf`.
+or `riscv32imac-unknown-redoubt-elf`.
 
 1. Decide what target you want.  For simple, embedded systems this could
    be `riscv32i-unknown-none-elf`, and for more complex systems with
@@ -26,7 +26,7 @@ or `riscv32imac-unknown-xous-elf`.
 ## Using
 
 To use the kernel, you must package it up into an arguments binary with
-`xous-tools`.
+`redoubt-tools`.
 
 ## Testing
 

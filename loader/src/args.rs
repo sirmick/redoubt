@@ -1,6 +1,6 @@
 //! Builds the tagged argument block the kernel reads at boot.
 //!
-//! Framing is the same as rv32 Xous: `tag: u32, crc16: u16, words: u16, data: [u32]`.
+//! Framing is the same as rv32 Redoubt: `tag: u32, crc16: u16, words: u16, data: [u32]`.
 //! Payloads that carry addresses are 64-bit clean: `XArg` is version 2 and `MREx`
 //! entries are `{ start: u64, size: u64, tag: u32, pad: u32 }`.
 

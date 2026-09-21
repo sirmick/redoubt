@@ -4,7 +4,7 @@
 
 param ($Arch="riscv") 
 
-$crate = "xous-kernel"
+$crate = "redoubt-kernel"
 
 New-Item -Force -Path bin -Type Directory | Out-Null
 
@@ -15,7 +15,7 @@ Switch ($Arch) {
 
         riscv-none-elf-gcc -ggdb3 -c -mabi=ilp32 -march=rv32imac_zicsr_zifencei src/arch/riscv/asm.S -o bin/$crate.o
         riscv-none-elf-ar crs bin/riscv32imac-unknown-none-elf.a bin/$crate.o
-        riscv-none-elf-ar crs bin/riscv32imac-unknown-xous-elf.a bin/$crate.o
+        riscv-none-elf-ar crs bin/riscv32imac-unknown-redoubt-elf.a bin/$crate.o
         riscv-none-elf-ar crs bin/riscv32imc-unknown-none-elf.a bin/$crate.o
 
         riscv-none-elf-gcc -ggdb3 -c -mabi=ilp32 -march=rv32i_zicsr_zifencei src/arch/riscv/asm.S -o bin/$crate.o
@@ -29,7 +29,7 @@ Switch ($Arch) {
         Remove-Item -Force bin/arm*.a
 
         arm-none-eabi-gcc -ggdb3 -c -march=armv7-a src/arch/arm/asm.S -o bin/$crate.o
-        ar crs bin/armv7a-unknown-xous-elf.a bin/$crate.o
+        ar crs bin/armv7a-unknown-redoubt-elf.a bin/$crate.o
     }
 }
 
