@@ -1,16 +1,25 @@
 # Building milestone 1: how the work runs
 
-Owns: how BUILD-PLAN.md's work packages are executed: one orchestrating Claude session that runs
-independent packages in parallel as sub-agents, each in its own git worktree, and reviews every
-package before merging it.
+Owns: how BUILD-PLAN.md's work packages are executed: one orchestrating session (the
+`orchestrator` agent) that runs independent packages in parallel as sub-agents, each in its
+own git worktree, and reviews every package before merging it. The roles are project agents in
+`.pi/agents/`; the orchestrator launches them through the `subagent` tool.
 
 ## Roles
-- **Orchestrator** (one Claude session): owns the claims table below, starts packages whose needs
+- **Orchestrator** (`orchestrator` agent, one session): owns the claims table below, starts packages whose needs
   are met, reviews results, merges, and keeps BUILD-PLAN.md, STATUS.md and HISTORY.md current. It
   does not implement packages itself.
+- **Architect** (a sub-agent the orchestrator consults): knows the frozen design back and
+  forth and answers the questions a package cannot be built without. The design is read-only to
+  the swarm; the architect opens each question formally in QUESTIONS.md, records the answer in
+  ANSWERS.md, backlinks the `Answered` line, applies the accepted answer to the design note, and
+  adds the HISTORY.md entry. A genuine owner decision comes back still open, with `Rec` and
+  `Alt`, and is not merged until the owner answers. The protocol is
+  `.pi/skills/architect-qa/SKILL.md`.
 - **Implementer** (a sub-agent per package): works only on its package, in its own worktree and
   branch (`wp-k1`, `wp-m0`, ...), and reports what it built, its test results and anything it found
-  wrong in the design.
+  wrong in the design. It does not guess at an open design question: it stops and the orchestrator
+  asks the architect.
 - **Reviewers** (sub-agents per finished package): red team (attack it against the spec and the
   attack suite), simplifier (what can be deleted), editor (code, comments and notes agree). Same
   pattern as the design reviews.
@@ -22,7 +31,9 @@ package before merging it.
 2. **Isolation.** Each implementer works in its own worktree and stages only the paths its package
    owns (BUILD-PLAN.md "Delivers"). Never `git add -A` or `git commit -a`.
 3. **The design is read-only.** An implementer that finds a spec problem stops and reports it; the
-   orchestrator raises it with the owner. Changes need a HISTORY.md entry.
+   orchestrator asks the **architect**, who records the question in QUESTIONS.md and the answer in
+   ANSWERS.md and raises a genuine owner decision with the owner. Nothing merges while its design
+   question is open. Changes need a HISTORY.md entry.
 4. **Done means:** the package's acceptance tests and attack cases pass in `cargo testbench`; the
    whole bench is still green; no undocumented `unsafe` and the ratchet does not rise; rv32 still
    compiles; the three reviewers' findings are fixed or recorded.
@@ -30,6 +41,27 @@ package before merging it.
    package at a time. One line per package in HISTORY.md.
 6. **Other sessions.** Any other session working in this repository finishes or pauses its work
    before the build starts, and follows the same staging rule.
+7. **The record is the source of truth.** Every design decision a package depends on is traceable
+   to a numbered question and answer (QUESTIONS.md, ANSWERS.md). An implementer is told the
+   question and answer number it is building to; an instruction without one is not a design change,
+   it is a guess.
+
+## Agents and workflows
+
+The roles above are project agents in `.pi/agents/`, driven by the `orchestrator`:
+
+| Role | Agent |
+| --- | --- |
+| Orchestrator | `orchestrator` |
+| Architect | `architect` (protocol: `.pi/skills/architect-qa/SKILL.md`) |
+| Implementer | `implementer` |
+| Reviewers | the builtin `reviewer`, one child per angle |
+
+Two workflow scripts drive a package: `.pi/workflows/run-package.js` (implementer, gated on
+its acceptance command, then the three reviewers) and `.pi/workflows/review-package.js`
+(the three reviewers alone, for a fix pass or a package built outside the swarm). Launch
+them with `subagent({ workflowScriptPath: ..., args: {...}, cwd: "<package worktree>" })`.
+The `/swarm` prompt template starts the whole queue.
 
 ## Waves
 Derived from BUILD-PLAN.md "Order". The orchestrator starts each package the moment its needs are
