@@ -1,6 +1,6 @@
 # Wire formats
 
-Designed; the codecs are built (`redoubt/wire/`, WP-W1). Owns: how bytes are laid out in messages
+Designed; the codecs are built (`libs/wire/`, WP-W1). Owns: how bytes are laid out in messages
 and in human-written files. One convention for every message, one for every file a person writes.
 
 ## Messages: 9P's convention

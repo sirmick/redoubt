@@ -9,14 +9,17 @@ reason recorded in HISTORY.md.
 under OpenSBI or RustSBI; a loader that verifies an Ed25519-signed boot bundle and builds Sv32/Sv39
 address spaces; W^X enforced and checked at boot; default-deny device grants; physical RAM never
 nameable by address; a two-hart SMP spike behind the `smp` feature; a QEMU test bench with attack
-tests. Milestone 1 so far (BUILD-PLAN.md): the system call ABI crate `redoubt-sys`; the wire codecs
-`redoubt-wire` and their generator; littlefs in pure Rust; the bench's SSH sessions, virtio disk and
-network, and attack verdicts taken from the system; fixes for three kernel panics reachable from
-any process (WP-K0). None of the new crates is used by the kernel yet. In the sibling beamlet
-repository: a BEAM VM that runs Elixir, its compiler and IEx over a console. See
-[STATUS.md](STATUS.md).
-**Designed, not built:** everything from capabilities onward (handles, IPC, budgets, labels, init
-and the steward, 9P namespaces, packages, storage and network servers). Order: [PLAN.md](PLAN.md).
+tests. Milestone 1 so far (BUILD-PLAN.md): budgets and handle tables, endpoints and messages, and
+device objects and interrupts are built on the new `redoubt-sys` call path beside the legacy
+interface (WP-K1 to WP-K3); `redoubt-rt`, the runtime and shared server library; `keyd`; the wire
+codecs `redoubt-wire` and their generator; littlefs in pure Rust; the bundle signing domain; the
+bench's SSH sessions, virtio disk and network, and attack verdicts taken from the system; fixes for
+three kernel panics reachable from any process (WP-K0). Process creation and exit, the timer and
+preemption, `init` and the servers, and beamlet's Redoubt platform are in progress or designed. In
+the sibling beamlet repository (`userland/otp`): a BEAM VM that runs Elixir, its compiler and IEx.
+See [STATUS.md](STATUS.md).
+**Designed, not built:** init and the steward, 9P namespaces, packages, storage and network
+servers, and the milestone-1 attack suite. Order: [PLAN.md](PLAN.md).
 
 ## Reading order
 **The design**

@@ -114,7 +114,7 @@ geometry, trap entry and saved context, and the ABI's register encoding; anywher
 - Reuse a crate only if it is small, `no_std`, pure Rust, maintained and read (tenet 5).
 
 ## Open work outside the slice
-- Finish the ABI audit: `redoubt-ipc` and `std`'s Redoubt PAL for register punning and `u32` fields in ABI
+- Finish the ABI audit: `libs/abi` and `std`'s Redoubt PAL for register punning and `u32` fields in ABI
   types (`libs/abi` `Result` marshalling is now covered by a round-trip test).
 - The kernel's default features include `debug-proc`, which `kernel/Cargo.toml` describes as adding
   kernel attack surface; decide whether a default build should carry it.

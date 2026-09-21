@@ -10,8 +10,8 @@ plans for what comes next: `docs/` (start with its `README.md` and `STATUS.md`).
 | `testbench/`      | Host tool: builds, injects programs, boots QEMU, asserts on the console and over SSH |
 | `tests/`          | Test cases for the bench, one TOML file each (`data/`: files they read; `keys/`: SSH test keys) |
 
-The kernel is in `../kernel/`, the boot loader (both widths) in `../loader/`, and the `redoubt`
-syscall ABI in `../libs/abi/`.
+The kernel is in `../kernel/`, the boot loader (both widths) in `../loader/`, the legacy
+`redoubt-abi` syscall ABI in `../libs/abi/`, and the new `redoubt-sys` ABI in `../libs/sys/`.
 
 ## Running tests
 
@@ -130,7 +130,7 @@ a checked one. Everything else must still pass.
 
 `--firmware <image>` replaces QEMU's bundled OpenSBI for a test run or for `--run`, e.g. a RustSBI
 Prototyper build. rv32 has no bundled OpenSBI, so it always boots under RustSBI; run
-`../scripts/fetch-rustsbi.sh` to build both firmwares (see the script's header). The bench looks
+`scripts/build-bios.sh` to build both firmwares (see the script's header). The bench looks
 for them in a `rustsbi` checkout beside this repository's main checkout (found through git, so
 worktrees work too), or where `RUSTSBI_PROTOTYPER` / `RUSTSBI_PROTOTYPER_RV32` say.
 
@@ -192,7 +192,7 @@ with the limit, e.g. "(verdict: survival only, until WP-K4)".
 ```toml
 [[file]]                     # a data entry, after the programs; bytes injected as they are
 name = "trace"
-from = { path = "redoubt/model/traces/t1" }        # or any `programs` form, e.g.
+from = { path = "tests/data/bundle-file.txt" }      # or any `programs` form, e.g.
                                                    # { corrupt = "rng-test", with = { truncate = 80 } }
 ```
 

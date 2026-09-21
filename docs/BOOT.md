@@ -15,7 +15,7 @@ SBI firmware (OpenSBI / RustSBI), M-mode
 ## Firmware
 rv64 boots under OpenSBI (bundled with QEMU) or the RustSBI Prototyper (pure Rust; the bench case
 `rustsbi-boot`). QEMU ships no rv32 OpenSBI, so rv32 always boots under RustSBI.
-`scripts/fetch-rustsbi.sh` builds both Prototyper firmwares where the bench expects them (override
+`scripts/build-bios.sh` builds both Prototyper firmwares where the bench expects them (override
 with `RUSTSBI_PROTOTYPER` / `RUSTSBI_PROTOTYPER_RV32`).
 
 ## Hardware abstraction

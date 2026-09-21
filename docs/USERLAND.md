@@ -3,7 +3,7 @@
 Designed in outline, not built. Owns: what beamlet exposes as natives, the Elixir API over them,
 file I/O, pipes and standard I/O, launching programs, and the shell. The system it talks to:
 NAMESPACES.md (9P, namespaces), CAPABILITIES.md (handles, minting, exit notices), CONTAINMENT.md
-(labels), INIT.md (startup block), PACKAGES.md (launching). The VM itself: `redoubt/beamlet`
+(labels), INIT.md (startup block), PACKAGES.md (launching). The VM itself: `userland/otp`
 (DESIGN.md). Milestone 1 needs only a slice of this: console, files, launching (BUILD-PLAN.md
 WP-B1, WP-B2).
 
