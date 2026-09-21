@@ -8,9 +8,11 @@ jobs:
       - name: Check out branch source
         uses: actions/checkout@v4
 
-      - name: Check .rs files for trailing whitespace
+      - name: Check .rs files for trailing whitespace (first-party; vendored trees excluded)
         run: >
-          find . -name '*.rs' -print0
+          find . -name '*.rs'
+          -not -path './bios/*' -not -path './reference/*' -not -path './vendor/*' -not -path './target/*'
+          -print0
           | xargs -0 grep -c --with-filename -P '[ \t]$'
           | grep -v ':0$'
           | perl -e 'while(<>){print;$n+=1};if($n>0){exit 1;};print "PASS\n";'
