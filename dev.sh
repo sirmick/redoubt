@@ -102,6 +102,8 @@ docker run --rm "${tty_args[@]}" \
     "${mounts[@]}" \
     -w /work \
     "$IMAGE" \
-    bash -lc "${args[*]:-bash}"
+    # Ensure the dev-environment pi extensions are present in the active pi config
+    # (the mounted host ~/.pi shadows the image's own install), then run the command.
+    bash -lc "/work/scripts/pi-ensure.sh; ${args[*]:-bash}"
 
 # Caches under /work are disposable: rm -rf .cargo .rustup .cargo-target reclaims the space.
