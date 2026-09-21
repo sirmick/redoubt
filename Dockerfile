@@ -102,6 +102,16 @@ RUN groupadd --gid "${USER_GID}" "${USERNAME}" \
 USER ${USERNAME}
 WORKDIR /work
 
+# ---------------------------------------------------------------------------
+# Pi extensions the dev environment expects: subagent delegation and the
+# deepseek-optimised profile. Installed as the user so they land in
+# /home/dev/.pi; when dev.sh bind-mounts the host's ~/.pi over it, the host's
+# own settings win and pi reconciles the two.
+# ---------------------------------------------------------------------------
+ENV HOME=/home/dev
+RUN pi install npm:pi-subagents \
+    && pi install npm:pi-deepseek-optimized
+
 # `pi` talks to the harness through the same env the host uses; nothing about the sandbox is
 # hidden from the agent, only from the filesystem.
 ENV PI_CODING_AGENT=true
