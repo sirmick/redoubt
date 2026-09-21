@@ -1,7 +1,7 @@
 description = "Hostile arguments to every call WP-K1, WP-K2 and WP-K3 built (bad and wide handles, unknown numbers, stray registers, records misaligned, in the kernel, read-only, never touched, straddling, malformed), in the spec's order of checks, and 4000 calls over hostile values: errors, never a panic (I14) (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# Built with the checks on (redoubt/README.md, "Debug assertions").
+# Built with the checks on (docs/testbench.md, "Debug assertions").
 debug_assertions = true
 # PID 2 the attacker (the loader's first program, holding root, system, users and every device
 # object); PID 3 log-server; PID 4 budget-victim, in system beside the attacker; PID 5

@@ -767,7 +767,7 @@ impl SystemServices {
             ];
 
             // The multiply is a hash: it is meant to wrap, so say so, or a checked build
-            // panics here instead of scheduling (redoubt/README.md, "Debug assertions").
+            // panics here instead of scheduling (docs/testbench.md, "Debug assertions").
             MULTIPLY_DEBRUIJN_BIT_POSITION[((!v.wrapping_sub(1) & v).wrapping_mul(0x077CB531)) >> 27]
         }
         // If there's only one thread runnable, run that one

@@ -1,6 +1,6 @@
 //! Ambient-authority attack. This program is given no device grants and tries to take the
 //! devices anyway. Whatever it gets, it uses, so that a breach shows up where it cannot fake
-//! it (redoubt/README.md, "Writing an attack case"):
+//! it (docs/testbench.md, "Writing an attack case"):
 //!   - the UART: it writes a raw `BREACH` line, which only a UART owner can print unprefixed;
 //!   - the power-off device: it powers the machine off, so the victim's later lines never come;
 //!   - UART interrupt 10: it keeps it, so the victim (log-server) never hears the input.

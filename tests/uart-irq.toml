@@ -1,7 +1,7 @@
 description = "An external interrupt reaches a driver through `receive` on its IRQ handle (R5: the kernel masks the source and sets `fired`, the next receive unmasks it and returns; no acknowledge call), with the console taken through `map_device` and injected console input (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# Built with the checks on (redoubt/README.md, "Debug assertions").
+# Built with the checks on (docs/testbench.md, "Debug assertions").
 debug_assertions = true
 # PID 2 log-server is the bundle's first program, so it holds every device object the loader
 # made (INTERIM, kernel device.rs): it maps the console through its MMIO handle and echoes

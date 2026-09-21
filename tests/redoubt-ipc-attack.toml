@@ -1,7 +1,7 @@
 description = "Hostile use of the Redoubt IPC calls (WP-K2): stealing a receive right, minting a badge of 0 in raw registers (the typed call cannot carry one) or minting from handles and message ids the thread does not hold, replying to and serving other threads' calls, lending memory that is not the sender's or not writable or already transferred, a transfer over the receiver's max_transfer, and a flood: errors, and a victim that still holds its receive right (attack, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# Built with the checks on (redoubt/README.md, "Debug assertions").
+# Built with the checks on (docs/testbench.md, "Debug assertions").
 debug_assertions = true
 # PID 2 log-server (the loader's first program); PID 3 redoubt-victim, which the kernel gives
 # the boot endpoint's receive right; PID 4 redoubt-attack, badged 4; PID 5 attack-checker.

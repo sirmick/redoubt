@@ -1,7 +1,7 @@
 description = "A receiver carved to exactly the open-call page plus the lent pages, with nothing for the page tables that map the lend: R4 counts those too, so the sender is Refused and the receiver is charged nothing; the kernel used to charge them and then stop on the charge that followed (attack, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# Built with the checks on (redoubt/README.md, "Debug assertions"): the bug was an arithmetic
+# Built with the checks on (docs/testbench.md, "Debug assertions"): the bug was an arithmetic
 # shortfall that a release build would have hidden until the charge itself failed.
 debug_assertions = true
 # PID 2 redoubt-tight: it must be the loader's first program, the one holding root, system and

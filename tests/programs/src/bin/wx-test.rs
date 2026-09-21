@@ -39,7 +39,7 @@ pub extern "C" fn _start() -> ! {
     log!(logger, "[wx] {}: adding execute to a writable page -> {:?}", if ok { "ok" } else { "FAIL" }, result);
 
     log!(logger, "[wx] attempts done");
-    // The verdict is the checker's, not ours (redoubt/README.md, "Writing an attack case").
+    // The verdict is the checker's, not ours (docs/testbench.md, "Writing an attack case").
     test_programs::checker::done();
     test_programs::park()
 }

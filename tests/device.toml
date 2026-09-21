@@ -1,7 +1,7 @@
 description = "Device objects and the Redoubt memory calls (WP-K3): map_device on an MMIO handle, with the length of what it mapped (QUESTIONS.md 146), and refused for every other kind; dma_alloc contiguous, zeroed and only with the DMA flag; map_anon zeroed and charged, unmap returning the pages, set_flags dropping and adding permissions without ever W+X (R11); system_reset only through the Reset right, which ends the case (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# Built with the checks on (redoubt/README.md, "Debug assertions").
+# Built with the checks on (docs/testbench.md, "Debug assertions").
 debug_assertions = true
 # PID 2 device-test is the bundle's first program, so it holds every device object the loader
 # made from the device tree (INTERIM, kernel device.rs). There is no log-server here: only one

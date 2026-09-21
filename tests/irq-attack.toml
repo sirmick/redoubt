@@ -1,7 +1,7 @@
 description = "Device objects are the only authority: a process holding none cannot receive on an interrupt, map an MMIO range, allocate DMA, reach the Reset right or name RAM by physical address, and the victim that holds them keeps hearing its interrupt (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# Built with the checks on (redoubt/README.md, "Debug assertions").
+# Built with the checks on (docs/testbench.md, "Debug assertions").
 debug_assertions = true
 # PID 2 log-server is the victim: as the bundle's first program it holds every device object
 # (INTERIM, kernel device.rs), maps the console and waits for its interrupt in `receive`.

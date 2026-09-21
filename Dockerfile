@@ -32,11 +32,13 @@ ARG USER_GID=1000
 # build-essential: a C toolchain for -sys crates the bench pulls in (and pcre2 for beamlet
 #   differential runs). qemu-system-misc: the virt machine for both RISC-V widths.
 # openssh-server: the bench spawns `sshd -i` for its SSH session cases.
+# graphviz: renders README.html's SVG diagrams via tools/gen_readme.py.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential \
       ca-certificates \
       curl \
       git \
+      graphviz \
       less \
       libssl-dev \
       openssh-server \

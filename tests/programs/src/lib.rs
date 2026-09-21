@@ -7,7 +7,7 @@
 //!
 //! Convention: a test program ends by logging `<NAME> TEST PASSED` or `<NAME> TEST FAILED`.
 //! An attack program ends with `attempts done` instead: its own verdict would count for nothing
-//! (redoubt/README.md, "Writing an attack case").
+//! (docs/testbench.md, "Writing an attack case").
 
 #![no_std]
 
@@ -107,7 +107,7 @@ pub fn park() -> ! {
 /// whose verdict is in (or, with no victim, the attacker when done) reports to the checker, and
 /// the checker (whose lines log-server marks with the checker's PID) names the reporter, says
 /// the system is still serving, and powers off.
-/// See redoubt/README.md, "Writing an attack case".
+/// See docs/testbench.md, "Writing an attack case".
 pub mod checker {
     use redoubt_abi::Message;
 

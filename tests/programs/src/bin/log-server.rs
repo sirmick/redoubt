@@ -7,7 +7,7 @@
 //! the kernel's gift to the bundle's **first** program (INTERIM, kernel `device.rs`); in a case
 //! where this server is not first it falls back to the legacy grant path and does not echo.
 //!
-//! Attack cases take their verdict from lines an attacker cannot write (redoubt/README.md,
+//! Attack cases take their verdict from lines an attacker cannot write (docs/testbench.md,
 //! "Writing an attack case"). So everything this server prints goes through `console::Console`,
 //! whose only way to print a client's bytes is `relay`, which starts every line with the
 //! sender's PID as the kernel reported it. The server's own lines are a closed set of templates
