@@ -3,7 +3,7 @@
 
 //! Which process handles which interrupt.
 
-use xous_kernel::{MemoryAddress, PID};
+use redoubt_abi::{MemoryAddress, PID};
 
 use crate::arch;
 use crate::cell::KernelCell;
@@ -26,13 +26,13 @@ fn handler(irq: usize) -> Option<Handler> { IRQ_HANDLERS.with(|handlers| handler
 /// Dispatch the single interrupt the arch layer claimed. Redirects into the owning
 /// process's handler, or masks the source if nobody owns it (an unexpected IRQ).
 #[cfg(baremetal)]
-pub fn handle(irq: usize) -> Result<xous_kernel::Result, xous_kernel::Error> {
+pub fn handle(irq: usize) -> Result<redoubt_abi::Result, redoubt_abi::Error> {
     use crate::services::SystemServices;
     let Some((pid, f, arg)) = handler(irq) else {
         klog!("[!] Masked an unhandled IRQ #{}", irq);
         // No handler: mask the source so it cannot storm. This is an error.
         arch::irq::disable_irq(irq);
-        return Ok(xous_kernel::Result::ResumeProcess);
+        return Ok(redoubt_abi::Result::ResumeProcess);
     };
     SystemServices::with_mut(|ss| {
         // Disable all other IRQs and redirect into userspace.
@@ -46,7 +46,7 @@ pub fn handle(irq: usize) -> Result<xous_kernel::Result, xous_kernel::Error> {
                 arg.map(|x| x.get() as *mut usize).unwrap_or(core::ptr::null_mut::<usize>()),
             ),
         )
-        .map(|_| xous_kernel::Result::ResumeProcess)
+        .map(|_| redoubt_abi::Result::ResumeProcess)
     })
 }
 
@@ -67,23 +67,23 @@ pub fn interrupt_claim(
     pid: PID,
     f: MemoryAddress,
     arg: Option<MemoryAddress>,
-) -> Result<(), xous_kernel::Error> {
+) -> Result<(), redoubt_abi::Error> {
     // A source with a device object is R5's, and a handle to it is the only authority over
     // it (WP-K3): the legacy claim is not a second one. (Both this path and the grants go
     // with WP-K6.)
     #[cfg(baremetal)]
     if crate::mem::MemoryManager::with(|mm| mm.irq_device(irq).is_some()) {
-        return Err(xous_kernel::Error::AccessDenied);
+        return Err(redoubt_abi::Error::AccessDenied);
     }
     // Default deny: a process may claim only interrupts the bundle granted it.
     #[cfg(baremetal)]
     if !crate::grants::may_claim_irq(pid, irq) {
-        return Err(xous_kernel::Error::AccessDenied);
+        return Err(redoubt_abi::Error::AccessDenied);
     }
     IRQ_HANDLERS.with(|handlers| {
-        let slot = handlers.get_mut(irq).ok_or(xous_kernel::Error::InterruptNotFound)?;
+        let slot = handlers.get_mut(irq).ok_or(redoubt_abi::Error::InterruptNotFound)?;
         if slot.is_some() {
-            return Err(xous_kernel::Error::InterruptInUse);
+            return Err(redoubt_abi::Error::InterruptInUse);
         }
         *slot = Some((pid, f, arg));
         Ok(())
@@ -96,10 +96,10 @@ pub fn interrupt_claim(
 #[allow(dead_code)]
 pub fn interrupt_owner(irq: usize) -> Option<PID> { handler(irq).map(|(pid, _, _)| pid) }
 
-pub fn interrupt_free(irq: usize, pid: PID) -> Result<(), xous_kernel::Error> {
+pub fn interrupt_free(irq: usize, pid: PID) -> Result<(), redoubt_abi::Error> {
     // Only the owner may free an interrupt. To everyone else it does not exist.
     if interrupt_owner(irq) != Some(pid) {
-        return Err(xous_kernel::Error::InterruptNotFound);
+        return Err(redoubt_abi::Error::InterruptNotFound);
     }
     arch::irq::disable_irq(irq);
     IRQ_HANDLERS.with(|handlers| handlers[irq] = None);

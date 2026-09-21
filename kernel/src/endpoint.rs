@@ -21,7 +21,7 @@
 //! with (I7) and where the cost table charges the page.
 
 use redoubt_sys::{Error, MAX_LABELS};
-use xous_kernel::PID;
+use redoubt_abi::PID;
 
 use crate::budget::{Budget, BudgetFrame};
 use crate::handle::{BudgetRef, EndpointRef, Handle, Object};

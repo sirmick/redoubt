@@ -1,4 +1,4 @@
-//! Parses the boot bundle's `grants` manifest (see `planning/redoubt/DEVICE-GRANTS.md`)
+//! Parses the boot bundle's `grants` manifest (see `docs/DEVICE-GRANTS.md`)
 //! and emits a `Grnt` argument tag per granted process.
 //!
 //! The manifest is plain text, one rule per line:

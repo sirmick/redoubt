@@ -1,5 +1,5 @@
 use std::sync::{LazyLock, Mutex};
-// Make a CID a u128 just to be different from Xous and ensure
+// Make a CID a u128 just to be different from Redoubt and ensure
 // the types don't make assumptions.
 pub type CID = u128;
 

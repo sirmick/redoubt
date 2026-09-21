@@ -23,7 +23,7 @@
 //! mismatch (a handle that escaped a sweep, naming a reused frame) stops the kernel (I1).
 
 use redoubt_sys::Error;
-use xous_kernel::PID;
+use redoubt_abi::PID;
 
 use crate::budget::{Budget, BudgetFrame};
 use crate::kframe;
@@ -38,11 +38,11 @@ pub use redoubt_sys::MAX_HANDLES;
 pub const MAX_HANDLE_PAGES: usize = MAX_HANDLES / HANDLES_PER_PAGE;
 /// Words one handle takes.
 const HANDLE_WORDS: usize = 4;
-const _: () = assert!(HANDLES_PER_PAGE * HANDLE_WORDS * 8 == xous_kernel::arch::PAGE_SIZE);
+const _: () = assert!(HANDLES_PER_PAGE * HANDLE_WORDS * 8 == redoubt_abi::arch::PAGE_SIZE);
 /// Bits of a frame index in a handle's first word. Two fit, with the kind above them, because
 /// the physmap reaches at most 2^25 frames.
 const FRAME_BITS: u32 = 28;
-const _: () = assert!(xous_kernel::arch::PHYSMAP_SIZE / xous_kernel::arch::PAGE_SIZE <= 1 << FRAME_BITS);
+const _: () = assert!(redoubt_abi::arch::PHYSMAP_SIZE / redoubt_abi::arch::PAGE_SIZE <= 1 << FRAME_BITS);
 
 /// A budget, named by frame and by id (the id is what the spec's stamp is).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

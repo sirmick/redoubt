@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-use xous_kernel::{Error, MemoryFlags, PID};
+use redoubt_abi::{Error, MemoryFlags, PID};
 
 use crate::mem::MemoryManager;
 
@@ -25,13 +25,13 @@ impl MemoryMapping {
     /// kernel, which should be mapped into every possible address space.
     /// As such, this will only have an observable effect once code returns
     /// to userspace.
-    pub fn activate(self) -> Result<(), xous_kernel::Error> {
+    pub fn activate(self) -> Result<(), redoubt_abi::Error> {
         // This is a no-op on hosted environments
         Ok(())
     }
 
     /// Does nothing in hosted mode.
-    pub unsafe fn allocate(&mut self, _pid: PID) -> Result<(), xous_kernel::Error> { Ok(()) }
+    pub unsafe fn allocate(&mut self, _pid: PID) -> Result<(), redoubt_abi::Error> { Ok(()) }
 
     pub fn reserve_address(
         &mut self,
@@ -55,7 +55,7 @@ pub fn map_page_inner(
     _virt: usize,
     _req_flags: MemoryFlags,
     _map_user: bool,
-) -> Result<(), xous_kernel::Error> {
+) -> Result<(), redoubt_abi::Error> {
     unimplemented!()
 }
 
@@ -101,4 +101,4 @@ pub fn virt_to_phys(virt: usize) -> Result<usize, Error> { Ok(virt) }
 
 pub fn page_flags(_virt: usize) -> Option<MemoryFlags> { None }
 
-pub fn update_page_flags(_virt: usize, _flags: MemoryFlags) -> Result<(), xous_kernel::Error> { Ok(()) }
+pub fn update_page_flags(_virt: usize, _flags: MemoryFlags) -> Result<(), redoubt_abi::Error> { Ok(()) }

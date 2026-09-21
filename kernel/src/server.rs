@@ -3,7 +3,7 @@
 
 use core::mem;
 
-use xous_kernel::{MemoryAddress, MemoryRange, MemorySize, Message, MessageSender, PID, SID, TID};
+use redoubt_abi::{MemoryAddress, MemoryRange, MemorySize, Message, MessageSender, PID, SID, TID};
 
 use crate::{mem::MemoryManager, services::SystemServices};
 
@@ -259,9 +259,9 @@ impl Server {
         pid: PID,
         sid: SID,
         _backing: MemoryRange,
-    ) -> Result<(), xous_kernel::Error> {
+    ) -> Result<(), redoubt_abi::Error> {
         if new != &None {
-            return Err(xous_kernel::Error::MemoryInUse);
+            return Err(redoubt_abi::Error::MemoryInUse);
         }
 
         #[cfg(baremetal)]
@@ -277,7 +277,7 @@ impl Server {
         let queue = {
             let mut queue = vec![];
             // TODO: Replace this with a direct operation on a passed-in page
-            queue.resize_with(xous_kernel::arch::PAGE_SIZE / mem::size_of::<QueuedMessage>(), || {
+            queue.resize_with(redoubt_abi::arch::PAGE_SIZE / mem::size_of::<QueuedMessage>(), || {
                 QueuedMessage::Empty
             });
             queue
@@ -338,13 +338,13 @@ impl Server {
                     _valid,
                 ) => {
                     MemoryManager::with_mut(|mm| {
-                        let mut result = Ok(xous_kernel::Result::Ok);
+                        let mut result = Ok(redoubt_abi::Result::Ok);
                         let virt = server_memory_addr;
                         let size = memory_length;
                         if !cfg!(baremetal) && virt & 0xfff != 0 {
-                            return Err(xous_kernel::Error::BadAlignment);
+                            return Err(redoubt_abi::Error::BadAlignment);
                         }
-                        for addr in (virt..(virt + size)).step_by(xous_kernel::arch::PAGE_SIZE) {
+                        for addr in (virt..(virt + size)).step_by(redoubt_abi::arch::PAGE_SIZE) {
                             if let Err(e) = mm.unmap_page(addr as *mut usize) {
                                 if result.is_ok() {
                                     result = Err(e);
@@ -368,7 +368,7 @@ impl Server {
                     ss.set_thread_result(
                         pid,
                         tid,
-                        xous_kernel::Result::Error(xous_kernel::Error::ServerNotFound),
+                        redoubt_abi::Result::Error(redoubt_abi::Error::ServerNotFound),
                     )
                     .unwrap();
 
@@ -435,7 +435,7 @@ impl Server {
                     ss.set_thread_result(
                         client_pid,
                         client_tid,
-                        xous_kernel::Result::Error(xous_kernel::Error::ServerNotFound),
+                        redoubt_abi::Result::Error(redoubt_abi::Error::ServerNotFound),
                     )
                     .unwrap();
                 }
@@ -451,7 +451,7 @@ impl Server {
             ss.set_thread_result(
                 server_pid,
                 server_tid,
-                xous_kernel::Result::Error(xous_kernel::Error::ServerNotFound),
+                redoubt_abi::Result::Error(redoubt_abi::Error::ServerNotFound),
             )
             .unwrap();
         }
@@ -461,7 +461,7 @@ impl Server {
         MemoryManager::with_mut(|mm| {
             let virt = self.queue.as_mut_ptr() as usize;
             let size = self.queue.len();
-            for addr in (virt..(virt + size)).step_by(xous_kernel::arch::PAGE_SIZE) {
+            for addr in (virt..(virt + size)).step_by(redoubt_abi::arch::PAGE_SIZE) {
                 mm.unmap_page(addr as *mut usize).unwrap();
             }
         });
@@ -533,13 +533,13 @@ impl Server {
         &mut self,
         message_index: usize,
         buf: Option<&MemoryRange>,
-    ) -> Result<WaitingMessage, xous_kernel::Error> {
+    ) -> Result<WaitingMessage, redoubt_abi::Error> {
         // klog!("head generation: {}  tail generation: {}", self.head_generation, self.tail_generation);
         // if self.tail_generation == self.head_generation {
-        //     Err(xous_kernel::Error::BadAddress)?;
+        //     Err(redoubt_abi::Error::BadAddress)?;
         // }
 
-        let current_val = self.queue.get_mut(message_index).ok_or(xous_kernel::Error::BadAddress)?;
+        let current_val = self.queue.get_mut(message_index).ok_or(redoubt_abi::Error::BadAddress)?;
         // klog!("memory in queue[{}]: {:?}", message_index, current_val);
         let (pid, tid, _idx, server_addr, client_addr, len, forget, is_memory) = match *current_val {
             QueuedMessage::WaitingReturnMemory(pid, tid, idx, server_addr, client_addr, len) => {
@@ -561,7 +561,7 @@ impl Server {
             if server_addr != buf.as_ptr() as usize || len != buf.len() {
                 // klog!("Memory is attached but the returned buffer doesn't match (len: {} vs {}), buf addr:
                 // {:08x} vs {:08x}", len, buf.len(), server_addr, buf.as_ptr() as usize);
-                return Err(xous_kernel::Error::BadAddress);
+                return Err(redoubt_abi::Error::BadAddress);
             }
         }
         *current_val = QueuedMessage::Empty;
@@ -622,7 +622,7 @@ impl Server {
     ///
     /// * **None**: There are no waiting messages
     /// ***Some(MessageEnvelope): This message is queued.
-    pub fn take_next_message(&mut self, sidx: usize) -> Option<xous_kernel::MessageEnvelope> {
+    pub fn take_next_message(&mut self, sidx: usize) -> Option<redoubt_abi::MessageEnvelope> {
         // klog!(
         //     "queue_head: ((({})))  queue_tail: ((({}))): {:?}  CID: ((({})))  head_gen: {}  tail_gen: {}",
         //     self.queue_head,
@@ -659,9 +659,9 @@ impl Server {
                 ) if idx == self.head_generation => {
                     sender.pid = PID::new(pid.try_into().unwrap());
                     (
-                        xous_kernel::MessageEnvelope {
+                        redoubt_abi::MessageEnvelope {
                             sender: sender.into(),
-                            body: xous_kernel::Message::Borrow(xous_kernel::MemoryMessage {
+                            body: redoubt_abi::Message::Borrow(redoubt_abi::MemoryMessage {
                                 id,
                                 buf: crate::mem::memory_range(server_addr, buf_size).ok()?,
                                 offset: MemorySize::new(offset),
@@ -684,9 +684,9 @@ impl Server {
                 ) if idx == self.head_generation => {
                     sender.pid = PID::new(pid.try_into().unwrap());
                     (
-                        xous_kernel::MessageEnvelope {
+                        redoubt_abi::MessageEnvelope {
                             sender: sender.into(),
-                            body: xous_kernel::Message::MutableBorrow(xous_kernel::MemoryMessage {
+                            body: redoubt_abi::Message::MutableBorrow(redoubt_abi::MemoryMessage {
                                 id,
                                 buf: crate::mem::memory_range(server_addr, buf_size).ok()?,
                                 offset: MemorySize::new(offset),
@@ -709,9 +709,9 @@ impl Server {
                 ) if idx == self.head_generation => {
                     sender.pid = PID::new(pid.try_into().unwrap());
                     (
-                        xous_kernel::MessageEnvelope {
+                        redoubt_abi::MessageEnvelope {
                             sender: sender.into(),
-                            body: xous_kernel::Message::Borrow(xous_kernel::MemoryMessage {
+                            body: redoubt_abi::Message::Borrow(redoubt_abi::MemoryMessage {
                                 id,
                                 buf: crate::mem::memory_range(server_addr, buf_size).ok()?,
                                 offset: MemorySize::new(offset),
@@ -734,9 +734,9 @@ impl Server {
                 ) if idx == self.head_generation => {
                     sender.pid = PID::new(pid.try_into().unwrap());
                     (
-                        xous_kernel::MessageEnvelope {
+                        redoubt_abi::MessageEnvelope {
                             sender: sender.into(),
-                            body: xous_kernel::Message::MutableBorrow(xous_kernel::MemoryMessage {
+                            body: redoubt_abi::Message::MutableBorrow(redoubt_abi::MemoryMessage {
                                 id,
                                 buf: crate::mem::memory_range(server_addr, buf_size).ok()?,
                                 offset: MemorySize::new(offset),
@@ -760,9 +760,9 @@ impl Server {
                 ) if idx == self.head_generation => {
                     sender.pid = PID::new(pid.try_into().unwrap());
                     (
-                        xous_kernel::MessageEnvelope {
+                        redoubt_abi::MessageEnvelope {
                             sender: sender.into(),
-                            body: xous_kernel::Message::BlockingScalar(xous_kernel::ScalarMessage {
+                            body: redoubt_abi::Message::BlockingScalar(redoubt_abi::ScalarMessage {
                                 id,
                                 arg1,
                                 arg2,
@@ -785,9 +785,9 @@ impl Server {
                     valid,
                 ) if idx == self.head_generation => {
                     sender.pid = PID::new(pid.try_into().unwrap());
-                    let msg = xous_kernel::MessageEnvelope {
+                    let msg = redoubt_abi::MessageEnvelope {
                         sender: sender.into(),
-                        body: xous_kernel::Message::Move(xous_kernel::MemoryMessage {
+                        body: redoubt_abi::Message::Move(redoubt_abi::MemoryMessage {
                             id,
                             buf: crate::mem::memory_range(server_addr, buf_size).ok()?,
                             offset: MemorySize::new(offset),
@@ -810,9 +810,9 @@ impl Server {
                     if idx == self.head_generation =>
                 {
                     sender.pid = PID::new(pid.try_into().unwrap());
-                    let msg = xous_kernel::MessageEnvelope {
+                    let msg = redoubt_abi::MessageEnvelope {
                         sender: sender.into(),
-                        body: xous_kernel::Message::Scalar(xous_kernel::ScalarMessage {
+                        body: redoubt_abi::Message::Scalar(redoubt_abi::ScalarMessage {
                             id,
                             arg1,
                             arg2,
@@ -842,9 +842,9 @@ impl Server {
                     arg4,
                 ) if idx == self.head_generation => {
                     sender.pid = PID::new(pid.try_into().unwrap());
-                    let msg = xous_kernel::MessageEnvelope {
+                    let msg = redoubt_abi::MessageEnvelope {
                         sender: sender.into(),
-                        body: xous_kernel::Message::Scalar(xous_kernel::ScalarMessage {
+                        body: redoubt_abi::Message::Scalar(redoubt_abi::ScalarMessage {
                             id,
                             arg1,
                             arg2,
@@ -912,9 +912,9 @@ impl Server {
         &mut self,
         pid: PID,
         tid: TID,
-        message: xous_kernel::Message,
+        message: redoubt_abi::Message,
         original_address: Option<MemoryAddress>,
-    ) -> core::result::Result<usize, xous_kernel::Error> {
+    ) -> core::result::Result<usize, redoubt_abi::Error> {
         // klog!(
         //     "Queueing message: {:?} from pid: {}  tid: {}",
         //     message,
@@ -924,7 +924,7 @@ impl Server {
         // If the head and the tail generations will end up the same, then
         // the queue is full.
         if self.tail_generation == self.head_generation.wrapping_sub(1) {
-            return Err(xous_kernel::Error::ServerQueueFull);
+            return Err(redoubt_abi::Error::ServerQueueFull);
         }
 
         // Look through the queue, beginning at the queue head, for an empty slot.
@@ -944,12 +944,12 @@ impl Server {
             }
         }
         if discovered_index.is_none() {
-            return Err(xous_kernel::Error::ServerQueueFull);
+            return Err(redoubt_abi::Error::ServerQueueFull);
         }
         let queue_idx = discovered_index.unwrap();
         let queue_entry = &mut self.queue[queue_idx];
         *queue_entry = match message {
-            xous_kernel::Message::Scalar(msg) => QueuedMessage::ScalarMessage(
+            redoubt_abi::Message::Scalar(msg) => QueuedMessage::ScalarMessage(
                 pid.get() as _,
                 tid as _,
                 self.tail_generation,
@@ -960,7 +960,7 @@ impl Server {
                 msg.arg3,
                 msg.arg4,
             ),
-            xous_kernel::Message::BlockingScalar(msg) => QueuedMessage::BlockingScalarMessage(
+            redoubt_abi::Message::BlockingScalar(msg) => QueuedMessage::BlockingScalarMessage(
                 pid.get() as _,
                 tid as _,
                 self.tail_generation,
@@ -971,7 +971,7 @@ impl Server {
                 msg.arg3,
                 msg.arg4,
             ),
-            xous_kernel::Message::Move(msg) => QueuedMessage::MemoryMessageSend(
+            redoubt_abi::Message::Move(msg) => QueuedMessage::MemoryMessageSend(
                 pid.get() as _,
                 tid as _,
                 self.tail_generation,
@@ -982,7 +982,7 @@ impl Server {
                 msg.offset.map(|x| x.get()).unwrap_or(0) as usize,
                 msg.valid.map(|x| x.get()).unwrap_or(0) as usize,
             ),
-            xous_kernel::Message::MutableBorrow(msg) => QueuedMessage::MemoryMessageRWLend(
+            redoubt_abi::Message::MutableBorrow(msg) => QueuedMessage::MemoryMessageRWLend(
                 pid.get() as _,
                 tid as _,
                 self.tail_generation,
@@ -993,7 +993,7 @@ impl Server {
                 msg.offset.map(|x| x.get()).unwrap_or(0) as usize,
                 msg.valid.map(|x| x.get()).unwrap_or(0) as usize,
             ),
-            xous_kernel::Message::Borrow(msg) => QueuedMessage::MemoryMessageROLend(
+            redoubt_abi::Message::Borrow(msg) => QueuedMessage::MemoryMessageROLend(
                 pid.get() as _,
                 tid as _,
                 self.tail_generation,
@@ -1029,7 +1029,7 @@ impl Server {
         tid: TID,
         message: &Message,
         client_address: Option<MemoryAddress>,
-    ) -> core::result::Result<usize, xous_kernel::Error> {
+    ) -> core::result::Result<usize, redoubt_abi::Error> {
         // klog!("Queueing address message: {:?} (pid: {} tid: {}) tail_gen: {}  head_gen: {}", message,
         // pid.get(), tid, self.tail_generation, self.head_generation);
         let mut queue_idx = self.queue_head;
@@ -1042,11 +1042,11 @@ impl Server {
                 queue_idx = 0;
             }
             if queue_idx == self.queue_head {
-                return Err(xous_kernel::Error::ServerQueueFull);
+                return Err(redoubt_abi::Error::ServerQueueFull);
             }
         }
         self.queue[queue_idx] = match message {
-            xous_kernel::Message::Scalar(_) | xous_kernel::Message::BlockingScalar(_) => {
+            redoubt_abi::Message::Scalar(_) | redoubt_abi::Message::BlockingScalar(_) => {
                 QueuedMessage::WaitingReturnScalar(
                     pid.get() as _,
                     tid as _,
@@ -1054,7 +1054,7 @@ impl Server {
                     client_address.map(|x| x.get()).unwrap_or(0),
                 )
             }
-            xous_kernel::Message::Move(msg) => {
+            redoubt_abi::Message::Move(msg) => {
                 let server_address = msg.buf.as_ptr() as _;
                 let len = msg.buf.len();
                 QueuedMessage::WaitingForget(
@@ -1066,7 +1066,7 @@ impl Server {
                     len,
                 )
             }
-            xous_kernel::Message::MutableBorrow(msg) | xous_kernel::Message::Borrow(msg) => {
+            redoubt_abi::Message::MutableBorrow(msg) | redoubt_abi::Message::Borrow(msg) => {
                 let server_address = msg.buf.as_ptr() as _;
                 let len = msg.buf.len();
                 QueuedMessage::WaitingReturnMemory(

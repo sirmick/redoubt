@@ -39,7 +39,7 @@ mod services;
 mod syscall;
 
 use services::SystemServices;
-use xous_kernel::*;
+use redoubt_abi::*;
 
 #[cfg(baremetal)]
 #[no_mangle]
@@ -138,8 +138,8 @@ pub extern "C" fn kmain() {
                 #[cfg(all(baremetal, any(target_arch = "riscv32", target_arch = "riscv64")))]
                 use arch::syscall::kernel_syscall;
                 #[cfg(not(all(baremetal, any(target_arch = "riscv32", target_arch = "riscv64"))))]
-                use xous_kernel::rsyscall as kernel_syscall;
-                kernel_syscall(xous_kernel::SysCall::SwitchTo(pid, 0)).expect("couldn't switch to pid");
+                use redoubt_abi::rsyscall as kernel_syscall;
+                kernel_syscall(redoubt_abi::SysCall::SwitchTo(pid, 0)).expect("couldn't switch to pid");
             }
             None => {
                 // I13, until WP-K5 arms the timer: with nothing runnable, the only thing that

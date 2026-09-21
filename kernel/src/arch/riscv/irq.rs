@@ -4,7 +4,7 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use riscv::register::{scause, sepc, sstatus, stval};
-use xous_kernel::{PID, SysCall, TID};
+use redoubt_abi::{PID, SysCall, TID};
 
 use crate::arch::current_pid;
 use crate::arch::exception::RiscvException;
@@ -15,7 +15,7 @@ use crate::cell::KernelCell;
 use crate::services::SystemServices;
 
 extern "Rust" {
-    fn _xous_syscall_return_result(args: &[usize; 8], context: &Thread) -> !;
+    fn _redoubt_syscall_return_result(args: &[usize; 8], context: &Thread) -> !;
 }
 
 /// Resume `context`, delivering `result` in its argument registers.
@@ -23,14 +23,14 @@ extern "Rust" {
 /// The result is serialized with `to_args()` rather than by reinterpreting the enum's
 /// memory as eight registers. The two only coincide when every field is exactly one
 /// register wide, which is not the case on rv64 (e.g. a `SID` is four `u32`s).
-fn return_result(result: &xous_kernel::Result, context: &Thread) -> ! { return_registers(&result.to_args(), context) }
+fn return_result(result: &redoubt_abi::Result, context: &Thread) -> ! { return_registers(&result.to_args(), context) }
 
 /// Resume `context` with `a0..=a7` = `args`.
 fn return_registers(args: &[usize; 8], context: &Thread) -> ! {
-    // SAFETY: `_xous_syscall_return_result` (asm) writes `args` into the return registers
+    // SAFETY: `_redoubt_syscall_return_result` (asm) writes `args` into the return registers
     // and resumes `context` with `sret`. Both point at valid, kernel-owned data and it
     // does not return.
-    unsafe { _xous_syscall_return_result(args, context) }
+    unsafe { _redoubt_syscall_return_result(args, context) }
 }
 
 /// The interrupt controller backend. Every backend provides `enable_irq`, `disable_irq`,
@@ -40,7 +40,7 @@ fn return_registers(args: &[usize; 8], context: &Thread) -> ! {
 mod intc;
 
 /// The hart timer backend, for platforms where the timer is a CPU resource rather than
-/// a device that userspace can own. See `planning/redoubt/TIMER.md`.
+/// a device that userspace can own. See `docs/TIMER.md`.
 #[cfg_attr(feature = "sbi", path = "timer_sbi.rs")]
 pub mod timer;
 
@@ -66,7 +66,7 @@ pub fn disable_irq(irq_no: usize) {
     }
 }
 
-/// Hold off every interrupt source while a userspace handler runs; Xous does not nest them.
+/// Hold off every interrupt source while a userspace handler runs; Redoubt does not nest them.
 pub fn disable_all_irqs() {
     intc::disable_all_irqs();
     timer::mask();
@@ -118,38 +118,38 @@ fn finish_isr() -> bool {
     true
 }
 
-/// Convert a RISC-V `Exception` into a Xous exception argument list.
+/// Convert a RISC-V `Exception` into a Redoubt exception argument list.
 fn generate_exception_args(ex: &RiscvException) -> Option<[usize; 3]> {
     match *ex {
         RiscvException::InstructionAddressMisaligned(epc, addr) => {
-            Some([xous_kernel::ExceptionType::InstructionAddressMisaligned as usize, epc, addr])
+            Some([redoubt_abi::ExceptionType::InstructionAddressMisaligned as usize, epc, addr])
         }
         RiscvException::InstructionAccessFault(epc, addr) => {
-            Some([xous_kernel::ExceptionType::InstructionAccessFault as usize, epc, addr])
+            Some([redoubt_abi::ExceptionType::InstructionAccessFault as usize, epc, addr])
         }
         RiscvException::IllegalInstruction(epc, instruction) => {
-            Some([xous_kernel::ExceptionType::IllegalInstruction as usize, epc, instruction])
+            Some([redoubt_abi::ExceptionType::IllegalInstruction as usize, epc, instruction])
         }
         RiscvException::LoadAddressMisaligned(epc, addr) => {
-            Some([xous_kernel::ExceptionType::LoadAddressMisaligned as usize, epc, addr])
+            Some([redoubt_abi::ExceptionType::LoadAddressMisaligned as usize, epc, addr])
         }
         RiscvException::LoadAccessFault(epc, addr) => {
-            Some([xous_kernel::ExceptionType::LoadAccessFault as usize, epc, addr])
+            Some([redoubt_abi::ExceptionType::LoadAccessFault as usize, epc, addr])
         }
         RiscvException::StoreAddressMisaligned(epc, addr) => {
-            Some([xous_kernel::ExceptionType::StoreAddressMisaligned as usize, epc, addr])
+            Some([redoubt_abi::ExceptionType::StoreAddressMisaligned as usize, epc, addr])
         }
         RiscvException::StoreAccessFault(epc, addr) => {
-            Some([xous_kernel::ExceptionType::StoreAccessFault as usize, epc, addr])
+            Some([redoubt_abi::ExceptionType::StoreAccessFault as usize, epc, addr])
         }
         RiscvException::InstructionPageFault(epc, addr) => {
-            Some([xous_kernel::ExceptionType::InstructionPageFault as usize, epc, addr])
+            Some([redoubt_abi::ExceptionType::InstructionPageFault as usize, epc, addr])
         }
         RiscvException::LoadPageFault(epc, addr) => {
-            Some([xous_kernel::ExceptionType::LoadPageFault as usize, epc, addr])
+            Some([redoubt_abi::ExceptionType::LoadPageFault as usize, epc, addr])
         }
         RiscvException::StorePageFault(epc, addr) => {
-            Some([xous_kernel::ExceptionType::StorePageFault as usize, epc, addr])
+            Some([redoubt_abi::ExceptionType::StorePageFault as usize, epc, addr])
         }
         _ => None,
     }
@@ -234,7 +234,7 @@ pub extern "C" fn trap_handler(
             let call = SysCall::from_args(a0, a1, a2, a3, a4, a5, a6, a7).unwrap_or_else(|_| {
                 ArchProcess::with_current_mut(|p| {
                     return_result(
-                        &xous_kernel::Result::Error(xous_kernel::Error::UnhandledSyscall),
+                        &redoubt_abi::Result::Error(redoubt_abi::Error::UnhandledSyscall),
                         p.current_thread(),
                     )
                 })
@@ -242,7 +242,7 @@ pub extern "C" fn trap_handler(
 
             let response =
                 crate::syscall::handle(pid, tid, PREVIOUS_PAIR.with(|p| p.is_some()), call)
-                    .unwrap_or_else(xous_kernel::Result::Error);
+                    .unwrap_or_else(redoubt_abi::Result::Error);
 
             // println!("Syscall Result: {:?}", response);
             ArchProcess::with_current_mut(|p| {
@@ -250,7 +250,7 @@ pub extern "C" fn trap_handler(
                 // If we're resuming a process that was previously sleeping, restore the
                 // thread context. Otherwise, keep the thread context the same and pass
                 // the return values in 8 argument registers.
-                if response == xous_kernel::Result::ResumeProcess {
+                if response == redoubt_abi::Result::ResumeProcess {
                     crate::arch::syscall::resume(current_pid().get() == 1, thread);
                 } else {
                     // println!("Returning to address {:08x}", thread.sepc);

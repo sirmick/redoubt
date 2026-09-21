@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use riscv::register::{satp, sie, sstatus};
-use xous_kernel::PID;
+use redoubt_abi::PID;
 
 mod asm;
 pub mod exception;

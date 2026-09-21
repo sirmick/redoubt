@@ -39,7 +39,7 @@ The default `settings.json` that comes with the repo already has these built in.
 
 The development workflow looks like this:
 
- 1. the developer installs pre-commit on their machine and runs pre-commit install from within the xous-core directory: it'll set up the necessary dependencies, and sets up a local git pre-commit hook to run them
+ 1. the developer installs pre-commit on their machine and runs pre-commit install from within the redoubt directory: it'll set up the necessary dependencies, and sets up a local git pre-commit hook to run them
  2. development flows as expected
  3. at commit time, one of two things can happen
     a. code is formatted correctly already, commit gets written

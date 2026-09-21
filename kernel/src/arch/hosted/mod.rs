@@ -15,7 +15,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, ToSocketAdd
 use std::thread_local;
 
 use crossbeam_channel::{Receiver, RecvError, RecvTimeoutError, Sender, unbounded};
-use xous_kernel::{PID, ProcessInit, ProcessKey, Result, SysCall, TID, ThreadInit};
+use redoubt_abi::{PID, ProcessInit, ProcessKey, Result, SysCall, TID, ThreadInit};
 
 use crate::arch::process::Process;
 use crate::services::SystemServices;
@@ -71,7 +71,7 @@ fn generate_pid_key() -> [u8; 16] {
     let mut process_key = [0u8; 16];
     let mut rng = ChaCha8Rng::seed_from_u64(
         LOCAL_RNG_STATE.load(Ordering::SeqCst)
-            + xous_kernel::TESTING_RNG_SEED.load(core::sync::atomic::Ordering::SeqCst),
+            + redoubt_abi::TESTING_RNG_SEED.load(core::sync::atomic::Ordering::SeqCst),
     );
     for b in process_key.iter_mut() {
         *b = rng.next_u32() as u8;
@@ -154,7 +154,7 @@ fn handle_connection(
                 );
                 unsafe {
                     call.replace_memory(
-                        xous_kernel::MemoryRange::new(
+                        redoubt_abi::MemoryRange::new(
                             Box::into_raw(sliced_data) as *mut u8 as usize,
                             mem.len(),
                         )
@@ -193,7 +193,7 @@ fn handle_connection(
     conn_thread.join().unwrap();
     #[cfg(not(test))]
     eprintln!("KERNEL({}): Finished the thread so sending TerminateProcess", pid);
-    chn.send(ThreadMessage::SysCall(pid, 1, xous_kernel::SysCall::TerminateProcess(0))).unwrap();
+    chn.send(ThreadMessage::SysCall(pid, 1, redoubt_abi::SysCall::TerminateProcess(0))).unwrap();
 }
 
 fn listen_thread(
@@ -205,7 +205,7 @@ fn listen_thread(
 ) {
     let should_exit = std::sync::Arc::new(core::sync::atomic::AtomicBool::new(false));
 
-    // println!("KERNEL(1): Starting Xous server on {}...", listen_addr);
+    // println!("KERNEL(1): Starting Redoubt server on {}...", listen_addr);
     let listener = TcpListener::bind(listen_addr).unwrap_or_else(|e| {
         panic!("Unable to create server: {}", e);
     });
@@ -351,7 +351,7 @@ pub fn idle() -> bool {
     assert_eq!(process_1.pid().get(), 1);
     let _tid1 = SystemServices::with_mut(|ss| ss.create_thread(process_1.pid(), ThreadInit {})).unwrap();
 
-    let listen_addr = env::var("XOUS_LISTEN_ADDR")
+    let listen_addr = env::var("REDOUBT_LISTEN_ADDR")
         .map(|s| {
             s.to_socket_addrs()
                 .expect("invalid server address")
@@ -378,8 +378,8 @@ pub fn idle() -> bool {
     #[cfg(not(test))]
     {
         let address = address_receiver.recv().unwrap();
-        xous_kernel::arch::set_xous_address(address);
-        println!("KERNEL: Xous server listening on {}", address);
+        redoubt_abi::arch::set_redoubt_address(address);
+        println!("KERNEL: Redoubt server listening on {}", address);
         println!("KERNEL: Starting initial processes:");
         let mut args = std::env::args();
         args.next();
@@ -394,11 +394,11 @@ pub fn idle() -> bool {
         println!("-------+------------------");
         for arg in args {
             let process_key = generate_pid_key();
-            let init = xous_kernel::ProcessInit { key: ProcessKey::new(process_key) };
+            let init = redoubt_abi::ProcessInit { key: ProcessKey::new(process_key) };
             let new_process = SystemServices::with_mut(|ss| ss.create_process(init)).unwrap();
             println!(" {:^5} |  {}", new_process, arg);
-            let process_args = xous_kernel::ProcessArgs::new("program", arg);
-            xous_kernel::arch::create_process_post(process_args, init, new_process).expect("couldn't spawn");
+            let process_args = redoubt_abi::ProcessArgs::new("program", arg);
+            redoubt_abi::arch::create_process_post(process_args, init, new_process).expect("couldn't spawn");
         }
     }
 
@@ -470,7 +470,7 @@ pub fn idle() -> bool {
                     }
                 }
 
-                // Handle the syscall within the Xous kernel
+                // Handle the syscall within the Redoubt kernel
                 let response =
                     crate::syscall::handle(pid, thread_id, false, call).unwrap_or_else(Result::Error);
 
@@ -525,9 +525,9 @@ pub fn idle() -> bool {
         }
     }
 
-    // println!("Exiting Xous because the listen thread channel has closed. Waiting for thread to finish...");
+    // println!("Exiting Redoubt because the listen thread channel has closed. Waiting for thread to finish...");
     listen_thread_handle.join().expect("error waiting for listen thread to return");
 
-    // println!("Thank you for using Xous!");
+    // println!("Thank you for using Redoubt!");
     false
 }

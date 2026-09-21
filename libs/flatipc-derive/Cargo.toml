@@ -16,5 +16,5 @@ quote = "1"
 syn = { version = "2", features = ["parsing", "extra-traits"] }
 
 [features]
-xous = []
+redoubt = []
 default = []

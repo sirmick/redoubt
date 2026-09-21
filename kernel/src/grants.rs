@@ -5,9 +5,9 @@
 //! A userspace process may map a device page or claim an interrupt only if the boot
 //! bundle's manifest granted it that resource (default deny). The loader delivers grants
 //! as `Grnt` argument tags, one per granted process; this module reads them on demand at
-//! a claim, the way `process_name` reads `PNam`. See `planning/redoubt/DEVICE-GRANTS.md`.
+//! a claim, the way `process_name` reads `PNam`. See `docs/DEVICE-GRANTS.md`.
 
-use xous_kernel::PID;
+use redoubt_abi::PID;
 
 use crate::args::{KernelArgument, KernelArguments};
 

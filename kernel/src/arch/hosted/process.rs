@@ -7,7 +7,7 @@ use std::io::Write;
 use std::net::TcpStream;
 use std::thread_local;
 
-use xous_kernel::{PID, ProcessInit, ProcessKey, ProcessStartup, TID, ThreadInit};
+use redoubt_abi::{PID, ProcessInit, ProcessKey, ProcessStartup, TID, ThreadInit};
 
 use crate::services::ProcessInner;
 
@@ -89,7 +89,7 @@ pub fn set_current_pid(pid: PID) {
     });
 }
 
-pub fn register_connection_for_key(mut conn: TcpStream, key: ProcessKey) -> Result<PID, xous_kernel::Error> {
+pub fn register_connection_for_key(mut conn: TcpStream, key: ProcessKey) -> Result<PID, redoubt_abi::Error> {
     PROCESS_TABLE.with(|pt| {
         let mut process_table = pt.borrow_mut();
         for (pid_minus_1, process) in process_table.table.iter_mut().enumerate() {
@@ -101,7 +101,7 @@ pub fn register_connection_for_key(mut conn: TcpStream, key: ProcessKey) -> Resu
                 }
             }
         }
-        Err(xous_kernel::Error::ProcessNotFound)
+        Err(redoubt_abi::Error::ProcessNotFound)
     })
 }
 
@@ -136,7 +136,7 @@ impl Process {
     }
 
     /// Mark this process as running (on the current core?!)
-    pub fn activate(&mut self) -> Result<(), xous_kernel::Error> {
+    pub fn activate(&mut self) -> Result<(), redoubt_abi::Error> {
         // let mut pt = PROCESS_TABLE.lock().unwrap();
         // assert!(pt.table[self.pid as usize - 1] == *self);
         // pt.current = self.pid as _;
@@ -187,14 +187,14 @@ impl Process {
         process.threads[thread - 1].allocated = true;
     }
 
-    pub fn retry_instruction(&mut self, _tid: TID) -> Result<(), xous_kernel::Error> { Ok(()) }
+    pub fn retry_instruction(&mut self, _tid: TID) -> Result<(), redoubt_abi::Error> { Ok(()) }
 
-    pub fn setup_process(pid: PID, setup: ThreadInit) -> Result<(), xous_kernel::Error> {
+    pub fn setup_process(pid: PID, setup: ThreadInit) -> Result<(), redoubt_abi::Error> {
         let mut tmp = Process { pid };
         tmp.setup_thread(INITIAL_TID, setup)
     }
 
-    pub fn setup_thread(&mut self, thread: TID, _setup: ThreadInit) -> Result<(), xous_kernel::Error> {
+    pub fn setup_thread(&mut self, thread: TID, _setup: ThreadInit) -> Result<(), redoubt_abi::Error> {
         // println!(
         //     "KERNEL({}): Setting up thread {} @ {:?}",
         //     self.pid,
@@ -210,7 +210,7 @@ impl Process {
     }
 
     /// Set the current thread ID.
-    pub fn set_tid(&mut self, thread: TID) -> Result<(), xous_kernel::Error> {
+    pub fn set_tid(&mut self, thread: TID) -> Result<(), redoubt_abi::Error> {
         assert!(thread > 0);
         PROCESS_TABLE.with(|pt| {
             let mut process_table = pt.borrow_mut();
@@ -259,7 +259,7 @@ impl Process {
         })
     }
 
-    pub fn set_thread_result(&mut self, tid: TID, result: xous_kernel::Result) {
+    pub fn set_thread_result(&mut self, tid: TID, result: redoubt_abi::Result) {
         assert!(tid > 0);
         PROCESS_TABLE.with(|pt| {
             let mut process_table = pt.borrow_mut();
@@ -320,7 +320,7 @@ impl Process {
         pid: PID,
         init_data: ProcessInit,
         _services: &mut crate::SystemServices,
-    ) -> Result<ProcessStartup, xous_kernel::Error> {
+    ) -> Result<ProcessStartup, redoubt_abi::Error> {
         PROCESS_TABLE.with(|process_table| {
             let mut process_table = process_table.borrow_mut();
             let pid_idx = (pid.get() - 1) as usize;
@@ -346,7 +346,7 @@ impl Process {
         })
     }
 
-    pub fn destroy(pid: PID) -> Result<(), xous_kernel::Error> {
+    pub fn destroy(pid: PID) -> Result<(), redoubt_abi::Error> {
         PROCESS_TABLE.with(|pt| {
             let mut process_table = pt.borrow_mut();
             let pid_idx = pid.get() as usize - 1;
@@ -361,7 +361,7 @@ impl Process {
         })
     }
 
-    pub fn send(&mut self, bytes: &[u8]) -> Result<(), xous_kernel::Error> {
+    pub fn send(&mut self, bytes: &[u8]) -> Result<(), redoubt_abi::Error> {
         // eprintln!("KERNEL: Sending syscall response: {:?}", bytes);
         PROCESS_TABLE.with(|pt| {
             let mut process_table = pt.borrow_mut();

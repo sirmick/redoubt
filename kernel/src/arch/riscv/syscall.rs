@@ -6,7 +6,7 @@ use riscv::register::{sepc, sstatus};
 use crate::services::Thread;
 
 extern "C" {
-    fn _xous_resume_context(regs: *const usize) -> !;
+    fn _redoubt_resume_context(regs: *const usize) -> !;
 }
 
 pub fn invoke(thread: &mut Thread, supervisor: bool, pc: usize, sp: usize, ret_addr: usize, args: &[usize]) {
@@ -30,7 +30,7 @@ fn set_supervisor(supervisor: bool) {
 
 pub fn resume(supervisor: bool, thread: &Thread) -> ! {
     // SAFETY: sets sepc, the address `sret` will resume at. Harmless until the `sret` in
-    // `_xous_resume_context`. (`unsafe` on the upstream `riscv` crate used for rv64, a
+    // `_redoubt_resume_context`. (`unsafe` on the upstream `riscv` crate used for rv64, a
     // no-op wrapper on the vendored rv32 one.)
     #[allow(unused_unsafe)]
     unsafe {
@@ -46,10 +46,10 @@ pub fn resume(supervisor: bool, thread: &Thread) -> ! {
         thread.registers[1],
         thread.sepc,
     );
-    // SAFETY: `_xous_resume_context` (asm) restores all registers from this thread's saved
+    // SAFETY: `_redoubt_resume_context` (asm) restores all registers from this thread's saved
     // register block and `sret`s. `thread.registers` is that block, and sepc/sstatus were
     // just set to match. It does not return.
-    unsafe { _xous_resume_context(thread.registers.as_ptr()) };
+    unsafe { _redoubt_resume_context(thread.registers.as_ptr()) };
 }
 
 /// Make a syscall from inside the kernel (PID 1).
@@ -57,14 +57,14 @@ pub fn resume(supervisor: bool, thread: &Thread) -> ! {
 /// Without SBI firmware, the loader delegates S-mode `ecall` back to S-mode, so the
 /// kernel can simply `ecall` into its own trap handler.
 #[cfg(not(feature = "sbi"))]
-pub fn kernel_syscall(call: xous_kernel::SysCall) -> xous_kernel::SysCallResult { xous_kernel::rsyscall(call) }
+pub fn kernel_syscall(call: redoubt_abi::SysCall) -> redoubt_abi::SysCallResult { redoubt_abi::rsyscall(call) }
 
 /// Make a syscall from inside the kernel (PID 1).
 ///
 /// Under SBI firmware an S-mode `ecall` is a call into that firmware and never reaches us. Instead, enter the trap handler directly, with the
 /// CSRs set up exactly as the hardware would have left them for an `ecall` from S-mode.
 #[cfg(feature = "sbi")]
-pub fn kernel_syscall(call: xous_kernel::SysCall) -> xous_kernel::SysCallResult {
+pub fn kernel_syscall(call: redoubt_abi::SysCall) -> redoubt_abi::SysCallResult {
     let mut args = call.as_args();
     // SAFETY: this hand-crafts the CSR state of an `ecall`-from-S-mode trap and jumps to
     // the trap vector, so the kernel takes its own syscall exactly as hardware would
@@ -94,8 +94,8 @@ pub fn kernel_syscall(call: xous_kernel::SysCall) -> xous_kernel::SysCallResult 
             inlateout("a7") args[7],
         )
     };
-    match xous_kernel::Result::from_args(args) {
-        xous_kernel::Result::Error(e) => Err(e),
+    match redoubt_abi::Result::from_args(args) {
+        redoubt_abi::Result::Error(e) => Err(e),
         other => Ok(other),
     }
 }

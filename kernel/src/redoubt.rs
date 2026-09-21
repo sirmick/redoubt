@@ -2,7 +2,7 @@
 
 //! The Redoubt system calls (KERNEL-SPEC.md), decoded by `redoubt-sys`.
 //!
-//! Until WP-K6 deletes it, the legacy Xous interface is served beside this one: the trap handler
+//! Until WP-K6 deletes it, the legacy Redoubt interface is served beside this one: the trap handler
 //! sends every `ecall` whose `a0` is at least `redoubt_sys::NUMBER_BASE` here, and the rest to
 //! `syscall.rs`. The two share nothing but the kernel's objects.
 //!
@@ -21,7 +21,7 @@ use redoubt_sys::{
     BUDGET_SPEC_SLOTS, BudgetSpec, Call, Error, Number, REGS, Return, USAGE_SLOTS,
     encode_result,
 };
-use xous_kernel::{PID, TID};
+use redoubt_abi::{PID, TID};
 
 use crate::kframe;
 use crate::mem::MemoryManager;
@@ -192,12 +192,12 @@ fn record_frames<const N: usize>(addr: usize, write: bool) -> Result<[usize; N],
 /// Copy in an `N`-slot input record.
 pub fn read_record<const N: usize>(addr: usize) -> Result<[u64; N], Error> {
     let frames = record_frames::<N>(addr, false)?;
-    Ok(core::array::from_fn(|i| kframe::read(frames[i], (addr + i * 8) % xous_kernel::arch::PAGE_SIZE)))
+    Ok(core::array::from_fn(|i| kframe::read(frames[i], (addr + i * 8) % redoubt_abi::arch::PAGE_SIZE)))
 }
 
 fn write_record_to<const N: usize>(addr: usize, frames: &[usize; N], slots: &[u64; N]) {
     for i in 0..N {
-        kframe::write(frames[i], (addr + i * 8) % xous_kernel::arch::PAGE_SIZE, slots[i]);
+        kframe::write(frames[i], (addr + i * 8) % redoubt_abi::arch::PAGE_SIZE, slots[i]);
     }
 }
 

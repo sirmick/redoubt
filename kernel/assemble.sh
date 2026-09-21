@@ -6,7 +6,7 @@
 
 set -euxo pipefail
 
-crate=xous-kernel
+crate=redoubt-kernel
 
 usage() {
     echo "Usage: $0 [-a <riscv|arm>]"
@@ -36,7 +36,7 @@ case $arch in
 
         riscv-none-elf-gcc -ggdb3 -c -mabi=ilp32 -march=rv32imac_zicsr src/arch/riscv/asm.S -o bin/$crate.o
         ar crs bin/riscv32imac-unknown-none-elf.a bin/$crate.o
-        ar crs bin/riscv32imac-unknown-xous-elf.a bin/$crate.o
+        ar crs bin/riscv32imac-unknown-redoubt-elf.a bin/$crate.o
         ar crs bin/riscv32imc-unknown-none-elf.a bin/$crate.o
 
         riscv-none-elf-gcc -ggdb3 -c -mabi=ilp32 -march=rv32i_zicsr src/arch/riscv/asm.S -DSKIP_MULTICORE -o bin/$crate.o
@@ -51,7 +51,7 @@ case $arch in
         rm -f bin/arm*.a
 
         arm-none-eabi-gcc -ggdb3 -c -march=armv7-a src/arch/arm/asm.S -o bin/$crate.o
-        ar crs bin/armv7a-unknown-xous-elf.a bin/$crate.o
+        ar crs bin/armv7a-unknown-redoubt-elf.a bin/$crate.o
         ;;
 
     default)

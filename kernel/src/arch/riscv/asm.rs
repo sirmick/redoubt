@@ -9,12 +9,12 @@
 //! `THREAD_CONTEXT_AREA + (N << CTX_SHIFT)`; the load/store width and the reservation-clear
 //! instruction change with the register width. All of that is confined to the small,
 //! `cfg`-gated preamble below; the entry paths are shared. Addresses come from
-//! `xous_kernel::arch` rather than being repeated as literals. There is no suspend/resume
+//! `redoubt_abi::arch` rather than being repeated as literals. There is no suspend/resume
 //! entry path (Redoubt has no low-power suspend).
 
 use core::arch::global_asm;
 
-use xous_kernel::arch::{EXCEPTION_STACK_TOP, THREAD_CONTEXT_AREA};
+use redoubt_abi::arch::{EXCEPTION_STACK_TOP, THREAD_CONTEXT_AREA};
 
 /// `log2(size of a saved context)`: contexts are indexed by `n << CTX_SHIFT`.
 const CTX_SHIFT: usize = (32 * core::mem::size_of::<usize>()).trailing_zeros() as usize;
@@ -184,8 +184,8 @@ _start_trap:
 /*
     Resume the context pointed to by a0. sepc and sstatus must already be set.
 */
-.global _xous_resume_context
-_xous_resume_context:
+.global _redoubt_resume_context
+_redoubt_resume_context:
     mv      sp, a0
     RESTORE x1, 0
     CLEAR_RESERVATION
@@ -196,12 +196,12 @@ _xous_resume_context:
     sret
 
 /*
-    Return from a syscall. Xous returns values in a0-a7, but the C calling convention
+    Return from a syscall. Redoubt returns values in a0-a7, but the C calling convention
     only gives us two return registers, so a0 points at an 8-word result block that is
     unpacked into the argument registers. a1 is the context to resume.
 */
-.global _xous_syscall_return_result
-_xous_syscall_return_result:
+.global _redoubt_syscall_return_result
+_redoubt_syscall_return_result:
     mv      sp, a1
     RESTORE t0, 31
     csrw    sepc, t0

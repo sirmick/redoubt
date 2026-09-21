@@ -42,7 +42,7 @@
 use core::convert::TryFrom;
 
 use redoubt_sys::{Error, PAGE_SIZE};
-use xous_kernel::PID;
+use redoubt_abi::PID;
 
 use crate::budget::BudgetFrame;
 use crate::handle::{BudgetRef, DeviceRef, Handle, Object};
@@ -324,7 +324,7 @@ impl MemoryManager {
     /// either. Whoever hands out a device handle is handing out the device.
     pub fn map_device(&mut self, pid: PID, h: u32) -> Result<(usize, usize), Error> {
         let d = self.device_of_kind(pid, h, Kind::Mmio)?;
-        let flags = xous_kernel::MemoryFlags::R | xous_kernel::MemoryFlags::W;
+        let flags = redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W;
         let len = d.size as usize;
         self.map_run(pid, len / PAGE_SIZE, flags, Some(d.base as usize)).map(|at| (at, len))
     }
@@ -342,7 +342,7 @@ impl MemoryManager {
         }
         // Charged and zeroed before anything is mapped (R6, R11).
         let phys = self.alloc_contiguous(pid, npages)?;
-        let flags = xous_kernel::MemoryFlags::R | xous_kernel::MemoryFlags::W;
+        let flags = redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W;
         match self.map_run(pid, npages, flags, Some(phys)) {
             Ok(at) => Ok((at, phys as u64)),
             Err(e) => {

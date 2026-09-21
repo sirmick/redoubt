@@ -5,7 +5,7 @@ use core::mem;
 /// The current process's bookkeeping lives at a fixed virtual address that the loader
 /// maps, to a different physical page, in every address space. So this one pointer always
 /// refers to whichever process is currently active.
-const PROCESS: *mut ProcessImpl = xous_kernel::arch::THREAD_CONTEXT_AREA as *mut ProcessImpl;
+const PROCESS: *mut ProcessImpl = redoubt_abi::arch::THREAD_CONTEXT_AREA as *mut ProcessImpl;
 
 /// The current process's `ProcessImpl`.
 ///
@@ -24,8 +24,8 @@ pub const EXCEPTION_TID: TID = 1;
 pub const INITIAL_TID: TID = 2;
 pub const IRQ_TID: TID = 0;
 
-use xous_kernel::arch::PAGE_SIZE;
-use xous_kernel::{PID, TID, ThreadInit};
+use redoubt_abi::arch::PAGE_SIZE;
+use redoubt_abi::{PID, TID, ThreadInit};
 
 use crate::cell::KernelCell;
 use crate::services::ProcessInner;
@@ -40,7 +40,7 @@ pub const MAX_PROCESS_COUNT: usize = 64;
 #[cfg(target_pointer_width = "32")]
 const MAGIC_RETURN_BASE: usize = 0xff80_0000;
 #[cfg(target_pointer_width = "64")]
-const MAGIC_RETURN_BASE: usize = xous_kernel::arch::PROCESS_AREA + 0x80_0000;
+const MAGIC_RETURN_BASE: usize = redoubt_abi::arch::PROCESS_AREA + 0x80_0000;
 
 /// This is the address a program will jump to in order to return from an ISR.
 pub const RETURN_FROM_ISR: usize = MAGIC_RETURN_BASE + 0x2000;
@@ -119,7 +119,7 @@ const _: () = assert!(mem::size_of::<ProcessImpl>() == (MAX_THREAD + 1) * mem::s
 const _: () = assert!(mem::size_of::<ProcessImpl>() % PAGE_SIZE == 0);
 // The loader maps this many pages for PID 1 and for every initial process.
 #[cfg(target_pointer_width = "64")]
-const _: () = assert!(PROCESS_IMPL_PAGES == xous_kernel::arch::THREAD_CONTEXT_PAGES);
+const _: () = assert!(PROCESS_IMPL_PAGES == redoubt_abi::arch::THREAD_CONTEXT_PAGES);
 
 /// Singleton process table. Each process in the system gets allocated from this table.
 struct ProcessTable {
@@ -195,7 +195,7 @@ impl Process {
     }
 
     /// Mark this process as running on the current core
-    pub fn activate(&mut self) -> Result<(), xous_kernel::Error> { Ok(()) }
+    pub fn activate(&mut self) -> Result<(), redoubt_abi::Error> { Ok(()) }
 
     /// Calls the provided function with the current inner process state.
     pub fn with_inner<F, R>(f: F) -> R
@@ -255,7 +255,7 @@ impl Process {
     }
 
     /// Set the current thread number.
-    pub fn set_tid(&mut self, tid: TID) -> Result<(), xous_kernel::Error> {
+    pub fn set_tid(&mut self, tid: TID) -> Result<(), redoubt_abi::Error> {
         let process = process_impl();
         let tid = fixup_irq(tid);
         klog!("Switching to thread {}", tid);
@@ -297,7 +297,7 @@ impl Process {
         None
     }
 
-    pub fn set_thread_result(&mut self, thread_nr: TID, result: xous_kernel::Result) {
+    pub fn set_thread_result(&mut self, thread_nr: TID, result: redoubt_abi::Result) {
         let vals = result.to_args();
         let thread = self.thread_mut(thread_nr);
         for (src, dest) in vals.iter().zip(thread.registers[9..].iter_mut()) {
@@ -314,7 +314,7 @@ impl Process {
         }
     }
 
-    pub fn retry_instruction(&mut self, tid: TID) -> Result<(), xous_kernel::Error> {
+    pub fn retry_instruction(&mut self, tid: TID) -> Result<(), redoubt_abi::Error> {
         let process = process_impl();
         let thread = &mut process.threads[tid];
         if thread.sepc >= 4 {
@@ -325,7 +325,7 @@ impl Process {
 
     /// Initialize this process thread with the given entrypoint and stack
     /// addresses.
-    pub fn setup_process(pid: PID, thread_init: ThreadInit) -> Result<(), xous_kernel::Error> {
+    pub fn setup_process(pid: PID, thread_init: ThreadInit) -> Result<(), redoubt_abi::Error> {
         let process = process_impl();
         let tid = INITIAL_TID;
 
@@ -394,7 +394,7 @@ impl Process {
                     .reserve_range(
                         init_sp as *mut u8,
                         stack_size,
-                        xous_kernel::MemoryFlags::R | xous_kernel::MemoryFlags::W,
+                        redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W,
                     )
                     .expect("couldn't reserve stack")
             });
@@ -402,14 +402,14 @@ impl Process {
         Ok(())
     }
 
-    pub fn setup_thread(&mut self, new_tid: TID, setup: ThreadInit) -> Result<(), xous_kernel::Error> {
+    pub fn setup_thread(&mut self, new_tid: TID, setup: ThreadInit) -> Result<(), redoubt_abi::Error> {
         let entrypoint = setup.call as usize;
         // Create the new context and set it to run in the new address space.
         let pid = self.pid.get();
         let thread = self.thread_mut(new_tid);
         let sp = setup.stack.as_ptr() as usize + setup.stack.len();
         if sp <= 16 {
-            return Err(xous_kernel::Error::BadAddress);
+            return Err(redoubt_abi::Error::BadAddress);
         }
         // Zero out the thread registers, including special ones like `$tp`.
         // This should already have been done by the destructor, but do it
@@ -435,13 +435,13 @@ impl Process {
     ///     The return value of the function
     ///
     /// # Errors
-    ///     xous::ThreadNotAvailable - the thread did not exist
-    pub fn destroy_thread(&mut self, tid: TID) -> Result<usize, xous_kernel::Error> {
+    ///     redoubt_abi::ThreadNotAvailable - the thread did not exist
+    pub fn destroy_thread(&mut self, tid: TID) -> Result<usize, redoubt_abi::Error> {
         let thread = self.thread_mut(tid);
 
         // Ensure this thread is valid
         if thread.sepc == 0 || tid == IRQ_TID {
-            return Err(xous_kernel::Error::ThreadNotAvailable);
+            return Err(redoubt_abi::Error::ThreadNotAvailable);
         }
 
         // thread.registers[0] == x1
@@ -482,7 +482,7 @@ impl Process {
         print!("{}", _thread);
     }
 
-    pub fn destroy(pid: PID) -> Result<(), xous_kernel::Error> {
+    pub fn destroy(pid: PID) -> Result<(), redoubt_abi::Error> {
         let pid_idx = pid.get() as usize - 1;
         PROCESS_TABLE.with(|pt| {
             if pid_idx >= pt.table.len() {

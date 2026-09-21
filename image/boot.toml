@@ -1,0 +1,27 @@
+# What goes into the signed boot bundle (`signature || ustar`).
+#
+# The loader verifies the signature over the whole archive and starts the entries in order.
+# `kernel` must be first; a `grants` manifest (docs/DEVICE-GRANTS.md) grants devices.
+#
+# NOTE: not yet consumed by a tool. `./mkimage` currently builds a kernel-only bundle through
+# the bench's builder; this file records the intended shape for when `init` and the servers
+# exist (docs/INIT.md, docs/PLAN.md).
+
+[[entry]]
+name = "kernel"
+package = "redoubt-kernel"
+
+# [[entry]]
+# name = "init"
+# package = "redoubt-init"
+
+# [[entry]]
+# name = "keyd"
+# package = "redoubt-keyd"
+
+# [[entry]]
+# name = "consoled"
+# package = "redoubt-consoled"
+
+[grants]
+# Device grants per entry, written into the bundle's `grants` entry.

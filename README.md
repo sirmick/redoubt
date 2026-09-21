@@ -1,74 +1,101 @@
 # Redoubt
 
-Redoubt is a small, auditable microkernel operating system written in pure Rust, built to
-stay defensible against a capable, well-resourced adversary — including one that has read
-all of its source.
+A small, auditable microkernel operating system in pure Rust, plus the runtimes that run on
+it. It is built to stay defensible against a capable, well-resourced adversary — including one
+that has read all of its source.
 
-It is a hard fork of [Xous](https://github.com/betrusted-io/xous-core). The kernel keeps
-Xous's shape — an MMU-backed microkernel where drivers and services are unprivileged
-userspace servers talking over IPC — and rebuilds it for 64-bit and 32-bit
-RISC-V on one clean, width-generic code path. The `xous` syscall ABI keeps its name as the
-heritage protocol the userspace runtime speaks.
+Redoubt is a hard fork of [Xous](https://github.com/betrusted-io/xous-core). It keeps Xous's
+shape — an MMU-backed microkernel where drivers and services are unprivileged userspace
+servers talking over IPC — and rebuilds it for 64-bit and 32-bit RISC-V on one clean,
+width-generic code path. The `redoubt` syscall ABI keeps the heritage protocol's shape.
 
-## What it is
-
-- **RV64 (Sv39) and RV32 (Sv32) from one source.** The loader, kernel and page-table crate
-  are width-generic; the two ports differ only in width, and both boot QEMU `virt` through
-  the same Rust firmware (RustSBI) and the same SBI/PLIC platform.
-- **A microkernel.** The kernel keeps memory, threads, IPC, interrupt delivery and the timer.
-  Today its IPC still uses Xous's password capabilities; capability handles, budgets and
-  information-flow labels are designed, with drivers and the filesystem as unprivileged
-  servers (see the design docs).
-- **Process isolation is the point.** Every process has its own address space; the kernel
-  maps all of physical RAM once (the "physmap") and walks page tables in software, so it
-  never switches address spaces to edit another process's tables (needed for SMP).
-- **Secure by construction.** W^X is enforced by the page-table layer and re-verified at
-  boot; the boot bundle is Ed25519-verified; devices are default-deny and granted to drivers
-  by the signed bundle's `grants` entry, not discovered. `unsafe` is treated as the number-one code smell and
-  ratcheted down per component (`redoubt/tests/unsafe-budget.toml`); it only ever decreases.
-- **All Rust, open standards.** Assembly only where it must be; RISC-V, SBI, virtio, 9P.
-- **Tested to death.** `cargo testbench` boots real images under QEMU for both widths and
-  asserts on the console, including adversarial cases (tampered bundles, corrupted ELFs,
-  syscall attacks). The suite is green on rv32 and rv64, including boots with 2 and 4
-  harts (default builds run only the boot hart; a two-hart spike runs kernel code on a second
-  hart behind the `smp` feature).
-
-What it is deliberately **not**: the fastest, or compatible with everything.
+The userspace runtime is **beamlet**, a safe-Rust BEAM (Erlang/Elixir) VM. The architecture is
+runtime-neutral, so other runtimes can live beside it; today OTP is the only one.
 
 ## Layout
 
 | Path | What |
 | --- | --- |
-| `kernel/` | the microkernel (the TCB) |
-| `loader/` | the S-mode boot loader, both widths |
-| `xous-rs/` | the `xous` syscall ABI and userspace runtime |
-| `redoubt/paging/` | the typed Sv32/Sv39 page-table crate — the only code that edits PTEs |
-| `redoubt/testbench/` | `cargo testbench`: build an image, boot QEMU, assert on the console |
-| `redoubt/test-programs/` | `no_std` programs injected into test boot bundles |
-| `redoubt/tests/` | TOML test cases and the `unsafe` budget |
-| `libs/flatipc/` | zero-copy IPC |
-| `planning/redoubt/` | the architecture of record — start at [its index](planning/redoubt/README.md) |
+| `bios/` | M-mode firmware — a vendored, pinned RustSBI checkout (the Prototyper). |
+| `loader/` | The S-mode boot loader, both widths: verifies the signed bundle, builds Sv32/Sv39. |
+| `kernel/` | The microkernel (the TCB): memory, threads, IPC, interrupts, the timer. |
+| `servers/` | Unprivileged trusted servers (`init`, `keyd`, `fsd`, …); one crate each, a thin `bin`. |
+| `userland/otp/` | beamlet, the OTP/BEAM runtime (`vm`, `crypto`, `re`, `cli`, `lib`, `tests`). |
+| `libs/` | Runtime-neutral crates: `sys` (ABI), `rt`, `paging`, `wire`, `signing`, `littlefs`, `flatipc`. |
+| `libs/abi/` | The legacy full syscall ABI/runtime; being folded into `sys` + `rt`. |
+| `image/` | Recipes and static content for the boot bundle and the disk image. |
+| `tools/` | Host tools: `testbench` (build + boot + assert), opcode/table generators. |
+| `tests/` | Bench cases (`*.toml`), test keys/data, and `programs/` injected into bundles. |
+| `docs/` | The architecture of record — start at [its index](docs/README.md). |
+| `reference/` | Third-party reference sources (AtomVM, Elixir, OTP) for differential work. |
+| `toolchains/` | Pinned OTP 28 / Elixir 1.20 archives beamlet's tests need. |
+| `vendor/` | Small vendored patches (e.g. `getrandom`). |
 
-(The userspace above the kernel is beamlet, a safe-Rust BEAM VM that runs an Elixir/OTP userland;
-it lives in a sibling repository, `../beamlet`, with its own `DESIGN.md`.)
+## Build, launch, test
 
-## Building and testing
+Top-level scripts wrap the boot chain; `--arch rv32|rv64` picks the width (default rv64).
 
 ```sh
-# One-time: build the RustSBI firmware the bench boots (QEMU ships no rv32 OpenSBI).
-./scripts/fetch-rustsbi.sh
-
-# Run the whole suite on both widths.
-cargo testbench
-
-# Or one width / one case.
-cargo testbench --arch rv32
-cargo testbench rng
+./build    --arch rv64              # compile the kernel + loader (+ --programs for test programs)
+./launch   --arch rv32              # print the exact QEMU line, boot, serial on stdin/stdout
+./launch   --arch rv64 --program log-server --smp 4
+./launch   --arch rv64 --print-only # just show the QEMU command
+./test     --arch rv64 timer        # the boot-test bench (filter, --list, ...)
+./mkimage                            # signed boot bundle -> target/image/redoubt.bundle
 ```
+
+`launch` attaches the guest's serial console to the terminal (`-nographic`, Ctrl-A X quits).
+rv64 boots QEMU's bundled OpenSBI by default; rv32 boots the RustSBI Prototyper from `bios/`.
+Build the firmware first if `bios/target/` is empty:
+
+```sh
+./scripts/build-bios.sh
+```
+
+The full suite (both widths) is also reachable directly:
+
+```sh
+cargo testbench                 # everything, rv32 + rv64
+cargo testbench --arch rv64
+cargo testbench rng             # cases whose name contains "rng"
+cargo testbench --list
+```
+
+It boots real images under QEMU and asserts on the console, including adversarial cases
+(tampered bundles, corrupted ELFs, syscall attacks). Console logs land in `target/testbench/`.
+
+## The development environment
+
+Everything runs inside the container; the host needs only Docker.
+
+```sh
+./dev.sh                 # build the image (first time), then a shell in /work
+./dev.sh ./test          # run one command and exit
+./dev.sh --rebuild       # rebuild the image after editing the Dockerfile
+```
+
+The image carries Rust (with the RISC-V targets), QEMU for both widths, OpenSSH, Node 22 and
+the agent CLIs (pi, Claude Code, Codex). Nothing is required from the host but Docker.
+
+### The sandbox boundary
+
+`dev.sh` mounts **only this directory** (as `/work`) plus the three CLIs' config/auth dirs, so
+an agent launched inside cannot read the rest of your home. The exact, auditable list is at the
+top of `dev.sh`. The Docker socket is deliberately never mounted. To run an agent confined,
+start `pi`, `claude` or `codex` **from inside** the `./dev.sh` shell rather than on the host.
+
+### Caches
+
+Cargo is redirected inside the workspace so nothing is written outside it:
+
+- `CARGO_HOME=/work/.cargo`, `RUSTUP_HOME=/work/.rustup`
+
+They are disposable: `rm -rf .cargo .rustup` reclaims the space. Build output lives in
+`target/` (disposable), and generated boot bundles and disk images in `target/image/`.
 
 ## Heritage
 
-Redoubt began as Xous by the betrusted.io project; the microkernel design, the syscall ABI,
-and much of `xous-rs` come from there. Redoubt drops Xous's Precursor/Baochip hardware
-support and its 32-bit-only, single-core, PDDB-centric assumptions, and takes the design
-64-bit, SMP-ready, and filesystem-bearing. See `planning/redoubt/HISTORY.md` for what changed and why.
+Redoubt began as Xous by the betrusted.io project; the microkernel design, the syscall ABI, and
+much of `libs/abi` come from there. Redoubt drops Xous's Precursor/Baochip hardware support and
+its 32-bit-only, single-core, PDDB-centric assumptions, and takes the design 64-bit, SMP-ready,
+and filesystem-bearing. See `docs/HISTORY.md` for what changed and why.

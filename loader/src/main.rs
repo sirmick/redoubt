@@ -1,4 +1,4 @@
-//! Xous loader for RISC-V platforms that boot through SBI firmware with a device tree,
+//! Redoubt loader for RISC-V platforms that boot through SBI firmware with a device tree,
 //! for both rv64 (Sv39) and rv32 (Sv32) — the same binary, width chosen at build time.
 //!
 //! The firmware enters `_start` in S-mode on a single boot hart with the MMU off,
@@ -7,7 +7,7 @@
 //!
 //! The loader unpacks the boot bundle (see `image.rs`), builds an address space for the
 //! kernel and for each initial process, describes the machine to the kernel in a tagged
-//! argument block, and enters the kernel. Design notes: `planning/redoubt/BOOT.md`.
+//! argument block, and enters the kernel. Design notes: `docs/BOOT.md`.
 
 #![no_std]
 #![no_main]
@@ -25,7 +25,7 @@ use core::arch::{asm, global_asm};
 use dt::Platform;
 
 use tar_no_std::TarArchiveRef;
-use xous::arch::{
+use redoubt_abi::arch::{
     EXCEPTION_STACK_PAGES, EXCEPTION_STACK_TOP, KERNEL_AREA, KERNEL_PLIC_BASE, KERNEL_STACK_PAGES,
     KERNEL_STACK_TOP, THREAD_CONTEXT_AREA, THREAD_CONTEXT_PAGES, USER_AREA_END, USER_STACK_TOP,
 };
@@ -94,7 +94,7 @@ struct InitialProcess {
 extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     println!();
     let xlen = core::mem::size_of::<usize>() * 8;
-    println!("loader: Xous rv{} loader, boot hart {}", xlen, hart_id);
+    println!("loader: Redoubt rv{} loader, boot hart {}", xlen, hart_id);
 
     // SAFETY: the SBI boot protocol passes the device-tree address in `a1`.
     let platform = unsafe { Platform::read(dtb) };
@@ -269,10 +269,10 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     // pages owned by PID 1.
     unsafe {
         enter_kernel(
-            xous::arch::physmap_virt(args_base),
-            xous::arch::physmap_virt(processes.as_ptr() as usize),
-            xous::arch::physmap_virt(alloc.rpt_base()),
-            xous::arch::physmap_virt(xpt),
+            redoubt_abi::arch::physmap_virt(args_base),
+            redoubt_abi::arch::physmap_virt(processes.as_ptr() as usize),
+            redoubt_abi::arch::physmap_virt(alloc.rpt_base()),
+            redoubt_abi::arch::physmap_virt(xpt),
             kernel.satp(),
             kernel_entry,
             KERNEL_STACK_TOP - STACK_PADDING,

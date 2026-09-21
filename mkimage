@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+#
+# mkimage -- build the signed boot bundle into target/image/, and prepare the disk-image
+# staging directory the image builder fills before packaging a littlefs volume.
+#
+# Usage: ./mkimage [--arch rv32|rv64] [--program NAME|PATH]...
+#
+#   target/image/redoubt.bundle   signed "signature || ustar" archive the loader verifies
+#   target/image/stage/           tree to be packed into the disk image (filled later;
+#                                 sources and recipes live in image/)
+#
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+arch=rv64
+progs=()
+while (($#)); do
+    case "$1" in
+        -a|--arch)   arch="${2:?--arch needs rv32 or rv64}"; shift 2 ;;
+        --arch=*)    arch="${1#*=}"; shift ;;
+        --program)   progs+=(--program "${2:?--program needs a name or path}"); shift 2 ;;
+        --program=*) progs+=(--program "${1#*=}"); shift ;;
+        -h|--help)   sed -n '2,12p' "$0"; exit 0 ;;
+        *) echo "mkimage: unknown argument: $1" >&2; exit 2 ;;
+    esac
+done
+
+mkdir -p target/image/stage
+
+# Reuse the bench's bundle builder: `--run --print-only` builds and signs the bundle, then
+# stops before booting. The archive lands at target/testbench/interactive.tar.
+cmd=(cargo run --quiet -p testbench -- --arch "$arch" --run --print-only)
+cmd+=("${progs[@]}")
+"${cmd[@]}"
+
+cp -f target/testbench/interactive.tar target/image/redoubt.bundle
+echo "==> boot bundle: target/image/redoubt.bundle"
+echo "==> disk staging: target/image/stage (sources and recipes live in image/)"

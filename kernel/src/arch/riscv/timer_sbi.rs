@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Hart timer backend for platforms with SBI firmware, using the SBI TIME extension.
-//! See `planning/redoubt/TIMER.md`.
+//! See `docs/TIMER.md`.
 
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use riscv::register::{scounteren, sie};
 
 /// The timer is presented to userspace as this interrupt. PLIC source 0 does not exist.
-pub const IRQ: usize = xous_kernel::arch::platform_call::TIMER_IRQ;
+pub const IRQ: usize = redoubt_abi::arch::platform_call::TIMER_IRQ;
 
 // The timebase is a frequency in Hz, set once at boot and read-only afterwards, so a plain
 // `AtomicUsize` is enough and stays lock-free on rv32 (which has no 64-bit atomics). Any

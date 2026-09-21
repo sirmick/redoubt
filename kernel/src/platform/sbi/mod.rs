@@ -39,21 +39,21 @@ pub fn reset(reboot: bool) {
     }
 }
 
-/// `SysCall::PlatformSpecific` for SBI platforms. Numbers are in `xous::arch::platform_call`.
-pub fn platform_call(pid: xous_kernel::PID, op: usize, a2: usize, _a3: usize) -> Result<xous_kernel::Result, xous_kernel::Error> {
-    use xous_kernel::arch::platform_call::*;
+/// `SysCall::PlatformSpecific` for SBI platforms. Numbers are in `redoubt_abi::arch::platform_call`.
+pub fn platform_call(pid: redoubt_abi::PID, op: usize, a2: usize, _a3: usize) -> Result<redoubt_abi::Result, redoubt_abi::Error> {
+    use redoubt_abi::arch::platform_call::*;
 
     use crate::arch::irq::timer;
     match op {
-        TIMER_TIMEBASE => Ok(xous_kernel::Result::Scalar1(timer::timebase() as usize)),
+        TIMER_TIMEBASE => Ok(redoubt_abi::Result::Scalar1(timer::timebase() as usize)),
         TIMER_SET_DEADLINE => {
             // The hart timer belongs to whoever claimed its interrupt.
             if crate::irq::interrupt_owner(timer::IRQ) != Some(pid) {
-                return Err(xous_kernel::Error::AccessDenied);
+                return Err(redoubt_abi::Error::AccessDenied);
             }
             timer::set_deadline(a2 as u64);
-            Ok(xous_kernel::Result::Ok)
+            Ok(redoubt_abi::Result::Ok)
         }
-        _ => Err(xous_kernel::Error::UnhandledSyscall),
+        _ => Err(redoubt_abi::Error::UnhandledSyscall),
     }
 }

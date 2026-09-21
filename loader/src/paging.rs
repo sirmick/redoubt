@@ -1,9 +1,9 @@
-//! Address space construction (Sv32 and Sv39). See `planning/redoubt/MEMORY-LAYOUT.md`.
+//! Address space construction (Sv32 and Sv39). See `docs/MEMORY-LAYOUT.md`.
 //!
 //! Page-table memory is only touched through the `paging` crate, which the kernel uses too.
 
 use paging::{PteFlags, Slot, Table, Window, ENTRIES, LARGEST_LEAF, LEVELS};
-use xous::arch::{PHYSMAP_PHYS_BASE, PROCESS_AREA};
+use redoubt_abi::arch::{PHYSMAP_PHYS_BASE, PROCESS_AREA};
 
 use crate::alloc::{PageAllocator, Pid};
 use crate::PAGE_SIZE;
@@ -47,7 +47,7 @@ impl AddressSpace {
         let last = ram.end.div_ceil(LARGEST_LEAF);
         for leaf in first..last {
             let phys = leaf * LARGEST_LEAF;
-            let virt = xous::arch::physmap_virt(phys);
+            let virt = redoubt_abi::arch::physmap_virt(phys);
             root.slot(paging::vpn(virt, LEVELS - 1)).set(paging::Pte::leaf(phys, flags));
         }
         let kernel_l1 = alloc.alloc(pid);
@@ -107,7 +107,7 @@ impl AddressSpace {
     /// writable alias of its own code, in breach of W^X. The physmap is built from
     /// gigapages, so the superpages covering `phys` are first split into smaller ones.
     pub fn write_protect_in_physmap(&self, alloc: &mut PageAllocator, phys: usize) {
-        let virt = xous::arch::physmap_virt(phys);
+        let virt = redoubt_abi::arch::physmap_virt(phys);
         let mut table = self.root;
         for level in (1..LEVELS).rev() {
             let slot = table.slot(paging::vpn(virt, level));
