@@ -552,7 +552,7 @@ merged:                  W1  W2  L1  T1  T1b  A1  A2  K0  K0b  K1  K2  K3  R1  R
                          (A3 folded into K2)
 in review:               M0/M1 (the executable model)
 building:                K4 (kernel track);  R4, D1, D3
-the ready set:           W3a (the 9P opcode floor and the `copy_file` rename);  K5 (behind K4 on the Hotspots)
+the ready set:           K5 (behind K4 on the Hotspots)
 kernel, serialized:      K4 -> K5 -> K6 (after R1b)
 runtime:                 R4 (after R1b, K3);  R2 (after K4) -> R3 (after R2, W1, K3, K5)
 beamlet:                 B1 (after R1b, R4) -> B2 (after B1, R3)
