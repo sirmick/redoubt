@@ -106,8 +106,7 @@ it. A package whose work landed inside another is recorded as `folded` and gets 
 | M1 | review | wp-m1 | carried by wp-m0 (answers 28-101) |
 | W1 | merged | wp-w1 | d52896bee |
 | W2 | merged | wp-w2 | 3715363a9 |
-| W3a | ready | | the 9P opcode floor; needs W2 (merged); split from W3 |
-| W3b | waiting | | records already backed; blocked on a design question (see QUESTIONS.md) |
+| W3a | ready | | the 9P opcode floor and the `copy_file` rename; needs W2 (merged) |
 | A1 | merged | wp-a1 | 44f1780a1 |
 | A2 | merged | wp-a2 | c98034520 |
 | A3 | folded | | into wp-k2 (answer 103; the `first` flag) |

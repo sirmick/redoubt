@@ -676,3 +676,15 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   domain. The design's mechanism is unchanged; the answers are clarifications and detail, applied to
   TENETS.md, CONTAINMENT.md, CAPABILITIES.md and INIT.md, with CONTAINMENT.md gaining the Push
   section. WP-S2 and WP-R3 also gain these details; the orchestrator files the follow-up.
+- **WP-W3 split: W3b dropped, and `fsd`'s `copy` renamed `copy_file`** (2026-09-22, answers
+  154-155). WP-W3 bundled two deliverables, and one had nothing to build: the runtime's records
+  are `Record([0; N])` stack arrays, already written and so already backed, and the
+  untouched-page assertion is kernel behaviour that two real-boot cases already assert
+  (`budget-syscall-attack`, WP-K1; `lend-untouched-page`, WP-K0), so **WP-W3b is deleted** and
+  WP-W3a is the whole of WP-W3. Building W3a then uncovered a latent defect: `fsd`'s typed table
+  declares a message `copy`, which camel-cases to the Rust type `Copy` and collides with the
+  `Copy` derive on every generated type, so `cargo test -p redoubt-wire-gen` was red on
+  `redoubt` — invisible because the parser died earlier, on the `<!-- wire: fsd ninep -->`
+  marker it did not yet understand. Answer 155 renames the message `copy_file` in NAMESPACES.md
+  and USERLAND.md; the generator's `RESERVED_TYPES` is correct and unchanged. Both answers are
+  in WP-W3a's scope.

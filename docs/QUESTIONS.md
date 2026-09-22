@@ -8,7 +8,8 @@ so each needs your decision; the answer goes into the named note with a HISTORY.
 answer now lives). **Open: 127-128**, **138-140** (from WP-K2) and **141** (from WP-S1) and **142-146** (from WP-K3) and **147** (from WP-D1) and **148-149** (from WP-R4) and **129-137** (userland,
 USERLAND.md), at the end. **150-153 answered 2026-09-22** (the owner's use-case direction, recorded
 in the tranche "Answers to 150-153"; the decisions were already in the notes, these questions pin
-their semantics). The round-4 answers revised 56 (handle kinds are checked by use) and replaced 57 and 58 (by
+their semantics). **154-155 answered 2026-09-22** (from the WP-W3 split: W3b is dropped as already
+satisfied, and the `fsd` message `copy` becomes `copy_file`; WP-W3a carries both). The round-4 answers revised 56 (handle kinds are checked by use) and replaced 57 and 58 (by
 82); a later tranche replaced 103 (no `first` flag and no strict priority: one stride queue for
 every budget); the tranche for 120-126 accepted every recommendation and added one change to what
 ships: the boot bundle's signature gets its own domain now (VERIFIED-BOOT.md).
@@ -1306,3 +1307,43 @@ do not re-decide it.
      **Answered:** CONTAINMENT.md, Push (input into a labelled domain) and Labels; INIT.md, The boot
      manifest (Confinement).
 
+
+## From the W3 split (WP-W3a, WP-W3b)
+
+154. **WP-W3b ("records that are already backed") has nothing to build.** WP-W3's second
+     deliverable asked `redoubt-rt` to touch every record buffer before passing it, since
+     decoding never allocates and a record in a page the caller reserved but never touched is
+     `InvalidArgument` (answer 115). But `libs/rt/src/sys.rs`'s `Record<const N: usize>(pub
+     [u64; N])` is built as `Record([0; N])`, a stack array that is written, so it is already
+     backed and the runtime owes no change; and the untouched-page assertion is kernel
+     behaviour, not reachable through the `HostKernel` fake, so it cannot live in
+     `redoubt-rt`'s host tests. As written, the package is unimplementable and an implementer
+     spent its whole budget looking for a change that does not exist.
+     *Rec:* answer 115 is already satisfied. No runtime change, no new bench case: the
+     assertion lives in real-boot cases that already exist and already assert it —
+     `budget-syscall-attack` (a page reserved and never touched, `budget_usage` on it is
+     `InvalidArgument`; owner WP-K1) and `lend-untouched-page` (WP-K0). **Drop WP-W3b**;
+     WP-W3a is the whole of WP-W3.
+     *Alt:* keep WP-W3b and write the assertion again in a new case. It would test the same
+     behaviour twice and would need a host-fake extension to model page backing, which would
+     make the fake less like the kernel, not more.
+     **Answered:** KERNEL-SPEC.md, ABI (Records) is unchanged; the assertion stays in
+     `tests/budget-syscall-attack` (WP-K1); BUILD-PLAN.md drops WP-W3b.
+
+155. **A wire message named `copy` cannot generate: it would make the Rust type `Copy`.** The
+     `fsd` typed-operations table (`docs/NAMESPACES.md`) declares a message `copy`, and the
+     generator refuses it: `copy` camel-cases to `Copy`, which is in the generator's
+     `RESERVED_TYPES`, because every generated type carries `#[derive(Debug, Clone, Copy,
+     PartialEq, Eq)]` and a module-local `struct Copy` would shadow the derive. `cargo test -p
+     redoubt-wire-gen` is red on `redoubt` because of it, and the failure was latent: before
+     WP-W3a the parser died earlier, on the `<!-- wire: fsd ninep -->` marker it did not yet
+     understand, so the `copy` clash was never reached.
+     *Rec:* the reservation is correct and stays. Rename the message `copy` to **`copy_file`**
+     in `docs/NAMESPACES.md` (`camel` gives `CopyFile`, which shadows nothing) and update the
+     `docs/USERLAND.md` row that names it. **Fold the rename into WP-W3a**, because WP-W3a's
+     own acceptance ("the `fsd` table must still generate") is unreachable until it lands.
+     *Alt:* rename generated types instead (prefix every message type), which touches every
+     generated codec and every call site for one word; or narrow `RESERVED_TYPES`, which
+     breaks the derive.
+     **Answered:** NAMESPACES.md, `fsd`'s typed operations (`copy_file`); USERLAND.md's
+     file-operations table; WP-W3a owns the rename.
