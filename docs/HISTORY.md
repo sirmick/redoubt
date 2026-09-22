@@ -635,20 +635,25 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   closure; label non-interference; human control) and "The high/low pair": a labelled agent with
   secrets and no network (**A**) colluding with an unlabelled, networked agent (**B**) that has agreed
   a code in advance. Labels remove every *intentional* path between them, so the note now says what it
-  always meant — **the isolation unit is the label set, not the capability set** — and adds a tenet-2
-  bullet that a protected label set shares no observable resource with a lower one: **non-observability
-  (zero), not low bandwidth**, since one bit can be a key. CONTAINMENT.md replaces "they never reach
-  zero; the goal is low bandwidth" with that split, states that **read-down from a shared unlabelled
-  volume is itself a low-to-high channel** (so a confined domain takes input by an audited steward
-  push, not by reading), and adds the **channel table**: every signalling resource closed by software,
-  closed by RTL, or a stated residual, with the rule that **no residual permits co-residence**.
-  PLATFORM-FPGA.md makes non-observability a required RTL deliverable (separate cores, partitioned L2,
-  isolated memory bandwidth, per-domain DMA/disk/NIC, no shared GPU), not an aspiration. INIT.md gains
+  always meant — **the isolation unit is the label set, not the capability set**. **Collusion is not a
+  goal the OS can meet**: on one machine, power, heat, EM and the clock couple any two domains, so even
+  a perfect RTL cannot reach zero. The design's exact claim is **zero intentional paths** (the OS, by
+  construction), plus a reduced and measured covert residual (RTL), with **placement — not co-locating
+  the secret with the domain that wants it — the only true zero**. CONTAINMENT.md replaces "they never
+  reach zero; the goal is low bandwidth" with that split, states that **read-down from a shared
+  unlabelled volume is an intentional low-to-high path** (so a confined domain takes input by an audited
+  steward push, not by reading), and adds the **channel table**: every signalling resource closed by
+  software, reduced by RTL, or physical and unclosable (power/heat/EM/clock), with the rule that two
+  domains co-reside only if the residual is below what the secret is worth. PLATFORM-FPGA.md makes the
+  enumerated RTL closures required (separate cores, partitioned L2, isolated memory bandwidth,
+  per-domain DMA/disk/NIC, no shared GPU) while stating they are a reduction, not a zero. INIT.md gains
   a `confined` manifest flag: `init` refuses a manifest that places differing label sets in one server
   instance, volume, endpoint, network instance or core, exactly as it refuses a server's own budget.
   GAME.md is new: the fight-club contract — scenarios (single-agent escape; the high/low pair;
   authority expansion; collusion through the human), setup, win conditions, and the **verdict
-  taxonomy** (design hole vs implementation bug vs stated residual vs policy vs human) without which a
-  red win proves nothing. The design is unchanged in mechanism; what changed is that its containment
-  claim is now stated where a reader and an agent can find it, and its covert-channel residuals are
-  named with owners instead of tolerated as "low bandwidth".
+  taxonomy** (design hole vs implementation bug vs stated residual vs policy vs human). A **software**
+  channel (an intentional path) is the only red win that counts against the OS; a **covert** channel is
+  measured and reported, never graded, because no OS can close it. The design is unchanged in
+  mechanism; what changed is that its containment claim is now stated exactly — zero intentional paths,
+  a measured covert residual, and placement as the only zero — where a reader and an agent can find it.
+

@@ -36,12 +36,15 @@ The FPGA is "the secure configuration" only if these hold:
   isolates only core from core and flushes when a core switches budgets. The kernel tells the
   hardware when it switches.
 - **Non-observability for a protected label set** (TENETS.md, The high/low pair). This is the RTL's
-  half of label non-interference and is required before the claim is made: a protected label set and
-  a lower one share no observable resource. The RTL must give separate cores, a partitioned L2,
-  isolated memory bandwidth, per-domain DMA windows (channel B already helps), per-domain disk and
-  NIC queues, and no shared GPU context. Each is a row of CONTAINMENT.md's channel table; until it is
-  closed, the path is a stated residual and the two domains must not co-reside. This is a
-  requirement, not an aspiration, for the GAME.md setup on FPGA hardware.
+  half of label non-interference: a protected label set and a lower one share no *enumerated* on-die
+  resource. The RTL must give separate cores, a partitioned L2, isolated memory bandwidth, per-domain
+  DMA windows (channel B already helps), per-domain disk and NIC queues, and no shared GPU context.
+  This is a requirement, not an aspiration, for the GAME.md setup on FPGA hardware. **It is a
+  reduction, not a zero**: power delivery, heat, electromagnetic emission and any shared clock are
+  physical and cannot be closed by RTL or software. Only not co-locating the two domains — separate
+  power/thermal domains, separate machines — is zero, and that is a deployment decision. Each RTL row
+  is a row of CONTAINMENT.md's channel table; until it is closed, the path is a stated residual and
+  the two domains co-reside only if the residual is below what the secret is worth.
 - **`keyd` on its own core** once there is SMP.
 - **Hardware channels are devices.** Each channel endpoint is reached through a handle, granted like
   any device; they also serve as doorbells between harts. Custom instructions are a vendor extension

@@ -24,36 +24,49 @@ VM (the BEAM is not in the TCB; INIT.md), and possibly a server it talks to. The
 1. **Capability closure.** An agent's reachable authority never exceeds its initial grants plus what
    a human-approved steward action adds; every delegation step narrows (R9, `mint`; CAPABILITIES.md).
    Authority is monotone non-increasing absent a human approval.
-2. **Label non-interference.** Data crosses a label boundary only by steward declassification. The
-   **label set, not the capability set, is the isolation unit**: two budgets with different label
-   sets have no intended path (R1, I7), and a protected label set shares no observable resource with
-   a lower one (Non-observability, below).
+2. **Label non-interference, in software.** No *intentional* path crosses a label boundary: not a
+   `call` or `send` (R1), a write (`check`), a read up, a sink, metadata or a counter. Data crosses
+   only by steward declassification. This is a property of the OS, it is by construction, and it is
+   testable. The **label set, not the capability set, is the isolation unit**; two budgets with
+   different label sets have no path the OS can carry a message over.
 3. **Human control.** Every increase in authority, and every declassification, is an out-of-band human
    approval; leases bound time; the sponsor can always end a lease (CAPABILITIES.md).
+
+It does **not** guarantee that two agents cannot signal each other *covertly*, because on one machine
+that is impossible (The high/low pair). Collusion is a threat the design bounds, not a goal it meets.
 
 ### The high/low pair
 The sharpest case: a labelled agent with secrets and no network (**A**) and an unlabelled agent with
 network (**B**) are colluding, having agreed a code in advance. Labels remove every *intentional*
 path between them — `call`/`send` (R1), writes (`check`), sinks, metadata, global counters, the
-approval screen. They do **not** remove *covert* ones: a shared core, cache, memory bandwidth, disk,
-NIC, GPU, server instance, volume, endpoint or scheduler timing. A pre-agreed code makes any shared
-observable resource a channel, and **one bit can be a key**. So for a protected label set:
+approval screen. They do **not** remove *covert* ones, and **on one machine those cannot be reduced
+to zero.** The design is honest about the difference:
 
-- **Non-observability is the requirement, not low bandwidth.** A protected label set shares no
-  observable resource with a lower one. This is a hardware property (PLATFORM-FPGA.md): separate
-  cores, partitioned L2, isolated memory bandwidth, per-domain DMA, disk and NIC, and no shared
-  scheduler. Software supplies the intentional-path removal (labels, `check`, sinks, no global
-  counters); hardware must supply the rest.
-- **A low-to-high read path is a channel.** Read-down (a labelled session reading an unlabelled
-  volume) is how data enters a vault, but with a colluding lower domain it is the B-to-A half of a
-  full channel. A confined domain reads no shared unlabelled data; input arrives by an audited push
-  from the steward.
+- **Collusion cannot be prevented; it can be bounded.** Two processes on one die always share physical
+  state: at minimum power delivery, heat and electromagnetic emission, and usually a clock (DVFS
+  couples a workload on one core to timing on another). Even a perfect RTL for every enumerated
+  on-die resource leaves a physical substrate. A pre-agreed code removes all negotiation cost, so the
+  smallest channel carries meaning: **one bit can be a key**. The goal is not silence; it is a
+  **known, small, measured** channel.
+- **The OS's claim is exact and strong: zero intentional paths, by construction.** Everything software
+  mediates is closed (CONTAINMENT.md's channel table). That claim is testable, and the bench tests it.
+- **Hardware reduces the covert channel; only placement zeroes it.** The RTL closes the enumerated
+  resources (cores, caches, memory bandwidth, DMA, disk, NIC, GPU); power, heat, EM and the clock
+  remain and cannot be closed in software or in RTL. The only true zero is not co-locating the secret
+  with the domain that wants it — separate power/thermal domains, separate machines. That is a
+  deployment decision, and the OS cannot substitute for it.
+- **Read-down is an intentional path, closed for a confined domain.** A labelled session reading an
+  unlabelled volume is how data enters a vault, but with a colluding lower domain it is a low-to-high
+  path. A confined domain reads no shared unlabelled data; input arrives by an audited push from the
+  steward.
 - **Sharing is the attack.** Two differing label sets in a confined deployment share no server
   instance, volume, endpoint, network instance or core. A manifest that places them together is
   refused (INIT.md).
 
-Where the hardware cannot yet provide non-observability, the path is a **stated residual, and the two
-domains do not co-reside**. No non-interference claim is made on QEMU or general hardware.
+Where the hardware cannot yet provide the enumerated closures, the path is a stated residual, and two
+domains co-reside only if the residual's capacity is below what the secret is worth. **No
+non-interference claim — even software's exact one — should be read as a silence guarantee**, and none
+is made on QEMU or general hardware.
 
 ## The adversary
 Design for a capable, patient, automated adversary that has read every line of this repository, can
@@ -123,9 +136,10 @@ loader, kernel) and hold it in their head. It should read like a textbook exampl
 - **Tested like it will be attacked.** See tenet 6: every security property has a test that tries to
   break it.
 - **Non-interference across labels.** The label set is the isolation unit; only steward declassification
-  moves data across one. Labels remove intentional flows; for a protected label set, hardware
-  non-observability must remove covert ones. There is no acceptable low-bandwidth channel for a
-  secret: the target is zero (The use case).
+  moves data across one. Labels remove every intentional (software-mediated) flow, by construction.
+  They cannot remove covert flows on one machine — power, heat, EM and the clock — so the OS's claim
+  is exactly zero intentional paths, and covert collusion is a bounded, measured, hardware-and-
+  placement matter, never a goal the OS meets (The use case).
 
 ## 3. Rust, and assembly only where Rust cannot reach
 - Everything that runs on the machine is Rust: loader, kernel, servers, applications, and the
