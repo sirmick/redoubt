@@ -149,8 +149,9 @@ client that never sends them still sees a plain pipe.
   answers "unknown".
 - `resize` (17) **parks until the size changes** (answer 160, Holding a call): the client calls it
   with no fields, the server holds the call, and when the window changes it replies with the new
-  `cols, rows`. It is the server's push channel, made of a `call` the client chose to make — so it
-  needs no endpoint and no `send`. The client re-calls `resize` after each reply to wait for the next
+  `cols, rows`. **Opcode 17 is WP-S3's obligation, not `consoled`'s**: nothing resizes over UART, and
+a parked *typed* call needs the WP-R1d extension first (question 163), so WP-B2a implements opcode 16
+and not this. The client re-calls `resize` after each reply to wait for the next
   change; a client that never calls it misses every change, which is why `size` exists and a TUI
   re-reads it whenever it redraws.
 - **A parked `resize` is keyed to the connection it arrived on, not to the server.** The answer is the size of *that* console: a server with one console (`consoled`) resumes every parked `resize` it holds on a change, but a server with many (`sshd`, one console per SSH channel, each with its own pty size and label set) resumes **only** the calls parked on the connection whose pty changed. Resuming them all would answer one channel's waiter with another channel's geometry — a labelled session reading an unlabelled one's terminal state, the read-up direction `check` exists to stop — so the parked call is keyed by (connection, console), and WP-S3 must keep enough state to do that. **A client re-calls `resize` after each reply** to wait for the next change; a second parked `resize` on one connection is a second waiter on the same event and is pointless but harmless.

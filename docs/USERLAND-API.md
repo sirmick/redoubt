@@ -199,14 +199,10 @@ No cell grid is maintained here; the user's terminal emulator does that.
 | `size()` | `{cols, rows} | {:error, :unknown}` | Asks `/dev/cons` for the `consol` `size` call and caches the answer; `{:error, :unknown}` when the server does not serve it |
 | `clear()` | `:ok` | Full clear + home cursor |
 | `move_to(col, row)` | `:ok` | 0-based |
-| `enter_alt_screen()` | `:ok` | `ESC[?1049h` |
-| `exit_alt_screen()` | `:ok` | `ESC[?1049l` |
-| `hide_cursor()` | `:ok` | `ESC[?25l` |
-| `show_cursor()` | `:ok` | `ESC[?25h` |
-| `set_color(fg, bg)` | `:ok` | 16-color or 256-color SGR sequences |
-| `sgr(attrs)` | `:ok` | Bold, inverse, underline; `attrs` is a keyword list |
-| `await_resize()` | `:ok` | Calls `consol`'s `resize` (opcode 17) and returns; the change arrives as a message to the caller (`{:console_resize, cols, rows}`) when the server answers (answer 160). It re-calls `resize` after each reply, so a caller that keeps handling the message keeps hearing about changes. Needs question 163. |
 | `write(data)` | `:ok` | Raw bytes to console; `IO.write` equivalent |
+| `await_resize(pid)` | `{:ok, ref}` | Calls `consol`'s `resize` (opcode 17) with a call that parks, and returns; the new size is delivered to `pid` as `{:console_resize, cols, rows}` when the server answers. It re-calls `resize` after each reply, so a process that keeps handling the message keeps hearing about changes. **Not in milestone 1** (question 163: a parked *typed* call is not buildable yet; WP-R1d adds it), and it is `sshd`'s obligation, not `consoled`'s (nothing resizes over UART). |
+
+Not in milestone 1: alt-screen, cursor-visibility and colour/SGR helpers. They are one `write/1` of an escape sequence away and nothing in the design consumes them; add them when a program needs them. (The `consol` `size` call and `clear`/`move_to`/`write` are what `Redoubt.Ed` needs.)
 
 ### `Redoubt.Console.Key` — keyboard decoder
 
@@ -217,7 +213,6 @@ Matches VT100/xterm/Linux function-key sequences.
 |----------|---------|-------|
 | `new()` | `%KeyDecoder{}` | Empty decoder state |
 | `feed(decoder, byte)` | `{decoder, [event]}` | Events: `:up`, `:down`, `:left`, `:right`, `:home`, `:end`, `:page_up`, `:page_down`, `{:f, n}`, `{:ctrl, char}`, `{:alt, char}`, plain `char` |
-| `feed_bytes(decoder, binary)` | `{decoder, [event]}` | Convenience over a binary |
 
 ### `Redoubt.Ed` — in-VM text editor
 
