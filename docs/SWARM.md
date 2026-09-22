@@ -44,7 +44,7 @@ the `subagent` tool.
    question is open. Changes need a HISTORY.md entry.
 4. **Done means:** the package's acceptance tests and attack cases pass in `cargo testbench`; the
    whole bench is still green; no undocumented `unsafe` and the ratchet does not rise; rv32 still
-   compiles; the three reviewers' findings are fixed or recorded.
+   compiles; and the package has had its **round of review** (rule 8).
 5. **Merging.** The orchestrator rebases the branch on `redoubt`, re-runs the bench, and merges one
    package at a time. One line per package in HISTORY.md.
 6. **Other sessions.** Any other session working in this repository finishes or pauses its work
@@ -53,6 +53,22 @@ the `subagent` tool.
    to a numbered question and answer (QUESTIONS.md, ANSWERS.md). An implementer is told the
    question and answer number it is building to; an instruction without one is not a design change,
    it is a guess.
+8. **Review is batched, and mandatory.** A package may merge on its acceptance gate alone, but it
+   is not *done* until it has been reviewed — by a **round** that covers one or more packages, not
+   necessarily one round per package. This is a deferral, never a waiver:
+   - A round is **bounded by risk**: a codec, docs, vectors or bench diff may share a round with
+     others; anything touching the TCB (kernel, loader, ABI, signing) or a security rule gets its
+     own round and a red-team reader.
+   - The orchestrator keeps a **review debt** list — every merged-but-unreviewed package and its
+     commit range — and runs it down before starting a new wave, or sooner if the debt touches the
+     TCB.
+   - A round's findings are fixed or recorded, the HISTORY line for each package is amended to say
+     it was reviewed and what the round found, and the debt entry is cleared. A package with review
+     debt is not counted as done in the claims table (mark it `merged (review due)`).
+   - The three angles are the design's: **red team** (attack it against the spec and the attack
+     suite), **simplifier** (what can be deleted), **editor** (code, comments and notes agree).
+     Order them by what the round is for: when the worry is over-engineering, the simplifier reads
+     first and alone, so its verdict is not argued away by the other two.
 
 ## Agents and workflows
 
@@ -106,7 +122,7 @@ it. A package whose work landed inside another is recorded as `folded` and gets 
 | M1 | review | wp-m1 | carried by wp-m0 (answers 28-101) |
 | W1 | merged | wp-w1 | d52896bee |
 | W2 | merged | wp-w2 | 3715363a9 |
-| W3a | merged | wp-w3 | 612a0a599 (the 9P opcode floor and the `copy_file` rename; answers 113, 155) |
+| W3a | merged (review due) | wp-w3 | 612a0a599; the 9P opcode floor and the `copy_file` rename (answers 113, 155) |
 | A1 | merged | wp-a1 | 44f1780a1 |
 | A2 | merged | wp-a2 | c98034520 |
 | A3 | folded | | into wp-k2 (answer 103; the `first` flag) |
@@ -138,5 +154,15 @@ it. A package whose work landed inside another is recorded as `folded` and gets 
 | C1 | waiting | | needs M1, K5, T1 |
 | E1 | waiting | | needs everything (milestone) |
 
-States: `waiting` (needs not merged), `ready`, `building`, `review`, `merged`, `folded` (landed inside
-another package).
+States: `waiting` (needs not merged), `ready`, `building`, `review`, `merged (review due)` (merged on
+its acceptance gate, round not yet run), `merged`, `folded` (landed inside another package).
+
+## Review debt
+
+Rounds owed, newest first (SWARM.md rule 8). Run down before a new wave.
+
+| Round | Range | What | Angles |
+| --- | --- | --- | --- |
+| R-1 | `6b224c0ab..612a0a599` | WP-W3a (codec generator: opcode floor + `copy_file`) | red team, simplifier, editor |
+| R-2 | `3e5b49f46^..HEAD` (docs) | the use case / tenets / confinement arc, answers 150-155, and GAME.md | simplifier first and alone, then red team, editor |
+| R-3 | `659adbdcd` | the swarm protocol change (resident architect, bounding rule) | simplifier |
