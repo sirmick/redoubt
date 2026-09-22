@@ -32,6 +32,12 @@ Do not read the design end to end, other branches, the git history beyond the st
 kernel source unless the finding needs it. If you find yourself reading files the task did not
 name, stop and write what you have. A short, concrete finding beats a complete survey.
 
+**The task's scope is the budget, so keep it to one question and a few files.** A reviewer given
+one question and two or three named files returns a verdict; the same reviewer given two questions
+or six files tends to spend its whole allowance thinking and return nothing. If you are handed a
+compound question, answer the first part, say the rest is out of scope for one pass, and end with a
+verdict. The orchestrator splits rounds for exactly this reason (`docs/SWARM.md` rule 8).
+
 ## What a finding is
 
 Exactly: the file and line, the concrete input, table, sequence or contradiction that triggers it,

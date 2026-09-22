@@ -706,3 +706,19 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   without its design having to be re-derived. One drift corrected: the Driver model bullet still
   recommended the `virtio-drivers` crate, which the restored section rejects under tenet 5; the
   bullet now says a virtio crate is judged like any dependency and points at the section.
+- **WP-D1 (`blkd`) recovered and merged** (`8681f2648`): the finished virtio-blk driver, which had sat
+  unmerged on `wp-d1` since 2026-09-19 because it was built against the pre-reorganization layout and
+  because the design section it was written to (`blkd: ranges, badges and messages`) was dropped when
+  the notes moved to `docs/`. The section was restored to `docs/IO-ARCHITECTURE.md` (`e553287ee`),
+  which let the wire codec regenerate, and the crate came across with path fixes only: `servers/blkd`,
+  `../../libs/rt`, no source changes. 46 tests pass unmodified, both widths build, the generator drift
+  test is green. Round R-D1: the editor found the fuzz manifest still pointed at `../../rt`, so its
+  three hostile-device targets (TENETS.md 6 requires one for every on-disk parser) silently did not
+  build — fixed in `a08aa9b30`; the red team judged all four TCB guarantees OK with no issues (DMA
+  address containment, hostile device values and the used-ring checks, range arithmetic overflow, and
+  GPT bounded allocation plus overlap refusal).
+- **Review rounds are split to one question per reader** (2026-09-22): a reviewer given one question
+  and two or three named files returns a verdict; the same reader given a compound question or six
+  files spends its whole allowance and returns nothing (five timeouts, then five verdicts after
+  splitting). The reviewer prompt says so, and `docs/SWARM.md` rule 8's rounds are cut to one
+  guarantee or one mechanical check each.

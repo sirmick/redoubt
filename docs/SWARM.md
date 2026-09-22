@@ -142,7 +142,7 @@ it. A package whose work landed inside another is recorded as `folded` and gets 
 | R4 | building | wp-r4 | bootfsd and consoled |
 | B1 | waiting | | needs R1b, R4 |
 | B2 | waiting | | needs B1, R3 |
-| D1 | building | wp-d1 | blkd; host side first |
+| D1 | merged | wp-d1b | 8681f2648; blkd recovered from wp-d1, reviewed R-D1 (editor BLOCK fixed; red team 4/4 OK) |
 | D2 | waiting | | needs D1, L1, R1b |
 | D3 | building | wp-d3 | netd and ipd |
 | S1 | merged | wp-s1 | 14bcc6e9d |
@@ -163,3 +163,4 @@ Rounds owed, newest first (SWARM.md rule 8). Run down before a new wave.
 | R-1 | `6b224c0ab..612a0a599` | WP-W3a (codec generator: opcode floor + `copy_file`) | **red team done** (2 P2, fixed in `17f11c8b2`); simplifier, editor owed |
 | R-2 | `3e5b49f46^..58601c588` | the use case / tenets / confinement arc, answers 150-155, and GAME.md | **simplifier + red team + editor done** (trims `58601c588`; device gap `8f5c08fdb`; citations fixed); debt cleared |
 | R-3 | `659adbdcd` | the swarm protocol change (resident architect, bounding rule) | **simplifier done** (`ca7a2a4ca`); debt cleared |
+| R-D1 | `e553287ee..8681f2648` | WP-D1b (`blkd` brought onto `redoubt`) | **editor done** (BLOCK: fuzz path, fixed `a08aa9b30`); **red team 4/4 OK**; simplifier running |
