@@ -193,12 +193,66 @@ impl Mmio {
         }
     }
 
+    /// Maps the device's registers and hands them back as a checked region, which is the only
+    /// way a driver reaches MMIO without `unsafe` of its own.
+    pub fn registers(&self) -> Result<Registers, Error> {
+        let (base, len) = self.map()?;
+        // The kernel maps whole pages, so a non-zero length is at least one page.
+        Ok(Registers { base, len, _not_sync: core::marker::PhantomData })
+    }
+
     /// `npages` contiguous zeroed pages the device may DMA to: (address, physical address).
     pub fn dma_alloc(&self, npages: usize) -> Result<(usize, u64), Error> {
         match syscall(&Call::DmaAlloc { device: self.0, npages })? {
             Return::Dma { addr, phys } => Ok((addr, phys)),
             _ => Err(Error::InvalidArgument),
         }
+    }
+}
+
+/// A device's registers, as [`Mmio::registers`] mapped them: the one safe way to reach MMIO, so
+/// a driver needs no `unsafe` (TENETS.md 2, the `unsafe` budget). Every access is bounds-checked
+/// against the length `map_device` reported, so an offset taken from a device tree, a manifest
+/// or a device is a refusal rather than a read outside the mapping.
+///
+/// Accesses are volatile: the compiler may neither drop, duplicate nor reorder them among
+/// themselves, which is what a device's registers need (reading one can pop a FIFO). A
+/// `Registers` is `Send` but not `Sync`: it may be moved to the thread that drives the device,
+/// and cannot be shared, so two threads never touch one device's registers through one value.
+#[derive(Debug)]
+pub struct Registers {
+    base: usize,
+    len: usize,
+    /// Makes the type `!Sync` (and keeps it `Send`).
+    _not_sync: core::marker::PhantomData<core::cell::Cell<u8>>,
+}
+
+impl Registers {
+    /// How many bytes of registers are mapped.
+    pub fn len(&self) -> usize { self.len }
+
+    pub fn is_empty(&self) -> bool { self.len == 0 }
+
+    /// The byte at `offset`, or `None` if it is outside the mapping.
+    pub fn read_u8(&self, offset: usize) -> Option<u8> {
+        if offset >= self.len {
+            return None;
+        }
+        // SAFETY: `base..base + len` is the device mapping the kernel made for this process in
+        // `map_device`; it stays mapped for the life of the process (a device mapping outlives
+        // its handle, KERNEL-SPEC.md), `offset < len` is checked just above, and a `u8` needs no
+        // alignment. `Registers` is not `Sync`, so no other thread holds this same region.
+        Some(unsafe { ((self.base + offset) as *const u8).read_volatile() })
+    }
+
+    /// Writes `value` at `offset`; false if it is outside the mapping.
+    pub fn write_u8(&self, offset: usize, value: u8) -> bool {
+        if offset >= self.len {
+            return false;
+        }
+        // SAFETY: as in `read_u8`; the mapping is read-write.
+        unsafe { ((self.base + offset) as *mut u8).write_volatile(value) };
+        true
     }
 }
 
