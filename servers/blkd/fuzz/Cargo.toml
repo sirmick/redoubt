@@ -1,0 +1,45 @@
+[package]
+name = "redoubt-blkd-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Host-only and out of the main workspace (its own workspace below), so the fuzzer's nightly
+# toolchain and libfuzzer never touch the machine build (TENETS.md 3 and 6). Run from
+# servers/blkd:
+#     cargo fuzz run -s none device
+#     cargo fuzz run -s none gpt
+#     cargo fuzz run -s none request
+# `-s none` because the address sanitizer adds nothing to safe Rust: the crate's only `unsafe` is
+# in `kernel.rs`, which no fuzz target can reach (it needs a real kernel).
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+redoubt-blkd = { path = ".." }
+redoubt-rt = { path = "../../../libs/rt" }
+
+[[bin]]
+name = "device"
+path = "fuzz_targets/device.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gpt"
+path = "fuzz_targets/gpt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "request"
+path = "fuzz_targets/request.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

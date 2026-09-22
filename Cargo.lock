@@ -521,6 +521,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "redoubt-blkd"
+version = "0.1.0"
+dependencies = [
+ "redoubt-rt",
+]
+
+[[package]]
 name = "redoubt-kernel"
 version = "0.9.38"
 dependencies = [
