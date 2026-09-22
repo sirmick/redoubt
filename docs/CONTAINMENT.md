@@ -149,7 +149,8 @@ Every system server that serves more than one account links one small library:
   later, rather than blocking or answering a default (NAMESPACES.md, Holding a call). Parking is
   charged to the **same** `Admission` the server's fids are, so a client cannot fill a server's fid
   table and its parked calls independently; a parked call has a server-side deadline and is answered
-  when it expires, and an abandoned one is replied to at once. The caps leave the open-call headroom
+  when it expires (a console read is the exception: it parks `FOREVER` and is reclaimed by its
+  caller's abandonment, NAMESPACES.md), and an abandoned one is replied to at once. The caps leave the open-call headroom
   ([`OPEN_CALL_HEADROOM`]) under `MAX_OPEN_CALLS` so parked calls never stop the server taking new
   ones (answers 81, 82).
 - **Byte quotas belong to the server.** The library carries `new_connection`'s `quota` and calls

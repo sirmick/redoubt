@@ -153,18 +153,25 @@ client that never sends them still sees a plain pipe.
   needs no endpoint and no `send`. The client re-calls `resize` after each reply to wait for the next
   change; a client that never calls it misses every change, which is why `size` exists and a TUI
   re-reads it whenever it redraws.
-- **One parked `resize` per connection is the client's to keep.** A second parked `resize` from the
-  same client is not refused but is pointless: it is a second waiter on the same event, and the
-  server answers both on a change. A server need keep no per-client resize state: it resumes every
-  parked `resize` it holds when the size changes.
-- **On a UART nothing resizes**, so `consoled` parks a `resize` call **for ever** (it is the same
-  wait as a read with no input) and answers it only if its size is ever set again, which over UART it
-  is not. It does not refuse opcode 17: a client that waits gets an honest wait, and one that would
-  rather not can call `size` instead. `sshd` is where a `resize` first gets an answer, from the SSH
-  window-change request (WP-S3).
+- **A parked `resize` is keyed to the connection it arrived on, not to the server.** The answer is the size of *that* console: a server with one console (`consoled`) resumes every parked `resize` it holds on a change, but a server with many (`sshd`, one console per SSH channel, each with its own pty size and label set) resumes **only** the calls parked on the connection whose pty changed. Resuming them all would answer one channel's waiter with another channel's geometry — a labelled session reading an unlabelled one's terminal state, the read-up direction `check` exists to stop — so the parked call is keyed by (connection, console), and WP-S3 must keep enough state to do that. **A client re-calls `resize` after each reply** to wait for the next change; a second parked `resize` on one connection is a second waiter on the same event and is pointless but harmless.
+- **On a UART nothing resizes**, so `consoled` parks a `resize` call **for ever**: it is the same
+  wait as a read with no input, and it is not answered until the size changes, which over UART it
+  never does. The server-side deadline that CONTAINMENT.md gives a parked call does not apply here —
+  `consoled` parks with `FOREVER`, because a console read waits on a person and what reclaims it is
+  the caller's abandonment, not a clock. It does not refuse opcode 17: a client that waits gets an
+  honest wait, and one that would rather not can call `size` instead. `sshd` is where a `resize`
+  first gets an answer, from the SSH window-change request (WP-S3).
 - **`resize` depends on question 163**: only the 9P `read` path can park today, so a parked *typed*
   call needs the typed dispatch to hand a request back (a small `libs/rt` extension). Until 163 is
-  answered, `size` (16) is implementable and `resize` (17) is specified but not buildable.
+  answered, `size` (16) is implementable and `resize` (17) is specified but not buildable. That
+  extension must answer a resumed typed call **only on the connection it arrived on** — a typed
+  message has no lend and no fid, so nothing is re-read on resume and the connection the call came
+  in on is the only thing that says which console it is for (see the keying rule above).
+- **A multi-channel server receives per channel.** An abandoned-call notice reaches only the thread
+  holding the call, on the endpoint the call came in on (KERNEL-SPEC.md), and a thread blocks in one
+  `receive`. So `sshd`, which parks `resize` calls from many channels, needs a serving thread per
+  channel — a thread parked on channel A never sees channel B's abandonment, and that call would
+  stay open holding a slot. `consoled` has one console and one endpoint, so it needs nothing special.
 
 ## The network tree (`/net`)
 `ipd` serves a Plan 9 style tree:
