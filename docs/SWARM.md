@@ -164,7 +164,9 @@ Rounds owed, newest first (SWARM.md rule 8). Run down before a new wave.
 
 | Round | Range | What | Angles |
 | --- | --- | --- | --- |
-| R-1 | `6b224c0ab..612a0a599` | WP-W3a (codec generator: opcode floor + `copy_file`) | **red team done** (2 P2, fixed in `17f11c8b2`); simplifier, editor owed |
+| R-1 | `6b224c0ab..612a0a599` | WP-W3a (codec generator: opcode floor + `copy_file`) | **complete**: red team (2 P2), simplifier (2 deletions), editor (mis-documented error-marker behaviour) all applied; debt cleared |
 | R-2 | `3e5b49f46^..58601c588` | the use case / tenets / confinement arc, answers 150-155, and GAME.md | **simplifier + red team + editor done** (trims `58601c588`; device gap `8f5c08fdb`; citations fixed); debt cleared |
 | R-3 | `659adbdcd` | the swarm protocol change (resident architect, bounding rule) | **simplifier done** (`ca7a2a4ca`); debt cleared |
 | R-R1c | `b8e456eeb..eae54bf1f` | WP-R1c (`libs/rt`: join `Parked` to the skeleton) | **complete**: editor P0 fixed (`eae54bf1f`); red team OK, no issues; debt cleared |
+| R-R4b | `89e05e360` | WP-R4b (`bootfsd` + `consoled`) | **complete**: bootfsd red team (2 P2, `8647a4fd9`); consoled park path reviewed directly after 3 timeouts; debt cleared |
+| R-T1 | `80cc5634d..HEAD` | the terminal change (push rule, `consol`, `Redoubt.Console`) | **complete**: security (cross-channel leak, `e888d88f1`); simplifier (5 trims); editor (`size()` cache contradiction); debt cleared |
