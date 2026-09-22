@@ -39,6 +39,8 @@ exclude = [
   "libs/littlefs/fuzz",
   # Host-only fuzz targets for redoubt-rt (see libs/littlefs/fuzz/Cargo.toml).
   "libs/rt/fuzz",
+  # Host-only fuzz targets for blkd (see servers/blkd/fuzz/Cargo.toml).
+  "servers/blkd/fuzz",
   # beamlet, the BEAM VM for the OTP userland: its own workspace (host tools and `no_std`
   # target crates, its own test toolchain), built by its own `cargo` invocations.
   "userland/otp",

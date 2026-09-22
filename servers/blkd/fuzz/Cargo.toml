@@ -6,7 +6,7 @@ edition = "2021"
 
 # Host-only and out of the main workspace (its own workspace below), so the fuzzer's nightly
 # toolchain and libfuzzer never touch the machine build (TENETS.md 3 and 6). Run from
-# redoubt/blkd:
+# servers/blkd:
 #     cargo fuzz run -s none device
 #     cargo fuzz run -s none gpt
 #     cargo fuzz run -s none request
@@ -18,7 +18,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 redoubt-blkd = { path = ".." }
-redoubt-rt = { path = "../../rt" }
+redoubt-rt = { path = "../../../libs/rt" }
 
 [[bin]]
 name = "device"
