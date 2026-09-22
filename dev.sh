@@ -77,10 +77,10 @@ mounts=(
 
 # Inside the container: pi's config directory and the sandbox's own SSH identity.
 PI_CONFIG_DIR="/config/pi"
-SSH_DIR="/config/ssh"
+SSH_DIR="${CONFIG}/ssh"
 GIT_SSH_KEY="${SSH_DIR}/id_ed25519"
 GIT_KNOWN_HOSTS="${SSH_DIR}/known_hosts"
-GIT_CONFIG_FILE="/config/gitconfig"
+GIT_CONFIG_FILE="${CONFIG}/gitconfig"
 
 # ---- the persistent SSH + git config --------------------------------------
 # The sandbox has its own identity (never the host's) and refuses unknown host keys, so
@@ -142,8 +142,8 @@ docker run --rm "${tty_args[@]}" \
     -e PI_CODING_AGENT_DIR="${PI_CONFIG_DIR}" \
     -e CARGO_HOME=/work/.cargo \
     -e RUSTUP_HOME=/work/.rustup \
-    -e GIT_SSH_COMMAND="ssh -i ${GIT_SSH_KEY} -o IdentitiesOnly=yes -o UserKnownHostsFile=${GIT_KNOWN_HOSTS} -o StrictHostKeyChecking=yes" \
-    -e GIT_CONFIG_GLOBAL="${GIT_CONFIG_FILE}" \
+    -e GIT_SSH_COMMAND="ssh -i /config/ssh/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=/config/ssh/known_hosts -o StrictHostKeyChecking=yes" \
+    -e GIT_CONFIG_GLOBAL="/config/gitconfig" \
     -e TERM="${TERM:-xterm-256color}" \
     "${mounts[@]}" \
     -w /work \

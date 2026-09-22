@@ -171,11 +171,11 @@ logout or a restart, not data loss.
 Restart and reboot rules: INIT.md.
 
 ## Covert and timing channels
-For ordinary multi-tenancy the goal is low, stated, audited bandwidth. **For a protected label set
-against a colluding lower domain the goal is zero**: a pre-agreed code makes a bounded channel as good
-as an unbounded one (one bit can be a key), so the requirement is non-observability — no shared
-observable resource — which is hardware (TENETS.md, The high/low pair; PLATFORM-FPGA.md). The attacker
-is assumed to have a perfect clock (TENETS.md).
+**Covert communication is out of scope**, like microarchitectural side channels (TENETS.md, The
+adversary). On one machine, power, heat, EM and the clock couple any two domains, so no OS can prevent
+or bound it. Software closes every *intentional* flow (the channel table below); covert channels are
+the physical layer's, and the only zero is placement. The attacker is assumed to have a perfect clock
+(TENETS.md).
 - **Secrets are handled by constant-time code** (`keyd`, crypto everywhere), so there is nothing
   secret-dependent to time.
 - **No microarchitectural state is shared between budgets:** one budget per core, RTL partitioning,
@@ -211,10 +211,9 @@ is assumed to have a perfect clock (TENETS.md).
   server CPU (above).
   On QEMU and ordinary hardware, none of the microarchitectural channels are closed.
 
-**The channel table.** Every resource that can carry a signal between two budgets is closed by
-software, closed by hardware (RTL), or a stated residual. **No residual permits co-residence for a
-protected label set** (TENETS.md, The high/low pair): a protected domain either has the resource to
-itself or shares it only with equal labels.
+**The channel table.** Software-closed rows are the OS's claim: an intentional path here is a hard
+requirement, and a leak is a design hole. The rest are out of scope (RTL-reduced or physical), with
+placement as the only zero (TENETS.md, The high/low pair).
 
 | Resource | Closed by | For a protected label set |
 | --- | --- | --- |
@@ -226,9 +225,10 @@ itself or shares it only with equal labels.
 | read-down from a shared unlabelled volume | software (policy) | forbidden; input is steward push |
 | a shared system-server instance (CPU, caches, quota, admission slots) | policy: one instance per domain | no sharing |
 | a shared endpoint (R2's round-robin cursor) | policy: one endpoint per domain | no sharing |
-| the scheduler (one stride queue) | hardware: one budget per core | RTL |
-| CPU caches, L2, memory bandwidth | hardware | RTL |
+| the scheduler (one stride queue) | hardware: one budget per core | RTL (reduced, not zero) |
+| CPU caches, L2, memory bandwidth | hardware | RTL (reduced, not zero) |
 | disk, NIC, GPU | hardware, or one instance per domain | RTL or no sharing |
+| power delivery, heat, EM emission, shared clock | **out of scope** — physical substrate | placement only: do not co-locate |
 
 ## The executable security model
 Before the kernel is built, the design is a Rust crate implementing **exactly** the objects, system

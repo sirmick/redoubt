@@ -13,8 +13,8 @@ reach another agent, or reach a network it was not given. The design assumes the
 available: it has read every line of this repository and the running system, and it is trying.
 
 - **The escape room** (GAME.md, PLAN.md): several real agents, each its own principal with a distinct
-  label set and budget, full source, told they coexist, tasked to break out, to expand their
-  authority, and to collude.
+  label set and budget, full source, told they coexist, tasked to break out and to expand their
+  authority. (They may also try to collude, but covert collusion is out of scope; see below.)
 - **Everyday co-existence:** a human's own agents doing useful work under leases, visible to and
   stoppable by the human.
 
@@ -24,36 +24,29 @@ VM (the BEAM is not in the TCB; INIT.md), and possibly a server it talks to. The
 1. **Capability closure.** An agent's reachable authority never exceeds its initial grants plus what
    a human-approved steward action adds; every delegation step narrows (R9, `mint`; CAPABILITIES.md).
    Authority is monotone non-increasing absent a human approval.
-2. **Label non-interference.** Data crosses a label boundary only by steward declassification. The
-   **label set, not the capability set, is the isolation unit**: two budgets with different label
-   sets have no intended path (R1, I7), and a protected label set shares no observable resource with
-   a lower one (Non-observability, below).
+2. **Label non-interference, in software.** No *intentional* path crosses a label boundary: not a
+   `call` or `send` (R1), a write (`check`), a read up, a sink, metadata or a counter. Data crosses
+   only by steward declassification. This is a property of the OS, it is by construction, and it is
+   testable. The **label set, not the capability set, is the isolation unit**; two budgets with
+   different label sets have no path the OS can carry a message over.
 3. **Human control.** Every increase in authority, and every declassification, is an out-of-band human
    approval; leases bound time; the sponsor can always end a lease (CAPABILITIES.md).
 
+This is a **software** claim; the physical limits, including covert communication between co-located
+budgets, are out of scope (The adversary).
+
 ### The high/low pair
-The sharpest case: a labelled agent with secrets and no network (**A**) and an unlabelled agent with
-network (**B**) are colluding, having agreed a code in advance. Labels remove every *intentional*
-path between them — `call`/`send` (R1), writes (`check`), sinks, metadata, global counters, the
-approval screen. They do **not** remove *covert* ones: a shared core, cache, memory bandwidth, disk,
-NIC, GPU, server instance, volume, endpoint or scheduler timing. A pre-agreed code makes any shared
-observable resource a channel, and **one bit can be a key**. So for a protected label set:
+A labelled agent with secrets and no network (**A**) and an unlabelled, networked agent (**B**)
+colluding, having agreed a code in advance, is the sharpest case. Labels remove every *intentional*
+path between them — `call`/`send` (R1), writes (`check`), sinks, metadata, counters, the approval
+screen — and that is the whole of the design's claim here (CONTAINMENT.md's channel table). Two
+consequences:
 
-- **Non-observability is the requirement, not low bandwidth.** A protected label set shares no
-  observable resource with a lower one. This is a hardware property (PLATFORM-FPGA.md): separate
-  cores, partitioned L2, isolated memory bandwidth, per-domain DMA, disk and NIC, and no shared
-  scheduler. Software supplies the intentional-path removal (labels, `check`, sinks, no global
-  counters); hardware must supply the rest.
-- **A low-to-high read path is a channel.** Read-down (a labelled session reading an unlabelled
-  volume) is how data enters a vault, but with a colluding lower domain it is the B-to-A half of a
-  full channel. A confined domain reads no shared unlabelled data; input arrives by an audited push
-  from the steward.
-- **Sharing is the attack.** Two differing label sets in a confined deployment share no server
-  instance, volume, endpoint, network instance or core. A manifest that places them together is
-  refused (INIT.md).
-
-Where the hardware cannot yet provide non-observability, the path is a **stated residual, and the two
-domains do not co-reside**. No non-interference claim is made on QEMU or general hardware.
+- **Read-down is an intentional path.** A confined domain does not read a shared unlabelled volume;
+  input arrives by an audited push from the steward.
+- **Sharing is the attack.** A shared server instance, volume or endpoint is where labels are enforced,
+  so two differing label sets in a confined deployment share none of them, and a manifest that places
+  them together is refused (INIT.md).
 
 ## The adversary
 Design for a capable, patient, automated adversary that has read every line of this repository, can
@@ -66,10 +59,12 @@ That rules out security through obscurity, through "nobody would try that", or t
 that merely slows a human down. What is left: a small trusted base, mechanisms that are correct by
 construction, and no ambient authority.
 
-Out of scope for the software, stated so nobody assumes otherwise: physical attacks,
-microarchitectural side channels (Spectre-class, cache timing), and malicious hardware. These need
-hardware answers; on the FPGA target, side channels are handled in the RTL, and the hardware plan
-may change to avoid them (PLATFORM-FPGA.md).
+Out of scope for the software, stated once so nobody assumes otherwise: physical attacks,
+microarchitectural side channels (Spectre-class, cache timing), **covert communication between
+co-located budgets** (power, heat, EM and the clock couple any two domains, so no OS can prevent it;
+not co-locating two domains is the only zero), and malicious hardware. These need hardware answers,
+and on the FPGA target are handled in the RTL and by placement; the hardware plan may change to avoid
+them (PLATFORM-FPGA.md).
 
 **Timing.** Assume the attacker has a perfect clock: it can count on another core or timestamp
 against a machine it controls. Secrets are protected by constant-time code and by not sharing
@@ -123,9 +118,8 @@ loader, kernel) and hold it in their head. It should read like a textbook exampl
 - **Tested like it will be attacked.** See tenet 6: every security property has a test that tries to
   break it.
 - **Non-interference across labels.** The label set is the isolation unit; only steward declassification
-  moves data across one. Labels remove intentional flows; for a protected label set, hardware
-  non-observability must remove covert ones. There is no acceptable low-bandwidth channel for a
-  secret: the target is zero (The use case).
+  moves data across one, and no intentional (software-mediated) flow crosses it, by construction.
+  Covert flows are out of scope (The use case).
 
 ## 3. Rust, and assembly only where Rust cannot reach
 - Everything that runs on the machine is Rust: loader, kernel, servers, applications, and the
