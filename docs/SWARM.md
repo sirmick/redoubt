@@ -141,8 +141,10 @@ it. A package whose work landed inside another is recorded as `folded` and gets 
 | R2 | waiting | | needs R1b, K4 |
 | R3 | waiting | | needs R2, W1, K3, K5; carries the `confined` manifest |
 | R4 | merged | wp-r4b | 69466924c; bootfsd and consoled recovered from wp-r4; reviewed R-R4b |
-| B1 | waiting | | needs R1b, R4 |
-| B2 | waiting | | needs B1, R3 |
+| B1 | waiting | | needs R1b, R4 (both merged) |
+| B2 | waiting | | IEx on the UART; needs B1, R3 |
+| B2a | waiting | | the console library (`consol` codec, `Redoubt.Console`/`.Key`, answer 162); needs B2, R4b |
+| B2b | waiting | | `Redoubt.Ed`, `Shell.top()`; needs B2a |
 | D1 | merged | wp-d1b | 8681f2648; blkd recovered from wp-d1, reviewed R-D1 (editor BLOCK fixed; red team 4/4 OK) |
 | D2 | waiting | | needs D1, L1, R1b |
 | D3 | building | wp-d3 | netd and ipd |

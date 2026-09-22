@@ -435,6 +435,23 @@ not needed.
   milestone 1, step 3).
 - Needs: WP-B1, WP-R3.
 
+**WP-B2a. The console library (answer 162).** Size S.
+- Reads: NAMESPACES.md (The console), USERLAND-API.md (The console and the `Platform` contract).
+- Delivers: the `consol` codec (`cargo run -p redoubt-wire-gen`); `consoled` answering the `size`
+  call from its `cols,rows` manifest argument (default 80x24, the opaque-string rule of answer 122);
+  `Redoubt.Console` and `Redoubt.Console.Key` in pure Elixir; the Redoubt platform's
+  `console_size` via the `size` call (answer 162; `Some((cols, rows))` or `None`, never a silent
+  80x24).
+- Accepted when: a bench case asks `/dev/cons` for `size` and gets the manifest's size; a key
+  sequence decodes to the right events; a server without `consol` yields `{:error, :unknown}`.
+- Needs: WP-B2, WP-R4b.
+
+**WP-B2b. Redoubt.Ed and Shell.top().** Size S.
+- Delivers: `Redoubt.Ed` (a TUI editor over `/dev/cons`) and `Redoubt.Shell.top()`.
+- Accepted when: a bench case opens `Ed` on `/dev/cons`, navigates with arrow keys, edits a line,
+  saves and exits.
+- Needs: WP-B2a. (Split from WP-B2 by answer 161: one acceptance per package.)
+
 ### Track D: storage and network
 **WP-D1. blkd.** Size M. virtio-blk driver (the `virtio-drivers` crate), partition table,
 block-range handles, validation of every ring index and length.
@@ -572,7 +589,7 @@ building:                K4 (kernel track);  R4, D1, D3
 the ready set:           K5 (behind K4 on the Hotspots)
 kernel, serialized:      K4 -> K5 -> K6 (after R1b)
 runtime:                 R1c (merged) -> R4 (merged);  R2 (after K4) -> R3 (after R2, W1, K3, K5)
-beamlet:                 B1 (after R1b, R4) -> B2 (after B1, R3)
+beamlet:                 B1 (after R1b, R4) -> B2 (after B1, R3) -> B2a (after B2, R4b) -> B2b (after B2a)
 storage and network:     D1 (merged) -> D2 (after D1, L1);  D3 (after R1b, K3, W2)
 security:                S1 (after R1b) -> S2 (after R3, B1, D2);  S3 (after D3, S1, S2)
 conformance:             C1 (after M1, K1-K5, T1)

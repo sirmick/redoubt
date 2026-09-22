@@ -779,3 +779,35 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   `mint` creates it) and that `read` inherited its pre-`seal` safety from `walk` — both now explicit
   (`8647a4fd9`). `consoled`'s park path was reviewed directly after three reviewer timeouts: parked
   calls are bounded by admission, freed on input, abandonment or expiry, and never resumed twice.
+- **The terminal-handling change made consistent** (2026-09-22, architect): an uncommitted change
+  added console typed operations, a `Redoubt.Console`/`Redoubt.Console.Key`/`Redoubt.Ed` inventory and
+  an implemented `Platform::console_size`, with four defects against the frozen design. **Question
+  162 answered:** `console_size` is `Option` with a `None` default (as implemented), the Redoubt
+  platform answers it by asking `/dev/cons` for the `consol` `size` call, `consoled` takes its size as
+  the manifest argument `cols,rows` (default 80×24), and `USERLAND-API.md` now owns the Redoubt side
+  of the `Platform` contract. The malformed console table became a real WIRE.md table
+  (`<!-- wire: consol ninep -->`, opcode 16 `size` → `cols: u16, rows: u16`); its codec must be
+  regenerated (`cargo run -p redoubt-wire-gen`), which WP-B2a owns. **Question 160 (open, owner):**
+  the server-to-client `resize` push has no channel — a 9P connection is not an endpoint and
+  milestone 1's typed messages are all `call`s — so the Rec is to drop it from milestone 1 (nothing
+  resizes on a UART) and, when a push is needed, give it a per-channel endpoint with `sshd`.
+  **Question 161 (open, orchestrator):** WP-B2 (Size S) had grown to carry an IEx bring-up plus a
+  terminal library plus a TUI editor; the Rec splits it into B2, B2a and B2b. `libvterm/` is recorded
+  as reference-only.
+- **The terminal-handling change made consistent; WP-B2 split (answers 160-162)** (2026-09-22): a
+  console change arrived as uncommitted edits — a typed console table, `Redoubt.Console`/`.Key`/`Ed`,
+  a grown WP-B2, and an already-implemented `Platform::console_size` — with four defects against the
+  frozen design, all now fixed or escalated. **162** (answered): `console_size` is `Option<(u16,u16)>`
+  and the Redoubt side is pinned — the platform asks `/dev/cons` with the `consol` `size` call and
+  caches it; the trait default stays `None`, so a platform that says nothing is honest rather than
+  claiming 80x24; `USERLAND-API.md` now owns the Redoubt side of the contract while
+  `userland/otp/DESIGN.md` keeps owning the trait. The console table became a real WIRE.md table
+  (`<!-- wire: consol ninep -->`, opcode 16 `size` -> `cols: u16, rows: u16`), so it generates.
+  **160** (open, the owner's): a server-to-client `resize` push has no mechanism — a 9P connection is
+  not an endpoint and every milestone 1 typed message is a `call` — so the recommendation is to drop
+  `resize` from milestone 1 (nothing resizes on a UART) and add it with `sshd`, as a per-channel
+  endpoint. **161** (decided by the orchestrator): WP-B2 had grown from IEx-on-UART into three
+  packages, so it splits into **B2** (IEx, its original scope), **B2a** (the console library: the
+  `consol` codec, `Redoubt.Console`/`.Key`, answer 162) and **B2b** (`Redoubt.Ed`, `Shell.top()`),
+  one acceptance each. `libvterm/` (an untracked C tree) is recorded as reference-only and added to
+  `.gitignore` beside `/reference/`, so tenet 3 is not violated and `git add -A` cannot sweep it in.

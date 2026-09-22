@@ -103,6 +103,30 @@ nothing to read parks** (Holding a call, below): it does not return 0, which wou
 like a closed console, and it is not an error the client must poll. `consoled` is the first server
 that must wait, which is what proves the join.
 
+**A console server also serves one typed operation** — the size query — on the same endpoint, so a
+TUI can lay out its screen. It is a `call` like every milestone 1 typed message (WIRE.md), and it
+changes nothing about the byte-stream contract: a client that never sends it still sees a plain pipe.
+
+<!-- wire: consol ninep -->
+| Opcode | Message | Fields | Reply |
+| --- | --- | --- | --- |
+| 16 | `size` | - | `cols: u16`, `rows: u16` |
+
+<!-- wire-errors: consol -->
+| Code | Error |
+| --- | --- |
+
+- The opcodes start at 16 because a console server is a 9P server and `ninep_common` reserves 1-15
+  (WIRE.md).
+- `cols` and `rows` are the terminal's size in cells. `consoled` answers from its manifest argument
+  `cols,rows` (default 80×24; INIT.md's arguments are opaque strings each server's note defines);
+  `sshd` answers from the SSH pty-req (WP-S3). A server that serves no `consol` (an older console, a
+  file) refuses opcode 16 as `Malformed`, and the client answers "unknown".
+- **There is no `resize` push in milestone 1** (question 160). Over UART there is no resize at all,
+  and a push needs a channel a 9P connection does not provide; a TUI re-reads `size` when it redraws.
+  A push, when something needs one, is a per-channel endpoint the client receives on (a `send`), and
+  it arrives with the `sshd` work.
+
 ## The network tree (`/net`)
 `ipd` serves a Plan 9 style tree:
 ```

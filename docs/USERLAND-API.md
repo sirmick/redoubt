@@ -158,6 +158,59 @@ pipe(~w(cat log.txt | grep error | wc -l))
 pair. The shell VM serves the pipes; when a stage exits, its stdout pipe is
 disconnected, the next stage reads EOF, and so on.
 
+### The console and the `Platform` contract
+
+This note owns the **Redoubt side** of beamlet's `Platform` trait: what each console method must
+answer here, and which `Redoubt.*` module wraps it. `userland/otp/DESIGN.md` owns the trait itself.
+
+- **`console_write`** writes output bytes to the VM's `/dev/cons` connection (a 9P write). No
+  ANSI interpretation here: the user's terminal emulator does that.
+- **`console_read`** is non-blocking and returns `ConsoleInput` (`Nothing`, `Data`, `Eof`); a read of
+  the `/dev/cons` connection with nothing to read **parks** (NAMESPACES.md, Holding a call), so the
+  VM is never blocked and `Eof` means the connection ended, not "no input yet".
+- **`console_size`** returns `Some((cols, rows))` when the platform knows a size and `None` when it
+  does not; **the trait default is `None`**, so a platform that says nothing is honest rather than
+  silently claiming 80×24 (answer 162). On Redoubt it asks the `/dev/cons` connection for the
+  `consol` `size` call (opcode 16, NAMESPACES.md, The console) and caches the answer. A server that
+  does not serve `consol` refuses the opcode as `Malformed`, and the platform answers `None`.
+  `Redoubt.Console.size/0` reports that as `{:error, :unknown}`.
+- **There is no resize push in milestone 1** (question 160): a TUI re-reads `size()` when it redraws.
+  A push needs a channel a 9P connection does not provide and arrives with `sshd` (WP-S3), the one
+  place a terminal size can change.
+- **`libvterm/`** (an untracked C tree at the repository root) is **reference only**: its terminal
+  state machine and key tables are read for the Elixir decoders below, never built and never linked
+  (TENETS.md 3 — no C in the build). It is a reading source, like the littlefs C reference for
+  `libs/littlefs`.
+
+### `Redoubt.Console` — ANSI terminal client
+
+Pure Elixir. Emits ANSI escape sequences to `/dev/cons` and interprets key sequences from it.
+No cell grid is maintained here; the user's terminal emulator does that.
+
+| Function | Returns | Notes |
+|----------|---------|-------|
+| `size()` | `{cols, rows} | {:error, :unknown}` | Asks `/dev/cons` for the `consol` `size` call and caches the answer; `{:error, :unknown}` when the server does not serve it |
+| `clear()` | `:ok` | Full clear + home cursor |
+| `move_to(col, row)` | `:ok` | 0-based |
+| `enter_alt_screen()` | `:ok` | `ESC[?1049h` |
+| `exit_alt_screen()` | `:ok` | `ESC[?1049l` |
+| `hide_cursor()` | `:ok` | `ESC[?25l` |
+| `show_cursor()` | `:ok` | `ESC[?25h` |
+| `set_color(fg, bg)` | `:ok` | 16-color or 256-color SGR sequences |
+| `sgr(attrs)` | `:ok` | Bold, inverse, underline; `attrs` is a keyword list |
+| `write(data)` | `:ok` | Raw bytes to console; `IO.write` equivalent |
+
+### `Redoubt.Console.Key` — keyboard decoder
+
+State machine fed by raw bytes read from `/dev/cons`. Returns structured key events.
+Matches VT100/xterm/Linux function-key sequences.
+
+| Function | Returns | Notes |
+|----------|---------|-------|
+| `new()` | `%KeyDecoder{}` | Empty decoder state |
+| `feed(decoder, byte)` | `{decoder, [event]}` | Events: `:up`, `:down`, `:left`, `:right`, `:home`, `:end`, `:page_up`, `:page_down`, `{:f, n}`, `{:ctrl, char}`, `{:alt, char}`, plain `char` |
+| `feed_bytes(decoder, binary)` | `{decoder, [event]}` | Convenience over a binary |
+
 ### `Redoubt.Ed` — in-VM text editor
 
 A TUI editor written in Elixir, running as a GenServer inside IEx. Uses ANSI

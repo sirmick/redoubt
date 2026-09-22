@@ -20,5 +20,8 @@ never a second copy: a copy goes stale and becomes a second source of truth. Ter
 - `RESERVED_TYPES` is correct, not over-broad (answer 155).
 - `redoubt-rt`'s records are already backed; WP-W3b was dropped (answer 154).
 - A docs table edit can break generation with no code change; run `cargo test -p redoubt-wire-gen`.
+- The console's `size` is a `call` (opcode 16), not a push: a 9P connection is not an endpoint, so a
+  server cannot push down it (question 160, open). `console_size` is `Option`, default `None`
+  (answer 162).
 - Bound every long-lived role: an unbounded reader returns nothing (orchestrator.md, architect.md).
 - A branch built before the notes reorganisation may be blocked by a **lost design section**, not stale code: `blkd`'s section, `bootfs`'s table, and a superseded sentence repeated in three notes each blocked a port. Check the design first.

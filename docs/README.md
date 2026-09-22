@@ -37,6 +37,8 @@ trust domain, no shared read-down) is designed and lands with WP-R3, WP-D2, WP-D
 | [INIT.md](INIT.md) | After the kernel: init, the boot manifest, the steward, keyd, sshd, restarts, the startup block; the worked example. |
 | [NAMESPACES.md](NAMESPACES.md) | 9P, per-process namespaces, `/dev/cons`, `/net`, filesystem servers, littlefs. |
 | [USERLAND.md](USERLAND.md) | The Elixir interface: beamlet's natives, file I/O, pipes, launching, the shell. |
+| [USERLAND-API.md](USERLAND-API.md) | The concrete Elixir module/function inventory (draft), and the Redoubt side of beamlet's `Platform` contract. |
+| [OS-API.md](OS-API.md) | The Rust API facade the servers and the beamlet platform link (draft). |
 | [WIRE.md](WIRE.md) | Byte layouts: 9P's encoding for every message, the typed-message table format and replies, strict JSON for files people write. |
 | [PACKAGES.md](PACKAGES.md) | Launching and the loader stub, what is signed, signer trust, per-principal packages, system updates. |
 | [IO-ARCHITECTURE.md](IO-ARCHITECTURE.md) | Drivers (virtio), DMA, storage and network stacks; the "Later" designs. |
