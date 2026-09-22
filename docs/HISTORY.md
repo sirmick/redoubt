@@ -676,6 +676,14 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   domain. The design's mechanism is unchanged; the answers are clarifications and detail, applied to
   TENETS.md, CONTAINMENT.md, CAPABILITIES.md and INIT.md, with CONTAINMENT.md gaining the Push
   section. WP-S2 and WP-R3 also gain these details; the orchestrator files the follow-up.
+- **WP-W3a merged** (`612a0a599`): the generator now understands `<!-- wire: NAME ninep -->` and
+  refuses a marked table whose opcode is below 16 (`ninep_common` reserves 1-15 on a 9P endpoint,
+  answer 113), with an unmarked table still starting at 1; and the `fsd` message `copy` became
+  `copy_file` (answer 155) so the table generates. Regenerating produced `fsd`'s codec for the first
+  time (`libs/wire/src/proto/fsd.rs`, `libs/wire/elixir/proto/fsd.ex`) and corrected stale generation
+  paths in the headers of the other generated files. `cargo test -p redoubt-wire -p redoubt-wire-gen`
+  is green on `redoubt` (was 13 passed, 2 failed in the generator alone); rv32 builds. WP-W3b is
+  deleted (answer 154).
 - **WP-W3 split: W3b dropped, and `fsd`'s `copy` renamed `copy_file`** (2026-09-22, answers
   154-155). WP-W3 bundled two deliverables, and one had nothing to build: the runtime's records
   are `Record([0; N])` stack arrays, already written and so already backed, and the

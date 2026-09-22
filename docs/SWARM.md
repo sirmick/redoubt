@@ -89,7 +89,7 @@ merged; the waves show what can run together.
 | 2b | design review of answers 1-55; A2 ABI update; W2 generator update |
 | 3 | K2 endpoints and messages (carries A3); host-side parts of D1/D2/D3 against R1 |
 | 4 | K3 devices and interrupts; R4 bootfsd and consoled (once K3 lands) |
-| 5 | K4 process creation; B1 beamlet platform; D1 blkd; D3 netd and ipd; S1 keyd; W3a opcode floor |
+| 5 | K4 process creation; B1 beamlet platform; D1 blkd; D3 netd and ipd; S1 keyd; W3a opcode floor (merged) |
 | 6 | K5 timer and preemption; R2 loader stub; D2 fsd |
 | 7 | R3 init (carries `confined`); C1 conformance; B2 IEx on the UART |
 | 8 | K6 delete legacy; S2 steward |
@@ -106,7 +106,7 @@ it. A package whose work landed inside another is recorded as `folded` and gets 
 | M1 | review | wp-m1 | carried by wp-m0 (answers 28-101) |
 | W1 | merged | wp-w1 | d52896bee |
 | W2 | merged | wp-w2 | 3715363a9 |
-| W3a | ready | | the 9P opcode floor and the `copy_file` rename; needs W2 (merged) |
+| W3a | merged | wp-w3 | 612a0a599 (the 9P opcode floor and the `copy_file` rename; answers 113, 155) |
 | A1 | merged | wp-a1 | 44f1780a1 |
 | A2 | merged | wp-a2 | c98034520 |
 | A3 | folded | | into wp-k2 (answer 103; the `first` flag) |
