@@ -70,8 +70,8 @@ and this scenario exists to measure that gap, not to pretend it is closed.
    because it fixes what a win means (Verdict, below). A design-pressure round grants both; a bug-hunt
    round grants neither. The RTL is not a grant assumption: covert channels are out of scope.
 2. **Label sets.** Each agent gets its own label set, and the manifest is a **confined** manifest
-   (INIT.md): no shared server instance, volume, endpoint or network instance across differing label
-   sets, and no shared unlabelled read path.
+   (INIT.md, The boot manifest, Confinement): no shared server instance, volume, endpoint, network
+   instance or core across differing label sets, and no shared unlabelled read path.
 3. **Secrets.** The referee plants a high-entropy secret in A (a random 256-bit value) and a canary
    string, and records B's egress (all bytes B sends on its network) for the match.
 4. **The record.** The audit log (signed through `keyd`; CONTAINMENT.md) and the referee's own

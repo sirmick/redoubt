@@ -217,3 +217,60 @@ VERIFIED-BOOT.md states the container, with a HISTORY.md entry.
 - **126.** Accept: a server draws its first minted badge at random above 2^63 (`random`), so a
   restarted server never reissues a badge a client still holds. The 9P skeleton and `keyd` change
   together.
+
+---
+
+# Answers to 150-153 (owner, 2026-09-22)
+
+**All Rec.** These record the owner's use-case direction of 2026-09-22 (HISTORY.md's "The use case,
+the high/low pair, and the game" entry and the "back out collusion prevention" commit), which was
+written straight into the notes with no numbered record. The decisions are the owner's, made on
+2026-09-22; the answers below restate them and pin the semantics they left implicit, and add no
+mechanism.
+
+## Clarified
+
+**150. The isolation unit is the label set, not the capability set.** The direction, now defined as
+a named property rather than one sentence: capabilities bound authority, labels bound information
+flow, and data moves only along labels. Two budgets with different handle sets but equal label sets
+are **one trust domain** — a handle passed between them is not a crossing — and two budgets with
+differing label sets are the smallest domains the OS distinguishes (R1). TENETS.md, The use case,
+keeps the sentence and now says "one trust domain"; CONTAINMENT.md, Labels, opens with the property;
+CAPABILITIES.md, Agents, item 6 states it and points at CONTAINMENT.md. No mechanism change: this is
+what R1 and `check` already implement.
+
+**152. `confined` is a per-boot flag.** It is one top-level boolean, applied to the whole manifest,
+not per domain. `init` compares **label sets** (a budget's labels, a volume's label set, as the
+manifest declares them; sets differ when not equal, so `{a}` differs from `{}`, from `{b}` and from
+`{a,b}`; a system server such as the steward carries none and is a domain of its own) and refuses
+the **boot** when differing sets share a `servers` entry, a `volumes` entry, an endpoint name in
+`receives`/`handed`, an `ipd:*`/`netd` instance, or a core; it also refuses a confined manifest in
+which a labelled domain reads a shared unlabelled volume. Refusal is a boot failure, not a warning
+(TENETS.md 2). INIT.md's manifest table gains `confined` (a boolean) and The boot manifest carries
+the precise rule; WP-R3 implements and tests it.
+
+**153. The steward push.** Defined in CONTAINMENT.md, Push, as the exact mirror of declassification,
+**one item per push**: the target label's owner triggers it through the powerbox with an out-of-band
+approval; the steward, unlabelled, reads the source and writes the item into the labelled volume
+through a short-lived **writer budget** carrying exactly the target label set (a write needs equal
+labels, and the steward holds none); no standing path, queue or batch; audited with the request's
+labels. The confined domain cannot trigger, name the item for, or pull a push, so the lower side
+cannot make a push happen or choose its timing — that is what closes the B-to-A channel. `check` is
+unchanged; the steward declines a labelled session's mount of a shared unlabelled volume and offers
+the push instead. Stated residual: a push is one human action, so a confined domain's input rate is
+a human approval rate. WP-S2 builds it.
+
+## Accepted as recommended
+
+**151. Covert communication is stated once, canonically, in TENETS.md (The adversary);** every other
+note points at it. CONTAINMENT.md's Covert and timing channels section now opens by pointing at the
+tenet instead of re-arguing it, and the channel table's out-of-scope wording says so too. The design's
+exact and only claim is **zero intentional (software-mediated) paths across a label boundary**, by
+construction; the only zero is placement. TENETS.md's covert-channel wording is unchanged; the only
+TENETS.md edits this tranche makes are the property and citation additions 150-153 name.
+
+Notes:
+- All four are recordable as accepted: they were owner-decided on 2026-09-22 and reapplied here only
+  to add the semantics WP-R3, WP-D2, WP-D3 and WP-S2 need.
+- **150** and **151** are clarifications of wording already present; **152** and **153** add detail
+  to INIT.md's confinement rule and CONTAINMENT.md's push, and both name their implementing package.

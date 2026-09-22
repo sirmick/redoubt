@@ -27,8 +27,9 @@ VM (the BEAM is not in the TCB; INIT.md), and possibly a server it talks to. The
 2. **Label non-interference, in software.** No *intentional* path crosses a label boundary: not a
    `call` or `send` (R1), a write (`check`), a read up, a sink, metadata or a counter. Data crosses
    only by steward declassification. This is a property of the OS, it is by construction, and it is
-   testable. The **label set, not the capability set, is the isolation unit**; two budgets with
-   different label sets have no path the OS can carry a message over.
+   testable. **The label set, not the capability set, is the isolation unit; two budgets with
+   different handle sets but equal label sets are one trust domain, and two budgets with differing
+   label sets have no path the OS can carry a message over.**
 3. **Human control.** Every increase in authority, and every declassification, is an out-of-band human
    approval; leases bound time; the sponsor can always end a lease (CAPABILITIES.md).
 
@@ -43,10 +44,10 @@ screen — and that is the whole of the design's claim here (CONTAINMENT.md's ch
 consequences:
 
 - **Read-down is an intentional path.** A confined domain does not read a shared unlabelled volume;
-  input arrives by an audited push from the steward.
-- **Sharing is the attack.** A shared server instance, volume or endpoint is where labels are enforced,
-  so two differing label sets in a confined deployment share none of them, and a manifest that places
-  them together is refused (INIT.md).
+  input arrives by an audited push from the steward (CONTAINMENT.md, Push).
+- **Sharing is the attack.** A shared server instance, volume, endpoint, network instance or core is
+  where labels are enforced, so two differing label sets in a confined deployment share none of them,
+  and a manifest that places them together is refused (INIT.md, The boot manifest).
 
 ## The adversary
 Design for a capable, patient, automated adversary that has read every line of this repository, can

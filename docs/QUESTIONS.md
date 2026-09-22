@@ -6,7 +6,9 @@ so each needs your decision; the answer goes into the named note with a HISTORY.
 
 **1-126 answered 2026-09-19** (ANSWERS.md, seven tranches; each "Answered" line says where the
 answer now lives). **Open: 127-128**, **138-140** (from WP-K2) and **141** (from WP-S1) and **142-146** (from WP-K3) and **147** (from WP-D1) and **148-149** (from WP-R4) and **129-137** (userland,
-USERLAND.md), at the end. The round-4 answers revised 56 (handle kinds are checked by use) and replaced 57 and 58 (by
+USERLAND.md), at the end. **150-153 answered 2026-09-22** (the owner's use-case direction, recorded
+in the tranche "Answers to 150-153"; the decisions were already in the notes, these questions pin
+their semantics). The round-4 answers revised 56 (handle kinds are checked by use) and replaced 57 and 58 (by
 82); a later tranche replaced 103 (no `first` flag and no strict priority: one stride queue for
 every budget); the tranche for 120-126 accepted every recommendation and added one change to what
 ships: the boot bundle's signature gets its own domain now (VERIFIED-BOOT.md).
@@ -1220,4 +1222,87 @@ on the box); 132 and 133 block the shell's pipelines, 135 blocks launching from 
      *Rec:* one rule in INIT.md: an MMIO region and its interrupt are separate manifest entries and
      separate named handles, `NAME` and `NAME-irq`, both under the manifest's name rule (which
      allows `-` but not `:`). WP-R3 enforces it, and blkd and consoled follow.
+
+## From the owner's use-case direction (TENETS.md, GAME.md; recorded 2026-09-22)
+
+The owner's direction of 2026-09-22 (HISTORY.md's "The use case, the high/low pair, and the game"
+entry and the "back out collusion prevention" commit) was written straight into the notes. Four
+packages (WP-R3, WP-D2, WP-D3, WP-S2) now build on it and must cite a numbered answer (SWARM.md
+rule 7), so these four questions record the direction and pin the semantics it left implicit. They
+do not re-decide it.
+
+150. **"The isolation unit is the label set, not the capability set" is stated but nowhere defined.**
+     TENETS.md (The use case, tenet 2) and the 2026-09-22 HISTORY entry say it, but no note says what
+     follows: CONTAINMENT.md never names the property, and CAPABILITIES.md treats a handle boundary
+     as if it were the OS's containment boundary (a launcher disconnects a child's connections "as a
+     second line of defence"), which a reader can take as the isolation unit. A package cannot cite a
+     property no note defines.
+     *Rec:* name it and define it, no mechanism change. TENETS.md (The use case) already carries the
+     sentence; CONTAINMENT.md, Labels, opens with the property and the split (capabilities bound
+     authority, labels bound information flow; a handle passed between equal-label budgets is not a
+     crossing; R1 is the boundary; two budgets with different handle sets but equal label sets are
+     **one trust domain**, two with differing label sets are the smallest domains the OS
+     distinguishes). CAPABILITIES.md, Agents, states the same line and points at CONTAINMENT.md, so
+     the three notes agree.
+     *Alt:* leave it as one sentence in TENETS.md and let each package re-derive it. Then the four
+     confinement packages each choose their own reading of "domain", and a server judged "one
+     instance per domain" by one is "per budget" by another.
+     **Answered:** TENETS.md, The use case (tenet 2); CONTAINMENT.md, Labels; CAPABILITIES.md, Agents.
+
+151. **Covert communication is a non-claim that CONTAINMENT.md re-argues.** TENETS.md's The adversary
+     already says it once, including power, heat, EM and the clock and "not co-locating two domains
+     is the only zero", and the 2026-09-22 HISTORY entry calls that the canonical statement.
+     CONTAINMENT.md's "Covert and timing channels" section restates the tenet in its own words
+     (TENETS.md outranks it) and the channel table's last row reads as an OS obligation, so an
+     implementer or a game referee can score a covert observation against the OS.
+     *Rec:* keep TENETS.md (The adversary) as the single statement; CONTAINMENT.md's section opens by
+     pointing at it instead of repeating the reason, and the channel table's out-of-scope row says so
+     too. The design's exact and only claim is "**zero intentional (software-mediated) paths across a
+     label boundary**", by construction; the only zero is placement. No new words in TENETS.md.
+     *Alt:* restate it in CONTAINMENT.md as well, "for the containment reader". Two statements drift
+     and the lower-precedence one gets edited first.
+     **Answered:** TENETS.md, The adversary (the one statement); CONTAINMENT.md, Covert and timing
+     channels and the channel table.
+
+152. **What `confined` actually makes `init` compare.** INIT.md, The boot manifest, gains the flag
+     ("any two entries with differing label sets share no server instance, volume, endpoint, network
+     instance or core"), but "entry", "differing" and "core" are undefined, and nothing says whether
+     the flag is per boot or per domain, so WP-R3 cannot implement the refusal. The consequence of
+     guessing: a manifest that places two label sets on one `fsd` instance, or on one core, is
+     admitted, and the channel table's "no sharing" rows become configurable fiction.
+     *Rec:* accept as the owner directed — `init` refuses the boot — and pin the semantics:
+     - the flag is **per boot, one top-level boolean**, applied to the whole manifest, not per domain;
+     - `init` compares **label sets**: each budget's labels and each volume's label set as the
+       manifest declares them; sets differ when not equal (`{a}` differs from `{}`, from `{b}` and
+       from `{a,b}`; a system server such as the steward carries none and is a domain of its own);
+     - it refuses when differing sets share a `servers` entry, a `volumes` entry, an endpoint name in
+       `receives`/`handed`, an `ipd:*`/`netd` instance, or a core (milestone 1 already runs one budget
+       per core, so this only refuses a manifest that would time-share one);
+     - it refuses a confined manifest in which a labelled domain reads a shared unlabelled volume;
+     - refusal is a **boot failure**, not a warning (TENETS.md 2, fail closed and loudly).
+     INIT.md's manifest table gains the `confined` member (a boolean), and WP-R3 tests the refusal.
+     *Alt:* leave the flag as prose and let WP-R3 choose. Then the attack case ("a confined manifest
+     placing a labelled and an unlabelled domain on one `fsd` is refused at boot") tests an
+     implementation convention, not the design.
+     **Answered:** INIT.md, The boot manifest (Confinement) and its entry table.
+
+153. **The steward push is named but not defined.** CONTAINMENT.md says a confined domain takes input
+     "by an audited push from the steward", and the channel table says read-down is "forbidden;
+     input is steward push", but nothing says what a push is, who may trigger it, or whether it is
+     per item, so WP-S2 cannot build the replacement for the read-down it refuses, and a labelled
+     session's read-down is a B-to-A channel with no stated closure.
+     *Rec:* define it in CONTAINMENT.md as the exact mirror of declassification, one item per push:
+     the **target label's owner** triggers it through the powerbox with an out-of-band approval
+     (CAPABILITIES.md); the steward, unlabelled, reads the source and writes the item into the
+     labelled volume through a **short-lived writer budget carrying exactly the target label set** (a
+     write needs equal labels, and the steward holds none); **one item per push**, no standing path,
+     queue or batch; audited with the request's labels. The confined domain cannot trigger, name the
+     item for, or pull a push, which is what closes the B-to-A channel; the lower side cannot make a
+     push happen or choose its timing. `check` is unchanged; the steward declines a labelled
+     session's mount of a shared unlabelled volume and offers the push. Stated residual: a push is one
+     human action, so a confined domain's input rate is a human approval rate.
+     *Alt:* allow the confined domain to read a steward-filtered queue on the shared volume. A queue
+     is a path the lower side writes and the higher side reads, which is the channel again.
+     **Answered:** CONTAINMENT.md, Push (input into a labelled domain) and Labels; INIT.md, The boot
+     manifest (Confinement).
 
