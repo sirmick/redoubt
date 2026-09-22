@@ -10,6 +10,10 @@ This is the confinement problem (Lampson, 1973).
 
 ## Labels
 Decentralized information flow control in the Flume/HiStar style, with labels fixed per budget.
+**Scope qualification:** answer 150 settles equal-label budgets as one trust domain. Question 165
+still asks how the per-agent authority-closure wording accounts for delegation within it; the
+property below neither forbids that delegation nor answers the question. Question 164 separately
+tracks the permitted trusted-mediation topology within the confined deployment profile.
 - **The isolation unit is the label set, not the capability set** (TENETS.md, The use case; tenet 2).
   Capabilities bound what a budget can *do*; labels bound what it can *leak*, and data moves only
   along labels. Two budgets with different handle sets but equal label sets are **one trust domain**:
@@ -70,6 +74,10 @@ Stated residual: text an agent wrote and a human approved can still carry a hidd
 system can prevent that.
 
 ## Push: input into a labelled domain
+**Accepted target, unresolved topology:** answer 153 specifies this push; question 164 remains open
+on reconciling its steward/helper edges with answer 152's confined placement rule. Do not infer a
+blanket system-server exemption or an implemented confined workflow from the operation below.
+
 Declassification is high to low; a **push** is its mirror, low to high, and is how input enters a
 labelled domain that is confined. A confined domain does not read a shared unlabelled volume: with a
 colluding lower domain, that read-down is a B-to-A channel (TENETS.md, The high/low pair; the channel
@@ -144,6 +152,22 @@ Every system server that serves more than one account links one small library:
   thread that holds the call, on the endpoint the call came in on, so **every serving thread keeps
   receiving there**: a thread that parks calls and stops receiving would never be told they were
   abandoned (question 104).
+- **Reply success is not resource acceptance** (answer 168). The library exposes `reply`'s
+  `delivered`/`discarded` result and installed-handle mask (KERNEL-SPEC.md, IPC completion). A server
+  creating a connection or grant keeps its new state provisional until that outcome is known.
+  `discarded` rolls back that state, its new grant/connection bookkeeping and admission charges;
+  a later abandonment notice is not needed to discover the discard. On `delivered`, the operation
+  checks whether every handle needed to use the new resource was installed. Each such operation
+  declares that required slot set and its cleanup policy; `new_connection` and `keyd`'s `grant`
+  require their returned capability, and roll back the new resource if that slot is missing.
+  Independently usable resources in a multi-handle result may be retained only with an explicit
+  per-resource policy, never merely because the syscall succeeded. Validation errors leave the
+  call open, so the server retains the obligation to complete it or exit under R4b, while reclaiming
+  any provisional state it abandons. Delivery means record commit, not that application code read
+  it or that its handles will survive later revocation. Ordinary disconnect/release and admission
+  bounds still handle clients that disappear after delivery. These rules do not roll back already
+  performed file writes or other non-provisional effects. WP-IPC1 updates the shared library and
+  existing grant/connection servers together.
 - **A server that must wait parks the call, in its own buckets.** A 9P server that cannot answer yet
   (a console read with no input, a connect waiting for the network) holds the call and serves it
   later, rather than blocking or answering a default (NAMESPACES.md, Holding a call). Parking is

@@ -462,3 +462,74 @@ Notes:
 - Applied to NAMESPACES.md (Holding a call, The console), USERLAND-API.md (The console and the
   `Platform` contract, `Redoubt.Console`), QUESTIONS.md (160 closed, 163 opened) and HISTORY.md.
   Nothing in KERNEL-SPEC.md, CAPABILITIES.md or TENETS.md is touched.
+
+---
+
+# Answers to 167-168 (owner, 2026-09-22)
+
+**Both Rec accepted.** The owner explicitly approved both IPC recommendations after the
+orchestrator summarized them. Questions 164-166 remain open; this approval changes neither
+confinement nor capability closure nor scheduling. The architect specifies the exact return
+encoding and completion ordering below as the mechanical elaboration of these approved outcomes,
+not as an additional statement attributed to the owner.
+
+## Accepted as recommended
+
+**167. Caller ownership and reply validity are independent of status.** Preserve R3, R4 and R4b,
+including abandonment consuming the lend, server death returning a live caller's lend, and R4
+delivering partial replies on `OutOfMemory` (answers 49, 70, 81, 107, 116). Every `call` return
+carries lend disposition and reply presence in registers, even on error. The exact encoding is
+owned by KERNEL-SPEC.md, IPC return registers: `a0` retains the existing status, `a1` is 0 `none`,
+1 `returned`, 2 `consumed`; `a2` is 0 `absent`, 1 `present`; `a3..a7` are zero. No new error code,
+input record, call number or wire protocol is introduced.
+
+- Before decoding a recognized `call`, initialize `none` for raw lend `(0, 0)` and `returned`
+  otherwise, with `absent` reply. Thus even an earlier bad argument cannot hide retention; this
+  does not validate the alleged memory range. Only post-receipt abandonment consumes a lend.
+- `present` means the complete output record committed. Output records are validated as readable
+  and writable before delivery, then checked again at completion. Restore the lend before output
+  so a record inside it remains supported. A failed output commit reclaims newly installed reply
+  handles and their otherwise-unused table pages, returns the lend, and reports `InvalidArgument`
+  with `absent`; that failure overrides an attempted partial reply's `OutOfMemory`.
+- CAPABILITIES.md, IPC, owns the safe runtime's consuming-buffer contract: return ownership only
+  when retained; disarm consumed buffers; expose or close every handle in a committed partial
+  reply before translating or discarding an error. Other facades must preserve this accounting.
+
+**168. A successful reply reports delivery or discard and the installed slots.** KERNEL-SPEC.md,
+IPC completion and IPC return registers, specifies `reply` success as `a0 = 0`, `a1 = 0 discarded`
+or `1 delivered`, `a2 = installed-handle mask`, `a3..a7 = 0`. Bits are positional, 0 through
+`MAX_MSG_HANDLES - 1`; a discarded reply's mask is zero. `reply` errors keep the existing error
+code and all-zero payload and leave the call open. A discarded reply successfully closes the call,
+whether abandonment or failed caller-output commit caused the discard. A partial R4 reply is
+delivered if its complete record commits, with only its installed slots set in the mask.
+
+- CONTAINMENT.md, the shared server library, owns the transaction rule: retain new grants and
+  connections provisionally, roll them and their admission charges back on discard, and check
+  required returned-handle slots on delivery. `new_connection` and `keyd`'s `grant` need their
+  returned capability; missing it rolls back that new resource. A multi-resource operation needs
+  an explicit per-resource policy, not an assumption that syscall success delivered everything.
+- Delivery is kernel record commit, not application acknowledgement or a promise against later
+  revocation. Ordinary release/disconnect and admission bounds remain necessary for a client that
+  disappears after delivery. Neither outcome rolls back prior non-provisional server effects.
+
+**Follow-up: WP-IPC1.** Update `redoubt-sys`, the kernel completion paths, executable model,
+`redoubt-rt` and its client/server wrappers, and existing grant/connection servers together. Cover
+every lifecycle-table row, both widths' encoding, early errors, partial handle delivery, failed
+output commit/rollback, subsequent address reuse and destructor behavior, and real-kernel server
+cleanup. Model integration and real timer-based cancellation acceptance remain required before
+declaring the package complete; host substitutes alone do not establish these boundaries.
+
+Applied to KERNEL-SPEC.md, CAPABILITIES.md, CONTAINMENT.md, QUESTIONS.md and HISTORY.md. These are
+specification changes awaiting implementation; no existing code is represented as conforming.
+
+### Architect clarification after R-IPC1-design (2026-09-22)
+
+The design reviewer asked whether "one kernel completion" protected mapping and lifecycle state
+as well as handle tables. It must: answer 167's valid output commit and answer 168's single
+delivery/discard outcome require validation, copying, handle installation/rollback and outcome
+publication to be protected together against relevant mapping changes and teardown/abandonment.
+KERNEL-SPEC.md, Output validity and rollback, now states that requirement explicitly. Equivalent
+validated-frame pinning still needs completion arbitration; it cannot permit a reply to commit
+while abandonment consumes the same lend. This is the architect's derivation of the accepted
+outcomes, not a further owner decision. Post-commit concurrent changes remain outside the promise;
+no encoding, status or ownership rule changes. WP-IPC1's concurrent-completion coverage verifies it.

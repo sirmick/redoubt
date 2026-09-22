@@ -65,6 +65,20 @@ Two primitives, each with a timeout (KERNEL-SPEC.md, Messages):
   killing it means destroying that budget.
 - **Interrupts** are received like messages: a driver thread waits on its IRQ handle.
 
+**The runtime owns a lend across the call** (answer 167). The consuming API and matching
+ABI/kernel completion paths are present in **this checkout**; this is
+not WP-IPC1 acceptance. Model, K5 timer and simultaneous multi-hart completion-race gates remain
+outstanding (STATUS.md). The safe API consumes its
+optional `Buffer`, rather than borrowing a buffer that might disappear. Its outcome carries the
+kernel status, the buffer only when returned, and a reply only when the kernel reports a committed
+record (KERNEL-SPEC.md, IPC completion). A consumed buffer is disarmed without accessing or
+unmapping its old address; a returned buffer remains usable and has exactly one owner. A partial
+reply on `OutOfMemory` still owns its delivered words and handle slots. A higher-level client may
+expose them or discard them while closing every surviving handle, but cannot erase the outcome
+with an early error return. Its own reply record remains backed and exclusively managed while
+the syscall runs. This contract is required of any facade above the runtime as well; an error
+translation never silently loses a buffer or delivered handle. WP-IPC1 implements the contract.
+
 ## Minting and revocation
 There are no per-capability revokers. **Budgets are the only revocation**: destroying a budget
 revokes every handle stamped with it or a descendant, wherever the copies went.

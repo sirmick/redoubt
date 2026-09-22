@@ -310,14 +310,15 @@ footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
   <div class="grid2">
     <div class="card"><h4>Built and tested</h4><ul class="tight">
       <li>rv64 + rv32 boot on QEMU virt under the vendored RustSBI firmware</li>
-      <li>the kernel: memory, threads, handles &amp; endpoints, budgets, devices, IRQ receive, timer, verified boot, W^X</li>
+      <li>the kernel: memory, legacy threads, handles &amp; endpoints, budgets, devices, IRQ receive, verified boot, W^X; cooperative scheduling</li>
       <li><code>libs/</code>: sys, rt, wire, signing, littlefs, paging</li>
-      <li><code>servers/keyd</code>, <code>tools/testbench</code></li>
-      <li>beamlet — runs Elixir, its compiler, IEx, OTP crypto/ssl/ssh</li>
+      <li>host-tested server components: keyd, bootfsd, consoled, blkd; full init boot wiring pending</li>
+      <li><code>tools/testbench</code>; beamlet on the host — Elixir, its compiler, IEx, OTP crypto/ssl/ssh</li>
     </ul></div>
     <div class="card"><h4>Designed, not built</h4><ul class="tight">
       <li>init + boot manifest + loader stub</li>
-      <li>steward, sshd, fsd, blkd, netd, ipd, bootfsd, consoled</li>
+      <li>steward, sshd, fsd, netd, ipd; end-to-end storage/network services</li>
+      <li>new process/thread syscalls, timer-driven scheduling, beamlet's Redoubt platform</li>
       <li>packages, projects, sharing, A/B system updates</li>
       <li>FPGA cards, disk encryption, gatewayd, webd, linkd/routerd</li>
     </ul></div>
@@ -363,9 +364,9 @@ footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
   <table>
     <tr><th>System call</th><th>What it does</th><th>Status</th></tr>
     <tr><td><code>map_anon unmap set_flags map_device dma_alloc</code></td><td>memory, W^X, DMA</td><td><span class="pill built"><span class="dot"></span>built</span></td></tr>
-    <tr><td><code>thread_create thread_exit</code></td><td>threads</td><td><span class="pill built"><span class="dot"></span>built</span></td></tr>
+    <tr><td><code>thread_create thread_exit</code></td><td>new thread API (legacy path exists)</td><td><span class="pill des"><span class="dot"></span>not implemented</span></td></tr>
     <tr><td><code>endpoint_create mint</code></td><td>capabilities</td><td><span class="pill built"><span class="dot"></span>built</span></td></tr>
-    <tr><td><code>call send receive reply serve</code></td><td>zero-copy IPC, lend / transfer</td><td><span class="pill built"><span class="dot"></span>built</span></td></tr>
+    <tr><td><code>call send receive reply serve</code></td><td>zero-copy IPC, lend / transfer</td><td><span class="pill built"><span class="dot"></span>implemented</span>; <a href="STATUS.md">IPC1 acceptance pending</a></td></tr>
     <tr><td><code>budget_create budget_destroy budget_usage</code></td><td>accounting, revocation, labels</td><td><span class="pill built"><span class="dot"></span>built</span></td></tr>
     <tr><td><code>time_now random system_reset</code></td><td>services</td><td><span class="pill built"><span class="dot"></span>built</span></td></tr>
     <tr><td><code>process_create process_map process_start process_exit</code></td><td>launch + exit notices</td><td><span class="pill prog"><span class="dot"></span>in progress</span></td></tr>
@@ -386,9 +387,9 @@ footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
   <table>
     <tr><th>Server</th><th>Role</th><th>Status</th></tr>
     <tr><td><code>init</code></td><td>holds all authority at boot; starts, wires and restarts every OS process</td><td><span class="pill des"><span class="dot"></span>designed</span></td></tr>
-    <tr><td><code>consoled</code></td><td>ns16550 UART driver, serves <code>/dev/cons</code></td><td><span class="pill prog"><span class="dot"></span>in progress</span></td></tr>
-    <tr><td><code>bootfsd</code></td><td>read-only 9P over the verified bundle (<code>/boot</code>)</td><td><span class="pill prog"><span class="dot"></span>in progress</span></td></tr>
-    <tr><td><code>blkd</code></td><td>virtio-blk driver + partitions + block-range handles</td><td><span class="pill prog"><span class="dot"></span>in progress</span></td></tr>
+    <tr><td><code>consoled</code></td><td>ns16550 UART driver, serves <code>/dev/cons</code></td><td>implemented, host-tested; full init wiring pending</td></tr>
+    <tr><td><code>bootfsd</code></td><td>read-only 9P over the verified bundle (<code>/boot</code>)</td><td>implemented, host-tested; full init wiring pending</td></tr>
+    <tr><td><code>blkd</code></td><td>virtio-blk driver + partitions + block-range handles</td><td>host-tested library; boot integration pending</td></tr>
     <tr><td><code>fsd</code></td><td>littlefs, one instance per volume, serves 9P</td><td><span class="pill des"><span class="dot"></span>designed</span></td></tr>
     <tr><td><code>netd</code> · <code>ipd</code></td><td>virtio-net driver; smoltcp stack serving <code>/net</code></td><td><span class="pill prog"><span class="dot"></span>in progress</span></td></tr>
     <tr><td><code>keyd</code></td><td>holds every private key; signs, never exports</td><td><span class="pill built"><span class="dot"></span>built</span> <a href="../servers/keyd/src/lib.rs">code</a></td></tr>
@@ -437,14 +438,14 @@ footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
 
 <section id="start">
   <h2><span class="num">07</span>Getting started</h2>
-  <p>Everything runs in a self-contained Docker container; the host needs only Docker. A concise version of this
+  <p>The OS build/test environment runs in Docker. Beamlet's differential tests additionally require separately installed OTP/Elixir. A concise version of this
   section also lives in <a href="GETTING-STARTED.md">GETTING-STARTED.md</a>.</p>
   <h3>1 · Toolchain</h3>
   <pre><code>./dev.sh                 # build the image (first time), then a shell in /work
 ./dev.sh --rebuild       # rebuild the image after editing the Dockerfile</code></pre>
   <p class="lead">Installs Rust with the RISC-V bare-metal targets (<code>riscv64imac</code>, <code>riscv32imac</code>,
   <code>riscv64gc</code>), QEMU for both widths, OpenSSH, graphviz (for this page's diagrams) and the agent CLIs.
-  The pinned OTP 28 / Elixir 1.20 toolchains live in <a href="../toolchains/">toolchains/</a>.</p>
+  OTP 28.5.0.6 / Elixir 1.20.4 are not installed by the image; see the quickstart's prerequisites.</p>
   <h3>2 · Firmware (once)</h3>
   <pre><code>./scripts/build-bios.sh  # builds the vendored RustSBI in bios/ for both widths</code></pre>
   <h3>3 · Build the OS</h3>
@@ -516,7 +517,7 @@ tools/difftest                 # differential tests against the real BEAM</code>
     <li><b>M1 — separation and containment:</b> Alice and Bob logged in over SSH, separated; Alice's agent under a lease, contained. Every property backed by an attack test.</li>
     <li><b>M2 — install, share, persist:</b> packages and trust lists, projects, reboot memory, A/B system updates with rollback.</li>
     <li><b>M3 — self-hosted development:</b> a real agent harness through <code>gatewayd</code>, compilers on the box, the server APIs.</li>
-    <li><b>After M3:</b> rv32 returned to the booted dimensions; SMP; the FPGA.</li>
+    <li><b>After M3:</b> rv32 returns to mandatory milestone boot acceptance (the bench already supports both widths); SMP; the FPGA.</li>
   </ul>
   <p><a href="BUILD-PLAN.md">BUILD-PLAN.md</a> · <a href="SWARM.md">SWARM.md</a> · <a href="HISTORY.md">HISTORY.md</a></p>
 </section>
@@ -540,5 +541,23 @@ for token, key in [
 ]:
     html = put(html, token, key)
 
+# Pages publishes only docs/. Keep its document links local; repository source and
+# root-level setup/license links must not escape that published directory.
+def published_link(match):
+    href = match.group(1)
+    if href.startswith("../"):
+        target = (OUT.parent / href).resolve()
+    elif href in ("GETTING-STARTED.md", "LICENSE", "LICENSES/"):
+        target = ROOT / href
+    else:
+        return match.group(0)
+    relative = target.relative_to(ROOT)
+    if not target.exists():
+        raise ValueError(f"missing repository link: {href}")
+    kind = "tree" if target.is_dir() else "blob"
+    return f'href="https://github.com/sirmick/redoubt/{kind}/main/{relative}"'
+
+
+html = re.sub(r'href="([^"]+)"', published_link, html)
 OUT.write_text(html)
 print(f"wrote {OUT} ({len(html)} bytes, {len(SVG)} diagrams)")

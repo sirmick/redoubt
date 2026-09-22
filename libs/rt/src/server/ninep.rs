@@ -37,7 +37,7 @@
 //! steward, for a lease's agent) is a share of its own.
 //!
 //! **Byte quotas** (answer 85; NAMESPACES.md, Filesystem servers) are the file server's.
-//! QUESTIONS.md 118 (pending): the skeleton only carries `new_connection`'s `quota` to
+//! As accepted in answer 118, the skeleton only carries `new_connection`'s `quota` to
 //! [`FileServer::minted`], which may refuse the grant, and tells the server when the connection
 //! goes ([`FileServer::disconnected`]). Only `fsd` meters bytes, and it knows what a file costs
 //! on its medium (WP-D2); the skeleton does not.
@@ -110,15 +110,14 @@ pub const DMDIR: u32 = 0x8000_0000;
 use super::minted::NotYours;
 pub use super::minted::{FIRST_MINTED_BADGE, Minter, first_badge};
 
-/// QUESTIONS.md 113 (pending): the typed opcodes `ninep_common` owns on every 9P endpoint. A
+/// The typed opcodes `ninep_common` owns on every 9P endpoint (answer 113). A
 /// server's own protocol on the same endpoint uses opcodes above them; an opcode in this range
 /// that `ninep_common` does not define is malformed.
 pub const NINEP_COMMON_OPCODES: RangeInclusive<u64> = 1..=15;
 
-/// QUESTIONS.md 114 (pending): the status of a `disconnect` naming an id the caller did not
+/// The status of a `disconnect` naming an id the caller did not
 /// receive, the same whether the id belongs to someone else or to nobody, so nothing is
-/// revealed: code 2, as the question recommends, which the table leaves free for it. Not yet in
-/// `ninep_common`'s error table, so the generated codec does not know it.
+/// revealed: code 2, as accepted in answer 114 and the `ninep_common` error table.
 pub const NOT_YOURS: u32 = 2;
 
 /// Open modes (intro(5)): the access in the low two bits, then flags.
@@ -420,6 +419,7 @@ impl<S: FileServer> NineServer<S> {
     pub fn serve(&mut self, request: Request) -> Result<(), Error> {
         self.serve_with(request, |_, request| {
             finish(request, &Outcome { words: MALFORMED, send: Handles::new(), close: Handles::new() })
+                .map(|_| ())
         })
     }
 
@@ -441,6 +441,7 @@ impl<S: FileServer> NineServer<S> {
             // hanging: the caller gets a refusal instead of waiting for a reply that never comes.
             Some(request) => {
                 finish(request, &Outcome { words: MALFORMED, send: Handles::new(), close: Handles::new() })
+                    .map(|_| ())
             }
         }
     }
@@ -483,28 +484,27 @@ impl<S: FileServer> NineServer<S> {
                     }
                 }
             };
-            return finish(request, &Outcome { words, send: Handles::new(), close: handles }).map(|()| None);
+            return finish(request, &Outcome { words, send: Handles::new(), close: handles }).map(|_| None);
         }
         if !NINEP_COMMON_OPCODES.contains(&words[0]) {
             return own(self, request).map(|()| None);
         }
         if missing {
             return finish(request, &Outcome { words: MALFORMED, send: Handles::new(), close: handles })
-                .map(|()| None);
+                .map(|_| None);
         }
         self.minted.answering();
         let mut kernel = super::minted::Kernel(request.id());
         let outcome = self.answer_common(&caller, &words, &handles, request.lend(), &mut kernel);
         let sent = finish(request, &outcome);
-        // A reply that could not be sent leaves a connection nobody can ever name: its id went
-        // nowhere, and `disconnect` answers only the holder of an id, so its admission slot
-        // would be held for the life of the process. Undo it (the same rule keyd follows).
+        // new_connection requires slot 0's capability. Discard or a missing required handle
+        // rolls back its provisional connection and admission charge (answer 168).
         if let Some(badge) = self.minted.minted_here() {
-            if sent.is_err() {
+            if !sent.as_ref().is_ok_and(|outcome| outcome.accepted(1)) {
                 self.forget(badge);
             }
         }
-        sent.map(|()| None)
+        sent.map(|_| None)
     }
 
     /// Answers a `ninep_common` request without replying: its outcome, the reply's fields
@@ -1104,7 +1104,7 @@ pub fn refuse(mut request: Request, error: NineError) -> Result<(), Error> {
         Ok(_) => WORDS_9P,
         Err(_) => MALFORMED,
     };
-    finish(request, &Outcome { words, send: Handles::new(), close: Handles::new() })
+    finish(request, &Outcome { words, send: Handles::new(), close: Handles::new() }).map(|_| ())
 }
 
 /// Refuses unknown mode bits, and anything but plain reading for a directory.

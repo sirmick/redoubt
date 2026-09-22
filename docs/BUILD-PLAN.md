@@ -27,7 +27,9 @@ not needed.
 - **Randomness:** a `random` system call returning one `u64` (KERNEL-SPEC.md), used by WP-B1,
   WP-S1, WP-S3.
 - **Widths:** milestone 1 is built and booted on rv64. rv32 must keep **compiling** (kernel, loader,
-  `redoubt-sys`, `redoubt-rt`, servers): a build check in the bench, no rv32 boots. Width-specific
+  `redoubt-sys`, `redoubt-rt`, servers): a build check in the bench. Existing rv32 boot cases are
+  optional additional coverage; required full-stack rv32 boot acceptance is after milestone 3
+  (TENETS.md, PLAN.md). Width-specific
   code only in paging geometry, trap entry and saved context, and the ABI's register encoding
   (PLAN.md); `redoubt-sys` needs none, since both widths share one register layout (KERNEL-SPEC.md,
   ABI).
@@ -172,6 +174,21 @@ not needed.
   line; `wx` and `irq-attack` are listed as survival-only until WP-K4 and WP-K3.
 - Needs: WP-T1. Merged.
 
+**WP-T1c. Fail-closed unsafe coverage (ASTRA C4).** Size S.
+- Reads: TENETS.md 2/6, ASTRA.md C4 and WP-IPC1's verification gate. This repairs existing
+  assurance machinery; it changes no frozen design or allowed unsafe budget.
+- Delivers: correct moved source roots in `tests/unsafe-budget.toml`; make
+  `tools/testbench/src/budget.rs` reject missing configured paths and configured roots with no
+  Rust source, including explicit files; focused negative tests proving these mistakes fail.
+  Keep normal zero-unsafe source valid and propagate filesystem errors with path context.
+- Accepted when: regression tests distinguish a valid zero-unsafe crate from absent/empty roots;
+  normal ratchet runs enumerate the actual production sources and report honest counts. Do not
+  raise budgets to hide newly uncovered debt; report any pre-existing overage separately.
+  The testbench host tests and its focused unsafe-budget case pass, with three review angles
+  complete. No firmware, kernel or runtime implementation is owned by this package.
+- Needs: WP-T1 (merged). Separate prerequisite for IPC1 acceptance; may run in parallel with
+  IPC1's ABI/runtime work in its own worktree.
+
 **WP-V1. The bundle signing domain (answer 120).** Size S. (Emerged from WP-S1.)
 - Reads: VERIFIED-BOOT.md (Signature, Testbench).
 - Delivers: the loader verifies the boot bundle's signature over
@@ -302,6 +319,53 @@ not needed.
   WP-K1; kernel line count reported.
 - Needs: WP-K1 to WP-K5, WP-R1b.
 
+**WP-IPC1. Observable IPC ownership and delivery (answers 167-168).** Size L.
+- Reads: ANSWERS.md 167-168; KERNEL-SPEC.md R3/R4/R4b, IPC outcomes, ABI and error/output
+  validity; CAPABILITIES.md (the native runtime's IPC ownership contract); CONTAINMENT.md
+  (shared server transaction cleanup); ASTRA.md C1/C2/C3/A1/D4.
+- Delivers: the approved outcome encoding in `libs/sys`; matching kernel call/reply completion
+  and rollback paths; a consuming lend API and delivered-partial-reply handling in `libs/rt`;
+  delivery-aware grant/connection cleanup in the shared server library and `servers/keyd`;
+  migration of affected native callers, server dispatch and tests. Update `model/` and its
+  traces to the same result/output-validity contract. Owned paths are those components' IPC
+  seams, their direct API consumers, and the relevant `tests/` and `tools/testbench` cases.
+  This includes C3's initial input/output record validation, not a separate kernel fix;
+  no unrelated process, scheduling or firmware redesign.
+- Accepted when:
+  - ABI tests round-trip every valid outcome on success and error, rejecting invalid result
+    encodings, on both widths; existing error ordering and R3/R4/R4b ownership remain intact.
+  - Runtime regressions cover queued cancellation with the buffer returned, taken-call
+    abandonment with it consumed, server death with it returned, and normal reply. Reuse the
+    former virtual address and prove that no stale safe buffer can access or unmap its replacement.
+  - Partial reply-handle delivery preserves the valid reply and every surviving handle identity
+    (or explicitly closes unused handles); no handle or admission charge is orphaned. Late output
+    failure rolls back newly installed reply handles and exposes no valid reply record while
+    still reporting lend ownership out of band.
+  - An initially read-only call record is refused before the receiver sees a message; an invalid
+    record takes precedence over a later invalid endpoint. Completion also protects output frames
+    during copying: concurrent unmap/remap, permission changes, teardown and abandonment cannot
+    redirect the write or publish incompatible outcomes. Test these races separately from the
+    allowed changes after commit.
+  - Actual grant/connection serving paths roll back provisional state on discard or failure of
+    an operation's required handle delivery; partial-success policy and close ownership are
+    explicit. Race abandonment against reply and verify counts return to their specified baseline.
+  - Model traces cover the lifecycle table. Real-kernel cases cover cancellation before and
+    after receipt, revocation, server death, partial delivery and output-record failure; real
+    timer timeout cases run after K5. Verdicts come from the kernel or a separate trusted checker,
+    not hostile-client output. Host substitutes do not satisfy this gate.
+  - The full bench remains green, rv32 compiles, and the package has its own risk-bounded TCB
+    round (red team, simplifier, editor). Do not rely on the false-green unsafe check in ASTRA C4:
+    the separate C4 checker repair must correct configured roots and reject missing roots. Check
+    coverage of IPC1's touched on-target ABI/kernel/runtime/server sources, explicitly listing any
+    newly introduced production seam. Do not weaken existing budgets. Host-only model and test
+    code uses its normal checks; this gate does not introduce a repository-wide unsafe policy.
+- Needs to start: WP-A2, WP-K2, WP-R1c, WP-S1 (all merged). Kernel edits serialize behind
+  the active WP-K4 and never overlap K5/K6; `libs/rt` edits serialize with WP-R1d and server ports.
+  Model work coordinates with WP-M1's owner: its in-review state is not a merged dependency.
+  **Completion gates:** WP-M1 integration, WP-K5 real timer support, and repair of ASTRA C4's
+  verification gap. ABI/runtime work need not wait for those gates, but this package cannot be
+  accepted or marked done without them. Filed after owner approval; not dispatched by that approval.
+
 **WP-C1. Model conformance.** Size M.
 - Reads: KERNEL-SPEC.md, errors and the order of checks (the model conforms to them).
 - Delivers: a bench case replaying WP-M1 traces on the real kernel and comparing every result
@@ -309,7 +373,7 @@ not needed.
   hostile arguments; I14).
 - Accepted when: 10^5 model traces replay with identical results; the fuzzer runs
   for its budget with no kernel panic.
-- Needs: WP-M1, WP-K1 to WP-K5, WP-T1.
+- Needs: WP-M1, WP-K1 to WP-K5, WP-T1, WP-IPC1 (traces include answers 167-168).
 
 ### Track R: user runtime and system servers
 **WP-R1. Native runtime crate.** Size M.
@@ -459,7 +523,7 @@ not needed.
 - Needs: WP-B2a. (Split from WP-B2 by answer 161: one acceptance per package.)
 
 ### Track D: storage and network
-**WP-D1. blkd.** Size M. virtio-blk driver (the `virtio-drivers` crate), partition table,
+**WP-D1. blkd.** Size M. virtio-blk driver (the in-tree Rust implementation in `servers/blkd`), partition table,
 block-range handles, validation of every ring index and length.
 - Accepted when: block round trips; a hostile-device model (malformed rings) never corrupts other
   memory or panics blkd; `blkd`'s contract (IO-ARCHITECTURE.md): a flush on every `sync`, in-order
@@ -471,7 +535,7 @@ manifest; **the byte quotas, metered here and nowhere else** (question 118): `ne
 `quota` carved from the granter's root through the shared library's grant hook, and returned
 through its disconnect hook, with the library holding no byte counters; `admit` and `check` on
 every request (writes need equal labels; a walk or `stat` is a read; directory reads list only
-readable entries); typed `rename`, `copy`, `get_attr` and `set_attr` for within-volume operations
+readable entries); typed `rename`, `copy_file`, `get_attr` and `set_attr` for within-volume operations
 9P2000 does not express; relies only on
 `blkd`'s contract (IO-ARCHITECTURE.md).
 - Accepted when: 9P conformance; per-volume label cases (read up, write down and write up all
@@ -591,14 +655,17 @@ this `sshd` in milestone 1, a stated residual).
 merged:                  W1  W2  L1  T1  T1b  A1  A2  K0  K0b  K1  K2  K3  R1  R1b  S1  V1
                          (A3 folded into K2; W3a merged, review due)
 in review:               M0/M1 (the executable model)
-building:                K4 (kernel track);  R4, D1, D3
+building:                K4/D3 external claims unverified; IPC1 implementation frozen after review
 the ready set:           K5 (behind K4 on the Hotspots)
 kernel, serialized:      K4 -> K5 -> K6 (after R1b)
+IPC follow-up:           IPC1 reviewed implementation present in primary; primary full bench99 PASS;
+                         model, K5 timer, process-exit integration and multi-hart acceptance remain
+verification follow-up:  T1c checker and runtime9/9 reduction present in primary; primary gate PASS
 runtime:                 R1c (merged) -> R4 (merged);  R2 (after K4) -> R3 (after R2, W1, K3, K5)
 beamlet:                 B1 (after R1b, R4) -> B2 (after B1, R3) -> B2a (after B2, R4b, R1d) -> B2b (after B2a)
 storage and network:     D1 (merged) -> D2 (after D1, L1);  D3 (after R1b, K3, W2)
 security:                S1 (after R1b) -> S2 (after R3, B1, D2);  S3 (after D3, S1, S2)
-conformance:             C1 (after M1, K1-K5, T1)
+conformance:             C1 (after M1, K1-K5, T1, IPC1)
 milestone:               E1 (after all)
 ```
 **The owner's answers 1-126** (QUESTIONS.md) are all in the notes; nothing is open. Answers

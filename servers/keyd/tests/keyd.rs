@@ -105,9 +105,11 @@ fn call(handle: Handle, request: &Message<'_>) -> (Words, Vec<u8>, Vec<Handle>) 
     let mut lend = Buffer::new(16).unwrap();
     let words = if inline { request.encode(&mut []).unwrap() } else { request.encode(&mut lend).unwrap() };
     let reply = if inline {
-        endpoint.call(&words, &[], None, FOREVER).unwrap()
+        endpoint.call(&words, &[], None, FOREVER).into_result().unwrap().0
     } else {
-        endpoint.call(&words, &[], Some(&mut lend), FOREVER).unwrap()
+        let (reply, returned) = endpoint.call(&words, &[], Some(lend), FOREVER).into_result().unwrap();
+        lend = returned.unwrap();
+        reply
     };
     let handles: Vec<Handle> = reply.handles.as_slice().iter().flatten().copied().collect();
     (reply.words, lend.to_vec(), handles)
@@ -199,7 +201,8 @@ fn a_launcher_grants_a_fresh_capability_and_releases_it() {
         let mut lend = Buffer::new(1).unwrap();
         for request in [Message::Grant(Grant {}), Message::Release(Release { id })] {
             let words = request.encode(&mut []).unwrap();
-            let reply = endpoint.call(&words, &[], Some(&mut lend), FOREVER).unwrap();
+            let (reply, returned) = endpoint.call(&words, &[], Some(lend), FOREVER).into_result().unwrap();
+            lend = returned.unwrap();
             assert_eq!(reply.words, MALFORMED);
             assert!(reply.handles.as_slice().iter().all(Option::is_none), "and nothing was minted");
         }
@@ -224,14 +227,18 @@ fn a_hostile_client_does_not_hurt_keyd_or_other_clients() {
             // Words that are not a request of this protocol, with handles to fill the table.
             let junk = Endpoint::create().unwrap();
             let words = [round % 11, round.wrapping_mul(7), round, 3];
-            let reply =
-                endpoint.call(&words, &[junk.handle(), junk.handle()], Some(&mut lend), FOREVER).unwrap();
+            let (reply, returned) = endpoint
+                .call(&words, &[junk.handle(), junk.handle()], Some(lend), FOREVER)
+                .into_result()
+                .unwrap();
+            lend = returned.unwrap();
             assert_ne!(reply.words[0], 0, "nothing junk was ever accepted");
             let _ = junk.close();
             // And an operation its badge does not name: the host badge asking for a record.
             let request = Message::SignRecord(SignRecord { record: b"give me a signature" });
             let words = request.encode(&mut lend).unwrap();
-            let reply = endpoint.call(&words, &[], Some(&mut lend), FOREVER).unwrap();
+            let (reply, returned) = endpoint.call(&words, &[], Some(lend), FOREVER).into_result().unwrap();
+            lend = returned.unwrap();
             assert_eq!(reply.words[0], u64::from(ErrorCode::NotPermitted.code()));
         }
         0

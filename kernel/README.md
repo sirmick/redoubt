@@ -12,39 +12,43 @@ Supervisor mode.
 
 ## Building
 
-To build the kernel, you will need a riscv32 target for Rust.  Possible
-targets include `riscv32i-unknown-none-elf`, `riscv32imac-unknown-none-elf`,
-or `riscv32imac-unknown-redoubt-elf`.
+From the repository root, `./build --arch rv64` builds the kernel and loader;
+`./build --arch rv32` selects the other supported width. The Rust targets are
+`riscv64imac-unknown-none-elf` and `riscv32imac-unknown-none-elf`.
+For the kernel alone:
 
-1. Decide what target you want.  For simple, embedded systems this could
-   be `riscv32i-unknown-none-elf`, and for more complex systems with
-   compressed instructions you could use `riscv32imac-unknown-none-elf`.
-2. Get Rust.  Go to https://rustup.rs/ and follow its instructions.
-3. Install the proper toolchain: `rustup target add ${target_arch}`
-4. Build the kernel: `cargo build --release --target ${target_arch}`
+```sh
+cargo build --release --target riscv64imac-unknown-none-elf -p redoubt-kernel --features qemu-virt
+```
+
+See [Getting started](../GETTING-STARTED.md) for the Docker environment and
+vendored RustSBI build, and [Debugging](../docs/DEBUGGING.md) for source debug information.
 
 ## Using
 
-To use the kernel, you must package it up into an arguments binary with
-`redoubt-tools`.
+`./launch --arch rv64` builds and signs the bundle, then boots it under QEMU.
+`./mkimage --arch rv64` writes a kernel-only signed bundle without booting.
+The [kernel specification](../docs/KERNEL-SPEC.md) describes the target interface;
+[status](../docs/STATUS.md) distinguishes implemented mechanisms from planned work.
 
 ## Testing
 
-_TBD_
+Run `./test --arch rv64` (or `rv32`) from the repository root. See the
+[test bench guide](../docs/testbench.md) for filters, cases and attack verdicts.
 
 ## Contribution Guidelines
 
-[![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-v2.0%20adopted-ff69b4.svg)](../CODE_OF_CONDUCT.md)
+[![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-v2.0%20adopted-ff69b4.svg)](../docs/CODE_OF_CONDUCT.md)
 
-Please see [CONTRIBUTING](../CONTRIBUTING.md) for details on
+Please see [CONTRIBUTING](../docs/CONTRIBUTING.md) for details on
 how to make a contribution.
 
 Please note that this project is released with a
-[Contributor Code of Conduct](../CODE_OF_CONDUCT.md).
+[Contributor Code of Conduct](../docs/CODE_OF_CONDUCT.md).
 By participating in this project you agree to abide its terms.
 
 ## License
 
 Copyright © 2020
 
-This project is licensed under the [Apache License 2.0](http://opensource.org/licenses/Apache-2.0) [LICENSE](LICENSE). For accurate information, please check individual files.
+This project is licensed under the [Apache License 2.0](http://opensource.org/licenses/Apache-2.0) [LICENSE](../LICENSE). For accurate information, please check individual files.

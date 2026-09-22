@@ -4,8 +4,8 @@
 use core::num::{NonZeroU64, NonZeroUsize};
 
 pub use redoubt_sys::{
-    Body, BudgetSpec, Call, Error, FOREVER, Handle, Handles, Labels, MAX_LEND_PAGES, MAX_MSG_HANDLES,
-    MAX_HANDLES, MAX_OPEN_CALLS, MemFlags, Message, MessageKind, MintSource, Number, PAGE_SIZE, Pages,
+    Body, BudgetSpec, Call, Error, FOREVER, Handle, Handles, Labels, MAX_HANDLES, MAX_LEND_PAGES,
+    MAX_MSG_HANDLES, MAX_OPEN_CALLS, MemFlags, Message, MessageKind, MintSource, Number, PAGE_SIZE, Pages,
     Received, ReceivedBody, ResetKind, Return, Usage, WAIT_CAP, WORDS,
 };
 use redoubt_sys::{RECEIVED_SLOTS, USAGE_SLOTS};
@@ -146,7 +146,10 @@ pub fn random() -> Result<u64, Error> {
 
 /// A call from raw registers `a0..=a7`, as a hostile program makes it; returns `a0` (0 for
 /// success, else the error code).
-pub fn raw(regs: [usize; 8]) -> usize {
+pub fn raw(regs: [usize; 8]) -> usize { raw_registers(regs)[0] }
+
+/// All return registers, including ownership facts on IPC errors.
+pub fn raw_registers(regs: [usize; 8]) -> [usize; 8] {
     let mut r = regs;
     // SAFETY: `ecall` traps to the kernel, which reads and writes only a0-a7 and memory the call
     // names; callers pass their own addresses, or ones the kernel must refuse.
@@ -158,7 +161,7 @@ pub fn raw(regs: [usize; 8]) -> usize {
             options(nostack),
         );
     }
-    r[0]
+    r
 }
 
 /// A call's number as it travels in `a0`.
@@ -195,7 +198,13 @@ pub fn mint(source: MintSource, badge: u64, budget: Option<u32>) -> Result<u32, 
 /// `NonZeroU64` cannot hold one, so a typed call would be refused here rather than there. The
 /// registers are the source's tag and its value's two halves, then the badge's two halves, then
 /// the optional budget handle (`redoubt-sys`).
-pub fn mint_raw(tag: usize, value: usize, badge_low: usize, badge_high: usize, budget: usize) -> Option<Error> {
+pub fn mint_raw(
+    tag: usize,
+    value: usize,
+    badge_low: usize,
+    badge_high: usize,
+    budget: usize,
+) -> Option<Error> {
     raw_error(raw([number(Number::Mint), tag, value, 0, badge_low, badge_high, budget, 0]))
 }
 
@@ -213,17 +222,33 @@ pub fn pages(addr: usize, npages: usize) -> Option<Pages> {
     Some(Pages { addr, npages: NonZeroUsize::new(npages)? })
 }
 
-/// `call(h, body, lend, timeout)`: the reply is decoded from the same record.
-pub fn call(
+/// Raw IPC outcome; unlike the convenience wrapper this exposes lend consumption on errors.
+pub fn call_outcome(
     endpoint: u32,
     body: &Body,
     lend: Option<Pages>,
     timeout: u64,
-) -> Result<ReceivedBody, Error> {
+) -> Result<(redoubt_sys::CallOutcome, Option<ReceivedBody>), Error> {
     let mut rec = body.encode();
-    let args = Call::Call { endpoint: h(endpoint), body_rec: rec.as_ptr() as usize, lend, timeout };
-    redoubt_sys::syscall(&args)?;
-    ReceivedBody::decode(&rec).inspect(|_| rec[0] = rec[0])
+    let args = Call::Call { endpoint: h(endpoint), body_rec: rec.as_mut_ptr() as usize, lend, timeout };
+    let Return::Call(outcome) = redoubt_sys::syscall(&args)? else { return Err(Error::InvalidArgument) };
+    let reply = if outcome.reply_present { Some(ReceivedBody::decode(&rec)?) } else { None };
+    Ok((outcome, reply))
+}
+
+/// Convenience for tests without ownership assertions. Error replies' handles are closed;
+/// tests inspecting a possibly consumed raw lend must use `call_outcome` instead.
+pub fn call(endpoint: u32, body: &Body, lend: Option<Pages>, timeout: u64) -> Result<ReceivedBody, Error> {
+    let (outcome, reply) = call_outcome(endpoint, body, lend, timeout)?;
+    if let Err(error) = outcome.status {
+        if let Some(reply) = reply {
+            for handle in reply.handles.as_slice().iter().flatten() {
+                let _ = redoubt_sys::syscall(&Call::HandleClose { handle: *handle });
+            }
+        }
+        return Err(error);
+    }
+    reply.ok_or(Error::InvalidArgument)
 }
 
 /// `call`, waiting out `Busy`: the endpoint's group is at `WAIT_CAP` (R2). Every program of
@@ -244,12 +269,7 @@ pub fn call_waiting(
 }
 
 /// `send`, waiting out `Busy`, as `call_waiting` does.
-pub fn send_waiting(
-    endpoint: u32,
-    body: &Body,
-    transfer: Option<Pages>,
-    timeout: u64,
-) -> Result<(), Error> {
+pub fn send_waiting(endpoint: u32, body: &Body, transfer: Option<Pages>, timeout: u64) -> Result<(), Error> {
     loop {
         match send(endpoint, body, transfer, timeout) {
             Err(Error::Busy) => crate::wait_ms(1),
@@ -271,12 +291,8 @@ pub fn send(endpoint: u32, body: &Body, transfer: Option<Pages>, timeout: u64) -
 /// `receive(h or none, timeout, max_transfer)`.
 pub fn receive(from: Option<u32>, timeout: u64, max_transfer: usize) -> Result<Received, Error> {
     let mut rec = [0u64; RECEIVED_SLOTS];
-    let args = Call::Receive {
-        from: from.map(h),
-        timeout,
-        max_transfer,
-        received_rec: rec.as_mut_ptr() as usize,
-    };
+    let args =
+        Call::Receive { from: from.map(h), timeout, max_transfer, received_rec: rec.as_mut_ptr() as usize };
     redoubt_sys::syscall(&args)?;
     Received::decode(&rec)
 }
@@ -309,8 +325,9 @@ pub fn body_with(words: [usize; WORDS], handles: &[u32]) -> Body {
 /// A page of this process's own memory, for lending and transferring. Touched, so that the
 /// kernel is not asked to back it while it decodes (answer 115).
 pub fn page() -> usize {
-    let range = redoubt_abi::map_memory(None, None, 4096, redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W)
-        .expect("map a page");
+    let range =
+        redoubt_abi::map_memory(None, None, 4096, redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W)
+            .expect("map a page");
     let at = range.as_mut_ptr() as usize;
     // SAFETY: the first word of a page this process just mapped read-write.
     unsafe { (at as *mut u64).write_volatile(0) };
@@ -355,6 +372,7 @@ pub mod victim {
     pub fn go() {
         let sid = redoubt_abi::SID::from_bytes(ADDRESS).unwrap();
         let cid = redoubt_abi::connect(sid).expect("couldn't connect to the victim");
-        redoubt_abi::send_message(cid, redoubt_abi::Message::new_blocking_scalar(GO, 0, 0, 0, 0)).expect("victim");
+        redoubt_abi::send_message(cid, redoubt_abi::Message::new_blocking_scalar(GO, 0, 0, 0, 0))
+            .expect("victim");
     }
 }

@@ -8,7 +8,7 @@ kind = "unsafe-budget"
 
 [[budget]]
 name = "paging crate (Sv32/Sv39 page tables)"
-paths = ["redoubt/paging/src"]
+paths = ["libs/paging/src"]
 max_unsafe = 12
 max_undocumented = 0
 
@@ -22,7 +22,7 @@ max_undocumented = 0
 # WP-V1: the boot bundle's signature preimage, linked into the loader, so it is TCB. It is
 # `#![forbid(unsafe_code)]`; the budget says so where the rest of the TCB is counted.
 name = "redoubt-signing (signature preimages)"
-paths = ["redoubt/signing/src"]
+paths = ["libs/signing/src"]
 max_unsafe = 0
 max_undocumented = 0
 
@@ -51,7 +51,7 @@ paths = [
     "kernel/src/main.rs", "kernel/src/mem.rs", "kernel/src/services.rs", "kernel/src/server.rs",
     "kernel/src/syscall.rs", "kernel/src/irq.rs", "kernel/src/args.rs", "kernel/src/io.rs",
     "kernel/src/budget.rs", "kernel/src/handle.rs", "kernel/src/kframe.rs", "kernel/src/redoubt.rs",
-    "kernel/src/device.rs",
+    "kernel/src/device.rs", "kernel/src/message.rs",
 ]
 # WP-K1: kframe.rs's three (words of kernel-object frames and of records, through the physmap)
 # replace mem.rs's three needless ones in the deleted `print_ownership`; the total is unchanged.
@@ -67,19 +67,19 @@ max_undocumented = 0
 
 [[budget]]
 name = "redoubt-sys (system call ABI): the ecall stub"
-paths = ["redoubt/sys/src"]
+paths = ["libs/sys/src"]
 max_unsafe = 1
 max_undocumented = 0
 
 [[budget]]
 name = "redoubt-rt (native runtime): the heap's free lists, page buffers and lends, the startup page"
-paths = ["redoubt/rt/src"]
+paths = ["libs/rt/src"]
 max_unsafe = 9
 max_undocumented = 0
 
 [[budget]]
 name = "keyd (holds every private key; signs, never exports)"
-paths = ["redoubt/keyd/src"]
+paths = ["servers/keyd/src"]
 # WP-S1: none, and the crate says `#![forbid(unsafe_code)]`, so this can only stay at 0.
 max_unsafe = 0
 max_undocumented = 0

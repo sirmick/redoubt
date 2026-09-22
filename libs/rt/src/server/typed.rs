@@ -67,7 +67,7 @@
 //! );
 //! ```
 
-use redoubt_sys::{Error, Handle, Handles, ReceivedHandles};
+use redoubt_sys::{Error, Handle, Handles, ReceivedHandles, ReplyOutcome};
 use redoubt_wire::Error as WireError;
 
 use crate::ipc::{Caller, Request, Words};
@@ -175,23 +175,34 @@ pub fn answer<P: Protocol, S: TypedServer<P>>(
 pub fn serve_call<P: Protocol, S: TypedServer<P>>(server: &mut S, mut request: Request) -> Result<(), Error> {
     let (caller, words, handles) = (request.caller, request.words, request.handles);
     let outcome = answer::<P, S>(server, &caller, &words, &handles, request.lend());
-    finish(request, &outcome)
+    finish(request, &outcome).map(|_| ())
 }
 
 /// Replies to `request` as `outcome` says, and closes what it says to close: handles that do not
 /// travel before the reply, so that a caller holding its reply knows the server no longer holds
 /// them; handles that travel once the reply has copied them. The one place a call is finished,
 /// for 9P, `ninep_common` and typed protocols alike.
-pub fn finish(request: Request, outcome: &Outcome) -> Result<(), Error> {
+/// A rejected reply leaves the call open. Finish it with the universal handle-free Malformed
+/// reply, retaining the original error so provisional resources are rolled back. If even that
+/// valid fallback is rejected, exit under R4b rather than strand the caller and keep serving.
+pub fn finish(request: Request, outcome: &Outcome) -> Result<ReplyOutcome, Error> {
     let (send, close) = (outcome.send.as_slice(), outcome.close.as_slice());
     for handle in close.iter().filter(|h| !send.contains(h)) {
         let _ = crate::handle::close(*handle);
     }
-    let sent = request.reply(&outcome.words, send).map_err(|(e, _)| e);
+    let sent = request.reply(&outcome.words, send);
     for handle in close.iter().filter(|h| send.contains(h)) {
         let _ = crate::handle::close(*handle);
     }
-    sent
+    match sent {
+        Ok(outcome) => Ok(outcome),
+        Err((error, request)) => {
+            if request.reply(&super::MALFORMED, &[]).is_err() {
+                crate::handle::process_exit(crate::start::exit::PANIC);
+            }
+            Err(error)
+        }
+    }
 }
 
 #[cfg(test)]

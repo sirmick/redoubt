@@ -48,7 +48,9 @@ fn call_lend_and_reply() {
         let mut lend = Buffer::new(2).unwrap();
         lend[..5].copy_from_slice(b"hello");
         let extra = Endpoint::create().unwrap();
-        let reply = ep.call(&[7, 8, 9, 10], &[extra.handle()], Some(&mut lend), FOREVER).unwrap();
+        let (reply, returned) =
+            ep.call(&[7, 8, 9, 10], &[extra.handle()], Some(lend), FOREVER).into_result().unwrap();
+        let lend = returned.unwrap();
         assert_eq!(reply.words, [1, 2, 3, u64::from(u32::MAX)]);
         assert_eq!(reply.handles.as_slice().len(), 2);
         assert_eq!(&lend[..5], b"HELLO");
@@ -110,13 +112,13 @@ fn timeouts_dead_endpoints_and_refusals() {
         assert!(matches!(other.receive(0, 0), Err(Error::NotPermitted)));
         assert_eq!(other.mint(nz(1), None), Err(Error::NotPermitted));
         // A call nobody takes times out.
-        assert_eq!(other.call(&[0; 4], &[], None, 1000), Err(Error::Timeout));
+        assert_eq!(other.call(&[0; 4], &[], None, 1000).status, Err(Error::Timeout));
         let t0 = handle::time_now().unwrap();
         assert!(handle::time_now().unwrap() >= t0);
         assert_ne!(handle::random_u64().unwrap(), handle::random_u64().unwrap());
         // Closing a handle makes it unusable.
         other.close().unwrap();
-        assert_eq!(Endpoint::from_handle(badged).call(&[0; 4], &[], None, 0), Err(Error::BadHandle));
+        assert_eq!(Endpoint::from_handle(badged).call(&[0; 4], &[], None, 0).status, Err(Error::BadHandle));
     });
     f.destroy(pid, receive);
     f.as_process(pid, || {

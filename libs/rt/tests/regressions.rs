@@ -100,7 +100,7 @@ fn typed_replies_close_the_handles_made_for_the_caller() {
         for _ in 0..10 {
             let (a, b) = (Endpoint::create().unwrap(), Endpoint::create().unwrap());
             let words = Message::Grant(Grant { pages: 1 }).encode(&mut []).unwrap();
-            let reply = ep.call(&words, &[a.handle(), b.handle()], None, FOREVER).unwrap();
+            let reply = ep.call(&words, &[a.handle(), b.handle()], None, FOREVER).into_result().unwrap().0;
             assert_eq!(reply.words, [0; 4]);
             reply.handles.as_slice().iter().flatten().for_each(|h| redoubt_rt::handle::close(*h).unwrap());
             a.close().unwrap();
@@ -131,7 +131,7 @@ fn a_reply_that_cannot_be_encoded_gives_the_request_back() {
         0
     });
     let code = f.run(client, move || {
-        let reply = Endpoint::from_handle(conn).call(&[0; 4], &[], None, FOREVER).unwrap();
+        let reply = Endpoint::from_handle(conn).call(&[0; 4], &[], None, FOREVER).into_result().unwrap().0;
         assert_eq!(reply.words, [1, 0, 0, 0]);
         0
     });
@@ -200,7 +200,7 @@ fn a_held_9p_call_closes_what_it_brought_exactly_once() {
         let limits = Limits { buckets: 2, in_flight: 2, files: 4, state: 0 };
         let mut nine = NineServer::new(WaitOnce { ready: false }, limits, 9).unwrap();
         let own = |_: &mut NineServer<WaitOnce>, r: redoubt_rt::ipc::Request| {
-            r.reply(&[1, 0, 0, 0], &[]).map_err(|(e, _)| e)
+            r.reply(&[1, 0, 0, 0], &[]).map(|_| ()).map_err(|(e, _)| e)
         };
         let mut verdict = 0;
         while let Ok(event) = ep.receive(FOREVER, 0) {
@@ -218,13 +218,15 @@ fn a_held_9p_call_closes_what_it_brought_exactly_once() {
     });
 
     let read = f.run(client, move || {
-        let mut buf = redoubt_rt::ipc::Buffer::new(1).unwrap();
+        let mut buf = Some(redoubt_rt::ipc::Buffer::new(1).unwrap());
         let ep = Endpoint::from_handle(conn);
         let mut rpc = |body: Body<'_>, handles: &[Handle]| {
-            NineP { tag: 3, body }.encode(&mut buf).unwrap();
-            let reply = ep.call(&WORDS_9P, handles, Some(&mut buf), FOREVER).expect("the call");
+            NineP { tag: 3, body }.encode(buf.as_mut().unwrap()).unwrap();
+            let (reply, returned) =
+                ep.call(&WORDS_9P, handles, buf.take(), FOREVER).into_result().expect("the call");
+            buf = returned;
             assert_eq!(reply.words, WORDS_9P);
-            NineP::decode(&buf).unwrap().body.kind()
+            NineP::decode(buf.as_ref().unwrap()).unwrap().body.kind()
         };
         assert_eq!(rpc(Body::Tattach { fid: 0, afid: NOFID, uname: "", aname: "" }, &[]), 105);
         assert_eq!(rpc(Body::Topen { fid: 0, mode: mode::OREAD }, &[]), 113);
@@ -243,9 +245,7 @@ fn a_held_9p_call_closes_what_it_brought_exactly_once() {
 #[test]
 fn a_wait_without_serve_parking_is_refused_not_stranded() {
     use redoubt_rt::server::Limits;
-    use redoubt_rt::server::ninep::{
-        FileServer, FileStat, NineError, NineServer, Qid, Read, WORDS_9P, mode,
-    };
+    use redoubt_rt::server::ninep::{FileServer, FileStat, NineError, NineServer, Qid, Read, WORDS_9P, mode};
     use redoubt_rt::wire::ninep::{Body, Message as NineP, NOFID};
 
     /// Every read waits, and nothing ever makes it ready: the server never parks, so a `serve`
@@ -292,7 +292,7 @@ fn a_wait_without_serve_parking_is_refused_not_stranded() {
         let limits = Limits { buckets: 2, in_flight: 2, files: 4, state: 0 };
         let mut nine = NineServer::new(AlwaysWaits, limits, 9).unwrap();
         let own = |_: &mut NineServer<AlwaysWaits>, r: redoubt_rt::ipc::Request| {
-            r.reply(&[1, 0, 0, 0], &[]).map_err(|(e, _)| e)
+            r.reply(&[1, 0, 0, 0], &[]).map(|_| ()).map_err(|(e, _)| e)
         };
         let mut answered = 0;
         while let Ok(event) = ep.receive(FOREVER, 0) {
@@ -306,11 +306,13 @@ fn a_wait_without_serve_parking_is_refused_not_stranded() {
     });
 
     let verdict = f.run(client, move || {
-        let mut buf = redoubt_rt::ipc::Buffer::new(1).unwrap();
+        let mut buf = Some(redoubt_rt::ipc::Buffer::new(1).unwrap());
         let ep = Endpoint::from_handle(conn);
         let mut rpc = |body: Body<'_>| -> redoubt_rt::ipc::Words {
-            NineP { tag: 3, body }.encode(&mut buf).unwrap();
-            let reply = ep.call(&WORDS_9P, &[], Some(&mut buf), FOREVER).expect("the call");
+            NineP { tag: 3, body }.encode(buf.as_mut().unwrap()).unwrap();
+            let (reply, returned) =
+                ep.call(&WORDS_9P, &[], buf.take(), FOREVER).into_result().expect("the call");
+            buf = returned;
             reply.words
         };
         assert_eq!(rpc(Body::Tattach { fid: 0, afid: NOFID, uname: "", aname: "" }), [0u64; 4]);

@@ -858,3 +858,106 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   primitive USERLAND.md sketches). Noted, not fixed here: the draft's `pipe/1` is shown in two
   incompatible shapes and neither it nor `read/1` is in the `Redoubt.Cmd` table — pre-existing draft
   drift, for the note's own next pass.
+- **ASTRA architect triage: five decisions open, no design change applied** (2026-09-22).
+  The three-reviewer assessment was routed through the resident architect after its standalone
+  review. Questions **164-168** separate the genuine choices: trusted mediation under confined
+  placement (152/153), authority-closure wording under the settled equal-label domain (150), the
+  one-slice scheduling promise (103), caller IPC disposition, and server reply disposition. The IPC
+  questions preserve R3/R4/R4b and answers 49/70/81/107/116; C1 and A1 share D4's causes, while C2's
+  partial-reply behavior is already specified. None is marked answered and no owner decision is
+  inferred from the request to review. C3/C4/A3 are implementation follow-ups, A2 remains a bounded
+  validation question, and simplification work belongs to the orchestrator's packages; S3 must use
+  SWARM.md's existing Claims authority. ARCHITECT-NOTES.md gains pointers, including the correction
+  that answer 160 is decided and only its typed-parking follow-up 163 remains open. No code,
+  normative design notes or earlier ANSWERS.md tranche changed.
+- **Owner accepts explicit IPC completion outcomes (answers 167-168)** (2026-09-22).
+  The owner accepted both recommendations. KERNEL-SPEC.md preserves R3/R4/R4b ownership and partial
+  delivery, and adds a lifecycle table plus exact out-of-band return encoding: caller status,
+  lend disposition and reply presence; server delivered/discarded and installed-handle mask. The
+  architect pinned the register tags and completion ordering as the encoding of those approved
+  outcomes. A failed caller-output commit rolls back newly installed reply handles, returns the
+  lend and reports existing `InvalidArgument`; a discarded server reply still closes the call.
+  CAPABILITIES.md states the consuming-buffer runtime contract, and CONTAINMENT.md requires
+  provisional grant/connection rollback on discard or missing required reply capabilities.
+  WP-IPC1 carries ABI, kernel, model, runtime and server implementation with regression coverage;
+  no implementation or tests changed here. Questions 164-166 remain open, and the former
+  all-open architect pointers are superseded by appended accepted-decision pointers.
+- **R-IPC1-design clarification: protect the whole completion** (2026-09-22). The design reviewer
+  requested precision about answer 167/168's "one kernel completion". KERNEL-SPEC.md now explicitly
+  includes mapping validation/copy, handle installation or rollback and outcome publication in
+  the protection against mapping changes and lifecycle teardown/abandonment. Validated-frame
+  pinning is sufficient only with equivalent completion arbitration. This architect clarification
+  derives from the approved single outcome; it changes no status, encoding, ownership rule or
+  post-commit guarantee. ANSWERS.md records the clarification separately from owner approval;
+  WP-IPC1 verifies concurrent mapping and lifecycle cases.
+- **R-IPC1-design: three reviews complete** (2026-09-22). Consistency/editor, design-only
+  adversarial and simplifier all passed the application of answers 167-168 and WP-IPC1's plan.
+  The adversarial clarification above was applied and rechecked; simplifier findings gave C3's
+  initial output validation one owner in IPC1 and bounded the separate C4 unsafe-checker
+  prerequisite to explicit production coverage. Final editor recheck passed. ASTRA.md records
+  all findings and dispositions; SWARM.md records the round and IPC1 as ready, not dispatched.
+  The documentation generator's 16 tests passed. No implementation, merge, or prior review-debt
+  clearance is implied; IPC1 still needs its full acceptance gates and implementation review.
+- **IPC1 starts; checker prerequisite exposes hidden unsafe debt** (2026-09-22). The owner
+  authorized implementation. IPC1's ABI/runtime phase runs in isolated branch `wp-ipc1`; kernel
+  edits await coordination with the existing K4 claim. The model is absent from this checkout
+  and QEMU is unavailable, so model/real-boot gates cannot yet be claimed. The separate `wp-t1c`
+  checker repair corrected five moved roots and rejects missing or source-free roots and empty
+  coverage lists, with seven new regression tests (nine host tests pass). All three checker
+  reviewers passed the diff. Its now-honest production check fails on pre-existing runtime
+  11 documented unsafe uses against budget 9; budgets were not raised. Neither package is merged
+  or accepted by these checks; source changes remain in their isolated worktrees.
+- **R-IPC1-host: ABI/runtime checkpoint reviewed, not merged** (2026-09-22). The staged
+  `wp-ipc1` slice implements explicit outcome encoding, consuming-buffer ownership, partial-reply
+  cleanup and delivery-aware provisional-resource rollback, with migrated clients and host tests.
+  Editor and adversarial readers independently caught a failed reply dropping its still-open
+  request; a handle-free fallback now finishes it, or a failed fallback exits under R4b. Stateful
+  KeyServer/NineServer regressions count open calls and lends as well as server bookkeeping.
+  The simplifier's copied-test-predicate concern became explicit lifecycle rows; stale loop
+  comments were corrected. All three angles passed after fixes. Parent verification: 219
+  host/doc tests passed, 2 timing tests ignored; rv32/rv64 affected-crate checks passed. Kernel,
+  model and real-boot work remain unimplemented/unverified here; the corrected ratchet still
+  fails pre-existing runtime 11 versus 9. IPC1 waits for coordination/prerequisites, with no commit
+  or merge; ASTRA.md section 6 and SWARM.md preserve the exact checkpoint and outstanding gates.
+- **Correction: QEMU is in the development image** (2026-09-22). The owner pointed out that the
+  emulator lives in Docker, as Dockerfile and dev.sh document. Both RISC-V QEMU binaries were
+  verified in existing `redoubt-dev:latest` (`79d2210ab327`), version 10.0.13, using read-only,
+  network-disabled diagnostic containers. The earlier host-only availability claim was wrong;
+  ASTRA.md and SWARM.md now distinguish available tooling from the still-unrun IPC1 boot tests.
+- **Correctness remediation resumed** (2026-09-22). Under the owner's renewed instruction,
+  IPC1 resumes kernel completion and real-boot regressions in its existing isolated worktree,
+  while T1c addresses the exposed runtime violation without increasing budget 9. No competing
+  local K4 writer or model checkout was found; external claims remain unverified. The resident
+  architect reconciles settled documentation findings without resolving open questions by fiat.
+  Prior host-review evidence is retained; no new acceptance, commit or merge is implied.
+- **Documentation conformance reconciliation** (2026-09-22). Restored accepted answer 114's
+  `not_yours` wire-table entry; reconciled console scope and fresh size queries with answers
+  160/162 and open 163; documented current device-tag and mapping-result behavior without closing
+  143/146. Distinguished accepted IPC 167/168 from the primary implementation, recorded existing
+  budgets versus pending scheduling, and clarified rv32 acceptance and future Rust `std` scope.
+  Open 164-166 remain explicit qualifications, not newly accepted changes. BUILD-PLAN names
+  the existing in-tree virtio driver and accepted `copy_file` operation. Codec regeneration and
+  source-comment corrections follow; no new design decision or implementation acceptance.
+- **Documentation/tooling accuracy fixes applied, IPC kernel integration withheld** (2026-09-22).
+  The three-review documentation round passed after correcting the regression's Disconnect
+  opcode and the rv32 acceptance wording. Rust/Elixir codecs and the tour were regenerated;
+  parent reruns in primary passed 53 wire/generator tests (one ignored), the server-status
+  regression and publication-link test. Release source-debug information was verified in the
+  kernel's compilation unit. The checker repair is applied with nine passing host tests; its
+  honest primary gate fails runtime11/9. A reviewed runtime reduction reaches9/9 only in the
+  IPC worktree. Kernel completion tests and existing IPC cases boot both widths, but review
+  found an inherited same-process loan-alias lifetime defect. Its regression is drafted; a
+  repeated agent platform restriction prevented the fix. No kernel/ABI/runtime patch was
+  copied into primary. The whole isolated bench passed except one stale bundle fixture path;
+  that separate path correction is applied and its focused boot passes. No commit or push.
+- **IPC correctness integration, not package acceptance** (2026-09-22). Owner-authorized Sol
+  fixed the same-process borrowed-loan alias defect; its regression failed before and passes
+  after on rv64/rv32. Three reviewers approved the fix after making abandoned frame release
+  fail closed and asserting page-charge restoration. The previously reviewed IPC outcome API,
+  consuming buffers, partial reply preservation, record validation/rollback, delivery-aware
+  server cleanup and runtime unsafe reduction are applied uncommitted to primary. Parent's
+  isolated and primary whole benches each passed 99 executions; primary host/wire/checker
+  suites passed 283 tests, 3 ignored; affected crates compile on both widths. The tour was regenerated with an
+  IPC acceptance qualifier. Model, real timer and simultaneous multi-hart gates remain open;
+  server terminal fallback is host-tested only until native process-exit integration. No
+  firmware changes, budget increases, commits or pushes. ASTRA.md section 9 owns the full evidence.

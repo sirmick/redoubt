@@ -6,15 +6,15 @@ the static files seeded into the filesystem. Everything it produces is written u
 
 | Source | What |
 | --- | --- |
-| `boot.toml` | The boot bundle's entries: the kernel, the servers and the `grants` manifest. |
-| `disk.toml` | The virtio-blk disk: partition table and the littlefs volume. |
-| `root/` | Static files seeded into the filesystem image (config, default layout). |
+| `boot.toml` | Proposed boot recipe (not consumed yet): kernel, servers and the `grants` manifest. |
+| `disk.toml` | Proposed disk recipe (not consumed yet): partition table and littlefs volume. |
+| `root/` | Planned static filesystem contents; not generated or installed yet. |
 
 | Output (`target/image/`) | What |
 | --- | --- |
 | `redoubt.bundle` | `signature ‖ ustar`, the archive the loader verifies. Built by `./mkimage`. |
 | `redoubt.img` | The disk image (partition table + littlefs), served by `blkd`/`fsd`. Not built yet. |
-| `stage/` | The tree `redoubt.img` is packed from, after built artifacts are copied in. |
+| `stage/` | Planned staging tree for `redoubt.img`; not built yet. |
 
 The loader verifies `redoubt.bundle` and starts its entries; the disk image is what the block
 and filesystem servers expose once they exist (`docs/NAMESPACES.md`,

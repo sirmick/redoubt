@@ -82,11 +82,19 @@ fn sample_calls() -> Vec<Call> {
 /// A successful result of the right shape for `number` (several where the shape has variety).
 fn sample_returns(number: Number) -> Vec<Return> {
     match number {
-        Number::MapAnon => std::vec![Return::Addr(0), Return::Addr(0xffff_f000)],
-        Number::MapDevice => std::vec![
-            Return::Mapping { addr: 0, len: 0 },
-            Return::Mapping { addr: 0xffff_f000, len: 0x1000 },
+        Number::Call => std::vec![Return::Call(CallOutcome {
+            status: Ok(()),
+            lend: LendDisposition::Returned,
+            reply_present: true,
+        })],
+        Number::Reply => std::vec![
+            Return::Reply(ReplyOutcome { delivered: false, installed: 0 }),
+            Return::Reply(ReplyOutcome { delivered: true, installed: 5 }),
         ],
+        Number::MapAnon => std::vec![Return::Addr(0), Return::Addr(0xffff_f000)],
+        Number::MapDevice => {
+            std::vec![Return::Mapping { addr: 0, len: 0 }, Return::Mapping { addr: 0xffff_f000, len: 0x1000 },]
+        }
         Number::DmaAlloc => std::vec![Return::Dma { addr: 0x2000_0000, phys: BIG }],
         Number::ThreadCreate => std::vec![Return::Tid(MAX_THREADS as u32)],
         Number::ProcessCreate | Number::EndpointCreate | Number::Mint | Number::BudgetCreate => {
@@ -131,11 +139,81 @@ fn every_result_and_error_round_trips() {
             assert_eq!(decode_result(number, &regs), Ok(value), "{value:?} encoded as {regs:?}");
         }
         for error in Error::ALL {
+            if number == Number::Call {
+                let value = Return::Call(CallOutcome {
+                    status: Err(error),
+                    lend: LendDisposition::Returned,
+                    reply_present: false,
+                });
+                assert_eq!(decode_result(number, &encode_result(&Ok(value))), Ok(value));
+                continue;
+            }
             let regs = encode_result(&Err(error));
             assert_eq!(regs, [error as u64, 0, 0, 0, 0, 0, 0, 0]);
             assert_eq!(decode_result(number, &regs), Err(error));
         }
     }
+}
+
+#[test]
+fn ipc_outcomes_round_trip_and_reject_impossible_combinations() {
+    // Independent allowed rows from KERNEL-SPEC's IPC completion table, not the decoder's
+    // Boolean predicate: rejection retains memory; normal/partial reply commits a record;
+    // only taken-call Timeout/Dead consumes memory. Each returning row also has a no-lend form.
+    let mut allowed = Vec::new();
+    for lend in [LendDisposition::None, LendDisposition::Returned] {
+        for error in Error::ALL {
+            allowed.push(Return::Call(CallOutcome { status: Err(error), lend, reply_present: false }));
+        }
+        for status in [Ok(()), Err(Error::OutOfMemory)] {
+            allowed.push(Return::Call(CallOutcome { status, lend, reply_present: true }));
+        }
+    }
+    for error in [Error::Timeout, Error::Dead] {
+        allowed.push(Return::Call(CallOutcome {
+            status: Err(error),
+            lend: LendDisposition::Consumed,
+            reply_present: false,
+        }));
+    }
+    for lend in [LendDisposition::None, LendDisposition::Returned, LendDisposition::Consumed] {
+        for status in core::iter::once(Ok(())).chain(Error::ALL.into_iter().map(Err)) {
+            for reply_present in [false, true] {
+                let value = Return::Call(CallOutcome { status, lend, reply_present });
+                let regs = encode_result(&Ok(value));
+                assert!(fits_rv32(&regs));
+                assert_eq!(
+                    decode_result(Number::Call, &regs),
+                    if allowed.contains(&value) { Ok(value) } else { Err(Error::InvalidArgument) }
+                );
+            }
+        }
+    }
+    for delivered in [false, true] {
+        for installed in 0..32 {
+            let value = Return::Reply(ReplyOutcome { delivered, installed });
+            let regs = encode_result(&Ok(value));
+            assert!(fits_rv32(&regs));
+            let valid = installed < 16 && (delivered || installed == 0);
+            assert_eq!(
+                decode_result(Number::Reply, &regs),
+                if valid { Ok(value) } else { Err(Error::InvalidArgument) }
+            );
+        }
+    }
+    for number in [Number::Call, Number::Reply] {
+        for slot in 1..REGS {
+            let mut regs = [0; REGS];
+            regs[2] = u64::from(number == Number::Call);
+            regs[slot] = 1 << 32;
+            assert_eq!(decode_result(number, &regs), Err(Error::InvalidArgument));
+        }
+    }
+    assert_eq!(decode_result(Number::Call, &[0; REGS]), Err(Error::InvalidArgument), "old success ABI");
+    assert_eq!(decode_result(Number::Call, &[0, 3, 1, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument));
+    assert_eq!(decode_result(Number::Call, &[0, 1, 2, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument));
+    assert_eq!(decode_result(Number::Reply, &[0, 2, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument));
+    assert!(ReplyOutcome { delivered: true, installed: 2 }.validate(1).is_err());
 }
 
 fn snake_case(camel: &str) -> String {

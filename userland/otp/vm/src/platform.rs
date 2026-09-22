@@ -31,7 +31,7 @@ pub trait Platform: crate::sync::Sendable {
     /// The console's current size, if known. A TUI application queries this to lay out its
     /// screen. The default is unknown, which is honest: a platform that has not asked its console
     /// server does not know, and must not claim a size it was never told. On Redoubt the embedder
-    /// answers by asking `/dev/cons` with the `consol` `size` call and caching the reply
+    /// will answer by asking `/dev/cons` with a fresh `consol` `size` call on each query, not caching it
     /// (docs/USERLAND-API.md, "The console and the `Platform` contract"; answer 162).
     fn console_size(&mut self) -> Option<(u16, u16)> {
         None

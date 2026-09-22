@@ -6,6 +6,8 @@ use crate::{Call, Error, Return, decode_result};
 /// Makes `call` and decodes its result. Records and buffers named by address in `call` must stay
 /// valid (and, for results, writable) for the duration of the call; the kernel checks that they
 /// are mapped.
+/// For IPC `call`, errors are in `Return::Call(...).status`, alongside ownership and reply
+/// validity; outer `Err` means a malformed outcome. Never discard the call outcome.
 pub fn syscall(call: &Call) -> Result<Return, Error> {
     // Every register holds at most 32 bits or one `usize` (regs.rs; the tests' `fits_rv32`
     // checks it for every call), so the casts are exact on both widths.

@@ -9,7 +9,8 @@
 //! A call is an `ecall` with `a0` = the call's [`Number`] (from [`NUMBER_BASE`] + 1) and its arguments in
 //! `a1..=a7`, in the order listed on each [`Call`] variant. The kernel answers in the same eight registers:
 //! `a0` = 0 and the result in `a1..=a7` (see [`Return`]), or `a0` = an [`Error`] code and
-//! `a1..=a7` = 0. The kernel preserves every register other than `a0..=a7` across the `ecall`.
+//! `a1..=a7` = 0, except `call`: its ownership and reply-validity payload is defined on every
+//! error too ([`CallOutcome`]). The kernel preserves every other register across the `ecall`.
 //!
 //! The layout is the same on both widths: in this crate a register is a `u64` holding the
 //! register's value, and no register ever holds more than 32 bits or one `usize`, so rv32 carries
@@ -117,7 +118,7 @@ pub use record::{
     Message, MessageKind, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles, Slot, USAGE_SLOTS, Usage,
 };
 pub use regs::REGS;
-pub use ret::{Return, decode_result, encode_result};
+pub use ret::{CallOutcome, LendDisposition, ReplyOutcome, Return, decode_result, encode_result};
 
 /// Machine words in a message.
 pub const WORDS: usize = 4;

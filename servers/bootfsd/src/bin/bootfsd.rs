@@ -49,7 +49,8 @@ pub fn serve(startup: &Startup) -> u32 {
         match endpoint.receive(FOREVER, 0) {
             Ok(Event::Call(request)) => {
                 // 9P and `ninep_common` in the skeleton; `add` and `seal` are ours.
-                // A failed reply means the caller is gone; there is nobody to tell.
+                // The shared finish path completes a rejected reply with a handle-free
+                // refusal (or exits under R4b), so an error leaves no open call here.
                 let _ = server.serve_with(request, |s, request| serve_call::<Bootfs, _>(&mut s.fs, request));
             }
             // Nothing here is sent one-way: drop it, and close what it brought.

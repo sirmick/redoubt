@@ -13,7 +13,7 @@ disagreement with the target's own check:
 Run one for an hour, seeded from the vector files (`seeds/`, made from `vectors/`):
 
 ```
-cd redoubt/wire/fuzz
+cd libs/wire/fuzz
 cargo fuzz run typed corpus/typed seeds/typed -- -max_total_time=3600 -max_len=70000 -timeout=10
 ```
 

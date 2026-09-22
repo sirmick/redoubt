@@ -15,11 +15,12 @@ interface (WP-K1 to WP-K3); `redoubt-rt`, the runtime and shared server library;
 codecs `redoubt-wire` and their generator; littlefs in pure Rust; the bundle signing domain; the
 bench's SSH sessions, virtio disk and network, and attack verdicts taken from the system; fixes for
 three kernel panics reachable from any process (WP-K0). Process creation and exit, the timer and
-preemption, `init` and the servers, and beamlet's Redoubt platform are in progress or designed. In
+preemption, `init`, full server boot integration, and beamlet's Redoubt platform are in progress or designed. In
 the sibling beamlet repository (`userland/otp`): a BEAM VM that runs Elixir, its compiler and IEx.
 See [STATUS.md](STATUS.md).
-**Designed, not built:** init and the steward, 9P namespaces, packages, storage and network
-servers, and the milestone-1 attack suite. The **use case and threat model** (TENETS.md) and the
+**Designed, not built end-to-end:** init and the steward, namespace wiring, packages, storage and network
+services, and the milestone-1 attack suite. The 9P runtime and bootfsd/consoled/keyd components
+exist; blkd has host-tested driver/service code but no boot integration. The **use case and threat model** (TENETS.md) and the
 **game** (GAME.md) are stated; **confinement** (the `confined` manifest flag, one server instance per
 trust domain, no shared read-down) is designed and lands with WP-R3, WP-D2, WP-D3 and WP-S2. Order:
 [PLAN.md](PLAN.md).
@@ -67,9 +68,9 @@ never a scheduling one; every budget shares one stride queue by weight (RESOURCE
 | Name | Role | Class | State |
 | --- | --- | --- | --- |
 | `init` | Holds all authority at boot; starts, wires and restarts every OS process | system | designed |
-| `consoled` | ns16550 UART driver | system | exists as test programs |
-| `bootfsd` | Read-only 9P server over the verified boot bundle (`/boot`) | system | designed |
-| `blkd` | virtio-blk driver, partition table, block-range handles | system | designed |
+| `consoled` | ns16550 UART driver | system | implemented; host-tested; full init wiring pending |
+| `bootfsd` | Read-only 9P server over the verified boot bundle (`/boot`) | system | implemented; host-tested; full init wiring pending |
+| `blkd` | virtio-blk driver, partition table, block-range handles | system | host-tested library; boot integration pending |
 | `fsd` | littlefs filesystem, one instance per volume (e.g. `fsd:data`), serves 9P | system | designed |
 | `netd` | virtio-net driver | system | designed |
 | `ipd` | smoltcp IP stack, one instance per network (e.g. `ipd:lan`), serves `/net` | system | designed |

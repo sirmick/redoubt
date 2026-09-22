@@ -14,16 +14,23 @@ debug capability. An in-kernel debug stub can read and write any process: ambien
 | Disassembly | host `gdb` / `objdump` | never in the guest |
 
 ## Kernel and loader debugging today (QEMU)
-Our ELFs carry full `.debug_info` even in release, so this is source-level out of the box:
+Release builds default to `debug = false`. Enable source debug information explicitly while
+retaining release optimization (important for rv32 image size):
 
-    cargo testbench --run <program>... --debug     # boots QEMU paused with -s -S, prints the gdb line
+    CARGO_PROFILE_RELEASE_DEBUG=2 cargo build --release --target riscv64imac-unknown-none-elf -p redoubt-kernel --features qemu-virt
+    CARGO_PROFILE_RELEASE_DEBUG=2 ./launch --arch rv64 --program log-server --debug
     # then, in another shell:
     gdb target/riscv64imac-unknown-none-elf/release/redoubt-kernel
     (gdb) target remote :1234
     (gdb) break kmain
     (gdb) continue
 
-(Plain `gdb` on this host understands riscv64; if a build does not, use `gdb-multiarch`.)
+Keep the environment override on `launch`: it rebuilds the image. Its `--debug` flag only
+pauses QEMU and enables the GDB stub; it does not select Rust source debug information.
+The build command above has been verified with `readelf --debug-dump=info` showing a
+`kernel/src/main.rs` compilation unit. Merely finding `.debug_info` is insufficient: it may
+contain only dependency sources. The same override applies to the loader built by `launch`.
+Use a host GDB with RISC-V support, such as `gdb-multiarch`.
 
 ## Later: an OS-level debugger
 A small kernel introspection mechanism reached only through a debug capability (read and write a

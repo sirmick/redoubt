@@ -1,6 +1,8 @@
 # Namespaces, 9P and filesystems
 
-Designed, not built. Owns: 9P as the user-facing protocol, per-process namespaces, the network and
+Target namespace design; the shared 9P library and initial server components exist, while full
+system integration and the console extensions below remain pending. Owns: 9P as the user-facing
+protocol, per-process namespaces, the network and
 console trees, filesystem servers, the filesystem choice. Byte layouts: WIRE.md. Borrows from Plan 9,
 minus its ambient parts.
 
@@ -36,6 +38,7 @@ minus its ambient parts.
   <!-- wire-errors: ninep_common -->
   | Code | Error |
   | --- | --- |
+  | 2 | `not_yours` |
   | 3 | `refused` |
 
   `new_connection` mints a connection rooted at `root`, a path relative to the caller's own root
@@ -86,8 +89,9 @@ deadline (`Parked::expired`). A client that wants no wait calls the non-parking 
 hand a request back the way the read path does, a small `libs/rt` extension. That gap is **question
 163**, open; `resize` is specified against it.
 - **The file server says so.** `FileServer::read` returns `Read::Done(usize)` (at most `out.len()`, 0
-  the end of the file) or `Read::Wait`: nothing to read yet and no end. Only `read` waits in milestone
-  1; a `write` that must wait is a non-goal until a server needs it.
+  the end of the file) or `Read::Wait`: nothing to read yet and no end. Among 9P file operations,
+  only `read` waits in milestone 1; typed event waits such as `resize` are also in scope (answer
+  160), pending the typed-dispatch extension (question 163). A waiting `write` remains a non-goal.
 - **The skeleton hands the call back unanswered.** `NineServer::serve_parking(request, own)` is
   `serve_with`, except that a request the file server asked to hold is returned to the server with its
   T-message untouched in its lend: nothing of it is kept in the skeleton. `answer_in_place` returns
@@ -149,9 +153,9 @@ client that never sends them still sees a plain pipe.
   answers "unknown".
 - `resize` (17) **parks until the size changes** (answer 160, Holding a call): the client calls it
   with no fields, the server holds the call, and when the window changes it replies with the new
-  `cols, rows`. **Opcode 17 is WP-S3's obligation, not `consoled`'s**: nothing resizes over UART, and
-a parked *typed* call needs the WP-R1d extension first (question 163), so WP-B2a implements opcode 16
-and not this. The client re-calls `resize` after each reply to wait for the next
+  `cols, rows`. **Opcode 17 is part of the milestone-1 console contract**, including `consoled`'s
+  indefinite UART wait below. It needs WP-R1d's typed-parking extension (question 163), so WP-B2a
+  implements opcode 16 first and opcode 17 after that extension. The client re-calls `resize` after each reply to wait for the next
   change; a client that never calls it misses every change, which is why `size` exists and a TUI
   re-reads it whenever it redraws.
 - **A parked `resize` is keyed to the connection it arrived on, not to the server.** The answer is the size of *that* console: a server with one console (`consoled`) resumes every parked `resize` it holds on a change, but a server with many (`sshd`, one console per SSH channel, each with its own pty size and label set) resumes **only** the calls parked on the connection whose pty changed. Resuming them all would answer one channel's waiter with another channel's geometry — a labelled session reading an unlabelled one's terminal state, the read-up direction `check` exists to stop — so the parked call is keyed by (connection, console), and WP-S3 must keep enough state to do that. **A client re-calls `resize` after each reply** to wait for the next change; a second parked `resize` on one connection is a second waiter on the same event and is pointless but harmless.
@@ -173,6 +177,11 @@ and not this. The client re-calls `resize` after each reply to wait for the next
   `receive`. So `sshd`, which parks `resize` calls from many channels, needs a serving thread per
   channel — a thread parked on channel A never sees channel B's abandonment, and that call would
   stay open holding a slot. `consoled` has one console and one endpoint, so it needs nothing special.
+
+**Current implementation:** the console's own typed-opcode callback in `consoled` still rejects
+unsupported operations; the `size`/`resize` behavior above is the accepted target, not evidence
+that either handler is integrated. Question 163 remains open for typed parking. Querying the size
+afresh is the Redoubt client contract (USERLAND-API.md, answer 162 and the R-T1 correction).
 
 ## The network tree (`/net`)
 `ipd` serves a Plan 9 style tree:

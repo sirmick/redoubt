@@ -14,7 +14,7 @@ forbid = ['KMAIN']
 
 [[file]]
 name = "data"
-from = { path = "redoubt/tests/data/bundle-file.txt" }
+from = { path = "tests/data/bundle-file.txt" }
 
 [[grant]]
 program = "log-server"

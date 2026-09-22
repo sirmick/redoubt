@@ -68,7 +68,7 @@ impl<T: Transport> BlockServer<T> {
     pub fn serve(&mut self, mut request: Request) -> Result<(), Error> {
         let (caller, words, handles) = (request.caller, request.words, request.handles);
         let outcome = answer_with(self, &caller, &words, &handles, request.lend());
-        finish(request, &outcome)
+        finish(request, &outcome).map(|_| ())
     }
 
     /// The range the caller's badge names, or `not_permitted`: a badge past the end of the array

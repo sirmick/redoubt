@@ -1,13 +1,55 @@
-//! What a call returns, in registers: `a0` = 0 and the value in `a1..=a7`, or `a0` = the error's
-//! code and `a1..=a7` = 0. Which [`Return`] a call gives is fixed by its [`Number`].
+//! Results in registers. IPC call status does not erase ownership or reply validity (answers
+//! 167-168); its status lives inside [`CallOutcome`], even when it is an error.
 
 use crate::regs::{REGS, Reader, Writer};
-use crate::{Error, Handle, Number};
+use crate::{Error, Handle, MAX_MSG_HANDLES, Number};
 
-/// A successful call's value.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LendDisposition {
+    None,
+    Returned,
+    Consumed,
+}
+
+/// A call's status and ownership facts, including on error.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CallOutcome {
+    pub status: Result<(), Error>,
+    pub lend: LendDisposition,
+    pub reply_present: bool,
+}
+
+/// Successful closure of an open call. Delivery means record commit, not acknowledgement.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ReplyOutcome {
+    pub delivered: bool,
+    pub installed: u32,
+}
+
+impl ReplyOutcome {
+    /// All required positional handle slots were installed in a committed reply.
+    pub fn accepted(self, required: u32) -> bool { self.delivered && self.installed & required == required }
+
+    /// Validate against the handle count supplied to this particular reply.
+    pub fn validate(self, handles: usize) -> Result<Self, Error> {
+        if handles > MAX_MSG_HANDLES
+            || self.installed >> handles != 0
+            || (!self.delivered && self.installed != 0)
+        {
+            Err(Error::InvalidArgument)
+        } else {
+            Ok(self)
+        }
+    }
+}
+
+/// A decoded result. `Call` includes its own status: outer `Ok` means the outcome decoded,
+/// not that the IPC succeeded. Other variants describe syscall success.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Return {
-    /// Calls with no value, and those whose result is in memory (`call`, `receive`,
+    Call(CallOutcome),
+    Reply(ReplyOutcome),
+    /// Calls with no value, and those whose result is in memory (`receive`,
     /// `budget_usage`).
     Nothing,
     /// `map_anon`.
@@ -16,10 +58,16 @@ pub enum Return {
     /// needs the length to know what it may touch; which device the handle names comes from
     /// the boot manifest, so the kernel says nothing about it.
     /// QUESTIONS.md 146 (pending).
-    Mapping { addr: usize, len: usize },
+    Mapping {
+        addr: usize,
+        len: usize,
+    },
     /// `dma_alloc`. `phys` is a `u64` on both widths because Sv32 physical addresses are 34
     /// bits.
-    Dma { addr: usize, phys: u64 },
+    Dma {
+        addr: usize,
+        phys: u64,
+    },
     /// `thread_create`.
     Tid(u32),
     /// `process_create`, `endpoint_create`, `mint`, `budget_create`.
@@ -39,6 +87,20 @@ pub fn encode_result(result: &Result<Return, Error>) -> [u64; REGS] {
         Ok(value) => {
             w.u32(0);
             match value {
+                Return::Call(outcome) => {
+                    // Status shares a0 with ordinary errors, but its payload is never erased.
+                    regs[0] = outcome.status.err().map_or(0, |e| e as u64);
+                    regs[1] = match outcome.lend {
+                        LendDisposition::None => 0,
+                        LendDisposition::Returned => 1,
+                        LendDisposition::Consumed => 2,
+                    };
+                    regs[2] = u64::from(outcome.reply_present);
+                }
+                Return::Reply(outcome) => {
+                    w.u32(u32::from(outcome.delivered));
+                    w.u32(outcome.installed);
+                }
                 Return::Nothing => {}
                 Return::Addr(addr) => w.usize(addr),
                 Return::Mapping { addr, len } => {
@@ -65,12 +127,44 @@ pub fn encode_result(result: &Result<Return, Error>) -> [u64; REGS] {
 pub fn decode_result(number: Number, regs: &[u64; REGS]) -> Result<Return, Error> {
     let mut r = Reader::regs(regs);
     let code = r.raw();
+    if number == Number::Call {
+        let status =
+            if code == 0 { Ok(()) } else { Err(Error::from_code(code).ok_or(Error::InvalidArgument)?) };
+        let lend = match r.u32()? {
+            0 => LendDisposition::None,
+            1 => LendDisposition::Returned,
+            2 => LendDisposition::Consumed,
+            _ => return Err(Error::InvalidArgument),
+        };
+        let reply_present = match r.u32()? {
+            0 => false,
+            1 => true,
+            _ => return Err(Error::InvalidArgument),
+        };
+        r.finish()?;
+        if (reply_present && !matches!(status, Ok(()) | Err(Error::OutOfMemory)))
+            || (status.is_ok() && !reply_present)
+            || (lend == LendDisposition::Consumed
+                && (reply_present || !matches!(status, Err(Error::Timeout | Error::Dead))))
+        {
+            return Err(Error::InvalidArgument);
+        }
+        return Ok(Return::Call(CallOutcome { status, lend, reply_present }));
+    }
     if code != 0 {
         let error = Error::from_code(code).ok_or(Error::InvalidArgument)?;
         r.finish()?;
         return Err(error);
     }
     let value = match number {
+        Number::Reply => {
+            let delivered = match r.u32()? {
+                0 => false,
+                1 => true,
+                _ => return Err(Error::InvalidArgument),
+            };
+            Return::Reply(ReplyOutcome { delivered, installed: r.u32()? }.validate(MAX_MSG_HANDLES)?)
+        }
         Number::MapAnon => Return::Addr(r.usize()?),
         // QUESTIONS.md 146 (pending).
         Number::MapDevice => Return::Mapping { addr: r.usize()?, len: r.usize()? },
@@ -87,15 +181,14 @@ pub fn decode_result(number: Number, regs: &[u64; REGS]) -> Result<Return, Error
         | Number::ProcessExit
         | Number::ProcessMap
         | Number::ProcessStart
-        | Number::Call
         | Number::Send
         | Number::Receive
-        | Number::Reply
         | Number::Serve
         | Number::HandleClose
         | Number::BudgetDestroy
         | Number::BudgetUsage
         | Number::SystemReset => Return::Nothing,
+        Number::Call => unreachable!(),
     };
     r.finish()?;
     Ok(value)

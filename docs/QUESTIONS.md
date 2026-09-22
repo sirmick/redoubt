@@ -23,6 +23,12 @@ that blocks building it). The round-4 answers revised 56 (handle kinds are check
 82); a later tranche replaced 103 (no `first` flag and no strict priority: one stride queue for
 every budget); the tranche for 120-126 accepted every recommendation and added one change to what
 ships: the boot bundle's signature gets its own domain now (VERIFIED-BOOT.md).
+**Open: 164-166** (ASTRA architect round, 2026-09-22): confined mediation, the authority-closure
+claim and the scheduling latency claim; these remain recommendations, reconciling or revising
+earlier answers 150, 152-153 and 103. **167-168 answered 2026-09-22** (owner accepted both Rec):
+caller IPC disposition and server reply disposition are specified in KERNEL-SPEC.md, preserving
+the settled IPC lifecycle; CAPABILITIES.md and CONTAINMENT.md own the runtime/server rules.
+WP-IPC1 is the implementation follow-up; an answered specification is not implemented behavior.
 
 ## Kernel: messages and IPC (KERNEL-SPEC.md)
 
@@ -1555,3 +1561,120 @@ do not re-decide it.
      answer 160 rejected as heavier than milestone 1 needs.
      **Open:** the owner's or the orchestrator's to schedule; the mechanism is `libs/rt`'s, the same
      owner as WP-R1c.
+
+## From the ASTRA architect round (2026-09-22)
+
+The report's C/A findings are implementation follow-ups unless named here. D4 shares its caller
+ownership issue with C1 and its server completion issue with A1; they are not additional questions
+about the same defect. C2's partial-reply semantics are already answered by 107 and 116 (R4).
+
+164. **Confined placement versus the approved steward mediation paths (ASTRA D1).** Answer 152
+     and INIT.md, The boot manifest, forbid differing label sets sharing any server or endpoint,
+     including the unlabelled steward's domain. Answers 101 and 153 nevertheless require labelled
+     reader/writer helpers and owner-approved declassification/push; CAPABILITIES.md also requires
+     labelled requests to reach the powerbox. The missing piece is a permitted topology and its
+     post-boot preservation, not whether push was approved. Guessing an exemption changes the
+     confined guarantee in TENETS.md and the boot refusal WP-R3 must implement.
+     *Rec:* retain ordinary per-label placement and explicitly name the trusted control-plane
+     mediation exception in TENETS.md, INIT.md and CONTAINMENT.md. Permit only the specified
+     request/owner-approval path, per-item reader/writer operations, and labelled lifecycle
+     supervision needed to end leases; give each edge its caller labels, allowed data, authority
+     and lifetime in one worked configuration. Do not exempt shared data servers, devices or cores.
+     `init` validates the declared graph at boot; the steward enforces it for dynamic budgets and
+     grants, and system servers enforce their own handoffs. Retain exact-label helpers, no standing
+     data path and answer 153's owner-triggered one-item push. Residual: the named mediators are
+     trusted across the labels they serve; the confinement claim must say so explicitly.
+     *Alt:* retain answer 152 literally, with a separate control-plane instance per label set and
+     an external owner-mediated transfer between them. That removes the shared mediator exception
+     but requires a replacement for the currently specified single-steward approval/helper path.
+     **Open:** owner decision; do not change the placement validator or add a general `system`
+     exemption while this is open. Follow-ups: WP-R3 and WP-S2, then the confined worked scenario.
+
+165. **What authority set is closed under permitted same-label delegation (ASTRA D2).** Answer
+     150 already says that equal-label budgets are one trust domain and that a handle passed between
+     them is not a crossing. CAPABILITIES.md permits copying handles. A recipient can therefore
+     acquire authority absent from its own initial handle set without a new approval, while
+     TENETS.md, The use case, and GAME.md, Authority expansion, read as forbidding that increase.
+     Neither forbidding transfers nor reopening the isolation-unit decision is a clarification.
+     *Rec:* define the closure claim over a trust domain's initial granted authority plus its
+     human-approved additions, closed under the permitted delegation and service paths. State
+     separately that a process exercises only its currently held grants and may receive legitimate
+     attenuated delegations; the union is a bound, not permission to mint a handle it cannot reach.
+     Keep R9, stamps, lease revocation and answer 150 unchanged. Align TENETS.md, CAPABILITIES.md
+     and GAME.md so lawful delegation is not scored as escape. Residual: different handle sets
+     within one label set do not supply a per-agent non-collusion guarantee.
+     *Alt:* define per-agent reachable authority as the transitive closure of an explicitly
+     recorded delegation/proxy graph. This can state a tighter bound than the whole label domain,
+     but the setup must record its actual edges and the verdict must include newly authorized
+     delegations; an initial handle list alone cannot define that bound. No new nontransferable
+     handle mechanism is implied by either choice.
+     **Open:** owner decision on the claim's scope; answer 150 remains binding.
+
+166. **The one-slice wakeup promise does not follow from the chosen queue (ASTRA D3).** Answer
+     103 explicitly promises up to one `SLICE` for drivers and the steward, and both RESOURCES.md
+     and KERNEL-SPEC.md R12 repeat it. R12 actually wakes at `max(own pass, current minimum)`;
+     retaining a larger pass or several budgets tied at the minimum defeats an unconditional
+     next-turn bound. This is a proposed revision of answer 103's latency claim, not a correction
+     an editor may make silently.
+     *Rec:* retain the single stride queue, actual-runtime charging and the `max` wake rule, and
+     replace the universal one-slice claim with a measured responsiveness target under a named
+     workload. WP-K5 specifies deterministic tie handling and records weights, runnable budgets,
+     prior passes and measured wake/lease-termination latency in its real-boot acceptance. No
+     universal deadline is inferred from large weight. Update R12, RESOURCES.md and affected
+     acceptance text together; preserve share/fairness and human-control requirements.
+     *Alt:* retain a hard one-slice requirement and design a scheduling/admission rule with a
+     proof under explicit load assumptions. That changes answer 103's mechanism and must be
+     reviewed for starvation and sleeping-to-gain-priority before WP-K5 implements it.
+     **Open:** owner decision; neither strict priority nor a weaker guarantee is accepted here.
+
+167. **A call result does not identify the caller's surviving resources (ASTRA D4/C1, with C2).**
+     R3, R4b and answers 49, 70 and 81 settle where lends go: pre-delivery cancellation restores
+     the caller's buffer, post-delivery abandonment consumes it, and server death while the caller
+     waits returns it. `Timeout`/`Dead` alone do not distinguish these cases. R4 and answers
+     107/116 also deliver words and surviving handle slots on `OutOfMemory`; discarding all error
+     records loses them. The safe runtime cannot infer ownership from the current error enum.
+     *Rec:* preserve those rules and add an explicit call outcome independent of the error:
+     `lend = none | returned | consumed`, and `reply = absent | present`. Return the outcome
+     out of band from the caller's output record, including on errors, so unavailable record memory
+     cannot hide the buffer's disposition. KERNEL-SPEC.md owns the outcome and its exact encoding;
+     `redoubt-sys` mirrors it. `present` means a complete output record was committed, including a
+     partial R4 reply's words and positional zero/surviving handle slots, not merely that the server
+     called `reply`; any supplied lend is `returned`. If a late output-record validation/write
+     failure prevents that commit, reclaim any reply handles newly installed by this attempt,
+     report `absent` with the output error, and return the lend. This cannot undo server effects
+     and does not promise that another caller thread leaves the record mapped afterward. Never
+     decode failed or partly written output to recover handle identities. Pre-delivery failures
+     are `absent` and retain any supplied buffer;
+     post-receipt timeout/revocation is `absent` and `consumed`; a still-waiting caller on server
+     death is `absent` and `returned`. The runtime consumes the buffer argument and returns it
+     only when owned, and exposes or closes every delivered handle. KERNEL-SPEC.md owns the table
+     and error/output validity rules; update ABI, model and runtime together in one follow-up.
+     *Alt:* change R3 so an abandoned lend always returns to the caller. That requires preventing
+     further server access safely and changes the server-survival guarantee; simply dropping or
+     retaining a runtime buffer on every error does not solve the ambiguity. Disabling timeouts
+     after receipt would repeat the option answer 81 explicitly rejected.
+     **Answered:** KERNEL-SPEC.md, IPC completion, IPC return registers, system-call/error tables;
+     CAPABILITIES.md, IPC (consuming-buffer runtime contract). Existing ownership and partial-reply
+     decisions stand; WP-IPC1 implements the outcome and rollback rules.
+
+168. **A server cannot distinguish a delivered reply from a discarded one (ASTRA D4/A1).**
+     R3 and the `reply` row intentionally discard an abandoned reply while closing the open call.
+     The successful syscall result does not tell a server whether the caller received its new
+     connection or grant identifier, so rollback based only on syscall error can strand admission
+     state. An abandonment notice cannot repair a race already consumed by `reply`.
+     *Rec:* keep closing abandoned calls, but return `delivered` or `discarded` from a successful
+     `reply`, together with the mask of handle slots actually installed when delivered. Delivery
+     means the caller's complete output record committed as in 167; a failed output commit with
+     reply-handle rollback is `discarded`, as is abandonment. This is kernel delivery, not
+     acknowledgement that application code used the result. The shared server
+     library exposes that outcome; a connection/grant transaction rolls back provisional state on
+     discard, and has an explicit operation-specific policy when its required handle did not fit
+     (R4). Invalid reply arguments remain errors. Put the contract in KERNEL-SPEC.md and the
+     transaction rule in CONTAINMENT.md; implement with 167's ABI/runtime follow-up, including
+     partial delivery, caller abandonment and server cleanup tests.
+     *Alt:* keep the current reply ABI and introduce acknowledgement/expiry for provisional server
+     resources. That requires another bounded protocol and cleanup lifetime per operation; relying
+     solely on the later abandonment notice or syscall success cannot decide delivery.
+     **Answered:** KERNEL-SPEC.md, IPC completion and IPC return registers; CONTAINMENT.md, the
+     shared server library (provisional grant/connection transactions). WP-IPC1 implements it
+     together with 167; the owner explicitly accepted both recommendations.
