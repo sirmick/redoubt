@@ -18,6 +18,7 @@ members = [
   "libs/flatipc",
   "libs/flatipc-derive",
   "servers/keyd",
+  "servers/blkd",
   "tests/programs",
   "tools/testbench",
   "vendor/getrandom",
