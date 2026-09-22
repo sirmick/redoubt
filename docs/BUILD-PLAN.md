@@ -417,7 +417,8 @@ manifest; **the byte quotas, metered here and nowhere else** (question 118): `ne
 `quota` carved from the granter's root through the shared library's grant hook, and returned
 through its disconnect hook, with the library holding no byte counters; `admit` and `check` on
 every request (writes need equal labels; a walk or `stat` is a read; directory reads list only
-readable entries); relies only on
+readable entries); typed `rename`, `copy`, `get_attr` and `set_attr` for within-volume operations
+9P2000 does not express; relies only on
 `blkd`'s contract (IO-ARCHITECTURE.md).
 - Accepted when: 9P conformance; per-volume label cases (read up, write down and write up all
   refused, `Tcreate` in a labelled directory from an unlabelled caller revealing nothing);
