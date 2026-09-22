@@ -172,12 +172,9 @@ Restart and reboot rules: INIT.md.
 
 ## Covert and timing channels
 **Covert communication is out of scope**, like microarchitectural side channels (TENETS.md, The
-adversary, and The high/low pair). On one machine, power, heat, EM and the clock couple any two
-domains, so no OS can prevent or bound it; the OS does not claim to, and does not measure it. What the
-OS does guarantee is the **intentional** half: every software-mediated flow is closed (the channel
-table below). For ordinary multi-tenancy, where the parties merely share a machine, keeping covert
-bandwidth low and audited is good practice; for a protected label set the only zero is placement — not
-co-locating the secret with the domain that wants it. The attacker is assumed to have a perfect clock
+adversary). On one machine, power, heat, EM and the clock couple any two domains, so no OS can prevent
+or bound it. Software closes every *intentional* flow (the channel table below); covert channels are
+the physical layer's, and the only zero is placement. The attacker is assumed to have a perfect clock
 (TENETS.md).
 - **Secrets are handled by constant-time code** (`keyd`, crypto everywhere), so there is nothing
   secret-dependent to time.
@@ -214,11 +211,9 @@ co-locating the secret with the domain that wants it. The attacker is assumed to
   server CPU (above).
   On QEMU and ordinary hardware, none of the microarchitectural channels are closed.
 
-**The channel table.** Each row is a resource that can carry a signal between two budgets, and how it
-is handled. Rows closed by software are the OS's claim: an intentional path here is a hard
-requirement, and a leak is a design hole. The rest are **out of scope**: covert channels are physical
-or RTL-reduced, never guaranteed closed, and the only zero is placement (TENETS.md, The high/low
-pair).
+**The channel table.** Software-closed rows are the OS's claim: an intentional path here is a hard
+requirement, and a leak is a design hole. The rest are out of scope (RTL-reduced or physical), with
+placement as the only zero (TENETS.md, The high/low pair).
 
 | Resource | Closed by | For a protected label set |
 | --- | --- | --- |

@@ -32,43 +32,21 @@ VM (the BEAM is not in the TCB; INIT.md), and possibly a server it talks to. The
 3. **Human control.** Every increase in authority, and every declassification, is an out-of-band human
    approval; leases bound time; the sponsor can always end a lease (CAPABILITIES.md).
 
-It guarantees the **software** half, and only that: no *intentional* path crosses a label boundary,
-and no agent gains authority it was not given. It makes **no claim at all** about *covert*
-communication between agents — signalling through shared physical state. On one machine that cannot be
-prevented (The high/low pair), so covert collusion is **out of scope**, exactly as physical attacks and
-microarchitectural side channels are: not a threat the design bounds, not one it measures, not a goal.
+This is a **software** claim; the physical limits, including covert communication between co-located
+budgets, are out of scope (The adversary).
 
 ### The high/low pair
-The sharpest case: a labelled agent with secrets and no network (**A**) and an unlabelled agent with
-network (**B**) are colluding, having agreed a code in advance. Labels remove every *intentional*
-path between them — `call`/`send` (R1), writes (`check`), sinks, metadata, global counters, the
-approval screen. There is **no goal** of preventing or bounding their *covert* communication: on a
-shared machine that is impossible, and it is out of scope, not something the design measures. The split:
+A labelled agent with secrets and no network (**A**) and an unlabelled, networked agent (**B**)
+colluding, having agreed a code in advance, is the sharpest case. Labels remove every *intentional*
+path between them — `call`/`send` (R1), writes (`check`), sinks, metadata, counters, the approval
+screen — and that is the whole of the design's claim here (CONTAINMENT.md's channel table). Two
+consequences:
 
-- **Covert communication is out of scope**, for the same reason microarchitectural side channels are
-  (CONTAINMENT.md; TENETS.md, The adversary). Two processes on one die always share physical state — at
-  minimum power delivery, heat and electromagnetic emission, and usually a clock (DVFS couples a
-  workload on one core to timing on another) — so even a perfect RTL for every enumerated on-die
-  resource leaves a substrate. A pre-agreed code removes all negotiation cost, so the smallest channel
-  carries meaning: **one bit can be a key**. The OS neither bounds nor measures this, and a channel
-  found in the game is an observation, not a design failure (GAME.md). It is a hardware and placement
-  matter (PLATFORM-FPGA.md).
-- **The OS's claim is exact and strong: zero intentional paths, by construction.** Everything software
-  mediates is closed (CONTAINMENT.md's channel table). That claim is testable, and the bench tests it.
-  This is what the design defends, and the only thing it defends here.
-- **Read-down is an intentional path, closed for a confined domain.** A labelled session reading an
-  unlabelled volume is how data enters a vault, but with a colluding lower domain it is a low-to-high
-  path. A confined domain reads no shared unlabelled data; input arrives by an audited push from the
-  steward.
-- **Sharing is the attack on the software half.** A shared server instance, volume or endpoint is where
-  labels are enforced, so two differing label sets in a confined deployment share none of them. A
-  manifest that places them together is refused (INIT.md). This narrows the software surface; it makes
-  no claim about the physical one.
-
-The **only** thing that zeroes covert communication is not co-locating the two domains — separate
-power/thermal domains or machines — and that is a deployment decision the OS cannot substitute for. No
-non-interference claim should be read as a silence guarantee, and none is made on QEMU or general
-hardware.
+- **Read-down is an intentional path.** A confined domain does not read a shared unlabelled volume;
+  input arrives by an audited push from the steward.
+- **Sharing is the attack.** A shared server instance, volume or endpoint is where labels are enforced,
+  so two differing label sets in a confined deployment share none of them, and a manifest that places
+  them together is refused (INIT.md).
 
 ## The adversary
 Design for a capable, patient, automated adversary that has read every line of this repository, can
@@ -81,10 +59,12 @@ That rules out security through obscurity, through "nobody would try that", or t
 that merely slows a human down. What is left: a small trusted base, mechanisms that are correct by
 construction, and no ambient authority.
 
-Out of scope for the software, stated so nobody assumes otherwise: physical attacks,
-microarchitectural side channels (Spectre-class, cache timing), and malicious hardware. These need
-hardware answers; on the FPGA target, side channels are handled in the RTL, and the hardware plan
-may change to avoid them (PLATFORM-FPGA.md).
+Out of scope for the software, stated once so nobody assumes otherwise: physical attacks,
+microarchitectural side channels (Spectre-class, cache timing), **covert communication between
+co-located budgets** (power, heat, EM and the clock couple any two domains, so no OS can prevent it;
+not co-locating two domains is the only zero), and malicious hardware. These need hardware answers,
+and on the FPGA target are handled in the RTL and by placement; the hardware plan may change to avoid
+them (PLATFORM-FPGA.md).
 
 **Timing.** Assume the attacker has a perfect clock: it can count on another core or timestamp
 against a machine it controls. Secrets are protected by constant-time code and by not sharing
@@ -138,10 +118,8 @@ loader, kernel) and hold it in their head. It should read like a textbook exampl
 - **Tested like it will be attacked.** See tenet 6: every security property has a test that tries to
   break it.
 - **Non-interference across labels.** The label set is the isolation unit; only steward declassification
-  moves data across one. Labels remove every intentional (software-mediated) flow, by construction.
-  Covert flows — power, heat, EM and the clock — are **out of scope**, like microarchitectural side
-  channels; the OS neither bounds nor measures them. The claim is exactly zero intentional paths
-  (The use case).
+  moves data across one, and no intentional (software-mediated) flow crosses it, by construction.
+  Covert flows are out of scope (The use case).
 
 ## 3. Rust, and assembly only where Rust cannot reach
 - Everything that runs on the machine is Rust: loader, kernel, servers, applications, and the

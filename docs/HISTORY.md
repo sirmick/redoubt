@@ -651,10 +651,10 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   volume, endpoint, network instance or core, exactly as it refuses a server's own budget. GAME.md is
   new: the fight-club contract — scenarios (single-agent escape; the high/low pair; authority expansion;
   collusion through the human), setup, win conditions, and the **verdict taxonomy** (design hole vs
-  implementation bug vs stated residual vs policy vs human). A **software** channel (an intentional
-  path) is the only red win that counts against the OS; a **covert** channel is an observation, out of
-  scope and unscored. The design is unchanged in mechanism; what changed is that its containment claim
-  is now stated exactly — zero intentional paths, covert channels out of scope, placement as the only
-  zero — where a reader and an agent can find it.
+  implementation bug vs out-of-scope covert channel vs policy vs human). A **software** channel (an
+  intentional path) is the only red win that counts against the OS; a **covert** channel is an
+  observation, out of scope and unscored. The design is unchanged in mechanism; what changed is that
+  its containment claim is now stated exactly — zero intentional paths, covert channels out of scope,
+  placement as the only zero — where a reader and an agent can find it.
 
 
