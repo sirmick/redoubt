@@ -395,8 +395,10 @@ not needed.
 
 **WP-R4. bootfsd and consoled.** Size S.
 - Delivers: `bootfsd` (read-only 9P over the verified bundle), serving **only the bundle entries
-  the manifest's `public` list names** (the list arrives as its arguments from `init`), matched
-  byte for byte, never the manifest (answer 123); `consoled` (UART driver serving
+  the manifest's `public` list names**, matched byte for byte, never the manifest (answer 123).
+  `init` names the public entries in its arguments and pushes their bytes over the `bootfs`
+  protocol, so `bootfsd` never sees the bundle and parses no archive (NAMESPACES.md, Filling
+  `/boot`; answer 148); `consoled` (UART driver serving
   `/dev/cons` over 9P, IRQ receive); both serve `ninep_common` through the skeleton.
 - Accepted when: 9P conformance vectors from WP-W1; typing on the UART reaches a 9P reader; attack
   case: a session walking `/boot` sees only the public entries, and a walk to the manifest's own

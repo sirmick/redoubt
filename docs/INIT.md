@@ -131,7 +131,9 @@ name rule does not apply to them; a server that wants one validates it itself.
 **What `/boot` shows.** `bootfsd` serves exactly the bundle entries the `public` list names,
 matched byte for byte (no globbing, no prefixes), as one flat read-only directory; a walk to any
 other name is "does not exist", so nothing there tells a caller what else the bundle holds
-(NAMESPACES.md). `init` passes the list to `bootfsd` as its arguments, and refuses a manifest whose
+(NAMESPACES.md). `init` reads the bundle and pushes the public entries' bytes to `bootfsd` over the
+`bootfs` protocol — `bootfsd` never sees the bundle and parses no archive (NAMESPACES.md, Filling
+`/boot`; answer 148) — and refuses a manifest whose
 `public` list names an entry the bundle does not hold, or names the manifest itself. **The manifest
 is never public:** it carries `keyd`'s seeds (below) and every principal's account and keys, while
 every session reaches `/boot` for its modules.
