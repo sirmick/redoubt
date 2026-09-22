@@ -19,14 +19,17 @@ preemption, `init` and the servers, and beamlet's Redoubt platform are in progre
 the sibling beamlet repository (`userland/otp`): a BEAM VM that runs Elixir, its compiler and IEx.
 See [STATUS.md](STATUS.md).
 **Designed, not built:** init and the steward, 9P namespaces, packages, storage and network
-servers, and the milestone-1 attack suite. Order: [PLAN.md](PLAN.md).
+servers, and the milestone-1 attack suite. The **use case and threat model** (TENETS.md) and the
+**game** (GAME.md) are stated; **confinement** (the `confined` manifest flag, one server instance per
+trust domain, no shared read-down) is designed and lands with WP-R3, WP-D2, WP-D3 and WP-S2. Order:
+[PLAN.md](PLAN.md).
 
 ## Reading order
 **The design**
 
 | Note | What it owns |
 | --- | --- |
-| [TENETS.md](TENETS.md) | Adversary, review model, timing principle, non-goals, the seven tenets. |
+| [TENETS.md](TENETS.md) | What the project believes — outranks everything; the use case, the high/low pair, the seven tenets. |
 | [CAPABILITIES.md](CAPABILITIES.md) | Why handles; how IPC and minting are used; revocation policy; principals, agents, projects; the powerbox and approvals. |
 | [CONTAINMENT.md](CONTAINMENT.md) | Labels, sessions and vaults, declassification, the shared server library, crash blame, covert and timing channels, the executable model. |
 | [RESOURCES.md](RESOURCES.md) | Why budgets look as they do; scheduling policy; the timer. |
