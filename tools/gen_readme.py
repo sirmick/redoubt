@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate README.html — one self-contained page with Graphviz-rendered SVG diagrams.
+"""Generate docs/README.html — one self-contained page with Graphviz-rendered SVG diagrams.
 
 Usage:  python3 tools/gen_readme.py
 Needs:  graphviz (`dot` on PATH).  Installed in the dev image (Dockerfile).
@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "README.html"
+OUT = ROOT / "docs" / "README.html"
 
 # --- status palette -------------------------------------------------------
 BUILT = ("#d9f2e0", "#1a7f37")   # green
@@ -324,7 +324,7 @@ footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
   </div>
   <p>A term to hold onto: a <b>budget</b> is a kernel container every process lives in. It is the unit of accounting,
   CPU share, revocation, <b>information-flow labels</b>, and identity (its <i>account</i> travels with every message) —
-  one object replacing five mechanisms. <a href="docs/RESOURCES.md">RESOURCES.md</a> · <a href="docs/CONTAINMENT.md">CONTAINMENT.md</a></p>
+  one object replacing five mechanisms. <a href="RESOURCES.md">RESOURCES.md</a> · <a href="CONTAINMENT.md">CONTAINMENT.md</a></p>
 </section>
 
 <section id="boot">
@@ -336,9 +336,9 @@ footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
   <div class="diagram">@@BOOT@@</div>
   <ul class="tight">
     <li><b>Built:</b> firmware selection, loader both widths, Ed25519 verification, W^X, default-deny device grants.
-      <a href="docs/BOOT.md">BOOT.md</a> · <a href="docs/VERIFIED-BOOT.md">VERIFIED-BOOT.md</a> · <a href="libs/signing/src/lib.rs">libs/signing</a> · <a href="loader/src/verify.rs">loader/src/verify.rs</a></li>
+      <a href="BOOT.md">BOOT.md</a> · <a href="VERIFIED-BOOT.md">VERIFIED-BOOT.md</a> · <a href="../libs/signing/src/lib.rs">libs/signing</a> · <a href="../loader/src/verify.rs">loader/src/verify.rs</a></li>
     <li><b>Designed change:</b> the loader will load only <code>kernel</code> + <code>init</code>; <code>init</code> launches every other
-      process through a system-signed <b>loader stub</b> from the bundle's pages. <a href="docs/PACKAGES.md">PACKAGES.md</a></li>
+      process through a system-signed <b>loader stub</b> from the bundle's pages. <a href="PACKAGES.md">PACKAGES.md</a></li>
   </ul>
   <h3>Hardware</h3>
   <table>
@@ -350,7 +350,7 @@ footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
   </table>
   <p class="lead">Hardware differences are <b>capability features</b> (<code>sbi</code>, <code>plic</code>) composed by <b>board
   features</b> (<code>qemu-virt</code>), never <code>target_arch</code> checks. RAM, MMIO and the interrupt controller come from
-  the device tree. <a href="docs/PLATFORM-FPGA.md">PLATFORM-FPGA.md</a> · <a href="docs/IO-ARCHITECTURE.md">IO-ARCHITECTURE.md</a></p>
+  the device tree. <a href="PLATFORM-FPGA.md">PLATFORM-FPGA.md</a> · <a href="IO-ARCHITECTURE.md">IO-ARCHITECTURE.md</a></p>
 </section>
 
 <section id="kernel">
@@ -371,10 +371,10 @@ footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
     <tr><td><code>process_create process_map process_start process_exit</code></td><td>launch + exit notices</td><td><span class="pill prog"><span class="dot"></span>in progress</span></td></tr>
   </table>
   <p>The precise spec — constants, the cost table, rules R1–R12, invariants I1–I15, errors and the order of checks —
-  is <a href="docs/KERNEL-SPEC.md">KERNEL-SPEC.md</a>, frozen for milestone 1. Implementation:
-  <a href="kernel/src/main.rs">kernel/src/main.rs</a>, <a href="kernel/src/syscall.rs">kernel/src/syscall.rs</a>,
-  <a href="kernel/src/services.rs">kernel/src/services.rs</a>, <a href="kernel/src/mem.rs">kernel/src/mem.rs</a>.
-  Page tables: <a href="libs/paging/src/lib.rs">libs/paging/src/lib.rs</a>.</p>
+  is <a href="KERNEL-SPEC.md">KERNEL-SPEC.md</a>, frozen for milestone 1. Implementation:
+  <a href="../kernel/src/main.rs">kernel/src/main.rs</a>, <a href="../kernel/src/syscall.rs">kernel/src/syscall.rs</a>,
+  <a href="../kernel/src/services.rs">kernel/src/services.rs</a>, <a href="../kernel/src/mem.rs">kernel/src/mem.rs</a>.
+  Page tables: <a href="../libs/paging/src/lib.rs">libs/paging/src/lib.rs</a>.</p>
 </section>
 
 <section id="servers">
@@ -391,10 +391,10 @@ footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
     <tr><td><code>blkd</code></td><td>virtio-blk driver + partitions + block-range handles</td><td><span class="pill prog"><span class="dot"></span>in progress</span></td></tr>
     <tr><td><code>fsd</code></td><td>littlefs, one instance per volume, serves 9P</td><td><span class="pill des"><span class="dot"></span>designed</span></td></tr>
     <tr><td><code>netd</code> · <code>ipd</code></td><td>virtio-net driver; smoltcp stack serving <code>/net</code></td><td><span class="pill prog"><span class="dot"></span>in progress</span></td></tr>
-    <tr><td><code>keyd</code></td><td>holds every private key; signs, never exports</td><td><span class="pill built"><span class="dot"></span>built</span> <a href="servers/keyd/src/lib.rs">code</a></td></tr>
+    <tr><td><code>keyd</code></td><td>holds every private key; signs, never exports</td><td><span class="pill built"><span class="dot"></span>built</span> <a href="../servers/keyd/src/lib.rs">code</a></td></tr>
     <tr><td><code>steward</code> · <code>sshd</code></td><td>principals, sessions, powerbox, audit; SSH front door</td><td><span class="pill des"><span class="dot"></span>designed</span></td></tr>
   </table>
-  <div class="note"><b>keyd's rule:</b> a badge names <b>one key and one purpose</b>. Every signature is over a 32-byte digest <b>keyd computed itself</b>, and no operation returns a private key. A session that crashes a shared server three times (same account + label set) is logged out for 10 minutes, taken from the kernel's exit notice — never the attacker's output. <a href="docs/INIT.md">INIT.md</a> · <a href="docs/CONTAINMENT.md">CONTAINMENT.md</a></div>
+  <div class="note"><b>keyd's rule:</b> a badge names <b>one key and one purpose</b>. Every signature is over a 32-byte digest <b>keyd computed itself</b>, and no operation returns a private key. A session that crashes a shared server three times (same account + label set) is logged out for 10 minutes, taken from the kernel's exit notice — never the attacker's output. <a href="INIT.md">INIT.md</a> · <a href="CONTAINMENT.md">CONTAINMENT.md</a></div>
 </section>
 
 <section id="beamlet">
@@ -405,8 +405,8 @@ footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
   <code>ssh</code> run unmodified on Rust natives.</p>
   <div class="diagram">@@BEAMLET@@</div>
   <ul class="tight">
-    <li><b>Built and tested against the real BEAM:</b> <a href="userland/otp/DESIGN.md">userland/otp/DESIGN.md</a></li>
-    <li><b>Designed:</b> beamlet's <code>Platform</code> retargeted to the Redoubt 9P client (WP-B1/WP-B2: console, files, launching; then IEx on the UART). <a href="docs/USERLAND.md">USERLAND.md</a></li>
+    <li><b>Built and tested against the real BEAM:</b> <a href="../userland/otp/DESIGN.md">userland/otp/DESIGN.md</a></li>
+    <li><b>Designed:</b> beamlet's <code>Platform</code> retargeted to the Redoubt 9P client (WP-B1/WP-B2: console, files, launching; then IEx on the UART). <a href="USERLAND.md">USERLAND.md</a></li>
     <li>On Redoubt, one VM = one trust domain; a new trust domain is a new VM under a new budget.</li>
   </ul>
 </section>
@@ -431,8 +431,8 @@ footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
       <li>Three blamed crashes end a session for the window</li>
     </ul></div>
   </div>
-  <p><a href="docs/CAPABILITIES.md">CAPABILITIES.md</a> · <a href="docs/CONTAINMENT.md">CONTAINMENT.md</a> ·
-  <a href="docs/TENETS.md">TENETS.md</a> (outranks everything) · <a href="docs/DEVICE-GRANTS.md">DEVICE-GRANTS.md</a></p>
+  <p><a href="CAPABILITIES.md">CAPABILITIES.md</a> · <a href="CONTAINMENT.md">CONTAINMENT.md</a> ·
+  <a href="TENETS.md">TENETS.md</a> (outranks everything) · <a href="DEVICE-GRANTS.md">DEVICE-GRANTS.md</a></p>
 </section>
 
 <section id="start">
@@ -444,7 +444,7 @@ footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
 ./dev.sh --rebuild       # rebuild the image after editing the Dockerfile</code></pre>
   <p class="lead">Installs Rust with the RISC-V bare-metal targets (<code>riscv64imac</code>, <code>riscv32imac</code>,
   <code>riscv64gc</code>), QEMU for both widths, OpenSSH, graphviz (for this page's diagrams) and the agent CLIs.
-  The pinned OTP 28 / Elixir 1.20 toolchains live in <a href="toolchains/">toolchains/</a>.</p>
+  The pinned OTP 28 / Elixir 1.20 toolchains live in <a href="../toolchains/">toolchains/</a>.</p>
   <h3>2 · Firmware (once)</h3>
   <pre><code>./scripts/build-bios.sh  # builds the vendored RustSBI in bios/ for both widths</code></pre>
   <h3>3 · Build the OS</h3>
@@ -458,21 +458,21 @@ footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
 ./launch --arch rv64 --print-only          # show the QEMU command and exit
 ./launch --arch rv64 --debug               # pause with a gdb stub on :1234</code></pre>
   <p class="lead"><code>launch</code> assembles and signs the boot bundle and attaches the guest serial console to your
-  stdin/stdout. <a href="docs/DEBUGGING.md">DEBUGGING.md</a></p>
+  stdin/stdout. <a href="DEBUGGING.md">DEBUGGING.md</a></p>
   <h3>5 · Run the tests</h3>
   <pre><code>./test --arch rv64            # the whole bench
 ./test --arch rv64 timer      # cases whose name contains "timer"
 ./test --list</code></pre>
   <h3>6 · Build an image</h3>
   <pre><code>./mkimage                      # signed boot bundle → target/image/redoubt.bundle</code></pre>
-  <p class="lead">Disk-image recipes (littlefs) live in <a href="image/">image/</a> and are not built yet.</p>
+  <p class="lead">Disk-image recipes (littlefs) live in <a href="../image/">image/</a> and are not built yet.</p>
   <h3>7 · beamlet</h3>
   <pre><code>cd userland/otp
 . tools/env.sh                 # put the pinned OTP/Elixir on PATH
 cargo test                     # unit + hostile-input tests
 tools/difftest                 # differential tests against the real BEAM</code></pre>
   <h3>Regenerating this page</h3>
-  <pre><code>python3 tools/gen_readme.py    # DOT → SVG → README.html (needs graphviz)</code></pre>
+  <pre><code>python3 tools/gen_readme.py    # DOT → SVG → docs/README.html (needs graphviz)</code></pre>
 </section>
 
 <section id="testing">
@@ -483,7 +483,7 @@ tools/difftest                 # differential tests against the real BEAM</code>
   <div class="diagram">@@TESTING@@</div>
   <p class="lead">A build of the same sources with debug assertions and overflow checks (the <code>checked</code> profile)
   is a normal case option. 55 cases exercise IPC, budgets, devices, timers, loader rejections, verified-boot attacks,
-  forged verdicts and SSH. <a href="docs/TENETS.md">TENETS.md</a> tenet 6 · <a href="docs/testbench.md">testbench.md</a> · <a href="tests/">tests/</a></p>
+  forged verdicts and SSH. <a href="TENETS.md">TENETS.md</a> tenet 6 · <a href="testbench.md">testbench.md</a> · <a href="../tests/">tests/</a></p>
 </section>
 
 <section id="reading">
@@ -491,20 +491,20 @@ tools/difftest                 # differential tests against the real BEAM</code>
   <div class="diagram">@@REPO@@</div>
   <div class="grid2">
     <div class="card"><h4>Reading order</h4><ul class="tight">
-      <li><a href="docs/TENETS.md">TENETS.md</a> — outranks everything</li>
-      <li><a href="docs/README.md">README.md</a> — index + glossary + server roster</li>
-      <li><a href="docs/STATUS.md">STATUS.md</a> — where the code stands</li>
-      <li><a href="docs/PLAN.md">PLAN.md</a> — the three milestones</li>
-      <li><a href="docs/KERNEL-SPEC.md">KERNEL-SPEC.md</a> — the precise kernel</li>
-      <li><a href="docs/CAPABILITIES.md">CAPABILITIES.md</a> · <a href="docs/CONTAINMENT.md">CONTAINMENT.md</a> · <a href="docs/RESOURCES.md">RESOURCES.md</a></li>
-      <li><a href="docs/INIT.md">INIT.md</a> · <a href="docs/NAMESPACES.md">NAMESPACES.md</a> · <a href="docs/WIRE.md">WIRE.md</a></li>
+      <li><a href="TENETS.md">TENETS.md</a> — outranks everything</li>
+      <li><a href="README.md">README.md</a> — index + glossary + server roster</li>
+      <li><a href="STATUS.md">STATUS.md</a> — where the code stands</li>
+      <li><a href="PLAN.md">PLAN.md</a> — the three milestones</li>
+      <li><a href="KERNEL-SPEC.md">KERNEL-SPEC.md</a> — the precise kernel</li>
+      <li><a href="CAPABILITIES.md">CAPABILITIES.md</a> · <a href="CONTAINMENT.md">CONTAINMENT.md</a> · <a href="RESOURCES.md">RESOURCES.md</a></li>
+      <li><a href="INIT.md">INIT.md</a> · <a href="NAMESPACES.md">NAMESPACES.md</a> · <a href="WIRE.md">WIRE.md</a></li>
     </ul></div>
     <div class="card"><h4>Code map</h4><ul class="tight">
-      <li><a href="bios/">bios/</a> · <a href="loader/">loader/</a> · <a href="kernel/">kernel/</a></li>
-      <li><a href="libs/sys/">libs/sys</a> (ABI) · <a href="libs/rt/">libs/rt</a> · <a href="libs/wire/">libs/wire</a></li>
-      <li><a href="libs/signing/">libs/signing</a> · <a href="libs/littlefs/">libs/littlefs</a> · <a href="libs/paging/">libs/paging</a></li>
-      <li><a href="servers/">servers/</a> · <a href="userland/otp/">userland/otp</a></li>
-      <li><a href="tools/testbench/">tools/testbench</a> · <a href="tests/">tests/</a></li>
+      <li><a href="../bios/">bios/</a> · <a href="../loader/">loader/</a> · <a href="../kernel/">kernel/</a></li>
+      <li><a href="../libs/sys/">libs/sys</a> (ABI) · <a href="../libs/rt/">libs/rt</a> · <a href="../libs/wire/">libs/wire</a></li>
+      <li><a href="../libs/signing/">libs/signing</a> · <a href="../libs/littlefs/">libs/littlefs</a> · <a href="../libs/paging/">libs/paging</a></li>
+      <li><a href="../servers/">servers/</a> · <a href="../userland/otp/">userland/otp</a></li>
+      <li><a href="../tools/testbench/">tools/testbench</a> · <a href="../tests/">tests/</a></li>
     </ul></div>
   </div>
 </section>
@@ -518,13 +518,13 @@ tools/difftest                 # differential tests against the real BEAM</code>
     <li><b>M3 — self-hosted development:</b> a real agent harness through <code>gatewayd</code>, compilers on the box, the server APIs.</li>
     <li><b>After M3:</b> rv32 returned to the booted dimensions; SMP; the FPGA.</li>
   </ul>
-  <p><a href="docs/BUILD-PLAN.md">BUILD-PLAN.md</a> · <a href="docs/SWARM.md">SWARM.md</a> · <a href="docs/HISTORY.md">HISTORY.md</a></p>
+  <p><a href="BUILD-PLAN.md">BUILD-PLAN.md</a> · <a href="SWARM.md">SWARM.md</a> · <a href="HISTORY.md">HISTORY.md</a></p>
 </section>
 
 <footer>
   Redoubt began as <b>Xous</b> by the betrusted.io project. Licensed under the terms in
   <a href="LICENSE">LICENSE</a> / <a href="LICENSES/">LICENSES/</a>. This page is generated by
-  <a href="tools/gen_readme.py">tools/gen_readme.py</a>.
+  <a href="../tools/gen_readme.py">tools/gen_readme.py</a>.
 </footer>
 
 </main>
