@@ -40,14 +40,10 @@ budgets, are out of scope (The adversary).
 A labelled agent with secrets and no network (**A**) and an unlabelled, networked agent (**B**)
 colluding, having agreed a code in advance, is the sharpest case. Labels remove every *intentional*
 path between them — `call`/`send` (R1), writes (`check`), sinks, metadata, counters, the approval
-screen — and that is the whole of the design's claim here (CONTAINMENT.md's channel table). Two
-consequences:
-
-- **Read-down is an intentional path.** A confined domain does not read a shared unlabelled volume;
-  input arrives by an audited push from the steward (CONTAINMENT.md, Push).
-- **Sharing is the attack.** A shared server instance, volume, endpoint, network instance or core is
-  where labels are enforced, so two differing label sets in a confined deployment share none of them,
-  and a manifest that places them together is refused (INIT.md, The boot manifest).
+screen — and that is the whole of the design's claim here (CONTAINMENT.md's channel table). What
+remains is covert, and is out of scope. The consequences for a confined deployment — read-down
+closed, nothing shared across differing label sets — are rules owned by CONTAINMENT.md (Push) and
+INIT.md (the boot manifest).
 
 ## The adversary
 Design for a capable, patient, automated adversary that has read every line of this repository, can
