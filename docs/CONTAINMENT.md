@@ -247,7 +247,7 @@ placement as the only zero (TENETS.md, The high/low pair).
 | Resource | Closed by | For a protected label set |
 | --- | --- | --- |
 | `call`/`send` between user budgets | software (R1) | closed |
-| writes, metadata (`check`), qids, directory reads | software | closed |
+| writes, metadata (`check`), qids, directory reads | software | closed between the writer and a reader with the writer's labels; a shared unlabelled volume read by a labelled domain is read-down, refused for a confined domain (Push) |
 | sinks (`ipd`, `gatewayd`) | software | closed |
 | approval rendering and notifications | software | closed |
 | global counters (PIDs, message ids, `budget_usage`) | software | closed |

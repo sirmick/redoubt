@@ -686,3 +686,15 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   marker it did not yet understand. Answer 155 renames the message `copy_file` in NAMESPACES.md
   and USERLAND.md; the generator's `RESERVED_TYPES` is correct and unchanged. Both answers are
   in WP-W3a's scope.
+- **R-2 red team: the `confined` refusal list was missing `devices`** (2026-09-22, review round). The
+  channel table closes disk, NIC and GPU with "one instance per domain", and the manifest has a
+  `devices` entry, but the `confined` refusal list named only servers, volumes, endpoints, network
+  instances and cores — so a confined manifest could hand a labelled and an unlabelled domain the same
+  device object and `init` would boot it, leaving the software claim resting on a policy gap the
+  software check did not enforce. INIT.md's Confinement section now refuses a shared **device object**,
+  and says plainly that the flag is a check on the **manifest**, not a run-time invariant (a budget,
+  volume, endpoint or device handed over after boot by `mint`, `keyd`'s `grant` or a system server is
+  outside `init`'s static comparison). CONTAINMENT.md's channel-table "writes, metadata, qids,
+  directory reads" row is scoped to a reader holding the writer's labels, since the high-to-low
+  direction of a shared unlabelled volume at the tail of push/declassification is not that row's
+  closure. WP-R3's acceptance gains the device clause and a matching attack case.

@@ -83,6 +83,10 @@ entries with **differing label sets** share any of these:
 - an **endpoint** — one name in a `servers` entry's `receives` or `handed` list they both hold;
 - a **network instance** — one `ipd:*` (or `netd`) instance they both use (and a labelled domain is
 given no `/net` at all: a sink refuses labelled callers);
+- a **device object** — one `devices` entry they both hold. A shared disk, NIC or GPU is a shared
+  scheduler, shared caches and a shared timing surface (CONTAINMENT.md, the channel table's
+  disk/NIC/GPU row), so it is refused like any other sharing; a device the manifest clears for a
+  label in a confined deployment needs its own instance per domain like the rest;
 - a **core** — a hardware core their budgets both run on. Milestone 1 is one budget per core already
   (PLATFORM-FPGA.md, RESOURCES.md); a confined manifest that names more cores than budget groups is
   refused rather than silently time-sharing a core between two label sets.
@@ -96,6 +100,12 @@ unlabelled volume (input arrives by an audited push from the steward; CONTAINMEN
 refusal is a **boot failure, not a warning**. The default (no flag) is ordinary multi-tenancy, where a
 shared server is acceptable and CONTAINMENT.md's residuals apply. **WP-R3 implements and tests this**;
 the confinement attack verdict is the boot failing, not the manifest's claim (BUILD-PLAN.md).
+
+It is a check on the **manifest**, not a run-time invariant: a budget, volume, endpoint or device
+handed over after boot (by `mint`, by `keyd`'s `grant`, by a system server) is outside `init`'s
+static comparison, and a system server that hands one across label sets is buggy, not the kernel
+(CONTAINMENT.md, Labels). The confined flag is what makes the channel table's software-closed rows a
+configuration rather than a default; it is not a second enforcer.
 
 **Weights.** One stride queue serves everyone (RESOURCES.md), so the manifest's weights are the
 whole scheduling policy. `init`, the steward and the drivers (`consoled`, `blkd`, `netd`) get
