@@ -571,7 +571,7 @@ in review:               M0/M1 (the executable model)
 building:                K4 (kernel track);  R4, D1, D3
 the ready set:           K5 (behind K4 on the Hotspots)
 kernel, serialized:      K4 -> K5 -> K6 (after R1b)
-runtime:                 R1c (after R1b, answers 156-158) -> R4 (after R1c, K3);  R2 (after K4) -> R3 (after R2, W1, K3, K5)
+runtime:                 R1c (merged) -> R4 (merged);  R2 (after K4) -> R3 (after R2, W1, K3, K5)
 beamlet:                 B1 (after R1b, R4) -> B2 (after B1, R3)
 storage and network:     D1 (merged) -> D2 (after D1, L1);  D3 (after R1b, K3, W2)
 security:                S1 (after R1b) -> S2 (after R3, B1, D2);  S3 (after D3, S1, S2)

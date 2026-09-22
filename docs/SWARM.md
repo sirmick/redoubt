@@ -140,7 +140,7 @@ it. A package whose work landed inside another is recorded as `folded` and gets 
 | R1c | merged | wp-r1c | cd65fa610; joined `Parked` to the 9P skeleton (recovery of `5d29d136e`, answers 156-158); reviewed R-R1c |
 | R2 | waiting | | needs R1b, K4 |
 | R3 | waiting | | needs R2, W1, K3, K5; carries the `confined` manifest |
-| R4 | building | wp-r4 | bootfsd and consoled |
+| R4 | merged | wp-r4b | 69466924c; bootfsd and consoled recovered from wp-r4; reviewed R-R4b |
 | B1 | waiting | | needs R1b, R4 |
 | B2 | waiting | | needs B1, R3 |
 | D1 | merged | wp-d1b | 8681f2648; blkd recovered from wp-d1, reviewed R-D1 (editor BLOCK fixed; red team 4/4 OK) |

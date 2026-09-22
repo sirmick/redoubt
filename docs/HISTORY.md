@@ -768,3 +768,14 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   the runner is exercised where it lives. The red team traced every path on which a handle-carrying
   request can be parked and re-served (closed exactly once, list emptied, revoked handle diverted to
   `MALFORMED`) and found no double close, leak or panic.
+- **WP-R4b merged** (`69466924c`): `bootfsd` and `consoled`, recovered from branch `wp-r4`. The port
+  was mechanical once WP-R1c joined `Parked` to the 9P skeleton: new paths, the `bootfs` design
+  section restored (`573c15f0a`), four stale test-harness `#[path]` includes (the break the keyd fix
+  addressed, answer 159), and the shared conformance runner locating the 9P corpus from the workspace
+  root rather than `<manifest>/../wire`. `consoled` parks a read with `Read::Wait` →
+  `serve_parking` → `parked.park`, the exact API R1c recovered; a console read has no deadline (it
+  waits on a person) and is reclaimed by the caller's abandoned-call notice. Round R-R4b: the bootfsd
+  red team found the founder gate was a comparison that also accepted badge 0 (the receive right, no
+  `mint` creates it) and that `read` inherited its pre-`seal` safety from `walk` — both now explicit
+  (`8647a4fd9`). `consoled`'s park path was reviewed directly after three reviewer timeouts: parked
+  calls are bounded by admission, freed on input, abandonment or expiry, and never resumed twice.
