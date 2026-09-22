@@ -698,3 +698,11 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   directory reads" row is scoped to a reader holding the writer's labels, since the high-to-low
   direction of a shared unlabelled volume at the tail of push/declassification is not that row's
   closure. WP-R3's acceptance gains the device clause and a matching attack case.
+- **The `blkd` design section restored** (2026-09-22, ahead of bringing `blkd` onto `redoubt`): the
+  section `### blkd: ranges, badges and messages` (its trust argument, the one-outstanding-request
+  virtqueue, the GPT rules, the range-is-a-badge mapping, its bounds, errors, wire tables and stated
+  residuals) lived in `planning/redoubt/IO-ARCHITECTURE.md` and was dropped when the notes moved to
+  `docs/`. It is restored to `docs/IO-ARCHITECTURE.md` so the finished driver can be brought over
+  without its design having to be re-derived. One drift corrected: the Driver model bullet still
+  recommended the `virtio-drivers` crate, which the restored section rejects under tenet 5; the
+  bullet now says a virtio crate is judged like any dependency and points at the section.
