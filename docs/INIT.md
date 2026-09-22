@@ -72,6 +72,14 @@ Each field has one JSON type (WIRE.md): 64-bit quantities (label ids, accounts, 
 deadlines) are decimal strings; small counts (processes, weights, depths, restart limits) and ports
 are numbers. A value of the wrong JSON type is an error.
 
+**Confinement.** A manifest may carry a `confined` flag (a deployment profile; GAME.md, TENETS.md's
+high/low pair). In a confined manifest, any two entries with differing label sets share no server
+instance, volume, endpoint, network instance or core, and no domain reads a shared unlabelled volume
+(input arrives by an audited push from the steward). `init` refuses a manifest that places differing
+label sets together, exactly as it refuses a server's own budget; the refusal is a boot failure, not
+a warning. The default (no flag) is ordinary multi-tenancy, where a shared server is acceptable and
+CONTAINMENT.md's residuals apply.
+
 **Weights.** One stride queue serves everyone (RESOURCES.md), so the manifest's weights are the
 whole scheduling policy. `init`, the steward and the drivers (`consoled`, `blkd`, `netd`) get
 weights an order of magnitude above a session's — 1000 against a user's 100 — so that they are

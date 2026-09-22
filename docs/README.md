@@ -41,6 +41,7 @@ servers, and the milestone-1 attack suite. Order: [PLAN.md](PLAN.md).
 | [PLAN.md](PLAN.md) | The three milestones, the milestone 1 slice and attack suite, what comes after. |
 | [BUILD-PLAN.md](BUILD-PLAN.md) | Milestone 1 as work packages: what each reads, delivers and must pass; order; hotspots. |
 | [SWARM.md](SWARM.md) | How the build runs: one orchestrator, parallel packages in worktrees, review, merge, claims. |
+| [GAME.md](GAME.md) | The adversarial-agent game: scenarios (single escape, the high/low pair, authority expansion, the human), setup, win conditions, the design-hole vs implementation-bug verdict. |
 
 **Built today**
 
