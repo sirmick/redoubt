@@ -137,9 +137,6 @@ pub struct Protocol {
     pub name: String,
     /// The note the table came from, relative to the repository root.
     pub source: String,
-    /// The table is marked `<!-- wire: NAME ninep -->`: the protocol is served on a 9P endpoint,
-    /// so `ninep_common` reserves opcodes 1-15 and this protocol's start at 16 (WIRE.md).
-    pub ninep: bool,
     pub messages: Vec<MessageDef>,
     /// From the protocol's error table (every protocol has one).
     pub errors: Vec<ErrorDef>,
@@ -447,7 +444,7 @@ pub fn parse(source: &str, text: &str) -> Result<Tables, String> {
                 messages.push(m);
             }
             let protocol =
-                Protocol { name: name.to_string(), source: source.to_string(), ninep, messages, errors: Vec::new() };
+                Protocol { name: name.to_string(), source: source.to_string(), messages, errors: Vec::new() };
             tables.protocols.push(protocol);
         }
     }
@@ -976,16 +973,12 @@ mod tests {
             let e = protocols(&format!("{marked}| {low} | `a` | - | - |\n{ERRORS}")).unwrap_err();
             assert!(e.contains("below 16") && e.contains("ninep_common"), "{low}: {e}");
         }
-        // 16 is the first allowed opcode, and the protocol is recorded as a 9P one.
+        // 16 is the first allowed opcode.
         let p = protocols(&format!("{marked}| 16 | `a` | - | - |\n{ERRORS}")).unwrap();
-        assert!(p[0].ninep);
         assert_eq!(p[0].messages[0].opcode, 16);
         // An unmarked table is unaffected: its opcodes may start at 1.
         let p = protocols(&format!("{HEAD}| 1 | `a` | - | - |\n{ERRORS}")).unwrap();
-        assert!(!p[0].ninep);
         assert_eq!(p[0].messages[0].opcode, 1);
-        // The marker is parsed only on message tables: an error table keeps its plain name.
-        assert!(protocols(&format!("{HEAD}| 1 | `a` | - | - |\n{ERRORS}")).is_ok());
     }
 
     #[test]
