@@ -77,42 +77,59 @@ merged; the waves show what can run together.
 
 | Wave | Runs in parallel |
 | --- | --- |
-| 1 | M0 model, W1 codecs, L1 littlefs, T1 bench extensions, A1 ABI crate |
-| 2 | K1 budgets and handles; R1 runtime (after A1, W1); L1 and T1 continue |
+| 1 | M0/M1 model, W1 codecs, L1 littlefs, T1 bench extensions, A1 ABI crate |
+| 2 | K1 budgets and handles; R1 runtime; L1 and T1 continue |
 | 2b | design review of answers 1-55; A2 ABI update; W2 generator update |
-| 3 | K2 endpoints and messages; host-side parts of D1/D2/D3 against R1 |
+| 3 | K2 endpoints and messages (carries A3); host-side parts of D1/D2/D3 against R1 |
 | 4 | K3 devices and interrupts; R4 bootfsd and consoled (once K3 lands) |
-| 5 | K4 process creation; B1 beamlet platform; D1 blkd; D3 netd and ipd; S1 keyd |
+| 5 | K4 process creation; B1 beamlet platform; D1 blkd; D3 netd and ipd; S1 keyd; W3 opcode floor |
 | 6 | K5 timer and preemption; R2 loader stub; D2 fsd |
-| 7 | R3 init; C1 conformance; B2 IEx on the UART |
+| 7 | R3 init (carries `confined`); C1 conformance; B2 IEx on the UART |
 | 8 | K6 delete legacy; S2 steward |
 | 9 | S3 sshd |
 | 10 | E1 the agent and the attack suite: milestone 1 done |
 
 ## Claims
+The claims table is the source of truth for package state; `docs/BUILD-PLAN.md`'s Order derives from
+it. A package whose work landed inside another is recorded as `folded` and gets no branch of its own.
+
 | Package | State | Branch | Notes |
 | --- | --- | --- | --- |
-| M0 | review | wp-m0 | round 3; also carries WP-M1 (answers 28-55) |
+| M0 | review | wp-m0 | round 3 |
+| M1 | review | wp-m1 | carried by wp-m0 (answers 28-101) |
 | W1 | merged | wp-w1 | d52896bee |
+| W2 | merged | wp-w2 | 3715363a9 |
+| W3 | ready | | needs W2, R1b; both merged |
+| A1 | merged | wp-a1 | 44f1780a1 |
+| A2 | merged | wp-a2 | c98034520 |
+| A3 | folded | | into wp-k2 (answer 103; the `first` flag) |
 | L1 | merged | wp-l1 | 25ab39296 |
 | T1 | merged | wp-t1 | 987bacbed |
-| A1 | merged | wp-a1 | 44f1780a1 |
-| K0 | merged | wp-k0 | f7b9fdd16 |
 | T1b | merged | wp-t1b | 6cd067a39 |
-| R1 | merged | wp-r1 | 8298608af (carried the answers 39-42, 50-53 part of R1b) |
-| K1 | merged | wp-k1 | e1d2c6216 |
-| A2 | merged | wp-a2 | c98034520 |
-| R1b | merged | wp-r1b | 86117e7af |
-| W2 | merged | wp-w2 | 3715363a9 |
+| V1 | merged | wp-v1 | 05955bf86 |
+| K0 | merged | wp-k0 | f7b9fdd16 |
 | K0b | merged | wp-k0b | e30d43304 |
-| K2 | merged | wp-k2 | 95788dcd0 |
+| K1 | merged | wp-k1 | e1d2c6216 |
+| K2 | merged | wp-k2 | 95788dcd0 (carried A3) |
 | K3 | merged | wp-k3 | 12c52c2d7 |
 | K4 | building | wp-k4 | kernel track |
+| K5 | ready | | needs K2; serialized behind K4 on the kernel Hotspots, not on dependencies |
+| K6 | waiting | | needs K1-K5, R1b |
+| R1 | merged | wp-r1 | 8298608af (carried the answers 39-42, 50-53 part of R1b) |
+| R1b | merged | wp-r1b | 86117e7af |
+| R2 | waiting | | needs R1b, K4 |
+| R3 | waiting | | needs R2, W1, K3, K5; carries the `confined` manifest |
 | R4 | building | wp-r4 | bootfsd and consoled |
+| B1 | waiting | | needs R1b, R4 |
+| B2 | waiting | | needs B1, R3 |
+| D1 | building | wp-d1 | blkd; host side first |
+| D2 | waiting | | needs D1, L1, R1b |
 | D3 | building | wp-d3 | netd and ipd |
 | S1 | merged | wp-s1 | 14bcc6e9d |
-| V1 | merged | wp-v1 | 05955bf86 |
-| D1 | building | wp-d1 | blkd; host side first |
-| all others | waiting | | see BUILD-PLAN.md "Needs" |
+| S2 | waiting | | needs R3, B1, D2 |
+| S3 | waiting | | needs D3, S1, S2 |
+| C1 | waiting | | needs M1, K5, T1 |
+| E1 | waiting | | needs everything (milestone) |
 
-States: `waiting` (needs not merged), `ready`, `building`, `review`, `merged`.
+States: `waiting` (needs not merged), `ready`, `building`, `review`, `merged`, `folded` (landed inside
+another package).
