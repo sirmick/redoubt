@@ -32,7 +32,11 @@ the `subagent` tool.
 1. **Parallel where the plan allows.** A package starts as soon as every package it needs is merged.
    Independent packages run at the same time; the kernel track runs one package at a time.
 2. **Isolation.** Each implementer works in its own worktree and stages only the paths its package
-   owns (BUILD-PLAN.md "Delivers"). Never `git add -A` or `git commit -a`.
+   owns (BUILD-PLAN.md "Delivers"). Never `git add -A` or `git commit -a` — a reviewer or another
+   session can leave a file in the tree, and `-A` sweeps it into your commit. **Reviewers are
+   read-only**: a reviewer that finds a missing note proposes it in its findings, it does not write
+   it ("the design is read-only to the swarm", rule 3). After any round, the orchestrator checks
+   `git status` for files it did not create before staging.
 3. **The design is read-only.** An implementer that finds a spec problem stops and reports it; the
    orchestrator asks the **architect**, who records the question in QUESTIONS.md and the answer in
    ANSWERS.md and raises a genuine owner decision with the owner. Nothing merges while its design
