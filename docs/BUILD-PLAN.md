@@ -99,26 +99,20 @@ not needed.
   own code 1 fails generation; the Elixir codec round-trips the new vectors.
 - Needs: WP-W1. Merged (`3715363a9`).
 
-**WP-W3a. The 9P opcode floor (answer 113).** Size S.
+**WP-W3a. The 9P opcode floor, and the `copy_file` rename (answers 113, 155).** Size S.
 - Reads: WIRE.md (Messages, Tables).
 - Delivers: in `libs/wire/gen/`: the `<!-- wire: NAME ninep -->` marker for a protocol served on a 9P
   endpoint, whose opcodes must start at 16 (`ninep_common` reserves 1-15 there); a marked table using
   a lower opcode is refused by the generator. The `fsd` typed-operations table (NAMESPACES.md) is a
-  marked table and must still generate.
+  marked table and must still generate, which needs answer 155's rename (`copy` -> `copy_file`,
+  because `copy` camel-cases to the Rust type `Copy`, which every generated type derives).
 - Accepted when: the drift test covers the marker; a marked table with an opcode below 16 fails
-  generation, a marked table at 16 passes, and an unmarked table still starts at 1.
-- Needs: WP-W2. (Split out of WP-W3: this half is well-specified and host-testable. The record-backing
-  half is WP-W3b, pending an answer — see QUESTIONS.md.)
-
-**WP-W3b. Records that are already backed (answer 115).** Size S. **Blocked on a design question.**
-- Reads: KERNEL-SPEC.md (ABI, Records; the order of checks, stage 1).
-- Delivers: the runtime half of the old WP-W3: every record buffer touched before it is passed to the
-  kernel, since decoding never allocates and an untouched reserved page is `InvalidArgument`.
-- Open: `redoubt-rt`'s records are `Record<const N>(pub [u64; N])`, built as `Record([0; N])` (stack,
-  already backed), so there may be nothing to change; and the untouched-page refusal is kernel
-  behaviour not reachable through `HostKernel`. Filed as a question to the architect before this
-  package is sized or started.
-- Needs: WP-W3a (ordering only); not startable until the question is answered.
+  generation, a marked table at 16 passes, and an unmarked table still starts at 1; and
+  `cargo test -p redoubt-wire-gen` is green, including the `fsd` table, on `redoubt`.
+- Needs: WP-W2. Carries answers 113 (the opcode floor) and 155 (the `copy_file` rename).
+  **WP-W3b is deleted** (answer 154): answer 115 was already satisfied — `redoubt-rt`'s records are
+  `Record([0; N])`, already backed, and the untouched-page assertion already lives in the
+  `budget-syscall-attack` (WP-K1) and `lend-untouched-page` (WP-K0) cases.
 
 **WP-A1. System call ABI crate.** Size S.
 - Reads: KERNEL-SPEC.md (system calls, messages, errors).
@@ -558,7 +552,7 @@ merged:                  W1  W2  L1  T1  T1b  A1  A2  K0  K0b  K1  K2  K3  R1  R
                          (A3 folded into K2)
 in review:               M0/M1 (the executable model)
 building:                K4 (kernel track);  R4, D1, D3
-the ready set:           W3a (the 9P opcode floor);  K5 (serialized behind K4 on the Hotspots)
+the ready set:           W3a (the 9P opcode floor and the `copy_file` rename);  K5 (behind K4 on the Hotspots)
 kernel, serialized:      K4 -> K5 -> K6 (after R1b)
 runtime:                 R4 (after R1b, K3);  R2 (after K4) -> R3 (after R2, W1, K3, K5)
 beamlet:                 B1 (after R1b, R4) -> B2 (after B1, R3)
@@ -568,7 +562,7 @@ conformance:             C1 (after M1, K1-K5, T1)
 milestone:               E1 (after all)
 ```
 **The owner's answers 1-126** (QUESTIONS.md) are all in the notes; nothing is open. Answers
-102-119 add W3 (since split into W3a and W3b) and change K2, K5, M1, R3, D2 and S2 (A3 was folded
+102-119 add W3 (since split, and W3b dropped) and change K2, K5, M1, R3, D2 and S2 (A3 was folded
 into K2); answers 120-126 add V1
 and change R3, R4, S1 and S2. The critical path is unchanged: the kernel track (K4 to K5), then R3,
 S2 and S3. V1 is off the path and

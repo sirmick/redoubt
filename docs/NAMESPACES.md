@@ -115,14 +115,14 @@ and refuses labelled callers. Elixir wraps the tree in `gen_tcp`-like modules.
   not exist", the same answer as for a name the bundle never held, so `/boot` reveals nothing about
   the rest of the bundle. `init` passes the list to `bootfsd` as its arguments.
 - **`fsd` typed operations:** `fsd` also serves typed messages on its 9P endpoint for what 9P2000
-  does not express: `rename` and `copy` within one volume, and `get_attr`/`set_attr` for per-file
+  does not express: `rename` and `copy_file` within one volume, and `get_attr`/`set_attr` for per-file
   metadata stored in littlefs custom attributes. They use the same label and quota checks as 9P.
 
   <!-- wire: fsd ninep -->
   | Opcode | Message | Fields | Reply |
   | --- | --- | --- | --- |
   | 16 | `rename` | `old_dir: u32`, `old_name: string`, `new_dir: u32`, `new_name: string` | - |
-  | 17 | `copy` | `src_fid: u32`, `dst_dir: u32`, `dst_name: string` | `count: u64` |
+  | 17 | `copy_file` | `src_fid: u32`, `dst_dir: u32`, `dst_name: string` | `count: u64` |
   | 18 | `set_attr` | `fid: u32`, `attr: u8`, `value: bytes` | - |
   | 19 | `get_attr` | `fid: u32`, `attr: u8` | `value: bytes` |
 

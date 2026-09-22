@@ -69,7 +69,7 @@ version, and nothing else, so:
 
 | Operation | What happens |
 | --- | --- |
-| `File.cp`, `cp_r` | within a volume, typed `copy`; across volumes, client-side read/write loop |
+| `File.cp`, `cp_r` | within a volume, typed `copy_file`; across volumes, client-side read/write loop |
 | `File.rename`, same directory | `wstat` with a new name, or typed `rename` |
 | `File.rename`, across directories | typed `rename` (same volume); across volumes, copy and remove |
 | `File.rename`, across volumes | copy and remove, never atomic |

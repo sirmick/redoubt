@@ -274,3 +274,37 @@ Notes:
   to add the semantics WP-R3, WP-D2, WP-D3 and WP-S2 need.
 - **150** and **151** are clarifications of wording already present; **152** and **153** add detail
   to INIT.md's confinement rule and CONTAINMENT.md's push, and both name their implementing package.
+
+---
+
+# Answers to 154-155 (owner, 2026-09-22)
+
+**All Rec.** Both are derivations from the existing design, raised by the WP-W3 split: W3a (the
+9P opcode floor) is being built and its implementation uncovered the second one.
+
+## Accepted as recommended
+
+**154. WP-W3b is dropped: answer 115 is already satisfied.** `redoubt-rt`'s
+`Record<const N: usize>(pub [u64; N])` is built as `Record([0; N])`, a written stack array, so
+every record it passes is already backed and the runtime owes no change. The "untouched page is
+`InvalidArgument`" assertion is kernel behaviour and is not reachable through the `HostKernel`
+fake, so it cannot move into `redoubt-rt`'s host tests; it already lives in two real-boot cases —
+`budget-syscall-attack` (WP-K1: a page reserved and never touched, `budget_usage` on it fails)
+and `lend-untouched-page` (WP-K0). No runtime change, no new case; BUILD-PLAN.md deletes WP-W3b
+and WP-W3a is the whole of WP-W3. KERNEL-SPEC.md (ABI, Records) is unchanged.
+
+**155. The `fsd` message `copy` is renamed `copy_file`.** `copy` camel-cases to `Copy`, and
+`Copy` is in the generator's `RESERVED_TYPES` for a real reason: every generated type derives
+`Copy`, so a message type named `Copy` would shadow the derive. The reservation stays; the
+message is renamed, in `docs/NAMESPACES.md` (`copy_file`, opcode 17, reply `count: u64`
+unchanged) and in the `docs/USERLAND.md` row that names it. This is folded into **WP-W3a**,
+because WP-W3a's acceptance ("the `fsd` table must still generate") cannot hold until the rename
+lands. The alternatives lose: prefixing generated types changes every codec and call site for
+one word, and narrowing `RESERVED_TYPES` breaks the derive.
+
+Notes:
+- The `copy` failure was latent, not new: `cargo test -p redoubt-wire-gen` was already red on
+  `redoubt`, because the `fsd` typed-operations tables reached `docs/NAMESPACES.md` without the
+  generator learning their `<!-- wire: fsd ninep -->` marker, and the parse died there before it
+  could reach `copy`.
+- **WP-W3a carries both:** the marker and opcode floor (answer 113), and this rename (answer 155).
