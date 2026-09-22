@@ -190,6 +190,11 @@ impl FileServer for BootFs {
 
     /// Never waits: every byte is already here.
     fn read(&mut self, _: &Caller, node: &Node, offset: u64, out: &mut [u8]) -> Result<Read, NineError> {
+        // Local, not inherited from `walk`: a fid on an entry only exists once sealed, but a read
+        // must not depend on that having been checked elsewhere.
+        if !self.sealed {
+            return Err(NineError::NOT_FOUND);
+        }
         let Node::Entry(i) = *node else { return Err(NineError::NOT_FOUND) };
         let data = self.entries.get(i).ok_or(NineError::NOT_FOUND)?.data.as_slice();
         // Any offset is the client's: past the end reads nothing.
@@ -250,7 +255,11 @@ impl TypedServer<Bootfs> for BootFs {
         request: Message<'_>,
         _handles: &[Handle],
     ) -> Result<Answer<Reply>, ErrorCode> {
-        if caller.badge >= FIRST_MINTED_BADGE {
+        // Only the founding handle fills `/boot`. A minted badge (`new_connection` mints at or
+        // above `FIRST_MINTED_BADGE`) is refused, and so is badge 0 — the receive right, which
+        // this server keeps and no `mint` creates — so the gate is an explicit set, not a
+        // comparison that happens to exclude them (KERNEL-SPEC.md, Handle).
+        if caller.badge == 0 || caller.badge >= FIRST_MINTED_BADGE {
             return Err(ErrorCode::Refused);
         }
         match request {
