@@ -2,10 +2,11 @@
 #
 # Ensure the dev environment's pi extensions are present in the active pi config.
 #
-# dev.sh bind-mounts the host's ~/.pi over /home/dev/.pi, which shadows whatever the image
-# installed at build time. This runs at container start and installs any missing extension
-# into whichever config is active (the mounted host one, or the image's when not mounted).
-# Idempotent and quiet: a no-op once installed. Needs network the first time.
+# dev.sh bind-mounts ../redoubt-config at /config and points PI_CODING_AGENT_DIR at
+# /config/pi, which shadows whatever the image installed at build time. This runs at
+# container start and installs any missing extension into the active config there, so the
+# extensions survive a respin along with the rest of the config. Idempotent and quiet: a
+# no-op once installed. Needs network the first time.
 set -uo pipefail
 
 command -v pi >/dev/null 2>&1 || exit 0
