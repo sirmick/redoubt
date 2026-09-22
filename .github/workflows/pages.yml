@@ -3,11 +3,8 @@ name: Deploy static site to GitHub Pages
 on:
   push:
     branches: [main]
-
-  # Allow manual trigger in Actions tab
   workflow_dispatch:
 
-# Allow only one concurrent deployment at a time
 concurrency:
   group: "pages"
   cancel-in-progress: false
@@ -26,9 +23,6 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-
-      - name: Set up Pages
-        uses: actions/configure-pages@v5
 
       - name: Upload docs/ as artifact
         uses: actions/upload-pages-artifact@v3
