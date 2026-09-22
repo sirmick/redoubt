@@ -66,6 +66,14 @@
 //! is by capability). `Twstat` is refused. `Tflush` is answered at once: requests are handled one
 //! at a time, so none is ever in flight to flush.
 //!
+//! **Waiting** (WP-R4; CONTAINMENT.md: a server parks calls rather than blocking). A read whose
+//! answer is not there yet ([`FileServer::read`] returning [`Read::Wait`]) is not answered:
+//! [`NineServer::serve_parking`] hands the request back with its T-message still in its lend, the
+//! server parks it ([`super::parked::Parked`], charged to the same buckets and shares through
+//! [`NineServer::admission_mut`]), and serves it again when it can be answered. Nothing of the
+//! request is kept in the skeleton meanwhile, so a `Tclunk` or `Tversion` while a read waits
+//! simply makes the second serving an `Rerror`.
+//!
 //! **Memory.** Every allocation a request makes fails cleanly with an `Rerror` ("out of memory")
 //! rather than killing the server. A server's budget needs headroom beyond its own use: lends
 //! whose callers died stay charged to it until it replies (R3), up to `MAX_OPEN_CALLS` ×
@@ -177,6 +185,31 @@ impl FileStat {
     }
 }
 
+/// What [`FileServer::read`] did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Read {
+    /// This many bytes were written into `out` (at most its length). 0 is the end of the file.
+    Done(usize),
+    /// There is nothing to read yet and the file has no end (a console waiting for a key
+    /// press): the call is handed back by [`NineServer::serve_parking`] for the server to park
+    /// ([`super::parked`]), and served again, unchanged, when there is something to read. A
+    /// server that returns this must serve through `serve_parking`; under [`NineServer::serve`]
+    /// it becomes a refusal, since that call must answer.
+    Wait,
+}
+
+/// What one 9P request did to its lend ([`NineServer::answer_in_place`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Answer {
+    /// An R-message, an `Rerror` included, was written over the T-message.
+    Replied,
+    /// Nothing was written: the file server asked for the call to wait ([`Read::Wait`]), so the
+    /// T-message is still there to be answered later.
+    Waiting,
+    /// Not even an `Rerror` fits the lend, so there is nothing to reply with.
+    NoRoom,
+}
+
 /// The files. Every method is called only as the module docs promise; each one still treats
 /// offsets and data as the client's.
 pub trait FileServer {
@@ -217,14 +250,16 @@ pub trait FileServer {
     /// `node` is being opened with `mode` (already checked against its kind and labels).
     fn open(&mut self, caller: &Caller, node: &Self::Node, mode: u8) -> Result<Qid, NineError>;
 
-    /// Reads at most `out.len()` bytes of the file at `offset`.
+    /// Reads at most `out.len()` bytes of the file at `offset`, or asks for the call to be held
+    /// until there is something to read ([`Read::Wait`], served through
+    /// [`NineServer::serve_parking`]).
     fn read(
         &mut self,
         caller: &Caller,
         node: &Self::Node,
         offset: u64,
         out: &mut [u8],
-    ) -> Result<usize, NineError>;
+    ) -> Result<Read, NineError>;
 
     /// Writes `data` at `offset`; returns how much was written (at most `data.len()`).
     fn write(
@@ -329,6 +364,20 @@ pub struct NineServer<S: FileServer> {
     stat: FileStat,
 }
 
+/// How answering one 9P request ended short of an R-message: refused, or held for later.
+/// `NineServer::answer`'s error, so that "hold this call" is a value the type system tracks and
+/// only the skeleton's own read path can produce, never a [`NineError`] a file server could
+/// return from somewhere else.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Held {
+    Error(NineError),
+    Wait,
+}
+
+impl From<NineError> for Held {
+    fn from(e: NineError) -> Held { Held::Error(e) }
+}
+
 impl<S: FileServer> NineServer<S> {
     /// Serves `fs`. `limits.files` bounds the fids one client (account, label set) holds across
     /// all its connections, `limits.state` the connections it has minted; the limits must leave
@@ -358,6 +407,15 @@ impl<S: FileServer> NineServer<S> {
     /// Admission, to see what each client holds.
     pub fn admission(&self) -> &Admission { &self.admission }
 
+    /// Admission, to charge a server's parked calls in the same buckets and shares as its fids
+    /// ([`super::parked::Parked`], which takes it on every call).
+    pub fn admission_mut(&mut self) -> &mut Admission { &mut self.admission }
+
+    /// The share `caller`'s requests count in, which is what a parked call is charged to: its
+    /// badge, or, for a connection it minted for itself, the share of the connection it minted
+    /// it through.
+    pub fn share_of(&self, caller: &Caller) -> u64 { self.share(caller) }
+
     /// Handles one call and replies to it: 9P, or `ninep_common`; any other opcode is malformed.
     pub fn serve(&mut self, request: Request) -> Result<(), Error> {
         self.serve_with(request, |_, request| {
@@ -369,11 +427,34 @@ impl<S: FileServer> NineServer<S> {
     /// [`NINEP_COMMON_OPCODES`] by `own` (the server's own protocol on this endpoint; its
     /// dispatch closes handles the protocol did not ask for, as [`super::typed::serve_call`]
     /// does).
+    ///
+    /// Every request is answered, so a file server that asks to wait ([`Read::Wait`]) is
+    /// refused here; one that waits serves through [`NineServer::serve_parking`].
     pub fn serve_with(
+        &mut self,
+        request: Request,
+        own: impl FnOnce(&mut Self, Request) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        match self.serve_parking(request, own)? {
+            None => Ok(()),
+            // A server bug (`Read::Wait` without `serve_parking`), answered rather than left
+            // hanging: the caller gets a refusal instead of waiting for a reply that never comes.
+            Some(request) => {
+                finish(request, &Outcome { words: MALFORMED, send: Handles::new(), close: Handles::new() })
+            }
+        }
+    }
+
+    /// [`NineServer::serve_with`], except that a request the file server asked to hold
+    /// ([`Read::Wait`]) is **not** answered: it comes back, with its T-message untouched in its
+    /// lend, for the server to park ([`super::parked::Parked`]). Serving it again later answers
+    /// it, because the request is read from the lend afresh each time; a fid clunked meanwhile
+    /// makes that second serving an `Rerror`, which is what the client should see.
+    pub fn serve_parking(
         &mut self,
         mut request: Request,
         own: impl FnOnce(&mut Self, Request) -> Result<(), Error>,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<Request>, Error> {
         let (caller, words) = (request.caller, request.words);
         // A missing handle (revoked on its way, R10) makes any request malformed (WIRE.md); the
         // ones present are closed all the same.
@@ -387,17 +468,29 @@ impl<S: FileServer> NineServer<S> {
                 MALFORMED
             } else {
                 match self.answer_in_place(&caller, request.lend()) {
-                    Some(()) => WORDS_9P,
-                    None => MALFORMED,
+                    Answer::Replied => WORDS_9P,
+                    Answer::NoRoom => MALFORMED,
+                    // Held: close what it brought and hand the call back unanswered. The
+                    // request's own list is emptied with them, so serving it again does not
+                    // close the same indices a second time -- by then they may name something
+                    // else this process has opened since.
+                    Answer::Waiting => {
+                        for handle in handles.as_slice() {
+                            let _ = crate::handle::close(*handle);
+                        }
+                        request.handles = redoubt_sys::ReceivedHandles::new();
+                        return Ok(Some(request));
+                    }
                 }
             };
-            return finish(request, &Outcome { words, send: Handles::new(), close: handles });
+            return finish(request, &Outcome { words, send: Handles::new(), close: handles }).map(|()| None);
         }
         if !NINEP_COMMON_OPCODES.contains(&words[0]) {
-            return own(self, request);
+            return own(self, request).map(|()| None);
         }
         if missing {
-            return finish(request, &Outcome { words: MALFORMED, send: Handles::new(), close: handles });
+            return finish(request, &Outcome { words: MALFORMED, send: Handles::new(), close: handles })
+                .map(|()| None);
         }
         self.minted.answering();
         let mut kernel = super::minted::Kernel(request.id());
@@ -411,7 +504,7 @@ impl<S: FileServer> NineServer<S> {
                 self.forget(badge);
             }
         }
-        sent
+        sent.map(|()| None)
     }
 
     /// Answers a `ninep_common` request without replying: its outcome, the reply's fields
@@ -471,9 +564,11 @@ impl<S: FileServer> NineServer<S> {
         }
     }
 
-    /// Reads the T-message at the front of `lend` and writes the R-message over it; `None` if
-    /// there is not even room for an `Rerror`.
-    pub fn answer_in_place(&mut self, caller: &Caller, lend: &mut [u8]) -> Option<()> {
+    /// Reads the T-message at the front of `lend` and writes the R-message over it. Nothing is
+    /// written when the file server asked for the call to wait ([`Answer::Waiting`]), so the
+    /// T-message survives to be answered later, or when not even an `Rerror` fits
+    /// ([`Answer::NoRoom`]).
+    pub fn answer_in_place(&mut self, caller: &Caller, lend: &mut [u8]) -> Answer {
         // Room for the reply: the lend, within the msize. Read data is bounded by it.
         let room = lend.len().min(MSIZE);
         let (tag, reply) = match Message::decode(lend) {
@@ -481,20 +576,31 @@ impl<S: FileServer> NineServer<S> {
             // The tag, if the header is there, so the client can match the error.
             Err(_) => {
                 let tag = lend.get(5..7).map_or(NOTAG, |t| u16::from_le_bytes([t[0], t[1]]));
-                (tag, Err(NineError::BAD_MESSAGE))
+                (tag, Err(Held::Error(NineError::BAD_MESSAGE)))
             }
         };
+        // The file server asked to hold the call: leave its T-message where it is.
+        if matches!(reply, Err(Held::Wait)) {
+            return Answer::Waiting;
+        }
         let lend = &mut lend[..room];
-        let body = reply.unwrap_or_else(|e| Body::Rerror { ename: e.0 });
+        let body = reply.unwrap_or_else(|e| match e {
+            Held::Error(e) => Body::Rerror { ename: e.0 },
+            // Ruled out just above; an `Rerror` is the safe thing to write if it ever were not.
+            Held::Wait => Body::Rerror { ename: NineError::NOT_OPEN.0 },
+        });
         if (Message { tag, body }).encode(lend).is_ok() {
-            return Some(());
+            return Answer::Replied;
         }
         // The answer did not fit the lend: say so if even that fits.
-        Message { tag, body: Body::Rerror { ename: "reply too large" } }.encode(lend).ok().map(|_| ())
+        match (Message { tag, body: Body::Rerror { ename: "reply too large" } }).encode(lend) {
+            Ok(_) => Answer::Replied,
+            Err(_) => Answer::NoRoom,
+        }
     }
 
     /// The R-message for `body`; a reply's data borrows the server's scratch space.
-    fn answer<'s>(&'s mut self, caller: &Caller, body: Body<'_>, room: usize) -> Result<Body<'s>, NineError> {
+    fn answer<'s>(&'s mut self, caller: &Caller, body: Body<'_>, room: usize) -> Result<Body<'s>, Held> {
         let key = ConnKey::of(caller);
         match body {
             Body::Tversion { msize, version } => {
@@ -507,10 +613,10 @@ impl<S: FileServer> NineServer<S> {
                 let version = if version.starts_with(VERSION) { VERSION } else { "unknown" };
                 Ok(Body::Rversion { msize: msize.min(MSIZE as u32), version })
             }
-            Body::Tauth { .. } => Err(NineError::NO_AUTH),
+            Body::Tauth { .. } => Err(NineError::NO_AUTH.into()),
             Body::Tattach { fid, afid, aname, .. } => {
                 if afid != NOFID {
-                    return Err(NineError::NO_AUTH);
+                    return Err(NineError::NO_AUTH.into());
                 }
                 self.reserve_fid(caller, fid)?;
                 let attached = self.root(caller, aname).and_then(|(node, qid)| {
@@ -531,7 +637,7 @@ impl<S: FileServer> NineServer<S> {
             Body::Topen { fid, mode } => {
                 let f = self.fid(&key, fid)?;
                 if f.open.is_some() {
-                    return Err(NineError::IS_OPEN);
+                    return Err(NineError::IS_OPEN.into());
                 }
                 let node = f.node();
                 self.check_open(caller, &node, mode, f.is_dir())?;
@@ -544,16 +650,16 @@ impl<S: FileServer> NineServer<S> {
             Body::Tcreate { fid, name, perm, mode } => {
                 let f = self.fid(&key, fid)?;
                 if f.open.is_some() {
-                    return Err(NineError::IS_OPEN);
+                    return Err(NineError::IS_OPEN.into());
                 }
                 if !f.is_dir() {
-                    return Err(NineError::NOT_DIR);
+                    return Err(NineError::NOT_DIR.into());
                 }
                 if !path::valid_name(name) {
-                    return Err(NineError::BAD_NAME);
+                    return Err(NineError::BAD_NAME.into());
                 }
                 if f.steps.len() > path::MAX_COMPONENTS {
-                    return Err(NineError::TOO_DEEP);
+                    return Err(NineError::TOO_DEEP.into());
                 }
                 let dir = f.node();
                 self.check_labels(caller, &dir, Access::Write)?;
@@ -573,7 +679,7 @@ impl<S: FileServer> NineServer<S> {
             Body::Twrite { fid, offset, data } => {
                 let f = self.fid(&key, fid)?;
                 if !f.open.is_some_and(|m| matches!(m & 3, mode::OWRITE | mode::ORDWR)) {
-                    return Err(NineError::NOT_OPEN);
+                    return Err(NineError::NOT_OPEN.into());
                 }
                 offset.checked_add(data.len() as u64).ok_or(NineError::BAD_OFFSET)?;
                 let node = f.node();
@@ -599,7 +705,7 @@ impl<S: FileServer> NineServer<S> {
                     .check_labels(caller, &node, Access::Write)
                     .and_then(|()| self.fs.remove(caller, &node));
                 self.drop_fid(key.client, share, fid);
-                result.map(|()| Body::Rremove)
+                result.map(|()| Body::Rremove).map_err(Held::from)
             }
             Body::Tstat { fid } => {
                 let node = self.fid(&key, fid)?.node();
@@ -607,10 +713,10 @@ impl<S: FileServer> NineServer<S> {
                 self.stat = self.fs.stat(caller, &node)?;
                 Ok(Body::Rstat { stat: self.stat.wire() })
             }
-            Body::Twstat { .. } => Err(NineError::NOT_SUPPORTED),
+            Body::Twstat { .. } => Err(NineError::NOT_SUPPORTED.into()),
             Body::Tflush { .. } => Ok(Body::Rflush),
             // R-messages travel only from servers.
-            _ => Err(NineError::BAD_MESSAGE),
+            _ => Err(NineError::BAD_MESSAGE.into()),
         }
     }
 
@@ -801,11 +907,11 @@ impl<S: FileServer> NineServer<S> {
         offset: u64,
         count: u32,
         room: usize,
-    ) -> Result<usize, NineError> {
+    ) -> Result<usize, Held> {
         let key = ConnKey::of(caller);
         let f = self.fid(&key, fid)?;
         if !f.open.is_some_and(|m| matches!(m & 3, mode::OREAD | mode::ORDWR | mode::OEXEC)) {
-            return Err(NineError::NOT_OPEN);
+            return Err(NineError::NOT_OPEN.into());
         }
         // Never more than the reply can carry, whatever the client asked.
         let count = (count as usize).min(room.saturating_sub(IOHDRSZ));
@@ -816,15 +922,20 @@ impl<S: FileServer> NineServer<S> {
         self.scratch.try_reserve(count).map_err(|_| NineError::NO_MEMORY)?;
         self.scratch.resize(count, 0);
         if !is_dir {
-            let n = self.fs.read(caller, &node, offset, &mut self.scratch)?;
-            return if n <= count { Ok(n) } else { Err(NineError::BAD_MESSAGE) };
+            return match self.fs.read(caller, &node, offset, &mut self.scratch)? {
+                Read::Done(n) if n <= count => Ok(n),
+                // A server claiming more than the buffer it was given is a bug; do not pass it on.
+                Read::Done(_) => Err(NineError::BAD_MESSAGE.into()),
+                // The one place a call is held: `answer_in_place` stops before writing a reply.
+                Read::Wait => Err(Held::Wait),
+            };
         }
         // A directory read starts at 0 or continues exactly where the last one ended
         // (intro(5), read); the entry index behind that offset is ours, never the client's.
         let mut index = match offset {
             0 => 0,
             o if o == dir_next.0 => dir_next.1,
-            _ => return Err(NineError::BAD_OFFSET),
+            _ => return Err(NineError::BAD_OFFSET.into()),
         };
         let mut w = Writer::new(&mut self.scratch);
         // Each entry is left out, takes bytes, or ends the loop: it ends by the directory's end or
@@ -833,7 +944,7 @@ impl<S: FileServer> NineServer<S> {
             let readable = check(caller.labels.as_slice(), self.fs.labels(&entry), Access::Read).is_ok();
             if readable && stat.wire().write_entry(&mut w).is_err() {
                 if w.position() == 0 {
-                    return Err(NineError::TOO_SMALL);
+                    return Err(NineError::TOO_SMALL.into());
                 }
                 break;
             }
@@ -977,6 +1088,23 @@ impl<S: FileServer> NineServer<S> {
             self.drop_fid(conn.key.client, conn.share, fid);
         }
     }
+}
+
+/// Answers a 9P call with `error`, for a server that took the call and then could not go on
+/// with it: a read it asked to hold ([`Read::Wait`]) that it has no room to park. The
+/// T-message is still at the front of the lend, so the `Rerror` carries its tag and the client
+/// matches the reply to its request as usual; a lend too small even for that is answered with
+/// [`MALFORMED`], as a 9P call that cannot be answered in its buffer always is.
+pub fn refuse(mut request: Request, error: NineError) -> Result<(), Error> {
+    let lend = request.lend();
+    let room = lend.len().min(MSIZE);
+    let tag = lend.get(5..7).map_or(NOTAG, |t| u16::from_le_bytes([t[0], t[1]]));
+    let body = Body::Rerror { ename: error.0 };
+    let words = match (Message { tag, body }).encode(&mut lend[..room]) {
+        Ok(_) => WORDS_9P,
+        Err(_) => MALFORMED,
+    };
+    finish(request, &Outcome { words, send: Handles::new(), close: Handles::new() })
 }
 
 /// Refuses unknown mode bits, and anything but plain reading for a directory.

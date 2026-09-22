@@ -21,6 +21,8 @@ struct MemFs {
     /// (badge, root, quota) of every minted connection the skeleton told us about and has not
     /// disconnected.
     grants: Vec<(u64, usize, u64)>,
+    /// When set, every file read asks the skeleton to hold the call (`Read::Wait`).
+    wait_for_input: bool,
 }
 
 struct MemNode {
@@ -36,8 +38,14 @@ impl MemFs {
     /// `/`, `/a/`, `/a/b/`, `/a/b/f` ("deep"), `/notes` ("hello, world"), `/vault/` and
     /// `/vault/key` (labelled 7), and `/secret`: a labelled file in the unlabelled root.
     fn new() -> MemFs {
-        let mut fs =
-            MemFs { nodes: Vec::new(), clunked: Vec::new(), attaches: 0, walks: 0, grants: Vec::new() };
+        let mut fs = MemFs {
+            nodes: Vec::new(),
+            clunked: Vec::new(),
+            attaches: 0,
+            walks: 0,
+            grants: Vec::new(),
+            wait_for_input: false,
+        };
         fs.add("", 0, true, b"", &[]);
         let a = fs.add("a", 0, true, b"", &[]);
         let b = fs.add("b", a, true, b"", &[]);
@@ -107,12 +115,15 @@ impl FileServer for MemFs {
         Ok(self.qid(*node))
     }
 
-    fn read(&mut self, _: &Caller, node: &usize, offset: u64, out: &mut [u8]) -> Result<usize, NineError> {
+    fn read(&mut self, _: &Caller, node: &usize, offset: u64, out: &mut [u8]) -> Result<Read, NineError> {
+        if self.wait_for_input {
+            return Ok(Read::Wait);
+        }
         let data = &self.nodes[*node].data;
         let start = usize::try_from(offset).unwrap_or(usize::MAX).min(data.len());
         let n = out.len().min(data.len() - start);
         out[..n].copy_from_slice(&data[start..start + n]);
-        Ok(n)
+        Ok(Read::Done(n))
     }
 
     fn write(&mut self, _: &Caller, node: &usize, offset: u64, data: &[u8]) -> Result<usize, NineError> {
@@ -209,7 +220,7 @@ impl T {
     fn rpc_with(&mut self, who: &Caller, lend: usize, body: Body<'_>) -> Body<'_> {
         self.buf = vec![0; lend];
         Message { tag: 5, body }.encode(&mut self.buf).unwrap();
-        self.server.answer_in_place(who, &mut self.buf).expect("a reply");
+        assert_eq!(self.server.answer_in_place(who, &mut self.buf), Answer::Replied, "a reply");
         let reply = Message::decode(&self.buf).unwrap();
         assert_eq!(reply.tag, 5);
         reply.body
@@ -579,7 +590,7 @@ fn a_short_reply_leaves_the_rest_of_the_lend_alone() {
     Message { tag: 1, body: Body::Tattach { fid: 0, afid: NOFID, uname: "", aname: "" } }
         .encode(&mut lend)
         .unwrap();
-    t.server.answer_in_place(&bob, &mut lend).unwrap();
+    assert_eq!(t.server.answer_in_place(&bob, &mut lend), Answer::Replied);
     let n = redoubt_wire::ninep::message_size(&lend).unwrap();
     assert!(lend[n..].iter().all(|b| *b == 0xaa));
 }
@@ -679,7 +690,7 @@ fn malformed_requests_get_errors() {
     // Garbage with a readable tag gets an Rerror with that tag.
     let mut buf = vec![0u8; 64];
     buf[..7].copy_from_slice(&[64, 0, 0, 0, 99, 0x34, 0x12]);
-    assert_eq!(t.server.answer_in_place(&a, &mut buf), Some(()));
+    assert_eq!(t.server.answer_in_place(&a, &mut buf), Answer::Replied);
     let reply = Message::decode(&buf).unwrap();
     assert_eq!((reply.tag, reply.body), (0x1234, Body::Rerror { ename: "malformed message" }));
     // R-messages and unsupported requests.
@@ -695,8 +706,8 @@ fn malformed_requests_get_errors() {
     ));
     assert_eq!(t.rpc(&a, Body::Tflush { oldtag: 1 }), Body::Rflush);
     // No room for any reply at all.
-    assert_eq!(t.server.answer_in_place(&a, &mut [0u8; 4]), None);
-    assert_eq!(t.server.answer_in_place(&a, &mut []), None);
+    assert_eq!(t.server.answer_in_place(&a, &mut [0u8; 4]), Answer::NoRoom);
+    assert_eq!(t.server.answer_in_place(&a, &mut []), Answer::NoRoom);
     // A reply that does not fit the lend becomes an error that does.
     t.attach(&a, 0, "");
     let reply = t.rpc_with(&a, 40, Body::Tstat { fid: 0 });
@@ -766,6 +777,54 @@ fn every_write_needs_equal_labels() {
     t.walk(&both, 0, 3, &["vault", "key"]);
     assert_eq!(t.err(&both, Body::Tremove { fid: 3 }), "permission denied");
     assert_eq!(t.server.fs.nodes[6].data, b"secret");
+}
+
+/// A file server that asks for a read to wait (`Read::Wait`) leaves the T-message in the lend
+/// untouched, so serving the same request again answers it. That is what `consoled` relies on:
+/// it parks the request and serves it again when a key arrives.
+#[test]
+fn a_read_that_waits_leaves_its_request_to_be_served_again() {
+    let mut t = T::new();
+    let a = alice();
+    t.attach(&a, 0, "");
+    t.walk(&a, 0, 1, &["notes"]);
+    t.open(&a, 1, mode::OREAD).unwrap();
+    t.server.fs.wait_for_input = true;
+    let mut buf = vec![0; MSIZE];
+    Message { tag: 9, body: Body::Tread { fid: 1, offset: 0, count: 64 } }.encode(&mut buf).unwrap();
+    let before = buf.clone();
+    assert_eq!(t.server.answer_in_place(&a, &mut buf), Answer::Waiting);
+    assert_eq!(buf, before, "a held request is left exactly as it arrived");
+    // Twice: a spurious wake-up parks it again and still changes nothing.
+    assert_eq!(t.server.answer_in_place(&a, &mut buf), Answer::Waiting);
+    assert_eq!(buf, before);
+    // Now there is something to read, and the same bytes answer.
+    t.server.fs.wait_for_input = false;
+    assert_eq!(t.server.answer_in_place(&a, &mut buf), Answer::Replied);
+    let reply = Message::decode(&buf).unwrap();
+    assert_eq!(reply.tag, 9);
+    assert_eq!(reply.body, Body::Rread { data: b"hello, world" });
+}
+
+/// A fid clunked while a read waits makes the second serving an error, not a panic or a read of
+/// something else.
+#[test]
+fn a_held_read_whose_fid_went_becomes_an_error() {
+    let mut t = T::new();
+    let a = alice();
+    t.attach(&a, 0, "");
+    t.walk(&a, 0, 1, &["notes"]);
+    t.open(&a, 1, mode::OREAD).unwrap();
+    t.server.fs.wait_for_input = true;
+    let mut buf = vec![0; MSIZE];
+    Message { tag: 9, body: Body::Tread { fid: 1, offset: 0, count: 64 } }.encode(&mut buf).unwrap();
+    assert_eq!(t.server.answer_in_place(&a, &mut buf), Answer::Waiting);
+    t.clunk(&a, 1);
+    t.server.fs.wait_for_input = false;
+    let mut again = vec![0; MSIZE];
+    Message { tag: 9, body: Body::Tread { fid: 1, offset: 0, count: 64 } }.encode(&mut again).unwrap();
+    assert_eq!(t.server.answer_in_place(&a, &mut again), Answer::Replied);
+    assert_eq!(Message::decode(&again).unwrap().body, Body::Rerror { ename: "unknown fid" });
 }
 
 #[path = "ninep_common_tests.rs"]

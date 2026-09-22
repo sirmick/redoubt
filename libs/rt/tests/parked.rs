@@ -22,12 +22,12 @@ const LONGEST: u64 = 200_000;
 /// A server that parks `WAIT` calls and answers one with 42 for each `WAKE`, until its endpoint
 /// goes. Returns how many abandoned-call notices it handled and how many calls expired.
 fn serve(ep: Endpoint) -> (u32, u32) {
-    let admission = Admission::new(Limits { buckets: 4, in_flight: 8, files: 0, state: 0 }).unwrap();
-    let mut parked: Parked<u64> = Parked::new(admission, LONGEST);
+    let mut admission = Admission::new(Limits { buckets: 4, in_flight: 8, files: 0, state: 0 }).unwrap();
+    let mut parked: Parked<u64> = Parked::new(LONGEST);
     let (mut abandoned, mut expired) = (0, 0);
     loop {
         let now = handle::time_now().unwrap();
-        while let Some(call) = parked.expired(now) {
+        while let Some(call) = parked.expired(&mut admission, now) {
             let (request, _) = call.unwrap();
             request.reply(&[TIMED_OUT, 0, 0, 0], &[]).unwrap();
             expired += 1;
@@ -36,12 +36,12 @@ fn serve(ep: Endpoint) -> (u32, u32) {
         match ep.receive(timeout, 0) {
             Ok(Event::Call(request)) if request.words[0] == WAIT => {
                 let badge = request.caller.badge;
-                if let Err(refused) = parked.park(request, badge, badge, now) {
+                if let Err(refused) = parked.park(&mut admission, request, badge, badge, now) {
                     refused.0.reply(&[9, 0, 0, 0], &[]).unwrap();
                 }
             }
             Ok(Event::Call(request)) if request.words[0] == WAKE => {
-                let woken = match parked.resume_first(|_| true) {
+                let woken = match parked.resume_first(&mut admission, |_| true) {
                     Some(call) => {
                         let (waiting, _) = call.unwrap();
                         waiting.reply(&[0, 42, 0, 0], &[]).unwrap();
@@ -53,7 +53,10 @@ fn serve(ep: Endpoint) -> (u32, u32) {
             }
             Ok(Event::Call(request)) => request.reply(&[1, 0, 0, 0], &[]).unwrap(),
             Ok(Event::Abandoned(id)) => {
-                assert!(parked.abandoned(id, &[0; 4]).is_some(), "a notice for a call not parked");
+                assert!(
+                    parked.abandoned(&mut admission, id, &[0; 4]).is_some(),
+                    "a notice for a call not parked"
+                );
                 abandoned += 1;
             }
             Ok(_) | Err(Error::Timeout) => {}
@@ -128,18 +131,18 @@ fn parking_is_admitted_per_bucket_and_share() {
     let conn = f.grant(server, receive, client, 7);
     let server_thread = f.run(server, move || {
         let ep = Endpoint::from_handle(receive);
-        let admission = Admission::new(Limits { buckets: 2, in_flight: 4, files: 0, state: 0 }).unwrap();
-        let mut parked: Parked<()> = Parked::new(admission, 10_000_000);
+        let mut admission = Admission::new(Limits { buckets: 2, in_flight: 4, files: 0, state: 0 }).unwrap();
+        let mut parked: Parked<()> = Parked::new(10_000_000);
         let mut refused = 0;
         while let Ok(event) = ep.receive(FOREVER, 0) {
             if let Event::Call(request) = event {
                 let now = handle::time_now().unwrap();
-                if let Err(back) = parked.park(request, 7, (), now) {
+                if let Err(back) = parked.park(&mut admission, request, 7, (), now) {
                     back.0.reply(&[9, 0, 0, 0], &[]).unwrap();
                     refused += 1;
                     if refused == 1 {
                         // Answer the parked ones so the clients finish.
-                        while let Some(call) = parked.resume_first(|_| true) {
+                        while let Some(call) = parked.resume_first(&mut admission, |_| true) {
                             call.unwrap().0.reply(&[0; 4], &[]).unwrap();
                         }
                     }
@@ -178,8 +181,8 @@ fn an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end() {
         (f.grant(server, receive, agent, 20), f.grant(server, receive, sponsor, 21));
     let server_thread = f.run(server, move || {
         let ep = Endpoint::from_handle(receive);
-        let admission = Admission::new(Limits { buckets: 4, in_flight: 8, files: 0, state: 0 }).unwrap();
-        let mut parked: Parked<()> = Parked::new(admission, 10_000_000);
+        let mut admission = Admission::new(Limits { buckets: 4, in_flight: 8, files: 0, state: 0 }).unwrap();
+        let mut parked: Parked<()> = Parked::new(10_000_000);
         while let Ok(event) = ep.receive(FOREVER, 0) {
             let Event::Call(request) = event else { continue };
             let now = handle::time_now().unwrap();
@@ -189,12 +192,12 @@ fn an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end() {
                 // is answered, so the clients finish.
                 END_LEASE => {
                     request.reply(&[0, parked.len() as u64, 0, 0], &[]).unwrap();
-                    while let Some(call) = parked.resume_first(|_| true) {
+                    while let Some(call) = parked.resume_first(&mut admission, |_| true) {
                         call.unwrap().0.reply(&[0; 4], &[]).unwrap();
                     }
                 }
                 _ => {
-                    if let Err(back) = parked.park(request, share, (), now) {
+                    if let Err(back) = parked.park(&mut admission, request, share, (), now) {
                         back.0.reply(&[9, 0, 0, 0], &[]).unwrap();
                     }
                 }

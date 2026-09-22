@@ -4,10 +4,15 @@
 //!
 //! - **Admission.** Parking takes one [`Resource::InFlight`] of the caller's bucket and share; answering,
 //!   abandoning or expiring the call gives it back. The caps leave headroom under `MAX_OPEN_CALLS`
-//!   ([`Admission::new`]), so parked calls never stop the server taking new ones.
+//!   ([`Admission::new`]), so parked calls never stop the server taking new ones. The [`Admission`] is the
+//!   server's, passed in on every call here rather than owned, so that a 9P server's fids and its parked
+//!   calls are charged in the same buckets and shares ([`crate::server::ninep::NineServer::admission_mut`]).
 //! - **A server-side deadline.** Every parked call has one, at most [`Parked::new`]'s longest wait;
 //!   [`Parked::expired`] hands back the calls past it, for the server to answer (with its protocol's timeout
-//!   error), so a client that parks calls and waits cannot pin them for good.
+//!   error), so a client that parks calls and waits cannot pin them for good. A server whose calls wait on a
+//!   person rather than on the machine (`consoled`, for a key press) passes [`FOREVER`] as the longest wait:
+//!   such a call has no deadline and never expires, and what reclaims it is its caller giving up, which
+//!   arrives as an abandoned-call notice.
 //! - **`serve` before resuming** (answer 82). Every call handed back is made the thread's current call first
 //!   ([`Request::serve`]), so a crash while working on it blames its caller, not whoever sent the call taken
 //!   most recently.
@@ -27,25 +32,24 @@
 //! ```text
 //! loop {
 //!     let now = time_now()?;
-//!     while let Some(call) = parked.expired(now) { ...answer it with a timeout... }
+//!     while let Some(call) = parked.expired(&mut admission, now) { ...answer it with a timeout... }
 //!     let timeout = parked.next_deadline().map_or(FOREVER, |d| d.saturating_sub(now).max(1));
 //!     match endpoint.receive(timeout, 0)? {
 //!         Event::Call(request) => ...park it, answer it, or answer it ahead of admission...,
-//!         Event::Abandoned(id) => { parked.abandoned(id, &words); }
+//!         Event::Abandoned(id) => { parked.abandoned(&mut admission, id, &words); }
 //!         ...
 //!     }
 //! }
 //! ```
 //!
-//! **Not yet joined to the 9P skeleton.** A [`crate::server::ninep::NineServer`] answers every
-//! request as it takes it, so it cannot park one. The first 9P server that must wait for
-//! something (`consoled`, for input) needs two things: the skeleton handing the `Request` back
-//! instead of answering it, and `Parked` borrowing the skeleton's [`Admission`] rather than
-//! owning one, so fids and parked calls are charged in the same buckets and shares.
+//! **Joined to the 9P skeleton** (WP-R4). [`crate::server::ninep::NineServer::serve_parking`]
+//! hands back a request the file server asked to hold, with its T-message untouched in its lend;
+//! the server parks it here and serves it again when it can be answered. `consoled` is the
+//! worked example.
 
 use alloc::vec::Vec;
 
-use redoubt_sys::Error;
+use redoubt_sys::{Error, FOREVER};
 
 use super::admit::{Admission, AdmitKey, Resource};
 use crate::ipc::{Request, Words};
@@ -62,30 +66,37 @@ struct Call<T> {
     state: T,
 }
 
-/// The calls one thread has parked, each with the server's state for it (`T`).
+/// The calls one thread has parked, each with the server's state for it (`T`). The server's
+/// [`Admission`] is passed to every method rather than owned, so that a 9P server charges its
+/// fids and its parked calls in one set of buckets and shares.
 pub struct Parked<T> {
-    admission: Admission,
     calls: Vec<Call<T>>,
     longest: u64,
 }
 
 impl<T> Parked<T> {
-    /// Parks calls under `admission` (its `in_flight` caps), each for at most `longest`
-    /// microseconds.
-    pub fn new(admission: Admission, longest: u64) -> Parked<T> {
-        Parked { admission, calls: Vec::new(), longest }
-    }
+    /// Parks calls for at most `longest` microseconds each; [`FOREVER`] for calls that wait on a
+    /// person and have no deadline.
+    pub fn new(longest: u64) -> Parked<T> { Parked { calls: Vec::new(), longest } }
 
     /// Parks `request` at `now` (µs since boot) for at most the longest wait, charged to its
-    /// caller's bucket and `share`. Refused when the caller's bucket or share is full, or there
-    /// is no memory; the request comes back to be answered now.
+    /// caller's bucket and `share` in `admission` (its `in_flight` caps). Refused when the
+    /// caller's bucket or share is full, or there is no memory; the request comes back to be
+    /// answered now.
     #[allow(clippy::result_large_err)] // the request comes back by value, as `Request::reply`'s does
-    pub fn park(&mut self, request: Request, share: u64, state: T, now: u64) -> Result<(), NotParked> {
+    pub fn park(
+        &mut self,
+        admission: &mut Admission,
+        request: Request,
+        share: u64,
+        state: T,
+        now: u64,
+    ) -> Result<(), NotParked> {
         let key = AdmitKey::of(&request.caller);
-        if self.calls.try_reserve(1).is_err() || self.admission.admit(key, share, Resource::InFlight).is_err()
-        {
+        if self.calls.try_reserve(1).is_err() || admission.admit(key, share, Resource::InFlight).is_err() {
             return Err(NotParked(request));
         }
+        // `FOREVER` is "no deadline" (KERNEL-SPEC.md, Constants), and saturating past it is too.
         let deadline = now.saturating_add(self.longest);
         self.calls.push(Call { request, key, share, deadline, state });
         Ok(())
@@ -96,13 +107,17 @@ impl<T> Parked<T> {
 
     pub fn is_empty(&self) -> bool { self.calls.is_empty() }
 
-    /// The earliest deadline, to bound the thread's next `receive`.
-    pub fn next_deadline(&self) -> Option<u64> { self.calls.iter().map(|c| c.deadline).min() }
+    /// The earliest deadline, to bound the thread's next `receive`; `None` when nothing is
+    /// parked or every parked call waits without one ([`FOREVER`]).
+    pub fn next_deadline(&self) -> Option<u64> {
+        self.calls.iter().map(|c| c.deadline).filter(|d| *d != FOREVER).min()
+    }
 
     /// Removes the call at `index`, releasing its admission.
-    fn take(&mut self, index: usize) -> (Request, T) {
-        let call = self.calls.swap_remove(index);
-        self.admission.release(call.key, call.share, Resource::InFlight);
+    fn take(&mut self, admission: &mut Admission, index: usize) -> (Request, T) {
+        // In order, not `swap_remove`: `resume_first` serves the call that has waited longest.
+        let call = self.calls.remove(index);
+        admission.release(call.key, call.share, Resource::InFlight);
         (call.request, call.state)
     }
 
@@ -110,34 +125,49 @@ impl<T> Parked<T> {
     /// thread's current call (`serve`). `None` if no such call is parked. If `serve` fails the
     /// call is not an open call of this thread (a server bug: parked from another thread), so
     /// nothing can answer it here; it is dropped and the error comes back.
-    pub fn resume(&mut self, id: core::num::NonZeroU64) -> Option<Result<(Request, T), Error>> {
+    pub fn resume(
+        &mut self,
+        admission: &mut Admission,
+        id: core::num::NonZeroU64,
+    ) -> Option<Result<(Request, T), Error>> {
         let index = self.calls.iter().position(|c| c.request.id() == id)?;
         let served = self.calls[index].request.serve();
-        let call = self.take(index);
+        let call = self.take(admission, index);
         Some(served.map(|()| call))
     }
 
     /// The first parked call whose state `pick` accepts, resumed as [`Parked::resume`] does:
     /// for servers that resume by what the call waits for (input on a channel) rather than by
-    /// id.
-    pub fn resume_first(&mut self, mut pick: impl FnMut(&T) -> bool) -> Option<Result<(Request, T), Error>> {
+    /// id. The calls are kept in the order they were parked, so the longest wait is served
+    /// first.
+    pub fn resume_first(
+        &mut self,
+        admission: &mut Admission,
+        mut pick: impl FnMut(&T) -> bool,
+    ) -> Option<Result<(Request, T), Error>> {
         let id = self.calls.iter().find(|c| pick(&c.state))?.request.id();
-        self.resume(id)
+        self.resume(admission, id)
     }
 
     /// One call past its deadline at `now`, resumed as [`Parked::resume`] does, for the server
-    /// to answer with its protocol's timeout error. Call until `None`.
-    pub fn expired(&mut self, now: u64) -> Option<Result<(Request, T), Error>> {
-        let id = self.calls.iter().find(|c| c.deadline <= now)?.request.id();
-        self.resume(id)
+    /// to answer with its protocol's timeout error. Call until `None`. A call parked without a
+    /// deadline ([`FOREVER`]) never comes back this way.
+    pub fn expired(&mut self, admission: &mut Admission, now: u64) -> Option<Result<(Request, T), Error>> {
+        let id = self.calls.iter().find(|c| c.deadline != FOREVER && c.deadline <= now)?.request.id();
+        self.resume(admission, id)
     }
 
     /// An abandoned-call notice for `id` ([`crate::ipc::Event::Abandoned`]): replies to the call
     /// at once with `words` (the reply reaches nobody; replying frees the call and its lend) and
     /// hands back the server's state for it. `None` if no such call is parked.
-    pub fn abandoned(&mut self, id: core::num::NonZeroU64, words: &Words) -> Option<T> {
+    pub fn abandoned(
+        &mut self,
+        admission: &mut Admission,
+        id: core::num::NonZeroU64,
+        words: &Words,
+    ) -> Option<T> {
         let index = self.calls.iter().position(|c| c.request.id() == id)?;
-        let (request, state) = self.take(index);
+        let (request, state) = self.take(admission, index);
         // The call is open until this reply; the reply's words cannot fail to encode.
         let _ = request.reply(words, &[]);
         Some(state)

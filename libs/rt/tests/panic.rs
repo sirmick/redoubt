@@ -12,7 +12,7 @@ use redoubt_rt::abi::FOREVER;
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Caller, Event};
 use redoubt_rt::server::Limits;
-use redoubt_rt::server::ninep::{FileServer, FileStat, NineError, NineServer, Qid};
+use redoubt_rt::server::ninep::{FileServer, FileStat, NineError, NineServer, Qid, Read};
 use redoubt_rt::startup::{Startup, StartupBuilder};
 
 /// A console: the connection's root is the one file; what is written is kept.
@@ -31,7 +31,9 @@ impl FileServer for Console {
 
     fn open(&mut self, _: &Caller, _: &(), _: u8) -> Result<Qid, NineError> { Ok(Qid::default()) }
 
-    fn read(&mut self, _: &Caller, _: &(), _: u64, _: &mut [u8]) -> Result<usize, NineError> { Ok(0) }
+    fn read(&mut self, _: &Caller, _: &(), _: u64, _: &mut [u8]) -> Result<Read, NineError> {
+        Ok(Read::Done(0))
+    }
 
     fn write(&mut self, _: &Caller, _: &(), _: u64, data: &[u8]) -> Result<usize, NineError> {
         self.0.lock().unwrap().extend_from_slice(data);
