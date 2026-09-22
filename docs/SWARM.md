@@ -10,13 +10,20 @@ the `subagent` tool.
 - **Orchestrator** (`orchestrator` agent, one session): owns the claims table below, starts packages whose needs
   are met, reviews results, merges, and keeps BUILD-PLAN.md, STATUS.md and HISTORY.md current. It
   does not implement packages itself.
-- **Architect** (a sub-agent the orchestrator consults): knows the frozen design back and
-  forth and answers the questions a package cannot be built without. The design is read-only to
-  the swarm; the architect opens each question formally in QUESTIONS.md, records the answer in
-  ANSWERS.md, backlinks the `Answered` line, applies the accepted answer to the design note, and
-  adds the HISTORY.md entry. A genuine owner decision comes back still open, with `Rec` and
-  `Alt`, and is not merged until the owner answers. The protocol is
+- **Architect** (one long-lived sub-agent session per build): knows the frozen design back and
+  forth and answers the questions a package cannot be built without. It is **resident, not a
+  fresh consult per question**: the orchestrator spawns it once (it reads the design and
+  `docs/ARCHITECT-NOTES.md`, its own durable memory, on first load) and then sends each later
+  question with `subagent({ action: "resume", id: <architect-run>, message: ... })`, so it
+  answers from context it already holds rather than re-reading the repository. The design is
+  read-only to the swarm; the architect opens each question formally in QUESTIONS.md, records
+  the answer in ANSWERS.md, backlinks the `Answered` line, applies the accepted answer to the
+  design note, and adds the HISTORY.md entry. A genuine owner decision comes back still open,
+  with `Rec` and `Alt`, and is not merged until the owner answers. The protocol is
   `.pi/skills/architect-qa/SKILL.md`.
+- **When to re-spawn.** `resume` the same architect session for every question in a build. Start
+  a fresh one only when the old session is unrecoverable, or when a question needs a clean
+  read of a note the session has not seen; the durable notes file keeps a fresh start cheap.
 - **Implementer** (a sub-agent per package): works only on its package, in its own worktree and
   branch (`wp-k1`, `wp-m0`, ...), and reports what it built, its test results and anything it found
   wrong in the design. It does not guess at an open design question: it stops and the orchestrator

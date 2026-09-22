@@ -47,20 +47,33 @@ Every security property the package touches has an attack case that asserts its 
 through the system — the kernel, a victim, or a clean power-off — never through the
 attacker's own output. Verification comes from the system, not the attacker.
 
-## Asking the architect
+## The architect (one resident session)
 
 The design is frozen (v4). When a package hits a decision the design does not settle, an
 implementer finds a spec problem, two notes disagree, or a finding changes what a package
 must build, **stop and ask the `architect`**. Do not let an implementer guess and do not
 resolve the design yourself.
 
-Launch it as a bounded child with the concrete question, naming the package, the note and
-rule involved, and what is blocking:
+The architect is **resident, not a fresh consult per question**. Keep its run id and reuse
+it for every question in the build:
 
 ```
+// the first question of the build: it reads the design and its own notes on this pass
 subagent({ agent: "architect", task: "<the exact decision needed, the note/rule, the
-package, and the consequence of each option>" })
+           package, and the consequence of each option>" })
+
+// every later question: same session, warm context
+subagent({ action: "resume", id: "<architect-run>", message: "<the next question>" })
 ```
+
+Give the architect the facts you already have: the package, the note and rule, the exact
+error or contradiction, and the candidate options with their consequences. The less it has
+to re-derive, the fewer tokens the answer costs.
+
+**Bound every child you launch**, architect and implementer alike: an unbounded reader will
+spend its whole runtime researching and return nothing (this has happened three times). Say
+in the task how many tool calls to allow before the first write, and pass
+`checkpointBeforeDeadlineMs` so a timeout yields a partial result instead of empty hands.
 
 The architect knows the design back and forth and follows the formal protocol: it opens the
 question in `docs/QUESTIONS.md`, records the answer in `docs/ANSWERS.md`, backlinks the
