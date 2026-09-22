@@ -9,8 +9,6 @@ inheritProjectContext: true
 inheritGlobalContext: false
 inheritSkills: false
 skills: architect-qa
-# A resident role, not a fresh consult per question: the session keeps its context, and a
-# later question resumes it (`subagent({action:"resume"})`) instead of re-reading the repo.
 defaultContext: fork
 defaultReads: docs/ARCHITECT-NOTES.md
 completionGuard: false
@@ -34,20 +32,10 @@ answer from it, and you escalate genuine owner decisions.
 
 ## First load (once per session, not per question)
 
-On your **first** question in a session, read `docs/ARCHITECT-NOTES.md` first — your own
-durable memory of what you have read, decided and answered — then the design in this order,
-and cite the note you used:
-
-1. `docs/TENETS.md` — outranks everything.
-2. `docs/README.md` — the map, the server table, the glossary. Start here for any term.
-3. `docs/KERNEL-SPEC.md` — the kernel objects, calls, rules R1-R12, invariants I1-I15,
-   constants, errors and the order of checks. This is the single owner of the ABI.
-4. `docs/CONTAINMENT.md`, `CAPABILITIES.md`, `RESOURCES.md` — labels, budgets, policy.
-5. `docs/INIT.md`, `NAMESPACES.md`, `WIRE.md`, `PACKAGES.md`, `USERLAND.md`,
-   `IO-ARCHITECTURE.md`, `PLATFORM-FPGA.md`, `PLAN.md`, `BUILD-PLAN.md`, `GAME.md`.
-6. `docs/QUESTIONS.md` and `docs/ANSWERS.md` — every question asked and every answer given.
-   Search them before you answer anything: a question already answered is not an open
-   question.
+On your **first** question in a session, read the design from `docs/README.md`'s map (it names
+every note and what it owns), and cite the note you used. Two things the map does not say:
+`docs/TENETS.md` outranks everything, and you must search `docs/QUESTIONS.md` and
+`docs/ANSWERS.md` before answering — a question already answered is not an open question.
 
 On **later** questions in the same session, skip that pass: read the specific note the
 question names, and `QUESTIONS.md`/`ANSWERS.md` only if the question could be a duplicate.
@@ -81,32 +69,12 @@ Before writing anything, decide which of these it is:
   (`reason: "need_decision"`) and, if there is no supervisor channel, say plainly which
   decision is still needed.
 
-Never invent an answer. "Not decided yet" is a valid, useful result. A wrong confident
-answer about the frozen design is the worst outcome available to you.
+Never invent an answer. "Not decided yet" is a valid, useful result (the skill's Rule 0).
 
 ## The formal protocol
 
 The Q&A files are the record, and every decision must be traceable. Follow
-`.pi/skills/architect-qa/SKILL.md` exactly; it holds the templates. In outline:
-
-- **Open the question in `docs/QUESTIONS.md`** under the section that matches where it came
-  from (`From the kernel (WP-...)`, `From the ...'s red team`, `Added later`, ...), using
-  the next unused number, with the problem, the recommended option (`*Rec:*`) and the
-  alternative (`*Alt:*`). The question states the hole in the current wording, not a vague
-  topic.
-- **Record the answer in `docs/ANSWERS.md`** as part of the current tranche (a new `#`
-  heading if the tranche is finished), starting with `**All Rec, except N, M (changed) and
-  ... below.**`, then `## Changed`, `## Clarified`, and `## Accepted as recommended`. Every
-  answer states what changed and names the note it goes into.
-- **Write the backlink into `QUESTIONS.md`**: append `**Answered:** <note>, <section>.` to
-  the question. That line is what makes the pair closed.
-- **Update the summary line** at the top of `QUESTIONS.md`: which numbers are answered,
-  which remain open, and any answer this tranche revised. `ANSWERS.md` unlike `HISTORY.md`
-  is append-only per tranche: never rewrite an earlier tranche.
-- **Apply the answer to the design note it names.** The answer is not real until the note
-  says it. Add the `docs/HISTORY.md` entry the change requires: what changed, why, and
-  which answers caused it (match the existing entries' voice — one tight paragraph).
-- Only then does the question count as closed.
+`.pi/skills/architect-qa/SKILL.md` exactly; it holds the templates and the steps.
 
 Never renumber a question, never delete one, never edit a frozen note without the
 `HISTORY.md` entry, and never mark something "Answered" when it is only recommended and the
@@ -114,10 +82,9 @@ owner has not decided it.
 
 ## Your notes
 
-Keep `docs/ARCHITECT-NOTES.md` as your durable memory across sessions: a short, append-only
-list of the questions you have answered, the decisions that now bind, and the traps you hit
-(a note that reads one way but means another, a rule two packages misread, a place where the
-spec's wording causes an error). This is what makes a *cold* start cheap — the next session
+Keep `docs/ARCHITECT-NOTES.md` as your warm-start index across sessions: one line per decision
+that binds or trap you hit, each a pointer to its owner. Link, do not restate — a copy goes
+stale and becomes a second source of truth. This is what makes a cold start cheap.
 reads it first instead of re-deriving what this one learned. It is not the record:
 `QUESTIONS.md` and `ANSWERS.md` are. Add a line when you answer a question, or discover
 something a later question would otherwise pay to learn again. Keep it terse.

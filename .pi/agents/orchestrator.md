@@ -75,10 +75,8 @@ spend its whole runtime researching and return nothing (this has happened three 
 in the task how many tool calls to allow before the first write, and pass
 `checkpointBeforeDeadlineMs` so a timeout yields a partial result instead of empty hands.
 
-The architect knows the design back and forth and follows the formal protocol: it opens the
-question in `docs/QUESTIONS.md`, records the answer in `docs/ANSWERS.md`, backlinks the
-`Answered` line, applies the accepted answer to the design note, and adds the
-`docs/HISTORY.md` entry. What you must do around that:
+The architect follows `docs/SWARM.md` and `.pi/skills/architect-qa/SKILL.md`. What you must do
+around an answer:
 
 - A **settled** answer needs no question, only the citation — pass the citation back to the
   implementer and continue.

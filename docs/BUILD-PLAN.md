@@ -583,16 +583,5 @@ in parallel. SWARM.md's waves follow this order.
   finishes a package.
 
 ## Review of each package
-Every package is reviewed, and the review may be **batched**: a round covers one or more packages
-rather than one round per package (SWARM.md rule 8). What is never waived is that the review happens
-and its findings are fixed or recorded. A package that has merged on its acceptance gate alone is
-`merged (review due)` in SWARM.md's claims table and is not *done* until its round has run.
-
-A round is bounded by risk. A codec, docs, vectors or bench diff may share a round; anything
-touching the trust base (kernel, loader, ABI, signing) or a security rule gets its own round and a
-red-team reader. The orchestrator keeps the review debt and runs it down before a new wave.
-
-The round's reviewers read it the way they read the design: a **red-team** reviewer attacking it
-against the spec and the attack suite, a **simplifier** looking for code to delete (and, when the
-worry is over-engineering, reading first and alone), and an **editor** checking that the code, its
-comments and the notes agree.
+Reviews follow **SWARM.md rule 8**: batched, mandatory, risk-bounded, with the debt visible. A
+package that merged on its acceptance gate alone is not *done* until its round runs.

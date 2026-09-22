@@ -12,18 +12,13 @@ the `subagent` tool.
   does not implement packages itself.
 - **Architect** (one long-lived sub-agent session per build): knows the frozen design back and
   forth and answers the questions a package cannot be built without. It is **resident, not a
-  fresh consult per question**: the orchestrator spawns it once (it reads the design and
-  `docs/ARCHITECT-NOTES.md`, its own durable memory, on first load) and then sends each later
-  question with `subagent({ action: "resume", id: <architect-run>, message: ... })`, so it
-  answers from context it already holds rather than re-reading the repository. The design is
-  read-only to the swarm; the architect opens each question formally in QUESTIONS.md, records
-  the answer in ANSWERS.md, backlinks the `Answered` line, applies the accepted answer to the
-  design note, and adds the HISTORY.md entry. A genuine owner decision comes back still open,
-  with `Rec` and `Alt`, and is not merged until the owner answers. The protocol is
-  `.pi/skills/architect-qa/SKILL.md`.
-- **When to re-spawn.** `resume` the same architect session for every question in a build. Start
-  a fresh one only when the old session is unrecoverable, or when a question needs a clean
-  read of a note the session has not seen; the durable notes file keeps a fresh start cheap.
+  fresh consult per question**: the orchestrator spawns it once and then sends each later question
+  with `subagent({ action: "resume", id: <architect-run>, message: ... })`, so it answers from
+  context it already holds rather than re-reading the repository. Spawn a fresh one only when the
+  old session is unrecoverable. The design is read-only to the swarm; the architect follows
+  `.pi/skills/architect-qa/SKILL.md` (opens the question, records the answer, backlinks it, applies
+  it to the owning note, adds the HISTORY entry). A genuine owner decision comes back still open,
+  with `Rec` and `Alt`, and is not merged until the owner answers.
 - **Implementer** (a sub-agent per package): works only on its package, in its own worktree and
   branch (`wp-k1`, `wp-m0`, ...), and reports what it built, its test results and anything it found
   wrong in the design. It does not guess at an open design question: it stops and the orchestrator
@@ -63,12 +58,10 @@ the `subagent` tool.
      commit range — and runs it down before starting a new wave, or sooner if the debt touches the
      TCB.
    - A round's findings are fixed or recorded, the HISTORY line for each package is amended to say
-     it was reviewed and what the round found, and the debt entry is cleared. A package with review
-     debt is not counted as done in the claims table (mark it `merged (review due)`).
+     it was reviewed and what the round found, and the debt entry is cleared.
    - The three angles are the design's: **red team** (attack it against the spec and the attack
      suite), **simplifier** (what can be deleted), **editor** (code, comments and notes agree).
-     Order them by what the round is for: when the worry is over-engineering, the simplifier reads
-     first and alone, so its verdict is not argued away by the other two.
+     Order them by what the round is for.
 
 ## Agents and workflows
 
