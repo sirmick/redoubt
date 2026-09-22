@@ -14,7 +14,7 @@ use alloc::vec::Vec;
 use redoubt_rt::abi::{Error, FOREVER};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Caller, Event};
-use redoubt_rt::server::ninep::{DMDIR, FileServer, FileStat, NineError, NineServer, QTDIR, Qid, mode};
+use redoubt_rt::server::ninep::{DMDIR, FileServer, FileStat, NineError, NineServer, QTDIR, Qid, Read, mode};
 use redoubt_rt::server::{Cost, Limits};
 use redoubt_rt::startup::Startup;
 
@@ -82,12 +82,13 @@ impl FileServer for EchoFs {
         Ok(qid(*node))
     }
 
-    fn read(&mut self, _: &Caller, _: &Node, offset: u64, out: &mut [u8]) -> Result<usize, NineError> {
+    /// Never waits: what has not been written yet reads as the end of the file.
+    fn read(&mut self, _: &Caller, _: &Node, offset: u64, out: &mut [u8]) -> Result<Read, NineError> {
         // Any offset is the client's: past the end reads nothing.
         let start = usize::try_from(offset).unwrap_or(usize::MAX).min(self.data.len());
         let n = out.len().min(self.data.len() - start);
         out[..n].copy_from_slice(&self.data[start..start + n]);
-        Ok(n)
+        Ok(Read::Done(n))
     }
 
     fn write(&mut self, _: &Caller, _: &Node, offset: u64, data: &[u8]) -> Result<usize, NineError> {

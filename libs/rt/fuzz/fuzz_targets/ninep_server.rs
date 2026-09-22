@@ -15,8 +15,8 @@ use redoubt_rt::abi::{Error, Handle, Handles, Labels};
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::path;
 use redoubt_rt::server::ninep::{
-    DMDIR, FIRST_MINTED_BADGE, FileServer, FileStat, MAX_FIDS, Minter, NineError, NineServer, QTDIR, Qid,
-    ninep_common,
+    Answer, DMDIR, FIRST_MINTED_BADGE, FileServer, FileStat, MAX_FIDS, Minter, NineError, NineServer,
+    QTDIR, Qid, Read, ninep_common,
 };
 use redoubt_rt::server::{AdmitKey, Limits, Resource};
 use redoubt_rt::wire::ninep::{Body, Message, NOFID, Names};
@@ -68,12 +68,12 @@ impl FileServer for Tree {
 
     fn open(&mut self, _: &Caller, node: &usize, _: u8) -> Result<Qid, NineError> { Ok(qid(*node)) }
 
-    fn read(&mut self, _: &Caller, node: &usize, offset: u64, out: &mut [u8]) -> Result<usize, NineError> {
+    fn read(&mut self, _: &Caller, node: &usize, offset: u64, out: &mut [u8]) -> Result<Read, NineError> {
         let data = &self.data[*node];
         let start = usize::try_from(offset).unwrap_or(usize::MAX).min(data.len());
         let n = out.len().min(data.len() - start);
         out[..n].copy_from_slice(&data[start..start + n]);
-        Ok(n)
+        Ok(Read::Done(n))
     }
 
     fn write(&mut self, _: &Caller, node: &usize, offset: u64, data: &[u8]) -> Result<usize, NineError> {
@@ -240,7 +240,8 @@ fuzz_target!(|data: &[u8]| {
                 continue;
             }
         }
-        if server.answer_in_place(&caller, lend).is_some() {
+        // This tree never waits, so every request is answered.
+        if server.answer_in_place(&caller, lend) == Answer::Replied {
             Message::decode(lend).expect("every reply decodes");
         }
         assert!(server.fids(&caller) <= MAX_FIDS);

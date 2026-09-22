@@ -9,6 +9,11 @@
 //! or charging, no label check between user budgets (R1), no fair waiting (R2), no lend
 //! unmapping from the caller. The executable model (`redoubt/model`, WP-M0) should replace it
 //! once merged. Calls it does not model panic, so a test cannot rely on them by accident.
+//!
+//! WP-R4 added what a driver needs: device objects (`Fake::mmio` and `Fake::irq`), `map_device`
+//! over a page of host memory a test can read and write as if it were registers, `receive` on an
+//! IRQ handle (R5: the source is unmasked when the receive begins and `fired` is cleared when it
+//! returns), and `thread_create`, which runs the new thread as the same fake process.
 
 #![allow(dead_code)]
 
@@ -24,6 +29,35 @@ use redoubt_rt::abi::{
     PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles, Return,
 };
 
+/// What a handle names: an endpoint, or one of a device object's two forms.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Object {
+    Endpoint(Endpoint),
+    /// A device's registers: the index of a [`State::devices`] entry.
+    Mmio(usize),
+    /// A device's interrupt: the index of a [`State::devices`] entry.
+    Irq(usize),
+}
+
+impl Object {
+    fn endpoint(self) -> Result<Endpoint, Error> {
+        match self {
+            Object::Endpoint(ep) => Ok(ep),
+            _ => Err(Error::WrongObject),
+        }
+    }
+}
+
+/// One device object: a page standing in for its registers, and its interrupt's `fired` and
+/// `masked` flags (KERNEL-SPEC.md, R5).
+struct Device {
+    /// The registers, as bytes of this (host) process's memory; `map_device` returns its address.
+    registers: usize,
+    len: usize,
+    fired: bool,
+    masked: bool,
+}
+
 /// What a handle names. Only endpoints are modelled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Endpoint {
@@ -35,7 +69,7 @@ struct Process {
     account: u64,
     labels: Labels,
     /// Index 0 is never a handle.
-    handles: Vec<Option<Endpoint>>,
+    handles: Vec<Option<Object>>,
     /// Mapped ranges: address -> length.
     mappings: HashMap<usize, usize>,
 }
@@ -47,7 +81,7 @@ struct Pending {
     account: u64,
     labels: Labels,
     words: [usize; 4],
-    handles: Vec<Endpoint>,
+    handles: Vec<Object>,
     pages: Option<Pages>,
     from: usize,
 }
@@ -66,7 +100,7 @@ struct State {
     /// Calls taken and not replied to: id -> (receiving process, endpoint).
     open: HashMap<u64, (usize, usize)>,
     /// Replies waiting for their caller: id -> (words, handles).
-    replies: HashMap<u64, ([usize; 4], Vec<Endpoint>)>,
+    replies: HashMap<u64, ([usize; 4], Vec<Object>)>,
     /// Sends a receiver has taken.
     taken: HashSet<u64>,
     exits: HashMap<usize, u32>,
@@ -77,6 +111,8 @@ struct State {
     abandoned: HashSet<u64>,
     /// `serve` and `reply` as they happened: (process, call, message id).
     log: Vec<(usize, &'static str, u64)>,
+    /// Device objects, by the index their handles carry.
+    devices: Vec<Device>,
 }
 
 pub struct Fake {
@@ -126,15 +162,58 @@ impl Fake {
         let mut s = self.lock();
         s.endpoints.push(EndpointState::default());
         let id = s.endpoints.len() - 1;
-        install(&mut s, owner, Endpoint { id, badge: 0 })
+        install(&mut s, owner, Object::Endpoint(Endpoint { id, badge: 0 }))
+    }
+
+    /// A new device object whose two handles (registers, interrupt) go into `owner`'s table,
+    /// with `len` bytes of registers, zeroed. What `init` hands a driver (INIT.md).
+    pub fn device(&self, owner: usize, len: usize) -> (Handle, Handle) {
+        let mut s = self.lock();
+        let layout = Layout::from_size_align(len.max(1), PAGE_SIZE).unwrap();
+        // SAFETY: the layout has a non-zero size; the allocation lives as long as the fake,
+        // which is leaked, so the addresses `map_device` hands out stay valid.
+        let registers = unsafe { alloc_zeroed(layout) } as usize;
+        s.devices.push(Device { registers, len, fired: false, masked: false });
+        let index = s.devices.len() - 1;
+        let mmio = install(&mut s, owner, Object::Mmio(index));
+        let irq = install(&mut s, owner, Object::Irq(index));
+        (mmio, irq)
+    }
+
+    /// The device's registers, as a test reads and writes them: the bytes behind `map_device`.
+    /// A test plays the part of the hardware here.
+    pub fn registers(&self, owner: usize, mmio: Handle) -> &'static mut [u8] {
+        let s = self.lock();
+        let Ok(Object::Mmio(index)) = lookup(&s, owner, mmio) else { panic!("not an mmio handle") };
+        let d = &s.devices[index];
+        // SAFETY: `device` allocated `len` bytes at this address and never frees them. Tests
+        // are single-threaded around each use; the borrow is `'static` because the allocation is.
+        unsafe { std::slice::from_raw_parts_mut(d.registers as *mut u8, d.len) }
+    }
+
+    /// The device raises its interrupt (KERNEL-SPEC.md, R5: the kernel masks the source and
+    /// sets `fired`).
+    pub fn fire(&self, owner: usize, irq: Handle) {
+        let mut s = self.lock();
+        let Ok(Object::Irq(index)) = lookup(&s, owner, irq) else { panic!("not an irq handle") };
+        s.devices[index].fired = true;
+        s.devices[index].masked = true;
+        self.changed.notify_all();
+    }
+
+    /// Whether the device's interrupt source is masked, which only `receive` unmasks (R5).
+    pub fn masked(&self, owner: usize, irq: Handle) -> bool {
+        let s = self.lock();
+        let Ok(Object::Irq(index)) = lookup(&s, owner, irq) else { panic!("not an irq handle") };
+        s.devices[index].masked
     }
 
     /// Gives `to` a handle to the endpoint `from_handle` names in `from`, with `badge`: what a
     /// parent does with `mint` and `process_start`.
     pub fn grant(&self, from: usize, from_handle: Handle, to: usize, badge: u64) -> Handle {
         let mut s = self.lock();
-        let ep = lookup(&s, from, from_handle).expect("grant from a handle that exists");
-        install(&mut s, to, Endpoint { badge, ..ep })
+        let ep = as_endpoint(&s, from, from_handle).expect("grant from an endpoint that exists");
+        install(&mut s, to, Object::Endpoint(Endpoint { badge, ..ep }))
     }
 
     /// Copies `from`'s handle `from_handle` into `to`, badge and all: what `process_start` does
@@ -148,7 +227,7 @@ impl Fake {
     /// Destroys the endpoint: its receivers and blocked callers get `Dead`.
     pub fn destroy(&self, owner: usize, handle: Handle) {
         let mut s = self.lock();
-        let ep = lookup(&s, owner, handle).unwrap();
+        let ep = as_endpoint(&s, owner, handle).unwrap();
         s.endpoints[ep.id].dead = true;
         self.changed.notify_all();
     }
@@ -215,7 +294,7 @@ impl Fake {
     }
 }
 
-fn install(s: &mut State, pid: usize, ep: Endpoint) -> Handle {
+fn install(s: &mut State, pid: usize, ep: Object) -> Handle {
     let table = &mut s.processes[pid].handles;
     let index = match table.iter().skip(1).position(Option::is_none) {
         Some(free) => free + 1,
@@ -228,9 +307,12 @@ fn install(s: &mut State, pid: usize, ep: Endpoint) -> Handle {
     Handle::new(index as u32).unwrap()
 }
 
-fn lookup(s: &State, pid: usize, h: Handle) -> Result<Endpoint, Error> {
+fn lookup(s: &State, pid: usize, h: Handle) -> Result<Object, Error> {
     s.processes[pid].handles.get(h.index() as usize).copied().flatten().ok_or(Error::BadHandle)
 }
+
+/// The endpoint `h` names in `pid`, or `WrongObject` if it names a device.
+fn as_endpoint(s: &State, pid: usize, h: Handle) -> Result<Endpoint, Error> { lookup(s, pid, h)?.endpoint() }
 
 fn deadline(timeout: u64) -> Option<Instant> {
     (timeout != FOREVER).then(|| Instant::now() + Duration::from_micros(timeout))
@@ -287,13 +369,34 @@ impl redoubt_rt::HostKernel for Fake {
                 let mut s = self.lock();
                 s.endpoints.push(EndpointState::default());
                 let id = s.endpoints.len() - 1;
-                Ok(Return::Handle(install(&mut s, pid, Endpoint { id, badge: 0 })))
+                Ok(Return::Handle(install(&mut s, pid, Object::Endpoint(Endpoint { id, badge: 0 }))))
+            }
+            Call::MapDevice { device } => {
+                let s = self.lock();
+                let Object::Mmio(index) = lookup(&s, pid, device)? else {
+                    return Err(Error::WrongObject);
+                };
+                let d = &s.devices[index];
+                Ok(Return::Mapping { addr: d.registers, len: d.len })
+            }
+            Call::ThreadCreate { entry, arg, .. } => {
+                // The new thread is the same fake process: it shares its handle table, as a
+                // thread does on the machine.
+                // SAFETY (host test code only): `entry` is a `fn(usize) -> !` the caller cast
+                // to a `usize`, which is what `process_start` and `thread_create` take.
+                let entry: extern "C" fn(usize) -> ! = unsafe { std::mem::transmute(entry) };
+                std::thread::spawn(move || {
+                    CURRENT.with(|c| c.set(Some(pid)));
+                    // The body never returns; `process_exit` unwinds, which ends this thread.
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| entry(arg)));
+                });
+                Ok(Return::Tid(1))
             }
             Call::Mint { source, badge, budget: None } => {
                 let mut s = self.lock();
                 let ep = match source {
                     MintSource::Handle(h) => {
-                        let ep = lookup(&s, pid, h)?;
+                        let ep = as_endpoint(&s, pid, h)?;
                         if ep.badge != 0 {
                             return Err(Error::NotPermitted);
                         }
@@ -304,7 +407,11 @@ impl redoubt_rt::HostKernel for Fake {
                         _ => return Err(Error::InvalidArgument),
                     },
                 };
-                Ok(Return::Handle(install(&mut s, pid, Endpoint { id: ep, badge: badge.get() })))
+                Ok(Return::Handle(install(
+                    &mut s,
+                    pid,
+                    Object::Endpoint(Endpoint { id: ep, badge: badge.get() }),
+                )))
             }
             Call::HandleClose { handle } => {
                 let mut s = self.lock();
@@ -383,7 +490,7 @@ impl Fake {
     ) -> Result<Return, Error> {
         let body = read_body(body_rec)?;
         let mut s = self.lock();
-        let ep = lookup(&s, pid, endpoint)?;
+        let ep = as_endpoint(&s, pid, endpoint)?;
         let handles =
             body.handles.as_slice().iter().map(|h| lookup(&s, pid, *h)).collect::<Result<Vec<_>, _>>()?;
         if pages.is_some_and(|p| !owns(&s, pid, p)) {
@@ -450,7 +557,23 @@ impl Fake {
             while self.wait(&mut guard, deadline) {}
             return Err(Error::Timeout);
         };
-        let ep = lookup(guard.as_ref().unwrap(), pid, from)?;
+        // An IRQ handle: unmask the source (R5), then wait for it to fire.
+        if let Object::Irq(index) = lookup(guard.as_ref().unwrap(), pid, from)? {
+            guard.as_mut().unwrap().devices[index].masked = false;
+            self.changed.notify_all();
+            loop {
+                let s = guard.as_mut().unwrap();
+                if std::mem::take(&mut s.devices[index].fired) {
+                    // SAFETY: the runtime's live, 8-aligned receive record.
+                    unsafe { (rec as *mut [u64; RECEIVED_SLOTS]).write(Received::Interrupt.encode()) };
+                    return Ok(Return::Nothing);
+                }
+                if !self.wait(&mut guard, deadline) {
+                    return Err(Error::Timeout);
+                }
+            }
+        }
+        let ep = as_endpoint(guard.as_ref().unwrap(), pid, from)?;
         if ep.badge != 0 {
             return Err(Error::NotPermitted);
         }
