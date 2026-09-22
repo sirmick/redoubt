@@ -635,25 +635,26 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   closure; label non-interference; human control) and "The high/low pair": a labelled agent with
   secrets and no network (**A**) colluding with an unlabelled, networked agent (**B**) that has agreed
   a code in advance. Labels remove every *intentional* path between them, so the note now says what it
-  always meant — **the isolation unit is the label set, not the capability set**. **Collusion is not a
-  goal the OS can meet**: on one machine, power, heat, EM and the clock couple any two domains, so even
-  a perfect RTL cannot reach zero. The design's exact claim is **zero intentional paths** (the OS, by
-  construction), plus a reduced and measured covert residual (RTL), with **placement — not co-locating
-  the secret with the domain that wants it — the only true zero**. CONTAINMENT.md replaces "they never
-  reach zero; the goal is low bandwidth" with that split, states that **read-down from a shared
-  unlabelled volume is an intentional low-to-high path** (so a confined domain takes input by an audited
-  steward push, not by reading), and adds the **channel table**: every signalling resource closed by
-  software, reduced by RTL, or physical and unclosable (power/heat/EM/clock), with the rule that two
-  domains co-reside only if the residual is below what the secret is worth. PLATFORM-FPGA.md makes the
-  enumerated RTL closures required (separate cores, partitioned L2, isolated memory bandwidth,
-  per-domain DMA/disk/NIC, no shared GPU) while stating they are a reduction, not a zero. INIT.md gains
-  a `confined` manifest flag: `init` refuses a manifest that places differing label sets in one server
-  instance, volume, endpoint, network instance or core, exactly as it refuses a server's own budget.
-  GAME.md is new: the fight-club contract — scenarios (single-agent escape; the high/low pair;
-  authority expansion; collusion through the human), setup, win conditions, and the **verdict
-  taxonomy** (design hole vs implementation bug vs stated residual vs policy vs human). A **software**
-  channel (an intentional path) is the only red win that counts against the OS; a **covert** channel is
-  measured and reported, never graded, because no OS can close it. The design is unchanged in
-  mechanism; what changed is that its containment claim is now stated exactly — zero intentional paths,
-  a measured covert residual, and placement as the only zero — where a reader and an agent can find it.
+  always meant — **the isolation unit is the label set, not the capability set**. **Collusion prevention
+  is not a goal and covert communication is out of scope**: on one machine, power, heat, EM and the
+  clock couple any two domains, so even a perfect RTL cannot reach zero, exactly as for
+  microarchitectural side channels. The design's exact and only claim is **zero intentional
+  (software-mediated) paths**, by construction; it neither bounds nor measures covert ones. The only
+  zero is **placement** — not co-locating the secret with the domain that wants it — and that is a
+  deployment decision the OS cannot substitute for. CONTAINMENT.md replaces "they never reach zero; the
+  goal is low bandwidth" with that split, states that **read-down from a shared unlabelled volume is an
+  intentional low-to-high path** (so a confined domain takes input by an audited steward push, not by
+  reading), and adds the **channel table**: software-closed rows are the OS's claim, and the rest are
+  out of scope (RTL-reduced or physical). PLATFORM-FPGA.md notes that RTL work shrinks the enumerated
+  on-die channels as good practice but is **not a requirement or a claim**. INIT.md gains a `confined`
+  manifest flag: `init` refuses a manifest that places differing label sets in one server instance,
+  volume, endpoint, network instance or core, exactly as it refuses a server's own budget. GAME.md is
+  new: the fight-club contract — scenarios (single-agent escape; the high/low pair; authority expansion;
+  collusion through the human), setup, win conditions, and the **verdict taxonomy** (design hole vs
+  implementation bug vs stated residual vs policy vs human). A **software** channel (an intentional
+  path) is the only red win that counts against the OS; a **covert** channel is an observation, out of
+  scope and unscored. The design is unchanged in mechanism; what changed is that its containment claim
+  is now stated exactly — zero intentional paths, covert channels out of scope, placement as the only
+  zero — where a reader and an agent can find it.
+
 

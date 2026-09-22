@@ -171,13 +171,14 @@ logout or a restart, not data loss.
 Restart and reboot rules: INIT.md.
 
 ## Covert and timing channels
-For ordinary multi-tenancy the goal is low, stated, audited bandwidth. **For a protected label set
-against a colluding lower domain there is no zero in software or hardware.** The OS removes every
-*intentional* path (that is exact and testable); the RTL reduces the enumerated covert ones; power,
-heat, EM and the clock remain. A pre-agreed code makes even a tiny channel carry meaning (one bit can
-be a key), so the honest target is a **known, small, measured** channel plus a placement decision —
-not silence. Only not co-locating the secret with the domain that wants it is zero. The attacker is
-assumed to have a perfect clock (TENETS.md, The high/low pair).
+**Covert communication is out of scope**, like microarchitectural side channels (TENETS.md, The
+adversary, and The high/low pair). On one machine, power, heat, EM and the clock couple any two
+domains, so no OS can prevent or bound it; the OS does not claim to, and does not measure it. What the
+OS does guarantee is the **intentional** half: every software-mediated flow is closed (the channel
+table below). For ordinary multi-tenancy, where the parties merely share a machine, keeping covert
+bandwidth low and audited is good practice; for a protected label set the only zero is placement — not
+co-locating the secret with the domain that wants it. The attacker is assumed to have a perfect clock
+(TENETS.md).
 - **Secrets are handled by constant-time code** (`keyd`, crypto everywhere), so there is nothing
   secret-dependent to time.
 - **No microarchitectural state is shared between budgets:** one budget per core, RTL partitioning,
@@ -213,10 +214,11 @@ assumed to have a perfect clock (TENETS.md, The high/low pair).
   server CPU (above).
   On QEMU and ordinary hardware, none of the microarchitectural channels are closed.
 
-**The channel table.** Every resource that can carry a signal between two budgets is closed by
-software, reduced by hardware (RTL), or — for the physical substrate — unclosable and left to
-placement. **No residual permits co-residence for a protected label set unless its measured capacity
-is below what the secret is worth** (TENETS.md, The high/low pair).
+**The channel table.** Each row is a resource that can carry a signal between two budgets, and how it
+is handled. Rows closed by software are the OS's claim: an intentional path here is a hard
+requirement, and a leak is a design hole. The rest are **out of scope**: covert channels are physical
+or RTL-reduced, never guaranteed closed, and the only zero is placement (TENETS.md, The high/low
+pair).
 
 | Resource | Closed by | For a protected label set |
 | --- | --- | --- |
@@ -231,7 +233,7 @@ is below what the secret is worth** (TENETS.md, The high/low pair).
 | the scheduler (one stride queue) | hardware: one budget per core | RTL (reduced, not zero) |
 | CPU caches, L2, memory bandwidth | hardware | RTL (reduced, not zero) |
 | disk, NIC, GPU | hardware, or one instance per domain | RTL or no sharing |
-| power delivery, heat, EM emission, shared clock | **nothing** — physical substrate | placement only: do not co-locate |
+| power delivery, heat, EM emission, shared clock | **out of scope** — physical substrate | placement only: do not co-locate |
 
 ## The executable security model
 Before the kernel is built, the design is a Rust crate implementing **exactly** the objects, system
