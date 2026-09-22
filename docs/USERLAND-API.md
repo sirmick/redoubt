@@ -122,7 +122,10 @@ Path.relative?("a/b")        # true if no leading /
 ### `Redoubt.Cmd` — native process pipelines
 
 Native binaries are launched in their own budgets, connected by pipe files the
-shell VM serves. The `Cmd` API is struct-based; IEx command mode provides sugar.
+shell VM serves. `Cmd` wraps the single launch primitive; the
+`Redoubt.Process.start/3` shape sketched in USERLAND.md is the same operation
+at a lower level (budget, exit endpoint, startup block), and this note owns the
+Elixir surface for it. The `Cmd` API is struct-based; IEx command mode provides sugar.
 
 ```elixir
 import Redoubt.Cmd
@@ -171,9 +174,14 @@ answer here, and which `Redoubt.*` module wraps it. `userland/otp/DESIGN.md` own
 - **`console_size`** returns `Some((cols, rows))` when the platform knows a size and `None` when it
   does not; **the trait default is `None`**, so a platform that says nothing is honest rather than
   silently claiming 80×24 (answer 162). On Redoubt it asks the `/dev/cons` connection for the
-  `consol` `size` call (opcode 16, NAMESPACES.md, The console) and caches the answer. A server that
+  `consol` `size` call (opcode 16, NAMESPACES.md, The console). A server that
   does not serve `consol` refuses the opcode as `Malformed`, and the platform answers `None`.
   `Redoubt.Console.size/0` reports that as `{:error, :unknown}`.
+  **The size is asked afresh on every `size/0` call, not cached across one.** The only console whose
+  size changes is an SSH channel, and the only thing that tells a client it changed is the `resize`
+  call (below, and not buildable until question 163) — so a cache no rule invalidates would answer a
+  redraw with the size before the change. A caller that needs the current size calls `size/0`; a
+  caller that wants to be told subscribes with `await_resize` once it exists.
 - **There is a resize channel in milestone 1, and it is a parked call** (answer 160). A server
   pushes an unprompted event by holding a call the client made and answering it when the event
   happens (NAMESPACES.md, Holding a call): the client calls `consol`'s opcode 17 `resize`, the server
@@ -196,7 +204,7 @@ No cell grid is maintained here; the user's terminal emulator does that.
 
 | Function | Returns | Notes |
 |----------|---------|-------|
-| `size()` | `{cols, rows} | {:error, :unknown}` | Asks `/dev/cons` for the `consol` `size` call and caches the answer; `{:error, :unknown}` when the server does not serve it |
+| `size()` | `{cols, rows} | {:error, :unknown}` | Asks `/dev/cons` for the `consol` `size` call (opcode 16) on every call, so a redraw after a resize is not answered from a stale cache; `{:error, :unknown}` when the server does not serve it |
 | `clear()` | `:ok` | Full clear + home cursor |
 | `move_to(col, row)` | `:ok` | 0-based |
 | `write(data)` | `:ok` | Raw bytes to console; `IO.write` equivalent |

@@ -846,3 +846,15 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   channel, since an abandonment notice reaches only the thread holding the call on the endpoint it
   came in on. CONTAINMENT.md now says the server-side deadline has the console read as its exception
   (`consoled` parks `FOREVER`), removing the contradiction with NAMESPACES.md.
+- **R-T1 editor: the `size()` cache contradicted the redraw remedy** (2026-09-22). `USERLAND-API.md`
+  said the platform "caches the answer" to the `consol` `size` call, while NAMESPACES.md told a TUI to
+  "re-read it whenever it redraws" — with nothing invalidating the cache, that re-read returns the
+  size from before the change. The one console whose size changes is an SSH channel, and the only
+  thing that reports a change is the `resize` call, which is not buildable until question 163. The
+  note now says the size is **asked afresh on every `size/0` call** (a caller that wants to be told
+  subscribes with `await_resize` once it exists), and the table row says so. Also fixed: the
+  `await_resize` table row's arity (`/1`, matching the prose and the answers) and the missing
+  `Redoubt.Process` in the launching inventory (USERLAND-API now says `Cmd` wraps the same launch
+  primitive USERLAND.md sketches). Noted, not fixed here: the draft's `pipe/1` is shown in two
+  incompatible shapes and neither it nor `read/1` is in the `Redoubt.Cmd` table — pre-existing draft
+  drift, for the note's own next pass.
