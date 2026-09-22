@@ -761,3 +761,10 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   It is its own package because `libs/rt` is shared by every server (answer 157), and WP-R4b now
   needs it. Also fixed on `redoubt` by itself: `servers/keyd/tests/keyd.rs`'s stale test-harness
   `#[path]`, which had made `cargo test -p redoubt-keyd` fail to compile (answer 159).
+- **WP-R1c reviewed** (2026-09-22, round R-R1c): the editor found the recovered 9P conformance runner
+  (`libs/rt/tests/common/vectors.rs`) orphaned — nothing declared `mod vectors;`, and it carries
+  `#![allow(dead_code)]`, so it neither compiled nor ran and would have rotted silently until WP-R4b's
+  servers included it. `libs/rt/tests/vectors.rs` now drives the corpus against a minimal server, so
+  the runner is exercised where it lives. The red team traced every path on which a handle-carrying
+  request can be parked and re-served (closed exactly once, list emptied, revoked handle diverted to
+  `MALFORMED`) and found no double close, leak or panic.

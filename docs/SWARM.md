@@ -137,7 +137,7 @@ it. A package whose work landed inside another is recorded as `folded` and gets 
 | K6 | waiting | | needs K1-K5, R1b |
 | R1 | merged | wp-r1 | 8298608af (carried the answers 39-42, 50-53 part of R1b) |
 | R1b | merged | wp-r1b | 86117e7af |
-| R1c | merged | wp-r1c | cd65fa610; joined `Parked` to the 9P skeleton (recovery of `5d29d136e`, answers 156-158); editor found the recovered conformance runner orphaned (fixed) |
+| R1c | merged | wp-r1c | cd65fa610; joined `Parked` to the 9P skeleton (recovery of `5d29d136e`, answers 156-158); reviewed R-R1c |
 | R2 | waiting | | needs R1b, K4 |
 | R3 | waiting | | needs R2, W1, K3, K5; carries the `confined` manifest |
 | R4 | building | wp-r4 | bootfsd and consoled |
@@ -164,4 +164,4 @@ Rounds owed, newest first (SWARM.md rule 8). Run down before a new wave.
 | R-1 | `6b224c0ab..612a0a599` | WP-W3a (codec generator: opcode floor + `copy_file`) | **red team done** (2 P2, fixed in `17f11c8b2`); simplifier, editor owed |
 | R-2 | `3e5b49f46^..58601c588` | the use case / tenets / confinement arc, answers 150-155, and GAME.md | **simplifier + red team + editor done** (trims `58601c588`; device gap `8f5c08fdb`; citations fixed); debt cleared |
 | R-3 | `659adbdcd` | the swarm protocol change (resident architect, bounding rule) | **simplifier done** (`ca7a2a4ca`); debt cleared |
-| R-R1c | `b8e456eeb..eae54bf1f` | WP-R1c (`libs/rt`: join `Parked` to the skeleton) | **editor done** (P0: the recovered `vectors.rs` was orphaned; fixed `eae54bf1f`); red team timed out, rerun owed |
+| R-R1c | `b8e456eeb..eae54bf1f` | WP-R1c (`libs/rt`: join `Parked` to the skeleton) | **complete**: editor P0 fixed (`eae54bf1f`); red team OK, no issues; debt cleared |
