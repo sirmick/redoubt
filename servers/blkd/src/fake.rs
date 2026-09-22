@@ -194,17 +194,6 @@ impl FakeDevice {
         disk.get(start..start + SECTOR_SIZE as usize).map(Vec::from).unwrap_or_default()
     }
 
-    /// Replaces one sector of the disk, for tests that plant a partition table.
-    pub fn set_sector(&self, lba: u64, bytes: &[u8]) {
-        let mut disk = self.disk.borrow_mut();
-        let start = lba as usize * SECTOR_SIZE as usize;
-        if let Some(slot) = disk.get_mut(start..start + SECTOR_SIZE as usize) {
-            let n = bytes.len().min(slot.len());
-            slot[..n].copy_from_slice(&bytes[..n]);
-            slot[n..].fill(0);
-        }
-    }
-
     /// The whole 64-bit feature word this device offers.
     fn offered(&self) -> u64 {
         self.policy

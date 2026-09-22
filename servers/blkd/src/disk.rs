@@ -17,7 +17,7 @@
 
 use crate::queue::{DATA_OFF, HEADER_OFF, Queue, STATUS_OFF, Segment};
 use crate::transport::Transport;
-use crate::virtio::{self, DATA_LEN, DeviceError, Features, MAX_SECTORS, SECTOR_SIZE, blk_status, request};
+use crate::virtio::{self, DATA_LEN, DeviceError, Features, SECTOR_SIZE, blk_status, request};
 
 /// The virtio-blk request header, in bytes (§5.2.6).
 const HEADER_BYTES: u32 = 16;
@@ -132,13 +132,12 @@ impl<T: Transport> Disk<T> {
     /// buffer. None of these refusals touches the device, so a client asking for too much does
     /// not cost anyone else the disk.
     fn check_span(&self, sector: u64, len: usize) -> Result<u32, DeviceError> {
+        // `DATA_LEN` is exactly `MAX_SECTORS` sectors (`virtio.rs`), so this one check bounds both
+        // the byte length and the sector count, and rejects an empty or unaligned request too.
         if len == 0 || len > DATA_LEN || !len.is_multiple_of(SECTOR_SIZE as usize) {
             return Err(DeviceError::Range);
         }
         let count = (len / SECTOR_SIZE as usize) as u64;
-        if count > u64::from(MAX_SECTORS) {
-            return Err(DeviceError::Range);
-        }
         match sector.checked_add(count) {
             Some(end) if end <= self.sectors => Ok(len as u32),
             _ => Err(DeviceError::Range),
