@@ -966,7 +966,8 @@ mod tests {
     /// WIRE.md (Messages): a protocol served on a 9P endpoint is marked
     /// `<!-- wire: NAME ninep -->`, and its opcodes start at 16, since `ninep_common` reserves
     /// 1-15 there; an unmarked table is unaffected and may start at 1. NAMESPACES.md's `fsd`
-    /// typed-operations table and `ninep_common` are both marked, and still generate.
+    /// typed-operations table is marked (its opcodes start at 16); `ninep_common` is *not* — it
+    /// owns the reserved 1-15 itself — so it keeps a plain marker.
     #[test]
     fn ninep_marker_sets_the_opcode_floor() {
         let marked = HEAD.replace("<!-- wire: demo -->", "<!-- wire: demo ninep -->");
