@@ -53,7 +53,37 @@ minus its ambient parts.
   request that does not decode, and `not_yours` (code 2) for a `disconnect` naming an id the
   caller did not receive (question 114).
 - The 9P codec parses untrusted bytes, so it is written once, shared by every server, and fuzzed.
-  Independent 9P implementations give differential tests.
+  Independent 9P implementations give differential tests. **Every 9P server runs the conformance
+  corpus** (`libs/wire/vectors/9p.txt`) against the skeleton, which checks the things that are the
+  skeleton's own: no vector panics, every answer decodes and carries the request's tag, a malformed
+  request is refused with an `Rerror`, an R-message sent to a server is refused, and no vector holds
+  a call or mints a connection.
+
+## Holding a call (a server that must wait)
+A 9P server sometimes cannot answer yet: a console read with no input, a `/net` connect waiting for
+the network. It must not answer 0 (the end of the file: a client would read a live console as closed)
+and must not block. It **parks the call** instead (CONTAINMENT.md, the shared server library).
+- **The file server says so.** `FileServer::read` returns `Read::Done(usize)` (at most `out.len()`, 0
+  the end of the file) or `Read::Wait`: nothing to read yet and no end. Only `read` waits in milestone
+  1; a `write` that must wait is a non-goal until a server needs it.
+- **The skeleton hands the call back unanswered.** `NineServer::serve_parking(request, own)` is
+  `serve_with`, except that a request the file server asked to hold is returned to the server with its
+  T-message untouched in its lend: nothing of it is kept in the skeleton. `answer_in_place` returns
+  `Replied`, `Waiting` or `NoRoom` (not `Option<()>`), so the read path can say which happened.
+  `serve`/`serve_with` answer every request, so a server that returns `Read::Wait` without serving
+  through `serve_parking` gets a refusal (`Rerror`), never a caller left waiting for a reply that
+  never comes.
+- **A held request's handles are closed when it is handed back**, and its handle list is emptied with
+  them: they were delivered into this process's table when the call was taken, so holding them across
+  the park would grow the table, and serving the call again would close indices that may name
+  something this process has opened since.
+- **Serving it again re-reads it from the lend**, so a fid clunked while the read waited makes the
+  second serving an `Rerror`, which is what the client should see.
+- **The server parks it in its own buckets.** A parked call is charged through the *same* `Admission`
+  the server's fids are (`NineServer::admission_mut`, `share_of`), so a client cannot hold a server's
+  fid table full and its parked calls full separately; and its deadline (`Parked::expired`), its
+  abandonment (`Parked::abandoned`) and its `serve` before resuming are the parked-call rules
+  (CONTAINMENT.md; answers 81, 82).
 
 ## Namespaces
 - Per process, built by the parent before start and handed over in the startup block (INIT.md):
@@ -68,7 +98,10 @@ minus its ambient parts.
 
 ## The console (`/dev/cons`)
 A single file: reads return input bytes, writes send output bytes. `sshd` serves one per SSH channel;
-`consoled` serves the UART's. The channel's labels are its session's (CONTAINMENT.md).
+`consoled` serves the UART's. The channel's labels are its session's (CONTAINMENT.md). **A read with
+nothing to read parks** (Holding a call, below): it does not return 0, which would look to a client
+like a closed console, and it is not an error the client must poll. `consoled` is the first server
+that must wait, which is what proves the join.
 
 ## The network tree (`/net`)
 `ipd` serves a Plan 9 style tree:

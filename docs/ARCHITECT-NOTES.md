@@ -16,7 +16,9 @@ never a second copy: a copy goes stale and becomes a second source of truth. Ter
 
 ## Traps
 
+- A 9P server that must wait **parks the call**; `FileServer::read` returns `Read::Done`/`Read::Wait` (answers 156-159; NAMESPACES.md, Holding a call). WP-R1c owns the join; the mechanism is in WP-R4's unmerged `5d29d136e`.
 - `RESERVED_TYPES` is correct, not over-broad (answer 155).
 - `redoubt-rt`'s records are already backed; WP-W3b was dropped (answer 154).
 - A docs table edit can break generation with no code change; run `cargo test -p redoubt-wire-gen`.
 - Bound every long-lived role: an unbounded reader returns nothing (orchestrator.md, architect.md).
+- A branch built before the notes reorganisation may be blocked by a **lost design section**, not stale code: `blkd`'s section, `bootfs`'s table, and a superseded sentence repeated in three notes each blocked a port. Check the design first.

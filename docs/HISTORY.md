@@ -731,3 +731,23 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   marker), since the two operations are opcodes 16 and 17 on `bootfsd`'s own 9P endpoint. The
   `bootfsd` bullet's last sentence, which still said `init` passes the list as its arguments, is
   corrected to match. No design decision changed; the source text is the reviewed note from `wp-r4`.
+- **Answers 156-159: a 9P server that must wait parks the call** (2026-09-22, from the WP-R4 port).
+  Porting `consoled` onto the current runtime found that the parked-call join was never built: R1b
+  removed the old `Read { Done(usize), Wait }` and left `FileServer::read` returning a `usize`, so a
+  server cannot say "nothing yet, no end" — the one thing a console read needs, since 0 means EOF —
+  which `libs/rt/src/server/parked.rs` had flagged itself ("Not yet joined to the 9P skeleton"). The
+  mechanism is not new: it was written in WP-R4's own runtime commit `5d29d136e` and never merged.
+  **156** records it precisely: `read` returns `Read::Done(n)`/`Read::Wait`, `answer_in_place` returns
+  `Replied`/`Waiting`/`NoRoom`, `serve_parking` hands a held request back with its T-message intact and
+  its handles closed, and `serve`/`serve_with` keep answering so a `Wait` without `serve_parking` is a
+  refusal, not a stranded caller. **157** puts the join in a new **WP-R1c** owned by `libs/rt`, not in
+  WP-R4b (a server port must not carry a shared-library API change behind its acceptance), and records
+  that **`Parked<T>` stops owning an `Admission`** — `park`/`resume`/`expired`/`abandoned` take
+  `&mut Admission` — so fids and parked calls are charged in the same buckets and shares. **158**
+  keeps `consoled` as the first user: a read with no input parks, rather than looking like EOF or
+  making the client poll. **159** assigns two test-harness breaks: the stale `#[path]` that makes
+  `cargo test -p redoubt-keyd` red on `redoubt` gets its own one-line commit, and the server-side 9P
+  conformance runner (`tests/common/vectors.rs`, whose `waiting` count is 156's new observable) is
+  recovered in WP-R1c. Applied to NAMESPACES.md (Holding a call; The console; the conformance corpus)
+  and CONTAINMENT.md (the shared server library: parking is charged in the server's own buckets). No
+  kernel, ABI or tenet change.

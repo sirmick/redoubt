@@ -144,6 +144,14 @@ Every system server that serves more than one account links one small library:
   thread that holds the call, on the endpoint the call came in on, so **every serving thread keeps
   receiving there**: a thread that parks calls and stops receiving would never be told they were
   abandoned (question 104).
+- **A server that must wait parks the call, in its own buckets.** A 9P server that cannot answer yet
+  (a console read with no input, a connect waiting for the network) holds the call and serves it
+  later, rather than blocking or answering a default (NAMESPACES.md, Holding a call). Parking is
+  charged to the **same** `Admission` the server's fids are, so a client cannot fill a server's fid
+  table and its parked calls independently; a parked call has a server-side deadline and is answered
+  when it expires, and an abandoned one is replied to at once. The caps leave the open-call headroom
+  ([`OPEN_CALL_HEADROOM`]) under `MAX_OPEN_CALLS` so parked calls never stop the server taking new
+  ones (answers 81, 82).
 - **Byte quotas belong to the server.** The library carries `new_connection`'s `quota` and calls
   two hooks, one when a connection is granted and one when it is disconnected; it counts no bytes
   itself. `fsd` implements them (NAMESPACES.md); every other server leaves them empty (question

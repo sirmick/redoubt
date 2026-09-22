@@ -9,7 +9,10 @@ answer now lives). **Open: 127-128**, **138-140** (from WP-K2) and **141** (from
 USERLAND.md), at the end. **150-153 answered 2026-09-22** (the owner's use-case direction, recorded
 in the tranche "Answers to 150-153"; the decisions were already in the notes, these questions pin
 their semantics). **154-155 answered 2026-09-22** (from the WP-W3 split: W3b is dropped as already
-satisfied, and the `fsd` message `copy` becomes `copy_file`; WP-W3a carries both). The round-4 answers revised 56 (handle kinds are checked by use) and replaced 57 and 58 (by
+satisfied, and the `fsd` message `copy` becomes `copy_file`; WP-W3a carries both). **156-159 answered
+2026-09-22** (from the WP-R4 port: a 9P server that must wait parks the call — restore the three-way
+read and `serve_parking`, a new WP-R1c owns the join, `consoled` is its first user, and two test-harness
+breaks are assigned). The round-4 answers revised 56 (handle kinds are checked by use) and replaced 57 and 58 (by
 82); a later tranche replaced 103 (no `first` flag and no strict priority: one stride queue for
 every budget); the tranche for 120-126 accepted every recommendation and added one change to what
 ships: the boot bundle's signature gets its own domain now (VERIFIED-BOOT.md).
@@ -1347,3 +1350,99 @@ do not re-decide it.
      breaks the derive.
      **Answered:** NAMESPACES.md, `fsd`'s typed operations (`copy_file`); USERLAND.md's
      file-operations table; WP-W3a owns the rename.
+
+## From the WP-R4 port (NAMESPACES.md, CONTAINMENT.md)
+
+156. **A 9P server that must wait cannot hold a call: the park join is unbuilt.** `FileServer::read`
+     returns `Result<usize, NineError>`, so its only outcomes are "this many bytes" — `0` meaning the
+     end of the file — and an error. A console read with no input is neither: the file has no end, and
+     `0` tells the client the console is closed. R1b removed the old three-way read that said so and
+     left `libs/rt/src/server/parked.rs` stating the gap itself ("Not yet joined to the 9P skeleton").
+     `consoled` is the first server that must wait (UART input), `ipd` the second (a connect).
+     *Rec:* restore the three-way read on the read path, and let the skeleton hand a call back instead
+     of answering it:
+     - `FileServer::read` returns `Result<Read, NineError>`: `Read::Done(usize)` (at most `out.len()`;
+       `0` is the end of the file) or `Read::Wait` (nothing to read yet and no end; the call is held).
+     - `NineServer::answer_in_place` returns a three-way enum — `Replied`, `Waiting`, `NoRoom` — in
+       place of `Option<()>`: `Waiting` means nothing was written and the T-message is still in the
+       lend. Named so it cannot be read as `server::typed::Answer` (`NineAnswer`, say).
+     - `NineServer::serve_parking(request, own) -> Result<Option<Request>, Error>` is `serve_with`
+       except that a `Read::Wait` request is handed back unanswered. `serve`/`serve_with` keep
+       answering every request, so a server that returns `Wait` without `serve_parking` gets a
+       refusal (`Rerror`), never a caller left hanging.
+     - **A held request's handles are closed when it is handed back, and its handle list is emptied
+       with them.** They were delivered into this process's table when the call was taken; holding
+       them across the park would grow the table, and a second serving would close indices that may
+       name something this process has opened since.
+     - Serving a held request again **re-reads it from the lend**, so the skeleton keeps nothing of
+       it meanwhile: a fid clunked while the read waited makes the second serving an `Rerror`.
+     - **Only `read` waits** in milestone 1. A `write` that must wait (a full console) is a non-goal
+       until a server needs it, so the enum stays on the read path alone.
+     *Alt:* keep `usize` and use a sentinel (`usize::MAX`) for "wait". Out: a sentinel is
+     indistinguishable from a buggy server's length, and nothing makes it impossible by construction.
+     *Alt:* a second method (`read_would_block`) beside `read`. Out: two methods that must agree, and
+     a server that answers with `read` alone silently reports EOF — the failure the enum exists to
+     make impossible. *Alt:* let the skeleton decide when to wait. Out: only the file server can tell
+     "no data yet" from "end of file"; the skeleton must not guess.
+     **Answered:** NAMESPACES.md, Holding a call (a server that must wait).
+157. **Who owns the park join, and what the server library's API becomes.** The join changes
+     `libs/rt`'s 9P skeleton and `Parked`, which every server shares, so it has a wider blast radius
+     than a server port; and it changes a merged public API (`Parked::new(admission, longest)` owns
+     its `Admission` today). WP-R4b ("bring `bootfsd` and `consoled` onto `redoubt`") is a server port
+     and must not carry it: one package would then own a shared-library API change *and* two ports,
+     and a reviewer could not tell the diffs apart. R4b also *needs* the join, so it has to land
+     first.
+     *Rec:* a new package, **WP-R1c ("join `Parked` to `NineServer`")**, owned by `libs/rt`, with its
+     own review round. It is **not** design-and-build: the runtime half was written in WP-R4's own
+     commit `5d29d136e` ("the runtime pieces the first two 9P servers need") and never merged, so R1c
+     recovers that commit onto current `redoubt`. The API it adds, besides question 156's:
+     - `NineServer::admission_mut(&mut self) -> &mut Admission` and
+       `NineServer::share_of(&self, caller: &Caller) -> u64`, so a server can charge its parked calls
+       in the same table its fids use.
+     - `Parked<T>` **stops owning an `Admission`** and takes `&mut Admission` on every call
+       (`park`, `resume`, `resume_first`, `expired`, `abandoned`), with `Parked::new(longest)`. Reason:
+       fids and parked calls must be charged in the **same** buckets and shares (CONTAINMENT.md,
+       `admit`); two admission tables would not compose, and the caps that leave open-call headroom
+       must cover both. This breaks `libs/rt/tests/parked.rs`, which R1c updates.
+     - Driven from the server's receiving thread: `expired(now)` before each `receive` (answered with
+       the protocol's timeout error), `serve_parking` on a call (park it, or answer it),
+       `resume_first` when what it waits for arrives (the IRQ fired), `abandoned(id)` on an
+       abandoned-call notice. The loop is `parked.rs`'s own module doc and `tests/parked.rs` runs it.
+     *Alt:* widen WP-R4b's `Delivers` to include `libs/rt`. Out: it puts a shared-library API change
+     behind a server port's acceptance, and makes the one package that a reviewer should read closest
+     (the skeleton every server implements) the least visible.
+     **Answered:** CONTAINMENT.md, the shared server library (a server that must wait parks the call,
+     in the server's own buckets); NAMESPACES.md, Holding a call.
+158. **Is `consoled`'s UART read the right first user?** The alternative is shipping `consoled`
+     without the park path: a read with no input answers an error and the client retries. That either
+     changes what `/dev/cons` means (a read that fails when the file simply has no data yet) or, worse,
+     returns `0` and makes a live console look closed between key presses.
+     *Rec:* **yes — build the join and have `consoled` park.** It is the smallest possible first user
+     (one file, one wait condition: no input byte), the work already exists (question 157), and `ipd`
+     needs the same join for a connect, so special-casing `consoled` would be thrown away. `consoled`
+     is the server that proves the join, not a reason to avoid it.
+     *Alt:* ship `consoled` with a retry-on-error read. Out: the 9P client then polls a console, and
+     `ipd` still needs the join, so the work happens anyway.
+     **Answered:** NAMESPACES.md, The console (`/dev/cons`); Holding a call.
+159. **Two test-harness breaks block the ported servers (one already breaks `redoubt`).** (a) Three
+     servers' tests include the runtime's test helper by a stale path —
+     `servers/keyd/tests/keyd.rs:8` does `#[path = "../../rt/tests/common/mod.rs"]`, which resolves to
+     `servers/rt/...` and does not exist, so **`cargo test -p redoubt-keyd` fails on `redoubt` today**,
+     independent of R4. The module is at `libs/rt/tests/common/mod.rs`. (b) The ported servers'
+     `tests/vectors.rs` include `tests/common/vectors.rs` and call `vectors::run(&mut server, &who)`
+     with a `Counts`, but that server-side runner **does not exist in `redoubt`** — only `libs/wire`'s
+     codec-level vectors test does, and it cannot drive a `NineServer`. The corpus file itself
+     (`libs/wire/vectors/9p.txt`) is there, and says it is "for servers' conformance tests too".
+     *Rec:* (a) fix the stale `#[path]` as **its own one-line commit on `redoubt`**, not inside R1c or
+     R4b: it is a pre-existing bug in a merged package, and a red `cargo test -p redoubt-keyd` masks
+     real regressions in whatever else runs. (b) **recover the server-side conformance runner** into
+     `libs/rt/tests/common/vectors.rs` **as part of WP-R1c**: it is the skeleton's own test (it drives
+     a `NineServer`), its `waiting` count is exactly the join's new observable (question 156), and
+     every 9P server should run the corpus. The two ported servers then include it by the corrected
+     path.
+     *Alt:* drop the servers' conformance tests. Out: the design asks for them (NAMESPACES.md: the
+     codec is shared and the corpus is for servers too), and it is the cheapest broad hostile-input
+     check a server has. *Alt:* point them at `libs/wire`'s runner. Out: that runner checks the codec,
+     not a server's behaviour, and has no equivalent of `Counts::waiting`.
+     **Answered:** NAMESPACES.md, Capabilities are 9P connections (every 9P server runs the corpus);
+     no note change for (a) — a finding for the orchestrator, its own commit.
