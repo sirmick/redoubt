@@ -18,6 +18,8 @@
 # the OTP/Elixir archives and the BEAM reference sources.
 /toolchains/
 /reference/
+# libvterm: read as a reference for the terminal decoders, never built (TENETS.md 3).
+/libvterm/
 
 # Vendored sub-trees rebuild here
 /bios/target/

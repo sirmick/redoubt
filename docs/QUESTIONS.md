@@ -12,7 +12,11 @@ their semantics). **154-155 answered 2026-09-22** (from the WP-W3 split: W3b is 
 satisfied, and the `fsd` message `copy` becomes `copy_file`; WP-W3a carries both). **156-159 answered
 2026-09-22** (from the WP-R4 port: a 9P server that must wait parks the call — restore the three-way
 read and `serve_parking`, a new WP-R1c owns the join, `consoled` is its first user, and two test-harness
-breaks are assigned). The round-4 answers revised 56 (handle kinds are checked by use) and replaced 57 and 58 (by
+breaks are assigned). **162 answered 2026-09-22** (the terminal-handling change: `console_size` is
+`Option`, `consoled` takes `cols,rows` as a manifest argument, and `USERLAND-API.md` owns the Redoubt
+side of the `Platform` contract). **160-161 open** (from the same change: whether milestone 1 carries
+a server-to-client `resize` push at all — 160, the owner's — and how WP-B2 splits — 161, the
+orchestrator's). The round-4 answers revised 56 (handle kinds are checked by use) and replaced 57 and 58 (by
 82); a later tranche replaced 103 (no `first` flag and no strict priority: one stride queue for
 every budget); the tranche for 120-126 accepted every recommendation and added one change to what
 ships: the boot bundle's signature gets its own domain now (VERIFIED-BOOT.md).
@@ -1446,3 +1450,75 @@ do not re-decide it.
      not a server's behaviour, and has no equivalent of `Counts::waiting`.
      **Answered:** NAMESPACES.md, Capabilities are 9P connections (every 9P server runs the corpus);
      no note change for (a) — a finding for the orchestrator, its own commit.
+
+## From the terminal-handling change (NAMESPACES.md, USERLAND-API.md)
+
+160. **A server-to-client `resize` push has no mechanism.** The incoming change adds a console
+     typed-operation table with opcode `16 size` (a query, which fits WIRE.md: a `call` whose reply
+     is `{cols, rows}`) and opcode `17 resize`, described as a **push**: "the server sends
+     `{cols: u16, rows: u16}` when the terminal window changes. A VM delivers this to the process
+     reading `/dev/cons`." WIRE.md states the opposite rule — "**Every milestone 1 typed message is a
+     `call`**; a `kind` column is added when a protocol first needs a `send`" — and neither a `call`
+     nor a `send` reaches a client that has not taken a call: a `send` needs the receiver to have an
+     endpoint it receives on, and `/dev/cons` is a 9P **connection** (a file), not an endpoint. So
+     there is no way for a console server to push anything to a process reading `/dev/cons`, and the
+     change specifies a mechanism the design does not have.
+     *Rec:* **milestone 1 has no resize push.** `size` is a `call` (opcode 16) and is the whole of
+     the `consol` protocol; `resize` is dropped from the table and from `Redoubt.Console`. This is
+     not a loss: over UART there is no resize at all (the change says so), a TUI re-reads `size()`
+     when it redraws, and WP-S3 (`sshd`) is where a real terminal first exists. When a push is
+     genuinely needed it is a design addition that must state its channel — the natural shape is a
+     per-channel **endpoint** the client receives on (a `send`, with the `kind` column WIRE.md
+     provides for), not a message smuggled down a 9P connection — and that belongs in its own
+     question then, with the `sshd` work, not now.
+     *Alt:* specify the push now as a `send` on a per-channel endpoint handed over at attach. It is
+     more mechanism than milestone 1 needs (nothing resizes on a UART), it would have to be built and
+     tested in WP-S3 anyway, and specifying it now pins an interface before the one server that needs
+     it exists.
+
+161. **WP-B2 (Size S) has grown into three packages.** WP-B2 was "an IEx session on the UART; the
+     first Redoubt IEx helpers (`ls`, `cd`, `cat` over 9P)" — Size S, "a few hundred lines"
+     (BUILD-PLAN.md, How to read a work package). The change adds to its `Delivers`: `Redoubt.Console`
+     (ANSI emit, size query, ~11 functions), `Redoubt.Console.Key` (a keyboard state machine matching
+     VT100/xterm/Linux sequences), `Redoubt.Ed` (a TUI editor with its own buffer state, movement,
+     search and replace), and `Redoubt.Shell.top()`. That is an IEx bring-up plus a terminal library
+     plus an application, and its acceptance test ("a bench case opens `Ed` on `/dev/cons`, navigates
+     with arrow keys, edits a line, saves and exits") tests the editor, not IEx.
+     *Rec:* **split it three ways** — WP-B2 stays "IEx on the UART" (Size S, its original scope and
+     acceptance: type expressions at IEx and check the answers); **WP-B2a** is the console library
+     (`Redoubt.Console` + `Redoubt.Console.Key`, the `size` call, the ANSI and key tables; Size S);
+     **WP-B2b** is `Redoubt.Ed` and `Redoubt.Shell.top()` (an application over B2a; Size S). Each has
+     its own acceptance, and B2a is the one that needs the `consol` codec. (BUILD-PLAN.md is the
+     orchestrator's note; this is a proposal for it, not an edit.)
+     *Alt:* keep one package. Then its acceptance test can pass while the console library is wrong,
+     the reviewers must hold three concerns at once, and "done" stops meaning anything for it.
+
+162. **`console_size` is implemented, but nothing says what the platform answers or who owns the
+     contract.** `userland/otp/vm/src/platform.rs` gained `fn console_size(&mut self) ->
+     Option<(u16, u16)> { None }` — a real trait method in the sibling beamlet repo — while
+     `docs/USERLAND-API.md` (a draft that says so itself) promises both `{:error, :unknown}` **and**
+     "UART defaults to 80×24", which are different contracts. No note owns the Redoubt side of the
+     `Platform` contract, and nothing says how `consoled` learns a size at all: the change says "the
+     startup block's size", but INIT.md's `startup` message has fields `version, handle_count,
+     namespace, handles, argv` and **no size**, so that source does not exist.
+     *Rec:* the `Option` is right and the default is the platform's, not the trait's. Pin it:
+     - `console_size` returns `Some((cols, rows))` when the platform knows a size and `None` when it
+       does not; the trait default is `None` (as implemented), so a platform that says nothing is
+       honest rather than silently 80×24.
+     - On Redoubt the size comes from the console server: the Redoubt platform asks its `/dev/cons`
+       connection with the `consol` `size` call (opcode 16) and caches the answer; a server that does
+       not serve `consol` refuses the opcode as `Malformed`, and the platform answers `None`, which
+       `Redoubt.Console.size()` reports as `{:error, :unknown}`.
+     - **`consoled` learns its size as a manifest argument**, `cols,rows` (each a decimal number),
+       defaulting to `80×24` when absent — INIT.md's arguments are opaque strings each server's note
+       defines, which is exactly how `keyd` takes `name,purpose,seed`. `sshd` answers from the SSH
+       pty-req instead (WP-S3), which is the real terminal and the only place a size can change.
+     - **`USERLAND-API.md` owns the Redoubt side** of the `Platform` contract (what each method must
+       answer here, and which `Redoubt.*` module wraps it); `userland/otp/DESIGN.md` owns the trait
+       itself, as it already documents `platform.rs`.
+     *Alt:* have the trait default to `80×24` rather than `None`. Then a platform with no console (a
+     headless agent VM, a test) claims a size it does not have, and a TUI lays out a screen nothing
+     will display.
+     **Answered:** USERLAND-API.md, The console and the `Platform` contract; NAMESPACES.md, The
+     console. (`consoled`'s `cols,rows` argument needs no new rule: INIT.md's arguments are opaque
+     strings each server's note defines, answer 122.)

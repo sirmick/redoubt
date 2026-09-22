@@ -365,3 +365,44 @@ Notes:
   restore it, so WP-R4b's `consoled` port is a port again, not a redesign.
 - **No design mechanism changed.** 157's `Parked` signature changes are an API shape the note now
   states; nothing in KERNEL-SPEC.md, CAPABILITIES.md or TENETS.md is touched.
+
+---
+
+# Answer to 162, and the status of 160-161 (architect, 2026-09-22)
+
+**160 and 161 are open** — 160 is the owner's (whether milestone 1 carries a resize push at all),
+161 is the orchestrator's (it changes BUILD-PLAN.md, which the architect does not edit). Both carry a
+`Rec`. **162 is answered** below; it is a consistency fix, not a new mechanism.
+
+## Accepted as recommended
+
+**162. `console_size` is `Option`, and the Redoubt side is pinned.** The implemented trait method is
+right as written: `Some((cols, rows))` when the platform knows a size, `None` when it does not, with
+the trait default `None`, so a platform that says nothing is honest rather than silently claiming
+80×24. What was missing is what the Redoubt platform answers and where a size comes from:
+
+- On Redoubt the size comes from the console server, not from the startup block (which has no size
+  field: `startup` carries `version, handle_count, namespace, handles, argv`). The Redoubt platform
+  asks its `/dev/cons` connection with the `consol` `size` call (opcode 16) and caches the answer. A
+  server that does not serve `consol` refuses the opcode as `Malformed` (WIRE.md, code 1), and the
+  platform answers `None`, which `Redoubt.Console.size()` reports as `{:error, :unknown}`.
+- **`consoled` takes its size as a manifest argument**, `cols,rows`, two decimal numbers, defaulting
+  to `80×24` when absent. INIT.md's `servers` arguments are opaque strings each server's note defines
+  (answer 122), which is how `keyd` already takes `name,purpose,seed`; `consoled`'s own note defines
+  this one. `sshd` answers from the SSH pty-req instead (WP-S3), the one place a size can change.
+- **`USERLAND-API.md` owns the Redoubt side of the `Platform` contract** — what each method must
+  answer here, and which `Redoubt.*` module wraps it. `userland/otp/DESIGN.md` keeps owning the trait
+  itself, as it already documents `platform.rs`.
+
+Applied to `USERLAND-API.md` (The console and the `Platform` contract), `NAMESPACES.md` (The console),
+and `HISTORY.md`. Nothing in KERNEL-SPEC.md, CAPABILITIES.md or TENETS.md is touched; no mechanism
+changed.
+
+Notes:
+- The `on_resize(callback)` entry in `Redoubt.Console` is removed with 160's Rec: a callback whose
+  delivery the same table describes as "via GenServer `handle_info`" is two contracts in one row, and
+  with no push there is nothing to deliver.
+- **`libvterm/`** (an untracked C git clone at the repo root) is **reference only** — read for its
+  terminal state-machine and key tables, never built, never linked (TENETS.md 3). Recorded in
+  `USERLAND-API.md`'s console section and ignored like the other vendored reference trees
+  (`.gitignore`). This is an orchestrator action (the file is not the architect's); proposed below.
