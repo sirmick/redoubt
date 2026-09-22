@@ -35,6 +35,13 @@ The FPGA is "the secure configuration" only if these hold:
   side channel. The scheduler runs all threads of a core in one budget or idles them, so the RTL
   isolates only core from core and flushes when a core switches budgets. The kernel tells the
   hardware when it switches.
+- **Non-observability for a protected label set** (TENETS.md, The high/low pair). This is the RTL's
+  half of label non-interference and is required before the claim is made: a protected label set and
+  a lower one share no observable resource. The RTL must give separate cores, a partitioned L2,
+  isolated memory bandwidth, per-domain DMA windows (channel B already helps), per-domain disk and
+  NIC queues, and no shared GPU context. Each is a row of CONTAINMENT.md's channel table; until it is
+  closed, the path is a stated residual and the two domains must not co-reside. This is a
+  requirement, not an aspiration, for the GAME.md setup on FPGA hardware.
 - **`keyd` on its own core** once there is SMP.
 - **Hardware channels are devices.** Each channel endpoint is reached through a handle, granted like
   any device; they also serve as doorbells between harts. Custom instructions are a vendor extension

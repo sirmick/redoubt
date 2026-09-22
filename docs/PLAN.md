@@ -77,7 +77,10 @@ a clean power-off), never by the attacker's own output (BUILD-PLAN.md).
 ## After milestone 1
 - **The real-agent harness ("escape room")** comes first, alongside milestone 2: a real LLM agent on
   Redoubt (through `gatewayd`) told to break out, with red-team agents from several vendors taking
-  turns. Every successful trick becomes a scripted test.
+  turns. Every successful trick becomes a scripted test. **GAME.md makes this a contract, not an
+  anecdote**: several agents, each its own label set, told they coexist, tasked to break out, to
+  expand authority and (scenario 2, the high/low pair) to collude and exfiltrate, with every finding
+  classified as a design hole or an implementation bug.
 - **SMP** (the FPGA has 32 hardware threads): below.
 
 ## Milestone 2: install, share, persist

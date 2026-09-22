@@ -20,7 +20,10 @@ Decentralized information flow control in the Flume/HiStar style, with labels fi
   stumbles on labelled data gets an error and keeps its network. Nobody can taint someone else.
 - **Between user budgets, calls and sends need equal label sets** (the kernel checks). Data enters a
   label by being read down: a vault session reads it from an unlabelled volume. Nothing writes into
-  a label from outside it: every write needs equal labels (`check`, below).
+  a label from outside it: every write needs equal labels (`check`, below). **Read-down is itself a
+  channel** when the lower side is adversarial: an unlabelled agent that can write the volume a
+  labelled agent reads has a low-to-high path. A confined domain (TENETS.md, The high/low pair) reads
+  no shared unlabelled data; input arrives by an audited push from the steward.
 - **System servers are exempt from the kernel check and enforce labels themselves**, using the
   caller's label set the kernel attaches to every message (the shared server library, below).
 - **A receive right is never handed across label sets.** R1 compares a sender with the endpoint's
@@ -168,8 +171,11 @@ logout or a restart, not data loss.
 Restart and reboot rules: INIT.md.
 
 ## Covert and timing channels
-They never reach zero; the goal is low bandwidth, stated, audited. The attacker is assumed to have a
-perfect clock (TENETS.md).
+For ordinary multi-tenancy the goal is low, stated, audited bandwidth. **For a protected label set
+against a colluding lower domain the goal is zero**: a pre-agreed code makes a bounded channel as good
+as an unbounded one (one bit can be a key), so the requirement is non-observability — no shared
+observable resource — which is hardware (TENETS.md, The high/low pair; PLATFORM-FPGA.md). The attacker
+is assumed to have a perfect clock (TENETS.md).
 - **Secrets are handled by constant-time code** (`keyd`, crypto everywhere), so there is nothing
   secret-dependent to time.
 - **No microarchitectural state is shared between budgets:** one budget per core, RTL partitioning,
@@ -204,6 +210,25 @@ perfect clock (TENETS.md).
   shared-server caches and the disk (a vault's reads warm a cache the unlabelled session can time);
   server CPU (above).
   On QEMU and ordinary hardware, none of the microarchitectural channels are closed.
+
+**The channel table.** Every resource that can carry a signal between two budgets is closed by
+software, closed by hardware (RTL), or a stated residual. **No residual permits co-residence for a
+protected label set** (TENETS.md, The high/low pair): a protected domain either has the resource to
+itself or shares it only with equal labels.
+
+| Resource | Closed by | For a protected label set |
+| --- | --- | --- |
+| `call`/`send` between user budgets | software (R1) | closed |
+| writes, metadata (`check`), qids, directory reads | software | closed |
+| sinks (`ipd`, `gatewayd`) | software | closed |
+| approval rendering and notifications | software | closed |
+| global counters (PIDs, message ids, `budget_usage`) | software | closed |
+| read-down from a shared unlabelled volume | software (policy) | forbidden; input is steward push |
+| a shared system-server instance (CPU, caches, quota, admission slots) | policy: one instance per domain | no sharing |
+| a shared endpoint (R2's round-robin cursor) | policy: one endpoint per domain | no sharing |
+| the scheduler (one stride queue) | hardware: one budget per core | RTL |
+| CPU caches, L2, memory bandwidth | hardware | RTL |
+| disk, NIC, GPU | hardware, or one instance per domain | RTL or no sharing |
 
 ## The executable security model
 Before the kernel is built, the design is a Rust crate implementing **exactly** the objects, system

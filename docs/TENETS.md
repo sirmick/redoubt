@@ -6,10 +6,61 @@ the tenet is amended here first, with the reason written down. Terms: [README.md
 **Design v4 is frozen for milestone 1:** a change to it needs a stated reason, recorded in
 HISTORY.md.
 
+## The use case
+Redoubt exists to run **untrusted, potentially hostile agents** — frontier models, and the code they
+write — on one machine, alongside their human principals, without letting an agent escape its grants,
+reach another agent, or reach a network it was not given. The design assumes the agent is the best
+available: it has read every line of this repository and the running system, and it is trying.
+
+- **The escape room** (GAME.md, PLAN.md): several real agents, each its own principal with a distinct
+  label set and budget, full source, told they coexist, tasked to break out, to expand their
+  authority, and to collude.
+- **Everyday co-existence:** a human's own agents doing useful work under leases, visible to and
+  stoppable by the human.
+
+This is a **containment** boundary, not a prevention one. Any agent is assumed to compromise its own
+VM (the BEAM is not in the TCB; INIT.md), and possibly a server it talks to. The design guarantees:
+
+1. **Capability closure.** An agent's reachable authority never exceeds its initial grants plus what
+   a human-approved steward action adds; every delegation step narrows (R9, `mint`; CAPABILITIES.md).
+   Authority is monotone non-increasing absent a human approval.
+2. **Label non-interference.** Data crosses a label boundary only by steward declassification. The
+   **label set, not the capability set, is the isolation unit**: two budgets with different label
+   sets have no intended path (R1, I7), and a protected label set shares no observable resource with
+   a lower one (Non-observability, below).
+3. **Human control.** Every increase in authority, and every declassification, is an out-of-band human
+   approval; leases bound time; the sponsor can always end a lease (CAPABILITIES.md).
+
+### The high/low pair
+The sharpest case: a labelled agent with secrets and no network (**A**) and an unlabelled agent with
+network (**B**) are colluding, having agreed a code in advance. Labels remove every *intentional*
+path between them — `call`/`send` (R1), writes (`check`), sinks, metadata, global counters, the
+approval screen. They do **not** remove *covert* ones: a shared core, cache, memory bandwidth, disk,
+NIC, GPU, server instance, volume, endpoint or scheduler timing. A pre-agreed code makes any shared
+observable resource a channel, and **one bit can be a key**. So for a protected label set:
+
+- **Non-observability is the requirement, not low bandwidth.** A protected label set shares no
+  observable resource with a lower one. This is a hardware property (PLATFORM-FPGA.md): separate
+  cores, partitioned L2, isolated memory bandwidth, per-domain DMA, disk and NIC, and no shared
+  scheduler. Software supplies the intentional-path removal (labels, `check`, sinks, no global
+  counters); hardware must supply the rest.
+- **A low-to-high read path is a channel.** Read-down (a labelled session reading an unlabelled
+  volume) is how data enters a vault, but with a colluding lower domain it is the B-to-A half of a
+  full channel. A confined domain reads no shared unlabelled data; input arrives by an audited push
+  from the steward.
+- **Sharing is the attack.** Two differing label sets in a confined deployment share no server
+  instance, volume, endpoint, network instance or core. A manifest that places them together is
+  refused (INIT.md).
+
+Where the hardware cannot yet provide non-observability, the path is a **stated residual, and the two
+domains do not co-reside**. No non-interference claim is made on QEMU or general hardware.
+
 ## The adversary
 Design for a capable, patient, automated adversary that has read every line of this repository, can
 generate and test exploit candidates faster than a human can review them, and controls any code it
-is allowed to run as an unprivileged process. Assume it finds every bug that is findable by reading.
+is allowed to run as an unprivileged process. It may run several such processes that know of each
+other and collude; a resource shared across a label boundary is a channel (The use case). Assume it
+finds every bug that is findable by reading.
 
 That rules out security through obscurity, through "nobody would try that", or through complexity
 that merely slows a human down. What is left: a small trusted base, mechanisms that are correct by
@@ -71,6 +122,10 @@ loader, kernel) and hold it in their head. It should read like a textbook exampl
   Any convenience that puts approval inside a session must first amend this tenet.
 - **Tested like it will be attacked.** See tenet 6: every security property has a test that tries to
   break it.
+- **Non-interference across labels.** The label set is the isolation unit; only steward declassification
+  moves data across one. Labels remove intentional flows; for a protected label set, hardware
+  non-observability must remove covert ones. There is no acceptable low-bandwidth channel for a
+  secret: the target is zero (The use case).
 
 ## 3. Rust, and assembly only where Rust cannot reach
 - Everything that runs on the machine is Rust: loader, kernel, servers, applications, and the
