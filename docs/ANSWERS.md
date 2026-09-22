@@ -308,3 +308,60 @@ Notes:
   generator learning their `<!-- wire: fsd ninep -->` marker, and the parse died there before it
   could reach `copy`.
 - **WP-W3a carries both:** the marker and opcode floor (answer 113), and this rename (answer 155).
+
+---
+
+# Answers to 156-159 (owner, 2026-09-22)
+
+**All Rec.** Four decisions raised by porting `consoled` onto the current runtime. They are
+derivations from R1b's parked-call design and CONTAINMENT.md's shared-server-library section (answers
+81, 82, 104 already decided the intent); none changes frozen behaviour, and 156's mechanism was
+written in WP-R4's own runtime commit and never merged.
+
+## Accepted as recommended
+
+**156. A 9P server that must wait: restore the three-way read and the skeleton's hand-back.** R1b
+removed the old `Read { Done(usize), Wait }` and left `FileServer::read` returning a `usize`, so a
+server cannot say "nothing yet, no end" — the one thing a console read needs, since `0` means EOF. The
+read path gets the three-way enum back: `Read::Done(n)` / `Read::Wait`; `answer_in_place` returns
+`Replied`/`Waiting`/`NoRoom` instead of `Option<()>`; and `serve_parking` is `serve_with` except a
+`Read::Wait` request is handed back unanswered, with its T-message still in its lend, so the server
+parks it (`Parked`) and serves it again later. `serve`/`serve_with` keep answering every request, so a
+server that returns `Wait` without `serve_parking` gets a `Rerror`, not a stranded caller. A held
+request's **handles are closed when it is handed back and its handle list emptied with them** (they
+were delivered into this process; holding them grows the table, and a second serving would close
+indices naming something opened since). Serving it again re-reads it from the lend, so the skeleton
+keeps nothing of a held call: a fid clunked meanwhile makes the second serving an `Rerror`. Only
+`read` waits in milestone 1. NAMESPACES.md owns it (Holding a call).
+
+**157. A new package owns the join; `Parked` stops owning its `Admission`.** **WP-R1c ("join `Parked`
+to `NineServer`")**, owned by `libs/rt`, with its own review round — not WP-R4b, which is a server
+port and must not carry a shared-library API change behind its acceptance. R1c recovers the runtime
+half from WP-R4's own commit `5d29d136e` ("the runtime pieces the first two 9P servers need"), which
+was written and never merged. It adds `NineServer::admission_mut` and `NineServer::share_of`, and
+**`Parked<T>` stops owning an `Admission`**: `Parked::new(longest)`, with `&mut Admission` passed to
+`park`, `resume`, `resume_first`, `expired` and `abandoned`. Reason: fids and parked calls must be
+charged in the same buckets and shares (`admit`, CONTAINMENT.md), and two tables do not compose. This
+updates `libs/rt/tests/parked.rs`. CONTAINMENT.md's shared-server-library section says so.
+
+**158. `consoled` is the right first user of the join.** A read with no input parks; it is not
+answered `0` (which would look like a closed console) nor an error the client must poll. It is the
+smallest possible first user (one file, one wait condition), the work exists (157), and `ipd` needs
+the same join, so special-casing `consoled` would be thrown away. NAMESPACES.md, The console.
+
+**159. Two test-harness breaks: one fixed on its own, one folded into R1c.** (a) `servers/keyd/tests/
+keyd.rs:8` (and the two ported servers) include the runtime's test helper at `../../rt/tests/common/
+mod.rs`, a stale path from the reorganisation that resolves to `servers/rt/...`; **`cargo test -p
+redoubt-keyd` is red on `redoubt` today because of it**. Fixed as **its own one-line commit on
+`redoubt`** (a pre-existing bug in a merged package; a red test masks other regressions). (b) The
+ported servers' `tests/vectors.rs` need a **server-side conformance runner**
+(`libs/rt/tests/common/vectors.rs`, `vectors::run(&mut NineServer, &Caller) -> Counts`, with the
+`waiting` count) that does not exist in `redoubt`; **recover it as part of WP-R1c**, since it drives
+the skeleton and its `waiting` count is precisely 156's new observable. NAMESPACES.md: every 9P server
+runs the corpus.
+
+Notes:
+- 156's mechanism is not new design: it was written in `5d29d136e` and dropped. R1c and the note
+  restore it, so WP-R4b's `consoled` port is a port again, not a redesign.
+- **No design mechanism changed.** 157's `Parked` signature changes are an API shape the note now
+  states; nothing in KERNEL-SPEC.md, CAPABILITIES.md or TENETS.md is touched.
