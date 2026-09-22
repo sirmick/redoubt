@@ -1,0 +1,16 @@
+[package]
+name = "redoubt-consoled"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "consoled: the ns16550 UART driver, serving /dev/cons over 9P"
+
+[[bin]]
+name = "consoled"
+path = "src/bin/consoled.rs"
+
+# Only the runtime. The ns16550 is fifty lines; a crate for it would be a dependency in a driver
+# for no gain (TENETS.md 5), and the runtime's `Registers` already keeps the `unsafe` in one
+# audited place.
+[dependencies]
+redoubt-rt = { path = "../../libs/rt" }
