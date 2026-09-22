@@ -10,6 +10,11 @@ This is the confinement problem (Lampson, 1973).
 
 ## Labels
 Decentralized information flow control in the Flume/HiStar style, with labels fixed per budget.
+- **The isolation unit is the label set, not the capability set** (TENETS.md, The use case; tenet 2).
+  Capabilities bound what a budget can *do*; labels bound what it can *leak*, and data moves only
+  along labels. Two budgets with different handle sets but equal label sets are **one trust domain**:
+  the OS sees no boundary between them, and a handle passed from one to the other is not a crossing.
+  Two budgets with differing label sets have no path the OS carries a message over (R1).
 - **A label is a name** such as `alice-secrets`, owned by a principal; the kernel sees a 64-bit id.
 - **Labels live on budgets and volumes.** A budget's label set is fixed when it is created: it may
   read data with those labels, and the kernel assumes it has read all of it. Children inherit their
@@ -23,7 +28,7 @@ Decentralized information flow control in the Flume/HiStar style, with labels fi
   a label from outside it: every write needs equal labels (`check`, below). **Read-down is itself a
   channel** when the lower side is adversarial: an unlabelled agent that can write the volume a
   labelled agent reads has a low-to-high path. A confined domain (TENETS.md, The high/low pair) reads
-  no shared unlabelled data; input arrives by an audited push from the steward.
+  no shared unlabelled data; input arrives by an audited push from the steward (Push, below).
 - **System servers are exempt from the kernel check and enforce labels themselves**, using the
   caller's label set the kernel attaches to every message (the shared server library, below).
 - **A receive right is never handed across label sets.** R1 compares a sender with the endpoint's
@@ -64,13 +69,37 @@ Only a label's owner declassifies, one item at a time, after a high-stakes appro
 Stated residual: text an agent wrote and a human approved can still carry a hidden message. No
 system can prevent that.
 
+## Push: input into a labelled domain
+Declassification is high to low; a **push** is its mirror, low to high, and is how input enters a
+labelled domain that is confined. A confined domain does not read a shared unlabelled volume: with a
+colluding lower domain, that read-down is a B-to-A channel (TENETS.md, The high/low pair; the channel
+table's read-down row). The push is the replacement, and it is deliberately shaped exactly like
+declassification:
+- **One item per push.** A push moves one item (a file, or one byte string) from an unlabelled source
+  volume into a labelled domain's volume; the steward is unlabelled, so `check` lets it read the
+  source. There is no standing path, no queue and no batch: one audited approval moves one item.
+- **The target label's owner triggers it**, through the powerbox, with an out-of-band approval
+  (CAPABILITIES.md, approvals), exactly as a declassification is approved. The confined domain cannot
+  trigger a push, name the item for one, or pull one: it has no read path to the source and no
+  unlabelled authority. That is what closes the channel — the lower side cannot make a push happen or
+  choose its timing.
+- **The steward carries it out with a short-lived writer budget carrying exactly the target label
+  set**, the mirror of the reader budget. A write needs equal labels (`check`), so the steward, which
+  is unlabelled, cannot write the labelled volume itself and an unlabelled writer cannot either; the
+  writer budget makes the labels equal. The confined domain then reads the item in its own volume.
+- **It is audited** with the request's labels, on the same path as every other steward action.
+- **`check` is unchanged.** The steward declines a labelled session's mount of a shared unlabelled
+  volume and offers the push instead (WP-S2); in a confined deployment no session reads down.
+
 ## Sessions and vaults
 - **Normal sessions are unlabelled** (`ssh alice@box`): full network, all tools; they cannot read
   labelled volumes.
 - **A vault session carries exactly one label.** `ssh alice+X@box` opens a session labelled
-  `{alice-X}`, only if the authenticated person owns that label. It reads and writes `fsd:alice-X`,
-  may read (never write) unlabelled volumes, which is how data enters the vault, runs local tools and
-  local models, and reaches no external sink.
+  `{alice-X}`, only if the authenticated person owns that label. It reads and writes `fsd:alice-X`.
+  In ordinary multi-tenancy it may read, never write, unlabelled volumes, which is how data enters
+  the vault; in a **confined** deployment it does not — that read-down is a B-to-A channel
+  (TENETS.md, The high/low pair; question 153) — and input enters only by an audited steward push.
+  It runs local tools and local models, and reaches no external sink.
 - **Each SSH channel is labelled with its session's labels** (`alice@` -> none, `alice+X@` ->
   `{alice-X}`), and `sshd` applies `check` (below) to them. A vault session's output reaches only its
   own channel, which the steward opened for the label's owner. **`sshd` is the one sink cleared for
@@ -171,11 +200,11 @@ logout or a restart, not data loss.
 Restart and reboot rules: INIT.md.
 
 ## Covert and timing channels
-**Covert communication is out of scope**, like microarchitectural side channels (TENETS.md, The
-adversary). On one machine, power, heat, EM and the clock couple any two domains, so no OS can prevent
-or bound it. Software closes every *intentional* flow (the channel table below); covert channels are
-the physical layer's, and the only zero is placement. The attacker is assumed to have a perfect clock
-(TENETS.md).
+**Covert communication is out of scope:** the canonical statement and the reason (on one machine,
+power, heat, EM and the clock couple any two domains, so no OS can prevent or bound it; the only zero
+is placement) are TENETS.md, The adversary — said once there and pointed at here, not repeated.
+Software closes every *intentional* flow (the channel table below); the attacker is assumed to have a
+perfect clock (TENETS.md, Timing).
 - **Secrets are handled by constant-time code** (`keyd`, crypto everywhere), so there is nothing
   secret-dependent to time.
 - **No microarchitectural state is shared between budgets:** one budget per core, RTL partitioning,
@@ -222,7 +251,7 @@ placement as the only zero (TENETS.md, The high/low pair).
 | sinks (`ipd`, `gatewayd`) | software | closed |
 | approval rendering and notifications | software | closed |
 | global counters (PIDs, message ids, `budget_usage`) | software | closed |
-| read-down from a shared unlabelled volume | software (policy) | forbidden; input is steward push |
+| read-down from a shared unlabelled volume | software (policy, `check`) | forbidden in a confined manifest; input is a steward push (Push, above) |
 | a shared system-server instance (CPU, caches, quota, admission slots) | policy: one instance per domain | no sharing |
 | a shared endpoint (R2's round-robin cursor) | policy: one endpoint per domain | no sharing |
 | the scheduler (one stride queue) | hardware: one budget per core | RTL (reduced, not zero) |

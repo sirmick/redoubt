@@ -124,7 +124,9 @@ share's stamp. Alice un-shares: the scope is destroyed, and `sub` dies with it.
 5. **Assume every agent is compromised** by something it read. A hijacked agent can do what its
    capabilities allow, until its lease ends, and nothing more. It can run code it wrote, but never
    with more authority than it holds (PACKAGES.md).
-6. **Labels** bound what an agent can leak; capabilities bound what it can do (CONTAINMENT.md).
+6. **Labels** bound what an agent can leak; capabilities bound what it can do (CONTAINMENT.md). The
+   **isolation unit is the label set, not the capability set**: two budgets with different handle sets
+   but equal label sets are one trust domain (TENETS.md, The use case).
 7. **No credentials in agent memory.** Agents use keys through `keyd` and, later, models through
    `gatewayd`, which holds API keys. **A lease carries `keys` only from milestone 2**, and then only
    if its approval named the key: a principal's key comes with **the one message shape it may sign**

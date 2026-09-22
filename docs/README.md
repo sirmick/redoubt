@@ -137,8 +137,10 @@ Sessions and agents are beamlet VMs in user budgets, not servers.
   physical **console**, the UART on the board). **Approver credential** (Later): a FIDO security key
   used as an SSH `sk-` key with user verification, for `ssh approve-hs@box`.
 - **Label**: an information-flow tag on budgets and volumes (CONTAINMENT.md); the approach is
-  **DIFC** (decentralized information flow control). **Sink**: a server whose output leaves a
-  principal or the machine. **Declassify**: the label owner releasing one item. **Reader budget**:
+  **DIFC** (decentralized information flow control). **Trust domain**: a label set and everything
+  carrying it; the OS's isolation unit — capabilities bound authority, labels bound flow, so two
+  budgets with equal label sets are one domain (TENETS.md, The use case). **Sink**: a server whose
+  output leaves a principal or the machine. **Declassify**: the label owner releasing one item. **Reader budget**:
   a short-lived budget the steward creates with exactly an item's labels, to read it for
   declassification (the steward itself stays unlabelled).
 - **Manifest**: (1) the **boot manifest**, strict JSON in the boot bundle: servers, devices,

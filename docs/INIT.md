@@ -67,18 +67,35 @@ One strict JSON file (WIRE.md) in the signed bundle; `init`'s only input. Entrie
 | `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), device names, volume, the endpoints it receives on, the endpoints it is handed, and arguments (never its own budget) |
 | `public` | the bundle entries `bootfsd` serves at `/boot`, by exact name: programs and module archives, and nothing else in the bundle |
 | `principals` | milestone 1 only: each principal's name, SSH public keys for login and approval, budget, account, owned labels, the label sets it works under (each gets a fixed sub-budget of the principal's budget: pages, processes, weight), home (volume and path), and network scope (IP prefixes and ports) |
+| `confined` | optional deployment flag (a boolean, at the top level); set, `init` refuses any placement of differing label sets (Confinement, below) |
 
 Each field has one JSON type (WIRE.md): 64-bit quantities (label ids, accounts, page and byte sizes,
 deadlines) are decimal strings; small counts (processes, weights, depths, restart limits) and ports
 are numbers. A value of the wrong JSON type is an error.
 
 **Confinement.** A manifest may carry a `confined` flag (a deployment profile; GAME.md, TENETS.md's
-high/low pair). In a confined manifest, any two entries with differing label sets share no server
-instance, volume, endpoint, network instance or core, and no domain reads a shared unlabelled volume
-(input arrives by an audited push from the steward). `init` refuses a manifest that places differing
-label sets together, exactly as it refuses a server's own budget; the refusal is a boot failure, not
-a warning. The default (no flag) is ordinary multi-tenancy, where a shared server is acceptable and
-CONTAINMENT.md's residuals apply.
+high/low pair). **It is a boot-wide property, not a per-domain one:** `init` parses it once and
+applies it to the whole manifest. If it is set, `init` **refuses the boot** whenever two manifest
+entries with **differing label sets** share any of these:
+
+- a **server instance** — one `servers` entry serving them;
+- a **volume** — one `volumes` entry they both attach;
+- an **endpoint** — one name in a `servers` entry's `receives` or `handed` list they both hold;
+- a **network instance** — one `ipd:*` (or `netd`) instance they both use (and a labelled domain is
+given no `/net` at all: a sink refuses labelled callers);
+- a **core** — a hardware core their budgets both run on. Milestone 1 is one budget per core already
+  (PLATFORM-FPGA.md, RESOURCES.md); a confined manifest that names more cores than budget groups is
+  refused rather than silently time-sharing a core between two label sets.
+
+What `init` compares is the **label set**: the labels each budget carries (`labels` in the manifest,
+plus each principal's `label sets`), and for a volume the `label set` field of its `volumes` entry.
+Two entries differ when their sets are not equal (`{a}` differs from `{}`, `{a}` and `{b}` differ, and
+`{a}` and `{a,b}` differ; a system server such as the steward carries no labels and is therefore a
+domain of its own). `init` also refuses a confined manifest in which a labelled domain reads a shared
+unlabelled volume (input arrives by an audited push from the steward; CONTAINMENT.md, Push). The
+refusal is a **boot failure, not a warning**. The default (no flag) is ordinary multi-tenancy, where a
+shared server is acceptable and CONTAINMENT.md's residuals apply. **WP-R3 implements and tests this**;
+the confinement attack verdict is the boot failing, not the manifest's claim (BUILD-PLAN.md).
 
 **Weights.** One stride queue serves everyone (RESOURCES.md), so the manifest's weights are the
 whole scheduling policy. `init`, the steward and the drivers (`consoled`, `blkd`, `netd`) get

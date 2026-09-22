@@ -380,13 +380,15 @@ not needed.
   is WP-S2's case); more than 5 restarts in 60 s reboots.
 - Needs: WP-R2, WP-W1, WP-K3, WP-K5. The `holds` operation it calls belongs to `keyd`'s table
   (WP-S1), so the refusal is written here and exercised end to end once WP-S1 has landed.
-- **Confinement (TENETS.md, The use case; CONTAINMENT.md, channel table; GAME.md, setup).** The
-  manifest gains the `confined` flag (INIT.md, The boot manifest): in a confined deployment, `init`
-  refuses any manifest that places two differing label sets in one server instance, volume, endpoint,
-  network instance or core, and refuses a domain that reads a shared unlabelled volume. Read the
-  channel table's software-closed rows, since `init` is what makes them configurations rather than
-  defaults. Attack case: a `confined` manifest placing a labelled and an unlabelled domain on one
-  `fsd` instance is refused at boot (the verdict is the boot failing, not the manifest's claim).
+- **Confinement (answers 152-153; TENETS.md, The use case; CONTAINMENT.md, Push and the channel
+  table; GAME.md, setup).** The manifest gains the `confined` flag (INIT.md, The boot manifest): one
+  top-level boolean for the whole boot. `init` compares **label sets** and refuses the boot when two
+  entries with differing sets share a `servers` entry, a `volumes` entry, an endpoint name in
+  `receives`/`handed`, an `ipd:*`/`netd` instance, or a core, and when a labelled domain would read a
+  shared unlabelled volume. Refusal is a boot failure, not a warning. Attack cases: a `confined`
+  manifest placing a labelled and an unlabelled domain on one `fsd` instance is refused (the verdict is
+  the boot failing, not the manifest's claim), and one placing them on one `ipd` instance, one endpoint
+  or one core is refused likewise.
 
 **WP-R4. bootfsd and consoled.** Size S.
 - Delivers: `bootfsd` (read-only 9P over the verified bundle), serving **only the bundle entries
@@ -513,12 +515,15 @@ those is a principal's: a principal's key, with the one message shape it may sig
   while every user budget spins (its weight, not an order); no
   server can destroy a session; a vault session's leases do not change the unlabelled sub-budget's
   free limits.
-- **Confinement (TENETS.md, The use case; CONTAINMENT.md, channel table).** For a confined deployment,
-  the steward refuses to place two differing label sets in one share, group or session tree, and never
-  mounts a shared unlabelled volume into a labelled domain (input is a steward push). It keeps each
-  agent its own label set by default. Attack case: a share or session that would place two differing
-  label sets under one server instance is refused, and a labelled session's attempt to read a shared
-  unlabelled volume is refused with a steward push offered instead.
+- **Confinement (answer 153; CONTAINMENT.md, Push; TENETS.md, The use case).** For a confined
+  deployment the steward never mounts a shared unlabelled volume into a labelled domain; input enters
+  by an audited **push**, the mirror of declassification: one item, triggered by the target label's
+  owner through the powerbox with an out-of-band approval, carried out through a short-lived writer
+  budget holding exactly the target label set, and audited. A confined domain cannot trigger, name the
+  item for, or pull a push. It keeps each agent its own label set by default. Attack cases: a labelled
+  session's attempt to read down is refused with the push offered instead; a push moves exactly one
+  item and no path, queue or batch remains; a confined domain cannot cause a push or observe its
+  timing.
 - Needs: WP-R3, WP-B1, WP-D2.
 
 **WP-S3. sshd.** Size M. `sunset`-based; host key through `keyd`; user authentication through the

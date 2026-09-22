@@ -658,3 +658,21 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   placement as the only zero — where a reader and an agent can find it.
 
 
+- **Recording the use-case direction as answers 150-153** (2026-09-22, architect protocol): the
+  "use case, the high/low pair, and the game" direction was written straight into TENETS.md,
+  CONTAINMENT.md, INIT.md and GAME.md with no numbered question, so four unbuilt packages (WP-R3,
+  WP-D2, WP-D3, WP-S2) had decisions to build on and nothing in the Q&A record to cite (SWARM.md
+  rule 7). Questions 150-153 now record it without re-deciding anything, expanding its wording
+  before it becomes code: **150** names the property "the isolation unit is the label set, not the
+  capability set" and defines it, so CONTAINMENT.md's Labels section and CAPABILITIES.md's Agents
+  list say it too instead of leaving it as one TENETS.md sentence; **151** makes TENETS.md's The
+  adversary the single statement of the covert-channel non-claim and stops CONTAINMENT.md
+  re-arguing it; **152** pins what `confined` makes `init` compare (a per-boot boolean; label sets
+  for `servers`, `volumes`, endpoint names, `ipd:*`/`netd` instances and cores; a boot failure, not
+  a warning) so WP-R3 can implement the refusal the confinement attack case tests; **153** defines
+  the steward push as the mirror of declassification, one item per push, triggered by the target
+  label's owner with an out-of-band approval and carried by a short-lived writer budget carrying the
+  target label set, which is what WP-S2 builds in place of the read-down it refuses for a confined
+  domain. The design's mechanism is unchanged; the answers are clarifications and detail, applied to
+  TENETS.md, CONTAINMENT.md, CAPABILITIES.md and INIT.md, with CONTAINMENT.md gaining the Push
+  section. WP-S2 and WP-R3 also gain these details; the orchestrator files the follow-up.
