@@ -2,15 +2,14 @@
 #
 # Build the RustSBI Prototyper firmware that the test bench boots under.
 #
-# The firmware is vendored in-tree at bios/. QEMU ships no rv32 OpenSBI, so
-# `cargo testbench --arch rv32` boots the RustSBI Prototyper instead (rv64 uses QEMU's
-# bundled OpenSBI by default but can also use RustSBI). This script builds the Prototyper
-# for both widths, leaving the ELFs exactly where the bench looks for them:
+# The firmware is vendored in-tree at bios/. Every supported width boots the RustSBI
+# Prototyper; there is no host-QEMU firmware fallback. This script builds the Prototyper for
+# both widths, leaving the ELFs exactly where the bench looks for them:
 #
 #   bios/target/riscv64gc-unknown-none-elf/release/rustsbi-prototyper
 #   bios/target/riscv32imac-unknown-none-elf/release/rustsbi-prototyper
 #
-# The bench (tools/testbench, resolve_firmware) defaults to bios/; override with
+# The bench defaults to bios/; override with
 # RUSTSBI_PROTOTYPER / RUSTSBI_PROTOTYPER_RV32.
 #
 # RustSBI pins its own nightly toolchain in bios/rust-toolchain.toml, which rustup selects
@@ -35,7 +34,7 @@ fi
 build() {
     local label="$1" target="$2"
     echo "==> building Prototyper for $label ($target)"
-    ( cd "$dest" && cargo xtask prototyper build ${target:+--target "$target"} )
+    ( cd "$dest" && cargo xtask prototyper build --features qemu-virt ${target:+--target "$target"} )
 }
 
 # Default target (rv64, riscv64gc) needs no --target flag; rv32 is explicit.

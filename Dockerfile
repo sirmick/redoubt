@@ -12,9 +12,7 @@
 # At run time ./dev.sh bind-mounts this directory into /work. See dev.sh for the exact mount
 # list; that script is the whole sandbox boundary.
 
-# trixie (Debian 13): QEMU 10.x, whose OpenSBI shows the loader/kernel's legacy SBI console
-# output that the bench's `expect` lines need. bookworm's QEMU 7.2 (OpenSBI 1.1) silently drops
-# it, so every boot case fails on its first expected line despite the guest running fine.
+# trixie (Debian 13) supplies the QEMU 10.x version used by the boot and device test matrix.
 FROM debian:trixie
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -25,6 +23,11 @@ ARG CODEX_VERSION=latest
 ARG USERNAME=dev
 ARG USER_UID=1000
 ARG USER_GID=1000
+ARG IMAGE_REV=2
+
+LABEL org.redoubt.dev.revision="${IMAGE_REV}" \
+      org.redoubt.dev.uid="${USER_UID}" \
+      org.redoubt.dev.gid="${USER_GID}"
 
 # ---------------------------------------------------------------------------
 # Base packages
@@ -94,7 +97,7 @@ RUN printf 'export PATH=/opt/cargo/bin:$PATH\n' > /etc/profile.d/rust.sh \
 # ---------------------------------------------------------------------------
 # A non-root user whose uid/gid match the host's, so bind-mounted files stay owned by you
 # ---------------------------------------------------------------------------
-RUN groupadd --gid "${USER_GID}" "${USERNAME}" \
+RUN if ! getent group "${USER_GID}" >/dev/null; then groupadd --gid "${USER_GID}" "${USERNAME}"; fi \
     && useradd --uid "${USER_UID}" --gid "${USER_GID}" --create-home --shell /bin/bash "${USERNAME}" \
     && echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/"${USERNAME}" \
     && chmod 0440 /etc/sudoers.d/"${USERNAME}"

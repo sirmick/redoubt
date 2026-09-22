@@ -5,12 +5,17 @@
 //! - Hardware manual: [Texas Instruments TL16C550D data sheet](https://www.ti.com/lit/ds/symlink/tl16c550d.pdf),
 //!   Programmable Baud Generator — the common 16550 divisor calculation.
 
+#[cfg(not(feature = "qemu-virt"))]
 mod axi_lite;
+#[cfg(not(feature = "qemu-virt"))]
 mod bl808;
 mod kind;
+#[cfg(not(feature = "qemu-virt"))]
 mod pl011;
+#[cfg(not(feature = "qemu-virt"))]
 mod sifive;
 mod uart16550;
+#[cfg(not(feature = "qemu-virt"))]
 mod xscale;
 
 use alloc::boxed::Box;
@@ -85,13 +90,16 @@ pub trait DbcnBackend {
     fn read_slice(&mut self, dst: &mut [u8]) -> Result<usize, DbcnError>;
 }
 
+#[cfg(not(feature = "qemu-virt"))]
 pub(super) const BAUD_RATE: u32 = 115_200;
 
 // 16550-compatible UARTs divide their input clock by sixteen before applying
 // the programmable divisor.
+#[cfg(not(feature = "qemu-virt"))]
 const UART_CLOCK_OVERSAMPLING: u32 = 16;
 
 /// Returns the nearest 16550 integer divisor.
+#[cfg(not(feature = "qemu-virt"))]
 pub(crate) fn uart_divisor(clock_hz: u32) -> Option<u16> {
     let denominator = BAUD_RATE.checked_mul(UART_CLOCK_OVERSAMPLING)?;
     let divisor = clock_hz.checked_add(denominator / 2)? / denominator;
@@ -123,10 +131,15 @@ pub(super) fn bind(
     let device = match console.kind {
         ConsoleKind::Uart16550U8 => uart16550::bind_u8(console.registers, memory)?,
         ConsoleKind::Uart16550U32 => uart16550::bind_u32(console.registers, memory)?,
+        #[cfg(not(feature = "qemu-virt"))]
         ConsoleKind::AxiLite => axi_lite::bind(console.registers, memory)?,
+        #[cfg(not(feature = "qemu-virt"))]
         ConsoleKind::Bl808 => bl808::bind(console.registers, memory)?,
+        #[cfg(not(feature = "qemu-virt"))]
         ConsoleKind::SiFive => sifive::bind(console.registers, memory)?,
+        #[cfg(not(feature = "qemu-virt"))]
         ConsoleKind::Pl011 => pl011::bind(console.registers, console.clock_hz, memory)?,
+        #[cfg(not(feature = "qemu-virt"))]
         ConsoleKind::XScale => xscale::bind(console.registers, console.clock_hz, memory)?,
     };
     Ok(Some(device))

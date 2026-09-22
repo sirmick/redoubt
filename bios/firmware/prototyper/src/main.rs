@@ -91,6 +91,7 @@ fn enable_supervisor_services() {
     timer::clear_current();
     // Gate per-hart IMSIC setup on the device selected during platform
     // initialization, not on AIA discovery alone.
+    #[cfg(not(feature = "qemu-virt"))]
     if ipi::uses_imsic() {
         driver::initialize_hart_imsic(
             platform::board_info()

@@ -1,5 +1,6 @@
 //! Machine IPI devices and validated target windows.
 
+#[cfg(not(feature = "qemu-virt"))]
 pub(super) mod plicsw;
 
 use alloc::boxed::Box;

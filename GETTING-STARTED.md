@@ -31,8 +31,8 @@ from your home. See the header of [`dev.sh`](dev.sh).
 ./scripts/build-bios.sh  # builds the vendored RustSBI Prototyper in bios/, both widths
 ```
 
-Needed for rv32 (QEMU ships no rv32 OpenSBI); rv64 defaults to QEMU's bundled OpenSBI. If
-`bios/target/` is already populated, skip this.
+Both rv32 and rv64 boot only the vendored RustSBI firmware. If `bios/target/` is already
+populated for both widths, skip this.
 
 ## 3. Build the operating system
 
@@ -42,6 +42,8 @@ Needed for rv32 (QEMU ships no rv32 OpenSBI); rv64 defaults to QEMU's bundled Op
 ./build --arch rv64 --programs   # also the in-guest test programs
 ```
 
+Builds are size-optimized release builds by default, which is required for the rv32 memory
+layout. Pass `--debug` only when working on a configuration that fits the debug image.
 `--arch` is `rv32` or `rv64` (default rv64) on every script.
 
 ## 4. Launch it in a VM

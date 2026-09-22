@@ -2,22 +2,23 @@
 #
 # build -- compile the Redoubt boot chain for one architecture.
 #
-# Usage: ./build [--arch rv32|rv64] [--release] [--programs]
+# Usage: ./build [--arch rv32|rv64] [--debug] [--programs]
 #   --arch      target width (default rv64)
-#   --release   build the release profile instead of debug
+#   --debug     build the unoptimized debug profile instead of release
 #   --programs  also build the in-guest test programs
 #
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 arch=rv64
-release=0
+release=1
 programs=0
 while (($#)); do
     case "$1" in
         -a|--arch)  arch="${2:?--arch needs rv32 or rv64}"; shift 2 ;;
         --arch=*)   arch="${1#*=}"; shift ;;
-        --release)  release=1; shift ;;
+        --release)  release=1; shift ;; # retained for compatibility; release is the default
+        --debug)    release=0; shift ;;
         --programs) programs=1; shift ;;
         -h|--help)  sed -n '2,10p' "$0"; exit 0 ;;
         *) echo "build: unknown argument: $1" >&2; exit 2 ;;

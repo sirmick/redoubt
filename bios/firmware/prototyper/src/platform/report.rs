@@ -38,6 +38,7 @@ fn log_harts(board: &BoardInfo) {
 }
 
 fn log_interrupt_controller(board: &BoardInfo) {
+    #[cfg(not(feature = "qemu-virt"))]
     if crate::driver::ipi::uses_imsic()
         && let Some(imsic) = board.imsic.as_ref()
     {
@@ -49,6 +50,7 @@ fn log_interrupt_controller(board: &BoardInfo) {
         return;
     }
 
+    #[cfg(not(feature = "qemu-virt"))]
     if let (Some(plmt), Some(plicsw)) = (board.plmt, board.plicsw) {
         info!(
             "{:<30}: Sunxi PLICSW (Base Address: 0x{:x})",
@@ -92,7 +94,10 @@ fn log_reset(board: &BoardInfo) {
             "Platform Reset Extension",
             registers.start().as_usize()
         );
-    } else if let Some((controller, address)) = board.spacemit_p1_pmic_reset {
+        return;
+    }
+    #[cfg(not(feature = "qemu-virt"))]
+    if let Some((controller, address)) = board.spacemit_p1_pmic_reset {
         info!(
             "{:<30}: Available (SpacemiT P1 PMIC @ 0x{:02x}, I2C Base: 0x{:x})",
             "Platform Reset Extension",
@@ -118,9 +123,9 @@ fn log_reset(board: &BoardInfo) {
             board.syscon_poweroff.is_some(),
             board.syscon_reboot.is_some(),
         );
-    } else {
-        warn!("{:<30}: Not Available", "Platform Reset Device");
+        return;
     }
+    warn!("{:<30}: Not Available", "Platform Reset Device");
 }
 
 fn log_sbi_extensions() {

@@ -1,4 +1,4 @@
-/* SBI firmware (OpenSBI / RustSBI) enters S-mode payloads here on QEMU virt and most SBCs. */
+/* RustSBI enters S-mode payloads here on QEMU virt and supported boards. */
 ENTRY(_start)
 
 MEMORY

@@ -10,10 +10,12 @@
 use runtime::rustsbi::{self, SbiRet};
 use spin::Mutex;
 
+#[cfg(not(feature = "qemu-virt"))]
+use crate::driver::{P1Pmic, SysconPoweroff, SysconReboot};
 use crate::driver::{
-    P1Pmic, ResetBackend, ResetError, ResetReason, ResetRequest, ResetType, SifiveTestDevice,
-    SysconPoweroff, SysconReboot,
+    ResetBackend, ResetError, ResetReason, ResetRequest, ResetType, SifiveTestDevice,
 };
+#[cfg(not(feature = "qemu-virt"))]
 use crate::driver::{SunxiWdtV104, SunxiWdtV105};
 
 /// SBI system-reset extension service.
@@ -29,18 +31,34 @@ enum Backend {
     #[default]
     None,
     SifiveTest(ResetAdapter<SifiveTestDevice>),
+    #[cfg(not(feature = "qemu-virt"))]
     SpacemitP1(ResetAdapter<P1Pmic>),
+    #[cfg(not(feature = "qemu-virt"))]
     SysconPoweroff(SysconPoweroff),
+    #[cfg(not(feature = "qemu-virt"))]
     SysconReboot(SysconReboot),
+    #[cfg(not(feature = "qemu-virt"))]
     Syscon {
         poweroff: SysconPoweroff,
         reboot: SysconReboot,
     },
+    #[cfg(not(feature = "qemu-virt"))]
     SunxiWdtV104(ResetAdapter<SunxiWdtV104>),
+    #[cfg(not(feature = "qemu-virt"))]
     SunxiWdtV105(ResetAdapter<SunxiWdtV105>),
 }
 
 impl SbiReset {
+    #[cfg(feature = "qemu-virt")]
+    pub fn new(sifive_test: Option<SifiveTestDevice>) -> Self {
+        Self {
+            backend: sifive_test
+                .map(|device| Backend::SifiveTest(ResetAdapter(Mutex::new(device))))
+                .unwrap_or_default(),
+        }
+    }
+
+    #[cfg(not(feature = "qemu-virt"))]
     pub fn new(
         sifive_test: Option<SifiveTestDevice>,
         spacemit_p1_pmic: Option<P1Pmic>,
@@ -80,6 +98,7 @@ impl rustsbi::Reset for SbiReset {
 
     #[inline]
     fn system_reset(&self, reset_type: u32, reset_reason: u32) -> SbiRet {
+        #[cfg(not(feature = "qemu-virt"))]
         use rustsbi::spec::srst::{
             RESET_TYPE_COLD_REBOOT, RESET_TYPE_SHUTDOWN, RESET_TYPE_WARM_REBOOT,
         };
@@ -87,9 +106,13 @@ impl rustsbi::Reset for SbiReset {
         match &self.backend {
             Backend::None => SbiRet::not_supported(),
             Backend::SifiveTest(device) => device.system_reset(reset_type, reset_reason),
+            #[cfg(not(feature = "qemu-virt"))]
             Backend::SpacemitP1(device) => device.system_reset(reset_type, reset_reason),
+            #[cfg(not(feature = "qemu-virt"))]
             Backend::SysconPoweroff(device) => device.system_reset(reset_type, reset_reason),
+            #[cfg(not(feature = "qemu-virt"))]
             Backend::SysconReboot(device) => device.system_reset(reset_type, reset_reason),
+            #[cfg(not(feature = "qemu-virt"))]
             Backend::Syscon { poweroff, reboot } => match reset_type {
                 RESET_TYPE_SHUTDOWN => poweroff.system_reset(reset_type, reset_reason),
                 RESET_TYPE_COLD_REBOOT | RESET_TYPE_WARM_REBOOT => {
@@ -97,7 +120,9 @@ impl rustsbi::Reset for SbiReset {
                 }
                 _ => SbiRet::invalid_param(),
             },
+            #[cfg(not(feature = "qemu-virt"))]
             Backend::SunxiWdtV104(device) => device.system_reset(reset_type, reset_reason),
+            #[cfg(not(feature = "qemu-virt"))]
             Backend::SunxiWdtV105(device) => device.system_reset(reset_type, reset_reason),
         }
     }
@@ -122,6 +147,7 @@ impl<D: ResetBackend> rustsbi::Reset for ResetAdapter<D> {
     }
 }
 
+#[cfg(not(feature = "qemu-virt"))]
 fn reset_syscon<D: ResetBackend<Request = ()>>(
     device: &D,
     reset_type: u32,
@@ -140,12 +166,14 @@ fn reset_syscon<D: ResetBackend<Request = ()>>(
     }
 }
 
+#[cfg(not(feature = "qemu-virt"))]
 impl rustsbi::Reset for SysconPoweroff {
     fn system_reset(&self, reset_type: u32, reset_reason: u32) -> SbiRet {
         reset_syscon(self, reset_type, reset_reason, || self.poweroff())
     }
 }
 
+#[cfg(not(feature = "qemu-virt"))]
 impl rustsbi::Reset for SysconReboot {
     fn system_reset(&self, reset_type: u32, reset_reason: u32) -> SbiRet {
         reset_syscon(self, reset_type, reset_reason, || self.reboot())

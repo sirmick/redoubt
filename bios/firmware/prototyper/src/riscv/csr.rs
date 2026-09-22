@@ -138,6 +138,7 @@ pub mod imsic {
     ///
     /// Callers probe Smaia before reaching this architecture boundary;
     /// selectors are derived from the validated IMSIC identity count.
+    #[cfg_attr(feature = "qemu-virt", allow(dead_code))]
     pub fn initialize_machine_file(num_ids: usize, ipi_iid: usize) {
         // SAFETY: the caller verified the current hart implements Smaia, and
         // M-mode firmware may access its own machine interrupt-file registers;

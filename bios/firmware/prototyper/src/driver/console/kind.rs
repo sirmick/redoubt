@@ -15,32 +15,48 @@
 pub(crate) enum ConsoleKind {
     Uart16550U8,
     Uart16550U32,
+    #[cfg(not(feature = "qemu-virt"))]
     AxiLite,
+    #[cfg(not(feature = "qemu-virt"))]
     Bl808,
+    #[cfg(not(feature = "qemu-virt"))]
     SiFive,
+    #[cfg(not(feature = "qemu-virt"))]
     Pl011,
+    #[cfg(not(feature = "qemu-virt"))]
     XScale,
 }
 
 const UART_16550_COMPATIBLES: [&str; 2] = ["ns16550", "ns16550a"];
+#[cfg(not(feature = "qemu-virt"))]
 const UART_16550_U32_COMPATIBLES: [&str; 2] = ["snps,dw-apb-uart", "allwinner,sunxi-uart"];
+#[cfg(not(feature = "qemu-virt"))]
 const UART_AXI_LITE_COMPATIBLES: [&str; 1] = ["xlnx,xps-uartlite-1.00.a"];
+#[cfg(not(feature = "qemu-virt"))]
 const UART_BFLB_COMPATIBLES: [&str; 1] = ["bflb,bl808-uart"];
+#[cfg(not(feature = "qemu-virt"))]
 const UART_SIFIVE_COMPATIBLES: [&str; 1] = ["sifive,uart0"];
+#[cfg(not(feature = "qemu-virt"))]
 const UART_PL011_COMPATIBLES: [&str; 2] = ["pl011", "arm,pl011"];
+#[cfg(not(feature = "qemu-virt"))]
 const UART_XSCALE_COMPATIBLES: [&str; 2] = ["intel,xscale-uart", "spacemit,k1-uart"];
 
 impl ConsoleKind {
     /// Returns whether `compatible` names a console family supported by this
     /// firmware, independently of its register layout.
     pub(crate) fn supports(compatible: &str) -> bool {
-        UART_16550_COMPATIBLES.contains(&compatible)
-            || UART_16550_U32_COMPATIBLES.contains(&compatible)
+        if UART_16550_COMPATIBLES.contains(&compatible) {
+            return true;
+        }
+        #[cfg(not(feature = "qemu-virt"))]
+        return UART_16550_U32_COMPATIBLES.contains(&compatible)
             || UART_AXI_LITE_COMPATIBLES.contains(&compatible)
             || UART_BFLB_COMPATIBLES.contains(&compatible)
             || UART_SIFIVE_COMPATIBLES.contains(&compatible)
             || UART_PL011_COMPATIBLES.contains(&compatible)
-            || UART_XSCALE_COMPATIBLES.contains(&compatible)
+            || UART_XSCALE_COMPATIBLES.contains(&compatible);
+        #[cfg(feature = "qemu-virt")]
+        false
     }
 
     /// Maps one `compatible` string plus the node's `reg-shift` and
@@ -54,14 +70,16 @@ impl ConsoleKind {
         let u32_layout = register_shift == Some(2) && register_width == Some(4);
 
         if UART_16550_COMPATIBLES.contains(&compatible) {
-            if u8_layout {
+            return if u8_layout {
                 Some(Self::Uart16550U8)
             } else if u32_layout {
                 Some(Self::Uart16550U32)
             } else {
                 None
-            }
-        } else if UART_16550_U32_COMPATIBLES.contains(&compatible) {
+            };
+        }
+        #[cfg(not(feature = "qemu-virt"))]
+        if UART_16550_U32_COMPATIBLES.contains(&compatible) {
             // Preserve the pre-MMIO driver's identity-based selection even
             // when older device trees omit the layout properties.
             Some(Self::Uart16550U32)
@@ -78,6 +96,8 @@ impl ConsoleKind {
         } else {
             None
         }
+        #[cfg(feature = "qemu-virt")]
+        None
     }
 
     /// Device name reported in boot logs.
@@ -85,10 +105,15 @@ impl ConsoleKind {
         match self {
             ConsoleKind::Uart16550U8 => "Uart16550U8",
             ConsoleKind::Uart16550U32 => "Uart16550U32",
+            #[cfg(not(feature = "qemu-virt"))]
             ConsoleKind::AxiLite => "UartAxiLite",
+            #[cfg(not(feature = "qemu-virt"))]
             ConsoleKind::Bl808 => "UartBl808",
+            #[cfg(not(feature = "qemu-virt"))]
             ConsoleKind::SiFive => "UartSiFive",
+            #[cfg(not(feature = "qemu-virt"))]
             ConsoleKind::Pl011 => "UartPl011",
+            #[cfg(not(feature = "qemu-virt"))]
             ConsoleKind::XScale => "UartXScale",
         }
     }

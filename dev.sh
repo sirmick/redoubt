@@ -35,7 +35,13 @@
 set -euo pipefail
 
 IMAGE=redoubt-dev
+IMAGE_REV=2
 PROJECT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The image contains a real passwd entry for the host identity. OpenSSH refuses to run for a
+# numeric uid that NSS cannot resolve, so the uid/gid are part of the image's cache identity.
+UID_N="$(id -u)"
+GID_N="$(id -g)"
 
 # ---- parse our own flags; everything else is the command -------------------
 REBUILD=0
@@ -48,14 +54,17 @@ for a in "$@"; do
 done
 
 # ---- the image ------------------------------------------------------------
-if [ "$REBUILD" = 1 ] || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+image_rev="$(docker image inspect --format '{{ index .Config.Labels "org.redoubt.dev.revision" }}' "$IMAGE" 2>/dev/null || true)"
+image_uid="$(docker image inspect --format '{{ index .Config.Labels "org.redoubt.dev.uid" }}' "$IMAGE" 2>/dev/null || true)"
+image_gid="$(docker image inspect --format '{{ index .Config.Labels "org.redoubt.dev.gid" }}' "$IMAGE" 2>/dev/null || true)"
+if [ "$REBUILD" = 1 ] || [ "$image_rev" != "$IMAGE_REV" ] || [ "$image_uid" != "$UID_N" ] || [ "$image_gid" != "$GID_N" ]; then
     echo "==> building $IMAGE (this pulls Debian + Node + Rust; a few minutes the first time)"
-    docker build -t "$IMAGE" "$PROJECT"
+    docker build \
+        --build-arg "IMAGE_REV=$IMAGE_REV" \
+        --build-arg "USER_UID=$UID_N" \
+        --build-arg "USER_GID=$GID_N" \
+        -t "$IMAGE" "$PROJECT"
 fi
-
-# ---- host user ------------------------------------------------------------
-UID_N="$(id -u)"
-GID_N="$(id -g)"
 
 # ---- the persistent config directory --------------------------------------
 # A sibling of the project, so it survives a `docker rmi` and is never committed. Created here
@@ -134,6 +143,9 @@ fi
 # CARGO_TARGET_DIR, so redirecting it would make every boot case fail. Build output therefore
 # lives in each crate tree's own target/ (git-ignored, disposable).
 # SANDBOX_NET (default "bridge"): set to "none" to cut the container off the network.
+# Create the sandbox SSH key on first start (idempotent, prints the public key), install
+# any missing pi extension into the mounted config dir, then run the command.
+# The image is built for this uid/gid, so OpenSSH and every other NSS user lookup resolve it.
 docker run --rm "${tty_args[@]}" \
     --hostname redoubt-dev \
     --user "${UID_N}:${GID_N}" \
@@ -148,8 +160,6 @@ docker run --rm "${tty_args[@]}" \
     "${mounts[@]}" \
     -w /work \
     "$IMAGE" \
-    # Create the sandbox SSH key on first start (idempotent, prints the public key), install
-    # any missing pi extension into the mounted config dir, then run the command.
-    bash -lc "SSH_KEY_DIR=/config/ssh /work/scripts/ssh-key-ensure.sh; /work/scripts/pi-ensure.sh; ${args[*]:-bash}"
+    bash -lc 'SSH_KEY_DIR=/config/ssh /work/scripts/ssh-key-ensure.sh; /work/scripts/pi-ensure.sh; if (( $# )); then exec "$@"; else exec bash; fi' _ "${args[@]}"
 
 # Caches under /work are disposable: rm -rf .cargo .rustup .cargo-target reclaims the space.

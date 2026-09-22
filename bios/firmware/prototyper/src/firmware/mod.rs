@@ -1,4 +1,6 @@
+#[cfg(not(feature = "qemu-virt"))]
 mod warm;
+#[cfg(not(feature = "qemu-virt"))]
 pub(crate) use warm::warm_entry;
 
 cfg_if::cfg_if! {
@@ -180,6 +182,7 @@ fn resolve_boot_selection(
 /// Patches the DTB for the next stage: reserves the firmware image and
 /// hides firmware-retained M-level interrupt controllers. Returns the
 /// patched DTB address.
+#[cfg_attr(feature = "qemu-virt", allow(unused_variables))]
 pub(crate) fn patch_device_tree(
     device_tree_address: usize,
     board: &crate::platform::BoardInfo,
@@ -187,6 +190,8 @@ pub(crate) fn patch_device_tree(
     uses_imsic: bool,
     firmware_is_reserved: bool,
 ) -> runtime::Result<usize> {
+    #[cfg(feature = "qemu-virt")]
+    let _ = board;
     // Retain an existing reservation that already covers the image. Avoid
     // copying a large DTB when neither its firmware reservation nor its
     // interrupt-controller description needs to change.
@@ -271,6 +276,7 @@ pub(crate) fn patch_device_tree(
 
     // Hide machine-level interrupt controllers only when firmware retained
     // them by selecting the IMSIC device.
+    #[cfg(not(feature = "qemu-virt"))]
     if uses_imsic {
         // SAFETY: same leaked buffer and length as above; the slice is
         // recreated for the in-place node patching below.
@@ -301,12 +307,18 @@ fn fdt_u64_cells(value: usize) -> [u32; 2] {
 }
 
 // TODO: Move these raw FDT structure block patch helpers to serde-device-tree.
+#[cfg(not(feature = "qemu-virt"))]
 const FDT_BEGIN_NODE: u32 = 0x01;
+#[cfg(not(feature = "qemu-virt"))]
 const FDT_END_NODE: u32 = 0x02;
+#[cfg(not(feature = "qemu-virt"))]
 const FDT_PROP: u32 = 0x03;
+#[cfg(not(feature = "qemu-virt"))]
 const FDT_NOP: u32 = 0x04;
+#[cfg(not(feature = "qemu-virt"))]
 const MACHINE_EXTERNAL_INTERRUPT_ID: u32 = 11;
 
+#[cfg(not(feature = "qemu-virt"))]
 fn fdt_read_u32(buffer: &[u8], offset: usize) -> u32 {
     u32::from_be_bytes([
         buffer[offset],
@@ -316,11 +328,13 @@ fn fdt_read_u32(buffer: &[u8], offset: usize) -> u32 {
     ])
 }
 
+#[cfg(not(feature = "qemu-virt"))]
 fn fdt_write_u32(buffer: &mut [u8], offset: usize, value: u32) {
     let bytes = value.to_be_bytes();
     buffer[offset..offset + 4].copy_from_slice(&bytes);
 }
 
+#[cfg(not(feature = "qemu-virt"))]
 fn fdt_nop_node_by_name(dtb: &mut [u8], target_name: &str) -> bool {
     let structure_offset = fdt_read_u32(dtb, 8) as usize;
     let structure_size = fdt_read_u32(dtb, 36) as usize;
@@ -383,6 +397,7 @@ fn fdt_nop_node_by_name(dtb: &mut [u8], target_name: &str) -> bool {
     false
 }
 
+#[cfg(not(feature = "qemu-virt"))]
 fn fdt_interrupts_extended_has_irq(property_value: &[u8], irq: u32) -> bool {
     let mut chunks = property_value.chunks_exact(8);
     let mut found = false;
@@ -396,6 +411,7 @@ fn fdt_interrupts_extended_has_irq(property_value: &[u8], irq: u32) -> bool {
     found && chunks.remainder().is_empty()
 }
 
+#[cfg(not(feature = "qemu-virt"))]
 fn fdt_compatible_matches(property_value: &[u8], compatibles: &[&str]) -> bool {
     property_value.split(|byte| *byte == 0).any(|candidate| {
         compatibles
@@ -404,6 +420,7 @@ fn fdt_compatible_matches(property_value: &[u8], compatibles: &[&str]) -> bool {
     })
 }
 
+#[cfg(not(feature = "qemu-virt"))]
 fn fdt_nop_m_level_imsic(dtb: &mut [u8]) {
     let structure_offset = fdt_read_u32(dtb, 8) as usize;
     let structure_size = fdt_read_u32(dtb, 36) as usize;
@@ -500,6 +517,7 @@ fn fdt_nop_m_level_imsic(dtb: &mut [u8]) {
     }
 }
 
+#[cfg(not(feature = "qemu-virt"))]
 fn fdt_nop_m_level_aplic(dtb: &mut [u8]) {
     let structure_offset = fdt_read_u32(dtb, 8) as usize;
     let structure_size = fdt_read_u32(dtb, 36) as usize;
@@ -661,6 +679,7 @@ pub fn set_pmp(firmware_ram: &Range<usize>) {
 
         // Keep machine-level interrupt controllers inaccessible to S-mode
         // only when the IMSIC device retained them for firmware use.
+        #[cfg(not(feature = "qemu-virt"))]
         if crate::driver::ipi::uses_imsic()
             && crate::platform::board_info().is_qemu_virt()
             && let Some(imsic) = crate::platform::board_info().imsic.as_ref()
@@ -733,27 +752,35 @@ pub fn set_pmp(firmware_ram: &Range<usize>) {
         pmpaddr5::write(FIRMWARE_END_ADDRESS >> 2);
         set_pmp_config(6, Range::TOR, Permission::RWX, false);
         pmpaddr6::write(firmware_ram.end >> 2);
-        if crate::platform::board_info()
-            .allwinner_v821
-            .map_or(0, |soc| soc.noncacheable_offset())
-            != 0
+        #[cfg(not(feature = "qemu-virt"))]
         {
-            let alias = crate::platform::board_info()
+            if crate::platform::board_info()
                 .allwinner_v821
-                .map_or(0, |soc| soc.noncacheable_offset());
-            assert!(alias.is_power_of_two() && alias >= firmware_ram.end as u64);
-            let start = (FIRMWARE_START_ADDRESS as u64).checked_add(alias).unwrap();
-            let end = (FIRMWARE_END_ADDRESS as u64).checked_add(alias).unwrap();
-            assert!(end >> 2 <= usize::MAX as u64);
-            // Deny the firmware alias before permitting the wider physical address space.
-            set_pmp_config(7, Range::OFF, Permission::NONE, false);
-            pmpaddr7::write((start >> 2) as usize);
-            set_pmp_config(8, Range::TOR, Permission::NONE, false);
-            pmpaddr8::write((end >> 2) as usize);
-            assert_eq!(pmpaddr8::read(), (end >> 2) as usize);
-            set_pmp_config(9, Range::NAPOT, Permission::RWX, false);
-            pmpaddr9::write(usize::MAX);
-        } else {
+                .map_or(0, |soc| soc.noncacheable_offset())
+                != 0
+            {
+                let alias = crate::platform::board_info()
+                    .allwinner_v821
+                    .map_or(0, |soc| soc.noncacheable_offset());
+                assert!(alias.is_power_of_two() && alias >= firmware_ram.end as u64);
+                let start = (FIRMWARE_START_ADDRESS as u64).checked_add(alias).unwrap();
+                let end = (FIRMWARE_END_ADDRESS as u64).checked_add(alias).unwrap();
+                assert!(end >> 2 <= usize::MAX as u64);
+                // Deny the firmware alias before permitting the wider physical address space.
+                set_pmp_config(7, Range::OFF, Permission::NONE, false);
+                pmpaddr7::write((start >> 2) as usize);
+                set_pmp_config(8, Range::TOR, Permission::NONE, false);
+                pmpaddr8::write((end >> 2) as usize);
+                assert_eq!(pmpaddr8::read(), (end >> 2) as usize);
+                set_pmp_config(9, Range::NAPOT, Permission::RWX, false);
+                pmpaddr9::write(usize::MAX);
+            } else {
+                set_pmp_config(7, Range::TOR, Permission::RWX, false);
+                pmpaddr7::write(usize::MAX >> 2);
+            }
+        }
+        #[cfg(feature = "qemu-virt")]
+        {
             set_pmp_config(7, Range::TOR, Permission::RWX, false);
             pmpaddr7::write(usize::MAX >> 2);
         }
@@ -835,6 +862,7 @@ pub fn log_pmp_cfg(_firmware_ram: &Range<usize>) {
     seq_macro::seq!(N in 0..8 {
         log_entry(N, pastey::paste! { [<pmpaddr ~N>]::read() });
     });
+    #[cfg(not(feature = "qemu-virt"))]
     if crate::platform::board_info()
         .allwinner_v821
         .is_some_and(|soc| soc.noncacheable_offset() != 0)

@@ -8,11 +8,14 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(not(feature = "qemu-virt"))]
 mod aia;
+#[cfg(not(feature = "qemu-virt"))]
 mod cci;
 mod clint;
 mod console;
 pub(crate) mod ipi;
+#[cfg(not(feature = "qemu-virt"))]
 mod plmt;
 mod reset;
 pub(crate) mod timer;
@@ -21,29 +24,43 @@ use alloc::boxed::Box;
 
 use runtime::memory::MemoryRegistry;
 
-use crate::platform::{BoardInfo, ImsicInfo};
+use crate::platform::BoardInfo;
+#[cfg(not(feature = "qemu-virt"))]
+use crate::platform::ImsicInfo;
 
+#[cfg(not(feature = "qemu-virt"))]
 pub(crate) use aia::ImsicInterrupt;
+#[cfg(not(feature = "qemu-virt"))]
 pub(crate) use aia::{IMSIC_COMPATIBLES, IMSIC_FILE_SPAN, initialize_hart_imsic};
+#[cfg(not(feature = "qemu-virt"))]
 pub(crate) use cci::Cci550;
 pub(crate) use clint::ClintKind;
 pub(crate) use console::{ConsoleKind, DbcnBackend, DbcnError};
 pub(crate) use ipi::{IpiBackend, IpiError, IpiRequest};
+#[cfg(not(feature = "qemu-virt"))]
 use timer::SstcTimer;
 pub(crate) use timer::TimerBackend;
 
 pub(crate) use runtime::hart::HartWake;
 
+#[cfg(not(feature = "qemu-virt"))]
 pub(crate) use reset::{
-    I2cAddress, P1_PMIC_COMPATIBLES, P1Pmic, PMIC_I2C_COMPATIBLES, ResetBackend, ResetError,
-    ResetReason, ResetRequest, ResetType, SIFIVE_TEST_COMPATIBLES, SUNXI_WDT_V104_COMPATIBLES,
-    SUNXI_WDT_V105_COMPATIBLE, SifiveTestDevice, SysconConfig, SysconPoweroff, SysconReboot,
+    I2cAddress, P1_PMIC_COMPATIBLES, P1Pmic, PMIC_I2C_COMPATIBLES, SUNXI_WDT_V104_COMPATIBLES,
+    SUNXI_WDT_V105_COMPATIBLE, SysconConfig, SysconPoweroff, SysconReboot,
 };
+pub(crate) use reset::{
+    ResetBackend, ResetError, ResetReason, ResetRequest, ResetType, SIFIVE_TEST_COMPATIBLES,
+    SifiveTestDevice,
+};
+#[cfg(not(feature = "qemu-virt"))]
 pub(crate) use reset::{SunxiWdtV104, SunxiWdtV105};
 
+#[cfg(not(feature = "qemu-virt"))]
 pub(crate) const PLMT_COMPATIBLE: &str = "andestech,plmt0";
+#[cfg(not(feature = "qemu-virt"))]
 pub(crate) const SUNXI_PLICSW_COMPATIBLE: &str = "allwinner,sun300i-plicsw";
 
+#[cfg(not(feature = "qemu-virt"))]
 pub(crate) const THEAD_PLIC_COMPATIBLES: [&str; 2] =
     ["thead,c900-plic", "allwinner,thead,c900-plic"];
 
@@ -53,16 +70,24 @@ pub(crate) struct Devices {
     pub(crate) ipi: Option<Box<dyn IpiBackend + Send + Sync>>,
     pub(crate) console: Option<Box<dyn DbcnBackend + Send>>,
     pub(crate) sifive_test: Option<SifiveTestDevice>,
+    #[cfg(not(feature = "qemu-virt"))]
     pub(crate) spacemit_p1_pmic: Option<P1Pmic>,
+    #[cfg(not(feature = "qemu-virt"))]
     pub(crate) syscon_poweroff: Option<SysconPoweroff>,
+    #[cfg(not(feature = "qemu-virt"))]
     pub(crate) syscon_reboot: Option<SysconReboot>,
+    #[cfg(not(feature = "qemu-virt"))]
     pub(crate) sunxi_wdt_v104: Option<SunxiWdtV104>,
+    #[cfg(not(feature = "qemu-virt"))]
     pub(crate) sunxi_wdt_v105: Option<SunxiWdtV105>,
 }
 
 impl Devices {
     /// Returns whether firmware IPIs use IMSIC interrupt files.
     pub(crate) fn uses_imsic(&self) -> bool {
+        #[cfg(feature = "qemu-virt")]
+        return false;
+        #[cfg(not(feature = "qemu-virt"))]
         self.ipi.as_ref().is_some_and(|ipi| ipi.is_imsic())
     }
 }
@@ -72,6 +97,7 @@ type InterruptDevices = (
     Option<Box<dyn IpiBackend + Send + Sync>>,
 );
 
+#[cfg(not(feature = "qemu-virt"))]
 fn bind_interrupts(
     board: &BoardInfo,
     selected_imsic: Option<&ImsicInfo>,
@@ -116,7 +142,20 @@ fn bind_interrupts(
     Ok((Some(timer), Some(ipi)))
 }
 
+#[cfg(feature = "qemu-virt")]
+fn bind_interrupts(
+    board: &BoardInfo,
+    memory: &mut MemoryRegistry,
+) -> runtime::Result<InterruptDevices> {
+    let Some(&(registers, kind)) = board.clint.as_ref() else {
+        return Ok((None, None));
+    };
+    let (timer, ipi) = clint::bind(registers, kind, memory)?;
+    Ok((Some(timer), Some(ipi)))
+}
+
 /// Binds all devices selected during platform discovery.
+#[cfg(not(feature = "qemu-virt"))]
 pub(crate) fn bind_devices(
     board: &BoardInfo,
     selected_imsic: Option<&ImsicInfo>,
@@ -165,5 +204,25 @@ pub(crate) fn bind_devices(
         syscon_reboot,
         sunxi_wdt_v104,
         sunxi_wdt_v105,
+    })
+}
+
+/// Binds the three device classes exposed by QEMU virt.
+#[cfg(feature = "qemu-virt")]
+pub(crate) fn bind_devices(
+    board: &BoardInfo,
+    memory: &mut MemoryRegistry,
+) -> runtime::Result<Devices> {
+    let (timer, ipi) = bind_interrupts(board, memory)?;
+    let console = console::bind(board, memory)?;
+    let sifive_test = board
+        .reset
+        .map(|registers| reset::sifive_test::bind(registers, memory))
+        .transpose()?;
+    Ok(Devices {
+        timer,
+        ipi,
+        console,
+        sifive_test,
     })
 }

@@ -47,6 +47,7 @@ expect = ['regex 1', 'regex 2']   # must each match a console line, in this orde
 forbid = ['regex']                # must never match; also always forbidden:
                                   # PANIC, TEST FAILED, WARNING: INSECURE
 poweroff = false             # true: the guest must power off after the last expect
+poweroff_status = 0          # required QEMU status; RustSBI SystemFailure is 255
 tamper_bundle = false        # true: flip one bundle byte after signing, so the loader must refuse it
 sign_bare_archive = false    # true: sign the archive alone instead of the preimage of
                              # VERIFIED-BOOT.md, which the loader must refuse as well
@@ -58,8 +59,9 @@ send = "xyz"
 
 After the last `expect` (and any sessions), the bench keeps reading the console for 50 ms, so a
 forbidden line right after the last expected one still fails the case. With `poweroff = true` it
-reads instead until QEMU exits, which must happen cleanly before `timeout_secs`, with no forbidden
-line on the way.
+reads instead until QEMU exits before `timeout_secs`, with no forbidden line on the way, and
+requires `poweroff_status` (zero by default). Tests that deliberately reach an SBI
+`SystemFailure` shutdown set it to 255.
 
 Optional tables add bundle files, virtio devices and SSH sessions: see the sections below. An
 unknown field or table is an error, so a misspelling cannot silently drop a check.
@@ -126,13 +128,12 @@ a checked one. Everything else must still pass.
     cargo testbench --run log-server ipc-client --smp 4
     cargo testbench --run path/to/some.elf
 
-## Other firmware
+## Firmware
 
-`--firmware <image>` replaces QEMU's bundled OpenSBI for a test run or for `--run`, e.g. a RustSBI
-Prototyper build. rv32 has no bundled OpenSBI, so it always boots under RustSBI; run
-`scripts/build-bios.sh` to build both firmwares (see the script's header). The bench looks
-for them in a `rustsbi` checkout beside this repository's main checkout (found through git, so
-worktrees work too), or where `RUSTSBI_PROTOTYPER` / `RUSTSBI_PROTOTYPER_RV32` say.
+Every run boots the vendored RustSBI Prototyper. Run `scripts/build-bios.sh` to build both widths
+where the bench expects them, or set `RUSTSBI_PROTOTYPER` / `RUSTSBI_PROTOTYPER_RV32`. A missing
+image fails the case unless `--allow-skip` was explicitly requested; there is no emulator-firmware
+fallback.
 
 ## Hostile inputs
 

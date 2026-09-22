@@ -9,11 +9,14 @@ use runtime::memory::SupervisorMemory;
 use spin::Once;
 
 use super::error::{self, ResultContext};
-use super::info::{BoardInfo, ImsicInfo};
+use super::info::BoardInfo;
+#[cfg(not(feature = "qemu-virt"))]
+use super::info::ImsicInfo;
 use super::{discovery, report, state};
 use crate::driver::ipi::IpiDevice;
 use crate::driver::timer::TimerDevice;
 use crate::driver::{self, HartWake};
+#[cfg(not(feature = "qemu-virt"))]
 use crate::riscv::spacemit_k1::{self, K1BootResources};
 use crate::sbi;
 use crate::sbi::SbiDispatcher;
@@ -50,19 +53,25 @@ fn try_init_board(mut platform_description: runtime::PlatformDescription) -> err
             .during("locating the firmware RAM bank")?,
     );
 
+    #[cfg(feature = "qemu-virt")]
+    let devices = driver::bind_devices(&board, &mut memory).during("binding platform devices")?;
+    #[cfg(not(feature = "qemu-virt"))]
     let devices = driver::bind_devices(&board, select_imsic(&board), &mut memory)
         .during("binding platform devices")?;
+    #[cfg(not(feature = "qemu-virt"))]
     let k1_resources = board
         .spacemit_k1
         .map(|registers| K1BootResources::acquire(&mut memory, registers))
         .transpose()
         .during("acquiring SpacemiT K1 resources")?;
+    #[cfg(not(feature = "qemu-virt"))]
     let v861_wake = board
         .allwinner_v861
         .map(|registers| crate::riscv::allwinner_v861::initialize_boot_hart(registers, &mut memory))
         .transpose()
         .during("initializing V861 C907 resources")?;
 
+    #[cfg(not(feature = "qemu-virt"))]
     if let Some(soc) = board.allwinner_v821 {
         crate::riscv::allwinner_v821::initialize(
             soc,
@@ -87,18 +96,23 @@ fn try_init_board(mut platform_description: runtime::PlatformDescription) -> err
     )
     .during("preparing the next-stage platform description")?;
 
+    #[cfg(not(feature = "qemu-virt"))]
     let hart_wake = k1_resources
         .map(|resources| {
             Box::new(spacemit_k1::initialize_boot_hart(resources)) as Box<dyn HartWake>
         })
         .or_else(|| v861_wake.map(|wake| Box::new(wake) as Box<dyn HartWake>));
 
+    #[cfg(feature = "qemu-virt")]
+    publish_platform_services(board, supervisor_memory, devices, pmu, None);
+    #[cfg(not(feature = "qemu-virt"))]
     publish_platform_services(board, supervisor_memory, devices, pmu, hart_wake);
     Ok(next_stage_fdt_address)
 }
 
 /// Selects IMSIC only when every enabled hart can use its CSR interface and
 /// Sstc timer. Device construction performs no SBI feature-policy queries.
+#[cfg(not(feature = "qemu-virt"))]
 fn select_imsic(board: &BoardInfo) -> Option<&ImsicInfo> {
     use sbi::features::{self, Extension};
 
@@ -122,8 +136,9 @@ fn discover_board_and_pmu(
     platform: runtime::PlatformView<'_>,
 ) -> runtime::Result<(BoardInfo, Option<SbiPmu>)> {
     let board = discovery::discover_platform(&platform)?;
-    let pmu =
-        sbi::pmu::init(platform.root()).or_else(|| board.allwinner_v861.map(|_| SbiPmu::default()));
+    let pmu = sbi::pmu::init(platform.root());
+    #[cfg(not(feature = "qemu-virt"))]
+    let pmu = pmu.or_else(|| board.allwinner_v861.map(|_| SbiPmu::default()));
     Ok((board, pmu))
 }
 
@@ -139,13 +154,19 @@ fn publish_platform_services(
         ipi,
         console,
         sifive_test,
+        #[cfg(not(feature = "qemu-virt"))]
         spacemit_p1_pmic,
+        #[cfg(not(feature = "qemu-virt"))]
         syscon_poweroff,
+        #[cfg(not(feature = "qemu-virt"))]
         syscon_reboot,
+        #[cfg(not(feature = "qemu-virt"))]
         sunxi_wdt_v104,
+        #[cfg(not(feature = "qemu-virt"))]
         sunxi_wdt_v105,
     } = devices;
     // Hardware ownership is established independently of the SBI dispatcher.
+    #[cfg(not(feature = "qemu-virt"))]
     let external = if ipi.as_ref().is_some_and(|device| device.is_imsic()) {
         static IMSIC: Once<driver::ImsicInterrupt> = Once::new();
         let iid = board
@@ -158,6 +179,8 @@ fn publish_platform_services(
     } else {
         None
     };
+    #[cfg(feature = "qemu-virt")]
+    let external: Option<&dyn runtime::irq::ExternalInterrupt> = None;
     static HART_WAKE: Once<Box<dyn HartWake>> = Once::new();
     let hart_wake = hart_wake.map(|device| HART_WAKE.call_once(|| device).as_ref());
     runtime::hart::install_wakeup(hart_wake);
@@ -174,6 +197,9 @@ fn publish_platform_services(
     sbi::logger::Logger::init().expect("BUG: firmware logger initialized more than once");
     info!("Hello RustSBI!");
 
+    #[cfg(feature = "qemu-virt")]
+    let reset = SbiReset::new(sifive_test);
+    #[cfg(not(feature = "qemu-virt"))]
     let reset = SbiReset::new(
         sifive_test,
         spacemit_p1_pmic,
@@ -231,6 +257,7 @@ fn publish_sbi_dispatcher(
 
 /// Runs the SoC-specific per-hart setup for secondary harts.
 pub fn initialize_secondary_hart() {
+    #[cfg(not(feature = "qemu-virt"))]
     if let Some(platform) = state::board_info().spacemit_k1 {
         spacemit_k1::initialize_hart(platform);
     }

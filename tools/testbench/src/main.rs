@@ -34,9 +34,6 @@ struct Args {
     /// List the cases and exit.
     #[arg(long)]
     list: bool,
-    /// Firmware image to pass as `-bios` instead of QEMU's bundled OpenSBI, e.g. a RustSBI build.
-    #[arg(long, default_value = "default")]
-    firmware: String,
     /// Instead of running tests, boot the kernel with the console on this terminal
     /// (Ctrl-A X quits). Add `--program NAME` to start programs after it.
     #[arg(long)]
@@ -99,7 +96,7 @@ fn main() -> Result<()> {
             &logs.join("interactive.tar"),
         )?;
         let loader = builder.artifact(target, machine.loader_package, Profile::Release);
-        let firmware = resolve_firmware(None, &args.firmware, target).map_err(|why| anyhow::anyhow!(why))?;
+        let firmware = rustsbi_prototyper(target).map_err(|why| anyhow::anyhow!(why))?;
         let image = Image {
             machine,
             firmware: &firmware,
@@ -165,7 +162,7 @@ fn main() -> Result<()> {
         }
         for arch in case.arch.iter().filter(|a| args.arch.as_ref().is_none_or(|only| only == *a)) {
             let target = target::find(arch).with_context(|| format!("{}: unknown arch {arch:?}", case.name))?;
-            for (variant, outcome, seconds) in run_case(&builder, case, target, &args.firmware, &logs, &missing)? {
+            for (variant, outcome, seconds) in run_case(&builder, case, target, &logs, &missing)? {
                 failures += report(&format!("{} [{}{}]", case.name, target.name, variant), outcome, seconds);
             }
         }
@@ -209,20 +206,6 @@ fn rustsbi_prototyper(target: &Target) -> Result<String, String> {
         Ok(std::fs::canonicalize(&path).map(|p| p.to_string_lossy().into_owned()).unwrap_or(path))
     } else {
         Err(format!("RustSBI Prototyper not found ({path}); build it with scripts/build-bios.sh or set {env}"))
-    }
-}
-
-/// Resolve a case's firmware choice to a `-bios` value. rv64 defaults to QEMU's bundled
-/// OpenSBI; QEMU ships none for rv32, so rv32 always boots under RustSBI. A case may force
-/// "rustsbi". A binary that is absent fails the case (or, with --allow-skip, skips it).
-fn resolve_firmware(case_firmware: Option<&str>, cli_default: &str, target: &Target) -> Result<String, String> {
-    let rv64 = target.triple.starts_with("riscv64");
-    match case_firmware {
-        Some("rustsbi") => rustsbi_prototyper(target),
-        None | Some("opensbi") if rv64 => Ok(cli_default.to_string()),
-        // rv32: no bundled OpenSBI, so the default firmware is RustSBI.
-        None | Some("opensbi") => rustsbi_prototyper(target),
-        Some(other) => Err(format!("unknown firmware {other:?}")),
     }
 }
 
@@ -283,7 +266,6 @@ fn run_case(
     builder: &Builder,
     case: &Case,
     target: &'static Target,
-    firmware: &str,
     logs: &Path,
     missing: &dyn Fn(String) -> Outcome,
 ) -> Result<Vec<(String, Outcome, f32)>> {
@@ -307,7 +289,7 @@ fn run_case(
         Ok(machine) => machine,
         Err(why) => return Ok(vec![(String::new(), Outcome::Skip(why.to_string()), 0.0)]),
     };
-    let firmware = match resolve_firmware(boot.firmware.as_deref(), firmware, target) {
+    let firmware = match rustsbi_prototyper(target) {
         Ok(firmware) => firmware,
         Err(why) => return Ok(vec![(String::new(), missing(why), 0.0)]),
     };

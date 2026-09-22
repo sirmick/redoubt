@@ -106,6 +106,10 @@ pub struct Boot {
     /// line before it. Without this the bench watches the console for `GRACE` more, then stops.
     #[serde(default)]
     pub poweroff: bool,
+    /// QEMU status required when `poweroff` is true. Zero is a normal shutdown; RustSBI maps an
+    /// SBI `SystemFailure` shutdown to 255, which rejection tests must request explicitly.
+    #[serde(default)]
+    pub poweroff_status: i32,
     /// Regular expressions with one capture group. The case is booted twice, and what
     /// each captures must differ between the two boots (for randomness, ASLR, ...).
     #[serde(default)]
@@ -131,8 +135,6 @@ pub struct Boot {
     /// the loader must still refuse. The container and the archive are otherwise normal.
     #[serde(default)]
     pub sign_bare_archive: bool,
-    /// Firmware to boot under: "opensbi" (default) or "rustsbi".
-    pub firmware: Option<String>,
     /// Data entries added to the bundle after the programs: a trace, a manifest, a hostile image.
     #[serde(default)]
     pub file: Vec<BundleFile>,

@@ -6,7 +6,7 @@ reason recorded in HISTORY.md.
 
 ## Built today vs designed
 **Built:** a width-generic (rv32 and rv64) microkernel forked from Xous that boots on QEMU `virt`
-under OpenSBI or RustSBI; a loader that verifies an Ed25519-signed boot bundle and builds Sv32/Sv39
+under the vendored RustSBI firmware; a loader that verifies an Ed25519-signed boot bundle and builds Sv32/Sv39
 address spaces; W^X enforced and checked at boot; default-deny device grants; physical RAM never
 nameable by address; a two-hart SMP spike behind the `smp` feature; a QEMU test bench with attack
 tests. Milestone 1 so far (BUILD-PLAN.md): budgets and handle tables, endpoints and messages, and

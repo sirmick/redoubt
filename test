@@ -10,7 +10,7 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-arch=rv64
+arch=
 args=()
 while (($#)); do
     case "$1" in
@@ -21,8 +21,7 @@ while (($#)); do
     esac
 done
 
-if ((${#args[@]})); then
-    exec cargo run --quiet -p testbench -- --arch "$arch" "${args[@]}"
-else
-    exec cargo run --quiet -p testbench -- --arch "$arch"
-fi
+cmd=(cargo run --quiet -p testbench --)
+if [ -n "$arch" ]; then cmd+=(--arch "$arch"); fi
+cmd+=("${args[@]}")
+exec "${cmd[@]}"

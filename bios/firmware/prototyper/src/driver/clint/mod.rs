@@ -2,6 +2,7 @@
 
 mod kind;
 mod sifive;
+#[cfg(not(feature = "qemu-virt"))]
 mod thead;
 
 use runtime::memory::{DeviceRegisterRange, MemoryRegistry};
@@ -20,6 +21,7 @@ pub(super) fn bind(
 ) -> runtime::Result<(Box<dyn TimerBackend>, Box<dyn IpiBackend + Send + Sync>)> {
     match kind {
         ClintKind::SiFive => sifive::bind(registers, memory),
+        #[cfg(not(feature = "qemu-virt"))]
         ClintKind::THead => thead::bind(registers, memory),
     }
 }
