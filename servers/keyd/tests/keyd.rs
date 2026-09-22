@@ -5,7 +5,7 @@
 //!
 //! The property tests that do not need a kernel are in `src/server_tests.rs`.
 
-#[path = "../../rt/tests/common/mod.rs"]
+#[path = "../../../libs/rt/tests/common/mod.rs"]
 mod common;
 
 use common::fake;
