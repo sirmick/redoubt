@@ -2,8 +2,9 @@
 
 Owns: how BUILD-PLAN.md's work packages are executed: one orchestrating session (the
 `orchestrator` agent) that runs independent packages in parallel as sub-agents, each in its
-own git worktree, and reviews every package before merging it. The roles are project agents in
-`.pi/agents/`; the orchestrator launches them through the `subagent` tool.
+own git worktree, and reviews every package before merging it. Three of the roles are project
+agents in `.pi/agents/`; the rest are builtins (below). The orchestrator launches them through
+the `subagent` tool.
 
 ## Roles
 - **Orchestrator** (`orchestrator` agent, one session): owns the claims table below, starts packages whose needs
@@ -48,14 +49,21 @@ own git worktree, and reviews every package before merging it. The roles are pro
 
 ## Agents and workflows
 
-The roles above are project agents in `.pi/agents/`, driven by the `orchestrator`:
+The roles above are `.pi/agents/` project agents (`architect`, `implementer`, `orchestrator`)
+or builtins shipped by the extension; `orchestrator`'s `allowedAgents` names exactly the set it
+may spawn. The workflows are the runnable path — the orchestrator spawns `architect`,
+`implementer` and `reviewer` directly only when it does not use them.
 
-| Role | Agent |
-| --- | --- |
-| Orchestrator | `orchestrator` |
-| Architect | `architect` (protocol: `.pi/skills/architect-qa/SKILL.md`) |
-| Implementer | `implementer` |
-| Reviewers | the builtin `reviewer`, one child per angle |
+| Role | Agent | Source |
+| --- | --- | --- |
+| Orchestrator | `orchestrator` | `.pi/agents/orchestrator.md` |
+| Architect | `architect` (protocol: `.pi/skills/architect-qa/SKILL.md`) | `.pi/agents/architect.md` |
+| Implementer | `implementer` | `.pi/agents/implementer.md` |
+| Reviewers | `reviewer`, one child per angle (red team, simplifier, editor) | builtin |
+| Orientation | `scout` (source recon before starting a package) | builtin |
+| Implementation help | `worker` | builtin |
+| Decision consistency | `oracle` | builtin |
+| Lightweight tasks | `delegate` | builtin |
 
 Two workflow scripts drive a package: `.pi/workflows/run-package.js` (implementer, gated on
 its acceptance command, then the three reviewers) and `.pi/workflows/review-package.js`

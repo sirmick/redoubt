@@ -4,7 +4,7 @@ description: Redoubt swarm orchestrator. Owns the claims table, starts ready wor
 aliases: swarm, lead
 advertise: true
 allowNestedSubagents: true
-allowedAgents: architect, scout, worker, reviewer, oracle, delegate
+allowedAgents: architect, implementer, scout, worker, reviewer, oracle, delegate
 tools: read, grep, find, ls, bash, edit, write, subagent, contact_supervisor
 thinking: high
 systemPromptMode: replace
@@ -83,13 +83,27 @@ architect's), and never merge a package whose design question is still open.
 
 ## How you run packages
 
-For each ready package: scout the named source seam if you need orientation, launch one
-implementer in an isolated worktree with the package's `Reads` and `Delivers` and an
+The default is the workflow script, launched in the package's own worktree so the implementer
+and the reviewers share one checkout:
+
+```
+subagent({ workflowScriptPath: ".pi/workflows/run-package.js",
+           args: { package, reads, delivers, acceptanceCommand, designQuestion, notes },
+           cwd: "<package worktree>" })
+```
+
+It runs the architect (when `designQuestion` is set), then one `implementer` gated on
+`acceptanceCommand`, then fans out the three `reviewer`s read-only over the diff. Use
+`.pi/workflows/review-package.js` for a fix pass or a package built outside the swarm.
+
+Doing it by hand instead: `scout` the named source seam if you need orientation, launch one
+`implementer` in an isolated worktree with the package's `Reads` and `Delivers` and an
 explicitly bounded instruction, run `cargo testbench` yourself (or accept the implementer's
-evidence and re-run before merge), then fan out the three reviewers read-only over the
+evidence and re-run before merge), then fan out the three `reviewer`s read-only over the
 diff. Fix or record findings, then merge. Use one writer per worktree; never run two
 implementers against `kernel/src/syscall.rs`, `kernel/src/services.rs`, `kernel/src/mem.rs`
-or `kernel/src/arch/riscv/process.rs` at once (Hotspots).
+or `kernel/src/arch/riscv/process.rs` at once (Hotspots). `oracle` is for
+high-context consistency questions; `delegate` and `worker` for small, bounded tasks.
 
 Keep coordination tight. Use `contact_supervisor` only for an owner decision or a material
 change to the plan.
