@@ -18,6 +18,8 @@ members = [
   "libs/flatipc",
   "libs/flatipc-derive",
   "servers/keyd",
+  "servers/bootfsd",
+  "servers/consoled",
   "servers/blkd",
   "tests/programs",
   "tools/testbench",

@@ -43,8 +43,22 @@ pub struct Counts {
 
 /// The vectors, as (kind, bytes): `true` for an `ok` line, `false` for a `bad` one.
 pub fn lines() -> Vec<(bool, Vec<u8>)> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../wire/vectors/9p.txt");
-    let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    // The corpus lives in `libs/wire/vectors/`, and this module is included by servers whose
+    // manifest directories are at different depths, so walk up from this crate to the workspace
+    // root rather than assuming a fixed relative path.
+    let path = {
+        let mut dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        loop {
+            let candidate = dir.join("libs/wire/vectors/9p.txt");
+            if candidate.is_file() {
+                break candidate;
+            }
+            if !dir.pop() {
+                panic!("libs/wire/vectors/9p.txt not found above {}", env!("CARGO_MANIFEST_DIR"));
+            }
+        }
+    };
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let mut out = Vec::new();
     for line in text.lines() {
         let line = line.trim();
