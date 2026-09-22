@@ -23,6 +23,11 @@ const MESSAGE_HEADER: [&str; 4] = ["Opcode", "Message", "Fields", "Reply"];
 const ERROR_HEADER: [&str; 2] = ["Code", "Error"];
 const MESSAGE_MARKER: &str = "<!-- wire:";
 const ERROR_MARKER: &str = "<!-- wire-errors:";
+/// The opcode floor on a 9P endpoint: `ninep_common` reserves 1-15 there, so a protocol served
+/// on a 9P endpoint (a table marked `<!-- wire: NAME ninep -->`) starts at 16 (WIRE.md, Messages).
+const NINEP_FIRST_OPCODE: u32 = 16;
+/// The marker suffix that says a protocol is served on a 9P endpoint.
+const NINEP_SUFFIX: &str = " ninep";
 
 /// A field's type, as written in a table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,6 +137,9 @@ pub struct Protocol {
     pub name: String,
     /// The note the table came from, relative to the repository root.
     pub source: String,
+    /// The table is marked `<!-- wire: NAME ninep -->`: the protocol is served on a 9P endpoint,
+    /// so `ninep_common` reserves opcodes 1-15 and this protocol's start at 16 (WIRE.md).
+    pub ninep: bool,
     pub messages: Vec<MessageDef>,
     /// From the protocol's error table (every protocol has one).
     pub errors: Vec<ErrorDef>,
@@ -341,7 +349,16 @@ pub fn parse(source: &str, text: &str) -> Result<Tables, String> {
             i += 1;
             continue;
         };
-        let name = rest.strip_suffix("-->").map(str::trim).ok_or_else(|| at(i, "malformed wire marker".into()))?;
+        let rest = rest.strip_suffix("-->");
+        let (name, ninep) = match (rest, header == MESSAGE_HEADER) {
+            // A protocol served on a 9P endpoint is marked `<!-- wire: NAME ninep -->` (WIRE.md).
+            (Some(rest), true) => match rest.trim().strip_suffix(NINEP_SUFFIX) {
+                Some(name) => (name.trim(), true),
+                None => (rest.trim(), false),
+            },
+            (Some(rest), false) => (rest.trim(), false),
+            (None, _) => return Err(at(i, "malformed wire marker".into())),
+        };
         check_ident("protocol", name).map_err(|e| at(i, e))?;
         let marker = i;
         i += 1;
@@ -406,6 +423,15 @@ pub fn parse(source: &str, text: &str) -> Result<Tables, String> {
                 if messages.iter().any(|o| o.opcode == m.opcode) {
                     return Err(at(n, format!("opcode {} used twice", m.opcode)));
                 }
+                // `ninep_common` reserves opcodes 1-15 on a 9P endpoint, so a protocol served
+                // there starts at 16; an unmarked table starts at 1 (WIRE.md, Messages).
+                if ninep && m.opcode < NINEP_FIRST_OPCODE {
+                    return Err(at(n, format!(
+                        "message `{}`: opcode {} is below {NINEP_FIRST_OPCODE}, reserved for `ninep_common`, \
+                         because `{name}` is served on a 9P endpoint (WIRE.md)",
+                        m.name, m.opcode
+                    )));
+                }
                 // Every Rust type the message produces must be new: `a_reply` and the
                 // reply of `a` would both be `AReply`.
                 let new_types = vec![m.type_name(), m.reply_type()];
@@ -420,7 +446,8 @@ pub fn parse(source: &str, text: &str) -> Result<Tables, String> {
                 types.extend(new_types);
                 messages.push(m);
             }
-            let protocol = Protocol { name: name.to_string(), source: source.to_string(), messages, errors: Vec::new() };
+            let protocol =
+                Protocol { name: name.to_string(), source: source.to_string(), ninep, messages, errors: Vec::new() };
             tables.protocols.push(protocol);
         }
     }
@@ -934,6 +961,30 @@ mod tests {
         assert!(err("| 1 | `a` | - |\n").contains("3 cells, expected 4"));
         assert!(err("\n").contains("no rows"));
         assert!(bare("<!-- wire: demo -->\n| Opcode | Message | Fields |\n").contains("header"));
+    }
+
+    /// WIRE.md (Messages): a protocol served on a 9P endpoint is marked
+    /// `<!-- wire: NAME ninep -->`, and its opcodes start at 16, since `ninep_common` reserves
+    /// 1-15 there; an unmarked table is unaffected and may start at 1. NAMESPACES.md's `fsd`
+    /// typed-operations table and `ninep_common` are both marked, and still generate.
+    #[test]
+    fn ninep_marker_sets_the_opcode_floor() {
+        let marked = HEAD.replace("<!-- wire: demo -->", "<!-- wire: demo ninep -->");
+        // A marked table using an opcode below 16 is refused, naming the reserved range.
+        for low in [1, 15] {
+            let e = protocols(&format!("{marked}| {low} | `a` | - | - |\n{ERRORS}")).unwrap_err();
+            assert!(e.contains("below 16") && e.contains("ninep_common"), "{low}: {e}");
+        }
+        // 16 is the first allowed opcode, and the protocol is recorded as a 9P one.
+        let p = protocols(&format!("{marked}| 16 | `a` | - | - |\n{ERRORS}")).unwrap();
+        assert!(p[0].ninep);
+        assert_eq!(p[0].messages[0].opcode, 16);
+        // An unmarked table is unaffected: its opcodes may start at 1.
+        let p = protocols(&format!("{HEAD}| 1 | `a` | - | - |\n{ERRORS}")).unwrap();
+        assert!(!p[0].ninep);
+        assert_eq!(p[0].messages[0].opcode, 1);
+        // The marker is parsed only on message tables: an error table keeps its plain name.
+        assert!(protocols(&format!("{HEAD}| 1 | `a` | - | - |\n{ERRORS}")).is_ok());
     }
 
     #[test]
