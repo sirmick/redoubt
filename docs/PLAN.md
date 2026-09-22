@@ -103,8 +103,11 @@ back. Every property attack-tested.**
   shipped in, or a stated exception. Decide when planning milestone 3.
 
 ## After milestone 3: rv32
-A small goal: bring the full stack up on rv32 and add it back to the bench's booted dimensions.
-Until then rv32 is compiled, not booted (HISTORY.md). Width-specific code is allowed only in paging
+A small goal: bring the full stack up on rv32 and add it back to the required booted acceptance
+dimensions. Until then milestones 1-3 require rv32 compilation and rv64 boots (HISTORY.md).
+The bench and launch tooling can already select either width, and existing cases may boot rv32;
+that capability does not make full-stack rv32 support a milestone requirement or a verified claim.
+Width-specific code is allowed only in paging
 geometry, trap entry and saved context, and the ABI's register encoding; anywhere else a
 `target_pointer_width` `cfg` fails review. 64-bit values are `u64`, never `usize`.
 

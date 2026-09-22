@@ -25,8 +25,9 @@ use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use redoubt_rt::abi::{
-    BODY_SLOTS, Body, Call, Error, FOREVER, Handle, Handles, Labels, Message, MessageKind, MintSource,
-    PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles, Return,
+    BODY_SLOTS, Body, Call, CallOutcome, Error, FOREVER, Handle, Handles, Labels, LendDisposition, Message,
+    MessageKind, MintSource, PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles,
+    ReplyOutcome, Return,
 };
 
 /// What a handle names: an endpoint, or one of a device object's two forms.
@@ -420,7 +421,14 @@ impl redoubt_rt::HostKernel for Fake {
                 Ok(Return::Nothing)
             }
             Call::Call { endpoint, body_rec, lend, timeout } => {
-                self.message(pid, endpoint, body_rec, lend, timeout, true)
+                match self.message(pid, endpoint, body_rec, lend, timeout, true) {
+                    Ok(result) => Ok(result),
+                    Err(error) => Ok(Return::Call(CallOutcome {
+                        status: Err(error),
+                        lend: if lend.is_some() { LendDisposition::Returned } else { LendDisposition::None },
+                        reply_present: false,
+                    })),
+                }
             }
             Call::Send { endpoint, body_rec, transfer, timeout } => {
                 self.message(pid, endpoint, body_rec, transfer, timeout, false)
@@ -444,11 +452,13 @@ impl redoubt_rt::HostKernel for Fake {
                 s.open.remove(&msg_id.get());
                 s.log.push((pid, "reply", msg_id.get()));
                 // An abandoned call's reply is discarded (R3).
-                if !s.abandoned.remove(&msg_id.get()) {
+                let delivered = !s.abandoned.remove(&msg_id.get());
+                let installed = if delivered { (1 << handles.len()) - 1 } else { 0 };
+                if delivered {
                     s.replies.insert(msg_id.get(), (body.words, handles));
                 }
                 self.changed.notify_all();
-                Ok(Return::Nothing)
+                Ok(Return::Reply(ReplyOutcome { delivered, installed }))
             }
             Call::TimeNow => Ok(Return::Time(self.boot.elapsed().as_micros() as u64)),
             Call::Random => {
@@ -517,7 +527,11 @@ impl Fake {
                 if let Some((words, handles)) = s.replies.remove(&id.get()) {
                     let handles: Vec<Handle> = handles.into_iter().map(|e| install(s, pid, e)).collect();
                     write_body(body_rec, &Body { words, handles: Handles::from_slice(&handles).unwrap() });
-                    return Ok(Return::Nothing);
+                    return Ok(Return::Call(CallOutcome {
+                        status: Ok(()),
+                        lend: if pages.is_some() { LendDisposition::Returned } else { LendDisposition::None },
+                        reply_present: true,
+                    }));
                 }
             } else if s.taken.remove(&id.get()) {
                 return Ok(Return::Nothing);
@@ -541,7 +555,15 @@ impl Fake {
                     s.abandoned.insert(id.get());
                     s.notices.push_back((receiver, endpoint, id.get()));
                     self.changed.notify_all();
-                    return Err(Error::Timeout);
+                    if let Some(pages) = pages {
+                        let len = s.processes[pid].mappings.remove(&pages.addr).unwrap();
+                        s.processes[receiver].mappings.insert(pages.addr, len);
+                    }
+                    return Ok(Return::Call(CallOutcome {
+                        status: Err(Error::Timeout),
+                        lend: if pages.is_some() { LendDisposition::Consumed } else { LendDisposition::None },
+                        reply_present: false,
+                    }));
                 }
                 if !is_call {
                     return Err(Error::Timeout);

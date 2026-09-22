@@ -49,7 +49,8 @@ pub fn serve(startup: &Startup) -> u32 {
     loop {
         match endpoint.receive(FOREVER, 0) {
             Ok(Event::Call(request)) => {
-                // A failed reply means the caller is gone; there is nobody to tell.
+                // Shared finish completes a rejected reply with a handle-free refusal (or
+                // exits under R4b); serve rolls back provisional state before returning an error.
                 let _ = server.serve(request);
             }
             // Every message of this protocol is a `call` (WIRE.md, answer 98). A `send` is

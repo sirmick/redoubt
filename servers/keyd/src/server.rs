@@ -124,16 +124,14 @@ impl KeyServer {
         let mut kernel = Kernel(request.id());
         let outcome = answer_with(self, &caller, &words, &handles, request.lend(), &mut kernel);
         let sent = finish(request, &outcome);
-        // A reply that could not be sent (the caller died, or the kernel refused it) leaves a
-        // granted capability nobody can ever name: its id went nowhere, and `release` answers
-        // only the holder of an id. Undo it, so a client cannot fill its own bucket by dying
-        // mid-grant.
+        // grant requires slot 0's capability. Discard or failure to install that handle rolls
+        // back provisional state and its admission charge, even when reply itself succeeded.
         if let Some(badge) = self.granted.minted_here() {
-            if sent.is_err() {
+            if !sent.as_ref().is_ok_and(|outcome| outcome.accepted(1)) {
                 self.forget_badge(badge);
             }
         }
-        sent
+        sent.map(|_| ())
     }
 
     /// Frees the granted capability with `badge`, and every capability granted under it.

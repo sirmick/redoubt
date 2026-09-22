@@ -126,6 +126,7 @@ it. A package whose work landed inside another is recorded as `folded` and gets 
 | L1 | merged | wp-l1 | 25ab39296 |
 | T1 | merged | wp-t1 | 987bacbed |
 | T1b | merged | wp-t1b | 6cd067a39 |
+| T1c | review | wp-t1c | Checker repair and three-reviewed runtime reduction included in the owner-authorized primary remediation commit; nine checker tests pass. Primary full bench and every configured unsafe budget PASS, runtime9/9 with zero undocumented. No budget increases |
 | V1 | merged | wp-v1 | 05955bf86 |
 | K0 | merged | wp-k0 | f7b9fdd16 |
 | K0b | merged | wp-k0b | e30d43304 |
@@ -135,6 +136,7 @@ it. A package whose work landed inside another is recorded as `folded` and gets 
 | K4 | building | wp-k4 | kernel track |
 | K5 | ready | | needs K2; serialized behind K4 on the kernel Hotspots, not on dependencies |
 | K6 | waiting | | needs K1-K5, R1b |
+| IPC1 | review | wp-ipc1 | Reviewed ABI/kernel/runtime/server changes and R1 borrowed-alias fix included in the owner-authorized primary remediation commit. Three-review follow-up PASS; isolated and primary full benches99 executions PASS each, primary283 host tests PASS/3 ignored, affected crates compile both widths. Model/K5/multi-hart acceptance and native process-exit integration remain outstanding. Full IPC1 acceptance remains pending |
 | R1 | merged | wp-r1 | 8298608af (carried the answers 39-42, 50-53 part of R1b) |
 | R1b | merged | wp-r1b | 86117e7af |
 | R1c | merged | wp-r1c | cd65fa610; joined `Parked` to the 9P skeleton (recovery of `5d29d136e`, answers 156-158); reviewed R-R1c |
@@ -152,11 +154,19 @@ it. A package whose work landed inside another is recorded as `folded` and gets 
 | S1 | merged | wp-s1 | 14bcc6e9d |
 | S2 | waiting | | needs R3, B1, D2 |
 | S3 | waiting | | needs D3, S1, S2 |
-| C1 | waiting | | needs M1, K5, T1 |
+| C1 | waiting | | needs M1, K5, T1, IPC1 (answers 167-168 outcomes in traces) |
 | E1 | waiting | | needs everything (milestone) |
 
 States: `waiting` (needs not merged), `ready`, `building`, `review`, `merged (review due)` (merged on
 its acceptance gate, round not yet run), `merged`, `folded` (landed inside another package).
+
+**Local coordination check (2026-09-22):** the recorded M0/M1, K4 and D3 claims have no
+corresponding branch or worktree in this checkout. Their external state is unverified, not
+silently completed or cancelled. Under the owner's renewed remediation instruction, IPC1 is
+the sole local kernel writer, in its existing isolated worktree; it does not implement K4/K5.
+Any external kernel changes must be reconciled before integration. The architect is reconciling
+settled documentation findings; tooling/codec fixes will use `wp-doc-accuracy`. No commits or
+pushes are authorized in this pass. Working-tree integration is distinct from a merged package.
 
 ## Review debt
 
@@ -170,3 +180,107 @@ Rounds owed, newest first (SWARM.md rule 8). Run down before a new wave.
 | R-R1c | `b8e456eeb..eae54bf1f` | WP-R1c (`libs/rt`: join `Parked` to the skeleton) | **complete**: editor P0 fixed (`eae54bf1f`); red team OK, no issues; debt cleared |
 | R-R4b | `89e05e360` | WP-R4b (`bootfsd` + `consoled`) | **complete**: bootfsd red team (2 P2, `8647a4fd9`); consoled park path reviewed directly after 3 timeouts; debt cleared |
 | R-T1 | `80cc5634d..HEAD` | the terminal change (push rule, `consol`, `Redoubt.Console`) | **complete**: security (cross-channel leak, `e888d88f1`); simplifier (5 trims); editor (`size()` cache contradiction); debt cleared |
+
+## Cross-cutting review records
+
+**Commit authorization (2026-09-22).** The owner subsequently requested a commit of the
+reviewed primary remediation. The no-commit/uncommitted wording in the dated checkpoints below
+describes their state before that authorization. Committing the correctness slice does not
+close IPC1's remaining acceptance gates. No push was requested.
+
+**R-IPC1-Sol (2026-09-22): three-review PASS; implementation applied uncommitted.**
+The owner authorized Sol after the prior agent restriction. The same-process borrowed-alias
+regression failed before the fix on rv64 and rv32, then passed with explicit borrower protection
+and identity-checked return. Editor, defensive reviewer and simplifier approved the correction.
+The editor's missing release-error invariant check was fixed, with an exact post-abandon page
+charge assertion; no reachable ownership mismatch was demonstrated. Parent reran 229 isolated
+host tests (2 ignored) and the complete isolated bench (99 passing executions, 56 cases).
+The coherent source and the previously reviewed runtime9/9 reduction are now applied to primary;
+283 primary host/wire/checker tests pass, 3 ignored, and the final primary full bench passes
+99 executions. Affected crates compile on both widths. All three integration rechecks passed
+the small API/status edits. Model, K5 timer,
+simultaneous multi-hart completion races and native process-exit integration remain outstanding;
+the shared server's terminal fallback is host-tested only. No commit, push or package acceptance.
+The earlier records below are historical checkpoints, superseded by this integration state.
+
+**R-DOC-accuracy (2026-09-22): three-review PASS, applied uncommitted.** Scope: the
+documentation-review correctness findings, not its proposed verbosity reduction. Architect edits
+preserve accepted 114/160/162/167-168 and explicitly retain open 143/146/163/164-166. Tooling fixes
+correct prerequisite/CLI/debug/status/publication claims; Rust and Elixir codecs were regenerated.
+Editor/red-team findings fixed: the new server regression decodes the actual Disconnect opcode,
+and TENETS distinguishes optional rv32 boots from later required full-stack acceptance. Simplifier
+found no additional issue. Parent reran in the primary checkout: 53 wire/generator tests pass,
+1 ignored; actual-server regression 1 pass; publication-link unittest 1 pass; whitespace clean.
+Release source-debug command was verified against a kernel compilation unit in the isolated docs
+tree. Elixir is not installed, so generated Elixir execution is unverified. No live-site check,
+commit or push. This does not accept IPC1's kernel changes.
+
+**R-T1c-runtime (2026-09-22): three-review PASS, runtime integration pending.** A private mapped-byte
+view replaces three raw slice constructions with one, using safe reborrows and releasing the view
+before ownership-changing syscalls. Runtime unsafe genuinely falls 11 to 9, with unchanged limits;
+`message.rs` joins kernel-core coverage at zero additional unsafe. Parent reran 122 host/doc tests
+and the configured checker, all passing. Reviewers confirmed lifecycle/error-path consistency and
+no count gaming. Existing safe raw mapping/syscall escape routes remain a broader inherited
+soundness boundary; this round does not certify arbitrary combinations of raw and owning APIs.
+The checker repair alone is now applied to primary: its nine tests pass and its production gate
+honestly fails on primary's still-unmodified runtime11/9. The isolated runtime change is not delivered.
+
+**R-IPC1-kernel (2026-09-22): first round BLOCK, fix in progress.** Editor and simplifier
+passed the new completion/rollback changes; the defensive reviewer found an inherited dependency
+that prevents ownership acceptance: a same-process received-lend alias can pass PID ownership
+checks, be unmapped/freed, and leave a stale frame for restoration. The architect confirmed that
+R3/R4/I9 already require protection independently of PID equality; no new owner decision is needed.
+The new regression is drafted, but its pre-fix execution and the lifetime fix were interrupted by
+a platform restriction that repeated on retry. Parent reran the earlier checked
+outcome test on both widths successfully, then the whole bench: every case passed except
+`bench-bundle-file`, whose fixture source had the obsolete `redoubt/` prefix. That separate
+one-line fixture fix is applied and its focused boot passes. Green existing tests do not close
+the newly discovered lifetime defect. No kernel source was integrated into primary.
+
+**R-ASTRA (2026-09-22): initial architect triage; subsequent implementation below.**
+[ASTRA.md](../ASTRA.md) records the consistency and simplification reviews, the completed
+design-only adversarial review, and the earlier partial code-adversarial observations. This was a
+live-tree assessment initially based on `d9ed817ec`, with the design-only restart after
+`61fd197f9`; it is not acceptance of a package commit range. The owner's RustSBI work was excluded.
+The resident architect routed genuine decisions to **QUESTIONS.md 164-168**, initially all open:
+confinement mediation, authority closure, scheduling latency, caller IPC disposition and server
+reply disposition. C1/A1 share D4's design issues; C2/C3/C4/A3 are implementation follow-ups under
+existing contracts; A2 needs bounded validation. ASTRA.md holds the per-finding dispositions and
+proposed follow-ups. No implementation package was dispatched or marked done by this round, and
+no existing package review debt is cleared by it. The owner subsequently approved **167-168 as
+recommended**; the architect applies them to the IPC contract and records their answers.
+**164-166 remain open.** At this triage checkpoint WP-IPC1 was filed as ready, not dispatched, with separate start and
+completion gates in BUILD-PLAN.md. Approval and specification edits do not fix C1/C2/A1 or
+complete an implementation review; follow-up TCB/security changes require their own risk-bounded
+review rounds.
+
+**R-IPC1-design (2026-09-22): three-review round complete.** Scope: the application of approved
+answers 167-168 in KERNEL-SPEC.md, CAPABILITIES.md and CONTAINMENT.md, their Q&A/history links,
+and the WP-IPC1 plan/claims/report. This is an uncommitted documentation change, not a merged
+implementation range. **Consistency/editor PASS; design-only adversarial PASS; simplifier PASS.**
+Findings resolved and rechecked: R1 protects output mapping/lifecycle state throughout completion;
+S1 assigns initial output validation (C3) to IPC1; S2 makes C4's unsafe-coverage prerequisite
+explicit without adding repository-wide policy. ASTRA.md section 5 records the dispositions;
+HISTORY.md records the round. The generator check passed 16 tests. WP-IPC1 was ready, not
+dispatched at this design checkpoint; its implementation requires its own acceptance tests and three-review TCB round.
+
+**R-T1c (2026-09-22): checker-diff reviews complete; acceptance still red.** Scope: uncommitted
+`tools/testbench/src/budget.rs` and `tests/unsafe-budget.toml` in branch `wp-t1c`, based on
+`61fd197f9`. Consistency/editor, defensive failure-path and simplifier reviewers all PASS with
+no required edits. Parent reran the host tests (9 passed). The focused unsafe-budget case now
+correctly fails: runtime 11 documented uses versus its unchanged budget 9; all other configured
+components pass. This is pre-existing debt uncovered by real coverage, not permission to raise
+the budget. No merge or package acceptance is recorded. The same reviewed two-file repair is
+overlaid in the IPC1 worktree for honest measurement, not a separate IPC1 implementation claim.
+
+**R-IPC1-host (2026-09-22): partial host-slice review complete; IPC1 not accepted.** Scope:
+the staged ABI/runtime/server/client/test changes in `wp-ipc1` based on `61fd197f9`, not kernel or
+model code. **Editor, defensive adversarial reader and simplifier PASS after fixes.** E1/R1
+found a rejected reply losing its still-open request: the finish helper now attempts a handle-free
+fallback, preserving the original error for provisional rollback, and exits under R4b if fallback
+also fails. Stateful serving-path regressions cover open-call/lend cleanup. S1 replaced a copied
+validity predicate in ABI tests with explicit lifecycle rows; E2 corrected a stale server-loop
+comment. Parent reran 219 passing host/doc tests (2 ignored timing tests) and affected-crate checks
+on rv32/rv64. Production unsafe counts are unchanged; the corrected checker still fails runtime
+11 versus 9. No kernel/model/full-boot acceptance, commit, merge or prior review-debt clearance is
+implied. Kernel coordination and external prerequisites remain outstanding; see ASTRA.md section 6.

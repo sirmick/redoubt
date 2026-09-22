@@ -53,12 +53,13 @@ fn setup(conn: Handle, message: Message<'_>) -> Result<(), ErrorCode> {
         Message::Seal(_) => (17, true),
     };
     let words = message.encode(&mut buf).expect("the request encodes");
-    let lend = (!inline).then_some(&mut buf);
-    let reply = Endpoint::from_handle(conn).call(&words, &[], lend, FOREVER).expect("the call");
+    let lend = (!inline).then_some(buf);
+    let (reply, returned) =
+        Endpoint::from_handle(conn).call(&words, &[], lend, FOREVER).into_result().expect("the call");
     if reply.words == MALFORMED {
         return Err(ErrorCode::Malformed);
     }
-    let body: &[u8] = if inline { &[] } else { &buf };
+    let body: &[u8] = returned.as_deref().unwrap_or(&[]);
     match Reply::decode(opcode, &reply.words, body, 0) {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(code)) => Err(code),

@@ -51,7 +51,9 @@ fn serve(ep: Endpoint) -> (u32, u32) {
                 };
                 request.reply(&[0, woken, 0, 0], &[]).unwrap();
             }
-            Ok(Event::Call(request)) => request.reply(&[1, 0, 0, 0], &[]).unwrap(),
+            Ok(Event::Call(request)) => {
+                request.reply(&[1, 0, 0, 0], &[]).unwrap();
+            }
             Ok(Event::Abandoned(id)) => {
                 assert!(
                     parked.abandoned(&mut admission, id, &[0; 4]).is_some(),
@@ -80,11 +82,12 @@ fn parked_calls_are_served_abandoned_and_expired() {
 
     // A waits; B wakes it (retrying until A's call is parked).
     let waiter = f.run(a, move || {
-        Endpoint::from_handle(ha).call(&[WAIT, 0, 0, 0], &[], None, FOREVER).unwrap().words[1] as u32
+        Endpoint::from_handle(ha).call(&[WAIT, 0, 0, 0], &[], None, FOREVER).into_result().unwrap().0.words[1]
+            as u32
     });
     f.run(b, move || {
         let ep = Endpoint::from_handle(hb);
-        while ep.call(&[WAKE, 0, 0, 0], &[], None, FOREVER).unwrap().words[1] == 0 {
+        while ep.call(&[WAKE, 0, 0, 0], &[], None, FOREVER).into_result().unwrap().0.words[1] == 0 {
             handle::sleep(1000).unwrap();
         }
         0
@@ -102,12 +105,13 @@ fn parked_calls_are_served_abandoned_and_expired() {
     // C gives up on its parked call: the server is told and replies at once, freeing it.
     let gave_up = f.run(c, move || {
         let r = Endpoint::from_handle(hc).call(&[WAIT, 0, 0, 0], &[], None, 100_000);
-        u32::from(r == Err(Error::Timeout))
+        u32::from(r.status == Err(Error::Timeout))
     });
     assert_eq!(gave_up.join().unwrap(), 1);
     // D waits past the server's deadline: its call is answered with a timeout, under `serve`.
     let expired = f.run(d, move || {
-        Endpoint::from_handle(hd).call(&[WAIT, 0, 0, 0], &[], None, FOREVER).unwrap().words[0] as u32
+        Endpoint::from_handle(hd).call(&[WAIT, 0, 0, 0], &[], None, FOREVER).into_result().unwrap().0.words[0]
+            as u32
     });
     assert_eq!(expired.join().unwrap(), TIMED_OUT as u32);
     let log = f.log(server);
@@ -155,8 +159,12 @@ fn parking_is_admitted_per_bucket_and_share() {
     let threads: Vec<_> = (0..3)
         .map(|_| {
             f.run(client, move || {
-                Endpoint::from_handle(conn).call(&[WAIT, 0, 0, 0], &[], None, FOREVER).unwrap().words[0]
-                    as u32
+                Endpoint::from_handle(conn)
+                    .call(&[WAIT, 0, 0, 0], &[], None, FOREVER)
+                    .into_result()
+                    .unwrap()
+                    .0
+                    .words[0] as u32
             })
         })
         .collect();
@@ -207,7 +215,12 @@ fn an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end() {
     });
     let wait = |pid, conn| {
         f.run(pid, move || {
-            Endpoint::from_handle(conn).call(&[WAIT, 0, 0, 0], &[], None, FOREVER).unwrap().words[0] as u32
+            Endpoint::from_handle(conn)
+                .call(&[WAIT, 0, 0, 0], &[], None, FOREVER)
+                .into_result()
+                .unwrap()
+                .0
+                .words[0] as u32
         })
     };
     // The agent floods: half the bucket (4 of 8) parks, the rest is refused.
@@ -221,8 +234,12 @@ fn an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end() {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     let parked_before_end = f.run(sponsor, move || {
-        Endpoint::from_handle(sponsor_conn).call(&[END_LEASE, 0, 0, 0], &[], None, FOREVER).unwrap().words[1]
-            as u32
+        Endpoint::from_handle(sponsor_conn)
+            .call(&[END_LEASE, 0, 0, 0], &[], None, FOREVER)
+            .into_result()
+            .unwrap()
+            .0
+            .words[1] as u32
     });
     assert_eq!(parked_before_end.join().unwrap(), 6);
     let mut agent_statuses: Vec<u32> = flood.into_iter().map(|t| t.join().unwrap()).collect();

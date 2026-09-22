@@ -1,11 +1,29 @@
 # Kernel specification
 
-Designed, not built; frozen for milestone 1. Owns: the kernel's objects and their costs, system
+Target contract, frozen for milestone 1. Owns: the kernel's objects and their costs, system
 calls, message shape, errors and the order of checks, constants and invariants, stated precisely
-enough to implement from. The executable model (CONTAINMENT.md) implements exactly this: same names,
+enough to implement from. The executable model (CONTAINMENT.md) must implement exactly this: same names,
 arguments, errors and invariants; where the two differ, the model changes.
 Rationale lives elsewhere: handles and IPC in CAPABILITIES.md, labels in CONTAINMENT.md, budgets and
 scheduling in RESOURCES.md.
+
+**Current conformance.** Budgets/handles, IPC and device objects have implementations on the new
+syscall path; process/thread creation and exit, timer-driven timeouts/preemption and legacy removal
+remain work packages. This note is not a claim that the whole contract runs in the primary
+checkout. The answers **167-168 completion encoding, lend ownership, output rollback and
+delivery-aware server bookkeeping are present in this checkout**.
+This is not WP-IPC1 acceptance: executable-model conformance, K5 timer-dependent cases and
+simultaneous multi-hart completion-race acceptance remain outstanding. Native server startup
+and terminal `process_exit` cleanup also depend on the unimplemented process interface;
+shared-server failure handling is host-tested, not boot-integrated.
+SWARM.md's Claims table owns package state; STATUS.md summarizes integration evidence.
+
+There are also explicitly unresolved target differences: the current `map_device` ABI returns
+`addr, len`, while the target row below still awaits question **146**; BOOT.md describes the
+implemented `Devs`/`Ctrl` handoff while device-policy question **143** remains open. Neither current
+behavior is owner approval of its proposal. Questions **164-166** respectively qualify confined
+mediation, authority-closure wording under permitted delegation, and the claimed wakeup bound;
+their recommendations are not amendments to R1/R9/R12.
 
 ## Constants
 Initial values; changing one is a spec change (HISTORY.md).
@@ -187,6 +205,8 @@ then ends, and the lend stays mapped in the server, charged only there, until th
 the call; the reply is discarded (its handles are dropped). The kernel sets the open call's
 abandoned flag, and the holding thread gets an abandoned-call notice (Messages). An abandoned call
 stays open, and counts against `MAX_OPEN_CALLS`, until that reply.
+The caller's return reports the lend's disposition independently of its status; `Timeout` or
+`Dead` alone does not identify its ownership (IPC completion, below; answer 167).
 
 **R4. Delivery.** A message is delivered only if the receiving process's budget can pay for
 everything it brings: the handle-table pages for its handles, a call's open-call page, its lent or
@@ -200,7 +220,9 @@ A **reply** is never refused: its caller is blocked and has nowhere else to put 
 a reply carries that do not fit the caller — its budget cannot pay the table pages, or they would
 take it past `MAX_HANDLES` — are dropped, each 0 in its slot as a revoked handle is (ABI), the
 reply is delivered without them, and the caller's `call` returns `OutOfMemory` (questions 107 and
-116).
+116). This partial reply is a committed reply, not an absent one: its words and surviving handle
+slots remain available even though `call` returns an error. `reply` reports delivery and the mask
+of installed slots to the server (IPC completion; answers 167-168).
 
 **R4a. Open calls.** Taking a `call` opens it and charges its page to the receiving process's
 budget; `reply` closes it and frees the page and the receiver's charge for the lend. A process that
@@ -214,6 +236,56 @@ of their callers gets `Dead` and its lend back; the lend of an abandoned call (R
 still blocked on the endpoint keep waiting: the endpoint survives, and a restarted server receives
 them (INIT.md). A server that means to exit replies to every open call first; exiting with open
 calls is reported `faulted` (Messages).
+
+### IPC completion (answers 167-168)
+`call` returns three independent facts: status, lend disposition (`none`, `returned`, `consumed`),
+and reply disposition (`absent`, `present`). A `present` reply means the complete output record was
+committed, not merely that a server attempted a reply. Only then may the caller decode it. The
+status may still be `OutOfMemory` under R4. A `returned` lend remains owned by the caller;
+`consumed` means its mapping and charge have ended and it must not be accessed or unmapped again.
+These outcomes do not change R3's transfer on abandonment or R4b's return on server death.
+
+| Completion | Caller status | Lend, if supplied | Reply record | Server's successful `reply` result |
+| --- | --- | --- | --- | --- |
+| Rejected before delivery, including queued timeout/revocation | Existing error (`Timeout`/`Dead` for cancellation) | `returned` | `absent` | No call was taken |
+| Taken call times out or is revoked/its endpoint destroyed | `Timeout` or `Dead` | `consumed` | `absent` | Later `discarded`, mask 0 |
+| Server dies while caller still waits | `Dead` | `returned` | `absent` | No reply |
+| Normal reply | Success | `returned` | `present` | `delivered`, installed-slot mask |
+| R4 partial reply (some handles do not fit) | `OutOfMemory` | `returned` | `present` | `delivered`, installed-slot mask |
+| Caller output record cannot be committed | `InvalidArgument` | `returned` | `absent` | `discarded`, mask 0 |
+| Caller dies after receipt | No return to caller | Consumed as R3 | No caller record | Later `discarded`, mask 0 |
+
+With no lend, every returning row reports `none`. On any rejection before delivery, `returned`
+means no supplied memory was consumed by this attempt; it does not certify an invalid input range
+as mapped or owned. A decoding failure does not acquire, alter or validate that memory.
+
+**Output validity and rollback.** A `call`'s body record is both input and output: validate its
+readability and writability during decoding, before delivery effects, and recheck ownership and
+writability at completion. Restore a returning lend before writing output: the record may lie in
+that lend. If output cannot be committed, close every caller handle newly installed by this reply
+attempt and release its otherwise-unused table pages under R6; do not close the server's original
+handles or any pre-existing caller handles. Completion validation, output copying, handle
+installation or rollback, and outcome publication are one kernel completion, protected together
+against relevant handle-table operations, mapping changes (`unmap`, remap, `set_flags`) and
+lifecycle teardown or abandonment. A completion cannot validate one mapping and write through a
+replacement, nor both commit a reply and consume its lend by abandonment. Serialization or
+equivalent validated-frame pinning with completion arbitration must preserve these same outcomes;
+pinning alone does not decide which lifecycle transition wins. The caller gets `InvalidArgument`,
+`reply = absent`, and its lend back; that output error takes precedence over an attempted partial
+reply's `OutOfMemory`. The server successfully closes the call and receives `discarded`, mask 0.
+An absent record is unspecified and must never be decoded, even if some bytes were written. This
+does not undo server side effects, and committing a record does not prevent another caller thread
+from changing or unmapping it afterward. Safe wrappers own and protect their records and buffers.
+
+**Server disposition.** A successful `reply` always closes the open call and releases the server's
+open-call/lend charges. It reports `delivered` only when the caller's complete record commits;
+otherwise (abandonment or failed output commit) it reports `discarded`. The installed-handle mask
+uses the reply's positional slots: a bit is set only for a handle installed for that committed
+reply; missing/revoked slots have clear bits. It records installation at completion, not future
+revocation or an acknowledgement that caller application code used the reply. Discarded replies
+have mask 0. Invalid reply arguments remain errors and do not close the call or assert delivery;
+the server still owes a valid reply or the R4b exit handling. Provisional server resources follow
+CONTAINMENT.md's transaction rule. The ABI below carries both sides' outcomes outside user memory.
 
 **R5. Interrupts.** When an IRQ fires, the kernel masks the source and sets `fired`. `receive` on the
 IRQ handle unmasks the source when it begins, then returns when `fired` is set (clearing it). There
@@ -258,9 +330,15 @@ weights the boot manifest gives them (RESOURCES.md, INIT.md). Because a waking b
 the current minimum pass, a driver woken by an interrupt runs within about one `SLICE`. Within a
 budget, threads run round-robin. The timer is always armed (slice end or the next deadline).
 
+**Open qualification (166):** the stated one-slice promise comes from answer 103, but does not
+follow from `max(own pass, current minimum)` with unspecified ties or retained larger passes.
+It is unresolved, not an established guarantee or an implemented latency result; the owner has
+not accepted either weakening that promise or changing the scheduler to establish it.
+
 ## System calls
-`h` is a handle. Every call returns a result or one error from the enum below; no argument can make
-the kernel panic.
+`h` is a handle. Every call returns a status (success or one error from the enum below); its result
+is valid as specified. `call` also returns ownership/output disposition on errors, and its committed
+partial reply remains valid on `OutOfMemory`. No argument can make the kernel panic.
 
 | Call | Arguments -> result | Checks |
 | --- | --- | --- |
@@ -277,10 +355,10 @@ the kernel panic.
 | `process_start` | h(process), entry, sp, arg, handles | not started; at most `MAX_START_HANDLES` handles, copied into slots 1..n; `arg` reaches the first thread unchanged, like `thread_create`'s (the startup page's address, 0 = none: INIT.md) |
 | `endpoint_create` | -> h (badge 0) | pages charged |
 | `mint` | source, badge, optional h(budget) -> h | see below |
-| `call` | h, words, handles, lend, timeout -> reply | endpoint; R1; R2; lend rules; R4 |
+| `call` | h, words, handles, lend, timeout -> status, lend disposition, reply disposition; committed reply in body record | endpoint; R1; R2; lend rules; R4; IPC completion |
 | `send` | h, words, handles, transfer, timeout | endpoint; R1; R2; rendezvous; R4 |
 | `receive` | h or none, timeout, max_transfer -> message, interrupt, exit notice, abandoned-call notice | badge-0 endpoint, IRQ, or none (sleep); R4a |
-| `reply` | msg_id, words, handles | msg_id is an open call of the caller's thread; returns the lend (an abandoned call's is freed and its reply discarded) |
+| `reply` | msg_id, words, handles -> delivered/discarded, installed-handle mask | msg_id is an open call of the caller's thread; closes the call; returns a live caller's lend, frees an abandoned one; IPC completion |
 | `serve` | msg_id | msg_id is an open call of the caller's thread; it becomes the thread's current call |
 | `handle_close` | h | - |
 | `budget_create` | h(parent), pages, processes, weight, labels, account, deadline -> h | R6-R8; class inherited; labels below; depth < `MAX_DEPTH` |
@@ -308,9 +386,11 @@ weight (the children's weight limits; R7), so a holder can see the free weight i
 User mode may also read the `time` counter directly (`rdtime`).
 
 ## ABI
-This note owns the calls: their names, arguments, results and errors. The ABI crate `redoubt-sys`
-owns how they travel (which registers, which records, which numbers), documented in its crate docs,
-and must match this note. These rules of the encoding are part of the spec:
+This note owns the calls: their names, arguments, results, errors and the normative encoding rules
+below. The ABI crate `redoubt-sys` implements and documents their register/record layouts and
+numbers, and must match this note. In particular, the completion encoding for `call` and `reply`
+is specified here; it is not an independent choice by the crate. These encoding rules are part of
+the spec:
 - **One register layout on both widths.** A 64-bit argument or result (ids, badges, accounts, time,
   `random`'s value) always takes two registers, each holding a 32-bit half, low half first. Other
   register values are a 32-bit value or one address or length. `redoubt-sys` therefore has no width
@@ -332,6 +412,34 @@ and must match this note. These rules of the encoding are part of the spec:
   slots keep their positions (WIRE.md names handles by slot).
 - **Decoding refuses W+X flags and a `mint` badge of 0**; the kernel's mapping and minting code
   refuse them again (R11, I3), so neither rests on one check.
+
+### IPC return registers
+The following is the exact encoding of answers 167-168 on both rv32 and rv64. Arguments, call
+numbers, body-record layouts and existing error codes do not change. `a0` is 0 for success or the
+existing `Error` code. All values here fit in 32 bits; high bits and unused registers are zero.
+
+| System call | `a1` | `a2` | `a3..a7` |
+| --- | --- | --- | --- |
+| `call`, on success **and every error** | lend: 0 `none`, 1 `returned`, 2 `consumed` | reply: 0 `absent`, 1 `present` | 0 |
+| `reply`, on success | delivery: 0 `discarded`, 1 `delivered` | installed-handle mask, bits 0 through `MAX_MSG_HANDLES - 1` | 0 |
+| `reply`, on error | 0 | 0 | 0 |
+
+For a recognized `call` number, initialize the disposition before argument decoding: if the raw
+lend address/page-count pair is `(0, 0)`, report `none`; otherwise initialize `returned`. This
+retention outcome remains defined even if an earlier argument fails, and does not validate the
+pair. Only R3 abandonment after receipt changes it to `consumed`. Initialize the reply disposition
+to `absent`; change it to `present` only at successful record commit. Unknown call numbers retain
+the ordinary error return with all payload registers zero.
+
+`present` is valid only with status success or R4 `OutOfMemory`, never with a consumed lend.
+`consumed` implies `absent` and `Timeout` or `Dead`. A successful `call` has `present`. A successful
+`reply` with `discarded` has mask 0; with `delivered`, bits outside its supplied handle count are 0,
+and each set bit corresponds to a nonzero installed handle in the caller's committed record. The
+mask may be 0 even on delivery (no handles requested, or all missing). Result decoders check these
+combinations and reject unknown tags, excess bits or nonzero unused registers; `a0 != 0` on `call`
+must not discard `a1/a2` or assume the output record is absent. All other syscalls retain their
+existing return encoding. A wrapper must inspect disposition before interpreting the error or
+dropping a supplied buffer (CAPABILITIES.md, IPC).
 
 ## Errors and the order of checks
 Errors: `BadHandle`, `WrongObject`, `InvalidArgument`, `OutOfMemory` (page limit), `OutOfProcesses`,
@@ -357,7 +465,9 @@ position, as the rows below list them:
 3. **Permission**: `NotPermitted`, `ClassDenied`, `LabelDenied`.
 4. **Resources**: `OutOfMemory`, `OutOfProcesses`, `TooManyThreads`, `Busy`.
 5. **At delivery** (`call`, `send`, `receive`, after blocking or not): `Refused`, `Timeout`, `Dead`,
-   `OutOfMemory`.
+   `OutOfMemory`; also `InvalidArgument` for a `call` whose output record cannot be committed
+   (IPC completion). Decoding already rejected initially invalid output records; this late failure
+   covers memory that changed while the call waited.
 
 Per call, in the order checked. "Then" lists stages 2-5; "each h" is every handle in a list, in
 order. A call that allocates also fails with `OutOfMemory` when the caller's handle table must grow
@@ -379,8 +489,8 @@ and its budget cannot pay, and with `TooLarge` when the new handle would be past
 | `process_start` | h: `BadHandle`; `arg`: not checked; count over `MAX_START_HANDLES`: `TooLarge`; list: record, each h `BadHandle` | `BadHandle`, `WrongObject`, `BadHandle` (each h), `NotPermitted` (started), `OutOfMemory` (the child's budget: thread, then table) |
 | `endpoint_create` | - | `OutOfMemory` |
 | `mint` | source: tag `InvalidArgument`, message id 0 `InvalidArgument`, handle `BadHandle`; badge 0: `InvalidArgument`; budget h: `BadHandle` | source: a message id that is not an open call of the caller's thread (a `send`'s id included) `InvalidArgument`, its endpoint or stamp gone `Dead`; or a handle `BadHandle`, `WrongObject`; budget: `BadHandle`, `WrongObject`; `NotPermitted` (a handle source's badge not 0), `NotPermitted` (budget not the default stamp or below) |
-| `call` | h: `BadHandle`; lend: exactly one of address and page count 0 is `InvalidArgument`; body: record, count `TooLarge`, each h `BadHandle` | `BadHandle`, `WrongObject` (not an endpoint), `BadHandle` (each h), `TooLarge` (lend over `MAX_LEND_PAGES`), `InvalidArgument` (lend not page-aligned or not the caller's own writable RAM), `LabelDenied` (R1), `Busy` (R2); at delivery: `Refused` (R4), `Timeout`, `Dead`, `OutOfMemory` (the reply's handles do not fit the caller, by its pages or by `MAX_HANDLES`; the reply arrives without them, R4) |
-| `send` | as `call`, with the transfer for the lend | as `call` without the lend limit; at delivery: `Refused` (R4), `Timeout`, `Dead` |
+| `call` | h: `BadHandle`; lend: exactly one of address and page count 0 is `InvalidArgument`; body: record (read and written), count `TooLarge`, each h `BadHandle` | `BadHandle`, `WrongObject` (not an endpoint), `BadHandle` (each h), `TooLarge` (lend over `MAX_LEND_PAGES`), `InvalidArgument` (lend not page-aligned or not the caller's own writable RAM), `LabelDenied` (R1), `Busy` (R2); at delivery: `Refused` (R4), `Timeout`, `Dead`, `InvalidArgument` (reply output cannot commit; rollback newly installed reply handles, absent reply), `OutOfMemory` (reply handles do not fit; the committed reply arrives without them, R4); disposition accompanies every return |
+| `send` | as `call`, with the transfer for the lend and body input-only | as `call` without the lend limit; at delivery only: `Refused` (R4), `Timeout`, `Dead` |
 | `receive` | h (0 = none): `BadHandle`; record | `BadHandle`, `WrongObject` (not an endpoint or IRQ), `NotPermitted` (badge not 0); at delivery: `Timeout`, `Dead` (endpoint destroyed) |
 | `reply` | msg_id 0: `InvalidArgument`; body: record, count `TooLarge`, each h `BadHandle` | `InvalidArgument` (msg_id not an open call of the caller's thread, including a `send`'s id), `BadHandle` (each h) |
 | `serve` | msg_id 0: `InvalidArgument` | `InvalidArgument` (msg_id not an open call of the caller's thread) |

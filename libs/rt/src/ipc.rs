@@ -8,8 +8,9 @@ use core::num::NonZeroU64;
 use core::ops::{Deref, DerefMut};
 
 use redoubt_sys::{
-    BODY_SLOTS, Body, BodyOf, Call, Error, ExitNotice, Handle, Handles, Labels, MemFlags, MessageKind,
-    MintSource, PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles, Slot, WORDS,
+    BODY_SLOTS, Body, BodyOf, Call, Error, ExitNotice, Handle, Handles, Labels, LendDisposition, MemFlags,
+    MessageKind, MintSource, PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles,
+    ReplyOutcome, Return, Slot, WORDS,
 };
 
 use crate::handle::{Budget, Endpoint, handle, nothing};
@@ -33,7 +34,47 @@ pub struct Caller {
 /// or was transferred. Unmapped on drop.
 #[derive(Debug)]
 pub struct Buffer {
+    mapping: Mapping,
+}
+
+/// A unique view of writable RAM that the kernel has mapped into this process. Private:
+/// only freshly mapped, received, or explicitly returned pages may be adopted. This view
+/// does not unmap on drop: a received lend is released by `reply`, not by dropping a Request.
+/// The reference never escapes with its storage lifetime; users get ordinary reborrows.
+struct Mapping {
     pages: Pages,
+    bytes: &'static mut [u8],
+}
+
+impl core::fmt::Debug for Mapping {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // Do not inspect or print message contents as part of ownership diagnostics.
+        self.pages.fmt(f)
+    }
+}
+
+impl Mapping {
+    fn adopt(pages: Pages) -> Self {
+        let len = pages.npages.get().checked_mul(PAGE_SIZE).expect("mapping length overflow");
+        assert!(pages.addr != 0 && pages.addr.is_multiple_of(PAGE_SIZE), "invalid mapping address");
+        assert!(
+            len <= isize::MAX as usize && pages.addr.checked_add(len).is_some(),
+            "invalid mapping length"
+        );
+        // SAFETY: every caller adopts only RAM just mapped writable by map_anon, received
+        // exclusively in a transfer/lend (R3/R4), or returned by call/send/reply completion.
+        // The kernel guarantees initialized contiguous pages and exclusive access; the checks
+        // above also bound the slice. Safe reborrows cannot outlive this private view, whose
+        // reference is cleared before any syscall can unmap or transfer the pages.
+        let bytes = unsafe { core::slice::from_raw_parts_mut(pages.addr as *mut u8, len) };
+        Self { pages, bytes }
+    }
+
+    /// End the Rust view before entering a syscall that can remove the mapping.
+    fn release(&mut self) -> Pages {
+        self.bytes = &mut [];
+        self.pages
+    }
 }
 
 impl Buffer {
@@ -42,44 +83,36 @@ impl Buffer {
         let npages = core::num::NonZeroUsize::new(npages).ok_or(Error::InvalidArgument)?;
         let len = npages.get().checked_mul(PAGE_SIZE).ok_or(Error::TooLarge)?;
         let addr = crate::handle::map_anon(len, MemFlags::READ | MemFlags::WRITE)?;
-        Ok(Buffer { pages: Pages { addr, npages } })
+        Ok(Buffer::adopt(Pages { addr, npages }))
     }
 
-    pub fn npages(&self) -> usize { self.pages.npages.get() }
+    fn adopt(pages: Pages) -> Self { Self { mapping: Mapping::adopt(pages) } }
+
+    pub fn npages(&self) -> usize { self.mapping.pages.npages.get() }
 
     /// Gives up ownership without unmapping (the pages are about to be transferred).
-    fn into_pages(self) -> Pages {
-        let pages = self.pages;
+    fn into_pages(mut self) -> Pages {
+        let pages = self.mapping.release();
         core::mem::forget(self);
         pages
     }
 }
 
-/// The length of `pages` in bytes; 0 if it overflows, which a real mapping cannot.
-fn byte_len(pages: Pages) -> usize { pages.npages.get().checked_mul(PAGE_SIZE).unwrap_or(0) }
-
 impl Deref for Buffer {
     type Target = [u8];
 
-    fn deref(&self) -> &[u8] {
-        // SAFETY: `pages` came from `map_anon` (read-write) or from a transfer the kernel mapped
-        // into this process, and stays mapped until drop; a Buffer is the only owner, so the
-        // shared borrow of `self` rules out a concurrent mutable view.
-        unsafe { core::slice::from_raw_parts(self.pages.addr as *const u8, byte_len(self.pages)) }
-    }
+    fn deref(&self) -> &[u8] { self.mapping.bytes }
 }
 
 impl DerefMut for Buffer {
-    fn deref_mut(&mut self) -> &mut [u8] {
-        // SAFETY: as in `deref`; the unique borrow of `self` makes this the only view.
-        unsafe { core::slice::from_raw_parts_mut(self.pages.addr as *mut u8, byte_len(self.pages)) }
-    }
+    fn deref_mut(&mut self) -> &mut [u8] { self.mapping.bytes }
 }
 
 impl Drop for Buffer {
     fn drop(&mut self) {
         // A failure means the pages are already gone; there is nothing else to do.
-        let _ = crate::handle::unmap(self.pages.addr, byte_len(self.pages));
+        let pages = self.mapping.release();
+        let _ = crate::handle::unmap(pages.addr, pages.npages.get() * PAGE_SIZE);
     }
 }
 
@@ -94,12 +127,42 @@ fn body(words: &Words, handles: &[Handle]) -> Result<Body, Error> {
 fn words_of<H: Slot>(body: &BodyOf<H>) -> Words { body.words.map(|w| w as u64) }
 
 /// The reply to a `call`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Reply {
     pub words: Words,
     /// Handles the server sent, now in this process's table; `None` for one that could not be
-    /// taken (QUESTIONS.md 116, pending) or was revoked on the way.
+    /// taken (answer 116) or was revoked on the way. The recipient owns these handles.
     pub handles: ReceivedHandles,
+}
+
+/// Ownership survives errors: inspect all three fields, not just `status`.
+/// Dropping an unclaimed reply closes its handles, including a partial OutOfMemory reply.
+#[derive(Debug)]
+#[must_use = "inspect status, returned buffer and any committed reply"]
+pub struct CallOutcome {
+    pub status: Result<(), Error>,
+    pub buffer: Option<Buffer>,
+    pub reply: Option<Reply>,
+}
+
+impl CallOutcome {
+    /// Convenience for clients that discard partial replies on error. All such handles are
+    /// closed; a returned buffer is dropped on error. Successful ownership moves to the caller.
+    pub fn into_result(mut self) -> Result<(Reply, Option<Buffer>), Error> {
+        self.status?;
+        let reply = self.reply.take().expect("successful call without committed reply");
+        Ok((reply, self.buffer.take()))
+    }
+}
+
+impl Drop for CallOutcome {
+    fn drop(&mut self) {
+        if let Some(reply) = self.reply.take() {
+            for h in reply.handles.as_slice().iter().flatten() {
+                let _ = crate::handle::close(*h);
+            }
+        }
+    }
 }
 
 impl Endpoint {
@@ -114,22 +177,29 @@ impl Endpoint {
         mint(MintSource::Handle(self.handle()), badge, budget)
     }
 
-    /// Calls the endpoint and waits for the reply, lending `lend` for the duration.
-    pub fn call(
-        &self,
-        words: &Words,
-        handles: &[Handle],
-        lend: Option<&mut Buffer>,
-        timeout: u64,
-    ) -> Result<Reply, Error> {
-        let mut rec = Record::<BODY_SLOTS>(body(words, handles)?.encode());
-        // The unique borrow of the buffer lasts the whole call: the kernel unmaps it from us
-        // until the reply, and nothing here can touch it meanwhile.
-        let lend = lend.map(|buffer| buffer.pages);
-        let call = Call::Call { endpoint: self.handle(), body_rec: rec.addr_mut(), lend, timeout };
-        nothing(syscall(&call))?;
-        let reply = ReceivedBody::decode(&rec.0)?;
-        Ok(Reply { words: words_of(&reply), handles: reply.handles })
+    /// Calls the endpoint, taking ownership of `lend`. Abandonment after receipt consumes it;
+    /// every other completion returns it in the outcome, independently of status.
+    pub fn call(&self, words: &Words, handles: &[Handle], lend: Option<Buffer>, timeout: u64) -> CallOutcome {
+        let mut rec = match body(words, handles) {
+            Ok(body) => Record::<BODY_SLOTS>(body.encode()),
+            Err(e) => return CallOutcome { status: Err(e), buffer: lend, reply: None },
+        };
+        // Disarm before entering the kernel, so malformed results cannot run a stale destructor.
+        let pages = lend.map(Buffer::into_pages);
+        let call = Call::Call { endpoint: self.handle(), body_rec: rec.addr_mut(), lend: pages, timeout };
+        let Ok(Return::Call(outcome)) = syscall(&call) else {
+            panic!("invalid IPC call outcome: buffer ownership unknown");
+        };
+        assert_eq!(outcome.lend == LendDisposition::None, pages.is_none(), "invalid lend outcome");
+        let buffer = match outcome.lend {
+            LendDisposition::Returned => pages.map(Buffer::adopt),
+            LendDisposition::None | LendDisposition::Consumed => None,
+        };
+        let reply = outcome.reply_present.then(|| {
+            let reply = ReceivedBody::decode(&rec.0).expect("invalid committed IPC record");
+            Reply { words: words_of(&reply), handles: reply.handles }
+        });
+        CallOutcome { status: outcome.status, buffer, reply }
     }
 
     /// Sends one-way, transferring `transfer` for good if the receiver takes it. On failure
@@ -148,7 +218,7 @@ impl Endpoint {
         let pages = transfer.map(Buffer::into_pages);
         let call = Call::Send { endpoint: self.handle(), body_rec: rec.addr(), transfer: pages, timeout };
         // A failed send moved nothing (R4), so the pages are ours again.
-        nothing(syscall(&call)).map_err(|e| (e, pages.map(|pages| Buffer { pages })))
+        nothing(syscall(&call)).map_err(|e| (e, pages.map(Buffer::adopt)))
     }
 
     /// Waits for a message on this endpoint (the receive right). Accepts a transfer of at most
@@ -195,10 +265,11 @@ pub(crate) fn receive_raw(from: Option<Handle>, timeout: u64, max_transfer: usiz
             let (words, handles) = (words_of(&m.body), m.body.handles);
             match m.kind {
                 MessageKind::Call { lend } => {
+                    let lend = lend.map(Mapping::adopt);
                     Event::Call(Request { id: m.msg_id, caller, words, handles, lend })
                 }
                 MessageKind::Send { transfer } => {
-                    let transfer = transfer.map(|pages| Buffer { pages });
+                    let transfer = transfer.map(Buffer::adopt);
                     Event::Send(Delivery { caller, words, handles, transfer })
                 }
             }
@@ -221,7 +292,7 @@ pub struct Request {
     /// call was queued (R10), which keeps its slot. A protocol that needs it treats the request
     /// as `Malformed` (WIRE.md: a missing handle).
     pub handles: ReceivedHandles,
-    lend: Option<Pages>,
+    lend: Option<Mapping>,
 }
 
 impl Request {
@@ -230,11 +301,8 @@ impl Request {
     /// The caller's lent buffer (empty if none): the request's bytes, and where the reply's go.
     /// The caller cannot see it change until the reply; it is hostile input all the same.
     pub fn lend(&mut self) -> &mut [u8] {
-        match self.lend {
-            // SAFETY: the kernel mapped the lend writable into this process when it delivered
-            // the call, and unmaps it only at `reply` (R3), which consumes `self`; so the pages
-            // stay mapped for this borrow, and the unique borrow of `self` makes it the only view.
-            Some(pages) => unsafe { core::slice::from_raw_parts_mut(pages.addr as *mut u8, byte_len(pages)) },
+        match self.lend.as_mut() {
+            Some(mapping) => mapping.bytes,
             None => &mut [],
         }
     }
@@ -264,14 +332,20 @@ impl Request {
     // The error carries the request back by value, which is its purpose; it is not boxed
     // because boxing allocates, and a server short of memory must still be able to answer.
     #[allow(clippy::result_large_err)]
-    pub fn reply(self, words: &Words, handles: &[Handle]) -> Result<(), (Error, Request)> {
+    pub fn reply(mut self, words: &Words, handles: &[Handle]) -> Result<ReplyOutcome, (Error, Request)> {
         let rec = match body(words, handles) {
             Ok(body) => Record::<BODY_SLOTS>(body.encode()),
             Err(e) => return Err((e, self)),
         };
-        match nothing(syscall(&Call::Reply { msg_id: self.id, body_rec: rec.addr() })) {
-            Ok(()) => Ok(()),
-            Err(e) => Err((e, self)),
+        let lend = self.lend.take().map(|mut mapping| mapping.release());
+        match syscall(&Call::Reply { msg_id: self.id, body_rec: rec.addr() }) {
+            Ok(Return::Reply(outcome)) => Ok(outcome.validate(handles.len()).expect("invalid reply mask")),
+            Ok(_) => panic!("invalid IPC reply outcome"),
+            Err(e) => {
+                // Rejected replies leave the open call and its lend in the server.
+                self.lend = lend.map(Mapping::adopt);
+                Err((e, self))
+            }
         }
     }
 }

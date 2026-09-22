@@ -48,7 +48,7 @@ impl From<redoubt_wire::Error> for ClientError {
 /// One 9P connection.
 pub struct Client {
     endpoint: Endpoint,
-    buf: Buffer,
+    buf: Option<Buffer>,
     tag: u16,
     /// Relative µs each request may take; `FOREVER` by default.
     pub timeout: u64,
@@ -58,14 +58,29 @@ impl Client {
     /// A client on `endpoint` with a lend of `npages` pages (at most `MAX_LEND_PAGES`, the msize).
     pub fn new(endpoint: Endpoint, npages: usize) -> Result<Client, ClientError> {
         let buf = Buffer::new(npages)?;
-        Ok(Client { endpoint, buf, tag: 0, timeout: redoubt_sys::FOREVER })
+        Ok(Client { endpoint, buf: Some(buf), tag: 0, timeout: redoubt_sys::FOREVER })
     }
 
     /// Gives the endpoint back.
     pub fn into_endpoint(self) -> Endpoint { self.endpoint }
 
     /// The most data one read or write carries with this client's buffer.
-    pub fn iounit(&self) -> usize { self.buf.len().min(redoubt_wire::MSIZE).saturating_sub(IOHDRSZ) }
+    pub fn iounit(&self) -> usize {
+        self.buf.as_ref().map_or(0, |buf| buf.len().min(redoubt_wire::MSIZE).saturating_sub(IOHDRSZ))
+    }
+
+    fn buffer(&mut self) -> Result<&mut Buffer, ClientError> {
+        self.buf.as_mut().ok_or(ClientError::Sys(Error::Dead))
+    }
+
+    fn call(&mut self, words: &crate::ipc::Words) -> Result<crate::ipc::Reply, ClientError> {
+        // Restore retained ownership even on error, before translating status. Once consumed,
+        // the client has no buffer and refuses later buffer operations (it never reuses a VA).
+        self.buffer()?;
+        let mut outcome = self.endpoint.call(words, &[], self.buf.take(), self.timeout);
+        self.buf = outcome.buffer.take();
+        Ok(outcome.into_result()?.0)
+    }
 
     /// Sends `body` and returns the reply's body, which must be `body`'s R-message.
     fn rpc(&mut self, body: Body<'_>) -> Result<Body<'_>, ClientError> {
@@ -73,14 +88,14 @@ impl Client {
         self.tag = self.tag.wrapping_add(1) % NOTAG;
         let tag = if matches!(body, Body::Tversion { .. }) { NOTAG } else { self.tag };
         let want = body.kind() + 1;
-        Message { tag, body }.encode(&mut self.buf)?;
-        let reply = self.endpoint.call(&WORDS_9P, &[], Some(&mut self.buf), self.timeout)?;
+        Message { tag, body }.encode(self.buffer()?)?;
+        let reply = self.call(&WORDS_9P)?;
         // No 9P reply carries handles: close any a hostile server sent, before anything else.
         close_all(reply.handles.as_slice());
         if reply.words != WORDS_9P || !reply.handles.as_slice().is_empty() {
             return Err(ClientError::Unexpected);
         }
-        let reply = Message::decode(&self.buf)?;
+        let reply = Message::decode(self.buffer()?)?;
         if reply.tag != tag {
             return Err(ClientError::Unexpected);
         }
@@ -161,13 +176,16 @@ impl Client {
     /// which quota was refused are the server's business, not the caller's.
     pub fn new_connection(&mut self, root: &str, quota: u64) -> Result<(Endpoint, u64), ClientError> {
         let request = ninep_common::Message::NewConnection(ninep_common::NewConnection { root, quota });
-        let words = request.encode(&mut self.buf)?;
-        let reply = self.endpoint.call(&words, &[], Some(&mut self.buf), self.timeout)?;
+        let words = request.encode(self.buffer()?)?;
+        let reply = self.call(&words)?;
         let handles = reply.handles.as_slice();
-        match ninep_common::Reply::decode(2, &reply.words, &self.buf, handles.len()) {
+        match ninep_common::Reply::decode(2, &reply.words, self.buffer()?, handles.len()) {
             Ok(Ok(ninep_common::Reply::NewConnection(r))) => match handles {
                 [Some(conn)] => Ok((Endpoint::from_handle(*conn), r.id)),
-                _ => Err(ClientError::Unexpected),
+                _ => {
+                    close_all(handles);
+                    Err(ClientError::Unexpected)
+                }
             },
             // An error reply carries no handles, and a malformed one may carry any: close them.
             result => {
@@ -187,7 +205,7 @@ impl Client {
     /// ids.
     pub fn disconnect(&mut self, id: u64) -> Result<(), ClientError> {
         let words = ninep_common::Message::Disconnect(ninep_common::Disconnect { id }).encode(&mut [])?;
-        let reply = self.endpoint.call(&words, &[], None, self.timeout)?;
+        let (reply, _) = self.endpoint.call(&words, &[], None, self.timeout).into_result()?;
         close_all(reply.handles.as_slice());
         match ninep_common::Reply::decode(3, &reply.words, &[], reply.handles.as_slice().len()) {
             Ok(Ok(_)) => Ok(()),

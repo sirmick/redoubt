@@ -1,7 +1,7 @@
 # OS API (draft)
 
 A unified facade that exposes kernel calls and base-server protocols through one
-Rust API layer, with thin pure-Elixir bindings above it. `USRERLAND.md` sketches
+Rust API layer, with thin pure-Elixir bindings above it. `USERLAND.md` sketches
 the Elixir surface; this note owns the Rust side.
 
 Status: **draft** — not frozen. It adds no kernel objects or wire formats, so it
@@ -125,7 +125,7 @@ end
 | Out of scope | Where it lives |
 | --- | --- |
 | Async / futures | A future sibling crate can wrap the blocking API |
-| `std` backend | Not planned; Redoubt has no POSIX ambient authority |
+| `std` backend | Future userland work in PLAN.md, outside this capability-explicit `no_std` facade; no libc or POSIX compatibility commitment |
 | Per-server generated bindings | `redoubt-wire` owns codegen; `redoubt-os` is hand-written |
 | Direct kernel syscall crate | `redoubt-sys` already covers that |
 | Startup block parsing, heap, panics | `redoubt-rt` |

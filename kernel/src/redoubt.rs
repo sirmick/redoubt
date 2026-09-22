@@ -17,11 +17,11 @@
 //! `system_reset`. Every other call (the `process_*` and `thread_*` family) decodes, then gets
 //! `InvalidArgument` until its package builds it (WP-K4).
 
-use redoubt_sys::{
-    BUDGET_SPEC_SLOTS, BudgetSpec, Call, Error, Number, REGS, Return, USAGE_SLOTS,
-    encode_result,
-};
 use redoubt_abi::{PID, TID};
+use redoubt_sys::{
+    BUDGET_SPEC_SLOTS, BudgetSpec, Call, CallOutcome, Error, LendDisposition, Number, REGS, Return,
+    USAGE_SLOTS, encode_result,
+};
 
 use crate::kframe;
 use crate::mem::MemoryManager;
@@ -50,8 +50,11 @@ pub fn handle(pid: PID, tid: TID, in_irq: bool, regs: &[u64; REGS]) -> Outcome {
         SystemServices::with_mut(|ss| MemoryManager::with_mut(|mm| crate::message::expire(ss, mm)));
     }
 
-    let result =
-        if in_irq { Err(Error::NotPermitted) } else { Call::decode(regs).and_then(|c| dispatch(pid, tid, c)) };
+    let result = if in_irq {
+        Err(Error::NotPermitted)
+    } else {
+        Call::decode(regs).and_then(|c| dispatch(pid, tid, c))
+    };
     // Every error a call returns is in its row of the spec's error table (`Number::can_return`).
     // The interim refusal of legacy callbacks is outside the table, and an unknown number has no
     // row (it is `InvalidArgument`).
@@ -61,7 +64,24 @@ pub fn handle(pid: PID, tid: TID, in_irq: bool, regs: &[u64; REGS]) -> Outcome {
     match result {
         Ok(None) => Outcome::Resume,
         Ok(Some(value)) => Outcome::Return(encode_result(&Ok(value))),
-        Err(error) => Outcome::Return(encode_result(&Err(error))),
+        Err(error) => {
+            // Recognized calls retain their raw lend even if an earlier argument did not
+            // decode. No memory has been consumed on this path (answers 167-168).
+            let result = if Number::from_raw(regs[0]) == Some(Number::Call) {
+                Ok(Return::Call(CallOutcome {
+                    status: Err(error),
+                    lend: if regs[3] == 0 && regs[4] == 0 {
+                        LendDisposition::None
+                    } else {
+                        LendDisposition::Returned
+                    },
+                    reply_present: false,
+                }))
+            } else {
+                Err(error)
+            };
+            Outcome::Return(encode_result(&result))
+        }
     }
 }
 
@@ -96,16 +116,29 @@ fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
             crate::message::send(ss, mm, pid, tid, MsgKind::Call, endpoint.index(), body_rec, lend, timeout)
         }),
         Call::Send { endpoint, body_rec, transfer, timeout } => with_both(|ss, mm| {
-            crate::message::send(ss, mm, pid, tid, MsgKind::Send, endpoint.index(), body_rec, transfer, timeout)
+            crate::message::send(
+                ss,
+                mm,
+                pid,
+                tid,
+                MsgKind::Send,
+                endpoint.index(),
+                body_rec,
+                transfer,
+                timeout,
+            )
         }),
         Call::Receive { from, timeout, max_transfer, received_rec } => with_both(|ss, mm| {
             let from = from.map(|h| h.index());
             crate::message::receive(ss, mm, pid, tid, from, timeout, max_transfer, received_rec)
         }),
         Call::Reply { msg_id, body_rec } => with_both(|ss, mm| {
-            crate::message::reply(ss, mm, pid, tid, msg_id.get(), body_rec).map(done)
+            crate::message::reply(ss, mm, pid, tid, msg_id.get(), body_rec)
+                .map(|outcome| Some(Return::Reply(outcome)))
         }),
-        Call::Serve { msg_id } => MemoryManager::with_mut(|mm| crate::message::serve(mm, pid, tid, msg_id.get())).map(done),
+        Call::Serve { msg_id } => {
+            MemoryManager::with_mut(|mm| crate::message::serve(mm, pid, tid, msg_id.get())).map(done)
+        }
         Call::MapAnon { len, flags } => {
             MemoryManager::with_mut(|mm| mm.map_anon(pid, len, flags)).map(|at| Some(Return::Addr(at)))
         }
@@ -201,16 +234,43 @@ fn write_record_to<const N: usize>(addr: usize, frames: &[usize; N], slots: &[u6
     }
 }
 
-/// Copy out an `N`-slot output record: `receive`'s and the reply `call` writes back. The
-/// receiving process's address space must be the active one.
-pub fn write_record<const N: usize>(addr: usize, slots: &[u64; N]) -> Result<(), Error> {
-    let frames = record_frames::<N>(addr, true)?;
-    write_record_to(addr, &frames, slots);
-    Ok(())
+/// IPC records must be the current process's own RAM, never a device mapping or somebody
+/// else's lend. The caller holds the memory-manager guard throughout validation and copying,
+/// excluding unmap/remap, permission changes and teardown of these frames.
+fn ipc_frames<const N: usize>(mm: &MemoryManager, addr: usize, write: bool) -> Result<[usize; N], Error> {
+    let frames = record_frames::<N>(addr, write)?;
+    let pid = crate::arch::process::current_pid();
+    for (i, frame) in frames.iter().enumerate() {
+        if !mm.is_main_memory(*frame as *mut u8) {
+            return Err(Error::InvalidArgument);
+        }
+        mm.check_owned_range(pid, addr + i * 8, 8).map_err(|_| Error::InvalidArgument)?;
+    }
+    Ok(frames)
 }
 
-/// Check an `N`-slot output record without writing it, so that `receive` refuses a record it
-/// could not fill before it blocks on one.
-pub fn check_record<const N: usize>(addr: usize) -> Result<(), Error> {
-    record_frames::<N>(addr, true).map(|_| ())
+pub fn read_ipc_record<const N: usize>(
+    mm: &MemoryManager,
+    addr: usize,
+    output: bool,
+) -> Result<[u64; N], Error> {
+    let frames = ipc_frames::<N>(mm, addr, false)?;
+    if output {
+        ipc_frames::<N>(mm, addr, true)?;
+    }
+    Ok(core::array::from_fn(|i| kframe::read(frames[i], (addr + i * 8) % redoubt_abi::arch::PAGE_SIZE)))
+}
+
+pub fn check_ipc_record<const N: usize>(mm: &MemoryManager, addr: usize) -> Result<(), Error> {
+    ipc_frames::<N>(mm, addr, true).map(|_| ())
+}
+
+pub fn write_ipc_record<const N: usize>(
+    mm: &MemoryManager,
+    addr: usize,
+    slots: &[u64; N],
+) -> Result<(), Error> {
+    let frames = ipc_frames::<N>(mm, addr, true)?;
+    write_record_to(addr, &frames, slots);
+    Ok(())
 }

@@ -119,7 +119,7 @@ fn serve_or_park(
 ) -> Result<(), Error> {
     // `consoled` serves no typed protocol of its own: only 9P and `ninep_common`.
     let held = server.serve_parking(request, |_, request| {
-        request.reply(&redoubt_rt::server::MALFORMED, &[]).map_err(|(e, _)| e)
+        request.reply(&redoubt_rt::server::MALFORMED, &[]).map(|_| ()).map_err(|(e, _)| e)
     })?;
     let Some(request) = held else { return Ok(()) };
     let share = server.share_of(&request.caller);

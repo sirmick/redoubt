@@ -327,11 +327,12 @@ impl MemoryMapping {
         }
     }
 
-    /// Call `f` with the physical frame of every page this address space has lent out
-    /// (a leaf with the shared bit set).
+    /// Call `f` with the physical frame of every page this address space has lent out.
+    /// An outgoing loan is `S` without `VALID`; `VALID | S` is its protected borrower
+    /// alias and must not make teardown reparent somebody else's frame.
     pub fn for_each_lent_frame(&self, mut f: impl FnMut(usize)) {
         self.for_each_user_leaf(|_virt, pte| {
-            if pte.has(MMUFlags::S) {
+            if pte.has(MMUFlags::S) && !pte.is_valid() {
                 f(pte.phys());
             }
         });
@@ -467,7 +468,7 @@ pub fn move_page_inner(
 ) -> Result<(), redoubt_abi::Error> {
     let src = walk(root_of(src_space.satp), src_addr as usize, None)?;
     let previous = src.get();
-    if !previous.is_valid() {
+    if !previous.is_valid() || previous.has(MMUFlags::S) {
         return Err(redoubt_abi::Error::BadAddress);
     }
     // Map in the destination first: if that fails, nothing has changed.
@@ -513,7 +514,7 @@ pub fn lend_page_inner(
     }
 
     // Map in the destination first: if that fails, nothing has changed.
-    map_page_in(root_of(dest_space.satp), mm, dest_pid, phys, dest_addr as usize, new_flags)?;
+    map_page_in(root_of(dest_space.satp), mm, dest_pid, phys, dest_addr as usize, new_flags | MMUFlags::S)?;
     src.set(current.without(MMUFlags::VALID).with(MMUFlags::S));
     flush_tlb();
     Ok(phys)
@@ -530,16 +531,14 @@ pub fn return_page_inner(
 ) -> Result<usize, redoubt_abi::Error> {
     let src = walk(root_of(src_space.satp), src_addr as usize, None)?;
     let phys = src.get().phys();
-    // Check both ends before changing either: the borrower must hold the page, and the lender's
-    // entry must still record the loan of this very frame. Unmap, map and reserve refuse to
-    // touch a lent entry, so the second check failing means a kernel bug, but it is refused
-    // like the first rather than trusted.
-    if !src.get().is_valid() {
+    // Check both protected aliases and their frame identity before changing either. The
+    // borrower's entry is `VALID | S`; the lender's is `S` without `VALID`.
+    if !src.get().is_valid() || !src.get().has(MMUFlags::S) {
         return Err(redoubt_abi::Error::ShareViolation);
     }
     let dest = walk(root_of(dest_space.satp), dest_addr as usize, None)
         .or(Err(redoubt_abi::Error::ShareViolation))?;
-    if !dest.get().has(MMUFlags::S) || dest.get().phys() != phys {
+    if dest.get().is_valid() || !dest.get().has(MMUFlags::S) || dest.get().phys() != phys {
         return Err(redoubt_abi::Error::ShareViolation);
     }
     src.set(Pte::EMPTY);
@@ -567,7 +566,7 @@ pub fn lend_out(space: &MemoryMapping, virt: usize) -> Result<usize, redoubt_abi
 /// The frame behind a page `space` lent out, from the lender's own entry.
 pub fn lent_frame(space: &MemoryMapping, virt: usize) -> Option<usize> {
     let pte = walk(root_of(space.satp), virt, None).ok()?.get();
-    pte.has(MMUFlags::S).then(|| pte.phys())
+    (pte.has(MMUFlags::S) && !pte.is_valid()).then(|| pte.phys())
 }
 
 /// Give a lent page back to its lender: `VALID` again, `S` cleared (`reply`, or a message that
@@ -575,7 +574,7 @@ pub fn lent_frame(space: &MemoryMapping, virt: usize) -> Option<usize> {
 pub fn lend_back(space: &MemoryMapping, virt: usize) -> Result<(), redoubt_abi::Error> {
     let slot = walk(root_of(space.satp), virt, None)?;
     let pte = slot.get();
-    if !pte.has(MMUFlags::S) {
+    if pte.is_valid() || !pte.has(MMUFlags::S) {
         return Err(redoubt_abi::Error::ShareViolation);
     }
     slot.set(pte.without(MMUFlags::S).with(MMUFlags::VALID));
@@ -588,7 +587,7 @@ pub fn lend_back(space: &MemoryMapping, virt: usize) -> Result<(), redoubt_abi::
 pub fn drop_lent(space: &MemoryMapping, virt: usize) -> Result<usize, redoubt_abi::Error> {
     let slot = walk(root_of(space.satp), virt, None)?;
     let pte = slot.get();
-    if !pte.has(MMUFlags::S) {
+    if pte.is_valid() || !pte.has(MMUFlags::S) {
         return Err(redoubt_abi::Error::ShareViolation);
     }
     slot.set(Pte::EMPTY);
@@ -596,27 +595,34 @@ pub fn drop_lent(space: &MemoryMapping, virt: usize) -> Result<usize, redoubt_ab
     Ok(pte.phys())
 }
 
-/// Map `phys` at `virt` in `space`, readable and writable, for `pid`. A message's buffer is
-/// always lent writable: the client already trusts the server with it (CAPABILITIES.md).
+/// Map `phys` at `virt` in `space`, readable and writable, for `pid`. A call's borrowed
+/// buffer also gets the protected `S` marker; a send's transferred buffer does not.
 pub fn map_into(
     mm: &mut MemoryManager,
     pid: PID,
     space: &MemoryMapping,
     phys: usize,
     virt: usize,
+    borrowed: bool,
 ) -> Result<(), redoubt_abi::Error> {
-    let flags = translate_flags(MemoryFlags::R | MemoryFlags::W) | user_flag(pid);
+    let mut flags = translate_flags(MemoryFlags::R | MemoryFlags::W) | user_flag(pid);
+    if borrowed {
+        // `VALID | S` remains normally readable/writable by the borrower, while every
+        // ownership-changing mapping API recognizes it as a protected loan alias.
+        flags |= MMUFlags::S;
+    }
     map_page_in(root_of(space.satp), mm, pid, phys, virt, flags)?;
     flush_tlb();
     Ok(())
 }
 
-/// Unmap `virt` from `space` without changing who owns the frame: a lend leaving the server.
+/// Remove a protected borrower alias without changing who owns the frame: an abandoned
+/// lend leaving the server.
 pub fn unmap_from(space: &MemoryMapping, virt: usize) -> Result<usize, redoubt_abi::Error> {
     let slot = walk(root_of(space.satp), virt, None)?;
     let pte = slot.get();
-    if !pte.is_valid() {
-        return Err(redoubt_abi::Error::BadAddress);
+    if !pte.is_valid() || !pte.has(MMUFlags::S) {
+        return Err(redoubt_abi::Error::ShareViolation);
     }
     slot.set(Pte::EMPTY);
     flush_tlb();
@@ -690,7 +696,8 @@ pub fn ensure_page_exists_inner(mm: &mut MemoryManager, address: usize) -> Resul
 /// it (and, with `write`, write it) there: a system call about to copy a record in or a result
 /// out. Anything else (unmapped, reserved but never touched, lent out, kernel, no permission)
 /// is `InvalidArgument`: decoding never allocates (answer 115), so a process
-/// touches its record buffers before a call.
+/// touches its record buffers before a call. This also excludes a live `VALID | S`
+/// borrower alias: userspace can access it normally, but cannot use it as syscall-owned RAM.
 pub fn user_frame(virt: usize, write: bool) -> Result<usize, redoubt_sys::Error> {
     use redoubt_sys::Error;
     if virt >= USER_AREA_END {
@@ -712,8 +719,9 @@ pub fn user_frame(virt: usize, write: bool) -> Result<usize, redoubt_sys::Error>
 /// executable and not writable, which is what W^X asks of it. `Pte::leaf` refuses the
 /// combination that would break W^X, as decoding already did.
 ///
-/// A page that is not the caller's own live mapping -- unmapped, reserved but never touched,
-/// or lent out -- is `BadAddress`, which the caller reports as `InvalidArgument`.
+/// A page that is not the caller's own unshared live mapping -- unmapped, reserved but never
+/// touched, lent out, or a protected borrower alias -- is `BadAddress`, which the caller
+/// reports as `InvalidArgument`.
 pub fn set_user_page_flags(virt: usize, flags: MemoryFlags) -> Result<(), redoubt_abi::Error> {
     let wanted = translate_flags(flags);
     check_permissions(wanted)?;
@@ -729,7 +737,7 @@ pub fn set_user_page_flags(virt: usize, flags: MemoryFlags) -> Result<(), redoub
 }
 
 /// Whether `virt` is a live, user-visible mapping of the current address space that is not
-/// lent out: what `unmap` and `set_flags` need of every page before either changes one
+/// either alias of a loan: what `unmap` and `set_flags` need before either changes one
 /// (WP-K0's rule: check the whole range first). The frame it maps, for the caller to check
 /// who owns it.
 pub fn user_mapping(virt: usize) -> Option<usize> {

@@ -22,6 +22,7 @@ defmodule Redoubt.Wire.Proto.NinepCommon do
   }
   @errors %{
     1 => :malformed,
+    2 => :not_yours,
     3 => :refused
   }
 

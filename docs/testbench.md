@@ -124,9 +124,9 @@ a checked one. Everything else must still pass.
 
 ## Poking at it by hand
 
-    cargo testbench --run log-server                  # console on this terminal; Ctrl-A X quits
-    cargo testbench --run log-server ipc-client --smp 4
-    cargo testbench --run path/to/some.elf
+    ./launch --program log-server                  # console on this terminal; Ctrl-A X quits
+    ./launch --program log-server --program ipc-client --smp 4
+    ./launch --program path/to/some.elf
 
 ## Firmware
 

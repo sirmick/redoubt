@@ -1,9 +1,9 @@
 # Example protocol (codec conformance fixture)
 
 Not a real protocol: no server speaks it. It exists so the generated codecs, the test vectors
-(`redoubt/wire/vectors/`) and the fuzz targets exercise every field type, both message shapes,
+(`libs/wire/vectors/`) and the fuzz targets exercise every field type, both message shapes,
 replies, error replies and the file framing. Real tables live in the owning server's note
-under `planning/redoubt/`; each server package writes its own. WIRE.md is the specification;
+under `docs/`; each server package writes its own. `docs/WIRE.md` is the specification;
 this note is the practical guide to writing one, and the generator enforces every rule here.
 
 ## Writing a table
@@ -70,8 +70,8 @@ handles; the caller ignores the buffer.
 `u32` followed by the buffer-shape encoding of its fields, one per `Twrite`. Messages with
 handles cannot be written into a file.
 
-**Generating.** `cargo run -p redoubt-wire-gen` writes `redoubt/wire/src/proto/NAME.rs` and
-`redoubt/wire/elixir/proto/NAME.ex`. The generated files are checked in, and
+**Generating.** `cargo run -p redoubt-wire-gen` writes `libs/wire/src/proto/NAME.rs` and
+`libs/wire/elixir/proto/NAME.ex`. The generated files are checked in, and
 `cargo test -p redoubt-wire-gen` fails if they differ from the tables
 (`cargo run -p redoubt-wire-gen -- --check` says which), so a table and its code cannot drift.
 

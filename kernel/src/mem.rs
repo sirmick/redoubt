@@ -697,8 +697,8 @@ impl MemoryManager {
 
     /// Free a frame `pid` owns (an abandoned lend the server replied to, R3).
     #[cfg(baremetal)]
-    pub fn free_frame_of(&mut self, phys: usize, pid: PID) {
-        self.release_page(phys as *mut usize, pid).ok();
+    pub fn free_frame_of(&mut self, phys: usize, pid: PID) -> Result<(), redoubt_abi::Error> {
+        self.release_page(phys as *mut usize, pid)
     }
 
     /// Back every demand-paged page of `[address, address + len)` in the current address

@@ -85,13 +85,16 @@ fn a_hostile_client_does_not_hurt_the_server_or_other_clients() {
         let mut lend = Buffer::new(1).unwrap();
         for _ in 0..50 {
             let junk = Endpoint::create().unwrap();
-            let reply =
-                ep.call(&[9, 9, 9, 9], &[junk.handle(), junk.handle()], Some(&mut lend), FOREVER).unwrap();
+            let (reply, returned) = ep
+                .call(&[9, 9, 9, 9], &[junk.handle(), junk.handle()], Some(lend), FOREVER)
+                .into_result()
+                .unwrap();
+            lend = returned.unwrap();
             assert_eq!(reply.words, MALFORMED);
             junk.close().unwrap();
         }
         // 9P with no lend at all.
-        assert_eq!(ep.call(&WORDS_9P, &[], None, FOREVER).unwrap().words, MALFORMED);
+        assert_eq!(ep.call(&WORDS_9P, &[], None, FOREVER).into_result().unwrap().0.words, MALFORMED);
         // Garbage in the lend: an Rerror, never a crash.
         let mut x = 0x1234_5678_u64;
         for round in 0..300 {
@@ -106,7 +109,8 @@ fn a_hostile_client_does_not_hurt_the_server_or_other_clients() {
                 lend[..4].copy_from_slice(&((x % 200) as u32 + 7).to_le_bytes());
                 lend[4] = 100 + (x % 28) as u8;
             }
-            let reply = ep.call(&WORDS_9P, &[], Some(&mut lend), FOREVER).unwrap();
+            let (reply, returned) = ep.call(&WORDS_9P, &[], Some(lend), FOREVER).into_result().unwrap();
+            lend = returned.unwrap();
             assert_eq!(reply.words, WORDS_9P);
             assert!(Message::decode(&lend).is_ok());
         }
@@ -116,7 +120,8 @@ fn a_hostile_client_does_not_hurt_the_server_or_other_clients() {
             lend.fill(0);
             let attach = Body::Tattach { fid, afid: u32::MAX, uname: "", aname: "" };
             Message { tag: 1, body: attach }.encode(&mut lend).unwrap();
-            ep.call(&WORDS_9P, &[], Some(&mut lend), FOREVER).unwrap();
+            let (_, returned) = ep.call(&WORDS_9P, &[], Some(lend), FOREVER).into_result().unwrap();
+            lend = returned.unwrap();
             if matches!(Message::decode(&lend).unwrap().body, Body::Rerror { .. }) {
                 refused += 1;
             }
@@ -189,7 +194,7 @@ fn a_launcher_gives_its_child_a_fresh_connection_and_disconnects_it() {
         let junk = Endpoint::create().unwrap();
         let ep = Endpoint::from_handle(fresh);
         let reply = ep.call(&[3, 0, 0, 0], &[junk.handle(), junk.handle()], None, FOREVER);
-        assert_eq!(reply.unwrap().words, MALFORMED);
+        assert_eq!(reply.into_result().unwrap().0.words, MALFORMED);
         junk.close().unwrap();
     });
     assert_eq!(f.held(server).0, handles_before);

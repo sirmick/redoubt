@@ -6,9 +6,9 @@ the design of record is [`docs/`](docs/README.md).
 
 ## Host requirements
 
-Only **Docker**. Everything below runs inside the dev container, which carries Rust with the RISC-V
-bare-metal targets, QEMU for both widths, OpenSSH, graphviz, and the pinned OTP 28 / Elixir 1.20
-toolchains.
+**Docker** supplies the OS build/test environment: Rust with the RISC-V bare-metal targets,
+QEMU for both widths, OpenSSH and graphviz. It does **not** install OTP or Elixir; beamlet's
+differential and Elixir tests have the additional prerequisites in section 7.
 
 Prefer your own environment? Install Rust + the `riscv64imac-unknown-none-elf`,
 `riscv32imac-unknown-none-elf` and `riscv64gc-unknown-none-elf` targets, `qemu-system-misc`, a C
@@ -44,7 +44,8 @@ populated for both widths, skip this.
 
 Builds are size-optimized release builds by default, which is required for the rv32 memory
 layout. Pass `--debug` only when working on a configuration that fits the debug image.
-`--arch` is `rv32` or `rv64` (default rv64) on every script.
+`--arch` is `rv32` or `rv64`. Build, launch and image scripts default to rv64; `./test`
+without `--arch` uses each case's declared architecture list, which may include both widths.
 
 ## 4. Launch it in a VM
 
@@ -81,6 +82,14 @@ output. Console logs land in `target/testbench/`. Writing cases: [`docs/testbenc
 Disk-image recipes (littlefs) live in [`image/`](image/) and are not built yet.
 
 ## 7. beamlet (the BEAM VM)
+
+The VM currently runs on the host; its Redoubt platform and boot integration are still planned.
+For differential/Elixir tests, separately install **OTP 28.5.0.6** and **Elixir 1.20.4**.
+The repository and Docker image do not provide these installations. `tools/env.sh` only adds
+`toolchains/otp-28.5.0.6/bin` and `toolchains/elixir-1.20.4/bin` to PATH; set
+`BEAMLET_TOOLCHAINS` to another installation root with that layout, or put matching installations
+on PATH yourself. Check `erl -noshell -eval 'io:format("~s~n", [erlang:system_info(otp_release)]), halt().'`
+and `elixir --version` before running those suites. Pure-Rust unit tests do not require them.
 
 ```sh
 cd userland/otp

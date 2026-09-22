@@ -188,6 +188,7 @@ impl<'a> Reply {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
     Malformed,
+    NotYours,
     Refused,
 }
 
@@ -195,6 +196,7 @@ impl ErrorCode {
     pub fn code(self) -> u32 {
         match self {
             ErrorCode::Malformed => 1,
+            ErrorCode::NotYours => 2,
             ErrorCode::Refused => 3,
         }
     }
@@ -202,6 +204,7 @@ impl ErrorCode {
     pub fn from_code(code: u32) -> Option<Self> {
         match code {
             1 => Some(ErrorCode::Malformed),
+            2 => Some(ErrorCode::NotYours),
             3 => Some(ErrorCode::Refused),
             _ => None,
         }

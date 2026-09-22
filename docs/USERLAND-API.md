@@ -177,7 +177,8 @@ answer here, and which `Redoubt.*` module wraps it. `userland/otp/DESIGN.md` own
   `consol` `size` call (opcode 16, NAMESPACES.md, The console). A server that
   does not serve `consol` refuses the opcode as `Malformed`, and the platform answers `None`.
   `Redoubt.Console.size/0` reports that as `{:error, :unknown}`.
-  **The size is asked afresh on every `size/0` call, not cached across one.** The only console whose
+  **The size is asked afresh on every `size/0` call, not cached across one.** This is the accepted
+  Redoubt contract; a trait/source comment suggesting a cache does not override it. The only console whose
   size changes is an SSH channel, and the only thing that tells a client it changed is the `resize`
   call (below, and not buildable until question 163) — so a cache no rule invalidates would answer a
   redraw with the size before the change. A caller that needs the current size calls `size/0`; a
@@ -208,7 +209,7 @@ No cell grid is maintained here; the user's terminal emulator does that.
 | `clear()` | `:ok` | Full clear + home cursor |
 | `move_to(col, row)` | `:ok` | 0-based |
 | `write(data)` | `:ok` | Raw bytes to console; `IO.write` equivalent |
-| `await_resize(pid)` | `{:ok, ref}` | Calls `consol`'s `resize` (opcode 17) with a call that parks, and returns; the new size is delivered to `pid` as `{:console_resize, cols, rows}` when the server answers. It re-calls `resize` after each reply, so a process that keeps handling the message keeps hearing about changes. **Not in milestone 1** (question 163: a parked *typed* call is not buildable yet; WP-R1d adds it), and it is `sshd`'s obligation, not `consoled`'s (nothing resizes over UART). |
+| `await_resize(pid)` | `{:ok, ref}` | Calls `consol`'s `resize` (opcode 17) with a call that parks, and returns; the new size is delivered to `pid` as `{:console_resize, cols, rows}` when the server answers. It re-calls `resize` after each reply. **In milestone 1 by answer 160, not implemented yet**: question 163/WP-R1d supplies typed parking. `consoled` must park it indefinitely on UART; `sshd` answers when that channel's window changes. |
 
 Not in milestone 1: alt-screen, cursor-visibility and colour/SGR helpers. They are one `write/1` of an escape sequence away and nothing in the design consumes them; add them when a program needs them. (The `consol` `size` call and `clear`/`move_to`/`write` are what `Redoubt.Ed` needs.)
 

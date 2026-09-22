@@ -67,7 +67,7 @@ fn check(startup: &Startup) -> Result<(), u32> {
     echo.clunk(FILE).map_err(|_| 19u32)?;
     // A call with words that are not 9P's is malformed (status 1), not served.
     let endpoint = echo.into_endpoint();
-    let reply = endpoint.call(&[1, 2, 3, 4], &[], None, FOREVER).map_err(|_| 20u32)?;
+    let (reply, _) = endpoint.call(&[1, 2, 3, 4], &[], None, FOREVER).into_result().map_err(|_| 20u32)?;
     if reply.words != MALFORMED {
         return Err(21);
     }

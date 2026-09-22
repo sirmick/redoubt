@@ -10,11 +10,10 @@
 //! for, the message it is sending and the calls it holds open in a page of its own
 //! ([`crate::budget::Account::ipc`]) — the page the cost table already charges for a thread. Two
 //! things follow, and they are the reason for this shape:
-//! - `call` and `send` allocate no kernel object, so neither can fail for want of one, which
-//!   their error rows require (neither returns `OutOfMemory`; a `call` returns it only for a
-//!   reply's handles, which is the caller's own table). A lend of pages the sender never
-//!   touched is still backed as it is checked, charged to the sender, and that is `unmap`'s
-//!   `OutOfMemory` rather than this path's (question 140);
+//! - `call` and `send` allocate no kernel object, so neither can fail for want of one, which their error rows
+//!   require (neither returns `OutOfMemory`; a `call` returns it only for a reply's handles, which is the
+//!   caller's own table). A lend of pages the sender never touched is still backed as it is checked, charged
+//!   to the sender, and that is `unmap`'s `OutOfMemory` rather than this path's (question 140);
 //! - nothing a sender does makes the kernel allocate on a receiver's behalf.
 //!
 //! A **taken** call moves out of the sender's page into an open-call page of its own, charged to
@@ -38,13 +37,13 @@
 use core::cmp::Ordering;
 use core::num::{NonZeroU64, NonZeroUsize};
 
-use redoubt_sys::{
-    Body, Error, Handle as AbiHandle, Labels, MAX_LEND_PAGES, MAX_MSG_HANDLES, MAX_OPEN_CALLS, Message,
-    MessageKind, MintSource, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles, Return,
-    WAIT_CAP, WORDS, encode_result,
-};
 use redoubt_abi::arch::PAGE_SIZE;
 use redoubt_abi::{MemoryFlags, PID, TID};
+use redoubt_sys::{
+    Body, CallOutcome, Error, Handle as AbiHandle, Labels, LendDisposition, MAX_LEND_PAGES, MAX_MSG_HANDLES,
+    MAX_OPEN_CALLS, Message, MessageKind, MintSource, Pages, RECEIVED_SLOTS, Received, ReceivedBody,
+    ReceivedHandles, ReplyOutcome, Return, WAIT_CAP, WORDS, encode_result,
+};
 
 use crate::arch::process::{MAX_PROCESS_COUNT, MAX_THREAD};
 use crate::budget::Class;
@@ -406,10 +405,7 @@ fn open_call_of(mm: &MemoryManager, pid: PID, tid: TID, rid: u64) -> Option<u32>
 // --- Walking the threads ---------------------------------------------------------------------------
 
 /// Call `f` for every thread that has an IPC page, until it answers `Some`.
-fn find_thread<T>(
-    mm: &MemoryManager,
-    mut f: impl FnMut(&MemoryManager, PID, TID) -> Option<T>,
-) -> Option<T> {
+fn find_thread<T>(mm: &MemoryManager, mut f: impl FnMut(&MemoryManager, PID, TID) -> Option<T>) -> Option<T> {
     for index in 1..=MAX_PROCESS_COUNT {
         let Some(pid) = PID::new(index as u8) else { continue };
         for tid in 0..MAX_THREAD {
@@ -472,8 +468,10 @@ fn answer_record<const N: usize>(
 ) {
     let rec = slot(mm, pid, tid).rec;
     let here = crate::arch::process::current_pid();
-    let written =
-        ss.activate(pid).map_err(|_| Error::Dead).and_then(|()| crate::redoubt::write_record(rec, slots));
+    let written = ss
+        .activate(pid)
+        .map_err(|_| Error::Dead)
+        .and_then(|()| crate::redoubt::write_ipc_record(mm, rec, slots));
     ss.activate(here).expect("the running process can be activated");
     wake(ss, mm, pid, tid, written.and(result));
 }
@@ -489,7 +487,12 @@ fn mark(mm: &MemoryManager, pid: PID, tid: TID, wait: Wait, timeout: u64) {
 /// What a blocking call does once delivery has had its chance: resume with the answer it already
 /// has, time out without ever blocking, or block. `Ok(None)` tells the trap handler to resume
 /// whatever is current now, which is this thread when it was answered (`redoubt.rs`).
-fn settle(ss: &mut SystemServices, mm: &mut MemoryManager, pid: PID, tid: TID) -> Result<Option<Return>, Error> {
+fn settle(
+    ss: &mut SystemServices,
+    mm: &mut MemoryManager,
+    pid: PID,
+    tid: TID,
+) -> Result<Option<Return>, Error> {
     let s = slot(mm, pid, tid);
     if s.wait == Wait::None {
         // Answered already: its registers hold the result.
@@ -498,7 +501,8 @@ fn settle(ss: &mut SystemServices, mm: &mut MemoryManager, pid: PID, tid: TID) -
     if s.deadline <= crate::arch::irq::timer::now_us() {
         // A deadline that has already passed (a `timeout` of 0 is a poll): never block on it.
         fail_wait(ss, mm, pid, tid, Error::Timeout);
-        return Err(Error::Timeout);
+        // fail_wait published the full outcome, including a lend consumed after receipt.
+        return Ok(None);
     }
     let ppid = ss.get_process(pid).expect("the running process").ppid;
     crate::syscall::reset_switchto_caller();
@@ -513,11 +517,35 @@ fn settle(ss: &mut SystemServices, mm: &mut MemoryManager, pid: PID, tid: TID) -
 /// `error`. This is the one meaning of a timeout (I13), of `Refused` (R4), of `Dead` from
 /// revocation or an endpoint's destruction (R10), whatever the thread was waiting for.
 fn fail_wait(ss: &mut SystemServices, mm: &mut MemoryManager, pid: PID, tid: TID, error: Error) {
+    let waiting = slot(mm, pid, tid);
+    let result = match waiting.wait {
+        Wait::Send if msg(mm, pid, tid).kind == MsgKind::Call => {
+            call_result(Err(error), msg(mm, pid, tid).buf_pages, false, false)
+        }
+        Wait::Reply => call_result(Err(error), open_call_at(mm, waiting.open).lend_pages, true, false),
+        _ => Err(error),
+    };
     let served = unwind(ss, mm, pid, tid);
-    wake(ss, mm, pid, tid, Err(error));
+    wake(ss, mm, pid, tid, result);
     if let Some(e) = served {
         pump(ss, mm, e);
     }
+}
+
+fn call_result(
+    status: Result<(), Error>,
+    pages: usize,
+    consumed: bool,
+    present: bool,
+) -> Result<Return, Error> {
+    let lend = if pages == 0 {
+        LendDisposition::None
+    } else if consumed {
+        LendDisposition::Consumed
+    } else {
+        LendDisposition::Returned
+    };
+    Ok(Return::Call(CallOutcome { status, lend, reply_present: present }))
 }
 
 /// Undo what `(pid, tid)`'s page says it waits for: a queued message's buffer goes back to it;
@@ -622,7 +650,7 @@ pub fn send(
     timeout: u64,
 ) -> Result<Option<Return>, Error> {
     // Stage 1 finished in `redoubt-sys`; the body record is the rest of it.
-    let body = Body::decode(&crate::redoubt::read_record(body_rec)?)?;
+    let body = Body::decode(&crate::redoubt::read_ipc_record(mm, body_rec, kind == MsgKind::Call)?)?;
     // Stage 2, argument by argument.
     let (endpoint, via) = mm.endpoint_handle(pid, h)?;
     let (handles, nhandles) = lookup_handles(mm, pid, &body)?;
@@ -812,7 +840,7 @@ pub fn receive(
     // Whatever it returns, the thread has no current call until it takes one (answer 82).
     set_tword(mm, pid, tid, W_CURRENT, 0);
     // The record must be the caller's own writable memory before anything else happens.
-    crate::redoubt::check_record::<RECEIVED_SLOTS>(rec)?;
+    crate::redoubt::check_ipc_record::<RECEIVED_SLOTS>(mm, rec)?;
     let Some(h) = from else {
         // No handle: sleep until the timeout (KERNEL-SPEC.md, `receive`).
         mark(mm, pid, tid, Wait::Sleep, timeout);
@@ -971,7 +999,7 @@ fn check_receive_record(
     let checked = ss
         .activate(pid)
         .map_err(|_| Error::Dead)
-        .and_then(|()| crate::redoubt::check_record::<RECEIVED_SLOTS>(rec));
+        .and_then(|()| crate::redoubt::check_ipc_record::<RECEIVED_SLOTS>(mm, rec));
     ss.activate(here).expect("the running process can be activated");
     checked
 }
@@ -1052,19 +1080,23 @@ fn prepare(
         // R4a: the call opens, charged to the receiving process's budget, and becomes the
         // thread's current call (answer 82).
         let frame = mm.alloc_object_frame().expect("R4: the open-call page was charged above");
-        store_open_call(mm, frame, &OpenCall {
-            rid,
-            caller: (spid, stid),
-            server: (rpid, rtid),
-            endpoint: e,
-            badge: m.badge,
-            stamp: m.stamp,
-            flags: F_WAITING,
-            lend_caller: m.buf_addr,
-            lend_server: at,
-            lend_pages: pages,
-            payer: BudgetRef { frame: rbudget, id: mm.budget(rbudget).id },
-        });
+        store_open_call(
+            mm,
+            frame,
+            &OpenCall {
+                rid,
+                caller: (spid, stid),
+                server: (rpid, rtid),
+                endpoint: e,
+                badge: m.badge,
+                stamp: m.stamp,
+                flags: F_WAITING,
+                lend_caller: m.buf_addr,
+                lend_server: at,
+                lend_pages: pages,
+                payer: BudgetRef { frame: rbudget, id: mm.budget(rbudget).id },
+            },
+        );
         push_open_call(mm, rpid, rtid, frame);
         set_tword(mm, rpid, rtid, W_CURRENT, frame_word(frame));
         // The caller now waits for the reply, not for a taker: its page names the open call.
@@ -1160,8 +1192,15 @@ fn move_buffer(ss: &SystemServices, mm: &mut MemoryManager, m: &Msg, spid: PID, 
     for i in 0..m.buf_pages {
         let from = m.buf_addr + i * PAGE_SIZE;
         let phys = crate::arch::mem::lent_frame(&sender_space, from).expect("I9: the page is lent out");
-        crate::arch::mem::map_into(mm, rpid, &receiver_space, phys, at + i * PAGE_SIZE)
-            .expect("R4: prepared just above");
+        crate::arch::mem::map_into(
+            mm,
+            rpid,
+            &receiver_space,
+            phys,
+            at + i * PAGE_SIZE,
+            m.kind == MsgKind::Call,
+        )
+        .expect("R4: prepared just above");
         if m.kind == MsgKind::Send {
             // The transfer is the receiver's for good: its entry in the sender goes, and the
             // owner and the payer change together.
@@ -1197,8 +1236,8 @@ pub fn reply(
     tid: TID,
     msg_id: u64,
     body_rec: usize,
-) -> Result<(), Error> {
-    let body = Body::decode(&crate::redoubt::read_record(body_rec)?)?;
+) -> Result<ReplyOutcome, Error> {
+    let body = Body::decode(&crate::redoubt::read_ipc_record(mm, body_rec, false)?)?;
     let frame = open_call_of(mm, pid, tid, msg_id).ok_or(Error::InvalidArgument)?;
     let (handles, nhandles) = lookup_handles(mm, pid, &body)?;
     let call = open_call_at(mm, frame);
@@ -1209,38 +1248,67 @@ pub fn reply(
         // R3: the reply to an abandoned call reaches nobody, and its lend is freed.
         free_abandoned_lend(ss, mm, &call);
     } else {
-        return_lend(ss, &call);
+        return_lend(ss, mm, &call);
     }
     close_call(mm, frame, &call);
-    poke_receivers(ss, mm, pid);
     if call.flags & F_WAITING == 0 {
-        return Ok(());
+        poke_receivers(ss, mm, pid);
+        return Ok(ReplyOutcome { delivered: false, installed: 0 });
     }
     // R4: a reply is never refused. A handle that does not fit the caller -- its budget cannot
     // pay, or it is at `MAX_HANDLES` -- is dropped, 0 in its slot, and the `call` returns
     // `OutOfMemory` either way, the reply still delivered (answers 107 and 116).
     let (cpid, ctid) = call.caller;
     let (slots, dropped) = install_handles(mm, cpid, &handles[..nhandles]);
-    let result = if dropped { Err(Error::OutOfMemory) } else { Ok(Return::Nothing) };
     let body = ReceivedBody { words: body.words, handles: slots };
-    answer_record(ss, mm, cpid, ctid, &body.encode(), result);
-    Ok(())
+    // The scheduler and memory-manager guards remain held through mapping validation, copy,
+    // handle rollback and register publication. No mapping/lifecycle transition can interleave.
+    let here = crate::arch::process::current_pid();
+    let rec = slot(mm, cpid, ctid).rec;
+    let written = ss
+        .activate(cpid)
+        .map_err(|_| Error::InvalidArgument)
+        .and_then(|()| crate::redoubt::write_ipc_record(mm, rec, &body.encode()));
+    ss.activate(here).expect("the running process can be activated");
+    let (status, delivered, installed) = if written.is_ok() {
+        let mask = slots
+            .as_slice()
+            .iter()
+            .enumerate()
+            .fold(0, |mask, (i, handle)| mask | (u32::from(handle.is_some()) << i));
+        (if dropped { Err(Error::OutOfMemory) } else { Ok(()) }, true, mask)
+    } else {
+        // Only this attempt's newly installed caller copies are removed; handle_close also
+        // releases a now-empty handle-table page (R6). The server originals stay untouched.
+        for handle in slots.as_slice().iter().flatten() {
+            mm.handle_close(cpid, handle.index()).expect("new reply handle remains installed under lock");
+        }
+        (Err(Error::InvalidArgument), false, 0)
+    };
+    wake(ss, mm, cpid, ctid, call_result(status, call.lend_pages, false, delivered));
+    poke_receivers(ss, mm, pid);
+    Ok(ReplyOutcome { delivered, installed })
 }
 
 /// Give a lend back to the caller (R3: until the reply, it stayed mapped in the server).
-fn return_lend(ss: &SystemServices, call: &OpenCall) {
+fn return_lend(ss: &SystemServices, mm: &mut MemoryManager, call: &OpenCall) {
     if call.lend_pages == 0 {
         return;
     }
-    let server = ss.mapping_of(call.server.0);
-    let caller = ss.mapping_of(call.caller.0);
+    let server = ss.mapping_of(call.server.0).expect("a waiting call's server is still alive");
+    let caller = ss.mapping_of(call.caller.0).expect("a waiting call's caller is still alive");
     for i in 0..call.lend_pages {
-        if let Some(space) = &server {
-            crate::arch::mem::unmap_from(space, call.lend_server + i * PAGE_SIZE).ok();
-        }
-        if let Some(space) = &caller {
-            crate::arch::mem::lend_back(space, call.lend_caller + i * PAGE_SIZE).ok();
-        }
+        // `return_page_inner` validates the protected borrower alias and the lender's
+        // invalid reservation name the same frame before it changes either PTE.
+        crate::arch::mem::return_page_inner(
+            mm,
+            &server,
+            (call.lend_server + i * PAGE_SIZE) as *mut u8,
+            call.caller.0,
+            &caller,
+            (call.lend_caller + i * PAGE_SIZE) as *mut u8,
+        )
+        .expect("an open call retains both aliases of its lend");
     }
 }
 
@@ -1249,11 +1317,12 @@ fn free_abandoned_lend(ss: &SystemServices, mm: &mut MemoryManager, call: &OpenC
     if call.lend_pages == 0 {
         return;
     }
-    let Some(space) = ss.mapping_of(call.server.0) else { return };
+    let space = ss.mapping_of(call.server.0).expect("an abandoned call's server is still alive");
     for i in 0..call.lend_pages {
-        if let Ok(phys) = crate::arch::mem::unmap_from(&space, call.lend_server + i * PAGE_SIZE) {
-            mm.free_frame_of(phys, call.server.0);
-        }
+        let phys = crate::arch::mem::unmap_from(&space, call.lend_server + i * PAGE_SIZE)
+            .expect("an abandoned call retains its protected borrower alias");
+        mm.free_frame_of(phys, call.server.0)
+            .expect("an abandoned lend's frame remains owned by its server");
     }
 }
 
@@ -1324,13 +1393,19 @@ pub fn thread_ending(ss: &mut SystemServices, mm: &mut MemoryManager, pid: PID, 
 fn finish_served(ss: &mut SystemServices, mm: &mut MemoryManager, frame: u32) {
     let call = open_call_at(mm, frame);
     if call.flags & F_WAITING != 0 {
-        return_lend(ss, &call);
+        return_lend(ss, mm, &call);
     } else {
         free_abandoned_lend(ss, mm, &call);
     }
     close_call(mm, frame, &call);
     if call.flags & F_WAITING != 0 {
-        wake(ss, mm, call.caller.0, call.caller.1, Err(Error::Dead));
+        wake(
+            ss,
+            mm,
+            call.caller.0,
+            call.caller.1,
+            call_result(Err(Error::Dead), call.lend_pages, false, false),
+        );
     }
 }
 

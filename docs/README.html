@@ -177,14 +177,15 @@ footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
   <div class="grid2">
     <div class="card"><h4>Built and tested</h4><ul class="tight">
       <li>rv64 + rv32 boot on QEMU virt under the vendored RustSBI firmware</li>
-      <li>the kernel: memory, threads, handles &amp; endpoints, budgets, devices, IRQ receive, timer, verified boot, W^X</li>
+      <li>the kernel: memory, legacy threads, handles &amp; endpoints, budgets, devices, IRQ receive, verified boot, W^X; cooperative scheduling</li>
       <li><code>libs/</code>: sys, rt, wire, signing, littlefs, paging</li>
-      <li><code>servers/keyd</code>, <code>tools/testbench</code></li>
-      <li>beamlet — runs Elixir, its compiler, IEx, OTP crypto/ssl/ssh</li>
+      <li>host-tested server components: keyd, bootfsd, consoled, blkd; full init boot wiring pending</li>
+      <li><code>tools/testbench</code>; beamlet on the host — Elixir, its compiler, IEx, OTP crypto/ssl/ssh</li>
     </ul></div>
     <div class="card"><h4>Designed, not built</h4><ul class="tight">
       <li>init + boot manifest + loader stub</li>
-      <li>steward, sshd, fsd, blkd, netd, ipd, bootfsd, consoled</li>
+      <li>steward, sshd, fsd, netd, ipd; end-to-end storage/network services</li>
+      <li>new process/thread syscalls, timer-driven scheduling, beamlet's Redoubt platform</li>
       <li>packages, projects, sharing, A/B system updates</li>
       <li>FPGA cards, disk encryption, gatewayd, webd, linkd/routerd</li>
     </ul></div>
@@ -262,7 +263,7 @@ footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
 </svg></div>
   <ul class="tight">
     <li><b>Built:</b> vendored RustSBI and loader on both widths, Ed25519 verification, W^X, default-deny device grants.
-      <a href="BOOT.md">BOOT.md</a> · <a href="VERIFIED-BOOT.md">VERIFIED-BOOT.md</a> · <a href="../libs/signing/src/lib.rs">libs/signing</a> · <a href="../loader/src/verify.rs">loader/src/verify.rs</a></li>
+      <a href="BOOT.md">BOOT.md</a> · <a href="VERIFIED-BOOT.md">VERIFIED-BOOT.md</a> · <a href="https://github.com/sirmick/redoubt/blob/main/libs/signing/src/lib.rs">libs/signing</a> · <a href="https://github.com/sirmick/redoubt/blob/main/loader/src/verify.rs">loader/src/verify.rs</a></li>
     <li><b>Designed change:</b> the loader will load only <code>kernel</code> + <code>init</code>; <code>init</code> launches every other
       process through a system-signed <b>loader stub</b> from the bundle's pages. <a href="PACKAGES.md">PACKAGES.md</a></li>
   </ul>
@@ -420,18 +421,18 @@ footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
   <table>
     <tr><th>System call</th><th>What it does</th><th>Status</th></tr>
     <tr><td><code>map_anon unmap set_flags map_device dma_alloc</code></td><td>memory, W^X, DMA</td><td><span class="pill built"><span class="dot"></span>built</span></td></tr>
-    <tr><td><code>thread_create thread_exit</code></td><td>threads</td><td><span class="pill built"><span class="dot"></span>built</span></td></tr>
+    <tr><td><code>thread_create thread_exit</code></td><td>new thread API (legacy path exists)</td><td><span class="pill des"><span class="dot"></span>not implemented</span></td></tr>
     <tr><td><code>endpoint_create mint</code></td><td>capabilities</td><td><span class="pill built"><span class="dot"></span>built</span></td></tr>
-    <tr><td><code>call send receive reply serve</code></td><td>zero-copy IPC, lend / transfer</td><td><span class="pill built"><span class="dot"></span>built</span></td></tr>
+    <tr><td><code>call send receive reply serve</code></td><td>zero-copy IPC, lend / transfer</td><td><span class="pill built"><span class="dot"></span>implemented</span>; <a href="STATUS.md">IPC1 acceptance pending</a></td></tr>
     <tr><td><code>budget_create budget_destroy budget_usage</code></td><td>accounting, revocation, labels</td><td><span class="pill built"><span class="dot"></span>built</span></td></tr>
     <tr><td><code>time_now random system_reset</code></td><td>services</td><td><span class="pill built"><span class="dot"></span>built</span></td></tr>
     <tr><td><code>process_create process_map process_start process_exit</code></td><td>launch + exit notices</td><td><span class="pill prog"><span class="dot"></span>in progress</span></td></tr>
   </table>
   <p>The precise spec — constants, the cost table, rules R1–R12, invariants I1–I15, errors and the order of checks —
   is <a href="KERNEL-SPEC.md">KERNEL-SPEC.md</a>, frozen for milestone 1. Implementation:
-  <a href="../kernel/src/main.rs">kernel/src/main.rs</a>, <a href="../kernel/src/syscall.rs">kernel/src/syscall.rs</a>,
-  <a href="../kernel/src/services.rs">kernel/src/services.rs</a>, <a href="../kernel/src/mem.rs">kernel/src/mem.rs</a>.
-  Page tables: <a href="../libs/paging/src/lib.rs">libs/paging/src/lib.rs</a>.</p>
+  <a href="https://github.com/sirmick/redoubt/blob/main/kernel/src/main.rs">kernel/src/main.rs</a>, <a href="https://github.com/sirmick/redoubt/blob/main/kernel/src/syscall.rs">kernel/src/syscall.rs</a>,
+  <a href="https://github.com/sirmick/redoubt/blob/main/kernel/src/services.rs">kernel/src/services.rs</a>, <a href="https://github.com/sirmick/redoubt/blob/main/kernel/src/mem.rs">kernel/src/mem.rs</a>.
+  Page tables: <a href="https://github.com/sirmick/redoubt/blob/main/libs/paging/src/lib.rs">libs/paging/src/lib.rs</a>.</p>
 </section>
 
 <section id="servers">
@@ -560,12 +561,12 @@ footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
   <table>
     <tr><th>Server</th><th>Role</th><th>Status</th></tr>
     <tr><td><code>init</code></td><td>holds all authority at boot; starts, wires and restarts every OS process</td><td><span class="pill des"><span class="dot"></span>designed</span></td></tr>
-    <tr><td><code>consoled</code></td><td>ns16550 UART driver, serves <code>/dev/cons</code></td><td><span class="pill prog"><span class="dot"></span>in progress</span></td></tr>
-    <tr><td><code>bootfsd</code></td><td>read-only 9P over the verified bundle (<code>/boot</code>)</td><td><span class="pill prog"><span class="dot"></span>in progress</span></td></tr>
-    <tr><td><code>blkd</code></td><td>virtio-blk driver + partitions + block-range handles</td><td><span class="pill prog"><span class="dot"></span>in progress</span></td></tr>
+    <tr><td><code>consoled</code></td><td>ns16550 UART driver, serves <code>/dev/cons</code></td><td>implemented, host-tested; full init wiring pending</td></tr>
+    <tr><td><code>bootfsd</code></td><td>read-only 9P over the verified bundle (<code>/boot</code>)</td><td>implemented, host-tested; full init wiring pending</td></tr>
+    <tr><td><code>blkd</code></td><td>virtio-blk driver + partitions + block-range handles</td><td>host-tested library; boot integration pending</td></tr>
     <tr><td><code>fsd</code></td><td>littlefs, one instance per volume, serves 9P</td><td><span class="pill des"><span class="dot"></span>designed</span></td></tr>
     <tr><td><code>netd</code> · <code>ipd</code></td><td>virtio-net driver; smoltcp stack serving <code>/net</code></td><td><span class="pill prog"><span class="dot"></span>in progress</span></td></tr>
-    <tr><td><code>keyd</code></td><td>holds every private key; signs, never exports</td><td><span class="pill built"><span class="dot"></span>built</span> <a href="../servers/keyd/src/lib.rs">code</a></td></tr>
+    <tr><td><code>keyd</code></td><td>holds every private key; signs, never exports</td><td><span class="pill built"><span class="dot"></span>built</span> <a href="https://github.com/sirmick/redoubt/blob/main/servers/keyd/src/lib.rs">code</a></td></tr>
     <tr><td><code>steward</code> · <code>sshd</code></td><td>principals, sessions, powerbox, audit; SSH front door</td><td><span class="pill des"><span class="dot"></span>designed</span></td></tr>
   </table>
   <div class="note"><b>keyd's rule:</b> a badge names <b>one key and one purpose</b>. Every signature is over a 32-byte digest <b>keyd computed itself</b>, and no operation returns a private key. A session that crashes a shared server three times (same account + label set) is logged out for 10 minutes, taken from the kernel's exit notice — never the attacker's output. <a href="INIT.md">INIT.md</a> · <a href="CONTAINMENT.md">CONTAINMENT.md</a></div>
@@ -637,7 +638,7 @@ footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
 </g>
 </svg></div>
   <ul class="tight">
-    <li><b>Built and tested against the real BEAM:</b> <a href="../userland/otp/DESIGN.md">userland/otp/DESIGN.md</a></li>
+    <li><b>Built and tested against the real BEAM:</b> <a href="https://github.com/sirmick/redoubt/blob/main/userland/otp/DESIGN.md">userland/otp/DESIGN.md</a></li>
     <li><b>Designed:</b> beamlet's <code>Platform</code> retargeted to the Redoubt 9P client (WP-B1/WP-B2: console, files, launching; then IEx on the UART). <a href="USERLAND.md">USERLAND.md</a></li>
     <li>On Redoubt, one VM = one trust domain; a new trust domain is a new VM under a new budget.</li>
   </ul>
@@ -727,14 +728,14 @@ footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
 
 <section id="start">
   <h2><span class="num">07</span>Getting started</h2>
-  <p>Everything runs in a self-contained Docker container; the host needs only Docker. A concise version of this
-  section also lives in <a href="GETTING-STARTED.md">GETTING-STARTED.md</a>.</p>
+  <p>The OS build/test environment runs in Docker. Beamlet's differential tests additionally require separately installed OTP/Elixir. A concise version of this
+  section also lives in <a href="https://github.com/sirmick/redoubt/blob/main/GETTING-STARTED.md">GETTING-STARTED.md</a>.</p>
   <h3>1 · Toolchain</h3>
   <pre><code>./dev.sh                 # build the image (first time), then a shell in /work
 ./dev.sh --rebuild       # rebuild the image after editing the Dockerfile</code></pre>
   <p class="lead">Installs Rust with the RISC-V bare-metal targets (<code>riscv64imac</code>, <code>riscv32imac</code>,
   <code>riscv64gc</code>), QEMU for both widths, OpenSSH, graphviz (for this page's diagrams) and the agent CLIs.
-  The pinned OTP 28 / Elixir 1.20 toolchains live in <a href="../toolchains/">toolchains/</a>.</p>
+  OTP 28.5.0.6 / Elixir 1.20.4 are not installed by the image; see the quickstart's prerequisites.</p>
   <h3>2 · Firmware (once)</h3>
   <pre><code>./scripts/build-bios.sh  # builds the vendored RustSBI in bios/ for both widths</code></pre>
   <h3>3 · Build the OS</h3>
@@ -755,7 +756,7 @@ footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
 ./test --list</code></pre>
   <h3>6 · Build an image</h3>
   <pre><code>./mkimage                      # signed boot bundle → target/image/redoubt.bundle</code></pre>
-  <p class="lead">Disk-image recipes (littlefs) live in <a href="../image/">image/</a> and are not built yet.</p>
+  <p class="lead">Disk-image recipes (littlefs) live in <a href="https://github.com/sirmick/redoubt/tree/main/image">image/</a> and are not built yet.</p>
   <h3>7 · beamlet</h3>
   <pre><code>cd userland/otp
 . tools/env.sh                 # put the pinned OTP/Elixir on PATH
@@ -845,7 +846,7 @@ tools/difftest                 # differential tests against the real BEAM</code>
 </svg></div>
   <p class="lead">A build of the same sources with debug assertions and overflow checks (the <code>checked</code> profile)
   is a normal case option. 55 cases exercise IPC, budgets, devices, timers, loader rejections, verified-boot attacks,
-  forged verdicts and SSH. <a href="TENETS.md">TENETS.md</a> tenet 6 · <a href="testbench.md">testbench.md</a> · <a href="../tests/">tests/</a></p>
+  forged verdicts and SSH. <a href="TENETS.md">TENETS.md</a> tenet 6 · <a href="testbench.md">testbench.md</a> · <a href="https://github.com/sirmick/redoubt/tree/main/tests">tests/</a></p>
 </section>
 
 <section id="reading">
@@ -992,11 +993,11 @@ tools/difftest                 # differential tests against the real BEAM</code>
       <li><a href="INIT.md">INIT.md</a> · <a href="NAMESPACES.md">NAMESPACES.md</a> · <a href="WIRE.md">WIRE.md</a></li>
     </ul></div>
     <div class="card"><h4>Code map</h4><ul class="tight">
-      <li><a href="../bios/">bios/</a> · <a href="../loader/">loader/</a> · <a href="../kernel/">kernel/</a></li>
-      <li><a href="../libs/sys/">libs/sys</a> (ABI) · <a href="../libs/rt/">libs/rt</a> · <a href="../libs/wire/">libs/wire</a></li>
-      <li><a href="../libs/signing/">libs/signing</a> · <a href="../libs/littlefs/">libs/littlefs</a> · <a href="../libs/paging/">libs/paging</a></li>
-      <li><a href="../servers/">servers/</a> · <a href="../userland/otp/">userland/otp</a></li>
-      <li><a href="../tools/testbench/">tools/testbench</a> · <a href="../tests/">tests/</a></li>
+      <li><a href="https://github.com/sirmick/redoubt/tree/main/bios">bios/</a> · <a href="https://github.com/sirmick/redoubt/tree/main/loader">loader/</a> · <a href="https://github.com/sirmick/redoubt/tree/main/kernel">kernel/</a></li>
+      <li><a href="https://github.com/sirmick/redoubt/tree/main/libs/sys">libs/sys</a> (ABI) · <a href="https://github.com/sirmick/redoubt/tree/main/libs/rt">libs/rt</a> · <a href="https://github.com/sirmick/redoubt/tree/main/libs/wire">libs/wire</a></li>
+      <li><a href="https://github.com/sirmick/redoubt/tree/main/libs/signing">libs/signing</a> · <a href="https://github.com/sirmick/redoubt/tree/main/libs/littlefs">libs/littlefs</a> · <a href="https://github.com/sirmick/redoubt/tree/main/libs/paging">libs/paging</a></li>
+      <li><a href="https://github.com/sirmick/redoubt/tree/main/servers">servers/</a> · <a href="https://github.com/sirmick/redoubt/tree/main/userland/otp">userland/otp</a></li>
+      <li><a href="https://github.com/sirmick/redoubt/tree/main/tools/testbench">tools/testbench</a> · <a href="https://github.com/sirmick/redoubt/tree/main/tests">tests/</a></li>
     </ul></div>
   </div>
 </section>
@@ -1055,15 +1056,15 @@ tools/difftest                 # differential tests against the real BEAM</code>
     <li><b>M1 — separation and containment:</b> Alice and Bob logged in over SSH, separated; Alice's agent under a lease, contained. Every property backed by an attack test.</li>
     <li><b>M2 — install, share, persist:</b> packages and trust lists, projects, reboot memory, A/B system updates with rollback.</li>
     <li><b>M3 — self-hosted development:</b> a real agent harness through <code>gatewayd</code>, compilers on the box, the server APIs.</li>
-    <li><b>After M3:</b> rv32 returned to the booted dimensions; SMP; the FPGA.</li>
+    <li><b>After M3:</b> rv32 returns to mandatory milestone boot acceptance (the bench already supports both widths); SMP; the FPGA.</li>
   </ul>
   <p><a href="BUILD-PLAN.md">BUILD-PLAN.md</a> · <a href="SWARM.md">SWARM.md</a> · <a href="HISTORY.md">HISTORY.md</a></p>
 </section>
 
 <footer>
   Redoubt began as <b>Xous</b> by the betrusted.io project. Licensed under the terms in
-  <a href="LICENSE">LICENSE</a> / <a href="LICENSES/">LICENSES/</a>. This page is generated by
-  <a href="../tools/gen_readme.py">tools/gen_readme.py</a>.
+  <a href="https://github.com/sirmick/redoubt/blob/main/LICENSE">LICENSE</a> / <a href="https://github.com/sirmick/redoubt/tree/main/LICENSES">LICENSES/</a>. This page is generated by
+  <a href="https://github.com/sirmick/redoubt/blob/main/tools/gen_readme.py">tools/gen_readme.py</a>.
 </footer>
 
 </main>

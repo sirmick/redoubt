@@ -1,6 +1,9 @@
 # Boot flow
 
-Built: rv32 and rv64 on QEMU `virt`. `cargo testbench --run <program>...` builds and boots it.
+The loader and bench support rv32 and rv64 on QEMU `virt`. For example,
+`./launch --program log-server --program ipc-client` builds and boots an rv64 run. The milestone
+acceptance requirement is rv64 boots plus rv32 compilation; optional rv32 runs do not establish
+full-stack rv32 support (PLAN.md).
 Owns: firmware, hardware abstraction, the loader, the boot bundle, the kernel argument block, and
 the hart timer as it works today. After the kernel starts: INIT.md.
 
@@ -84,8 +87,33 @@ end of the block, so a truncated or malformed block cannot make the kernel read 
 | `Seed` | RNG seed (32 bytes); a kernel with no `Seed` panics                       |
 | `Time` | timebase in ticks per second (2 words)                                    |
 | `Grnt` | one per granted process: pid, MMIO count, IRQ count, then the regions (four words each) and IRQs (DEVICE-GRANTS.md) |
+| `Devs` | device entries, six words each: kind, first value (2 words), second value (2), flags; layout below |
+| `Ctrl` | controller ranges, four words each: physical base (2 words), size (2); excluded from device mappings |
 | `IniE` | one per initial process; today only counted, to size the process table    |
 | `PNam` | one per initial process: pid, name length in bytes, then the name, padded to a word. `process_name` walks these records within the tag's own length |
+
+**Current device encoding (WP-K3).** These are the loader/kernel's implemented handoff, not an
+implicit answer to open question 143 about the target device policy. `Devs` entries are:
+
+| Kind | First value | Second value | Flags |
+| --- | --- | --- | --- |
+| 1, MMIO | Physical base | Size in bytes, whole pages | Bit 0: DMA permitted |
+| 2, IRQ | Interrupt number | 0 | 0 |
+| 3, Reset | 0 | 0 | 0 |
+
+The loader identifies virtio MMIO as DMA-capable and excludes interrupt controllers from its
+device list. `Ctrl` separately records the PLIC/CLINT ranges discovered by the controller searches;
+the kernel rejects an MMIO entry overlapping RAM or those controller ranges, wrapping its range,
+or not naming nonempty whole pages. This kernel check does not depend on the device-list exclusion
+heuristic succeeding. An IRQ entry cannot name 0, the legacy hart-timer pseudo-IRQ.
+
+The current handle order is interim: reset, the chosen console's MMIO and IRQ, then other MMIO in
+device-tree order and other IRQs ascending. The loader requires that console and IRQ before
+emitting the list; the kernel gives these device handles to the bundle's first user program.
+WP-R3 replaces positional discovery with manifest-named handles. The current `map_device` ABI
+returns **address and byte length** (`Return::Mapping { addr, len }`), so a driver can bound access;
+question 146 still tracks accepting that result shape into the target specification. Neither
+143 nor 146 is closed by this description of existing code.
 
 **Decided change** (PACKAGES.md, launching): the loader will verify the bundle and load only the
 kernel and `init`; `init` launches every other process through the loader stub, from the bundle's

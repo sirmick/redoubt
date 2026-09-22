@@ -33,6 +33,14 @@ VM (the BEAM is not in the TCB; INIT.md), and possibly a server it talks to. The
 3. **Human control.** Every increase in authority, and every declassification, is an out-of-band human
    approval; leases bound time; the sponsor can always end a lease (CAPABILITIES.md).
 
+**Open qualifications to these target guarantees:** question **165** asks how the capability-closure
+claim above accounts for permitted same-label delegation; answer 150's equal-label trust domain
+remains settled. Question **164** asks how confined placement accommodates the already-specified
+trusted mediation for approvals, push and declassification (answers 152-153). These are unresolved
+claim/topology questions, not accepted exceptions or proof that the current implementation meets
+the guarantees. Question **166** separately challenges the one-slice responsiveness promise in
+RESOURCES.md; human control does not establish that timing bound by itself.
+
 This is a **software** claim; the physical limits, including covert communication between co-located
 budgets, are out of scope (The adversary).
 
@@ -163,8 +171,10 @@ system, held to the same standard of simplicity as the kernel.
 - **Attack tests, not just happy paths.** Hostile images, hostile syscall arguments, hostile
   messages, resource exhaustion, malformed device trees. Expected outcome: a clean refusal, never a
   kernel panic, never silent corruption.
-- **Every dimension we claim.** (Milestones 1 to 3 claim rv64 only; rv32 is built, not booted, until
-  its goal after milestone 3, HISTORY.md.) Each XLEN, each hart count, each supported firmware. A configuration
+- **Every dimension we claim.** Milestones 1 to 3 require rv64 boot acceptance and rv32
+  compilation; available rv32 boot cases are optional, and required full-stack rv32 boot
+  acceptance belongs to the goal after milestone 3 (PLAN.md, HISTORY.md). Each claimed XLEN,
+  each hart count, each supported firmware. A configuration
   that is not booted in the bench is not supported.
 - **The harness can fail.** It is itself checked against known-bad runs, so a green result means something.
 - **Fuzz what parses.** Anything that parses untrusted bytes (ELF, tar, device tree, syscall
