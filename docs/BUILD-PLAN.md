@@ -34,9 +34,9 @@ not needed.
 - **Typed-message tables:** each server package (WP-D1, WP-D2, WP-D3, WP-S1, WP-S2, WP-S3) writes
   the tables of the protocols its server serves into that server's note, in WIRE.md's format, with a
   HISTORY.md line: a small design addition, reviewed as one.
-- **The owner's answers 1-126** (QUESTIONS.md) are in the notes; nothing is open. Packages built
-  before an answer that changes them get a follow-up package below (WP-A2, WP-A3, WP-W2, WP-W3,
-  WP-M1, WP-R1b, WP-V1) rather than a silent edit.
+- **The owner's answers 1-126** (QUESTIONS.md) are in the notes; nothing is open. A package built
+  before an answer that changed it gets a follow-up package rather than a silent edit (WP-A2, WP-W2,
+  WP-W3, WP-M1, WP-R1b, WP-V1); WP-A3 was folded into WP-K2, so it has no branch of its own.
 
 ## Work packages
 
@@ -143,7 +143,9 @@ not needed.
   call's errors updated to match.
 - Accepted when: round-trip and malformed-input tests for `budget_create`'s record; no encoding
   carries a priority or class argument; the fuzz target rerun; names match WP-M1.
-- Needs: WP-A2. Before WP-K2, which removes the flag from the kernel.
+- Needs: WP-A2. Before WP-K2, which removes the flag from the kernel. **Folded into WP-K2** (no
+  separate package): the flag is gone from `redoubt-sys` and the kernel together, so there is no A3
+  row in SWARM.md's claims table (HISTORY.md, WP-K2).
 
 **WP-L1. littlefs in pure Rust.** Size L.
 - Reads: NAMESPACES.md (filesystem section), littlefs `SPEC.md`.
@@ -223,8 +225,9 @@ not needed.
   116); transfer opt-in; `Dead` for the calls a dying server had taken; R10's reach into messages in
   flight and into handles inside queued messages (K1 has no messages to test it with); message ids
   unique per receiving process.
-- Also: the `first` flag removed from the kernel's `budget_create` (answer 103; K1 built it, WP-A3
-  drops it from the ABI). Nothing schedules on class or on a flag; R12's one queue is WP-K5's.
+- Also: the `first` flag removed from the kernel's `budget_create` (answer 103; K1 built it, and K2
+  removes it from the kernel and `redoubt-sys` together, so **WP-A3 is folded in** and has no branch
+  of its own). Nothing schedules on class or on a flag; R12's one queue is WP-K5's.
 - Accepted when: kernel cases for R1-R4b and I3, I4, I7, I9, I11, I15; attack cases: steal a receive
   right, mint badge 0, mint into a foreign budget, unequal-label call, 10,000 sender threads
   attempting to call with another account still served in turn, a vault-labelled sender filling its
@@ -238,7 +241,7 @@ not needed.
   handle's queued message and taken call (no reply handle reaches the sender), a revoked handle
   inside a queued message arriving as 0, `mint` from a `send`'s id;
   `budget_create` takes no flag, so no argument of any call asks to run ahead of the queue.
-- Needs: WP-K1, WP-A2, WP-A3.
+- Needs: WP-K1, WP-A2.
 
 **WP-K3. Device objects and interrupts.** Size M.
 - Reads: KERNEL-SPEC.md Device, R5, R11, `map_device`, `dma_alloc`, `system_reset`; DEVICE-GRANTS.md.
@@ -351,7 +354,7 @@ not needed.
 - Needs: WP-R1b, WP-K4.
 
 **WP-R3. init and the boot manifest.** Size M.
-- Reads: INIT.md (all), WIRE.md (JSON).
+- Reads: INIT.md (all), WIRE.md (JSON), TENETS.md (The use case), CONTAINMENT.md (the channel table).
 - Delivers: `init`: reads the manifest (refusing names outside INIT.md's name rule, and any grant of
   a server's own budget; refusing a manifest that gives `keyd` a principal's login or approval key
   or the key the loader verifies the bundle with, which it asks `keyd` for with `holds`, answers
@@ -377,6 +380,13 @@ not needed.
   is WP-S2's case); more than 5 restarts in 60 s reboots.
 - Needs: WP-R2, WP-W1, WP-K3, WP-K5. The `holds` operation it calls belongs to `keyd`'s table
   (WP-S1), so the refusal is written here and exercised end to end once WP-S1 has landed.
+- **Confinement (TENETS.md, The use case; CONTAINMENT.md, channel table; GAME.md, setup).** The
+  manifest gains the `confined` flag (INIT.md, The boot manifest): in a confined deployment, `init`
+  refuses any manifest that places two differing label sets in one server instance, volume, endpoint,
+  network instance or core, and refuses a domain that reads a shared unlabelled volume. Read the
+  channel table's software-closed rows, since `init` is what makes them configurations rather than
+  defaults. Attack case: a `confined` manifest placing a labelled and an unlabelled domain on one
+  `fsd` instance is refused at boot (the verdict is the boot failing, not the manifest's claim).
 
 **WP-R4. bootfsd and consoled.** Size S.
 - Delivers: `bootfsd` (read-only 9P over the verified bundle), serving **only the bundle entries
@@ -427,6 +437,11 @@ readable entries); typed `rename`, `copy`, `get_attr` and `set_attr` for within-
   than the granter's free quota is `refused`, and a `disconnect` gives it back); a remove while
   another connection holds a fid succeeds; the no-leaky-state observer sees no change, qid versions
   included, from a vault writer.
+- **Confinement (CONTAINMENT.md, channel table).** One `fsd` instance per volume, and a volume carries
+  one label set, so two differing label sets are never served by one instance; a confined deployment
+  gives each trust domain its own volume and instance. Attack case: an unlabelled connection cannot
+  see, read or time-change anything in a labelled volume's instance (the no-leaky-state observer,
+  extended to a second instance).
 - Needs: WP-D1, WP-L1, WP-R1b.
 
 **WP-D3. netd and ipd.** Size L. virtio-net driver; `ipd:lan` on `smoltcp` serving `/net` over
@@ -436,6 +451,9 @@ labelled callers.
   prefix, connect to the box's own address, a labelled caller refused. The bench's network is
   QEMU user mode with `restrict=on` (no outside peer); this package adds the peer it needs to the
   bench, with a self-check that the guest reaches nothing else.
+- **Confinement (CONTAINMENT.md, channel table).** One `ipd` per network or trust domain, so a stack bug
+  reached from one domain cannot touch another's; a confined deployment gives a labelled domain no
+  `/net` at all (a sink refuses labelled callers).
 - Needs: WP-R1b, WP-K3, WP-W2.
 
 ### Track S: security servers
@@ -495,6 +513,12 @@ those is a principal's: a principal's key, with the one message shape it may sig
   while every user budget spins (its weight, not an order); no
   server can destroy a session; a vault session's leases do not change the unlabelled sub-budget's
   free limits.
+- **Confinement (TENETS.md, The use case; CONTAINMENT.md, channel table).** For a confined deployment,
+  the steward refuses to place two differing label sets in one share, group or session tree, and never
+  mounts a shared unlabelled volume into a labelled domain (input is a steward push). It keeps each
+  agent its own label set by default. Attack case: a share or session that would place two differing
+  label sets under one server instance is refused, and a labelled session's attempt to read a shared
+  unlabelled volume is refused with a steward push offered instead.
 - Needs: WP-R3, WP-B1, WP-D2.
 
 **WP-S3. sshd.** Size M. `sunset`-based; host key through `keyd`; user authentication through the
@@ -517,21 +541,23 @@ this `sshd` in milestone 1, a stated residual).
 
 ## Order
 ```
-merged:                  W1  W2  L1  T1  T1b  A1  A2  K0  K1  R1  R1b
-start now, in parallel:  M0 -> M1;  A3 (after A2);  W3 (after W2, R1b);  V1 (nothing)
-kernel, serialized:      K2 (after A3) -> K3 -> K4 -> K5 -> K6 (after R1b)
-runtime:                 R2 (after K4) -> R3 (after K3, K5)
-                         R4 (after R1b, K3)
-beamlet:                 B1 (after R1b, R4) -> B2 (after R3)
-storage and network:     D1 (after R1b, K3) -> D2 (after L1);  D3 (after R1b, K3, W2)
-security:                S1 (after R1b);  S2 (after R3, B1, D2);  S3 (after D3, S1, S2)
-conformance:             C1 (after M1, K5, T1)
+merged:                  W1  W2  L1  T1  T1b  A1  A2  K0  K0b  K1  K2  K3  R1  R1b  S1  V1
+                         (A3 folded into K2)
+in review:               M0/M1 (the executable model)
+building:                K4 (kernel track);  R4, D1, D3
+the ready set:           W3 (the 9P opcode floor);  K5 (serialized behind K4 on the Hotspots)
+kernel, serialized:      K4 -> K5 -> K6 (after R1b)
+runtime:                 R4 (after R1b, K3);  R2 (after K4) -> R3 (after R2, W1, K3, K5)
+beamlet:                 B1 (after R1b, R4) -> B2 (after B1, R3)
+storage and network:     D1 (after R1b, K3) -> D2 (after D1, L1);  D3 (after R1b, K3, W2)
+security:                S1 (after R1b) -> S2 (after R3, B1, D2);  S3 (after D3, S1, S2)
+conformance:             C1 (after M1, K1-K5, T1)
 milestone:               E1 (after all)
 ```
 **The owner's answers 1-126** (QUESTIONS.md) are all in the notes; nothing is open. Answers
-102-119 add A3 and W3 and change K2, K5, M1, R3, D2 and S2; answers 120-126 add V1 and change R3,
-R4, S1 and S2. The critical path is unchanged: the kernel track (K2 to K5), then R3, S2 and S3;
-A3 must land before K2, which removes the `first` flag the merged K1 built. V1 is off the path and
+102-119 add W3 and change K2, K5, M1, R3, D2 and S2 (A3 was folded into K2); answers 120-126 add V1
+and change R3, R4, S1 and S2. The critical path is unchanged: the kernel track (K4 to K5), then R3,
+S2 and S3. V1 is off the path and
 depends on nothing, but it changes the loader and the bench's signing path together, so it is one
 package and no other package may edit either half while it runs (Hotspots).
 Everything off that path (model, codecs, littlefs, bench, drivers, beamlet's platform) can proceed
