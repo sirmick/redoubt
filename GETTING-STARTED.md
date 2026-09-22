@@ -1,7 +1,7 @@
 # Getting started with Redoubt
 
 Redoubt is a small, auditable RISC-V microkernel in pure Rust. Today the runtime is **beamlet**, a
-safe-Rust BEAM (Erlang/Elixir) VM. The full, diagrammatic tour is **[README.html](README.html)**;
+safe-Rust BEAM (Erlang/Elixir) VM. The full, diagrammatic tour is **[README.html](docs/README.html)**;
 the design of record is [`docs/`](docs/README.md).
 
 ## Host requirements
@@ -98,7 +98,7 @@ python3 tools/gen_readme.py   # DOT → SVG → README.html (needs graphviz)
 
 | Want | Read |
 | --- | --- |
-| The tour, with diagrams | [README.html](README.html) |
+| The tour, with diagrams | [README.html](docs/README.html) |
 | What the project believes (outranks everything) | [`docs/TENETS.md`](docs/TENETS.md) |
 | Where the code stands | [`docs/STATUS.md`](docs/STATUS.md) |
 | The precise kernel | [`docs/KERNEL-SPEC.md`](docs/KERNEL-SPEC.md) |
