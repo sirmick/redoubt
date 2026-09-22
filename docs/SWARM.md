@@ -137,6 +137,7 @@ it. A package whose work landed inside another is recorded as `folded` and gets 
 | K6 | waiting | | needs K1-K5, R1b |
 | R1 | merged | wp-r1 | 8298608af (carried the answers 39-42, 50-53 part of R1b) |
 | R1b | merged | wp-r1b | 86117e7af |
+| R1c | ready | | join `Parked` to the 9P skeleton; recovery of `5d29d136e` (answers 156-158); blocks R4 |
 | R2 | waiting | | needs R1b, K4 |
 | R3 | waiting | | needs R2, W1, K3, K5; carries the `confined` manifest |
 | R4 | building | wp-r4 | bootfsd and consoled |

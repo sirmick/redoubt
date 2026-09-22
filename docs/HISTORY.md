@@ -751,3 +751,13 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   recovered in WP-R1c. Applied to NAMESPACES.md (Holding a call; The console; the conformance corpus)
   and CONTAINMENT.md (the shared server library: parking is charged in the server's own buckets). No
   kernel, ABI or tenet change.
+- **WP-R1c filed: join `Parked` to the 9P skeleton** (2026-09-22, answers 156-159). Porting WP-R4
+  found that R1b removed the old `Read::Wait` without landing its replacement, and `parked.rs` said
+  so itself ("not yet joined to the 9P skeleton"). The join had in fact been written — in WP-R4's
+  own commit `5d29d136e`, never merged — so this is a recovery, not new design: `FileServer::read`
+  returns `Done`/`Wait`, `NineServer::serve_parking` hands a held request back with its T-message
+  intact (closing the handles it brought, re-reading it on the second serving so a clunked fid is an
+  `Rerror`), and `Parked` takes `&mut Admission` so fids and parked calls share buckets and shares.
+  It is its own package because `libs/rt` is shared by every server (answer 157), and WP-R4b now
+  needs it. Also fixed on `redoubt` by itself: `servers/keyd/tests/keyd.rs`'s stale test-harness
+  `#[path]`, which had made `cargo test -p redoubt-keyd` fail to compile (answer 159).
