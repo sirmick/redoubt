@@ -528,6 +528,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "redoubt-bootfsd"
+version = "0.1.0"
+dependencies = [
+ "redoubt-rt",
+]
+
+[[package]]
+name = "redoubt-consoled"
+version = "0.1.0"
+dependencies = [
+ "redoubt-rt",
+]
+
+[[package]]
 name = "redoubt-kernel"
 version = "0.9.38"
 dependencies = [
