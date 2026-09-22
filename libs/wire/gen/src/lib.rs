@@ -979,6 +979,13 @@ mod tests {
         // An unmarked table is unaffected: its opcodes may start at 1.
         let p = protocols(&format!("{HEAD}| 1 | `a` | - | - |\n{ERRORS}")).unwrap();
         assert_eq!(p[0].messages[0].opcode, 1);
+        // The ` ninep` suffix is stripped only from a `<!-- wire: ... -->` marker. On an error
+        // marker it is not, so it stays part of the name and `check_ident` refuses it — an error
+        // table never carries the marker, and a writer who tries gets a clear snake_case error
+        // rather than a table silently served as if it were a protocol on a 9P endpoint.
+        let bad_errors = ERRORS.replace("wire-errors: demo", "wire-errors: demo ninep");
+        let e = protocols(&format!("{HEAD}| 1 | `a` | - | - |\n{bad_errors}")).unwrap_err();
+        assert!(e.contains("snake_case"), "{e}");
     }
 
     #[test]
