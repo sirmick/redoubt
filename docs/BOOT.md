@@ -5,7 +5,7 @@ Owns: firmware, hardware abstraction, the loader, the boot bundle, the kernel ar
 the hart timer as it works today. After the kernel starts: INIT.md.
 
 ```
-SBI firmware (OpenSBI / RustSBI), M-mode
+RustSBI firmware, M-mode
   └─ loader, S-mode, MMU off           a0 = hart id, a1 = device tree
        └─ kernel, S-mode, Sv32/Sv39    a0 = args, a1 = process table, a2 = RAM page-owner table,
                                        a3 = MMIO page-owner table
@@ -13,10 +13,10 @@ SBI firmware (OpenSBI / RustSBI), M-mode
 ```
 
 ## Firmware
-rv64 boots under OpenSBI (bundled with QEMU) or the RustSBI Prototyper (pure Rust; the bench case
-`rustsbi-boot`). QEMU ships no rv32 OpenSBI, so rv32 always boots under RustSBI.
-`scripts/build-bios.sh` builds both Prototyper firmwares where the bench expects them (override
-with `RUSTSBI_PROTOTYPER` / `RUSTSBI_PROTOTYPER_RV32`).
+Both rv32 and rv64 boot only the vendored RustSBI Prototyper. `scripts/build-bios.sh` builds both
+firmware images where the bench expects them (override with `RUSTSBI_PROTOTYPER` /
+`RUSTSBI_PROTOTYPER_RV32`). A missing image is a build error; the bench never falls back to
+firmware bundled with the emulator.
 
 ## Hardware abstraction
 CPUs and SoCs differ in ways unrelated to XLEN, so code never uses `target_arch` to mean "has a PLIC"

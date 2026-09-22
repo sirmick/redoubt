@@ -34,3 +34,7 @@ payload = []
 jump = []
 fdt = []
 hypervisor = []
+# Redoubt's current deployment profile: QEMU virt's 16550 UART, SiFive CLINT,
+# and SiFive test/finisher reset device. The generic profile remains the
+# default so upstream hardware support can be re-enabled without restoring code.
+qemu-virt = []

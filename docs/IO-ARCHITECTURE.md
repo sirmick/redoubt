@@ -276,15 +276,15 @@ contains no graphics code.
 For messy SoCs (e.g. the Orange Pi RV2, SpacemiT K1: no IOMMU, no hypervisor extension).
 - **Trust model: Linux is in the TCB.** A compromised Linux (or its boot chain, which also supplies
   the device tree and RNG seed) is game over; we do not defend against it.
-- **Partition with OpenSBI domains:** the device tree assigns harts, RAM and MMIO to a Linux domain
+- **Partition with RustSBI domains:** the device tree assigns harts, RAM and MMIO to a Linux domain
   and a Redoubt domain; PMP keeps each domain's harts out of the other's memory; SBI IPI and HSM
   calls stay within a domain.
 - **One shared window** holds the virtio rings and buffers. Linux runs the device side (a small
   userspace backend over its drivers); Redoubt runs its normal virtio drivers.
 - **Doorbells:** SBI IPIs do not cross domains. Start with polling; later a hardware mailbox or a
   small SBI extension.
-- The firmware (OpenSBI, C) enforces the partition; whether RustSBI supports domains is unchecked.
-  Testable on QEMU: OpenSBI domains work on `virt`.
+- RustSBI must enforce the partition. Its domain support is currently unchecked, so Linux on
+  reserved cores remains deferred until that support exists and is tested on QEMU `virt`.
 
 ### IOMMU and IOPMP
 A RISC-V IOMMU backend (QEMU `iommu-sys=on`, QEMU 10 or later; open RTL exists) or IOPMP

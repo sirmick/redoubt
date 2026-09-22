@@ -1,9 +1,15 @@
 //! Translation from Platform Description nodes into [`BoardInfo`].
 
 mod console;
+#[cfg(not(feature = "qemu-virt"))]
+mod devices;
+#[cfg(feature = "qemu-virt")]
+#[path = "devices_qemu.rs"]
 mod devices;
 mod harts;
+#[cfg(not(feature = "qemu-virt"))]
 mod imsic;
+#[cfg(not(feature = "qemu-virt"))]
 mod syscon;
 
 use crate::devicetree::Tree;
@@ -19,9 +25,15 @@ pub(super) fn discover_platform(
     let mut board = BoardInfo::empty();
     harts::discover(&mut board, &tree)?;
     board.console = console::discover(platform)?;
-    board.allwinner_v821 = platform.allwinner_v821_registers();
+    #[cfg(not(feature = "qemu-virt"))]
+    {
+        board.allwinner_v821 = platform.allwinner_v821_registers();
+    }
     devices::discover(&mut board, platform)?;
-    board.spacemit_k1 = platform.spacemit_k1_registers()?;
-    board.allwinner_v861 = platform.allwinner_v861_registers();
+    #[cfg(not(feature = "qemu-virt"))]
+    {
+        board.spacemit_k1 = platform.spacemit_k1_registers()?;
+        board.allwinner_v861 = platform.allwinner_v861_registers();
+    }
     Ok(board)
 }

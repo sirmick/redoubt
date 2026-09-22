@@ -50,7 +50,7 @@ DIAGRAMS = {}
 
 DIAGRAMS["stack"] = digraph("stack", [
     node("hw", "HARDWARE\\nQEMU virt RV64 + RV32 (built)   ·   FPGA cards (planned)", DEFER),
-    node("fw", "BIOS / firmware (M-mode)\\nOpenSBI (QEMU)   ·   RustSBI Prototyper", BUILT),
+    node("fw", "BIOS / firmware (M-mode)\\nRustSBI Prototyper — rv64 + rv32", BUILT),
     node("ld", "LOADER (S-mode)\\nverify the Ed25519 bundle  ·  build Sv32/Sv39  ·  argument block", BUILT),
     node("ke", "KERNEL (S-mode) — the TCB\\nmemory · threads · IPC · budgets · handles · endpoints · devices · timer", KERN),
     node("sv", "SERVERS (U-mode, unprivileged)\\nkeyd  ·  steward  ·  sshd  ·  fsd  ·  blkd  ·  netd  ·  ipd  ·  bootfsd  ·  consoled", DES),
@@ -309,7 +309,7 @@ footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
   <div class="diagram">@@STACK@@</div>
   <div class="grid2">
     <div class="card"><h4>Built and tested</h4><ul class="tight">
-      <li>rv64 + rv32 boot on QEMU virt, OpenSBI and RustSBI</li>
+      <li>rv64 + rv32 boot on QEMU virt under the vendored RustSBI firmware</li>
       <li>the kernel: memory, threads, handles &amp; endpoints, budgets, devices, IRQ receive, timer, verified boot, W^X</li>
       <li><code>libs/</code>: sys, rt, wire, signing, littlefs, paging</li>
       <li><code>servers/keyd</code>, <code>tools/testbench</code></li>
@@ -335,7 +335,7 @@ footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
   both the loader and the signer so they cannot drift.</p>
   <div class="diagram">@@BOOT@@</div>
   <ul class="tight">
-    <li><b>Built:</b> firmware selection, loader both widths, Ed25519 verification, W^X, default-deny device grants.
+    <li><b>Built:</b> vendored RustSBI and loader on both widths, Ed25519 verification, W^X, default-deny device grants.
       <a href="BOOT.md">BOOT.md</a> · <a href="VERIFIED-BOOT.md">VERIFIED-BOOT.md</a> · <a href="../libs/signing/src/lib.rs">libs/signing</a> · <a href="../loader/src/verify.rs">loader/src/verify.rs</a></li>
     <li><b>Designed change:</b> the loader will load only <code>kernel</code> + <code>init</code>; <code>init</code> launches every other
       process through a system-signed <b>loader stub</b> from the bundle's pages. <a href="PACKAGES.md">PACKAGES.md</a></li>
@@ -343,10 +343,10 @@ footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
   <h3>Hardware</h3>
   <table>
     <tr><th>Target</th><th>Width</th><th>Firmware</th><th>Status</th></tr>
-    <tr><td>QEMU <code>virt</code></td><td>RV64 (Sv39)</td><td>OpenSBI (bundled) or RustSBI Prototyper</td><td><span class="pill built"><span class="dot"></span>booted</span></td></tr>
-    <tr><td>QEMU <code>virt</code></td><td>RV32 (Sv32)</td><td>RustSBI Prototyper (no rv32 OpenSBI in QEMU)</td><td><span class="pill built"><span class="dot"></span>booted</span></td></tr>
-    <tr><td>FPGA PCIe cards (XC7K480T)</td><td>RV64GC Sv39, 32 hw threads</td><td>RustSBI / OpenSBI</td><td><span class="pill des"><span class="dot"></span>planned</span></td></tr>
-    <tr><td>Messy SoCs (e.g. Orange Pi RV2)</td><td>RV64</td><td>OpenSBI domains; Linux on reserved cores</td><td><span class="pill defer"><span class="dot"></span>deferred</span></td></tr>
+    <tr><td>QEMU <code>virt</code></td><td>RV64 (Sv39)</td><td>RustSBI Prototyper</td><td><span class="pill built"><span class="dot"></span>booted</span></td></tr>
+    <tr><td>QEMU <code>virt</code></td><td>RV32 (Sv32)</td><td>RustSBI Prototyper</td><td><span class="pill built"><span class="dot"></span>booted</span></td></tr>
+    <tr><td>FPGA PCIe cards (XC7K480T)</td><td>RV64GC Sv39, 32 hw threads</td><td>RustSBI</td><td><span class="pill des"><span class="dot"></span>planned</span></td></tr>
+    <tr><td>Messy SoCs (e.g. Orange Pi RV2)</td><td>RV64</td><td>RustSBI domains; Linux on reserved cores</td><td><span class="pill defer"><span class="dot"></span>deferred</span></td></tr>
   </table>
   <p class="lead">Hardware differences are <b>capability features</b> (<code>sbi</code>, <code>plic</code>) composed by <b>board
   features</b> (<code>qemu-virt</code>), never <code>target_arch</code> checks. RAM, MMIO and the interrupt controller come from

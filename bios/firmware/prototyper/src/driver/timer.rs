@@ -1,7 +1,9 @@
 //! Platform timer devices shared by boot, Runtime, and SBI TIME.
 
+#[cfg(not(feature = "qemu-virt"))]
 use crate::riscv::csr::stimecmp;
 use alloc::boxed::Box;
+#[cfg(not(feature = "qemu-virt"))]
 use runtime::csr::{mie, mip};
 use runtime::hart::HartId;
 use spin::{Mutex, Once};
@@ -40,8 +42,10 @@ pub(crate) trait TimerBackend: Send + Sync {
 }
 
 /// Timer implementation using the Sstc `stimecmp` CSR.
+#[cfg(not(feature = "qemu-virt"))]
 pub(super) struct SstcTimer;
 
+#[cfg(not(feature = "qemu-virt"))]
 impl TimerBackend for SstcTimer {
     #[inline(always)]
     fn set_timer(&self, hart_id: usize, value: u64) {

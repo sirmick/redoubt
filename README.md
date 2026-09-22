@@ -25,7 +25,7 @@ runtime is **beamlet**, a safe-Rust **BEAM (Erlang/Elixir) VM**. The OS is runti
 
 ```sh
 ./dev.sh                 # build the dev container (once), then a shell in /work
-./scripts/build-bios.sh  # firmware: the vendored RustSBI in bios/ (needed for rv32)
+./scripts/build-bios.sh  # firmware: the vendored RustSBI in bios/, both widths
 ./build  --arch rv64     # kernel + loader
 ./launch --arch rv64     # prints the exact QEMU line, boots, serial on stdin/stdout
 ./test   --arch rv64     # the boot-test bench

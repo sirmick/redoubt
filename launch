@@ -5,7 +5,7 @@
 #
 # Usage: ./launch [--arch rv32|rv64] [--smp N] [--debug] [--print-only]
 #                 [--program NAME|PATH]...
-#   --arch       target width (default rv64); rv32 boots RustSBI from bios/
+#   --arch       target width (default rv64); both widths boot RustSBI from bios/
 #   --smp N      hart count (default 1)
 #   --debug      start paused with QEMU's gdb stub on :1234
 #   --print-only print the QEMU command and exit without booting

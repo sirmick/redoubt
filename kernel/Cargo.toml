@@ -36,7 +36,7 @@ smp = [] # multi-hart: KernelCell becomes a spinlock (the big kernel lock)
 
 # Capabilities. Boards select these; code keys on them rather than on the CPU's XLEN.
 # See "Hardware abstraction" in planning/redoubt/PLAN.md.
-sbi = ["dep:sbi-rt", "rand_chacha"] # runs in S-mode under SBI firmware (OpenSBI, RustSBI)
+sbi = ["dep:sbi-rt", "rand_chacha"] # runs in S-mode under the vendored RustSBI firmware
 plic = ["dep:plic"]                 # standard RISC-V PLIC interrupt controller
 
 # Boards. Everything else about these machines comes from the device tree at boot.

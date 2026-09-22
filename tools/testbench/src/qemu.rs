@@ -42,7 +42,7 @@ impl Drop for Reaped {
 /// What to boot: the same for a test run and for an interactive session.
 pub struct Image<'a> {
     pub machine: &'a Machine,
-    /// A firmware image for `-bios`, or "default" for the one QEMU ships (OpenSBI).
+    /// The vendored RustSBI firmware image passed to QEMU with `-bios`.
     pub firmware: &'a str,
     pub loader: &'a Path,
     pub bundle: &'a Path,
@@ -270,8 +270,11 @@ pub fn run(image: &Image, boot: &Boot, workspace: &Path, forwards: &[Forward], l
             Line::Timeout => break,
             Line::Exited if boot.poweroff => {
                 let status = guest.0.wait()?;
-                if !status.success() {
-                    return Ok(Verdict::Fail(format!("QEMU exited with {status}")));
+                if status.code() != Some(boot.poweroff_status) {
+                    return Ok(Verdict::Fail(format!(
+                        "QEMU exited with {status}, expected status {}",
+                        boot.poweroff_status
+                    )));
                 }
                 break;
             }

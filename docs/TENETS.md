@@ -119,9 +119,8 @@ loader, kernel) and hold it in their head. It should read like a textbook exampl
   Covert flows are out of scope (The use case).
 
 ## 3. Rust, and assembly only where Rust cannot reach
-- Everything that runs on the machine is Rust: loader, kernel, servers, applications, and the
-  firmware where we choose it (RustSBI). OpenSBI (C) is tolerated on QEMU and in the Linux-partition
-  mode; firmware is always TCB.
+- Everything that runs on the machine is Rust: RustSBI firmware, loader, kernel, servers and
+  applications. RustSBI is the only supported firmware on both widths and is always TCB.
 - Assembly is limited to what the language cannot express: trap entry and exit, context switch, the
   first instructions after reset. It is written as `global_asm!`/`asm!` inside Rust sources, never as
   separate prebuilt objects.

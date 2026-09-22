@@ -22,6 +22,7 @@ struct V821Cache {
     l2: MmioRegion,
 }
 
+#[cfg_attr(feature = "qemu-virt", allow(dead_code))]
 pub(crate) fn initialize(
     _soc: AllwinnerV821Registers,
     registers: DeviceRegisterRange,

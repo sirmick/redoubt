@@ -6,8 +6,8 @@ channels; this note records what Redoubt needs from it.
 ## The cards
 Two XC7K480T PCIe cards (Baidu/Inspur; about 300K LUT6, 34 Mb BRAM, 4 GB DDR3 each, PCIe Gen2 x8),
 in a host machine that builds and serves them.
-- **Card A, the CPU:** RV64GC with Sv39 on a standard platform (CLINT, PLIC, 16550), so OpenSBI,
-  RustSBI and Linux run unmodified. 8 cores x 4 hardware threads (in-order, dual-issue,
+- **Card A, the CPU:** RV64GC with Sv39 on a standard platform (CLINT, PLIC, 16550), so RustSBI
+  and Linux run unmodified. 8 cores x 4 hardware threads (in-order, dual-issue,
   barrel-scheduled), 32 KB L1s, 2 MB shared L2. DDR3 channel A is main memory; **channel B is for
   DMA**. Hardware channels (send, receive, park on empty) as MMIO devices, later possibly as custom
   instructions. A retirement trace and performance counters for the test harness.

@@ -1,7 +1,6 @@
-description = "The same loader and bundle boot under pure-Rust firmware (RustSBI), not just OpenSBI"
-arch = ["rv64"]
+description = "The normal loader and bundle boot under the vendored RustSBI firmware"
+arch = ["rv32", "rv64"]
 kind = "boot"
-firmware = "rustsbi"
 programs = ["log-server", "ipc-client"]
 expect = ['bundle signature ok', 'KMAIN \(clean boot\)', 'IPC TEST PASSED']
 

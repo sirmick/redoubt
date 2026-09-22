@@ -147,7 +147,7 @@ questions (129-137). Points already agreed:
 ## SMP (after milestone 1)
 The two-hart spike works: a second hart started through SBI HSM runs kernel code and contends on the
 spinlock `KernelCell` (the `smp` feature; bench case `smp-spike`). Remaining:
-- OpenSBI picks the boot hart at random; never assume hart 0.
+- Firmware may pick any boot hart; never assume hart 0.
 - Per-hart trap stack and current (PID, TID) via `sscratch`; scheduling on every hart.
 - Big kernel lock at trap entry; one global run queue (RESOURCES.md).
 - IPIs: reschedule, and TLB shootdown (SBI RFENCE, by ASID) on unmap, lend and return before a page

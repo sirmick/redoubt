@@ -43,7 +43,7 @@ ratchet (211 undocumented uses at the fork, 0 now); ARM, x86 and the in-kernel g
 
 ## rv32 re-homed (2026-09-18)
 rv32 and rv64 now share one loader, one SBI/PLIC/timer platform and one physmap design, differing
-only in width; both boot on QEMU under RustSBI (QEMU ships no rv32 OpenSBI). Precursor, bao1x,
+only in width; both boot on QEMU under RustSBI. Precursor, bao1x,
 VexRiscv, the Sv32 window scheme, swap and the prebuilt assembly blobs were deleted.
 Width bugs found at first rv32 boot, all "assumed rv64":
 - `PHYSMAP_BASE + phys` is right only when the physmap starts at physical 0; use `physmap_virt()`.
