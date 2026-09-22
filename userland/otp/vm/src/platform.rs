@@ -28,6 +28,15 @@ pub trait Platform: crate::sync::Sendable {
     /// Write bytes to the VM's console (the `user` I/O device).
     fn console_write(&mut self, bytes: &[u8]);
 
+    /// The console's current size, if known. A TUI application queries this to lay out its
+    /// screen. The default is unknown, which is honest: a platform that has not asked its console
+    /// server does not know, and must not claim a size it was never told. On Redoubt the embedder
+    /// answers by asking `/dev/cons` with the `consol` `size` call and caching the reply
+    /// (docs/USERLAND-API.md, "The console and the `Platform` contract"; answer 162).
+    fn console_size(&mut self) -> Option<(u16, u16)> {
+        None
+    }
+
     /// Input typed at the console, if any has arrived. Must not block: the VM calls it between
     /// time slices, and [`Platform::idle`] is where it waits (an `idle` call should return when
     /// input arrives). The default is a console with no input at all.
