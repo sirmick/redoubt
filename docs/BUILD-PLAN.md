@@ -383,7 +383,7 @@ not needed.
 - Needs: WP-R2, WP-W1, WP-K3, WP-K5. The `holds` operation it calls belongs to `keyd`'s table
   (WP-S1), so the refusal is written here and exercised end to end once WP-S1 has landed.
 - **Confinement (answers 152-153; TENETS.md, The use case; CONTAINMENT.md, Push and the channel
-  table; GAME.md, setup).** The manifest gains the `confined` flag (INIT.md, The boot manifest): one
+  table; GAME.md, Setting up a match).** The manifest gains the `confined` flag (INIT.md, The boot manifest): one
   top-level boolean for the whole boot. `init` compares **label sets** and refuses the boot when two
   entries with differing sets share a `servers` entry, a `volumes` entry, an endpoint name in
   `receives`/`handed`, an `ipd:*`/`netd` instance, a **device object** (`devices`), or a core, and when
@@ -473,7 +473,7 @@ those is a principal's: a principal's key, with the one message shape it may sig
   WIRE.md (granting and releasing).
 - Delivers, besides signing: `grant` and `release` in WIRE.md's shape, written into `keyd`'s table;
   `holds(public key)`, answered yes or no, which is how `init` refuses a manifest that hands `keyd`
-  the bundle key without deriving a public key itself (INIT.md, answer 120); its keys taken as the
+  the bundle key without deriving a public key itself (INIT.md, The boot manifest; answer 120); its keys taken as the
   manifest arguments `name,purpose,seed`, defined in `keyd`'s own note (answer 122); its first
   minted badge drawn at random above 2^63 (answer 126, with the 9P skeleton, which changes with it).
 - Accepted when: a signature round-trips through a badge-scoped handle; attack cases: a caller
@@ -550,7 +550,7 @@ this `sshd` in milestone 1, a stated residual).
 ## Order
 ```
 merged:                  W1  W2  L1  T1  T1b  A1  A2  K0  K0b  K1  K2  K3  R1  R1b  S1  V1
-                         (A3 folded into K2)
+                         (A3 folded into K2; W3a merged, review due)
 in review:               M0/M1 (the executable model)
 building:                K4 (kernel track);  R4, D1, D3
 the ready set:           K5 (behind K4 on the Hotspots)

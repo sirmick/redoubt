@@ -88,7 +88,7 @@ given no `/net` at all: a sink refuses labelled callers);
   disk/NIC/GPU row), so it is refused like any other sharing; a device the manifest clears for a
   label in a confined deployment needs its own instance per domain like the rest;
 - a **core** — a hardware core their budgets both run on. Milestone 1 is one budget per core already
-  (PLATFORM-FPGA.md, RESOURCES.md); a confined manifest that names more cores than budget groups is
+  (PLATFORM-FPGA.md, What Redoubt needs; RESOURCES.md); a confined manifest that names more cores than budget groups is
   refused rather than silently time-sharing a core between two label sets.
 
 What `init` compares is the **label set**: the labels each budget carries (`labels` in the manifest,
@@ -266,7 +266,8 @@ waiting per (account, label set) (R2, CONTAINMENT.md) and the bound on one reque
 **Bounds.** At most 16 keys; a transcript part at most 16 KiB and an audit record at most 8 KiB,
 so the work of one request is bounded by a number stated here rather than by the buffer that
 carried it; at most 8 live grants per (account, label set), across at most 16 of those at once,
-which is what `keyd`'s budget covers with every bucket at its cap (CONTAINMENT.md, answer 85).
+which is what `keyd`'s budget covers with every bucket at its cap (CONTAINMENT.md, the shared server
+library; answer 85).
 
 **What each error answers.** `malformed` (code 1, as in every protocol): the request did not
 decode, or its lengths are ones no sender could mean — a transcript with an empty part, or an
@@ -361,7 +362,7 @@ into slots 1..n, at most `MAX_START_HANDLES`; handle 0 is never a handle) and ma
 into it, read-only (`process_map`), holding the block below. **`process_start`'s `arg` is that
 page's address** (page-aligned; 0 = no block), which the child's first thread receives
 (KERNEL-SPEC.md); there is no fixed address. The program image travels in its own pages, which the
-block names (PACKAGES.md, launching; its fields are defined with the loader stub). No environment
+block names (PACKAGES.md, Launching a process; its fields are defined with the loader stub). No environment
 variables, nothing inherited. Configuration is files in the namespace.
 
 **Format.** The page starts with a `u32` byte length, then the block: one typed message (WIRE.md),
