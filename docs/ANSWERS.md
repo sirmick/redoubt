@@ -406,3 +406,59 @@ Notes:
   terminal state-machine and key tables, never built, never linked (TENETS.md 3). Recorded in
   `USERLAND-API.md`'s console section and ignored like the other vendored reference trees
   (`.gitignore`). This is an orchestrator action (the file is not the architect's); proposed below.
+
+---
+
+# Answer to 160 (owner, 2026-09-22), and question 163 (architect)
+
+**160 is decided by the owner; 163 is open.** The owner overruled 160's earlier recommendation and
+chose the general rule with `resize` kept in milestone 1. Specifying it revealed a mechanical gap,
+recorded as 163.
+
+## Accepted as recommended
+
+**160. A server pushes an unprompted event by parking a call the client made.** The IPC primitives
+are caller-initiated — a `call` and a `send` both start at the client, a `reply` answers a call the
+server already took — so a server has no way to speak to a process that is merely reading a file. The
+design's answer is that a server which has news and a client that wants it meet by the client
+**calling and waiting**: the client makes a call meaning "tell me when this happens", the server
+**parks** it (the machinery WP-R1c landed), and answers it when the event occurs. The parked call *is*
+the push channel: no endpoint is handed over, no `send` is needed, and WIRE.md's rule holds (every
+milestone 1 typed message is a `call`).
+
+- **Where it lives:** NAMESPACES.md, Holding a call — the section that already describes parking now
+  says *why* a server parks (not only "the file server asked"), and states this as the design's answer
+  to server-initiated delivery.
+- **What it costs:** a parked call holds one of the caller's `MAX_OPEN_CALLS` and one of the server's
+  admission slots (its bucket and share) for as long as it waits, which is why parked calls are
+  capped, reported abandoned, and may carry a deadline.
+- **`resize` is an instance.** `consol` opcode 17 `resize` is a `call` with no fields: the client
+  calls it, the server parks it, and answers `cols, rows` when the window changes. Same shape as
+  opcode 16 `size`, so the table stays all-`call`s and needs no `kind` column. A client that never
+  calls it misses changes (it should re-read `size` when it redraws); a client re-calls `resize` after
+  each reply to wait for the next; one parked `resize` per connection is the client's own business and
+  the server keeps no per-client resize state; on a UART, where nothing resizes, `consoled` parks a
+  `resize` for ever rather than refusing it, since a wait is honest and `size` is there for a client
+  that would rather not wait.
+- **`Redoubt.Console`** gets `await_resize/1` — a **message**, not the removed `on_resize(callback)`:
+  the caller is re-called and `{:console_resize, cols, rows}` arrives as a message, which is how this
+  VM delivers anything to a process.
+
+## Open
+
+**163. A parked *typed* call is not possible yet.** The park mechanism reaches only the 9P `read`
+path: `serve_parking` hands a request back only when `answer_in_place` returns `Answer::Waiting`, and
+that comes only from `FileServer::read` returning `Read::Wait`. A typed opcode goes to the server's
+own dispatch (`Result<(), Error>`, always replies) and the typed `Answer<R>` has no "wait". So
+`resize` is specified but not buildable until the typed dispatch can hand a request back. **Rec:**
+extend it in its own `libs/rt` package (WP-R1d), owned by WP-B2a, so one park mechanism serves both
+entry points; until then WP-B2a builds opcode 16 `size` and not 17 `resize`. **Alt:** make `resize` a
+9P file (`/dev/cons-size`, whose `read` parks) — needs no `libs/rt` change but splits one concern
+across two mechanisms. Open for the owner or the orchestrator to schedule.
+
+Notes:
+- 160's earlier Rec (drop `resize` from milestone 1) is **overruled**; the record keeps the reasoning
+  in QUESTIONS.md 160, which now carries the owner's decision in its `Answered` line.
+- Applied to NAMESPACES.md (Holding a call, The console), USERLAND-API.md (The console and the
+  `Platform` contract, `Redoubt.Console`), QUESTIONS.md (160 closed, 163 opened) and HISTORY.md.
+  Nothing in KERNEL-SPEC.md, CAPABILITIES.md or TENETS.md is touched.

@@ -5,6 +5,7 @@
 
 pub mod blkd;
 pub mod bootfs;
+pub mod consol;
 pub mod example;
 pub mod fsd;
 pub mod keyd;
