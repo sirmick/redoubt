@@ -722,3 +722,12 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   files spends its whole allowance and returns nothing (five timeouts, then five verdicts after
   splitting). The reviewer prompt says so, and `docs/SWARM.md` rule 8's rounds are cut to one
   guarantee or one mechanical check each.
+- **`bootfs` design restored to NAMESPACES.md** (2026-09-22): the `#### Filling /boot: the bootfs
+  protocol` section, dropped when the notes moved from `planning/redoubt/` to `docs/`, is restored
+  ahead of bringing the finished `bootfsd` and `consoled` (branch `wp-r4`) onto `redoubt`. Without
+  its wire table `bootfsd`'s codec cannot generate, the same gap that held up `blkd`. The section
+  keeps answer 148's design — `init` reads the bundle and pushes the public entries' bytes, so
+  `bootfsd` never sees the bundle — and its table is marked `<!-- wire: bootfs ninep -->` (WP-W3a's
+  marker), since the two operations are opcodes 16 and 17 on `bootfsd`'s own 9P endpoint. The
+  `bootfsd` bullet's last sentence, which still said `init` passes the list as its arguments, is
+  corrected to match. No design decision changed; the source text is the reviewed note from `wp-r4`.
