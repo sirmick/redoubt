@@ -386,11 +386,12 @@ not needed.
   table; GAME.md, setup).** The manifest gains the `confined` flag (INIT.md, The boot manifest): one
   top-level boolean for the whole boot. `init` compares **label sets** and refuses the boot when two
   entries with differing sets share a `servers` entry, a `volumes` entry, an endpoint name in
-  `receives`/`handed`, an `ipd:*`/`netd` instance, or a core, and when a labelled domain would read a
-  shared unlabelled volume. Refusal is a boot failure, not a warning. Attack cases: a `confined`
-  manifest placing a labelled and an unlabelled domain on one `fsd` instance is refused (the verdict is
-  the boot failing, not the manifest's claim), and one placing them on one `ipd` instance, one endpoint
-  or one core is refused likewise.
+  `receives`/`handed`, an `ipd:*`/`netd` instance, a **device object** (`devices`), or a core, and when
+  a labelled domain would read a shared unlabelled volume. Refusal is a boot failure, not a warning.
+  Attack cases: a `confined` manifest placing a labelled and an unlabelled domain on one `fsd`
+  instance is refused (the verdict is the boot failing, not the manifest's claim), and one placing
+  them on one `ipd` instance, one endpoint, one device or one core is refused likewise. (R-2 red team,
+  2026-09-22: the device clause was the gap; the shared-volume tail is covered by the Push rule.)
 
 **WP-R4. bootfsd and consoled.** Size S.
 - Delivers: `bootfsd` (read-only 9P over the verified bundle), serving **only the bundle entries
