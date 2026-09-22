@@ -833,3 +833,16 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   back only on `Answer::Waiting`, which only `FileServer::read` produces, and the typed dispatch must
   always reply — so question 163 files **WP-R1d** (extend the typed dispatch to park, `libs/rt`, its
   own review round), and WP-B2a implements `size` now and `resize` once R1d lands.
+- **R-T1 security review: the parked `resize` rule leaked across channels** (2026-09-22). The new push
+  rule said "a server need keep no per-client resize state: it resumes every parked `resize` it holds
+  when the size changes". That is right for `consoled` (one console) and wrong for `sshd` (one console
+  per SSH channel, each with its own pty size and label set) — the very server the same note says
+  gives `resize` its first answer. It would answer one channel's waiter with another channel's
+  geometry: a labelled session reading an unlabelled one's terminal state, the read-up direction
+  `check` exists to stop. The rule now keys a parked `resize` to the (connection, console) it arrived
+  on, and says WP-S3 must keep the state to do that. Two consequences recorded: the 163 extension must
+  answer a resumed **typed** call only on the connection it arrived on (a typed message has no lend
+  and no fid, so nothing is re-read on resume), and a multi-channel server needs a serving thread per
+  channel, since an abandonment notice reaches only the thread holding the call on the endpoint it
+  came in on. CONTAINMENT.md now says the server-side deadline has the console read as its exception
+  (`consoled` parks `FOREVER`), removing the contradiction with NAMESPACES.md.
