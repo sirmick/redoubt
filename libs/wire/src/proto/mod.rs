@@ -4,6 +4,7 @@
 //! `cargo run -p redoubt-wire-gen`.
 
 pub mod blkd;
+pub mod bootfs;
 pub mod example;
 pub mod fsd;
 pub mod keyd;

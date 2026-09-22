@@ -1,0 +1,14 @@
+[package]
+name = "redoubt-bootfsd"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "bootfsd: serves the boot bundle's public entries read-only at /boot over 9P, and nothing else of the bundle"
+
+[[bin]]
+name = "bootfsd"
+path = "src/bin/bootfsd.rs"
+
+# Only the runtime: nothing here parses a format of its own (TENETS.md 5).
+[dependencies]
+redoubt-rt = { path = "../../libs/rt" }
