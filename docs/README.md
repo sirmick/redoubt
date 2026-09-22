@@ -153,6 +153,10 @@ Sessions and agents are beamlet VMs in user budgets, not servers.
   9P calls: the request did not decode (WIRE.md).
 - **beamlet**: the safe-Rust BEAM VM running the Elixir userland (sibling repository). **IEx**:
   Elixir's interactive shell. **OTP**: Erlang's standard library. **NIF**: a BEAM native function.
-- **LPM** (longest-prefix match): IP route lookup. **VLAN** (802.1Q): tagged virtual LANs.
+- **`redoubt-sys` / `redoubt-abi`:** `redoubt-sys` (libs/sys/) is the new Redoubt syscall ABI
+  (call numbers, register encodings, errors, WP-A1); the kernel's Redoubt call path uses it.
+  `redoubt-abi` (libs/abi/) is the legacy Xous ABI — memory layout constants, process structures,
+  the old syscall interface — still used by the kernel's RISC-V arch layer and the loader.
+  **WP-K6 removes the legacy interface and resolves the split.**
 - **virtio**: the standard virtual-device interface (virtio-mmio, virtio-blk, virtio-net).
 - **SIMT**: single instruction, multiple threads (the GPU's execution model).

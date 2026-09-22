@@ -116,8 +116,9 @@ geometry, trap entry and saved context, and the ABI's register encoding; anywher
 ## Open work outside the slice
 - Finish the ABI audit: `libs/abi` and `std`'s Redoubt PAL for register punning and `u32` fields in ABI
   types (`libs/abi` `Result` marshalling is now covered by a round-trip test).
-- The kernel's default features include `debug-proc`, which `kernel/Cargo.toml` describes as adding
-  kernel attack surface; decide whether a default build should carry it.
+- ~~The kernel's default features include `debug-proc`, which `kernel/Cargo.toml` describes as adding
+  kernel attack surface; decide whether a default build should carry it.~~ Removed from default; the
+  feature exists but has no `cfg` gates in the source.
 - Custom userspace target `riscv64gc-unknown-redoubt-elf` and `std` (`-Zbuild-std`); process `env`
   block and `.eh_frame` (needed by `std`).
 - Test programs hardcode the UART address and IRQ; startup blocks fix this.

@@ -1,6 +1,6 @@
 # Status against the tenets
 
-What the code does today (not the design). The kernel's default features include `debug-proc` (PLAN.md, open work). `cargo testbench` enforces the rows marked (enforced).
+What the code does today (not the design). `cargo testbench` enforces the rows marked (enforced).
 Update this note with each milestone.
 
 | Tenet | Today |
