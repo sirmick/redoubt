@@ -42,12 +42,4 @@ impl Range {
         // does this.
         Some(self.first + sector)
     }
-
-    /// The sub-range `sector..sector + count` of this one, for `grant`. A window that leaves this
-    /// range, or an empty one, is `None`: nothing granted is ever wider than the badge it came
-    /// through (WIRE.md, granting and releasing).
-    pub fn narrow(&self, sector: u64, count: u64) -> Option<Range> {
-        let first = self.absolute(sector, count)?;
-        Some(Range { first, sectors: count })
-    }
 }

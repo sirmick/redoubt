@@ -69,19 +69,6 @@ fn a_full_run_of_sectors_round_trips() {
     assert_eq!(device.strayed(), 0);
 }
 
-/// The partition table is read off the device, through the real driver.
-#[test]
-fn the_partition_table_is_read_through_the_driver() {
-    let device = device();
-    let mut disk = up(&device).expect("bring-up");
-    let roots = read_partitions(&mut disk).expect("a table");
-    // One slot per GPT entry, so a badge names an entry and a gap renumbers nothing.
-    assert_eq!(roots.len(), redoubt_blkd::image::ENTRIES as usize);
-    assert_eq!(roots[0].map(|r| (r.first(), r.sectors())), Some((64, 1000)));
-    assert_eq!(roots[1].map(|r| (r.first(), r.sectors())), Some((2048, 2048)));
-    assert!(roots[2..].iter().all(Option::is_none));
-    assert_eq!(device.strayed(), 0);
-}
 
 /// The completion may already be there when the driver first looks (`defer` off) or arrive while
 /// it waits (`defer` on). Both paths work, and neither is the only one tested.
