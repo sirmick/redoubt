@@ -345,6 +345,17 @@ not needed.
   target.
 - Needs: WP-R1, WP-A2, WP-W2. Merged (`86117e7af`).
 
+**WP-R1c. Join `Parked` to the 9P skeleton (answers 156-158).** Size M.
+- Reads: NAMESPACES.md (Holding a call), CONTAINMENT.md (the shared server library), `libs/rt/src/server/parked.rs`'s own module doc.
+- Delivers: **the recovery of `5d29d136e`** — the join was written in WP-R4 (2026-09-19, on branch `wp-r4`) and never merged, after R1b removed the old `Read::Wait` and left `parked.rs` stating the gap. Restore it:
+  - `FileServer::read` returns `Read::Done(n)` / `Read::Wait`; `answer_in_place` returns `Replied`/`Waiting`/`NoRoom`.
+  - `NineServer::serve_parking` hands a held request back with its T-message intact in its own lend, closing the handles it brought (and emptying its own list with them) so a second serving cannot close the same indices; a second serving re-reads it, so a clunked fid becomes an `Rerror`.
+  - `Parked<T>` stops owning an `Admission`: `park`/`resume`/`resume_first`/`expired`/`abandoned` take `&mut Admission`, so fids and parked calls are charged in the same buckets and shares (`NineServer::admission_mut`, `share_of`).
+  - `serve`/`serve_with` keep answering everything, so a `Wait` without `serve_parking` is a refusal, never a stranded caller. Only `read` waits in milestone 1.
+- Also: recover the server-side 9P conformance runner (`tests/common/vectors.rs`, whose `waiting` count is 156's new observable).
+- Accepted when: `redoubt-rt`'s host tests cover a parked read resumed when input arrives, a held call abandoned and freed, a fid clunked while its read waits (the second serving is an `Rerror`), and a `Wait` refused by a plain `serve`; the `libs/rt/tests/parked.rs` breaking change is resolved; both widths build; the fuzz target reruns.
+- Needs: WP-R1b. **Blocks WP-R4b** (`consoled` parks a read). `libs/rt` is shared by every server, so this is its own package with its own review round, not part of a server port (answer 157).
+
 **WP-R2. Loader stub.** Size S.
 - Reads: PACKAGES.md (launching), INIT.md (startup block).
 - Delivers: the flat-binary stub at its fixed address: find the ELF image through the startup
@@ -403,7 +414,10 @@ not needed.
 - Accepted when: 9P conformance vectors from WP-W1; typing on the UART reaches a 9P reader; attack
   case: a session walking `/boot` sees only the public entries, and a walk to the manifest's own
   name is refused exactly as a name the bundle never held.
-- Needs: WP-R1b, WP-K3.
+- Needs: WP-R1c (answer 157: `consoled` parks a read, so the skeleton join lands first), WP-K3.
+  Recovering this package from branch `wp-r4`: the design sections it was written to are restored
+  (`bootfs` in NAMESPACES.md), and `5d29d136e`'s runtime pieces move to WP-R1c. The port onto the
+  current `redoubt-rt` is otherwise mechanical except `consoled`'s parked read.
 
 ### Track B: beamlet on Redoubt (parallel with track K once WP-R1 exists)
 **WP-B1. The Redoubt platform for beamlet.** Size M.
@@ -557,7 +571,7 @@ in review:               M0/M1 (the executable model)
 building:                K4 (kernel track);  R4, D1, D3
 the ready set:           K5 (behind K4 on the Hotspots)
 kernel, serialized:      K4 -> K5 -> K6 (after R1b)
-runtime:                 R4 (after R1b, K3);  R2 (after K4) -> R3 (after R2, W1, K3, K5)
+runtime:                 R1c (after R1b, answers 156-158) -> R4 (after R1c, K3);  R2 (after K4) -> R3 (after R2, W1, K3, K5)
 beamlet:                 B1 (after R1b, R4) -> B2 (after B1, R3)
 storage and network:     D1 (merged) -> D2 (after D1, L1);  D3 (after R1b, K3, W2)
 security:                S1 (after R1b) -> S2 (after R3, B1, D2);  S3 (after D3, S1, S2)
