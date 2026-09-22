@@ -163,4 +163,4 @@ Rounds owed, newest first (SWARM.md rule 8). Run down before a new wave.
 | R-1 | `6b224c0ab..612a0a599` | WP-W3a (codec generator: opcode floor + `copy_file`) | **red team done** (2 P2, fixed in `17f11c8b2`); simplifier, editor owed |
 | R-2 | `3e5b49f46^..58601c588` | the use case / tenets / confinement arc, answers 150-155, and GAME.md | **simplifier + red team + editor done** (trims `58601c588`; device gap `8f5c08fdb`; citations fixed); debt cleared |
 | R-3 | `659adbdcd` | the swarm protocol change (resident architect, bounding rule) | **simplifier done** (`ca7a2a4ca`); debt cleared |
-| R-D1 | `e553287ee..8681f2648` | WP-D1b (`blkd` brought onto `redoubt`) | **editor done** (BLOCK: fuzz path, fixed `a08aa9b30`); **red team 4/4 OK**; simplifier running |
+| R-D1 | `e553287ee..HEAD` | WP-D1b (`blkd` brought onto `redoubt`) | **complete**: editor BLOCK fixed (`a08aa9b30`); red team 4/4 OK; simplifier cuts applied; debt cleared |
