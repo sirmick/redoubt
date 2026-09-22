@@ -67,7 +67,7 @@ never a scheduling one; every budget shares one stride queue by weight (RESOURCE
 | `fsd` | littlefs filesystem, one instance per volume (e.g. `fsd:data`), serves 9P | system | designed |
 | `netd` | virtio-net driver | system | designed |
 | `ipd` | smoltcp IP stack, one instance per network (e.g. `ipd:lan`), serves `/net` | system | designed |
-| `keyd` | Holds every private key; signs, never exports | system | designed |
+| `keyd` | Holds every private key; signs, never exports | system | built |
 | `steward` | Principals, authentication, sessions, the powerbox, launching, audit file; packages from milestone 2 | system | designed |
 | `sshd` | SSH front door (`sunset`) and the approval sessions | system | designed |
 | `gatewayd` | LLM gateway | system | milestone 3 |
