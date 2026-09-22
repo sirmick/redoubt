@@ -822,3 +822,14 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   Specifying it found a mechanical gap — **question 163**: only the 9P `read` path can park, so a
   parked *typed* call needs the typed dispatch to hand a request back (a `libs/rt` extension, Rec:
   WP-R1d, owned by WP-B2a), and until it lands WP-B2a builds `size` and not `resize`.
+- **A server pushes by parking a call; `resize` is in milestone 1 (answer 160, question 163)** (2026-09-22):
+  the owner chose the general rule over dropping `resize`. NAMESPACES.md's "Holding a call" now opens
+  with *why* a server parks — the IPC primitives are caller-initiated, so a server with news and a
+  client that wants it meet by the client **calling and waiting**: the parked call *is* the push
+  channel, with no second mechanism and no endpoint to hand over. `consol` gains opcode 17 `resize`
+  as a `call` that parks and answers `{cols, rows}` (opcode 16 `size` is its query), and
+  `Redoubt.Console.await_resize/1` delivers a message rather than the removed callback. Specifying it
+  surfaced a real gap: **a parked *typed* call is impossible today** — `serve_parking` hands a request
+  back only on `Answer::Waiting`, which only `FileServer::read` produces, and the typed dispatch must
+  always reply — so question 163 files **WP-R1d** (extend the typed dispatch to park, `libs/rt`, its
+  own review round), and WP-B2a implements `size` now and `resize` once R1d lands.

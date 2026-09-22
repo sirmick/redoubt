@@ -354,7 +354,13 @@ not needed.
   - `serve`/`serve_with` keep answering everything, so a `Wait` without `serve_parking` is a refusal, never a stranded caller. Only `read` waits in milestone 1.
 - Also: recover the server-side 9P conformance runner (`tests/common/vectors.rs`, whose `waiting` count is 156's new observable).
 - Accepted when: `redoubt-rt`'s host tests cover a parked read resumed when input arrives, a held call abandoned and freed, a fid clunked while its read waits (the second serving is an `Rerror`), and a `Wait` refused by a plain `serve`; the `libs/rt/tests/parked.rs` breaking change is resolved; both widths build; the fuzz target reruns.
-- Needs: WP-R1b. **Blocks WP-R4b** (`consoled` parks a read). `libs/rt` is shared by every server, so this is its own package with its own review round, not part of a server port (answer 157).
+- Needs: WP-R1b. **Blocks WP-R4b** (`consoled` parks a read). `libs/rt` is shared by every server, so this is its own package with its own review round, not part of a server port (answer 157). Merged (`cd65fa610`).
+
+**WP-R1d. Let a typed call park (answer 163).** Size S.
+- Reads: NAMESPACES.md (Holding a call), `libs/rt/src/server/typed.rs` and `ninep.rs`.
+- Delivers: the park mechanism reaches the **typed** dispatch too, which today it does not. `serve_parking` hands a request back only when `answer_in_place` returns `Answer::Waiting`, and that comes only from `FileServer::read -> Read::Wait`; a typed opcode goes to the server's own dispatch, which is `Result<(), Error>` and must reply, and `Answer<R>` has no "wait" variant. Give the typed path the same hand-back: a way for a typed handler to say "hold this", routed through the same close-the-handles-and-empty-the-list path the read already uses. Nothing else changes: the parked call is still charged to the server's `Admission`, still reported abandoned, still resumed and re-read. One mechanism, two entry points.
+- Accepted when: `redoubt-rt`'s host tests cover a parked **typed** call resumed and answered, one abandoned and freed, and a `Wait` from a typed handler refused by a plain `serve`; both widths build; the fuzz target reruns.
+- Needs: WP-R1c. **Blocks the `resize` half of WP-B2a**; until it lands, B2a implements opcode 16 `size` and not 17 `resize`. `libs/rt` is shared, so its own review round (answer 157).
 
 **WP-R2. Loader stub.** Size S.
 - Reads: PACKAGES.md (launching), INIT.md (startup block).
@@ -444,7 +450,7 @@ not needed.
   80x24).
 - Accepted when: a bench case asks `/dev/cons` for `size` and gets the manifest's size; a key
   sequence decodes to the right events; a server without `consol` yields `{:error, :unknown}`.
-- Needs: WP-B2, WP-R4b.
+- Needs: WP-B2, WP-R4b, WP-R1d (for `resize`; `size` does not need it).
 
 **WP-B2b. Redoubt.Ed and Shell.top().** Size S.
 - Delivers: `Redoubt.Ed` (a TUI editor over `/dev/cons`) and `Redoubt.Shell.top()`.
@@ -589,7 +595,7 @@ building:                K4 (kernel track);  R4, D1, D3
 the ready set:           K5 (behind K4 on the Hotspots)
 kernel, serialized:      K4 -> K5 -> K6 (after R1b)
 runtime:                 R1c (merged) -> R4 (merged);  R2 (after K4) -> R3 (after R2, W1, K3, K5)
-beamlet:                 B1 (after R1b, R4) -> B2 (after B1, R3) -> B2a (after B2, R4b) -> B2b (after B2a)
+beamlet:                 B1 (after R1b, R4) -> B2 (after B1, R3) -> B2a (after B2, R4b, R1d) -> B2b (after B2a)
 storage and network:     D1 (merged) -> D2 (after D1, L1);  D3 (after R1b, K3, W2)
 security:                S1 (after R1b) -> S2 (after R3, B1, D2);  S3 (after D3, S1, S2)
 conformance:             C1 (after M1, K1-K5, T1)
