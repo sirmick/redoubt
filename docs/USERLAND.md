@@ -69,15 +69,16 @@ version, and nothing else, so:
 
 | Operation | What happens |
 | --- | --- |
-| `File.cp`, `cp_r` | client-side read and write loops; no server-side copy; across volumes is fine |
-| `File.rename`, same directory | `wstat` with a new name: the only rename 9P2000 has |
-| `File.rename`, across directories | not expressible today (question 129) |
+| `File.cp`, `cp_r` | within a volume, typed `copy`; across volumes, client-side read/write loop |
+| `File.rename`, same directory | `wstat` with a new name, or typed `rename` |
+| `File.rename`, across directories | typed `rename` (same volume); across volumes, copy and remove |
 | `File.rename`, across volumes | copy and remove, never atomic |
-| `File.chmod`, `chown` | no mode or owner bits exist: access is by capability (question 130) |
-| `File.stat` | mode, uid, gid and atime have no source and would be synthesised (question 130) |
-| `File.ln_s`, `ln` | no symlinks in plain 9P2000; the POSIX platform resolves them, so platforms differ |
-| `File.rm` of an open file | succeeds by design: an "in use" refusal would be a channel (question 131) |
-| directory listing | a read of a directory fid; entries the caller cannot read are omitted |
+| `File.chmod`, `chown` | no mode or owner bits: access is by capability |
+| `File.stat` | name, length, mtime, qid, and custom attributes via `get_attr` |
+| `File.ln_s`, `ln` | no symlinks in plain 9P2000 |
+| `File.rm` of an open file | succeeds by design: an "in use" refusal would be a channel |
+| custom attributes | typed `set_attr` / `get_attr` on `fsd`; per-file metadata in littlefs custom attributes |
+| directory listing | a read of a directory fid; unreadable entries are omitted |
 
 ## Pipes and standard I/O
 There is no pipe object, no file-descriptor table and no inheritance, so a pipe is a 9P file that

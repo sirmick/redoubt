@@ -622,4 +622,9 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   completion for a disabled source): `uart-irq` says so rather than claiming a catch. Reviewers ran
   on Opus; Fable's credits had run out. Kernel 14.9k -> 15.6k lines, loader 1.1k -> 1.3k, kernel
   core `unsafe` 21 -> 20 (the legacy contiguous-DMA allocator `dma_alloc` replaces was deleted).
+- **`fsd` typed operations** (2026-09-22, design amendment before WP-D2): added `rename`, `copy`,
+  `get_attr` and `set_attr` to `fsd`'s typed protocol for within-volume operations 9P2000 does not
+  express. Per-file attributes are stored in littlefs custom attributes and accessed through the
+  same label and quota checks as 9P operations. `NAMESPACES.md` carries the wire table; `USERLAND.md`
+  and `BUILD-PLAN.md` WP-D2 are updated. Cross-volume rename stays copy-and-remove.
 

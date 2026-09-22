@@ -113,7 +113,26 @@ and refuses labelled callers. Elixir wraps the tree in `gen_tcp`-like modules.
   archives), as one flat directory, matched byte for byte; **never the manifest itself**, which
   carries `keyd`'s seeds and every principal's keys (INIT.md). A walk to any other name is "does
   not exist", the same answer as for a name the bundle never held, so `/boot` reveals nothing about
-  the rest of the bundle. `init` passes the list to `bootfsd` as its arguments (question 123).
+  the rest of the bundle. `init` passes the list to `bootfsd` as its arguments.
+- **`fsd` typed operations:** `fsd` also serves typed messages on its 9P endpoint for what 9P2000
+  does not express: `rename` and `copy` within one volume, and `get_attr`/`set_attr` for per-file
+  metadata stored in littlefs custom attributes. They use the same label and quota checks as 9P.
+
+  <!-- wire: fsd ninep -->
+  | Opcode | Message | Fields | Reply |
+  | --- | --- | --- | --- |
+  | 16 | `rename` | `old_dir: u32`, `old_name: string`, `new_dir: u32`, `new_name: string` | - |
+  | 17 | `copy` | `src_fid: u32`, `dst_dir: u32`, `dst_name: string` | `count: u64` |
+  | 18 | `set_attr` | `fid: u32`, `attr: u8`, `value: bytes` | - |
+  | 19 | `get_attr` | `fid: u32`, `attr: u8` | `value: bytes` |
+
+  <!-- wire-errors: fsd -->
+  | Code | Error |
+  | --- | --- |
+  | 2 | `not_found` |
+  | 3 | `refused` |
+  | 4 | `exists` |
+  | 5 | `not_dir` |
 
 ### littlefs
 Criteria: a published on-disk format, an independent second implementation to test against,
@@ -122,8 +141,9 @@ power-loss safety, small enough to read. (Rust is required by tenet 3, so it is 
   power-loss safe by design, bounded memory. The C reference runs only on the host, as a test oracle:
   every image either implementation writes must read back identically in the other. Nothing C runs
   on the target. (`littlefs2` on crates.io wraps the C library: not used.)
-- **Metadata** in littlefs custom attributes: what 9P `stat` needs (mtime, qid version). No owners
-  or permission bits: access is by capability.
+- **Metadata** in littlefs custom attributes: what 9P `stat` needs (mtime, qid version), and generic
+  per-file attributes accessed through `fsd`'s typed `get_attr` and `set_attr`. No owners or
+  permission bits: access is by capability.
 - **Accepted limits:** large directories and files scale poorly; data is not checksummed (littlefs
   checksums metadata only, so a block device that returns wrong data undetected, beyond `blkd`'s
   contract in IO-ARCHITECTURE.md, can corrupt file contents silently). For
