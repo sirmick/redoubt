@@ -63,6 +63,28 @@ minus its ambient parts.
 A 9P server sometimes cannot answer yet: a console read with no input, a `/net` connect waiting for
 the network. It must not answer 0 (the end of the file: a client would read a live console as closed)
 and must not block. It **parks the call** instead (CONTAINMENT.md, the shared server library).
+
+**This is also how a server delivers an unprompted event to a client** (answer 160). The IPC
+primitives are caller-initiated: a `call` and a `send` both start at the client, and a `reply`
+answers a call the server already took. Nothing lets a server speak to a process that is simply
+reading a file. So a server that has news and a client that wants it meet by the client **calling and
+waiting**: the client makes a call that means "tell me when this happens", the server parks it, and
+answers it when the event occurs. The parked call *is* the push channel; there is no second
+mechanism, no endpoint to hand over, and no `send` (so WIRE.md's rule holds: every milestone 1 typed
+message is a `call`).
+
+**What a park costs.** A parked call holds one of the caller's `MAX_OPEN_CALLS` and one of the
+server's admission slots (its bucket and share) for as long as it waits, which is why parked calls
+are capped per (account, label set), reported abandoned when the caller gives up, and may carry a
+deadline (`Parked::expired`). A client that wants no wait calls the non-parking form instead (a
+`size` query, not a `resize` wait).
+
+**Only the 9P `read` path parks today.** `serve_parking` hands back a request only when
+`answer_in_place` returns `Answer::Waiting`, which is the `FileServer::read` -> `Read::Wait` path; a
+**typed** opcode goes to the server's own dispatch, whose answer is always a reply. So a parked
+*typed* call — the shape `resize` below needs — is not possible yet: it needs the typed dispatch to
+hand a request back the way the read path does, a small `libs/rt` extension. That gap is **question
+163**, open; `resize` is specified against it.
 - **The file server says so.** `FileServer::read` returns `Read::Done(usize)` (at most `out.len()`, 0
   the end of the file) or `Read::Wait`: nothing to read yet and no end. Only `read` waits in milestone
   1; a `write` that must wait is a non-goal until a server needs it.
@@ -103,14 +125,16 @@ nothing to read parks** (Holding a call, below): it does not return 0, which wou
 like a closed console, and it is not an error the client must poll. `consoled` is the first server
 that must wait, which is what proves the join.
 
-**A console server also serves one typed operation** — the size query — on the same endpoint, so a
-TUI can lay out its screen. It is a `call` like every milestone 1 typed message (WIRE.md), and it
-changes nothing about the byte-stream contract: a client that never sends it still sees a plain pipe.
+**A console server also serves typed operations** on the same endpoint — the size query, and a wait
+for a change — so a TUI can lay out its screen and redraw when the window moves. Both are `call`s
+like every milestone 1 typed message (WIRE.md), and neither changes the byte-stream contract: a
+client that never sends them still sees a plain pipe.
 
 <!-- wire: consol ninep -->
 | Opcode | Message | Fields | Reply |
 | --- | --- | --- | --- |
 | 16 | `size` | - | `cols: u16`, `rows: u16` |
+| 17 | `resize` | - | `cols: u16`, `rows: u16` |
 
 <!-- wire-errors: consol -->
 | Code | Error |
@@ -118,14 +142,29 @@ changes nothing about the byte-stream contract: a client that never sends it sti
 
 - The opcodes start at 16 because a console server is a 9P server and `ninep_common` reserves 1-15
   (WIRE.md).
-- `cols` and `rows` are the terminal's size in cells. `consoled` answers from its manifest argument
-  `cols,rows` (default 80×24; INIT.md's arguments are opaque strings each server's note defines);
-  `sshd` answers from the SSH pty-req (WP-S3). A server that serves no `consol` (an older console, a
-  file) refuses opcode 16 as `Malformed`, and the client answers "unknown".
-- **There is no `resize` push in milestone 1** (question 160). Over UART there is no resize at all,
-  and a push needs a channel a 9P connection does not provide; a TUI re-reads `size` when it redraws.
-  A push, when something needs one, is a per-channel endpoint the client receives on (a `send`), and
-  it arrives with the `sshd` work.
+- `size` (16) **answers now**: `cols` and `rows` are the terminal's size in cells. `consoled`
+  answers from its manifest argument `cols,rows` (default 80×24; INIT.md's arguments are opaque
+  strings each server's note defines); `sshd` answers from the SSH pty-req (WP-S3). A server that
+  serves no `consol` (an older console, a file) refuses opcode 16 as `Malformed`, and the client
+  answers "unknown".
+- `resize` (17) **parks until the size changes** (answer 160, Holding a call): the client calls it
+  with no fields, the server holds the call, and when the window changes it replies with the new
+  `cols, rows`. It is the server's push channel, made of a `call` the client chose to make — so it
+  needs no endpoint and no `send`. The client re-calls `resize` after each reply to wait for the next
+  change; a client that never calls it misses every change, which is why `size` exists and a TUI
+  re-reads it whenever it redraws.
+- **One parked `resize` per connection is the client's to keep.** A second parked `resize` from the
+  same client is not refused but is pointless: it is a second waiter on the same event, and the
+  server answers both on a change. A server need keep no per-client resize state: it resumes every
+  parked `resize` it holds when the size changes.
+- **On a UART nothing resizes**, so `consoled` parks a `resize` call **for ever** (it is the same
+  wait as a read with no input) and answers it only if its size is ever set again, which over UART it
+  is not. It does not refuse opcode 17: a client that waits gets an honest wait, and one that would
+  rather not can call `size` instead. `sshd` is where a `resize` first gets an answer, from the SSH
+  window-change request (WP-S3).
+- **`resize` depends on question 163**: only the 9P `read` path can park today, so a parked *typed*
+  call needs the typed dispatch to hand a request back (a small `libs/rt` extension). Until 163 is
+  answered, `size` (16) is implementable and `resize` (17) is specified but not buildable.
 
 ## The network tree (`/net`)
 `ipd` serves a Plan 9 style tree:

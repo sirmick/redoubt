@@ -14,9 +14,12 @@ satisfied, and the `fsd` message `copy` becomes `copy_file`; WP-W3a carries both
 read and `serve_parking`, a new WP-R1c owns the join, `consoled` is its first user, and two test-harness
 breaks are assigned). **162 answered 2026-09-22** (the terminal-handling change: `console_size` is
 `Option`, `consoled` takes `cols,rows` as a manifest argument, and `USERLAND-API.md` owns the Redoubt
-side of the `Platform` contract). **160-161 open** (from the same change: whether milestone 1 carries
-a server-to-client `resize` push at all — 160, the owner's — and how WP-B2 splits — 161, the
-orchestrator's). The round-4 answers revised 56 (handle kinds are checked by use) and replaced 57 and 58 (by
+side of the `Platform` contract). **160 answered 2026-09-22** (the owner: a server pushes an
+unprompted event by parking a call the client made — the general rule, stated in NAMESPACES.md — and
+`resize` stays in milestone 1 as an instance of it). **161 decided by the orchestrator** (WP-B2
+splits into B2/B2a/B2b; BUILD-PLAN.md). **Open: 163** (a parked *typed* call is not possible yet: only
+the 9P `read` path parks, so `resize` needs the typed dispatch to hand a request back — the one thing
+that blocks building it). The round-4 answers revised 56 (handle kinds are checked by use) and replaced 57 and 58 (by
 82); a later tranche replaced 103 (no `first` flag and no strict priority: one stride queue for
 every budget); the tranche for 120-126 accepted every recommendation and added one change to what
 ships: the boot bundle's signature gets its own domain now (VERIFIED-BOOT.md).
@@ -1463,18 +1466,17 @@ do not re-decide it.
      endpoint it receives on, and `/dev/cons` is a 9P **connection** (a file), not an endpoint. So
      there is no way for a console server to push anything to a process reading `/dev/cons`, and the
      change specifies a mechanism the design does not have.
-     *Rec:* **milestone 1 has no resize push.** `size` is a `call` (opcode 16) and is the whole of
-     the `consol` protocol; `resize` is dropped from the table and from `Redoubt.Console`. This is
-     not a loss: over UART there is no resize at all (the change says so), a TUI re-reads `size()`
-     when it redraws, and WP-S3 (`sshd`) is where a real terminal first exists. When a push is
-     genuinely needed it is a design addition that must state its channel — the natural shape is a
-     per-channel **endpoint** the client receives on (a `send`, with the `kind` column WIRE.md
-     provides for), not a message smuggled down a 9P connection — and that belongs in its own
-     question then, with the `sshd` work, not now.
-     *Alt:* specify the push now as a `send` on a per-channel endpoint handed over at attach. It is
-     more mechanism than milestone 1 needs (nothing resizes on a UART), it would have to be built and
-     tested in WP-S3 anyway, and specifying it now pins an interface before the one server that needs
-     it exists.
+     *Rec:* ~~milestone 1 has no resize push~~ **overruled by the owner.**
+     **Decided (owner, 2026-09-22): state the general rule, and keep `resize` in milestone 1 as an
+     instance of it.** A server pushes an unprompted event by **parking a call the client made** and
+     answering it when the event happens — the machinery WP-R1c landed, with no new primitive and no
+     `send`. NAMESPACES.md (Holding a call) now states that as the design's answer to
+     server-initiated delivery, with its cost (a parked call holds one `MAX_OPEN_CALLS` slot and one
+     admission slot); the `consol` table gains opcode 17 `resize` as a **`call` that parks**, and
+     `Redoubt.Console` gets a message-based `await_resize`, not a callback.
+     **Answered:** NAMESPACES.md, Holding a call and The console; USERLAND-API.md, The console and
+     the `Platform` contract, and `Redoubt.Console`; answer 160 in ANSWERS.md. **See 163**: the
+     parked *typed* call this needs is not possible yet.
 
 161. **WP-B2 (Size S) has grown into three packages.** WP-B2 was "an IEx session on the UART; the
      first Redoubt IEx helpers (`ls`, `cd`, `cat` over 9P)" — Size S, "a few hundred lines"
@@ -1522,3 +1524,34 @@ do not re-decide it.
      **Answered:** USERLAND-API.md, The console and the `Platform` contract; NAMESPACES.md, The
      console. (`consoled`'s `cols,rows` argument needs no new rule: INIT.md's arguments are opaque
      strings each server's note defines, answer 122.)
+
+163. **A parked *typed* call is not possible: only the 9P `read` path parks.** Answer 160 makes
+     `consol`'s opcode 17 `resize` a **`call` that parks** — the server holds the client's call and
+     answers it when the window changes. But the park mechanism WP-R1c landed reaches only one path:
+     `NineServer::serve_parking` hands a request back **only** when `answer_in_place` returns
+     `Answer::Waiting`, and `Answer::Waiting` is produced **only** by `FileServer::read` returning
+     `Read::Wait`. A **typed** opcode (`words[0]` not 0 and not in `NINEP_COMMON_OPCODES`) goes to the
+     server's own dispatch — `serve_parking`'s `own(self, request)`, which is
+     `Result<(), Error>` and must reply — and the typed `Answer<R>` has no "wait" variant, only
+     `reply`, `handles` and `close_after_reply` (`libs/rt/src/server/typed.rs`). So there is no way
+     for a typed request to be held, and `resize` as specified cannot be built until there is.
+     *Rec:* **extend the typed dispatch to park the same way the read path does, in its own `libs/rt`
+     package (WP-R1d), owned by the round that first needs it (WP-B2a).** The minimal shape, keeping
+     one rule for both paths: `TypedServer::handle` gains a way to answer "hold this" — an
+     `Answer::Wait`-style variant, or the dispatch returns `Option<Request>` as `serve_parking` does —
+     and `serve_parking` routes a held **typed** request through the same hand-back (close the handles
+     it brought, empty its list, return the request) that the read path already uses. Nothing else
+     changes: the parked call is still charged to the server's `Admission`, still reported abandoned,
+     still resumed and re-read. One mechanism, two entry points. Until it lands, WP-B2a implements
+     opcode 16 `size` and **not** 17 `resize`; `consol`'s table carries both, with `resize` marked as
+     depending on this answer.
+     *Alt:* make `resize` a 9P **file** instead of a typed opcode — a `/dev/cons-size` file whose
+     `read` parks and answers `cols,rows`. It needs no `libs/rt` change (the read path already parks)
+     and fits the "everything user-facing is 9P" rule (NAMESPACES.md, Decisions). Out: it adds a
+     second file to the console contract for one operation, and a size is not a stream — the `size`
+     query is already a typed opcode, so `resize` as a file would split one concern across two
+     mechanisms.
+     *Alt:* build a `send`-based push after all (a per-channel endpoint the client receives on), which
+     answer 160 rejected as heavier than milestone 1 needs.
+     **Open:** the owner's or the orchestrator's to schedule; the mechanism is `libs/rt`'s, the same
+     owner as WP-R1c.

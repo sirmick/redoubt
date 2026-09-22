@@ -174,9 +174,16 @@ answer here, and which `Redoubt.*` module wraps it. `userland/otp/DESIGN.md` own
   `consol` `size` call (opcode 16, NAMESPACES.md, The console) and caches the answer. A server that
   does not serve `consol` refuses the opcode as `Malformed`, and the platform answers `None`.
   `Redoubt.Console.size/0` reports that as `{:error, :unknown}`.
-- **There is no resize push in milestone 1** (question 160): a TUI re-reads `size()` when it redraws.
-  A push needs a channel a 9P connection does not provide and arrives with `sshd` (WP-S3), the one
-  place a terminal size can change.
+- **There is a resize channel in milestone 1, and it is a parked call** (answer 160). A server
+  pushes an unprompted event by holding a call the client made and answering it when the event
+  happens (NAMESPACES.md, Holding a call): the client calls `consol`'s opcode 17 `resize`, the server
+  parks it, and answers with the new `cols, rows` when the window changes. There is no callback and
+  no endpoint — the client asks, and the server replies when it has news. `Redoubt.Console` exposes
+  it as a **message**, `await_resize/1` (below), because this is a message-passing VM: the caller is
+  re-called and the change arrives as a message, not as a function invoked inside the VM's I/O path.
+  **It depends on question 163** (a parked *typed* call needs the typed dispatch to hand a request
+  back, a `libs/rt` extension), so WP-B2a builds `size` first and `resize` when 163 lands. On a UART
+  nothing resizes, so a parked `resize` waits for ever (NAMESPACES.md, The console).
 - **`libvterm/`** (an untracked C tree at the repository root) is **reference only**: its terminal
   state machine and key tables are read for the Elixir decoders below, never built and never linked
   (TENETS.md 3 — no C in the build). It is a reading source, like the littlefs C reference for
@@ -198,6 +205,7 @@ No cell grid is maintained here; the user's terminal emulator does that.
 | `show_cursor()` | `:ok` | `ESC[?25h` |
 | `set_color(fg, bg)` | `:ok` | 16-color or 256-color SGR sequences |
 | `sgr(attrs)` | `:ok` | Bold, inverse, underline; `attrs` is a keyword list |
+| `await_resize()` | `:ok` | Calls `consol`'s `resize` (opcode 17) and returns; the change arrives as a message to the caller (`{:console_resize, cols, rows}`) when the server answers (answer 160). It re-calls `resize` after each reply, so a caller that keeps handling the message keeps hearing about changes. Needs question 163. |
 | `write(data)` | `:ok` | Raw bytes to console; `IO.write` equivalent |
 
 ### `Redoubt.Console.Key` — keyboard decoder

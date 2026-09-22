@@ -811,3 +811,14 @@ One line per merged work package (SWARM.md). Open owner questions: QUESTIONS.md.
   `consol` codec, `Redoubt.Console`/`.Key`, answer 162) and **B2b** (`Redoubt.Ed`, `Shell.top()`),
   one acceptance each. `libvterm/` (an untracked C tree) is recorded as reference-only and added to
   `.gitignore` beside `/reference/`, so tenet 3 is not violated and `git add -A` cannot sweep it in.
+- **A server pushes by parking a call; `resize` stays in milestone 1 (answer 160, question 163)**
+  (2026-09-22): the owner overruled the earlier recommendation to drop `resize`, and widened the
+  question. The IPC primitives are all caller-initiated, so a server has no way to speak to a process
+  reading a file; the design's answer is now stated in NAMESPACES.md (Holding a call): **a server
+  delivers an unprompted event by parking a call the client made and answering it when the event
+  happens** — the machinery WP-R1c landed, no endpoint, no `send`, WIRE.md's all-`call`s rule intact.
+  `consol` opcode 17 `resize` is that shape: the client calls, the server parks, and the reply is the
+  new `cols, rows`; `Redoubt.Console` gains `await_resize/1` (a message, not the removed callback).
+  Specifying it found a mechanical gap — **question 163**: only the 9P `read` path can park, so a
+  parked *typed* call needs the typed dispatch to hand a request back (a `libs/rt` extension, Rec:
+  WP-R1d, owned by WP-B2a), and until it lands WP-B2a builds `size` and not `resize`.
