@@ -16,6 +16,8 @@ mod common;
 use std::time::{Duration, Instant};
 
 use common::fake;
+use redoubt_consoled::MAX_INPUT;
+use redoubt_consoled::uart::FIFO;
 use redoubt_rt::abi::Handle;
 use redoubt_rt::client::{Client, ClientError};
 use redoubt_rt::handle::Endpoint;
@@ -240,6 +242,56 @@ fn a_device_stuck_on_data_ready_does_not_hang_the_server() {
         assert_eq!(c.write(0, 0, b"#").unwrap(), 1);
     });
     assert_eq!(b.printed(), b'#');
+    assert_eq!(b.shut_down(), redoubt_rt::exit::OK);
+}
+
+/// A flood of input with nobody reading keeps what was typed first: the ring takes
+/// [`MAX_INPUT`] bytes and drops the rest, rather than overwriting the oldest, so a reader gets
+/// the start of what was typed, in order, and the console carries on once it has been read.
+///
+/// This device hands over whatever its receive register holds each time the driver looks, so
+/// how many copies of a byte one drain takes is not the test's to choose; only their order is.
+/// Each byte is held on the line across two calls the server answers, which puts one whole drain
+/// of it ([`FIFO`] bytes) between them: 64 bytes are enough to fill the ring, and the 65th has
+/// nowhere to go. The count of dropped bytes (`Console::dropped`) is inside the server and not
+/// visible here; what shows the drop is that the last byte never reaches the reader.
+#[test]
+fn a_flood_of_input_keeps_what_was_typed_first() {
+    let b = boot();
+    let f = fake();
+    let (client, conn) = b.client();
+    f.as_process(client, || {
+        let mut c = Client::new(Endpoint::from_handle(conn), 4).unwrap();
+        c.attach(0, "").unwrap();
+        let typed: Vec<u8> = (0..=(MAX_INPUT / FIFO) as u8).map(|i| b'0' + i).collect();
+        for byte in &typed {
+            b.types(*byte);
+            // Refused walks, not writes: a write would put its byte in the same register.
+            for _ in 0..2 {
+                assert_eq!(c.walk(0, 1, "anything").unwrap_err(), ClientError::Remote);
+            }
+        }
+        b.line_quiet();
+
+        // Room for one byte more than the ring may hold, and exactly the ring's limit comes back.
+        c.open(0, mode::OREAD).unwrap();
+        let mut got = vec![0u8; MAX_INPUT + 1];
+        assert_eq!(c.read(0, 0, &mut got).unwrap(), MAX_INPUT);
+        got.truncate(MAX_INPUT);
+        // A run of each byte in the order it was typed, from the very first: nothing skipped or
+        // overwritten.
+        got.dedup();
+        assert!(typed.starts_with(&got), "{got:?}");
+        // And the last, typed with the ring already full, was dropped.
+        assert!(got.len() < typed.len());
+
+        // Once read, the ring has room again.
+        b.types(b'!');
+        let mut next = [0u8; 1];
+        assert_eq!(c.read(0, 0, &mut next).unwrap(), 1);
+        assert_eq!(next[0], b'!');
+        b.line_quiet();
+    });
     assert_eq!(b.shut_down(), redoubt_rt::exit::OK);
 }
 
