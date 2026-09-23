@@ -4,9 +4,9 @@
 use core::num::{NonZeroU64, NonZeroUsize};
 
 pub use redoubt_sys::{
-    Body, BudgetSpec, Call, Error, FOREVER, Handle, Handles, Labels, MAX_HANDLES, MAX_LEND_PAGES,
-    MAX_MSG_HANDLES, MAX_OPEN_CALLS, MemFlags, Message, MessageKind, MintSource, Number, PAGE_SIZE, Pages,
-    Received, ReceivedBody, ResetKind, Return, Usage, WAIT_CAP, WORDS,
+    Body, BudgetSpec, Call, Cause, Error, ExitNotice, FOREVER, Handle, Handles, Labels, MAX_HANDLES,
+    MAX_LEND_PAGES, MAX_MSG_HANDLES, MAX_OPEN_CALLS, MAX_START_HANDLES, MemFlags, Message, MessageKind,
+    MintSource, Number, PAGE_SIZE, Pages, Received, ReceivedBody, ResetKind, Return, Usage, WAIT_CAP, WORDS,
 };
 use redoubt_sys::{RECEIVED_SLOTS, USAGE_SLOTS};
 
@@ -375,4 +375,66 @@ pub mod victim {
         redoubt_abi::send_message(cid, redoubt_abi::Message::new_blocking_scalar(GO, 0, 0, 0, 0))
             .expect("victim");
     }
+}
+
+// --- Processes and threads (WP-K4) -------------------------------------------------------
+
+/// `process_create(h(budget), h(exit endpoint)) -> h(process)`.
+pub fn process_create(budget: u32, exit_endpoint: u32) -> Result<u32, Error> {
+    let call = Call::ProcessCreate { budget: h(budget), exit_endpoint: h(exit_endpoint) };
+    match redoubt_sys::syscall(&call)? {
+        Return::Handle(handle) => Ok(handle.index()),
+        _ => Err(Error::InvalidArgument),
+    }
+}
+
+/// `process_map(h(process), src, dst, len, flags)`.
+pub fn process_map(process: u32, src: usize, dst: usize, len: usize, flags: MemFlags) -> Result<(), Error> {
+    redoubt_sys::syscall(&Call::ProcessMap { process: h(process), src, dst, len, flags }).map(|_| ())
+}
+
+/// `process_start(h(process), entry, sp, arg, handles)`: the handles land in the child's
+/// slots 1..n.
+pub fn process_start(
+    process: u32,
+    entry: usize,
+    sp: usize,
+    arg: usize,
+    handles: &[u32],
+) -> Result<(), Error> {
+    let mut list = [0u64; MAX_START_HANDLES];
+    for (slot, index) in list.iter_mut().zip(handles) {
+        *slot = h(*index).to_raw();
+    }
+    start_raw(process, entry, sp, arg, list.as_ptr() as usize, handles.len() as u32)
+}
+
+/// `process_start` with the list at any address and any count (hostile cases).
+pub fn start_raw(
+    process: u32,
+    entry: usize,
+    sp: usize,
+    arg: usize,
+    handles_rec: usize,
+    count: u32,
+) -> Result<(), Error> {
+    let call = Call::ProcessStart { process: h(process), entry, sp, arg, handles_rec, count };
+    redoubt_sys::syscall(&call).map(|_| ())
+}
+
+/// `thread_create(entry, sp, arg) -> tid`.
+pub fn thread_create(entry: usize, sp: usize, arg: usize) -> Result<u32, Error> {
+    match redoubt_sys::syscall(&Call::ThreadCreate { entry, sp, arg })? {
+        Return::Tid(tid) => Ok(tid),
+        _ => Err(Error::InvalidArgument),
+    }
+}
+
+/// `thread_exit()`. Returns only if the kernel refused.
+pub fn thread_exit() -> Result<(), Error> { redoubt_sys::syscall(&Call::ThreadExit).map(|_| ()) }
+
+/// `process_exit(code)`. Never returns on success.
+pub fn process_exit(code: u32) -> ! {
+    redoubt_sys::syscall(&Call::ProcessExit { code }).ok();
+    crate::park()
 }

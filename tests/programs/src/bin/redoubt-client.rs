@@ -20,7 +20,7 @@
 #![no_main]
 #![allow(unused_must_use)] // `expect!` returns what it checked, for the steps that use it
 
-use test_programs::rd::{self, Error, FOREVER};
+use test_programs::rd::{self, Error, FOREVER, Received};
 use test_programs::redoubt_ipc::op;
 use test_programs::{Logger, log};
 
@@ -101,7 +101,11 @@ pub extern "C" fn _start() -> ! {
     expect!(t, rd::peek(page), 0x5151);
     // A lend of memory that is not this program's is refused too.
     let stranger = rd::pages(0x4000, 1);
-    expect!(t, rd::call(E, &rd::body([op::LEND, 0, 0, 0]), stranger, FOREVER).err(), Some(Error::InvalidArgument));
+    expect!(
+        t,
+        rd::call(E, &rd::body([op::LEND, 0, 0, 0]), stranger, FOREVER).err(),
+        Some(Error::InvalidArgument)
+    );
 
     // --- A transfer (R4): the receiver must have named a `max_transfer` at least its size ----
     let gift = rd::page();
@@ -164,19 +168,60 @@ pub extern "C" fn _start() -> ! {
     expect!(t, busy, Some(Error::Busy));
 
     // --- R3 and I15: abandoned calls, reported once and freed by their reply ------------------
-    // A `call` whose deadline passes after a server took it is abandoned: the server is told
-    // once, and the call stays open until it replies.
+    // A timeout alone does not establish receipt: it may cancel a still-queued call. A lend's
+    // outcome distinguishes that (Returned) from a taken call's abandonment (Consumed). Count
+    // exactly 64 proven abandonments; do not mistake scheduler timing for a missing notice.
     let before = ask(&mut t, op::COUNTS, 0)[2];
-    for _ in 0..rd::MAX_OPEN_CALLS {
-        expect!(t, rd::call_waiting(E, &rd::body([op::KEEP, 0, 0, 0]), None, 2_000).err(), Some(Error::Timeout));
+    let never_received = rd::endpoint_create().expect("queued-cancellation endpoint");
+    let (mut abandoned, mut queued) = (0, 0);
+    for attempt in 0..256 {
+        let page = rd::map_anon(rd::PAGE_SIZE, rd::rw()).expect("abandonment lend");
+        // The first attempt deliberately exercises the Returned cleanup branch. The remaining
+        // ones target the server, whose own notice count must match the Consumed outcomes.
+        let (endpoint, timeout) = if attempt == 0 { (never_received, 0) } else { (E, 2_000) };
+        let (outcome, reply) =
+            rd::call_outcome(endpoint, &rd::body([op::KEEP, 0, 0, 0]), rd::pages(page, 1), timeout)
+                .expect("call outcome");
+        t.check(reply.is_none(), format_args!("a parked call has no reply"));
+        match (outcome.status, outcome.lend) {
+            (Err(Error::Timeout), redoubt_sys::LendDisposition::Consumed) => abandoned += 1,
+            (Err(Error::Timeout), redoubt_sys::LendDisposition::Returned) => {
+                queued += 1;
+                rd::unmap(page, rd::PAGE_SIZE).expect("returned queued lend");
+            }
+            (Err(Error::Busy), redoubt_sys::LendDisposition::Returned) => {
+                rd::unmap(page, rd::PAGE_SIZE).expect("returned busy lend");
+                test_programs::wait_ms(1);
+            }
+            other => {
+                t.check(false, format_args!("unexpected abandonment outcome: {:?}", other));
+                break;
+            }
+        }
+        if abandoned == rd::MAX_OPEN_CALLS {
+            break;
+        }
     }
+    rd::close(never_received).expect("close unused endpoint handle");
+    expect!(t, abandoned, rd::MAX_OPEN_CALLS);
+    t.check(queued >= 1, format_args!("queued timeout exercised: {}", queued));
     let counts = ask(&mut t, op::COUNTS, 0);
     // Every one was reported exactly once, and every reply freed its call, so the server holds
     // no more open calls than the other programs' own parked ones (`redoubt-filler`'s, which
     // keep arriving while this runs, so only the abandoned ones are counted exactly).
     expect!(t, counts[1], rd::MAX_OPEN_CALLS);
-    log!(t.logger, "[ipc] {} calls abandoned, {} notices, {} open before, {} after", rd::MAX_OPEN_CALLS, counts[1], before, counts[2]);
+    log!(
+        t.logger,
+        "[ipc] {} calls abandoned, {} notices, {} open before, {} after",
+        rd::MAX_OPEN_CALLS,
+        counts[1],
+        before,
+        counts[2]
+    );
     t.check(counts[2] <= rd::MAX_OPEN_CALLS, format_args!("open calls after: {}", counts[2]));
+
+    let full_notice = rd::endpoint_create().expect("capacity endpoint");
+    let notify = rd::mint_from_handle(full_notice, 1, None).expect("capacity sender");
 
     // --- A reply whose handles do not fit the caller (answers 107, 116) ----------------------
     // Fill this program's table to `MAX_HANDLES` with endpoints of its own.
@@ -210,9 +255,13 @@ pub extern "C" fn _start() -> ! {
             break;
         }
     }
-    ask(&mut t, op::SELF_FILL, 0);
-    // Give the server time to park what it can; its own line says when it is full.
-    test_programs::wait_ms(200);
+    // Synchronize on actual saturation, not a wall-clock delay: the server's own trusted
+    // check reports its 64th open call before it sends this acknowledgement.
+    rd::call(E, &rd::body_with([op::SELF_FILL, 0, 0, 0], &[notify]), None, FOREVER).expect("start filling");
+    let Received::Message(full) = rd::receive(Some(full_notice), FOREVER, 0).expect("capacity notice") else {
+        panic!("expected capacity notice");
+    };
+    expect!(t, full.body.words[1], rd::MAX_OPEN_CALLS);
     // A call now stays queued and times out; a `send` is still delivered (answer 105).
     expect!(t, rd::call(E, &rd::body([op::KEEP, 0, 0, 0]), None, 5_000).err(), Some(Error::Timeout));
     expect!(t, rd::send(E, &rd::body([0, 99, 0, 0]), None, FOREVER), Ok(()));

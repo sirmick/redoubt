@@ -1,0 +1,47 @@
+description = "Process creation and exit (WP-K4): process_create, process_map and process_start with its arg and its handle list; thread_create, thread_exit and process_exit; exit notices with cause, code, blamed account and blamed labels, all three causes, a labelled process's notice reaching a system-class reader, blame following the failing thread's current call and nothing else, a creator's budget destroyed killing its children with no notice, and a store to a page that is only readable faulting rather than spinning in the page-fault handler (checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# Built with the checks on (docs/testbench.md, "Debug assertions").
+debug_assertions = true
+# proc-test is the bundle's only program, so it holds root, system, users and every device
+# object (INTERIM, kernel device.rs) and maps the console itself, as device-test does. Its
+# children are copies of its image with nothing in their tables but what process_start gave
+# them, so they cannot print: every line here is the parent's, and everything it says about a
+# child is what the kernel told it in an exit notice.
+programs = ["proc-test"]
+timeout_secs = 60
+expect = [
+    '^\[proc\] mapped the console$',
+    '^\[proc\] ok: a child budget starts with no processes$',
+    '^\[proc\] ok: process_exit\(7\) -> exited, code 7, nobody blamed$',
+    '^\[proc\] ok: the process handle is closed once its notice is taken$',
+    '^\[proc\] ok: a store to a page it has not got -> faulted, nobody blamed$',
+    '^\[proc\] ok: budget_destroy -> killed, code 0, nobody blamed$',
+    '^\[proc\] ok: the final thread exits its empty process with code zero$',
+    '^\[proc\] ok: returning final worker exits its empty process with code zero$',
+    '^\[proc\] ok: a labelled process.s notice reaches a system-class reader \(R1\)$',
+    '^\[proc\] ok: a server that faults blames the account and labels of its current call.s sender$',
+    '^\[proc\] ok: process_exit holding an open call is faulted, blamed on that call \(answer 55\)$',
+    '^\[proc\] ok: a thread holding two callers. calls blames the one `serve` named, not the other$',
+    '^\[proc\] ok: a crash after replying blames nobody: the reply cleared the current call$',
+    '^\[proc\] ok: a send is never an open call, so a crash after taking one blames nobody$',
+    '^\[proc\] ok: a thread with no current call blames nobody, though another thread holds one$',
+    '^\[proc\] ok: process_exit with multiple calls blames only the call selected by serve$',
+    '^\[proc\] ok: process_exit without a current call blames nobody while a sibling holds calls$',
+    '^\[proc\] ok: final thread_exit snapshots current-call blame before cleanup$',
+    '^\[proc\] ok: final thread_exit with open calls and no current call blames nobody$',
+    '^\[proc\] ok: returning final worker snapshots current-call blame before cleanup$',
+    '^\[proc\] ok: a child finds its startup block through arg, at the address its parent chose$',
+    '^\[proc\] ok: the startup page is read-only: writing it faults$',
+    '^\[proc\] ok: the launcher.s budget holds the launcher and its child$',
+    '^\[proc\] ok: the launcher itself is reported killed$',
+    '^\[proc\] ok: a process whose object died with its creator.s budget produces no notice$',
+    '^\[proc\] ok: thread_create returns a thread id$',
+    '^\[proc\] ok: thread \d+ past the limit -> TooManyThreads$',
+    '^\[proc\] PROC TEST PASSED$',
+]
+# Every check prints ok or FAIL, so a check that fails fails the case; the last line is not
+# enough on its own, because `poweroff` also requires the machine to go down through
+# system_reset, which only the Reset handle can do.
+forbid = ['\[proc\] FAIL']
+poweroff = true

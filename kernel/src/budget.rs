@@ -20,14 +20,14 @@
 //! second kernel lock.
 //!
 //! # What is charged (the cost table)
-//! A budget's own object 1 page, always to its parent (answer 76); a process 1; a
-//! thread 1; each page-table page and each mapped RAM frame 1 (counted as frames change owner,
-//! `mem.rs`); each handle-table page 1 (`handle.rs`). The frames holding a process's saved
-//! contexts (`ProcessImpl`) are the physical form of the process and thread objects and are not
-//! charged again.
+//! A budget's own object costs its parent one page (answer 76). A process object's notice page
+//! costs its creator one page; every thread's IPC page costs the execution budget one page.
+//! Separately allocated saved contexts cost the execution budget their actual physical frames
+//! (one on rv32, two on rv64), in addition to its page tables and mapped RAM (answer 127).
+//! Frame charges follow ownership in `mem.rs`; handle-table pages are charged in `handle.rs`.
 
-use redoubt_sys::{BudgetSpec, Error, FOREVER, MAX_DEPTH, MAX_LABELS, Usage};
 use redoubt_abi::PID;
+use redoubt_sys::{BudgetSpec, Error, FOREVER, MAX_DEPTH, MAX_LABELS, Usage};
 
 use crate::arch::process::{INITIAL_TID, MAX_PROCESS_COUNT, MAX_THREAD};
 use crate::handle::{BudgetRef, Handle, HandleTable, Object};
@@ -302,9 +302,7 @@ impl MemoryManager {
     }
 
     /// Whether `b` is `ancestor` or below it (R9: a budget handle only narrows).
-    pub fn is_at_or_below(&self, b: BudgetFrame, ancestor: BudgetFrame) -> bool {
-        self.below(b, ancestor)
-    }
+    pub fn is_at_or_below(&self, b: BudgetFrame, ancestor: BudgetFrame) -> bool { self.below(b, ancestor) }
 
     /// The budget process `pid` lives in; `None` for the kernel.
     pub fn budget_of(&self, pid: PID) -> Option<BudgetFrame> { self.account(pid).and_then(|a| a.budget) }
@@ -347,8 +345,10 @@ impl MemoryManager {
 
     // --- Processes and threads ------------------------------------------------------------------
 
-    /// Put new process `pid`, with its first thread, in `budget`: one process from its process
-    /// limit, and the process and thread objects from its pages. Nothing changes on an error.
+    /// Put new process `pid` in `budget`: one process from its process limit, and an account of
+    /// its own, with no threads yet. Its address space is charged to `budget` frame by frame as
+    /// it is built (`process.rs`, and answer 127); its object page is the *creator's*, which
+    /// `process_create` charges separately. Nothing changes on an error.
     pub fn process_created(&mut self, pid: PID, budget: BudgetFrame) -> Result<(), Error> {
         let index = account_index(pid).ok_or(Error::InvalidArgument)?;
         let mut b = self.budget(budget);
@@ -359,15 +359,9 @@ impl MemoryManager {
         if b.free_processes() == 0 {
             return Err(Error::OutOfProcesses);
         }
-        if PROCESS_PAGES + THREAD_PAGES > b.free_pages() {
-            return Err(Error::OutOfMemory);
-        }
         b.processes_used += 1;
-        b.pages_used += PROCESS_PAGES + THREAD_PAGES;
         self.store(budget, &b);
-        self.objects.accounts[index] = Account { budget: Some(budget), threads: 1, ..Account::NONE };
-        // The first thread's page, charged just above, is its IPC page.
-        self.give_ipc_frame(pid, INITIAL_TID);
+        self.objects.accounts[index] = Account { budget: Some(budget), ..Account::NONE };
         Ok(())
     }
 
@@ -380,7 +374,7 @@ impl MemoryManager {
             self.take_ipc_frame(pid, tid);
         }
         let account = self.account_mut(pid).expect("account");
-        let pages = PROCESS_PAGES + account.threads * THREAD_PAGES + account.frames;
+        let pages = account.threads * THREAD_PAGES + account.frames;
         *account = Account::NONE;
         self.uncharge(budget, pages);
         let mut b = self.budget(budget);
@@ -410,7 +404,7 @@ impl MemoryManager {
 
     /// Create `root`, `system` and `users` and put the loader's processes in `system`.
     ///
-    /// INTERIM (until WP-K4 loads only `init`, and WP-R3's `init` builds the tree from the boot
+    /// INTERIM (until WP-R3 loads only `init` and builds the tree from the boot
     /// manifest): the sizes are computed here rather than read from the argument block. `root`
     /// gets every RAM page the kernel did not keep at boot, every PID but the kernel's, and all
     /// the weight; `system` a quarter of each (RESOURCES.md's default), `users` the rest. Every
@@ -421,17 +415,11 @@ impl MemoryManager {
     /// A loader bundle whose processes do not fit in `system` cannot run under the rules, so the
     /// kernel refuses to boot (fail closed).
     pub fn boot_budgets(&mut self) {
-        // INTERIM (QUESTIONS.md 127; until WP-K4 creates processes from userspace and charges
-        // it): held back from `root`, so that every charged page has a real frame behind it (R7:
-        // an allocation fails only on the caller's own budget, never because the kernel ran
-        // out). A process's own page pays for one frame, but its saved contexts (`ProcessImpl`)
-        // take `PROCESS_IMPL_PAGES`; the thread pages that once covered the difference now each
-        // hold a thread's IPC page (`Account::ipc`). The gap is fixed per process, so reserving
-        // it for every PID at boot covers every process the kernel can ever hold.
-        let per_process = crate::arch::process::PROCESS_IMPL_PAGES as u64 - PROCESS_PAGES;
-        let reserved = per_process * MAX_PROCESS_COUNT as u64;
-        let pages = self.ram_frames() - self.ram_frames_owned_by(crate::services::KERNEL_PID) as u64
-            - reserved;
+        // Every RAM page the kernel did not keep for itself. Nothing is held back any more
+        // (answer 127): a process's saved contexts and its root page table are charged to
+        // the budget it runs in as they are allocated, like any other frame it owns, so every
+        // charged page has a real frame behind it without a reservation.
+        let pages = self.ram_frames() - self.ram_frames_owned_by(crate::services::KERNEL_PID) as u64;
         let processes = (MAX_PROCESS_COUNT - 1) as u32;
         let (sys_pages, sys_processes, sys_weight) = (pages / 4, processes / 4, ROOT_WEIGHT / 4);
         // Root pays for the two budgets' own pages. Root's own page is charged to no one: it has
@@ -441,12 +429,26 @@ impl MemoryManager {
         // `root` and `system` are class `system`; `users` is class `user`. Nothing runs before
         // anything else: one stride queue, and weight decides (answer 103).
         let boot = |mm: &mut Self, parent, class, pages, processes, weight| {
-            let spec = BudgetSpec { pages, processes, weight, labels: Default::default(), account: 0, deadline: FOREVER };
+            let spec = BudgetSpec {
+                pages,
+                processes,
+                weight,
+                labels: Default::default(),
+                account: 0,
+                deadline: FOREVER,
+            };
             mm.new_budget(parent, &spec, class, &[]).expect("boot: no frame for a boot budget")
         };
         let root = boot(self, None, Class::System, pages, processes, ROOT_WEIGHT);
         let system = boot(self, Some(root), Class::System, sys_pages, sys_processes, sys_weight);
-        let users = boot(self, Some(root), Class::User, users_pages, processes - sys_processes, ROOT_WEIGHT - sys_weight);
+        let users = boot(
+            self,
+            Some(root),
+            Class::User,
+            users_pages,
+            processes - sys_processes,
+            ROOT_WEIGHT - sys_weight,
+        );
         let mut first = None;
         let mut bundle = [None; MAX_PROCESS_COUNT];
         let mut nbundle = 0;
@@ -459,16 +461,19 @@ impl MemoryManager {
             first.get_or_insert(pid);
             bundle[nbundle] = Some(pid);
             nbundle += 1;
-            let frames = frames - crate::arch::process::PROCESS_IMPL_PAGES as u64;
+            // Everything the loader gave it: its image, its stack, its page tables, its root
+            // table and its saved contexts, all owned by the PID in the ownership table.
             self.process_created(pid, system).expect("boot: the loader's processes do not fit in system");
             self.charge(system, frames).expect("boot: the loader's processes do not fit in system");
             self.account_mut(pid).expect("account").frames = frames;
+            self.thread_created(pid, INITIAL_TID).expect("boot: no page for a program's first thread");
         }
         let stamp = BudgetRef { frame: root, id: self.budget(root).id };
         if let Some(first) = first {
             for budget in [root, system, users] {
                 let id = self.budget(budget).id;
-                let handle = Handle { object: Object::Budget(BudgetRef { frame: budget, id }), badge: 0, stamp };
+                let handle =
+                    Handle { object: Object::Budget(BudgetRef { frame: budget, id }), badge: 0, stamp };
                 self.install_handle(first, handle).expect("boot: no room for the first program's handles");
             }
         }
@@ -481,7 +486,10 @@ impl MemoryManager {
         // themselves are charged to, and die with, `system`.
         self.boot_devices(system, first, stamp);
         self.boot_endpoint(system, &bundle[..nbundle]);
-        println!("Budgets: root {} pages, system {} (the loader's processes), users {}", pages, sys_pages, users_pages);
+        println!(
+            "Budgets: root {} pages, system {} (the loader's processes), users {}",
+            pages, sys_pages, users_pages
+        );
     }
 
     /// INTERIM (until WP-K4's `process_start` passes handles and WP-R3's `init` hands out
@@ -665,7 +673,9 @@ impl MemoryManager {
     }
 
     /// Whether `pid` lives in a budget that is being destroyed.
-    pub fn process_is_doomed(&self, pid: PID) -> bool { self.budget_of(pid).is_some_and(|b| self.budget(b).dying) }
+    pub fn process_is_doomed(&self, pid: PID) -> bool {
+        self.budget_of(pid).is_some_and(|b| self.budget(b).dying)
+    }
 
     /// Last step of `budget_destroy`, once the doomed budgets' processes are gone: close every
     /// handle naming a doomed budget or stamped with one, in every table (R10, I2); give the
@@ -679,6 +689,8 @@ impl MemoryManager {
                 // revoked with it.
                 Object::Endpoint(e) => mm.budget_at(mm.endpoint_at(e).owner).dying,
                 Object::Device(d) => mm.budget_at(mm.device_at(d).owner).dying,
+                // A process object dies with the budget it is charged to, its creator's (R10).
+                Object::Process(p) => mm.budget_at(mm.process_at(p).creator).dying,
             };
             object_dying || mm.budget_at(h.stamp).dying
         });

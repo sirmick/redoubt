@@ -16,6 +16,7 @@ use core::fmt::Write;
 use redoubt_abi::{CID, MemoryFlags, MemoryRange, MemorySize, Message};
 
 pub mod rd;
+pub mod spawn;
 
 /// There is no name server yet, so the log server uses a well-known address.
 pub const SERVER_ADDRESS: &[u8; 16] = b"redoubt-ipc-tst!";
@@ -84,8 +85,11 @@ impl Logger {
     pub fn log(&mut self, args: core::fmt::Arguments) {
         self.page.clear();
         self.page.write_fmt(args).ok();
-        redoubt_abi::send_message(self.cid, Message::new_lend(op::PRINT, self.page.range, None, self.page.valid()))
-            .expect("couldn't lend to log-server");
+        redoubt_abi::send_message(
+            self.cid,
+            Message::new_lend(op::PRINT, self.page.range, None, self.page.valid()),
+        )
+        .expect("couldn't lend to log-server");
     }
 }
 

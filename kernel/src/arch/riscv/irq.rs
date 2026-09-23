@@ -3,8 +3,8 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use riscv::register::{scause, sepc, sstatus, stval};
 use redoubt_abi::{PID, SysCall, TID};
+use riscv::register::{scause, sepc, sstatus, stval};
 
 use crate::arch::current_pid;
 use crate::arch::exception::RiscvException;
@@ -23,7 +23,9 @@ extern "Rust" {
 /// The result is serialized with `to_args()` rather than by reinterpreting the enum's
 /// memory as eight registers. The two only coincide when every field is exactly one
 /// register wide, which is not the case on rv64 (e.g. a `SID` is four `u32`s).
-fn return_result(result: &redoubt_abi::Result, context: &Thread) -> ! { return_registers(&result.to_args(), context) }
+fn return_result(result: &redoubt_abi::Result, context: &Thread) -> ! {
+    return_registers(&result.to_args(), context)
+}
 
 /// Resume `context` with `a0..=a7` = `args`.
 fn return_registers(args: &[usize; 8], context: &Thread) -> ! {
@@ -177,7 +179,9 @@ pub extern "C" fn trap_handler(
 
     // If we were previously in Supervisor mode and we've just tried to write to
     // invalid memory, then we likely blew out the stack.
-    if cfg!(any(target_arch = "riscv32", target_arch = "riscv64")) && sstatus::read().spp() == sstatus::SPP::Supervisor && sc.bits() == 0xf
+    if cfg!(any(target_arch = "riscv32", target_arch = "riscv64"))
+        && sstatus::read().spp() == sstatus::SPP::Supervisor
+        && sc.bits() == 0xf
     {
         let pid = current_pid();
         let ex = RiscvException::from_regs(sc.bits(), sepc::read(), stval::read());
@@ -240,9 +244,8 @@ pub extern "C" fn trap_handler(
                 })
             });
 
-            let response =
-                crate::syscall::handle(pid, tid, PREVIOUS_PAIR.with(|p| p.is_some()), call)
-                    .unwrap_or_else(redoubt_abi::Result::Error);
+            let response = crate::syscall::handle(pid, tid, PREVIOUS_PAIR.with(|p| p.is_some()), call)
+                .unwrap_or_else(redoubt_abi::Result::Error);
 
             // println!("Syscall Result: {:?}", response);
             ArchProcess::with_current_mut(|p| {
@@ -302,21 +305,27 @@ pub extern "C" fn trap_handler(
         RiscvException::StorePageFault(_pc, addr) | RiscvException::LoadPageFault(_pc, addr) => {
             #[cfg(all(feature = "debug-print", feature = "print-panics"))]
             println!("KERNEL({}): RISC-V fault: {} @ {:08x}, addr {:08x} - ", pid, ex, _pc, addr);
-            crate::mem::MemoryManager::with_mut(|mm| crate::arch::mem::ensure_page_exists_inner(mm, addr))
-                .map(|_new_page| {
-                    ArchProcess::with_current_mut(|process| {
-                        #[cfg(all(feature = "debug-print", feature = "print-panics"))]
-                        println!(
-                            "SPF Handing page {:08x} to pid {} tid {} sepc {:x}",
-                            _new_page,
-                            process.pid().get(),
-                            process.current_tid(),
-                            process.current_thread().sepc,
-                        );
-                        crate::arch::syscall::resume(current_pid().get() == 1, process.current_thread())
-                    });
-                })
-                .ok(); // If this fails, fall through.
+            crate::mem::MemoryManager::with_mut(|mm| {
+                // A valid mapping faulted on permissions: retrying cannot make progress.
+                if crate::arch::mem::is_mapped(addr) {
+                    return Err(redoubt_abi::Error::AccessDenied);
+                }
+                crate::arch::mem::ensure_page_exists_inner(mm, addr)
+            })
+            .map(|_new_page| {
+                ArchProcess::with_current_mut(|process| {
+                    #[cfg(all(feature = "debug-print", feature = "print-panics"))]
+                    println!(
+                        "SPF Handing page {:08x} to pid {} tid {} sepc {:x}",
+                        _new_page,
+                        process.pid().get(),
+                        process.current_tid(),
+                        process.current_thread().sepc,
+                    );
+                    crate::arch::syscall::resume(current_pid().get() == 1, process.current_thread())
+                });
+            })
+            .ok(); // If this fails, fall through.
         }
 
         RiscvException::InstructionPageFault(RETURN_FROM_EXCEPTION_HANDLER, _offset) => {
@@ -339,20 +348,19 @@ pub extern "C" fn trap_handler(
             // containment that calls terminate_process(pid).
         }
 
-        RiscvException::InstructionPageFault(EXIT_THREAD, _offset) => {
+        RiscvException::InstructionPageFault(EXIT_THREAD, _offset)
+            if ArchProcess::with_current(|process| process.current_tid())
+                >= crate::arch::process::INITIAL_TID =>
+        {
             let tid = ArchProcess::with_current(|process| process.current_tid());
+            // Ordinary thread returns use the same lifecycle policy as explicit thread_exit:
+            // the final return snapshots open calls/blame before process_exit(0) cleanup (170).
+            // IRQ callbacks have their separate RETURN_FROM_ISR path below.
+            SystemServices::with_mut(|ss| crate::process::thread_exit(ss, pid, tid));
 
-            // This address indicates a thread has exited. Destroy the thread.
-            // This activates another thread within this process.
-            if SystemServices::with_mut(|ss| ss.destroy_thread(pid, tid)).unwrap() {
-                crate::syscall::reset_switchto_caller();
-            }
-
-            // Now that the thread is destroyed, switch to a different process if
-            // we're in an interrupt handler.
             finish_isr();
 
-            // Resume the new thread within the same process.
+            // Teardown selected a surviving sibling or another process.
             ArchProcess::with_current_mut(|p| {
                 crate::arch::syscall::resume(current_pid().get() == 1, p.current_thread())
             });
@@ -367,7 +375,6 @@ pub extern "C" fn trap_handler(
 
         // Handle faulted instruction pages, because we can now actually have instruction pages that are
         // swapped out.
-
         _ => {
             println!("!!! Unrecognized exception: {:x?}", ex);
         }
@@ -429,11 +436,10 @@ pub extern "C" fn trap_handler(
 
     finish_isr();
 
-    // If it's not a failure in the kernel, terminate or debug the current process.
-    SystemServices::with_mut(|ss| {
-        ss.terminate_process(pid).expect("couldn't terminate current process");
-        crate::syscall::reset_switchto_caller();
-    });
+    // If it's not a failure in the kernel, the process faults: it is torn down and its exit
+    // notice, cause `faulted`, blames the sender of the faulting thread's current call
+    // (KERNEL-SPEC.md, Messages; `process.rs`). The code is the RISC-V exception cause.
+    crate::process::faulted(pid, (sc.bits() & 0xff) as u32);
 
     // Resume the parent process.
     ArchProcess::with_current_mut(|process| {

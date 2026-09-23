@@ -1,23 +1,12 @@
 # Open decisions
 
-Open IDs: **127–149, 163–166**. Next unused ID: **169**. Recommendations below are not approvals.
+Open IDs: **128–149, 163–166**. Next unused ID: **171**. Recommendations below are not approvals.
 The owning specification carries each accepted rule and its rationale; [ANSWERS.md](ANSWERS.md)
 indexes approval provenance. [Earlier questions](archive/2026-09-22/QUESTIONS.md) are historical.
 Do not renumber or reopen settled questions. Record a new decision once, then update its owner.
 
 Questions 164–166 qualify the confinement, authority-closure and wakeup-latency claims.
 Questions 143/146 remain open even though BOOT documents the current device implementation.
-
-### 127. The cost table is silent about per-process kernel storage.
-
-A process object costs one
-page, but its saved thread contexts take `PROCESS_IMPL_PAGES` (two on rv64). WP-K1 covered the
-gap with the first thread's page; now that a thread's page holds its IPC state, WP-K2 reserves
-the difference at boot instead, so every charged page still has a frame behind it.
-*Rec:* the cost table says what a process really costs: its own page, plus
-`PROCESS_IMPL_PAGES - 1` for its saved contexts, plus one page per thread for that thread's
-IPC state. The kernel then charges it rather than reserving it at boot, once WP-K4 creates
-processes from userspace.
 
 ### 128. An endpoint cannot be destroyed.
 

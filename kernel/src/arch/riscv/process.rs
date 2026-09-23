@@ -93,6 +93,9 @@ struct ProcessImpl {
     /// Global parameters used by the operating system
     pub inner: ProcessInner,
 
+    /// Allocated contexts, independent of their untrusted program counters.
+    allocated_threads: u32,
+
     /// The last thread ID that was allocated
     last_tid_allocated: u8,
 
@@ -107,7 +110,7 @@ struct ProcessImpl {
 }
 
 const HEADER_PADDING: usize =
-    mem::size_of::<Thread>() - (2 * mem::size_of::<usize>() + mem::size_of::<ProcessInner>() + 1);
+    mem::size_of::<Thread>() - (2 * mem::size_of::<usize>() + mem::size_of::<ProcessInner>() + 4 + 1);
 
 /// Number of pages `ProcessImpl` occupies at `THREAD_CONTEXT_AREA`: 1 on rv32, 2 on rv64.
 #[allow(dead_code)] // used by the loader handoff on rv64
@@ -251,7 +254,7 @@ impl Process {
 
     pub fn thread_exists(&self, tid: TID) -> bool {
         let tid = fixup_irq(tid);
-        self.thread(tid).sepc != 0
+        tid < MAX_THREAD && process_impl().allocated_threads & (1 << tid) != 0
     }
 
     /// Set the current thread number.
@@ -261,6 +264,9 @@ impl Process {
         klog!("Switching to thread {}", tid);
         assert!(tid < process.threads.len(), "attempt to switch to an invalid thread {}", tid);
         process.hardware_thread = tid + 1;
+        if tid == IRQ_TID || tid == EXCEPTION_TID {
+            process.allocated_threads |= 1 << tid;
+        }
         Ok(())
     }
 
@@ -280,18 +286,12 @@ impl Process {
 
     pub fn find_free_thread(&self) -> Option<TID> {
         let process = process_impl();
-        let start_tid = process.last_tid_allocated as usize;
-        let a = &process.threads[start_tid..process.threads.len()];
-        let b = &process.threads[0..start_tid];
-        for (index, thread) in a.iter().chain(b.iter()).enumerate() {
-            let mut tid = index + start_tid;
-            if tid >= process.threads.len() {
-                tid -= process.threads.len()
-            }
-
-            if tid != IRQ_TID && tid != EXCEPTION_TID && thread.sepc == 0 {
-                process.last_tid_allocated = tid as _;
-                return Some(tid as TID);
+        let start = process.last_tid_allocated as usize;
+        for offset in 0..MAX_THREAD {
+            let tid = (start + offset) % MAX_THREAD;
+            if tid != IRQ_TID && tid != EXCEPTION_TID && process.allocated_threads & (1 << tid) == 0 {
+                process.last_tid_allocated = tid as u8;
+                return Some(tid);
             }
         }
         None
@@ -350,6 +350,8 @@ impl Process {
         // the first default thread. There is an offset of 1 due to how the
         // interrupt handler functions.
         process.hardware_thread = tid + 1;
+        process.allocated_threads = 1 << tid;
+        process.last_tid_allocated = tid as u8;
 
         // Reset the thread state, since it's possibly uninitialized memory
         for thread in process.threads.iter_mut() {
@@ -402,6 +404,69 @@ impl Process {
         Ok(())
     }
 
+    /// WP-K4: claim `pid` in the process table, so that its address space can be activated. It
+    /// is a separate step from `setup_empty_process`, which needs that space to be active
+    /// already: `set_current_pid` refuses a PID the table does not hold.
+    pub fn claim(pid: PID) {
+        let pid_idx = (pid.get() as usize) - 1;
+        PROCESS_TABLE.with(|pt| {
+            assert!(!pt.table[pid_idx], "process {} is already allocated", pid);
+            pt.table[pid_idx] = true;
+        });
+    }
+
+    /// Initialize the context storage of the address space `process_create` just allocated. It has no thread
+    /// yet: nothing can run in it until `process_start`.
+    ///
+    /// The process's own address space must be the active one, as `setup_process` requires, so
+    /// that `process_impl()` names *its* saved contexts. `MemoryMapping::allocate` zeroed those
+    /// frames, and all-zeroes is not a valid `ProcessInner` (its `pid` is a `NonZeroU8`), so
+    /// nothing may read them before this runs.
+    pub fn setup_empty_process(pid: PID) {
+        let process = process_impl();
+        assert_eq!(pid, crate::arch::current_pid(), "hardware pid does not match setup pid");
+        // By convention thread 0 is the trap thread, so the first ordinary thread is
+        // `INITIAL_TID`; the hardware thread number is one more than the TID.
+        process.hardware_thread = INITIAL_TID + 1;
+        process.allocated_threads = 0;
+        process.last_tid_allocated = INITIAL_TID as u8;
+        for thread in process.threads.iter_mut() {
+            *thread = Default::default();
+        }
+        process.inner = Default::default();
+        process.inner.pid = pid;
+    }
+
+    /// WP-K4: the first thread of a process `process_start` is starting, at `entry` with stack
+    /// pointer `sp` and one argument. Unlike `setup_process` this reserves no stack: a Redoubt
+    /// process is given every page it has by its parent (`process_map`), so `sp` is an address
+    /// the parent has already mapped and the kernel only loads it.
+    ///
+    /// The process's own address space must be the active one.
+    pub fn setup_first_thread(pid: PID, entry: usize, sp: usize, arg: usize) {
+        let process = process_impl();
+        assert_eq!(pid, crate::arch::current_pid(), "hardware pid does not match setup pid");
+        process.allocated_threads |= 1 << INITIAL_TID;
+        let thread = &mut process.threads[INITIAL_TID];
+        *thread = Default::default();
+        thread.sepc = entry;
+        thread.registers[1] = sp;
+        thread.registers[9] = arg;
+    }
+
+    /// WP-K4: `thread_create(entry, sp, arg)`. As `setup_thread`, without the legacy
+    /// `ThreadInit`'s stack range: the caller has mapped its own stack and passes `sp`.
+    pub fn setup_redoubt_thread(&mut self, new_tid: TID, entry: usize, sp: usize, arg: usize) {
+        let process = process_impl();
+        let thread = &mut process.threads[new_tid];
+        *thread = Default::default();
+        thread.sepc = entry;
+        thread.registers[0] = EXIT_THREAD;
+        thread.registers[1] = sp;
+        thread.registers[9] = arg;
+        process.allocated_threads |= 1 << new_tid;
+    }
+
     pub fn setup_thread(&mut self, new_tid: TID, setup: ThreadInit) -> Result<(), redoubt_abi::Error> {
         let entrypoint = setup.call as usize;
         // Create the new context and set it to run in the new address space.
@@ -426,6 +491,7 @@ impl Process {
             EXIT_THREAD,
             &[setup.arg1, setup.arg2, setup.arg3, setup.arg4],
         );
+        process_impl().allocated_threads |= 1 << new_tid;
         Ok(())
     }
 
@@ -437,13 +503,12 @@ impl Process {
     /// # Errors
     ///     redoubt_abi::ThreadNotAvailable - the thread did not exist
     pub fn destroy_thread(&mut self, tid: TID) -> Result<usize, redoubt_abi::Error> {
-        let thread = self.thread_mut(tid);
-
-        // Ensure this thread is valid
-        if thread.sepc == 0 || tid == IRQ_TID {
+        // Ensure this thread is allocated, regardless of the PC it was given.
+        if !self.thread_exists(tid) || tid == IRQ_TID {
             return Err(redoubt_abi::Error::ThreadNotAvailable);
         }
 
+        let thread = self.thread_mut(tid);
         // thread.registers[0] == x1
         // thread.registers[1] == x2
         // ...
@@ -457,6 +522,7 @@ impl Process {
             *val = 0;
         }
         thread.sepc = 0;
+        process_impl().allocated_threads &= !(1 << tid);
 
         Ok(return_value)
     }
@@ -499,7 +565,7 @@ impl Process {
     {
         let process = process_impl();
         for (idx, thread) in process.threads.iter_mut().enumerate() {
-            if thread.sepc == 0 {
+            if process.allocated_threads & (1 << idx) == 0 {
                 continue;
             }
             if op(idx, thread) {

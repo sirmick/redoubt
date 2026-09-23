@@ -1,0 +1,31 @@
+description = "K4 hostile mapping/startup, R8 accounts, R9 creation stamps, I8 user-class restrictions, pending exit-record rollback and creator-paid notice exhaustion"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+programs = ["proc-attack"]
+timeout_secs = 60
+# Only the trusted parent holds UART/reset. Probe replies are checked against actual kernel
+# usage, handle revocation and notice metadata; every success also requires a clean SBI reset.
+expect = [
+    '^\[proc-attack\] ok: weight zero refused$',
+    '^\[proc-attack\] ok: badged exit refused$',
+    '^\[proc-attack\] ok: hostile mapping ranges and W\+X refused without moving source$',
+    '^\[proc-attack\] ok: occupied destination refused without losing caller page$',
+    '^\[proc-attack\] ok: oversized startup list refused before record access$',
+    '^\[proc-attack\] ok: invalid startup records and handles leave process unchanged$',
+    '^\[proc-attack\] ok: started process rejects mapping and restart$',
+    '^\[proc-attack\] ok: bad receive output preserves pending notice and process object$',
+    '^\[proc-attack\] ok: exit restores exact execution budget usage$',
+    '^\[proc-attack\] ok: late receive output failure preserves exit notice and process object$',
+    '^\[proc-attack\] ok: destroying own creator scope kills external caller without notice$',
+    '^\[proc-attack\] ok: creator destruction suppresses notices even for a blocked external receiver$',
+    '^\[proc-attack\] ok: R8 account inheritance observed in kernel message metadata$',
+    '^\[proc-attack\] ok: R9 all creation stamps revoke while external budget survives$',
+    '^\[proc-attack\] ok: I8 user class refuses labels and labelled sibling usage$',
+    '^\[proc-attack\] ok: unreceived notices exhaust only their creator budget$',
+    '^\[proc-attack\] ok: PIDs remain distinct while their notices are pending$',
+    '^\[proc-attack\] ok: receiving notices refunds exact creator pages and permits reuse$',
+    '^\[proc-attack\] PROCESS ATTACK TEST PASSED$',
+]
+forbid = ['\[proc-attack\] FAIL']
+poweroff = true

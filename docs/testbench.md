@@ -1,17 +1,17 @@
-# redoubt
+# Testbench
 
-The Redoubt-specific crates: the page-table library and the test bench. Architecture and
-plans for what comes next: `docs/` (start with its `README.md` and `STATUS.md`).
+The test bench and its related workspace paths are listed below. Architecture and plans for
+what comes next: `docs/` (start with its `README.md` and `STATUS.md`).
 
 | Path              | What                                                                          |
 | ----------------- | ----------------------------------------------------------------------------- |
-| `paging/`         | Typed Sv32/Sv39 page tables — the one place page-table memory is touched (loader + kernel) |
-| `test-programs/`  | `no_std` programs that run inside Redoubt, for example `log-server`, `rng-test`, `timer-test`, `mem-attack` |
-| `testbench/`      | Host tool: builds, injects programs, boots QEMU, asserts on the console and over SSH |
+| `libs/paging/`    | Typed Sv32/Sv39 page tables used by the loader and kernel |
+| `tests/programs/` | `no_std` programs that run inside Redoubt, for example `log-server`, `rng-test`, `timer-test`, `mem-attack` |
+| `tools/testbench/` | Host tool: builds, injects programs, boots QEMU, asserts on the console and over SSH |
 | `tests/`          | Test cases for the bench, one TOML file each (`data/`: files they read; `keys/`: SSH test keys) |
 
-The kernel is in `../kernel/`, the boot loader (both widths) in `../loader/`, the legacy
-`redoubt-abi` syscall ABI in `../libs/abi/`, and the new `redoubt-sys` ABI in `../libs/sys/`.
+The kernel is in `kernel/`, the boot loader (both widths) in `loader/`, the legacy
+`redoubt-abi` syscall ABI in `libs/abi/`, and the new `redoubt-sys` ABI in `libs/sys/`.
 
 ## Running tests
 
@@ -197,11 +197,16 @@ from = { path = "tests/data/bundle-file.txt" }      # or any `programs` form, e.
                                                    # { corrupt = "rng-test", with = { truncate = 80 } }
 ```
 
-Entry names must all differ (and differ from `kernel` and `grants`). This is how a model trace
-reaches an in-guest replayer; the replayer compares results itself and prints a verdict line for
-`expect`/`forbid`. Today's loader starts every entry but `grants` as a process, so it refuses data
-entries (`bench-bundle-file`); once it loads only the kernel and `init` (WP-K4), they are data for
-`init` and `bootfsd`.
+Entry names must all differ (and differ from `kernel` and `grants`). This is the planned path
+for a model trace to reach an in-guest replayer; the replayer compares results itself and prints
+a verdict line for `expect`/`forbid`. Today's loader starts every entry but `grants` as a process, so it refuses data
+entries (`bench-bundle-file`). WP-R3 changes it to load only the kernel and `init`, after the
+R2 stub lets init launch the remaining programs. Init then receives the verified bundle and
+supplies the permitted public entries to `bootfsd` (INIT.md).
+
+K4's clean guest byte-readback gate remains unfinished until that R2/R3 handoff (answer 169).
+Reviewed process-lifecycle integration may land independently; the current expected loader
+rejection does not establish this acceptance, and no interim boot-data ABI is implied.
 
 ## Devices
 

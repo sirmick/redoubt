@@ -1129,6 +1129,16 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
             reply_and_receive_next(pid, tid, in_irq, sender, a0, a1, a2, a3, a4, scalar_type)
         }
         SysCall::TrySendMessage(cid, message) => send_message(pid, tid, cid, message),
+        // The legacy exit, which every `no_std` program still uses. It is `process_exit` with
+        // another number: a process the Redoubt calls created gets its exit notice either way
+        // (KERNEL-SPEC.md, `process_exit`), so a program does not have to be rewritten before its
+        // parent can be told how it ended. (INTERIM until WP-K6 deletes the legacy interface.)
+        #[cfg(baremetal)]
+        SysCall::TerminateProcess(ret) => {
+            SystemServices::with_mut(|ss| crate::process::process_exit(ss, pid, tid, ret.into()));
+            Ok(redoubt_abi::Result::ResumeProcess)
+        }
+        #[cfg(not(baremetal))]
         SysCall::TerminateProcess(_ret) => SystemServices::with_mut(|ss| {
             ss.unschedule_thread(pid, tid)?;
             ss.terminate_process(pid)?;

@@ -53,15 +53,15 @@ External candidates remain unaccepted until ported and tested against the curren
 | K1 | merged | wp-k1 | e1d2c6216 |
 | K2 | merged | wp-k2 | 95788dcd0 (carried A3) |
 | K3 | merged | wp-k3 | 12c52c2d7 |
-| K4 | building | wp-k4 | External candidate 6ddf06786 inspected, not integrated or accepted; selectively port lifecycle work |
+| K4 | merged | recovery-k4 | Native lifecycle integrated; three reviews and full bench complete; bundle-file readback remains acceptance gate for R2/R3 (answer 169) |
 | K5 | ready | | needs K2; serialized behind K4 on the kernel Hotspots, not on dependencies |
 | K6 | waiting | | needs K1-K5, R1b |
-| IPC1 | review | wp-ipc1 | Implementation in fe807fc4b; model, K5 timer, native exit and concurrency acceptance remain open |
+| IPC1 | review | wp-ipc1 | Implementation in fe807fc4b; model, K5 timer and concurrency acceptance remain open; native exit covered by K4 |
 | R1 | merged | wp-r1 | 8298608af (carried the answers 39-42, 50-53 part of R1b) |
 | R1b | merged | wp-r1b | 86117e7af |
 | R1c | merged | wp-r1c | cd65fa610; joined `Parked` to the 9P skeleton (recovery of `5d29d136e`, answers 156-158); reviewed R-R1c |
 | R1d | waiting | | typed parking awaits decision 163; needs R1c (merged); blocks `resize` in B2a |
-| R2 | waiting | | needs R1b, K4 |
+| R2 | ready | | R1b and K4 lifecycle integrated; production handoff completes K4 bundle-readback acceptance |
 | R3 | waiting | | needs R2, W1, K3, K5; carries the `confined` manifest |
 | R4 | merged | wp-r4b | 69466924c; bootfsd and consoled recovered from wp-r4; reviewed R-R4b |
 | B1 | waiting | | needs R1b, R4 (both merged) |
@@ -86,7 +86,7 @@ accept any package. Exact evidence is in the
 | Source | Required action |
 | --- | --- |
 | `origin/wp-d1` e4d22b980; `origin/wp-r4` 33a46e010 | Source is already recovered into servers/blkd, bootfsd and consoled. Preserve later fixes. SV1 restores the five bench definitions and server unsafe-budget coverage; host/build checks do not establish boot integration. |
-| `origin/wp-k4` 6ddf06786 | Selectively port process lifecycle/tests; preserve current loan protection, outcome ABI and rollback. Complete hostile mapping, exit/lend, PID reuse and bundle-readback acceptance. |
+| `origin/wp-k4` 6ddf06786 | Lifecycle selectively recovered with current loan protection, outcome ABI and rollback, hostile inputs and PID reuse. Bundle-readback acceptance remains for R2/R3 (answer 169). |
 | `origin/wp-m0` 674831cf9 | Move candidate to model/, register it, remove old priority tiers and reconcile outcomes, record validity, ghost checks, mutations and traces. Existing process-lifecycle modeling also needs conformance tests. |
 | D3 | External claim remains unverified. |
 
@@ -95,7 +95,8 @@ accept any package. Exact evidence is in the
 Completed R-1/R-2/R-3/R-R1c/R-R4b/R-T1 rounds have no remaining debt. IPC1's implementation
 reviews do not close its acceptance gaps. New TCB changes, including the budget-record guard,
 need their own review before package acceptance; this edit does not claim a three-review round.
-The K4/model ports still need their normal acceptance.
+K4 retains its clean bundle-readback acceptance gate for R2/R3 (answer 169); model recovery
+still needs its implementation, validation and review.
 
 ## Cross-cutting review records
 

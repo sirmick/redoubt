@@ -51,6 +51,7 @@ pub extern "C" fn _start() -> ! {
     // process holds as many open calls as it may. One process cannot hold that many threads, so
     // `redoubt-client` and `redoubt-filler` supply the rest.
     let (mut filling, mut pending, mut announced) = (false, false, false);
+    let mut full_notice = None;
     // The handles `op::FILL_TABLE` made, so that it can unmake them.
     let (mut filled_from, mut filled) = (0u32, 0usize);
     loop {
@@ -71,6 +72,11 @@ pub extern "C" fn _start() -> ! {
             log!(logger, "[server] MAX_OPEN_CALLS reached: {} open calls", nparked);
             announced = true;
             filling = false;
+            if let Some(endpoint) = full_notice.take() {
+                rd::send(endpoint, &rd::body([op::SELF_FILL, nparked, 0, 0]), None, FOREVER)
+                    .expect("full-capacity acknowledgement");
+                rd::close(endpoint).expect("close acknowledgement handle");
+            }
         }
         let received = match rd::receive(Some(rd::BOOT_ENDPOINT), FOREVER, max_transfer()) {
             Ok(received) => received,
@@ -181,6 +187,7 @@ pub extern "C" fn _start() -> ! {
                 pending = false;
             }
             op::SELF_FILL => {
+                full_notice = Some(m.body.handles.as_slice()[0].expect("completion handle").index());
                 log!(logger, "[server] filling from {} open calls", nparked);
                 filling = true;
                 rd::reply(id, &rd::body([op::SELF_FILL, nparked, 0, 0])).ok();

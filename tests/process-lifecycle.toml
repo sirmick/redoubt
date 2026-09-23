@@ -1,0 +1,18 @@
+description = "Native process/thread exits composed with current IPC loans, abandonment, exact budget restoration and randomized PID reuse"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+programs = ["proc-lifecycle"]
+timeout_secs = 60
+expect = [
+    '^\[lifecycle\] native server exit returns live lend and all child resources$',
+    '^\[lifecycle\] final thread_exit returns live lend and all child resources$',
+    '^\[lifecycle\] returning final worker returns live lend and all child resources$',
+    '^\[lifecycle\] caller death abandons once and discarded reply frees loan and call$',
+    '^\[lifecycle\] native caller process_exit abandons live lend without a stale PID$',
+    '^\[lifecycle\] thread exit preserves siblings and returns same-process lend exactly$',
+    '^\[lifecycle\] whole-process exit cleans both sides of same-process loan$',
+    '^\[lifecycle\] 260 exits restore exact budgets and reuse freed PIDs$',
+]
+forbid = ['\[lifecycle\] FAIL']
+poweroff = true

@@ -280,6 +280,11 @@ impl Process {
         // Remove this PID from the process table
         ArchProcess::destroy(self.pid)?;
         self.state = ProcessState::Free;
+        // And forget its address space. Until WP-K4 nothing ever reused a PID, so a terminated
+        // process could keep a `satp` naming page tables that had just been freed; now
+        // `process_create` draws PIDs from the free ones, and `MemoryMapping::allocate` refuses
+        // a mapping that still names an address space.
+        self.mapping = Default::default();
         Ok(())
     }
 }
@@ -391,9 +396,8 @@ impl SystemServices {
             // refuses a bundle with more processes than the kernel has room for. This is the
             // kernel's side of that check: a count beyond either limit means the two disagree,
             // and the boot stops here rather than at an index somewhere later.
-            let capacity = (redoubt_abi::arch::PAGE_SIZE
-                / size_of::<crate::arch::process::InitialProcess>())
-            .min(crate::arch::process::MAX_PROCESS_COUNT);
+            let capacity = (redoubt_abi::arch::PAGE_SIZE / size_of::<crate::arch::process::InitialProcess>())
+                .min(crate::arch::process::MAX_PROCESS_COUNT);
             assert!(
                 init_count <= capacity,
                 "the loader reported {} initial processes, room is {}",
@@ -542,6 +546,90 @@ impl SystemServices {
         // entry.ppid = _ppid;
         klog!("created new process for PID {} with PPID {}", new_pid, _ppid);
         return Ok(startup);
+    }
+
+    /// WP-K4: give `pid` a slot in the process table and an address space, without a thread.
+    /// The caller has already reserved the process against its budget (`budget.rs`); everything
+    /// the address space takes is charged to that budget as it is allocated.
+    #[cfg(baremetal)]
+    pub fn allocate_process_slot(
+        &mut self,
+        mm: &mut crate::mem::MemoryManager,
+        pid: PID,
+    ) -> Result<(), redoubt_abi::Error> {
+        let entry =
+            self.processes.get_mut(pid.get() as usize - 1).ok_or(redoubt_abi::Error::ProcessNotFound)?;
+        if entry.state != ProcessState::Free {
+            return Err(redoubt_abi::Error::ProcessNotFound);
+        }
+        entry.pid = pid;
+        // `ppid` is the legacy "switch back to this when I stop", not a process hierarchy, and
+        // the one process always able to run is the kernel: a creator may itself be blocked when
+        // its child ends. (INTERIM: WP-K5's one stride queue replaces this dance.)
+        entry.ppid = KERNEL_PID;
+        entry.state = ProcessState::Allocated;
+        entry.exception_handler = None;
+        entry.current_thread = INITIAL_TID as TID;
+        entry.previous_thread = INITIAL_TID as TID;
+        entry.mapping.allocate(mm, pid).inspect_err(|_| {
+            entry.state = ProcessState::Free;
+            entry.mapping = Default::default();
+        })?;
+        // Only now can the new space be activated: `set_current_pid` refuses a PID the arch's
+        // process table does not hold.
+        ArchProcess::claim(pid);
+        Ok(())
+    }
+
+    /// WP-K4: give back the slot of a process that never started (a `process_create` that failed
+    /// after its address space was made). Its frames have already been released.
+    #[cfg(baremetal)]
+    pub fn free_process_slot(&mut self, pid: PID) {
+        ArchProcess::destroy(pid).ok();
+        if let Some(entry) = self.processes.get_mut(pid.get() as usize - 1) {
+            entry.state = ProcessState::Free;
+            entry.mapping = Default::default();
+        }
+    }
+
+    /// WP-K4: `process_start` has set up the first thread; the process becomes runnable.
+    #[cfg(baremetal)]
+    pub fn start_process(&mut self, pid: PID) -> Result<(), redoubt_abi::Error> {
+        let process = self.get_process_mut(pid)?;
+        match process.state {
+            ProcessState::Allocated => {
+                process.state = ProcessState::Ready(1 << INITIAL_TID);
+                Ok(())
+            }
+            _ => Err(redoubt_abi::Error::ProcessNotFound),
+        }
+    }
+
+    /// WP-K4: `thread_create(entry, sp, arg) -> tid` (KERNEL-SPEC.md). As `create_thread`,
+    /// without the legacy `ThreadInit`: a Redoubt thread is given a stack pointer, not a stack
+    /// to reserve, and the calling thread keeps running with the new thread's id as its result.
+    #[cfg(baremetal)]
+    pub fn create_redoubt_thread(
+        &mut self,
+        pid: PID,
+        entry: usize,
+        sp: usize,
+        arg: usize,
+    ) -> Result<TID, redoubt_sys::Error> {
+        let process = self.get_process_mut(pid).map_err(|_| redoubt_sys::Error::NotPermitted)?;
+        process.activate().map_err(|_| redoubt_sys::Error::NotPermitted)?;
+        let mut arch_process = ArchProcess::current();
+        let new_tid = arch_process.find_free_thread().ok_or(redoubt_sys::Error::TooManyThreads)?;
+        // A thread costs its budget a page (R6).
+        crate::mem::MemoryManager::with_mut(|mm| mm.thread_created(pid, new_tid))?;
+        arch_process.setup_redoubt_thread(new_tid, entry, sp, arg);
+        let process = self.get_process_mut(pid).map_err(|_| redoubt_sys::Error::NotPermitted)?;
+        process.state = match process.state {
+            ProcessState::Running(x) => ProcessState::Running(x | (1 << new_tid)),
+            ProcessState::Ready(x) => ProcessState::Ready(x | (1 << new_tid)),
+            other => panic!("thread_create in a process that is {:?}", other),
+        };
+        Ok(new_tid)
     }
 
     pub fn get_process(&self, pid: PID) -> Result<&Process, redoubt_abi::Error> {
@@ -1011,9 +1099,7 @@ impl SystemServices {
 
     /// Make `pid`'s address space the active one, for the steps that must run in it (choosing a
     /// buffer's address, writing a record into the receiver's own memory).
-    pub fn activate(&self, pid: PID) -> Result<(), redoubt_abi::Error> {
-        self.get_process(pid)?.activate()
-    }
+    pub fn activate(&self, pid: PID) -> Result<(), redoubt_abi::Error> { self.get_process(pid)?.activate() }
 
     /// Hand a thread the registers a Redoubt call answers with (`redoubt-sys` encodes them, so
     /// the legacy `Result` shape does not fit). As `set_thread_result`, it visits the target's
@@ -1033,9 +1119,7 @@ impl SystemServices {
         }
         self.get_process(pid)?.activate()?;
         ArchProcess::current().set_thread_registers(tid, &words);
-        self.get_process(current_pid)
-            .expect("couldn't switch back after setting a Redoubt result")
-            .activate()
+        self.get_process(current_pid).expect("couldn't switch back after setting a Redoubt result").activate()
     }
 
     /// Resume the given process, picking up exactly where it left off. If the

@@ -1,0 +1,13 @@
+description = "K4 review regressions: one-way exit label flow, distinct zero-PC thread allocation, invalid native stacks fault only when run"
+kind = "boot"
+arch = ["rv64", "rv32"]
+debug_assertions = true
+programs = ["proc-review"]
+timeout_secs = 30
+expect = [
+  '^\[proc-review\] notice labels permit read-up and reject system-source write-down$',
+  '^\[proc-review\] zero-entry threads keep distinct IDs and refund exact resources$',
+  '^\[proc-review\] invalid native stacks are accepted then fault when executed$',
+]
+forbid = ['\[proc-review\] FAIL']
+poweroff = true
