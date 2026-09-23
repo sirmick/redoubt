@@ -139,7 +139,7 @@ share's stamp. Alice un-shares: the scope is destroyed, and `sub` dies with it.
    capabilities allow, until its lease ends, and nothing more. It can run code it wrote, but never
    with more authority than it holds (PACKAGES.md).
 6. **Labels** bound what an agent can leak; capabilities bound what it can do. The isolation unit is
-   the label set, not the capability set (CONTAINMENT.md, Labels; TENETS.md, The use case).
+   the label set, not the capability set (CONTAINMENT.md, Labels; TENETS.md, Purpose and threat model).
 7. **No credentials in agent memory.** Agents use keys through `keyd` and, later, models through
    `gatewayd`, which holds API keys. **A lease carries `keys` only from milestone 2**, and then only
    if its approval named the key: a principal's key comes with **the one message shape it may sign**

@@ -3,145 +3,94 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Redoubt — system documentation</title>
+<title>Redoubt — tenets, architecture and build method</title>
 <style>
-:root{
-  --bg:#f7f8fa; --card:#ffffff; --ink:#111827; --muted:#4b5563; --line:#e5e7eb;
-  --built:#1a7f37; --built-bg:#e8f6ec; --prog:#9a6700; --prog-bg:#fff6dc;
-  --des:#b42318; --des-bg:#fdeceb; --defer:#6b7280; --defer-bg:#eef0f2;
-  --kern:#1d4ed8; --kern-bg:#e8effd; --acc:#6d28d9; --acc-bg:#f0eafd;
-}
-*{box-sizing:border-box}
-html{scroll-behavior:smooth}
-body{margin:0;background:var(--bg);color:var(--ink);
-  font:16px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
-a{color:#1d4ed8;text-decoration:none}
-a:hover{text-decoration:underline}
-code,kbd,pre{font-family:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace}
-code{background:#f0f2f5;padding:.08em .35em;border-radius:4px;font-size:.9em}
-pre{background:#0f172a;color:#e2e8f0;padding:14px 16px;border-radius:10px;overflow:auto;font-size:13.5px;line-height:1.5}
-pre code{background:none;padding:0;color:inherit}
-.wrap{max-width:1120px;margin:0 auto;padding:0 22px}
-header.hero{background:linear-gradient(160deg,#0f172a,#1e3a8a 65%,#3730a3);color:#fff;padding:46px 0 34px}
-header.hero h1{margin:0 0 6px;font-size:40px;letter-spacing:-.02em}
-header.hero .tag{font-size:18px;color:#c7d2fe;max-width:820px}
-.legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}
-.pill{display:inline-flex;align-items:center;gap:7px;padding:3px 11px;border-radius:999px;
-  font-size:12.5px;font-weight:600;border:1px solid transparent;white-space:nowrap}
-.dot{width:9px;height:9px;border-radius:50%}
-.built{background:var(--built-bg);color:var(--built);border-color:#b7e0c2}.built .dot{background:var(--built)}
-.prog{background:var(--prog-bg);color:var(--prog);border-color:#efd9a0}.prog .dot{background:var(--prog)}
-.des{background:var(--des-bg);color:var(--des);border-color:#f3c0bc}.des .dot{background:var(--des)}
-.defer{background:var(--defer-bg);color:var(--defer);border-color:#d5d8dd}.defer .dot{background:var(--defer)}
-.kern{background:var(--kern-bg);color:var(--kern);border-color:#bcd0f5}.kern .dot{background:var(--kern)}
-.acc{background:var(--acc-bg);color:var(--acc);border-color:#d6c8f7}.acc .dot{background:var(--acc)}
-nav.toc{position:sticky;top:0;z-index:20;background:rgba(247,248,250,.92);
-  backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
-nav.toc ul{display:flex;flex-wrap:wrap;gap:2px 14px;list-style:none;margin:0;padding:10px 0;font-size:13.5px}
-nav.toc a{color:var(--muted);font-weight:600}
-main{padding:8px 0 60px}
-section{background:var(--card);border:1px solid var(--line);border-radius:14px;
-  padding:26px 28px;margin:22px 0;box-shadow:0 1px 2px rgba(16,24,40,.04)}
-h2{margin:0 0 4px;font-size:26px;letter-spacing:-.01em}
-h2 .num{color:#9ca3af;font-weight:700;margin-right:10px}
-h3{margin:24px 0 4px;font-size:18px}
-p{margin:10px 0;color:var(--ink)}
-.lead{color:var(--muted)}
-.diagram{background:#fbfcfe;border:1px solid var(--line);border-radius:12px;padding:14px;margin:16px 0;overflow:auto}
-.diagram svg{max-width:100%;height:auto;display:block;margin:0 auto}
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-@media(max-width:760px){.grid2{grid-template-columns:1fr}}
-.card{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:#fcfcfd}
-.card h4{margin:0 0 8px;font-size:14px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
-ul.tight{margin:8px 0;padding-left:20px}ul.tight li{margin:4px 0}
-table{border-collapse:collapse;width:100%;margin:14px 0;font-size:14.5px}
-th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
-th{background:#f3f4f6;font-size:12.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
-tr:hover td{background:#fafbfc}
-.note{border-left:4px solid var(--acc);background:var(--acc-bg);padding:10px 14px;border-radius:0 8px 8px 0;margin:14px 0}
-.warn{border-left:4px solid var(--prog);background:var(--prog-bg);padding:10px 14px;border-radius:0 8px 8px 0;margin:14px 0}
-footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
-.kv{display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;font-size:14.5px}
-.kv b{color:var(--muted)}
+:root{color-scheme:light;--ink:#172033;--muted:#475569;--line:#dbe2ea}
+*{box-sizing:border-box}body{margin:0;background:#f7f8fa;color:var(--ink);font:17px/1.6 system-ui,sans-serif}
+main,header,footer{max-width:1100px;margin:auto;padding:24px}header{padding-top:48px}
+h1{font-size:48px;margin:0}h2{margin:0 0 16px}a{color:#1d4ed8}p{max-width:85ch}
+nav{display:flex;flex-wrap:wrap;gap:20px;margin-top:24px}section{padding:28px 0;border-top:1px solid var(--line)}
+table{border-collapse:collapse;width:100%;margin:20px 0}th,td{padding:10px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+.diagram{overflow-x:auto;background:white;padding:16px;border:1px solid var(--line);border-radius:8px;margin:20px 0}
+.diagram svg{display:block;width:100%;min-width:620px;height:auto}.note{color:var(--muted)}
+code{font-size:.9em}footer{font-size:14px;color:var(--muted)}
 </style>
 </head>
 <body>
-
-<header class="hero"><div class="wrap">
-  <h1>Redoubt</h1>
-  <p class="tag">A small, auditable <b>RISC-V microkernel</b> in pure Rust — and the runtimes that run on it.
-  Today the runtime is <b>beamlet</b>, a safe-Rust BEAM (Erlang/Elixir) VM. The OS is runtime-neutral.</p>
-  <div class="legend">
-    <span class="pill built"><span class="dot"></span>Built — exercised by cargo testbench</span>
-    <span class="pill prog"><span class="dot"></span>In progress — a work package is building</span>
-    <span class="pill des"><span class="dot"></span>Designed, not built — in docs/</span>
-    <span class="pill defer"><span class="dot"></span>Deferred — deliberately later</span>
-  </div>
-</div></header>
-
-<nav class="toc"><div class="wrap"><ul>
-  <li><a href="#overview">Overview</a></li>
-  <li><a href="#boot">Boot</a></li>
-  <li><a href="#kernel">Kernel</a></li>
-  <li><a href="#servers">Servers</a></li>
-  <li><a href="#beamlet">Userland</a></li>
-  <li><a href="#security">Security model</a></li>
-  <li><a href="#start">Getting started</a></li>
-  <li><a href="#testing">Testing</a></li>
-  <li><a href="#reading">Read the design</a></li>
-  <li><a href="#milestones">Milestones</a></li>
-</ul></div></nav>
-
-<main class="wrap">
-
-<section id="overview">
-  <h2><span class="num">01</span>The system at a glance</h2>
-  <p class="lead">Redoubt is a hard fork of <a href="https://github.com/betrusted-io/xous-core">Xous</a>, rebuilt for RV32 and RV64
-  on one width-generic code path and aimed at a specific threat: a capable adversary that has read every line of the
-  source and controls any code it is allowed to run. The design rests on <b>no ambient authority</b> — a process can
-  touch only what it was explicitly given — enforced by a tiny kernel with capabilities, budgets and information-flow labels.</p>
-  <div class="diagram"><svg width="1104pt" height="336pt"
- viewBox="0.00 0.00 1104.00 336.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<header>
+<h1>Redoubt</h1>
+<p>A RISC-V microkernel in pure Rust for running hostile code under explicit authority,
+resource limits and information-flow labels. QEMU boots on rv64 and rv32; beamlet currently
+runs on the host. Native userland integration remains work in progress.</p>
+<nav aria-label="Page"><a href="#tenets">Tenets</a><a href="#architecture">Architecture</a>
+<a href="#method">Swarm method</a><a href="#start">Build and test</a><a href="#next">Next</a></nav>
+</header>
+<main>
+<section id="tenets">
+<h2>The tenets govern the design</h2>
+<p><a href="TENETS.md">TENETS</a> outranks every other document. These are target constraints;
+<a href="STATUS.md">STATUS</a> records implementation gaps and evidence.</p>
+<ol>
+<li><b>Simple enough to audit:</b> a small kernel, one mechanism per job, deletion before configuration.</li>
+<li><b>Secure by construction:</b> explicit capabilities, least privilege, W^X, authenticated privileged code,
+fail-closed behavior, bounded unsafe code and an out-of-band approval channel.</li>
+<li><b>Rust:</b> assembly only where Rust cannot reach; host test-oracle exceptions stay off target.</li>
+<li><b>Open standards:</b> published hardware interfaces, formats, protocols and reproducible sources.</li>
+<li><b>Dependencies are part of the TCB:</b> small, read, pinned and justified.</li>
+<li><b>Attack-tested:</b> real boots, regressions, hostile inputs and a harness proved able to fail.</li>
+<li><b>Virtio devices:</b> trivial-device exceptions; DMA drivers are trusted unless hardware confines them.</li>
+</ol>
+<p class="note">The label set is the isolation unit. Covert/physical channels are outside the software claim.
+Mediation, authority closure and the wakeup bound still have <a href="QUESTIONS.md">open decisions 164–166</a>;
+their recommendations are not accepted rules.</p>
+</section>
+<section id="architecture">
+<h2>System and IPC</h2>
+<p>The kernel owns memory, threads, IPC, interrupt delivery and the timer; services and policy run
+in user processes. This diagram shows the target structure; <a href="STATUS.md">STATUS</a> distinguishes
+implemented components from integrated services.</p>
+<div class="diagram" role="img" aria-label="Redoubt architecture"><svg width="924pt" height="336pt"
+ viewBox="0.00 0.00 924.00 336.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
 <g id="stack_graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 332)">
 <title>stack</title>
 <g id="stack_node1" class="node">
 <title>hw</title>
-<path fill="#eef0f2" stroke="#6b7280" stroke-width="1.5" d="M689.5,-328C689.5,-328 375.5,-328 375.5,-328 369.5,-328 363.5,-322 363.5,-316 363.5,-316 363.5,-304 363.5,-304 363.5,-298 369.5,-292 375.5,-292 375.5,-292 689.5,-292 689.5,-292 695.5,-292 701.5,-298 701.5,-304 701.5,-304 701.5,-316 701.5,-316 701.5,-322 695.5,-328 689.5,-328"/>
-<text text-anchor="middle" x="532.5" y="-313.2" font-family="Helvetica,sans-Serif" font-size="11.00">HARDWARE</text>
-<text text-anchor="middle" x="532.5" y="-301.2" font-family="Helvetica,sans-Serif" font-size="11.00">QEMU virt RV64 + RV32 (built) &#160;&#160;· &#160;&#160;FPGA cards (planned)</text>
+<path fill="#eef0f2" stroke="#6b7280" stroke-width="1.5" d="M644.5,-328C644.5,-328 330.5,-328 330.5,-328 324.5,-328 318.5,-322 318.5,-316 318.5,-316 318.5,-304 318.5,-304 318.5,-298 324.5,-292 330.5,-292 330.5,-292 644.5,-292 644.5,-292 650.5,-292 656.5,-298 656.5,-304 656.5,-304 656.5,-316 656.5,-316 656.5,-322 650.5,-328 644.5,-328"/>
+<text text-anchor="middle" x="487.5" y="-313.2" font-family="Helvetica,sans-Serif" font-size="11.00">HARDWARE</text>
+<text text-anchor="middle" x="487.5" y="-301.2" font-family="Helvetica,sans-Serif" font-size="11.00">QEMU virt RV64 + RV32 (built) &#160;&#160;· &#160;&#160;FPGA cards (planned)</text>
 </g>
 <g id="stack_node2" class="node">
 <title>fw</title>
-<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M627.5,-255C627.5,-255 437.5,-255 437.5,-255 431.5,-255 425.5,-249 425.5,-243 425.5,-243 425.5,-231 425.5,-231 425.5,-225 431.5,-219 437.5,-219 437.5,-219 627.5,-219 627.5,-219 633.5,-219 639.5,-225 639.5,-231 639.5,-231 639.5,-243 639.5,-243 639.5,-249 633.5,-255 627.5,-255"/>
-<text text-anchor="middle" x="532.5" y="-240.2" font-family="Helvetica,sans-Serif" font-size="11.00">BIOS / firmware (M&#45;mode)</text>
-<text text-anchor="middle" x="532.5" y="-228.2" font-family="Helvetica,sans-Serif" font-size="11.00">RustSBI Prototyper — rv64 + rv32</text>
+<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M582.5,-255C582.5,-255 392.5,-255 392.5,-255 386.5,-255 380.5,-249 380.5,-243 380.5,-243 380.5,-231 380.5,-231 380.5,-225 386.5,-219 392.5,-219 392.5,-219 582.5,-219 582.5,-219 588.5,-219 594.5,-225 594.5,-231 594.5,-231 594.5,-243 594.5,-243 594.5,-249 588.5,-255 582.5,-255"/>
+<text text-anchor="middle" x="487.5" y="-240.2" font-family="Helvetica,sans-Serif" font-size="11.00">BIOS / firmware (M&#45;mode)</text>
+<text text-anchor="middle" x="487.5" y="-228.2" font-family="Helvetica,sans-Serif" font-size="11.00">RustSBI Prototyper — rv64 + rv32</text>
 </g>
 <g id="stack_edge1" class="edge">
 <title>hw&#45;&gt;fw</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M532.5,-291.81C532.5,-282.92 532.5,-271.91 532.5,-262.17"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="534.95,-262.03 532.5,-255.03 530.05,-262.03 534.95,-262.03"/>
+<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M487.5,-291.81C487.5,-282.92 487.5,-271.91 487.5,-262.17"/>
+<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="489.95,-262.03 487.5,-255.03 485.05,-262.03 489.95,-262.03"/>
 </g>
 <g id="stack_node3" class="node">
 <title>ld</title>
-<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M710.5,-182C710.5,-182 354.5,-182 354.5,-182 348.5,-182 342.5,-176 342.5,-170 342.5,-170 342.5,-158 342.5,-158 342.5,-152 348.5,-146 354.5,-146 354.5,-146 710.5,-146 710.5,-146 716.5,-146 722.5,-152 722.5,-158 722.5,-158 722.5,-170 722.5,-170 722.5,-176 716.5,-182 710.5,-182"/>
-<text text-anchor="middle" x="532.5" y="-167.2" font-family="Helvetica,sans-Serif" font-size="11.00">LOADER (S&#45;mode)</text>
-<text text-anchor="middle" x="532.5" y="-155.2" font-family="Helvetica,sans-Serif" font-size="11.00">verify the Ed25519 bundle &#160;· &#160;build Sv32/Sv39 &#160;· &#160;argument block</text>
+<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M665.5,-182C665.5,-182 309.5,-182 309.5,-182 303.5,-182 297.5,-176 297.5,-170 297.5,-170 297.5,-158 297.5,-158 297.5,-152 303.5,-146 309.5,-146 309.5,-146 665.5,-146 665.5,-146 671.5,-146 677.5,-152 677.5,-158 677.5,-158 677.5,-170 677.5,-170 677.5,-176 671.5,-182 665.5,-182"/>
+<text text-anchor="middle" x="487.5" y="-167.2" font-family="Helvetica,sans-Serif" font-size="11.00">LOADER (S&#45;mode)</text>
+<text text-anchor="middle" x="487.5" y="-155.2" font-family="Helvetica,sans-Serif" font-size="11.00">verify the Ed25519 bundle &#160;· &#160;build Sv32/Sv39 &#160;· &#160;argument block</text>
 </g>
 <g id="stack_edge2" class="edge">
 <title>fw&#45;&gt;ld</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M532.5,-218.81C532.5,-209.92 532.5,-198.91 532.5,-189.17"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="534.95,-189.03 532.5,-182.03 530.05,-189.03 534.95,-189.03"/>
+<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M487.5,-218.81C487.5,-209.92 487.5,-198.91 487.5,-189.17"/>
+<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="489.95,-189.03 487.5,-182.03 485.05,-189.03 489.95,-189.03"/>
 </g>
 <g id="stack_node4" class="node">
 <title>ke</title>
-<path fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.5" d="M731,-109C731,-109 334,-109 334,-109 328,-109 322,-103 322,-97 322,-97 322,-85 322,-85 322,-79 328,-73 334,-73 334,-73 731,-73 731,-73 737,-73 743,-79 743,-85 743,-85 743,-97 743,-97 743,-103 737,-109 731,-109"/>
-<text text-anchor="middle" x="532.5" y="-94.2" font-family="Helvetica,sans-Serif" font-size="11.00">KERNEL (S&#45;mode) — the TCB</text>
-<text text-anchor="middle" x="532.5" y="-82.2" font-family="Helvetica,sans-Serif" font-size="11.00">memory · threads · IPC · budgets · handles · endpoints · devices · timer</text>
+<path fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.5" d="M686,-109C686,-109 289,-109 289,-109 283,-109 277,-103 277,-97 277,-97 277,-85 277,-85 277,-79 283,-73 289,-73 289,-73 686,-73 686,-73 692,-73 698,-79 698,-85 698,-85 698,-97 698,-97 698,-103 692,-109 686,-109"/>
+<text text-anchor="middle" x="487.5" y="-94.2" font-family="Helvetica,sans-Serif" font-size="11.00">KERNEL (S&#45;mode) — the TCB</text>
+<text text-anchor="middle" x="487.5" y="-82.2" font-family="Helvetica,sans-Serif" font-size="11.00">memory · threads · IPC · budgets · handles · endpoints · devices · timer</text>
 </g>
 <g id="stack_edge3" class="edge">
 <title>ld&#45;&gt;ke</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M532.5,-145.81C532.5,-136.92 532.5,-125.91 532.5,-116.17"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="534.95,-116.03 532.5,-109.03 530.05,-116.03 534.95,-116.03"/>
+<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M487.5,-145.81C487.5,-136.92 487.5,-125.91 487.5,-116.17"/>
+<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="489.95,-116.03 487.5,-109.03 485.05,-116.03 489.95,-116.03"/>
 </g>
 <g id="stack_node5" class="node">
 <title>sv</title>
@@ -151,922 +100,201 @@ footer{color:var(--muted);font-size:13.5px;padding:26px 0 50px}
 </g>
 <g id="stack_edge4" class="edge">
 <title>ke&#45;&gt;sv</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M457.77,-72.99C410.95,-62.34 350.57,-48.6 302.44,-37.65"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="302.8,-35.22 295.43,-36.05 301.71,-39.99 302.8,-35.22"/>
+<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M423.55,-72.99C383.88,-62.45 332.84,-48.87 291.86,-37.98"/>
+<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="292.25,-35.54 284.86,-36.11 290.99,-40.28 292.25,-35.54"/>
 </g>
 <g id="stack_node6" class="node">
 <title>ul</title>
-<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M1084,-36C1084,-36 609,-36 609,-36 603,-36 597,-30 597,-24 597,-24 597,-12 597,-12 597,-6 603,0 609,0 609,0 1084,0 1084,0 1090,0 1096,-6 1096,-12 1096,-12 1096,-24 1096,-24 1096,-30 1090,-36 1084,-36"/>
-<text text-anchor="middle" x="846.5" y="-21.2" font-family="Helvetica,sans-Serif" font-size="11.00">USERLAND</text>
-<text text-anchor="middle" x="846.5" y="-9.2" font-family="Helvetica,sans-Serif" font-size="11.00">beamlet — the BEAM/OTP runtime &#160;· &#160;sessions &amp; agents (one VM = one trust domain)</text>
+<path fill="#ffe0e0" stroke="#b42318" stroke-width="1.5" d="M904,-36C904,-36 609,-36 609,-36 603,-36 597,-30 597,-24 597,-24 597,-12 597,-12 597,-6 603,0 609,0 609,0 904,0 904,0 910,0 916,-6 916,-12 916,-12 916,-24 916,-24 916,-30 910,-36 904,-36"/>
+<text text-anchor="middle" x="756.5" y="-21.2" font-family="Helvetica,sans-Serif" font-size="11.00">USERLAND (planned integration)</text>
+<text text-anchor="middle" x="756.5" y="-9.2" font-family="Helvetica,sans-Serif" font-size="11.00">beamlet runs on the host today &#160;· &#160;sessions &amp; agents</text>
 </g>
 <g id="stack_edge5" class="edge">
 <title>ke&#45;&gt;ul</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M607.71,-72.99C654.83,-62.34 715.6,-48.6 764.03,-37.65"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="764.8,-39.99 771.09,-36.05 763.72,-35.21 764.8,-39.99"/>
+<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M551.93,-72.99C591.98,-62.42 643.53,-48.82 684.86,-37.91"/>
+<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="685.52,-40.27 691.66,-36.11 684.27,-35.53 685.52,-40.27"/>
 </g>
 <g id="stack_edge6" class="edge">
 <title>sv&#45;&gt;ul</title>
-<path fill="none" stroke="#6d28d9" stroke-width="1.3" d="M448.31,-18C494.23,-18 542.79,-18 589.63,-18"/>
-<polygon fill="#6d28d9" stroke="#6d28d9" stroke-width="1.3" points="448.2,-15.55 441.2,-18 448.2,-20.45 448.2,-15.55"/>
-<polygon fill="#6d28d9" stroke="#6d28d9" stroke-width="1.3" points="589.83,-20.45 596.83,-18 589.83,-15.55 589.83,-20.45"/>
+<path fill="none" stroke="#6d28d9" stroke-width="1.3" d="M448.25,-18C495.66,-18 544.78,-18 589.51,-18"/>
+<polygon fill="#6d28d9" stroke="#6d28d9" stroke-width="1.3" points="448.22,-15.55 441.22,-18 448.22,-20.45 448.22,-15.55"/>
+<polygon fill="#6d28d9" stroke="#6d28d9" stroke-width="1.3" points="589.65,-20.45 596.65,-18 589.65,-15.55 589.65,-20.45"/>
 <text text-anchor="middle" x="519" y="-23.8" font-family="Helvetica,sans-Serif" font-size="9.00" fill="#6d28d9">IPC: call / send · 9P · handles</text>
 </g>
 </g>
 </svg></div>
-  <div class="grid2">
-    <div class="card"><h4>Built and tested</h4><ul class="tight">
-      <li>rv64 + rv32 boot on QEMU virt under the vendored RustSBI firmware</li>
-      <li>the kernel: memory, legacy threads, handles &amp; endpoints, budgets, devices, IRQ receive, verified boot, W^X; cooperative scheduling</li>
-      <li><code>libs/</code>: sys, rt, wire, signing, littlefs, paging</li>
-      <li>host-tested server components: keyd, bootfsd, consoled, blkd; full init boot wiring pending</li>
-      <li><code>tools/testbench</code>; beamlet on the host — Elixir, its compiler, IEx, OTP crypto/ssl/ssh</li>
-    </ul></div>
-    <div class="card"><h4>Designed, not built</h4><ul class="tight">
-      <li>init + boot manifest + loader stub</li>
-      <li>steward, sshd, fsd, netd, ipd; end-to-end storage/network services</li>
-      <li>new process/thread syscalls, timer-driven scheduling, beamlet's Redoubt platform</li>
-      <li>packages, projects, sharing, A/B system updates</li>
-      <li>FPGA cards, disk encryption, gatewayd, webd, linkd/routerd</li>
-    </ul></div>
-  </div>
-  <p>A term to hold onto: a <b>budget</b> is a kernel container every process lives in. It is the unit of accounting,
-  CPU share, revocation, <b>information-flow labels</b>, and identity (its <i>account</i> travels with every message) —
-  one object replacing five mechanisms. <a href="RESOURCES.md">RESOURCES.md</a> · <a href="CONTAINMENT.md">CONTAINMENT.md</a></p>
-</section>
-
-<section id="boot">
-  <h2><span class="num">02</span>Boot flow</h2>
-  <p>Firmware verifies nothing on QEMU (QEMU loads the loader directly); the link that matters is that the
-  <b>loader authenticates the boot bundle</b> before executing any of it. The initrd is <code>signature(64) ‖ tar</code>;
-  the signature covers <code>"redoubt.bundle.v1\0" ‖ u64_le(len) ‖ tar</code>, and one crate builds the preimage for
-  both the loader and the signer so they cannot drift.</p>
-  <div class="diagram"><svg width="970pt" height="80pt"
- viewBox="0.00 0.00 970.00 80.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-<g id="boot_graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 76)">
-<title>boot</title>
-<g id="boot_node1" class="node">
-<title>rom</title>
-<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M99,-54C99,-54 12,-54 12,-54 6,-54 0,-48 0,-42 0,-42 0,-30 0,-30 0,-24 6,-18 12,-18 12,-18 99,-18 99,-18 105,-18 111,-24 111,-30 111,-30 111,-42 111,-42 111,-48 105,-54 99,-54"/>
-<text text-anchor="middle" x="55.5" y="-39.2" font-family="Helvetica,sans-Serif" font-size="11.00">ROM / firmware</text>
-<text text-anchor="middle" x="55.5" y="-27.2" font-family="Helvetica,sans-Serif" font-size="11.00">M&#45;mode</text>
-</g>
-<g id="boot_node2" class="node">
-<title>loader</title>
-<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M377,-72C377,-72 159,-72 159,-72 153,-72 147,-66 147,-60 147,-60 147,-12 147,-12 147,-6 153,0 159,0 159,0 377,0 377,0 383,0 389,-6 389,-12 389,-12 389,-60 389,-60 389,-66 383,-72 377,-72"/>
-<text text-anchor="middle" x="268" y="-57.2" font-family="Helvetica,sans-Serif" font-size="11.00">LOADER (S&#45;mode, MMU off)</text>
-<text text-anchor="middle" x="268" y="-45.2" font-family="Helvetica,sans-Serif" font-size="11.00">1 &#160;read the device tree</text>
-<text text-anchor="middle" x="268" y="-33.2" font-family="Helvetica,sans-Serif" font-size="11.00">2 &#160;VERIFY the bundle — fail ⇒ power off</text>
-<text text-anchor="middle" x="268" y="-21.2" font-family="Helvetica,sans-Serif" font-size="11.00">3 &#160;build Sv32/Sv39 address spaces</text>
-<text text-anchor="middle" x="268" y="-9.2" font-family="Helvetica,sans-Serif" font-size="11.00">4 &#160;write the argument block</text>
-</g>
-<g id="boot_edge1" class="edge">
-<title>rom&#45;&gt;loader</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M111.26,-36C120.18,-36 129.73,-36 139.56,-36"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="139.75,-38.45 146.75,-36 139.75,-33.55 139.75,-38.45"/>
-</g>
-<g id="boot_node3" class="node">
-<title>kernel</title>
-<path fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.5" d="M601,-60C601,-60 437,-60 437,-60 431,-60 425,-54 425,-48 425,-48 425,-24 425,-24 425,-18 431,-12 437,-12 437,-12 601,-12 601,-12 607,-12 613,-18 613,-24 613,-24 613,-48 613,-48 613,-54 607,-60 601,-60"/>
-<text text-anchor="middle" x="519" y="-45.2" font-family="Helvetica,sans-Serif" font-size="11.00">KERNEL (S&#45;mode)</text>
-<text text-anchor="middle" x="519" y="-33.2" font-family="Helvetica,sans-Serif" font-size="11.00">root / system / users budgets</text>
-<text text-anchor="middle" x="519" y="-21.2" font-family="Helvetica,sans-Serif" font-size="11.00">hand every device to init</text>
-</g>
-<g id="boot_edge2" class="edge">
-<title>loader&#45;&gt;kernel</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M389.12,-36C398.64,-36 408.19,-36 417.54,-36"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="417.66,-38.45 424.66,-36 417.66,-33.55 417.66,-38.45"/>
-</g>
-<g id="boot_node4" class="node">
-<title>init</title>
-<path fill="#ffe0e0" stroke="#b42318" stroke-width="1.5" d="M784,-60C784,-60 661,-60 661,-60 655,-60 649,-54 649,-48 649,-48 649,-24 649,-24 649,-18 655,-12 661,-12 661,-12 784,-12 784,-12 790,-12 796,-18 796,-24 796,-24 796,-48 796,-48 796,-54 790,-60 784,-60"/>
-<text text-anchor="middle" x="722.5" y="-45.2" font-family="Helvetica,sans-Serif" font-size="11.00">init (U&#45;mode)</text>
-<text text-anchor="middle" x="722.5" y="-33.2" font-family="Helvetica,sans-Serif" font-size="11.00">start servers from the</text>
-<text text-anchor="middle" x="722.5" y="-21.2" font-family="Helvetica,sans-Serif" font-size="11.00">signed boot manifest</text>
-</g>
-<g id="boot_edge3" class="edge">
-<title>kernel&#45;&gt;init</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M613.08,-36C622.61,-36 632.24,-36 641.61,-36"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="641.72,-38.45 648.72,-36 641.72,-33.55 641.72,-38.45"/>
-</g>
-<g id="boot_node5" class="node">
-<title>run</title>
-<path fill="#ffe0e0" stroke="#b42318" stroke-width="1.5" d="M950,-54C950,-54 844,-54 844,-54 838,-54 832,-48 832,-42 832,-42 832,-30 832,-30 832,-24 838,-18 844,-18 844,-18 950,-18 950,-18 956,-18 962,-24 962,-30 962,-30 962,-42 962,-42 962,-48 956,-54 950,-54"/>
-<text text-anchor="middle" x="897" y="-33.2" font-family="Helvetica,sans-Serif" font-size="11.00">servers + sessions</text>
-</g>
-<g id="boot_edge4" class="edge">
-<title>init&#45;&gt;run</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M796.16,-36C805.62,-36 815.31,-36 824.75,-36"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="824.92,-38.45 831.92,-36 824.92,-33.55 824.92,-38.45"/>
-</g>
-</g>
-</svg></div>
-  <ul class="tight">
-    <li><b>Built:</b> vendored RustSBI and loader on both widths, Ed25519 verification, W^X, default-deny device grants.
-      <a href="BOOT.md">BOOT.md</a> · <a href="VERIFIED-BOOT.md">VERIFIED-BOOT.md</a> · <a href="https://github.com/sirmick/redoubt/blob/main/libs/signing/src/lib.rs">libs/signing</a> · <a href="https://github.com/sirmick/redoubt/blob/main/loader/src/verify.rs">loader/src/verify.rs</a></li>
-    <li><b>Designed change:</b> the loader will load only <code>kernel</code> + <code>init</code>; <code>init</code> launches every other
-      process through a system-signed <b>loader stub</b> from the bundle's pages. <a href="PACKAGES.md">PACKAGES.md</a></li>
-  </ul>
-  <h3>Hardware</h3>
-  <table>
-    <tr><th>Target</th><th>Width</th><th>Firmware</th><th>Status</th></tr>
-    <tr><td>QEMU <code>virt</code></td><td>RV64 (Sv39)</td><td>RustSBI Prototyper</td><td><span class="pill built"><span class="dot"></span>booted</span></td></tr>
-    <tr><td>QEMU <code>virt</code></td><td>RV32 (Sv32)</td><td>RustSBI Prototyper</td><td><span class="pill built"><span class="dot"></span>booted</span></td></tr>
-    <tr><td>FPGA PCIe cards (XC7K480T)</td><td>RV64GC Sv39, 32 hw threads</td><td>RustSBI</td><td><span class="pill des"><span class="dot"></span>planned</span></td></tr>
-    <tr><td>Messy SoCs (e.g. Orange Pi RV2)</td><td>RV64</td><td>RustSBI domains; Linux on reserved cores</td><td><span class="pill defer"><span class="dot"></span>deferred</span></td></tr>
-  </table>
-  <p class="lead">Hardware differences are <b>capability features</b> (<code>sbi</code>, <code>plic</code>) composed by <b>board
-  features</b> (<code>qemu-virt</code>), never <code>target_arch</code> checks. RAM, MMIO and the interrupt controller come from
-  the device tree. <a href="PLATFORM-FPGA.md">PLATFORM-FPGA.md</a> · <a href="IO-ARCHITECTURE.md">IO-ARCHITECTURE.md</a></p>
-</section>
-
-<section id="kernel">
-  <h2><span class="num">03</span>The kernel — objects and calls</h2>
-  <p>The kernel keeps memory, threads, IPC, interrupt delivery and the timer. Nothing else. Its whole interface is a
-  small set of objects reached through unforgeable handles, and a set of system calls whose errors and
-  <b>order of checks</b> are normative so the executable model and the real kernel can be compared exactly.</p>
-  <div class="diagram"><svg width="697pt" height="312pt"
- viewBox="0.00 0.00 697.00 312.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-<g id="kernel_graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 308)">
-<title>kernel</title>
-<g id="kernel_node1" class="node">
-<title>proc</title>
-<path fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.5" d="M265,-185C265,-185 12,-185 12,-185 6,-185 0,-179 0,-173 0,-173 0,-149 0,-149 0,-143 6,-137 12,-137 12,-137 265,-137 265,-137 271,-137 277,-143 277,-149 277,-149 277,-173 277,-173 277,-179 271,-185 265,-185"/>
-<text text-anchor="middle" x="138.5" y="-170.2" font-family="Helvetica,sans-Serif" font-size="11.00">process</text>
-<text text-anchor="middle" x="138.5" y="-158.2" font-family="Helvetica,sans-Serif" font-size="11.00">handle table (≤ MAX_HANDLES = 4096)</text>
-<text text-anchor="middle" x="138.5" y="-146.2" font-family="Helvetica,sans-Serif" font-size="11.00">open calls (≤ 64) · current call · exit endpoint</text>
-</g>
-<g id="kernel_node2" class="node">
-<title>budget</title>
-<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M677,-304C677,-304 493,-304 493,-304 487,-304 481,-298 481,-292 481,-292 481,-268 481,-268 481,-262 487,-256 493,-256 493,-256 677,-256 677,-256 683,-256 689,-262 689,-268 689,-268 689,-292 689,-292 689,-298 683,-304 677,-304"/>
-<text text-anchor="middle" x="585" y="-289.2" font-family="Helvetica,sans-Serif" font-size="11.00">BUDGET</text>
-<text text-anchor="middle" x="585" y="-277.2" font-family="Helvetica,sans-Serif" font-size="11.00">pages · processes · weight</text>
-<text text-anchor="middle" x="585" y="-265.2" font-family="Helvetica,sans-Serif" font-size="11.00">class · labels · account · deadline</text>
-</g>
-<g id="kernel_edge1" class="edge">
-<title>proc&#45;&gt;budget</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M195.23,-185.1C224.52,-197.1 261.26,-211.12 295,-221 353.32,-238.08 419.68,-252 474.08,-262.02"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="473.67,-264.44 481,-263.29 474.55,-259.62 473.67,-264.44"/>
-<text text-anchor="middle" x="379" y="-261.8" font-family="Helvetica,sans-Serif" font-size="9.00">handle</text>
-</g>
-<g id="kernel_node3" class="node">
-<title>endpoint</title>
-<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M635,-231C635,-231 535,-231 535,-231 529,-231 523,-225 523,-219 523,-219 523,-195 523,-195 523,-189 529,-183 535,-183 535,-183 635,-183 635,-183 641,-183 647,-189 647,-195 647,-195 647,-219 647,-219 647,-225 641,-231 635,-231"/>
-<text text-anchor="middle" x="585" y="-216.2" font-family="Helvetica,sans-Serif" font-size="11.00">ENDPOINT</text>
-<text text-anchor="middle" x="585" y="-204.2" font-family="Helvetica,sans-Serif" font-size="11.00">outlives its server</text>
-<text text-anchor="middle" x="585" y="-192.2" font-family="Helvetica,sans-Serif" font-size="11.00">fair waiting (R2)</text>
-</g>
-<g id="kernel_edge2" class="edge">
-<title>proc&#45;&gt;endpoint</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M241.14,-185.07C259,-188.58 277.48,-191.76 295,-194 370.16,-203.6 457.1,-206.4 515.84,-207.08"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="515.83,-209.53 522.86,-207.15 515.89,-204.63 515.83,-209.53"/>
-<text text-anchor="middle" x="379" y="-207.8" font-family="Helvetica,sans-Serif" font-size="9.00">handle &#160;&#160;(badge 0 = receive right)</text>
-</g>
-<g id="kernel_node4" class="node">
-<title>mmio</title>
-<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M638.5,-158C638.5,-158 531.5,-158 531.5,-158 525.5,-158 519.5,-152 519.5,-146 519.5,-146 519.5,-134 519.5,-134 519.5,-128 525.5,-122 531.5,-122 531.5,-122 638.5,-122 638.5,-122 644.5,-122 650.5,-128 650.5,-134 650.5,-134 650.5,-146 650.5,-146 650.5,-152 644.5,-158 638.5,-158"/>
-<text text-anchor="middle" x="585" y="-137.2" font-family="Helvetica,sans-Serif" font-size="11.00">MMIO (+ DMA flag)</text>
-</g>
-<g id="kernel_edge3" class="edge">
-<title>proc&#45;&gt;mmio</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M277.1,-154.5C354.8,-150.83 448.74,-146.39 512.05,-143.4"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="512.35,-145.84 519.23,-143.06 512.12,-140.94 512.35,-145.84"/>
-</g>
-<g id="kernel_node5" class="node">
-<title>irq</title>
-<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M600,-97C600,-97 570,-97 570,-97 564,-97 558,-91 558,-85 558,-85 558,-73 558,-73 558,-67 564,-61 570,-61 570,-61 600,-61 600,-61 606,-61 612,-67 612,-73 612,-73 612,-85 612,-85 612,-91 606,-97 600,-97"/>
-<text text-anchor="middle" x="585" y="-76.2" font-family="Helvetica,sans-Serif" font-size="11.00">IRQ</text>
-</g>
-<g id="kernel_edge4" class="edge">
-<title>proc&#45;&gt;irq</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M269.86,-136.95C366.65,-119.1 491.67,-96.03 550.53,-85.17"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="551.28,-87.53 557.72,-83.85 550.39,-82.71 551.28,-87.53"/>
-</g>
-<g id="kernel_node6" class="node">
-<title>reset</title>
-<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M601,-36C601,-36 569,-36 569,-36 563,-36 557,-30 557,-24 557,-24 557,-12 557,-12 557,-6 563,0 569,0 569,0 601,0 601,0 607,0 613,-6 613,-12 613,-12 613,-24 613,-24 613,-30 607,-36 601,-36"/>
-<text text-anchor="middle" x="585" y="-15.2" font-family="Helvetica,sans-Serif" font-size="11.00">Reset</text>
-</g>
-<g id="kernel_edge5" class="edge">
-<title>proc&#45;&gt;reset</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M193.21,-136.97C222.88,-124.19 260.6,-108.73 295,-97 385.7,-66.07 495.52,-38.75 549.98,-25.85"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="550.72,-28.2 556.97,-24.21 549.59,-23.43 550.72,-28.2"/>
-</g>
-<g id="kernel_edge6" class="edge">
-<title>endpoint&#45;&gt;proc</title>
-<path fill="none" stroke="#6d28d9" stroke-width="1.3" d="M522.7,-193.26C503.65,-189.42 482.53,-185.59 463,-183 404.8,-175.28 340.33,-170.2 284.36,-166.89"/>
-<polygon fill="#6d28d9" stroke="#6d28d9" stroke-width="1.3" points="284.36,-164.44 277.23,-166.47 284.07,-169.33 284.36,-164.44"/>
-<text text-anchor="middle" x="379" y="-185.8" font-family="Helvetica,sans-Serif" font-size="9.00" fill="#6d28d9">message (badge, account, labels, id)</text>
-</g>
-</g>
-</svg></div>
-  <div class="diagram"><svg width="663pt" height="95pt"
- viewBox="0.00 0.00 663.01 95.50" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-<g id="ipc_graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 91.5)">
+<p><a href="BOOT.md">Boot flow</a> · <a href="VERIFIED-BOOT.md">Bundle authentication</a> ·
+<a href="KERNEL-SPEC.md">Kernel contract</a> · <a href="INIT.md">Init and startup</a></p>
+<div class="diagram" role="img" aria-label="Call and reply lifecycle"><svg width="644pt" height="126pt"
+ viewBox="0.00 0.00 644.01 126.14" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="ipc_graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 122.14)">
 <title>ipc</title>
 <g id="ipc_node1" class="node">
 <title>client</title>
-<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M43,-42.5C43,-42.5 12,-42.5 12,-42.5 6,-42.5 0,-36.5 0,-30.5 0,-30.5 0,-18.5 0,-18.5 0,-12.5 6,-6.5 12,-6.5 12,-6.5 43,-6.5 43,-6.5 49,-6.5 55,-12.5 55,-18.5 55,-18.5 55,-30.5 55,-30.5 55,-36.5 49,-42.5 43,-42.5"/>
-<text text-anchor="middle" x="27.5" y="-21.7" font-family="Helvetica,sans-Serif" font-size="11.00">client</text>
+<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M43,-73.14C43,-73.14 12,-73.14 12,-73.14 6,-73.14 0,-67.14 0,-61.14 0,-61.14 0,-49.14 0,-49.14 0,-43.14 6,-37.14 12,-37.14 12,-37.14 43,-37.14 43,-37.14 49,-37.14 55,-43.14 55,-49.14 55,-49.14 55,-61.14 55,-61.14 55,-67.14 49,-73.14 43,-73.14"/>
+<text text-anchor="middle" x="27.5" y="-52.34" font-family="Helvetica,sans-Serif" font-size="11.00">client</text>
 </g>
 <g id="ipc_node2" class="node">
 <title>ep</title>
-<ellipse fill="#ede9fe" stroke="#6d28d9" stroke-width="1.5" cx="321.01" cy="-24.5" rx="55.01" ry="18"/>
-<text text-anchor="middle" x="321.01" y="-21.7" font-family="Helvetica,sans-Serif" font-size="11.00">ENDPOINT</text>
+<ellipse fill="#ede9fe" stroke="#6d28d9" stroke-width="1.5" cx="255.01" cy="-55.14" rx="55.01" ry="18"/>
+<text text-anchor="middle" x="255.01" y="-52.34" font-family="Helvetica,sans-Serif" font-size="11.00">ENDPOINT</text>
 </g>
 <g id="ipc_edge1" class="edge">
 <title>client&#45;&gt;ep</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M55.13,-32.19C60.97,-33.56 67.15,-34.78 73,-35.5 150.21,-44.9 170.45,-41.38 248,-35.5 253.5,-35.08 259.21,-34.48 264.91,-33.78"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="265.47,-36.18 272.09,-32.85 264.84,-31.32 265.47,-36.18"/>
-<text text-anchor="middle" x="160.5" y="-43.3" font-family="Helvetica,sans-Serif" font-size="9.00">call(handle, lend buffer)</text>
+<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M55.25,-55.14C88.92,-55.14 147.77,-55.14 192.72,-55.14"/>
+<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="192.81,-57.59 199.81,-55.14 192.81,-52.69 192.81,-57.59"/>
+<text text-anchor="middle" x="127.5" y="-57.94" font-family="Helvetica,sans-Serif" font-size="9.00">call(handle, lend buffer)</text>
 </g>
 <g id="ipc_edge4" class="edge">
 <title>ep&#45;&gt;client</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M265.77,-24.5C206.09,-24.5 112.05,-24.5 62.17,-24.5"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="62.14,-22.05 55.14,-24.5 62.14,-26.95 62.14,-22.05"/>
-<text text-anchor="middle" x="160.5" y="-27.3" font-family="Helvetica,sans-Serif" font-size="9.00">reply + lend returned</text>
-</g>
-<g id="ipc_edge6" class="edge">
-<title>ep&#45;&gt;client</title>
-<path fill="none" stroke="#b42318" stroke-width="1.3" stroke-dasharray="5,2" d="M277.24,-13.38C267.68,-11.35 257.55,-9.54 248,-8.5 170.69,-0.01 149.62,4.86 73,-8.5 69.45,-9.11 65.81,-9.99 62.22,-11.02"/>
-<polygon fill="#b42318" stroke="#b42318" stroke-width="1.3" points="61.34,-8.72 55.39,-13.15 62.81,-13.4 61.34,-8.72"/>
-<text text-anchor="middle" x="160.5" y="-11.3" font-family="Helvetica,sans-Serif" font-size="9.00" fill="#b42318">abandoned&#45;call notice if the caller dies</text>
+<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M211.24,-44.03C201.68,-42 191.55,-40.19 182,-39.14 133.84,-33.86 120.72,-30.82 73,-39.14 69.45,-39.76 65.81,-40.64 62.22,-41.67"/>
+<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="61.34,-39.37 55.39,-43.8 62.81,-44.05 61.34,-39.37"/>
+<text text-anchor="middle" x="127.5" y="-41.94" font-family="Helvetica,sans-Serif" font-size="9.00">reply + lend returned</text>
 </g>
 <g id="ipc_node3" class="node">
 <title>server</title>
-<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M628.01,-42.5C628.01,-42.5 552.01,-42.5 552.01,-42.5 546.01,-42.5 540.01,-36.5 540.01,-30.5 540.01,-30.5 540.01,-18.5 540.01,-18.5 540.01,-12.5 546.01,-6.5 552.01,-6.5 552.01,-6.5 628.01,-6.5 628.01,-6.5 634.01,-6.5 640.01,-12.5 640.01,-18.5 640.01,-18.5 640.01,-30.5 640.01,-30.5 640.01,-36.5 634.01,-42.5 628.01,-42.5"/>
-<text text-anchor="middle" x="590.01" y="-21.7" font-family="Helvetica,sans-Serif" font-size="11.00">server thread</text>
+<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M609.01,-73.14C609.01,-73.14 533.01,-73.14 533.01,-73.14 527.01,-73.14 521.01,-67.14 521.01,-61.14 521.01,-61.14 521.01,-49.14 521.01,-49.14 521.01,-43.14 527.01,-37.14 533.01,-37.14 533.01,-37.14 609.01,-37.14 609.01,-37.14 615.01,-37.14 621.01,-43.14 621.01,-49.14 621.01,-49.14 621.01,-61.14 621.01,-61.14 621.01,-67.14 615.01,-73.14 609.01,-73.14"/>
+<text text-anchor="middle" x="571.01" y="-52.34" font-family="Helvetica,sans-Serif" font-size="11.00">server thread</text>
 </g>
 <g id="ipc_edge2" class="edge">
 <title>ep&#45;&gt;server</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M376.04,-24.5C421.6,-24.5 486.58,-24.5 532.76,-24.5"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="533.01,-26.95 540.01,-24.5 533.01,-22.05 533.01,-26.95"/>
-<text text-anchor="middle" x="458.01" y="-27.3" font-family="Helvetica,sans-Serif" font-size="9.00">receive() &#160;→ &#160;a call or a send</text>
+<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M303.92,-63.5C311.94,-64.6 320.2,-65.55 328.01,-66.14 405.57,-72.03 425.49,-72.46 503.01,-66.14 506.52,-65.86 510.12,-65.49 513.75,-65.06"/>
+<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="514.1,-67.49 520.73,-64.17 513.48,-62.62 514.1,-67.49"/>
+<text text-anchor="middle" x="415.51" y="-72.94" font-family="Helvetica,sans-Serif" font-size="9.00">receive() &#160;→ &#160;a call or a send</text>
+</g>
+<g id="ipc_edge6" class="edge">
+<title>ep&#45;&gt;server</title>
+<path fill="none" stroke="#b42318" stroke-width="1.3" stroke-dasharray="5,2" d="M310.34,-55.14C367.24,-55.14 456.17,-55.14 513.77,-55.14"/>
+<polygon fill="#b42318" stroke="#b42318" stroke-width="1.3" points="513.98,-57.59 520.98,-55.14 513.98,-52.69 513.98,-57.59"/>
+<text text-anchor="middle" x="415.51" y="-57.94" font-family="Helvetica,sans-Serif" font-size="9.00" fill="#b42318">abandoned&#45;call notice if the caller dies</text>
 </g>
 <g id="ipc_edge3" class="edge">
 <title>server&#45;&gt;ep</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M539.85,-11.37C533.88,-10.19 527.83,-9.18 522.01,-8.5 465.52,-1.84 450.56,-2.29 394.01,-8.5 386.85,-9.28 379.36,-10.49 372.03,-11.91"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="371.15,-9.59 364.78,-13.38 372.12,-14.39 371.15,-9.59"/>
-<text text-anchor="middle" x="458.01" y="-11.3" font-family="Helvetica,sans-Serif" font-size="9.00">reply(msg_id)</text>
+<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M546.95,-37.14C534.65,-28.68 518.82,-19.5 503.01,-15.14 428.04,5.54 403.31,4.36 328.01,-15.14 312.67,-19.12 297.11,-27.15 284.4,-34.98"/>
+<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="283,-32.97 278.4,-38.79 285.63,-37.11 283,-32.97"/>
+<text text-anchor="middle" x="415.51" y="-17.94" font-family="Helvetica,sans-Serif" font-size="9.00">reply(msg_id)</text>
 </g>
 <g id="ipc_edge5" class="edge">
 <title>server&#45;&gt;server</title>
-<path fill="none" stroke="#9a6700" stroke-width="1.3" stroke-dasharray="5,2" d="M567.68,-42.61C560.91,-55.15 568.36,-67.5 590.01,-67.5 607.78,-67.5 615.98,-59.19 614.62,-49.28"/>
-<polygon fill="#9a6700" stroke="#9a6700" stroke-width="1.3" points="616.92,-48.45 612.35,-42.61 612.29,-50.03 616.92,-48.45"/>
-<text text-anchor="middle" x="590.01" y="-80.3" font-family="Helvetica,sans-Serif" font-size="9.00" fill="#9a6700">serve(msg_id)</text>
-<text text-anchor="middle" x="590.01" y="-70.3" font-family="Helvetica,sans-Serif" font-size="9.00" fill="#9a6700">sets the current call (blame)</text>
+<path fill="none" stroke="#9a6700" stroke-width="1.3" stroke-dasharray="5,2" d="M544.96,-73.26C537.06,-85.8 545.75,-98.14 571.01,-98.14 591.74,-98.14 601.31,-89.84 599.72,-79.93"/>
+<polygon fill="#9a6700" stroke="#9a6700" stroke-width="1.3" points="601.93,-78.86 597.07,-73.26 597.38,-80.67 601.93,-78.86"/>
+<text text-anchor="middle" x="571.01" y="-110.94" font-family="Helvetica,sans-Serif" font-size="9.00" fill="#9a6700">serve(msg_id)</text>
+<text text-anchor="middle" x="571.01" y="-100.94" font-family="Helvetica,sans-Serif" font-size="9.00" fill="#9a6700">sets the current call (blame)</text>
 </g>
 </g>
 </svg></div>
-  <table>
-    <tr><th>System call</th><th>What it does</th><th>Status</th></tr>
-    <tr><td><code>map_anon unmap set_flags map_device dma_alloc</code></td><td>memory, W^X, DMA</td><td><span class="pill built"><span class="dot"></span>built</span></td></tr>
-    <tr><td><code>thread_create thread_exit</code></td><td>new thread API (legacy path exists)</td><td><span class="pill des"><span class="dot"></span>not implemented</span></td></tr>
-    <tr><td><code>endpoint_create mint</code></td><td>capabilities</td><td><span class="pill built"><span class="dot"></span>built</span></td></tr>
-    <tr><td><code>call send receive reply serve</code></td><td>zero-copy IPC, lend / transfer</td><td><span class="pill built"><span class="dot"></span>implemented</span>; <a href="STATUS.md">IPC1 acceptance pending</a></td></tr>
-    <tr><td><code>budget_create budget_destroy budget_usage</code></td><td>accounting, revocation, labels</td><td><span class="pill built"><span class="dot"></span>built</span></td></tr>
-    <tr><td><code>time_now random system_reset</code></td><td>services</td><td><span class="pill built"><span class="dot"></span>built</span></td></tr>
-    <tr><td><code>process_create process_map process_start process_exit</code></td><td>launch + exit notices</td><td><span class="pill prog"><span class="dot"></span>in progress</span></td></tr>
-  </table>
-  <p>The precise spec — constants, the cost table, rules R1–R12, invariants I1–I15, errors and the order of checks —
-  is <a href="KERNEL-SPEC.md">KERNEL-SPEC.md</a>, frozen for milestone 1. Implementation:
-  <a href="https://github.com/sirmick/redoubt/blob/main/kernel/src/main.rs">kernel/src/main.rs</a>, <a href="https://github.com/sirmick/redoubt/blob/main/kernel/src/syscall.rs">kernel/src/syscall.rs</a>,
-  <a href="https://github.com/sirmick/redoubt/blob/main/kernel/src/services.rs">kernel/src/services.rs</a>, <a href="https://github.com/sirmick/redoubt/blob/main/kernel/src/mem.rs">kernel/src/mem.rs</a>.
-  Page tables: <a href="https://github.com/sirmick/redoubt/blob/main/libs/paging/src/lib.rs">libs/paging/src/lib.rs</a>.</p>
+<p>The caller consumes a lend and receives an explicit ownership outcome. A server learns whether
+its reply was delivered and which handles were installed. <a href="KERNEL-SPEC.md#ipc-completion">Completion rules</a>
+cover cancellation, partial replies and output failure; full IPC1 acceptance is still open.</p>
+<p><a href="CAPABILITIES.md">Delegation and leases</a> · <a href="CONTAINMENT.md">Labels and mediation</a> ·
+<a href="RESOURCES.md">Budgets and scheduling</a> · <a href="NAMESPACES.md">9P and namespaces</a> ·
+<a href="WIRE.md">Wire formats</a></p>
 </section>
-
-<section id="servers">
-  <h2><span class="num">04</span>Servers</h2>
-  <p>Every server is an unprivileged process in its own budget. Its authority is a set of handles, never ambient.
-  A launcher never passes its own connection to a child: it asks the server for a fresh one, so a hostile agent
-  started by a shell cannot share the shell's file table.</p>
-  <div class="diagram"><svg width="494pt" height="370pt"
- viewBox="0.00 0.00 494.00 370.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-<g id="servers_graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 366)">
-<title>servers</title>
-<g id="servers_node1" class="node">
-<title>client</title>
-<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M113,-188C113,-188 12,-188 12,-188 6,-188 0,-182 0,-176 0,-176 0,-164 0,-164 0,-158 6,-152 12,-152 12,-152 113,-152 113,-152 119,-152 125,-158 125,-164 125,-164 125,-176 125,-176 125,-182 119,-188 113,-188"/>
-<text text-anchor="middle" x="62.5" y="-173.2" font-family="Helvetica,sans-Serif" font-size="11.00">sessions &amp; agents</text>
-<text text-anchor="middle" x="62.5" y="-161.2" font-family="Helvetica,sans-Serif" font-size="11.00">(beamlet VMs)</text>
+<section id="method">
+<h2>The swarm method</h2>
+<p><a href="SWARM.md">SWARM</a> owns execution and claims. Independent packages use isolated worktrees;
+one writer owns each shared hotspot. The resident architect resolves contract questions, implementers
+build bounded packages, and defensive, simplifier and editor reviews check the result.</p>
+<div class="diagram" role="img" aria-label="Package execution and review"><svg width="1269pt" height="44pt"
+ viewBox="0.00 0.00 1269.00 44.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<g id="swarm_graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 40)">
+<title>swarm</title>
+<g id="swarm_node1" class="node">
+<title>contract</title>
+<path fill="#ede9fe" stroke="#6d28d9" stroke-width="1.5" d="M158,-36C158,-36 12,-36 12,-36 6,-36 0,-30 0,-24 0,-24 0,-12 0,-12 0,-6 6,0 12,0 12,0 158,0 158,0 164,0 170,-6 170,-12 170,-12 170,-24 170,-24 170,-30 164,-36 158,-36"/>
+<text text-anchor="middle" x="85" y="-15.2" font-family="Helvetica,sans-Serif" font-size="11.00">Contract + open decisions</text>
 </g>
-<g id="servers_node2" class="node">
-<title>steward</title>
-<path fill="#ffe0e0" stroke="#b42318" stroke-width="1.5" d="M474,-362C474,-362 362,-362 362,-362 356,-362 350,-356 350,-350 350,-350 350,-326 350,-326 350,-320 356,-314 362,-314 362,-314 474,-314 474,-314 480,-314 486,-320 486,-326 486,-326 486,-350 486,-350 486,-356 480,-362 474,-362"/>
-<text text-anchor="middle" x="418" y="-347.2" font-family="Helvetica,sans-Serif" font-size="11.00">steward</text>
-<text text-anchor="middle" x="418" y="-335.2" font-family="Helvetica,sans-Serif" font-size="11.00">principals · sessions</text>
-<text text-anchor="middle" x="418" y="-323.2" font-family="Helvetica,sans-Serif" font-size="11.00">powerbox · audit</text>
+<g id="swarm_node2" class="node">
+<title>claim</title>
+<path fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.5" d="M334,-36C334,-36 218,-36 218,-36 212,-36 206,-30 206,-24 206,-24 206,-12 206,-12 206,-6 212,0 218,0 218,0 334,0 334,0 340,0 346,-6 346,-12 346,-12 346,-24 346,-24 346,-30 340,-36 334,-36"/>
+<text text-anchor="middle" x="276" y="-21.2" font-family="Helvetica,sans-Serif" font-size="11.00">Claim ready package</text>
+<text text-anchor="middle" x="276" y="-9.2" font-family="Helvetica,sans-Serif" font-size="11.00">check dependencies</text>
 </g>
-<g id="servers_edge1" class="edge">
-<title>client&#45;&gt;steward</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M71.92,-188.11C86.04,-216.25 117.28,-269.95 161,-296 215.99,-328.77 288.82,-338.1 342.74,-339.91"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="342.81,-342.37 349.88,-340.11 342.95,-337.47 342.81,-342.37"/>
+<g id="swarm_edge1" class="edge">
+<title>contract&#45;&gt;claim</title>
+<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M170.27,-18C179.77,-18 189.4,-18 198.78,-18"/>
+<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="198.9,-20.45 205.9,-18 198.9,-15.55 198.9,-20.45"/>
 </g>
-<g id="servers_node3" class="node">
-<title>sshd</title>
-<path fill="#ffe0e0" stroke="#b42318" stroke-width="1.5" d="M278,-283C278,-283 197,-283 197,-283 191,-283 185,-277 185,-271 185,-271 185,-259 185,-259 185,-253 191,-247 197,-247 197,-247 278,-247 278,-247 284,-247 290,-253 290,-259 290,-259 290,-271 290,-271 290,-277 284,-283 278,-283"/>
-<text text-anchor="middle" x="237.5" y="-268.2" font-family="Helvetica,sans-Serif" font-size="11.00">sshd</text>
-<text text-anchor="middle" x="237.5" y="-256.2" font-family="Helvetica,sans-Serif" font-size="11.00">SSH front door</text>
+<g id="swarm_node3" class="node">
+<title>work</title>
+<path fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.5" d="M518,-36C518,-36 394,-36 394,-36 388,-36 382,-30 382,-24 382,-24 382,-12 382,-12 382,-6 388,0 394,0 394,0 518,0 518,0 524,0 530,-6 530,-12 530,-12 530,-24 530,-24 530,-30 524,-36 518,-36"/>
+<text text-anchor="middle" x="456" y="-21.2" font-family="Helvetica,sans-Serif" font-size="11.00">Isolated worktree</text>
+<text text-anchor="middle" x="456" y="-9.2" font-family="Helvetica,sans-Serif" font-size="11.00">one writer per hotspot</text>
 </g>
-<g id="servers_edge2" class="edge">
-<title>client&#45;&gt;sshd</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M89.73,-188.25C108.99,-201.25 136.03,-218.71 161,-232 168.69,-236.1 177,-240.11 185.2,-243.85"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="184.65,-246.29 192.04,-246.93 186.66,-241.82 184.65,-246.29"/>
+<g id="swarm_edge2" class="edge">
+<title>claim&#45;&gt;work</title>
+<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M346.07,-18C355.42,-18 365.07,-18 374.59,-18"/>
+<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="374.84,-20.45 381.84,-18 374.84,-15.55 374.84,-20.45"/>
 </g>
-<g id="servers_node5" class="node">
-<title>fsd</title>
-<path fill="#ffe0e0" stroke="#b42318" stroke-width="1.5" d="M302,-219C302,-219 173,-219 173,-219 167,-219 161,-213 161,-207 161,-207 161,-195 161,-195 161,-189 167,-183 173,-183 173,-183 302,-183 302,-183 308,-183 314,-189 314,-195 314,-195 314,-207 314,-207 314,-213 308,-219 302,-219"/>
-<text text-anchor="middle" x="237.5" y="-204.2" font-family="Helvetica,sans-Serif" font-size="11.00">fsd</text>
-<text text-anchor="middle" x="237.5" y="-192.2" font-family="Helvetica,sans-Serif" font-size="11.00">littlefs, one per volume</text>
+<g id="swarm_node4" class="node">
+<title>test</title>
+<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M776,-36C776,-36 578,-36 578,-36 572,-36 566,-30 566,-24 566,-24 566,-12 566,-12 566,-6 572,0 578,0 578,0 776,0 776,0 782,0 788,-6 788,-12 788,-12 788,-24 788,-24 788,-30 782,-36 776,-36"/>
+<text text-anchor="middle" x="677" y="-21.2" font-family="Helvetica,sans-Serif" font-size="11.00">Acceptance + full bench</text>
+<text text-anchor="middle" x="677" y="-9.2" font-family="Helvetica,sans-Serif" font-size="11.00">attack cases · rv32 · unsafe ratchet</text>
 </g>
-<g id="servers_edge5" class="edge">
-<title>client&#45;&gt;fsd</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M125.47,-181.1C134.67,-182.75 144.28,-184.48 153.83,-186.19"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="153.44,-188.61 160.77,-187.43 154.31,-183.78 153.44,-188.61"/>
+<g id="swarm_edge3" class="edge">
+<title>work&#45;&gt;test</title>
+<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M530.23,-18C539.43,-18 549.02,-18 558.7,-18"/>
+<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="558.75,-20.45 565.75,-18 558.75,-15.55 558.75,-20.45"/>
 </g>
-<g id="servers_node6" class="node">
-<title>ipd</title>
-<path fill="#ffe0e0" stroke="#b42318" stroke-width="1.5" d="M294.5,-158C294.5,-158 180.5,-158 180.5,-158 174.5,-158 168.5,-152 168.5,-146 168.5,-146 168.5,-134 168.5,-134 168.5,-128 174.5,-122 180.5,-122 180.5,-122 294.5,-122 294.5,-122 300.5,-122 306.5,-128 306.5,-134 306.5,-134 306.5,-146 306.5,-146 306.5,-152 300.5,-158 294.5,-158"/>
-<text text-anchor="middle" x="237.5" y="-143.2" font-family="Helvetica,sans-Serif" font-size="11.00">ipd</text>
-<text text-anchor="middle" x="237.5" y="-131.2" font-family="Helvetica,sans-Serif" font-size="11.00">smoltcp, serves /net</text>
+<g id="swarm_node5" class="node">
+<title>review</title>
+<path fill="#ede9fe" stroke="#6d28d9" stroke-width="1.5" d="M1005,-36C1005,-36 836,-36 836,-36 830,-36 824,-30 824,-24 824,-24 824,-12 824,-12 824,-6 830,0 836,0 836,0 1005,0 1005,0 1011,0 1017,-6 1017,-12 1017,-12 1017,-24 1017,-24 1017,-30 1011,-36 1005,-36"/>
+<text text-anchor="middle" x="920.5" y="-21.2" font-family="Helvetica,sans-Serif" font-size="11.00">Defensive · simplifier · editor</text>
+<text text-anchor="middle" x="920.5" y="-9.2" font-family="Helvetica,sans-Serif" font-size="11.00">fix findings / track review debt</text>
 </g>
-<g id="servers_edge6" class="edge">
-<title>client&#45;&gt;ipd</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M125.47,-159.25C137.06,-157.24 149.29,-155.12 161.23,-153.05"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="161.74,-155.45 168.22,-151.84 160.9,-150.62 161.74,-155.45"/>
+<g id="swarm_edge4" class="edge">
+<title>test&#45;&gt;review</title>
+<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M788.15,-18C797.67,-18 807.27,-18 816.73,-18"/>
+<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="816.92,-20.45 823.92,-18 816.92,-15.55 816.92,-20.45"/>
 </g>
-<g id="servers_node7" class="node">
-<title>bootfsd</title>
-<path fill="#fff3cd" stroke="#9a6700" stroke-width="1.5" d="M280,-97C280,-97 195,-97 195,-97 189,-97 183,-91 183,-85 183,-85 183,-73 183,-73 183,-67 189,-61 195,-61 195,-61 280,-61 280,-61 286,-61 292,-67 292,-73 292,-73 292,-85 292,-85 292,-91 286,-97 280,-97"/>
-<text text-anchor="middle" x="237.5" y="-82.2" font-family="Helvetica,sans-Serif" font-size="11.00">bootfsd</text>
-<text text-anchor="middle" x="237.5" y="-70.2" font-family="Helvetica,sans-Serif" font-size="11.00">read&#45;only /boot</text>
+<g id="swarm_node6" class="node">
+<title>integrate</title>
+<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M1249,-36C1249,-36 1065,-36 1065,-36 1059,-36 1053,-30 1053,-24 1053,-24 1053,-12 1053,-12 1053,-6 1059,0 1065,0 1065,0 1249,0 1249,0 1255,0 1261,-6 1261,-12 1261,-12 1261,-24 1261,-24 1261,-30 1255,-36 1249,-36"/>
+<text text-anchor="middle" x="1157" y="-21.2" font-family="Helvetica,sans-Serif" font-size="11.00">Rebase · retest · integrate</text>
+<text text-anchor="middle" x="1157" y="-9.2" font-family="Helvetica,sans-Serif" font-size="11.00">update claims and current status</text>
 </g>
-<g id="servers_edge7" class="edge">
-<title>client&#45;&gt;bootfsd</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M90.14,-151.98C109.37,-139.38 136.2,-122.62 161,-110 167.87,-106.51 175.22,-103.1 182.54,-99.9"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="183.78,-102.03 189.25,-97.02 181.85,-97.53 183.78,-102.03"/>
-</g>
-<g id="servers_node8" class="node">
-<title>consoled</title>
-<path fill="#fff3cd" stroke="#9a6700" stroke-width="1.5" d="M264.5,-36C264.5,-36 210.5,-36 210.5,-36 204.5,-36 198.5,-30 198.5,-24 198.5,-24 198.5,-12 198.5,-12 198.5,-6 204.5,0 210.5,0 210.5,0 264.5,0 264.5,0 270.5,0 276.5,-6 276.5,-12 276.5,-12 276.5,-24 276.5,-24 276.5,-30 270.5,-36 264.5,-36"/>
-<text text-anchor="middle" x="237.5" y="-21.2" font-family="Helvetica,sans-Serif" font-size="11.00">consoled</text>
-<text text-anchor="middle" x="237.5" y="-9.2" font-family="Helvetica,sans-Serif" font-size="11.00">/dev/cons</text>
-</g>
-<g id="servers_edge8" class="edge">
-<title>client&#45;&gt;consoled</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M73.81,-151.81C89.51,-125.56 121.78,-77.04 161,-48 170.2,-41.19 181.15,-35.68 191.83,-31.33"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="192.78,-33.59 198.42,-28.78 191,-29.03 192.78,-33.59"/>
-</g>
-<g id="servers_edge3" class="edge">
-<title>sshd&#45;&gt;steward</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M282.62,-283.04C303.39,-291.54 328.58,-301.84 351.51,-311.22"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="350.82,-313.58 358.23,-313.97 352.68,-309.05 350.82,-313.58"/>
-</g>
-<g id="servers_node4" class="node">
-<title>keyd</title>
-<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M457.5,-289C457.5,-289 378.5,-289 378.5,-289 372.5,-289 366.5,-283 366.5,-277 366.5,-277 366.5,-253 366.5,-253 366.5,-247 372.5,-241 378.5,-241 378.5,-241 457.5,-241 457.5,-241 463.5,-241 469.5,-247 469.5,-253 469.5,-253 469.5,-277 469.5,-277 469.5,-283 463.5,-289 457.5,-289"/>
-<text text-anchor="middle" x="418" y="-274.2" font-family="Helvetica,sans-Serif" font-size="11.00">keyd</text>
-<text text-anchor="middle" x="418" y="-262.2" font-family="Helvetica,sans-Serif" font-size="11.00">keys that sign</text>
-<text text-anchor="middle" x="418" y="-250.2" font-family="Helvetica,sans-Serif" font-size="11.00">never export</text>
-</g>
-<g id="servers_edge4" class="edge">
-<title>sshd&#45;&gt;keyd</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M290.13,-265C311.78,-265 337.04,-265 359.3,-265"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="359.41,-267.45 366.41,-265 359.41,-262.55 359.41,-267.45"/>
-</g>
-<g id="servers_node9" class="node">
-<title>blkd</title>
-<path fill="#fff3cd" stroke="#9a6700" stroke-width="1.5" d="M442.5,-216C442.5,-216 393.5,-216 393.5,-216 387.5,-216 381.5,-210 381.5,-204 381.5,-204 381.5,-192 381.5,-192 381.5,-186 387.5,-180 393.5,-180 393.5,-180 442.5,-180 442.5,-180 448.5,-180 454.5,-186 454.5,-192 454.5,-192 454.5,-204 454.5,-204 454.5,-210 448.5,-216 442.5,-216"/>
-<text text-anchor="middle" x="418" y="-201.2" font-family="Helvetica,sans-Serif" font-size="11.00">blkd</text>
-<text text-anchor="middle" x="418" y="-189.2" font-family="Helvetica,sans-Serif" font-size="11.00">virtio&#45;blk</text>
-</g>
-<g id="servers_edge9" class="edge">
-<title>fsd&#45;&gt;blkd</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M314.2,-199.73C334.49,-199.39 355.73,-199.03 373.6,-198.73"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="374.09,-201.17 381.05,-198.6 374.01,-196.27 374.09,-201.17"/>
-</g>
-<g id="servers_node10" class="node">
-<title>netd</title>
-<path fill="#fff3cd" stroke="#9a6700" stroke-width="1.5" d="M443.5,-155C443.5,-155 392.5,-155 392.5,-155 386.5,-155 380.5,-149 380.5,-143 380.5,-143 380.5,-131 380.5,-131 380.5,-125 386.5,-119 392.5,-119 392.5,-119 443.5,-119 443.5,-119 449.5,-119 455.5,-125 455.5,-131 455.5,-131 455.5,-143 455.5,-143 455.5,-149 449.5,-155 443.5,-155"/>
-<text text-anchor="middle" x="418" y="-140.2" font-family="Helvetica,sans-Serif" font-size="11.00">netd</text>
-<text text-anchor="middle" x="418" y="-128.2" font-family="Helvetica,sans-Serif" font-size="11.00">virtio&#45;net</text>
-</g>
-<g id="servers_edge10" class="edge">
-<title>ipd&#45;&gt;netd</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M306.75,-138.85C329.01,-138.48 353.13,-138.07 373.11,-137.74"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="373.31,-140.18 380.27,-137.62 373.23,-135.29 373.31,-140.18"/>
+<g id="swarm_edge5" class="edge">
+<title>review&#45;&gt;integrate</title>
+<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M1017.22,-18C1026.6,-18 1036.18,-18 1045.69,-18"/>
+<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="1045.95,-20.45 1052.95,-18 1045.95,-15.55 1045.95,-20.45"/>
 </g>
 </g>
 </svg></div>
-  <table>
-    <tr><th>Server</th><th>Role</th><th>Status</th></tr>
-    <tr><td><code>init</code></td><td>holds all authority at boot; starts, wires and restarts every OS process</td><td><span class="pill des"><span class="dot"></span>designed</span></td></tr>
-    <tr><td><code>consoled</code></td><td>ns16550 UART driver, serves <code>/dev/cons</code></td><td>implemented, host-tested; full init wiring pending</td></tr>
-    <tr><td><code>bootfsd</code></td><td>read-only 9P over the verified bundle (<code>/boot</code>)</td><td>implemented, host-tested; full init wiring pending</td></tr>
-    <tr><td><code>blkd</code></td><td>virtio-blk driver + partitions + block-range handles</td><td>host-tested library; boot integration pending</td></tr>
-    <tr><td><code>fsd</code></td><td>littlefs, one instance per volume, serves 9P</td><td><span class="pill des"><span class="dot"></span>designed</span></td></tr>
-    <tr><td><code>netd</code> · <code>ipd</code></td><td>virtio-net driver; smoltcp stack serving <code>/net</code></td><td><span class="pill prog"><span class="dot"></span>in progress</span></td></tr>
-    <tr><td><code>keyd</code></td><td>holds every private key; signs, never exports</td><td><span class="pill built"><span class="dot"></span>built</span> <a href="https://github.com/sirmick/redoubt/blob/main/servers/keyd/src/lib.rs">code</a></td></tr>
-    <tr><td><code>steward</code> · <code>sshd</code></td><td>principals, sessions, powerbox, audit; SSH front door</td><td><span class="pill des"><span class="dot"></span>designed</span></td></tr>
-  </table>
-  <div class="note"><b>keyd's rule:</b> a badge names <b>one key and one purpose</b>. Every signature is over a 32-byte digest <b>keyd computed itself</b>, and no operation returns a private key. A session that crashes a shared server three times (same account + label set) is logged out for 10 minutes, taken from the kernel's exit notice — never the attacker's output. <a href="INIT.md">INIT.md</a> · <a href="CONTAINMENT.md">CONTAINMENT.md</a></div>
+<p>Acceptance includes package tests, the full bench, rv32 compilation and the unsafe ratchet.
+Review can be batched for small changes; TCB/security changes get a dedicated round. Deferred
+review stays visible as debt and is cleared before a new wave. Keep approved rules in their
+specifications and current state in <a href="SWARM.md#claims">Claims</a>.</p>
+<p><a href="BUILD-PLAN.md">Remaining packages and acceptance</a> ·
+<a href="ANSWERS.md">Approval provenance</a> · <a href="CONTRIBUTING.md">Contribution rules</a></p>
 </section>
-
-<section id="beamlet">
-  <h2><span class="num">05</span>Userland: beamlet (the OTP runtime)</h2>
-  <p>The OS is runtime-neutral. beamlet runs Erlang/Elixir bytecode from the pinned OTP 28, with its own scheduler,
-  per-process heaps and copying GC. It is verified by differential tests: every test runs on the real BEAM and on
-  beamlet and the output must be identical. OTP's <code>crypto</code>, <code>public_key</code>, <code>ssl</code> and
-  <code>ssh</code> run unmodified on Rust natives.</p>
-  <div class="diagram"><svg width="543pt" height="336pt"
- viewBox="0.00 0.00 543.00 336.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-<g id="beamlet_graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 332)">
-<title>beamlet</title>
-<g id="beamlet_node1" class="node">
-<title>elixir</title>
-<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M338.5,-328C338.5,-328 79.5,-328 79.5,-328 73.5,-328 67.5,-322 67.5,-316 67.5,-316 67.5,-304 67.5,-304 67.5,-298 73.5,-292 79.5,-292 79.5,-292 338.5,-292 338.5,-292 344.5,-292 350.5,-298 350.5,-304 350.5,-304 350.5,-316 350.5,-316 350.5,-322 344.5,-328 338.5,-328"/>
-<text text-anchor="middle" x="209" y="-307.2" font-family="Helvetica,sans-Serif" font-size="11.00">Elixir / OTP stdlib / IEx &#160;&#160;(unchanged OTP code)</text>
-</g>
-<g id="beamlet_node2" class="node">
-<title>vm</title>
-<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M353.5,-255C353.5,-255 64.5,-255 64.5,-255 58.5,-255 52.5,-249 52.5,-243 52.5,-243 52.5,-231 52.5,-231 52.5,-225 58.5,-219 64.5,-219 64.5,-219 353.5,-219 353.5,-219 359.5,-219 365.5,-225 365.5,-231 365.5,-231 365.5,-243 365.5,-243 365.5,-249 359.5,-255 353.5,-255"/>
-<text text-anchor="middle" x="209" y="-240.2" font-family="Helvetica,sans-Serif" font-size="11.00">beamlet VM</text>
-<text text-anchor="middle" x="209" y="-228.2" font-family="Helvetica,sans-Serif" font-size="11.00">per&#45;process heaps · copying GC · several schedulers</text>
-</g>
-<g id="beamlet_edge1" class="edge">
-<title>elixir&#45;&gt;vm</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M209,-291.81C209,-282.92 209,-271.91 209,-262.17"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="211.45,-262.03 209,-255.03 206.55,-262.03 211.45,-262.03"/>
-</g>
-<g id="beamlet_node3" class="node">
-<title>nat</title>
-<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M346,-182C346,-182 72,-182 72,-182 66,-182 60,-176 60,-170 60,-170 60,-158 60,-158 60,-152 66,-146 72,-146 72,-146 346,-146 346,-146 352,-146 358,-152 358,-158 358,-158 358,-170 358,-170 358,-176 352,-182 346,-182"/>
-<text text-anchor="middle" x="209" y="-167.2" font-family="Helvetica,sans-Serif" font-size="11.00">Rust natives</text>
-<text text-anchor="middle" x="209" y="-155.2" font-family="Helvetica,sans-Serif" font-size="11.00">crypto (RustCrypto) · re · zlib · prim_file · console</text>
-</g>
-<g id="beamlet_edge2" class="edge">
-<title>vm&#45;&gt;nat</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M209,-218.81C209,-209.92 209,-198.91 209,-189.17"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="211.45,-189.03 209,-182.03 206.55,-189.03 211.45,-189.03"/>
-</g>
-<g id="beamlet_edge5" class="edge">
-<title>nat&#45;&gt;nat</title>
-<path fill="none" stroke="#1a7f37" stroke-width="1.3" stroke-dasharray="5,2" d="M358.12,-169.55C373.31,-168.45 383,-166.6 383,-164 383,-161.83 376.23,-160.18 365.14,-159.05"/>
-<polygon fill="#1a7f37" stroke="#1a7f37" stroke-width="1.3" points="365.31,-156.61 358.12,-158.45 364.89,-161.49 365.31,-156.61"/>
-<text text-anchor="middle" x="459" y="-161.8" font-family="Helvetica,sans-Serif" font-size="9.00" fill="#1a7f37">differential tests vs the real BEAM</text>
-</g>
-<g id="beamlet_node4" class="node">
-<title>plat</title>
-<path fill="#ede9fe" stroke="#6d28d9" stroke-width="1.5" d="M327.5,-109C327.5,-109 90.5,-109 90.5,-109 84.5,-109 78.5,-103 78.5,-97 78.5,-97 78.5,-85 78.5,-85 78.5,-79 84.5,-73 90.5,-73 90.5,-73 327.5,-73 327.5,-73 333.5,-73 339.5,-79 339.5,-85 339.5,-85 339.5,-97 339.5,-97 339.5,-103 333.5,-109 327.5,-109"/>
-<text text-anchor="middle" x="209" y="-88.2" font-family="Helvetica,sans-Serif" font-size="11.00">Platform trait: ONE asynchronous 9P client</text>
-</g>
-<g id="beamlet_edge3" class="edge">
-<title>nat&#45;&gt;plat</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M209,-145.81C209,-136.92 209,-125.91 209,-116.17"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="211.45,-116.03 209,-109.03 206.55,-116.03 211.45,-116.03"/>
-</g>
-<g id="beamlet_node5" class="node">
-<title>os</title>
-<path fill="#fff3cd" stroke="#9a6700" stroke-width="1.5" d="M406,-36C406,-36 12,-36 12,-36 6,-36 0,-30 0,-24 0,-24 0,-12 0,-12 0,-6 6,0 12,0 12,0 406,0 406,0 412,0 418,-6 418,-12 418,-12 418,-24 418,-24 418,-30 412,-36 406,-36"/>
-<text text-anchor="middle" x="209" y="-15.2" font-family="Helvetica,sans-Serif" font-size="11.00">Redoubt: files · /net · /dev/cons are namespace walks (resource terms)</text>
-</g>
-<g id="beamlet_edge4" class="edge">
-<title>plat&#45;&gt;os</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M209,-72.81C209,-63.92 209,-52.91 209,-43.17"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="211.45,-43.03 209,-36.03 206.55,-43.03 211.45,-43.03"/>
-</g>
-</g>
-</svg></div>
-  <ul class="tight">
-    <li><b>Built and tested against the real BEAM:</b> <a href="https://github.com/sirmick/redoubt/blob/main/userland/otp/DESIGN.md">userland/otp/DESIGN.md</a></li>
-    <li><b>Designed:</b> beamlet's <code>Platform</code> retargeted to the Redoubt 9P client (WP-B1/WP-B2: console, files, launching; then IEx on the UART). <a href="USERLAND.md">USERLAND.md</a></li>
-    <li>On Redoubt, one VM = one trust domain; a new trust domain is a new VM under a new budget.</li>
-  </ul>
-</section>
-
-<section id="security">
-  <h2><span class="num">06</span>The security model in one diagram</h2>
-  <p>Capabilities bound <b>authority</b> (what a process can do); labels bound <b>information</b> (what it can leak);
-  budgets tie both together and are the only revocation mechanism.</p>
-  <div class="diagram"><svg width="1006pt" height="202pt"
- viewBox="0.00 0.00 1006.00 202.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-<g id="security_graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 198)">
-<title>security</title>
-<g id="security_node1" class="node">
-<title>cap</title>
-<path fill="#ede9fe" stroke="#6d28d9" stroke-width="1.5" d="M199,-194C199,-194 12,-194 12,-194 6,-194 0,-188 0,-182 0,-182 0,-158 0,-158 0,-152 6,-146 12,-146 12,-146 199,-146 199,-146 205,-146 211,-152 211,-158 211,-158 211,-182 211,-182 211,-188 205,-194 199,-194"/>
-<text text-anchor="middle" x="105.5" y="-179.2" font-family="Helvetica,sans-Serif" font-size="11.00">CAPABILITY</text>
-<text text-anchor="middle" x="105.5" y="-167.2" font-family="Helvetica,sans-Serif" font-size="11.00">handle = (object, badge, stamp)</text>
-<text text-anchor="middle" x="105.5" y="-155.2" font-family="Helvetica,sans-Serif" font-size="11.00">unforgeable · revocable by stamp</text>
-</g>
-<g id="security_node4" class="node">
-<title>rule</title>
-<path fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.5" d="M501.11,-131.39C501.11,-131.39 258.89,-98.61 258.89,-98.61 252.95,-97.8 252.95,-96.2 258.89,-95.39 258.89,-95.39 501.11,-62.61 501.11,-62.61 507.05,-61.8 518.95,-61.8 524.89,-62.61 524.89,-62.61 767.11,-95.39 767.11,-95.39 773.05,-96.2 773.05,-97.8 767.11,-98.61 767.11,-98.61 524.89,-131.39 524.89,-131.39 518.95,-132.2 507.05,-132.2 501.11,-131.39"/>
-<text text-anchor="middle" x="513" y="-100.2" font-family="Helvetica,sans-Serif" font-size="11.00">a flow A → B is allowed iff</text>
-<text text-anchor="middle" x="513" y="-88.2" font-family="Helvetica,sans-Serif" font-size="11.00">B is system&#45;class &#160;OR &#160;labels(B) ⊇ labels(A)</text>
-</g>
-<g id="security_edge1" class="edge">
-<title>cap&#45;&gt;rule</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M211.19,-151.15C266.21,-141.25 333.92,-129.06 391.16,-118.75"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="391.64,-121.16 398.09,-117.51 390.77,-116.34 391.64,-121.16"/>
-</g>
-<g id="security_node2" class="node">
-<title>budget</title>
-<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M193.5,-121C193.5,-121 17.5,-121 17.5,-121 11.5,-121 5.5,-115 5.5,-109 5.5,-109 5.5,-85 5.5,-85 5.5,-79 11.5,-73 17.5,-73 17.5,-73 193.5,-73 193.5,-73 199.5,-73 205.5,-79 205.5,-85 205.5,-85 205.5,-109 205.5,-109 205.5,-115 199.5,-121 193.5,-121"/>
-<text text-anchor="middle" x="105.5" y="-106.2" font-family="Helvetica,sans-Serif" font-size="11.00">BUDGET</text>
-<text text-anchor="middle" x="105.5" y="-94.2" font-family="Helvetica,sans-Serif" font-size="11.00">container charged in pages</text>
-<text text-anchor="middle" x="105.5" y="-82.2" font-family="Helvetica,sans-Serif" font-size="11.00">CPU weight · account · deadline</text>
-</g>
-<g id="security_edge2" class="edge">
-<title>budget&#45;&gt;rule</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M205.7,-97C216.47,-97 227.78,-97 239.44,-97"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="239.75,-99.45 246.75,-97 239.75,-94.55 239.75,-99.45"/>
-</g>
-<g id="security_node3" class="node">
-<title>label</title>
-<path fill="#fff3cd" stroke="#9a6700" stroke-width="1.5" d="M187.5,-48C187.5,-48 23.5,-48 23.5,-48 17.5,-48 11.5,-42 11.5,-36 11.5,-36 11.5,-12 11.5,-12 11.5,-6 17.5,0 23.5,0 23.5,0 187.5,0 187.5,0 193.5,0 199.5,-6 199.5,-12 199.5,-12 199.5,-36 199.5,-36 199.5,-42 193.5,-48 187.5,-48"/>
-<text text-anchor="middle" x="105.5" y="-33.2" font-family="Helvetica,sans-Serif" font-size="11.00">LABEL</text>
-<text text-anchor="middle" x="105.5" y="-21.2" font-family="Helvetica,sans-Serif" font-size="11.00">64&#45;bit name, fixed at creation</text>
-<text text-anchor="middle" x="105.5" y="-9.2" font-family="Helvetica,sans-Serif" font-size="11.00">information flow</text>
-</g>
-<g id="security_edge3" class="edge">
-<title>label&#45;&gt;rule</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M199.53,-40.75C256.38,-50.98 329.7,-64.18 391.02,-75.22"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="390.74,-77.66 398.06,-76.49 391.61,-72.84 390.74,-77.66"/>
-</g>
-<g id="security_node5" class="node">
-<title>read</title>
-<path fill="#ffe0e0" stroke="#b42318" stroke-width="1.5" d="M986,-115C986,-115 827,-115 827,-115 821,-115 815,-109 815,-103 815,-103 815,-91 815,-91 815,-85 821,-79 827,-79 827,-79 986,-79 986,-79 992,-79 998,-85 998,-91 998,-91 998,-103 998,-103 998,-109 992,-115 986,-115"/>
-<text text-anchor="middle" x="906.5" y="-100.2" font-family="Helvetica,sans-Serif" font-size="11.00">reads above your labels FAIL</text>
-<text text-anchor="middle" x="906.5" y="-88.2" font-family="Helvetica,sans-Serif" font-size="11.00">writes need EQUAL labels</text>
-</g>
-<g id="security_edge4" class="edge">
-<title>rule&#45;&gt;read</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M779.2,-97C789.01,-97 798.55,-97 807.71,-97"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="807.97,-99.45 814.97,-97 807.97,-94.55 807.97,-99.45"/>
-</g>
-</g>
-</svg></div>
-  <div class="grid2">
-    <div class="card"><h4>Mechanisms</h4><ul class="tight">
-      <li><b>No ambient authority</b> — devices default-deny; RAM is never nameable by address; pages are zeroed</li>
-      <li><b>Verified boot</b> — every privileged byte is authenticated first</li>
-      <li><b>W^X</b> everywhere, including the kernel's own mappings</li>
-      <li><b>Fail closed</b> — a violated invariant stops the machine</li>
-      <li><b>unsafe is a budget</b> that only falls</li>
-    </ul></div>
-    <div class="card"><h4>Agents and approvals</h4><ul class="tight">
-      <li>Own principal, accountable sponsor, task-scoped <b>leases</b></li>
-      <li>Delegation only narrows; assume every agent is compromised</li>
-      <li>Approvals are <b>out of band</b>: only the steward talks to <code>ssh approve@box</code></li>
-      <li>Three blamed crashes end a session for the window</li>
-    </ul></div>
-  </div>
-  <p><a href="CAPABILITIES.md">CAPABILITIES.md</a> · <a href="CONTAINMENT.md">CONTAINMENT.md</a> ·
-  <a href="TENETS.md">TENETS.md</a> (outranks everything) · <a href="DEVICE-GRANTS.md">DEVICE-GRANTS.md</a></p>
-</section>
-
 <section id="start">
-  <h2><span class="num">07</span>Getting started</h2>
-  <p>The OS build/test environment runs in Docker. Beamlet's differential tests additionally require separately installed OTP/Elixir. A concise version of this
-  section also lives in <a href="https://github.com/sirmick/redoubt/blob/main/GETTING-STARTED.md">GETTING-STARTED.md</a>.</p>
-  <h3>1 · Toolchain</h3>
-  <pre><code>./dev.sh                 # build the image (first time), then a shell in /work
-./dev.sh --rebuild       # rebuild the image after editing the Dockerfile</code></pre>
-  <p class="lead">Installs Rust with the RISC-V bare-metal targets (<code>riscv64imac</code>, <code>riscv32imac</code>,
-  <code>riscv64gc</code>), QEMU for both widths, OpenSSH, graphviz (for this page's diagrams) and the agent CLIs.
-  OTP 28.5.0.6 / Elixir 1.20.4 are not installed by the image; see the quickstart's prerequisites.</p>
-  <h3>2 · Firmware (once)</h3>
-  <pre><code>./scripts/build-bios.sh  # builds the vendored RustSBI in bios/ for both widths</code></pre>
-  <h3>3 · Build the OS</h3>
-  <pre><code>./build --arch rv64              # kernel + loader
-./build --arch rv32
-./build --arch rv64 --programs   # also the in-guest test programs</code></pre>
-  <h3>4 · Launch it in a VM</h3>
-  <pre><code>./launch --arch rv64                       # prints the exact QEMU line, then boots; Ctrl-A X quits
-./launch --arch rv64 --program log-server
-./launch --arch rv32 --smp 4
-./launch --arch rv64 --print-only          # show the QEMU command and exit
-./launch --arch rv64 --debug               # pause with a gdb stub on :1234</code></pre>
-  <p class="lead"><code>launch</code> assembles and signs the boot bundle and attaches the guest serial console to your
-  stdin/stdout. <a href="DEBUGGING.md">DEBUGGING.md</a></p>
-  <h3>5 · Run the tests</h3>
-  <pre><code>./test --arch rv64            # the whole bench
-./test --arch rv64 timer      # cases whose name contains "timer"
-./test --list</code></pre>
-  <h3>6 · Build an image</h3>
-  <pre><code>./mkimage                      # signed boot bundle → target/image/redoubt.bundle</code></pre>
-  <p class="lead">Disk-image recipes (littlefs) live in <a href="https://github.com/sirmick/redoubt/tree/main/image">image/</a> and are not built yet.</p>
-  <h3>7 · beamlet</h3>
-  <pre><code>cd userland/otp
-. tools/env.sh                 # put the pinned OTP/Elixir on PATH
-cargo test                     # unit + hostile-input tests
-tools/difftest                 # differential tests against the real BEAM</code></pre>
-  <h3>Regenerating this page</h3>
-  <pre><code>python3 tools/gen_readme.py    # DOT → SVG → docs/README.html (needs graphviz)</code></pre>
+<h2>Build and test</h2>
+<p><a href="https://github.com/sirmick/redoubt/blob/main/GETTING-STARTED.md">Getting started</a> is the setup and command reference.
+It covers Docker, firmware, both widths, images, and separate OTP/Elixir prerequisites.</p>
+<p><a href="testbench.md">Testbench</a> defines cases and trusted verdicts; <code>./test --list</code>
+lists current coverage. Host tests complement real-kernel boots. <a href="DEBUGGING.md">Debugging</a>
+explains source debug builds and QEMU's GDB stub.</p>
+<p>Source: <a href="https://github.com/sirmick/redoubt/tree/main/kernel">kernel</a> · <a href="https://github.com/sirmick/redoubt/tree/main/libs">libraries</a> ·
+<a href="https://github.com/sirmick/redoubt/tree/main/servers">servers</a> · <a href="https://github.com/sirmick/redoubt/tree/main/userland/otp">beamlet</a> ·
+<a href="https://github.com/sirmick/redoubt/tree/main/tests">boot cases</a> · <a href="https://github.com/sirmick/redoubt/tree/main/tools/testbench">harness</a>.</p>
 </section>
-
-<section id="testing">
-  <h2><span class="num">08</span>Testing, and why a green run means something</h2>
-  <p>One simple harness, real boots, no kernel mocks: <code>cargo testbench</code> boots the real kernel under QEMU
-  with injected programs and asserts on the console. An <b>attack case passes only on a line the attacker cannot write</b> —
-  the verdict comes from the kernel, a victim, or a clean power-off.</p>
-  <div class="diagram"><svg width="1300pt" height="81pt"
- viewBox="0.00 0.00 1300.00 80.74" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-<g id="testing_graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 76.74)">
-<title>testing</title>
-<g id="testing_node1" class="node">
-<title>case</title>
-<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M192,-72.74C192,-72.74 12,-72.74 12,-72.74 6,-72.74 0,-66.74 0,-60.74 0,-60.74 0,-48.74 0,-48.74 0,-42.74 6,-36.74 12,-36.74 12,-36.74 192,-36.74 192,-36.74 198,-36.74 204,-42.74 204,-48.74 204,-48.74 204,-60.74 204,-60.74 204,-66.74 198,-72.74 192,-72.74"/>
-<text text-anchor="middle" x="102" y="-57.94" font-family="Helvetica,sans-Serif" font-size="11.00">tests/&lt;case&gt;.toml</text>
-<text text-anchor="middle" x="102" y="-45.94" font-family="Helvetica,sans-Serif" font-size="11.00">arch · programs · expect · forbid</text>
-</g>
-<g id="testing_node2" class="node">
-<title>bench</title>
-<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M437,-72.74C437,-72.74 253,-72.74 253,-72.74 247,-72.74 241,-66.74 241,-60.74 241,-60.74 241,-48.74 241,-48.74 241,-42.74 247,-36.74 253,-36.74 253,-36.74 437,-36.74 437,-36.74 443,-36.74 449,-42.74 449,-48.74 449,-48.74 449,-60.74 449,-60.74 449,-66.74 443,-72.74 437,-72.74"/>
-<text text-anchor="middle" x="345" y="-57.94" font-family="Helvetica,sans-Serif" font-size="11.00">testbench</text>
-<text text-anchor="middle" x="345" y="-45.94" font-family="Helvetica,sans-Serif" font-size="11.00">build kernel + loader + programs</text>
-</g>
-<g id="testing_edge1" class="edge">
-<title>case&#45;&gt;bench</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M204.16,-54.74C213.9,-54.74 223.82,-54.74 233.64,-54.74"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="233.78,-57.19 240.78,-54.74 233.78,-52.29 233.78,-57.19"/>
-</g>
-<g id="testing_node3" class="node">
-<title>sign</title>
-<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M643,-72.74C643,-72.74 498,-72.74 498,-72.74 492,-72.74 486,-66.74 486,-60.74 486,-60.74 486,-48.74 486,-48.74 486,-42.74 492,-36.74 498,-36.74 498,-36.74 643,-36.74 643,-36.74 649,-36.74 655,-42.74 655,-48.74 655,-48.74 655,-60.74 655,-60.74 655,-66.74 649,-72.74 643,-72.74"/>
-<text text-anchor="middle" x="570.5" y="-57.94" font-family="Helvetica,sans-Serif" font-size="11.00">sign the bundle</text>
-<text text-anchor="middle" x="570.5" y="-45.94" font-family="Helvetica,sans-Serif" font-size="11.00">redoubt.bundle.v1 domain</text>
-</g>
-<g id="testing_edge2" class="edge">
-<title>bench&#45;&gt;sign</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M449.25,-54.74C459.09,-54.74 469.03,-54.74 478.75,-54.74"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="478.78,-57.19 485.78,-54.74 478.78,-52.29 478.78,-57.19"/>
-</g>
-<g id="testing_node4" class="node">
-<title>qemu</title>
-<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M765,-72.74C765,-72.74 704,-72.74 704,-72.74 698,-72.74 692,-66.74 692,-60.74 692,-60.74 692,-48.74 692,-48.74 692,-42.74 698,-36.74 704,-36.74 704,-36.74 765,-36.74 765,-36.74 771,-36.74 777,-42.74 777,-48.74 777,-48.74 777,-60.74 777,-60.74 777,-66.74 771,-72.74 765,-72.74"/>
-<text text-anchor="middle" x="734.5" y="-57.94" font-family="Helvetica,sans-Serif" font-size="11.00">QEMU virt</text>
-<text text-anchor="middle" x="734.5" y="-45.94" font-family="Helvetica,sans-Serif" font-size="11.00">rv64 · rv32</text>
-</g>
-<g id="testing_edge3" class="edge">
-<title>sign&#45;&gt;qemu</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M655.35,-54.74C665.44,-54.74 675.47,-54.74 684.81,-54.74"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="684.81,-57.19 691.81,-54.74 684.81,-52.29 684.81,-57.19"/>
-</g>
-<g id="testing_node5" class="node">
-<title>assert</title>
-<path fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" d="M1004,-72.74C1004,-72.74 826,-72.74 826,-72.74 820,-72.74 814,-66.74 814,-60.74 814,-60.74 814,-48.74 814,-48.74 814,-42.74 820,-36.74 826,-36.74 826,-36.74 1004,-36.74 1004,-36.74 1010,-36.74 1016,-42.74 1016,-48.74 1016,-48.74 1016,-60.74 1016,-60.74 1016,-66.74 1010,-72.74 1004,-72.74"/>
-<text text-anchor="middle" x="915" y="-57.94" font-family="Helvetica,sans-Serif" font-size="11.00">assert on the console</text>
-<text text-anchor="middle" x="915" y="-45.94" font-family="Helvetica,sans-Serif" font-size="11.00">+ SSH sessions + virtio disk/net</text>
-</g>
-<g id="testing_edge4" class="edge">
-<title>qemu&#45;&gt;assert</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M777.35,-54.74C786.39,-54.74 796.35,-54.74 806.64,-54.74"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="806.81,-57.19 813.81,-54.74 806.81,-52.29 806.81,-57.19"/>
-</g>
-<g id="testing_edge5" class="edge">
-<title>assert&#45;&gt;case</title>
-<path fill="none" stroke="#1a7f37" stroke-width="1.3" d="M840.39,-36.73C819.96,-32.25 797.71,-27.84 777,-24.74 541.41,10.55 477.29,5.53 241,-24.74 221.61,-27.23 200.92,-31.07 181.62,-35.19"/>
-<polygon fill="#1a7f37" stroke="#1a7f37" stroke-width="1.3" points="180.89,-32.84 174.57,-36.72 181.93,-37.63 180.89,-32.84"/>
-<text text-anchor="middle" x="570.5" y="-10.54" font-family="Helvetica,sans-Serif" font-size="9.00" fill="#1a7f37">PASS / FAIL</text>
-</g>
-<g id="testing_node6" class="node">
-<title>verdict</title>
-<path fill="#fff3cd" stroke="#9a6700" stroke-width="1.5" d="M1280,-72.74C1280,-72.74 1065,-72.74 1065,-72.74 1059,-72.74 1053,-66.74 1053,-60.74 1053,-60.74 1053,-48.74 1053,-48.74 1053,-42.74 1059,-36.74 1065,-36.74 1065,-36.74 1280,-36.74 1280,-36.74 1286,-36.74 1292,-42.74 1292,-48.74 1292,-48.74 1292,-60.74 1292,-60.74 1292,-66.74 1286,-72.74 1280,-72.74"/>
-<text text-anchor="middle" x="1172.5" y="-57.94" font-family="Helvetica,sans-Serif" font-size="11.00">attack verdict comes from the SYSTEM</text>
-<text text-anchor="middle" x="1172.5" y="-45.94" font-family="Helvetica,sans-Serif" font-size="11.00">kernel · victim · clean power&#45;off</text>
-</g>
-<g id="testing_edge6" class="edge">
-<title>assert&#45;&gt;verdict</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" stroke-dasharray="5,2" d="M1016.25,-54.74C1025.92,-54.74 1035.82,-54.74 1045.7,-54.74"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="1045.89,-57.19 1052.89,-54.74 1045.89,-52.29 1045.89,-57.19"/>
-</g>
-</g>
-</svg></div>
-  <p class="lead">A build of the same sources with debug assertions and overflow checks (the <code>checked</code> profile)
-  is a normal case option. 55 cases exercise IPC, budgets, devices, timers, loader rejections, verified-boot attacks,
-  forged verdicts and SSH. <a href="TENETS.md">TENETS.md</a> tenet 6 · <a href="testbench.md">testbench.md</a> · <a href="https://github.com/sirmick/redoubt/tree/main/tests">tests/</a></p>
+<section id="next">
+<h2>What will be</h2>
+<p><a href="PLAN.md">PLAN</a> owns milestone outcomes and attack acceptance:</p>
+<ol>
+<li>Separated SSH sessions and a leased, contained agent on QEMU.</li>
+<li>Signed packages, projects, persistent policy and A/B updates.</li>
+<li>Self-hosted development and compilers; the real-agent harness begins alongside milestone 2.</li>
+</ol>
+<p>SMP follows milestone 1; required full-stack rv32 boots follow milestone 3. Current rv32 boot
+tests do not establish full-stack support.</p>
+<p><a href="USERLAND.md">Userland boundary</a> · <a href="PACKAGES.md">Packages</a> ·
+<a href="IO-ARCHITECTURE.md">I/O</a> · <a href="PLATFORM-FPGA.md">FPGA</a> ·
+<a href="GAME.md">Agent attack scenarios</a> · <a href="README.md">Documentation map</a>.</p>
 </section>
-
-<section id="reading">
-  <h2><span class="num">09</span>Where to start reading</h2>
-  <div class="diagram"><svg width="320pt" height="654pt"
- viewBox="0.00 0.00 320.00 654.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-<g id="repo_graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 650)">
-<title>repo</title>
-<g id="repo_node1" class="node">
-<title>root</title>
-<polygon fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.5" points="71,-341 68,-345 47,-345 44,-341 0,-341 0,-305 71,-305 71,-341"/>
-<text text-anchor="middle" x="35.5" y="-320.2" font-family="Helvetica,sans-Serif" font-size="11.00">redoubt/</text>
-</g>
-<g id="repo_node2" class="node">
-<title>bios</title>
-<polygon fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" points="297.5,-646 294.5,-650 273.5,-650 270.5,-646 121.5,-646 121.5,-610 297.5,-610 297.5,-646"/>
-<text text-anchor="middle" x="209.5" y="-631.2" font-family="Helvetica,sans-Serif" font-size="11.00">bios/</text>
-<text text-anchor="middle" x="209.5" y="-619.2" font-family="Helvetica,sans-Serif" font-size="11.00">M&#45;mode firmware (RustSBI)</text>
-</g>
-<g id="repo_edge1" class="edge">
-<title>root&#45;&gt;bios</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M38.82,-341.25C46.19,-396.48 70.74,-560.39 107,-598 109.79,-600.89 112.84,-603.51 116.1,-605.88"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="114.96,-608.07 122.15,-609.88 117.66,-603.98 114.96,-608.07"/>
-</g>
-<g id="repo_node3" class="node">
-<title>loader</title>
-<polygon fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" points="276,-585 273,-589 252,-589 249,-585 143,-585 143,-549 276,-549 276,-585"/>
-<text text-anchor="middle" x="209.5" y="-570.2" font-family="Helvetica,sans-Serif" font-size="11.00">loader/</text>
-<text text-anchor="middle" x="209.5" y="-558.2" font-family="Helvetica,sans-Serif" font-size="11.00">S&#45;mode boot loader</text>
-</g>
-<g id="repo_edge2" class="edge">
-<title>root&#45;&gt;loader</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M37.06,-341.12C39.34,-382.06 50.69,-482.4 107,-537 115.19,-544.94 125.39,-550.8 136.12,-555.11"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="135.45,-557.48 142.87,-557.6 137.15,-552.88 135.45,-557.48"/>
-</g>
-<g id="repo_node4" class="node">
-<title>kernel</title>
-<polygon fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" points="282,-524 279,-528 258,-528 255,-524 137,-524 137,-488 282,-488 282,-524"/>
-<text text-anchor="middle" x="209.5" y="-509.2" font-family="Helvetica,sans-Serif" font-size="11.00">kernel/</text>
-<text text-anchor="middle" x="209.5" y="-497.2" font-family="Helvetica,sans-Serif" font-size="11.00">the microkernel (TCB)</text>
-</g>
-<g id="repo_edge3" class="edge">
-<title>root&#45;&gt;kernel</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M39.76,-341.02C46.5,-372.97 64.97,-439.64 107,-476 113.87,-481.94 121.86,-486.7 130.3,-490.53"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="129.42,-492.81 136.82,-493.27 131.32,-488.3 129.42,-492.81"/>
-</g>
-<g id="repo_node5" class="node">
-<title>servers</title>
-<polygon fill="#ffe0e0" stroke="#b42318" stroke-width="1.5" points="278,-463 275,-467 254,-467 251,-463 141,-463 141,-427 278,-427 278,-463"/>
-<text text-anchor="middle" x="209.5" y="-448.2" font-family="Helvetica,sans-Serif" font-size="11.00">servers/</text>
-<text text-anchor="middle" x="209.5" y="-436.2" font-family="Helvetica,sans-Serif" font-size="11.00">unprivileged servers</text>
-</g>
-<g id="repo_edge4" class="edge">
-<title>root&#45;&gt;servers</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M45.89,-341.35C57.48,-362.21 79.14,-395.85 107,-415 115.24,-420.67 124.57,-425.28 134.15,-429.03"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="133.39,-431.36 140.81,-431.49 135.09,-426.77 133.39,-431.36"/>
-</g>
-<g id="repo_node6" class="node">
-<title>userland</title>
-<polygon fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" points="285.5,-402 282.5,-406 261.5,-406 258.5,-402 133.5,-402 133.5,-366 285.5,-366 285.5,-402"/>
-<text text-anchor="middle" x="209.5" y="-387.2" font-family="Helvetica,sans-Serif" font-size="11.00">userland/</text>
-<text text-anchor="middle" x="209.5" y="-375.2" font-family="Helvetica,sans-Serif" font-size="11.00">otp/ = beamlet (BEAM)</text>
-</g>
-<g id="repo_edge5" class="edge">
-<title>root&#45;&gt;userland</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M71.29,-339.34C82.56,-344.35 95.2,-349.68 107,-354 116.32,-357.41 126.23,-360.72 136.07,-363.82"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="135.44,-366.19 142.85,-365.92 136.89,-361.51 135.44,-366.19"/>
-</g>
-<g id="repo_node7" class="node">
-<title>libs</title>
-<polygon fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" points="312,-341 309,-345 288,-345 285,-341 107,-341 107,-305 312,-305 312,-341"/>
-<text text-anchor="middle" x="209.5" y="-326.2" font-family="Helvetica,sans-Serif" font-size="11.00">libs/</text>
-<text text-anchor="middle" x="209.5" y="-314.2" font-family="Helvetica,sans-Serif" font-size="11.00">sys rt wire signing littlefs paging</text>
-</g>
-<g id="repo_edge6" class="edge">
-<title>root&#45;&gt;libs</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M71.31,-323C79.92,-323 89.61,-323 99.76,-323"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="99.85,-325.45 106.85,-323 99.85,-320.55 99.85,-325.45"/>
-</g>
-<g id="repo_node8" class="node">
-<title>image</title>
-<polygon fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" points="280.5,-280 277.5,-284 256.5,-284 253.5,-280 138.5,-280 138.5,-244 280.5,-244 280.5,-280"/>
-<text text-anchor="middle" x="209.5" y="-265.2" font-family="Helvetica,sans-Serif" font-size="11.00">image/</text>
-<text text-anchor="middle" x="209.5" y="-253.2" font-family="Helvetica,sans-Serif" font-size="11.00">bundle &amp; disk recipes</text>
-</g>
-<g id="repo_edge7" class="edge">
-<title>root&#45;&gt;image</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M71.35,-307.31C82.63,-302.46 95.25,-297.28 107,-293 117.15,-289.3 127.98,-285.67 138.64,-282.27"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="139.68,-284.51 145.62,-280.07 138.21,-279.84 139.68,-284.51"/>
-</g>
-<g id="repo_node9" class="node">
-<title>tools</title>
-<polygon fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" points="285,-219 282,-223 261,-223 258,-219 134,-219 134,-183 285,-183 285,-219"/>
-<text text-anchor="middle" x="209.5" y="-204.2" font-family="Helvetica,sans-Serif" font-size="11.00">tools/</text>
-<text text-anchor="middle" x="209.5" y="-192.2" font-family="Helvetica,sans-Serif" font-size="11.00">testbench · generators</text>
-</g>
-<g id="repo_edge8" class="edge">
-<title>root&#45;&gt;tools</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M45.97,-304.89C57.64,-284.3 79.37,-251.07 107,-232 113.27,-227.67 120.16,-223.94 127.31,-220.71"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="128.46,-222.88 133.94,-217.89 126.54,-218.38 128.46,-222.88"/>
-</g>
-<g id="repo_node10" class="node">
-<title>tests</title>
-<polygon fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" points="295.5,-158 292.5,-162 271.5,-162 268.5,-158 123.5,-158 123.5,-122 295.5,-122 295.5,-158"/>
-<text text-anchor="middle" x="209.5" y="-143.2" font-family="Helvetica,sans-Serif" font-size="11.00">tests/</text>
-<text text-anchor="middle" x="209.5" y="-131.2" font-family="Helvetica,sans-Serif" font-size="11.00">cases (*.toml) + programs</text>
-</g>
-<g id="repo_edge9" class="edge">
-<title>root&#45;&gt;tests</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M39.88,-304.89C46.77,-273.1 65.43,-207.2 107,-171 111.1,-167.43 115.61,-164.27 120.37,-161.47"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="121.56,-163.61 126.53,-158.12 119.21,-159.31 121.56,-163.61"/>
-</g>
-<g id="repo_node11" class="node">
-<title>docs</title>
-<polygon fill="#d9f2e0" stroke="#1a7f37" stroke-width="1.5" points="277.5,-97 274.5,-101 253.5,-101 250.5,-97 141.5,-97 141.5,-61 277.5,-61 277.5,-97"/>
-<text text-anchor="middle" x="209.5" y="-82.2" font-family="Helvetica,sans-Serif" font-size="11.00">docs/</text>
-<text text-anchor="middle" x="209.5" y="-70.2" font-family="Helvetica,sans-Serif" font-size="11.00">the design of record</text>
-</g>
-<g id="repo_edge10" class="edge">
-<title>root&#45;&gt;docs</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M37.15,-304.7C39.59,-263.82 51.28,-164.44 107,-110 114.78,-102.39 124.38,-96.65 134.53,-92.31"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="135.66,-94.5 141.28,-89.65 133.87,-89.94 135.66,-94.5"/>
-</g>
-<g id="repo_node12" class="node">
-<title>ext</title>
-<polygon fill="#eef0f2" stroke="#6b7280" stroke-width="1.5" points="312,-36 309,-40 288,-40 285,-36 107,-36 107,0 312,0 312,-36"/>
-<text text-anchor="middle" x="209.5" y="-15.2" font-family="Helvetica,sans-Serif" font-size="11.00">reference/ · toolchains/ · vendor/</text>
-</g>
-<g id="repo_edge11" class="edge">
-<title>root&#45;&gt;ext</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M38.84,-304.83C46.28,-249.84 71.01,-86.63 107,-49 110.18,-45.68 113.7,-42.71 117.46,-40.06"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="119,-41.98 123.57,-36.15 116.36,-37.86 119,-41.98"/>
-</g>
-</g>
-</svg></div>
-  <div class="grid2">
-    <div class="card"><h4>Reading order</h4><ul class="tight">
-      <li><a href="TENETS.md">TENETS.md</a> — outranks everything</li>
-      <li><a href="README.md">README.md</a> — index + glossary + server roster</li>
-      <li><a href="STATUS.md">STATUS.md</a> — where the code stands</li>
-      <li><a href="PLAN.md">PLAN.md</a> — the three milestones</li>
-      <li><a href="KERNEL-SPEC.md">KERNEL-SPEC.md</a> — the precise kernel</li>
-      <li><a href="CAPABILITIES.md">CAPABILITIES.md</a> · <a href="CONTAINMENT.md">CONTAINMENT.md</a> · <a href="RESOURCES.md">RESOURCES.md</a></li>
-      <li><a href="INIT.md">INIT.md</a> · <a href="NAMESPACES.md">NAMESPACES.md</a> · <a href="WIRE.md">WIRE.md</a></li>
-    </ul></div>
-    <div class="card"><h4>Code map</h4><ul class="tight">
-      <li><a href="https://github.com/sirmick/redoubt/tree/main/bios">bios/</a> · <a href="https://github.com/sirmick/redoubt/tree/main/loader">loader/</a> · <a href="https://github.com/sirmick/redoubt/tree/main/kernel">kernel/</a></li>
-      <li><a href="https://github.com/sirmick/redoubt/tree/main/libs/sys">libs/sys</a> (ABI) · <a href="https://github.com/sirmick/redoubt/tree/main/libs/rt">libs/rt</a> · <a href="https://github.com/sirmick/redoubt/tree/main/libs/wire">libs/wire</a></li>
-      <li><a href="https://github.com/sirmick/redoubt/tree/main/libs/signing">libs/signing</a> · <a href="https://github.com/sirmick/redoubt/tree/main/libs/littlefs">libs/littlefs</a> · <a href="https://github.com/sirmick/redoubt/tree/main/libs/paging">libs/paging</a></li>
-      <li><a href="https://github.com/sirmick/redoubt/tree/main/servers">servers/</a> · <a href="https://github.com/sirmick/redoubt/tree/main/userland/otp">userland/otp</a></li>
-      <li><a href="https://github.com/sirmick/redoubt/tree/main/tools/testbench">tools/testbench</a> · <a href="https://github.com/sirmick/redoubt/tree/main/tests">tests/</a></li>
-    </ul></div>
-  </div>
-</section>
-
-<section id="milestones">
-  <h2><span class="num">10</span>Milestones</h2>
-  <div class="diagram"><svg width="881pt" height="56pt"
- viewBox="0.00 0.00 881.00 56.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
-<g id="milestones_graph0" class="graph" transform="scale(1 1) rotate(0) translate(4 52)">
-<title>milestones</title>
-<g id="milestones_node1" class="node">
-<title>m1</title>
-<path fill="#fff3cd" stroke="#9a6700" stroke-width="1.5" d="M175,-48C175,-48 12,-48 12,-48 6,-48 0,-42 0,-36 0,-36 0,-12 0,-12 0,-6 6,0 12,0 12,0 175,0 175,0 181,0 187,-6 187,-12 187,-12 187,-36 187,-36 187,-42 181,-48 175,-48"/>
-<text text-anchor="middle" x="93.5" y="-33.2" font-family="Helvetica,sans-Serif" font-size="11.00">M1 &#160;(in progress)</text>
-<text text-anchor="middle" x="93.5" y="-21.2" font-family="Helvetica,sans-Serif" font-size="11.00">separation &amp; containment</text>
-<text text-anchor="middle" x="93.5" y="-9.2" font-family="Helvetica,sans-Serif" font-size="11.00">Alice, Bob, a contained agent</text>
-</g>
-<g id="milestones_node2" class="node">
-<title>m2</title>
-<path fill="#ffe0e0" stroke="#b42318" stroke-width="1.5" d="M421,-48C421,-48 235,-48 235,-48 229,-48 223,-42 223,-36 223,-36 223,-12 223,-12 223,-6 229,0 235,0 235,0 421,0 421,0 427,0 433,-6 433,-12 433,-12 433,-36 433,-36 433,-42 427,-48 421,-48"/>
-<text text-anchor="middle" x="328" y="-33.2" font-family="Helvetica,sans-Serif" font-size="11.00">M2 &#160;(designed)</text>
-<text text-anchor="middle" x="328" y="-21.2" font-family="Helvetica,sans-Serif" font-size="11.00">install · share · persist</text>
-<text text-anchor="middle" x="328" y="-9.2" font-family="Helvetica,sans-Serif" font-size="11.00">packages · projects · A/B updates</text>
-</g>
-<g id="milestones_edge1" class="edge">
-<title>m1&#45;&gt;m2</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M187.06,-24C196.54,-24 206.23,-24 215.88,-24"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="215.89,-26.45 222.89,-24 215.89,-21.55 215.89,-26.45"/>
-</g>
-<g id="milestones_node3" class="node">
-<title>m3</title>
-<path fill="#ffe0e0" stroke="#b42318" stroke-width="1.5" d="M650,-48C650,-48 481,-48 481,-48 475,-48 469,-42 469,-36 469,-36 469,-12 469,-12 469,-6 475,0 481,0 481,0 650,0 650,0 656,0 662,-6 662,-12 662,-12 662,-36 662,-36 662,-42 656,-48 650,-48"/>
-<text text-anchor="middle" x="565.5" y="-33.2" font-family="Helvetica,sans-Serif" font-size="11.00">M3 &#160;(designed)</text>
-<text text-anchor="middle" x="565.5" y="-21.2" font-family="Helvetica,sans-Serif" font-size="11.00">self&#45;hosted development</text>
-<text text-anchor="middle" x="565.5" y="-9.2" font-family="Helvetica,sans-Serif" font-size="11.00">real agent harness · compilers</text>
-</g>
-<g id="milestones_edge2" class="edge">
-<title>m2&#45;&gt;m3</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M433.32,-24C442.73,-24 452.26,-24 461.66,-24"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="461.82,-26.45 468.82,-24 461.82,-21.55 461.82,-26.45"/>
-</g>
-<g id="milestones_node4" class="node">
-<title>after</title>
-<path fill="#eef0f2" stroke="#6b7280" stroke-width="1.5" d="M861,-42C861,-42 710,-42 710,-42 704,-42 698,-36 698,-30 698,-30 698,-18 698,-18 698,-12 704,-6 710,-6 710,-6 861,-6 861,-6 867,-6 873,-12 873,-18 873,-18 873,-30 873,-30 873,-36 867,-42 861,-42"/>
-<text text-anchor="middle" x="785.5" y="-27.2" font-family="Helvetica,sans-Serif" font-size="11.00">after M3</text>
-<text text-anchor="middle" x="785.5" y="-15.2" font-family="Helvetica,sans-Serif" font-size="11.00">rv32 returned · SMP · FPGA</text>
-</g>
-<g id="milestones_edge3" class="edge">
-<title>m3&#45;&gt;after</title>
-<path fill="none" stroke="#94a3b8" stroke-width="1.3" d="M662.12,-24C671.6,-24 681.22,-24 690.68,-24"/>
-<polygon fill="#94a3b8" stroke="#94a3b8" stroke-width="1.3" points="690.88,-26.45 697.88,-24 690.88,-21.55 690.88,-26.45"/>
-</g>
-</g>
-</svg></div>
-  <ul class="tight">
-    <li><b>M1 — separation and containment:</b> Alice and Bob logged in over SSH, separated; Alice's agent under a lease, contained. Every property backed by an attack test.</li>
-    <li><b>M2 — install, share, persist:</b> packages and trust lists, projects, reboot memory, A/B system updates with rollback.</li>
-    <li><b>M3 — self-hosted development:</b> a real agent harness through <code>gatewayd</code>, compilers on the box, the server APIs.</li>
-    <li><b>After M3:</b> rv32 returns to mandatory milestone boot acceptance (the bench already supports both widths); SMP; the FPGA.</li>
-  </ul>
-  <p><a href="BUILD-PLAN.md">BUILD-PLAN.md</a> · <a href="SWARM.md">SWARM.md</a> · <a href="HISTORY.md">HISTORY.md</a></p>
-</section>
-
-<footer>
-  Redoubt began as <b>Xous</b> by the betrusted.io project. Licensed under the terms in
-  <a href="https://github.com/sirmick/redoubt/blob/main/LICENSE">LICENSE</a> / <a href="https://github.com/sirmick/redoubt/tree/main/LICENSES">LICENSES/</a>. This page is generated by
-  <a href="https://github.com/sirmick/redoubt/blob/main/tools/gen_readme.py">tools/gen_readme.py</a>.
-</footer>
-
 </main>
+<footer>Forked from Xous. <a href="https://github.com/sirmick/redoubt/blob/main/LICENSE">LICENSE</a> / <a href="https://github.com/sirmick/redoubt/tree/main/LICENSES">LICENSES</a>.
+Generated by <a href="https://github.com/sirmick/redoubt/blob/main/tools/gen_readme.py">tools/gen_readme.py</a> (Graphviz); edit the source and regenerate.</footer>
 </body>
 </html>

@@ -36,7 +36,7 @@ The FPGA is "the secure configuration" only if these hold:
   isolates only core from core and flushes when a core switches budgets. The kernel tells the
   hardware when it switches.
 - **Non-observability for a protected label set.** Covert communication is out of scope (TENETS.md,
-  The use case), but the RTL can still shrink the enumerated on-die channels between a protected label
+  Purpose and threat model), but the RTL can still shrink the enumerated on-die channels between a protected label
   set and a lower one: separate cores, a partitioned L2, isolated memory bandwidth, per-domain DMA
   windows (channel B already helps), per-domain disk and NIC queues, and no shared GPU context. Good
   practice, not a design claim; only placement — separate power/thermal domains or machines — is zero.

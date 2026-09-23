@@ -26,8 +26,8 @@ and in human-written files. One convention for every message, one for every file
 - **One codec**, shared by 9P and the typed messages, and fuzzed.
 
 ### Tables
-Each protocol's table lives in the note of the server that serves it (README.md, Servers), written
-by that server's work package with a HISTORY.md line (BUILD-PLAN.md). A line holding only
+Each protocol's table lives in the note of the server that serves it (README.md, topic map), written
+by that server's work package with an approval record in ANSWERS.md (BUILD-PLAN.md). A line holding only
 `<!-- wire: NAME -->` names the protocol; the next table is its layout. A protocol served on a 9P
 endpoint is marked `<!-- wire: NAME ninep -->`, and its opcodes start at 16, since `ninep_common`
 reserves 1-15 there (above):
