@@ -1,0 +1,8 @@
+description = "consoled builds for both widths (BUILD-PLAN.md: rv32 keeps compiling)"
+arch = ["rv64", "rv32"]
+kind = "build"
+# Builds the library and `consoled` binary. Boot integration still needs native process
+# startup and init to supply the UART and interrupt handles in the startup block.
+# `servers/consoled/tests/` covers the threads, fake ns16550 and parked read resumed by an
+# interrupt, including 9P conformance vectors; this case checks compilation only.
+package = "redoubt-consoled"

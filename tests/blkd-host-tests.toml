@@ -1,0 +1,8 @@
+description = "blkd against a hostile virtio-blk device: malformed responses and randomized device behavior"
+kind = "host-tests"
+# QEMU's normal virtio-blk device cannot exercise the malicious responses in
+# `servers/blkd/tests/`: malformed rings, invalid indices and lengths, looping descriptors,
+# unsolicited completions, and data changed between reads. The suite also runs 100,000
+# randomized hostile-device iterations using the fuzz targets' `policy_from` generator.
+# These host tests do not establish server boot integration.
+packages = ["redoubt-blkd"]

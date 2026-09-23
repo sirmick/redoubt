@@ -12,7 +12,7 @@ outcomes, [SWARM](SWARM.md#claims) owns package state, and [BUILD-PLAN](BUILD-PL
 | Record validation | Budget and IPC records must be backed, permitted, owned RAM. MMIO and borrowed aliases are rejected before record access. | Preserve this guard when adding syscalls. |
 | Scheduling and processes | Cooperative scheduling and legacy process/thread facilities; timer IRQ tests and a two-hart lock spike. | New process/thread syscall family, native exit cleanup, kernel-owned timeouts/deadlines and preemption. No full SMP scheduler. |
 | Native libraries and servers | sys/rt/wire/signing, pure-Rust littlefs, keyd, bootfsd, consoled and in-tree virtio-blk/blkd have host tests. | Init/startup integration, fsd, network/steward/SSH stack and Redoubt beamlet platform. Console typed size/resize are target behavior; typed parking awaits 163. |
-| Verification | Boot attack cases, checked builds, host tests, wire-generator drift checks and a fail-closed unsafe ratchet. | Model replay, kernel hosted tests in the bench, kernel fuzzing, omitted server bench/budget registrations. |
+| Verification | Boot attack cases, checked builds, registered server host tests and both-width builds, wire-generator drift checks and a fail-closed unsafe ratchet. | Model replay, kernel hosted tests in the bench and kernel fuzzing. |
 
 ## Acceptance gaps
 
@@ -38,7 +38,17 @@ the shared-validator fix. It checks input/output refusal, error precedence and c
 service on both widths. IPC coverage remains in `ipc-outcomes` and the revocation/lend cases.
 
 The unsafe ratchet rejects missing or empty configured source roots; it does not prove that
-all TCB components were configured. Runtime ceiling: 9, no undocumented uses. Server omissions
-are tracked in SWARM. Validation for this change (2026-09-22): the full bench passed 99 executions across 56 cases,
-including budget/MMIO and IPC outcomes on rv32/rv64; wire-generator tests passed 16/16.
-This is regression evidence, not acceptance of the outstanding packages.
+all TCB components were configured. Runtime ceiling: 9; blkd: 4; bootfsd/consoled together: 0;
+all require zero undocumented uses. Server host/build registrations do not establish boot integration.
+
+Prior budget-record/IPC validation (2026-09-22, through `26cba3022`): the full bench passed
+99 executions across 56 cases, including budget/MMIO and IPC outcomes on rv32/rv64;
+wire-generator tests passed 16/16. This is regression evidence, not acceptance of the
+outstanding packages.
+
+Server-verification recovery (2026-09-22): 67 server host tests and 9 harness tests passed;
+all three servers built for both widths. The full bench passed 107 executions across 61 cases,
+with no failures or skips. Actual unsafe counts were blkd 4, bootfsd/consoled 0 and runtime 9,
+with zero undocumented uses. The consistency, defensive and simplification reviews completed;
+the documentation attribution finding was corrected. This adds permanent verification coverage,
+not server boot integration.

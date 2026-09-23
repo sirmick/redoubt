@@ -34,6 +34,7 @@ External candidates remain unaccepted until ported and tested against the curren
 
 | Package | State | Branch | Notes |
 | --- | --- | --- | --- |
+| SV1 | merged | recovery-server-checks | Five D1/R4 bench registrations and server unsafe coverage restored; three reviews complete; source behavior unchanged |
 | M0 | review | wp-m0 | Remote candidate `674831cf9`; absent from active workspace; current-spec reconciliation required |
 | M1 | review | wp-m1 | Carried by wp-m0; remove obsolete priority tiers and add current IPC outcomes/traces |
 | W1 | merged | wp-w1 | d52896bee |
@@ -45,7 +46,7 @@ External candidates remain unaccepted until ported and tested against the curren
 | L1 | merged | wp-l1 | 25ab39296 |
 | T1 | merged | wp-t1 | 987bacbed |
 | T1b | merged | wp-t1b | 6cd067a39 |
-| T1c | review | wp-t1c | Checker/runtime repair in fe807fc4b; actual configured budgets pass, runtime 9/9. Server coverage omissions remain |
+| T1c | review | wp-t1c | Checker/runtime repair in fe807fc4b; actual configured budgets pass, runtime 9/9. Server coverage restored by SV1 |
 | V1 | merged | wp-v1 | 05955bf86 |
 | K0 | merged | wp-k0 | f7b9fdd16 |
 | K0b | merged | wp-k0b | e30d43304 |
@@ -84,7 +85,7 @@ accept any package. Exact evidence is in the
 
 | Source | Required action |
 | --- | --- |
-| `origin/wp-d1` e4d22b980; `origin/wp-r4` 33a46e010 | Source is already recovered into servers/blkd, bootfsd and consoled. Preserve later fixes. Restore missing bench definitions and server unsafe-budget coverage; see BUILD-PLAN verification follow-up. |
+| `origin/wp-d1` e4d22b980; `origin/wp-r4` 33a46e010 | Source is already recovered into servers/blkd, bootfsd and consoled. Preserve later fixes. SV1 restores the five bench definitions and server unsafe-budget coverage; host/build checks do not establish boot integration. |
 | `origin/wp-k4` 6ddf06786 | Selectively port process lifecycle/tests; preserve current loan protection, outcome ABI and rollback. Complete hostile mapping, exit/lend, PID reuse and bundle-readback acceptance. |
 | `origin/wp-m0` 674831cf9 | Move candidate to model/, register it, remove old priority tiers and reconcile outcomes, record validity, ghost checks, mutations and traces. Existing process-lifecycle modeling also needs conformance tests. |
 | D3 | External claim remains unverified. |
@@ -94,7 +95,7 @@ accept any package. Exact evidence is in the
 Completed R-1/R-2/R-3/R-R1c/R-R4b/R-T1 rounds have no remaining debt. IPC1's implementation
 reviews do not close its acceptance gaps. New TCB changes, including the budget-record guard,
 need their own review before package acceptance; this edit does not claim a three-review round.
-The server-verification recovery and future K4/model ports also need their normal acceptance.
+The K4/model ports still need their normal acceptance.
 
 ## Cross-cutting review records
 
