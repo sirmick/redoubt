@@ -15,46 +15,75 @@ Design changes need approval recorded once in [ANSWERS](ANSWERS.md) and applied 
 Open decisions are in [QUESTIONS](QUESTIONS.md), including 163 (typed parking), 164–166
 (security/latency claims), 171 (late-invalid receive output), and device/lifecycle issues 128–149. No package resolves them by assumption.
 
+## Order
+
+### Next three tasks
+
+1. **G1 — close launch gates.** Reconcile T1c's retained three-review evidence and current checker
+   coverage; identify and complete missing budget-record/IPC TCB reviews before the next wave.
+   Have the architect prepare question 166 for an owner decision, then apply the actual decision
+   before K5's affected work. Record evidence and residuals in SWARM; do not repeat already-valid
+   reviews or mark whole IPC1 accepted. R2 can proceed after review debt is cleared even if 166
+   remains open. Acceptance of G1 requires review debt cleared and the K5 contract settled.
+2. **R2 — loader stub and startup image fields.** Use the integrated K4 lifecycle, a hostile-ELF
+   confinement test and coordinated startup codec migration. This enables native launch; it does
+   not alone close K4's bundle-readback gate.
+3. **K5 — timer, deadlines and preemption.** After 166 is recorded/applied, implement the accepted
+   single-queue contract and real timeout/fairness/deadline tests, preserving IPC ownership outcomes.
+   Use the sole kernel writer; it may run alongside R2 only with disjoint owned paths.
+
+### Route to working SSH and milestone acceptance
+
+Use [SWARM Claims](SWARM.md#claims) for ownership. The rows distinguish integrated prerequisites
+from final acceptance; a reviewed implementation may supply a downstream dependency while its
+explicit end-to-end gates remain open. This ordering changes no security contract or acceptance
+threshold. Required reviews and shared checks still apply before integration.
+
+| Stage | Integrated prerequisites | Exit evidence / remaining gate |
+| --- | --- | --- |
+| Native startup: R2 + K5 → R3 infrastructure | Reviewed K4 lifecycle, existing runtime/wire/device/keyd work; affected design decisions settled | Real init starts available servers through the stub; clean public bundle-file readback closes K4's retained gate. R3 full-stack acceptance remains open. |
+| VM and shell: B1 → B2 | Existing R1b/R4; production R3 handoff and K5 for boot acceptance | Elixir prints; the bench drives IEx on UART, then S3 reuses it over each SSH channel. |
+| Storage: D2 | D1/L1/R1b, filesystem contracts and R3 startup | Real fsd/blkd boots, quotas, labels, disconnect and no-leaky-state cases pass. |
+| Network: reconcile D3 → D3 | Existing R1b/K3/W2; verify external ownership/source before replacing or accepting work | Real netd/ipd, scoped TCP and isolated bench peer; no outside-network access. |
+| Policy: S2 | R3 infrastructure, B1, D2 and existing S1 audit signing | Sessions/leases, approvals, signed audit, revocation and real init/steward blame handoff; affected 164–166 decisions settled. |
+| SSH: S3 | D3 + S1 + S2 + B2; B2a/R1d for full console acceptance | Pinned-key Alice, Bob, vault and approval sessions on the production stack; session separation, per-channel resize/abandonment and cleanup checked. |
+| Final acceptance: E1 | All required packages and retained gates, including K6, C1 and IPC1 | The entire PLAN milestone-1 attack suite, full bench, rv32 compilation, unsafe and review requirements; then declare milestone 1. |
+
+B2a/B2b and R1d remain in the milestone plan; they can follow the first SSH bring-up without
+blocking its basic IEx session. B2a/R1d must land before full S3 console acceptance. This is
+scheduling, not a waiver of E1's existing "everything" dependency. The hosted-kernel repair
+remains separate verification work; native tests neither depend on that hosted target nor
+establish its compatibility. D1/R4 source is already recovered.
+
+### Acceptance gates and decision ownership
+
+| Gate | Owner / enabling work | Closure rule |
+| --- | --- | --- |
+| K4 bundle readback | R2/R3 (answer 169) | Guest compares injected bytes after clean production boot; loader refusal is insufficient. |
+| IPC1 model replay | C1, after integrated IPC1/K5 and R3 bundle handoff | Native replay evidence feeds IPC1 acceptance; C1 does not wait for that final acceptance. |
+| IPC1 real timers | K5, then IPC1 cases | Real timer timeouts, not host substitutes. |
+| IPC1 serving-path cleanup | Native server startup through R3 | Actual serving paths exercise terminal fallback/rollback; host coverage remains partial evidence. |
+| IPC1 concurrent completion | Architect scopes against PLAN's post-M1 SMP section; owner decides | Preserve the gate until resolved; single-hart cases are not simultaneous multi-hart evidence. |
+| Confined deployment scope | Architect reconciles INIT's per-core placement with PLAN's post-M1 SMP scope and question 164 | A working single-hart SSH session does not prove confined placement; retain the conflict for an explicit scope decision, not an implicit exemption. INIT's literal "more cores than budget groups" refusal also needs clarification; infer no validator inequality. |
+| R3 full-server boot and blame | Later D2/D3/S2/S3 integration | Close with the real milestone manifest and steward; infrastructure integration is not acceptance. |
+| S3 per-channel console | B2a/R1d after decision 163 | Size/resize, label separation and parked-call abandonment follow NAMESPACES; a working SSH byte stream is insufficient. |
+| S2/S3 wire integration | Architect and both package owners | Owning protocol tables, decision provenance, generated codecs/drift checks and real authentication/session/approval exchanges. |
+| Shared runtime/server assurance | IPC1 reviews, ASTRA A3 cleanup and raw-syscall/owning-view audit | Explicit findings and system-verdict regressions before relying on affected security claims. |
+
+Questions 163–166 and 171 retain their IDs and remain open until approved. Scope questions 128–149
+at the consuming package, including model conformance and device lifecycle; recommendations are
+not defaults. Model properties/mutations remain host evidence, not kernel replay. The architect
+owns specifications and decision records; the orchestrator owns this order, claims and progress.
+
 ## Work packages
 
-**WP-M0. Executable security model.** Size L.
-- Reads: KERNEL-SPEC.md (all), CONTAINMENT.md, CAPABILITIES.md (steward policy parts used in
-  milestone 1).
-- Delivers: `model/`: a host Rust crate implementing every object, system call, error and
-  rule of KERNEL-SPEC.md with the same names and arguments; the steward's milestone 1 policy
-  (principals, sessions, vault sessions, leases, approvals, declassification) as a layer above it;
-  property tests (random operation sequences) for invariants I1-I14 and the policy's properties; a
-  trace format (a sequence of calls and their expected results) that WP-C1 replays on the real
-  kernel.
-- Accepted when: all property tests pass at 10^6 sequences; **each rule R1-R12, deliberately broken
-  in the model, makes at least one property test fail** (so the tests are not vacuous).
-- Needs: nothing. Handed to red-team agents as soon as it passes.
-
-**WP-M1. The model follows answers 28-101.** Size M.
-- Reads: KERNEL-SPEC.md as changed by answers 28-101: R2 (groups, system callers by budget), R3
-  (lends charged to both sides, abandoned calls and their notice), R4 (delivery or `Refused`), R4a
-  (at the limit no calls are taken), R4b, R10 (messages in flight, handles in queued messages
-  swept), R11, R12 (one stride queue over every budget, no class or flag ordering: answer 103);
-  `MAX_HANDLES` and the handle table charged per table page in use (questions 102, 111, 116); open
-  calls, the current call and `serve`; exit notices with `blamed_labels`, held by the process
-  object charged to its creator; a budget's own page charged to its parent; class inherited;
-  `random` as one `u64`; message ids per receiving process and random PIDs; a badge-0 exit
-  endpoint; I2, I5 (unconditional), I7, I8, I10, I11, I12, I15 (new).
-  CONTAINMENT.md (`check`, metadata as reads, `admit` per badge for account 0 with a fair share per
-  badge, reader budgets answering a call, blame per (account, label set) ending every budget of it,
-  fixed sub-budgets per label set); CAPABILITIES.md (`MAX_LEASE` as steward policy, nested
-  sub-agents, the approval screen, narrowing handles as revocation scopes, no `keys` in milestone-1 leases).
-- Delivers: `model/` updated: the README's interpretation choices the spec has now settled
-  changed to match or marked settled (6 and 7 change: a `send` is never served or blamed; 8, 10,
-  14, 20, 23, 24 stand), and the open questions it listed closed; mutations for each new rule (an
-  abandoned call never reported, a lend charged to one side only, a delivery failing `receive`
-  instead of `Refused`, blame of a call other than the current one, blame falling back to another
-  thread's call, a revoked handle inside a queued message delivered, a badged exit endpoint
-  accepted, a class argument honoured, a budget scheduled ahead of the queue, a handle table
-  charged by its highest handle rather than by the pages in use, handles past `MAX_HANDLES`
-  admitted).
-- Accepted when: as WP-M0, at 10^6 sequences, adding I15 and the new mutations.
-- Needs: WP-M0.
+**WP-M0 / WP-M1. Host model — integrated and validated.**
+The current-contract host oracle, property families and mutation checks are complete within
+[the documented domain](../model/VALIDATION.md): 5,001,000 acceptance sequences and all 99
+mutations detected, with three reviews and full-bench evidence. Preserve these regression checks.
+Remaining work is C1's native replay and the separately tracked open contracts, including 171;
+this evidence does not accept IPC1 or establish kernel conformance. Historical implementation
+recipes remain in git.
 
 **WP-T1c. Fail-closed unsafe coverage (ASTRA C4).** Size S.
 - Reads: TENETS.md 2/6, ASTRA.md C4 and WP-IPC1's verification gate. This repairs existing
@@ -68,10 +97,12 @@ Open decisions are in [QUESTIONS](QUESTIONS.md), including 163 (typed parking), 
   raise budgets to hide newly uncovered debt; report any pre-existing overage separately.
   The testbench host tests and its focused unsafe-budget case pass, with three review angles
   complete. No firmware, kernel or runtime implementation is owned by this package.
-- Needs: WP-T1 (merged). Separate prerequisite for IPC1 acceptance; may run in parallel with
-  IPC1's ABI/runtime work in its own worktree.
+- Implementation is integrated. G1 reconciles the retained reviews and current coverage against
+  these criteria; do not restart the checker repair. This remains a separate IPC1 acceptance gate.
 
 **WP-K4. Process creation and exit.** Size M.
+- Lifecycle implementation is integrated and reviewed. Retain the criteria below as regression
+  requirements; remaining acceptance work is the R2/R3 bundle-readback gate, not another lifecycle port.
 - Reads: KERNEL-SPEC.md Process, `process_*`, exit notices, R10; PACKAGES.md (launching); INIT.md.
 - Delivers: `process_create`/`process_map`/`process_start` (with `arg`, the startup page's address);
   the process object charged to its creator and holding the exit notice until it is received or
@@ -101,7 +132,8 @@ Open decisions are in [QUESTIONS](QUESTIONS.md), including 163 (typed parking), 
 - Reads: KERNEL-SPEC.md R12, timeouts, deadlines; RESOURCES.md.
 - Delivers: the kernel-owned timer; timeouts on `call`/`send`/`receive`; budget deadlines enforced;
   **one stride queue over every runnable budget** — no priority tier, no class ordering, no flag
-  (answer 103) — with a waking budget re-entering at the current minimum pass; `rdtime` readable
+  (answer 103) — with a waking budget re-entering at `max(own pass, current minimum)`
+  (KERNEL-SPEC.md R12); `rdtime` readable
   from user mode.
 - Accepted when: a spinning budget cannot delay another beyond its weight; a sleeping-waking budget
   cannot exceed its share; a system-class server busy on one user's requests delays other users only
@@ -110,6 +142,8 @@ Open decisions are in [QUESTIONS](QUESTIONS.md), including 163 (typed parking), 
   under that load; every blocking call returns by its timeout (I13); a deadline
   destroys its budget; the old IRQ-0 timer path and `timer` case are gone.
 - Needs: WP-K2.
+- Design gate: question 166 must settle the wakeup guarantee before implementing the affected
+  scheduling contract. Dependency-ready does not authorize choosing either proposed answer.
 
 **WP-K6. Delete the legacy interface.** Size M.
 - Delivers: removal of SID connects, scalar message kinds, `ClaimInterrupt`, the `grants` entry,
@@ -119,6 +153,8 @@ Open decisions are in [QUESTIONS](QUESTIONS.md), including 163 (typed parking), 
 - Needs: WP-K1 to WP-K5, WP-R1b.
 
 **WP-IPC1. Observable IPC ownership and delivery (answers 167-168).** Size L.
+- The implementation is integrated. Remaining work closes the acceptance gates below and fixes
+  demonstrated gaps; do not rebuild the outcome ABI or repeat the completed recovery.
 - Reads: ANSWERS.md 167-168; KERNEL-SPEC.md R3/R4/R4b, IPC outcomes, ABI and error/output
   validity; CAPABILITIES.md (the native runtime's IPC ownership contract); CONTAINMENT.md
   (shared server transaction cleanup); ASTRA.md C1/C2/C3/A1/D4.
@@ -164,6 +200,8 @@ Open decisions are in [QUESTIONS](QUESTIONS.md), including 163 (typed parking), 
   **Completion gates:** WP-M1 integration (complete), WP-K5 real timer support, and repair of ASTRA C4's
   verification gap. ABI/runtime work need not wait for those gates, but this package cannot be
   accepted or marked done without them. Filed after owner approval; not dispatched by that approval.
+  C1 native replay, actual serving-path evidence and the unresolved concurrency gate also remain
+  required; see Order's acceptance-gate table for the retained completion dependencies.
 
 **WP-C1. Model conformance.** Size M.
 - Reads: KERNEL-SPEC.md, errors and the order of checks (the model conforms to them).
@@ -172,7 +210,12 @@ Open decisions are in [QUESTIONS](QUESTIONS.md), including 163 (typed parking), 
   hostile arguments; I14).
 - Accepted when: 10^5 model traces replay with identical results; the fuzzer runs
   for its budget with no kernel panic.
-- Needs: WP-M1, WP-K1 to WP-K5, WP-T1, WP-IPC1 (traces include answers 167-168).
+- Needs to run native acceptance: integrated WP-M1, WP-K1 to WP-K5, WP-T1 and the integrated
+  WP-IPC1 outcome ABI/implementation (answers 167-168), plus R2/R3's production bundle handoff
+  for trace files (testbench.md, Files in the bundle). It does not wait for IPC1's final acceptance:
+  C1 supplies replay evidence to that acceptance. No temporary boot-data ABI is implied.
+- Contract gate: question 171 and relevant open model/kernel questions must have an explicit
+  disposition before affected traces count toward conformance. Unsupported scenarios are not passes.
 
 **WP-R1d. Let a typed call park (open question 163).** Size S.
 - Reads: NAMESPACES.md (Holding a call), `libs/rt/src/server/typed.rs` and `ninep.rs`.
@@ -183,12 +226,16 @@ Open decisions are in [QUESTIONS](QUESTIONS.md), including 163 (typed parking), 
 **WP-R2. Loader stub.** Size S.
 - Reads: PACKAGES.md (launching), INIT.md (startup block).
 - Delivers: the flat-binary stub at its fixed address: find the ELF image through the startup
-  block's image fields (defined here and added to INIT.md's `startup` message, answer 65), parse it
+  block's image fields (defined with R2 in INIT's owning `startup` table, answer 65), parse it
   from memory, map segments (code executable and read-only), free the image, jump, passing on the
   startup page's address it was started with (`arg`).
 - Accepted when: fuzzed ELF images never escape the child (the child faults or exits; nothing else
   is affected); attack case: a hostile ELF from a user parent hurts only the child.
 - Needs: WP-R1b, WP-K4.
+- Uses K4's integrated lifecycle, not its still-open R2/R3 bundle-readback acceptance (answer 169).
+  Define the image fields in INIT's owning startup table with the architect, regenerate the wire
+  codec, and migrate its writers/readers together. Preserve PACKAGES' current copied-image path;
+  question 134 is not permission to introduce shared image pages.
 
 **WP-R3. init and the boot manifest.** Size M.
 - Reads: INIT.md (all), WIRE.md (JSON), TENETS.md (Purpose and threat model), CONTAINMENT.md (the channel table).
@@ -212,12 +259,20 @@ Open decisions are in [QUESTIONS](QUESTIONS.md), including 163 (typed parking), 
   manifest whose `public` list names the manifest, or an entry the bundle lacks, is refused;
   arguments reach their server byte for byte, and a count or length that would overflow the startup
   page is refused; no server's startup block holds a budget handle; a crashing server restarts on
-  the same endpoint; blame case: 3 crashes blamed on one (account,
-  label set) produce the steward signal naming that (account, label set) and no other (a vault
-  session's crashes name its label set, not its owner's empty one; what the steward then destroys
-  is WP-S2's case); more than 5 restarts in 60 s reboots.
+  the same endpoint. Each attributed crash forwards its account and label set unchanged to the
+  steward; three matching crashes within 10 minutes exercise S2's revocation/login-refusal policy,
+  while unrelated and differently labelled sessions survive. A crash without a current call
+  invents no blame; more than 5 restarts in 60 s remains init's separate reboot rule.
 - Needs: WP-R2, WP-W1, WP-K3, WP-K5. The `holds` operation it calls belongs to `keyd`'s table
   (WP-S1), so the refusal is written here and exercised end to end once WP-S1 has landed.
+- Integration order: first deliver reviewed startup/manifest infrastructure and the production
+  bundle handoff with available servers. Later packages build on that integrated infrastructure;
+  R3 stays unaccepted until its full-server boot and real steward blame tests pass. S2 owns the
+  blame message table in INIT; coordinate that contract before either side implements the wire
+  handoff, and test both sides together when S2 is available. No substitute server proves that gate.
+- Contract gates: resolve the relevant device/startup questions 142–149 and confinement question
+  164 before implementing their affected behavior. In particular, 147 governs safe driver restart,
+  148 the private-bundle/public-bootfs handoff, and 149 device handle names.
 - **Confinement (answers 152-153; TENETS.md, Purpose and threat model; CONTAINMENT.md, Push and the channel
   table; GAME.md, Setting up a match).** The manifest gains the `confined` flag (INIT.md, The boot manifest): one
   top-level boolean for the whole boot. `init` compares **label sets** and refuses the boot when two
@@ -237,12 +292,21 @@ Open decisions are in [QUESTIONS](QUESTIONS.md), including 163 (typed parking), 
 - Accepted when: **Elixir prints on the box** (PLAN.md's milestone 1, step 2); beamlet's differential
   suite subset runs on the box with identical output.
 - Needs: WP-R1b, WP-R4.
+- These permit platform work to start after its interface questions are scoped. On-target acceptance
+  additionally uses R2/R3 startup, the public module handoff and K5 time/wait behavior; host VM
+  tests alone do not establish that Elixir prints on Redoubt. Inventory the existing Platform
+  methods against this slice before adding natives; unresolved answers are not implementation defaults.
 
 **WP-B2. IEx on the UART console.** Size S.
 - Delivers: an IEx session on the UART; the first Redoubt IEx helpers (`ls`, `cd`, `cat` over 9P).
 - Accepted when: a bench case types expressions at IEx and checks the answers (PLAN.md's
   milestone 1, step 3).
 - Needs: WP-B1, WP-R3.
+- R3 here means integrated startup infrastructure. INIT's shell helpers `ps`/`budget` (own account
+  and label set only) and approval notification must also have owners: B2 supplies the shell surface,
+  S2 supplies policy/notification integration, and S3 tests that surface in a real SSH session.
+  Define any unsettled interfaces with the architect before implementation; do not import the
+  entire milestone-3 API into this slice. UART IEx remains bench-only (INIT, The shell).
 
 **WP-B2a. The console library (answer 162).** Size S.
 - Reads: NAMESPACES.md (The console), USERLAND-API.md (The console and the `Platform` contract).
@@ -282,6 +346,10 @@ readable entries); typed `rename`, `copy_file`, `get_attr` and `set_attr` for wi
   see, read or time-change anything in a labelled volume's instance (the no-leaky-state observer,
   extended to a second instance).
 - Needs: WP-D1, WP-L1, WP-R1b.
+- Dependencies are merged, but question 131's held-fid behavior and relevant filesystem interface
+  questions (including 129/130/137 where consumed) require contract reconciliation. R3 supplies the
+  production startup needed for boot acceptance; admission-chain question 141 affects shared-server
+  assurance. Do not infer approval from an existing prototype or from target prose alone.
 
 **WP-D3. netd and ipd.** Size L. virtio-net driver; `ipd:lan` on `smoltcp` serving `/net` over
 9P with IP-prefix-and-port capabilities that never include the box's own addresses; refuses
@@ -339,6 +407,13 @@ labelled callers.
   item and no path, queue or batch remains; a confined domain cannot cause a push or observe its
   timing.
 - Needs: WP-R3, WP-B1, WP-D2.
+- Uses R3's integrated startup infrastructure; jointly closes R3's real steward blame gate.
+  Resolve affected questions 164/165 and apply 166's accepted responsiveness contract before
+  accepting mediation, authority-closure or latency claims. S1's audit signing is exercised here.
+- Coordinate the S2/S3 authentication, session and approval protocol inventory with the architect
+  before either endpoint implements it. WIRE requires a table in its owning specification,
+  approval provenance as applicable, generated Rust/Elixir codecs and drift checks; settle any new
+  authority, lifetime or error choices explicitly. S2 and S3 own end-to-end use of those contracts.
 
 **WP-S3. sshd.** Size M. `sunset`-based; host key through `keyd`; user authentication through the
 steward; rejects keys `keyd` holds; each channel labelled with its session's labels, a labelled
@@ -348,7 +423,28 @@ this `sshd` in milestone 1, a stated residual).
   SSH client, with the box's host key pinned (`net.host_key`); loopback login with a `keyd` key
   refused. The bench's loopback self-checks log in as one host user, so per-user separation is
   first tested here.
-- Needs: WP-D3, WP-S1, WP-S2.
+- Needs: WP-D3, WP-S1, WP-S2 and WP-B2 (IEx is the session shell).
+- End-to-end integration: boot the real stack through init; `sshd` owns each channel's `/dev/cons`,
+  the steward authenticates and launches its IEx VM, and `keyd` signs the exchange. Exercise
+  concurrent Alice/Bob sessions, a labelled pty session and `approve@`, with a pinned host key.
+  Check home/namespace separation, labelled-channel refusal of forwarding/subsystems/exec,
+  approval-channel isolation, and logout/VM-death cleanup while the other session remains usable.
+  These instantiate INIT's existing session contract; E1 still owns the complete attack suite.
+- Full console acceptance additionally needs B2a's `consol` codec and R1d's typed parking
+  (question 163). Implement `size` from that channel's pty request and `resize` from its window
+  changes, with the per-channel receiving threads required by NAMESPACES, The console. Test two
+  channels with different dimensions: `size` returns each channel's dimensions; a window change
+  completes that channel's parked `resize` with the new size, a fresh `size` query agrees, and
+  the other channel's waiter remains parked and learns no geometry. Parked byte reads and typed
+  resize calls release their admission resources on abandonment/logout while the other channel
+  remains usable.
+  Verify nonblocking VM input, no-input distinct from EOF and no stale size cache (USERLAND-API,
+  The console). Basic byte-stream SSH bring-up is not full S3 acceptance.
+- S3 owns the necessary bench controls and negative self-checks for these cases. The existing
+  session runner supplies pty requests, text steps and concurrent sessions, but no explicit
+  window-change step; extend the harness as needed for real resize and forbidden-request tests.
+  Reuse the pinned-host-key and concurrent-session machinery; host loopback is harness evidence,
+  not Redoubt user-separation evidence.
 
 **WP-E1. Alice's agent and the attack suite.** Size M.
 - Delivers: the scripted hostile agent and the scripted hostile user (Bob), and every case in
@@ -356,21 +452,6 @@ this `sshd` in milestone 1, a stated residual).
   through the system (How to read a work package).
 - Accepted when: the whole suite passes, and **milestone 1 is declared done** in STATUS.md.
 - Needs: everything above.
-
-## Order
-
-Use [SWARM Claims](SWARM.md#claims) and each package's Needs above. The native process
-lifecycle port is integrated; its bundle-readback acceptance remains
-dependent on R2/R3 (answer 169). The recovered executable model is a host oracle;
-real-kernel replay remains C1 work, and late-invalid receive scenarios await decision 171.
-D1/R4 source must not be ported again. K5 is dependency-ready but shares the kernel with K4.
-Preserve IPC1's accepted outcomes
-through both changes. R2/R3 enable native startup; B1/B2 bring up the VM; D2/D3 and S2/S3
-complete storage, network, policy and SSH before E1 acceptance.
-
-IPC1's concurrency gate remains unresolved against [PLAN's post-M1 SMP scope](PLAN.md#smp-after-milestone-1).
-Record the scope decision before accepting or waiving it; single-hart tests are not simultaneous
-multi-hart evidence. Model properties and mutation tests remain required for M0/M1.
 
 ## Hotspots
 
