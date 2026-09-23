@@ -30,30 +30,33 @@ orchestrator transcript or launcher default prompt.
 
 Resolve actual model IDs/thinking choices from `about.caller.config_options` or
 `workspace_get.sessions[member_id].config_options` for the intended provider.
-Register `god` as Astra 6/high, `pleb` as Sol 5.6/high. Reviewers normally use pleb
-with medium thinking; use god for demanding defensive/consistency work. If unavailable,
-ask the owner for a supported alternative; do not guess IDs or silently substitute.
-Preserve existing user-selected profiles.
+Register `god` as the owner's most capable available model with high thinking and
+`pleb` as a strong everyday model with high thinking, on whichever provider the owner
+selects. Reviewers normally use pleb with medium thinking; use god for demanding
+defensive/consistency work. If the owner has not named models, ask; do not guess IDs
+or silently substitute. Preserve existing user-selected profiles.
 
-Call `workspace_configure` with a single setup/patch. This is a template: replace
-model placeholders and derive the keyed plan from the current project first.
+The project root is the orchestrator's current working directory (`.` below); resolve
+it to an absolute path before submitting. Call `workspace_configure` with a single
+setup/patch. This is a template: replace placeholders and derive the keyed plan from
+the current project first.
 
 ```json
 {
   "request_id":"redoubt-setup-1",
-  "workspace":{"name":"Redoubt","project_root":"/data/redoubt"},
+  "workspace":{"name":"Redoubt","project_root":"."},
   "max_active":4,
   "max_members":16,
   "profiles":{
-    "god":{"provider":"codex","model":"<verified Astra 6 ID>","thinking":"high"},
-    "pleb":{"provider":"codex","model":"<verified Sol 5.6 ID>","thinking":"high"}
+    "god":{"provider":"<provider>","model":"<verified most capable model ID>","thinking":"high"},
+    "pleb":{"provider":"<provider>","model":"<verified everyday model ID>","thinking":"high"}
   },
   "default_profile":"pleb",
-  "document":{"path":"/data/redoubt/docs/BUILD-PLAN.md","title":"Redoubt build plan"},
-  "qa_document":{"path":"/data/redoubt/docs/WORKSPACE-QA.md","title":"Redoubt QA"},
+  "document":{"path":"./docs/BUILD-PLAN.md","title":"Redoubt build plan"},
+  "qa_document":{"path":"./docs/WORKSPACE-QA.md","title":"Redoubt QA"},
   "members":{
     "architect":{
-      "name":"Architect","profile":"god","cwd":"/data/redoubt",
+      "name":"Architect","profile":"god","cwd":".",
       "lifetime":"resident","role":"architect","can_spawn":false,
       "instructions":"You are Redoubt's resident Architect. Read PROJECT.md, docs/TENETS.md, docs/README.md, .pi/agents/architect.md and .pi/skills/architect-qa/SKILL.md. Own formal QUESTIONS/ANSWERS and specification updates, not implementation. Answer tracked QA through message_send with thread_id and reply_to. Cite settled rules; request genuine owner decisions with recommendation, alternatives and thread_id. Only actual human responses authorize changes. Apply the formal QA protocol, attach decision references and return the question to its implementer. Acknowledge inbox messages and complete explicit assignments. Set status/emoji and waiting using member_update, then END YOUR TURN. Stay resident; never poll or create another swarm."
     }
@@ -107,19 +110,14 @@ That is `assignment_update`. Completing an assignment keeps a resident available
 an ephemeral agent retires after its assignment and turn end. Reserve ephemeral
 agents for bounded auxiliary tasks, not package implementers or reviewers.
 
-Reviewer roles alone impose no tool restrictions. Inspect about.permissions and use
-capability:"reviewer" only with an explicitly supported provider/profile. Currently the
-verified Claude adapter supports read/search plus scoped coordination; the Codex adapter
-does not. Do not silently change the specified reviewer model/provider: ask the owner
-for an approved alternative if enforced review is required. About reports permission limits. Do not equate an adapter's 'read-only' mode with filesystem safety,
-or grant broad auto-approval to bypass coordination prompts. Human approval requests
+Do not grant broad auto-approval to bypass coordination prompts. Human approval requests
 are actionable in the member's main-panel tab. A blocked approval is not a messaging
 failure; report it rather than repeatedly launching the same blocked preset.
 
 ## First-class QA and design decisions
 
 Wash owns the durable QA records and the live **Questions** Markdown tab. Configure
-`qa_document` during workspace setup: `/data/redoubt/docs/WORKSPACE-QA.md`, title
+`qa_document` during workspace setup: `docs/WORKSPACE-QA.md` under the project root, title
 `Redoubt QA`. Wash creates the file and atomically refreshes its complete history after
 every QA update, including actual human answers. The tab shows its path and write errors.
 Check `qa_document_status`; on error the backend records are safe and file writes retry.
@@ -194,7 +192,7 @@ and required reviews. Follow current `docs/testbench.md` commands; report exit c
 Rebase/retest and integrate one package at a time. Update claims, BUILD-PLAN, STATUS and
 plan items according to ownership. Do not mark done merely because code merged.
 
-Keep worktrees/builds/caches/logs on `/data`; check space before large builds. Never stage
+Keep worktrees/builds/caches/logs on the project root's filesystem; check space before large builds. Never stage
 another session's work, use blanket git staging/commits in shared worktrees, restart Wash
 or replace live assets. On acceptance or explicit abandonment, end the package's residents
 with `member_control({"action":"end","package":"K5"})`; retain Architect for the workspace.

@@ -31,7 +31,7 @@ End all four package residents with `member_control` only after acceptance/aband
 Ephemeral agents are for bounded auxiliary tasks. `.pi/agents/` retains role responsibilities;
 PROJECT overrides legacy fresh/ephemeral lifecycle assumptions. Workflow scripts are references,
 not an automatic Wash runner. Acknowledge inbox messages and end the turn after setting
-`member_update.waiting`; never poll. Preserve running Wash and keep build artifacts on `/data`.
+`member_update.waiting`; never poll. Preserve running Wash and keep build artifacts on the project root's filesystem.
 
 ## Questions and acceptance evidence
 
@@ -63,11 +63,8 @@ the final save and returns its status. Preserve and reuse the generated filename
 
 Browser refresh preserves backend workspace/QA and running residents. Backend restart pauses
 recovered members for deliberate reconciliation/resume. Tab selection and unsent drafts need not
-survive refresh. A reviewer role alone imposes no restrictions. Inspect about.permissions and
-use capability:"reviewer" with a supported provider for enforced read/search plus coordination.
-Currently verified Claude supports it; Codex does not. Do not silently switch approved reviewer
-models/providers. Pending approvals appear in Needs you and open the member tab; do not bypass
-them with broad auto-approval. The capability is a provider tool restriction, not an OS sandbox.
+survive refresh. Do not silently switch approved reviewer models/providers. Pending approvals
+appear in Needs you and open the member tab; do not bypass them with broad auto-approval.
 
 ## Claims
 
