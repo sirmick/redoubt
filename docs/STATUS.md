@@ -12,15 +12,18 @@ outcomes, [SWARM](SWARM.md#claims) owns package state, and [BUILD-PLAN](BUILD-PL
 | Record validation | Budget and IPC records must be backed, permitted, owned RAM. MMIO and borrowed aliases are rejected before record access. | Preserve this guard when adding syscalls. |
 | Scheduling and processes | Native process/thread creation, startup and exit; creator-paid notices, blame, loan cleanup and PID reuse; cooperative scheduling, timer IRQ tests and a two-hart lock spike. | Kernel-owned timeouts/deadlines and preemption. No full SMP scheduler. |
 | Native libraries and servers | sys/rt/wire/signing, pure-Rust littlefs, keyd, bootfsd, consoled and in-tree virtio-blk/blkd have host tests. | Init/startup integration, fsd, network/steward/SSH stack and Redoubt beamlet platform. Console typed size/resize are target behavior; typed parking awaits 163. |
-| Verification | Boot attack cases, checked builds, registered server host tests and both-width builds, wire-generator drift checks and a fail-closed unsafe ratchet. | Model replay, hosted-kernel compilation repair and bench registration, and kernel fuzzing. |
+| Verification | Boot attack cases, checked builds, registered server host tests and both-width builds, wire-generator drift checks, a host executable model and a fail-closed unsafe ratchet. | Real-kernel model replay, hosted-kernel compilation repair and bench registration, and kernel fuzzing. |
 
 ## Acceptance gaps
 
-- **IPC1 is not accepted.** The model is absent from the active workspace; its remote source needs
-  current scheduling and IPC semantics. K5 real-timer cases remain pending. Native exit and
+- **IPC1 is not accepted.** The host executable model has been recovered with flat weighted
+  scheduling, independent IPC outcomes and call-output rollback. Host trace checks are not
+  real-kernel replay; that remains WP-C1 work. K5 real-timer cases remain pending. Native exit and
   loan cleanup have real-kernel coverage; the shared server's terminal fallback serving path
   remains host-tested pending server boot integration. Concurrent completion coverage remains open; reconcile its
   milestone scope with [PLAN's SMP section](PLAN.md#smp-after-milestone-1).
+- Question **171** leaves late-invalid receive output unresolved. The model rejects dependent
+  scenarios explicitly; initial receive validation and call/reply completion are covered.
 - Questions **164–166** leave mediation, authority closure and the wakeup bound unresolved.
   They qualify the security/latency claims, not just their implementation schedule.
 - `consoled` unknown-request handle cleanup and the broader raw-syscall/owning-runtime

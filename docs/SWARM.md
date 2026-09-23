@@ -35,14 +35,14 @@ External candidates remain unaccepted until ported and tested against the curren
 | Package | State | Branch | Notes |
 | --- | --- | --- | --- |
 | SV1 | merged | recovery-server-checks | Five D1/R4 bench registrations and server unsafe coverage restored; three reviews complete; source behavior unchanged |
-| M0 | review | wp-m0 | Remote candidate `674831cf9`; absent from active workspace; current-spec reconciliation required |
-| M1 | review | wp-m1 | Carried by wp-m0; remove obsolete priority tiers and add current IPC outcomes/traces |
+| M0 | merged | recovery-model | Current-contract host model recovered; three reviews, full bench and 5,001,000-sequence run complete; see model/VALIDATION.md |
+| M1 | merged | recovery-model | Joint host-model recovery with M0: flat scheduling, IPC outcomes and record traces; native replay remains C1; question 171 remains open |
 | W1 | merged | wp-w1 | d52896bee |
 | W2 | merged | wp-w2 | 3715363a9 |
 | W3a | merged | wp-w3 | 612a0a599; review R-1 complete |
 | A1 | merged | wp-a1 | 44f1780a1 |
 | A2 | merged | wp-a2 | c98034520 |
-| A3 | folded | | into wp-k2 (answer 103; the `first` flag) |
+| A3 | folded | | into wp-k2 (answer 103; one flat weighted stride queue) |
 | L1 | merged | wp-l1 | 25ab39296 |
 | T1 | merged | wp-t1 | 987bacbed |
 | T1b | merged | wp-t1b | 6cd067a39 |
@@ -56,7 +56,7 @@ External candidates remain unaccepted until ported and tested against the curren
 | K4 | merged | recovery-k4 | Native lifecycle integrated; three reviews and full bench complete; bundle-file readback remains acceptance gate for R2/R3 (answer 169) |
 | K5 | ready | | needs K2; serialized behind K4 on the kernel Hotspots, not on dependencies |
 | K6 | waiting | | needs K1-K5, R1b |
-| IPC1 | review | wp-ipc1 | Implementation in fe807fc4b; model, K5 timer and concurrency acceptance remain open; native exit covered by K4 |
+| IPC1 | review | wp-ipc1 | Implementation in fe807fc4b; host model recovered, native replay, K5 timer and concurrency acceptance remain open; native exit covered by K4 |
 | R1 | merged | wp-r1 | 8298608af (carried the answers 39-42, 50-53 part of R1b) |
 | R1b | merged | wp-r1b | 86117e7af |
 | R1c | merged | wp-r1c | cd65fa610; joined `Parked` to the 9P skeleton (recovery of `5d29d136e`, answers 156-158); reviewed R-R1c |
@@ -85,18 +85,19 @@ accept any package. Exact evidence is in the
 
 | Source | Required action |
 | --- | --- |
-| `origin/wp-d1` e4d22b980; `origin/wp-r4` 33a46e010 | Source is already recovered into servers/blkd, bootfsd and consoled. Preserve later fixes. SV1 restores the five bench definitions and server unsafe-budget coverage; host/build checks do not establish boot integration. |
+| `origin/wp-d1` e4d22b980; `origin/wp-r4` 33a46e010 | Source is already recovered into servers/blkd, bootfsd and consoled. Preserve later fixes. SV1 restored the five bench definitions and server unsafe-budget coverage; host/build checks do not establish boot integration. |
 | `origin/wp-k4` 6ddf06786 | Lifecycle selectively recovered with current loan protection, outcome ABI and rollback, hostile inputs and PID reuse. Bundle-readback acceptance remains for R2/R3 (answer 169). |
-| `origin/wp-m0` 674831cf9 | Move candidate to model/, register it, remove old priority tiers and reconcile outcomes, record validity, ghost checks, mutations and traces. Existing process-lifecycle modeling also needs conformance tests. |
+| `origin/wp-m0` 674831cf9 | Recovered into model/ and registered; scheduling, IPC outcomes, record validity, accounting, policy abstractions and traces reconciled. Three reviews and host validation complete; see model/VALIDATION.md. Native replay remains C1; question 171 remains open. |
 | D3 | External claim remains unverified. |
 
 ## Review debt
 
 Completed R-1/R-2/R-3/R-R1c/R-R4b/R-T1 rounds have no remaining debt. IPC1's implementation
 reviews do not close its acceptance gaps. New TCB changes, including the budget-record guard,
-need their own review before package acceptance; this edit does not claim a three-review round.
-K4 retains its clean bundle-readback acceptance gate for R2/R3 (answer 169); model recovery
-still needs its implementation, validation and review.
+need their own review before package acceptance.
+K4 retains its clean bundle-readback acceptance gate for R2/R3 (answer 169). Model implementation
+reviews and host validation are complete; [validation evidence](../model/VALIDATION.md) records
+counts, resolved findings and remaining contract/conformance boundaries.
 
 ## Cross-cutting review records
 
