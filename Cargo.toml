@@ -5,6 +5,7 @@ default-members = [
   "tools/testbench",
 ]
 members = [
+  "model",
   "kernel",
   "loader",
   "libs/abi",
@@ -69,3 +70,12 @@ overflow-checks = true
 [patch.crates-io]
 [patch.crates-io.getrandom]
 path = "vendor/getrandom"
+
+# Arithmetic overflow remains an invariant failure in the executable model.
+[profile.release.package.redoubt-model]
+overflow-checks = true
+
+# The bench runs host suites in dev; optimize the model without disabling checks.
+[profile.dev.package.redoubt-model]
+opt-level = 3
+overflow-checks = true

@@ -1,6 +1,6 @@
 # Open decisions
 
-Open IDs: **128–149, 163–166**. Next unused ID: **171**. Recommendations below are not approvals.
+Open IDs: **128–149, 163–166, 171**. Next unused ID: **172**. Recommendations below are not approvals.
 The owning specification carries each accepted rule and its rationale; [ANSWERS.md](ANSWERS.md)
 indexes approval provenance. [Earlier questions](archive/2026-09-22/QUESTIONS.md) are historical.
 Do not renumber or reopen settled questions. Record a new decision once, then update its owner.
@@ -325,3 +325,37 @@ acceptance text together; preserve share/fairness and human-control requirements
 proof under explicit load assumptions. That changes answer 103's mechanism and must be
 reviewed for starvation and sleeping-to-gain-priority before WP-K5 implements it.
 **Open:** owner decision; neither strict priority nor a weaker guarantee is accepted here.
+
+### 171. A receive output record becomes invalid while its thread waits.
+
+KERNEL-SPEC.md, ABI Records and Errors, requires initial output-record validation. Its IPC
+completion rule and late-output `InvalidArgument` explicitly describe `call`/`reply`; the
+`receive` error row lists only `Timeout` and `Dead` after decoding. Neither answers 167–168
+nor their archived proposals settle whether a failed receive-output commit consumes its
+message, notice or interrupt and associated resources.
+
+The current kernel revalidates before message delivery (`kernel/src/message.rs`, `deliver`),
+leaving a message queued on failure, and before taking an exit notice. However, `answer_record`
+documents a later write failure after consumption as the receiver's loss. Current code is
+evidence of behavior, not approval for the model's independent oracle.
+
+*Rec:* every successful `receive` output commits transactionally. Revalidate the output record
+and protect validation, copying and delivery commit together against relevant mapping changes
+and teardown. If it cannot commit, return `InvalidArgument` to the receiver with no valid
+record and no delivery effects: leave a queued sender and its message unchanged; do not
+consume an exit notice or release its object/PID, mark an abandoned-call notice delivered, or
+consume a pending interrupt. Install no message handles or buffer mappings and retain no
+provisional delivery charges. This does not undo receive setup already performed, such as
+clearing the current call or unmasking an IRQ, and does not require a valid output record to
+return an error such as `Timeout`. Record bytes on failure are unspecified and must not be
+decoded. No new return-register encoding is needed.
+
+*Alt:* defer this extension and explicitly exclude late-invalid receive outputs from the
+model's conformance claims and acceptance counts pending a decision; continue initial record
+validation and the settled call/reply outcome tests. A different mechanism, such as pinning
+the initial output frames throughout the wait, would need its own mapping and teardown rules
+and is not implicitly approved here.
+**Open:** owner decision. If approved, apply the receive error/output contract to KERNEL-SPEC.md
+and the model, then record native receive completion/rollback tests and implementation review
+as remaining work. This host-model package does not change the kernel or establish native
+receive conformance.

@@ -1,0 +1,43 @@
+# R3, lends and abandoned calls: a client in alice's budget lends two pages to a system server;
+# init destroys alice's budget while the server holds them. While the call is open the lent pages
+# are charged to both sides (the server's usage counts them, with the open call and the two
+# page-table pages mapping them); once the caller is gone, to the server only. The server still
+# reads its buffer, is told the call was abandoned, replies (the reply is discarded) and the pages
+# are freed. The client's exit notice (killed) is waiting on the endpoint.
+# Written by tests/traces.rs (REDOUBT_MODEL_BLESS=1 rewrites it); format: README.md.
+redoubt-model-trace 2
+boot root=[1024,24,1000] system=[256,8,250] users=[512,12,500]
+costs budget=1 process=1 contexts=2 thread=1 endpoint=1 handles_per_page=128 page_table=1 open_call=1
+device mmio base=0x10000000 pages=1 dma=0
+device mmio base=0x10001000 pages=1 dma=1
+device irq n=10
+device irq n=11
+device reset
+start p:1 t:1
+do p:1 t:1 endpoint_create -> ok h:9
+do p:1 t:1 budget_create h:3 32 1 50 [] 1001 forever -> ok h:10
+do p:1 t:1 budget_create h:2 32 1 50 [] 0 forever -> ok h:11
+do p:1 t:1 process_create h:11 h:9 -> ok h:12
+note process p:1 h:12 p:38622
+do p:1 t:1 process_start h:12 0x1000 0x2000 0x0 [h:9] -> ok
+note thread p:38622 t:2
+do p:1 t:1 mint h:9 5 h:10 -> ok h:13
+do p:1 t:1 process_create h:10 h:9 -> ok h:14
+note process p:1 h:14 p:61415
+do p:1 t:1 process_start h:14 0x1000 0x2000 0x0 [h:13] -> ok
+note thread p:61415 t:3
+do p:38622 t:2 receive h:1 forever 0 -> blocked
+do p:61415 t:3 map_anon 0x2000 3 -> ok a:0x1000000000
+write p:61415 t:3 a:0x1000000000+0x0 42 -> ok
+do p:61415 t:3 call h:1 [1,2,3,4] [] a:0x1000000000+0x0@2 forever -> blocked
+wake p:38622 t:2 -> ok message call m:1 badge=5 account=1001 labels=[] words=[1,2,3,4] handles=[] buffer=[lend,a:0x1000000000,2]
+read p:38622 t:2 a:0x1000000000+0x0 -> ok word 42
+write p:38622 t:2 a:0x1000000000+0x0 99 -> ok
+do p:1 t:1 budget_usage h:11 -> ok usage [32,10,1,1,50,0]
+do p:1 t:1 budget_destroy h:10 -> ok
+read p:38622 t:2 a:0x1000000000+0x0 -> ok word 99
+do p:1 t:1 budget_usage h:11 -> ok usage [32,10,1,1,50,0]
+do p:38622 t:2 receive h:1 0 0 -> ok abandoned m:1
+do p:38622 t:2 reply m:1 [0,0,0,0] [] -> ok reply delivery=discarded mask=0
+do p:1 t:1 budget_usage h:11 -> ok usage [32,5,1,1,50,0]
+do p:38622 t:2 receive h:1 0 0 -> ok exit p:61415 cause=killed code=0 blamed=0 blamed_labels=[]

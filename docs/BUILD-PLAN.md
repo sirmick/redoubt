@@ -13,7 +13,7 @@ Milestone 1 requires rv64 boots and rv32 compilation; existing rv32 boots add co
 The slice uses `no_std` + `alloc` Rust and Elixir; a Rust `std` target is later work.
 Design changes need approval recorded once in [ANSWERS](ANSWERS.md) and applied to their owner.
 Open decisions are in [QUESTIONS](QUESTIONS.md), including 163 (typed parking), 164–166
-(security/latency claims), and device/lifecycle issues 128–149. No package resolves them by assumption.
+(security/latency claims), 171 (late-invalid receive output), and device/lifecycle issues 128–149. No package resolves them by assumption.
 
 ## Work packages
 
@@ -158,10 +158,10 @@ Open decisions are in [QUESTIONS](QUESTIONS.md), including 163 (typed parking), 
     coverage of IPC1's touched on-target ABI/kernel/runtime/server sources, explicitly listing any
     newly introduced production seam. Do not weaken existing budgets. Host-only model and test
     code uses its normal checks; this gate does not introduce a repository-wide unsafe policy.
-- Needs to start: WP-A2, WP-K2, WP-R1c, WP-S1 (all merged). Kernel edits serialize behind
-  the active WP-K4 and never overlap K5/K6; `libs/rt` edits serialize with WP-R1d and server ports.
-  Model work coordinates with WP-M1's owner: its in-review state is not a merged dependency.
-  **Completion gates:** WP-M1 integration, WP-K5 real timer support, and repair of ASTRA C4's
+- Needs to start: WP-A2, WP-K2, WP-R1c, WP-S1 (all merged). Kernel edits use one writer and
+  serialize with K5/K6; `libs/rt` edits serialize with WP-R1d and server ports.
+  The WP-M1 host model is integrated; real-kernel trace replay remains WP-C1 work.
+  **Completion gates:** WP-M1 integration (complete), WP-K5 real timer support, and repair of ASTRA C4's
   verification gap. ABI/runtime work need not wait for those gates, but this package cannot be
   accepted or marked done without them. Filed after owner approval; not dispatched by that approval.
 
@@ -361,7 +361,8 @@ this `sshd` in milestone 1, a stated residual).
 
 Use [SWARM Claims](SWARM.md#claims) and each package's Needs above. The native process
 lifecycle port is integrated; its bundle-readback acceptance remains
-dependent on R2/R3 (answer 169). Model reconciliation is the next recovery prerequisite;
+dependent on R2/R3 (answer 169). The recovered executable model is a host oracle;
+real-kernel replay remains C1 work, and late-invalid receive scenarios await decision 171.
 D1/R4 source must not be ported again. K5 is dependency-ready but shares the kernel with K4.
 Preserve IPC1's accepted outcomes
 through both changes. R2/R3 enable native startup; B1/B2 bring up the VM; D2/D3 and S2/S3
