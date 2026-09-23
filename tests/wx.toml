@@ -1,30 +1,12 @@
-description = "W^X through the syscall interface: no writable+executable mapping, errors instead of kernel panics (verdict: survival only, until WP-K4)"
-# Pending (WP-K4): that each attempt was refused is only the attacker's report. With process
-# creation and exit notices the checker can launch the attacker and learn from the kernel how it
-# ended, e.g. a fault when it jumps into a page it could only make writable.
+description = "W^X: trusted checker observes native child exit notices for attempted data execution and code writes"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# PID 3 wx-test attacks; PID 4 attack-checker gives the verdict (README "Writing an attack case").
-programs = ["log-server", "wx-test", "attack-checker"]
+debug_assertions = true
+programs = ["wx-test"]
 expect = [
-    # Progress, the attacker's report; a refusal it did not get shows as FAIL (forbidden).
-    '^\[pid 3\] \[wx\] ok: mapping write\+execute -> Err',
-    '^\[pid 3\] \[wx\] ok: mapping no permissions at all -> Err',
-    '^\[pid 3\] \[wx\] ok: mapping read\+execute -> Ok',
-    '^\[pid 3\] \[wx\] ok: adding execute to a writable page -> Err',
-    '^\[pid 3\] \[wx\] attempts done$',
-    # The verdict: the kernel survived. Unforgeable: log-server prefixes the checker's line with
-    # its kernel-reported PID 4, and the checker names the reporter as the kernel reports it;
-    # with poweroff the case also needs the checker's clean power-off.
-    '^\[pid 4\] \[checker\] PID 3 reported; the kernel still serves',
+    '^\[wx\] checker: kernel refuses W\+X and empty permissions$',
+    '^\[wx\] checker: attack 1 faulted with kernel cause 12$',
+    '^\[wx\] checker: attack 2 faulted with kernel cause 15$',
 ]
-forbid = ['\] FAIL']
+forbid = ['\[wx\] FAIL']
 poweroff = true
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]
-
-[[grant]]
-program = "attack-checker"
-mmio = ["0x100000:0x1000"]

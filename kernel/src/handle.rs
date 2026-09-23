@@ -22,8 +22,8 @@
 //! frames always hold the budgets named; every path that reads either checks the id, and a
 //! mismatch (a handle that escaped a sweep, naming a reused frame) stops the kernel (I1).
 
-use redoubt_sys::Error;
 use redoubt_abi::PID;
+use redoubt_sys::Error;
 
 use crate::budget::{Budget, BudgetFrame};
 use crate::kframe;
@@ -65,12 +65,20 @@ pub struct DeviceRef {
     pub id: u64,
 }
 
-/// What a handle names. WP-K4 adds processes.
+/// A process, named by frame and by id, like an endpoint (`process.rs`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ProcessRef {
+    pub frame: u32,
+    pub id: u64,
+}
+
+/// What a handle names (KERNEL-SPEC.md, Objects).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Object {
     Budget(BudgetRef),
     Endpoint(EndpointRef),
     Device(DeviceRef),
+    Process(ProcessRef),
 }
 
 /// KERNEL-SPEC.md, Handle = (object, badge, stamp).
@@ -85,6 +93,7 @@ pub struct Handle {
 const KIND_BUDGET: u64 = 1;
 const KIND_ENDPOINT: u64 = 2;
 const KIND_DEVICE: u64 = 3;
+const KIND_PROCESS: u64 = 4;
 
 impl Handle {
     /// A handle as the four words a table slot holds. `message.rs` keeps copies in the same
@@ -94,6 +103,7 @@ impl Handle {
             Object::Budget(b) => (KIND_BUDGET, b.frame, b.id),
             Object::Endpoint(e) => (KIND_ENDPOINT, e.frame, e.id),
             Object::Device(d) => (KIND_DEVICE, d.frame, d.id),
+            Object::Process(p) => (KIND_PROCESS, p.frame, p.id),
         };
         let mask = (1u64 << FRAME_BITS) - 1;
         let (of, sf) = (u64::from(frame), u64::from(self.stamp.frame));
@@ -110,6 +120,7 @@ impl Handle {
             KIND_BUDGET => Object::Budget(BudgetRef { frame: frame(0), id: words[1] }),
             KIND_ENDPOINT => Object::Endpoint(EndpointRef { frame: frame(0), id: words[1] }),
             KIND_DEVICE => Object::Device(DeviceRef { frame: frame(0), id: words[1] }),
+            KIND_PROCESS => Object::Process(ProcessRef { frame: frame(0), id: words[1] }),
             // Only the kernel writes table pages.
             _ => panic!("I1: corrupt handle table"),
         };
@@ -135,7 +146,8 @@ pub struct HandleTable {
 }
 
 impl HandleTable {
-    pub const EMPTY: HandleTable = HandleTable { pages: [None; MAX_HANDLE_PAGES], live: [0; MAX_HANDLE_PAGES] };
+    pub const EMPTY: HandleTable =
+        HandleTable { pages: [None; MAX_HANDLE_PAGES], live: [0; MAX_HANDLE_PAGES] };
 }
 
 /// (page, slot) of index `i`, or `None` if `i` cannot be an index (0, or past the last page).
@@ -177,6 +189,9 @@ impl MemoryManager {
             }
             Object::Device(d) => {
                 self.device_at(d);
+            }
+            Object::Process(p) => {
+                self.process_at(p);
             }
         }
         self.budget_at(handle.stamp);

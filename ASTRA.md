@@ -9,7 +9,7 @@ findings, reproductions and the owner's branch restrictions. Those checkpoints a
 | Finding | Next action |
 | --- | --- |
 | D1–D3: confinement mediation, authority closure, wakeup bound | Owner decisions [164–166](docs/QUESTIONS.md); retain the qualifications beside the affected guarantees. |
-| IPC1 acceptance | Reconcile the executable model and traces, add K5 timer cases and native process-exit cleanup tests. Reconcile concurrency acceptance with PLAN's post-M1 SMP scope without silently waiving the existing gate. |
+| IPC1 acceptance | Reconcile the executable model and traces, add K5 timer cases; native process-exit cleanup now has K4 coverage. Reconcile concurrency acceptance with PLAN's post-M1 SMP scope without silently waiving the existing gate. |
 | A3: consoled unknown-request handles | Close attached handles on rejection and test the actual serving path. |
 | Raw syscalls combined with owning runtime views | Audit this inherited API soundness boundary separately; the IPC regression does not certify arbitrary combinations. |
 | Legacy interfaces and speculative APIs (S1/S2/S5) | Finish K6 migration; assess unused flatipc crates and grow the client API from integrated callers. |
@@ -23,7 +23,8 @@ regression reproduced a kernel panic on rv32 before the fix. Verification is rec
 ## Recovery constraints
 
 Do not merge the supplied remote branches wholesale. D1/R4 source is already recovered;
-K4 and the old model need selective ports onto the current contracts. Preserve the protected
+K4 lifecycle has been selectively recovered; its bundle-readback gate remains for R2/R3.
+The old model still needs reconciliation with the current contracts. Preserve the protected
 loan mappings, outcome ABI and rollback checks. D3's external implementation remains unverified.
 See [the recovery inventory](docs/archive/2026-09-22/ASTRA.md#11-remote-branch-recovery-review--2026-09-22)
 for exact tips, path mappings, missing tests and model discrepancies.

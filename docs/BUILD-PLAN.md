@@ -13,7 +13,7 @@ Milestone 1 requires rv64 boots and rv32 compilation; existing rv32 boots add co
 The slice uses `no_std` + `alloc` Rust and Elixir; a Rust `std` target is later work.
 Design changes need approval recorded once in [ANSWERS](ANSWERS.md) and applied to their owner.
 Open decisions are in [QUESTIONS](QUESTIONS.md), including 163 (typed parking), 164–166
-(security/latency claims), and device/lifecycle issues 127–149. No package resolves them by assumption.
+(security/latency claims), and device/lifecycle issues 128–149. No package resolves them by assumption.
 
 ## Work packages
 
@@ -88,9 +88,11 @@ Open decisions are in [QUESTIONS](QUESTIONS.md), including 163 (typed parking), 
   `MAX_START_HANDLES`, a process in a weight-0 budget, a badged exit endpoint refused, creating and
   killing processes whose notices nobody receives (bounded by the creator's own budget);
   `bench-bundle-file` becomes a clean boot in which a guest reads its `[[file]]` entry back (today
-  the loader refuses data entries).
+  the loader refuses data entries). This gate is completed by the R2/R3 loader-stub and init
+  bundle handoff. Answer 169 permits the reviewed lifecycle implementation to land first,
+  retaining clean guest readback as unfinished K4 acceptance.
 - Also: `wx` re-based on exit notices (a checker launches the attacker and takes the verdict
-  from the kernel's notice), replacing today's survival-only verdict.
+  from the kernel's notice); this is implemented by the recovered lifecycle tests.
 - Also: `thread_create`, `thread_exit`, `process_exit`; the R8, R9 and I8 cases WP-K1 could not
   stage (a user-class caller needs `process_create`).
 - Needs: WP-K2, WP-A2.
@@ -201,7 +203,8 @@ Open decisions are in [QUESTIONS](QUESTIONS.md), including 163 (typed parking), 
   device handles, starts every system server through the stub, restarts with the rate
   limit, passes crash blame by (account, label set) to the steward (the typed message whose table
   WP-S2 writes), reboot as last resort; the boot loader loading only the kernel and `init`, once
-  `init` can start every bundle program through the stub.
+  `init` can start every bundle program through the stub. This handoff also completes K4's
+  retained clean `bench-bundle-file` guest readback gate (answer 169).
 - Accepted when: the milestone 1 manifest boots every server, each in a budget carrying the weight
   the manifest names; a manifest with a bad name, or one granting a server its budget, is refused;
   attack cases: a manifest giving `keyd` the bundle key stops the boot (the `holds` answer, not a
@@ -356,9 +359,11 @@ this `sshd` in milestone 1, a stated residual).
 
 ## Order
 
-Use [SWARM Claims](SWARM.md#claims) and each package's Needs above. K4's selective port and
-model reconciliation are the next integration prerequisites; D1/R4 source must not be ported
-again. K5 is dependency-ready but shares the kernel with K4. Preserve IPC1's accepted outcomes
+Use [SWARM Claims](SWARM.md#claims) and each package's Needs above. The native process
+lifecycle port is integrated; its bundle-readback acceptance remains
+dependent on R2/R3 (answer 169). Model reconciliation is the next recovery prerequisite;
+D1/R4 source must not be ported again. K5 is dependency-ready but shares the kernel with K4.
+Preserve IPC1's accepted outcomes
 through both changes. R2/R3 enable native startup; B1/B2 bring up the VM; D2/D3 and S2/S3
 complete storage, network, policy and SSH before E1 acceptance.
 

@@ -7,15 +7,16 @@ arguments, errors and invariants; where the two differ, the model changes.
 Rationale lives elsewhere: handles and IPC in CAPABILITIES.md, labels in CONTAINMENT.md, budgets and
 scheduling in RESOURCES.md.
 
-**Current conformance.** Budgets/handles, IPC and device objects have implementations on the new
-syscall path; process/thread creation and exit, timer-driven timeouts/preemption and legacy removal
-remain work packages. This note is not a claim that the whole contract runs in the primary
-checkout. The answers **167-168 completion encoding, lend ownership, output rollback and
-delivery-aware server bookkeeping are present in this checkout**.
+**Current conformance.** Budgets/handles, IPC, device objects and process/thread creation and
+exit have implementations on the new syscall path. Real-kernel cases exercise native lifecycle
+and loan teardown; timer-driven timeouts/preemption and legacy removal remain work packages.
+This note is not a claim that the whole contract runs in the primary checkout. The answers
+**167-168 completion encoding, lend ownership, output rollback and delivery-aware server
+bookkeeping are present in this checkout**.
 This is not WP-IPC1 acceptance: executable-model conformance, K5 timer-dependent cases and
 simultaneous multi-hart completion-race acceptance remain outstanding. Native server startup
-and terminal `process_exit` cleanup also depend on the unimplemented process interface;
-shared-server failure handling is host-tested, not boot-integrated.
+and the shared-server serving path's terminal-failure fallback still need boot integration;
+host checks of that fallback and native syscall teardown tests do not establish it.
 SWARM.md's Claims table owns package state; STATUS.md summarizes integration evidence.
 
 There are also explicitly unresolved target differences: the current `map_device` ABI returns
@@ -88,6 +89,13 @@ object, so no PID is reused while a notice still names it. Destroying the creato
 the object (R10), killing the process first if it still runs; then there is no notice. So a notice
 never allocates.
 
+`thread_exit` with surviving siblings frees only that thread and its IPC state, including
+the R4b cleanup of its open calls; it produces no process-exit notice. The last thread's
+`thread_exit` is equivalent to `process_exit(0)`. Determine whether open calls remain and
+snapshot current-call blame before cleanup, then apply the normal process teardown and
+notice/PID lifetime above. Thus a started process cannot remain alive with zero threads
+(answer 170).
+
 An **open call** is a `call` a thread has taken with `receive` and not yet replied to. A thread may
 hold several; its process may hold at most `MAX_OPEN_CALLS`. Each costs a page (below) while it is
 open, and its lend is charged to the receiving process's budget too (R3). A `send` is never an open
@@ -124,11 +132,19 @@ any other (R4).
 | --- | --- | --- |
 | budget | 1 | its parent (`root`'s is the kernel's) |
 | process | 1 | the creator's budget (`process_create`'s caller) |
-| thread | 1 | its process's budget |
+| saved process contexts | `PROCESS_IMPL_PAGES` (rv32: 1; rv64: 2) | the process's execution budget |
+| thread IPC state | 1 per thread | its process's budget |
 | endpoint | 1 | its owner |
-| page tables | 1 per page-table page, when allocated | the process's budget |
+| page tables | 1 per page-table page, including the root, when allocated | the process's budget |
 | handle table | 1 per table page holding a handle (128 handles a page, at most `MAX_HANDLES`) | the process's budget |
 | open call | 1 while open | the receiving process's budget |
+
+Saved contexts are distinct frames from the creator-paid process/notice object and each
+thread's IPC page (answer 127). Charge all context frames from address-space creation until
+process teardown, including for initial loader processes. There is no global per-PID context
+reservation and no subtraction of one context frame for the separately allocated notice.
+Each of these storage frames is counted once. Loader-started processes that lack process/notice
+objects during boot integration incur no unbacked charge for such an object.
 
 Plus the pages themselves: mapped, lent (charged to both sides while the call is open, R3), or
 transferred. The handle-table figure assumes a handle of 24-32 bytes (object reference, 64-bit
@@ -163,7 +179,8 @@ reveal nothing of anyone else's traffic.
 - an exit notice (on an endpoint named as some process's exit endpoint): `(pid, cause, code,
   blamed_account, blamed_labels)`, where `cause` is `exited`, `faulted` or `killed`. A
   `process_exit` while the process holds open calls (a Rust panic, say) is reported `faulted`, like
-  a fault; a server that means to exit replies to every open call first. For `faulted`,
+  a fault; this includes the final thread's `thread_exit`, equivalent to `process_exit(0)`.
+  A server that means to exit replies to every open call first. For `faulted`,
   `blamed_account` and `blamed_labels` are the account and labels of the sender of the current call
   of the thread that faulted or called `process_exit`. If that thread has no current call, nobody
   is blamed, even when other threads of the process hold open calls. When nobody is blamed, and for
@@ -348,7 +365,7 @@ partial reply remains valid on `OutOfMemory`. No argument can make the kernel pa
 | `map_device` | h(MMIO) -> addr | MMIO device handle |
 | `dma_alloc` | h(MMIO), npages -> addr, phys | DMA flag; pages charged; contiguous; zeroed |
 | `thread_create` | entry, sp, arg -> tid | pages charged; fewer than `MAX_THREADS` |
-| `thread_exit` | - | - |
+| `thread_exit` | - | siblings survive without a process notice; last thread is `process_exit(0)` |
 | `process_exit` | code | exit notice `exited`, or `faulted` while the process holds open calls |
 | `process_create` | h(budget), h(exit endpoint) -> h(process) | budget's weight not 0; exit endpoint's badge 0; the budget's process and page limits; process object charged to the caller |
 | `process_map` | h(process), src, dst, len, flags | process not started; src owned by caller; pages move to the child's budget; not W+X |

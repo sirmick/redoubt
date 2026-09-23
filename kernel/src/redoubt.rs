@@ -11,11 +11,10 @@
 //! (alignment, then lying in the caller's own memory, then their slots); then the call's own
 //! checks, which live with the objects (`budget.rs`, `handle.rs`).
 //!
-//! Built so far (WP-K1, WP-K2, WP-K3): `handle_close`, `budget_create`, `budget_destroy`,
+//! Implemented calls (WP-K1 through WP-K4): `handle_close`, `budget_create`, `budget_destroy`,
 //! `budget_usage`, `time_now`, `random`, `endpoint_create`, `mint`, `call`, `send`, `receive`,
 //! `reply`, `serve`, `map_anon`, `unmap`, `set_flags`, `map_device`, `dma_alloc`,
-//! `system_reset`. Every other call (the `process_*` and `thread_*` family) decodes, then gets
-//! `InvalidArgument` until its package builds it (WP-K4).
+//! `system_reset` and the `process_*` and `thread_*` families.
 
 use redoubt_abi::{PID, TID};
 use redoubt_sys::{
@@ -169,14 +168,37 @@ fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
             crate::platform::rand::fill(&mut bytes);
             Ok(Some(Return::Random(u64::from_le_bytes(bytes))))
         }
-        // Decoded, not built yet (WP-K3 to WP-K5).
-        _ => Err(Error::InvalidArgument),
+        Call::ProcessCreate { budget, exit_endpoint } => with_both(|ss, mm| {
+            let handle = crate::process::process_create(ss, mm, pid, budget.index(), exit_endpoint.index())?;
+            Ok(Some(Return::Handle(redoubt_sys::Handle::new(handle).expect("indices start at 1"))))
+        }),
+        Call::ProcessMap { process, src, dst, len, flags } => with_both(|ss, mm| {
+            crate::process::process_map(ss, mm, pid, process.index(), src, dst, len, flags).map(done)
+        }),
+        Call::ProcessStart { process, entry, sp, arg, handles_rec, count } => with_both(|ss, mm| {
+            let h = process.index();
+            crate::process::process_start(ss, mm, pid, h, entry, sp, arg, handles_rec, count).map(done)
+        }),
+        // These three end a thread or a process, so they take the scheduler alone: tearing a
+        // process down borrows the memory manager itself (`process.rs`, Locks).
+        Call::ThreadCreate { entry, sp, arg } => {
+            SystemServices::with_mut(|ss| crate::process::thread_create(ss, pid, entry, sp, arg))
+                .map(|tid| Some(Return::Tid(tid)))
+        }
+        Call::ThreadExit => {
+            SystemServices::with_mut(|ss| crate::process::thread_exit(ss, pid, tid));
+            Ok(None)
+        }
+        Call::ProcessExit { code } => {
+            SystemServices::with_mut(|ss| crate::process::process_exit(ss, pid, tid, code));
+            Ok(None)
+        }
     }
 }
 
 /// `budget_destroy(h)` (R10): mark the subtree, kill every process in it (the caller last, if it
 /// is one of them), then sweep the handles and free the budgets.
-fn budget_destroy(pid: PID, tid: TID, h: u32) -> Result<Option<Return>, Error> {
+fn budget_destroy(pid: PID, _tid: TID, h: u32) -> Result<Option<Return>, Error> {
     SystemServices::with_mut(|ss| {
         let top = MemoryManager::with_mut(|mm| mm.destroy_begin(pid, h))?;
         let mut caller_doomed = false;
@@ -188,16 +210,20 @@ fn budget_destroy(pid: PID, tid: TID, h: u32) -> Result<Option<Return>, Error> {
             if victim == pid {
                 caller_doomed = true;
             } else {
-                ss.kill_process(victim).expect("a process with an account exists");
+                // Each gets an exit notice with cause `killed`, unless its process object is
+                // charged to a budget in the same doomed subtree (`process.rs`).
+                crate::process::killed(ss, victim);
             }
         }
         if caller_doomed {
-            // As the legacy `TerminateProcess` does: the caller's thread stops, and the kernel
-            // picks what runs next.
-            ss.unschedule_thread(pid, tid).expect("the caller is running");
-            ss.terminate_process(pid).expect("the caller exists");
-            crate::syscall::reset_switchto_caller();
+            crate::process::killed(ss, pid);
         }
+        // R10 reaches the process objects charged to the subtree: each is freed, with no notice,
+        // its process killed first if it still runs.
+        crate::process::budgets_dying(ss);
+        // The caller may run outside this subtree but have its process object charged to it.
+        // R10 killed it through its creator above; never return registers to that dead PID.
+        caller_doomed |= MemoryManager::with(|mm| mm.budget_of(pid).is_none());
         // R10 reaches messages in flight: the endpoints the subtree owns are destroyed, and
         // every message sent through a handle stamped with it fails its sender with `Dead`.
         MemoryManager::with_mut(|mm| {
@@ -241,6 +267,23 @@ pub fn read_record<const N: usize>(mm: &MemoryManager, addr: usize, output: bool
         record_frames::<N>(mm, addr, true)?;
     }
     Ok(core::array::from_fn(|i| kframe::read(frames[i], (addr + i * 8) % redoubt_abi::arch::PAGE_SIZE)))
+}
+
+/// Read a handle-list record under the ownership guard used by fixed records.
+pub fn read_slots<const N: usize>(mm: &MemoryManager, addr: usize, n: usize) -> Result<[u64; N], Error> {
+    if n > N {
+        return Err(Error::TooLarge);
+    }
+    let mut slots = [0u64; N];
+    let mut frames = [0usize; N];
+    for (i, frame) in frames.iter_mut().enumerate().take(n) {
+        let at = addr.checked_add(i * 8).ok_or(Error::InvalidArgument)?;
+        *frame = record_frames::<1>(mm, at, false)?[0];
+    }
+    for i in 0..n {
+        slots[i] = kframe::read(frames[i], (addr + i * 8) % redoubt_abi::arch::PAGE_SIZE);
+    }
+    Ok(slots)
 }
 
 pub fn check_record<const N: usize>(mm: &MemoryManager, addr: usize) -> Result<(), Error> {

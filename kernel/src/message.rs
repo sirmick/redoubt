@@ -40,9 +40,9 @@ use core::num::{NonZeroU64, NonZeroUsize};
 use redoubt_abi::arch::PAGE_SIZE;
 use redoubt_abi::{MemoryFlags, PID, TID};
 use redoubt_sys::{
-    Body, CallOutcome, Error, Handle as AbiHandle, Labels, LendDisposition, MAX_LEND_PAGES, MAX_MSG_HANDLES,
-    MAX_OPEN_CALLS, Message, MessageKind, MintSource, Pages, RECEIVED_SLOTS, Received, ReceivedBody,
-    ReceivedHandles, ReplyOutcome, Return, WAIT_CAP, WORDS, encode_result,
+    Body, CallOutcome, Error, Handle as AbiHandle, Labels, LendDisposition, MAX_LABELS, MAX_LEND_PAGES,
+    MAX_MSG_HANDLES, MAX_OPEN_CALLS, Message, MessageKind, MintSource, Pages, RECEIVED_SLOTS, Received,
+    ReceivedBody, ReceivedHandles, ReplyOutcome, Return, WAIT_CAP, WORDS, encode_result,
 };
 
 use crate::arch::process::{MAX_PROCESS_COUNT, MAX_THREAD};
@@ -293,7 +293,13 @@ const C_LEND_SERVER: usize = 13; // first page in the server
 const C_LEND_PAGES: usize = 14;
 const C_PAYER: usize = 15; // the receiving budget: frame + 1
 const C_PAYER_ID: usize = 16;
-const CALL_WORDS: usize = 17;
+/// The sender's account and labels as they were when the call was delivered: what a fault blames
+/// (answers 37, 55, 82). Snapshots, not a reference to the sender's budget, so that blame
+/// survives that budget being destroyed while the call is open.
+const C_ACCOUNT: usize = 17;
+const C_NLABELS: usize = 18;
+const C_LABELS: usize = 19; // MAX_LABELS words
+const CALL_WORDS: usize = C_LABELS + MAX_LABELS;
 const _: () = assert!(CALL_WORDS * 8 <= PAGE_SIZE);
 
 /// The caller is still waiting for the reply.
@@ -319,6 +325,10 @@ struct OpenCall {
     /// The receiving budget: it pays for the open-call page and, while the caller waits, for the
     /// lend as well (R3).
     payer: BudgetRef,
+    /// The sender's account and labels, for blame.
+    account: u64,
+    labels: [u64; MAX_LABELS],
+    nlabels: usize,
 }
 
 fn pid_of(word: u64) -> PID { PID::new(word as u8).expect("I1: an open call names no process") }
@@ -339,6 +349,9 @@ fn open_call_at(mm: &MemoryManager, frame: u32) -> OpenCall {
         lend_server: w(C_LEND_SERVER) as usize,
         lend_pages: w(C_LEND_PAGES) as usize,
         payer: BudgetRef { frame: frame_of(w(C_PAYER)).unwrap_or(0), id: w(C_PAYER_ID) },
+        account: w(C_ACCOUNT),
+        labels: core::array::from_fn(|i| w(C_LABELS + i)),
+        nlabels: (w(C_NLABELS) as usize).min(MAX_LABELS),
     }
 }
 
@@ -362,6 +375,9 @@ fn store_open_call(mm: &MemoryManager, frame: u32, c: &OpenCall) {
     words[C_LEND_PAGES] = c.lend_pages as u64;
     words[C_PAYER] = frame_word(c.payer.frame);
     words[C_PAYER_ID] = c.payer.id;
+    words[C_ACCOUNT] = c.account;
+    words[C_NLABELS] = c.nlabels as u64;
+    words[C_LABELS..].copy_from_slice(&c.labels);
     for (i, word) in words.iter().enumerate() {
         kframe::write(phys, i * 8, *word);
     }
@@ -623,6 +639,20 @@ pub fn mint(
     mm.install_handle(pid, Handle { object: Object::Endpoint(endpoint), badge, stamp })
 }
 
+/// The account and labels a fault in `(pid, tid)` blames: the sender of the thread's **current
+/// call**, or nobody (answers 37, 55, 82; KERNEL-SPEC.md, Messages). A thread with no current
+/// call blames nobody, even when other threads of its process hold open calls, and a `send` is
+/// never blamed because a send is never an open call.
+pub fn current_call_blame(mm: &MemoryManager, pid: PID, tid: TID) -> Option<(u64, Labels)> {
+    let frame = frame_of(u64::from(slot(mm, pid, tid).current))?;
+    let call = open_call_at(mm, frame);
+    let mut labels = Labels::new();
+    for label in &call.labels[..call.nlabels] {
+        labels.push(*label).expect("MAX_LABELS");
+    }
+    Some((call.account, labels))
+}
+
 /// `serve(msg_id)`: the call becomes the thread's current call, the one a fault blames.
 pub fn serve(mm: &mut MemoryManager, pid: PID, tid: TID, msg_id: u64) -> Result<(), Error> {
     let frame = open_call_of(mm, pid, tid, msg_id).ok_or(Error::InvalidArgument)?;
@@ -870,6 +900,9 @@ pub fn receive(
 
 // --- Delivery (R2, R4, R4a) --------------------------------------------------------------------
 
+/// Deliver whatever is pending on `e` (`process.rs` calls this when an exit notice appears).
+pub fn pump_endpoint(ss: &mut SystemServices, mm: &mut MemoryManager, e: EndpointRef) { pump(ss, mm, e); }
+
 /// Match waiting receivers on `e` with what is pending there, until nothing more can be
 /// delivered. Notices come before messages (KERNEL-SPEC.md, Messages).
 fn pump(ss: &mut SystemServices, mm: &mut MemoryManager, e: EndpointRef) {
@@ -896,6 +929,29 @@ fn pump(ss: &mut SystemServices, mm: &mut MemoryManager, e: EndpointRef) {
             store_open_call(mm, frame, &c);
             let id = NonZeroU64::new(rid).expect("I12: a message id is never 0");
             answer_record(ss, mm, pid, tid, &Received::Abandoned(id).encode(), Ok(Return::Nothing));
+            continue;
+        }
+        // Then an exit notice (KERNEL-SPEC.md, Messages: notices before messages). Unlike an
+        // abandoned-call notice it belongs to no particular thread -- it is addressed to the
+        // endpoint -- so whichever thread is receiving here takes it. Taking it frees the
+        // process object, which is what frees the PID (answer 106).
+        #[cfg(baremetal)]
+        let exit = crate::process::pending_notice(mm, e).and_then(|(frame, notice)| {
+            find_thread(mm, |mm, pid, tid| {
+                let s = slot(mm, pid, tid);
+                (s.wait == Wait::Receive && s.endpoint == Some(e)).then_some((pid, tid))
+            })
+            .map(|(pid, tid)| (frame, notice, pid, tid))
+        });
+        #[cfg(baremetal)]
+        if let Some((frame, notice, pid, tid)) = exit {
+            // A failed output record does not consume the notice or release its PID.
+            if let Err(error) = check_receive_record(ss, pid, tid, mm) {
+                wake(ss, mm, pid, tid, Err(error));
+                continue;
+            }
+            crate::process::free_object(mm, frame);
+            answer_record(ss, mm, pid, tid, &Received::Exit(notice).encode(), Ok(Return::Nothing));
             continue;
         }
         // The first receiver that can take a message, and the message R2 picks for it.
@@ -1093,6 +1149,9 @@ fn prepare(
                 lend_server: at,
                 lend_pages: pages,
                 payer: BudgetRef { frame: rbudget, id: mm.budget(rbudget).id },
+                account: sender.account,
+                labels: sender.labels,
+                nlabels: sender.nlabels,
             },
         );
         push_open_call(mm, rpid, rtid, frame);
@@ -1124,6 +1183,10 @@ fn is_live(mm: &MemoryManager, h: Handle) -> bool {
         Object::Budget(b) => mm.is_live_budget(b),
         Object::Endpoint(e) => mm.is_live_endpoint(e),
         Object::Device(d) => mm.is_live_device(d),
+        #[cfg(baremetal)]
+        Object::Process(p) => mm.is_live_process(p),
+        #[cfg(not(baremetal))]
+        Object::Process(_) => false,
     }
 }
 
@@ -1457,6 +1520,10 @@ fn destroy_endpoint(ss: &mut SystemServices, mm: &mut MemoryManager, frame: u32)
         let s = slot(mm, pid, tid);
         s.wait == Wait::Reply && open_call_at(mm, s.open).endpoint == e
     });
+    // Every exit notice owed here is dropped, and a process still running loses the ear it was
+    // to report to (R10; `process.rs`).
+    #[cfg(baremetal)]
+    crate::process::endpoint_dying(mm, e);
     // The handles naming it go first: `budget_destroy`'s later sweep reads every handle's
     // object, and one naming a freed frame would stop the kernel (I1). Unreachable until a
     // destroyable budget owns an endpoint (WP-K4), and cheaper than a liveness test on a path

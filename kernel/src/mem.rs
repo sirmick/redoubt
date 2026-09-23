@@ -250,13 +250,12 @@ impl MemoryManager {
         Ok(self.ram_start + index * PAGE_SIZE)
     }
 
-    /// Allocate a page to `pid` without charging it: only for the frames holding a process's
-    /// saved thread contexts (`ProcessImpl`). The cost table's process page and a page per thread
-    /// already pay for them, so charging the frames too would count them twice.
+    /// Allocate a page for a process's saved thread contexts (`ProcessImpl`), charged to the
+    /// budget the process runs in like any other frame it owns (answer 127: the kernel
+    /// charges what a process really costs instead of holding it back from `root` at boot).
     #[cfg(baremetal)]
-    #[allow(dead_code)] // WP-K4's `process_create`, through `MemoryMapping::allocate`
     pub fn alloc_context_page(&mut self, pid: PID) -> Result<usize, redoubt_abi::Error> {
-        Ok(self.ram_start + self.alloc_frame(pid)? * PAGE_SIZE)
+        self.alloc_page(pid)
     }
 
     /// Take a free frame for `owner`; its index in the ownership table.
@@ -943,22 +942,29 @@ impl MemoryManager {
                 }
             });
 
-            // Pass 2: free every frame still owned by this process.
-            for idx in 0..self.allocations.len() {
-                if self.allocations[idx] == Some(pid) {
-                    self.allocations[idx] = None;
-                }
-            }
-            for idx in 0..self.extra_allocations.len() {
-                if self.extra_allocations[idx] == Some(pid) {
-                    self.extra_allocations[idx] = None;
-                }
-            }
-            // Both passes took RAM frames away from `pid`.
-            self.uncharge_all_frames(pid);
+            // Pass 2: release the remaining ownership entries after protected lends moved away.
+            self.release_owned_frames(pid);
         }
         #[cfg(not(baremetal))]
         let _ = (pid, space);
+    }
+
+    /// Give back every frame still owned by a process that will never run again. Its protected
+    /// lends must already have moved away, or it must never have run (`process_create` rollback).
+    /// This shared final step needs no page-table access, including for a partially built space.
+    #[cfg(baremetal)]
+    pub fn release_owned_frames(&mut self, pid: PID) {
+        for idx in 0..self.allocations.len() {
+            if self.allocations[idx] == Some(pid) {
+                self.allocations[idx] = None;
+            }
+        }
+        for idx in 0..self.extra_allocations.len() {
+            if self.extra_allocations[idx] == Some(pid) {
+                self.extra_allocations[idx] = None;
+            }
+        }
+        self.uncharge_all_frames(pid);
     }
 
     /// Adjust the flags on the given memory range. This allows for stripping flags from a memory
@@ -1237,7 +1243,7 @@ impl MemoryManager {
     /// The frame behind `page`, which must be a live user mapping of the caller that is not
     /// lent out and, if it is RAM, is credited to the caller (a lend the caller is holding is
     /// its lender's, not its own).
-    fn owned_mapping(&self, pid: PID, page: usize) -> Result<usize, redoubt_sys::Error> {
+    pub(crate) fn owned_mapping(&self, pid: PID, page: usize) -> Result<usize, redoubt_sys::Error> {
         let bad = redoubt_sys::Error::InvalidArgument;
         let phys = crate::arch::mem::user_mapping(page).ok_or(bad)?;
         let ram = self.is_main_memory(phys as *mut u8);
@@ -1250,7 +1256,7 @@ impl MemoryManager {
 
 /// The ABI's flags as the page-table layer's. There is no W+X: `MemFlags` cannot hold it.
 #[cfg(baremetal)]
-fn redoubt_flags(flags: redoubt_sys::MemFlags) -> MemoryFlags {
+pub(crate) fn redoubt_flags(flags: redoubt_sys::MemFlags) -> MemoryFlags {
     let has = |bit: redoubt_sys::MemFlags, flag| {
         if flags.bits() & bit.bits() != 0 { flag } else { MemoryFlags::FREE }
     };
