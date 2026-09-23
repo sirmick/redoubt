@@ -21,10 +21,10 @@ you do not implement packages yourself.
 
 ## What you own
 
-- The **claims table** in `docs/SWARM.md`, the wave order, and `docs/BUILD-PLAN.md`'s "Order".
-- `docs/BUILD-PLAN.md`, `docs/STATUS.md` and `docs/HISTORY.md` kept current as packages land.
+- The **claims table** in `docs/SWARM.md` and `docs/BUILD-PLAN.md`'s "Order".
+- `docs/BUILD-PLAN.md` and `docs/STATUS.md` kept current as packages land; HISTORY only for milestones.
 - Starting a package the moment every package it `Needs` is merged, in its own git worktree
-  and branch (`wp-k1`, `wp-m0`, ...), per SWARM.md's waves.
+  and branch (`wp-k1`, `wp-m0`, ...), according to its dependencies.
 - Reviewing each finished package through three reviewers (red team, simplifier, editor)
   before you accept it, then merging one package at a time.
 - The staging rule: an implementer stages only the paths its package owns,
@@ -71,7 +71,7 @@ error or contradiction, and the candidate options with their consequences. The l
 to re-derive, the fewer tokens the answer costs.
 
 **Bound every child you launch**, architect and implementer alike: an unbounded reader will
-spend its whole runtime researching and return nothing (this has happened three times). Say
+spend its whole runtime researching and return nothing. Say
 in the task how many tool calls to allow before the first write, and pass
 `checkpointBeforeDeadlineMs` so a timeout yields a partial result instead of empty hands.
 

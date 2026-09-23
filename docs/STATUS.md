@@ -1,82 +1,44 @@
-# Status against the tenets
+# Implementation status
 
-What the code does today (not the design). `cargo testbench` enforces the rows marked (enforced).
-Update this note with each milestone.
+Redoubt boots on QEMU `virt` under vendored RustSBI on rv64 and rv32. The native OS userland
+is not integrated end to end; beamlet currently runs on the host. [PLAN](PLAN.md) owns milestone
+outcomes, [SWARM](SWARM.md#claims) owns package state, and [BUILD-PLAN](BUILD-PLAN.md) owns acceptance.
 
-**Remediation checkpoint (2026-09-22):** the reviewed answers 167-168 ABI/kernel/runtime/server
-changes are present in this checkout, including protected same-process loan aliases.
-The regression failed before the fix and passes after on rv64 and rv32; all three correction
-reviewers approved it. Parent's isolated and primary full benches each passed 99 executions
-across 56 case files. Primary host/wire/checker suites passed 283 tests, with 3 ignored;
-affected ABI/runtime/server crates compile on rv32 and rv64. This is not IPC1 package acceptance:
-model integration, K5 real timer cases and simultaneous multi-hart completion races remain open.
-See [SWARM.md](SWARM.md) and [ASTRA.md](../ASTRA.md). Host tests do not establish
-mapping/lifecycle correctness in the kernel. The executable model is absent from this checkout.
+| Area | Implemented and checked | Remaining |
+| --- | --- | --- |
+| Boot | Loader verifies domain-separated Ed25519 bundles; no usable seed or bad signature refuses boot. Both widths boot. | Loader/firmware authentication, production keys, rollback protection. |
+| Memory and devices | Typed W^X page tables, zeroed anonymous RAM, default-deny legacy device grants; new MMIO/DMA/reset handles. | User code retains a writable kernel-only physmap alias. DMA drivers remain trusted. Device-policy questions 142–147 are open. |
+| Budgets and IPC | Accounting, carving, labels, revocation, handles, endpoints, call/send/receive/reply, abandoned calls and protected loans. Explicit caller ownership and server delivery outcomes; partial replies and failed-output rollback. | IPC1 model/timer/native-exit acceptance; see below. |
+| Record validation | Budget and IPC records must be backed, permitted, owned RAM. MMIO and borrowed aliases are rejected before record access. | Preserve this guard when adding syscalls. |
+| Scheduling and processes | Cooperative scheduling and legacy process/thread facilities; timer IRQ tests and a two-hart lock spike. | New process/thread syscall family, native exit cleanup, kernel-owned timeouts/deadlines and preemption. No full SMP scheduler. |
+| Native libraries and servers | sys/rt/wire/signing, pure-Rust littlefs, keyd, bootfsd, consoled and in-tree virtio-blk/blkd have host tests. | Init/startup integration, fsd, network/steward/SSH stack and Redoubt beamlet platform. Console typed size/resize are target behavior; typed parking awaits 163. |
+| Verification | Boot attack cases, checked builds, host tests, wire-generator drift checks and a fail-closed unsafe ratchet. | Model replay, kernel hosted tests in the bench, kernel fuzzing, omitted server bench/budget registrations. |
 
-The shared server's failed-reply fallback is host-tested. Its terminal `process_exit` path
-cannot yet perform R4b cleanup on target because the new kernel process-exit syscall is
-unimplemented; native server startup/exit integration remains a K4/R3 dependency.
+## Acceptance gaps
 
-The native `bootfsd`, `consoled`, `keyd` and `blkd` components exist with host tests. Their
-manifest-driven startup under init and the Redoubt beamlet platform are not boot-integrated;
-the host beamlet VM is not a booted Redoubt userland. New process/thread syscalls, deadline
-enforcement and timer-driven scheduling remain planned; existing legacy boot/thread facilities
-and timer IRQ tests do not implement those new interfaces.
+- **IPC1 is not accepted.** The model is absent from the active workspace; its remote source needs
+  current scheduling and IPC semantics. K5 real-timer cases and native process-exit cleanup are
+  pending. The shared server's terminal `process_exit` fallback is host-tested only because the
+  new syscall is unimplemented. Concurrent completion coverage remains open; reconcile its
+  milestone scope with [PLAN's SMP section](PLAN.md#smp-after-milestone-1).
+- Questions **164–166** leave mediation, authority closure and the wakeup bound unresolved.
+  They qualify the security/latency claims, not just their implementation schedule.
+- `consoled` unknown-request handle cleanup and the broader raw-syscall/owning-runtime
+  composition need follow-up; [review tasks](https://github.com/sirmick/redoubt/blob/main/ASTRA.md).
+- `wx` remains a survival test until process-exit verdict integration. The host VM and host
+  substitute kernels do not establish target lifecycle correctness.
 
-| Tenet | Today |
-| --- | --- |
-| 1 Simple | Kernel about 15.6k lines (`kernel/src`; 11.8k before WP-K1's budgets, handle tables and the Redoubt call path, 12.9k before WP-K2's endpoints and messages); interrupts dispatched one at a time over the PLIC's 1024-source space; loader about 1.1k, `paging` crate about 280. Trap entry and exit are `global_asm!` in `arch/riscv/asm.rs`. Kernel globals are `KernelCell`, not `static mut` (two exceptions, each only ever addressed: the SBI console and the SMP spike's secondary stack); an `smp` feature turns `KernelCell` into a spinlock: host stress-tested, and a two-hart spike (`smp-spike`) starts a second hart through SBI HSM that runs kernel code and contends on it without losing updates. Default builds run only the boot hart. ARM, x86, the in-kernel gdb stub, Precursor, bao1x, VexRiscv, swap and the prebuilt assembly blobs are deleted. New for milestone 1: `redoubt-sys`, the ABI (about 1.1k lines with one `unsafe`), now the kernel's call path for budgets, handles, endpoints, messages, devices and interrupts (WP-K1 to WP-K3) beside the legacy interface; `redoubt-rt`, the runtime and shared server library; `redoubt-wire`, the codecs, about 1.3k lines plus a host-only generator; `redoubt-signing`; `keyd`. `littlefs` about 2.7k lines, no `unsafe`, no dependencies (for `fsd`, not yet used). |
-| 2 No ambient authority | Devices: (enforced) default deny; a process maps a device page or claims an IRQ only if the bundle's `grants` entry granted it (DEVICE-GRANTS.md, interim; the boot manifest is designed, INIT.md). Physical RAM cannot be named by address, and anonymous pages are zeroed. The Redoubt interface has endpoints and the four IPC calls beside the legacy one: handles with badges and stamps, `mint`, badge-0 receive rights, the label check against an endpoint's owner, fair waiting by (account, label set), delivery paid by the receiver, open calls and abandoned calls, and revocation reaching messages in flight (WP-K2). The legacy server connections are still stock Redoubt password capabilities (128-bit IDs), and go with WP-K6. |
-| 2 W^X | (enforced) `paging::Pte::leaf` cannot express a writable and executable mapping; syscalls asking for one get `InvalidArgument`; the physmap alias of kernel code is read-only; the kernel checks its own address space at boot. Known gap: user code pages have a writable alias in the kernel-only physmap. |
-| 2 Verified boot | (enforced) The loader verifies an Ed25519 signature over `"redoubt.bundle.v1\0" || u64_le(len) || tar`, with `len` measured from the initrd it was handed, never over the bare archive; the preimage is built in one crate (`libs/signing`) shared with the bench's signer. One public development key. Open: M-of-N, rollback protection, verifying the loader itself. |
-| 2 Fail closed | No usable RNG seed or a bad bundle signature: refuse to boot. A kernel panic powers off. |
-| 2 `unsafe` budget | Correct source roots and fail-closed missing/empty coverage checks run with nine passing host tests. The reviewed runtime reduction is present in this checkout: 9 documented uses against unchanged budget 9. Final primary validation passes every configured budget: `paging` 12, loader 17, backends 15, arch 10, kernel core 20, sys 1, signing/keyd 0; zero undocumented. No budgets were increased. |
-| 3 All Rust | RustSBI firmware, kernel and loader: Rust plus `global_asm!`, no C toolchain, on both widths. RustSBI is the only supported firmware. |
-| 4 Standards | SBI, PLIC, Sv32/Sv39, device tree, ELF, ustar. The kernel argument block is our own format, specified in BOOT.md. |
-| 5 Dependencies | `redoubt-keyd`: `redoubt-rt` and the loader's `ed25519-compact`, no new crates; SHA-256 written in-house. `redoubt-sys` and `redoubt-wire`: no dependencies; host-only fuzz crates (`libfuzzer-sys`, `serde_json` as an oracle) sit outside the workspace (tenet 3). Kernel about 20 crates in its dependency tree, loader 8 direct (`fdt-rs`, `sbi-rt`, `elf`, `tar-no-std`, `crc`, `ed25519-compact`, `redoubt-abi`, `paging`). None vendored or formally audited. |
-| 6 Tested | (enforced) 56 cases across both widths under RustSBI; attack cases listed below. The harness can fail: each bench feature added for milestone 1 (SSH sessions over host OpenSSH, virtio disk and net, bundle data entries, a required clean power-off) has a self-check, and `must_fail` cases pass only if the bench fails for the stated reason. A missing firmware or OpenSSH fails a case rather than skipping it. Host unit test: `cargo test -p redoubt-abi` round-trips every syscall `Result` variant through its register encoding. No kernel fuzzing yet; the kernel's hosted unit tests are not wired into the bench. Host tests, not yet in the bench: `cargo test -p redoubt-sys` round-trips every KERNEL-SPEC.md call, result, error and record and refuses every malformed encoding; `cargo test -p redoubt-wire -p redoubt-wire-gen` (9P, typed-message and JSON vectors, the generator's drift test). Fuzz targets: `libs/sys/fuzz`, `libs/wire/fuzz` (no findings outstanding). Attack cases take their verdict from the system: `log-server` prefixes every relayed line with the sender's PID from the kernel, and verdicts come from the kernel or loader, a victim, or `attack-checker`; `wx` and `irq-attack` prove survival only until WP-K4 and WP-K3. `littlefs` (host, `cargo test --release` in `libs/littlefs`): model-based operations with handles held across removes and renames, crash injection at every block write, hostile images; by hand, differential tests against the C reference (`libs/littlefs/diff`) and two fuzz targets. `cargo test -p redoubt-rt` (cases: startup blocks, `check`, admission, the 9P skeleton against hostile clients, the echo pair against a fake kernel); `rt-build` checks it compiles for both widths; fuzz targets in `libs/rt/fuzz`. Checked-profile cases boot a kernel and loader built with debug assertions and overflow checks (the `checked` profile), so `core`'s preconditions on every raw-pointer call are enforced on a real boot; `bench-debug-assertions` checks that the mode reaches the kernel. Not covered: a malformed argument block, since the loader is its only writer, so the block's bounds are asserted rather than tested. `cargo test -p redoubt-keyd` (cases: the WP-S1 attack cases against a fake kernel, RFC 8032 and FIPS 180-4 vectors, the exchange hash against an independent implementation, and a timing test with a 5% control that must be flagged in the same run). A `host-tests` case runs `cargo test -p redoubt-signing -p testbench` inside the suite, so the signature preimage's bytes are pinned by the bench and not only by a host test nobody runs. |
-| 7 Virtio | `servers/blkd` implements an in-tree virtio-blk driver with host-tested ring/device validation and block-service logic. Its entry point is not integrated with init/process startup, so an end-to-end storage boot is not claimed. UART support also exists in test programs and `consoled`. |
+## Verification
 
-## Test cases (`tests/`)
-| Case | Checks |
-| --- | --- |
-| `ipc` | Every message type across address spaces: scalar, blocking scalar, lend, lend_mut, move |
-| `timer` | Hart timer as IRQ 0: ownership, timebase, one-shot ticks re-armed from the handler |
-| `uart-irq` | External interrupt through the PLIC to a userspace handler, with injected input |
-| `rng` | Kernel RNG seeded from the device tree: server IDs differ within and between boots |
-| `all-together` | IPC and timer tests sharing one log server |
-| `rustsbi-boot` | The same loader and bundle boot under RustSBI |
-| `kernel-wx` | The kernel's code is not writable, directly or through the physmap (attack) |
-| `wx` | No writable and executable mapping through the syscall interface (attack) |
-| `irq-attack` | Hostile interrupt syscalls: out-of-range, unowned, doubly claimed (attack) |
-| `grant-attack` | An ungranted process is denied every device page and interrupt (attack) |
-| `mem-attack` | Physical RAM cannot be mapped by address; anonymous RAM is zeroed (attack) |
-| `uaf-lent-page` | A frame lent out by a dying process is not reused under the borrower (attack) |
-| `loader-rejects-kernel-address` | A program segment in the kernel's range is refused (attack) |
-| `loader-rejects-kernel-entry` | A program entry point in the kernel's range is refused (attack) |
-| `verified-boot-rejects-bare-archive` | A bundle signed over the bare archive, with no domain and no length, is refused and the machine powers off (attack) |
-| `host-tests` | The host tests that pin wire bytes run in the suite |
-| `verified-boot-rejects-tamper` | A bundle changed after signing is refused (attack) |
-| `smp-spike` | With the `smp` feature, a second hart started through SBI HSM contends on the spinlock big kernel lock without losing updates |
-| `unsafe-budget` | The `unsafe` ratchet |
-| `lend-untouched-page` | Lending, mutably lending or moving never-touched pages is served on 1 and 4 harts; a half-mapped range is refused whole; backing more than RAM is the caller's `OutOfMemory` (attack) |
-| `move-borrowed-page` | A server cannot move on a page it was only lent; the lender gets it back intact (attack) |
-| `return-lent-unmapped` | A lender cannot unmap or remap its own lent page; the server's return survives (attack) |
-| `syscall-attack` | Hostile heap and oversized-message arguments get errors, not a panic (attack) |
-| `touch-beyond-ram` | Touching reserved memory beyond RAM ends the process, not the kernel (attack) |
-| `budget` | Carving and charging (R6, R7), labels (I6), a subtree destroyed and its handles swept (R10, I2, I10), 128 handles per table page, usage within limits (I5), 500 create-destroy cycles, `time_now`, `random` |
-| `budget-destroy-kills` | Destroying `system` kills every process in it, the caller last (R10); the verdict is the kernel's own lines |
-| `budget-mem-churn` | `system`'s usage stays exactly stable over 64 map/touch/unmap rounds and 64 lend/return cycles, on 1 and 2 harts |
-| `budget-carve-attack` | Carving beyond a parent's pages, processes or weight, with the largest values and wrapping sums, is refused (attack) |
-| `budget-destroy-attack` | Handles to a destroyed subtree are all `BadHandle`, before and after frames and indices are reused (attack) |
-| `budget-forge-attack` | 540 forged handle indices get `BadHandle` (attack) |
-| `budget-table-attack` | A table filled to `MAX_HANDLES` gets `TooLarge`; each page is charged and freed (attack) |
-| `budget-syscall-attack` | Hostile arguments to every K1 and K2 call, in the spec's order of checks, and 4000 fuzzed calls: errors, never a panic (I14) (attack) |
-| `redoubt-ipc` | Endpoints and messages across address spaces: a call with a lend, a transfer and one the receiver never asked for (R4), the badge, account and labels the kernel attaches, minting and receive rights (I3, I4), `WAIT_CAP` per group (R2), abandoned calls reported once and freed by their reply (R3, I15), a message whose handle the receiver's full table cannot take (`Refused`) and a reply whose handles do not fit (`OutOfMemory`) (answers 107, 116), `MAX_OPEN_CALLS` with sends still delivered (R4a) |
-| `redoubt-revoke` | R10 reaching messages in flight: a queued message and a taken call through a revoked handle both `Dead`, the taken one abandoned with its reply reaching nobody, and a revoked handle inside a queued message arriving as 0; a budget handle only narrows (I3) |
-| `redoubt-tight` | A receiver carved to exactly the open-call page plus the lent pages, with nothing for the page tables that map the lend: `Refused`, and the refusal costs it nothing (R4) (attack) |
-| `redoubt-dead` | A server thread exiting with an open call: its caller gets `Dead` and its lend back, and the endpoint survives (R4b); a message the receiving budget cannot pay for is `Refused` to its sender (R4) |
-| `redoubt-ipc-attack` | Stealing a receive right, minting badge 0 or from foreign handles and message ids, replying to and serving other threads' calls, lending memory that is not the sender's, a transfer over `max_transfer`, and a flood: errors, and a victim that still holds its receive right (attack) |
-| `device` | Device objects and the memory calls: `map_device` and its refusals, `dma_alloc` contiguous, zeroed and only with the DMA flag, `map_anon` zeroed even on reused frames, `set_flags` never W+X, and a power-off only the Reset right can produce |
-| `loader-rejects-truncated-elf` | A program image cut short inside its program headers is refused (attack) |
-| `bench-*` | The bench's own self-checks (including `bench-attack-forgery`: a client cannot forge an unprefixed or another PID's line): SSH sessions (loopback against host `sshd -i`, and to the guest's forwarded port), virtio devices, bundle data entries, console reading after the last expect, required power-off; the `must_fail` ones pass only when the bench catches the fault |
+Run `./test --list` for the case inventory and `./test` for the bench. [testbench.md](testbench.md)
+defines verdicts and checked builds. Case definitions and tests own the exact coverage.
+
+The budget/MMIO regression in `budget-syscall-attack` reproduced an rv32 kernel panic before
+the shared-validator fix. It checks input/output refusal, error precedence and continued kernel
+service on both widths. IPC coverage remains in `ipc-outcomes` and the revocation/lend cases.
+
+The unsafe ratchet rejects missing or empty configured source roots; it does not prove that
+all TCB components were configured. Runtime ceiling: 9, no undocumented uses. Server omissions
+are tracked in SWARM. Validation for this change (2026-09-22): the full bench passed 99 executions across 56 cases,
+including budget/MMIO and IPC outcomes on rv32/rv64; wire-generator tests passed 16/16.
+This is regression evidence, not acceptance of the outstanding packages.

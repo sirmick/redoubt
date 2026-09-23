@@ -26,7 +26,7 @@ mediation, authority-closure wording under permitted delegation, and the claimed
 their recommendations are not amendments to R1/R9/R12.
 
 ## Constants
-Initial values; changing one is a spec change (HISTORY.md).
+Initial values; changing one is a spec change (ANSWERS.md).
 
 | Name | Value | Meaning |
 | --- | --- | --- |

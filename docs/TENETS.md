@@ -4,22 +4,16 @@ These outrank every other note. When a change conflicts with a tenet, either the
 the tenet is amended here first, with the reason written down. Terms: [README.md](README.md).
 
 **Design v4 is frozen for milestone 1:** a change to it needs a stated reason, recorded in
-HISTORY.md.
+ANSWERS.md.
 
-## The use case
-Redoubt exists to run **untrusted, potentially hostile agents** — frontier models, and the code they
-write — on one machine, alongside their human principals, without letting an agent escape its grants,
-reach another agent, or reach a network it was not given. The design assumes the agent is the best
-available: it has read every line of this repository and the running system, and it is trying.
+## Purpose and threat model
 
-- **The escape room** (GAME.md, PLAN.md): several real agents, each its own principal with a distinct
-  label set and budget, full source, told they coexist, tasked to break out and to expand their
-  authority. (They may also try to collude, but covert collusion is out of scope; see below.)
-- **Everyday co-existence:** a human's own agents doing useful work under leases, visible to and
-  stoppable by the human.
+Run untrusted, potentially hostile agents alongside their human principals, under explicit
+grants and human-revocable leases. Assume the adversary has the full source, can automate
+exploit attempts, controls its unprivileged processes and may compromise its VM or a server.
+The BEAM is outside the TCB; a compromised shared server exposes what its clients entrusted to it.
 
-This is a **containment** boundary, not a prevention one. Any agent is assumed to compromise its own
-VM (the BEAM is not in the TCB; INIT.md), and possibly a server it talks to. The design guarantees:
+The target guarantees are:
 
 1. **Capability closure.** An agent's reachable authority never exceeds its initial grants plus what
    a human-approved steward action adds; every delegation step narrows (R9, `mint`; CAPABILITIES.md).
@@ -41,55 +35,20 @@ claim/topology questions, not accepted exceptions or proof that the current impl
 the guarantees. Question **166** separately challenges the one-slice responsiveness promise in
 RESOURCES.md; human control does not establish that timing bound by itself.
 
-This is a **software** claim; the physical limits, including covert communication between co-located
-budgets, are out of scope (The adversary).
+The [high/low scenario](GAME.md) tests a secret-holding agent colluding with a networked one.
+Labels must close intentional software paths; confined placement and permitted mediation are
+owned by CONTAINMENT and INIT, with the open qualifications above.
 
-### The high/low pair
-A labelled agent with secrets and no network (**A**) and an unlabelled, networked agent (**B**)
-colluding, having agreed a code in advance, is the sharpest case. Labels remove every *intentional*
-path between them — `call`/`send` (R1), writes (`check`), sinks, metadata, counters, the approval
-screen — and that is the whole of the design's claim here (CONTAINMENT.md's channel table). What
-remains is covert, and is out of scope. The consequences for a confined deployment — read-down
-closed, nothing shared across differing label sets — are rules owned by CONTAINMENT.md (Push) and
-INIT.md (the boot manifest).
+Out of scope: physical attacks, malicious hardware, microarchitectural side channels and
+covert communication between co-located budgets (including power, heat, EM and clocks).
+Hardware isolation and placement belong to [PLATFORM-FPGA](PLATFORM-FPGA.md).
+Assume a perfect attacker clock; protect secrets through constant-time code and isolation,
+not hidden time. Adversarial agents and real attacks test the design; review alone cannot
+bound damage from bugs.
 
-## The adversary
-Design for a capable, patient, automated adversary that has read every line of this repository, can
-generate and test exploit candidates faster than a human can review them, and controls any code it
-is allowed to run as an unprivileged process. It may run several such processes that know of each
-other and collude; a resource shared across a label boundary is a channel (The use case). Assume it
-finds every bug that is findable by reading.
-
-That rules out security through obscurity, through "nobody would try that", or through complexity
-that merely slows a human down. What is left: a small trusted base, mechanisms that are correct by
-construction, and no ambient authority.
-
-Out of scope for the software, stated once so nobody assumes otherwise: physical attacks,
-microarchitectural side channels (Spectre-class, cache timing), **covert communication between
-co-located budgets** (power, heat, EM and the clock couple any two domains, so no OS can prevent it;
-not co-locating two domains is the only zero), and malicious hardware. These need hardware answers,
-and on the FPGA target are handled in the RTL and by placement; the hardware plan may change to avoid
-them (PLATFORM-FPGA.md).
-
-**Timing.** Assume the attacker has a perfect clock: it can count on another core or timestamp
-against a machine it controls. Secrets are protected by constant-time code and by not sharing
-hardware state between budgets, never by hiding time (CONTAINMENT.md).
-
-**Review model.** We do not rely on human review. Adversarial agents from several vendors, and real
-attacks, test the system, so **the design, not review, must bound the damage**. Every component will
-have bugs; a compromised process holds only its own capabilities, and a compromised server reaches
-only what its clients entrusted to it (for a shared server, that is every client's data).
-
-## What this is not
-Said up front, because these are the pressures that erode the tenets below.
-
-- **Not fast.** When speed and clarity conflict, clarity wins. A global TLB flush that is obviously
-  correct beats a targeted one that is subtly wrong. We optimize only what measurement shows is
-  unusable, and only in ways that stay easy to audit.
-- **Not compatible with everything.** No POSIX, no Linux ABI, no C libraries, no legacy hardware, no
-  vendor SDKs. A small set of supported targets, all describable by open standards. Software runs
-  here because it was written or ported for it in Rust.
-- **Not feature-complete.** Anything we do not need is absent rather than optional.
+Clarity takes priority over speed. Optimize measured problems only while retaining auditability.
+There is no POSIX/Linux ABI, C-library, legacy-hardware or vendor-SDK compatibility goal.
+Support a small set of open-standard targets and omit unneeded features.
 
 ## 1. Simple enough to audit in full
 A competent reader should be able to read the entire trusted computing base (firmware interface,
@@ -124,7 +83,7 @@ loader, kernel) and hold it in their head. It should read like a textbook exampl
   break it.
 - **Non-interference across labels.** The label set is the isolation unit; only steward declassification
   moves data across one, and no intentional (software-mediated) flow crosses it, by construction.
-  Covert flows are out of scope (The use case).
+  Covert flows are out of scope (Purpose and threat model).
 
 ## 3. Rust, and assembly only where Rust cannot reach
 - Everything that runs on the machine is Rust: RustSBI firmware, loader, kernel, servers and
@@ -164,8 +123,7 @@ system, held to the same standard of simplicity as the kernel.
 - **One simple harness, real boots.** `cargo testbench` boots the real kernel under QEMU with injected
   programs and asserts on the console. No mocks of the kernel, no special test builds of it (a build of the same sources with debug
   assertions and overflow checks on is not a special build: it is the kernel checked harder, and
-  the bench boots chosen cases with it). The whole
-  suite runs in seconds, so it runs on every change.
+  the bench boots chosen cases with it). Run the whole suite on every change.
 - **Every behaviour has a case.** New kernel or loader behaviour lands with a test in `tests/`.
   A bug fix lands with the test that would have caught it.
 - **Attack tests, not just happy paths.** Hostile images, hostile syscall arguments, hostile
@@ -173,7 +131,7 @@ system, held to the same standard of simplicity as the kernel.
   kernel panic, never silent corruption.
 - **Every dimension we claim.** Milestones 1 to 3 require rv64 boot acceptance and rv32
   compilation; available rv32 boot cases are optional, and required full-stack rv32 boot
-  acceptance belongs to the goal after milestone 3 (PLAN.md, HISTORY.md). Each claimed XLEN,
+  acceptance belongs to the goal after milestone 3 (PLAN.md, ANSWERS.md). Each claimed XLEN,
   each hart count, each supported firmware. A configuration
   that is not booted in the bench is not supported.
 - **The harness can fail.** It is itself checked against known-bad runs, so a green result means something.
@@ -188,5 +146,8 @@ channel); the platform states which. On messy hardware we write no drivers: we r
 Redoubt and let Linux run the hardware and serve virtio to us. There, Linux is in the TCB; we do not
 pretend to contain it. Design: IO-ARCHITECTURE.md.
 
-## Where we stand
-See [STATUS.md](STATUS.md).
+## Implementation and method
+
+[STATUS](STATUS.md) distinguishes implemented behavior from these target constraints.
+[SWARM](SWARM.md) applies them through isolated work packages, explicit dependencies, attack
+acceptance and defensive/simplifier/editor review. [PLAN](PLAN.md) owns future outcomes.

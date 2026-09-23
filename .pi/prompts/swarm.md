@@ -42,8 +42,7 @@ Requested packages: ${@:-none given; derive the ready set from the build plan}.
    in `cargo testbench`, the whole bench is green, no undocumented `unsafe` exists and the
    ratchet did not rise, rv32 still compiles, and the three reviewers' findings are fixed or
    recorded. Then rebase the branch on `redoubt`, re-run the bench, and merge one package at a
-   time. Keep the claims table in `docs/SWARM.md`, `docs/STATUS.md` and one line per package in
-   `docs/HISTORY.md` current.
+   time. Keep the claims table in `docs/SWARM.md`, `docs/STATUS.md` current; add HISTORY entries only for milestones.
 
 6. **Continue the waves.** After a merge, start whatever became ready. Stop when the ready set
    is empty or something needs the owner.

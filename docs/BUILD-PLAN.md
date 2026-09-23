@@ -1,47 +1,30 @@
-# Build plan: milestone 1
+# Remaining milestone 1 work
 
-Draft for review. Owns: the work packages for milestone 1, their order, and how they are accepted.
-The design is frozen (design v4); this plan changes, the design does not without a HISTORY.md entry.
+Milestone outcome: Alice and Bob logged in over SSH on QEMU, separated, with Alice's agent
+contained under a lease. [PLAN](PLAN.md) owns the product acceptance suite; [SWARM](SWARM.md#claims)
+owns package state. Completed package recipes remain in git; the contracts live in their specifications.
 
-**Milestone 1:** Alice and Bob logged in over SSH on QEMU, separated, and Alice's agent running under
-a lease, contained. Every property backed by an attack test (PLAN.md).
+Each package below states its contract, deliverables, acceptance and dependencies. Sizes are
+S (hundreds of lines), M (roughly 1.5k), or L (larger). A passing host component is not a booted
+service. Acceptance also requires the [shared checks and review](SWARM.md#roles-and-execution).
+Attack verdicts come from the kernel, a victim or a trusted checker, not an attacker's claims.
 
-## How to read a work package
-Each package (WP) has:
-- **Reads:** the design it implements. The spec wins over anything else; rules are cited as R1-R12
-  (with R4a and R4b) and invariants as I1-I15 (KERNEL-SPEC.md).
-- **Delivers:** the crates, programs or changes it produces, and the paths it may write.
-- **Accepted when:** its tests. A package is done when these pass in `cargo testbench` (and the
-  model's property tests, where named), a reviewer has checked it against the spec, and STATUS.md
-  is updated. Every security property it touches has an **attack case** that tries to break it.
-  An attack case asserts its outcome through the system (the kernel, the victim, or a clean
-  power-off), never through the attacker's own output: the console does not say who wrote a line,
-  so a hostile program can print its own PASSED line.
-- **Needs:** the packages that must be done first.
-- **Size:** S (a few hundred lines), M (up to ~1.5k), L (more).
+Milestone 1 requires rv64 boots and rv32 compilation; existing rv32 boots add coverage.
+The slice uses `no_std` + `alloc` Rust and Elixir; a Rust `std` target is later work.
+Design changes need approval recorded once in [ANSWERS](ANSWERS.md) and applied to their owner.
+Open decisions are in [QUESTIONS](QUESTIONS.md), including 163 (typed parking), 164–166
+(security/latency claims), and device/lifecycle issues 127–149. No package resolves them by assumption.
 
-Everything in milestone 1 is `no_std` + `alloc` Rust or Elixir on beamlet; the Rust `std` target is
-not needed.
+## Verification follow-up
 
-## Settled before the build
-- **Randomness:** a `random` system call returning one `u64` (KERNEL-SPEC.md), used by WP-B1,
-  WP-S1, WP-S3.
-- **Widths:** milestone 1 is built and booted on rv64. rv32 must keep **compiling** (kernel, loader,
-  `redoubt-sys`, `redoubt-rt`, servers): a build check in the bench. Existing rv32 boot cases are
-  optional additional coverage; required full-stack rv32 boot acceptance is after milestone 3
-  (TENETS.md, PLAN.md). Width-specific
-  code only in paging geometry, trap entry and saved context, and the ABI's register encoding
-  (PLAN.md); `redoubt-sys` needs none, since both widths share one register layout (KERNEL-SPEC.md,
-  ABI).
-- **Typed-message tables:** each server package (WP-D1, WP-D2, WP-D3, WP-S1, WP-S2, WP-S3) writes
-  the tables of the protocols its server serves into that server's note, in WIRE.md's format, with a
-  HISTORY.md line: a small design addition, reviewed as one.
-- **The owner's answers 1-126** (QUESTIONS.md) are in the notes; nothing is open. A package built
-  before an answer that changed it gets a follow-up package rather than a silent edit (WP-A2, WP-W2,
-  WP-W3, WP-M1, WP-R1b, WP-V1); WP-A3 was folded into WP-K2, so it has no branch of its own.
+Restore `blkd-build.toml`, `blkd-host-tests.toml`, `bootfsd-build.toml`, `consoled-build.toml`
+and `r4-host-tests.toml` from the recovery inventory using current paths. Register blkd's
+unsafe ceiling of 4 and bootfsd/consoled's combined ceiling of 0, with zero undocumented uses;
+keep runtime at 9. Verify host cases, both-width builds and actual source coverage. Current
+manual server test results do not substitute for permanent bench registration.
+
 ## Work packages
 
-### Track M: model and contracts (start immediately, in parallel)
 **WP-M0. Executable security model.** Size L.
 - Reads: KERNEL-SPEC.md (all), CONTAINMENT.md, CAPABILITIES.md (steward policy parts used in
   milestone 1).
@@ -68,7 +51,7 @@ not needed.
   CONTAINMENT.md (`check`, metadata as reads, `admit` per badge for account 0 with a fair share per
   badge, reader budgets answering a call, blame per (account, label set) ending every budget of it,
   fixed sub-budgets per label set); CAPABILITIES.md (`MAX_LEASE` as steward policy, nested
-  sub-agents, the approval screen, narrowing handles as revocation scopes, `keys` in leases).
+  sub-agents, the approval screen, narrowing handles as revocation scopes, no `keys` in milestone-1 leases).
 - Delivers: `model/` updated: the README's interpretation choices the spec has now settled
   changed to match or marked settled (6 and 7 change: a `send` is never served or blamed; 8, 10,
   14, 20, 23, 24 stand), and the open questions it listed closed; mutations for each new rule (an
@@ -80,99 +63,6 @@ not needed.
   admitted).
 - Accepted when: as WP-M0, at 10^6 sequences, adding I15 and the new mutations.
 - Needs: WP-M0.
-
-**WP-W1. Wire codecs.** Size M.
-- Reads: WIRE.md.
-- Delivers: `libs/wire/`: a `no_std` 9P2000 codec; the typed-message table format and a
-  generator emitting Rust and Elixir codecs; a strict JSON (I-JSON) parser profile for manifests.
-  Fuzz targets for all three.
-- Accepted when: round-trip tests; fuzzing finds no panics or hangs (1 hour each in CI-equivalent
-  runs); the Elixir codec round-trips the same vectors on beamlet.
-- Needs: nothing. Merged.
-
-**WP-W2. Wire generator follows answers 28, 41, 42, 56 and 98.** Size S.
-- Reads: WIRE.md (Tables, Layout in a message).
-- Delivers: `libs/wire/`: `handle[N] KIND` in the table format, the kind in the generated docs
-  only (answer 56: kinds are checked by use, `WrongObject` on first use); code 1 `Malformed`
-  reserved and added to every error table (`tables/example.md`'s code 1 renumbered); a table giving
-  code 1 its own meaning refused; no `kind` column (every milestone 1 typed message is a `call`,
-  answer 98).
-- Accepted when: the drift test covers kinds and `Malformed`; a table with an unknown kind or its
-  own code 1 fails generation; the Elixir codec round-trips the new vectors.
-- Needs: WP-W1. Merged (`3715363a9`).
-
-**WP-W3a. The 9P opcode floor, and the `copy_file` rename (answers 113, 155).** Size S.
-- Reads: WIRE.md (Messages, Tables).
-- Delivers: in `libs/wire/gen/`: the `<!-- wire: NAME ninep -->` marker for a protocol served on a 9P
-  endpoint, whose opcodes must start at 16 (`ninep_common` reserves 1-15 there); a marked table using
-  a lower opcode is refused by the generator. The `fsd` typed-operations table (NAMESPACES.md) is a
-  marked table and must still generate, which needs answer 155's rename (`copy` -> `copy_file`,
-  because `copy` camel-cases to the Rust type `Copy`, which every generated type derives).
-- Accepted when: the drift test covers the marker; a marked table with an opcode below 16 fails
-  generation, a marked table at 16 passes, and an unmarked table still starts at 1; and
-  `cargo test -p redoubt-wire-gen` is green, including the `fsd` table, on `redoubt`.
-- Needs: WP-W2. Carries answers 113 (the opcode floor) and 155 (the `copy_file` rename).
-  **WP-W3b is deleted** (answer 154): answer 115 was already satisfied — `redoubt-rt`'s records are
-  `Record([0; N])`, already backed, and the untouched-page assertion already lives in the
-  `budget-syscall-attack` (WP-K1) and `lend-untouched-page` (WP-K0) cases.
-
-**WP-A1. System call ABI crate.** Size S.
-- Reads: KERNEL-SPEC.md (system calls, messages, errors).
-- Delivers: `redoubt-sys`: call numbers, argument and result register encodings (one layout for
-  both widths), the error enum, and a host round-trip test for every call and error (like `redoubt`'s
-  `Result` test).
-- Accepted when: round-trip tests pass; the names match WP-M0 exactly.
-- Needs: WP-M0's call list (can start from KERNEL-SPEC.md directly). Merged.
-
-**WP-A2. ABI follows answers 28-101.** Size S.
-- Reads: KERNEL-SPEC.md (`process_start`, `budget_create`, `serve`, `random`, Messages, ABI,
-  Constants, the error table).
-- Delivers: `redoubt-sys`: `process_start`'s `arg`; `receive`'s one record (`call`, `send`,
-  `interrupt`, `exit`, `abandoned`), with `blamed_labels` in the exit notice and no badge notice or
-  handle kinds; the `serve` call; `random` returning one `u64` (`MAX_RANDOM` gone);
-  `budget_create`'s `first` flag in place of a class; no `MAX_LEASE` (a steward constant); the
-  error rows as the spec now lists them (`Refused` at delivery for `call`, no `Busy` or
-  `OutOfMemory` from `receive`, `NotPermitted` for a badged exit endpoint).
-- Accepted when: round-trip and malformed-input tests for every changed call and record; the fuzz
-  target rerun; names match WP-M1.
-- Needs: WP-A1. Before WP-K2 and WP-R1b use the new records. Merged (`c98034520`); `budget_create`'s
-  `first` flag, which it added, is removed again by WP-A3.
-
-**WP-A3. The ABI drops `first` (answer 103).** Size S.
-- Reads: KERNEL-SPEC.md (`budget_create` and its error row, Budget, R12, I8).
-- Delivers: `redoubt-sys`: `budget_create`'s record without the `first` flag — the slot is removed
-  and the fields after it move up, so the record is one slot shorter — and its error row without
-  `ClassDenied`; `MAX_HANDLES`'s `TooLarge` on a call that would exceed it, and `OutOfMemory` on a
-  reply whose handles do not fit (questions 102, 107, 116); the debug assertions that check each
-  call's errors updated to match.
-- Accepted when: round-trip and malformed-input tests for `budget_create`'s record; no encoding
-  carries a priority or class argument; the fuzz target rerun; names match WP-M1.
-- Needs: WP-A2. Before WP-K2, which removes the flag from the kernel. **Folded into WP-K2** (no
-  separate package): the flag is gone from `redoubt-sys` and the kernel together, so there is no A3
-  row in SWARM.md's claims table (HISTORY.md, WP-K2).
-
-**WP-L1. littlefs in pure Rust.** Size L.
-- Reads: NAMESPACES.md (filesystem section), littlefs `SPEC.md`.
-- Delivers: `libs/littlefs/`: `no_std` littlefs over a block trait; custom attributes; host tests.
-- Accepted when: differential tests against the C reference **on the host only** (images written by
-  either read identically in the other); crash injection at every block write leaves a mountable,
-  consistent image; fuzzed images never panic.
-- Needs: nothing. Merged. It relies only on `blkd`'s contract (IO-ARCHITECTURE.md, Storage).
-
-**WP-T1. Test bench extensions.** Size M.
-- Delivers: in `tools/testbench`: an SSH client driving sessions over QEMU port forwarding;
-  multi-session scripted scenarios; a virtio-blk image and virtio-net per case; attack programs as
-  first-class case inputs; model-trace replay support for WP-C1.
-- Accepted when: a self-check case proves each new feature can fail (TENETS.md 6).
-- Needs: nothing. Merged.
-
-**WP-T1b. Attack verdicts from the system.** Size S. (Emerged from answer 26.)
-- Delivers: every existing attack case takes its verdict from the kernel, a victim or an
-  `attack-checker`, never from the attacker's output; `log-server` prefixes every relayed line with
-  the sender's PID from the kernel; `bench-attack-forgery`.
-- Accepted when: `bench-attack-forgery` shows a client cannot forge an unprefixed or another PID's
-  line; `wx` and `irq-attack` are listed as survival-only until WP-K4 and WP-K3.
-- Needs: WP-T1. Merged.
 
 **WP-T1c. Fail-closed unsafe coverage (ASTRA C4).** Size S.
 - Reads: TENETS.md 2/6, ASTRA.md C4 and WP-IPC1's verification gate. This repairs existing
@@ -188,91 +78,6 @@ not needed.
   complete. No firmware, kernel or runtime implementation is owned by this package.
 - Needs: WP-T1 (merged). Separate prerequisite for IPC1 acceptance; may run in parallel with
   IPC1's ABI/runtime work in its own worktree.
-
-**WP-V1. The bundle signing domain (answer 120).** Size S. (Emerged from WP-S1.)
-- Reads: VERIFIED-BOOT.md (Signature, Testbench).
-- Delivers: the loader verifies the boot bundle's signature over
-  `"redoubt.bundle.v1\0" || u64_le(len) || tar`, with `len` taken from the initrd it is reading, and
-  never over the bare archive (`loader/src/verify.rs`); the bench's signing path builds the same
-  preimage (`tools/testbench`, the bundle builder), so the two change together — nothing boots if
-  only one does; a case that signs the bare archive, with no domain and no length.
-- Accepted when: every bench case still boots; the bare-archive case is refused by the loader and
-  the machine powers off, as `verified-boot-rejects-tamper` does; `tamper_bundle` still fails; a
-  signature made over a preimage with another domain, or with the wrong `len`, is refused.
-- Needs: nothing. Changes what ships (the loader is TCB), so it lands on its own, before any
-  production key exists.
-
-### Track K: the kernel (one integrator at a time; see "Hotspots")
-**WP-K0. Kernel memory panics.** Size S. (Emerged from WP-T1b's audit.)
-- Delivers: the three kernel panics reachable from any unprivileged process fixed (lending an
-  untouched page, moving a page only lent, a lender unmapping its lent page), and the
-  out-of-memory `expect`s beside them; the lend and move paths check a whole range before any page
-  moves.
-- Accepted when: cases `lend-untouched-page`, `move-borrowed-page`, `return-lent-unmapped`,
-  `syscall-attack`, `touch-beyond-ram`, on 1 and 4 harts.
-- Needs: nothing. Merged.
-
-**WP-K1. Budgets and handle tables.** Size L.
-- Reads: KERNEL-SPEC.md objects (Budget, Handle, the cost table), R6-R10, `budget_*`,
-  `handle_close`, `time_now`, `random`; errors and the order of checks. (What R10 does to messages
-  needs endpoints: WP-K2.)
-- Delivers: budget objects with page, process and weight accounting, carving, accounts, deadlines
-  recorded (enforced by WP-K5), class inherited from the parent, a budget's own page charged to its
-  parent, destruction sweeping stamped handles; per-process handle tables charged in pages
-  (confirming the cost table's 128 handles per page, or changing it), at most `MAX_HANDLES` a
-  process (question 102); 64-bit never-reused budget ids; `random` returning one `u64`.
-- Accepted when: kernel cases for R6-R10 and I2, I5, I8, I10, I12; attack cases: carve beyond the
-  parent, exhaust handle tables, a table filled to `MAX_HANDLES` refused with `TooLarge`, destroy
-  while handles are held elsewhere, forge a handle index.
-- Needs: WP-A1 (WP-A2 for the new `budget_create` and `random`). Merged (`e1d2c6216`); the `first`
-  flag it recorded is removed by WP-K2 (answer 103).
-
-**WP-K2. Endpoints and messages.** Size L.
-- Reads: KERNEL-SPEC.md Endpoint, Process (open calls, the current call), Messages (abandoned-call
-  notices), R1-R4b, R10 (messages in flight), `endpoint_create`, `mint`, `call`, `send`,
-  `receive`, `reply`, `serve`, `handle_close`.
-- Delivers: endpoints; the four IPC calls with lend and transfer; `receive` reporting a call or a
-  send; open calls (up to `MAX_OPEN_CALLS` per process, each charged a page, its lend charged to the
-  receiver too; at the limit no calls are taken, while sends, interrupts and notices still are);
-  each thread's current call and `serve`; abandoned calls and their notices; `mint` with stamps,
-  from an open call of the caller's thread; badge-0 receive rights; the label check against the
-  endpoint's owner; fair waiting by (account, label set), and by budget for account 0, `WAIT_CAP`
-  counting queued messages only; delivery only when the receiver can pay for everything the message
-  brings, `Refused` to the sender otherwise, handles that would take the receiver past
-  `MAX_HANDLES` among the costs it cannot pay, and a reply's handles that do not fit the caller
-  dropped (0 in their slots) with the reply delivered and `OutOfMemory` returned (questions 107,
-  116); transfer opt-in; `Dead` for the calls a dying server had taken; R10's reach into messages in
-  flight and into handles inside queued messages (K1 has no messages to test it with); message ids
-  unique per receiving process.
-- Also: the `first` flag removed from the kernel's `budget_create` (answer 103; K1 built it, and K2
-  removes it from the kernel and `redoubt-sys` together, so **WP-A3 is folded in** and has no branch
-  of its own). Nothing schedules on class or on a flag; R12's one queue is WP-K5's.
-- Accepted when: kernel cases for R1-R4b and I3, I4, I7, I9, I11, I15; attack cases: steal a receive
-  right, mint badge 0, mint into a foreign budget, unequal-label call, 10,000 sender threads
-  attempting to call with another account still served in turn, a vault-labelled sender filling its
-  `WAIT_CAP` with its owner's unlabelled sender unaffected, two system senders in different budgets
-  not sharing a `WAIT_CAP`, open calls beyond `MAX_OPEN_CALLS` with sends still delivered, 64 calls
-  parked with short timeouts (each reported abandoned once, freed by its reply), reply to a send,
-  `serve` on a call the thread does not hold, lender destroyed mid-call with the server surviving,
-  unrequested transfer, a message the receiver cannot pay for (`Refused` to its sender; `receive`
-  unaffected), a message whose handles would take the receiver past `MAX_HANDLES` (`Refused`), a
-  caller at `MAX_HANDLES` getting its reply without its handles and `OutOfMemory`, a revoked
-  handle's queued message and taken call (no reply handle reaches the sender), a revoked handle
-  inside a queued message arriving as 0, `mint` from a `send`'s id;
-  `budget_create` takes no flag, so no argument of any call asks to run ahead of the queue.
-- Needs: WP-K1, WP-A2.
-
-**WP-K3. Device objects and interrupts.** Size M.
-- Reads: KERNEL-SPEC.md Device, R5, R11, `map_device`, `dma_alloc`, `system_reset`; DEVICE-GRANTS.md.
-- Delivers: the loader creating MMIO, IRQ and Reset objects from the device tree; IRQ receive with
-  mask-on-fire; DMA allocation returning physical addresses.
-- Accepted when: `uart-irq` rewritten on IRQ receive; attack cases: map an MMIO range without its
-  handle, receive on an IRQ handle not held, name RAM by physical address.
-- Also: `irq-attack` rewritten for IRQ handles, its verdict from a victim holding the handle;
-  today its out-of-range and double-claim attempts prove only survival.
-- Also: `map_anon`, `unmap`, `set_flags` (R11) on the Redoubt path, replacing the legacy memory
-  calls. (Until a call's package runs, it decodes and returns `InvalidArgument`: WP-K1.)
-- Needs: WP-K1 (and WP-K2 for `receive`).
 
 **WP-K4. Process creation and exit.** Size M.
 - Reads: KERNEL-SPEC.md Process, `process_*`, exit notices, R10; PACKAGES.md (launching); INIT.md.
@@ -375,52 +180,7 @@ not needed.
   for its budget with no kernel panic.
 - Needs: WP-M1, WP-K1 to WP-K5, WP-T1, WP-IPC1 (traces include answers 167-168).
 
-### Track R: user runtime and system servers
-**WP-R1. Native runtime crate.** Size M.
-- Delivered (merged, `8298608af`, with everything from answers 39-42 and 50-53): `redoubt-rt`:
-  startup-block parsing and writing as INIT.md states it, found through `arg`; typed handle
-  wrappers, `call`/`send`/`receive` helpers, an allocator over `map_anon`, a panic handler; the
-  shared server library (CONTAINMENT.md): `admit(badge, account, labels)` (per (account, label
-  set), per badge for account 0), `check(caller_labels, object_labels, read|write)` (read: object
-  ⊆ caller; write: equal), a 9P server skeleton (fids keyed by (badge, account, label set), `..`
-  kept inside the root, walks, qids, `stat` and directory reads checked as reads, a 9P call with
-  non-zero words or no lend refused with `Malformed`, a hook freeing a badge's fids and slots when
-  its badge notice arrives) and typed-message dispatch (WIRE.md, status 1 = `Malformed`).
-- Accepted when: host tests against a fake kernel; a bench echo server and client use only this
-  crate; an rv32 and rv64 build case; fuzz targets.
-- Needs: WP-A1, WP-W1 (and WP-K2 to run on the kernel). Merged.
-
-**WP-R1b. The runtime follows answers 64 and 69-101.** Size M.
-- Reads: CONTAINMENT.md (the shared server library), INIT.md (Startup block), NAMESPACES.md
-  (`ninep_common`), WIRE.md, KERNEL-SPEC.md (`receive`'s record, abandoned-call notices, `serve`).
-- Delivers: in `redoubt-rt`: the startup block as the `startup` typed message (answer 75),
-  replacing the tag-and-CRC format, with handle names under the manifest's name rule (answer 64);
-  `ninep_common` (`new_connection` with a random connection id, `disconnect` freeing a connection
-  and everything minted under it) served by the 9P skeleton, its table and INIT.md's `startup`
-  table unfenced and generated (answers 69, 83); the badge-notice hook removed (answer 69); `serve`
-  before resuming a parked call, and an immediate reply to an abandoned-call notice (answers 81,
-  82); handles a request carries that the protocol did not ask for closed (85); caps sized so every
-  bucket at its cap fits the server's budget and the open calls they allow sum to less than
-  `MAX_OPEN_CALLS` with headroom, and a server-side deadline for parked calls (81, 85); a fair share
-  per badge within a bucket (90); badge numbers never reused (86).
-- Accepted when: host tests for each change (a disconnect freeing its fids and every connection
-  minted under it; a stranger's id refused; an unasked handle closed; an agent flooding a bucket
-  leaving its sponsor's share; a parked call resumed under `serve`); the startup-message fuzz
-  target.
-- Needs: WP-R1, WP-A2, WP-W2. Merged (`86117e7af`).
-
-**WP-R1c. Join `Parked` to the 9P skeleton (answers 156-158).** Size M.
-- Reads: NAMESPACES.md (Holding a call), CONTAINMENT.md (the shared server library), `libs/rt/src/server/parked.rs`'s own module doc.
-- Delivers: **the recovery of `5d29d136e`** — the join was written in WP-R4 (2026-09-19, on branch `wp-r4`) and never merged, after R1b removed the old `Read::Wait` and left `parked.rs` stating the gap. Restore it:
-  - `FileServer::read` returns `Read::Done(n)` / `Read::Wait`; `answer_in_place` returns `Replied`/`Waiting`/`NoRoom`.
-  - `NineServer::serve_parking` hands a held request back with its T-message intact in its own lend, closing the handles it brought (and emptying its own list with them) so a second serving cannot close the same indices; a second serving re-reads it, so a clunked fid becomes an `Rerror`.
-  - `Parked<T>` stops owning an `Admission`: `park`/`resume`/`resume_first`/`expired`/`abandoned` take `&mut Admission`, so fids and parked calls are charged in the same buckets and shares (`NineServer::admission_mut`, `share_of`).
-  - `serve`/`serve_with` keep answering everything, so a `Wait` without `serve_parking` is a refusal, never a stranded caller. Only `read` waits in milestone 1.
-- Also: recover the server-side 9P conformance runner (`tests/common/vectors.rs`, whose `waiting` count is 156's new observable).
-- Accepted when: `redoubt-rt`'s host tests cover a parked read resumed when input arrives, a held call abandoned and freed, a fid clunked while its read waits (the second serving is an `Rerror`), and a `Wait` refused by a plain `serve`; the `libs/rt/tests/parked.rs` breaking change is resolved; both widths build; the fuzz target reruns.
-- Needs: WP-R1b. **Blocks WP-R4b** (`consoled` parks a read). `libs/rt` is shared by every server, so this is its own package with its own review round, not part of a server port (answer 157). Merged (`cd65fa610`).
-
-**WP-R1d. Let a typed call park (answer 163).** Size S.
+**WP-R1d. Let a typed call park (open question 163).** Size S.
 - Reads: NAMESPACES.md (Holding a call), `libs/rt/src/server/typed.rs` and `ninep.rs`.
 - Delivers: the park mechanism reaches the **typed** dispatch too, which today it does not. `serve_parking` hands a request back only when `answer_in_place` returns `Answer::Waiting`, and that comes only from `FileServer::read -> Read::Wait`; a typed opcode goes to the server's own dispatch, which is `Result<(), Error>` and must reply, and `Answer<R>` has no "wait" variant. Give the typed path the same hand-back: a way for a typed handler to say "hold this", routed through the same close-the-handles-and-empty-the-list path the read already uses. Nothing else changes: the parked call is still charged to the server's `Admission`, still reported abandoned, still resumed and re-read. One mechanism, two entry points.
 - Accepted when: `redoubt-rt`'s host tests cover a parked **typed** call resumed and answered, one abandoned and freed, and a `Wait` from a typed handler refused by a plain `serve`; both widths build; the fuzz target reruns.
@@ -437,7 +197,7 @@ not needed.
 - Needs: WP-R1b, WP-K4.
 
 **WP-R3. init and the boot manifest.** Size M.
-- Reads: INIT.md (all), WIRE.md (JSON), TENETS.md (The use case), CONTAINMENT.md (the channel table).
+- Reads: INIT.md (all), WIRE.md (JSON), TENETS.md (Purpose and threat model), CONTAINMENT.md (the channel table).
 - Delivers: `init`: reads the manifest (refusing names outside INIT.md's name rule, and any grant of
   a server's own budget; refusing a manifest that gives `keyd` a principal's login or approval key
   or the key the loader verifies the bundle with, which it asks `keyd` for with `holds`, answers
@@ -463,7 +223,7 @@ not needed.
   is WP-S2's case); more than 5 restarts in 60 s reboots.
 - Needs: WP-R2, WP-W1, WP-K3, WP-K5. The `holds` operation it calls belongs to `keyd`'s table
   (WP-S1), so the refusal is written here and exercised end to end once WP-S1 has landed.
-- **Confinement (answers 152-153; TENETS.md, The use case; CONTAINMENT.md, Push and the channel
+- **Confinement (answers 152-153; TENETS.md, Purpose and threat model; CONTAINMENT.md, Push and the channel
   table; GAME.md, Setting up a match).** The manifest gains the `confined` flag (INIT.md, The boot manifest): one
   top-level boolean for the whole boot. `init` compares **label sets** and refuses the boot when two
   entries with differing sets share a `servers` entry, a `volumes` entry, an endpoint name in
@@ -474,22 +234,6 @@ not needed.
   them on one `ipd` instance, one endpoint, one device or one core is refused likewise. (R-2 red team,
   2026-09-22: the device clause was the gap; the shared-volume tail is covered by the Push rule.)
 
-**WP-R4. bootfsd and consoled.** Size S.
-- Delivers: `bootfsd` (read-only 9P over the verified bundle), serving **only the bundle entries
-  the manifest's `public` list names**, matched byte for byte, never the manifest (answer 123).
-  `init` names the public entries in its arguments and pushes their bytes over the `bootfs`
-  protocol, so `bootfsd` never sees the bundle and parses no archive (NAMESPACES.md, Filling
-  `/boot`; answer 148); `consoled` (UART driver serving
-  `/dev/cons` over 9P, IRQ receive); both serve `ninep_common` through the skeleton.
-- Accepted when: 9P conformance vectors from WP-W1; typing on the UART reaches a 9P reader; attack
-  case: a session walking `/boot` sees only the public entries, and a walk to the manifest's own
-  name is refused exactly as a name the bundle never held.
-- Needs: WP-R1c (answer 157: `consoled` parks a read, so the skeleton join lands first), WP-K3.
-  Recovering this package from branch `wp-r4`: the design sections it was written to are restored
-  (`bootfs` in NAMESPACES.md), and `5d29d136e`'s runtime pieces move to WP-R1c. The port onto the
-  current `redoubt-rt` is otherwise mechanical except `consoled`'s parked read.
-
-### Track B: beamlet on Redoubt (parallel with track K once WP-R1 exists)
 **WP-B1. The Redoubt platform for beamlet.** Size M.
 - Reads: beamlet DESIGN.md (I/O), PACKAGES.md.
 - Delivers: a `no_std` `Platform` over `redoubt-rt`: console over `/dev/cons`, monotonic and wall
@@ -514,21 +258,13 @@ not needed.
   80x24).
 - Accepted when: a bench case asks `/dev/cons` for `size` and gets the manifest's size; a key
   sequence decodes to the right events; a server without `consol` yields `{:error, :unknown}`.
-- Needs: WP-B2, WP-R4b, WP-R1d (for `resize`; `size` does not need it).
+- Needs: WP-B2, WP-R4, WP-R1d (for `resize`; `size` does not need it).
 
 **WP-B2b. Redoubt.Ed and Shell.top().** Size S.
 - Delivers: `Redoubt.Ed` (a TUI editor over `/dev/cons`) and `Redoubt.Shell.top()`.
 - Accepted when: a bench case opens `Ed` on `/dev/cons`, navigates with arrow keys, edits a line,
   saves and exits.
 - Needs: WP-B2a. (Split from WP-B2 by answer 161: one acceptance per package.)
-
-### Track D: storage and network
-**WP-D1. blkd.** Size M. virtio-blk driver (the in-tree Rust implementation in `servers/blkd`), partition table,
-block-range handles, validation of every ring index and length.
-- Accepted when: block round trips; a hostile-device model (malformed rings) never corrupts other
-  memory or panics blkd; `blkd`'s contract (IO-ARCHITECTURE.md): a flush on every `sync`, in-order
-  completion, whole-sector writes.
-- Needs: WP-R1b, WP-K3.
 
 **WP-D2. fsd.** Size M. 9P over littlefs on a block range; one label set per volume from the
 manifest; **the byte quotas, metered here and nowhere else** (question 118): `new_connection`'s
@@ -564,29 +300,6 @@ labelled callers.
   `/net` at all (a sink refuses labelled callers).
 - Needs: WP-R1b, WP-K3, WP-W2.
 
-### Track S: security servers
-**WP-S1. keyd.** Size S. Holds keys; signs through a badge-scoped capability naming one key and one
-purpose (for SSH, a signature over the session identifier `keyd` computes itself), never arbitrary
-bytes; never holds keys that authenticate a person to the box; constant-time signing. Its keys in
-milestone 1 are the SSH host key and the steward's `audit` key; **no session and no lease holds
-`keys`** (answer 124), since `grant` mints only the granter's own key and purpose and neither of
-those is a principal's: a principal's key, with the one message shape it may sign, is milestone 2.
-- Reads: INIT.md (keyd, the boot manifest's arguments), CAPABILITIES.md (the powerbox and
-  approvals, agents 7), CONTAINMENT.md (covert and timing channels: constant time; minted badges),
-  WIRE.md (granting and releasing).
-- Delivers, besides signing: `grant` and `release` in WIRE.md's shape, written into `keyd`'s table;
-  `holds(public key)`, answered yes or no, which is how `init` refuses a manifest that hands `keyd`
-  the bundle key without deriving a public key itself (INIT.md, The boot manifest; answer 120); its keys taken as the
-  manifest arguments `name,purpose,seed`, defined in `keyd`'s own note (answer 122); its first
-  minted badge drawn at random above 2^63 (answer 126, with the 9P skeleton, which changes with it).
-- Accepted when: a signature round-trips through a badge-scoped handle; attack cases: a caller
-  cannot sign with a key or for a purpose its badge does not name, a request to sign arbitrary
-  bytes (a relayed SSH user-auth blob) is refused, no export operation exists, enrolling a login
-  key is refused, a `release` of an id the caller never received is refused like one that does not
-  exist, and a grant released with its parent leaves nothing usable behind; two boots of the same
-  bundle mint different badges; the signing path is constant-time under the bench's timing check.
-- Needs: WP-R1b.
-
 **WP-S2. steward (stateless, milestone 1).** Size L.
 - Reads: CAPABILITIES.md, CONTAINMENT.md, INIT.md, PACKAGES.md (launching).
 - Delivers: principals and SSH keys from the manifest; each principal's budget split at boot into
@@ -621,7 +334,7 @@ those is a principal's: a principal's key, with the one message shape it may sig
   while every user budget spins (its weight, not an order); no
   server can destroy a session; a vault session's leases do not change the unlabelled sub-budget's
   free limits.
-- **Confinement (answer 153; CONTAINMENT.md, Push; TENETS.md, The use case).** For a confined
+- **Confinement (answer 153; CONTAINMENT.md, Push; TENETS.md, Purpose and threat model).** For a confined
   deployment the steward never mounts a shared unlabelled volume into a labelled domain; input enters
   by an audited **push**, the mirror of declassification: one item, triggered by the target label's
   owner through the powerbox with an out-of-band approval, carried out through a short-lived writer
@@ -642,7 +355,6 @@ this `sshd` in milestone 1, a stated residual).
   first tested here.
 - Needs: WP-D3, WP-S1, WP-S2.
 
-### Track E: the milestone
 **WP-E1. Alice's agent and the attack suite.** Size M.
 - Delivers: the scripted hostile agent and the scripted hostile user (Bob), and every case in
   PLAN.md's milestone 1 attack suite not already delivered by the packages above, each asserted
@@ -651,44 +363,19 @@ this `sshd` in milestone 1, a stated residual).
 - Needs: everything above.
 
 ## Order
-```
-merged:                  W1  W2  L1  T1  T1b  A1  A2  K0  K0b  K1  K2  K3  R1  R1b  S1  V1
-                         (A3 folded into K2; W3a merged, review due)
-in review:               M0/M1 (the executable model)
-building:                K4/D3 external claims unverified; IPC1 implementation frozen after review
-the ready set:           K5 (behind K4 on the Hotspots)
-kernel, serialized:      K4 -> K5 -> K6 (after R1b)
-IPC follow-up:           IPC1 reviewed implementation present in primary; primary full bench99 PASS;
-                         model, K5 timer, process-exit integration and multi-hart acceptance remain
-verification follow-up:  T1c checker and runtime9/9 reduction present in primary; primary gate PASS
-runtime:                 R1c (merged) -> R4 (merged);  R2 (after K4) -> R3 (after R2, W1, K3, K5)
-beamlet:                 B1 (after R1b, R4) -> B2 (after B1, R3) -> B2a (after B2, R4b, R1d) -> B2b (after B2a)
-storage and network:     D1 (merged) -> D2 (after D1, L1);  D3 (after R1b, K3, W2)
-security:                S1 (after R1b) -> S2 (after R3, B1, D2);  S3 (after D3, S1, S2)
-conformance:             C1 (after M1, K1-K5, T1, IPC1)
-milestone:               E1 (after all)
-```
-**The owner's answers 1-126** (QUESTIONS.md) are all in the notes; nothing is open. Answers
-102-119 add W3 (since split, and W3b dropped) and change K2, K5, M1, R3, D2 and S2 (A3 was folded
-into K2); answers 120-126 add V1
-and change R3, R4, S1 and S2. The critical path is unchanged: the kernel track (K4 to K5), then R3,
-S2 and S3. V1 is off the path and
-depends on nothing, but it changes the loader and the bench's signing path together, so it is one
-package and no other package may edit either half while it runs (Hotspots).
-Everything off that path (model, codecs, littlefs, bench, drivers, beamlet's platform) can proceed
-in parallel. SWARM.md's waves follow this order.
 
-## Hotspots (serialize edits to these)
-- `kernel/src/syscall.rs`, `kernel/src/services.rs`, `kernel/src/mem.rs`,
-  `kernel/src/arch/riscv/process.rs`: only the one kernel package in progress edits them.
-- `redoubt-sys` (the ABI): changed only with a KERNEL-SPEC.md change.
-- `loader/src/verify.rs` and the bench's bundle builder (`tools/testbench`): the signature's
-  preimage lives in both, so only WP-V1 edits either until it lands.
-- The boot manifest format (INIT.md) and the typed-message tables (WIRE.md and each server's note):
-  one owner each; changes go through the design notes first.
-- `docs/`: design changes only with a HISTORY.md entry; STATUS.md updated by whoever
-  finishes a package.
+Use [SWARM Claims](SWARM.md#claims) and each package's Needs above. K4's selective port and
+model reconciliation are the next integration prerequisites; D1/R4 source must not be ported
+again. K5 is dependency-ready but shares the kernel with K4. Preserve IPC1's accepted outcomes
+through both changes. R2/R3 enable native startup; B1/B2 bring up the VM; D2/D3 and S2/S3
+complete storage, network, policy and SSH before E1 acceptance.
 
-## Review of each package
-Reviews follow **SWARM.md rule 8**: batched, mandatory, risk-bounded, with the debt visible. A
-package that merged on its acceptance gate alone is not *done* until its round runs.
+IPC1's concurrency gate remains unresolved against [PLAN's post-M1 SMP scope](PLAN.md#smp-after-milestone-1).
+Record the scope decision before accepting or waiving it; single-hart tests are not simultaneous
+multi-hart evidence. Model properties and mutation tests remain required for M0/M1.
+
+## Hotspots
+
+Serialize kernel `services.rs`, `mem.rs`, `message.rs`, `redoubt.rs`, architecture mapping code
+and syscall dispatch. Coordinate runtime IPC/server changes with native callers. Generated
+wire code changes through its owning tables and generator; do not overwrite it from old branches.

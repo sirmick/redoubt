@@ -88,7 +88,7 @@ list: PLAN.md.
 - **Every blocking call takes a timeout.** Sleeping is a `receive` with a timeout and nothing to
   receive. There is no timer server and no IRQ 0 timer.
 - **User mode reads the high-resolution counter** (`rdtime`) directly. Hiding time protects nothing
-  (TENETS.md, timing).
+  (TENETS.md, Purpose and threat model).
 - **Wall-clock time** (dates, time zones, NTP) is a userspace offset over monotonic time.
 
 ## Swap (later)

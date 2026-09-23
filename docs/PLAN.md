@@ -1,6 +1,6 @@
 # Plan
 
-Forward-looking only. TENETS.md outranks this; what is done is in STATUS.md and HISTORY.md.
+Forward-looking only. TENETS.md outranks this; current behavior is in STATUS.md.
 Design v4 is frozen for milestone 1 (TENETS.md).
 
 ## Milestone 1: separation and containment
@@ -104,33 +104,22 @@ back. Every property attack-tested.**
 
 ## After milestone 3: rv32
 A small goal: bring the full stack up on rv32 and add it back to the required booted acceptance
-dimensions. Until then milestones 1-3 require rv32 compilation and rv64 boots (HISTORY.md).
+dimensions. Until then milestones 1-3 require rv32 compilation and rv64 boots (TENETS.md).
 The bench and launch tooling can already select either width, and existing cases may boot rv32;
 that capability does not make full-stack rv32 support a milestone requirement or a verified claim.
 Width-specific code is allowed only in paging
 geometry, trap entry and saved context, and the ABI's register encoding; anywhere else a
 `target_pointer_width` `cfg` fails review. 64-bit values are `u64`, never `usize`.
 
-## Working rules
-- Record design decisions in `docs/` before or with the code; keep STATUS.md current.
-  Changes to the frozen design need a reason in HISTORY.md.
-- Run `cargo testbench` before and after kernel or loader changes (see `docs/testbench.md`). New
-  kernel behaviour gets a case in `tests/` and, if needed, a program in
-  `tests/programs/`. Every security property gets an attack case.
-- Reuse a crate only if it is small, `no_std`, pure Rust, maintained and read (tenet 5).
-
 ## Open work outside the slice
 - Finish the ABI audit: `libs/abi` and `std`'s Redoubt PAL for register punning and `u32` fields in ABI
   types (`libs/abi` `Result` marshalling is now covered by a round-trip test).
-- ~~The kernel's default features include `debug-proc`, which `kernel/Cargo.toml` describes as adding
-  kernel attack surface; decide whether a default build should carry it.~~ Removed from default; the
-  feature exists but has no `cfg` gates in the source.
 - Custom userspace target `riscv64gc-unknown-redoubt-elf` and `std` (`-Zbuild-std`); process `env`
   block and `.eh_frame` (needed by `std`).
 - Test programs hardcode the UART address and IRQ; startup blocks fix this.
 - Bench: inject device trees to test fail-closed paths (no rng-seed, no memory node, junk); wire in
   the kernel's hosted unit tests; fuzz targets for every parser.
-- Report the two upstream bugs to betrusted-io/xous-core (HISTORY.md).
+- Report the upstream lent-frame and physical-RAM mapping bugs to betrusted-io/xous-core; see the historical bug record linked from HISTORY.md.
 - Retarget `std::fs` on the Redoubt target from PDDB (Redoubt's key-value store) to `fsd`.
 
 ## Userland API (USERLAND.md; milestone 3)

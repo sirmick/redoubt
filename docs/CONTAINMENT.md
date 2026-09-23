@@ -14,7 +14,7 @@ Decentralized information flow control in the Flume/HiStar style, with labels fi
 still asks how the per-agent authority-closure wording accounts for delegation within it; the
 property below neither forbids that delegation nor answers the question. Question 164 separately
 tracks the permitted trusted-mediation topology within the confined deployment profile.
-- **The isolation unit is the label set, not the capability set** (TENETS.md, The use case; tenet 2).
+- **The isolation unit is the label set, not the capability set** (TENETS.md, Purpose and threat model; tenet 2).
   Capabilities bound what a budget can *do*; labels bound what it can *leak*, and data moves only
   along labels. Two budgets with different handle sets but equal label sets are **one trust domain**:
   the OS sees no boundary between them, and a handle passed from one to the other is not a crossing.
@@ -235,7 +235,7 @@ Restart and reboot rules: INIT.md.
 ## Covert and timing channels
 **Covert communication is out of scope:** the canonical statement and the reason (on one machine,
 power, heat, EM and the clock couple any two domains, so no OS can prevent or bound it; the only zero
-is placement) are TENETS.md, The adversary — said once there and pointed at here, not repeated.
+is placement) are TENETS.md, Purpose and threat model — said once there and pointed at here, not repeated.
 Software closes every *intentional* flow (the channel table below); the attacker is assumed to have a
 perfect clock (TENETS.md, Timing).
 - **Secrets are handled by constant-time code** (`keyd`, crypto everywhere), so there is nothing
