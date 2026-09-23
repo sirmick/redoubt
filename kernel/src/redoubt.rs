@@ -93,13 +93,13 @@ fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
             MemoryManager::with_mut(|mm| mm.handle_close(pid, handle.index())).map(done)
         }
         Call::BudgetCreate { parent, spec_rec } => MemoryManager::with_mut(|mm| {
-            let spec = BudgetSpec::decode(&read_record::<BUDGET_SPEC_SLOTS>(spec_rec)?)?;
+            let spec = BudgetSpec::decode(&read_record::<BUDGET_SPEC_SLOTS>(mm, spec_rec, false)?)?;
             let handle = mm.budget_create(pid, parent.index(), &spec)?;
             Ok(Some(Return::Handle(redoubt_sys::Handle::new(handle).expect("indices start at 1"))))
         }),
         Call::BudgetDestroy { budget } => budget_destroy(pid, tid, budget.index()),
         Call::BudgetUsage { budget, usage_rec } => MemoryManager::with_mut(|mm| {
-            let frames = record_frames::<USAGE_SLOTS>(usage_rec, true)?;
+            let frames = record_frames::<USAGE_SLOTS>(mm, usage_rec, true)?;
             let usage = mm.budget_usage(pid, budget.index())?;
             write_record_to(usage_rec, &frames, &usage.encode());
             Ok(Some(Return::Nothing))
@@ -208,24 +208,24 @@ fn budget_destroy(pid: PID, tid: TID, h: u32) -> Result<Option<Return>, Error> {
     })
 }
 
-/// The frames behind each slot of an `N`-slot record at `addr`: aligned, and all the caller's
-/// own memory, readable (and, with `write`, writable). Checked in full before any slot is used.
-fn record_frames<const N: usize>(addr: usize, write: bool) -> Result<[usize; N], Error> {
+/// The frames behind a record: backed, aligned, permitted, and owned RAM. The caller
+/// holds the memory-manager guard through validation and copying, excluding unmap/remap,
+/// permission changes and teardown. Device mappings and borrowed pages are not records.
+fn record_frames<const N: usize>(mm: &MemoryManager, addr: usize, write: bool) -> Result<[usize; N], Error> {
     if addr % 8 != 0 {
         return Err(Error::InvalidArgument);
     }
+    let pid = crate::arch::process::current_pid();
     let mut frames = [0; N];
     for (i, frame) in frames.iter_mut().enumerate() {
         let slot = addr.checked_add(i * 8).ok_or(Error::InvalidArgument)?;
         *frame = crate::arch::mem::user_frame(slot, write)?;
+        if !mm.is_main_memory(*frame as *mut u8) {
+            return Err(Error::InvalidArgument);
+        }
+        mm.check_owned_range(pid, slot, 8).map_err(|_| Error::InvalidArgument)?;
     }
     Ok(frames)
-}
-
-/// Copy in an `N`-slot input record.
-pub fn read_record<const N: usize>(addr: usize) -> Result<[u64; N], Error> {
-    let frames = record_frames::<N>(addr, false)?;
-    Ok(core::array::from_fn(|i| kframe::read(frames[i], (addr + i * 8) % redoubt_abi::arch::PAGE_SIZE)))
 }
 
 fn write_record_to<const N: usize>(addr: usize, frames: &[usize; N], slots: &[u64; N]) {
@@ -234,43 +234,21 @@ fn write_record_to<const N: usize>(addr: usize, frames: &[usize; N], slots: &[u6
     }
 }
 
-/// IPC records must be the current process's own RAM, never a device mapping or somebody
-/// else's lend. The caller holds the memory-manager guard throughout validation and copying,
-/// excluding unmap/remap, permission changes and teardown of these frames.
-fn ipc_frames<const N: usize>(mm: &MemoryManager, addr: usize, write: bool) -> Result<[usize; N], Error> {
-    let frames = record_frames::<N>(addr, write)?;
-    let pid = crate::arch::process::current_pid();
-    for (i, frame) in frames.iter().enumerate() {
-        if !mm.is_main_memory(*frame as *mut u8) {
-            return Err(Error::InvalidArgument);
-        }
-        mm.check_owned_range(pid, addr + i * 8, 8).map_err(|_| Error::InvalidArgument)?;
-    }
-    Ok(frames)
-}
-
-pub fn read_ipc_record<const N: usize>(
-    mm: &MemoryManager,
-    addr: usize,
-    output: bool,
-) -> Result<[u64; N], Error> {
-    let frames = ipc_frames::<N>(mm, addr, false)?;
+/// Copy an input record after validating every slot. Calls also need writable output.
+pub fn read_record<const N: usize>(mm: &MemoryManager, addr: usize, output: bool) -> Result<[u64; N], Error> {
+    let frames = record_frames::<N>(mm, addr, false)?;
     if output {
-        ipc_frames::<N>(mm, addr, true)?;
+        record_frames::<N>(mm, addr, true)?;
     }
     Ok(core::array::from_fn(|i| kframe::read(frames[i], (addr + i * 8) % redoubt_abi::arch::PAGE_SIZE)))
 }
 
-pub fn check_ipc_record<const N: usize>(mm: &MemoryManager, addr: usize) -> Result<(), Error> {
-    ipc_frames::<N>(mm, addr, true).map(|_| ())
+pub fn check_record<const N: usize>(mm: &MemoryManager, addr: usize) -> Result<(), Error> {
+    record_frames::<N>(mm, addr, true).map(|_| ())
 }
 
-pub fn write_ipc_record<const N: usize>(
-    mm: &MemoryManager,
-    addr: usize,
-    slots: &[u64; N],
-) -> Result<(), Error> {
-    let frames = ipc_frames::<N>(mm, addr, true)?;
+pub fn write_record<const N: usize>(mm: &MemoryManager, addr: usize, slots: &[u64; N]) -> Result<(), Error> {
+    let frames = record_frames::<N>(mm, addr, true)?;
     write_record_to(addr, &frames, slots);
     Ok(())
 }
