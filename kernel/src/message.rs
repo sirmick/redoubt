@@ -468,10 +468,8 @@ fn answer_record<const N: usize>(
 ) {
     let rec = slot(mm, pid, tid).rec;
     let here = crate::arch::process::current_pid();
-    let written = ss
-        .activate(pid)
-        .map_err(|_| Error::Dead)
-        .and_then(|()| crate::redoubt::write_ipc_record(mm, rec, slots));
+    let written =
+        ss.activate(pid).map_err(|_| Error::Dead).and_then(|()| crate::redoubt::write_record(mm, rec, slots));
     ss.activate(here).expect("the running process can be activated");
     wake(ss, mm, pid, tid, written.and(result));
 }
@@ -650,7 +648,7 @@ pub fn send(
     timeout: u64,
 ) -> Result<Option<Return>, Error> {
     // Stage 1 finished in `redoubt-sys`; the body record is the rest of it.
-    let body = Body::decode(&crate::redoubt::read_ipc_record(mm, body_rec, kind == MsgKind::Call)?)?;
+    let body = Body::decode(&crate::redoubt::read_record(mm, body_rec, kind == MsgKind::Call)?)?;
     // Stage 2, argument by argument.
     let (endpoint, via) = mm.endpoint_handle(pid, h)?;
     let (handles, nhandles) = lookup_handles(mm, pid, &body)?;
@@ -840,7 +838,7 @@ pub fn receive(
     // Whatever it returns, the thread has no current call until it takes one (answer 82).
     set_tword(mm, pid, tid, W_CURRENT, 0);
     // The record must be the caller's own writable memory before anything else happens.
-    crate::redoubt::check_ipc_record::<RECEIVED_SLOTS>(mm, rec)?;
+    crate::redoubt::check_record::<RECEIVED_SLOTS>(mm, rec)?;
     let Some(h) = from else {
         // No handle: sleep until the timeout (KERNEL-SPEC.md, `receive`).
         mark(mm, pid, tid, Wait::Sleep, timeout);
@@ -999,7 +997,7 @@ fn check_receive_record(
     let checked = ss
         .activate(pid)
         .map_err(|_| Error::Dead)
-        .and_then(|()| crate::redoubt::check_ipc_record::<RECEIVED_SLOTS>(mm, rec));
+        .and_then(|()| crate::redoubt::check_record::<RECEIVED_SLOTS>(mm, rec));
     ss.activate(here).expect("the running process can be activated");
     checked
 }
@@ -1237,7 +1235,7 @@ pub fn reply(
     msg_id: u64,
     body_rec: usize,
 ) -> Result<ReplyOutcome, Error> {
-    let body = Body::decode(&crate::redoubt::read_ipc_record(mm, body_rec, false)?)?;
+    let body = Body::decode(&crate::redoubt::read_record(mm, body_rec, false)?)?;
     let frame = open_call_of(mm, pid, tid, msg_id).ok_or(Error::InvalidArgument)?;
     let (handles, nhandles) = lookup_handles(mm, pid, &body)?;
     let call = open_call_at(mm, frame);
@@ -1268,7 +1266,7 @@ pub fn reply(
     let written = ss
         .activate(cpid)
         .map_err(|_| Error::InvalidArgument)
-        .and_then(|()| crate::redoubt::write_ipc_record(mm, rec, &body.encode()));
+        .and_then(|()| crate::redoubt::write_record(mm, rec, &body.encode()));
     ss.activate(here).expect("the running process can be activated");
     let (status, delivered, installed) = if written.is_ok() {
         let mask = slots
@@ -1321,8 +1319,7 @@ fn free_abandoned_lend(ss: &SystemServices, mm: &mut MemoryManager, call: &OpenC
     for i in 0..call.lend_pages {
         let phys = crate::arch::mem::unmap_from(&space, call.lend_server + i * PAGE_SIZE)
             .expect("an abandoned call retains its protected borrower alias");
-        mm.free_frame_of(phys, call.server.0)
-            .expect("an abandoned lend's frame remains owned by its server");
+        mm.free_frame_of(phys, call.server.0).expect("an abandoned lend's frame remains owned by its server");
     }
 }
 

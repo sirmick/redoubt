@@ -9,10 +9,10 @@
 #![no_std]
 #![no_main]
 
+use redoubt_abi::MemoryFlags;
 use redoubt_sys::{BUDGET_SPEC_SLOTS, NUMBER_BASE};
 use test_programs::rd::{self, Error, Number};
 use test_programs::{Logger, log};
-use redoubt_abi::MemoryFlags;
 
 /// Where the fuzzing calls may write: nothing else of this program's.
 static mut SCRATCH: [u64; 1024] = [0; 1024];
@@ -102,6 +102,22 @@ pub extern "C" fn _start() -> ! {
         call(Number::BudgetUsage, [999, scratch, 0, 0, 0, 0, 0]),
     ];
     log!(logger, "[i14] budget_usage -> {:?}", usage);
+    // A non-DMA device mapping is not record storage. Reject both input and output
+    // records before reading/writing device registers or looking up a nonzero handle.
+    let (mmio, len) = rd::map_device(rd::CONSOLE_MMIO).expect("console mapping");
+    for record in [mmio, mmio + len - 8] {
+        for budget in [rd::SYSTEM, 999] {
+            for number in [Number::BudgetCreate, Number::BudgetUsage] {
+                assert_eq!(
+                    call(number, [budget as usize, record, 0, 0, 0, 0, 0]),
+                    Some(Error::InvalidArgument),
+                    "MMIO-backed budget record"
+                );
+            }
+        }
+    }
+    rd::unmap(mmio, len).expect("unmap console");
+    log!(logger, "[i14] MMIO budget input/output records refused before use");
     // `random` takes no arguments (answer 77): its old buffer and length are stray registers.
     let random = [
         call(Number::Random, [text, 8, 0, 0, 0, 0, 0]),
@@ -162,8 +178,28 @@ pub extern "C" fn _start() -> ! {
     // have to put a known reset kind in `a2` and zero in `a3..=a7` at the same time: the
     // machine is not powered off by accident here.
     let pool = [
-        0, 1, 2, 3, 4, 7, 8, 64, 65, 0xfff, 0x1000, scratch, scratch + 3, scratch + 4096, text, end - 8, end,
-        KERNEL, u32::MAX as usize, usize::MAX, usize::MAX - 7, 1 << 31,
+        0,
+        1,
+        2,
+        3,
+        4,
+        7,
+        8,
+        64,
+        65,
+        0xfff,
+        0x1000,
+        scratch,
+        scratch + 3,
+        scratch + 4096,
+        text,
+        end - 8,
+        end,
+        KERNEL,
+        u32::MAX as usize,
+        usize::MAX,
+        usize::MAX - 7,
+        1 << 31,
     ];
     let mut seed = 0x9e37_79b9_u32;
     let mut next = || {
