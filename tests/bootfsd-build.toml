@@ -1,0 +1,7 @@
+description = "bootfsd builds for both widths (BUILD-PLAN.md: rv32 keeps compiling)"
+arch = ["rv64", "rv32"]
+kind = "build"
+# Builds the library and `bootfsd` binary. Boot integration still needs native process startup
+# and init to supply the startup block and public bundle entries. Host tests in
+# `servers/bootfsd/tests/` include the 9P conformance vectors; this case checks compilation only.
+package = "redoubt-bootfsd"

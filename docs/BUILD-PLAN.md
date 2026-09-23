@@ -15,14 +15,6 @@ Design changes need approval recorded once in [ANSWERS](ANSWERS.md) and applied 
 Open decisions are in [QUESTIONS](QUESTIONS.md), including 163 (typed parking), 164–166
 (security/latency claims), and device/lifecycle issues 127–149. No package resolves them by assumption.
 
-## Verification follow-up
-
-Restore `blkd-build.toml`, `blkd-host-tests.toml`, `bootfsd-build.toml`, `consoled-build.toml`
-and `r4-host-tests.toml` from the recovery inventory using current paths. Register blkd's
-unsafe ceiling of 4 and bootfsd/consoled's combined ceiling of 0, with zero undocumented uses;
-keep runtime at 9. Verify host cases, both-width builds and actual source coverage. Current
-manual server test results do not substitute for permanent bench registration.
-
 ## Work packages
 
 **WP-M0. Executable security model.** Size L.

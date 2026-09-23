@@ -83,3 +83,18 @@ paths = ["servers/keyd/src"]
 # WP-S1: none, and the crate says `#![forbid(unsafe_code)]`, so this can only stay at 0.
 max_unsafe = 0
 max_undocumented = 0
+
+[[budget]]
+# WP-D1: a DMA driver is TCB without DMA confinement (TENETS.md 7). The four unsafe
+# blocks in src/kernel.rs perform volatile MMIO register and DMA byte reads/writes.
+name = "blkd (virtio-blk driver; DMA, so TCB)"
+paths = ["servers/blkd/src"]
+max_unsafe = 4
+max_undocumented = 0
+
+[[budget]]
+# WP-R4: both crates forbid unsafe code. consoled uses the runtime's Registers for MMIO.
+name = "bootfsd and consoled (the first two 9P servers)"
+paths = ["servers/bootfsd/src", "servers/consoled/src"]
+max_unsafe = 0
+max_undocumented = 0

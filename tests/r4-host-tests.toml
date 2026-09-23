@@ -1,0 +1,6 @@
+description = "bootfsd and consoled serving paths against the runtime's fake kernel, including 9P conformance vectors"
+kind = "host-tests"
+# Host tests cover public bundle contents read back byte for byte, the manifest name hidden
+# like any absent name, and fake ns16550 input reaching a 9P reader through a parked call.
+# They do not establish server boot integration or native process startup.
+packages = ["redoubt-bootfsd", "redoubt-consoled"]

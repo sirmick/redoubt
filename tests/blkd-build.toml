@@ -1,0 +1,7 @@
+description = "blkd builds for both widths (BUILD-PLAN.md: rv32 keeps compiling)"
+arch = ["rv64", "rv32"]
+kind = "build"
+# Builds the library and `blkd` binary. Boot integration still needs native process startup
+# and init to supply the endpoint and `disk`/`disk-irq` handles in the startup block.
+# Host behavior is covered by `blkd-host-tests`; this case checks compilation only.
+package = "redoubt-blkd"
