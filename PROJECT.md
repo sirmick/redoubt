@@ -91,6 +91,8 @@ acceptance gates. Add four keyed members in one `workspace_configure` patch:
 Each has `package:"<package>"`, `lifetime:"resident"`, `can_spawn:false`, the actual
 worktree cwd and explicit instructions. Set role to `implementer` or `reviewer`.
 Keep all four through review and fix cycles; do not replace reviewers between rounds.
+Create package worktrees under `.worktrees/<package>` in the project root (listed in
+`.git/info/exclude`); Wash rejects member cwds outside the configured root.
 
 The implementer receives `.pi/agents/implementer.md`, owned paths, governing spec
 sections/decision IDs, exact deliverables, test commands and an early reporting checkpoint.
