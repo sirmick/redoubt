@@ -145,6 +145,10 @@ recipes remain in git.
   returns by its timeout (I13); a deadline destroys its budget; the old IRQ-0 timer path and
   `timer` case are gone.
 - Needs: WP-K2.
+- **Parked code is not a starting point.** Branch `wp-k5-unreviewed` (9a11c74e5) holds scheduler
+  and timer code a first implementer wrote without an approved plan, test report or review. It may
+  be inspected once WP-K5's plan is approved, as a source of ideas to verify, never as a base:
+  nothing merges from it, no test or plan may rely on it, and WP-K5 is built fresh on `wp-k5`.
 
 **WP-K5a. `map_fixed` (answer 172).** Size S.
 - Reads: KERNEL-SPEC.md R11, System calls and Errors (`map_fixed`); PACKAGES.md, Launching a process.
