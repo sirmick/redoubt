@@ -1,0 +1,20 @@
+description = "A device grant names its loader program's PID, and only that program has it: a process created later with the PID of a granted program that has exited is refused the legacy interrupt claim and device map the grant allowed (checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+# PID 2 grant-reuse, the steward's stand-in, spawns children until process_create draws PID 3.
+# PID 3 grant-donor claims its interrupt and maps its device through its grants, then exits (it
+# parks instead if its own grants fail, and the launcher then never sees PID 3 come free).
+programs = ["grant-reuse", "grant-donor"]
+timeout_secs = 120
+expect = [
+    '^\[grant-reuse\] ok: PID 3 reused after \d+ spawns; its grants refused$',
+    '^GRANT-PID-REUSE TEST DONE$',
+]
+forbid = ['\[grant-reuse\] FAIL', 'BREACH', 'panicked']
+poweroff = true
+
+[[grant]]
+program = "grant-donor"
+mmio = ["0x101000:0x1000"]
+irq = [40]
