@@ -295,8 +295,9 @@ pub extern "C" fn _start() -> ! {
         }
     }
     expect!(t, rd::usage(rd::SYSTEM), Ok(system0));
-    // A deadline is recorded, not yet enforced (WP-K5): creating with one is accepted.
-    let lease = rd::BudgetSpec { deadline: 1, ..rd::spec(2, 0, 0) };
+    // A deadline is accepted at creation; this one is an hour away, so the budget is destroyed by
+    // hand first. (Enforcement: `budget-deadline`.)
+    let lease = rd::BudgetSpec { deadline: rd::time_now().unwrap() + 3_600_000_000, ..rd::spec(2, 0, 0) };
     let l = expect!(t, rd::create(rd::SYSTEM, &lease), Ok(base)).unwrap_or(base);
     expect!(t, rd::destroy(l), Ok(()));
     let _ = FOREVER;
