@@ -16,8 +16,10 @@ const WAIT: u64 = 1;
 const WAKE: u64 = 2;
 /// The status of a parked call past its deadline.
 const TIMED_OUT: u64 = 5;
-/// The longest a call stays parked (µs).
-const LONGEST: u64 = 200_000;
+/// The longest a call stays parked (µs). Long enough that A's parked call cannot expire while B
+/// retries its wake-up, however loaded the machine (QA D3-code-review-3: at 200 ms it could,
+/// and B then retried for ever).
+const LONGEST: u64 = 2_000_000;
 
 /// A server that parks `WAIT` calls and answers one with 42 for each `WAKE`, until its endpoint
 /// goes. Returns how many abandoned-call notices it handled and how many calls expired.
@@ -80,21 +82,27 @@ fn parked_calls_are_served_abandoned_and_expired() {
         abandoned * 100 + expired
     });
 
-    // A waits; B wakes it (retrying until A's call is parked).
+    // A waits; B wakes it (retrying until A's call is parked, and no longer than A waits).
     let waiter = f.run(a, move || {
         Endpoint::from_handle(ha).call(&[WAIT, 0, 0, 0], &[], None, FOREVER).into_result().unwrap().0.words[1]
             as u32
     });
-    f.run(b, move || {
+    let waiter_done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let done = waiter_done.clone();
+    let waker = f.run(b, move || {
         let ep = Endpoint::from_handle(hb);
-        while ep.call(&[WAKE, 0, 0, 0], &[], None, FOREVER).into_result().unwrap().0.words[1] == 0 {
+        while !done.load(std::sync::atomic::Ordering::Acquire) {
+            if ep.call(&[WAKE, 0, 0, 0], &[], None, FOREVER).into_result().unwrap().0.words[1] != 0 {
+                return 1;
+            }
             handle::sleep(1000).unwrap();
         }
         0
-    })
-    .join()
-    .unwrap();
-    assert_eq!(waiter.join().unwrap(), 42);
+    });
+    let woken = waiter.join().unwrap();
+    waiter_done.store(true, std::sync::atomic::Ordering::Release);
+    assert_eq!(waker.join().unwrap(), 1, "A's call was answered without B's wake-up (it expired)");
+    assert_eq!(woken, 42);
     // The server made A's call its current call before it answered it (answer 82).
     // (A's is the only call resumed so far; B's were answered as they came.)
     let log = f.log(server);
