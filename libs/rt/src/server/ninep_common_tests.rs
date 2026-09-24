@@ -394,3 +394,47 @@ fn random_common_requests_never_panic() {
         }
     }
 }
+
+/// `mint_rooted` (answer 174: `ipd`'s `grant`): a connection rooted where the file server says,
+/// minted in the same table as `new_connection`'s, admitted, freed by `disconnect` like any other,
+/// and undone by `unmint`.
+#[test]
+fn a_rooted_mint_is_an_ordinary_connection_rooted_where_the_server_says() {
+    let (mut t, mut k) = (T::new(), FakeKernel::new());
+    let a = alice();
+    t.attach(&a, 0, "");
+    // The file server picks the root: `a/b` (node 2), whatever the caller's own root is.
+    let root = (2usize, t.server.fs.qid(2));
+    let (handle, id, badge) = t.server.mint_rooted(&a, root, &mut k).unwrap();
+    assert_eq!(handle, h(99 + k.minted.len() as u32));
+    assert!(badge >= FIRST_MINTED_BADGE);
+    assert_eq!(t.server.connections(), 1);
+    let child = through(&a, badge);
+    t.attach(&child, 0, "");
+    assert_eq!(t.walk(&child, 0, 1, &["f"]), vec![3], "rooted at a/b");
+    assert_eq!(t.walk(&child, 0, 2, &[".."]), vec![2], "`..` stops at its root");
+    // Its id is an ordinary connection's: `disconnect` frees it and its fids.
+    t.disconnect(&mut k, &a, id).unwrap();
+    assert_eq!(t.server.connections(), 0);
+    assert_eq!(t.err(&child, Body::Tattach { fid: 5, afid: NOFID, uname: "", aname: "" }), "no such connection");
+    // `unmint` undoes one whose reply was not delivered, admission and all.
+    let (_, _, badge) = t.server.mint_rooted(&a, root, &mut k).unwrap();
+    t.server.unmint(badge);
+    assert_eq!(t.server.connections(), 0);
+    assert_eq!(t.server.admission().held(AdmitKey::of(&a), Resource::State), 0);
+}
+
+/// A rooted mint takes admission like `new_connection`, and a caller at its cap is refused.
+#[test]
+fn a_rooted_mint_is_admitted() {
+    let (mut t, mut k) = (T::new(), FakeKernel::new());
+    let a = alice();
+    let root = (0usize, t.server.fs.qid(0));
+    let mut made = 0;
+    while t.server.mint_rooted(&a, root, &mut k).is_ok() {
+        made += 1;
+        assert!(made <= 8, "the state cap binds");
+    }
+    assert!(made >= 1);
+    assert_eq!(t.server.admission().held(AdmitKey::of(&a), Resource::State), made);
+}

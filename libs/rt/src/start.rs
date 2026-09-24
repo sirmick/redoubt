@@ -10,7 +10,7 @@
 //! on hostile input is blamed however the process died.
 
 use core::fmt::{self, Write};
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 use redoubt_sys::Handle;
 
@@ -32,6 +32,11 @@ pub mod exit {
 static CONSOLE: AtomicU32 = AtomicU32::new(0);
 /// Set by the first panic, so a panic while reporting one exits at once.
 static PANICKING: AtomicBool = AtomicBool::new(false);
+/// The program's panic hook ([`set_panic_hook`]), as a function pointer's address; 0 for none.
+/// Only ever 0 or a `fn()` stored by `set_panic_hook`.
+static PANIC_HOOK: AtomicUsize = AtomicUsize::new(0);
+/// Set when the hook is first run, so a panic inside the hook does not run it again.
+static HOOK_RAN: AtomicBool = AtomicBool::new(false);
 /// The fid the panic report uses on the console connection: high, so it does not collide with
 /// the program's own (a collision only loses the report).
 const PANIC_FID: u32 = 0xffff_fff0;
@@ -95,8 +100,38 @@ pub fn note_console(startup: &Startup) {
 #[cfg(target_os = "none")]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
+    // The hook first: reporting can wait up to `PANIC_TIMEOUT` on the console, and the hook is
+    // what makes the process safe to leave (a driver stopping its device).
+    run_panic_hook();
     report_panic(format_args!("{info}"));
     crate::handle::process_exit(exit::PANIC)
+}
+
+/// Sets the one function the panic handler runs before anything else, for a program that must
+/// put something right before it dies: `netd` resets its device so it stops writing into pages
+/// that are about to be freed (IO-ARCHITECTURE.md, `netd`; answer 174). It may be set once;
+/// `false` if one was already set. The hook must be short and bounded, must not allocate (the
+/// panic may be the heap's) and must not rely on anything but its own atomics: it runs on a
+/// thread that has just panicked. A panic inside it skips it and exits.
+pub fn set_panic_hook(hook: fn()) -> bool {
+    PANIC_HOOK.compare_exchange(0, hook as usize, Ordering::AcqRel, Ordering::Acquire).is_ok()
+}
+
+/// Runs the panic hook, once per process: a second panic (in the hook, or on another thread)
+/// finds it already run.
+pub fn run_panic_hook() {
+    if HOOK_RAN.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let hook = PANIC_HOOK.load(Ordering::Acquire);
+    if hook == 0 {
+        return;
+    }
+    // SAFETY: `PANIC_HOOK` only ever holds 0 or the address of a `fn()` stored by
+    // `set_panic_hook` (`hook as usize`), and 0 was ruled out just above, so this is that same
+    // function pointer back, with its own type.
+    let hook: fn() = unsafe { core::mem::transmute::<usize, fn()>(hook) };
+    hook();
 }
 
 /// Prints a panic report on the console, if the startup block named one. It never allocates
@@ -154,6 +189,22 @@ impl Write for Text {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static CALLS: AtomicU32 = AtomicU32::new(0);
+
+    fn count() { CALLS.fetch_add(1, Ordering::Relaxed); }
+
+    fn other() {}
+
+    /// The hook is set once, and runs once however often the handler asks.
+    #[test]
+    fn the_panic_hook_is_set_once_and_runs_once() {
+        assert!(set_panic_hook(count));
+        assert!(!set_panic_hook(other), "a second hook is refused");
+        run_panic_hook();
+        run_panic_hook();
+        assert_eq!(CALLS.load(Ordering::Relaxed), 1);
+    }
 
     #[test]
     fn text_keeps_what_fits_at_a_character_boundary() {

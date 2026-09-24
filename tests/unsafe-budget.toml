@@ -102,7 +102,9 @@ max_undocumented = 0
 [[budget]]
 name = "redoubt-rt (native runtime): the heap's free lists, page buffers and lends, the startup page"
 paths = ["libs/rt/src"]
-max_unsafe = 9
+# +1 (WP-D3, answer 174): start.rs turns the panic hook's stored address back into its `fn()`,
+# the one way a program (netd) can stop its device before the panic handler exits.
+max_unsafe = 10
 max_undocumented = 0
 
 [[budget]]

@@ -141,12 +141,36 @@ pub struct Refused;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Unsized;
 
+/// Caps for the bucket of one account-0 root badge, in place of [`Limits`]' per-bucket caps
+/// (answer 174: `ipd` gives `sshd` room for a parked accept and two calls per session, and the
+/// steward room for its grants). It applies only to a caller with account 0 calling on exactly
+/// this badge: a server cannot know a badge's account when it reads its arguments, and a client
+/// with an account never lands in a badge's bucket (`AdmitKey::of`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Override {
+    pub badge: u64,
+    pub in_flight: u32,
+    pub files: u32,
+    pub state: u32,
+}
+
+impl Override {
+    fn of(&self, resource: Resource) -> u32 {
+        match resource {
+            Resource::InFlight => self.in_flight,
+            Resource::Files => self.files,
+            Resource::State => self.state,
+        }
+    }
+}
+
 /// Counts what each bucket, and each share within it, holds. Nothing holding nothing has an
 /// entry, so the tables only ever hold what currently holds something. Plain vectors searched
 /// linearly: growing them can fail cleanly (`try_reserve`), and a server has few clients.
 #[derive(Debug)]
 pub struct Admission {
     limits: Limits,
+    overrides: Vec<Override>,
     buckets: Vec<(AdmitKey, [u32; RESOURCES])>,
     shares: Vec<(AdmitKey, u64, [u32; RESOURCES])>,
 }
@@ -162,10 +186,63 @@ impl Admission {
         if caps.iter().any(|cap| (1..SMALLEST_CAP).contains(cap)) {
             return Err(Unsized);
         }
-        Ok(Admission { limits, buckets: Vec::new(), shares: Vec::new() })
+        Ok(Admission { limits, overrides: Vec::new(), buckets: Vec::new(), shares: Vec::new() })
+    }
+
+    /// Admission under `limits`, with `overrides` for named account-0 root badges. Refused
+    /// ([`Unsized`]) unless every badge is a root one (nonzero, below the minted range) and named
+    /// once, there are no more overrides than buckets, every cap is 0 or at least
+    /// [`SMALLEST_CAP`], and the **worst case**, every override's bucket and every other bucket
+    /// at its cap, holds no more open calls than `MAX_OPEN_CALLS` less the headroom.
+    pub fn with_overrides(limits: Limits, overrides: &[Override]) -> Result<Admission, Unsized> {
+        let mut admission = Admission::new(limits)?;
+        let first_minted = super::minted::FIRST_MINTED_BADGE;
+        for (i, o) in overrides.iter().enumerate() {
+            let caps = [o.in_flight, o.files, o.state];
+            if o.badge == 0
+                || o.badge >= first_minted
+                || overrides[..i].iter().any(|p| p.badge == o.badge)
+                || caps.iter().any(|cap| (1..SMALLEST_CAP).contains(cap))
+            {
+                return Err(Unsized);
+            }
+        }
+        let named = u32::try_from(overrides.len()).map_err(|_| Unsized)?;
+        let rest = limits.buckets.checked_sub(named).ok_or(Unsized)?;
+        let open = overrides.iter().map(|o| u64::from(o.in_flight)).sum::<u64>()
+            + u64::from(rest) * u64::from(limits.in_flight);
+        if open > (MAX_OPEN_CALLS - OPEN_CALL_HEADROOM) as u64 {
+            return Err(Unsized);
+        }
+        admission.overrides.try_reserve(overrides.len()).map_err(|_| Unsized)?;
+        admission.overrides.extend_from_slice(overrides);
+        Ok(admission)
+    }
+
+    /// Whether every bucket at its cap, the overridden ones at theirs, fits `budget` bytes.
+    pub fn fits(&self, cost: &Cost, budget: u64) -> bool {
+        let one = |in_flight: u32, files: u32, state: u32| {
+            u64::from(in_flight)
+                .checked_mul(cost.in_flight)?
+                .checked_add(u64::from(files).checked_mul(cost.file)?)?
+                .checked_add(u64::from(state).checked_mul(cost.state)?)
+        };
+        let named = self.overrides.iter().try_fold(0u64, |sum, o| sum.checked_add(one(o.in_flight, o.files, o.state)?));
+        let rest = u64::from(self.limits.buckets.saturating_sub(self.overrides.len() as u32));
+        let others =
+            one(self.limits.in_flight, self.limits.files, self.limits.state).and_then(|b| b.checked_mul(rest));
+        named.zip(others).and_then(|(a, b)| a.checked_add(b)).is_some_and(|all| all <= budget)
     }
 
     pub fn limits(&self) -> &Limits { &self.limits }
+
+    /// `key`'s cap for `resource`: an override's, for an account-0 root badge that has one.
+    fn cap(&self, key: AdmitKey, resource: Resource) -> u32 {
+        match self.overrides.iter().find(|o| key.account == 0 && key.badge == o.badge) {
+            Some(o) => o.of(resource),
+            None => self.limits.of(resource),
+        }
+    }
 
     fn bucket(&self, key: AdmitKey) -> Option<usize> { self.buckets.iter().position(|(k, _)| *k == key) }
 
@@ -176,7 +253,7 @@ impl Admission {
     /// Takes one `resource` for `share` (a badge) in `key`'s bucket, or refuses.
     pub fn admit(&mut self, key: AdmitKey, share: u64, resource: Resource) -> Result<(), Refused> {
         let r = resource as usize;
-        let limit = self.limits.of(resource);
+        let limit = self.cap(key, resource);
         let bucket = self.bucket(key);
         let total = bucket.map_or(0, |i| self.buckets[i].1[r]);
         if total >= limit || (bucket.is_none() && self.buckets.len() >= self.limits.buckets as usize) {
@@ -386,5 +463,60 @@ mod tests {
         assert!(l.fits(&cost, need));
         assert!(!l.fits(&cost, need - 1));
         assert!(!Limits { buckets: u32::MAX, ..l }.fits(&Cost { file: u64::MAX, ..cost }, u64::MAX));
+    }
+
+    use alloc::vec;
+
+    fn root(badge: u64, account: u64) -> AdmitKey {
+        AdmitKey::of(&Caller { badge, account, labels: Labels::from_slice(&[]).unwrap() })
+    }
+
+    /// An override gives exactly its badge's bucket its caps, for account-0 callers only.
+    #[test]
+    fn an_override_is_its_root_badge_s_alone() {
+        let sshd = Override { badge: 3, in_flight: 24, files: 32, state: 20 };
+        let mut a = Admission::with_overrides(Limits { buckets: 5, in_flight: 5, files: 8, state: 4 }, &[sshd]).unwrap();
+        // sshd's bucket takes 24 calls; the 25th is refused.
+        for _ in 0..24 {
+            a.admit(root(3, 0), 3, Resource::InFlight).unwrap();
+        }
+        assert_eq!(a.admit(root(3, 0), 3, Resource::InFlight), Err(Refused));
+        // Another account-0 badge, and a user whose badge happens to be 3, get the default 5.
+        for key in [root(4, 0), root(3, 1001)] {
+            let taken = (0..30).take_while(|_| a.admit(key, 3, Resource::InFlight).is_ok()).count();
+            // At most the default 5 (a user's bucket shares it: one badge alone gets half).
+            assert!((1..=5).contains(&taken), "{key:?}: {taken}");
+        }
+    }
+
+    /// Worst-case sizing: overrides plus every other bucket at the default must leave the
+    /// open-call headroom; bad badges and small caps are refused.
+    #[test]
+    fn overrides_are_sized_and_checked() {
+        let limits = Limits { buckets: 6, in_flight: 5, files: 8, state: 4 };
+        let o = |badge, in_flight| Override { badge, in_flight, files: 8, state: 4 };
+        // The milestone manifest: sshd 24, the steward 2, four more at 5: 46 <= 48.
+        assert!(Admission::with_overrides(limits, &[o(1, 24), o(2, 2)]).is_ok());
+        // 24 + 8 + 4 x 5 = 52 > 48.
+        assert_eq!(Admission::with_overrides(limits, &[o(1, 24), o(2, 8)]).err(), Some(Unsized));
+        for bad in [
+            vec![o(0, 2)],
+            vec![o(1 << 63, 2)],
+            vec![o(1, 2), o(1, 2)],
+            vec![o(1, 1)],
+            vec![o(1, 2); 7],
+        ] {
+            assert_eq!(Admission::with_overrides(limits, &bad).err(), Some(Unsized), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn fits_counts_overrides_at_their_caps() {
+        let limits = Limits { buckets: 2, in_flight: 2, files: 2, state: 2 };
+        let a = Admission::with_overrides(limits, &[Override { badge: 1, in_flight: 10, files: 0, state: 0 }]).unwrap();
+        let cost = Cost { in_flight: 100, file: 10, state: 1 };
+        // 10 x 100 for the override, 2 x 100 + 2 x 10 + 2 x 1 for the other bucket.
+        assert!(a.fits(&cost, 1222));
+        assert!(!a.fits(&cost, 1221));
     }
 }

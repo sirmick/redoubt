@@ -23,6 +23,8 @@ struct MemFs {
     grants: Vec<(u64, usize, u64)>,
     /// When set, every file read asks the skeleton to hold the call (`Read::Wait`).
     wait_for_input: bool,
+    /// When set, every file write asks the skeleton to hold the call (`Write::Wait`).
+    wait_for_room: bool,
 }
 
 struct MemNode {
@@ -45,6 +47,7 @@ impl MemFs {
             walks: 0,
             grants: Vec::new(),
             wait_for_input: false,
+            wait_for_room: false,
         };
         fs.add("", 0, true, b"", &[]);
         let a = fs.add("a", 0, true, b"", &[]);
@@ -134,6 +137,13 @@ impl FileServer for MemFs {
         }
         file[offset..offset + data.len()].copy_from_slice(data);
         Ok(data.len())
+    }
+
+    fn write_or_wait(&mut self, c: &Caller, node: &usize, offset: u64, data: &[u8]) -> Result<Write, NineError> {
+        if self.wait_for_room {
+            return Ok(Write::Wait);
+        }
+        self.write(c, node, offset, data).map(Write::Done)
     }
 
     fn stat(&mut self, _: &Caller, node: &usize) -> Result<FileStat, NineError> { Ok(self.stat_of(*node)) }
@@ -825,6 +835,45 @@ fn a_held_read_whose_fid_went_becomes_an_error() {
     Message { tag: 9, body: Body::Tread { fid: 1, offset: 0, count: 64 } }.encode(&mut again).unwrap();
     assert_eq!(t.server.answer_in_place(&a, &mut again), Answer::Replied);
     assert_eq!(Message::decode(&again).unwrap().body, Body::Rerror { ename: "unknown fid" });
+}
+
+/// A write that waits (`Write::Wait`, answer 174) is held exactly as a read is: its T-message is
+/// left in the lend, and serving it again, once there is room, writes and answers it.
+#[test]
+fn a_write_that_waits_leaves_its_request_to_be_served_again() {
+    let mut t = T::new();
+    let a = alice();
+    t.attach(&a, 0, "");
+    t.walk(&a, 0, 1, &["notes"]);
+    t.open(&a, 1, mode::OWRITE).unwrap();
+    t.server.fs.wait_for_room = true;
+    let mut buf = vec![0; MSIZE];
+    Message { tag: 4, body: Body::Twrite { fid: 1, offset: 0, data: b"HELLO" } }.encode(&mut buf).unwrap();
+    let before = buf.clone();
+    assert_eq!(t.server.answer_in_place(&a, &mut buf), Answer::Waiting);
+    assert_eq!(buf, before, "a held write is left exactly as it arrived");
+    assert_eq!(t.server.fs.nodes[4].data, b"hello, world", "nothing was written while it waited");
+    t.server.fs.wait_for_room = false;
+    assert_eq!(t.server.answer_in_place(&a, &mut buf), Answer::Replied);
+    let reply = Message::decode(&buf).unwrap();
+    assert_eq!((reply.tag, reply.body), (4, Body::Rwrite { count: 5 }));
+    assert_eq!(t.server.fs.nodes[4].data, b"HELLO, world");
+}
+
+/// The checks that refuse a write still come first: a write on a fid not open for writing is
+/// refused, never held.
+#[test]
+fn a_write_is_refused_before_it_can_wait() {
+    let mut t = T::new();
+    let a = alice();
+    t.attach(&a, 0, "");
+    t.walk(&a, 0, 1, &["notes"]);
+    t.open(&a, 1, mode::OREAD).unwrap();
+    t.server.fs.wait_for_room = true;
+    let mut buf = vec![0; MSIZE];
+    Message { tag: 4, body: Body::Twrite { fid: 1, offset: 0, data: b"x" } }.encode(&mut buf).unwrap();
+    assert_eq!(t.server.answer_in_place(&a, &mut buf), Answer::Replied);
+    assert!(matches!(Message::decode(&buf).unwrap().body, Body::Rerror { .. }));
 }
 
 #[path = "ninep_common_tests.rs"]
