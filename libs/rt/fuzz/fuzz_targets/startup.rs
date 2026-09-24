@@ -17,4 +17,11 @@ fuzz_target!(|data: &[u8]| {
     for arg in startup.args() {
         let _ = startup.handle(arg);
     }
+    // image_addr is 0 exactly when image_len is, page-aligned, and does not overflow (INIT.md,
+    // Startup block; WP-R2).
+    if let Some((addr, len)) = startup.image() {
+        assert!(addr != 0 && len != 0);
+        assert_eq!(addr % 4096, 0);
+        assert!(addr.checked_add(len).is_some());
+    }
 });

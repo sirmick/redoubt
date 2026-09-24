@@ -364,7 +364,7 @@ into slots 1..n, at most `MAX_START_HANDLES`; handle 0 is never a handle) and ma
 into it, read-only (`process_map`), holding the block below. **`process_start`'s `arg` is that
 page's address** (page-aligned; 0 = no block), which the child's first thread receives
 (KERNEL-SPEC.md); there is no fixed address. The program image travels in its own pages, which the
-block names (PACKAGES.md, Launching a process; its fields are defined with the loader stub). No environment
+block names (`image_addr`, `image_len`; PACKAGES.md, Launching a process). No environment
 variables, nothing inherited. Configuration is files in the namespace.
 
 **Format.** The page starts with a `u32` byte length, then the block: one typed message (WIRE.md),
@@ -378,7 +378,7 @@ parent writes the block and could write any checksum too).
 <!-- wire: startup -->
 | Opcode | Message | Fields | Reply |
 | --- | --- | --- | --- |
-| 1 | `startup` | `version: u32`, `handle_count: u32`, `namespace: bytes`, `handles: bytes`, `argv: bytes` | - |
+| 1 | `startup` | `version: u32`, `handle_count: u32`, `namespace: bytes`, `handles: bytes`, `argv: bytes`, `image_addr: u64`, `image_len: u64` | - |
 
 <!-- wire-errors: startup -->
 | Code | Error |
@@ -392,11 +392,20 @@ parent writes the block and could write any checksum too).
   following the manifest's name rule (Names, above): services (`keys`, `powerbox`), device handles
   for drivers, and, for a session or agent only (never a server), its own budget as `budget`.
 - `argv` is a sequence of `string`s, the arguments in order (each may be empty).
+- `image_addr` and `image_len` name the program image the loader stub loads (PACKAGES.md,
+  Launching a process; answer 65): the address of its first byte, page-aligned, in pages the parent
+  mapped into the child read-write (`process_map`), and its exact length in bytes (bytes past it in
+  the last page are not part of it). Both are 0 when no image is named, for a process started at
+  its own entry rather than at the stub; the stub refuses such a block. They are `u64` on both
+  widths, so the block has one shape everywhere.
 
 Rules: the length and the message it counts fit in one page; handles are 1..=n, n ≤
 `MAX_START_HANDLES`; paths are unique
 among `namespace` entries and names among `handles` entries; each `bytes` field holds whole entries
-and nothing else; the rest of the page after the message is not read. A block breaking any rule is
+and nothing else; `image_addr` is 0 exactly when `image_len` is, is page-aligned, and
+`image_addr + image_len` does not overflow; the rest of the page after the message is not read.
+No reader can check that the image lies in pages the parent mapped: a parent that lies faults only
+its own child. A block breaking any rule is
 refused whole. The parent may be hostile, so the child decodes defensively; `redoubt-rt` also
 writes blocks for launchers.
 
