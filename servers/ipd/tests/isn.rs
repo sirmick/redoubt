@@ -54,7 +54,7 @@ fn syns(w: &World, with_ack: bool) -> Vec<u32> {
 
 #[test]
 fn each_active_open_takes_one_seed_and_its_isn_is_that_seeds() {
-    let mut w = World::new(2000);
+    let mut w = World::unmetered(2000);
     let who = owner(&caller(5, 1, &[]));
     let main_seed = w.seeds.borrow()[0];
     assert_eq!(w.seeds.borrow().len(), 1, "one seed for the main interface");
@@ -82,7 +82,7 @@ fn each_active_open_takes_one_seed_and_its_isn_is_that_seeds() {
 
 #[test]
 fn each_passive_open_takes_one_seed_and_its_isn_is_that_seeds() {
-    let mut w = World::new(64);
+    let mut w = World::unmetered(64);
     let who = owner(&caller(22, 0, &[]));
     let n = w.nine.fs.stack.allocate(who, 22, 16).unwrap();
     w.nine.fs.stack.listen(who, n, &anywhere(), 22, 1, 16).unwrap();
@@ -105,7 +105,7 @@ fn each_passive_open_takes_one_seed_and_its_isn_is_that_seeds() {
 /// unanswered. Nothing falls back to the main interface's PRNG.
 #[test]
 fn without_a_seed_nothing_opens() {
-    let mut w = World::new(64);
+    let mut w = World::unmetered(64);
     let who = owner(&caller(5, 1, &[]));
     let listener = owner(&caller(22, 0, &[]));
     let l = w.nine.fs.stack.allocate(listener, 22, 16).unwrap();

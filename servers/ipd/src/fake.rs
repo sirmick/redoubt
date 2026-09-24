@@ -15,7 +15,7 @@ use core::cell::{Cell, RefCell};
 use redoubt_rt::abi::Labels;
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::server::ninep::NineServer;
-use redoubt_rt::server::{AdmitKey, Limits};
+use redoubt_rt::server::{Admission, AdmitKey, Limits, Override};
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
 use smoltcp::phy::{self, Device, DeviceCapabilities, Medium};
 use smoltcp::socket::tcp;
@@ -274,7 +274,26 @@ pub fn selfset() -> SelfSet {
 }
 
 impl World {
-    /// A world whose link is up, `max_sockets` sockets at most.
+    /// A world whose stack is driven directly, not through 9P: its sockets are not metered (the
+    /// admission is not in the loop).
+    pub fn unmetered(max_sockets: usize) -> World {
+        let mut w = World::new(max_sockets);
+        w.nine.fs.stack.meter_off();
+        w
+    }
+
+    /// One 9P request as `who`, answered in place as the program answers it: the caller's
+    /// sockets reserved in the admission around it ([`crate::server::open_sockets`]).
+    pub fn answer(&mut self, who: &Caller, buf: &mut [u8]) -> Answer {
+        self.nine.fs.now = self.now;
+        crate::server::open_sockets(&mut self.nine, who, &redoubt_rt::server::ninep::WORDS_9P);
+        let answer = self.nine.answer_in_place(who, buf);
+        crate::server::close_sockets(&mut self.nine);
+        answer
+    }
+
+    /// A world whose link is up, `max_sockets` sockets at most, its sockets metered through the
+    /// admission as the program's are: make them through [`World::answer`].
     pub fn new(max_sockets: usize) -> World {
         let wire = Rc::new(RefCell::new(Wire { selfset: Some(selfset()), ..Default::default() }));
         let seeds = Rc::new(RefCell::new(Vec::new()));
@@ -297,11 +316,22 @@ impl World {
                 .unwrap(),
             ),
         ];
-        let caps = SocketCaps { default: 8, overrides: vec![(LISTENER, 20)] };
+        // As `crate::sizing` sets them: a bucket's `State` units (4 + 8, and the listener's 0 + 20).
+        let caps = SocketCaps { default: 12, overrides: vec![(LISTENER, 20)] };
         let mut fs = NetFs::new(stack, &roots, caps);
         fs.now = now;
-        let limits = Limits { buckets: 8, in_flight: 5, files: 24, state: 4 };
-        let nine = NineServer::new(fs, limits, 0).unwrap();
+        // As the program sizes itself (`crate::sizing`): sockets are `State` units, so a bucket
+        // holds 4 connections and 8 sockets' worth, and the listener badge 20 sockets'.
+        let state = crate::sizing::state_for(4, 8);
+        let limits = Limits { buckets: 8, in_flight: 5, files: 24, state };
+        let listener = Override {
+            badge: LISTENER,
+            in_flight: 5,
+            files: crate::sizing::files_for(20),
+            state: crate::sizing::state_for(0, 20),
+        };
+        let admission = Admission::with_overrides(limits, &[listener]).unwrap();
+        let nine = NineServer::with_admission(fs, admission, 0);
         World { nine, wire, peer: Peer::new(now), now, seeds, fail_random: fail, rng }
     }
 
@@ -312,6 +342,7 @@ impl World {
         self.nine.fs.now = self.now;
         for _ in 0..10_000 {
             self.nine.fs.stack.poll(self.now);
+            crate::server::settle_sockets(&mut self.nine);
             let mut moved = false;
             loop {
                 let next = self.wire.borrow_mut().to_peer.pop_front();
@@ -624,7 +655,7 @@ fn fuzzed_datagram(b: &mut Bytes) -> Vec<u8> {
 pub fn drive_frames(input: &[u8]) -> Drove {
     let mut drove = Drove::default();
     let mut b = Bytes(input);
-    let mut w = World::new(64);
+    let mut w = World::unmetered(64);
     let sshd = Owner { badge: LISTENER, key: AdmitKey::of(&caller(LISTENER, 0, &[])) };
     let client = Owner { badge: ANY, key: AdmitKey::of(&caller(ANY, 1, &[])) };
     let l = w.nine.fs.stack.allocate(sshd, LISTENER, 20).unwrap();
@@ -723,8 +754,7 @@ fn fuzzed_9p(w: &mut World, who: &Caller, b: &mut Bytes) -> (bool, bool) {
     if (Message { tag: 1, body }).encode(&mut buf).is_err() {
         return (false, false);
     }
-    w.nine.fs.now = w.now;
-    let answer = w.nine.answer_in_place(who, &mut buf);
+    let answer = w.answer(who, &mut buf);
     let _ = w.nine.fs.take_wait();
     let ok = answer == Answer::Replied
         && !matches!(Message::decode(&buf).expect("ipd's reply does not decode").body, Body::Rerror { .. });
@@ -736,8 +766,7 @@ fn fuzzed_9p(w: &mut World, who: &Caller, b: &mut Bytes) -> (bool, bool) {
 fn rpc(w: &mut World, who: &Caller, body: Body<'_>) -> Result<Option<Vec<u8>>, bool> {
     let mut buf = vec![0u8; MSIZE];
     (Message { tag: 1, body }).encode(&mut buf).map_err(|_| false)?;
-    w.nine.fs.now = w.now;
-    let answer = w.nine.answer_in_place(who, &mut buf);
+    let answer = w.answer(who, &mut buf);
     let _ = w.nine.fs.take_wait();
     if answer == Answer::Waiting {
         return Err(true);
@@ -777,6 +806,20 @@ fn op_bytes(message: net_ctl::Message<'_>) -> Vec<u8> {
     let n = message.encode_file(&mut out).unwrap_or(0);
     out.truncate(n);
     out
+}
+
+/// The sockets' ledger (QA D3-code-review-5, P2-2): no reservation outlives its request, and
+/// every bucket holds at least one `State` unit for each of its live sockets.
+pub fn check_ledger(w: &World) {
+    assert_eq!(w.nine.fs.stack.meter(), crate::stack::Meter::Closed, "a reservation outlived its request");
+    for key in w.nine.fs.stack.charged_keys() {
+        let held = w.nine.admission().held(key, redoubt_rt::server::Resource::State) as usize;
+        assert!(
+            held >= w.nine.fs.stack.charged(key),
+            "sockets not paid for: {held} units for {}",
+            w.nine.fs.stack.charged(key)
+        );
+    }
 }
 
 /// Drives `/net` through the 9P skeleton with requests, `ctl` operations, grants,
@@ -926,6 +969,7 @@ pub fn drive_session(input: &[u8]) -> Drove {
             _ => w.run_for(u64::from(b.u8()) * 50_000, 25_000),
         }
         w.nine.fs.stack.audit().unwrap();
+        check_ledger(&w);
         drove.steps += 1;
         drove.sockets = drove.sockets.max(w.nine.fs.stack.live());
     }
@@ -938,6 +982,13 @@ pub fn drive_session(input: &[u8]) -> Drove {
     w.run_for(75_000_000, 5_000_000);
     w.nine.fs.stack.audit().unwrap();
     assert_eq!(w.nine.fs.minted_connections(), 0, "a disconnected connection is still minted");
+    // No connection is left, so each bucket's `State` units are exactly its live sockets (a root
+    // badge's sockets live on; every released one is gone and its unit given back).
+    for who in &callers {
+        let key = AdmitKey::of(who);
+        let held = w.nine.admission().held(key, redoubt_rt::server::Resource::State) as usize;
+        assert_eq!(held, w.nine.fs.stack.charged(key), "units and sockets do not balance");
+    }
     drove.sent = w.wire.borrow().sent.len();
     drove
 }

@@ -332,6 +332,17 @@ sockets (a waiting accept, and a read and a write for each of 11 sessions), the 
 flight and 32 connections (the `/net` grants it has made), and four more buckets at the default 5
 in flight and 8 sockets: 23 + 5 (the steward's slot, at worst a default one) + 4 × 5 = 48.
 
+**Sockets are paid for in the shared admission** (QA D3-code-review-5). Each socket is one `State`
+unit, in its owner's bucket and share, like a minted connection: a bucket's `State` cap is its
+connections and its sockets together (by default 4 + 8 = 12; an override's `STATE + SOCKETS`). So
+sockets have the library's fair shares (answer 90): a badge alone in its account's bucket may take
+half of it, and its sponsor, arriving second, still finds a third. A socket keeps its unit until
+`ipd` removes it, so a bucket stays held while its sockets linger after its connections and fids
+are gone. The memory check costs every unit as a socket (17 KiB), and the most sockets `ipd` keeps
+at once is the units' worst case, each override slot at the larger of its units and the default's:
+in the milestone manifest 20 (`sshd`) + 32 (the steward) + 4 × 12 = 100, which with the parked
+calls and fids needs about 4.7 MiB of the 8 MiB budget (1 MiB is `ipd` itself).
+
 A link fault never stops `ipd`: without a working `netd` (its `info` fails, its MAC is not
 unicast, or `transmit` answers `failed`) it answers `unreachable` to `connect` and `listen`,
 keeps every other rule, and asks `netd` again with backoff.

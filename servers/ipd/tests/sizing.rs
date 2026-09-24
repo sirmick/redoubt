@@ -37,8 +37,15 @@ fn the_rig_and_the_milestone_fit() {
     over[7] = "limits=5:24:0:20";
     assert!(sizing_of(&over).is_err(), "sshd 24 with the steward at 2 admits 49");
     let sizing = sizing_of(&milestone).unwrap();
-    assert_eq!(sizing.max_sockets, 20 + 4 * 8);
-    assert_eq!(sizing.caps.overrides, vec![(5, 20), (4, 0)]);
+    // Sockets are `State` units (QA D3-code-review-5): sshd's 0 + 20, the steward's 32 + 0, and
+    // four defaults of 4 + 8. At their worst: 20, 32, and 4 x 12, each override slot at the
+    // larger of its units and the default's.
+    assert_eq!(sizing.max_sockets, 20 + 32 + 4 * 12);
+    assert_eq!(sizing.caps.overrides, vec![(5, 20), (4, 32)]);
+    // An override below the default counts as the default: its slot can go to a default bucket.
+    let mut small = milestone;
+    small[8] = "limits=4:2:2:0";
+    assert_eq!(sizing_of(&small).unwrap().max_sockets, 20 + 12 + 4 * 12);
 }
 
 /// Sizing: the worst case, every override's bucket and every other at the defaults, must leave

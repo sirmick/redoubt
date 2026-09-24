@@ -10,6 +10,11 @@
 //! or write for at most [`DATA_WAIT_US`], then `timeout`. They are served again once the stack
 //! says they would not wait, and an abandoned one is answered at once.
 //!
+//! **Sockets are paid for in the shared admission** (QA D3-code-review-5, P2-2): around each 9P
+//! request the caller's bucket and share reserve up to [`SOCKETS_PER_REQUEST`] `State` units
+//! ([`open_sockets`]), the stack makes sockets only from them, and the unused go back
+//! ([`close_sockets`]); a removed socket's unit goes back after each poll ([`settle_sockets`]).
+//!
 //! **Crash blame never lands on a parked caller** (KERNEL-SPEC.md, the current call). The stack
 //! is polled only right after a `receive` that returned something other than a call, so no call
 //! is current while smoltcp runs; [`Ipd::current`] tracks it and [`Ipd::poll`] checks it.
@@ -18,18 +23,18 @@ use core::num::NonZeroU64;
 
 use redoubt_rt::abi::{Error, Handle, Handles};
 use redoubt_rt::ipc::{Caller, Delivery, Request, Words};
-use redoubt_rt::server::MALFORMED;
 use redoubt_rt::server::minted::{Kernel, Minter};
-use redoubt_rt::server::ninep::{NineError, NineServer, refuse};
+use redoubt_rt::server::ninep::{NineError, NineServer, WORDS_9P, refuse};
 use redoubt_rt::server::parked::{NotParked, Parked};
 use redoubt_rt::server::typed::{Outcome, finish};
+use redoubt_rt::server::{AdmitKey, MALFORMED, Resource};
 use redoubt_rt::wire::proto::ipd::{ErrorCode, GrantReply, Message, Reply};
 use redoubt_rt::wire::typed::error_reply;
 
 use crate::fs::{At, NetFs, Node};
 use crate::link::Netif;
 use crate::scope::Scope;
-use crate::stack::{Entropy, Owner, WaitFor};
+use crate::stack::{Entropy, MAX_BACKLOG, Owner, Room, WaitFor};
 
 /// How long a `ctl` read waits for a connect or an accept (µs).
 pub const CTL_WAIT_US: u64 = 60_000_000;
@@ -38,6 +43,46 @@ pub const DATA_WAIT_US: u64 = 30_000_000;
 /// `grant`'s opcode, and the ingress `frame`'s (NAMESPACES.md, `ipd`'s table).
 pub const GRANT: u64 = 16;
 pub const FRAME: u64 = 17;
+
+/// The most sockets one request can make: a `listen`'s backlog (a `clone` makes one, an accept
+/// tops a backlog up).
+pub const SOCKETS_PER_REQUEST: usize = MAX_BACKLOG as usize;
+
+/// Before a request: reserves, for its caller's bucket and share, as many `State` units as the
+/// admission gives, up to [`SOCKETS_PER_REQUEST`], for the sockets the request may make. Only a
+/// 9P request can make one; any other reserves nothing, so a `grant` or `new_connection` finds
+/// the admission as it was.
+pub fn open_sockets<N: Netif, E: Entropy>(
+    nine: &mut NineServer<NetFs<N, E>>,
+    caller: &Caller,
+    words: &Words,
+) {
+    if *words != WORDS_9P {
+        return;
+    }
+    let (key, share) = (AdmitKey::of(caller), nine.share_of(caller));
+    let mut left = 0;
+    while left < SOCKETS_PER_REQUEST && nine.admission_mut().admit(key, share, Resource::State).is_ok() {
+        left += 1;
+    }
+    nine.fs.stack.open_room(Room { key, share, left });
+}
+
+/// After a request: gives back what its reservation did not spend.
+pub fn close_sockets<N: Netif, E: Entropy>(nine: &mut NineServer<NetFs<N, E>>) {
+    if let Some(room) = nine.fs.stack.close_room() {
+        for _ in 0..room.left {
+            nine.admission_mut().release(room.key, room.share, Resource::State);
+        }
+    }
+}
+
+/// After a poll: gives back the unit of every socket the stack removed.
+pub fn settle_sockets<N: Netif, E: Entropy>(nine: &mut NineServer<NetFs<N, E>>) {
+    for (key, share) in nine.fs.stack.take_freed() {
+        nine.admission_mut().release(key, share, Resource::State);
+    }
+}
 
 /// What a parked call waits for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,7 +167,10 @@ impl<N: Netif, E: Entropy> Ipd<N, E> {
     /// Serves `request` (current), parking it if the file server asked it to wait.
     fn serve(&mut self, request: Request, now: u64) {
         let _ = self.nine.fs.take_wait();
-        match self.nine.serve_parking(request, serve_own) {
+        open_sockets(&mut self.nine, &request.caller, &request.words);
+        let served = self.nine.serve_parking(request, serve_own);
+        close_sockets(&mut self.nine);
+        match served {
             Ok(None) | Err(_) => self.current = None,
             Ok(Some(request)) => self.park(request, now),
         }
@@ -196,6 +244,7 @@ impl<N: Netif, E: Entropy> Ipd<N, E> {
         }
         self.nine.fs.now = now;
         self.nine.fs.stack.poll(now);
+        settle_sockets(&mut self.nine);
         self.resume(now);
     }
 

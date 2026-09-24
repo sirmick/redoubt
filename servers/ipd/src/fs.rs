@@ -115,7 +115,9 @@ struct Minted {
     group: u64,
 }
 
-/// The sockets one bucket may hold: the default, or a root badge's override (account 0 only).
+/// The sockets one bucket may hold: the default, or a root badge's override (account 0 only). Set
+/// to the bucket's `State` units (`crate::sizing`), in which sockets are paid; the admission, with
+/// its shares, is what binds, and this count only agrees with it.
 #[derive(Clone, Debug, Default)]
 pub struct SocketCaps {
     pub default: usize,
