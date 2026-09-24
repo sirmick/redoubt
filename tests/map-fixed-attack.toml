@@ -17,6 +17,8 @@ expect = [
     '^\[map-fixed\] ok: nothing charged$',
     '^\[map-fixed\] ok: straddles USER_AREA_END$',
     '^\[map-fixed\] ok: nothing charged$',
+    '^\[map-fixed\] ok: outside user space, empty root slot$',
+    '^\[map-fixed\] ok: nothing charged$',
     '^\[map-fixed\] ok: W\+X$',
     '^\[map-fixed\] ok: nothing charged$',
     '^\[map-fixed\] ok: W without R$',
