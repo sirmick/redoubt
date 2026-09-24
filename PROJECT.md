@@ -48,8 +48,8 @@ the current project first.
   "max_active":4,
   "max_members":16,
   "profiles":{
-    "god":{"provider":"<provider>","model":"<verified most capable model ID>","thinking":"high"},
-    "pleb":{"provider":"<provider>","model":"<verified everyday model ID>","thinking":"high"}
+    "god":{"provider":"<provider>","model":"<verified most capable model ID>","thinking":"high","approval":"auto"},
+    "pleb":{"provider":"<provider>","model":"<verified everyday model ID>","thinking":"high","approval":"auto"}
   },
   "default_profile":"pleb",
   "document":{"path":"./docs/BUILD-PLAN.md","title":"Redoubt build plan"},
@@ -112,9 +112,13 @@ That is `assignment_update`. Completing an assignment keeps a resident available
 an ephemeral agent retires after its assignment and turn end. Reserve ephemeral
 agents for bounded auxiliary tasks, not package implementers or reviewers.
 
-Do not grant broad auto-approval to bypass coordination prompts. Human approval requests
-are actionable in the member's main-panel tab. A blocked approval is not a messaging
-failure; report it rather than repeatedly launching the same blocked preset.
+The owner runs Redoubt with `approval:"auto"` on `god` and `pleb` (2026-09-23): members
+run tools without per-call prompts, each approval is narrated in the member transcript,
+and host policy denies still win. Wash only accepts `auto` from an orchestrator that is
+itself auto-approved; if setup reports otherwise, ask the owner rather than dropping it.
+Wash coordination calls never prompt. Any prompt that still appears needs the human in
+the member's main-panel tab; a blocked approval is not a messaging failure, so report it
+rather than repeatedly launching the same blocked preset.
 
 ## First-class QA and design decisions
 
