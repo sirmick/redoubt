@@ -3,20 +3,20 @@
 //! Every test runs the real bring-up and the real queues against `redoubt_netd::fake::FakeNic`,
 //! which lies on demand. Asserted throughout:
 //!
-//! 1. **No panic.** A panicking test fails, so every case is a no-panic case, and the randomized
-//!    sweep at the end is many thousands more.
-//! 2. **No address outside the regions, and no crossing.** `strayed` counts an address the driver
-//!    wrote that is outside both regions, `crossed` one in the other queue's region.
-//! 3. **A lie is a refusal; a bad frame is not.** A device that breaks the ring protocol gets an
-//!    error; a frame of a length `netd` does not carry is dropped and counted, and the queue goes
-//!    on working.
+//! 1. **No panic.** A panicking test fails, so every case is a no-panic case, and the randomized sweep at the
+//!    end is many thousands more.
+//! 2. **No address outside the regions, and no crossing.** `strayed` counts an address the driver wrote that
+//!    is outside both regions, `crossed` one in the other queue's region.
+//! 3. **A lie is a refusal; a bad frame is not.** A device that breaks the ring protocol gets an error; a
+//!    frame of a length `netd` does not carry is dropped and counted, and the queue goes on working.
 
 use redoubt_netd::fake::{FAKE_MAC, FakeNic, Policy, Scribble, exercise};
+use redoubt_netd::receiver::{Stopped, receive};
 use redoubt_netd::ring::{QUEUE_SIZE, SLOT_LEN};
 use redoubt_netd::rxq::{Frame, RxQueue};
 use redoubt_netd::txq::Sent;
 use redoubt_netd::virtio::{DeviceError, MAX_FRAME, NET_HDR_LEN, TX_TIMEOUT_US, bit, feature, status};
-use redoubt_netd::{Up, bring_up};
+use redoubt_netd::{Fault, Up, bring_up};
 
 fn clean(nic: &FakeNic) {
     assert_eq!(nic.strayed(), 0, "an address outside both regions");
@@ -282,6 +282,117 @@ fn randomized_hostile_devices() {
     let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
     for _ in 0..20_000 {
         let nic = exercise(&mut || rng.byte());
+        clean(&nic);
+    }
+}
+
+/// A device that scribbles on the descriptor of each buffer it completes cannot break the queue:
+/// every offer rewrites the descriptor whole, so once the device behaves again every frame
+/// arrives, in both directions. (A driver that wrote descriptors only at bring-up would lose every
+/// frame after the first sixteen here.)
+#[test]
+fn a_scribbled_descriptor_is_rewritten_when_offered_again() {
+    let nic = with(Policy { scribble: Some(Scribble::Completed), ..Default::default() });
+    let Up { mut rx, mut tx, .. } = up(&nic);
+    let t = nic.tx_view();
+    // Every slot of both queues is completed once, and scribbled on as it is.
+    for n in 0..QUEUE_SIZE {
+        let sent = frame(64, n as u8);
+        nic.arrive(&sent);
+        assert_eq!(drain(&nic, &mut rx).unwrap(), vec![sent]);
+        assert_eq!(tx.transmit(&t, &frame(60, n as u8)), Ok(Sent::Queued));
+    }
+    nic.set_policy(Policy::default());
+    for n in 0..4 * QUEUE_SIZE {
+        let sent = frame(64 + usize::from(n), n as u8);
+        nic.arrive(&sent);
+        assert_eq!(drain(&nic, &mut rx).unwrap(), vec![sent], "frame {n} after the scribbling");
+        let out = frame(60 + usize::from(n), n as u8);
+        assert_eq!(tx.transmit(&t, &out), Ok(Sent::Queued));
+        assert_eq!(&nic.wire().last().unwrap()[NET_HDR_LEN..], &out[..], "transmit {n} after the scribbling");
+    }
+    assert_eq!(nic.backlog(), 0, "no frame left waiting for a buffer the device could not use");
+    assert_eq!(rx.outstanding(), u32::from(QUEUE_SIZE));
+    assert_eq!(nic.wire().len(), 5 * usize::from(QUEUE_SIZE));
+    clean(&nic);
+}
+
+/// Every ring counter is a `u16` that wraps (16 divides 65,536). More than 65,536 + 16 frames each
+/// way take every counter, the driver's and the device's, past the wrap, with overflow checks on
+/// (the test profile), so a counter that did not wrap would panic here.
+#[test]
+fn the_ring_counters_wrap() {
+    const FRAMES: u32 = 65_536 + 16 + 100;
+    let nic = FakeNic::new();
+    let Up { mut rx, mut tx, .. } = up(&nic);
+    let t = nic.tx_view();
+    let mut scratch: Frame = [0; SLOT_LEN];
+    for n in 0..FRAMES {
+        let sent = frame(60, n as u8);
+        nic.arrive(&sent);
+        let mut got = 0;
+        rx.drain(&nic.rx_view(), &mut scratch, |f| {
+            assert_eq!(f, &sent[..], "frame {n}");
+            got += 1;
+        })
+        .unwrap();
+        assert_eq!(got, 1, "frame {n}");
+        assert_eq!(tx.transmit(&t, &sent), Ok(Sent::Queued), "transmit {n}");
+    }
+    assert_eq!(rx.delivered, u64::from(FRAMES));
+    assert_eq!(tx.sent, u64::from(FRAMES));
+    assert_eq!(nic.wire().len(), FRAMES as usize);
+    clean(&nic);
+}
+
+/// Runs the receive loop over `nic` until it stops, returning why, the frames it forwarded and
+/// how many times it reported.
+fn receive_until_stopped(nic: &FakeNic, rx: &mut RxQueue) -> (Stopped, Vec<Vec<u8>>, u32) {
+    let mut scratch: Frame = [0; SLOT_LEN];
+    let (mut got, mut reports) = (Vec::new(), 0);
+    let stopped = receive(&nic.rx_view(), rx, &mut scratch, |f| got.push(f.to_vec()), || reports += 1);
+    (stopped, got, reports)
+}
+
+/// The interrupt handle failing ends the receive thread, but never silently: the device is reset,
+/// so no receive slot stays armed with nobody draining it, and the serving thread is told.
+#[test]
+fn the_receive_loop_resets_and_reports_when_the_interrupt_fails() {
+    let nic = FakeNic::new();
+    let Up { mut rx, .. } = up(&nic);
+    let sent: Vec<Vec<u8>> = (0..3).map(|n| frame(80, n)).collect();
+    for f in &sent {
+        nic.arrive(f);
+    }
+    // One wait finds the frames, one finds nothing (a timeout: it waits again), then it fails.
+    nic.fail_irq_after(2);
+    let (stopped, got, reports) = receive_until_stopped(&nic, &mut rx);
+    assert_eq!(stopped, Stopped::Interrupt(Fault::Kernel));
+    assert_eq!(got, sent);
+    assert_eq!(reports, 1, "the serving thread is told exactly once");
+    assert_eq!(nic.status(), 0, "the device is reset: no receive slot is left armed");
+    clean(&nic);
+}
+
+/// A lie ends the receive thread the same way: reset, and reported once.
+#[test]
+fn the_receive_loop_resets_and_reports_a_lie() {
+    for policy in [
+        Policy { header_flags: Some(1), ..Default::default() },
+        Policy { rx_used_idx_delta: Some(9), ..Default::default() },
+        Policy { rx_duplicate_id: true, ..Default::default() },
+    ] {
+        let nic = FakeNic::new();
+        let Up { mut rx, .. } = up(&nic);
+        nic.set_policy(policy);
+        nic.arrive(&frame(64, 1));
+        nic.arrive(&frame(64, 2));
+        // Bounded, should the lie ever go unnoticed.
+        nic.fail_irq_after(8);
+        let (stopped, _, reports) = receive_until_stopped(&nic, &mut rx);
+        assert_eq!(stopped, Stopped::Device(DeviceError::Lie), "{policy:?}");
+        assert_eq!(reports, 1, "{policy:?}");
+        assert_eq!(nic.status(), 0, "{policy:?}");
         clean(&nic);
     }
 }

@@ -1,6 +1,9 @@
-description = "netd against a hostile virtio-net device: bring-up refusals, ring lies refused and the device reset, bad frames from the wire dropped (never a lie), transmits carrying exactly header and frame, busy then broken, one client and no labelled callers, and 20,000 randomized hostile devices and requests (answer 174)"
+description = "netd against a hostile virtio-net device: bring-up refusals, ring lies refused and the device reset, bad frames from the wire dropped (never a lie), transmits carrying exactly header and frame, busy then broken, descriptors rewritten after a scribble, ring counters past the u16 wrap, the receive loop resetting and reporting on every exit, the panic hook resetting the device, one client and no labelled callers, and 20,000 randomized hostile devices and requests (answer 174)"
 kind = "host-tests"
 # QEMU's honest virtio-net cannot lie; the malicious rings, ids, lengths, headers and scribbles
 # live in servers/netd/tests/, against redoubt_netd::fake::FakeNic. These host tests do not
 # establish boot integration: the tests/net rig does that.
+# Retained gate (QA D3-code-review-2): before netd is used off the bench (it also waits for
+# WP-K5b), both fuzz targets in servers/netd/fuzz run for at least 5 minutes each with no crash:
+#     cd servers/netd && cargo +nightly fuzz run -s none <device|request> -- -max_total_time=300
 packages = ["redoubt-netd"]
