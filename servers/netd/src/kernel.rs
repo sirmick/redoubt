@@ -3,8 +3,8 @@
 //! the receive thread's half to that thread.
 //!
 //! **This is the only module in `netd` with `unsafe` in it**:
-//! - volatile reads and writes of a register (32-bit and, for the MAC, 8-bit), which the panic
-//!   hook also uses to reset the device;
+//! - volatile reads and writes of a register (32-bit and, for the MAC, 8-bit), which the panic hook also uses
+//!   to reset the device;
 //! - volatile reads and writes of a byte of a DMA region;
 //! - the one `Box::from_raw` that takes the receive thread's half back out of [`RX_PART`].
 //!
@@ -45,6 +45,18 @@ impl Regs {
         Ok(Regs { base, len })
     }
 
+    /// Host tests only: "registers" in ordinary memory, given up for good as a device's mapping
+    /// is, so the panic hook can be run on the host ([`Regs::arm_panic_reset`]). Nothing on the
+    /// machine can build a `Regs` but [`Regs::map`].
+    #[cfg(not(target_os = "none"))]
+    pub fn in_memory(words: &'static mut [u32]) -> Regs {
+        Regs { base: words.as_mut_ptr() as usize, len: core::mem::size_of_val(words) }
+    }
+
+    /// Host tests only: reads the register at `off`, as the hook left it.
+    #[cfg(not(target_os = "none"))]
+    pub fn read_register(&self, off: usize) -> Result<u32, Fault> { self.read(off) }
+
     /// The address of a `width`-byte access at `off`, if it is inside the mapping and aligned.
     fn at(&self, off: usize, width: usize) -> Option<usize> {
         if !off.is_multiple_of(width) || off.checked_add(width)? > self.len {
@@ -58,7 +70,9 @@ impl Regs {
         // SAFETY: `at` is inside the mapping `map_device` returned (a `Regs` is only ever made
         // from one, by `Regs::map`, or copied from one), which stays mapped for the life of this
         // process (nothing here unmaps it), and `Regs::at` checked the whole 32-bit access lies
-        // inside it and is 4-byte aligned. Volatile: the value is a device register.
+        // inside it and is 4-byte aligned. Volatile: the value is a device register. (In host
+        // tests, `Regs::in_memory` stands a leaked `&'static mut [u32]` in for the mapping: it
+        // too lives for ever, is aligned, and is reached only through these accesses.)
         Ok(unsafe { (at as *const u32).read_volatile() })
     }
 

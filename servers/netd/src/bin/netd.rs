@@ -1,14 +1,14 @@
 //! `netd`, the program: two threads over one virtio-net device (IO-ARCHITECTURE.md, `netd`).
 //!
-//! - **The serving thread** maps the registers, allocates both DMA regions, brings the device up
-//!   (both queues configured, every receive slot offered, `DRIVER_OK`) and only then starts the
-//!   receive thread. It owns the transmit queue and answers `netif` calls from its one client.
-//!   It never waits on anything but its own `receive`.
-//! - **The receive thread** takes its half ([`RxPart`]) out of this process's own memory, waits on
-//!   the interrupt, drains the receive queue and `send`s each frame to `ipd`, one page transferred
-//!   per frame, giving up after [`SEND_TIMEOUT_US`]: a frame `ipd` cannot take is dropped, as on
-//!   any wire. It tells the serving thread only that the device is broken, on a badge drawn at
-//!   random above 2^63 that carries no data.
+//! - **The serving thread** maps the registers, allocates both DMA regions, brings the device up (both queues
+//!   configured, every receive slot offered, `DRIVER_OK`) and only then starts the receive thread. It owns
+//!   the transmit queue and answers `netif` calls from its one client. It never waits on anything but its own
+//!   `receive`.
+//! - **The receive thread** takes its half ([`RxPart`]) out of this process's own memory, waits on the
+//!   interrupt, drains the receive queue and `send`s each frame to `ipd`, one page transferred per frame,
+//!   giving up after [`SEND_TIMEOUT_US`]: a frame `ipd` cannot take is dropped, as on any wire. It tells the
+//!   serving thread only that the device is broken, on a badge drawn at random above 2^63 that carries no
+//!   data.
 //!
 //! **Every exit `netd` controls resets the device first** (status 0, read back), so the device
 //! stops touching its rings before its pages can return to the pool. A kill or a fault runs none
@@ -26,7 +26,7 @@ use core::num::NonZeroU64;
 
 use redoubt_netd::kernel::{self, Device, Regs};
 use redoubt_netd::rxq::Frame;
-use redoubt_netd::{BROKEN, FIRST_MINTED_BADGE, NetServer, RxPart, bring_up, parse_client, virtio};
+use redoubt_netd::{BROKEN, FIRST_MINTED_BADGE, NetServer, RxPart, bring_up, parse_client, receiver};
 use redoubt_rt::abi::{Error, FOREVER, MemFlags, PAGE_SIZE};
 use redoubt_rt::handle::{Endpoint, Irq, Mmio};
 use redoubt_rt::ipc::{Buffer, Event};
@@ -66,28 +66,18 @@ extern "C" fn rx_thread(_arg: usize) -> ! {
     redoubt_rt::handle::thread_exit()
 }
 
-/// Drains the receive queue on every interrupt and sends each frame to `ipd`. Returns when the
-/// device has lied (having reset it and told the serving thread) or the interrupt is gone.
+/// Drains the receive queue on every interrupt and sends each frame to `ipd`, until the device
+/// lies or the interrupt fails ([`receiver::receive`]); either way the device is reset and the
+/// serving thread told.
 fn receive_frames(part: RxPart) {
     let RxPart { device, mut rx, ipd, broken } = part;
     let mut scratch: Frame = [0; redoubt_netd::ring::SLOT_LEN];
-    loop {
-        use redoubt_netd::Transport;
-        match device.wait_irq(FOREVER) {
-            Ok(()) | Err(redoubt_netd::Fault::Timeout) => {}
-            Err(_) => return,
-        }
-        let drained = virtio::ack_interrupt(&device).and_then(|()| {
-            rx.drain(&device, &mut scratch, |frame| forward(&ipd, frame))
-        });
-        if drained.is_err() {
-            let _ = virtio::reset(&device);
-            // Waits: the serving thread always comes back to `receive`, and a lost report would
-            // leave it transmitting on a device that has been reset.
-            let _ = broken.send(&[BROKEN, 0, 0, 0], &[], None, FOREVER);
-            return;
-        }
-    }
+    // Waits: the serving thread always comes back to `receive`, and a lost report would leave it
+    // transmitting on a device that has been reset.
+    let report = || {
+        let _ = broken.send(&[BROKEN, 0, 0, 0], &[], None, FOREVER);
+    };
+    let _ = receiver::receive(&device, &mut rx, &mut scratch, |frame| forward(&ipd, frame), report);
 }
 
 /// Sends one frame to `ipd` as its `frame` message: a `send`, the frame in one transferred page.
@@ -103,7 +93,8 @@ fn forward(ipd: &Endpoint, frame: &[u8]) {
 pub fn serve(startup: &Startup) -> u32 {
     let Some(endpoint) = startup.handle(ENDPOINT).map(Endpoint::from_handle) else { return NO_ENDPOINT };
     let Some(client) = parse_client(startup.args()) else { return BAD_ARGS };
-    let (Some(mmio), Some(irq), Some(ipd)) = (startup.handle(NET), startup.handle(NET_IRQ), startup.handle(IPD))
+    let (Some(mmio), Some(irq), Some(ipd)) =
+        (startup.handle(NET), startup.handle(NET_IRQ), startup.handle(IPD))
     else {
         return NO_DEVICE;
     };
@@ -124,19 +115,18 @@ pub fn serve(startup: &Startup) -> u32 {
         Err(_) => (0, redoubt_netd::txq::TxQueue::new(), None),
     };
     let mut server = NetServer::new(tx_view, tx, mac, client);
-    let broken_badge = match rx {
+    match rx {
         Some(rx) => match start_receiving(&endpoint, rx_view, rx, Endpoint::from_handle(ipd)) {
-            Ok(badge) => Some(badge),
+            Ok(badge) => {
+                server.expect_reports_on(badge);
+            }
             Err(code) => {
                 server.break_device();
                 return code;
             }
         },
-        None => {
-            server.break_device();
-            None
-        }
-    };
+        None => server.break_device(),
+    }
     let exit = loop {
         match endpoint.receive(FOREVER, 0) {
             Ok(Event::Call(request)) => {
@@ -147,9 +137,7 @@ pub fn serve(startup: &Startup) -> u32 {
                 for handle in delivery.handles.as_slice().iter().flatten() {
                     let _ = redoubt_rt::handle::close(*handle);
                 }
-                if Some(delivery.caller.badge) == broken_badge && delivery.words[0] == BROKEN {
-                    server.break_device();
-                }
+                server.sent(delivery.caller.badge, &delivery.words);
             }
             Ok(Event::Interrupt | Event::Exit(_) | Event::Abandoned(_)) => {}
             Err(Error::Dead) => break redoubt_rt::exit::OK,
@@ -163,13 +151,22 @@ pub fn serve(startup: &Startup) -> u32 {
 
 /// Starts the receive thread with its half and returns the badge its broken-device report will
 /// arrive on.
-fn start_receiving(endpoint: &Endpoint, device: Device, rx: redoubt_netd::rxq::RxQueue, ipd: Endpoint) -> Result<u64, u32> {
+fn start_receiving(
+    endpoint: &Endpoint,
+    device: Device,
+    rx: redoubt_netd::rxq::RxQueue,
+    ipd: Endpoint,
+) -> Result<u64, u32> {
     let random = redoubt_rt::handle::random_u64().map_err(|_| NO_RESOURCES)?;
     // Above 2^63, where no manifest badge is, so it can never be the client's.
     let badge = FIRST_MINTED_BADGE | random;
-    let broken = NonZeroU64::new(badge).ok_or(NO_RESOURCES).and_then(|b| endpoint.mint(b, None).map_err(|_| NO_RESOURCES))?;
-    let stack = redoubt_rt::handle::map_anon(RX_STACK, MemFlags::READ | MemFlags::WRITE).map_err(|_| NO_RESOURCES)?;
+    let broken = NonZeroU64::new(badge)
+        .ok_or(NO_RESOURCES)
+        .and_then(|b| endpoint.mint(b, None).map_err(|_| NO_RESOURCES))?;
+    let stack =
+        redoubt_rt::handle::map_anon(RX_STACK, MemFlags::READ | MemFlags::WRITE).map_err(|_| NO_RESOURCES)?;
     // The stack grows down from the top of the mapping, which is page-aligned.
-    kernel::start_rx_thread(RxPart { device, rx, ipd, broken }, rx_thread, stack + RX_STACK).map_err(|_| NO_RESOURCES)?;
+    kernel::start_rx_thread(RxPart { device, rx, ipd, broken }, rx_thread, stack + RX_STACK)
+        .map_err(|_| NO_RESOURCES)?;
     Ok(badge)
 }

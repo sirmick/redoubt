@@ -6,27 +6,37 @@
 //! No code here can make a device that ignores its addresses harmless. What it is written to
 //! guarantee is the rest, stated so that it can be checked:
 //!
-//! 1. **`netd` never asks the device to touch anything but the pages `dma_alloc` gave it.** It has
-//!    two regions, one per queue, and every address it writes into a descriptor or a queue base
-//!    register is a region's physical base plus a constant of [`ring`] ([`ring::LAYOUT_FITS`]).
-//!    Descriptor *i* always names slot *i*. A client's lend never reaches the device: a transmit is
-//!    copied into a slot, and a received frame is copied out.
-//! 2. **Nothing the device says can corrupt `netd`'s memory, panic it or make it lie to `ipd`.**
-//!    No device value is used as an index or a length until it has been checked against what
-//!    `netd` gave the device. The descriptor tables and available rings are written, never read
-//!    back. A device that breaks the protocol is reset and never trusted again.
-//! 3. **Nothing a network sender puts on the wire can stop it.** A frame of a length `netd` does not
-//!    carry is dropped and counted, never taken for a device's lie ([`rxq`]).
-//! 4. **No address travels in a message.** Both regions are allocated, both queues configured and
-//!    the device started by the serving thread before the receive thread exists. The receive
-//!    thread's half ([`RxPart`]) is handed over in this process's own memory ([`kernel`]).
+//! 1. **`netd` never asks the device to touch anything but the pages `dma_alloc` gave it.** It has two
+//!    regions, one per queue, and every address it writes into a descriptor or a queue base register is a
+//!    region's physical base plus a constant of [`ring`] ([`ring::LAYOUT_FITS`]). Descriptor *i* always names
+//!    slot *i*. A client's lend never reaches the device: a transmit is copied into a slot, and a received
+//!    frame is copied out.
+//! 2. **Nothing the device says can corrupt `netd`'s memory, panic it or make it lie to `ipd`.** No device
+//!    value is used as an index or a length until it has been checked against what `netd` gave the device.
+//!    The descriptor tables and available rings are written, never read back. A device that breaks the
+//!    protocol is reset and never trusted again.
+//! 3. **Nothing a network sender puts on the wire can stop it.** A frame of a length `netd` does not carry is
+//!    dropped and counted, never taken for a device's lie ([`rxq`]).
+//! 4. **No address travels in a message.** Both regions are allocated, both queues configured and the device
+//!    started by the serving thread before the receive thread exists. The receive thread's half ([`RxPart`])
+//!    is handed over in this process's own memory ([`kernel`]).
+//! 5. **A DMA page never leaves `netd`** (answer 173, WP-K5b: from K5b the kernel refuses to lend, transfer
+//!    or `process_map` a `dma_alloc` page). No path here lends, transfers or maps one: each received frame is
+//!    copied into a fresh one-page `Buffer` of anonymous memory before it is sent to `ipd`, a transmit is
+//!    copied out of the caller's lend into a slot, and no reply carries a buffer. DMA addresses exist only as
+//!    numbers inside [`kernel::Device`].
+//! 6. **Either thread leaving its loop stops the device.** The receive thread resets it and tells the serving
+//!    thread on every way out ([`receiver`]); the serving thread resets it on a lie, on a report, and before
+//!    it exits; a panic resets it from the runtime's panic hook ([`kernel::Regs::arm_panic_reset`]). A kill
+//!    or a fault runs none of this (WP-K5b).
 //!
 //! # Shape
-//! - [`transport`]: the seam to the kernel, and [`kernel`], its one implementation and the only
-//!   `unsafe` in the crate. Host tests use [`fake::FakeNic`], a hostile device in safe Rust.
+//! - [`transport`]: the seam to the kernel, and [`kernel`], its one implementation and the only `unsafe` in
+//!   the crate. Host tests use [`fake::FakeNic`], a hostile device in safe Rust.
 //! - [`virtio`]: the register map, the handshake, feature negotiation, the MAC.
 //! - [`ring`]: one region's layout; [`rxq`] and [`txq`]: the two queues.
-//! - [`device`]: bring-up. [`server`]: the `netif` protocol for `ipd`.
+//! - [`device`]: bring-up. [`server`]: the `netif` protocol for `ipd`. [`receiver`]: the receive thread's
+//!   loop.
 
 #![no_std]
 #![deny(unsafe_code)]
@@ -39,6 +49,7 @@ use redoubt_rt::handle::Endpoint;
 pub mod device;
 #[allow(unsafe_code)]
 pub mod kernel;
+pub mod receiver;
 pub mod ring;
 pub mod rxq;
 pub mod server;
@@ -83,7 +94,10 @@ pub fn parse_client<'a>(mut args: impl Iterator<Item = &'a str>) -> Option<u64> 
         return None;
     }
     let digits = arg.strip_prefix("client=")?;
-    if digits.is_empty() || digits.len() > 20 || !digits.bytes().all(|b| b.is_ascii_digit()) || digits.starts_with('0')
+    if digits.is_empty()
+        || digits.len() > 20
+        || !digits.bytes().all(|b| b.is_ascii_digit())
+        || digits.starts_with('0')
     {
         return None;
     }

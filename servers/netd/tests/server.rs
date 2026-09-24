@@ -30,7 +30,13 @@ fn call(server: &mut NetServer<View<'_>>, who: &Caller, message: Message<'_>) ->
     raw(server, who, &words, &mut lend, opcode(&message))
 }
 
-fn raw(server: &mut NetServer<View<'_>>, who: &Caller, words: &Words, lend: &mut [u8], op: u32) -> Result<Reply, ErrorCode> {
+fn raw(
+    server: &mut NetServer<View<'_>>,
+    who: &Caller,
+    words: &Words,
+    lend: &mut [u8],
+    op: u32,
+) -> Result<Reply, ErrorCode> {
     let outcome = answer_with(server, who, words, &ReceivedHandles::new(), lend);
     Reply::decode(op, &outcome.words, lend, 0).expect("a reply that decodes")
 }
@@ -62,7 +68,10 @@ fn anyone_else_is_not_permitted() {
     for who in [caller(CLIENT + 1, &[]), caller(1 << 63, &[]), caller(CLIENT, &[5])] {
         assert_eq!(call(&mut s, &who, Message::Info(Info {})), Err(ErrorCode::NotPermitted), "{who:?}");
         let frame = [0u8; 60];
-        assert_eq!(call(&mut s, &who, Message::Transmit(Transmit { frame: &frame })), Err(ErrorCode::NotPermitted));
+        assert_eq!(
+            call(&mut s, &who, Message::Transmit(Transmit { frame: &frame })),
+            Err(ErrorCode::NotPermitted)
+        );
     }
     assert!(nic.wire().is_empty(), "nothing a stranger asked for reached the wire");
 }
@@ -161,4 +170,34 @@ fn randomized_requests_reach_the_wire_only_from_the_client() {
     }
     assert_eq!(nic.strayed(), 0);
     assert!(nic.wire().iter().all(|sent| (12 + 14..=12 + 1514).contains(&sent.len())));
+}
+
+/// The receive thread's report is the one `send` the serving thread acts on: `BROKEN` on the
+/// badge it was told to expect. The same words from the client, or anything else on that badge,
+/// change nothing; and a badge below 2^63, which the manifest could have given out, is never
+/// taken as the reporting badge.
+#[test]
+fn only_the_receive_threads_report_breaks_the_device() {
+    use redoubt_netd::{BROKEN, FIRST_MINTED_BADGE};
+    let nic = FakeNic::new();
+    let mut s = server(&nic);
+    let me = caller(CLIENT, &[]);
+    assert!(!s.expect_reports_on(CLIENT), "a manifest badge is refused");
+    s.sent(CLIENT, &[BROKEN, 0, 0, 0]);
+    let reports = FIRST_MINTED_BADGE | 0x1234_5678;
+    assert!(s.expect_reports_on(reports));
+    for (badge, words) in [
+        (CLIENT, [BROKEN, 0, 0, 0]),
+        (reports ^ 1, [BROKEN, 0, 0, 0]),
+        (reports, [1, 0, 0, 0]),
+        (reports, [2, BROKEN, 0, 0]),
+    ] {
+        s.sent(badge, &words);
+        assert!(!s.broken(), "{badge:#x} {words:?}");
+    }
+    assert!(call(&mut s, &me, Message::Info(Info {})).is_ok());
+    s.sent(reports, &[BROKEN, 0, 0, 0]);
+    assert!(s.broken());
+    assert_eq!(nic.status(), 0, "the report resets the device");
+    assert_eq!(call(&mut s, &me, Message::Info(Info {})), Err(ErrorCode::Failed));
 }

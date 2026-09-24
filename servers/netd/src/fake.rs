@@ -86,6 +86,10 @@ pub enum Scribble {
     WholeRx(u8),
     /// Every byte of the transmit region.
     WholeTx(u8),
+    /// Only the descriptor of the buffer being completed, in its own queue's region: the one
+    /// descriptor the driver is about to offer again, so only rewriting it whole on every offer
+    /// keeps the queue working.
+    Completed,
 }
 
 /// Which of the two regions a view, or an address, is in.
@@ -138,6 +142,8 @@ pub struct FakeNic {
     wire: RefCell<Vec<Vec<u8>>>,
     /// Bytes the device read from a transmit slot outside the descriptor it was given. Always 0.
     overread: Cell<u64>,
+    /// Waits for the interrupt left before the handle fails ([`FakeNic::fail_irq_after`]).
+    irq_waits_left: Cell<Option<u64>>,
 }
 
 impl Default for FakeNic {
@@ -158,6 +164,7 @@ impl FakeNic {
             inbox: RefCell::new(VecDeque::new()),
             wire: RefCell::new(Vec::new()),
             overread: Cell::new(0),
+            irq_waits_left: Cell::new(None),
         }
     }
 
@@ -187,6 +194,10 @@ impl FakeNic {
     pub fn wire(&self) -> Vec<Vec<u8>> { self.wire.borrow().clone() }
 
     pub fn overread(&self) -> u64 { self.overread.get() }
+
+    /// After `waits` more waits, waiting for the interrupt fails as the kernel's does when the
+    /// handle has gone ([`Fault::Kernel`]), and goes on failing.
+    pub fn fail_irq_after(&self, waits: u64) { self.irq_waits_left.set(Some(waits)); }
 
     /// Advances the device's clock.
     pub fn advance(&self, us: u64) { self.now.set(self.now.get().saturating_add(us)); }
@@ -319,7 +330,16 @@ impl FakeNic {
     }
 
     /// Publishes one used entry (and the extra, lying ones the policy asks for) on queue `q`.
-    fn complete(&self, q: usize, region: Region, used: usize, id: u32, len: u32, extra: u16, delta: Option<u16>) {
+    fn complete(
+        &self,
+        q: usize,
+        region: Region,
+        used: usize,
+        id: u32,
+        len: u32,
+        extra: u16,
+        delta: Option<u16>,
+    ) {
         let mut regs = self.regs.borrow_mut();
         let base = regs.queues[q].used_idx;
         for e in 0..extra {
@@ -351,7 +371,7 @@ impl FakeNic {
                 continue;
             }
             if let Some(what) = policy.scribble {
-                self.scribble(what);
+                self.scribble(what, Region::Rx, head);
             }
             let mut header = [0u8; NET_HDR_LEN];
             header[0] = policy.header_flags.unwrap_or(0);
@@ -399,7 +419,7 @@ impl FakeNic {
                 continue;
             }
             if let Some(what) = policy.scribble {
-                self.scribble(what);
+                self.scribble(what, Region::Tx, head);
             }
             self.complete(
                 1,
@@ -413,7 +433,8 @@ impl FakeNic {
         }
     }
 
-    fn scribble(&self, what: Scribble) {
+    /// Rewrites what `what` names, just before buffer `head` of the queue in `region` completes.
+    fn scribble(&self, what: Scribble, region: Region, head: u16) {
         match what {
             Scribble::Descriptors => {
                 for region in [Region::Rx, Region::Tx] {
@@ -433,6 +454,13 @@ impl FakeNic {
             }
             Scribble::WholeRx(byte) => self.rx_dma.borrow_mut().fill(byte),
             Scribble::WholeTx(byte) => self.tx_dma.borrow_mut().fill(byte),
+            Scribble::Completed => {
+                let at = DESC_OFF + usize::from(head) * 16;
+                self.poke(region, at, &(RX_PHYS ^ TX_PHYS ^ 0x5a5a_0000).to_le_bytes());
+                self.poke(region, at + 8, &7u32.to_le_bytes());
+                self.poke(region, at + 12, &1u16.to_le_bytes());
+                self.poke(region, at + 14, &u16::MAX.to_le_bytes());
+            }
         }
     }
 
@@ -624,6 +652,12 @@ impl Transport for View<'_> {
     fn dma_len(&self) -> usize { REGION_LEN }
 
     fn wait_irq(&self, timeout_us: u64) -> Result<(), Fault> {
+        if let Some(left) = self.nic.irq_waits_left.get() {
+            if left == 0 {
+                return Err(Fault::Kernel);
+            }
+            self.nic.irq_waits_left.set(Some(left - 1));
+        }
         if self.nic.irq.get() != 0 {
             self.nic.advance(1);
             return Ok(());
@@ -652,11 +686,12 @@ pub fn policy_from(next: &mut impl FnMut() -> u8) -> Policy {
     let (tx_id, tx_len) = (u32_of(next), u32_of(next));
     let tx_delta = u32_of(next) as u16;
     let spurious = u32::from(next() % 4);
-    let scribble = match next() % 4 {
+    let scribble = match next() % 5 {
         0 => Scribble::Descriptors,
         1 => Scribble::Avail,
         2 => Scribble::WholeRx(next()),
-        _ => Scribble::WholeTx(next()),
+        3 => Scribble::WholeTx(next()),
+        _ => Scribble::Completed,
     };
     Policy {
         magic: on(0).then_some(magic),
@@ -710,7 +745,10 @@ pub fn exercise(bytes: &mut impl FnMut() -> u8) -> FakeNic {
                 let frame: Vec<u8> = (0..len).map(|i| round.wrapping_add(i as u8)).collect();
                 nic.arrive(&frame);
                 let drained = rx.drain(&rx_view, &mut scratch, |f| {
-                    assert!((virtio::MIN_FRAME..=virtio::MAX_FRAME).contains(&f.len()), "a bad frame delivered");
+                    assert!(
+                        (virtio::MIN_FRAME..=virtio::MAX_FRAME).contains(&f.len()),
+                        "a bad frame delivered"
+                    );
                 });
                 if drained.is_err() {
                     break;

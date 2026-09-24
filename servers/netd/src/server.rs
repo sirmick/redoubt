@@ -26,13 +26,36 @@ pub struct NetServer<T: Transport> {
     mac: u64,
     client: u64,
     broken: bool,
+    /// The badge the receive thread reports a broken device on ([`NetServer::expect_reports_on`]).
+    reports: Option<u64>,
 }
 
 impl<T: Transport> NetServer<T> {
     /// Serves `client` (a badge below 2^63, [`crate::parse_client`]) on the transmit queue `tx`
     /// in `t`'s region, for a device whose MAC is `mac`.
     pub fn new(t: T, tx: TxQueue, mac: u64, client: u64) -> NetServer<T> {
-        NetServer { t, tx, mac, client, broken: false }
+        NetServer { t, tx, mac, client, broken: false, reports: None }
+    }
+
+    /// The receive thread reports a broken device with a `send` on `badge`, drawn at random at or
+    /// above [`crate::FIRST_MINTED_BADGE`], so never the client's. A badge below that is refused
+    /// (`false`), as it could be one the manifest gave out.
+    pub fn expect_reports_on(&mut self, badge: u64) -> bool {
+        let minted = badge >= crate::FIRST_MINTED_BADGE;
+        if minted {
+            self.reports = Some(badge);
+        }
+        minted
+    }
+
+    /// A `send` arrived on `badge` with `words` (its handles are the caller's to close). The one
+    /// `send` that means anything is the receive thread's [`crate::BROKEN`] on the reporting
+    /// badge: the device is reset and `failed` from then on. Any other is ignored; the client
+    /// only calls, and nobody else can make the serving thread do anything.
+    pub fn sent(&mut self, badge: u64, words: &Words) {
+        if self.reports == Some(badge) && words[0] == crate::BROKEN {
+            self.break_device();
+        }
     }
 
     pub fn broken(&self) -> bool { self.broken }
