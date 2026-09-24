@@ -480,8 +480,8 @@ impl<S: FileServer> NineServer<S> {
     }
 
     /// [`NineServer::serve_with`], except that a request the file server asked to hold
-    /// ([`Read::Wait`], [`Write::Wait`]) is **not** answered: it comes back, with its T-message untouched in its
-    /// lend, for the server to park ([`super::parked::Parked`]). Serving it again later answers
+    /// ([`Read::Wait`], [`Write::Wait`]) is **not** answered: it comes back, with its T-message untouched in
+    /// its lend, for the server to park ([`super::parked::Parked`]). Serving it again later answers
     /// it, because the request is read from the lend afresh each time; a fid clunked meanwhile
     /// makes that second serving an `Rerror`, which is what the client should see.
     pub fn serve_parking(
@@ -820,7 +820,11 @@ impl<S: FileServer> NineServer<S> {
     /// [`FileServer::minted`] hook (with no quota), then the handle, so `disconnect` frees it like
     /// any other. Returns (handle, id, badge). The caller replies with the handle and, unless the
     /// reply was delivered with it installed, undoes the connection with [`NineServer::unmint`]
-    /// (answer 168). Deciding that `root` is no wider than the caller's own is the file server's.
+    /// (answer 168). Deciding that `root` is no wider than the caller's own is the file server's,
+    /// and so is deciding that the caller may mint at all: unlike `new_connection`, this does not
+    /// attach the caller's own root or check its labels first, so the file server calls it only
+    /// for a caller it has authorised (`ipd` refuses labelled callers and checks the caller's
+    /// scope before it mints).
     pub fn mint_rooted(
         &mut self,
         caller: &Caller,

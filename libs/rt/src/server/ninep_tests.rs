@@ -139,7 +139,13 @@ impl FileServer for MemFs {
         Ok(data.len())
     }
 
-    fn write_or_wait(&mut self, c: &Caller, node: &usize, offset: u64, data: &[u8]) -> Result<Write, NineError> {
+    fn write_or_wait(
+        &mut self,
+        c: &Caller,
+        node: &usize,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<Write, NineError> {
         if self.wait_for_room {
             return Ok(Write::Wait);
         }
@@ -874,6 +880,28 @@ fn a_write_is_refused_before_it_can_wait() {
     Message { tag: 4, body: Body::Twrite { fid: 1, offset: 0, data: b"x" } }.encode(&mut buf).unwrap();
     assert_eq!(t.server.answer_in_place(&a, &mut buf), Answer::Replied);
     assert!(matches!(Message::decode(&buf).unwrap().body, Body::Rerror { .. }));
+}
+
+/// A labelled caller's write is refused on its labels before it can wait: a write down (a
+/// caller labelled 7 to an unlabelled file) is refused at open, and a write to a fid it could not
+/// open is refused, never held, however much the file server would wait.
+#[test]
+fn a_labelled_write_is_refused_before_it_can_wait() {
+    let mut t = T::new();
+    let vault = caller(ALICE, 1001, &[7]);
+    t.attach(&vault, 0, "");
+    t.walk(&vault, 0, 1, &["notes"]);
+    t.server.fs.wait_for_room = true;
+    assert_eq!(t.open(&vault, 1, mode::OWRITE), Err("permission denied".into()));
+    let mut buf = vec![0; MSIZE];
+    Message { tag: 4, body: Body::Twrite { fid: 1, offset: 0, data: b"x" } }.encode(&mut buf).unwrap();
+    assert_eq!(t.server.answer_in_place(&vault, &mut buf), Answer::Replied);
+    assert!(matches!(Message::decode(&buf).unwrap().body, Body::Rerror { .. }));
+    // With equal labels the write passes the check, and only then waits.
+    t.walk(&vault, 0, 2, &["vault", "key"]);
+    t.open(&vault, 2, mode::OWRITE).unwrap();
+    Message { tag: 5, body: Body::Twrite { fid: 2, offset: 0, data: b"x" } }.encode(&mut buf).unwrap();
+    assert_eq!(t.server.answer_in_place(&vault, &mut buf), Answer::Waiting);
 }
 
 #[path = "ninep_common_tests.rs"]

@@ -19,6 +19,10 @@ fn a_panic_resets_the_device() {
 
     assert!(regs.arm_panic_reset(), "armed once");
     assert!(!regs.arm_panic_reset(), "and only once");
+    // A second mapping cannot re-arm it, nor pair its length with the first one's base: the hook
+    // below resets the first registers, whose status it reads back as 0.
+    let other = Regs::in_memory(Box::leak(vec![7u32; 1].into_boxed_slice()));
+    assert!(!other.arm_panic_reset());
     assert_ne!(regs.read_register(reg::STATUS), Ok(0), "arming alone touches nothing");
 
     std::panic::set_hook(Box::new(|_| redoubt_rt::start::run_panic_hook()));

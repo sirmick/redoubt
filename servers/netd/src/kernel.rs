@@ -14,7 +14,7 @@
 
 use alloc::boxed::Box;
 use core::ptr::null_mut;
-use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 
 use redoubt_rt::abi::Error;
 use redoubt_rt::handle::{Irq, Mmio, time_now};
@@ -92,10 +92,17 @@ impl Regs {
 
     /// Makes these registers the ones the panic hook resets, and installs the hook
     /// (`redoubt_rt::start::set_panic_hook`). Once per process; `false` if it was done already.
+    ///
+    /// Only the first call stores anything: a flag is claimed first, then the length, then the
+    /// base, which the hook reads first. So the hook sees either nothing or one mapping's base and
+    /// length together, never one's base with another's length (QA D3-code-review-3).
     pub fn arm_panic_reset(&self) -> bool {
-        let armed = PANIC_BASE.compare_exchange(0, self.base, Ordering::AcqRel, Ordering::Acquire).is_ok();
+        if PANIC_ARMED.swap(true, Ordering::AcqRel) {
+            return false;
+        }
         PANIC_LEN.store(self.len, Ordering::Release);
-        armed && redoubt_rt::start::set_panic_hook(panic_reset)
+        PANIC_BASE.store(self.base, Ordering::Release);
+        redoubt_rt::start::set_panic_hook(panic_reset)
     }
 }
 
@@ -103,6 +110,8 @@ impl Regs {
 /// on, so rebuilding a `Regs` from them names the same mapping. 0 before it is armed.
 static PANIC_BASE: AtomicUsize = AtomicUsize::new(0);
 static PANIC_LEN: AtomicUsize = AtomicUsize::new(0);
+/// Claimed by the one call of [`Regs::arm_panic_reset`] that stores the registers.
+static PANIC_ARMED: AtomicBool = AtomicBool::new(false);
 
 /// The panic hook: stop the device (status 0, read back, bounded), so it writes nothing more into
 /// pages the panic is about to free. Bounded, no allocation, only atomics and two registers.
