@@ -22,7 +22,7 @@ use crate::invariants::Checker;
 use crate::kernel::{Boot, Kernel};
 use crate::mutation::Mutation;
 use crate::sched::Scheduler;
-use crate::spec::SLICE;
+use crate::spec::{SLICE, STRIDE};
 use crate::syscall::Op;
 
 /// A property that did not hold.
@@ -731,10 +731,18 @@ fn sched_gaming(rng: &mut Rng, mutation: Option<Mutation>) -> Sr {
     let (g, v) = (1, 2);
     sim.budget(g, ROOT_B, w, 2);
     sim.budget(v, ROOT_B, w, 1);
-    let burst = rng.range(1, SLICE / 4);
+    // At a weight above STRIDE, a burst shorter than w / STRIDE is charged under one pass unit:
+    // only the remainder makes it count.
+    let burst =
+        if w > STRIDE { rng.range(1, (w / STRIDE).clamp(2, SLICE / 4)) } else { rng.range(1, SLICE / 4) };
     let horizon = 200 * SLICE;
+    // Above STRIDE every turn of the gamer's is a burst, so none of its runs is charged a whole
+    // unit on its own.
+    let always = w > STRIDE;
     while sim.now < horizon {
-        let Some((b, t, _)) = sim.run(if rng.pct(50) { burst } else { SLICE }) else { break };
+        let Some(c) = sim.s.pick() else { break };
+        let max = if c.budget == g && (always || rng.pct(50)) { burst } else { SLICE };
+        let Some((b, t, _)) = sim.run(max) else { break };
         if b == g {
             // The burst ends in a block; the thread is runnable again by the next entry.
             sim.s.thread_blocked(g, t);
@@ -1054,6 +1062,12 @@ fn sched_rank(rng: &mut Rng, mutation: Option<Mutation>) -> Sr {
                 }
                 // Full slices keep passes equal (all weights are equal), so ties are the rule.
                 let c = s.current.unwrap();
+                // Sometimes only part of it: the thread keeps the CPU, so a wake that follows
+                // finds it running and must leave it there (b).
+                if c.slice_left > 1 && rng.pct(50) {
+                    s.run(rng.range(1, c.slice_left - 1));
+                    continue;
+                }
                 s.run(c.slice_left);
                 s.slice_end();
                 let (b, _) = current.take().unwrap();
@@ -1074,7 +1088,10 @@ fn sched_rank(rng: &mut Rng, mutation: Option<Mutation>) -> Sr {
 }
 
 /// (k) P (100) spins and gives each of many short commands a child of weight 99; a victim V (100)
-/// spins. Both keep half: the parent's lead grows only by the commands' own work.
+/// spins. Both keep half: the parent's lead grows only by the commands' own work. Like a shell, P
+/// starts each command from inside its own slice, holding the lead that run gave it, and first
+/// runs one to three commands back to back that end before they run at all: those move nothing (a
+/// lift that counted the entry wait, measured from the floor, would double P's lead each time).
 fn sched_shell(rng: &mut Rng, mutation: Option<Mutation>) -> Sr {
     let mut sim = Sim::new(mutation);
     let (p, v) = (1, 2);
@@ -1085,7 +1102,20 @@ fn sched_shell(rng: &mut Rng, mutation: Option<Mutation>) -> Sr {
     let mut child: Option<(u64, u64)> = None; // (child, work left)
     let mut commands = 0;
     while sim.now < 300 * SLICE {
-        if child.is_none() && commands < 50 {
+        let Some(cur) = sim.s.pick() else { break };
+        if cur.budget == p && child.is_none() && commands < 50 && cur.slice_left > 1 {
+            // Most of P's slice, then the commands start inside it.
+            let part = cur.slice_left - 1;
+            sim.s.run(part);
+            sim.now += part;
+            *sim.ran.entry(p).or_default() += part;
+            for _ in 0..rng.range(1, 3) {
+                let c = next;
+                next += 1;
+                sim.budget(c, p, 99, 0);
+                subtree.push(c);
+                sim.s.destroy_budget(c);
+            }
             let c = next;
             next += 1;
             commands += 1;

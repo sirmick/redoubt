@@ -366,18 +366,24 @@ fn budget_churn(end: u64, tpu: u64) -> u64 {
     let weight = param(1).max(1) as u32;
     if variant == 4 {
         // The shell pattern, as the kernel sees it: this budget keeps counting on a thread of its
-        // own, and gives budget after budget most of its weight, then takes it back, with no run
-        // in between. Creating and destroying moves nothing (OWNER DECISION 6): the thread keeps
-        // this budget's share.
+        // own and on this one, which runs most of a slice and then, holding the lead that gave
+        // it, gives five budgets back to back most of its weight and takes it back, with no run
+        // in between. Creating and destroying moves nothing (OWNER DECISION 6): the budget keeps
+        // its share. (A lift that counted the entry wait, from the floor, would grow the lead by
+        // half again at each one.)
         thread(shell_spinner, 0);
+        let mut total = 0;
         while ticks() < end {
-            if let Ok(c) = rd::create(3, &rd::spec(1, 0, weight)) {
-                let _ = rd::destroy(c);
+            total += spin_until((ticks() + (SLICE_US - SLICE_US / 5) * tpu).min(end));
+            for _ in 0..5 {
+                if let Ok(c) = rd::create(3, &rd::spec(1, 0, weight)) {
+                    let _ = rd::destroy(c);
+                }
             }
             let _ = rd::receive(None, 1_000, 0);
         }
         await_done(1);
-        return TOTAL.load(SeqCst) as u64;
+        return total + TOTAL.load(SeqCst) as u64;
     }
     let image = spawn::image();
     let exit = rd::endpoint_create().expect("exit");

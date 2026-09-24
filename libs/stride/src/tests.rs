@@ -220,3 +220,24 @@ fn a_running_budget_stays_queued_and_counts_for_the_floor() {
     q.reconcile(&mut bs, None, &[2]);
     assert!(!q.contains(1));
 }
+
+#[test]
+fn a_deschedule_charges_at_least_one_unit_and_a_destroy_only_what_ran() {
+    let mut bs = map(&[1, 2]);
+    bs.0.get_mut(&1).unwrap().1 = 1;
+    let mut cpu: Cpu<u64, 4> = Cpu::new();
+    cpu.reconcile(&mut bs, &[1]);
+    // Picked, then off the CPU with nothing seen to run: one unit is charged all the same.
+    cpu.switch(&mut bs, Some(1), |_, _| true);
+    cpu.switch(&mut bs, None, |_, _| true);
+    assert_eq!(bs.state(1).pass, u128::from(MIN_CHARGE * STRIDE));
+    // Runs 5, then is destroyed on the CPU: charged exactly 5, and the CPU is free.
+    cpu.switch(&mut bs, Some(1), |_, _| true);
+    cpu.accrue(5);
+    let before = bs.state(1).pass;
+    cpu.settle(&mut bs, 1);
+    assert_eq!(bs.state(1).pass, before + u128::from(5 * STRIDE));
+    cpu.accrue(3);
+    cpu.destroy(&mut bs, 1, None, |_| {});
+    assert_eq!((cpu.cur, cpu.pending), (None, 0));
+}
