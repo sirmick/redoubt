@@ -23,6 +23,7 @@ amendments and approval attribution. Accepted IDs: **1–126, 150–160, 162, 16
 Later answers replace earlier wording where stated in the archive: 56 was revised; 57/58
 were replaced by 82; 103 removed `first` and priority tiers; 120 added the bundle signature
 domain. Answers 167/168 add observable IPC outcomes without changing lend ownership rules.
+Answer 166 below revises 103's one-`SLICE` latency claim without changing its mechanism.
 Approval does not establish implementation: see [STATUS](STATUS.md).
 
 ## Recording a new decision
@@ -82,3 +83,33 @@ retention.
 **Reason:** avoid a started, inert zero-thread process that the current interface cannot
 restart. **Owner:** KERNEL-SPEC.md, Process, Messages and System calls. **Residual:** real-kernel
 tests must cover final-thread exit both with and without open calls and surviving siblings.
+
+## Wakeup latency decision (Mick, 2026-09-23)
+
+Mick answered the Architect's Wash decision request on QA thread G1-q166 with “go with
+recommendation”, after an earlier relayed “answer A”. The recommendation (A) kept answer 103's
+mechanism and withdrew its universal one-`SLICE` claim; the alternative (B) kept a hard
+one-`SLICE` bound and changed the scheduler to establish it under a proof. A was chosen.
+
+### 166. Withdraw the universal one-slice wakeup claim; specify ties and preemption (revises 103).
+
+**Decision:** keep answer 103's single stride queue, actual-runtime charging and the
+`max(own pass, current minimum)` wake rule. Withdraw the claim that a driver or the steward
+woken under load runs within about one `SLICE`; nothing in the mechanism establishes it, and
+no deadline follows from weight. R12 gains a deterministic wake-first tie rule (a waking budget
+is ranked ahead of already-queued budgets with an equal pass) and states that preemption
+happens at slice end or at a deadline, never on wake alone. Wakeup is prompt but not bounded.
+The attack-test and WP-K5 acceptance bullets that repeated the bound are replaced by a
+measured responsiveness target under a named workload: N spinning user budgets at the manifest
+user weight, one driver and the steward at their manifest weights, recording weights, runnable
+budgets, prior passes, wake latency and lease-termination latency. WP-K5 proposes the numeric
+target with that evidence and a package reviewer accepts it.
+
+**Reason:** answer 103's "stated cost: up to one `SLICE`" was a promise, not a consequence of
+`max(own pass, current minimum)` with unspecified ties and retained larger passes; a woken
+budget can wait for the running slice plus a slice per equal-pass budget ahead of it. Option A
+preserves the accepted no-priority design and makes the guarantee honest and testable at no
+mechanism cost. **Owners:** KERNEL-SPEC.md, R12; RESOURCES.md, Scheduling and Attack tests;
+BUILD-PLAN.md, WP-K5. Answer 103's latency wording is superseded; its removal of `first` and
+priority tiers stands. **Residual:** human control (TENETS guarantee 3) rests on a measured
+steward lease-termination latency, not a proven bound, until something needs a real-time rule.

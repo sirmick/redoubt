@@ -22,9 +22,9 @@ SWARM.md's Claims table owns package state; STATUS.md summarizes integration evi
 There are also explicitly unresolved target differences: the current `map_device` ABI returns
 `addr, len`, while the target row below still awaits question **146**; BOOT.md describes the
 implemented `Devs`/`Ctrl` handoff while device-policy question **143** remains open. Neither current
-behavior is owner approval of its proposal. Questions **164-166** respectively qualify confined
-mediation, authority-closure wording under permitted delegation, and the claimed wakeup bound;
-their recommendations are not amendments to R1/R9/R12.
+behavior is owner approval of its proposal. Questions **164-165** respectively qualify confined
+mediation and authority-closure wording under permitted delegation; their recommendations are
+not amendments to R1/R9.
 
 ## Constants
 Initial values; changing one is a spec change (ANSWERS.md).
@@ -342,15 +342,13 @@ and freed when it maps nothing. The kernel chooses the addresses `map_anon`, `ma
 **R12. Scheduling.** **One flat stride queue over every runnable budget**, of either class, with no
 priority above it: run the lowest pass; at every deschedule, pass += runtime x `STRIDE` / weight
 (never 0: a weight-0 budget holds no process); on wake, pass = max(own pass, current minimum).
+Ties are deterministic and wake-first: a waking budget is ranked ahead of already-queued budgets
+with an equal pass. Preemption happens at slice end or at a deadline, never on wake alone.
 `init`, the steward and the drivers are scheduled by weight like everyone else, with the large
-weights the boot manifest gives them (RESOURCES.md, INIT.md). Because a waking budget re-enters at
-the current minimum pass, a driver woken by an interrupt runs within about one `SLICE`. Within a
-budget, threads run round-robin. The timer is always armed (slice end or the next deadline).
-
-**Open qualification (166):** the stated one-slice promise comes from answer 103, but does not
-follow from `max(own pass, current minimum)` with unspecified ties or retained larger passes.
-It is unresolved, not an established guarantee or an implemented latency result; the owner has
-not accepted either weakening that promise or changing the scheduler to establish it.
+weights the boot manifest gives them (RESOURCES.md, INIT.md). Wakeup is prompt but not bounded:
+a waking budget may retain a larger pass, and no deadline follows from weight; RESOURCES.md
+states the measured responsiveness target (answer 166, revising 103). Within a budget, threads
+run round-robin. The timer is always armed (slice end or the next deadline).
 
 ## System calls
 `h` is a handle. Every call returns a status (success or one error from the enum below); its result

@@ -24,7 +24,8 @@ outcomes, [SWARM](SWARM.md#claims) owns package state, and [BUILD-PLAN](BUILD-PL
   milestone scope with [PLAN's SMP section](PLAN.md#smp-after-milestone-1).
 - Question **171** leaves late-invalid receive output unresolved. The model rejects dependent
   scenarios explicitly; initial receive validation and call/reply completion are covered.
-- Questions **164–166** leave mediation, authority closure and the wakeup bound unresolved.
+- Questions **164–165** leave mediation and authority closure unresolved. Answer 166 made wakeup
+  latency a measured target (RESOURCES.md), not a bound; WP-K5 implements its tie rule and bench case.
   They qualify the security/latency claims, not just their implementation schedule.
 - `consoled` unknown-request handle cleanup and the broader raw-syscall/owning-runtime
   composition need follow-up; [review tasks](https://github.com/sirmick/redoubt/blob/main/ASTRA.md).

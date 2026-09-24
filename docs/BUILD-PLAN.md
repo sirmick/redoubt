@@ -12,8 +12,8 @@ Attack verdicts come from the kernel, a victim or a trusted checker, not an atta
 Milestone 1 requires rv64 boots and rv32 compilation; existing rv32 boots add coverage.
 The slice uses `no_std` + `alloc` Rust and Elixir; a Rust `std` target is later work.
 Design changes need approval recorded once in [ANSWERS](ANSWERS.md) and applied to their owner.
-Open decisions are in [QUESTIONS](QUESTIONS.md), including 163 (typed parking), 164–166
-(security/latency claims), 171 (late-invalid receive output), and device/lifecycle issues 128–149. No package resolves them by assumption.
+Open decisions are in [QUESTIONS](QUESTIONS.md), including 163 (typed parking), 164–165
+(security claims), 171 (late-invalid receive output), and device/lifecycle issues 128–149. No package resolves them by assumption.
 
 ## Order
 
@@ -21,15 +21,15 @@ Open decisions are in [QUESTIONS](QUESTIONS.md), including 163 (typed parking), 
 
 1. **G1 — close launch gates.** Reconcile T1c's retained three-review evidence and current checker
    coverage; identify and complete missing budget-record/IPC TCB reviews before the next wave.
-   Have the architect prepare question 166 for an owner decision, then apply the actual decision
-   before K5's affected work. Record evidence and residuals in SWARM; do not repeat already-valid
-   reviews or mark whole IPC1 accepted. R2 can proceed after review debt is cleared even if 166
-   remains open. Acceptance of G1 requires review debt cleared and the K5 contract settled.
+   Question 166 is decided and applied (answer 166; KERNEL-SPEC R12, RESOURCES.md, WP-K5).
+   Record evidence and residuals in SWARM; do not repeat already-valid reviews or mark whole
+   IPC1 accepted. R2 can proceed after review debt is cleared. Acceptance of G1 requires review
+   debt cleared and the K5 contract settled.
 2. **R2 — loader stub and startup image fields.** Use the integrated K4 lifecycle, a hostile-ELF
    confinement test and coordinated startup codec migration. This enables native launch; it does
    not alone close K4's bundle-readback gate.
-3. **K5 — timer, deadlines and preemption.** After 166 is recorded/applied, implement the accepted
-   single-queue contract and real timeout/fairness/deadline tests, preserving IPC ownership outcomes.
+3. **K5 — timer, deadlines and preemption.** Implement the accepted single-queue contract
+   (answer 166) and real timeout/fairness/deadline tests, preserving IPC ownership outcomes.
    Use the sole kernel writer; it may run alongside R2 only with disjoint owned paths.
 
 ### Route to working SSH and milestone acceptance
@@ -45,7 +45,7 @@ threshold. Required reviews and shared checks still apply before integration.
 | VM and shell: B1 → B2 | Existing R1b/R4; production R3 handoff and K5 for boot acceptance | Elixir prints; the bench drives IEx on UART, then S3 reuses it over each SSH channel. |
 | Storage: D2 | D1/L1/R1b, filesystem contracts and R3 startup | Real fsd/blkd boots, quotas, labels, disconnect and no-leaky-state cases pass. |
 | Network: reconcile D3 → D3 | Existing R1b/K3/W2; verify external ownership/source before replacing or accepting work | Real netd/ipd, scoped TCP and isolated bench peer; no outside-network access. |
-| Policy: S2 | R3 infrastructure, B1, D2 and existing S1 audit signing | Sessions/leases, approvals, signed audit, revocation and real init/steward blame handoff; affected 164–166 decisions settled. |
+| Policy: S2 | R3 infrastructure, B1, D2 and existing S1 audit signing | Sessions/leases, approvals, signed audit, revocation and real init/steward blame handoff; affected 164–165 decisions settled. |
 | SSH: S3 | D3 + S1 + S2 + B2; B2a/R1d for full console acceptance | Pinned-key Alice, Bob, vault and approval sessions on the production stack; session separation, per-channel resize/abandonment and cleanup checked. |
 | Final acceptance: E1 | All required packages and retained gates, including K6, C1 and IPC1 | The entire PLAN milestone-1 attack suite, full bench, rv32 compilation, unsafe and review requirements; then declare milestone 1. |
 
@@ -70,7 +70,7 @@ establish its compatibility. D1/R4 source is already recovered.
 | S2/S3 wire integration | Architect and both package owners | Owning protocol tables, decision provenance, generated codecs/drift checks and real authentication/session/approval exchanges. |
 | Shared runtime/server assurance | IPC1 reviews, ASTRA A3 cleanup and raw-syscall/owning-view audit | Explicit findings and system-verdict regressions before relying on affected security claims. |
 
-Questions 163–166 and 171 retain their IDs and remain open until approved. Scope questions 128–149
+Questions 163–165 and 171 retain their IDs and remain open until approved. Scope questions 128–149
 at the consuming package, including model conformance and device lifecycle; recommendations are
 not defaults. Model properties/mutations remain host evidence, not kernel replay. The architect
 owns specifications and decision records; the orchestrator owns this order, claims and progress.
@@ -132,18 +132,20 @@ recipes remain in git.
 - Reads: KERNEL-SPEC.md R12, timeouts, deadlines; RESOURCES.md.
 - Delivers: the kernel-owned timer; timeouts on `call`/`send`/`receive`; budget deadlines enforced;
   **one stride queue over every runnable budget** — no priority tier, no class ordering, no flag
-  (answer 103) — with a waking budget re-entering at `max(own pass, current minimum)`
-  (KERNEL-SPEC.md R12); `rdtime` readable
-  from user mode.
+  (answer 103) — with a waking budget re-entering at `max(own pass, current minimum)`,
+  deterministic wake-first tie handling and preemption only at slice end or a deadline
+  (KERNEL-SPEC.md R12, answer 166); `rdtime` readable from user mode.
 - Accepted when: a spinning budget cannot delay another beyond its weight; a sleeping-waking budget
   cannot exceed its share; a system-class server busy on one user's requests delays other users only
-  by its weight; **a driver woken by an interrupt runs within about one `SLICE` while user budgets
-  spin** (the stated cost of one queue, RESOURCES.md), and a large-weight server keeps its share
-  under that load; every blocking call returns by its timeout (I13); a deadline
-  destroys its budget; the old IRQ-0 timer path and `timer` case are gone.
+  by its weight; **deterministic wake-first tie handling is implemented and tested; real-boot
+  acceptance under the named workload** (N spinning user budgets at the manifest user weight, one
+  driver and the steward at their manifest weights) **reports the measured driver wake and steward
+  lease-termination latencies with the recorded weights, runnable budgets and prior passes**, WP-K5
+  proposes the numeric target with that evidence and a package reviewer accepts it (RESOURCES.md,
+  Attack tests), and a large-weight server keeps its share under that load; every blocking call
+  returns by its timeout (I13); a deadline destroys its budget; the old IRQ-0 timer path and
+  `timer` case are gone.
 - Needs: WP-K2.
-- Design gate: question 166 must settle the wakeup guarantee before implementing the affected
-  scheduling contract. Dependency-ready does not authorize choosing either proposed answer.
 
 **WP-K6. Delete the legacy interface.** Size M.
 - Delivers: removal of SID connects, scalar message kinds, `ClaimInterrupt`, the `grants` entry,
@@ -408,8 +410,8 @@ labelled callers.
   timing.
 - Needs: WP-R3, WP-B1, WP-D2.
 - Uses R3's integrated startup infrastructure; jointly closes R3's real steward blame gate.
-  Resolve affected questions 164/165 and apply 166's accepted responsiveness contract before
-  accepting mediation, authority-closure or latency claims. S1's audit signing is exercised here.
+  Resolve affected questions 164/165 before accepting mediation or authority-closure claims;
+  latency claims follow answer 166's measured target. S1's audit signing is exercised here.
 - Coordinate the S2/S3 authentication, session and approval protocol inventory with the architect
   before either endpoint implements it. WIRE requires a table in its owning specification,
   approval provenance as applicable, generated Rust/Elixir codecs and drift checks; settle any new

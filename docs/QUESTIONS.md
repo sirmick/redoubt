@@ -1,11 +1,11 @@
 # Open decisions
 
-Open IDs: **128–149, 163–166, 171**. Next unused ID: **172**. Recommendations below are not approvals.
+Open IDs: **128–149, 163–165, 171**. Next unused ID: **172**. Recommendations below are not approvals.
 The owning specification carries each accepted rule and its rationale; [ANSWERS.md](ANSWERS.md)
 indexes approval provenance. [Earlier questions](archive/2026-09-22/QUESTIONS.md) are historical.
 Do not renumber or reopen settled questions. Record a new decision once, then update its owner.
 
-Questions 164–166 qualify the confinement, authority-closure and wakeup-latency claims.
+Questions 164–165 qualify the confinement and authority-closure claims.
 Questions 143/146 remain open even though BOOT documents the current device implementation.
 
 ### 128. An endpoint cannot be destroyed.
@@ -306,25 +306,6 @@ but the setup must record its actual edges and the verdict must include newly au
 delegations; an initial handle list alone cannot define that bound. No new nontransferable
 handle mechanism is implied by either choice.
 **Open:** owner decision on the claim's scope; answer 150 remains binding.
-
-### 166. The one-slice wakeup promise does not follow from the chosen queue (ASTRA D3).
-
-Answer
-103 explicitly promises up to one `SLICE` for drivers and the steward, and both RESOURCES.md
-and KERNEL-SPEC.md R12 repeat it. R12 actually wakes at `max(own pass, current minimum)`;
-retaining a larger pass or several budgets tied at the minimum defeats an unconditional
-next-turn bound. This is a proposed revision of answer 103's latency claim, not a correction
-an editor may make silently.
-*Rec:* retain the single stride queue, actual-runtime charging and the `max` wake rule, and
-replace the universal one-slice claim with a measured responsiveness target under a named
-workload. WP-K5 specifies deterministic tie handling and records weights, runnable budgets,
-prior passes and measured wake/lease-termination latency in its real-boot acceptance. No
-universal deadline is inferred from large weight. Update R12, RESOURCES.md and affected
-acceptance text together; preserve share/fairness and human-control requirements.
-*Alt:* retain a hard one-slice requirement and design a scheduling/admission rule with a
-proof under explicit load assumptions. That changes answer 103's mechanism and must be
-reviewed for starvation and sleeping-to-gain-priority before WP-K5 implements it.
-**Open:** owner decision; neither strict priority nor a weaker guarantee is accepted here.
 
 ### 171. A receive output record becomes invalid while its thread waits.
 
