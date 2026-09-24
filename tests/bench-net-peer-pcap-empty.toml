@@ -1,0 +1,27 @@
+description = "Bench self-check (must fail): the capture is cut to nothing before it is judged, and an empty capture proves nothing, so the case fails however right the counts are"
+arch = ["rv64"]
+kind = "boot"
+programs = [{ package = "redoubt-net-tests", bin = "net-rig-twice" }]
+timeout_secs = 120
+expect = [
+    '^\[net-rig\] ok: echo through 10\.0\.9\.100:7, 2 round\(s\): exited 0$',
+    '^\[net-rig\] ok: the listener accepted and echoed the bench.s dial \(1\)$',
+    '^\[net-rig\] D3 NET TCP PASSED$',
+]
+forbid = ['\[net-rig\] FAIL']
+poweroff = true
+must_fail = '^the capture is 0 bytes, shorter than a pcap header$'
+
+[net]
+forward = [8000]
+self_forbidden = ["10.0.2.0/24", "10.0.9.102/32", "0.0.0.0/8", "127.0.0.0/8", "224.0.0.0/4", "240.0.0.0/4", "255.255.255.255/32"]
+truncate_capture = 0
+
+[[net.peer]]
+addr = "10.0.9.100:7"
+connections = 2
+
+[[net.dial]]
+port = 8000
+send = "d3 dial\n"
+expect = "d3 dial\n"

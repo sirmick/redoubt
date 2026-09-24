@@ -1,0 +1,58 @@
+description = "Self-check of d3-net-attacks (must fail): the same boot with ipd not told that 10.0.9.102 is the box's own (no self=10.0.9.102/32), so the attack on it connects, and the bench's capture catches the SYN to a self_forbidden address. Proves the case would catch a missing self check. The original: attacks on the real netd and ipd, each from its own account with its positive control in the same boot (tests/net rig, pre-R3). Outside its prefix: scoped to 10.0.9.110/32 port 7, a client's connect to 10.0.9.101:7 reaches nothing (the peer counts 0), its control to 10.0.9.110:7 does (1). The box's own addresses, from a scope allowing everything: a forwarded self address (10.0.9.102, the peer counts 0), ipd's own address, loopback and the gateway are refused before any SYN (the capture), the victim listening on 8000 accepts only the bench's dial, and the unlabelled twin reaches its own peer (1). A labelled caller with a wide scope is refused everywhere (its peer counts 0) and holds no bucket: with 4 buckets, the rig and the victim hold two, two more accounts attach and a third is refused"
+arch = ["rv64"]
+kind = "boot"
+programs = [{ package = "redoubt-net-tests", bin = "net-rig-unrefused" }]
+timeout_secs = 180
+expect = [
+    '^\[net-rig\] started netd and ipd \(self=10\.0\.2\.0/24\)$',
+    '^\[net-rig\] ipd has a link ',
+    '^\[net-rig\] victim listening on 8000$',
+    '^\[net-rig\] attack outside the prefix to 10\.0\.9\.101:7: ',
+    '^\[net-rig\] its control to 10\.0\.9\.110:7: ',
+    '^\[net-rig\] attack on the box.s own 10\.0\.9\.102:7: ',
+    '^\[net-rig\] attack on the box.s own 10\.0\.2\.15:8000: ',
+    '^\[net-rig\] attack on the box.s own 127\.0\.0\.1:8000: ',
+    '^\[net-rig\] attack on the box.s own 127\.1\.2\.3:8000: ',
+    '^\[net-rig\] attack on the box.s own 10\.0\.2\.2:8000: ',
+    '^\[net-rig\] attack on the box.s own 10\.0\.2\.2:22: ',
+    '^\[net-rig\] the twin to 10\.0\.9\.111:7: ',
+    '^\[net-rig\] the labelled caller: not refused 0x0$',
+    '^\[net-rig\] ok: the victim accepted the bench.s dial \(1\)$',
+    '^\[net-rig\] ok: the victim accepted nothing more and still runs$',
+    '^\[net-rig\] ok: buckets: two more accounts held, a third refused \(\[true, true, false\]\)$',
+    '^\[net-rig\] ok: netd and ipd still run ',
+    '^\[net-rig\] D3 NET ATTACKS PASSED$',
+]
+forbid = ['\[net-rig\] FAIL']
+poweroff = true
+must_fail = '^captured frame [0-9]+: the guest sent a SYN to 10\.0\.9\.102:7, one of the box.s own addresses$'
+
+[net]
+forward = [8000]
+# tests/net/src/lib.rs: SELF_ARGS then SELF_ALWAYS (a host test keeps them equal).
+self_forbidden = ["10.0.2.0/24", "10.0.9.102/32", "0.0.0.0/8", "127.0.0.0/8", "224.0.0.0/4", "240.0.0.0/4", "255.255.255.255/32"]
+
+# The attack outside its prefix, and its control.
+[[net.peer]]
+addr = "10.0.9.101:7"
+connections = 0
+[[net.peer]]
+addr = "10.0.9.110:7"
+connections = 1
+# A forwarded address of the box's own, and the unlabelled twin's peer.
+[[net.peer]]
+addr = "10.0.9.102:7"
+connections = 0
+[[net.peer]]
+addr = "10.0.9.111:7"
+connections = 1
+# The labelled caller's.
+[[net.peer]]
+addr = "10.0.9.112:7"
+connections = 0
+
+# The victim's one legitimate connection.
+[[net.dial]]
+port = 8000
+send = "d3 dial to the victim\n"
+expect = "d3 dial to the victim\n"

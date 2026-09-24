@@ -1,0 +1,13 @@
+description = "Bench self-check (answer 174): a case with [net] gets virtio-mmio's modern transport (force-legacy off), which netd and blkd require: the network card reports version 2"
+arch = ["rv64"]
+kind = "boot"
+programs = [{ package = "redoubt-net-tests", bin = "net-rig-probe" }]
+timeout_secs = 60
+expect = [
+    '^\[net-rig\] net device: virtio-mmio version 2$',
+    '^\[net-rig\] NET PROBE PASSED$',
+]
+forbid = ['\[net-rig\] FAIL']
+poweroff = true
+
+[net]

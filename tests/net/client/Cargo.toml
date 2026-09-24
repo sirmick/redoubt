@@ -1,0 +1,16 @@
+[package]
+name = "redoubt-net-client"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "The programs the D3 network rig launches: clients, a victim, attackers (tests/net)"
+
+# One program, its role chosen by argument (src/lib.rs). The rig (tests/net) embeds its ELF, so
+# this package must never depend on the rig's: the rig's build script builds this one.
+[[bin]]
+name = "net-client"
+path = "src/main.rs"
+
+[dependencies]
+redoubt-rt = { path = "../../../libs/rt" }
+redoubt-ipd = { path = "../../../servers/ipd" }

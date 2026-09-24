@@ -1,0 +1,31 @@
+description = "WP-D3 (answer 174): the real netd and ipd, launched through the loader stub by the tests/net rig (pre-R3). A client granted 10.0.9.100/32 port 7 connects to the bench's peer there and round-trips bytes (the peer counts exactly 1 connection); a listener granted port 8000 with a backlog of 2 echoes the bench's dial through a forwarded port. The capture shows no SYN to the box's own addresses, no non-TCP IPv4 and ARP only for the gateway"
+arch = ["rv64"]
+kind = "boot"
+programs = [{ package = "redoubt-net-tests", bin = "net-rig" }]
+timeout_secs = 120
+expect = [
+    '^\[net-rig\] net device: virtio-mmio version 2$',
+    '^\[net-rig\] started netd and ipd \(self=10\.0\.2\.0/24 self=10\.0\.9\.102/32\)$',
+    '^\[net-rig\] ipd has a link ',
+    '^\[net-rig\] ok: echo through 10\.0\.9\.100:7, 1 round\(s\): exited 0$',
+    '^\[net-rig\] listening on 8000 with a backlog of 2$',
+    '^\[net-rig\] ok: the listener accepted and echoed the bench.s dial \(1\)$',
+    '^\[net-rig\] ok: netd and ipd still run ',
+    '^\[net-rig\] D3 NET TCP PASSED$',
+]
+forbid = ['\[net-rig\] FAIL']
+poweroff = true
+
+[net]
+forward = [8000]
+# tests/net/src/lib.rs: SELF_ARGS then SELF_ALWAYS (a host test keeps them equal).
+self_forbidden = ["10.0.2.0/24", "10.0.9.102/32", "0.0.0.0/8", "127.0.0.0/8", "224.0.0.0/4", "240.0.0.0/4", "255.255.255.255/32"]
+
+[[net.peer]]
+addr = "10.0.9.100:7"
+connections = 1
+
+[[net.dial]]
+port = 8000
+send = "d3 dial through the forwarded port\n"
+expect = "d3 dial through the forwarded port\n"

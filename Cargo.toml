@@ -27,6 +27,8 @@ members = [
   "servers/ipd",
   "stub",
   "tests/programs",
+  "tests/net",
+  "tests/net/client",
   "tools/testbench",
   "tools/vendor-check",
   "vendor/getrandom",
