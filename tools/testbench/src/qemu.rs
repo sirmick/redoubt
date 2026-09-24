@@ -12,6 +12,7 @@ use anyhow::{Context, Result};
 use regex::Regex;
 
 use crate::case::{Boot, ALWAYS_FORBIDDEN};
+use crate::peer;
 use crate::ssh;
 use crate::target::Machine;
 
@@ -103,7 +104,7 @@ fn shell_line(cmd: &Command) -> String {
     line
 }
 
-fn shell_quote(s: &str) -> String {
+pub fn shell_quote(s: &str) -> String {
     if s.is_empty() || s.chars().any(|c| c.is_whitespace() || "\"'\\$`&|;<>()*?[]{}!#~".contains(c)) {
         format!("'{}'", s.replace('\'', "'\\''"))
     } else {
@@ -154,7 +155,11 @@ pub fn virtio_devices(boot: &Boot, disk: &Path) -> Result<(Vec<String>, Vec<Forw
             netdev += &format!(",hostfwd=tcp:127.0.0.1:{host}-:{guest}");
             forwards.push((*guest, host));
         }
+        // Peers: the wider network, a guestfwd each, and the capture (`peer.rs`).
+        let peers = peer::Files::beside(disk);
+        netdev += &peer::netdev_options(net, &peers)?;
         args.extend(["-netdev".into(), netdev, "-device".into(), "virtio-net-device,netdev=net0".into()]);
+        args.extend(peer::capture_args(net, &peers));
     }
     Ok((args, forwards))
 }
@@ -336,9 +341,14 @@ mod tests {
     }
 
     fn args(devices: &str) -> Vec<String> {
-        let disk = std::env::temp_dir().join(format!("testbench-qemu-test-{}.img", std::process::id()));
+        // One name per call: tests run side by side, and a case with peers clears the files
+        // beside its disk.
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let call = CALLS.fetch_add(1, Ordering::Relaxed);
+        let disk = std::env::temp_dir().join(format!("testbench-qemu-test-{}-{call}.img", std::process::id()));
         let (args, _) = virtio_devices(&boot(devices), &disk).expect("device arguments");
         std::fs::remove_file(&disk).ok();
+        std::fs::remove_dir_all(disk.with_extension("peers")).ok();
         args
     }
 
@@ -354,11 +364,36 @@ mod tests {
         assert!(args("").is_empty());
     }
 
-    /// The guest reaches nothing outside QEMU: every network is `restrict=on`.
+    /// The guest reaches nothing outside QEMU: every network is `restrict=on`, the wider one a
+    /// case with peers gets included, since it widens what maps to the host's loopback.
     #[test]
     fn every_network_is_restricted() {
-        let args = args("[net]\nforward = [22]\n");
+        let peers = "[net]\nforward = [8000]\n[[net.peer]]\naddr = '10.0.9.100:7'\nconnections = 1\n";
+        for case in ["[net]\nforward = [22]\n", "[net]\n", peers] {
+            let args = args(case);
+            let netdev = args.iter().find(|a| a.starts_with("user,")).expect("a user-mode netdev");
+            assert!(netdev.split(',').any(|o| o == "restrict=on"), "{netdev}");
+        }
+    }
+
+    /// A case with peers gets the /16, one guestfwd to the helper per peer and the capture; one
+    /// without keeps slirp's default network and no capture, as the milestone's manifest does.
+    #[test]
+    fn peers_get_the_wider_network_and_a_capture() {
+        let args = args(
+            "[net]\n[[net.peer]]\naddr = '10.0.9.100:7'\nconnections = 1\n\
+             [[net.peer]]\naddr = '10.0.9.101:7'\nconnections = 0\n",
+        );
         let netdev = args.iter().find(|a| a.starts_with("user,")).expect("a user-mode netdev");
-        assert!(netdev.split(',').any(|o| o == "restrict=on"), "{netdev}");
+        assert!(netdev.contains(&format!(",{},", peer::VNET)), "{netdev}");
+        assert_eq!(netdev.matches(",guestfwd=tcp:10.0.9.10").count(), 2, "{netdev}");
+        assert!(netdev.contains(&format!("-cmd:{}", shell_quote(&std::env::current_exe().unwrap().to_string_lossy()))));
+        assert!(netdev.contains(" peer-helper --id 10.0.9.100:7 --dir "), "{netdev}");
+        let capture = args.windows(2).find(|w| w[0] == "-object").expect("a capture");
+        assert!(capture[1].starts_with("filter-dump,id=capture0,netdev=net0,file="), "{}", capture[1]);
+
+        let plain = self::args("[net]\nforward = [22]\n");
+        assert!(!plain.iter().any(|a| a.contains("guestfwd") || a.contains("net=10.0.0.0/16")), "{plain:?}");
+        assert!(!plain.iter().any(|a| a == "-object"), "{plain:?}");
     }
 }
