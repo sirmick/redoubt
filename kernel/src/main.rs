@@ -134,6 +134,11 @@ pub extern "C" fn kmain() {
         }));
     }
 
+    // The loader wrote every boot program's image: make instruction fetch see it before the
+    // first of them runs (`fence.i`; every later executable page is fenced as it is mapped).
+    #[cfg(all(baremetal, any(target_arch = "riscv32", target_arch = "riscv64")))]
+    crate::arch::mem::sync_icache();
+
     loop {
         // Deadlines first (`time.rs`): answering them makes threads runnable. This is the kernel's
         // own loop, not an entry; nothing enters between here and the switch below.

@@ -47,6 +47,9 @@ paths = [
 ]
 # G1: +1, physmap.rs's `Window::new` over the loader's physmap. Existing code that no budget
 # listed, now counted; no new unsafe.
+# WP-K5: -1, the legacy hart-timer path removed (the kernel owns the timer); +1, mem.rs's
+# `sync_icache`, the one `fence.i` (OWNER DECISION 10): executable pages must be fetched as
+# written, and inline asm is the only way to issue the instruction. Net 0.
 max_unsafe = 16
 max_undocumented = 0
 

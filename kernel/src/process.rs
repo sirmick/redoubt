@@ -388,6 +388,8 @@ pub fn process_map(
             .expect("process_map: prepared just above");
         mm.move_frame(phys, pid, child).expect("process_map: the pages were charged above");
     }
+    // The caller wrote these pages; the child may fetch from them (on this hart, the only one).
+    crate::mem::sync_if_executable(flags);
     Ok(())
 }
 
