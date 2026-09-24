@@ -82,24 +82,20 @@ fn preempt() -> ! {
     resume_current()
 }
 
-// Indicate when we handle an IRQ
+/// A legacy interrupt callback is running: set only here, as the kernel starts one, and
+/// cleared only as it ends ([`finish_isr`]).
 static HANDLING_IRQ: AtomicBool = AtomicBool::new(false);
 
 /// The (PID, TID) to resume after an interrupt handler returns. Set when an interrupt
-/// redirects into a userspace handler, cleared when it finishes.
+/// redirects into a userspace handler, cleared when it finishes. Nothing else sets it: the
+/// legacy `ReturnToParent`, which could, is refused (`syscall.rs`).
 static PREVIOUS_PAIR: KernelCell<Option<(PID, TID)>> = KernelCell::new(None);
 
-/// Record who to resume after an interrupt handler returns.
-///
-/// # Safety
-/// The operation is sound on its own; `unsafe` is a cross-architecture ABI marker (the
-/// arm and hosted backends share the signature). Callers coordinate ISR return state and
-/// must pair this with exactly one `take_isr_return_pair`.
-pub unsafe fn set_isr_return_pair(pid: PID, tid: TID) { PREVIOUS_PAIR.with(|p| *p = Some((pid, tid))); }
-
 /// Whether a legacy interrupt callback is running (on borrowed time, with a process to resume
-/// after it). Budget deadlines wait until it has finished (`time.rs`).
-pub fn in_callback() -> bool { PREVIOUS_PAIR.with(|p| p.is_some()) }
+/// after it): the kernel dispatched one and it has not returned. Its calls are limited (the
+/// Redoubt ones are refused), and budget deadlines and slice-end preemption wait until it has
+/// finished (`time.rs`).
+pub fn in_callback() -> bool { HANDLING_IRQ.load(Ordering::Relaxed) }
 
 /// Finish a pending ISR. Return `false` if there was none.
 fn finish_isr() -> bool {
@@ -258,8 +254,7 @@ pub extern "C" fn trap_handler(
             // A Redoubt call (redoubt-sys): its numbers start above every legacy one.
             if a0 >= redoubt_sys::NUMBER_BASE as usize {
                 let regs = [a0, a1, a2, a3, a4, a5, a6, a7].map(|r| r as u64);
-                let in_irq = PREVIOUS_PAIR.with(|p| p.is_some());
-                match crate::redoubt::handle(pid, tid, in_irq, &regs) {
+                match crate::redoubt::handle(pid, tid, in_callback(), &regs) {
                     // Every result register holds at most 32 bits or one `usize` (redoubt-sys).
                     crate::redoubt::Outcome::Return(out) => ArchProcess::with_current_mut(|p| {
                         return_registers(&out.map(|r| r as usize), p.current_thread())
@@ -278,7 +273,7 @@ pub extern "C" fn trap_handler(
                 })
             });
 
-            let response = crate::syscall::handle(pid, tid, PREVIOUS_PAIR.with(|p| p.is_some()), call)
+            let response = crate::syscall::handle(pid, tid, in_callback(), call)
                 .unwrap_or_else(redoubt_abi::Result::Error);
 
             // println!("Syscall Result: {:?}", response);
@@ -320,13 +315,16 @@ pub extern "C" fn trap_handler(
                 // no ISR to return from and no pair to remember; completing the claim is all
                 // that is left before resuming whatever was interrupted.
                 if !crate::device::irq_fired(irq) {
-                    // Remember who to resume once the userspace handler returns.
-                    PREVIOUS_PAIR.with(|previous| {
-                        if previous.is_none() {
-                            *previous = Some((pid, crate::arch::process::current_tid()));
-                        }
-                    });
-                    HANDLING_IRQ.store(true, Ordering::Relaxed);
+                    // Remember who to resume once the userspace handler returns. A source with
+                    // no handler is only masked: no callback runs, so none is recorded.
+                    if crate::irq::interrupt_owner(irq).is_some() {
+                        PREVIOUS_PAIR.with(|previous| {
+                            if previous.is_none() {
+                                *previous = Some((pid, crate::arch::process::current_tid()));
+                            }
+                        });
+                        HANDLING_IRQ.store(true, Ordering::Relaxed);
+                    }
                     crate::irq::handle(irq).expect("Couldn't handle IRQ");
                 }
                 crate::sched::bill_irq(irq, started);
