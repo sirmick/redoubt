@@ -23,6 +23,7 @@ members = [
   "servers/bootfsd",
   "servers/consoled",
   "servers/blkd",
+  "servers/netd",
   "stub",
   "tests/programs",
   "tools/testbench",

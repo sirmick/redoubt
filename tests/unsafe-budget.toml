@@ -121,6 +121,15 @@ max_unsafe = 4
 max_undocumented = 0
 
 [[budget]]
+# WP-D3 (answer 174): netd is a DMA driver, TCB like blkd. src/kernel.rs holds all of it: volatile
+# register reads (32- and 8-bit) and writes, volatile DMA byte reads, writes and zeroing, and the
+# one Box::from_raw that hands the receive thread its half.
+name = "netd (virtio-net driver; DMA, so TCB)"
+paths = ["servers/netd/src"]
+max_unsafe = 7
+max_undocumented = 0
+
+[[budget]]
 # WP-R4: both crates forbid unsafe code. consoled uses the runtime's Registers for MMIO.
 name = "bootfsd and consoled (the first two 9P servers)"
 paths = ["servers/bootfsd/src", "servers/consoled/src"]
