@@ -943,7 +943,14 @@ impl Gen {
             (
                 if over { free + self.rng.range(1, 5) } else { self.rng.range(1, (free / 2).max(1)) },
                 if over && self.rng.pct(50) { free_proc + 1 } else { self.rng.range(0, free_proc.min(2)) },
-                if over && self.rng.pct(50) { free_w + 1 } else { self.rng.range(0, free_w.min(60)) },
+                if over && self.rng.pct(50) {
+                    free_w + 1
+                } else if self.rng.pct(5) {
+                    // All of it: refused when the parent holds a process (R7/R12: free weight 0).
+                    free_w
+                } else {
+                    self.rng.range(0, free_w.min(60))
+                },
             )
         };
         let mut labels = labels;

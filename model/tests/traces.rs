@@ -68,6 +68,8 @@ fn a_rule_breaking_kernel_fails_replay() {
     // Rare positional-capacity and explicit current-call selection are deterministic trace gates.
     texts.push(common::contracts::partial_reply_trace());
     texts.push(common::contracts::serve_blame_trace());
+    // The equal-instant expiry order needs a timeout and a budget deadline on one instant.
+    texts.push(common::contracts::expiry_order_trace());
     let mut missed = Vec::new();
     let invisible = |m: &Mutation| {
         m.rule() == "policy"
