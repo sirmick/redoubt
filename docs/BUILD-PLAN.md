@@ -330,6 +330,11 @@ recipes remain in git.
 - Contract gates: resolve the relevant device/startup questions 142–149 and confinement question
   164 before implementing their affected behavior. In particular, 147 governs safe driver restart,
   148 the private-bundle/public-bootfs handoff, and 149 device handle names.
+- **Network (answer 174).** WP-D3 is accepted on a rig that starts the real `netd` and `ipd`
+  through the stub; R3 retains the manifest boot of `netd` and `ipd:lan` (named handles, their
+  arguments, `self=10.0.2.0/24` on QEMU) as its own gate. **Restarting `netd`, or any driver
+  holding an always-armed DMA device, waits for WP-K5b (answer 173)**: until then its death
+  leaves a device a freed frame's next owner can steer.
 - **Confinement (answers 152-153; TENETS.md, Purpose and threat model; CONTAINMENT.md, Push and the channel
   table; GAME.md, Setting up a match).** The manifest gains the `confined` flag (INIT.md, The boot manifest): one
   top-level boolean for the whole boot. `init` compares **label sets** and refuses the boot when two
@@ -435,6 +440,9 @@ labelled callers.
   reached from one domain cannot touch another's; a confined deployment gives a labelled domain no
   `/net` at all (a sink refuses labelled callers).
 - Needs: WP-R1b, WP-K3, WP-W2.
+- Contract: answer 174 (IO-ARCHITECTURE.md, `netd`; NAMESPACES.md, the network tree). Evidence
+  before R3 is the rig (`tests/net`); the manifest boot is R3's gate, and use off the bench or a
+  `netd` restart needs WP-K5b.
 
 **WP-S2. steward (stateless, milestone 1).** Size L.
 - Reads: CAPABILITIES.md, CONTAINMENT.md, INIT.md, PACKAGES.md (launching).

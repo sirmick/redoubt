@@ -233,6 +233,82 @@ says which.
 - **TLS and SSH are end to end**, so drivers and stacks carry ciphertext. `sshd` is Rust (INIT.md);
   users' own outbound TLS and SSH run in their VMs.
 
+### netd: frames, rings and one client
+
+**What `netd` is trusted for.** It is `blkd`'s promise for a device that is always receiving: it
+never asks the device to touch anything but the pages `dma_alloc` gave it, nothing the device
+puts in them can corrupt `netd`'s memory or stop it answering, and **nothing a network sender
+puts on the wire can make it stop.** It inherits `blkd`'s decision to write its own queues
+(above): two split virtqueues of 16 descriptors, rx (queue 0) and tx (queue 1), each in its own
+`dma_alloc` region holding its ring and sixteen 2048-byte slots. Every address it gives the
+device is a region's base plus a constant. Descriptor *i* always names slot *i*; the descriptor
+table and available ring are written, never read back.
+
+**Bring-up refuses rather than works around.** Transport version 2 and device ID 1 only.
+`netd` accepts exactly `VERSION_1` and `MAC`, both required, and leaves every offload,
+mergeable buffers, the control queue, multiqueue, event indices and indirect descriptors
+unaccepted, so the device may send no GSO, no merged buffers and no checksum offload. A zero,
+multicast or broadcast MAC is refused. The configuration is read under `ConfigGeneration`.
+
+**A lie and a bad frame are different things.** Of the used rings `netd` reads the index, each
+entry's id and its length, at its own counter, never at a device index. An index that runs past
+what is outstanding, an id out of range, not outstanding or seen twice, a length below the
+12-byte header or above the slot, or a header asking for checksum or segmentation it was never
+offered, is a **lie**: the device is marked broken, reset, and every later request answered
+`failed`. A frame whose length (the used length less the header) is outside 14..1514 bytes but
+inside the slot is **content**: an 802.1Q frame or a runt from some sender on the wire. It is
+dropped and counted, and the slot is posted again; a packet on the LAN never bricks the NIC.
+Each frame is copied out once, with `netd`'s own length. A transmit's descriptor carries exactly
+its header and frame (`12 + len`), never the slot, so no byte of an earlier frame goes out with
+it. A transmit slot the device holds for more than ten seconds is a lie.
+
+**Two threads, no shared state.** The serving thread maps the registers, allocates both regions,
+sets `DRIVER_OK` and only then starts the receive thread, handing it the receive region's view
+as the thread's argument: no message ever carries an address. The serving thread owns the
+transmit ring and answers `info` and `transmit`; it never waits on anything but its own
+`receive`. The receive thread waits on the interrupt, drains the receive ring and `send`s each
+frame to `ipd`, one page transferred per frame, giving up after 50 ms (a frame `ipd` cannot take
+is dropped: back pressure is loss, as on any wire). It tells the serving thread only that the
+device is broken, on a badge drawn at random above 2^63 that carries no data.
+
+**A driver that dies leaves an armed device.** `netd` resets the device (status 0, then read back
+until 0, bounded) on every exit it controls, its panic included (`redoubt-rt`'s panic hook). A
+kill, a destroyed budget or a fault that is not a panic runs none of its code: the device stays
+live with its rings in freed frames, which QEMU re-reads on every packet, so the frames' next
+owner could steer its DMA anywhere in physical memory. The kernel closes that (answer 173, WP-K5b):
+**until WP-K5b has merged, `netd` is not restarted (WP-R3) and not used off the bench.**
+
+**What it is handed.** Its startup block names the endpoint it receives on, `netd`; two device
+handles, `net` (the MMIO region, which must carry the DMA flag) and `net-irq`; and `ipd`, a
+handle to `ipd`'s endpoint carrying the ingress badge `ipd` accepts frames on. One argument,
+`client=BADGE`, names the only badge (below 2^63) allowed `info` and `transmit`. It exits only
+without its handles or arguments; a device fault leaves it running and answering `failed`, so
+`init` never restarts it for one.
+
+<!-- wire: netif -->
+| Opcode | Message | Fields | Reply |
+| --- | --- | --- | --- |
+| 1 | `info` | - | `mac: u64`, `mtu: u32` |
+| 2 | `transmit` | `frame: bytes` | - |
+
+<!-- wire-errors: netif -->
+| Code | Error |
+| --- | --- |
+| 2 | `not_permitted` |
+| 3 | `too_many` |
+| 4 | `busy` |
+| 5 | `failed` |
+
+- `info`'s `mac` is the device's address in its low 48 bits, first octet lowest; `mtu` is 1500.
+- `transmit` sends one Ethernet frame, 14 to 1514 bytes without the FCS (`too_many` otherwise).
+  It returns once the frame is on the ring, not when it has left: `busy` means all sixteen slots
+  are in flight, and the caller drops the frame (TCP retransmits).
+- `not_permitted`: another badge, or a labelled caller. `failed`: the device is broken.
+- Frames reach `ipd` as its `frame` message, a `send` (NAMESPACES.md, `ipd`'s table).
+
+**Stated residuals.** A DMA handle is kernel-level trust, as for `blkd`. A flood of frames costs
+`netd`'s CPU at its large weight. Answer 173's reset needs WP-K5b.
+
 ## The Elixir boundary (beamlet)
 beamlet's `Platform` trait is one asynchronous 9P client: directories, files, sockets and the
 console are namespace walks, seen by BEAM code as unforgeable resource terms. The kernel has no
