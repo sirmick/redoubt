@@ -162,6 +162,9 @@ fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
             println!("system_reset: {:?} asked for by PID {}", kind, pid.get());
             crate::platform::reset(kind == redoubt_sys::ResetKind::Reboot)
         }
+        Call::MapFixed { addr, len, flags } => {
+            MemoryManager::with_mut(|mm| mm.map_fixed(pid, addr, len, flags)).map(done)
+        }
         Call::TimeNow => Ok(Some(Return::Time(crate::arch::irq::timer::now_us()))),
         Call::Random => {
             let mut bytes = [0u8; 8];

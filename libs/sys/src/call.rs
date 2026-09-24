@@ -322,4 +322,8 @@ calls! {
     /// -> `Random`: one `u64` from the kernel's CSPRNG.
     Random = 24 "random";
     SystemReset = 25 "system_reset" { device: Handle, kind: ResetKind };
+    /// Maps zeroed pages at exactly `addr` in the caller's own address space, as `map_anon`
+    /// but at a caller-named address; never replaces a mapping (KERNEL-SPEC.md R11, answer
+    /// 172). Appended last so earlier call numbers keep their values (ABI).
+    MapFixed = 26 "map_fixed" { addr: usize, len: usize, flags: MemFlags };
 }

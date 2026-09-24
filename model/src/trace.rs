@@ -230,6 +230,7 @@ impl Names {
                 )
             }
             S::SystemReset { h: x, kind } => format!("{} {kind}", h(*x)),
+            S::MapFixed { addr, len, flags } => format!("{} {len:#x} {flags}", a(*addr)),
         };
         if args.is_empty() { c.name().to_string() } else { format!("{} {args}", c.name()) }
     }
@@ -553,6 +554,7 @@ pub fn parse_call(t: &[Token]) -> Result<Syscall, String> {
         "time_now" => S::TimeNow,
         "random" => S::Random,
         "system_reset" => S::SystemReset { h: v(0)?, kind: v(1)? },
+        "map_fixed" => S::MapFixed { addr: v(0)?, len: v(1)?, flags: v(2)? },
         other => return Err(format!("unknown call {other}")),
     })
 }

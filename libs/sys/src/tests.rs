@@ -76,6 +76,7 @@ fn sample_calls() -> Vec<Call> {
         Call::Random,
         Call::SystemReset { device: h(12), kind: ResetKind::PowerOff },
         Call::SystemReset { device: h(12), kind: ResetKind::Reboot },
+        Call::MapFixed { addr: 0x2000_0000, len: 0x1000, flags: rw },
     ]
 }
 
@@ -417,6 +418,22 @@ fn malformed_calls_are_refused() {
     );
     assert_eq!(decode([map_anon, 0x1000, 6, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "W+X");
     assert_eq!(decode([map_anon, 0x1000, 7, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "RW+X");
+    let map_fixed = Number::MapFixed as u64;
+    assert_eq!(
+        decode([map_fixed, 0x2000_0000, 0x1000, 8, 0, 0, 0, 0]),
+        Err(Error::InvalidArgument),
+        "map_fixed unknown flag"
+    );
+    assert_eq!(
+        decode([map_fixed, 0x2000_0000, 0x1000, 6, 0, 0, 0, 0]),
+        Err(Error::InvalidArgument),
+        "map_fixed W+X"
+    );
+    assert_eq!(
+        decode([map_fixed, 0x2000_0000, 0x1000, 3, 0, 0, 0, 0]),
+        Ok(Call::MapFixed { addr: 0x2000_0000, len: 0x1000, flags: MemFlags::READ | MemFlags::WRITE }),
+        "map_fixed decodes"
+    );
     let random = Number::Random as u64;
     assert_eq!(
         decode([random, 0x9000, 8, 0, 0, 0, 0, 0]),
@@ -725,4 +742,41 @@ fn error_rows() {
     for n in [Number::ProcessCreate, Number::EndpointCreate, Number::Mint, Number::BudgetCreate] {
         assert!(has(n, &[OutOfMemory, TooLarge]), "{n:?}");
     }
+}
+
+/// `map_fixed`'s kernel-side range check (`MemoryManager::user_range`, kernel/src/mem.rs) is
+/// `addr.checked_add(len)`, in whatever width `usize` is on the target -- genuinely 32 bits on
+/// rv32, where `kernel/src/mem.rs` isn't host-testable (it's `cfg(baremetal)`, and the kernel's
+/// hosted build doesn't build on this host at all). This mirrors that exact check with an
+/// explicit `u32`, so a 64-bit host can still exercise the rv32-width wraparound the real check
+/// relies on `checked_add` to refuse (answer 172's "rv32 wrap" attack case).
+fn user_range_at_width(addr: u32, len: u32, page_size: u32, user_area_end: u32) -> Option<u32> {
+    if len == 0 || len % page_size != 0 || addr % page_size != 0 {
+        return None;
+    }
+    let end = addr.checked_add(len)?;
+    if end > user_area_end { None } else { Some(end) }
+}
+
+#[test]
+fn map_fixed_range_check_refuses_rv32_wraparound() {
+    // rv32's PAGE_SIZE and USER_AREA_END (redoubt_abi::arch, 32-bit layout).
+    let page_size = 4096u32;
+    let user_area_end = 0x8000_0000u32;
+    // addr + len wraps past u32::MAX: an unchecked add would land well under
+    // `user_area_end` and be wrongly accepted. `checked_add` must refuse it instead.
+    let addr = 0xFFFF_F000u32;
+    let len = 0x0000_2000u32;
+    assert!(addr.checked_add(len).is_none(), "the attack case must actually wrap on 32 bits");
+    assert_eq!(user_range_at_width(addr, len, page_size, user_area_end), None);
+    // A range that does not wrap and fits is accepted, for contrast.
+    assert_eq!(user_range_at_width(0x1000, 0x1000, page_size, user_area_end), Some(0x2000));
+    // The last page before USER_AREA_END is accepted; USER_AREA_END itself is refused (no
+    // lower bound: page 0 is user space, K5a-addr0).
+    assert_eq!(
+        user_range_at_width(user_area_end - page_size, page_size, page_size, user_area_end),
+        Some(user_area_end)
+    );
+    assert_eq!(user_range_at_width(user_area_end, page_size, page_size, user_area_end), None);
+    assert_eq!(user_range_at_width(0, page_size, page_size, user_area_end), Some(page_size));
 }
