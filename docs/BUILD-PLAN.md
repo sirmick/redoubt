@@ -270,7 +270,10 @@ recipes remain in git.
   limit, passes crash blame by (account, label set) to the steward (the typed message whose table
   WP-S2 writes), reboot as last resort; the boot loader loading only the kernel and `init`, once
   `init` can start every bundle program through the stub. This handoff also completes K4's
-  retained clean `bench-bundle-file` guest readback gate (answer 169).
+  retained clean `bench-bundle-file` guest readback gate (answer 169). Every launcher places the
+  child's startup page and stack outside the stub's link range `0x1_0000..0x1FF0_0000`
+  (MEMORY-LAYOUT), with an unmapped guard page below the stack. The stub doesn't check for a gap
+  between a segment and the stack (WP-R2 review 4).
 - Accepted when: the milestone 1 manifest boots every server, each in a budget carrying the weight
   the manifest names; a manifest with a bad name, or one granting a server its budget, is refused;
   attack cases: a manifest giving `keyd` the bundle key stops the boot (the `holds` answer, not a
