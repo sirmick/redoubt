@@ -234,9 +234,10 @@ fn budget_destroy(pid: PID, _tid: TID, h: u32) -> Result<Option<Return>, Error> 
     })
 }
 
-/// The frames behind a record: backed, aligned, permitted, and owned RAM. The caller
-/// holds the memory-manager guard through validation and copying, excluding unmap/remap,
-/// permission changes and teardown. Device mappings and borrowed pages are not records.
+/// The frames behind a record: backed, aligned, readable (and, with `write`, writable), and
+/// owned RAM, every slot checked before any is used. The caller holds the memory-manager
+/// guard through validation and copying, excluding unmap/remap, permission changes and
+/// teardown. Device mappings and borrowed pages are not records.
 fn record_frames<const N: usize>(mm: &MemoryManager, addr: usize, write: bool) -> Result<[usize; N], Error> {
     if addr % 8 != 0 {
         return Err(Error::InvalidArgument);
@@ -260,7 +261,8 @@ fn write_record_to<const N: usize>(addr: usize, frames: &[usize; N], slots: &[u6
     }
 }
 
-/// Copy an input record after validating every slot. Calls also need writable output.
+/// Copy an input record after validating every slot. With `output` (a `call` body, which
+/// also carries the reply), every slot must also be writable.
 pub fn read_record<const N: usize>(mm: &MemoryManager, addr: usize, output: bool) -> Result<[u64; N], Error> {
     let frames = record_frames::<N>(mm, addr, false)?;
     if output {

@@ -88,7 +88,7 @@ work; it does not mean an implementer is running. Merged rows retain dependency 
 | L1 | merged | wp-l1 | 25ab39296 |
 | T1 | merged | wp-t1 | 987bacbed |
 | T1b | merged | wp-t1b | 6cd067a39 |
-| T1c | review | wp-t1c | Checker/runtime repair in fe807fc4b; actual configured budgets pass, runtime 9/9. Server coverage restored by SV1 |
+| T1c | merged | wp-t1c | fe807fc4b; checker and runtime 9/9 reduction each passed three reviews. Server roots restored by SV1; G1 listed every on-target source (enumeration criterion met) |
 | V1 | merged | wp-v1 | 05955bf86 |
 | K0 | merged | wp-k0 | f7b9fdd16 |
 | K0b | merged | wp-k0b | e30d43304 |
@@ -96,10 +96,10 @@ work; it does not mean an implementer is running. Merged rows retain dependency 
 | K2 | merged | wp-k2 | 95788dcd0 (carried A3) |
 | K3 | merged | wp-k3 | 12c52c2d7 |
 | K4 | merged | recovery-k4 | Native lifecycle integrated; three reviews and full bench complete; bundle-file readback remains acceptance gate for R2/R3 (answer 169) |
-| G1 | building | wp-g1 | Reconcile retained T1c/IPC review evidence; 26cba3022 budget-record change needs its TCB review. Q166 option A recorded as answer 166 and applied to R12/RESOURCES/WP-K5 (2026-09-23, Wash QA G1-q166) |
-| K5 | waiting | | K2 merged; answer 166 applied: WP-K5 adds wake-first ties, slice-end preemption and the measured latency bench case; sole kernel writer after review debt is cleared |
+| G1 | merged | wp-g1 | Review debt cleared 2026-09-23: 26cba3022 reviewed, unsafe coverage complete, R11 write-without-read rule (Wash QA G1-coverage, G1-write-without-read); three rounds, all OK with notes. Answer 166 settles K5's contract (Wash QA G1-q166) |
+| K5 | ready | | K2 merged; answer 166 applied: WP-K5 adds wake-first ties, slice-end preemption and the measured latency bench case; sole kernel writer |
 | K6 | waiting | | needs K1-K5, R1b |
-| IPC1 | review | wp-ipc1 | Implementation in fe807fc4b; host model recovered, native replay, K5 timer and concurrency acceptance remain open; native exit covered by K4 |
+| IPC1 | review | wp-ipc1 | Implementation in fe807fc4b, its TCB rounds complete; 26cba3022's shared record validator reviewed in G1. Host model recovered; native replay, K5 timer, serving-path and concurrency gates remain open; native exit covered by K4 |
 | R1 | merged | wp-r1 | 8298608af (carried the answers 39-42, 50-53 part of R1b) |
 | R1b | merged | wp-r1b | 86117e7af |
 | R1c | merged | wp-r1c | cd65fa610; joined `Parked` to the 9P skeleton (recovery of `5d29d136e`, answers 156-158); reviewed R-R1c |
@@ -130,10 +130,28 @@ Current acceptance gaps belong to BUILD-PLAN and STATUS.
 
 ## Review debt
 
-G1 reconciles T1c's retained three-review evidence and current coverage, and establishes which
-budget-record/IPC TCB changes still need their own review. Preserve valid completed reviews;
-review completion alone does not close IPC1's acceptance gates. Completed model validation and
-review evidence is in [model/VALIDATION.md](../model/VALIDATION.md).
+G1 cleared the debt that gated the next wave (2026-09-23; evidence in its commit and Wash QA).
+Valid earlier reviews stand: T1c's checker (R-T1c) and runtime unsafe reduction, and IPC1's design,
+host and kernel rounds ([assessment §5–§9](archive/2026-09-22/ASTRA.md#5-owner-approved-ipc-follow-up--2026-09-22)).
+Review completion alone does not close IPC1's acceptance gates. Completed model validation is in
+[model/VALIDATION.md](../model/VALIDATION.md).
+
+Outstanding follow-ups, none blocking:
+
+- **Kernel `print!` panic re-entry.** A panic inside `print!`'s `write!` re-enters through the
+  panic handler's `println!` while the first `&mut OUTPUT` is live; the handler then powers off.
+  Proposed fix (red team): an `AtomicBool` `PRINTING` that makes `handle_panic` write straight to
+  the stateless SBI console.
+- **`R11AllowsWriteOnly` is caught only through `set_flags`.** The mutation also disables the
+  model's `process_map` check, which no sequence yet shows killed on its own. The kernel side is
+  covered by `write-only-attack`. Split the mutation or add a `process_map` sequence.
+- **`process_map` backs its source before refusing bad flags.** `ensure_range_exists` runs before
+  the W+X and write-without-read refusals, so a refused call can still charge the caller for
+  demand-reserved source pages. Only the caller's own budget changes, as with its other
+  refusals; moving the flags check first would change error precedence, so decide with the
+  Errors table.
+- `libs/abi`'s 44 undocumented unsafe uses remain legacy debt for K6, as does the legacy
+  `UpdateMemoryFlags` call (now refusing write-without-read too).
 
 ## Cross-cutting review records
 

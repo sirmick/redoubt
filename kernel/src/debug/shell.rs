@@ -59,6 +59,8 @@ impl fmt::Write for Output {
 ///
 /// This should be called in platform initialization code.
 pub fn init(serial: &'static mut dyn SerialWrite) {
+    // SAFETY: the one caller, `platform::sbi::early_init`, runs once on the boot hart before
+    // interrupts, other harts or any `print!`, so nothing else refers to `OUTPUT` yet.
     unsafe { OUTPUT = Some(Output::new(serial)) }
 
     // Print the processed kernel arguments

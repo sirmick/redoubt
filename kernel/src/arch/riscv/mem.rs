@@ -160,8 +160,12 @@ pub fn prepare_map(
 /// from syscall arguments, so a bad combination is the caller's error, not a kernel bug.
 fn check_permissions(flags: MMUFlags) -> Result<(), redoubt_abi::Error> {
     let permissions = flags & (MMUFlags::R | MMUFlags::W | MMUFlags::X);
-    // W^X: no page is ever writable and executable at once.
-    if permissions.is_empty() || permissions.contains(MMUFlags::W | MMUFlags::X) {
+    // W^X: no page is ever writable and executable at once. Nor writable without readable
+    // (R11): the privileged architecture reserves that encoding.
+    if permissions.is_empty()
+        || permissions.contains(MMUFlags::W | MMUFlags::X)
+        || (permissions.contains(MMUFlags::W) && !permissions.contains(MMUFlags::R))
+    {
         return Err(redoubt_abi::Error::InvalidArgument);
     }
     Ok(())
@@ -732,7 +736,9 @@ pub fn user_frame(virt: usize, write: bool) -> Result<usize, redoubt_sys::Error>
     }
     let page = virt & !(PAGE_SIZE - 1);
     let pte = walk(current_root(), page, None).map_err(|_| Error::InvalidArgument)?.get();
-    let wanted = MMUFlags::VALID | MMUFlags::USER | if write { MMUFlags::W } else { MMUFlags::R };
+    // A writable record must be readable too (R11), so a write-only entry is never one.
+    let wanted =
+        MMUFlags::VALID | MMUFlags::USER | MMUFlags::R | if write { MMUFlags::W } else { MMUFlags::NONE };
     if !pte.has(wanted) || pte.has(MMUFlags::S) {
         return Err(Error::InvalidArgument);
     }
@@ -833,6 +839,13 @@ pub fn update_page_flags(virt: usize, flags: MemoryFlags) -> Result<(), redoubt_
         } else if !pte.has(bit) {
             return Err(redoubt_abi::Error::ShareViolation);
         }
+    }
+
+    // Dropping R while keeping W (R11) would leave a writable-without-readable encoding,
+    // an invalid result like the all-stripped case above; use the same error and refuse
+    // before the entry changes.
+    if pte.has(MMUFlags::W) && !pte.has(MMUFlags::R) {
+        return Err(redoubt_abi::Error::MemoryInUse);
     }
 
     slot.set(pte);

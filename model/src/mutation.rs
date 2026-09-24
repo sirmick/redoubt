@@ -120,6 +120,8 @@ pub enum Mutation {
     R11NoZeroing,
     /// `set_flags` accepts writable and executable together (the decoder's refusal included).
     R11SetFlagsAllowsWx,
+    /// `set_flags` and `process_map` accept writable without readable.
+    R11AllowsWriteOnly,
     /// A lent page stays mapped in the lender during the call.
     R11LendStaysMapped,
     /// Publishes no lend despite a supplied buffer.
@@ -241,7 +243,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 99] = {
+    pub const ALL: [Mutation; 100] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -290,6 +292,7 @@ impl Mutation {
             R10CreatorDeathSparesProcess,
             R11NoZeroing,
             R11SetFlagsAllowsWx,
+            R11AllowsWriteOnly,
             R11LendStaysMapped,
             IpcWrongLend,
             IpcDropPartial,
@@ -391,7 +394,7 @@ impl Mutation {
             | R10RevokedCallAnswered
             | R10SweptHandlesDropped
             | R10CreatorDeathSparesProcess => "R10",
-            R11NoZeroing | R11SetFlagsAllowsWx | R11LendStaysMapped => "R11",
+            R11NoZeroing | R11SetFlagsAllowsWx | R11AllowsWriteOnly | R11LendStaysMapped => "R11",
             IpcWrongLend | IpcDropPartial | IpcFalseDelivery | IpcSkipOutputCheck | IpcLeakRollback => "IPC",
             R12PriorityById | R12IgnoreWeight | R12WakeBanksCredit => "R12",
             MsgNoLabels

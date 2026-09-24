@@ -333,7 +333,10 @@ the server had taken is abandoned (R3). Revocation reaches messages already sent
 sent through a handle stamped with B or a descendant fails its sender with `Dead`; a taken call sent
 through one fails its caller with `Dead` at once and is abandoned (R3).
 
-**R11. Memory.** No mapping is ever writable and executable. Every page is zeroed before a process
+**R11. Memory.** No mapping is ever writable and executable, and none is writable without being
+readable: the privileged architecture reserves that page-table encoding, so every call that
+installs or changes user permissions (`map_anon`, `set_flags`, `process_map`) refuses it with
+`InvalidArgument`, and a writable user page is always readable. Every page is zeroed before a process
 first sees it. Userspace never maps RAM by physical address; a DMA driver learns the physical
 address of pages the kernel gave it. A page-table page is allocated when a mapping first needs it
 and freed when it maps nothing. The kernel chooses the addresses `map_anon`, `map_device` and
@@ -493,14 +496,14 @@ and its budget cannot pay, and with `TooLarge` when the new handle would be past
 | --- | --- | --- |
 | `map_anon` | flags: `InvalidArgument` | `InvalidArgument` (len 0 or unaligned; flags 0, or W without R), `OutOfMemory` |
 | `unmap` | - | `InvalidArgument` (range; a page not the caller's own mapping, or lent out) |
-| `set_flags` | flags: `InvalidArgument` | `InvalidArgument` (range; flags; a page not the caller's own mapping) |
+| `set_flags` | flags: `InvalidArgument` | `InvalidArgument` (range; flags 0, or W without R; a page not the caller's own mapping) |
 | `map_device` | h: `BadHandle` | `BadHandle`, `WrongObject` (not MMIO), `OutOfMemory` (page tables) |
 | `dma_alloc` | h: `BadHandle` | `BadHandle`, `WrongObject`, `InvalidArgument` (npages 0), `NotPermitted` (no DMA flag), `OutOfMemory` |
 | `thread_create` | - | `TooManyThreads`, `OutOfMemory` |
 | `thread_exit` | - | - |
 | `process_exit` | code: `InvalidArgument` | - |
 | `process_create` | each h: `BadHandle` | `BadHandle`, `WrongObject` (budget), `BadHandle`, `WrongObject` (exit endpoint), `InvalidArgument` (budget weight 0), `NotPermitted` (exit endpoint's badge not 0), `OutOfProcesses`, `OutOfMemory` (the budget: page tables; then the caller: the process object) |
-| `process_map` | h: `BadHandle`; flags: `InvalidArgument` | `BadHandle`, `WrongObject`, `InvalidArgument` (src range, not the caller's own RAM; dst range, occupied; flags), `NotPermitted` (started), `OutOfMemory` (the child's budget) |
+| `process_map` | h: `BadHandle`; flags: `InvalidArgument` | `BadHandle`, `WrongObject`, `InvalidArgument` (src range, not the caller's own RAM; dst range, occupied; flags 0, or W without R), `NotPermitted` (started), `OutOfMemory` (the child's budget) |
 | `process_start` | h: `BadHandle`; `arg`: not checked; count over `MAX_START_HANDLES`: `TooLarge`; list: record, each h `BadHandle` | `BadHandle`, `WrongObject`, `BadHandle` (each h), `NotPermitted` (started), `OutOfMemory` (the child's budget: thread, then table) |
 | `endpoint_create` | - | `OutOfMemory` |
 | `mint` | source: tag `InvalidArgument`, message id 0 `InvalidArgument`, handle `BadHandle`; badge 0: `InvalidArgument`; budget h: `BadHandle` | source: a message id that is not an open call of the caller's thread (a `send`'s id included) `InvalidArgument`, its endpoint or stamp gone `Dead`; or a handle `BadHandle`, `WrongObject`; budget: `BadHandle`, `WrongObject`; `NotPermitted` (a handle source's badge not 0), `NotPermitted` (budget not the default stamp or below) |
