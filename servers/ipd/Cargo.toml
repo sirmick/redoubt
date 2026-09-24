@@ -4,6 +4,20 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "ipd: the TCP/IP stack for one network, serving /net over 9P (answer 174)"
+build = "build.rs"
 
+[[bin]]
+name = "ipd"
+path = "src/bin/ipd.rs"
+
+# smoltcp is vendored (vendor/smoltcp, through the root manifest's [patch.crates-io]; answer
+# 174): IPv4, Ethernet and TCP, and nothing else. tools/vendor-check proves the vendored copy is
+# the one that builds, with exactly these features.
 [dependencies]
 redoubt-rt = { path = "../../libs/rt" }
+smoltcp = { version = "=0.14.0", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp"] }
+
+[dev-dependencies]
+# The tests' peer: a second smoltcp stack with exactly ipd's features, so feature unification
+# adds nothing to what ipd builds.
+smoltcp = { version = "=0.14.0", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp"] }

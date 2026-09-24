@@ -75,8 +75,8 @@ repository owns, and these crates are third-party code pinned by these checksums
 leaves:
 - `smoltcp` is `#![deny(unsafe_code)]`, apart from `rand.rs` and the host phy backends, which
   `ipd` does not compile.
-- `heapless` does use `unsafe`. smoltcp uses it only through `Vec` and `LinearMap`, and those two
-  modules are read before `ipd`'s stack lands (that commit records it).
+- `heapless` does use `unsafe`. smoltcp uses it only through `Vec` and `LinearMap`. Those two
+  were read with `ipd`'s stack commit; see "What of heapless ipd runs" below.
 
 rustfmt ignores `vendor/`.
 
@@ -94,6 +94,28 @@ rustc 1.98.1. Nothing builds with `-D warnings`, and silencing them by a workspa
 - `heapless`'s sets a cfg for a few 32-bit targets that are not ours. It also compiles a
   one-line ARM `clrex` probe with the build's own `rustc`; on RISC-V the probe fails, so it sets
   nothing.
+
+**What of heapless `ipd` runs** (read for `ipd`'s stack commit, answer 174). With `ipd`'s
+features smoltcp compiles three heapless containers, all over `Copy` elements with no `Drop`:
+`Vec<IpCidr, 2>` (the interface's addresses, `iface/interface/mod.rs`), `Vec<Route, 2>` (its
+routes, `iface/route.rs`) and `LinearMap<IpAddress, Neighbor, 8>` (the neighbour cache,
+`iface/neighbor.rs`). Multicast, SLAAC, RPL, DHCP, DNS and 6LoWPAN, which use more, are not
+compiled.
+- `vec/mod.rs` has 42 lines with `unsafe`. Its one invariant is that elements `0..len` are
+  initialised and `len <= N`. The paths smoltcp reaches keep it:
+  - `push` checks `len < capacity` before `push_unchecked` writes slot `len`;
+  - `swap_remove` asserts `index < len`, then reads that slot, moves the last one into it and
+    shortens `len`;
+  - `remove` panics on `index >= len`, then reads the slot and shifts the tail down by one;
+  - `as_slice`/`as_mut_slice` (and so `Deref`, `iter`) make a slice of exactly `0..len`;
+  - `truncate`/`clear` and `Drop` shorten `len` before `drop_in_place`, so a panicking destructor
+    cannot drop twice (and these elements have none).
+  `LenT` is `usize` here, so its conversions cannot fail.
+- `linear_map.rs` has 6 `unsafe` blocks, all in the `Entry` API (`OccupiedEntry`), which smoltcp
+  never calls. What it does call (`new`, `get`, `get_mut`, `insert`, `remove`, `iter`, `keys`)
+  is safe code over `Vec`'s `iter`, `iter_mut`, `push` and `swap_remove`, above.
+- Found: nothing that needs changing. An update of heapless must redo this reading; the counts
+  above make the diff easy to see.
 
 **Updating.** Take the new `.crate` files from crates.io and check their SHA-256 against the
 index. Unpack each over an emptied directory, then regenerate the sums:

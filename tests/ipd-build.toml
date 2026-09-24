@@ -1,0 +1,4 @@
+description = "ipd builds for both widths, with the vendored smoltcp (BUILD-PLAN.md: rv32 keeps compiling)"
+arch = ["rv64", "rv32"]
+kind = "build"
+package = "redoubt-ipd"

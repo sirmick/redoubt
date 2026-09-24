@@ -1,0 +1,52 @@
+[package]
+name = "redoubt-ipd-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Host-only and out of the main workspace (its own workspace below), as netd's: the fuzzer's
+# nightly toolchain and libfuzzer never touch the machine build (TENETS.md 3 and 6). Run from
+# servers/ipd (cargo-fuzz needs nightly):
+#     cargo +nightly fuzz run frames -- -max_total_time=300
+#     cargo +nightly fuzz run session -- -max_total_time=300
+#     cargo +nightly fuzz run args -- -max_total_time=300
+# ipd forbids unsafe code; the address sanitizer still covers the vendored stack under it.
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+redoubt-ipd = { path = ".." }
+
+# The vendored stack, as the main workspace builds it (vendor/README.md).
+[patch.crates-io]
+smoltcp = { path = "../../../vendor/smoltcp" }
+managed = { path = "../../../vendor/managed" }
+heapless = { path = "../../../vendor/heapless" }
+hash32 = { path = "../../../vendor/hash32" }
+stable_deref_trait = { path = "../../../vendor/stable_deref_trait" }
+byteorder = { path = "../../../vendor/byteorder" }
+
+[[bin]]
+name = "frames"
+path = "fuzz_targets/frames.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "session"
+path = "fuzz_targets/session.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "args"
+path = "fuzz_targets/args.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

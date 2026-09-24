@@ -49,6 +49,9 @@ exclude = [
   "libs/rt/fuzz",
   # Host-only fuzz targets for blkd (see servers/blkd/fuzz/Cargo.toml).
   "servers/blkd/fuzz",
+  # Host-only fuzz targets for netd and ipd (see servers/ipd/fuzz/Cargo.toml).
+  "servers/netd/fuzz",
+  "servers/ipd/fuzz",
   # Host-only fuzz target for the loader stub's ELF bounds-checking (see stub/fuzz/Cargo.toml).
   "stub/fuzz",
   # beamlet, the BEAM VM for the OTP userland: its own workspace (host tools and `no_std`
