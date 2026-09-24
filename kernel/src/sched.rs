@@ -96,6 +96,11 @@ impl Budgets<BudgetRef> for MemoryManager {
 
     #[cfg(feature = "sched-trace")]
     fn left(&mut self, b: BudgetRef) { trace::record(trace::LEFT, b.id, self.sched_state(b.frame).pass) }
+
+    #[cfg(feature = "sched-trace")]
+    fn lifted(&mut self, parent: BudgetRef, child: BudgetRef, l: &redoubt_stride::Lift) {
+        trace::lift(parent.id, child.id, l)
+    }
 }
 
 fn budget_ref(mm: &MemoryManager, frame: BudgetFrame) -> BudgetRef {
@@ -422,6 +427,28 @@ pub mod trace {
                 r.dropped += 1;
             }
         });
+    }
+
+    /// A destroyed child's work moved to its parent: every operand of the rule and its result,
+    /// as a group of nine records the oracle recomputes (`L` parent pass before, `l` child pass,
+    /// `e` child entry, `f` floor, `r` child remainder, `q` parent remainder before, `w` the child's
+    /// and the parent's weights (high and low 32 bits), `A` parent pass after, `a` parent
+    /// remainder after).
+    pub fn lift(parent: u64, child: u64, l: &redoubt_stride::Lift) {
+        let weights = (l.w_child << 32 | l.w_parent & 0xffff_ffff) as u128;
+        for (kind, id, value) in [
+            (b'L', parent, l.parent.pass),
+            (b'l', child, l.child.pass),
+            (b'e', child, l.child.entry),
+            (b'f', 0, l.floor),
+            (b'r', child, u128::from(l.child.rem)),
+            (b'q', parent, u128::from(l.parent.rem)),
+            (b'w', 0, weights),
+            (b'A', parent, l.after.pass),
+            (b'a', parent, u128::from(l.after.rem)),
+        ] {
+            record(kind, id, value);
+        }
     }
 
     /// Debug only, never in a bench build but one recorded negative run (feature

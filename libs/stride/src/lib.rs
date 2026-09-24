@@ -106,6 +106,19 @@ pub fn lift(parent: &mut State, child: &State, w_child: u64, w_parent: u64, f: u
     parent.rem = (rem % wp) as u64;
 }
 
+/// One destroyed child's work moving to its parent ([`lift`]): what went in and what came out,
+/// for a kernel that records it (the test-only `sched-trace`, checked by the bench's oracle).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Lift {
+    /// The parent before and after.
+    pub parent: State,
+    pub after: State,
+    pub child: State,
+    pub w_child: u64,
+    pub w_parent: u64,
+    pub floor: u128,
+}
+
 /// The order a pick minimizes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Rank {
@@ -130,6 +143,8 @@ pub trait Budgets<B> {
     fn woke(&mut self, _b: B) {}
     fn requeued(&mut self, _b: B) {}
     fn left(&mut self, _b: B) {}
+    /// `child`'s work moved to `parent` (called after the parent's new state is set).
+    fn lifted(&mut self, _parent: B, _child: B, _lift: &Lift) {}
 }
 
 /// The queue: every budget with a runnable thread (or running), at most `N` of them, and the
@@ -302,9 +317,12 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
     ) {
         if let Some(p) = parent {
             let c = bs.state(child);
-            let mut s = bs.state(p);
+            let before = bs.state(p);
+            let mut s = before;
             lift(&mut s, &c, w_child, w_parent, self.floor);
             bs.set_state(p, s);
+            let l = Lift { parent: before, after: s, child: c, w_child, w_parent, floor: self.floor };
+            bs.lifted(p, child, &l);
         }
         if self.contains(child) {
             self.take_out(child);
