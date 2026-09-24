@@ -1,0 +1,18 @@
+description = "The legacy ReturnToParent outside any callback is refused (WP-K5): a process that makes it and then spins is still destroyed at its lease's deadline, on time; the steward's stand-in still gets the CPU and destroys another such caller's budget; Redoubt calls keep working; nothing panics (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["callback-state-attack"]
+timeout_secs = 60
+expect = [
+    '^\[callback-state\] ok: calibration destroy took \d+ µs$',
+    '^\[callback-state\] ok: ReturnToParent refused \(Some\(\(true, \d+\)\)\), and a Redoubt send after it delivered$',
+    '^\[callback-state\] ok: the lease was destroyed by its deadline, killed notice blaming nobody$',
+    '^\[callback-state\] lateness ok \(',
+    '^\[callback-state\] ok: the steward stand-in destroyed the spinning caller.s budget',
+    '^\[callback-state\] ok: Redoubt calls still served$',
+    '^CALLBACK-STATE-ATTACK TEST PASSED$',
+]
+forbid = ['\[callback-state\] FAIL', '\[callback-state\] lateness LATE', 'panicked', 'KERNEL FAILURE']
+poweroff = true

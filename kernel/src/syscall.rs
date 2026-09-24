@@ -25,6 +25,8 @@ use crate::services::{PostActivateOp, SystemServices};
 
  Currently (as of Mar 2021) this functionality isn't being used, it's just returning
  back to the kernel, e.g. (PID,TID) = (1,1)
+
+ (Redoubt, WP-K5: ReturnToParent is refused; nothing used it.)
 */
 /// This is the PID/TID of the last person that called SwitchTo
 static SWITCHTO_CALLER: KernelCell<Option<(PID, TID)>> = KernelCell::new(None);
@@ -1041,16 +1043,11 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
             interrupt_free(no, pid as definitions::PID).map(|_| redoubt_abi::Result::Ok)
         }
         SysCall::Yield => do_yield(pid, tid),
-        SysCall::ReturnToParent(_pid, _cpuid) => {
-            // SAFETY: the block only calls the (unsafe-ABI) set_isr_return_pair; the state access itself is
-            // checked.
-            unsafe {
-                if let Some((parent_pid, parent_ctx)) = SWITCHTO_CALLER.with(|c| c.take()) {
-                    crate::arch::irq::set_isr_return_pair(parent_pid, parent_ctx)
-                }
-            };
-            Ok(redoubt_abi::Result::ResumeProcess)
-        }
+        // Refused, to everyone (WP-K5): nothing in the tree calls it, and it put the kernel in the
+        // state of a running interrupt callback with none running, which held every budget
+        // deadline and slice end and refused every Redoubt call. A callback returns through
+        // `RETURN_FROM_ISR` (`arch::irq`).
+        SysCall::ReturnToParent(_pid, _cpuid) => Err(redoubt_abi::Error::UnhandledSyscall),
         SysCall::ReceiveMessage(sid) => receive_message(pid, tid, sid, ExecutionType::Blocking),
         SysCall::TryReceiveMessage(sid) => receive_message(pid, tid, sid, ExecutionType::NonBlocking),
         SysCall::WaitEvent => SystemServices::with_mut(|ss| {
