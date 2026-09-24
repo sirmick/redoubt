@@ -9,3 +9,7 @@ description = "no_std programs that run inside Redoubt under the test bench (red
 redoubt-abi = { path = "../../libs/abi" }
 uart_16550 = { version = "0.3", default-features = false }
 redoubt-sys = { path = "../../libs/sys" }
+# Only for the stub launcher (WP-R2): the startup-block builder, and the stub's own fixed
+# address/bounds-checking constants. Every other test program stays on the raw `rd` wrapper.
+redoubt-rt = { path = "../../libs/rt" }
+stub = { path = "../../stub" }

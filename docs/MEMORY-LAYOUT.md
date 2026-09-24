@@ -45,6 +45,15 @@ no page is reserved at the bottom, so a call that names a user address (`map_fix
 dereferences a user pointer and a mapped page 0 cannot turn a kernel null dereference into an
 attack.
 
+**The loader stub** (PACKAGES.md, Launching a process) is mapped in every launched process at
+`STUB_ENTRY = 0x1FF0_0000` on both widths, its entry point and the start of its one fixed code
+region, which runs to at most `0x1FF4_0000` (256 KiB, the stub's `link.x`), just below
+`DEFAULT_HEAP_BASE`. The value is a convention between the stub and its launchers
+(`stub::STUB_ENTRY`), not a kernel constant: `process_map`'s destination is the launcher's choice. It constrains every program: no loadable
+segment may overlap that region, or the stub refuses the image and the process exits. Programs
+link at `0x1_0000`, and their segments must end below `0x1FF0_0000`, which leaves just under
+512 MiB, so large programs such as beamlet need no special link base.
+
 ## Sv32 vs Sv39
 Same low 10 PTE flag bits; the physical page number starts at bit 10 in both. So one `usize`-based
 `Pte` and one flag set serve both; only these are width-specific:

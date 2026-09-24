@@ -14,6 +14,8 @@ pub struct Startup<'a> {
     pub namespace: &'a [u8],
     pub handles: &'a [u8],
     pub argv: &'a [u8],
+    pub image_addr: u64,
+    pub image_len: u64,
 }
 
 /// The reply to [`Startup`].
@@ -53,7 +55,9 @@ impl<'a> Message<'a> {
                 w.u32(m.handle_count)?;
                 w.bytes(m.namespace)?;
                 w.bytes(m.handles)?;
-                w.bytes(m.argv)
+                w.bytes(m.argv)?;
+                w.u64(m.image_addr)?;
+                w.u64(m.image_len)
             }
         }
     }
@@ -64,7 +68,7 @@ impl<'a> Message<'a> {
 
     fn read_buffer(opcode: u32, r: &mut Reader<'a>) -> Result<Self, Error> {
         Ok(match opcode {
-            1 => Message::Startup(Startup { version: r.u32()?, handle_count: r.u32()?, namespace: r.bytes()?, handles: r.bytes()?, argv: r.bytes()? }),
+            1 => Message::Startup(Startup { version: r.u32()?, handle_count: r.u32()?, namespace: r.bytes()?, handles: r.bytes()?, argv: r.bytes()?, image_addr: r.u64()?, image_len: r.u64()? }),
             _ => return Err(Error::BadOpcode),
         })
     }
