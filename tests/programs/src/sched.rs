@@ -72,6 +72,10 @@ pub enum Role {
     /// p1 times: sleep p0 µs, and measure how long after its deadline it runs again; report the
     /// shortest such delay, in µs.
     WakeDelay = 17,
+    /// Destroy the budget in slot 3, then count until the window ends; report, first, how long the
+    /// destruction took and the longest this thread then went without the CPU (µs), then the
+    /// count.
+    DestroyThenCount = 18,
     /// The latency case's driver stand-in: p0 samples of the goldfish RTC's alarm (MMIO in slot
     /// 3, interrupt in slot 4), each waited for in `receive`; report [`Stats::DRIVER_WAKE`].
     Driver = 14,
@@ -102,6 +106,7 @@ impl Role {
             Steward,
             TieReceiver,
             WakeDelay,
+            DestroyThenCount,
         ]
         .into_iter()
         .find(|r| *r as u8 == x)
@@ -306,6 +311,24 @@ pub extern "C" fn child(arg: usize) -> ! {
                 least = least.min(ticks().saturating_sub(before + nap * tpu) / tpu);
             }
             least
+        }
+        Some(Role::DestroyThenCount) => {
+            // Timed with rdtime: no call of its own before the destruction.
+            let before = ticks();
+            let _ = rd::destroy(3);
+            let took = (ticks() - before) / tpu;
+            // From here on, the longest time this thread went without the CPU.
+            let (mut n, mut last, mut gap) = (0u64, ticks(), 0u64);
+            while last < end {
+                for _ in 0..CHUNK {
+                    n = core::hint::black_box(n + 1);
+                }
+                let now = ticks();
+                gap = gap.max(now - last);
+                last = now;
+            }
+            let _ = rd::send(1, &rd::body([took as usize, (gap / tpu) as usize, 0, 0]), None, rd::FOREVER);
+            n
         }
         Some(Role::TieReceiver) => {
             let r = rd::receive(Some(3), rd::FOREVER, 0);

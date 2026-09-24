@@ -780,9 +780,21 @@ impl MemoryManager {
     }
 
     /// Mark `top` and everything below it dying (R10's first step, for `budget_destroy` and for
-    /// a deadline alike). Each one's weight goes back to its parent as the scheduler lifts it,
-    /// bottom-up ([`MemoryManager::lift_dying`]).
+    /// a deadline alike). Before anything else, `top`'s carve comes back to its parent, so the
+    /// destruction's own work (often the parent's own `budget_destroy`) is charged at the weight
+    /// the parent has once the child is gone, not at the sliver it kept while the child held the
+    /// rest (K5-code-review-4 D1; `sched.rs`: a weight change charges what ran before it). The
+    /// budgets below the top return theirs as the scheduler lifts them, bottom-up
+    /// ([`MemoryManager::lift_dying`]).
     pub fn mark_dying(&mut self, top: BudgetFrame) {
+        if let Some(p) = self.budget(top).parent {
+            let limit = self.budget(top).weight_limit;
+            crate::sched::change_weight(self, p, |mm| {
+                let mut pb = mm.budget(p);
+                pb.weight_carved = pb.weight_carved.checked_sub(limit).expect("I5: carve underflow");
+                mm.store(p, &pb);
+            });
+        }
         for frame in 0..=self.objects.high_frame {
             if self.is_budget_frame(frame) && self.below(frame, top) {
                 let mut b = self.budget(frame);
@@ -884,7 +896,8 @@ impl MemoryManager {
     }
 
     /// The dying budgets, deepest first (every one's descendants before it): R10's bottom-up
-    /// order for the scheduler's lifts, each returning its weight to its parent as it goes.
+    /// order for the scheduler's lifts, each returning its weight to its parent as it goes (the
+    /// top's went back at mark time).
     pub fn lift_dying(&mut self, top: BudgetFrame) {
         let top_depth = self.budget(top).depth;
         for depth in (top_depth..MAX_DEPTH as u32).rev() {
@@ -893,7 +906,7 @@ impl MemoryManager {
                     && self.budget(frame).dying
                     && self.budget(frame).depth == depth
                 {
-                    crate::sched::destroy(self, frame);
+                    crate::sched::destroy(self, frame, frame == top);
                 }
             }
         }

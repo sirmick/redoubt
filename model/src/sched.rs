@@ -63,6 +63,9 @@ pub struct Entry {
     pub runnable: BTreeSet<ThreadId>,
     /// The thread it ran last, for round-robin.
     pub cursor: Option<ThreadId>,
+    /// Its carve is back with its parent already ([`Scheduler::return_carve`]: the top of a
+    /// destruction, at its start).
+    pub returned: bool,
 }
 
 /// The thread on the CPU.
@@ -189,8 +192,31 @@ impl Scheduler {
                 queued: false,
                 runnable: BTreeSet::new(),
                 cursor: None,
+                returned: false,
             },
         );
+    }
+
+    /// The first step of destroying `b` and everything below it: `b`'s carve comes back to its
+    /// parent (fold at the old weight first, then rescale), before any of the destruction's own
+    /// work is charged, so the parent pays for it at the weight it has once `b` is gone
+    /// (K5-code-review-4 D1). [`Scheduler::destroy_budget`] then returns nothing for `b`.
+    pub fn return_carve(&mut self, b: u64) {
+        let Some(child) = self.budgets.get(&b).cloned() else { return };
+        let Some(p) = child.parent.filter(|p| self.budgets.contains_key(p)) else { return };
+        if child.returned {
+            return;
+        }
+        if !self.broken(Mutation::R12FoldAtNewWeight) {
+            self.fold_if_running(p);
+        }
+        let old = self.weight(p);
+        if let Some(x) = self.budgets.get_mut(&p) {
+            x.carved = x.carved.saturating_sub(child.limit);
+        }
+        let new = self.weight(p);
+        self.reweigh(p, old, new);
+        self.budgets.get_mut(&b).unwrap().returned = true;
     }
 
     /// Budget `b` is destroyed; its descendants already were (bottom-up, R10 order), and every
@@ -209,8 +235,10 @@ impl Scheduler {
                 self.fold_if_running(p);
             }
             let old = self.weight(p);
-            if let Some(x) = self.budgets.get_mut(&p) {
-                x.carved = x.carved.saturating_sub(child.limit);
+            if !child.returned {
+                if let Some(x) = self.budgets.get_mut(&p) {
+                    x.carved = x.carved.saturating_sub(child.limit);
+                }
             }
             let w_parent = self.weight(p);
             self.reweigh(p, old, w_parent);

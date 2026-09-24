@@ -1865,6 +1865,8 @@ impl Kernel {
         if !self.budgets.contains_key(&b) {
             return;
         }
+        // The top's carve returns first, before anything is destroyed (K5-code-review-4 D1).
+        self.sched.return_carve(b);
         // Descendants first: post-order.
         let mut order = Vec::new();
         let mut stack = vec![(b, false)];

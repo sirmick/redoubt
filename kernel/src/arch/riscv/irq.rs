@@ -91,17 +91,25 @@ static HANDLING_IRQ: AtomicBool = AtomicBool::new(false);
 /// legacy `ReturnToParent`, which could, is refused (`syscall.rs`).
 static PREVIOUS_PAIR: KernelCell<Option<(PID, TID)>> = KernelCell::new(None);
 
+/// The process whose handler the running callback is: only its IRQ thread ends the callback.
+static CALLBACK_OWNER: KernelCell<Option<PID>> = KernelCell::new(None);
+
 /// Whether a legacy interrupt callback is running (on borrowed time, with a process to resume
 /// after it): the kernel dispatched one and it has not returned. Its calls are limited (the
 /// Redoubt ones are refused), and budget deadlines and slice-end preemption wait until it has
 /// finished (`time.rs`).
 pub fn in_callback() -> bool { HANDLING_IRQ.load(Ordering::Relaxed) }
 
-/// Finish a pending ISR. Return `false` if there was none.
-fn finish_isr() -> bool {
-    if !HANDLING_IRQ.swap(false, Ordering::Relaxed) {
+/// Finish the running callback, if `(pid, tid)` is its handler's thread (the owner's IRQ
+/// thread). Return `false` if there was none, or if this is anyone else: another process that
+/// reaches `RETURN_FROM_ISR`, or ends a thread or faults, while a callback runs ends nothing.
+fn finish_isr(pid: PID, tid: TID) -> bool {
+    let owner = CALLBACK_OWNER.with(|o| *o);
+    if !HANDLING_IRQ.load(Ordering::Relaxed) || owner != Some(pid) || tid != crate::arch::process::IRQ_TID {
         return false;
     }
+    HANDLING_IRQ.store(false, Ordering::Relaxed);
+    CALLBACK_OWNER.with(|o| *o = None);
 
     // If we hit this address, then an ISR has just returned.  Since
     // we're in an interrupt context, it is safe to access this
@@ -321,7 +329,8 @@ pub extern "C" fn trap_handler(
                 if !crate::device::irq_fired(irq) {
                     // Remember who to resume once the userspace handler returns. A source with
                     // no handler is only masked: no callback runs, so none is recorded.
-                    if crate::irq::interrupt_owner(irq).is_some() {
+                    if let Some(owner) = crate::irq::interrupt_owner(irq) {
+                        CALLBACK_OWNER.with(|o| *o = Some(owner));
                         PREVIOUS_PAIR.with(|previous| {
                             if previous.is_none() {
                                 *previous = Some((pid, crate::arch::process::current_tid()));
@@ -395,7 +404,7 @@ pub extern "C" fn trap_handler(
             // IRQ callbacks have their separate RETURN_FROM_ISR path below.
             SystemServices::with_mut(|ss| crate::process::thread_exit(ss, pid, tid));
 
-            finish_isr();
+            finish_isr(pid, tid);
 
             // Teardown selected a surviving sibling or another process.
             ArchProcess::with_current_mut(|p| {
@@ -404,11 +413,14 @@ pub extern "C" fn trap_handler(
         }
 
         RiscvException::InstructionPageFault(RETURN_FROM_ISR, _offset) => {
-            finish_isr();
-            // Budget deadlines that fell due while the callback ran were held back; the
-            // callback is over, so answer them now, then run whatever is current.
-            crate::time::expire_at_entry();
-            resume_current();
+            let tid = ArchProcess::with_current(|p| p.current_tid());
+            if finish_isr(pid, tid) {
+                // Budget deadlines that fell due while the callback ran were held back; the
+                // callback is over, so answer them now, then run whatever is current.
+                crate::time::expire_at_entry();
+                resume_current();
+            }
+            // Anyone else jumping there faults like any wild jump (below).
         }
 
         // Handle faulted instruction pages, because we can now actually have instruction pages that are
@@ -473,7 +485,7 @@ pub extern "C" fn trap_handler(
         loop {}
     }
 
-    finish_isr();
+    finish_isr(pid, ArchProcess::with_current(|p| p.current_tid()));
 
     // If it's not a failure in the kernel, the process faults: it is torn down and its exit
     // notice, cause `faulted`, blames the sender of the faulting thread's current call
