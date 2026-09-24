@@ -43,7 +43,8 @@ fn files(base: &Path, dir: &Path, out: &mut BTreeSet<String>) {
 }
 
 /// `vendor/SHA256SUMS` lists every vendored file with its SHA-256, each file is exactly that,
-/// and no file is missing from the list or from the tree.
+/// and no file is missing from the list or from the tree. The sums are generated from the tree,
+/// so this is integrity since vendoring; `provenance.sh` checks the tree against crates.io.
 #[test]
 fn vendored_files_are_the_published_bytes() {
     let vendor = root().join("vendor");
@@ -84,7 +85,12 @@ fn the_vendored_copies_are_the_ones_that_build() {
     let lock = std::fs::read_to_string(root().join("Cargo.lock")).expect("Cargo.lock");
     for (name, version, _) in VENDORED {
         let blocks = locked(&lock, name);
-        assert_eq!(blocks.len(), 1, "{name}: expected exactly one copy in Cargo.lock, found {}", blocks.len());
+        assert_eq!(
+            blocks.len(),
+            1,
+            "{name}: expected exactly one copy in Cargo.lock, found {}",
+            blocks.len()
+        );
         let block = &blocks[0];
         assert!(block.contains(&format!("version = \"{version}\"")), "{name}: not version {version}");
         assert!(
@@ -96,10 +102,56 @@ fn the_vendored_copies_are_the_ones_that_build() {
         let blocks = locked(&lock, name);
         let pinned = blocks.iter().any(|b| {
             b.contains(&format!("version = \"{version}\""))
-                && b.contains(&"source = \"registry+https://github.com/rust-lang/crates.io-index\"".to_string())
+                && b.contains(
+                    &"source = \"registry+https://github.com/rust-lang/crates.io-index\"".to_string(),
+                )
                 && b.contains(&format!("checksum = \"{checksum}\""))
         });
         assert!(pinned, "{name} {version} is not locked from crates.io with checksum {checksum}");
+    }
+}
+
+/// Every `"manifest_path":"..."` in `cargo metadata`'s JSON: the resolved graph's packages.
+fn manifest_paths(metadata: &str) -> BTreeSet<String> {
+    let key = "\"manifest_path\":\"";
+    metadata
+        .match_indices(key)
+        .map(|(at, _)| {
+            let rest = &metadata[at + key.len()..];
+            rest[..rest.find('"').expect("unterminated manifest_path")].to_string()
+        })
+        .collect()
+}
+
+/// A path package has no source in `Cargo.lock` wherever its directory is, so the lockfile
+/// alone cannot show that the patches point at `vendor/`. The resolved graph can: each
+/// vendored crate's manifest is `vendor/<name>/Cargo.toml` in this tree, and no registry copy
+/// (`.../<name>-<version>/Cargo.toml`) of it is in the graph at all. The riscv64 filter keeps
+/// `--offline` from needing host-only crates the registry cache may lack.
+#[test]
+fn the_patches_point_at_vendor() {
+    let root = root().canonicalize().expect("repository root");
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let out = std::process::Command::new(cargo)
+        .current_dir(&root)
+        .args([
+            "metadata",
+            "--format-version",
+            "1",
+            "--offline",
+            "--filter-platform",
+            "riscv64imac-unknown-none-elf",
+        ])
+        .output()
+        .expect("run cargo metadata");
+    assert!(out.status.success(), "cargo metadata failed: {}", String::from_utf8_lossy(&out.stderr));
+    let paths = manifest_paths(&String::from_utf8(out.stdout).expect("UTF-8 metadata"));
+    for (name, version, _) in VENDORED {
+        let vendored = root.join("vendor").join(name).join("Cargo.toml");
+        assert!(paths.contains(vendored.to_str().unwrap()), "{name}: not built from {}", vendored.display());
+        let registry = format!("/{name}-{version}/Cargo.toml");
+        let copies: Vec<_> = paths.iter().filter(|p| p.ends_with(&registry)).collect();
+        assert!(copies.is_empty(), "{name}: a registry copy is in the graph: {copies:?}");
     }
 }
 

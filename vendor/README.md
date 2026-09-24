@@ -42,8 +42,27 @@ held at 2.0.0 so that no other package's locked `proc-macro2` moves.
 **Checked.** `tools/vendor-check` (the `vendor-check` bench case, `kind = "host-tests"`) proves:
 - every file matches `vendor/SHA256SUMS`, and no file has been added or removed;
 - `Cargo.lock` builds each vendored crate from its path, at its version, with no registry copy;
+- `cargo metadata` resolves each one to `vendor/<name>/Cargo.toml` in this tree, so the patches
+  point here, and no registry copy of it is in the graph;
 - `cfg-if` and `bitflags` are locked at the versions and checksums above;
 - this table agrees with the test's own.
+
+**Integrity, not provenance.** `vendor/SHA256SUMS` is generated from the tree itself (see
+"Updating"), and the table's `.crate` checksums are compared only with the test's constants, never
+with the bytes. So the bench proves that nothing has changed since the sums were written. It does
+not prove that the tree is what crates.io published: someone who edits a file, regenerates the
+sums and updates both tables passes it. Provenance is checked against crates.io itself, by
+
+```
+tools/vendor-check/provenance.sh
+```
+
+For each crate in the first table it downloads the `.crate` from `static.crates.io`, checks its
+SHA-256 against the live crates.io index and against this table, unpacks it, and `diff -r`s it
+against `vendor/<name>`. It exits 0 only if all three agree for every crate. It needs the network,
+so the bench does not run it; **the review of any change under `vendor/` must run it** and quote
+its output. It passed for 737a0a41a (the red team's independent run, QA D3-code-review-1) and at
+the provenance commit that added it.
 
 **Not workspace members.** The six directories are in the root manifest's `exclude`, not in
 `members`. Were they members, `Cargo.lock` would take in their dev-dependencies (test
@@ -60,6 +79,13 @@ leaves:
   modules are read before `ipd`'s stack lands (that commit records it).
 
 rustfmt ignores `vendor/`.
+
+**Warnings.** Cargo caps lints only for registry and git packages; a path package, patched or
+not, is built as local code, and there is no per-package lint cap on stable (`profile-rustflags`
+is nightly-only). A cold build prints four warnings, all from `managed`: two
+`mismatched_lifetime_syntaxes` and two `redundant_semicolons`. `heapless` prints none with
+rustc 1.98.1. Nothing builds with `-D warnings`, and silencing them by a workspace-wide
+`-A` flag would hide the same lints in our own code, so they are left.
 
 **Build scripts,** which run on the build host. Both were read.
 - `smoltcp`'s reads `SMOLTCP_*` environment variables to size its buffers. `ipd`'s own build
@@ -78,7 +104,7 @@ index. Unpack each over an emptied directory, then regenerate the sums:
 ```
 
 Update both tables here and the constants in `tools/vendor-check/tests/vendored.rs` in the same
-commit, and read the diff.
+commit, run `tools/vendor-check/provenance.sh`, and read the diff.
 
 ## `getrandom`
 
