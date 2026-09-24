@@ -162,6 +162,20 @@ recipes remain in git.
 - Needs: WP-K4. Uses the sole kernel writer: the K5 implementer does it first, reviewed and
   integrated on its own so WP-R2 can finish; trusted-code review panel.
 
+**WP-K5b. DMA device reset and frame quarantine (answer 173).** Size S.
+- Reads: KERNEL-SPEC.md device objects, `dma_alloc`, R10; IO-ARCHITECTURE.md (DMA trust); QUESTIONS.md 147.
+- Delivers: on release of the last handle to a DMA-flagged MMIO device object, a virtio reset
+  (status 0, read back, bounded) before its `dma_alloc` frames return to the pool; frames of a
+  device that does not confirm the reset are quarantined for good, charged to the grant holder's
+  budget, and the device is not handed out again; the executable model mirrors it.
+- Accepted when: rv64 boot and rv32 compilation; attack cases: a DMA driver killed mid-traffic,
+  its frames reallocated to another process, whose writes into the old ring pages steer no DMA
+  and receive no device bytes; a device that ignores reset leaves its frames quarantined and
+  never reused; nothing is freed before the reset is confirmed; a model mutation (free before
+  reset) is caught.
+- Needs: WP-K5 (sole kernel writer; done right after it, reviewed and integrated on its own).
+  Gates WP-R3's driver restart and any off-bench use of WP-D3.
+
 **WP-K6. Delete the legacy interface.** Size M.
 - Delivers: removal of SID connects, scalar message kinds, `ClaimInterrupt`, the `grants` entry,
   name lookup and `PlatformSpecific` timer calls; old test programs migrated or deleted.
