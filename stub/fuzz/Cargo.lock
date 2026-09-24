@@ -82,14 +82,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
-name = "redoubt-rt"
-version = "0.1.0"
-dependencies = [
- "redoubt-sys",
- "redoubt-wire",
-]
-
-[[package]]
 name = "redoubt-sys"
 version = "0.1.0"
 
@@ -108,8 +100,8 @@ name = "stub"
 version = "0.1.0"
 dependencies = [
  "elf",
- "redoubt-rt",
  "redoubt-sys",
+ "redoubt-wire",
 ]
 
 [[package]]

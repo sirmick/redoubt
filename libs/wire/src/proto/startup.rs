@@ -23,7 +23,9 @@ pub struct Startup<'a> {
 pub struct StartupReply {}
 
 /// Requests by opcode.
-const REQUESTS: &[Layout] = &[Layout { opcode: 1, inline: false, handles: 0 }];
+const REQUESTS: &[Layout] = &[
+    Layout { opcode: 1, inline: false, handles: 0 },
+];
 
 /// Every request of the protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,19 +62,13 @@ impl<'a> Message<'a> {
         }
     }
 
-    fn read_inline(_opcode: u32, _r: &mut Reader<'_>) -> Result<Self, Error> { Err(Error::BadOpcode) }
+    fn read_inline(_opcode: u32, _r: &mut Reader<'_>) -> Result<Self, Error> {
+        Err(Error::BadOpcode)
+    }
 
     fn read_buffer(opcode: u32, r: &mut Reader<'a>) -> Result<Self, Error> {
         Ok(match opcode {
-            1 => Message::Startup(Startup {
-                version: r.u32()?,
-                handle_count: r.u32()?,
-                namespace: r.bytes()?,
-                handles: r.bytes()?,
-                argv: r.bytes()?,
-                image_addr: r.u64()?,
-                image_len: r.u64()?,
-            }),
+            1 => Message::Startup(Startup { version: r.u32()?, handle_count: r.u32()?, namespace: r.bytes()?, handles: r.bytes()?, argv: r.bytes()?, image_addr: r.u64()?, image_len: r.u64()? }),
             _ => return Err(Error::BadOpcode),
         })
     }
@@ -103,7 +99,9 @@ impl<'a> Message<'a> {
 }
 
 /// Replies, by the opcode of their request.
-const REPLIES: &[Layout] = &[Layout { opcode: 1, inline: false, handles: 0 }];
+const REPLIES: &[Layout] = &[
+    Layout { opcode: 1, inline: false, handles: 0 },
+];
 
 /// Every successful reply of the protocol, named after its request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,7 +130,9 @@ impl<'a> Reply {
         }
     }
 
-    fn read_inline(_opcode: u32, _r: &mut Reader<'_>) -> Result<Self, Error> { Err(Error::BadOpcode) }
+    fn read_inline(_opcode: u32, _r: &mut Reader<'_>) -> Result<Self, Error> {
+        Err(Error::BadOpcode)
+    }
 
     fn read_buffer(opcode: u32, _r: &mut Reader<'a>) -> Result<Self, Error> {
         Ok(match opcode {
@@ -144,12 +144,7 @@ impl<'a> Reply {
     /// Decodes the reply to the request with `opcode` (the caller knows what it sent):
     /// `Ok(Ok(reply))`, `Ok(Err(code))`
     /// for an error reply, or `Err` if the reply is malformed.
-    pub fn decode(
-        opcode: u32,
-        words: &Words,
-        buf: &'a [u8],
-        handles: usize,
-    ) -> Result<Result<Self, ErrorCode>, Error> {
+    pub fn decode(opcode: u32, words: &Words, buf: &'a [u8], handles: usize) -> Result<Result<Self, ErrorCode>, Error> {
         let layout = typed::layout(REPLIES, opcode)?;
         if let Some(code) = typed::reply_status(words, handles)? {
             return ErrorCode::from_code(code).map(Err).ok_or(Error::BadStatus);
@@ -186,5 +181,7 @@ impl ErrorCode {
     }
 
     /// The words of the error reply (no buffer, no handles).
-    pub fn encode(self) -> Words { typed::error_reply(self.code()) }
+    pub fn encode(self) -> Words {
+        typed::error_reply(self.code())
+    }
 }

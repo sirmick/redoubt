@@ -17,11 +17,48 @@
 #![no_std]
 
 use elf::ElfBytes;
-use elf::abi::{PF_R, PF_W, PF_X, PT_LOAD};
+use elf::abi::{EM_RISCV, PF_R, PF_W, PF_X, PT_LOAD};
 use elf::endian::LittleEndian;
+use elf::file::Class;
 use elf::segment::ProgramHeader;
 use redoubt_sys::{MemFlags, PAGE_SIZE};
 use redoubt_wire::proto::startup::Message;
+
+/// The ELF class this build's stub accepts: `usize`-width segment addresses only fit this
+/// target's own class, and the stub links for one width at a time (`libs/abi`'s
+/// `target_pointer_width` split).
+#[cfg(target_pointer_width = "32")]
+const ELF_CLASS: Class = Class::ELF32;
+#[cfg(target_pointer_width = "64")]
+const ELF_CLASS: Class = Class::ELF64;
+
+/// Exits the calling process with `code`: the same call `redoubt_rt::handle::process_exit`
+/// wraps, duplicated here so this crate's `[[bin]]`s (the stub itself, and the `fixture-child`
+/// test fixture) never depend on `redoubt-rt` (module doc above). `redoubt_sys::syscall` exists
+/// only on the riscv targets these binaries actually run on, not host unit tests.
+#[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
+pub fn process_exit(code: u32) -> ! {
+    loop {
+        let _ = redoubt_sys::syscall(&redoubt_sys::Call::ProcessExit { code });
+    }
+}
+
+/// `redoubt-wire` declares `extern crate alloc` (only its JSON parser actually allocates; typed
+/// decoding, which `read_image` uses, never does), so any `no_std`/`no_main` binary that links
+/// this crate needs *some* `#[global_allocator]` even though it never calls one. Each of this
+/// crate's `[[bin]]`s instantiates one `static ALLOC: NullAlloc = NullAlloc;` with
+/// `#[global_allocator]` (a `#[global_allocator]` static must live in the binary crate, not the
+/// lib): zero-sized, so it adds no heap or writable static to either binary's page.
+pub struct NullAlloc;
+// SAFETY: neither binary's code path ever allocates (the stub only uses `redoubt-wire`'s typed
+// decoding, which borrows into its input; the fixture fixture does not touch `redoubt-wire` at
+// all), so `alloc` is unreachable; returning null is the documented way to report failure if it
+// ever is.
+unsafe impl core::alloc::GlobalAlloc for NullAlloc {
+    unsafe fn alloc(&self, _layout: core::alloc::Layout) -> *mut u8 { core::ptr::null_mut() }
+
+    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: core::alloc::Layout) {}
+}
 
 /// Where a launcher maps the stub's flat binary in every child, and the `entry` it passes to
 /// `process_start` (PACKAGES.md: "a flat binary, one code region at a fixed address... the same
@@ -33,6 +70,14 @@ use redoubt_wire::proto::startup::Message;
 /// `tests/programs/src/spawn.rs::IMAGE_BASE` (0x1_0000, where test images and, by convention,
 /// most real program images are expected to start) and far below `STACK_TOP`/`STARTUP_AT`.
 pub const STUB_ENTRY: usize = 0x1FF0_0000;
+
+/// A defensive cap on `image_len` (INIT.md, Startup block), checked before this stub ever reads
+/// the image bytes it names: MEMORY-LAYOUT.md's own bound on program link space ("just under 512
+/// MiB" below `STUB_ENTRY`), so no honest image needs more than this. Refusing an absurd
+/// `image_len` up front keeps `validate`'s per-segment work (and `main.rs`'s eventual raw read of
+/// `[image_addr, image_addr + image_len)`) bounded by a number grounded in the loading
+/// convention, rather than only by `usize::MAX`/page-alignment overflow checks.
+pub const MAX_IMAGE_LEN: usize = STUB_ENTRY;
 
 /// Why an image was refused whole (PACKAGES.md: "A malicious ELF can at most compromise the
 /// process it was going to become" -- every one of these is a refusal, never a panic).
@@ -50,6 +95,17 @@ pub enum BadImage {
     /// A segment asks for both writable and executable, or for neither read nor write nor
     /// execute (R11, W^X; TENETS.md 2).
     BadFlags,
+    /// `e_machine` is not `EM_RISCV`, or the file's class does not match this stub's own width
+    /// (a 32-bit image on a 64-bit stub or the reverse): every address in this file would be
+    /// read at the wrong width.
+    WrongMachine,
+    /// `p_align` is not a power of two, or `p_vaddr` and `p_offset` disagree mod `p_align` (the
+    /// ELF rule this stub's page-granular mapping otherwise never needs to check, since a
+    /// segment that breaks it would put file bytes at the wrong offset within the mapped page).
+    BadAlign,
+    /// `e_entry` does not fall inside any segment this file maps executable: the stub would jump
+    /// into memory the child never mapped, or into data.
+    EntryNotExecutable,
 }
 
 /// One validated `PT_LOAD` segment, ready to be mapped.
@@ -86,12 +142,43 @@ pub fn plan<'a, E>(
     mut on_segment: impl FnMut(Segment<'a>) -> Result<(), E>,
 ) -> Result<usize, Either<BadImage, E>> {
     let elf = ElfBytes::<LittleEndian>::minimal_parse(image).map_err(|_| Either::A(BadImage::Malformed))?;
+    // e_machine/class: every field below is read at this stub's own width, so a file built for
+    // the other one would have every address misread rather than refused.
+    if elf.ehdr.e_machine != EM_RISCV || elf.ehdr.class != ELF_CLASS {
+        return Err(Either::A(BadImage::WrongMachine));
+    }
+    let entry = usize::try_from(elf.ehdr.e_entry).map_err(|_| Either::A(BadImage::Overflow))?;
     let segments = elf.segments().ok_or(Either::A(BadImage::Malformed))?;
-    for header in segments.iter().filter(|s| s.p_type == PT_LOAD && s.p_memsz > 0) {
+    let loads = || segments.iter().filter(|s| s.p_type == PT_LOAD && s.p_memsz > 0);
+    let mut entry_executable = false;
+    for (i, header) in loads().enumerate() {
         let segment = validate(image, image_addr, exclude, &header).map_err(Either::A)?;
+        let seg_end = segment.first_page + segment.pages * PAGE_SIZE;
+        // Segments only check against the image, the startup page and the stub above
+        // (`exclude`); an ELF may still describe two segments that overlap each other, e.g. one
+        // hostile segment's pages silently overwriting another's mapping order. `i` earlier
+        // segments were already validated to their own final page ranges above, so re-deriving
+        // theirs here (rather than storing a growing list, which would need an allocator) is
+        // just repeated pure work, bounded by this image's own segment count.
+        for other in loads().take(i) {
+            let other_segment = validate(image, image_addr, exclude, &other).map_err(Either::A)?;
+            let other_end = other_segment.first_page + other_segment.pages * PAGE_SIZE;
+            if overlaps(segment.first_page, seg_end, other_segment.first_page, other_end) {
+                return Err(Either::A(BadImage::Overlaps));
+            }
+        }
+        if segment.flags.bits() & MemFlags::EXECUTE.bits() != 0
+            && entry >= segment.first_page
+            && entry < seg_end
+        {
+            entry_executable = true;
+        }
         on_segment(segment).map_err(Either::B)?;
     }
-    usize::try_from(elf.ehdr.e_entry).map_err(|_| Either::A(BadImage::Overflow))
+    if !entry_executable {
+        return Err(Either::A(BadImage::EntryNotExecutable));
+    }
+    Ok(entry)
 }
 
 /// Bounds-checks one segment against the image it came from and `exclude`, and computes its
@@ -108,6 +195,17 @@ fn validate<'a>(
     let memsz = usize::try_from(header.p_memsz).map_err(|_| BadImage::Overflow)?;
     let filesz = usize::try_from(header.p_filesz).map_err(|_| BadImage::Overflow)?;
     let offset = usize::try_from(header.p_offset).map_err(|_| BadImage::Overflow)?;
+    let align = usize::try_from(header.p_align).map_err(|_| BadImage::Overflow)?;
+    // ELF: `p_align` is 0 or 1 (no constraint) or a power of two, and `p_vaddr` must then equal
+    // `p_offset`, modulo `p_align`. This stub always maps at a page boundary regardless of
+    // `p_align` (`first_page`, below), so a violation cannot misalign the mapping itself; it is
+    // refused anyway because it means the file was not built for this loading convention and its
+    // `p_vaddr`/`p_offset` pairing should not be trusted for anything downstream.
+    if align > 1 {
+        if !align.is_power_of_two() || vaddr % align != offset % align {
+            return Err(BadImage::BadAlign);
+        }
+    }
     if filesz > memsz {
         return Err(BadImage::OutOfImage);
     }
@@ -222,6 +320,9 @@ pub fn read_image(page: &[u8]) -> Result<Option<(usize, usize)>, BadStartup> {
     if !addr.is_multiple_of(PAGE_SIZE) {
         return Err(BadStartup::BadImage);
     }
+    if len > MAX_IMAGE_LEN {
+        return Err(BadStartup::BadImage);
+    }
     addr.checked_add(len).ok_or(BadStartup::BadImage)?;
     Ok(Some((addr, len)))
 }
@@ -256,6 +357,14 @@ mod tests {
         let mut phdrs = Vec::new();
         let mut data = Vec::new();
         for &(flags, vaddr, file, memsz) in segments {
+            // Real linkers place file bytes so `p_offset % p_align == p_vaddr % p_align` (ELF;
+            // `validate` checks it): pad with zero bytes rather than start each segment's bytes
+            // wherever the previous one happened to end.
+            let want = vaddr % PAGE_SIZE as u64;
+            let have = data_offset % PAGE_SIZE as u64;
+            let pad = if have <= want { want - have } else { PAGE_SIZE as u64 - have + want };
+            data.extend(core::iter::repeat(0u8).take(pad as usize));
+            data_offset += pad;
             let offset = data_offset;
             phdrs.extend_from_slice(&PT_LOAD_TAG.to_le_bytes());
             phdrs.extend_from_slice(&flags.to_le_bytes());
@@ -363,5 +472,52 @@ mod tests {
     #[test]
     fn read_image_refuses_a_short_page() {
         assert_eq!(read_image(&[0u8; 3]), Err(BadStartup::Short));
+    }
+
+    #[test]
+    fn read_image_refuses_an_image_len_over_the_cap() {
+        let mut builder = redoubt_rt::startup::StartupBuilder::new(0);
+        builder.image(0x2000_0000, MAX_IMAGE_LEN + 1);
+        let page = builder.finish().unwrap();
+        assert_eq!(read_image(&page), Err(BadStartup::BadImage));
+    }
+
+    #[test]
+    fn plan_refuses_a_non_riscv_machine() {
+        let code = [0u8; 4];
+        let mut image = elf64(0x1_0000, &[(PF_R | PF_X, 0x1_0000, &code, 4096)]);
+        // e_machine sits right after e_ident (16) and e_type (2).
+        image[18..20].copy_from_slice(&0u16.to_le_bytes()); // EM_NONE
+        let result = plan::<()>(&image, 0x2000_0000, &[], |_| Ok(()));
+        assert_eq!(result, Err(Either::A(BadImage::WrongMachine)));
+    }
+
+    #[test]
+    fn plan_refuses_an_entry_outside_any_executable_segment() {
+        let code = [0u8; 4];
+        // Readable only: e_entry names a byte inside it, but nothing here is executable.
+        let image = elf64(0x1_0000, &[(PF_R, 0x1_0000, &code, 4096)]);
+        let result = plan::<()>(&image, 0x2000_0000, &[], |_| Ok(()));
+        assert_eq!(result, Err(Either::A(BadImage::EntryNotExecutable)));
+    }
+
+    #[test]
+    fn plan_refuses_two_segments_that_overlap_each_other() {
+        let code = [0u8; 4];
+        // Neither overlaps `exclude`; they overlap each other instead.
+        let image = elf64(0x1_0000, &[(PF_R | PF_X, 0x1_0000, &code, 4096), (PF_R, 0x1_0000, &code, 4096)]);
+        let result = plan::<()>(&image, 0x2000_0000, &[], |_| Ok(()));
+        assert_eq!(result, Err(Either::A(BadImage::Overlaps)));
+    }
+
+    #[test]
+    fn plan_refuses_a_misaligned_p_align() {
+        let code = [0u8; 4];
+        let mut image = elf64(0x1_0000, &[(PF_R | PF_X, 0x1_0000, &code, 4096)]);
+        // p_align is the phdr's last 8-byte field, right after the one program header (EHDR_LEN
+        // + p_type + p_flags + p_offset + p_vaddr + p_paddr + p_filesz + p_memsz = 64 + 48).
+        image[112..120].copy_from_slice(&3u64.to_le_bytes()); // not a power of two
+        let result = plan::<()>(&image, 0x2000_0000, &[], |_| Ok(()));
+        assert_eq!(result, Err(Either::A(BadImage::BadAlign)));
     }
 }

@@ -12,7 +12,7 @@ use core::arch::asm;
 use core::panic::PanicInfo;
 
 use redoubt_sys::{Call, Error, MemFlags, PAGE_SIZE, Return, syscall};
-use stub::{Either, STUB_ENTRY, read_image};
+use stub::{Either, STUB_ENTRY, process_exit, read_image};
 
 /// Exit codes the stub itself uses. Distinct from anything the started program can produce:
 /// once the jump below happens, this process's exit code is that program's to choose.
@@ -63,10 +63,11 @@ fn run(arg: usize) -> Result<usize, u32> {
     // PACKAGES.md step 5: segments are mapped at their link addresses with `map_fixed`, before
     // the stub maps anything else; a segment overlapping the stub, the startup page or the image
     // makes it exit (`stub::plan`'s `exclude` argument, checked before any mapping call below).
-    let entry = stub::plan(image, image_addr, &exclude, |segment| map_segment(&segment)).map_err(|e| match e {
-        Either::A(_bad_image) => exit::BAD_IMAGE,
-        Either::B(_map_error) => exit::BAD_IMAGE,
-    })?;
+    let entry =
+        stub::plan(image, image_addr, &exclude, |segment| map_segment(&segment)).map_err(|e| match e {
+            Either::A(_bad_image) => exit::BAD_IMAGE,
+            Either::B(_map_error) => exit::BAD_IMAGE,
+        })?;
 
     // PACKAGES.md, Launching a process: "free the image". Every segment's bytes are now copied
     // into their own mapping (`map_segment`, above); the parent's copy is no longer read. Best
@@ -126,12 +127,6 @@ fn set_flags(addr: usize, len: usize, flags: MemFlags) -> Result<(), Error> {
 
 fn unmap(addr: usize, len: usize) -> Result<(), Error> { nothing(&Call::Unmap { addr, len }) }
 
-fn process_exit(code: u32) -> ! {
-    loop {
-        let _ = syscall(&Call::ProcessExit { code });
-    }
-}
-
 /// Rounds `len` up to a whole number of pages.
 fn page_align_up(len: usize) -> usize {
     match len.checked_add(PAGE_SIZE - 1) {
@@ -162,9 +157,14 @@ fn jump(entry: usize, arg: usize) -> ! {
     // SAFETY: `entry` is `validate`'s checked `e_entry` (within the image `plan` already
     // bounds-checked every segment of); every segment it names has just been mapped executable
     // or read-only by `map_segment` above. `arg` is passed through unchanged in `a0`, the same
-    // register the stub itself received it in, matching `process_start`'s contract.
+    // register the stub itself received it in, matching `process_start`'s contract. `fence.i`
+    // runs first: `map_segment` wrote the program's code with ordinary stores
+    // (`copy_nonoverlapping`), which only the data cache and store buffer see on RISC-V until an
+    // explicit `fence.i` orders them against instruction fetch (unpriv spec, `Zifencei`); without
+    // it this hart could fetch stale (e.g. zeroed) bytes at `entry`.
     unsafe {
         asm!(
+            "fence.i",
             "jr {entry}",
             entry = in(reg) entry,
             in("a0") arg,
@@ -179,3 +179,8 @@ fn jump(entry: usize, arg: usize) -> ! {
 /// other refusal here does.
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! { process_exit(exit::PANIC) }
+
+/// See `stub::NullAlloc`'s doc: `redoubt-wire` needs a `#[global_allocator]` in the link graph
+/// even though this binary never allocates.
+#[global_allocator]
+static ALLOC: stub::NullAlloc = stub::NullAlloc;
