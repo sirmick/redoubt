@@ -5,6 +5,10 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "netd: the virtio-net driver, serving Ethernet frames to one ipd"
 
+[[bin]]
+name = "netd"
+path = "src/bin/netd.rs"
+
 # No outside crates: netd inherits blkd's reasoning for writing its own virtqueues rather than
 # taking `virtio-drivers` (IO-ARCHITECTURE.md, blkd; answer 174).
 [dependencies]

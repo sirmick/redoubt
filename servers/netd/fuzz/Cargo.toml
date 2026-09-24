@@ -8,6 +8,7 @@ edition = "2021"
 # nightly toolchain and libfuzzer never touch the machine build (TENETS.md 3 and 6). Run from
 # servers/netd:
 #     cargo fuzz run -s none device
+#     cargo fuzz run -s none request
 # `-s none`: the crate's only `unsafe` is in `kernel.rs`, which no fuzz target reaches.
 [package.metadata]
 cargo-fuzz = true
@@ -20,6 +21,13 @@ redoubt-rt = { path = "../../../libs/rt" }
 [[bin]]
 name = "device"
 path = "fuzz_targets/device.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "request"
+path = "fuzz_targets/request.rs"
 test = false
 doc = false
 bench = false
