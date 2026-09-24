@@ -91,3 +91,21 @@ Questions 164–166 remain open, as do the documented 128/146 model conventions.
 witnesses and direct accounting/PID checks are not complete generated syscall traces. Real-kernel
 replay, native timer and concurrency acceptance remain separate work; host checks do not close
 IPC acceptance, server boot integration or native clean bundle-file readback.
+
+## WP-K5 scheduler and time rules (2026-09-24)
+
+The model now implements the owner-approved WP-K5 decisions (K5-plan, OWNER DECISIONS 1-7 and 9):
+the preemption points and I13 reading, the floor, the four rank clauses, tick-style charging with
+an exact remainder, pass inheritance with additive normalized debt measured from entry, stride
+weight as free weight with the carve and `process_create` refusals, and the kernel's boot weight
+split (root 1,000,000 with 1,000 free, system 250,000, users 749,000).
+
+`Mutation::ALL` grows from 101 to 120: 19 new breaks, one per new rule (mutation.rs, R12, R7, I13
+and Budget). Each is caught; `--test mutations -- --nocapture` names the property. The
+`budget churn` scenario's spinning-parent and deadline-timed variants are required to catch
+`R12LiftByMax`; `check::churn_variants` records that the blocking churner alone lets it survive.
+The `debt lift` bound is one round (K5-debt-lift-bound), not two slices.
+
+| Command | Result |
+| --- | --- |
+| `cargo test --offline --locked -p redoubt-model --release` | Passed: lib 6, coverage 1, current contracts 16, map_fixed 10, mutations 2 (all 120 detected), policy 7, properties 6 (1 ignored), traces 4. |

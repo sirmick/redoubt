@@ -345,20 +345,29 @@ fn exited_object_handles_and_queued_copies_live_until_notice_receipt() {
 
 #[test]
 fn scheduler_stays_fair_past_the_old_pass_saturation_boundary() {
-    use redoubt_model::sched::Scheduler;
+    use redoubt_model::sched::{RUNTIME_CAP, Scheduler};
     let mut s = Scheduler::default();
-    s.add_budget(1, 1);
-    s.add_budget(2, 1);
-    s.wake(1, 1);
-    s.charge(1, u64::MAX / STRIDE + SLICE);
-    assert!(s.budgets[&1].pass > u64::MAX as u128);
-    s.wake(2, 2);
+    s.add_budget(10, None, 2);
+    s.add_budget(1, Some(10), 1);
+    s.add_budget(2, Some(10), 1);
+    s.thread_runnable(1, (1, 1));
+    s.reconcile();
+    // Budget 1 alone runs far past where a u64 pass would have saturated.
+    while s.budgets[&1].pass <= u64::MAX as u128 {
+        let c = s.pick().unwrap();
+        s.run(c.slice_left);
+        s.slice_end();
+        s.budgets.get_mut(&1).unwrap().pass += u128::from(RUNTIME_CAP) * u128::from(STRIDE);
+    }
+    s.thread_runnable(2, (2, 2));
+    s.reconcile();
     assert_eq!(s.budgets[&1].pass, s.budgets[&2].pass);
     let mut runs = [0; 2];
     for _ in 0..1000 {
-        let (b, _) = s.pick().unwrap();
-        runs[(b - 1) as usize] += 1;
-        s.charge(b, SLICE);
+        let c = s.pick().unwrap();
+        runs[(c.budget - 1) as usize] += 1;
+        s.run(c.slice_left);
+        s.slice_end();
     }
     assert_eq!(runs, [500, 500]);
 }
@@ -420,3 +429,6 @@ fn process_map_destination_validation_precedes_started_state() {
     }
     trace::check(&trace::record(&Boot::default(), &w.ops, None).unwrap(), None).unwrap();
 }
+
+#[test]
+fn scheduler_contracts_hold() { sched_contracts(None).unwrap(); }
