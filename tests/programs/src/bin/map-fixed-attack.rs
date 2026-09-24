@@ -68,6 +68,11 @@ fn bad_ranges(c: &mut Checker) {
     // The last page below USER_AREA_END is accepted (checked as a success case below); an
     // aligned range starting there and running one page past it is refused whole.
     refused(c, "straddles USER_AREA_END", USER_AREA_END - PAGE, 2 * PAGE, rd::rw(), Error::InvalidArgument);
+    // On Sv39 both cases above are also refused by the overlap walk: USER_AREA_END is root slot
+    // 256, the physmap every process copies. Root slot 320 is kernel half but empty, so only
+    // `user_range`'s end check refuses this one (without it, the kernel panics mapping it).
+    #[cfg(target_pointer_width = "64")]
+    refused(c, "outside user space, empty root slot", 0x50_0000_0000, PAGE, rd::rw(), Error::InvalidArgument);
 }
 
 fn bad_flags(c: &mut Checker) {
