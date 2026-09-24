@@ -140,3 +140,11 @@ running budget destroyed without its runtime charged; a carve returned without f
 | --- | --- |
 | `cargo test --offline --locked -p redoubt-model --release` | Passed: lib 6, coverage 1, current contracts 16, map_fixed 10, mutations 2 (all 121 detected), policy 7, properties 6 (1 ignored), traces 4. |
 | `cargo test -p redoubt-stride --release` | Passed: 10 unit tests; the differential over 3000 seeds; 18 broken models all disagree. |
+
+### Destruction order (K5-code-review-4 D1, the orchestrator's ruling)
+
+The top of a destruction returns its carve to its parent first (`Scheduler::return_carve`, called
+at the start of the kernel model's R10), before any of the destruction's work; the budgets below
+it return theirs at their own bottom-up step. The kernel does the same at `mark_dying`, and the
+differential's leaf and subtree destructions return the top's carve first on both sides; it
+agrees over 3000 seeds. Default suites pass again, with all 121 mutations detected.

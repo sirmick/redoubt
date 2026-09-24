@@ -8,7 +8,8 @@
 //!
 //! Destructions come in the kernel's shapes too: a leaf whose threads were blocked first; the
 //! budget on the CPU, destroyed with its threads (a deadline: nothing deschedules it first); and a
-//! whole subtree at once, bottom-up (R10's order).
+//! whole subtree at once, bottom-up (R10's order), the top's carve returned first (the kernel's
+//! `mark_dying`, K5-code-review-4 D1).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -50,6 +51,8 @@ struct Kernel {
     bs: Store,
     thread: Option<Thread>,
     slice_left: u64,
+    /// Destructions begun: their carves are back with their parents.
+    returned: BTreeSet<u64>,
 }
 
 impl Kernel {
@@ -90,12 +93,23 @@ impl Kernel {
         }
     }
 
-    /// Destroy `b` (its children already gone): its carve goes back to its parent.
+    /// The first step of destroying `top` (the kernel's `mark_dying`): its carve goes back to its
+    /// parent before anything else.
+    fn return_carve(&mut self, top: u64) {
+        let Some(p) = self.bs.0[&top].parent else { return };
+        let limit = self.bs.0[&top].limit;
+        self.cpu.change_weight(&mut self.bs, p, |bs| bs.0.get_mut(&p).unwrap().carved -= limit);
+        self.returned.insert(top);
+    }
+
+    /// Destroy `b` (its children already gone): its carve goes back to its parent, unless it
+    /// went back at the start.
     fn destroy_budget(&mut self, b: u64) {
         let parent = self.bs.0[&b].parent;
         let limit = self.bs.0[&b].limit;
+        let returned = self.returned.remove(&b);
         self.cpu.destroy(&mut self.bs, b, parent, |bs| {
-            if let Some(p) = parent {
+            if let (false, Some(p)) = (returned, parent) {
                 bs.0.get_mut(&p).unwrap().carved -= limit;
             }
         });
@@ -105,9 +119,11 @@ impl Kernel {
         self.bs.0.remove(&b);
     }
 
-    /// R10 for a subtree (`bottom_up`: every budget in it, each after its descendants): its
-    /// threads end with no deschedule, then each budget goes, returning its carve as it does.
-    fn destroy_subtree(&mut self, bottom_up: &[u64]) {
+    /// R10 for the subtree at `top` (`bottom_up`: every budget in it, each after its
+    /// descendants): the top's carve returns first, its threads end with no deschedule, then each
+    /// budget goes, the ones below the top returning their carves as they do.
+    fn destroy_subtree(&mut self, top: u64, bottom_up: &[u64]) {
+        self.return_carve(top);
         for b in bottom_up {
             self.bs.0.get_mut(b).unwrap().threads.clear();
         }
@@ -246,7 +262,9 @@ fn run_with(seed: u64, mutation: Option<Mutation>) {
                     m.thread_exited(b, t);
                     k.thread_blocked(b, t);
                 }
+                m.return_carve(b);
                 m.destroy_budget(b);
+                k.return_carve(b);
                 k.destroy_budget(b);
             }
             // A thread becomes runnable, in a budget with free weight.
@@ -316,10 +334,11 @@ fn run_with(seed: u64, mutation: Option<Mutation>) {
                 }
                 // Deepest first: the reverse of the breadth-first order.
                 subtree.reverse();
+                m.return_carve(top);
                 for b in &subtree {
                     m.destroy_budget(*b);
                 }
-                k.destroy_subtree(&subtree);
+                k.destroy_subtree(top, &subtree);
             }
             _ => {
                 assert_eq!(m.pick(), k.pick(), "seed {seed} step {step} pick");

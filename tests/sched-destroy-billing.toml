@@ -1,0 +1,13 @@
+description = "A destruction is billed at the parent's restored weight (WP-K5, K5-code-review-4 D1): a parent that kept free weight 10 of 1000 destroys the child holding the rest, and is back on the CPU beside an equal victim within twice the destruction's cost and two slices (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-destroy-billing"]
+timeout_secs = 120
+expect = [
+    '^\[destroy-billing\] ok: P \(free weight 10 while C held 990\) destroyed C \(alone it takes \d+ µs\); from the call to running again \d+ µs',
+    '^SCHED-DESTROY-BILLING TEST PASSED$',
+]
+forbid = ['\[destroy-billing\] FAIL', 'PROGRAM HALT']
+poweroff = true

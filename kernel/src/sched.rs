@@ -326,10 +326,10 @@ pub fn change_weight(mm: &mut MemoryManager, b: BudgetFrame, change: impl FnOnce
 }
 
 /// `frame`, dying, is being destroyed (its descendants already were, bottom-up): what it ran is
-/// charged, its carve returns to its parent, its work since entry moves there (added to the
-/// parent's lead, normalized by the parent's weight now), and it leaves the queue. Its frame is
-/// freed after this.
-pub fn destroy(mm: &mut MemoryManager, frame: BudgetFrame) {
+/// charged, its carve returns to its parent (unless it came back already: the top's does at mark
+/// time), its work since entry moves there (added to the parent's lead, normalized by the
+/// parent's weight now), and it leaves the queue. Its frame is freed after this.
+pub fn destroy(mm: &mut MemoryManager, frame: BudgetFrame, weight_returned: bool) {
     let child = budget_ref(mm, frame);
     let parent_frame = mm.budget(frame).parent;
     let parent = parent_frame.map(|p| budget_ref(mm, p));
@@ -346,7 +346,7 @@ pub fn destroy(mm: &mut MemoryManager, frame: BudgetFrame) {
             s.user_since = None;
         }
         s.cpu.destroy(mm, child, parent, |mm| {
-            if let Some(p) = parent_frame {
+            if let (false, Some(p)) = (weight_returned, parent_frame) {
                 let mut pb = mm.budget(p);
                 pb.weight_carved = pb.weight_carved.checked_sub(limit).expect("I5: carve underflow");
                 mm.store(p, &pb);
