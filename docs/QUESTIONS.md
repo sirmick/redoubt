@@ -1,6 +1,6 @@
 # Open decisions
 
-Open IDs: **128–149, 163–165, 171**. Next unused ID: **172**. Recommendations below are not approvals.
+Open IDs: **128–149, 163–165, 171**. Next unused ID: **173**. Recommendations below are not approvals.
 The owning specification carries each accepted rule and its rationale; [ANSWERS.md](ANSWERS.md)
 indexes approval provenance. [Earlier questions](archive/2026-09-22/QUESTIONS.md) are historical.
 Do not renumber or reopen settled questions. Record a new decision once, then update its owner.

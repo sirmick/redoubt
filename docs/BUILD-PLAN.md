@@ -146,6 +146,18 @@ recipes remain in git.
   `timer` case are gone.
 - Needs: WP-K2.
 
+**WP-K5a. `map_fixed` (answer 172).** Size S.
+- Reads: KERNEL-SPEC.md R11, System calls and Errors (`map_fixed`); PACKAGES.md, Launching a process.
+- Delivers: `map_fixed(addr, len, flags)` in the kernel, `redoubt-sys` and the executable model,
+  appended last in the call table so earlier call numbers keep their values; it never replaces a
+  mapping.
+- Accepted when: rv64 boot and rv32 compilation; attack cases refuse an occupied range, a range
+  outside user space, an unaligned address or length, len 0, `addr + len` overflow, W+X, W without
+  R and an exhausted budget, each with nothing mapped and nothing charged; a model mutation shows
+  the model's rule bites.
+- Needs: WP-K4. Uses the sole kernel writer: the K5 implementer does it first, reviewed and
+  integrated on its own so WP-R2 can finish; trusted-code review panel.
+
 **WP-K6. Delete the legacy interface.** Size M.
 - Delivers: removal of SID connects, scalar message kinds, `ClaimInterrupt`, the `grants` entry,
   name lookup and `PlatformSpecific` timer calls; old test programs migrated or deleted.
@@ -232,7 +244,9 @@ recipes remain in git.
   startup page's address it was started with (`arg`).
 - Accepted when: fuzzed ELF images never escape the child (the child faults or exits; nothing else
   is affected); attack case: a hostile ELF from a user parent hurts only the child.
-- Needs: WP-R1b, WP-K4.
+- Needs: WP-R1b, WP-K4; on-target stub mapping and the hostile-ELF boot acceptance also need WP-K5a
+  (`map_fixed`, answer 172). Host-side work (the stub's ELF checks, startup fields, codec, fuzzing)
+  does not.
 - Uses K4's integrated lifecycle, not its still-open R2/R3 bundle-readback acceptance (answer 169).
   Define the image fields in INIT's owning startup table with the architect, regenerate the wire
   codec, and migrate its writers/readers together. Preserve PACKAGES' current copied-image path;

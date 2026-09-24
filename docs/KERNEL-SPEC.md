@@ -335,12 +335,15 @@ through one fails its caller with `Dead` at once and is abandoned (R3).
 
 **R11. Memory.** No mapping is ever writable and executable, and none is writable without being
 readable: the privileged architecture reserves that page-table encoding, so every call that
-installs or changes user permissions (`map_anon`, `set_flags`, `process_map`) refuses it with
+installs or changes user permissions (`map_anon`, `map_fixed`, `set_flags`, `process_map`) refuses it with
 `InvalidArgument`, and a writable user page is always readable. Every page is zeroed before a process
 first sees it. Userspace never maps RAM by physical address; a DMA driver learns the physical
 address of pages the kernel gave it. A page-table page is allocated when a mapping first needs it
 and freed when it maps nothing. The kernel chooses the addresses `map_anon`, `map_device` and
-`dma_alloc` return; nothing may depend on them.
+`dma_alloc` return; nothing may depend on them. `map_fixed` is the one call that puts new pages
+at an address the caller names, so that the loader stub can place a program's segments at their
+link addresses from inside the started process (PACKAGES.md); unlike POSIX `MAP_FIXED` it never
+replaces a mapping, so it can neither discard nor alias a page (answer 172).
 
 **R12. Scheduling.** **One flat stride queue over every runnable budget**, of either class, with no
 priority above it: run the lowest pass; at every deschedule, pass += runtime x `STRIDE` / weight
@@ -385,6 +388,7 @@ partial reply remains valid on `OutOfMemory`. No argument can make the kernel pa
 | `time_now` | -> µs | - |
 | `random` | -> u64 | from the kernel's CSPRNG (seeded at boot, BOOT.md) |
 | `system_reset` | h(Reset), kind | Reset device handle |
+| `map_fixed` | addr, len, flags | as `map_anon`, at exactly `addr`: range in user space and overlapping none of the caller's mappings; nothing mapped on failure. Last in the table so earlier call numbers keep their values (ABI) |
 
 **`mint(source, badge, budget?)`** creates a handle to an endpoint with `badge != 0`.
 - `source` is either the message id of an open call of the caller's thread (the new handle is to
@@ -519,6 +523,7 @@ and its budget cannot pay, and with `TooLarge` when the new handle would be past
 | `time_now` | - | - |
 | `random` | - | - |
 | `system_reset` | h: `BadHandle`; kind: `InvalidArgument` | `BadHandle`, `WrongObject` (not the Reset device) |
+| `map_fixed` | flags: `InvalidArgument` | `InvalidArgument` (range: addr or len unaligned, len 0, not in user space, or overlapping a mapping of the caller's; flags 0, or W without R), `OutOfMemory` (pages, then page tables) |
 
 Two exceptions to the stages, both stated in the rows: a weight over the parent's free weight is
 `InvalidArgument` (no error names weight), and `mint` from a message whose endpoint or stamp is gone
