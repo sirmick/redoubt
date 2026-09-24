@@ -63,6 +63,18 @@ pub enum Role {
     /// Count until p0 ticks (not reported), sleep until p1 ticks, then count until the window
     /// ends; report that last count.
     SpinGap = 12,
+    /// `send` through slot 3 until it fails; report the `rdtime` it first runs again (0 unless
+    /// the send failed `Dead`), then exit.
+    TieSender = 13,
+    /// `receive` on slot 3; report the `rdtime` it first runs again, then exit.
+    TieReceiver = 16,
+    /// The latency case's driver stand-in: p0 samples of the goldfish RTC's alarm (MMIO in slot
+    /// 3, interrupt in slot 4), each waited for in `receive`; report [`Stats::DRIVER_WAKE`].
+    Driver = 14,
+    /// The latency case's steward stand-in, with leases carved from slot 3: p0 timeout wakes,
+    /// p1 leases destroyed by hand and p1 destroyed by their deadlines; report
+    /// [`Stats::TIMER_WAKE`], [`Stats::DESTROY`] and [`Stats::DEADLINE`].
+    Steward = 15,
 }
 
 impl Role {
@@ -81,6 +93,10 @@ impl Role {
             Probe,
             SpinFrom,
             SpinGap,
+            TieSender,
+            Driver,
+            Steward,
+            TieReceiver,
         ]
         .into_iter()
         .find(|r| *r as u8 == x)
@@ -123,7 +139,7 @@ fn word(arg: usize, i: usize) -> u64 {
 /// Two message words holding a `u64` as 32-bit halves (the same on both widths).
 fn halves(v: u64) -> [usize; 2] { [v as u32 as usize, (v >> 32) as u32 as usize] }
 
-fn join(lo: usize, hi: usize) -> u64 { (lo as u32 as u64) | ((hi as u32 as u64) << 32) }
+pub fn join(lo: usize, hi: usize) -> u64 { (lo as u32 as u64) | ((hi as u32 as u64) << 32) }
 
 /// Report `value` on slot 1.
 fn report(value: u64) {
@@ -261,6 +277,26 @@ pub extern "C" fn child(arg: usize) -> ! {
             spin_until(param(0));
             sleep_until(param(1), tpu);
             spin_until(end)
+        }
+        Some(Role::TieSender) => {
+            let r = rd::send(3, &rd::body([0; 4]), None, rd::FOREVER);
+            let t = ticks();
+            report(if r == Err(Error::Dead) { t } else { 0 });
+            rd::process_exit(0)
+        }
+        Some(Role::TieReceiver) => {
+            let r = rd::receive(Some(3), rd::FOREVER, 0);
+            let t = ticks();
+            report(if matches!(r, Ok(Received::Message(_))) { t } else { 0 });
+            rd::process_exit(0)
+        }
+        Some(Role::Driver) => {
+            driver(param(0) as usize);
+            rd::process_exit(0)
+        }
+        Some(Role::Steward) => {
+            steward(param(0) as usize, param(1) as usize);
+            rd::process_exit(0)
         }
         Some(Role::Probe) => {
             let _ =
@@ -451,6 +487,178 @@ extern "C" fn shell_spinner(_: usize) -> ! {
     crate::park()
 }
 
+/// Latency statistics, in µs, reported as one message each: `[p50, p99, max, tag | count << 8]`.
+pub struct Stats;
+
+impl Stats {
+    pub const DEADLINE: usize = 4;
+    pub const DESTROY: usize = 3;
+    pub const DRIVER_WAKE: usize = 1;
+    pub const TIMER_WAKE: usize = 2;
+
+    /// Sort `samples` and send `[p50, p99, max, tag | count << 8]` on slot 1.
+    fn report(samples: &mut [u64], tag: usize) {
+        samples.sort_unstable();
+        let n = samples.len();
+        let at =
+            |q: usize| samples.get((n * q).div_ceil(100).saturating_sub(1)).copied().unwrap_or(0) as usize;
+        let max = samples.last().copied().unwrap_or(0) as usize;
+        let _ = rd::send(1, &rd::body([at(50), at(99), max, tag | n << 8]), None, rd::FOREVER);
+    }
+}
+
+/// The most samples a stand-in takes of one thing.
+const MAX_SAMPLES: usize = 64;
+
+/// The driver stand-in: `k` alarms, each a little over 2 ms ahead (phases spread over a
+/// millisecond); how late, on the RTC's own clock, it runs again after each.
+fn driver(k: usize) {
+    let Ok((base, _)) = rd::map_device(3) else { return };
+    let mut late = [0u64; MAX_SAMPLES];
+    let k = k.min(MAX_SAMPLES);
+    for (i, sample) in late[..k].iter_mut().enumerate() {
+        let at = rtc::now_ns(base) + 2_000_000 + (i as u64 * 397_000) % 1_000_000;
+        rtc::alarm(base, at);
+        let _ = rd::receive(Some(4), rd::FOREVER, 0);
+        *sample = rtc::now_ns(base).saturating_sub(at) / 1000;
+        rtc::clear(base);
+    }
+    Stats::report(&mut late[..k], Stats::DRIVER_WAKE);
+}
+
+/// The steward stand-in: `k` timeout wakes (how late it runs again after each deadline); `leases`
+/// one-process leases carved from slot 3, each destroyed by hand after a timeout (how long
+/// `budget_destroy` takes); and `leases` more destroyed by their deadlines (how late the killed
+/// notice arrives).
+fn steward(k: usize, leases: usize) {
+    let now = || rd::time_now().unwrap_or(0);
+    let (k, leases) = (k.min(MAX_SAMPLES), leases.min(MAX_SAMPLES));
+    let mut wake = [0u64; MAX_SAMPLES];
+    for (i, sample) in wake[..k].iter_mut().enumerate() {
+        let timeout = 3_000 + (i as u64 * 397) % 1_000;
+        let before = now();
+        let _ = rd::receive(None, timeout, 0);
+        *sample = now().saturating_sub(before + timeout);
+    }
+    Stats::report(&mut wake[..k], Stats::TIMER_WAKE);
+    let image = spawn::image();
+    let exit = rd::endpoint_create().expect("exit");
+    let pages = image.pages() as u64 + 96;
+    let mut startup = [0u8; 1 + 8 * 8];
+    startup[0] = Role::Spin as u8;
+    // A lease's spinner counts until a window that never ends (its lease ends first).
+    let (mut destroy, mut nd) = ([0u64; MAX_SAMPLES], 0);
+    let (mut notice, mut nn) = ([0u64; MAX_SAMPLES], 0);
+    for i in 0..2 * leases {
+        let by_deadline = i >= leases;
+        let deadline = if by_deadline { now() + 200_000 } else { rd::FOREVER };
+        let Ok(lease) = rd::create(3, &rd::BudgetSpec { deadline, ..rd::spec(pages, 1, 10) }) else {
+            continue;
+        };
+        if spawn::spawn(&image, lease, exit, lease_spinner as *const () as usize, &startup, &[]).is_err() {
+            let _ = rd::destroy(lease);
+            continue;
+        }
+        if !by_deadline {
+            let _ = rd::receive(None, 5_000, 0);
+            let before = now();
+            if rd::destroy(lease).is_ok() {
+                destroy[nd] = now() - before;
+                nd += 1;
+            }
+        }
+        // The lease's one process: its `killed` notice (by hand, or at the deadline).
+        if let Ok(Received::Exit(n)) = rd::receive(Some(exit), 1_000_000, 0) {
+            if by_deadline && n.cause == rd::Cause::Killed {
+                notice[nn] = now().saturating_sub(deadline);
+                nn += 1;
+            }
+        }
+    }
+    Stats::report(&mut destroy[..nd], Stats::DESTROY);
+    Stats::report(&mut notice[..nn], Stats::DEADLINE);
+}
+
+/// A lease's process: spin until killed.
+extern "C" fn lease_spinner(_: usize) -> ! {
+    loop {
+        spin_until(u64::MAX);
+    }
+}
+
+/// The goldfish RTC (QEMU `virt`), for the latency case's driver stand-in: a nanosecond clock
+/// with one alarm and an interrupt. Found among the first program's device handles by what it
+/// does, since a handle says nothing of what device it is.
+pub mod rtc {
+    use crate::rd::{self, Received};
+
+    const TIME_LOW: usize = 0x00;
+    const TIME_HIGH: usize = 0x04;
+    const ALARM_LOW: usize = 0x08;
+    const ALARM_HIGH: usize = 0x0c;
+    const IRQ_ENABLED: usize = 0x10;
+    const CLEAR_INTERRUPT: usize = 0x1c;
+    /// What a virtio-mmio device holds at offset 0 ("virt"): not the RTC.
+    const VIRTIO_MAGIC: u32 = 0x7472_6976;
+
+    fn read(base: usize, reg: usize) -> u32 {
+        // SAFETY: `base` is a device page `map_device` mapped here; the registers are 32-bit.
+        unsafe { ((base + reg) as *const u32).read_volatile() }
+    }
+
+    fn write(base: usize, reg: usize, v: u32) {
+        // SAFETY: as `read`.
+        unsafe { ((base + reg) as *mut u32).write_volatile(v) }
+    }
+
+    /// The RTC's time, in ns (reading the low word latches the high one).
+    pub fn now_ns(base: usize) -> u64 {
+        let lo = read(base, TIME_LOW);
+        u64::from(lo) | u64::from(read(base, TIME_HIGH)) << 32
+    }
+
+    /// Raise the interrupt when the RTC reaches `at` ns.
+    pub fn alarm(base: usize, at: u64) {
+        write(base, IRQ_ENABLED, 1);
+        write(base, ALARM_HIGH, (at >> 32) as u32);
+        write(base, ALARM_LOW, at as u32);
+    }
+
+    pub fn clear(base: usize) { write(base, CLEAR_INTERRUPT, 1); }
+
+    /// Among the device handles from [`rd::OTHER_DEVICES`]: the RTC's MMIO handle and where it is
+    /// mapped here, and its interrupt handle. The MMIO is the one-page device that is not virtio
+    /// and whose first word (its time's low half, in ns) moves by half a million to a hundred
+    /// million over a millisecond's sleep: nothing else of the others is read, since some fault on
+    /// reads they do not expect. The interrupt is the one a `receive` on which returns when the
+    /// alarm fires.
+    pub fn find() -> Option<(u32, usize, u32)> {
+        let free = rd::first_free();
+        let (mmio, base) = (rd::OTHER_DEVICES..free).find_map(|h| {
+            let (addr, len) = rd::map_device(h).ok()?;
+            if len == rd::PAGE_SIZE && read(addr, 0) != VIRTIO_MAGIC {
+                let a = read(addr, TIME_LOW);
+                let _ = rd::receive(None, 1_000, 0);
+                let moved = read(addr, TIME_LOW).wrapping_sub(a);
+                if (500_000..100_000_000).contains(&moved) {
+                    return Some((h, addr));
+                }
+            }
+            let _ = rd::unmap(addr, len);
+            None
+        })?;
+        // Each candidate waits in `receive` while an alarm fires: an alarm that fired while its
+        // source was masked would not be seen by a later `receive` (observed on QEMU virt).
+        let irq = (rd::OTHER_DEVICES..free).filter(|h| *h != mmio).find(|h| {
+            alarm(base, now_ns(base) + 1_000_000);
+            let fired = matches!(rd::receive(Some(*h), 3_000, 0), Ok(Received::Interrupt));
+            clear(base);
+            fired
+        });
+        Some((mmio, base, irq?))
+    }
+}
+
 /// The launcher's UART, once mapped, for [`panicked`].
 static UART: AtomicUsize = AtomicUsize::new(0);
 
@@ -574,6 +782,24 @@ impl Bench {
             }
         }
         // Their exit notices.
+        while rd::receive(Some(self.exit), 0, 0).is_ok() {}
+        out
+    }
+
+    /// Collect `n` messages of raw words: for each child index, up to four messages in the order
+    /// they came.
+    pub fn collect_words(&mut self, n: usize) -> [[[usize; 4]; 4]; 64] {
+        let mut out = [[[0usize; 4]; 4]; 64];
+        let mut seen = [0usize; 64];
+        for _ in 0..n {
+            if let Ok(Received::Message(m)) = rd::receive(Some(self.rep), 60_000_000, 0) {
+                let i = (m.badge as usize).saturating_sub(1);
+                if i < 64 && seen[i] < 4 {
+                    out[i][seen[i]] = m.body.words;
+                    seen[i] += 1;
+                }
+            }
+        }
         while rd::receive(Some(self.exit), 0, 0).is_ok() {}
         out
     }

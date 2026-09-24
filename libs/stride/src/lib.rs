@@ -124,6 +124,12 @@ pub trait Budgets<B> {
     fn weight(&self, b: B) -> u64;
     /// Whether `b` still exists (a [`Cpu`] may name a budget destroyed since).
     fn live(&self, _b: B) -> bool { true }
+    /// What the queue did, for a kernel that records it (the kernel's test-only `sched-trace`):
+    /// `b` woke into the queue, was requeued behind its equals, or left it. Called after its new
+    /// state is set. Nothing by default.
+    fn woke(&mut self, _b: B) {}
+    fn requeued(&mut self, _b: B) {}
+    fn left(&mut self, _b: B) {}
 }
 
 /// The queue: every budget with a runnable thread (or running), at most `N` of them, and the
@@ -203,7 +209,9 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
     /// behind its equals; otherwise it leaves the queue.
     pub fn deschedule(&mut self, bs: &mut impl Budgets<B>, b: B, still_runnable: bool) {
         let mut s = bs.state(b);
-        if still_runnable && self.insert(b) {
+        let was = self.contains(b);
+        let requeued = still_runnable && self.insert(b);
+        if requeued {
             self.back = self.back.saturating_add(1);
             s.tie = self.back;
             s.queued = true;
@@ -212,6 +220,11 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
             self.take_out(b);
         }
         bs.set_state(b, s);
+        if requeued {
+            bs.requeued(b);
+        } else if was {
+            bs.left(b);
+        }
         self.raise_floor(bs);
         self.reset_if_empty();
     }
@@ -228,6 +241,7 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
             s.queued = false;
             bs.set_state(b, s);
             self.take_out(b);
+            bs.left(b);
         }
         self.raise_floor(bs);
         self.reset_if_empty();
@@ -247,6 +261,7 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
             s.tie = self.front;
             s.queued = true;
             bs.set_state(b, s);
+            bs.woke(b);
         }
         self.raise_floor(bs);
     }
@@ -291,7 +306,10 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
             lift(&mut s, &c, w_child, w_parent, self.floor);
             bs.set_state(p, s);
         }
-        self.take_out(child);
+        if self.contains(child) {
+            self.take_out(child);
+            bs.left(child);
+        }
         self.raise_floor(bs);
         self.reset_if_empty();
     }

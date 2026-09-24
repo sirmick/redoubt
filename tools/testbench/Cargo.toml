@@ -14,3 +14,8 @@ tar = { version = "0.4", default-features = false }
 toml = "0.8"
 ed25519-compact = { version = "2", default-features = false }
 redoubt-signing = { path = "../../libs/signing" }                        # the bundle signature's preimage
+
+[dev-dependencies]
+# The oracle's own evidence (sched_oracle.rs): traces from the executable model, with its tie
+# rules broken on purpose, must be rejected.
+redoubt-model = { path = "../../model" }
