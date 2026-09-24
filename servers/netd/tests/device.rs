@@ -374,6 +374,57 @@ fn the_receive_loop_resets_and_reports_when_the_interrupt_fails() {
     clean(&nic);
 }
 
+/// A buffer the device completed without an interrupt, before the receive loop first waits (the
+/// first edge lost, as once on QEMU: K5 review 5), is still delivered: the loop drains before it
+/// waits. The interrupt handle then fails at once, so without that drain nothing would arrive.
+#[test]
+fn a_frame_completed_before_the_first_wait_without_an_interrupt_is_delivered() {
+    let nic = FakeNic::new();
+    let Up { mut rx, .. } = up(&nic);
+    nic.complete_silently(1);
+    let sent = frame(70, 9);
+    nic.arrive(&sent);
+    nic.fail_irq_after(0);
+    let (stopped, got, reports) = receive_until_stopped(&nic, &mut rx);
+    assert_eq!(stopped, Stopped::Interrupt(Fault::Kernel));
+    assert_eq!(got, vec![sent]);
+    assert_eq!(reports, 1);
+    clean(&nic);
+}
+
+/// A frame completed without an interrupt while the loop drains after one (its edge lost) is
+/// delivered before the loop waits again: it drains until the used ring is empty.
+#[test]
+fn a_frame_completed_silently_during_a_drain_is_delivered_before_the_next_wait() {
+    let nic = FakeNic::new();
+    let Up { mut rx, .. } = up(&nic);
+    let (first, second) = (frame(64, 1), frame(66, 2));
+    let mut scratch: Frame = [0; SLOT_LEN];
+    let (mut got, mut reports) = (Vec::new(), 0);
+    // The first frame arrives with its interrupt; one wait answers, the next fails.
+    nic.arrive(&first);
+    nic.fail_irq_after(1);
+    let mut injected = false;
+    let stopped = receive(
+        &nic.rx_view(),
+        &mut rx,
+        &mut scratch,
+        |f| {
+            got.push(f.to_vec());
+            if !injected {
+                injected = true;
+                nic.complete_silently(1);
+                nic.arrive(&second);
+            }
+        },
+        || reports += 1,
+    );
+    assert_eq!(stopped, Stopped::Interrupt(Fault::Kernel));
+    assert_eq!(got, vec![first, second], "the silent completion was left behind");
+    assert_eq!(reports, 1);
+    clean(&nic);
+}
+
 /// A lie ends the receive thread the same way: reset, and reported once.
 #[test]
 fn the_receive_loop_resets_and_reports_a_lie() {
