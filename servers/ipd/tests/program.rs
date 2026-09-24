@@ -141,10 +141,12 @@ struct Net {
     peer: Arc<Mutex<Peer>>,
     wire: std::thread::JoinHandle<u32>,
     netd_thread: std::thread::JoinHandle<u32>,
+    /// Every frame ipd transmitted, in order.
+    transmitted: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 
-/// `netd`'s serving side: `info` and `transmit`, each frame handed to the wire.
-fn serve_netd(ep: Endpoint, out: Sender<Vec<u8>>) -> u32 {
+/// `netd`'s serving side: `info` and `transmit`, each frame handed to the wire and kept in `log`.
+fn serve_netd(ep: Endpoint, out: Sender<Vec<u8>>, log: Arc<Mutex<Vec<Vec<u8>>>>) -> u32 {
     loop {
         match ep.receive(FOREVER, 0) {
             Ok(Event::Call(mut request)) => {
@@ -157,6 +159,7 @@ fn serve_netd(ep: Endpoint, out: Sender<Vec<u8>>) -> u32 {
                         netif::Reply::Info(netif::InfoReply { mac, mtu: 1500 }).encode(&mut []).unwrap()
                     }
                     Ok(netif::Message::Transmit(t)) => {
+                        log.lock().unwrap().push(t.frame.to_vec());
                         let _ = out.send(t.frame.to_vec());
                         netif::Reply::Transmit(netif::TransmitReply {}).encode(&mut []).unwrap()
                     }
@@ -229,12 +232,14 @@ fn boot(buckets: u32) -> Net {
     let block = b.finish().unwrap();
     let thread = f.run(ipd, move || ipd_bin::serve(&Startup::parse(&block).unwrap()));
     let (tx, rx) = channel();
-    let netd_thread = f.run(netd, move || serve_netd(Endpoint::from_handle(netd_ep), tx));
+    let transmitted = Arc::new(Mutex::new(Vec::new()));
+    let log = transmitted.clone();
+    let netd_thread = f.run(netd, move || serve_netd(Endpoint::from_handle(netd_ep), tx, log));
     let stop = Arc::new(AtomicBool::new(false));
     let peer = Arc::new(Mutex::new(Peer::new(Instant::now())));
     let (p, s) = (peer.clone(), stop.clone());
     let wire = f.run(netd, move || carry(Endpoint::from_handle(ingress), rx, p, s));
-    Net { ipd, ep, netd, netd_ep, _ingress: ingress, thread, stop, peer, wire, netd_thread }
+    Net { ipd, ep, netd, netd_ep, _ingress: ingress, thread, stop, peer, wire, netd_thread, transmitted }
 }
 
 impl Net {
@@ -508,5 +513,66 @@ fn two_reads_one_byte_one_answer_and_ipd_goes_on() {
     results.sort_unstable();
     assert_eq!(results, vec![1, 100], "one read got the byte, the other timed out");
     wait_until("ipd to hold no call", || f.open_calls(net.ipd) == 0);
+    assert_eq!(net.shut_down(), redoubt_rt::exit::OK);
+}
+
+/// Whether ipd has transmitted a SYN-ACK to `port` (on any address).
+fn syn_ack_to(net: &Net, port: u16) -> bool {
+    net.transmitted.lock().unwrap().iter().any(|frame| {
+        let Ok(eth) = smoltcp::wire::EthernetFrame::new_checked(&frame[..]) else { return false };
+        let Ok(ip) = smoltcp::wire::Ipv4Packet::new_checked(eth.payload()) else { return false };
+        let Ok(tcp) = smoltcp::wire::TcpPacket::new_checked(ip.payload()) else { return false };
+        tcp.syn() && tcp.ack() && tcp.dst_port() == port
+    })
+}
+
+/// A SYN from a LAN host to ipd's port 8000, as `netd` would deliver one off the wire.
+fn forged_syn(from_port: u16) -> Vec<u8> {
+    use smoltcp::wire::{TcpControl, TcpRepr, TcpSeqNumber};
+    let syn = TcpRepr {
+        src_port: from_port,
+        dst_port: 8000,
+        control: TcpControl::Syn,
+        seq_number: TcpSeqNumber(1000),
+        ack_number: None,
+        window_len: 4096,
+        window_scale: None,
+        max_seg_size: None,
+        sack_permitted: false,
+        sack_ranges: [None, None, None],
+        timestamp: None,
+        payload: &[],
+    };
+    redoubt_ipd::fake::segment(u32::from_be_bytes([10, 1, 9, 200]), u32::from_be_bytes([10, 1, 0, 2]), &syn)
+}
+
+/// Only `netd`'s frames reach the stack (QA D3-code-review-5, P2-3 a and b): a frame sent on any
+/// other badge, a client's own root badge included, or on the ingress badge by a labelled
+/// process, is dropped, so no client can forge a SYN (a spoofed inbound connection) or an RST into
+/// another's connection. The same SYN on the true ingress badge, sent last, is answered: the
+/// control, and the proof that the dropped ones had been taken and dropped by then (ipd takes
+/// messages in order, on one thread).
+#[test]
+fn frames_count_only_from_the_unlabelled_ingress_badge() {
+    let net = boot(6);
+    let f = fake();
+    let (pid, conn) = net.client(1, &[], ANY);
+    f.as_process(pid, || {
+        let mut c = Client::new(Endpoint::from_handle(conn), 4).unwrap();
+        let _ = socket(&mut c);
+        let listen = op(net_ctl::Message::Listen(net_ctl::Listen { port: 8000, backlog: 2 }));
+        c.write(2, 0, &listen).unwrap();
+    });
+    // A client forging a frame on its own (unlabelled, scoped) badge.
+    f.as_process(pid, || send_frame(&Endpoint::from_handle(conn), &forged_syn(43001)));
+    // A labelled process holding the ingress badge.
+    let (labelled, ingress) = net.client(0, &[7], INGRESS);
+    f.as_process(labelled, || send_frame(&Endpoint::from_handle(ingress), &forged_syn(43002)));
+    // An unlabelled process holding the ingress badge: netd's position, so this one counts.
+    let (netd_like, ingress) = net.client(0, &[], INGRESS);
+    f.as_process(netd_like, || send_frame(&Endpoint::from_handle(ingress), &forged_syn(43003)));
+    wait_until("ipd to answer the frame on the ingress badge", || syn_ack_to(&net, 43003));
+    assert!(!syn_ack_to(&net, 43001), "a frame on a client's badge reached the stack");
+    assert!(!syn_ack_to(&net, 43002), "a labelled sender's frame on the ingress badge reached the stack");
     assert_eq!(net.shut_down(), redoubt_rt::exit::OK);
 }

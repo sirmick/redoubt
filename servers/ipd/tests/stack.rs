@@ -349,6 +349,41 @@ fn ephemeral_ports_are_unique() {
     assert_eq!(unique.len(), 40, "a port was used twice");
 }
 
+/// A port draw that lands on a port in use is drawn again (QA D3-code-review-5, P2-3 c): with the
+/// generator set back before each connect, every connect's first draw is the same port, and each
+/// still gets a port of its own, until `PORT_TRIES` draws all land on ports in use.
+#[test]
+fn a_port_in_use_is_drawn_again() {
+    use redoubt_ipd::stack::PORT_TRIES;
+    let mut w = World::new(200);
+    let _l = w.peer.listen(7);
+    let who = owner(&caller(5, 1, &[]));
+    let start = w.rng.get();
+    for _ in 0..PORT_TRIES {
+        w.rng.set(start);
+        let n = w.nine.fs.stack.allocate(who, 5, 100).unwrap();
+        w.nine.fs.stack.connect(who, n, &anywhere(), LAN_HOST, 7, w.now).unwrap();
+    }
+    // The 17th connect's 16 draws all land on ports already taken.
+    w.rng.set(start);
+    let n = w.nine.fs.stack.allocate(who, 5, 100).unwrap();
+    assert_eq!(w.nine.fs.stack.connect(who, n, &anywhere(), LAN_HOST, 7, w.now), Err(CtlError::TooMany));
+    w.run_for(500_000, 50_000);
+    let mut ports: Vec<u16> = Vec::new();
+    for f in &w.wire.borrow().sent {
+        let eth = smoltcp::wire::EthernetFrame::new_checked(&f[..]).unwrap();
+        let Ok(ipp) = smoltcp::wire::Ipv4Packet::new_checked(eth.payload()) else { continue };
+        let t = smoltcp::wire::TcpPacket::new_checked(ipp.payload()).unwrap();
+        if t.syn() && !t.ack() {
+            ports.push(t.src_port());
+        }
+    }
+    let mut unique = ports.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!((ports.len(), unique.len()), (PORT_TRIES, PORT_TRIES), "a port was used twice: {ports:?}");
+}
+
 /// `disconnect` aborts every socket of the connection and gives its charges back.
 #[test]
 fn a_disconnect_aborts_and_returns_the_charges() {

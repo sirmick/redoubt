@@ -264,6 +264,8 @@ pub struct World {
     pub now: u64,
     pub seeds: Rc<RefCell<Vec<u64>>>,
     pub fail_random: Rc<Cell<bool>>,
+    /// The generator's state: a test that sets it back replays the same draws.
+    pub rng: Rc<Cell<u64>>,
 }
 
 pub fn selfset() -> SelfSet {
@@ -277,11 +279,8 @@ impl World {
         let wire = Rc::new(RefCell::new(Wire { selfset: Some(selfset()), ..Default::default() }));
         let seeds = Rc::new(RefCell::new(Vec::new()));
         let fail = Rc::new(Cell::new(false));
-        let entropy = Seeds {
-            state: Rc::new(Cell::new(0x9e37_79b9_7f4a_7c15)),
-            seeds: seeds.clone(),
-            fail: fail.clone(),
-        };
+        let rng = Rc::new(Cell::new(0x9e37_79b9_7f4a_7c15));
+        let entropy = Seeds { state: rng.clone(), seeds: seeds.clone(), fail: fail.clone() };
         let net = Net { addr: ADDR, len: LEN, gateway: Some(GATEWAY), selfset: selfset() };
         let mut stack = Stack::new(net, Link::new(Pipe(wire.clone())), entropy, max_sockets);
         let now = 1_000_000;
@@ -303,7 +302,7 @@ impl World {
         fs.now = now;
         let limits = Limits { buckets: 8, in_flight: 5, files: 24, state: 4 };
         let nine = NineServer::new(fs, limits, 0).unwrap();
-        World { nine, wire, peer: Peer::new(now), now, seeds, fail_random: fail }
+        World { nine, wire, peer: Peer::new(now), now, seeds, fail_random: fail, rng }
     }
 
     pub fn stack(&mut self) -> &mut Stack<Pipe, Seeds> { &mut self.nine.fs.stack }
