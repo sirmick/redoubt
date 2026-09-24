@@ -30,10 +30,10 @@ orchestrator transcript or launcher default prompt.
 
 Resolve actual model IDs/thinking choices from `about.caller.config_options` or
 `workspace_get.sessions[member_id].config_options` for the intended provider.
-Register `god` as the owner's most capable available model with high thinking and
-`pleb` as a strong everyday model with high thinking, on whichever provider the owner
-selects. Reviewers normally use pleb with medium thinking; use god for demanding
-defensive/consistency work. If the owner has not named models, ask; do not guess IDs
+Cost matters (owner, 2026-09-23): register `god` as a strong model with high thinking
+(Opus, not the largest model) and `pleb` as an efficient everyday model with medium
+thinking (Sonnet). Implementers and reviewers use pleb; only a trusted-code red team or
+the Architect uses god. Keep `max_active` at 2. If the owner has not named models, ask; do not guess IDs
 or silently substitute. Preserve existing user-selected profiles.
 
 The project root is the orchestrator's current working directory (`.` below); resolve
@@ -45,7 +45,7 @@ the current project first.
 {
   "request_id":"redoubt-setup-1",
   "workspace":{"name":"Redoubt","project_root":"."},
-  "max_active":4,
+  "max_active":2,
   "max_members":16,
   "profiles":{
     "god":{"provider":"<provider>","model":"<verified most capable model ID>","thinking":"high","approval":"auto"},
