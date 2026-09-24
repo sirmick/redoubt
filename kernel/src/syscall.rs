@@ -896,7 +896,7 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                         klog!("PID {} tried to map physical RAM {:08x} by address", pid.get(), base);
                         return Err(redoubt_abi::Error::InvalidArgument);
                     }
-                    if !crate::grants::may_map_device(pid, base, size.get()) {
+                    if !crate::grants::may_map_device(mm, pid, base, size.get()) {
                         klog!("PID {} denied device {:08x}", pid.get(), base);
                         return Err(redoubt_abi::Error::AccessDenied);
                     }

@@ -22,7 +22,9 @@ static IRQ_HANDLERS: KernelCell<[Option<Handler>; MAX_IRQS]> = KernelCell::new([
 
 /// The handler registered for `irq`. Out-of-range numbers simply have no handler: they
 /// come straight from syscall arguments, so they must never index the table.
-fn handler(irq: usize) -> Option<Handler> { IRQ_HANDLERS.with(|handlers| handlers.get(irq).copied().flatten()) }
+fn handler(irq: usize) -> Option<Handler> {
+    IRQ_HANDLERS.with(|handlers| handlers.get(irq).copied().flatten())
+}
 
 /// Dispatch the single interrupt the arch layer claimed. Redirects into the owning
 /// process's handler, or masks the source if nobody owns it (an unexpected IRQ).
@@ -82,7 +84,7 @@ pub fn interrupt_claim(
     }
     // Default deny: a process may claim only interrupts the bundle granted it.
     #[cfg(baremetal)]
-    if !crate::grants::may_claim_irq(pid, irq) {
+    if !crate::mem::MemoryManager::with(|mm| crate::grants::may_claim_irq(mm, pid, irq)) {
         return Err(redoubt_abi::Error::AccessDenied);
     }
     IRQ_HANDLERS.with(|handlers| {

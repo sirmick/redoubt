@@ -119,6 +119,10 @@ fn finish_isr() -> bool {
 
     // Re-enable interrupts now that they're handled
     enable_all_irqs();
+    // Budget deadlines and slice ends waited while the callback ran (`time.rs`): arm for them
+    // now, whichever way it ended (a return, a thread exit or a fault). One already past fires
+    // as soon as the kernel lets interrupts in.
+    crate::time::rearm();
 
     true
 }
@@ -445,7 +449,8 @@ pub extern "C" fn trap_handler(
         }
     }
 
-    let is_kernel_failure = sstatus::read().spp() == sstatus::SPP::Supervisor;
+    // Read at entry, before expiry (which never changes it, but nothing here depends on that).
+    let is_kernel_failure = !from_user;
     // The exception was not handled. We should terminate the program here.
     // For now, let's halt the whole system instead so that it becomes
     // immediately obvious that we screwed up. On hardware this will trigger

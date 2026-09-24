@@ -110,8 +110,9 @@ fn running() -> Option<redoubt_abi::PID> {
 /// borrows the memory manager in phases (`process.rs`, Locks).
 ///
 /// Each item's handling is billed to its own budget (`sched::bill`): a timeout to its thread's,
-/// a deadline to the dying budget (whose debt then moves up). The walks that find them are the
-/// kernel's.
+/// a deadline to the dying budget (whose debt then moves up). So is the walk that found it: a
+/// budget with many timeouts due at once pays for the walk each one costs. The one walk that
+/// finds nothing more is the kernel's, so an entry does at most one walk nobody pays for.
 pub fn expire_due(ss: &mut SystemServices) -> bool {
     let now = now_us();
     let callback = crate::arch::irq::in_callback();
@@ -121,6 +122,7 @@ pub fn expire_due(ss: &mut SystemServices) -> bool {
     let mut destroyed = false;
     let mut next_timeout;
     loop {
+        let started = crate::sched::now_ticks();
         let (timeout, next) = MemoryManager::with_mut(|mm| crate::message::next_timeout(mm, now));
         next_timeout = next;
         let budget = if callback { None } else { due_budget(now) };
@@ -131,7 +133,6 @@ pub fn expire_due(ss: &mut SystemServices) -> bool {
             (t, _) => t.is_some(),
         };
         if let (true, Some((_, pid, tid))) = (timeout_first, timeout) {
-            let started = crate::sched::now_ticks();
             MemoryManager::with_mut(|mm| {
                 crate::message::time_out(ss, mm, pid, tid);
                 if let Some(frame) = mm.budget_of(pid) {
@@ -139,8 +140,12 @@ pub fn expire_due(ss: &mut SystemServices) -> bool {
                     crate::sched::bill(mm, b, crate::sched::now_ticks().saturating_sub(started));
                 }
             });
-        } else if let Some((_, _, frame)) = budget {
-            MemoryManager::with_mut(|mm| mm.mark_dying(frame));
+        } else if let Some((_, id, frame)) = budget {
+            MemoryManager::with_mut(|mm| {
+                let b = crate::handle::BudgetRef { frame, id };
+                crate::sched::bill(mm, b, crate::sched::now_ticks().saturating_sub(started));
+                mm.mark_dying(frame)
+            });
             crate::budget::destroy_subtree(ss, frame, running(), true);
             destroyed = true;
         }
