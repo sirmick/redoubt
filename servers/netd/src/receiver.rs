@@ -1,5 +1,8 @@
-//! The receive thread's loop, here rather than in the program so that host tests drive it: wait
-//! for the interrupt, acknowledge it, drain the receive queue, and hand each frame on.
+//! The receive thread's loop, here rather than in the program so that host tests drive it: drain
+//! the receive queue until it is empty, handing each frame on, then wait for the interrupt, and
+//! again. The interrupt only says when to look: a lost one delays nothing, because the queue is
+//! drained before every wait. (Transmit never waits on an interrupt at all: its queue is marked
+//! `NO_INTERRUPT`, and the serving thread takes completed buffers back on each `transmit`.)
 //!
 //! **Every way out stops the device and says so** (IO-ARCHITECTURE.md, `netd`: either thread
 //! leaving its loop resets). A lie, a fault reading the rings, or the interrupt handle failing all
@@ -33,14 +36,22 @@ pub fn receive<T: Transport>(
     mut forward: impl FnMut(&[u8]),
     report: impl FnOnce(),
 ) -> Stopped {
-    let stopped = loop {
+    let stopped = 'run: loop {
+        // Drain until the used ring is empty before every wait, the first one included (the
+        // device may have completed buffers between DRIVER_OK and it), so an interrupt that was
+        // never delivered cannot leave frames waiting: the last, empty drain is the re-check of
+        // the used index right before blocking (K5 review 5: on QEMU `virt` an interrupt raised
+        // while the IRQ object was masked was lost once, on a driver's first receive).
+        loop {
+            match virtio::ack_interrupt(t).and_then(|()| rx.drain(t, scratch, &mut forward)) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(error) => break 'run Stopped::Device(error),
+            }
+        }
         match t.wait_irq(FOREVER) {
             Ok(()) | Err(Fault::Timeout) => {}
             Err(fault) => break Stopped::Interrupt(fault),
-        }
-        let drained = virtio::ack_interrupt(t).and_then(|()| rx.drain(t, scratch, &mut forward));
-        if let Err(error) = drained {
-            break Stopped::Device(error);
         }
     };
     // A device that does not reset is still reported: the serving thread's own reset is tried

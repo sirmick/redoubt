@@ -144,6 +144,8 @@ pub struct FakeNic {
     overread: Cell<u64>,
     /// Waits for the interrupt left before the handle fails ([`FakeNic::fail_irq_after`]).
     irq_waits_left: Cell<Option<u64>>,
+    /// Receive completions left that raise no interrupt ([`FakeNic::complete_silently`]).
+    silent: Cell<u64>,
 }
 
 impl Default for FakeNic {
@@ -165,6 +167,7 @@ impl FakeNic {
             wire: RefCell::new(Vec::new()),
             overread: Cell::new(0),
             irq_waits_left: Cell::new(None),
+            silent: Cell::new(0),
         }
     }
 
@@ -198,6 +201,10 @@ impl FakeNic {
     /// After `waits` more waits, waiting for the interrupt fails as the kernel's does when the
     /// handle has gone ([`Fault::Kernel`]), and goes on failing.
     pub fn fail_irq_after(&self, waits: u64) { self.irq_waits_left.set(Some(waits)); }
+
+    /// The next `completions` receive completions raise no interrupt: an interrupt lost on the
+    /// way, as one raised while the IRQ object was masked once was on QEMU (K5 review 5).
+    pub fn complete_silently(&self, completions: u64) { self.silent.set(completions); }
 
     /// Advances the device's clock.
     pub fn advance(&self, us: u64) { self.now.set(self.now.get().saturating_add(us)); }
@@ -394,7 +401,10 @@ impl FakeNic {
             if policy.keep_writing {
                 self.poke(Region::Rx, off, &[0xa5; 64]);
             }
-            self.irq.set(self.irq.get() | 1);
+            match self.silent.get() {
+                0 => self.irq.set(self.irq.get() | 1),
+                n => self.silent.set(n - 1),
+            }
         }
     }
 
@@ -759,6 +769,26 @@ pub fn exercise(bytes: &mut impl FnMut() -> u8) -> FakeNic {
                 }
                 nic.advance(u64::from(bytes()) * 100_000);
             }
+            // Then the receive thread's own loop over what is left, with some interrupts lost
+            // (a completion that raises none), until its interrupt handle fails.
+            nic.complete_silently(u64::from(bytes() % 4));
+            for _ in 0..bytes() % 4 {
+                let frame: Vec<u8> = (0..usize::from(bytes()) * 8).map(|i| i as u8).collect();
+                nic.arrive(&frame);
+            }
+            nic.fail_irq_after(u64::from(bytes() % 4));
+            let _ = crate::receiver::receive(
+                &rx_view,
+                &mut rx,
+                &mut scratch,
+                |f| {
+                    assert!(
+                        (virtio::MIN_FRAME..=virtio::MAX_FRAME).contains(&f.len()),
+                        "a bad frame delivered"
+                    )
+                },
+                || {},
+            );
         }
     }
     nic
