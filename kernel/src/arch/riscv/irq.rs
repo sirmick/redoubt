@@ -41,8 +41,8 @@ fn return_registers(args: &[usize; 8], context: &Thread) -> ! {
 #[cfg_attr(feature = "plic", path = "intc_plic.rs")]
 mod intc;
 
-/// The hart timer backend, for platforms where the timer is a CPU resource rather than
-/// a device that userspace can own. See `docs/TIMER.md`.
+/// The hart timer backend. The timer is the kernel's (`crate::time`), never a device userspace
+/// owns.
 #[cfg_attr(feature = "sbi", path = "timer_sbi.rs")]
 pub mod timer;
 
@@ -53,30 +53,20 @@ pub fn init() {
     timer::init();
 }
 
-pub fn enable_irq(irq_no: usize) {
-    // The timer is armed by setting a deadline, not by claiming its interrupt.
-    if !timer::owns(irq_no) {
-        intc::enable_irq(irq_no);
-    }
-}
+pub fn enable_irq(irq_no: usize) { intc::enable_irq(irq_no); }
 
-pub fn disable_irq(irq_no: usize) {
-    if timer::owns(irq_no) {
-        timer::mask();
-    } else {
-        intc::disable_irq(irq_no);
-    }
-}
+pub fn disable_irq(irq_no: usize) { intc::disable_irq(irq_no); }
 
 /// Hold off every interrupt source while a userspace handler runs; Redoubt does not nest them.
-pub fn disable_all_irqs() {
-    intc::disable_all_irqs();
-    timer::mask();
-}
+/// The kernel's timer is not a source here: timeouts expire during a callback too.
+pub fn disable_all_irqs() { intc::disable_all_irqs(); }
 
-pub fn enable_all_irqs() {
-    intc::enable_all_irqs();
-    timer::unmask();
+pub fn enable_all_irqs() { intc::enable_all_irqs(); }
+
+/// Resume whatever is current now: after the entering thread's process died at this entry, or
+/// once a trap is fully handled.
+fn resume_current() -> ! {
+    ArchProcess::with_current_mut(|p| crate::arch::syscall::resume(current_pid().get() == 1, p.current_thread()))
 }
 
 // Indicate when we handle an IRQ
@@ -193,6 +183,19 @@ pub extern "C" fn trap_handler(
     let epc = sepc::read();
 
     let ex = RiscvException::from_regs(sc.bits(), epc, stval::read());
+
+    // Every entry but the kernel's own `SwitchTo` answers the deadlines that have passed first
+    // (`time.rs`), so a deadline beats anything that enters after it. If that ended the entering
+    // process (a budget deadline), there is nothing of it left to handle: run what is current.
+    if !matches!(ex, RiscvException::CallFromSMode(..)) {
+        crate::time::expire_at_entry();
+        let from_user = sstatus::read().spp() == sstatus::SPP::User;
+        if from_user
+            && (current_pid() != pid || SystemServices::with(|ss| ss.get_process(pid).map_or(true, |p| p.free())))
+        {
+            resume_current();
+        }
+    }
     #[cfg(any(feature = "debug-print"))] // , feature = "debug-swap-verbose"
     {
         let pid = current_pid();
@@ -261,20 +264,15 @@ pub extern "C" fn trap_handler(
                 }
             });
         }
+        // The kernel's timer: what was due was answered at this entry; arm for what is next.
+        RiscvException::SupervisorTimerInterrupt(_) => {
+            crate::time::on_interrupt();
+            resume_current();
+        }
         // Hardware interrupt
-        RiscvException::UserExternalInterrupt(_)
-        | RiscvException::SupervisorExternalInterrupt(_)
-        | RiscvException::SupervisorTimerInterrupt(_) => {
-            // The controller (or the timer) claims one interrupt; `None` is a spurious trap
-            // with nothing pending, which we ignore and just resume from.
-            #[cfg(feature = "sbi")]
-            let pending = if let RiscvException::SupervisorTimerInterrupt(_) = ex {
-                timer::on_interrupt();
-                Some(timer::IRQ)
-            } else {
-                intc::pending()
-            };
-            #[cfg(not(feature = "sbi"))]
+        RiscvException::UserExternalInterrupt(_) | RiscvException::SupervisorExternalInterrupt(_) => {
+            // The controller claims one interrupt; `None` is a spurious trap with nothing
+            // pending, which we ignore and just resume from.
             let pending = intc::pending();
 
             if let Some(irq) = pending {

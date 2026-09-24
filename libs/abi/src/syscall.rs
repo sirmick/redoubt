@@ -1208,8 +1208,8 @@ impl SysCall {
                 | SysCall::ReturnScalar2(_, _, _)
                 | SysCall::ReturnScalar1(_, _)
                 | SysCall::ReturnMemory(_, _, _, _)
-                // Platform calls never block. A timer interrupt handler needs one to
-                // re-arm the hart timer (see `arch::platform_call`).
+                // Platform calls never block (there are none left: the hart timer is the
+                // kernel's).
                 | SysCall::PlatformSpecific(_, _, _, _, _, _, _)
         )
     }

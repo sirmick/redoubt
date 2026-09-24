@@ -30,9 +30,9 @@
 //! once by the dispatcher (`redoubt.rs`) in that order; nothing here borrows either again.
 //!
 //! # Timeouts
-//! A blocking call records its deadline, and [`expire`] answers every thread whose deadline has
-//! passed. WP-K5 owns the kernel timer; until it arms one, `redoubt.rs` expires deadlines at
-//! every Redoubt system call, so a timeout lands as soon as anything else enters the kernel.
+//! A blocking call records its deadline (`mark`, which also makes sure the kernel's timer comes by
+//! then), and [`expire_due`] answers every thread whose deadline has passed, earliest first. The
+//! timer and when expiry runs are `time.rs`'s.
 
 use core::cmp::Ordering;
 use core::num::{NonZeroU64, NonZeroUsize};
@@ -494,8 +494,12 @@ fn answer_record<const N: usize>(
 /// that follows may answer it at once, and `settle` then never takes it off the ready list.
 fn mark(mm: &MemoryManager, pid: PID, tid: TID, wait: Wait, timeout: u64) {
     // Timeouts are relative microseconds, added with saturation, so `FOREVER` never expires.
+    let deadline = crate::time::now_us().saturating_add(timeout);
     set_tword(mm, pid, tid, W_WAIT, wait as u64);
-    set_tword(mm, pid, tid, W_DEADLINE, crate::arch::irq::timer::now_us().saturating_add(timeout));
+    set_tword(mm, pid, tid, W_DEADLINE, deadline);
+    if deadline != u64::MAX {
+        crate::time::note_timeout(deadline);
+    }
 }
 
 /// What a blocking call does once delivery has had its chance: resume with the answer it already
@@ -512,7 +516,7 @@ fn settle(
         // Answered already: its registers hold the result.
         return Ok(None);
     }
-    if s.deadline <= crate::arch::irq::timer::now_us() {
+    if s.deadline <= crate::time::now_us() {
         // A deadline that has already passed (a `timeout` of 0 is a poll): never block on it.
         fail_wait(ss, mm, pid, tid, Error::Timeout);
         // fail_wait published the full outcome, including a lend consumed after receipt.
@@ -1545,31 +1549,33 @@ fn fail_all(
     }
 }
 
-/// I13: every blocking call returns by its timeout. Answer every deadline that has passed, and
-/// say whether any finite one is still waiting.
+/// I13: every blocking call returns by its timeout. Answer every thread whose deadline is at or
+/// before `now`, earliest first (at an equal instant, in (pid, tid) order, the walk's order), each
+/// with `Timeout`; return the earliest deadline still to come (`u64::MAX` for none).
 ///
-/// WP-K5 owns the kernel timer. Until it arms one, this runs at every Redoubt system call and in
-/// the scheduler's idle branch, where it also keeps the hart out of `wfi` while a deadline is
-/// pending (`main.rs`): polling is not free, but nothing can sleep through a timeout.
-pub fn expire(ss: &mut SystemServices, mm: &mut MemoryManager) -> bool {
-    let mut answered = false;
+/// Answering one can change others (a `pump` delivers, a server takes calls again), so each is
+/// found afresh; a thread answered is no longer waiting and is not found again.
+pub fn expire_due(ss: &mut SystemServices, mm: &mut MemoryManager, now: u64) -> u64 {
     loop {
-        let now = crate::arch::irq::timer::now_us();
-        let due = find_thread(mm, |mm, pid, tid| {
+        let mut due: Option<(u64, PID, TID)> = None;
+        let mut next = u64::MAX;
+        find_thread(mm, |mm, pid, tid| {
             let s = slot(mm, pid, tid);
-            (s.wait != Wait::None && s.deadline <= now).then_some((pid, tid))
+            if s.wait == Wait::None || s.deadline == u64::MAX {
+                return None::<()>;
+            }
+            if s.deadline <= now {
+                // Walk order is (pid, tid) ascending, so the first at a deadline wins ties.
+                if due.is_none_or(|(d, _, _)| s.deadline < d) {
+                    due = Some((s.deadline, pid, tid));
+                }
+            } else {
+                next = next.min(s.deadline);
+            }
+            None
         });
-        let Some((pid, tid)) = due else {
-            // A thread this answered is runnable again, so the caller must look for work
-            // before it idles; so must a finite deadline that has not passed yet.
-            let pending = find_thread(mm, |mm, pid, tid| {
-                let s = slot(mm, pid, tid);
-                (s.wait != Wait::None && s.deadline != u64::MAX).then_some(())
-            });
-            return answered || pending.is_some();
-        };
+        let Some((_, pid, tid)) = due else { return next };
         fail_wait(ss, mm, pid, tid, Error::Timeout);
-        answered = true;
     }
 }
 

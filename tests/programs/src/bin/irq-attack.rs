@@ -94,6 +94,16 @@ pub extern "C" fn _start() -> ! {
     let verdict = if survived { "ok" } else { "FAIL" };
     log!(logger, "[irq-attack] {}: every legacy claim and free refused", verdict);
 
+    // The hart timer is the kernel's (WP-K5): interrupt 0 does not exist, whatever grants say,
+    // and the platform calls that used to program the timer are gone.
+    let zero = redoubt_abi::claim_interrupt(0, never_called, core::ptr::null_mut());
+    let timer_calls =
+        [1, 2].map(|op| redoubt_abi::rsyscall(SysCall::PlatformSpecific(op, 0, 0, 0, 0, 0, 0)).err());
+    let ok = zero == Err(redoubt_abi::Error::InterruptNotFound)
+        && timer_calls.iter().all(|e| *e == Some(redoubt_abi::Error::UnhandledSyscall));
+    log!(logger, "[irq-attack] {}: interrupt 0 -> {:?}, the old timer calls -> {:?}",
+        if ok { "ok" } else { "FAIL" }, zero, timer_calls);
+
     // The verdict is the victim's, not ours (docs/testbench.md, "Writing an attack case").
     log!(logger, "[irq-attack] attempts done");
     test_programs::park()

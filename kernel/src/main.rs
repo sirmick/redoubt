@@ -39,6 +39,8 @@ mod redoubt;
 mod server;
 mod services;
 mod syscall;
+#[cfg(baremetal)]
+mod time;
 
 use redoubt_abi::*;
 use services::SystemServices;
@@ -129,6 +131,11 @@ pub extern "C" fn kmain() {
     }
 
     loop {
+        // Deadlines first (`time.rs`): answering them makes threads runnable. This is the kernel's
+        // own loop, not an entry; nothing enters between here and the switch below.
+        #[cfg(baremetal)]
+        SystemServices::with_mut(|ss| mem::MemoryManager::with_mut(|mm| crate::time::expire_due(ss, mm)));
+
         #[cfg(feature = "debug-print")]
         let last_pid = pid;
         pid = next_pid_to_run(pid);
@@ -141,18 +148,13 @@ pub extern "C" fn kmain() {
                 use arch::syscall::kernel_syscall;
                 #[cfg(not(all(baremetal, any(target_arch = "riscv32", target_arch = "riscv64"))))]
                 use redoubt_abi::rsyscall as kernel_syscall;
-                kernel_syscall(redoubt_abi::SysCall::SwitchTo(pid, 0)).expect("couldn't switch to pid");
-            }
-            None => {
-                // I13, until WP-K5 arms the timer: with nothing runnable, the only thing that
-                // can make progress is a Redoubt deadline passing, so answer the ones that have
-                // and keep polling while any is still waiting, rather than sleeping through it.
-                if SystemServices::with_mut(|ss| {
-                    mem::MemoryManager::with_mut(|mm| crate::message::expire(ss, mm))
-                }) {
+                // A process that cannot be switched to (it died since it was picked) is simply
+                // not run: pick again.
+                if kernel_syscall(redoubt_abi::SysCall::SwitchTo(pid, 0)).is_err() {
                     continue;
                 }
-
+            }
+            None => {
                 #[cfg(feature = "debug-print")]
                 klog!("NO RUNNABLE TASKS FOUND, entering idle state");
 
@@ -165,7 +167,9 @@ pub extern "C" fn kmain() {
                     }
                 });
 
-                // Special case for testing: idle can return `false` to indicate exit
+                // Sleep until an interrupt: a device, or the timer, which is always armed for the
+                // next deadline (`time.rs`). A deadline that passed since the check above is
+                // already pending, so `wfi` returns at once.
                 if !arch::idle() {
                     return;
                 }

@@ -120,6 +120,13 @@ pub struct Boot {
     /// Extra kernel features, e.g. `debug-print`.
     #[serde(default)]
     pub kernel_features: Vec<String>,
+    /// Run the guest in virtual time: QEMU `-icount <this>` (e.g. `shift=3,sleep=off`, a fixed
+    /// instruction rate that skips idle time to the next timer deadline), with the RTC on the
+    /// same virtual clock (`-rtc clock=vm`). Timing a case asserts is then instruction time, the
+    /// same on any host; without it, host load shows up as guest latency. None: real time, as
+    /// every case ran before.
+    #[serde(default)]
+    pub icount: Option<String>,
     /// Build the kernel and the loader with debug assertions on, so `core`'s precondition
     /// checks on raw-pointer calls and every `debug_assert!` run (a failure is a `PANIC`).
     #[serde(default)]

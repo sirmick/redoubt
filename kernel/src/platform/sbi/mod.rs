@@ -39,21 +39,14 @@ pub fn reset(reboot: bool) {
     }
 }
 
-/// `SysCall::PlatformSpecific` for SBI platforms. Numbers are in `redoubt_abi::arch::platform_call`.
-pub fn platform_call(pid: redoubt_abi::PID, op: usize, a2: usize, _a3: usize) -> Result<redoubt_abi::Result, redoubt_abi::Error> {
-    use redoubt_abi::arch::platform_call::*;
-
-    use crate::arch::irq::timer;
-    match op {
-        TIMER_TIMEBASE => Ok(redoubt_abi::Result::Scalar1(timer::timebase() as usize)),
-        TIMER_SET_DEADLINE => {
-            // The hart timer belongs to whoever claimed its interrupt.
-            if crate::irq::interrupt_owner(timer::IRQ) != Some(pid) {
-                return Err(redoubt_abi::Error::AccessDenied);
-            }
-            timer::set_deadline(a2 as u64);
-            Ok(redoubt_abi::Result::Ok)
-        }
-        _ => Err(redoubt_abi::Error::UnhandledSyscall),
-    }
+/// `SysCall::PlatformSpecific` for SBI platforms. There are no platform calls any more: the hart
+/// timer, whose two calls these were, is the kernel's (`time.rs`). The legacy call itself goes
+/// with WP-K6.
+pub fn platform_call(
+    _pid: redoubt_abi::PID,
+    _op: usize,
+    _a2: usize,
+    _a3: usize,
+) -> Result<redoubt_abi::Result, redoubt_abi::Error> {
+    Err(redoubt_abi::Error::UnhandledSyscall)
 }
