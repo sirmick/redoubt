@@ -1,0 +1,16 @@
+[package]
+name = "redoubt-vendor-check"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Host-only checks that the vendored crates are the published ones and the ones that build"
+publish = false
+
+# The same smoltcp, with exactly ipd's features (answer 174), so the lockfile resolves the
+# vendored stack here too and `tests/vendored.rs` can prove the path copies are used.
+[dependencies]
+smoltcp = { version = "=0.14.0", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp"] }
+
+[dev-dependencies]
+# SHA-256, already in the tree and tested against its vectors (keyd).
+redoubt-keyd = { path = "../../servers/keyd" }

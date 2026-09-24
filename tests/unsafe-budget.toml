@@ -9,6 +9,8 @@ kind = "unsafe-budget"
 # Only code that runs on rv64 is counted; see TENETS.md for the baseline.
 # G1: every on-target source file is listed. A file left out of every budget is not counted
 # at all, and the checker cannot notice; add new sources to a budget when they land.
+# vendor/ (smoltcp and its dependencies for ipd, getrandom) is third-party code pinned by
+# checksum and outside the ratchet (vendor/README.md), like other crates.io dependencies.
 
 [[budget]]
 name = "paging crate (Sv32/Sv39 page tables)"

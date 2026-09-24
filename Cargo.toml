@@ -26,6 +26,7 @@ members = [
   "stub",
   "tests/programs",
   "tools/testbench",
+  "tools/vendor-check",
   "vendor/getrandom",
 ]
 resolver = "2"
@@ -51,6 +52,16 @@ exclude = [
   # beamlet, the BEAM VM for the OTP userland: its own workspace (host tools and `no_std`
   # target crates, its own test toolchain), built by its own `cargo` invocations.
   "userland/otp",
+  # ipd's TCP/IP stack and its dependencies, vendored unmodified from crates.io (vendor/README.md).
+  # They are built through the [patch.crates-io] paths below but are not workspace members, so
+  # their dev-dependencies never enter Cargo.lock and `cargo test --workspace` never builds their
+  # default (std, libc) feature sets.
+  "vendor/smoltcp",
+  "vendor/managed",
+  "vendor/heapless",
+  "vendor/hash32",
+  "vendor/stable_deref_trait",
+  "vendor/byteorder",
 ]
 
 [profile.release]
@@ -74,6 +85,20 @@ overflow-checks = true
 [patch.crates-io]
 [patch.crates-io.getrandom]
 path = "vendor/getrandom"
+# ipd's stack (answer 174): the vendored copies are the ones that build; tools/vendor-check
+# proves it and that every vendored byte is the published one.
+[patch.crates-io.smoltcp]
+path = "vendor/smoltcp"
+[patch.crates-io.managed]
+path = "vendor/managed"
+[patch.crates-io.heapless]
+path = "vendor/heapless"
+[patch.crates-io.hash32]
+path = "vendor/hash32"
+[patch.crates-io.stable_deref_trait]
+path = "vendor/stable_deref_trait"
+[patch.crates-io.byteorder]
+path = "vendor/byteorder"
 
 # Arithmetic overflow remains an invariant failure in the executable model.
 [profile.release.package.redoubt-model]
