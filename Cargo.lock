@@ -584,6 +584,13 @@ name = "redoubt-signing"
 version = "0.1.0"
 
 [[package]]
+name = "redoubt-stride"
+version = "0.1.0"
+dependencies = [
+ "redoubt-model",
+]
+
+[[package]]
 name = "redoubt-sys"
 version = "0.1.0"
 
