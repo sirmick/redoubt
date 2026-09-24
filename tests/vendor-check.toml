@@ -1,3 +1,3 @@
-description = "The vendored crates (vendor/README.md, answer 174) are byte for byte what crates.io published, nothing added or removed, and Cargo.lock builds them from vendor/, with no registry copy; cfg-if and bitflags, left to the lockfile, are pinned by version and checksum"
+description = "The vendored crates (vendor/README.md, answer 174) are byte for byte what vendor/SHA256SUMS records (integrity; provenance is tools/vendor-check/provenance.sh, run in review), nothing added or removed, and Cargo.lock and cargo metadata build them from vendor/, with no registry copy; cfg-if and bitflags, left to the lockfile, are pinned by version and checksum"
 kind = "host-tests"
 packages = ["redoubt-vendor-check"]

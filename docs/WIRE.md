@@ -55,7 +55,9 @@ reserves 1-15 there (above):
   needs a `send` (a transfer) heads its table `| Opcode | Kind | Message | Fields | Reply |` and
   gives each row `call` or `send`. A `send` has no reply (`-`): it is never an open call, so
   nothing can answer it. A table without the column is all calls. `ipd`'s ingress `frame` is the
-  first `send` (IO-ARCHITECTURE.md, Networking; answer 174).
+  first `send` (IO-ARCHITECTURE.md, Networking; answer 174). The generator keeps its tables
+  uniform, so a `send` row still gets an empty reply type and a `REPLIES` layout; no receiver
+  encodes one, because there is no open call to answer (`is_send()` says which rows these are).
 - **Errors.** Each protocol has an error table, marked by a line `<!-- wire-errors: NAME -->` and
   headed `| Code | Error |`: codes unique, each with a name. **Code 1 is `Malformed` in every
   protocol**, and in a 9P call's reply status: a request that does not decode (unknown opcode, wrong
