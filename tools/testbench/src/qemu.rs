@@ -125,10 +125,19 @@ fn free_ports(count: usize) -> Result<Vec<u16>> {
     Ok(listeners.iter().map(|l| l.local_addr().map(|a| a.port())).collect::<std::io::Result<Vec<_>>>()?)
 }
 
+/// QEMU presents virtio-mmio devices in the legacy (version 1) register layout unless told
+/// otherwise (`force-legacy` defaults to on). Our drivers speak only version 2, virtio 1.x's
+/// layout (`blkd`, `netd`: IO-ARCHITECTURE.md), and carry no second layout for a device only
+/// QEMU presents, so every case with a virtio device asks for the modern one.
+pub const MODERN_VIRTIO: [&str; 2] = ["-global", "virtio-mmio.force-legacy=false"];
+
 /// QEMU arguments for a case's virtio devices, for one boot: creates the disk afresh at
 /// `disk`, so no boot sees another's writes, and picks free host ports for the forwards.
 pub fn virtio_devices(boot: &Boot, disk: &Path) -> Result<(Vec<String>, Vec<Forward>)> {
     let mut args = Vec::new();
+    if boot.disk.is_some() || boot.net.is_some() {
+        args.extend(MODERN_VIRTIO.iter().map(|a| a.to_string()));
+    }
     if let Some(spec) = &boot.disk {
         std::fs::File::create(disk)?.set_len(spec.size_kib * 1024)?;
         // QEMU's option syntax separates with commas; a comma inside a value is doubled.
@@ -316,4 +325,40 @@ fn run_sessions(
         let session_failure = sessions.join().expect("session runner panicked")?;
         Ok(console?.or(session_failure))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn boot(devices: &str) -> Boot {
+        toml::from_str(&format!("programs = []\nexpect = []\n{devices}")).expect("a test case's TOML")
+    }
+
+    fn args(devices: &str) -> Vec<String> {
+        let disk = std::env::temp_dir().join(format!("testbench-qemu-test-{}.img", std::process::id()));
+        let (args, _) = virtio_devices(&boot(devices), &disk).expect("device arguments");
+        std::fs::remove_file(&disk).ok();
+        args
+    }
+
+    fn modern(args: &[String]) -> usize { args.windows(2).filter(|w| w == &MODERN_VIRTIO).count() }
+
+    /// Every case with a virtio device gets the version 2 transport, once; a case with none
+    /// gets no device arguments at all.
+    #[test]
+    fn virtio_devices_are_modern() {
+        assert_eq!(modern(&args("[net]\n")), 1);
+        assert_eq!(modern(&args("[disk]\nsize_kib = 64\n")), 1);
+        assert_eq!(modern(&args("[net]\n[disk]\nsize_kib = 64\n")), 1);
+        assert!(args("").is_empty());
+    }
+
+    /// The guest reaches nothing outside QEMU: every network is `restrict=on`.
+    #[test]
+    fn every_network_is_restricted() {
+        let args = args("[net]\nforward = [22]\n");
+        let netdev = args.iter().find(|a| a.starts_with("user,")).expect("a user-mode netdev");
+        assert!(netdev.split(',').any(|o| o == "restrict=on"), "{netdev}");
+    }
 }
