@@ -7,6 +7,7 @@ what comes next: `docs/` (start with its `README.md` and `STATUS.md`).
 | ----------------- | ----------------------------------------------------------------------------- |
 | `libs/paging/`    | Typed Sv32/Sv39 page tables used by the loader and kernel |
 | `tests/programs/` | `no_std` programs that run inside Redoubt, for example `log-server`, `rng-test`, `timer-test`, `mem-attack` |
+| `tests/net/`      | The D3 rig: boots the real `netd` and `ipd` through the loader stub, with clients and attackers (`client/`) |
 | `tools/testbench/` | Host tool: builds, injects programs, boots QEMU, asserts on the console and over SSH |
 | `tests/`          | Test cases for the bench, one TOML file each (`data/`: files they read; `keys/`: SSH test keys) |
 
@@ -220,10 +221,56 @@ host_key = "ssh-ed25519 AAAA..."   # optional: the only SSH host key sessions ac
 ```
 
 The guest reaches nothing outside QEMU (`restrict=on`): there is no outside peer, only forwarded
-connections coming in. A case that needs one must add it deliberately. Each boot gets its own
+connections coming in. A case that needs one must add it deliberately (below). Each boot gets its own
 host ports, chosen by the OS, so benches running side by side do not collide; another program
 could still take a port in the moment before QEMU binds it, and QEMU then fails to start, which
 fails the case rather than hiding.
+
+### Peers, dials and the capture (answer 174)
+
+A network case can give the guest hosts to reach and judge what it sent, all from outside the
+guest (`tools/testbench/src/peer.rs`; the peers and the capture are judged in the bench's
+post-check, once the boot has passed):
+
+```toml
+[net]
+forward = [8000]
+self_forbidden = ["10.0.2.0/24", "127.0.0.0/8"]   # the guest must never send a SYN to these
+truncate_capture = 0         # optional, self-checks only: cut the capture before judging it
+
+[[net.peer]]                 # a host the guest may connect to, and exactly how often it must
+addr = "10.0.9.100:7"        #   inside 10.0.0.0/16, outside slirp's own 10.0.2.0/24
+connections = 1
+
+[[net.dial]]                 # the bench connects in through a forwarded port while the guest
+port = 8000                  #   boots, retrying until the case's deadline, and needs `expect`
+send = "hello\n"             #   back on the same connection
+expect = "hello\n"
+```
+
+- **Peers** are `guestfwd`s to a program: for each connection the guest makes to a peer, libslirp
+  starts `testbench peer-helper` (a hidden subcommand of the bench's own binary) on it, which
+  records the connection as a file (created exclusively, before a byte is echoed) and then echoes.
+  After the boot every peer's count must equal its `connections`. There is no host listener.
+- **The network.** `guestfwd` takes only addresses inside slirp's network, so a case with peers
+  widens it to `net=10.0.0.0/16,host=10.0.2.2,dns=10.0.2.3,dhcpstart=10.0.2.15`: slirp's host,
+  resolver and the guest's address stay where they are, and the peers sit outside the /24 the
+  guest is configured for, reached through its gateway. `restrict=on` still holds (a unit test
+  checks every `[net]` case), so nothing else in the /16 reaches the host. A case without peers
+  keeps slirp's default /24, as the milestone manifest does.
+- **The capture.** A case with peers also gets `-object filter-dump`: every frame on the guest's
+  card, before slirp, in `target/testbench/<case>-<target>-smp<N>.pcap` (the records are beside it
+  in `.peers/`). It is read fail closed: missing, empty, cut or malformed fails the case. A frame
+  whose Ethernet source is not slirp's (`52:55:0a:00:02:02`) is the guest's, and the guest may send
+  only ARP (requests for the gateway alone) and IPv4 TCP, never a fragment and never a SYN to a
+  `self_forbidden` prefix. Each peer's count must also match the distinct SYNs to it in the
+  capture, so a connection whose helper never ran is still counted. A case with peers needs one
+  that expects a connection: its SYN in the capture is what shows the capture was live.
+
+Every verdict comes from the bench: the guest's own claims about the network are not trusted.
+The self-checks are `bench-net-peer-twice` (two connections where one is expected),
+`bench-net-peer-count` (a peer never reached) and `bench-net-peer-pcap-empty` (a capture cut to
+nothing), each a `must_fail` quoting the bench's reason.
 
 ## SSH sessions
 

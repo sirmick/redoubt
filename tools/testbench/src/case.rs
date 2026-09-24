@@ -187,6 +187,39 @@ pub struct Net {
     /// The guest's SSH host key, as an OpenSSH public key line. If set, sessions refuse any
     /// other; if not, they accept whatever key the guest presents.
     pub host_key: Option<String>,
+    /// Hosts the guest may connect to, each counting its connections (`peer.rs`). A case with
+    /// peers also gets the wider virtual network and a capture of the guest's frames.
+    #[serde(default)]
+    pub peer: Vec<Peer>,
+    /// Connections the bench makes into the guest's forwarded ports while it boots (`peer.rs`).
+    #[serde(default)]
+    pub dial: Vec<Dial>,
+    /// Prefixes (`A.B.C.D/len`) the guest must never send a SYN to: the box's own addresses.
+    #[serde(default)]
+    pub self_forbidden: Vec<String>,
+    /// Cut the capture to this many bytes before judging it: self-checks that a cut or empty
+    /// capture fails.
+    pub truncate_capture: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Peer {
+    /// `A.B.C.D:PORT`, inside 10.0.0.0/16 and outside slirp's own 10.0.2.0/24.
+    pub addr: String,
+    /// Exactly how many connections the guest must make to it.
+    pub connections: u32,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Dial {
+    /// The guest port, one of `forward`.
+    pub port: u16,
+    /// What the bench sends once connected.
+    pub send: String,
+    /// What must come back on the same connection.
+    pub expect: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -323,12 +356,39 @@ impl Case {
                 if !boot.session.is_empty() {
                     ensure!(boot.net.as_ref().is_some_and(|n| n.forward.contains(&22)), "sessions need net.forward = [22]");
                 }
+                if let Some(net) = &boot.net {
+                    check_net(net)?;
+                    // The post-check judges one boot's peer files.
+                    ensure!(net.peer.is_empty() || boot.distinct_across_boots.is_empty(), "peers need one boot");
+                }
                 check_sessions(&boot.session)
             }
             Kind::SshLoopback(loopback) => check_sessions(&loopback.session),
             _ => Ok(()),
         }
     }
+}
+
+/// Peers are distinct and well-formed, and a case with peers has a positive control: one peer
+/// the guest must reach, whose SYN proves the capture was live. Dials go to forwarded ports.
+fn check_net(net: &Net) -> Result<()> {
+    let mut seen = HashSet::new();
+    for peer in &net.peer {
+        ensure!(seen.insert(crate::peer::parse_peer(&peer.addr)?), "peer {} given twice", peer.addr);
+    }
+    if !net.peer.is_empty() {
+        ensure!(net.peer.iter().any(|p| p.connections > 0), "peers need one with connections > 0");
+    }
+    ensure!(net.self_forbidden.is_empty() || !net.peer.is_empty(), "self_forbidden needs peers (the capture)");
+    ensure!(net.truncate_capture.is_none() || !net.peer.is_empty(), "truncate_capture needs peers");
+    for prefix in &net.self_forbidden {
+        crate::peer::parse_prefix(prefix)?;
+    }
+    for dial in &net.dial {
+        ensure!(net.forward.contains(&dial.port), "dial to {}: not in net.forward", dial.port);
+        ensure!(!dial.expect.is_empty(), "dial to {}: expect nothing", dial.port);
+    }
+    Ok(())
 }
 
 /// Session users name log files, so they are unique and plain; every mark waited for is set.

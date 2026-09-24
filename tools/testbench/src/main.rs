@@ -7,6 +7,7 @@
 mod budget;
 mod build;
 mod case;
+mod peer;
 mod qemu;
 mod sched_oracle;
 mod ssh;
@@ -69,6 +70,10 @@ enum Outcome {
 }
 
 fn main() -> Result<()> {
+    // Not a command for people: what libslirp runs for each connection to a peer (`peer.rs`).
+    if std::env::args().nth(1).as_deref() == Some(peer::HELPER) {
+        peer::helper(std::env::args().skip(2));
+    }
     let args = Args::parse();
     let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize()?;
     let logs = workspace.join("target/testbench");
@@ -329,7 +334,8 @@ fn run_case(
         let log = logs.join(format!("{}-{}-smp{}.log", case.name, target.name, smp));
         // Every boot gets fresh devices: a new disk, new host ports.
         let boot_once = |log: &Path| -> Result<Verdict> {
-            let (mut devices, forwards) = qemu::virtio_devices(boot, &log.with_extension("img"))?;
+            let disk = log.with_extension("img");
+            let (mut devices, forwards) = qemu::virtio_devices(boot, &disk)?;
             if let Some(icount) = &boot.icount {
                 devices.extend(["-icount".into(), icount.clone(), "-rtc".into(), "clock=vm".into()]);
             }
@@ -342,7 +348,12 @@ fn run_case(
                 memory_mib: boot.memory_mib.unwrap_or(target::DEFAULT_MEMORY_MIB),
                 devices: &devices,
             };
-            qemu::run(&image, boot, &builder.workspace, &forwards, log)
+            // The network's far side dials in while it boots (`peer.rs`); its peers and capture are
+            // judged by the post-check below.
+            let deadline = Instant::now() + std::time::Duration::from_secs_f64(boot.timeout_secs);
+            let dials = boot.net.as_ref().map(|net| peer::Dials::start(net, &forwards, deadline)).transpose()?;
+            let verdict = qemu::run(&image, boot, &builder.workspace, &forwards, log)?;
+            Ok(peer::finish_dials(verdict, dials))
         };
         let outcome = match boot_once(&log)? {
             Verdict::Fail(why) => Outcome::Fail(why),
@@ -355,9 +366,10 @@ fn run_case(
                 }
             }
         };
-        // Cases without a `post_check` are judged exactly as before.
+        // Cases without a `post_check` or peers are judged exactly as before.
+        let peers = boot.net.as_ref().is_some_and(|net| !net.peer.is_empty());
         let outcome = match outcome {
-            Outcome::Pass if boot.post_check.is_some() => post_check(boot, &log)?,
+            Outcome::Pass if boot.post_check.is_some() || peers => post_check(boot, &log)?,
             other => other,
         };
         results.push((format!(", smp={smp}"), judge(boot.must_fail.as_deref(), outcome)?, elapsed(run_started)));
@@ -368,6 +380,12 @@ fn run_case(
 /// Run a case's `post_check` (a name, then its arguments) over the console log of a boot that
 /// passed.
 fn post_check(boot: &case::Boot, log: &Path) -> Result<Outcome> {
+    // A network with peers: the peers' counts and the capture of this boot (`peer.rs`).
+    if let Some(net) = boot.net.as_ref().filter(|net| !net.peer.is_empty()) {
+        if let Err(why) = peer::judge_peers(net, &peer::Files::beside(&log.with_extension("img"))) {
+            return Ok(Outcome::Fail(why));
+        }
+    }
     let text = std::fs::read(log).with_context(|| format!("reading {}", log.display()))?;
     let text = String::from_utf8_lossy(&text);
     let check = boot.post_check.as_deref().unwrap_or("");
