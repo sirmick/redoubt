@@ -109,6 +109,9 @@ pub fn serve(startup: &Startup) -> u32 {
     };
     let mmio = Mmio::from_handle(mmio);
     let Ok(regs) = Regs::map(&mmio) else { return NO_DEVICE };
+    // From here a panic stops the device before the process dies (answer 174). A kill or a
+    // fault runs none of this; that is WP-K5b's (answer 173).
+    regs.arm_panic_reset();
     let (Ok(rx_view), Ok(tx_view)) =
         (Device::new(regs, &mmio, Some(Irq::from_handle(irq))), Device::new(regs, &mmio, None))
     else {
