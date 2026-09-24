@@ -3,7 +3,9 @@
 # published .crate from static.crates.io, check its SHA-256 against the live crates.io index and
 # against the checksum recorded in vendor/README.md, unpack it, and `diff -r` it against
 # vendor/<name>. Needs the network, so the bench never runs it; the review of any change to
-# vendor/ does. Exit 0 only if every crate matches on all three counts.
+# vendor/ does. Exit 0 only if every crate matches on all three counts. Before any download it
+# checks that the table and vendor/ name the same crates, and fails if not; `--structure-only`
+# does just that, offline (tests/provenance.rs).
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -22,27 +24,57 @@ index_path() {
     esac
 }
 
-# The vendored table's header. Fail closed: a table that can't be found checks nothing.
+# Structure first, with no network: the table must be there, every row must name a vendored
+# directory, and every vendored directory (derived from vendor/ itself, getrandom aside: it has its
+# own section, "getrandom") must have a row. Anything else fails closed, before any download, so a
+# table that cannot be read never checks nothing and passes. `--structure-only` stops here.
 header='^| Crate | Version | License (ours to use under)'
 if ! grep -q "$header" "$readme"; then
     echo "provenance: no vendored table in $readme" >&2
     exit 1
 fi
-
-failed=0
-checked=()
-# Every row of the vendored table: | `name` | version | license | `sha256` |
+names=() versions=() sums=()
 while IFS='|' read -r _ name version _ sum _; do
     name="$(echo "$name" | tr -d ' `')"
-    version="$(echo "$version" | tr -d ' ')"
-    recorded="$(echo "$sum" | tr -d ' `')"
     [ -n "$name" ] || continue
+    names+=("$name")
+    versions+=("$(echo "$version" | tr -d ' ')")
+    sums+=("$(echo "$sum" | tr -d ' `')")
+done < <(sed -n "/$header/,/^\$/p" "$readme" | tail -n +3)
+
+failed=0
+dirs=()
+for dir in "$root"/vendor/*/; do
+    name="$(basename "$dir")"
+    [ "$name" = getrandom ] || dirs+=("$name")
+done
+for name in "${names[@]}"; do
     if [ ! -d "$root/vendor/$name" ]; then
-        echo "$name $version: listed but vendor/$name is missing"
+        echo "$name: listed but vendor/$name is missing"
         failed=1
-        continue
     fi
-    checked+=("$name")
+done
+for name in "${dirs[@]}"; do
+    if [[ " ${names[*]} " != *" $name "* ]]; then
+        echo "vendor/$name: not in the vendored table, so not checked"
+        failed=1
+    fi
+done
+if [ "${#dirs[@]}" = 0 ] || [ "${#names[@]}" != "${#dirs[@]}" ]; then
+    echo "provenance: ${#names[@]} rows for ${#dirs[@]} vendored directories" >&2
+    failed=1
+fi
+if [ "$failed" != 0 ]; then
+    exit 1
+fi
+if [ "${1:-}" = --structure-only ]; then
+    echo "provenance: the table names every vendored crate (${#dirs[@]}), structure only"
+    exit 0
+fi
+
+checked=0
+for i in "${!names[@]}"; do
+    name="${names[$i]}" version="${versions[$i]}" recorded="${sums[$i]}"
 
     crate="$work/$name-$version.crate"
     curl -sSfL -o "$crate" "https://static.crates.io/crates/$name/$name-$version.crate"
@@ -61,23 +93,13 @@ while IFS='|' read -r _ name version _ sum _; do
         cat "$work/$name.diff" >&2
     fi
     echo "$name $version: $verdict"
-    [ "$verdict" = ok ] || failed=1
-done < <(sed -n "/$header/,/^\$/p" "$readme" | tail -n +3)
-
-# Every vendored directory must have been checked, except getrandom, which is patched and has its
-# own section (vendor/README.md, "getrandom").
-for dir in "$root"/vendor/*/; do
-    name="$(basename "$dir")"
-    [ "$name" = getrandom ] && continue
-    if [[ " ${checked[*]} " != *" $name "* ]]; then
-        echo "vendor/$name: not in the vendored table, so not checked"
-        failed=1
-    fi
+    if [ "$verdict" = ok ]; then checked=$((checked + 1)); else failed=1; fi
 done
-if [ "${#checked[@]}" = 0 ]; then
-    echo "provenance: the vendored table has no rows" >&2
+
+# Every vendored crate was downloaded and compared, not just some of them.
+if [ "$checked" != "${#dirs[@]}" ]; then
+    echo "provenance: $checked of ${#dirs[@]} vendored crates match" >&2
     failed=1
 fi
-
 if [ "$failed" = 0 ]; then echo "provenance: every vendored crate is the published one"; fi
 exit "$failed"
