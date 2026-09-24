@@ -141,3 +141,28 @@ kernel writer (kernel, `redoubt-sys`, executable model) with rv64 boot and rv32 
 acceptance and attack cases (occupied range, outside user space, unaligned, len 0, overflow,
 W+X, W without R, budget exhausted); MEMORY-LAYOUT.md records the stub's address once WP-R2
 fixes it, so program link bases avoid it.
+
+Mick answered in chat on 2026-09-24 ("better fix that") after the WP-D3 red team showed that
+question 147 is worse for an always-armed network device: the freed frames hold the rx and tx
+rings, which QEMU's virtio-net re-reads on every packet, so the frames' next owner can steer the
+device's DMA to any physical address (rx an arbitrary write with LAN bytes, tx an arbitrary read).
+
+### 173. The kernel resets a DMA device and quarantines its frames before they are reused (question 147).
+
+**Decision:** when the last handle to a DMA-flagged MMIO device object is released (its holder
+exits, its budget is destroyed, or it is closed), the kernel writes 0 to the device's virtio
+status register, reads it back until it reads 0 (bounded), and only then returns that device's
+`dma_alloc` frames to the pool. If the reset is not confirmed within the bound, or the device is
+not virtio, its frames are quarantined: they never return to the pool, and stay charged to the
+budget that holds the device object's grant (not to the dead driver). A device the kernel could
+not reset is not handed out again until reboot. The kernel never acknowledges or services the
+device on the driver's behalf.
+
+**Reason:** the recommendation's reset closes the window with a few lines and no device
+knowledge beyond virtio's reset; the quarantine covers a device that ignores the reset, which is
+exactly the hostile case, at the cost of memory, not safety. **Owners:** KERNEL-SPEC.md (device
+objects, `dma_alloc`, R10 destruction order), IO-ARCHITECTURE.md (DMA trust). **Residual:** a
+kernel package (WP-K5b) for the sole kernel writer after WP-K5, with attack cases: a driver
+killed mid-traffic whose frames are reallocated, then the new owner's writes into the old rings
+reach nothing and peer bytes land nowhere; a device that ignores reset keeps its frames
+quarantined. Until WP-K5b merges, no driver restart (WP-R3) and no off-bench network use.
