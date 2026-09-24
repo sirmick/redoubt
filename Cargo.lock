@@ -783,6 +783,7 @@ dependencies = [
  "elf",
  "redoubt-rt",
  "redoubt-sys",
+ "redoubt-wire",
 ]
 
 [[package]]

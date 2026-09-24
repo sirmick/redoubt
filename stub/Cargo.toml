@@ -19,8 +19,14 @@ name = "fixture-child"
 path = "src/bin/fixture-child.rs"
 
 # Only our own crates, plus the same pinned ELF parser the boot loader already vets
-# (loader/Cargo.toml) -- one crate, one version, read once (TENETS.md 5).
+# (loader/Cargo.toml) -- one crate, one version, read once (TENETS.md 5). Never redoubt-rt: see
+# lib.rs's module doc (its global allocator and panic handler are not for this crate's R+X page).
 [dependencies]
-redoubt-rt = { path = "../libs/rt" }
 redoubt-sys = { path = "../libs/sys" }
+redoubt-wire = { path = "../libs/wire" }
 elf = { version = "0.8", default-features = false }
+
+# Host unit tests build a startup page with redoubt-rt's StartupBuilder; the on-target stub
+# binary never links it (see [dependencies]).
+[dev-dependencies]
+redoubt-rt = { path = "../libs/rt" }

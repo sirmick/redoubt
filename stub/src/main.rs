@@ -1,15 +1,18 @@
 //! The loader stub (WP-R2): entered directly by `process_start` (no `redoubt-rt::entry!`, since
 //! it never returns an exit code of its own -- it jumps into the program it just mapped). See
 //! `stub::plan` for the segment bounds-checking this drives.
+//!
+//! Depends on `redoubt-sys` only, never `redoubt-rt` (`stub::lib`'s module doc): every call here
+//! goes straight through `redoubt_sys::syscall`, and this file supplies its own `#[panic_handler]`
+//! (below) rather than pulling in `redoubt-rt`'s console-reporting one and the statics it needs.
 #![no_std]
 #![no_main]
 
 use core::arch::asm;
+use core::panic::PanicInfo;
 
-use redoubt_rt::handle::{process_exit, set_flags};
-use redoubt_rt::startup::Startup;
-use redoubt_sys::{Error, MemFlags, PAGE_SIZE};
-use stub::{Either, STUB_ENTRY};
+use redoubt_sys::{Call, Error, MemFlags, PAGE_SIZE, Return, syscall};
+use stub::{Either, STUB_ENTRY, read_image};
 
 /// Exit codes the stub itself uses. Distinct from anything the started program can produce:
 /// once the jump below happens, this process's exit code is that program's to choose.
@@ -21,6 +24,9 @@ mod exit {
     /// child a hostile image, and only this child pays for it (PACKAGES.md: "A malicious ELF can
     /// at most compromise the process it was going to become").
     pub const BAD_IMAGE: u32 = 111;
+    /// The stub itself panicked (matches `redoubt_rt::start::exit::PANIC`, though this binary
+    /// never links `redoubt-rt`: any caller inspecting exit codes sees the same value either way).
+    pub const PANIC: u32 = 101;
 }
 
 #[no_mangle]
@@ -39,13 +45,15 @@ fn run(arg: usize) -> Result<usize, u32> {
     // `arg`, INIT.md, Startup block); the parent mapped one whole page here, read-only, before
     // starting this process, and it stays mapped for the life of the process.
     let page = unsafe { core::slice::from_raw_parts(arg as *const u8, PAGE_SIZE) };
-    let startup = Startup::parse(page).map_err(|_| exit::BAD_STARTUP)?;
-    let (image_addr, image_len) = startup.image().ok_or(exit::BAD_STARTUP)?;
+    let (image_addr, image_len) = match read_image(page) {
+        Ok(Some(image)) => image,
+        Ok(None) | Err(_) => return Err(exit::BAD_STARTUP),
+    };
     // SAFETY: the parent's `process_map` step (PACKAGES.md step 4) put exactly this range in
-    // this process's own memory, read-write, before `process_start`; `Startup::image` already
-    // checked `image_addr + image_len` does not overflow (INIT.md, Startup block). A parent that
-    // named a range it did not actually map only faults this read, which hurts nobody but this
-    // child (PACKAGES.md).
+    // this process's own memory, read-write, before `process_start`; `read_image` already checked
+    // `image_addr + image_len` does not overflow (INIT.md, Startup block). A parent that named a
+    // range it did not actually map only faults this read, which hurts nobody but this child
+    // (PACKAGES.md).
     let image = unsafe { core::slice::from_raw_parts(image_addr as *const u8, image_len) };
 
     let startup_page = (arg, arg + PAGE_SIZE);
@@ -55,10 +63,18 @@ fn run(arg: usize) -> Result<usize, u32> {
     // PACKAGES.md step 5: segments are mapped at their link addresses with `map_fixed`, before
     // the stub maps anything else; a segment overlapping the stub, the startup page or the image
     // makes it exit (`stub::plan`'s `exclude` argument, checked before any mapping call below).
-    stub::plan(image, image_addr, &exclude, |segment| map_segment(&segment)).map_err(|e| match e {
+    let entry = stub::plan(image, image_addr, &exclude, |segment| map_segment(&segment)).map_err(|e| match e {
         Either::A(_bad_image) => exit::BAD_IMAGE,
         Either::B(_map_error) => exit::BAD_IMAGE,
-    })
+    })?;
+
+    // PACKAGES.md, Launching a process: "free the image". Every segment's bytes are now copied
+    // into their own mapping (`map_segment`, above); the parent's copy is no longer read. Best
+    // effort: an unmap failure here only wastes this child's own address space, so it does not
+    // block the jump (`report_panic`'s "gives up quietly" precedent, `redoubt_rt::start`).
+    let _ = unmap(image_addr, page_align_up(image_len));
+
+    Ok(entry)
 }
 
 /// Maps one validated segment at its own `vaddr` (`segment.first_page`) with `map_fixed`
@@ -94,6 +110,39 @@ fn map_segment(segment: &stub::Segment) -> Result<(), Error> {
 /// `redoubt_sys::Call::MapFixed`. Until then it fails closed, mapping nothing.
 fn map_fixed(_addr: usize, _len: usize, _flags: MemFlags) -> Result<(), Error> { Err(Error::InvalidArgument) }
 
+/// One system call expecting `Return::Nothing`, exactly as `redoubt_rt::handle`'s wrappers do
+/// (duplicated rather than depending on `redoubt-rt`: see `stub::lib`'s module doc).
+fn nothing(call: &Call) -> Result<(), Error> {
+    match syscall(call)? {
+        Return::Nothing => Ok(()),
+        // redoubt-sys decodes a result by the call's number, so another shape cannot arrive.
+        _ => Err(Error::InvalidArgument),
+    }
+}
+
+fn set_flags(addr: usize, len: usize, flags: MemFlags) -> Result<(), Error> {
+    nothing(&Call::SetFlags { addr, len, flags })
+}
+
+fn unmap(addr: usize, len: usize) -> Result<(), Error> { nothing(&Call::Unmap { addr, len }) }
+
+fn process_exit(code: u32) -> ! {
+    loop {
+        let _ = syscall(&Call::ProcessExit { code });
+    }
+}
+
+/// Rounds `len` up to a whole number of pages.
+fn page_align_up(len: usize) -> usize {
+    match len.checked_add(PAGE_SIZE - 1) {
+        Some(v) => v & !(PAGE_SIZE - 1),
+        // Cannot actually happen: `read_image` already checked `image_addr + image_len` (a
+        // nonzero `image_addr`) does not overflow, so `image_len` alone has headroom. Round down
+        // instead of up rather than pass an even larger `len` to `unmap`.
+        None => len & !(PAGE_SIZE - 1),
+    }
+}
+
 /// The stub's own mapped length, rounded to whole pages: `_stub_end` is defined by `link.x` at
 /// the end of its last section.
 fn stub_len() -> usize {
@@ -123,3 +172,10 @@ fn jump(entry: usize, arg: usize) -> ! {
         )
     }
 }
+
+/// This binary's one panic handler (a `no_std`/`no_main` binary needs exactly one in its whole
+/// link graph): unlike `redoubt_rt::start`'s, it prints nothing (no console handle to report to,
+/// no allocator to build one with -- `stub::lib`'s module doc) and just exits, the same way every
+/// other refusal here does.
+#[panic_handler]
+fn panic(_info: &PanicInfo) -> ! { process_exit(exit::PANIC) }

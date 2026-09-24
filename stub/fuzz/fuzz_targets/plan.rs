@@ -35,8 +35,7 @@ fuzz_target!(|data: &[u8]| {
             | BadImage::Overflow
             | BadImage::OutOfImage
             | BadImage::Overlaps
-            | BadImage::BadFlags
-            | BadImage::NoImage,
+            | BadImage::BadFlags,
         )) => {}
         Err(Either::B(())) => unreachable!("on_segment above never returns Err"),
     }

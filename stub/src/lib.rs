@@ -4,9 +4,16 @@
 //!
 //! `main.rs` is the on-target binary: `_start`, and the actual mapping calls `plan` only
 //! describes. Splitting them here lets `plan`'s hostile-input logic run as ordinary host unit
-//! tests, with no kernel and no QEMU (TENETS.md 6: "fuzz what parses"). The startup page's
-//! `image_addr`/`image_len` fields (INIT.md, Startup block) are read through
-//! `redoubt_rt::startup::Startup::image`, not duplicated here.
+//! tests, with no kernel and no QEMU (TENETS.md 6: "fuzz what parses").
+//!
+//! This crate depends on `redoubt-wire` and `redoubt-sys` directly, never `redoubt-rt`: the
+//! stub's mapped region carries no writable statics (`link.x`), but `redoubt-rt` unconditionally
+//! defines a `#[global_allocator]` and a `#[panic_handler]` for the machine at its crate root
+//! (`libs/rt/src/lib.rs`, `libs/rt/src/start.rs`), pulled in whole by depending on any part of
+//! it. `read_image` below reads `image_addr`/`image_len` straight off the decoded message
+//! (INIT.md, Startup block), the same rule `redoubt_rt::startup::parse_image` applies for
+//! ordinary programs, without building the allocated entries table that rule's own callers need
+//! and this one does not.
 #![no_std]
 
 use elf::ElfBytes;
@@ -14,6 +21,7 @@ use elf::abi::{PF_R, PF_W, PF_X, PT_LOAD};
 use elf::endian::LittleEndian;
 use elf::segment::ProgramHeader;
 use redoubt_sys::{MemFlags, PAGE_SIZE};
+use redoubt_wire::proto::startup::Message;
 
 /// Where a launcher maps the stub's flat binary in every child, and the `entry` it passes to
 /// `process_start` (PACKAGES.md: "a flat binary, one code region at a fixed address... the same
@@ -24,14 +32,12 @@ use redoubt_sys::{MemFlags, PAGE_SIZE};
 /// `link.x` agree on, not a kernel mechanism. Chosen well clear of
 /// `tests/programs/src/spawn.rs::IMAGE_BASE` (0x1_0000, where test images and, by convention,
 /// most real program images are expected to start) and far below `STACK_TOP`/`STARTUP_AT`.
-pub const STUB_ENTRY: usize = 0x0020_0000;
+pub const STUB_ENTRY: usize = 0x1FF0_0000;
 
 /// Why an image was refused whole (PACKAGES.md: "A malicious ELF can at most compromise the
 /// process it was going to become" -- every one of these is a refusal, never a panic).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BadImage {
-    /// The startup page named no image, was misaligned, or did not parse at all.
-    NoImage,
     /// `ElfBytes::minimal_parse` or `.segments()` refused it.
     Malformed,
     /// A field does not fit `usize` on this width, or an address/length computation would wrap.
@@ -110,8 +116,14 @@ fn validate<'a>(
     let file = image.get(offset..file_end).ok_or(BadImage::OutOfImage)?;
 
     let first_page = vaddr & !(PAGE_SIZE - 1);
-    let page_end = seg_end.next_multiple_of(PAGE_SIZE);
-    let image_pages = (image_addr & !(PAGE_SIZE - 1), (image_addr + image.len()).next_multiple_of(PAGE_SIZE));
+    // `seg_end` not overflowing (above) does not mean rounding it up to a page does: an attacker
+    // picks `p_vaddr`/`p_memsz` freely, so `seg_end` can sit anywhere below `usize::MAX`, and
+    // `next_multiple_of` would wrap the addition past it. `page_align_up` refuses that instead of
+    // silently computing a wrong (too-small) `page_end`, which would let a segment through with a
+    // page range shorter than the bytes it actually claims.
+    let page_end = page_align_up(seg_end)?;
+    let image_end = image_addr.checked_add(image.len()).ok_or(BadImage::Overflow)?;
+    let image_pages = (image_addr & !(PAGE_SIZE - 1), page_align_up(image_end)?);
     if overlaps(first_page, page_end, image_pages.0, image_pages.1)
         || exclude.iter().any(|&(start, end)| overlaps(first_page, page_end, start, end))
     {
@@ -150,6 +162,68 @@ fn validate<'a>(
 
 fn overlaps(a_start: usize, a_end: usize, b_start: usize, b_end: usize) -> bool {
     a_start < b_end && b_start < a_end
+}
+
+/// Rounds `addr` up to the next page boundary, refusing rather than wrapping when that would
+/// overflow `usize`.
+fn page_align_up(addr: usize) -> Result<usize, BadImage> {
+    addr.checked_add(PAGE_SIZE - 1).map(|v| v & !(PAGE_SIZE - 1)).ok_or(BadImage::Overflow)
+}
+
+/// The length word in front of the message (INIT.md, Startup block; QUESTIONS.md 112, pending).
+const FRAME_HEADER: usize = 4;
+/// One whole page: the startup block never holds more (INIT.md, Startup block).
+const MAX_BLOCK: usize = PAGE_SIZE;
+/// The only `startup` block version this stub understands (INIT.md, Startup block).
+const VERSION: u32 = 1;
+
+/// Why the startup page's image fields could not be read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BadStartup {
+    /// The page holds fewer bytes than the block's length says, or the block's length is
+    /// impossible.
+    Short,
+    /// The message does not decode as `startup`, or is not the version this stub understands.
+    Malformed,
+    /// `image_addr`/`image_len` break INIT.md's rule: one is 0 and the other is not,
+    /// `image_addr` is not page-aligned, or `image_addr + image_len` overflows or does not fit
+    /// this target's `usize`.
+    BadImage,
+}
+
+/// Reads `image_addr`/`image_len` out of the startup page at `page` (INIT.md, Startup block;
+/// `arg`, PACKAGES.md step 4), without allocating: `Some((addr, len))` when the block names an
+/// image, `None` for a process started at its own entry rather than through the stub.
+///
+/// Applies the same `image_addr`/`image_len` rule as `redoubt_rt::startup::Startup::image`
+/// (`libs/rt/src/startup.rs`'s private `parse_image`), which this duplicates rather than calls:
+/// see the module doc for why the stub cannot depend on `redoubt-rt`.
+pub fn read_image(page: &[u8]) -> Result<Option<(usize, usize)>, BadStartup> {
+    let page = page.get(..MAX_BLOCK).unwrap_or(page);
+    let word = page.get(..FRAME_HEADER).ok_or(BadStartup::Short)?;
+    let len = u32::from_le_bytes([word[0], word[1], word[2], word[3]]);
+    let len = usize::try_from(len).map_err(|_| BadStartup::Short)?;
+    if len > MAX_BLOCK - FRAME_HEADER {
+        return Err(BadStartup::Short);
+    }
+    let message = page.get(FRAME_HEADER..FRAME_HEADER + len).ok_or(BadStartup::Short)?;
+    let Message::Startup(fields) = Message::decode_file(message).map_err(|_| BadStartup::Malformed)?;
+    if fields.version != VERSION {
+        return Err(BadStartup::Malformed);
+    }
+    if fields.image_addr == 0 && fields.image_len == 0 {
+        return Ok(None);
+    }
+    if fields.image_addr == 0 || fields.image_len == 0 {
+        return Err(BadStartup::BadImage);
+    }
+    let addr = usize::try_from(fields.image_addr).map_err(|_| BadStartup::BadImage)?;
+    let len = usize::try_from(fields.image_len).map_err(|_| BadStartup::BadImage)?;
+    if !addr.is_multiple_of(PAGE_SIZE) {
+        return Err(BadStartup::BadImage);
+    }
+    addr.checked_add(len).ok_or(BadStartup::BadImage)?;
+    Ok(Some((addr, len)))
 }
 
 /// Two error kinds, kept distinct rather than merged into one enum: `plan`'s own refusals
@@ -270,5 +344,24 @@ mod tests {
         let image = elf64(0x1_0000, &[(PF_R | PF_X, 0x1_0000, &code, 4096)]);
         let result = plan(&image, 0x2000_0000, &[], |_| Err(42));
         assert_eq!(result, Err(Either::B(42)));
+    }
+
+    #[test]
+    fn read_image_reads_the_field_a_real_builder_writes() {
+        let mut builder = redoubt_rt::startup::StartupBuilder::new(0);
+        builder.image(0x2000_0000, 0x3000);
+        let page = builder.finish().unwrap();
+        assert_eq!(read_image(&page), Ok(Some((0x2000_0000, 0x3000))));
+    }
+
+    #[test]
+    fn read_image_is_none_for_no_image() {
+        let page = redoubt_rt::startup::StartupBuilder::new(0).finish().unwrap();
+        assert_eq!(read_image(&page), Ok(None));
+    }
+
+    #[test]
+    fn read_image_refuses_a_short_page() {
+        assert_eq!(read_image(&[0u8; 3]), Err(BadStartup::Short));
     }
 }
