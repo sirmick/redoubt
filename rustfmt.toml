@@ -5,6 +5,7 @@
 # Don't format libraries that have been vendored in
 ignore = [
     "imports/getrandom/**",
+    "vendor/**",
 ]
 
 # I can't rely on contributors using .editorconfig
