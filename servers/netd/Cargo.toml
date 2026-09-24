@@ -1,0 +1,11 @@
+[package]
+name = "redoubt-netd"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "netd: the virtio-net driver, serving Ethernet frames to one ipd"
+
+# No outside crates: netd inherits blkd's reasoning for writing its own virtqueues rather than
+# taking `virtio-drivers` (IO-ARCHITECTURE.md, blkd; answer 174).
+[dependencies]
+redoubt-rt = { path = "../../libs/rt" }
