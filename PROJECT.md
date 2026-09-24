@@ -83,16 +83,54 @@ The default limits allow four concurrent child inbox turns and sixteen non-ended
 members including the orchestrator. Idle residents consume membership slots but do
 not poll the model. Budget four members per active package plus Architect/orchestrator.
 
+## Environment preflight
+
+Before the first package launches, and after any toolchain change, the orchestrator checks the
+machine once and puts the results in every member's instructions; members never install
+toolchain components themselves, they report what is missing.
+
+- `rustup +stable target list --installed` includes `riscv32imac-unknown-none-elf`,
+  `riscv64imac-unknown-none-elf` and `riscv64gc-unknown-none-elf`.
+- `rustup +nightly component list --installed` includes `rustfmt` (CONTRIBUTING requires
+  `cargo +nightly fmt`; the repo's rustfmt.toml uses nightly-only options).
+- Firmware: the bench looks for RustSBI under the checkout's own `bios/target/`, which a
+  `.worktrees/<package>` checkout does not have. Give package members
+  `RUSTSBI_PROTOTYPER=/home/mick/riscv/bios/target/riscv64gc-unknown-none-elf/release/rustsbi-prototyper`
+  and `RUSTSBI_PROTOTYPER_RV32=/home/mick/riscv/bios/target/riscv32imac-unknown-none-elf/release/rustsbi-prototyper`
+  (absolute paths into the main tree; rebuild with `scripts/build-bios.sh` if absent).
+
+Heavy tests: the consoled flood test (`servers/consoled/tests/consoled.rs`) is expensive on
+this machine. Run it once per round, loops of at most x20; never 300- or 1000-run loops.
+Reason about ordering from the code instead.
+
 ## Package residents
 
 Before launching a ready package, reconcile its claim, isolated worktree, branch and
-acceptance gates. Add four keyed members in one `workspace_configure` patch:
-`<package>-implementer`, `<package>-red`, `<package>-simplifier`, `<package>-editor`.
-Each has `package:"<package>"`, `lifetime:"resident"`, `can_spawn:false`, the actual
-worktree cwd and explicit instructions. Set role to `implementer` or `reviewer`.
-Keep all four through review and fix cycles; do not replace reviewers between rounds.
+acceptance gates. Name the package once with `packages:{"<package>":{"title":"<what it
+is>"}}` in `workspace_configure`; the sidebar groups the package's members under that title,
+so member names are just the role ("Implementer", "Red team", "Simplifier", "Editor").
 Create package worktrees under `.worktrees/<package>` in the project root (listed in
 `.git/info/exclude`); Wash rejects member cwds outside the configured root.
+
+Size the review panel to the risk, in one `workspace_configure` patch. Every member has
+`package:"<package>"`, `lifetime:"resident"`, `can_spawn:false`, the worktree cwd and
+explicit instructions, with role `implementer` or `reviewer`:
+
+- Trusted code (kernel, loader, ABI, unsafe, anything a KERNEL-SPEC rule or attack case
+  governs): `<package>-implementer` plus three reviewers, `<package>-red` (on `god`),
+  `<package>-simplifier` and `<package>-editor`.
+- Tests, docs, comments or tooling configuration only: `<package>-implementer` plus one
+  reviewer, `<package>-red` for test changes or `<package>-editor` for documentation.
+  Add the other angles only if its findings show the change is riskier than it looked.
+
+Keep a package's reviewers through review and fix cycles; do not replace them between rounds.
+
+Reviewers complete their assignment with `cc:["<package>-implementer"]`, so the implementer
+already holds every finding. The orchestrator creates a round's review assignments together,
+then waits with `member_update({"waiting":{"reason":"…","until_assignments":[<the round's
+assignment IDs>]}})`: the results arrive in one turn once the last reviewer reports. It then
+decides which findings to apply and sends one fix assignment that cites them by reviewer and
+number instead of restating them.
 
 The implementer receives `.pi/agents/implementer.md`, owned paths, governing spec
 sections/decision IDs, exact deliverables, test commands and an early reporting checkpoint.
