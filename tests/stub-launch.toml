@@ -1,0 +1,24 @@
+description = "WP-R2: a user parent launches children through the real loader stub (PACKAGES.md, Launching a process). A well-formed ELF runs and exits from its own entry. Hostile ELFs (overlapping segments, a segment over the stub, the startup page or the stack, an entry outside executable segments, truncated headers, a huge image_len, segment bytes past the mapped image, and 32 header-fuzzed images) only exit or fault the child: the parent's budget returns to the same usage after each, and a well-formed child still runs afterwards"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+programs = ["stub-launch"]
+timeout_secs = 60
+expect = [
+    '^\[stub-launch\] ok: well-formed child: exited 77$',
+    '^\[stub-launch\] ok: overlapping segments: exited 111$',
+    '^\[stub-launch\] ok: segment over the stub: exited 111$',
+    '^\[stub-launch\] ok: segment over the startup page: exited 111$',
+    '^\[stub-launch\] ok: segment over the stack: exited 111$',
+    '^\[stub-launch\] ok: entry in a read-only segment: exited 111$',
+    '^\[stub-launch\] ok: entry outside every segment: exited 111$',
+    '^\[stub-launch\] ok: truncated file header: exited 111$',
+    '^\[stub-launch\] ok: truncated program headers: exited 111$',
+    '^\[stub-launch\] ok: huge image_len: exited 110$',
+    '^\[stub-launch\] ok: segment bytes past the mapped image: faulted [0-9]+$',
+    '^\[stub-launch\] fuzz: 32 images, [0-9]+ exited, [0-9]+ faulted$',
+    '^\[stub-launch\] ok: well-formed child after the attacks: exited 77$',
+    '^\[stub-launch\] STUB LAUNCH TEST PASSED$',
+]
+forbid = ['\[stub-launch\] FAIL']
+poweroff = true

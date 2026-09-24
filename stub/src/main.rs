@@ -24,10 +24,11 @@ mod exit {
     /// for it (PACKAGES.md: "A malicious ELF can at most compromise the process it was going to
     /// become").
     pub const BAD_IMAGE: u32 = 111;
-    /// `map_fixed` refused a segment `stub::plan` already accepted -- today this is always the
-    /// **WP-K5a shim** (`map_fixed`, below), which fails closed unconditionally until the real
-    /// syscall lands; kept distinct from `BAD_IMAGE` so this case (a system limitation, not a
-    /// hostile image) is not indistinguishable from one on target (round-2 red team P3-7).
+    /// `map_fixed` answered `OutOfMemory` for a segment `stub::plan` accepted: this child's
+    /// budget cannot hold the program's pages or their page tables (KERNEL-SPEC.md, Errors).
+    /// Kept distinct from `BAD_IMAGE` because it is a resource limit, not a hostile image
+    /// (round-2 red team P3-7). `InvalidArgument` from `map_fixed` or `set_flags` (a segment over
+    /// a mapping the parent made, such as the stack) is `BAD_IMAGE`.
     pub const MAP_UNAVAILABLE: u32 = 112;
     /// The stub itself panicked (matches `redoubt_rt::start::exit::PANIC`, though this binary
     /// never links `redoubt-rt`: any caller inspecting exit codes sees the same value either way).
@@ -60,7 +61,10 @@ fn run(arg: usize) -> Result<usize, u32> {
         Ok(None) | Err(_) => return Err(exit::BAD_STARTUP),
     };
 
-    let startup_page = (arg, arg + PAGE_SIZE);
+    // `arg` is page-aligned and nonzero (above), but nothing stops a parent naming the last page
+    // of the address space: refuse rather than wrap to an empty range at 0.
+    let startup_end = arg.checked_add(PAGE_SIZE).ok_or(exit::BAD_STARTUP)?;
+    let startup_page = (arg, startup_end);
     let stub_region = (STUB_ENTRY & !(PAGE_SIZE - 1), STUB_ENTRY + stub_len());
     let exclude = [startup_page, stub_region];
 
@@ -85,11 +89,12 @@ fn run(arg: usize) -> Result<usize, u32> {
     let entry =
         stub::plan(image, image_addr, &exclude, |segment| map_segment(&segment)).map_err(|e| match e {
             Either::A(_bad_image) => exit::BAD_IMAGE,
-            // The map_fixed shim always refuses (below): while it does, every mapping failure
-            // here comes from it, not from a hostile segment `plan` already accepted, so it gets
-            // its own code rather than being indistinguishable from BAD_IMAGE (round-2 red team
-            // P3-7).
-            Either::B(_map_error) => exit::MAP_UNAVAILABLE,
+            // Out of memory is this child's budget, not the image (`exit::MAP_UNAVAILABLE`).
+            Either::B(Error::OutOfMemory) => exit::MAP_UNAVAILABLE,
+            // `InvalidArgument` means the kernel refused a segment `plan` accepted: it overlaps
+            // a mapping `plan` cannot see (the stack), or lies outside user space. The image
+            // named it, so the image is at fault. Any other error fails closed the same way.
+            Either::B(_) => exit::BAD_IMAGE,
         })?;
 
     // PACKAGES.md, Launching a process: "free the image". Every segment's bytes are now copied
@@ -125,14 +130,12 @@ fn map_segment(segment: &stub::Segment) -> Result<(), Error> {
     Ok(())
 }
 
-/// **Blocked on WP-K5a** (docs/WORKSPACE-QA.md, `R2-stub-self-map`; answer 172;
-/// KERNEL-SPEC.md, System calls: `map_fixed(addr, len, flags)`, last in the call table). The
-/// kernel does not implement it yet, and `redoubt-sys`'s call table has no variant for it (both
-/// outside R2's owned paths: the sole kernel writer lands them as a follow-up package). This
-/// shim already has the signature and error shape KERNEL-SPEC.md specifies -- `map_segment`
-/// above will not change when WP-K5a lands, only this function's body, becoming a real
-/// `redoubt_sys::Call::MapFixed`. Until then it fails closed, mapping nothing.
-fn map_fixed(_addr: usize, _len: usize, _flags: MemFlags) -> Result<(), Error> { Err(Error::InvalidArgument) }
+/// Maps zeroed pages at exactly `addr` in this process (KERNEL-SPEC.md, System calls:
+/// `map_fixed`, answer 172). It never replaces a mapping: an occupied, unaligned or
+/// out-of-user-space range is `InvalidArgument` with nothing mapped.
+fn map_fixed(addr: usize, len: usize, flags: MemFlags) -> Result<(), Error> {
+    nothing(&Call::MapFixed { addr, len, flags })
+}
 
 /// One system call expecting `Return::Nothing`, exactly as `redoubt_rt::handle`'s wrappers do
 /// (duplicated rather than depending on `redoubt-rt`: see `stub::lib`'s module doc).
