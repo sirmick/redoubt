@@ -119,9 +119,12 @@ fn is_occupied(pte: Pte) -> bool { pte.is_valid() || pte.has(MMUFlags::S) }
 /// message is delivered, so they are counted here and allocated only once the message is
 /// certain: nothing is charged for a delivery that is refused.
 ///
-/// The range is contiguous and ascending, so one table serves consecutive pages and its index at
-/// its level never recurs after changing; counting each level's index once as it changes
-/// therefore counts each missing table exactly once.
+/// The range is contiguous and ascending, so one table serves consecutive pages, and the table
+/// below a `level` entry is named by `addr / leaf_size(level)`, which only grows along the range;
+/// counting each such name once as it changes therefore counts each missing table exactly once.
+/// (Not the entry's index within its own table: below the root that index recurs in the next
+/// table up, so a missing table at index 5 in one gigabyte and another at index 5 in the next,
+/// with present tables between them, would be counted once.)
 pub fn tables_needed(space: &MemoryMapping, virt: usize, pages: usize) -> usize {
     let mut needed = 0;
     let mut counted = [usize::MAX; physmap::LEVELS];
@@ -129,10 +132,10 @@ pub fn tables_needed(space: &MemoryMapping, virt: usize, pages: usize) -> usize 
         let addr = virt + i * PAGE_SIZE;
         let mut table = Some(root_of(space.satp));
         for level in (1..physmap::LEVELS).rev() {
-            let index = physmap::vpn(addr, level);
-            table = table.and_then(|t| t.child(index));
-            if table.is_none() && counted[level] != index {
-                counted[level] = index;
+            table = table.and_then(|t| t.child(physmap::vpn(addr, level)));
+            let name = addr / physmap::leaf_size(level);
+            if table.is_none() && counted[level] != name {
+                counted[level] = name;
                 needed += 1;
             }
         }

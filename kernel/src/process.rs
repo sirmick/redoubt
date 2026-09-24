@@ -48,7 +48,7 @@
 //! [`thread_create`]) takes only the scheduler and borrows the memory manager in phases. The
 //! functions that take both are only ever called from a dispatcher that holds both.
 
-use redoubt_abi::{MemoryFlags, PID, TID};
+use redoubt_abi::{PID, TID};
 use redoubt_sys::{
     Cause, Error, ExitNotice, Handle as AbiHandle, Labels, MAX_LABELS, MAX_START_HANDLES, MemFlags,
 };
@@ -353,11 +353,7 @@ pub fn process_map(
     // because a later failure would not put the source back. Not W+X, and not writable
     // without readable.
     let flags = crate::mem::redoubt_flags(flags);
-    let wx = MemoryFlags::W | MemoryFlags::X;
-    let write_only = flags & MemoryFlags::W == MemoryFlags::W && flags & MemoryFlags::R != MemoryFlags::R;
-    if flags.is_empty() || flags & wx == wx || write_only {
-        return Err(Error::InvalidArgument);
-    }
+    crate::mem::check_map_flags(flags)?;
     let child = p.pid;
     let space = ss.mapping_of(child).ok_or(Error::NotPermitted)?;
     for i in 0..pages {

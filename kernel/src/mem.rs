@@ -1245,11 +1245,11 @@ impl MemoryManager {
     /// the order KERNEL-SPEC.md's Errors row gives: the range (`user_range`), then that range's
     /// overlap with any of the caller's mappings (`range_available_in`, over the whole range
     /// before anything is charged or allocated -- `undo_run`'s rollback leaks page tables, so
-    /// nothing here may need it), then the flags (the same three-way check `process_map` uses,
-    /// `process.rs:354-360`, so W+X and W-without-R are refused here and can never reach
-    /// `map_page_inner`'s `.expect` below), then a single charge check for the pages and the
-    /// page tables they need. Only once all of that holds does the guaranteed-success mapping
-    /// loop run, so a failure never leaves anything mapped or charged.
+    /// nothing here may need it), then the flags (`check_map_flags`, shared with `process_map`,
+    /// so W+X and W-without-R are refused here and can never reach `map_page_inner`'s `.expect`
+    /// below), then a charge check for the pages and the page tables they need. Only once all
+    /// of that holds does the guaranteed-success mapping loop run, so a failure never leaves
+    /// anything mapped or charged.
     pub fn map_fixed(
         &mut self,
         pid: PID,
@@ -1257,22 +1257,18 @@ impl MemoryManager {
         len: usize,
         flags: redoubt_sys::MemFlags,
     ) -> Result<(), redoubt_sys::Error> {
-        let bad = redoubt_sys::Error::InvalidArgument;
         let oom = redoubt_sys::Error::OutOfMemory;
         Self::user_range(addr, len)?;
         let space = MemoryMapping::current();
         if !crate::arch::mem::range_available_in(&space, addr, len) {
-            return Err(bad);
+            return Err(redoubt_sys::Error::InvalidArgument);
         }
         let flags = redoubt_flags(flags);
-        let wx = MemoryFlags::W | MemoryFlags::X;
-        let writable = flags & MemoryFlags::W == MemoryFlags::W;
-        let readable = flags & MemoryFlags::R == MemoryFlags::R;
-        if flags.is_empty() || flags & wx == wx || (writable && !readable) {
-            return Err(bad);
-        }
+        check_map_flags(flags)?;
         let npages = (len / PAGE_SIZE) as u64;
-        let budget = self.budget_of(pid).ok_or(oom)?;
+        // `pid` is the running caller, and only the kernel (which makes no syscalls) has no
+        // budget. Not an error: map_fixed's error set is InvalidArgument and OutOfMemory only.
+        let budget = self.budget_of(pid).expect("map_fixed: the running process has a budget");
         // "OutOfMemory (pages, then page tables)": the pages alone first, cheaply, so a huge
         // `len` that the budget could never pay for is refused before `tables_needed` walks it.
         if npages > self.free_pages(budget) {
@@ -1282,17 +1278,23 @@ impl MemoryManager {
         if npages + tables > self.free_pages(budget) {
             return Err(oom);
         }
-        // From here nothing fails: the range was free, the flags are good, and the budget was
-        // just charged (by the check above) for exactly this many pages and page tables.
+        // From here nothing fails: the range was free, the flags are good, and the check above
+        // found the budget able to pay for exactly this many pages and page tables, which
+        // `alloc_page` charges as it takes them.
         for offset in (0..len).step_by(PAGE_SIZE) {
             crate::arch::mem::prepare_map(self, &space, pid, addr + offset)
                 .expect("map_fixed: range_available_in found this page empty, so prepare_map's own (weaker) occupancy check cannot fail, and the charge check above paid for its page table");
         }
         for offset in (0..len).step_by(PAGE_SIZE) {
             // Zeroed through the physmap, before the mapping exists at all (R11). The charge
-            // check above guarantees the budget can pay for `npages` pages; that a budget's
-            // free_pages is backed by free physical frames is the same assumption
-            // `process_map`'s `.expect` at `process.rs:382-392` relies on.
+            // check above guarantees the budget can pay for `npages` pages. That a free frame
+            // exists for each is an assumption: a budget's free_pages is backed by free
+            // physical frames. It holds because `boot_budgets` gives `root` only the RAM frames
+            // the kernel did not keep, every child carves its limit out of its parent's, and
+            // nothing is held back (answer 127). `process_map` relies on the same thing only
+            // for page tables (its `prepare_map` `.expect`, which allocates through `walk`);
+            // failing on data frames with `.expect` is new here. `map_run` instead treats a
+            // failed `alloc_page` as live and unwinds, which leaks page tables (see above).
             let frame = self.alloc_page(pid).expect("map_fixed: charged for above");
             crate::kframe::zero(frame);
             crate::arch::mem::map_page_inner(self, pid, frame, addr + offset, flags, true)
@@ -1324,6 +1326,20 @@ pub(crate) fn redoubt_flags(flags: redoubt_sys::MemFlags) -> MemoryFlags {
     has(redoubt_sys::MemFlags::READ, MemoryFlags::R)
         | has(redoubt_sys::MemFlags::WRITE, MemoryFlags::W)
         | has(redoubt_sys::MemFlags::EXECUTE, MemoryFlags::X)
+}
+
+/// R11 for a caller that maps with `.expect` afterwards (`map_fixed`, `process_map`): refuse
+/// empty flags, W+X, and writable without readable before anything is charged or moved, so the
+/// page-table layer's own refusal (`check_permissions`) is never what catches them. Decoding
+/// already refuses W+X; this check does not rest on that (KERNEL-SPEC.md, ABI).
+#[cfg(baremetal)]
+pub(crate) fn check_map_flags(flags: MemoryFlags) -> Result<(), redoubt_sys::Error> {
+    let wx = MemoryFlags::W | MemoryFlags::X;
+    let write_only = flags & MemoryFlags::W == MemoryFlags::W && flags & MemoryFlags::R != MemoryFlags::R;
+    if flags.is_empty() || flags & wx == wx || write_only {
+        return Err(redoubt_sys::Error::InvalidArgument);
+    }
+    Ok(())
 }
 
 /// Zero the memory in `start..end` with volatile writes.

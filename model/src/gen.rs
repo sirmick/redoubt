@@ -15,7 +15,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::kernel::{
-    Backing, DeviceKind, INIT_PID, KERNEL_CHOSEN_BASE, Kernel, MapState, Object, ROOT, SYSTEM, USERS, USER_TOP,
+    Backing, DeviceKind, INIT_PID, KERNEL_CHOSEN_BASE, Kernel, MapState, Object, ROOT, SYSTEM, USER_TOP,
+    USERS,
 };
 use crate::spec::*;
 use crate::syscall::*;

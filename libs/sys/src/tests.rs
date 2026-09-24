@@ -750,6 +750,10 @@ fn error_rows() {
 /// hosted build doesn't build on this host at all). This mirrors that exact check with an
 /// explicit `u32`, so a 64-bit host can still exercise the rv32-width wraparound the real check
 /// relies on `checked_add` to refuse (answer 172's "rv32 wrap" attack case).
+///
+/// This is a COPY, and the test below documents it; it does not test the kernel. A change to
+/// the kernel's `user_range` does not fail it. Keep the two identical by hand. (Sharing one
+/// function would mean moving a kernel check into redoubt-sys for a test's sake.)
 fn user_range_at_width(addr: u32, len: u32, page_size: u32, user_area_end: u32) -> Option<u32> {
     if len == 0 || len % page_size != 0 || addr % page_size != 0 {
         return None;

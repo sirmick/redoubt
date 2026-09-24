@@ -397,9 +397,11 @@ impl Mutation {
             | R10RevokedCallAnswered
             | R10SweptHandlesDropped
             | R10CreatorDeathSparesProcess => "R10",
-            R11NoZeroing | R11SetFlagsAllowsWx | R11AllowsWriteOnly | R11LendStaysMapped | R11MapFixedSkipsOverlap => {
-                "R11"
-            }
+            R11NoZeroing
+            | R11SetFlagsAllowsWx
+            | R11AllowsWriteOnly
+            | R11LendStaysMapped
+            | R11MapFixedSkipsOverlap => "R11",
             IpcWrongLend | IpcDropPartial | IpcFalseDelivery | IpcSkipOutputCheck | IpcLeakRollback => "IPC",
             R12PriorityById | R12IgnoreWeight | R12WakeBanksCredit => "R12",
             MsgNoLabels

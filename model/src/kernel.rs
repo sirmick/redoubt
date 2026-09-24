@@ -2443,7 +2443,11 @@ impl Kernel {
         self.charge(b, n.checked_add(tables).ok_or(Error::OutOfMemory)?)?;
         for i in 0..n {
             let f = self.alloc_frame(b);
-            self.map_page(pid, first + i, Mapping { backing: Backing::Frame(f), flags, state: MapState::Own });
+            self.map_page(
+                pid,
+                first + i,
+                Mapping { backing: Backing::Frame(f), flags, state: MapState::Own },
+            );
         }
         Ok(())
     }
