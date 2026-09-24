@@ -1,0 +1,13 @@
+[package]
+name = "redoubt-stride"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "The kernel's stride queue arithmetic and ranks (KERNEL-SPEC.md R7/R12), host-tested against the executable model"
+
+# No dependencies: the kernel links this, so it is TCB. The model is a dev-dependency only, for
+# the differential test; the model itself depends on nothing of the kernel's.
+[dependencies]
+
+[dev-dependencies]
+redoubt-model = { path = "../../model" }

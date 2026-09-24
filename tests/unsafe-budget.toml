@@ -17,6 +17,13 @@ max_unsafe = 12
 max_undocumented = 0
 
 [[budget]]
+# WP-K5: the kernel's stride queue rules, linked into the kernel. `#![forbid(unsafe_code)]`.
+name = "redoubt-stride (scheduler rules)"
+paths = ["libs/stride/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
 name = "loader"
 paths = ["loader/src"]
 max_unsafe = 17 # +3: fdt-rs DevTree::from_raw_pointer, the static index buffer, and Platform::read
