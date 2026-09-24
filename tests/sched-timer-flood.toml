@@ -1,0 +1,14 @@
+description = "Timer interrupts an attacker arms cost the attacker (WP-K5, billing): 1 us-staggered sleepers, and staggered budget deadlines, leave an equal-weight victim half (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-timer-flood"]
+timeout_secs = 600
+expect = [
+    '^\[timer-flood\] ok: 30 sleepers, 1 us apart',
+    '^\[timer-flood\] ok: 30 sleepers and 64 staggered',
+    '^SCHED-TIMER-FLOOD TEST PASSED$',
+]
+forbid = ['\[timer-flood\] FAIL']
+poweroff = true

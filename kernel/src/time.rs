@@ -2,9 +2,9 @@
 
 //! The kernel-owned timer (RESOURCES.md, The timer; KERNEL-SPEC.md, I13 and R12).
 //!
-//! One hardware timer, always armed for the earliest of what is due: a blocking call's timeout
-//! (I13) or a budget's deadline. Nothing in userspace programs it and there is no timer interrupt
-//! for userspace; user mode reads the counter directly (`rdtime`).
+//! One hardware timer, always armed for the earliest of what is due: the running thread's slice
+//! end (R12), a blocking call's timeout (I13) or a budget's deadline. Nothing in userspace programs it and
+//! there is no timer interrupt for userspace; user mode reads the counter directly (`rdtime`).
 //!
 //! # Expiry
 //! [`expire_due`] handles everything due at or before now, earliest first: a timeout returns
@@ -45,11 +45,14 @@ struct Timer {
     threads: u64,
     /// No budget's deadline is earlier than this.
     budgets: u64,
+    /// When the running thread's slice ends (`sched.rs`); `NEVER` while `kmain` runs.
+    slice: u64,
     /// What the hardware is armed for, in microseconds.
     armed: u64,
 }
 
-static TIMER: KernelCell<Timer> = KernelCell::new(Timer { threads: NEVER, budgets: NEVER, armed: NEVER });
+static TIMER: KernelCell<Timer> =
+    KernelCell::new(Timer { threads: NEVER, budgets: NEVER, slice: NEVER, armed: NEVER });
 
 /// Monotonic microseconds since boot.
 pub fn now_us() -> u64 { timer::now_us() }
@@ -67,12 +70,21 @@ pub fn note_budget_deadline(deadline: u64) {
     rearm();
 }
 
+/// The running thread's slice ends at `at` (`NEVER` for none).
+pub fn set_slice_end(at: u64) {
+    TIMER.with(|t| t.slice = at);
+    rearm();
+}
+
+/// When the running thread's slice ends.
+pub fn slice_end() -> u64 { TIMER.with(|t| t.slice) }
+
 /// Arm the timer for the earliest thing due, if that changed. Budget deadlines wait while a
 /// legacy callback runs (module docs).
 pub fn rearm() {
     let callback = crate::arch::irq::in_callback();
     TIMER.with(|t| {
-        let target = if callback { t.threads } else { t.threads.min(t.budgets) };
+        let target = if callback { t.threads } else { t.threads.min(t.budgets).min(t.slice) };
         if target != t.armed {
             t.armed = target;
             timer::set(if target == NEVER { u64::MAX } else { timer::us_to_ticks(target) });
@@ -93,17 +105,23 @@ fn running() -> Option<redoubt_abi::PID> {
     (pid.get() != 1).then_some(pid)
 }
 
-/// Handle everything due (module docs), then re-arm for the next thing. Takes the scheduler
-/// only: destroying a budget borrows the memory manager in phases (`process.rs`, Locks).
-pub fn expire_due(ss: &mut SystemServices) {
+/// Handle everything due (module docs), then re-arm for the next thing. Returns whether a budget
+/// deadline fired (a preemption point, R12). Takes the scheduler only: destroying a budget
+/// borrows the memory manager in phases (`process.rs`, Locks).
+///
+/// Each item's handling is billed to its own budget (`sched::bill`): a timeout to its thread's,
+/// a deadline to the dying budget (whose debt then moves up). The walks that find them are the
+/// kernel's.
+pub fn expire_due(ss: &mut SystemServices) -> bool {
     let now = now_us();
     let callback = crate::arch::irq::in_callback();
     if TIMER.with(|t| t.threads > now && (callback || t.budgets > now)) {
-        return;
+        return false;
     }
+    let mut destroyed = false;
     let mut next_timeout;
     loop {
-        let (timeout, next) = MemoryManager::with(|mm| crate::message::next_timeout(mm, now));
+        let (timeout, next) = MemoryManager::with_mut(|mm| crate::message::next_timeout(mm, now));
         next_timeout = next;
         let budget = if callback { None } else { due_budget(now) };
         // Earliest first; at an equal instant, the timeout.
@@ -113,10 +131,18 @@ pub fn expire_due(ss: &mut SystemServices) {
             (t, _) => t.is_some(),
         };
         if let (true, Some((_, pid, tid))) = (timeout_first, timeout) {
-            MemoryManager::with_mut(|mm| crate::message::time_out(ss, mm, pid, tid));
+            let started = crate::sched::now_ticks();
+            MemoryManager::with_mut(|mm| {
+                crate::message::time_out(ss, mm, pid, tid);
+                if let Some(frame) = mm.budget_of(pid) {
+                    let b = crate::handle::BudgetRef { frame, id: mm.budget(frame).id };
+                    crate::sched::bill(mm, b, crate::sched::now_ticks().saturating_sub(started));
+                }
+            });
         } else if let Some((_, _, frame)) = budget {
             MemoryManager::with_mut(|mm| mm.mark_dying(frame));
-            crate::budget::destroy_subtree(ss, frame, running());
+            crate::budget::destroy_subtree(ss, frame, running(), true);
+            destroyed = true;
         }
     }
     let next_budget = MemoryManager::with(|mm| {
@@ -129,6 +155,7 @@ pub fn expire_due(ss: &mut SystemServices) {
         t.armed = 0;
     });
     rearm();
+    destroyed
 }
 
 /// A timer interrupt arrived. The trap handler has already expired what is due at its entry;
@@ -138,5 +165,5 @@ pub fn on_interrupt() {
     rearm();
 }
 
-/// Expire at a kernel entry.
-pub fn expire_at_entry() { SystemServices::with_mut(expire_due); }
+/// Expire at a kernel entry; whether a budget deadline fired.
+pub fn expire_at_entry() -> bool { SystemServices::with_mut(expire_due) }

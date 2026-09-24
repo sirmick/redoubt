@@ -1,0 +1,15 @@
+description = "Exiting on the CPU is charged (WP-K5, trap-boundary accounting): threads that exit, processes that exit and processes that fault leave an equal-weight victim half (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-exit-churn"]
+timeout_secs = 600
+expect = [
+    '^\[exit-churn\] ok: threads that exit',
+    '^\[exit-churn\] ok: processes that exit',
+    '^\[exit-churn\] ok: processes that fault',
+    '^SCHED-EXIT-CHURN TEST PASSED$',
+]
+forbid = ['\[exit-churn\] FAIL']
+poweroff = true

@@ -29,6 +29,8 @@ fn return_result(result: &redoubt_abi::Result, context: &Thread) -> ! {
 
 /// Resume `context` with `a0..=a7` = `args`.
 fn return_registers(args: &[usize; 8], context: &Thread) -> ! {
+    // Leaving the kernel: the scheduler's exit hook (`sched.rs`, accounting at the trap boundary).
+    crate::sched::leave(current_pid());
     // SAFETY: `_redoubt_syscall_return_result` (asm) writes `args` into the return registers
     // and resumes `context` with `sret`. Both point at valid, kernel-owned data and it
     // does not return.
@@ -66,7 +68,18 @@ pub fn enable_all_irqs() { intc::enable_all_irqs(); }
 /// Resume whatever is current now: after the entering thread's process died at this entry, or
 /// once a trap is fully handled.
 fn resume_current() -> ! {
-    ArchProcess::with_current_mut(|p| crate::arch::syscall::resume(current_pid().get() == 1, p.current_thread()))
+    ArchProcess::with_current_mut(|p| {
+        crate::arch::syscall::resume(current_pid().get() == 1, p.current_thread())
+    })
+}
+
+/// Preempt the running thread (R12: its slice ended, or a budget deadline fired): it stays ready
+/// and `kmain` picks again. A trap it had not yet been handled for is taken again when it next
+/// runs: its `sepc` is untouched (an `ecall` is stepped over only when handled).
+fn preempt() -> ! {
+    let tid = ArchProcess::with_current(|p| p.current_tid());
+    SystemServices::with_mut(|ss| crate::sched::preempt(ss, tid));
+    resume_current()
 }
 
 // Indicate when we handle an IRQ
@@ -188,17 +201,31 @@ pub extern "C" fn trap_handler(
 
     let ex = RiscvException::from_regs(sc.bits(), epc, stval::read());
 
+    // The user time since the last return is the running budget's (`sched.rs`).
+    let from_user = sstatus::read().spp() == sstatus::SPP::User;
+    if from_user {
+        crate::sched::from_user();
+    }
     // Every entry but the kernel's own `SwitchTo` answers the deadlines that have passed first
     // (`time.rs`), so a deadline beats anything that enters after it. If that ended the entering
     // process (a budget deadline), there is nothing of it left to handle: run what is current.
+    // A budget deadline is a preemption point (R12): the entering thread yields the CPU before
+    // anything else, and its trap is taken again when it next runs.
     if !matches!(ex, RiscvException::CallFromSMode(..)) {
-        crate::time::expire_at_entry();
-        let from_user = sstatus::read().spp() == sstatus::SPP::User;
+        let destroyed = crate::time::expire_at_entry();
         if from_user
-            && (current_pid() != pid || SystemServices::with(|ss| ss.get_process(pid).map_or(true, |p| p.free())))
+            && (current_pid() != pid
+                || SystemServices::with(|ss| ss.get_process(pid).map_or(true, |p| p.free())))
         {
             resume_current();
         }
+        if from_user && destroyed && !in_callback() {
+            preempt();
+        }
+    }
+    // From here, kernel time is the running budget's: a system call's is its caller's.
+    if from_user {
+        crate::sched::begin_billing();
     }
     #[cfg(any(feature = "debug-print"))] // , feature = "debug-swap-verbose"
     {
@@ -271,12 +298,19 @@ pub extern "C" fn trap_handler(
         // The kernel's timer: what was due was answered at this entry; arm for what is next.
         RiscvException::SupervisorTimerInterrupt(_) => {
             crate::time::on_interrupt();
+            // The running thread's slice is over: preempt it (R12). Not inside a legacy callback,
+            // which runs on the interrupted thread's time until it returns (INTERIM, WP-K6).
+            if from_user && !in_callback() && crate::sched::slice_over() {
+                preempt();
+            }
             resume_current();
         }
         // Hardware interrupt
         RiscvException::UserExternalInterrupt(_) | RiscvException::SupervisorExternalInterrupt(_) => {
             // The controller claims one interrupt; `None` is a spurious trap with nothing
-            // pending, which we ignore and just resume from.
+            // pending, which we ignore and just resume from. Handling it is its device owner's
+            // work, not the interrupted budget's (`sched::bill_irq`).
+            let started = crate::sched::now_ticks();
             let pending = intc::pending();
 
             if let Some(irq) = pending {
@@ -295,10 +329,9 @@ pub extern "C" fn trap_handler(
                     HANDLING_IRQ.store(true, Ordering::Relaxed);
                     crate::irq::handle(irq).expect("Couldn't handle IRQ");
                 }
+                crate::sched::bill_irq(irq, started);
             }
-            ArchProcess::with_current_mut(|process| {
-                crate::arch::syscall::resume(current_pid().get() == 1, process.current_thread())
-            })
+            resume_current()
         }
 
         // See if it's a known exception, such as writing to a demand-paged area

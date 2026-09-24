@@ -244,12 +244,27 @@ impl Default for ProcessInner {
 
 impl Process {
     /// This process has at least one context that may be run
+    #[cfg(not(baremetal))]
     pub fn runnable(&self) -> bool {
         matches!(self.state, ProcessState::Setup(_) | ProcessState::Ready(_) | ProcessState::Exception(_))
     }
 
     /// This process slot is unallocated and may be turn into a process
     pub fn free(&self) -> bool { matches!(self.state, ProcessState::Free) }
+
+    /// The threads the scheduler may run next (`sched.rs`): a bit per thread waiting for the
+    /// CPU, or `None` for a process whose next thread `activate_process_thread` chooses itself
+    /// (being set up, or in its exception handler). A running thread is not waiting.
+    pub fn ready_threads(&self) -> Option<usize> {
+        match self.state {
+            ProcessState::Ready(x) | ProcessState::Running(x) => Some(x),
+            ProcessState::Setup(_) | ProcessState::Exception(_) => None,
+            _ => Some(0),
+        }
+    }
+
+    /// Whether the process is on the CPU.
+    pub fn running(&self) -> bool { matches!(self.state, ProcessState::Running(_)) }
 
     pub fn activate(&self) -> Result<(), redoubt_abi::Error> {
         crate::arch::process::set_current_pid(self.pid);

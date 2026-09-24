@@ -492,12 +492,15 @@ fn answer_record<const N: usize>(
 
 /// Say what a thread is waiting for, and until when. It does not block yet: the delivery attempt
 /// that follows may answer it at once, and `settle` then never takes it off the ready list.
-fn mark(mm: &MemoryManager, pid: PID, tid: TID, wait: Wait, timeout: u64) {
+fn mark(mm: &mut MemoryManager, pid: PID, tid: TID, wait: Wait, timeout: u64) {
     // Timeouts are relative microseconds, added with saturation, so `FOREVER` never expires.
     let deadline = crate::time::now_us().saturating_add(timeout);
     set_tword(mm, pid, tid, W_WAIT, wait as u64);
     set_tword(mm, pid, tid, W_DEADLINE, deadline);
     if deadline != u64::MAX {
+        if let Some(a) = mm.account_mut(pid) {
+            a.earliest_timeout = a.earliest_timeout.min(deadline);
+        }
         crate::time::note_timeout(deadline);
     }
 }
@@ -1550,25 +1553,44 @@ fn fail_all(
 }
 
 /// I13: the timeout due first at `now`: the earliest deadline at or before `now` (at an equal
-/// deadline, the first in (pid, tid) order, the walk's order), and the earliest deadline still to
-/// come (`u64::MAX` for none). One walk of every thread.
-pub fn next_timeout(mm: &MemoryManager, now: u64) -> (Option<(u64, PID, TID)>, u64) {
+/// deadline, the first in (pid, tid) order), and the earliest deadline still to come (`u64::MAX`
+/// for none). Only the threads of processes whose cached earliest timeout has come are read; each
+/// such cache is recomputed on the way.
+pub fn next_timeout(mm: &mut MemoryManager, now: u64) -> (Option<(u64, PID, TID)>, u64) {
     let mut due: Option<(u64, PID, TID)> = None;
     let mut next = u64::MAX;
-    find_thread(mm, |mm, pid, tid| {
-        let s = slot(mm, pid, tid);
-        if s.wait == Wait::None || s.deadline == u64::MAX {
-            return None::<()>;
+    for index in 1..=MAX_PROCESS_COUNT {
+        let Some(pid) = PID::new(index as u8) else { continue };
+        let Some(earliest) = mm.account(pid).map(|a| a.earliest_timeout) else { continue };
+        if earliest > now {
+            next = next.min(earliest);
+            continue;
         }
-        if s.deadline <= now {
-            if due.is_none_or(|(d, _, _)| s.deadline < d) {
-                due = Some((s.deadline, pid, tid));
+        let mut exact = u64::MAX;
+        for tid in 0..MAX_THREAD {
+            if mm.ipc_frame(pid, tid).is_none() {
+                continue;
             }
-        } else {
-            next = next.min(s.deadline);
+            if Wait::from_word(tword(mm, pid, tid, W_WAIT)) == Wait::None {
+                continue;
+            }
+            let deadline = tword(mm, pid, tid, W_DEADLINE);
+            if deadline == u64::MAX {
+                continue;
+            }
+            exact = exact.min(deadline);
+            if deadline <= now {
+                if due.is_none_or(|(d, _, _)| deadline < d) {
+                    due = Some((deadline, pid, tid));
+                }
+            } else {
+                next = next.min(deadline);
+            }
         }
-        None
-    });
+        if let Some(a) = mm.account_mut(pid) {
+            a.earliest_timeout = exact;
+        }
+    }
     (due, next)
 }
 

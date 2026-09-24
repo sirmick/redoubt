@@ -553,6 +553,7 @@ dependencies = [
  "rand",
  "rand_chacha",
  "redoubt-abi",
+ "redoubt-stride",
  "redoubt-sys",
  "riscv",
  "sbi-rt",

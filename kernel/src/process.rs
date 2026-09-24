@@ -242,7 +242,9 @@ pub fn process_create(
     let target = mm.budget_handle(pid, budget_h)?;
     let (endpoint, exit_handle) = mm.endpoint_handle(pid, endpoint_h)?;
     // A weight-0 budget holds no process (R12); the spec's stated exception, `InvalidArgument`.
-    if mm.budget(target).weight_limit == 0 {
+    // A budget with no free weight holds no process (R12: its stride weight is its free weight).
+    let tb = mm.budget(target);
+    if tb.weight_limit.saturating_sub(tb.weight_carved) == 0 {
         return Err(Error::InvalidArgument);
     }
     // Stage 3: an exit endpoint is named by its receive right, so a notice cannot be steered at

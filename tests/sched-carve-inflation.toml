@@ -1,0 +1,16 @@
+description = "Carving moves share, never duplicates it (WP-K5, free weight): a carving subtree gets at most half, nested too; carving a process-holding budget to zero and a process in a fully carved budget are refused (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-carve-inflation"]
+timeout_secs = 600
+expect = [
+    '^\[carve\] ok: a chain of 1 carves',
+    '^\[carve\] ok: a chain of 4 carves',
+    '^\[carve\] ok: carving all of a process-holding',
+    '^\[carve\] ok: a process in a budget with no free weight',
+    '^SCHED-CARVE-INFLATION TEST PASSED$',
+]
+forbid = ['\[carve\] FAIL']
+poweroff = true

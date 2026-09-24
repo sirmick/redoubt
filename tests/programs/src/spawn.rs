@@ -136,8 +136,16 @@ fn mem_flags(p_flags: u32) -> MemFlags {
     flags
 }
 
-/// Copy `len` bytes from `src` to `dst`, neither of which overlaps the other.
+/// Copy `len` bytes from `src` to `dst`, neither of which overlaps the other; a word at a time
+/// when both are word-aligned (whole pages always are).
 fn copy(dst: usize, src: usize, len: usize) {
+    if dst % 8 == 0 && src % 8 == 0 && len % 8 == 0 {
+        for i in (0..len).step_by(8) {
+            // SAFETY: as below, eight bytes at a time, both addresses 8-aligned.
+            unsafe { ((dst + i) as *mut u64).write_volatile(((src + i) as *const u64).read_volatile()) };
+        }
+        return;
+    }
     for i in 0..len {
         // SAFETY: `src` is a page of this program's own image and `dst` a page it has just
         // mapped read-write; both are `len` bytes long and they do not overlap.

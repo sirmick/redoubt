@@ -200,7 +200,7 @@ fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
 fn budget_destroy(pid: PID, _tid: TID, h: u32) -> Result<Option<Return>, Error> {
     SystemServices::with_mut(|ss| {
         let top = MemoryManager::with_mut(|mm| mm.destroy_begin(pid, h))?;
-        let caller_doomed = crate::budget::destroy_subtree(ss, top, Some(pid));
+        let caller_doomed = crate::budget::destroy_subtree(ss, top, Some(pid), false);
         Ok(if caller_doomed { None } else { Some(Return::Nothing) })
     })
 }
