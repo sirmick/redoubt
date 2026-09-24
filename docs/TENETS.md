@@ -32,8 +32,8 @@ claim above accounts for permitted same-label delegation; answer 150's equal-lab
 remains settled. Question **164** asks how confined placement accommodates the already-specified
 trusted mediation for approvals, push and declassification (answers 152-153). These are unresolved
 claim/topology questions, not accepted exceptions or proof that the current implementation meets
-the guarantees. Question **166** separately challenges the one-slice responsiveness promise in
-RESOURCES.md; human control does not establish that timing bound by itself.
+the guarantees. Steward responsiveness for ending a lease is a measured target in RESOURCES.md,
+not a proven bound (answer 166); human control does not establish a timing bound by itself.
 
 The [high/low scenario](GAME.md) tests a secret-holding agent colluding with a networked one.
 Labels must close intentional software paths; confined placement and permitted mediation are

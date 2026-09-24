@@ -35,28 +35,25 @@ Why each rule:
   notices are received); a lease is a budget with a deadline, at most `MAX_LEASE` (CAPABILITIES.md).
 
 ## Scheduling
-The policy below is the accepted target, not the current scheduler. **Question 166 remains open**:
-answer 103's one-slice wakeup promise does not follow from R12's retained-pass rule and unspecified
-ties. The promise is not verified, and neither the proposed weaker claim nor a replacement
-scheduler has been accepted. WP-K5 must resolve that acceptance issue before claiming the bound.
+The policy below is the accepted target, not the current scheduler (STATUS.md).
 
 ### Everyone by weight, in one queue
 - **One stride queue for every budget** (KERNEL-SPEC.md, R12). There is no priority, no second
   queue and no flag that jumps one: `init`, the steward and the drivers get **large weights in the
   boot manifest** (INIT.md) instead of running first.
-- **Wake rule.** A budget that wakes uses `max(own pass, current minimum)` (R12); it can retain a
-  larger pass. Answer 103's claim of about one `SLICE` is qualified by open question 166 above.
-  Strict priority would only matter for a
-  driver that spins while others are runnable, and that is a bug for the bench to find, not a mode
-  to support.
+- **Wake rule.** A budget that wakes uses `max(own pass, current minimum)` (R12) and can retain a
+  larger pass. Among equal passes a waking budget is ranked ahead of budgets already queued
+  (wake-first, deterministic), and preemption happens at slice end or at a deadline, never on
+  wake alone. Wakeup is therefore prompt but not bounded: no deadline follows from weight, and
+  the responsiveness target below is measured, not derived (answer 166, revising 103). Strict
+  priority would only matter for a driver that spins while others are runnable, and that is a
+  bug for the bench to find, not a mode to support.
 - **The steward's weight is large too**, which is what keeps logout and ending a lease responsive.
   It also works for users, so it bounds the work any one request can cause and relies on its
   per-(account, label set) caps.
 - **Servers that work for users** (`fsd`, `keyd`, `ipd`, `sshd`, ...) get ordinary manifest weights
   and bound the work of one request. Were they ahead of everyone, Bob could make `fsd` or `keyd` do
   expensive work and no user budget would run meanwhile.
-- **Unresolved latency claim (166):** answer 103 states up to one `SLICE` for a driver or steward
-  under load. The specified mechanism does not establish that bound; it is not a measured result.
 - **Stated residual:** work a server does for a user is paid by the server's weight, not the
   requester's (and the steward's by the steward); CONTAINMENT.md.
 Class (`system` or `user`) means trust, not order: it decides R1's exemption, who may read
@@ -98,9 +95,12 @@ budget exceed its total; swapped pages encrypted and authenticated; the system b
 ## Attack tests the bench gains
 - A spinning process cannot delay another budget beyond its share, including by sleeping briefly
   between bursts.
-- A driver woken by an interrupt runs within about one `SLICE` while user budgets spin (the stated
-  cost in answer 103, still disputed by open question 166), and a large-weight server keeps its
-  share under that load. This is a pending acceptance claim, not existing evidence of a bound.
+- **Measured responsiveness target (answer 166).** Under the named workload (N spinning user
+  budgets at the manifest user weight, one driver and the steward at their manifest weights) the
+  bench records the weights, the runnable budgets, each budget's prior pass, the driver's
+  interrupt-to-run wake latency and the steward's lease-termination latency, and a large-weight
+  server keeps its share under that load. WP-K5 proposes the numeric target with that evidence and
+  a package reviewer accepts it. It is a measured target, not a bound derived from the queue.
 - A thread, endpoint, handle or budget bomb hits its own page limit; other budgets keep creating.
 - A memory hog gets `OutOfMemory`; the system budget is untouched.
 - A transfer to a server that did not opt in fails; the server's budget is untouched.

@@ -8,7 +8,8 @@ findings, reproductions and the owner's branch restrictions. Those checkpoints a
 
 | Finding | Next action |
 | --- | --- |
-| D1–D3: confinement mediation, authority closure, wakeup bound | Owner decisions [164–166](docs/QUESTIONS.md); retain the qualifications beside the affected guarantees. |
+| D1–D2: confinement mediation, authority closure | Owner decisions [164–165](docs/QUESTIONS.md); retain the qualifications beside the affected guarantees. |
+| D3: wakeup bound | Settled by [answer 166](docs/ANSWERS.md): a measured responsiveness target in RESOURCES.md, not a bound. WP-K5 implements the tie rule and records the measurement. |
 | IPC1 acceptance | Replay the reconciled model traces against the kernel and add K5 timer cases; native process-exit cleanup now has K4 coverage. Reconcile concurrency acceptance with PLAN's post-M1 SMP scope without silently waiving the existing gate. |
 | A3: consoled unknown-request handles | Close attached handles on rejection and test the actual serving path. |
 | Raw syscalls combined with owning runtime views | Audit this inherited API soundness boundary separately; the IPC regression does not certify arbitrary combinations. |

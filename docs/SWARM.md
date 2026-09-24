@@ -96,8 +96,8 @@ work; it does not mean an implementer is running. Merged rows retain dependency 
 | K2 | merged | wp-k2 | 95788dcd0 (carried A3) |
 | K3 | merged | wp-k3 | 12c52c2d7 |
 | K4 | merged | recovery-k4 | Native lifecycle integrated; three reviews and full bench complete; bundle-file readback remains acceptance gate for R2/R3 (answer 169) |
-| G1 | building | wp-g1 | Reconcile retained T1c/IPC review evidence; 26cba3022 budget-record change needs its TCB review. Owner chose Q166 option A (2026-09-23, Wash QA G1-q166); Architect still to record it in ANSWERS and apply to R12/RESOURCES/WP-K5 |
-| K5 | waiting | | K2 merged; Q166 answered (option A) but not yet recorded/applied; sole kernel writer after review debt is cleared |
+| G1 | building | wp-g1 | Reconcile retained T1c/IPC review evidence; 26cba3022 budget-record change needs its TCB review. Q166 option A recorded as answer 166 and applied to R12/RESOURCES/WP-K5 (2026-09-23, Wash QA G1-q166) |
+| K5 | waiting | | K2 merged; answer 166 applied: WP-K5 adds wake-first ties, slice-end preemption and the measured latency bench case; sole kernel writer after review debt is cleared |
 | K6 | waiting | | needs K1-K5, R1b |
 | IPC1 | review | wp-ipc1 | Implementation in fe807fc4b; host model recovered, native replay, K5 timer and concurrency acceptance remain open; native exit covered by K4 |
 | R1 | merged | wp-r1 | 8298608af (carried the answers 39-42, 50-53 part of R1b) |
