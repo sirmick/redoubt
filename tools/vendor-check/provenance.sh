@@ -22,13 +22,27 @@ index_path() {
     esac
 }
 
+# The vendored table's header. Fail closed: a table that can't be found checks nothing.
+header='^| Crate | Version | License (ours to use under)'
+if ! grep -q "$header" "$readme"; then
+    echo "provenance: no vendored table in $readme" >&2
+    exit 1
+fi
+
 failed=0
+checked=()
 # Every row of the vendored table: | `name` | version | license | `sha256` |
 while IFS='|' read -r _ name version _ sum _; do
     name="$(echo "$name" | tr -d ' `')"
     version="$(echo "$version" | tr -d ' ')"
     recorded="$(echo "$sum" | tr -d ' `')"
-    [ -n "$name" ] && [ -d "$root/vendor/$name" ] || continue
+    [ -n "$name" ] || continue
+    if [ ! -d "$root/vendor/$name" ]; then
+        echo "$name $version: listed but vendor/$name is missing"
+        failed=1
+        continue
+    fi
+    checked+=("$name")
 
     crate="$work/$name-$version.crate"
     curl -sSfL -o "$crate" "https://static.crates.io/crates/$name/$name-$version.crate"
@@ -48,7 +62,22 @@ while IFS='|' read -r _ name version _ sum _; do
     fi
     echo "$name $version: $verdict"
     [ "$verdict" = ok ] || failed=1
-done < <(sed -n '/^| Crate | Version | License (ours to use under)/,/^$/p' "$readme" | tail -n +3)
+done < <(sed -n "/$header/,/^\$/p" "$readme" | tail -n +3)
+
+# Every vendored directory must have been checked, except getrandom, which is patched and has its
+# own section (vendor/README.md, "getrandom").
+for dir in "$root"/vendor/*/; do
+    name="$(basename "$dir")"
+    [ "$name" = getrandom ] && continue
+    if [[ " ${checked[*]} " != *" $name "* ]]; then
+        echo "vendor/$name: not in the vendored table, so not checked"
+        failed=1
+    fi
+done
+if [ "${#checked[@]}" = 0 ]; then
+    echo "provenance: the vendored table has no rows" >&2
+    failed=1
+fi
 
 if [ "$failed" = 0 ]; then echo "provenance: every vendored crate is the published one"; fi
 exit "$failed"
