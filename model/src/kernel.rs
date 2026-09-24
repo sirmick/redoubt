@@ -2329,6 +2329,9 @@ impl Kernel {
             S::TimeNow => done(Ok(Ret::Time(self.time_now()))),
             S::Random => done(Ok(Ret::Random)),
             S::SystemReset { h, kind } => done(self.system_reset(pid, *h, *kind).map(|_| Ret::Unit)),
+            S::MapFixed { addr, len, flags } => {
+                done(self.map_fixed(pid, *addr, *len, *flags).map(|_| Ret::Unit))
+            }
         }
     }
 

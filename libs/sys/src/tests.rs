@@ -76,6 +76,7 @@ fn sample_calls() -> Vec<Call> {
         Call::Random,
         Call::SystemReset { device: h(12), kind: ResetKind::PowerOff },
         Call::SystemReset { device: h(12), kind: ResetKind::Reboot },
+        Call::MapFixed { addr: 0x2000_0000, len: 0x3000, flags: rw },
     ]
 }
 
@@ -417,6 +418,13 @@ fn malformed_calls_are_refused() {
     );
     assert_eq!(decode([map_anon, 0x1000, 6, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "W+X");
     assert_eq!(decode([map_anon, 0x1000, 7, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "RW+X");
+    let map_fixed = Number::MapFixed as u64;
+    assert_eq!(
+        decode([map_fixed, 0x2000_0000, 0x1000, 8, 0, 0, 0, 0]),
+        Err(Error::InvalidArgument),
+        "map_fixed unknown flag"
+    );
+    assert_eq!(decode([map_fixed, 0x2000_0000, 0x1000, 6, 0, 0, 0, 0]), Err(Error::InvalidArgument), "map_fixed W+X");
     let random = Number::Random as u64;
     assert_eq!(
         decode([random, 0x9000, 8, 0, 0, 0, 0, 0]),

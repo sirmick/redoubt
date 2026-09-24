@@ -80,6 +80,11 @@ pub fn set_flags(addr: usize, len: usize, flags: MemFlags) -> Result<(), Error> 
     nothing(syscall(&Call::SetFlags { addr, len, flags }))
 }
 
+/// Maps `len` bytes (whole pages) of zeroed memory at exactly `addr`; never replaces a mapping.
+pub fn map_fixed(addr: usize, len: usize, flags: MemFlags) -> Result<(), Error> {
+    nothing(syscall(&Call::MapFixed { addr, len, flags }))
+}
+
 /// Starts a thread at `entry` with stack `sp` and `arg` in its first argument register.
 pub fn thread_create(entry: usize, sp: usize, arg: usize) -> Result<u32, Error> {
     match syscall(&Call::ThreadCreate { entry, sp, arg })? {
