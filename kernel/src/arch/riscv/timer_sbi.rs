@@ -1,86 +1,74 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Hart timer backend for platforms with SBI firmware, using the SBI TIME extension.
-//! See `docs/TIMER.md`.
+//! Hart timer backend for platforms with SBI firmware, using the SBI TIME extension. The kernel
+//! owns the timer (RESOURCES.md, The timer); `crate::time` decides what it is armed for.
+//!
+//! SBI TIME rather than Sstc: it works under every SBI firmware on both widths, with no firmware
+//! configuration (Sstc needs `menvcfg.STCE`), and one `ecall` per arming is nothing at a 10 ms
+//! slice.
 
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use riscv::register::{scounteren, sie};
-
-/// The timer is presented to userspace as this interrupt. PLIC source 0 does not exist.
-pub const IRQ: usize = redoubt_abi::arch::platform_call::TIMER_IRQ;
 
 // The timebase is a frequency in Hz, set once at boot and read-only afterwards, so a plain
 // `AtomicUsize` is enough and stays lock-free on rv32 (which has no 64-bit atomics). Any
 // real RISC-V timebase fits in 32 bits.
 static TIMEBASE: AtomicUsize = AtomicUsize::new(0);
-/// A deadline has been set and its interrupt has not been delivered yet.
-static ARMED: AtomicBool = AtomicBool::new(false);
-/// An interrupt handler is running, so the timer interrupt must stay off.
-static MASKED: AtomicBool = AtomicBool::new(false);
 
-pub fn init() {
-    if let Some(arg) = crate::args::KernelArguments::get().iter().find(|a| a.name == u32::from_le_bytes(*b"Time")) {
-        TIMEBASE.store(crate::args::wide(arg.data, 0), Ordering::Relaxed);
-    }
-    BOOT_TICKS.with(|t| *t = riscv::register::time::read64());
-    // Let userspace read the `time` CSR directly, via `scounteren.TM`.
-    // SAFETY: this exposes a read-only counter to U-mode and has no memory effect.
-    unsafe { scounteren::set_tm() };
-}
-
-/// Mask or unmask the supervisor timer interrupt at the hart.
-fn set_interrupt_enabled(enabled: bool) {
-    // SAFETY: the kernel itself runs with `sstatus.SIE` clear, so this only changes whether
-    // the interrupt is taken from U-mode, where the trap handler is ready for it.
-    unsafe {
-        if enabled { sie::set_stimer() } else { sie::clear_stimer() }
-    }
-}
-
-/// Ticks of the `time` CSR per second, or 0 if the loader did not report it.
-pub fn timebase() -> u64 { TIMEBASE.load(Ordering::Relaxed) as u64 }
-
-/// The `time` CSR when the kernel started, so that `now_us` counts from boot.
+/// The `time` CSR when the kernel started, so that time counts from boot.
 static BOOT_TICKS: crate::cell::KernelCell<u64> = crate::cell::KernelCell::new(0);
 
-/// Monotonic microseconds since boot (KERNEL-SPEC.md, `time_now`).
-pub fn now_us() -> u64 {
-    let ticks = riscv::register::time::read64().saturating_sub(BOOT_TICKS.with(|t| *t));
+pub fn init() {
+    if let Some(arg) =
+        crate::args::KernelArguments::get().iter().find(|a| a.name == u32::from_le_bytes(*b"Time"))
+    {
+        TIMEBASE.store(crate::args::wide(arg.data, 0), Ordering::Relaxed);
+    }
+    // Fail closed: without a timebase no timeout, slice or deadline means anything.
+    assert!(timebase() != 0, "boot: the loader reported no timebase (`Time`)");
+    BOOT_TICKS.with(|t| *t = riscv::register::time::read64());
+    // Nothing is due yet.
+    sbi_rt::set_timer(u64::MAX);
+    // SAFETY: these only choose which interrupts reach the trap handler. The kernel itself runs
+    // with `sstatus.SIE` clear, so the timer interrupt is taken from U-mode or in `idle`, where
+    // the trap handler is ready for it; `scounteren.TM` exposes the read-only `time` counter to
+    // U-mode (`rdtime`), with no memory effect.
+    unsafe {
+        sie::set_stimer();
+        scounteren::set_tm();
+    }
+}
+
+/// Ticks of the `time` CSR per second.
+pub fn timebase() -> u64 { TIMEBASE.load(Ordering::Relaxed) as u64 }
+
+/// Ticks since boot.
+pub fn now_ticks() -> u64 { riscv::register::time::read64().saturating_sub(BOOT_TICKS.with(|t| *t)) }
+
+/// Monotonic microseconds since boot (KERNEL-SPEC.md, `time_now`), rounded down.
+pub fn now_us() -> u64 { ticks_to_us(now_ticks()) }
+
+/// Ticks since boot as microseconds, rounded down.
+pub fn ticks_to_us(ticks: u64) -> u64 {
     // Whole seconds, then the remainder: no 128-bit arithmetic, and no overflow while the
     // remainder (below the timebase, which fits in 32 bits) times 10^6 fits in 64 bits.
     let hz = timebase().max(1);
-    (ticks / hz) * 1_000_000 + (ticks % hz) * 1_000_000 / hz
+    (ticks / hz).saturating_mul(1_000_000).saturating_add((ticks % hz) * 1_000_000 / hz)
 }
 
-/// Whether `irq` is the timer, rather than a source on the interrupt controller.
-pub fn owns(irq: usize) -> bool { irq == IRQ }
-
-/// Request an interrupt once `time` reaches `deadline`. Writing a deadline also clears a
-/// pending timer interrupt.
-pub fn set_deadline(deadline: u64) {
-    sbi_rt::set_timer(deadline);
-    ARMED.store(true, Ordering::Relaxed);
-    if !MASKED.load(Ordering::Relaxed) {
-        set_interrupt_enabled(true);
-    }
+/// The first tick at or after `us` microseconds since boot, rounded up, so that an interrupt
+/// armed for it never comes before `now_us() >= us`; `u64::MAX` for a time that never comes.
+pub fn us_to_ticks(us: u64) -> u64 {
+    let hz = timebase().max(1);
+    let (secs, frac) = (us / 1_000_000, us % 1_000_000);
+    // frac < 10^6 and hz < 2^32: the product fits in 64 bits.
+    secs.checked_mul(hz).and_then(|t| t.checked_add((frac * hz).div_ceil(1_000_000))).unwrap_or(u64::MAX)
 }
 
-/// The timer interrupt fired. It stays pending until a new deadline is written, so it
-/// has to be masked or the hart would trap again immediately.
-pub fn on_interrupt() {
-    ARMED.store(false, Ordering::Relaxed);
-    set_interrupt_enabled(false);
-}
-
-pub fn mask() {
-    MASKED.store(true, Ordering::Relaxed);
-    set_interrupt_enabled(false);
-}
-
-pub fn unmask() {
-    MASKED.store(false, Ordering::Relaxed);
-    if ARMED.load(Ordering::Relaxed) {
-        set_interrupt_enabled(true);
-    }
+/// Request a timer interrupt once `ticks` (since boot) have passed; `u64::MAX` for none. Writing
+/// a deadline also clears a pending timer interrupt.
+pub fn set(ticks: u64) {
+    let at = ticks.checked_add(BOOT_TICKS.with(|t| *t)).unwrap_or(u64::MAX);
+    sbi_rt::set_timer(at);
 }

@@ -328,7 +328,10 @@ fn run_case(
         let log = logs.join(format!("{}-{}-smp{}.log", case.name, target.name, smp));
         // Every boot gets fresh devices: a new disk, new host ports.
         let boot_once = |log: &Path| -> Result<Verdict> {
-            let (devices, forwards) = qemu::virtio_devices(boot, &log.with_extension("img"))?;
+            let (mut devices, forwards) = qemu::virtio_devices(boot, &log.with_extension("img"))?;
+            if let Some(icount) = &boot.icount {
+                devices.extend(["-icount".into(), icount.clone(), "-rtc".into(), "clock=vm".into()]);
+            }
             let image = Image {
                 machine,
                 firmware: &firmware,

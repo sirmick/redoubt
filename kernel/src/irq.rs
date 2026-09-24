@@ -8,8 +8,9 @@ use redoubt_abi::{MemoryAddress, PID};
 use crate::arch;
 use crate::cell::KernelCell;
 
-/// Interrupts are numbered `0..MAX_IRQS`: IRQ 0 is the hart timer (TIMER.md) and 1..=1023
-/// are PLIC sources (the PLIC's 10-bit source-id space, so any source fits). The arch
+/// Interrupts are numbered `0..MAX_IRQS`: 1..=1023 are PLIC sources (the PLIC's 10-bit
+/// source-id space, so any source fits). Source 0 does not exist; the hart timer is the kernel's
+/// (`time.rs`) and is no interrupt userspace can claim. The arch
 /// layer reports one pending interrupt at a time (`arch::intc::pending()`), so this is a
 /// plain table index, not a bitmask, and is not bounded by the width of a `usize`.
 const MAX_IRQS: usize = 1024;
@@ -68,6 +69,10 @@ pub fn interrupt_claim(
     f: MemoryAddress,
     arg: Option<MemoryAddress>,
 ) -> Result<(), redoubt_abi::Error> {
+    // There is no source 0 (the hart timer that used to be claimed as IRQ 0 is the kernel's).
+    if irq == 0 {
+        return Err(redoubt_abi::Error::InterruptNotFound);
+    }
     // A source with a device object is R5's, and a handle to it is the only authority over
     // it (WP-K3): the legacy claim is not a second one. (Both this path and the grants go
     // with WP-K6.)

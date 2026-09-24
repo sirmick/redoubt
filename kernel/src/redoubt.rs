@@ -42,12 +42,8 @@ pub enum Outcome {
 
 pub fn handle(pid: PID, tid: TID, in_irq: bool, regs: &[u64; REGS]) -> Outcome {
     // A legacy interrupt callback runs on borrowed time inside another process's quantum; it
-    // gets none of these calls. (INTERIM: WP-K3 replaces callbacks with IRQ handles.)
-    // I13, until WP-K5 arms the timer: every deadline that has passed is answered before this
-    // call is, so a blocking call returns by its timeout as soon as anything enters the kernel.
-    if !in_irq {
-        SystemServices::with_mut(|ss| MemoryManager::with_mut(|mm| crate::message::expire(ss, mm)));
-    }
+    // gets none of these calls. (INTERIM: WP-K3 replaces callbacks with IRQ handles.) Deadlines
+    // that have passed were answered at this entry, before anything else (`time.rs`).
 
     let result = if in_irq {
         Err(Error::NotPermitted)
@@ -165,7 +161,7 @@ fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
         Call::MapFixed { addr, len, flags } => {
             MemoryManager::with_mut(|mm| mm.map_fixed(pid, addr, len, flags)).map(done)
         }
-        Call::TimeNow => Ok(Some(Return::Time(crate::arch::irq::timer::now_us()))),
+        Call::TimeNow => Ok(Some(Return::Time(crate::time::now_us()))),
         Call::Random => {
             let mut bytes = [0u8; 8];
             crate::platform::rand::fill(&mut bytes);

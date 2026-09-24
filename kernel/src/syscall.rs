@@ -1018,7 +1018,14 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
             //     "Activating process thread {} in pid {} coming from pid {} thread {}",
             //     new_context, new_pid, pid, tid
             // );
-            let new_tid = ss.activate_process_thread(tid, new_pid, new_tid, true, PostActivateOp::None)?;
+            let new_tid = match ss.activate_process_thread(tid, new_pid, new_tid, true, PostActivateOp::None) {
+                Ok(t) => t,
+                Err(e) => {
+                    // Nothing was switched: the caller picks again (`main.rs`).
+                    SWITCHTO_CALLER.with(|c| *c = None);
+                    return Err(e);
+                }
+            };
             ORIGINAL_PID.store(new_pid.get(), Relaxed);
             ORIGINAL_TID.store(new_tid, Relaxed);
             Ok(redoubt_abi::Result::ResumeProcess)

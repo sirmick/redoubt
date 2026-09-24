@@ -20,6 +20,7 @@ expect = [
     '^\[pid 3\] \[irq-attack\] ok: RAM by address',
     '^\[pid 3\] \[irq-attack\] ok: wrong kind',
     '^\[pid 3\] \[irq-attack\] ok: every legacy claim and free refused$',
+    '^\[pid 3\] \[irq-attack\] ok: interrupt 0 -> Err\(InterruptNotFound\), the old timer calls',
     '^\[pid 3\] \[irq-attack\] attempts done$',
     # The verdict, the victim's: the machine is still up (a stolen Reset right would have
     # powered it off), and the console's interrupt is still the victim's, so a byte sent after

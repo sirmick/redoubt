@@ -1,0 +1,28 @@
+description = "Reference run in real time (no icount), reporting lateness without judging it: timeouts on the kernel's own timer (WP-K5, I13): idle sleeps end on time and never early; queued call and send time out with buffers returned; a taken call times out with its lend consumed, one abandoned-call notice and a discarded reply; receive times out on an endpoint and an interrupt; FOREVER and a saturating timeout never expire; a reply racing a timeout lands on exactly one side 200 times; rdtime is monotonic and in step with time_now (plain TCG, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+# Plain TCG: host load shows up as guest lateness, so the lateness line is reported, not judged.
+# The first program holds the device objects (one is an interrupt that never fires here);
+# log-server (PID 3) runs beside it on the legacy grant and is idle while it sleeps.
+programs = ["timeouts", "log-server"]
+timeout_secs = 120
+expect = [
+    '^\[pid 2\] \[timeouts\] ok: 20 idle sleeps returned Timeout, none early$',
+    '^\[pid 2\] \[timeouts\] lateness (ok|LATE) \(',
+    '^\[pid 2\] \[timeouts\] ok: a queued call timed out after \d+ µs, lend returned$',
+    '^\[pid 2\] \[timeouts\] ok: a queued send timed out after \d+ µs, transfer returned$',
+    '^\[pid 2\] \[timeouts\] ok: receive timed out on an endpoint',
+    '^\[pid 2\] \[timeouts\] ok: a taken call timed out, lend consumed, one notice, reply discarded',
+    '^\[pid 2\] \[timeouts\] ok: timeout 0xffffffffffffffff did not expire; the reply came$',
+    '^\[pid 2\] \[timeouts\] ok: timeout 0xfffffffffffffffe did not expire; the reply came$',
+    '^\[pid 2\] \[timeouts\] ok: timeout 0x[0-9a-f]+ did not expire; the reply came$',
+    '^\[pid 2\] \[timeouts\] ok: reply race: \d+ replied, \d+ timed out, 0 inconsistent$',
+    '^\[pid 2\] \[timeouts\] ok: rdtime is monotonic and linear in time_now',
+    '^\[pid 2\] TIMEOUTS TEST PASSED$',
+]
+forbid = ['\[timeouts\] FAIL']
+
+[[grant]]
+program = "log-server"
+mmio = ["0x10000000:0x1000"]
