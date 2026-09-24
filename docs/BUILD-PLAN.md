@@ -19,18 +19,17 @@ Open decisions are in [QUESTIONS](QUESTIONS.md), including 163 (typed parking), 
 
 ### Next three tasks
 
-1. **G1 — close launch gates.** Reconcile T1c's retained three-review evidence and current checker
-   coverage; identify and complete missing budget-record/IPC TCB reviews before the next wave.
-   Question 166 is decided and applied (answer 166; KERNEL-SPEC R12, RESOURCES.md, WP-K5).
-   Record evidence and residuals in SWARM; do not repeat already-valid reviews or mark whole
-   IPC1 accepted. R2 can proceed after review debt is cleared. Acceptance of G1 requires review
-   debt cleared and the K5 contract settled.
-2. **R2 — loader stub and startup image fields.** Use the integrated K4 lifecycle, a hostile-ELF
+G1 cleared the launch gates on 2026-09-23 (review debt and the K5 contract; SWARM records the
+non-blocking follow-ups).
+
+1. **R2 — loader stub and startup image fields.** Use the integrated K4 lifecycle, a hostile-ELF
    confinement test and coordinated startup codec migration. This enables native launch; it does
    not alone close K4's bundle-readback gate.
-3. **K5 — timer, deadlines and preemption.** Implement the accepted single-queue contract
+2. **K5 — timer, deadlines and preemption.** Implement the accepted single-queue contract
    (answer 166) and real timeout/fairness/deadline tests, preserving IPC ownership outcomes.
    Use the sole kernel writer; it may run alongside R2 only with disjoint owned paths.
+3. **B1 — the Redoubt platform for beamlet.** Scope the Platform interfaces before launch; native
+   acceptance additionally needs R3 startup/public modules and K5.
 
 ### Route to working SSH and milestone acceptance
 

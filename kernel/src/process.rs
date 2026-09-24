@@ -348,11 +348,14 @@ pub fn process_map(
             return Err(Error::InvalidArgument);
         }
     }
-    // R11, checked here as well as while decoding, so neither check rests on the other
-    // (KERNEL-SPEC.md, ABI).
+    // R11, checked here as well as while decoding and in the page tables, so neither check
+    // rests on the other (KERNEL-SPEC.md, ABI). It must refuse before any page moves,
+    // because a later failure would not put the source back. Not W+X, and not writable
+    // without readable.
     let flags = crate::mem::redoubt_flags(flags);
     let wx = MemoryFlags::W | MemoryFlags::X;
-    if flags.is_empty() || flags & wx == wx {
+    let write_only = flags & MemoryFlags::W == MemoryFlags::W && flags & MemoryFlags::R != MemoryFlags::R;
+    if flags.is_empty() || flags & wx == wx || write_only {
         return Err(Error::InvalidArgument);
     }
     let child = p.pid;

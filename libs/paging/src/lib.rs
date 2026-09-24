@@ -101,6 +101,12 @@ impl Pte {
         assert!(flags.intersects(PteFlags::PERMISSIONS), "a leaf needs at least one permission");
         // W^X: nothing is ever mapped both writable and executable.
         assert!(!flags.contains(PteFlags::W | PteFlags::X), "refusing a writable and executable mapping");
+        // R11: nothing is ever mapped writable without being readable; the privileged
+        // architecture reserves that encoding.
+        assert!(
+            !flags.contains(PteFlags::W) || flags.contains(PteFlags::R),
+            "refusing a writable and unreadable mapping"
+        );
         Pte(((phys >> 12) << 10) | (flags | PteFlags::VALID | PteFlags::A | PteFlags::D).bits())
     }
 

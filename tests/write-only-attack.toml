@@ -1,0 +1,30 @@
+description = "R11: map_anon, set_flags, process_map and the legacy update_memory_flags refuse a writable page that is not readable and leave the mapping unchanged (checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+programs = ["write-only-attack"]
+timeout_secs = 30
+# The program is the loader's trusted parent, holding UART/reset. Each verdict is a kernel
+# result: the refusal, the child's usage, the child's still-free destination, and the kernel's
+# output-record check, which accepts only readable and writable RAM. Success also needs a
+# clean SBI power-off; a write-only page that was read would fault the parent first.
+expect = [
+    '^\[write-only\] ok: map_anon refuses W without R$',
+    '^\[write-only\] ok: set_flags refuses W without R$',
+    '^\[write-only\] ok: set_flags refuses W without R over a range$',
+    '^\[write-only\] ok: refused set_flags kept the contents$',
+    '^\[write-only\] ok: refused set_flags left the pages readable and writable$',
+    '^\[write-only\] ok: set_flags refuses W without R on a read-only page$',
+    '^\[write-only\] ok: refused set_flags did not make a read-only page writable$',
+    '^\[write-only\] ok: update_memory_flags refuses W without R$',
+    '^\[write-only\] ok: refused update_memory_flags kept the contents$',
+    '^\[write-only\] ok: refused update_memory_flags left the page readable and writable$',
+    '^\[write-only\] ok: process_map refuses W without R$',
+    '^\[write-only\] ok: refused process_map charged the child nothing$',
+    '^\[write-only\] ok: refused process_map left the source in place$',
+    '^\[write-only\] ok: refused process_map left the source readable and writable$',
+    '^\[write-only\] ok: refused process_map mapped nothing$',
+    '^\[write-only\] WRITE-ONLY ATTACK TEST PASSED$',
+]
+forbid = ['\[write-only\] FAIL']
+poweroff = true

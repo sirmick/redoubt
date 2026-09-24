@@ -2,9 +2,13 @@ description = "Ratchet on `unsafe` in the trusted computing base, and on unsafe 
 kind = "unsafe-budget"
 
 # Budgets only go down. Raising one needs a justification in the commit that does it.
-# Every component is at max_undocumented = 0: all `unsafe` in the kernel and loader now
-# carries a SAFETY comment or a `# Safety` doc. Keep it that way.
+# Every component but the legacy redoubt-abi is at max_undocumented = 0: all `unsafe` in the
+# kernel's and loader's own crates now carries a SAFETY comment or a `# Safety` doc. Keep it
+# that way. Third-party crates.io dependencies are outside the budget: the ratchet counts code
+# this repository owns, and those are pinned by Cargo.lock.
 # Only code that runs on rv64 is counted; see TENETS.md for the baseline.
+# G1: every on-target source file is listed. A file left out of every budget is not counted
+# at all, and the checker cannot notice; add new sources to a budget when they land.
 
 [[budget]]
 name = "paging crate (Sv32/Sv39 page tables)"
@@ -31,9 +35,12 @@ name = "kernel: Sv39, SBI and PLIC backends"
 paths = [
     "kernel/src/arch/riscv/mem.rs", "kernel/src/arch/riscv/mmu_flags.rs",
     "kernel/src/arch/riscv/intc_plic.rs", "kernel/src/arch/riscv/timer_sbi.rs",
-    "kernel/src/arch/riscv/asm.rs", "kernel/src/platform/sbi",
+    "kernel/src/arch/riscv/asm.rs", "kernel/src/platform/sbi", "kernel/src/arch/riscv/physmap.rs",
+    "kernel/src/platform/mod.rs",
 ]
-max_unsafe = 15
+# G1: +1, physmap.rs's `Window::new` over the loader's physmap. Existing code that no budget
+# listed, now counted; no new unsafe.
+max_unsafe = 16
 max_undocumented = 0
 
 [[budget]]
@@ -41,8 +48,11 @@ name = "kernel: RISC-V arch (shared with rv32)"
 paths = [
     "kernel/src/arch/riscv/irq.rs", "kernel/src/arch/riscv/process.rs", "kernel/src/arch/riscv/syscall.rs",
     "kernel/src/arch/riscv/mod.rs", "kernel/src/arch/riscv/exception.rs", "kernel/src/arch/riscv/panic.rs",
+    "kernel/src/arch/riscv/smp.rs", "kernel/src/arch/mod.rs",
 ]
-max_unsafe = 10
+# G1: +3, smp.rs's hart-block `Sync`, its write of the block and the parked hart's `wfi`
+# (the `smp` spike). Existing code that no budget listed, now counted; no new unsafe.
+max_unsafe = 13
 max_undocumented = 0
 
 [[budget]]
@@ -51,7 +61,8 @@ paths = [
     "kernel/src/main.rs", "kernel/src/mem.rs", "kernel/src/services.rs", "kernel/src/server.rs",
     "kernel/src/syscall.rs", "kernel/src/irq.rs", "kernel/src/args.rs", "kernel/src/io.rs",
     "kernel/src/budget.rs", "kernel/src/handle.rs", "kernel/src/kframe.rs", "kernel/src/redoubt.rs",
-    "kernel/src/device.rs", "kernel/src/message.rs", "kernel/src/process.rs",
+    "kernel/src/device.rs", "kernel/src/message.rs", "kernel/src/process.rs", "kernel/src/cell.rs",
+    "kernel/src/debug", "kernel/src/endpoint.rs", "kernel/src/grants.rs", "kernel/src/macros.rs",
 ]
 # WP-K1: kframe.rs's three (words of kernel-object frames and of records, through the physmap)
 # replace mem.rs's three needless ones in the deleted `print_ownership`; the total is unchanged.
@@ -62,7 +73,10 @@ paths = [
 # WP-K3: device.rs joins the list with none of its own (it reaches frames through kframe.rs
 # and the page tables through arch::mem). -1: the legacy contiguous allocation for a device,
 # which `dma_alloc` replaces, is deleted, and its `bzero` of the freshly mapped pages with it.
-max_unsafe = 20
+# G1: +5, existing code that no budget listed, now counted; no new unsafe. cell.rs's three
+# (`SpinLock`/`KernelCell` `Sync` and the lock's access) and the debug console's two (setting
+# `OUTPUT` at boot and `print!`'s use of it). The debug pair gained its SAFETY comments here.
+max_unsafe = 25
 max_undocumented = 0
 
 [[budget]]
@@ -98,3 +112,26 @@ name = "bootfsd and consoled (the first two 9P servers)"
 paths = ["servers/bootfsd/src", "servers/consoled/src"]
 max_unsafe = 0
 max_undocumented = 0
+
+[[budget]]
+# G1: the wire codecs are linked into the runtime, so they run on target. The crate says
+# `#![forbid(unsafe_code)]`, so this can only stay at 0.
+name = "redoubt-wire (protocol codecs)"
+paths = ["libs/wire/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
+# G1: the legacy Xous ABI, linked into the kernel and loader for shared constants and types.
+# Existing code that no budget listed, now counted; no new unsafe. Its on-target modules only:
+# the arm, hosted and test backends never build for riscv. The 44 undocumented uses are
+# pre-existing legacy-interface debt. WP-K6 deletes that interface; do not add to it.
+name = "redoubt-abi (legacy interface, on-target modules)"
+paths = [
+    "libs/abi/src/lib.rs", "libs/abi/src/arch/mod.rs", "libs/abi/src/arch/riscv", "libs/abi/src/carton.rs",
+    "libs/abi/src/definitions.rs", "libs/abi/src/definitions", "libs/abi/src/pagebuffer.rs",
+    "libs/abi/src/process.rs", "libs/abi/src/services.rs", "libs/abi/src/services", "libs/abi/src/string.rs",
+    "libs/abi/src/stringbuffer.rs", "libs/abi/src/syscall.rs",
+]
+max_unsafe = 52
+max_undocumented = 44

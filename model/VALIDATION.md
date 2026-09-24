@@ -14,7 +14,7 @@ to execute concurrently. Commands are run from the recovered workspace root.
 
 | Command | Result |
 | --- | --- |
-| `cargo test --offline --locked -p redoubt-model --release -- --nocapture` | 40 passed, 0 failed; 1 ignored test is the separate long acceptance run. Default properties: 90,020 sequences. All 99 deliberate mutations detected. |
+| `cargo test --offline --locked -p redoubt-model --release -- --nocapture` | 40 passed, 0 failed; 1 ignored test is the separate long acceptance run. Default properties: 90,020 sequences. All 100 deliberate mutations detected. |
 | `cargo check --offline --locked -p redoubt-model --target riscv64gc-unknown-none-elf` | Passed. |
 | `cargo check --offline --locked -p redoubt-model --target riscv32imac-unknown-none-elf` | Passed. |
 | `cargo testbench` | Final optimized run: 116 PASS, 66 cases, 0 FAIL, 0 SKIP; exit 0. |
@@ -42,13 +42,13 @@ unchanged through final acceptance; only validation documentation was finalized 
 
 ## Test execution improvements
 
-Three policy mutations now try their detecting noninterference family first. All 99 variants,
+Three policy mutations now try their detecting noninterference family first. All 100 variants,
 six fallback families and original seed caps remain. In the model timer, event-free intervals
 avoid repeated deadline scans while retaining every scheduler pick and charge. Pending delivery,
 deadline boundaries and partial slices keep their previous handling.
 
 The differential test compares complete model state against the original timer loop: 4,800
-boundary cases across the normal model and all 99 mutations, plus 64 histories, 9,600 operations
+boundary cases across the normal model and all 100 mutations, plus 64 histories, 9,600 operations
 and 3,241 tick comparisons. No histories were omitted. It covers saturation inside the fast path.
 
 Measured default mutation runtime fell from 420.99 to 58.53 seconds; properties from 293.71 to

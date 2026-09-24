@@ -102,8 +102,10 @@ pub extern "C" fn _start() -> ! {
         call(Number::BudgetUsage, [999, scratch, 0, 0, 0, 0, 0]),
     ];
     log!(logger, "[i14] budget_usage -> {:?}", usage);
-    // A non-DMA device mapping is not record storage. Reject both input and output
-    // records before reading/writing device registers or looking up a nonzero handle.
+    // A non-DMA device mapping is not record storage. Input and output records at `mmio`
+    // are refused with InvalidArgument (not a kernel fault, as rv32 once gave) before any
+    // nonzero handle is looked up. `mmio + len - 8` straddles the end of the mapping: its
+    // second slot lies past the mapping, so this case does not isolate the device check.
     let (mmio, len) = rd::map_device(rd::CONSOLE_MMIO).expect("console mapping");
     for record in [mmio, mmio + len - 8] {
         for budget in [rd::SYSTEM, 999] {

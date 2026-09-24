@@ -540,9 +540,9 @@ fn decode_range(b: Option<Buffer>) -> R<Option<Buffer>> {
 }
 
 /// Kernel check of mapping flags: some access, and write only with read (RISC-V has no
-/// write-only pages).
-fn check_flags(flags: u64) -> R<()> {
-    if flags == 0 || (flags & FLAG_W != 0 && flags & FLAG_R == 0) {
+/// write-only pages). `allow_write_only` is the R11AllowsWriteOnly mutation.
+fn check_flags(flags: u64, allow_write_only: bool) -> R<()> {
+    if flags == 0 || (flags & FLAG_W != 0 && flags & FLAG_R == 0 && !allow_write_only) {
         Err(Error::InvalidArgument)
     } else {
         Ok(())
@@ -2366,7 +2366,7 @@ impl Kernel {
         if len == 0 || !len.is_multiple_of(PAGE_SIZE) {
             return Err(Error::InvalidArgument);
         }
-        check_flags(flags)?;
+        check_flags(flags, false)?;
         self.map_fresh(pid, len / PAGE_SIZE, flags, false).map(|x| x.0)
     }
 
@@ -2383,11 +2383,11 @@ impl Kernel {
         Ok(())
     }
 
-    /// `set_flags(addr, len, flags)`: own mapping; not W+X.
+    /// `set_flags(addr, len, flags)`: own mapping; not W+X; not W without R.
     pub fn set_flags(&mut self, pid: u64, addr: u64, len: u64, flags: u64) -> R<()> {
         decode_flags(flags, self.broken(Mutation::R11SetFlagsAllowsWx))?;
         let (first, n) = user_range(addr, len)?;
-        check_flags(flags)?;
+        check_flags(flags, self.broken(Mutation::R11AllowsWriteOnly))?;
         self.own_range(pid, first, n, |_| true)?;
         let p = self.processes.get_mut(&pid).unwrap();
         for v in first..first + n {
@@ -2549,7 +2549,7 @@ impl Kernel {
         if cp.is_some_and(|p| (d..d + n).any(|v| p.space.contains_key(&v))) {
             return Err(Error::InvalidArgument);
         }
-        check_flags(flags)?;
+        check_flags(flags, self.broken(Mutation::R11AllowsWriteOnly))?;
         let cp = cp.ok_or(Error::NotPermitted)?;
         if cp.started {
             return Err(Error::NotPermitted);
@@ -3516,7 +3516,8 @@ mod tick_equivalence {
             }
         }
         std::eprintln!(
-            "tick differential: {boundary_cases} boundary cases, 64 histories, {history_ops} history operations, {history_ticks} history tick comparisons; all99 mutations; no omitted histories"
+            "tick differential: {boundary_cases} boundary cases, 64 histories, {history_ops} history operations, {history_ticks} history tick comparisons; all {} mutations; no omitted histories",
+            Mutation::ALL.len()
         );
     }
 }
