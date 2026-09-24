@@ -156,6 +156,8 @@ fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
         Call::SystemReset { device, kind } => {
             MemoryManager::with(|mm| mm.check_reset(pid, device.index()))?;
             println!("system_reset: {:?} asked for by PID {}", kind, pid.get());
+            #[cfg(feature = "sched-trace")]
+            crate::sched::trace::dump();
             crate::platform::reset(kind == redoubt_sys::ResetKind::Reboot)
         }
         Call::MapFixed { addr, len, flags } => {

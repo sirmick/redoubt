@@ -1,0 +1,24 @@
+description = "Latency under the named workload (WP-K5): a driver stand-in on the goldfish RTC's alarm interrupt, a steward stand-in on timeouts, hand destroys and lease deadlines, and 1, 4 and 16 spinning sessions; p50/p99/max reported in virtual (instruction) time, a 1000-weight server's share under the 16-session load asserted, and every pick checked by the rank oracle (checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-latency"]
+# Test builds only: the trace ring and its dump (never in a default or production kernel).
+kernel_features = ["sched-trace"]
+post_check = "sched_oracle"
+timeout_secs = 900
+expect = [
+    '^\[latency\] ok: the RTC keeps virtual time',
+    '^\[latency\] N=1 driver wake: ',
+    '^\[latency\] N=1 deadline notice: ',
+    '^\[latency\] N=4 driver wake: ',
+    '^\[latency\] N=4 deadline notice: ',
+    '^\[latency\] N=16 driver wake: ',
+    '^\[latency\] N=16 deadline notice: ',
+    '^\[latency\] ok: N=16: the 1000-weight server got \d+ of 1000',
+    '^SCHED-LATENCY TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['\[latency\] FAIL', 'PROGRAM HALT']
+poweroff = true

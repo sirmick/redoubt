@@ -67,7 +67,17 @@ fn ticks() -> u64 { crate::arch::irq::timer::now_ticks() }
 impl Budgets<BudgetRef> for MemoryManager {
     fn state(&self, b: BudgetRef) -> State { self.sched_state(b.frame) }
 
-    fn set_state(&mut self, b: BudgetRef, s: State) { self.set_sched_state(b.frame, &s) }
+    fn set_state(&mut self, b: BudgetRef, s: State) {
+        #[cfg(feature = "sched-inject-tie-fault")]
+        let s = trace::tie_fault(s);
+        // A pass that changes while the budget is queued (one that is not ranks nowhere; its
+        // pass is recorded when it wakes).
+        #[cfg(feature = "sched-trace")]
+        if s.queued && self.sched_state(b.frame).pass != s.pass {
+            trace::record(trace::PASS, b.id, s.pass);
+        }
+        self.set_sched_state(b.frame, &s)
+    }
 
     fn id(&self, b: BudgetRef) -> u64 { b.id }
 
@@ -75,6 +85,17 @@ impl Budgets<BudgetRef> for MemoryManager {
     fn weight(&self, b: BudgetRef) -> u64 { self.free_weight_of(b.frame) }
 
     fn live(&self, b: BudgetRef) -> bool { self.is_live_budget(b) }
+
+    #[cfg(feature = "sched-trace")]
+    fn woke(&mut self, b: BudgetRef) { trace::record(trace::WAKE, b.id, self.sched_state(b.frame).pass) }
+
+    #[cfg(feature = "sched-trace")]
+    fn requeued(&mut self, b: BudgetRef) {
+        trace::record(trace::REQUEUE, b.id, self.sched_state(b.frame).pass)
+    }
+
+    #[cfg(feature = "sched-trace")]
+    fn left(&mut self, b: BudgetRef) { trace::record(trace::LEFT, b.id, self.sched_state(b.frame).pass) }
 }
 
 fn budget_ref(mm: &MemoryManager, frame: BudgetFrame) -> BudgetRef {
@@ -123,6 +144,8 @@ impl Sched {
     }
 
     fn reconcile(&mut self, mm: &mut MemoryManager, runnable: &[BudgetRef]) {
+        #[cfg(feature = "sched-trace")]
+        trace::entry();
         self.cpu.reconcile(mm, runnable);
     }
 }
@@ -239,6 +262,8 @@ pub fn pick(ss: &SystemServices, mm: &mut MemoryManager) -> Option<(PID, TID)> {
         s.cpu.pick(mm, |mm, b| next_thread(ss, mm, b))
     });
     let (b, (pid, tid)) = chosen?;
+    #[cfg(feature = "sched-trace")]
+    trace::record(trace::PICK, b.id, mm.sched_state(b.frame).pass);
     let mut x = mm.budget(b.frame);
     x.cursor = Some((pid.get(), tid as u8));
     mm.store(b.frame, &x);
@@ -337,4 +362,87 @@ pub fn preempt(ss: &mut SystemServices, tid: TID) {
     ss.activate_process_thread(tid, kernel, 0, true, crate::services::PostActivateOp::None)
         .expect("the kernel can always run");
     crate::syscall::restore_last_thread(ss);
+}
+
+/// The queue's raw events, for the bench's independent rank oracle (`tools/testbench`,
+/// `sched_oracle`), in test builds only (feature `sched-trace`; a default build compiles none of
+/// it: a per-pick record of every budget is a cross-principal channel no production kernel may
+/// have). A bounded ring in the kernel's own RAM region (so its records are compact), printed at
+/// `system_reset`. It records what the queue did, never why: no tie key. Each record: its
+/// sequence number, the kernel entry (reconcile) it belongs to, the event, the budget's id, and
+/// the low 64 bits of its pass after the event (a pass reaches 2^64 only after centuries of
+/// slices).
+#[cfg(feature = "sched-trace")]
+pub mod trace {
+    use crate::cell::KernelCell;
+
+    /// A budget woke into the queue, was requeued behind its equals, left the queue, had its pass
+    /// changed, or was picked.
+    pub const WAKE: u8 = b'W';
+    pub const REQUEUE: u8 = b'R';
+    pub const LEFT: u8 = b'D';
+    pub const PASS: u8 = b'P';
+    pub const PICK: u8 = b'K';
+
+    /// 160 KiB of the kernel's 512 KiB RAM region, in a test build only.
+    const CAP: usize = 10240;
+
+    #[derive(Clone, Copy)]
+    struct Rec {
+        pass: u64,
+        entry: u32,
+        /// The budget's id (below 2^24 in any test run) and the event, in its low byte.
+        id_kind: u32,
+    }
+
+    struct Ring {
+        recs: [Rec; CAP],
+        n: usize,
+        dropped: u64,
+        entry: u32,
+    }
+
+    static RING: KernelCell<Ring> = KernelCell::new(Ring {
+        recs: [Rec { pass: 0, entry: 0, id_kind: 0 }; CAP],
+        n: 0,
+        dropped: 0,
+        entry: 0,
+    });
+
+    /// A reconcile begins: the records that follow belong to a new kernel entry.
+    pub fn entry() { RING.with(|r| r.entry = r.entry.wrapping_add(1)); }
+
+    pub fn record(kind: u8, id: u64, pass: u128) {
+        RING.with(|r| {
+            if r.n < CAP {
+                let entry = r.entry;
+                r.recs[r.n] = Rec { pass: pass as u64, entry, id_kind: (id as u32) << 8 | u32::from(kind) };
+                r.n += 1;
+            } else {
+                r.dropped += 1;
+            }
+        });
+    }
+
+    /// Debug only, never in a bench build but one recorded negative run (feature
+    /// `sched-inject-tie-fault`): wakers rank behind queued budgets of equal pass, and behind each
+    /// other in reverse (the model's `R12TieQueuedFirst`), to show the oracle catches it.
+    #[cfg(feature = "sched-inject-tie-fault")]
+    pub fn tie_fault(mut s: redoubt_stride::State) -> redoubt_stride::State {
+        if s.tie < 0 {
+            s.tie = i64::MAX / 2 - s.tie;
+        }
+        s
+    }
+
+    /// Print the ring (at `system_reset`, before the machine goes). A drop fails the oracle.
+    pub fn dump() {
+        RING.with(|r| {
+            for (seq, rec) in r.recs[..r.n].iter().enumerate() {
+                let (id, kind) = (rec.id_kind >> 8, rec.id_kind as u8 as char);
+                println!("SCHED-TRACE {} {} {} {} {:x}", seq, rec.entry, kind, id, rec.pass);
+            }
+            println!("SCHED-TRACE-END {} dropped {}", r.n, r.dropped);
+        });
+    }
 }

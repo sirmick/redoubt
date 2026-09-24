@@ -855,6 +855,7 @@ dependencies = [
  "anyhow",
  "clap",
  "ed25519-compact",
+ "redoubt-model",
  "redoubt-signing",
  "regex",
  "serde",
