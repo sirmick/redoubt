@@ -1,0 +1,4 @@
+description = "netd builds for both widths (BUILD-PLAN.md: rv32 keeps compiling)"
+arch = ["rv64", "rv32"]
+kind = "build"
+package = "redoubt-netd"

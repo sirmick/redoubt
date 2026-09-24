@@ -26,7 +26,7 @@
 //!   `unsafe` in the crate. Host tests use [`fake::FakeNic`], a hostile device in safe Rust.
 //! - [`virtio`]: the register map, the handshake, feature negotiation, the MAC.
 //! - [`ring`]: one region's layout; [`rxq`] and [`txq`]: the two queues.
-//! - [`device`]: bring-up.
+//! - [`device`]: bring-up. [`server`]: the `netif` protocol for `ipd`.
 
 #![no_std]
 #![deny(unsafe_code)]
@@ -41,6 +41,7 @@ pub mod device;
 pub mod kernel;
 pub mod ring;
 pub mod rxq;
+pub mod server;
 pub mod transport;
 pub mod txq;
 pub mod virtio;
@@ -49,6 +50,7 @@ pub mod virtio;
 pub mod fake;
 
 pub use device::{Up, bring_up};
+pub use server::NetServer;
 pub use transport::{Fault, Transport};
 pub use virtio::DeviceError;
 
