@@ -315,11 +315,14 @@ argument `ipd` does not understand stops it (`BAD_ARGS`).
 - `buckets=N`, and `limits=BADGE:INFLIGHT:STATE:SOCKETS` overriding the default caps for one
   root badge. An override applies only to calls with account 0 through exactly that badge.
 Badges are below 2^63 and appear once each. `ipd` refuses to start unless every bucket at its
-cap fits its budget and its parked calls leave `MAX_OPEN_CALLS`' headroom: the overrides'
-in-flight caps plus the default's for every other bucket at most 48. In the milestone manifest:
-six buckets, `sshd` 24 in flight and 20 sockets (a waiting accept, a read and a write for each of
-11 sessions), the steward 2 in flight and 32 connections (the `/net` grants it has made), and
-four more buckets at the default 5 in flight and 8 sockets: 24 + 2 + 4 × 5 = 46.
+cap fits its budget and its parked calls leave `MAX_OPEN_CALLS`' headroom, in the worst case:
+`buckets` bounds how many buckets hold anything, whichever they are, so an override below the
+default may be idle while a default bucket takes its slot. Each override counts as the larger of
+its cap and the default, and every other bucket as the default; for parked calls that is at most
+48 (QA D3-code-review-3). In the milestone manifest: six buckets, `sshd` 23 in flight and 20
+sockets (a waiting accept, and a read and a write for each of 11 sessions), the steward 2 in
+flight and 32 connections (the `/net` grants it has made), and four more buckets at the default 5
+in flight and 8 sockets: 23 + 5 (the steward's slot, at worst a default one) + 4 × 5 = 48.
 
 A link fault never stops `ipd`: without a working `netd` (its `info` fails, its MAC is not
 unicast, or `transmit` answers `failed`) it answers `unreachable` to `connect` and `listen`,

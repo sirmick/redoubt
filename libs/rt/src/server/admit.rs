@@ -192,8 +192,13 @@ impl Admission {
     /// Admission under `limits`, with `overrides` for named account-0 root badges. Refused
     /// ([`Unsized`]) unless every badge is a root one (nonzero, below the minted range) and named
     /// once, there are no more overrides than buckets, every cap is 0 or at least
-    /// [`SMALLEST_CAP`], and the **worst case**, every override's bucket and every other bucket
-    /// at its cap, holds no more open calls than `MAX_OPEN_CALLS` less the headroom.
+    /// [`SMALLEST_CAP`], and the **worst case** holds no more open calls than `MAX_OPEN_CALLS`
+    /// less the headroom.
+    ///
+    /// The worst case is the `buckets` largest caps that can be held at once. `buckets` bounds the
+    /// buckets holding anything, whichever they are, so an override **below** the default can be
+    /// idle while a default bucket takes its slot: each override slot counts as
+    /// `max(override, default)`, and every other slot as the default (QA D3-code-review-3).
     pub fn with_overrides(limits: Limits, overrides: &[Override]) -> Result<Admission, Unsized> {
         let mut admission = Admission::new(limits)?;
         let first_minted = super::minted::FIRST_MINTED_BADGE;
@@ -209,7 +214,7 @@ impl Admission {
         }
         let named = u32::try_from(overrides.len()).map_err(|_| Unsized)?;
         let rest = limits.buckets.checked_sub(named).ok_or(Unsized)?;
-        let open = overrides.iter().map(|o| u64::from(o.in_flight)).sum::<u64>()
+        let open = overrides.iter().map(|o| u64::from(o.in_flight.max(limits.in_flight))).sum::<u64>()
             + u64::from(rest) * u64::from(limits.in_flight);
         if open > (MAX_OPEN_CALLS - OPEN_CALL_HEADROOM) as u64 {
             return Err(Unsized);
@@ -219,7 +224,9 @@ impl Admission {
         Ok(admission)
     }
 
-    /// Whether every bucket at its cap, the overridden ones at theirs, fits `budget` bytes.
+    /// Whether the worst case fits `budget` bytes: as in [`Admission::with_overrides`], each
+    /// override slot at the larger of its cap and the default, per resource, and every other slot
+    /// at the default.
     pub fn fits(&self, cost: &Cost, budget: u64) -> bool {
         let one = |in_flight: u32, files: u32, state: u32| {
             u64::from(in_flight)
@@ -227,10 +234,13 @@ impl Admission {
                 .checked_add(u64::from(files).checked_mul(cost.file)?)?
                 .checked_add(u64::from(state).checked_mul(cost.state)?)
         };
-        let named = self.overrides.iter().try_fold(0u64, |sum, o| sum.checked_add(one(o.in_flight, o.files, o.state)?));
+        let d = &self.limits;
+        let named = self.overrides.iter().try_fold(0u64, |sum, o| {
+            sum.checked_add(one(o.in_flight.max(d.in_flight), o.files.max(d.files), o.state.max(d.state))?)
+        });
         let rest = u64::from(self.limits.buckets.saturating_sub(self.overrides.len() as u32));
-        let others =
-            one(self.limits.in_flight, self.limits.files, self.limits.state).and_then(|b| b.checked_mul(rest));
+        let others = one(self.limits.in_flight, self.limits.files, self.limits.state)
+            .and_then(|b| b.checked_mul(rest));
         named.zip(others).and_then(|(a, b)| a.checked_add(b)).is_some_and(|all| all <= budget)
     }
 
@@ -475,7 +485,9 @@ mod tests {
     #[test]
     fn an_override_is_its_root_badge_s_alone() {
         let sshd = Override { badge: 3, in_flight: 24, files: 32, state: 20 };
-        let mut a = Admission::with_overrides(Limits { buckets: 5, in_flight: 5, files: 8, state: 4 }, &[sshd]).unwrap();
+        let mut a =
+            Admission::with_overrides(Limits { buckets: 5, in_flight: 5, files: 8, state: 4 }, &[sshd])
+                .unwrap();
         // sshd's bucket takes 24 calls; the 25th is refused.
         for _ in 0..24 {
             a.admit(root(3, 0), 3, Resource::InFlight).unwrap();
@@ -495,28 +507,55 @@ mod tests {
     fn overrides_are_sized_and_checked() {
         let limits = Limits { buckets: 6, in_flight: 5, files: 8, state: 4 };
         let o = |badge, in_flight| Override { badge, in_flight, files: 8, state: 4 };
-        // The milestone manifest: sshd 24, the steward 2, four more at 5: 46 <= 48.
-        assert!(Admission::with_overrides(limits, &[o(1, 24), o(2, 2)]).is_ok());
+        // The milestone manifest: sshd 23, the steward 2 (a slot of 5 at worst), four more at 5:
+        // 23 + 5 + 4 x 5 = 48.
+        assert!(Admission::with_overrides(limits, &[o(1, 23), o(2, 2)]).is_ok());
+        // sshd 24 is one too many: the steward idle, a sixth default bucket takes its slot.
+        assert_eq!(Admission::with_overrides(limits, &[o(1, 24), o(2, 2)]).err(), Some(Unsized));
         // 24 + 8 + 4 x 5 = 52 > 48.
         assert_eq!(Admission::with_overrides(limits, &[o(1, 24), o(2, 8)]).err(), Some(Unsized));
-        for bad in [
-            vec![o(0, 2)],
-            vec![o(1 << 63, 2)],
-            vec![o(1, 2), o(1, 2)],
-            vec![o(1, 1)],
-            vec![o(1, 2); 7],
-        ] {
+        for bad in
+            [vec![o(0, 2)], vec![o(1 << 63, 2)], vec![o(1, 2), o(1, 2)], vec![o(1, 1)], vec![o(1, 2); 7]]
+        {
             assert_eq!(Admission::with_overrides(limits, &bad).err(), Some(Unsized), "{bad:?}");
         }
+    }
+
+    /// The red team's case (QA D3-code-review-3): whatever order the badges come in, admission
+    /// never holds more open calls than `with_overrides` accepted it for. With sshd 24 and the
+    /// steward 2 it held 49 (sshd's 24, then five other badges at 5 while the steward was idle).
+    #[test]
+    fn the_worst_order_never_passes_the_headroom() {
+        let limits = Limits { buckets: 6, in_flight: 5, files: 8, state: 4 };
+        let o = |badge, in_flight| Override { badge, in_flight, files: 8, state: 4 };
+        let root = |badge| AdmitKey::of(&Caller { badge, account: 0, labels: Default::default() });
+        let bound = (MAX_OPEN_CALLS - OPEN_CALL_HEADROOM) as u32;
+        for overrides in
+            [vec![o(1, 23), o(2, 2)], vec![o(1, 24), o(2, 2)], vec![o(1, 30)], vec![o(1, 2), o(2, 2)]]
+        {
+            let Ok(mut a) = Admission::with_overrides(limits, &overrides) else { continue };
+            // The big override first, then every other badge, the small overrides last.
+            let mut held = 0;
+            for badge in [1, 10, 11, 12, 13, 14, 15, 16, 2] {
+                while a.admit(root(badge), badge, Resource::InFlight).is_ok() {
+                    held += 1;
+                }
+            }
+            assert!(held <= bound, "{overrides:?} admitted {held} open calls, over {bound}");
+        }
+        assert!(Admission::with_overrides(limits, &[o(1, 24), o(2, 2)]).is_err());
     }
 
     #[test]
     fn fits_counts_overrides_at_their_caps() {
         let limits = Limits { buckets: 2, in_flight: 2, files: 2, state: 2 };
-        let a = Admission::with_overrides(limits, &[Override { badge: 1, in_flight: 10, files: 0, state: 0 }]).unwrap();
+        let a =
+            Admission::with_overrides(limits, &[Override { badge: 1, in_flight: 10, files: 0, state: 0 }])
+                .unwrap();
         let cost = Cost { in_flight: 100, file: 10, state: 1 };
-        // 10 x 100 for the override, 2 x 100 + 2 x 10 + 2 x 1 for the other bucket.
-        assert!(a.fits(&cost, 1222));
-        assert!(!a.fits(&cost, 1221));
+        // 10 x 100 for the override (its files and state below the default count at the
+        // default, 2 x 10 + 2 x 1), and 2 x 100 + 2 x 10 + 2 x 1 for the other bucket.
+        assert!(a.fits(&cost, 1244));
+        assert!(!a.fits(&cost, 1243));
     }
 }

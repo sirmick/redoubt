@@ -15,10 +15,10 @@ use redoubt_rt::abi::{Error, Handle, Handles, Labels};
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::path;
 use redoubt_rt::server::ninep::{
-    Answer, DMDIR, FIRST_MINTED_BADGE, FileServer, FileStat, MAX_FIDS, Minter, NineError, NineServer,
-    QTDIR, Qid, Read, ninep_common,
+    Answer, DMDIR, FIRST_MINTED_BADGE, FileServer, FileStat, MAX_FIDS, Minter, NineError, NineServer, QTDIR,
+    Qid, Read, Write, ninep_common,
 };
-use redoubt_rt::server::{AdmitKey, Limits, Resource};
+use redoubt_rt::server::{Admission, AdmitKey, Limits, Override, Resource};
 use redoubt_rt::wire::ninep::{Body, Message, NOFID, Names};
 
 /// name, parent, directory, labels
@@ -83,6 +83,21 @@ impl FileServer for Tree {
         let n = data.len().min(file.len() - offset);
         file[offset..offset + n].copy_from_slice(&data[..n]);
         Ok(n)
+    }
+
+    /// A write at an odd offset waits (`Write::Wait`, answer 174): the skeleton must hold it with
+    /// its T-message untouched, after every check a write gets.
+    fn write_or_wait(
+        &mut self,
+        caller: &Caller,
+        node: &usize,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<Write, NineError> {
+        if offset % 2 == 1 {
+            return Ok(Write::Wait);
+        }
+        self.write(caller, node, offset, data).map(Write::Done)
     }
 
     fn stat(&mut self, _: &Caller, node: &usize) -> Result<FileStat, NineError> {
@@ -153,7 +168,11 @@ impl Minter for Kernel {
 }
 
 fuzz_target!(|data: &[u8]| {
-    let mut server = NineServer::new(Tree { data: Default::default() }, LIMITS, 0).unwrap();
+    // Badge 1, account 0, has its own caps (answer 174's overrides), no larger than the default
+    // so the checks below hold for every bucket.
+    let overrides = [Override { badge: 1, in_flight: 0, files: 10, state: 3 }];
+    let admission = Admission::with_overrides(LIMITS, &overrides).unwrap();
+    let mut server = NineServer::with_admission(Tree { data: Default::default() }, admission, 0);
     let mut kernel = Kernel { minted: Vec::new(), rng: 0x2545_f491_4f6c_dd1d };
     // Connection ids handed out, with who asked for each.
     let mut ids: Vec<(u64, Caller)> = Vec::new();
@@ -175,22 +194,38 @@ fuzz_target!(|data: &[u8]| {
         let room = 64 + (arg as usize % 8000);
         let names: Vec<&str> =
             (0..(arg >> 8) % 5).map(|i| NAMES[((arg >> (12 + 3 * i)) % 8) as usize]).collect();
-        let body = match op % 14 {
+        let body = match op % 15 {
+            14 => {
+                // A connection rooted at a node the file server chose (`ipd`'s grant), kept or
+                // undone as an undelivered reply would be (answer 168).
+                let root = arg as usize % TREE.len();
+                if let Ok((_, id, badge)) = server.mint_rooted(&caller, (root, qid(root)), &mut kernel) {
+                    if arg & 0x100 == 0 {
+                        ids.push((id, caller));
+                    } else {
+                        server.unmint(badge);
+                    }
+                }
+                continue;
+            }
             12 => {
                 let root = ["", "a", "a/b", "..", "vault", "a/b/f", "nope"][arg as usize % 7];
                 let quota = [0, 1, 1000, u64::MAX][(arg >> 4) as usize % 4];
-                let message = ninep_common::Message::NewConnection(ninep_common::NewConnection { root, quota });
+                let message =
+                    ninep_common::Message::NewConnection(ninep_common::NewConnection { root, quota });
                 let words = message.encode(&mut lend).unwrap();
                 let outcome = server.answer_common(&caller, &words, &Handles::new(), &mut lend, &mut kernel);
                 if outcome.words[0] == 0 {
-                    let reply = ninep_common::Reply::decode(2, &outcome.words, &lend, 1).expect("the reply decodes");
+                    let reply =
+                        ninep_common::Reply::decode(2, &outcome.words, &lend, 1).expect("the reply decodes");
                     let Ok(ninep_common::Reply::NewConnection(reply)) = reply else { panic!("{reply:?}") };
                     ids.push((reply.id, caller));
                 }
                 continue;
             }
             13 => {
-                let (id, owner) = ids.get(fid as usize % (ids.len() + 1)).copied().unwrap_or((u64::from(arg), caller));
+                let (id, owner) =
+                    ids.get(fid as usize % (ids.len() + 1)).copied().unwrap_or((u64::from(arg), caller));
                 let message = ninep_common::Message::Disconnect(ninep_common::Disconnect { id });
                 let words = message.encode(&mut []).unwrap();
                 let outcome = server.answer_common(&caller, &words, &Handles::new(), &mut [], &mut kernel);
@@ -240,9 +275,20 @@ fuzz_target!(|data: &[u8]| {
                 continue;
             }
         }
-        // This tree never waits, so every request is answered.
-        if server.answer_in_place(&caller, lend) == Answer::Replied {
-            Message::decode(lend).expect("every reply decodes");
+        // A write at an odd offset may be held; then its request must be exactly as it came.
+        let before = lend.to_vec();
+        match server.answer_in_place(&caller, lend) {
+            Answer::Replied => {
+                Message::decode(lend).expect("every reply decodes");
+            }
+            Answer::Waiting => {
+                assert_eq!(&lend[..], &before[..], "a held request was changed");
+                let Ok(Message { body: Body::Twrite { offset, .. }, .. }) = Message::decode(lend) else {
+                    panic!("something other than a write was held");
+                };
+                assert_eq!(offset % 2, 1);
+            }
+            Answer::NoRoom => {}
         }
         assert!(server.fids(&caller) <= MAX_FIDS);
         let admission = server.admission();
