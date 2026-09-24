@@ -97,14 +97,15 @@ work; it does not mean an implementer is running. Merged rows retain dependency 
 | K3 | merged | wp-k3 | 12c52c2d7 |
 | K4 | merged | recovery-k4 | Native lifecycle integrated; three reviews and full bench complete; bundle-file readback remains acceptance gate for R2/R3 (answer 169) |
 | G1 | merged | wp-g1 | Review debt cleared 2026-09-23: 26cba3022 reviewed, unsafe coverage complete, R11 write-without-read rule (Wash QA G1-coverage, G1-write-without-read); three rounds, all OK with notes. Answer 166 settles K5's contract (Wash QA G1-q166) |
-| K5 | ready | | K2 merged; answer 166 applied: WP-K5 adds wake-first ties, slice-end preemption and the measured latency bench case; sole kernel writer |
+| K5a | building | wp-k5 | `map_fixed` (answer 172) for R2's stub; K5's implementer does it first, integrated on its own |
+| K5 | building | wp-k5 | K2 merged; answer 166 applied: WP-K5 adds wake-first ties, slice-end preemption and the measured latency bench case; sole kernel writer |
 | K6 | waiting | | needs K1-K5, R1b |
 | IPC1 | review | wp-ipc1 | Implementation in fe807fc4b, its TCB rounds complete; 26cba3022's shared record validator reviewed in G1. Host model recovered; native replay, K5 timer, serving-path and concurrency gates remain open; native exit covered by K4 |
 | R1 | merged | wp-r1 | 8298608af (carried the answers 39-42, 50-53 part of R1b) |
 | R1b | merged | wp-r1b | 86117e7af |
 | R1c | merged | wp-r1c | cd65fa610; joined `Parked` to the 9P skeleton (recovery of `5d29d136e`, answers 156-158); reviewed R-R1c |
 | R1d | waiting | | typed parking awaits decision 163; needs R1c (merged); blocks `resize` in B2a |
-| R2 | ready | | R1b and K4 lifecycle integrated; production handoff completes K4 bundle-readback acceptance |
+| R2 | building | wp-r2 | Startup image fields (INIT) and stub host checks in progress; on-target mapping needs K5a (answer 172). R1b and K4 lifecycle integrated; production handoff completes K4 bundle-readback acceptance |
 | R3 | waiting | | needs R2/K5 and relevant device/startup/confinement decisions; infrastructure enables later packages, full-server boot/blame acceptance awaits their integration |
 | R4 | merged | wp-r4b | 69466924c; bootfsd and consoled recovered from wp-r4; reviewed R-R4b |
 | B1 | ready | | R1b/R4 merged; scope Platform interfaces before launch; native acceptance additionally needs R3 startup/public modules and K5 |

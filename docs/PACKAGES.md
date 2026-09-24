@@ -17,10 +17,12 @@ One mechanism for every process after `init`, at boot or at run time:
 4. It copies the program's ELF bytes into pages and maps them into the process, read-write, as data
    (`process_map`), then writes the startup block (INIT.md) into a page mapped read-only, and starts
    the process at the stub with that page's address as `process_start`'s `arg`. The startup block
-   names the image (its address and length), so the stub finds it without a fixed address; its
-   fields are defined with the stub (BUILD-PLAN.md, WP-R2) and added to INIT.md's `startup` message.
-5. The stub, running inside the new process's own budget, parses the ELF from memory, maps its
-   segments (code executable and never writable), frees the image pages and jumps to the entry point,
+   names the image (`image_addr`, `image_len`: INIT.md, Startup block), so the stub finds it
+   without a fixed address.
+5. The stub, running inside the new process's own budget, parses the ELF from memory and maps its
+   segments at their link addresses with `map_fixed` (KERNEL-SPEC.md, answer 172), code executable
+   and never writable, before it maps anything else; a segment overlapping the stub, the startup
+   page or the image makes it exit. It then frees the image pages and jumps to the entry point,
    passing the startup page's address on.
 
 `init` and the steward copy bytes; they never parse an ELF. A malicious ELF can at most compromise the

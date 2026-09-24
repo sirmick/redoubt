@@ -113,3 +113,31 @@ mechanism cost. **Owners:** KERNEL-SPEC.md, R12; RESOURCES.md, Scheduling and At
 BUILD-PLAN.md, WP-K5. Answer 103's latency wording is superseded; its removal of `first` and
 priority tiers stands. **Residual:** human control (TENETS guarantee 3) rests on a measured
 steward lease-termination latency, not a proven bound, until something needs a real-time rule.
+
+## Loader-stub mapping decision (Mick, 2026-09-24)
+
+Mick answered the Architect's Wash decision request on QA thread R2-stub-self-map with "go with
+recommendation". The recommendation was a new `map_fixed` call; the alternatives were (A) an
+`addr` argument on `map_anon` and (B) static-PIE programs relocated by the stub. Parent-side
+segment mapping was rejected because it would make `init` and the steward parse ELFs.
+
+### 172. `map_fixed`: a process maps new pages at an address it names.
+
+**Decision:** add `map_fixed(addr, len, flags)`. It maps zeroed pages at exactly `addr` in the
+caller's own address space, charged to the caller's budget like `map_anon`'s. `addr` and `len`
+are page-aligned, `len` is not 0, and the range lies in user space and overlaps none of the
+caller's mappings; otherwise `InvalidArgument` and nothing is mapped. It never replaces a
+mapping (unlike POSIX `MAP_FIXED`). Flags follow `map_anon`'s rules (not 0, not W+X, not W
+without R). Errors `InvalidArgument`, `OutOfMemory`. `map_anon`, its kernel-chosen addresses
+and its callers are unchanged. The loader stub maps a program's segments with it before mapping
+anything else, and exits if a segment overlaps the stub, the startup page or the image.
+
+**Reason:** the stub runs inside the started child, where `map_anon`'s address is the kernel's
+and `process_map` is refused, yet native programs are fixed-address static ELFs. One small
+kernel call keeps the stub the only ELF parser and keeps one linking convention. **Owners:**
+KERNEL-SPEC.md, R11, System calls (appended last so earlier call numbers keep their values),
+Errors; PACKAGES.md, Launching a process, step 5. **Residual:** a kernel package for the sole
+kernel writer (kernel, `redoubt-sys`, executable model) with rv64 boot and rv32 compile
+acceptance and attack cases (occupied range, outside user space, unaligned, len 0, overflow,
+W+X, W without R, budget exhausted); MEMORY-LAYOUT.md records the stub's address once WP-R2
+fixes it, so program link bases avoid it.
