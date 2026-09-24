@@ -1,0 +1,50 @@
+description = "map_fixed (R11, answer 172): a range check, an overlap check and the flags rule each refuse with nothing mapped and nothing charged; an exhausted budget and a huge len are refused promptly; the success path zeroes, writes and unmaps back to baseline; page 0 is user space"
+arch = ["rv64"]
+kind = "boot"
+debug_assertions = true
+programs = ["map-fixed-attack"]
+timeout_secs = 30
+expect = [
+    '^\[map-fixed\] ok: addr unaligned$',
+    '^\[map-fixed\] ok: nothing charged$',
+    '^\[map-fixed\] ok: len unaligned$',
+    '^\[map-fixed\] ok: nothing charged$',
+    '^\[map-fixed\] ok: len 0$',
+    '^\[map-fixed\] ok: nothing charged$',
+    '^\[map-fixed\] ok: addr \+ len overflows$',
+    '^\[map-fixed\] ok: nothing charged$',
+    '^\[map-fixed\] ok: outside user space$',
+    '^\[map-fixed\] ok: nothing charged$',
+    '^\[map-fixed\] ok: straddles USER_AREA_END$',
+    '^\[map-fixed\] ok: nothing charged$',
+    '^\[map-fixed\] ok: W\+X$',
+    '^\[map-fixed\] ok: nothing charged$',
+    '^\[map-fixed\] ok: W without R$',
+    '^\[map-fixed\] ok: nothing charged$',
+    '^\[map-fixed\] ok: flags 0$',
+    '^\[map-fixed\] ok: nothing charged$',
+    '^\[map-fixed\] ok: own stack page$',
+    '^\[map-fixed\] ok: nothing charged$',
+    '^\[map-fixed\] ok: a map_anon region$',
+    '^\[map-fixed\] ok: nothing charged$',
+    '^\[map-fixed\] ok: partial overlap: free, occupied, free$',
+    '^\[map-fixed\] ok: nothing charged$',
+    '^\[map-fixed\] ok: partial overlap: occupied, free$',
+    '^\[map-fixed\] ok: nothing charged$',
+    '^\[map-fixed\] ok: an exhausted budget is refused$',
+    '^\[map-fixed\] ok: nothing charged when the budget is exhausted$',
+    '^\[map-fixed\] ok: a huge len is refused promptly$',
+    '^\[map-fixed\] ok: nothing charged$',
+    '^\[map-fixed\] ok: a successful map_fixed charges something$',
+    '^\[map-fixed\] ok: a fresh page reads zero$',
+    '^\[map-fixed\] ok: the page is writable$',
+    '^\[map-fixed\] ok: unmap returns usage to baseline$',
+    '^\[map-fixed\] ok: map_fixed\(0, \.\.\.\) charges something$',
+    '^\[map-fixed\] ok: a second map_fixed\(0, \.\.\.\) overlaps$',
+    '^\[map-fixed\] ok: nothing charged$',
+    '^\[map-fixed\] ok: unmap page 0 returns usage to baseline$',
+    '^\[map-fixed\] ok: map_anon still succeeds after an unrelated map_fixed$',
+    '^\[map-fixed\] MAP-FIXED ATTACK TEST PASSED$',
+]
+forbid = ['\[map-fixed\] FAIL']
+poweroff = true

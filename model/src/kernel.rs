@@ -195,9 +195,8 @@ fn check_boot(b: &Boot) -> Result<(), String> {
 }
 
 /// Where user virtual addresses end (Sv39's lower half). `process_map`'s `dst` must lie below.
+/// User space has no lower bound: page 0 is in it (MEMORY-LAYOUT.md, Decision 2; K5a-addr0).
 pub const USER_TOP: u64 = 1 << 38;
-/// The lowest mappable user address (page 0 is never mapped).
-pub const USER_BASE: u64 = PAGE_SIZE;
 /// Where the kernel places the mappings it chooses addresses for (`map_anon`, received buffers):
 /// above everything the process has mapped, from here (README choice 20).
 pub const KERNEL_CHOSEN_BASE: u64 = 0x10_0000_0000;
@@ -555,7 +554,7 @@ fn user_range(addr: u64, len: u64) -> R<(u64, u64)> {
         return Err(Error::InvalidArgument);
     }
     let end = addr.checked_add(len).ok_or(Error::InvalidArgument)?;
-    if addr < USER_BASE || end > USER_TOP {
+    if end > USER_TOP {
         return Err(Error::InvalidArgument);
     }
     Ok((vpn(addr), len / PAGE_SIZE))
@@ -993,15 +992,30 @@ impl Kernel {
     }
 
     /// `n` free virtual pages in `pid` for a mapping whose address the kernel chooses: above
-    /// everything already mapped, from `KERNEL_CHOSEN_BASE` (README choice 20).
+    /// everything already mapped, from `KERNEL_CHOSEN_BASE` (README choice 20). If that space
+    /// doesn't fit `n` pages -- a `map_fixed` placed a mapping high in `[KERNEL_CHOSEN_BASE,
+    /// USER_TOP)`, which the real kernel's bounded `find_virtual_address` window never sees --
+    /// fall back to the first gap of `n` free pages anywhere in that range, so this stays as
+    /// permissive as the kernel (P1-1).
     fn alloc_va(&self, pid: u64, n: u64) -> R<u64> {
         let p = self.processes.get(&pid).ok_or(Error::Dead)?;
         let above = p.space.last_key_value().map_or(0, |(v, _)| v + 1);
         let start = above.max(vpn(KERNEL_CHOSEN_BASE));
-        match start.checked_add(n) {
-            Some(end) if end <= vpn(USER_TOP) => Ok(start),
-            _ => Err(Error::OutOfMemory),
+        if let Some(end) = start.checked_add(n) {
+            if end <= vpn(USER_TOP) {
+                return Ok(start);
+            }
         }
+        let (lo, hi) = (vpn(KERNEL_CHOSEN_BASE), vpn(USER_TOP));
+        let mut cursor = lo;
+        for (&v, _) in p.space.range(lo..hi) {
+            // `v - cursor`, not `cursor + n`: a hostile `n` near `u64::MAX` must not overflow.
+            if v.saturating_sub(cursor) >= n {
+                return Ok(cursor);
+            }
+            cursor = cursor.max(v + 1);
+        }
+        if hi.saturating_sub(cursor) >= n { Ok(cursor) } else { Err(Error::OutOfMemory) }
     }
 
     /// Page-table pages (in pages to charge) that mapping `vpns` into `pid` would allocate.
@@ -1058,6 +1072,15 @@ impl Kernel {
             }
         }
         Ok(())
+    }
+
+    /// Every page in `[first, first + n)` is absent from `pid`'s address space (`map_fixed`'s
+    /// overlap check): the opposite of `own_range`, wanting nothing there rather than an owned
+    /// mapping, and a single `BTreeMap::range` lookup instead of `n` point lookups, so it stays
+    /// cheap even for a huge `n` (P1-2).
+    fn range_free(&self, pid: u64, first: u64, n: u64) -> bool {
+        let Some(p) = self.processes.get(&pid) else { return false };
+        p.space.range(first..first + n).next().is_none()
     }
 
     // ---------------------------------------------------------------------------------------
@@ -2329,6 +2352,9 @@ impl Kernel {
             S::TimeNow => done(Ok(Ret::Time(self.time_now()))),
             S::Random => done(Ok(Ret::Random)),
             S::SystemReset { h, kind } => done(self.system_reset(pid, *h, *kind).map(|_| Ret::Unit)),
+            S::MapFixed { addr, len, flags } => {
+                done(self.map_fixed(pid, *addr, *len, *flags).map(|_| Ret::Unit))
+            }
         }
     }
 
@@ -2392,6 +2418,32 @@ impl Kernel {
         let p = self.processes.get_mut(&pid).unwrap();
         for v in first..first + n {
             p.space.get_mut(&v).unwrap().flags = flags;
+        }
+        Ok(())
+    }
+
+    /// `map_fixed(addr, len, flags)`: as `map_anon`, but at exactly `addr`; never replaces a
+    /// mapping (KERNEL-SPEC.md R11, answer 172). Same order as the kernel: decode flags, the
+    /// range (`user_range`, page 0 included: K5a-addr0), the whole range's overlap with any of
+    /// `pid`'s mappings (`range_free`, before anything is charged), the flags rule, then the
+    /// charge -- pages alone first, cheaply (P1-2/N2: a hostile `map_fixed(0, USER_TOP)` must
+    /// stay fast, never walking `tables_needed` over pages it was never going to afford).
+    pub fn map_fixed(&mut self, pid: u64, addr: u64, len: u64, flags: u64) -> R<()> {
+        decode_flags(flags, false)?;
+        let (first, n) = user_range(addr, len)?;
+        if !self.range_free(pid, first, n) && !self.broken(Mutation::R11MapFixedSkipsOverlap) {
+            return Err(Error::InvalidArgument);
+        }
+        check_flags(flags, false)?;
+        let b = self.budget_of(pid).ok_or(Error::Dead)?;
+        if n > self.free_pages(b) {
+            return Err(Error::OutOfMemory);
+        }
+        let tables = self.tables_needed(pid, first..first + n);
+        self.charge(b, n.checked_add(tables).ok_or(Error::OutOfMemory)?)?;
+        for i in 0..n {
+            let f = self.alloc_frame(b);
+            self.map_page(pid, first + i, Mapping { backing: Backing::Frame(f), flags, state: MapState::Own });
         }
         Ok(())
     }

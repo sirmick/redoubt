@@ -1240,6 +1240,67 @@ impl MemoryManager {
         Ok(())
     }
 
+    /// `map_fixed(addr, len, flags)`: as `map_anon`, but at exactly `addr` (R11, answer 172) --
+    /// zeroed pages, charged to the caller's budget, that never replace a mapping. Checked in
+    /// the order KERNEL-SPEC.md's Errors row gives: the range (`user_range`), then that range's
+    /// overlap with any of the caller's mappings (`range_available_in`, over the whole range
+    /// before anything is charged or allocated -- `undo_run`'s rollback leaks page tables, so
+    /// nothing here may need it), then the flags (the same three-way check `process_map` uses,
+    /// `process.rs:354-360`, so W+X and W-without-R are refused here and can never reach
+    /// `map_page_inner`'s `.expect` below), then a single charge check for the pages and the
+    /// page tables they need. Only once all of that holds does the guaranteed-success mapping
+    /// loop run, so a failure never leaves anything mapped or charged.
+    pub fn map_fixed(
+        &mut self,
+        pid: PID,
+        addr: usize,
+        len: usize,
+        flags: redoubt_sys::MemFlags,
+    ) -> Result<(), redoubt_sys::Error> {
+        let bad = redoubt_sys::Error::InvalidArgument;
+        let oom = redoubt_sys::Error::OutOfMemory;
+        Self::user_range(addr, len)?;
+        let space = MemoryMapping::current();
+        if !crate::arch::mem::range_available_in(&space, addr, len) {
+            return Err(bad);
+        }
+        let flags = redoubt_flags(flags);
+        let wx = MemoryFlags::W | MemoryFlags::X;
+        let writable = flags & MemoryFlags::W == MemoryFlags::W;
+        let readable = flags & MemoryFlags::R == MemoryFlags::R;
+        if flags.is_empty() || flags & wx == wx || (writable && !readable) {
+            return Err(bad);
+        }
+        let npages = (len / PAGE_SIZE) as u64;
+        let budget = self.budget_of(pid).ok_or(oom)?;
+        // "OutOfMemory (pages, then page tables)": the pages alone first, cheaply, so a huge
+        // `len` that the budget could never pay for is refused before `tables_needed` walks it.
+        if npages > self.free_pages(budget) {
+            return Err(oom);
+        }
+        let tables = crate::arch::mem::tables_needed(&space, addr, len / PAGE_SIZE) as u64;
+        if npages + tables > self.free_pages(budget) {
+            return Err(oom);
+        }
+        // From here nothing fails: the range was free, the flags are good, and the budget was
+        // just charged (by the check above) for exactly this many pages and page tables.
+        for offset in (0..len).step_by(PAGE_SIZE) {
+            crate::arch::mem::prepare_map(self, &space, pid, addr + offset)
+                .expect("map_fixed: range_available_in found this page empty, so prepare_map's own (weaker) occupancy check cannot fail, and the charge check above paid for its page table");
+        }
+        for offset in (0..len).step_by(PAGE_SIZE) {
+            // Zeroed through the physmap, before the mapping exists at all (R11). The charge
+            // check above guarantees the budget can pay for `npages` pages; that a budget's
+            // free_pages is backed by free physical frames is the same assumption
+            // `process_map`'s `.expect` at `process.rs:382-392` relies on.
+            let frame = self.alloc_page(pid).expect("map_fixed: charged for above");
+            crate::kframe::zero(frame);
+            crate::arch::mem::map_page_inner(self, pid, frame, addr + offset, flags, true)
+                .expect("map_fixed: prepare_map already made this slot ready");
+        }
+        Ok(())
+    }
+
     /// The frame behind `page`, which must be a live user mapping of the caller that is not
     /// lent out and, if it is RAM, is credited to the caller (a lend the caller is holding is
     /// its lender's, not its own).

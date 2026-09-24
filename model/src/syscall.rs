@@ -137,11 +137,18 @@ pub enum Syscall {
         h: u64,
         kind: u64,
     },
+    /// As `MapAnon`, but at exactly `addr`; never replaces a mapping (KERNEL-SPEC.md R11,
+    /// answer 172). Appended last so earlier call numbers keep their values.
+    MapFixed {
+        addr: u64,
+        len: u64,
+        flags: u64,
+    },
 }
 
 /// The calls' names, in KERNEL-SPEC.md's table order (the order of `redoubt-sys`'s numbers,
 /// from 1). The one list of them: [`Syscall::name`], the trace and the tests use it.
-pub const CALL_NAMES: [&str; 25] = [
+pub const CALL_NAMES: [&str; 26] = [
     "map_anon",
     "unmap",
     "set_flags",
@@ -167,6 +174,7 @@ pub const CALL_NAMES: [&str; 25] = [
     "time_now",
     "random",
     "system_reset",
+    "map_fixed",
 ];
 
 impl Syscall {
@@ -198,6 +206,7 @@ impl Syscall {
             Syscall::TimeNow => 23,
             Syscall::Random => 24,
             Syscall::SystemReset { .. } => 25,
+            Syscall::MapFixed { .. } => 26,
         }
     }
 

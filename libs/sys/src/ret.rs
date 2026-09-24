@@ -187,7 +187,8 @@ pub fn decode_result(number: Number, regs: &[u64; REGS]) -> Result<Return, Error
         | Number::HandleClose
         | Number::BudgetDestroy
         | Number::BudgetUsage
-        | Number::SystemReset => Return::Nothing,
+        | Number::SystemReset
+        | Number::MapFixed => Return::Nothing,
         Number::Call => unreachable!(),
     };
     r.finish()?;

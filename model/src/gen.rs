@@ -14,7 +14,9 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::kernel::{Backing, DeviceKind, INIT_PID, Kernel, MapState, Object, ROOT, SYSTEM, USERS};
+use crate::kernel::{
+    Backing, DeviceKind, INIT_PID, KERNEL_CHOSEN_BASE, Kernel, MapState, Object, ROOT, SYSTEM, USERS, USER_TOP,
+};
 use crate::spec::*;
 use crate::syscall::*;
 
@@ -232,7 +234,7 @@ impl Gen {
         let w = [self.any(), self.any(), self.any(), self.any()];
         let buf =
             |g: &mut Gen| if g.rng.pct(50) { None } else { Some(Buffer { addr: g.any(), npages: g.any() }) };
-        match self.rng.below(24) {
+        match self.rng.below(25) {
             0 => S::MapAnon { len: self.any(), flags: self.any() },
             1 => S::Unmap { addr: self.any(), len: self.any() },
             2 => S::SetFlags { addr: self.any(), len: self.any(), flags: self.any() },
@@ -307,6 +309,7 @@ impl Gen {
             20 => S::TimeNow,
             21 => S::SystemReset { h: self.any(), kind: self.any() },
             22 => S::Random,
+            23 => S::MapFixed { addr: self.any(), len: self.any(), flags: self.any() },
             _ => S::ThreadCreate { entry: 0, sp: 0, arg: 0 },
         }
     }
@@ -889,6 +892,24 @@ impl Gen {
                 } else {
                     Syscall::SystemReset { h: self.handle(k, pid, is_endpoint), kind: 1 }
                 }
+            }
+            96..=98 => {
+                // A mix of a likely-free low address, address 0 (K5a-addr0: user space starts
+                // at 0), an address near USER_TOP (where a lone-mapping process's alloc_va
+                // fallback matters, P1-1), and now and then a page the process already owns
+                // (own_pages), so the overlap refusal fires too.
+                let addr = if self.rng.pct(20) {
+                    self.own_pages(k, pid, 1, |_| true).0
+                } else {
+                    match self.rng.below(4) {
+                        0 => 0,
+                        1 => 0x1000_0000,
+                        2 => USER_TOP - PAGE_SIZE,
+                        _ => KERNEL_CHOSEN_BASE - PAGE_SIZE,
+                    }
+                };
+                let n = if self.rng.pct(90) { self.rng.range(1, 4) } else { self.rng.range(0, 40) };
+                Syscall::MapFixed { addr, len: n * PAGE_SIZE, flags: self.flags() }
             }
             _ => Syscall::TimeNow,
         }

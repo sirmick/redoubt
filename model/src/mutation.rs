@@ -124,6 +124,8 @@ pub enum Mutation {
     R11AllowsWriteOnly,
     /// A lent page stays mapped in the lender during the call.
     R11LendStaysMapped,
+    /// `map_fixed` skips the overlap check, so it can map over an existing mapping.
+    R11MapFixedSkipsOverlap,
     /// Publishes no lend despite a supplied buffer.
     IpcWrongLend,
     /// Hides a committed partial reply behind its error.
@@ -243,7 +245,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 100] = {
+    pub const ALL: [Mutation; 101] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -294,6 +296,7 @@ impl Mutation {
             R11SetFlagsAllowsWx,
             R11AllowsWriteOnly,
             R11LendStaysMapped,
+            R11MapFixedSkipsOverlap,
             IpcWrongLend,
             IpcDropPartial,
             IpcFalseDelivery,
@@ -394,7 +397,9 @@ impl Mutation {
             | R10RevokedCallAnswered
             | R10SweptHandlesDropped
             | R10CreatorDeathSparesProcess => "R10",
-            R11NoZeroing | R11SetFlagsAllowsWx | R11AllowsWriteOnly | R11LendStaysMapped => "R11",
+            R11NoZeroing | R11SetFlagsAllowsWx | R11AllowsWriteOnly | R11LendStaysMapped | R11MapFixedSkipsOverlap => {
+                "R11"
+            }
             IpcWrongLend | IpcDropPartial | IpcFalseDelivery | IpcSkipOutputCheck | IpcLeakRollback => "IPC",
             R12PriorityById | R12IgnoreWeight | R12WakeBanksCredit => "R12",
             MsgNoLabels

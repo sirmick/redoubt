@@ -648,6 +648,53 @@ pub fn address_available_in(space: &MemoryMapping, virt: usize) -> bool {
     }
 }
 
+/// Whether every page in `[addr, addr + len)` is free in `space` (`map_fixed`'s overlap check):
+/// like `address_available_in` for each page (any nonzero PTE, including a reservation, is
+/// occupied), but a missing subtree is skipped as a whole instead of walking it one page at a
+/// time, so a huge range that is mostly unmapped costs at most the root entries it spans plus
+/// `ENTRIES` (512 on Sv39, 1024 on Sv32) per table actually present in the range -- never one
+/// walk per page. `addr` and `addr + len` are assumed already checked (page-aligned, in user
+/// space): this only interprets what it finds in the page tables.
+pub fn range_available_in(space: &MemoryMapping, addr: usize, len: usize) -> bool {
+    !subtree_occupied(root_of(space.satp), physmap::LEVELS - 1, addr, addr + len)
+}
+
+/// True if any page in `[start, end)` is occupied under `table`, a table at `level`. `start` and
+/// `end` need not be aligned to `level`'s span; each entry's coverage is computed from its own
+/// index, not from `start`.
+fn subtree_occupied(table: Table, level: usize, start: usize, end: usize) -> bool {
+    let span = physmap::leaf_size(level);
+    let mut virt = start;
+    while virt < end {
+        // The next boundary strictly after `virt` at this level's granularity, clamped to `end`.
+        let boundary = (virt | (span - 1)).wrapping_add(1);
+        let next = boundary.min(end);
+        let index = physmap::vpn(virt, level);
+        let pte = table.get(index);
+        if level == 0 {
+            if !pte.is_empty() {
+                return true;
+            }
+        } else if !pte.is_empty() {
+            match table.child(index) {
+                // A live subtree: recurse into it over the clipped range.
+                Some(child) => {
+                    if subtree_occupied(child, level - 1, virt, next) {
+                        return true;
+                    }
+                }
+                // Nonempty but not a table: a leaf this high (user space has none on either
+                // width) or a malformed entry. Fail closed rather than skip it.
+                None => return true,
+            }
+        }
+        // Empty entry: the whole `[virt, next)` gap is free (matches `walk`'s "missing table
+        // means nothing is mapped" reading, used by `address_available_in`), so skip it.
+        virt = next;
+    }
+    false
+}
+
 /// Unmap only the protected borrower alias when a lend leaves the server.
 pub fn unmap_from(space: &MemoryMapping, virt: usize) -> Result<usize, redoubt_abi::Error> {
     let slot = walk(root_of(space.satp), virt, None)?;
