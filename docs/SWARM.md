@@ -105,7 +105,7 @@ work; it does not mean an implementer is running. Merged rows retain dependency 
 | R1b | merged | wp-r1b | 86117e7af |
 | R1c | merged | wp-r1c | cd65fa610; joined `Parked` to the 9P skeleton (recovery of `5d29d136e`, answers 156-158); reviewed R-R1c |
 | R1d | waiting | | typed parking awaits decision 163; needs R1c (merged); blocks `resize` in B2a |
-| R2 | building | wp-r2 | Host side at 47cf82c1c passed red-team round 3 (OK with notes); stub at 0x1FF0_0000. K5a is merged, so the next round is the real `map_fixed`, the error mapping, stub-launch in the bench and the hostile-ELF boot acceptance (Wash QA R2-after-K5a). R1b and K4 lifecycle integrated; production handoff completes K4 bundle-readback acceptance |
+| R2 | merged | wp-r2 | d6b1809a7: flat-binary stub at 0x1FF0_0000 maps ELF segments with `map_fixed`, frees the image, jumps. Bench case stub-launch (rv64, rv32): hostile ELFs and 32 fuzzed headers hurt only the child. Four review rounds; red team and editor OK (Wash QA R2-review-4). Test-coverage follow-ups in Wash QA R2-followups. R1b and K4 lifecycle integrated; production handoff completes K4 bundle-readback acceptance |
 | R3 | waiting | | needs R2/K5 and relevant device/startup/confinement decisions; infrastructure enables later packages, full-server boot/blame acceptance awaits their integration |
 | R4 | merged | wp-r4b | 69466924c; bootfsd and consoled recovered from wp-r4; reviewed R-R4b |
 | B1 | ready | | R1b/R4 merged; scope Platform interfaces before launch; native acceptance additionally needs R3 startup/public modules and K5 |
