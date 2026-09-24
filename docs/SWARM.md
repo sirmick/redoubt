@@ -98,7 +98,7 @@ work; it does not mean an implementer is running. Merged rows retain dependency 
 | K4 | merged | recovery-k4 | Native lifecycle integrated; three reviews and full bench complete; bundle-file readback remains acceptance gate for R2/R3 (answer 169) |
 | G1 | merged | wp-g1 | Review debt cleared 2026-09-23: 26cba3022 reviewed, unsafe coverage complete, R11 write-without-read rule (Wash QA G1-coverage, G1-write-without-read); three rounds, all OK with notes. Answer 166 settles K5's contract (Wash QA G1-q166) |
 | K5a | building | wp-k5 | `map_fixed` (answer 172) for R2's stub; K5's implementer does it first, integrated on its own |
-| K5 | building | wp-k5 | K2 merged; answer 166 applied: WP-K5 adds wake-first ties, slice-end preemption and the measured latency bench case; sole kernel writer |
+| K5 | building | wp-k5 | Restarting after K5a with a new implementer and an approved plan; `wp-k5-unreviewed` is parked, unreviewed and not relied on (BUILD-PLAN WP-K5). K2 merged; answer 166 applied: WP-K5 adds wake-first ties, slice-end preemption and the measured latency bench case; sole kernel writer |
 | K6 | waiting | | needs K1-K5, R1b |
 | IPC1 | review | wp-ipc1 | Implementation in fe807fc4b, its TCB rounds complete; 26cba3022's shared record validator reviewed in G1. Host model recovered; native replay, K5 timer, serving-path and concurrency gates remain open; native exit covered by K4 |
 | R1 | merged | wp-r1 | 8298608af (carried the answers 39-42, 50-53 part of R1b) |
