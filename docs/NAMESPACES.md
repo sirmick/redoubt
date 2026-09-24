@@ -285,10 +285,12 @@ scope is canonical: host bits zero, `lo` ≤ `hi`.
   loopback, where a forwarded port leads back to the guest's `sshd`, and the resolver to the
   host's. An address that routes back to the box from outside (a NAT's hairpin) is refused only
   if the manifest lists it; each `ipd`'s list must name every address of every `ipd` on the box.
-  Inbound TCP claiming to come from any of the box's own addresses but the gateway (`ipd`'s own,
-  `127/8` and `0/8` among them) is dropped: it is spoofed or the box talking to itself, and
-  answering it would mean asking ARP for one of the box's own addresses. The gateway is kept
-  because QEMU's forwarded connections arrive from it.
+  Inbound IPv4 of any protocol claiming to come from any of the box's own addresses but the
+  gateway (`ipd`'s own, `127/8` and `0/8` among them) is dropped: it is spoofed or the box talking
+  to itself, and answering it would mean asking ARP for one of the box's own addresses. The
+  gateway is kept because QEMU's forwarded connections arrive from it. Inbound IPv4 that is not
+  TCP is dropped from anyone: `ipd` serves only TCP, and answering it (ICMP "protocol
+  unreachable") would reflect packets at whatever source it claims.
 
 <!-- wire: ipd ninep -->
 | Opcode | Kind | Message | Fields | Reply |
