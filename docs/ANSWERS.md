@@ -166,3 +166,41 @@ kernel package (WP-K5b) for the sole kernel writer after WP-K5, with attack case
 killed mid-traffic whose frames are reallocated, then the new owner's writes into the old rings
 reach nothing and peer bytes land nowhere; a device that ignores reset keeps its frames
 quarantined. Until WP-K5b merges, no driver restart (WP-R3) and no off-bench network use.
+
+## Network decisions (Mick, 2026-09-24)
+
+Mick approved the thirteen OWNER DECISIONS of the WP-D3 plan (QA D3-plan, after the red team's
+D3-plan-review) on 2026-09-24, with one change: smoltcp is vendored rather than only pinned.
+
+### 174. `netd`, `ipd` and `/net` for milestone 1.
+
+**Decision:** the network contracts WP-D3 builds, owned by IO-ARCHITECTURE.md (Networking, `netd`)
+and NAMESPACES.md (The network tree):
+- `netd` is our own virtio-net driver in `blkd`'s manner: version 2 only, `VERSION_1` and `MAC`
+  only, two DMA regions, no address in any message; a structural lie breaks the device, a frame
+  of the wrong length from the wire is dropped; a device fault never makes it exit. Its `netif`
+  protocol (`info`, `transmit`) serves one client badge.
+- Frames reach `ipd` as a `send` with a one-page transfer (`frame`), the first `send` in any
+  table, which gives WIRE.md's tables their `Kind` column.
+- `ipd` runs `smoltcp` 0.14.0, **vendored** (`vendor/smoltcp` and its dependencies), IPv4 and
+  TCP only with a static address; `/net/udp` is deferred.
+- `/net` files are typed: `clone` makes a socket, `ctl` takes `net_ctl` operations and its read
+  waits for a connect or an accept, `data` reads and writes wait, `remote` names the peer.
+- The capability is at most 8 prefix-and-port rules. Root scopes come from `ipd`'s arguments; a
+  typed `grant` never widens; `new_connection` keeps the scope; `disconnect` frees it. The box's
+  own addresses (on QEMU `self=10.0.2.0/24`) are refused before any scope is consulted. Labelled
+  callers are refused before admission.
+- `libs/rt` gains `Write::Wait` (any file server may park a write; only `/net` data does in
+  milestone 1), `NineServer::mint_rooted`, a panic hook, and a per-badge admission override for
+  account-0 root badges.
+- Each TCP connection's initial sequence number comes from a fresh kernel-random seed.
+- Before `init` exists, WP-D3's acceptance is a rig that launches the real `netd` and `ipd`
+  through the stub; the manifest boot is WP-R3's retained gate.
+
+**Reason:** the plan's recommendations, reviewed by the red team twice. Vendoring puts the
+stack's exact source in the tree, so it is read and built from here, not fetched. **Residual:**
+an armed device after a `netd` death is answer 173 (WP-K5b), without which there is no `netd`
+restart and no use off the bench; an address outside `self=` that loops back to the box is
+refused only if listed, and `sshd`'s refusal of `keyd` keys is the backstop; blind TCP injection
+needs about 2^19 guesses per connection and yields at most a reset (SSH's MAC rejects injected
+bytes); a half-open flood holds a listener's backlog 3 s per SYN.

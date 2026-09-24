@@ -82,16 +82,22 @@ are capped per (account, label set), reported abandoned when the caller gives up
 deadline (`Parked::expired`). A client that wants no wait calls the non-parking form instead (a
 `size` query, not a `resize` wait).
 
-**Only the 9P `read` path parks today.** `serve_parking` hands back a request only when
-`answer_in_place` returns `Answer::Waiting`, which is the `FileServer::read` -> `Read::Wait` path; a
+**Only the 9P `read` and `write` paths park.** `serve_parking` hands back a request only when
+`answer_in_place` returns `Answer::Waiting`, which is the `FileServer::read` -> `Read::Wait` path
+or the `FileServer::write` -> `Write::Wait` path (answer 174); a
 **typed** opcode goes to the server's own dispatch, whose answer is always a reply. So a parked
 *typed* call — the shape `resize` below needs — is not possible yet: it needs the typed dispatch to
 hand a request back the way the read path does, a small `libs/rt` extension. That gap is **question
 163**, open; `resize` is specified against it.
 - **The file server says so.** `FileServer::read` returns `Read::Done(usize)` (at most `out.len()`, 0
   the end of the file) or `Read::Wait`: nothing to read yet and no end. Among 9P file operations,
-  only `read` waits in milestone 1; typed event waits such as `resize` are also in scope (answer
-  160), pending the typed-dispatch extension (question 163). A waiting `write` remains a non-goal.
+  `read` and `write` wait in milestone 1; typed event waits such as `resize` are also in scope
+  (answer 160), pending the typed-dispatch extension (question 163).
+- **A write may wait too** (answer 174). `FileServer::write` returns `Write::Done(usize)` or
+  `Write::Wait`, and `serve_parking` hands a waiting write back exactly as it does a read: same
+  admission, same deadline, same abandonment. Any file server may use it; in milestone 1 only
+  `ipd`'s `data` files do, when a socket's send buffer is full, so a TCP writer waits instead of
+  spinning.
 - **The skeleton hands the call back unanswered.** `NineServer::serve_parking(request, own)` is
   `serve_with`, except that a request the file server asked to hold is returned to the server with its
   T-message untouched in its lend: nothing of it is kept in the skeleton. `answer_in_place` returns
@@ -197,6 +203,127 @@ ports only** ("connect to 10.0.0.0/8 port 443", "listen on TCP 22"). DNS runs in
 name-scoped check could only ever see the IP the client chose. Session scopes never include the box's
 own addresses, including any address that routes back to the box (CAPABILITIES.md). `ipd` is a sink
 and refuses labelled callers. Elixir wraps the tree in `gen_tcp`-like modules.
+
+### What `ipd` serves in milestone 1 (answer 174)
+IPv4 and TCP only, with a static address; `/net/udp` comes later. `ipd` runs `smoltcp` 0.14.0,
+vendored (`vendor/smoltcp`), with IPv4, Ethernet and TCP and nothing else: no IPv6, DHCP, DNS,
+UDP, raw or ICMP sockets, and no fragment reassembly, so a fragment is dropped.
+
+**The files.** Everything a file holds is typed (WIRE.md's encoding), never text:
+- `/tcp/clone`: a read at offset 0 makes a new socket, charged to the caller (below), and returns
+  its number `n: u32`. Numbers are per connection, the lowest free one; `/tcp` lists only the
+  caller's connection's sockets, and a walk to another connection's number is "not found". (A
+  read makes it because the 9P skeleton does not move a fid when it is opened.)
+- `/tcp/N/ctl`: a write is one `net_ctl` operation (below). A read returns `state: u32` and
+  `n: u32`, and **waits** while a connect is in progress or a listener has nothing accepted
+  (60 s at most, then `timeout`). States: 1 connecting, 2 established, 3 closing, 4 closed,
+  5 listening; for a listener that accepted, `n` is the new connection's number.
+- `/tcp/N/data`: the byte stream. A read waits while there is nothing to read (0 is the peer's
+  end); a write waits while the send buffer is full (`Write::Wait`, above). Either waits 30 s at
+  most, then answers `timeout`, and the client asks again: they wait on the network, not on a
+  person, so they are not the console's exception.
+- `/tcp/N/remote`: `addr: bytes[4]` (network order) then `port: u16`.
+
+A socket lives until `close` (its graceful end), `abort`, or the `disconnect` of its connection
+(which aborts every socket of it), then lingers at most 60 s more before `ipd` resets it, plus
+TCP's 10 s TIME-WAIT; it stays charged to its owner until it is gone. An established socket
+without acknowledged progress for 60 s is ended.
+
+<!-- wire: net_ctl -->
+| Opcode | Message | Fields | Reply |
+| --- | --- | --- | --- |
+| 1 | `connect` | `addr: bytes`, `port: u16` | - |
+| 2 | `listen` | `port: u16`, `backlog: u8` | - |
+| 3 | `close` | - | - |
+| 4 | `abort` | - | - |
+
+<!-- wire-errors: net_ctl -->
+| Code | Error |
+| --- | --- |
+| 2 | `not_permitted` |
+| 3 | `in_use` |
+| 4 | `too_many` |
+| 5 | `state` |
+| 6 | `unreachable` |
+| 7 | `refused` |
+| 8 | `timeout` |
+
+A `ctl` write that fails is an `Rerror` whose text is the error's name. `connect`'s `addr` is four
+bytes, network order. It is checked in this order, before the stack sees anything: the box's own
+addresses (below), then the scope, then the socket's state; success means the attempt has
+started, and a read of `ctl` waits for the answer. The local port is drawn at random, unique
+among every live socket of every owner (TIME-WAIT included) and never a listened port.
+`listen` takes `backlog` 1 to 8: `ipd` keeps that many listening sockets, each charged to the
+holder, and one waiting read of `ctl` returns each accepted connection as a new number. A
+half-open connection (SYN received, no answer) is given 3 s, then the listener listens again. A
+port belongs to the connection that listened on it first, and to the connections minted from it
+by `new_connection("")`; any other gets `in_use`, even one granted from the same root.
+`unreachable` means `ipd` has no link.
+
+**The capability.** A connection's scope is at most 8 rules, each a **connect** rule (an IPv4
+prefix and a port range) or a **listen** rule (a port range). As a `bytes` field (WIRE.md,
+compound values): `count: u8`, then per rule `kind: u8` (1 connect, 2 listen), `addr: bytes[4]`
+(network order; zero for listen), `len: u8` (0 to 32; zero for listen), `lo: u16`, `hi: u16`. A
+scope is canonical: host bits zero, `lo` ≤ `hi`.
+- **Root badges** are minted by `init`; `ipd`'s arguments say what each means (below). In the
+  milestone manifest the steward's badge may connect anywhere, `sshd`'s may listen on 22, and
+  `netd`'s is the ingress badge, which has no `/net` at all.
+- **`grant`** mints a connection whose scope is the requested one, which must be canonical and
+  **no wider** than the caller's: each rule inside one of the caller's of the same kind, prefix
+  within prefix (no shorter), ports within ports. So a grant never widens and never adds
+  `listen`. It is how the steward gives a principal its manifest `net` scope.
+- **`new_connection`** keeps the caller's scope, rooted at `""` or `"tcp"` only (a socket's
+  directory is not delegated). **`disconnect`** frees a connection, everything minted under it
+  and every socket of them (`ninep_common`).
+- **The box's own addresses** are refused to every scope, before the scope is looked at:
+  `ipd`'s address, its network's network and broadcast addresses, `255.255.255.255`, `127/8`,
+  `0/8`, `224/4`, `240/4`, and every `self=` prefix its manifest entry lists. On QEMU that is
+  `10.0.2.0/24`: slirp maps every address of its network but the resolver to the host's
+  loopback, where a forwarded port leads back to the guest's `sshd`, and the resolver to the
+  host's. An address that routes back to the box from outside (a NAT's hairpin) is refused only
+  if the manifest lists it; each `ipd`'s list must name every address of every `ipd` on the box.
+  Inbound TCP claiming to come from `ipd`'s own address, `127/8` or `0/8` is dropped.
+
+<!-- wire: ipd ninep -->
+| Opcode | Kind | Message | Fields | Reply |
+| --- | --- | --- | --- | --- |
+| 16 | call | `grant` | `scope: bytes` | `conn: handle[0] endpoint`, `id: u64` |
+| 17 | send | `frame` | `frame: bytes` | - |
+
+<!-- wire-errors: ipd -->
+| Code | Error |
+| --- | --- |
+| 2 | `not_permitted` |
+| 3 | `too_many` |
+
+- `grant`: `not_permitted` for a wider, non-canonical or malformed scope, or a labelled caller;
+  `too_many` when the caller's bucket holds its cap of connections.
+- `frame`: one received Ethernet frame, in a one-page transfer, accepted only on the ingress
+  badge (`netd`'s). It is the first `send` in any table (WIRE.md). A frame on another badge is
+  dropped, and its pages unmapped.
+
+**Labelled callers get nothing.** `ipd` refuses a caller whose budget carries any label before
+it looks at 9P, `ninep_common`, `grant` or admission, so a labelled caller opens no bucket and
+cannot even allocate a socket by reading `clone` (which `check` alone would let it read).
+
+**Arguments** (INIT.md, arguments; each server defines its own), strict, all or nothing: an
+argument `ipd` does not understand stops it (`BAD_ARGS`).
+- `addr=A.B.C.D/LEN`, a unicast host address and its network; `gateway=A.B.C.D`, unicast and on it.
+- `self=A.B.C.D/LEN`, up to 8; `ingress=BADGE`, the badge `netd` sends frames on.
+- `scope=BADGE:RULE[,RULE...]`, one per root badge, up to 8; a rule is `c:A.B.C.D/LEN:LO-HI` or
+  `l:LO-HI`.
+- `buckets=N`, and `limits=BADGE:INFLIGHT:STATE:SOCKETS` overriding the default caps for one
+  root badge. An override applies only to calls with account 0 through exactly that badge.
+Badges are below 2^63 and appear once each. `ipd` refuses to start unless every bucket at its
+cap fits its budget and its parked calls leave `MAX_OPEN_CALLS`' headroom: the overrides'
+in-flight caps plus the default's for every other bucket at most 48. In the milestone manifest:
+six buckets, `sshd` 24 in flight and 20 sockets (a waiting accept, a read and a write for each of
+11 sessions), the steward 2 in flight and 32 connections (the `/net` grants it has made), and
+four more buckets at the default 5 in flight and 8 sockets: 24 + 2 + 4 × 5 = 46.
+
+A link fault never stops `ipd`: without a working `netd` (its `info` fails, its MAC is not
+unicast, or `transmit` answers `failed`) it answers `unreachable` to `connect` and `listen`,
+keeps every other rule, and asks `netd` again with backoff.
 
 ## Filesystem servers
 - **Holds:** one block-range handle (a partition from `blkd`). No MMIO, IRQ or DMA.
