@@ -39,7 +39,11 @@ Per-process kernel data holds `ProcessImpl` at `THREAD_CONTEXT_AREA` (slot 0 is 
 slots 1..=31 are saved thread contexts: 2 pages on rv64, 1 on rv32) and `USERSPACE_BUFFER`
 (temporary; the physmap should replace it). Userspace regions are the same on both widths
 (`DEFAULT_HEAP_BASE = 0x2000_0000`, stack top `0x8000_0000`); spreading out over the rv64 space
-(and ASLR) is a later, userspace-visible change.
+(and ASLR) is a later, userspace-visible change. User space starts at address 0 on both widths:
+no page is reserved at the bottom, so a call that names a user address (`map_fixed`,
+`process_map`, `unmap`, `set_flags`) accepts page 0. SUM stays clear, so the kernel never
+dereferences a user pointer and a mapped page 0 cannot turn a kernel null dereference into an
+attack.
 
 ## Sv32 vs Sv39
 Same low 10 PTE flag bits; the physical page number starts at bit 10 in both. So one `usize`-based
