@@ -20,6 +20,9 @@ use std::path::{Path, PathBuf};
 use redoubt_wire::typed::{HandleKind, INLINE_BYTES, MALFORMED, MAX_MSG_HANDLES};
 
 const MESSAGE_HEADER: [&str; 4] = ["Opcode", "Message", "Fields", "Reply"];
+/// The same with a `Kind` column (WIRE.md: "a `kind` column is added when a protocol first needs
+/// a `send`"): each row says `call` or `send`. A table without the column is all calls.
+const MESSAGE_HEADER_KIND: [&str; 5] = ["Opcode", "Kind", "Message", "Fields", "Reply"];
 const ERROR_HEADER: [&str; 2] = ["Code", "Error"];
 const MESSAGE_MARKER: &str = "<!-- wire:";
 const ERROR_MARKER: &str = "<!-- wire-errors:";
@@ -107,6 +110,8 @@ pub struct MessageDef {
     pub fields: Vec<Field>,
     /// The reply's fields; empty for a reply that is its status alone.
     pub reply: Vec<Field>,
+    /// Sent one-way (`send`, its buffer a transfer) rather than called: there is no reply.
+    pub send: bool,
 }
 
 impl MessageDef {
@@ -282,14 +287,26 @@ fn parse_fields(cell: &str) -> Result<Vec<Field>, String> {
     Ok(parsed)
 }
 
-fn parse_message(row: &[&str]) -> Result<MessageDef, String> {
-    let [opcode, name, fields, reply] = row else {
-        return Err(format!("a row has {} cells, expected 4", row.len()));
+fn parse_message(row: &[&str], with_kind: bool) -> Result<MessageDef, String> {
+    let (opcode, kind, name, fields, reply) = match (row, with_kind) {
+        ([opcode, name, fields, reply], false) => (opcode, "call", name, fields, reply),
+        ([opcode, kind, name, fields, reply], true) => (opcode, *kind, name, fields, reply),
+        _ => return Err(format!("a row has {} cells, expected {}", row.len(), if with_kind { 5 } else { 4 })),
     };
     let opcode = parse_code("opcode", opcode)?;
+    let send = match kind {
+        "call" => false,
+        "send" => true,
+        _ => return Err(format!("kind `{kind}` is neither `call` nor `send`")),
+    };
     let name = backticked(name).ok_or_else(|| format!("message name `{name}` must be in backticks"))?;
     check_ident("message", name)?;
-    Ok(MessageDef { opcode, name: name.to_string(), fields: parse_fields(fields)?, reply: parse_fields(reply)? })
+    let reply = parse_fields(reply)?;
+    // A `send` is never an open call, so nothing can answer it (KERNEL-SPEC.md, `reply`).
+    if send && !reply.is_empty() {
+        return Err(format!("message `{name}` is a `send`: its reply must be `-`, since a send has no reply"));
+    }
+    Ok(MessageDef { opcode, name: name.to_string(), fields: parse_fields(fields)?, reply, send })
 }
 
 /// The name of error code 1, every protocol's (WIRE.md, Errors).
@@ -335,7 +352,8 @@ pub fn parse(source: &str, text: &str) -> Result<Tables, String> {
             continue;
         }
         // A table with our header but no marker would be silently ignored: refuse it.
-        if cells(trimmed).is_some_and(|c| c == MESSAGE_HEADER || c == ERROR_HEADER) {
+        let headed = |c: Vec<&str>| c == MESSAGE_HEADER || c == MESSAGE_HEADER_KIND || c == ERROR_HEADER;
+        if cells(trimmed).is_some_and(headed) {
             return Err(at(i, "a wire table needs a `<!-- wire: NAME -->` or `<!-- wire-errors: NAME -->` line before it".into()));
         }
         let (rest, header) = if let Some(rest) = trimmed.strip_prefix(ERROR_MARKER) {
@@ -362,7 +380,11 @@ pub fn parse(source: &str, text: &str) -> Result<Tables, String> {
         while line(i).is_some_and(str::is_empty) {
             i += 1;
         }
-        if line(i).and_then(cells).is_none_or(|c| c != header) {
+        let found = line(i).and_then(cells);
+        // A message table may carry the `Kind` column; an error table never does.
+        let with_kind = header == MESSAGE_HEADER && found.as_deref() == Some(&MESSAGE_HEADER_KIND[..]);
+        let header: &[&str] = if with_kind { &MESSAGE_HEADER_KIND } else { header };
+        if found.is_none_or(|c| c != header) {
             return Err(at(i, format!("expected the header `| {} |`", header.join(" | "))));
         }
         i += 1;
@@ -382,7 +404,7 @@ pub fn parse(source: &str, text: &str) -> Result<Tables, String> {
         }
         // An error table may be empty: `malformed` is every protocol's, and a protocol may
         // have no errors of its own.
-        if rows.is_empty() && header == MESSAGE_HEADER {
+        if rows.is_empty() && header != ERROR_HEADER {
             return Err(at(marker, format!("table `{name}` has no rows")));
         }
         // A row cut off from its table by a blank line would otherwise be read as prose.
@@ -416,7 +438,7 @@ pub fn parse(source: &str, text: &str) -> Result<Tables, String> {
             let mut messages: Vec<MessageDef> = Vec::new();
             let mut types: Vec<String> = Vec::new();
             for (n, row) in rows {
-                let m = parse_message(&row).map_err(|e| at(n, e))?;
+                let m = parse_message(&row, with_kind).map_err(|e| at(n, e))?;
                 if messages.iter().any(|o| o.opcode == m.opcode) {
                     return Err(at(n, format!("opcode {} used twice", m.opcode)));
                 }
@@ -604,7 +626,12 @@ pub fn rust(p: &Protocol) -> String {
     s.push_str("use crate::codec::{Error, Reader, Writer};\nuse crate::typed::{self, Layout, Words};\n");
     for m in &p.messages {
         let shape = if m.inline() { "inline" } else { "buffer" };
-        let doc = format!("/// `{}`: opcode {}, {shape}; reply [`{}`].", m.name, m.opcode, m.reply_type());
+        let doc = if m.send {
+            let what = "a `send`: its buffer is a transfer and there is no reply";
+            format!("/// `{}`: opcode {}, {shape}, {what}.", m.name, m.opcode)
+        } else {
+            format!("/// `{}`: opcode {}, {shape}; reply [`{}`].", m.name, m.opcode, m.reply_type())
+        };
         rust_struct(&mut s, &doc, &m.type_name(), &m.fields);
         rust_struct(&mut s, &format!("/// The reply to [`{}`].", m.type_name()), &m.reply_type(), &m.reply);
     }
@@ -637,7 +664,18 @@ pub fn rust(p: &Protocol) -> String {
     s.push_str("        typed::decode_file(REQUESTS, bytes, Self::read_buffer)\n    }\n\n");
     s.push_str("    /// Writes the request in the file framing into the front of `out`; returns its length.\n");
     s.push_str("    pub fn encode_file(&self, out: &mut [u8]) -> Result<usize, Error> {\n");
-    s.push_str("        typed::encode_file(typed::layout(REQUESTS, self.opcode())?, out, |w| self.write(w))\n    }\n}\n");
+    s.push_str("        typed::encode_file(typed::layout(REQUESTS, self.opcode())?, out, |w| self.write(w))\n    }\n");
+    // Only a protocol with a `Kind` column that names a `send` says which messages are sent: every
+    // other protocol is all calls (WIRE.md), and its generated code is unchanged.
+    if p.messages.iter().any(|m| m.send) {
+        let sends: Vec<String> =
+            p.messages.iter().filter(|m| m.send).map(|m| format!("Message::{}(_)", m.type_name())).collect();
+        s.push_str("\n    /// Whether this message is sent one-way (`send`, its buffer a transfer) rather than\n");
+        s.push_str("    /// called: a receiver must not reply to it, and a sender must not wait for a reply.\n");
+        let sends = sends.join(" | ");
+        let _ = writeln!(s, "    pub fn is_send(&self) -> bool {{\n        matches!(self, {sends})\n    }}");
+    }
+    s.push_str("}\n");
 
     let replies = layouts(p.messages.iter().map(|m| (m.opcode, m.inline(), handles(&m.reply).count())).collect());
     let _ = write!(s, "\n/// Replies, by the opcode of their request.\nconst REPLIES: &[Layout] = &[\n{replies}];\n");
@@ -1091,12 +1129,43 @@ mod tests {
         assert!(elixir(&p[0]).contains("1 => :malformed,\n    2 => :denied"));
     }
 
-    /// Answer 98: every milestone 1 typed message is a `call`; a table has no `kind` column.
+    const KIND_HEAD: &str =
+        "<!-- wire: demo -->\n| Opcode | Kind | Message | Fields | Reply |\n| --- | --- | --- | --- | --- |\n";
+
+    /// WIRE.md: a `Kind` column says which messages are `send`s; without it, all are calls.
     #[test]
-    fn no_kind_column() {
-        let t = "<!-- wire: demo -->\n| Opcode | Kind | Message | Fields | Reply |\n| --- | --- | --- | --- | --- |\n\
-                 | 1 | call | `a` | - | - |\n";
-        assert!(protocols(t).unwrap_err().contains("expected the header `| Opcode | Message | Fields | Reply |`"));
+    fn kind_column() {
+        let rows = "| 1 | call | `a` | - | `x: u32` |\n| 2 | send | `b` | `f: bytes` | - |\n";
+        let t = format!("{KIND_HEAD}{rows}{ERRORS}");
+        let p = protocols(&t).unwrap();
+        assert!(!p[0].messages[0].send);
+        assert!(p[0].messages[1].send);
+        let rust = rust(&p[0]);
+        assert!(rust.contains("/// `b`: opcode 2, buffer, a `send`: its buffer is a transfer and there is no reply."));
+        assert!(rust.contains("pub fn is_send(&self) -> bool {\n        matches!(self, Message::B(_))\n    }"), "{rust}");
+        // Without the column every message is a call, and the generated code says nothing of sends.
+        let calls = protocols(&format!("{HEAD}| 1 | `a` | - | - |\n{ERRORS}")).unwrap();
+        assert!(!calls[0].messages[0].send);
+        assert!(!rust_for(&calls).contains("is_send"));
+        // A table that names only calls in its column is still all calls, with no `is_send`.
+        let only_calls = protocols(&format!("{KIND_HEAD}| 1 | call | `a` | - | - |\n{ERRORS}")).unwrap();
+        assert!(!rust_for(&only_calls).contains("is_send"));
+    }
+
+    fn rust_for(p: &[Protocol]) -> String { rust(&p[0]) }
+
+    #[test]
+    fn kind_column_is_checked() {
+        let with = |rows: &str| protocols(&format!("{KIND_HEAD}{rows}{ERRORS}")).unwrap_err();
+        // A send has no reply: nothing can answer it.
+        assert!(with("| 1 | send | `a` | - | `x: u32` |\n").contains("its reply must be `-`"));
+        assert!(with("| 1 | sent | `a` | - | - |\n").contains("kind `sent` is neither `call` nor `send`"));
+        assert!(with("| 1 | `a` | - | - |\n").contains("a row has 4 cells, expected 5"));
+        // A kind column in a table without it is a fifth cell, refused.
+        assert!(err("| 1 | call | `a` | - | - |\n").contains("a row has 5 cells, expected 4"));
+        // A table with the kind header still needs its marker.
+        let bare = "| Opcode | Kind | Message | Fields | Reply |\n| --- | --- | --- | --- | --- |\n| 1 | call | `a` | - | - |\n";
+        assert!(protocols(bare).unwrap_err().contains("needs a `<!-- wire: NAME -->`"));
     }
 
     /// `text` with the fenced message table replaced by what WP-R1b writes when it unfences
