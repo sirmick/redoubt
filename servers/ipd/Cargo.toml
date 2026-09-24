@@ -1,0 +1,9 @@
+[package]
+name = "redoubt-ipd"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "ipd: the TCP/IP stack for one network, serving /net over 9P (answer 174)"
+
+[dependencies]
+redoubt-rt = { path = "../../libs/rt" }
