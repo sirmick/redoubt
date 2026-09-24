@@ -51,8 +51,11 @@ reserves 1-15 there (above):
   handle's kind, so a handle of the wrong kind is found by use (`WrongObject` on first use).
 - **Compound values** (a label set, an IP prefix) are a `bytes` field whose inner layout is stated
   under the table, in the same encoding. Milestone 1 adds no other types.
-- **Every milestone 1 typed message is a `call`.** A table has no column saying so; a `kind` column
-  is added when a protocol first needs a `send` (a transfer).
+- **Typed messages are `call`s unless a table's `Kind` column says `send`.** A protocol that
+  needs a `send` (a transfer) heads its table `| Opcode | Kind | Message | Fields | Reply |` and
+  gives each row `call` or `send`. A `send` has no reply (`-`): it is never an open call, so
+  nothing can answer it. A table without the column is all calls. `ipd`'s ingress `frame` is the
+  first `send` (IO-ARCHITECTURE.md, Networking; answer 174).
 - **Errors.** Each protocol has an error table, marked by a line `<!-- wire-errors: NAME -->` and
   headed `| Code | Error |`: codes unique, each with a name. **Code 1 is `Malformed` in every
   protocol**, and in a 9P call's reply status: a request that does not decode (unknown opcode, wrong

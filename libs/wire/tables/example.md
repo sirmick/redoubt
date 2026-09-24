@@ -40,9 +40,10 @@ Then one row per message:
 - **Reply:** the reply's fields in the same form as Fields (with its own handle slots from 0),
   or `-` for a reply that is its status alone.
 
-There is no column saying how a message is sent: every milestone 1 typed message is a `call`
-(WIRE.md, answer 98), and a table with any other header is refused. A `kind` column is added
-when a protocol first needs a `send`.
+A table's messages are `call`s. A protocol that needs a `send` (a transfer) adds a `Kind` column
+after Opcode, `| Opcode | Kind | Message | Fields | Reply |`, and each row says `call` or `send`.
+A `send`'s Reply must be `-`, since nothing answers a send; its generated `Message` gains
+`is_send()`. A table with any other header is refused (WIRE.md).
 
 The table ends at the first blank line. Every line before that must be a row; a row-like line
 right after the blank line is refused, so a stray blank line cannot drop rows. Tables inside
