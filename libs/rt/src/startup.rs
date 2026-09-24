@@ -53,6 +53,10 @@ pub enum StartupError {
     Duplicate,
     /// Longer than [`MAX_BLOCK`], or out of memory for its entries.
     TooLarge,
+    /// `image_addr`/`image_len` break INIT.md's rule: one is 0 and the other is not,
+    /// `image_addr` is not page-aligned, `image_addr + image_len` overflows, or either does not
+    /// fit this target's `usize` (rv32).
+    BadImage,
 }
 
 /// Whether `name` may name a handle: the boot manifest's rule (INIT.md, Names; answer 64), 1-64
@@ -106,11 +110,13 @@ enum Entry<'a> {
 #[derive(Clone, Debug)]
 pub struct Startup<'a> {
     entries: Vec<Entry<'a>>,
+    /// `(image_addr, image_len)`, `None` when the block named no image (INIT.md, Startup block).
+    image: Option<(usize, usize)>,
 }
 
 impl<'a> Startup<'a> {
     /// A process started with no block.
-    pub const EMPTY: Startup<'static> = Startup { entries: Vec::new() };
+    pub const EMPTY: Startup<'static> = Startup { entries: Vec::new(), image: None };
 
     /// Parses the block at the front of `page` (at most [`MAX_BLOCK`] bytes of it are looked at).
     pub fn parse(page: &'a [u8]) -> Result<Startup<'a>, StartupError> {
@@ -154,10 +160,17 @@ impl<'a> Startup<'a> {
         while !r.rest().is_empty() {
             push(&mut entries, Entry::Arg(r.string().map_err(StartupError::Malformed)?))?;
         }
-        Ok(Startup { entries })
+        let image = parse_image(fields.image_addr, fields.image_len)?;
+        Ok(Startup { entries, image })
     }
 
     fn entries(&self) -> impl Iterator<Item = Entry<'a>> + '_ { self.entries.iter().copied() }
+
+    /// `(image_addr, image_len)`, the program image the loader stub loads (INIT.md, Startup
+    /// block; PACKAGES.md, Launching a process): the address of its first byte and its exact
+    /// byte length, both already checked non-overflowing and page-aligned. `None` for a process
+    /// started at its own entry rather than through the stub.
+    pub fn image(&self) -> Option<(usize, usize)> { self.image }
 
     /// The namespace table: (path, handle), in block order.
     pub fn namespace(&self) -> impl Iterator<Item = (&'a str, Handle)> + '_ {
@@ -198,6 +211,24 @@ impl<'a> Startup<'a> {
     }
 }
 
+/// INIT.md's `image_addr`/`image_len` rule: `image_addr` is 0 exactly when `image_len` is, is
+/// page-aligned, and `image_addr + image_len` does not overflow. Both 0 is "no image".
+fn parse_image(image_addr: u64, image_len: u64) -> Result<Option<(usize, usize)>, StartupError> {
+    if image_addr == 0 && image_len == 0 {
+        return Ok(None);
+    }
+    if image_addr == 0 || image_len == 0 {
+        return Err(StartupError::BadImage);
+    }
+    let addr = usize::try_from(image_addr).map_err(|_| StartupError::BadImage)?;
+    let len = usize::try_from(image_len).map_err(|_| StartupError::BadImage)?;
+    if !addr.is_multiple_of(PAGE_SIZE) {
+        return Err(StartupError::BadImage);
+    }
+    addr.checked_add(len).ok_or(StartupError::BadImage)?;
+    Ok(Some((addr, len)))
+}
+
 /// One `handle: u32`, `string` entry.
 fn handle_and_string<'a>(r: &mut Reader<'a>) -> Result<(u32, &'a str), StartupError> {
     let raw = r.u32().map_err(StartupError::Malformed)?;
@@ -235,20 +266,32 @@ pub struct StartupBuilder {
     namespace: Vec<u8>,
     names: Vec<u8>,
     argv: Vec<u8>,
+    image_addr: u64,
+    image_len: u64,
     /// A string too long for its `u16` length, remembered for `finish`.
     too_long: bool,
 }
 
 impl StartupBuilder {
-    /// A block for a child given `handles` handles (its slots 1..=handles).
+    /// A block for a child given `handles` handles (its slots 1..=handles), naming no image.
     pub fn new(handles: u32) -> StartupBuilder {
         StartupBuilder {
             handles,
             namespace: Vec::new(),
             names: Vec::new(),
             argv: Vec::new(),
+            image_addr: 0,
+            image_len: 0,
             too_long: false,
         }
+    }
+
+    /// Names the program image the loader stub loads at `addr..addr + len` (INIT.md, Startup
+    /// block): `addr` must be page-aligned for [`finish`](Self::finish) to accept it.
+    pub fn image(&mut self, addr: usize, len: usize) -> &mut Self {
+        self.image_addr = addr as u64;
+        self.image_len = len as u64;
+        self
     }
 
     /// Appends a `string`: its `u16` length and its bytes.
@@ -289,6 +332,8 @@ impl StartupBuilder {
             namespace: &self.namespace,
             handles: &self.names,
             argv: &self.argv,
+            image_addr: self.image_addr,
+            image_len: self.image_len,
         });
         let mut page = alloc::vec![0; MAX_BLOCK];
         let body = page.get_mut(frame::HEADER..).ok_or(StartupError::TooLarge)?;
@@ -331,6 +376,7 @@ mod tests {
         assert_eq!(s.handle("budget"), Some(h(4)));
         assert_eq!(s.handle("nope"), None);
         assert_eq!(s.args().collect::<Vec<_>>(), vec!["--verbose", "", "naïve"]);
+        assert_eq!(s.image(), None);
         // The rest of the page is not read.
         let mut page = bytes.clone();
         page.resize(MAX_BLOCK, 0xaa);
@@ -351,8 +397,27 @@ mod tests {
         want.extend_from_slice(&0u32.to_le_bytes()); // handles: none
         want.extend_from_slice(&3u32.to_le_bytes()); // argv: 3 bytes
         want.extend_from_slice(&[1, 0, b'a']);
+        want.extend_from_slice(&0u64.to_le_bytes()); // image_addr: none
+        want.extend_from_slice(&0u64.to_le_bytes()); // image_len: none
         assert_eq!(bytes[..4], (want.len() as u32).to_le_bytes());
         assert_eq!(bytes[4..], want[..]);
+    }
+
+    #[test]
+    fn image_round_trips_and_is_validated() {
+        let bytes = StartupBuilder::new(0).image(PAGE_SIZE, 42).finish().unwrap();
+        assert_eq!(Startup::parse(&bytes).unwrap().image(), Some((PAGE_SIZE, 42)));
+
+        // image_addr is 0 exactly when image_len is: one without the other is refused.
+        assert_eq!(StartupBuilder::new(0).image(PAGE_SIZE, 0).finish().err(), Some(StartupError::BadImage));
+        assert_eq!(StartupBuilder::new(0).image(0, 1).finish().err(), Some(StartupError::BadImage));
+        // Not page-aligned.
+        assert_eq!(StartupBuilder::new(0).image(1, 1).finish().err(), Some(StartupError::BadImage));
+        // Overflows.
+        assert_eq!(
+            StartupBuilder::new(0).image(usize::MAX & !(PAGE_SIZE - 1), PAGE_SIZE).finish().err(),
+            Some(StartupError::BadImage)
+        );
     }
 
     #[test]
@@ -434,6 +499,8 @@ mod tests {
             namespace,
             handles,
             argv,
+            image_addr: 0,
+            image_len: 0,
         };
         let ok = fields(&[1, 0, 0, 0, 1, 0, b'/'], &[1, 0, 0, 0, 1, 0, b'k'], &[0, 0]);
         assert!(Startup::from_fields(&ok).is_ok());

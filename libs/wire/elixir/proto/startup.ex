@@ -27,7 +27,7 @@ defmodule Redoubt.Wire.Proto.Startup do
   `{name, type}` in order, `handles` lists the handles' names by slot, and `reply` is
   `{fields, handles}`.
   """
-  def layout(:startup), do: {1, :buffer, [{:version, :u32}, {:handle_count, :u32}, {:namespace, :bytes}, {:handles, :bytes}, {:argv, :bytes}], [], {[], []}}
+  def layout(:startup), do: {1, :buffer, [{:version, :u32}, {:handle_count, :u32}, {:namespace, :bytes}, {:handles, :bytes}, {:argv, :bytes}, {:image_addr, :u64}, {:image_len, :u64}], [], {[], []}}
   def layout(_), do: nil
 
   @doc "Encodes a request: `{:ok, words, buffer}` or `{:error, reason}`."
@@ -52,11 +52,11 @@ defmodule Redoubt.Wire.Proto.Startup do
   @doc "Decodes a request written into a 9P file."
   def decode_file(bytes), do: W.decode_file(bytes, @requests, &read(:request, &1, &2))
 
-  defp enc(:request, :startup, %{version: v_version, handle_count: v_handle_count, namespace: v_namespace, handles: v_handles, argv: v_argv} = f) when map_size(f) == 5, do: {1, [W.u(v_version, 32), W.u(v_handle_count, 32), W.bytes(v_namespace), W.bytes(v_handles), W.bytes(v_argv)]}
+  defp enc(:request, :startup, %{version: v_version, handle_count: v_handle_count, namespace: v_namespace, handles: v_handles, argv: v_argv, image_addr: v_image_addr, image_len: v_image_len} = f) when map_size(f) == 7, do: {1, [W.u(v_version, 32), W.u(v_handle_count, 32), W.bytes(v_namespace), W.bytes(v_handles), W.bytes(v_argv), W.u(v_image_addr, 64), W.u(v_image_len, 64)]}
   defp enc(:reply, :startup, %{} = f) when map_size(f) == 0, do: {1, []}
   defp enc(_, _, _), do: throw({:wire, :bad_message})
 
-  defp read(:request, 1, <<v_version::little-32, v_handle_count::little-32, n_namespace::little-32, v_namespace::binary-size(n_namespace), n_handles::little-32, v_handles::binary-size(n_handles), n_argv::little-32, v_argv::binary-size(n_argv), rest::binary>>), do: {:ok, :startup, %{version: v_version, handle_count: v_handle_count, namespace: v_namespace, handles: v_handles, argv: v_argv}, rest}
+  defp read(:request, 1, <<v_version::little-32, v_handle_count::little-32, n_namespace::little-32, v_namespace::binary-size(n_namespace), n_handles::little-32, v_handles::binary-size(n_handles), n_argv::little-32, v_argv::binary-size(n_argv), v_image_addr::little-64, v_image_len::little-64, rest::binary>>), do: {:ok, :startup, %{version: v_version, handle_count: v_handle_count, namespace: v_namespace, handles: v_handles, argv: v_argv, image_addr: v_image_addr, image_len: v_image_len}, rest}
   defp read(:reply, 1, <<rest::binary>>), do: {:ok, :startup, %{}, rest}
   defp read(_, _, _), do: {:error, :short_fields}
 end

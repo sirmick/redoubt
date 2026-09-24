@@ -1,0 +1,26 @@
+[package]
+name = "stub"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "The Redoubt loader stub (WP-R2): a flat binary, system-signed and the same for every process, that parses its child's own ELF image from memory and jumps to it (PACKAGES.md, Launching a process)"
+
+[lib]
+name = "stub"
+path = "src/lib.rs"
+
+[[bin]]
+name = "stub"
+path = "src/main.rs"
+
+[[bin]]
+# Test fixture, not the stub itself: see src/bin/fixture-child.rs.
+name = "fixture-child"
+path = "src/bin/fixture-child.rs"
+
+# Only our own crates, plus the same pinned ELF parser the boot loader already vets
+# (loader/Cargo.toml) -- one crate, one version, read once (TENETS.md 5).
+[dependencies]
+redoubt-rt = { path = "../libs/rt" }
+redoubt-sys = { path = "../libs/sys" }
+elf = { version = "0.8", default-features = false }

@@ -1,0 +1,25 @@
+[package]
+name = "stub-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# Host-only and out of the main workspace (its own workspace below), so the fuzzer's nightly
+# toolchain and libfuzzer never touch the machine build (TENETS.md 3 and 6). Run from here:
+#     cargo fuzz run plan
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+stub = { path = ".." }
+
+[[bin]]
+name = "plan"
+path = "fuzz_targets/plan.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]
