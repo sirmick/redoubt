@@ -1,16 +1,21 @@
 //! The kernel's stride rules against the executable model: the same random sequence of budget
 //! creations and destructions, thread wakes and blocks, runs, slice ends and preemptions, driven
-//! through `redoubt_model::sched::Scheduler` and through this crate wired as the kernel wires it
-//! (a queue of budgets, their state in a store, the running thread's pending runtime folded at
-//! every deschedule and weight change). Every pass, entry, remainder, tie, queue membership, the
-//! floor, the tie counters and the running thread must agree after every step.
+//! through `redoubt_model::sched::Scheduler` and through this crate's [`Cpu`], the wiring the
+//! kernel's `sched.rs` calls (a deschedule, a pick, a creation, a weight change, a destruction; the
+//! budgets' state in a store). Only the thread bookkeeping and the clock are this harness's own.
+//! Every pass, entry, remainder, tie, queue membership, the floor, the tie counters and the running
+//! thread must agree after every step.
+//!
+//! Destructions come in the kernel's shapes too: a leaf whose threads were blocked first; the
+//! budget on the CPU, destroyed with its threads (a deadline: nothing deschedules it first); and a
+//! whole subtree at once, bottom-up (R10's order).
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use redoubt_model::mutation::Mutation;
 use redoubt_model::sched::{Current, Scheduler};
 use redoubt_model::spec::SLICE;
-use redoubt_stride::{Budgets, Queue, State};
+use redoubt_stride::{Budgets, Cpu, State};
 
 type Thread = (u64, u64);
 
@@ -34,36 +39,28 @@ impl Budgets<u64> for Store {
     fn id(&self, b: u64) -> u64 { b }
 
     fn weight(&self, b: u64) -> u64 { self.0.get(&b).map_or(0, |x| x.limit - x.carved) }
+
+    fn live(&self, b: u64) -> bool { self.0.contains_key(&b) }
 }
 
-/// The crate, wired like the kernel.
+/// The kernel's wiring ([`Cpu`]) over a store, with the thread on the CPU and its slice.
 #[derive(Default)]
 struct Kernel {
-    q: Queue<u64, 64>,
+    cpu: Cpu<u64, 64>,
     bs: Store,
-    current: Option<Current>,
+    thread: Option<Thread>,
+    slice_left: u64,
 }
 
 impl Kernel {
-    fn fold(&mut self) {
-        if let Some(c) = self.current.as_mut() {
-            let (b, run) = (c.budget, c.pending);
-            c.pending = 0;
-            self.q.fold(&mut self.bs, b, run);
-        }
-    }
-
-    fn fold_if_running(&mut self, b: u64) {
-        if self.current.is_some_and(|c| c.budget == b) {
-            self.fold();
-        }
+    fn current(&self) -> Option<Current> {
+        let budget = self.cpu.cur?;
+        Some(Current { budget, thread: self.thread?, pending: self.cpu.pending, slice_left: self.slice_left })
     }
 
     fn deschedule(&mut self) {
-        self.fold();
-        let Some(c) = self.current.take() else { return };
-        let still = !self.bs.0[&c.budget].threads.is_empty();
-        self.q.deschedule(&mut self.bs, c.budget, still);
+        self.cpu.switch(&mut self.bs, None, |bs, b| !bs.0[&b].threads.is_empty());
+        self.thread = None;
     }
 
     fn runnable(&self) -> Vec<u64> {
@@ -72,13 +69,10 @@ impl Kernel {
 
     fn reconcile(&mut self) {
         let runnable = self.runnable();
-        self.q.reconcile(&mut self.bs, self.current.map(|c| c.budget), &runnable);
+        self.cpu.reconcile(&mut self.bs, &runnable);
     }
 
     fn add_budget(&mut self, id: u64, parent: Option<u64>, limit: u64) {
-        if let Some(p) = parent {
-            self.fold_if_running(p);
-        }
         self.bs.0.insert(
             id,
             Budget {
@@ -90,77 +84,84 @@ impl Kernel {
                 cursor: None,
             },
         );
-        self.q.create(&mut self.bs, id, parent);
+        self.cpu.create(&mut self.bs, id, parent);
         if let Some(p) = parent {
-            let old = self.bs.weight(p);
-            self.bs.0.get_mut(&p).unwrap().carved += limit;
-            let new = self.bs.weight(p);
-            self.q.reweigh(&mut self.bs, p, old, new);
+            self.cpu.change_weight(&mut self.bs, p, |bs| bs.0.get_mut(&p).unwrap().carved += limit);
         }
     }
 
+    /// Destroy `b` (its children already gone): its carve goes back to its parent.
     fn destroy_budget(&mut self, b: u64) {
-        if self.current.is_some_and(|c| c.budget == b) {
-            self.fold();
-            self.current = None;
-        }
-        let w_child = self.bs.weight(b);
         let parent = self.bs.0[&b].parent;
-        let mut w_parent = 0;
-        if let Some(p) = parent {
-            self.fold_if_running(p);
-            let old = self.bs.weight(p);
-            let limit = self.bs.0[&b].limit;
-            self.bs.0.get_mut(&p).unwrap().carved -= limit;
-            w_parent = self.bs.weight(p);
-            self.q.reweigh(&mut self.bs, p, old, w_parent);
+        let limit = self.bs.0[&b].limit;
+        self.cpu.destroy(&mut self.bs, b, parent, |bs| {
+            if let Some(p) = parent {
+                bs.0.get_mut(&p).unwrap().carved -= limit;
+            }
+        });
+        if self.cpu.cur.is_none() {
+            self.thread = None;
         }
-        self.q.destroy(&mut self.bs, b, parent, w_child, w_parent);
         self.bs.0.remove(&b);
+    }
+
+    /// R10 for a subtree (`bottom_up`: every budget in it, each after its descendants): its
+    /// threads end with no deschedule, then each budget goes, returning its carve as it does.
+    fn destroy_subtree(&mut self, bottom_up: &[u64]) {
+        for b in bottom_up {
+            self.bs.0.get_mut(b).unwrap().threads.clear();
+        }
+        for &b in bottom_up {
+            self.destroy_budget(b);
+        }
     }
 
     fn thread_runnable(&mut self, b: u64, t: Thread) { self.bs.0.get_mut(&b).unwrap().threads.insert(t); }
 
     fn thread_blocked(&mut self, b: u64, t: Thread) {
         self.bs.0.get_mut(&b).unwrap().threads.remove(&t);
-        if self.current.is_some_and(|c| c.budget == b && c.thread == t) {
+        if self.cpu.cur == Some(b) && self.thread == Some(t) {
             self.deschedule();
         }
     }
 
     fn pick(&mut self) -> Option<Current> {
         self.reconcile();
-        if self.current.is_some() {
-            return self.current;
+        if self.cpu.cur.is_some() {
+            return self.current();
         }
-        let b = self.q.pick(&self.bs)?;
-        let x = self.bs.0.get_mut(&b).unwrap();
-        let next = x
-            .cursor
-            .and_then(|c| x.threads.range((std::ops::Bound::Excluded(c), std::ops::Bound::Unbounded)).next())
-            .or_else(|| x.threads.iter().next())
-            .copied()?;
-        x.cursor = Some(next);
-        self.current = Some(Current { budget: b, thread: next, pending: 0, slice_left: SLICE });
-        self.current
+        let (b, t) = self.cpu.pick(&mut self.bs, |bs, b| {
+            let x = &bs.0[&b];
+            x.cursor
+                .and_then(|c| {
+                    x.threads.range((std::ops::Bound::Excluded(c), std::ops::Bound::Unbounded)).next()
+                })
+                .or_else(|| x.threads.iter().next())
+                .copied()
+        })?;
+        self.bs.0.get_mut(&b).unwrap().cursor = Some(t);
+        self.cpu.switch(&mut self.bs, Some(b), |_, _| true);
+        self.thread = Some(t);
+        self.slice_left = SLICE;
+        self.current()
     }
 
     fn run(&mut self, dt: u64) {
-        if let Some(c) = self.current.as_mut() {
-            let dt = dt.min(c.slice_left);
-            c.pending += dt;
-            c.slice_left -= dt;
+        if self.cpu.cur.is_some() {
+            let dt = dt.min(self.slice_left);
+            self.cpu.accrue(dt);
+            self.slice_left -= dt;
         }
     }
 
     fn slice_end(&mut self) {
-        if self.current.is_some_and(|c| c.slice_left == 0) {
+        if self.cpu.cur.is_some() && self.slice_left == 0 {
             self.deschedule();
         }
     }
 
     fn preempt(&mut self) {
-        if self.current.is_some() {
+        if self.cpu.cur.is_some() {
             self.deschedule();
         }
     }
@@ -196,8 +197,9 @@ fn compare(m: &Scheduler, k: &Kernel, step: usize, seed: u64) {
         );
         assert_eq!(m.weight(*id), k.bs.weight(*id), "{} weight of {id}", at());
     }
-    assert_eq!((m.floor, m.front, m.back), (k.q.floor, k.q.front, k.q.back), "{} floor and counters", at());
-    assert_eq!(m.current, k.current, "{} running thread", at());
+    let q = &k.cpu.q;
+    assert_eq!((m.floor, m.front, m.back), (q.floor, q.front, q.back), "{} floor and counters", at());
+    assert_eq!(m.current, k.current(), "{} running thread", at());
 }
 
 fn run(seed: u64) { run_with(seed, None) }
@@ -289,10 +291,35 @@ fn run_with(seed: u64, mutation: Option<Mutation>) {
                 m.slice_end();
                 k.slice_end();
             }
-            // A budget deadline.
+            // A budget deadline elsewhere: the running thread is preempted.
             10 => {
                 m.preempt();
                 k.preempt();
+            }
+            // A deadline (or a destroy) takes a whole subtree, the running budget perhaps in it:
+            // its threads die with it, nothing descheduled first, bottom-up.
+            11 if rng.below(2) == 0 => {
+                let top = match m.current {
+                    Some(c) if c.budget != ROOT && rng.below(2) == 0 => c.budget,
+                    _ => {
+                        let others: Vec<u64> = ids.iter().copied().filter(|b| *b != ROOT).collect();
+                        let Some(b) = rng.pick(&others) else { continue };
+                        b
+                    }
+                };
+                let mut subtree = vec![top];
+                let mut i = 0;
+                while i < subtree.len() {
+                    let b = subtree[i];
+                    subtree.extend(m.budgets.iter().filter(|(_, e)| e.parent == Some(b)).map(|(id, _)| *id));
+                    i += 1;
+                }
+                // Deepest first: the reverse of the breadth-first order.
+                subtree.reverse();
+                for b in &subtree {
+                    m.destroy_budget(*b);
+                }
+                k.destroy_subtree(&subtree);
             }
             _ => {
                 assert_eq!(m.pick(), k.pick(), "seed {seed} step {step} pick");
@@ -334,6 +361,7 @@ fn a_broken_model_disagrees() {
         Mutation::R12FoldAtNewWeight,
         Mutation::R12PriorityById,
         Mutation::R12PreemptOnWake,
+        Mutation::R12NoMinimumCharge,
     ] {
         let seen = (0..3000).any(|seed| std::panic::catch_unwind(|| run_with(seed, Some(m))).is_err());
         if !seen {

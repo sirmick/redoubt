@@ -407,6 +407,29 @@ pub fn sched_contracts(mutation: Option<Mutation>) -> Result<(), String> {
             "a process in a budget with no free weight",
         )?;
     }
+    // Owner decision 5: a deschedule charges at least one unit, so a run too short for the clock
+    // to see (the kernel's timebase tick) is not free. A thread that blocks the moment it is
+    // picked, over and over, still moves its budget's pass.
+    {
+        use redoubt_model::sched::{MIN_CHARGE, Scheduler};
+        let mut s = Scheduler { mutation, ..Scheduler::default() };
+        s.add_budget(1, None, 1 << 31);
+        let w = 7;
+        s.add_budget(2, Some(1), w);
+        let before = s.budgets[&2].pass;
+        for _ in 0..10 {
+            s.thread_runnable(2, (2, 0));
+            s.reconcile();
+            expect(s.pick().is_some_and(|c| c.budget == 2), "the budget is picked")?;
+            s.thread_blocked(2, (2, 0));
+            s.reconcile();
+        }
+        let want = u128::from(10 * MIN_CHARGE * redoubt_model::spec::STRIDE / w);
+        expect(
+            s.budgets[&2].pass >= before + want,
+            "ten zero-length runs charged less than the minimum each (a sub-tick run was free)",
+        )?;
+    }
     Ok(())
 }
 

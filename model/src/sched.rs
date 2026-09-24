@@ -20,6 +20,8 @@
 //!   wakes take `front -= 1` (same-reconcile wakes processed in descending id), every deschedule of a
 //!   still-runnable budget takes `back += 1`; both reset when the queue empties.
 //! - **Preemption** only at slice end or a budget deadline; a wake never preempts.
+//! - **Deschedule**: a budget taken off the CPU is charged what it ran, and at least [`MIN_CHARGE`] (owner
+//!   decision 5: the kernel's clock is a timebase tick, and a run too short for it to see is not free).
 //! - **Pass inheritance**: a child enters at `e = max(floor, parent.pass)`, kept as its `entry`; at its
 //!   destruction its own unpaid work since entry, `W = (pass − max(entry, floor))⁺·w + rem`, is added to the
 //!   parent's lead: `parent = max(parent.pass, floor) + W / w_parent` (remainder carried), `w_parent` taken
@@ -36,6 +38,9 @@ use crate::spec::{SLICE, STRIDE};
 /// The most runtime one fold charges: `RUNTIME_CAP · STRIDE` stays below 2^60, so a charge and a
 /// remainder below 2^32 fit in 64 bits.
 pub const RUNTIME_CAP: u64 = 1 << 40;
+
+/// The least a deschedule charges (one of the caller's time units; the kernel's timebase tick).
+pub const MIN_CHARGE: u64 = 1;
 
 /// A thread: (pid, tid). Round-robin within a budget follows this order.
 pub type ThreadId = (u64, u64);
@@ -286,6 +291,11 @@ impl Scheduler {
     /// Take the running thread off the CPU: fold, and requeue its budget if it still has a
     /// runnable thread, or take it out of the queue.
     fn deschedule(&mut self) {
+        if !self.broken(Mutation::R12NoMinimumCharge) {
+            if let Some(c) = self.current.as_mut() {
+                c.pending = c.pending.max(MIN_CHARGE);
+            }
+        }
         self.fold();
         let Some(c) = self.current.take() else { return };
         let still = self.budgets.get(&c.budget).is_some_and(|e| !e.runnable.is_empty());
@@ -420,9 +430,9 @@ impl Scheduler {
         if n == 0 {
             return;
         }
-        // The first slice is the current one; the rest rotate through its threads.
+        // The first slice is the current one (charged at the deschedule below); the rest rotate
+        // through its threads.
         self.run(SLICE);
-        self.fold();
         let b = c.budget;
         // n − 1 further slices: charged together (the remainder makes this exact), or one by one
         // where a mutation makes a split charge differ from a whole one.
@@ -451,7 +461,7 @@ impl Scheduler {
         let at = threads.iter().position(|t| Some(*t) == e.cursor).unwrap_or(0);
         let last = threads[(at + (n as usize - 1) % threads.len()) % threads.len()];
         e.cursor = Some(last);
-        self.current = Some(Current { budget: b, thread: last, pending: 0, slice_left: 0 });
+        self.current = Some(Current { budget: b, thread: last, pending: SLICE, slice_left: 0 });
         self.deschedule();
         self.raise_floor();
     }

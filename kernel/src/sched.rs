@@ -2,8 +2,10 @@
 
 //! The scheduler: one stride queue over every runnable budget (KERNEL-SPEC.md R7, R12; RESOURCES.md,
 //! Scheduling; the WP-K5 owner decisions). The rules themselves (charging with an exact remainder,
-//! the floor, ranks, inheritance) are `redoubt-stride`'s, checked there against the executable
-//! model; this module keeps their state in the budgets' frames and wires them to the CPU.
+//! the floor, ranks, inheritance) and their wiring to a CPU (when runtime is folded, what a
+//! deschedule, a pick, a weight change and a destruction do, in what order) are `redoubt-stride`'s
+//! ([`Cpu`]), checked there against the executable model; this module keeps their state in the
+//! budgets' frames and drives them from the trap boundary.
 //!
 //! # Accounting at the trap boundary
 //! There are exactly two ways into user mode (`arch::syscall::resume` and the syscall return) and
@@ -16,8 +18,9 @@
 //!   (`time.rs`), and the shared walk to nobody (the kernel).
 //! - [`leave`] (on every return, to user mode or to `kmain`) closes the billing and, if the budget that runs
 //!   next is not `cur`, deschedules `cur`: its pending runtime is folded into its pass (at least one tick)
-//!   and it is requeued behind its equals. It then reconciles the queue (one reconcile per kernel entry:
-//!   budgets that gained a runnable thread wake, those that lost their last one leave).
+//!   and it is requeued behind its equals if it still has a runnable thread. It then reconciles the queue
+//!   (one reconcile per kernel entry: budgets that gained a runnable thread wake, those that lost their last
+//!   one leave).
 //!
 //! A pass changes only at a fold: a deschedule, a weight change (a carve, or a carve returned,
 //! folds first so earlier runtime is charged at the weight it ran at), a budget's destruction,
@@ -32,7 +35,7 @@
 //! (INTERIM, until WP-K6).
 
 use redoubt_abi::{PID, TID};
-use redoubt_stride::{Budgets, Queue, State};
+use redoubt_stride::{Budgets, Cpu, State};
 
 use crate::arch::process::{MAX_PROCESS_COUNT, MAX_THREAD};
 use crate::budget::BudgetFrame;
@@ -45,11 +48,9 @@ use crate::services::SystemServices;
 pub const SLICE_US: u64 = 10_000;
 
 struct Sched {
-    q: Queue<BudgetRef, MAX_PROCESS_COUNT>,
-    /// The budget whose runtime is accruing: on the CPU, or in the kernel on its behalf.
-    cur: Option<BudgetRef>,
-    /// Ticks `cur` has run and not yet been charged.
-    pending: u64,
+    /// The queue, the budget whose runtime is accruing (on the CPU, or in the kernel on its
+    /// behalf) and the ticks it has run and not yet been charged.
+    cpu: Cpu<BudgetRef, MAX_PROCESS_COUNT>,
     /// When `cur` last went to user mode, in ticks.
     user_since: Option<u64>,
     /// Kernel time since this tick is billed to this budget.
@@ -58,14 +59,8 @@ struct Sched {
     paused: Option<BudgetRef>,
 }
 
-static SCHED: KernelCell<Sched> = KernelCell::new(Sched {
-    q: Queue::new(),
-    cur: None,
-    pending: 0,
-    user_since: None,
-    billing: None,
-    paused: None,
-});
+static SCHED: KernelCell<Sched> =
+    KernelCell::new(Sched { cpu: Cpu::new(), user_since: None, billing: None, paused: None });
 
 fn ticks() -> u64 { crate::arch::irq::timer::now_ticks() }
 
@@ -78,9 +73,9 @@ impl Budgets<BudgetRef> for MemoryManager {
 
     /// Stride weight is free weight: what the budget has not carved to children (R7).
     fn weight(&self, b: BudgetRef) -> u64 { self.free_weight_of(b.frame) }
-}
 
-fn free_weight(mm: &MemoryManager, frame: BudgetFrame) -> u64 { mm.free_weight_of(frame) }
+    fn live(&self, b: BudgetRef) -> bool { self.is_live_budget(b) }
+}
 
 fn budget_ref(mm: &MemoryManager, frame: BudgetFrame) -> BudgetRef {
     BudgetRef { frame, id: mm.budget_id(frame) }
@@ -91,53 +86,23 @@ impl Sched {
     /// else's is charged at once.
     fn close_billing(&mut self, mm: &mut MemoryManager, now: u64) {
         if let Some((since, b)) = self.billing.take() {
-            let dt = now.saturating_sub(since);
-            if Some(b) == self.cur {
-                self.pending = self.pending.saturating_add(dt);
-            } else if mm.is_live_budget(b) {
-                self.q.fold(mm, b, dt);
-            }
+            self.cpu.bill(mm, b, now.saturating_sub(since));
         }
     }
 
-    /// Fold `cur`'s pending runtime into its pass.
-    fn fold_cur(&mut self, mm: &mut MemoryManager) {
-        if let Some(c) = self.cur {
-            let run = core::mem::take(&mut self.pending);
-            if mm.is_live_budget(c) {
-                self.q.fold(mm, c, run);
-            }
-        }
-    }
-
-    /// If `b` is accruing runtime, charge what it has so far (at its present weight) and reopen
-    /// its billing interval: a weight change or a creation under it follows.
-    fn settle(&mut self, mm: &mut MemoryManager, b: BudgetRef) {
-        let now = ticks();
+    /// If kernel time is being billed to `b`, close the interval and reopen it: what `b` is
+    /// worth is about to change (a weight change, a creation under it, its destruction).
+    fn settle_billing(&mut self, mm: &mut MemoryManager, b: BudgetRef) {
         if self.billing.is_some_and(|(_, payer)| payer == b) {
+            let now = ticks();
             self.close_billing(mm, now);
             self.billing = Some((now, b));
         }
-        if self.cur == Some(b) {
-            self.fold_cur(mm);
-        }
-    }
-
-    /// Take `cur` off the CPU: fold at least a tick, and requeue it behind its equals (the next
-    /// reconcile takes it out if it has no runnable thread left).
-    fn deschedule(&mut self, mm: &mut MemoryManager) {
-        let Some(c) = self.cur.take() else { return };
-        let run = core::mem::take(&mut self.pending).max(1);
-        if mm.is_live_budget(c) {
-            self.q.fold(mm, c, run);
-            self.q.deschedule(mm, c, true);
-        }
-        self.user_since = None;
     }
 
     /// Budgets with a thread waiting for the CPU, each once.
-    fn runnable(ss: &SystemServices, mm: &MemoryManager) -> ([Option<BudgetRef>; MAX_PROCESS_COUNT], usize) {
-        let mut out = [None; MAX_PROCESS_COUNT];
+    fn runnable(ss: &SystemServices, mm: &MemoryManager) -> ([BudgetRef; MAX_PROCESS_COUNT], usize) {
+        let mut out = [BudgetRef { frame: 0, id: 0 }; MAX_PROCESS_COUNT];
         let mut n = 0;
         for p in ss.processes.iter() {
             if p.free() || p.pid.get() == 1 {
@@ -149,22 +114,16 @@ impl Sched {
             }
             let Some(frame) = mm.budget_of(p.pid) else { continue };
             let b = budget_ref(mm, frame);
-            if !out[..n].contains(&Some(b)) && n < out.len() {
-                out[n] = Some(b);
+            if !out[..n].contains(&b) && n < out.len() {
+                out[n] = b;
                 n += 1;
             }
         }
         (out, n)
     }
 
-    fn reconcile(&mut self, ss: &SystemServices, mm: &mut MemoryManager) {
-        let (list, n) = Self::runnable(ss, mm);
-        let mut budgets = [BudgetRef { frame: 0, id: 0 }; MAX_PROCESS_COUNT];
-        for (dst, src) in budgets.iter_mut().zip(list[..n].iter()) {
-            *dst = src.expect("filled");
-        }
-        let running = self.cur.filter(|c| mm.is_live_budget(*c));
-        self.q.reconcile(mm, running, &budgets[..n]);
+    fn reconcile(&mut self, mm: &mut MemoryManager, runnable: &[BudgetRef]) {
+        self.cpu.reconcile(mm, runnable);
     }
 }
 
@@ -173,7 +132,7 @@ pub fn from_user() {
     let now = ticks();
     SCHED.with(|s| {
         if let Some(since) = s.user_since.take() {
-            s.pending = s.pending.saturating_add(now.saturating_sub(since));
+            s.cpu.accrue(now.saturating_sub(since));
         }
     });
 }
@@ -182,7 +141,7 @@ pub fn from_user() {
 /// caller's).
 pub fn begin_billing() {
     let now = ticks();
-    SCHED.with(|s| s.billing = s.cur.map(|b| (now, b)));
+    SCHED.with(|s| s.billing = s.cpu.cur.map(|b| (now, b)));
 }
 
 /// Kernel time since billing began goes to nobody: it was spent for someone else (an interrupt
@@ -221,15 +180,7 @@ pub fn stop_billing() {
 
 /// Charge `ticks` of kernel work done for `b` (an expired timeout of one of its threads, its
 /// destruction, an interrupt of its device) to it.
-pub fn bill(mm: &mut MemoryManager, b: BudgetRef, ticks: u64) {
-    SCHED.with(|s| {
-        if s.cur == Some(b) {
-            s.pending = s.pending.saturating_add(ticks);
-        } else if mm.is_live_budget(b) {
-            s.q.fold(mm, b, ticks);
-        }
-    });
-}
+pub fn bill(mm: &mut MemoryManager, b: BudgetRef, ticks: u64) { SCHED.with(|s| s.cpu.bill(mm, b, ticks)); }
 
 /// An interrupt was handled from tick `started`: bill that to the owner of its device object
 /// (R5), if it has one, and restart billing the interrupted budget from now.
@@ -256,10 +207,11 @@ pub fn leave(pid: PID) {
             SCHED.with(|s| {
                 s.close_billing(mm, now);
                 let next = if pid.get() == 1 { None } else { mm.budget_of(pid).map(|f| budget_ref(mm, f)) };
-                if next != s.cur {
-                    let left = s.cur;
-                    s.deschedule(mm);
-                    s.cur = next;
+                let (list, n) = Sched::runnable(ss, mm);
+                let runnable = &list[..n];
+                if next != s.cpu.cur {
+                    let left = s.cpu.switch(mm, next, |_, b| runnable.contains(&b));
+                    s.user_since = None;
                     // `kmain`'s pick and switch after a deschedule are the descheduled budget's
                     // work (it blocked, exited or was preempted): billed to it, as a deschedule's
                     // cost, until the next budget runs.
@@ -267,7 +219,7 @@ pub fn leave(pid: PID) {
                         s.billing = left.filter(|b| mm.is_live_budget(*b)).map(|b| (now, b));
                     }
                 }
-                s.reconcile(ss, mm);
+                s.reconcile(mm, runnable);
                 s.user_since = next.map(|_| now);
             })
         })
@@ -282,15 +234,9 @@ pub fn leave(pid: PID) {
 /// a slice. `None` when nothing is runnable.
 pub fn pick(ss: &SystemServices, mm: &mut MemoryManager) -> Option<(PID, TID)> {
     let chosen = SCHED.with(|s| {
-        s.reconcile(ss, mm);
-        loop {
-            let b = s.q.pick(mm)?;
-            if let Some(t) = next_thread(ss, mm, b) {
-                return Some((b, t));
-            }
-            // Queued with nothing to run: out it goes (never expected; reconcile keeps them in step).
-            s.q.deschedule(mm, b, false);
-        }
+        let (list, n) = Sched::runnable(ss, mm);
+        s.reconcile(mm, &list[..n]);
+        s.cpu.pick(mm, |mm, b| next_thread(ss, mm, b))
     });
     let (b, (pid, tid)) = chosen?;
     let mut x = mm.budget(b.frame);
@@ -326,67 +272,56 @@ fn next_thread(ss: &SystemServices, mm: &MemoryManager, b: BudgetRef) -> Option<
     after.or(first)
 }
 
-/// A budget is created under `parent`: fold a running parent's runtime, then the child enters at
-/// `max(floor, parent's pass)`. The carve and [`reweigh`] follow.
+/// A budget is created under `parent`: a running parent is charged first, then the child enters
+/// at `max(floor, parent's pass)`. The carve ([`change_weight`]) follows.
 pub fn create(mm: &mut MemoryManager, child: BudgetFrame, parent: Option<BudgetFrame>) {
     let child = budget_ref(mm, child);
     let parent = parent.map(|p| budget_ref(mm, p));
     SCHED.with(|s| {
         if let Some(p) = parent {
-            s.settle(mm, p);
+            s.settle_billing(mm, p);
         }
-        s.q.create(mm, child, parent);
+        s.cpu.create(mm, child, parent);
     });
 }
 
-/// `b`'s stride weight is about to change: charge what it ran at the old weight (callers change
-/// the carve after this and then call [`reweigh`]).
-pub fn before_weight_change(mm: &mut MemoryManager, b: BudgetFrame) {
+/// `b`'s stride weight changes by `change` (a carve, or a carve returned): what it ran is charged
+/// at the old weight first, then its remainder is rescaled.
+pub fn change_weight(mm: &mut MemoryManager, b: BudgetFrame, change: impl FnOnce(&mut MemoryManager)) {
     let b = budget_ref(mm, b);
-    SCHED.with(|s| s.settle(mm, b));
-}
-
-/// `b`'s stride weight changed from `old` to `new`: rescale its remainder.
-pub fn reweigh(mm: &mut MemoryManager, b: BudgetFrame, old: u64, new: u64) {
-    let b = budget_ref(mm, b);
-    SCHED.with(|s| s.q.reweigh(mm, b, old, new));
-}
-
-/// `b`, dying, is being destroyed (its descendants already were, bottom-up): charge what it ran,
-/// return its carve to its parent (unless it came back already: the subtree's top returns its
-/// weight first), move its work since entry there (added to the parent's lead, normalized by the
-/// parent's weight now), and take it out of the queue. Its frame is freed after this.
-pub fn destroy(mm: &mut MemoryManager, frame: BudgetFrame, weight_returned: bool) {
-    let child = budget_ref(mm, frame);
-    let parent = mm.budget(frame).parent;
     SCHED.with(|s| {
-        s.settle(mm, child);
-        if s.cur == Some(child) {
-            s.cur = None;
-            s.user_since = None;
-        }
+        s.settle_billing(mm, b);
+        s.cpu.change_weight(mm, b, change);
+    });
+}
+
+/// `frame`, dying, is being destroyed (its descendants already were, bottom-up): what it ran is
+/// charged, its carve returns to its parent, its work since entry moves there (added to the
+/// parent's lead, normalized by the parent's weight now), and it leaves the queue. Its frame is
+/// freed after this.
+pub fn destroy(mm: &mut MemoryManager, frame: BudgetFrame) {
+    let child = budget_ref(mm, frame);
+    let parent_frame = mm.budget(frame).parent;
+    let parent = parent_frame.map(|p| budget_ref(mm, p));
+    let limit = mm.budget(frame).weight_limit;
+    SCHED.with(|s| {
+        s.settle_billing(mm, child);
         if s.billing.is_some_and(|(_, b)| b == child) {
             s.billing = None;
         }
-        let w_child = free_weight(mm, frame);
-        let limit = mm.budget(frame).weight_limit;
-        let (parent, w_parent) = match parent {
-            Some(p) => {
-                let pref = budget_ref(mm, p);
-                if !weight_returned {
-                    s.settle(mm, pref);
-                    let old = free_weight(mm, p);
-                    let mut pb = mm.budget(p);
-                    pb.weight_carved = pb.weight_carved.checked_sub(limit).expect("I5: carve underflow");
-                    mm.store(p, &pb);
-                    let new = free_weight(mm, p);
-                    s.q.reweigh(mm, pref, old, new);
-                }
-                (Some(pref), free_weight(mm, p))
+        if let Some(p) = parent {
+            s.settle_billing(mm, p);
+        }
+        if s.cpu.cur == Some(child) {
+            s.user_since = None;
+        }
+        s.cpu.destroy(mm, child, parent, |mm| {
+            if let Some(p) = parent_frame {
+                let mut pb = mm.budget(p);
+                pb.weight_carved = pb.weight_carved.checked_sub(limit).expect("I5: carve underflow");
+                mm.store(p, &pb);
             }
-            None => (None, 0),
-        };
-        s.q.destroy(mm, child, parent, w_child, w_parent);
+        });
     });
 }
 

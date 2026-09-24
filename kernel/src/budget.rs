@@ -616,11 +616,6 @@ impl MemoryManager {
     ) -> Result<BudgetFrame, Error> {
         let frame = self.alloc_object_frame()?;
         let id = self.next_object_id();
-        // The carve changes the parent's stride weight: charge what it ran at the old one.
-        let old_weight = parent.map(|p| {
-            crate::sched::before_weight_change(self, p);
-            self.budget(p).free_weight()
-        });
         let mut label_array = [0; MAX_LABELS];
         label_array[..labels.len()].copy_from_slice(labels);
         let parent_budget = parent.map(|p| self.budget(p));
@@ -648,17 +643,20 @@ impl MemoryManager {
         if spec.deadline != FOREVER {
             self.link_deadline(frame);
         }
-        if let (Some(p), Some(mut pb)) = (parent, parent_budget) {
-            pb.pages_used += BUDGET_PAGES + spec.pages;
-            pb.processes_used += spec.processes;
-            pb.weight_carved += spec.weight;
-            self.store(p, &pb);
-        }
         // It enters the queue's virtual time at max(floor, parent's pass).
         crate::sched::create(self, frame, parent);
-        if let (Some(p), Some(old)) = (parent, old_weight) {
-            let new = self.budget(p).free_weight();
-            crate::sched::reweigh(self, p, u64::from(old), u64::from(new));
+        if let Some(p) = parent {
+            // Read after the scheduler charged it: the frame holds its scheduling words too.
+            let mut pb = self.budget(p);
+            pb.pages_used += BUDGET_PAGES + spec.pages;
+            pb.processes_used += spec.processes;
+            self.store(p, &pb);
+            // The carve changes the parent's stride weight: what it ran is charged at the old one.
+            crate::sched::change_weight(self, p, |mm| {
+                let mut pb = mm.budget(p);
+                pb.weight_carved += spec.weight;
+                mm.store(p, &pb);
+            });
         }
         Ok(frame)
     }
@@ -720,11 +718,7 @@ impl MemoryManager {
         let stamp = BudgetRef { frame: caller, id: self.budget(caller).id };
         let handle = Handle { object: Object::Budget(BudgetRef { frame: child, id }), badge: 0, stamp };
         let installed = self.install_handle(pid, handle).inspect_err(|_| {
-            crate::sched::before_weight_change(self, pf);
-            let old = self.budget(pf).free_weight();
-            self.return_carve(child, true);
-            let new = self.budget(pf).free_weight();
-            crate::sched::reweigh(self, pf, u64::from(old), u64::from(new));
+            crate::sched::change_weight(self, pf, |mm| mm.return_carve(child, true));
             self.unlink_deadline(child);
             self.free_object_frame(child);
         })?;
@@ -786,12 +780,9 @@ impl MemoryManager {
     }
 
     /// Mark `top` and everything below it dying (R10's first step, for `budget_destroy` and for
-    /// a deadline alike). Before anything else, `top`'s carve comes back to its parent: the
-    /// destruction's own work (often the parent's own `budget_destroy`) is charged at the weight
-    /// the parent has once the child is gone, not at the sliver it kept while the child held the
-    /// rest (`sched.rs`: a weight change folds first).
+    /// a deadline alike). Each one's weight goes back to its parent as the scheduler lifts it,
+    /// bottom-up ([`MemoryManager::lift_dying`]).
     pub fn mark_dying(&mut self, top: BudgetFrame) {
-        self.return_top_weight(top);
         for frame in 0..=self.objects.high_frame {
             if self.is_budget_frame(frame) && self.below(frame, top) {
                 let mut b = self.budget(frame);
@@ -892,22 +883,8 @@ impl MemoryManager {
         self.objects.accounts.iter().any(|a| a.budget == Some(frame))
     }
 
-    /// Give `top`'s weight back to its parent at once (charging what the parent ran at its old
-    /// weight first): the first step of destroying `top`.
-    fn return_top_weight(&mut self, top: BudgetFrame) {
-        let Some(p) = self.budget(top).parent else { return };
-        crate::sched::before_weight_change(self, p);
-        let old = self.budget(p).free_weight();
-        let mut pb = self.budget(p);
-        pb.weight_carved =
-            pb.weight_carved.checked_sub(self.budget(top).weight_limit).expect("I5: carve underflow");
-        self.store(p, &pb);
-        let new = self.budget(p).free_weight();
-        crate::sched::reweigh(self, p, u64::from(old), u64::from(new));
-    }
-
     /// The dying budgets, deepest first (every one's descendants before it): R10's bottom-up
-    /// order for the scheduler's lifts. `top`'s weight is back with its parent already.
+    /// order for the scheduler's lifts, each returning its weight to its parent as it goes.
     pub fn lift_dying(&mut self, top: BudgetFrame) {
         let top_depth = self.budget(top).depth;
         for depth in (top_depth..MAX_DEPTH as u32).rev() {
@@ -916,7 +893,7 @@ impl MemoryManager {
                     && self.budget(frame).dying
                     && self.budget(frame).depth == depth
                 {
-                    crate::sched::destroy(self, frame, frame == top);
+                    crate::sched::destroy(self, frame);
                 }
             }
         }

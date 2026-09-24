@@ -176,6 +176,8 @@ pub enum Mutation {
     R12LiftCountsEntryWait,
     /// Pending runtime is not folded before a weight change (charged at the new weight).
     R12FoldAtNewWeight,
+    /// A deschedule charges only what the clock saw: a run shorter than one unit is free.
+    R12NoMinimumCharge,
     // KERNEL-SPEC.md, Messages: what the kernel attaches, and notices.
     /// Messages carry no labels.
     MsgNoLabels,
@@ -284,7 +286,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 120] = {
+    pub const ALL: [Mutation; 121] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -360,6 +362,7 @@ impl Mutation {
             R12UnnormalizedLift,
             R12LiftCountsEntryWait,
             R12FoldAtNewWeight,
+            R12NoMinimumCharge,
             MsgNoLabels,
             MsgBadgeZero,
             MsgAccountZero,
@@ -479,7 +482,8 @@ impl Mutation {
             | R12StrideWeightIsLimit
             | R12UnnormalizedLift
             | R12LiftCountsEntryWait
-            | R12FoldAtNewWeight => "R12",
+            | R12FoldAtNewWeight
+            | R12NoMinimumCharge => "R12",
             MsgNoLabels
             | MsgBadgeZero
             | MsgAccountZero

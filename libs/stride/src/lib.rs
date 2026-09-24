@@ -18,6 +18,13 @@
 //!   reconcile's wake first; within one reconcile the lower id first; requeues FIFO.
 //! - **Inheritance**: a child enters at `max(floor, parent pass)` ([`entry`]); when destroyed, its work since
 //!   entry is added to its parent's lead, normalized by weight ([`lift`]).
+//! - **Deschedule**: a budget taken off the CPU is charged what it ran, and at least [`MIN_CHARGE`] (owner
+//!   decision 5: a run too short for the clock to see is not free).
+//!
+//! [`Cpu`] is the wiring itself: the budget whose runtime is accruing, when it is folded, and the
+//! order of the steps at a deschedule, a pick, a creation, a weight change and a destruction. The
+//! kernel's `sched.rs` drives it with its trap-boundary accounting and the budgets' frames; the
+//! differential drives the same code against the model.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -28,6 +35,12 @@ pub const STRIDE: u64 = 1 << 20;
 /// The most runtime one charge counts: `RUNTIME_CAP · STRIDE < 2^60`, so a charge plus a
 /// remainder below 2^32 fits in 64 bits.
 pub const RUNTIME_CAP: u64 = 1 << 40;
+
+/// The least a deschedule charges, in the caller's time unit (the kernel's timebase ticks).
+pub const MIN_CHARGE: u64 = 1;
+
+/// The largest stride weight: the ABI's weights are 32-bit, and the arithmetic relies on it.
+pub const MAX_WEIGHT: u64 = u32::MAX as u64;
 
 /// A budget's scheduling state, as the kernel keeps it in the budget's frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -46,11 +59,12 @@ pub struct State {
 /// Charge `runtime` to `s` at stride weight `weight` (nothing for weight 0, which holds no
 /// process).
 pub fn charge(s: &mut State, weight: u64, runtime: u64) {
+    debug_assert!(weight <= MAX_WEIGHT, "stride weight {weight} above 32 bits");
     if weight == 0 {
         return;
     }
-    // rem < weight < 2^32 and runtime·STRIDE < 2^60.
-    let t = s.rem + runtime.min(RUNTIME_CAP) * STRIDE;
+    // rem < weight <= 2^32 and runtime·STRIDE < 2^60: no overflow (saturating all the same).
+    let t = s.rem.saturating_add(runtime.min(RUNTIME_CAP) * STRIDE);
     s.pass += u128::from(t / weight);
     s.rem = t % weight;
 }
@@ -78,11 +92,17 @@ pub fn lift(parent: &mut State, child: &State, w_child: u64, w_parent: u64, f: u
         return;
     }
     let from = child.entry.max(f);
-    let work = child.pass.saturating_sub(from) * u128::from(w_child) + u128::from(child.rem);
+    // Below 2^128 while the pass is (every charge adds under 2^60 to a pass that starts at 0),
+    // but saturating: a destroy must not stop the kernel.
+    let work = child
+        .pass
+        .saturating_sub(from)
+        .saturating_mul(u128::from(w_child))
+        .saturating_add(u128::from(child.rem));
     let wp = u128::from(w_parent);
     let (base, base_rem) = if parent.pass >= f { (parent.pass, u128::from(parent.rem)) } else { (f, 0) };
     let rem = base_rem + work % wp;
-    parent.pass = base + work / wp + rem / wp;
+    parent.pass = base.saturating_add(work / wp).saturating_add(rem / wp);
     parent.rem = (rem % wp) as u64;
 }
 
@@ -102,6 +122,8 @@ pub trait Budgets<B> {
     fn id(&self, b: B) -> u64;
     /// Its stride weight: its free weight.
     fn weight(&self, b: B) -> u64;
+    /// Whether `b` still exists (a [`Cpu`] may name a budget destroyed since).
+    fn live(&self, _b: B) -> bool { true }
 }
 
 /// The queue: every budget with a runnable thread (or running), at most `N` of them, and the
@@ -128,14 +150,22 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
 
     pub fn is_empty(&self) -> bool { self.slots.iter().all(Option::is_none) }
 
-    fn insert(&mut self, b: B) {
+    /// Whether `b` is queued now. A queued budget has a runnable thread, so there are never more
+    /// than there are processes, and `N` is the process count: a full queue is a broken invariant,
+    /// and `b` is then left out rather than anything stopping.
+    fn insert(&mut self, b: B) -> bool {
         if self.contains(b) {
-            return;
+            return true;
         }
-        // A queued budget has a runnable thread, so there are never more than there are
-        // processes; `N` is the process count.
-        if let Some(slot) = self.slots.iter_mut().find(|s| s.is_none()) {
-            *slot = Some(b);
+        match self.slots.iter_mut().find(|s| s.is_none()) {
+            Some(slot) => {
+                *slot = Some(b);
+                true
+            }
+            None => {
+                debug_assert!(false, "stride queue full");
+                false
+            }
         }
     }
 
@@ -173,11 +203,10 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
     /// behind its equals; otherwise it leaves the queue.
     pub fn deschedule(&mut self, bs: &mut impl Budgets<B>, b: B, still_runnable: bool) {
         let mut s = bs.state(b);
-        if still_runnable {
+        if still_runnable && self.insert(b) {
             self.back = self.back.saturating_add(1);
             s.tie = self.back;
             s.queued = true;
-            self.insert(b);
         } else {
             s.queued = false;
             self.take_out(b);
@@ -208,13 +237,16 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
             else {
                 break;
             };
+            // Each pass queues one more, so this ends; a full queue (never expected) ends it too.
+            if !self.insert(b) {
+                break;
+            }
             self.front = self.front.saturating_sub(1);
             let mut s = bs.state(b);
             s.pass = s.pass.max(self.floor);
             s.tie = self.front;
             s.queued = true;
             bs.set_state(b, s);
-            self.insert(b);
         }
         self.raise_floor(bs);
     }
@@ -262,6 +294,140 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
         self.take_out(child);
         self.raise_floor(bs);
         self.reset_if_empty();
+    }
+}
+
+/// One CPU wired to the queue: the budget whose runtime is accruing (`cur`: on the CPU, or in
+/// the kernel on its behalf) and what it has accrued and not yet been charged (`pending`). Runtime
+/// is folded into a pass only here: at a deschedule ([`Cpu::switch`], at least [`MIN_CHARGE`]),
+/// before a weight change or a creation under the budget ([`Cpu::settle`]), at a destruction, and
+/// for work billed to a budget that is not running ([`Cpu::bill`]).
+#[derive(Clone, Debug)]
+pub struct Cpu<B, const N: usize> {
+    pub q: Queue<B, N>,
+    pub cur: Option<B>,
+    pub pending: u64,
+}
+
+impl<B: Copy + PartialEq, const N: usize> Default for Cpu<B, N> {
+    fn default() -> Self { Self::new() }
+}
+
+impl<B: Copy + PartialEq, const N: usize> Cpu<B, N> {
+    pub const fn new() -> Self { Cpu { q: Queue::new(), cur: None, pending: 0 } }
+
+    /// `cur` ran, or the kernel worked for it, `t` more.
+    pub fn accrue(&mut self, t: u64) { self.pending = self.pending.saturating_add(t); }
+
+    /// `t` of work was done for `b`: `cur`'s joins its pending runtime, anyone else's is charged
+    /// at once.
+    pub fn bill(&mut self, bs: &mut impl Budgets<B>, b: B, t: u64) {
+        if self.cur == Some(b) {
+            self.accrue(t);
+        } else if bs.live(b) {
+            self.q.fold(bs, b, t);
+        }
+    }
+
+    /// If `b` is accruing runtime, charge it now, at its present weight: a weight change or a
+    /// creation under it follows.
+    pub fn settle(&mut self, bs: &mut impl Budgets<B>, b: B) {
+        if self.cur == Some(b) {
+            let run = core::mem::take(&mut self.pending);
+            if bs.live(b) {
+                self.q.fold(bs, b, run);
+            }
+        }
+    }
+
+    /// `b`'s stride weight changes by `change`: what it ran is charged at the old weight first,
+    /// then its remainder is rescaled.
+    pub fn change_weight<S: Budgets<B>>(&mut self, bs: &mut S, b: B, change: impl FnOnce(&mut S)) {
+        self.settle(bs, b);
+        let old = bs.weight(b);
+        change(bs);
+        let new = bs.weight(b);
+        self.q.reweigh(bs, b, old, new);
+    }
+
+    /// The CPU goes to `next` (`None`: to nobody's budget). If that is not `cur`, `cur` is taken
+    /// off: charged what it ran and at least [`MIN_CHARGE`], then requeued behind its equals if it
+    /// still has a runnable thread, or taken out of the queue. Returns the budget taken off.
+    pub fn switch<S: Budgets<B>>(
+        &mut self,
+        bs: &mut S,
+        next: Option<B>,
+        still_runnable: impl FnOnce(&S, B) -> bool,
+    ) -> Option<B> {
+        if next == self.cur {
+            return None;
+        }
+        let left = self.cur.take();
+        let run = core::mem::take(&mut self.pending).max(MIN_CHARGE);
+        if let Some(c) = left.filter(|c| bs.live(*c)) {
+            self.q.fold(bs, c, run);
+            let still = still_runnable(bs, c);
+            self.q.deschedule(bs, c, still);
+        }
+        self.cur = next;
+        left
+    }
+
+    /// The end of a kernel entry: [`Queue::reconcile`] with `cur` running.
+    pub fn reconcile(&mut self, bs: &mut impl Budgets<B>, runnable: &[B]) {
+        let running = self.cur.filter(|c| bs.live(*c));
+        self.q.reconcile(bs, running, runnable);
+    }
+
+    /// The lowest-ranked queued budget and what `next` chooses to run of it. A queued budget with
+    /// nothing to run (never expected: reconciles keep the queue in step) is taken out.
+    pub fn pick<S: Budgets<B>, T>(
+        &mut self,
+        bs: &mut S,
+        mut next: impl FnMut(&S, B) -> Option<T>,
+    ) -> Option<(B, T)> {
+        loop {
+            let b = self.q.pick(bs)?;
+            if let Some(t) = next(bs, b) {
+                return Some((b, t));
+            }
+            self.q.deschedule(bs, b, false);
+        }
+    }
+
+    /// A new budget `child` under `parent`: a running parent is charged first, then the child
+    /// enters at `max(floor, parent's pass)`. The carve ([`Cpu::change_weight`]) follows.
+    pub fn create(&mut self, bs: &mut impl Budgets<B>, child: B, parent: Option<B>) {
+        if let Some(p) = parent {
+            self.settle(bs, p);
+        }
+        self.q.create(bs, child, parent);
+    }
+
+    /// `child` is destroyed (its own children already were, bottom-up): what it ran is charged,
+    /// its carve goes back to `parent` (`return_weight`, which may do nothing if it went back
+    /// already), and its work since entry moves to the parent at the parent's weight now.
+    pub fn destroy<S: Budgets<B>>(
+        &mut self,
+        bs: &mut S,
+        child: B,
+        parent: Option<B>,
+        return_weight: impl FnOnce(&mut S),
+    ) {
+        self.settle(bs, child);
+        if self.cur == Some(child) {
+            self.cur = None;
+            self.pending = 0;
+        }
+        let w_child = bs.weight(child);
+        let w_parent = match parent {
+            Some(p) => {
+                self.change_weight(bs, p, return_weight);
+                bs.weight(p)
+            }
+            None => 0,
+        };
+        self.q.destroy(bs, child, parent, w_child, w_parent);
     }
 }
 

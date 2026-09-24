@@ -109,3 +109,34 @@ The `debt lift` bound is one round (K5-debt-lift-bound), not two slices.
 | Command | Result |
 | --- | --- |
 | `cargo test --offline --locked -p redoubt-model --release` | Passed: lib 6, coverage 1, current contracts 16, map_fixed 10, mutations 2 (all 120 detected), policy 7, properties 6 (1 ignored), traces 4. |
+
+### Review fixups (K5-code-review-1)
+
+- **Owner decision 5, at least one unit per deschedule.** Both the model (`sched.rs`, `MIN_CHARGE`)
+  and `redoubt-stride` (`Cpu::switch`) now apply it. A new mutation, `R12NoMinimumCharge`, is caught
+  by a focused `sched_contracts` case: ten zero-length runs must each move the pass. That brings
+  `Mutation::ALL` to 121. A destruction is not a deschedule, so a budget destroyed on the CPU is
+  charged what it ran and nothing more, in the kernel and the model alike.
+- **(k) shell.** The shell now starts each command from inside its own slice, holding the lead that
+  run gave it, after one to three back-to-back commands that end before they run.
+  `R12LiftCountsEntryWait` is now caught on 3000 of 3000 shell seeds (residue 9 of 30,000); before,
+  it was caught on none.
+- **(b) wakes never preempt.** Rank runs now stop part-way through a slice about half the time, so
+  a later wake finds a thread running. `R12PreemptOnWake` is caught on 2959 of 3000 rank seeds;
+  before, on none.
+- **(d) gaming.** At weights above STRIDE, the gamer's every turn is a burst shorter than
+  `w / STRIDE`. `R12DropRemainder` is caught on 1376 of 3000 gaming seeds; before, on about 1 in
+  135.
+- No unmutated scenario fails on any residue of 30,000 seeds.
+
+The differential (`libs/stride/tests/differential.rs`) now drives `redoubt_stride::Cpu`, the
+wiring the kernel's `sched.rs` calls, rather than a copy written for the harness. It destroys the
+running budget with its threads (nothing deschedules it first), and whole subtrees bottom-up in
+one step. It still agrees over 3000 seeds; a model with any of 18 scheduling rules broken
+disagrees. Bugs planted in `Cpu` are each caught at seed 0: the minimum charge dropped; the
+running budget destroyed without its runtime charged; a carve returned without folding first.
+
+| Command | Result |
+| --- | --- |
+| `cargo test --offline --locked -p redoubt-model --release` | Passed: lib 6, coverage 1, current contracts 16, map_fixed 10, mutations 2 (all 121 detected), policy 7, properties 6 (1 ignored), traces 4. |
+| `cargo test -p redoubt-stride --release` | Passed: 10 unit tests; the differential over 3000 seeds; 18 broken models all disagree. |
