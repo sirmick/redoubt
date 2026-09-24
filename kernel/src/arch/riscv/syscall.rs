@@ -29,6 +29,8 @@ fn set_supervisor(supervisor: bool) {
 }
 
 pub fn resume(supervisor: bool, thread: &Thread) -> ! {
+    // Leaving the kernel: the scheduler's exit hook (`sched.rs`, accounting at the trap boundary).
+    crate::sched::leave(crate::arch::current_pid());
     // SAFETY: sets sepc, the address `sret` will resume at. Harmless until the `sret` in
     // `_redoubt_resume_context`. (`unsafe` on the upstream `riscv` crate used for rv64, a
     // no-op wrapper on the vendored rv32 one.)

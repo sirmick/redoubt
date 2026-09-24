@@ -70,7 +70,9 @@ paths = [
     "kernel/src/budget.rs", "kernel/src/handle.rs", "kernel/src/kframe.rs", "kernel/src/redoubt.rs",
     "kernel/src/device.rs", "kernel/src/message.rs", "kernel/src/process.rs", "kernel/src/cell.rs",
     "kernel/src/debug", "kernel/src/endpoint.rs", "kernel/src/grants.rs", "kernel/src/macros.rs",
+    "kernel/src/time.rs", "kernel/src/sched.rs",
 ]
+# WP-K5: time.rs and sched.rs (the kernel's timer and scheduler) have no unsafe.
 # WP-K1: kframe.rs's three (words of kernel-object frames and of records, through the physmap)
 # replace mem.rs's three needless ones in the deleted `print_ownership`; the total is unchanged.
 # WP-A2: -1, kframe.rs's `write_byte` (its one user, the old byte-writing `random`, is gone).

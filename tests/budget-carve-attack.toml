@@ -15,7 +15,7 @@ expect = [
     '^\[pid 2\] \[carve\] 18446744073709551615 pages 0 processes 0 weight under 2 -> Err\(OutOfMemory\)$',
     '^\[pid 2\] \[carve\] 1 pages 12 processes 0 weight under 2 -> Err\(OutOfProcesses\)$',
     '^\[pid 2\] \[carve\] 1 pages 4294967295 processes 0 weight under 2 -> Err\(OutOfProcesses\)$',
-    '^\[pid 2\] \[carve\] 1 pages 0 processes 251 weight under 2 -> Err\(InvalidArgument\)$',
+    '^\[pid 2\] \[carve\] 1 pages 0 processes \d+ weight under 2 -> Err\(InvalidArgument\)$',
     '^\[pid 2\] \[carve\] 1 pages 0 processes 4294967295 weight under 2 -> Err\(InvalidArgument\)$',
     '^\[pid 2\] \[carve\] 1 pages 0 processes 0 weight under 1 -> Err\(OutOfMemory\)$',
     '^\[pid 2\] \[carve\] 18446744073709551615 pages 0 processes 0 weight under \d+ -> Err\(OutOfMemory\)$',

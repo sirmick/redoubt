@@ -1,0 +1,13 @@
+description = "A destroyed lineage's debt reaches a shared parent normalized (WP-K5, pass inheritance): a sibling created after a weight-1 grandchild's lineage is destroyed runs within one round (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-debt-lift"]
+timeout_secs = 600
+expect = [
+    '^\[debt-lift\] ok: the sibling first ran',
+    '^SCHED-DEBT-LIFT TEST PASSED$',
+]
+forbid = ['\[debt-lift\] FAIL']
+poweroff = true

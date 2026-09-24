@@ -1,0 +1,15 @@
+description = "Sleeping and waking cannot buy more than a budget's weight (WP-K5, R12): near-slice and 20 us bursts with 1 us naps, and long sleeps with bursts, against an equal-weight spinner (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-sleep-gaming"]
+timeout_secs = 600
+expect = [
+    '^\[gaming\] ok: near-slice bursts',
+    '^\[gaming\] ok: 20 us bursts',
+    '^\[gaming\] ok: 100 ms bursts',
+    '^SCHED-SLEEP-GAMING TEST PASSED$',
+]
+forbid = ['\[gaming\] FAIL']
+poweroff = true

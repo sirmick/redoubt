@@ -26,6 +26,7 @@ rand = "0.8.5"
 [target.'cfg(any(target_arch = "riscv32", target_arch = "riscv64"))'.dependencies]
 riscv = "0.16"
 paging = { path = "../libs/paging" }
+redoubt-stride = { path = "../libs/stride" }
 redoubt-sys = { path = "../libs/sys" }
 
 [lints.rust]

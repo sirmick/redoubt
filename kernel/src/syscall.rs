@@ -74,8 +74,11 @@ fn do_yield(_pid: PID, tid: TID) -> SysCallResult {
         return Ok(redoubt_abi::Result::Ok);
     }
 
+    // The quantum's owner, normally `kmain` through `SwitchTo`. A preemption or a blocking call
+    // may have taken the CPU back to `kmain` since (and forgotten the caller); every process's
+    // parent is `kmain` then (WP-K5). A yield must never stop the kernel (I14).
     let (parent_pid, parent_ctx) =
-        SWITCHTO_CALLER.with(|c| c.take()).expect("yielded when no parent context was present");
+        SWITCHTO_CALLER.with(|c| c.take()).unwrap_or((crate::services::KERNEL_PID, 0));
     //println!("\n\r ***YIELD CALLED***");
     SystemServices::with_mut(|ss| {
         // TODO: Advance thread
@@ -1018,7 +1021,8 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
             //     "Activating process thread {} in pid {} coming from pid {} thread {}",
             //     new_context, new_pid, pid, tid
             // );
-            let new_tid = match ss.activate_process_thread(tid, new_pid, new_tid, true, PostActivateOp::None) {
+            let new_tid = match ss.activate_process_thread(tid, new_pid, new_tid, true, PostActivateOp::None)
+            {
                 Ok(t) => t,
                 Err(e) => {
                     // Nothing was switched: the caller picks again (`main.rs`).
