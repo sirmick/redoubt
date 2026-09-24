@@ -1,0 +1,3 @@
+description = "The D3 rig on the host (answer 174): every case booting the rig forbids exactly the addresses its ipd refuses (the rig's self= list plus ipd's fixed ones), and the launched programs parse their arguments strictly. The bench's peer, capture and dial checks are in testbench's own tests (host-tests)"
+kind = "host-tests"
+packages = ["redoubt-net-tests", "redoubt-net-client"]

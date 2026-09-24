@@ -1,0 +1,39 @@
+[package]
+name = "redoubt-net-tests"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "The D3 rig: boots the real netd and ipd through the loader stub and attacks them (answer 174)"
+build = "build.rs"
+
+# One rig, one binary per case (src/rig.rs, `Mode`): the first program of the bundle, it holds
+# the devices and budgets and launches everything else through the stub (INTERIM until WP-R3's
+# init; docs/testbench.md, "Peers").
+[[bin]]
+name = "net-rig"
+path = "src/bin/net-rig.rs"
+
+[[bin]]
+name = "net-rig-twice"
+path = "src/bin/net-rig-twice.rs"
+
+[[bin]]
+name = "net-rig-attacks"
+path = "src/bin/net-rig-attacks.rs"
+
+[[bin]]
+name = "net-rig-unrefused"
+path = "src/bin/net-rig-unrefused.rs"
+
+[[bin]]
+name = "net-rig-probe"
+path = "src/bin/net-rig-probe.rs"
+
+[dependencies]
+redoubt-rt = { path = "../../libs/rt" }
+redoubt-ipd = { path = "../../servers/ipd" }
+redoubt-net-client = { path = "client" }
+stub = { path = "../../stub" }
+
+[dev-dependencies]
+toml = "0.8"

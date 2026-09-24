@@ -1,0 +1,30 @@
+description = "Bench self-check (must fail): a peer the guest never connects to (10.0.9.120:7) is expected once; the bench's count must catch the missing connection"
+arch = ["rv64"]
+kind = "boot"
+programs = [{ package = "redoubt-net-tests", bin = "net-rig-twice" }]
+timeout_secs = 120
+expect = [
+    '^\[net-rig\] ok: echo through 10\.0\.9\.100:7, 2 round\(s\): exited 0$',
+    '^\[net-rig\] ok: the listener accepted and echoed the bench.s dial \(1\)$',
+    '^\[net-rig\] D3 NET TCP PASSED$',
+]
+forbid = ['\[net-rig\] FAIL']
+poweroff = true
+must_fail = '^peer 10\.0\.9\.120:7: 0 connections, expected 1$'
+
+[net]
+forward = [8000]
+self_forbidden = ["10.0.2.0/24", "10.0.9.102/32", "0.0.0.0/8", "127.0.0.0/8", "224.0.0.0/4", "240.0.0.0/4", "255.255.255.255/32"]
+
+[[net.peer]]
+addr = "10.0.9.100:7"
+connections = 2
+
+[[net.peer]]
+addr = "10.0.9.120:7"
+connections = 1
+
+[[net.dial]]
+port = 8000
+send = "d3 dial\n"
+expect = "d3 dial\n"
