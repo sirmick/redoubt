@@ -24,7 +24,11 @@
 //! to a listening port is taken in through a fresh one's ingress. The fresh interface has the
 //! same address and route but an empty neighbour cache, so a reply it would send at once is
 //! lost rather than sent; the SYN-ACK goes out later from the main interface, carrying the ISN
-//! the fresh one drew. With no seed there is no open: the connect answers `unreachable`, the SYN
+//! the fresh one drew. **Stated (QA D3-code-review-5):** when every listening socket of the port is
+//! busy, the fresh interface answers the SYN with an RST, and its empty cache turns that into one
+//! ARP request for the next hop instead: under a SYN flood at a full backlog, one ARP broadcast
+//! per SYN (1:1, no amplification), never for one of the box's own addresses (their SYNs are
+//! dropped as martian first). With no seed there is no open: the connect answers `unreachable`, the SYN
 //! is dropped, and nothing falls back to the main PRNG.
 //!
 //! # What is checked before smoltcp sees anything

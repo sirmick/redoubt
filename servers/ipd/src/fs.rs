@@ -31,8 +31,9 @@ use crate::link::Netif;
 use crate::scope::Scope;
 use crate::stack::{CtlError, Entropy, Owner, Ready, Stack, WaitFor};
 
-/// A scope's id: never reused.
-pub type ScopeId = u32;
+/// A scope's id: never reused. 64 bits, so no count of grants a box could make wraps it (QA
+/// D3-code-review-5: a 32-bit counter panicked or wrapped after 2^32).
+pub type ScopeId = u64;
 
 /// Where a node is in the tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

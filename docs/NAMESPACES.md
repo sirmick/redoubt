@@ -257,7 +257,10 @@ started, and a read of `ctl` waits for the answer. The local port is drawn at ra
 among every live socket of every owner (TIME-WAIT included) and never a listened port.
 `listen` takes `backlog` 1 to 8: `ipd` keeps that many listening sockets, each charged to the
 holder, and one waiting read of `ctl` returns each accepted connection as a new number. A
-half-open connection (SYN received, no answer) is given 3 s, then the listener listens again. A
+half-open connection (SYN received, no answer) is given 3 s, then the listener listens again. A SYN
+that finds every listening socket busy gets one ARP request for its next hop (the refusal, taken
+in through a fresh interface with an empty neighbour cache): under a SYN flood at a full backlog,
+one ARP broadcast per SYN, never for one of the box's own addresses. A
 port belongs to the connection that listened on it first, and to the connections minted from it
 by `new_connection("")`; any other gets `in_use`, even one granted from the same root.
 `unreachable` means `ipd` has no link, or the kernel gave no random word for the connection's
