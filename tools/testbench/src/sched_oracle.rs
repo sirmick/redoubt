@@ -11,6 +11,12 @@
 //! - of two that woke, the later kernel entry's first, and within one entry the lower id;
 //! - requeued ones in the order they were requeued.
 //!
+//! A destruction's lift (a child's work since entry moving to its parent) is recorded as a group
+//! of nine records, every operand and the result, and recomputed here from the rule as the spec
+//! states it (KERNEL-SPEC.md R12, Inheritance): W = (child pass - max(entry, floor))+ x child weight
+//! + child remainder; the parent becomes max(its pass, floor) + W / its weight, keeping its
+//! remainder only if it was not below the floor, the remainders carried.
+//!
 //! A trace that is malformed, incomplete, lost records or holds no pick is rejected: a check that
 //! saw nothing proves nothing.
 
@@ -56,7 +62,7 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
             return Err(bad());
         }
         let kind = f[2].chars().next().ok_or_else(bad)?;
-        if f[2].len() != 1 || !"WRDPK".contains(kind) {
+        if f[2].len() != 1 || !"WRDPKLlefrqwAa".contains(kind) {
             return Err(bad());
         }
         records.push(Record {
@@ -87,13 +93,57 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
     Ok(records)
 }
 
-/// Check every pick in `records` against the four clauses; the number of picks checked.
-pub fn check(records: &[Record]) -> Result<usize, String> {
+/// The kinds of a lift's group, in order.
+const LIFT: &str = "LlefrqwAa";
+
+/// Check the lift group starting at `records[0]` against the rule; (records used, whether the
+/// child's work was above zero and the parent led the floor, so a lift by `max` would differ).
+fn check_lift(records: &[Record]) -> Result<(usize, bool), String> {
+    let g = records.get(..LIFT.len()).ok_or_else(|| format!("record {}: a lift group cut short", records[0].seq))?;
+    let kinds: String = g.iter().map(|r| r.kind).collect();
+    if kinds != LIFT {
+        return Err(format!("record {}: a lift group of kinds {kinds}, not {LIFT}", g[0].seq));
+    }
+    let [pb, cp, e, f, cr, pr, w, pa, par] = [0, 1, 2, 3, 4, 5, 6, 7, 8].map(|i| g[i].pass);
+    let (wc, wp) = (w >> 32, w & 0xffff_ffff);
+    if wp == 0 {
+        return Ok((LIFT.len(), false));
+    }
+    let work = cp.saturating_sub(e.max(f)) * wc + cr;
+    let (base, base_rem) = if pb >= f { (pb, pr) } else { (f, 0) };
+    let rem = base_rem + work % wp;
+    let want = (base + work / wp + rem / wp, rem % wp);
+    if (pa, par) != want {
+        return Err(format!(
+            "record {}: budget {}'s lift of budget {} gave pass {pa:#x} rem {par}, but the rule gives {:#x} rem {} \
+             (parent {pb:#x} rem {pr}, child {cp:#x} rem {cr} entry {e:#x}, floor {f:#x}, weights {wc} and {wp})",
+            g[0].seq, g[0].id, g[1].id, want.0, want.1
+        ));
+    }
+    Ok((LIFT.len(), work / wp > 0 && pb > f))
+}
+
+/// Check every pick in `records` against the four clauses, and every lift against the rule:
+/// (picks, lifts, lifts a `max` rule would have got wrong) checked.
+pub fn check(records: &[Record]) -> Result<(usize, usize, usize), String> {
     let mut queued: BTreeMap<u64, (u128, Key)> = BTreeMap::new();
     let mut requeues: i128 = 0;
     let mut picks = 0;
-    for r in records {
+    let (mut lifts, mut telling) = (0, 0);
+    let mut i = 0;
+    while i < records.len() {
+        let r = &records[i];
+        i += 1;
         match r.kind {
+            'L' => {
+                let (used, tells) = check_lift(&records[i - 1..])?;
+                i += used - 1;
+                lifts += 1;
+                telling += usize::from(tells);
+            }
+            'l' | 'e' | 'f' | 'r' | 'q' | 'w' | 'A' | 'a' => {
+                return Err(format!("record {}: a lift record outside a lift group", r.seq));
+            }
             'W' => {
                 queued.insert(r.id, (r.pass, (0, -i128::from(r.entry))));
             }
@@ -133,20 +183,23 @@ pub fn check(records: &[Record]) -> Result<usize, String> {
                 }
                 picks += 1;
             }
-            _ => unreachable!("parse admits only W, R, D, P and K"),
+            _ => unreachable!("parse admits only these kinds"),
         }
     }
     if picks == 0 {
         return Err("the trace holds no pick: nothing was checked".into());
     }
-    Ok(picks)
+    Ok((picks, lifts, telling))
 }
 
 /// The bench's post-check: parse the case's console log and check it.
 pub fn run(log: &str) -> Result<String, String> {
     let records = parse(log)?;
-    let picks = check(&records)?;
-    Ok(format!("sched_oracle: {} records, {picks} picks, every one in rank order", records.len()))
+    let (picks, lifts, telling) = check(&records)?;
+    Ok(format!(
+        "sched_oracle: {} records, {picks} picks, every one in rank order; {lifts} lifts by the rule ({telling} with a leading parent and work to move)",
+        records.len()
+    ))
 }
 
 #[cfg(test)]
@@ -214,6 +267,48 @@ mod tests {
             let v = verdict(t);
             assert!(v.as_ref().is_err_and(|e| e.contains("rank clauses")), "clause {what}: {v:?}");
         }
+    }
+
+    /// A lift group, then a pick so the trace is complete: parent 1 at `pb` rem `pr`, child 2 at
+    /// `cp` rem `cr` entry `e`, floor `f`, weights `wc` and `wp`, parent after `pa` rem `par`.
+    #[allow(clippy::too_many_arguments)]
+    fn lift_trace(pb: u128, pr: u128, cp: u128, cr: u128, e: u128, f: u128, wc: u128, wp: u128, pa: u128, par: u128) -> String {
+        trace(&[
+            (1, 'L', 1, pb),
+            (1, 'l', 2, cp),
+            (1, 'e', 2, e),
+            (1, 'f', 0, f),
+            (1, 'r', 2, cr),
+            (1, 'q', 1, pr),
+            (1, 'w', 0, wc << 32 | wp),
+            (1, 'A', 1, pa),
+            (1, 'a', 1, par),
+            (1, 'W', 1, pa),
+            (1, 'K', 1, pa),
+        ])
+    }
+
+    #[test]
+    fn lifts_are_recomputed() {
+        // Parent leads the floor (pb 150 > f 100); the child did 30 over max(entry 90, floor 100)
+        // at weight 4, remainder 3: W = 123; parent weight 10: 150 + 12, remainder 5 + 3 = 8.
+        assert!(run(&lift_trace(150, 5, 130, 3, 90, 100, 4, 10, 162, 8)).is_ok());
+        // The carry: remainder 9 + 3 = 12 is a pass unit and 2.
+        assert!(run(&lift_trace(150, 9, 130, 3, 90, 100, 4, 10, 163, 2)).is_ok());
+        // A parent below the floor starts from the floor, remainder dropped.
+        assert!(run(&lift_trace(80, 9, 130, 3, 90, 100, 4, 10, 112, 3)).is_ok());
+        // The same lift by max (the model's R12LiftByMax): max(150, 100 + 12) = 150.
+        let by_max = run(&lift_trace(150, 5, 130, 3, 90, 100, 4, 10, 150, 5));
+        assert!(by_max.as_ref().is_err_and(|e| e.contains("the rule gives")), "{by_max:?}");
+        // Measured from the floor, not the entry (R12LiftCountsEntryWait): entry 60 under floor
+        // 100 changes nothing, but a child that entered above the floor moves only its own work.
+        assert!(run(&lift_trace(150, 0, 130, 0, 120, 100, 4, 10, 154, 0)).is_ok());
+        assert!(run(&lift_trace(150, 0, 130, 0, 120, 100, 4, 10, 162, 0)).is_err());
+        // A group cut short, or a lift record on its own.
+        let cut = "SCHED-TRACE 0 1 L 1 5\nSCHED-TRACE 1 1 W 1 5\nSCHED-TRACE 2 1 K 1 5\nSCHED-TRACE-END 3 dropped 0\n";
+        assert!(run(cut).is_err());
+        let stray = "SCHED-TRACE 0 1 a 1 5\nSCHED-TRACE 1 1 W 1 5\nSCHED-TRACE 2 1 K 1 5\nSCHED-TRACE-END 3 dropped 0\n";
+        assert!(run(stray).is_err());
     }
 
     #[test]

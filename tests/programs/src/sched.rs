@@ -42,12 +42,13 @@ pub enum Role {
     Server = 3,
     /// p2 threads calling slot 3 for the whole window; report the calls made.
     Flood = 4,
-    /// Churn threads: a thread counts for p0 ticks then exits, over and over; report the total.
+    /// Churn threads: a thread counts for p0 ticks then exits straight from the count, over and
+    /// over; report the total.
     ThreadChurn = 5,
     /// Churn processes in the budget in slot 3: a child counts for p0 ticks then exits (p1 = 0)
-    /// or faults (p1 = 1); report the total.
+    /// or faults (p1 = 1) straight from the count; report how many ran.
     ProcessChurn = 6,
-    /// A process-churn child: count p0 ticks, report to slot 1, exit or fault.
+    /// A churn child: count p0 ticks, report to slot 1 unless p2 = 1, exit or fault.
     ChurnChild = 7,
     /// Budget churn under the budget in slot 3 (the child's own): p0 = variant (0 blocking,
     /// 1 spinning parent destroying at its slice's end, 2 destroyed by a deadline just after the
@@ -68,6 +69,9 @@ pub enum Role {
     TieSender = 13,
     /// `receive` on slot 3; report the `rdtime` it first runs again, then exit.
     TieReceiver = 16,
+    /// p1 times: sleep p0 µs, and measure how long after its deadline it runs again; report the
+    /// shortest such delay, in µs.
+    WakeDelay = 17,
     /// The latency case's driver stand-in: p0 samples of the goldfish RTC's alarm (MMIO in slot
     /// 3, interrupt in slot 4), each waited for in `receive`; report [`Stats::DRIVER_WAKE`].
     Driver = 14,
@@ -97,6 +101,7 @@ impl Role {
             Driver,
             Steward,
             TieReceiver,
+            WakeDelay,
         ]
         .into_iter()
         .find(|r| *r as u8 == x)
@@ -221,10 +226,15 @@ extern "C" fn flood_thread(_: usize) -> ! {
     crate::park()
 }
 
-extern "C" fn churn_worker(done: usize) -> ! {
+/// Workers of [`Role::ThreadChurn`] that have finished counting.
+static CHURNED: AtomicUsize = AtomicUsize::new(0);
+
+/// Count, then end in `thread_exit` itself: no system call between the count and the exit, so the
+/// run is charged at the exit or not at all (the count goes through memory, not a message).
+extern "C" fn churn_worker(_: usize) -> ! {
     let n = spin_until(ticks() + param(0));
     TOTAL.fetch_add(n as usize, SeqCst);
-    let _ = rd::send(done as u32, &rd::body([0; 4]), None, rd::FOREVER);
+    CHURNED.fetch_add(1, SeqCst);
     rd::thread_exit().ok();
     crate::park()
 }
@@ -255,7 +265,11 @@ pub extern "C" fn child(arg: usize) -> ! {
     }
     if role == Some(Role::ChurnChild) {
         let n = spin_until(ticks() + param(0));
-        let _ = rd::send(1, &rd::body([n as usize, 0, 0, 0]), None, rd::FOREVER);
+        // Process churn (p2 = 1) reports nothing: the count ends in the exit or the fault itself,
+        // so the run is charged there or not at all.
+        if param(2) == 0 {
+            let _ = rd::send(1, &rd::body([n as usize, 0, 0, 0]), None, rd::FOREVER);
+        }
         if param(1) == 1 {
             // A fault: a store to page 0, which nothing maps.
             // SAFETY: none; this faults on purpose, and the kernel ends the process.
@@ -283,6 +297,15 @@ pub extern "C" fn child(arg: usize) -> ! {
             let t = ticks();
             report(if r == Err(Error::Dead) { t } else { 0 });
             rd::process_exit(0)
+        }
+        Some(Role::WakeDelay) => {
+            let (nap, mut least) = (param(0), u64::MAX);
+            for _ in 0..param(1) {
+                let before = ticks();
+                let _ = rd::receive(None, nap, 0);
+                least = least.min(ticks().saturating_sub(before + nap * tpu) / tpu);
+            }
+            least
         }
         Some(Role::TieReceiver) => {
             let r = rd::receive(Some(3), rd::FOREVER, 0);
@@ -336,15 +359,16 @@ pub extern "C" fn child(arg: usize) -> ! {
             TOTAL.load(SeqCst) as u64
         }
         Some(Role::ThreadChurn) => {
-            let done = rd::endpoint_create().expect("done endpoint");
-            let done_client = rd::mint_from_handle(done, 1, None).expect("mint");
             let mut round = 0;
             while ticks() < end {
                 // One worker at a time, on two stacks in turn: the one before last has certainly
-                // exited (the last may still be between its report and its exit).
-                thread_on(30 + round % 2, churn_worker, done_client as usize);
+                // exited (the last may still be between its count and its exit). This thread
+                // sleeps while the worker counts, and looks every millisecond.
+                thread_on(30 + round % 2, churn_worker, 0);
                 round += 1;
-                let _ = rd::receive(Some(done), rd::FOREVER, 0);
+                while CHURNED.load(SeqCst) < round {
+                    let _ = rd::receive(None, 1_000, 0);
+                }
             }
             TOTAL.load(SeqCst) as u64
         }
@@ -373,27 +397,25 @@ pub extern "C" fn child(arg: usize) -> ! {
 }
 
 /// Process churn: children in this process's own budget (slot 3), each counting for a while and
-/// then exiting or faulting.
+/// then exiting or faulting straight from the count (no report: the victim's share is what the
+/// case judges). Reports the children that ran.
 fn process_churn(end: u64) -> u64 {
     let image = spawn::image();
     let exit = rd::endpoint_create().expect("exit");
-    let rep = rd::endpoint_create().expect("rep");
-    let rep_client = rd::mint_from_handle(rep, 1, None).expect("mint");
-    let mut total = 0u64;
+    let mut children = 0u64;
     let mut startup = [0u8; 1 + 8 * 8];
     startup[0] = Role::ChurnChild as u8;
     startup[1..9].copy_from_slice(&param(0).to_le_bytes());
     startup[9..17].copy_from_slice(&param(1).to_le_bytes());
+    startup[17..25].copy_from_slice(&1u64.to_le_bytes());
     while ticks() < end {
-        if spawn::spawn(&image, 3, exit, child as *const () as usize, &startup, &[rep_client]).is_err() {
+        if spawn::spawn(&image, 3, exit, child as *const () as usize, &startup, &[]).is_err() {
             break;
         }
-        if let Ok(Received::Message(m)) = rd::receive(Some(rep), rd::FOREVER, 0) {
-            total += m.body.words[0] as u64;
-        }
         let _ = rd::receive(Some(exit), rd::FOREVER, 0);
+        children += 1;
     }
-    total
+    children
 }
 
 /// Budget churn under this process's own budget (slot 3); see [`Role::BudgetChurn`].
