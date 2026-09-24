@@ -67,7 +67,8 @@
 //! at a time, so none is ever in flight to flush.
 //!
 //! **Waiting** (WP-R4; CONTAINMENT.md: a server parks calls rather than blocking). A read whose
-//! answer is not there yet ([`FileServer::read`] returning [`Read::Wait`]) is not answered:
+//! answer is not there yet ([`FileServer::read`] returning [`Read::Wait`]), or a write that cannot
+//! be taken yet ([`FileServer::write_or_wait`] returning [`Write::Wait`], answer 174), is not answered:
 //! [`NineServer::serve_parking`] hands the request back with its T-message still in its lend, the
 //! server parks it ([`super::parked::Parked`], charged to the same buckets and shares through
 //! [`NineServer::admission_mut`]), and serves it again when it can be answered. Nothing of the
@@ -197,13 +198,25 @@ pub enum Read {
     Wait,
 }
 
+/// What [`FileServer::write_or_wait`] did (answer 174: a write may wait as a read does).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Write {
+    /// This many bytes of the data were written (at most its length).
+    Done(usize),
+    /// Nothing can be written yet (a socket's send buffer is full): the call is handed back by
+    /// [`NineServer::serve_parking`] for the server to park, and served again, unchanged, when
+    /// there is room. As for [`Read::Wait`], a server that returns this must serve through
+    /// `serve_parking`; under [`NineServer::serve`] it becomes a refusal.
+    Wait,
+}
+
 /// What one 9P request did to its lend ([`NineServer::answer_in_place`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Answer {
     /// An R-message, an `Rerror` included, was written over the T-message.
     Replied,
-    /// Nothing was written: the file server asked for the call to wait ([`Read::Wait`]), so the
-    /// T-message is still there to be answered later.
+    /// Nothing was written: the file server asked for the call to wait ([`Read::Wait`] or
+    /// [`Write::Wait`]), so the T-message is still there to be answered later.
     Waiting,
     /// Not even an `Rerror` fits the lend, so there is nothing to reply with.
     NoRoom,
@@ -268,6 +281,20 @@ pub trait FileServer {
         offset: u64,
         data: &[u8],
     ) -> Result<usize, NineError>;
+
+    /// Writes `data` at `offset`, or asks for the call to be held until it can be written
+    /// ([`Write::Wait`], served through [`NineServer::serve_parking`]). This is what the skeleton
+    /// calls for a `Twrite`; the default is [`FileServer::write`], which never waits, so only a
+    /// server that must wait (`ipd`'s sockets) overrides it.
+    fn write_or_wait(
+        &mut self,
+        caller: &Caller,
+        node: &Self::Node,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<Write, NineError> {
+        self.write(caller, node, offset, data).map(Write::Done)
+    }
 
     fn stat(&mut self, caller: &Caller, node: &Self::Node) -> Result<FileStat, NineError>;
 
@@ -385,14 +412,20 @@ impl<S: FileServer> NineServer<S> {
     /// minted badges start (answer 126: see [`super::minted`]); a server that cannot get one
     /// must not start, because a predictable first badge is a hole across a restart.
     pub fn new(fs: S, limits: Limits, random: u64) -> Result<NineServer<S>, Unsized> {
-        Ok(NineServer {
+        Ok(NineServer::with_admission(fs, Admission::new(limits)?, random))
+    }
+
+    /// As [`NineServer::new`], with an [`Admission`] the server built itself: one with
+    /// per-badge overrides (`Admission::with_overrides`, answer 174).
+    pub fn with_admission(fs: S, admission: Admission, random: u64) -> NineServer<S> {
+        NineServer {
             fs,
             conns: Vec::new(),
             minted: Minted::new(random),
-            admission: Admission::new(limits)?,
+            admission,
             scratch: Vec::new(),
             stat: FileStat::default(),
-        })
+        }
     }
 
     /// Fids open on the caller's connection.
@@ -428,8 +461,8 @@ impl<S: FileServer> NineServer<S> {
     /// dispatch closes handles the protocol did not ask for, as [`super::typed::serve_call`]
     /// does).
     ///
-    /// Every request is answered, so a file server that asks to wait ([`Read::Wait`]) is
-    /// refused here; one that waits serves through [`NineServer::serve_parking`].
+    /// Every request is answered, so a file server that asks to wait ([`Read::Wait`],
+    /// [`Write::Wait`]) is refused here; one that waits serves through [`NineServer::serve_parking`].
     pub fn serve_with(
         &mut self,
         request: Request,
@@ -437,7 +470,7 @@ impl<S: FileServer> NineServer<S> {
     ) -> Result<(), Error> {
         match self.serve_parking(request, own)? {
             None => Ok(()),
-            // A server bug (`Read::Wait` without `serve_parking`), answered rather than left
+            // A server bug (a wait without `serve_parking`), answered rather than left
             // hanging: the caller gets a refusal instead of waiting for a reply that never comes.
             Some(request) => {
                 finish(request, &Outcome { words: MALFORMED, send: Handles::new(), close: Handles::new() })
@@ -447,7 +480,7 @@ impl<S: FileServer> NineServer<S> {
     }
 
     /// [`NineServer::serve_with`], except that a request the file server asked to hold
-    /// ([`Read::Wait`]) is **not** answered: it comes back, with its T-message untouched in its
+    /// ([`Read::Wait`], [`Write::Wait`]) is **not** answered: it comes back, with its T-message untouched in its
     /// lend, for the server to park ([`super::parked::Parked`]). Serving it again later answers
     /// it, because the request is read from the lend afresh each time; a fid clunked meanwhile
     /// makes that second serving an `Rerror`, which is what the client should see.
@@ -684,7 +717,11 @@ impl<S: FileServer> NineServer<S> {
                 offset.checked_add(data.len() as u64).ok_or(NineError::BAD_OFFSET)?;
                 let node = f.node();
                 self.check_labels(caller, &node, Access::Write)?;
-                let n = self.fs.write(caller, &node, offset, data)?;
+                let n = match self.fs.write_or_wait(caller, &node, offset, data)? {
+                    Write::Done(n) => n,
+                    // Held like a waiting read: the T-message stays in the lend.
+                    Write::Wait => return Err(Held::Wait),
+                };
                 // A server claiming more than it was given is a bug; do not pass it on.
                 let count = u32::try_from(n)
                     .ok()
@@ -773,6 +810,45 @@ impl<S: FileServer> NineServer<S> {
             self.step(caller, &mut steps, name)?;
         }
         let new_root = steps.pop().ok_or(NineError::NOT_FOUND)?;
+        self.mint_at(caller, new_root, quota, kernel, share)
+    }
+
+    /// Mints a connection rooted at `root`, a node the **file server** chose rather than a path
+    /// the caller walked: `ipd`'s typed `grant`, whose root carries a scope no wider than the
+    /// caller's (answer 174). It is minted exactly as `new_connection` mints one, in the same
+    /// table: admission first, then a badge above 2^63 and a random id, the file server's
+    /// [`FileServer::minted`] hook (with no quota), then the handle, so `disconnect` frees it like
+    /// any other. Returns (handle, id, badge). The caller replies with the handle and, unless the
+    /// reply was delivered with it installed, undoes the connection with [`NineServer::unmint`]
+    /// (answer 168). Deciding that `root` is no wider than the caller's own is the file server's.
+    pub fn mint_rooted(
+        &mut self,
+        caller: &Caller,
+        root: (S::Node, Qid),
+        kernel: &mut impl Minter,
+    ) -> Result<(Handle, u64, u64), NineError> {
+        let (client, share) = (AdmitKey::of(caller), self.share(caller));
+        self.admission.admit(client, share, Resource::State).map_err(|_| NineError::TOO_MANY)?;
+        let made = self.mint_at(caller, root, 0, kernel, share);
+        if made.is_err() {
+            self.admission.release(client, share, Resource::State);
+        }
+        made
+    }
+
+    /// Undoes a connection [`NineServer::mint_rooted`] made, and everything under it: its reply
+    /// was not delivered, or the handle did not arrive (answer 168).
+    pub fn unmint(&mut self, badge: u64) { self.forget(badge) }
+
+    /// The minting both `new_connection` and `mint_rooted` share, its admission taken.
+    fn mint_at(
+        &mut self,
+        caller: &Caller,
+        new_root: (S::Node, Qid),
+        quota: u64,
+        kernel: &mut impl Minter,
+        share: u64,
+    ) -> Result<(Handle, u64, u64), NineError> {
         let ticket = self.minted.reserve(caller, share, kernel).map_err(|e| match e {
             MintError::TooMany => NineError::TOO_MANY,
             MintError::Failed => NineError::NO_ID,
