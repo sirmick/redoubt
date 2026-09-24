@@ -482,6 +482,49 @@ pub fn segment(src: u32, dst: u32, tcp: &TcpRepr) -> Vec<u8> {
     frame
 }
 
+/// A well-formed IPv4 packet of any `protocol` from `src` to `dst`, its header checksummed, with
+/// `payload` as its body: UDP, ICMP or a protocol nobody speaks, as the wire could carry them.
+pub fn datagram(src: u32, dst: u32, protocol: IpProtocol, payload: &[u8]) -> Vec<u8> {
+    let caps = ChecksumCapabilities::default();
+    let ip = Ipv4Repr {
+        src_addr: Ipv4Address::from(src),
+        dst_addr: Ipv4Address::from(dst),
+        next_header: protocol,
+        payload_len: payload.len(),
+        hop_limit: 64,
+    };
+    let eth = EthernetRepr {
+        src_addr: EthernetAddress(PEER_MAC),
+        dst_addr: EthernetAddress(IPD_MAC),
+        ethertype: EthernetProtocol::Ipv4,
+    };
+    let mut frame = vec![0u8; eth.buffer_len() + ip.buffer_len() + payload.len()];
+    let mut e = EthernetFrame::new_unchecked(&mut frame[..]);
+    eth.emit(&mut e);
+    let mut p = Ipv4Packet::new_unchecked(e.payload_mut());
+    ip.emit(&mut p, &caps);
+    p.payload_mut().copy_from_slice(payload);
+    frame
+}
+
+/// An ICMP echo request's bytes, checksummed: what `ping` sends.
+pub fn echo_request(payload: &[u8]) -> Vec<u8> {
+    let mut bytes = vec![0u8; 8 + payload.len()];
+    bytes[0] = 8;
+    bytes[4..6].copy_from_slice(&0x1234u16.to_be_bytes());
+    bytes[6..8].copy_from_slice(&1u16.to_be_bytes());
+    bytes[8..].copy_from_slice(payload);
+    let mut sum = 0u32;
+    for pair in bytes.chunks(2) {
+        sum += u32::from(u16::from_be_bytes([pair[0], *pair.get(1).unwrap_or(&0)]));
+    }
+    while sum > 0xffff {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    bytes[2..4].copy_from_slice(&(!(sum as u16)).to_be_bytes());
+    bytes
+}
+
 /// What a drive did, so a sweep can show it went deep.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Drove {
@@ -553,8 +596,30 @@ fn fuzzed_segment(b: &mut Bytes) -> Vec<u8> {
     segment(src, dst, &repr)
 }
 
+/// A well-formed IPv4 packet that is not TCP, from the input: UDP, ICMP (an echo request, or
+/// anything) or another protocol, from any of the sources, to `ipd` or elsewhere. `ipd` must
+/// answer none of them (QA D3-code-review-5): [`check_frame`] fails on anything but TCP or ARP.
+fn fuzzed_datagram(b: &mut Bytes) -> Vec<u8> {
+    let protocol = match b.u8() % 4 {
+        0 => IpProtocol::Udp,
+        1 => IpProtocol::Icmp,
+        2 => IpProtocol::Unknown(99),
+        _ => IpProtocol::from(b.u8()),
+    };
+    let len = usize::from(b.u8() % 64);
+    let payload = if protocol == IpProtocol::Icmp && b.u8() % 2 == 0 {
+        echo_request(&b.take(len))
+    } else {
+        b.take(len)
+    };
+    let src = b.pick(SOURCES);
+    let dst = if b.u8() % 4 == 0 { b.pick(SOURCES) } else { ADDR };
+    datagram(src, dst, protocol, &payload)
+}
+
 /// Drives `ipd`'s stack with frames from the input: well-formed segments with fuzzed fields,
-/// raw bytes, the peer's own traffic, the clock, and the stack's own operations, auditing the
+/// well-formed IPv4 that is not TCP, raw bytes, the peer's own traffic, the clock, and the stack's
+/// own operations, auditing the
 /// table after each. A panic anywhere is the failure; every frame `ipd` sends is checked as it
 /// goes ([`check_frame`]). Shared by the `frames` fuzz target and a seeded sweep.
 pub fn drive_frames(input: &[u8]) -> Drove {
@@ -575,9 +640,13 @@ pub fn drive_frames(input: &[u8]) -> Drove {
             break;
         }
         let now = w.now;
-        match b.u8() % 8 {
+        match b.u8() % 9 {
             0 | 1 => {
                 let frame = fuzzed_segment(&mut b);
+                w.nine.fs.stack.ingress(&frame, now);
+            }
+            8 => {
+                let frame = fuzzed_datagram(&mut b);
                 w.nine.fs.stack.ingress(&frame, now);
             }
             2 => {

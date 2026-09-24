@@ -691,7 +691,7 @@ impl<N: Netif, E: Entropy> Stack<N, E> {
             return false;
         }
         let changed = match classify(frame, &self.net) {
-            Class::Martian => {
+            Class::Martian | Class::NotTcp => {
                 self.link.discard();
                 false
             }
@@ -852,10 +852,15 @@ fn status_of(state: State) -> Status {
 /// What an inbound frame is, as far as the choice of interface goes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Class {
-    /// TCP whose source is one of the box's own addresses (other than the gateway), or nowhere:
-    /// dropped. It is spoofed, or the box talking to itself; and answering it would mean asking
-    /// ARP for one of the box's own addresses.
+    /// IPv4 whose source is one of the box's own addresses (other than the gateway), or nowhere,
+    /// whatever its protocol: dropped. It is spoofed, or the box talking to itself; and answering
+    /// it would mean asking ARP for one of the box's own addresses.
     Martian,
+    /// IPv4 that is not TCP, from anywhere: dropped. `ipd` serves only TCP, and the main
+    /// interface would answer it with an ICMP "protocol unreachable" to its claimed source: a
+    /// reflection for anyone who spoofs one, and a packet to the box's own addresses if the
+    /// source were one (QA D3-code-review-5).
+    NotTcp,
     /// A SYN without ACK to `ipd`'s own address.
     Syn { port: u16 },
     /// Anything else: the main interface's.
@@ -866,9 +871,11 @@ pub enum Class {
 /// smoltcp later, TCP's ports and flags. A frame that does not parse is `Other` (the main
 /// interface refuses it properly).
 ///
-/// **Martian sources.** TCP from `ipd`'s own address, `127/8` or `0/8` ([`martian_source`]), or
-/// from any other of the box's own addresses ([`SelfSet`]) except the gateway, is dropped. The
-/// gateway is kept: on QEMU it is where forwarded connections arrive from (answer 174).
+/// **Martian sources.** IPv4 of any protocol from `ipd`'s own address, `127/8` or `0/8`
+/// ([`martian_source`]), or from any other of the box's own addresses ([`SelfSet`]) except the
+/// gateway, is dropped, before its protocol is looked at. The gateway is kept: on QEMU it is where
+/// forwarded connections arrive from (answer 174). **Then every IPv4 packet that is not TCP is
+/// dropped** ([`Class::NotTcp`]), so nothing but TCP ever reaches smoltcp from the wire.
 pub fn classify(frame: &[u8], net: &Net) -> Class {
     let own = net.addr;
     let Ok(eth) = EthernetFrame::new_checked(frame) else { return Class::Other };
@@ -876,12 +883,12 @@ pub fn classify(frame: &[u8], net: &Net) -> Class {
         return Class::Other;
     }
     let Ok(ip) = Ipv4Packet::new_checked(eth.payload()) else { return Class::Other };
-    if ip.next_header() != IpProtocol::Tcp {
-        return Class::Other;
-    }
     let src = u32_of(ip.src_addr());
     if martian_source(src, own) || (net.selfset.contains(src) && Some(src) != net.gateway) {
         return Class::Martian;
+    }
+    if ip.next_header() != IpProtocol::Tcp {
+        return Class::NotTcp;
     }
     if u32_of(ip.dst_addr()) != own || ip.more_frags() || ip.frag_offset() != 0 {
         return Class::Other;

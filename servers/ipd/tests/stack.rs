@@ -433,3 +433,69 @@ fn martian_sources_are_dropped() {
     w.run_for(300_000, 10_000);
     assert!(matches!(w.nine.fs.stack.status(who, n, CAP), Ok(Ready::Now((Status::Listening, _)))));
 }
+
+/// IPv4 that is not TCP gets no answer from anyone, and IPv4 of any protocol from the box's own
+/// addresses is dropped before its protocol is looked at (QA D3-code-review-5, P2-1): without that,
+/// smoltcp answers UDP or an unknown protocol with an ICMP "protocol unreachable", so a spoofed
+/// source gets a reflection, and ipd's own address makes it ask ARP for itself. Every frame ipd
+/// sends is checked as it goes (TCP or ARP only, no ARP for its own), and none may be sent here.
+#[test]
+fn non_tcp_and_martian_datagrams_get_no_answer() {
+    use redoubt_ipd::fake::{datagram, echo_request};
+    use redoubt_ipd::stack::{Class, classify};
+    use smoltcp::wire::IpProtocol;
+    let mut w = World::new(64);
+    w.pump();
+    let before = w.wire.borrow().sent.len();
+    let net = redoubt_ipd::stack::Net { addr: ADDR, len: LEN, gateway: Some(GATEWAY), selfset: selfset() };
+    let protocols = [IpProtocol::Udp, IpProtocol::Icmp, IpProtocol::Unknown(99)];
+    let sources = [
+        ADDR,
+        ip(127, 0, 0, 1),
+        ip(0, 0, 0, 5),
+        SELF_EXTRA,
+        ip(10, 1, 255, 255),
+        LAN_HOST,
+        FAR_HOST,
+        GATEWAY,
+    ];
+    for protocol in protocols {
+        for src in sources {
+            let payload =
+                if protocol == IpProtocol::Icmp { echo_request(b"ping") } else { b"udp or not".to_vec() };
+            let frame = datagram(src, ADDR, protocol, &payload);
+            let class = classify(&frame, &net);
+            let martian = src != GATEWAY && (selfset().contains(src) || src == ADDR);
+            let expected = if martian { Class::Martian } else { Class::NotTcp };
+            assert_eq!(class, expected, "{protocol} from {src:#x}");
+            let now = w.now;
+            w.nine.fs.stack.ingress(&frame, now);
+            w.pump();
+        }
+    }
+    // TCP from the box's own addresses is martian too, and from the gateway it is not.
+    let syn = segment(ADDR, ADDR, &syn_to(8000));
+    assert_eq!(classify(&syn, &net), Class::Martian);
+    assert_eq!(classify(&segment(GATEWAY, ADDR, &syn_to(8000)), &net), Class::Syn { port: 8000 });
+    w.run_for(1_000_000, 100_000);
+    let sent = w.wire.borrow().sent.len();
+    assert_eq!(sent, before, "ipd answered a datagram that is not TCP, or one from its own addresses");
+}
+
+fn syn_to(port: u16) -> smoltcp::wire::TcpRepr<'static> {
+    use smoltcp::wire::{TcpControl, TcpRepr, TcpSeqNumber};
+    TcpRepr {
+        src_port: 42000,
+        dst_port: port,
+        control: TcpControl::Syn,
+        seq_number: TcpSeqNumber(1),
+        ack_number: None,
+        window_len: 1024,
+        window_scale: None,
+        max_seg_size: None,
+        sack_permitted: false,
+        sack_ranges: [None, None, None],
+        timestamp: None,
+        payload: &[],
+    }
+}
