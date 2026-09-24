@@ -1,5 +1,6 @@
 //! `/net` over 9P (NAMESPACES.md, What `ipd` serves in milestone 1), through the real skeleton
-//! (`NineServer::answer_in_place`, no system calls) over the stack and the peer of tests/common:
+//! (`NineServer::answer_in_place` through `World::answer`, which meters sockets as the program
+//! does; no system calls) over the stack and the peer of tests/common:
 //! the tree, per-connection sockets, `ctl` operations and their refusals, waiting reads and
 //! writes, `new_connection`, `grant` and `disconnect`.
 
@@ -55,8 +56,7 @@ enum R {
 fn rpc(w: &mut World, who: &Caller, body: Body<'_>) -> R {
     let mut buf = vec![0u8; MSIZE];
     Message { tag: 9, body }.encode(&mut buf).unwrap();
-    w.nine.fs.now = w.now;
-    match w.nine.answer_in_place(who, &mut buf) {
+    match w.answer(who, &mut buf) {
         Answer::Waiting => return R::Waiting,
         Answer::NoRoom => panic!("no room"),
         Answer::Replied => {}
@@ -282,20 +282,27 @@ fn a_listener_accepts_through_ctl() {
 #[test]
 fn clone_stops_at_the_buckets_socket_cap() {
     let mut w = World::new(64);
+    // One badge alone in its account's bucket gets half of it (answer 90): 6 of its 12 `State`
+    // units, sockets being paid in them (QA D3-code-review-5).
     let a = caller(ANY, 1, &[]);
-    for _ in 0..8 {
+    for _ in 0..6 {
         socket(&mut w, &a);
     }
     assert_eq!(walk(&mut w, &a, 1, 60, &["clone"]), R::Ok);
     assert_eq!(open(&mut w, &a, 60, mode::OREAD), R::Ok);
     assert_eq!(read(&mut w, &a, 60, 0), R::Err("too_many".into()));
-    // The listener badge has 20, but only as account 0.
+    // The listener badge has 20, as account 0 (a bucket of its own, with no shares), and then
+    // its socket cap stops it.
     let sshd = caller(LISTENER, 0, &[]);
-    for _ in 0..12 {
+    for _ in 0..20 {
         socket(&mut w, &sshd);
     }
+    assert_eq!(walk(&mut w, &sshd, 1, 60, &["clone"]), R::Ok);
+    assert_eq!(open(&mut w, &sshd, 60, mode::OREAD), R::Ok);
+    assert_eq!(read(&mut w, &sshd, 60, 0), R::Err("too_many".into()));
+    // With any other account it is the default, halved for a lone badge.
     let not_sshd = caller(LISTENER, 5, &[]);
-    for _ in 0..8 {
+    for _ in 0..6 {
         socket(&mut w, &not_sshd);
     }
     assert_eq!(walk(&mut w, &not_sshd, 1, 60, &["clone"]), R::Ok);
@@ -434,4 +441,75 @@ fn a_port_is_shared_with_new_connection_children_but_not_grants() {
     let j = socket(&mut w, &c);
     open_file(&mut w, &c, j, "ctl", 10, mode::ORDWR);
     assert_eq!(write(&mut w, &c, 10, &listen_op(22, 1)), R::Count(7));
+}
+
+/// How many sockets `who` can make before `clone` answers `too_many`.
+fn sockets_until_refused(w: &mut World, who: &Caller) -> usize {
+    if walk(w, who, 0, 1, &["tcp"]) != R::Ok && attach(w, who, 0) == R::Ok {
+        assert_eq!(walk(w, who, 0, 1, &["tcp"]), R::Ok);
+    }
+    let mut made = 0;
+    loop {
+        assert_eq!(walk(w, who, 1, 900, &["clone"]), R::Ok);
+        assert_eq!(open(w, who, 900, mode::OREAD), R::Ok);
+        let got = read(w, who, 900, 0);
+        assert_eq!(clunk(w, who, 900), R::Ok);
+        match got {
+            R::Data(_) => made += 1,
+            R::Err(e) if e == "too_many" => return made,
+            other => panic!("clone: {other:?}"),
+        }
+    }
+}
+
+/// Sockets are paid in the shared admission, so they have fair shares (answer 90; QA
+/// D3-code-review-5, P2-2): an agent sharing its sponsor's account takes at most half of the
+/// bucket's 12 units alone, and its sponsor, arriving second, still gets its own third.
+#[test]
+fn an_agent_cannot_take_all_its_sponsors_sockets() {
+    use redoubt_rt::server::{AdmitKey, Resource};
+    let mut w = World::new(64);
+    let agent = caller(ANY, 7, &[]);
+    let sponsor = caller(NARROW, 7, &[]);
+    assert_eq!(sockets_until_refused(&mut w, &agent), 6, "a lone badge takes half the bucket");
+    assert_eq!(sockets_until_refused(&mut w, &sponsor), 4, "the sponsor gets its share after the agent's");
+    let key = AdmitKey::of(&agent);
+    assert_eq!(w.nine.admission().held(key, Resource::State), 10);
+    assert_eq!(w.nine.admission().held_by(key, ANY, Resource::State), 6);
+    assert_eq!(w.nine.fs.stack.charged(key), 10);
+}
+
+/// A socket keeps its unit, and so its bucket, while it lingers after its owner let go of
+/// everything else (QA D3-code-review-5, P2-2): the bucket cannot be given to a newcomer while
+/// the socket still counts. The unit goes back once the stack removes the socket.
+#[test]
+fn a_lingering_socket_keeps_its_bucket() {
+    use redoubt_rt::server::{AdmitKey, Resource};
+    let mut w = World::new(64);
+    let _peer = w.peer.listen(9);
+    let who = caller(ANY, 8, &[]);
+    let key = AdmitKey::of(&who);
+    let n = socket(&mut w, &who);
+    open_file(&mut w, &who, n, "ctl", 10, mode::ORDWR);
+    assert_eq!(write(&mut w, &who, 10, &connect_op(LAN_HOST, 9)), R::Count(14));
+    w.run_for(200_000, 50_000);
+    assert!(matches!(read(&mut w, &who, 10, 0), R::Data(d) if d[0] == 2), "established");
+    // The peer goes quiet, and then the owner closes: the FIN is never answered, and the socket
+    // lingers, sending it again.
+    w.wire.borrow_mut().blackhole.push(9);
+    let close = op(net_ctl::Message::Close(net_ctl::Close {}));
+    assert_eq!(write(&mut w, &who, 10, &close), R::Count(close.len() as u32));
+    for fid in [10, 1, 0] {
+        assert_eq!(clunk(&mut w, &who, fid), R::Ok);
+    }
+    w.run_for(1_000_000, 100_000);
+    assert_eq!(w.nine.fids(&who), 0, "every fid is gone");
+    assert_eq!(w.nine.fs.stack.charged(key), 1, "the socket lingers");
+    assert_eq!(w.nine.admission().held(key, Resource::State), 1, "and so does its unit, and its bucket");
+    assert_eq!(w.nine.admission().keys(), 1);
+    // Past the linger deadline ipd resets it, removes it, and gives the unit back.
+    w.run_for(70_000_000, 1_000_000);
+    assert_eq!(w.nine.fs.stack.charged(key), 0);
+    assert_eq!(w.nine.admission().held(key, Resource::State), 0);
+    assert_eq!(w.nine.admission().keys(), 0, "the bucket is free again");
 }

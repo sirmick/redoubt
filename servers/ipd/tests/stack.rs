@@ -23,7 +23,7 @@ fn echo_once(w: &mut World, peer: smoltcp::iface::SocketHandle) {
 /// Connect, the ctl wait, bytes both ways, the peer's end, close.
 #[test]
 fn a_connection_carries_bytes_both_ways_and_ends() {
-    let mut w = World::new(64);
+    let mut w = World::unmetered(64);
     let listener = w.peer.listen(7);
     let me = caller(5, 1, &[]);
     let who = owner(&me);
@@ -63,7 +63,7 @@ fn a_connection_carries_bytes_both_ways_and_ends() {
 /// Behind the gateway: ipd asks ARP for the gateway, and only for it.
 #[test]
 fn a_far_host_is_reached_through_the_gateway() {
-    let mut w = World::new(64);
+    let mut w = World::unmetered(64);
     let listener = w.peer.listen(443);
     let who = owner(&caller(5, 1, &[]));
     let n = w.nine.fs.stack.allocate(who, 5, CAP).unwrap();
@@ -79,7 +79,7 @@ fn a_far_host_is_reached_through_the_gateway() {
 /// A write waits while the send buffer is full, and goes on once the peer has read.
 #[test]
 fn a_write_waits_while_the_send_buffer_is_full() {
-    let mut w = World::new(64);
+    let mut w = World::unmetered(64);
     let listener = w.peer.listen(9);
     let who = owner(&caller(5, 1, &[]));
     let n = w.nine.fs.stack.allocate(who, 5, CAP).unwrap();
@@ -123,7 +123,7 @@ fn a_write_waits_while_the_send_buffer_is_full() {
 /// each charged to the listener's owner, and the backlog refilled.
 #[test]
 fn a_listener_accepts_its_backlog_and_listens_again() {
-    let mut w = World::new(64);
+    let mut w = World::unmetered(64);
     let who = owner(&caller(22, 0, &[]));
     let n = w.nine.fs.stack.allocate(who, 22, CAP).unwrap();
     w.nine.fs.stack.listen(who, n, &listen_scope(22, 22), 22, 2, CAP).unwrap();
@@ -166,7 +166,7 @@ fn a_listener_accepts_its_backlog_and_listens_again() {
 /// listens again.
 #[test]
 fn a_half_open_connection_gives_its_slot_back() {
-    let mut w = World::new(64);
+    let mut w = World::unmetered(64);
     let who = owner(&caller(22, 0, &[]));
     let n = w.nine.fs.stack.allocate(who, 22, CAP).unwrap();
     w.nine.fs.stack.listen(who, n, &listen_scope(8000, 8000), 8000, 1, CAP).unwrap();
@@ -193,7 +193,7 @@ fn a_half_open_connection_gives_its_slot_back() {
 /// sees anything, so the peer sees no SYN at all.
 #[test]
 fn connects_outside_the_scope_or_to_the_box_are_refused_and_send_nothing() {
-    let mut w = World::new(64);
+    let mut w = World::unmetered(64);
     let who = owner(&caller(5, 1, &[]));
     let narrow = connect_scope(ip(10, 1, 9, 110), 32, 7, 7);
     let n = w.nine.fs.stack.allocate(who, 5, CAP).unwrap();
@@ -239,7 +239,7 @@ fn connects_outside_the_scope_or_to_the_box_are_refused_and_send_nothing() {
 /// Every socket's number is its owner's own; another owner's is not there at all.
 #[test]
 fn numbers_are_per_connection_and_invisible_to_others() {
-    let mut w = World::new(64);
+    let mut w = World::unmetered(64);
     let (a, b) = (owner(&caller(5, 1, &[])), owner(&caller(6, 2, &[])));
     assert_eq!(w.nine.fs.stack.allocate(a, 5, CAP), Ok(0));
     assert_eq!(w.nine.fs.stack.allocate(a, 5, CAP), Ok(1));
@@ -258,7 +258,7 @@ fn numbers_are_per_connection_and_invisible_to_others() {
 /// A bucket's sockets stop at its cap, and a backlog must fit it too.
 #[test]
 fn sockets_stop_at_the_buckets_cap() {
-    let mut w = World::new(64);
+    let mut w = World::unmetered(64);
     let who = owner(&caller(5, 1, &[]));
     for _ in 0..3 {
         w.nine.fs.stack.allocate(who, 5, 3).unwrap();
@@ -269,7 +269,7 @@ fn sockets_stop_at_the_buckets_cap() {
     assert_eq!(w.nine.fs.stack.listen(other, n, &anywhere(), 5000, 4, 3), Err(CtlError::TooMany));
     assert_eq!(w.nine.fs.stack.listen(other, n, &anywhere(), 5000, 3, 3), Ok(()));
     // And the box-wide limit: every bucket at its cap.
-    let mut small = World::new(2);
+    let mut small = World::unmetered(2);
     let x = owner(&caller(7, 3, &[]));
     small.nine.fs.stack.allocate(x, 7, 8).unwrap();
     small.nine.fs.stack.allocate(x, 7, 8).unwrap();
@@ -280,7 +280,7 @@ fn sockets_stop_at_the_buckets_cap() {
 /// group joins, and a port in use by a connection is `in_use` to anyone.
 #[test]
 fn a_listened_port_is_its_groups() {
-    let mut w = World::new(64);
+    let mut w = World::unmetered(64);
     let (a, a2, b) =
         (owner(&caller(22, 0, &[])), owner(&caller(1 << 63 | 5, 0, &[])), owner(&caller(23, 0, &[])));
     let n = w.nine.fs.stack.allocate(a, 22, CAP).unwrap();
@@ -324,7 +324,7 @@ fn local_port(w: &World, addr: u32, port: u16) -> u16 {
 /// Ephemeral ports are drawn from 49152-65535 and never repeat among live sockets.
 #[test]
 fn ephemeral_ports_are_unique() {
-    let mut w = World::new(200);
+    let mut w = World::unmetered(200);
     let _l = w.peer.listen(7);
     let who = owner(&caller(5, 1, &[]));
     for _ in 0..40 {
@@ -355,7 +355,7 @@ fn ephemeral_ports_are_unique() {
 #[test]
 fn a_port_in_use_is_drawn_again() {
     use redoubt_ipd::stack::PORT_TRIES;
-    let mut w = World::new(200);
+    let mut w = World::unmetered(200);
     let _l = w.peer.listen(7);
     let who = owner(&caller(5, 1, &[]));
     let start = w.rng.get();
@@ -387,7 +387,7 @@ fn a_port_in_use_is_drawn_again() {
 /// `disconnect` aborts every socket of the connection and gives its charges back.
 #[test]
 fn a_disconnect_aborts_and_returns_the_charges() {
-    let mut w = World::new(64);
+    let mut w = World::unmetered(64);
     let listener = w.peer.listen(7);
     let who = owner(&caller(1 << 63 | 9, 1, &[]));
     let n = w.nine.fs.stack.allocate(who, 9, CAP).unwrap();
@@ -407,7 +407,7 @@ fn a_disconnect_aborts_and_returns_the_charges() {
 /// within 60 s plus smoltcp's own timers.
 #[test]
 fn a_lingering_socket_is_bounded() {
-    let mut w = World::new(64);
+    let mut w = World::unmetered(64);
     let _listener = w.peer.listen(7);
     let who = owner(&caller(5, 1, &[]));
     let n = w.nine.fs.stack.allocate(who, 5, CAP).unwrap();
@@ -425,7 +425,7 @@ fn a_lingering_socket_is_bounded() {
 /// stack works again once `info` does.
 #[test]
 fn no_link_is_unreachable_until_it_comes_back() {
-    let mut w = World::new(64);
+    let mut w = World::unmetered(64);
     // Two: the connect made while the link was down goes out too once it is back.
     let (_l1, _l2) = (w.peer.listen(7), w.peer.listen(7));
     let who = owner(&caller(5, 1, &[]));
@@ -453,7 +453,7 @@ fn no_link_is_unreachable_until_it_comes_back() {
 /// socket sees it.
 #[test]
 fn martian_sources_are_dropped() {
-    let mut w = World::new(64);
+    let mut w = World::unmetered(64);
     let who = owner(&caller(22, 0, &[]));
     let n = w.nine.fs.stack.allocate(who, 22, CAP).unwrap();
     w.nine.fs.stack.listen(who, n, &anywhere(), 8000, 2, CAP).unwrap();
@@ -479,7 +479,7 @@ fn non_tcp_and_martian_datagrams_get_no_answer() {
     use redoubt_ipd::fake::{datagram, echo_request};
     use redoubt_ipd::stack::{Class, classify};
     use smoltcp::wire::IpProtocol;
-    let mut w = World::new(64);
+    let mut w = World::unmetered(64);
     w.pump();
     let before = w.wire.borrow().sent.len();
     let net = redoubt_ipd::stack::Net { addr: ADDR, len: LEN, gateway: Some(GATEWAY), selfset: selfset() };

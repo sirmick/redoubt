@@ -8,6 +8,15 @@
 //! removes it. A socket its owner has closed, aborted or disconnected is no longer visible and
 //! lingers at most [`LINGER_US`] more before `ipd` resets it.
 //!
+//! # What a socket costs its owner (QA D3-code-review-5, P2-2)
+//! Each socket is one `State` unit in the 9P skeleton's shared admission, in its owner's bucket
+//! and share, so sockets get the library's buckets, fair shares (an agent cannot take all of its
+//! sponsor's) and worst-case sizing. The stack cannot reach the admission from inside a request,
+//! so the server reserves units for the caller around each request ([`Stack::open_room`]); a
+//! socket is made only from that reservation ([`Meter`]), records the share it was charged to, and
+//! gives its unit back only when it is removed ([`Stack::take_freed`]), so a bucket stays held
+//! while its sockets linger. Outside a request nothing can make a socket.
+//!
 //! # Initial sequence numbers (answer 174, decision 11)
 //! smoltcp draws an ISN from its interface's PRNG, which is seeded only when an interface is
 //! made. So the main interface never makes one: each active open is connected through the
@@ -178,6 +187,8 @@ struct Entry {
     /// When it was closed, aborted or disconnected: it is reset at this deadline if smoltcp
     /// has not ended it by then.
     linger_until: Option<u64>,
+    /// The share its socket is charged to (the owner's badge when unmetered).
+    share: u64,
 }
 
 impl Entry {
@@ -185,6 +196,25 @@ impl Entry {
     fn listens_on(&self, port: u16) -> bool {
         self.linger_until.is_none() && matches!(self.kind, Kind::Listener { port: p, .. } if p == port)
     }
+}
+
+/// Units the server reserved for one request's caller: sockets it makes are paid from these.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Room {
+    pub key: AdmitKey,
+    pub share: u64,
+    pub left: usize,
+}
+
+/// Whether and from what the stack may make sockets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Meter {
+    /// Between requests: no socket can be made.
+    Closed,
+    /// During a request: from this reservation only.
+    Open(Room),
+    /// Host tests of the stack alone, with no admission around it: sockets cost nothing.
+    Off,
 }
 
 /// The stack and its socket table.
@@ -199,6 +229,9 @@ pub struct Stack<N: Netif, E: Entropy> {
     next_id: u64,
     /// The most sockets that may exist at once, every bucket at its cap.
     max_sockets: usize,
+    meter: Meter,
+    /// (bucket, share) of each metered socket removed, for the server to give back.
+    freed: Vec<(AdmitKey, u64)>,
 }
 
 fn instant(us: u64) -> Instant { Instant::from_micros(i64::try_from(us).unwrap_or(i64::MAX)) }
@@ -220,8 +253,48 @@ impl<N: Netif, E: Entropy> Stack<N, E> {
             table: Vec::new(),
             next_id: 1,
             max_sockets,
+            meter: Meter::Closed,
+            freed: Vec::new(),
         }
     }
+
+    /// Host tests of the stack on its own: sockets are not metered.
+    pub fn meter_off(&mut self) { self.meter = Meter::Off; }
+
+    /// The server reserved `room` for the request it is about to serve.
+    pub fn open_room(&mut self, room: Room) {
+        if self.meter != Meter::Off {
+            self.meter = Meter::Open(room);
+        }
+    }
+
+    /// The request is served: what is left of its reservation, for the server to give back.
+    pub fn close_room(&mut self) -> Option<Room> {
+        match self.meter {
+            Meter::Open(room) => {
+                self.meter = Meter::Closed;
+                Some(room)
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether and from what sockets can be made now.
+    pub fn meter(&self) -> Meter { self.meter }
+
+    /// Every bucket some socket is charged to.
+    pub fn charged_keys(&self) -> Vec<AdmitKey> {
+        let mut keys: Vec<AdmitKey> = Vec::new();
+        for e in self.table.iter().filter(|e| e.kind.handle().is_some()) {
+            if !keys.contains(&e.owner.key) {
+                keys.push(e.owner.key);
+            }
+        }
+        keys
+    }
+
+    /// The (bucket, share) of every metered socket removed since last asked.
+    pub fn take_freed(&mut self) -> Vec<(AdmitKey, u64)> { core::mem::take(&mut self.freed) }
 
     pub fn net(&self) -> &Net { &self.net }
 
@@ -315,9 +388,15 @@ impl<N: Netif, E: Entropy> Stack<N, E> {
         n
     }
 
-    /// Whether one more socket may be charged to `key`, whose bucket's cap is `cap`.
+    /// Whether `more` sockets may be charged to `key`, whose bucket's cap is `cap`: under that
+    /// cap and the whole stack's, and paid for by the request's reservation.
     fn room(&self, key: AdmitKey, cap: usize, more: usize) -> bool {
-        self.charged(key) + more <= cap && self.live() + more <= self.max_sockets
+        let paid = match self.meter {
+            Meter::Off => true,
+            Meter::Closed => more == 0,
+            Meter::Open(room) => room.key == key && room.left >= more,
+        };
+        paid && self.charged(key) + more <= cap && self.live() + more <= self.max_sockets
     }
 
     fn new_socket(&mut self) -> SocketHandle {
@@ -328,11 +407,23 @@ impl<N: Netif, E: Entropy> Stack<N, E> {
         self.sockets.add(socket)
     }
 
-    fn push(&mut self, owner: Owner, group: u64, n: Option<u32>, kind: Kind) -> u64 {
+    fn push(&mut self, owner: Owner, group: u64, n: Option<u32>, kind: Kind, share: u64) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
-        self.table.push(Entry { id, owner, group, n, kind, linger_until: None });
+        self.table.push(Entry { id, owner, group, n, kind, linger_until: None, share });
         id
+    }
+
+    /// Takes `more` sockets' units from the reservation (already checked by [`Stack::room`]);
+    /// the share they are charged to.
+    fn pay(&mut self, owner: Owner, more: usize) -> u64 {
+        match &mut self.meter {
+            Meter::Open(room) => {
+                room.left -= more;
+                room.share
+            }
+            _ => owner.badge,
+        }
     }
 
     /// Reading `clone`: a new socket, charged to `owner`'s bucket (cap `cap`), numbered for it.
@@ -342,7 +433,8 @@ impl<N: Netif, E: Entropy> Stack<N, E> {
         }
         let n = self.lowest_free(owner);
         let handle = self.new_socket();
-        self.push(owner, group, Some(n), Kind::Fresh(handle));
+        let share = self.pay(owner, 1);
+        self.push(owner, group, Some(n), Kind::Fresh(handle), share);
         Ok(n)
     }
 
@@ -447,12 +539,15 @@ impl<N: Netif, E: Entropy> Stack<N, E> {
         }
         let listener = self.table[i].id;
         self.table[i].kind = Kind::Listener { port, backlog };
-        let mut handles = vec![first];
+        // The first keeps the share `clone` charged it to; the rest are paid now.
+        let first_share = self.table[i].share;
+        let share = self.pay(owner, usize::from(backlog) - 1);
+        let mut handles = vec![(first, first_share)];
         for _ in 1..backlog {
-            handles.push(self.new_socket());
+            handles.push((self.new_socket(), share));
         }
-        for handle in handles {
-            self.push(owner, group, None, Kind::Backlog { listener, handle, half_open_since: None });
+        for (handle, share) in handles {
+            self.push(owner, group, None, Kind::Backlog { listener, handle, half_open_since: None }, share);
             self.relisten(handle, port);
         }
         Ok(())
@@ -573,7 +668,14 @@ impl<N: Netif, E: Entropy> Stack<N, E> {
                 break;
             }
             let handle = self.new_socket();
-            self.push(owner, group, None, Kind::Backlog { listener: id, handle, half_open_since: None });
+            let share = self.pay(owner, 1);
+            self.push(
+                owner,
+                group,
+                None,
+                Kind::Backlog { listener: id, handle, half_open_since: None },
+                share,
+            );
             self.relisten(handle, port);
         }
     }
@@ -803,6 +905,9 @@ impl<N: Netif, E: Entropy> Stack<N, E> {
             if gone {
                 if let Some(h) = e.kind.handle() {
                     self.sockets.remove(h);
+                    if self.meter != Meter::Off {
+                        self.freed.push((e.owner.key, e.share));
+                    }
                 }
                 self.table.swap_remove(i);
             } else {

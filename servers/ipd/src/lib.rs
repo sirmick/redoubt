@@ -8,9 +8,9 @@
 //! 1. **A connection reaches only what its scope allows**, IP prefixes and ports, and **never the box's own
 //!    addresses**, whatever the scope says ([`scope`]). Both are checked before smoltcp sees the connect.
 //! 2. **A scope only narrows**: a `grant` can never widen one or add `listen` to it.
-//! 3. **A client can exhaust only its own bucket** (CONTAINMENT.md, the shared server library): fids, minted
-//!    connections and parked calls through the skeleton's admission, sockets by `ipd`'s own count against the
-//!    same bucket's cap.
+//! 3. **A client can exhaust only its own bucket and share** (CONTAINMENT.md, the shared server library):
+//!    fids, minted connections, parked calls and sockets all through the skeleton's admission, a socket as
+//!    one `State` unit held until the socket is gone ([`server::open_sockets`]).
 //! 4. **Every ISN is drawn from the kernel's CSPRNG**, one fresh seed per connection, and never from
 //!    smoltcp's own PRNG ([`stack`]).
 //! 5. **No link fault stops `ipd`**: without a working `netd` it answers `unreachable` and asks again.
