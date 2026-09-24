@@ -1549,34 +1549,33 @@ fn fail_all(
     }
 }
 
-/// I13: every blocking call returns by its timeout. Answer every thread whose deadline is at or
-/// before `now`, earliest first (at an equal instant, in (pid, tid) order, the walk's order), each
-/// with `Timeout`; return the earliest deadline still to come (`u64::MAX` for none).
-///
-/// Answering one can change others (a `pump` delivers, a server takes calls again), so each is
-/// found afresh; a thread answered is no longer waiting and is not found again.
-pub fn expire_due(ss: &mut SystemServices, mm: &mut MemoryManager, now: u64) -> u64 {
-    loop {
-        let mut due: Option<(u64, PID, TID)> = None;
-        let mut next = u64::MAX;
-        find_thread(mm, |mm, pid, tid| {
-            let s = slot(mm, pid, tid);
-            if s.wait == Wait::None || s.deadline == u64::MAX {
-                return None::<()>;
+/// I13: the timeout due first at `now`: the earliest deadline at or before `now` (at an equal
+/// deadline, the first in (pid, tid) order, the walk's order), and the earliest deadline still to
+/// come (`u64::MAX` for none). One walk of every thread.
+pub fn next_timeout(mm: &MemoryManager, now: u64) -> (Option<(u64, PID, TID)>, u64) {
+    let mut due: Option<(u64, PID, TID)> = None;
+    let mut next = u64::MAX;
+    find_thread(mm, |mm, pid, tid| {
+        let s = slot(mm, pid, tid);
+        if s.wait == Wait::None || s.deadline == u64::MAX {
+            return None::<()>;
+        }
+        if s.deadline <= now {
+            if due.is_none_or(|(d, _, _)| s.deadline < d) {
+                due = Some((s.deadline, pid, tid));
             }
-            if s.deadline <= now {
-                // Walk order is (pid, tid) ascending, so the first at a deadline wins ties.
-                if due.is_none_or(|(d, _, _)| s.deadline < d) {
-                    due = Some((s.deadline, pid, tid));
-                }
-            } else {
-                next = next.min(s.deadline);
-            }
-            None
-        });
-        let Some((_, pid, tid)) = due else { return next };
-        fail_wait(ss, mm, pid, tid, Error::Timeout);
-    }
+        } else {
+            next = next.min(s.deadline);
+        }
+        None
+    });
+    (due, next)
+}
+
+/// The blocking call of `(pid, tid)` reached its timeout: it returns `Timeout` (I13), with what
+/// it waited for unwound (a queued message's buffer back, a taken call abandoned).
+pub fn time_out(ss: &mut SystemServices, mm: &mut MemoryManager, pid: PID, tid: TID) {
+    fail_wait(ss, mm, pid, tid, Error::Timeout);
 }
 
 /// After `reply` freed an open call, the process may be able to take calls again (R4a) and an

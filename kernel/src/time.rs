@@ -3,22 +3,31 @@
 //! The kernel-owned timer (RESOURCES.md, The timer; KERNEL-SPEC.md, I13 and R12).
 //!
 //! One hardware timer, always armed for the earliest of what is due: a blocking call's timeout
-//! (I13). Nothing in userspace programs it and there is no timer interrupt for userspace; user
-//! mode reads the counter directly (`rdtime`).
+//! (I13) or a budget's deadline. Nothing in userspace programs it and there is no timer interrupt
+//! for userspace; user mode reads the counter directly (`rdtime`).
 //!
 //! # Expiry
-//! [`expire_due`] answers every timeout that has passed, earliest first (at an equal instant,
-//! in (pid, tid) order), with `Timeout`. It runs at every kernel entry from user mode and at
-//! every timer or interrupt trap, before anything else looks at the entering process, so a
-//! deadline that has passed beats any operation that enters later (a reply after a caller's
-//! timeout finds the call already abandoned). The kernel's own `SwitchTo` entry never expires:
+//! [`expire_due`] handles everything due at or before now, earliest first: a timeout returns
+//! `Timeout` (`message.rs`); a deadline destroys its budget (`budget::destroy_subtree`, R10). At an
+//! equal instant timeouts come first, then budgets by id; timeouts among themselves in (pid, tid)
+//! order. The order matters: a caller whose call its server took, and whose timeout falls with
+//! the server budget's deadline, gets `Timeout` with its lend consumed, not `Dead` with it
+//! returned.
+//!
+//! It runs at every kernel entry but the kernel's own `SwitchTo`, first, before anything reads
+//! the entering process, so a deadline that has passed beats any operation that enters later.
 //! `kmain` expires, then picks, then switches, with no kernel entry in between.
 //!
+//! While a legacy interrupt callback runs, budget deadlines wait (timeouts still expire: they
+//! only wake): the process it interrupted must be there to go back to. They are handled as the
+//! callback returns (INTERIM, until WP-K6 removes callbacks).
+//!
 //! # Hints
-//! Finding what is due means walking every thread (`message.rs`). The walk is skipped while the
-//! cached earliest deadline is still in the future. The hint is only ever early: `mark` lowers it
-//! as a call blocks, and a cancelled wait (a reply, a death) leaves it where it was, which costs
-//! at most one early interrupt and a walk that recomputes it. So no deadline is missed.
+//! Finding what is due means walking every thread (`message.rs`) and the list of budgets with a
+//! deadline (`budget.rs`). Both are skipped while the cached earliest deadlines are still in the
+//! future. A hint is only ever early: a blocking call or a new budget lowers it, and a cancelled
+//! wait or a destroyed budget leaves it where it was, which costs at most one early interrupt and
+//! a walk that recomputes it. So nothing is missed.
 //!
 //! Microseconds are the ABI's unit (KERNEL-SPEC.md, Constants): deadlines are kept in them, and
 //! converted to timer ticks rounding up, so an interrupt never comes before its deadline.
@@ -34,11 +43,13 @@ pub const NEVER: u64 = u64::MAX;
 struct Timer {
     /// No thread's timeout is earlier than this.
     threads: u64,
+    /// No budget's deadline is earlier than this.
+    budgets: u64,
     /// What the hardware is armed for, in microseconds.
     armed: u64,
 }
 
-static TIMER: KernelCell<Timer> = KernelCell::new(Timer { threads: NEVER, armed: NEVER });
+static TIMER: KernelCell<Timer> = KernelCell::new(Timer { threads: NEVER, budgets: NEVER, armed: NEVER });
 
 /// Monotonic microseconds since boot.
 pub fn now_us() -> u64 { timer::now_us() }
@@ -49,10 +60,19 @@ pub fn note_timeout(deadline: u64) {
     rearm();
 }
 
-/// Arm the timer for the earliest thing due, if that changed.
+/// A budget was created with `deadline`: make sure the timer comes by then (at once, for one
+/// already past).
+pub fn note_budget_deadline(deadline: u64) {
+    TIMER.with(|t| t.budgets = t.budgets.min(deadline));
+    rearm();
+}
+
+/// Arm the timer for the earliest thing due, if that changed. Budget deadlines wait while a
+/// legacy callback runs (module docs).
 pub fn rearm() {
+    let callback = crate::arch::irq::in_callback();
     TIMER.with(|t| {
-        let target = t.threads;
+        let target = if callback { t.threads } else { t.threads.min(t.budgets) };
         if target != t.armed {
             t.armed = target;
             timer::set(if target == NEVER { u64::MAX } else { timer::us_to_ticks(target) });
@@ -60,15 +80,51 @@ pub fn rearm() {
     });
 }
 
-/// Answer every timeout that has passed (I13), earliest first, then re-arm for the next one.
-pub fn expire_due(ss: &mut SystemServices, mm: &mut MemoryManager) {
+/// The budget deadline due first at `now`, if budget deadlines may be handled: (deadline, id,
+/// frame).
+fn due_budget(now: u64) -> Option<(u64, u64, u32)> {
+    MemoryManager::with(|mm| mm.deadlines().filter(|(d, _, _)| *d <= now).min())
+}
+
+/// The process a destruction happens under: the one running (whose call or run this entry
+/// interrupted), if it is not the kernel.
+fn running() -> Option<redoubt_abi::PID> {
+    let pid = crate::arch::current_pid();
+    (pid.get() != 1).then_some(pid)
+}
+
+/// Handle everything due (module docs), then re-arm for the next thing. Takes the scheduler
+/// only: destroying a budget borrows the memory manager in phases (`process.rs`, Locks).
+pub fn expire_due(ss: &mut SystemServices) {
     let now = now_us();
-    if TIMER.with(|t| t.threads > now) {
+    let callback = crate::arch::irq::in_callback();
+    if TIMER.with(|t| t.threads > now && (callback || t.budgets > now)) {
         return;
     }
-    let next = crate::message::expire_due(ss, mm, now);
+    let mut next_timeout;
+    loop {
+        let (timeout, next) = MemoryManager::with(|mm| crate::message::next_timeout(mm, now));
+        next_timeout = next;
+        let budget = if callback { None } else { due_budget(now) };
+        // Earliest first; at an equal instant, the timeout.
+        let timeout_first = match (timeout, budget) {
+            (None, None) => break,
+            (Some((td, _, _)), Some((bd, _, _))) => td <= bd,
+            (t, _) => t.is_some(),
+        };
+        if let (true, Some((_, pid, tid))) = (timeout_first, timeout) {
+            MemoryManager::with_mut(|mm| crate::message::time_out(ss, mm, pid, tid));
+        } else if let Some((_, _, frame)) = budget {
+            MemoryManager::with_mut(|mm| mm.mark_dying(frame));
+            crate::budget::destroy_subtree(ss, frame, running());
+        }
+    }
+    let next_budget = MemoryManager::with(|mm| {
+        mm.deadlines().map(|(d, _, _)| d).filter(|d| callback || *d > now).min().unwrap_or(NEVER)
+    });
     TIMER.with(|t| {
-        t.threads = next;
+        t.threads = next_timeout;
+        t.budgets = next_budget;
         // The hardware fired (or will, for what just passed); arm afresh.
         t.armed = 0;
     });
@@ -82,5 +138,5 @@ pub fn on_interrupt() {
     rearm();
 }
 
-/// Expire at a kernel entry: both managers, borrowed in the kernel's order.
-pub fn expire_at_entry() { SystemServices::with_mut(|ss| MemoryManager::with_mut(|mm| expire_due(ss, mm))); }
+/// Expire at a kernel entry.
+pub fn expire_at_entry() { SystemServices::with_mut(expire_due); }

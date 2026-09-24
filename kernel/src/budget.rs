@@ -33,6 +33,7 @@ use crate::arch::process::{INITIAL_TID, MAX_PROCESS_COUNT, MAX_THREAD};
 use crate::handle::{BudgetRef, Handle, HandleTable, Object};
 use crate::kframe;
 use crate::mem::MemoryManager;
+use crate::services::SystemServices;
 
 /// A budget, named by the index of its frame in the page-ownership table.
 pub type BudgetFrame = u32;
@@ -65,8 +66,11 @@ pub struct Budget {
     pub labels: [u64; MAX_LABELS],
     pub nlabels: usize,
     pub account: u64,
-    /// Absolute µs since boot; `FOREVER` for none. Recorded here; WP-K5 enforces it.
+    /// Absolute µs since boot; `FOREVER` for none. When it passes, the kernel destroys the
+    /// budget (`time.rs`).
     pub deadline: u64,
+    /// The next budget on the kernel's list of budgets with a deadline (`Objects::deadlines`).
+    pub next_deadline: Option<BudgetFrame>,
     pub pages_limit: u64,
     pub pages_used: u64,
     pub processes_limit: u32,
@@ -135,12 +139,21 @@ pub struct Objects {
     next_seq: u64,
     /// The highest frame ever given to a kernel object: where a scan for budgets stops.
     pub high_frame: u32,
+    /// The first of the budgets with a deadline, linked through their frames
+    /// (`Budget::next_deadline`), so finding the next deadline never scans every frame.
+    deadlines: Option<BudgetFrame>,
     accounts: [Account; MAX_PROCESS_COUNT],
 }
 
 impl Objects {
     pub const fn new() -> Objects {
-        Objects { next_id: 1, next_seq: 1, high_frame: 0, accounts: [Account::NONE; MAX_PROCESS_COUNT] }
+        Objects {
+            next_id: 1,
+            next_seq: 1,
+            high_frame: 0,
+            deadlines: None,
+            accounts: [Account::NONE; MAX_PROCESS_COUNT],
+        }
     }
 }
 
@@ -181,6 +194,8 @@ impl MemoryManager {
             nlabels: (w(6) as usize).min(MAX_LABELS),
             account: w(7),
             deadline: w(8),
+            // Word 15 is the next deadline budget's frame plus one; 0 for none.
+            next_deadline: (w(15) as u32).checked_sub(1),
             pages_limit: w(9),
             pages_used: w(10),
             processes_limit: w(11) as u32,
@@ -208,6 +223,7 @@ impl MemoryManager {
         words[12] = u64::from(b.processes_used);
         words[13] = u64::from(b.weight_limit);
         words[14] = u64::from(b.weight_carved);
+        words[15] = b.next_deadline.map_or(0, |f| u64::from(f) + 1);
         words[16..].copy_from_slice(&b.labels);
         for (i, word) in words.iter().enumerate() {
             kframe::write(phys, i * 8, *word);
@@ -546,8 +562,12 @@ impl MemoryManager {
             processes_used: 0,
             weight_limit: spec.weight,
             weight_carved: 0,
+            next_deadline: None,
         };
         self.store(frame, &b);
+        if spec.deadline != FOREVER {
+            self.link_deadline(frame);
+        }
         if let (Some(p), Some(mut pb)) = (parent, parent_budget) {
             pb.pages_used += BUDGET_PAGES + spec.pages;
             pb.processes_used += spec.processes;
@@ -610,10 +630,16 @@ impl MemoryManager {
         // after the carve (the caller's budget may be the parent); if it cannot, undo.
         let stamp = BudgetRef { frame: caller, id: self.budget(caller).id };
         let handle = Handle { object: Object::Budget(BudgetRef { frame: child, id }), badge: 0, stamp };
-        self.install_handle(pid, handle).inspect_err(|_| {
+        let installed = self.install_handle(pid, handle).inspect_err(|_| {
             self.return_carve(child);
+            self.unlink_deadline(child);
             self.free_object_frame(child);
-        })
+        })?;
+        if spec.deadline != FOREVER {
+            // A deadline already past is destroyed at the next kernel entry.
+            crate::time::note_budget_deadline(spec.deadline);
+        }
+        Ok(installed)
     }
 
     /// `budget_usage(h) -> counters`, after decoding.
@@ -662,6 +688,13 @@ impl MemoryManager {
     /// (`process_is_doomed`), and finishes with [`MemoryManager::destroy_marked`].
     pub fn destroy_begin(&mut self, pid: PID, h: u32) -> Result<BudgetFrame, Error> {
         let top = self.budget_handle(pid, h)?;
+        self.mark_dying(top);
+        Ok(top)
+    }
+
+    /// Mark `top` and everything below it dying (R10's first step, for `budget_destroy` and for
+    /// a deadline alike).
+    pub fn mark_dying(&mut self, top: BudgetFrame) {
         for frame in 0..=self.objects.high_frame {
             if self.is_budget_frame(frame) && self.below(frame, top) {
                 let mut b = self.budget(frame);
@@ -669,7 +702,6 @@ impl MemoryManager {
                 self.store(frame, &b);
             }
         }
-        Ok(top)
     }
 
     /// Whether `pid` lives in a budget that is being destroyed.
@@ -697,9 +729,49 @@ impl MemoryManager {
         self.return_carve(top);
         for frame in 0..=self.objects.high_frame {
             if self.is_budget_frame(frame) && self.budget(frame).dying {
+                self.unlink_deadline(frame);
                 self.free_object_frame(frame);
             }
         }
+    }
+
+    // --- Deadlines ---------------------------------------------------------------------------------
+
+    fn link_deadline(&mut self, frame: BudgetFrame) {
+        let mut b = self.budget(frame);
+        b.next_deadline = self.objects.deadlines;
+        self.store(frame, &b);
+        self.objects.deadlines = Some(frame);
+    }
+
+    /// Take `frame` off the deadline list, if it is on it.
+    fn unlink_deadline(&mut self, frame: BudgetFrame) {
+        let next = self.budget(frame).next_deadline;
+        if self.objects.deadlines == Some(frame) {
+            self.objects.deadlines = next;
+            return;
+        }
+        let mut cur = self.objects.deadlines;
+        while let Some(c) = cur {
+            let mut cb = self.budget(c);
+            if cb.next_deadline == Some(frame) {
+                cb.next_deadline = next;
+                self.store(c, &cb);
+                return;
+            }
+            cur = cb.next_deadline;
+        }
+    }
+
+    /// Every live budget with a deadline, as (deadline, id, frame): the list, not a scan.
+    pub fn deadlines(&self) -> impl Iterator<Item = (u64, u64, BudgetFrame)> + '_ {
+        let mut cur = self.objects.deadlines;
+        core::iter::from_fn(move || {
+            let f = cur?;
+            let b = self.budget(f);
+            cur = b.next_deadline;
+            Some((b.deadline, b.id, f))
+        })
     }
 
     /// Give `b`'s parent back what `b` carved from it, and `b`'s own page (I10).
@@ -713,4 +785,45 @@ impl MemoryManager {
         pb.weight_carved = pb.weight_carved.checked_sub(b.weight_limit).expect("I5: carve underflow");
         self.store(p, &pb);
     }
+}
+
+/// R10 for the subtree marked dying at `top` (`MemoryManager::mark_dying`), for `budget_destroy`
+/// and for a deadline alike: every process in it is killed (each exit notice `killed`), the
+/// caller last if it is one of them; the process objects charged to it are freed; messages in
+/// flight are failed or abandoned and its endpoints and devices destroyed; then its handles are
+/// swept and its frames freed. `caller` is the process whose call or whose interrupted run this
+/// is, if any. Returns whether the caller is gone (it must not be resumed).
+pub fn destroy_subtree(ss: &mut SystemServices, top: BudgetFrame, caller: Option<PID>) -> bool {
+    let mut caller_doomed = false;
+    for index in 1..=MAX_PROCESS_COUNT {
+        let Some(victim) = PID::new(index as u8) else { continue };
+        if !MemoryManager::with(|mm| mm.process_is_doomed(victim)) {
+            continue;
+        }
+        if Some(victim) == caller {
+            caller_doomed = true;
+        } else {
+            // Each gets an exit notice with cause `killed`, unless its process object is
+            // charged to a budget in the same doomed subtree (`process.rs`).
+            crate::process::killed(ss, victim);
+        }
+    }
+    if let (true, Some(caller)) = (caller_doomed, caller) {
+        crate::process::killed(ss, caller);
+    }
+    // R10 reaches the process objects charged to the subtree: each is freed, with no notice,
+    // its process killed first if it still runs.
+    crate::process::budgets_dying(ss);
+    // The caller may run outside this subtree but have its process object charged to it.
+    // R10 killed it through its creator above; never return registers to that dead PID.
+    if let Some(caller) = caller {
+        caller_doomed |= MemoryManager::with(|mm| mm.budget_of(caller).is_none());
+    }
+    // R10 reaches messages in flight: the endpoints the subtree owns are destroyed, and every
+    // message sent through a handle stamped with it fails its sender with `Dead`.
+    MemoryManager::with_mut(|mm| {
+        crate::message::budgets_dying(ss, mm);
+        mm.destroy_marked(top);
+    });
+    caller_doomed
 }

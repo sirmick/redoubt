@@ -134,7 +134,7 @@ pub extern "C" fn kmain() {
         // Deadlines first (`time.rs`): answering them makes threads runnable. This is the kernel's
         // own loop, not an entry; nothing enters between here and the switch below.
         #[cfg(baremetal)]
-        SystemServices::with_mut(|ss| mem::MemoryManager::with_mut(|mm| crate::time::expire_due(ss, mm)));
+        SystemServices::with_mut(crate::time::expire_due);
 
         #[cfg(feature = "debug-print")]
         let last_pid = pid;

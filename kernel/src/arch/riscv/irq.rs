@@ -84,6 +84,10 @@ static PREVIOUS_PAIR: KernelCell<Option<(PID, TID)>> = KernelCell::new(None);
 /// must pair this with exactly one `take_isr_return_pair`.
 pub unsafe fn set_isr_return_pair(pid: PID, tid: TID) { PREVIOUS_PAIR.with(|p| *p = Some((pid, tid))); }
 
+/// Whether a legacy interrupt callback is running (on borrowed time, with a process to resume
+/// after it). Budget deadlines wait until it has finished (`time.rs`).
+pub fn in_callback() -> bool { PREVIOUS_PAIR.with(|p| p.is_some()) }
+
 /// Finish a pending ISR. Return `false` if there was none.
 fn finish_isr() -> bool {
     if !HANDLING_IRQ.swap(false, Ordering::Relaxed) {
@@ -366,9 +370,10 @@ pub extern "C" fn trap_handler(
 
         RiscvException::InstructionPageFault(RETURN_FROM_ISR, _offset) => {
             finish_isr();
-            ArchProcess::with_current_mut(|process| {
-                crate::arch::syscall::resume(current_pid().get() == 1, process.current_thread())
-            });
+            // Budget deadlines that fell due while the callback ran were held back; the
+            // callback is over, so answer them now, then run whatever is current.
+            crate::time::expire_at_entry();
+            resume_current();
         }
 
         // Handle faulted instruction pages, because we can now actually have instruction pages that are

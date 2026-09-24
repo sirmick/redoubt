@@ -195,40 +195,12 @@ fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
     }
 }
 
-/// `budget_destroy(h)` (R10): mark the subtree, kill every process in it (the caller last, if it
-/// is one of them), then sweep the handles and free the budgets.
+/// `budget_destroy(h)` (R10): mark the subtree, then destroy it (`budget::destroy_subtree`), the
+/// caller last if it is in it.
 fn budget_destroy(pid: PID, _tid: TID, h: u32) -> Result<Option<Return>, Error> {
     SystemServices::with_mut(|ss| {
         let top = MemoryManager::with_mut(|mm| mm.destroy_begin(pid, h))?;
-        let mut caller_doomed = false;
-        for index in 1..=crate::arch::process::MAX_PROCESS_COUNT {
-            let Some(victim) = PID::new(index as u8) else { continue };
-            if !MemoryManager::with(|mm| mm.process_is_doomed(victim)) {
-                continue;
-            }
-            if victim == pid {
-                caller_doomed = true;
-            } else {
-                // Each gets an exit notice with cause `killed`, unless its process object is
-                // charged to a budget in the same doomed subtree (`process.rs`).
-                crate::process::killed(ss, victim);
-            }
-        }
-        if caller_doomed {
-            crate::process::killed(ss, pid);
-        }
-        // R10 reaches the process objects charged to the subtree: each is freed, with no notice,
-        // its process killed first if it still runs.
-        crate::process::budgets_dying(ss);
-        // The caller may run outside this subtree but have its process object charged to it.
-        // R10 killed it through its creator above; never return registers to that dead PID.
-        caller_doomed |= MemoryManager::with(|mm| mm.budget_of(pid).is_none());
-        // R10 reaches messages in flight: the endpoints the subtree owns are destroyed, and
-        // every message sent through a handle stamped with it fails its sender with `Dead`.
-        MemoryManager::with_mut(|mm| {
-            crate::message::budgets_dying(ss, mm);
-            mm.destroy_marked(top);
-        });
+        let caller_doomed = crate::budget::destroy_subtree(ss, top, Some(pid));
         Ok(if caller_doomed { None } else { Some(Return::Nothing) })
     })
 }
