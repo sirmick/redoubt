@@ -10,8 +10,8 @@ use redoubt_rt::server::{Cost, Limits};
 
 use crate::uart::Uart;
 
-/// Input bytes held for readers. Beyond this the UART's own FIFO holds the line back, which is
-/// the right place for it to stop: nothing here rewrites what someone already typed.
+/// Input bytes held for readers. Beyond this [`Console::drain`] still empties the UART's FIFO but
+/// drops what it takes, so a flood keeps what was typed first.
 pub const MAX_INPUT: usize = 1024;
 
 /// What admission lets clients hold, sized so that every bucket at its cap fits [`BUDGET`]
@@ -34,16 +34,19 @@ pub struct Cons;
 pub struct Console {
     uart: Uart,
     input: VecDeque<u8>,
-    /// Bytes the ring had no room for. Only a diagnostic; the FIFO holds the line back first.
+    /// Bytes taken from the FIFO that the ring had no room for, and so were dropped. No program
+    /// path reports it; only tests read it, through [`Console::dropped`].
     dropped: u64,
 }
 
 impl Console {
     pub fn new(uart: Uart) -> Console { Console { uart, input: VecDeque::new(), dropped: 0 } }
 
-    /// Takes what the UART has, up to [`crate::uart::FIFO`] bytes and the ring's limit. Called
-    /// before parking a read and on every wake-up from the interrupt thread, so a byte is never
-    /// left in the FIFO with a reader waiting for it.
+    /// Takes what the UART has, up to [`crate::uart::FIFO`] bytes, and keeps each one unless the
+    /// ring already holds [`MAX_INPUT`] bytes or cannot reserve room for it, in which case the byte
+    /// is dropped and counted; how many it kept. Called before parking a read and at the top of
+    /// every turn of the serving loop, wake-ups from the interrupt thread included, so a byte is
+    /// never left in the FIFO with a reader waiting for it.
     ///
     /// The bound is the receive FIFO's depth, which is all a 16550 can be holding: a device
     /// that says "data ready" for ever — broken, or an FPGA card's line stuck low — then costs
@@ -66,6 +69,7 @@ impl Console {
     /// Whether a read can be answered now.
     pub fn has_input(&self) -> bool { !self.input.is_empty() }
 
+    /// How many input bytes [`Console::drain`] has dropped.
     pub fn dropped(&self) -> u64 { self.dropped }
 
     /// The UART, for the program's start-up banner and for tests.
