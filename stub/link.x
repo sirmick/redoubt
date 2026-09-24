@@ -37,3 +37,18 @@ SECTIONS
 
     /DISCARD/ : { *(.eh_frame) *(.eh_frame_hdr) }
 }
+
+/* Every launcher calls process_start(..., STUB_ENTRY, ...) (PACKAGES.md step 4): if `_start`
+ * ever landed anywhere else in `.text`, every child would run whatever code the linker put at
+ * STUB_ENTRY instead, silently. `_start`'s `.text.init` section (main.rs) is `KEEP`'d first, so
+ * this should always hold; the assert catches a future linker-layout change that breaks it.
+ */
+ASSERT(_start == ORIGIN(RAM), "_start must be the stub's first byte (STUB_ENTRY)");
+
+/* The module doc's "no `.bss`/`.data` of its own" claim (top of this file) was only a comment,
+ * not enforced: a `.bss` is NOLOAD and silently dropped by `objcopy`, so a future writable
+ * static here would compile clean and only fail once faulted into (this page is read-only
+ * executable) -- catch it at link time instead.
+ */
+ASSERT(SIZEOF(.data) == 0, "the stub must have no .data (see this file's module doc)");
+ASSERT(SIZEOF(.bss) == 0, "the stub must have no .bss (see this file's module doc)");

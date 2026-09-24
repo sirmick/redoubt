@@ -17,12 +17,21 @@
 #![no_std]
 
 use elf::ElfBytes;
-use elf::abi::{EM_RISCV, PF_R, PF_W, PF_X, PT_LOAD};
+use elf::abi::{EM_RISCV, ET_EXEC, PF_R, PF_W, PF_X, PT_LOAD};
 use elf::endian::LittleEndian;
 use elf::file::Class;
 use elf::segment::ProgramHeader;
 use redoubt_sys::{MemFlags, PAGE_SIZE};
 use redoubt_wire::proto::startup::Message;
+
+/// A generous but small bound on `e_phnum` (elf crate honours `PN_XNUM`, so an attacker can
+/// otherwise claim a program header count up to roughly `image_len / 56`, close to
+/// `MAX_IMAGE_LEN / 56`, about 9.5 million entries): `plan`'s segment-vs-segment overlap check is
+/// `O(K*N)` in the number of headers `N` by design (host-testable, no allocator), so an
+/// unbounded `N` lets a hostile image burn CPU proportional to its own header count times its
+/// accepted `PT_LOAD` count (round-2 red team P3-3). No honest program needs anywhere near this
+/// many segments.
+const MAX_PHNUM: usize = 64;
 
 /// The ELF class this build's stub accepts: `usize`-width segment addresses only fit this
 /// target's own class, and the stub links for one width at a time (`libs/abi`'s
@@ -106,6 +115,16 @@ pub enum BadImage {
     /// `e_entry` does not fall inside any segment this file maps executable: the stub would jump
     /// into memory the child never mapped, or into data.
     EntryNotExecutable,
+    /// `e_phnum` (after resolving `PN_XNUM`) is over [`MAX_PHNUM`].
+    TooManySegments,
+    /// A segment's page range touches page 0, or reaches past `STUB_ENTRY`
+    /// (MEMORY-LAYOUT.md: "their segments must end below `0x1FF0_0000`"): checked directly,
+    /// rather than relying only on `exclude` naming the stub's own current region correctly.
+    OutOfLinkRange,
+    /// `e_type` is not `ET_EXEC` (PACKAGES.md: "No dynamic linking... fixed at build time"): an
+    /// `ET_DYN` image would map unrelocated at whatever `p_vaddr` its segments claim, most often
+    /// page 0.
+    WrongType,
 }
 
 /// One validated `PT_LOAD` segment, ready to be mapped.
@@ -147,8 +166,18 @@ pub fn plan<'a, E>(
     if elf.ehdr.e_machine != EM_RISCV || elf.ehdr.class != ELF_CLASS {
         return Err(Either::A(BadImage::WrongMachine));
     }
+    // Every native Redoubt binary is a fixed-address, non-relocatable static (PACKAGES.md: "No
+    // dynamic linking"); refuse anything else (e.g. `ET_DYN`) before trusting its `p_vaddr`s.
+    if elf.ehdr.e_type != ET_EXEC {
+        return Err(Either::A(BadImage::WrongType));
+    }
     let entry = usize::try_from(elf.ehdr.e_entry).map_err(|_| Either::A(BadImage::Overflow))?;
     let segments = elf.segments().ok_or(Either::A(BadImage::Malformed))?;
+    // `segments.len()` already resolves `PN_XNUM` (elf crate): cap it before any loop below scans
+    // it, rather than only bounding the `PT_LOAD` count the loop below actually maps.
+    if segments.len() > MAX_PHNUM {
+        return Err(Either::A(BadImage::TooManySegments));
+    }
     let loads = || segments.iter().filter(|s| s.p_type == PT_LOAD && s.p_memsz > 0);
     let mut entry_executable = false;
     for (i, header) in loads().enumerate() {
@@ -220,6 +249,13 @@ fn validate<'a>(
     // silently computing a wrong (too-small) `page_end`, which would let a segment through with a
     // page range shorter than the bytes it actually claims.
     let page_end = page_align_up(seg_end)?;
+    // MEMORY-LAYOUT.md: "Programs link at 0x1_0000, and their segments must end below
+    // 0x1FF0_0000" -- page 0 is never a valid link address either. Checked directly against
+    // `STUB_ENTRY` rather than only through `exclude`, which only ever names the stub's own
+    // *current* region (`main.rs`'s `stub_region`), not everything above it.
+    if first_page < PAGE_SIZE || page_end > STUB_ENTRY {
+        return Err(BadImage::OutOfLinkRange);
+    }
     let image_end = image_addr.checked_add(image.len()).ok_or(BadImage::Overflow)?;
     let image_pages = (image_addr & !(PAGE_SIZE - 1), page_align_up(image_end)?);
     if overlaps(first_page, page_end, image_pages.0, image_pages.1)
@@ -260,6 +296,18 @@ fn validate<'a>(
 
 fn overlaps(a_start: usize, a_end: usize, b_start: usize, b_end: usize) -> bool {
     a_start < b_end && b_start < a_end
+}
+
+/// True when `[image_addr, image_addr + image_len)` overlaps any of `exclude` (the stub's own
+/// region, the startup page): `plan` already refuses a *segment* that overlaps them
+/// (`validate`'s `exclude` check), but nothing stopped the image range itself from doing so.
+/// `main.rs::run` naming `image_addr == STUB_ENTRY` would make its own later "free the image"
+/// unmap remove the stub's own mapped code out from under itself before the jump (round-2 red
+/// team P3-6). `image_len` is not re-validated here (the caller already ran it through
+/// [`read_image`], which bounds it and its overflow).
+pub fn image_in_bounds(image_addr: usize, image_len: usize, exclude: &[(usize, usize)]) -> bool {
+    let image_end = image_addr.saturating_add(image_len);
+    !exclude.iter().any(|&(start, end)| overlaps(image_addr, image_end, start, end))
 }
 
 /// Rounds `addr` up to the next page boundary, refusing rather than wrapping when that would
@@ -519,5 +567,61 @@ mod tests {
         image[112..120].copy_from_slice(&3u64.to_le_bytes()); // not a power of two
         let result = plan::<()>(&image, 0x2000_0000, &[], |_| Ok(()));
         assert_eq!(result, Err(Either::A(BadImage::BadAlign)));
+    }
+
+    #[test]
+    fn plan_refuses_more_than_max_phnum_segments() {
+        let code = [0u8; 4];
+        let segments: Vec<_> =
+            (0..MAX_PHNUM + 1).map(|_| (PF_R | PF_X, 0x1_0000, code.as_slice(), 4096)).collect();
+        let image = elf64(0x1_0000, &segments);
+        let result = plan::<()>(&image, 0x2000_0000, &[], |_| Ok(()));
+        assert_eq!(result, Err(Either::A(BadImage::TooManySegments)));
+    }
+
+    #[test]
+    fn plan_refuses_a_segment_touching_page_zero() {
+        let code = [0u8; 4];
+        // vaddr 0: MEMORY-LAYOUT.md's link range starts at 0x1_0000, never page 0.
+        let image = elf64(0, &[(PF_R | PF_X, 0, &code, 4096)]);
+        let result = plan::<()>(&image, 0x2000_0000, &[], |_| Ok(()));
+        assert_eq!(result, Err(Either::A(BadImage::OutOfLinkRange)));
+    }
+
+    #[test]
+    fn plan_refuses_a_segment_reaching_into_the_stub_region() {
+        let code = [0u8; 4];
+        let vaddr = STUB_ENTRY as u64 - 100;
+        // memsz alone pushes this segment's (page-rounded) end past STUB_ENTRY.
+        let image = elf64(vaddr, &[(PF_R | PF_X, vaddr, &code, 200)]);
+        let result = plan::<()>(&image, 0x2000_0000, &[], |_| Ok(()));
+        assert_eq!(result, Err(Either::A(BadImage::OutOfLinkRange)));
+    }
+
+    #[test]
+    fn plan_refuses_a_non_exec_type() {
+        let code = [0u8; 4];
+        let mut image = elf64(0x1_0000, &[(PF_R | PF_X, 0x1_0000, &code, 4096)]);
+        image[16..18].copy_from_slice(&3u16.to_le_bytes()); // ET_DYN, not ET_EXEC
+        let result = plan::<()>(&image, 0x2000_0000, &[], |_| Ok(()));
+        assert_eq!(result, Err(Either::A(BadImage::WrongType)));
+    }
+
+    #[test]
+    fn image_in_bounds_refuses_an_image_overlapping_the_stub() {
+        let stub_region = (STUB_ENTRY, STUB_ENTRY + 0x4_0000);
+        assert!(!image_in_bounds(STUB_ENTRY, 0x1000, &[stub_region]));
+    }
+
+    #[test]
+    fn image_in_bounds_refuses_an_image_overlapping_the_startup_page() {
+        let startup_page = (0x3000_0000, 0x3000_1000);
+        assert!(!image_in_bounds(0x2FFF_F000, 0x2000, &[startup_page]));
+    }
+
+    #[test]
+    fn image_in_bounds_accepts_a_disjoint_image() {
+        let exclude = [(STUB_ENTRY, STUB_ENTRY + 0x4_0000), (0x3000_0000, 0x3000_1000)];
+        assert!(image_in_bounds(0x2000_0000, 0x1000, &exclude));
     }
 }

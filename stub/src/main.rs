@@ -19,17 +19,27 @@ use stub::{Either, STUB_ENTRY, process_exit, read_image};
 mod exit {
     /// No startup page, one that does not parse, or one naming no image.
     pub const BAD_STARTUP: u32 = 110;
-    /// The ELF did not parse, a segment failed its bounds/flags check, or `map_fixed` refused it
-    /// (including the WP-K5a shim, which always does): the parent (or its package) handed this
-    /// child a hostile image, and only this child pays for it (PACKAGES.md: "A malicious ELF can
-    /// at most compromise the process it was going to become").
+    /// The ELF did not parse, or a segment failed one of `stub::plan`'s own bounds/flags checks:
+    /// the parent (or its package) handed this child a hostile image, and only this child pays
+    /// for it (PACKAGES.md: "A malicious ELF can at most compromise the process it was going to
+    /// become").
     pub const BAD_IMAGE: u32 = 111;
+    /// `map_fixed` refused a segment `stub::plan` already accepted -- today this is always the
+    /// **WP-K5a shim** (`map_fixed`, below), which fails closed unconditionally until the real
+    /// syscall lands; kept distinct from `BAD_IMAGE` so this case (a system limitation, not a
+    /// hostile image) is not indistinguishable from one on target (round-2 red team P3-7).
+    pub const MAP_UNAVAILABLE: u32 = 112;
     /// The stub itself panicked (matches `redoubt_rt::start::exit::PANIC`, though this binary
     /// never links `redoubt-rt`: any caller inspecting exit codes sees the same value either way).
     pub const PANIC: u32 = 101;
 }
 
+/// `.text.init` (`link.x`) is the only section `KEEP`'d first in `.text`, and `link.x` asserts
+/// this symbol lands at `ORIGIN(RAM)` (`STUB_ENTRY`): without this section, the linker is free
+/// to place `_start` anywhere in `.text`, so every launcher's `process_start(..., STUB_ENTRY,
+/// ...)` would jump into whatever code happened to land first instead (round-2 red team P1-1).
 #[no_mangle]
+#[link_section = ".text.init"]
 pub extern "C" fn _start(arg: usize) -> ! {
     match run(arg) {
         Ok(entry) => jump(entry, arg),
@@ -49,16 +59,25 @@ fn run(arg: usize) -> Result<usize, u32> {
         Ok(Some(image)) => image,
         Ok(None) | Err(_) => return Err(exit::BAD_STARTUP),
     };
-    // SAFETY: the parent's `process_map` step (PACKAGES.md step 4) put exactly this range in
-    // this process's own memory, read-write, before `process_start`; `read_image` already checked
-    // `image_addr + image_len` does not overflow (INIT.md, Startup block). A parent that named a
-    // range it did not actually map only faults this read, which hurts nobody but this child
-    // (PACKAGES.md).
-    let image = unsafe { core::slice::from_raw_parts(image_addr as *const u8, image_len) };
 
     let startup_page = (arg, arg + PAGE_SIZE);
     let stub_region = (STUB_ENTRY & !(PAGE_SIZE - 1), STUB_ENTRY + stub_len());
     let exclude = [startup_page, stub_region];
+
+    // The image range itself, not just a segment inside it, must not overlap the stub or the
+    // startup page (round-2 red team P3-6): otherwise the raw read below could alias the stub's
+    // own mapped code, and the later "free the image" unmap could remove it out from under this
+    // process before the jump.
+    if !stub::image_in_bounds(image_addr, image_len, &exclude) {
+        return Err(exit::BAD_STARTUP);
+    }
+    // SAFETY: the parent's `process_map` step (PACKAGES.md step 4) put exactly this range in
+    // this process's own memory, read-write, before `process_start`; `read_image` already checked
+    // `image_addr + image_len` does not overflow (INIT.md, Startup block), and the check above
+    // rules out this range aliasing the stub's own mapped code or the startup page. A parent that
+    // named a range it did not actually map only faults this read, which hurts nobody but this
+    // child (PACKAGES.md).
+    let image = unsafe { core::slice::from_raw_parts(image_addr as *const u8, image_len) };
 
     // PACKAGES.md step 5: segments are mapped at their link addresses with `map_fixed`, before
     // the stub maps anything else; a segment overlapping the stub, the startup page or the image
@@ -66,7 +85,11 @@ fn run(arg: usize) -> Result<usize, u32> {
     let entry =
         stub::plan(image, image_addr, &exclude, |segment| map_segment(&segment)).map_err(|e| match e {
             Either::A(_bad_image) => exit::BAD_IMAGE,
-            Either::B(_map_error) => exit::BAD_IMAGE,
+            // The map_fixed shim always refuses (below): while it does, every mapping failure
+            // here comes from it, not from a hostile segment `plan` already accepted, so it gets
+            // its own code rather than being indistinguishable from BAD_IMAGE (round-2 red team
+            // P3-7).
+            Either::B(_map_error) => exit::MAP_UNAVAILABLE,
         })?;
 
     // PACKAGES.md, Launching a process: "free the image". Every segment's bytes are now copied
