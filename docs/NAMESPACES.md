@@ -217,7 +217,9 @@ UDP, raw or ICMP sockets, and no fragment reassembly, so a fragment is dropped.
 - `/tcp/N/ctl`: a write is one `net_ctl` operation (below). A read returns `state: u32` and
   `n: u32`, and **waits** while a connect is in progress or a listener has nothing accepted
   (60 s at most, then `timeout`). States: 1 connecting, 2 established, 3 closing, 4 closed,
-  5 listening; for a listener that accepted, `n` is the new connection's number.
+  5 listening; for a listener that accepted, `n` is the new connection's number. A socket
+  neither connected nor listening yet reads as closed. The offset is not looked at: each read is
+  the state now, or the next accepted connection.
 - `/tcp/N/data`: the byte stream. A read waits while there is nothing to read (0 is the peer's
   end); a write waits while the send buffer is full (`Write::Wait`, above). Either waits 30 s at
   most, then answers `timeout`, and the client asks again: they wait on the network, not on a
@@ -258,7 +260,8 @@ holder, and one waiting read of `ctl` returns each accepted connection as a new 
 half-open connection (SYN received, no answer) is given 3 s, then the listener listens again. A
 port belongs to the connection that listened on it first, and to the connections minted from it
 by `new_connection("")`; any other gets `in_use`, even one granted from the same root.
-`unreachable` means `ipd` has no link.
+`unreachable` means `ipd` has no link, or the kernel gave no random word for the connection's
+sequence number (there is no fallback).
 
 **The capability.** A connection's scope is at most 8 rules, each a **connect** rule (an IPv4
 prefix and a port range) or a **listen** rule (a port range). As a `bytes` field (WIRE.md,
@@ -282,7 +285,10 @@ scope is canonical: host bits zero, `lo` ≤ `hi`.
   loopback, where a forwarded port leads back to the guest's `sshd`, and the resolver to the
   host's. An address that routes back to the box from outside (a NAT's hairpin) is refused only
   if the manifest lists it; each `ipd`'s list must name every address of every `ipd` on the box.
-  Inbound TCP claiming to come from `ipd`'s own address, `127/8` or `0/8` is dropped.
+  Inbound TCP claiming to come from any of the box's own addresses but the gateway (`ipd`'s own,
+  `127/8` and `0/8` among them) is dropped: it is spoofed or the box talking to itself, and
+  answering it would mean asking ARP for one of the box's own addresses. The gateway is kept
+  because QEMU's forwarded connections arrive from it.
 
 <!-- wire: ipd ninep -->
 | Opcode | Kind | Message | Fields | Reply |

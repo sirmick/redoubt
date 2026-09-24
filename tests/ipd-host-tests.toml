@@ -1,0 +1,6 @@
+description = "ipd on the host (answer 174): strict arguments and sizing; scopes, grants that only narrow and the box's own addresses, swept; the stack end to end against a second smoltcp stack (connect, listen and accept, half-open slots, write waits, refusals that send nothing, ports, caps, disconnect, linger, no link, martian sources); one CSPRNG seed per ISN; /net over the 9P skeleton; the whole program on the fake kernel (labelled callers get nothing and hold no bucket, grant, parking and abandonment); the 9P conformance vectors; and seeded sweeps of the fuzz targets"
+kind = "host-tests"
+# Every frame ipd sends in these tests is checked as it goes: no SYN to the box's own addresses,
+# ARP only for the gateway among them, nothing but TCP. These do not establish boot integration:
+# the tests/net rig does that. Fuzz targets: servers/ipd/fuzz (frames, session, args).
+packages = ["redoubt-ipd"]

@@ -132,6 +132,14 @@ max_unsafe = 7
 max_undocumented = 0
 
 [[budget]]
+# WP-D3 (answer 174): ipd forbids unsafe code; smoltcp and its dependencies are vendored third-party
+# code outside this count (vendor/README.md: pinned by checksum, heapless's Vec and LinearMap read).
+name = "ipd (the TCP/IP stack; /net over 9P)"
+paths = ["servers/ipd/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
 # WP-R4: both crates forbid unsafe code. consoled uses the runtime's Registers for MMIO.
 name = "bootfsd and consoled (the first two 9P servers)"
 paths = ["servers/bootfsd/src", "servers/consoled/src"]
