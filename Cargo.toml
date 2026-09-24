@@ -24,6 +24,7 @@ members = [
   "servers/consoled",
   "servers/blkd",
   "servers/netd",
+  "servers/ipd",
   "stub",
   "tests/programs",
   "tools/testbench",
