@@ -269,6 +269,14 @@ impl MemoryManager {
         Ok(index)
     }
 
+    /// A frame for the kernel itself (the test-only trace ring), taken at boot before the budget
+    /// tree counts what the kernel keeps.
+    #[cfg(feature = "sched-trace")]
+    pub fn kernel_frame(&mut self) -> Result<usize, redoubt_abi::Error> {
+        let index = self.alloc_frame(crate::services::KERNEL_PID)?;
+        Ok(self.ram_start + index * PAGE_SIZE)
+    }
+
     /// A zeroed frame for a kernel object, owned by `OBJECT_OWNER`. The caller charges it to the
     /// budget the cost table names. `OutOfMemory` only if RAM itself is exhausted.
     #[cfg(baremetal)]

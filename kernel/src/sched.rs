@@ -372,14 +372,15 @@ pub fn preempt(ss: &mut SystemServices, tid: TID) {
 /// The queue's raw events, for the bench's independent rank oracle (`tools/testbench`,
 /// `sched_oracle`), in test builds only (feature `sched-trace`; a default build compiles none of
 /// it: a per-pick record of every budget is a cross-principal channel no production kernel may
-/// have). A bounded ring in the kernel's own RAM region (so its records are compact), printed at
-/// `system_reset`. It records what the queue did, never why: no tie key. Each record: its
-/// sequence number, the kernel entry (reconcile) it belongs to, the event, the budget's id, and
-/// the low 64 bits of its pass after the event (a pass reaches 2^64 only after centuries of
-/// slices).
+/// have). A bounded ring in frames the kernel takes for itself at boot, before the budget tree
+/// counts what is left ([`trace::init`]), printed at `system_reset`. It records what the queue
+/// did, never why: no tie key. Each record: its sequence number, the kernel entry (reconcile) it
+/// belongs to, the event, the budget's id, and the low 64 bits of its pass after the event (a pass
+/// reaches 2^64 only after centuries of slices).
 #[cfg(feature = "sched-trace")]
 pub mod trace {
     use crate::cell::KernelCell;
+    use crate::mem::MemoryManager;
 
     /// A budget woke into the queue, was requeued behind its equals, left the queue, had its pass
     /// changed, or was picked.
@@ -388,46 +389,57 @@ pub mod trace {
     pub const LEFT: u8 = b'D';
     pub const PASS: u8 = b'P';
     pub const PICK: u8 = b'K';
+    /// A destruction (R10) began and ended: the top's id, and the time in µs in the pass field.
+    pub const R10_BEGIN: u8 = b'X';
+    pub const R10_END: u8 = b'Y';
 
-    /// 160 KiB of the kernel's 512 KiB RAM region, in a test build only.
-    const CAP: usize = 10240;
-
-    #[derive(Clone, Copy)]
-    struct Rec {
-        pass: u64,
-        entry: u32,
-        /// The budget's id (below 2^24 in any test run) and the event, in its low byte.
-        id_kind: u32,
-    }
+    /// Frames the ring takes (2 MiB), and the records they hold: four words each.
+    const PAGES: usize = 512;
+    const PER_PAGE: usize = redoubt_abi::arch::PAGE_SIZE / 32;
+    const CAP: usize = PAGES * PER_PAGE;
 
     struct Ring {
-        recs: [Rec; CAP],
+        pages: [usize; PAGES],
         n: usize,
         dropped: u64,
-        entry: u32,
+        entry: u64,
     }
 
-    static RING: KernelCell<Ring> = KernelCell::new(Ring {
-        recs: [Rec { pass: 0, entry: 0, id_kind: 0 }; CAP],
-        n: 0,
-        dropped: 0,
-        entry: 0,
-    });
+    static RING: KernelCell<Ring> = KernelCell::new(Ring { pages: [0; PAGES], n: 0, dropped: 0, entry: 0 });
+
+    /// Take the ring's frames, zeroed (at boot, before `boot_budgets` counts what the kernel
+    /// keeps).
+    pub fn init(mm: &mut MemoryManager) {
+        RING.with(|r| {
+            for page in r.pages.iter_mut() {
+                *page = mm.kernel_frame().expect("sched-trace: no RAM for the trace ring");
+                crate::kframe::zero(*page);
+            }
+        });
+    }
 
     /// A reconcile begins: the records that follow belong to a new kernel entry.
-    pub fn entry() { RING.with(|r| r.entry = r.entry.wrapping_add(1)); }
+    pub fn entry() { RING.with(|r| r.entry += 1); }
 
     pub fn record(kind: u8, id: u64, pass: u128) {
         RING.with(|r| {
-            if r.n < CAP {
-                let entry = r.entry;
-                r.recs[r.n] = Rec { pass: pass as u64, entry, id_kind: (id as u32) << 8 | u32::from(kind) };
+            if r.n < CAP && r.pages[0] != 0 {
+                let (page, at) = (r.pages[r.n / PER_PAGE], (r.n % PER_PAGE) * 32);
+                for (k, word) in [pass as u64, r.entry, id, u64::from(kind)].iter().enumerate() {
+                    crate::kframe::write(page, at + k * 8, *word);
+                }
                 r.n += 1;
             } else {
                 r.dropped += 1;
             }
         });
     }
+
+    /// A destruction begins or ends (`budget::destroy_subtree`).
+    pub fn r10(kind: u8, top: u64) { record(kind, top, u128::from(crate::time::now_us())); }
+
+    /// The object frames a destruction walks (after its `X`).
+    pub const R10_FRAMES: u8 = b'Z';
 
     /// A destroyed child's work moved to its parent: every operand of the rule and its result,
     /// as a group of nine records the oracle recomputes (`L` parent pass before, `l` child pass,
@@ -465,9 +477,10 @@ pub mod trace {
     /// Print the ring (at `system_reset`, before the machine goes). A drop fails the oracle.
     pub fn dump() {
         RING.with(|r| {
-            for (seq, rec) in r.recs[..r.n].iter().enumerate() {
-                let (id, kind) = (rec.id_kind >> 8, rec.id_kind as u8 as char);
-                println!("SCHED-TRACE {} {} {} {} {:x}", seq, rec.entry, kind, id, rec.pass);
+            for seq in 0..r.n {
+                let (page, at) = (r.pages[seq / PER_PAGE], (seq % PER_PAGE) * 32);
+                let w = |k: usize| crate::kframe::read(page, at + k * 8);
+                println!("SCHED-TRACE {} {} {} {} {:x}", seq, w(1), w(3) as u8 as char, w(2), w(0));
             }
             println!("SCHED-TRACE-END {} dropped {}", r.n, r.dropped);
         });

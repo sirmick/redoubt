@@ -71,6 +71,10 @@ pub unsafe extern "C" fn init(
     });
     SystemServices::with_mut(|system_services| system_services.init_from_memory(init_offset, &args));
 
+    // Test builds only: the scheduling trace's ring, before the budget tree counts free RAM.
+    #[cfg(feature = "sched-trace")]
+    crate::mem::MemoryManager::with_mut(crate::sched::trace::init);
+
     // The budget tree, with the loader's processes in `system` (budget.rs, `boot_budgets`).
     crate::mem::MemoryManager::with_mut(|mm| mm.boot_budgets());
 

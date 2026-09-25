@@ -17,6 +17,15 @@
 //! + child remainder; the parent becomes max(its pass, floor) + W / its weight, keeping its
 //! remainder only if it was not below the floor, the remainders carried.
 //!
+//! It does not only trust the passes it is given. It keeps its own **floor**, the queue's lowest
+//! pass, never lowered (so it holds while the queue is empty) and raised after a reconcile's wakes,
+//! as the kernel's is, and requires every wake's pass to be at least that floor; and it requires
+//! every budget's pass never to fall.
+//!
+//! Each destruction (R10) is bracketed by `X` and `Y` records carrying the time in µs in the pass
+//! field; the check reports their durations, and a case can bound their p99
+//! (`post_check = "sched_oracle r10_p99_us=30000"`).
+//!
 //! A trace that is malformed, incomplete, lost records or holds no pick is rejected: a check that
 //! saw nothing proves nothing.
 
@@ -62,7 +71,7 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
             return Err(bad());
         }
         let kind = f[2].chars().next().ok_or_else(bad)?;
-        if f[2].len() != 1 || !"WRDPKLlefrqwAa".contains(kind) {
+        if f[2].len() != 1 || !"WRDPKLlefrqwAaXYZ".contains(kind) {
             return Err(bad());
         }
         records.push(Record {
@@ -123,23 +132,62 @@ fn check_lift(records: &[Record]) -> Result<(usize, bool), String> {
     Ok((LIFT.len(), work / wp > 0 && pb > f))
 }
 
-/// Check every pick in `records` against the four clauses, and every lift against the rule:
-/// (picks, lifts, lifts a `max` rule would have got wrong) checked.
-pub fn check(records: &[Record]) -> Result<(usize, usize, usize), String> {
+/// What a check covered.
+#[derive(Debug, Default)]
+pub struct Summary {
+    pub picks: usize,
+    pub lifts: usize,
+    /// Lifts a `max` rule would have got wrong (a leading parent, work to move).
+    pub telling: usize,
+    /// Each destruction's duration, µs, in trace order.
+    pub r10_us: Vec<u64>,
+    /// The most object frames present at a destruction's start (R10 walks them all).
+    pub r10_frames: u64,
+}
+
+/// Check every pick in `records` against the four clauses, the floor and every pass's
+/// monotonicity, and every lift against the rule.
+pub fn check(records: &[Record]) -> Result<Summary, String> {
     let mut queued: BTreeMap<u64, (u128, Key)> = BTreeMap::new();
+    let mut last_pass: BTreeMap<u64, u128> = BTreeMap::new();
+    let mut floor: u128 = 0;
+    let mut open_r10: Option<(u64, u128)> = None;
     let mut requeues: i128 = 0;
-    let mut picks = 0;
-    let (mut lifts, mut telling) = (0, 0);
+    let mut sum = Summary::default();
     let mut i = 0;
     while i < records.len() {
         let r = &records[i];
         i += 1;
+        // A budget's pass never falls (the records that carry one).
+        if "WRDPK".contains(r.kind) {
+            if last_pass.get(&r.id).is_some_and(|p| r.pass < *p) {
+                return Err(format!(
+                    "record {}: budget {}'s pass fell to {:#x} from {:#x}",
+                    r.seq, r.id, r.pass, last_pass[&r.id]
+                ));
+            }
+            last_pass.insert(r.id, r.pass);
+        }
+        if r.kind == 'W' && r.pass < floor {
+            return Err(format!("record {}: budget {} woke at pass {:#x}, below the floor {floor:#x}", r.seq, r.id, r.pass));
+        }
         match r.kind {
+            'X' => {
+                if let Some((id, _)) = open_r10 {
+                    return Err(format!("record {}: a destruction began inside budget {id}'s", r.seq));
+                }
+                open_r10 = Some((r.id, r.pass));
+            }
+            'Z' => sum.r10_frames = sum.r10_frames.max(r.pass as u64),
+            'Y' => match open_r10.take() {
+                Some((id, t)) if id == r.id => sum.r10_us.push(r.pass.saturating_sub(t) as u64),
+                _ => return Err(format!("record {}: budget {}'s destruction ended without beginning", r.seq, r.id)),
+            },
             'L' => {
                 let (used, tells) = check_lift(&records[i - 1..])?;
                 i += used - 1;
-                lifts += 1;
-                telling += usize::from(tells);
+                sum.lifts += 1;
+                sum.telling += usize::from(tells);
             }
             'l' | 'e' | 'f' | 'r' | 'q' | 'w' | 'A' | 'a' => {
                 return Err(format!("record {}: a lift record outside a lift group", r.seq));
@@ -181,24 +229,62 @@ pub fn check(records: &[Record]) -> Result<(usize, usize, usize), String> {
                         want.and_then(rank)
                     ));
                 }
-                picks += 1;
+                sum.picks += 1;
             }
             _ => unreachable!("parse admits only these kinds"),
         }
+        // The floor: the lowest queued pass, never lowered. The kernel raises it after a reconcile's
+        // wakes, not between them (they all wake against the floor as it was), so a wake does not
+        // raise it here either; the record after the wakes does.
+        // A `P` for a budget not queued is a waker's pass, raised to the floor as it wakes: it
+        // moves no floor either.
+        let waking = r.kind == 'W' || (r.kind == 'P' && !queued.contains_key(&r.id));
+        if !waking {
+            if let Some(min) = queued.values().map(|(p, _)| *p).min() {
+                floor = floor.max(min);
+            }
+        }
     }
-    if picks == 0 {
+    if sum.picks == 0 {
         return Err("the trace holds no pick: nothing was checked".into());
     }
-    Ok((picks, lifts, telling))
+    Ok(sum)
 }
 
-/// The bench's post-check: parse the case's console log and check it.
-pub fn run(log: &str) -> Result<String, String> {
+/// The `q`-th percentile of `v` (sorted in place): the smallest value at least `q`% of them do
+/// not exceed.
+fn percentile(v: &mut [u64], q: usize) -> u64 {
+    v.sort_unstable();
+    v.get((v.len() * q).div_ceil(100).saturating_sub(1)).copied().unwrap_or(0)
+}
+
+/// The bench's post-check: parse the case's console log and check it. `args` may bound the p99
+/// of R10's durations: `r10_p99_us=N`.
+pub fn run(log: &str, args: &str) -> Result<String, String> {
     let records = parse(log)?;
-    let (picks, lifts, telling) = check(&records)?;
+    let mut sum = check(&records)?;
+    let n = sum.r10_us.len();
+    let (p50, p99, max) =
+        (percentile(&mut sum.r10_us, 50), percentile(&mut sum.r10_us, 99), sum.r10_us.last().copied().unwrap_or(0));
+    for arg in args.split_whitespace() {
+        let bound = arg
+            .strip_prefix("r10_p99_us=")
+            .and_then(|v| v.parse::<u64>().ok())
+            .ok_or_else(|| format!("unknown sched_oracle argument {arg:?}"))?;
+        if n == 0 {
+            return Err("r10_p99_us is set, but the trace holds no destruction".into());
+        }
+        if p99 > bound {
+            return Err(format!("R10's p99 is {p99} µs over {n} destructions, above {bound}"));
+        }
+    }
     Ok(format!(
-        "sched_oracle: {} records, {picks} picks, every one in rank order; {lifts} lifts by the rule ({telling} with a leading parent and work to move)",
-        records.len()
+        "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling; {} lifts by the rule ({} with a leading parent and work to move); R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}",
+        records.len(),
+        sum.picks,
+        sum.lifts,
+        sum.telling,
+        sum.r10_frames
     ))
 }
 
@@ -216,7 +302,7 @@ mod tests {
         s
     }
 
-    fn verdict(records: &[(u64, char, u64, u128)]) -> Result<String, String> { run(&trace(records)) }
+    fn verdict(records: &[(u64, char, u64, u128)]) -> Result<String, String> { run(&trace(records), "") }
 
     #[test]
     fn a_trace_that_keeps_every_clause_passes() {
@@ -292,23 +378,54 @@ mod tests {
     fn lifts_are_recomputed() {
         // Parent leads the floor (pb 150 > f 100); the child did 30 over max(entry 90, floor 100)
         // at weight 4, remainder 3: W = 123; parent weight 10: 150 + 12, remainder 5 + 3 = 8.
-        assert!(run(&lift_trace(150, 5, 130, 3, 90, 100, 4, 10, 162, 8)).is_ok());
+        assert!(run(&lift_trace(150, 5, 130, 3, 90, 100, 4, 10, 162, 8), "").is_ok());
         // The carry: remainder 9 + 3 = 12 is a pass unit and 2.
-        assert!(run(&lift_trace(150, 9, 130, 3, 90, 100, 4, 10, 163, 2)).is_ok());
+        assert!(run(&lift_trace(150, 9, 130, 3, 90, 100, 4, 10, 163, 2), "").is_ok());
         // A parent below the floor starts from the floor, remainder dropped.
-        assert!(run(&lift_trace(80, 9, 130, 3, 90, 100, 4, 10, 112, 3)).is_ok());
+        assert!(run(&lift_trace(80, 9, 130, 3, 90, 100, 4, 10, 112, 3), "").is_ok());
         // The same lift by max (the model's R12LiftByMax): max(150, 100 + 12) = 150.
-        let by_max = run(&lift_trace(150, 5, 130, 3, 90, 100, 4, 10, 150, 5));
+        let by_max = run(&lift_trace(150, 5, 130, 3, 90, 100, 4, 10, 150, 5), "");
         assert!(by_max.as_ref().is_err_and(|e| e.contains("the rule gives")), "{by_max:?}");
         // Measured from the floor, not the entry (R12LiftCountsEntryWait): entry 60 under floor
         // 100 changes nothing, but a child that entered above the floor moves only its own work.
-        assert!(run(&lift_trace(150, 0, 130, 0, 120, 100, 4, 10, 154, 0)).is_ok());
-        assert!(run(&lift_trace(150, 0, 130, 0, 120, 100, 4, 10, 162, 0)).is_err());
+        assert!(run(&lift_trace(150, 0, 130, 0, 120, 100, 4, 10, 154, 0), "").is_ok());
+        assert!(run(&lift_trace(150, 0, 130, 0, 120, 100, 4, 10, 162, 0), "").is_err());
         // A group cut short, or a lift record on its own.
         let cut = "SCHED-TRACE 0 1 L 1 5\nSCHED-TRACE 1 1 W 1 5\nSCHED-TRACE 2 1 K 1 5\nSCHED-TRACE-END 3 dropped 0\n";
-        assert!(run(cut).is_err());
+        assert!(run(cut, "").is_err());
         let stray = "SCHED-TRACE 0 1 a 1 5\nSCHED-TRACE 1 1 W 1 5\nSCHED-TRACE 2 1 K 1 5\nSCHED-TRACE-END 3 dropped 0\n";
-        assert!(run(stray).is_err());
+        assert!(run(stray, "").is_err());
+    }
+
+    #[test]
+    fn the_floor_and_the_passes_are_checked_on_their_own() {
+        // 1 is queued at 9; 2 wakes at 5, below that floor (a wake that kept its own pass).
+        let below = [(1, 'W', 1, 9), (1, 'K', 1, 9), (1, 'R', 1, 9), (2, 'W', 2, 5), (2, 'K', 2, 5)];
+        let v = verdict(&below);
+        assert!(v.as_ref().is_err_and(|e| e.contains("below the floor")), "{v:?}");
+        // Two wake into an empty queue above the floor, one entry: each against the floor as it was
+        // (the waker's own raised pass, `P`, moves nothing).
+        let together = [(1, 'W', 1, 9), (1, 'K', 1, 9), (1, 'D', 1, 9), (2, 'P', 3, 12), (2, 'W', 3, 12), (2, 'P', 2, 9), (2, 'W', 2, 9), (2, 'K', 2, 9)];
+        assert!(verdict(&together).is_ok(), "{:?}", verdict(&together));
+        // The floor holds while the queue is empty: 1 leaves at 9, 2 wakes at 5 later.
+        let held = [(1, 'W', 1, 9), (1, 'K', 1, 9), (1, 'D', 1, 9), (2, 'W', 2, 5), (2, 'K', 2, 5)];
+        assert!(verdict(&held).is_err());
+        // A pass that falls.
+        let fell = [(1, 'W', 1, 9), (1, 'K', 1, 9), (1, 'P', 1, 7), (1, 'K', 1, 7)];
+        let v = verdict(&fell);
+        assert!(v.as_ref().is_err_and(|e| e.contains("fell")), "{v:?}");
+    }
+
+    #[test]
+    fn destructions_are_timed_and_bounded() {
+        let t = trace(&[(1, 'X', 7, 100), (1, 'Y', 7, 130), (1, 'X', 8, 200), (1, 'Y', 8, 250), (1, 'W', 1, 5), (1, 'K', 1, 5)]);
+        let ok = run(&t, "r10_p99_us=50");
+        assert!(ok.as_ref().is_ok_and(|s| s.contains("R10 2 destructions over up to 0 object frames, µs p50/p99/max 30/50/50")), "{ok:?}");
+        assert!(run(&t, "r10_p99_us=49").is_err_and(|e| e.contains("above 49")));
+        assert!(run(&t, "r10_p99=49").is_err());
+        // Unpaired or nested brackets.
+        assert!(verdict(&[(1, 'Y', 7, 1), (1, 'W', 1, 5), (1, 'K', 1, 5)]).is_err());
+        assert!(verdict(&[(1, 'X', 7, 1), (1, 'X', 8, 2), (1, 'W', 1, 5), (1, 'K', 1, 5)]).is_err());
     }
 
     #[test]
@@ -339,9 +456,9 @@ mod tests {
             ),
         ];
         for (what, log) in cases {
-            assert!(run(&log).is_err(), "{what} was accepted");
+            assert!(run(&log, "").is_err(), "{what} was accepted");
         }
-        assert!(run(&format!("{one}SCHED-TRACE-END 2 dropped 0\n")).is_ok());
+        assert!(run(&format!("{one}SCHED-TRACE-END 2 dropped 0\n"), "").is_ok());
     }
 }
 
