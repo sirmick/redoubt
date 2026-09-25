@@ -54,7 +54,13 @@ pub extern "C" fn _start() -> ! {
                 say!(
                     out,
                     "[virtio] handle {}: network device, mac {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                    handle, low[0], low[1], low[2], low[3], high[0], high[1]
+                    handle,
+                    low[0],
+                    low[1],
+                    low[2],
+                    low[3],
+                    high[0],
+                    high[1]
                 );
             }
             2 => {
