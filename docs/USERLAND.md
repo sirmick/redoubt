@@ -141,6 +141,8 @@ No shell in the Elixir world replaces bash. The precedent that matches ours is N
   command syntax (IEx is Elixir syntax; bare-word commands are a thin layer over the evaluator), and
   job control (Erlang's `user_drv`/`group`/`edlin` give Ctrl+G, but beamlet replaces `user_drv` with
   its own `beamlet_io`).
+- The proposed terminal library, line editor, completion and help are in USERLAND-API.md (The
+  interactive shell), work package WP-B2c.
 
 ## Prior art
 Plan 9 (namespaces, `/net`, `/dev/cons`), Inferno, WASI preopens, Capsicum, Nerves and Toolshed

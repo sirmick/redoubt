@@ -19,7 +19,7 @@ the IEx VM.
 |------|------|
 | `cp a b` | `File.cp!("a", "b")` — pure Elixir |
 | `grep x f` | `Enum.filter(lines, &String.contains?(&1, "x"))` — pure Elixir, or native pipe if untrusted |
-| `cat a \| grep x \| wc -l` | `pipe([{"cat",["a"]}, {"grep",["x"]}, {"wc",["-l"]}])` — native processes wired by the shell VM |
+| `cat a \| grep x \| wc -l` | `cat("a") \|> grep("x") \|> count()` — pure Elixir; `pipe(~w(...))` when a stage must be native |
 | `ed file.txt` | `Redoubt.Ed.open("file.txt")` — pure Elixir TUI in IEx |
 | Agent harness | `Redoubt.Agent.start(...)` orchestrates a separate beamlet VM |
 
@@ -63,7 +63,7 @@ against the session namespace and charge work to the session budget.
 
 | Function | Returns | Notes |
 |----------|---------|-------|
-| `cat(path)` | `String` | Read entire file, print to console |
+| `cat(path \| [path])` | `%Lines{}` | Lazy lines; prints (paged) when it is the value at the prompt |
 | `cp(src, dst)` | `:ok` | Copy; within one volume is server-side, across volumes is client loop |
 | `mv(src, dst)` | `:ok` | Rename; across volumes is copy+remove, not atomic |
 | `rm(path)` | `:ok` | Remove; open files succeed (no "in use" channel) |
@@ -140,10 +140,8 @@ cmd = Cmd.new()
 result = Job.await(job)
 IO.puts(result.stdout)
 
-# Short form (IEx only)
-pipe(~w(cat log.txt | grep error | wc -l))
-|> read
-|> IO.puts
+# Short form: a pipe is lines of its stdout
+pipe(~w(grep error log.txt | wc -l)) |> out()
 ```
 
 | Function | Returns | Notes |
@@ -346,40 +344,229 @@ Keyd.holds(public_key)        # does keyd have this key?
 
 ## Utilities (`Redoubt.Util`)
 
-Pure Elixir stream functions. No native processes needed.
+Pure Elixir, imported in every session and `run` script (`Util.grep/2` when
+not). Files come in through `cat` and go out through `w`; everything between
+takes lines first and chains with `|>`.
+
+`cat` returns `%Lines{}`: enumerable and lazy, read in 9P-sized blocks when
+consumed, and closed when a consumer stops early (`head`). It checks the file
+exists when called, so a missing file fails on its own line. Its `Inspect`
+prints the lines, paged, so bare `cat("f")` at the prompt shows the file.
+`grep`, `sub`, `head` and the rest return `%Lines{}` too. A `pipe` is lines of
+its stdout.
 
 ```elixir
-grep(pattern, stream)       # Stream.filter
-wc(stream)                  # lines / words / bytes
-count_lines(stream)
-uniq(stream)
-sort(stream)
-head(n, stream)
-tail(n, stream)
-hexdump(binary)
-checksum(path)              # SHA-256
+cat(path | [path])          # lazy lines; a list concatenates
+follow(path)                # tail -f; Ctrl+G stops
+w(src, path)                # temp file + rename: cat(f) |> ... |> w(f) is safe
+append(src, path)
+grep(src, pat) / grep_v(src, pat)   # pat: string or ~r//
+sub(src, pat, rep)          # sed s/pat/rep/g
+cut(src, sep, n)            # field n, 1-based
+sort(src) / uniq(src) / uniq_c(src) # uniq_c: {count, line}, most first
+head(src, n) / tail(src, n)
+count(src)                  # wc -l
+out(src)                    # print unpaged
+glob(pat)                   # ["logs/a.log", ...]
+now()                       # wall time string
+checksum(path) / hexdump(binary)
 ```
 
 ## IEx command mode expansion
 
-In a Redoubt IEx session, a preprocessor intercepts input before the Elixir
-parser:
+A preprocessor ahead of the Elixir parser. Bare words are quoted; `|>` is an
+Elixir stage, `|` a native one, `>` is `w`, `>>` is `append`.
 
 | Typed | Expanded |
 |-------|----------|
 | `cat a` | `cat("a")` |
 | `cp a b` | `cp("a", "b")` |
-| `grep x f` | `grep("x", "f")` |
-| `cat a \|> grep x` | `pipe([{"cat",["a"]}, {"grep",["x"]}]) \|> read()` |
-| `cat a \|> grep x \|> wc -l` | `pipe([{"cat",["a"]}, {"grep",["x"]}, {"wc",["-l"]}]) \|> read()` |
-| `cat a \|> out` | `pipe([{"cat",["a"]}]) \|> into("out") \|> run()` |
-| `ed f` | `ed("f")` |
-| `ls` | `ls(".")` |
-| `top` | `top()` |
-| `cd d` | `cd("d")` |
+| `grep x f` | `cat("f") \|> grep("x")` |
+| `cat a \|> grep x \|> count` | `cat("a") \|> grep("x") \|> count()` |
+| `cat a \|> sub x y > a` | `cat("a") \|> sub("x", "y") \|> w("a")` |
+| `zcat a.gz \| sort > b` | `pipe(~w(zcat a.gz \| sort)) \|> w("b")` |
+| `cat a \| parse --json \|> grep w` | `cat("a") \|> pipe(~w(parse --json)) \|> grep("w")` |
+| `ls` / `top` / `cd d` / `ed f` | `ls(".")` / `top()` / `cd("d")` / `ed("f")` |
 
-The `\|>` operator is overloaded in command mode: between bare commands it
-means "native pipeline." In programmatic mode it is ordinary Elixir pipe.
+A command-mode `cat` is always the Elixir one; no native `cat` is launched.
+
+## The interactive shell: terminal, line editing, completion, help
+
+Proposed, not milestone 1 (WP-B2c). The starting fact: **nothing between the
+keyboard and IEx edits a line.** `consoled` and `sshd` serve `/dev/cons` as a
+raw byte pipe with no echo, and `beamlet_io` buffers input to a newline and
+reports `echo: false`. On a host the terminal's cooked mode hides this; on
+Redoubt nobody echoes a keystroke. The shell owns line editing, and completion
+comes with it.
+
+Four layers, bottom up.
+
+### `Redoubt.Term` — terminal library
+
+Grows `Redoubt.Console` and `Redoubt.Console.Key` into the one terminal library
+every TUI uses (`Ed`, `top`, the pager, the line editor). Pure Elixir.
+
+- **Output:** cursor movement and save/restore, erase line and screen, scroll
+  regions, alt screen, cursor visibility, SGR colour and attributes (on top of
+  Elixir's `IO.ANSI`), bracketed paste, synchronized update (mode 2026) so a
+  redraw does not flicker.
+- **Input:** the `Key` decoder extended with CSI modifier forms
+  (`ESC [1;5C` is Ctrl+Right), SS3, UTF-8 assembly, bracketed-paste framing
+  (a paste is one event, never a run of keys that could trigger completion) and
+  optionally SGR mouse.
+- **Width:** grapheme and East Asian width, so cursor arithmetic holds for CJK
+  and emoji.
+- **One target, no terminfo:** VT102 plus the common xterm extensions every
+  current emulator speaks. `libvterm/` stays reference only.
+- **Widgets:** a pager (`less`-shaped: space, `b`, `/search`, `q`), column
+  layout for completion lists, later a picker. Owl (Apache-2.0) is the borrow
+  target.
+- Layout uses `Console.size/0`; on `{:error, :unknown}` it assumes 80 columns
+  and says nothing.
+
+### The line editor: OTP's `edlin` inside `beamlet_io`
+
+On BEAM, `group` and `edlin` do line editing and are plain Erlang; only
+`prim_tty` underneath needs OS tty support. IEx hands its completer to the I/O
+server with `:io.setopts(expand_fun: ...)`. So `beamlet_io` gains `edlin` and a
+small tty backend that writes through `Redoubt.Term` to `/dev/cons`, and
+honours `expand_fun`. That gives:
+
+- Emacs keys, kill ring, multi-line input, history and Ctrl+R search.
+- **IEx's own Elixir completion (`IEx.Autocomplete`) unchanged:** modules,
+  functions, variables, map keys.
+- The job-control gap USERLAND.md (The shell) names: `edlin`'s Ctrl+G
+  interrupts a runaway expression without killing the session.
+- History persists per principal in the principal's home volume, capped in
+  lines. A vault session keeps history in memory only: its labels forbid
+  writing down to the unlabelled home volume, so there is nowhere to save it.
+
+Echo is the editor's job, so a password prompt is a call that reads with echo
+off (`Redoubt.Term.read_secret/1`), not a terminal mode.
+
+### Completion
+
+`Redoubt.Shell` installs an `expand_fun` that inspects the line before
+deferring:
+
+| Line so far | Completes from |
+|-------------|----------------|
+| `cp no⇥` (command mode, first word done) | the argument type declared for that command: path, package, principal, budget, label |
+| `c⇥` (command mode, first word) | the command registry |
+| anything else | `IEx.Autocomplete` |
+
+- **Paths** resolve through the session namespace and read the directory
+  over 9P, one read per Tab. Labels already filter directory reads (`fsd`
+  lists only readable entries), so completion cannot reveal a name the session
+  could not `ls`.
+- **Behaviour:** first Tab inserts the longest common prefix; a second Tab
+  lists the candidates in columns through the pager when they exceed a
+  screen. Directories complete with a trailing `/`.
+- A completer never launches a process and never writes; a slow server
+  bounds it by a short timeout, after which Tab does nothing.
+
+### Help: one registry drives everything
+
+Every command-mode command is declared once:
+
+```elixir
+defcommand :cp,
+  args: [src: :path, dst: :path],
+  summary: "Copy a file",
+  doc: """
+  Copies SRC to DST. Within one volume the copy is server-side;
+  across volumes it is a client loop.
+  """,
+  examples: ["cp notes.txt backup.txt", "cp /work/a.txt /home/b.txt"]
+```
+
+From that one declaration come the command-mode expansion, completion's
+argument types, and help:
+
+```elixir
+help            # commands grouped by area, one line each
+help cp         # full page in the pager: usage, doc, examples
+help namespaces # a concept topic: namespaces, budgets, labels, pipes, sessions
+h File.cp/2     # IEx's own module docs (needs Docs chunks, see Open decisions)
+```
+
+A test fails the build for any command without a summary, a doc or an
+example. Concept topics are short, shell-oriented summaries of the
+`docs/*.md` specifications, bundled as `.md` and rendered with SGR bold and
+indentation.
+
+### Open decisions
+
+To be numbered in QUESTIONS.md once in-flight branches have settled their IDs.
+
+1. **Docs chunks in the boot bundle.** `h/1` needs them in each `.beam`; they
+   add substantially to the stdlib's size (to be measured). *Rec:* strip from the boot bundle,
+   ship them as an optional docs package that `h/1` reads when present.
+2. **Terminal discovery.** Assume the VT102-plus-xterm target, or send DA1
+   (`ESC [c`) at session start and adapt? *Rec:* assume; a query on a UART
+   that never answers costs a timeout on every login.
+3. **Editor placement.** `edlin` in `beamlet_io` (above) or a fresh editor in
+   Elixir. *Rec:* `edlin`; it is what IEx is tested against, and it keeps IEx
+   completion for free.
+4. **Running a script.** Command mode `run tool.exs a b` → `Code.require_file`
+   with `System.argv/0` set, in the session VM. Running one in its own budget
+   and labels is a child VM (as `Redoubt.Agent`). *Rec:* both, `run` for the
+   first and `run --isolated` for the second.
+
+## Scripting: bash equivalents
+
+```elixir
+# cat app.log
+cat("app.log")
+# grep -c error app.log
+cat("app.log") |> grep("error") |> count()
+# grep -Ei 'timeout|refused' app.log | tail -20
+cat("app.log") |> grep(~r/timeout|refused/i) |> tail(20)
+# head -5 big.log                      (reads one block)
+cat("big.log") |> head(5)
+# sed -i s/staging/prod/g config.txt
+cat("config.txt") |> sub("staging", "prod") |> w("config.txt")
+# grep -v '^#' app.conf > clean.conf
+cat("app.conf") |> grep_v(~r/^#/) |> w("clean.conf")
+# cut -d' ' -f1 access.log | sort | uniq -c | sort -rn | head
+cat("access.log") |> cut(" ", 1) |> uniq_c() |> head(10)
+# cat a.log b.log | grep error
+cat(["a.log", "b.log"]) |> grep("error")
+# grep error logs/*.log
+glob("logs/*.log") |> cat() |> grep("error")
+# for f in logs/*.log; do echo "$f $(grep -c error $f)"; done
+for f <- glob("logs/*.log"), do: {f, cat(f) |> grep("error") |> count()}
+# for n in alice bob; do echo "hi $n" > hi-$n.txt; done
+for n <- ~w(alice bob), do: w(["hi #{n}"], "hi-#{n}.txt")
+# echo "done $(date)" >> run.log
+append(["done #{now()}"], "run.log")
+# [ $(grep -c error app.log) -gt 0 ] && echo bad
+if cat("app.log") |> grep("error") |> count() > 0, do: IO.puts("bad")
+# untrusted parser as a native stage, in its own budget
+cat("dump.bin") |> pipe(~w(parse --json)) |> grep("warn")
+# all native
+pipe(~w(zcat big.gz | sort | uniq)) |> w("uniq.txt")
+# tail -f app.log | grep error
+follow("app.log") |> grep("error") |> out()
+# ./long-task & ... wait $!; echo $?
+job = pipe(~w(long-task)) |> run();  Job.await(job).exit
+```
+
+Command mode:
+
+```
+cat app.log |> grep error |> count
+cat config.txt |> sub staging prod > config.txt
+zcat big.gz | sort | uniq > uniq.txt
+```
+
+A script is plain Elixir; its inputs are `System.argv/0` and its namespace.
+
+```elixir
+# count.exs — run count.exs error a.log b.log
+[pat | files] = System.argv()
+for f <- files, do: IO.puts("#{f} #{cat(f) |> grep(pat) |> count()}")
+```
 
 ## Native binary inventory
 

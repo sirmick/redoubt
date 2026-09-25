@@ -361,6 +361,22 @@ recipes remain in git.
   saves and exits.
 - Needs: WP-B2a. (Split from WP-B2 by answer 161: one acceptance per package.)
 
+**WP-B2c. The human shell: terminal library, line editing, completion, help.** Size M. Proposed;
+after milestone 1, not on its critical path.
+- Reads: USERLAND-API.md (The interactive shell), USERLAND.md (The shell), beamlet DESIGN.md
+  (`beamlet_io`).
+- Delivers: `Redoubt.Term` (output, input decoding, width, pager, columns) grown from
+  `Redoubt.Console`; OTP's `edlin` in `beamlet_io` with a `/dev/cons` tty backend that honours
+  `expand_fun`; `Redoubt.Shell`'s completer (command registry, typed arguments, paths through the
+  namespace, else `IEx.Autocomplete`); `defcommand` and `help`; persistent per-principal history.
+- Accepted when, on host beamlet from scripted keystroke bytes and then on the bench: typed input
+  echoes and edits (arrows, Ctrl+A/E/K/W, history, Ctrl+R); Tab completes an Elixir call, a
+  command and a path, and lists columns on the second Tab; a path Tab never lists an entry `ls`
+  would not; a bracketed paste containing a Tab completes nothing; `help` lists every registered
+  command and a test fails any command lacking a summary, doc or example; a vault session writes
+  no history file.
+- Needs: WP-B2a; the four open decisions in USERLAND-API.md settled first.
+
 **WP-D2. fsd.** Size M. 9P over littlefs on a block range; one label set per volume from the
 manifest; **the byte quotas, metered here and nowhere else** (question 118): `new_connection`'s
 `quota` carved from the granter's root through the shared library's grant hook, and returned
