@@ -5,7 +5,7 @@ The loader and bench support rv32 and rv64 on QEMU `virt`. For example,
 acceptance requirement is rv64 boots plus rv32 compilation; optional rv32 runs do not establish
 full-stack rv32 support (PLAN.md).
 Owns: firmware, hardware abstraction, the loader, the boot bundle, the kernel argument block, and
-the hart timer as it works today. After the kernel starts: INIT.md.
+the hart timer. After the kernel starts: INIT.md.
 
 ```
 RustSBI firmware, M-mode
@@ -34,9 +34,9 @@ or "runs under SBI".
 - **Width-bound only:** page-table geometry (`paging`), saved-context size and trap assembly key on
   `target_pointer_width`.
 - Interrupt controller backend contract (`arch/riscv/irq.rs`): `enable_irq`, `disable_irq`,
-  `disable_all_irqs`, `enable_all_irqs`, `pending` (at most one interrupt, from the PLIC claim or the
-  timer), `mask`, optional `init`. The handler table covers the PLIC's 10-bit source space (IRQ 0 is
-  the timer, 1..=1023 the PLIC).
+  `disable_all_irqs`, `enable_all_irqs`, `pending` (at most one interrupt, from the PLIC claim),
+  `mask`, optional `init`. The handler table covers the PLIC's 10-bit source space (1..=1023; there
+  is no source 0, and the hart timer is the kernel's, below).
 
 ## Boot bundle
 A plain ustar archive of ELF executables, passed as the initrd and signed (VERIFIED-BOOT.md owns the
@@ -105,7 +105,8 @@ The loader identifies virtio MMIO as DMA-capable and excludes interrupt controll
 device list. `Ctrl` separately records the PLIC/CLINT ranges discovered by the controller searches;
 the kernel rejects an MMIO entry overlapping RAM or those controller ranges, wrapping its range,
 or not naming nonempty whole pages. This kernel check does not depend on the device-list exclusion
-heuristic succeeding. An IRQ entry cannot name 0, the legacy hart-timer pseudo-IRQ.
+heuristic succeeding. An IRQ entry cannot name 0: there is no such source (the hart timer is no
+device).
 
 The current handle order is interim: reset, the chosen console's MMIO and IRQ, then other MMIO in
 device-tree order and other IRQs ascending. The loader requires that console and IRQ before
@@ -132,20 +133,21 @@ Real SMP scheduling is after milestone 1 (PLAN.md).
 - Kernel console = SBI debug console. The kernel owns no devices; the ns16550 belongs to userspace.
 - A kernel panic powers the machine off through SBI SRST, so test runs terminate.
 
-## The hart timer today
+## The hart timer
 The RISC-V S-mode timer is a hart resource, not a device: the `time` counter, and a deadline
-programmed through SBI TIME (or, with Sstc, `stimecmp`). Its interrupt arrives as a supervisor timer
-trap, not through the PLIC. Today the kernel exposes it to userspace as if it were a device
-(`arch/riscv/timer_sbi.rs`):
-- the timer interrupt is delivered as **IRQ 0** (PLIC source 0 does not exist), claimed with
-  `ClaimInterrupt`;
-- user mode reads `rdtime` directly (`scounteren.TM` set);
-- `PlatformSpecific` calls `TIMER_TIMEBASE` and `TIMER_SET_DEADLINE`, allowed only to IRQ 0's owner;
-- one-shot: when it fires the kernel masks `sie.STIE` and dispatches IRQ 0; the handler re-arms it.
-
-There is no preemption: threads are rescheduled when messages are delivered or they yield. The
-decided design (the kernel owns the timer; interrupts are received, not handled) is in RESOURCES.md
-and KERNEL-SPEC.md.
+programmed through SBI TIME. Its interrupt arrives as a supervisor timer trap, not through the PLIC.
+Since WP-K5 it is the kernel's alone (RESOURCES.md, The timer; `kernel/src/time.rs`):
+- the kernel keeps it armed for the earliest of the running thread's slice end (R12), the next
+  blocking call's timeout (I13) and the next budget deadline; deadlines are kept in microseconds and
+  converted to ticks rounding up, so the interrupt never comes early. The backend is SBI TIME
+  (`arch/riscv/timer_sbi.rs`), which every SBI platform has; Sstc is not used;
+- boot fails closed without a `Time` tag (the timebase);
+- user mode reads `rdtime` directly (`scounteren.TM` set) and `time_now` for microseconds; no call
+  programs the timer, and there is no IRQ 0 (`interrupt_claim(0)` is `InterruptNotFound`; the old
+  `TIMER_TIMEBASE` and `TIMER_SET_DEADLINE` platform calls are gone);
+- every kernel entry but the kernel's own `SwitchTo` first answers what is due (timeouts, then
+  budget deadlines at an equal instant); a slice end or a budget deadline preempts, and a timeout
+  only wakes (KERNEL-SPEC.md, R12, I13). `kmain` idles in `wfi` with the timer armed.
 
 ## Fail closed
 - No usable `/chosen/rng-seed` (at least 16 bytes): the loader refuses to boot; a kernel started

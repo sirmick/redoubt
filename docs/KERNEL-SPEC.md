@@ -65,7 +65,7 @@ budget (the cost table says which).
 | `deadline` | time or none | when it passes, the kernel destroys the budget; the kernel sets no maximum (leases are the steward's: CAPABILITIES.md) |
 | `pages` | limit, usage | every object charged here (R6) |
 | `processes` | limit, usage | the processes running in it |
-| `weight` | u32 limit, carved | CPU share; carved by children (R7); weight 0 holds no process |
+| `weight` | u32 limit, carved | CPU share: the free weight (limit less the children's carve) is the stride weight (R7, R12); free weight 0 holds no process |
 
 `root`, `system` and `users` are created by the kernel at boot from the argument block (`system`
 gets its reserved share); `root` and `system` are class `system`, `users` is class `user`; all
@@ -316,6 +316,10 @@ limits** and their own pages, never their live usage.
 
 **R7. Carving.** A child's page, process and weight limits come out of the parent's free limits: the
 children never add up to more than the parent. Allocation fails only on the caller's own budget.
+A budget's stride weight (R12) is its **free weight**, its weight limit less what its children
+carved: carving moves share to the child and never duplicates it. A carve that would leave a budget
+that holds a process with free weight 0 is refused, as is `process_create` into a budget with free
+weight 0 (both `InvalidArgument`; the rows below).
 
 **R8. Accounts.** A new budget's account equals its parent's, unless the parent's is 0; then the
 creator may set any value (the steward sets one on each principal's top budget).
@@ -346,15 +350,43 @@ link addresses from inside the started process (PACKAGES.md); unlike POSIX `MAP_
 replaces a mapping, so it can neither discard nor alias a page (answer 172).
 
 **R12. Scheduling.** **One flat stride queue over every runnable budget**, of either class, with no
-priority above it: run the lowest pass; at every deschedule, pass += runtime x `STRIDE` / weight
-(never 0: a weight-0 budget holds no process); on wake, pass = max(own pass, current minimum).
-Ties are deterministic and wake-first: a waking budget is ranked ahead of already-queued budgets
-with an equal pass. Preemption happens at slice end or at a deadline, never on wake alone.
-`init`, the steward and the drivers are scheduled by weight like everyone else, with the large
-weights the boot manifest gives them (RESOURCES.md, INIT.md). Wakeup is prompt but not bounded:
-a waking budget may retain a larger pass, and no deadline follows from weight; RESOURCES.md
-states the measured responsiveness target (answer 166, revising 103). Within a budget, threads
-run round-robin. The timer is always armed (slice end or the next deadline).
+priority above it: run the lowest pass; at every deschedule, pass += runtime x `STRIDE` / weight,
+the weight being the budget's free weight (R7; never 0: a budget with free weight 0 holds no
+process); on wake, pass = max(own pass, current minimum). `init`, the steward and the drivers are
+scheduled by weight like everyone else, with the large weights the boot manifest gives them
+(RESOURCES.md, INIT.md). Within a budget, threads run round-robin in (pid, tid) order. The timer is
+always armed (the running thread's slice end, or the next timeout or budget deadline). Precisely
+(the WP-K5 owner decisions):
+- **Preemption points.** Only slice end and a *budget* deadline. A timeout expiring or an interrupt
+  firing only wakes (makes a thread runnable); the running thread keeps the CPU.
+- **Current minimum.** The lowest pass among runnable budgets, the running one included at its
+  last-charged pass, floored by a monotone **floor** that holds while the queue is empty. A waking
+  budget's pass is max(own pass, floor). A wake is a budget going from no runnable thread to one.
+- **Ties** (the rank at an equal pass): wakers ahead of requeued budgets; a later kernel entry's
+  wake ahead of an earlier one's; within one entry the lower budget id first (ids are the
+  kernel's); requeued budgets in the order they were requeued.
+- **Charging.** Runtime is counted in timebase ticks, at least 1 per deschedule, at most 2^40 per
+  charge, with an exact per-budget division remainder, so split runs cost what one run would.
+  Runtime is charged at the weight it ran at: a weight change (a carve, or a carve returned)
+  charges what ran before it.
+- **Inheritance.** A new budget enters at e = max(floor, parent's pass), kept as its entry. When
+  it is destroyed (bottom-up, R10), its work since entry,
+  W = (pass - max(e, floor))+ x its weight + its remainder, is added to its parent's lead:
+  parent's pass = max(parent's pass, floor) + W / parent's weight (taken after the child's carve
+  returns), the remainder carried. A child's debt is only work it did after its entry, so creating
+  and destroying a budget that never ran moves nothing. The top of a destruction returns its carve
+  to its parent first, before any of the destruction's own work is charged, so the parent (often
+  the caller of `budget_destroy`) pays for it at the weight it has once the child is gone; the
+  budgets below return theirs at their own bottom-up step.
+- **Running while carved down** (a stated behaviour, accepted for WP-K5). A budget that runs while
+  most of its weight is carved away accrues its lead at the small weight it kept, and that lead is
+  not rescaled when the weight returns; a destroyed child's lead is lifted at the child's weight at
+  its destruction, whatever it had kept while it ran. Both only over-charge the budget that carved,
+  never under-charge: no share is gained by carving. Rescaling is to be revisited once real shell
+  and steward carve patterns exist.
+Wakeup is prompt but not bounded: a wake waits out the running thread's slice, a waking budget may
+retain a larger pass, and no deadline follows from weight; RESOURCES.md states the measured
+responsiveness target (answer 166, revising 103), and the WP-K5 latency bench measures it.
 
 ## System calls
 `h` is a handle. Every call returns a status (success or one error from the enum below); its result
@@ -371,7 +403,7 @@ partial reply remains valid on `OutOfMemory`. No argument can make the kernel pa
 | `thread_create` | entry, sp, arg -> tid | pages charged; fewer than `MAX_THREADS` |
 | `thread_exit` | - | siblings survive without a process notice; last thread is `process_exit(0)` |
 | `process_exit` | code | exit notice `exited`, or `faulted` while the process holds open calls |
-| `process_create` | h(budget), h(exit endpoint) -> h(process) | budget's weight not 0; exit endpoint's badge 0; the budget's process and page limits; process object charged to the caller |
+| `process_create` | h(budget), h(exit endpoint) -> h(process) | budget's free weight not 0 (R7); exit endpoint's badge 0; the budget's process and page limits; process object charged to the caller |
 | `process_map` | h(process), src, dst, len, flags | process not started; src owned by caller; pages move to the child's budget; not W+X |
 | `process_start` | h(process), entry, sp, arg, handles | not started; at most `MAX_START_HANDLES` handles, copied into slots 1..n; `arg` reaches the first thread unchanged, like `thread_create`'s (the startup page's address, 0 = none: INIT.md) |
 | `endpoint_create` | -> h (badge 0) | pages charged |
@@ -506,7 +538,7 @@ and its budget cannot pay, and with `TooLarge` when the new handle would be past
 | `thread_create` | - | `TooManyThreads`, `OutOfMemory` |
 | `thread_exit` | - | - |
 | `process_exit` | code: `InvalidArgument` | - |
-| `process_create` | each h: `BadHandle` | `BadHandle`, `WrongObject` (budget), `BadHandle`, `WrongObject` (exit endpoint), `InvalidArgument` (budget weight 0), `NotPermitted` (exit endpoint's badge not 0), `OutOfProcesses`, `OutOfMemory` (the budget: page tables; then the caller: the process object) |
+| `process_create` | each h: `BadHandle` | `BadHandle`, `WrongObject` (budget), `BadHandle`, `WrongObject` (exit endpoint), `InvalidArgument` (budget free weight 0), `NotPermitted` (exit endpoint's badge not 0), `OutOfProcesses`, `OutOfMemory` (the budget: page tables; then the caller: the process object) |
 | `process_map` | h: `BadHandle`; flags: `InvalidArgument` | `BadHandle`, `WrongObject`, `InvalidArgument` (src range, not the caller's own RAM; dst range, occupied; flags 0, or W without R), `NotPermitted` (started), `OutOfMemory` (the child's budget) |
 | `process_start` | h: `BadHandle`; `arg`: not checked; count over `MAX_START_HANDLES`: `TooLarge`; list: record, each h `BadHandle` | `BadHandle`, `WrongObject`, `BadHandle` (each h), `NotPermitted` (started), `OutOfMemory` (the child's budget: thread, then table) |
 | `endpoint_create` | - | `OutOfMemory` |
@@ -517,7 +549,7 @@ and its budget cannot pay, and with `TooLarge` when the new handle would be past
 | `reply` | msg_id 0: `InvalidArgument`; body: record, count `TooLarge`, each h `BadHandle` | `InvalidArgument` (msg_id not an open call of the caller's thread, including a `send`'s id), `BadHandle` (each h) |
 | `serve` | msg_id 0: `InvalidArgument` | `InvalidArgument` (msg_id not an open call of the caller's thread) |
 | `handle_close` | h: `BadHandle` | `BadHandle` |
-| `budget_create` | h: `BadHandle`; spec: record, labels over `MAX_LABELS` before deduplication `TooLarge`, a 32-bit field `InvalidArgument` | `BadHandle`, `WrongObject`, `TooLarge` (the child would be at depth `MAX_DEPTH`), `LabelDenied` (labels not ⊇ the parent's), `ClassDenied` (labels added), `OutOfMemory` (pages, plus the budget's own page, over the parent's free pages), `OutOfProcesses`, `InvalidArgument` (weight over the parent's free weight) |
+| `budget_create` | h: `BadHandle`; spec: record, labels over `MAX_LABELS` before deduplication `TooLarge`, a 32-bit field `InvalidArgument` | `BadHandle`, `WrongObject`, `TooLarge` (the child would be at depth `MAX_DEPTH`), `LabelDenied` (labels not ⊇ the parent's), `ClassDenied` (labels added), `OutOfMemory` (pages, plus the budget's own page, over the parent's free pages), `OutOfProcesses`, `InvalidArgument` (weight over the parent's free weight, or all of it from a parent that holds a process; R7) |
 | `budget_destroy` | h: `BadHandle` | `BadHandle`, `WrongObject` |
 | `budget_usage` | h: `BadHandle`; counters: record (written) | `BadHandle`, `WrongObject`, `LabelDenied` (R1: a user-class caller whose labels ⊉ the target's) |
 | `time_now` | - | - |
@@ -553,10 +585,14 @@ Numbered for the executable model and the property tests.
     each group's oldest message is taken within k receives.
 12. Budget ids are never reused; a message id is never 0 and never reused within its receiving
     process.
-13. Every blocking call returns by its timeout.
+13. Every blocking call returns by its timeout: its `Timeout` is committed, and its thread made
+    runnable, at the first kernel entry at or after the timeout, and the always-armed timer bounds
+    when that entry comes by timer latency. When the thread then runs is R12's.
 14. No sequence of system calls, with any arguments, panics the kernel.
 15. Every abandoned call is reported to the thread holding it exactly once, and stays open until
-    that thread replies; its reply reaches nobody.
+    that thread replies; its reply reaches nobody. The report is an abandoned-call notice, or, when
+    the holder's reply enters before it has seen one (the caller timed out or died just before),
+    the reply's own result: `discarded`, mask 0, and no notice follows.
 
 ## Added in milestone 2
 `budget_children(h) -> [h]`, so a restarted steward can enumerate and destroy what it created
