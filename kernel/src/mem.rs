@@ -85,6 +85,10 @@ pub struct MemoryManager {
     /// most charges are.
     #[cfg(baremetal)]
     pub objects: crate::budget::Objects,
+    /// DMA devices and the runs `dma_alloc` handed out through them (WP-K5b, `dma.rs`). Here,
+    /// beside the ownership table that names their frames' owner, `DMA_OWNER`.
+    #[cfg(baremetal)]
+    pub dma: crate::dma::Registry,
 }
 
 /// Owner, in the ownership table, of frames that hold kernel objects (budgets, handle-table
@@ -97,6 +101,16 @@ pub const OBJECT_OWNER: PID = match PID::new(255) {
 };
 #[cfg(baremetal)]
 const _: () = assert!(crate::arch::process::MAX_PROCESS_COUNT < 255);
+/// Owner, in the ownership table, of `dma_alloc` frames (WP-K5b, `dma.rs`). No process has this
+/// PID either, so no generic release, move or lend path, all of which check that the caller
+/// owns the frame, can free or move one: only `dma_release` pools it, after the reset.
+#[cfg(baremetal)]
+pub const DMA_OWNER: PID = match PID::new(254) {
+    Some(pid) => pid,
+    None => unreachable!(),
+};
+#[cfg(baremetal)]
+const _: () = assert!(crate::arch::process::MAX_PROCESS_COUNT < 254);
 #[cfg(baremetal)]
 type RamAllocation = Option<PID>;
 
@@ -129,6 +143,8 @@ impl MemoryManager {
             extra_regions: &[],
             #[cfg(baremetal)]
             objects: crate::budget::Objects::new(),
+            #[cfg(baremetal)]
+            dma: crate::dma::Registry::new(),
         }
     }
 
@@ -319,36 +335,23 @@ impl MemoryManager {
         base < ram_end && ram_start < end
     }
 
-    /// `npages` contiguous free RAM frames, claimed for `pid`, charged to its budget (R6) and
-    /// zeroed through the physmap (R11: before the process can see them). The physical address
-    /// of the first. `dma_alloc` is the only caller: nothing else needs contiguity.
-    ///
-    /// Nothing changes on failure: the frames are taken and charged one at a time and given
-    /// back if any charge fails.
+    /// `npages` contiguous free RAM frames, claimed for `owner` and zeroed through the physmap
+    /// (R11: before any process can see them); the physical address of the first. Not charged:
+    /// `dma_new_run`, the only caller, charges the run's budget itself (`dma.rs`).
     #[cfg(baremetal)]
-    pub fn alloc_contiguous(&mut self, pid: PID, npages: usize) -> Result<usize, redoubt_sys::Error> {
+    pub fn alloc_contiguous(&mut self, owner: PID, npages: usize) -> Result<usize, redoubt_sys::Error> {
         // First fit over the ownership table, as `alloc_frame` is, with a run to fill.
         let mut run = 0;
         let start = self
             .allocations
             .iter()
-            .position(|owner| {
-                run = if owner.is_none() { run + 1 } else { 0 };
+            .position(|o| {
+                run = if o.is_none() { run + 1 } else { 0 };
                 run == npages
             })
             .map(|last| last + 1 - npages)
             .ok_or(redoubt_sys::Error::OutOfMemory)?;
-        for index in start..start + npages {
-            self.allocations[index] = Some(pid);
-            if self.charge_frame(pid).is_err() {
-                self.allocations[index] = None;
-                for undo in start..index {
-                    self.allocations[undo] = None;
-                    self.uncharge_frame(pid);
-                }
-                return Err(redoubt_sys::Error::OutOfMemory);
-            }
-        }
+        self.allocations[start..start + npages].fill(Some(owner));
         let phys = self.ram_start + start * PAGE_SIZE;
         for page in 0..npages {
             crate::kframe::zero(phys + page * PAGE_SIZE);
@@ -356,12 +359,21 @@ impl MemoryManager {
         Ok(phys)
     }
 
-    /// Give `npages` frames of `pid`'s back (`dma_alloc` unwinding).
+    /// Give back `npages` frames from `phys` that `alloc_contiguous` claimed for `owner`.
     #[cfg(baremetal)]
-    pub fn free_frames(&mut self, pid: PID, phys: usize, npages: usize) {
-        for page in 0..npages {
-            self.release_page((phys + page * PAGE_SIZE) as *mut usize, pid).ok();
+    pub fn free_contiguous(&mut self, owner: PID, phys: usize, npages: usize) {
+        let start = (phys - self.ram_start) / PAGE_SIZE;
+        for entry in &mut self.allocations[start..start + npages] {
+            assert!(*entry == Some(owner), "I1: a contiguous run changed owner");
+            *entry = None;
         }
+    }
+
+    /// Whether RAM frame `phys` is a `dma_alloc` frame (`DMA_OWNER`'s).
+    #[cfg(baremetal)]
+    pub fn is_dma_frame(&self, phys: usize) -> bool {
+        self.is_main_memory(phys as *mut u8)
+            && self.allocations[(phys - self.ram_start) / PAGE_SIZE] == Some(DMA_OWNER)
     }
 
     /// RAM frames owned by `pid` in the ownership table.
@@ -942,7 +954,9 @@ impl MemoryManager {
             space.for_each_lent_frame(|phys| {
                 if self.is_main_memory(phys as *mut u8) {
                     let idx = (phys - self.ram_start) / PAGE_SIZE;
-                    {
+                    // A DMA frame is never lent (OD2), and stays `DMA_OWNER`'s whatever happens:
+                    // only `dma_release` pools it.
+                    if self.allocations[idx] != Some(DMA_OWNER) {
                         self.allocations[idx] = Some(kernel);
                     }
                 } else if let Some(idx) = self.extra_index(phys) {
@@ -1045,6 +1059,10 @@ impl MemoryManager {
                             let allocation_offset = (phys - self.ram_start) / PAGE_SIZE;
                             let existing_owner = &self.allocations[allocation_offset];
                             let eo = existing_owner;
+                            // A `dma_alloc` frame is `DMA_OWNER`'s, mapped by the run's holder.
+                            if eo == &Some(DMA_OWNER) {
+                                continue;
+                            }
                             if eo != &Some(pid) {
                                 let is_lent = {
                                     if let Some(existing_owner) = eo {
@@ -1211,7 +1229,8 @@ impl MemoryManager {
     /// (I9), checked before any page moves. A RAM frame goes back to the free pool and to the
     /// caller's budget; a device's registers are not RAM and only lose their mapping -- the
     /// MMIO page-ownership table is left alone, as `map_device` left it alone (the handle, not
-    /// a page owner, is the authority there).
+    /// a page owner, is the authority there). A `dma_alloc` frame only loses its mapping too: it
+    /// stays held, and charged, until the process ends (WP-K5b, OD2).
     pub fn unmap(&mut self, pid: PID, addr: usize, len: usize) -> Result<(), redoubt_sys::Error> {
         let end = Self::user_range(addr, len)?;
         for page in (addr..end).step_by(PAGE_SIZE) {
@@ -1219,7 +1238,7 @@ impl MemoryManager {
         }
         for page in (addr..end).step_by(PAGE_SIZE) {
             let phys = crate::arch::mem::unmap_page_inner(self, page).expect("checked just above");
-            if self.is_main_memory(phys as *mut u8) {
+            if self.is_main_memory(phys as *mut u8) && !self.is_dma_frame(phys) {
                 self.release_page(phys as *mut usize, pid).ok();
             }
         }
@@ -1317,12 +1336,15 @@ impl MemoryManager {
 
     /// The frame behind `page`, which must be a live user mapping of the caller that is not
     /// lent out and, if it is RAM, is credited to the caller (a lend the caller is holding is
-    /// its lender's, not its own).
+    /// its lender's, not its own) or is a `dma_alloc` frame of a run the caller holds.
     pub(crate) fn owned_mapping(&self, pid: PID, page: usize) -> Result<usize, redoubt_sys::Error> {
         let bad = redoubt_sys::Error::InvalidArgument;
         let phys = crate::arch::mem::user_mapping(page).ok_or(bad)?;
         let ram = self.is_main_memory(phys as *mut u8);
-        if ram && self.allocations[(phys - self.ram_start) / PAGE_SIZE] != Some(pid) {
+        let own = !ram
+            || self.allocations[(phys - self.ram_start) / PAGE_SIZE] == Some(pid)
+            || (self.is_dma_frame(phys) && self.dma_holder(phys) == Some(pid));
+        if !own {
             return Err(bad);
         }
         Ok(phys)
