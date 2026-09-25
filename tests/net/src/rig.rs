@@ -27,7 +27,7 @@ use core::fmt::{self, Write};
 use core::num::NonZeroU64;
 
 use redoubt_ipd::scope::{Ports, Prefix, Rule, Scope};
-use redoubt_net_client::{REPORT, event};
+use redoubt_net_client::{REPORT, code, event};
 use redoubt_rt::abi::{
     BudgetSpec, Cause, Error, ExitNotice, FOREVER, Handle, Labels, MemFlags, PAGE_SIZE, ResetKind,
 };
@@ -85,6 +85,8 @@ const OUTSIDE_TARGET: [u8; 4] = [10, 0, 9, 101];
 const FORWARDED_SELF: [u8; 4] = [10, 0, 9, 102];
 const OUTSIDE_CONTROL: [u8; 4] = [10, 0, 9, 110];
 const TWIN_PEER: [u8; 4] = [10, 0, 9, 111];
+/// In scope but no peer: slirp drops the SYN.
+const UNANSWERED: [u8; 4] = [10, 0, 9, 200];
 const PEER_PORT: u16 = 7;
 
 /// What a rig binary runs: one per case.
@@ -100,6 +102,11 @@ pub enum Mode {
     Attacks,
     /// `d3-net-self-unrefused`: the same, with `ipd` not told 10.0.9.102 is the box's own.
     Unrefused,
+    /// `bench-net-peer`: an echo through the peer, and a connect nobody answers, which must end.
+    Peer,
+    /// `d3-net-pinned`: parked calls abandoned, a parked read ended by `ipd`'s deadline, and the
+    /// echo still working.
+    Pinned,
 }
 
 /// The console: the UART the kernel handed over, written a byte at a time.
@@ -146,6 +153,10 @@ impl Child {
         }
     }
 }
+
+/// How long a program whose end rests on `ipd`'s deadlines (60 s for a `ctl` wait, 30 s for a
+/// read) may take (µs).
+const ENDS_WITHIN: u64 = 150_000_000;
 
 /// How long a program the rig runs to its end may take (µs). One still running then is killed,
 /// and the case goes on: an attack that hangs is judged, like any other, by what reached the
@@ -210,6 +221,8 @@ pub fn run(mode: Mode) -> u32 {
             match mode {
                 Mode::Probe => "NET PROBE",
                 Mode::Tcp | Mode::Twice => "D3 NET TCP",
+                Mode::Peer => "NET PEER",
+                Mode::Pinned => "D3 NET PINNED",
                 Mode::Attacks | Mode::Unrefused => "D3 NET ATTACKS",
             }
         );
@@ -245,6 +258,8 @@ impl Rig {
             Mode::Tcp => self.tcp(1)?,
             Mode::Twice => self.tcp(2)?,
             Mode::Attacks | Mode::Unrefused => self.attacks()?,
+            Mode::Peer => self.peer()?,
+            Mode::Pinned => self.pinned()?,
         }
         self.check_alive();
         Ok(())
@@ -480,10 +495,21 @@ impl Rig {
         labels: &[u64],
         args: &[&str],
     ) -> Result<Option<ExitNotice>, String> {
+        self.run_client_for(rules, labels, args, RUN_LIMIT)
+    }
+
+    /// [`Rig::run_client`], giving it `limit` µs rather than [`RUN_LIMIT`].
+    fn run_client_for(
+        &mut self,
+        rules: &[Rule],
+        labels: &[u64],
+        args: &[&str],
+        limit: u64,
+    ) -> Result<Option<ExitNotice>, String> {
         let (child, id, _) = self.client(rules, labels, args)?;
-        let notice = child.wait(RUN_LIMIT);
+        let notice = child.wait(limit);
         if notice.is_none() {
-            say!(self, "[net-rig] {} did not end within {} s: killed", args.join(" "), RUN_LIMIT / 1_000_000);
+            say!(self, "[net-rig] {} did not end within {} s: killed", args.join(" "), limit / 1_000_000);
         }
         self.disconnect(id);
         // Its weight and pages go back to the parent for the next.
@@ -557,6 +583,36 @@ impl Rig {
         say!(self, "[net-rig] listening on 8000 with a backlog of 2");
         let accepted = self.report(&listener, badge, event::ACCEPTED)?;
         self.check(accepted == 1, &format!("the listener accepted and echoed the bench's dial ({accepted})"));
+        Ok(())
+    }
+
+    /// The bench's peer, both ways: the echo peer counts one connection, and a connect to an
+    /// address in scope that nobody answers (slirp, `restrict=on`, drops it) ends rather than
+    /// hangs, by `ipd`'s `ctl` deadline or smoltcp's own timeout (plan 6.4, after K5).
+    fn peer(&mut self) -> Result<(), String> {
+        let echo = [Rule::Connect(prefix(ECHO_PEER, 32), ports(PEER_PORT))];
+        let notice = self.run_client(&echo, &[], &["role=echo", "addr=10.0.9.100", "port=7"])?;
+        let passed = matches!(notice, Some(n) if n.cause == Cause::Exited && n.code == 0);
+        self.check(passed, &format!("echo through 10.0.9.100:7: {}", describe(notice)));
+        let nowhere = [Rule::Connect(prefix(UNANSWERED, 32), ports(PEER_PORT))];
+        let args = ["role=connect", "addr=10.0.9.200", "port=7"];
+        let notice = self.run_client_for(&nowhere, &[], &args, ENDS_WITHIN)?;
+        let ended = matches!(notice, Some(n) if n.cause == Cause::Exited
+            && (n.code == code::TIMED_OUT || n.code == code::CONNECTED + 4));
+        self.check(ended, &format!("the connect nobody answers ended: {}", describe(notice)));
+        Ok(())
+    }
+
+    /// Pinned (plan 6.5): 64 parked reads given up by their caller, one parked read ended by
+    /// `ipd`'s deadline, then the echo: the client exits 0 only if every step held.
+    fn pinned(&mut self) -> Result<(), String> {
+        let echo = [Rule::Connect(prefix(ECHO_PEER, 32), ports(PEER_PORT))];
+        let args = ["role=pin", "addr=10.0.9.100", "port=7", "times=64"];
+        let notice = self.run_client_for(&echo, &[], &args, ENDS_WITHIN)?;
+        let passed = matches!(notice, Some(n) if n.cause == Cause::Exited && n.code == 0);
+        let what =
+            format!("64 abandoned reads, one ended by ipd's deadline, then the echo: {}", describe(notice));
+        self.check(passed, &what);
         Ok(())
     }
 

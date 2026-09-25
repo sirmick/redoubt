@@ -1,0 +1,26 @@
+description = "Bench self-check (answer 174, after K5): the peer and the capture work both ways on the real netd and ipd (tests/net rig). A client granted 10.0.9.100/32 port 7 reaches the peer there (exactly 1 connection); one granted 10.0.9.200/32 port 7, where no peer is (slirp, restrict=on, drops the SYN), sees its connect end, by ipd's 60 s ctl deadline or smoltcp's own timeout, rather than hang; the peer at 10.0.9.101:7 counts 0. Runs in virtual time (icount), so the waits pass at once"
+arch = ["rv64"]
+kind = "boot"
+programs = [{ package = "redoubt-net-tests", bin = "net-rig-peer" }]
+icount = "shift=3,sleep=off"
+timeout_secs = 180
+expect = [
+    '^\[net-rig\] ok: echo through 10\.0\.9\.100:7: exited 0$',
+    '^\[net-rig\] ok: the connect nobody answers ended: exited (34|44)$',
+    '^\[net-rig\] ok: netd and ipd still run ',
+    '^\[net-rig\] NET PEER PASSED$',
+]
+forbid = ['\[net-rig\] FAIL']
+poweroff = true
+
+[net]
+# tests/net/src/lib.rs: SELF_ARGS then SELF_ALWAYS (a host test keeps them equal).
+self_forbidden = ["10.0.2.0/24", "10.0.9.102/32", "0.0.0.0/8", "127.0.0.0/8", "224.0.0.0/4", "240.0.0.0/4", "255.255.255.255/32"]
+
+[[net.peer]]
+addr = "10.0.9.100:7"
+connections = 1
+
+[[net.peer]]
+addr = "10.0.9.101:7"
+connections = 0
