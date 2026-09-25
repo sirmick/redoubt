@@ -30,11 +30,17 @@ orchestrator transcript or launcher default prompt.
 
 Resolve actual model IDs/thinking choices from `about.caller.config_options` or
 `workspace_get.sessions[member_id].config_options` for the intended provider.
-Cost matters (owner, 2026-09-23): register `god` as a strong model with high thinking
-(Opus, not the largest model) and `pleb` as an efficient everyday model with medium
-thinking (Sonnet). Implementers and reviewers use pleb; only a trusted-code red team or
-the Architect uses god. Keep `max_active` at 2. If the owner has not named models, ask; do not guess IDs
-or silently substitute. Preserve existing user-selected profiles.
+Cost matters (owner, 2026-09-25). Three tiers, named by what they are for:
+
+| Tier | Model and thinking | Used by |
+| --- | --- | --- |
+| `frontier` | the strongest model the owner pays for (Opus, not the largest), high | orchestrator, Architect |
+| `workhorse` | the same model, medium | implementers, red team |
+| `light` | an efficient everyday model (Sonnet), medium | simplifier, editor |
+
+Wash has no profile registry, so each member's launch carries its tier's `model` and
+`effort`. Keep `max_active` at 2. If the owner has not named models, ask; do not guess IDs
+or silently substitute. Preserve models the owner has chosen for running members.
 
 The project root is the orchestrator's current working directory (`.` below); resolve
 it to an absolute path before submitting. Call `workspace_configure` with a single
@@ -47,16 +53,11 @@ the current project first.
   "workspace":{"name":"Redoubt","project_root":"."},
   "max_active":2,
   "max_members":16,
-  "profiles":{
-    "god":{"provider":"<provider>","model":"<verified most capable model ID>","thinking":"high","approval":"auto"},
-    "pleb":{"provider":"<provider>","model":"<verified everyday model ID>","thinking":"high","approval":"auto"}
-  },
-  "default_profile":"pleb",
   "document":{"path":"./docs/BUILD-PLAN.md","title":"Redoubt build plan"},
   "qa_document":{"path":"./docs/WORKSPACE-QA.md","title":"Redoubt QA"},
   "members":{
     "architect":{
-      "name":"Architect","profile":"god","cwd":".",
+      "name":"Architect","model":"<frontier model ID>","effort":"high","approval":"auto","cwd":".",
       "lifetime":"resident","role":"architect","can_spawn":false,
       "instructions":"You are Redoubt's resident Architect. Read PROJECT.md, docs/TENETS.md, docs/README.md, .pi/agents/architect.md and .pi/skills/architect-qa/SKILL.md. Own formal QUESTIONS/ANSWERS and specification updates, not implementation. Answer tracked QA through message_send with thread_id and reply_to. Cite settled rules; request genuine owner decisions with recommendation, alternatives and thread_id. Only actual human responses authorize changes. Apply the formal QA protocol, attach decision references and return the question to its implementer. Acknowledge inbox messages and complete explicit assignments. Set status/emoji and waiting using member_update, then END YOUR TURN. Stay resident; never poll or create another swarm."
     }
@@ -117,8 +118,8 @@ Size the review panel to the risk, in one `workspace_configure` patch. Every mem
 explicit instructions, with role `implementer` or `reviewer`:
 
 - Trusted code (kernel, loader, ABI, unsafe, anything a KERNEL-SPEC rule or attack case
-  governs): `<package>-implementer` plus three reviewers, `<package>-red` (on `god`),
-  `<package>-simplifier` and `<package>-editor`.
+  governs): `<package>-implementer` plus three reviewers, `<package>-red` (`workhorse`),
+  `<package>-simplifier` and `<package>-editor` (`light`, `capability:"reviewer"`).
 - Tests, docs, comments or tooling configuration only: `<package>-implementer` plus one
   reviewer, `<package>-red` for test changes or `<package>-editor` for documentation.
   Add the other angles only if its findings show the change is riskier than it looked.
@@ -150,7 +151,8 @@ That is `assignment_update`. Completing an assignment keeps a resident available
 an ephemeral agent retires after its assignment and turn end. Reserve ephemeral
 agents for bounded auxiliary tasks, not package implementers or reviewers.
 
-The owner runs Redoubt with `approval:"auto"` on `god` and `pleb` (2026-09-23): members
+The owner runs Redoubt with `approval:"auto"` on every member that can write (2026-09-23;
+read-only `capability:"reviewer"` members cannot take it): members
 run tools without per-call prompts, each approval is narrated in the member transcript,
 and host policy denies still win. Wash only accepts `auto` from an orchestrator that is
 itself auto-approved; if setup reports otherwise, ask the owner rather than dropping it.
