@@ -1,0 +1,18 @@
+description = "DMA frames come back only after a reset (WP-K5b, answer 173): a driver child brings the virtio disk up, holds DMA runs through it and is destroyed with its budget; its frames, when reallocated to another process (proven by physical address; no reuse is an inconclusive FAIL), were handed out only after the disk's status reads 0 (checked build)"
+arch = ["rv64"]
+kind = "boot"
+debug_assertions = true
+# The first program, so it holds every device object (INTERIM, kernel device.rs).
+programs = ["dma-reset-reuse"]
+timeout_secs = 30
+expect = [
+    '^\[dma-reset-reuse\] ok: the driver brought the disk up ',
+    '^\[dma-reset-reuse\] ok: the driver frames came back to this program ',
+    '^\[dma-reset-reuse\] ok: every reused frame was handed out after the disk reset ',
+    '^\[dma-reset-reuse\] DMA RESET REUSE PASSED$',
+]
+forbid = ['\[dma-reset-reuse\] FAIL', 'PROGRAM HALT']
+poweroff = true
+
+[disk]
+size_kib = 4096
