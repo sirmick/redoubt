@@ -155,19 +155,32 @@ The model implements answer 173 as the K5b plan rules it. `dma_alloc` frames are
 their process ends (OD2), and they cannot be lent, transferred or moved by `process_map`. At
 death the process's reset set S (OD3) is reset, and its frames are pooled only if every device in
 S confirmed in that same call. Otherwise all of them are quarantined (P1-1), and so is each device
-that failed to confirm. A quarantined device is refused to `map_device` and `dma_alloc` (OD6).
+that failed to confirm. Every handle to a quarantined device is swept, as R10 sweeps, from process
+tables and from messages not yet received (OD6; the Architect's K5b-od6-sweep ruling), so
+`map_device` and `dma_alloc` on an old index return `BadHandle`. The kernel destroys the device
+object; the model keeps the device as its flagged registry entry, and R10's message check counts
+it as destroyed.
 A quarantined frame's charge moves to the destroyed top's parent after the carve returns (OD5, N1).
-`Boot::default` appends a DMA device whose first reset fails, so the handles init creates
-start at 10, not 9; the example trace was re-recorded for that and nothing else.
+`Boot::default` appends a DMA device whose first reset fails and then a second healthy one, so
+the handles init creates start at 11, not 9; the example trace was re-recorded for that and
+nothing else.
 
 The new invariant, I-DMA, arms each DMA frame against every device in its holder's S. A device is
-disarmed only when its object shows it genuinely reset, and no free frame may still be armed.
-`Mutation::ALL` grows from 121 to 126 with five K5b breaks, each caught by `kernel_sequence`
-(`--test mutations -- --nocapture`). The setup now sometimes hands a child a DMA device, so the
-co-holder and reuse paths come up. A scripted trace (`dma_quarantine_trace`) makes the OD6 break
-visible to trace replay, and `tests/dma_contracts.rs` scripts OD2, pooling, P1-1 and the
-parent-at-its-limit case.
+disarmed for a frame only when the frame's holder dies and the device's object shows it genuinely
+reset; another process's death never disarms it, because a live co-holder can program the device
+again. No free frame may still be armed. The plan also names frames "newly handed out"; the pool
+check covers them, because `dma_alloc` takes frames never used before and every other allocation
+takes them from the free pool, which is checked after every step.
+`Mutation::ALL` grows from 121 to 127 with six K5b breaks, each caught by `kernel_sequence`
+(`--test mutations -- --nocapture`). The setup hands a child each DMA device half the time, and a
+child holding one maps it or allocates through it often, so the co-holder and reuse paths come up
+in short sequences. `Boot::default` appends a second healthy DMA device after the deaf one, so a
+process can allocate through one device and map another that a co-holder also reaches
+(`K5bResetClearsCoHolderReach`, from red review round 1). That mutation changes no answer while
+every reset confirms, so trace replay cannot see it; I-DMA does. A scripted trace
+(`dma_quarantine_trace`) makes the OD6 and P1-1 breaks visible to trace replay, and `tests/dma_contracts.rs` scripts OD2, pooling, P1-1, the
+co-holder case (with its mutation) and the parent-at-its-limit case.
 
 | Command | Result |
 | --- | --- |
-| `cargo test -p redoubt-model --release` | Passed: lib 6, coverage 1, current contracts 16, map_fixed 10, mutations 2 (all 126 detected), policy 7, properties 6 (1 ignored); traces 4 and dma contracts 4 after the trace fixes. |
+| `cargo test -p redoubt-model --release` | Passed: lib 6, coverage 1, current contracts 16, dma contracts 5, map_fixed 10, mutations 2 (all 127 detected), policy 7, properties 6 (1 ignored), traces 4 (red review round 1 fixes). |

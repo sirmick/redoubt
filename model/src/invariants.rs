@@ -18,7 +18,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::ghost::{Blame, Flow, Key, group};
-use crate::kernel::{Backing, Handle, Kernel, MapState, MsgKind, Object, Origin, ROOT, USERS, Wait};
+use crate::kernel::{Backing, DeviceKind, Handle, Kernel, MapState, MsgKind, Object, Origin, ROOT, USERS, Wait};
 use crate::spec::*;
 use crate::syscall::{MintSource, Ret};
 
@@ -439,7 +439,12 @@ fn delivered(
                         || k.ghost.owed.get(&p).is_some_and(|o| k.endpoints.contains_key(&o.endpoint)))
             }
             Object::Endpoint(e) => k.endpoints.contains_key(&e),
-            Object::Device(d) => k.devices.contains_key(&d),
+            // A quarantined device's object is destroyed as R10 destroys one (WP-K5b, OD6); the
+            // model keeps it only as the flagged registry entry.
+            Object::Device(d) => k
+                .devices
+                .get(&d)
+                .is_some_and(|dev| !matches!(dev.kind, DeviceKind::Mmio { quarantined: true, .. })),
         };
         let closed = !k.budgets.contains_key(&sent.stamp) || !live;
         let stamp = sent.stamp;
