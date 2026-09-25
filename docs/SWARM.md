@@ -100,7 +100,7 @@ work; it does not mean an implementer is running. Merged rows retain dependency 
 | K5a | merged | wp-k5a | 7526e8571: `map_fixed` (answer 172) in the kernel, redoubt-sys and the model, call 26; fixes a `tables_needed` under-count for ranges of 1 GiB or more (shared with `process_map`). Attack cases map-fixed-attack and map-fixed-tables; the R11MapFixedSkipsOverlap mutation is caught. Three review rounds; red team, editor and simplifier all OK (Wash QA K5a-review-1, K5a-review-2) |
 | K5 | merged | wp-k5 | 33db4858e (tip 1784a7f91): kernel-owned timer, timeouts, budget deadlines, one preemptive stride queue with inheritance and free-weight carving; redoubt-stride crate checked against the model; fence.i; pinned latency targets met on both widths. Five plan rounds, final red review MERGE (Wash QA K5-code-review-final). Follow-ups: K5-r10-destroy-cost, K5-carve-lead-rescale, K3-irq-level-latch |
 | K5b | building | wp-k5b | answer 173 (question 147): DMA device reset and frame quarantine; plan approved 2026-09-24, building in wave 6 (resident panel: red, simplifier, editor); gates R3 driver restart and off-bench D3 |
-| K6 | waiting | | needs K1-K5, R1b |
+| K6 | building | wp-k6 | delete the legacy interface; plan approved 2026-09-24; building in wave 6 on top of wp-k5b, rebased onto redoubt after K5b merges |
 | IPC1 | review | wp-ipc1 | Implementation in fe807fc4b, its TCB rounds complete; 26cba3022's shared record validator reviewed in G1. Host model recovered; native replay, K5 timer, serving-path and concurrency gates remain open; native exit covered by K4 |
 | R1 | merged | wp-r1 | 8298608af (carried the answers 39-42, 50-53 part of R1b) |
 | R1b | merged | wp-r1b | 86117e7af |
