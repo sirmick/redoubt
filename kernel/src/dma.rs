@@ -293,3 +293,12 @@ impl MemoryManager {
         self.dma.slots.iter().flatten().flat_map(|s| s.runs.iter().flatten()).any(|r| r.holder == Some(pid))
     }
 }
+
+/// Whether `[base, base + size)`, rounded out to whole pages, touches any DMA-flagged device the
+/// loader reported, registered or not (legacy `MapMemory`; WP-K5b, P2-1). `None` if the rounding
+/// overflows. Device ranges are whole pages (`device.rs`, `decode_entry`).
+pub fn overlaps_dma_device(base: usize, size: usize) -> Option<bool> {
+    let start = (base & !(PAGE_SIZE - 1)) as u64;
+    let end = base.checked_add(size)?.checked_next_multiple_of(PAGE_SIZE)? as u64;
+    Some(crate::device::dma_ranges().any(|(b, s)| start < b + s && b < end))
+}
