@@ -70,6 +70,8 @@ fn a_rule_breaking_kernel_fails_replay() {
     texts.push(common::contracts::serve_blame_trace());
     // The equal-instant expiry order needs a timeout and a budget deadline on one instant.
     texts.push(common::contracts::expiry_order_trace());
+    // A quarantined device named again (WP-K5b, OD6).
+    texts.push(common::contracts::dma_quarantine_trace());
     let mut missed = Vec::new();
     let invisible = |m: &Mutation| {
         m.rule() == "policy"
@@ -109,7 +111,7 @@ fn lender_dies_mid_call() -> Vec<Op> {
         })
     };
     let init = |call| Op::Sys { pid: 1, tid: 1, call };
-    // init's slots: 1 root, 2 system, 3 users, 4-8 the devices; new handles from 9.
+    // init's slots: 1 root, 2 system, 3 users, 4-9 the devices; new handles from 10.
     let budget = |parent, account| Syscall::BudgetCreate {
         parent,
         pages: 32,
@@ -121,15 +123,15 @@ fn lender_dies_mid_call() -> Vec<Op> {
         deadline: FOREVER,
     };
     let buf = 0x10_0000_0000; // the model's first kernel-chosen address
-    go(&mut k, init(Syscall::EndpointCreate)); // h:9
-    go(&mut k, init(budget(3, 1001))); // h:10 alice
-    go(&mut k, init(budget(2, 0))); // h:11 server
-    go(&mut k, init(Syscall::ProcessCreate { budget: 11, exit_endpoint: 9 })); // h:12
-    let start = Syscall::ProcessStart { process: 12, entry: 0x1000, sp: 0x2000, arg: 0, handles: vec![9] };
+    go(&mut k, init(Syscall::EndpointCreate)); // h:10
+    go(&mut k, init(budget(3, 1001))); // h:11 alice
+    go(&mut k, init(budget(2, 0))); // h:12 server
+    go(&mut k, init(Syscall::ProcessCreate { budget: 12, exit_endpoint: 10 })); // h:13
+    let start = Syscall::ProcessStart { process: 13, entry: 0x1000, sp: 0x2000, arg: 0, handles: vec![10] };
     let (sp, st) = go(&mut k, init(start)).unwrap();
-    go(&mut k, init(Syscall::Mint { source: MintSource::Handle(9), badge: 5, budget: Some(10) })); // h:13
-    go(&mut k, init(Syscall::ProcessCreate { budget: 10, exit_endpoint: 9 })); // h:14
-    let start = Syscall::ProcessStart { process: 14, entry: 0x1000, sp: 0x2000, arg: 0, handles: vec![13] };
+    go(&mut k, init(Syscall::Mint { source: MintSource::Handle(10), badge: 5, budget: Some(11) })); // h:14
+    go(&mut k, init(Syscall::ProcessCreate { budget: 11, exit_endpoint: 10 })); // h:15
+    let start = Syscall::ProcessStart { process: 15, entry: 0x1000, sp: 0x2000, arg: 0, handles: vec![14] };
     let (cp, ct) = go(&mut k, init(start)).unwrap();
     let server = |call| Op::Sys { pid: sp, tid: st, call };
     let client = |call| Op::Sys { pid: cp, tid: ct, call };
@@ -140,13 +142,13 @@ fn lender_dies_mid_call() -> Vec<Op> {
     go(&mut k, client(Syscall::Call { h: 1, words: [1, 2, 3, 4], handles: vec![], lend, timeout: FOREVER }));
     go(&mut k, Op::Read { pid: sp, tid: st, addr: buf });
     go(&mut k, Op::Write { pid: sp, tid: st, addr: buf, value: 99 });
-    go(&mut k, init(Syscall::BudgetUsage { h: 11 }));
-    go(&mut k, init(Syscall::BudgetDestroy { h: 10 }));
+    go(&mut k, init(Syscall::BudgetUsage { h: 12 }));
+    go(&mut k, init(Syscall::BudgetDestroy { h: 11 }));
     go(&mut k, Op::Read { pid: sp, tid: st, addr: buf });
-    go(&mut k, init(Syscall::BudgetUsage { h: 11 }));
+    go(&mut k, init(Syscall::BudgetUsage { h: 12 }));
     go(&mut k, server(Syscall::Receive { h: Some(1), timeout: 0, max_transfer: 0 }));
     go(&mut k, server(Syscall::Reply { msg_id: 1, words: [0; 4], handles: vec![] }));
-    go(&mut k, init(Syscall::BudgetUsage { h: 11 }));
+    go(&mut k, init(Syscall::BudgetUsage { h: 12 }));
     go(&mut k, server(Syscall::Receive { h: Some(1), timeout: 0, max_transfer: 0 }));
     ops
 }

@@ -83,6 +83,10 @@ commands above are instructions, not assertions that any particular run complete
 
 `ghost.rs` records source authority, delivered calls, ownership transitions and expected blame;
 `invariants.rs` recomputes I1-I9/I11-I15 from objects rather than trusting usage counters.
+WP-K5b (answer 173) adds I-DMA: `ghost.rs` arms each DMA frame against every device its holder
+could reach and disarms a device only on a reset that genuinely confirms (read from the device
+object, not from the kernel's answer), and no frame in the free pool may be armed; a quarantined
+device handed out again (OD6) is a violation too.
 `check::budget_lifecycle` supplies I10's before/after comparison. New IPC examples exercise queued
 and taken cancellation, server-thread death, returned same-process lends, partial replies and
 late-output rollback. Invalid raw lends report returned without certifying the supplied mapping.
@@ -91,7 +95,8 @@ late-output rollback. Invalid raw lends report returned without certifying the s
 
 Text records retain `boot`, `costs`, `device`, `start`, `do`, memory accesses, `fault`, `irq`,
 `tick`, `note` and `wake`. Header: `redoubt-model-trace 2`. `costs` now includes `contexts=N`;
-`budget_create` has no obsolete priority argument. Names `p:`, `t:`, `h:`, `a:`, `m:` bind chosen
+`budget_create` has no obsolete priority argument. `device mmio` takes an optional
+`resets=always|first-fails|never` (default `always`; WP-K5b's reset outcome for a DMA device). Names `p:`, `t:`, `h:`, `a:`, `m:` bind chosen
 PID/thread/handle/address/message values. Lists use `[a,b,...]`; `-` is none; `forever` is no timeout.
 `record p:P t:T owned|unmapped|readonly|borrowed|device|copyfault|ADDRESS` changes record validity.
 Call results print `call status=ok|ERROR lend=none|returned|consumed reply=absent|present`, followed
