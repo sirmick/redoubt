@@ -212,17 +212,15 @@ impl MemoryManager {
     /// Reset right first and the console and its interrupt next, so a test program can name
     /// one without a manifest.
     pub fn boot_devices(&mut self, owner: BudgetFrame, first: Option<PID>, stamp: BudgetRef) {
-        let Some(tag) =
-            crate::args::KernelArguments::get().iter().find(|a| a.name == u32::from_le_bytes(*b"Devs"))
-        else {
+        let Some(entries) = devs() else {
             println!("Devices: the loader reported none");
             return;
         };
-        assert!(tag.data.len() % ENTRY_WORDS == 0, "Devs is not a whole number of entries");
-        for words in tag.data.chunks_exact(ENTRY_WORDS) {
+        let n = entries.len();
+        for words in entries {
             let d = self.decode_entry(words);
             // A DMA device the kernel cannot reset gets no object at all (WP-K5b, fail closed);
-            // legacy `MapMemory` still refuses it (WP-K5b commit 3).
+            // legacy `MapMemory` still refuses it (`dma_ranges`).
             if d.kind == Kind::Mmio && d.dma && !self.dma_register(d.base) {
                 println!("Devices: no DMA slot for {:x}; it gets no device object", d.base);
                 continue;
@@ -233,7 +231,6 @@ impl MemoryManager {
                 self.install_handle(pid, handle).expect("boot: no room for a device handle");
             }
         }
-        let n = tag.data.len() / ENTRY_WORDS;
         println!("Devices: {} objects, all held by the first program (INTERIM)", n);
     }
 
@@ -241,8 +238,7 @@ impl MemoryManager {
     /// Every check here is fail-closed: a malformed entry stops the boot rather than becoming
     /// an object that names something it must not.
     fn decode_entry(&self, words: &[u32]) -> Device {
-        let value = |i: usize| u64::from(words[i]) | u64::from(words[i + 1]) << 32;
-        let (base, size, flags) = (value(1), value(3), words[5]);
+        let (base, size, flags) = (entry_value(words, 1), entry_value(words, 3), words[5]);
         let none = BudgetRef { frame: 0, id: 0 };
         let mut d = Device {
             id: 0,
@@ -272,7 +268,7 @@ impl MemoryManager {
                 d.kind = Kind::Mmio;
                 d.base = base;
                 d.size = size;
-                d.dma = flags & 1 != 0;
+                d.dma = flags & DEVS_DMA != 0;
             }
             2 => {
                 let irq = u32::try_from(base).expect("Devs: an interrupt number too wide");
@@ -293,6 +289,29 @@ impl MemoryManager {
 
 /// Words in one `Devs` entry.
 const ENTRY_WORDS: usize = 6;
+/// An MMIO `Devs` entry's flag: the device is a bus master (BOOT.md).
+const DEVS_DMA: u32 = 1;
+
+/// The loader's `Devs` entries (BOOT.md), or `None` if it reported none.
+fn devs() -> Option<core::slice::ChunksExact<'static, u32>> {
+    let tag = crate::args::KernelArguments::get().iter().find(|a| a.name == u32::from_le_bytes(*b"Devs"))?;
+    assert!(tag.data.len() % ENTRY_WORDS == 0, "Devs is not a whole number of entries");
+    Some(tag.data.chunks_exact(ENTRY_WORDS))
+}
+
+/// The 64-bit value at word `i` of a `Devs` entry, low word first.
+fn entry_value(words: &[u32], i: usize) -> u64 { u64::from(words[i]) | u64::from(words[i + 1]) << 32 }
+
+/// Every DMA-flagged MMIO range the loader reported, as (base, size), whether or not it got a
+/// device object (WP-K5b: legacy `MapMemory` refuses them all). `decode_entry` checked each
+/// at boot.
+pub fn dma_ranges() -> impl Iterator<Item = (u64, u64)> {
+    devs()
+        .into_iter()
+        .flatten()
+        .filter(|w| w[0] == 1 && w[5] & DEVS_DMA != 0)
+        .map(|w| (entry_value(w, 1), entry_value(w, 3)))
+}
 
 /// Words in one `Ctrl` entry: base and size, low word first.
 const CTRL_WORDS: usize = 4;
