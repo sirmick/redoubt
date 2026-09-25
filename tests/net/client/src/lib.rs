@@ -57,6 +57,10 @@ pub mod code {
     pub const PIN_REFUSED: u32 = 35;
     /// `pin`: a read with nothing coming did not end with `ipd`'s deadline.
     pub const NO_DEADLINE: u32 = 36;
+    /// `pin`: a listener's `ctl` read with no peer coming did not end with `ipd`'s deadline.
+    pub const NO_CTL_DEADLINE: u32 = 37;
+    /// The port `pin` listens on for its `ctl` deadline.
+    pub const PIN_LISTEN_PORT: u16 = 8001;
 }
 
 /// What a launched program does.
@@ -74,7 +78,9 @@ pub enum Role {
     /// Attaches, reports, and holds its bucket until it is killed.
     Hold,
     /// Connects to `addr:port`, then `times` reads that its own short timeout abandons while they
-    /// are parked, then one read with nothing coming that `ipd`'s deadline must end, then an echo.
+    /// are parked, then one read with nothing coming that `ipd`'s deadline must end, then an echo;
+    /// then listens on `code::PIN_LISTEN_PORT` and waits on its `ctl` with no peer coming, which
+    /// `ipd`'s `ctl` deadline must end.
     Pin,
 }
 

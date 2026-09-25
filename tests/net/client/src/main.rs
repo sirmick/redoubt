@@ -274,6 +274,15 @@ impl Me {
         if &back[..] != &sent[..] {
             return Err(code::ECHO);
         }
+        // A listener nobody connects to: its `ctl` read (an accept) must end with ipd's 60 s
+        // `ctl` deadline, `timeout`, not wait for ever.
+        let listener = self.socket()?;
+        let listen = net_ctl::Message::Listen(net_ctl::Listen { port: code::PIN_LISTEN_PORT, backlog: 1 });
+        self.ctl(&listener, listen, code::LISTEN)?;
+        let mut words = [0u8; 8];
+        if self.c.read(listener.ctl, 0, &mut words) != Err(ClientError::Remote) {
+            return Err(code::NO_CTL_DEADLINE);
+        }
         Ok(())
     }
 

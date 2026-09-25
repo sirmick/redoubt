@@ -85,7 +85,7 @@ const OUTSIDE_TARGET: [u8; 4] = [10, 0, 9, 101];
 const FORWARDED_SELF: [u8; 4] = [10, 0, 9, 102];
 const OUTSIDE_CONTROL: [u8; 4] = [10, 0, 9, 110];
 const TWIN_PEER: [u8; 4] = [10, 0, 9, 111];
-/// In scope but no peer: slirp drops the SYN.
+/// In scope but no peer: slirp refuses the SYN at once.
 const UNANSWERED: [u8; 4] = [10, 0, 9, 200];
 const PEER_PORT: u16 = 7;
 
@@ -387,7 +387,10 @@ impl Rig {
             args.push(format!("self={prefix}"));
         }
         args.push(format!("ingress={INGRESS}"));
-        args.push(format!("scope={ROOT}:c:0.0.0.0/0:1-65535,l:{LISTEN_PORT},l:{PROBE_PORT}"));
+        args.push(format!(
+            "scope={ROOT}:c:0.0.0.0/0:1-65535,l:{LISTEN_PORT},l:{PROBE_PORT},l:{}",
+            redoubt_net_client::code::PIN_LISTEN_PORT
+        ));
         args.push(String::from("buckets=4"));
         // The rig's root holds a grant for every program alive at once: the victim, the labelled
         // caller and three holders in the attack case, more than the default 4.
@@ -586,9 +589,10 @@ impl Rig {
         Ok(())
     }
 
-    /// The bench's peer, both ways: the echo peer counts one connection, and a connect to an
-    /// address in scope that nobody answers (slirp, `restrict=on`, drops it) ends rather than
-    /// hangs, by `ipd`'s `ctl` deadline or smoltcp's own timeout (plan 6.4, after K5).
+    /// The bench's peer, both ways: the echo peer counts one connection, and a connect in scope to
+    /// an address with no peer ends closed: slirp (`restrict=on`) refuses it at once with an RST
+    /// (QA D3-code-review-final: this is a refusal, not a timeout; `d3-net-pinned` tests the
+    /// deadlines).
     fn peer(&mut self) -> Result<(), String> {
         let echo = [Rule::Connect(prefix(ECHO_PEER, 32), ports(PEER_PORT))];
         let notice = self.run_client(&echo, &[], &["role=echo", "addr=10.0.9.100", "port=7"])?;
@@ -596,22 +600,27 @@ impl Rig {
         self.check(passed, &format!("echo through 10.0.9.100:7: {}", describe(notice)));
         let nowhere = [Rule::Connect(prefix(UNANSWERED, 32), ports(PEER_PORT))];
         let args = ["role=connect", "addr=10.0.9.200", "port=7"];
-        let notice = self.run_client_for(&nowhere, &[], &args, ENDS_WITHIN)?;
-        let ended = matches!(notice, Some(n) if n.cause == Cause::Exited
-            && (n.code == code::TIMED_OUT || n.code == code::CONNECTED + 4));
-        self.check(ended, &format!("the connect nobody answers ended: {}", describe(notice)));
+        let notice = self.run_client(&nowhere, &[], &args)?;
+        let refused = matches!(notice, Some(n) if n.cause == Cause::Exited && n.code == code::CONNECTED + 4);
+        self.check(refused, &format!("the connect slirp refuses ended closed: {}", describe(notice)));
         Ok(())
     }
 
     /// Pinned (plan 6.5): 64 parked reads given up by their caller, one parked read ended by
-    /// `ipd`'s deadline, then the echo: the client exits 0 only if every step held.
+    /// `ipd`'s 30 s data deadline, the echo, then a listener's `ctl` read ended by `ipd`'s 60 s
+    /// `ctl` deadline: the client exits 0 only if every step held.
     fn pinned(&mut self) -> Result<(), String> {
-        let echo = [Rule::Connect(prefix(ECHO_PEER, 32), ports(PEER_PORT))];
+        let echo = [
+            Rule::Connect(prefix(ECHO_PEER, 32), ports(PEER_PORT)),
+            Rule::Listen(ports(redoubt_net_client::code::PIN_LISTEN_PORT)),
+        ];
         let args = ["role=pin", "addr=10.0.9.100", "port=7", "times=64"];
         let notice = self.run_client_for(&echo, &[], &args, ENDS_WITHIN)?;
         let passed = matches!(notice, Some(n) if n.cause == Cause::Exited && n.code == 0);
-        let what =
-            format!("64 abandoned reads, one ended by ipd's deadline, then the echo: {}", describe(notice));
+        let what = format!(
+            "64 abandoned reads, a read and an accept ended by ipd's deadlines, the echo: {}",
+            describe(notice)
+        );
         self.check(passed, &what);
         Ok(())
     }
