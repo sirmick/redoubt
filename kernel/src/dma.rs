@@ -48,7 +48,7 @@ const RESET_READS: u32 = 100_000;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum State {
-    /// Held by a live process (or by none yet: it is being set up).
+    /// Held by a live process: `holder` is always `Some`.
     Live,
     /// Its process died and some device in its S did not confirm: never pooled.
     Quarantined,
