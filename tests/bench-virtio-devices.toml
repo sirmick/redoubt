@@ -3,6 +3,7 @@ arch = ["rv64"]
 kind = "boot"
 # The first program holds every device object and maps each through its handle: no virtio slot
 # is reachable by legacy MapMemory grants (WP-K5b).
+# It prints on the console it maps itself, not through log-server: the UART has one owner.
 programs = ["virtio-probe"]
 timeout_secs = 20
 # In handle order, which is the loader's: the disk comes before the network card.
