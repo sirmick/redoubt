@@ -47,12 +47,6 @@ const WAKE_P50: usize = 15_000;
 const WAKE_P99: usize = 50_000;
 const NOTICE_P99: usize = 30_000;
 const R10_P99: usize = 30_000;
-/// Decision-to-dead (K5-code-review-5's own combined target: decision wake + R10, p99 <= 80 ms),
-/// not `WAKE_P99`. `WAKE_P99` is pinned for driver and steward *timer* wake only (BUILD-PLAN);
-/// applying it to decision wake too (K5-latency-flake) checked a tighter, unpinned number and
-/// flaked at N=16 under real contention (20-run sample: a stable ~9-24 ms baseline, occasionally
-/// 58-82 ms, both well inside 80 ms once R10's own, separately-bounded 30 ms is folded in).
-const DECISION_DEAD_P99: usize = 80_000;
 
 fn verdict(b: bool) -> &'static str { if b { "met" } else { "missed" } }
 
@@ -110,7 +104,7 @@ pub extern "C" fn _start() -> ! {
         for (i, tag, what, p50, p99) in [
             (d, Stats::DRIVER_WAKE, "driver wake", Some(WAKE_P50), WAKE_P99),
             (s, Stats::TIMER_WAKE, "steward timer wake", Some(WAKE_P50), WAKE_P99),
-            (s, Stats::DECISION_WAKE, "steward decision wake", Some(WAKE_P50), DECISION_DEAD_P99),
+            (s, Stats::DECISION_WAKE, "steward decision wake", Some(WAKE_P50), WAKE_P99),
             (s, Stats::DEADLINE, "deadline notice", None, NOTICE_P99),
         ] {
             match stat(i, tag) {
