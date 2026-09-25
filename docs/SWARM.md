@@ -115,7 +115,7 @@ work; it does not mean an implementer is running. Merged rows retain dependency 
 | B2b | waiting | | `Redoubt.Ed`, `Shell.top()`; needs B2a |
 | D1 | merged | wp-d1b | 8681f2648; blkd recovered from wp-d1, reviewed R-D1 (editor BLOCK fixed; red team 4/4 OK) |
 | D2 | waiting | | D1/L1/R1b merged; held-fid and consumed filesystem contracts need reconciliation (including Q131); boot acceptance needs R3 |
-| D3 | building | wp-d3 | External claim unverified; no source supplied in recovery review |
+| D3 | merged | wp-d3 | dc3c8aab1: netd (virtio-net, hostile-device checks, reset on every controlled exit) and ipd:lan on vendored smoltcp 0.14.0 (IPv4/TCP, /net over 9P, prefix-and-port scopes that never reach the box, labelled callers refused, CSPRNG ISNs); testbench peer and pcap; rig boot cases. Six review rounds, final MERGE (Wash QA D3-code-review-final). Bench-only until WP-K5b (Q147); manifest boot, netd restart and S2/S3 remain R3/S gates |
 | S1 | merged | wp-s1 | 14bcc6e9d |
 | S2 | waiting | | needs integrated R3 startup infrastructure, B1 and D2; coordinate R3 blame and S3 session protocol tables before implementation |
 | S3 | waiting | | needs D3/S1/S2/B2; full console acceptance also needs B2a/R1d (Q163), per-channel resize/abandonment and cleanup |
