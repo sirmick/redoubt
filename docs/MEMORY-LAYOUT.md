@@ -25,13 +25,17 @@ the physmap: devices are mapped explicitly per server.
 The top root entries are the kernel's and are shared by every address space; creating a process copies
 them from the current root. Those entries are created once by the loader and never change (the
 loader pre-creates the shared intermediate tables, so later kernel mappings, such as the PLIC, appear
-everywhere).
+everywhere). The DMA register window is one page per DMA device, the device's first register page,
+for the kernel alone: it resets a device through it before that device's frames are reused
+(IO-ARCHITECTURE.md, DMA). The loader also creates the window's leaf tables, so the kernel maps it
+without allocating.
 
 | | Sv39 (rv64) | Sv32 (rv32) |
 | --- | --- | --- |
 | Userspace | root 0..=255, below `0x40_0000_0000` | root 0..=511, below `0x8000_0000` |
 | Physmap | root 256..=383 at `0xffff_ffc0_0000_0000`, from physical 0, 1 GiB leaves | root 512..=1019 at `0x8000_0000`, identity (QEMU RAM starts there), 4 MiB leaves |
 | Interrupt controller | `0xffff_ffff_f000_0000` | root 1020..=1021 at `0xff00_0000` |
+| DMA device registers (WP-K5b) | `0xffff_ffff_f400_0000`, 16 pages, after the largest PLIC (64 MiB) | the last 64 KiB of root 1021, `0xff7f_0000`; the PLIC must end below it (checked at boot) |
 | Per-process kernel data | root 510 at `0xffff_ffff_8000_0000` | root 1022 at `0xff80_0000` |
 | Kernel image, stacks, arguments | root 511 at `0xffff_ffff_c000_0000` | root 1023 at `0xffc0_0000` |
 
