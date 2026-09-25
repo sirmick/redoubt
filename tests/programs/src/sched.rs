@@ -80,8 +80,9 @@ pub enum Role {
     /// 3, interrupt in slot 4), each waited for in `receive`; report [`Stats::DRIVER_WAKE`].
     Driver = 14,
     /// The latency case's steward stand-in, with leases carved from slot 3: p0 timeout wakes,
-    /// p1 leases destroyed by hand and p1 destroyed by their deadlines; report
-    /// [`Stats::TIMER_WAKE`], [`Stats::DESTROY`] and [`Stats::DEADLINE`].
+    /// p1 leases destroyed by hand (each after a timeout: its decision) and p1 destroyed by their
+    /// deadlines; report [`Stats::TIMER_WAKE`], [`Stats::DESTROY`], [`Stats::DECISION_WAKE`] and
+    /// [`Stats::DEADLINE`].
     Steward = 15,
 }
 
@@ -537,7 +538,11 @@ pub struct Stats;
 
 impl Stats {
     pub const DEADLINE: usize = 4;
+    /// The steward's wake from the timeout after which it destroys a lease: its decision.
+    pub const DECISION_WAKE: usize = 5;
     pub const DESTROY: usize = 3;
+    /// The driver's alarms that never arrived (first word: how many).
+    pub const DRIVER_LOST: usize = 6;
     pub const DRIVER_WAKE: usize = 1;
     pub const TIMER_WAKE: usize = 2;
 
@@ -553,22 +558,33 @@ impl Stats {
 }
 
 /// The most samples a stand-in takes of one thing.
-const MAX_SAMPLES: usize = 64;
+const MAX_SAMPLES: usize = 256;
 
 /// The driver stand-in: `k` alarms, each a little over 2 ms ahead (phases spread over a
 /// millisecond); how late, on the RTC's own clock, it runs again after each.
 fn driver(k: usize) {
     let Ok((base, _)) = rd::map_device(3) else { return };
     let mut late = [0u64; MAX_SAMPLES];
-    let k = k.min(MAX_SAMPLES);
-    for (i, sample) in late[..k].iter_mut().enumerate() {
+    let (k, mut n, mut lost) = (k.min(MAX_SAMPLES), 0, 0usize);
+    for i in 0..2 * k {
+        if n == k {
+            break;
+        }
         let at = rtc::now_ns(base) + 2_000_000 + (i as u64 * 397_000) % 1_000_000;
         rtc::alarm(base, at);
-        let _ = rd::receive(Some(4), rd::FOREVER, 0);
-        *sample = rtc::now_ns(base).saturating_sub(at) / 1000;
+        // An alarm that fires while the source is masked (the driver's slice ended before it
+        // got back into `receive`) may never be delivered (K5-code-review-5, R5: K3's
+        // follow-up); give up on it after 100 ms, count it, and arm again.
+        if matches!(rd::receive(Some(4), 100_000, 0), Ok(Received::Interrupt)) {
+            late[n] = rtc::now_ns(base).saturating_sub(at) / 1000;
+            n += 1;
+        } else {
+            lost += 1;
+        }
         rtc::clear(base);
     }
-    Stats::report(&mut late[..k], Stats::DRIVER_WAKE);
+    Stats::report(&mut late[..n], Stats::DRIVER_WAKE);
+    let _ = rd::send(1, &rd::body([lost, 0, 0, Stats::DRIVER_LOST | 1 << 8]), None, rd::FOREVER);
 }
 
 /// The steward stand-in: `k` timeout wakes (how late it runs again after each deadline); `leases`
@@ -593,10 +609,36 @@ fn steward(k: usize, leases: usize) {
     startup[0] = Role::Spin as u8;
     // A lease's spinner counts until a window that never ends (its lease ends first).
     let (mut destroy, mut nd) = ([0u64; MAX_SAMPLES], 0);
+    let (mut decision, mut ns) = ([0u64; MAX_SAMPLES], 0);
     let (mut notice, mut nn) = ([0u64; MAX_SAMPLES], 0);
-    for i in 0..2 * leases {
-        let by_deadline = i >= leases;
-        let deadline = if by_deadline { now() + 200_000 } else { rd::FOREVER };
+    // By hand: spawn a lease's process, sleep (the timeout the steward decides on), destroy.
+    for _ in 0..leases * 2 {
+        if nd == leases {
+            break;
+        }
+        let Ok(lease) = rd::create(3, &rd::spec(pages, 1, 10)) else { continue };
+        if spawn::spawn(&image, lease, exit, lease_spinner as *const () as usize, &startup, &[]).is_err() {
+            let _ = rd::destroy(lease);
+            continue;
+        }
+        let before = now();
+        let _ = rd::receive(None, 5_000, 0);
+        let woke = now();
+        decision[ns] = woke.saturating_sub(before + 5_000);
+        ns += 1;
+        if rd::destroy(lease).is_ok() {
+            destroy[nd] = now() - woke;
+            nd += 1;
+        }
+        let _ = rd::receive(Some(exit), 1_000_000, 0);
+    }
+    // By deadline: the deadline is set before the spawn, so it leaves room for the spawn under
+    // load; a lease whose deadline came first is retried.
+    for _ in 0..leases * 2 {
+        if nn == leases {
+            break;
+        }
+        let deadline = now() + 150_000;
         let Ok(lease) = rd::create(3, &rd::BudgetSpec { deadline, ..rd::spec(pages, 1, 10) }) else {
             continue;
         };
@@ -604,23 +646,15 @@ fn steward(k: usize, leases: usize) {
             let _ = rd::destroy(lease);
             continue;
         }
-        if !by_deadline {
-            let _ = rd::receive(None, 5_000, 0);
-            let before = now();
-            if rd::destroy(lease).is_ok() {
-                destroy[nd] = now() - before;
-                nd += 1;
-            }
-        }
-        // The lease's one process: its `killed` notice (by hand, or at the deadline).
         if let Ok(Received::Exit(n)) = rd::receive(Some(exit), 1_000_000, 0) {
-            if by_deadline && n.cause == rd::Cause::Killed {
+            if n.cause == rd::Cause::Killed {
                 notice[nn] = now().saturating_sub(deadline);
                 nn += 1;
             }
         }
     }
     Stats::report(&mut destroy[..nd], Stats::DESTROY);
+    Stats::report(&mut decision[..ns], Stats::DECISION_WAKE);
     Stats::report(&mut notice[..nn], Stats::DEADLINE);
 }
 

@@ -921,6 +921,16 @@ impl MemoryManager {
 /// is, if any. Returns whether the caller is gone (it must not be resumed).
 pub fn destroy_subtree(ss: &mut SystemServices, top: BudgetFrame, caller: Option<PID>, bill: bool) -> bool {
     let started = crate::sched::now_ticks();
+    #[cfg(feature = "sched-trace")]
+    let top_id = MemoryManager::with(|mm| mm.budget_id(top));
+    #[cfg(feature = "sched-trace")]
+    crate::sched::trace::r10(crate::sched::trace::R10_BEGIN, top_id);
+    #[cfg(feature = "sched-trace")]
+    crate::sched::trace::record(
+        crate::sched::trace::R10_FRAMES,
+        0,
+        MemoryManager::with(|mm| u128::from(mm.objects.high_frame)),
+    );
     let mut caller_doomed = false;
     for index in 1..=MAX_PROCESS_COUNT {
         let Some(victim) = PID::new(index as u8) else { continue };
@@ -959,5 +969,7 @@ pub fn destroy_subtree(ss: &mut SystemServices, top: BudgetFrame, caller: Option
         mm.lift_dying(top);
         mm.destroy_marked(top);
     });
+    #[cfg(feature = "sched-trace")]
+    crate::sched::trace::r10(crate::sched::trace::R10_END, top_id);
     caller_doomed
 }

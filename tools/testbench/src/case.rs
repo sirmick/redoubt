@@ -156,9 +156,9 @@ pub struct Boot {
     /// The case passes only if the bench fails it for a reason matching this regular
     /// expression: self-checks proving that a bench feature can fail (TENETS.md 6).
     pub must_fail: Option<String>,
-    /// A check the bench runs on the console log once everything else passed, by name. The one
-    /// there is: `sched_oracle`, the stride queue's rank clauses over a `sched-trace` kernel's
-    /// trace (`sched_oracle.rs`).
+    /// A check the bench runs on the console log once everything else passed, by name, then its
+    /// arguments. The one there is: `sched_oracle`, the stride queue's ranks, floor and lifts over
+    /// a `sched-trace` kernel's trace (`sched_oracle.rs`); `r10_p99_us=N` bounds destructions.
     pub post_check: Option<String>,
 }
 

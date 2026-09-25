@@ -1,0 +1,32 @@
+description = "Reference run in real time (no icount), reporting without judging: latency under the named workload (WP-K5), as sched-latency, with host load showing up as guest latency; the rank oracle still checks every pick (plain TCG, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+programs = ["sched-latency"]
+kernel_features = ["sched-trace"]
+# Order only: R10's time is host time here, so no bound.
+post_check = "sched_oracle"
+timeout_secs = 1800
+expect = [
+    '^\[latency\] the RTC keeps virtual time: (met|missed)',
+    '^\[latency\] N=1 driver wake: .*: target (met|missed)',
+    '^\[latency\] N=1 steward timer wake: .*: target (met|missed)',
+    '^\[latency\] N=1 steward decision wake: .*: target (met|missed)',
+    '^\[latency\] N=1 deadline notice: .*: target (met|missed)',
+    '^\[latency\] N=1 budget_destroy, call to return: ',
+    '^\[latency\] N=4 driver wake: .*: target (met|missed)',
+    '^\[latency\] N=4 steward timer wake: .*: target (met|missed)',
+    '^\[latency\] N=4 steward decision wake: .*: target (met|missed)',
+    '^\[latency\] N=4 deadline notice: .*: target (met|missed)',
+    '^\[latency\] N=4 budget_destroy, call to return: ',
+    '^\[latency\] N=16 driver wake: .*: target (met|missed)',
+    '^\[latency\] N=16 steward timer wake: .*: target (met|missed)',
+    '^\[latency\] N=16 steward decision wake: .*: target (met|missed)',
+    '^\[latency\] N=16 deadline notice: .*: target (met|missed)',
+    '^\[latency\] N=16 budget_destroy, call to return: ',
+    '^\[latency\] N=16: the 1000-weight server got \d+ of 1000 of the spinning CPU: target (met|missed)',
+    '^SCHED-LATENCY TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['\[latency\] FAIL', 'PROGRAM HALT']
+poweroff = true

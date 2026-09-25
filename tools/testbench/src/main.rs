@@ -365,12 +365,15 @@ fn run_case(
     Ok(results)
 }
 
-/// Run a case's `post_check` over the console log of a boot that passed.
+/// Run a case's `post_check` (a name, then its arguments) over the console log of a boot that
+/// passed.
 fn post_check(boot: &case::Boot, log: &Path) -> Result<Outcome> {
     let text = std::fs::read(log).with_context(|| format!("reading {}", log.display()))?;
     let text = String::from_utf8_lossy(&text);
-    Ok(match boot.post_check.as_deref() {
-        Some("sched_oracle") => match sched_oracle::run(&text) {
+    let check = boot.post_check.as_deref().unwrap_or("");
+    let (name, args) = check.split_once(' ').unwrap_or((check, ""));
+    Ok(match (!check.is_empty()).then_some(name) {
+        Some("sched_oracle") => match sched_oracle::run(&text, args) {
             Ok(summary) => {
                 println!("      {summary}");
                 Outcome::Pass
