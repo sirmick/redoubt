@@ -72,7 +72,7 @@ against the session namespace and charge work to the session budget.
 | `mkdir_p(path)` | `:ok` | Recursive create |
 | `ls(path \\ ".")` | `[String]` | List directory entries |
 | `ls_r(path)` | `Stream.t(String)` | Recursive list |
-| `find(path, pattern)` | `Stream.t(String)` | Glob + pattern match |
+| `find(path, ~r//)` | `%Lines{}` | Recursive; regex matches the file's own name, yields full paths |
 | `touch(path)` | `:ok` | Create empty or bump mtime |
 | `stat(path)` | `File.Stat.t` | Name, length, mtime, qid; no mode/owner |
 | `top()` | `String` | Budgets, weights, usage, processes |
@@ -368,7 +368,8 @@ head(src, n) / tail(src, n)
 count(src)                  # wc -l
 out(src)                    # print unpaged
 glob(pat)                   # ["logs/a.log", ...]
-now()                       # wall time string
+now() / today()             # wall time / date string
+ago(t, days: n)             # t minus a duration
 checksum(path) / hexdump(binary)
 ```
 
@@ -552,9 +553,42 @@ follow("app.log") |> grep("error") |> out()
 job = pipe(~w(long-task)) |> run();  Job.await(job).exit
 ```
 
+Directories:
+
+```elixir
+# ls *.log
+ls() |> grep(~r/\.log$/)
+# ls logs | grep '^app-2026-09' | xargs rm
+ls("logs") |> grep(~r/^app-2026-09/) |> Enum.each(&rm("logs/#{&1}"))
+# for f in *.txt; do mv "$f" "${f%.txt}.md"; done
+for f <- ls() |> grep(~r/\.txt$/), do: mv(f, String.replace(f, ~r/\.txt$/, ".md"))
+# IMG_1234.JPG -> photo-1234.jpg
+for f <- ls("pics"), [_, n] <- [Regex.run(~r/^IMG_(\d+)\.JPG$/, f)] do
+  mv("pics/#{f}", "pics/photo-#{n}.jpg")
+end
+# find src -name '*.ex' | xargs grep -l TODO
+find("src", ~r/\.ex$/) |> Enum.filter(&(cat(&1) |> grep("TODO") |> count() > 0))
+# find . -name '*.tmp' -delete
+find(".", ~r/\.tmp$/) |> Enum.each(&rm/1)
+# find logs -size +1M
+ls_r("logs") |> Enum.filter(&(stat(&1).size > 1_000_000))
+# biggest 5 files under /work
+ls_r("/work") |> Enum.map(&{stat(&1).size, &1}) |> Enum.sort(:desc) |> Enum.take(5)
+# gzip .log files older than 7 days (native gzip)
+cutoff = ago(now(), days: 7)
+for f <- find("logs", ~r/\.log$/), stat(f).mtime < cutoff, do: pipe(~w(gzip #{f})) |> run()
+# latest report-YYYY-MM-DD.csv
+ls("reports") |> grep(~r/^report-\d{4}-\d{2}-\d{2}\.csv$/) |> sort() |> tail(1)
+# back up host-*.conf, date-stamped
+mkdir_p("backup")
+for f <- ls("/etc") |> grep(~r/^host-.*\.conf$/), do: cp("/etc/#{f}", "backup/#{f}.#{today()}")
+```
+
 Command mode:
 
 ```
+ls logs |> grep ^app-2026-09
+find src \.ex$ |> count
 cat app.log |> grep error |> count
 cat config.txt |> sub staging prod > config.txt
 zcat big.gz | sort | uniq > uniq.txt
