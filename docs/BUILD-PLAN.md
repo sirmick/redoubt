@@ -144,6 +144,23 @@ recipes remain in git.
   Attack tests), and a large-weight server keeps its share under that load; every blocking call
   returns by its timeout (I13); a deadline destroys its budget; the old IRQ-0 timer path and
   `timer` case are gone.
+- **Pinned latency target** (K5-code-review-5, the package reviewer's decision; `sched-latency`
+  asserts it): in virtual instruction time (icount shift=3, QEMU `virt`), for this named workload
+  with stand-ins at INIT.md weights and N <= 16 sessions:
+  - driver wake and steward timer wake: p50 <= 15 ms and p99 <= 50 ms;
+  - deadline notice: p99 <= 30 ms;
+  - steward-initiated termination: `budget_destroy`'s kernel time (R10) p99 <= 30 ms, and from the
+    steward's decision (its timer deadline) to the lease's processes killed, decision wake + R10,
+    p99 <= 80 ms. `budget_destroy` call-to-return, which includes the steward's wait for the CPU
+    after R10 when its slice ended during it, is recorded, not asserted; its bound is one round,
+    30 ms + (runnable budgets + 2) x SLICE (about 240 ms at N = 16);
+  - a 1000-weight server's share of the spinning CPU at N = 16: at least its weight's share less
+    30/1000.
+  R10's non-preemptible cost (13-30 ms here, growing with the object frames present) dominates the
+  deadline and termination terms and sits under every wake's tail, so these margins hold for this
+  workload only: adding objects moves them, and any growth is gated on follow-up
+  K5-r10-destroy-cost (indexed R10), after which the deadline notice target tightens to about
+  10 ms. `sched-latency-tcg` is the plain-TCG reference, reported only.
 - Needs: WP-K2.
 - **Parked code is not a starting point.** Branch `wp-k5-unreviewed` (9a11c74e5) holds scheduler
   and timer code a first implementer wrote without an approved plan, test report or review. It may
@@ -284,7 +301,11 @@ recipes remain in git.
   the same endpoint. Each attributed crash forwards its account and label set unchanged to the
   steward; three matching crashes within 10 minutes exercise S2's revocation/login-refusal policy,
   while unrelated and differently labelled sessions survive. A crash without a current call
-  invents no blame; more than 5 restarts in 60 s remains init's separate reboot rule.
+  invents no blame; more than 5 restarts in 60 s remains init's separate reboot rule. `root` keeps
+  free weight above 0 while `init` runs in it (a budget holding a process needs free weight; the
+  kernel's interim boot split keeps 1000 for it, KERNEL-SPEC.md R7). Rerun the WP-K5
+  named-workload latency bench (`sched-latency`) with the real drivers: the numbers must stay
+  within the accepted target.
 - Needs: WP-R2, WP-W1, WP-K3, WP-K5. The `holds` operation it calls belongs to `keyd`'s table
   (WP-S1), so the refusal is written here and exercised end to end once WP-S1 has landed.
 - Integration order: first deliver reviewed startup/manifest infrastructure and the production
@@ -416,7 +437,9 @@ labelled callers.
   leases of that label set are gone and a new login is refused within the window; every audit
   record in the file carries a signature that verifies against `keyd`'s audit key, and one byte
   changed in a record makes its signature fail; a logout and an ended lease still complete promptly
-  while every user budget spins (its weight, not an order); no
+  while every user budget spins (its weight, not an order); rerun the WP-K5 named-workload latency
+  bench (`sched-latency`) with the real steward and drivers in place of its stand-ins: the numbers
+  must stay within the accepted target; no
   server can destroy a session; a vault session's leases do not change the unlabelled sub-budget's
   free limits.
 - **Confinement (answer 153; CONTAINMENT.md, Push; TENETS.md, Purpose and threat model).** For a confined
