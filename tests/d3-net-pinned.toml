@@ -1,0 +1,21 @@
+description = "WP-D3 (answer 174, plan 6.5, after K5): ipd pinned with abandoned calls and its deadlines on the machine (tests/net rig). A client with an established connection to the peer 10.0.9.100:7 parks 64 data reads that its own 20 ms timeout abandons, each one of which ipd must answer and free (a leaked one would fill the share's parked calls and the next read would be refused at once); then one read with nothing coming, which ipd's 30 s parked deadline ends with timeout; then the echo still works. Virtual time (icount), so the deadline passes at once"
+arch = ["rv64"]
+kind = "boot"
+programs = [{ package = "redoubt-net-tests", bin = "net-rig-pinned" }]
+icount = "shift=3,sleep=off"
+timeout_secs = 180
+expect = [
+    '^\[net-rig\] ok: 64 abandoned reads, one ended by ipd.s deadline, then the echo: exited 0$',
+    '^\[net-rig\] ok: netd and ipd still run ',
+    '^\[net-rig\] D3 NET PINNED PASSED$',
+]
+forbid = ['\[net-rig\] FAIL']
+poweroff = true
+
+[net]
+# tests/net/src/lib.rs: SELF_ARGS then SELF_ALWAYS (a host test keeps them equal).
+self_forbidden = ["10.0.2.0/24", "10.0.9.102/32", "0.0.0.0/8", "127.0.0.0/8", "224.0.0.0/4", "240.0.0.0/4", "255.255.255.255/32"]
+
+[[net.peer]]
+addr = "10.0.9.100:7"
+connections = 1

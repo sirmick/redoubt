@@ -26,6 +26,14 @@ name = "net-rig-unrefused"
 path = "src/bin/net-rig-unrefused.rs"
 
 [[bin]]
+name = "net-rig-peer"
+path = "src/bin/net-rig-peer.rs"
+
+[[bin]]
+name = "net-rig-pinned"
+path = "src/bin/net-rig-pinned.rs"
+
+[[bin]]
 name = "net-rig-probe"
 path = "src/bin/net-rig-probe.rs"
 

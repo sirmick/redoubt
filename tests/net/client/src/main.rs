@@ -46,6 +46,7 @@ fn run(startup: &Startup) -> u32 {
         Role::Connect => me.connect_once(&args),
         Role::Labelled => me.labelled(),
         Role::Hold => me.hold(),
+        Role::Pin => me.pin(&args),
     };
     match done {
         Ok(()) => code::OK,
@@ -225,9 +226,55 @@ impl Me {
         self.c.attach(ROOT, "").map_err(|_| code::ATTACH)?;
         let s = self.socket()?;
         self.connect(&s, args)?;
-        let state = self.status(&s)?.0;
+        // One wait: if nobody answers, it ends with `ipd`'s `ctl` deadline (or smoltcp's own).
+        let mut words = [0u8; 8];
+        let state = match self.c.read(s.ctl, 0, &mut words) {
+            Ok(8) => u32::from_le_bytes([words[0], words[1], words[2], words[3]]),
+            Err(ClientError::Remote) => return Err(code::TIMED_OUT),
+            _ => return Err(code::STATUS),
+        };
         let _ = self.ctl(&s, net_ctl::Message::Abort(net_ctl::Abort {}), code::CLOSE);
         Err(code::CONNECTED + state.min(5))
+    }
+
+    /// Pins `ipd` with abandoned calls (plan 6.5, `d3-net-pinned`): `times` data reads on a quiet
+    /// socket, each parked and then given up by this client's short timeout, so `ipd` must free
+    /// every one (a leaked one fills this share's parked calls and the next read is refused at
+    /// once); then a read with no timeout of its own, which `ipd`'s 30 s deadline must end; then
+    /// the echo still works.
+    fn pin(&mut self, args: &Args) -> Result<(), u32> {
+        self.c.attach(ROOT, "").map_err(|_| code::ATTACH)?;
+        let s = self.socket()?;
+        self.connect(&s, args)?;
+        if self.status(&s)?.0 != ESTABLISHED {
+            return Err(code::STATUS);
+        }
+        let mut buf = [0u8; 64];
+        self.c.timeout = 20_000;
+        for _ in 0..args.times {
+            match self.c.read(s.data, 0, &mut buf) {
+                Err(ClientError::Sys(redoubt_rt::abi::Error::Timeout)) => {
+                    // The abandoned call keeps the lend: a new client, on the same connection
+                    // (whose fids are ipd's), lends a fresh one.
+                    self.c = Client::new(Endpoint::from_handle(self.net), 2).map_err(|_| code::NO_MEMORY)?;
+                    self.c.timeout = 20_000;
+                }
+                Err(ClientError::Remote) => return Err(code::PIN_REFUSED),
+                _ => return Err(code::READ),
+            }
+        }
+        self.c.timeout = FOREVER;
+        if self.c.read(s.data, 0, &mut buf) != Err(ClientError::Remote) {
+            return Err(code::NO_DEADLINE);
+        }
+        let sent = b"d3 still echoing after the pins\n";
+        self.write_all(&s, sent)?;
+        let mut back = [0u8; 32];
+        self.read_exact(&s, &mut back)?;
+        if &back[..] != &sent[..] {
+            return Err(code::ECHO);
+        }
+        Ok(())
     }
 
     /// Every door a labelled caller might try. Each one not refused sets a bit of the report;

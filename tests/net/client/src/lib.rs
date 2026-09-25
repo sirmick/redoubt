@@ -51,6 +51,12 @@ pub mod code {
     pub const REPORT: u32 = 33;
     /// An attacker's connect was accepted and ended in this state + `CONNECTED` (1..=5).
     pub const CONNECTED: u32 = 40;
+    /// A connect was accepted and nobody answered: `ipd`'s `ctl` wait ran out (`timeout`).
+    pub const TIMED_OUT: u32 = 34;
+    /// `pin`: a short read was refused at once instead of parking: an abandoned call was not freed.
+    pub const PIN_REFUSED: u32 = 35;
+    /// `pin`: a read with nothing coming did not end with `ipd`'s deadline.
+    pub const NO_DEADLINE: u32 = 36;
 }
 
 /// What a launched program does.
@@ -67,6 +73,9 @@ pub enum Role {
     Labelled,
     /// Attaches, reports, and holds its bucket until it is killed.
     Hold,
+    /// Connects to `addr:port`, then `times` reads that its own short timeout abandons while they
+    /// are parked, then one read with nothing coming that `ipd`'s deadline must end, then an echo.
+    Pin,
 }
 
 /// A program's arguments: `role=R`, and `addr=A.B.C.D`, `port=P`, `backlog=B`, `times=N` as its
@@ -94,6 +103,7 @@ impl Args {
                         "connect" => Role::Connect,
                         "labelled" => Role::Labelled,
                         "hold" => Role::Hold,
+                        "pin" => Role::Pin,
                         _ => return None,
                     })
                 }
