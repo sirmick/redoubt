@@ -35,8 +35,8 @@ Cost matters (owner, 2026-09-25). Three tiers, named by what they are for:
 | Tier | Model and thinking | Used by |
 | --- | --- | --- |
 | `frontier` | the strongest model the owner pays for (Opus, not the largest), high | orchestrator, Architect |
-| `workhorse` | the same model, medium | implementers, red team |
-| `light` | an efficient everyday model (Sonnet), medium | simplifier, editor |
+| `workhorse` | the same model, low; medium for kernel commits and merge-gate reviews | implementers, red team |
+| `light` | an efficient everyday model (Sonnet), low | simplifier, editor |
 
 Wash has no profile registry, so each member's launch carries its tier's `model` and
 `effort`. Keep `max_active` at 2. If the owner has not named models, ask; do not guess IDs
@@ -104,6 +104,10 @@ Heavy tests: the consoled flood test (`servers/consoled/tests/consoled.rs`) is e
 this machine. Run it once per round, loops of at most x20; never 300- or 1000-run loops.
 Reason about ordering from the code instead.
 
+Test output fills context, and context is what costs. Filter or tail bench and cargo output
+to the verdict and the failing lines; never read a whole log. Repeat a case about 5 times to
+confirm a result; go to 20 only when chasing a flake.
+
 ## Package residents
 
 Before launching a ready package, reconcile its claim, isolated worktree, branch and
@@ -125,6 +129,12 @@ explicit instructions, with role `implementer` or `reviewer`:
   Add the other angles only if its findings show the change is riskier than it looked.
 
 Keep a package's reviewers through review and fix cycles; do not replace them between rounds.
+
+Handoff at about 300K tokens of context: every call re-sends the whole context, so a long-lived
+member costs more with each step. At that size a member finishes and commits its current step,
+writes `<PACKAGE>-HANDOFF.md` in its worktree (state, next steps, traps, open QA), commits it,
+reports, and stops. The orchestrator ends it and launches a fresh member under a new key from
+that file. A reviewer hands off between rounds, not during one.
 
 Reviewers complete their assignment with `cc:["<package>-implementer"]`, so the implementer
 already holds every finding. The orchestrator creates a round's review assignments together,
