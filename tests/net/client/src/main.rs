@@ -243,9 +243,22 @@ impl Me {
         tried(1, self.c.walk(ROOT, CLONE, "tcp/clone").is_ok());
         tried(2, self.c.open(CLONE, mode::OREAD).is_ok());
         let mut n = [0u8; 4];
-        tried(3, self.c.read(CLONE, 0, &mut n).is_ok());
+        let cloned = self.c.read(CLONE, 0, &mut n) == Ok(4);
+        tried(3, cloned);
+        // A real connect, on the socket's own `ctl` (socket 0 if clone gave nothing), so that if
+        // ipd let a labelled caller through, the SYN would reach its peer, 10.0.9.112:7, and the
+        // bench's count of 0 would catch it.
+        let number = if cloned { u32::from_le_bytes(n) } else { 0 };
+        let ctl = self.fid();
+        let opened_ctl = self.c.walk(ROOT, ctl, &format!("tcp/{number}/ctl")).is_ok()
+            && self.c.open(ctl, mode::ORDWR).is_ok();
         let wide = Args { role: Role::Connect, addr: [10, 0, 9, 112], port: 7, backlog: 1, times: 1 };
-        tried(4, self.connect(&Socket { ctl: CLONE, data: CLONE }, &wide).is_ok());
+        let connected = self.connect(&Socket { ctl, data: ctl }, &wide).is_ok();
+        tried(4, opened_ctl && connected);
+        if connected {
+            // Wait for it to finish, so the connection is made (and counted) before the rig goes on.
+            let _ = self.status(&Socket { ctl, data: ctl });
+        }
         tried(5, self.c.new_connection("", 0).is_ok());
         tried(6, self.grant_anything());
         self.report(event::LABELLED, opened)?;
