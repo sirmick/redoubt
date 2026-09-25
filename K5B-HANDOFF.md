@@ -83,3 +83,13 @@ the Successor notes. Commit 4: docs.
   and run single `--test` files.
 - Env: `RUSTSBI_PROTOTYPER` / `RUSTSBI_PROTOTYPER_RV32` (see the instructions). `bench-ssh-loopback*`
   fail on this host (SELinux).
+
+## Open QA threads
+
+- K5-latency-flake: root cause posted (boot RNG seed plus stride debt). The latency-spread look
+  is already done, so the successor does not need to repeat it; await the orchestrator's ruling
+  on the follow-up.
+- K5b-code-review-0: round 0 fixes are in (c5884cda1, 6d3154240); waiting for the red panel's
+  resolution.
+- bench-process-flake: fixed by 2e8f3d735 plus 6d3154240; waiting for the orchestrator to
+  resolve it.
