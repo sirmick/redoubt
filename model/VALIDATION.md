@@ -148,3 +148,26 @@ at the start of the kernel model's R10), before any of the destruction's work; t
 it return theirs at their own bottom-up step. The kernel does the same at `mark_dying`, and the
 differential's leaf and subtree destructions return the top's carve first on both sides; it
 agrees over 3000 seeds. Default suites pass again, with all 121 mutations detected.
+
+## WP-K5b DMA device reset and frame quarantine (2026-09-25)
+
+The model implements answer 173 as the K5b plan rules it. `dma_alloc` frames are held until
+their process ends (OD2), and they cannot be lent, transferred or moved by `process_map`. At
+death the process's reset set S (OD3) is reset, and its frames are pooled only if every device in
+S confirmed in that same call. Otherwise all of them are quarantined (P1-1), and so is each device
+that failed to confirm. A quarantined device is refused to `map_device` and `dma_alloc` (OD6).
+A quarantined frame's charge moves to the destroyed top's parent after the carve returns (OD5, N1).
+`Boot::default` appends a DMA device whose first reset fails, so the handles init creates
+start at 10, not 9; the example trace was re-recorded for that and nothing else.
+
+The new invariant, I-DMA, arms each DMA frame against every device in its holder's S. A device is
+disarmed only when its object shows it genuinely reset, and no free frame may still be armed.
+`Mutation::ALL` grows from 121 to 126 with five K5b breaks, each caught by `kernel_sequence`
+(`--test mutations -- --nocapture`). The setup now sometimes hands a child a DMA device, so the
+co-holder and reuse paths come up. A scripted trace (`dma_quarantine_trace`) makes the OD6 break
+visible to trace replay, and `tests/dma_contracts.rs` scripts OD2, pooling, P1-1 and the
+parent-at-its-limit case.
+
+| Command | Result |
+| --- | --- |
+| `cargo test -p redoubt-model --release` | Passed: lib 6, coverage 1, current contracts 16, map_fixed 10, mutations 2 (all 126 detected), policy 7, properties 6 (1 ignored); traces 4 and dma contracts 4 after the trace fixes. |

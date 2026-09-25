@@ -10,7 +10,7 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use crate::kernel::{Boot, Costs, DeviceSpec, Kernel, Limits, Note, Step};
+use crate::kernel::{Boot, Costs, DeviceSpec, Kernel, Limits, Note, Resets, Step};
 use crate::mutation::Mutation;
 use crate::spec::*;
 use crate::syscall::*;
@@ -369,8 +369,13 @@ fn boot_lines(boot: &Boot) -> Vec<String> {
     ];
     for d in &boot.devices {
         out.push(match d {
-            DeviceSpec::Mmio { base, pages, dma } => {
-                format!("device mmio base={base:#x} pages={pages} dma={}", *dma as u8)
+            DeviceSpec::Mmio { base, pages, dma, resets } => {
+                let r = match resets {
+                    Resets::Always => "always",
+                    Resets::FirstFails => "first-fails",
+                    Resets::Never => "never",
+                };
+                format!("device mmio base={base:#x} pages={pages} dma={} resets={r}", *dma as u8)
             }
             DeviceSpec::Irq { n } => format!("device irq n={n}"),
             DeviceSpec::Reset => "device reset".to_string(),
@@ -582,6 +587,22 @@ fn field<'a>(t: &'a [Token<'a>], key: &str) -> Result<u64, String> {
         .unwrap_or_else(|| Err(format!("missing {key}=")))
 }
 
+/// A field whose value is a bare word, or `default` if the field is absent (WP-K5b's
+/// `resets=always|first-fails|never`, which most traces do not name).
+fn word_field<'a>(t: &'a [Token<'a>], key: &str, default: &'a str) -> Result<&'a str, String> {
+    for x in t {
+        if let Token::Field(k, v) = x {
+            if *k == key {
+                return match v.as_ref() {
+                    Token::Word(w) => Ok(w),
+                    _ => Err(format!("{key}= needs a word")),
+                };
+            }
+        }
+    }
+    Ok(default)
+}
+
 /// Parse a trace into its boot configuration and the events it contains (results are not
 /// needed to replay on the model: [`check`] regenerates and compares them).
 pub fn parse(text: &str) -> Result<(Boot, Vec<Op>), String> {
@@ -621,6 +642,12 @@ pub fn parse(text: &str) -> Result<(Boot, Vec<Op>), String> {
                     base: field(&t, "base")?,
                     pages: field(&t, "pages")?,
                     dma: field(&t, "dma")? != 0,
+                    resets: match word_field(&t, "resets", "always")? {
+                        "always" => Resets::Always,
+                        "first-fails" => Resets::FirstFails,
+                        "never" => Resets::Never,
+                        other => return Err(err(format!("unknown resets={other}"))),
+                    },
                 },
                 Some(Token::Word("irq")) => DeviceSpec::Irq { n: field(&t, "n")? },
                 Some(Token::Word("reset")) => DeviceSpec::Reset,

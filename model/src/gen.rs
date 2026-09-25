@@ -21,6 +21,12 @@ use crate::kernel::{
 use crate::spec::*;
 use crate::syscall::*;
 
+/// A handle to a DMA-flagged device (WP-K5b, answer 173).
+fn dma_device(k: &Kernel, h: &crate::kernel::Handle) -> bool {
+    matches!(h.object, Object::Device(d)
+        if k.devices.get(&d).is_some_and(|dev| matches!(dev.kind, DeviceKind::Mmio { dma: true, .. })))
+}
+
 /// splitmix64: small, fast, and good enough to drive a search; not for secrets.
 #[derive(Clone, Debug)]
 pub struct Rng(u64);
@@ -432,6 +438,13 @@ impl Gen {
                     made.iter().copied().find(|x| *x != SYSTEM && k.budgets[x].class == Class::System);
                 let target = if self.rng.pct(50) { made_system.unwrap_or(SYSTEM) } else { SYSTEM };
                 hs.push(budget_h(target)?);
+            }
+            // WP-K5b: now and then a DMA device too, so a child can hold DMA memory, share its
+            // device with init or a sibling (the co-holder case), and quarantine it by dying.
+            if self.rng.pct(30) {
+                let dma: Vec<u64> =
+                    init.handles.iter().filter(|(_, h)| dma_device(k, h)).map(|(i, _)| *i).collect();
+                hs.extend(self.rng.pick(&dma));
             }
             return sys(Syscall::ProcessStart {
                 process: ph,

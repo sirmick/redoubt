@@ -208,6 +208,42 @@ pub fn partial_reply_trace() -> String {
     trace::record(&Boot::default(), &w.ops, None).unwrap()
 }
 
+/// WP-K5b, OD6: a child holding DMA memory from the default boot's deaf device (init's handle
+/// 9, whose first reset fails) exits and quarantines it; init's `dma_alloc` and `map_device` on
+/// it are then refused. Random traces rarely name a quarantined device again.
+pub fn dma_quarantine_trace() -> String {
+    let mut w = World::new(None);
+    let Ok(Ret::Handle(ep)) = w.value(1, Syscall::EndpointCreate) else { panic!("endpoint") };
+    let call = Syscall::BudgetCreate {
+        parent: 3,
+        pages: 40,
+        processes: 1,
+        weight: 10,
+        labels: vec![],
+        account: 0,
+        deadline: FOREVER,
+    };
+    let Ok(Ret::Handle(b)) = w.value(1, call) else { panic!("budget") };
+    let s = w.sys(1, Syscall::ProcessCreate { budget: b, exit_endpoint: ep }).unwrap();
+    let (ph, pid) = s
+        .notes
+        .iter()
+        .find_map(|n| if let Note::Process { h, pid, .. } = n { Some((*h, *pid)) } else { None })
+        .unwrap();
+    let start = Syscall::ProcessStart { process: ph, entry: 0x1000, sp: 0x2000, arg: 0, handles: vec![9] };
+    let s = w.sys(1, start).unwrap();
+    let tid = s
+        .notes
+        .iter()
+        .find_map(|n| if let Note::Thread { tid, .. } = n { Some(*tid) } else { None })
+        .unwrap();
+    w.op(Op::Sys { pid, tid, call: Syscall::DmaAlloc { h: 1, npages: 1 } }).unwrap();
+    w.op(Op::Sys { pid, tid, call: Syscall::ProcessExit { code: 0 } }).unwrap();
+    w.sys(1, Syscall::DmaAlloc { h: 9, npages: 1 }).unwrap();
+    w.sys(1, Syscall::MapDevice { h: 9 }).unwrap();
+    trace::record(&Boot::default(), &w.ops, None).unwrap()
+}
+
 pub fn serve_blame_trace() -> String { serve_blame_trace_with_exit(Syscall::ThreadExit, 0) }
 
 pub fn process_exit_blame_trace() -> String {
