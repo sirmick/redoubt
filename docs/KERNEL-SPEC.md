@@ -9,7 +9,8 @@ scheduling in RESOURCES.md.
 
 **Current conformance.** Budgets/handles, IPC, device objects and process/thread creation and
 exit have implementations on the new syscall path. Real-kernel cases exercise native lifecycle
-and loan teardown; timer-driven timeouts/preemption and legacy removal remain work packages.
+and loan teardown. The kernel owns the timer: timeouts, budget deadlines and stride preemption
+(R12) are implemented (WP-K5). Legacy removal remains a work package (WP-K6).
 This note is not a claim that the whole contract runs in the primary checkout. The answers
 **167-168 completion encoding, lend ownership, output rollback and delivery-aware server
 bookkeeping are present in this checkout**.
