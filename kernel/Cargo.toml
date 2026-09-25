@@ -40,6 +40,9 @@ sched-trace = []
 # Debug only, never in a bench build but one recorded negative run: rank wakers behind queued
 # budgets of equal pass (the model's R12TieQueuedFirst), to show the oracle catches it.
 sched-inject-tie-fault = ["sched-trace"]
+# Test builds only (WP-K5b, OD7): each DMA device's first reset reports "not confirmed" after the
+# real write, so the quarantine path runs. It only ever adds quarantine.
+dma-reset-deaf = []
 
 # Capabilities. Boards select these; code keys on them rather than on the CPU's XLEN.
 # See "Hardware abstraction" in planning/redoubt/PLAN.md.

@@ -285,6 +285,10 @@ impl Process {
         crate::mem::MemoryManager::with_mut(|mm| {
             // SAFETY: called only here, as the final teardown step for a process that will not run again.
             unsafe { mm.release_all_memory_for_process(self.pid, &self.mapping) };
+            // Its DMA frames are pooled only once every device that could hold their address
+            // confirms a reset, or quarantined for ever (WP-K5b, `dma.rs`).
+            #[cfg(baremetal)]
+            mm.dma_release(self.pid);
             #[cfg(baremetal)]
             mm.process_ended(self.pid);
         });
@@ -1584,6 +1588,12 @@ impl SystemServices {
         MemoryManager::with_mut(|mm| {
             // Back every page before lending any, so that a failure leaves nothing half lent.
             mm.ensure_range_exists(src_virt as usize, len)?;
+            // DMA pages stay put (WP-K5b, OD2): never lent, even by the legacy path.
+            for page in (src_virt as usize..src_virt as usize + len).step_by(PAGE_SIZE) {
+                if mm.is_dma_frame(crate::arch::mem::virt_to_phys(page)?) {
+                    return Err(redoubt_abi::Error::InvalidArgument);
+                }
+            }
 
             // Locate an address to fit the new memory.
             dest_mapping.activate()?;
@@ -2292,6 +2302,8 @@ impl SystemServices {
         process.activate()?;
         let parent_pid = process.ppid;
         process.terminate()?;
+        #[cfg(baremetal)]
+        crate::mem::MemoryManager::with_mut(|mm| crate::message::destroy_quarantined_devices(self, mm));
 
         self.switch_to_thread(parent_pid, None).unwrap();
 
@@ -2361,6 +2373,7 @@ impl SystemServices {
         crate::mem::MemoryManager::with_mut(|mm| crate::message::process_ending(self, mm, target));
         // `terminate` needs no address space: it names the target's mapping itself.
         self.get_process_mut(target)?.terminate()?;
+        crate::mem::MemoryManager::with_mut(|mm| crate::message::destroy_quarantined_devices(self, mm));
         self.get_process(current)?.activate()
     }
 

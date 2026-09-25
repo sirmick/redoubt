@@ -127,6 +127,9 @@ pub struct Account {
     /// The next message id its threads will hand a sender. Never 0, never reused within this
     /// process, and from no counter anyone else can see (I12, CONTAINMENT.md).
     pub next_msg_id: u64,
+    /// The DMA registry slots it has mapped with `map_device` (WP-K5b, `dma.rs`): half of the
+    /// set its death must reset. Zero again for a new process in the same PID.
+    pub dma_mapped: u16,
     /// No thread of this process has a timeout earlier than this (`message::next_timeout`): only
     /// ever early, so expiry walks just the processes it might be due in.
     pub earliest_timeout: u64,
@@ -142,6 +145,7 @@ impl Account {
         open_calls: 0,
         next_msg_id: 1,
         earliest_timeout: u64::MAX,
+        dma_mapped: 0,
     };
 }
 
@@ -828,6 +832,9 @@ impl MemoryManager {
         });
         // The weight came back as the scheduler lifted each budget (`sched::destroy`).
         self.return_carve(top, false);
+        // Then, and only then (N1), quarantined DMA pages charged in the subtree move to the
+        // parent, which has just got back at least that much (WP-K5b, OD5).
+        self.dma_migrate_quarantine(self.budget(top).parent);
         for frame in 0..=self.objects.high_frame {
             if self.is_budget_frame(frame) && self.budget(frame).dying {
                 self.unlink_deadline(frame);

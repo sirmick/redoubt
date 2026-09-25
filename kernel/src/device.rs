@@ -221,6 +221,12 @@ impl MemoryManager {
         assert!(tag.data.len() % ENTRY_WORDS == 0, "Devs is not a whole number of entries");
         for words in tag.data.chunks_exact(ENTRY_WORDS) {
             let d = self.decode_entry(words);
+            // A DMA device the kernel cannot reset gets no object at all (WP-K5b, fail closed);
+            // legacy `MapMemory` still refuses it (WP-K5b commit 3).
+            if d.kind == Kind::Mmio && d.dma && !self.dma_register(d.base) {
+                println!("Devices: no DMA slot for {:x}; it gets no device object", d.base);
+                continue;
+            }
             let device = self.new_device(owner, &d).expect("boot: no room for a device object");
             if let Some(pid) = first {
                 let handle = Handle { object: Object::Device(device), badge: 0, stamp };
@@ -287,6 +293,7 @@ impl MemoryManager {
 
 /// Words in one `Devs` entry.
 const ENTRY_WORDS: usize = 6;
+
 /// Words in one `Ctrl` entry: base and size, low word first.
 const CTRL_WORDS: usize = 4;
 
@@ -322,31 +329,52 @@ impl MemoryManager {
     /// entries would be a mechanism the design does not otherwise have: a device mapping
     /// behaves like pages transferred to another process, which revocation does not reach
     /// either. Whoever hands out a device handle is handing out the device.
+    ///
+    /// A DMA device joins the set of devices the caller's death must reset before its DMA
+    /// frames are pooled (WP-K5b, OD3): it could be programmed with any of their addresses.
     pub fn map_device(&mut self, pid: PID, h: u32) -> Result<(usize, usize), Error> {
         let d = self.device_of_kind(pid, h, Kind::Mmio)?;
+        let slot = self.dma_slot_of(&d);
         let flags = redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W;
         let len = d.size as usize;
-        self.map_run(pid, len / PAGE_SIZE, flags, Some(d.base as usize)).map(|at| (at, len))
+        let at = self.map_run(pid, len / PAGE_SIZE, flags, Some(d.base as usize))?;
+        if let Some(slot) = slot {
+            self.dma_mapped(pid, slot);
+        }
+        Ok((at, len))
+    }
+
+    /// The registry slot of DMA device `d`, which every DMA device object has (`boot_devices`
+    /// makes none beyond the registry). A live object never names a quarantined device: its
+    /// quarantine destroyed the object (OD6).
+    fn dma_slot_of(&self, d: &Device) -> Option<usize> {
+        if !d.dma {
+            return None;
+        }
+        assert!(!self.dma_quarantined(d.base), "I-DMA: a live device object names a quarantined device");
+        Some(self.dma_slot(d.base).expect("every DMA device object has a registry slot"))
     }
 
     /// `dma_alloc(h(MMIO), npages) -> addr, phys` (KERNEL-SPEC.md; IO-ARCHITECTURE.md, DMA):
     /// contiguous, zeroed RAM the device may be programmed with. **The one call that returns a
     /// physical address**, and only for a device the platform says is a bus master.
+    ///
+    /// The memory and its run are held, and charged, until the process ends; they are never
+    /// reclaimed while it lives, and at its end they are pooled only once every device that could
+    /// hold their address has confirmed a reset (WP-K5b, `dma.rs`).
     pub fn dma_alloc(&mut self, pid: PID, h: u32, npages: usize) -> Result<(usize, u64), Error> {
         let d = self.device_of_kind(pid, h, Kind::Mmio)?;
         if npages == 0 {
             return Err(Error::InvalidArgument);
         }
-        if !d.dma {
-            return Err(Error::NotPermitted);
-        }
+        let Some(slot) = self.dma_slot_of(&d) else { return Err(Error::NotPermitted) };
         // Charged and zeroed before anything is mapped (R6, R11).
-        let phys = self.alloc_contiguous(pid, npages)?;
+        let phys = self.dma_new_run(pid, slot, npages)?;
         let flags = redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W;
         match self.map_run(pid, npages, flags, Some(phys)) {
             Ok(at) => Ok((at, phys as u64)),
             Err(e) => {
-                self.free_frames(pid, phys, npages);
+                self.dma_drop_run(slot, phys);
                 Err(e)
             }
         }

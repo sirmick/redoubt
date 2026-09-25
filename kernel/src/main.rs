@@ -19,6 +19,8 @@ mod budget;
 mod cell;
 #[cfg(baremetal)]
 mod device;
+#[cfg(baremetal)]
+mod dma;
 mod endpoint;
 #[cfg(baremetal)]
 mod grants;
