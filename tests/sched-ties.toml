@@ -1,0 +1,19 @@
+description = "Ties in the stride queue (WP-K5, OWNER DECISION 4): a sched-trace kernel's record of every queue event, checked pick by pick against the four rank clauses by the bench's independent oracle; in the guest, wakers of one kernel entry run lowest id first and a later entry's wakers first (a1, a2, a3, b3, b2, b1) (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-ties"]
+# Test builds only: the trace ring and its dump (never in a default or production kernel).
+kernel_features = ["sched-trace"]
+post_check = "sched_oracle"
+timeout_secs = 120
+expect = [
+    '^\[ties\] ok: B woken by three sends, A by one destroy',
+    '^\[ties\] ok: wakers of one entry ran lowest id first \(clause 3\)$',
+    '^\[ties\] ok: a later entry.s wakers ran first \(clause 2\)$',
+    '^SCHED-TIES TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['\[ties\] FAIL', 'PROGRAM HALT']
+poweroff = true

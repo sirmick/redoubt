@@ -143,6 +143,41 @@ pub enum Mutation {
     R12IgnoreWeight,
     /// A waking budget keeps its old pass (banks credit while asleep).
     R12WakeBanksCredit,
+    /// A waking budget ranks behind queued budgets of equal pass (wake-first ties broken).
+    R12TieQueuedFirst,
+    /// A descheduled, still-runnable budget ranks ahead of equal passes, like a waker.
+    R12RequeueAhead,
+    /// Requeued budgets of equal pass run last-in first-out instead of FIFO.
+    R12RequeueLifo,
+    /// A wake at a better rank than the running budget preempts it.
+    R12PreemptOnWake,
+    /// A timeout expiring in a tick re-picks, preempting the running thread.
+    R12TimeoutWakePreempts,
+    /// A budget waking into an empty queue keeps its own pass (no floor across an idle gap).
+    R12NoFloorWhenIdle,
+    /// Runs shorter than a slice are charged nothing.
+    R12ShortRunsFree,
+    /// The division remainder of charging is dropped.
+    R12DropRemainder,
+    /// Exiting, faulting or being killed on the CPU charges nothing for the partial slice.
+    R12ExitRunsFree,
+    /// A destroyed budget's unpaid work is dropped instead of moving to its parent.
+    R12DestroyDropsDebt,
+    /// A new budget enters at the floor, ignoring its parent's pass.
+    R12CreateAtFloorOnly,
+    /// Destroy lifts the parent to max(parent, floor + work) instead of adding the work to its
+    /// lead.
+    R12LiftByMax,
+    /// Stride weight is the weight limit, not the free weight (carving duplicates share).
+    R12StrideWeightIsLimit,
+    /// Destroy lifts the parent to the child's raw pass, not its work normalized by weight.
+    R12UnnormalizedLift,
+    /// Destroy counts the child's inherited entry wait as its work (debt measured from the floor).
+    R12LiftCountsEntryWait,
+    /// Pending runtime is not folded before a weight change (charged at the new weight).
+    R12FoldAtNewWeight,
+    /// A deschedule charges only what the clock saw: a run shorter than one unit is free.
+    R12NoMinimumCharge,
     // KERNEL-SPEC.md, Messages: what the kernel attaches, and notices.
     /// Messages carry no labels.
     MsgNoLabels,
@@ -171,6 +206,10 @@ pub enum Mutation {
     // KERNEL-SPEC.md, Budget: deadlines and inherited class.
     /// Budget deadlines never fire.
     BudgetDeadlineIgnored,
+    /// At an equal instant, budget deadlines are processed before timeouts.
+    ExpireBudgetsFirst,
+    /// Timeouts expire only while nothing runs (a timer armed only when idle).
+    TimeoutIgnoredWhileOthersRun,
     /// A child takes its creator's class, not its parent's (QUESTIONS 73).
     ClassNotInherited,
     /// "Adding labels needs a system-class caller" checks the parent's class.
@@ -189,8 +228,10 @@ pub enum Mutation {
     /// A new `receive` forgets the thread's open calls.
     ReceiveDropsOpenCalls,
     // QUESTIONS 12.
-    /// A budget with weight 0 may hold a process.
+    /// A budget with free weight 0 may hold a process.
     ProcessInWeightlessBudget,
+    /// A carve may leave a process-holding budget with free weight 0.
+    R7CarveToZeroFree,
     // The steward's policy (CONTAINMENT.md, CAPABILITIES.md, INIT.md).
     /// A vault session may carry a label its principal does not own.
     PolicyVaultWithoutOwnership,
@@ -245,7 +286,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 101] = {
+    pub const ALL: [Mutation; 121] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -305,6 +346,23 @@ impl Mutation {
             R12PriorityById,
             R12IgnoreWeight,
             R12WakeBanksCredit,
+            R12TieQueuedFirst,
+            R12RequeueAhead,
+            R12RequeueLifo,
+            R12PreemptOnWake,
+            R12TimeoutWakePreempts,
+            R12NoFloorWhenIdle,
+            R12ShortRunsFree,
+            R12DropRemainder,
+            R12ExitRunsFree,
+            R12DestroyDropsDebt,
+            R12CreateAtFloorOnly,
+            R12LiftByMax,
+            R12StrideWeightIsLimit,
+            R12UnnormalizedLift,
+            R12LiftCountsEntryWait,
+            R12FoldAtNewWeight,
+            R12NoMinimumCharge,
             MsgNoLabels,
             MsgBadgeZero,
             MsgAccountZero,
@@ -317,6 +375,8 @@ impl Mutation {
             ReceiveKeepsCurrent,
             ServeIgnored,
             BudgetDeadlineIgnored,
+            ExpireBudgetsFirst,
+            TimeoutIgnoredWhileOthersRun,
             ClassNotInherited,
             LabelsAddedByParentClass,
             ReceiveWithBadgedHandle,
@@ -325,6 +385,7 @@ impl Mutation {
             OpenCallsUnlimited,
             ReceiveDropsOpenCalls,
             ProcessInWeightlessBudget,
+            R7CarveToZeroFree,
             PolicyVaultWithoutOwnership,
             PolicyApproveIgnoresHash,
             PolicyShowLabelledToAll,
@@ -386,7 +447,7 @@ impl Mutation {
             | R6ProcessObjectFree
             | R6ProcessObjectChargedToBudget
             | R6LendChargedOnce => "R6",
-            R7NoCarveCheck => "R7",
+            R7NoCarveCheck | R7CarveToZeroFree => "R7",
             R8AccountFromArgument => "R8",
             R9ReceivedHandleRestamped | R9MintStampsCaller | R9MsgStampIsSenderBudget => "R9",
             R10KeepForeignHandles
@@ -403,7 +464,26 @@ impl Mutation {
             | R11LendStaysMapped
             | R11MapFixedSkipsOverlap => "R11",
             IpcWrongLend | IpcDropPartial | IpcFalseDelivery | IpcSkipOutputCheck | IpcLeakRollback => "IPC",
-            R12PriorityById | R12IgnoreWeight | R12WakeBanksCredit => "R12",
+            R12PriorityById
+            | R12IgnoreWeight
+            | R12WakeBanksCredit
+            | R12TieQueuedFirst
+            | R12RequeueAhead
+            | R12RequeueLifo
+            | R12PreemptOnWake
+            | R12TimeoutWakePreempts
+            | R12NoFloorWhenIdle
+            | R12ShortRunsFree
+            | R12DropRemainder
+            | R12ExitRunsFree
+            | R12DestroyDropsDebt
+            | R12CreateAtFloorOnly
+            | R12LiftByMax
+            | R12StrideWeightIsLimit
+            | R12UnnormalizedLift
+            | R12LiftCountsEntryWait
+            | R12FoldAtNewWeight
+            | R12NoMinimumCharge => "R12",
             MsgNoLabels
             | MsgBadgeZero
             | MsgAccountZero
@@ -414,7 +494,8 @@ impl Mutation {
             | ExitWithOpenCallsNotFaulted => "Messages",
             CurrentNeverSet | ReceiveKeepsCurrent => "Process",
             ServeIgnored => "serve",
-            BudgetDeadlineIgnored | ClassNotInherited => "Budget",
+            BudgetDeadlineIgnored | ClassNotInherited | ExpireBudgetsFirst => "Budget",
+            TimeoutIgnoredWhileOthersRun => "I13",
             LabelsAddedByParentClass => "budget_create",
             ReceiveWithBadgedHandle => "Handle",
             ExitEndpointBadged => "process_create",

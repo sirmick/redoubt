@@ -633,16 +633,23 @@ fn structure(k: &Kernel) -> Check {
             _ => {}
         }
     }
-    // Scheduler bookkeeping: each budget's weight, and exactly its runnable
+    // Scheduler bookkeeping: each budget's weight limit and carve, and exactly its runnable
     // threads.
     for (b, e) in &k.sched.budgets {
         let Some(bx) = k.budgets.get(b) else {
             return Err(format!("R12: scheduler keeps destroyed budget {b}"));
         };
-        ensure!(e.weight == bx.weight, "R12: scheduler has budget {b}'s weight wrong");
-        for t in &e.runnable {
+        ensure!(e.limit == bx.weight, "R12: scheduler has budget {b}'s weight wrong");
+        ensure!(e.carved == bx.weight_used, "R7/R12: scheduler has budget {b}'s carve wrong");
+        ensure!(
+            u128::from(e.rem) < u128::from(k.sched.weight(*b)).max(1),
+            "R12: budget {b}'s remainder is not below its weight"
+        );
+        for (pid, t) in &e.runnable {
             ensure!(
-                k.threads.get(t).is_some_and(|x| x.wait.is_none() && k.budget_of(x.pid) == Some(*b)),
+                k.threads
+                    .get(t)
+                    .is_some_and(|x| x.pid == *pid && x.wait.is_none() && k.budget_of(x.pid) == Some(*b)),
                 "R12: scheduler queues thread {t}, which is not runnable in budget {b}"
             );
         }
@@ -650,9 +657,31 @@ fn structure(k: &Kernel) -> Check {
     for t in k.threads.values().filter(|t| t.wait.is_none()) {
         let b = k.budget_of(t.pid).unwrap();
         ensure!(
-            k.sched.budgets.get(&b).is_some_and(|e| e.runnable.contains(&t.tid)),
+            k.sched.budgets.get(&b).is_some_and(|e| e.runnable.contains(&(t.pid, t.tid))),
             "R12: runnable thread {} is not queued",
             t.tid
+        );
+    }
+    for b in k.budgets.keys() {
+        ensure!(k.sched.budgets.contains_key(b), "R12: budget {b} is missing from the scheduler");
+    }
+    // R7/R12: a budget that holds a process has free weight (its stride weight) above 0.
+    for p in k.processes.values() {
+        let bx = &k.budgets[&p.budget];
+        ensure!(
+            bx.weight > bx.weight_used,
+            "R7/R12: budget {} holds process {} with free weight 0",
+            p.budget,
+            p.pid
+        );
+    }
+    // The floor never exceeds a queued budget's pass by more than the running budget's unfolded
+    // runtime could explain: every queued pass is at least the floor, except a waker not yet
+    // reconciled.
+    for (b, e) in &k.sched.budgets {
+        ensure!(
+            !e.queued || e.pass >= k.sched.floor || e.runnable.is_empty(),
+            "R12: queued budget {b} below the floor"
         );
     }
     Ok(())

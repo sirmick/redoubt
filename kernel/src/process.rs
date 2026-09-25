@@ -242,7 +242,9 @@ pub fn process_create(
     let target = mm.budget_handle(pid, budget_h)?;
     let (endpoint, exit_handle) = mm.endpoint_handle(pid, endpoint_h)?;
     // A weight-0 budget holds no process (R12); the spec's stated exception, `InvalidArgument`.
-    if mm.budget(target).weight_limit == 0 {
+    // A budget with no free weight holds no process (R12: its stride weight is its free weight).
+    let tb = mm.budget(target);
+    if tb.weight_limit.saturating_sub(tb.weight_carved) == 0 {
         return Err(Error::InvalidArgument);
     }
     // Stage 3: an exit endpoint is named by its receive right, so a notice cannot be steered at
@@ -386,6 +388,8 @@ pub fn process_map(
             .expect("process_map: prepared just above");
         mm.move_frame(phys, pid, child).expect("process_map: the pages were charged above");
     }
+    // The caller wrote these pages; the child may fetch from them (on this hart, the only one).
+    crate::mem::sync_if_executable(flags);
     Ok(())
 }
 

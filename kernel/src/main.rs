@@ -39,7 +39,12 @@ mod redoubt;
 mod server;
 mod services;
 mod syscall;
+#[cfg(baremetal)]
+mod sched;
+#[cfg(baremetal)]
+mod time;
 
+#[cfg(not(baremetal))]
 use redoubt_abi::*;
 use services::SystemServices;
 
@@ -66,6 +71,10 @@ pub unsafe extern "C" fn init(
     });
     SystemServices::with_mut(|system_services| system_services.init_from_memory(init_offset, &args));
 
+    // Test builds only: the scheduling trace's ring, before the budget tree counts free RAM.
+    #[cfg(feature = "sched-trace")]
+    crate::mem::MemoryManager::with_mut(crate::sched::trace::init);
+
     // The budget tree, with the loader's processes in `system` (budget.rs, `boot_budgets`).
     crate::mem::MemoryManager::with_mut(|mm| mm.boot_budgets());
 
@@ -87,8 +96,9 @@ pub unsafe extern "C" fn init(
     platform::rand::get_u32();
 }
 
-/// Loop through the SystemServices list to determine the next PID to be run.
-/// If no process is ready, return `None`.
+/// Loop through the SystemServices list to determine the next PID to be run (hosted builds;
+/// on the machine, `sched.rs` picks). If no process is ready, return `None`.
+#[cfg(not(baremetal))]
 fn next_pid_to_run(last_pid: Option<PID>) -> Option<PID> {
     // PIDs are 1-indexed but arrays are 0-indexed.  By not subtracting
     // 1 from the PID when we use it as an array index, we automatically
@@ -115,8 +125,8 @@ pub extern "C" fn kmain() {
     #[cfg(all(baremetal, feature = "smp", feature = "sbi"))]
     crate::arch::smp::run();
 
-    // Start performing round-robin on all child processes.
-    // Note that at this point, no new direct children of INIT may be created.
+    // Hosted builds round-robin by PID; on the machine, `sched.rs` picks.
+    #[cfg(not(baremetal))]
     let mut pid = None;
 
     #[cfg(not(any(baremetal, all(ci, test))))]
@@ -128,31 +138,45 @@ pub extern "C" fn kmain() {
         }));
     }
 
-    loop {
-        #[cfg(feature = "debug-print")]
-        let last_pid = pid;
-        pid = next_pid_to_run(pid);
+    // The loader wrote every boot program's image: make instruction fetch see it before the
+    // first of them runs (`fence.i`; every later executable page is fenced as it is mapped).
+    #[cfg(all(baremetal, any(target_arch = "riscv32", target_arch = "riscv64")))]
+    crate::arch::mem::sync_icache();
 
-        match pid {
-            Some(pid) => {
+    loop {
+        // Deadlines first (`time.rs`): answering them makes threads runnable. This is the kernel's
+        // own loop, not an entry; nothing enters between here and the switch below.
+        #[cfg(baremetal)]
+        {
+            crate::sched::pause_billing();
+            SystemServices::with_mut(crate::time::expire_due);
+            crate::sched::resume_billing();
+        }
+
+        // One stride queue over every runnable budget (`sched.rs`).
+        #[cfg(baremetal)]
+        let next = SystemServices::with(|ss| mem::MemoryManager::with_mut(|mm| crate::sched::pick(ss, mm)));
+        #[cfg(not(baremetal))]
+        let next = {
+            pid = next_pid_to_run(pid);
+            pid.map(|p| (p, 0))
+        };
+
+        match next {
+            Some((pid, tid)) => {
                 #[cfg(feature = "debug-print")]
-                println!("  PID{:?}->{:?}", last_pid, pid); // keep this succinct as it happens often
+                println!("  ->PID{:?}:{}", pid, tid); // keep this succinct as it happens often
                 #[cfg(all(baremetal, any(target_arch = "riscv32", target_arch = "riscv64")))]
                 use arch::syscall::kernel_syscall;
                 #[cfg(not(all(baremetal, any(target_arch = "riscv32", target_arch = "riscv64"))))]
                 use redoubt_abi::rsyscall as kernel_syscall;
-                kernel_syscall(redoubt_abi::SysCall::SwitchTo(pid, 0)).expect("couldn't switch to pid");
-            }
-            None => {
-                // I13, until WP-K5 arms the timer: with nothing runnable, the only thing that
-                // can make progress is a Redoubt deadline passing, so answer the ones that have
-                // and keep polling while any is still waiting, rather than sleeping through it.
-                if SystemServices::with_mut(|ss| {
-                    mem::MemoryManager::with_mut(|mm| crate::message::expire(ss, mm))
-                }) {
+                // A process that cannot be switched to (it died since it was picked) is simply
+                // not run: pick again.
+                if kernel_syscall(redoubt_abi::SysCall::SwitchTo(pid, tid)).is_err() {
                     continue;
                 }
-
+            }
+            None => {
                 #[cfg(feature = "debug-print")]
                 klog!("NO RUNNABLE TASKS FOUND, entering idle state");
 
@@ -165,7 +189,11 @@ pub extern "C" fn kmain() {
                     }
                 });
 
-                // Special case for testing: idle can return `false` to indicate exit
+                // Sleep until an interrupt: a device, or the timer, which is always armed for the
+                // next deadline (`time.rs`). A deadline that passed since the check above is
+                // already pending, so `wfi` returns at once.
+                #[cfg(baremetal)]
+                crate::sched::stop_billing();
                 if !arch::idle() {
                     return;
                 }

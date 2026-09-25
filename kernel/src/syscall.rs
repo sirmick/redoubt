@@ -25,6 +25,8 @@ use crate::services::{PostActivateOp, SystemServices};
 
  Currently (as of Mar 2021) this functionality isn't being used, it's just returning
  back to the kernel, e.g. (PID,TID) = (1,1)
+
+ (Redoubt, WP-K5: ReturnToParent is refused; nothing used it.)
 */
 /// This is the PID/TID of the last person that called SwitchTo
 static SWITCHTO_CALLER: KernelCell<Option<(PID, TID)>> = KernelCell::new(None);
@@ -74,8 +76,11 @@ fn do_yield(_pid: PID, tid: TID) -> SysCallResult {
         return Ok(redoubt_abi::Result::Ok);
     }
 
+    // The quantum's owner, normally `kmain` through `SwitchTo`. A preemption or a blocking call
+    // may have taken the CPU back to `kmain` since (and forgotten the caller); every process's
+    // parent is `kmain` then (WP-K5). A yield must never stop the kernel (I14).
     let (parent_pid, parent_ctx) =
-        SWITCHTO_CALLER.with(|c| c.take()).expect("yielded when no parent context was present");
+        SWITCHTO_CALLER.with(|c| c.take()).unwrap_or((crate::services::KERNEL_PID, 0));
     //println!("\n\r ***YIELD CALLED***");
     SystemServices::with_mut(|ss| {
         // TODO: Advance thread
@@ -891,7 +896,7 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                         klog!("PID {} tried to map physical RAM {:08x} by address", pid.get(), base);
                         return Err(redoubt_abi::Error::InvalidArgument);
                     }
-                    if !crate::grants::may_map_device(pid, base, size.get()) {
+                    if !crate::grants::may_map_device(mm, pid, base, size.get()) {
                         klog!("PID {} denied device {:08x}", pid.get(), base);
                         return Err(redoubt_abi::Error::AccessDenied);
                     }
@@ -1018,7 +1023,15 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
             //     "Activating process thread {} in pid {} coming from pid {} thread {}",
             //     new_context, new_pid, pid, tid
             // );
-            let new_tid = ss.activate_process_thread(tid, new_pid, new_tid, true, PostActivateOp::None)?;
+            let new_tid = match ss.activate_process_thread(tid, new_pid, new_tid, true, PostActivateOp::None)
+            {
+                Ok(t) => t,
+                Err(e) => {
+                    // Nothing was switched: the caller picks again (`main.rs`).
+                    SWITCHTO_CALLER.with(|c| *c = None);
+                    return Err(e);
+                }
+            };
             ORIGINAL_PID.store(new_pid.get(), Relaxed);
             ORIGINAL_TID.store(new_tid, Relaxed);
             Ok(redoubt_abi::Result::ResumeProcess)
@@ -1030,16 +1043,11 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
             interrupt_free(no, pid as definitions::PID).map(|_| redoubt_abi::Result::Ok)
         }
         SysCall::Yield => do_yield(pid, tid),
-        SysCall::ReturnToParent(_pid, _cpuid) => {
-            // SAFETY: the block only calls the (unsafe-ABI) set_isr_return_pair; the state access itself is
-            // checked.
-            unsafe {
-                if let Some((parent_pid, parent_ctx)) = SWITCHTO_CALLER.with(|c| c.take()) {
-                    crate::arch::irq::set_isr_return_pair(parent_pid, parent_ctx)
-                }
-            };
-            Ok(redoubt_abi::Result::ResumeProcess)
-        }
+        // Refused, to everyone (WP-K5): nothing in the tree calls it, and it put the kernel in the
+        // state of a running interrupt callback with none running, which held every budget
+        // deadline and slice end and refused every Redoubt call. A callback returns through
+        // `RETURN_FROM_ISR` (`arch::irq`).
+        SysCall::ReturnToParent(_pid, _cpuid) => Err(redoubt_abi::Error::UnhandledSyscall),
         SysCall::ReceiveMessage(sid) => receive_message(pid, tid, sid, ExecutionType::Blocking),
         SysCall::TryReceiveMessage(sid) => receive_message(pid, tid, sid, ExecutionType::NonBlocking),
         SysCall::WaitEvent => SystemServices::with_mut(|ss| {

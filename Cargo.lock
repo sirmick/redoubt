@@ -553,6 +553,7 @@ dependencies = [
  "rand",
  "rand_chacha",
  "redoubt-abi",
+ "redoubt-stride",
  "redoubt-sys",
  "riscv",
  "sbi-rt",
@@ -582,6 +583,13 @@ dependencies = [
 [[package]]
 name = "redoubt-signing"
 version = "0.1.0"
+
+[[package]]
+name = "redoubt-stride"
+version = "0.1.0"
+dependencies = [
+ "redoubt-model",
+]
 
 [[package]]
 name = "redoubt-sys"
@@ -847,6 +855,7 @@ dependencies = [
  "anyhow",
  "clap",
  "ed25519-compact",
+ "redoubt-model",
  "redoubt-signing",
  "regex",
  "serde",

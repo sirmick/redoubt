@@ -111,9 +111,11 @@ pub struct Boot {
 impl Default for Boot {
     fn default() -> Boot {
         Boot {
-            root: Limits { pages: 1024, processes: 24, weight: 1000 },
-            system: Limits { pages: 256, processes: 8, weight: 250 },
-            users: Limits { pages: 512, processes: 12, weight: 500 },
+            // The kernel's interim boot split (budget.rs, `boot_budgets`): root keeps 1000 free for
+            // init; system a quarter; users the rest.
+            root: Limits { pages: 1024, processes: 24, weight: 1_000_000 },
+            system: Limits { pages: 256, processes: 8, weight: 250_000 },
+            users: Limits { pages: 512, processes: 12, weight: 749_000 },
             devices: vec![
                 DeviceSpec::Mmio { base: 0x1000_0000, pages: 1, dma: false },
                 DeviceSpec::Mmio { base: 0x1000_1000, pages: 1, dma: true },
@@ -853,7 +855,7 @@ impl Kernel {
             x.processes_used += l.processes;
             x.weight_used += l.weight;
         }
-        self.sched.add_budget(id, l.weight);
+        self.sched.add_budget(id, parent, l.weight);
         id
     }
 
@@ -1105,7 +1107,7 @@ impl Kernel {
         let p = self.processes.get_mut(&pid).unwrap();
         p.threads.insert(tid);
         let b = p.budget;
-        self.sched.wake(b, tid);
+        self.sched.thread_runnable(b, (pid, tid));
         tid
     }
 
@@ -1116,7 +1118,7 @@ impl Kernel {
         t.deadline = deadline;
         let pid = t.pid;
         if let Some(b) = self.budget_of(pid) {
-            self.sched.block(b, tid);
+            self.sched.thread_blocked(b, (pid, tid));
         }
     }
 
@@ -1166,7 +1168,7 @@ impl Kernel {
         t.deadline = None;
         let pid = t.pid;
         if let Some(b) = self.budget_of(pid) {
-            self.sched.wake(b, tid);
+            self.sched.thread_runnable(b, (pid, tid));
         }
         if !matches!(result, Ok(Ret::Message(_))) {
             self.ghost.receiving.remove(&tid);
@@ -1674,7 +1676,7 @@ impl Kernel {
         }
         let budget = self.budget_of(t.pid);
         if let Some(b) = budget {
-            self.sched.block(b, tid);
+            self.sched.thread_exited(b, (t.pid, tid));
         }
         self.threads.remove(&tid);
         self.ghost.thread_gone(tid);
@@ -1863,6 +1865,8 @@ impl Kernel {
         if !self.budgets.contains_key(&b) {
             return;
         }
+        // The top's carve returns first, before anything is destroyed (K5-code-review-4 D1).
+        self.sched.return_carve(b);
         // Descendants first: post-order.
         let mut order = Vec::new();
         let mut stack = vec![(b, false)];
@@ -1954,42 +1958,54 @@ impl Kernel {
                 px.weight_used = px.weight_used.saturating_sub(bb.weight);
             }
         }
+        // Bottom-up (R10 order): each budget's work since entry moves to its parent, and its
+        // carve returns there.
         for x in order {
             self.budgets.remove(&x);
-            self.sched.remove_budget(x);
+            self.sched.destroy_budget(x);
         }
     }
 
     // ---------------------------------------------------------------------------------------
     // Time.
 
-    /// Everything due at or before `now`: timeouts (I13) and budget deadlines, earliest first.
-    fn expire(&mut self) {
+    /// Everything due at or before `now`: timeouts (I13) and budget deadlines, earliest first; at
+    /// an equal instant timeouts first. Returns what it did: (a timeout expired, a budget was
+    /// destroyed).
+    fn expire(&mut self) -> (bool, bool) {
         let deadlines = !self.broken(Mutation::BudgetDeadlineIgnored);
+        // Broken: a timer armed only while idle, so timeouts wait for the CPU to be free.
+        let timeouts = !(self.broken(Mutation::TimeoutIgnoredWhileOthersRun) && self.sched.current.is_some());
+        let (timeout_kind, budget_kind) =
+            if self.broken(Mutation::ExpireBudgetsFirst) { (1, 0) } else { (0, 1) };
+        let mut did = (false, false);
         loop {
             let t = self
                 .threads
                 .values()
-                .filter(|t| t.wait.is_some() && t.deadline.is_some_and(|d| d <= self.now))
+                .filter(|t| timeouts && t.wait.is_some() && t.deadline.is_some_and(|d| d <= self.now))
                 .min_by_key(|t| (t.deadline, t.tid))
-                .map(|t| (t.deadline.unwrap(), 0, t.tid));
+                .map(|t| (t.deadline.unwrap(), timeout_kind, t.tid));
             let b = self
                 .budgets
                 .values()
                 .filter(|b| deadlines && b.deadline.is_some_and(|d| d <= self.now))
                 .min_by_key(|b| (b.deadline, b.id))
-                .map(|b| (b.deadline.unwrap(), 1, b.id));
+                .map(|b| (b.deadline.unwrap(), budget_kind, b.id));
             let next = match (t, b) {
                 (Some(x), Some(y)) => x.min(y),
                 (Some(x), None) | (None, Some(x)) => x,
                 (None, None) => {
                     self.settle();
-                    return;
+                    return did;
                 }
             };
-            match next {
-                (_, 0, tid) => self.time_out(tid),
-                (_, _, id) => self.destroy_budget(id),
+            if next.1 == timeout_kind {
+                self.time_out(next.2);
+                did.0 = true;
+            } else {
+                self.destroy_budget(next.2);
+                did.1 = true;
             }
         }
     }
@@ -2020,55 +2036,55 @@ impl Kernel {
         self.wake(tid, Err(Error::Timeout));
     }
 
-    /// `dt` microseconds pass. The scheduler runs its pick for at most a slice at a time, up to
-    /// the next due event; each run is charged at deschedule (R12). With nothing to run, time
-    /// jumps to the next event.
+    /// `dt` microseconds pass. The running thread keeps the CPU until its slice ends, it blocks or
+    /// exits, or a budget deadline fires (R12: preemption at slice end or a deadline, never on a
+    /// wake); then the scheduler picks again. Each timer instant inside the tick is its own kernel
+    /// entry: what it expires is reconciled (and ranked) there. With nothing to run, time jumps to
+    /// the next event.
     fn tick(&mut self, dt: u64) {
         let end = self.now.saturating_add(dt);
         while self.now < end {
-            let pick = self.sched.pick();
-            // With one budget runnable and nothing due, every whole slice until the next event
-            // goes to it alike: charge them at once (the same passes as slice by slice), so that a
-            // long tick costs the model no more than a short one.
-            let until = self.next_event().filter(|e| *e > self.now).map_or(end, |e| e.min(end));
-            let slices = (until - self.now) / SLICE;
-            if let Some((b, _)) = pick.filter(|_| slices > 1 && self.sched.runnable_budgets() == 1) {
-                self.now += slices * SLICE;
-                self.sched.charge_slices(b, slices);
-                self.expire();
+            let cur = self.sched.pick();
+            let limit = self.next_event().filter(|e| *e > self.now).map_or(end, |e| e.min(end));
+            let Some(c) = cur else {
+                self.now = limit;
+                self.at_instant();
                 continue;
-            }
-            // No delivery or deadline can change runnable state before `until`. Keep
-            // every scheduler pick and charge, but defer empty expiry scans to that boundary.
-            // A stale earliest deadline under mutation still uses the slice-by-slice path.
+            };
+            // With one budget queued, a fresh slice and nothing due for whole slices, every one of
+            // them goes to it alike: charge them at once (the same passes and thread order as slice
+            // by slice), so that a long tick costs the model no more than a short one.
+            let slices = (limit - self.now) / SLICE;
             if slices > 1
+                && c.slice_left == SLICE
+                && self.sched.runnable_budgets() == 1
                 && self.to_pump.is_empty()
-                && self.next_event().is_none_or(|e| e > self.now)
-                && pick.is_some()
             {
-                for _ in 0..slices {
-                    let (b, _) = self.sched.pick().unwrap();
-                    self.now += SLICE;
-                    self.sched.charge(b, SLICE);
-                }
-                self.expire();
+                self.now += slices * SLICE;
+                self.sched.run_slices(slices);
+                self.at_instant();
                 continue;
             }
-            let mut run = end - self.now;
-            if pick.is_some() {
-                run = run.min(SLICE);
-            }
-            if let Some(e) = self.next_event() {
-                if e > self.now {
-                    run = run.min(e - self.now);
-                }
-            }
+            let run = c.slice_left.min(limit - self.now);
             self.now += run;
-            if let Some((b, _)) = pick {
-                self.sched.charge(b, run);
-            }
-            self.expire();
+            self.sched.run(run);
+            self.sched.slice_end();
+            self.at_instant();
         }
+    }
+
+    /// One timer instant inside a tick: expire what is due; a budget deadline preempts (the
+    /// running budget is folded and requeued), a timeout only wakes; then reconcile.
+    fn at_instant(&mut self) {
+        if self.next_event().is_some_and(|e| e <= self.now) {
+            let (timed_out, destroyed) = self.expire();
+            if destroyed || (timed_out && self.broken(Mutation::R12TimeoutWakePreempts)) {
+                self.sched.preempt();
+            }
+        } else {
+            self.settle();
+        }
+        self.sched.reconcile();
     }
 
     /// Interrupt line `n` is raised. R5: if the source is unmasked it fires: the kernel masks it
@@ -2215,7 +2231,13 @@ impl Kernel {
             }
         };
         self.settle();
-        self.expire();
+        let (_, destroyed) = self.expire();
+        if destroyed {
+            self.sched.preempt();
+        }
+        // The end of a kernel entry: budgets that gained or lost runnable threads join or leave
+        // the queue (R12's wake rule and ranks).
+        self.sched.reconcile();
         // A call that blocked and was answered within this same step returns its answer
         // directly (for example `receive` with a message waiting, or a timeout of 0).
         let mut outcome = outcome;
@@ -2522,8 +2544,10 @@ impl Kernel {
         let b = self.lookup_budget(pid, budget)?;
         let (endpoint, exit) = self.lookup_endpoint(pid, exit_endpoint)?;
         let bx = &self.budgets[&b];
-        // A budget with weight 0 cannot hold a process (QUESTIONS 12).
-        if bx.weight == 0 && !self.broken(Mutation::ProcessInWeightlessBudget) {
+        // A budget with free weight 0 cannot hold a process (QUESTIONS 12; its stride weight is
+        // its free weight, R12).
+        if bx.weight.saturating_sub(bx.weight_used) == 0 && !self.broken(Mutation::ProcessInWeightlessBudget)
+        {
             return Err(Error::InvalidArgument);
         }
         // Only a receive right names an exit endpoint: otherwise anyone could spray notices.
@@ -3260,8 +3284,14 @@ impl Kernel {
         if carve_check && processes > px.processes_limit.saturating_sub(px.processes_used) {
             return Err(Error::OutOfProcesses);
         }
-        // README choice 2.
-        if carve_check && weight > px.weight.saturating_sub(px.weight_used) {
+        // README choice 2. A carve may not leave a budget that holds a process with free weight 0:
+        // its stride weight is its free weight, and a weight-0 budget holds no process (R7, R12).
+        let free = px.weight.saturating_sub(px.weight_used);
+        let holds = self.processes.values().any(|x| x.budget == p);
+        if carve_check
+            && (weight > free
+                || (holds && weight == free && weight > 0 && !self.broken(Mutation::R7CarveToZeroFree)))
+        {
             return Err(Error::InvalidArgument);
         }
         // R8: the parent's account, unless it is 0 (then the argument; README choice 4).
@@ -3457,35 +3487,22 @@ mod tick_equivalence {
 
     use super::*;
     use crate::gen::Gen;
+    /// Slice by slice, with no batching: what `tick` must equal.
     fn reference_tick(k: &mut Kernel, dt: u64) {
         let end = k.now.saturating_add(dt);
         while k.now < end {
-            let pick = k.sched.pick();
-            // With one budget runnable and nothing due, every whole slice until the next event
-            // goes to it alike: charge them at once (the same passes as slice by slice), so that a
-            // long tick costs the model no more than a short one.
-            let until = k.next_event().filter(|e| *e > k.now).map_or(end, |e| e.min(end));
-            let slices = (until - k.now) / SLICE;
-            if let Some((b, _)) = pick.filter(|_| slices > 1 && k.sched.runnable_budgets() == 1) {
-                k.now += slices * SLICE;
-                k.sched.charge_slices(b, slices);
-                k.expire();
+            let cur = k.sched.pick();
+            let limit = k.next_event().filter(|e| *e > k.now).map_or(end, |e| e.min(end));
+            let Some(c) = cur else {
+                k.now = limit;
+                k.at_instant();
                 continue;
-            }
-            let mut run = end - k.now;
-            if pick.is_some() {
-                run = run.min(SLICE);
-            }
-            if let Some(e) = k.next_event() {
-                if e > k.now {
-                    run = run.min(e - k.now);
-                }
-            }
+            };
+            let run = c.slice_left.min(limit - k.now);
             k.now += run;
-            if let Some((b, _)) = pick {
-                k.sched.charge(b, run);
-            }
-            k.expire();
+            k.sched.run(run);
+            k.sched.slice_end();
+            k.at_instant();
         }
     }
 

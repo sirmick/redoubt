@@ -33,6 +33,7 @@ use crate::arch::process::{INITIAL_TID, MAX_PROCESS_COUNT, MAX_THREAD};
 use crate::handle::{BudgetRef, Handle, HandleTable, Object};
 use crate::kframe;
 use crate::mem::MemoryManager;
+use crate::services::SystemServices;
 
 /// A budget, named by the index of its frame in the page-ownership table.
 pub type BudgetFrame = u32;
@@ -43,8 +44,13 @@ pub const PROCESS_PAGES: u64 = 1;
 pub const THREAD_PAGES: u64 = 1;
 
 /// The weight `root` starts with. Weights only matter relative to each other (R12), so any
-/// value works; this one leaves room to carve.
-const ROOT_WEIGHT: u32 = 1000;
+/// value works; this one leaves room to carve INIT.md's manifest weights (1000 for `init`, the
+/// steward and the drivers, 100 for a session). INTERIM, until WP-R3 builds the tree from the
+/// manifest.
+const ROOT_WEIGHT: u32 = 1_000_000;
+/// What `root` keeps for `init` when carving `system` and `users` (KERNEL-SPEC.md, R12: a
+/// budget holding a process has free weight).
+const INIT_WEIGHT: u32 = 1000;
 
 /// A budget's class (KERNEL-SPEC.md, Budget): inherited from its parent, so never in the ABI.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -65,8 +71,11 @@ pub struct Budget {
     pub labels: [u64; MAX_LABELS],
     pub nlabels: usize,
     pub account: u64,
-    /// Absolute µs since boot; `FOREVER` for none. Recorded here; WP-K5 enforces it.
+    /// Absolute µs since boot; `FOREVER` for none. When it passes, the kernel destroys the
+    /// budget (`time.rs`).
     pub deadline: u64,
+    /// The next budget on the kernel's list of budgets with a deadline (`Objects::deadlines`).
+    pub next_deadline: Option<BudgetFrame>,
     pub pages_limit: u64,
     pub pages_used: u64,
     pub processes_limit: u32,
@@ -74,6 +83,10 @@ pub struct Budget {
     pub weight_limit: u32,
     /// The children's weight limits (R7).
     pub weight_carved: u32,
+    /// Its place in the stride queue (`sched.rs`).
+    pub sched: redoubt_stride::State,
+    /// The (pid, tid) it ran last, for round-robin among its threads.
+    pub cursor: Option<(u8, u8)>,
 }
 
 impl Budget {
@@ -92,7 +105,9 @@ impl Budget {
 /// First word of every budget frame, so that a frame read as a budget that is not one is caught.
 const MAGIC: u64 = u64::from_le_bytes(*b"budget\0\0");
 /// Words a budget takes in its frame, one per field (a frame has 512): `load` and `store` below.
-const WORDS: usize = 16 + MAX_LABELS;
+const WORDS: usize = 16 + MAX_LABELS + 8;
+/// Where the scheduling words start, after the labels.
+const W_SCHED: usize = 16 + MAX_LABELS;
 
 /// One process's side of the ledger. The kernel (PID 1) has none: it has no budget.
 #[derive(Clone, Copy)]
@@ -112,6 +127,9 @@ pub struct Account {
     /// The next message id its threads will hand a sender. Never 0, never reused within this
     /// process, and from no counter anyone else can see (I12, CONTAINMENT.md).
     pub next_msg_id: u64,
+    /// No thread of this process has a timeout earlier than this (`message::next_timeout`): only
+    /// ever early, so expiry walks just the processes it might be due in.
+    pub earliest_timeout: u64,
 }
 
 impl Account {
@@ -123,6 +141,7 @@ impl Account {
         ipc: [0; MAX_THREAD],
         open_calls: 0,
         next_msg_id: 1,
+        earliest_timeout: u64::MAX,
     };
 }
 
@@ -135,12 +154,21 @@ pub struct Objects {
     next_seq: u64,
     /// The highest frame ever given to a kernel object: where a scan for budgets stops.
     pub high_frame: u32,
+    /// The first of the budgets with a deadline, linked through their frames
+    /// (`Budget::next_deadline`), so finding the next deadline never scans every frame.
+    deadlines: Option<BudgetFrame>,
     accounts: [Account; MAX_PROCESS_COUNT],
 }
 
 impl Objects {
     pub const fn new() -> Objects {
-        Objects { next_id: 1, next_seq: 1, high_frame: 0, accounts: [Account::NONE; MAX_PROCESS_COUNT] }
+        Objects {
+            next_id: 1,
+            next_seq: 1,
+            high_frame: 0,
+            deadlines: None,
+            accounts: [Account::NONE; MAX_PROCESS_COUNT],
+        }
     }
 }
 
@@ -181,6 +209,20 @@ impl MemoryManager {
             nlabels: (w(6) as usize).min(MAX_LABELS),
             account: w(7),
             deadline: w(8),
+            // Word 15 is the next deadline budget's frame plus one; 0 for none.
+            next_deadline: (w(15) as u32).checked_sub(1),
+            sched: redoubt_stride::State {
+                pass: u128::from(w(W_SCHED)) | u128::from(w(W_SCHED + 1)) << 64,
+                entry: u128::from(w(W_SCHED + 2)) | u128::from(w(W_SCHED + 3)) << 64,
+                rem: w(W_SCHED + 4),
+                tie: w(W_SCHED + 5) as i64,
+                queued: w(W_SCHED + 6) != 0,
+            },
+            // The cursor: (pid, tid) plus one in the low bytes, 0 for none.
+            cursor: match w(W_SCHED + 7) {
+                0 => None,
+                c => Some(((c >> 8) as u8, (c as u8).wrapping_sub(1))),
+            },
             pages_limit: w(9),
             pages_used: w(10),
             processes_limit: w(11) as u32,
@@ -208,10 +250,61 @@ impl MemoryManager {
         words[12] = u64::from(b.processes_used);
         words[13] = u64::from(b.weight_limit);
         words[14] = u64::from(b.weight_carved);
-        words[16..].copy_from_slice(&b.labels);
+        words[15] = b.next_deadline.map_or(0, |f| u64::from(f) + 1);
+        words[W_SCHED] = b.sched.pass as u64;
+        words[W_SCHED + 1] = (b.sched.pass >> 64) as u64;
+        words[W_SCHED + 2] = b.sched.entry as u64;
+        words[W_SCHED + 3] = (b.sched.entry >> 64) as u64;
+        words[W_SCHED + 4] = b.sched.rem;
+        words[W_SCHED + 5] = b.sched.tie as u64;
+        words[W_SCHED + 6] = u64::from(b.sched.queued);
+        words[W_SCHED + 7] = b.cursor.map_or(0, |(p, t)| u64::from(p) << 8 | u64::from(t.wrapping_add(1)));
+        words[16..W_SCHED].copy_from_slice(&b.labels);
         for (i, word) in words.iter().enumerate() {
             kframe::write(phys, i * 8, *word);
         }
+    }
+
+    // --- The scheduler's words, read and written alone (`sched.rs` reads them on every exit) --
+
+    /// `frame`'s place in the stride queue.
+    pub fn sched_state(&self, frame: BudgetFrame) -> redoubt_stride::State {
+        let phys = self.object_phys(frame);
+        let w = |i: usize| kframe::read(phys, i * 8);
+        debug_assert!(w(0) == MAGIC, "I1: frame {} holds no budget", frame);
+        redoubt_stride::State {
+            pass: u128::from(w(W_SCHED)) | u128::from(w(W_SCHED + 1)) << 64,
+            entry: u128::from(w(W_SCHED + 2)) | u128::from(w(W_SCHED + 3)) << 64,
+            rem: w(W_SCHED + 4),
+            tie: w(W_SCHED + 5) as i64,
+            queued: w(W_SCHED + 6) != 0,
+        }
+    }
+
+    pub fn set_sched_state(&mut self, frame: BudgetFrame, s: &redoubt_stride::State) {
+        let phys = self.object_phys(frame);
+        assert!(kframe::read(phys, 0) == MAGIC, "I1: frame {} holds no budget", frame);
+        let words = [
+            s.pass as u64,
+            (s.pass >> 64) as u64,
+            s.entry as u64,
+            (s.entry >> 64) as u64,
+            s.rem,
+            s.tie as u64,
+            u64::from(s.queued),
+        ];
+        for (i, word) in words.iter().enumerate() {
+            kframe::write(phys, (W_SCHED + i) * 8, *word);
+        }
+    }
+
+    /// `frame`'s id.
+    pub fn budget_id(&self, frame: BudgetFrame) -> u64 { kframe::read(self.object_phys(frame), 8) }
+
+    /// `frame`'s free weight: its stride weight (R12).
+    pub fn free_weight_of(&self, frame: BudgetFrame) -> u64 {
+        let phys = self.object_phys(frame);
+        kframe::read(phys, 13 * 8).saturating_sub(kframe::read(phys, 14 * 8))
     }
 
     /// The next never-reused object id (budgets, endpoints).
@@ -298,7 +391,7 @@ impl MemoryManager {
     /// answer here, not a kernel bug: a message carries handles that R10 may have revoked while
     /// it waited, and an open call remembers a stamp that may be gone (`mint`'s `Dead`).
     pub fn is_live_budget(&self, r: BudgetRef) -> bool {
-        self.is_budget_frame(r.frame) && self.budget(r.frame).id == r.id
+        self.is_budget_frame(r.frame) && self.budget_id(r.frame) == r.id
     }
 
     /// Whether `b` is `ancestor` or below it (R9: a budget handle only narrows).
@@ -352,8 +445,9 @@ impl MemoryManager {
     pub fn process_created(&mut self, pid: PID, budget: BudgetFrame) -> Result<(), Error> {
         let index = account_index(pid).ok_or(Error::InvalidArgument)?;
         let mut b = self.budget(budget);
-        // A weight-0 budget holds no process (R12).
-        if b.weight_limit == 0 {
+        // A budget with no free weight holds no process (R12: its stride weight is its free
+        // weight).
+        if b.free_weight() == 0 {
             return Err(Error::InvalidArgument);
         }
         if b.free_processes() == 0 {
@@ -422,6 +516,8 @@ impl MemoryManager {
         let pages = self.ram_frames() - self.ram_frames_owned_by(crate::services::KERNEL_PID) as u64;
         let processes = (MAX_PROCESS_COUNT - 1) as u32;
         let (sys_pages, sys_processes, sys_weight) = (pages / 4, processes / 4, ROOT_WEIGHT / 4);
+        // `users` gets the rest of the weight but what `root` keeps for `init`.
+        let users_weight = ROOT_WEIGHT - sys_weight - INIT_WEIGHT;
         // Root pays for the two budgets' own pages. Root's own page is charged to no one: it has
         // no parent, and its frame is one of the RAM pages counted in its limit, taken for the tree
         // itself.
@@ -441,14 +537,7 @@ impl MemoryManager {
         };
         let root = boot(self, None, Class::System, pages, processes, ROOT_WEIGHT);
         let system = boot(self, Some(root), Class::System, sys_pages, sys_processes, sys_weight);
-        let users = boot(
-            self,
-            Some(root),
-            Class::User,
-            users_pages,
-            processes - sys_processes,
-            ROOT_WEIGHT - sys_weight,
-        );
+        let users = boot(self, Some(root), Class::User, users_pages, processes - sys_processes, users_weight);
         let mut first = None;
         let mut bundle = [None; MAX_PROCESS_COUNT];
         let mut nbundle = 0;
@@ -546,13 +635,28 @@ impl MemoryManager {
             processes_used: 0,
             weight_limit: spec.weight,
             weight_carved: 0,
+            next_deadline: None,
+            sched: redoubt_stride::State::default(),
+            cursor: None,
         };
         self.store(frame, &b);
-        if let (Some(p), Some(mut pb)) = (parent, parent_budget) {
+        if spec.deadline != FOREVER {
+            self.link_deadline(frame);
+        }
+        // It enters the queue's virtual time at max(floor, parent's pass).
+        crate::sched::create(self, frame, parent);
+        if let Some(p) = parent {
+            // Read after the scheduler charged it: the frame holds its scheduling words too.
+            let mut pb = self.budget(p);
             pb.pages_used += BUDGET_PAGES + spec.pages;
             pb.processes_used += spec.processes;
-            pb.weight_carved += spec.weight;
             self.store(p, &pb);
+            // The carve changes the parent's stride weight: what it ran is charged at the old one.
+            crate::sched::change_weight(self, p, |mm| {
+                let mut pb = mm.budget(p);
+                pb.weight_carved += spec.weight;
+                mm.store(p, &pb);
+            });
         }
         Ok(frame)
     }
@@ -598,8 +702,11 @@ impl MemoryManager {
         if spec.processes > p.free_processes() {
             return Err(Error::OutOfProcesses);
         }
-        // No error names weight; the spec's stated exception.
-        if spec.weight > p.free_weight() {
+        // No error names weight; the spec's stated exception. A carve may not leave a budget
+        // that holds a process with no free weight (R12: its stride weight is its free weight).
+        if spec.weight > p.free_weight()
+            || (spec.weight > 0 && spec.weight == p.free_weight() && self.holds_process(pf))
+        {
             return Err(Error::InvalidArgument);
         }
         // R8: the parent's account, unless it is 0; then the creator's choice.
@@ -610,10 +717,16 @@ impl MemoryManager {
         // after the carve (the caller's budget may be the parent); if it cannot, undo.
         let stamp = BudgetRef { frame: caller, id: self.budget(caller).id };
         let handle = Handle { object: Object::Budget(BudgetRef { frame: child, id }), badge: 0, stamp };
-        self.install_handle(pid, handle).inspect_err(|_| {
-            self.return_carve(child);
+        let installed = self.install_handle(pid, handle).inspect_err(|_| {
+            crate::sched::change_weight(self, pf, |mm| mm.return_carve(child, true));
+            self.unlink_deadline(child);
             self.free_object_frame(child);
-        })
+        })?;
+        if spec.deadline != FOREVER {
+            // A deadline already past is destroyed at the next kernel entry.
+            crate::time::note_budget_deadline(spec.deadline);
+        }
+        Ok(installed)
     }
 
     /// `budget_usage(h) -> counters`, after decoding.
@@ -662,6 +775,26 @@ impl MemoryManager {
     /// (`process_is_doomed`), and finishes with [`MemoryManager::destroy_marked`].
     pub fn destroy_begin(&mut self, pid: PID, h: u32) -> Result<BudgetFrame, Error> {
         let top = self.budget_handle(pid, h)?;
+        self.mark_dying(top);
+        Ok(top)
+    }
+
+    /// Mark `top` and everything below it dying (R10's first step, for `budget_destroy` and for
+    /// a deadline alike). Before anything else, `top`'s carve comes back to its parent, so the
+    /// destruction's own work (often the parent's own `budget_destroy`) is charged at the weight
+    /// the parent has once the child is gone, not at the sliver it kept while the child held the
+    /// rest (K5-code-review-4 D1; `sched.rs`: a weight change charges what ran before it). The
+    /// budgets below the top return theirs as the scheduler lifts them, bottom-up
+    /// ([`MemoryManager::lift_dying`]).
+    pub fn mark_dying(&mut self, top: BudgetFrame) {
+        if let Some(p) = self.budget(top).parent {
+            let limit = self.budget(top).weight_limit;
+            crate::sched::change_weight(self, p, |mm| {
+                let mut pb = mm.budget(p);
+                pb.weight_carved = pb.weight_carved.checked_sub(limit).expect("I5: carve underflow");
+                mm.store(p, &pb);
+            });
+        }
         for frame in 0..=self.objects.high_frame {
             if self.is_budget_frame(frame) && self.below(frame, top) {
                 let mut b = self.budget(frame);
@@ -669,7 +802,6 @@ impl MemoryManager {
                 self.store(frame, &b);
             }
         }
-        Ok(top)
     }
 
     /// Whether `pid` lives in a budget that is being destroyed.
@@ -694,23 +826,150 @@ impl MemoryManager {
             };
             object_dying || mm.budget_at(h.stamp).dying
         });
-        self.return_carve(top);
+        // The weight came back as the scheduler lifted each budget (`sched::destroy`).
+        self.return_carve(top, false);
         for frame in 0..=self.objects.high_frame {
             if self.is_budget_frame(frame) && self.budget(frame).dying {
+                self.unlink_deadline(frame);
                 self.free_object_frame(frame);
             }
         }
     }
 
-    /// Give `b`'s parent back what `b` carved from it, and `b`'s own page (I10).
-    fn return_carve(&mut self, b: BudgetFrame) {
+    // --- Deadlines ---------------------------------------------------------------------------------
+
+    fn link_deadline(&mut self, frame: BudgetFrame) {
+        let mut b = self.budget(frame);
+        b.next_deadline = self.objects.deadlines;
+        self.store(frame, &b);
+        self.objects.deadlines = Some(frame);
+    }
+
+    /// Take `frame` off the deadline list, if it is on it.
+    fn unlink_deadline(&mut self, frame: BudgetFrame) {
+        let next = self.budget(frame).next_deadline;
+        if self.objects.deadlines == Some(frame) {
+            self.objects.deadlines = next;
+            return;
+        }
+        let mut cur = self.objects.deadlines;
+        while let Some(c) = cur {
+            let mut cb = self.budget(c);
+            if cb.next_deadline == Some(frame) {
+                cb.next_deadline = next;
+                self.store(c, &cb);
+                return;
+            }
+            cur = cb.next_deadline;
+        }
+    }
+
+    /// Every live budget with a deadline, as (deadline, id, frame): the list, not a scan.
+    pub fn deadlines(&self) -> impl Iterator<Item = (u64, u64, BudgetFrame)> + '_ {
+        let mut cur = self.objects.deadlines;
+        core::iter::from_fn(move || {
+            let f = cur?;
+            let b = self.budget(f);
+            cur = b.next_deadline;
+            Some((b.deadline, b.id, f))
+        })
+    }
+
+    /// Give `b`'s parent back what `b` carved from it, and `b`'s own page (I10); its weight too,
+    /// unless the scheduler already returned it.
+    fn return_carve(&mut self, b: BudgetFrame, weight: bool) {
         let b = self.budget(b);
         let Some(p) = b.parent else { return };
         let mut pb = self.budget(p);
         let carved = BUDGET_PAGES + b.pages_limit;
         pb.pages_used = pb.pages_used.checked_sub(carved).expect("I5: carve underflow");
         pb.processes_used = pb.processes_used.checked_sub(b.processes_limit).expect("I5: carve underflow");
-        pb.weight_carved = pb.weight_carved.checked_sub(b.weight_limit).expect("I5: carve underflow");
+        if weight {
+            pb.weight_carved = pb.weight_carved.checked_sub(b.weight_limit).expect("I5: carve underflow");
+        }
         self.store(p, &pb);
     }
+
+    /// Whether a process runs in `frame`.
+    fn holds_process(&self, frame: BudgetFrame) -> bool {
+        self.objects.accounts.iter().any(|a| a.budget == Some(frame))
+    }
+
+    /// The dying budgets, deepest first (every one's descendants before it): R10's bottom-up
+    /// order for the scheduler's lifts, each returning its weight to its parent as it goes (the
+    /// top's went back at mark time).
+    pub fn lift_dying(&mut self, top: BudgetFrame) {
+        let top_depth = self.budget(top).depth;
+        for depth in (top_depth..MAX_DEPTH as u32).rev() {
+            for frame in 0..=self.objects.high_frame {
+                if self.is_budget_frame(frame)
+                    && self.budget(frame).dying
+                    && self.budget(frame).depth == depth
+                {
+                    crate::sched::destroy(self, frame, frame == top);
+                }
+            }
+        }
+    }
+}
+
+/// R10 for the subtree marked dying at `top` (`MemoryManager::mark_dying`), for `budget_destroy`
+/// and for a deadline alike: every process in it is killed (each exit notice `killed`), the
+/// caller last if it is one of them; the process objects charged to it are freed; messages in
+/// flight are failed or abandoned and its endpoints and devices destroyed; then its handles are
+/// swept and its frames freed. `caller` is the process whose call or whose interrupted run this
+/// is, if any. Returns whether the caller is gone (it must not be resumed).
+pub fn destroy_subtree(ss: &mut SystemServices, top: BudgetFrame, caller: Option<PID>, bill: bool) -> bool {
+    let started = crate::sched::now_ticks();
+    #[cfg(feature = "sched-trace")]
+    let top_id = MemoryManager::with(|mm| mm.budget_id(top));
+    #[cfg(feature = "sched-trace")]
+    crate::sched::trace::r10(crate::sched::trace::R10_BEGIN, top_id);
+    #[cfg(feature = "sched-trace")]
+    crate::sched::trace::record(
+        crate::sched::trace::R10_FRAMES,
+        0,
+        MemoryManager::with(|mm| u128::from(mm.objects.high_frame)),
+    );
+    let mut caller_doomed = false;
+    for index in 1..=MAX_PROCESS_COUNT {
+        let Some(victim) = PID::new(index as u8) else { continue };
+        if !MemoryManager::with(|mm| mm.process_is_doomed(victim)) {
+            continue;
+        }
+        if Some(victim) == caller {
+            caller_doomed = true;
+        } else {
+            // Each gets an exit notice with cause `killed`, unless its process object is
+            // charged to a budget in the same doomed subtree (`process.rs`).
+            crate::process::killed(ss, victim);
+        }
+    }
+    if let (true, Some(caller)) = (caller_doomed, caller) {
+        crate::process::killed(ss, caller);
+    }
+    // R10 reaches the process objects charged to the subtree: each is freed, with no notice,
+    // its process killed first if it still runs.
+    crate::process::budgets_dying(ss);
+    // The caller may run outside this subtree but have its process object charged to it.
+    // R10 killed it through its creator above; never return registers to that dead PID.
+    if let Some(caller) = caller {
+        caller_doomed |= MemoryManager::with(|mm| mm.budget_of(caller).is_none());
+    }
+    // R10 reaches messages in flight: the endpoints the subtree owns are destroyed, and every
+    // message sent through a handle stamped with it fails its sender with `Dead`.
+    MemoryManager::with_mut(|mm| {
+        crate::message::budgets_dying(ss, mm);
+        // A deadline's work so far is the dying budget's own, and moves up with its debt.
+        if bill {
+            let top_ref = BudgetRef { frame: top, id: mm.budget(top).id };
+            crate::sched::bill(mm, top_ref, crate::sched::now_ticks().saturating_sub(started));
+        }
+        // Each budget's work since entry moves to its parent, bottom-up, and its carve returns.
+        mm.lift_dying(top);
+        mm.destroy_marked(top);
+    });
+    #[cfg(feature = "sched-trace")]
+    crate::sched::trace::r10(crate::sched::trace::R10_END, top_id);
+    caller_doomed
 }

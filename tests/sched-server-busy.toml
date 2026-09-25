@@ -1,0 +1,14 @@
+description = "A system server busy on one user's requests delays other users only by its weight (WP-K5): the server's work stays within its share and two spinning users keep theirs (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-server-busy"]
+timeout_secs = 600
+expect = [
+    '^\[server-busy\] ok: the server.s work for A',
+    '^\[server-busy\] ok: users B and C got',
+    '^SCHED-SERVER-BUSY TEST PASSED$',
+]
+forbid = ['\[server-busy\] FAIL']
+poweroff = true

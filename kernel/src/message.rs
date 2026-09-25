@@ -30,9 +30,9 @@
 //! once by the dispatcher (`redoubt.rs`) in that order; nothing here borrows either again.
 //!
 //! # Timeouts
-//! A blocking call records its deadline, and [`expire`] answers every thread whose deadline has
-//! passed. WP-K5 owns the kernel timer; until it arms one, `redoubt.rs` expires deadlines at
-//! every Redoubt system call, so a timeout lands as soon as anything else enters the kernel.
+//! A blocking call records its deadline (`mark`, which also makes sure the kernel's timer comes by
+//! then), and [`expire_due`] answers every thread whose deadline has passed, earliest first. The
+//! timer and when expiry runs are `time.rs`'s.
 
 use core::cmp::Ordering;
 use core::num::{NonZeroU64, NonZeroUsize};
@@ -492,10 +492,17 @@ fn answer_record<const N: usize>(
 
 /// Say what a thread is waiting for, and until when. It does not block yet: the delivery attempt
 /// that follows may answer it at once, and `settle` then never takes it off the ready list.
-fn mark(mm: &MemoryManager, pid: PID, tid: TID, wait: Wait, timeout: u64) {
+fn mark(mm: &mut MemoryManager, pid: PID, tid: TID, wait: Wait, timeout: u64) {
     // Timeouts are relative microseconds, added with saturation, so `FOREVER` never expires.
+    let deadline = crate::time::now_us().saturating_add(timeout);
     set_tword(mm, pid, tid, W_WAIT, wait as u64);
-    set_tword(mm, pid, tid, W_DEADLINE, crate::arch::irq::timer::now_us().saturating_add(timeout));
+    set_tword(mm, pid, tid, W_DEADLINE, deadline);
+    if deadline != u64::MAX {
+        if let Some(a) = mm.account_mut(pid) {
+            a.earliest_timeout = a.earliest_timeout.min(deadline);
+        }
+        crate::time::note_timeout(deadline);
+    }
 }
 
 /// What a blocking call does once delivery has had its chance: resume with the answer it already
@@ -512,7 +519,7 @@ fn settle(
         // Answered already: its registers hold the result.
         return Ok(None);
     }
-    if s.deadline <= crate::arch::irq::timer::now_us() {
+    if s.deadline <= crate::time::now_us() {
         // A deadline that has already passed (a `timeout` of 0 is a poll): never block on it.
         fail_wait(ss, mm, pid, tid, Error::Timeout);
         // fail_wait published the full outcome, including a lend consumed after receipt.
@@ -1545,32 +1552,52 @@ fn fail_all(
     }
 }
 
-/// I13: every blocking call returns by its timeout. Answer every deadline that has passed, and
-/// say whether any finite one is still waiting.
-///
-/// WP-K5 owns the kernel timer. Until it arms one, this runs at every Redoubt system call and in
-/// the scheduler's idle branch, where it also keeps the hart out of `wfi` while a deadline is
-/// pending (`main.rs`): polling is not free, but nothing can sleep through a timeout.
-pub fn expire(ss: &mut SystemServices, mm: &mut MemoryManager) -> bool {
-    let mut answered = false;
-    loop {
-        let now = crate::arch::irq::timer::now_us();
-        let due = find_thread(mm, |mm, pid, tid| {
-            let s = slot(mm, pid, tid);
-            (s.wait != Wait::None && s.deadline <= now).then_some((pid, tid))
-        });
-        let Some((pid, tid)) = due else {
-            // A thread this answered is runnable again, so the caller must look for work
-            // before it idles; so must a finite deadline that has not passed yet.
-            let pending = find_thread(mm, |mm, pid, tid| {
-                let s = slot(mm, pid, tid);
-                (s.wait != Wait::None && s.deadline != u64::MAX).then_some(())
-            });
-            return answered || pending.is_some();
-        };
-        fail_wait(ss, mm, pid, tid, Error::Timeout);
-        answered = true;
+/// I13: the timeout due first at `now`: the earliest deadline at or before `now` (at an equal
+/// deadline, the first in (pid, tid) order), and the earliest deadline still to come (`u64::MAX`
+/// for none). Only the threads of processes whose cached earliest timeout has come are read; each
+/// such cache is recomputed on the way.
+pub fn next_timeout(mm: &mut MemoryManager, now: u64) -> (Option<(u64, PID, TID)>, u64) {
+    let mut due: Option<(u64, PID, TID)> = None;
+    let mut next = u64::MAX;
+    for index in 1..=MAX_PROCESS_COUNT {
+        let Some(pid) = PID::new(index as u8) else { continue };
+        let Some(earliest) = mm.account(pid).map(|a| a.earliest_timeout) else { continue };
+        if earliest > now {
+            next = next.min(earliest);
+            continue;
+        }
+        let mut exact = u64::MAX;
+        for tid in 0..MAX_THREAD {
+            if mm.ipc_frame(pid, tid).is_none() {
+                continue;
+            }
+            if Wait::from_word(tword(mm, pid, tid, W_WAIT)) == Wait::None {
+                continue;
+            }
+            let deadline = tword(mm, pid, tid, W_DEADLINE);
+            if deadline == u64::MAX {
+                continue;
+            }
+            exact = exact.min(deadline);
+            if deadline <= now {
+                if due.is_none_or(|(d, _, _)| deadline < d) {
+                    due = Some((deadline, pid, tid));
+                }
+            } else {
+                next = next.min(deadline);
+            }
+        }
+        if let Some(a) = mm.account_mut(pid) {
+            a.earliest_timeout = exact;
+        }
     }
+    (due, next)
+}
+
+/// The blocking call of `(pid, tid)` reached its timeout: it returns `Timeout` (I13), with what
+/// it waited for unwound (a queued message's buffer back, a taken call abandoned).
+pub fn time_out(ss: &mut SystemServices, mm: &mut MemoryManager, pid: PID, tid: TID) {
+    fail_wait(ss, mm, pid, tid, Error::Timeout);
 }
 
 /// After `reply` freed an open call, the process may be able to take calls again (R4a) and an

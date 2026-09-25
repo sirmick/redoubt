@@ -1,0 +1,13 @@
+description = "A large-weight server keeps its share under load (WP-K5): weight 1000 against eight users of 100 gets 1000/1800 (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-large-weight"]
+timeout_secs = 600
+expect = [
+    '^\[large-weight\] ok: the weight-1000 server got',
+    '^SCHED-LARGE-WEIGHT TEST PASSED$',
+]
+forbid = ['\[large-weight\] FAIL']
+poweroff = true

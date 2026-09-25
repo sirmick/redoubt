@@ -42,12 +42,8 @@ pub enum Outcome {
 
 pub fn handle(pid: PID, tid: TID, in_irq: bool, regs: &[u64; REGS]) -> Outcome {
     // A legacy interrupt callback runs on borrowed time inside another process's quantum; it
-    // gets none of these calls. (INTERIM: WP-K3 replaces callbacks with IRQ handles.)
-    // I13, until WP-K5 arms the timer: every deadline that has passed is answered before this
-    // call is, so a blocking call returns by its timeout as soon as anything enters the kernel.
-    if !in_irq {
-        SystemServices::with_mut(|ss| MemoryManager::with_mut(|mm| crate::message::expire(ss, mm)));
-    }
+    // gets none of these calls. (INTERIM: WP-K3 replaces callbacks with IRQ handles.) Deadlines
+    // that have passed were answered at this entry, before anything else (`time.rs`).
 
     let result = if in_irq {
         Err(Error::NotPermitted)
@@ -160,12 +156,14 @@ fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
         Call::SystemReset { device, kind } => {
             MemoryManager::with(|mm| mm.check_reset(pid, device.index()))?;
             println!("system_reset: {:?} asked for by PID {}", kind, pid.get());
+            #[cfg(feature = "sched-trace")]
+            crate::sched::trace::dump();
             crate::platform::reset(kind == redoubt_sys::ResetKind::Reboot)
         }
         Call::MapFixed { addr, len, flags } => {
             MemoryManager::with_mut(|mm| mm.map_fixed(pid, addr, len, flags)).map(done)
         }
-        Call::TimeNow => Ok(Some(Return::Time(crate::arch::irq::timer::now_us()))),
+        Call::TimeNow => Ok(Some(Return::Time(crate::time::now_us()))),
         Call::Random => {
             let mut bytes = [0u8; 8];
             crate::platform::rand::fill(&mut bytes);
@@ -199,40 +197,12 @@ fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
     }
 }
 
-/// `budget_destroy(h)` (R10): mark the subtree, kill every process in it (the caller last, if it
-/// is one of them), then sweep the handles and free the budgets.
+/// `budget_destroy(h)` (R10): mark the subtree, then destroy it (`budget::destroy_subtree`), the
+/// caller last if it is in it.
 fn budget_destroy(pid: PID, _tid: TID, h: u32) -> Result<Option<Return>, Error> {
     SystemServices::with_mut(|ss| {
         let top = MemoryManager::with_mut(|mm| mm.destroy_begin(pid, h))?;
-        let mut caller_doomed = false;
-        for index in 1..=crate::arch::process::MAX_PROCESS_COUNT {
-            let Some(victim) = PID::new(index as u8) else { continue };
-            if !MemoryManager::with(|mm| mm.process_is_doomed(victim)) {
-                continue;
-            }
-            if victim == pid {
-                caller_doomed = true;
-            } else {
-                // Each gets an exit notice with cause `killed`, unless its process object is
-                // charged to a budget in the same doomed subtree (`process.rs`).
-                crate::process::killed(ss, victim);
-            }
-        }
-        if caller_doomed {
-            crate::process::killed(ss, pid);
-        }
-        // R10 reaches the process objects charged to the subtree: each is freed, with no notice,
-        // its process killed first if it still runs.
-        crate::process::budgets_dying(ss);
-        // The caller may run outside this subtree but have its process object charged to it.
-        // R10 killed it through its creator above; never return registers to that dead PID.
-        caller_doomed |= MemoryManager::with(|mm| mm.budget_of(pid).is_none());
-        // R10 reaches messages in flight: the endpoints the subtree owns are destroyed, and
-        // every message sent through a handle stamped with it fails its sender with `Dead`.
-        MemoryManager::with_mut(|mm| {
-            crate::message::budgets_dying(ss, mm);
-            mm.destroy_marked(top);
-        });
+        let caller_doomed = crate::budget::destroy_subtree(ss, top, Some(pid), false);
         Ok(if caller_doomed { None } else { Some(Return::Nothing) })
     })
 }

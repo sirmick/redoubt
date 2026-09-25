@@ -29,9 +29,19 @@ fn mutations_are_caught() {
     let only = std::env::var("REDOUBT_MODEL_MUTATIONS").unwrap_or_default();
     let wanted = |m: &Mutation| only.is_empty() || only.split(',').any(|s| format!("{m:?}").contains(s));
     for m in Mutation::ALL.into_iter().filter(wanted) {
-        let mut caught = common::contracts::ipc_contracts(Some(m)).err().map(|message| {
-            redoubt_model::check::Failure { family: "ipc_contracts", seed: 0, message, ops: vec![] }
-        });
+        let mut caught = common::contracts::ipc_contracts(Some(m))
+            .err()
+            .map(|message| redoubt_model::check::Failure {
+                family: "ipc_contracts",
+                seed: 0,
+                message,
+                ops: vec![],
+            })
+            .or_else(|| {
+                common::contracts::sched_contracts(Some(m)).err().map(|message| {
+                    redoubt_model::check::Failure { family: "sched_contracts", seed: 0, message, ops: vec![] }
+                })
+            });
         // Try the rule's pressure family first, retaining every family and unchanged seed caps.
         let preferred = match m.rule() {
             "R12" => "scheduler_fairness",
