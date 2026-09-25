@@ -10,23 +10,23 @@
 //! destroyed as R10 destroys one, so nobody is handed it again until reboot (OD6).
 //!
 //! # Where things are
-//! - **The registry**: one slot per DMA device, keyed by MMIO base, so a slot outlives its
-//!   device object. At most `MAX_DMA_DEVICES`; a DMA device beyond that gets no device object at
-//!   all (`device.rs`), failing closed.
+//! - **The registry**: one slot per DMA device, keyed by MMIO base, so a slot outlives its device object. At
+//!   most `MAX_DMA_DEVICES`; a DMA device beyond that gets no device object at all (`device.rs`), failing
+//!   closed.
 //! - **Runs**: what `dma_alloc` handed out, up to `MAX_RUNS` per device. The frames are owned by
-//!   `mem::DMA_OWNER` in the ownership table, not by the process, and the run's budget pays for
-//!   them directly, so no generic release, move or lend path can free or move one: they all
-//!   check that the caller owns the frame.
-//! - **The window**: each device's first register page, mapped for the kernel alone at
-//!   `KERNEL_DMA_REGS + slot * PAGE_SIZE`, in tables the loader shared.
+//!   `mem::DMA_OWNER` in the ownership table, not by the process, and the run's budget pays for them
+//!   directly, so no generic release, move or lend path can free or move one: they all check that the caller
+//!   owns the frame.
+//! - **The window**: each device's first register page, mapped for the kernel alone at `KERNEL_DMA_REGS +
+//!   slot * PAGE_SIZE`, in tables the loader shared.
 //! - **S's mapped half**: `Account::dma_mapped`, a bit per slot, set by `map_device`.
 
-use redoubt_abi::arch::{KERNEL_DMA_PAGES, KERNEL_DMA_REGS};
 use redoubt_abi::PID;
+use redoubt_abi::arch::{KERNEL_DMA_PAGES, KERNEL_DMA_REGS};
 use redoubt_sys::{Error, PAGE_SIZE};
 
 use crate::handle::BudgetRef;
-use crate::mem::{MemoryManager, DMA_OWNER};
+use crate::mem::{DMA_OWNER, MemoryManager};
 
 /// DMA devices the kernel can reset: one window page each.
 pub const MAX_DMA_DEVICES: usize = KERNEL_DMA_PAGES;
@@ -98,10 +98,14 @@ impl Registry {
 }
 
 /// The slots whose bits are set in `mask`.
-fn bits(mask: u16) -> impl Iterator<Item = usize> { (0..MAX_DMA_DEVICES).filter(move |i| mask & (1 << i) != 0) }
+fn bits(mask: u16) -> impl Iterator<Item = usize> {
+    (0..MAX_DMA_DEVICES).filter(move |i| mask & (1 << i) != 0)
+}
 
 /// One 32-bit register of slot `slot`'s device, `offset` bytes into its first page.
-fn register(slot: usize, offset: usize) -> *mut u32 { (KERNEL_DMA_REGS + slot * PAGE_SIZE + offset) as *mut u32 }
+fn register(slot: usize, offset: usize) -> *mut u32 {
+    (KERNEL_DMA_REGS + slot * PAGE_SIZE + offset) as *mut u32
+}
 
 fn read(slot: usize, offset: usize) -> u32 {
     // SAFETY: `dma_register` mapped this slot's window page, read-write and kernel-only, to the
@@ -132,7 +136,9 @@ impl MemoryManager {
         self.dma.slots.iter().position(|s| s.is_some_and(|s| s.base == base))
     }
 
-    fn slot_mut(&mut self, slot: usize) -> &mut Slot { self.dma.slots[slot].as_mut().expect("a registered slot") }
+    fn slot_mut(&mut self, slot: usize) -> &mut Slot {
+        self.dma.slots[slot].as_mut().expect("a registered slot")
+    }
 
     /// Whether DMA device `base` failed a reset (OD6). Its object is gone by the time any process
     /// runs again, so a live device object never names one.
@@ -214,7 +220,10 @@ impl MemoryManager {
                 }
                 if pooled {
                     // P1-1b: pooled only after every slot of S confirmed in this very call.
-                    assert!(confirmed & s == s && confirmed & 1 << i != 0, "P1-1: a run pooled before its reset");
+                    assert!(
+                        confirmed & s == s && confirmed & 1 << i != 0,
+                        "P1-1: a run pooled before its reset"
+                    );
                     let run = run.take().expect("held");
                     self.pool(run);
                 } else {
