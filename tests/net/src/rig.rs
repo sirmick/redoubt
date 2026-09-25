@@ -140,13 +140,9 @@ impl Child {
 
     /// Waits at most `limit` µs for its exit notice; `None` if it did not end by then.
     fn wait(&self, limit: u64) -> Option<ExitNotice> {
-        let until = now().saturating_add(limit);
-        loop {
-            match self.exit.receive(TICK, 0) {
-                Ok(Event::Exit(notice)) => return Some(notice),
-                Err(Error::Timeout) if now() < until => {}
-                _ => return None,
-            }
+        match self.exit.receive(limit, 0) {
+            Ok(Event::Exit(notice)) => Some(notice),
+            _ => None,
         }
     }
 }
@@ -156,26 +152,8 @@ impl Child {
 /// network.
 const RUN_LIMIT: u64 = 10_000_000;
 
-/// How often the rig comes back to userspace while it waits (µs), until WP-K5.
-///
-/// **INTERIM, until WP-K5 merges.** Before K5 arms the timer, the kernel's idle branch polls
-/// deadlines with interrupts off (`kernel/src/main.rs`, I13): while any thread waits with a
-/// finite timeout and nothing is runnable, no device interrupt is taken until some thread runs
-/// in userspace again. `ipd` always has one (a parked call's deadline, a linger), so `netd`'s
-/// receive interrupt would wait for it, up to 30 s. The rig's own waits are short polls instead,
-/// so an interrupt waits at most this long. K5's idle sleeps in `wfi` with the timer armed, and
-/// these become plain waits.
-const TICK: u64 = 1_000;
-
-/// `receive` on `endpoint` until something arrives, [`TICK`] at a time.
-fn wait_on(endpoint: &Endpoint) -> Result<Event, Error> {
-    loop {
-        match endpoint.receive(TICK, 0) {
-            Err(Error::Timeout) => continue,
-            other => return other,
-        }
-    }
-}
+/// How often a wait for a program's report looks whether the program has ended instead (µs).
+const LOOK_EVERY: u64 = 100_000;
 
 fn describe(notice: Option<ExitNotice>) -> String {
     match notice {
@@ -522,7 +500,7 @@ impl Rig {
             if let Some(i) = self.backlog.iter().position(|(b, w, _)| *b == badge && *w == what) {
                 return Ok(self.backlog.remove(i).2);
             }
-            match self.take_report(TICK) {
+            match self.take_report(LOOK_EVERY) {
                 Some(report) => self.backlog.push(report),
                 None => {
                     if let Some(notice) = from.ended() {
@@ -539,9 +517,7 @@ impl Rig {
     /// One report, answered, or `None` if none came within `timeout`.
     fn take_report(&mut self, timeout: u64) -> Option<(u64, u64, u64)> {
         loop {
-            let got =
-                if timeout == FOREVER { wait_on(&self.reports) } else { self.reports.receive(timeout, 0) };
-            match got {
+            match self.reports.receive(timeout, 0) {
                 Ok(Event::Call(request)) => {
                     let words = request.words;
                     let badge = request.caller.badge;
