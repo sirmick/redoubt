@@ -1,0 +1,15 @@
+description = "A spinning budget cannot delay another beyond its weight (WP-K5, R12): spinners at weights 100, 100 and 300 each get their weight's share (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-share"]
+timeout_secs = 600
+expect = [
+    '^\[share\] ok: weight 100 got',
+    '^\[share\] ok: weight 100 got',
+    '^\[share\] ok: weight 300 got',
+    '^SCHED-SHARE TEST PASSED$',
+]
+forbid = ['\[share\] FAIL']
+poweroff = true

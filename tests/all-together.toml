@@ -1,16 +1,16 @@
-description = "IPC and timer tests sharing one log server, to catch interference between processes (checked build)"
+description = "IPC tests sharing one log server with a process sleeping on the kernel's timer beside them, to catch interference between processes (checked build)"
 arch = ["rv64"]
 kind = "boot"
 # Built with the checks on (docs/testbench.md, "Debug assertions").
 debug_assertions = true
-programs = ["log-server", "ipc-client", "timer-test"]
+# sleeper blocks with short timeouts throughout (WP-K5: the timer is the kernel's, so it is what
+# arms and fires here), each of which must end in Timeout and never early. It reports after every
+# batch of 50, so a report comes after the IPC verdict whichever finishes first.
+programs = ["log-server", "ipc-client", "sleeper"]
 smp = [1, 2]
-expect = ["IPC TEST PASSED", "TIMER TEST PASSED"]
+expect = ["IPC TEST PASSED", '\[sleeper\] ok: 50 sleeps returned Timeout, none early']
+forbid = ['\[sleeper\] FAIL']
 
 [[grant]]
 program = "log-server"
 mmio = ["0x10000000:0x1000"]
-
-[[grant]]
-program = "timer-test"
-irq = [0]

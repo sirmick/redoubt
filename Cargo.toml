@@ -12,6 +12,7 @@ members = [
   "libs/paging",
   "libs/rt",
   "libs/signing",
+  "libs/stride",
   "libs/sys",
   "libs/littlefs",
   "libs/wire",

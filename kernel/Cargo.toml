@@ -26,6 +26,7 @@ rand = "0.8.5"
 [target.'cfg(any(target_arch = "riscv32", target_arch = "riscv64"))'.dependencies]
 riscv = "0.16"
 paging = { path = "../libs/paging" }
+redoubt-stride = { path = "../libs/stride" }
 redoubt-sys = { path = "../libs/sys" }
 
 [lints.rust]
@@ -33,6 +34,12 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(ci)', 'cfg(baremetal)'] }
 
 [features]
 smp = [] # multi-hart: KernelCell becomes a spinlock (the big kernel lock)
+# Test builds only (WP-K5): record the stride queue's raw events in a bounded ring and print it at
+# `system_reset`, for the bench's independent rank oracle (tools/testbench, sched_oracle).
+sched-trace = []
+# Debug only, never in a bench build but one recorded negative run: rank wakers behind queued
+# budgets of equal pass (the model's R12TieQueuedFirst), to show the oracle catches it.
+sched-inject-tie-fault = ["sched-trace"]
 
 # Capabilities. Boards select these; code keys on them rather than on the CPU's XLEN.
 # See "Hardware abstraction" in planning/redoubt/PLAN.md.

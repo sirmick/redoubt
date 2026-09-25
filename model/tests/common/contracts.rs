@@ -1,6 +1,6 @@
 use redoubt_model::{
     invariants::Checker,
-    kernel::{Boot, Kernel, Step},
+    kernel::{Boot, Kernel, Note, Step},
     mutation::Mutation,
     spec::*,
     syscall::*,
@@ -273,5 +273,217 @@ fn serve_blame_trace_with_exit(exit: Syscall, code: u64) -> String {
     assert!(matches!(r, Ret::ExitNotice {
         cause: Cause::Faulted, code: got_code, blamed_account: 11, ref blamed_labels, ..
     } if got_code == code && blamed_labels == &[11]));
+    trace::record(&Boot::default(), &w.ops, None).unwrap()
+}
+
+/// Start a process in the budget `budget` (a handle of init's) reporting to `ep`; its (pid, tid).
+fn spawn(w: &mut World, budget: u64, ep: u64) -> Result<(u64, u64), String> {
+    spawn_with(w, budget, ep, vec![])
+}
+
+/// As `spawn`, handing the child `handles` in slots 1..n.
+fn spawn_with(w: &mut World, budget: u64, ep: u64, handles: Vec<u64>) -> Result<(u64, u64), String> {
+    let s = w.sys(1, Syscall::ProcessCreate { budget, exit_endpoint: ep })?;
+    let (h, pid) = s
+        .notes
+        .iter()
+        .find_map(|n| match n {
+            Note::Process { h, pid, .. } => Some((*h, *pid)),
+            _ => None,
+        })
+        .ok_or("process_create gave no process")?;
+    let s = w.sys(1, Syscall::ProcessStart { process: h, entry: 0, sp: 0, arg: 0, handles })?;
+    let tid = s
+        .notes
+        .iter()
+        .find_map(|n| match n {
+            Note::Thread { tid, .. } => Some(*tid),
+            _ => None,
+        })
+        .ok_or("process_start gave no thread")?;
+    Ok((pid, tid))
+}
+
+fn budget(w: &mut World, parent: u64, weight: u64, deadline: u64) -> Result<u64, String> {
+    match w
+        .value(
+            1,
+            Syscall::BudgetCreate {
+                parent,
+                pages: 64,
+                processes: 2,
+                weight,
+                labels: vec![],
+                account: 0,
+                deadline,
+            },
+        )
+        .map_err(|e| format!("budget_create: {e}"))?
+    {
+        Ret::Handle(h) => Ok(h),
+        r => Err(format!("budget_create: {r:?}")),
+    }
+}
+
+/// Focused R12/R7/I13 contracts for the WP-K5 rules that live in the kernel model rather than the
+/// scheduler: timeouts wake without preempting, the equal-instant expiry order, and the
+/// free-weight refusals.
+pub fn sched_contracts(mutation: Option<Mutation>) -> Result<(), String> {
+    // A timeout expiring mid-slice wakes its thread; the running thread keeps the CPU until its
+    // slice ends (R12: never preempt on a wake).
+    {
+        let mut w = World::new(mutation);
+        let Ret::Handle(ep) = w.value(1, Syscall::EndpointCreate)? else { return Err("endpoint".into()) };
+        let b1 = budget(&mut w, 3, 100, FOREVER)?;
+        let b2 = budget(&mut w, 3, 100, FOREVER)?;
+        let (pa, ta) = spawn(&mut w, b1, ep)?;
+        let (pb, tb) = spawn(&mut w, b2, ep)?;
+        let now = w.k.now;
+        w.op(Op::Sys {
+            pid: pb,
+            tid: tb,
+            call: Syscall::Receive { h: None, timeout: 5_000, max_transfer: 0 },
+        })?;
+        w.sys(1, Syscall::Receive { h: None, timeout: FOREVER, max_transfer: 0 })?;
+        w.op(Op::Tick { dt: 1_000 })?;
+        expect(w.k.sched.current.is_some_and(|c| c.thread == (pa, ta)), "the spinner runs")?;
+        let s = w.op(Op::Tick { dt: 4_500 })?;
+        expect(
+            s.wakes.iter().any(|x| x.tid == tb && x.result == Err(Error::Timeout)),
+            "the sleeper timed out",
+        )?;
+        expect(w.k.now == now + 5_500, "time")?;
+        expect(
+            w.k.sched.current.is_some_and(|c| c.thread == (pa, ta)),
+            "a timeout wake preempted the running thread",
+        )?;
+        // At its slice end the woken sleeper, ranked ahead of the spinner (wake-first), runs.
+        w.op(Op::Tick { dt: 4_500 })?;
+        w.op(Op::Tick { dt: 1 })?;
+        expect(w.k.sched.current.is_some_and(|c| c.thread == (pb, tb)), "the woken sleeper runs next")?;
+    }
+    // At an equal instant, a timeout goes before a budget deadline: a caller whose call its
+    // server took gets Timeout (the lend consumed), not Dead from the server's death.
+    expiry_order(mutation)?;
+    // Free weight: a carve may not leave a process-holding budget (root holds init) with free
+    // weight 0, and no process may be created in a budget whose weight is all carved.
+    {
+        let mut w = World::new(mutation);
+        let free = w.k.budgets[&1].weight - w.k.budgets[&1].weight_used;
+        let r = w.sys(
+            1,
+            Syscall::BudgetCreate {
+                parent: 1,
+                pages: 8,
+                processes: 0,
+                weight: free,
+                labels: vec![],
+                account: 0,
+                deadline: FOREVER,
+            },
+        )?;
+        expect(r.outcome == Outcome::Done(Err(Error::InvalidArgument)), "carving all of init's free weight")?;
+        let Ret::Handle(ep) = w.value(1, Syscall::EndpointCreate)? else { return Err("endpoint".into()) };
+        let x = budget(&mut w, 3, 10, FOREVER)?;
+        let r = w.sys(
+            1,
+            Syscall::BudgetCreate {
+                parent: x,
+                pages: 8,
+                processes: 0,
+                weight: 10,
+                labels: vec![],
+                account: 0,
+                deadline: FOREVER,
+            },
+        )?;
+        expect(
+            matches!(r.outcome, Outcome::Done(Ok(Ret::Handle(_)))),
+            "carving all of a process-free budget's weight",
+        )?;
+        let r = w.sys(1, Syscall::ProcessCreate { budget: x, exit_endpoint: ep })?;
+        expect(
+            r.outcome == Outcome::Done(Err(Error::InvalidArgument)),
+            "a process in a budget with no free weight",
+        )?;
+    }
+    // Owner decision 5: a deschedule charges at least one unit, so a run too short for the clock
+    // to see (the kernel's timebase tick) is not free. A thread that blocks the moment it is
+    // picked, over and over, still moves its budget's pass.
+    {
+        use redoubt_model::sched::{MIN_CHARGE, Scheduler};
+        let mut s = Scheduler { mutation, ..Scheduler::default() };
+        s.add_budget(1, None, 1 << 31);
+        let w = 7;
+        s.add_budget(2, Some(1), w);
+        let before = s.budgets[&2].pass;
+        for _ in 0..10 {
+            s.thread_runnable(2, (2, 0));
+            s.reconcile();
+            expect(s.pick().is_some_and(|c| c.budget == 2), "the budget is picked")?;
+            s.thread_blocked(2, (2, 0));
+            s.reconcile();
+        }
+        let want = u128::from(10 * MIN_CHARGE * redoubt_model::spec::STRIDE / w);
+        expect(
+            s.budgets[&2].pass >= before + want,
+            "ten zero-length runs charged less than the minimum each (a sub-tick run was free)",
+        )?;
+    }
+    Ok(())
+}
+
+/// A caller's timeout and its server budget's deadline fall on one instant; the timeout is
+/// processed first (the caller gets Timeout and its lend is consumed). Returns the world, whose
+/// ops make a trace that replay checks against the expiry order.
+fn expiry_order_world(mutation: Option<Mutation>) -> Result<World, String> {
+    let mut w = World::new(mutation);
+    let Ret::Handle(ep) = w.value(1, Syscall::EndpointCreate)? else { return Err("endpoint".into()) };
+    let Ret::Handle(h) =
+        w.value(1, Syscall::Mint { source: MintSource::Handle(ep), badge: 7, budget: None })?
+    else {
+        return Err("mint".into());
+    };
+    let t = w.k.now + 3_000;
+    let bs = budget(&mut w, 3, 100, t)?;
+    // The server runs in the budget whose deadline falls with the caller's timeout.
+    let (ps, server) = spawn_with(&mut w, bs, ep, vec![ep])?;
+    let lend = w.lend().map_err(|e| format!("lend: {e}"))?;
+    let Ret::Tid(caller) =
+        w.value(1, Syscall::ThreadCreate { entry: 0, sp: 0, arg: 0 }).map_err(|e| format!("thread: {e}"))?
+    else {
+        return Err("thread".into());
+    };
+    let dt = t - w.k.now;
+    w.sys(caller, Syscall::Call { h, words: [0; 4], handles: vec![], lend: Some(lend), timeout: dt })?;
+    match w
+        .op(Op::Sys {
+            pid: ps,
+            tid: server,
+            call: Syscall::Receive { h: Some(1), timeout: FOREVER, max_transfer: 0 },
+        })?
+        .outcome
+    {
+        Outcome::Done(Ok(Ret::Message(_))) => {}
+        x => return Err(format!("server receive: {x:?}")),
+    }
+    let s = w.op(Op::Tick { dt: dt + 1 })?;
+    let c = s.wakes.iter().find(|x| x.tid == caller).ok_or("the caller was not answered")?;
+    match &c.result {
+        Ok(Ret::Call(cc)) => expect(
+            cc.status == Err(Error::Timeout) && cc.lend == LendDisposition::Consumed,
+            "equal instant: the timeout must be processed before the budget deadline",
+        )?,
+        r => return Err(format!("caller: {r:?}")),
+    }
+    expect(!w.k.budgets.values().any(|b| b.deadline == Some(t)), "the deadline destroyed its budget")?;
+    Ok(w)
+}
+
+fn expiry_order(mutation: Option<Mutation>) -> Result<(), String> { expiry_order_world(mutation).map(|_| ()) }
+
+/// The trace of [`expiry_order_world`], for replay.
+pub fn expiry_order_trace() -> String {
+    let w = expiry_order_world(None).expect("the specified model keeps the expiry order");
     trace::record(&Boot::default(), &w.ops, None).unwrap()
 }

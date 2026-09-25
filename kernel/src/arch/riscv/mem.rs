@@ -35,6 +35,17 @@ fn flush_tlb() {
     unsafe { sfence_vma() };
 }
 
+/// Make this hart's instruction fetches see every store it made before (RISC-V `fence.i`,
+/// Zifencei). Called after anything that makes memory executable for userspace: an image moved in
+/// by `process_map`, and `map_anon`, `map_fixed`, `set_flags` or a demand-paged fault installing
+/// X, and once at boot before the first user dispatch. Single hart (WP-K5): another hart would
+/// need its own fence (post-M1 SMP).
+pub fn sync_icache() {
+    // SAFETY: `fence.i` takes no operands, touches no memory the compiler tracks and changes no
+    // register; it only orders this hart's later instruction fetches after its earlier stores.
+    unsafe { core::arch::asm!("fence.i", options(nostack, preserves_flags)) };
+}
+
 /// First root entry belonging to the kernel half of the address space.
 const ROOT_KERNEL_START: usize = physmap::ENTRIES / 2;
 /// Root entry holding per-process kernel data. Everything else in the kernel half is shared.
@@ -769,6 +780,11 @@ pub fn ensure_page_exists_inner(mm: &mut MemoryManager, address: usize) -> Resul
     unsafe { window().zero_frame(new_page) };
     slot.set(Pte::leaf(new_page, reservation.flags() | MMUFlags::USER));
     flush_tlb();
+    // A reservation made executable (the legacy `MapMemory`) is fetched from once it faults in:
+    // the zeroed frame must not be seen through what the icache held for its last use.
+    if reservation.has(MMUFlags::X) {
+        sync_icache();
+    }
 
     Ok(new_page)
 }

@@ -29,6 +29,8 @@ fn return_result(result: &redoubt_abi::Result, context: &Thread) -> ! {
 
 /// Resume `context` with `a0..=a7` = `args`.
 fn return_registers(args: &[usize; 8], context: &Thread) -> ! {
+    // Leaving the kernel: the scheduler's exit hook (`sched.rs`, accounting at the trap boundary).
+    crate::sched::leave(current_pid());
     // SAFETY: `_redoubt_syscall_return_result` (asm) writes `args` into the return registers
     // and resumes `context` with `sret`. Both point at valid, kernel-owned data and it
     // does not return.
@@ -41,8 +43,8 @@ fn return_registers(args: &[usize; 8], context: &Thread) -> ! {
 #[cfg_attr(feature = "plic", path = "intc_plic.rs")]
 mod intc;
 
-/// The hart timer backend, for platforms where the timer is a CPU resource rather than
-/// a device that userspace can own. See `docs/TIMER.md`.
+/// The hart timer backend. The timer is the kernel's (`crate::time`), never a device userspace
+/// owns.
 #[cfg_attr(feature = "sbi", path = "timer_sbi.rs")]
 pub mod timer;
 
@@ -53,52 +55,61 @@ pub fn init() {
     timer::init();
 }
 
-pub fn enable_irq(irq_no: usize) {
-    // The timer is armed by setting a deadline, not by claiming its interrupt.
-    if !timer::owns(irq_no) {
-        intc::enable_irq(irq_no);
-    }
-}
+pub fn enable_irq(irq_no: usize) { intc::enable_irq(irq_no); }
 
-pub fn disable_irq(irq_no: usize) {
-    if timer::owns(irq_no) {
-        timer::mask();
-    } else {
-        intc::disable_irq(irq_no);
-    }
-}
+pub fn disable_irq(irq_no: usize) { intc::disable_irq(irq_no); }
 
 /// Hold off every interrupt source while a userspace handler runs; Redoubt does not nest them.
-pub fn disable_all_irqs() {
-    intc::disable_all_irqs();
-    timer::mask();
+/// The kernel's timer is not a source here: timeouts expire during a callback too.
+pub fn disable_all_irqs() { intc::disable_all_irqs(); }
+
+pub fn enable_all_irqs() { intc::enable_all_irqs(); }
+
+/// Resume whatever is current now: after the entering thread's process died at this entry, or
+/// once a trap is fully handled.
+fn resume_current() -> ! {
+    ArchProcess::with_current_mut(|p| {
+        crate::arch::syscall::resume(current_pid().get() == 1, p.current_thread())
+    })
 }
 
-pub fn enable_all_irqs() {
-    intc::enable_all_irqs();
-    timer::unmask();
+/// Preempt the running thread (R12: its slice ended, or a budget deadline fired): it stays ready
+/// and `kmain` picks again. A trap it had not yet been handled for is taken again when it next
+/// runs: its `sepc` is untouched (an `ecall` is stepped over only when handled).
+fn preempt() -> ! {
+    let tid = ArchProcess::with_current(|p| p.current_tid());
+    SystemServices::with_mut(|ss| crate::sched::preempt(ss, tid));
+    resume_current()
 }
 
-// Indicate when we handle an IRQ
+/// A legacy interrupt callback is running: set only here, as the kernel starts one, and
+/// cleared only as it ends ([`finish_isr`]).
 static HANDLING_IRQ: AtomicBool = AtomicBool::new(false);
 
 /// The (PID, TID) to resume after an interrupt handler returns. Set when an interrupt
-/// redirects into a userspace handler, cleared when it finishes.
+/// redirects into a userspace handler, cleared when it finishes. Nothing else sets it: the
+/// legacy `ReturnToParent`, which could, is refused (`syscall.rs`).
 static PREVIOUS_PAIR: KernelCell<Option<(PID, TID)>> = KernelCell::new(None);
 
-/// Record who to resume after an interrupt handler returns.
-///
-/// # Safety
-/// The operation is sound on its own; `unsafe` is a cross-architecture ABI marker (the
-/// arm and hosted backends share the signature). Callers coordinate ISR return state and
-/// must pair this with exactly one `take_isr_return_pair`.
-pub unsafe fn set_isr_return_pair(pid: PID, tid: TID) { PREVIOUS_PAIR.with(|p| *p = Some((pid, tid))); }
+/// The process whose handler the running callback is: only its IRQ thread ends the callback.
+static CALLBACK_OWNER: KernelCell<Option<PID>> = KernelCell::new(None);
 
-/// Finish a pending ISR. Return `false` if there was none.
-fn finish_isr() -> bool {
-    if !HANDLING_IRQ.swap(false, Ordering::Relaxed) {
+/// Whether a legacy interrupt callback is running (on borrowed time, with a process to resume
+/// after it): the kernel dispatched one and it has not returned. Its calls are limited (the
+/// Redoubt ones are refused), and budget deadlines and slice-end preemption wait until it has
+/// finished (`time.rs`).
+pub fn in_callback() -> bool { HANDLING_IRQ.load(Ordering::Relaxed) }
+
+/// Finish the running callback, if `(pid, tid)` is its handler's thread (the owner's IRQ
+/// thread). Return `false` if there was none, or if this is anyone else: another process that
+/// reaches `RETURN_FROM_ISR`, or ends a thread or faults, while a callback runs ends nothing.
+fn finish_isr(pid: PID, tid: TID) -> bool {
+    let owner = CALLBACK_OWNER.with(|o| *o);
+    if !HANDLING_IRQ.load(Ordering::Relaxed) || owner != Some(pid) || tid != crate::arch::process::IRQ_TID {
         return false;
     }
+    HANDLING_IRQ.store(false, Ordering::Relaxed);
+    CALLBACK_OWNER.with(|o| *o = None);
 
     // If we hit this address, then an ISR has just returned.  Since
     // we're in an interrupt context, it is safe to access this
@@ -116,6 +127,10 @@ fn finish_isr() -> bool {
 
     // Re-enable interrupts now that they're handled
     enable_all_irqs();
+    // Budget deadlines and slice ends waited while the callback ran (`time.rs`): arm for them
+    // now, whichever way it ended (a return, a thread exit or a fault). One already past fires
+    // as soon as the kernel lets interrupts in.
+    crate::time::rearm();
 
     true
 }
@@ -193,6 +208,33 @@ pub extern "C" fn trap_handler(
     let epc = sepc::read();
 
     let ex = RiscvException::from_regs(sc.bits(), epc, stval::read());
+
+    // The user time since the last return is the running budget's (`sched.rs`).
+    let from_user = sstatus::read().spp() == sstatus::SPP::User;
+    if from_user {
+        crate::sched::from_user();
+    }
+    // Every entry but the kernel's own `SwitchTo` answers the deadlines that have passed first
+    // (`time.rs`), so a deadline beats anything that enters after it. If that ended the entering
+    // process (a budget deadline), there is nothing of it left to handle: run what is current.
+    // A budget deadline is a preemption point (R12): the entering thread yields the CPU before
+    // anything else, and its trap is taken again when it next runs.
+    if !matches!(ex, RiscvException::CallFromSMode(..)) {
+        let destroyed = crate::time::expire_at_entry();
+        if from_user
+            && (current_pid() != pid
+                || SystemServices::with(|ss| ss.get_process(pid).map_or(true, |p| p.free())))
+        {
+            resume_current();
+        }
+        if from_user && destroyed && !in_callback() {
+            preempt();
+        }
+    }
+    // From here, kernel time is the running budget's: a system call's is its caller's.
+    if from_user {
+        crate::sched::begin_billing();
+    }
     #[cfg(any(feature = "debug-print"))] // , feature = "debug-swap-verbose"
     {
         let pid = current_pid();
@@ -224,8 +266,7 @@ pub extern "C" fn trap_handler(
             // A Redoubt call (redoubt-sys): its numbers start above every legacy one.
             if a0 >= redoubt_sys::NUMBER_BASE as usize {
                 let regs = [a0, a1, a2, a3, a4, a5, a6, a7].map(|r| r as u64);
-                let in_irq = PREVIOUS_PAIR.with(|p| p.is_some());
-                match crate::redoubt::handle(pid, tid, in_irq, &regs) {
+                match crate::redoubt::handle(pid, tid, in_callback(), &regs) {
                     // Every result register holds at most 32 bits or one `usize` (redoubt-sys).
                     crate::redoubt::Outcome::Return(out) => ArchProcess::with_current_mut(|p| {
                         return_registers(&out.map(|r| r as usize), p.current_thread())
@@ -244,7 +285,7 @@ pub extern "C" fn trap_handler(
                 })
             });
 
-            let response = crate::syscall::handle(pid, tid, PREVIOUS_PAIR.with(|p| p.is_some()), call)
+            let response = crate::syscall::handle(pid, tid, in_callback(), call)
                 .unwrap_or_else(redoubt_abi::Result::Error);
 
             // println!("Syscall Result: {:?}", response);
@@ -261,20 +302,22 @@ pub extern "C" fn trap_handler(
                 }
             });
         }
+        // The kernel's timer: what was due was answered at this entry; arm for what is next.
+        RiscvException::SupervisorTimerInterrupt(_) => {
+            crate::time::on_interrupt();
+            // The running thread's slice is over: preempt it (R12). Not inside a legacy callback,
+            // which runs on the interrupted thread's time until it returns (INTERIM, WP-K6).
+            if from_user && !in_callback() && crate::sched::slice_over() {
+                preempt();
+            }
+            resume_current();
+        }
         // Hardware interrupt
-        RiscvException::UserExternalInterrupt(_)
-        | RiscvException::SupervisorExternalInterrupt(_)
-        | RiscvException::SupervisorTimerInterrupt(_) => {
-            // The controller (or the timer) claims one interrupt; `None` is a spurious trap
-            // with nothing pending, which we ignore and just resume from.
-            #[cfg(feature = "sbi")]
-            let pending = if let RiscvException::SupervisorTimerInterrupt(_) = ex {
-                timer::on_interrupt();
-                Some(timer::IRQ)
-            } else {
-                intc::pending()
-            };
-            #[cfg(not(feature = "sbi"))]
+        RiscvException::UserExternalInterrupt(_) | RiscvException::SupervisorExternalInterrupt(_) => {
+            // The controller claims one interrupt; `None` is a spurious trap with nothing
+            // pending, which we ignore and just resume from. Handling it is its device owner's
+            // work, not the interrupted budget's (`sched::bill_irq`).
+            let started = crate::sched::now_ticks();
             let pending = intc::pending();
 
             if let Some(irq) = pending {
@@ -284,19 +327,22 @@ pub extern "C" fn trap_handler(
                 // no ISR to return from and no pair to remember; completing the claim is all
                 // that is left before resuming whatever was interrupted.
                 if !crate::device::irq_fired(irq) {
-                    // Remember who to resume once the userspace handler returns.
-                    PREVIOUS_PAIR.with(|previous| {
-                        if previous.is_none() {
-                            *previous = Some((pid, crate::arch::process::current_tid()));
-                        }
-                    });
-                    HANDLING_IRQ.store(true, Ordering::Relaxed);
+                    // Remember who to resume once the userspace handler returns. A source with
+                    // no handler is only masked: no callback runs, so none is recorded.
+                    if let Some(owner) = crate::irq::interrupt_owner(irq) {
+                        CALLBACK_OWNER.with(|o| *o = Some(owner));
+                        PREVIOUS_PAIR.with(|previous| {
+                            if previous.is_none() {
+                                *previous = Some((pid, crate::arch::process::current_tid()));
+                            }
+                        });
+                        HANDLING_IRQ.store(true, Ordering::Relaxed);
+                    }
                     crate::irq::handle(irq).expect("Couldn't handle IRQ");
                 }
+                crate::sched::bill_irq(irq, started);
             }
-            ArchProcess::with_current_mut(|process| {
-                crate::arch::syscall::resume(current_pid().get() == 1, process.current_thread())
-            })
+            resume_current()
         }
 
         // See if it's a known exception, such as writing to a demand-paged area
@@ -358,7 +404,7 @@ pub extern "C" fn trap_handler(
             // IRQ callbacks have their separate RETURN_FROM_ISR path below.
             SystemServices::with_mut(|ss| crate::process::thread_exit(ss, pid, tid));
 
-            finish_isr();
+            finish_isr(pid, tid);
 
             // Teardown selected a surviving sibling or another process.
             ArchProcess::with_current_mut(|p| {
@@ -367,10 +413,14 @@ pub extern "C" fn trap_handler(
         }
 
         RiscvException::InstructionPageFault(RETURN_FROM_ISR, _offset) => {
-            finish_isr();
-            ArchProcess::with_current_mut(|process| {
-                crate::arch::syscall::resume(current_pid().get() == 1, process.current_thread())
-            });
+            let tid = ArchProcess::with_current(|p| p.current_tid());
+            if finish_isr(pid, tid) {
+                // Budget deadlines that fell due while the callback ran were held back; the
+                // callback is over, so answer them now, then run whatever is current.
+                crate::time::expire_at_entry();
+                resume_current();
+            }
+            // Anyone else jumping there faults like any wild jump (below).
         }
 
         // Handle faulted instruction pages, because we can now actually have instruction pages that are
@@ -411,7 +461,8 @@ pub extern "C" fn trap_handler(
         }
     }
 
-    let is_kernel_failure = sstatus::read().spp() == sstatus::SPP::Supervisor;
+    // Read at entry, before expiry (which never changes it, but nothing here depends on that).
+    let is_kernel_failure = !from_user;
     // The exception was not handled. We should terminate the program here.
     // For now, let's halt the whole system instead so that it becomes
     // immediately obvious that we screwed up. On hardware this will trigger
@@ -434,7 +485,7 @@ pub extern "C" fn trap_handler(
         loop {}
     }
 
-    finish_isr();
+    finish_isr(pid, ArchProcess::with_current(|p| p.current_tid()));
 
     // If it's not a failure in the kernel, the process faults: it is torn down and its exit
     // notice, cause `faulted`, blames the sender of the faulting thread's current call

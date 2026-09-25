@@ -8,8 +8,9 @@ use redoubt_abi::{MemoryAddress, PID};
 use crate::arch;
 use crate::cell::KernelCell;
 
-/// Interrupts are numbered `0..MAX_IRQS`: IRQ 0 is the hart timer (TIMER.md) and 1..=1023
-/// are PLIC sources (the PLIC's 10-bit source-id space, so any source fits). The arch
+/// Interrupts are numbered `0..MAX_IRQS`: 1..=1023 are PLIC sources (the PLIC's 10-bit
+/// source-id space, so any source fits). Source 0 does not exist; the hart timer is the kernel's
+/// (`time.rs`) and is no interrupt userspace can claim. The arch
 /// layer reports one pending interrupt at a time (`arch::intc::pending()`), so this is a
 /// plain table index, not a bitmask, and is not bounded by the width of a `usize`.
 const MAX_IRQS: usize = 1024;
@@ -21,7 +22,9 @@ static IRQ_HANDLERS: KernelCell<[Option<Handler>; MAX_IRQS]> = KernelCell::new([
 
 /// The handler registered for `irq`. Out-of-range numbers simply have no handler: they
 /// come straight from syscall arguments, so they must never index the table.
-fn handler(irq: usize) -> Option<Handler> { IRQ_HANDLERS.with(|handlers| handlers.get(irq).copied().flatten()) }
+fn handler(irq: usize) -> Option<Handler> {
+    IRQ_HANDLERS.with(|handlers| handlers.get(irq).copied().flatten())
+}
 
 /// Dispatch the single interrupt the arch layer claimed. Redirects into the owning
 /// process's handler, or masks the source if nobody owns it (an unexpected IRQ).
@@ -68,6 +71,10 @@ pub fn interrupt_claim(
     f: MemoryAddress,
     arg: Option<MemoryAddress>,
 ) -> Result<(), redoubt_abi::Error> {
+    // There is no source 0 (the hart timer that used to be claimed as IRQ 0 is the kernel's).
+    if irq == 0 {
+        return Err(redoubt_abi::Error::InterruptNotFound);
+    }
     // A source with a device object is R5's, and a handle to it is the only authority over
     // it (WP-K3): the legacy claim is not a second one. (Both this path and the grants go
     // with WP-K6.)
@@ -77,7 +84,7 @@ pub fn interrupt_claim(
     }
     // Default deny: a process may claim only interrupts the bundle granted it.
     #[cfg(baremetal)]
-    if !crate::grants::may_claim_irq(pid, irq) {
+    if !crate::mem::MemoryManager::with(|mm| crate::grants::may_claim_irq(mm, pid, irq)) {
         return Err(redoubt_abi::Error::AccessDenied);
     }
     IRQ_HANDLERS.with(|handlers| {

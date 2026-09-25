@@ -38,9 +38,19 @@ commands above are instructions, not assertions that any particular run complete
 
 ## Contracts and abstractions
 
-- One flat weighted stride queue (answer 103), no priority flag or tier. Wake sets pass to
-  `max(saved pass, current runnable minimum)`; threads within each budget rotate. Fairness
-  properties include sleepers.
+- One flat weighted stride queue (answers 103, 166 and the WP-K5 owner decisions), no priority
+  flag or tier (`sched.rs`). Stride weight is a budget's free weight (limit less its carve); runtime
+  is folded into the pass at every deschedule and before every weight change, with an exact
+  division remainder. A wake sets the pass to `max(own, floor)`, the floor being the queue's
+  monotone minimum, kept across an empty queue. Equal passes rank wakers first (later reconcile
+  first, then lower id), requeues FIFO. The running thread keeps the CPU until its slice ends, it
+  blocks or exits, or a budget deadline fires; a timeout or IRQ only wakes. A child budget enters
+  at `max(floor, parent pass)`; when destroyed, its work since entry is added to its parent's lead,
+  normalized by weight. Threads within a budget run round-robin in (pid, tid) order. The
+  `scheduler_fairness` family draws one scenario per seed (share, gaming, idle gap, exit churn,
+  budget churn, carve inflation, debt lift, idempotence, rank oracle, shell); `sched_contracts`
+  pins the kernel-side rules (timeout wakes do not preempt, the equal-instant expiry order, the
+  free-weight refusals).
 - `Ret::Call(CallCompletion)` carries status, lend disposition and an optional committed reply
   independently. A partial reply keeps words and positional handle slots even with `OutOfMemory`.
   `Ret::Replied` reports delivered/discarded and the positional installed mask (answers 167-168).

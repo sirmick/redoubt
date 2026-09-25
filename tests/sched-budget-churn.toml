@@ -1,0 +1,24 @@
+description = "Budget churn gains nothing (WP-K5, pass inheritance): blocking, spinning-parent, deadline-timed and fresh-intermediate churn leave an equal-weight victim half; a shell that keeps giving a budget half its weight and taking it back is neither starved nor favoured (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-budget-churn"]
+# Test builds only: the trace ring (never in a default kernel). The oracle checks every pick, and
+# recomputes every lift (a destroyed child's work moving to its parent) from the rule: the lift
+# wiring, which the victim's share alone cannot see (a churner pays more for spawning and for R10
+# than a wrong lift could give it back).
+kernel_features = ["sched-trace"]
+post_check = "sched_oracle"
+timeout_secs = 600
+expect = [
+    '^\[budget-churn\] ok: blocking churner',
+    '^\[budget-churn\] ok: spinning parent',
+    '^\[budget-churn\] ok: deadline just after',
+    '^\[budget-churn\] ok: fresh intermediates',
+    '^\[budget-churn\] ok: shell giving and taking back half its weight',
+    '^SCHED-BUDGET-CHURN TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['\[budget-churn\] FAIL']
+poweroff = true

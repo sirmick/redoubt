@@ -8,6 +8,7 @@ mod budget;
 mod build;
 mod case;
 mod qemu;
+mod sched_oracle;
 mod ssh;
 mod target;
 
@@ -328,7 +329,10 @@ fn run_case(
         let log = logs.join(format!("{}-{}-smp{}.log", case.name, target.name, smp));
         // Every boot gets fresh devices: a new disk, new host ports.
         let boot_once = |log: &Path| -> Result<Verdict> {
-            let (devices, forwards) = qemu::virtio_devices(boot, &log.with_extension("img"))?;
+            let (mut devices, forwards) = qemu::virtio_devices(boot, &log.with_extension("img"))?;
+            if let Some(icount) = &boot.icount {
+                devices.extend(["-icount".into(), icount.clone(), "-rtc".into(), "clock=vm".into()]);
+            }
             let image = Image {
                 machine,
                 firmware: &firmware,
@@ -351,9 +355,34 @@ fn run_case(
                 }
             }
         };
+        // Cases without a `post_check` are judged exactly as before.
+        let outcome = match outcome {
+            Outcome::Pass if boot.post_check.is_some() => post_check(boot, &log)?,
+            other => other,
+        };
         results.push((format!(", smp={smp}"), judge(boot.must_fail.as_deref(), outcome)?, elapsed(run_started)));
     }
     Ok(results)
+}
+
+/// Run a case's `post_check` (a name, then its arguments) over the console log of a boot that
+/// passed.
+fn post_check(boot: &case::Boot, log: &Path) -> Result<Outcome> {
+    let text = std::fs::read(log).with_context(|| format!("reading {}", log.display()))?;
+    let text = String::from_utf8_lossy(&text);
+    let check = boot.post_check.as_deref().unwrap_or("");
+    let (name, args) = check.split_once(' ').unwrap_or((check, ""));
+    Ok(match (!check.is_empty()).then_some(name) {
+        Some("sched_oracle") => match sched_oracle::run(&text, args) {
+            Ok(summary) => {
+                println!("      {summary}");
+                Outcome::Pass
+            }
+            Err(why) => Outcome::Fail(format!("sched_oracle: {why}")),
+        },
+        Some(other) => bail!("unknown post_check {other:?}"),
+        None => Outcome::Pass,
+    })
 }
 
 /// Apply a case's `must_fail` to the verdict of its run: then the case passes only if the run

@@ -16,6 +16,7 @@ use core::fmt::Write;
 use redoubt_abi::{CID, MemoryFlags, MemoryRange, MemorySize, Message};
 
 pub mod rd;
+pub mod sched;
 pub mod spawn;
 
 /// There is no name server yet, so the log server uses a well-known address.

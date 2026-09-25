@@ -1,0 +1,34 @@
+description = "Latency under the named workload (WP-K5; the targets K5-code-review-5 pinned): a driver stand-in on the goldfish RTC's alarm interrupt, a steward stand-in on timeouts, hand destroys after a decision timeout and lease deadlines, and 1, 4 and 16 spinning sessions; 200 wakes and 50 destructions of each kind per run; wakes p50 <= 15 ms and p99 <= 50 ms, deadline notice p99 <= 30 ms, R10 kernel time p99 <= 30 ms (from the trace), a 1000-weight server's share under the 16-session load; every pick checked by the rank oracle (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-latency"]
+# Test builds only: the trace ring and its dump (never in a default or production kernel).
+kernel_features = ["sched-trace"]
+# The rank oracle, and R10's kernel time from the trace's X/Y records: p99 <= 30 ms.
+post_check = "sched_oracle r10_p99_us=30000"
+timeout_secs = 1800
+expect = [
+    '^\[latency\] the RTC keeps virtual time: met',
+    '^\[latency\] N=1 driver wake: .*: target met',
+    '^\[latency\] N=1 steward timer wake: .*: target met',
+    '^\[latency\] N=1 steward decision wake: .*: target met',
+    '^\[latency\] N=1 deadline notice: .*: target met',
+    '^\[latency\] N=1 budget_destroy, call to return: ',
+    '^\[latency\] N=4 driver wake: .*: target met',
+    '^\[latency\] N=4 steward timer wake: .*: target met',
+    '^\[latency\] N=4 steward decision wake: .*: target met',
+    '^\[latency\] N=4 deadline notice: .*: target met',
+    '^\[latency\] N=4 budget_destroy, call to return: ',
+    '^\[latency\] N=16 driver wake: .*: target met',
+    '^\[latency\] N=16 steward timer wake: .*: target met',
+    '^\[latency\] N=16 steward decision wake: .*: target met',
+    '^\[latency\] N=16 deadline notice: .*: target met',
+    '^\[latency\] N=16 budget_destroy, call to return: ',
+    '^\[latency\] N=16: the 1000-weight server got \d+ of 1000 of the spinning CPU: target met',
+    '^SCHED-LATENCY TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['\[latency\] FAIL', 'target missed', 'PROGRAM HALT']
+poweroff = true

@@ -1,0 +1,6 @@
+description = "The kernel's stride queue rules (redoubt-stride): exact charging, ranks, floor, inheritance, and a differential against the executable model"
+kind = "host-tests"
+# The differential drives the crate, wired as the kernel wires it, and the model's scheduler through
+# the same random sequences and compares every pass, remainder, tie and pick; it also shows that a
+# model with any of 17 scheduling rules broken disagrees. Host evidence, not on-target conformance.
+packages = ["redoubt-stride"]

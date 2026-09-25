@@ -17,6 +17,13 @@ max_unsafe = 12
 max_undocumented = 0
 
 [[budget]]
+# WP-K5: the kernel's stride queue rules, linked into the kernel. `#![forbid(unsafe_code)]`.
+name = "redoubt-stride (scheduler rules)"
+paths = ["libs/stride/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
 name = "loader"
 paths = ["loader/src"]
 max_unsafe = 17 # +3: fdt-rs DevTree::from_raw_pointer, the static index buffer, and Platform::read
@@ -40,6 +47,9 @@ paths = [
 ]
 # G1: +1, physmap.rs's `Window::new` over the loader's physmap. Existing code that no budget
 # listed, now counted; no new unsafe.
+# WP-K5: -1, the legacy hart-timer path removed (the kernel owns the timer); +1, mem.rs's
+# `sync_icache`, the one `fence.i` (OWNER DECISION 10): executable pages must be fetched as
+# written, and inline asm is the only way to issue the instruction. Net 0.
 max_unsafe = 16
 max_undocumented = 0
 
@@ -63,7 +73,9 @@ paths = [
     "kernel/src/budget.rs", "kernel/src/handle.rs", "kernel/src/kframe.rs", "kernel/src/redoubt.rs",
     "kernel/src/device.rs", "kernel/src/message.rs", "kernel/src/process.rs", "kernel/src/cell.rs",
     "kernel/src/debug", "kernel/src/endpoint.rs", "kernel/src/grants.rs", "kernel/src/macros.rs",
+    "kernel/src/time.rs", "kernel/src/sched.rs",
 ]
+# WP-K5: time.rs and sched.rs (the kernel's timer and scheduler) have no unsafe.
 # WP-K1: kframe.rs's three (words of kernel-object frames and of records, through the physmap)
 # replace mem.rs's three needless ones in the deleted `print_ownership`; the total is unchanged.
 # WP-A2: -1, kframe.rs's `write_byte` (its one user, the old byte-writing `random`, is gone).

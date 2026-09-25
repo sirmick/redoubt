@@ -269,6 +269,14 @@ impl MemoryManager {
         Ok(index)
     }
 
+    /// A frame for the kernel itself (the test-only trace ring), taken at boot before the budget
+    /// tree counts what the kernel keeps.
+    #[cfg(feature = "sched-trace")]
+    pub fn kernel_frame(&mut self) -> Result<usize, redoubt_abi::Error> {
+        let index = self.alloc_frame(crate::services::KERNEL_PID)?;
+        Ok(self.ram_start + index * PAGE_SIZE)
+    }
+
     /// A zeroed frame for a kernel object, owned by `OBJECT_OWNER`. The caller charges it to the
     /// budget the cost table names. `OutOfMemory` only if RAM itself is exhausted.
     #[cfg(baremetal)]
@@ -1142,7 +1150,9 @@ impl MemoryManager {
         if flags.is_empty() || (writable && !readable) {
             return Err(bad);
         }
-        self.map_run(pid, len / PAGE_SIZE, flags, None)
+        let at = self.map_run(pid, len / PAGE_SIZE, flags, None)?;
+        sync_if_executable(flags);
+        Ok(at)
     }
 
     /// Map `npages` pages at an address the kernel chooses (R11), with `flags`. `phys` is the
@@ -1237,6 +1247,7 @@ impl MemoryManager {
         for page in (addr..end).step_by(PAGE_SIZE) {
             crate::arch::mem::set_user_page_flags(page, flags).map_err(|_| bad)?;
         }
+        sync_if_executable(flags);
         Ok(())
     }
 
@@ -1300,6 +1311,7 @@ impl MemoryManager {
             crate::arch::mem::map_page_inner(self, pid, frame, addr + offset, flags, true)
                 .expect("map_fixed: prepare_map already made this slot ready");
         }
+        sync_if_executable(flags);
         Ok(())
     }
 
@@ -1314,6 +1326,16 @@ impl MemoryManager {
             return Err(bad);
         }
         Ok(phys)
+    }
+}
+
+/// Pages just mapped or remapped with `flags` may be fetched from: if they are executable, make
+/// this hart's instruction fetches see what was stored in them (`fence.i`; the pages were zeroed,
+/// or written by their owner before becoming executable, since W^X forbids both at once).
+#[cfg(baremetal)]
+pub(crate) fn sync_if_executable(flags: MemoryFlags) {
+    if flags & MemoryFlags::X == MemoryFlags::X {
+        crate::arch::mem::sync_icache();
     }
 }
 

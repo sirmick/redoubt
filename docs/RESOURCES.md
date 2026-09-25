@@ -1,8 +1,8 @@
 # Resources: budgets, scheduling, the timer
 
-Budgets, accounting and scoped revocation are implemented on the new kernel path. CPU weights
-and deadlines are recorded; stride scheduling and timer-driven enforcement remain planned.
-The current scheduler is cooperative and exposes the hart timer as IRQ 0 (BOOT.md).
+Budgets, accounting and scoped revocation are implemented on the new kernel path. The kernel owns
+the hart timer: one stride queue over every runnable budget preempts at slice end or a budget
+deadline, blocking calls time out, and a passed deadline destroys its budget (WP-K5; KERNEL-SPEC R12).
 Owns: why budgets look the way they do, scheduling policy, the timer. The precise fields, rules and
 constants: KERNEL-SPEC.md. Revocation by budget: CAPABILITIES.md. Labels: CONTAINMENT.md.
 
