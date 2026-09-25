@@ -20,46 +20,85 @@ Gates 1-2 and fix round 0 are reported and complete (assignments 3c304971, 8d4c4
 K5-latency-flake root cause is posted in its QA thread; the orchestrator decides the follow-up.
 Do not depend on any sched-latency bound.
 
-## Next: plan §7 commit 2, the kernel
+## Update 2026-09-25 (second implementer): model fix round 1, kernel WIP
 
-The model is the reference. Mirror its semantics (`model/src/kernel.rs`: `dma_reach`,
-`dma_release`, `reset_device`, `quarantine_device`, the OD2 checks, and `destroy_budget`'s
-quarantine migration after the carve). Kernel facts gathered so far, all read on this tree:
+**Model fix round 1** (QA K5b-code-review-1: red B1, P3-1, P3-2) is committed as a model-only
+commit. It changes the following:
+- B1: `Ghost::dma_reset(d, frames)` disarms only the dying holder's frames.
+- There is a new mutation `K5bResetClearsCoHolderReach`. `Boot::default` gains a second healthy DMA
+  device (dev 7, init handle 10), so init's new handles start at 11.
+- The generator hands a child each DMA device 50% of the time. A child holding one issues
+  `map_device`/`dma_alloc` on it 12% of the time. Without that, the random search never built the
+  co-holder shape (measured: 0 in 4000 seeds, now about 10).
+- `dma_contracts` has the co-holder case, with and without the mutation.
+- P3-1 is covered in VALIDATION.md. P3-2: `ghost.armed` is removed when a no-parent frame is dropped.
+- **Architect ruling, QA K5b-od6-sweep (answered):** quarantine sweeps every handle to the device;
+  the kernel destroys the device object with message.rs `destroy_device`, as R10 does.
+  - Copies in unreceived messages arrive as 0.
+  - There is no NotPermitted for a quarantined device. The guard is
+    `assert!(!quarantined)`, "I-DMA: a live device object names a quarantined device".
+  - Case §6: after D2 dies, `map_device`/`dma_alloc` on the old index give BadHandle, and a handle sent
+    before the quarantine arrives as 0.
+  - The Architect writes the KERNEL-SPEC R10/Device text and answer 173's residual when commit 4 is
+    ready; tell them then.
+  - The model now sweeps in `quarantine_device`. The invariants R10 message check counts a
+    quarantined device as destroyed.
+- Results: all model tests pass. Mutations: all 127 caught; the K5b six at kernel_sequence seeds
+  22, 171, 11, 28, 29, 677.
 
-- `kernel/src/device.rs:325` `map_device` → `map_run(pid, len/PAGE, R|W, Some(base))`. `:335`
-  `dma_alloc` → `alloc_contiguous(pid, npages)` (mem.rs:329; it charges through `charge_frame`,
-  which puts the frames in `account.frames`: the plan's Trap). Then `map_run(.., Some(phys))`, and
-  `free_frames` on unwind. For K5b the frames must be owned by `DMA_OWNER` and charged to the run's
-  budget directly, never through `account.frames`, or `uncharge_all_frames` would uncharge them
-  before the reset.
-- `kernel/src/mem.rs`:
-  - `OBJECT_OWNER` is PID 255 (`mem.rs:94`), with a const assert that `MAX_PROCESS_COUNT` < 255.
-    Add `DMA_OWNER` (254) beside it, the same way.
-  - `release_all_memory_for_process` (`mem.rs:930`): pass 1 reparents lent frames to the kernel,
-    then `release_owned_frames(pid)` frees `allocations[idx] == Some(pid)` and calls
-    `uncharge_all_frames`. Frames owned by `DMA_OWNER` are untouched by construction; still check
-    pass 1's `for_each_lent_frame`.
-  - `check_for_duplicates` (`mem.rs:1020`) has to skip `DMA_OWNER`.
-  - `unmap` (`mem.rs:1215`) releases any RAM frame through `release_page`. A DMA frame must only
-    lose its PTE.
-  - `owned_mapping` (`mem.rs:1321`) requires `allocations[..] == Some(pid)`. It must also accept a
-    DMA frame whose Live run is held by `pid`, so that `set_flags` and `unmap` work.
-- Legacy lend is `services.rs:1549/1638` `lend_memory`, and `process_map` is `process.rs:330`: both
-  must refuse DMA frames. The legacy `MapMemory` refusal of any range overlapping a DMA-flagged
-  `Devs` entry goes in `syscall.rs:855` (plan §2 P3 a: page-rounded, half-open, before anything is
-  claimed).
-- The terminate hook: `services.rs:276` `Process::terminate`. Call `mm.dma_release(pid)` straight
-  after `release_all_memory_for_process` and before `process_ended`, in the same MM closure.
-- N1: `budget.rs:816` `destroy_marked`. Migrate the quarantine charges AFTER
-  `self.return_carve(top, false)` (line 830) and before the frames are freed.
-- Boot: `dma::boot` goes after PLIC init and before `boot_budgets` (Trap: page tables before
-  root's limit is sized). Use `arch::mem::map_page_inner` with PID 1. The window constant goes in
-  `libs/abi/src/arch/riscv/mem.rs` (plan §2 gives the addresses and the asserts).
-- The QEMU virt DMA devices are the virtio-mmio slots 0x10001000..0x10008000 (see the `Devs` tag
-  in any boot log). STATUS is at +0x70. The magic 0x74726976 is at +0x000, and the version at
-  +0x004.
-- Feature `dma-reset-deaf` (OD7): the *first* attempt per device reports "not confirmed", after the
-  real write of 0.
+**Kernel: WIP commit "WIP K5b kernel: ..."** builds on rv64 and rv32 (`--features qemu-virt`), and
+rv64 with `dma-reset-deaf`, and the loader on both. **No bench case has been run on it yet.** By file:
+- `kernel/src/dma.rs` (new):
+  - `Registry` (slots keyed by base, `runs[32]`, `doomed`, `deaf_spent`) and the window
+    read/write (2 unsafe);
+  - `dma_register` (boot, maps the window, classifies virtio), `dma_slot`, `dma_quarantined`,
+    `dma_mapped`, `dma_holder`;
+  - `dma_new_run`/`dma_drop_run`/`pool`;
+  - `dma_release` (the P1-1 rule, with its assert), `dma_reset` (OD4 bound, deaf feature);
+  - `dma_migrate_quarantine` (N1), `dma_holds_any`, `dma_take_doomed`.
+  - `reset_epoch` from the plan is dropped (nothing reads it).
+- `libs/abi/src/arch/riscv/mem.rs`: `KERNEL_DMA_REGS` (rv32 0xff7f_0000, rv64 0xffff_ffff_f400_0000)
+  and `KERNEL_DMA_PAGES` = 16, with const asserts.
+- `loader/src/main.rs`: `reserve_tables` for the window, so the kernel allocates **no** page table
+  for it (`arch::mem::map_kernel_page` walks with no allocator and panics if a table is missing).
+  That removes the boot_budgets ordering trap: `dma_register` runs inside `boot_devices`.
+- `intc_plic.rs`: asserts that the PLIC ends below the window.
+- `mem.rs`:
+  - `DMA_OWNER` (254) and the `dma` field;
+  - `alloc_contiguous(owner, n)` no longer charges; `free_contiguous`; `free_frames` is deleted;
+  - `is_dma_frame`; `unmap` keeps DMA frames; `owned_mapping` accepts the holder's DMA frame;
+  - pass 1 and `check_for_duplicates` skip `DMA_OWNER`.
+- `device.rs`:
+  - `map_device` sets `dma_mapped`, and `dma_alloc` uses `dma_new_run`/`dma_drop_run`, both through
+    `dma_slot_of` (the quarantine assert);
+  - `boot_devices` registers DMA devices and gives no object past 16.
+- `budget.rs`: `Account::dma_mapped: u16`; `destroy_marked` calls `dma_migrate_quarantine` after
+  `return_carve`.
+- `services.rs`:
+  - `terminate` calls `dma_release` between `release_all_memory_for_process` and `process_ended`;
+  - `terminate_process`/`kill_process` then call `message::destroy_quarantined_devices`, since
+    `terminate` has no `ss` (the Architect's check (2)). `shutdown` doesn't; the machine is going down;
+  - legacy `lend_memory` refuses DMA frames.
+- `process.rs`: `process_map` refuses DMA frames; the `drop_unstarted` debug_assert.
+- `tests/unsafe-budget.toml`: dma.rs is listed; kernel core goes 25 -> 27, with the reason.
+- **Held back for commit 3:** the legacy MapMemory refusal (syscall.rs) plus its helpers
+  `dma::overlaps_dma_device` and `device::dma_ranges`. They are in the untracked file
+  `/home/mick/riscv/.worktrees/k5b-mapmemory-refusal.patch` (a git diff plus two appended code
+  blocks). They go in with the virtio-probe move, or bench-virtio-devices breaks.
+
+**Next steps**:
+1. Boot-check the WIP: run `device` rv64/rv32 (copy it to a unique toml name), a blkd case, and
+   D3 net cases. Every DMA device now maps a window page at boot, and blkd/netd dma_alloc goes
+   through runs.
+2. Review against the model once more: pooling at terminate, and the charge uncharged only if the
+   budget is live.
+3. Then commit 3 (cases and programs; the pre-K5b must-fail run first, on merged K5 without the
+   kernel commit), then commit 4 (docs), and tell the Architect.
+
+**Traps (new):**
+- Model generator changes shift every mutation's catching seed. Rerun the whole mutations suite,
+  not only the K5b filter.
+- The model's replay test lists `K5bResetClearsCoHolderReach` as invisible to replay (ghost-only).
 
 ## Commits 3-4 (unchanged from the plan)
 
