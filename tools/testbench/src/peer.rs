@@ -47,6 +47,13 @@ const SLIRP_PREFIX: (Ipv4Addr, u8) = (Ipv4Addr::new(10, 0, 2, 0), 24);
 pub const GATEWAY: Ipv4Addr = Ipv4Addr::new(10, 0, 2, 2);
 /// The Ethernet source of every frame slirp sends: `52:55` and slirp's host address. A frame from
 /// any other source is taken as the guest's, so a mistake here checks more frames, never fewer.
+///
+/// A frame from this address is skipped only if it is **not addressed to** it: slirp never sends
+/// to itself, so a frame to slirp's MAC is the guest's whatever source it claims, and anything the
+/// guest routes out goes to that MAC (its gateway). What stays unjudged is a guest frame claiming
+/// slirp's source *and* sent to a broadcast or to the guest's own MAC, which leaves the guest for
+/// nothing but slirp's ARP handling; the guest's stack (smoltcp) sets every source to the card's
+/// own MAC, so it does not send one (QA D3-code-review-6).
 pub const SLIRP_MAC: [u8; 6] = [0x52, 0x55, 10, 0, 2, 2];
 
 /// The hidden subcommand libslirp runs for each connection to a peer.
@@ -352,7 +359,7 @@ pub fn inspect(frames: &[&[u8]], self_forbidden: &[(Ipv4Addr, u8)]) -> Result<Se
         if frame.len() < 14 {
             return fail(format!("{} bytes, shorter than an Ethernet header", frame.len()));
         }
-        if frame[6..12] == SLIRP_MAC {
+        if frame[6..12] == SLIRP_MAC && frame[..6] != SLIRP_MAC {
             continue;
         }
         let payload = &frame[14..];
@@ -568,6 +575,10 @@ mod tests {
             assert!(err.contains(why), "{err:?} lacks {why:?}");
         };
         refused(tcp(GUEST_MAC, [10, 0, 9, 102], 50000, 7, SYN), "SYN to 10.0.9.102:7, one of the box's own");
+        // A frame to slirp's MAC is the guest's, whatever source it claims.
+        let mut spoofed = tcp(SLIRP_MAC, [10, 0, 9, 102], 50000, 7, SYN);
+        spoofed[..6].copy_from_slice(&SLIRP_MAC);
+        refused(spoofed, "SYN to 10.0.9.102:7, one of the box's own");
         refused(tcp(GUEST_MAC, [10, 0, 2, 2], 50000, 22, SYN), "SYN to 10.0.2.2:22");
         refused(arp(GUEST_MAC, 1, [10, 0, 2, 3]), "asked ARP for 10.0.2.3");
         refused(ethernet(GUEST_MAC, 0x86dd, &[0; 40]), "ethertype 0x86dd");

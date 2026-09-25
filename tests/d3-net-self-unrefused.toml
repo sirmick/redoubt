@@ -16,7 +16,7 @@ expect = [
     '^\[net-rig\] attack on the box.s own 10\.0\.2\.2:8000: ',
     '^\[net-rig\] attack on the box.s own 10\.0\.2\.2:22: ',
     '^\[net-rig\] the twin to 10\.0\.9\.111:7: ',
-    '^\[net-rig\] the labelled caller: not refused 0x0$',
+    '^\[net-rig\] the labelled caller reports \(information only\): ',
     '^\[net-rig\] ok: the victim accepted the bench.s dial \(1\)$',
     '^\[net-rig\] ok: the victim accepted nothing more and still runs$',
     '^\[net-rig\] ok: buckets: two more accounts held, a third refused \(\[true, true, false\]\)$',

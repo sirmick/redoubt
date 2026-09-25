@@ -485,10 +485,10 @@ impl Rig {
             account: self.next_account,
             deadline: FOREVER,
         };
-        // Only a system-class parent may add labels (KERNEL-SPEC.md, `budget_create`); the class
-        // makes no difference to `ipd`, which refuses every labelled caller.
-        let parent = if labels.is_empty() { USERS } else { SYSTEM };
-        let child = self.launch(parent, &spec, CLIENT, &[("net", conn), ("rig", report.handle())], args)?;
+        // Every client is user-class, under USERS, as a principal's program is; a labelled one too:
+        // adding labels needs the *caller's* budget to be system-class (KERNEL-SPEC.md,
+        // `budget_create` labels), and the rig runs in the root budget, which is.
+        let child = self.launch(USERS, &spec, CLIENT, &[("net", conn), ("rig", report.handle())], args)?;
         // The child has its own copies now.
         let _ = redoubt_rt::handle::close(conn);
         let _ = report.close();
@@ -627,12 +627,15 @@ impl Rig {
         let twin = self.run_client(&any, &[], &["role=connect", "addr=10.0.9.111", "port=7"])?;
         say!(self, "[net-rig] the twin to {}:7: {}", dotted(TWIN_PEER), describe(twin));
 
-        // A labelled caller with a wide scope: refused on every path (its peer must count 0), and
+        // A labelled caller with a wide scope, user-class like any principal's program: refused on
+        // every path (its real connect attempt's peer must count 0), and
         // holding no bucket (below).
         // It stays, holding whatever it was given, until the buckets are counted.
         let (labelled, _, badge) = self.client(&any, &[7], &["role=labelled"])?;
+        // What it says it got through is the attacker's own claim, printed for information only:
+        // the verdicts are the bucket count below and the bench's count of its peer.
         let opened = self.report(&labelled, badge, event::LABELLED)?;
-        say!(self, "[net-rig] the labelled caller: not refused {opened:#x}");
+        say!(self, "[net-rig] the labelled caller reports (information only): not refused {opened:#x}");
         self.holders.push(labelled);
 
         // The victim got exactly the bench's dial.
