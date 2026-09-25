@@ -116,7 +116,8 @@ receiving on it.
 - IRQ: an interrupt number, a `fired` flag and a `masked` flag;
 - Reset: the right to power off or reboot (given only to `init`).
 
-The loader creates device objects from the device tree; `init` receives them all.
+The loader creates device objects from the device tree; `init` receives them all. None is created
+later, so a DMA device destroyed for failing its reset (R10) is gone until reboot.
 
 **Handle** = (object, badge: u64, stamp: budget id), an index into a process's handle table.
 **Index 0 is never allocated** and means "no handle" where a handle is optional. For an endpoint,
@@ -337,6 +338,10 @@ endpoint, calls in flight to it, and receives waiting on it, fail with `Dead`; a
 the server had taken is abandoned (R3). Revocation reaches messages already sent: a queued message
 sent through a handle stamped with B or a descendant fails its sender with `Dead`; a taken call sent
 through one fails its caller with `Dead` at once and is abandoned (R3).
+A DMA device that fails the reset of a process's end (R11) is destroyed the same way, at that end:
+every handle naming it closes, in every table and every message not yet received, and its page
+goes back to its owner. Its base stays flagged until reboot, so no handle names it again; a live
+co-holder keeps the mapping it already has (question 144).
 
 **R11. Memory.** No mapping is ever writable and executable, and none is writable without being
 readable: the privileged architecture reserves that page-table encoding, so every call that
