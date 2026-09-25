@@ -153,13 +153,16 @@ pub extern "C" fn _start() -> ! {
     let slot = redoubt_abi::map_memory(MemoryAddress::new(VIRTIO), None, rd::PAGE_SIZE, rwf).map(|_| ());
     let across = redoubt_abi::map_memory(MemoryAddress::new(UART), None, 2 * rd::PAGE_SIZE, rwf).map(|_| ());
     let beside = redoubt_abi::map_memory(MemoryAddress::new(UART), None, rd::PAGE_SIZE, rwf).map(|_| ());
+    let inside =
+        redoubt_abi::map_memory(MemoryAddress::new(VIRTIO + 0x10), None, rd::PAGE_SIZE, rwf).map(|_| ());
     let denied = Err(redoubt_abi::Error::AccessDenied);
     check!(
         out,
-        slot == denied && across == denied && beside.is_ok(),
-        "legacy MapMemory refuses a granted virtio slot and a range reaching into one ({:?}, {:?}), not the page beside it",
+        slot == denied && across == denied && inside.is_err() && beside.is_ok(),
+        "legacy MapMemory refuses a granted virtio slot, a range reaching into one and an unaligned base inside one ({:?}, {:?}, {:?}), not the page beside it",
         slot,
-        across
+        across,
+        inside
     );
 
     say!(out, "[dma-rules] DMA RULES PASSED");
