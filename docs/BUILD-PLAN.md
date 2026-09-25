@@ -156,6 +156,9 @@ recipes remain in git.
     30 ms + (runnable budgets + 2) x SLICE (about 240 ms at N = 16);
   - a 1000-weight server's share of the spinning CPU at N = 16: at least its weight's share less
     30/1000.
+  WP-K5b adds to that teardown, also non-preemptibly, the DMA reset of each device the dying
+  process could reach: at most 1 ms each, and at most 16 devices, so at most 16 ms on top of R10's.
+  It is billed as the teardown it runs in is.
   R10's non-preemptible cost (13-30 ms here, growing with the object frames present) dominates the
   deadline and termination terms and sits under every wake's tail, so these margins hold for this
   workload only: adding objects moves them, and any growth is gated on follow-up
@@ -181,10 +184,11 @@ recipes remain in git.
 
 **WP-K5b. DMA device reset and frame quarantine (answer 173).** Size S.
 - Reads: KERNEL-SPEC.md device objects, `dma_alloc`, R10; IO-ARCHITECTURE.md (DMA trust); QUESTIONS.md 147.
-- Delivers: on release of the last handle to a DMA-flagged MMIO device object, a virtio reset
-  (status 0, read back, bounded) before its `dma_alloc` frames return to the pool; frames of a
-  device that does not confirm the reset are quarantined for good, charged to the grant holder's
-  budget, and the device is not handed out again; the executable model mirrors it.
+- Delivers: when the process holding `dma_alloc` frames ends, a virtio reset (status 0, read
+  back, bounded) of every device that could hold their addresses before they return to the pool;
+  if any of those devices does not confirm, the frames are quarantined for good, still charged to
+  the budget that paid for them, and each device that failed has its object destroyed and is not
+  handed out again until reboot; the executable model mirrors it (answer 173 and its note).
 - Accepted when: rv64 boot and rv32 compilation; attack cases: a DMA driver killed mid-traffic,
   its frames reallocated to another process, whose writes into the old ring pages steer no DMA
   and receive no device bytes; a device that ignores reset leaves its frames quarantined and
