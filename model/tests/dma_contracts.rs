@@ -6,14 +6,16 @@ mod common;
 use common::contracts::*;
 use redoubt_model::{
     kernel::{DeviceKind, Note, Object},
+    mutation::Mutation,
     spec::*,
     syscall::*,
 };
 
-/// `init`'s handles to the two DMA devices of the default boot: one whose reset always
-/// confirms (device 2), and one whose first reset fails (device 6, the `dma-reset-deaf` feature).
+/// `init`'s handles to the three DMA devices of the default boot: two whose resets always confirm
+/// (devices 2 and 7), and one whose first reset fails (device 6, the `dma-reset-deaf` feature).
 const DMA: u64 = 5;
 const DEAF: u64 = 9;
+const DMA2: u64 = 10;
 const USERS: u64 = 3;
 
 /// The syscall's own `Result<Ret, Error>`, as process `pid`'s thread `tid` got it.
@@ -138,8 +140,34 @@ fn exit_pools_after_reset() {
     assert!(used(&mut w, b) < base, "the process's own charges, and its DMA pages, are back");
 }
 
-/// OD6 and P1-1: a device whose reset fails quarantines the dying holder's memory and is never
-/// handed out again; a co-holder's later death quarantines all of its memory too, the run through
+/// OD3: one death's confirmed reset of a device does not cover a live co-holder that still
+/// reaches it. B allocates through device 7 and maps device 2; A maps device 2 and exits, which
+/// resets it; B can still program device 2, so its own death must reset it again before B's frame
+/// is pooled. Under `K5bResetClearsCoHolderReach` it is not, and I-DMA reports the frame.
+#[test]
+fn reset_at_one_death_does_not_cover_a_co_holder() {
+    for mutation in [None, Some(Mutation::K5bResetClearsCoHolderReach)] {
+        let mut w = World::new(mutation);
+        assert!(matches!(w.k.processes[&1].handles[&DMA2].object, Object::Device(7)));
+        let (_, b, tb) = child(&mut w, USERS, vec![DMA, DMA2]);
+        let (_, a, ta) = child(&mut w, USERS, vec![DMA]);
+        dma_alloc(&mut w, b, tb, 2, 1);
+        assert!(matches!(call(&mut w, b, tb, Syscall::MapDevice { h: 1 }), Ok(Ret::Addr(_))));
+        assert!(matches!(call(&mut w, a, ta, Syscall::MapDevice { h: 1 }), Ok(Ret::Addr(_))));
+        w.op(Op::Sys { pid: a, tid: ta, call: Syscall::ProcessExit { code: 0 } }).unwrap();
+        let r = w.op(Op::Sys { pid: b, tid: tb, call: Syscall::ProcessExit { code: 0 } });
+        match mutation {
+            None => {
+                r.unwrap();
+                assert!(w.k.frames.values().all(|f| f.dma.is_none()), "B's frame pooled after both resets");
+            }
+            Some(_) => assert!(r.unwrap_err().contains("I-DMA"), "the dropped reach is caught"),
+        }
+    }
+}
+
+/// OD6 and P1-1: a device whose reset fails quarantines the dying holder's memory, and every
+/// handle to it is swept; a co-holder's later death quarantines all of its memory too, the run through
 /// the healthy device included, because a quarantined device counts as not reset.
 #[test]
 fn deaf_device_quarantines_the_co_holder_too() {
@@ -155,8 +183,9 @@ fn deaf_device_quarantines_the_co_holder_too() {
     assert!(quarantined(&w, 6), "the first reset of the deaf device fails");
     assert_eq!(w.k.frames.values().filter(|f| f.quarantined).count(), 1);
     assert!(used(&mut w, b1) >= 1 && used(&mut w, b1) < held1, "the quarantined page stays charged");
-    assert_eq!(call(&mut w, 1, 1, Syscall::DmaAlloc { h: DEAF, npages: 1 }), Err(Error::NotPermitted));
-    assert_eq!(call(&mut w, 1, 1, Syscall::MapDevice { h: DEAF }), Err(Error::NotPermitted));
+    // Every handle to it was swept (OD6), init's own copy included.
+    assert_eq!(call(&mut w, 1, 1, Syscall::DmaAlloc { h: DEAF, npages: 1 }), Err(Error::BadHandle));
+    assert_eq!(call(&mut w, 1, 1, Syscall::MapDevice { h: DEAF }), Err(Error::BadHandle));
 
     // The deaf device would now reset, but a quarantined slot never counts as reset. The
     // co-holder dies the other way, by a fault.

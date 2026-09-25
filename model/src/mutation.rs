@@ -295,12 +295,16 @@ pub enum Mutation {
     /// A quarantined frame's charge is dropped instead of moving to its budget's destroyed
     /// parent (OD5, N1).
     K5bQuarantineChargeDropped,
-    /// `map_device` and `dma_alloc` accept a quarantined device (OD6).
+    /// A quarantined device's handles are not swept, so it can be mapped and allocated through
+    /// again (OD6).
     K5bQuarantinedDeviceUsable,
+    /// A confirmed reset at one death drops the device from every live co-holder's reset set, so
+    /// a co-holder's later death pools frames the device can still write (OD3).
+    K5bResetClearsCoHolderReach,
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 126] = {
+    pub const ALL: [Mutation; 127] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -429,6 +433,7 @@ impl Mutation {
             K5bUnmapFreesDma,
             K5bQuarantineChargeDropped,
             K5bQuarantinedDeviceUsable,
+            K5bResetClearsCoHolderReach,
         ]
     };
 
@@ -525,7 +530,8 @@ impl Mutation {
             | K5bQuarantinedSlotCountsAsReset
             | K5bUnmapFreesDma
             | K5bQuarantineChargeDropped
-            | K5bQuarantinedDeviceUsable => "answer 173",
+            | K5bQuarantinedDeviceUsable
+            | K5bResetClearsCoHolderReach => "answer 173",
             _ => "policy",
         }
     }

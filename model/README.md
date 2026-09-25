@@ -86,7 +86,7 @@ commands above are instructions, not assertions that any particular run complete
 WP-K5b (answer 173) adds I-DMA: `ghost.rs` arms each DMA frame against every device its holder
 could reach and disarms a device only on a reset that genuinely confirms (read from the device
 object, not from the kernel's answer), and no frame in the free pool may be armed; a quarantined
-device handed out again (OD6) is a violation too.
+device used again (OD6: its handles are swept) is a violation too.
 `check::budget_lifecycle` supplies I10's before/after comparison. New IPC examples exercise queued
 and taken cancellation, server-thread death, returned same-process lends, partial replies and
 late-output rollback. Invalid raw lends report returned without certifying the supplied mapping.

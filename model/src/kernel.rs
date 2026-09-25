@@ -137,6 +137,9 @@ impl Default for Boot {
                 // DMA device whose first-ever reset reports "not confirmed" (the `dma-reset-deaf`
                 // feature), for the quarantine path.
                 DeviceSpec::Mmio { base: 0x1000_2000, pages: 1, dma: true, resets: Resets::FirstFails },
+                // A second healthy DMA device, so one process can allocate through one device and
+                // map another that a co-holder also reaches.
+                DeviceSpec::Mmio { base: 0x1000_3000, pages: 1, dma: true, resets: Resets::Always },
             ],
             costs: Costs::default(),
         }
@@ -2025,6 +2028,7 @@ impl Kernel {
                     }
                     None => {
                         self.frames.remove(&f);
+                        self.ghost.armed.remove(&f);
                     }
                 }
             }
@@ -2563,19 +2567,15 @@ impl Kernel {
     }
 
     /// `map_device(h(MMIO)) -> addr`: MMIO device handle. The range is mapped read-write. Device
-    /// pages are not RAM; their page tables are charged. A quarantined DMA device (WP-K5b, OD6)
-    /// is refused, once and for all; otherwise, a DMA device is added to the reset set S this
-    /// process's death will need (OD3), and every DMA frame it already holds is armed against it
-    /// too (ghost, I-DMA).
+    /// pages are not RAM; their page tables are charged. A DMA device (WP-K5b) is added to the
+    /// reset set S this process's death will need (OD3), and every DMA frame it already holds is
+    /// armed against it too (ghost, I-DMA). No handle to a quarantined device survives (OD6).
     pub fn map_device(&mut self, pid: u64, h: u64) -> R<u64> {
         let h = decode_handle(h)?;
         let Object::Device(d) = self.lookup(pid, h)?.object else { return Err(Error::WrongObject) };
         let DeviceKind::Mmio { pages, dma, quarantined, .. } = self.devices[&d].kind else {
             return Err(Error::WrongObject);
         };
-        if quarantined && !self.broken(Mutation::K5bQuarantinedDeviceUsable) {
-            return Err(Error::NotPermitted);
-        }
         let start = self.alloc_va(pid, pages)?;
         let tables = self.tables_needed(pid, start..start + pages);
         self.charge(self.budget_of(pid).unwrap(), tables)?;
@@ -2592,7 +2592,6 @@ impl Kernel {
     }
 
     /// `dma_alloc(h(MMIO), npages) -> addr, phys`: DMA flag; pages charged; contiguous; zeroed.
-    /// A quarantined device is refused (WP-K5b, OD6).
     pub fn dma_alloc(&mut self, pid: u64, h: u64, npages: u64) -> R<(u64, u64)> {
         let h = decode_handle(h)?;
         let Object::Device(d) = self.lookup(pid, h)?.object else { return Err(Error::WrongObject) };
@@ -2602,7 +2601,7 @@ impl Kernel {
         if npages == 0 {
             return Err(Error::InvalidArgument);
         }
-        if !dma || (quarantined && !self.broken(Mutation::K5bQuarantinedDeviceUsable)) {
+        if !dma {
             return Err(Error::NotPermitted);
         }
         let r = self.map_fresh(pid, npages, FLAG_R | FLAG_W, Some(d))?;
@@ -2662,8 +2661,18 @@ impl Kernel {
             })
             .collect();
         let confirmed: BTreeSet<u64> = s.iter().copied().filter(|&d| self.reset_device(d)).collect();
+        let held = self.processes[&pid].dma.clone();
         for d in genuine {
-            self.ghost.dma_reset(d);
+            self.ghost.dma_reset(d, &held);
+        }
+        if self.broken(Mutation::K5bResetClearsCoHolderReach) {
+            // Broken: a confirmed reset is taken to cover every live co-holder too, so each drops
+            // the device from the set its own death will reset.
+            for (&q, p) in self.processes.iter_mut() {
+                if q != pid {
+                    p.dma_mapped.retain(|d| !confirmed.contains(d));
+                }
+            }
         }
         if confirmed == s || self.broken(Mutation::K5bFreeBeforeReset) {
             // Every device in S confirmed: this call's frames are left for the ordinary
@@ -2706,12 +2715,16 @@ impl Kernel {
     }
 
     /// OD6: a device that fails a reset is flagged for ever (until reboot, which the model never
-    /// does): `map_device` and `dma_alloc` on it are refused from here on.
+    /// does), and every handle to it is swept as R10 sweeps (a copy in a message not yet received
+    /// arrives as 0), so nobody can map it or allocate through it again.
     fn quarantine_device(&mut self, d: u64) {
         if let Some(dev) = self.devices.get_mut(&d) {
             if let DeviceKind::Mmio { quarantined, .. } = &mut dev.kind {
                 *quarantined = true;
             }
+        }
+        if !self.broken(Mutation::K5bQuarantinedDeviceUsable) {
+            self.sweep(|h| h.object == Object::Device(d));
         }
     }
 

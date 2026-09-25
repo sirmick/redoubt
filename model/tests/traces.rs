@@ -80,6 +80,9 @@ fn a_rule_breaking_kernel_fails_replay() {
             // Random sequences never reach MAX_OPEN_CALLS; the flood family does (its traces are
             // the ones to replay for R4a).
             || matches!(m, Mutation::OpenCallsUnlimited | Mutation::R4aOpenCallsPerThread | Mutation::R4aFullTakesNothing)
+            // Ghost-only: while the dropped device's resets confirm, every answer is the same; only
+            // I-DMA (kernel_sequence, dma_contracts) sees the frame pooled while still armed.
+            || *m == Mutation::K5bResetClearsCoHolderReach
     };
     for m in Mutation::ALL.into_iter().filter(|m| !invisible(m)) {
         let detected = texts.iter().position(|text| {
@@ -111,7 +114,7 @@ fn lender_dies_mid_call() -> Vec<Op> {
         })
     };
     let init = |call| Op::Sys { pid: 1, tid: 1, call };
-    // init's slots: 1 root, 2 system, 3 users, 4-9 the devices; new handles from 10.
+    // init's slots: 1 root, 2 system, 3 users, 4-10 the devices; new handles from 11.
     let budget = |parent, account| Syscall::BudgetCreate {
         parent,
         pages: 32,
@@ -123,15 +126,15 @@ fn lender_dies_mid_call() -> Vec<Op> {
         deadline: FOREVER,
     };
     let buf = 0x10_0000_0000; // the model's first kernel-chosen address
-    go(&mut k, init(Syscall::EndpointCreate)); // h:10
-    go(&mut k, init(budget(3, 1001))); // h:11 alice
-    go(&mut k, init(budget(2, 0))); // h:12 server
-    go(&mut k, init(Syscall::ProcessCreate { budget: 12, exit_endpoint: 10 })); // h:13
-    let start = Syscall::ProcessStart { process: 13, entry: 0x1000, sp: 0x2000, arg: 0, handles: vec![10] };
+    go(&mut k, init(Syscall::EndpointCreate)); // h:11
+    go(&mut k, init(budget(3, 1001))); // h:12 alice
+    go(&mut k, init(budget(2, 0))); // h:13 server
+    go(&mut k, init(Syscall::ProcessCreate { budget: 13, exit_endpoint: 11 })); // h:14
+    let start = Syscall::ProcessStart { process: 14, entry: 0x1000, sp: 0x2000, arg: 0, handles: vec![11] };
     let (sp, st) = go(&mut k, init(start)).unwrap();
-    go(&mut k, init(Syscall::Mint { source: MintSource::Handle(10), badge: 5, budget: Some(11) })); // h:14
-    go(&mut k, init(Syscall::ProcessCreate { budget: 11, exit_endpoint: 10 })); // h:15
-    let start = Syscall::ProcessStart { process: 15, entry: 0x1000, sp: 0x2000, arg: 0, handles: vec![14] };
+    go(&mut k, init(Syscall::Mint { source: MintSource::Handle(11), badge: 5, budget: Some(12) })); // h:15
+    go(&mut k, init(Syscall::ProcessCreate { budget: 12, exit_endpoint: 11 })); // h:16
+    let start = Syscall::ProcessStart { process: 16, entry: 0x1000, sp: 0x2000, arg: 0, handles: vec![15] };
     let (cp, ct) = go(&mut k, init(start)).unwrap();
     let server = |call| Op::Sys { pid: sp, tid: st, call };
     let client = |call| Op::Sys { pid: cp, tid: ct, call };
@@ -142,13 +145,13 @@ fn lender_dies_mid_call() -> Vec<Op> {
     go(&mut k, client(Syscall::Call { h: 1, words: [1, 2, 3, 4], handles: vec![], lend, timeout: FOREVER }));
     go(&mut k, Op::Read { pid: sp, tid: st, addr: buf });
     go(&mut k, Op::Write { pid: sp, tid: st, addr: buf, value: 99 });
-    go(&mut k, init(Syscall::BudgetUsage { h: 12 }));
-    go(&mut k, init(Syscall::BudgetDestroy { h: 11 }));
+    go(&mut k, init(Syscall::BudgetUsage { h: 13 }));
+    go(&mut k, init(Syscall::BudgetDestroy { h: 12 }));
     go(&mut k, Op::Read { pid: sp, tid: st, addr: buf });
-    go(&mut k, init(Syscall::BudgetUsage { h: 12 }));
+    go(&mut k, init(Syscall::BudgetUsage { h: 13 }));
     go(&mut k, server(Syscall::Receive { h: Some(1), timeout: 0, max_transfer: 0 }));
     go(&mut k, server(Syscall::Reply { msg_id: 1, words: [0; 4], handles: vec![] }));
-    go(&mut k, init(Syscall::BudgetUsage { h: 12 }));
+    go(&mut k, init(Syscall::BudgetUsage { h: 13 }));
     go(&mut k, server(Syscall::Receive { h: Some(1), timeout: 0, max_transfer: 0 }));
     ops
 }
