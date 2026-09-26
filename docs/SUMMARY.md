@@ -44,16 +44,16 @@
 
 # Userland
 
-- [Userland]()
-  - [Sessions and namespaces]()
-  - [beamlet, the Elixir VM]()
-  - [The shell]()
-  - [Files and binds]()
-  - [Native programs]()
-  - [Agents, leases and labels]()
-  - [File transfer]()
-  - [Development on Redoubt]()
-  - [Packages]()
+- [Userland](userland/README.md)
+  - [Sessions and namespaces](userland/sessions.md)
+  - [beamlet, the Elixir VM](userland/beamlet.md)
+  - [The shell](userland/shell.md)
+  - [Files and binds](userland/files.md)
+  - [Native programs](userland/native.md)
+  - [Agents, leases and labels](userland/agents.md)
+  - [File transfer](userland/transfer.md)
+  - [Development on Redoubt](userland/development.md)
+  - [Packages](userland/packages.md)
 
 # The plan
 
@@ -79,6 +79,7 @@
   - [Scans of every kernel-object frame](todo/kernel-scan-bounds.md)
   - [map_anon's search cost](todo/map-anon-search-cost.md)
   - [Records at a device mapping](todo/mmio-record-frames.md)
+  - [The code path's search order](todo/module-search-order.md)
   - [Freeing empty page tables](todo/page-table-freeing.md)
   - [RAM beyond the physmap](todo/physmap-ram-bound.md)
   - [PID pool pinning](todo/pid-pool-pinning.md)

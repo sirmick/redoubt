@@ -21,7 +21,7 @@ by topic where the table says so. No page ever writes a bare milestone number.
 | (no legacy equivalent) SFTP, SCP | **M3 (files in and out)** | new in the owner's plan |
 | "Milestone 3: self-hosted development", "milestone 3" (`gatewayd`, compilers, server APIs, `std` target, client crates, USERLAND-API "full inventory") | **M4 (self-hosted development)** | |
 | PLAN "After milestone 1": the real-agent harness / escape room (GAME), `gatewayd` | **M4 (self-hosted development)** | the owner's M4 names GAME running continuously and the audit log |
-| "Milestone 2: install, share, persist", "milestone 2", "from milestone 2" (packages, trust lists, user signing, projects, sharing, steward persistence and re-minting, `budget_children`, first-owner enrolment on the console, run-time users, namespace re-walk after restart, A/B updates, M-of-N, rollback counter, audit chaining and the verifier, keys in leases, sealed `keyd` keys) | **M5 (persist, install, share)** | the audit log itself is M4; its chaining and offline verifier are M5 (log retention) |
+| "Milestone 2: install, share, persist", "milestone 2", "from milestone 2" (packages, trust lists, user signing, projects, sharing, steward persistence and re-minting, `budget_children`, first-owner enrolment on the console, run-time users, namespace re-walk after restart, A/B updates, M-of-N, rollback counter, audit chaining and the verifier, keys in leases, sealed `keyd` keys) | **M5 (persist, install, share)** | the audit log starts in M3 for file transfers, covers every steward action from M4, and gets chaining, the offline verifier and retention in M5 (owner decision) |
 | "After milestone 3: rv32" (full-stack rv32 boot) | **beyond M5** (`beyond/rv32.md`) | until then: rv64 boots and rv32 compiles, for every milestone |
 | "SMP (after milestone 1)" | **beyond M5** (`beyond/smp.md`) | the two-hart spike and 4-hart bench cases that exist are documented as built |
 | "Later", "deferred" (disk encryption, swap, ASLR, time donation, taint-on-read, integrity labels, content store, OS debugger, Linux on reserved cores, IOMMU, `linkd`/`routerd`, `webd`, FIDO approvals, FPGA) | **beyond M5** (`beyond/`) | |
@@ -354,7 +354,7 @@ split: the code's behaviour is B with its host and bench tests; running in the s
 - **`servers/steward.md`**: principals [P · M1]; authentication and sessions [P · M1]; leases
   (`MAX_LEASE`, deadline budgets) [P · M1]; the powerbox and approvals (out-of-band channel,
   rendering whitelist, binding, caps) [P · M1]; declassification and push [P · M1]; crash-blame
-  policy [P · M1]; fixed sub-budgets per label set [P · M1]; the audit log [P · M4
+  policy [P · M1]; fixed sub-budgets per label set [P · M1]; the audit log [P · M3 (files in and out) for file transfers; every steward action from M4
   (self-hosted development)]; log retention, chaining and the verifier [P · M5]; persistence
   and re-minting, run-time users and keys, first-owner enrolment [P · M5]; projects and
   sharing [P · M5]. The policy is modelled (`model/src/steward.rs`,
@@ -573,9 +573,10 @@ rule); "dup X" = the same item as X; "+S" = also a SECURITY residual row; milest
 - A-18: servers/netd.md rings; servers/ipd.md `/net`, scope rules, own addresses, labelled callers; serving `admit` (account-0 override); manifest boot part: init.md M1.
 - A-19: ipd.md Why (vendored smoltcp, tenet 5). A-20: ipd.md, netd.md Residual (+S).
 - A-21: kernel/objects.md the four object kinds (no `endpoint_destroy`).
-- A-22, A-24: servers/fsd.md typed operations **Open:** (M1). A-23, A-30: userland/files.md files over 9P **Open:** (M1).
+- A-22, A-24: servers/fsd.md typed operations **Open:** (M1). A-23: userland/files.md files over 9P (M1; decided: refuse visibly, report only real fields). A-30: userland/files.md files over 9P **Open:** (M1).
 - A-25, A-26: userland/native.md pipes **Open:** (M2). A-27: servers/init.md launching, Why; todo/shared-image-pages.md.
 - A-28, A-29: userland/beamlet.md natives **Open:** (M1).
+- A-28 note: userland/native.md places the launch mechanism under M1 (separation and containment), per section A's remap (M1 keeps the launching its attack suite needs); standard I/O, pipes and killing stay M2 (usable shell).
 - A-31: kernel/ipc.md R4. A-32: todo/endpoint-destroyed-open-calls.md; ipc.md Failure and restart. A-33: ipc.md R3.
 - A-34: servers/serving.md minted connections, Residual (+S); todo/account0-share-chain.md (the code calls it an open hole).
 - A-35: kernel/objects.md costs; devices.md device objects. A-36: devices.md R18, boot.md loader, Residual (a device tree that hides a controller; +S). A-37: devices.md Residual (a co-holder keeps its mapping; +S).
@@ -593,10 +594,11 @@ rule); "dup X" = the same item as X; "+S" = also a SECURITY residual row; milest
 - A-68: scheduling.md one flat queue; budgets.md class is trust (latency claim sup A-10). A-69: objects.md handles, costs.
 - A-70: ipc.md R4; wire.md `ninep_common`; serving.md `admit`; testbench checked builds. A-71: serving.md Residual (+S).
 - A-72: boot.md verified boot (R15); init.md key-separation check (M1); pkg.md package domain (M5).
-- A-73: wire.md granting and releasing; init.md arguments (M1); bootfsd.md; keyd.md seeds (M1), sealed keys and keys in leases (M5); steward.md audit log (M4), verifier (M5); serving.md badge allocation. A-74: keyd.md Residual (+S).
+- A-73: wire.md granting and releasing; init.md arguments (M1); bootfsd.md; keyd.md seeds (M1), sealed keys and keys in leases (M5); steward.md audit log (M3 for transfers, M4 for every steward action), verifier (M5); serving.md badge allocation. A-74: keyd.md Residual (+S).
 - A-75: TENETS label non-interference; servers/README.md Labels; GLOSSARY trust domain. A-76: init.md confinement check (M1). A-77: steward.md declassification and push (M1). A-78: steward.md Residual (+S). A-79: TENETS Threat model.
 - A-80: abi.md records. A-81: fsd.md typed operations (M1). A-82, A-83: serving.md parked calls, `admit`. A-84: consoled.md `/dev/cons`. A-85: serving.md conformance corpus.
 - A-86: consoled.md `size` (M2); beamlet.md `Platform` (M1). A-87: userland/shell.md terminal library (M2). A-88: shell.md Why. A-89: serving.md parked calls (push rule); consoled.md `resize`; shell.md (M2). A-90: serving.md parked-call accounting (new R; +S).
+- A-86 note: the item's "cached" is superseded by the later accepted contract (a fresh `consol` `size` call on every query, never cached; `userland/otp/vm/src/platform.rs` agrees); pages follow the later contract.
 - A-91, A-93: ipc.md How a call completes, R13; abi.md register use. A-92: userland/native.md `redoubt-rt`. A-94: serving.md replies and rollback. A-95: plan/m1-separation.md Progress; kernel/model.md replay [P · M1]. A-96: none: provenance.
 - A-97: ipc.md R13. A-98: ipc.md What `receive` returns. A-99: ipc.md R4a (sup A-49). A-100: ipc.md Messages; invariants I12 (scope refined by A-185). A-101: ipc.md R1. A-102: ipc.md R4. A-103: ipc.md R4b.
 - A-104: processes.md exit notices (sup A-171). A-105: ipc.md R1; budgets.md `budget_usage`. A-106: budgets.md root, system, users (sup A-170). A-107: objects.md index 0; processes.md creating and starting. A-108, A-109: budgets.md `budget_usage`, fields. A-110: objects.md costs. A-111: abi.md order of checks.
@@ -610,10 +612,10 @@ rule); "dup X" = the same item as X; "+S" = also a SECURITY residual row; milest
 - A-167: ipc.md R3; budgets R6. A-168: ipc.md R3; GLOSSARY abandoned call. A-169: ipc.md R4 (current). A-170: budgets.md root, system, users; class is trust. A-171: processes.md PID lifetime; objects.md costs. A-172: init.md startup block (current). A-173: budgets.md R6. A-174: boot.md randomness.
 - A-175: steward.md leases (M1). A-176: init.md manifest, servers/README.md holdings; new property (no server gets a budget; M1). A-177: steward.md leases; new property (servers get only revocation scopes; M1). A-178: ipc.md R3, R4a; serving.md `admit`. A-179: processes.md R21 (current blame rule). A-180: wire.md `ninep_common`; serving.md minted.
 - A-181: scheduling.md charging, Residual (+S). A-182: fsd.md quotas (M1); serving.md `admit`. A-183: budgets.md R10; invariants I2. A-184: ipc.md R2. A-185: ipc.md R14; processes.md PIDs; shell.md resource use (M2). A-186: steward.md sub-budgets per label set (M1; new property). A-187: steward.md leases; serving.md `admit`; plan/m1 Attack suite.
-- A-188: steward.md crash-blame policy (M1; new property). A-189: steward.md audit log (M4), approvals notifications (M1; new property). A-190: processes.md creating and starting (exit endpoint must be badge 0: fold into R21 or take the next kernel ID). A-191: sshd.md sessions, Residual (M1; +S; a separate `approve@` instance M5). A-192: keyd.md keys in leases (M5; new property: a badge names one key and one purpose); steward.md.
+- A-188: steward.md crash-blame policy (M1; new property). A-189: steward.md audit log (M3 for transfers, M4 for every steward action), approvals notifications (M1; new property). A-190: processes.md creating and starting (exit endpoint must be badge 0: fold into R21 or take the next kernel ID). A-191: sshd.md sessions, Residual (M1; +S; a separate `approve@` instance M5). A-192: keyd.md keys in leases (M5; new property: a badge names one key and one purpose); steward.md.
 - A-193: sup A-166. A-194: init.md restarts; steward.md crash blame (M1). A-195: wire.md (sup A-18). A-196: processes.md exit notices, R21. A-197: abi.md order of checks. A-198: steward.md declassification (M1). A-199: objects.md handles (dup A-69). A-200: scheduling.md (sup A-68, A-10).
 - A-201: ipc.md R3; invariants I15. A-202: ipc.md R4a (current). A-203: processes.md PID lifetime. A-204: ipc.md R4 (sup A-213). A-205: wire.md `ninep_common`; init.md `startup` table. A-206: invariants I15. A-207: processes.md R21. A-208: objects.md costs. A-209: init.md startup block. A-210, A-211: wire.md. A-212: abi.md records. A-213: ipc.md R4.
-- A-214: wire.md `ninep_common`; serving.md minted; fsd.md quotas (M1). A-215: serving.md Residual; fsd.md quotas (+S; dup A-71). A-216: TENETS tenet 6; testbench checked builds. A-217: dup A-72. A-218: wire.md granting and releasing; init.md restarts (M1). A-219: init.md manifest (M1). A-220: bootfsd.md; keyd.md Residual (+S). A-221: keyd.md keys in leases (M5); steward.md leases (M1). A-222: steward.md audit log (M4), retention and verifier (M5). A-223: serving.md badge allocation (dup A-73).
+- A-214: wire.md `ninep_common`; serving.md minted; fsd.md quotas (M1). A-215: serving.md Residual; fsd.md quotas (+S; dup A-71). A-216: TENETS tenet 6; testbench checked builds. A-217: dup A-72. A-218: wire.md granting and releasing; init.md restarts (M1). A-219: init.md manifest (M1). A-220: bootfsd.md; keyd.md Residual (+S). A-221: keyd.md keys in leases (M5); steward.md leases (M1). A-222: steward.md audit log (M3 for transfers, M4 for every steward action), chaining, retention and verifier (M5). A-223: serving.md badge allocation (dup A-73).
 - A-224 to A-257: duplicates of A-4, A-21, A-22 to A-41, A-75, A-79, A-76, A-77/78, A-80 to A-85, A-89, mapped as their originals (A-224=A-4, A-225=A-21, A-226=A-22, A-227=A-23, A-228=A-24, A-229=A-25, A-230=A-26, A-231=A-27, A-232=A-28, A-233=A-29, A-234=A-30, A-235=A-31, A-236=A-32, A-237=A-33, A-238=A-34, A-239=A-35, A-240=A-36, A-241=A-37, A-242=A-38, A-243=A-39, A-244=A-40, A-245=A-41, A-246=A-42, A-247=A-75, A-248=A-79, A-249=A-76, A-250=A-77 and A-78, A-251=A-80, A-252=A-81, A-253=A-82, A-254=A-83, A-255=A-84, A-256=A-85, A-257=A-89).
 - A-258: none: provenance. A-259=A-86. A-260=A-43. A-261=A-44 and A-45. A-262=A-46. A-263: scheduling.md ties (settled by A-10). A-264=A-91. A-265=A-93 and A-94.
 - A-266, A-267: native.md `redoubt-rt`; ipc.md R4 (resolved). A-268: ipc.md R13; abi.md records. A-269: testbench unsafe budget. A-270: serving.md replies and rollback. A-271: todo/mmio-record-frames.md; abi.md records, Residual (+S; the record check confirms RAM, but only some calls' records are attacked at a device mapping). A-272: todo/consoled-unknown-request-handles.md; consoled.md Residual.
@@ -1053,7 +1055,8 @@ lines starting `#`..`######` and a space, outside fences.
 4. The optional `· tested:` tail on "partly tested" status lines (S3).
 5. Milestone placements the brief does not state: name-scoped TCP for people and the resolver in
    M4 (self-hosted development); console `size` and `resize` in M2 (usable shell); the audit log
-   in M4, its chaining, verifier and retention in M5 (persist, install, share); model replay on
+   in M3 (files in and out) for file transfers and M4 for every steward action (owner decision),
+   its chaining, verifier and retention in M5 (persist, install, share); model replay on
    the real kernel in M1 (separation and containment).
 6. Mermaid JavaScript assets in `docs/theme/` (G).
 7. `beyond/browser-gui.md` records `webd` as conflicting with the no-GUI non-goal rather than
