@@ -197,15 +197,6 @@ impl Process {
     pub fn activate(&mut self) -> Result<(), redoubt_abi::Error> { Ok(()) }
 
     /// Calls the provided function with the current inner process state.
-    pub fn with_inner<F, R>(f: F) -> R
-    where
-        F: FnOnce(&ProcessInner) -> R,
-    {
-        let process = process_impl();
-        f(&process.inner)
-    }
-
-    /// Calls the provided function with the current inner process state.
     pub fn with_current<F, R>(f: F) -> R
     where
         F: FnOnce(&Process) -> R,

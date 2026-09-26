@@ -47,7 +47,6 @@ print-panics = []
 dump-kernel-pages = []                              # include kernel pages in panic dumps
 report-memory = ["stats_alloc"]
 wrap-print = []
-big-heap = []                                       # Cause heaps to start at 12 MM instead of 512 kB
 # this is somewhat unsafe because it introduces more attack surface for the kernel by allowing the
 # userspace to hand it a random page from the caller's virtual memory space, and populate it with debug information
 debug-proc = []

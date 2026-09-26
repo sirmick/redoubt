@@ -59,10 +59,7 @@ pub fn memory_range(addr: usize, size: usize) -> Result<MemoryRange, redoubt_abi
 pub struct MemoryManager {
     ram_start: usize,
     ram_size: usize,
-    #[allow(dead_code)]
     ram_name: u32,
-    #[allow(dead_code)]
-    last_ram_page: usize,
     /// Who owns each page of RAM, indexed by page number within RAM. The loader builds
     /// this table and hands it over in `init_from_memory`.
     allocations: &'static mut [RamAllocation],
@@ -114,7 +111,6 @@ impl MemoryManager {
             ram_start: 0,
             ram_size: 0,
             ram_name: 0,
-            last_ram_page: 0,
             allocations: &mut [],
             extra_allocations: &mut [],
             extra_regions: &[],
@@ -333,13 +329,8 @@ impl MemoryManager {
         // let process = Process::current();
         Process::with_inner_mut(|process_inner| {
             let (start, end, initial) = match kind {
-                redoubt_abi::MemoryType::Stack => return Err(redoubt_abi::Error::BadAddress),
-                redoubt_abi::MemoryType::Heap => {
-                    let new_virt = process_inner.mem_heap_base + process_inner.mem_heap_size + PAGE_SIZE;
-                    if new_virt + size > process_inner.mem_heap_base + process_inner.mem_heap_max {
-                        return Err(redoubt_abi::Error::OutOfMemory);
-                    }
-                    return Ok(new_virt as *mut u8);
+                redoubt_abi::MemoryType::Stack | redoubt_abi::MemoryType::Heap => {
+                    return Err(redoubt_abi::Error::BadAddress);
                 }
                 redoubt_abi::MemoryType::Default => (
                     process_inner.mem_default_base,
@@ -448,11 +439,11 @@ impl MemoryManager {
     ///
     /// No platform we target (QEMU virt) has peripheral RAM, so this is always false; it is
     /// kept as the extension point for one that does.
-    #[allow(dead_code)]
     pub fn is_peripheral_ram(&self, _phys: usize) -> bool { false }
 
-    /// Attempt to map the given physical address into the virtual address space
-    /// of this process.
+    /// Map the device registers at `phys` into the virtual address space of `pid` (the kernel's
+    /// own: the PLIC). Nothing here reserves pages to back later: reservations are only the
+    /// loader programs' stacks (`reserve_range`, the Setup path).
     ///
     /// # Errors
     ///
@@ -468,12 +459,6 @@ impl MemoryManager {
     ) -> Result<redoubt_abi::MemoryRange, redoubt_abi::Error> {
         let phys = phys_ptr as usize;
         let virt = self.find_virtual_address(virt_ptr, size, kind)?;
-
-        // If no physical address is specified, give the user the next available pages.
-        // Contiguous RAM for a device is `dma_alloc`'s (device.rs), through a device handle.
-        if phys == 0 {
-            return self.reserve_range(virt, size, flags);
-        }
 
         // 1. Attempt to claim all physical pages in the range
         for claim_phys in (phys..(phys + size)).step_by(PAGE_SIZE) {
@@ -505,96 +490,6 @@ impl MemoryManager {
         }
 
         crate::mem::memory_range(virt as usize, size)
-    }
-
-    /// Attempt to map the given physical address into the virtual address space
-    /// of this process.
-    ///
-    /// # Errors
-    ///
-    /// * MemoryInUse - The specified page is already mapped
-    pub fn unmap_page(&mut self, virt: *mut usize) -> Result<usize, redoubt_abi::Error> {
-        let pid = crate::arch::process::current_pid();
-
-        // If the virtual address has an assigned physical address, release that
-        // address from this process.
-        if let Ok(phys) = crate::arch::mem::virt_to_phys(virt as usize) {
-            self.release_page(phys as *mut usize, pid).ok();
-        }
-
-        // Free the virtual address.
-        crate::arch::mem::unmap_page_inner(self, virt as usize)
-    }
-
-    /// Move a page from one process into another, keeping its permissions.
-    #[allow(dead_code)]
-    pub fn move_page(
-        &mut self,
-        src_pid: PID,
-        src_mapping: &MemoryMapping,
-        src_addr: *mut u8,
-        dest_pid: PID,
-        dest_mapping: &MemoryMapping,
-        dest_addr: *mut u8,
-    ) -> Result<(), redoubt_abi::Error> {
-        let phys_addr = crate::arch::mem::virt_to_phys(src_addr as usize)?;
-        crate::arch::mem::move_page_inner(self, src_mapping, src_addr, dest_pid, dest_mapping, dest_addr)?;
-        self.claim_release_move(phys_addr as *mut usize, dest_pid, ClaimReleaseMove::Move(src_pid))
-    }
-
-    #[allow(dead_code)]
-    /// Move the page in the process mapping listing without manipulating
-    /// the pagetables at all.
-    pub fn move_page_raw(&mut self, phys_addr: *mut usize, dest_pid: PID) -> Result<(), redoubt_abi::Error> {
-        self.claim_release_move(
-            phys_addr as *mut usize,
-            dest_pid,
-            ClaimReleaseMove::Move(crate::arch::process::current_pid()),
-        )
-    }
-
-    /// Mark the page in the current process as being lent.  If the borrow is
-    /// read-only, then additionally remove the "write" bit on it.  If the page
-    /// is writable, then remove it from the current process until the borrow is
-    /// returned.
-    #[allow(dead_code)]
-    pub fn lend_page(
-        &mut self,
-        src_mapping: &MemoryMapping,
-        src_addr: *mut u8,
-        dest_pid: PID,
-        dest_mapping: &MemoryMapping,
-        dest_addr: *mut u8,
-        mutable: bool,
-    ) -> Result<usize, redoubt_abi::Error> {
-        // If this page is to be writable, detach it from this process.
-        // Otherwise, mark it as read-only to prevent a process from modifying
-        // the page while it's borrowed.
-        crate::arch::mem::lend_page_inner(
-            self,
-            src_mapping,
-            src_addr as _,
-            dest_pid,
-            dest_mapping,
-            dest_addr as _,
-            mutable,
-        )
-    }
-
-    /// Return the range from `src_mapping` back to `dest_mapping`
-    #[allow(dead_code)]
-    pub fn unlend_page(
-        &mut self,
-        src_mapping: &MemoryMapping,
-        src_addr: *mut u8,
-        dest_pid: PID,
-        dest_mapping: &MemoryMapping,
-        dest_addr: *mut u8,
-    ) -> Result<usize, redoubt_abi::Error> {
-        // If this page is to be writable, detach it from this process.
-        // Otherwise, mark it as read-only to prevent a process from modifying
-        // the page while it's borrowed.
-        crate::arch::mem::return_page_inner(self, src_mapping, src_addr, dest_pid, dest_mapping, dest_addr)
     }
 
     /// A frame changes hands between two processes that are not the running one: a transfer
@@ -857,47 +752,6 @@ impl MemoryManager {
         self.uncharge_all_frames(pid);
     }
 
-    /// Adjust the flags on the given memory range. This allows for stripping flags from a memory
-    /// range but does not allow adding flags. The memory range must exist, and the flags must be valid.
-    pub fn update_memory_flags(
-        &mut self,
-        range: MemoryRange,
-        flags: MemoryFlags,
-    ) -> Result<(), redoubt_abi::Error> {
-        let virt = range.as_mut_ptr() as usize;
-        let size = range.len();
-        if virt & (PAGE_SIZE - 1) != 0 {
-            return Err(redoubt_abi::Error::BadAlignment);
-        }
-
-        if size & (PAGE_SIZE - 1) != 0 {
-            return Err(redoubt_abi::Error::BadAlignment);
-        }
-
-        // Pre-check the range to ensure the new flags are valid
-        for virt in (virt..(virt + size)).step_by(PAGE_SIZE) {
-            let existing_flags = crate::arch::mem::page_flags(virt).ok_or(redoubt_abi::Error::MemoryInUse)?;
-            // If the new flags add to the range, return an error.
-            if !(!existing_flags & flags).is_empty() {
-                return Err(redoubt_abi::Error::MemoryInUse);
-            }
-        }
-
-        // Now that the flags are validated, perform the update. This is fine as long as
-        // we're unicore.
-        for virt in (virt..(virt + size)).step_by(PAGE_SIZE) {
-            let existing_flags = crate::arch::mem::page_flags(virt).ok_or(redoubt_abi::Error::MemoryInUse)?;
-            // If the new flags add to the range, return an error.
-            if !(!existing_flags & flags).is_empty() {
-                return Err(redoubt_abi::Error::MemoryInUse);
-            }
-
-            crate::arch::mem::update_page_flags(virt, flags)?;
-        }
-
-        Ok(())
-    }
-
     pub fn check_for_duplicates(&self) {
         use crate::services::SystemServices;
 
@@ -993,17 +847,16 @@ impl MemoryManager {
 
 // --- The Redoubt memory calls (KERNEL-SPEC.md; R11) ------------------------------------------
 //
-// `map_anon`, `unmap` and `set_flags`, which replace the legacy `MapMemory`/`UnmapMemory`/
-// `UpdateMemoryFlags` for Redoubt programs (WP-K6 deletes those). Three rules of R11 shape
-// them: no mapping is ever writable and executable (`Pte::leaf` refuses it, as decoding
-// already did), every page is zeroed before a process first sees it, and **userspace never
-// names an address**: the kernel chooses where each mapping lands, so none of these calls
-// takes a physical address and only `map_anon` returns a virtual one.
+// `map_anon`, `unmap` and `set_flags`. Three rules of R11 shape them: no mapping is ever
+// writable and executable (`Pte::leaf` refuses it, as decoding already did), every page is
+// zeroed before a process first sees it, and **userspace never names an address**: the kernel
+// chooses where each mapping lands, so none of these calls takes a physical address and only
+// `map_anon` returns a virtual one.
 //
 // `map_anon` backs and charges every page at once rather than reserving it for demand paging.
 // The spec's row says "pages charged", and a process that is told it has memory and then
-// faults for want of it has been told a lie; the legacy path's reservations stay where they
-// are, for the legacy path.
+// faults for want of it has been told a lie. The only reservations are the loader programs'
+// stacks (`reserve_range`, the Setup path).
 impl MemoryManager {
     /// A range argument: page-aligned, non-empty, and wholly inside user space. Its end.
     fn user_range(addr: usize, len: usize) -> Result<usize, redoubt_sys::Error> {
