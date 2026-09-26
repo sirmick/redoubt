@@ -203,6 +203,12 @@ recipes remain in git.
 - Accepted when: the bench passes with no legacy calls; the `unsafe` ratchet is lower than before
   WP-K1; kernel line count reported.
 - Needs: WP-K1 to WP-K5, WP-R1b.
+- Acceptance (wave 6, against redoubt d6715b8f0): the bench has no legacy caller, and
+  `legacy-gone` shows every legacy call number refused as unknown on both widths. Kernel
+  `unsafe` 54 -> 44 (Sv39/SBI/PLIC 16 -> 13, arch 12 -> 12, core 26 -> 19), below the like-for-like
+  pre-K1 58; redoubt-abi's 52 (44 undocumented) -> redoubt-layout's 0. Lines: kernel/src
+  18,469 -> 10,403 (arch/hosted's 1,053 among them); libs/abi, flatipc and flatipc-derive 8,287
+  -> libs/layout 98.
 
 **WP-IPC1. Observable IPC ownership and delivery (answers 167-168).** Size L.
 - The implementation is integrated. Remaining work closes the acceptance gates below and fixes
