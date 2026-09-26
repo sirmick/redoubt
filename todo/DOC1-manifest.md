@@ -94,7 +94,9 @@ I16 DMA pages reset before reuse.
   kernel follow-up package). Short names are the parentheses of the defining headings. The
   servers set starts at R25.
 - **Servers list (as written):** R25 the label check, R26 admission fairness, R27 badge
-  allocation, R28 parked-call accounting (serving.md).
+  allocation, R28 parked-call accounting (serving.md); R29 strict decoding, R30 one layout per
+  message (wire.md); R31 startup block checked whole, R32 a hostile image hurts only its process,
+  R33 no server holds a system budget, R34 confined placement, R35 key separation (init.md).
 - The servers set takes the next free numbers, in the order its pages are written (the
   userland template has no Security properties section, so userland pages only cite).
 - `rule F` stays on `docs/testbench.md`.
