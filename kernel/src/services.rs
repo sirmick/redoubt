@@ -6,15 +6,11 @@ use core::num::NonZeroU8;
 use redoubt_abi::arch::*;
 // use core::mem;
 use redoubt_abi::{CID, Error, MemoryAddress, Message, PID, SID, TID, ThreadInit};
-#[cfg(not(baremetal))]
-use redoubt_abi::{ProcessInit, pid_from_usize};
 
 use crate::arch;
 use crate::arch::mem::MemoryMapping;
 pub use crate::arch::process::Process as ArchProcess;
-#[cfg(not(any(windows, unix)))]
 pub use crate::arch::process::Thread;
-#[cfg(baremetal)]
 use crate::cell::KernelCell;
 use crate::filled_array;
 use crate::platform;
@@ -41,11 +37,9 @@ const MINIELF_FLG_W: u8 = 1;
 const MINIELF_FLG_NC: u8 = 2;
 #[allow(dead_code)]
 const MINIELF_FLG_X: u8 = 4;
-#[cfg(baremetal)]
 const MINIELF_FLG_EHF: u8 = 8;
 
 #[derive(Debug)]
-#[allow(dead_code)] // suppresses unused warnings in hosted mode
 pub enum CallbackType {
     /// args: irq_no, arg
     Interrupt(usize, *mut usize),
@@ -243,11 +237,6 @@ impl Default for ProcessInner {
 }
 
 impl Process {
-    /// This process has at least one context that may be run
-    #[cfg(not(baremetal))]
-    pub fn runnable(&self) -> bool {
-        matches!(self.state, ProcessState::Setup(_) | ProcessState::Ready(_) | ProcessState::Exception(_))
-    }
 
     /// This process slot is unallocated and may be turn into a process
     pub fn free(&self) -> bool { matches!(self.state, ProcessState::Free) }
@@ -287,9 +276,7 @@ impl Process {
             unsafe { mm.release_all_memory_for_process(self.pid, &self.mapping) };
             // Its DMA frames are pooled only once every device that could hold their address
             // confirms a reset, or quarantined for ever (WP-K5b, `dma.rs`).
-            #[cfg(baremetal)]
             mm.dma_release(self.pid);
-            #[cfg(baremetal)]
             mm.process_ended(self.pid);
         });
 
@@ -308,24 +295,7 @@ impl Process {
     }
 }
 
-#[cfg(not(baremetal))]
-std::thread_local!(static SYSTEM_SERVICES: core::cell::RefCell<SystemServices> = core::cell::RefCell::new(SystemServices {
-    processes: [Process {
-        state: ProcessState::Free,
-        ppid: KERNEL_PID,
-        pid: KERNEL_PID,
-        mapping: arch::mem::DEFAULT_MEMORY_MAPPING,
-        current_thread: 0_usize,
-        previous_thread: INITIAL_TID as TID,
-        exception_handler: None,
-    }; MAX_PROCESS_COUNT],
-    // Note we can't use MAX_SERVER_COUNT here because of how Rust's
-    // macro tokenization works
-    servers: filled_array![None; 128],
-}));
-
 /// Taken before `MEMORY_MANAGER`, never after it: the lock order is stated there (mem.rs).
-#[cfg(baremetal)]
 static SYSTEM_SERVICES: KernelCell<SystemServices> = KernelCell::new(SystemServices {
     processes: [Process {
         state: ProcessState::Free,
@@ -358,7 +328,6 @@ impl core::fmt::Debug for Process {
 /// its page tables and check that it is free. With the source already backed (and, for a move,
 /// owned by the sender), each transfer in the loop can then no longer fail, so running out of
 /// memory, or a destination already in use, refuses the whole transfer with nothing changed.
-#[cfg(baremetal)]
 fn prepare_destination(
     mm: &mut crate::mem::MemoryManager,
     dest_mapping: &arch::mem::MemoryMapping,
@@ -378,27 +347,19 @@ impl SystemServices {
     where
         F: FnOnce(&SystemServices) -> R,
     {
-        #[cfg(baremetal)]
-        return SYSTEM_SERVICES.with(|ss| f(ss));
-        #[cfg(not(baremetal))]
-        SYSTEM_SERVICES.with(|ss| f(&ss.borrow()))
+        SYSTEM_SERVICES.with(|ss| f(ss))
     }
 
     pub fn with_mut<F, R>(f: F) -> R
     where
         F: FnOnce(&mut SystemServices) -> R,
     {
-        #[cfg(baremetal)]
-        return SYSTEM_SERVICES.with(f);
-
-        #[cfg(not(baremetal))]
-        SYSTEM_SERVICES.with(|ss| f(&mut ss.borrow_mut()))
+        SYSTEM_SERVICES.with(f)
     }
 
     /// Create a new "System Services" object based on the arguments from the
     /// kernel. These arguments decide where the memory spaces are located, as
     /// well as where the stack and program counter should initially go.
-    #[cfg(baremetal)]
     pub fn init_from_memory(&mut self, base: *const u32, args: &crate::args::KernelArguments) {
         // Look through the kernel arguments and create a new process for each.
         let init_offsets = {
@@ -487,10 +448,7 @@ impl SystemServices {
                 }
 
                 let arg0 = eh_frame as _;
-                #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
                 let arg1 = init.env as _;
-                #[cfg(not(any(target_arch = "riscv32", target_arch = "riscv64")))]
-                let arg1 = 0;
                 let arg2 = 0;
                 let arg3 = 0;
 
@@ -518,59 +476,9 @@ impl SystemServices {
             .expect("couldn't setup process");
     }
 
-    /// Add a new entry to the process table. This results in a new address space
-    /// and a new PID, though the process is in the state `Setup()`. Hosted only: on bare metal
-    /// processes come from the loader until WP-K4's `process_create`.
-    #[cfg(not(baremetal))]
-    pub fn create_process(
-        &mut self,
-        init_process: ProcessInit,
-    ) -> Result<ProcessStartup, redoubt_abi::Error> {
-        let mut entry_idx = None;
-        let mut new_pid = None;
-        let _ppid = crate::arch::process::current_pid();
-
-        for (idx, entry) in self.processes.iter_mut().enumerate() {
-            if entry.state != ProcessState::Free {
-                continue;
-            }
-            entry_idx = Some(idx);
-            new_pid = Some(pid_from_usize(idx + 1)?);
-            entry.pid = new_pid.unwrap();
-            entry.ppid = PID::new(1).unwrap();
-            entry.state = ProcessState::Allocated;
-            // `allocate` is a safe function on Sv39 and an unsafe one on Sv32.
-            #[allow(unused_unsafe)]
-            // SAFETY: `allocate` is a safe fn on Sv39 and unsafe on Sv32; the unsafe covers only the latter.
-            unsafe {
-                entry.mapping.allocate(new_pid.unwrap()).or(Err(redoubt_abi::Error::InternalError))?
-            };
-            break;
-        }
-        if entry_idx.is_none() {
-            return Err(redoubt_abi::Error::ProcessNotFound);
-        }
-        let new_pid = new_pid.unwrap();
-        let startup = arch::process::Process::create(new_pid, init_process, self).unwrap();
-
-        #[cfg(baremetal)]
-        {
-            let entry = &mut self.processes[entry_idx.unwrap()];
-            // The `Process::create()` call above set up the process so that it will
-            // be ready to run right away, meaning we will not need to first set
-            // the state to `ProcessState::Allocated` and we can go straight to running
-            // this process.
-            entry.state = ProcessState::Ready(1 << INITIAL_TID);
-        }
-        // entry.ppid = _ppid;
-        klog!("created new process for PID {} with PPID {}", new_pid, _ppid);
-        return Ok(startup);
-    }
-
     /// WP-K4: give `pid` a slot in the process table and an address space, without a thread.
     /// The caller has already reserved the process against its budget (`budget.rs`); everything
     /// the address space takes is charged to that budget as it is allocated.
-    #[cfg(baremetal)]
     pub fn allocate_process_slot(
         &mut self,
         mm: &mut crate::mem::MemoryManager,
@@ -602,7 +510,6 @@ impl SystemServices {
 
     /// WP-K4: give back the slot of a process that never started (a `process_create` that failed
     /// after its address space was made). Its frames have already been released.
-    #[cfg(baremetal)]
     pub fn free_process_slot(&mut self, pid: PID) {
         ArchProcess::destroy(pid).ok();
         if let Some(entry) = self.processes.get_mut(pid.get() as usize - 1) {
@@ -612,7 +519,6 @@ impl SystemServices {
     }
 
     /// WP-K4: `process_start` has set up the first thread; the process becomes runnable.
-    #[cfg(baremetal)]
     pub fn start_process(&mut self, pid: PID) -> Result<(), redoubt_abi::Error> {
         let process = self.get_process_mut(pid)?;
         match process.state {
@@ -627,7 +533,6 @@ impl SystemServices {
     /// WP-K4: `thread_create(entry, sp, arg) -> tid` (KERNEL-SPEC.md). As `create_thread`,
     /// without the legacy `ThreadInit`: a Redoubt thread is given a stack pointer, not a stack
     /// to reserve, and the calling thread keeps running with the new thread's id as its result.
-    #[cfg(baremetal)]
     pub fn create_redoubt_thread(
         &mut self,
         pid: PID,
@@ -657,7 +562,7 @@ impl SystemServices {
         if pid_idx >= self.processes.len() {
             return Err(redoubt_abi::Error::ProcessNotFound);
         }
-        if cfg!(baremetal) && self.processes[pid_idx].mapping.get_pid() != Some(pid) {
+        if self.processes[pid_idx].mapping.get_pid() != Some(pid) {
             Err(redoubt_abi::Error::ProcessNotFound)
         } else if self.processes[pid_idx].state == ProcessState::Free {
             Err(redoubt_abi::Error::ProcessNotFound)
@@ -672,7 +577,7 @@ impl SystemServices {
         if pid_idx >= self.processes.len() {
             return Err(redoubt_abi::Error::ProcessNotFound);
         }
-        if cfg!(baremetal) && self.processes[pid_idx].mapping.get_pid() != Some(pid) {
+        if self.processes[pid_idx].mapping.get_pid() != Some(pid) {
             Err(redoubt_abi::Error::ProcessNotFound)
         } else if self.processes[pid_idx].state == ProcessState::Free {
             Err(redoubt_abi::Error::ProcessNotFound)
@@ -687,7 +592,6 @@ impl SystemServices {
     /// 1. Pause the current process and switch to the new one
     /// 2. Save the process state, if it hasn't already been saved
     /// 3. Run the new process, returning to an illegal instruction
-    #[cfg(baremetal)]
     pub fn finish_callback_and_resume(&mut self, pid: PID, tid: TID) -> Result<(), redoubt_abi::Error> {
         // Get the current process (which was the interrupt handler) and mark it
         // as Ready.  Note that the new PID may very well be the same PID.
@@ -743,7 +647,6 @@ impl SystemServices {
     /// 1. Pause the current process and switch to the new one
     /// 2. Save the process state, if it hasn't already been saved
     /// 3. Run the new process, returning to an illegal instruction
-    #[cfg(baremetal)]
     pub fn make_callback_to(
         &mut self,
         pid: PID,
@@ -1011,8 +914,6 @@ impl SystemServices {
                 }
 
                 // Activate this process on this CPU
-                #[cfg(not(baremetal))]
-                process.activate()?;
                 ArchProcess::current().set_tid(new_thread)?;
                 process.current_thread = new_thread as _;
                 ProcessState::Running(ready_threads & !(1 << new_thread))
@@ -1050,21 +951,9 @@ impl SystemServices {
                 "PID {} thread {} was already queued for running when `unschedule_thread()` was called",
                 pid, tid
             ),
-            ProcessState::Running(0) => {
-                if cfg!(baremetal) {
-                    ProcessState::Sleeping
-                } else {
-                    ProcessState::Running(0)
-                }
-            }
+            ProcessState::Running(0) => ProcessState::Sleeping,
             ProcessState::Exception(x) => ProcessState::BlockedException(x),
-            ProcessState::Running(x) => {
-                if cfg!(baremetal) {
-                    ProcessState::Ready(x)
-                } else {
-                    ProcessState::Running(x)
-                }
-            }
+            ProcessState::Running(x) => ProcessState::Ready(x),
             other => {
                 panic!("PID {} TID {} was not in a state to be switched from: {:?}", pid, tid, other);
             }
@@ -1432,7 +1321,6 @@ impl SystemServices {
     ///
     /// If the memory should have been able to go into the destination process
     /// but failed, then the system panics.
-    #[cfg(baremetal)]
     pub fn send_memory(
         &mut self,
         src_virt: *mut usize,
@@ -1514,17 +1402,6 @@ impl SystemServices {
         .map(|val| val as *mut usize)
     }
 
-    #[cfg(not(baremetal))]
-    pub fn send_memory(
-        &mut self,
-        src_virt: *mut usize,
-        _dest_pid: PID,
-        _dest_virt: *mut usize,
-        _len: usize,
-    ) -> Result<*mut usize, redoubt_abi::Error> {
-        Ok(src_virt)
-    }
-
     /// Lend memory from one process to another.
     ///
     /// During this process, memory is marked as `Shared` in the source process.
@@ -1549,7 +1426,6 @@ impl SystemServices {
     /// * **ShareViolation**: Tried to mutably share a region that was already shared
     /// * **BadAddress**: The provided address was not valid
     /// * **BadAlignment**: The provided address or length was not page-aligned
-    #[cfg(baremetal)]
     pub fn lend_memory(
         &mut self,
         src_virt: *mut usize,
@@ -1644,18 +1520,6 @@ impl SystemServices {
         .map(|val| val as *mut usize)
     }
 
-    #[cfg(not(baremetal))]
-    pub fn lend_memory(
-        &mut self,
-        src_virt: *mut usize,
-        _dest_pid: PID,
-        _dest_virt: *mut usize,
-        _len: usize,
-        _mutable: bool,
-    ) -> Result<*mut usize, redoubt_abi::Error> {
-        Ok(src_virt)
-    }
-
     /// Return memory from one process back to another
     ///
     /// During this process, memory is unmapped from the source process.
@@ -1667,7 +1531,6 @@ impl SystemServices {
     /// # Errors
     ///
     /// * **ShareViolation**: Tried to mutably share a region that was already shared
-    #[cfg(baremetal)]
     pub fn return_memory(
         &mut self,
         src_virt: *mut usize,
@@ -1747,32 +1610,6 @@ impl SystemServices {
         .map(|val| val as *mut usize)
     }
 
-    #[cfg(not(baremetal))]
-    pub fn return_memory(
-        &mut self,
-        src_virt: *mut usize,
-        dest_pid: PID,
-        dest_tid: TID,
-        _dest_virt: *mut usize,
-        len: usize,
-        // buf: MemoryRange,
-    ) -> Result<*mut usize, redoubt_abi::Error> {
-        let buf = crate::mem::memory_range(src_virt as usize, len)?;
-        // SAFETY: `buf` is a MemoryRange the caller lent; it describes a mapped, page-aligned region.
-        let buf = unsafe { buf.as_slice() };
-        let current_pid = self.current_pid();
-        {
-            let target_process = self.get_process(dest_pid)?;
-            target_process.activate()?;
-            let mut arch_process = ArchProcess::current();
-            arch_process.return_memory(dest_tid, buf);
-        }
-        let target_process = self.get_process(current_pid)?;
-        target_process.activate()?;
-
-        Ok(src_virt as *mut usize)
-    }
-
     /// Create a new thread in the current process.  Execution begins at
     /// `entrypoint`, with the stack pointer set to `stack_pointer`.  A single
     /// argument will be passed to the new function.
@@ -1791,11 +1628,9 @@ impl SystemServices {
         let new_tid = arch_process.find_free_thread().ok_or(redoubt_abi::Error::ThreadNotAvailable)?;
 
         // A thread costs its budget a page (R6).
-        #[cfg(baremetal)]
         crate::mem::MemoryManager::with_mut(|mm| mm.thread_created(pid, new_tid))
             .map_err(|_| redoubt_abi::Error::OutOfMemory)?;
         arch_process.setup_thread(new_tid, thread_init).inspect_err(|_| {
-            #[cfg(baremetal)]
             crate::mem::MemoryManager::with_mut(|mm| mm.thread_ended(pid, new_tid));
         })?;
 
@@ -1821,7 +1656,6 @@ impl SystemServices {
     /// # Errors
     ///
     /// * **ThreadNotAvailable**: The thread does not exist in this process
-    #[cfg(baremetal)]
     pub fn destroy_thread(&mut self, pid: PID, tid: TID) -> Result<bool, redoubt_abi::Error> {
         let current_pid = self.current_pid();
         assert_eq!(pid, current_pid);
@@ -1937,14 +1771,10 @@ impl SystemServices {
 
         for entry in self.servers.iter_mut() {
             if *entry == None {
-                #[cfg(baremetal)]
                 // Allocate a single page for the server queue
                 let backing = crate::mem::MemoryManager::with_mut(|mm| {
                     crate::mem::memory_range(mm.map_zeroed_page(pid, false)? as _, PAGE_SIZE)
                 })?;
-
-                #[cfg(not(baremetal))]
-                let backing = crate::mem::memory_range(4096, 4096).unwrap();
 
                 // klog!("initializing new server with backing at {:x?} -- entry is {:?} (connect? {:?})",
                 // backing, *entry, connect); Initialize the server with the given memory
@@ -2302,7 +2132,6 @@ impl SystemServices {
         process.activate()?;
         let parent_pid = process.ppid;
         process.terminate()?;
-        #[cfg(baremetal)]
         crate::mem::MemoryManager::with_mut(|mm| crate::message::destroy_quarantined_devices(self, mm));
 
         self.switch_to_thread(parent_pid, None).unwrap();
@@ -2365,7 +2194,6 @@ impl SystemServices {
     /// destroyed budget), which keeps running: the same teardown as `terminate_process`, then
     /// the running process's address space is active again. `target` must not be the running
     /// process.
-    #[cfg(baremetal)]
     pub fn kill_process(&mut self, target: PID) -> Result<(), redoubt_abi::Error> {
         let current = self.current_pid();
         assert!(target != current, "kill_process on the running process");
@@ -2419,7 +2247,6 @@ impl SystemServices {
     ///     1. The process does not exist
     ///     2. The process has no exception handler
     ///     3. The process is not "Running" or "Ready"
-    #[cfg(baremetal)]
     #[allow(dead_code)]
     pub fn begin_exception_handler(&mut self, pid: PID) -> Option<ExceptionHandler> {
         let process = self.get_process_mut(pid).ok()?;
@@ -2439,7 +2266,6 @@ impl SystemServices {
 
     /// Move the current process from an `Exception` state back into a `Running` state
     /// with the current thread being marked as the given tid.
-    #[cfg(baremetal)]
     pub fn finish_exception_handler_and_resume(&mut self, pid: PID) -> Result<(), redoubt_abi::Result> {
         let process = self.get_process_mut(pid)?;
         if let ProcessState::Exception(threads) = process.state {
@@ -2454,7 +2280,6 @@ impl SystemServices {
     }
 
     /// Returns the process name, if any, of a given PID
-    #[cfg(baremetal)]
     pub fn process_name(&self, pid: PID) -> Option<&str> {
         let args = crate::args::KernelArguments::get();
         for arg in args.iter() {

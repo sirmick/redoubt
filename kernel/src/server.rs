@@ -29,10 +29,7 @@ pub struct Server {
     tail_generation: u8,
 
     /// Where data will appear
-    #[cfg(baremetal)]
     queue: &'static mut [QueuedMessage],
-    #[cfg(not(baremetal))]
-    queue: Vec<QueuedMessage>,
 
     /// The `context mask` is a bitfield of contexts that are able to handle
     /// this message. If there are no available contexts, then messages will
@@ -264,23 +261,12 @@ impl Server {
             return Err(redoubt_abi::Error::MemoryInUse);
         }
 
-        #[cfg(baremetal)]
         // SAFETY: `backing` is a page the kernel just allocated for this server's message queue.
         let queue = unsafe {
             core::slice::from_raw_parts_mut(
                 _backing.as_mut_ptr() as *mut QueuedMessage,
                 _backing.len() / mem::size_of::<QueuedMessage>(),
             )
-        };
-
-        #[cfg(not(baremetal))]
-        let queue = {
-            let mut queue = vec![];
-            // TODO: Replace this with a direct operation on a passed-in page
-            queue.resize_with(redoubt_abi::arch::PAGE_SIZE / mem::size_of::<QueuedMessage>(), || {
-                QueuedMessage::Empty
-            });
-            queue
         };
 
         *new = Some(Server {
@@ -341,9 +327,6 @@ impl Server {
                         let mut result = Ok(redoubt_abi::Result::Ok);
                         let virt = server_memory_addr;
                         let size = memory_length;
-                        if !cfg!(baremetal) && virt & 0xfff != 0 {
-                            return Err(redoubt_abi::Error::BadAlignment);
-                        }
                         for addr in (virt..(virt + size)).step_by(redoubt_abi::arch::PAGE_SIZE) {
                             if let Err(e) = mm.unmap_page(addr as *mut usize) {
                                 if result.is_ok() {
@@ -457,7 +440,6 @@ impl Server {
         }
 
         // Release the backing memory
-        #[cfg(baremetal)]
         MemoryManager::with_mut(|mm| {
             let virt = self.queue.as_mut_ptr() as usize;
             let size = self.queue.len();
@@ -556,7 +538,7 @@ impl Server {
 
         // Sanity check the specified address was correct, and matches what we
         // had cached.
-        if is_memory && cfg!(baremetal) && buf.is_some() {
+        if is_memory && buf.is_some() {
             let buf = buf.expect("memory message expected but no buffer passed!");
             if server_addr != buf.as_ptr() as usize || len != buf.len() {
                 // klog!("Memory is attached but the returned buffer doesn't match (len: {} vs {}), buf addr:

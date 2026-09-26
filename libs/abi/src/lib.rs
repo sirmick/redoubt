@@ -1,4 +1,4 @@
-#![cfg_attr(target_os = "none", no_std)]
+#![no_std]
 
 pub mod arch;
 
@@ -19,5 +19,3 @@ pub use string::*;
 pub use stringbuffer::*;
 pub use syscall::*;
 
-#[cfg(feature = "processes-as-threads")]
-pub use crate::arch::ProcessArgsAsThread;

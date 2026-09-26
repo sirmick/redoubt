@@ -17,8 +17,6 @@ members = [
   "libs/littlefs",
   "libs/wire",
   "libs/wire/gen",
-  "libs/flatipc",
-  "libs/flatipc-derive",
   "servers/keyd",
   "servers/bootfsd",
   "servers/consoled",

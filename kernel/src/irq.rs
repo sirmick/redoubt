@@ -28,7 +28,6 @@ fn handler(irq: usize) -> Option<Handler> {
 
 /// Dispatch the single interrupt the arch layer claimed. Redirects into the owning
 /// process's handler, or masks the source if nobody owns it (an unexpected IRQ).
-#[cfg(baremetal)]
 pub fn handle(irq: usize) -> Result<redoubt_abi::Result, redoubt_abi::Error> {
     use crate::services::SystemServices;
     let Some((pid, f, arg)) = handler(irq) else {
@@ -53,7 +52,6 @@ pub fn handle(irq: usize) -> Result<redoubt_abi::Result, redoubt_abi::Error> {
     })
 }
 
-#[allow(dead_code)] // needed to silence a hosted mode warning
 pub fn for_each_irq<F>(mut op: F)
 where
     F: FnMut(usize, &PID, MemoryAddress, Option<MemoryAddress>),
@@ -78,12 +76,10 @@ pub fn interrupt_claim(
     // A source with a device object is R5's, and a handle to it is the only authority over
     // it (WP-K3): the legacy claim is not a second one. (Both this path and the grants go
     // with WP-K6.)
-    #[cfg(baremetal)]
     if crate::mem::MemoryManager::with(|mm| mm.irq_device(irq).is_some()) {
         return Err(redoubt_abi::Error::AccessDenied);
     }
     // Default deny: a process may claim only interrupts the bundle granted it.
-    #[cfg(baremetal)]
     if !crate::mem::MemoryManager::with(|mm| crate::grants::may_claim_irq(mm, pid, irq)) {
         return Err(redoubt_abi::Error::AccessDenied);
     }

@@ -16,21 +16,10 @@ redoubt-abi = { path = "../libs/abi", features = [
 rand_chacha = { version = "0.3.1", optional = true, default-features = false }
 sbi-rt = { version = "0.0.3", optional = true }
 plic = { version = "0.0.3", optional = true, features = ["primitive-id"] }
-[target.'cfg(any(windows,unix))'.dev-dependencies]
-redoubt-abi = { path = "../libs/abi", features = [
-    "forget-memory-messages",
-    "processes-as-threads",
-] }
-rand = "0.8.5"
-
-[target.'cfg(any(target_arch = "riscv32", target_arch = "riscv64"))'.dependencies]
 riscv = "0.16"
 paging = { path = "../libs/paging" }
 redoubt-stride = { path = "../libs/stride" }
 redoubt-sys = { path = "../libs/sys" }
-
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(ci)', 'cfg(baremetal)'] }
 
 [features]
 smp = [] # multi-hart: KernelCell becomes a spinlock (the big kernel lock)
@@ -68,10 +57,3 @@ hwsim = []
 
 # default = ["print-panics", "debug-print", "wrap-print"]
 default = ["print-panics"]
-
-[target.'cfg(any(windows, unix))'.dependencies]
-crossbeam-channel = "0.5"
-hex = "0.4"
-lazy_static = "1.4"
-rand = "0.8.5"
-rand_chacha = "0.3.1"

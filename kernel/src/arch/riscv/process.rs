@@ -138,7 +138,6 @@ static PROCESS_TABLE: KernelCell<ProcessTable> =
     KernelCell::new(ProcessTable { current: crate::services::KERNEL_PID, table: [false; MAX_PROCESS_COUNT] });
 
 #[repr(C)]
-#[cfg(baremetal)]
 #[derive(Debug, Copy, Clone)]
 /// The stage1 bootloader sets up some initial processes.  These are reported
 /// to us as (satp, entrypoint, sp) tuples, which can be turned into a structure.

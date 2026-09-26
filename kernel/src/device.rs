@@ -416,7 +416,6 @@ impl MemoryManager {
 /// PLIC silently ignores a completion for a source that is not, and would then never raise that
 /// source again. The masking below follows straight after, so nothing is delivered in between
 /// (the hart takes no trap in supervisor mode), and the next `receive` unmasks it.
-#[cfg(baremetal)]
 pub fn irq_fired(irq: usize) -> bool {
     crate::services::SystemServices::with_mut(|ss| {
         MemoryManager::with_mut(|mm| {
