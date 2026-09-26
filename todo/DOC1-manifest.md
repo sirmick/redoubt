@@ -99,7 +99,9 @@ I16 DMA pages reset before reuse.
   R33 no server holds a system budget, R34 confined placement, R35 key separation (init.md); R36 unpredictable ids, R37 vault non-interference, R38
   out-of-band approval, R39 leases end, R40 blame by label set, R41 narrowing by revocation scope,
   R42 one approved item (steward.md); R43 no export, R44 one key, one purpose, keyd's own digest,
-  R45 constant-time signing (keyd.md).
+  R45 constant-time signing (keyd.md); R46 only the public list (bootfsd.md); R47 one volume
+  per instance, R48 a quota per attach root, R49 a hostile medium is corrupt, not a crash, R50
+  power loss leaves before or after (fsd.md).
 - The servers set takes the next free numbers, in the order its pages are written (the
   userland template has no Security properties section, so userland pages only cite).
 - `rule F` stays on `docs/testbench.md`.

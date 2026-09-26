@@ -30,6 +30,8 @@
   - [Init](servers/init.md)
   - [The steward](servers/steward.md)
   - [keyd](servers/keyd.md)
+  - [bootfsd](servers/bootfsd.md)
+  - [fsd](servers/fsd.md)
   - [The wire protocol]()
   - [init and the boot manifest]()
   - [The steward]()
