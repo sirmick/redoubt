@@ -93,6 +93,8 @@ I16 DMA pages reset before reuse.
   (memory-layout.md, added in R1 for the kernel's `sstatus` rule; planned · M1, fixed in the
   kernel follow-up package). Short names are the parentheses of the defining headings. The
   servers set starts at R25.
+- **Servers list (as written):** R25 the label check, R26 admission fairness, R27 badge
+  allocation, R28 parked-call accounting (serving.md).
 - The servers set takes the next free numbers, in the order its pages are written (the
   userland template has no Security properties section, so userland pages only cite).
 - `rule F` stays on `docs/testbench.md`.

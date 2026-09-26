@@ -24,8 +24,8 @@
 
 # The servers
 
-- [The servers]()
-  - [The serving library]()
+- [The servers](servers/README.md)
+  - [The serving library](servers/serving.md)
   - [The wire protocol]()
   - [init and the boot manifest]()
   - [The steward]()
@@ -64,6 +64,7 @@
 - [M5 (persist, install, share)]()
 - [Follow-ups]()
   - [Kernel attack gaps](todo/kernel-attack-gaps.md)
+  - [An account-0 client's share chain](todo/account0-share-chain.md)
   - [The model's order of checks](todo/abi-model-disagreements.md)
   - [The boot hart's interrupt context](todo/boot-hart-context.md)
   - [Root's own page](todo/boot-root-frame.md)
@@ -75,6 +76,7 @@
   - [DMA reset on rv32](todo/dma-reset-rv32.md)
   - [Calls abandoned by an endpoint's destruction](todo/endpoint-destroyed-open-calls.md)
   - [Reclaiming an endpoint](todo/endpoint-reclaim.md)
+  - [Host tests the bench does not run](todo/host-tests-in-bench.md)
   - [An interrupt before the first receive](todo/irq-level-latch.md)
   - [Scans of every kernel-object frame](todo/kernel-scan-bounds.md)
   - [map_anon's search cost](todo/map-anon-search-cost.md)
