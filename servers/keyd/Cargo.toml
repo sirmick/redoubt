@@ -13,6 +13,6 @@ path = "src/bin/keyd.rs"
 redoubt-rt = { path = "../../libs/rt" }
 # TENETS.md 5: the one outside crate keyd links. Pinned by Cargo.lock at 2.4.2, the same
 # version and the same `default-features = false` the loader already uses for verified boot
-# (VERIFIED-BOOT.md), so the box has one Ed25519 implementation, not two. With the default
+# (docs/kernel/boot.md), so the box has one Ed25519 implementation, not two. With the default
 # features off it is `no_std`, pure Rust and has no dependencies at all.
 ed25519-compact = { version = "2", default-features = false }

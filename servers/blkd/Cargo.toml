@@ -9,10 +9,10 @@ description = "blkd: the virtio-blk driver, the partition table, and block range
 name = "blkd"
 path = "src/bin/blkd.rs"
 
-# No outside crates. `virtio-drivers` is named in BUILD-PLAN.md and was read and judged under
-# TENETS.md 5 (see the crate docs, "Why the queue is ours"): it is 13k lines covering nine device
-# classes we do not have, behind six dependencies, and its safe interface ends where ours has to
-# begin. What we need is one split virtqueue with one request outstanding, which is small enough
-# to hold in your head and is the thing the device attacks.
+# No outside crates. `virtio-drivers` was read and judged under TENETS.md 5 (see the crate
+# docs, "Why the queue is ours"): it is 13k lines covering nine device classes we do not have,
+# behind six dependencies, and its safe interface ends where ours has to begin. What we need is
+# one split virtqueue with one request outstanding, which is small enough to hold in your head
+# and is the thing the device attacks.
 [dependencies]
 redoubt-rt = { path = "../../libs/rt" }
