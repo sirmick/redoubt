@@ -27,9 +27,9 @@
 //! Frame charges follow ownership in `mem.rs`; handle-table pages are charged in `handle.rs`.
 
 use redoubt_layout::Pid;
-use redoubt_sys::{BudgetSpec, Error, FOREVER, MAX_DEPTH, MAX_LABELS, Usage};
+use redoubt_sys::{BudgetSpec, Error, FOREVER, MAX_DEPTH, MAX_LABELS, MAX_THREADS, Usage};
 
-use crate::arch::process::{INITIAL_TID, MAX_PROCESS_COUNT, MAX_THREAD};
+use crate::arch::process::{INITIAL_TID, MAX_PROCESS_COUNT};
 use crate::handle::{BudgetRef, Handle, HandleTable, Object};
 use crate::kframe;
 use crate::mem::MemoryManager;
@@ -117,11 +117,12 @@ pub struct Account {
     /// RAM frames owned by the process and charged to its budget (page tables and mapped pages).
     pub frames: u64,
     pub handles: HandleTable,
-    /// Each thread's IPC page (`message.rs`), by frame index; 0 for a thread that has none.
+    /// Each thread's IPC page (`message.rs`), by frame index, indexed by TID (`1..=MAX_THREADS`;
+    /// slot 0, like `ProcessImpl`'s context 0, names no thread); 0 for a thread that has none.
     /// This *is* the page the cost table charges for a thread: the saved registers live in
     /// `ProcessImpl`, and everything IPC needs (what the thread waits for, the message it is
     /// sending, the calls it holds open) lives here, so `call` and `send` never allocate.
-    pub ipc: [u32; MAX_THREAD],
+    pub ipc: [u32; MAX_THREADS + 1],
     /// Open calls this process's threads hold (R4a): at `MAX_OPEN_CALLS` it takes no more.
     pub open_calls: u32,
     /// The next message id its threads will hand a sender. Never 0, never reused within this
@@ -141,7 +142,7 @@ impl Account {
         threads: 0,
         frames: 0,
         handles: HandleTable::EMPTY,
-        ipc: [0; MAX_THREAD],
+        ipc: [0; MAX_THREADS + 1],
         open_calls: 0,
         next_msg_id: 1,
         earliest_timeout: u64::MAX,
@@ -342,7 +343,7 @@ impl MemoryManager {
     /// created, so the frame is already paid for; one missing here would mean the kernel
     /// over-committed RAM, which `boot_budgets` reserves against, so it stops (fail closed).
     fn give_ipc_frame(&mut self, pid: Pid, tid: usize) {
-        if self.account(pid).is_none() || tid >= MAX_THREAD || self.ipc_frame(pid, tid).is_some() {
+        if self.account(pid).is_none() || !(1..=MAX_THREADS).contains(&tid) || self.ipc_frame(pid, tid).is_some() {
             return;
         }
         let frame = self.alloc_object_frame().expect("R6: a thread's page was charged but has no frame");
@@ -458,7 +459,7 @@ impl MemoryManager {
     pub fn process_ended(&mut self, pid: Pid) {
         let Some(budget) = self.budget_of(pid) else { return };
         self.close_all_handles(pid);
-        for tid in 0..MAX_THREAD {
+        for tid in 1..=MAX_THREADS {
             self.take_ipc_frame(pid, tid);
         }
         let account = self.account_mut(pid).expect("account");

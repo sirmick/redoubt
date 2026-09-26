@@ -229,10 +229,7 @@ pub extern "C" fn trap_handler(
             .ok(); // If this fails, fall through.
         }
 
-        RiscvException::InstructionPageFault(EXIT_THREAD, _offset)
-            if ArchProcess::with_current(|process| process.current_tid())
-                >= crate::arch::process::INITIAL_TID =>
-        {
+        RiscvException::InstructionPageFault(EXIT_THREAD, _offset) => {
             let tid = ArchProcess::with_current(|process| process.current_tid());
             // Ordinary thread returns use the same lifecycle policy as explicit thread_exit:
             // the final return snapshots open calls/blame before process_exit(0) cleanup (170).

@@ -41,9 +41,10 @@
 use redoubt_layout::{KERNEL_PID, Pid};
 
 use crate::arch::process::TID;
+use redoubt_sys::MAX_THREADS;
 use redoubt_stride::{Budgets, Cpu, State};
 
-use crate::arch::process::{MAX_PROCESS_COUNT, MAX_THREAD};
+use crate::arch::process::MAX_PROCESS_COUNT;
 use crate::budget::BudgetFrame;
 use crate::cell::KernelCell;
 use crate::handle::BudgetRef;
@@ -293,7 +294,7 @@ fn next_thread(ss: &SystemServices, mm: &MemoryManager, b: BudgetRef) -> Option<
         if p.free() || p.running() || p.pid.get() == 1 || mm.budget_of(p.pid) != Some(b.frame) {
             continue;
         }
-        let tids: [bool; MAX_THREAD + 1] = match p.ready_threads() {
+        let tids: [bool; MAX_THREADS + 1] = match p.ready_threads() {
             Some(mask) => core::array::from_fn(|t| mask & (1 << t) != 0),
             None => core::array::from_fn(|t| t == 0),
         };

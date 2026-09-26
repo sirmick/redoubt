@@ -460,7 +460,8 @@ impl SystemServices {
         if thread_mask & (thread_mask - 1) == 0 {
             trailing_zeros(thread_mask)
         } else {
-            let upper_bits = thread_mask & !((2usize << current_thread) - 1);
+            // The threads above `current_thread`: none when it is the last TID (OD10: 31 on rv32).
+            let upper_bits = thread_mask & usize::MAX.checked_shl(current_thread as u32 + 1).unwrap_or(0);
             if upper_bits != 0 { trailing_zeros(upper_bits) } else { trailing_zeros(thread_mask) }
         }
     }
@@ -473,7 +474,8 @@ impl SystemServices {
         if thread_mask.is_power_of_two() {
             thread_mask.trailing_zeros() as usize
         } else {
-            let upper_bits = thread_mask & !((2usize << current_thread) - 1);
+            // The threads above `current_thread`: none when it is the last TID (OD10: 31 on rv32).
+            let upper_bits = thread_mask & usize::MAX.checked_shl(current_thread as u32 + 1).unwrap_or(0);
             if upper_bits != 0 {
                 upper_bits.trailing_zeros() as usize
             } else {
