@@ -49,10 +49,11 @@ bundle signature, and the reverse.
   list, before it reads a single tar header or manifest byte. An archive no trusted key signed never
   reaches the parser.
 - **The parser is contained.** A trusted key can still sign a hostile archive. So the steward
-  starts a `pkg` instance per principal for each install, holding the archive it was handed and a
-  write handle to that principal's package directory, `/system/pkgs/<principal>/`, only; each
-  package goes in `<name>-<version>-<hash>/` there. A parser bug reaches only that principal's
-  own packages. Nothing a session holds writes there.
+  starts a `pkg` instance per principal for each install. It holds the archive it was handed, a
+  write handle to that principal's package directory, `/system/pkgs/<principal>/` (each package
+  goes in `<name>-<version>-<hash>/` there), the steward's call to record the install, and, read
+  only, the principal's trust list and the names of the modules the system bundle defines. It
+  writes nowhere else, so a parser bug reaches only that principal's own packages. Nothing a session holds writes there.
 - **The steward keeps the authority.** `pkg` does the parsing, so the steward never parses an
   archive, as `init` and the steward never parse an ELF. Profiles, `use` records, trust lists and
   the grants a manifest requests are steward records; `pkg` asks the steward to record and never
