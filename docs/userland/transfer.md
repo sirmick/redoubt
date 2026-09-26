@@ -110,8 +110,8 @@ with crafted input holds only their session's file capabilities, which they alre
 could suppress their own records, and they could move data out unaudited through their terminal
 anyway.
 
-**Open:** the audit log's first milestone; and whether the file server audits transfer handles
-itself, which matters only if the audit must survive a compromised transfer server.
+**Open:** whether the file server audits transfer handles itself, which matters only if the audit
+must survive a compromised transfer server.
 
 ## Why
 
