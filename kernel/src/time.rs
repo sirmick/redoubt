@@ -18,10 +18,6 @@
 //! the entering process, so a deadline that has passed beats any operation that enters later.
 //! `kmain` expires, then picks, then switches, with no kernel entry in between.
 //!
-//! While a legacy interrupt callback runs, budget deadlines wait (timeouts still expire: they
-//! only wake): the process it interrupted must be there to go back to. They are handled as the
-//! callback returns (INTERIM, until WP-K6 removes callbacks).
-//!
 //! # Hints
 //! Finding what is due means walking every thread (`message.rs`) and the list of budgets with a
 //! deadline (`budget.rs`). Both are skipped while the cached earliest deadlines are still in the
@@ -79,12 +75,10 @@ pub fn set_slice_end(at: u64) {
 /// When the running thread's slice ends.
 pub fn slice_end() -> u64 { TIMER.with(|t| t.slice) }
 
-/// Arm the timer for the earliest thing due, if that changed. Budget deadlines wait while a
-/// legacy callback runs (module docs).
+/// Arm the timer for the earliest thing due, if that changed.
 pub fn rearm() {
-    let callback = crate::arch::irq::in_callback();
     TIMER.with(|t| {
-        let target = if callback { t.threads } else { t.threads.min(t.budgets).min(t.slice) };
+        let target = t.threads.min(t.budgets).min(t.slice);
         if target != t.armed {
             t.armed = target;
             timer::set(if target == NEVER { u64::MAX } else { timer::us_to_ticks(target) });
@@ -92,8 +86,7 @@ pub fn rearm() {
     });
 }
 
-/// The budget deadline due first at `now`, if budget deadlines may be handled: (deadline, id,
-/// frame).
+/// The budget deadline due first at `now`: (deadline, id, frame).
 fn due_budget(now: u64) -> Option<(u64, u64, u32)> {
     MemoryManager::with(|mm| mm.deadlines().filter(|(d, _, _)| *d <= now).min())
 }
@@ -115,8 +108,7 @@ fn running() -> Option<redoubt_abi::PID> {
 /// finds nothing more is the kernel's, so an entry does at most one walk nobody pays for.
 pub fn expire_due(ss: &mut SystemServices) -> bool {
     let now = now_us();
-    let callback = crate::arch::irq::in_callback();
-    if TIMER.with(|t| t.threads > now && (callback || t.budgets > now)) {
+    if TIMER.with(|t| t.threads > now && t.budgets > now) {
         return false;
     }
     let mut destroyed = false;
@@ -125,7 +117,7 @@ pub fn expire_due(ss: &mut SystemServices) -> bool {
         let started = crate::sched::now_ticks();
         let (timeout, next) = MemoryManager::with_mut(|mm| crate::message::next_timeout(mm, now));
         next_timeout = next;
-        let budget = if callback { None } else { due_budget(now) };
+        let budget = due_budget(now);
         // Earliest first; at an equal instant, the timeout.
         let timeout_first = match (timeout, budget) {
             (None, None) => break,
@@ -151,7 +143,7 @@ pub fn expire_due(ss: &mut SystemServices) -> bool {
         }
     }
     let next_budget = MemoryManager::with(|mm| {
-        mm.deadlines().map(|(d, _, _)| d).filter(|d| callback || *d > now).min().unwrap_or(NEVER)
+        mm.deadlines().map(|(d, _, _)| d).filter(|d| *d > now).min().unwrap_or(NEVER)
     });
     TIMER.with(|t| {
         t.threads = next_timeout;

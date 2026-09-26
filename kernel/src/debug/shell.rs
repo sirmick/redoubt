@@ -91,21 +91,6 @@ pub fn process_characters<R: SerialRead>(serial: &mut R) {
 fn handle_character(b: u8) {
 
     match b {
-        b'i' => {
-            println!("Interrupt handlers:");
-            println!("  IRQ | Process | Handler | Argument");
-            crate::services::SystemServices::with(|system_services| {
-                crate::irq::for_each_irq(|irq, pid, address, arg| {
-                    println!(
-                        "    {}:  {} @ {:x?} {:x?}",
-                        irq,
-                        system_services.process_name(*pid).unwrap_or(""),
-                        address,
-                        arg
-                    );
-                });
-            });
-        }
         b'k' => {
             println!("Checking RAM for duplicate pages (this will take a few minutes)");
             crate::mem::MemoryManager::with(|mm| {
@@ -194,7 +179,6 @@ fn print_help() {
     println!("key | command");
     println!("--- + -----------------------");
     println!(" h  | print this message");
-    println!(" i  | print irq handlers");
     println!(" k  | check RAM to make sure pages are unique");
     println!(" m  | print MMU page tables of all processes");
     println!(" p  | print all processes");

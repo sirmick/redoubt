@@ -8,10 +8,8 @@
 //!
 //! The PLIC's claim/complete protocol maps onto Redoubt's interrupt flow like this: the
 //! trap handler calls `pending()`, which claims the highest-priority interrupt. The
-//! PLIC will not raise that source again until it is completed, which happens in
-//! `enable_all_irqs()` once the userspace handler has returned. While a handler runs,
-//! external interrupts are masked at the hart (`sie.SEIE`), because S-mode interrupts
-//! cannot otherwise be held off while the hart is in U-mode.
+//! PLIC will not raise that source again until it is completed (`complete()`), which the
+//! trap handler does before it masks the source (`device.rs`, R5).
 
 use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
@@ -72,19 +70,12 @@ pub fn enable_irq(irq_no: usize) {
 
 pub fn disable_irq(irq_no: usize) { plic().disable(irq_no as u32, context()); }
 
-pub fn disable_all_irqs() {
-    // SAFETY: masking an interrupt source cannot violate memory safety.
-    unsafe { sie::clear_sext() };
-}
-
-pub fn enable_all_irqs() {
+/// Complete the interrupt `pending()` claimed, if any.
+pub fn complete() {
     let claimed = CLAIMED.swap(0, Ordering::Relaxed);
     if claimed != 0 {
         plic().complete(context(), claimed);
     }
-    // SAFETY: the kernel itself runs with `sstatus.SIE` clear, so unmasking the source only
-    // takes effect in U-mode, where the trap handler is ready for it.
-    unsafe { sie::set_sext() };
 }
 
 /// Claim the highest-priority pending interrupt. Returned as a bitmask with at most one

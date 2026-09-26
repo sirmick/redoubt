@@ -408,9 +408,9 @@ impl MemoryManager {
 }
 
 /// R5: interrupt `irq` fired, if a device object owns it -- the answer the trap handler wants,
-/// so that an interrupt with no device object takes the legacy handler table's path instead
-/// (until WP-K6 deletes that). The kernel masks the source and sets `fired`; a thread already
-/// waiting in `receive` on the handle is answered at once (which clears `fired` again).
+/// so that it masks an interrupt no device object owns. The kernel masks the source and sets
+/// `fired`; a thread already waiting in `receive` on the handle is answered at once (which
+/// clears `fired` again).
 ///
 /// The interrupt controller's claim is completed *first*, while the source is still enabled: a
 /// PLIC silently ignores a completion for a source that is not, and would then never raise that
@@ -420,7 +420,7 @@ pub fn irq_fired(irq: usize) -> bool {
     crate::services::SystemServices::with_mut(|ss| {
         MemoryManager::with_mut(|mm| {
             let Some(frame) = mm.irq_device(irq) else { return false };
-            crate::arch::irq::enable_all_irqs();
+            crate::arch::irq::complete_irq();
             let mut d = mm.device(frame);
             d.fired = true;
             d.masked = true;

@@ -40,20 +40,12 @@ pub enum Outcome {
     Resume,
 }
 
-pub fn handle(pid: PID, tid: TID, in_irq: bool, regs: &[u64; REGS]) -> Outcome {
-    // A legacy interrupt callback runs on borrowed time inside another process's quantum; it
-    // gets none of these calls. (INTERIM: WP-K3 replaces callbacks with IRQ handles.) Deadlines
-    // that have passed were answered at this entry, before anything else (`time.rs`).
-
-    let result = if in_irq {
-        Err(Error::NotPermitted)
-    } else {
-        Call::decode(regs).and_then(|c| dispatch(pid, tid, c))
-    };
+pub fn handle(pid: PID, tid: TID, regs: &[u64; REGS]) -> Outcome {
+    // Deadlines that have passed were answered at this entry, before anything else (`time.rs`).
+    let result = Call::decode(regs).and_then(|c| dispatch(pid, tid, c));
     // Every error a call returns is in its row of the spec's error table (`Number::can_return`).
-    // The interim refusal of legacy callbacks is outside the table, and an unknown number has no
-    // row (it is `InvalidArgument`).
-    if let (Err(error), false, Some(number)) = (&result, in_irq, Number::from_raw(regs[0])) {
+    // An unknown number has no row (it is `InvalidArgument`).
+    if let (Err(error), Some(number)) = (&result, Number::from_raw(regs[0])) {
         debug_assert!(number.can_return(*error), "{} returned {:?}, outside its row", number.name(), error);
     }
     match result {

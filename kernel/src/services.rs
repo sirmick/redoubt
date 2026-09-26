@@ -33,12 +33,6 @@ const MINIELF_FLG_NC: u8 = 2;
 const MINIELF_FLG_X: u8 = 4;
 const MINIELF_FLG_EHF: u8 = 8;
 
-#[derive(Debug)]
-pub enum CallbackType {
-    /// args: irq_no, arg
-    Interrupt(usize, *mut usize),
-}
-
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct ExceptionHandler {
     /// Address (in program space) where the exception handler is
@@ -252,9 +246,6 @@ impl Process {
             mm.dma_release(self.pid);
             mm.process_ended(self.pid);
         });
-
-        // Free all claimed IRQs
-        crate::irq::release_interrupts_for_pid(self.pid);
 
         // Remove this PID from the process table
         ArchProcess::destroy(self.pid)?;
@@ -540,145 +531,6 @@ impl SystemServices {
     }
 
     pub fn current_pid(&self) -> PID { arch::process::current_pid() }
-
-    /// Create a stack frame in the specified process and jump to it.
-    /// 1. Pause the current process and switch to the new one
-    /// 2. Save the process state, if it hasn't already been saved
-    /// 3. Run the new process, returning to an illegal instruction
-    pub fn finish_callback_and_resume(&mut self, pid: PID, tid: TID) -> Result<(), redoubt_abi::Error> {
-        // Get the current process (which was the interrupt handler) and mark it
-        // as Ready.  Note that the new PID may very well be the same PID.
-        {
-            let current_pid = self.current_pid();
-            let current = self.get_process_mut(current_pid).expect("couldn't get current PID");
-            klog!("Finishing callback in PID {}", current_pid);
-            // let old_state = current.state;
-            current.state = match current.state {
-                ProcessState::Running(0) => ProcessState::Sleeping,
-                ProcessState::Running(x) => ProcessState::Ready(x),
-                y => panic!("current process was {:?}, not 'Running(_)'", y),
-            };
-            // log_process_update(file!(), line!(), current, old_state);
-            // current.current_thread = current.previous_context;
-        }
-
-        // Get the new process, and ensure that it is in a state where it's fit
-        // to run. Again, if the new process isn't fit to run, then the system
-        // is in a very bad state.
-        {
-            let process = self.get_process_mut(pid)?;
-            // Ensure the new context is available to be run
-            let available_threads = match process.state {
-                ProcessState::Ready(x) if x & 1 << tid != 0 => x & !(1 << tid),
-                // If we're currently debugging the process, return to its parent.
-                // This can happen when the process handles a debug interrupt.
-                other => panic!(
-                    "process {} was in an invalid state {:?} -- thread {} not available to run",
-                    pid, other, tid
-                ),
-            };
-            process.state = ProcessState::Running(available_threads);
-            // klog!(
-            //     "in resuming callback, process state went from {:?} to {:?}",
-            //     old_state,
-            //     process.state
-            // );
-            // log_process_update(file!(), line!(), process, old_state);
-            // process.current_thread = tid as u8;
-            process.mapping.activate()?;
-            process.activate()?;
-
-            // Activate the current context
-            ArchProcess::current().set_tid(tid)?;
-            process.current_thread = tid;
-        }
-        // self.pid = pid;
-        Ok(())
-    }
-
-    /// Create a stack frame in the specified process and jump to it.
-    /// 1. Pause the current process and switch to the new one
-    /// 2. Save the process state, if it hasn't already been saved
-    /// 3. Run the new process, returning to an illegal instruction
-    pub fn make_callback_to(
-        &mut self,
-        pid: PID,
-        pc: *const usize,
-        cb_type: CallbackType,
-    ) -> Result<(), redoubt_abi::Error> {
-        // Get the current process (which was just interrupted) and mark it as
-        // "ready to run".  If this function is called when the current process
-        // isn't running, that means the system has gotten into an invalid
-        // state.
-
-        // Mark the interrupted process ready to run again.
-        let current_pid = self.current_pid();
-        let current = self.get_process_mut(current_pid).expect("couldn't get current PID");
-        if current.current_thread == 0 {
-            current.current_thread = arch::process::current_tid();
-        }
-        current.state = match current.state {
-            ProcessState::Running(x) => ProcessState::Ready(x | (1 << current.current_thread)),
-            y => panic!("current process was {:?}, not 'Running(_)'", y),
-        };
-
-        // Get the new process, and ensure that it is in a state where it's fit
-        // to run.  Again, if the new process isn't fit to run, then the system
-        // is in a very bad state.
-        {
-            let process = self.get_process_mut(pid)?;
-            let available_threads = match process.state {
-                ProcessState::Ready(x) | ProcessState::Running(x) | ProcessState::Exception(x) => x,
-                ProcessState::Sleeping | ProcessState::BlockedException(_) => 0,
-                ProcessState::Free => panic!("process was not allocated"),
-                ProcessState::Setup(_) | ProcessState::Allocated => {
-                    panic!("process hasn't been set up yet")
-                }
-            };
-            {
-                process.state = ProcessState::Running(available_threads);
-            }
-
-            // log_process_update(file!(), line!(), process, old_state);
-            if process.current_thread != arch::process::IRQ_TID {
-                process.previous_thread = process.current_thread;
-            }
-            process.current_thread = arch::process::IRQ_TID;
-            process.mapping.activate()?;
-            process.activate()?;
-        }
-
-        // Switch to new process memory space, allowing us to save the context
-        // if necessary.
-        // self.pid = pid;
-
-        // Invoke the syscall, but use the current stack pointer.  When this
-        // function returns, it will jump to the RETURN_FROM_ISR address,
-        // causing an instruction fault and exiting the interrupt.
-        ArchProcess::with_current_mut(|arch_process| {
-            let sp = if pid.get() == 1 {
-                EXCEPTION_STACK_TOP
-            } else {
-                arch_process.current_thread().stack_pointer()
-            };
-
-            // Activate the current context
-            arch_process.set_tid(arch::process::IRQ_TID).unwrap();
-
-            // Construct the new frame. Returning jumps to RETURN_FROM_ISR, faulting out
-            // of the interrupt.
-            let CallbackType::Interrupt(irq_no, arg) = cb_type;
-            arch::syscall::invoke(
-                arch_process.current_thread_mut(),
-                pid.get() == 1,
-                pc as usize,
-                sp,
-                arch::process::RETURN_FROM_ISR,
-                &[irq_no, arg as usize],
-            );
-        });
-        Ok(())
-    }
 
     /// Mark the specified context as ready to run. If the thread is Sleeping, mark
     /// it as Ready.
