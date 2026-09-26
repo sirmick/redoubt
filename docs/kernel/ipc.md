@@ -317,9 +317,9 @@ Status: built · tested: bench:redoubt-dead, bench:redoubt-revoke, bench:budget-
 - **A budget is destroyed:** endpoints it owns are destroyed and everything waiting on them gets
   `Dead`; queued messages sent through a handle it stamped fail with `Dead`; a taken call sent
   through one is abandoned ([R10 (destruction)](budgets.md#r10-destruction)).
-- **Crash blame:** when a server thread faults, or exits while holding open calls, the exit
-  notice blames the account and labels of the sender of its current call, or nobody if it has
-  none ([processes](processes.md#exit-notices)). A `send` is never blamed. A server calls `serve`
+- **Crash blame:** when a server process faults, or exits while it holds open calls, the exit
+  notice blames the account and labels of the sender of the ending thread's current call, or
+  nobody if it has none ([R21 (crash blame)](processes.md#r21-crash-blame)). A `send` is never blamed. A server calls `serve`
   before resuming a held call so that a crash blames the right caller.
 - No argument to any IPC call can make the kernel panic (I14 (no call panics the kernel)).
 

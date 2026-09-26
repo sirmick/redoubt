@@ -120,8 +120,9 @@ servers. Defined in [processes](kernel/processes.md).
 
 ### current call
 
-The open call a server thread is working on: the one it took last, or the one it named with
-`serve`. A crash blames its sender. Defined in [IPC](kernel/ipc.md).
+The open call a server thread is working on: the call its last `receive` took, or the one it
+named with `serve`; none once it replies to it or receives anything else. A crash blames its
+sender. Defined in [IPC](kernel/ipc.md).
 
 ### declassification
 
@@ -241,6 +242,13 @@ and never executable. Defined in [memory layout](kernel/memory-layout.md).
 
 The steward's service that turns a request for more authority into an out-of-band approval and,
 if approved, a narrow capability. Defined in [the steward](servers/steward.md).
+
+### PID
+
+A process's number, 2 to 64 (1 is the kernel), which is also its hardware address-space id. It is
+drawn at random from the free ones and held until the process's exit notice is taken or dropped.
+No authority is keyed by it. Unix: a PID, but it names; it grants nothing. Defined in
+[processes](kernel/processes.md).
 
 ### principal
 
