@@ -41,21 +41,6 @@
   - [consoled](servers/consoled.md)
   - [Packages](servers/pkg.md)
   - [The supervisor](servers/supervisor.md)
-  - [The wire protocol]()
-  - [init and the boot manifest]()
-  - [The steward]()
-  - [keyd]()
-  - [bootfsd]()
-  - [The file server]()
-  - [blkd]()
-  - [netd]()
-  - [ipd]()
-  - [The resolver]()
-  - [gatewayd]()
-  - [sshd]()
-  - [consoled]()
-  - [pkg]()
-  - [The supervisor]()
 
 # Userland
 
