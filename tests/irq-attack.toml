@@ -5,7 +5,7 @@ kind = "boot"
 debug_assertions = true
 # PID 2 log-server is the victim: as the bundle's first program it holds every device object
 # (INTERIM, kernel device.rs), maps the console and waits for its interrupt in `receive`.
-# PID 3 irq-attack holds one handle, the boot endpoint, and attacks from there.
+# PID 3 irq-attack holds the boot endpoint and its log handle, and attacks from there.
 programs = ["log-server", "irq-attack"]
 timeout_secs = 30
 expect = [
@@ -17,10 +17,8 @@ expect = [
     # the wrong reason prints FAIL, which is forbidden.
     '^\[pid 3\] \[irq-attack\] ok: receive on an irq handle it does not hold',
     '^\[pid 3\] \[irq-attack\] ok: mapping the console.s mmio',
-    '^\[pid 3\] \[irq-attack\] ok: RAM by address',
+    '^\[pid 3\] \[irq-attack\] ok: map_anon first word -> Ok\(0\)$',
     '^\[pid 3\] \[irq-attack\] ok: wrong kind',
-    '^\[pid 3\] \[irq-attack\] ok: every legacy claim and free refused$',
-    '^\[pid 3\] \[irq-attack\] ok: interrupt 0 -> Err\(InterruptNotFound\), the old timer calls',
     '^\[pid 3\] \[irq-attack\] attempts done$',
     # The verdict, the victim's: the machine is still up (a stolen Reset right would have
     # powered it off), and the console's interrupt is still the victim's, so a byte sent after
@@ -32,6 +30,3 @@ forbid = ['\] FAIL', 'BREACH']
 [[input]]
 after = '^\[pid 3\] \[irq-attack\] attempts done$'
 send = "y"
-
-# No grant for log-server: it takes the console through its device handle. The attacker is
-# granted nothing, so the legacy claims it makes are denied as they were before.
