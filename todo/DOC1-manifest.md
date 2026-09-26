@@ -89,8 +89,10 @@ I16 DMA pages reset before reuse.
   R15 verified boot, R16 image confinement, R17 fail closed (boot.md); R18 device authority
   (devices.md); R19 kernel W^X, R22 range cost (memory.md); R20 PID reuse, R21 crash blame, with
   "the exit endpoint is a receive right" folded in (processes.md); R23 no test channels
-  (scheduling.md); I16 DMA pages reset before reuse (invariants.md). Short names are the
-  parentheses of the defining headings. The servers set starts at R24.
+  (scheduling.md); I16 DMA pages reset before reuse (invariants.md); R24 SUM and MXR clear
+  (memory-layout.md, added in R1 for the kernel's `sstatus` rule; planned · M1, fixed in the
+  kernel follow-up package). Short names are the parentheses of the defining headings. The
+  servers set starts at R25.
 - The servers set takes the next free numbers, in the order its pages are written (the
   userland template has no Security properties section, so userland pages only cite).
 - `rule F` stays on `docs/testbench.md`.

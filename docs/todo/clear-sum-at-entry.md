@@ -7,9 +7,9 @@ S-mode with both clear. With `SUM` set, a kernel bug that dereferenced a user ad
 or write the process's memory instead of faulting. With `MXR` set, kernel loads could read pages
 that are execute-only.
 
-The rule for the memory-layout page: "The kernel clears `sstatus.SUM` and `sstatus.MXR` at entry
-and never sets either: S-mode cannot load or store through a user mapping, and a stray kernel
-dereference of a user address faults."
+The rule, R24 (SUM and MXR clear) on the memory-layout page: "The kernel clears `sstatus.SUM`
+and `sstatus.MXR` at entry and never sets either: S-mode cannot load or store through a user
+mapping, and a stray kernel dereference of a user address faults."
 
 ## Why it matters
 
@@ -24,10 +24,12 @@ Fixed in the kernel follow-up package after the documentation rewrite, before th
 
 - [`kernel/src/arch/riscv/mod.rs`](../../kernel/src/arch/riscv/mod.rs): the kernel's start,
   where `sstatus` is first set up.
-- The page: [memory layout](../kernel/memory-layout.md#residual-risks).
+- The page: [memory layout](../kernel/memory-layout.md#r24-sum-and-mxr-clear) and its residual
+  risks.
 
 ## Done when
 
 - The kernel clears both bits at entry (one `csrc`).
 - A boot assertion checks both bits are clear.
 - A kernel test shows that a kernel load through a user address faults.
+- R24's section on the memory-layout page is built, with its status line naming those tests.
