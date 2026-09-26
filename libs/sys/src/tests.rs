@@ -764,9 +764,9 @@ fn user_range_at_width(addr: u32, len: u32, page_size: u32, user_area_end: u32) 
 
 #[test]
 fn map_fixed_range_check_refuses_rv32_wraparound() {
-    // rv32's PAGE_SIZE and USER_AREA_END (redoubt_abi::arch, 32-bit layout).
-    let page_size = 4096u32;
-    let user_area_end = 0x8000_0000u32;
+    // rv32's PAGE_SIZE and USER_AREA_END.
+    let page_size = crate::PAGE_SIZE as u32;
+    let user_area_end = crate::rv32::USER_AREA_END as u32;
     // addr + len wraps past u32::MAX: an unchecked add would land well under
     // `user_area_end` and be wrongly accepted. `checked_add` must refuse it instead.
     let addr = 0xFFFF_F000u32;

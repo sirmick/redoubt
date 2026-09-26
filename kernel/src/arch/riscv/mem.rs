@@ -15,7 +15,9 @@
 //! currently active address space.
 
 use ::riscv::register::satp;
-use redoubt_abi::{MemoryFlags, PID, arch::*};
+use redoubt_abi::arch::{KERNEL_AREA, PROCESS_AREA, THREAD_CONTEXT_AREA, physmap_virt};
+use redoubt_abi::{MemoryFlags, PID};
+use redoubt_sys::{PAGE_SIZE, USER_AREA_END};
 
 pub use super::mmu_flags::MMUFlags;
 use super::mmu_flags::translate_flags;
@@ -584,7 +586,7 @@ pub fn map_into_with(
 /// Whether `virt` is free in `space`: `address_available`, for an address space that is not the
 /// running one (`process_map` looks into a child that has never run).
 pub fn address_available_in(space: &MemoryMapping, virt: usize) -> bool {
-    debug_assert!(virt < redoubt_abi::arch::USER_AREA_END, "process_map checks its range first");
+    debug_assert!(virt < redoubt_sys::USER_AREA_END, "process_map checks its range first");
     match walk(root_of(space.satp), virt, None) {
         // No leaf table yet, so nothing is mapped there. Inside user space the only other way
         // `walk` fails is a non-canonical address, which the caller has already ruled out.

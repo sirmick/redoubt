@@ -208,7 +208,7 @@ impl Platform {
             // region that does not start on one is dropped here, loudly, so that the kernel's
             // boot checks stay a check against a hostile argument block rather than a limit on
             // which machines boot.
-            if base % crate::PAGE_SIZE != 0 {
+            if base % redoubt_sys::PAGE_SIZE != 0 {
                 crate::println!("  {} at {:#x} does not start on a page; skipped", name, base);
                 continue;
             }

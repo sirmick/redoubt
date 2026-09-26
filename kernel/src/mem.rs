@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-use redoubt_abi::{MemoryFlags, MemoryRange, PID, arch::*};
+use redoubt_abi::{MemoryFlags, MemoryRange, PID};
+use redoubt_sys::{PAGE_SIZE, USER_AREA_END};
 
 pub use crate::arch::mem::MemoryMapping;
 use crate::arch::process::Process;
@@ -54,6 +55,19 @@ impl MemoryRangeExtra {
 pub fn memory_range(addr: usize, size: usize) -> Result<MemoryRange, redoubt_abi::Error> {
     // SAFETY: see the doc comment.
     unsafe { MemoryRange::new(addr, size) }
+}
+
+/// Where the first page of each placement area is, per process (`ProcessInner`): what
+/// `find_virtual_address` searches when the caller names no address.
+pub const DEFAULT_BASE: usize = 0x6000_0000;
+pub const DEFAULT_MESSAGE_BASE: usize = 0x4000_0000;
+
+/// A placement area: `map_anon`'s (`Default`, 256 MiB from `DEFAULT_BASE`) or the one received
+/// messages are mapped into (`Messages`, one superpage from `DEFAULT_MESSAGE_BASE`).
+#[derive(Clone, Copy, Debug)]
+pub enum MemoryType {
+    Default,
+    Messages,
 }
 
 pub struct MemoryManager {
@@ -319,7 +333,7 @@ impl MemoryManager {
         &mut self,
         virt_ptr: *mut u8,
         size: usize,
-        kind: redoubt_abi::MemoryType,
+        kind: MemoryType,
     ) -> Result<*mut u8, redoubt_abi::Error> {
         // If we were supplied a perfectly good address, return that.
         if !virt_ptr.is_null() {
@@ -329,15 +343,12 @@ impl MemoryManager {
         // let process = Process::current();
         Process::with_inner_mut(|process_inner| {
             let (start, end, initial) = match kind {
-                redoubt_abi::MemoryType::Stack | redoubt_abi::MemoryType::Heap => {
-                    return Err(redoubt_abi::Error::BadAddress);
-                }
-                redoubt_abi::MemoryType::Default => (
+                MemoryType::Default => (
                     process_inner.mem_default_base,
                     process_inner.mem_default_base + 0x1000_0000,
                     process_inner.mem_default_last,
                 ),
-                redoubt_abi::MemoryType::Messages => (
+                MemoryType::Messages => (
                     process_inner.mem_message_base,
                     process_inner.mem_message_base + 0x40_0000, // Limit to one superpage
                     process_inner.mem_message_last,
@@ -359,9 +370,8 @@ impl MemoryManager {
                 }
                 if all_free {
                     match kind {
-                        redoubt_abi::MemoryType::Default => process_inner.mem_default_last = potential_start,
-                        redoubt_abi::MemoryType::Messages => process_inner.mem_message_last = potential_start,
-                        other => panic!("invalid kind: {:?}", other),
+                        MemoryType::Default => process_inner.mem_default_last = potential_start,
+                        MemoryType::Messages => process_inner.mem_message_last = potential_start,
                     }
                     return Ok(potential_start as *mut u8);
                 }
@@ -377,9 +387,8 @@ impl MemoryManager {
                 }
                 if all_free {
                     match kind {
-                        redoubt_abi::MemoryType::Default => process_inner.mem_default_last = potential_start,
-                        redoubt_abi::MemoryType::Messages => process_inner.mem_message_last = potential_start,
-                        other => panic!("invalid kind: {:?}", other),
+                        MemoryType::Default => process_inner.mem_default_last = potential_start,
+                        MemoryType::Messages => process_inner.mem_message_last = potential_start,
                     }
                     return Ok(potential_start as *mut u8);
                 }
@@ -399,7 +408,7 @@ impl MemoryManager {
     ) -> Result<redoubt_abi::MemoryRange, redoubt_abi::Error> {
         // If no address was specified, pick the next address that fits
         // in the "default" range
-        let virt = self.find_virtual_address(virt_ptr, size, redoubt_abi::MemoryType::Default)? as usize;
+        let virt = self.find_virtual_address(virt_ptr, size, MemoryType::Default)? as usize;
 
         if virt & 0xfff != 0 {
             return Err(redoubt_abi::Error::BadAlignment);
@@ -455,7 +464,7 @@ impl MemoryManager {
         size: usize,
         pid: PID,
         flags: MemoryFlags,
-        kind: redoubt_abi::MemoryType,
+        kind: MemoryType,
     ) -> Result<redoubt_abi::MemoryRange, redoubt_abi::Error> {
         let phys = phys_ptr as usize;
         let virt = self.find_virtual_address(virt_ptr, size, kind)?;
@@ -907,7 +916,7 @@ impl MemoryManager {
         let oom = redoubt_sys::Error::OutOfMemory;
         let len = npages.checked_mul(PAGE_SIZE).ok_or(oom)?;
         let at = self
-            .find_virtual_address(core::ptr::null_mut(), len, redoubt_abi::MemoryType::Default)
+            .find_virtual_address(core::ptr::null_mut(), len, MemoryType::Default)
             .map_err(|_| oom)? as usize;
         let ours = phys.is_none();
         for offset in (0..len).step_by(PAGE_SIZE) {

@@ -124,12 +124,12 @@ pub extern "C" fn _start() -> ! {
         // The memory and device calls (WP-K3): a stray register, flags that cannot be decoded
         // (W+X, an unknown bit), no length, a range that is not the caller's, and handles of
         // the wrong kind. `system_reset` is offered a budget handle, never the Reset right.
-        call(Number::MapAnon, [4096, 3, 1, 0, 0, 0, 0]),
-        call(Number::MapAnon, [4096, 6, 0, 0, 0, 0, 0]),
-        call(Number::MapAnon, [4096, 8, 0, 0, 0, 0, 0]),
+        call(Number::MapAnon, [rd::PAGE_SIZE, 3, 1, 0, 0, 0, 0]),
+        call(Number::MapAnon, [rd::PAGE_SIZE, 6, 0, 0, 0, 0, 0]),
+        call(Number::MapAnon, [rd::PAGE_SIZE, 8, 0, 0, 0, 0, 0]),
         call(Number::MapAnon, [0, 3, 0, 0, 0, 0, 0]),
-        call(Number::Unmap, [KERNEL, 4096, 0, 0, 0, 0, 0]),
-        call(Number::SetFlags, [text, 4096, 6, 0, 0, 0, 0]),
+        call(Number::Unmap, [KERNEL, rd::PAGE_SIZE, 0, 0, 0, 0, 0]),
+        call(Number::SetFlags, [text, rd::PAGE_SIZE, 6, 0, 0, 0, 0]),
         call(Number::MapDevice, [0, 0, 0, 0, 0, 0, 0]),
         call(Number::MapDevice, [system as usize, 0, 0, 0, 0, 0, 0]),
         call(Number::DmaAlloc, [999, 1, 0, 0, 0, 0, 0]),
@@ -174,7 +174,7 @@ pub extern "C" fn _start() -> ! {
         0x1000,
         scratch,
         scratch + 3,
-        scratch + 4096,
+        scratch + rd::PAGE_SIZE,
         text,
         end - 8,
         end,

@@ -26,14 +26,15 @@ use dt::Platform;
 use tar_no_std::TarArchiveRef;
 use redoubt_abi::arch::{
     EXCEPTION_STACK_PAGES, EXCEPTION_STACK_TOP, KERNEL_AREA, KERNEL_DMA_PAGES, KERNEL_DMA_REGS, KERNEL_PLIC_BASE, KERNEL_STACK_PAGES,
-    KERNEL_STACK_TOP, THREAD_CONTEXT_AREA, THREAD_CONTEXT_PAGES, USER_AREA_END, USER_STACK_TOP,
+    KERNEL_STACK_TOP, THREAD_CONTEXT_AREA, THREAD_CONTEXT_PAGES,
 };
+use redoubt_sys::{PAGE_SIZE, USER_AREA_END};
 
 use crate::alloc::{PageAllocator, Pid, KERNEL_PID};
 use crate::paging::{AddressSpace, Pte};
 
-pub const PAGE_SIZE: usize = 4096;
-
+/// Top of the first thread's stack in every loader process, the same on both widths.
+const USER_STACK_TOP: usize = 0x8000_0000;
 /// Pages of stack reserved for the first thread of an initial process. Only the top
 /// page is backed by memory; the kernel demand-pages the rest.
 const USER_STACK_PAGES: usize = 32;

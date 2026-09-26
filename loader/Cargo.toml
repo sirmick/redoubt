@@ -13,5 +13,6 @@ elf = { version = "0.8", default-features = false }
 tar-no-std = { version = "0.5", default-features = false }
 crc = { version = "3", default-features = false }
 paging = { path = "../libs/paging" }
+redoubt-sys = { path = "../libs/sys" }
 ed25519-compact = { version = "2", default-features = false }
 redoubt-signing = { path = "../libs/signing" }              # the bundle signature's preimage

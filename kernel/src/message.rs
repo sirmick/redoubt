@@ -37,8 +37,10 @@
 use core::cmp::Ordering;
 use core::num::{NonZeroU64, NonZeroUsize};
 
-use redoubt_abi::arch::PAGE_SIZE;
-use redoubt_abi::{MemoryFlags, PID, TID};
+use redoubt_sys::PAGE_SIZE;
+use redoubt_abi::{MemoryFlags, PID};
+
+use crate::arch::process::TID;
 use redoubt_sys::{
     Body, CallOutcome, Error, Handle as AbiHandle, Labels, LendDisposition, MAX_LABELS, MAX_LEND_PAGES,
     MAX_MSG_HANDLES, MAX_OPEN_CALLS, Message, MessageKind, MintSource, Pages, RECEIVED_SLOTS, Received,
@@ -1222,7 +1224,7 @@ fn choose_buffer_address(
     // `find_virtual_address` reads the receiver's own kernel page, so its space must be active.
     ss.activate(rpid).map_err(|_| Error::Refused)?;
     let found = mm
-        .find_virtual_address(core::ptr::null_mut(), pages * PAGE_SIZE, redoubt_abi::MemoryType::Messages)
+        .find_virtual_address(core::ptr::null_mut(), pages * PAGE_SIZE, crate::mem::MemoryType::Messages)
         .map(|addr| addr as usize)
         .map_err(|_| Error::Refused);
     ss.activate(here).expect("the running process can be activated");

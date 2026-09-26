@@ -38,7 +38,9 @@
 //! ([`switch`]). It is not a system call: its tag is outside the call table, and a user-mode
 //! `ecall` with it is an unknown number (`InvalidArgument`) like any other.
 
-use redoubt_abi::{PID, TID};
+use redoubt_abi::PID;
+
+use crate::arch::process::TID;
 use redoubt_stride::{Budgets, Cpu, State};
 
 use crate::arch::process::{MAX_PROCESS_COUNT, MAX_THREAD};
@@ -434,7 +436,7 @@ pub mod trace {
 
     /// Frames the ring takes (2 MiB), and the records they hold: four words each.
     const PAGES: usize = 512;
-    const PER_PAGE: usize = redoubt_abi::arch::PAGE_SIZE / 32;
+    const PER_PAGE: usize = redoubt_sys::PAGE_SIZE / 32;
     const CAP: usize = PAGES * PER_PAGE;
 
     struct Ring {

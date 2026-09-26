@@ -6,7 +6,8 @@ use core::num::{NonZeroU64, NonZeroUsize};
 pub use redoubt_sys::{
     Body, BudgetSpec, Call, Cause, Error, ExitNotice, FOREVER, Handle, Handles, Labels, MAX_HANDLES,
     MAX_LEND_PAGES, MAX_MSG_HANDLES, MAX_OPEN_CALLS, MAX_START_HANDLES, MemFlags, Message, MessageKind,
-    MintSource, Number, PAGE_SIZE, Pages, Received, ReceivedBody, ResetKind, Return, Usage, WAIT_CAP, WORDS,
+    MintSource, Number, PAGE_SIZE, Pages, Received, ReceivedBody, ResetKind, Return, USER_AREA_END,
+    Usage, WAIT_CAP, WORDS,
 };
 use redoubt_sys::{RECEIVED_SLOTS, USAGE_SLOTS};
 
