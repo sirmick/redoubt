@@ -96,7 +96,10 @@ I16 DMA pages reset before reuse.
 - **Servers list (as written):** R25 the label check, R26 admission fairness, R27 badge
   allocation, R28 parked-call accounting (serving.md); R29 strict decoding, R30 one layout per
   message (wire.md); R31 startup block checked whole, R32 a hostile image hurts only its process,
-  R33 no server holds a system budget, R34 confined placement, R35 key separation (init.md).
+  R33 no server holds a system budget, R34 confined placement, R35 key separation (init.md); R36 unpredictable ids, R37 vault non-interference, R38
+  out-of-band approval, R39 leases end, R40 blame by label set, R41 narrowing by revocation scope,
+  R42 one approved item (steward.md); R43 no export, R44 one key, one purpose, keyd's own digest,
+  R45 constant-time signing (keyd.md).
 - The servers set takes the next free numbers, in the order its pages are written (the
   userland template has no Security properties section, so userland pages only cite).
 - `rule F` stays on `docs/testbench.md`.

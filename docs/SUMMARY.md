@@ -28,6 +28,8 @@
   - [The serving library](servers/serving.md)
   - [Wire formats](servers/wire.md)
   - [Init](servers/init.md)
+  - [The steward](servers/steward.md)
+  - [keyd](servers/keyd.md)
   - [The wire protocol]()
   - [init and the boot manifest]()
   - [The steward]()
