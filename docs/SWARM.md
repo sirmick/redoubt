@@ -20,17 +20,17 @@ git.
 | Architect | frontier | the resident design authority: answers design questions from the pages, records owner decisions, applies accepted rules to the owning page |
 | Implementer | workhorse | builds exactly one package in its own worktree and branch |
 | Red team | workhorse | reviews a package for a way to break it: a rule or invariant violated, a label or capability bypassed, an attack case whose verdict could be forged |
-| Simplifier | light | reviews for what can be deleted or made simpler without losing a rule |
-| Editor | light | reviews code comments and pages for voice, vocabulary, links and process leftovers |
+| Simplifier | light | reviews for what can be deleted or made simpler without losing a rule, and for any growth of the trusted computing base the pages did not require |
+| Editor | light | checks that the code and the pages it cites agree, that every `SAFETY:` justification is true of the code, that names and paths are spelled the same everywhere, and that comments and pages keep the book's voice, vocabulary and links with no process leftovers |
 
 **Tiers** name what a member is for, not a model. Cost matters: every call re-sends a member's whole
 context, so the cheapest capable tier is used.
 
 | Tier | Model and thinking |
 | --- | --- |
-| `frontier` | the strongest model the owner pays for, high thinking |
-| `workhorse` | the same model, low thinking; medium for kernel commits and merge-gate reviews |
-| `light` | an efficient everyday model, low thinking |
+| `frontier` | the strongest model the owner pays for (Claude Opus), high thinking |
+| `workhorse` | the same model (Claude Opus), low thinking; medium for kernel commits and merge-gate reviews |
+| `light` | an efficient everyday model (Claude Sonnet), low thinking |
 
 ### The orchestrator
 
@@ -39,11 +39,16 @@ context, so the cheapest capable tier is used.
   (`.worktrees/<package>`) and branch (`wp-<package>`).
 - Sizes the review panel to the risk ([running a package](#running-a-package)) and keeps the same
   reviewers through every round of one package.
-- Asks the Architect whenever a package meets a decision the pages do not settle; never answers a
-  design question itself, and never lets an implementer guess.
+- Rules on a member's question itself when the pages settle it or a recommendation is clear, and
+  flags any answer that would open an insecure or complex door. Asks the Architect when a package
+  meets a design decision the pages do not settle, and never lets an implementer guess.
+- Escalates to the owner only a genuine owner choice, and stops only the work that depends on it.
 - Commits and merges; implementers and reviewers do not.
 - Bounds every task it hands out: how many tool calls before the first written result, and what to
   return.
+- Keeps a running report for the owner: packages started and their state, questions asked and
+  their status, review verdicts, what was fixed or recorded as a follow-up, merges (package and
+  commit), what waits on the owner, and the next wave.
 
 ### The Architect
 
@@ -63,14 +68,14 @@ context, so the cheapest capable tier is used.
 
 Builds exactly one package and nothing else, and does not break these rules:
 1. **One package, one worktree, one branch.** No other package's files.
-2. **Stage only the paths the package delivers.** Never `git add -A` or `git commit -a`. Leave the
-   work staged and uncommitted so the reviewers and the orchestrator see the diff, unless the
-   assignment says to commit.
+2. **Stage only the paths the package delivers.** Never `git add -A` or `git commit -a`, and never
+   run git against the shared checkout. Leave the work staged and uncommitted so the reviewers and
+   the orchestrator see the diff, unless the assignment says to commit.
 3. **The design is read-only.** A contradiction, a gap, or a decision the pages do not settle is
    reported as a blocking question naming the page, the rule and the options, never improvised.
 4. **No undocumented `unsafe`,** and the ratchet only falls
    ([the unsafe budget](testbench.md#the-unsafe-budget)).
-5. **rv32 keeps compiling.**
+5. **rv32 keeps compiling:** the kernel, the loader, `redoubt-sys`, `redoubt-rt` and the servers.
 6. **Every behaviour lands with its test.** A security property lands with an attack case whose
    verdict comes from the system, never from the attacker
    ([rule F](testbench.md#rule-f-trusted-verdicts)); a bug fix lands with the test that would have
@@ -88,6 +93,9 @@ step.
 
 One angle each, read-only: a reviewer reports findings and edits, creates and stages nothing.
 
+- **Scoped to the diff.** Only concrete, current issues the diff causes or makes reachable, each
+  backed by the source, a test or reproduction, or a contradiction with a page. The diff includes
+  its untracked files: a reviewer lists them as well as the staged and unstaged changes.
 - **Bounded.** The first finding within about 15 tool calls, the verdict within about 30. Read the
   diff or range given, the pages it cites and, for the red team, the rules it claims to keep; not
   the whole book, other branches or history. One question and a few named files per task: a
@@ -105,9 +113,9 @@ One angle each, read-only: a reviewer reports findings and edits, creates and st
 
 A package is a unit of work one implementer can finish and a panel can review. It is written as:
 
-- **ID and size:** a short ID (a letter and a number, such as `K7` or `S2`) and S (hundreds of
-  lines), M (about 1,500) or L (larger). Package IDs never use the letters R, I or M, which the
-  book uses for rules, invariants and milestones.
+- **ID and size:** a short ID (letters and a number, such as `K7`, `S2` or `DOC1`) and S (hundreds
+  of lines), M (about 1,500) or L (larger). An ID is never a lone R, I or M followed by digits,
+  which the book uses for rules, invariants and milestones.
 - **Reads:** the pages and rules it implements.
 - **Delivers:** the paths it owns, which is its staging boundary, and the tests it adds.
 - **Needs:** the packages that must be merged first, and the decisions that must be settled.
@@ -220,16 +228,18 @@ accepted until its review is done. Merged packages leave the table; their record
 | server follow-ups | waiting | the server items of step 1 | DOC1's switch-over |
 | beamlet follow-up | waiting | the module search order, step 1 | DOC1's switch-over |
 | HIST1 | waiting | the git history rewrite | the old docs deleted |
-| IPC1 | review | the IPC completion checker; its remaining gates are model replay on the real kernel, the timer, the serving path and concurrency | step 8 |
+| IPC1 | review | the IPC completion checker; its remaining gates are model replay on the real kernel, the timer, the serving path and concurrency | step 9 |
 | typed parking | waiting | parking a typed call in the serving library | an owner decision; blocks the console's `resize` |
-| init and the manifest | waiting | step 2 | the follow-ups |
-| beamlet on Redoubt; IEx on the console | waiting | step 3 | `init` |
-| the file server | waiting | step 4 | `init` |
-| the steward, `keyd` and `sshd` in a boot | waiting | steps 5 and 6 | the file server, beamlet |
-| the agent and the attack suite | waiting | step 7 | everything above |
+| the kernel containment gate | waiting | step 2 | the follow-ups |
+| init and the manifest | waiting | step 3 | the follow-ups |
+| beamlet on Redoubt; IEx on the console | waiting | step 4 | `init` |
+| the file server | waiting | step 5 | `init` |
+| the steward, `keyd` and `sshd` in a boot | waiting | steps 6 and 7 | the file server, beamlet |
+| the agent and the attack suite | waiting | step 8 | everything above |
 
 ## Review debt
 
 Outstanding, none blocking, each with its page:
-[the kernel's print on a panic](todo/print-panic-reentry.md) and
+[the kernel's print on a panic](todo/print-panic-reentry.md),
+[`process_map`'s flag order](todo/process-map-flag-order.md) and
 [the write-only mutation](todo/write-only-mutation-split.md).

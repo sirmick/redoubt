@@ -33,8 +33,10 @@ Resolve actual model IDs and thinking choices from `about.caller.config_options`
 implementers and the red team, `light` for the simplifier and the editor.
 
 Wash has no profile registry, so each member's launch carries its tier's `model` and `effort`.
-Keep `max_active` at 2. If the owner has not named models, ask; do not guess IDs or silently
-substitute. Preserve the models the owner has chosen for running members.
+The owner's models are named in the tier table: Claude Opus for `frontier` and `workhorse`, Claude
+Sonnet for `light`. Resolve each to the provider's current model ID from `config_options`; if a
+named model is not offered, ask the owner, and do not guess IDs or silently substitute. Keep
+`max_active` at 2. Preserve the models the owner has chosen for running members.
 
 The project root is the orchestrator's working directory (`.` below); resolve it to an absolute
 path before submitting. Call `workspace_configure` with a single setup or patch. This is a
@@ -180,6 +182,18 @@ Only the orchestrator or a reviewer tagged to the package resolves, with evidenc
 ```
 
 Use the actual revision, references and evidence, not these placeholders.
+
+## Wash quirks
+
+- A member's `task` arrives after its `instructions`, and a member may act on the task before it
+  rereads them. Put every gate and limit (what to do first, what not to touch) in the
+  instructions, not only in the task.
+- Assignment results and QA replies carry their text in `body`.
+- A QA `open` needs an `assignee`. Split a long QA body into several replies, and never write the
+  HTML comment opener (`<!` followed by two hyphens) in one: the generated QA file is Markdown, and
+  the opener hides everything after it.
+- Recovered members after a backend restart are paused: resume them with `member_control`
+  ([below](#acceptance-and-recovery)).
 
 ## Inbox, status and waiting
 
