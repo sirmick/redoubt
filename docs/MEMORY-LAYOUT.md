@@ -1,7 +1,8 @@
 # Virtual memory (Sv32 and Sv39)
 
-Built, both widths. Owns: the physmap, the address-space split, per-width layouts. Constants live in
-`libs/abi/src/arch/riscv/mem.rs`; the page-table code is the `paging` crate (`libs/paging/`), the
+Built, both widths. Owns: the physmap, the address-space split, per-width layouts. The kernel half's
+constants live in `libs/layout/` (`redoubt-layout`, shared by the loader and the kernel); the extent
+of user space (`USER_AREA_END`) and `PAGE_SIZE` are `redoubt-sys`'s. The page-table code is the `paging` crate (`libs/paging/`), the
 only code that edits page-table entries.
 
 ## Decision 1: a direct physical map
@@ -39,10 +40,10 @@ without allocating.
 | Per-process kernel data | root 510 at `0xffff_ffff_8000_0000` | root 1022 at `0xff80_0000` |
 | Kernel image, stacks, arguments | root 511 at `0xffff_ffff_c000_0000` | root 1023 at `0xffc0_0000` |
 
-Per-process kernel data holds `ProcessImpl` at `THREAD_CONTEXT_AREA` (slot 0 is the process header,
-slots 1..=31 are saved thread contexts: 2 pages on rv64, 1 on rv32) and `USERSPACE_BUFFER`
-(temporary; the physmap should replace it). Userspace regions are the same on both widths
-(`DEFAULT_HEAP_BASE = 0x2000_0000`, stack top `0x8000_0000`); spreading out over the rv64 space
+Per-process kernel data holds `ProcessImpl` at `PROCESS_AREA` (context 0 is the process header,
+context N the saved registers of thread N, 1..=31: 2 pages on rv64, 1 on rv32). Userspace regions
+are the same on both widths (the kernel places anonymous memory from `0x6000_0000`, stack top
+`0x8000_0000`); spreading out over the rv64 space
 (and ASLR) is a later, userspace-visible change. User space starts at address 0 on both widths:
 no page is reserved at the bottom, so a call that names a user address (`map_fixed`,
 `process_map`, `unmap`, `set_flags`) accepts page 0. SUM stays clear, so the kernel never
@@ -89,4 +90,4 @@ takes two 32-bit register halves on both widths (KERNEL-SPEC.md, ABI), so `redou
 - The physmap makes all RAM kernel-addressable, including a writable alias of user code pages.
 - Every map and unmap does a global `sfence.vma`.
 - Kernel entry relies on the firmware delegating instruction page faults to S-mode (BOOT.md).
-- For SMP, the exception stack and "current context" must become per-hart (PLAN.md, SMP).
+- For SMP, the trap stack and "current context" must become per-hart (PLAN.md, SMP).
