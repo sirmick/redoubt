@@ -189,13 +189,13 @@ recipes remain in git.
   if any of those devices does not confirm, the frames are quarantined for good, still charged to
   the budget that paid for them, and each device that failed has its object destroyed and is not
   handed out again until reboot; the executable model mirrors it (answer 173 and its note).
-- Accepted when: rv64 boot and rv32 compilation; attack cases: a DMA driver killed mid-traffic,
-  its frames reallocated to another process, whose writes into the old ring pages steer no DMA
-  and receive no device bytes; a device that ignores reset leaves its frames quarantined and
-  never reused; nothing is freed before the reset is confirmed; a model mutation (free before
-  reset) is caught.
+- Accepted when: rv64 boot and rv32 compilation; attack cases (owner, 2026-09-25: reuse checks,
+  no test steers DMA): a DMA driver destroyed with its budget, whose frames come back to another
+  process only after the device reports reset, failing on a kernel without the reset; a device
+  that ignores reset leaves its frames quarantined and never reused; nothing is freed before the
+  reset is confirmed; a model mutation (free before reset) is caught.
 - Needs: WP-K5 (sole kernel writer; done right after it, reviewed and integrated on its own).
-  Gates WP-R3's driver restart and any off-bench use of WP-D3.
+- Status: merged in wave 6. WP-R3's driver restart and off-bench WP-D3 no longer wait on it.
 
 **WP-K6. Delete the legacy interface.** Size M.
 - Delivers: removal of SID connects, scalar message kinds, `ClaimInterrupt`, the `grants` entry,
@@ -337,8 +337,8 @@ recipes remain in git.
 - **Network (answer 174).** WP-D3 is accepted on a rig that starts the real `netd` and `ipd`
   through the stub; R3 retains the manifest boot of `netd` and `ipd:lan` (named handles, their
   arguments, `self=10.0.2.0/24` on QEMU) as its own gate. **Restarting `netd`, or any driver
-  holding an always-armed DMA device, waits for WP-K5b (answer 173)**: until then its death
-  leaves a device a freed frame's next owner can steer.
+  holding an always-armed DMA device, is safe since WP-K5b (answer 173)**: the kernel resets
+  each device the dead driver could reach before its frames are reused.
 - **Confinement (answers 152-153; TENETS.md, Purpose and threat model; CONTAINMENT.md, Push and the channel
   table; GAME.md, Setting up a match).** The manifest gains the `confined` flag (INIT.md, The boot manifest): one
   top-level boolean for the whole boot. `init` compares **label sets** and refuses the boot when two
@@ -445,8 +445,8 @@ labelled callers.
   `/net` at all (a sink refuses labelled callers).
 - Needs: WP-R1b, WP-K3, WP-W2.
 - Contract: answer 174 (IO-ARCHITECTURE.md, `netd`; NAMESPACES.md, the network tree). Evidence
-  before R3 is the rig (`tests/net`); the manifest boot is R3's gate, and use off the bench or a
-  `netd` restart needs WP-K5b.
+  before R3 is the rig (`tests/net`); the manifest boot, use off the bench and a `netd` restart
+  are R3's gate (WP-K5b's DMA reset is in).
 
 **WP-S2. steward (stateless, milestone 1).** Size L.
 - Reads: CAPABILITIES.md, CONTAINMENT.md, INIT.md, PACKAGES.md (launching).
