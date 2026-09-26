@@ -1,7 +1,6 @@
-# The `consol` protocol
+The `consol` protocol's message and error tables, included by its owning page, [servers/consoled.md](../../../docs/servers/consoled.md).
 
-Owned by [servers/consoled.md](../../../docs/servers/consoled.md).
-
+<!-- ANCHOR: tables -->
 <!-- wire: consol ninep -->
 | Opcode | Message | Fields | Reply |
 | --- | --- | --- | --- |
@@ -11,3 +10,5 @@ Owned by [servers/consoled.md](../../../docs/servers/consoled.md).
 <!-- wire-errors: consol -->
 | Code | Error |
 | --- | --- |
+
+<!-- ANCHOR_END: tables -->

@@ -1,7 +1,6 @@
-# The `bootfs` protocol
+The `bootfs` protocol's message and error tables, included by its owning page, [servers/bootfsd.md](../../../docs/servers/bootfsd.md).
 
-Owned by [servers/bootfsd.md](../../../docs/servers/bootfsd.md).
-
+<!-- ANCHOR: tables -->
 <!-- wire: bootfs ninep -->
 | Opcode | Message | Fields | Reply |
 | --- | --- | --- | --- |
@@ -12,3 +11,5 @@ Owned by [servers/bootfsd.md](../../../docs/servers/bootfsd.md).
 | Code | Error |
 | --- | --- |
 | 2 | `refused` |
+
+<!-- ANCHOR_END: tables -->
