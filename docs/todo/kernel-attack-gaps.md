@@ -8,7 +8,7 @@ gap: the page's section, the claim, and what no case attacks.
 
 ### ipc.md
 - R1 (flow): a call or send between user budgets with different labels is attacked only in the model.
-- R2 (fair waiting): turns between several groups are attacked only in the model.
+- R2 (fair waiting): turns between several groups, and the keying of groups by account, label set and (for account 0) budget, are attacked only in the model; `redoubt-ipc` fills one group's cap.
 - What `receive` returns: a record made unwritable while its thread waits is not attacked (`process-attack` attacks only a record bad when `receive` starts).
 - How a call completes, R13 (one outcome per call): completion races between harts are not attacked.
 - R14 (unforgeable sender): every case delivers account 0 and no labels; a non-zero account or a label set reaching the receiver unchanged is attacked only in the model (`MsgNoLabels`, `MsgAccountZero`).
