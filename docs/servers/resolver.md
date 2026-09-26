@@ -24,10 +24,12 @@ Status: planned · M4 (self-hosted development)
   that subtracts from it and always wins. A suffix matches only at a label boundary: `example.com`
   covers `a.example.com` and never `evilexample.com`. The rules come from whoever granted the
   connection, and a grant only narrows them.
-- **Callers.** `ipd` asks through its own resolver connection, with the rule of the connection
-  that is connecting ([ipd](ipd.md#name-scoped-connections)). A session's own lookups (for
-  `getaddrinfo`) come on a resolver badge carrying the same rule, minted from the same grant; their
-  answers are only informational, since the session connects by name.
+- **Callers.** The steward mints one resolver connection per (account, label set) from its
+  resolver root and hands it to `ipd` with that principal's `ipd` root; `ipd` uses exactly that
+  connection for every `connect(name, port)` under that root and never shares one across roots
+  ([ipd](ipd.md#name-scoped-connections)). A session's own lookups (for `getaddrinfo`) use its own
+  steward-minted resolver connection, carrying the same rule; their answers are only informational,
+  since the session connects by name.
 - **`resolve(name)`** answers the IPv4 addresses for `name` if the rules allow it, with their
   lifetime. A disallowed name is refused locally with its own error, `refused`, and never sent
   upstream, so the names queried cannot carry data out; a nonexistent allowed name is the
@@ -63,12 +65,19 @@ through `gatewayd` ([gatewayd](gatewayd.md)).
 
 Status: planned · M4 (self-hosted development)
 
-Answers are cached per (account, label set), in practice per account since the resolver is a
-sink, and never shared: a shared cache tells one principal, by how fast it answers, which names
-another asked for. A cached answer keeps the lifetime the upstream gave it, capped by the
-resolver's own maximum.
+The cache is keyed by the connection a query arrives on, its own badge, never by anything in the
+query and never by the connection's admission share: the account-0 fold of
+[R26 (admission fairness)](serving.md#r26-admission-fairness) governs admission only.
+Since the steward mints one connection per (account, label set) for `ipd` and one for the session,
+each principal's lookups fill only its own caches, and no principal's answers are served from
+another's: a shared cache would tell one principal, by how fast it answers, which names another
+asked for. A cached answer keeps the lifetime the upstream gave it, capped by the resolver's own
+maximum.
 
-**Open:** the cap on an answer's lifetime and on the cache's size per (account, label set).
+The attack test: two principals resolve one name and the upstream sees two queries; a mutation that
+keys the cache by rule or name alone fails it.
+
+**Open:** the cap on an answer's lifetime and on each connection's cache size.
 
 ## Authority
 
@@ -121,6 +130,8 @@ Status: planned · M4 (self-hosted development)
   implementation.
 - **The allowed names are a channel.** A client may choose which allowed names it asks for and when;
   the resolver bounds the alphabet to its rules, not the timing.
+- **The upstream's cache is shared.** The upstream DNS server's own cache serves everyone outside
+  the box as well, so timing there is a side channel the resolver cannot close.
 - **A name's addresses are shared.** An allowed name hosted beside other services on one address
   reaches all of them on the allowed ports.
 
