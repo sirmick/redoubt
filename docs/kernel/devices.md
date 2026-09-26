@@ -157,7 +157,7 @@ the kernel prints `DMA: device <base> did not confirm its reset; quarantined unt
 
 ### `system_reset`
 
-Status: built · tested: bench:device, bench:irq-attack
+Status: built · partly tested: a reboot (`kind` 2) is not attacked by a case; the cases power off, and ask for a reboot only through a handle not held · tested: bench:device, bench:irq-attack
 
 `system_reset(h(Reset), kind)` powers the machine off (`kind` 1) or reboots it (`kind` 2)
 through the firmware's system reset call. On success it does not return. Errors:

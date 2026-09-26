@@ -213,8 +213,15 @@ Status: built · tested: host:redoubt-model::every_rule_has_a_mutation, host:red
 A **mutation** is one deliberate break planted in the model. Each variant of `enum Mutation`
 (`model/src/mutation.rs`) breaks one rule at one place in the model, marked
 `self.broken(Mutation::...)`; with no mutation, the model is the specified kernel.
-`Mutation::ALL` lists all 127 variants, and `Mutation::rule()` returns the rule or invariant ID
-each one breaks, or `policy` for the steward's.
+`Mutation::ALL` lists all 127 variants. `Mutation::rule()` names what each one breaks, but not
+always by the IDs these pages use. It returns `R1` to `R12` for the variants named after those
+rules, folding the open-call and dead-server variants into their parent rule, `I13` for one,
+and `policy` for the steward's. The rest return
+the name of the design text or the call they were written from: `IPC` for the R13 variants,
+`Messages`, `Process`, `Budget`, `Handle`, `serve`, `budget_create`, `process_create`, `mint`,
+and labels that name no page at all for the open-call limit, a weightless budget and I16's
+variants. The table below maps every variant to its ID; the code's grouping matters only to
+the tests that key on it.
 
 - `every_rule_has_a_mutation` requires at least one variant for every kernel rule numbered 1
   to 12.

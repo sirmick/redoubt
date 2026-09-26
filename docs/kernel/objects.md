@@ -23,7 +23,7 @@ those three walls and the tests that attack them.
 
 ### The four object kinds
 
-Status: built · tested: bench:budget, bench:redoubt-ipc, bench:redoubt-dead, bench:process, bench:process-attack, bench:device
+Status: built · partly tested: that no two objects ever share an id is attacked only in the model for budgets and not at all for the other kinds, because a process cannot see an id · tested: bench:budget, bench:redoubt-ipc, bench:redoubt-dead, bench:process, bench:process-attack, bench:device
 
 | Kind | What it is | Made by | Ends when |
 | --- | --- | --- | --- |

@@ -37,7 +37,7 @@ a time never fires before `time_now` reaches it.
 
 ### The hart timer
 
-Status: built · tested: bench:timeouts, bench:budget-deadline, bench:sched-share, mutation:TimeoutIgnoredWhileOthersRun
+Status: built · partly tested: that a stale early hint costs one early interrupt and misses nothing is argued from the code, not attacked · tested: bench:timeouts, bench:budget-deadline, bench:sched-share, mutation:TimeoutIgnoredWhileOthersRun
 
 The kernel keeps three times (`kernel/src/time.rs`) and arms the hardware for the earliest:
 - the **slice end** of the running thread: set to the pick time plus `SLICE` (10,000 µs) when
@@ -202,7 +202,7 @@ it, and a wake never preempts; the bench measures that delay as a target, not a 
 
 ### A passed deadline comes first
 
-Status: built · tested: bench:budget-deadline, mutation:BudgetDeadlineIgnored
+Status: built · partly tested: a process entering the kernel in a tight loop to put its deadline off is not attacked by a case · tested: bench:budget-deadline, mutation:BudgetDeadlineIgnored
 
 A budget whose deadline has passed is destroyed before any operation that enters the kernel
 after that instant, by R10. Nothing defers expiry: no kernel state, no interrupt handling and no

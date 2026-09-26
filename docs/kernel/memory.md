@@ -171,7 +171,7 @@ zeroed whenever it leaves Free.*
 
 ## Authority
 
-Status: built · tested: bench:process-attack, bench:device, bench:ipc-outcomes, bench:map-fixed-attack
+Status: built · partly tested: that no call names a physical frame is argued from the call table, not attacked · tested: bench:process-attack, bench:device, bench:ipc-outcomes, bench:map-fixed-attack
 
 - **A process maps only into its own address space.** `map_anon`, `map_fixed`, `unmap` and
   `set_flags` act on the caller's own pages; none names another process.
