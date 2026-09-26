@@ -21,7 +21,7 @@ expect = [
     '^\[net-rig\] ok: the victim accepted nothing more and still runs$',
     '^\[net-rig\] ok: buckets: two more accounts held, a third refused \(\[true, true, false\]\)$',
     '^\[net-rig\] ok: netd and ipd still run ',
-    '^\[net-rig\] D3 NET ATTACKS PASSED$',
+    '^\[net-rig\] NET ATTACKS PASSED$',
 ]
 forbid = ['\[net-rig\] FAIL']
 poweroff = true

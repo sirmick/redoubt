@@ -434,8 +434,11 @@ impl Mutation {
         ]
     };
 
+    /// A break of the steward model's policy rather than of the kernel.
+    pub fn is_policy(self) -> bool { alloc::format!("{self:?}").starts_with("Policy") }
+
     /// The rule or invariant it breaks, by the ID the book defines it under (kernel/model.md,
-    /// "Mutations"), or "policy" for the steward model's.
+    /// "Mutations"). Every variant names one: the match has no catch-all.
     pub fn rule(self) -> &'static str {
         use Mutation::*;
         match self {
@@ -524,7 +527,27 @@ impl Mutation {
             | DmaQuarantineChargeDropped
             | DmaQuarantinedDeviceUsable
             | DmaResetClearsCoHolderReach => "I16",
-            _ => "policy",
+            PolicyServerHoldsSystemBudget => "R33",
+            PolicyLoginWithKeydKey => "R35",
+            PolicySequentialIds => "R36",
+            PolicyVaultWithoutOwnership
+            | PolicyWriteUp
+            | PolicyCarveFromUnlabelled
+            | PolicyAuditUnfiltered => "R37",
+            PolicyApproveIgnoresHash
+            | PolicyShowLabelledToAll
+            | PolicyRenderNotWhitelisted
+            | PolicyLabelledFreeTextShown
+            | PolicyNoPendingCap
+            | PolicyCapPerAccount
+            | PolicyDeadSessionRequestsKept => "R38",
+            PolicyUnboundedLease
+            | PolicySubAgentOutlivesAgent
+            | PolicyEndLeaseAdmitted
+            | PolicyNoFairShare => "R39",
+            PolicyBlameNoWindow | PolicyBlamePerAccount | PolicyNoLockout => "R40",
+            PolicyNarrowToSessionBudget => "R41",
+            PolicyDeclassifyLive | PolicyDeclassifyWithoutReader => "R42",
         }
     }
 }

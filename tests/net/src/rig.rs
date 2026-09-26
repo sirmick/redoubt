@@ -228,10 +228,10 @@ pub fn run(mode: Mode) -> u32 {
             "[net-rig] {} PASSED",
             match mode {
                 Mode::Probe => "NET PROBE",
-                Mode::Tcp | Mode::Twice => "D3 NET TCP",
+                Mode::Tcp | Mode::Twice => "NET TCP",
                 Mode::Peer => "NET PEER",
-                Mode::Pinned => "D3 NET PINNED",
-                Mode::Attacks | Mode::Unrefused => "D3 NET ATTACKS",
+                Mode::Pinned => "NET PINNED",
+                Mode::Attacks | Mode::Unrefused => "NET ATTACKS",
             }
         );
     }

@@ -11,7 +11,7 @@ expect = [
     '^\[net-rig\] listening on 8000 with a backlog of 2$',
     '^\[net-rig\] ok: the listener accepted and echoed the bench.s dial \(1\)$',
     '^\[net-rig\] ok: netd and ipd still run ',
-    '^\[net-rig\] D3 NET TCP PASSED$',
+    '^\[net-rig\] NET TCP PASSED$',
 ]
 forbid = ['\[net-rig\] FAIL']
 poweroff = true

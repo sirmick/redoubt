@@ -218,13 +218,14 @@ A **mutation** is one deliberate break planted in the model. Each variant of `en
 more than one place, and a direct comparison with the mutation for `AbandonNoticeMissing` and
 `R11LendStaysMapped`. With no mutation, the model is the specified kernel.
 `Mutation::ALL` lists all 127 variants. `Mutation::rule()` returns the ID each one breaks, as in
-the table below, and `policy` for the steward's.
+the table below; the steward's variants, named `Policy...`, break the server rules the steward
+model checks.
 
 - `every_rule_has_a_mutation` requires at least one variant for every kernel rule numbered 1
   to 12.
 - `mutations_are_caught` plants each variant in turn. It runs the scripted IPC and scheduling
   contracts, then every property family, the one that pressures the rule first
-  (`scheduler_fairness` for R12, the steward families for `policy`, `flood` for the open-call
+  (`scheduler_fairness` for R12, the steward families for the `Policy` variants, `flood` for the open-call
   limit), up to 20,000 seeds each (20 for the flood). It fails if any variant survives, and
   prints the property and seed that caught each one. `REDOUBT_MODEL_MUTATIONS` narrows the run
   to matching variants, for diagnosis only.
@@ -254,7 +255,15 @@ the table below, and `policy` for the steward's.
 | [I8 (class and account inherited)](invariants.md#i8-class-and-account-inherited) | `ClassNotInherited` | a child's class is its parent's |
 | [I13 (every blocking call returns by its timeout)](invariants.md#i13-every-blocking-call-returns-by-its-timeout) | `TimeoutIgnoredWhileOthersRun`, `ExpireBudgetsFirst` | timeouts expire while others run; at one instant, timeouts before deadlines |
 | [I16 (DMA pages reset before reuse)](invariants.md#i16-dma-pages-reset-before-reuse) | `DmaFreeBeforeReset`, `DmaQuarantinedSlotCountsAsReset`, `DmaUnmapFrees`, `DmaQuarantineChargeDropped`, `DmaQuarantinedDeviceUsable`, `DmaResetClearsCoHolderReach` | pooling only after a confirmed reset, co-holders included; `unmap` keeping DMA frames; quarantine's charge and sweep |
-| `policy` | `PolicyVaultWithoutOwnership`, `PolicyApproveIgnoresHash`, `PolicyShowLabelledToAll`, `PolicyNoPendingCap`, `PolicyCapPerAccount`, `PolicyNoFairShare`, `PolicyEndLeaseAdmitted`, `PolicyDeclassifyLive`, `PolicyDeclassifyWithoutReader`, `PolicyBlameNoWindow`, `PolicyBlamePerAccount`, `PolicyNoLockout`, `PolicySequentialIds`, `PolicyLoginWithKeydKey`, `PolicySubAgentOutlivesAgent`, `PolicyUnboundedLease`, `PolicyDeadSessionRequestsKept`, `PolicyRenderNotWhitelisted`, `PolicyLabelledFreeTextShown`, `PolicyWriteUp`, `PolicyServerHoldsSystemBudget`, `PolicyNarrowToSessionBudget`, `PolicyCarveFromUnlabelled`, `PolicyAuditUnfiltered` | the steward model's properties |
+| [R33 (no server holds a system budget)](../servers/init.md#r33-no-server-holds-a-system-budget) | `PolicyServerHoldsSystemBudget` | the steward starts with no system-class budget handle |
+| [R35 (key separation)](../servers/init.md#r35-key-separation) | `PolicyLoginWithKeydKey` | no login with a key `keyd` holds |
+| [R36 (unpredictable ids)](../servers/steward.md#r36-unpredictable-ids) | `PolicySequentialIds` | random ids |
+| [R37 (vault non-interference)](../servers/steward.md#r37-vault-non-interference) | `PolicyVaultWithoutOwnership`, `PolicyWriteUp`, `PolicyCarveFromUnlabelled`, `PolicyAuditUnfiltered` | vault ownership, no write up, sub-budgets per label set, filtered audit reads |
+| [R38 (out-of-band approval)](../servers/steward.md#r38-out-of-band-approval) | `PolicyApproveIgnoresHash`, `PolicyShowLabelledToAll`, `PolicyRenderNotWhitelisted`, `PolicyLabelledFreeTextShown`, `PolicyNoPendingCap`, `PolicyCapPerAccount`, `PolicyDeadSessionRequestsKept` | approval of the frozen request, what the screen shows, the pending caps |
+| [R39 (leases end)](../servers/steward.md#r39-leases-end) | `PolicyUnboundedLease`, `PolicySubAgentOutlivesAgent`, `PolicyEndLeaseAdmitted`, `PolicyNoFairShare` | bounded leases, sub-agents ending with them, ending always admitted, a fair share |
+| [R40 (blame by label set)](../servers/steward.md#r40-blame-by-label-set) | `PolicyBlameNoWindow`, `PolicyBlamePerAccount`, `PolicyNoLockout` | the blame window, its key and the lockout |
+| [R41 (narrowing by revocation scope)](../servers/steward.md#r41-narrowing-by-revocation-scope) | `PolicyNarrowToSessionBudget` | narrowing to a revocation scope |
+| [R42 (one approved item)](../servers/steward.md#r42-one-approved-item) | `PolicyDeclassifyLive`, `PolicyDeclassifyWithoutReader` | a snapshot, to a named reader |
 
 Six rules are outside the model and have no variant: R15 (verified boot), R16 (image confinement), R17 (fail closed), R19 (kernel W^X), R23 (no test channels) and R24 (SUM and MXR clear). The model has no
 loader, no bundle, no kernel mappings of its own and no test build. Three rules are in the model
@@ -326,7 +335,7 @@ The tests:
   rule. It replays 2,000 random traces with epilogues, plus four scripted ones (a partial reply,
   current-call blame, the equal-instant expiry order, a quarantined device named again), and
   requires some trace to fail for every variant that results can show. Not required, because
-  results cannot show them: the `policy` variants; R12's, since scheduling shows only in timing;
+  results cannot show them: the `Policy` variants; R12's, since scheduling shows only in timing;
   `R5NoMaskOnFire`, since every result is the same and the model's own R5 check catches it; the
   three open-call-limit variants, since random traces never reach the limit (the flood does);
   and `DmaResetClearsCoHolderReach`, which only the I16 ghost check sees.

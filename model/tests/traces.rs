@@ -76,7 +76,7 @@ fn a_rule_breaking_kernel_fails_replay() {
     texts.push(common::contracts::dma_quarantine_trace());
     let mut missed = Vec::new();
     let invisible = |m: &Mutation| {
-        m.rule() == "policy"
+        m.is_policy()
             || m.rule() == "R12"
             || *m == Mutation::R5NoMaskOnFire
             // Random sequences never reach MAX_OPEN_CALLS; the flood family does (its traces are
