@@ -67,7 +67,7 @@ fn ask(t: &mut T, code: usize, arg: usize) -> [usize; rd::WORDS] {
 }
 
 /// A thread that queues one message on an endpoint nobody receives on (R2's `WAIT_CAP`).
-fn queue_one(_arg: usize) -> ! {
+fn queue_one(_arg: usize) {
     // SAFETY: the main thread wrote it before creating any of these threads.
     let silent = unsafe { core::ptr::read_volatile(&raw const SILENT) };
     rd::call(silent, &rd::body([0; rd::WORDS]), None, FOREVER).ok();
@@ -75,7 +75,7 @@ fn queue_one(_arg: usize) -> ! {
 }
 
 /// A thread that offers one call for the server to park (R4a).
-fn parker(_arg: usize) -> ! {
+fn parker(_arg: usize) {
     rd::call_waiting(E, &rd::body([op::KEEP, 0, 0, 0]), None, FOREVER).ok();
     test_programs::park()
 }
@@ -153,7 +153,7 @@ pub extern "C" fn _start() -> ! {
     // SAFETY: written before any thread that reads it is created.
     unsafe { core::ptr::write_volatile(&raw mut SILENT, silent) };
     for _ in 0..rd::WAIT_CAP {
-        redoubt_abi::create_thread_1(queue_one, 0).expect("a queueing thread");
+        rd::thread(queue_one, 0).expect("a queueing thread");
     }
     // A `call` with a timeout of 0 queues and is withdrawn at once, so this poll adds nothing
     // to the queue; it answers `Busy` as soon as the other `WAIT_CAP` are in it.
@@ -251,7 +251,7 @@ pub extern "C" fn _start() -> ! {
 
     // --- R4a: at `MAX_OPEN_CALLS` no call is taken, while a send still is ---------------------
     for _ in 0..12 {
-        if redoubt_abi::create_thread_1(parker, 0).is_err() {
+        if rd::thread(parker, 0).is_err() {
             break;
         }
     }

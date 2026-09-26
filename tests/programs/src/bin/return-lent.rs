@@ -14,7 +14,7 @@ use test_programs::return_lent::LENT_ADDR;
 use test_programs::{Logger, checker, log, rd};
 
 /// Second thread: once the page is lent, try to pull the lent address out from under the loan.
-extern "C" fn clobber(_arg: usize) -> ! {
+fn clobber(_arg: usize) {
     let mut logger = Logger::connect();
     test_programs::wait_ms(30);
     let unmapped = rd::unmap(LENT_ADDR, rd::PAGE_SIZE);

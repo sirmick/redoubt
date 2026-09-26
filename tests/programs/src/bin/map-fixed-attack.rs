@@ -139,7 +139,7 @@ fn lend_server(_: usize) {
 fn lent_ranges(c: &mut Checker) {
     let endpoint = rd::endpoint_create().expect("endpoint");
     LEND_ENDPOINT.store(endpoint as usize, Ordering::Release);
-    redoubt_abi::create_thread_1(lend_server, 0).expect("lend server thread");
+    rd::thread(lend_server, 0).expect("lend server thread");
     let page = rd::map_anon(PAGE, rd::rw()).expect("map_anon the page to lend");
     rd::poke(page, 42);
     let reply = rd::call(endpoint, &rd::body([page, 0, 0, 0]), rd::pages(page, 1), FOREVER);

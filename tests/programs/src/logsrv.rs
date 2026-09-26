@@ -86,7 +86,7 @@ pub(crate) fn started() -> bool { LOG_RX.load(Ordering::Relaxed) != 0 }
 
 /// Serve the loader's siblings on a thread of its own, after [`start`].
 pub fn start_serving() {
-    extern "C" fn server(_: usize) -> ! { serve(|_| false) }
+    fn server(_: usize) { serve(|_| false) }
     rd::thread(server, 0).expect("the log server's thread");
 }
 

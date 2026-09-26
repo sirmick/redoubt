@@ -60,7 +60,7 @@ fn code(result: Result<rd::ReceivedBody, Error>) -> usize {
 }
 
 /// A caller whose message stays queued: nothing receives on `SILENT`.
-fn queued_caller(_arg: usize) -> ! {
+fn queued_caller(_arg: usize) {
     let handle = get(&raw const STAMPED_SILENT);
     let result = rd::call(handle, &rd::body([1, 0, 0, 0]), None, FOREVER);
     put(&raw mut QUEUED_RESULT, code(result));
@@ -68,7 +68,7 @@ fn queued_caller(_arg: usize) -> ! {
 }
 
 /// A caller whose call a server takes and parks, so that revocation abandons it (R3).
-fn taken_caller(_arg: usize) -> ! {
+fn taken_caller(_arg: usize) {
     let handle = get(&raw const STAMPED_SERVED);
     let result = rd::call(handle, &rd::body([2, 0, 0, 0]), None, FOREVER);
     if let Ok(reply) = &result {
@@ -80,7 +80,7 @@ fn taken_caller(_arg: usize) -> ! {
 
 /// A sender whose message carries a handle that revocation will take away before anyone
 /// receives it.
-fn carrier(_arg: usize) -> ! {
+fn carrier(_arg: usize) {
     let silent = get(&raw const SILENT);
     let carried = get(&raw const CARRIED);
     rd::send(silent, &rd::body_with([3, 0, 0, 0], &[carried]), None, FOREVER).ok();
@@ -89,7 +89,7 @@ fn carrier(_arg: usize) -> ! {
 
 /// The server thread: it takes one call, parks it, and answers the abandoned-call notice that
 /// revocation produces, replying with a handle that must reach nobody.
-fn server(_arg: usize) -> ! {
+fn server(_arg: usize) {
     let mut logger = Logger::connect();
     let served = get(&raw const SERVED);
     loop {
@@ -167,10 +167,10 @@ pub extern "C" fn _start() -> ! {
         core::ptr::write_volatile(&raw mut STAMPED_SERVED, stamped_served);
         core::ptr::write_volatile(&raw mut CARRIED, carried);
     }
-    redoubt_abi::create_thread_1(server, 0).expect("the server thread");
-    redoubt_abi::create_thread_1(queued_caller, 0).expect("the queued caller");
-    redoubt_abi::create_thread_1(taken_caller, 0).expect("the taken caller");
-    redoubt_abi::create_thread_1(carrier, 0).expect("the carrier");
+    rd::thread(server, 0).expect("the server thread");
+    rd::thread(queued_caller, 0).expect("the queued caller");
+    rd::thread(taken_caller, 0).expect("the taken caller");
+    rd::thread(carrier, 0).expect("the carrier");
     // Let each of them reach its call; none of them can return until the destruction below.
     test_programs::wait_ms(100);
     // SAFETY: each slot has one writer, and this thread only reads.
