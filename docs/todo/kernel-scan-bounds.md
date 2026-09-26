@@ -45,8 +45,9 @@ Fixed in the kernel follow-up package after the documentation rewrite, before th
 - Two indexes, kept at create and at free, replace the scans:
   - a PID-to-process-object table, `[Option<frame>; MAX_PROCESS_COUNT]`, so `object_of` is one
     lookup, the PID draw at most 63, and `pending_notice` looks at no more than those 63 objects;
-  - an interrupt-to-IRQ-object table sized from the platform's interrupt count, set when the
-    boot makes device objects and cleared when one is destroyed, so `irq_device` is one lookup.
+  - an interrupt-to-IRQ-object table sized from the platform's interrupt source count, set in
+    `boot_devices` (`kernel/src/device.rs`) and cleared when an IRQ object is destroyed, so
+    `irq_device` is one lookup.
 - A host or model property checks that each index gives the old scan's answer after every
   create and free.
 - A bench case, `scan-bounds`, has one budget fill its page limit with endpoints; then
