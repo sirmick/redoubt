@@ -74,7 +74,7 @@ max_undocumented = 0
 [[budget]]
 name = "kernel: core"
 paths = [
-    "kernel/src/main.rs", "kernel/src/mem.rs", "kernel/src/services.rs",
+    "kernel/src/main.rs", "kernel/src/mem.rs", "kernel/src/ptable.rs",
     "kernel/src/args.rs", "kernel/src/io.rs",
     "kernel/src/budget.rs", "kernel/src/handle.rs", "kernel/src/kframe.rs", "kernel/src/redoubt.rs",
     "kernel/src/device.rs", "kernel/src/message.rs", "kernel/src/process.rs", "kernel/src/cell.rs",
@@ -96,7 +96,7 @@ paths = [
 # `OUTPUT` at boot and `print!`'s use of it). The debug pair gained its SAFETY comments here.
 # WP-K5b: +2, dma.rs's volatile read and write of a DMA device's registers through the kernel's
 # register window (the reset of answer 173); no other access to a device's registers needs one.
-# WP-K6: 21, from 27: with the old call interface, server.rs's message queue, services.rs's two
+# WP-K6: 21, from 27: with the old call interface, server.rs's message queue, ptable.rs's two
 # old message buffers, mem.rs's `bzero` and its use, and the old ceiling's slack of one.
 # WP-K6 8b: 20, from 21: `memory_range`'s `unsafe` `MemoryRange::new` goes with `MemoryRange`.
 max_unsafe = 20

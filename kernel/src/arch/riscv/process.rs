@@ -31,7 +31,7 @@ use redoubt_sys::{MAX_THREADS, PAGE_SIZE};
 use redoubt_layout::Pid;
 
 use crate::cell::KernelCell;
-use crate::services::ProcessInner;
+use crate::ptable::ProcessInner;
 
 // use crate::args::KernelArguments;
 pub const DEFAULT_STACK_SIZE: usize = 128 * 1024;
@@ -93,8 +93,9 @@ const _: () = assert!(mem::size_of::<ProcessImpl>() % PAGE_SIZE == 0);
 #[cfg(target_pointer_width = "64")]
 const _: () = assert!(PROCESS_IMPL_PAGES == redoubt_layout::THREAD_CONTEXT_PAGES);
 
-/// Singleton process table. Each process in the system gets allocated from this table.
-struct ProcessTable {
+/// Which PIDs have an address space the hardware may switch to, and which one is current. The
+/// process table proper is `ptable::ProcessTable`; this is the arch layer's view of it.
+struct PidSlots {
     /// The process upon which the current syscall is operating
     current: Pid,
 
@@ -103,8 +104,8 @@ struct ProcessTable {
     table: [bool; MAX_PROCESS_COUNT],
 }
 
-static PROCESS_TABLE: KernelCell<ProcessTable> =
-    KernelCell::new(ProcessTable { current: redoubt_layout::KERNEL_PID, table: [false; MAX_PROCESS_COUNT] });
+static PID_SLOTS: KernelCell<PidSlots> =
+    KernelCell::new(PidSlots { current: redoubt_layout::KERNEL_PID, table: [false; MAX_PROCESS_COUNT] });
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -154,7 +155,7 @@ pub struct Thread {
 
 impl Process {
     pub fn current() -> Process {
-        let pid = PROCESS_TABLE.with(|pt| pt.current);
+        let pid = PID_SLOTS.with(|pt| pt.current);
         let hardware_pid = crate::arch::mem::pid_from_satp(riscv::register::satp::read().bits());
         assert_eq!((pid.get() as usize), hardware_pid);
         Process { pid }
@@ -262,7 +263,7 @@ impl Process {
     /// already: `set_current_pid` refuses a PID the table does not hold.
     pub fn claim(pid: Pid) {
         let pid_idx = (pid.get() as usize) - 1;
-        PROCESS_TABLE.with(|pt| {
+        PID_SLOTS.with(|pt| {
             assert!(!pt.table[pid_idx], "process {} is already allocated", pid);
             pt.table[pid_idx] = true;
         });
@@ -358,7 +359,7 @@ impl Process {
 
     pub fn destroy(pid: Pid) {
         let pid_idx = pid.get() as usize - 1;
-        PROCESS_TABLE.with(|pt| {
+        PID_SLOTS.with(|pt| {
             if pid_idx >= pt.table.len() {
                 panic!("attempted to destroy PID that exceeds table index: {}", pid);
             }
@@ -420,7 +421,7 @@ fn valid_tid(tid: TID) -> bool { (1..=MAX_THREADS).contains(&tid) }
 
 pub fn set_current_pid(pid: Pid) {
     let pid_idx = (pid.get() - 1) as usize;
-    PROCESS_TABLE.with(|pt| {
+    PID_SLOTS.with(|pt| {
         match pt.table.get(pid_idx) {
             None | Some(false) => panic!("PID {} does not exist", pid),
             _ => (),
@@ -429,4 +430,4 @@ pub fn set_current_pid(pid: Pid) {
     });
 }
 
-pub fn current_pid() -> Pid { PROCESS_TABLE.with(|pt| pt.current) }
+pub fn current_pid() -> Pid { PID_SLOTS.with(|pt| pt.current) }

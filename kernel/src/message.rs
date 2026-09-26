@@ -53,7 +53,7 @@ use crate::endpoint::Group;
 use crate::handle::{BudgetRef, DeviceRef, EndpointRef, Handle, Object};
 use crate::kframe;
 use crate::mem::MemoryManager;
-use crate::services::SystemServices;
+use crate::ptable::ProcessTable;
 
 /// The cost table (KERNEL-SPEC.md, What objects cost), in pages.
 pub const OPEN_CALL_PAGES: u64 = 1;
@@ -453,13 +453,13 @@ fn group_of(mm: &MemoryManager, pid: Pid, tid: TID) -> Group {
 
 /// Whether `(pid, tid)` is the thread making the system call. It was never taken off the ready
 /// list, so an answer for it is just its registers: `settle` resumes it.
-fn is_running(ss: &SystemServices, pid: Pid, tid: TID) -> bool {
+fn is_running(ss: &ProcessTable, pid: Pid, tid: TID) -> bool {
     ss.current_pid() == pid && crate::arch::process::Process::current().current_tid() == tid
 }
 
 /// Hand a thread its result. One that was blocked goes back on the ready list; the thread making
 /// the call was never off it.
-fn wake(ss: &mut SystemServices, mm: &MemoryManager, pid: Pid, tid: TID, result: Result<Return, Error>) {
+fn wake(ss: &mut ProcessTable, mm: &MemoryManager, pid: Pid, tid: TID, result: Result<Return, Error>) {
     set_tword(mm, pid, tid, W_WAIT, Wait::None as u64);
     if !is_running(ss, pid, tid) {
         // A waiting thread belongs to a live process, so this cannot fail.
@@ -477,7 +477,7 @@ fn wake(ss: &mut SystemServices, mm: &MemoryManager, pid: Pid, tid: TID, result:
 /// since is the receiver's own loss, not the sender's; delivery re-checks it beforehand
 /// (`check_receive_record`) so that this is a narrow race, not the usual way.
 fn answer_record<const N: usize>(
-    ss: &mut SystemServices,
+    ss: &mut ProcessTable,
     mm: &MemoryManager,
     pid: Pid,
     tid: TID,
@@ -511,7 +511,7 @@ fn mark(mm: &mut MemoryManager, pid: Pid, tid: TID, wait: Wait, timeout: u64) {
 /// has, time out without ever blocking, or block. `Ok(None)` tells the trap handler to resume
 /// whatever is current now, which is this thread when it was answered (`redoubt.rs`).
 fn settle(
-    ss: &mut SystemServices,
+    ss: &mut ProcessTable,
     mm: &mut MemoryManager,
     pid: Pid,
     tid: TID,
@@ -527,7 +527,7 @@ fn settle(
         // fail_wait published the full outcome, including a lend consumed after receipt.
         return Ok(None);
     }
-    // `can_resume: false` is what takes this thread off the ready list (services.rs).
+    // `can_resume: false` is what takes this thread off the ready list (ptable.rs).
     ss.activate_process_thread(tid, KERNEL_PID, 0, false).expect("the kernel can always run");
     Ok(None)
 }
@@ -535,7 +535,7 @@ fn settle(
 /// A blocked thread's wait ends without an answer: what it waited for is unwound and it gets
 /// `error`. This is the one meaning of a timeout (I13), of `Refused` (R4), of `Dead` from
 /// revocation or an endpoint's destruction (R10), whatever the thread was waiting for.
-fn fail_wait(ss: &mut SystemServices, mm: &mut MemoryManager, pid: Pid, tid: TID, error: Error) {
+fn fail_wait(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid, tid: TID, error: Error) {
     let waiting = slot(mm, pid, tid);
     let result = match waiting.wait {
         Wait::Send if msg(mm, pid, tid).kind == MsgKind::Call => {
@@ -570,7 +570,7 @@ fn call_result(
 /// Undo what `(pid, tid)`'s page says it waits for: a queued message's buffer goes back to it;
 /// a taken call is abandoned (R3). Returns the endpoint of an abandoned call, which is owed a
 /// pump once the thread is dealt with: its server may be waiting there for the notice.
-fn unwind(ss: &SystemServices, mm: &mut MemoryManager, pid: Pid, tid: TID) -> Option<EndpointRef> {
+fn unwind(ss: &ProcessTable, mm: &mut MemoryManager, pid: Pid, tid: TID) -> Option<EndpointRef> {
     let s = slot(mm, pid, tid);
     match s.wait {
         Wait::Send => {
@@ -672,7 +672,7 @@ pub fn serve(mm: &mut MemoryManager, pid: Pid, tid: TID, msg_id: u64) -> Result<
 /// is queued and the sender blocks.
 #[allow(clippy::too_many_arguments)]
 pub fn send(
-    ss: &mut SystemServices,
+    ss: &mut ProcessTable,
     mm: &mut MemoryManager,
     pid: Pid,
     tid: TID,
@@ -785,7 +785,7 @@ fn check_buffer(mm: &mut MemoryManager, pid: Pid, pages: Pages, lend: bool) -> R
 
 /// Take the buffer out of the sender's address space (I9: a lent page is unmapped from its
 /// lender until the call ends). Every page was checked by [`check_buffer`], so nothing fails.
-fn take_buffer(ss: &SystemServices, pid: Pid, addr: usize, npages: usize) {
+fn take_buffer(ss: &ProcessTable, pid: Pid, addr: usize, npages: usize) {
     let space = ss.mapping_of(pid).expect("the sending process is alive");
     for i in 0..npages {
         crate::arch::mem::lend_out(&space, addr + i * PAGE_SIZE).expect("a checked range lends");
@@ -799,7 +799,7 @@ fn take_buffer(ss: &SystemServices, pid: Pid, addr: usize, npages: usize) {
 /// source stays masked from the moment it fires until the *next* receive, so a driver that is
 /// busy or gone cannot be stormed by its own device.
 fn receive_irq(
-    ss: &mut SystemServices,
+    ss: &mut ProcessTable,
     mm: &mut MemoryManager,
     pid: Pid,
     tid: TID,
@@ -827,7 +827,7 @@ fn receive_irq(
 /// Hand the interrupt to a thread waiting in `receive` on device `frame`, if one is waiting
 /// and the device has fired. Clearing `fired` here is R5's "returns when `fired` is set
 /// (clearing it)", and it happens exactly once per waiting thread.
-pub fn irq_ready(ss: &mut SystemServices, mm: &mut MemoryManager, frame: u32) {
+pub fn irq_ready(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32) {
     if !mm.device(frame).fired {
         return;
     }
@@ -846,7 +846,7 @@ pub fn irq_ready(ss: &mut SystemServices, mm: &mut MemoryManager, frame: u32) {
 /// R10: a device whose owner budget is dying. Everything waiting on it gets `Dead`, its
 /// source is masked so nothing can raise it again, the handles naming it go (I1: the sweep
 /// that follows reads every handle's object), and its page goes back to its owner.
-pub fn destroy_device(ss: &mut SystemServices, mm: &mut MemoryManager, frame: u32) {
+pub fn destroy_device(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32) {
     let id = mm.device(frame).id;
     let r = DeviceRef { frame, id };
     fail_all(ss, mm, Error::Dead, |mm, pid, tid| slot(mm, pid, tid).irq == Some(r));
@@ -861,7 +861,7 @@ pub fn destroy_device(ss: &mut SystemServices, mm: &mut MemoryManager, frame: u3
 /// `receive(h or none, timeout, max_transfer) -> message | notice | interrupt`.
 #[allow(clippy::too_many_arguments)]
 pub fn receive(
-    ss: &mut SystemServices,
+    ss: &mut ProcessTable,
     mm: &mut MemoryManager,
     pid: Pid,
     tid: TID,
@@ -906,11 +906,11 @@ pub fn receive(
 // --- Delivery (R2, R4, R4a) --------------------------------------------------------------------
 
 /// Deliver whatever is pending on `e` (`process.rs` calls this when an exit notice appears).
-pub fn pump_endpoint(ss: &mut SystemServices, mm: &mut MemoryManager, e: EndpointRef) { pump(ss, mm, e); }
+pub fn pump_endpoint(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) { pump(ss, mm, e); }
 
 /// Match waiting receivers on `e` with what is pending there, until nothing more can be
 /// delivered. Notices come before messages (KERNEL-SPEC.md, Messages).
-fn pump(ss: &mut SystemServices, mm: &mut MemoryManager, e: EndpointRef) {
+fn pump(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) {
     loop {
         if !mm.is_live_endpoint(e) {
             return;
@@ -1008,7 +1008,7 @@ fn next_sender(mm: &MemoryManager, e: EndpointRef, calls: bool) -> Option<(Pid, 
 /// `max_transfer`, fails its sender with `Refused` and the receiver keeps waiting.
 #[allow(clippy::too_many_arguments)]
 fn deliver(
-    ss: &mut SystemServices,
+    ss: &mut ProcessTable,
     mm: &mut MemoryManager,
     e: EndpointRef,
     rpid: Pid,
@@ -1046,7 +1046,7 @@ fn deliver(
 /// Whether `(pid, tid)`'s `receive` record is still where it can be written. `InvalidArgument`
 /// is the error a record earns, and every call's row carries it (decoding, stage 1).
 fn check_receive_record(
-    ss: &mut SystemServices,
+    ss: &mut ProcessTable,
     pid: Pid,
     tid: TID,
     mm: &MemoryManager,
@@ -1065,7 +1065,7 @@ fn check_receive_record(
 /// and the sender is refused (R4).
 #[allow(clippy::too_many_arguments)]
 fn prepare(
-    ss: &SystemServices,
+    ss: &ProcessTable,
     mm: &mut MemoryManager,
     e: EndpointRef,
     rpid: Pid,
@@ -1215,7 +1215,7 @@ fn install_handles(mm: &mut MemoryManager, pid: Pid, handles: &[Option<Handle>])
 /// Where a buffer would land in the receiver: a free run of `pages` pages in its Messages
 /// region. It only looks; nothing is mapped or charged until the whole cost is known (R4).
 fn choose_buffer_address(
-    ss: &SystemServices,
+    ss: &ProcessTable,
     mm: &mut MemoryManager,
     rpid: Pid,
     pages: usize,
@@ -1234,7 +1234,7 @@ fn choose_buffer_address(
 /// Allocate the page tables that map the buffer at `at`, charged to the receiver's budget. The
 /// R4 decision counted exactly these, and the address was free when it was chosen, so neither
 /// step can fail here.
-fn reserve_buffer(ss: &SystemServices, mm: &mut MemoryManager, rpid: Pid, at: usize, pages: usize) {
+fn reserve_buffer(ss: &ProcessTable, mm: &mut MemoryManager, rpid: Pid, at: usize, pages: usize) {
     let space = ss.mapping_of(rpid).expect("the receiving process is alive");
     for i in 0..pages {
         crate::arch::mem::prepare_map(mm, &space, rpid, at + i * PAGE_SIZE)
@@ -1244,7 +1244,7 @@ fn reserve_buffer(ss: &SystemServices, mm: &mut MemoryManager, rpid: Pid, at: us
 
 /// Map the buffer into the receiver: a lend stays the sender's (whose entry remembers the loan),
 /// a transfer changes owner and payer together. Every page was prepared, so nothing fails.
-fn move_buffer(ss: &SystemServices, mm: &mut MemoryManager, m: &Msg, spid: Pid, rpid: Pid, at: usize) {
+fn move_buffer(ss: &ProcessTable, mm: &mut MemoryManager, m: &Msg, spid: Pid, rpid: Pid, at: usize) {
     if m.buf_pages == 0 {
         return;
     }
@@ -1272,7 +1272,7 @@ fn move_buffer(ss: &SystemServices, mm: &mut MemoryManager, m: &Msg, spid: Pid, 
 }
 
 /// Put a queued message's buffer back in its sender's address space.
-fn give_buffer_back(ss: &SystemServices, mm: &MemoryManager, pid: Pid, tid: TID) {
+fn give_buffer_back(ss: &ProcessTable, mm: &MemoryManager, pid: Pid, tid: TID) {
     let m = msg(mm, pid, tid);
     if m.buf_pages == 0 {
         return;
@@ -1291,7 +1291,7 @@ fn give_buffer_back(ss: &SystemServices, mm: &MemoryManager, pid: Pid, tid: TID)
 /// never is, R4a); it returns the lend. An abandoned call's lend is freed and its reply
 /// discarded (R3).
 pub fn reply(
-    ss: &mut SystemServices,
+    ss: &mut ProcessTable,
     mm: &mut MemoryManager,
     pid: Pid,
     tid: TID,
@@ -1352,7 +1352,7 @@ pub fn reply(
 }
 
 /// Give a lend back to the caller (R3: until the reply, it stayed mapped in the server).
-fn return_lend(ss: &SystemServices, mm: &mut MemoryManager, call: &OpenCall) {
+fn return_lend(ss: &ProcessTable, mm: &mut MemoryManager, call: &OpenCall) {
     if call.lend_pages == 0 {
         return;
     }
@@ -1374,7 +1374,7 @@ fn return_lend(ss: &SystemServices, mm: &mut MemoryManager, call: &OpenCall) {
 }
 
 /// The lend of an abandoned call: its pages are the server's alone, so replying frees them.
-fn free_abandoned_lend(ss: &SystemServices, mm: &mut MemoryManager, call: &OpenCall) {
+fn free_abandoned_lend(ss: &ProcessTable, mm: &mut MemoryManager, call: &OpenCall) {
     if call.lend_pages == 0 {
         return;
     }
@@ -1402,7 +1402,7 @@ fn close_call(mm: &mut MemoryManager, frame: u32, call: &OpenCall) {
 /// revocation or by its endpoint's destruction. The caller's charge for the lend ends; the lend
 /// stays mapped in the server, charged only there, until the server replies; and the thread
 /// holding the call is owed a notice (answer 104).
-fn abandon(ss: &SystemServices, mm: &mut MemoryManager, frame: u32) {
+fn abandon(ss: &ProcessTable, mm: &mut MemoryManager, frame: u32) {
     let mut call = open_call_at(mm, frame);
     if call.flags & F_WAITING == 0 {
         return;
@@ -1432,7 +1432,7 @@ fn abandon(ss: &SystemServices, mm: &mut MemoryManager, frame: u32) {
 
 /// A thread is ending. What it waited for is withdrawn; a caller still waiting on a call it
 /// holds gets `Dead` and its lend back, and an abandoned lend is freed (R4b).
-pub fn thread_ending(ss: &mut SystemServices, mm: &mut MemoryManager, pid: Pid, tid: TID) {
+pub fn thread_ending(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid, tid: TID) {
     // Not `fail_wait`: a dying thread gets no answer and must not go back on the ready list.
     let served = unwind(ss, mm, pid, tid);
     set_tword(mm, pid, tid, W_WAIT, Wait::None as u64);
@@ -1450,7 +1450,7 @@ pub fn thread_ending(ss: &mut SystemServices, mm: &mut MemoryManager, pid: Pid, 
 
 /// A served call's server is gone: a waiting caller gets `Dead` and its lend back; an abandoned
 /// lend is freed (R4b).
-fn finish_served(ss: &mut SystemServices, mm: &mut MemoryManager, frame: u32) {
+fn finish_served(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32) {
     let call = open_call_at(mm, frame);
     if call.flags & F_WAITING != 0 {
         return_lend(ss, mm, &call);
@@ -1470,7 +1470,7 @@ fn finish_served(ss: &mut SystemServices, mm: &mut MemoryManager, frame: u32) {
 }
 
 /// A process is ending: every one of its threads does (R4b).
-pub fn process_ending(ss: &mut SystemServices, mm: &mut MemoryManager, pid: Pid) {
+pub fn process_ending(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid) {
     for tid in 1..=MAX_THREADS {
         if mm.ipc_frame(pid, tid).is_some() {
             thread_ending(ss, mm, pid, tid);
@@ -1481,7 +1481,7 @@ pub fn process_ending(ss: &mut SystemServices, mm: &mut MemoryManager, pid: Pid)
 /// R10, the part that reaches messages: after `budget_destroy` marked a subtree dying and before
 /// its budgets are freed, destroy the endpoints it owns and fail every message sent through a
 /// handle stamped with it.
-pub fn budgets_dying(ss: &mut SystemServices, mm: &mut MemoryManager) {
+pub fn budgets_dying(ss: &mut ProcessTable, mm: &mut MemoryManager) {
     // Endpoints owned by a dying budget: everything waiting on them gets `Dead`.
     while let Some(frame) = (0..=mm.objects.high_frame)
         .find(|frame| mm.is_endpoint_frame(*frame) && mm.budget_at(mm.endpoint(*frame).owner).dying)
@@ -1510,7 +1510,7 @@ pub fn budgets_dying(ss: &mut SystemServices, mm: &mut MemoryManager) {
 /// OD6 (WP-K5b): a DMA device whose reset did not confirm is destroyed as R10 destroys one, so
 /// every handle to it goes, copies in unreceived messages arriving as 0. Its registry slot, keyed
 /// by base, stays flagged until reboot, and no device object is ever made again.
-pub fn destroy_quarantined_devices(ss: &mut SystemServices, mm: &mut MemoryManager) {
+pub fn destroy_quarantined_devices(ss: &mut ProcessTable, mm: &mut MemoryManager) {
     if !mm.dma_take_doomed() {
         return;
     }
@@ -1527,7 +1527,7 @@ pub fn destroy_quarantined_devices(ss: &mut SystemServices, mm: &mut MemoryManag
 /// Destroy an endpoint (R10): blocked senders and receivers get `Dead`, then calls in flight
 /// that a server took fail with `Dead` and are abandoned (R3), and the page goes back to its
 /// owner. Receivers go first, so none is offered an abandoned-call notice on the way out.
-fn destroy_endpoint(ss: &mut SystemServices, mm: &mut MemoryManager, frame: u32) {
+fn destroy_endpoint(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32) {
     let e = EndpointRef { frame, id: mm.endpoint(frame).id };
     fail_all(ss, mm, Error::Dead, |mm, pid, tid| {
         let s = slot(mm, pid, tid);
@@ -1551,7 +1551,7 @@ fn destroy_endpoint(ss: &mut SystemServices, mm: &mut MemoryManager, frame: u32)
 
 /// Fail every blocked thread `doomed` picks, one at a time, until none is left.
 fn fail_all(
-    ss: &mut SystemServices,
+    ss: &mut ProcessTable,
     mm: &mut MemoryManager,
     error: Error,
     mut doomed: impl FnMut(&MemoryManager, Pid, TID) -> bool,
@@ -1605,13 +1605,13 @@ pub fn next_timeout(mm: &mut MemoryManager, now: u64) -> (Option<(u64, Pid, TID)
 
 /// The blocking call of `(pid, tid)` reached its timeout: it returns `Timeout` (I13), with what
 /// it waited for unwound (a queued message's buffer back, a taken call abandoned).
-pub fn time_out(ss: &mut SystemServices, mm: &mut MemoryManager, pid: Pid, tid: TID) {
+pub fn time_out(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid, tid: TID) {
     fail_wait(ss, mm, pid, tid, Error::Timeout);
 }
 
 /// After `reply` freed an open call, the process may be able to take calls again (R4a) and an
 /// abandoned-call notice may be waiting: try every endpoint its threads receive on.
-fn poke_receivers(ss: &mut SystemServices, mm: &mut MemoryManager, pid: Pid) {
+fn poke_receivers(ss: &mut ProcessTable, mm: &mut MemoryManager, pid: Pid) {
     for tid in 1..=MAX_THREADS {
         let s = slot(mm, pid, tid);
         if s.wait == Wait::Receive {

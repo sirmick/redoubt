@@ -38,6 +38,8 @@
 //! ([`switch`]). It is not a system call: its tag is outside the call table, and a user-mode
 //! `ecall` with it is an unknown number (`InvalidArgument`) like any other.
 
+use core::convert::TryFrom;
+
 use redoubt_layout::{KERNEL_PID, Pid};
 
 use crate::arch::process::TID;
@@ -49,7 +51,7 @@ use crate::budget::BudgetFrame;
 use crate::cell::KernelCell;
 use crate::handle::BudgetRef;
 use crate::mem::MemoryManager;
-use crate::services::{ArchProcess, SystemServices};
+use crate::ptable::{ArchProcess, ProcessTable};
 
 /// Time slice, in microseconds (KERNEL-SPEC.md, Constants).
 pub const SLICE_US: u64 = 10_000;
@@ -134,7 +136,7 @@ impl Sched {
     }
 
     /// Budgets with a thread waiting for the CPU, each once.
-    fn runnable(ss: &SystemServices, mm: &MemoryManager) -> ([BudgetRef; MAX_PROCESS_COUNT], usize) {
+    fn runnable(ss: &ProcessTable, mm: &MemoryManager) -> ([BudgetRef; MAX_PROCESS_COUNT], usize) {
         let mut out = [BudgetRef { frame: 0, id: 0 }; MAX_PROCESS_COUNT];
         let mut n = 0;
         for p in ss.processes.iter() {
@@ -237,7 +239,7 @@ pub fn now_ticks() -> u64 { ticks() }
 /// budget that ran if another runs now, reconcile, and start counting user time.
 pub fn leave(pid: Pid) {
     let now = ticks();
-    SystemServices::with(|ss| {
+    ProcessTable::with(|ss| {
         MemoryManager::with_mut(|mm| {
             SCHED.with(|s| {
                 s.close_billing(mm, now);
@@ -267,7 +269,7 @@ pub fn leave(pid: Pid) {
 
 /// What `kmain` runs next: the lowest-ranked queued budget's next thread after its cursor. Starts
 /// a slice. `None` when nothing is runnable.
-pub fn pick(ss: &SystemServices, mm: &mut MemoryManager) -> Option<(Pid, TID)> {
+pub fn pick(ss: &ProcessTable, mm: &mut MemoryManager) -> Option<(Pid, TID)> {
     let chosen = SCHED.with(|s| {
         let (list, n) = Sched::runnable(ss, mm);
         s.reconcile(mm, &list[..n]);
@@ -286,7 +288,7 @@ pub fn pick(ss: &SystemServices, mm: &mut MemoryManager) -> Option<(Pid, TID)> {
 /// The next runnable thread of budget `b` after its cursor, in (pid, tid) order, wrapping; a tid
 /// of 0 leaves the choice to `activate_process_thread` (a process being set up or handling an
 /// exception).
-fn next_thread(ss: &SystemServices, mm: &MemoryManager, b: BudgetRef) -> Option<(Pid, TID)> {
+fn next_thread(ss: &ProcessTable, mm: &MemoryManager, b: BudgetRef) -> Option<(Pid, TID)> {
     let cursor = mm.budget(b.frame).cursor.map(|(p, t)| (p, t as usize));
     let mut first: Option<(Pid, TID)> = None;
     let mut after: Option<(Pid, TID)> = None;
@@ -368,7 +370,7 @@ pub fn slice_over() -> bool { crate::time::slice_end() <= crate::time::now_us() 
 /// The running thread is preempted (its slice ended, or a budget deadline fired): it stays ready,
 /// and the CPU goes to `kmain`, which picks again. Its budget is descheduled as the kernel leaves
 /// for `kmain` ([`leave`]).
-pub fn preempt(ss: &mut SystemServices, tid: TID) {
+pub fn preempt(ss: &mut ProcessTable, tid: TID) {
     ss.activate_process_thread(tid, KERNEL_PID, 0, true).expect("the kernel can always run");
 }
 
@@ -395,14 +397,14 @@ pub fn switch_to(pid: Pid, tid: TID) -> Result<(), NotRunnable> {
 /// The trap of [`switch_to`] (an `ecall` from S-mode): make `(pid, tid)` current, or leave
 /// `kmain` current with [`NOT_RUNNABLE`]. Only `kmain` switches, and only with [`SWITCH_TAG`];
 /// anything else is a kernel bug. The caller resumes whatever is current.
-pub fn switch(ss: &mut SystemServices, tag: usize, pid: usize, tid: TID) {
+pub fn switch(ss: &mut ProcessTable, tag: usize, pid: usize, tid: TID) {
     assert!(
         ss.current_pid() == KERNEL_PID && tag == SWITCH_TAG,
         "an S-mode ecall that is not kmain's switch: pid {}, a0 {:#x}",
         ss.current_pid(),
         tag
     );
-    let pid = Pid::new(pid as u8).expect("kmain switches to a process");
+    let pid = u8::try_from(pid).ok().and_then(Pid::new).expect("kmain switches to a process's PID");
     let kmain = ArchProcess::with_current(|p| p.current_tid());
     // `kmain` reads `a0` when it next runs: once the CPU comes back to it.
     ss.set_redoubt_result(KERNEL_PID, kmain, &[RAN, 0, 0, 0, 0, 0, 0, 0]).expect("kmain exists");

@@ -772,6 +772,7 @@ pub fn is_mapped(virt: usize) -> bool {
 
 /// Determine whether a virtual address has been mapped
 pub fn address_available(virt: usize) -> bool {
+    debug_assert!(virt < redoubt_sys::USER_AREA_END, "find_virtual_address searches user areas only");
     // An empty entry, or no table reaching it; a reservation or either alias of a loan is not
     // free (`map_anon` would then find a lent page taken, not free).
     walk(current_root(), virt, None).map_or(true, |slot| slot.get().is_empty())

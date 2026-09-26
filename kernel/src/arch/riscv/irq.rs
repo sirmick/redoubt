@@ -8,7 +8,7 @@ use crate::arch::exception::RiscvException;
 use crate::arch::mem::MemoryMapping;
 use crate::arch::process::{EXIT_THREAD, Thread};
 use crate::arch::process::Process as ArchProcess;
-use crate::services::SystemServices;
+use crate::ptable::ProcessTable;
 
 extern "Rust" {
     fn _redoubt_syscall_return_result(args: &[usize; 8], context: &Thread) -> !;
@@ -61,7 +61,7 @@ fn resume_current() -> ! {
 /// runs: its `sepc` is untouched (an `ecall` is stepped over only when handled).
 fn preempt() -> ! {
     let tid = ArchProcess::with_current(|p| p.current_tid());
-    SystemServices::with_mut(|ss| crate::sched::preempt(ss, tid));
+    ProcessTable::with_mut(|ss| crate::sched::preempt(ss, tid));
     resume_current()
 }
 
@@ -133,7 +133,7 @@ pub extern "C" fn trap_handler(
         let destroyed = crate::time::expire_at_entry();
         if from_user
             && (current_pid() != pid
-                || SystemServices::with(|ss| ss.get_process(pid).map_or(true, |p| p.free())))
+                || ProcessTable::with(|ss| ss.get_process(pid).map_or(true, |p| p.free())))
         {
             resume_current();
         }
@@ -164,7 +164,7 @@ pub extern "C" fn trap_handler(
         // `kmain`'s switch (`sched::switch_to`), the one S-mode `ecall`: resumed past it.
         RiscvException::CallFromSMode(..) => {
             ArchProcess::with_current_mut(|p| p.current_thread_mut().sepc += 4);
-            SystemServices::with_mut(|ss| crate::sched::switch(ss, a0, a1, a2));
+            ProcessTable::with_mut(|ss| crate::sched::switch(ss, a0, a1, a2));
             resume_current()
         }
         RiscvException::CallFromUMode(..) => system_call(pid, [a0, a1, a2, a3, a4, a5, a6, a7]),
@@ -233,7 +233,7 @@ pub extern "C" fn trap_handler(
             let tid = ArchProcess::with_current(|process| process.current_tid());
             // Ordinary thread returns use the same lifecycle policy as explicit thread_exit:
             // the final return snapshots open calls/blame before process_exit(0) cleanup (170).
-            SystemServices::with_mut(|ss| crate::process::thread_exit(ss, pid, tid));
+            ProcessTable::with_mut(|ss| crate::process::thread_exit(ss, pid, tid));
 
             // Teardown selected a surviving sibling or another process.
             ArchProcess::with_current_mut(|p| {

@@ -33,7 +33,7 @@ use crate::arch::process::{INITIAL_TID, MAX_PROCESS_COUNT};
 use crate::handle::{BudgetRef, Handle, HandleTable, Object};
 use crate::kframe;
 use crate::mem::MemoryManager;
-use crate::services::SystemServices;
+use crate::ptable::ProcessTable;
 
 /// A budget, named by the index of its frame in the page-ownership table.
 pub type BudgetFrame = u32;
@@ -936,7 +936,7 @@ impl MemoryManager {
 /// flight are failed or abandoned and its endpoints and devices destroyed; then its handles are
 /// swept and its frames freed. `caller` is the process whose call or whose interrupted run this
 /// is, if any. Returns whether the caller is gone (it must not be resumed).
-pub fn destroy_subtree(ss: &mut SystemServices, top: BudgetFrame, caller: Option<Pid>, bill: bool) -> bool {
+pub fn destroy_subtree(ss: &mut ProcessTable, top: BudgetFrame, caller: Option<Pid>, bill: bool) -> bool {
     let started = crate::sched::now_ticks();
     #[cfg(feature = "sched-trace")]
     let top_id = MemoryManager::with(|mm| mm.budget_id(top));

@@ -41,7 +41,7 @@ pub enum ProcessError {
 
 /// A big unifying struct containing all of the system state.
 /// This is inherited from the stage 1 bootloader.
-pub struct SystemServices {
+pub struct ProcessTable {
     /// A table of all processes in the system
     pub processes: [Process; MAX_PROCESS_COUNT],
 }
@@ -212,7 +212,7 @@ impl Process {
 }
 
 /// Taken before `MEMORY_MANAGER`, never after it: the lock order is stated there (mem.rs).
-static SYSTEM_SERVICES: KernelCell<SystemServices> = KernelCell::new(SystemServices {
+static PROCESS_TABLE: KernelCell<ProcessTable> = KernelCell::new(ProcessTable {
     processes: [Process {
         state: ProcessState::Free,
         pid: KERNEL_PID,
@@ -234,20 +234,20 @@ impl core::fmt::Debug for Process {
     }
 }
 
-impl SystemServices {
+impl ProcessTable {
     /// Calls the provided function with the current inner process state.
     pub fn with<F, R>(f: F) -> R
     where
-        F: FnOnce(&SystemServices) -> R,
+        F: FnOnce(&ProcessTable) -> R,
     {
-        SYSTEM_SERVICES.with(|ss| f(ss))
+        PROCESS_TABLE.with(|ss| f(ss))
     }
 
     pub fn with_mut<F, R>(f: F) -> R
     where
-        F: FnOnce(&mut SystemServices) -> R,
+        F: FnOnce(&mut ProcessTable) -> R,
     {
-        SYSTEM_SERVICES.with(f)
+        PROCESS_TABLE.with(f)
     }
 
     /// Create a new "System Services" object based on the arguments from the
@@ -280,7 +280,7 @@ impl SystemServices {
 
         // Copy over the initial process list.  The pid is encoded in the SATP
         // value from the bootloader.  For each process, translate it from a raw
-        // KernelArguments value to a SystemServices Process value.
+        // KernelArguments value to a ProcessTable Process value.
         for init in init_offsets.iter() {
             let pid = init.pid().get();
             let proc_idx = pid - 1;

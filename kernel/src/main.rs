@@ -29,11 +29,11 @@ mod message;
 mod platform;
 mod process;
 mod redoubt;
-mod services;
+mod ptable;
 mod sched;
 mod time;
 
-use services::SystemServices;
+use ptable::ProcessTable;
 
 #[no_mangle]
 /// Called from the startup code to initialize the kernel's structures from the arguments the
@@ -58,7 +58,7 @@ pub unsafe extern "C" fn init(
     crate::mem::MemoryManager::with_mut(|mm| {
         mm.init_from_memory(rpt_offset, xpt_offset, &args).expect("couldn't initialize memory manager")
     });
-    SystemServices::with_mut(|system_services| system_services.init_from_memory(init_offset, &args));
+    ProcessTable::with_mut(|pt| pt.init_from_memory(init_offset, &args));
 
     // Test builds only: the scheduling trace's ring, before the budget tree counts free RAM.
     #[cfg(feature = "sched-trace")]
@@ -101,11 +101,11 @@ pub extern "C" fn kmain() {
         // Deadlines first (`time.rs`): answering them makes threads runnable. This is the kernel's
         // own loop, not an entry; nothing enters between here and the switch below.
         crate::sched::pause_billing();
-        SystemServices::with_mut(crate::time::expire_due);
+        ProcessTable::with_mut(crate::time::expire_due);
         crate::sched::resume_billing();
 
         // One stride queue over every runnable budget (`sched.rs`).
-        let next = SystemServices::with(|ss| mem::MemoryManager::with_mut(|mm| crate::sched::pick(ss, mm)));
+        let next = ProcessTable::with(|ss| mem::MemoryManager::with_mut(|mm| crate::sched::pick(ss, mm)));
 
         match next {
             Some((pid, tid)) => {
@@ -122,8 +122,8 @@ pub extern "C" fn kmain() {
                 klog!("NO RUNNABLE TASKS FOUND, entering idle state");
 
                 #[cfg(feature = "debug-print")]
-                SystemServices::with(|system_services| {
-                    for (test_idx, process) in system_services.processes.iter().enumerate() {
+                ProcessTable::with(|pt| {
+                    for (test_idx, process) in pt.processes.iter().enumerate() {
                         if !process.free() {
                             klog!("PID {}: {:?}", test_idx + 1, process);
                         }
