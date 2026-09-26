@@ -17,7 +17,7 @@ whole call as system-call time. The deadline path does not.
 The rule text for R10 and R12: "Every destruction's whole cost is billed to someone. For
 `budget_destroy` that is the caller. For a deadline it is the top's parent, after its carve
 returns, or the nearest ancestor with free weight above 0 if the parent has none. `root` always
-has. No part of a destruction is billed to nobody."
+does. No part of a destruction is billed to nobody."
 
 ## Why it matters
 

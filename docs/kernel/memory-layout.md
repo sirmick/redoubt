@@ -81,7 +81,7 @@ The walls on the boundary:
 
 ## The two address maps
 
-Status: built · partly tested: the constants' separation is checked at compile time and the PLIC's size at boot, not attacked by a case · tested: bench:kernel-wx, bench:legacy-gone
+Status: built · partly tested: the constants' separation is checked at compile time and the PLIC's size at boot, not attacked by a case; no case loads, stores or fetches at a mapped kernel-half address from user mode, and `kernel-wx` boots rv64 only · tested: bench:kernel-wx, bench:legacy-gone
 
 Addresses are from `libs/layout/src/lib.rs`, the kernel's `link.x` and `link64.x`, and
 `kernel/src/arch/riscv/process.rs`. Compile-time assertions keep the DMA window clear of the
@@ -310,7 +310,7 @@ question does not arise.
 
 ### `satp`
 
-Status: built · partly tested: no case attacks a translation that outlives an address-space switch or an unmap
+Status: built · partly tested: no case attacks a translation that outlives an address-space switch or an unmap directly; one hart and a whole-TLB flush at every switch are argued from the code · tested: bench:pid-reuse-authority, bench:uaf-lent-page
 
 `satp` holds the mode, the process's PID as its ASID, and the root table's physical page number
 (`make_satp`). PIDs fit every ASID width, because a PID is a byte. The kernel is PID 1; the loader

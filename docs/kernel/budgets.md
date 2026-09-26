@@ -86,12 +86,14 @@ for every call; the full rows are in the
 [ABI reference](abi.md#errors-and-the-order-of-checks).
 
 The kernel itself (PID 1) has no budget and makes no calls. A call from it would get
-`NotPermitted` for most calls, `BadHandle` from `handle_close` and `budget_destroy`, and an
-answer from `time_now` and `random`; none of them panics, so a bug there cannot become one.
+`InvalidArgument` from a call that passes a record (the record check comes first, and no user
+page is the kernel's), `NotPermitted` from most others, `BadHandle` from `handle_close` and
+`budget_destroy`, and an answer from `time_now` and `random`; none of them panics, so a bug
+there cannot become one.
 
 ### Root, system and users
 
-Status: built · partly tested: no case checks the boot table (`root`'s 63 processes, the weights, `INIT_WEIGHT`) · tested: bench:budget, bench:budget-destroy-kills, bench:process-attack
+Status: built · partly tested: no case checks the boot table (`root`'s 63 processes, the weights, `INIT_WEIGHT`), and the boot code departs from R6 (charging) for `root`'s own page (Residual risks) · tested: bench:budget, bench:budget-destroy-kills, bench:process-attack
 
 At boot the kernel creates three budgets, all with account 0, no labels and no deadline:
 
@@ -346,8 +348,9 @@ Status: built · partly tested: destroying the budget a device object is charged
 
 Destroying budget B, by `budget_destroy` or by a deadline, destroys B and everything below it, in
 this order:
-1. **Mark.** B's weight goes back to its parent first, so the destruction's own work is billed at
-   the parent's restored weight, not the sliver it kept while B held the rest
+1. **Mark.** B's weight goes back to its parent first, so that the destruction's own work is
+   billed at the parent's restored weight, not the sliver it kept while B held the rest (the
+   deadline path departs from this; see below)
    ([scheduling](scheduling.md)). Then B and every descendant are marked dying.
 2. **Kill.** Every process running in a dying budget is killed, the caller last if it is one of
    them. Each gets an exit notice with cause `killed`, blaming nobody, unless its process object
@@ -391,8 +394,9 @@ its lend consumed, not `Dead` with it returned ([timer](timer.md#expiry)).
 Every destruction's whole cost is billed to someone. For `budget_destroy` that is the caller, as
 the call's own kernel time. For a deadline it is B's parent, after its carve returns, or the
 nearest ancestor with free weight above 0 if the parent has none; `root` always has. No part of a
-destruction is billed to nobody. The deadline path departs from this: it bills B for steps 1 to
-4, which step 5 moves up with B's debt, and steps 5 to 9 to nobody; a B with free weight 0 pays
+destruction is billed to nobody. The deadline path departs from this: it bills B for its expiry
+walk and for steps 2 to 4, which step 5 moves up with B's debt, and the mark (step 1) and
+steps 5 to 9 to nobody; a B with free weight 0 pays
 nothing at all ([Residual risks](#residual-risks)).
 
 ```mermaid
