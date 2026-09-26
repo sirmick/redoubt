@@ -92,7 +92,7 @@ one. "(2)" marks a 64-bit value in two registers. A field named `..._rec` is the
 | 0x109 | `process_create` | budget handle, exit endpoint handle | process handle | [processes](processes.md) |
 | 0x10a | `process_map` | process handle, source, destination, len, flags | - | [processes](processes.md) |
 | 0x10b | `process_start` | process handle, entry, stack pointer, argument, `handles_rec`, count | - | [processes](processes.md) |
-| 0x10c | `endpoint_create` | - | endpoint handle, badge 0 | [objects](objects.md) |
+| 0x10c | `endpoint_create` | - | endpoint handle (the receive right, badge 0) | [objects](objects.md) |
 | 0x10d | `mint` | source tag (1 message id, 2 handle), source value (2), badge (2), budget handle or 0 | handle | [objects](objects.md#mint) |
 | 0x10e | `call` | endpoint handle, `body_rec`, lend address, lend pages, timeout (2) | `a0` status; lend and reply dispositions | [IPC](ipc.md#the-calls) |
 | 0x10f | `send` | endpoint handle, `body_rec`, transfer address, transfer pages, timeout (2) | - | [IPC](ipc.md#the-calls) |
@@ -248,7 +248,7 @@ one wrong code on their way out.
 
 ## Errors and the order of checks
 
-Status: built · partly tested: for most rows the order after decoding is argued from the code rather than pinned by a case; the kernel and the model are compared by reading, not by replaying traces, and differ in two rows (Residual risks) · tested: bench:budget-syscall-attack, bench:syscall-attack, bench:ipc-outcomes, bench:process-attack, host:redoubt-sys::malformed_calls_are_refused, host:redoubt-model::every_call_and_error_is_reached, host:redoubt-model::process_map_destination_validation_precedes_started_state, fuzz:redoubt-sys/decode
+Status: built · partly tested: for most rows the order after decoding is argued from the code rather than pinned by a case; the kernel and the model are compared by reading, not by replaying traces, and differ in two rows and in several details (Residual risks) · tested: bench:budget-syscall-attack, bench:syscall-attack, bench:ipc-outcomes, bench:process-attack, host:redoubt-sys::malformed_calls_are_refused, host:redoubt-model::every_call_and_error_is_reached, host:redoubt-model::process_map_destination_validation_precedes_started_state, fuzz:redoubt-sys/decode
 
 A call with several faults returns the first one found, in a fixed order, so that the kernel,
 the model and a replayed trace agree exactly. Checks go in stages, and within a stage by
@@ -318,8 +318,11 @@ Every call can also fail decoding in the general ways of stage 1 (a non-zero unu
 value too wide). "Handle table" is stage 4's last check. Three rows depart from the stages, and
 say so: a weight over the parent's free weight is `InvalidArgument`, because no error names
 weight; `mint` from a message whose endpoint or stamp is gone is `Dead` at the argument stage;
-and `receive` clears the thread's current call before anything else, whatever it returns
-([R21 (crash blame)](processes.md#r21-crash-blame)).
+and `receive` clears the thread's current call as soon as its registers decode, before its
+record check and every later stage, whatever it then returns
+([R21 (crash blame)](processes.md#r21-crash-blame)). A `receive` refused while its registers
+are decoded (a handle wider than 32 bits, a non-zero unused register) leaves the current call
+as it was.
 
 `map_fixed`'s order keeps its cost bounded: the overlap walk skips page-table subtrees that are
 absent, and the charge for the pages alone comes before the walk that counts page tables, so a
@@ -351,13 +354,13 @@ interrupt fires, and a child jumping to a fixed kernel return address faults.
 
 ## Residual risks
 
-- **The kernel and the model differ in two rows.** `budget_create`: the kernel decodes the spec
+- **The kernel and the model differ in two rows, and in details.** `budget_create`: the kernel decodes the spec
   record in slot order, so a spec with a process count wider than 32 bits and more than
   `MAX_LABELS` labels is `InvalidArgument`; the model checks the label count first and says
   `TooLarge`. `process_create`: the kernel checks for a free PID before the budget's process
   limit and before any charge; the model checks it last, so with no free PID and too little
   memory the kernel says `OutOfProcesses` and the model `OutOfMemory`. The table above is the
-  kernel's. The model also clears a `receive`'s current call only after the record check,
+  kernel's. In details: the model clears a `receive`'s current call only after the record check,
   checks only a record's first page, and does not model the 32-run limit of `dma_alloc` or the
   size of the placement area. No trace has been replayed on the kernel to find more such
   differences ([model](model.md)). Follow-up: [todo](../todo/abi-model-disagreements.md).
@@ -366,9 +369,9 @@ interrupt fires, and a child jumping to a fixed kernel return address faults.
   `receive`, `serve` and `process_start`; most later positions in most rows are read from the
   kernel, not attacked. A wrong order is a replay mismatch, not a way past a check: every
   check in a row is still made.
-- **A record's frame is checked for RAM by its physical address.** The record check confirms
-  every slot is RAM credited to the caller, so a device mapping is refused as a record. A case
-  attacks this for a `call` body and for `budget_create` and `budget_usage` records at a device
+- **A record at a device mapping is attacked for only some calls.** The record check confirms
+  every slot is RAM credited to the caller, by its physical address, so a device mapping is
+  refused as a record. A case attacks this for a `call` body and for `budget_create` and `budget_usage` records at a device
   mapping, not for `send`, `reply`, `receive` or `process_start` records, which share the same
   check. Follow-up: [todo](../todo/mmio-record-frames.md).
 - **An error may leave a page backed.** Stage 1 never allocates, but stage 2 backs untouched

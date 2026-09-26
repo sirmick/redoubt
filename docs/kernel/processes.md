@@ -281,7 +281,8 @@ faulted or ended the process. If that thread has no current call, nobody is blam
 labels empty), even when other threads of the process hold open calls; there is no fallback to
 another call. `exited` and `killed` blame nobody.
 - A thread's current call is set by `receive` to the call it takes, and to none whenever
-  `receive` returns anything else; `serve` names another open call of the thread; replying to it
+  `receive` returns anything else, unless its registers fail to decode, which leaves it as it
+  was ([ABI](abi.md#errors-and-the-order-of-checks)); `serve` names another open call of the thread; replying to it
   sets it to none ([IPC](ipc.md#the-calls)). A server that parks calls and resumes one
   calls `serve` first, so a crash blames that call's sender and not whoever called last.
 - A `send` is never an open call, so it is never blamed.
