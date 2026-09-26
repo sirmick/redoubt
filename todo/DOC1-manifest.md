@@ -101,7 +101,10 @@ I16 DMA pages reset before reuse.
   R42 one approved item (steward.md); R43 no export, R44 one key, one purpose, keyd's own digest,
   R45 constant-time signing (keyd.md); R46 only the public list (bootfsd.md); R47 one volume
   per instance, R48 a quota per attach root, R49 a hostile medium is corrupt, not a crash, R50
-  power loss leaves before or after (fsd.md).
+  power loss leaves before or after (fsd.md); R51 DMA stays in its region, R52 a lie is a
+  failure, never corruption, R53 a filesystem sees only its partition (blkd.md); R54 DMA stays in
+  netd's regions, R55 a bad frame is content, not a lie, R56 no earlier frame leaks, R57 the
+  device stops before netd does (netd.md).
 - The servers set takes the next free numbers, in the order its pages are written (the
   userland template has no Security properties section, so userland pages only cite).
 - `rule F` stays on `docs/testbench.md`.

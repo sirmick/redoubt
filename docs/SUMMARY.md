@@ -32,6 +32,8 @@
   - [keyd](servers/keyd.md)
   - [bootfsd](servers/bootfsd.md)
   - [fsd](servers/fsd.md)
+  - [blkd](servers/blkd.md)
+  - [netd](servers/netd.md)
   - [The wire protocol]()
   - [init and the boot manifest]()
   - [The steward]()
