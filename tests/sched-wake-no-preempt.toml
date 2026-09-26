@@ -1,4 +1,4 @@
-description = "A timeout only wakes (WP-K5, OWNER DECISION 2): a sleeper whose timeout falls mid-slice runs at the running spinner's slice end, never at once (virtual time, checked build)"
+description = "A timeout only wakes (kernel/scheduling.md, \"Preemption points\"): a sleeper whose timeout falls mid-slice runs at the running spinner's slice end, never at once (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true

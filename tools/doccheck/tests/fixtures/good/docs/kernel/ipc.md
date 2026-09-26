@@ -34,6 +34,12 @@ Status: built · tested: bench:smoke, host:demo::flows
 
 Labels decide flow.
 
+### R1 (flow), across harts
+
+Status: built · partly tested: one hart only · tested: host:demo::slowly
+
+Flow holds on every hart.
+
 ### R2 (fair waiting)
 
 Status: planned · M2 (usable shell)

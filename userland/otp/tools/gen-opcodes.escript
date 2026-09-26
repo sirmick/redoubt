@@ -1,6 +1,6 @@
 #!/usr/bin/env escript
 %% Generates vm/src/opcodes.rs from tools/genop.tab, the compiler's opcode table taken
-%% verbatim from the pinned OTP tag (see DESIGN.md). Usage:
+%% verbatim from the pinned OTP tag (see README.md). Usage:
 %%   escript tools/gen-opcodes.escript tools/genop.tab vm/src/opcodes.rs
 main([Tab, Out]) ->
     {ok, Bin} = file:read_file(Tab),

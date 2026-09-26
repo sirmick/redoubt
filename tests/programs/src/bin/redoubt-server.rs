@@ -1,4 +1,4 @@
-//! The server side of the Redoubt IPC case (WP-K2): it holds the boot endpoint's receive right
+//! The server side of the Redoubt IPC case: it holds the boot endpoint's receive right
 //! (badge 0, handle 1) and answers `redoubt-client`, which drives the script and prints the
 //! verdicts. Everything this program reports about a message -- the badge, the account, the
 //! labels, the message id -- is what the kernel attached, which is the point: no client can
@@ -217,7 +217,7 @@ pub extern "C" fn _start() -> ! {
             }
             op::REPLY_HANDLES => {
                 // Handles the caller may not be able to take: each arrives as 0 in its slot and
-                // the caller's `call` is `OutOfMemory` (answers 107, 116).
+                // the caller's `call` is `OutOfMemory` (R4).
                 let mut handles = [0u32; rd::MAX_MSG_HANDLES];
                 let mut n = 0;
                 while n < words[1].min(rd::MAX_MSG_HANDLES) {
@@ -248,7 +248,7 @@ pub extern "C" fn _start() -> ! {
                 rd::reply(id, &rd::body([op::SERVE_BAD, 0, 0, 0])).ok();
             }
             op::FILL_TABLE if words[1] == 0 => {
-                // Answer 116: handles that would take this process past `MAX_HANDLES` are a
+                // R4: handles that would take this process past `MAX_HANDLES` are a
                 // cost it cannot pay, so a message carrying one is refused to its sender.
                 // Endpoints are the only object this program can make without a budget handle;
                 // their indices run from the first one upwards, so they are closed the same way.

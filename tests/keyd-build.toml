@@ -1,8 +1,8 @@
-description = "keyd builds for both widths (BUILD-PLAN.md: rv32 keeps compiling)"
+description = "keyd builds for both widths (rv32 keeps compiling)"
 arch = ["rv64", "rv32"]
 kind = "build"
 # `cargo build -p redoubt-keyd` builds the library and its one bin, `keyd`. Booting it on the
-# box needs WP-K2, WP-K4 and WP-R3 (an `init` that can start it from the manifest); until then
+# box needs an `init` that can start it from the manifest (docs/plan/m1-separation.md); until then
 # `keyd`'s behaviour is covered by host tests against the runtime's fake kernel
 # (`redoubt/keyd/tests/`), and this case covers the configuration the bench cannot boot yet.
 package = "redoubt-keyd"

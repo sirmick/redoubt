@@ -1,7 +1,7 @@
 description = "Every kind of message across address spaces: a call with words, a lend, a writable lend, a send with a transfer (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# Built with the checks on (docs/testbench.md, "Debug assertions").
+# Built with the checks on (docs/testbench.md, "Checked builds").
 debug_assertions = true
 programs = ["log-server", "ipc-client"]
 smp = [1, 4]

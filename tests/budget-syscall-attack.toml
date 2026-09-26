@@ -1,7 +1,7 @@
-description = "Hostile arguments to every call WP-K1, WP-K2 and WP-K3 built (bad and wide handles, unknown numbers, stray registers, records misaligned, in the kernel, read-only, never touched, straddling, malformed), in the spec's order of checks, and 4000 calls over hostile values: errors, never a panic (I14) (checked build)"
+description = "Hostile arguments to every budget, IPC and memory call (bad and wide handles, unknown numbers, stray registers, records misaligned, in the kernel, read-only, never touched, straddling, malformed), in the spec's order of checks, and 4000 calls over hostile values: errors, never a panic (I14) (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# Built with the checks on (docs/testbench.md, "Debug assertions").
+# Built with the checks on (docs/testbench.md, "Checked builds").
 debug_assertions = true
 # PID 2 log-server; PID 3 budget-victim, second, in system beside the attacker and holding the
 # boot endpoint's receive right; PID 4 the attacker, whose first act is to take root, system

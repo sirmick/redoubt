@@ -1,5 +1,5 @@
-//! Typed handles and the system calls that are not IPC (KERNEL-SPEC.md, System calls). IPC is
-//! in [`crate::ipc`].
+//! Typed handles and the system calls that are not IPC (kernel/abi.md). IPC is in
+//! [`crate::ipc`].
 //!
 //! A typed handle only says what the program expects the handle to be: the kernel checks the
 //! object's kind on every use (`WrongObject`), so wrapping the wrong kind is a refused call, never
@@ -167,8 +167,8 @@ impl Process {
     }
 
     /// Starts the process at `entry` with stack `sp` and `arg` in its first thread's first
-    /// argument register (the startup page's address, 0 for none: INIT.md); `handles` land in its
-    /// slots 1..=n.
+    /// argument register (the startup page's address, 0 for none: servers/init.md); `handles`
+    /// land in its slots 1..=n.
     pub fn start(&self, entry: usize, sp: usize, arg: usize, handles: &[Handle]) -> Result<(), Error> {
         let mut rec = Record([0; MAX_START_HANDLES]);
         let slots = rec.0.get_mut(..handles.len()).ok_or(Error::TooLarge)?;
@@ -184,7 +184,7 @@ impl Process {
 
 impl Mmio {
     /// Maps the device's registers: their address and how many bytes of them
-    /// (QUESTIONS.md 146, pending). Which device this is comes from the boot manifest, not
+    /// (kernel/devices.md, `map_device`). Which device this is comes from the boot manifest, not
     /// from the kernel.
     pub fn map(&self) -> Result<(usize, usize), Error> {
         match syscall(&Call::MapDevice { device: self.0 })? {
@@ -240,7 +240,7 @@ impl Registers {
         }
         // SAFETY: `base..base + len` is the device mapping the kernel made for this process in
         // `map_device`; it stays mapped for the life of the process (a device mapping outlives
-        // its handle, KERNEL-SPEC.md), `offset < len` is checked just above, and a `u8` needs no
+        // its handle, kernel/devices.md), `offset < len` is checked just above, and a `u8` needs no
         // alignment. `Registers` is not `Sync`, so no other thread holds this same region.
         Some(unsafe { ((self.base + offset) as *const u8).read_volatile() })
     }

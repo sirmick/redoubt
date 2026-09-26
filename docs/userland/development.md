@@ -52,8 +52,7 @@ Elixir's compiler (`Code.compile_string`, `Code.eval_string`) and OTP's Erlang c
 The code, atom, export and literal chunks they write are identical to BEAM's; compressed chunks
 (debug information, documentation) differ in bytes, because the deflate implementation differs,
 and decode to the same terms. A call to a function not yet loaded goes to the process's error
-handler, which Elixir's parallel compiler uses to wait for modules
-([`userland/otp/DESIGN.md`](../../userland/otp/DESIGN.md)).
+handler, which Elixir's parallel compiler uses to wait for modules.
 
 ### Compiling on the box
 

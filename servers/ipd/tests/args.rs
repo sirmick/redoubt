@@ -1,11 +1,11 @@
-//! `ipd`'s arguments (NAMESPACES.md): strict, all or nothing.
+//! `ipd`'s arguments (servers/ipd.md, "Sizing"): strict, all or nothing.
 
 use redoubt_ipd::args::{BadArgs, Config, DEFAULT_BUCKETS, Limit, parse};
 use redoubt_ipd::scope::{Ports, Prefix, Rule, ip};
 
 fn run(args: &[&str]) -> Result<Config, BadArgs> { parse(args.iter().copied()) }
 
-/// The rig's arguments (tests/net) and the milestone manifest's, as NAMESPACES.md gives them.
+/// The rig's arguments (tests/net) and the milestone manifest's.
 const RIG: &[&str] = &[
     "addr=10.0.2.15/24",
     "gateway=10.0.2.2",

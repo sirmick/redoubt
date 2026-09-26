@@ -5,8 +5,8 @@
 //! budget would reach a freed frame, and the kernel stops on that (I1) rather than trust it; a
 //! reused frame read through a stale handle would carve from a budget the attacker no longer
 //! holds. The kernel surviving, and the victim still getting its pages from `system`, is the
-//! verdict. (K1 has no other process holding handles; with messages, WP-K2 extends this to
-//! copies in other tables.) See `tests/budget-destroy-attack.toml`.
+//! verdict. (No other process holds handles here; copies in other tables, which travel in
+//! messages, are not covered by this case.) See `tests/budget-destroy-attack.toml`.
 
 #![no_std]
 #![no_main]

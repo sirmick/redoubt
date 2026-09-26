@@ -1,12 +1,12 @@
 description = "An external interrupt reaches a driver through `receive` on its IRQ handle (R5: the kernel masks the source and sets `fired`, the next receive unmasks it and returns; no acknowledge call), with the console taken through `map_device` and injected console input (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# Built with the checks on (docs/testbench.md, "Debug assertions").
+# Built with the checks on (docs/testbench.md, "Checked builds").
 debug_assertions = true
 # PID 2 log-server is the bundle's first program, so it holds every device object the loader
-# made (INTERIM, kernel device.rs): it maps the console through its MMIO handle and echoes
+# made (kernel/devices.md): it maps the console through its MMIO handle and echoes
 # every byte from a thread blocked in `receive` on the console's IRQ handle, which is the
-# authority (DEVICE-GRANTS.md, Replacement).
+# authority (R18).
 programs = ["log-server"]
 # The server reads **one byte per interrupt**, so every byte needs an interrupt of its own and
 # the FIFO is left with data in it. What that pins: a kernel whose `receive` does not unmask

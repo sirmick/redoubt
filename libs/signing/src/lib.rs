@@ -1,13 +1,13 @@
 //! Redoubt signing domains: the one place a signature preimage is constructed.
 //!
-//! See `docs/VERIFIED-BOOT.md`. A Redoubt signature never covers bare bytes a caller
-//! handed the signer: it covers a domain-separated preimage, or (`keyd`, for packages) a digest
-//! of one that the signer computed itself. A preimage is a NUL-terminated ASCII domain name, then
-//! the `u64_le` byte count of what follows, then the bytes themselves. The names are prefix-free and
-//! the length is fixed-width, so a signature made under one domain can never be re-read as
-//! another protocol's message (question 120: 25 bytes of someone else's domain and length fit
-//! inside a ustar header's name field, so without a domain of our own a foreign signature could
-//! be presented as a valid bundle).
+//! See `docs/kernel/boot.md`, "Verified boot". A Redoubt signature never covers bare bytes a
+//! caller handed the signer: it covers a domain-separated preimage the signer built itself, or
+//! (`keyd`'s audit records) a digest of one that `keyd` computed itself. A preimage is a
+//! NUL-terminated ASCII domain name, then the `u64_le` byte count of what follows, then the bytes
+//! themselves. The names are prefix-free and the length is fixed-width, so a signature made under
+//! one domain can never be re-read as another protocol's message (25 bytes of someone else's
+//! domain and length fit inside a ustar header's name field, so without a domain of our own a
+//! foreign signature could be presented as a valid bundle).
 //!
 //! The boot bundle's preimage is `"redoubt.bundle.v1\0" || u64_le(len) || tar`. Both sides of the
 //! signature take its preamble from `bundle_preamble` here and nowhere else — the loader
@@ -19,13 +19,14 @@
 //! the container it is reading (the initrd, after the 64-byte signature). It must never take a
 //! length out of the signed bytes: those are the attacker's.
 //!
-//! The other domains of VERIFIED-BOOT.md (`"redoubt.audit.v1\0"` in `keyd`, `"redoubt.pkg.v1\0"`
-//! for packages in milestone 2) belong here too when they land, built the same way.
+//! The other domains (`"redoubt.audit.v1\0"`, today defined in `keyd` itself, see
+//! `docs/servers/keyd.md`; `"redoubt.pkg.v1\0"` for packages, `docs/servers/pkg.md`, not built
+//! yet) belong here too, built the same way.
 
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 
-/// The boot bundle signing domain, NUL-terminated (VERIFIED-BOOT.md, Signature).
+/// The boot bundle signing domain, NUL-terminated (kernel/boot.md, "Verified boot").
 pub const BUNDLE_DOMAIN: &[u8] = b"redoubt.bundle.v1\0";
 
 /// Bytes of preamble the bundle signature covers before the archive itself: the domain and the
@@ -50,7 +51,7 @@ pub fn bundle_preamble(len: u64) -> [u8; BUNDLE_PREAMBLE_LEN] {
 mod tests {
     use super::*;
 
-    /// The wire form, spelled out by hand as VERIFIED-BOOT.md states it. If this test has to be
+    /// The wire form, spelled out by hand as kernel/boot.md states it. If this test has to be
     /// edited, the signature format has changed and every signed bundle in the world stops
     /// verifying: that is the change, not a detail of it.
     #[test]

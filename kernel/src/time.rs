@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The kernel-owned timer (RESOURCES.md, The timer; KERNEL-SPEC.md, I13 and R12).
+//! The kernel-owned timer (kernel/timer.md; I13 and R12).
 //!
 //! One hardware timer, always armed for the earliest of what is due: the running thread's slice
 //! end (R12), a blocking call's timeout (I13) or a budget's deadline. Nothing in userspace programs it and
@@ -26,7 +26,7 @@
 //! wait or a destroyed budget leaves it where it was, which costs at most one early interrupt and
 //! a walk that recomputes it. So nothing is missed.
 //!
-//! Microseconds are the ABI's unit (KERNEL-SPEC.md, Constants): deadlines are kept in them, and
+//! Microseconds are the ABI's unit (kernel/timer.md, "Time"): deadlines are kept in them, and
 //! converted to timer ticks rounding up, so an interrupt never comes before its deadline.
 
 use crate::arch::irq::timer;

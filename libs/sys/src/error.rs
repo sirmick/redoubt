@@ -1,5 +1,5 @@
-//! The one error enum every call returns (KERNEL-SPEC.md, Errors), and which errors each call can
-//! return.
+//! The one error enum every call returns (kernel/abi.md, "Errors and their codes"), and which
+//! errors each call can return.
 
 use Error::*;
 
@@ -72,16 +72,16 @@ impl Errors {
 const DECODING: Errors = set(&[InvalidArgument]);
 
 /// A call that adds a handle to its caller's table can find the caller's budget unable to pay
-/// for a new table page (KERNEL-SPEC.md, above the error table).
+/// for a new table page (kernel/abi.md, "Errors and the order of checks").
 const ADDS_HANDLE: Errors = set(&[OutOfMemory]).with(HANDLE_LIMIT);
 
-/// A process holds at most `MAX_HANDLES` handles (answer 102), and a call that would add one
+/// A process holds at most `MAX_HANDLES` handles (kernel/objects.md), and a call that would add one
 /// more to its caller's table gets `TooLarge`, which the caller can tell from its budget running
 /// out of pages.
 const HANDLE_LIMIT: Errors = set(&[TooLarge]);
 
 impl Number {
-    /// Whether this call can return `error`: the errors of its row in KERNEL-SPEC.md's error
+    /// Whether this call can return `error`: the errors of its row in kernel/abi.md's error
     /// table (in what order they are checked is the spec's), plus decoding's general
     /// `InvalidArgument`, and `OutOfMemory` for a call that adds a handle to its caller's table.
     /// The kernel checks every error it returns against this in debug builds.
@@ -109,8 +109,8 @@ impl Number {
             }
             // A reply is never refused (R4): handles that do not fit the caller, by its pages
             // or by `MAX_HANDLES`, are dropped (0 in their slots) and the reply arrives without
-            // them, and the `call` returns `OutOfMemory` (answers 107 and 116) -- not `TooLarge`,
-            // which here means only a lend over `MAX_LEND_PAGES`.
+            // them, and the `call` returns `OutOfMemory` -- not `TooLarge`, which here means only
+            // a lend over `MAX_LEND_PAGES`.
             Number::Call => set(&[
                 BadHandle,
                 TooLarge,
@@ -134,9 +134,9 @@ impl Number {
                 Timeout,
                 Dead,
             ]),
-            // At `MAX_OPEN_CALLS` calls stay queued, so `receive` is never `Busy` (answer
-            // 105); nor `OutOfMemory`, since a message the receiver cannot pay for is its
-            // sender's `Refused` (R4).
+            // At `MAX_OPEN_CALLS` calls stay queued, so `receive` is never `Busy` (R4a); nor
+            // `OutOfMemory`, since a message the receiver cannot pay for is its sender's
+            // `Refused` (R4).
             Number::Receive => set(&[BadHandle, WrongObject, NotPermitted, Timeout, Dead]),
             Number::Reply => set(&[InvalidArgument, TooLarge, BadHandle]),
             Number::Serve => set(&[InvalidArgument]),

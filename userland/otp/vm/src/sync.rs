@@ -1,7 +1,7 @@
 //! The one lock type, and what may be shared between schedulers.
 //!
-//! With the `std` feature the VM may run several schedulers on threads (DESIGN.md, "Terms and
-//! heaps", stage 2): [`Lock`] is a mutex and shared values must be `Send + Sync`. Without it
+//! With the `std` feature the VM may run several schedulers on threads (docs/userland/beamlet.md):
+//! [`Lock`] is a mutex and shared values must be `Send + Sync`. Without it
 //! there is one scheduler: [`Lock`] is a `RefCell` and nothing needs to cross threads. Code
 //! is written once against this module and is correct in both.
 

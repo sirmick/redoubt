@@ -1,4 +1,4 @@
-//! A spinning budget cannot delay another beyond its weight (WP-K5; R12): three spinners in
+//! A spinning budget cannot delay another beyond its weight (R12): three spinners in
 //! budgets of weight 100, 100 and 300 each get their weight's share of a two-second window.
 
 #![no_std]

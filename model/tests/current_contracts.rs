@@ -246,7 +246,7 @@ fn unsettled_receive_output_is_rejected_by_trace_oracle() {
     assert!(w.k.step(&op).is_none());
     let mut ops = w.ops.clone();
     ops.push(op);
-    assert!(trace::record(&Boot::default(), &ops, None).unwrap_err().contains("171"));
+    assert!(trace::record(&Boot::default(), &ops, None).unwrap_err().contains("late-invalid receive output"));
     let mut w = World::new(None);
     let (ep, _, server) = w.setup().unwrap();
     let memory = w.lend().unwrap();
@@ -256,7 +256,7 @@ fn unsettled_receive_output_is_rejected_by_trace_oracle() {
     assert!(w.k.unsupported_receive_output(&op));
     let mut ops = w.ops.clone();
     ops.push(op);
-    assert!(trace::record(&Boot::default(), &ops, None).unwrap_err().contains("171"));
+    assert!(trace::record(&Boot::default(), &ops, None).unwrap_err().contains("late-invalid receive output"));
     let mut w = World::new(None);
     let (ep, _, server) = w.setup().unwrap();
     w.op(Op::Record { pid: 1, tid: server, record: Record::CopyFault }).unwrap();

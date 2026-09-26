@@ -1,10 +1,10 @@
-//! Attacker: hostile arguments to every call WP-K1 and WP-K2 built (I14): bad and wide handles, unknown
-//! numbers, non-zero unused registers, records misaligned, at 0, in the kernel, read-only,
-//! never touched, straddling into an unmapped page, malformed slot by slot, the largest values; the order in
-//! which the stages report them; then a few thousand calls with arguments drawn from a pool of
-//! hostile values. No argument may panic the kernel. Each targeted attempt's error is printed as
-//! progress; the verdict is the victim's report and the checker's power-off, which a panicked
-//! kernel never reaches. See `tests/budget-syscall-attack.toml`.
+//! Attacker: hostile arguments to the kernel's calls (I14): bad and wide handles, unknown
+//! numbers, non-zero unused registers, records misaligned, at 0, in the kernel, read-only, never
+//! touched, straddling into an unmapped page, malformed slot by slot, the largest values; the
+//! order in which the stages report them; then a few thousand calls with arguments drawn from a
+//! pool of hostile values. No argument may panic the kernel. Each targeted attempt's error is
+//! printed as progress; the verdict is the victim's report and the checker's power-off, which a
+//! panicked kernel never reaches. See `tests/budget-syscall-attack.toml`.
 
 #![no_std]
 #![no_main]
@@ -29,11 +29,12 @@ fn good_spec() -> [u64; BUDGET_SPEC_SLOTS] { rd::spec(1, 0, 0).encode() }
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
-    // The bundle's third program: its budgets come from log-server, once, and no device (R2).
+    // The bundle's third program: its budgets come from log-server, once, and no device.
     let rd::Gifts { system, .. } = rd::take_gifts().expect("the budgets");
     log!(logger, "[attacker] starting");
     let scratch = (&raw mut SCRATCH) as usize;
-    // Decoding never backs an untouched page (QUESTIONS.md 115), so touch every page of SCRATCH.
+    // Decoding never backs an untouched page (kernel/abi.md, "The record check"), so touch every
+    // page of SCRATCH.
     for word in (0..1024).step_by(512) {
         // SAFETY: an in-bounds word of SCRATCH, this program's own.
         unsafe { ((&raw mut SCRATCH) as *mut u64).add(word).write_volatile(0) };
@@ -55,7 +56,7 @@ pub extern "C" fn _start() -> ! {
         }
         scratch
     };
-    // Slot 3 is the label count: a spec asks for no place in the queue (answer 103).
+    // Slot 3 is the label count: a spec asks for no place in the queue.
     let mut nine_labels = spec;
     nine_labels[3] = 9;
     let mut huge_labels = spec;
@@ -89,7 +90,8 @@ pub extern "C" fn _start() -> ! {
         call(Number::BudgetCreate, [system as usize, at(&spec), 1, 0, 0, 0, 0]),
     ];
     log!(logger, "[i14] budget_create order -> {:?}", order);
-    // A page reserved and never touched: decoding does not back it (QUESTIONS.md 115).
+    // A page reserved and never touched: decoding does not back it (kernel/abi.md, "The record
+    // check").
     let untouched = rd::untouched_stack_page();
     let usage = [
         call(Number::BudgetUsage, [system as usize, untouched, 0, 0, 0, 0, 0]),
@@ -101,7 +103,7 @@ pub extern "C" fn _start() -> ! {
         call(Number::BudgetUsage, [999, scratch, 0, 0, 0, 0, 0]),
     ];
     log!(logger, "[i14] budget_usage -> {:?}", usage);
-    // `random` takes no arguments (answer 77): its old buffer and length are stray registers.
+    // `random` takes no arguments: its old buffer and length are stray registers.
     let random = [
         call(Number::Random, [text, 8, 0, 0, 0, 0, 0]),
         call(Number::Random, [KERNEL, 0, 0, 0, 0, 0, 0]),
@@ -121,7 +123,7 @@ pub extern "C" fn _start() -> ! {
         call(Number::HandleClose, [999, 0, 0, 0, 0, 0, 0]),
         call(Number::HandleClose, [system as usize, 1, 0, 0, 0, 0, 0]),
         call(Number::BudgetDestroy, [999, 0, 0, 0, 0, 0, 0]),
-        // The memory and device calls (WP-K3): a stray register, flags that cannot be decoded
+        // The memory and device calls: a stray register, flags that cannot be decoded
         // (W+X, an unknown bit), no length, a range that is not the caller's, and handles of
         // the wrong kind. `system_reset` is offered a budget handle, never the Reset right.
         call(Number::MapAnon, [rd::PAGE_SIZE, 3, 1, 0, 0, 0, 0]),

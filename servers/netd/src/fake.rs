@@ -203,7 +203,8 @@ impl FakeNic {
     pub fn fail_irq_after(&self, waits: u64) { self.irq_waits_left.set(Some(waits)); }
 
     /// The next `completions` receive completions raise no interrupt: an interrupt lost on the
-    /// way, as one raised while the IRQ object was masked once was on QEMU (K5 review 5).
+    /// way, as one raised while the IRQ object was masked once was on QEMU
+    /// (todo/irq-level-latch.md).
     pub fn complete_silently(&self, completions: u64) { self.silent.set(completions); }
 
     /// Advances the device's clock.

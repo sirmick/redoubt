@@ -2,7 +2,8 @@
 #
 # Build and enter it with ./dev.sh. Everything lives in this image:
 #   - Rust (stable, via rustup) with the bare-metal targets the Redoubt kernel builds,
-#     plus rustfmt/clippy/llvm-tools and cargo-binutils (RustSBI's xtask uses rust-objcopy).
+#     plus rustfmt/clippy/llvm-tools and cargo-binutils (RustSBI's xtask uses rust-objcopy),
+#     and mdbook with its Mermaid and Svgbob preprocessors, which render the book in docs/.
 #   - QEMU for BOTH RISC-V widths (qemu-system-riscv32 and qemu-system-riscv64): the test
 #     bench boots entirely inside the container. No host QEMU is used.
 #   - OpenSSH server and client: the bench spawns /usr/sbin/sshd -i and drives it with ssh.
@@ -35,13 +36,11 @@ LABEL org.redoubt.dev.revision="${IMAGE_REV}" \
 # build-essential: a C toolchain for -sys crates the bench pulls in (and pcre2 for beamlet
 #   differential runs). qemu-system-misc: the virt machine for both RISC-V widths.
 # openssh-server: the bench spawns `sshd -i` for its SSH session cases.
-# graphviz: renders README.html's SVG diagrams via tools/gen_readme.py.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential \
       ca-certificates \
       curl \
       git \
-      graphviz \
       less \
       libssl-dev \
       openssh-server \
@@ -86,6 +85,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     && rustup component add rustfmt clippy llvm-tools \
     && rustup target add riscv64imac-unknown-none-elf riscv32imac-unknown-none-elf riscv64gc-unknown-none-elf \
     && cargo install --locked cargo-binutils@0.4.0 \
+    && cargo install --locked mdbook@0.5.4 mdbook-mermaid@0.17.1 mdbook-svgbob@0.3.1 \
     && chmod -R a+rX /opt/rustup /opt/cargo
 
 # `bash -lc` resets PATH from the login profile, so put the toolchain there too (and in

@@ -146,8 +146,8 @@ pub enum ProgramEvent {
 /// symbolic link pointing out of it. Handles are the platform's own numbers; the VM closes a
 /// handle when the process that opened it exits.
 ///
-/// Calls are synchronous for now. On redoubt64 this becomes a 9P client (see DESIGN.md), and the
-/// same operations map onto walk/open/read/write/stat/clunk.
+/// Calls are synchronous for now. On redoubt64 this becomes a 9P client
+/// (docs/userland/beamlet.md), and the same operations map onto walk/open/read/write/stat/clunk.
 pub trait Files {
     fn open(&mut self, path: &str, mode: OpenMode) -> Result<u64, FileError>;
     fn close(&mut self, handle: u64);

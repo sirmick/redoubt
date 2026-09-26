@@ -85,6 +85,7 @@
   - [An interrupt before the first receive](todo/irq-level-latch.md)
   - [Scans of every kernel-object frame](todo/kernel-scan-bounds.md)
   - [A stray file in the kernel's tree](todo/kernel-test-hello.md)
+  - [The littlefs hostile images](todo/littlefs-hostile-images.md)
   - [Loader stub test coverage](todo/loader-stub-coverage.md)
   - [map_anon's search cost](todo/map-anon-search-cost.md)
   - [The vendored crates under Miri](todo/miri-vendored-unsafe.md)

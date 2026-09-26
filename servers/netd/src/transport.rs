@@ -1,4 +1,4 @@
-//! The seam between `netd` and the kernel: `blkd`'s seam (IO-ARCHITECTURE.md), with one more
+//! The seam between `netd` and the kernel: `blkd`'s seam (servers/blkd.md), with one more
 //! operation, a byte-wide register read, because virtio-net's MAC is an array of bytes and
 //! virtio-mmio asks for byte-wide accesses to byte-wide configuration fields (§4.2.2.2).
 //!

@@ -1,6 +1,6 @@
-//! Trusted IPC1 checker. Its serving thread changes a blocked caller's record at a known
-//! boundary, then replies; the main checker judges kernel outcomes and accounting, not text
-//! from a hostile program. Existing redoubt-ipc covers separate address spaces.
+//! Trusted checker of IPC outcomes (R13). Its serving thread changes a blocked caller's record at
+//! a known boundary, then replies; the main checker judges kernel outcomes and accounting, not
+//! text from a hostile program. Existing redoubt-ipc covers separate address spaces.
 #![no_std]
 #![no_main]
 
@@ -166,14 +166,14 @@ pub extern "C" fn _start() -> ! {
     }
     assert_eq!(TAKEN.load(Ordering::Acquire), 0, "invalid records were never delivered");
     rd::set_flags(page, rd::PAGE_SIZE, rd::rw()).unwrap();
-    log!(logger, "IPC1 initial readonly/MMIO records refused before delivery");
+    log!(logger, "ipc-outcomes initial readonly/MMIO records refused before delivery");
 
     // Restore the lend before writing its overlapping output record.
     let out = raw_call(endpoint, page, rd::pages(page, 1));
     assert_eq!(out, CallOutcome { status: Ok(()), lend: LendDisposition::Returned, reply_present: true });
     assert_eq!(rd::peek(page), 42);
     assert_eq!(replied(1), ReplyOutcome { delivered: true, installed: 0 });
-    log!(logger, "IPC1 record inside returned lend committed");
+    log!(logger, "ipc-outcomes record inside returned lend committed");
 
     // Timeout zero on an endpoint nobody serves deterministically cancels before receipt.
     let silent = rd::endpoint_create().unwrap();
@@ -223,7 +223,7 @@ pub extern "C" fn _start() -> ! {
             rd::unmap(record, rd::PAGE_SIZE).unwrap();
         }
     }
-    log!(logger, "IPC1 late readonly/unmap/remap discarded; handles and table pages rolled back");
+    log!(logger, "ipc-outcomes late readonly/unmap/remap discarded; handles and table pages rolled back");
 
     // Exactly one reply handle fits: keep its identity and all words on OutOfMemory.
     let mut next = rd::first_free();
@@ -264,7 +264,7 @@ pub extern "C" fn _start() -> ! {
     for handle in &filler[..count] {
         rd::close(*handle).unwrap();
     }
-    log!(logger, "IPC1 partial OOM reply preserves words, slots and installed mask");
+    log!(logger, "ipc-outcomes partial OOM reply preserves words, slots and installed mask");
 
     let before = rd::usage(rd::SYSTEM).unwrap().pages_usage;
     let (out, _) =
@@ -274,7 +274,7 @@ pub extern "C" fn _start() -> ! {
     assert_eq!(replied(7), ReplyOutcome { delivered: true, installed: 0 });
     assert_eq!(rd::peek(page), 0xbeef, "same physical frame returned");
     assert_eq!(rd::usage(rd::SYSTEM).unwrap().pages_usage, before);
-    log!(logger, "IPC1 both loan aliases protected; frame and charges preserved");
+    log!(logger, "ipc-outcomes both loan aliases protected; frame and charges preserved");
 
     // Destroying the request's stamp after receipt abandons it; the late reply is discarded.
     let before_abandon = rd::usage(rd::SYSTEM).unwrap().pages_usage;
@@ -290,7 +290,7 @@ pub extern "C" fn _start() -> ! {
     assert!(reply.is_none());
     assert_eq!(replied(8), ReplyOutcome { delivered: false, installed: 0 });
     assert_eq!(rd::usage(rd::SYSTEM).unwrap().pages_usage + 1, before_abandon);
-    log!(logger, "IPC1 taken revocation consumed lend; server observed discard");
+    log!(logger, "ipc-outcomes taken revocation consumed lend; server observed discard");
 
     let returned = rd::page();
     rd::poke(returned, 0xfeed);
@@ -302,14 +302,14 @@ pub extern "C" fn _start() -> ! {
     );
     assert!(reply.is_none());
     assert_eq!(rd::peek(returned), 0xfeed);
-    log!(logger, "IPC1 server death returned lend without reply");
-    log!(logger, "IPC1 KERNEL OUTCOMES PASSED");
+    log!(logger, "ipc-outcomes server death returned lend without reply");
+    log!(logger, "ipc-outcomes KERNEL OUTCOMES PASSED");
     test_programs::park()
 }
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     let mut logger = Logger::connect();
-    log!(logger, "IPC1 FAILED: {}", info);
+    log!(logger, "ipc-outcomes FAILED: {}", info);
     test_programs::park()
 }

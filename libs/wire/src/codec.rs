@@ -1,4 +1,4 @@
-//! 9P's encoding (WIRE.md), shared by 9P and the typed messages: little-endian `u8`,
+//! 9P's encoding (servers/wire.md), shared by 9P and the typed messages: little-endian `u8`,
 //! `u16`, `u32`, `u64`; strings as a `u16` length and UTF-8; byte arrays as a `u32` length
 //! and the bytes.
 //!

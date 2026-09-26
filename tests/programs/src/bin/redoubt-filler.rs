@@ -1,4 +1,4 @@
-//! Callers for the `MAX_OPEN_CALLS` part of the Redoubt IPC case (WP-K2). Each blocked caller
+//! Callers for the `MAX_OPEN_CALLS` part of the Redoubt IPC case. Each blocked caller
 //! holds exactly one open call in the server, and one process cannot hold `MAX_OPEN_CALLS`
 //! threads, so the count is made up from this program, `redoubt-client` and the server's own
 //! threads. These threads never return: the server never replies to `op::KEEP`.

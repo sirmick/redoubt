@@ -7,7 +7,7 @@
 //!
 //! The loader unpacks the boot bundle (see `image.rs`), builds an address space for the
 //! kernel and for each initial process, describes the machine to the kernel in a tagged
-//! argument block, and enters the kernel. Design notes: `docs/BOOT.md`.
+//! argument block, and enters the kernel. Design notes: `docs/kernel/boot.md`.
 
 #![no_std]
 #![no_main]
@@ -196,7 +196,7 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     kernel.map_stack(&mut alloc, TRAP_STACK_TOP, TRAP_STACK_PAGES, kernel_flags);
     map_context(&mut alloc, &kernel, KERNEL_PID);
     // Pre-share the tables the kernel will map its interrupt controller and its DMA register
-    // window (WP-K5b) into. The kernel maps both at runtime, after these root entries have been
+    // window into. The kernel maps both at runtime, after these root entries have been
     // copied into every user address space, so the intermediate tables must exist and be shared
     // now (see AddressSpace::reserve_tables). These are the only runtime kernel mappings.
     if let Some(plic) = &platform.plic {
@@ -242,7 +242,8 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
         *processes.get_mut(count).expect("too many initial processes") = process;
         count += 1;
 
-        // The kernel counts these tags to size its process table (BOOT.md); they carry no data.
+        // The kernel counts these tags to size its process table (kernel/boot.md); they carry
+        // no data.
         args.begin(b"IniE");
         args.end();
     }
@@ -267,8 +268,8 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
 }
 
 /// Describe the machine's devices to the kernel, which turns each entry into a device object
-/// (KERNEL-SPEC.md, Device; DEVICE-GRANTS.md, Replacement). One `Devs` tag of fixed six-word
-/// entries: kind, then two 64-bit values (low word first) and a flag word.
+/// (kernel/devices.md, "Device objects"). One `Devs` tag of fixed six-word entries: kind, then
+/// two 64-bit values (low word first) and a flag word.
 ///
 /// | Kind | a | b | flags |
 /// | --- | --- | --- | --- |
@@ -279,18 +280,19 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
 /// A second tag, `Ctrl`, lists the interrupt controllers, four words each: base and size, low
 /// word first. The kernel refuses a `Devs` entry that overlaps one, so which ranges userspace
 /// may never reach is the kernel's to enforce and not a `compatible` string's
-/// (QUESTIONS.md 143). The ranges come from the PLIC and CLINT searches, **not** from the
+/// (kernel/boot.md). The ranges come from the PLIC and CLINT searches, **not** from the
 /// exclusion that keeps them out of the device list: a tree that defeated that exclusion would
 /// otherwise hand the kernel an empty list along with the controller it just offered.
 ///
-/// **The order is INTERIM** (WP-K3; WP-R3 removes it). `init` will be told which handle is
-/// which by the boot manifest, but there is no `init` yet: the kernel hands every device
-/// object to the bundle's first program, in this order, so that a test program can name one
-/// without a manifest. Reset first, then the console named by `/chosen/stdout-path` and its
-/// interrupt, then every other region in device-tree order and every other interrupt
-/// ascending. Because those three positions are fixed, a machine whose device tree does not
-/// name a console, or names it without an interrupt, is refused here rather than booted with
-/// the indices shifted under a program that pinned them (as a missing RNG seed is refused).
+/// **The order is temporary**: `init` will be told which handle is which by the boot manifest
+/// (kernel/boot.md, "The loader loads only the kernel and `init`"; plan/m1-separation.md), but
+/// there is no `init` yet: the kernel hands every device object to the bundle's first program,
+/// in this order, so that a test program can name one without a manifest. Reset first, then
+/// the console named by `/chosen/stdout-path` and its interrupt, then every other region in
+/// device-tree order and every other interrupt ascending. Because those three positions are
+/// fixed, a machine whose device tree does not name a console, or names it without an
+/// interrupt, is refused here rather than booted with the indices shifted under a program that
+/// pinned them (as a missing RNG seed is refused).
 fn emit_devices(args: &mut args::ArgsBuilder, platform: &Platform) {
     const MMIO: u32 = 1;
     const IRQ: u32 = 2;

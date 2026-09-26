@@ -48,7 +48,7 @@ pub fn init() {
     let base = crate::args::wide(arg.data, 0);
     let size = crate::args::wide(arg.data, 2);
     CONTEXT.store(arg.data[4] as usize, Ordering::Relaxed);
-    // The DMA register window (WP-K5b) follows the PLIC's mapping.
+    // The DMA register window follows the PLIC's mapping.
     assert!(size <= redoubt_layout::KERNEL_DMA_REGS - KERNEL_PLIC_BASE, "the PLIC runs into the DMA window");
 
     crate::mem::MemoryManager::with_mut(|mm| {

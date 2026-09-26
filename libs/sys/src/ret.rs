@@ -1,5 +1,6 @@
-//! Results in registers. IPC call status does not erase ownership or reply validity (answers
-//! 167-168); its status lives inside [`CallOutcome`], even when it is an error.
+//! Results in registers. IPC call status does not erase ownership or reply validity
+//! (kernel/ipc.md, "How a call completes"); its status lives inside [`CallOutcome`], even when it
+//! is an error.
 
 use crate::regs::{REGS, Reader, Writer};
 use crate::{Error, Handle, MAX_MSG_HANDLES, Number};
@@ -57,7 +58,7 @@ pub enum Return {
     /// `map_device`: where the device's registers are, and how many bytes of them. A driver
     /// needs the length to know what it may touch; which device the handle names comes from
     /// the boot manifest, so the kernel says nothing about it.
-    /// QUESTIONS.md 146 (pending).
+    /// See kernel/devices.md, `map_device`.
     Mapping {
         addr: usize,
         len: usize,
@@ -166,7 +167,7 @@ pub fn decode_result(number: Number, regs: &[u64; REGS]) -> Result<Return, Error
             Return::Reply(ReplyOutcome { delivered, installed: r.u32()? }.validate(MAX_MSG_HANDLES)?)
         }
         Number::MapAnon => Return::Addr(r.usize()?),
-        // QUESTIONS.md 146 (pending).
+        // The address and the length (kernel/devices.md, `map_device`).
         Number::MapDevice => Return::Mapping { addr: r.usize()?, len: r.usize()? },
         Number::DmaAlloc => Return::Dma { addr: r.usize()?, phys: r.u64()? },
         Number::ThreadCreate => Return::Tid(r.u32()?),

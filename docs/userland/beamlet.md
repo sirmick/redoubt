@@ -127,8 +127,7 @@ Everything the VM gets from outside comes through the `Platform` trait
 Status: built · partly tested: runs on the host only; the differential suites against the real BEAM need OTP 28 and Elixir installed and are not run by the bench, and linear-time matching and crypto's refusal without randomness are not attacked by a named test · tested: host:beamlet-vm::decodes_otp_output, host:beamlet-vm::encodes_like_otp, host:beamlet-vm::printing_matches_otp, host:beamlet-vm::matches_otp, host:beamlet-vm::block_hash_handles_every_tail_length, host:beamlet-re::pcre_spellings, host:beamlet-re::braces_are_quantifiers_only_when_counted, host:beamlet-crypto::certificates_round_trip, host:beamlet-crypto::nesting_is_bounded, host:beamlet-crypto::mutants_never_panic
 
 Where beamlet implements something, it behaves as the real BEAM does, and the differential suite
-checks it: each test runs on BEAM and on beamlet and the printed results must be identical
-([`userland/otp/DESIGN.md`](../../userland/otp/DESIGN.md)).
+checks it: each test runs on BEAM and on beamlet and the printed results must be identical.
 - **OTP and Elixir unchanged.** OTP's `stdlib`, `logger`, `file`, `ssl` (TLS 1.2 and 1.3) and
   `ssh` run unmodified, and so do Elixir's standard library, its compiler, OTP's Erlang compiler
   and IEx, whose transcript matches BEAM's. Every live OTP 28 opcode is implemented except

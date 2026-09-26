@@ -1,6 +1,5 @@
-//! The timing check for the signing path (BUILD-PLAN.md, WP-S1: "the signing path is
-//! constant-time under the bench's timing check"; CONTAINMENT.md, covert and timing channels;
-//! TENETS.md: assume the attacker has a perfect clock).
+//! The timing check for the signing path (servers/keyd.md R45; TENETS.md, "Side channels":
+//! assume the attacker has a perfect clock).
 //!
 //! **What it measures.** A fixed-versus-random test, as `dudect` does it. Two classes of
 //! sample, interleaved by a deterministic coin so that any drift in the machine falls on both:

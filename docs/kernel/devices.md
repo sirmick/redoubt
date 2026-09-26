@@ -50,7 +50,7 @@ the device calls are in the [ABI reference](abi.md#errors-and-the-order-of-check
 
 ### `map_device`
 
-Status: built · tested: bench:device, bench:irq-attack, host:redoubt-model::reset_at_one_death_does_not_cover_a_co_holder, mutation:K5bResetClearsCoHolderReach
+Status: built · tested: bench:device, bench:irq-attack, host:redoubt-model::reset_at_one_death_does_not_cover_a_co_holder, mutation:DmaResetClearsCoHolderReach
 
 `map_device(h(MMIO)) -> addr, len` maps the whole range readable and writable, not executable,
 at an address the kernel chooses ([R11 (memory)](memory.md#r11-memory)), and returns the address
@@ -70,7 +70,7 @@ process with the registers mapped could have programmed the device with any addr
 
 ### `dma_alloc`
 
-Status: built · partly tested: the limit of `MAX_RUNS` runs per device is not attacked by a case · tested: bench:device, bench:dma-rules, host:redoubt-model::dma_pages_stay_put, mutation:K5bUnmapFreesDma
+Status: built · partly tested: the limit of `MAX_RUNS` runs per device is not attacked by a case · tested: bench:device, bench:dma-rules, host:redoubt-model::dma_pages_stay_put, mutation:DmaUnmapFrees
 
 `dma_alloc(h(MMIO), npages) -> addr, phys` returns `npages` physically contiguous, zeroed pages,
 mapped readable and writable at an address the kernel chooses, and their physical address. It is
@@ -92,7 +92,7 @@ process only at its end.
 
 ### Reset before reuse
 
-Status: built · partly tested: that the reset precedes the pooling inside the kernel is attacked only in the model; the case runs only on rv64 · tested: bench:dma-reset-reuse, bench:dma-rules, host:redoubt-model::exit_pools_after_reset, host:redoubt-model::reset_at_one_death_does_not_cover_a_co_holder, mutation:K5bFreeBeforeReset, mutation:K5bResetClearsCoHolderReach
+Status: built · partly tested: that the reset precedes the pooling inside the kernel is attacked only in the model; the case runs only on rv64 · tested: bench:dma-reset-reuse, bench:dma-rules, host:redoubt-model::exit_pools_after_reset, host:redoubt-model::reset_at_one_death_does_not_cover_a_co_holder, mutation:DmaFreeBeforeReset, mutation:DmaResetClearsCoHolderReach
 
 A DMA device may still hold the physical address of a run after the process that programmed it
 has died. So no DMA page goes back to the pool until every device that could hold its address has
@@ -135,7 +135,7 @@ stateDiagram-v2
 
 ### Quarantine
 
-Status: built · partly tested: the cases run only on rv64 · tested: bench:dma-reset-quarantine, host:redoubt-model::deaf_device_quarantines_the_co_holder_too, host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit, mutation:K5bQuarantinedSlotCountsAsReset, mutation:K5bQuarantineChargeDropped, mutation:K5bQuarantinedDeviceUsable
+Status: built · partly tested: the cases run only on rv64 · tested: bench:dma-reset-quarantine, host:redoubt-model::deaf_device_quarantines_the_co_holder_too, host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit, mutation:DmaQuarantinedSlotCountsAsReset, mutation:DmaQuarantineChargeDropped, mutation:DmaQuarantinedDeviceUsable
 
 When a device in the reset set does not confirm, every run the ending process held is
 **quarantined**, the runs through devices that did confirm included: their pages are never

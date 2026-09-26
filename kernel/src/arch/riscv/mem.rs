@@ -5,7 +5,7 @@
 //!
 //! Page tables are never mapped into a window. All of physical RAM is mapped
 //! supervisor-only at `PHYSMAP_BASE`, and tables are walked in software starting from a
-//! root. See `docs/MEMORY-LAYOUT.md`. Everything width-specific (the level
+//! root. See `docs/kernel/memory-layout.md`. Everything width-specific (the level
 //! count, entries per table, VPN width and `satp` layout) lives in the `paging` crate,
 //! reached here through `physmap`; this file is written in terms of `LEVELS`, `vpn()` and
 //! `leaf_size()` and so is identical for both modes.
@@ -38,8 +38,8 @@ fn flush_tlb() {
 /// Make this hart's instruction fetches see every store it made before (RISC-V `fence.i`,
 /// Zifencei). Called after anything that makes memory executable for userspace: an image moved in
 /// by `process_map`, and `map_anon`, `map_fixed`, `set_flags` or a demand-paged fault installing
-/// X, and once at boot before the first user dispatch. Single hart (WP-K5): another hart would
-/// need its own fence (post-M1 SMP).
+/// X, and once at boot before the first user dispatch. Single hart: another hart would need its
+/// own fence (beyond/smp.md).
 pub fn sync_icache() {
     // SAFETY: `fence.i` takes no operands, touches no memory the compiler tracks and changes no
     // register; it only orders this hart's later instruction fetches after its earlier stores.
@@ -289,7 +289,7 @@ impl MemoryMapping {
         }
 
         for page in 0..crate::arch::process::PROCESS_IMPL_PAGES {
-            // Saved contexts are frames charged to the running budget (answer 127).
+            // Saved contexts are frames charged to the running budget (kernel/objects.md).
             let context_phys = mm.alloc_context_page(pid)?;
             // SAFETY: a freshly allocated frame, as above.
             unsafe { window().zero_frame(context_phys) };
@@ -407,7 +407,7 @@ pub fn map_page_inner(
 }
 
 /// Map device registers `phys` at kernel address `virt`, read-write and for the kernel alone (no
-/// U bit): WP-K5b's DMA register window. The loader created and shared the tables above it
+/// U bit): the DMA register window. The loader created and shared the tables above it
 /// (`reserve_tables`), so nothing is allocated and every address space sees the page; a missing
 /// table is a boot bug, and the kernel stops.
 pub fn map_kernel_page(phys: usize, virt: usize) {
@@ -681,8 +681,8 @@ pub fn ensure_page_exists_inner(mm: &mut MemoryManager, address: usize) -> Resul
 /// The frame behind user address `virt` of the current address space, if the process may read
 /// it (and, with `write`, write it) there: a system call about to copy a record in or a result
 /// out. Anything else (unmapped, reserved but never touched, lent out, kernel, no permission)
-/// is `InvalidArgument`: decoding never allocates (answer 115), so a process
-/// touches its record buffers before a call. This also excludes a live `VALID | S`
+/// is `InvalidArgument`: decoding never allocates (kernel/abi.md, "The record check"), so a
+/// process touches its record buffers before a call. This also excludes a live `VALID | S`
 /// borrower alias: userspace can access it normally, but cannot use it as syscall-owned RAM.
 pub fn user_frame(virt: usize, write: bool) -> Result<usize, redoubt_sys::Error> {
     use redoubt_sys::Error;
@@ -700,7 +700,7 @@ pub fn user_frame(virt: usize, write: bool) -> Result<usize, redoubt_sys::Error>
     Ok(pte.phys())
 }
 
-/// `set_flags` (KERNEL-SPEC.md, R11): give a mapped user page exactly the permissions
+/// `set_flags` (kernel/memory.md, R11): give a mapped user page exactly the permissions
 /// `flags` asks for, keeping everything else about the entry (its frame, `USER`, the
 /// accessed and dirty bits). It may add a permission as well as drop one: a program maps a page writable, writes code into it, and then makes it
 /// executable and not writable, which is what W^X asks of it. `Pte::leaf` refuses the
@@ -725,7 +725,7 @@ pub fn set_user_page_flags(virt: usize, flags: MemFlags) -> Result<(), PageError
 
 /// Whether `virt` is a live, user-visible mapping of the current address space that is not
 /// either alias of a loan: what `unmap` and `set_flags` need before either changes one
-/// (WP-K0's rule: check the whole range first). The frame it maps, for the caller to check
+/// (kernel/memory.md: check the whole range first). The frame it maps, for the caller to check
 /// who owns it.
 pub fn user_mapping(virt: usize) -> Option<usize> {
     let pte = walk(current_root(), virt, None).ok()?.get();

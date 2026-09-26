@@ -19,7 +19,7 @@ fn process_impl() -> &'static mut ProcessImpl {
     // SAFETY: see the function's doc comment.
     unsafe { &mut *PROCESS }
 }
-/// A thread's number within its process, `1..=MAX_THREADS` (KERNEL-SPEC.md). Thread `tid`'s
+/// A thread's number within its process, `1..=MAX_THREADS` (kernel/processes.md). Thread `tid`'s
 /// saved context is context `tid` of `ProcessImpl` (context 0 is the header), so `tid` is
 /// also the number the trap handler reads from `hardware_thread`, where 0 means no thread.
 pub type TID = usize;
@@ -214,7 +214,7 @@ impl Process {
     }
 
     /// A free TID, searching round from the last one handed out; `None` once `MAX_THREADS`
-    /// threads exist (OD10: the initial thread counts).
+    /// threads exist (the initial thread counts; kernel/processes.md).
     pub fn find_free_thread(&self) -> Option<TID> {
         let process = process_impl();
         let start = process.last_tid_allocated as usize;
@@ -237,9 +237,10 @@ impl Process {
         }
     }
 
-    /// The first run of a loader-bundle program (INTERIM, until R3's `init` launches them), in
-    /// its own address space: claim its slot, reset its contexts, start its first thread at
-    /// `entry` with stack pointer `sp`, and reserve its stack for demand paging (OD6).
+    /// The first run of a loader-bundle program (until `init` launches them,
+    /// plan/m1-separation.md), in its own address space: claim its slot, reset its contexts,
+    /// start its first thread at `entry` with stack pointer `sp`, and reserve its stack for demand
+    /// paging (kernel/memory.md, "Backing and zeroing").
     pub fn setup_loader_process(pid: Pid, entry: usize, sp: usize) {
         Self::claim(pid);
         Self::setup_empty_process(pid);
@@ -255,9 +256,9 @@ impl Process {
         });
     }
 
-    /// WP-K4: claim `pid` in the process table, so that its address space can be activated. It
-    /// is a separate step from `setup_empty_process`, which needs that space to be active
-    /// already: `set_current_pid` refuses a PID the table does not hold.
+    /// Claim `pid` in the process table, so that its address space can be activated. It is a
+    /// separate step from `setup_empty_process`, which needs that space to be active already:
+    /// `set_current_pid` refuses a PID the table does not hold.
     pub fn claim(pid: Pid) {
         let pid_idx = (pid.get() as usize) - 1;
         PID_SLOTS.with(|pt| {
@@ -284,10 +285,10 @@ impl Process {
         process.inner = Default::default();
     }
 
-    /// WP-K4: the first thread of a process `process_start` is starting, at `entry` with stack
-    /// pointer `sp` and one argument. Unlike `setup_loader_process` this reserves no stack: a Redoubt
-    /// process is given every page it has by its parent (`process_map`), so `sp` is an address
-    /// the parent has already mapped and the kernel only loads it.
+    /// The first thread of a process `process_start` is starting, at `entry` with stack pointer
+    /// `sp` and one argument. Unlike `setup_loader_process` this reserves no stack: a Redoubt
+    /// process is given every page it has by its parent (`process_map`), so `sp` is an address the
+    /// parent has already mapped and the kernel only loads it.
     ///
     /// The process's own address space must be the active one.
     pub fn setup_first_thread(pid: Pid, entry: usize, sp: usize, arg: usize) {
@@ -301,8 +302,7 @@ impl Process {
         thread.registers[9] = arg;
     }
 
-    /// WP-K4: `thread_create(entry, sp, arg)`. The caller has mapped its own stack and passes
-    /// `sp`.
+    /// `thread_create(entry, sp, arg)`. The caller has mapped its own stack and passes `sp`.
     pub fn setup_redoubt_thread(&mut self, new_tid: TID, entry: usize, sp: usize, arg: usize) {
         assert!(valid_tid(new_tid), "attempt to create an invalid thread {}", new_tid);
         let process = process_impl();

@@ -1,7 +1,8 @@
-//! A destroyed lineage's debt reaches a shared parent normalized by weight (WP-K5; OWNER
-//! DECISION 6): under `users`, sixteen spinners of weight 100 run; U (100) spins with a weight-1
-//! grandchild G that runs a slice; G is destroyed, then U (a logout). A sibling S created under
-//! `users` afterwards runs within one round (QA K5-debt-lift-bound), not after G's raw debt.
+//! A destroyed lineage's debt reaches a shared parent normalized by weight (kernel/scheduling.md,
+//! "Inheritance"): under `users`, sixteen spinners of weight 100 run; U (100) spins with a
+//! weight-1 grandchild G that runs a slice; G is destroyed, then U (a logout). A sibling S created
+//! under `users` afterwards runs within one round (kernel/scheduling.md, "Residual risks"), not
+//! after G's raw debt.
 
 #![no_std]
 #![no_main]

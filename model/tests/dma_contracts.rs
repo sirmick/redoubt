@@ -1,4 +1,4 @@
-//! DMA device reset and frame quarantine (WP-K5b, answer 173): the model's own checks, scripted,
+//! DMA device reset and frame quarantine (kernel/devices.md): the model's own checks, scripted,
 //! beside the property families and mutations that search for the same breaks at random. The
 //! kernel's boot cases (`tests/dma-rules.toml`, `tests/dma-reset-*.toml`) cover the kernel.
 
@@ -89,8 +89,9 @@ fn quarantined(w: &World, device: u64) -> bool {
     matches!(w.k.devices[&device].kind, DeviceKind::Mmio { quarantined: true, .. })
 }
 
-/// OD2: a DMA page is neither lent, transferred nor moved by `process_map`; `set_flags` works,
-/// and `unmap` drops the mapping but keeps the frame, held and charged.
+/// A DMA page (kernel/devices.md, `dma_alloc`) is neither lent, transferred nor moved by
+/// `process_map`; `set_flags` works, and `unmap` drops the mapping but keeps the frame, held and
+/// charged.
 #[test]
 fn dma_pages_stay_put() {
     let mut w = World::new(None);
@@ -140,13 +141,14 @@ fn exit_pools_after_reset() {
     assert!(used(&mut w, b) < base, "the process's own charges, and its DMA pages, are back");
 }
 
-/// OD3: one death's confirmed reset of a device does not cover a live co-holder that still
-/// reaches it. B allocates through device 7 and maps device 2; A maps device 2 and exits, which
-/// resets it; B can still program device 2, so its own death must reset it again before B's frame
-/// is pooled. Under `K5bResetClearsCoHolderReach` it is not, and I-DMA reports the frame.
+/// Reset before reuse (kernel/devices.md): one death's confirmed reset of a device does not
+/// cover a live co-holder that still reaches it. B allocates through device 7 and maps device 2;
+/// A maps device 2 and exits, which resets it; B can still program device 2, so its own death must
+/// reset it again before B's frame is pooled. Under `DmaResetClearsCoHolderReach` it is not, and
+/// I16 reports the frame.
 #[test]
 fn reset_at_one_death_does_not_cover_a_co_holder() {
-    for mutation in [None, Some(Mutation::K5bResetClearsCoHolderReach)] {
+    for mutation in [None, Some(Mutation::DmaResetClearsCoHolderReach)] {
         let mut w = World::new(mutation);
         assert!(matches!(w.k.processes[&1].handles[&DMA2].object, Object::Device(7)));
         let (_, b, tb) = child(&mut w, USERS, vec![DMA, DMA2]);
@@ -161,14 +163,15 @@ fn reset_at_one_death_does_not_cover_a_co_holder() {
                 r.unwrap();
                 assert!(w.k.frames.values().all(|f| f.dma.is_none()), "B's frame pooled after both resets");
             }
-            Some(_) => assert!(r.unwrap_err().contains("I-DMA"), "the dropped reach is caught"),
+            Some(_) => assert!(r.unwrap_err().contains("I16"), "the dropped reach is caught"),
         }
     }
 }
 
-/// OD6 and P1-1: a device whose reset fails quarantines the dying holder's memory, and every
-/// handle to it is swept; a co-holder's later death quarantines all of its memory too, the run through
-/// the healthy device included, because a quarantined device counts as not reset.
+/// Quarantine (kernel/devices.md): a device whose reset fails quarantines the dying holder's
+/// memory, and every handle to it is swept; a co-holder's later death quarantines all of its
+/// memory too, the run through the healthy device included, because a quarantined device counts
+/// as not reset.
 #[test]
 fn deaf_device_quarantines_the_co_holder_too() {
     let mut w = World::new(None);
@@ -183,7 +186,7 @@ fn deaf_device_quarantines_the_co_holder_too() {
     assert!(quarantined(&w, 6), "the first reset of the deaf device fails");
     assert_eq!(w.k.frames.values().filter(|f| f.quarantined).count(), 1);
     assert!(used(&mut w, b1) >= 1 && used(&mut w, b1) < held1, "the quarantined page stays charged");
-    // Every handle to it was swept (OD6), init's own copy included.
+    // Every handle to it was swept, init's own copy included.
     assert_eq!(call(&mut w, 1, 1, Syscall::DmaAlloc { h: DEAF, npages: 1 }), Err(Error::BadHandle));
     assert_eq!(call(&mut w, 1, 1, Syscall::MapDevice { h: DEAF }), Err(Error::BadHandle));
 
@@ -198,9 +201,9 @@ fn deaf_device_quarantines_the_co_holder_too() {
     assert!(matches!(call(&mut w, 1, 1, Syscall::DmaAlloc { h: DMA, npages: 1 }), Ok(Ret::AddrPhys { .. })));
 }
 
-/// OD5 and N1: when a budget holding quarantined pages is destroyed, its carve returns to the
-/// parent first and the charge then moves there; so a parent already at its limit ends at most
-/// at it (I5), and the pages stay charged to a live budget.
+/// Quarantine charging (kernel/devices.md): when a budget holding quarantined pages is
+/// destroyed, its carve returns to the parent first and the charge then moves there; so a parent
+/// already at its limit ends at most at it (I5), and the pages stay charged to a live budget.
 #[test]
 fn quarantine_charge_moves_to_a_parent_at_its_limit() {
     let mut w = World::new(None);

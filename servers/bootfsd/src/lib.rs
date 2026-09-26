@@ -1,14 +1,14 @@
 //! `bootfsd`: the read-only 9P server over the verified boot bundle, mounted at `/boot`
-//! (NAMESPACES.md, Filesystem servers; INIT.md, What `/boot` shows).
+//! (servers/bootfsd.md; servers/init.md, "What `/boot` shows").
 //!
 //! **It serves exactly the entries the boot manifest's `public` list names, and never the
 //! manifest.** That is not a filter it applies: `bootfsd` never sees the bundle. `init` reads
 //! the archive and hands over the public entries' bytes, one at a time, through the `bootfs`
-//! protocol (NAMESPACES.md's table, generated into [`redoubt_rt::wire::proto::bootfs`]), so the
-//! manifest — which carries `keyd`'s seeds and every principal's keys — never enters this
-//! process's address space at all (answer 123). A walk to any other name is "does not exist",
-//! the same answer as a name the bundle never held, so `/boot` says nothing about the rest of
-//! the bundle.
+//! protocol (servers/bootfsd.md's table, generated into [`redoubt_rt::wire::proto::bootfs`]), so
+//! the manifest — which carries `keyd`'s seeds and every principal's keys — never enters this
+//! process's address space at all (servers/bootfsd.md R46). A walk to any other name is "does
+//! not exist", the same answer as a name the bundle never held, so `/boot` says nothing about
+//! the rest of the bundle.
 //!
 //! **What it refuses.** Everything that writes: `Twrite`, `Tcreate`, `Tremove`, `Twstat`, and
 //! opening for writing or with `OTRUNC`. There is no code here that can change an entry after

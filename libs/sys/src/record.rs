@@ -33,8 +33,8 @@ impl Slot for Handle {
 }
 
 /// A handle as it arrives in a message or a reply: 0 is `None`, a handle revoked while its
-/// message was in flight (R10), or one a reply's caller could not take (answer 116). It keeps its
-/// slot, so the handles after it keep their positions (WIRE.md numbers them).
+/// message was in flight (R10), or one a reply's caller could not take (R4). It keeps its slot,
+/// so the handles after it keep their positions (servers/wire.md numbers them).
 impl Slot for Option<Handle> {
     const FILL: Self = None;
 
@@ -139,7 +139,7 @@ pub type Body = BodyOf<Handle>;
 
 /// A body as received: inside a [`Message`], and the reply `call` writes back over its request.
 /// A handle slot within the count may be 0 (`None`): the handle was revoked while the message was
-/// in flight (R10), or, in a reply, did not fit the caller's table (answer 116: the reply is still
+/// in flight (R10), or, in a reply, did not fit the caller's table (R4: the reply is still
 /// delivered, without it, and the `call` returns `OutOfMemory`). Slots past the count are still 0.
 pub type ReceivedBody = BodyOf<Option<Handle>>;
 
@@ -177,9 +177,9 @@ impl<H: Slot> BodyOf<H> {
     }
 }
 
-/// Slots in a [`Received`] record, one layout for every kind (KERNEL-SPEC.md, ABI): kind,
-/// message id, badge, account, labels (count and `MAX_LABELS`), body (words, handle count,
-/// handles), buffer (address, pages).
+/// Slots in a [`Received`] record, one layout for every kind (kernel/abi.md, "The receive
+/// record"): kind, message id, badge, account, labels (count and `MAX_LABELS`), body (words,
+/// handle count, handles), buffer (address, pages).
 pub const RECEIVED_SLOTS: usize = 4 + 1 + MAX_LABELS + BODY_SLOTS + 2;
 
 /// The record kinds, in slot 0.
@@ -203,7 +203,7 @@ const ABANDONED: u64 = 5;
 /// | `exit` | words 0-2: `pid`, `cause`, `code`; `account`: `blamed_account`; `labels`: `blamed_labels` |
 /// | `abandoned` | `msg_id`: the abandoned call's id |
 ///
-/// Handles carry no kind here (answer 56): a handle is checked by use (`WrongObject`).
+/// Handles carry no kind here: a handle is checked by use (`WrongObject`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Received {
     Message(Message),
@@ -212,12 +212,12 @@ pub enum Received {
     Exit(ExitNotice),
     /// The open call with this id, held by the receiving thread, was abandoned (R3): its caller
     /// is gone. The thread replies to it to free it; the reply reaches nobody. Returned once, by
-    /// the holding thread's next `receive` on the endpoint the call arrived on (answer 104).
+    /// the holding thread's next `receive` on the endpoint the call arrived on.
     Abandoned(NonZeroU64),
 }
 
-/// A delivered message. The kernel attaches the badge, account, labels and id (KERNEL-SPEC.md,
-/// Messages); the handles are indices in the receiver's own table.
+/// A delivered message. The kernel attaches the badge, account, labels and id (kernel/ipc.md,
+/// "Messages"); the handles are indices in the receiver's own table.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Message {
     pub kind: MessageKind,
@@ -247,7 +247,7 @@ pub struct ExitNotice {
     pub code: u32,
     /// For `Faulted`: the account of the sender of the current call of the thread that failed;
     /// 0 when nobody is blamed, and for `Exited` and `Killed`. That is the kernel's rule
-    /// (KERNEL-SPEC.md, Messages): the type holds any value, and decoding does not check it.
+    /// (kernel/processes.md R21): the type holds any value, and decoding does not check it.
     pub blamed_account: u64,
     /// That sender's labels; empty whenever nobody is blamed (the kernel's rule, as above).
     pub blamed_labels: Labels,
@@ -409,10 +409,10 @@ impl Received {
 /// account, deadline.
 pub const BUDGET_SPEC_SLOTS: usize = 3 + 1 + MAX_LABELS + 2;
 
-/// The new budget's fields for `budget_create` (KERNEL-SPEC.md, Budget), in slot order. There is
-/// no class: a child's class is its parent's (answer 73). There is no scheduling flag either:
-/// every budget is in the one stride queue, and what runs first is a matter of weight
-/// (answer 103).
+/// The new budget's fields for `budget_create` (kernel/budgets.md, "The budget object"), in slot
+/// order. There is no class: a child's class is its parent's (I8). There is no scheduling flag
+/// either: every budget is in the one stride queue, and what runs first is a matter of weight
+/// (kernel/scheduling.md R12).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct BudgetSpec {
     /// Page limit.
@@ -457,7 +457,8 @@ impl BudgetSpec {
 /// Slots in a [`Usage`] record.
 pub const USAGE_SLOTS: usize = 6;
 
-/// What `budget_usage` writes to its `usage_rec`, in slot order (KERNEL-SPEC.md, `budget_usage`).
+/// What `budget_usage` writes to its `usage_rec`, in slot order (kernel/budgets.md,
+/// `budget_usage`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Usage {
     pub pages_limit: u64,

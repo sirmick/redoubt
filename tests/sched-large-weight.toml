@@ -1,4 +1,4 @@
-description = "A large-weight server keeps its share under load (WP-K5): weight 1000 against eight users of 100 gets 1000/1800 (virtual time, checked build)"
+description = "A large-weight server keeps its share under load (R12): weight 1000 against eight users of 100 gets 1000/1800 (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true

@@ -1,4 +1,4 @@
-//! Attacks the device objects (WP-K3): this program holds no device handle at all, and tries
+//! Attacks the device objects (R18): this program holds no device handle at all, and tries
 //! to reach the victim's devices anyway -- its interrupt, its MMIO and the Reset right. Every
 //! call must come back as an error, none may panic the kernel, and
 //! the victim (`log-server`, the bundle's first program, which holds every device object) must
@@ -8,7 +8,7 @@
 //! boot endpoint is also the wrong-kind handle every device call is offered.
 //!
 //! Its own reports can only fail the case: the verdict is the victim's
-//! (docs/testbench.md, "Writing an attack case").
+//! (docs/testbench.md, "Rule F (trusted verdicts)").
 
 #![no_std]
 #![no_main]
@@ -66,7 +66,7 @@ pub extern "C" fn _start() -> ! {
     log!(logger, "[irq-attack] {}: wrong kind -> {:?}, not held -> {:?}",
         if ok { "ok" } else { "FAIL" }, wrong, absent);
 
-    // The verdict is the victim's, not ours (docs/testbench.md, "Writing an attack case").
+    // The verdict is the victim's, not ours (docs/testbench.md, "Rule F (trusted verdicts)").
     log!(logger, "[irq-attack] attempts done");
     test_programs::park()
 }

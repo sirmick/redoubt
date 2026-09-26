@@ -1,4 +1,4 @@
-//! Regressions from the WP-R1 red team that need the fake kernel: handle leaks between client
+//! Red-team regressions that need the fake kernel: handle leaks between client
 //! and server, and a reply that cannot be encoded.
 
 mod common;
@@ -139,7 +139,7 @@ fn a_reply_that_cannot_be_encoded_gives_the_request_back() {
     assert_eq!(server_thread.join().unwrap(), 0);
 }
 
-/// WP-R4: a 9P call the skeleton hands back to be parked has already had whatever handles it
+/// A 9P call the skeleton hands back to be parked has already had whatever handles it
 /// brought closed, and its own list emptied with them, so serving it a second time closes
 /// nothing. Without that, the second serving closes the same table indices — which by then name
 /// whatever the server has opened since.
@@ -238,10 +238,11 @@ fn a_held_9p_call_closes_what_it_brought_exactly_once() {
     assert_eq!(server_thread.join().unwrap(), 1, "the second serving closed a handle it did not own");
 }
 
-/// WP-R1c (answers 156-158): a file server that asks to wait (`Read::Wait`) and is served through
-/// a plain `serve` — not `serve_parking` — is **refused**, not left hanging. The skeleton has
-/// nowhere to put a held call, so the caller gets a status-1 refusal instead of a reply that never
-/// comes; only a server that serves through `serve_parking` may wait.
+/// A file server that asks to wait (`Read::Wait`) and is served through a plain `serve` — not
+/// `serve_parking` — is **refused**, not left hanging (servers/serving.md, "The 9P server
+/// skeleton"). The skeleton has nowhere to put a held call, so the caller gets a status-1 refusal
+/// instead of a reply that never comes; only a server that serves through `serve_parking` may
+/// wait.
 #[test]
 fn a_wait_without_serve_parking_is_refused_not_stranded() {
     use redoubt_rt::server::Limits;

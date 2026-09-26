@@ -1,4 +1,4 @@
-description = "redoubt-rt and its programs (the echo pair) build for both widths (BUILD-PLAN.md: rv32 keeps compiling)"
+description = "redoubt-rt and its programs (the echo pair) build for both widths (rv32 keeps compiling)"
 arch = ["rv64", "rv32"]
 kind = "build"
 # `cargo build -p redoubt-rt` builds the library and its bins, `echo-server` and `echo-client`.

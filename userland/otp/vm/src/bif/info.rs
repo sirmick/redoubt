@@ -477,8 +477,8 @@ pub fn pid_to_list(c: &mut Ctx, a: &[Term]) -> R {
     Ok(c.string(&alloc::format!("<0.{}.{}>", p.index, p.serial)))
 }
 
-/// `list_to_pid("<0.I.S>")`. Pids are not capabilities inside one VM (see DESIGN.md), so making
-/// one from text grants nothing new.
+/// `list_to_pid("<0.I.S>")`. Pids are not capabilities inside one VM
+/// (docs/userland/beamlet.md), so making one from text grants nothing new.
 pub fn list_to_pid(c: &mut Ctx, a: &[Term]) -> R {
     let s = text_of(c, &a[0])?;
     let parts: Option<Vec<u32>> = s

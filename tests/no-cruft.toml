@@ -1,4 +1,4 @@
-description = "No cruft (WP-K6): no name of the dropped interface, no silenced dead code, no Cargo feature nothing reads, one literal definition of PAGE_SIZE and USER_AREA_END"
+description = "No cruft: no name of the dropped interface, no silenced dead code, no Cargo feature nothing reads, one literal definition of PAGE_SIZE and USER_AREA_END"
 kind = "no-cruft"
 paths = ["kernel", "libs", "loader", "tests", "stub", "tools/testbench", ".cargo/config.toml"]
 no_allow_dead = ["kernel/src", "libs/layout", "libs/paging", "loader/src", "tests/programs/src"]
@@ -24,7 +24,7 @@ forbidden = [
     { pattern = 'send_message' }, { pattern = 'yield_slice' }, { pattern = 'create_thread_1' },
     { pattern = 'UnhandledSyscall' }, { pattern = 'flatipc' }, { pattern = 'LEGACY_' }, { pattern = 'until WP-K6' },
     { pattern = 'INTERIM.*K6' },
-    # The hosted build's leftovers: after OD1 all are unconditional or dead.
+    # The hosted build's leftovers: with the hosted build gone, all are unconditional or dead.
     { pattern = 'baremetal' }, { pattern = 'cfg\(ci\)' }, { pattern = 'crossbeam_no_atomic_64' },
     # "legacy" survives only where it names virtio-mmio v1's own legacy interface.
     { pattern = '(?i)legacy', unless = '(?i)virtio' },

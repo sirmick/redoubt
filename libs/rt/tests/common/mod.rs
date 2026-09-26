@@ -7,10 +7,10 @@
 //! abandoned calls and their notices, `map_anon`, `unmap`, `handle_close`, `time_now`, `random`,
 //! `process_exit`) and not the rest: no budgets
 //! or charging, no label check between user budgets (R1), no fair waiting (R2), no lend
-//! unmapping from the caller. The executable model (`redoubt/model`, WP-M0) should replace it
-//! once merged. Calls it does not model panic, so a test cannot rely on them by accident.
+//! unmapping from the caller. The executable model (`model/`) should replace it. Calls it does
+//! not model panic, so a test cannot rely on them by accident.
 //!
-//! WP-R4 added what a driver needs: device objects (`Fake::mmio` and `Fake::irq`), `map_device`
+//! It also has what a driver needs: device objects (`Fake::mmio` and `Fake::irq`), `map_device`
 //! over a page of host memory a test can read and write as if it were registers, `receive` on an
 //! IRQ handle (R5: the source is unmasked when the receive begins and `fired` is cleared when it
 //! returns), and `thread_create`, which runs the new thread as the same fake process.
@@ -50,7 +50,7 @@ impl Object {
 }
 
 /// One device object: a page standing in for its registers, and its interrupt's `fired` and
-/// `masked` flags (KERNEL-SPEC.md, R5).
+/// `masked` flags (kernel/devices.md R5).
 struct Device {
     /// The registers, as bytes of this (host) process's memory; `map_device` returns its address.
     registers: usize,
@@ -167,7 +167,7 @@ impl Fake {
     }
 
     /// A new device object whose two handles (registers, interrupt) go into `owner`'s table,
-    /// with `len` bytes of registers, zeroed. What `init` hands a driver (INIT.md).
+    /// with `len` bytes of registers, zeroed. What `init` hands a driver (servers/init.md).
     pub fn device(&self, owner: usize, len: usize) -> (Handle, Handle) {
         let mut s = self.lock();
         let layout = Layout::from_size_align(len.max(1), PAGE_SIZE).unwrap();
@@ -192,7 +192,7 @@ impl Fake {
         unsafe { std::slice::from_raw_parts_mut(d.registers as *mut u8, d.len) }
     }
 
-    /// The device raises its interrupt (KERNEL-SPEC.md, R5: the kernel masks the source and
+    /// The device raises its interrupt (kernel/devices.md R5: the kernel masks the source and
     /// sets `fired`).
     pub fn fire(&self, owner: usize, irq: Handle) {
         let mut s = self.lock();

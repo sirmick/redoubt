@@ -208,12 +208,13 @@ pub fn partial_reply_trace() -> String {
     trace::record(&Boot::default(), &w.ops, None).unwrap()
 }
 
-/// WP-K5b, OD6 and P1-1: two children hold DMA memory, the first from the default boot's deaf
-/// device (init's handle 9, whose first reset fails), the second from the healthy device (handle
-/// 5) while also mapping the deaf one. The first exits and quarantines the deaf device, which
-/// sweeps every handle to it: init's `dma_alloc` and `map_device` on its old index then fail. The second exits too, and its budget still
-/// carries its quarantined page, because a quarantined device never counts as reset. Random traces
-/// rarely name a quarantined device again, or build this co-holder.
+/// Quarantine (kernel/devices.md): two children hold DMA memory, the first from the default
+/// boot's deaf device (init's handle 9, whose first reset fails), the second from the healthy
+/// device (handle 5) while also mapping the deaf one. The first exits and quarantines the deaf
+/// device, which sweeps every handle to it: init's `dma_alloc` and `map_device` on its old index
+/// then fail. The second exits too, and its budget still carries its quarantined page, because a
+/// quarantined device never counts as reset. Random traces rarely name a quarantined device again,
+/// or build this co-holder.
 pub fn dma_quarantine_trace() -> String {
     let mut w = World::new(None);
     let child = |w: &mut World, handles: Vec<u64>| {
@@ -373,8 +374,8 @@ fn budget(w: &mut World, parent: u64, weight: u64, deadline: u64) -> Result<u64,
     }
 }
 
-/// Focused R12/R7/I13 contracts for the WP-K5 rules that live in the kernel model rather than the
-/// scheduler: timeouts wake without preempting, the equal-instant expiry order, and the
+/// Focused R12/R7/I13 contracts for the scheduling rules that live in the kernel model rather
+/// than the scheduler: timeouts wake without preempting, the equal-instant expiry order, and the
 /// free-weight refusals.
 pub fn sched_contracts(mutation: Option<Mutation>) -> Result<(), String> {
     // A timeout expiring mid-slice wakes its thread; the running thread keeps the CPU until its

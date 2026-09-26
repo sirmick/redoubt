@@ -1,14 +1,14 @@
-//! Budget churn gains nothing (WP-K5; pass inheritance, OWNER DECISION 6): an attacker that
+//! Budget churn gains nothing (R12; kernel/scheduling.md, "Inheritance"): an attacker that
 //! creates a weight-1 child budget, lets it run a slice and destroys it, over and over, gets at
 //! most its own weight against an equal-weight victim. Variants: the attacker blocked while the
 //! child runs; spinning and destroying at the end of its own slice; the child destroyed by a
 //! deadline just after the attacker's slice; a fresh intermediate budget for each child. And a
 //! shell that keeps giving a budget half its weight and taking it back, with no run in between,
-//! is neither starved nor favoured: creating and destroying moves nothing (OWNER DECISION 6; the
-//! entry-wait double count grew such a parent's lead by half again each time). Half, not most:
-//! a parent's own runtime while its weight is carved away is charged at what it kept (OWNER
-//! DECISION 7), the create/destroy calls' own time included, so carving 99 of 100 would make that
-//! window cost a hundred times over whatever the rule for debt.
+//! is neither starved nor favoured: creating and destroying moves nothing (the entry-wait double
+//! count grew such a parent's lead by half again each time). Half, not most: a parent's own
+//! runtime while its weight is carved away is charged at what it kept (kernel/scheduling.md,
+//! "Running while carved down"), the create/destroy calls' own time included, so carving 99 of
+//! 100 would make that window cost a hundred times over whatever the rule for debt.
 
 #![no_std]
 #![no_main]

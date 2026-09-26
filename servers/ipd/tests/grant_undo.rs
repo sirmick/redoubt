@@ -1,4 +1,4 @@
-//! `grant`'s undo (answer 168; QA D3-code-review-5, P2-3 d): a connection `grant` minted is
+//! `grant`'s undo (servers/serving.md, "Replies and rollback"): a connection `grant` minted is
 //! forgotten again, with its scope, unless the reply carrying its handle was delivered. Driven
 //! through `Ipd::on_call` on the rt fake kernel, with a caller that gives up before the reply.
 

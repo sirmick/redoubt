@@ -1,5 +1,5 @@
-//! R12 (answers 103, 166 and the K5 owner decisions): one flat weighted stride queue over every
-//! runnable budget; round-robin threads within each budget.
+//! R12 (kernel/scheduling.md): one flat weighted stride queue over every runnable budget;
+//! round-robin threads within each budget.
 //!
 //! The kernel model tells the scheduler when a thread becomes runnable or stops being runnable
 //! ([`Scheduler::thread_runnable`], [`Scheduler::thread_blocked`]), when a budget is created,
@@ -7,7 +7,7 @@
 //! asks what to run ([`Scheduler::pick`]) and ends slices ([`Scheduler::slice_end`]) or preempts
 //! at a budget deadline ([`Scheduler::preempt`]).
 //!
-//! The rules, as the owner approved them for WP-K5 (KERNEL-SPEC.md, R7/R12):
+//! The rules (kernel/budgets.md R7, kernel/scheduling.md R12):
 //! - **Stride weight is free weight**: a budget's weight limit less what it carved to children, so carving
 //!   moves share and never duplicates it.
 //! - **Charging** happens at a *fold*: pending runtime is added as `t = rem + runtime·STRIDE; pass += t / w;
@@ -199,8 +199,8 @@ impl Scheduler {
 
     /// The first step of destroying `b` and everything below it: `b`'s carve comes back to its
     /// parent (fold at the old weight first, then rescale), before any of the destruction's own
-    /// work is charged, so the parent pays for it at the weight it has once `b` is gone
-    /// (K5-code-review-4 D1). [`Scheduler::destroy_budget`] then returns nothing for `b`.
+    /// work is charged, so the parent pays for it at the weight it has once `b` is gone.
+    /// [`Scheduler::destroy_budget`] then returns nothing for `b`.
     pub fn return_carve(&mut self, b: u64) {
         let Some(child) = self.budgets.get(&b).cloned() else { return };
         let Some(p) = child.parent.filter(|p| self.budgets.contains_key(p)) else { return };

@@ -238,7 +238,9 @@ Status: planned · M1 (separation and containment)
 - **Large directories and files scale poorly** in littlefs's format.
 - **The littlefs tests are not in the bench.** Its host tests, fuzz targets and the C oracle in
   `libs/littlefs/diff/` run by hand; a change can break them without a bench run noticing.
-  Follow-up: [todo](../todo/host-tests-in-bench.md).
+  Follow-up: [todo](../todo/host-tests-in-bench.md). Three of its hostile tests read images the
+  repository does not track, so a fresh clone cannot build them
+  ([todo](../todo/littlefs-hostile-images.md)).
 - **A shared `fsd` is shared state.** Principals on one volume share one server's memory and
   scheduling; where that matters, each gets its own volume and instance.
 

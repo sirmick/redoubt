@@ -1,4 +1,4 @@
-//! What the D3 rig (`tests/net`) and the programs it launches agree on: the roles, their
+//! What the network rig (`tests/net`) and the programs it launches agree on: the roles, their
 //! arguments, the reports a program makes to the rig, and the exit codes.
 //!
 //! A launched program holds two handles: `net`, its connection to `ipd` (granted by the rig), and

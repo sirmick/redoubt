@@ -2,7 +2,7 @@
 
 A small BEAM (Erlang/Elixir) interpreter in safe Rust, for the redoubt64 microkernel. Security,
 auditability and simplicity come first. It currently runs on the host; the Redoubt platform is
-planned. See [DESIGN.md](DESIGN.md).
+planned. See [its page](../../docs/userland/beamlet.md).
 
 Differential/Elixir tests require separately installed OTP 28.5.0.6 and Elixir 1.20.4.
 Neither this repository nor the Docker image installs them. `tools/env.sh` only adjusts PATH;

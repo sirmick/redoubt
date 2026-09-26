@@ -1,4 +1,4 @@
-//! Sleeping and waking cannot buy more than a budget's weight (WP-K5; R12): against an
+//! Sleeping and waking cannot buy more than a budget's weight (R12): against an
 //! equal-weight spinner, a gamer whose two threads each run nearly a slice (or a few
 //! microseconds) and then sleep a microsecond, and one that sleeps long and wakes for bursts,
 //! get at most half; the victim at least half.

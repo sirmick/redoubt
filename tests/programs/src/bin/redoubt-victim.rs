@@ -1,4 +1,4 @@
-//! The victim of the Redoubt IPC attack case (WP-K2): it holds the boot endpoint's receive
+//! The victim of the Redoubt IPC attack case: it holds the boot endpoint's receive
 //! right, which `redoubt-attack` tries to take, and keeps serving afterwards. The verdict is
 //! this program's, not the attacker's: it still receives on a right the attacker could not
 //! steal, and it reports `DONE` to log-server, which powers the machine off.

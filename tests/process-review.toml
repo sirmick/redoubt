@@ -1,4 +1,4 @@
-description = "K4 review regressions: one-way exit label flow, distinct zero-PC thread allocation, invalid native stacks fault only when run"
+description = "Process regressions: one-way exit label flow, distinct zero-PC thread allocation, invalid native stacks fault only when run"
 kind = "boot"
 arch = ["rv64", "rv32"]
 debug_assertions = true
