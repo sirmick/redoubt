@@ -265,6 +265,10 @@ a hostile image, including a segment the kernel refuses to map (one over the sta
 `map_fixed` is out of memory in the child's budget; and 101 if it panics. After the jump, the exit
 code is the program's.
 
+The stub allocates nothing. It links the wire crate, which declares an allocator, so it installs
+a zero-sized global allocator, `NullAlloc` (`stub/src/lib.rs`), whose `alloc` returns null and is
+never reached: the typed decoding the stub uses does not allocate.
+
 The bench's launcher, `stub-launch`, and the net rig (`tests/net/src/rig.rs`, which stands in for
 `init` to launch the real `netd` and `ipd`) both launch this way
 ([R32 (a hostile image hurts only its process)](#r32-a-hostile-image-hurts-only-its-process)).
@@ -461,9 +465,10 @@ Status: built · partly tested: the runtime's exit on a refused block is read fr
 - **A confined boot is checked once.** Capabilities handed over after boot are outside the check;
   a system server that hands one across label sets breaks confinement without the kernel noticing.
 - **Every child pays for a copy of its image.** There is no shared text: a launcher copies the ELF
-  into pages charged to the child, and the stub copies each segment again. A read-only image cache
-  shared between principals would be a cross-principal timing surface, and is set aside with the
-  shared content store, beyond M5 (persist, install, share).
+  into pages charged to the child, and the stub copies each segment again. That cost is the reason
+  the steward may cache a VM image. Whether the stub may instead map image pages read-only from a
+  shared cache is open: such a cache, shared between principals, would be a cross-principal timing
+  surface ([a shared image cache](../beyond/image-cache.md)).
 - **A blame can be lost.** If the steward does not take `init`'s blame within its timeout, the
   crash is reported on the console but counts toward no lockout.
 - **The mediators are trusted across labels.** The steward and `sshd` are the confinement check's

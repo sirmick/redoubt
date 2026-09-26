@@ -75,7 +75,10 @@ The table: [libs/wire/tables/fsd.md](../../libs/wire/tables/fsd.md).
 `too_large`. Attribute types 0 to 15 are `fsd`'s own (mtime, qid version, and later use), and
 `set_attr` refuses them; types 16 to 255 are the user's.
 
-**Open:** none.
+**Open:** cross-directory rename. The recommendation is the typed `rename` above, atomic within
+a volume, with a move across volumes left to the client's copy and remove (reported like POSIX's
+`EXDEV`). The alternative is copy and remove everywhere: never atomic, so a crash mid-rename leaves
+both copies or neither. Not decided.
 
 ### Quotas
 

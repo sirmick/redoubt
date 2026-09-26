@@ -592,8 +592,8 @@ rule); "dup X" = the same item as X; "+S" = also a SECURITY residual row; milest
 - A-18: servers/netd.md rings; servers/ipd.md `/net`, scope rules, own addresses, labelled callers; serving `admit` (account-0 override); manifest boot part: init.md M1.
 - A-19: ipd.md Why (vendored smoltcp, tenet 5). A-20: ipd.md, netd.md Residual (+S).
 - A-21: kernel/objects.md the four object kinds (no `endpoint_destroy`).
-- A-22, A-24: servers/fsd.md typed operations **Open:** (M1). A-23: userland/files.md files over 9P (M1; decided: refuse visibly, report only real fields). A-30: userland/files.md files over 9P **Open:** (M1).
-- A-25, A-26: userland/native.md pipes **Open:** (M2). A-27: servers/init.md launching, Why; todo/shared-image-pages.md.
+- A-22: servers/fsd.md typed operations **Open:** (M1; cross-directory rename, no ruling on record). A-24: servers/fsd.md typed operations (M1; decided, de6864a5c). A-23: userland/files.md files over 9P (M1; decided: refuse visibly, report only real fields). A-30: userland/files.md files over 9P **Open:** (M1).
+- A-25, A-26: userland/native.md pipes **Open:** (M2). A-27: servers/init.md Residual (every child pays for a copy; the reason the steward may cache a VM image; the shared read-only cache **Open:**, no ruling on record); beyond/image-cache.md (not decided).
 - A-28, A-29: userland/beamlet.md natives **Open:** (M1).
 - A-28 note: userland/native.md places the launch mechanism under M1 (separation and containment), per section A's remap (M1 keeps the launching its attack suite needs); standard I/O, pipes and killing stay M2 (usable shell).
 - A-31: kernel/ipc.md R4. A-32: todo/endpoint-destroyed-open-calls.md; ipc.md Failure and restart. A-33: ipc.md R3.
@@ -602,7 +602,7 @@ rule); "dup X" = the same item as X; "+S" = also a SECURITY residual row; milest
 - A-38: todo/page-table-freeing.md; kernel/memory.md Residual (`unmap` keeps empty tables, charged to the process itself).
 - A-39: devices.md `map_device` (addr, len: built); init.md manifest names (M1). A-40: devices.md (sup A-14). A-41: servers/bootfsd.md filling it. A-42: init.md the boot manifest (M1).
 - A-43: serving.md parking a typed call **Open:**; consoled.md `resize` (M2).
-- A-44: TENETS Guarantees **Open:** (confined placement vs trusted mediation); init.md confinement check (M1). A-45: TENETS Guarantees; steward.md Residual (+S). A-46: TENETS Guarantees **Open:** (closure vs same-label delegation). A-47: TENETS Guarantees; userland/agents.md (+S).
+- A-44: TENETS Guarantees (decided, a59276590: confined placement with the named control-plane exception); init.md confinement check (M1). A-45: TENETS Guarantees; steward.md Residual (+S). A-46: TENETS Guarantees **Open:** (closure vs same-label delegation). A-47: TENETS Guarantees; userland/agents.md (+S).
 - A-48: kernel/ipc.md What `receive` returns; todo/receive-output-late-invalid.md (already in the sample).
 - A-49: ipc.md R4a; invariants I5 ("Busy at the limit" sup A-202). A-50: objects.md handles, costs. A-51: abi.md order of checks. A-52: init.md manifest (M1); wire.md strict JSON.
 - A-53: ipc.md R2; TENETS tenet 3; testbench rule F. A-54: processes.md R21 (sup A-179). A-55: processes.md Residual (+S). A-56: servers/README.md Labels; serving.md `check` (current rule). A-57: processes.md exit notices, R21 (blame sup A-179).
