@@ -16,7 +16,8 @@ walls the OS rests on but does not own.
 flowchart TB
     subgraph host["the host: virtio emulation"]
       FW["firmware (RustSBI)"] --> LD["loader: verifies the bundle"] --> K["kernel"]
-      K --> SYS["system servers: init, keyd"]
+      K -.-> INIT["init"]
+      K --> KD["keyd"]
       K --> SH["shared servers: files, disk, network, console"]
       K -.-> ST["the steward"]
       K -.-> SSHD["sshd"]
@@ -26,11 +27,11 @@ flowchart TB
     P(["a person"]) -.->|"SSH, the one door"| SSHD
     H(["the approving human"]) -.->|"approve@box"| ST
     classDef planned stroke-dasharray: 5 5
-    class ST,SSHD,SE,AG,P,H planned
+    class INIT,ST,SSHD,SE,AG,P,H planned
 ```
-*Figure: the prison walls. The steward, `sshd`, sessions and agents are planned for
-M1 (separation and containment); the servers drawn solid are built and attacked in host tests or on
-the kernel.*
+*Figure: the prison walls. `init`'s manifest handling, the steward, `sshd`, sessions and agents are
+planned for M1 (separation and containment); the servers drawn solid are built and attacked in host
+tests or on the kernel.*
 
 Detail: [the walls](TENETS.md#the-walls)
 
