@@ -206,8 +206,9 @@ rather than wrap a counter.
 
 **Model check:** `i5_charging` recomputes every budget's usage from the objects charged to it
 (the cost table) and requires it to equal the budget's counters and fit its limits.
-`R4OverdrawOnDelivery` and `R7NoCarveCheck` fail here; the R6 mutations fail the recount in the
-same function.
+`R4OverdrawOnDelivery` fails here, and the R6 mutations fail the recount in the same function.
+`R7NoCarveCheck` is caught first by the scripted scheduling contracts, which find a process in a
+budget with no free weight left.
 
 **Attacks:** `budget` checks usage within limits after every step of its carving sequence;
 `budget-carve-attack` carves past every limit with the largest and wrapping values, and a victim
@@ -251,7 +252,10 @@ the exit endpoint's owner, dropped if it fails); `budget_usage` (`kernel/src/bud
 **Model check:** `Checker::flows` and `delivered`: every delivered message between user budgets
 had equal labels with the owner, every notice and usage read went to a system-class budget or a
 superset, and every `LabelDenied` was one R1 requires; `exits_owed`: no endpoint holds a notice
-that was not owed to it. Each listed R1 mutation fails one of these.
+that was not owed to it. Two of the listed R1 mutations are caught elsewhere first:
+`R1ExitNoticeIgnoresLabels` by I1's check (a handle to a process object the wrong delivery
+freed), and `R1ExitExemptBySystemExiting` by the ghost's record of owed notices (an object freed
+while its notice is still owed).
 
 **Attacks:** `process-attack` reads a labelled sibling's usage from a user budget
 (`LabelDenied`); `process-review` sends exit notices up and down between label sets.
@@ -318,8 +322,9 @@ process object's page back to its creator when its notice is received or dropped
 
 **Model check:** `check::budget_lifecycle`: after a random prefix, a thread creates a child,
 starts a process in it, lets only the child's subtree act, destroys it and receives the notices;
-every budget's counters must be what they were. It catches `R10KeepCarvedLimits`, which the
-per-step recount in `i5_charging` catches too.
+every budget's counters must be what they were. `R10KeepCarvedLimits` breaks it, but the
+scripted scheduling contracts catch that variant first (a carve the scheduler holds wrong), so
+this family's own check may be doing no unique work.
 
 **Attacks:** `budget` destroys a nested subtree and checks the parent's usage exactly, then runs
 500 create-nest-destroy cycles; `budget-deadline` checks `system`'s usage after a deadline
@@ -399,7 +404,8 @@ error, never a stop.
 
 **Kept in** `redoubt-sys` ([`libs/sys`](../../libs/sys/src/lib.rs)), whose decoders reject every
 malformed register and record slot with an error; `kernel/src/redoubt.rs`, which checks every
-record's alignment and that it lies in the caller's own writable memory before reading it, then
+record's alignment and that it lies in the caller's own memory before reading it (readable for a
+record the call only reads, writable too for one it writes back, such as a `call` body), then
 runs each call's checks in the fixed order ([ABI](abi.md#errors-and-the-order-of-checks)). The
 kernel's own assertions (I1's id checks, I5's checked
 subtractions) are for kernel bugs, not for arguments: no argument reaches them.
@@ -443,7 +449,7 @@ caller's death.
 
 ### I16 (DMA pages reset before reuse)
 
-Status: built · partly tested: a co-holder that still reaches a device reset at another holder's death is attacked only in the model, and the DMA cases boot rv64 only · tested: bench:dma-reset-reuse, bench:dma-reset-quarantine, bench:dma-rules, host:redoubt-model::reset_at_one_death_does_not_cover_a_co_holder, host:redoubt-model::deaf_device_quarantines_the_co_holder_too, host:redoubt-model::exit_pools_after_reset, mutation:K5bFreeBeforeReset, mutation:K5bQuarantinedSlotCountsAsReset, mutation:K5bResetClearsCoHolderReach, mutation:K5bUnmapFreesDma
+Status: built · partly tested: a co-holder that still reaches a device reset at another holder's death is attacked only in the model, and the reset and quarantine cases boot rv64 only (`dma-rules` runs on both widths) · tested: bench:dma-reset-reuse, bench:dma-reset-quarantine, bench:dma-rules, host:redoubt-model::reset_at_one_death_does_not_cover_a_co_holder, host:redoubt-model::deaf_device_quarantines_the_co_holder_too, host:redoubt-model::exit_pools_after_reset, mutation:K5bFreeBeforeReset, mutation:K5bQuarantinedSlotCountsAsReset, mutation:K5bResetClearsCoHolderReach, mutation:K5bUnmapFreesDma
 
 A page `dma_alloc` handed out goes back to the free pool only after every device that could still
 write it has confirmed a reset: the device it was allocated through and every DMA device its

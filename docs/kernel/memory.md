@@ -119,7 +119,7 @@ thread moves ([SMP](../beyond/smp.md)).
 
 ### Lending at the page-table level
 
-Status: built · partly tested: a lend within one process is not attacked across harts or across that process's teardown · tested: bench:return-lent-unmapped, bench:ipc-outcomes, bench:map-fixed-attack, bench:move-borrowed-page, bench:uaf-lent-page, bench:lend-untouched-page, mutation:R11LendStaysMapped
+Status: built · partly tested: a lend within one process is not attacked across harts · tested: bench:process-lifecycle, bench:return-lent-unmapped, bench:ipc-outcomes, bench:map-fixed-attack, bench:move-borrowed-page, bench:uaf-lent-page, bench:lend-untouched-page, mutation:R11LendStaysMapped
 
 A [lend or a transfer](ipc.md#messages) is page-table edits:
 - **When the message is sent**, each page is checked first: backed (a reserved page is backed at
@@ -312,8 +312,8 @@ Status: built · tested: bench:touch-beyond-ram, bench:lend-untouched-page, benc
   code on several harts needs them on every hart, and when a thread moves
   ([SMP](../beyond/smp.md)).
 - **A lend within one process** (a thread calling an endpoint its own process receives on) is
-  argued from the code, not attacked, when that process is torn down with the call open or when
-  its threads run on several harts.
+  argued from the code, not attacked, when its threads run on several harts. `process-lifecycle`
+  attacks it on one hart, the process ending with the call open included.
 - **The physmap maps every user frame writable for the kernel,** code included. Only the
   kernel can use that alias ([memory layout](memory-layout.md#residual-risks)).
 

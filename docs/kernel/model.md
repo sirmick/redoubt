@@ -25,9 +25,10 @@ Status: built · partly tested: independence from the kernel's source and the em
   `[dependencies]` table is empty: it links no kernel crate, not `redoubt-sys`, nothing from
   crates.io. It states its constants itself, with the kernel's names and values: `WORDS` (4),
   `MAX_MSG_HANDLES` (4), `MAX_HANDLES` (4096), `MAX_LEND_PAGES` (16), `MAX_THREADS` (31),
-  `WAIT_CAP` (16), `MAX_OPEN_CALLS` (64), `SLICE` (10,000 µs), `STRIDE` (2^20). The one crate
-  that uses the model is `redoubt-stride`, as a dev-dependency for its differential test
-  ([below](#where-the-model-meets-the-kernels-code)).
+  `WAIT_CAP` (16), `MAX_OPEN_CALLS` (64), `SLICE` (10,000 µs), `STRIDE` (2^20). Two crates
+  use the model, each as a dev-dependency: `redoubt-stride`, for its differential test
+  ([below](#where-the-model-meets-the-kernels-code)), and the test bench, whose scheduling
+  oracle must reject traces from the model's scheduler with its tie rules broken.
 - **One method per call.** `Kernel` in `model/src/kernel.rs` has one method for each call, with
   the call's name. Every argument arrives as a raw `u64`, as from user mode, and the checks run
   in the kernel's order: decoding as `redoubt-sys` decodes, then each argument from left to
@@ -93,7 +94,8 @@ and printed as a trace. Rerunning the seed reproduces the failure exactly.
 
 The generator (`model/src/gen.rs`) first builds a world worth attacking: principals' budgets
 under `users`, some labelled and with accounts, a system budget, shared endpoints, handles
-minted into the principals' budgets, and a process in each budget. Then it picks operations
+minted into the principals' budgets, and a process in each budget. One sequence in five skips
+this setup and starts from `init` alone. Then it picks operations
 from the model's state: a handle the actor holds, a page it has mapped, a message it serves.
 About one argument in ten is hostile instead (a handle index the actor lacks, an unaligned
 address, a list over its cap). `every_call_and_error_is_reached` checks over 5,000 seeds that
@@ -211,8 +213,10 @@ The mutation check runs the IPC and scheduling contracts first, for every varian
 Status: built · tested: host:redoubt-model::every_rule_has_a_mutation, host:redoubt-model::mutations_are_caught
 
 A **mutation** is one deliberate break planted in the model. Each variant of `enum Mutation`
-(`model/src/mutation.rs`) breaks one rule at one place in the model, marked
-`self.broken(Mutation::...)`; with no mutation, the model is the specified kernel.
+(`model/src/mutation.rs`) breaks one rule, at the sites in the model marked
+`self.broken(Mutation::...)`: one site for most variants, two or three where the rule is kept in
+more than one place, and a direct comparison with the mutation for `AbandonNoticeMissing` and
+`R11LendStaysMapped`. With no mutation, the model is the specified kernel.
 `Mutation::ALL` lists all 127 variants. `Mutation::rule()` names what each one breaks, but not
 always by the IDs these pages use. It returns `R1` to `R12` for the variants named after those
 rules, folding the open-call and dead-server variants into their parent rule, `I13` for one,
@@ -313,6 +317,7 @@ write p:38622 t:2 a:0x1000000000+0x0 99 -> ok
 do p:1 t:1 budget_usage h:13 -> ok usage [32,10,1,1,50,0]
 do p:1 t:1 budget_destroy h:12 -> ok
 read p:38622 t:2 a:0x1000000000+0x0 -> ok word 99
+do p:1 t:1 budget_usage h:13 -> ok usage [32,10,1,1,50,0]
 do p:38622 t:2 receive h:1 0 0 -> ok abandoned m:1
 do p:38622 t:2 reply m:1 [0,0,0,0] [] -> ok reply delivery=discarded mask=0
 do p:1 t:1 budget_usage h:13 -> ok usage [32,5,1,1,50,0]
@@ -334,7 +339,8 @@ The tests:
   and `K5bResetClearsCoHolderReach`, which only the I16 ghost check sees.
 - `the_example_trace_is_what_the_model_does` rebuilds the example and requires the same text.
 - `hostile_traces_are_refused_cleanly` feeds fixed worst cases and 500 randomly damaged traces
-  to the replayer; each must give an error, never a panic.
+  to the replayer. Each worst case must give an error; a damaged trace must not panic, and may
+  still replay (a damaged line can be one the model accepts).
 
 ```mermaid
 flowchart LR
