@@ -1,8 +1,6 @@
 # Summary
 
-- [Reading this book]()
-- [Tenets]()
-- [Security register]()
+- [Reading this book](README.md)
 - [Glossary](GLOSSARY.md)
 
 # The kernel
@@ -57,12 +55,7 @@
 
 # The plan
 
-- [M1 (separation and containment)]()
-- [M2 (usable shell)]()
-- [M3 (files in and out)]()
-- [M4 (self-hosted development)]()
-- [M5 (persist, install, share)]()
-- [Follow-ups]()
+- [Follow-ups](todo/README.md)
   - [Kernel attack gaps](todo/kernel-attack-gaps.md)
   - [An account-0 client's share chain](todo/account0-share-chain.md)
   - [The model's order of checks](todo/abi-model-disagreements.md)
@@ -92,11 +85,5 @@
   - [PID pool pinning](todo/pid-pool-pinning.md)
   - [process_map's flag order](todo/process-map-flag-order.md)
   - [A notice lost to a bad receive record](todo/receive-output-late-invalid.md)
+  - [Nightly rustfmt drift](todo/rustfmt-nightly-drift.md)
   - [The steward decision-wake target](todo/sched-latency-target.md)
-- [Beyond M5]()
-
-# Working on Redoubt
-
-- [The test bench]()
-- [How packages are built]()
-- [The project and its orchestrator]()
