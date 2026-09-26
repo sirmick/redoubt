@@ -28,5 +28,9 @@ fn the_book_builds() {
         Command::new("mdbook").arg("build").arg("docs").current_dir(&root).output().expect("mdbook runs");
     let log = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     assert!(out.status.success(), "{log}");
-    assert!(!log.lines().any(|l| l.contains("WARN") || l.contains("ERROR")), "{log}");
+    // The Mermaid preprocessor names the mdbook version it was built against on every build; that
+    // notice is about the plugin, not the book.
+    let notice = |l: &str| l.contains("mdbook-mermaid preprocessor was built against version");
+    let bad = |l: &str| !notice(l) && ["WARN", "Warning", "ERROR"].iter().any(|w| l.contains(w));
+    assert!(!log.lines().any(bad), "{log}");
 }
