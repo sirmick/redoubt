@@ -1,6 +1,6 @@
-//! Shared pieces of the loader stub (WP-R2; `docs/PACKAGES.md`, Launching a process;
-//! `docs/BUILD-PLAN.md`, WP-R2): the fixed address every launcher maps it at, and the segment
-//! bounds-checking logic (host-testable, no syscalls).
+//! Shared pieces of the loader stub (`docs/servers/init.md`, "Launching through the loader
+//! stub"): the fixed address every launcher maps it at, and the segment bounds-checking logic
+//! (host-testable, no syscalls).
 //!
 //! `main.rs` is the on-target binary: `_start`, and the actual mapping calls `plan` only
 //! describes. Splitting them here lets `plan`'s hostile-input logic run as ordinary host unit
@@ -11,9 +11,9 @@
 //! defines a `#[global_allocator]` and a `#[panic_handler]` for the machine at its crate root
 //! (`libs/rt/src/lib.rs`, `libs/rt/src/start.rs`), pulled in whole by depending on any part of
 //! it. `read_image` below reads `image_addr`/`image_len` straight off the decoded message
-//! (INIT.md, Startup block), the same rule `redoubt_rt::startup::parse_image` applies for
-//! ordinary programs, without building the allocated entries table that rule's own callers need
-//! and this one does not.
+//! (servers/init.md, "The startup block"), the same rule `redoubt_rt::startup::parse_image`
+//! applies for ordinary programs, without building the allocated entries table that rule's own
+//! callers need and this one does not.
 #![no_std]
 
 use elf::ElfBytes;
@@ -29,8 +29,7 @@ use redoubt_wire::proto::startup::Message;
 /// `MAX_IMAGE_LEN / 56`, about 9.5 million entries): `plan`'s segment-vs-segment overlap check is
 /// `O(K*N)` in the number of headers `N` by design (host-testable, no allocator), so an
 /// unbounded `N` lets a hostile image burn CPU proportional to its own header count times its
-/// accepted `PT_LOAD` count (round-2 red team P3-3). No honest program needs anywhere near this
-/// many segments.
+/// accepted `PT_LOAD` count. No honest program needs anywhere near this many segments.
 const MAX_PHNUM: usize = 64;
 
 /// The ELF class this build's stub accepts: `usize`-width segment addresses only fit this
@@ -69,26 +68,27 @@ unsafe impl core::alloc::GlobalAlloc for NullAlloc {
 }
 
 /// Where a launcher maps the stub's flat binary in every child, and the `entry` it passes to
-/// `process_start` (PACKAGES.md: "a flat binary, one code region at a fixed address... the same
-/// for everyone"). Same value on both widths.
+/// `process_start` (servers/init.md, "Launching through the loader stub"). Same value on both
+/// widths.
 ///
-/// Not a KERNEL-SPEC.md or INIT.md constant: `process_map`'s destination is caller-chosen
-/// (KERNEL-SPEC.md), so this is an implementation convention every launcher and this crate's own
-/// `link.x` agree on, not a kernel mechanism. Chosen well clear of
+/// Not a kernel constant: `process_map`'s destination is caller-chosen (kernel/processes.md,
+/// "Creating and starting"), so this is an implementation convention every launcher and this
+/// crate's own `link.x` agree on, not a kernel mechanism (kernel/memory-layout.md, "The loader
+/// stub and the link range"). Chosen well clear of
 /// `tests/programs/src/spawn.rs::IMAGE_BASE` (0x1_0000, where test images and, by convention,
 /// most real program images are expected to start) and far below `STACK_TOP`/`STARTUP_AT`.
 pub const STUB_ENTRY: usize = 0x1FF0_0000;
 
-/// A defensive cap on `image_len` (INIT.md, Startup block), checked before this stub ever reads
-/// the image bytes it names: MEMORY-LAYOUT.md's own bound on program link space ("just under 512
-/// MiB" below `STUB_ENTRY`), so no honest image needs more than this. Refusing an absurd
-/// `image_len` up front keeps `validate`'s per-segment work (and `main.rs`'s eventual raw read of
-/// `[image_addr, image_addr + image_len)`) bounded by a number grounded in the loading
+/// A defensive cap on `image_len` (servers/init.md, "The startup block"), checked before this stub
+/// ever reads the image bytes it names: kernel/memory-layout.md's own bound on program link space
+/// ("just under 512 MiB" below `STUB_ENTRY`), so no honest image needs more than this. Refusing an
+/// absurd `image_len` up front keeps `validate`'s per-segment work (and `main.rs`'s eventual raw
+/// read of `[image_addr, image_addr + image_len)`) bounded by a number grounded in the loading
 /// convention, rather than only by `usize::MAX`/page-alignment overflow checks.
 pub const MAX_IMAGE_LEN: usize = STUB_ENTRY;
 
-/// Why an image was refused whole (PACKAGES.md: "A malicious ELF can at most compromise the
-/// process it was going to become" -- every one of these is a refusal, never a panic).
+/// Why an image was refused whole (servers/init.md R32: a hostile image hurts only its process
+/// -- every one of these is a refusal, never a panic).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BadImage {
     /// `ElfBytes::minimal_parse` or `.segments()` refused it.
@@ -117,10 +117,10 @@ pub enum BadImage {
     /// `e_phnum` (after resolving `PN_XNUM`) is over [`MAX_PHNUM`].
     TooManySegments,
     /// A segment's page range touches page 0, or reaches past `STUB_ENTRY`
-    /// (MEMORY-LAYOUT.md: "their segments must end below `0x1FF0_0000`"): checked directly,
+    /// (kernel/memory-layout.md, "The loader stub and the link range"): checked directly,
     /// rather than relying only on `exclude` naming the stub's own current region correctly.
     OutOfLinkRange,
-    /// `e_type` is not `ET_EXEC` (PACKAGES.md: "No dynamic linking... fixed at build time"): an
+    /// `e_type` is not `ET_EXEC` (userland/native.md: "No dynamic linking"): an
     /// `ET_DYN` image would map unrelocated at whatever `p_vaddr` its segments claim, most often
     /// page 0.
     WrongType,
@@ -165,8 +165,8 @@ pub fn plan<'a, E>(
     if elf.ehdr.e_machine != EM_RISCV || elf.ehdr.class != ELF_CLASS {
         return Err(Either::A(BadImage::WrongMachine));
     }
-    // Every native Redoubt binary is a fixed-address, non-relocatable static (PACKAGES.md: "No
-    // dynamic linking"); refuse anything else (e.g. `ET_DYN`) before trusting its `p_vaddr`s.
+    // Every native Redoubt binary is a fixed-address, non-relocatable static (userland/native.md:
+    // "No dynamic linking"); refuse anything else (e.g. `ET_DYN`) before trusting its `p_vaddr`s.
     if elf.ehdr.e_type != ET_EXEC {
         return Err(Either::A(BadImage::WrongType));
     }
@@ -248,9 +248,9 @@ fn validate<'a>(
     // silently computing a wrong (too-small) `page_end`, which would let a segment through with a
     // page range shorter than the bytes it actually claims.
     let page_end = page_align_up(seg_end)?;
-    // MEMORY-LAYOUT.md: "Programs link at 0x1_0000, and their segments must end below
-    // 0x1FF0_0000" -- page 0 is never a valid link address either. Checked directly against
-    // `STUB_ENTRY` rather than only through `exclude`, which only ever names the stub's own
+    // kernel/memory-layout.md: programs link at 0x1_0000 and their segments must end by
+    // `STUB_ENTRY` (0x1FF0_0000) -- page 0 is never a valid link address either. Checked directly
+    // against `STUB_ENTRY` rather than only through `exclude`, which only ever names the stub's own
     // *current* region (`main.rs`'s `stub_region`), not everything above it.
     if first_page < PAGE_SIZE || page_end > STUB_ENTRY {
         return Err(BadImage::OutOfLinkRange);
@@ -301,9 +301,9 @@ fn overlaps(a_start: usize, a_end: usize, b_start: usize, b_end: usize) -> bool 
 /// region, the startup page): `plan` already refuses a *segment* that overlaps them
 /// (`validate`'s `exclude` check), but nothing stopped the image range itself from doing so.
 /// `main.rs::run` naming `image_addr == STUB_ENTRY` would make its own later "free the image"
-/// unmap remove the stub's own mapped code out from under itself before the jump (round-2 red
-/// team P3-6). `image_len` is not re-validated here (the caller already ran it through
-/// [`read_image`], which bounds it and its overflow).
+/// unmap remove the stub's own mapped code out from under itself before the jump. `image_len`
+/// is not re-validated here (the caller already ran it through [`read_image`], which bounds it
+/// and its overflow).
 pub fn image_in_bounds(image_addr: usize, image_len: usize, exclude: &[(usize, usize)]) -> bool {
     let image_end = image_addr.saturating_add(image_len);
     !exclude.iter().any(|&(start, end)| overlaps(image_addr, image_end, start, end))
@@ -315,11 +315,12 @@ fn page_align_up(addr: usize) -> Result<usize, BadImage> {
     addr.checked_add(PAGE_SIZE - 1).map(|v| v & !(PAGE_SIZE - 1)).ok_or(BadImage::Overflow)
 }
 
-/// The length word in front of the message (INIT.md, Startup block; QUESTIONS.md 112, pending).
+/// The length word in front of the message (servers/init.md, "The startup block").
 const FRAME_HEADER: usize = 4;
-/// One whole page: the startup block never holds more (INIT.md, Startup block).
+/// One whole page: the startup block never holds more (servers/init.md, "The startup block").
 const MAX_BLOCK: usize = PAGE_SIZE;
-/// The only `startup` block version this stub understands (INIT.md, Startup block).
+/// The only `startup` block version this stub understands (servers/init.md, "The startup
+/// block").
 const VERSION: u32 = 1;
 
 /// Why the startup page's image fields could not be read.
@@ -330,15 +331,16 @@ pub enum BadStartup {
     Short,
     /// The message does not decode as `startup`, or is not the version this stub understands.
     Malformed,
-    /// `image_addr`/`image_len` break INIT.md's rule: one is 0 and the other is not,
+    /// `image_addr`/`image_len` break servers/init.md's rule: one is 0 and the other is not,
     /// `image_addr` is not page-aligned, or `image_addr + image_len` overflows or does not fit
     /// this target's `usize`.
     BadImage,
 }
 
-/// Reads `image_addr`/`image_len` out of the startup page at `page` (INIT.md, Startup block;
-/// `arg`, PACKAGES.md step 4), without allocating: `Some((addr, len))` when the block names an
-/// image, `None` for a process started at its own entry rather than through the stub.
+/// Reads `image_addr`/`image_len` out of the startup page at `page` (servers/init.md, "The startup
+/// block"; `arg`, "Launching through the loader stub" step 3), without allocating:
+/// `Some((addr, len))` when the block names an image, `None` for a process started at its own
+/// entry rather than through the stub.
 ///
 /// Applies the same `image_addr`/`image_len` rule as `redoubt_rt::startup::Startup::image`
 /// (`libs/rt/src/startup.rs`'s private `parse_image`), which this duplicates rather than calls:
@@ -581,7 +583,7 @@ mod tests {
     #[test]
     fn plan_refuses_a_segment_touching_page_zero() {
         let code = [0u8; 4];
-        // vaddr 0: MEMORY-LAYOUT.md's link range starts at 0x1_0000, never page 0.
+        // vaddr 0: kernel/memory-layout.md's link range starts at 0x1_0000, never page 0.
         let image = elf64(0, &[(PF_R | PF_X, 0, &code, PAGE_SIZE as u64)]);
         let result = plan::<()>(&image, 0x2000_0000, &[], |_| Ok(()));
         assert_eq!(result, Err(Either::A(BadImage::OutOfLinkRange)));
