@@ -26,11 +26,11 @@ use redoubt_sys::{
 use crate::kframe;
 use crate::mem::MemoryManager;
 use crate::message::MsgKind;
-use crate::services::SystemServices;
+use crate::ptable::ProcessTable;
 
 /// The scheduler and the memory manager together, in the one order the kernel borrows them.
-fn with_both<T>(f: impl FnOnce(&mut SystemServices, &mut MemoryManager) -> T) -> T {
-    SystemServices::with_mut(|ss| MemoryManager::with_mut(|mm| f(ss, mm)))
+fn with_both<T>(f: impl FnOnce(&mut ProcessTable, &mut MemoryManager) -> T) -> T {
+    ProcessTable::with_mut(|ss| MemoryManager::with_mut(|mm| f(ss, mm)))
 }
 
 /// What the trap handler does after a call.
@@ -176,15 +176,15 @@ fn dispatch(pid: Pid, tid: TID, call: Call) -> Result<Option<Return>, Error> {
         // These three end a thread or a process, so they take the scheduler alone: tearing a
         // process down borrows the memory manager itself (`process.rs`, Locks).
         Call::ThreadCreate { entry, sp, arg } => {
-            SystemServices::with_mut(|ss| crate::process::thread_create(ss, pid, entry, sp, arg))
+            ProcessTable::with_mut(|ss| crate::process::thread_create(ss, pid, entry, sp, arg))
                 .map(|tid| Some(Return::Tid(tid)))
         }
         Call::ThreadExit => {
-            SystemServices::with_mut(|ss| crate::process::thread_exit(ss, pid, tid));
+            ProcessTable::with_mut(|ss| crate::process::thread_exit(ss, pid, tid));
             Ok(None)
         }
         Call::ProcessExit { code } => {
-            SystemServices::with_mut(|ss| crate::process::process_exit(ss, pid, tid, code));
+            ProcessTable::with_mut(|ss| crate::process::process_exit(ss, pid, tid, code));
             Ok(None)
         }
     }
@@ -193,7 +193,7 @@ fn dispatch(pid: Pid, tid: TID, call: Call) -> Result<Option<Return>, Error> {
 /// `budget_destroy(h)` (R10): mark the subtree, then destroy it (`budget::destroy_subtree`), the
 /// caller last if it is in it.
 fn budget_destroy(pid: Pid, _tid: TID, h: u32) -> Result<Option<Return>, Error> {
-    SystemServices::with_mut(|ss| {
+    ProcessTable::with_mut(|ss| {
         let top = MemoryManager::with_mut(|mm| mm.destroy_begin(pid, h))?;
         let caller_doomed = crate::budget::destroy_subtree(ss, top, Some(pid), false);
         Ok(if caller_doomed { None } else { Some(Return::Nothing) })

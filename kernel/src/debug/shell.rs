@@ -100,43 +100,43 @@ fn handle_character(b: u8) {
         }
         b'm' => {
             println!("Printing memory page tables");
-            crate::services::SystemServices::with(|system_services| {
-                let current_pid = system_services.current_pid();
-                for process in &system_services.processes {
+            crate::ptable::ProcessTable::with(|pt| {
+                let current_pid = pt.current_pid();
+                for process in &pt.processes {
                     if !process.free() {
                         println!(
                             "PID {} {}:",
                             process.pid,
-                            system_services.process_name(process.pid).unwrap_or("")
+                            pt.process_name(process.pid).unwrap_or("")
                         );
                         process.activate();
                         crate::arch::mem::MemoryMapping::current().print_map();
                         println!();
                     }
                 }
-                system_services.get_process(current_pid).unwrap().activate();
+                pt.get_process(current_pid).unwrap().activate();
             });
         }
         b'p' => {
             println!("Printing processes");
-            crate::services::SystemServices::with(|system_services| {
-                for process in &system_services.processes {
+            crate::ptable::ProcessTable::with(|pt| {
+                for process in &pt.processes {
                     if !process.free() {
-                        println!("{:x?} {}", process, system_services.process_name(process.pid).unwrap_or(""));
+                        println!("{:x?} {}", process, pt.process_name(process.pid).unwrap_or(""));
                     }
                 }
             });
         }
         b'P' => {
             println!("Printing processes and threads");
-            crate::services::SystemServices::with(|system_services| {
-                let current_pid = system_services.current_pid();
-                for process in &system_services.processes {
+            crate::ptable::ProcessTable::with(|pt| {
+                let current_pid = pt.current_pid();
+                for process in &pt.processes {
                     if !process.free() {
                         println!(
                             "{:x?} {}:",
                             process,
-                            system_services.process_name(process.pid).unwrap_or("")
+                            pt.process_name(process.pid).unwrap_or("")
                         );
                         process.activate();
                         crate::arch::process::Process::with_current_mut(|arch_process| {
@@ -145,15 +145,15 @@ fn handle_character(b: u8) {
                         println!();
                     }
                 }
-                system_services.get_process(current_pid).unwrap().activate();
+                pt.get_process(current_pid).unwrap().activate();
             });
         }
         b'r' => {
             println!("RAM usage:");
             let mut total_bytes = 0;
-            crate::services::SystemServices::with(|system_services| {
+            crate::ptable::ProcessTable::with(|pt| {
                 crate::mem::MemoryManager::with(|mm| {
-                    for process in &system_services.processes {
+                    for process in &pt.processes {
                         if !process.free() {
                             let bytes_used = mm.ram_used_by(process.pid);
                             total_bytes += bytes_used;
@@ -161,7 +161,7 @@ fn handle_character(b: u8) {
                                 "    PID {:>3}: {:>4} k {}",
                                 process.pid,
                                 bytes_used / 1024,
-                                system_services.process_name(process.pid).unwrap_or("")
+                                pt.process_name(process.pid).unwrap_or("")
                             );
                         }
                     }

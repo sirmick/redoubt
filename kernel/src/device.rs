@@ -405,7 +405,7 @@ impl MemoryManager {
 /// source again. The masking below follows straight after, so nothing is delivered in between
 /// (the hart takes no trap in supervisor mode), and the next `receive` unmasks it.
 pub fn irq_fired(irq: usize) -> bool {
-    crate::services::SystemServices::with_mut(|ss| {
+    crate::ptable::ProcessTable::with_mut(|ss| {
         MemoryManager::with_mut(|mm| {
             let Some(frame) = mm.irq_device(irq) else { return false };
             crate::arch::irq::complete_irq();

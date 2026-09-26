@@ -3,7 +3,7 @@
 
 use riscv::register::{sepc, sstatus};
 
-use crate::services::Thread;
+use crate::ptable::Thread;
 
 extern "C" {
     fn _redoubt_resume_context(regs: *const usize) -> !;

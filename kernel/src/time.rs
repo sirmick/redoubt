@@ -32,7 +32,7 @@
 use crate::arch::irq::timer;
 use crate::cell::KernelCell;
 use crate::mem::MemoryManager;
-use crate::services::SystemServices;
+use crate::ptable::ProcessTable;
 
 /// A time that never comes (`FOREVER`).
 pub const NEVER: u64 = u64::MAX;
@@ -107,7 +107,7 @@ fn running() -> Option<redoubt_layout::Pid> {
 /// a deadline to the dying budget (whose debt then moves up). So is the walk that found it: a
 /// budget with many timeouts due at once pays for the walk each one costs. The one walk that
 /// finds nothing more is the kernel's, so an entry does at most one walk nobody pays for.
-pub fn expire_due(ss: &mut SystemServices) -> bool {
+pub fn expire_due(ss: &mut ProcessTable) -> bool {
     let now = now_us();
     if TIMER.with(|t| t.threads > now && t.budgets > now) {
         return false;
@@ -164,4 +164,4 @@ pub fn on_interrupt() {
 }
 
 /// Expire at a kernel entry; whether a budget deadline fired.
-pub fn expire_at_entry() -> bool { SystemServices::with_mut(expire_due) }
+pub fn expire_at_entry() -> bool { ProcessTable::with_mut(expire_due) }

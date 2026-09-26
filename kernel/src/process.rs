@@ -43,7 +43,7 @@
 //!
 //! # Locks
 //! `budget.rs`, `handle.rs` and the reading half of this module work on a borrowed
-//! [`MemoryManager`]. Ending a process does not: `SystemServices::terminate_process` takes the
+//! [`MemoryManager`]. Ending a process does not: `ProcessTable::terminate_process` takes the
 //! memory manager itself, so everything that can end a process ([`died`], [`budgets_dying`],
 //! [`thread_create`]) takes only the scheduler and borrows the memory manager in phases. The
 //! functions that take both are only ever called from a dispatcher that holds both.
@@ -60,7 +60,7 @@ use crate::budget::{Class, PROCESS_PAGES, THREAD_PAGES};
 use crate::handle::{BudgetRef, EndpointRef, Handle, Object, ProcessRef};
 use crate::kframe;
 use crate::mem::MemoryManager;
-use crate::services::SystemServices;
+use crate::ptable::ProcessTable;
 
 /// First word of every process frame, so that a frame read as a process that is not one is
 /// caught. Distinct from every other object's magic.
@@ -215,7 +215,7 @@ pub fn object_of(mm: &MemoryManager, pid: Pid) -> Option<u32> {
 /// A PID drawn at random from the free ASIDs (KERNEL-SPEC.md, Process): free in the process
 /// table, and named by no process object, so a PID is not reused while a notice still names it
 /// (answer 106). Random so that nothing can predict which ASID a process will get.
-fn random_free_pid(ss: &SystemServices, mm: &MemoryManager) -> Option<Pid> {
+fn random_free_pid(ss: &ProcessTable, mm: &MemoryManager) -> Option<Pid> {
     let free = |pid: Pid| ss.get_process(pid).is_err() && object_of(mm, pid).is_none();
     let count = (2..=MAX_PROCESS_COUNT).filter(|i| Pid::new(*i as u8).is_some_and(free)).count();
     if count == 0 {
@@ -232,7 +232,7 @@ fn random_free_pid(ss: &SystemServices, mm: &MemoryManager) -> Option<Pid> {
 /// `process_create(h(budget), h(exit endpoint)) -> h(process)` (KERNEL-SPEC.md), after decoding.
 /// The checks follow the spec's row for `process_create`, in order.
 pub fn process_create(
-    ss: &mut SystemServices,
+    ss: &mut ProcessTable,
     mm: &mut MemoryManager,
     pid: Pid,
     budget_h: u32,
@@ -295,7 +295,7 @@ pub fn process_create(
 
 /// Give `child` an address space and a slot in the process table, but no thread: it cannot run
 /// until `process_start`. Every frame it takes is charged to the budget it runs in (answer 127).
-fn new_address_space(ss: &mut SystemServices, mm: &mut MemoryManager, child: Pid) -> Result<(), Error> {
+fn new_address_space(ss: &mut ProcessTable, mm: &mut MemoryManager, child: Pid) -> Result<(), Error> {
     let here = crate::arch::process::current_pid();
     ss.allocate_process_slot(mm, child).map_err(|_| Error::OutOfMemory)?;
     // `setup_empty_process` writes the new space's own `ProcessImpl`, so that space must be the
@@ -312,7 +312,7 @@ fn new_address_space(ss: &mut SystemServices, mm: &mut MemoryManager, child: Pid
 /// Undo a `process_create` that failed after the address space was made. The process has never
 /// run, so nothing waits on it and nothing holds its handles; this is `Process::terminate` minus
 /// everything that needs the memory manager it does not already hold.
-fn drop_unstarted(ss: &mut SystemServices, mm: &mut MemoryManager, child: Pid) {
+fn drop_unstarted(ss: &mut ProcessTable, mm: &mut MemoryManager, child: Pid) {
     // Not `release_all_memory_for_process`: that one first walks the page tables for frames the
     // process lent out, and a process that has never run has lent nothing. What is left is the
     // frames it owns, which is what this frees -- and it needs no address space, so a
@@ -332,7 +332,7 @@ fn drop_unstarted(ss: &mut SystemServices, mm: &mut MemoryManager, child: Pid) {
 /// (PACKAGES.md, launching; INIT.md, Startup block).
 #[allow(clippy::too_many_arguments)]
 pub fn process_map(
-    ss: &mut SystemServices,
+    ss: &mut ProcessTable,
     mm: &mut MemoryManager,
     pid: Pid,
     process_h: u32,
@@ -420,7 +420,7 @@ fn whole_pages(src: usize, dst: usize, len: usize) -> Result<usize, Error> {
 /// the kernel passes on unchanged and never looks at.
 #[allow(clippy::too_many_arguments)]
 pub fn process_start(
-    ss: &mut SystemServices,
+    ss: &mut ProcessTable,
     mm: &mut MemoryManager,
     pid: Pid,
     process_h: u32,
@@ -481,7 +481,7 @@ pub fn process_start(
 /// `thread_create(entry, sp, arg) -> tid` (KERNEL-SPEC.md): `TooManyThreads` past `MAX_THREADS`,
 /// `OutOfMemory` when the process's budget cannot pay for the thread's page.
 pub fn thread_create(
-    ss: &mut SystemServices,
+    ss: &mut ProcessTable,
     pid: Pid,
     entry: usize,
     sp: usize,
@@ -494,7 +494,7 @@ pub fn thread_create(
 ///
 /// The final thread performs `process_exit(0)` (answer 170). Classify open calls and snapshot
 /// current-call blame before any thread cleanup destroys the evidence.
-pub fn thread_exit(ss: &mut SystemServices, pid: Pid, tid: TID) {
+pub fn thread_exit(ss: &mut ProcessTable, pid: Pid, tid: TID) {
     let last = MemoryManager::with(|mm| mm.account(pid).is_none_or(|a| a.threads <= 1));
     if last {
         process_exit(ss, pid, tid, 0);
@@ -508,7 +508,7 @@ pub fn thread_exit(ss: &mut SystemServices, pid: Pid, tid: TID) {
 /// `process_exit(code)` (KERNEL-SPEC.md): `exited`, or `faulted` while the process holds open
 /// calls -- which is where a Rust panic lands (answer 55). A server that means to exit replies to
 /// every open call first (R4b).
-pub fn process_exit(ss: &mut SystemServices, pid: Pid, tid: TID, code: u32) {
+pub fn process_exit(ss: &mut ProcessTable, pid: Pid, tid: TID, code: u32) {
     let open = MemoryManager::with(|mm| mm.account(pid).map_or(0, |a| a.open_calls));
     let cause = if open == 0 { Cause::Exited } else { Cause::Faulted };
     died(ss, pid, tid, cause, code);
@@ -518,12 +518,12 @@ pub fn process_exit(ss: &mut SystemServices, pid: Pid, tid: TID, code: u32) {
 /// on (`arch::irq`). `code` is the RISC-V exception cause.
 pub fn faulted(pid: Pid, code: u32) {
     let tid = ArchProcess::with_current(|p| p.current_tid());
-    SystemServices::with_mut(|ss| died(ss, pid, tid, Cause::Faulted, code));
+    ProcessTable::with_mut(|ss| died(ss, pid, tid, Cause::Faulted, code));
 }
 
 /// R10: destroying a budget kills the processes running in it. The notice has cause `killed`
 /// (`died` drops it if the object is going too, which [`budgets_dying`] sees to afterwards).
-pub fn killed(ss: &mut SystemServices, victim: Pid) { died(ss, victim, INITIAL_TID, Cause::Killed, 0); }
+pub fn killed(ss: &mut ProcessTable, victim: Pid) { died(ss, victim, INITIAL_TID, Cause::Killed, 0); }
 
 /// The one path out of a process, whatever ended it: record the notice, tear the process down,
 /// then deliver the notice or drop it.
@@ -531,7 +531,7 @@ pub fn killed(ss: &mut SystemServices, victim: Pid) { died(ss, victim, INITIAL_T
 /// The order matters. Blame is read first, because the teardown frees the open call it names.
 /// The budget the process ran in is read first too, because R1 compares *its* labels with the
 /// exit endpoint's owner, and the teardown may be the last thing keeping it alive.
-fn died(ss: &mut SystemServices, pid: Pid, tid: TID, cause: Cause, code: u32) {
+fn died(ss: &mut ProcessTable, pid: Pid, tid: TID, cause: Cause, code: u32) {
     let recorded = MemoryManager::with_mut(|mm| record(mm, pid, tid, cause, code));
     let Some((object, flow)) = recorded else { return };
     end_process(ss, pid);
@@ -581,7 +581,7 @@ fn record(
 /// Tear the process down: R4b for its threads' open calls, then its memory, handle table and
 /// process-table slot. The running process is dealt with as `budget_destroy` deals with a caller
 /// that destroyed its own budget.
-fn end_process(ss: &mut SystemServices, pid: Pid) {
+fn end_process(ss: &mut ProcessTable, pid: Pid) {
     if ss.get_process(pid).is_err() {
         return;
     }
@@ -596,7 +596,7 @@ fn end_process(ss: &mut SystemServices, pid: Pid) {
 
 /// Deliver the notice if R1 allows and there is somewhere to deliver it, or drop it. A dropped
 /// notice frees the object at once, so nothing waits for a notice that can never arrive.
-fn settle_notice(ss: &mut SystemServices, mm: &mut MemoryManager, frame: u32, flow: Option<Flow>) {
+fn settle_notice(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32, flow: Option<Flow>) {
     let p = mm.process(frame);
     // R10 drops objects charged to a dying creator without emitting their notices, even
     // when an external receiver is already blocked on a surviving exit endpoint.
@@ -670,7 +670,7 @@ pub fn pending_notice(mm: &MemoryManager, e: EndpointRef) -> Option<(u32, ExitNo
 /// still runs, and then there is no notice. Runs after `budget_destroy` has killed the processes
 /// *in* the dying budgets, so what is usually left here is objects whose process already died in
 /// another budget.
-pub fn budgets_dying(ss: &mut SystemServices) {
+pub fn budgets_dying(ss: &mut ProcessTable) {
     loop {
         let next = MemoryManager::with(|mm| {
             mm.find_process(|mm, frame| mm.budget_at(mm.process(frame).creator).dying)

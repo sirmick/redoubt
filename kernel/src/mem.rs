@@ -126,7 +126,7 @@ impl Default for MemoryManager {
     fn default() -> Self { Self::default_hack() }
 }
 
-/// Lock order: `SystemServices` (services.rs) before `MemoryManager`. Code holding the memory
+/// Lock order: `ProcessTable` (ptable.rs) before `MemoryManager`. Code holding the memory
 /// manager never takes the process table, so charging a budget from deep inside the allocator
 /// (`alloc_page`) needs only this cell; code holding the process table may take this one.
 static MEMORY_MANAGER: crate::cell::KernelCell<MemoryManager> =
@@ -770,18 +770,18 @@ impl MemoryManager {
     }
 
     pub fn check_for_duplicates(&self) {
-        use crate::services::SystemServices;
+        use crate::ptable::ProcessTable;
 
-        SystemServices::with(|system_services| {
-            let current_pid = system_services.current_pid();
+        ProcessTable::with(|pt| {
+            let current_pid = pt.current_pid();
 
             // Activate the debugging process and iterate through it,
             // noting down each active thread.
             for phys in (self.ram_start..self.ram_start + self.ram_size).step_by(PAGE_SIZE) {
                 let mut owner = None;
-                for pid in 1..crate::services::MAX_PROCESS_COUNT {
+                for pid in 1..crate::ptable::MAX_PROCESS_COUNT {
                     let pid = Pid::new(pid as u8).unwrap();
-                    let Ok(process) = system_services.get_process(pid) else {
+                    let Ok(process) = pt.get_process(pid) else {
                         continue;
                     };
                     process.activate();
@@ -802,7 +802,7 @@ impl MemoryManager {
                             if eo != &Some(pid) {
                                 let is_lent = {
                                     if let Some(existing_owner) = eo {
-                                        system_services
+                                        pt
                                             .get_process(*existing_owner)
                                             .unwrap()
                                             .activate();
@@ -813,7 +813,7 @@ impl MemoryManager {
                                         } else {
                                             false
                                         };
-                                        system_services.get_process(pid).unwrap().activate();
+                                        pt.get_process(pid).unwrap().activate();
                                         is_lent
                                     } else {
                                         false
@@ -823,10 +823,10 @@ impl MemoryManager {
                                     "!!! 0x{:08x} is owned by {} ({}) but is mapped to {} ({}) -- {}",
                                     phys,
                                     eo.map(|v| v.get() as isize).unwrap_or(-1),
-                                    eo.map(|v| system_services.process_name(v).unwrap_or("<unknown>"))
+                                    eo.map(|v| pt.process_name(v).unwrap_or("<unknown>"))
                                         .unwrap_or("<none>"),
                                     pid.get(),
-                                    system_services.process_name(pid).unwrap_or("<unknown>"),
+                                    pt.process_name(pid).unwrap_or("<unknown>"),
                                     if is_lent { "page is lent" } else { "duplicate!" },
                                 );
                             }
@@ -839,11 +839,11 @@ impl MemoryManager {
                                         phys,
                                         owner.map(|v| v.0.get() as isize).unwrap_or(-1),
                                         owner
-                                            .map(|v| system_services.process_name(v.0).unwrap_or("<unknown>"))
+                                            .map(|v| pt.process_name(v.0).unwrap_or("<unknown>"))
                                             .unwrap_or("<none>"),
                                         owner.map(|v| v.1).unwrap_or(0),
                                         pid.get(),
-                                        system_services.process_name(pid).unwrap_or("<unknown>"),
+                                        pt.process_name(pid).unwrap_or("<unknown>"),
                                         virt,
                                     );
                                 }
@@ -854,7 +854,7 @@ impl MemoryManager {
             }
 
             // Restore the previous PID
-            system_services.get_process(current_pid).unwrap().activate();
+            pt.get_process(current_pid).unwrap().activate();
         })
     }
 }
