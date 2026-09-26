@@ -48,6 +48,8 @@ const EXCLUDED: [&str; 1] = ["docs/legacy"];
 const ROOT_PAGES: [&str; 3] = ["README.md", "GETTING-STARTED.md", "CONTRIBUTING.md"];
 const PACKAGES: [&str; 17] =
     ["SV", "IPC", "DOC", "HIST", "OD", "K", "D", "B", "E", "C", "W", "A", "L", "T", "V", "G", "S"];
+/// The book's favicon: a hand-written SVG, text like the theme's scripts, and the one image C8 allows.
+const FAVICON: &str = "docs/theme/favicon.svg";
 const BINARY: [&str; 9] = ["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "ico", "pdf"];
 const STATUS_TESTED: &str = " · tested: ";
 
@@ -920,10 +922,10 @@ fn no_binaries(c: &mut Ctx) {
     for f in files {
         let ext = f.rsplit_once('.').map_or(String::new(), |(_, e)| e.to_lowercase());
         let theme_js = f.strip_prefix("docs/theme/").is_some_and(|r| !r.contains('/') && ext == "js");
-        if BINARY.contains(&ext.as_str()) {
+        if f != FAVICON && BINARY.contains(&ext.as_str()) {
             c.err(8, &f, 1, "image or binary file under docs/".into());
-        } else if !(ext == "md" || f == "docs/book.toml" || theme_js) {
-            c.err(8, &f, 1, "only Markdown, docs/book.toml and docs/theme/*.js belong under docs/".into());
+        } else if !(ext == "md" || f == "docs/book.toml" || theme_js || f == FAVICON) {
+            c.err(8, &f, 1, "only Markdown, book.toml, theme/*.js and the favicon belong under docs/".into());
         }
         let bytes = fs::read(c.root.join(&f)).unwrap_or_default();
         if bytes.iter().take(8192).any(|&b| b == 0) {

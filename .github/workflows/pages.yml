@@ -1,4 +1,4 @@
-name: Deploy static site to GitHub Pages
+name: Deploy the book to GitHub Pages
 
 on:
   push:
@@ -24,10 +24,33 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Upload docs/ as artifact
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache the mdBook tools
+        id: tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/mdbook
+            ~/.cargo/bin/mdbook-mermaid
+            ~/.cargo/bin/mdbook-svgbob
+          key: mdbook-0.5.4-mermaid-0.17.1-svgbob-0.3.1-${{ runner.os }}
+
+      - name: Install mdBook and its preprocessors
+        if: steps.tools.outputs.cache-hit != 'true'
+        run: |
+          cargo install mdbook --version 0.5.4
+          cargo install mdbook-mermaid --version 0.17.1
+          cargo install mdbook-svgbob --version 0.3.1
+
+      - name: Build the book
+        run: mdbook build docs
+
+      - name: Upload the book as the Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: "docs"
+          path: "target/book"
 
       - name: Deploy to GitHub Pages
         id: deployment
