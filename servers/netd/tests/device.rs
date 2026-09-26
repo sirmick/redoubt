@@ -1,4 +1,4 @@
-//! The driver against a hostile virtio-net device (IO-ARCHITECTURE.md, `netd`; answer 174).
+//! The driver against a hostile virtio-net device (servers/netd.md).
 //!
 //! Every test runs the real bring-up and the real queues against `redoubt_netd::fake::FakeNic`,
 //! which lies on demand. Asserted throughout:
@@ -375,8 +375,9 @@ fn the_receive_loop_resets_and_reports_when_the_interrupt_fails() {
 }
 
 /// A buffer the device completed without an interrupt, before the receive loop first waits (the
-/// first edge lost, as once on QEMU: K5 review 5), is still delivered: the loop drains before it
-/// waits. The interrupt handle then fails at once, so without that drain nothing would arrive.
+/// first edge lost, as once on QEMU: todo/irq-level-latch.md), is still delivered: the loop drains
+/// before it waits. The interrupt handle then fails at once, so without that drain nothing would
+/// arrive.
 #[test]
 fn a_frame_completed_before_the_first_wait_without_an_interrupt_is_delivered() {
     let nic = FakeNic::new();

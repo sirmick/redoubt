@@ -1,5 +1,5 @@
 //! Every property the `blkd` protocol claims, with a test that tries to break it
-//! (BUILD-PLAN.md, WP-D1; TENETS.md 6).
+//! (servers/blkd.md; TENETS.md 6).
 //!
 //! These drive [`answer_with`] against the hostile fake device, so every path runs with no system
 //! call and no hardware. `blkd` mints nothing, so there is no fake kernel here either: answering
@@ -17,7 +17,7 @@ use crate::virtio::MAX_SECTORS;
 
 const SECTORS: u64 = 8192;
 const SECTOR: usize = SECTOR_SIZE as usize;
-/// A lend big enough for the largest reply: `MAX_LEND_PAGES` is 16 pages, 64 KiB (WIRE.md).
+/// A lend big enough for the largest reply: `MAX_LEND_PAGES` is 16 pages, 64 KiB (kernel/ipc.md).
 const LEND: usize = 64 * 1024;
 
 /// The two partitions every test starts with, and the badges that name them.
@@ -74,8 +74,9 @@ fn ask_with_lend<T: Transport>(
     let mut buf = vec![0u8; lend.max(LEND)];
     let words = request.encode(&mut buf).expect("the request encodes");
     let opcode = redoubt_rt::wire::typed::opcode(&words).unwrap();
-    // An inline message travels in its words alone, so its caller lends nothing (WIRE.md); a
-    // client that lends anyway is refused, which `malformed_requests_are_refused` checks.
+    // An inline message travels in its words alone, so its caller lends nothing
+    // (servers/wire.md); a client that lends anyway is refused, which
+    // `malformed_requests_are_refused` checks.
     if inline(request) {
         let outcome = answer_with(server, caller, &words, &ReceivedHandles::new(), &mut []);
         return decode(opcode, &outcome, &[]);
@@ -281,7 +282,7 @@ fn a_read_whose_reply_would_not_fit_the_lend_is_refused_before_the_disk_is_touch
 // ---------------------------------------------------------------- labels
 
 /// A range carries no labels in milestone 1, so `check` lets any caller read one and only an
-/// unlabelled caller write to it (IO-ARCHITECTURE.md).
+/// unlabelled caller write to it (servers/serving.md R25).
 #[test]
 fn a_labelled_caller_may_read_but_not_write() {
     let device = device();
@@ -350,9 +351,9 @@ fn arbitrary_requests_never_panic() {
     assert_eq!(device.strayed(), 0);
 }
 
-/// The red team's C7. Alice's write leaves 32 KiB in the DMA buffer; Bob reads from his own
-/// partition against a device that writes only half of what it was given. One client's bytes must
-/// not reach another's reply, and that must not depend on the device behaving.
+/// Alice's write leaves 32 KiB in the DMA buffer; Bob reads from his own partition against a
+/// device that writes only half of what it was given. One client's bytes must not reach another's
+/// reply, and that must not depend on the device behaving (servers/blkd.md R52).
 #[test]
 fn one_clients_read_never_carries_anothers_bytes() {
     let device = device();

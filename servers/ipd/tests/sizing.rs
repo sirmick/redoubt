@@ -1,4 +1,4 @@
-//! `ipd`'s sizing (NAMESPACES.md, the milestone manifest; answer 174): the worst case, every
+//! `ipd`'s sizing (servers/ipd.md, "Sizing"): the worst case, every
 //! override's bucket and every other at the defaults, must leave `MAX_OPEN_CALLS`' headroom (48)
 //! and fit the budget, or `ipd` does not start.
 
@@ -9,7 +9,7 @@ fn sizing_of(args: &[&str]) -> Result<redoubt_ipd::sizing::Sizing, redoubt_ipd::
 }
 
 /// The rig's and the milestone manifest's arguments fit: 23 + 5 (the steward's slot at its worst)
-/// + 4 x 5 = 48; with sshd at 24 they do not (QA D3-code-review-3).
+/// + 4 x 5 = 48; with sshd at 24 they do not.
 #[test]
 fn the_rig_and_the_milestone_fit() {
     let rig = [
@@ -37,9 +37,9 @@ fn the_rig_and_the_milestone_fit() {
     over[7] = "limits=5:24:0:20";
     assert!(sizing_of(&over).is_err(), "sshd 24 with the steward at 2 admits 49");
     let sizing = sizing_of(&milestone).unwrap();
-    // Sockets are `State` units (QA D3-code-review-5): sshd's 0 + 20, the steward's 32 + 0, and
-    // four defaults of 4 + 8. At their worst: 20, 32, and 4 x 12, each override slot at the
-    // larger of its units and the default's.
+    // Sockets are `State` units: sshd's 0 + 20, the steward's 32 + 0, and four defaults of 4 + 8.
+    // At their worst: 20, 32, and 4 x 12, each override slot at the larger of its units and the
+    // default's.
     assert_eq!(sizing.max_sockets, 20 + 32 + 4 * 12);
     assert_eq!(sizing.caps.overrides, vec![(5, 20), (4, 32)]);
     // An override below the default counts as the default: its slot can go to a default bucket.

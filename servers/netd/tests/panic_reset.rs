@@ -1,6 +1,6 @@
-//! A panic in `netd` stops the device before the process dies (IO-ARCHITECTURE.md, `netd`;
-//! answer 174): the runtime's panic handler runs the hook first (`redoubt_rt::start`), and
-//! `netd`'s hook writes status 0 to the registers it was armed with and reads it back.
+//! A panic in `netd` stops the device before the process dies (servers/netd.md R57): the
+//! runtime's panic handler runs the hook first (`redoubt_rt::start`), and `netd`'s hook writes
+//! status 0 to the registers it was armed with and reads it back.
 //!
 //! On the machine `redoubt-rt`'s `#[panic_handler]` calls `run_panic_hook` before anything else.
 //! A host test runs under `std`'s panic machinery instead, so a `std` panic hook stands in for

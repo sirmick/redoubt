@@ -82,8 +82,8 @@ pub fn tcp_dst(frame: &[u8]) -> Option<u16> {
     Some(t.dst_port())
 }
 
-/// The invariant on everything `ipd` sends (answer 174): no SYN without ACK to one of the box's
-/// own addresses, and no ARP request for one of them other than the gateway.
+/// The invariant on everything `ipd` sends (servers/ipd.md R59): no SYN without ACK to one of the
+/// box's own addresses, and no ARP request for one of them other than the gateway.
 pub fn check_frame(frame: &[u8], selfset: &SelfSet) {
     let eth = EthernetFrame::new_checked(frame).expect("ipd sent a frame that is not Ethernet");
     match eth.ethertype() {
@@ -627,8 +627,8 @@ fn fuzzed_segment(b: &mut Bytes) -> Vec<u8> {
 }
 
 /// A well-formed IPv4 packet that is not TCP, from the input: UDP, ICMP (an echo request, or
-/// anything) or another protocol, from any of the sources, to `ipd` or elsewhere. `ipd` must
-/// answer none of them (QA D3-code-review-5): [`check_frame`] fails on anything but TCP or ARP.
+/// anything) or another protocol, from any of the sources, to `ipd` or elsewhere. `ipd` must answer
+/// none of them: [`check_frame`] fails on anything but TCP or ARP.
 fn fuzzed_datagram(b: &mut Bytes) -> Vec<u8> {
     let protocol = match b.u8() % 4 {
         0 => IpProtocol::Udp,
@@ -808,8 +808,8 @@ fn op_bytes(message: net_ctl::Message<'_>) -> Vec<u8> {
     out
 }
 
-/// The sockets' ledger (QA D3-code-review-5, P2-2): no reservation outlives its request, and
-/// every bucket holds at least one `State` unit for each of its live sockets.
+/// The sockets' ledger: no reservation outlives its request, and every bucket holds at least one
+/// `State` unit for each of its live sockets.
 pub fn check_ledger(w: &World) {
     assert_eq!(w.nine.fs.stack.meter(), crate::stack::Meter::Closed, "a reservation outlived its request");
     for key in w.nine.fs.stack.charged_keys() {

@@ -1,14 +1,14 @@
 //! `ipd`: the TCP/IP stack for one network or trust domain, serving `/net` over 9P
-//! (IO-ARCHITECTURE.md, Networking; NAMESPACES.md, The network tree; answer 174).
+//! (servers/ipd.md; servers/README.md, "The network path").
 //!
 //! # What this is trusted for
 //! `ipd` is a sink: cleared for nothing, it refuses every labelled caller before it looks at
-//! anything else (CONTAINMENT.md). What it is written to guarantee:
+//! anything else (servers/ipd.md R60). What it is written to guarantee:
 //!
 //! 1. **A connection reaches only what its scope allows**, IP prefixes and ports, and **never the box's own
 //!    addresses**, whatever the scope says ([`scope`]). Both are checked before smoltcp sees the connect.
 //! 2. **A scope only narrows**: a `grant` can never widen one or add `listen` to it.
-//! 3. **A client can exhaust only its own bucket and share** (CONTAINMENT.md, the shared server library):
+//! 3. **A client can exhaust only its own bucket and share** (servers/serving.md R26):
 //!    fids, minted connections, parked calls and sockets all through the skeleton's admission, a socket as
 //!    one `State` unit held until the socket is gone ([`server::open_sockets`]).
 //! 4. **Every ISN is drawn from the kernel's CSPRNG**, one fresh seed per connection, and never from

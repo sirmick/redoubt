@@ -7,7 +7,7 @@
 //! `keyd` builds the hash itself, from the parts, with the host key blob taken from its own key
 //! rather than from the request. So a holder of the badge — a hijacked `sshd`, or an agent whose
 //! lease named the key — cannot get a signature over bytes it chose, and in particular cannot
-//! relay someone else's SSH user-authentication request and get it signed (answer 95).
+//! relay someone else's SSH user-authentication request and get it signed (servers/keyd.md R44).
 //!
 //! Why it cannot be one anyway: what is signed here is always exactly 32 bytes, the SHA-256
 //! output. An SSH user-authentication signature is over `string session_id`, a byte, then the
@@ -17,8 +17,8 @@
 //! What a holder of this badge *can* do, stated so the guarantee is not read as wider than it
 //! is: complete an SSH key exchange as this box, with any peer, for as long as it holds the
 //! capability. That is what a host-key capability is for, and it is why the steward grants one
-//! only to `sshd`; `keys` in a lease names the key the approval named (CAPABILITIES.md,
-//! agents 7), and an approval for the host key is an approval to speak as the box.
+//! only to `sshd`; `keys` in a lease names the key the approval named (servers/steward.md,
+//! "Leases"), and an approval for the host key is an approval to speak as the box.
 
 use crate::keys::{ALGORITHM, PUBLIC_KEY_LEN};
 use crate::sha256::{self, Sha256};

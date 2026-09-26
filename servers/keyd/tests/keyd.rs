@@ -124,7 +124,7 @@ fn ask(handle: Handle, request: &Message<'_>) -> Result<Vec<u8>, Option<ErrorCod
         return Err(None);
     }
     // An inline reply has no buffer: the lend comes back untouched, and a decoder handed it
-    // would refuse the reply (WIRE.md).
+    // would refuse the reply (servers/wire.md).
     let body: &[u8] = if inline { &[] } else { &body };
     match Reply::decode(opcode, &words, body, handles.len()) {
         Ok(Ok(Reply::SignRecord(r))) => Ok(r.signature.to_vec()),
@@ -167,9 +167,9 @@ fn a_signature_round_trips_over_the_real_ipc_path() {
 }
 
 /// A launcher asks for a fresh capability for each child, and disconnects it when the child is
-/// gone (INIT.md, "Launching gives fresh connections"). The handle really arrives, really works
-/// for the same key and purpose, and really stops working when released — and `keyd` keeps no
-/// handle of its own per grant.
+/// gone (servers/init.md, "Fresh connections per child"). The handle really arrives, really
+/// works for the same key and purpose, and really stops working when released — and `keyd`
+/// keeps no handle of its own per grant.
 #[test]
 fn a_launcher_grants_a_fresh_capability_and_releases_it() {
     let keyd = start_keyd(&default_keys());
@@ -305,16 +305,17 @@ fn a_one_way_message_is_dropped_and_its_handles_closed() {
     assert_eq!(keyd.stop(), 0);
 }
 
-/// The red team's attack, turned into its refutation. Endpoints outlive servers (INIT.md
-/// decision 4) and a server keeps no state across a restart, so a capability granted before a
-/// restart is still a live handle afterwards. When both incarnations started their badges at
-/// 2^63, the restarted `keyd` handed that very badge to its first new client, and the stale
-/// handle silently became a capability for whatever that client asked for — an agent's audit
-/// grant turning into the box's SSH host key, with no id anyone could use to evict it.
+/// The red team's attack, turned into its refutation. Endpoints outlive servers
+/// (servers/init.md, "Restarts and reboots") and a server keeps no state across a restart, so a
+/// capability granted before a restart is still a live handle afterwards. When both
+/// incarnations started their badges at 2^63, the restarted `keyd` handed that very badge to its
+/// first new client, and the stale handle silently became a capability for whatever that client
+/// asked for — an agent's audit grant turning into the box's SSH host key, with no id anyone
+/// could use to evict it.
 ///
-/// Now each incarnation draws its first badge at random above 2^63 (answer 126), so the badge
-/// the restarted `keyd` gives out is not the one the stale handle carries, and the stale handle
-/// names nothing at all.
+/// Now each incarnation draws its first badge at random above 2^63 (servers/serving.md R27), so
+/// the badge the restarted `keyd` gives out is not the one the stale handle carries, and the
+/// stale handle names nothing at all.
 #[test]
 fn a_stale_grant_does_not_name_a_new_key_after_a_restart() {
     let f = fake();
