@@ -49,7 +49,7 @@ order of the checks, the same in the kernel and the [model](model.md), is in the
 
 ### Backing and zeroing
 
-Status: built · partly tested: that a frame freed with data in it comes back zero is attacked only in the model, because no case can tell which frames it was handed · tested: bench:device, bench:mem-attack, bench:map-fixed-attack, bench:lend-untouched-page, bench:touch-beyond-ram, mutation:R11NoZeroing
+Status: built · partly tested: that a frame freed with data in it comes back zero is attacked only in the model: `mem-attack` cannot tell which frames it was handed, and `dma-reset-reuse`, which proves reuse by physical address, never reads the reused frames · tested: bench:device, bench:mem-attack, bench:map-fixed-attack, bench:lend-untouched-page, bench:touch-beyond-ram, mutation:R11NoZeroing
 
 `map_anon` and `map_fixed` back every page when they map it. Each takes a free frame, charges it
 to the caller's budget ([R6 (charging)](budgets.md#r6-charging)), zeroes it through the
@@ -68,7 +68,7 @@ Running out is the caller's error: `map_anon` of more than the budget or RAM can
 
 ### Where `map_anon` puts pages
 
-Status: built · partly tested: a full placement area, and a run that fits only at the area's end, are not attacked by a case; the kernel departs from the placement rule at both ends of the area (Residual risks) · tested: bench:map-fixed-attack, bench:touch-beyond-ram
+Status: built · partly tested: no case attacks the placement itself (first fit from the last run, the wrap to the area's start, a full area, a run that fits only at the area's end, an oversize request, the message area); `touch-beyond-ram` exhausts RAM, not the area; the kernel departs from the placement rule at both ends of the area (Residual risks) · tested: bench:map-fixed-attack, bench:touch-beyond-ram
 
 The kernel chooses the address, and nothing may depend on it. `map_anon` takes the first free
 run of pages in its placement area, 256 MiB from `DEFAULT_BASE` (0x6000_0000 to 0x7000_0000),
@@ -86,7 +86,7 @@ area is full (Residual risks).
 
 ### `map_fixed`
 
-Status: built · partly tested: the `map_fixed` cases run on rv64 only · tested: bench:map-fixed-attack, bench:map-fixed-tables, bench:return-lent-unmapped, host:redoubt-model::bad_ranges_are_refused, host:redoubt-model::partial_overlap_is_refused_whole, host:redoubt-model::page_tables_half_of_the_charge_check
+Status: built · partly tested: `map-fixed-attack` and `map-fixed-tables` run on rv64 only; on rv32 only `return-lent-unmapped` calls `map_fixed` · tested: bench:map-fixed-attack, bench:map-fixed-tables, bench:return-lent-unmapped, host:redoubt-model::bad_ranges_are_refused, host:redoubt-model::partial_overlap_is_refused_whole, host:redoubt-model::page_tables_half_of_the_charge_check
 
 `map_fixed(addr, len, flags)` maps zeroed pages at exactly `addr` in the caller's own address
 space, charged as `map_anon`'s are. It is the one call that puts new pages at an address the

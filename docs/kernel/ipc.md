@@ -154,7 +154,7 @@ against the handles its reply actually supplied.
 
 The Rust runtime (`libs/rt/src/ipc.rs`) makes the rules hard to break. `Endpoint::call` takes the
 lend as an owned `Buffer` and returns a `CallOutcome` holding the status, the buffer only if it
-was returned, and the reply only if it is present. `Request::reply` consumes the request.
+was returned, and the reply only if it is present. `Request::reply` consumes the request, and hands it back with the error if the reply is refused, so the server can still answer it.
 
 ```mermaid
 sequenceDiagram

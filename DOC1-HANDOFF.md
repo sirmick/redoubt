@@ -47,12 +47,11 @@ DOC1-device-mapping-exec and DOC1-kernel-code-findings (workspace_get view qa, t
 - RED-26, 28, 29, 30 were already applied by the third lead.
 
 ## Still to do
-1. RED-18 (timer.md's Security properties have no rule IDs): asked the Architect on QA
-   DOC1-timer-rule-ids; recommendation is citations of I13, R10 and R12, no new IDs.
-2. budgets.md:279 (R1 numbering; the R6 status line) P3: asked the red team on DOC1-red-R1
-   what it meant.
-3. `K5b*` mutation names and `Mutation::rule()`'s labels change at the switch-over; model.md's
+1. `K5b*` mutation names and `Mutation::rule()`'s labels change at the switch-over; model.md's
    Mutations paragraph and table then need the new names.
+Everything else on the R1 list is applied, RED-18 as the Architect decided on
+DOC1-timer-rule-ids (citations of I13, R10 and R12 on timer.md; R10 on budgets.md gains the
+deadline-first and equal-instant sentence), and the red team's clarified P3s.
 
 ## Traps
 - Commit trailer: the model that wrote the commit. Stage by path; never stash; never push.

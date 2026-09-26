@@ -183,13 +183,12 @@ Status: built · tested: bench:timeouts, bench:budget-deadline, bench:legacy-gon
 
 ## Security properties
 
-### Every blocking call returns by its timeout
+### I13 (every blocking call returns by its timeout), on the timer
 
 Status: built · tested: bench:timeouts, bench:timeouts-tcg, bench:sched-latency, bench:sched-wake-no-preempt, mutation:TimeoutIgnoredWhileOthersRun
 
-I13 (every blocking call returns by its timeout)
-([invariants](invariants.md#i13-every-blocking-call-returns-by-its-timeout)): no thread stays
-blocked past its timeout. The timer is armed for the
+I13 is owned by [invariants](invariants.md#i13-every-blocking-call-returns-by-its-timeout); this
+is how the timer keeps it. No thread stays blocked past its timeout. The timer is armed for the
 earliest timeout whether or not another thread runs, and every kernel entry expires first. The
 conversion rounds up, so no timeout ends early. `FOREVER` and saturated timeouts are the only
 ones that never end. A reply racing a timeout lands on exactly one side: either the caller gets
@@ -200,21 +199,24 @@ the reply and the server `delivered`, or the caller gets `Timeout` and the serve
 it, and a wake never preempts; the bench measures that delay as a target, not a bound
 ([scheduling](scheduling.md)).
 
-### A passed deadline comes first
+### R10 (destruction) at a deadline: a passed deadline comes first
 
 Status: built · partly tested: a process entering the kernel in a tight loop to put its deadline off is not attacked by a case · tested: bench:budget-deadline, mutation:BudgetDeadlineIgnored
 
-A budget whose deadline has passed is destroyed before any operation that enters the kernel
-after that instant, by R10. Nothing defers expiry: no kernel state, no interrupt handling and no
+R10 is owned by [budgets](budgets.md#r10-destruction), which states the deadline path and the
+equal-instant order; this is how the timer keeps it. A budget whose deadline has passed is
+destroyed before any operation that enters the kernel at or after that instant, because
+`expire_due` (`kernel/src/time.rs`) runs first at every kernel entry. Nothing defers expiry: no kernel state, no interrupt handling and no
 call a process can make postpones it. A budget cannot outlive its deadline by spinning, because
 its slice end brings the kernel back, nor by blocking, because the timer is armed for the
 deadline itself. The only delay is the kernel work already in progress when the deadline passes.
 
-### Timer work is paid by whoever asked for it
+### R12 (scheduling) for timer work
 
 Status: built · partly tested: the kernel departs from this for a deadline's destruction, and floods of weight-0 deadline budgets past the 64 of the case are not attacked · tested: bench:sched-timer-flood
 
-Each expired item's work is billed under R12: a timeout to its thread's budget, a deadline's
+R12 is owned by [scheduling](scheduling.md#r12-scheduling); this is how its charging applies to
+the timer's work. Each expired item's work is billed under it: a timeout to its thread's budget, a deadline's
 whole destruction to the dying budget's parent, after its carve returns, or to the nearest
 ancestor with free weight above 0 ([scheduling](scheduling.md#charging)). So is the walk that
 found the item. A budget with many timeouts due at once pays one walk for each. The one walk per

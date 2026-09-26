@@ -28,7 +28,8 @@ gap: the page's section, the claim, and what no case attacks.
 - R9 (stamps): a handle minted from a call taking the call's handle's stamp (not the caller's budget) is attacked only in the model (`R9MsgStampIsSenderBudget`).
 
 ### budgets.md
-- R6 (charging): an endpoint's page charge is attacked only in the model.
+- R6 (charging): an endpoint's page charge is attacked only in the model; the saved-context pages (1 on rv32, 2 on rv64) are pinned by no case.
+- R10 (destruction): timeouts before deadlines at an equal instant is attacked only in the model (`ExpireBudgetsFirst`).
 - Deadlines: floods of weight-0 deadline budgets past the 64 of `sched-timer-flood` are not attacked ([deadline destruction billing](deadline-destroy-billing.md)).
 - Class is trust, not order: that the scheduler never reads class is argued from the code.
 - Deadlines: a process entering the kernel in a tight loop to put its deadline off is not attacked.
@@ -64,8 +65,8 @@ gap: the page's section, the claim, and what no case attacks.
 
 ### memory.md
 - Backing and zeroing: that a frame freed with data comes back zero is attacked only in the model (`R11NoZeroing`); no case can tell which frames it was handed.
-- Where `map_anon` puts pages: a full placement area, and a request that fits only at the area's end, are not attacked; the search's worst-case cost is not measured.
-- `map_fixed`: its cases run on rv64 only.
+- Where `map_anon` puts pages: the placement itself (first fit from the last run, the wrap, a full area, a run that fits only at the area's end, an oversize request, the message area) is not attacked (`touch-beyond-ram` exhausts RAM, not the area); the search's worst-case cost is not measured.
+- `map_fixed`: `map-fixed-attack` and `map-fixed-tables` run on rv64 only; on rv32 only `return-lent-unmapped` calls it.
 - Instruction fetch after mapping: no case can see a missing `fence.i` (QEMU keeps fetch coherent).
 - Lending at the page-table level: a lend within one process is not attacked across harts.
 - R11 (memory): W^X on device registers and `dma_alloc` pages is not attacked, and does not hold ([device mapping exec](device-mapping-exec.md)); the absence of any physical-address argument is argued from the call table.

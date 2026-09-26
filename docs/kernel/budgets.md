@@ -282,7 +282,7 @@ Status: built · tested: bench:budget, bench:process-attack, bench:budget-forge-
 
 ### R6 (charging)
 
-Status: built · partly tested: an endpoint's page charge is attacked only in the model; the boot code departs from the rule for `root`'s own page and for process objects (see Residual risks), and no case attacks either · tested: bench:budget, bench:budget-mem-churn, bench:budget-table-attack, bench:map-fixed-tables, bench:redoubt-tight, bench:process-attack, mutation:R6ChargeAncestors, mutation:R6OwnPageChargedToItself, mutation:R6EndpointsFree, mutation:R6PageTablesFree, mutation:R6OpenCallsFree, mutation:R6ProcessObjectFree, mutation:R6ProcessObjectChargedToBudget, mutation:R6LendChargedOnce
+Status: built · partly tested: an endpoint's page charge is attacked only in the model, and the saved-context pages (1 on rv32, 2 on rv64) are pinned by no case; the boot code departs from the rule for `root`'s own page and for process objects (see Residual risks), and no case attacks either · tested: bench:budget, bench:budget-mem-churn, bench:budget-table-attack, bench:map-fixed-tables, bench:redoubt-tight, bench:process-attack, mutation:R6ChargeAncestors, mutation:R6OwnPageChargedToItself, mutation:R6EndpointsFree, mutation:R6PageTablesFree, mutation:R6OpenCallsFree, mutation:R6ProcessObjectFree, mutation:R6ProcessObjectChargedToBudget, mutation:R6LendChargedOnce
 
 Every kernel object is charged in pages to one budget, and a charge over the budget's limit fails
 with `OutOfMemory` before anything changes. Who pays:
@@ -342,7 +342,7 @@ by itself.
 
 ### R10 (destruction)
 
-Status: built · partly tested: destroying the budget a device object is charged to, or an endpoint's owner while a receiver waits on it, is not checked by a case, and no program checks `receive` returning `Dead`; a deadline's destruction is billed only in part (see Residual risks) · tested: bench:budget, bench:budget-destroy-attack, bench:budget-destroy-kills, bench:budget-deadline, bench:redoubt-revoke, bench:process-attack, bench:sched-destroy-billing, bench:dma-reset-quarantine, host:redoubt-model::budget_lifecycles, host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit, mutation:R10KeepForeignHandles, mutation:R10KeepCarvedLimits, mutation:R10SpareDescendantProcesses, mutation:R10ExitNoticesOutlivePayer, mutation:R10RevokedMessageDelivered, mutation:R10RevokedCallAnswered, mutation:R10SweptHandlesDropped, mutation:R10CreatorDeathSparesProcess
+Status: built · partly tested: destroying the budget a device object is charged to, or an endpoint's owner while a receiver waits on it, is not checked by a case, and no program checks `receive` returning `Dead`; the equal-instant order of timeouts before deadlines is attacked only in the model; a deadline's destruction is billed only in part (see Residual risks) · tested: bench:budget, bench:budget-destroy-attack, bench:budget-destroy-kills, bench:budget-deadline, bench:redoubt-revoke, bench:process-attack, bench:sched-destroy-billing, bench:dma-reset-quarantine, host:redoubt-model::budget_lifecycles, host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit, mutation:R10KeepForeignHandles, mutation:R10KeepCarvedLimits, mutation:R10SpareDescendantProcesses, mutation:R10ExitNoticesOutlivePayer, mutation:R10RevokedMessageDelivered, mutation:R10RevokedCallAnswered, mutation:R10SweptHandlesDropped, mutation:R10CreatorDeathSparesProcess, mutation:ExpireBudgetsFirst
 
 Destroying budget B, by `budget_destroy` or by a deadline, destroys B and everything below it, in
 this order:
@@ -381,6 +381,12 @@ budgets B's processes created elsewhere and handles to them stamped outside B. A
 reset fails at the end of a process that used it for DMA is destroyed the same way, at that end:
 every handle naming it closes, in every table and every unreceived message
 ([devices](devices.md#quarantine), [R11 (memory)](memory.md#r11-memory)).
+
+A budget whose deadline has passed is destroyed before any operation that enters the kernel at
+or after that instant: expiry runs first at every kernel entry, before anything reads the
+entering process. At an equal instant, timeouts expire before deadlines, so a caller whose call
+a server took, and whose timeout falls with the server budget's deadline, gets `Timeout` with
+its lend consumed, not `Dead` with it returned ([timer](timer.md#expiry)).
 
 Every destruction's whole cost is billed to someone. For `budget_destroy` that is the caller, as
 the call's own kernel time. For a deadline it is B's parent, after its carve returns, or the
