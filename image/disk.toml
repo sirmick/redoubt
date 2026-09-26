@@ -1,7 +1,7 @@
 # The virtio-blk disk image: a partition table plus one littlefs volume served by `fsd`.
 #
 # NOTE: not yet built. `./image/mkimage` today only prepares `target/image/stage/`; packing a
-# littlefs image with the in-tree `libs/littlefs` is the next step (docs/IO-ARCHITECTURE.md).
+# littlefs image with the in-tree `libs/littlefs` is planned with `fsd` (docs/servers/fsd.md).
 
 # Whole disk, in KiB (a whole number of 512-byte sectors).
 size_kib = 65536
