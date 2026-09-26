@@ -33,40 +33,26 @@ DOC1-device-mapping-exec and DOC1-kernel-code-findings (workspace_get view qa, t
   a new `## Security properties` section (the page is a reference page, so C9 allows it); B3 in
   the manifest records R24; **the servers set starts at R25**. P3 at 208 and 316-317.
 
-## Still to do, in order
-Read each page in full before committing it.
-1. Group 2 rest:
-   - RED-9 model.md:216-217: `Mutation::rule()` returns "IPC", "Messages", "QUESTIONS 2",
-     "answer 173"... and "R4" for R4a/R4b; state it (the switch-over fixes it, manifest K1).
-   - RED-10g devices.md:160 `system_reset`: partly tested (reboot not attacked).
-   - RED-10h boot.md:225: the console and DMA-reset-slot refusals are not attacked.
-   - RED-10i timer.md:40 and 205-211: add the gaps kernel-attack-gaps lists for timer.
-   - RED-10j processes.md:267 R21: add the parked-call-then-fault gap.
-   - RED-10k README.md:70, objects.md:26, memory.md:174: plain "tested" where the page says
-     model-only or argued.
-2. Group 3 rest (Architect's rule text is on the two code-findings threads):
-   - memory.md: `map_anon`'s residual (about line 282) says "nothing charged": the search's kernel
-     time is billed to the caller; the harm is latency (interrupts off, every wake waits); cite
-     R12's new sentence. R11 gains the per-frame W^X sentence ("W^X holds per frame, not only per
-     mapping. Only RAM that a process owns is ever executable. ...") with status partly tested
-     naming the gap; devices.md's residual points to memory.md.
-   - scheduling.md: R12 gains "A system call's kernel time is bounded by a constant plus a term
-     linear in the pages it maps or the objects it names. It never depends on the extent of an
-     address area or on what other processes hold. Billing it to the caller does not excuse it,
-     because every wake waits for it." (R10's scan is the stated exception, todo
-     budget-destroy-cost); the whole-cost billing rule as on budgets.md R10, with the departure
-     in its residual (around line 346); the "kernel is not preemptible" residual cites the rule.
-   - processes.md: the process-object counting rule (as on budgets.md R6), departure as residual.
-   - boot.md: "The loader refuses to boot when RAM extends past `PHYSMAP_SIZE`, with a clear
-     message." under R17 (fail closed), as a departure/planned part with todo
-     physmap-ram-bound. Also RED-19 (hart 0, dt.rs:282-289) and RED-20 (verified-boot cases are
-     rv64 only) while there.
-3. Group 4: RED-11 memory.md:122 (check whether `process-lifecycle` really lends within one
-   process across teardown before dropping the gap; kernel-attack-gaps memory.md line already
-   dropped "across teardown", restore if not), RED-12..24, 27, and the P3 list; ED-1 leftovers:
-   GLOSSARY `PID` sits after `powerbox`; `K5b*` mutation names are for the switch-over.
-   Unidentified P3s: ipc.md:149-154 and 211, budgets.md:279 (ask the red team what they mean).
-4. Complete the assignment with a summary (at most 2000 bytes).
+## Done by the fixer (assignment 6cbd0325)
+- `686a08537` RED-9, RED-10g-k. `202b38004` the Architect's amendments (R12 kernel-time bound,
+  R11 per-frame W^X, whole-cost destruction billing on scheduling.md and timer.md, the
+  process-object count on processes.md, the loader's RAM-bound refusal under R17), RED-19 (new
+  todo `boot-hart-context`), RED-20. `e44b53951` RED-11 (process-lifecycle does attack the
+  same-process lend across teardown, so only the harts gap stays), RED-12..16 and the abi,
+  invariants and model P3s (catchers confirmed by a full `mutations_are_caught` run).
+  `5a3bd56f1` RED-17, RED-21..25, RED-27, objects and processes P3s, and a new code finding in
+  `map-anon-search-cost` (the search never tries the area's last start; its wrapped pass can
+  run past the area's end). Then ipc.md's decoder combinations and R2 keying, the `MREx` size,
+  the handle order defined once (boot.md owns it), GLOSSARY `PID` before `powerbox`.
+- RED-26, 28, 29, 30 were already applied by the third lead.
+
+## Still to do
+1. RED-18 (timer.md's Security properties have no rule IDs): asked the Architect on QA
+   DOC1-timer-rule-ids; recommendation is citations of I13, R10 and R12, no new IDs.
+2. budgets.md:279 (R1 numbering; the R6 status line) P3: asked the red team on DOC1-red-R1
+   what it meant.
+3. `K5b*` mutation names and `Mutation::rule()`'s labels change at the switch-over; model.md's
+   Mutations paragraph and table then need the new names.
 
 ## Traps
 - Commit trailer: the model that wrote the commit. Stage by path; never stash; never push.

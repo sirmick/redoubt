@@ -146,8 +146,11 @@ memory, on every return including errors:
 | `reply` (success) | 0 | 0 `discarded`, 1 `delivered` | installed-handle mask, bits 0-3 |
 | `reply` (error) | the error code | 0 | 0 |
 
-Registers `a3`-`a7` are 0. A decoder refuses any other combination: `present` with a consumed
-lend, `consumed` without `Timeout` or `Dead`, mask bits past the handles supplied.
+Registers `a3`-`a7` are 0. `redoubt_sys::decode_result` refuses any other combination: for
+`call`, `present` with a status other than success or `OutOfMemory`, success without `present`,
+`present` with a consumed lend, and `consumed` without `Timeout` or `Dead`; for `reply`, a mask
+bit past the fourth handle, or any mask bit with `discarded`. The runtime then checks the mask
+against the handles its reply actually supplied.
 
 The Rust runtime (`libs/rt/src/ipc.rs`) makes the rules hard to break. `Endpoint::call` takes the
 lend as an owned `Buffer` and returns a `CallOutcome` holding the status, the buffer only if it
@@ -208,7 +211,7 @@ exiting budget to the owner of the exit endpoint; one that fails the rule is dro
 
 ### R2 (fair waiting)
 
-Status: built · partly tested: turns between several groups are attacked only in the model · tested: bench:redoubt-ipc, mutation:R2FifoAcrossAccounts, mutation:R2NoWaitCap, mutation:R2KeyByAccountOnly, mutation:R2KeyByStampLabels, mutation:R2SystemCallersShareGroup
+Status: built · partly tested: turns between several groups, and how groups are keyed (account, label set, and budget for account 0), are attacked only in the model; the case fills one group's cap · tested: bench:redoubt-ipc, mutation:R2FifoAcrossAccounts, mutation:R2NoWaitCap, mutation:R2KeyByAccountOnly, mutation:R2KeyByStampLabels, mutation:R2SystemCallersShareGroup
 
 Senders blocked on an endpoint are grouped by their budget's account and label set, and, for
 account 0 (no principal: the boot budgets, and any budget carved without one, of either class),

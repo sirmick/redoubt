@@ -238,17 +238,17 @@ in inverse proportion to the budget's weight. Defined in [scheduling](kernel/sch
 The kernel's mapping of all RAM at a fixed offset, so it can reach any frame. Supervisor-only
 and never executable. Defined in [memory layout](kernel/memory-layout.md).
 
-### powerbox
-
-The steward's service that turns a request for more authority into an out-of-band approval and,
-if approved, a narrow capability. Defined in [the steward](servers/steward.md).
-
 ### PID
 
 A process's number, 2 to 64 (1 is the kernel), which is also its hardware address-space id. It is
 drawn at random from the free ones and held until the process's exit notice is taken or dropped.
 No authority is keyed by it. Unix: a PID, but it names; it grants nothing. Defined in
 [processes](kernel/processes.md).
+
+### powerbox
+
+The steward's service that turns a request for more authority into an out-of-band approval and,
+if approved, a narrow capability. Defined in [the steward](servers/steward.md).
 
 ### principal
 

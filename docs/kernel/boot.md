@@ -168,7 +168,7 @@ by `kernel/src/args.rs`. It is a run of tags, `XArg` first:
 | Tag | Data | Read by (in `kernel/src/`) | If absent |
 | --- | --- | --- | --- |
 | `XArg` | block size in words, version (2), RAM start (2 words), RAM size (2), RAM name (`sram`) | `mem.rs` | the boot stops: it must be first |
-| `MREx` | every MMIO region in the tree, controllers included, six words each: start (2), size in whole pages (2), the node name's first four bytes, 0 | `mem.rs`: the MMIO ownership table | no MMIO table; a second `MREx` stops the boot |
+| `MREx` | every MMIO region in the tree, controllers included, six words each: start (2), size in bytes rounded up to whole pages (2), the node name's first four bytes, 0 | `mem.rs`: the MMIO ownership table | no MMIO table; a second `MREx` stops the boot |
 | `Ctrl` | the PLIC and CLINT ranges, four words each: base (2), size (2) | `device.rs` | no controller check |
 | `Devs` | one entry per device object, six words each (below) | `device.rs` | no device objects |
 | `Plic` | PLIC base (2), size (2), hart 0's S-mode context, 0 | `arch/riscv/intc_plic.rs` | no external interrupts |

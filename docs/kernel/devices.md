@@ -170,23 +170,14 @@ because that call never returns.
 Status: built · partly tested: the loader's refusal of a device tree that names no console, or a console with no interrupt, is not attacked by a case · tested: bench:device, bench:irq-attack
 
 The kernel gives every device object to the bundle's first program, which is where `init`
-receives them to place ([below](#which-process-gets-which-device)). Its handle table is, in this
-order:
-
-| Index | Handle |
-| --- | --- |
-| 1, 2, 3 | the `root`, `system` and `users` budgets |
-| 4 | the Reset right |
-| 5 | the console's MMIO (the device tree's `/chosen/stdout-path`) |
-| 6 | the console's interrupt |
-| 7 onward | every other MMIO range in device-tree order, then every other interrupt, ascending |
-| last | the receive right of the log endpoint |
-
-The loader fixes positions 4 to 6 and refuses to boot a device tree that names no console, or a
-console with no interrupt, rather than shift the indices under a program that relies on them.
-The objects are charged to `system`. The handles are stamped with `root`, like the three budget
-handles, so they are revoked only with the whole tree ([stamps](objects.md#r9-stamps)). A
-program finds its DMA devices by asking: `dma_alloc` is `NotPermitted` without the flag and
+receives them to place ([below](#which-process-gets-which-device)). The handle order is on
+[boot](boot.md#devices-handed-to-the-first-program): after the three budgets, the Reset right at
+4, the console's MMIO (the device tree's `/chosen/stdout-path`) at 5 and its interrupt at 6,
+then every other MMIO range in device-tree order and every other interrupt, ascending. The
+loader refuses a device tree that names no console, or a console with no interrupt, rather than
+shift those indices. The objects are charged to `system`, and the handles are stamped with
+`root`, so they are revoked only with the whole tree ([stamps](objects.md#r9-stamps)). A program
+finds its DMA devices by asking: `dma_alloc` is `NotPermitted` without the flag and
 `WrongObject` on an IRQ or the Reset right.
 
 ### Which process gets which device
