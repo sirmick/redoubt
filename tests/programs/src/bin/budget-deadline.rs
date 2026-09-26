@@ -1,4 +1,4 @@
-//! A budget's deadline destroys it (WP-K5; KERNEL-SPEC.md, Budget, R10): the kernel's timer
+//! A budget's deadline destroys it (kernel/budgets.md, "Deadlines", R10): the kernel's timer
 //! fires, and R10 runs exactly as for `budget_destroy`, with nobody asking.
 //!
 //! The lease `L` (carved from `system`, so this program can mint handles stamped with it) holds

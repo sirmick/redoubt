@@ -1,4 +1,4 @@
-//! A sleeper cannot bank credit across an idle gap (WP-K5; R12, the floor): A sleeps while B
+//! A sleeper cannot bank credit across an idle gap (R12, the floor): A sleeps while B
 //! runs alone for two seconds; B then sleeps 5 ms, and A wakes inside that gap, when nothing else
 //! is runnable. Afterwards B still gets half. A budget created inside the gap enters at the floor
 //! too, and gets a third once all three run.

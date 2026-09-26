@@ -32,7 +32,7 @@ pub const BAD_LIMITS: u32 = 4;
 /// what the manifest named is worse than none (TENETS.md 2, fail closed and loudly).
 pub const BAD_PUBLIC_LIST: u32 = 5;
 /// The kernel would not give a random word, and a server's first minted badge must be
-/// unpredictable (answer 126). A server that cannot get one does not start.
+/// unpredictable (servers/serving.md R27). A server that cannot get one does not start.
 pub const NO_RANDOM: u32 = 6;
 
 /// Serves until the endpoint is destroyed.

@@ -185,7 +185,7 @@ fn set_status(t: &impl Transport, bits: u32) -> Result<(), DeviceError> {
 
 /// Resets the device: write 0, and poll until the status register reads 0 (§4.2.3.1), a bounded
 /// number of times. After a reset the device may not touch its rings, so this is also how `netd`
-/// stops a device it no longer trusts, or is about to leave (IO-ARCHITECTURE.md, `netd`).
+/// stops a device it no longer trusts, or is about to leave (servers/netd.md R57).
 pub fn reset(t: &impl Transport) -> Result<(), DeviceError> {
     t.reg_write(reg::STATUS, 0)?;
     for _ in 0..RESET_TRIES {

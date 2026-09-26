@@ -1,8 +1,8 @@
-description = "DMA pages stay put (WP-K5b, OD2): a dma_alloc page is refused for lend, transfer and process_map, set_flags works, unmap drops only the mapping (the frames stay charged and are not handed out again), and a child that allocates and exits leaves its budget as it was. Empty virtio-mmio slots, no device behind them (checked build)"
+description = "DMA pages stay put (kernel/devices.md, dma_alloc): a dma_alloc page is refused for lend, transfer and process_map, set_flags works, unmap drops only the mapping (the frames stay charged and are not handed out again), and a child that allocates and exits leaves its budget as it was. Empty virtio-mmio slots, no device behind them (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
-# The first program, so it holds every device object (INTERIM, kernel device.rs).
+# The first program, so it holds every device object (kernel/devices.md).
 programs = ["dma-rules"]
 timeout_secs = 30
 expect = [

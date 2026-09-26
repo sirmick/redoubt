@@ -1,4 +1,4 @@
-description = "Timer interrupts an attacker arms cost the attacker (WP-K5, billing): 1 us-staggered sleepers, and staggered budget deadlines, leave an equal-weight victim half (virtual time, checked build)"
+description = "Timer interrupts an attacker arms cost the attacker (billing): 1 us-staggered sleepers, and staggered budget deadlines, leave an equal-weight victim half (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true

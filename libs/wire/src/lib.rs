@@ -1,4 +1,4 @@
-//! Redoubt's wire formats (docs/WIRE.md), shared by every server:
+//! Redoubt's wire formats (servers/wire.md), shared by every server:
 //!
 //! - [`ninep`]: plain 9P2000 with a fixed `msize` of 64 KiB;
 //! - [`typed`]: the typed-message framing, used by the codecs in [`proto`] that
@@ -24,5 +24,5 @@ pub mod typed;
 pub use codec::Error;
 
 /// The 9P `msize` and the largest typed-message buffer: `MAX_LEND_PAGES` (16) pages of
-/// 4 KiB (KERNEL-SPEC.md, WIRE.md).
+/// 4 KiB (kernel/ipc.md, servers/wire.md).
 pub const MSIZE: usize = 64 * 1024;

@@ -1,4 +1,4 @@
-description = "A destroyed lineage's debt reaches a shared parent normalized (WP-K5, pass inheritance): a sibling created after a weight-1 grandchild's lineage is destroyed runs within one round (virtual time, checked build)"
+description = "A destroyed lineage's debt reaches a shared parent normalized (pass inheritance): a sibling created after a weight-1 grandchild's lineage is destroyed runs within one round (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true

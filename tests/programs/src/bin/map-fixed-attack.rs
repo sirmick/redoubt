@@ -1,4 +1,4 @@
-//! Attack test for `map_fixed(addr, len, flags)` (KERNEL-SPEC.md R11, answer 172).
+//! Attack test for `map_fixed(addr, len, flags)` (kernel/memory.md, `map_fixed`; R11, R22).
 //!
 //! Every failing case must map nothing and charge nothing: verified by `system`'s page usage
 //! (`rd::usage(rd::SYSTEM)`, R6) before and after, and, where relevant, by `unmap` on the
@@ -9,11 +9,11 @@
 //! `wx-test.rs` does).
 //!
 //! Not covered here: a startup page and a loader-stub page. This bench's test programs are
-//! started directly (`process_start` with `arg` = 0, no startup block), and the loader stub
-//! (WP-R2) is not yet wired into any boot path, so neither address exists in any process's
-//! space to attack yet. The occupied-range rule is still exercised against this process's own
-//! stack (touched and untouched), a `map_anon` region and both sides of a lend, which are real,
-//! unconditionally present mappings.
+//! started directly (`process_start` with `arg` = 0, no startup block), and the loader stub is
+//! not yet wired into any boot path (docs/plan/m1-separation.md), so neither address exists in
+//! any process's space to attack yet. The occupied-range rule is still exercised against this
+//! process's own stack (touched and untouched), a `map_anon` region and both sides of a lend,
+//! which are real, unconditionally present mappings.
 #![no_std]
 #![no_main]
 
@@ -147,7 +147,7 @@ fn lent_ranges(c: &mut Checker) {
 }
 
 /// A request over the budget's own free-pages count is refused before anything is allocated
-/// (the cheap "pages" check, P1-2/N2), so this needs no filler and never approaches real
+/// (the cheap "pages" check, R22), so this needs no filler and never approaches real
 /// physical RAM: asking for one more page than the whole budget can ever hold is refused by
 /// arithmetic alone, the same way a huge `len` is.
 fn exhausted_budget(c: &mut Checker) {
@@ -236,7 +236,7 @@ fn page_table_charge(c: &mut Checker) {
 
 /// A range of about 2^26 pages (4 GiB to USER_AREA_END, 252 GiB) must be refused at once: the
 /// overlap walk skips absent subtrees and the pages check runs before `tables_needed` ever
-/// walks the range (P1-2). The range is free (everything else here is below 4 GiB; the only
+/// walks the range (R22). The range is free (everything else here is below 4 GiB; the only
 /// tables in it are the two `page_table_charge` left at 4 GiB, which the kernel does not free
 /// on `unmap`), so it is the budget check that refuses it, not an occupied page.
 ///
@@ -245,7 +245,7 @@ fn page_table_charge(c: &mut Checker) {
 /// syscall. A regression to one walk per page does 2^26 walks: at even 100 ns each that is
 /// ~7 s, and a per-page `tables_needed` is 2^26 x 3 levels. 10 ms sits two orders above the
 /// first and nearly three below the second, and absorbs a timer tick or two (the kernel's
-/// slice is milliseconds). `time_now` is in microseconds (KERNEL-SPEC.md, System calls).
+/// slice is milliseconds). `time_now` is in microseconds (kernel/timer.md, "Time").
 #[cfg(target_pointer_width = "64")]
 fn huge_len_is_prompt(c: &mut Checker) {
     const BOUND_US: u64 = 10_000;
@@ -273,7 +273,7 @@ fn success_and_addr_zero(c: &mut Checker) {
     rd::unmap(addr, PAGE_SIZE).expect("unmap");
     c.check(usage_pages() == before, "unmap returns usage to baseline");
 
-    // K5a-addr0: page 0 is user space. A second identical call is refused as an overlap.
+    // Page 0 is user space. A second identical call is refused as an overlap.
     let before = usage_pages();
     rd::map_fixed(0, PAGE_SIZE, MemFlags::READ).expect("map_fixed(0, ...) succeeds");
     c.check(usage_pages() > before, "map_fixed(0, ...) charges something");
@@ -282,7 +282,8 @@ fn success_and_addr_zero(c: &mut Checker) {
     c.check(usage_pages() == before, "unmap page 0 returns usage to baseline");
 
     // The last page below USER_AREA_END is accepted, and stays mapped while `map_anon` runs:
-    // the kernel half of P1-1 (a mapping near the top must not starve the kernel's choice).
+    // a mapping near the top must not starve the kernel's choice (kernel/memory.md, "Where
+    // `map_anon` puts pages").
     let last = USER_AREA_END - PAGE_SIZE;
     rd::map_fixed(last, PAGE_SIZE, MemFlags::READ).expect("the last page below USER_AREA_END is accepted");
     c.check(

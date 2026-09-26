@@ -1,4 +1,4 @@
-//! The scheduling cases (WP-K5; KERNEL-SPEC.md R7, R12; RESOURCES.md, Attack tests).
+//! The scheduling cases (kernel/budgets.md R7; kernel/scheduling.md R12).
 //!
 //! Each case is one program, the bundle's only one, and a launcher: it holds `root`, `system` and
 //! `users`, makes budgets, starts children in them (copies of itself, [`crate::spawn`]), and
@@ -25,7 +25,7 @@ use crate::spawn::{self, Image};
 
 /// Iterations between clock checks in the counting loop.
 const CHUNK: u64 = 256;
-/// The slice (KERNEL-SPEC.md, Constants), in microseconds.
+/// The slice (kernel/scheduling.md, "Preemption points"), in microseconds.
 pub const SLICE_US: u64 = 10_000;
 
 /// What a child does. Its startup block is the role, then up to eight `u64` parameters.
@@ -450,9 +450,9 @@ fn budget_churn(end: u64, tpu: u64) -> u64 {
         // The shell pattern, as the kernel sees it: this budget keeps counting on a thread of its
         // own and on this one, which runs most of a slice and then, holding the lead that gave
         // it, gives five budgets back to back most of its weight and takes it back, with no run
-        // in between. Creating and destroying moves nothing (OWNER DECISION 6): the budget keeps
-        // its share. (A lift that counted the entry wait, from the floor, would grow the lead by
-        // half again at each one.)
+        // in between. Creating and destroying moves nothing (kernel/scheduling.md, "Inheritance"):
+        // the budget keeps its share. (A lift that counted the entry wait, from the floor, would
+        // grow the lead by half again at each one.)
         thread(shell_spinner, 0);
         let mut total = 0;
         while ticks() < end {
@@ -573,8 +573,8 @@ fn driver(k: usize) {
         let at = rtc::now_ns(base) + 2_000_000 + (i as u64 * 397_000) % 1_000_000;
         rtc::alarm(base, at);
         // An alarm that fires while the source is masked (the driver's slice ended before it
-        // got back into `receive`) may never be delivered (K5-code-review-5, R5: K3's
-        // follow-up); give up on it after 100 ms, count it, and arm again.
+        // got back into `receive`) may never be delivered (R5; docs/todo/irq-level-latch.md);
+        // give up on it after 100 ms, count it, and arm again.
         if matches!(rd::receive(Some(4), 100_000, 0), Ok(Received::Interrupt)) {
             late[n] = rtc::now_ns(base).saturating_sub(at) / 1000;
             n += 1;

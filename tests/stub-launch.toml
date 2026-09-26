@@ -1,4 +1,4 @@
-description = "WP-R2: a user parent launches children through the real loader stub (PACKAGES.md, Launching a process). A well-formed ELF runs and exits from its own entry. Hostile ELFs (overlapping segments, a segment over the stub, the startup page or the stack, an entry outside executable segments, truncated headers, a huge image_len, segment bytes past the mapped image, and 32 header-fuzzed images) only exit or fault the child: the parent's budget returns to the same usage after each, and a well-formed child still runs afterwards"
+description = "A user parent launches children through the real loader stub (servers/init.md, \"Launching through the loader stub\"; R32). A well-formed ELF runs and exits from its own entry. Hostile ELFs (overlapping segments, a segment over the stub, the startup page or the stack, an entry outside executable segments, truncated headers, a huge image_len, segment bytes past the mapped image, and 32 header-fuzzed images) only exit or fault the child: the parent's budget returns to the same usage after each, and a well-formed child still runs afterwards"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true

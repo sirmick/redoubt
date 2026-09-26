@@ -8,7 +8,7 @@
 //!
 //! **Overlaps are refused.** Two partitions that share a sector would let two volumes alias each
 //! other's bytes, which is the containment `blkd` exists to give (a filesystem sees only its
-//! partition, IO-ARCHITECTURE.md). A table with an overlap is refused whole rather than in part,
+//! partition, servers/blkd.md R53). A table with an overlap is refused whole rather than in part,
 //! so there is no question of which volume won.
 //!
 //! **Primary header only.** `blkd` never writes a partition table, so a table that does not check
@@ -79,7 +79,7 @@ pub struct ArrayLocation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Partition {
     /// The entry's index in the array, from 0. The **root badge of partition *i* is *i* + 1**
-    /// (IO-ARCHITECTURE.md), so this is what `init`'s manifest names.
+    /// (servers/blkd.md), so this is what `init`'s manifest names.
     pub index: u32,
     /// The first LBA, inclusive.
     pub first_lba: u64,

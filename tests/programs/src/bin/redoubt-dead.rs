@@ -1,4 +1,4 @@
-//! R4b and R4's `Refused` (WP-K2). Must run as the loader's first program, the one holding
+//! R4b and R4's `Refused`. Must run as the loader's first program, the one holding
 //! `root`, `system` and `users`: the `Refused` step needs a budget handle to take `system`'s
 //! free pages away and give them back.
 //!

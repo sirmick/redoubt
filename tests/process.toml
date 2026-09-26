@@ -1,10 +1,10 @@
-description = "Process creation and exit (WP-K4): process_create, process_map and process_start with its arg and its handle list; thread_create, thread_exit and process_exit; exit notices with cause, code, blamed account and blamed labels, all three causes, a labelled process's notice reaching a system-class reader, blame following the failing thread's current call and nothing else, a creator's budget destroyed killing its children with no notice, and a store to a page that is only readable faulting rather than spinning in the page-fault handler (checked build)"
+description = "Process creation and exit: process_create, process_map and process_start with its arg and its handle list; thread_create, thread_exit and process_exit; exit notices with cause, code, blamed account and blamed labels, all three causes, a labelled process's notice reaching a system-class reader, blame following the failing thread's current call and nothing else, a creator's budget destroyed killing its children with no notice, and a store to a page that is only readable faulting rather than spinning in the page-fault handler (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# Built with the checks on (docs/testbench.md, "Debug assertions").
+# Built with the checks on (docs/testbench.md, "Checked builds").
 debug_assertions = true
 # proc-test is the bundle's only program, so it holds root, system, users and every device
-# object (INTERIM, kernel device.rs) and maps the console itself, as device-test does. Its
+# object (kernel/devices.md) and maps the console itself, as device-test does. Its
 # children are copies of its image with nothing in their tables but what process_start gave
 # them, so they cannot print: every line here is the parent's, and everything it says about a
 # child is what the kernel told it in an exit notice.
@@ -21,7 +21,7 @@ expect = [
     '^\[proc\] ok: returning final worker exits its empty process with code zero$',
     '^\[proc\] ok: a labelled process.s notice reaches a system-class reader \(R1\)$',
     '^\[proc\] ok: a server that faults blames the account and labels of its current call.s sender$',
-    '^\[proc\] ok: process_exit holding an open call is faulted, blamed on that call \(answer 55\)$',
+    '^\[proc\] ok: process_exit holding an open call is faulted, blamed on that call$',
     '^\[proc\] ok: a thread holding two callers. calls blames the one `serve` named, not the other$',
     '^\[proc\] ok: a crash after replying blames nobody: the reply cleared the current call$',
     '^\[proc\] ok: a send is never an open call, so a crash after taking one blames nobody$',

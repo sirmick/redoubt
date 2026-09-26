@@ -1,4 +1,4 @@
-//! The findings the WP-D1 red team raised, each with the case that would have caught it.
+//! The findings a red team raised against the driver, each with the case that would have caught it.
 //!
 //! Every one needs to see the seam itself — how many times the driver acknowledged an interrupt,
 //! what bytes it put in the DMA region, what its clock said — so these wrap
@@ -123,7 +123,7 @@ impl Transport for Watch<'_> {
     fn now_us(&self) -> u64 { self.clock.get().unwrap_or_else(|| self.inner.now_us()) }
 }
 
-/// **A2.** `flush` used to answer ok on a device that was read-only *and* broken, because the
+/// `flush` used to answer ok on a device that was read-only *and* broken, because the
 /// read-only shortcut came before the broken check. A `sync` that answers ok is a promise the
 /// data is durable, and that promise must never come from a device that has already lied.
 #[test]
@@ -146,7 +146,7 @@ fn a_broken_read_only_device_does_not_answer_ok_to_a_flush() {
     assert_eq!(disk.flush(), Err(DeviceError::Broken), "a broken device promised durability");
 }
 
-/// **A3.** The completion is often already there when the driver first looks, and that path used
+/// The completion is often already there when the driver first looks, and that path used
 /// to skip `InterruptACK` entirely: virtio wants the driver to acknowledge an interrupt it was
 /// sent (§4.2.2), and the kernel masking the source until the next `receive` (R5) made that
 /// survivable rather than right.
@@ -170,7 +170,7 @@ fn every_completion_acknowledges_the_interrupt() {
     }
 }
 
-/// **A10.** A `write` used to copy the client's bytes into the DMA region before testing whether
+/// A `write` used to copy the client's bytes into the DMA region before testing whether
 /// the device was already broken, so a device that had lied was handed another client's plaintext
 /// on its way to being refused.
 #[test]
@@ -196,7 +196,7 @@ fn a_broken_device_is_never_handed_a_clients_write_payload() {
     assert_eq!(disk.read(64, &mut out), Err(DeviceError::Broken));
 }
 
-/// **A11.** `avail.flags` used to be written once at queue setup, so a device that scribbled
+/// `avail.flags` used to be written once at queue setup, so a device that scribbled
 /// `VIRTQ_AVAIL_F_NO_INTERRUPT` into it kept it that way for ever — and the claim that everything
 /// the device is told is written fresh before every request was narrowly false.
 #[test]
@@ -217,7 +217,7 @@ fn avail_flags_is_written_again_before_every_request() {
     assert_eq!(u16::from_le_bytes(flags), 0, "avail.flags was left as the device wrote it");
 }
 
-/// **A1.** A device that re-asserts its interrupt the instant it is acknowledged, on a machine
+/// A device that re-asserts its interrupt the instant it is acknowledged, on a machine
 /// whose clock has failed. `now_us` used to read a failed `time_now` as 0, which put the deadline
 /// ten seconds into a past that never arrives, so the request never timed out at all. It now
 /// saturates, so a clock that cannot be read fails the request immediately — fail closed, and

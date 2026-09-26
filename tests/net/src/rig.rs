@@ -1,18 +1,19 @@
-//! The rig: the bundle's first program, standing in for WP-R3's `init`. It holds every device and
-//! the boot budgets (INTERIM, kernel `device.rs`), and launches the real `netd` and `ipd`, then
-//! each case's programs, through the loader stub exactly as PACKAGES.md's "Launching a process"
-//! describes, with the startup blocks `init` will write.
+//! The rig: the bundle's first program, standing in for `init` until `init` starts the servers
+//! (docs/plan/m1-separation.md). It holds every device and the boot budgets (kernel/devices.md,
+//! "Devices handed to the first program"), and launches the real `netd` and `ipd`, then each
+//! case's programs, through the loader stub exactly as servers/init.md, "Launching through the
+//! loader stub" describes, with the startup blocks `init` will write.
 //!
-//! **Placement** (WP-R3's rule): every launched image is copied to [`IMAGE_AT`], the startup page
-//! is at [`STARTUP_AT`] and the stack ends at [`STACK_TOP`], with the unmapped page below the
-//! stack as its guard: nothing a launcher maps is inside the program link range
-//! `0x1_0000..STUB_ENTRY`.
+//! **Placement** (kernel/memory-layout.md, "Launcher placement"): every launched image is copied
+//! to [`IMAGE_AT`], the startup page is at [`STARTUP_AT`] and the stack ends at [`STACK_TOP`],
+//! with the unmapped page below the stack as its guard: nothing a launcher maps is inside the
+//! program link range `0x1_0000..STUB_ENTRY`.
 //!
 //! **The device.** The rig finds the network card by its virtio device ID among the MMIO
 //! handles the loader made (the DMA-capable ones are virtio-mmio's eight slots), and its interrupt
 //! by the same slot's position: the loader emits other MMIO in device-tree order and other
-//! interrupts ascending (BOOT.md), QEMU `virt` gives slot k interrupt k + 1, and its device tree
-//! lists the slots from the highest address down. A wrong pairing shows at once: `netd` never
+//! interrupts ascending (kernel/boot.md), QEMU `virt` gives slot k interrupt k + 1, and its device
+//! tree lists the slots from the highest address down. A wrong pairing shows at once: `netd` never
 //! hears a frame, so no positive control passes.
 //!
 //! **Verdicts.** The rig prints `[net-rig] ok: ...` for what it checked itself (exit codes of the
@@ -47,14 +48,16 @@ static NETD: &[u8] = include_bytes!(env!("NET_RIG_NETD"));
 static IPD: &[u8] = include_bytes!(env!("NET_RIG_IPD"));
 static CLIENT: &[u8] = include_bytes!(env!("NET_RIG_CLIENT"));
 
-/// Where a launched program's image, startup page and stack go (WP-R3's placement rule).
+/// Where a launched program's image, startup page and stack go (kernel/memory-layout.md,
+/// "Launcher placement").
 pub const IMAGE_AT: usize = 0x4000_0000;
 pub const STARTUP_AT: usize = 0x7FF0_0000;
 pub const STACK_TOP: usize = 0x8000_0000;
 const STACK_PAGES: usize = 16;
 const _: () = assert!(IMAGE_AT >= STUB_ENTRY + 0x10_0000 && STARTUP_AT >= STUB_ENTRY + 0x10_0000);
 
-/// The handles the kernel gives the first program (INTERIM: `tests/programs/src/rd.rs`).
+/// The handles the kernel gives the first program (kernel/boot.md, "Devices handed to the first
+/// program"; `tests/programs/src/rd.rs`).
 const SYSTEM: u32 = 2;
 const USERS: u32 = 3;
 const RESET: u32 = 4;
@@ -179,7 +182,7 @@ struct Rig {
     out: Console,
     ok: bool,
     /// The device handles: from `OTHER_DEVICES` up to the log endpoint's receive right, which
-    /// the kernel installs last (INTERIM: `tests/programs/src/rd.rs`, `log_rx`).
+    /// the kernel installs last (`tests/programs/src/rd.rs`, `log_rx`).
     devices: core::ops::Range<u32>,
     /// Where the programs report (`redoubt_net_client::REPORT`); each gets its own badge.
     reports: Endpoint,
@@ -225,10 +228,10 @@ pub fn run(mode: Mode) -> u32 {
             "[net-rig] {} PASSED",
             match mode {
                 Mode::Probe => "NET PROBE",
-                Mode::Tcp | Mode::Twice => "D3 NET TCP",
+                Mode::Tcp | Mode::Twice => "NET TCP",
                 Mode::Peer => "NET PEER",
-                Mode::Pinned => "D3 NET PINNED",
-                Mode::Attacks | Mode::Unrefused => "D3 NET ATTACKS",
+                Mode::Pinned => "NET PINNED",
+                Mode::Attacks | Mode::Unrefused => "NET ATTACKS",
             }
         );
     }
@@ -486,8 +489,8 @@ impl Rig {
             deadline: FOREVER,
         };
         // Every client is user-class, under USERS, as a principal's program is; a labelled one too:
-        // adding labels needs the *caller's* budget to be system-class (KERNEL-SPEC.md,
-        // `budget_create` labels), and the rig runs in the root budget, which is.
+        // adding labels needs the *caller's* budget to be system-class (kernel/budgets.md,
+        // "Labels on budgets"), and the rig runs in the root budget, which is.
         let child = self.launch(USERS, &spec, CLIENT, &[("net", conn), ("rig", report.handle())], args)?;
         // The child has its own copies now.
         let _ = redoubt_rt::handle::close(conn);
@@ -595,8 +598,7 @@ impl Rig {
 
     /// The bench's peer, both ways: the echo peer counts one connection, and a connect in scope to
     /// an address with no peer ends closed: slirp (`restrict=on`) refuses it at once with an RST
-    /// (QA D3-code-review-final: this is a refusal, not a timeout; `d3-net-pinned` tests the
-    /// deadlines).
+    /// (a refusal, not a timeout; `d3-net-pinned` tests the deadlines).
     fn peer(&mut self) -> Result<(), String> {
         let echo = [Rule::Connect(prefix(ECHO_PEER, 32), ports(PEER_PORT))];
         let notice = self.run_client(&echo, &[], &["role=echo", "addr=10.0.9.100", "port=7"])?;

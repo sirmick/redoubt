@@ -20,7 +20,7 @@ static LATE_RECORD: AtomicUsize = AtomicUsize::new(0);
 static LATE_BUDGET: AtomicUsize = AtomicUsize::new(0);
 
 extern "C" fn invalidate_notice_record(_: usize) -> ! {
-    // Single-hart K4 schedules this sibling only after the parent blocks in Receive:
+    // A single-hart kernel schedules this sibling only after the parent blocks in Receive:
     // thread_create returns to the parent, which performs no intervening yielding call.
     // Thus initial output validation already succeeded before this unmap executes.
     rd::unmap(LATE_RECORD.load(Ordering::Acquire), rd::PAGE_SIZE).unwrap();

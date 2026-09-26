@@ -90,7 +90,8 @@ fn nothing_is_visible_before_seal() {
 }
 
 /// A walk to a name the list never held is "does not exist" — the same answer as for a name the
-/// bundle never held, so `/boot` reveals nothing about the rest of the bundle (answer 123).
+/// bundle never held, so `/boot` reveals nothing about the rest of the bundle
+/// (servers/bootfsd.md R46).
 #[test]
 fn a_walk_to_an_unpublished_name_is_the_same_as_to_one_that_never_existed() {
     let mut fs = filled(&[("keyd", b"ELF"), ("beamlet", b"VM")]);
@@ -172,7 +173,7 @@ fn the_published_bytes_are_bounded() {
     assert!(offset > 0 && offset <= MAX_BYTES as u64);
 }
 
-/// Every bucket at its cap fits the budget the manifest gives this server (answer 85).
+/// Every bucket at its cap fits the budget the manifest gives this server (servers/serving.md R26).
 #[test]
 fn the_limits_fit_the_budget() {
     assert!(LIMITS.fits(&COST, BUDGET));

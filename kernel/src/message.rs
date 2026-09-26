@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Messages: `call`, `send`, `receive`, `reply`, `serve` and `mint` (KERNEL-SPEC.md, Messages,
-//! R1-R4b, R10).
+//! Messages: `call`, `send`, `receive`, `reply`, `serve` and `mint` (kernel/ipc.md, R1-R4b,
+//! R10).
 //!
 //! # Where a message lives
 //! There is no message queue anywhere. A message is queued exactly while its sender is blocked in
@@ -13,7 +13,7 @@
 //! - `call` and `send` allocate no kernel object, so neither can fail for want of one, which their error rows
 //!   require (neither returns `OutOfMemory`; a `call` returns it only for a reply's handles, which is the
 //!   caller's own table). A lend of pages the sender never touched is still backed as it is checked, charged
-//!   to the sender, and that is `unmap`'s `OutOfMemory` rather than this path's (question 140);
+//!   to the sender, and that is `unmap`'s `OutOfMemory` rather than this path's (kernel/ipc.md R3);
 //! - nothing a sender does makes the kernel allocate on a receiver's behalf.
 //!
 //! A **taken** call moves out of the sender's page into an open-call page of its own, charged to
@@ -55,7 +55,7 @@ use crate::kframe;
 use crate::mem::MemoryManager;
 use crate::ptable::ProcessTable;
 
-/// The cost table (KERNEL-SPEC.md, What objects cost), in pages.
+/// The cost table (kernel/objects.md, "What objects cost"), in pages.
 pub const OPEN_CALL_PAGES: u64 = 1;
 
 /// First word of a thread's IPC page, and of an open call's page.
@@ -105,7 +105,7 @@ pub enum Wait {
     Reply = 2,
     /// In `receive` on the endpoint this page names.
     Receive = 3,
-    /// In `receive` with no handle: asleep until the timeout (KERNEL-SPEC.md, `receive`).
+    /// In `receive` with no handle: asleep until the timeout (kernel/timer.md).
     Sleep = 4,
     /// In `receive` on the IRQ handle this page names, until it fires (R5).
     Irq = 5,
@@ -133,7 +133,7 @@ pub enum MsgKind {
     Send = 2,
 }
 
-/// The message a thread is sending while it waits (KERNEL-SPEC.md, Messages). The account and
+/// The message a thread is sending while it waits (kernel/ipc.md, "Messages"). The account and
 /// the labels are not copied: they are read from `sender_budget`, whose account and labels never
 /// change and which outlives the message, since destroying it kills the sender (R10).
 #[derive(Clone, Copy)]
@@ -147,7 +147,7 @@ struct Msg {
     buf_pages: usize,
     words: [u64; WORDS],
     /// Copies made when the message was sent. One R10 revoked meanwhile arrives as 0, keeping
-    /// its slot (WIRE.md names handles by slot).
+    /// its slot (servers/wire.md names handles by slot).
     handles: [Option<Handle>; MAX_MSG_HANDLES],
     nhandles: usize,
 }
@@ -169,7 +169,8 @@ struct Slot {
     max_transfer: usize,
     rec: usize,
     ncalls: usize,
-    /// The thread's current call: the one a fault blames (answer 82). Frame + 1; 0 for none.
+    /// The thread's current call: the one a fault blames (kernel/processes.md R21). Frame + 1; 0
+    /// for none.
     current: u32,
 }
 
@@ -296,7 +297,7 @@ const C_LEND_PAGES: usize = 14;
 const C_PAYER: usize = 15; // the receiving budget: frame + 1
 const C_PAYER_ID: usize = 16;
 /// The sender's account and labels as they were when the call was delivered: what a fault blames
-/// (answers 37, 55, 82). Snapshots, not a reference to the sender's budget, so that blame
+/// (kernel/processes.md R21). Snapshots, not a reference to the sender's budget, so that blame
 /// survives that budget being destroyed while the call is open.
 const C_ACCOUNT: usize = 17;
 const C_NLABELS: usize = 18;
@@ -587,7 +588,7 @@ fn unwind(ss: &ProcessTable, mm: &mut MemoryManager, pid: Pid, tid: TID) -> Opti
 
 // --- `mint` and `serve` --------------------------------------------------------------------------
 
-/// `mint(source, badge, budget?) -> h` (KERNEL-SPEC.md, `mint`; R9, I3, I4).
+/// `mint(source, badge, budget?) -> h` (kernel/objects.md, `mint`; R9, I3, I4).
 pub fn mint(
     mm: &mut MemoryManager,
     pid: Pid,
@@ -610,7 +611,7 @@ pub fn mint(
                 return Err(Error::Dead);
             }
             // The badge that matters is the *handle* source's; a message source carries
-            // none (KERNEL-SPEC.md, `mint`: only "a handle source's badge not 0" is
+            // none (kernel/objects.md, `mint`: only "a handle source's badge not 0" is
             // `NotPermitted`). A server answers a badged call by minting under its own
             // receive right, which is the whole point of minting from a message.
             (call.endpoint, call.stamp, 0)
@@ -622,7 +623,7 @@ pub fn mint(
     };
     // I3: a minted badge is never 0, the receive right's. `redoubt-sys` refuses it while
     // decoding, so nothing reaches here; it is checked again so that neither check rests on the
-    // other (KERNEL-SPEC.md, ABI).
+    // other (kernel/abi.md).
     if badge == 0 {
         return Err(Error::InvalidArgument);
     }
@@ -645,7 +646,7 @@ pub fn mint(
 }
 
 /// The account and labels a fault in `(pid, tid)` blames: the sender of the thread's **current
-/// call**, or nobody (answers 37, 55, 82; KERNEL-SPEC.md, Messages). A thread with no current
+/// call**, or nobody (kernel/processes.md R21). A thread with no current
 /// call blames nobody, even when other threads of its process hold open calls, and a `send` is
 /// never blamed because a send is never an open call.
 pub fn current_call_blame(mm: &MemoryManager, pid: Pid, tid: TID) -> Option<(u64, Labels)> {
@@ -668,7 +669,7 @@ pub fn serve(mm: &mut MemoryManager, pid: Pid, tid: TID, msg_id: u64) -> Result<
 // --- `call` and `send` ----------------------------------------------------------------------------
 
 /// `call(h, words, handles, lend, timeout) -> reply` and `send(h, words, handles, transfer,
-/// timeout)` (KERNEL-SPEC.md): the same checks, in the order of `call`'s row, then the message
+/// timeout)` (kernel/ipc.md): the same checks, in the order of `call`'s row, then the message
 /// is queued and the sender blocks.
 #[allow(clippy::too_many_arguments)]
 pub fn send(
@@ -763,15 +764,15 @@ fn lookup_handles(
 }
 
 /// A lend or transfer range: page-aligned, non-empty, backed, all the caller's own RAM, and for
-/// a lend writable (KERNEL-SPEC.md, `call`'s row). Anything else is `InvalidArgument`.
+/// a lend writable (kernel/abi.md, `call`'s row; R3). Anything else is `InvalidArgument`.
 fn check_buffer(mm: &mut MemoryManager, pid: Pid, pages: Pages, lend: bool) -> Result<(), Error> {
     if pages.addr % PAGE_SIZE != 0 {
         return Err(Error::InvalidArgument);
     }
     let len = pages.npages.get().checked_mul(PAGE_SIZE).ok_or(Error::InvalidArgument)?;
     let end = pages.addr.checked_add(len).ok_or(Error::InvalidArgument)?;
-    // Back every demand-paged page before anything is checked or moved (WP-K0's rule: a range is
-    // checked whole before any page moves).
+    // Back every demand-paged page before anything is checked or moved (kernel/memory.md: a range
+    // is checked whole before any page moves).
     mm.ensure_range_exists(pages.addr, len).map_err(|_| Error::InvalidArgument)?;
     mm.check_owned_range(pid, pages.addr, len).map_err(|_| Error::InvalidArgument)?;
     for page in (pages.addr..end).step_by(PAGE_SIZE) {
@@ -870,16 +871,16 @@ pub fn receive(
     max_transfer: usize,
     rec: usize,
 ) -> Result<Option<Return>, Error> {
-    // Whatever it returns, the thread has no current call until it takes one (answer 82).
+    // Whatever it returns, the thread has no current call until it takes one (R21).
     set_tword(mm, pid, tid, W_CURRENT, 0);
     // The record must be the caller's own writable memory before anything else happens.
     crate::redoubt::check_record::<RECEIVED_SLOTS>(mm, rec)?;
     let Some(h) = from else {
-        // No handle: sleep until the timeout (KERNEL-SPEC.md, `receive`).
+        // No handle: sleep until the timeout (kernel/timer.md).
         mark(mm, pid, tid, Wait::Sleep, timeout);
         return settle(ss, mm, pid, tid);
     };
-    // `receive` takes a badge-0 endpoint or an IRQ (KERNEL-SPEC.md, `receive`'s row:
+    // `receive` takes a badge-0 endpoint or an IRQ (kernel/abi.md, `receive`'s row:
     // `BadHandle`, then `WrongObject`, then `NotPermitted`). A device handle carries badge 0
     // always, so only the endpoint case can earn `NotPermitted`.
     let handle = mm.handle(pid, h)?;
@@ -909,14 +910,14 @@ pub fn receive(
 pub fn pump_endpoint(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) { pump(ss, mm, e); }
 
 /// Match waiting receivers on `e` with what is pending there, until nothing more can be
-/// delivered. Notices come before messages (KERNEL-SPEC.md, Messages).
+/// delivered. Notices come before messages (kernel/ipc.md, "What `receive` returns").
 fn pump(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) {
     loop {
         if !mm.is_live_endpoint(e) {
             return;
         }
         // An abandoned-call notice goes to the thread holding the call, on the endpoint the call
-        // arrived on (answer 104), before any message.
+        // arrived on (R3), before any message.
         let notice = find_thread(mm, |mm, pid, tid| {
             let s = slot(mm, pid, tid);
             if s.wait != Wait::Receive || s.endpoint != Some(e) {
@@ -936,10 +937,10 @@ fn pump(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointRef) {
             answer_record(ss, mm, pid, tid, &Received::Abandoned(id).encode(), Ok(Return::Nothing));
             continue;
         }
-        // Then an exit notice (KERNEL-SPEC.md, Messages: notices before messages). Unlike an
+        // Then an exit notice (kernel/ipc.md: notices before messages). Unlike an
         // abandoned-call notice it belongs to no particular thread -- it is addressed to the
         // endpoint -- so whichever thread is receiving here takes it. Taking it frees the
-        // process object, which is what frees the PID (answer 106).
+        // process object, which is what frees the PID (kernel/processes.md R20).
         let exit = crate::process::pending_notice(mm, e).and_then(|(frame, notice)| {
             find_thread(mm, |mm, pid, tid| {
                 let s = slot(mm, pid, tid);
@@ -1095,8 +1096,8 @@ fn prepare(
     // its handles, a call's open-call page, its lent or transferred pages, and the page tables
     // to map them (R4).
     let live: usize = m.handles[..m.nhandles].iter().flatten().filter(|h| is_live(mm, **h)).count();
-    // Answer 116: handles that would take the receiver past `MAX_HANDLES` refuse the message,
-    // like any other cost it cannot pay.
+    // R4: handles that would take the receiver past `MAX_HANDLES` refuse the message, like any
+    // other cost it cannot pay.
     let growth = mm.table_growth(rpid, live).ok_or(Error::Refused)?;
     let open = if m.kind == MsgKind::Call { OPEN_CALL_PAGES } else { 0 };
     // A lend is charged to the receiver as well while the call is open (R3); a transfer is
@@ -1135,7 +1136,7 @@ fn prepare(
     };
     if m.kind == MsgKind::Call {
         // R4a: the call opens, charged to the receiving process's budget, and becomes the
-        // thread's current call (answer 82).
+        // thread's current call (R21).
         let frame = mm.alloc_object_frame().expect("R4: the open-call page was charged above");
         store_open_call(
             mm,
@@ -1318,7 +1319,7 @@ pub fn reply(
     }
     // R4: a reply is never refused. A handle that does not fit the caller -- its budget cannot
     // pay, or it is at `MAX_HANDLES` -- is dropped, 0 in its slot, and the `call` returns
-    // `OutOfMemory` either way, the reply still delivered (answers 107 and 116).
+    // `OutOfMemory` either way, the reply still delivered.
     let (cpid, ctid) = call.caller;
     let (slots, dropped) = install_handles(mm, cpid, &handles[..nhandles]);
     let body = ReceivedBody { words: body.words, handles: slots };
@@ -1401,7 +1402,7 @@ fn close_call(mm: &mut MemoryManager, frame: u32, call: &OpenCall) {
 /// R3: a taken call is abandoned, its caller having died, timed out, or been failed by
 /// revocation or by its endpoint's destruction. The caller's charge for the lend ends; the lend
 /// stays mapped in the server, charged only there, until the server replies; and the thread
-/// holding the call is owed a notice (answer 104).
+/// holding the call is owed a notice (I15).
 fn abandon(ss: &ProcessTable, mm: &mut MemoryManager, frame: u32) {
     let mut call = open_call_at(mm, frame);
     if call.flags & F_WAITING == 0 {
@@ -1507,9 +1508,10 @@ pub fn budgets_dying(ss: &mut ProcessTable, mm: &mut MemoryManager) {
     });
 }
 
-/// OD6 (WP-K5b): a DMA device whose reset did not confirm is destroyed as R10 destroys one, so
-/// every handle to it goes, copies in unreceived messages arriving as 0. Its registry slot, keyed
-/// by base, stays flagged until reboot, and no device object is ever made again.
+/// A DMA device whose reset did not confirm is destroyed as R10 destroys one (kernel/devices.md,
+/// "Quarantine"), so every handle to it goes, copies in unreceived messages arriving as 0. Its
+/// registry slot, keyed by base, stays flagged until reboot, and no device object is ever made
+/// again.
 pub fn destroy_quarantined_devices(ss: &mut ProcessTable, mm: &mut MemoryManager) {
     if !mm.dma_take_doomed() {
         return;
@@ -1541,9 +1543,9 @@ fn destroy_endpoint(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32) {
     // to report to (R10; `process.rs`).
     crate::process::endpoint_dying(mm, e);
     // The handles naming it go first: `budget_destroy`'s later sweep reads every handle's
-    // object, and one naming a freed frame would stop the kernel (I1). Unreachable until a
-    // destroyable budget owns an endpoint (WP-K4), and cheaper than a liveness test on a path
-    // that runs for every handle in the system.
+    // object, and one naming a freed frame would stop the kernel (I1). Needed only when a
+    // destroyable budget owns an endpoint, and cheaper than a liveness test on a path that runs
+    // for every handle in the system.
     mm.sweep_handles(|_, h| matches!(h.object, Object::Endpoint(x) if x == e));
     let owner = mm.endpoint(frame).owner;
     mm.free_endpoint(frame, owner.frame);

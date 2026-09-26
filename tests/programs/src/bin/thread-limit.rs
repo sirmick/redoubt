@@ -1,5 +1,5 @@
-//! OD10: a process has exactly `MAX_THREADS` threads, its initial one included, numbered
-//! `1..=MAX_THREADS` (KERNEL-SPEC.md, Threads). The verdicts are the kernel's: the TIDs
+//! A process has exactly `MAX_THREADS` threads, its initial one included, numbered
+//! `1..=MAX_THREADS` (kernel/processes.md, "Threads"). The verdicts are the kernel's: the TIDs
 //! `thread_create` returns, and `TooManyThreads` for the one past the limit.
 
 #![no_std]

@@ -1,4 +1,4 @@
-//! `ipd`'s arguments (NAMESPACES.md, What `ipd` serves; INIT.md: each server defines its own),
+//! `ipd`'s arguments (servers/ipd.md, "Sizing"; servers/init.md: each server defines its own),
 //! parsed strictly and all at once: an argument `ipd` does not understand, or one that breaks a
 //! rule below, stops it (`BAD_ARGS`) before it serves anything.
 //!
@@ -238,7 +238,7 @@ fn unicast(a: u32) -> bool {
 }
 
 impl Config {
-    /// The box's own addresses for this configuration (NAMESPACES.md).
+    /// The box's own addresses for this configuration (servers/ipd.md R59).
     pub fn selfset(&self) -> crate::scope::SelfSet {
         crate::scope::SelfSet::new(self.addr, self.len, &self.selfs)
     }

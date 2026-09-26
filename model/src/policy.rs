@@ -3,19 +3,19 @@
 //!
 //! | Property | Statement | Source |
 //! | --- | --- | --- |
-//! | P1 sessions | a session's budget is carved from its principal's fixed sub-budget for its label set (a sub-agent's from its agent's), with its account; labels are none or one the principal owns | CONTAINMENT.md, "Sessions and vaults"; QUESTIONS 89 |
-//! | P2 login | a login used one of the principal's login keys, never one `keyd` holds | CAPABILITIES.md, "The powerbox and approvals" |
-//! | P3 approvals | an approval came through `approve@box` with the approver's approval key, named the frozen content's hash, and granted no label the approver lacks | CAPABILITIES.md, "Binding", "Limits and labels" |
-//! | P4 screens | an approver sees only its own requests, labelled ones only if it owns every label; rendered text is printable ASCII with capped free text; a labelled request shows none of its free text | CAPABILITIES.md, "Rendering"; QUESTIONS 34, 35 |
-//! | P5 cap | at most `PENDING_CAP` pending requests per (account, label set), all of live sessions; a session holds at most its fair share | CONTAINMENT.md, "The shared server library"; QUESTIONS 17, 90 |
-//! | P6 declassification | what is copied out is exactly the snapshot taken at submission, read through a reader budget carrying exactly the item's label | CONTAINMENT.md, "Declassification"; QUESTIONS 54 |
-//! | P7 blame | an (account, label set)'s sessions are logged out exactly when three server crashes blamed on it (by the kernel's exit notices) fall within ten minutes; no other sessions are touched; no session of it starts for the next ten minutes | CONTAINMENT.md, "Crash blame"; INIT.md; QUESTIONS 48, 91 |
-//! | P8 labelled sessions | a labelled session starts nothing; it only submits requests | CONTAINMENT.md, "The shared server library" (steward) |
-//! | P9 leases | an agent's budget has a deadline at most `MAX_LEASE` away; a sub-agent sits in its agent's budget and ends no later; an expired lease is gone | CAPABILITIES.md, "Agents"; QUESTIONS 33 |
-//! | P10 non-interference | a vault session's work (item writes, requests, calls to a shared server) changes nothing an unlabelled session observes: its results, the usage of `users`, of every principal's budget and unlabelled sub-budget, and the audit records an unlabelled reader may read | PLAN.md, attack suite "no leaky state"; CONTAINMENT.md; QUESTIONS 89, 92 |
-//! | P11 writes | every write to an item is by a session with exactly the item's labels | CONTAINMENT.md, `check`; QUESTIONS 51 |
-//! | P12 system budgets | only `init` and the steward hold a handle to a system-class budget; a session's connection to the server is narrowed to a revocation scope inside its session | QUESTIONS 79, 80 |
-//! | P13 leases end | a lease's sponsor can always end it | CAPABILITIES.md; QUESTIONS 90 |
+//! | P1 sessions | a session's budget is carved from its principal's fixed sub-budget for its label set (a sub-agent's from its agent's), with its account; labels are none or one the principal owns | servers/steward.md, "Fixed sub-budgets per label set" |
+//! | P2 login | a login used one of the principal's login keys, never one `keyd` holds | servers/steward.md, "Authentication and sessions" |
+//! | P3 approvals | an approval came through `approve@box` with the approver's approval key, named the frozen content's hash, and granted no label the approver lacks | servers/steward.md R38 |
+//! | P4 screens | an approver sees only its own requests, labelled ones only if it owns every label; rendered text is printable ASCII with capped free text; a labelled request shows none of its free text | servers/steward.md, "The powerbox and approvals"; R38 |
+//! | P5 cap | at most `PENDING_CAP` pending requests per (account, label set), all of live sessions; a session holds at most its fair share | servers/steward.md, "The powerbox and approvals"; servers/serving.md R26 |
+//! | P6 declassification | what is copied out is exactly the snapshot taken at submission, read through a reader budget carrying exactly the item's label | servers/steward.md R42 |
+//! | P7 blame | an (account, label set)'s sessions are logged out exactly when three server crashes blamed on it (by the kernel's exit notices) fall within ten minutes; no other sessions are touched; no session of it starts for the next ten minutes | servers/steward.md R40; servers/init.md, "Restarts and reboots" |
+//! | P8 labelled sessions | a labelled session starts nothing; it only submits requests | servers/steward.md, "Authentication and sessions" |
+//! | P9 leases | an agent's budget has a deadline at most `MAX_LEASE` away; a sub-agent sits in its agent's budget and ends no later; an expired lease is gone | servers/steward.md R39 |
+//! | P10 non-interference | a vault session's work (item writes, requests, calls to a shared server) changes nothing an unlabelled session observes: its results, the usage of `users`, of every principal's budget and unlabelled sub-budget, and the audit records an unlabelled reader may read | servers/steward.md R37 |
+//! | P11 writes | every write to an item is by a session with exactly the item's labels | servers/steward.md R42 |
+//! | P12 system budgets | only `init` and the steward hold a handle to a system-class budget; a session's connection to the server is narrowed to a revocation scope inside its session | servers/steward.md R41; servers/init.md R33 |
+//! | P13 leases end | a lease's sponsor can always end it | servers/steward.md R39 |
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
@@ -266,7 +266,7 @@ pub struct Run {
     pub ghost_blames: BTreeMap<(u64, Vec<u64>), Vec<u64>>,
     /// The account and labels of the call the server works on (from what `hold` returned), if any.
     held: Option<(u64, Vec<u64>)>,
-    /// (account, label set)s logged out, and when their lockout ends (P7; QUESTIONS 91).
+    /// (account, label set)s logged out, and when their lockout ends (P7).
     pub ghost_locked: BTreeMap<(u64, Vec<u64>), u64>,
     pub per_session: BTreeMap<u64, u64>,
 }
@@ -377,7 +377,7 @@ impl Run {
                             r.id, r.text
                         ));
                     }
-                    // A labelled request shows only text the steward generates (QUESTIONS 35).
+                    // A labelled request shows only text the steward generates.
                     let note = match &req.content {
                         Content::Note { what } => what.clone(),
                         _ => String::new(),
@@ -653,7 +653,7 @@ impl Run {
                             "P6: declassified {bytes:?}, the snapshot at submission was {want:?}"
                         ));
                     }
-                    // The kernel's own record of the reader budget (QUESTIONS 54).
+                    // The kernel's own record of the reader budget.
                     let labels = st.k.ghost.labels_at_creation.get(reader);
                     if labels != Some(&vec![*label]) {
                         return Err(format!(
@@ -689,16 +689,16 @@ pub fn steward_policy(seed: u64, mutation: Option<Mutation>) -> Result<(), Failu
     Ok(())
 }
 
-/// P10 (PLAN.md's "no leaky state" attack case; CONTAINMENT.md): one sequence runs twice, the
-/// second time without the work of the vault sessions (their item writes, submissions and calls to
-/// the shared server). Everything an unlabelled session observes must be the same: every result it
-/// gets, and the usage of every principal's top budget and of `users`.
+/// P10 (servers/steward.md R37): one sequence runs twice, the second time without the work of the
+/// vault sessions (their item writes, submissions and calls to the shared server). Everything an
+/// unlabelled session observes must be the same: every result it gets, and the usage of every
+/// principal's top budget and of `users`.
 ///
-/// Since the caps are keyed by (account, label set) (QUESTIONS 17), the observers include the
-/// vault owner's own unlabelled sessions. Left out of the sequence: approving or denying a vault
-/// request (approving is declassifying, by design), ending a vault session, and the server's
-/// crashes (crash blame is per account, so a vault crashing the server could log out its owner's
-/// unlabelled sessions: README, open questions). The owner's approval screen is not an observer.
+/// Since the caps are keyed by (account, label set), the observers include the vault owner's own
+/// unlabelled sessions. Left out of the sequence: approving or denying a vault request (approving
+/// is declassifying, by design), ending a vault session, and the server's crashes (a leak through
+/// crash blame is not checked here: kernel/model.md, "Residual risks"). The owner's approval
+/// screen is not an observer.
 pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
     let mut rng = Rng::new(seed);
     let secret = rng.next_u64();
@@ -772,7 +772,7 @@ pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<
                 )));
             }
         }
-        // What an unlabelled reader may read of the audit file (QUESTIONS 92).
+        // What an unlabelled reader may read of the audit file.
         let (x, y) = (format!("{:?}", with.st.audit_view(&[])), format!("{:?}", without.st.audit_view(&[])));
         if x != y {
             return Err(fail(format!("P10: the unlabelled audit view depends on the vault's work (op {i})")));
@@ -794,10 +794,11 @@ pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<
     Ok(())
 }
 
-/// Independent ancestry oracle for answer 117. The model stores a root at grant time; this
-/// checker instead walks immutable parent edges and reconstructs connected shares after every
-/// operation, including after disconnect. `break_lineage` deliberately assigns self-minted
-/// descendants new roots to establish that the property can fail.
+/// Independent ancestry oracle for the self-minted share (servers/serving.md R26: a chain of
+/// self-mints spends one share). The model stores a root at grant time; this checker instead walks
+/// immutable parent edges and reconstructs connected shares after every operation, including after
+/// disconnect. `break_lineage` deliberately assigns self-minted descendants new roots to establish
+/// that the property can fail.
 pub fn connection_lineage(seed: u64, steps: usize, break_lineage: bool) -> Result<(), String> {
     #[derive(Clone)]
     struct Grant {

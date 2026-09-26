@@ -1,4 +1,4 @@
-//! `/net` over 9P (NAMESPACES.md, What `ipd` serves in milestone 1), through the real skeleton
+//! `/net` over 9P (servers/ipd.md, "The `/net` tree"), through the real skeleton
 //! (`NineServer::answer_in_place` through `World::answer`, which meters sockets as the program
 //! does; no system calls) over the stack and the peer of tests/common:
 //! the tree, per-connection sockets, `ctl` operations and their refusals, waiting reads and
@@ -282,8 +282,8 @@ fn a_listener_accepts_through_ctl() {
 #[test]
 fn clone_stops_at_the_buckets_socket_cap() {
     let mut w = World::new(64);
-    // One badge alone in its account's bucket gets half of it (answer 90): 6 of its 12 `State`
-    // units, sockets being paid in them (QA D3-code-review-5).
+    // One badge alone in its account's bucket gets half of it (servers/serving.md R26): 6 of its
+    // 12 `State` units, sockets being paid in them.
     let a = caller(ANY, 1, &[]);
     for _ in 0..6 {
         socket(&mut w, &a);
@@ -462,9 +462,9 @@ fn sockets_until_refused(w: &mut World, who: &Caller) -> usize {
     }
 }
 
-/// Sockets are paid in the shared admission, so they have fair shares (answer 90; QA
-/// D3-code-review-5, P2-2): an agent sharing its sponsor's account takes at most half of the
-/// bucket's 12 units alone, and its sponsor, arriving second, still gets its own third.
+/// Sockets are paid in the shared admission, so they have fair shares (servers/serving.md R26): an
+/// agent sharing its sponsor's account takes at most half of the bucket's 12 units alone, and its
+/// sponsor, arriving second, still gets its own third.
 #[test]
 fn an_agent_cannot_take_all_its_sponsors_sockets() {
     use redoubt_rt::server::{AdmitKey, Resource};
@@ -480,8 +480,8 @@ fn an_agent_cannot_take_all_its_sponsors_sockets() {
 }
 
 /// A socket keeps its unit, and so its bucket, while it lingers after its owner let go of
-/// everything else (QA D3-code-review-5, P2-2): the bucket cannot be given to a newcomer while
-/// the socket still counts. The unit goes back once the stack removes the socket.
+/// everything else: the bucket cannot be given to a newcomer while the socket still counts. The
+/// unit goes back once the stack removes the socket.
 #[test]
 fn a_lingering_socket_keeps_its_bucket() {
     use redoubt_rt::server::{AdmitKey, Resource};

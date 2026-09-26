@@ -5,11 +5,11 @@
 //!   ([`redoubt_rt::server::parked`]) instead of blocking, so every other client is still served. Nothing of
 //!   a parked read is kept but the call itself: serving it again reads its T-message out of its own lend
 //!   afresh (`NineServer::serve_parking`).
-//! - **The interrupt thread** does nothing but `receive` on the IRQ handle (KERNEL-SPEC.md, R5: the kernel
-//!   masks the source when it fires and the next receive unmasks it; there is no acknowledge) and `send` one
-//!   word to the serving thread's own endpoint. It touches no register, so the UART stays on one thread and
-//!   there is no shared state between the two — which is why neither needs a lock, and why the runtime's
-//!   `Registers` need not be `Sync`.
+//! - **The interrupt thread** does nothing but `receive` on the IRQ handle (kernel/devices.md R5:
+//!   the kernel masks the source when it fires and the next receive unmasks it; there is no
+//!   acknowledge) and `send` one word to the serving thread's own endpoint. It touches no register,
+//!   so the UART stays on one thread and there is no shared state between the two — which is why
+//!   neither needs a lock, and why the runtime's `Registers` need not be `Sync`.
 //!
 //! A wake-up carries no data: the serving thread drains the whole FIFO each time, so two bytes
 //! that arrive between two interrupts are both read, and a wake-up that names nothing costs a
@@ -38,11 +38,13 @@ use redoubt_rt::startup::Startup;
 
 redoubt_rt::entry!(serve);
 
-/// The name of the endpoint `consoled` receives on, in its startup block (INIT.md: a server's
-/// manifest entry names the endpoints it receives on).
+/// The name of the endpoint `consoled` receives on, in its startup block (servers/init.md: a
+/// server's manifest entry names the endpoints it receives on).
 pub const ENDPOINT: &str = "consoled";
 /// The names of the two device handles `init` puts in the startup block: the UART's registers
-/// and its interrupt (INIT.md, the manifest's `devices` and a server's `devices` list).
+/// and its interrupt (servers/init.md, "The boot manifest": the `devices` list and a server's
+/// device names). The interrupt's name departs from the `NAME-irq` rule
+/// (docs/todo/consoled-irq-name.md).
 pub const UART_MMIO: &str = "uart";
 pub const UART_IRQ: &str = "uart:irq";
 
@@ -59,7 +61,7 @@ pub const NO_UART: u32 = 5;
 /// it a read would wait for ever, so this is a refusal to start rather than a silent downgrade.
 pub const NO_IRQ: u32 = 6;
 /// The kernel would not give a random word, and a server's first minted badge must be
-/// unpredictable (answer 126).
+/// unpredictable (servers/serving.md R27).
 pub const NO_RANDOM: u32 = 7;
 
 /// The badge the interrupt thread's wake-ups arrive with. It is the serving thread's own mint

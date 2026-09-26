@@ -1,4 +1,4 @@
-description = "Destroying a budget while handles to it and its descendants are held closes every one of them: each stale index is BadHandle, before and after frames and indices are reused (R10, I1, I2; only the holder's own table until WP-K2)"
+description = "Destroying a budget while handles to it and its descendants are held closes every one of them: each stale index is BadHandle, before and after frames and indices are reused (R10, I1, I2)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 # PID 2 log-server; PID 3 budget-victim, second, in system beside the attacker and holding the

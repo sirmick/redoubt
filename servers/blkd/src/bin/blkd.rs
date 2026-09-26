@@ -5,17 +5,17 @@
 //! Everything it can do is in `redoubt-blkd`'s library, so host tests drive the same code against
 //! a hostile fake device and the runtime's fake kernel (`tests/`).
 //!
-//! **Its device is handed in, not discovered** (IO-ARCHITECTURE.md, Driver model): the startup
+//! **Its device is handed in, not discovered** (servers/blkd.md, "Started by `init`"): the startup
 //! block names two handles, [`DISK`] (the MMIO region, with the DMA flag) and [`DISK_IRQ`] (its
 //! interrupt), which `init` places there from the boot manifest's `devices` list. `blkd` parses
 //! no device tree and hardcodes no address; without both handles it does not start, which is the
 //! honest thing for a driver that has no device.
 //!
-//! **Pending on WP-R3.** WP-K3's device objects, `dma_alloc` and IRQ receive are merged and wired
+//! **Nothing starts it yet.** The kernel's device objects, `dma_alloc` and IRQ receive are wired
 //! here. What is still missing is the `init` that reads the boot manifest, creates `blkd`'s
-//! endpoint and writes this startup block (and WP-K4's `process_start`, which puts the handles in
-//! the table), so nothing starts this program yet; until then its behaviour is covered by host
-//! tests against a hostile fake device (`blkd-host-tests`).
+//! endpoint and writes this startup block (docs/plan/m1-separation.md, step 3), so nothing boots
+//! this program yet; until then its behaviour is covered by host tests against a hostile fake
+//! device (`blkd-host-tests`).
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 
@@ -40,7 +40,7 @@ pub const RECEIVE_FAILED: u32 = 3;
 pub const NO_DEVICE: u32 = 5;
 
 /// The startup-block name of the MMIO device object `blkd` drives: the boot manifest's `devices`
-/// entry for the disk, which must carry the DMA flag (IO-ARCHITECTURE.md).
+/// entry for the disk, which must carry the DMA flag (servers/blkd.md).
 pub const DISK: &str = "disk";
 /// The startup-block name of that device's interrupt.
 pub const DISK_IRQ: &str = "disk-irq";
@@ -50,7 +50,7 @@ pub const NO_DISK: u32 = 6;
 /// a partition `blkd` cannot read is a volume `fsd` cannot mount, and serving without it would
 /// look like the volume simply not existing. `init` restarts `blkd`, which reads the same disk
 /// and exits again, so an unreadable disk is a reboot loop rather than a degraded boot
-/// (IO-ARCHITECTURE.md; INIT.md, restarts and reboots).
+/// (servers/blkd.md, "Failure and restart"; servers/init.md, "Restarts and reboots").
 pub const NO_PARTITIONS: u32 = 7;
 
 /// Serves until the endpoint is destroyed.
@@ -72,8 +72,8 @@ pub fn serve(startup: &Startup) -> u32 {
                 // A failed reply means the caller is gone; there is nobody to tell.
                 let _ = server.serve(request);
             }
-            // Every message of this protocol is a `call` (WIRE.md, answer 98). A `send` is
-            // dropped, and what it brought is closed, so it cannot grow the handle table.
+            // Every message of this protocol is a `call`. A `send` is dropped, and what it
+            // brought is closed, so it cannot grow the handle table.
             Ok(Event::Send(delivery)) => {
                 for handle in delivery.handles.as_slice().iter().flatten() {
                     let _ = redoubt_rt::handle::close(*handle);

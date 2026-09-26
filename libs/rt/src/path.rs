@@ -1,6 +1,6 @@
-//! Path names, cleaned lexically (NAMESPACES.md, Plan 9's rule): `..` is resolved in the name
-//! before any lookup, never by asking a server for a parent, so it cannot climb above the root
-//! it is resolved against. Clients clean here; the 9P server skeleton applies the same rules
+//! Path names, cleaned lexically (userland/sessions.md, Plan 9's rule): `..` is resolved in the
+//! name before any lookup, never by asking a server for a parent, so it cannot climb above the
+//! root it is resolved against. Clients clean here; the 9P server skeleton applies the same rules
 //! again to every walk.
 
 use alloc::vec::Vec;

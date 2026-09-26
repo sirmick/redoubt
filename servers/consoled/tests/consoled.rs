@@ -138,7 +138,7 @@ fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
     panic!("timed out waiting for {what}");
 }
 
-/// The case BUILD-PLAN.md names: **typing on the UART reaches a 9P reader**. The reader's call
+/// The central case: **typing on the UART reaches a 9P reader**. The reader's call
 /// is parked (the server is holding it open with nothing to answer), the interrupt thread wakes
 /// the serving thread, and the same call is answered with the byte that was typed.
 #[test]

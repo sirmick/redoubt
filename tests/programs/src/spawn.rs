@@ -1,10 +1,10 @@
-//! Launching a child process from a test program (KERNEL-SPEC.md, `process_*`; PACKAGES.md,
-//! launching).
+//! Launching a child process from a test program (kernel/processes.md, "Creating and starting";
+//! servers/init.md, "Launching through the loader stub").
 //!
 //! A real launcher maps the loader stub into the child and copies the program's ELF bytes in as
-//! data, and the stub parses them inside the child's own budget (PACKAGES.md). There is no stub
-//! yet (WP-R2), and a test program has no file to read anyway, so these cases do the one thing a
-//! program can do with nothing but its own memory: **the child is another copy of the caller**.
+//! data, and the stub parses them inside the child's own budget (servers/init.md). A test
+//! program has no file to read, so these cases do the one thing a program can do with nothing
+//! but its own memory: **the child is another copy of the caller**.
 //! The caller reads its own ELF program headers -- the loader mapped its ELF header at the first
 //! segment's address, so they are simply there in memory -- allocates fresh pages, copies each
 //! loadable segment into them and hands them to the child at the very same addresses with the
@@ -12,7 +12,7 @@
 //! resolve as they do here, so the child runs ordinary Rust; which part of it runs is `arg`'s to
 //! say.
 //!
-//! This exercises exactly what WP-K4 built: `process_create`, `process_map` (which *moves* the
+//! This exercises the process calls: `process_create`, `process_map` (which *moves* the
 //! pages, so the caller's own image is never at risk), `process_start` with its handle list and
 //! its `arg`, and the exit notice that comes back afterwards.
 
@@ -25,7 +25,8 @@ pub const IMAGE_BASE: usize = 0x1_0000;
 pub const STACK_TOP: usize = 0x1000_0000;
 /// Stack pages a child gets.
 pub const STACK_PAGES: usize = 8;
-/// Where a child's startup page lands; `process_start`'s `arg` (INIT.md, Startup block).
+/// Where a child's startup page lands; `process_start`'s `arg` (servers/init.md, "The startup
+/// block").
 pub const STARTUP_AT: usize = 0x0f00_0000;
 
 /// Pages of image this helper can carry. Test programs are far smaller than this.
@@ -214,8 +215,8 @@ fn give_stack(process: u32) -> Result<(), Error> {
     rd::process_map(process, scratch, STACK_TOP - len, len, rd::rw())
 }
 
-/// The startup page (INIT.md, Startup block): one ordinary page, mapped **read-only**, whose
-/// address the child receives as `arg`.
+/// The startup page (servers/init.md, "The startup block"): one ordinary page, mapped
+/// **read-only**, whose address the child receives as `arg`.
 fn give_startup(process: u32, startup: &[u8]) -> Result<usize, Error> {
     assert!(startup.len() <= rd::PAGE_SIZE, "a startup block fits in one page");
     let scratch = rd::map_anon(rd::PAGE_SIZE, rd::rw())?;

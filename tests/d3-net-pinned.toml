@@ -1,4 +1,4 @@
-description = "WP-D3 (answer 174, plan 6.5, after K5): ipd pinned with abandoned calls and its deadlines on the machine (tests/net rig). A client with an established connection to the peer 10.0.9.100:7 parks 64 data reads that its own 20 ms timeout abandons, each one of which ipd must answer and free (a leaked one would fill the share's parked calls and the next read would be refused at once); then one read with nothing coming, which ipd's 30 s parked deadline ends with timeout; then the echo still works; then a listener's ctl read with no peer coming, which ipd's 60 s ctl deadline ends with timeout (QA D3-code-review-final). Virtual time (icount), so the deadlines pass at once"
+description = "ipd pinned with abandoned calls and its deadlines on the machine (tests/net rig). A client with an established connection to the peer 10.0.9.100:7 parks 64 data reads that its own 20 ms timeout abandons, each one of which ipd must answer and free (a leaked one would fill the share's parked calls and the next read would be refused at once); then one read with nothing coming, which ipd's 30 s parked deadline ends with timeout; then the echo still works; then a listener's ctl read with no peer coming, which ipd's 60 s ctl deadline ends with timeout. Virtual time (icount), so the deadlines pass at once"
 arch = ["rv64"]
 kind = "boot"
 programs = [{ package = "redoubt-net-tests", bin = "net-rig-pinned" }]
@@ -7,7 +7,7 @@ timeout_secs = 180
 expect = [
     '^\[net-rig\] ok: 64 abandoned reads, a read and an accept ended by ipd.s deadlines, the echo: exited 0$',
     '^\[net-rig\] ok: netd and ipd still run ',
-    '^\[net-rig\] D3 NET PINNED PASSED$',
+    '^\[net-rig\] NET PINNED PASSED$',
 ]
 forbid = ['\[net-rig\] FAIL']
 poweroff = true

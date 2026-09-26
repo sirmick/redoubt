@@ -3,12 +3,12 @@ name = "redoubt-net-tests"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "The D3 rig: boots the real netd and ipd through the loader stub and attacks them (answer 174)"
+description = "The network rig: boots the real netd and ipd through the loader stub and attacks them (docs/servers/ipd.md)"
 build = "build.rs"
 
 # One rig, one binary per case (src/rig.rs, `Mode`): the first program of the bundle, it holds
-# the devices and budgets and launches everything else through the stub (INTERIM until WP-R3's
-# init; docs/testbench.md, "Peers").
+# the devices and budgets and launches everything else through the stub until `init` starts the
+# servers (docs/plan/m1-separation.md; docs/testbench.md, "Peers, dials and the capture").
 [[bin]]
 name = "net-rig"
 path = "src/bin/net-rig.rs"

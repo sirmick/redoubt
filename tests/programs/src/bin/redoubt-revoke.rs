@@ -1,11 +1,10 @@
-//! R10's reach into messages (WP-K2), and `mint`'s narrowing rule (R9, I3). Must run as the
-//! loader's first program, the one that holds `root`, `system` and `users`, because only a
-//! budget handle can revoke anything.
+//! R10's reach into messages, and `mint`'s narrowing rule (R9, I3). Must run as the loader's
+//! first program, the one that holds `root`, `system` and `users`, because only a budget handle
+//! can revoke anything.
 //!
-//! Everything here happens inside one process, across threads, because a Redoubt handle cannot
-//! reach a second process until `process_start` carries one (WP-K4). That is enough: R10 looks
-//! at the *stamp* of the handle a message was sent through, and at the handles a message
-//! carries, neither of which cares which address space they are in.
+//! Everything here happens inside one process, across threads. That is enough: R10 looks at the
+//! *stamp* of the handle a message was sent through, and at the handles a message carries,
+//! neither of which cares which address space they are in.
 //!
 //! What it shows:
 //! - a budget handle only narrows: minting into a budget that is not the default stamp or below
@@ -141,7 +140,7 @@ pub extern "C" fn _start() -> ! {
     log!(t.logger, "[revoke] starting");
 
     // Two revocation scopes: budgets with no limits at all, made only to be destroyed
-    // (CAPABILITIES.md). They are children of `system`, this process's own budget.
+    // (kernel/budgets.md). They are children of `system`, this process's own budget.
     let scope = rd::create(rd::SYSTEM, &rd::spec(0, 0, 0)).expect("a revocation scope");
     let scope2 = rd::create(rd::SYSTEM, &rd::spec(0, 0, 0)).expect("a second scope");
     let silent = rd::endpoint_create().expect("an endpoint");

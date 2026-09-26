@@ -85,7 +85,7 @@ impl FileServer for Tree {
         Ok(n)
     }
 
-    /// A write at an odd offset waits (`Write::Wait`, answer 174): the skeleton must hold it with
+    /// A write at an odd offset waits (`Write::Wait`): the skeleton must hold it with
     /// its T-message untouched, after every check a write gets.
     fn write_or_wait(
         &mut self,
@@ -168,7 +168,7 @@ impl Minter for Kernel {
 }
 
 fuzz_target!(|data: &[u8]| {
-    // Badge 1, account 0, has its own caps (answer 174's overrides), no larger than the default
+    // Badge 1, account 0, has its own caps (an override), no larger than the default
     // so the checks below hold for every bucket.
     let overrides = [Override { badge: 1, in_flight: 0, files: 10, state: 3 }];
     let admission = Admission::with_overrides(LIMITS, &overrides).unwrap();
@@ -197,7 +197,8 @@ fuzz_target!(|data: &[u8]| {
         let body = match op % 15 {
             14 => {
                 // A connection rooted at a node the file server chose (`ipd`'s grant), kept or
-                // undone as an undelivered reply would be (answer 168).
+                // undone as an undelivered reply would be (servers/serving.md, "Replies and
+                // rollback").
                 let root = arg as usize % TREE.len();
                 if let Ok((_, id, badge)) = server.mint_rooted(&caller, (root, qid(root)), &mut kernel) {
                     if arg & 0x100 == 0 {

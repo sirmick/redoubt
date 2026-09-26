@@ -1,6 +1,6 @@
-//! A large-weight server keeps its share under load (WP-K5): a server budget of weight 1000
-//! (INIT.md's driver and steward weight) against eight users of weight 100, all spinning, gets
-//! 1000/1800 of the CPU.
+//! A large-weight server keeps its share under load (R12): a server budget of weight 1000 (the
+//! driver and steward weight in servers/init.md) against eight users of weight 100, all spinning,
+//! gets 1000/1800 of the CPU.
 
 #![no_std]
 #![no_main]

@@ -1,6 +1,6 @@
 //! Bring-up: both queues configured, every receive slot offered, and the device told it may
-//! start, all by one thread **before** the receive thread exists (IO-ARCHITECTURE.md, `netd`: no
-//! message ever carries an address).
+//! start, all by one thread **before** the receive thread exists (servers/netd.md, "Two threads,
+//! reset on exit": no message ever carries an address).
 
 use crate::rxq::RxQueue;
 use crate::transport::Transport;

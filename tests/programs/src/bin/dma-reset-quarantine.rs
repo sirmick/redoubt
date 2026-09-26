@@ -1,12 +1,13 @@
-//! A device that does not confirm its reset keeps its frames for ever (WP-K5b, answer 173; OD5,
-//! OD6, P1-1; KERNEL-SPEC.md, Device). Built with `dma-reset-deaf`, whose first reset of each
+//! A device that does not confirm its reset keeps its frames for ever (I16; kernel/devices.md,
+//! "Quarantine"). Built with `dma-reset-deaf`, whose first reset of each
 //! device reports "not confirmed" after the real write.
 //!
 //! Two drivers hold DMA runs through the same empty virtio-mmio slot, each in its own budget.
 //! The first faults: the slot's first reset fails, so its run is quarantined and the slot with
 //! it, and every handle to the slot is gone (`BadHandle`). Its budget still carries the run; when
 //! the budget is destroyed the charge moves to the parent. The co-holder is destroyed after, and
-//! its run is quarantined too, although a retry would now confirm (P1-1).
+//! its run is quarantined too, although a retry would now confirm (a quarantined device never
+//! counts as reset).
 //!
 //! Then every free page in the tree is searched: `users` is destroyed, a checker child takes all
 //! of `root`'s free pages, and it and this program each `dma_alloc` through the other empty slots
@@ -216,7 +217,7 @@ pub extern "C" fn _start() -> ! {
         held
     );
 
-    // --- Destroyed: each quarantined charge moves to the parent (OD5) --------------------------
+    // --- Destroyed: each quarantined charge moves to the parent --------------------------------
     for (i, (&b, &c)) in budgets.iter().zip(carve.iter()).enumerate() {
         let before = pages(rd::SYSTEM);
         let destroyed = rd::destroy(b);

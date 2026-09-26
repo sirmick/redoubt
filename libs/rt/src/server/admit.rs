@@ -1,26 +1,27 @@
-//! Admission (CONTAINMENT.md, the shared server library: `admit(badge, account, labels)`): limits
-//! on what one client may hold in a shared server at once, so that one client cannot use up a
-//! server that serves others.
+//! Admission (servers/serving.md, `admit`): limits on what one client may hold in a shared server
+//! at once, so that one client cannot use up a server that serves others.
 //!
 //! - **Buckets.** Limits are per (account, label set): accounts, not badges or budgets, because both of those
 //!   are cheap to create; with the label set, so that a vault session filling a server's slots is not visible
 //!   to its owner's unlabelled session, which shares the account. Account 0 (every system-class caller) is
 //!   admitted per badge, so one daemon cannot fill a bucket the steward needs.
-//! - **A fair share per badge within a bucket** (answer 90), with the bucket as the ceiling, so an agent
-//!   cannot lock out its sponsor, who shares its bucket. A share may take one more of a resource while it
-//!   holds less than `limit / (n + 1)`, where n is the shares in the bucket holding that resource, itself
-//!   included: whatever the others hold, a share always leaves room for one more share's worth. So an agent
-//!   flooding its sponsor's bucket alone gets half of it, and its sponsor can still take a third. The unit of
-//!   a share is the caller's badge; the 9P skeleton counts a connection a client minted for itself in the
-//!   share of the connection it minted it from, so minting more connections gains nothing
-//!   ([`crate::server::ninep`], Connections).
-//! - **Caps sized to fit** (answers 81, 85): at most [`Limits::buckets`] buckets hold anything at once, so
-//!   that every bucket at its cap fits the server's budget ([`Limits::fits`]) and the calls they may hold
-//!   open sum to less than `MAX_OPEN_CALLS` with headroom (checked by [`Admission::new`]). A bucket beyond
-//!   that is refused. Stated residual: a server sized for fewer buckets than it serves refuses the
-//!   latecomers, which tells them that others hold state - across accounts, and between the label sets of one
-//!   account, where it is a channel out of a vault (QUESTIONS.md 118). Sizing closes it: a server's manifest
-//!   sizes its bucket count to the (account, label set)s it serves, so the cap never binds in normal use.
+//! - **A fair share per badge within a bucket** (servers/serving.md R26), with the bucket as the
+//!   ceiling, so an agent cannot lock out its sponsor, who shares its bucket. A share may take one
+//!   more of a resource while it holds less than `limit / (n + 1)`, where n is the shares in the
+//!   bucket holding that resource, itself included: whatever the others hold, a share always leaves
+//!   room for one more share's worth. So an agent flooding its sponsor's bucket alone gets half of
+//!   it, and its sponsor can still take a third. The unit of a share is the caller's badge; the 9P
+//!   skeleton counts a connection a client minted for itself in the share of the connection it
+//!   minted it from, so minting more connections gains nothing ([`crate::server::ninep`],
+//!   Connections).
+//! - **Caps sized to fit**: at most [`Limits::buckets`] buckets hold anything at once, so that
+//!   every bucket at its cap fits the server's budget ([`Limits::fits`]) and the calls they may
+//!   hold open sum to less than `MAX_OPEN_CALLS` with headroom (checked by [`Admission::new`]). A
+//!   bucket beyond that is refused. Stated residual: a server sized for fewer buckets than it
+//!   serves refuses the latecomers, which tells them that others hold state - across accounts, and
+//!   between the label sets of one account, where it is a channel out of a vault
+//!   (servers/serving.md, "Residual risks"). Sizing closes it: a server's manifest sizes its bucket
+//!   count to the (account, label set)s it serves, so the cap never binds in normal use.
 //! - **Caps big enough for a share to mean anything**: a non-zero cap is at least [`SMALLEST_CAP`], so that
 //!   one badge alone can never fill its bucket (its share is at most half of it) and a second badge - the
 //!   sponsor an agent shares the bucket with - always finds a slot. With three or more badges a bucket can
@@ -41,7 +42,7 @@ pub const SMALLEST_CAP: u32 = 2;
 /// abandoned calls not yet replied to.
 pub const OPEN_CALL_HEADROOM: usize = MAX_OPEN_CALLS / 4;
 
-/// What admission is keyed by: the caller's account and label set (CONTAINMENT.md), and for
+/// What admission is keyed by: the caller's account and label set (servers/serving.md), and for
 /// account 0 ("none": system-class callers) the badge as well. [`AdmitKey::of`] is the one place
 /// the key is made.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -118,8 +119,8 @@ impl Limits {
     /// The calls every bucket at its cap holds open together.
     pub fn open_calls(&self) -> u64 { u64::from(self.buckets) * u64::from(self.in_flight) }
 
-    /// Whether every bucket at its cap fits `budget` bytes (answer 85): the server's own use
-    /// comes on top, and a server's budget must also cover lends of abandoned calls (R3).
+    /// Whether every bucket at its cap fits `budget` bytes: the server's own use comes on top,
+    /// and a server's budget must also cover lends of abandoned calls (kernel/ipc.md R3).
     pub fn fits(&self, cost: &Cost, budget: u64) -> bool {
         let one = [
             u64::from(self.in_flight).checked_mul(cost.in_flight),
@@ -142,7 +143,7 @@ pub struct Refused;
 pub struct Unsized;
 
 /// Caps for the bucket of one account-0 root badge, in place of [`Limits`]' per-bucket caps
-/// (answer 174: `ipd` gives `sshd` room for a parked accept and two calls per session, and the
+/// (`ipd` gives `sshd` room for a parked accept and two calls per session, and the
 /// steward room for its grants). It applies only to a caller with account 0 calling on exactly
 /// this badge: a server cannot know a badge's account when it reads its arguments, and a client
 /// with an account never lands in a badge's bucket (`AdmitKey::of`).
@@ -198,7 +199,7 @@ impl Admission {
     /// The worst case is the `buckets` largest caps that can be held at once. `buckets` bounds the
     /// buckets holding anything, whichever they are, so an override **below** the default can be
     /// idle while a default bucket takes its slot: each override slot counts as
-    /// `max(override, default)`, and every other slot as the default (QA D3-code-review-3).
+    /// `max(override, default)`, and every other slot as the default.
     pub fn with_overrides(limits: Limits, overrides: &[Override]) -> Result<Admission, Unsized> {
         let mut admission = Admission::new(limits)?;
         let first_minted = super::minted::FIRST_MINTED_BADGE;
@@ -397,7 +398,7 @@ mod tests {
 
     #[test]
     fn the_key_is_the_account_and_the_label_set() {
-        // CONTAINMENT.md: per (account, label set). A vault session filling its slots leaves
+        // servers/serving.md: per (account, label set). A vault session filling its slots leaves
         // its owner's unlabelled session (same account) untouched.
         let owner = caller(9, &[]);
         let vault = caller(9, &[5]);
@@ -418,8 +419,8 @@ mod tests {
         assert_eq!(AdmitKey::of(&caller(9, &[3, 1, 3])), AdmitKey::of(&caller(9, &[1, 3])));
     }
 
-    /// Answer 90's attack: an agent sharing its sponsor's bucket floods it, alone at first, then
-    /// with a second badge; its sponsor still gets a share.
+    /// The attack on R26 (servers/serving.md): an agent sharing its sponsor's bucket floods it,
+    /// alone at first, then with a second badge; its sponsor still gets a share.
     #[test]
     fn an_agent_flooding_a_bucket_leaves_its_sponsor_a_share() {
         let (agent, agent2, sponsor) = (1, 2, 3);
@@ -521,7 +522,7 @@ mod tests {
         }
     }
 
-    /// The red team's case (QA D3-code-review-3): whatever order the badges come in, admission
+    /// A red-team case: whatever order the badges come in, admission
     /// never holds more open calls than `with_overrides` accepted it for. With sshd 24 and the
     /// steward 2 it held 49 (sshd's 24, then five other badges at 5 while the steward was idle).
     #[test]

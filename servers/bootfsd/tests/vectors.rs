@@ -1,4 +1,4 @@
-//! `bootfsd` against WP-W1's 9P2000 conformance vectors (`redoubt/wire/vectors/9p.txt`). What
+//! `bootfsd` against the 9P2000 conformance vectors (`redoubt/wire/vectors/9p.txt`). What
 //! they check is in the runner's own docs; what is checked here on top is what only `bootfsd`
 //! knows: a run of hostile and well-formed messages publishes nothing, changes nothing and
 //! leaves every entry exactly as `init` sealed it.

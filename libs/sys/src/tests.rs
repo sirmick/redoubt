@@ -158,7 +158,7 @@ fn every_result_and_error_round_trips() {
 
 #[test]
 fn ipc_outcomes_round_trip_and_reject_impossible_combinations() {
-    // Independent allowed rows from KERNEL-SPEC's IPC completion table, not the decoder's
+    // Independent allowed rows from kernel/ipc.md's completion table, not the decoder's
     // Boolean predicate: rejection retains memory; normal/partial reply commits a record;
     // only taken-call Timeout/Dead consumes memory. Each returning row also has a no-lend form.
     let mut allowed = Vec::new();
@@ -387,7 +387,7 @@ fn records_round_trip() {
     }
     let usage = sample_usage();
     assert_eq!(Usage::decode(&usage.encode()), Ok(usage));
-    // The spec has no scheduling flag (answer 103): slot 3 is the label count.
+    // The spec has no scheduling flag: slot 3 is the label count.
     assert_eq!(sample_specs()[1].encode()[3], MAX_LABELS as u64, "labels");
 }
 
@@ -709,7 +709,7 @@ fn random_records() {
     assert!(decoded[1..].iter().all(|n| *n > 100), "decoded per kind: {decoded:?}");
 }
 
-/// Each call's error row (KERNEL-SPEC.md, the error table), where answers 72-119 changed it.
+/// Each call's error row (kernel/abi.md, "Errors and the order of checks").
 #[test]
 fn error_rows() {
     use Error::*;
@@ -720,7 +720,7 @@ fn error_rows() {
         assert!(n.can_return(InvalidArgument), "{n:?}");
     }
     // A reply's handles that do not fit the caller arrive as 0 and its `call` is `OutOfMemory`
-    // (answers 107 and 116); `TooLarge` here means only a lend over `MAX_LEND_PAGES`.
+    // (R4); `TooLarge` here means only a lend over `MAX_LEND_PAGES`.
     assert!(has(Number::Call, &[Refused, LabelDenied, Busy, Timeout, Dead, TooLarge, OutOfMemory]));
     assert!(lacks(Number::Call, &[NotPermitted]));
     assert!(has(Number::Send, &[Refused, LabelDenied, Busy, Timeout, Dead]));
@@ -738,7 +738,7 @@ fn error_rows() {
     assert!(lacks(Number::Random, &[TooLarge, BadHandle, OutOfMemory]));
     assert!(lacks(Number::TimeNow, &[BadHandle, OutOfMemory]));
     assert!(lacks(Number::ThreadExit, &[BadHandle, OutOfMemory]));
-    // Answer 102: every call that adds a handle to its caller's table.
+    // Every call that adds a handle to its caller's table (`MAX_HANDLES`).
     for n in [Number::ProcessCreate, Number::EndpointCreate, Number::Mint, Number::BudgetCreate] {
         assert!(has(n, &[OutOfMemory, TooLarge]), "{n:?}");
     }
@@ -749,7 +749,7 @@ fn error_rows() {
 /// rv32, where `kernel/src/mem.rs` isn't host-testable (the kernel builds only for its RISC-V
 /// targets). This mirrors that exact check with an
 /// explicit `u32`, so a 64-bit host can still exercise the rv32-width wraparound the real check
-/// relies on `checked_add` to refuse (answer 172's "rv32 wrap" attack case).
+/// relies on `checked_add` to refuse.
 ///
 /// This is a COPY, and the test below documents it; it does not test the kernel. A change to
 /// the kernel's `user_range` does not fail it. Keep the two identical by hand. (Sharing one
@@ -776,7 +776,7 @@ fn map_fixed_range_check_refuses_rv32_wraparound() {
     // A range that does not wrap and fits is accepted, for contrast.
     assert_eq!(user_range_at_width(0x1000, 0x1000, page_size, user_area_end), Some(0x2000));
     // The last page before USER_AREA_END is accepted; USER_AREA_END itself is refused (no
-    // lower bound: page 0 is user space, K5a-addr0).
+    // lower bound: page 0 is user space, kernel/memory.md, `map_fixed`).
     assert_eq!(
         user_range_at_width(user_area_end - page_size, page_size, page_size, user_area_end),
         Some(user_area_end)

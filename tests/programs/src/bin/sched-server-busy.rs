@@ -1,5 +1,5 @@
-//! A system server busy on one user's requests delays other users only by its weight (WP-K5;
-//! RESOURCES.md, Attack tests): user A floods a system-class server (weight 100, 2 ms of work per
+//! A system server busy on one user's requests delays other users only by its weight (R12;
+//! kernel/scheduling.md): user A floods a system-class server (weight 100, 2 ms of work per
 //! request) from four threads; users B and C spin. The server's work stays within its weight's
 //! share, and B and C each keep theirs (a quarter: A's calls are its own CPU too).
 

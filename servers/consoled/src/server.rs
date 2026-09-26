@@ -15,11 +15,12 @@ use crate::uart::Uart;
 pub const MAX_INPUT: usize = 1024;
 
 /// What admission lets clients hold, sized so that every bucket at its cap fits [`BUDGET`]
-/// (answer 85), and so that the parked reads every bucket may hold together stay well under
-/// `MAX_OPEN_CALLS` with its headroom ([`redoubt_rt::server::Admission::new`] checks that).
+/// (servers/serving.md R26), and so that the parked reads every bucket may hold together stay
+/// well under `MAX_OPEN_CALLS` with its headroom ([`redoubt_rt::server::Admission::new`] checks
+/// that).
 pub const LIMITS: Limits = Limits { buckets: 4, in_flight: 2, files: 4, state: 4 };
 /// What one of each costs, in bytes. A parked read holds its caller's lend, charged to this
-/// server until it replies (KERNEL-SPEC.md, R3), which is `MAX_LEND_PAGES` pages at worst; a
+/// server until it replies (kernel/ipc.md R3), which is `MAX_LEND_PAGES` pages at worst; a
 /// fid and a minted connection are small records.
 pub const COST: Cost = Cost { in_flight: 64 * 1024, file: 256, state: 256 };
 /// The bytes of this server's budget its clients may use between them; its manifest entry gives
@@ -81,12 +82,12 @@ impl FileServer for Console {
 
     /// Every connection attaches at the file itself, not at a directory holding it: a namespace
     /// binds `/dev/cons` to the connection, and a program opens and reads it straight away
-    /// (NAMESPACES.md, The console; the runtime's panic reporter does exactly that).
+    /// (servers/consoled.md, "`/dev/cons`"; the runtime's panic reporter does exactly that).
     fn attach(&mut self, _: &Caller, _aname: &str) -> Result<(Cons, Qid), NineError> { Ok((Cons, qid())) }
 
-    /// The physical console carries no labels (INIT.md). So anyone may read it, and `check`
-    /// lets only an unlabelled caller write to it: no write down onto a screen someone else is
-    /// looking at.
+    /// The physical console carries no labels (servers/consoled.md R69). So anyone may read it,
+    /// and `check` lets only an unlabelled caller write to it: no write down onto a screen someone
+    /// else is looking at.
     fn labels(&self, _: &Cons) -> &[u64] { &[] }
 
     /// `/dev/cons` is a file, not a directory; the skeleton refuses a walk from it before this
