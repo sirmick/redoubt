@@ -6,7 +6,7 @@ timeout_secs = 120
 expect = [
     '^\[net-rig\] ok: echo through 10\.0\.9\.100:7, 2 round\(s\): exited 0$',
     '^\[net-rig\] ok: the listener accepted and echoed the bench.s dial \(1\)$',
-    '^\[net-rig\] D3 NET TCP PASSED$',
+    '^\[net-rig\] NET TCP PASSED$',
 ]
 forbid = ['\[net-rig\] FAIL']
 poweroff = true

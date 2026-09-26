@@ -1,4 +1,4 @@
-//! `net-client`: one unprivileged program of the D3 rig, in the role its arguments name
+//! `net-client`: one unprivileged program of the network rig, in the role its arguments name
 //! (`redoubt_net_client::Role`). It talks to `ipd` only through the connection the rig granted it
 //! (`net`), exactly as a principal's program would, and to the rig only to report
 //! (`redoubt_net_client::REPORT`).
@@ -29,8 +29,8 @@ const CLONE: u32 = 1;
 /// How many times a waiting read that timed out (`ipd`'s deadline) is asked again.
 const WAITS: u32 = 64;
 
-/// Status words of a `ctl` read (NAMESPACES.md, `/net`). A listener's read answers `LISTENING`
-/// with the accepted connection's number.
+/// Status words of a `ctl` read (servers/ipd.md, "The `/net` tree"). A listener's read answers
+/// `LISTENING` with the accepted connection's number.
 const ESTABLISHED: u32 = 2;
 const LISTENING: u32 = 5;
 

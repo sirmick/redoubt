@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Processes (KERNEL-SPEC.md, Process; R10) and the calls that make and end them:
+//! Processes (kernel/processes.md; R10) and the calls that make and end them:
 //! `process_create`, `process_map`, `process_start`, `thread_create`, `thread_exit` and
 //! `process_exit`, with the exit notices they produce.
 //!
@@ -17,23 +17,20 @@
 //! process had is freed at once -- threads, address space, handle table, open calls -- and it stops
 //! counting against its budget's `processes` usage; the frame stays, now holding only the notice,
 //! until a `receive` on the exit endpoint takes it or the notice is dropped. Its PID is reserved
-//! for exactly that long (answer 106): [`random_free_pid`] skips a PID a live object names, so no
+//! for exactly that long (R20): [`random_free_pid`] skips a PID a live object names, so no
 //! PID is reused while a notice still names it.
 //!
 //! Destroying the creator's budget frees the object (R10), killing the process first if it still
 //! runs; then there is no notice at all.
 //!
-//! # What a process costs (answer 127)
+//! # What a process costs (kernel/objects.md, "What objects cost")
 //! The cost table says one page for the process object. A process needs more than one page of
 //! kernel storage: its saved thread contexts take `PROCESS_IMPL_PAGES` frames and its root page
 //! table one more. Those die with the process, so they are charged **to the budget it runs in**,
 //! as ordinary frames of that process, while the object's own page -- the notice -- is the
-//! creator's, paid by someone who is still alive when the process is not. WP-K1 and WP-K2 could
-//! not charge them, because nothing created a process from userspace, and held back
-//! `PROCESS_IMPL_PAGES - 1` per PID from `root` at boot instead; that reservation is gone with
-//! this package.
+//! creator's, paid by someone who is still alive when the process is not.
 //!
-//! # Blame (answers 37, 55, 82)
+//! # Blame (kernel/processes.md R21)
 //! A `faulted` notice blames the sender of the **current call** of the thread that faulted or
 //! called `process_exit`: the call `receive` last delivered to it, or the one `serve` named. A
 //! thread with no current call blames nobody, even when other threads of the process hold open
@@ -212,9 +209,9 @@ pub fn object_of(mm: &MemoryManager, pid: Pid) -> Option<u32> {
     mm.find_process(|mm, frame| mm.process(frame).pid == pid)
 }
 
-/// A PID drawn at random from the free ASIDs (KERNEL-SPEC.md, Process): free in the process
-/// table, and named by no process object, so a PID is not reused while a notice still names it
-/// (answer 106). Random so that nothing can predict which ASID a process will get.
+/// A PID drawn at random from the free ASIDs (kernel/processes.md, "Processes and PIDs"): free in
+/// the process table, and named by no process object, so a PID is not reused while a notice
+/// still names it (R20). Random so that nothing can predict which ASID a process will get.
 fn random_free_pid(ss: &ProcessTable, mm: &MemoryManager) -> Option<Pid> {
     let free = |pid: Pid| ss.get_process(pid).is_err() && object_of(mm, pid).is_none();
     let count = (2..=MAX_PROCESS_COUNT).filter(|i| Pid::new(*i as u8).is_some_and(free)).count();
@@ -229,8 +226,8 @@ fn random_free_pid(ss: &ProcessTable, mm: &MemoryManager) -> Option<Pid> {
 
 // --- `process_create` ---------------------------------------------------------------------------
 
-/// `process_create(h(budget), h(exit endpoint)) -> h(process)` (KERNEL-SPEC.md), after decoding.
-/// The checks follow the spec's row for `process_create`, in order.
+/// `process_create(h(budget), h(exit endpoint)) -> h(process)` (kernel/processes.md), after
+/// decoding. The checks follow kernel/abi.md's row for `process_create`, in order.
 pub fn process_create(
     ss: &mut ProcessTable,
     mm: &mut MemoryManager,
@@ -294,7 +291,7 @@ pub fn process_create(
 }
 
 /// Give `child` an address space and a slot in the process table, but no thread: it cannot run
-/// until `process_start`. Every frame it takes is charged to the budget it runs in (answer 127).
+/// until `process_start`. Every frame it takes is charged to the budget it runs in (R6).
 fn new_address_space(ss: &mut ProcessTable, mm: &mut MemoryManager, child: Pid) -> Result<(), Error> {
     let here = crate::arch::process::current_pid();
     ss.allocate_process_slot(mm, child).map_err(|_| Error::OutOfMemory)?;
@@ -326,10 +323,10 @@ fn drop_unstarted(ss: &mut ProcessTable, mm: &mut MemoryManager, child: Pid) {
 
 // --- `process_map` -------------------------------------------------------------------------------
 
-/// `process_map(h(process), src, dst, len, flags)` (KERNEL-SPEC.md): pages of the caller's own RAM
-/// move into a process that has not started, at an address the caller chooses, and the budget
+/// `process_map(h(process), src, dst, len, flags)` (kernel/processes.md): pages of the caller's own
+/// RAM move into a process that has not started, at an address the caller chooses, and the budget
 /// paying for them moves with them (R6). The image and the startup block travel this way
-/// (PACKAGES.md, launching; INIT.md, Startup block).
+/// (servers/init.md, "Launching through the loader stub" and "The startup block").
 #[allow(clippy::too_many_arguments)]
 pub fn process_map(
     ss: &mut ProcessTable,
@@ -345,18 +342,18 @@ pub fn process_map(
     let r = mm.process_handle(pid, process_h)?;
     let p = mm.process_at(r);
     // Stage 2: the ranges, then the source, which must be the caller's own backed RAM, mapped
-    // and not lent out. Checked whole before any page moves (WP-K0's rule).
+    // and not lent out. Checked whole before any page moves (kernel/memory.md).
     let pages = whole_pages(src, dst, len)?;
     mm.ensure_range_exists(src, len).map_err(|_| Error::InvalidArgument)?;
     for i in 0..pages {
         let phys = mm.owned_mapping(pid, src + i * page_size)?;
-        // DMA pages stay put (WP-K5b, OD2): held by their process until it ends.
+        // DMA pages stay put (kernel/devices.md, `dma_alloc`): held by their process until it ends.
         if !mm.is_main_memory(phys as *mut u8) || mm.is_dma_frame(phys) {
             return Err(Error::InvalidArgument);
         }
     }
     // R11, checked here as well as while decoding and in the page tables, so neither check
-    // rests on the other (KERNEL-SPEC.md, ABI). It must refuse before any page moves,
+    // rests on the other (kernel/abi.md). It must refuse before any page moves,
     // because a later failure would not put the source back. Not W+X, and not writable
     // without readable.
     crate::mem::check_map_flags(flags)?;
@@ -414,10 +411,10 @@ fn whole_pages(src: usize, dst: usize, len: usize) -> Result<usize, Error> {
 
 // --- `process_start` ------------------------------------------------------------------------------
 
-/// `process_start(h(process), entry, sp, arg, handles)` (KERNEL-SPEC.md): the handles are copied
-/// into the child's empty table, so they land in slots 1..n, and its first thread starts at
-/// `entry` with `sp` and `arg`. `arg` is the startup page's address (INIT.md, answer 40), which
-/// the kernel passes on unchanged and never looks at.
+/// `process_start(h(process), entry, sp, arg, handles)` (kernel/processes.md): the handles are
+/// copied into the child's empty table, so they land in slots 1..n, and its first thread starts
+/// at `entry` with `sp` and `arg`. `arg` is the startup page's address (servers/init.md, "The
+/// startup block"), which the kernel passes on unchanged and never looks at.
 #[allow(clippy::too_many_arguments)]
 pub fn process_start(
     ss: &mut ProcessTable,
@@ -478,8 +475,8 @@ pub fn process_start(
 
 // --- Threads ---------------------------------------------------------------------------------------
 
-/// `thread_create(entry, sp, arg) -> tid` (KERNEL-SPEC.md): `TooManyThreads` past `MAX_THREADS`,
-/// `OutOfMemory` when the process's budget cannot pay for the thread's page.
+/// `thread_create(entry, sp, arg) -> tid` (kernel/processes.md): `TooManyThreads` past
+/// `MAX_THREADS`, `OutOfMemory` when the process's budget cannot pay for the thread's page.
 pub fn thread_create(
     ss: &mut ProcessTable,
     pid: Pid,
@@ -490,9 +487,9 @@ pub fn thread_create(
     ss.create_redoubt_thread(pid, entry, sp, arg).map(|tid| tid as u32)
 }
 
-/// `thread_exit()` (KERNEL-SPEC.md): the calling thread ends.
+/// `thread_exit()` (kernel/processes.md): the calling thread ends.
 ///
-/// The final thread performs `process_exit(0)` (answer 170). Classify open calls and snapshot
+/// The final thread performs `process_exit(0)` (R21). Classify open calls and snapshot
 /// current-call blame before any thread cleanup destroys the evidence.
 pub fn thread_exit(ss: &mut ProcessTable, pid: Pid, tid: TID) {
     let last = MemoryManager::with(|mm| mm.account(pid).is_none_or(|a| a.threads <= 1));
@@ -505,8 +502,8 @@ pub fn thread_exit(ss: &mut ProcessTable, pid: Pid, tid: TID) {
 
 // --- Exit, fault and kill ---------------------------------------------------------------------------
 
-/// `process_exit(code)` (KERNEL-SPEC.md): `exited`, or `faulted` while the process holds open
-/// calls -- which is where a Rust panic lands (answer 55). A server that means to exit replies to
+/// `process_exit(code)` (kernel/processes.md): `exited`, or `faulted` while the process holds
+/// open calls -- which is where a Rust panic lands (R21). A server that means to exit replies to
 /// every open call first (R4b).
 pub fn process_exit(ss: &mut ProcessTable, pid: Pid, tid: TID, code: u32) {
     let open = MemoryManager::with(|mm| mm.account(pid).map_or(0, |a| a.open_calls));
@@ -559,7 +556,7 @@ fn record(
         p.flags = (p.flags & !F_ALIVE) | F_NOTICE;
         p.cause = cause as u64;
         p.code = code;
-        // Blame only for `faulted` (KERNEL-SPEC.md, Messages): `exited` and `killed` blame
+        // Blame only for `faulted` (kernel/processes.md R21): `exited` and `killed` blame
         // nobody, and neither does a faulting thread with no current call.
         if cause == Cause::Faulted {
             if let Some((account, labels)) = crate::message::current_call_blame(mm, pid, tid) {

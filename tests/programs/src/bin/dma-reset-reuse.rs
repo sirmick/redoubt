@@ -1,4 +1,4 @@
-//! DMA frames come back only after a reset (WP-K5b, answer 173; KERNEL-SPEC.md, Device): a
+//! DMA frames come back only after a reset (I16; kernel/devices.md, "Reset before reuse"): a
 //! driver child brings the case's virtio disk up, allocates DMA runs through it and is destroyed
 //! with its budget. This program then allocates until it gets back at least one of the driver's
 //! physical frames, and for each one it got back, reads the disk's status register through its

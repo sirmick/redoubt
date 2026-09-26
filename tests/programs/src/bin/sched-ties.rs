@@ -1,4 +1,4 @@
-//! Ties in the stride queue (WP-K5; OWNER DECISION 4, the rank at an equal pass), in a kernel
+//! Ties in the stride queue (kernel/scheduling.md, "The current minimum and ties"), in a kernel
 //! built with `sched-trace`: the bench's independent oracle (`tools/testbench`, `sched_oracle`)
 //! checks every pick of the whole run against the four clauses. These checks, from the programs'
 //! own first-run times, are a cheap second line (and catch a trace that lost its meaning).

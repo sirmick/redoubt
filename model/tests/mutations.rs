@@ -47,17 +47,16 @@ fn mutations_are_caught() {
             "R12" => "scheduler_fairness",
             // These breaks expose confidential work through shared state or audit reads.
             // Try their paired-world oracle before spending full caps on unrelated families.
-            "policy"
-                if matches!(
-                    m,
-                    Mutation::PolicyCapPerAccount
-                        | Mutation::PolicySequentialIds
-                        | Mutation::PolicyAuditUnfiltered
-                ) =>
+            _ if matches!(
+                m,
+                Mutation::PolicyCapPerAccount
+                    | Mutation::PolicySequentialIds
+                    | Mutation::PolicyAuditUnfiltered
+            ) =>
             {
                 "steward_noninterference"
             }
-            "policy" => "steward_policy",
+            _ if m.is_policy() => "steward_policy",
             _ if matches!(
                 m,
                 Mutation::R4aOpenCallsPerThread

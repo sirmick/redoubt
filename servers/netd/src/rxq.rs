@@ -1,6 +1,6 @@
 //! The receive queue: sixteen slots always offered to the device, drained on each interrupt.
 //!
-//! **A lie and a bad frame are different things** (IO-ARCHITECTURE.md, `netd`). A used entry
+//! **A lie and a bad frame are different things** (servers/netd.md R55). A used entry
 //! that breaks the ring protocol is a lie and ends the device: the index running past what is
 //! outstanding, an id out of range, not outstanding or seen twice, a length below the header or
 //! above the slot, or a header asking for checksum or segmentation that was never negotiated. A

@@ -1,4 +1,4 @@
-//! `provenance.sh` fails closed (QA D3-code-review-4): a table it cannot find, a row without a
+//! `provenance.sh` fails closed: a table it cannot find, a row without a
 //! vendored directory and a vendored directory without a row each fail it before anything is
 //! downloaded, so it can never pass having checked nothing. The structure is checked offline on a
 //! copy of the script, `vendor/README.md` and the vendored directories' names.

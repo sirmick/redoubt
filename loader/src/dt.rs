@@ -25,11 +25,11 @@ pub struct MmioRegion {
     pub range: Range<usize>,
     pub name: [u8; 4],
     /// The device is a bus master: a driver holding it may call `dma_alloc`
-    /// (KERNEL-SPEC.md, Device; IO-ARCHITECTURE.md, DMA). Nothing in a device tree states
-    /// this in general, so the platform's rule stands here: on the targets Redoubt supports
-    /// the only bus masters are virtio devices, so a node whose `compatible` names virtio
-    /// carries the flag and nothing else does. A platform that confines DMA in hardware
-    /// (PLATFORM-FPGA.md) will state its own rule in the same place.
+    /// (kernel/devices.md, "Device objects"). Nothing in a device tree states this in general,
+    /// so the platform's rule stands here: on the targets Redoubt supports the only bus masters
+    /// are virtio devices, so a node whose `compatible` names virtio carries the flag and
+    /// nothing else does. A platform that confines DMA in hardware (beyond/fpga-platform.md)
+    /// will state its own rule in the same place.
     pub dma: bool,
     /// Whether this is the console the device tree's `/chosen/stdout-path` names.
     pub console: bool,
@@ -55,13 +55,13 @@ pub struct Platform {
     pub plic: Option<Plic>,
     /// The hart's local interrupt controller (timer and software interrupts), found on its
     /// own rather than through the device list: the kernel is told this range so that it, not
-    /// the exclusion below, decides that no device object may name it (QUESTIONS.md 143).
+    /// the exclusion below, decides that no device object may name it (kernel/boot.md).
     pub clint: Option<Range<usize>>,
     pub mmio: [MmioRegion; MAX_MMIO],
     pub mmio_len: usize,
     /// Every interrupt number wired to a device the loader reports, in ascending order and
     /// without repeats. The hart timer is not here: it is a CPU resource, not a device
-    /// (BOOT.md).
+    /// (kernel/boot.md, "Hardware abstraction").
     pub irq: [u32; MAX_IRQ],
     pub irq_len: usize,
     /// The interrupt of the console named by `/chosen/stdout-path`, if it has one.
@@ -223,8 +223,9 @@ impl Platform {
                 for entry in prop(&node, "interrupts").into_iter().flat_map(|b| b.chunks_exact(4)) {
                     let irq = u32::from_be_bytes([entry[0], entry[1], entry[2], entry[3]]);
                     // Source 0 does not exist on a PLIC, and the kernel keeps number 0 for the
-                    // hart timer (BOOT.md), so a node that asks for it is asking for something
-                    // else: a controller with wider cells, or a tree we do not understand.
+                    // hart timer (kernel/boot.md), so a node that asks for it is asking for
+                    // something else: a controller with wider cells, or a tree we do not
+                    // understand.
                     if irq == 0 {
                         crate::println!("  {} asks for interrupt 0; skipped", name);
                         continue;

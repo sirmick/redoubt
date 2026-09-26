@@ -1,4 +1,4 @@
-//! `ipd` against WP-W1's 9P2000 conformance vectors (`libs/wire/vectors/9p.txt`), run by the
+//! `ipd` against the 9P2000 conformance vectors (`libs/wire/vectors/9p.txt`), run by the
 //! shared runner (`libs/rt/tests/common/vectors.rs`, whose docs say what it checks). On top of it,
 //! what only `ipd` knows: a run of hostile and well-formed messages leaves no socket behind and
 //! sends nothing on the wire, from a root badge that may connect anywhere.

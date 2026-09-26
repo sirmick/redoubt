@@ -7,8 +7,8 @@
 //! `dma_phys() + <one of these constants>`**, and the only other addresses it gives the device
 //! are the three queue base registers, which point at the same region. Nothing else in `blkd`'s
 //! memory — its handle table, its heap, its stack, a client's lend — is ever named to the device.
-//! On a platform whose hardware confines DMA (PLATFORM-FPGA.md) that is the end of it; on QEMU it
-//! is a promise about what `blkd` asks for, not about what the device does (IO-ARCHITECTURE.md).
+//! On a platform whose hardware confines DMA (beyond/iommu.md) that is the end of it; on QEMU it
+//! is a promise about what `blkd` asks for, not about what the device does (servers/blkd.md R51).
 //!
 //! # Nothing the device writes is believed
 //! The descriptor table and the available ring are **write-only** here: they are filled from
@@ -35,7 +35,8 @@ use crate::virtio::{self, DATA_LEN, DeviceError, REQUEST_TIMEOUT_US, reg};
 /// Descriptors in the ring. Three is the longest chain `blkd` builds (header, data, status) and
 /// the ring must be a power of two (§2.7), so four it is. A larger ring would only hold requests
 /// this driver does not make: exactly one is outstanding at a time, which is what makes
-/// "requests complete in order" (IO-ARCHITECTURE.md) true by construction rather than by care.
+/// "requests complete in order" (servers/blkd.md, "Messages") true by construction rather than
+/// by care.
 pub const QUEUE_SIZE: u16 = 4;
 
 /// The descriptor every chain starts at. Fixed, so the used ring's `id` is compared with a
@@ -74,7 +75,7 @@ pub const STATUS_OFF: usize = HEADER_OFF + HEADER_BYTES;
 /// than on the rings it is about to read.
 pub const DATA_OFF: usize = PAGE_SIZE;
 
-/// A page, which is what `dma_alloc` hands out (KERNEL-SPEC.md).
+/// A page, which is what `dma_alloc` hands out (kernel/devices.md).
 
 /// Pages in the DMA region: one for the rings, the header and the status byte, then
 /// [`DATA_LEN`] bytes of data buffer.

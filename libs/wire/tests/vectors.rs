@@ -269,7 +269,7 @@ fn example_vectors() {
     assert!(requests.next().is_none() && replies.next().is_none() && files.next().is_none(), "a hand-built value has no line");
 }
 
-/// Spelled out from WIRE.md by hand, independent of the encoder.
+/// Spelled out from servers/wire.md by hand, independent of the encoder.
 #[test]
 fn layouts_by_hand() {
     let pong = Message::Pong(Pong { seq: 0x0102_0304_0506_0708, flags: 0xdead_beef });

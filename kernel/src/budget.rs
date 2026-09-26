@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Budgets (KERNEL-SPEC.md, Budget; R6-R10) and the per-process accounts that charge them.
+//! Budgets (kernel/budgets.md; R6-R10) and the per-process accounts that charge them.
 //!
 //! # Where things live
 //! Every budget occupies one RAM frame of its own, allocated to `mem::OBJECT_OWNER`: that frame *is*
@@ -20,10 +20,11 @@
 //! second kernel lock.
 //!
 //! # What is charged (the cost table)
-//! A budget's own object costs its parent one page (answer 76). A process object's notice page
+//! A budget's own object costs its parent one page (R6). A process object's notice page
 //! costs its creator one page; every thread's IPC page costs the execution budget one page.
 //! Separately allocated saved contexts cost the execution budget their actual physical frames
-//! (one on rv32, two on rv64), in addition to its page tables and mapped RAM (answer 127).
+//! (one on rv32, two on rv64), in addition to its page tables and mapped RAM
+//! (kernel/objects.md).
 //! Frame charges follow ownership in `mem.rs`; handle-table pages are charged in `handle.rs`.
 
 use redoubt_layout::Pid;
@@ -38,21 +39,23 @@ use crate::ptable::ProcessTable;
 /// A budget, named by the index of its frame in the page-ownership table.
 pub type BudgetFrame = u32;
 
-/// The cost table (KERNEL-SPEC.md, What objects cost), in pages.
+/// The cost table (kernel/objects.md, "What objects cost"), in pages.
 pub const BUDGET_PAGES: u64 = 1;
 pub const PROCESS_PAGES: u64 = 1;
 pub const THREAD_PAGES: u64 = 1;
 
 /// The weight `root` starts with. Weights only matter relative to each other (R12), so any
-/// value works; this one leaves room to carve INIT.md's manifest weights (1000 for `init`, the
-/// steward and the drivers, 100 for a session). INTERIM, until WP-R3 builds the tree from the
-/// manifest.
+/// value works; this one leaves room to carve the manifest weights (1000 for `init`, the steward
+/// and the drivers, 100 for a session; servers/init.md). It is fixed here until `init` builds the
+/// tree from the manifest (kernel/budgets.md, "The tree from the boot manifest";
+/// plan/m1-separation.md).
 const ROOT_WEIGHT: u32 = 1_000_000;
-/// What `root` keeps for `init` when carving `system` and `users` (KERNEL-SPEC.md, R12: a
+/// What `root` keeps for `init` when carving `system` and `users` (kernel/budgets.md R7: a
 /// budget holding a process has free weight).
 const INIT_WEIGHT: u32 = 1000;
 
-/// A budget's class (KERNEL-SPEC.md, Budget): inherited from its parent, so never in the ABI.
+/// A budget's class (kernel/budgets.md, "Class is trust, not order"): inherited from its parent,
+/// so never in the ABI.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Class {
     User = 1,
@@ -126,9 +129,9 @@ pub struct Account {
     /// Open calls this process's threads hold (R4a): at `MAX_OPEN_CALLS` it takes no more.
     pub open_calls: u32,
     /// The next message id its threads will hand a sender. Never 0, never reused within this
-    /// process, and from no counter anyone else can see (I12, CONTAINMENT.md).
+    /// process, and from no counter anyone else can see (I12).
     pub next_msg_id: u64,
-    /// The DMA registry slots it has mapped with `map_device` (WP-K5b, `dma.rs`): half of the
+    /// The DMA registry slots it has mapped with `map_device` (`dma.rs`): half of the
     /// set its death must reset. Zero again for a new process in the same PID.
     pub dma_mapped: u16,
     /// No thread of this process has a timeout earlier than this (`message::next_timeout`): only
@@ -435,7 +438,7 @@ impl MemoryManager {
 
     /// Put new process `pid` in `budget`: one process from its process limit, and an account of
     /// its own, with no threads yet. Its address space is charged to `budget` frame by frame as
-    /// it is built (`process.rs`, and answer 127); its object page is the *creator's*, which
+    /// it is built (`process.rs`; kernel/objects.md); its object page is the *creator's*, which
     /// `process_create` charges separately. Nothing changes on an error.
     pub fn process_created(&mut self, pid: Pid, budget: BudgetFrame) -> Result<(), Error> {
         let index = account_index(pid).ok_or(Error::InvalidArgument)?;
@@ -493,10 +496,11 @@ impl MemoryManager {
 
     /// Create `root`, `system` and `users` and put the loader's processes in `system`.
     ///
-    /// INTERIM (until WP-R3 loads only `init` and builds the tree from the boot
-    /// manifest): the sizes are computed here rather than read from the argument block. `root`
-    /// gets every RAM page the kernel did not keep at boot, every PID but the kernel's, and all
-    /// the weight; `system` a quarter of each (RESOURCES.md's default), `users` the rest. Every
+    /// Until the loader loads only `init` and `init` builds the tree from the boot manifest
+    /// (kernel/budgets.md, "The tree from the boot manifest"; plan/m1-separation.md): the sizes
+    /// are computed here rather than read from the argument block. `root` gets every RAM page the
+    /// kernel did not keep at boot, every PID but the kernel's, and all the weight; `system` a
+    /// quarter of each (the manifest's default), `users` the rest. Every
     /// loader-started process (every PID owning frames: the loader gave each its pages) is
     /// charged to `system`, and the first one (PID 2) gets handles to the three budgets in slots
     /// 1-3, stamped with `root`, as `init` will.
@@ -504,10 +508,10 @@ impl MemoryManager {
     /// A loader bundle whose processes do not fit in `system` cannot run under the rules, so the
     /// kernel refuses to boot (fail closed).
     pub fn boot_budgets(&mut self) {
-        // Every RAM page the kernel did not keep for itself. Nothing is held back any more
-        // (answer 127): a process's saved contexts and its root page table are charged to
-        // the budget it runs in as they are allocated, like any other frame it owns, so every
-        // charged page has a real frame behind it without a reservation.
+        // Every RAM page the kernel did not keep for itself. Nothing is held back: a process's
+        // saved contexts and its root page table are charged to the budget it runs in as they
+        // are allocated, like any other frame it owns, so every charged page has a real frame
+        // behind it without a reservation.
         let pages = self.ram_frames() - self.ram_frames_owned_by(redoubt_layout::KERNEL_PID) as u64;
         let processes = (MAX_PROCESS_COUNT - 1) as u32;
         let (sys_pages, sys_processes, sys_weight) = (pages / 4, processes / 4, ROOT_WEIGHT / 4);
@@ -518,7 +522,7 @@ impl MemoryManager {
         // itself.
         let users_pages = pages - 2 * BUDGET_PAGES - sys_pages;
         // `root` and `system` are class `system`; `users` is class `user`. Nothing runs before
-        // anything else: one stride queue, and weight decides (answer 103).
+        // anything else: one stride queue, and weight decides (kernel/scheduling.md).
         let boot = |mm: &mut Self, parent, class, pages, processes, weight| {
             let spec = BudgetSpec {
                 pages,
@@ -561,11 +565,11 @@ impl MemoryManager {
                 self.install_handle(first, handle).expect("boot: no room for the first program's handles");
             }
         }
-        // The machine's devices, charged to `system` and given to the first program as `init`
-        // will receive them (INTERIM, `device.rs`). They come after the three budget handles,
-        // so the first program's table is 1-3 budgets, 4.. devices. The handles are stamped
-        // with `root`, like the three budget handles, and not with the budget the objects are
-        // charged to: a stamp says which budget's destruction revokes the *handle* (R10), and
+        // The machine's devices, charged to `system` and given to the first program as `init` will
+        // receive them (until `init` exists, `device.rs`). They come after the three budget
+        // handles, so the first program's table is 1-3 budgets, 4.. devices. The handles are
+        // stamped with `root`, like the three budget handles, and not with the budget the objects
+        // are charged to: a stamp says which budget's destruction revokes the *handle* (R10), and
         // these are `init`'s to hand on, so they outlive anything below `root`. The objects
         // themselves are charged to, and die with, `system`.
         self.boot_devices(system, first, stamp);
@@ -577,9 +581,9 @@ impl MemoryManager {
         );
     }
 
-    /// INTERIM (until WP-K4's `process_start` passes handles and WP-R3's `init` hands out
-    /// endpoints from the boot manifest): one endpoint for the bundle's programs to talk over,
-    /// because nothing else can put a Redoubt handle in a second process yet.
+    /// Until `init` hands out endpoints from the boot manifest (plan/m1-separation.md): one
+    /// endpoint for the bundle's programs to talk over, because nothing else can put a Redoubt
+    /// handle in a second process yet.
     ///
     /// The **second** program gets the receive right (badge 0, handle 1) and every later one a
     /// handle badged with its own PID, so a server can tell its clients apart. The first
@@ -599,7 +603,8 @@ impl MemoryManager {
         }
     }
 
-    /// INTERIM (until WP-R3's `init` owns the console): the log endpoint, one in every boot.
+    /// Until `init` owns the console (plan/m1-separation.md): the log endpoint, one in every
+    /// boot.
     ///
     /// The first program, which owns the console, gets the receive right, installed last, after
     /// the budgets and the devices, so it is the highest index in its table. Every later program
@@ -619,8 +624,8 @@ impl MemoryManager {
     // --- The calls --------------------------------------------------------------------------------
 
     /// Create the budget object (after every check): its frame, its id, its place in the tree;
-    /// its own object and its limits charged to the parent (R6, R7; answer 76). The class is the
-    /// caller's to choose: `budget_create` passes the parent's (answer 73), boot its own.
+    /// its own object and its limits charged to the parent (R6, R7). The class is the caller's to
+    /// choose: `budget_create` passes the parent's (kernel/budgets.md), boot its own.
     fn new_budget(
         &mut self,
         parent: Option<BudgetFrame>,
@@ -675,7 +680,7 @@ impl MemoryManager {
         Ok(frame)
     }
 
-    /// `budget_create(h(parent), spec) -> h`, after decoding. The checks follow KERNEL-SPEC.md's
+    /// `budget_create(h(parent), spec) -> h`, after decoding. The checks follow kernel/abi.md's
     /// row for `budget_create`, in order.
     pub fn budget_create(&mut self, pid: Pid, parent: u32, spec: &BudgetSpec) -> Result<u32, Error> {
         // Only the kernel (PID 1) has no account, and it makes no Redoubt calls; `NotPermitted` is
@@ -687,8 +692,8 @@ impl MemoryManager {
         if p.depth as usize + 1 >= MAX_DEPTH {
             return Err(Error::TooLarge);
         }
-        // A child's class is its parent's (answer 73); nothing else about scheduling is the
-        // caller's to choose (answer 103: one stride queue, ordered by weight).
+        // A child's class is its parent's (kernel/budgets.md); nothing else about scheduling is
+        // the caller's to choose (kernel/scheduling.md: one stride queue, ordered by weight).
         let mut labels = [0; MAX_LABELS];
         let given = spec.labels.as_slice();
         labels[..given.len()].copy_from_slice(given);
@@ -708,8 +713,8 @@ impl MemoryManager {
         if labels != p.labels() && caller_class != Class::System {
             return Err(Error::ClassDenied);
         }
-        // R6, R7: the parent pays the child's own page and carves its limits (answer 76: a
-        // revocation scope, with zero limits, is no special case).
+        // R6, R7: the parent pays the child's own page and carves its limits (a revocation
+        // scope, with zero limits, is no special case).
         if spec.pages.checked_add(BUDGET_PAGES).is_none_or(|pages| pages > p.free_pages()) {
             return Err(Error::OutOfMemory);
         }
@@ -797,7 +802,7 @@ impl MemoryManager {
     /// a deadline alike). Before anything else, `top`'s carve comes back to its parent, so the
     /// destruction's own work (often the parent's own `budget_destroy`) is charged at the weight
     /// the parent has once the child is gone, not at the sliver it kept while the child held the
-    /// rest (K5-code-review-4 D1; `sched.rs`: a weight change charges what ran before it). The
+    /// rest (`sched.rs`: a weight change charges what ran before it). The
     /// budgets below the top return theirs as the scheduler lifts them, bottom-up
     /// ([`MemoryManager::lift_dying`]).
     pub fn mark_dying(&mut self, top: BudgetFrame) {
@@ -842,8 +847,8 @@ impl MemoryManager {
         });
         // The weight came back as the scheduler lifted each budget (`sched::destroy`).
         self.return_carve(top, false);
-        // Then, and only then (N1), quarantined DMA pages charged in the subtree move to the
-        // parent, which has just got back at least that much (WP-K5b, OD5).
+        // Then, and only then, quarantined DMA pages charged in the subtree move to the parent,
+        // which has just got back at least that much (kernel/devices.md, "Quarantine").
         self.dma_migrate_quarantine(self.budget(top).parent);
         for frame in 0..=self.objects.high_frame {
             if self.is_budget_frame(frame) && self.budget(frame).dying {

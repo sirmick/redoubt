@@ -1,6 +1,7 @@
-//! The capability (NAMESPACES.md): containment, canonical encoding, grants that only narrow, and
-//! the box's own addresses. Property sweeps with a seeded generator, as netd's tests use (no
-//! property-testing crate in the tree): each property is checked on tens of thousands of cases.
+//! The capability (servers/ipd.md, "Scopes and grants"): containment, canonical encoding, grants
+//! that only narrow, and the box's own addresses. Property sweeps with a seeded generator, as
+//! netd's tests use (no property-testing crate in the tree): each property is checked on tens of
+//! thousands of cases.
 
 use redoubt_ipd::scope::{
     MAX_RULES, Ports, Prefix, RULE_BYTES, Rule, Scope, SelfSet, ip, martian_source, mask,
@@ -216,7 +217,8 @@ fn the_encoding_is_canonical_and_round_trips() {
     }
 }
 
-/// The box's own addresses, under a scope of everything (answer 174: checked before the scope).
+/// The box's own addresses, under a scope of everything (servers/ipd.md R59: checked before the
+/// scope).
 #[test]
 fn the_self_set() {
     let set = SelfSet::new(

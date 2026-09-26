@@ -1,4 +1,4 @@
-//! Address space construction (Sv32 and Sv39). See `docs/MEMORY-LAYOUT.md`.
+//! Address space construction (Sv32 and Sv39). See `docs/kernel/memory-layout.md`.
 //!
 //! Page-table memory is only touched through the `paging` crate, which the kernel uses too.
 
@@ -33,7 +33,7 @@ pub struct AddressSpace {
 }
 
 impl AddressSpace {
-    /// Create the kernel's (PID 1) address space: the physmap over `ram`, plus the L1
+    /// Create the kernel's (PID 1) address space: the physmap over `ram`, plus the level-1
     /// table under the kernel's root entry so that every later kernel mapping is shared.
     pub fn new_kernel(alloc: &mut PageAllocator, pid: Pid) -> Self {
         let (root_phys, root) = new_table(alloc, pid);
@@ -143,7 +143,7 @@ impl AddressSpace {
     /// mapping any leaf. When these tables belong to the shared kernel region and this runs
     /// before user address spaces copy the kernel's root entries, a leaf the kernel later
     /// maps into them (its PLIC, say) becomes visible in every address space. On rv64 the
-    /// single shared kernel L1 already spans that region, so this only pre-allocates a
+    /// single shared kernel level-1 table already spans that region, so this only pre-allocates a
     /// leaf-level table there; on rv32, where the region crosses several 4 MiB root entries,
     /// it is what makes those roots shared tables rather than empty copies.
     pub fn reserve_tables(&self, alloc: &mut PageAllocator, virt: usize, size: usize) {

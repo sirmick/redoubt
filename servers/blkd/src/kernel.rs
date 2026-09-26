@@ -1,5 +1,5 @@
 //! The seam's one real implementation: [`Transport`] over the kernel's device calls
-//! (KERNEL-SPEC.md: `map_device`, `dma_alloc`, `receive` on an IRQ handle).
+//! (kernel/devices.md: `map_device`, `dma_alloc`, `receive` on an IRQ handle).
 //!
 //! **This is the only module in `blkd` with `unsafe` in it**, and it holds four blocks: a
 //! volatile read and a volatile write of an MMIO register, and the same two for a byte of the DMA
@@ -31,9 +31,9 @@ pub const REGS_NEEDED: usize = reg::CONFIG + 8;
 pub struct Device {
     /// Where `map_device` put the registers.
     regs: usize,
-    /// How many bytes of them may be touched: the length `map_device` reported (QUESTIONS.md
-    /// 146), not a number this driver assumed. Every access is checked against it, and
-    /// [`Device::open`] refuses a region too short for the registers virtio-mmio puts a block
+    /// How many bytes of them may be touched: the length `map_device` reported
+    /// (kernel/devices.md), not a number this driver assumed. Every access is checked against it,
+    /// and [`Device::open`] refuses a region too short for the registers virtio-mmio puts a block
     /// device's configuration in, so `blkd` never reads past the device object it was given and
     /// never has to guess how big one is.
     regs_len: usize,
@@ -55,7 +55,7 @@ impl Device {
     /// Maps `mmio`'s registers and allocates the driver's DMA region from it.
     ///
     /// `dma_alloc` is allowed only with an MMIO handle carrying the DMA flag, and returns
-    /// physically contiguous, zeroed pages (KERNEL-SPEC.md), which is what the queue's layout
+    /// physically contiguous, zeroed pages (kernel/devices.md), which is what the queue's layout
     /// assumes: one run of [`crate::queue::DMA_PAGES`] pages, and the rings starting at zero.
     /// A region shorter than [`REGS_NEEDED`] is refused here rather than faulted on later: it
     /// is not a virtio-mmio transport, whatever else it is.

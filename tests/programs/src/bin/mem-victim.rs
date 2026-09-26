@@ -1,7 +1,7 @@
 //! The victim and judge of the memory attack (`tests/mem-attack.toml`). It fills pages
 //! with a secret and frees them, then checks every page the attacker lends it: each must be
 //! all zero. The verdict is this program's line, which the attacker cannot print (log-server
-//! marks every line with its writer's PID; README "Writing an attack case").
+//! marks every line with its writer's PID; docs/testbench.md, "Rule F (trusted verdicts)").
 
 #![no_std]
 #![no_main]

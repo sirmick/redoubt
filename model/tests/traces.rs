@@ -42,15 +42,17 @@ fn traces_round_trip() {
     }
 }
 
-/// What WP-C1 does, with a broken model standing in for the kernel: random traces of the
-/// specified model, each ending with the epilogue, replayed on a kernel that breaks one rule.
-/// For every mutation of R1-R11, some trace among the first 2,000 must fail to replay.
+/// What replaying traces on the real kernel does (kernel/model.md), with a broken model standing
+/// in for the kernel: random traces of the specified model, each ending with the epilogue,
+/// replayed on a kernel that breaks one rule. For every mutation of R1-R11, some trace among the
+/// first 2,000 must fail to replay.
 ///
 /// Two breaks are not visible in results, so trace replay cannot see them and other tests must:
-/// R12 (scheduling shows only in timing; WP-K5's tests), and `R5NoMaskOnFire` (a source left
-/// unmasked re-fires into the kernel, but since `receive` unmasks and a pending line fires then
-/// anyway, every result is the same; the model's own R5 check catches it, and WP-K3 must test
-/// the mask directly). The three breaks of `MAX_OPEN_CALLS` need a flood to reach the limit (`check::flood`).
+/// R12 (scheduling shows only in timing; the scheduler's own tests), and `R5NoMaskOnFire` (a
+/// source left unmasked re-fires into the kernel, but since `receive` unmasks and a pending line
+/// fires then anyway, every result is the same; the model's own R5 check catches it, and a kernel
+/// case must test the mask directly: todo/kernel-attack-gaps.md). The three breaks of
+/// `MAX_OPEN_CALLS` need a flood to reach the limit (`check::flood`).
 #[test]
 fn a_rule_breaking_kernel_fails_replay() {
     common::quiet_panics();
@@ -70,19 +72,19 @@ fn a_rule_breaking_kernel_fails_replay() {
     texts.push(common::contracts::serve_blame_trace());
     // The equal-instant expiry order needs a timeout and a budget deadline on one instant.
     texts.push(common::contracts::expiry_order_trace());
-    // A quarantined device named again (WP-K5b, OD6).
+    // A quarantined device named again (kernel/devices.md, "Quarantine").
     texts.push(common::contracts::dma_quarantine_trace());
     let mut missed = Vec::new();
     let invisible = |m: &Mutation| {
-        m.rule() == "policy"
+        m.is_policy()
             || m.rule() == "R12"
             || *m == Mutation::R5NoMaskOnFire
             // Random sequences never reach MAX_OPEN_CALLS; the flood family does (its traces are
             // the ones to replay for R4a).
             || matches!(m, Mutation::OpenCallsUnlimited | Mutation::R4aOpenCallsPerThread | Mutation::R4aFullTakesNothing)
             // Ghost-only: while the dropped device's resets confirm, every answer is the same; only
-            // I-DMA (kernel_sequence, dma_contracts) sees the frame pooled while still armed.
-            || *m == Mutation::K5bResetClearsCoHolderReach
+            // I16 (kernel_sequence, dma_contracts) sees the frame pooled while still armed.
+            || *m == Mutation::DmaResetClearsCoHolderReach
     };
     for m in Mutation::ALL.into_iter().filter(|m| !invisible(m)) {
         let detected = texts.iter().position(|text| {
@@ -212,8 +214,8 @@ fn hostile_traces_are_refused_cleanly() {
         "redoubt-model-trace 2\ncosts budget=1 process=1 contexts=2 thread=1 endpoint=1 handles_per_page=0 page_table=1 \
          open_call=1 exit_slot=1 badge_slots_per_page=1\n"
             .to_string(),
-        // Costs whose sums would overflow (the red team's panics at `tables_needed` and at a
-        // delivery's page count).
+        // Costs whose sums would overflow (panics at `tables_needed` and at a delivery's page
+        // count).
         "redoubt-model-trace 2\ncosts budget=1 process=1 contexts=2 thread=1 endpoint=1 handles_per_page=1 \
          page_table=18446744073709551615 open_call=18446744073709551615 exit_slot=1 badge_slots_per_page=1\n"
             .to_string(),

@@ -1,10 +1,10 @@
-description = "Budgets and handle tables (WP-K1), as seen by a system-class caller holding the boot budgets: carving and charging (R6, R7), labels added and sorted (part of I6), depth, destruction and its sweep of the caller's own table (R10, I2, I10), 128 handles per table page, usage within limits (I5), 500 create-destroy cycles, time_now and random, and a model-predicted sequence. Accounts, other budgets' stamps, user-class callers and killing below system wait for WP-K2 and WP-K4 (checked build)"
+description = "Budgets and handle tables, as seen by a system-class caller holding the boot budgets: carving and charging (R6, R7), labels added and sorted (part of I6), depth, destruction and its sweep of the caller's own table (R10, I2, I10), 128 handles per table page, usage within limits (I5), 500 create-destroy cycles, time_now and random, and a model-predicted sequence; accounts, stamps, user-class callers and killing are other cases' (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 # PID 2 budget-test, alone (the loader's first program: it holds root, system and users).
 programs = ["budget-test"]
 timeout_secs = 30
-# Built with the checks on (docs/testbench.md, "Debug assertions").
+# Built with the checks on (docs/testbench.md, "Checked builds").
 debug_assertions = true
 expect = ['^\[pid 2\] \[budget\] system ', '^\[pid 2\] BUDGET TEST PASSED$']
 forbid = ['\[budget\] FAIL']

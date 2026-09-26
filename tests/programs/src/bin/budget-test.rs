@@ -1,20 +1,20 @@
-//! Budgets and handle tables as KERNEL-SPEC.md states them (WP-K1, with answer 103's queue), as far as a system-class
-//! caller holding the boot budgets can see them: carving and charging (R6, R7), labels added
-//! and sorted (part of I6), depth, destruction and its sweep of this process's own table (R10,
-//! I2, I10), the handle table's cost (128 handles a page), usage within limits after every step
-//! (I5), `time_now` and `random`, and a short sequence whose every result the executable model
-//! predicts (written out below, for WP-C1). Must run as the loader's first program, which holds
-//! root, system and users in handles 1-3, then a handle per device object the machine has
-//! (WP-K3), and lives in system. How many devices there are is the machine's business, so the
-//! handles this test creates are numbered from [`rd::first_free`], never from 4.
+//! Budgets and handle tables as kernel/budgets.md and kernel/objects.md state them, as far as a
+//! system-class caller holding the boot budgets can see them: carving and charging (R6, R7),
+//! labels added and sorted (part of I6), depth, destruction and its sweep of this process's own
+//! table (R10, I2, I10), the handle table's cost (128 handles a page), usage within limits after
+//! every step (I5), `time_now` and `random`, and a short sequence whose every result the
+//! executable model predicts (written out below as a trace, kernel/model.md, "Traces"). Must run
+//! as the loader's first program, which holds root, system and users in handles 1-3, then a
+//! handle per device object the machine has, and lives in system. How many devices there are is
+//! the machine's business, so the handles this test creates are numbered from
+//! [`rd::first_free`], never from 4.
 //!
-//! What K1 cannot show from userspace, and which case will: accounts (R8) and stamps other than
-//! the caller's (R9) travel only in messages (WP-K2); a process killed by R10 in a budget below
-//! `system` needs `process_create` (WP-K4; `budget-destroy-kills` covers `system` itself); a
-//! user-class caller (the `ClassDenied` for labels, `budget_usage`'s `LabelDenied`) needs a
-//! process in a user budget (WP-K4). Budget ids never being reused (I12) is not visible from
-//! here: the kernel checks ids on every handle lookup, and the cycles below only exercise that
-//! path.
+//! What this test cannot show from userspace: accounts (R8) and stamps other than the caller's
+//! (R9) travel only in messages; a process killed by R10 in a budget below `system` needs
+//! `process_create` (`budget-destroy-kills` covers `system` itself); a user-class caller (the
+//! `ClassDenied` for labels, `budget_usage`'s `LabelDenied`) needs a process in a user budget.
+//! Budget ids never being reused (I12) is not visible from here: the kernel checks ids on every
+//! handle lookup, and the cycles below only exercise that path.
 
 #![no_std]
 #![no_main]
@@ -102,7 +102,8 @@ pub extern "C" fn _start() -> ! {
         t.hold(h);
     }
     // Where this process's own handles start: after root, system, users and the machine's
-    // device objects (kernel `device.rs`, INTERIM).
+    // device objects (kernel `device.rs`; which process gets which device is
+    // docs/plan/m1-separation.md).
     let base = rd::first_free();
     // `system` pays for every page this process and log-server fault in, so exact checks of its
     // usage need both to be done growing first: touch the stack this test will use, and let
@@ -118,7 +119,7 @@ pub extern "C" fn _start() -> ! {
     // --- R6, R7: carving and charging -------------------------------------------------------
     let a = expect!(t, rd::create(rd::SYSTEM, &rd::spec(100, 2, 50)), Ok(base)).unwrap_or(base);
     t.hold(a);
-    // The parent pays the child's own page and counts its limits, never its usage (R6, answer 76).
+    // The parent pays the child's own page and counts its limits, never its usage (R6).
     let s = system0;
     let _ = expect!(t, rd::usage(rd::SYSTEM), Ok(Usage {
         pages_usage: s.pages_usage + 101,
@@ -155,9 +156,10 @@ pub extern "C" fn _start() -> ! {
     let again = expect!(t, rd::create(a, &rd::spec(1, 0, 0)), Ok(base + 2)).unwrap_or(base + 2);
     let _ = expect!(t, rd::destroy(again), Ok(()));
 
-    // --- Classes and labels (part of I6 and I8; the rest needs a user-class caller, WP-K4) ----
-    // A child's class is its parent's (answer 73), and nothing in a spec asks for a place in the
-    // queue: there is one stride queue, ordered by weight alone (answer 103).
+    // --- Classes and labels (part of I6 and I8; the rest needs a user-class caller) -----------
+    // A child's class is its parent's, and nothing in a spec asks for a place in the queue: there
+    // is one stride queue, ordered by weight alone (kernel/budgets.md, "Class is trust, not
+    // order").
     let quick = expect!(t, rd::create(a, &labelled(1, &[])), Ok(base + 2)).unwrap_or(base + 2);
     let _ = expect!(t, rd::create(quick, &labelled(0, &[])), Ok(base + 3));
     let _ = expect!(t, rd::destroy(quick), Ok(()));
@@ -242,11 +244,10 @@ pub extern "C" fn _start() -> ! {
     let _ = expect!(t, rd::usage(rd::SYSTEM), Ok(system0));
     let _ = expect!(t, rd::usage(128), Err(Error::BadHandle));
 
-    // --- A sequence the model predicts, result by result (WP-C1 compares these) -------------
-    // In the trace format (redoubt/model/README.md), from a fresh budget M = (10 pages,
+    // --- A sequence the model predicts, result by result (replay compares these) ------------
+    // In the trace format (kernel/model.md, "Traces"), from a fresh budget M = (10 pages,
     // 1 process, weight 10) in system, M = h:4 in the model's numbering (here `base`, since
-    // the boot handles come first), with each budget's own page charged to its parent
-    // (answer 76):
+    // the boot handles come first), with each budget's own page charged to its parent (R6):
     //   budget_create h:4 5 0 0 user [] 0 forever  -> ok h:5
     //   budget_usage h:4                           -> ok usage [10,6,1,0,10,0]
     //   budget_create h:4 5 0 0 user [] 0 forever  -> err OutOfMemory
@@ -306,7 +307,7 @@ pub extern "C" fn _start() -> ! {
     test_programs::wait_ms(5);
     let t2 = rd::time_now().unwrap_or(0);
     t.check(t2 >= t1 + 4_000 && t2 < t1 + 1_000_000, format_args!("time_now {} then {}", t1, t2));
-    // `random` returns one u64 (answer 77): eight draws, all different (a repeat among eight
+    // `random` returns one u64: eight draws, all different (a repeat among eight
     // CSPRNG values has probability about 2^-59).
     let mut draws = [Ok(0); 8];
     for draw in draws.iter_mut() {

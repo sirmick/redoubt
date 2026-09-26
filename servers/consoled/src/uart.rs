@@ -49,8 +49,8 @@ const LSR_THR_EMPTY: u8 = 0x20;
 
 /// How many times [`Uart::put`] looks at `LSR` before giving up on a byte. The transmitter
 /// empties in a character time, so this is generous; the point is that it is finite, because a
-/// server must not spin for ever on a device that has stopped (CONTAINMENT.md: a server parks
-/// calls rather than blocking, and never blocks on hardware either).
+/// server must not spin for ever on a device that has stopped (servers/consoled.md R70: a server
+/// parks calls rather than blocking, and never blocks on hardware either).
 const TX_TRIES: u32 = 10_000;
 
 /// One ns16550.

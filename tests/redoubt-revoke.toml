@@ -1,7 +1,7 @@
-description = "R10 reaching messages in flight (WP-K2): destroying the budget a handle is stamped with fails a queued message and a taken call with Dead, the taken call is abandoned and its reply reaches nobody, and a handle inside a queued message arrives as 0; a budget handle only narrows (I3) (checked build)"
+description = "R10 reaching messages in flight: destroying the budget a handle is stamped with fails a queued message and a taken call with Dead, the taken call is abandoned and its reply reaches nobody, and a handle inside a queued message arrives as 0; a budget handle only narrows (I3) (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# Built with the checks on (docs/testbench.md, "Debug assertions").
+# Built with the checks on (docs/testbench.md, "Checked builds").
 debug_assertions = true
 # PID 2 redoubt-revoke: it must be the loader's first program, the one holding root, system and
 # users, since only a budget handle revokes anything.

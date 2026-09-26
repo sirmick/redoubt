@@ -218,7 +218,7 @@ fn caller(badge: u64, account: u64, labels: &[u64]) -> Caller {
 const ALICE: u64 = 1;
 
 /// The word these tests draw their first minted badge from, so a failure reproduces. On the
-/// machine it comes from the kernel's CSPRNG (answer 126).
+/// machine it comes from the kernel's CSPRNG (servers/serving.md R27).
 const TEST_RANDOM: u64 = 0;
 
 fn alice() -> Caller { caller(ALICE, 1001, &[]) }
@@ -435,7 +435,7 @@ fn labels_are_checked_on_every_request() {
     let mut t = T::new();
     let plain = alice();
     let vault = caller(9, 1001, &[7]);
-    // An unlabelled caller cannot walk into what it cannot read: a qid is a read (question 52).
+    // An unlabelled caller cannot walk into what it cannot read: a qid is a read (R25).
     t.attach(&plain, 0, "");
     for names in [&["vault"][..], &["secret"], &["a", "..", "vault", "key"]] {
         let wnames = Names::new(names).unwrap();
@@ -775,8 +775,8 @@ fn random_requests_never_panic() {
 
 #[test]
 fn every_write_needs_equal_labels() {
-    // Answer 51: no blind write-up. A caller with more labels than the object may read it but
-    // write nothing into it.
+    // servers/serving.md R25: no blind write-up. A caller with more labels than the object may
+    // read it but write nothing into it.
     let mut t = T::new();
     let both = caller(3, 1001, &[7, 8]);
     t.attach(&both, 0, "");
@@ -843,7 +843,7 @@ fn a_held_read_whose_fid_went_becomes_an_error() {
     assert_eq!(Message::decode(&again).unwrap().body, Body::Rerror { ename: "unknown fid" });
 }
 
-/// A write that waits (`Write::Wait`, answer 174) is held exactly as a read is: its T-message is
+/// A write that waits (`Write::Wait`) is held exactly as a read is: its T-message is
 /// left in the lend, and serving it again, once there is room, writes and answers it.
 #[test]
 fn a_write_that_waits_leaves_its_request_to_be_served_again() {

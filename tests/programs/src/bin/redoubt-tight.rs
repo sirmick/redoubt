@@ -1,7 +1,6 @@
-//! A budget carved to exactly what R4's pre-check used to count (WP-K2, from the red team's
-//! probe): a `call` with a lend delivered to a receiver whose budget has precisely the
-//! open-call page plus the lent pages free, and nothing for the page tables that map the lend
-//! where it lands.
+//! A budget carved to exactly what R4's pre-check used to count (from a red-team probe): a
+//! `call` with a lend delivered to a receiver whose budget has precisely the open-call page plus
+//! the lent pages free, and nothing for the page tables that map the lend where it lands.
 //!
 //! R4 lists those page tables among what the receiving budget must be able to pay for, so the
 //! answer is `Refused` to the sender. The kernel used to leave them out of the decision and

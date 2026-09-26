@@ -2,9 +2,10 @@
 
 Not a real protocol: no server speaks it. It exists so the generated codecs, the test vectors
 (`libs/wire/vectors/`) and the fuzz targets exercise every field type, both message shapes,
-replies, error replies and the file framing. Real tables live in the owning server's note
-under `docs/`; each server package writes its own. `docs/WIRE.md` is the specification;
-this note is the practical guide to writing one, and the generator enforces every rule here.
+replies, error replies and the file framing. Real tables are the other files in
+`libs/wire/tables/`, one per protocol, each included by its owning server's page under
+`docs/servers/`. `docs/servers/wire.md` is the specification; this note is the practical guide
+to writing a table, and the generator enforces every rule here.
 
 ## Writing a table
 A protocol is two tables: its messages and its errors.
@@ -30,7 +31,7 @@ Then one row per message:
   `-` for none. Types: `u8`, `u16`, `u32`, `u64`, `string` (`u16` length + UTF-8), `bytes`
   (`u32` length + bytes), and `handle[N] KIND` (one ASCII space between them): the handle in
   slot N, which must name an object of kind KIND, one of `endpoint`, `budget`, `process`,
-  `mmio`, `irq` or `reset` (KERNEL-SPEC.md, Objects). Slots are numbered 0, 1, ... in order,
+  `mmio`, `irq` or `reset` (`docs/kernel/objects.md`). Slots are numbered 0, 1, ... in order,
   at most 4 (`MAX_MSG_HANDLES`), and carry no bytes. The kind is required, and an unknown one
   is refused, but it is documentation: the generator puts it in the generated codecs' docs
   only, and nothing checks it on receipt, since the kernel does not report a received
@@ -43,29 +44,29 @@ Then one row per message:
 A table's messages are `call`s. A protocol that needs a `send` (a transfer) adds a `Kind` column
 after Opcode, `| Opcode | Kind | Message | Fields | Reply |`, and each row says `call` or `send`.
 A `send`'s Reply must be `-`, since nothing answers a send; its generated `Message` gains
-`is_send()`. A table with any other header is refused (WIRE.md).
+`is_send()`. A table with any other header is refused (`docs/servers/wire.md`).
 
 The table ends at the first blank line. Every line before that must be a row; a row-like line
 right after the blank line is refused, so a stray blank line cannot drop rows. Tables inside
 fenced code blocks (like the one above) are ignored.
 
-**Shape** (WIRE.md, Layout in a message). A message is **inline** if its request's fields
-and its reply's fields each have a fixed size (no `string` or `bytes`) and fit in 12 bytes (words 1-3 at 32 bits, the same on
-both widths); the fields are packed into words 1-3 and there is no buffer. Otherwise it is a
-**buffer** message: the request's fields go in the buffer (a lend when sent with `call`, a
-transfer with `send`) with their length in word 1, and the reply's fields are written back
-into the caller's lend with their length in word 1. A small request whose reply carries data
-(a block read) is therefore a buffer message.
+**Shape** (`docs/servers/wire.md`, "The message convention"). A message is **inline** if its
+request's fields and its reply's fields each have a fixed size (no `string` or `bytes`) and fit
+in 12 bytes (words 1-3 at 32 bits, the same on both widths); the fields are packed into words
+1-3 and there is no buffer. Otherwise it is a **buffer** message: the request's fields go in
+the buffer (a lend when sent with `call`, a transfer with `send`) with their length in word 1,
+and the reply's fields are written back into the caller's lend with their length in word 1. A
+small request whose reply carries data (a block read) is therefore a buffer message.
 
 **The error table.** Every protocol has one, marked `<!-- wire-errors: NAME -->` (same NAME)
 with the header `| Code | Error |`: one row per error, the code decimal, unique, the name
 snake_case in backticks and unique. Code 0 is success, and **code 1 is `malformed` in every
-protocol** (WIRE.md, Errors): a request that does not decode (unknown opcode, wrong shape, bad
-lengths, a missing handle, or one found to be of the wrong kind). The generator adds it to
-every table, so a protocol's own codes start at 2, and a table that lists code 1 or the name
-`malformed` itself is refused. A protocol with no errors of its own writes the header and
-separator alone. An error reply carries the code in word 0, zeros in words 1-3 and no
-handles; the caller ignores the buffer.
+protocol** (`docs/servers/wire.md`): a request that does not decode (unknown opcode, wrong
+shape, bad lengths, a missing handle, or one found to be of the wrong kind). The generator adds
+it to every table, so a protocol's own codes start at 2, and a table that lists code 1 or the
+name `malformed` itself is refused. A protocol with no errors of its own writes the header and
+separator alone. An error reply carries the code in word 0, zeros in words 1-3 and no handles;
+the caller ignores the buffer.
 
 **In a 9P file.** A message written into a file (e.g. an `ipd` `ctl` file) is its opcode as a
 `u32` followed by the buffer-shape encoding of its fields, one per `Twrite`. Messages with

@@ -1,4 +1,4 @@
-description = "Budget churn gains nothing (WP-K5, pass inheritance): blocking, spinning-parent, deadline-timed and fresh-intermediate churn leave an equal-weight victim half; a shell that keeps giving a budget half its weight and taking it back is neither starved nor favoured (virtual time, checked build)"
+description = "Budget churn gains nothing (pass inheritance): blocking, spinning-parent, deadline-timed and fresh-intermediate churn leave an equal-weight victim half; a shell that keeps giving a budget half its weight and taking it back is neither starved nor favoured (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true

@@ -1,4 +1,4 @@
-//! Attacker against the Redoubt IPC rules (WP-K2). It holds one badged handle to the boot
+//! Attacker against the Redoubt IPC rules. It holds one badged handle to the boot
 //! endpoint, which `redoubt-victim` receives on, and nothing else.
 //!
 //! What it tries: to receive on a badged handle (steal a receive right, I4); to mint the receive

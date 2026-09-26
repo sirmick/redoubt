@@ -1,9 +1,9 @@
 description = "IPC tests sharing one log server with a process sleeping on the kernel's timer beside them, to catch interference between processes (checked build)"
 arch = ["rv64"]
 kind = "boot"
-# Built with the checks on (docs/testbench.md, "Debug assertions").
+# Built with the checks on (docs/testbench.md, "Checked builds").
 debug_assertions = true
-# sleeper blocks with short timeouts throughout (WP-K5: the timer is the kernel's, so it is what
+# sleeper blocks with short timeouts throughout (the timer is the kernel's, so it is what
 # arms and fires here), each of which must end in Timeout and never early. It reports after every
 # batch of 50, so a report comes after the IPC verdict whichever finishes first.
 programs = ["log-server", "ipc-client", "sleeper"]

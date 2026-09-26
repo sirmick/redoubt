@@ -546,12 +546,11 @@ fn forged_syn(from_port: u16) -> Vec<u8> {
     redoubt_ipd::fake::segment(u32::from_be_bytes([10, 1, 9, 200]), u32::from_be_bytes([10, 1, 0, 2]), &syn)
 }
 
-/// Only `netd`'s frames reach the stack (QA D3-code-review-5, P2-3 a and b): a frame sent on any
-/// other badge, a client's own root badge included, or on the ingress badge by a labelled
-/// process, is dropped, so no client can forge a SYN (a spoofed inbound connection) or an RST into
-/// another's connection. The same SYN on the true ingress badge, sent last, is answered: the
-/// control, and the proof that the dropped ones had been taken and dropped by then (ipd takes
-/// messages in order, on one thread).
+/// Only `netd`'s frames reach the stack: a frame sent on any other badge, a client's own root badge
+/// included, or on the ingress badge by a labelled process, is dropped, so no client can forge a
+/// SYN (a spoofed inbound connection) or an RST into another's connection. The same SYN on the true
+/// ingress badge, sent last, is answered: the control, and the proof that the dropped ones had been
+/// taken and dropped by then (ipd takes messages in order, on one thread).
 #[test]
 fn frames_count_only_from_the_unlabelled_ingress_badge() {
     let net = boot(6);

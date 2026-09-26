@@ -1,4 +1,5 @@
-//! A timeout only wakes (WP-K5; OWNER DECISION 2): it never takes the CPU from the thread running.
+//! A timeout only wakes (kernel/scheduling.md, "Preemption points"): it never takes the CPU from
+//! the thread running.
 //!
 //! A sleeper and a spinner, in budgets of equal weight. The sleeper sleeps 3 ms, twenty times;
 //! each time it blocks, the spinner is picked and starts a 10 ms slice, so the sleeper's timeout

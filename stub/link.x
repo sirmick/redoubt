@@ -1,7 +1,7 @@
-/* The loader stub (WP-R2): a flat binary a launcher maps into every child at a fixed address
+/* The loader stub: a flat binary a launcher maps into every child at a fixed address
  * (this file's ORIGIN = stub::STUB_ENTRY), the same on rv32 and rv64. No dynamic relocations,
  * no writable statics (its own image is mapped read-only executable alongside the process's
- * real one -- INIT.md, Startup block -- so it never needs a `.bss`/`.data` of its own).
+ * real one -- servers/init.md, The startup block -- so it never needs a `.bss`/`.data` of its own).
  */
 ENTRY(_start)
 
@@ -38,7 +38,7 @@ SECTIONS
     /DISCARD/ : { *(.eh_frame) *(.eh_frame_hdr) }
 }
 
-/* Every launcher calls process_start(..., STUB_ENTRY, ...) (PACKAGES.md step 4): if `_start`
+/* Every launcher calls process_start(..., STUB_ENTRY, ...) (servers/init.md, launch step 3): if `_start`
  * ever landed anywhere else in `.text`, every child would run whatever code the linker put at
  * STUB_ENTRY instead, silently. `_start`'s `.text.init` section (main.rs) is `KEEP`'d first, so
  * this should always hold; the assert catches a future linker-layout change that breaks it.

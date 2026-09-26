@@ -1,7 +1,7 @@
-//! Strict JSON for files people write (WIRE.md): RFC 8259 syntax under the I-JSON profile
+//! Strict JSON for files people write (servers/wire.md): RFC 8259 syntax under the I-JSON profile
 //! (RFC 7493), one parser for the boot manifest, package manifests and configuration.
 //!
-//! WIRE.md's rules, as enforced here:
+//! servers/wire.md's rules, as enforced here:
 //! - UTF-8 only;
 //! - no object has two members with the same name. Names are compared byte for byte after
 //!   unescaping (so `"a"` and `"\u0061"` are the same name), with no Unicode normalisation;
@@ -14,7 +14,8 @@
 //! - unknown members are errors: objects are decoded only through [`Value::object`], which
 //!   refuses any member the decoder did not take.
 //!
-//! Stricter than WIRE.md states (each is also I-JSON's advice or removes a second spelling):
+//! Stricter than servers/wire.md states (each is also I-JSON's advice or removes a second
+//! spelling):
 //! - no byte-order mark;
 //! - no surrogates (so no unpaired `\uD800` escape) and no Unicode noncharacters
 //!   (U+FDD0..U+FDEF, U+xFFFE, U+xFFFF), escaped or raw (RFC 7493 section 2.1);
@@ -378,7 +379,7 @@ pub struct SchemaError {
 pub enum SchemaKind {
     /// A required member is absent (`path` ends with its name).
     Missing,
-    /// A member the decoder does not know (WIRE.md: unknown members are errors).
+    /// A member the decoder does not know (servers/wire.md: unknown members are errors).
     Unknown,
     /// A value of the wrong type, or an integer out of range.
     WrongType,
@@ -606,7 +607,7 @@ mod tests {
         SchemaError { path: path.into(), kind }
     }
 
-    /// INIT.md's budget: pages is a 64-bit quantity (a string), the rest small counts.
+    /// servers/init.md's budget: pages is a 64-bit quantity (a string), the rest small counts.
     #[derive(Debug, PartialEq)]
     struct Budget {
         pages: u64,
@@ -636,7 +637,7 @@ mod tests {
 
     #[test]
     fn unknown_members_are_errors() {
-        // The manifest example from INIT.md.
+        // The manifest example from servers/init.md.
         let text = br#"{ "name": "fsd:data", "program": "fsd", "volume": "data",
                          "budget": { "pages": "4096", "processes": 1, "weight": 100 },
                          "receives": ["fsd:data"], "handed": ["blkd"] }"#;

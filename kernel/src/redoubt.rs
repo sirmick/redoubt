@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The Redoubt system calls (KERNEL-SPEC.md), decoded by `redoubt-sys`.
+//! The Redoubt system calls (kernel/abi.md), decoded by `redoubt-sys`.
 //!
 //! The trap handler sends every user-mode `ecall` here; an `a0` outside the call table is an
 //! unknown number (`InvalidArgument`).
 //!
-//! Every call runs the spec's stages in order (KERNEL-SPEC.md, Errors and the order of checks):
+//! Every call runs the spec's stages in order (kernel/abi.md, "Errors and the order of checks"):
 //! `Call::decode` checks the registers; the records a call passes are then checked and copied
 //! (alignment, then lying in the caller's own memory, then their slots); then the call's own
 //! checks, which live with the objects (`budget.rs`, `handle.rs`).
 //!
-//! Implemented calls (WP-K1 through WP-K4): `handle_close`, `budget_create`, `budget_destroy`,
+//! Implemented calls: `handle_close`, `budget_create`, `budget_destroy`,
 //! `budget_usage`, `time_now`, `random`, `endpoint_create`, `mint`, `call`, `send`, `receive`,
 //! `reply`, `serve`, `map_anon`, `unmap`, `set_flags`, `map_device`, `dma_alloc`,
 //! `system_reset` and the `process_*` and `thread_*` families.
@@ -54,7 +54,7 @@ pub fn handle(pid: Pid, tid: TID, regs: &[u64; REGS]) -> Outcome {
         Ok(Some(value)) => Outcome::Return(encode_result(&Ok(value))),
         Err(error) => {
             // Recognized calls retain their raw lend even if an earlier argument did not
-            // decode. No memory has been consumed on this path (answers 167-168).
+            // decode. No memory has been consumed on this path (kernel/ipc.md R13).
             let result = if Number::from_raw(regs[0]) == Some(Number::Call) {
                 Ok(Return::Call(CallOutcome {
                     status: Err(error),
@@ -135,7 +135,7 @@ fn dispatch(pid: Pid, tid: TID, call: Call) -> Result<Option<Return>, Error> {
             MemoryManager::with_mut(|mm| mm.set_flags(pid, addr, len, flags)).map(done)
         }
         Call::MapDevice { device } => MemoryManager::with_mut(|mm| {
-            // QUESTIONS.md 146 (pending): the length comes back with the address.
+            // The length comes back with the address (kernel/devices.md, `map_device`).
             let (addr, len) = mm.map_device(pid, device.index())?;
             Ok(Some(Return::Mapping { addr, len }))
         }),

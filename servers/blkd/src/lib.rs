@@ -1,5 +1,5 @@
 //! `blkd`: the virtio-blk driver. It owns one disk, reads its partition table once, and serves
-//! each partition to one `fsd` as a range of sectors (IO-ARCHITECTURE.md, Storage).
+//! each partition to one `fsd` as a range of sectors (servers/blkd.md).
 //!
 //! # What this is trusted for
 //! On QEMU no hardware confines DMA, so `blkd` is inside the TCB (TENETS.md 7): it programs a
@@ -36,8 +36,8 @@
 //!
 //! # Why the queue is ours
 //! `virtio-drivers` (rcore-os) was read at 0.13.0 and rejected under tenet 5; the reasoning is in
-//! IO-ARCHITECTURE.md, where `netd` will find it rather than re-argue it. The short of it: it is
-//! careful where it matters (it shadows the descriptor table, and refuses a used entry whose id
+//! servers/blkd.md, "Why", where `netd` will find it rather than re-argue it. The short of it: it
+//! is careful where it matters (it shadows the descriptor table, and refuses a used entry whose id
 //! is not the token awaited), but it is 13k lines of device classes we do not have behind six
 //! dependencies, with an interface that is `unsafe` at every call site. [`queue`] and [`virtio`]
 //! are about 500 lines with no dependencies, and with one request outstanding there is no
@@ -86,7 +86,7 @@ pub enum TableError {
 
 /// Reads the partition table once and turns it into the root ranges, **one slot per GPT entry**:
 /// slot *i* is the range badge *i* + 1 names, and `None` is an entry the table does not use
-/// (IO-ARCHITECTURE.md).
+/// (servers/blkd.md, "Ranges and badges").
 ///
 /// The holes are the point. A badge names an entry of the array, not a position among the entries
 /// that happen to be in use, so a gap — which `gdisk` leaves routinely — does not renumber every

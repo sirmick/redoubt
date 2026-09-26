@@ -384,7 +384,7 @@ impl<'a> Reply<'a> {
 }
 
 /// The protocol's error codes: word 0 of an error reply. Code 1, `Malformed`, is every
-/// protocol's: a request that does not decode (WIRE.md, Errors).
+/// protocol's: a request that does not decode (servers/wire.md, "The message convention").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
     Malformed,

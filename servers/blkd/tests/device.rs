@@ -1,5 +1,5 @@
-//! The driver against a hostile virtio-blk device (BUILD-PLAN.md, WP-D1: "a hostile-device model
-//! (malformed rings) never corrupts other memory or panics `blkd`").
+//! The driver against a hostile virtio-blk device: malformed rings never corrupt other memory or
+//! panic `blkd` (servers/blkd.md R51, R52).
 //!
 //! Every test here runs the real bring-up, the real queue and the real partition parser against
 //! `redoubt_blkd::fake::FakeDevice`, which lies on demand. The three things asserted throughout:

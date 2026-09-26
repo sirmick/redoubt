@@ -1,0 +1,22 @@
+[book]
+title = "Redoubt"
+description = "A headless RISC-V operating system that agents can work on and not get out of."
+language = "en"
+src = "."
+
+[build]
+build-dir = "../target/book"
+create-missing = false
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
+[preprocessor.svgbob]
+command = "mdbook-svgbob"
+
+[output.html]
+additional-js = ["theme/mermaid.min.js", "theme/mermaid-init.js"]
+git-repository-url = "https://github.com/sirmick/redoubt"
+
+[output.html.search]
+enable = true

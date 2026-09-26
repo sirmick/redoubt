@@ -1,4 +1,4 @@
-description = "Bench self-check (answer 174): a case with [net] gets virtio-mmio's modern transport (force-legacy off), which netd and blkd require: the network card reports version 2"
+description = "Bench self-check: a case with [net] gets virtio-mmio's modern transport (force-legacy off), which netd and blkd require: the network card reports version 2"
 arch = ["rv64"]
 kind = "boot"
 programs = [{ package = "redoubt-net-tests", bin = "net-rig-probe" }]

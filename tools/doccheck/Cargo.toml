@@ -1,0 +1,11 @@
+[package]
+name = "redoubt-doccheck"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Holds the pages under docs/ to the style guide's rules: status lines, tests, IDs, links, templates"
+publish = false
+
+[[bin]]
+name = "doccheck"
+path = "src/main.rs"

@@ -1,9 +1,9 @@
-//! Generates the typed-message codecs from the tables in the design notes (WIRE.md: "one
-//! layout per message type, defined by a table in the owning server's note ... the Rust and
-//! Elixir codecs are generated from those tables, so sender and receiver cannot disagree").
+//! Generates the typed-message codecs from the protocol tables (servers/wire.md: one layout
+//! per message type, defined by a table the owning server's page includes; the Rust and
+//! Elixir codecs are generated from those tables, so sender and receiver cannot disagree).
 //!
-//! The notes are the single source of truth. This crate reads every `docs/*.md`
-//! and `libs/wire/tables/*.md` (skipping fenced code blocks), finds each message table
+//! The tables are the single source of truth. This crate reads every `libs/wire/tables/*.md`
+//! (skipping fenced code blocks), finds each message table
 //! marked `<!-- wire: NAME -->` and each error table marked `<!-- wire-errors: NAME -->`, and
 //! emits `libs/wire/src/proto/NAME.rs`, `libs/wire/elixir/proto/NAME.ex`, and
 //! `libs/wire/src/proto/mod.rs` listing the Rust modules. The generated files are checked
@@ -20,14 +20,15 @@ use std::path::{Path, PathBuf};
 use redoubt_wire::typed::{HandleKind, INLINE_BYTES, MALFORMED, MAX_MSG_HANDLES};
 
 const MESSAGE_HEADER: [&str; 4] = ["Opcode", "Message", "Fields", "Reply"];
-/// The same with a `Kind` column (WIRE.md: "a `kind` column is added when a protocol first needs
-/// a `send`"): each row says `call` or `send`. A table without the column is all calls.
+/// The same with a `Kind` column, added when a protocol first needs a `send`
+/// (`docs/servers/wire.md`): each row says `call` or `send`. A table without the column is all
+/// calls.
 const MESSAGE_HEADER_KIND: [&str; 5] = ["Opcode", "Kind", "Message", "Fields", "Reply"];
 const ERROR_HEADER: [&str; 2] = ["Code", "Error"];
 const MESSAGE_MARKER: &str = "<!-- wire:";
 const ERROR_MARKER: &str = "<!-- wire-errors:";
 /// The opcode floor on a 9P endpoint: `ninep_common` reserves 1-15 there, so a protocol served
-/// on a 9P endpoint (a table marked `<!-- wire: NAME ninep -->`) starts at 16 (WIRE.md, Messages).
+/// on a 9P endpoint (a table marked `<!-- wire: NAME ninep -->`) starts at 16 (servers/wire.md).
 const NINEP_FIRST_OPCODE: u32 = 16;
 /// The marker suffix that says a protocol is served on a 9P endpoint.
 const NINEP_SUFFIX: &str = " ninep";
@@ -42,7 +43,7 @@ pub enum Ty {
     Str,
     Bytes,
     /// The handle in this slot, and the kind of object it must name (documentation: kinds
-    /// are checked by use, WIRE.md); carries no bytes.
+    /// are checked by use, servers/wire.md); carries no bytes.
     Handle(usize, HandleKind),
 }
 
@@ -117,7 +118,7 @@ pub struct MessageDef {
 impl MessageDef {
     /// Inline if the request's fields and the reply's fields each fit in the words; a
     /// message whose reply needs a buffer is buffer-shaped, because reply data can only
-    /// come back in the caller's lend (WIRE.md).
+    /// come back in the caller's lend (servers/wire.md).
     pub fn inline(&self) -> bool {
         fits_inline(&self.fields) && fits_inline(&self.reply)
     }
@@ -302,14 +303,14 @@ fn parse_message(row: &[&str], with_kind: bool) -> Result<MessageDef, String> {
     let name = backticked(name).ok_or_else(|| format!("message name `{name}` must be in backticks"))?;
     check_ident("message", name)?;
     let reply = parse_fields(reply)?;
-    // A `send` is never an open call, so nothing can answer it (KERNEL-SPEC.md, `reply`).
+    // A `send` is never an open call, so nothing can answer it (kernel/ipc.md R4a).
     if send && !reply.is_empty() {
         return Err(format!("message `{name}` is a `send`: its reply must be `-`, since a send has no reply"));
     }
     Ok(MessageDef { opcode, name: name.to_string(), fields: parse_fields(fields)?, reply, send })
 }
 
-/// The name of error code 1, every protocol's (WIRE.md, Errors).
+/// The name of error code 1, every protocol's (servers/wire.md).
 const MALFORMED_NAME: &str = "malformed";
 
 /// The error every protocol has: code 1.
@@ -366,7 +367,8 @@ pub fn parse(source: &str, text: &str) -> Result<Tables, String> {
         };
         let rest = rest.strip_suffix("-->");
         let (name, ninep) = match (rest, header == MESSAGE_HEADER) {
-            // A protocol served on a 9P endpoint is marked `<!-- wire: NAME ninep -->` (WIRE.md).
+            // A protocol served on a 9P endpoint is marked `<!-- wire: NAME ninep -->`
+            // (servers/wire.md).
             (Some(rest), true) => match rest.trim().strip_suffix(NINEP_SUFFIX) {
                 Some(name) => (name.trim(), true),
                 None => (rest.trim(), false),
@@ -416,7 +418,7 @@ pub fn parse(source: &str, text: &str) -> Result<Tables, String> {
             return Err(at(next, format!("this looks like a row of `{name}`, but its table ended at the blank line above")));
         }
         if header == ERROR_HEADER {
-            // Code 1 is `malformed` in every protocol (WIRE.md, Errors): added here, and a
+            // Code 1 is `malformed` in every protocol (servers/wire.md): added here, and a
             // table may not give the code (or the name) a meaning of its own.
             let mut errors: Vec<ErrorDef> = vec![malformed()];
             for (n, row) in rows {
@@ -443,11 +445,11 @@ pub fn parse(source: &str, text: &str) -> Result<Tables, String> {
                     return Err(at(n, format!("opcode {} used twice", m.opcode)));
                 }
                 // `ninep_common` reserves opcodes 1-15 on a 9P endpoint, so a protocol served
-                // there starts at 16; an unmarked table starts at 1 (WIRE.md, Messages).
+                // there starts at 16; an unmarked table starts at 1 (servers/wire.md).
                 if ninep && m.opcode < NINEP_FIRST_OPCODE {
                     return Err(at(n, format!(
                         "message `{}`: opcode {} is below {NINEP_FIRST_OPCODE}, reserved for `ninep_common`, \
-                         because `{name}` is served on a 9P endpoint (WIRE.md)",
+                         because `{name}` is served on a 9P endpoint (servers/wire.md)",
                         m.name, m.opcode
                     )));
                 }
@@ -477,7 +479,7 @@ pub fn parse(source: &str, text: &str) -> Result<Tables, String> {
 }
 
 /// Joins every protocol with its error table, sorted by name. Every protocol has exactly
-/// one error table (WIRE.md).
+/// one error table (servers/wire.md).
 pub fn link(tables: Vec<Tables>) -> Result<Vec<Protocol>, String> {
     let mut protocols: Vec<Protocol> = Vec::new();
     let mut errors: Vec<ErrorTable> = Vec::new();
@@ -666,7 +668,7 @@ pub fn rust(p: &Protocol) -> String {
     s.push_str("    pub fn encode_file(&self, out: &mut [u8]) -> Result<usize, Error> {\n");
     s.push_str("        typed::encode_file(typed::layout(REQUESTS, self.opcode())?, out, |w| self.write(w))\n    }\n");
     // Only a protocol with a `Kind` column that names a `send` says which messages are sent: every
-    // other protocol is all calls (WIRE.md), and its generated code is unchanged.
+    // other protocol is all calls (servers/wire.md), and its generated code is unchanged.
     if p.messages.iter().any(|m| m.send) {
         let sends: Vec<String> =
             p.messages.iter().filter(|m| m.send).map(|m| format!("Message::{}(_)", m.type_name())).collect();
@@ -699,7 +701,7 @@ pub fn rust(p: &Protocol) -> String {
     s.push_str("        typed::encode(typed::layout(REPLIES, self.opcode())?, 0, buf, |w| self.write(w))\n    }\n}\n");
 
     s.push_str("\n/// The protocol's error codes: word 0 of an error reply. Code 1, `Malformed`, is every\n");
-    s.push_str("/// protocol's: a request that does not decode (WIRE.md, Errors).\n");
+    s.push_str("/// protocol's: a request that does not decode (servers/wire.md, \"The message convention\").\n");
     s.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub enum ErrorCode {\n");
     for e in &p.errors {
         let _ = writeln!(s, "    {},", camel(&e.name));
@@ -813,7 +815,7 @@ pub fn elixir(p: &Protocol) -> String {
     s.push_str("  @doc \"\"\"\n  A message's layout: `{opcode, shape, fields, handles, reply}`, where `fields` lists\n");
     s.push_str("  `{name, type}` in order, `handles` lists the handles' names by slot, and `reply` is\n");
     s.push_str("  `{fields, handles}`.\n");
-    // The kinds are documentation only (WIRE.md): checked by use, never on receipt.
+    // The kinds are documentation only (servers/wire.md): checked by use, never on receipt.
     let kinds: Vec<String> = p
         .messages
         .iter()
@@ -865,17 +867,16 @@ pub fn elixir(p: &Protocol) -> String {
     s
 }
 
-/// The notes that may hold tables, relative to the repository root, sorted.
+/// The files that may hold tables, relative to the repository root, sorted.
 pub fn sources(root: &Path) -> Result<Vec<PathBuf>, String> {
     let mut found = Vec::new();
-    for dir in ["docs", "libs/wire/tables"] {
-        let entries = std::fs::read_dir(root.join(dir)).map_err(|e| format!("{dir}: {e}"))?;
-        for entry in entries {
-            let path = entry.map_err(|e| format!("{dir}: {e}"))?.path();
-            if path.extension().is_some_and(|x| x == "md") {
-                let rel = path.strip_prefix(root).map_err(|e| e.to_string())?;
-                found.push(rel.to_path_buf());
-            }
+    let dir = "libs/wire/tables";
+    let entries = std::fs::read_dir(root.join(dir)).map_err(|e| format!("{dir}: {e}"))?;
+    for entry in entries {
+        let path = entry.map_err(|e| format!("{dir}: {e}"))?.path();
+        if path.extension().is_some_and(|x| x == "md") {
+            let rel = path.strip_prefix(root).map_err(|e| e.to_string())?;
+            found.push(rel.to_path_buf());
         }
     }
     found.sort();
@@ -998,9 +999,9 @@ mod tests {
         assert!(bare("<!-- wire: demo -->\n| Opcode | Message | Fields |\n").contains("header"));
     }
 
-    /// WIRE.md (Messages): a protocol served on a 9P endpoint is marked
+    /// servers/wire.md: a protocol served on a 9P endpoint is marked
     /// `<!-- wire: NAME ninep -->`, and its opcodes start at 16, since `ninep_common` reserves
-    /// 1-15 there; an unmarked table is unaffected and may start at 1. NAMESPACES.md's `fsd`
+    /// 1-15 there; an unmarked table is unaffected and may start at 1. The `fsd`
     /// typed-operations table is marked (its opcodes start at 16); `ninep_common` is *not* — it
     /// owns the reserved 1-15 itself — so it keeps a plain marker.
     #[test]
@@ -1041,7 +1042,7 @@ mod tests {
         assert!(errors("| 2 | `X` |\n").contains("snake_case"));
     }
 
-    /// Answers 28 and 56: every handle names its kind, one WIRE.md lists, after exactly one
+    /// Every handle names its kind, one `libs/wire/tables/example.md` lists, after exactly one
     /// ASCII space; the kind is documentation, and there is nothing else after it.
     #[test]
     fn handle_kinds() {
@@ -1062,7 +1063,7 @@ mod tests {
         assert!(err("| 1 | `a` | `h: u32 endpoint` | - |\n").contains("unknown type"));
     }
 
-    /// Found by review: the separator is exactly one ASCII space. A tab, two spaces or a
+    /// The separator is exactly one ASCII space. A tab, two spaces or a
     /// non-ASCII space (which `str::trim` and `split_whitespace` would have accepted) is refused.
     #[test]
     fn kind_separator_is_one_ascii_space() {
@@ -1101,7 +1102,7 @@ mod tests {
         assert!(ex.contains("[{:x, :u32}], [:r, :m], {[], [:b]}"), "{ex}");
     }
 
-    /// Answers 41 and 42: code 1 is `Malformed` in every protocol, added by the generator;
+    /// Code 1 is `Malformed` in every protocol, added by the generator;
     /// a table giving code 1 (or the name) a meaning of its own is refused.
     #[test]
     fn malformed_is_code_one_everywhere() {
@@ -1119,7 +1120,7 @@ mod tests {
         assert_eq!(errors("\nSome prose.\n").unwrap()[0].errors, [malformed()]);
         // A row cut off from the empty table is still refused.
         assert!(errors("\n| 2 | `x` |\n").unwrap_err().contains("ended at the blank line"));
-        // Found by review: a line straight after the empty table names the table.
+        // A line straight after the empty table names the table.
         assert!(errors("Some prose.\n").unwrap_err().contains("table `demo` must end at a blank line"));
         assert!(errors("<!-- wire: other -->\n").unwrap_err().contains("table `demo` must end at a blank line"));
         let p = errors("| 2 | `denied` |\n").unwrap();
@@ -1132,7 +1133,7 @@ mod tests {
     const KIND_HEAD: &str =
         "<!-- wire: demo -->\n| Opcode | Kind | Message | Fields | Reply |\n| --- | --- | --- | --- | --- |\n";
 
-    /// WIRE.md: a `Kind` column says which messages are `send`s; without it, all are calls.
+    /// servers/wire.md: a `Kind` column says which messages are `send`s; without it, all are calls.
     #[test]
     fn kind_column() {
         let rows = "| 1 | call | `a` | - | `x: u32` |\n| 2 | send | `b` | `f: bytes` | - |\n";
@@ -1168,36 +1169,17 @@ mod tests {
         assert!(protocols(bare).unwrap_err().contains("needs a `<!-- wire: NAME -->`"));
     }
 
-    /// `text` with the fenced message table replaced by what WP-R1b writes when it unfences
-    /// it: the marker, the table, and an empty error table. `None` if there is no such fence.
-    fn unfence(text: &str, name: &str) -> Option<String> {
-        let lines: Vec<&str> = text.lines().collect();
-        let header = |l: &str| cells(l.trim()).is_some_and(|c| c == MESSAGE_HEADER);
-        let open = (0..lines.len()).find(|&i| lines[i].trim().starts_with("```") && lines.get(i + 1).is_some_and(|l| header(l)))?;
-        let close = (open + 1..lines.len()).find(|&i| lines[i].trim().starts_with("```"))?;
-        let mut out: Vec<String> = lines[..open].iter().map(|l| l.to_string()).collect();
-        out.push(format!("<!-- wire: {name} -->"));
-        out.extend(lines[open + 1..close].iter().map(|l| l.trim().to_string()));
-        out.extend(["".into(), format!("<!-- wire-errors: {name} -->"), "| Code | Error |".into(), "| --- | --- |".into()]);
-        out.extend(lines[close + 1..].iter().map(|l| l.to_string()));
-        Some(out.join("\n") + "\n")
-    }
-
-    /// The tables WP-R1b unfences (NAMESPACES.md `ninep_common`, INIT.md `startup`), read
-    /// from the notes as they stand, with the fence stripped: the generator can express both.
-    /// Once R1b has unfenced them, the notes are parsed as they are.
+    /// The real tables: `ninep_common` has a handle reply and a string field; `startup` has no
+    /// inline message.
     #[test]
-    fn fenced_r1b_tables_parse() {
+    fn tables_parse() {
         let mut found = Vec::new();
-        for (note, name) in [("docs/NAMESPACES.md", "ninep_common"), ("docs/INIT.md", "startup")] {
+        for note in ["libs/wire/tables/ninep_common.md", "libs/wire/tables/startup.md"] {
             let text = std::fs::read_to_string(repo_root().join(note)).unwrap();
-            let text = unfence(&text, name).unwrap_or(text);
             let tables = parse(note, &text).unwrap_or_else(|e| panic!("{e}"));
             found.push(tables);
         }
         let p = link(found).unwrap();
-        // By name, not by position: INIT.md holds `keyd`'s tables as well (WP-S1), and other
-        // notes will grow more, so this must not depend on how many a note happens to have.
         let by_name = |want: &str| p.iter().find(|t| t.name == want).unwrap_or_else(|| panic!("{want}"));
         let (n, s) = (by_name("ninep_common"), by_name("startup"));
         let names: Vec<&str> = n.messages.iter().map(|m| m.name.as_str()).collect();
@@ -1215,7 +1197,7 @@ mod tests {
     }
 
 
-    /// Found by review: these names compiled into code that did not build.
+    /// These names would compile into code that does not build.
     #[test]
     fn refuses_names_that_clash_in_generated_code() {
         for name in [
@@ -1227,7 +1209,7 @@ mod tests {
         assert!(protocols(&format!("{HEAD}| 1 | `value` | - | - |\n{ERRORS}")).is_ok());
     }
 
-    /// Found by review: rows were dropped without an error.
+    /// No row is dropped without an error.
     #[test]
     fn every_row_is_read_or_refused() {
         assert!(err("| 1 | `a` | - | - |\n\n| 2 | `b` | - | - |\n").contains("ended at the blank line"));
@@ -1248,13 +1230,15 @@ mod tests {
         assert!(protocols(&format!("```\n{table}")).unwrap_err().contains("unclosed code fence"));
     }
 
-    /// WIRE.md shows an example table in a code fence and names the markers in prose; it
-    /// defines no protocol.
+    /// The authoring guide shows tables in code fences and names the markers in prose; the only
+    /// protocol it defines is `example`.
     #[test]
-    fn wire_md_defines_no_protocol() {
-        let text = std::fs::read_to_string(repo_root().join("docs/WIRE.md")).unwrap();
-        assert!(text.contains("<!-- wire: example -->"), "WIRE.md no longer shows its example");
-        assert_eq!(parse("docs/WIRE.md", &text), Ok(Tables::default()));
+    fn the_guide_defines_only_example() {
+        let note = "libs/wire/tables/example.md";
+        let text = std::fs::read_to_string(repo_root().join(note)).unwrap();
+        let p = link(vec![parse(note, &text).unwrap()]).unwrap();
+        let names: Vec<&str> = p.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["example"]);
     }
 
     #[test]

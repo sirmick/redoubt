@@ -40,7 +40,8 @@ pub enum ProcessState {
     Allocated,
 
     /// A loader-bundle program that hasn't run yet: its first thread starts at `entry` with stack
-    /// pointer `sp` when it is first switched to (INTERIM, until R3's `init` launches them).
+    /// pointer `sp` when it is first switched to (until `init` launches them,
+    /// plan/m1-separation.md).
     Setup { entry: usize, sp: usize },
 
     /// This process is able to be run.  The context bitmask describes contexts
@@ -160,7 +161,7 @@ impl Process {
             // SAFETY: called only here, as the final teardown step for a process that will not run again.
             unsafe { mm.release_all_memory_for_process(self.pid, &self.mapping) };
             // Its DMA frames are pooled only once every device that could hold their address
-            // confirms a reset, or quarantined for ever (WP-K5b, `dma.rs`).
+            // confirms a reset, or quarantined for ever (kernel/devices.md, `dma.rs`).
             mm.dma_release(self.pid);
             mm.process_ended(self.pid);
         });
@@ -168,10 +169,9 @@ impl Process {
         // Remove this PID from the process table
         ArchProcess::destroy(self.pid);
         self.state = ProcessState::Free;
-        // And forget its address space. Until WP-K4 nothing ever reused a PID, so a terminated
-        // process could keep a `satp` naming page tables that had just been freed; now
-        // `process_create` draws PIDs from the free ones, and `MemoryMapping::allocate` refuses
-        // a mapping that still names an address space.
+        // And forget its address space. `process_create` draws PIDs from the free ones, and
+        // `MemoryMapping::allocate` refuses a mapping that still names an address space, so a
+        // terminated process must not keep a `satp` naming page tables that were just freed.
         self.mapping = Default::default();
         Ok(())
     }
@@ -222,12 +222,12 @@ impl ProcessTable {
     pub fn init_from_memory(&mut self, base: *const u32, args: &crate::args::KernelArguments) {
         // Look through the kernel arguments and create a new process for each.
         let init_offsets = {
-            // The kernel, then one `IniE` tag per loader process (BOOT.md).
+            // The kernel, then one `IniE` tag per loader process (kernel/boot.md).
             let init_count = 1 + args.iter().filter(|arg| arg.name == u32::from_le_bytes(*b"IniE")).count();
-            // The loader writes the table into one page, one record per process (BOOT.md), and
-            // refuses a bundle with more processes than the kernel has room for. This is the
-            // kernel's side of that check: a count beyond either limit means the two disagree,
-            // and the boot stops here rather than at an index somewhere later.
+            // The loader writes the table into one page, one record per process (kernel/boot.md),
+            // and refuses a bundle with more processes than the kernel has room for. This is the
+            // kernel's side of that check: a count beyond either limit means the two disagree, and
+            // the boot stops here rather than at an index somewhere later.
             let capacity = (redoubt_sys::PAGE_SIZE / size_of::<crate::arch::process::InitialProcess>())
                 .min(crate::arch::process::MAX_PROCESS_COUNT);
             assert!(
@@ -271,7 +271,7 @@ impl ProcessTable {
         ArchProcess::setup_first_thread(KERNEL_PID, 0, 0, 0);
     }
 
-    /// WP-K4: give `pid` a slot in the process table and an address space, without a thread.
+    /// Give `pid` a slot in the process table and an address space, without a thread.
     /// The caller has already reserved the process against its budget (`budget.rs`); everything
     /// the address space takes is charged to that budget as it is allocated.
     pub fn allocate_process_slot(
@@ -297,8 +297,8 @@ impl ProcessTable {
         Ok(())
     }
 
-    /// WP-K4: give back the slot of a process that never started (a `process_create` that failed
-    /// after its address space was made). Its frames have already been released.
+    /// Give back the slot of a process that never started (a `process_create` that failed after
+    /// its address space was made). Its frames have already been released.
     pub fn free_process_slot(&mut self, pid: Pid) {
         ArchProcess::destroy(pid);
         if let Some(entry) = self.processes.get_mut(pid.get() as usize - 1) {
@@ -307,7 +307,7 @@ impl ProcessTable {
         }
     }
 
-    /// WP-K4: `process_start` has set up the first thread; the process becomes runnable.
+    /// `process_start` has set up the first thread; the process becomes runnable.
     pub fn start_process(&mut self, pid: Pid) -> Result<(), ProcessError> {
         let process = self.get_process_mut(pid)?;
         match process.state {
@@ -319,9 +319,9 @@ impl ProcessTable {
         }
     }
 
-    /// WP-K4: `thread_create(entry, sp, arg) -> tid` (KERNEL-SPEC.md). As `create_thread`,
-    /// without a stack to reserve: a Redoubt thread is given a stack pointer, not a stack
-    /// to reserve, and the calling thread keeps running with the new thread's id as its result.
+    /// `thread_create(entry, sp, arg) -> tid` (kernel/processes.md). As `create_thread`, without
+    /// a stack to reserve: a Redoubt thread is given a stack pointer, not a stack to reserve, and
+    /// the calling thread keeps running with the new thread's id as its result.
     pub fn create_redoubt_thread(
         &mut self,
         pid: Pid,
@@ -405,7 +405,7 @@ impl ProcessTable {
             ];
 
             // The multiply is a hash: it is meant to wrap, so say so, or a checked build
-            // panics here instead of scheduling (docs/testbench.md, "Debug assertions").
+            // panics here instead of scheduling (docs/testbench.md, "Checked builds").
             MULTIPLY_DEBRUIJN_BIT_POSITION[((!v.wrapping_sub(1) & v).wrapping_mul(0x077CB531)) >> 27]
         }
         // If there's only one thread runnable, run that one
@@ -416,7 +416,7 @@ impl ProcessTable {
         if thread_mask & (thread_mask - 1) == 0 {
             trailing_zeros(thread_mask)
         } else {
-            // The threads above `current_thread`: none when it is the last TID (OD10: 31 on rv32).
+            // The threads above `current_thread`: none when it is the last TID (31 on rv32).
             let upper_bits = thread_mask & usize::MAX.checked_shl(current_thread as u32 + 1).unwrap_or(0);
             if upper_bits != 0 { trailing_zeros(upper_bits) } else { trailing_zeros(thread_mask) }
         }
@@ -430,7 +430,7 @@ impl ProcessTable {
         if thread_mask.is_power_of_two() {
             thread_mask.trailing_zeros() as usize
         } else {
-            // The threads above `current_thread`: none when it is the last TID (OD10: 31 on rv32).
+            // The threads above `current_thread`: none when it is the last TID (31 on rv32).
             let upper_bits = thread_mask & usize::MAX.checked_shl(current_thread as u32 + 1).unwrap_or(0);
             if upper_bits != 0 {
                 upper_bits.trailing_zeros() as usize

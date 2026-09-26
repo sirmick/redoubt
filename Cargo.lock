@@ -528,6 +528,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "redoubt-doccheck"
+version = "0.1.0"
+
+[[package]]
 name = "redoubt-ipd"
 version = "0.1.0"
 dependencies = [

@@ -1,7 +1,7 @@
 description = "A second hart, started via SBI HSM, contends on the spinlock big-kernel-lock without losing updates (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# Built with the checks on (docs/testbench.md, "Debug assertions").
+# Built with the checks on (docs/testbench.md, "Checked builds").
 debug_assertions = true
 programs = ["log-server"]
 kernel_features = ["smp"]

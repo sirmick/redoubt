@@ -27,6 +27,7 @@ members = [
   "tests/programs",
   "tests/net",
   "tests/net/client",
+  "tools/doccheck",
   "tools/testbench",
   "tools/vendor-check",
   "vendor/getrandom",
@@ -80,7 +81,7 @@ opt-level = "s" # z,s: Optimize for size instead of performance; 1 for easier de
 
 # Release with checks on: `core`'s preconditions on raw-pointer calls, `debug_assert!` and
 # arithmetic overflow panic instead of being silent. The bench boots chosen cases with it
-# (docs/testbench.md, "Debug assertions"); `cargo build --profile checked` by hand.
+# (docs/testbench.md, "Checked builds"); `cargo build --profile checked` by hand.
 [profile.checked]
 inherits = "release"
 debug-assertions = true
@@ -90,7 +91,7 @@ overflow-checks = true
 [patch.crates-io]
 [patch.crates-io.getrandom]
 path = "vendor/getrandom"
-# ipd's stack (answer 174): the vendored copies are the ones that build; tools/vendor-check
+# ipd's stack: the vendored copies are the ones that build; tools/vendor-check
 # proves it and that every vendored byte is the published one.
 [patch.crates-io.smoltcp]
 path = "vendor/smoltcp"

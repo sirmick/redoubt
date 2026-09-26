@@ -1,4 +1,4 @@
-//! `map_fixed` (KERNEL-SPEC.md R11, answer 172): the model's own checks, independent of the
+//! `map_fixed` (kernel/memory.md R11): the model's own checks, independent of the
 //! kernel boot bench (`tests/programs/src/bin/map-fixed-attack.rs` covers the kernel).
 
 mod common;
@@ -17,8 +17,8 @@ fn call(w: &mut World, tid: u64, s: Syscall) -> Result<Ret, Error> {
     }
 }
 
-/// Page 0 is user space (K5a-addr0): `map_fixed(0, ...)` succeeds, and a second identical call
-/// is refused as an overlap, not as "outside user space".
+/// Page 0 is user space (kernel/memory-layout.md): `map_fixed(0, ...)` succeeds, and a second
+/// identical call is refused as an overlap, not as "outside user space".
 #[test]
 fn addr_zero_succeeds_then_a_second_call_overlaps() {
     let mut w = World::new(None);
@@ -38,7 +38,7 @@ fn addr_zero_succeeds_then_a_second_call_overlaps() {
 
 /// A `map_fixed` placed high (inside `[KERNEL_CHOSEN_BASE, USER_TOP)`, where a static ELF's
 /// stub-placed segments and the loader stub itself live) must not make a later `map_anon` fail:
-/// `alloc_va`'s first-fit fallback (P1-1) keeps the model as permissive as the kernel's bounded
+/// `alloc_va`'s first-fit fallback keeps the model as permissive as the kernel's bounded
 /// `find_virtual_address` window, which never sees a mapping that high.
 #[test]
 fn map_fixed_near_user_top_does_not_starve_map_anon() {
@@ -53,11 +53,10 @@ fn map_fixed_near_user_top_does_not_starve_map_anon() {
 }
 
 /// A hostile huge `len` must be refused promptly: the overlap check is one `BTreeMap` range
-/// lookup and the pages-vs-budget check runs before `tables_needed` ever walks the range
-/// (P1-2/N2). The range matches the boot bench's (4 GiB to the top of user space, about 2^26
-/// pages). The bound is generous for a debug build: the fixed path is microseconds, while a
-/// regression to one lookup per page, or to `tables_needed` first (2^26 vpns into a
-/// `BTreeSet`), takes seconds.
+/// lookup and the pages-vs-budget check runs before `tables_needed` ever walks the range. The
+/// range matches the boot bench's (4 GiB to the top of user space, about 2^26 pages). The bound
+/// is generous for a debug build: the fixed path is microseconds, while a regression to one
+/// lookup per page, or to `tables_needed` first (2^26 vpns into a `BTreeSet`), takes seconds.
 #[test]
 fn huge_len_is_refused_promptly() {
     let mut w = World::new(None);
@@ -79,7 +78,7 @@ fn free(w: &World) -> u64 {
 
 fn used(w: &World) -> u64 { w.k.budgets[&w.k.processes[&1].budget].pages_used }
 
-/// The "page tables" half of the charge check (red team P2-1), which the "pages" half never
+/// The "page tables" half of the charge check, which the "pages" half never
 /// reaches: pages that fit, whose page tables do not. The same case as the boot bench's
 /// `page_table_charge`. `[4 GiB - PAGE, 4 GiB + PAGE)` is the last page of the fourth gigabyte
 /// and the first of the fifth, both empty, so each page needs a level-1 table (one per
@@ -133,7 +132,7 @@ fn page_tables_half_of_the_charge_check() {
     assert_eq!(used(&w), before + PAGES + TABLES, "2 pages and 4 page tables");
 }
 
-/// Both sides of a lend are occupied (red team P2-4): the borrower's alias (`LentIn`) and the
+/// Both sides of a lend are occupied: the borrower's alias (`LentIn`) and the
 /// lender's own page (`LentOut`), here in one process, as in the boot bench. The kernel refuses
 /// them through their non-empty PTEs; the model through `p.space`, a different mechanism, which
 /// is why both are tested.
@@ -222,7 +221,7 @@ fn success_then_unmap_returns_to_baseline() {
 }
 
 /// `KERNEL_CHOSEN_BASE` stays the boundary the kernel picks its own addresses above; a
-/// `map_fixed` just below it must not affect that (sanity check for the P1-1 fallback range).
+/// `map_fixed` just below it must not affect that (sanity check for the fallback range).
 #[test]
 fn map_fixed_below_kernel_chosen_base_is_unaffected() {
     let mut w = World::new(None);

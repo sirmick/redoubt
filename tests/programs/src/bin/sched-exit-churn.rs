@@ -1,4 +1,4 @@
-//! Exiting on the CPU is charged (WP-K5; accounting at the trap boundary): an attacker whose
+//! Exiting on the CPU is charged (R12; accounting at the trap boundary): an attacker whose
 //! threads, or child processes, each run nearly a slice and then exit (or fault) gets at most
 //! its weight against an equal-weight victim.
 

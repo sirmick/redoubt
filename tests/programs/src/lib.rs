@@ -7,7 +7,7 @@
 //!
 //! Convention: a test program ends by logging `<NAME> TEST PASSED` or `<NAME> TEST FAILED`.
 //! An attack program ends with `attempts done` instead: its own verdict would count for nothing
-//! (docs/testbench.md, "Writing an attack case").
+//! (docs/testbench.md, "Rule F (trusted verdicts)").
 
 #![no_std]
 
@@ -119,7 +119,7 @@ pub fn park() -> ! {
 /// whose verdict is in (or, with no victim, the attacker when done) reports to the checker,
 /// which names the reporter by its kernel-written badge in a line no relayed text can start
 /// with, says the system is still serving, and powers off. The case's `reporter` pins who.
-/// See docs/testbench.md, "Writing an attack case".
+/// See docs/testbench.md, "Rule F (trusted verdicts)".
 pub mod checker {
     use crate::{op, rd};
 
@@ -131,7 +131,7 @@ pub mod checker {
     }
 }
 
-/// Protocol for the Redoubt IPC cases (WP-K2): `redoubt-server` answers `redoubt-client` over
+/// Protocol for the Redoubt IPC cases: `redoubt-server` answers `redoubt-client` over
 /// the boot endpoint the kernel gives the bundle's programs. The opcode is word 0 of a call.
 pub mod redoubt_ipc {
     pub mod op {
@@ -157,7 +157,7 @@ pub mod redoubt_ipc {
         /// Report the abandoned notices, parked calls and sends the server has seen.
         pub const COUNTS: usize = 10;
         /// Word 1 = 0: fill the server's own handle table to `MAX_HANDLES`, so that a
-        /// message's handles have nowhere to go and R4 refuses it (answer 116). Word 1 = 1:
+        /// message's handles have nowhere to go and R4 refuses it. Word 1 = 1:
         /// empty it again, so the steps that follow can mint.
         pub const FILL_TABLE: usize = 11;
         /// The last call of the script.

@@ -1,4 +1,4 @@
-description = "map_fixed's page-table count across gigabytes (K5a review round 2, N1): two missing level-0 tables at index 0 of consecutive gigabytes, every table between them present, are both counted, so a request one table short is refused with nothing charged instead of panicking the kernel"
+description = "map_fixed's page-table count across gigabytes (R22, I14): two missing level-0 tables at index 0 of consecutive gigabytes, every table between them present, are both counted, so a request one table short is refused with nothing charged instead of panicking the kernel"
 arch = ["rv64"]
 kind = "boot"
 debug_assertions = true

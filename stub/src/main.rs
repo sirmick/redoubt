@@ -1,6 +1,7 @@
-//! The loader stub (WP-R2): entered directly by `process_start` (no `redoubt-rt::entry!`, since
-//! it never returns an exit code of its own -- it jumps into the program it just mapped). See
-//! `stub::plan` for the segment bounds-checking this drives.
+//! The loader stub (servers/init.md, "Launching through the loader stub"): entered directly by
+//! `process_start` (no `redoubt-rt::entry!`, since it never returns an exit code of its own -- it
+//! jumps into the program it just mapped). See `stub::plan` for the segment bounds-checking this
+//! drives.
 //!
 //! Depends on `redoubt-sys` only, never `redoubt-rt` (`stub::lib`'s module doc): every call here
 //! goes straight through `redoubt_sys::syscall`, and this file supplies its own `#[panic_handler]`
@@ -21,14 +22,13 @@ mod exit {
     pub const BAD_STARTUP: u32 = 110;
     /// The ELF did not parse, or a segment failed one of `stub::plan`'s own bounds/flags checks:
     /// the parent (or its package) handed this child a hostile image, and only this child pays
-    /// for it (PACKAGES.md: "A malicious ELF can at most compromise the process it was going to
-    /// become").
+    /// for it (servers/init.md R32: a hostile image hurts only its process).
     pub const BAD_IMAGE: u32 = 111;
     /// `map_fixed` answered `OutOfMemory` for a segment `stub::plan` accepted: this child's
-    /// budget cannot hold the program's pages or their page tables (KERNEL-SPEC.md, Errors).
-    /// Kept distinct from `BAD_IMAGE` because it is a resource limit, not a hostile image
-    /// (round-2 red team P3-7). `InvalidArgument` from `map_fixed` or `set_flags` (a segment over
-    /// a mapping the parent made, such as the stack) is `BAD_IMAGE`.
+    /// budget cannot hold the program's pages or their page tables (kernel/abi.md, "Errors and
+    /// their codes"). Kept distinct from `BAD_IMAGE` because it is a resource limit, not a
+    /// hostile image. `InvalidArgument` from `map_fixed` or `set_flags` (a segment over a mapping
+    /// the parent made, such as the stack) is `BAD_IMAGE`.
     pub const MAP_UNAVAILABLE: u32 = 112;
     /// The stub itself panicked (matches `redoubt_rt::start::exit::PANIC`, though this binary
     /// never links `redoubt-rt`: any caller inspecting exit codes sees the same value either way).
@@ -38,7 +38,7 @@ mod exit {
 /// `.text.init` (`link.x`) is the only section `KEEP`'d first in `.text`, and `link.x` asserts
 /// this symbol lands at `ORIGIN(RAM)` (`STUB_ENTRY`): without this section, the linker is free
 /// to place `_start` anywhere in `.text`, so every launcher's `process_start(..., STUB_ENTRY,
-/// ...)` would jump into whatever code happened to land first instead (round-2 red team P1-1).
+/// ...)` would jump into whatever code happened to land first instead.
 #[no_mangle]
 #[link_section = ".text.init"]
 pub extern "C" fn _start(arg: usize) -> ! {
@@ -53,8 +53,8 @@ fn run(arg: usize) -> Result<usize, u32> {
         return Err(exit::BAD_STARTUP);
     }
     // SAFETY: `arg` is the startup page address the kernel gave this thread (`process_start`'s
-    // `arg`, INIT.md, Startup block); the parent mapped one whole page here, read-only, before
-    // starting this process, and it stays mapped for the life of the process.
+    // `arg`, servers/init.md, "The startup block"); the parent mapped one whole page here,
+    // read-only, before starting this process, and it stays mapped for the life of the process.
     let page = unsafe { core::slice::from_raw_parts(arg as *const u8, PAGE_SIZE) };
     let (image_addr, image_len) = match read_image(page) {
         Ok(Some(image)) => image,
@@ -69,23 +69,24 @@ fn run(arg: usize) -> Result<usize, u32> {
     let exclude = [startup_page, stub_region];
 
     // The image range itself, not just a segment inside it, must not overlap the stub or the
-    // startup page (round-2 red team P3-6): otherwise the raw read below could alias the stub's
-    // own mapped code, and the later "free the image" unmap could remove it out from under this
-    // process before the jump.
+    // startup page: otherwise the raw read below could alias the stub's own mapped code, and the
+    // later "free the image" unmap could remove it out from under this process before the jump.
     if !stub::image_in_bounds(image_addr, image_len, &exclude) {
         return Err(exit::BAD_STARTUP);
     }
-    // SAFETY: the parent's `process_map` step (PACKAGES.md step 4) put exactly this range in
-    // this process's own memory, read-write, before `process_start`; `read_image` already checked
-    // `image_addr + image_len` does not overflow (INIT.md, Startup block), and the check above
-    // rules out this range aliasing the stub's own mapped code or the startup page. A parent that
-    // named a range it did not actually map only faults this read, which hurts nobody but this
-    // child (PACKAGES.md).
+    // SAFETY: the parent's `process_map` step (servers/init.md, "Launching through the loader
+    // stub", step 2) put exactly this range in this process's own memory, read-write, before
+    // `process_start`; `read_image` already checked `image_addr + image_len` does not overflow
+    // (servers/init.md, "The startup block"), and the check above rules out this range aliasing
+    // the stub's own mapped code or the startup page. A parent that named a range it did not
+    // actually map only faults this read, which hurts nobody but this child (servers/init.md
+    // R32).
     let image = unsafe { core::slice::from_raw_parts(image_addr as *const u8, image_len) };
 
-    // PACKAGES.md step 5: segments are mapped at their link addresses with `map_fixed`, before
-    // the stub maps anything else; a segment overlapping the stub, the startup page or the image
-    // makes it exit (`stub::plan`'s `exclude` argument, checked before any mapping call below).
+    // Launch step 5 (servers/init.md): segments are mapped at their link addresses with
+    // `map_fixed`, before the stub maps anything else; a segment overlapping the stub, the startup
+    // page or the image makes it exit (`stub::plan`'s `exclude` argument, checked before any
+    // mapping call below).
     let entry =
         stub::plan(image, image_addr, &exclude, |segment| map_segment(&segment)).map_err(|e| match e {
             Either::A(_bad_image) => exit::BAD_IMAGE,
@@ -97,17 +98,17 @@ fn run(arg: usize) -> Result<usize, u32> {
             Either::B(_) => exit::BAD_IMAGE,
         })?;
 
-    // PACKAGES.md, Launching a process: "free the image". Every segment's bytes are now copied
-    // into their own mapping (`map_segment`, above); the parent's copy is no longer read. Best
-    // effort: an unmap failure here only wastes this child's own address space, so it does not
-    // block the jump (`report_panic`'s "gives up quietly" precedent, `redoubt_rt::start`).
+    // Launch step 5 (servers/init.md) ends by unmapping the image copy. Every segment's bytes are
+    // now copied into their own mapping (`map_segment`, above); the parent's copy is no longer
+    // read. Best effort: an unmap failure here only wastes this child's own address space, so it
+    // does not block the jump (`report_panic`'s "gives up quietly" precedent, `redoubt_rt::start`).
     let _ = unmap(image_addr, page_align_up(image_len));
 
     Ok(entry)
 }
 
 /// Maps one validated segment at its own `vaddr` (`segment.first_page`) with `map_fixed`
-/// (KERNEL-SPEC.md, answer 172), executable or read-only per `segment.flags`, never both
+/// (kernel/memory.md, "`map_fixed`"), executable or read-only per `segment.flags`, never both
 /// writable and executable at once (R11, TENETS.md 2).
 fn map_segment(segment: &stub::Segment) -> Result<(), Error> {
     let len = segment.pages * PAGE_SIZE;
@@ -130,9 +131,9 @@ fn map_segment(segment: &stub::Segment) -> Result<(), Error> {
     Ok(())
 }
 
-/// Maps zeroed pages at exactly `addr` in this process (KERNEL-SPEC.md, System calls:
-/// `map_fixed`, answer 172). It never replaces a mapping: an occupied, unaligned or
-/// out-of-user-space range is `InvalidArgument` with nothing mapped.
+/// Maps zeroed pages at exactly `addr` in this process (kernel/memory.md, "`map_fixed`"). It never
+/// replaces a mapping: an occupied, unaligned or out-of-user-space range is `InvalidArgument` with
+/// nothing mapped.
 fn map_fixed(addr: usize, len: usize, flags: MemFlags) -> Result<(), Error> {
     nothing(&Call::MapFixed { addr, len, flags })
 }
@@ -176,9 +177,10 @@ fn stub_len() -> usize {
     (end - STUB_ENTRY).next_multiple_of(PAGE_SIZE)
 }
 
-/// Jumps to the started program's entry with `arg` unchanged in `a0` (INIT.md, Startup block;
-/// `redoubt_rt::start::start`'s `_start(startup: usize)` is exactly this contract). Never
-/// returns: there is nothing to return to, and this stack is the program's own now.
+/// Jumps to the started program's entry with `arg` unchanged in `a0` (servers/init.md, "The
+/// startup block"; `redoubt_rt::start::start`'s `_start(startup: usize)` is exactly this
+/// contract). Never returns: there is nothing to return to, and this stack is the program's own
+/// now.
 fn jump(entry: usize, arg: usize) -> ! {
     // SAFETY: `entry` is `validate`'s checked `e_entry` (within the image `plan` already
     // bounds-checked every segment of); every segment it names has just been mapped executable

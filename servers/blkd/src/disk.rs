@@ -1,7 +1,7 @@
 //! The whole disk: bring-up, and the three operations `blkd` serves over a range.
 //!
 //! # Where the bytes go
-//! A client's lent pages never reach the device (IO-ARCHITECTURE.md, DMA). A `write` is copied
+//! A client's lent pages never reach the device (servers/blkd.md R51). A `write` is copied
 //! from the lend into the DMA data buffer before the request is offered; a `read` is copied out
 //! of the DMA data buffer into `blkd`'s own memory, **once**, with a length this driver chose,
 //! before anything looks at a byte of it. So the device sees only [`crate::queue`]'s region, and
@@ -12,8 +12,9 @@
 //! [`Disk::is_broken`] and answers every later request with [`DeviceError::Broken`]. Carrying on
 //! after a timeout would mean a completion arriving for a request no longer tracked, and carrying
 //! on after a lie would mean trusting the liar; `init` restarts `blkd`, which resets the device
-//! from the beginning (INIT.md). A device that merely *reports* a failure (virtio-blk status
-//! `IOERR` or `UNSUPP`) is behaving, so that fails one request and nothing more.
+//! from the beginning (servers/init.md, "Restarts and reboots"). A device that merely *reports*
+//! a failure (virtio-blk status `IOERR` or `UNSUPP`) is behaving, so that fails one request and
+//! nothing more.
 
 use crate::queue::{DATA_OFF, HEADER_OFF, Queue, STATUS_OFF, Segment};
 use crate::transport::Transport;
@@ -103,9 +104,9 @@ impl<T: Transport> Disk<T> {
     }
 
     /// Issues virtio-blk's flush and returns only when the device says it completed
-    /// (IO-ARCHITECTURE.md, `blkd`'s contract: `sync` is never acknowledged before the data is
-    /// durable). `BLK_FLUSH` was required at negotiation, so the device cannot answer `UNSUPP`
-    /// without breaking its own word.
+    /// (servers/blkd.md, "Messages": `sync` is never acknowledged before the data is durable).
+    /// `BLK_FLUSH` was required at negotiation, so the device cannot answer `UNSUPP` without
+    /// breaking its own word.
     pub fn flush(&mut self) -> Result<(), DeviceError> {
         // Broken first: a broken read-only device must not answer ok to a `sync`.
         self.usable()?;
