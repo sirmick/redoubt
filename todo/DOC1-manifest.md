@@ -502,7 +502,7 @@ the code keeps messages and exit notices pending; the owner decides the rule); `
 switch-over does not rename "IPC1" verdict lines. From the inventory (D3): `bench-load-flakes.md`,
 `miri-vendored-unsafe.md`, `dma-reset-rv32.md`, `programs-build-rerun.md` (verify first),
 `account0-share-chain.md`, `page-table-freeing.md`, `mmio-record-frames.md`,
-`endpoint-destroyed-open-calls.md`, `shared-image-pages.md`.
+`endpoint-destroyed-open-calls.md`; `shared-image-pages.md` became `beyond/image-cache.md`.
 Found while writing the kernel set (each linked from the page named; the kernel pages' own
 notes give the Done-when):
 - `device-mapping-exec.md` (memory, devices): `set_flags` accepts EXECUTE on device registers
@@ -592,8 +592,8 @@ rule); "dup X" = the same item as X; "+S" = also a SECURITY residual row; milest
 - A-18: servers/netd.md rings; servers/ipd.md `/net`, scope rules, own addresses, labelled callers; serving `admit` (account-0 override); manifest boot part: init.md M1.
 - A-19: ipd.md Why (vendored smoltcp, tenet 5). A-20: ipd.md, netd.md Residual (+S).
 - A-21: kernel/objects.md the four object kinds (no `endpoint_destroy`).
-- A-22: servers/fsd.md typed operations **Open:** (M1; cross-directory rename, no ruling on record). A-24: servers/fsd.md typed operations (M1; decided, de6864a5c). A-23: userland/files.md files over 9P (M1; decided: refuse visibly, report only real fields). A-30: userland/files.md files over 9P **Open:** (M1).
-- A-25, A-26: userland/native.md pipes **Open:** (M2). A-27: servers/init.md Residual (every child pays for a copy; the reason the steward may cache a VM image; the shared read-only cache **Open:**, no ruling on record); beyond/image-cache.md (not decided).
+- A-22: servers/fsd.md typed operations (M1; decided: exactly rename within one volume, copy_file, set_attr, get_attr; across volumes `{:error, :exdev}`); userland/files.md. A-24: servers/fsd.md typed operations (M1; decided, de6864a5c). A-23: userland/files.md files over 9P (M1; decided: refuse visibly, report only real fields). A-30: userland/files.md files over 9P **Open:** (M1).
+- A-25, A-26: userland/native.md pipes **Open:** (M2). A-27: servers/init.md Residual (decided: every child gets its own copy, in M1 and after; the steward may cache an image's bytes); beyond/image-cache.md (a shared image-page cache is not planned: a cross-principal timing surface).
 - A-28, A-29: userland/beamlet.md natives **Open:** (M1).
 - A-28 note: userland/native.md places the launch mechanism under M1 (separation and containment), per section A's remap (M1 keeps the launching its attack suite needs); standard I/O, pipes and killing stay M2 (usable shell).
 - A-31: kernel/ipc.md R4. A-32: todo/endpoint-destroyed-open-calls.md; ipc.md Failure and restart. A-33: ipc.md R3.
@@ -644,7 +644,8 @@ Provenance-only items reported to the owner: A-1, A-2, A-3, A-17, A-96, A-163, A
 Q-24, Q-25, Q-39, Q-40, Q-45, Q-48, Q-69, Q-99, Q-104, Q-105.
 
 New todo slugs from D3.A: `account0-share-chain.md`, `page-table-freeing.md`,
-`mmio-record-frames.md`, `endpoint-destroyed-open-calls.md`, `shared-image-pages.md`.
+`mmio-record-frames.md`, `endpoint-destroyed-open-calls.md` (`shared-image-pages.md` became
+`beyond/image-cache.md`).
 
 New server properties found (IDs allocated by the servers set): steward keyed-random ids;
 approval fields printable-only and labelled requests showing only steward text; no server

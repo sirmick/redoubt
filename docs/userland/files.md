@@ -111,7 +111,7 @@ another's files. So what an operation costs depends on where its two ends are:
 | Operation | Within one volume | Across volumes |
 | --- | --- | --- |
 | copy (`File.cp`, `cp_r`, `cp`) | the file server's `copy_file`: no bytes cross into the VM | a read and write loop in the VM |
-| rename or move (`File.rename`, `mv`) | the file server's `rename`, atomic, within one directory or between two | a copy and a remove in the VM: not atomic |
+| rename or move (`File.rename`, `mv`) | the file server's `rename`, atomic, within one directory or between two | `File.rename` returns `{:error, :exdev}`; a move is the caller's copy and remove (`mv` does both), not atomic |
 | remove (`rm`, `rm_rf`) | a 9P `remove`, recursively for `rm_rf` | |
 | make a directory (`mkdir`, `mkdir_p`) | a 9P `create` with the directory bit | |
 

@@ -78,9 +78,9 @@ status line, so the register agrees with it); `660976a98` plan (and todo placeme
 verdict-strings widened); `3667e128b` SWARM, PROJECT, GETTING-STARTED; `4cc9655f8` inventory
 misses (fsd, init, beyond/image-cache, docs/README, manifest D3). New todo pages:
 host-shell-scripts, stub-unsafe-budget.
-Left for the owner: whether tenet 3 reaches the build host (TENETS residual + todo); A-22
-(cross-directory rename) and A-27 (shared image cache) are Open with no ruling on record;
-the vulnerability channel in CONTRIBUTING. Not applied: beyond/README.md's title "Beyond M5"
+Left for the owner: whether tenet 3 reaches the build host (TENETS residual + todo); the
+vulnerability channel in CONTRIBUTING. A-22 and A-27 were ruled by the Architect (QA thread
+DOC1-a22-a27) and are written as decided on fsd, files, init and beyond/image-cache. Not applied: beyond/README.md's title "Beyond M5"
 (outside the pages named; the checker allows it); the inventory's borderline items.
 
 ## Switch-over notes (for the implementer)

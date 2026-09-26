@@ -7,11 +7,12 @@ of each child paying for its own copy.
 
 ## Why it is not a goal
 
-It is not decided, and it would be a channel. A cache shared between principals tells one
-principal, by how fast a launch goes or what it costs, which programs another has run. Today every child pays for a copy of
+It is a channel. A cache of image pages shared between principals tells one principal, by how
+fast a launch goes or what it costs, which programs another has run. Today every child pays for a copy of
 its image: the launcher copies the ELF into pages charged to the child, and the loader stub copies
 each segment again ([init](../servers/init.md#residual-risks)). That costs memory and launch time,
-and leaks nothing.
+and leaks nothing. The steward may keep an image's bytes cached, to avoid reading them again: each
+child still gets its own copy, so nothing is shared between principals.
 
 ## What it would need
 
