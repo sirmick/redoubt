@@ -83,6 +83,7 @@ Method that worked for ipc.md:
 - The `no-cruft` gate forbids "legacy" in `.rs` and `.toml` under kernel, libs, loader, tests,
   stub and tools/testbench.
 - Do not read `.wash/QA.md`; it is 1.65 MB.
+- The switch-over (manifest K) also deletes `docs/.nojekyll`, which the checker's C8 flags. The checker implementer has been told.
 
 ## Open QA
 - DOC1-plan: approved.
