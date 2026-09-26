@@ -1,4 +1,4 @@
 description = "Executable model properties, deliberate rule breaks and host trace replay (not real-kernel conformance)"
 kind = "host-tests"
-# Default suites retain their sequence counts; the separate million acceptance run is documented in model/README.md.
+# Default suites retain their sequence counts; the separate million acceptance run is described in docs/kernel/model.md.
 packages = ["redoubt-model"]

@@ -6,8 +6,7 @@ The build host runs shell scripts: `build`, `test`, `launch`, `mkimage` and `dev
 root, `scripts/build-bios.sh`, `scripts/pi-ensure.sh`, `scripts/ssh-key-ensure.sh`,
 `tools/vendor-check/provenance.sh`, `libs/wire/elixir/run-vectors`, and the Elixir runtime's tools
 under `userland/otp/tools/` (`env.sh`, `build-beamlet`, `build-lib`, `difftest`,
-`elixir-tests`). Two more, `kernel/assemble.sh` and `kernel/assemble.ps1`, are referenced by
-nothing and are dead.
+`elixir-tests`).
 
 ## Why it matters
 
@@ -16,8 +15,7 @@ script runs on the machine, and names these scripts as its residual. None of the
 machine, but each is code a reader of the build must audit in a second language. Whether the tenet
 reaches the build host is the owner's to decide.
 
-Belongs to no follow-up package until the owner rules. Deleting the two dead scripts is part of
-the documentation switch-over.
+Belongs to no follow-up package until the owner rules.
 
 ## Where
 
@@ -27,11 +25,9 @@ the documentation switch-over.
 - [`tools/vendor-check/provenance.sh`](../../tools/vendor-check/provenance.sh)
 - [`libs/wire/elixir/run-vectors`](../../libs/wire/elixir/run-vectors)
 - [`userland/otp/tools/`](../../userland/otp/tools)
-- [`kernel/assemble.sh`](../../kernel/assemble.sh), [`kernel/assemble.ps1`](../../kernel/assemble.ps1)
 
 ## Done when
 
-- `kernel/assemble.sh` and `kernel/assemble.ps1` are deleted.
 - The owner has ruled on the build host. If the tenet reaches it, each script is a Rust tool (or
   a `cargo` alias) and this page is deleted; if not, tenet 3 states the build-host exception in
   place of its residual, and this page is deleted.

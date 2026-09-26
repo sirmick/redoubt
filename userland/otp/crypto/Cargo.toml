@@ -6,7 +6,7 @@ license.workspace = true
 version.workspace = true
 
 # Every dependency below is pure Rust, no_std, from the RustCrypto or dalek projects: the most
-# reviewed Rust implementations of these primitives. See DESIGN.md, "Crypto".
+# reviewed Rust implementations of these primitives. See docs/userland/beamlet.md.
 [dependencies]
 aes = { version = "0.9.3", default-features = false }
 aes-gcm = { version = "0.11.1", default-features = false, features = ["aes"] }

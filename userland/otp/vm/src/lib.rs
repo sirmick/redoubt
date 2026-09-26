@@ -1,7 +1,7 @@
 //! beamlet: a small BEAM interpreter in safe Rust.
 //!
-//! It runs `.beam` files produced by one pinned Erlang/OTP compiler (see `DESIGN.md`). Security,
-//! auditability and simplicity come first; speed and completeness come later, if at all.
+//! It runs `.beam` files produced by one pinned Erlang/OTP compiler (docs/userland/beamlet.md).
+//! Security, auditability and simplicity come first; speed and completeness come later, if at all.
 //!
 //! Map of the crate, in reading order:
 //! - [`term`]: Erlang values. [`atom`]: interned atoms.
