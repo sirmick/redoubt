@@ -359,7 +359,8 @@ Status: built · tested: bench:process-lifecycle, bench:process-attack, bench:st
 - **`process_map` backs its source before it checks the flags.** A `process_map` with bad flags
   may first make the caller's untouched source pages real, at the caller's cost, before it
   refuses. The model's proof of the write-without-read refusal goes through `set_flags`, not
-  `process_map`. Follow-up: [todo](../todo/process-map-flag-order.md).
+  `process_map` ([todo](../todo/write-only-mutation-split.md)). Follow-up:
+  [todo](../todo/process-map-flag-order.md).
 - **The loader's own programs send no notice.** Nothing hears when one of them ends
   ([boot](boot.md)).
 

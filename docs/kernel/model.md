@@ -450,7 +450,8 @@ Replay is what turns the model from a reference into evidence about the kernel.
   reader finds the drift.
 - **Host tests do not reach the kernel's boundaries.** Timer-driven cancellation, the kernel's
   locking and completion races between harts are outside the model: a step is atomic and time
-  is a counter. Passing model runs establish none of them.
+  is a counter. Passing model runs establish none of them. The kernel crate itself has no host
+  test target that compiles ([todo](../todo/hosted-kernel-tests.md)).
 - **The kernel's `map_anon` window can run out where the model's does not.** The kernel places
   `map_anon` only within a 256 MiB window from its default base. A process can fill that window
   with `map_fixed`, and its own later `map_anon` calls fail with `OutOfMemory` where the model,

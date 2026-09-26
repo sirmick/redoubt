@@ -230,12 +230,6 @@ accepted until its review is done. Merged packages leave the table; their record
 
 ## Review debt
 
-Outstanding, none blocking; each needs a page in `docs/todo/`:
-- **The kernel's `print!` can re-enter on a panic.** A panic inside `print!`'s `write!` re-enters
-  through the panic handler's `println!` while the first borrow of the output is live; the handler
-  then powers off. Proposed fix: a flag that sends the panic handler straight to the stateless SBI
-  console.
-- **The mutation that allows write-only pages is caught only through `set_flags`.** It also
-  disables the model's `process_map` check, which no sequence yet shows killed on its own; the
-  kernel side is covered by `write-only-attack`. Split the mutation or add a `process_map`
-  sequence.
+Outstanding, none blocking, each with its page:
+[the kernel's print on a panic](todo/print-panic-reentry.md) and
+[the write-only mutation](todo/write-only-mutation-split.md).

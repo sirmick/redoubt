@@ -218,6 +218,9 @@ the loader stub.
 - **Tested on the host against a fake kernel.** Every system call goes through one function; on
   the machine it is the `ecall`, on the host a `HostKernel` a test installs, so the runtime and
   programs built on it (the echo client and server) run in host tests.
+- **Beside the owning types, the raw calls.** `unmap` and `set_flags` are safe functions that take
+  any address, so safe code can pull a page from under an object that owns it; which calls must
+  become `unsafe` is a follow-up ([todo](../todo/raw-syscall-runtime-audit.md)).
 
 ### Client crates and the Rust `std` target
 

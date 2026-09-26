@@ -64,11 +64,11 @@ CODE_OF_CONDUCT (git mv'd), TENETS "no shell script on the machine"; `53fe7ebf8`
 Left for the owner or the next package:
 - TENETS keeps one **Open:** (capability closure against same-label delegation).
 - CONTRIBUTING sends vulnerability reports to GitHub's private advisories: confirm the channel.
-- Manifest C7 todo pages never written: `print-panic-reentry` (from the brief; SWARM's review
-  debt describes it), `hosted-kernel-tests`, `raw-syscall-runtime-audit`, `kernel-test-hello`,
-  `verdict-strings`, `bench-load-flakes`, `miri-vendored-unsafe`, `programs-build-rerun`, and the
-  write-only mutation split (SWARM review debt). `shared-image-pages` became
-  `beyond/image-cache.md`.
+- The manifest's missing todo pages are written (assignment 03ffcfcd): print-panic-reentry,
+  hosted-kernel-tests, kernel-test-hello (kernel package); raw-syscall-runtime-audit (servers
+  package); verdict-strings (the switch-over); bench-load-flakes, miri-vendored-unsafe,
+  programs-build-rerun (verified: the manifests and Cargo.lock are still unwatched),
+  write-only-mutation-split (no package). `shared-image-pages` is `beyond/image-cache.md`.
 - SWARM's claims table is the orchestrator's to keep; package IDs must avoid R, I and M (the
   checker reads them as rules, invariants and milestones).
 
