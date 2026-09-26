@@ -56,6 +56,11 @@
 
 # The plan
 
+- [M1 (separation and containment)](plan/m1-separation.md)
+- [M2 (usable shell)](plan/m2-usable-shell.md)
+- [M3 (files in and out)](plan/m3-files.md)
+- [M4 (self-hosted development)](plan/m4-self-hosted.md)
+- [M5 (persist, install, share)](plan/m5-persist.md)
 - [Follow-ups](todo/README.md)
   - [Kernel attack gaps](todo/kernel-attack-gaps.md)
   - [An account-0 client's share chain](todo/account0-share-chain.md)
