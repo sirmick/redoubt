@@ -152,13 +152,13 @@ handle to it closes, in every table.
 
 ### What objects cost
 
-Status: built · partly tested: an endpoint's page is attacked only in the model, a device's page by no case, and the saved-context pages (1 on rv32, 2 on rv64) are pinned by no case · tested: bench:budget, bench:budget-table-attack, bench:budget-mem-churn, bench:process-attack, bench:process-review, bench:process-lifecycle, mutation:R6EndpointsFree, mutation:R6ProcessObjectChargedToBudget, mutation:R6OwnPageChargedToItself, mutation:R6OpenCallsFree
+Status: built · partly tested: an endpoint's page is attacked only in the model, a device's page by no case, and the saved-context pages (1 on rv32, 2 on rv64) are pinned by no case; the boot code departs from R6 (charging) for `root`'s own page · tested: bench:budget, bench:budget-table-attack, bench:budget-mem-churn, bench:process-attack, bench:process-review, bench:process-lifecycle, mutation:R6EndpointsFree, mutation:R6ProcessObjectChargedToBudget, mutation:R6OwnPageChargedToItself, mutation:R6OpenCallsFree
 
 Everything the kernel stores is charged in whole pages to one budget (R6 (charging)):
 
 | What | Pages | Charged to |
 | --- | --- | --- |
-| budget | 1 | its parent (`root`'s is charged to nobody) |
+| budget | 1 | its parent; `root`'s own to `root`, a rule the boot code departs from ([budgets](budgets.md#residual-risks)) |
 | endpoint | 1 | its owner, the budget of the process that created it |
 | device | 1 | its owner: `system`, the budget the loader's programs run in |
 | process object (it holds the exit notice) | 1 | the creator's budget, the budget of `process_create`'s caller |
@@ -181,13 +181,16 @@ holds the exit notice, and that notice must outlive the budget it ran in; the pa
 (contexts, page tables, thread pages, handle table) is charged where it runs, and comes back when
 it ends.
 
-Every charge comes back exactly. Closing a handle, unmapping, replying, receiving an exit notice
-and destroying a budget each return what they freed; a refused call charges nothing. A table of
+Every charge comes back exactly, with one exception. Closing a handle, unmapping, replying,
+receiving an exit notice and destroying a budget each return what they freed; a refused call
+charges nothing. The exception is a DMA page quarantined because its device did not confirm a
+reset: it is never freed, so its charge stays, and moves to the parent when its budget is
+destroyed ([devices](devices.md#quarantine)). A table of
 n handles filled without closing any costs exactly ceil(n / 128) pages.
 
 ### `mint`
 
-Status: built · partly tested: `Dead` from a message source whose stamp has gone is attacked by no case · tested: bench:redoubt-ipc, bench:redoubt-ipc-attack, bench:redoubt-revoke, host:redoubt-sys::malformed_calls_are_refused, mutation:MintFromUnservedMessage
+Status: built · partly tested: `Dead` from a message source whose endpoint or stamp has gone is attacked by no case · tested: bench:redoubt-ipc, bench:redoubt-ipc-attack, bench:redoubt-revoke, host:redoubt-sys::malformed_calls_are_refused, mutation:MintFromUnservedMessage
 
 `mint(source, badge, budget?) -> h` makes a new handle to an endpoint, with a badge the caller
 chooses. The source is one of:
@@ -196,7 +199,7 @@ chooses. The source is one of:
 - **the message id of an open call held by the calling thread**: the new handle is to the
   endpoint the call arrived on, and its default stamp is the stamp of the handle the call came
   through. A `send`'s id, another thread's call and an id the thread never received are
-  `InvalidArgument`; if the call's stamp has been destroyed meanwhile, `Dead`.
+  `InvalidArgument`; if the call's endpoint or its stamp has gone meanwhile, `Dead`.
 
 The rules:
 - The badge is never 0: 0 is the receive right, and `mint` never makes one. The decoder in
@@ -335,13 +338,17 @@ Status: built · tested: bench:budget-destroy-attack, bench:budget-table-attack,
   R10's sweep would stop the kernel, and every process with it; it would not let a process use a
   freed object.
 - **Sweeps and slot searches scan.** Destroying a budget scans every table of every process (up
-  to `MAX_PROCESS_COUNT` (64) processes of 32 table pages) and every object frame; installing a
-  handle searches for the lowest free slot. The time is bounded by compile-time constants, not by
-  anything a process chooses.
+  to `MAX_PROCESS_COUNT` (64) processes of 32 table pages), bounded by compile-time constants,
+  and every frame up to the highest one ever given to a kernel object, which is bounded only by
+  RAM: any budget moves that mark up by creating objects, and it never comes down. Installing a
+  handle searches for the lowest free slot of one table. R10's scan is the stated exception to
+  R12 (scheduling)'s bound on kernel time ([budgets](budgets.md#residual-risks)). Follow-up:
+  [todo](../todo/budget-destroy-cost.md).
 - **Accounting on both widths.** One row of the cost table depends on the width: saved contexts
-  take 1 page on rv32 and 2 on rv64. The bench runs every accounting case on both widths and checks
-  that each charge comes back exactly, but no case pins the per-width figure, and the model's cost
-  table is the rv64 one.
+  take 1 page on rv32 and 2 on rv64. Most accounting cases run on both widths and check that each
+  charge comes back exactly, but `map-fixed-tables`, `map-fixed-attack` and `dma-reset-quarantine`
+  run on rv64 only, no case pins the per-width figure, and the model's cost table is the rv64
+  one.
 
 ## Why
 

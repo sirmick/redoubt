@@ -39,8 +39,10 @@ is a `dma_alloc` page of its own, or device registers it mapped). A reservation 
 is not a mapping.
 
 Each call checks the whole range before it changes any page, so an error leaves every mapping
-as it was. Only `map_anon`'s rollback can leave a charge behind: the page tables it allocated
-(Residual risks). The errors are `InvalidArgument` and `OutOfMemory`, and for
+as it was. Two can leave a charge behind: `map_anon`'s rollback keeps the page tables it
+allocated, and `process_map` backs untouched pages of its source before its later checks, so a
+refused one can leave them backed and charged to the caller (Residual risks;
+[processes](processes.md#residual-risks)). The errors are `InvalidArgument` and `OutOfMemory`, and for
 `process_map` also `BadHandle`, `WrongObject` and `NotPermitted` (the child has started). The
 order of the checks, the same in the kernel and the [model](model.md), is in the
 [ABI reference](abi.md#errors-and-the-order-of-checks).
@@ -66,7 +68,7 @@ Running out is the caller's error: `map_anon` of more than the budget or RAM can
 
 ### Where `map_anon` puts pages
 
-Status: built · partly tested: a full placement area is not attacked by a case · tested: bench:map-fixed-attack, bench:touch-beyond-ram
+Status: built · partly tested: a full placement area, and a run that fits only at the area's end, are not attacked by a case; the kernel departs from the placement rule at both ends of the area (Residual risks) · tested: bench:map-fixed-attack, bench:touch-beyond-ram
 
 The kernel chooses the address, and nothing may depend on it. `map_anon` takes the first free
 run of pages in its placement area, 256 MiB from `DEFAULT_BASE` (0x6000_0000 to 0x7000_0000),
@@ -84,7 +86,7 @@ area is full (Residual risks).
 
 ### `map_fixed`
 
-Status: built · partly tested: attacked on rv64 only · tested: bench:map-fixed-attack, bench:map-fixed-tables, bench:return-lent-unmapped, host:redoubt-model::bad_ranges_are_refused, host:redoubt-model::partial_overlap_is_refused_whole, host:redoubt-model::page_tables_half_of_the_charge_check
+Status: built · partly tested: the `map_fixed` cases run on rv64 only · tested: bench:map-fixed-attack, bench:map-fixed-tables, bench:return-lent-unmapped, host:redoubt-model::bad_ranges_are_refused, host:redoubt-model::partial_overlap_is_refused_whole, host:redoubt-model::page_tables_half_of_the_charge_check
 
 `map_fixed(addr, len, flags)` maps zeroed pages at exactly `addr` in the caller's own address
 space, charged as `map_anon`'s are. It is the one call that puts new pages at an address the
@@ -231,9 +233,11 @@ Together these are I9 (pages W^X, zeroed, lends unmapped) of the
 Status: built · partly tested: no case plants a writable kernel code page to show that the check stops the boot, and the case boots rv64 only · tested: bench:kernel-wx
 
 The kernel's own mappings are W^X. At boot, before any process runs, the kernel walks its own
-area of the address space and checks three things: no executable page is writable, no
-executable frame has a writable alias in the physmap, and no physmap page is executable. If one
-fails, the kernel panics instead of running. It then prints `W^X verified: N executable kernel
+area of the address space and, for every executable page there, checks three things: the page
+is not writable, its frame's alias in the physmap is not writable, and that alias is not
+executable. The check reads only the aliases of executable kernel frames; it does not walk the
+rest of the physmap, whose entries the loader builds never executable. If one fails, the kernel
+panics instead of running. It then prints `W^X verified: N executable kernel
 pages, none writable under any alias`, the line the case checks. Every mapping the kernel makes
 later goes through the same entry constructor that refuses W+X; its one later window, for DMA
 device registers, is read-write and never executable.
@@ -295,6 +299,13 @@ Status: built · tested: bench:touch-beyond-ram, bench:lend-untouched-page, benc
   The kernel departs here from R12, which bounds a call's kernel time by what it
   maps or names ([scheduling](scheduling.md#r12-scheduling)). The receiver's message area uses
   the same search over 1024 pages. No case measures it. Follow-up:
+  [todo](../todo/map-anon-search-cost.md).
+- **`map_anon`'s search misses the area's last start and can run past its end.** Its first
+  pass stops one start short, so a run that fits only at the very end of the area, or a request
+  for the whole of an empty area, is `OutOfMemory`. Its second pass, from the area's start up to
+  the last placement, has no upper bound: when the last placement lies above the last start that
+  fits, a run can be placed there and extend past the area's end, into the caller's own user
+  space beyond it. Only the caller is affected. Follow-up:
   [todo](../todo/map-anon-search-cost.md).
 - **`map_fixed` can fill `map_anon`'s area.** A process that maps the whole area with
   `map_fixed` makes its own later `map_anon` calls fail with `OutOfMemory`, where the

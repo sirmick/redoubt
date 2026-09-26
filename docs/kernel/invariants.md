@@ -433,8 +433,9 @@ result instead: `discarded`, mask 0, and no notice follows.
 sets the call's notice flag in the same step that clears its waiting flag; `pump` delivers the
 notice to the holding thread before any exit notice or message and clears the flag; `reply` to a
 call whose caller no longer waits frees the lend and reports `discarded`, and since the call
-leaves the thread's open calls there, no notice is left to deliver. One kernel lock covers each
-step, so a reply and an abandonment cannot both win.
+leaves the thread's open calls there, no notice is left to deliver. Each step runs to its end
+with interrupts off, holding the memory manager, so a reply and an abandonment cannot both
+win.
 
 **Model check:** `Checker::i15_abandoned`: a thread waiting in `receive` on the call's endpoint
 has been told of every abandoned call it holds; `Checker::flows`: a notice goes only to the
