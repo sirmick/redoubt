@@ -19,7 +19,7 @@ rationale go in the owning specification, with provenance in [ANSWERS](ANSWERS.m
 | Budgets, CPU shares and timer policy | [RESOURCES](RESOURCES.md) |
 | Current boot flow and argument tags | [BOOT](BOOT.md) |
 | Bundle authentication and trust boundary | [VERIFIED-BOOT](VERIFIED-BOOT.md) |
-| Legacy device grants; address-space layout | [DEVICE-GRANTS](DEVICE-GRANTS.md), [MEMORY-LAYOUT](MEMORY-LAYOUT.md) |
+| Device handles and the retired grants; address-space layout | [DEVICE-GRANTS](DEVICE-GRANTS.md), [MEMORY-LAYOUT](MEMORY-LAYOUT.md) |
 | Init, manifests, startup, restarts and keyd | [INIT](INIT.md) |
 | Namespaces, 9P connections, console, bootfs and filesystem protocols | [NAMESPACES](NAMESPACES.md) |
 | Encoding and generator inputs | [WIRE](WIRE.md) |
@@ -50,7 +50,7 @@ rationale go in the owning specification, with provenance in [ANSWERS](ANSWERS.m
 | 9P connection / fid | A server connection / file identifier within that connection. |
 | Hart / XLEN / physmap | RISC-V hardware thread / register width / kernel RAM mapping. |
 | TCB | Code whose failure can violate the security guarantees. |
-| sys / abi | `libs/sys` is the new syscall ABI; `libs/abi` supplies legacy interfaces still needed until K6. |
+| sys / layout | `libs/sys` is the system-call ABI; `libs/layout` is the kernel half of the address map, shared by the loader and the kernel. |
 
 [Milestones](HISTORY.md) and [approval provenance](ANSWERS.md) are reference material.
 Dated review and decision archives preserve evidence; they are not required reading for the contracts.

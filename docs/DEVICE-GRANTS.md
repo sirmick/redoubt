@@ -1,32 +1,24 @@
-# Device grants (interim)
+# Device grants (retired)
 
-Built and enforced; **interim**, until device handles in startup blocks replace it (below). Tenet 2:
-no ambient authority.
+Retired in WP-K6. Devices reach a process only as handles to kernel device objects (KERNEL-SPEC.md).
+This note records what grants were and what refuses them now. Tenet 2: no ambient authority.
 
-## The hole it closed
-Stock Redoubt let any process `MapMemory` any physical device page, or `ClaimInterrupt` any IRQ,
-first come first served: a compromised process could claim the power-off device, another driver's
-registers, or its interrupt.
+## What grants were
+The call interface Redoubt inherited let any process map any physical device page, or claim any
+IRQ, first come first served. Grants closed that as an interim measure: a plain-text `grants` entry
+in the signed bundle listed, per process name, the MMIO ranges and IRQs it might claim. The loader
+passed them to the kernel as `Grnt` tags, and the kernel checked each claim against them.
 
-## Model
-- **Default deny.** A userspace process may claim a device page or IRQ only if it was granted that
-  exact resource. (PID 1, the kernel, is exempt.)
-- **Grants ship in the signed bundle**, as a plain-text `grants` entry, one rule per line
-  (`<process-name> mmio <hex-base> <hex-len>` or `<process-name> irq <decimal>`). The loader resolves
-  names to PIDs and passes `Grnt` tags to the kernel (BOOT.md).
-- **The kernel enforces at the two claim points:** `MapMemory` of a device address is allowed only if
-  a grant covers the whole range; `ClaimInterrupt` only if a grant lists the IRQ. Otherwise
-  `AccessDenied`. The kernel keeps no table: it scans the `Grnt` tags at each claim.
-- **Physical RAM cannot be named at all:** `MapMemory` with an explicit physical address inside RAM
-  is refused, and anonymous pages are zeroed.
+## What replaced them
+MMIO regions (with a DMA flag) and IRQs are kernel device objects reached through handles. Mapping
+a device takes its handle, and a driver waits for its interrupt with `receive` on the IRQ handle
+(KERNEL-SPEC.md). Physical RAM cannot be named at all, and anonymous pages are zeroed. For now the
+bundle's first program holds every device object (INTERIM, until `init` places each driver's
+handles in its startup block, as the boot manifest says; INIT.md). Delegation and revocation come
+from the capability mechanism (CAPABILITIES.md).
 
-Tests: `grant-attack` (ungranted process denied), `mem-attack` (RAM by address refused, pages zeroed).
-Bench cases declare grants with `[[grant]]` tables; the bench writes the `grants` entry.
-
-## Replacement (decided)
-MMIO regions (with a DMA flag) and IRQs become kernel device objects reached through handles. `init`
-receives all of them and places each driver's handles in its startup block, as the boot manifest
-says (INIT.md); mapping a device takes a handle, and a driver waits for its interrupt with `receive`
-on the IRQ handle (KERNEL-SPEC.md). `ClaimInterrupt` and interrupt handlers go. Then the `grants` entry, the `Grnt`
-tags and the claim-time scan are deleted, and devices get delegation and revocation from the
-capability mechanism (CAPABILITIES.md). `redoubt-names` (name lookup) is deleted too.
+## What refuses them now
+- The loader refuses a bundle entry named `grants` (`loader-rejects-grants`).
+- The kernel refuses a `Grnt` boot argument, so a loader that still passed one cannot grant anything.
+- The bench refuses a `[[grant]]` table in a case.
+- The old claim calls are unknown numbers, `InvalidArgument` (`legacy-gone`).

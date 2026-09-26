@@ -542,6 +542,6 @@ this `sshd` in milestone 1, a stated residual).
 
 ## Hotspots
 
-Serialize kernel `services.rs`, `mem.rs`, `message.rs`, `redoubt.rs`, architecture mapping code
+Serialize kernel `ptable.rs`, `mem.rs`, `message.rs`, `redoubt.rs`, architecture mapping code
 and syscall dispatch. Coordinate runtime IPC/server changes with native callers. Generated
 wire code changes through its owning tables and generator; do not overwrite it from old branches.

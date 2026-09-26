@@ -10,7 +10,8 @@ scheduling in RESOURCES.md.
 **Current conformance.** Budgets/handles, IPC, device objects and process/thread creation and
 exit have implementations on the new syscall path. Real-kernel cases exercise native lifecycle
 and loan teardown. The kernel owns the timer: timeouts, budget deadlines and stride preemption
-(R12) are implemented (WP-K5). Legacy removal remains a work package (WP-K6).
+(R12) are implemented (WP-K5). The old call interface is gone (WP-K6): this is the kernel's only
+system-call interface, and a number it does not define is `InvalidArgument` like any other malformed call.
 This note is not a claim that the whole contract runs in the primary checkout. The answers
 **167-168 completion encoding, lend ownership, output rollback and delivery-aware server
 bookkeeping are present in this checkout**.
@@ -79,7 +80,8 @@ is inherited, a handle to a system-class budget is also the authority to create 
 is why only `init` and the steward ever hold one (INIT.md). Scheduling never looks at class: every
 budget shares one stride queue by weight (R12, RESOURCES.md).
 
-**Process**: PID (= ASID), the budget it runs in, address space, up to `MAX_THREADS` threads, handle
+**Process**: PID (= ASID), the budget it runs in, address space, up to `MAX_THREADS` threads (TIDs
+`1..=MAX_THREADS`, the initial thread's being 1), handle
 table, exit endpoint handle, a started flag, and its open calls (at most `MAX_OPEN_CALLS`). PIDs are
 drawn at random from the free ASIDs. The **process object is charged to its creator's budget** (the
 budget of `process_create`'s caller), not to the budget it runs in, and it holds the process's one
@@ -458,7 +460,8 @@ the spec:
 - **One register layout on both widths.** A 64-bit argument or result (ids, badges, accounts, time,
   `random`'s value) always takes two registers, each holding a 32-bit half, low half first. Other
   register values are a 32-bit value or one address or length. `redoubt-sys` therefore has no width
-  `cfg` (MEMORY-LAYOUT.md).
+  `cfg` in any encoding; the extent of user space (`USER_AREA_END`) is its one per-width constant
+  (MEMORY-LAYOUT.md).
 - **Records** (what does not fit in registers: message bodies, a budget's fields, the
   `process_start` list, what `receive` returns (a notice's kind and fields included),
   `budget_usage`'s counters) are arrays of 64-bit little-endian slots at an 8-byte-aligned address
