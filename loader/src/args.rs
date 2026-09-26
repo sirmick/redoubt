@@ -35,7 +35,7 @@ impl ArgsBuilder {
 
     pub fn word(&mut self, value: u32) {
         // The block is a fixed number of pages (`ARGS_PAGES`), which a bundle with many
-        // processes, names and devices can fill. Say so rather than panicking on the index.
+        // processes and devices can fill. Say so rather than panicking on the index.
         assert!(self.len < self.buf.len(), "argument block full");
         self.buf[self.len] = value;
         self.len += 1;
