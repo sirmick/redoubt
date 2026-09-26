@@ -9,7 +9,7 @@
 
 - [The kernel]()
   - [Handles and objects]()
-  - [IPC]()
+  - [IPC](kernel/ipc.md)
   - [Memory]()
   - [Budgets]()
   - [Scheduling]()
