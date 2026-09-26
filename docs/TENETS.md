@@ -13,7 +13,7 @@ and most malicious agents can run on it, do real work, and not get out.
 - It runs on RISC-V softcores, nearly always over virtio (block, network, console). It never has
   a local display, keyboard or mouse. People reach it over SSH.
 - **Auditable by construction.** Everything that runs on the machine is Rust, with assembly only
-  where Rust cannot reach. There is no C and no shell script anywhere, userland included. The
+  where Rust cannot reach. There is no C and no shell script on the machine, userland included. The
   trusted computing base (the firmware interface, the loader and the kernel) is small enough to
   read like a textbook.
 - **Authority is capabilities.** There is no ambient authority: no root, no user IDs that grant

@@ -1,27 +1,24 @@
 # Redoubt
 
-A RISC-V microkernel in pure Rust, forked from [Xous](https://github.com/betrusted-io/xous-core).
-It boots on QEMU under vendored RustSBI on rv64 and rv32. Capabilities, budgets and labels bound
-authority, resources and information flow.
+Redoubt is a prison: a headless, multi-user operating system for RISC-V, built so that the most
+capable and most malicious agents can run on it, do real work, and not get out. Authority is
+capabilities, with no ambient authority, no root and no network by default; information-flow
+labels keep principals' data apart, and only an out-of-band human approval moves it across. The
+kernel is a small microkernel, and everything above it is an unprivileged server. Everything that
+runs on the machine is Rust, with no C, so the trusted computing base can be read like a textbook.
+Every security claim names the rule that makes it, the code that enforces it and the attack case
+that tests it.
 
-The planned Elixir userland uses **beamlet**, a safe-Rust BEAM VM. beamlet runs on the host today;
-its Redoubt platform and the native server stack are not integrated end to end.
+**Today** the kernel runs and is attack-tested on QEMU, on rv64 and rv32, with the network driver
+and the TCP/IP server above it; the boot file, key and console servers are built and host-tested;
+the steward, SSH sessions and agents come next ([the plan](docs/plan/m1-separation.md)).
 
-The [seven tenets](docs/TENETS.md) govern every change: auditability, security by construction,
-Rust, open standards, accountable dependencies, attack testing and virtio devices.
-The [swarm method](docs/SWARM.md) turns them into isolated work packages, acceptance tests and
-three review angles, with one current claims ledger.
-
-| Start here | Purpose |
+| Start here | |
 | --- | --- |
-| [Getting started](GETTING-STARTED.md) | Toolchain, build, launch and tests |
-| [Implementation status](docs/STATUS.md) | What works and what remains |
-| [Documentation map](docs/README.md) | Contracts and development references |
-| [Visual tour](https://sirmick.github.io/redoubt/README.html) | Architecture diagrams |
-| [Plan](docs/PLAN.md) | Milestone outcomes and acceptance |
+| [The book](docs/README.md) | the whole system, what is built and what is planned |
+| [The tenets](docs/TENETS.md) | what Redoubt must achieve, against whom, and its limits |
+| [The security register](docs/SECURITY.md) | every security property, its code and its test |
+| [Getting started](GETTING-STARTED.md) | build, run, test and debug |
+| [Contributing](CONTRIBUTING.md) | how to send a change |
 
-`bios/`, `loader/` and `kernel/` form the boot chain; `libs/` holds shared components;
-`servers/` and `userland/otp/` hold native services and beamlet. Build/test tools live in
-`tools/`, with boot cases in `tests/`.
-
-Licensed under [LICENSE](LICENSE) / [LICENSES](LICENSES/).
+Licensed under [LICENSE](LICENSE) and [LICENSES](LICENSES/).
