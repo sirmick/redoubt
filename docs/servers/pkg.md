@@ -29,9 +29,10 @@ Status: planned · M5 (persist, install, share)
   `"redoubt.pkg.v1\0" || u64_le(len) || archive`, never the bare archive, and is checked by the same
   verifier the loader uses for the bundle, whose domain is `"redoubt.bundle.v1\0"`. Domains are
   prefix-free, so a package signature is never a bundle signature, and the reverse.
-- **Where signing keys live.** A person's signing key may live off the box, where they sign a package
-  themselves, or in [`keyd`](keyd.md) under a `pkg` purpose, which signs only the package preimage it
-  builds itself from the archive, with an approval per signature. An agent's key lives in `keyd`.
+- **Where signing keys live.** A person's signing key may live off the box, where they sign a
+  package themselves, or in [`keyd`](keyd.md) under a `pkg` purpose, which signs only the package
+  preimage it builds itself from the archive, with an approval per signature. An agent's key lives
+  in `keyd`.
 - **The manifest** is strict JSON ([wire](wire.md#strict-json)). It names the contents and
   **requests** capabilities ("`/net` connect to 443", "read my config directory"); it can grant
   nothing.
@@ -50,10 +51,12 @@ parses an archive, as `init` and the steward never parse an ELF.
 - **Verify before parse.** The pkg server checks the signature over the whole archive against the
   **installing** principal's trust list before it reads a single tar header or manifest byte. An
   archive not signed by a trusted key never reaches the parser.
-- **One principal's packages.** A key on one principal's trust list can still sign a hostile archive,
-  so the steward starts the pkg server per principal, per install, holding the archive it was handed
-  and a write handle to that principal's package directory, `/system/pkgs/<principal>/`, and
-  nothing else. A parser bug then reaches only that principal's own packages
+- **One principal's packages.** A key on one principal's trust list can still sign a hostile
+  archive, so the steward starts the pkg server per principal, per install. It holds the archive it
+  was handed, a write handle to that principal's package directory, `/system/pkgs/<principal>/`, the
+  installing principal's trust list and the system bundle's module names (both passed in by the
+  steward), and a badge on which it asks the steward to record, and nothing else. A parser bug then
+  reaches only that principal's own packages
   ([R74 (a hostile package stays in its principal's packages)](#r74-a-hostile-package-stays-in-its-principals-packages)).
   Nothing a session holds can write there.
 - **The steward keeps the authority.** The pkg server asks the steward to record the profile, `use`
@@ -73,10 +76,10 @@ Status: planned · M5 (persist, install, share)
   most what the principal grants: at install or run time the principal grants the manifest's
   requests, attenuated from its own capabilities, and the launcher builds the namespace from exactly
   those grants ([R71 (no new authority without trust)](#r71-no-new-authority-without-trust)).
-- **System code** (drivers, servers, the loader stub, the VM) is signed by the system key. The system
-  key is on no trust list and cannot be removed: system code is trusted by the bundle's verification,
-  not by a list. A principal may run native code signed by keys on its trust list, its own included;
-  `.beam` code follows the same rule.
+- **System code** (drivers, servers, the loader stub, the VM) is signed by the system key. The
+  system key is on no trust list and cannot be removed: system code is trusted by the bundle's
+  verification, not by a list. A principal may run native code signed by keys on its trust list, its
+  own included; `.beam` code follows the same rule.
 - **Adding a key to a trust list** is a high-stakes approval
   ([steward](steward.md#the-powerbox-and-approvals)).
 - **Agents sign with their own keys.** Code an agent built runs within the agent's lease; running it
@@ -102,15 +105,17 @@ Status: planned · M5 (persist, install, share)
   `/system/pkgs/<principal>/<name>-<version>-<hash>/`. A principal's **profile** (the versions it
   uses, its `/bin`) and **trust list** are steward records, not files in its space.
 - **Installing** a package signed by a key already on the trust list needs no approval.
-- **Upgrading is atomic per package**: `pkg add` installs a new version beside the old, `pkg use` flips
-  one steward record, flipping back is the rollback, and `pkg gc` removes unused versions.
+- **Upgrading is atomic per package**: `pkg add` installs a new version beside the old, `pkg use`
+  flips one steward record, flipping back is the rollback, and `pkg gc` removes unused versions.
 - **Loading code.** Launching never consults a session's writable namespace, and the VM's
   `load_module` resolves module names only from the system bundle and the profile's package
   directories, through read-only handles, so write access to someone's home never becomes a launch
   or a load with their authority.
 - **No shadowing.** A package may not define a module the system bundle defines (the pkg server
   refuses it at install), and two packages in one profile may not define the same module (the
-  steward refuses it at `use`); the system bundle always resolves first.
+  steward refuses it at `use`); the system bundle always resolves first. The VM departs from this
+  for a directory a session adds to the front of its own code path, which shadows a system module
+  in that VM; it grants nothing the session lacked, and is a follow-up on the VM's side.
 - **Code one loads oneself** (compiling a string, requiring one's own file) runs within one's own
   authority; the code-path rule is not a wall against it.
 - A project has its own package directory, so a shared toolchain is installed once.
@@ -133,8 +138,9 @@ Status: planned · M5 (persist, install, share)
 
 - **A/B bundle slots.** `sys update` writes the new signed bundle to the inactive slot; the loader
   verifies it on the next boot. The new system is **healthy** once `init` reaches a steady state,
-  every system server running, **before any user session starts**, so a user's crash loop cannot force
-  a rollback. If it fails to boot or to become healthy, the next boot falls back to the other slot.
+  every system server running, **before any user session starts**, so a user's crash loop cannot
+  force a rollback. If it fails to boot or to become healthy, the next boot falls back to the other
+  slot.
 - **Rollback protection.** A version counter kept outside both slots, which the loader refuses to go
   below ([R72 (no rollback below the counter)](#r72-no-rollback-below-the-counter)).
 - **M-of-N signatures** on system bundles, so that no one key owns every machine, and builds are
@@ -151,8 +157,9 @@ keys.
 Status: planned · M5 (persist, install, share)
 
 - The steward keeps the profile, trust and grant records; it does not write packages or parse them.
-- Each pkg server instance holds one archive and a write handle to one principal's package
-  directory, and nothing else.
+- Each pkg server instance holds one archive, a write handle to one principal's package directory,
+  that principal's trust list, the system bundle's module names and a badge for the steward's
+  records, and nothing else.
 - A package's code gets exactly the grants its principal made from the manifest's requests, never
   more than the principal holds.
 - A signature grants nothing.
@@ -186,9 +193,9 @@ counter's storage cannot be reset (Residual risks).
 Status: planned · M5 (persist, install, share)
 
 No archive reaches the package parser unless a key on the installing principal's trust list signed
-it, and the parser runs in a pkg server holding only that archive and that principal's package
-directory. So a hostile archive, even one a trusted key signed, can write only its own principal's
-packages.
+it, and the parser runs in a pkg server holding only that archive, that principal's package
+directory and trust list, the bundle's module names and a badge for the steward's records. So a
+hostile archive, even one a trusted key signed, can write only its own principal's packages.
 
 **Open:** none.
 
@@ -208,16 +215,17 @@ Status: planned · M5 (persist, install, share)
 
 - **A hijacked agent runs code it wrote,** within its own authority: any process can create a child
   and map pages into it, and the shell evaluates any Elixir. Signatures gate only new grants.
-- **Every principal reaches the whole system-call interface** through native code; it must hold on its
-  own, and the bench attacks it with hostile native programs.
-- **A trusted key that is stolen** launches code with whatever its trusters grant, until it is removed.
+- **Every principal reaches the whole system-call interface** through native code; it must hold on
+  its own, and the bench attacks it with hostile native programs.
+- **A trusted key that is stolen** launches code with whatever its trusters grant, until it is
+  removed.
 - **A resettable counter undoes rollback protection.** If whatever holds the version counter can be
   reset or rewritten (a virtio disk the host controls), an older signed system boots again.
 
 ## Why
 
-- **Signatures and capabilities apart.** A signature says who vouches for code, not what it may do; a
-  system that granted authority by signature alone would make every signing key a master key.
+- **Signatures and capabilities apart.** A signature says who vouches for code, not what it may do;
+  a system that granted authority by signature alone would make every signing key a master key.
 - **One container and verifier.** The boot bundle, updates and packages share one verifier of signed
   archives, the most attacked code in the system.
 - **Parse in a per-principal server.** Keys a principal trusts can still sign a hostile archive; a
@@ -225,5 +233,6 @@ Status: planned · M5 (persist, install, share)
   which holds everyone's records, never parses one.
 - **Healthy before any session.** Judging an update healthy only before users run keeps a user from
   forcing a rollback to an older system.
-- **No shared content store.** A store shared by every principal is a covert channel (add a blob, probe
-  for it); per-principal directories give up deduplication, which a handful of users hardly need.
+- **No shared content store.** A store shared by every principal is a covert channel (add a blob,
+  probe for it); per-principal directories give up deduplication, which a handful of users hardly
+  need.

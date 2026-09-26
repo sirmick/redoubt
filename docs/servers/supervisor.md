@@ -19,14 +19,14 @@ launch: the loader stub, fresh connections, and grants no wider than their owner
 
 Status: planned · M5 (persist, install, share)
 
-- **A service record** names an installed package's program, its owner (a principal), the grants its
+- **A service record** names an installed package's program, its owner, the grants its
   owner made for it from the package's requests, a budget carved from the owner's, and a restart
   policy. The steward keeps the records, since they carry grants.
 - **Starting** a service is a launch like any other: a budget carved from the owner's, fresh
   connections for exactly the recorded grants, through the loader stub
   ([init](init.md#launching-through-the-loader-stub)).
-- **Restarting.** When a service exits, the supervisor starts it again with the same record, up to the
-  policy's limit in a window; past it, the service stays stopped and its owner is told.
+- **Restarting.** When a service exits, the supervisor starts it again with the same record, up to
+  the policy's limit in a window; past it, the service stays stopped and its owner is told.
 - **Logs.** A service's console output is kept in a log its owner can read, bounded in size.
 - **Control.** A service's owner can start, stop and inspect it; nobody else can.
 
@@ -41,7 +41,8 @@ Status: planned · M5 (persist, install, share)
 
 - A service holds exactly the grants its record names, never its owner's whole set.
 - Whatever the supervisor holds to launch, it holds no `system`-class budget handle: only `init` and
-  the steward do ([R33 (no server holds a system budget)](init.md#r33-no-server-holds-a-system-budget)).
+  the steward do
+  ([R33 (no server holds a system budget)](init.md#r33-no-server-holds-a-system-budget)).
 
 **Open:** whether the supervisor holds handles to its owners' budgets itself or asks the steward for
 each launch.
@@ -64,8 +65,8 @@ Status: planned · M5 (persist, install, share)
 
 - **A service crash-loops:** past its restart limit it stays stopped, and a crash blamed on another
   principal is the steward's to judge ([steward](steward.md#crash-blame)).
-- **The supervisor restarts:** it holds none of its earlier exit notices; it rebuilds its records from
-  the steward's.
+- **The supervisor restarts:** it holds none of its earlier exit notices; it rebuilds its records
+  from the steward's.
 
 **Open:** how the supervisor learns which services are still running after its own restart.
 

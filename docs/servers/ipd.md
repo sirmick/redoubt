@@ -8,8 +8,8 @@ refuses every labelled caller. It runs smoltcp 0.14.0, vendored, with IPv4, Ethe
 
 ## Purpose
 
-Agents and sessions need the network, and the network is where data leaves the box. `ipd` puts
-the rule at the socket: a capability names exactly the prefixes and ports it may connect to or
+People's sessions need the network, and the network is where data leaves the box; agents reach it
+only through `gatewayd`, never a socket of their own. `ipd` puts the rule at the socket: a capability names exactly the prefixes and ports it may connect to or
 listen on, a grant can only narrow it, and no scope can reach back into the box, where a forwarded
 port could lead a session to `approve@box`. Because `ipd` is a sink, no labelled data reaches it
 at all.
@@ -167,8 +167,8 @@ each appears once.
 **Admission.** Fids, minted connections, parked calls and sockets all go through the skeleton's
 admission ([R26 (admission fairness)](serving.md#r26-admission-fairness)): by default 5 parked
 calls, 4 connections and 8 sockets per bucket. A socket is one `State` unit, reserved around each
-request that may make one and held until the socket is gone, lingering included, so an agent cannot
-take all its sponsor's sockets. Every bucket at its cap must fit `ipd`'s 8 MiB budget, less 1 MiB for
+request that may make one and held until the socket is gone, lingering included, so one badge
+cannot take all its bucket's sockets. Every bucket at its cap must fit `ipd`'s 8 MiB budget, less 1 MiB for
 its own use, or `ipd` does not start.
 
 ### Sequence numbers and the link
