@@ -209,7 +209,7 @@ pub extern "C" fn trap_handler(
             crate::mem::MemoryManager::with_mut(|mm| {
                 // A valid mapping faulted on permissions: retrying cannot make progress.
                 if crate::arch::mem::is_mapped(addr) {
-                    return Err(redoubt_abi::Error::AccessDenied);
+                    return Err(crate::mem::PageError::InUse);
                 }
                 crate::arch::mem::ensure_page_exists_inner(mm, addr)
             })

@@ -16,7 +16,8 @@ use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use plic::Plic;
 use riscv::register::sie;
 use redoubt_abi::arch::KERNEL_PLIC_BASE;
-use redoubt_abi::{MemoryFlags, PID};
+use redoubt_abi::PID;
+use redoubt_sys::MemFlags;
 
 use crate::mem::MemoryType;
 
@@ -57,7 +58,7 @@ pub fn init() {
             KERNEL_PLIC_BASE as *mut u8,
             size,
             PID::new(1).unwrap(),
-            MemoryFlags::R | MemoryFlags::W,
+            MemFlags::READ | MemFlags::WRITE,
             MemoryType::Default,
         )
         .expect("unable to map the PLIC")

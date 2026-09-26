@@ -109,12 +109,12 @@ fn handle_character(b: u8) {
                             process.pid,
                             system_services.process_name(process.pid).unwrap_or("")
                         );
-                        process.activate().unwrap();
+                        process.activate();
                         crate::arch::mem::MemoryMapping::current().print_map();
                         println!();
                     }
                 }
-                system_services.get_process(current_pid).unwrap().activate().unwrap();
+                system_services.get_process(current_pid).unwrap().activate();
             });
         }
         b'p' => {
@@ -138,14 +138,14 @@ fn handle_character(b: u8) {
                             process,
                             system_services.process_name(process.pid).unwrap_or("")
                         );
-                        process.activate().unwrap();
+                        process.activate();
                         crate::arch::process::Process::with_current_mut(|arch_process| {
                             arch_process.print_all_threads()
                         });
                         println!();
                     }
                 }
-                system_services.get_process(current_pid).unwrap().activate().unwrap();
+                system_services.get_process(current_pid).unwrap().activate();
             });
         }
         b'r' => {

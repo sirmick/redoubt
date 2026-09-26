@@ -38,7 +38,7 @@ use core::cmp::Ordering;
 use core::num::{NonZeroU64, NonZeroUsize};
 
 use redoubt_sys::PAGE_SIZE;
-use redoubt_abi::{MemoryFlags, PID};
+use redoubt_abi::PID;
 
 use crate::arch::process::TID;
 use redoubt_sys::{
@@ -776,7 +776,7 @@ fn check_buffer(mm: &mut MemoryManager, pid: PID, pages: Pages, lend: bool) -> R
     mm.check_owned_range(pid, pages.addr, len).map_err(|_| Error::InvalidArgument)?;
     for page in (pages.addr..end).step_by(PAGE_SIZE) {
         let flags = crate::arch::mem::page_flags(page).ok_or(Error::InvalidArgument)?;
-        if lend && flags.bits() & MemoryFlags::W.bits() == 0 {
+        if lend && !flags.contains(redoubt_sys::MemFlags::WRITE) {
             return Err(Error::InvalidArgument);
         }
     }

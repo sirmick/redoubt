@@ -33,6 +33,17 @@ pub use crate::arch::process::{INITIAL_TID, MAX_PROCESS_COUNT};
 // process.state);     }
 // }
 
+/// Why the process table refused a step. Kernel-internal: a system call maps it explicitly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProcessError {
+    /// No such process, or its slot is not in the state the step needs.
+    NotFound,
+    /// The thread is not one that can run now.
+    NotReady,
+    /// The address space could not be made (`MemoryMapping::allocate`).
+    Page(crate::mem::PageError),
+}
+
 /// A big unifying struct containing all of the system state.
 /// This is inherited from the stage 1 bootloader.
 pub struct SystemServices {
@@ -170,16 +181,14 @@ impl Process {
     /// Whether the process is on the CPU.
     pub fn running(&self) -> bool { matches!(self.state, ProcessState::Running(_)) }
 
-    pub fn activate(&self) -> Result<(), redoubt_abi::Error> {
+    pub fn activate(&self) {
         crate::arch::process::set_current_pid(self.pid);
-        self.mapping.activate()?;
-        let mut current_process = ArchProcess::current();
-        current_process.activate()
+        self.mapping.activate();
     }
 
-    pub fn terminate(&mut self) -> Result<(), redoubt_abi::Error> {
+    pub fn terminate(&mut self) -> Result<(), ProcessError> {
         if self.free() {
-            return Err(redoubt_abi::Error::ProcessNotFound);
+            return Err(ProcessError::NotFound);
         }
 
         println!("[!] Terminating process with PID {}", self.pid);
@@ -196,7 +205,7 @@ impl Process {
         });
 
         // Remove this PID from the process table
-        ArchProcess::destroy(self.pid)?;
+        ArchProcess::destroy(self.pid);
         self.state = ProcessState::Free;
         // And forget its address space. Until WP-K4 nothing ever reused a PID, so a terminated
         // process could keep a `satp` naming page tables that had just been freed; now
@@ -315,16 +324,16 @@ impl SystemServices {
         &mut self,
         mm: &mut crate::mem::MemoryManager,
         pid: PID,
-    ) -> Result<(), redoubt_abi::Error> {
+    ) -> Result<(), ProcessError> {
         let entry =
-            self.processes.get_mut(pid.get() as usize - 1).ok_or(redoubt_abi::Error::ProcessNotFound)?;
+            self.processes.get_mut(pid.get() as usize - 1).ok_or(ProcessError::NotFound)?;
         if entry.state != ProcessState::Free {
-            return Err(redoubt_abi::Error::ProcessNotFound);
+            return Err(ProcessError::NotFound);
         }
         entry.pid = pid;
         entry.state = ProcessState::Allocated;
         entry.current_thread = INITIAL_TID as TID;
-        entry.mapping.allocate(mm, pid).inspect_err(|_| {
+        entry.mapping.allocate(mm, pid).map_err(ProcessError::Page).inspect_err(|_| {
             entry.state = ProcessState::Free;
             entry.mapping = Default::default();
         })?;
@@ -337,7 +346,7 @@ impl SystemServices {
     /// WP-K4: give back the slot of a process that never started (a `process_create` that failed
     /// after its address space was made). Its frames have already been released.
     pub fn free_process_slot(&mut self, pid: PID) {
-        ArchProcess::destroy(pid).ok();
+        ArchProcess::destroy(pid);
         if let Some(entry) = self.processes.get_mut(pid.get() as usize - 1) {
             entry.state = ProcessState::Free;
             entry.mapping = Default::default();
@@ -345,14 +354,14 @@ impl SystemServices {
     }
 
     /// WP-K4: `process_start` has set up the first thread; the process becomes runnable.
-    pub fn start_process(&mut self, pid: PID) -> Result<(), redoubt_abi::Error> {
+    pub fn start_process(&mut self, pid: PID) -> Result<(), ProcessError> {
         let process = self.get_process_mut(pid)?;
         match process.state {
             ProcessState::Allocated => {
                 process.state = ProcessState::Ready(1 << INITIAL_TID);
                 Ok(())
             }
-            _ => Err(redoubt_abi::Error::ProcessNotFound),
+            _ => Err(ProcessError::NotFound),
         }
     }
 
@@ -367,7 +376,7 @@ impl SystemServices {
         arg: usize,
     ) -> Result<TID, redoubt_sys::Error> {
         let process = self.get_process_mut(pid).map_err(|_| redoubt_sys::Error::NotPermitted)?;
-        process.activate().map_err(|_| redoubt_sys::Error::NotPermitted)?;
+        process.activate();
         let mut arch_process = ArchProcess::current();
         let new_tid = arch_process.find_free_thread().ok_or(redoubt_sys::Error::TooManyThreads)?;
         // A thread costs its budget a page (R6).
@@ -382,31 +391,31 @@ impl SystemServices {
         Ok(new_tid)
     }
 
-    pub fn get_process(&self, pid: PID) -> Result<&Process, redoubt_abi::Error> {
+    pub fn get_process(&self, pid: PID) -> Result<&Process, ProcessError> {
         // PID0 doesn't exist -- process IDs are offset by 1.
         let pid_idx = pid.get() as usize - 1;
         if pid_idx >= self.processes.len() {
-            return Err(redoubt_abi::Error::ProcessNotFound);
+            return Err(ProcessError::NotFound);
         }
         if self.processes[pid_idx].mapping.get_pid() != Some(pid) {
-            Err(redoubt_abi::Error::ProcessNotFound)
+            Err(ProcessError::NotFound)
         } else if self.processes[pid_idx].state == ProcessState::Free {
-            Err(redoubt_abi::Error::ProcessNotFound)
+            Err(ProcessError::NotFound)
         } else {
             Ok(&self.processes[pid_idx])
         }
     }
 
-    pub fn get_process_mut(&mut self, pid: PID) -> Result<&mut Process, redoubt_abi::Error> {
+    pub fn get_process_mut(&mut self, pid: PID) -> Result<&mut Process, ProcessError> {
         // PID0 doesn't exist -- process IDs are offset by 1.
         let pid_idx = pid.get() as usize - 1;
         if pid_idx >= self.processes.len() {
-            return Err(redoubt_abi::Error::ProcessNotFound);
+            return Err(ProcessError::NotFound);
         }
         if self.processes[pid_idx].mapping.get_pid() != Some(pid) {
-            Err(redoubt_abi::Error::ProcessNotFound)
+            Err(ProcessError::NotFound)
         } else if self.processes[pid_idx].state == ProcessState::Free {
-            Err(redoubt_abi::Error::ProcessNotFound)
+            Err(ProcessError::NotFound)
         } else {
             Ok(&mut self.processes[pid_idx])
         }
@@ -416,7 +425,7 @@ impl SystemServices {
 
     /// Mark the specified context as ready to run. If the thread is Sleeping, mark
     /// it as Ready.
-    pub fn ready_thread(&mut self, pid: PID, tid: TID) -> Result<(), redoubt_abi::Error> {
+    pub fn ready_thread(&mut self, pid: PID, tid: TID) -> Result<(), ProcessError> {
         let process = self.get_process_mut(pid)?;
         // let old_state = process.state;
         process.state = match process.state {
@@ -483,7 +492,7 @@ impl SystemServices {
     /// # Panics
     ///
     /// If the current process is not running, or if it's "Running" but has no free contexts
-    pub fn switch_to_thread(&mut self, pid: PID, tid: Option<TID>) -> Result<(), redoubt_abi::Error> {
+    pub fn switch_to_thread(&mut self, pid: PID, tid: Option<TID>) -> Result<(), ProcessError> {
         let process = self.get_process_mut(pid)?;
         // klog!(
         //     "switch_to_thread({}:{:?}): Old state was {:?}",
@@ -493,10 +502,10 @@ impl SystemServices {
         // let old_state = process.state;
         // Determine which thread to switch to
         process.state = match process.state {
-            ProcessState::Free => return Err(redoubt_abi::Error::ProcessNotFound),
-            ProcessState::Sleeping => return Err(redoubt_abi::Error::ProcessNotFound),
+            ProcessState::Free => return Err(ProcessError::NotFound),
+            ProcessState::Sleeping => return Err(ProcessError::NotFound),
             ProcessState::Allocated | ProcessState::Setup { .. } => {
-                return Err(redoubt_abi::Error::ProcessNotFound)
+                return Err(ProcessError::NotFound)
             }
             ProcessState::Ready(0) => {
                 panic!("ProcessState was `Ready(0)`, which is invalid!");
@@ -509,9 +518,9 @@ impl SystemServices {
                     panic!("invalid thread ID");
                 }
 
-                process.activate()?;
+                process.activate();
 
-                ArchProcess::current().set_tid(new_thread)?;
+                ArchProcess::current().set_tid(new_thread);
                 process.current_thread = new_thread as _;
                 ProcessState::Running(ready_threads & !(1 << new_thread))
             }
@@ -525,11 +534,11 @@ impl SystemServices {
                 // Ensure the specified context is ready to run, or is
                 // currently running.
                 if ready_threads & (1 << new_thread) == 0 {
-                    return Err(redoubt_abi::Error::InvalidThread);
+                    return Err(ProcessError::NotReady);
                 }
 
                 // Activate this process on this CPU
-                ArchProcess::current().set_tid(new_thread)?;
+                ArchProcess::current().set_tid(new_thread);
                 process.current_thread = new_thread as _;
                 ProcessState::Running(ready_threads & !(1 << new_thread))
             }
@@ -552,7 +561,7 @@ impl SystemServices {
     /// # Panics
     ///
     /// If the current process is not running.
-    pub fn unschedule_thread(&mut self, pid: PID, tid: TID) -> Result<(), redoubt_abi::Error> {
+    pub fn unschedule_thread(&mut self, pid: PID, tid: TID) -> Result<(), ProcessError> {
         let process = self.get_process_mut(pid)?;
         // klog!(
         //     "unschedule_thread({}:{}): Old state was {:?}",
@@ -583,7 +592,10 @@ impl SystemServices {
 
     /// Make `pid`'s address space the active one, for the steps that must run in it (choosing a
     /// buffer's address, writing a record into the receiver's own memory).
-    pub fn activate(&self, pid: PID) -> Result<(), redoubt_abi::Error> { self.get_process(pid)?.activate() }
+    pub fn activate(&self, pid: PID) -> Result<(), ProcessError> {
+        self.get_process(pid)?.activate();
+        Ok(())
+    }
 
     /// Hand a thread the registers a Redoubt call answers with (`redoubt-sys` encodes them). If
     /// `pid` is not the running process, it visits `pid`'s address space and comes back.
@@ -592,7 +604,7 @@ impl SystemServices {
         pid: PID,
         tid: TID,
         regs: &[u64; redoubt_sys::REGS],
-    ) -> Result<(), redoubt_abi::Error> {
+    ) -> Result<(), ProcessError> {
         // Every register holds at most 32 bits or one `usize` (redoubt-sys).
         let words = regs.map(|r| r as usize);
         let current_pid = self.current_pid();
@@ -600,9 +612,10 @@ impl SystemServices {
             ArchProcess::current().set_thread_registers(tid, &words);
             return Ok(());
         }
-        self.get_process(pid)?.activate()?;
+        self.get_process(pid)?.activate();
         ArchProcess::current().set_thread_registers(tid, &words);
-        self.get_process(current_pid).expect("couldn't switch back after setting a Redoubt result").activate()
+        self.get_process(current_pid).expect("couldn't switch back after setting a Redoubt result").activate();
+        Ok(())
     }
 
     /// Resume the given process, picking up exactly where it left off. If the
@@ -613,7 +626,7 @@ impl SystemServices {
         new_pid: PID,
         mut new_tid: TID,
         can_resume: bool,
-    ) -> Result<TID, redoubt_abi::Error> {
+    ) -> Result<TID, ProcessError> {
         let previous_pid = self.current_pid();
 
         #[cfg(feature = "debug-print")]
@@ -634,7 +647,7 @@ impl SystemServices {
                 match new.state {
                     ProcessState::Free => {
                         klog!("PID {} was free", new_pid);
-                        return Err(redoubt_abi::Error::ProcessNotFound);
+                        return Err(ProcessError::NotFound);
                     }
                     ProcessState::Setup { .. } | ProcessState::Allocated => new_tid = INITIAL_TID,
                     ProcessState::Ready(x) => {
@@ -650,7 +663,7 @@ impl SystemServices {
                                 "process state is {:?}, but new thread {} is not runnable",
                                 new.state, new_tid
                             );
-                            return Err(redoubt_abi::Error::ProcessNotFound);
+                            return Err(ProcessError::NotFound);
                         }
                         new.current_thread = new_tid as _;
                     }
@@ -658,7 +671,7 @@ impl SystemServices {
                         panic!("process was running even though the pid was different")
                     }
                     ProcessState::Sleeping => {
-                        return Err(redoubt_abi::Error::ProcessNotFound);
+                        return Err(ProcessError::NotFound);
                     }
                 }
             }
@@ -667,7 +680,7 @@ impl SystemServices {
             // point onward, we will need to activate the previous memory space
             // if we encounter an error.
             let new = self.get_process(new_pid)?;
-            new.mapping.activate()?;
+            new.mapping.activate();
 
             // Set up the new process, if necessary.  Remove the new thread from
             // the list of ready threads.
@@ -691,7 +704,7 @@ impl SystemServices {
                 ProcessState::Sleeping => ProcessState::Running(0),
             };
             // log_process_update(file!(), line!(), new, old_state);
-            new.activate()?;
+            new.activate();
 
             // Mark the previous process as ready to run, since we just switched
             // away
@@ -752,7 +765,7 @@ impl SystemServices {
                     );
                 }
                 let mut process = ArchProcess::current();
-                process.set_tid(new_tid).unwrap();
+                process.set_tid(new_tid);
                 new.current_thread = new_tid;
                 return Ok(new_tid);
             }
@@ -774,7 +787,7 @@ impl SystemServices {
                 }
 
                 if x & (1 << new_tid) == 0 {
-                    return Err(redoubt_abi::Error::ThreadNotAvailable);
+                    return Err(ProcessError::NotReady);
                 }
 
                 new.current_thread = new_tid as _;
@@ -788,7 +801,7 @@ impl SystemServices {
         }
 
         // Restore the previous thread, if one exists.
-        ArchProcess::current().set_tid(new_tid)?;
+        ArchProcess::current().set_tid(new_tid);
 
         klog!(
             "Activated process {}:{}, new state: {:?}",
@@ -804,7 +817,7 @@ impl SystemServices {
     /// # Errors
     ///
     /// * **ThreadNotAvailable**: The thread does not exist in this process
-    pub fn destroy_thread(&mut self, pid: PID, tid: TID) -> Result<bool, redoubt_abi::Error> {
+    pub fn destroy_thread(&mut self, pid: PID, tid: TID) -> Result<bool, ProcessError> {
         let current_pid = self.current_pid();
         assert_eq!(pid, current_pid);
 
@@ -819,7 +832,7 @@ impl SystemServices {
         };
 
         // Destroy the thread at a hardware level
-        if ArchProcess::current().destroy_thread(tid).is_ok() {
+        if ArchProcess::current().destroy_thread(tid) {
             crate::mem::MemoryManager::with_mut(|mm| mm.thread_ended(pid, tid));
         }
 
@@ -845,14 +858,14 @@ impl SystemServices {
     }
 
     /// Terminate the given process, the running one; the CPU goes to `kmain`.
-    pub fn terminate_process(&mut self, target_pid: PID) -> Result<(), redoubt_abi::Error> {
+    pub fn terminate_process(&mut self, target_pid: PID) -> Result<(), ProcessError> {
         println!("terminate_process: {:?}", target_pid);
         // R4b: every call its threads hold open fails its caller with `Dead`, and every message
         // they were sending is withdrawn, before its memory goes.
         crate::mem::MemoryManager::with_mut(|mm| crate::message::process_ending(self, mm, target_pid));
 
         let process = self.get_process_mut(target_pid)?;
-        process.activate()?;
+        process.activate();
         process.terminate()?;
         crate::mem::MemoryManager::with_mut(|mm| crate::message::destroy_quarantined_devices(self, mm));
 
@@ -865,14 +878,15 @@ impl SystemServices {
     /// destroyed budget), which keeps running: the same teardown as `terminate_process`, then
     /// the running process's address space is active again. `target` must not be the running
     /// process.
-    pub fn kill_process(&mut self, target: PID) -> Result<(), redoubt_abi::Error> {
+    pub fn kill_process(&mut self, target: PID) -> Result<(), ProcessError> {
         let current = self.current_pid();
         assert!(target != current, "kill_process on the running process");
         crate::mem::MemoryManager::with_mut(|mm| crate::message::process_ending(self, mm, target));
         // `terminate` needs no address space: it names the target's mapping itself.
         self.get_process_mut(target)?.terminate()?;
         crate::mem::MemoryManager::with_mut(|mm| crate::message::destroy_quarantined_devices(self, mm));
-        self.get_process(current)?.activate()
+        self.get_process(current)?.activate();
+        Ok(())
     }
 
     /// Returns the process name, if any, of a given PID
