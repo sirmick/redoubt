@@ -285,8 +285,10 @@ fn has_phrase(lower: &str, phrase: &str) -> bool {
     })
 }
 
-/// C4's patterns; commit hashes only when `hashes`. One message per match.
-fn process_refs(s: &str, hashes: bool) -> Vec<String> {
+/// C4's patterns; commit hashes only when `hashes`. With `checker`, `C1`..`C12` are this
+/// checker's rule names, not package IDs (the page that documents the checker). One message per
+/// match.
+fn process_refs(s: &str, hashes: bool, checker: bool) -> Vec<String> {
     let mut out = Vec::new();
     for (at, w) in words(s) {
         let rest = &s[at + w.len()..];
@@ -305,6 +307,11 @@ fn process_refs(s: &str, hashes: bool) -> Vec<String> {
             out.push(format!("answer or question number after `{w}`"));
         } else if w == "ANSWERS" || w == "QUESTIONS" {
             out.push(format!("process reference `{w}`"));
+        } else if checker
+            && w.strip_prefix('C')
+                .and_then(|n| n.parse::<u8>().ok())
+                .is_some_and(|n| (1..=12).contains(&n) && !w.starts_with("C0"))
+        {
         } else if PACKAGES.iter().any(|p| w.strip_prefix(p).is_some_and(|r| digits_then(r, true))) {
             out.push(format!("package ID `{w}`"));
         } else if (1..=4).contains(&upper) && digits_then(&w[upper..], true) && dash_lower {
@@ -633,7 +640,7 @@ fn milestones_and_process(c: &mut Ctx, p: &Page) {
             }
         }
         if process {
-            for m in process_refs(l, !p.fenced[i]) {
+            for m in process_refs(l, !p.fenced[i], p.path == "docs/testbench.md") {
                 c.err(4, &p.path, i + 1, m);
             }
         }
@@ -936,7 +943,7 @@ fn code(c: &mut Ctx, pages: &[Page], defs: &BTreeMap<String, Def>) {
                 l.find("//").map(|at| &l[at + 2..])
             };
             let Some(text) = text else { continue };
-            let mut msgs = process_refs(text, true);
+            let mut msgs = process_refs(text, true, false);
             msgs.extend(
                 legacy.iter().filter(|n| text.contains(n.as_str())).map(|n| format!("legacy doc name `{n}`")),
             );
