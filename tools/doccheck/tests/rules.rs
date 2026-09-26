@@ -83,4 +83,5 @@ fn narrow_cases_fire() {
     assert!(at("c11", 11, "libs/wire/elixir/proto/ping.ex", 2));
     assert!(at("c11", 11, "libs/wire/elixir/wire.ex", 3));
     assert!(at("c12", 12, "docs/SUMMARY.md", 4));
+    assert!(at("c8", 8, "docs/theme/logo.svg", 1));
 }
