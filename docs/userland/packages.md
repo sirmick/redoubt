@@ -74,13 +74,18 @@ It is a steward record, not a file the principal can write.
   flips one steward record; flipping back is the rollback; `pkg gc` removes versions no profile
   uses.
 - **Installed code comes only from installed packages.** `Platform::load_module` resolves a module
-  name only from the system bundle and the profile's package directories, through read-only
-  handles, and the steward launches only installed programs. Neither ever consults the session's
-  writable namespace, so a file dropped in a person's home cannot pose as their installed code
+  name only from the system bundle and the profile's package directories, through read-only handles,
+  and the steward launches only installed programs. Neither ever consults the session's writable
+  namespace (a directory a session puts on its own code path is its own choice, below), so a file
+  dropped in a person's home cannot pose as their installed code
   ([beamlet](beamlet.md#beamlet-on-redoubt)).
 - **No shadowing.** The system bundle always resolves first, and a package may not define a module
   the bundle defines: `pkg` refuses it at install. Two packages in one profile may not define the
-  same module: the steward refuses it at `use`.
+  same module: the steward refuses it at `use`. beamlet departs from the first rule: it searches
+  directories a session adds to the front of its code path before the platform's modules, so such a
+  directory, in the session's own files, shadows a system module in that VM. It grants nothing the
+  session lacked, and it is fixed in the beamlet follow-up
+  ([module search order](../todo/module-search-order.md)).
 - **One's own code is not installed code.** A session that compiles or loads its own code
   (`Code.compile_string`, `Code.require_file` on its own files) runs it within its own authority.
   The code-path rule is about what loads implicitly, not a wall against one's own code

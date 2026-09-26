@@ -91,7 +91,9 @@ fields, so nothing is invented. This is the one statement of the rule; file tran
 arithmetic on a mode (the mode preservation in `File.cp` and `File.cp_r`, Mix's check that a file
 is executable) is adjusted in beamlet's platform layer to skip the mode, never fed a fake one; the
 M4 (self-hosted development) case that compiles a Mix project on the box catches any caller that
-breaks.
+breaks. Planned cases: a host or bench test asserts that `File.stat` gives `:undefined` for `mode`,
+`uid`, `gid`, `links`, `inode` and `major_device`, and that `File.chmod`, `File.chown`, `File.ln_s`
+and `File.ln` each return `{:error, :enotsup}`.
 
 **Open:** error vocabularies. `File` expects POSIX atoms (`:enoent`, `:eacces`) and Redoubt has its
 own (`:refused`, `:not_yours`, a label or budget refusal). Recommended: Redoubt errors keep their

@@ -67,9 +67,9 @@ budget or process handles. That is narrower than the session, as a launch always
   at a connection's root stays at the root, by 9P's walk; cleaning names lexically makes them
   predictable, and is not the wall.
 - **Unsupported operations fail visibly.** `SYMLINK`, `READLINK` and `LINK` get
-  `SSH_FX_OP_UNSUPPORTED`. `SETSTAT` honours a size (truncation), and a modification time where the
-  file server stores one; a mode, a user or a group gets `SSH_FX_OP_UNSUPPORTED` rather than a
-  silent success. This is the same rule the `File` API follows on the box
+  `SSH_FX_OP_UNSUPPORTED`. `SETSTAT` honours a size (truncation), and the modification and access
+  times where the file server stores them; a mode, a user or a group gets `SSH_FX_OP_UNSUPPORTED`
+  rather than a silent success. This is the same rule the `File` API follows on the box
   ([files](files.md#files-over-9p)).
 - **The same budget and file rules.** Its pages and CPU are charged to the session's budget, a
   full volume refuses the write, a rename between volumes is a copy and a remove, and removing an
