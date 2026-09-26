@@ -32,10 +32,14 @@ Status: planned · M1 (separation and containment)
   never live in `keyd` ([R35 (key separation)](init.md#r35-key-separation)).
 - **A pty session.** A session gets one channel with a pty, on which `sshd` serves its `/dev/cons`
   ([consoled](consoled.md#the-consol-protocol) has the same protocol): input from the channel,
-  output to it, and the window's size and its changes.
+  output to it, and the window's size and its changes. The channel's `signal` request (INT) and
+  `break` request reach the session as the interrupt a 0x03 byte gives: protocol messages, not
+  signals, since nothing in Redoubt has signals.
 - **State is per channel**, and each channel carries its session's labels (`alice@`: none;
   `alice+secrets@`: `{alice-secrets}`); `sshd` applies the label check to them
-  ([R25 (the label check)](serving.md#r25-the-label-check)).
+  ([R25 (the label check)](serving.md#r25-the-label-check)). Channels are independent: one
+  channel's close, logout or VM death leaves every other channel, `approve@box`'s included, usable,
+  and a channel learns nothing of another's window size or waiting reads.
 - **The one sink cleared for a label.** A vault session's output may reach its own channel, which
   the steward opened for the label's owner, and only a pty channel its owner authenticated: no
   forwarding, no subsystems, no `exec` on a labelled channel. No other sink has an owner exemption
@@ -71,7 +75,8 @@ sequenceDiagram
 
 Status: planned · M1 (separation and containment)
 
-`ssh approve@box` authenticates with the person's own approval key, and on that connection only the
+`ssh approve@box` authenticates with the person's own approval key, one of their own SSH keys that
+the manifest lists for approval, and on that connection only the
 steward talks: `sshd` relays the steward's rendered requests and the person's answers, and nothing
 a session or agent sends reaches it ([steward](steward.md#the-powerbox-and-approvals)). A session's
 network scope never includes the box's own addresses ([ipd](ipd.md#the-boxs-own-addresses)), so a

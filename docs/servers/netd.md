@@ -17,11 +17,12 @@ policy. Everything above the link is `ipd`'s.
 
 ### Serving `ipd`
 
-Status: built · tested: bench:netd-host-tests, bench:d3-net-tcp, host:redoubt-netd::info_and_transmit_for_the_client, host:redoubt-netd::anyone_else_is_not_permitted, host:redoubt-netd::a_frame_of_the_wrong_length_is_too_many, host:redoubt-netd::a_full_ring_is_busy_and_a_lie_is_failed_for_good, host:redoubt-netd::a_request_that_does_not_decode_is_malformed, host:redoubt-netd::arguments_are_exactly_one_client_badge, host:redoubt-netd::randomized_requests_reach_the_wire_only_from_the_client, fuzz:redoubt-netd/request
+Status: built · partly tested: the drop of a frame `ipd` does not take within `SEND_TIMEOUT_US` is read from the code, not attacked · tested: bench:netd-host-tests, bench:d3-net-tcp, host:redoubt-netd::info_and_transmit_for_the_client, host:redoubt-netd::anyone_else_is_not_permitted, host:redoubt-netd::a_frame_of_the_wrong_length_is_too_many, host:redoubt-netd::a_full_ring_is_busy_and_a_lie_is_failed_for_good, host:redoubt-netd::a_request_that_does_not_decode_is_malformed, host:redoubt-netd::arguments_are_exactly_one_client_badge, host:redoubt-netd::randomized_requests_reach_the_wire_only_from_the_client, fuzz:redoubt-netd/request
 
 - **One client.** `netd`'s one argument names the badge `ipd`'s handle carries. Any other badge, and
-  any labelled caller, gets `not_permitted`. `netd` mints nothing and parks nothing, so a call holds
-  nothing after its reply.
+  any labelled caller, gets `not_permitted`. `netd` mints nothing for a client and parks nothing,
+  so a call holds nothing after its reply. (It mints one badge on its own endpoint, for the receive
+  thread's report.)
 - **`info`**: the device's MAC address and the MTU (1500).
 - **`transmit(frame)`**: one Ethernet frame of 14 to 1514 bytes (`MIN_FRAME` to `MAX_FRAME`), copied
   out of the caller's lend into a transmit slot. A frame of another length is `too_many`; a full
@@ -44,7 +45,8 @@ Status: built · tested: host:redoubt-netd::an_honest_device_comes_up_with_two_f
   `netd` gives the device is a region's base plus a constant**, checked at compile time
   (`ring::LAYOUT_FITS`), and descriptor i always names slot i
   ([R54 (DMA stays in netd's regions)](#r54-dma-stays-in-netds-regions)).
-- **Bring-up** accepts version 2 only and exactly two features, version 1 and the MAC; it
+- **Bring-up** accepts version 2 only and exactly two features, version 1 and the MAC, and refuses a
+  MAC that is all zeros or has the group bit set (multicast or broadcast); it
   configures both queues, offers every receive slot, and sets `DRIVER_OK` before the receive thread
   exists. A device that fails any step is reset and refused.
 - **Receive.** All sixteen slots are always offered. Each frame is copied out of its slot once, with
@@ -57,7 +59,8 @@ Status: built · tested: host:redoubt-netd::an_honest_device_comes_up_with_two_f
   ([R56 (no earlier frame leaks)](#r56-no-earlier-frame-leaks)). The transmit queue asks for no
   interrupts.
 - **Interrupts only say when to look.** The receive queue is drained before every wait, so a lost
-  interrupt delays nothing and a spurious one delivers nothing.
+  interrupt delays nothing and a spurious one delivers nothing (an interrupt raised before the
+  first receive is a kernel follow-up: [todo](../todo/irq-level-latch.md)).
 - **A DMA page never leaves `netd`.** No path lends, transfers or maps one; the kernel refuses to
   anyway ([devices](../kernel/devices.md#dma_alloc)).
 
@@ -102,7 +105,7 @@ Status: built · tested: fuzz:redoubt-netd/device, host:redoubt-netd::receive_li
 
 ### Two threads, reset on exit
 
-Status: built · tested: host:redoubt-netd::only_the_receive_threads_report_breaks_the_device, host:redoubt-netd::the_receive_loop_resets_and_reports_a_lie, host:redoubt-netd::the_receive_loop_resets_and_reports_when_the_interrupt_fails, host:redoubt-netd::a_panic_resets_the_device, bench:d3-net-tcp
+Status: built · partly tested: the serving thread's reset before it exits is read from the code, not attacked · tested: host:redoubt-netd::only_the_receive_threads_report_breaks_the_device, host:redoubt-netd::the_receive_loop_resets_and_reports_a_lie, host:redoubt-netd::the_receive_loop_resets_and_reports_when_the_interrupt_fails, host:redoubt-netd::a_panic_resets_the_device
 
 - **The serving thread** maps the registers, allocates both regions, brings the device up and only
   then starts the receive thread. It owns the transmit queue, answers `netif` calls, and waits on
@@ -129,7 +132,9 @@ carries; it hands `ipd` the matching handle to `netd` and `netd` a handle to `ip
 frames ([init](init.md#starting-the-servers)). The net rig (`tests/net/src/rig.rs`) does this in
 the bench, finding the card by its virtio device ID.
 
-**Open:** none.
+**Open:** whether and how `init` restarts `netd` after a kill or a fault, which runs none of
+`netd`'s reset code: the kernel resets the device before its DMA pages are reused, but a restarted
+`netd` must bring the device up again and `ipd` must find the new instance.
 
 ## Authority
 
@@ -169,7 +174,7 @@ that claims more than it wrote hands back zeros.
 
 ### R57 (the device stops before netd does)
 
-Status: built · partly tested: a kill or a fault of `netd` runs none of its code, and the device reset then is the kernel's · tested: host:redoubt-netd::a_panic_resets_the_device, host:redoubt-netd::the_receive_loop_resets_and_reports_a_lie, host:redoubt-netd::the_receive_loop_resets_and_reports_when_the_interrupt_fails, host:redoubt-netd::only_the_receive_threads_report_breaks_the_device
+Status: built · partly tested: a kill or a fault of `netd` runs none of its code, and the device reset then is the kernel's; the serving thread's reset before it exits is not attacked · tested: host:redoubt-netd::a_panic_resets_the_device, host:redoubt-netd::the_receive_loop_resets_and_reports_a_lie, host:redoubt-netd::the_receive_loop_resets_and_reports_when_the_interrupt_fails, host:redoubt-netd::only_the_receive_threads_report_breaks_the_device
 
 On every way out of either thread that `netd` controls, a lie, a failed interrupt, an exit or a
 panic, the device is reset and the reset read back before anything else, so the device writes
@@ -179,7 +184,7 @@ kernel resets the device before its DMA pages are reused
 
 ## Failure and restart
 
-Status: built · tested: host:redoubt-netd::a_full_ring_is_busy_and_a_lie_is_failed_for_good, host:redoubt-netd::bring_up_refuses_and_resets, host:redoubt-netd::a_panic_resets_the_device
+Status: built · partly tested: the exit codes (`NO_DEVICE`, `BAD_ARGS`, `NO_RESOURCES` in `servers/netd/src/bin/netd.rs`) are read from the code, not attacked · tested: host:redoubt-netd::a_full_ring_is_busy_and_a_lie_is_failed_for_good, host:redoubt-netd::bring_up_refuses_and_resets, host:redoubt-netd::a_panic_resets_the_device
 
 - **No device or bad arguments:** `netd` exits with a code before serving.
 - **The device lies or times out:** it is reset, every later request is `failed`, and `netd` stays up.
@@ -191,8 +196,9 @@ Status: built · tested: host:redoubt-netd::a_full_ring_is_busy_and_a_lie_is_fai
 
 - **`netd` is trusted without an IOMMU.** A compromised `netd`, or a device that ignores its
   addresses, can write anywhere in RAM.
-- **A frame flood costs `netd`'s CPU** at its large manifest weight, and its drops fall on every
-  connection `ipd` serves.
+- **A frame flood costs `netd`'s CPU** at its large manifest weight. Under a flood the receive thread
+  drains without waiting on the interrupt, paced only by each send to `ipd` (up to 50 ms), and its
+  drops fall on every connection `ipd` serves.
 - **A reset stops the device for everyone.** One lie ends the network for every principal until the
   device is brought up again; `netd` is not restarted to do that.
 - **`netd` does not boot under `init` in the bench.** The net rig launches it through the stub in
