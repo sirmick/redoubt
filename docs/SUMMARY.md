@@ -50,8 +50,8 @@
   - [The shell](userland/shell.md)
   - [Files and binds](userland/files.md)
   - [Native programs](userland/native.md)
-  - [Agents, leases and labels]()
-  - [File transfer]()
+  - [Agents, leases and labels](userland/agents.md)
+  - [File transfer](userland/transfer.md)
   - [Development on Redoubt]()
   - [Packages]()
 
