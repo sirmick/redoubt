@@ -1,7 +1,6 @@
-# The `netif` protocol
+The `netif` protocol's message and error tables, included by its owning page, [servers/netd.md](../../../docs/servers/netd.md).
 
-Owned by [servers/netd.md](../../../docs/servers/netd.md).
-
+<!-- ANCHOR: tables -->
 <!-- wire: netif -->
 | Opcode | Message | Fields | Reply |
 | --- | --- | --- | --- |
@@ -15,3 +14,5 @@ Owned by [servers/netd.md](../../../docs/servers/netd.md).
 | 3 | `too_many` |
 | 4 | `busy` |
 | 5 | `failed` |
+
+<!-- ANCHOR_END: tables -->

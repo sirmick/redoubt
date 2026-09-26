@@ -1,7 +1,6 @@
-# The `fsd` protocol
+The `fsd` protocol's message and error tables, included by its owning page, [servers/fsd.md](../../../docs/servers/fsd.md).
 
-Owned by [servers/fsd.md](../../../docs/servers/fsd.md).
-
+<!-- ANCHOR: tables -->
 <!-- wire: fsd ninep -->
 | Opcode | Message | Fields | Reply |
 | --- | --- | --- | --- |
@@ -17,3 +16,7 @@ Owned by [servers/fsd.md](../../../docs/servers/fsd.md).
 | 3 | `refused` |
 | 4 | `exists` |
 | 5 | `not_dir` |
+| 6 | `removed` |
+| 7 | `too_large` |
+
+<!-- ANCHOR_END: tables -->
