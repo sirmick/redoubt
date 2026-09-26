@@ -93,6 +93,7 @@
   - [A notice lost to a bad receive record](todo/receive-output-late-invalid.md)
   - [Nightly rustfmt drift](todo/rustfmt-nightly-drift.md)
   - [The steward decision-wake target](todo/sched-latency-target.md)
+  - [The SSH loopback self-checks](todo/ssh-loopback-host.md)
 - [Beyond M5](beyond/README.md)
   - [The FPGA platform](beyond/fpga-platform.md)
   - [SMP](beyond/smp.md)
@@ -114,3 +115,7 @@
   - [ASLR](beyond/aslr.md)
   - [Scheduling extensions](beyond/scheduling-extensions.md)
   - [Label extensions](beyond/label-extensions.md)
+
+# Working on Redoubt
+
+- [The test bench](testbench.md)
