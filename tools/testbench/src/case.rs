@@ -110,6 +110,10 @@ pub struct Boot {
     /// SBI `SystemFailure` shutdown to 255, which rejection tests must request explicitly.
     #[serde(default)]
     pub poweroff_status: i32,
+    /// The program whose `DONE` to `log-server` ends a `poweroff` case (docs/testbench.md, rule
+    /// F). The case passes only if the one console line starting `[server] done:` names this
+    /// program's PID. Any other such line fails it, as does one in a case with no reporter.
+    pub reporter: Option<String>,
     /// Regular expressions with one capture group. The case is booted twice, and what
     /// each captures must differ between the two boots (for randomness, ASLR, ...).
     #[serde(default)]
@@ -335,6 +339,15 @@ fn default_smp() -> Vec<u32> { vec![1] }
 
 fn default_timeout() -> f64 { 60.0 }
 
+impl Boot {
+    /// The reporter's PID: the loader numbers the bundle's programs from 2, in order.
+    pub fn reporter_pid(&self) -> Option<usize> {
+        let reporter = self.reporter.as_ref()?;
+        let index = self.programs.iter().position(|p| matches!(p, Program::TestProgram(name) if name == reporter))?;
+        Some(index + 2)
+    }
+}
+
 impl Case {
     pub fn load(path: &Path) -> Result<Case> {
         let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
@@ -360,6 +373,10 @@ impl Case {
                     check_net(net)?;
                     // The post-check judges one boot's peer files.
                     ensure!(net.peer.is_empty() || boot.distinct_across_boots.is_empty(), "peers need one boot");
+                }
+                if let Some(reporter) = &boot.reporter {
+                    ensure!(boot.poweroff, "a reporter needs poweroff = true");
+                    ensure!(boot.reporter_pid().is_some(), "reporter {reporter:?} is not one of the programs");
                 }
                 check_sessions(&boot.session)
             }

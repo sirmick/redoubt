@@ -1,9 +1,9 @@
 //! Programs that run inside Redoubt under the test bench (`tools/testbench`).
 //!
-//! They are `no_std`, because `std` is not ported to rv64 yet, and they print through
-//! `log-server`, which owns the UART. Everything a client prints travels to the server
-//! in lent memory, so plain logging already exercises IPC and the page-table operations
-//! behind it.
+//! They are `no_std`, because `std` is not ported to rv64 yet, and they print through the
+//! bundle's first program, which owns the UART and serves the log endpoint (`logsrv`; by default
+//! `log-server`). Everything a client prints travels there in lent memory, so plain logging
+//! already exercises IPC and the page-table operations behind it.
 //!
 //! Convention: a test program ends by logging `<NAME> TEST PASSED` or `<NAME> TEST FAILED`.
 //! An attack program ends with `attempts done` instead: its own verdict would count for nothing
@@ -13,8 +13,10 @@
 
 use core::fmt::Write;
 
-use redoubt_abi::{CID, MemoryFlags, MemoryRange, MemorySize, Message};
+use redoubt_abi::{CID, MemoryFlags, MemoryRange, MemorySize};
 
+pub mod console;
+pub mod logsrv;
 pub mod rd;
 pub mod sched;
 pub mod spawn;
@@ -22,18 +24,30 @@ pub mod spawn;
 /// There is no name server yet, so the log server uses a well-known address.
 pub const SERVER_ADDRESS: &[u8; 16] = b"redoubt-ipc-tst!";
 
-/// Message IDs understood by `log-server`.
+/// A legacy connection to `log-server`, for the programs that still send it legacy messages.
+pub fn connect_legacy() -> CID {
+    let sid = redoubt_abi::SID::from_bytes(SERVER_ADDRESS).unwrap();
+    redoubt_abi::connect(sid).expect("couldn't connect to log-server")
+}
+
+/// Operations on the log endpoint (`logsrv`), word 0 of a message; word 1 is a byte count.
 pub mod op {
     /// Scalar: print the four arguments.
     pub const PRINT_SCALARS: usize = 1;
-    /// BlockingScalar: reply with the sum of the four arguments.
+    /// Call with words: reply with the sum of words 1-3.
     pub const SUM: usize = 2;
-    /// Borrow: print `valid` bytes of the buffer as UTF-8.
+    /// Call with a lend: print word 1 bytes of it as UTF-8.
     pub const PRINT: usize = 3;
-    /// MutableBorrow: upper-case `valid` bytes of the buffer in place.
+    /// Call with a writable lend: upper-case word 1 bytes of it in place.
     pub const UPPERCASE: usize = 4;
-    /// Move: print `valid` bytes of the buffer. The server keeps the page.
+    /// Send with a transfer: print word 1 bytes of it. The server keeps the pages.
     pub const PRINT_AND_KEEP: usize = 5;
+    /// Call, `log-server` only: the first caller gets `root`, `system` and `users` in the reply
+    /// (`rd::take_gifts`), and never a device; a later one gets `Refused` in word 0.
+    pub const TAKE_GIFTS: usize = 6;
+    /// Call, `log-server` only: the attack checker. It prints `[server] done: reported by pid
+    /// N; still serving`, N the caller's badge, replies, and powers the machine off.
+    pub const DONE: usize = 7;
 }
 
 /// A page of memory that can be lent or moved to a server, and written to as text.
@@ -70,27 +84,31 @@ impl Write for Page {
     }
 }
 
-/// A connection to `log-server`.
+/// A program's log: a send on the log endpoint (`rd::LOG`), or, in the first program once it
+/// has called `logsrv::start`, the console itself, as `[pid 2]`.
 pub struct Logger {
-    pub cid: CID,
+    endpoint: Option<u32>,
     page: Page,
 }
 
 impl Logger {
-    /// Blocks until `log-server` is up.
+    /// A logger for this thread: every bundle program but the first logs through its slot-2
+    /// handle.
     pub fn connect() -> Self {
-        let sid = redoubt_abi::SID::from_bytes(SERVER_ADDRESS).unwrap();
-        Logger { cid: redoubt_abi::connect(sid).expect("couldn't connect to log-server"), page: Page::new() }
+        let endpoint = if logsrv::started() { None } else { Some(rd::LOG) };
+        Logger { endpoint, page: Page::new() }
     }
 
     pub fn log(&mut self, args: core::fmt::Arguments) {
         self.page.clear();
         self.page.write_fmt(args).ok();
-        redoubt_abi::send_message(
-            self.cid,
-            Message::new_lend(op::PRINT, self.page.range, None, self.page.valid()),
-        )
-        .expect("couldn't lend to log-server");
+        let Some(endpoint) = self.endpoint else {
+            let text = core::str::from_utf8(self.page.bytes()).unwrap_or("<invalid utf-8>");
+            return console::relay(logsrv::FIRST_PID, text);
+        };
+        let body = rd::body([op::PRINT, self.page.len, 0, 0]);
+        rd::call_waiting(endpoint, &body, rd::pages(self.page.range.as_ptr() as usize, 1), rd::FOREVER)
+            .expect("couldn't lend to the log server");
     }
 }
 
@@ -103,30 +121,23 @@ macro_rules! log {
 /// The test bench notices the missing verdict and times out.
 pub fn park() -> ! {
     loop {
-        redoubt_abi::yield_slice();
+        let _ = rd::receive(None, rd::FOREVER, 0);
     }
 }
 
-/// The attack checker (`attack-checker`): the party that ends an attack case. An attacker's
+/// The attack checker, `log-server`'s `DONE`: the party that ends an attack case. An attacker's
 /// own output can never pass a case, because the attacker could print anything; so a victim
-/// whose verdict is in (or, with no victim, the attacker when done) reports to the checker, and
-/// the checker (whose lines log-server marks with the checker's PID) names the reporter, says
-/// the system is still serving, and powers off.
+/// whose verdict is in (or, with no victim, the attacker when done) reports to the checker,
+/// which names the reporter by its kernel-written badge in a line no relayed text can start
+/// with, says the system is still serving, and powers off. The case's `reporter` pins who.
 /// See docs/testbench.md, "Writing an attack case".
 pub mod checker {
-    use redoubt_abi::Message;
-
-    /// Well-known address of the checker's server.
-    pub const ADDRESS: &[u8; 16] = b"redoubt-checker!";
-    /// BlockingScalar: the sender reports (a victim's verdict is in, or an attacker is done).
-    pub const DONE: usize = 1;
+    use crate::{op, rd};
 
     /// Report to the checker, which names this process and powers off. Blocks until it has
     /// answered, which it does just before powering off.
     pub fn done() {
-        let sid = redoubt_abi::SID::from_bytes(ADDRESS).unwrap();
-        let cid = redoubt_abi::connect(sid).expect("couldn't connect to the attack checker");
-        redoubt_abi::send_message(cid, Message::new_blocking_scalar(DONE, 0, 0, 0, 0))
+        rd::call_waiting(rd::LOG, &rd::body([op::DONE, 0, 0, 0]), None, rd::FOREVER)
             .expect("couldn't reach the checker");
     }
 }
@@ -220,10 +231,6 @@ pub mod return_lent {
     pub const LENT_ADDR: usize = 0x5000_0000;
 }
 
-/// Wait about `ms` milliseconds, reading the `time` CSR (which the kernel lets U-mode
-/// read) but yielding between checks. These processes have no timer preemption, so a pure
-/// busy-loop would never let another runnable thread proceed. Used only to order events
-/// between processes that cannot otherwise synchronise.
 /// Read the 64-bit `time` CSR. On rv64 that is one `rdtime`; on rv32 `time` is 32 bits, so
 /// combine `rdtimeh`/`rdtime`, retrying if the low word wrapped between the two reads.
 pub fn read_time() -> u64 {
@@ -255,10 +262,7 @@ pub fn read_time() -> u64 {
     }
 }
 
-pub fn wait_ms(ms: u64) {
-    // QEMU virt runs the timer at 10 MHz.
-    let deadline = read_time() + ms * 10_000;
-    while read_time() < deadline {
-        redoubt_abi::yield_slice();
-    }
-}
+/// Sleep `ms` milliseconds on the kernel's timer: a `receive` with nothing to receive, which
+/// answers `Timeout`. Used only to order events between processes that cannot otherwise
+/// synchronise, and to wait out `Busy`.
+pub fn wait_ms(ms: u64) { let _ = rd::receive(None, ms * 1000, 0); }

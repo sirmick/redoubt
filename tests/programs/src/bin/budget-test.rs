@@ -97,7 +97,7 @@ fn warm_stack() {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let logger = Logger::connect();
+    let logger = test_programs::logsrv::start();
     let mut t = T { logger, failed: false, held: [0; 64], nheld: 0 };
     for h in [rd::ROOT, rd::SYSTEM, rd::USERS] {
         t.hold(h);

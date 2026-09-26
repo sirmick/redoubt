@@ -5,7 +5,7 @@
 //!
 //! On the old kernel, unmap cleared the lent PTE; the borrower's return then hit
 //! `assert!(dest ... shared)` / an `expect` and halted the machine. See
-//! `tests/return-lent-unmapped.toml`. The verdict is survival only, via `attack-checker`.
+//! `tests/return-lent-unmapped.toml`. The verdict is survival only, via log-server's `DONE`.
 
 #![no_std]
 #![no_main]

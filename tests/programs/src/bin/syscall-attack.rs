@@ -1,6 +1,6 @@
 //! Attack test: syscall arguments that once reached a kernel panic, each of which must now be a
 //! clean error. See `tests/syscall-attack.toml`; the case's verdict is survival only,
-//! from `attack-checker`, which this program reports to once it is done.
+//! from log-server's `DONE`, which this program reports once it is done.
 
 #![no_std]
 #![no_main]
@@ -23,7 +23,7 @@ pub extern "C" fn _start() -> ! {
     // (2) Lend more than the message region (one 4 MiB superpage) can hold. Finding room for it
     // in the destination computed the region end minus the size, which underflowed.
     let big = redoubt_abi::map_memory(None, None, 5 << 20, rw).expect("couldn't reserve 5 MiB");
-    let lend = redoubt_abi::send_message(logger.cid, Message::new_lend(op::PRINT, big, None, None));
+    let lend = redoubt_abi::send_message(test_programs::connect_legacy(), Message::new_lend(op::PRINT, big, None, None));
     redoubt_abi::unmap_memory(big).expect("couldn't unmap the 5 MiB range");
     log!(logger, "[syscall] oversized lend -> {:?}", lend);
 

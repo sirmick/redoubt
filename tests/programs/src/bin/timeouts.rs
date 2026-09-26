@@ -93,7 +93,7 @@ fn await_round(n: usize) {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let devices = rd::OTHER_DEVICES..rd::log_rx();
-    let mut logger = Logger::connect();
+    let mut logger = test_programs::logsrv::start();
 
     // Idle sleeps: nothing else runs, so only the kernel's timer can end them.
     let mut worst = 0;

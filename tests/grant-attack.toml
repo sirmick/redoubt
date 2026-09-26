@@ -29,4 +29,3 @@ forbid = ['BREACH']
 [[input]]
 after = '^\[pid 3\] \[grant\] attempts done$'
 send = "y"
-

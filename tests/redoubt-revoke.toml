@@ -4,8 +4,8 @@ kind = "boot"
 # Built with the checks on (docs/testbench.md, "Debug assertions").
 debug_assertions = true
 # PID 2 redoubt-revoke: it must be the loader's first program, the one holding root, system and
-# users, since only a budget handle revokes anything. PID 3 log-server.
-programs = ["redoubt-revoke", "log-server"]
+# users, since only a budget handle revokes anything.
+programs = ["redoubt-revoke"]
 timeout_secs = 30
 expect = [
     '^\[pid 2\] \[revoke\] server took call \d+ badge 6$',
@@ -14,7 +14,3 @@ expect = [
     '^\[pid 2\] REDOUBT-REVOKE TEST PASSED$',
 ]
 forbid = ['\[revoke\] FAIL', 'REDOUBT-REVOKE TEST FAILED']
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]

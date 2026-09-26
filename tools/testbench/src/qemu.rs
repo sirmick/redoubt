@@ -181,7 +181,14 @@ struct Console {
     captured: Vec<Option<String>>,
     inputs: Vec<(Regex, String)>,
     stdin: ChildStdin,
+    /// The reporter's `DONE` line, and whether it has been seen (`Boot::reporter`).
+    done: Option<Regex>,
+    done_seen: bool,
 }
+
+/// A line `log-server` prints for `DONE`. Anchored: every relayed line starts `[pid N]` or
+/// `[badge N]`, so no program's text can start this way.
+const DONE_LINE: &str = "[server] done:";
 
 impl Console {
     fn next(&mut self, until: Instant) -> Result<Line> {
@@ -193,6 +200,12 @@ impl Console {
         writeln!(self.log, "{line}")?;
         if let Some(pattern) = self.forbid.iter().find(|p| p.is_match(&line)) {
             return Ok(Line::Forbidden(format!("forbidden output /{pattern}/: {line}")));
+        }
+        if line.starts_with(DONE_LINE) {
+            match &self.done {
+                Some(done) if !self.done_seen && done.is_match(&line) => self.done_seen = true,
+                _ => return Ok(Line::Forbidden(format!("a DONE line not the reporter's: {line}"))),
+            }
         }
         for (pattern, slot) in self.capture.iter().zip(self.captured.iter_mut()).filter(|(_, slot)| slot.is_none()) {
             *slot = pattern.captures(&line).and_then(|c| c.get(1)).map(|m| m.as_str().to_string());
@@ -227,6 +240,11 @@ pub fn run(image: &Image, boot: &Boot, workspace: &Path, forwards: &[Forward], l
         .map(|i| Ok((Regex::new(&i.after)?, i.send.clone())))
         .collect::<Result<Vec<_>>>()?;
 
+    let done = boot
+        .reporter_pid()
+        .map(|pid| Regex::new(&format!(r"^\[server\] done: reported by pid {pid};")))
+        .transpose()?;
+
     let mut qemu = image.qemu();
     qemu.args(["-display", "none", "-monitor", "none", "-serial", "stdio"])
         .stdin(Stdio::piped())
@@ -254,6 +272,8 @@ pub fn run(image: &Image, boot: &Boot, workspace: &Path, forwards: &[Forward], l
         capture,
         inputs,
         stdin,
+        done,
+        done_seen: false,
     };
     let deadline = Instant::now() + Duration::from_secs_f64(boot.timeout_secs);
     let mut next = 0;
@@ -289,6 +309,9 @@ pub fn run(image: &Image, boot: &Boot, workspace: &Path, forwards: &[Forward], l
                         "QEMU exited with {status}, expected status {}",
                         boot.poweroff_status
                     )));
+                }
+                if console.done.is_some() && !console.done_seen {
+                    return Ok(Verdict::Fail("powered off without the reporter's DONE".into()));
                 }
                 break;
             }

@@ -8,7 +8,7 @@
 //! ran out of RAM. See `tests/lend-untouched-page.toml`.
 //!
 //! The verdict is survival only: this program makes every attempt, then reports to
-//! `attack-checker`, which powers off under its own PID. A kernel that panicked on any attempt
+//! log-server (`DONE`), which names it and powers off. A kernel that panicked on any attempt
 //! never reaches the power-off. Nothing this program prints is the verdict.
 
 #![no_std]
@@ -25,7 +25,7 @@ fn untouched(pages: usize) -> MemoryRange {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
-    let server = logger.cid;
+    let server = test_programs::connect_legacy();
 
     // (1) Borrow, and (2) mutable borrow of three pages: all never touched.
     let page = untouched(1);
@@ -69,8 +69,8 @@ pub extern "C" fn _start() -> ! {
     // way; that must be this call's error, not a kernel panic. Unmapping gives the RAM back.
     let huge = untouched(HUGE_PAGES);
     let beyond = redoubt_abi::send_message(server, Message::new_lend(op::PRINT, huge, None, None));
-    log!(logger, "[untouched] lend beyond RAM: {:?}", beyond);
     redoubt_abi::unmap_memory(huge).expect("couldn't unmap the huge range");
+    log!(logger, "[untouched] lend beyond RAM: {:?}", beyond);
 
     // Survived every attempt. The checker powers off under its own PID; that clean power-off is
     // the verdict.

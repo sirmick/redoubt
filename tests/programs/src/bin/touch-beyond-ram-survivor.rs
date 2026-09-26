@@ -1,7 +1,7 @@
 //! Survivor for `touch-beyond-ram`: after the attacker has had time to exhaust RAM and be
-//! terminated, it does ordinary work (a round trip through log-server) and reports to
-//! `attack-checker`. The kernel still scheduling and serving it, and the clean power-off, are
-//! the verdict; the attacker cannot produce them.
+//! terminated, it does ordinary work (a round trip through log-server) and reports `DONE`. The
+//! kernel still scheduling and serving it, and the clean power-off, are the verdict; the attacker
+//! cannot produce them.
 
 #![no_std]
 #![no_main]

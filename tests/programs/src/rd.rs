@@ -187,6 +187,29 @@ pub const LOG: u32 = 2;
 /// only until the program creates a handle, so a program reads it once, at startup.
 pub fn log_rx() -> u32 { first_free() - 1 }
 
+/// The budgets `log-server` gives its first `TAKE_GIFTS` caller, at the indices its reply
+/// installed here. Never a device (R2).
+pub struct Gifts {
+    pub root: u32,
+    pub system: u32,
+    pub users: u32,
+}
+
+/// Ask `log-server` for the first program's budgets (`op::TAKE_GIFTS`): only the first caller
+/// gets them; any later one gets `Refused`.
+pub fn take_gifts() -> Result<Gifts, Error> {
+    let reply = call_waiting(LOG, &body([crate::op::TAKE_GIFTS, 0, 0, 0]), None, FOREVER)?;
+    if let Some(error) = Error::from_code(reply.words[0] as u64) {
+        return Err(error);
+    }
+    match reply.handles.as_slice() {
+        [Some(root), Some(system), Some(users)] => {
+            Ok(Gifts { root: root.index(), system: system.index(), users: users.index() })
+        }
+        _ => Err(Error::InvalidArgument),
+    }
+}
+
 pub fn endpoint_create() -> Result<u32, Error> {
     match redoubt_sys::syscall(&Call::EndpointCreate)? {
         Return::Handle(handle) => Ok(handle.index()),
@@ -368,21 +391,18 @@ pub fn poke(at: usize, value: u64) {
     unsafe { (at as *mut u64).write_volatile(value) };
 }
 
-/// Protocol for the budget attack cases: a victim living in `system` beside the attacker waits
-/// for the attacker's go, then maps and touches pages in `system` and reports to the checker.
+/// Protocol for the budget attack cases: a victim living in `system` beside the attacker, the
+/// bundle's second program, waits on the boot endpoint for the attacker's go, then maps and
+/// touches pages in `system` and reports to the checker.
 pub mod victim {
-    /// Well-known address of the victim's server.
-    pub const ADDRESS: &[u8; 16] = b"redoubt-bud-vict";
-    /// BlockingScalar: the attacker has made its attempts.
+    /// Call: the attacker has made its attempts.
     pub const GO: usize = 1;
     /// Pages the victim maps and touches afterwards.
     pub const PAGES: usize = 64;
 
     /// Tell the victim the attempts are over. Returns once it has the message.
     pub fn go() {
-        let sid = redoubt_abi::SID::from_bytes(ADDRESS).unwrap();
-        let cid = redoubt_abi::connect(sid).expect("couldn't connect to the victim");
-        redoubt_abi::send_message(cid, redoubt_abi::Message::new_blocking_scalar(GO, 0, 0, 0, 0))
+        super::call_waiting(super::BOOT_ENDPOINT, &super::body([GO, 0, 0, 0]), None, super::FOREVER)
             .expect("victim");
     }
 }
@@ -441,6 +461,13 @@ pub fn thread_create(entry: usize, sp: usize, arg: usize) -> Result<u32, Error> 
 }
 
 /// `thread_exit()`. Returns only if the kernel refused.
+/// A thread running `f(arg)` on a fresh stack of its own.
+pub fn thread(f: extern "C" fn(usize) -> !, arg: usize) -> Result<u32, Error> {
+    const STACK: usize = 4 * PAGE_SIZE;
+    let stack = map_anon(STACK, rw())?;
+    thread_create(f as usize, stack + STACK - 16, arg)
+}
+
 pub fn thread_exit() -> Result<(), Error> { redoubt_sys::syscall(&Call::ThreadExit).map(|_| ()) }
 
 /// `process_exit(code)`. Never returns on success.

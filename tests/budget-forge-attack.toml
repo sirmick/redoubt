@@ -1,28 +1,23 @@
 description = "Forged handle indices (unused slots, pages the table does not have, past the table, 0, wider than 32 bits) are BadHandle for every call; none reaches a budget the attacker holds (I1)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# PID 2 the attacker (the loader's first program, holding root, system and users); PID 3
-# log-server; PID 4 budget-victim, in system beside the attacker; PID 5 attack-checker.
-programs = ["budget-forge-attack", "log-server", "budget-victim", "attack-checker"]
+# PID 2 log-server; PID 3 budget-victim, second, in system beside the attacker and holding the
+# boot endpoint's receive right; PID 4 the attacker, whose first act is to take root, system
+# and users from log-server (TAKE_GIFTS; never a device).
+programs = ["log-server", "budget-victim", "budget-forge-attack"]
 timeout_secs = 30
 # Indices 129 and 257 name slot 1 of pages the attacker's table does not have, and 2^32 + 2
 # has system's index in its low half: a kernel that dropped the page, or truncated, would
 # destroy root or system, and the victim living in system would never report. The verdict is
-# the victim's pages and the checker's power-off; the attacker's counts are progress.
+# the victim's pages and its DONE and the power-off; the attacker's counts are progress.
 expect = [
-    '^\[pid 2\] \[forge\] \d+ of \d+ calls on forged indices got BadHandle \(all\)$',
-    '^\[pid 2\] \[forge\] raw index 0, all ones, 2\^32 \+ 2 -> \[Some\(BadHandle\), Some\(BadHandle\), Some\(BadHandle\)\]$',
-    '^\[pid 2\] \[forge\] attempts done$',
-    '^\[pid 4\] \[victim\] mapped and touched 64 pages in system after the attack$',
-    '^\[pid 5\] \[checker\] PID 4 reported; the kernel still serves',
+    '^\[server\] gifts given to pid 4$',
+    '^\[pid 4\] \[forge\] \d+ of \d+ calls on forged indices got BadHandle \(all\)$',
+    '^\[pid 4\] \[forge\] raw index 0, all ones, 2\^32 \+ 4 -> \[Some\(BadHandle\), Some\(BadHandle\), Some\(BadHandle\)\]$',
+    '^\[pid 4\] \[forge\] attempts done$',
+    '^\[pid 3\] \[victim\] mapped and touched 64 pages in system after the attack$',
+    '^\[server\] done: reported by pid 3; still serving$',
 ]
 forbid = ['BREACH']
 poweroff = true
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]
-
-[[grant]]
-program = "attack-checker"
-mmio = ["0x100000:0x1000"]
+reporter = "budget-victim"

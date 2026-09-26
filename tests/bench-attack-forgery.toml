@@ -1,22 +1,20 @@
 description = "Bench self-check: an attacker cannot print another party's verdict line through log-server (lend or move)"
 arch = ["rv64"]
 kind = "boot"
-# PID 3 forger sends grant-attack's verdict lines, each on a line of its own, once by lend and
-# once by move, then reports to PID 4 attack-checker, which powers off.
-programs = ["log-server", "forger", "attack-checker"]
+# PID 3 forger sends grant-attack's verdict lines and a DONE line in another's name, each on a
+# line of its own, once by lend and once by transfer, then reports DONE itself.
+programs = ["log-server", "forger"]
 timeout_secs = 20
 # Both copies arrive, each line under the forger's prefix; the bare verdict line never does.
+# The forged DONE arrives only as `[pid 3] ...`: a `[server] done:` line that was not the
+# reporter's would fail the case for another reason than `must_fail` names.
 expect = [
     '^\[pid 3\] \[server\] irq: received .y.$',
+    '^\[pid 3\] \[server\] done: reported by pid 3; still serving$',
     '^\[pid 3\] \[server\] irq: received .y.$',
+    '^\[pid 3\] \[server\] done: reported by pid 3; still serving$',
     '^\[server\] irq: received .y.$',
 ]
+poweroff = true
+reporter = "forger"
 must_fail = '^guest exited while waiting for /\^\\\[server\\\] irq: received \.y\.\$/$'
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]
-
-[[grant]]
-program = "attack-checker"
-mmio = ["0x100000:0x1000"]

@@ -3,9 +3,9 @@ arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
 # Plain TCG: host load shows up as guest lateness, so the lateness line is reported, not judged.
-# The first program holds the device objects (one is an interrupt that never fires here);
-# log-server (PID 3) runs beside it on the legacy grant and is idle while it sleeps.
-programs = ["timeouts", "log-server"]
+# The first program, alone, holds the device objects (one is an interrupt that never fires
+# here) and prints on the console itself.
+programs = ["timeouts"]
 timeout_secs = 120
 expect = [
     '^\[pid 2\] \[timeouts\] ok: 20 idle sleeps returned Timeout, none early$',
@@ -22,7 +22,3 @@ expect = [
     '^\[pid 2\] TIMEOUTS TEST PASSED$',
 ]
 forbid = ['\[timeouts\] FAIL']
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]

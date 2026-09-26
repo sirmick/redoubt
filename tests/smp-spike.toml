@@ -9,7 +9,3 @@ smp = [2]
 timeout_secs = 60
 expect = ['SMP SPIKE:.* OK']
 forbid = ['MISMATCH', 'could not start']
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]

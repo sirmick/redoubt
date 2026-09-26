@@ -1,0 +1,10 @@
+description = "Bench self-check: a case whose DONE line names another program than its declared reporter fails (the reporter rule, docs/testbench.md)"
+arch = ["rv64"]
+kind = "boot"
+# PID 2 log-server; PID 3 forger reports DONE, but the case declares log-server as the reporter.
+programs = ["log-server", "forger"]
+timeout_secs = 20
+expect = ['^\[server\] PID 2 listening$']
+poweroff = true
+reporter = "log-server"
+must_fail = '^a DONE line not the reporter.s: \[server\] done: reported by pid 3; still serving$'

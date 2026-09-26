@@ -1,20 +1,16 @@
 description = "Destroying a budget kills every process in it, the caller last when it is one of them (R10); here system, which holds every loader-started process"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# PID 2 budget-destroy-system (holds system's handle); PID 3 log-server; PID 4 budget-victim, a
-# bystander blocked in its server.
-programs = ["budget-destroy-system", "log-server", "budget-victim"]
+# PID 2 budget-destroy-system (holds system's handle; it owns the console and serves the log
+# endpoint for its sibling); PID 3 budget-victim, a bystander blocked in `receive` on the boot
+# endpoint.
+programs = ["budget-destroy-system", "budget-victim"]
 timeout_secs = 30
 # The kills are the kernel's own lines (no `[pid` prefix, so no process can print them), in the
 # order R10 takes them: every other process in the budget, then the caller.
 expect = [
     '^\[pid 2\] \[destroyer\] destroying system$',
     '^\[!\] Terminating process with PID 3$',
-    '^\[!\] Terminating process with PID 4$',
     '^\[!\] Terminating process with PID 2$',
 ]
 forbid = ['BREACH']
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]

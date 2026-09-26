@@ -1,25 +1,18 @@
 description = "Syscall arguments that once panicked the kernel are clean errors: a failed heap grow does not corrupt the heap, and an oversized lend does not underflow (verdict: survival only)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# PID 2 log-server; PID 3 syscall-attack; PID 4 attack-checker.
-programs = ["log-server", "syscall-attack", "attack-checker"]
+# PID 2 log-server; PID 3 syscall-attack, which reports DONE when its attempts are made.
+programs = ["log-server", "syscall-attack"]
 timeout_secs = 30
 # Each attempt once reached a panic (heap grow rolled forward then a shrink `.expect()`; a
-# message-region size underflow). PANIC is always forbidden; the verdict is the checker's clean
-# power-off under its own PID, which a panicked kernel never reaches. The attacker's lines are
-# progress only, and pin the error kind, so a refusal for the wrong reason fails.
+# message-region size underflow). PANIC is always forbidden; the verdict is log-server's DONE line
+# naming PID 3 and its clean power-off, which a panicked kernel never reaches. The attacker's
+# lines are progress only, and pin the error kind, so a refusal for the wrong reason fails.
 expect = [
     '^\[pid 3\] \[syscall\] heap grow W\+X -> Err\(InvalidArgument\); shrink -> Err\(OutOfMemory\)$',
     '^\[pid 3\] \[syscall\] oversized lend -> Err\(BadAddress\)$',
-    '^\[pid 4\] \[checker\] PID 3 reported; the kernel still serves',
+    '^\[server\] done: reported by pid 3; still serving$',
 ]
 forbid = ['BREACH']
 poweroff = true
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]
-
-[[grant]]
-program = "attack-checker"
-mmio = ["0x100000:0x1000"]
+reporter = "syscall-attack"

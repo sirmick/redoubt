@@ -97,7 +97,7 @@ macro_rules! expect {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let logger = Logger::connect();
+    let logger = test_programs::logsrv::start();
     let mut t = T { logger, failed: false };
     log!(t.logger, "[dead] starting");
     let endpoint = rd::endpoint_create().expect("an endpoint");
