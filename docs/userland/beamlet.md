@@ -92,7 +92,7 @@ Everything the VM gets from outside comes through the `Platform` trait
 | `monotonic_us`, `idle` | a clock that never goes backwards; sleeping until a deadline or an event | required |
 | `system_time_us` | wall-clock time | required; may answer `None` |
 | `console_write`, `console_read`, `console_size` | the `user` I/O device; input never blocks | no input; size unknown |
-| `random` | cryptographically secure bytes; on failure the VM raises rather than use a weaker source | required |
+| `random` | random bytes from a cryptographic source; on failure the VM raises rather than use a weaker source | required |
 | `load_module`, `load_app`, `module_file` | the bytes of a `.beam` or `.app` this VM may load | no applications |
 | `files` | a file system, as `prim_file` sees it | none: `file` calls fail with `enotsup` |
 | `programs` | starting programs behind ports | none: `open_port` fails with `eacces` |
