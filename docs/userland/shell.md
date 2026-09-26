@@ -155,10 +155,29 @@ A command-mode `cat` is always the Elixir one; no native `cat` is launched. Ever
 declared once, with `defcommand`, naming its argument types, a summary, a page of help and
 examples; that one declaration drives the expansion, completion and help.
 
-**Open:** how a line is known to be command mode rather than Elixir (the recommendation: a line
-whose first word is a registered command and which does not parse as Elixir), and whether
-`run tool.exs` runs a script in the session's VM with `run --isolated` running it in a child VM
-with its own budget and labels (the recommendation: both).
+**Which lines are commands.** The mode is decided by the line's first two tokens alone, never by
+trying Elixir first: almost every command line is also valid Elixir (`cat a` parses as `cat(a)`),
+and a rule that fell back on failure would make a line's meaning depend on what the session has
+bound. A line is in command mode when its first token is a registered command and it is followed
+by the end of the line, or by whitespace and a token that is not an Elixir operator (`|>`, `|`,
+`>` and `>>` are command-mode stage operators here, not Elixir ones). Every other line is Elixir:
+`cat("a") |> grep("x")`, `count = 5`, `ls == x`, and any line whose first word is not a command.
+Parentheses right after a command's name are how to write Elixir that starts with it.
+
+What command mode cannot do:
+- **Run code hidden in an argument.** Bare words become literal strings with no interpolation, as
+  `~S` does: `cat #{File.rm("x")}` reads a file of that name and runs nothing.
+- **Be redirected by a binding.** Command mode calls the registry's functions by their full module
+  name, so a local variable or an import named `cp` cannot change what `cp` runs.
+
+**Running a script.** `run tool.exs a b` runs the script in the session's VM with the session's
+full authority, with `System.argv/0` set: exactly as if it were typed, so it is for scripts one
+would type. `run --isolated tool.exs` starts a child VM through the same launch path as an agent's
+lease ([agents](agents.md#the-agent-harness)), with capabilities the same as or narrower than the
+session's. With no grants, the child gets a budget of its own carved from the session's (bounded
+CPU and memory, ended by destroying it), a read-only view of the current directory and no network.
+
+**Open:** the grant syntax for `run --isolated`, which follows the agent harness's.
 
 ### Native programs and pipes
 
@@ -191,10 +210,30 @@ else. `Job.status(job)` is `:running`, `:exited`, `:faulted` or `:killed`, read 
 notice ([processes](../kernel/processes.md#exit-notices)). A job's budget is carved from the
 session's, so ending it can never touch the session.
 
-**Open:** what the interrupt key does. The recommendation: Ctrl+C at the line editor destroys the
-budgets of the foreground job's native stages and, for Elixir work, kills the evaluating Erlang
-process with an untrappable exit, after which IEx starts a fresh evaluator and keeps the
-session's bindings; Ctrl+G stays `edlin`'s job-control menu.
+The interrupt key:
+- **Ctrl+C with a job in the foreground** destroys the budget of every native stage of that job.
+  Elixir work is ended by killing the evaluating Erlang process with an untrappable exit (`:kill`),
+  and IEx starts a fresh evaluator. The session and its VM survive; its bindings are whatever IEx
+  keeps.
+- **Ctrl+C at an idle prompt** clears the line. The BEAM's break menu is never reachable, and a
+  session ends only by `exit` or Ctrl+D.
+- **Ctrl+G** is `edlin`'s job-control menu.
+- **Over SSH**, `sshd` turns the channel's `signal` request (INT) and `break` request into the same
+  interrupt a 0x03 byte gives. It is a protocol message, not a Unix signal; nothing inside Redoubt
+  has signals ([sshd](../servers/sshd.md)).
+
+What a job cannot do:
+- **Swallow the interrupt.** The session's I/O server reads `/dev/cons` all the time, not only
+  while a line is requested, and a native stage never gets the raw console: its standard input is
+  a pipe the session feeds. So no foreground program can hide Ctrl+C from the shell.
+- **Take the session's memory.** The evaluator runs with Erlang's `max_heap_size` flag (killing),
+  set to a fixed share of the session's budget, so a runaway allocation kills the evaluator, as
+  Ctrl+C would, instead of taking the whole VM to its budget's page limit.
+
+Processes an expression spawned without a link are not killed by Ctrl+C; background work belongs
+in a `Job`.
+
+**Open:** none.
 
 ### The terminal library
 

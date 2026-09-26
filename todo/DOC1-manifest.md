@@ -576,6 +576,7 @@ rule); "dup X" = the same item as X; "+S" = also a SECURITY residual row; milest
 - A-22, A-24: servers/fsd.md typed operations **Open:** (M1). A-23, A-30: userland/files.md files over 9P **Open:** (M1).
 - A-25, A-26: userland/native.md pipes **Open:** (M2). A-27: servers/init.md launching, Why; todo/shared-image-pages.md.
 - A-28, A-29: userland/beamlet.md natives **Open:** (M1).
+- A-28 note: userland/native.md places the launch mechanism under M1 (separation and containment), per section A's remap (M1 keeps the launching its attack suite needs); standard I/O, pipes and killing stay M2 (usable shell).
 - A-31: kernel/ipc.md R4. A-32: todo/endpoint-destroyed-open-calls.md; ipc.md Failure and restart. A-33: ipc.md R3.
 - A-34: servers/serving.md minted connections, Residual (+S); todo/account0-share-chain.md (the code calls it an open hole).
 - A-35: kernel/objects.md costs; devices.md device objects. A-36: devices.md R18, boot.md loader, Residual (a device tree that hides a controller; +S). A-37: devices.md Residual (a co-holder keeps its mapping; +S).
@@ -597,6 +598,7 @@ rule); "dup X" = the same item as X; "+S" = also a SECURITY residual row; milest
 - A-75: TENETS label non-interference; servers/README.md Labels; GLOSSARY trust domain. A-76: init.md confinement check (M1). A-77: steward.md declassification and push (M1). A-78: steward.md Residual (+S). A-79: TENETS Threat model.
 - A-80: abi.md records. A-81: fsd.md typed operations (M1). A-82, A-83: serving.md parked calls, `admit`. A-84: consoled.md `/dev/cons`. A-85: serving.md conformance corpus.
 - A-86: consoled.md `size` (M2); beamlet.md `Platform` (M1). A-87: userland/shell.md terminal library (M2). A-88: shell.md Why. A-89: serving.md parked calls (push rule); consoled.md `resize`; shell.md (M2). A-90: serving.md parked-call accounting (new R; +S).
+- A-86 note: the item's "cached" is superseded by the later accepted contract (a fresh `consol` `size` call on every query, never cached; `userland/otp/vm/src/platform.rs` agrees); pages follow the later contract.
 - A-91, A-93: ipc.md How a call completes, R13; abi.md register use. A-92: userland/native.md `redoubt-rt`. A-94: serving.md replies and rollback. A-95: plan/m1-separation.md Progress; kernel/model.md replay [P · M1]. A-96: none: provenance.
 - A-97: ipc.md R13. A-98: ipc.md What `receive` returns. A-99: ipc.md R4a (sup A-49). A-100: ipc.md Messages; invariants I12 (scope refined by A-185). A-101: ipc.md R1. A-102: ipc.md R4. A-103: ipc.md R4b.
 - A-104: processes.md exit notices (sup A-171). A-105: ipc.md R1; budgets.md `budget_usage`. A-106: budgets.md root, system, users (sup A-170). A-107: objects.md index 0; processes.md creating and starting. A-108, A-109: budgets.md `budget_usage`, fields. A-110: objects.md costs. A-111: abi.md order of checks.

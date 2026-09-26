@@ -1,11 +1,11 @@
 # Development on Redoubt
 
-Redoubt is developed on Redoubt. A developer, or a developer's agent, works in a session: the
-source lives in their home volume, `git` reaches its remotes through a gateway, and the Elixir and
-Erlang compilers run on the box in beamlet. Rust, including the kernel and the servers, is built
-off the box, because the Rust compiler is not ported, and shipped signed. The server APIs, the
-client crates and a Rust `std` target exist so that programs written on the box can use the
-system.
+Redoubt is developed on Redoubt. A developer, or a developer's agent, works in a session: the source
+lives in their home volume, `git` reaches its remotes through a gateway, and the Elixir and Erlang
+compilers run on the box in beamlet. Rust, including the kernel and the servers, is built off the
+box, because the Rust compiler is not ported: system code ships in the signed boot bundle, and a
+developer's own program arrives by SFTP. The server APIs, the client crates and a Rust `std` target
+exist so that programs written on the box can use the system.
 
 ## Purpose
 
@@ -21,14 +21,14 @@ A working day, sketched:
 ```text
 $ ssh alice@box
 iex(1)> cd "/home/alice/redoubt"
-iex(2)> git pull                                 # through the gateway, to an allowlisted remote
+iex(2)> git pull                                 # through a gatewayd git capability
 iex(3)> ed "userland/lib/redoubt/shell.ex"
 iex(4)> mix test                                 # the Elixir compiler and ExUnit, in the session
 iex(5)> git commit -am "shell: complete labels" ; git push
 ```
 
-Rust is built on the developer's own machine. With packages, from M5 (persist, install, share),
-it arrives as a signed package:
+Rust is built on the developer's own machine. A program for one's own use arrives by SFTP and
+runs unsigned; with packages, from M5 (persist, install, share), it arrives as a signed package:
 
 ```text
 laptop$ cargo build --release --target riscv64gc-unknown-redoubt-elf
@@ -75,16 +75,23 @@ run with authority the steward grants (for another principal, or as a package) i
 
 Status: planned · M4 (self-hosted development)
 
-`git` reaches its remotes through a gateway, never through an open socket, so a session or agent
-that holds the capability for one remote can push to that remote and nowhere else. The network's
-rules apply as everywhere: default deny, allowlists written as names, the name resolved by the
-mediated resolver and the connection pinned to it ([the resolver](../servers/resolver.md)). The
-box's own addresses and the host's are never reachable.
+`git` reaches its remotes through a gateway: a `gatewayd` capability for `git`, the documented path
+for people and agents alike ([gatewayd](../servers/gatewayd.md)).
+- **Scoped by name and by operation.** The capability names its remotes; fetch and push are granted
+  separately; push is limited to named ref patterns; force-push is refused unless granted.
+- **No credentials in the session.** `gatewayd` holds the remote's credentials (a token or a deploy
+  key), terminates TLS, checks each request and logs it. The client never sees a credential.
+- **The client is a Rust `git`.** Redoubt has no C, so the client is a pure-Rust implementation,
+  built off the box and shipped in the system bundle like other system Rust. It runs as a native
+  program in a budget carved from its launcher's (a session or an agent), holding only the working
+  tree it was given and one remote capability; the gateway speaks git's smart HTTP to it. Ctrl+C or
+  the end of a lease destroys it like any native stage ([native programs](native.md)).
+- **Agents get only this path**, since they never get sockets. A person may instead hand the client
+  their own name-scoped TCP capability to an allowlisted remote, with credentials from their own
+  session: that is their general network right, not the development path.
 
-**Open:** which path `git` takes and which client runs it. The recommendation: people get `git`
-over name-scoped TCP to allowlisted remotes, and agents through a `gatewayd` capability for `git`
-scoped to named remotes ([gatewayd](../servers/gatewayd.md)); and the client is a native program
-in Rust, since Redoubt has no C.
+**Open:** the gateway's finer checks on `git` requests beyond remote, operation, refs and force
+(size limits, path rules), which belong to [gatewayd](../servers/gatewayd.md).
 
 ### Rust built off the box
 
@@ -92,18 +99,38 @@ Status: planned · M4 (self-hosted development)
 
 The Rust compiler is not ported, so native programs, servers and the kernel are built off the box
 with the `riscv64gc-unknown-redoubt-elf` target and the Rust `std` target, against the client
-crates ([native programs](native.md#client-crates-and-the-rust-std-target)). The binary arrives
-signed: the signature says who vouches for the code, and the steward launches it with new grants
-only for a principal who trusts the signer. A binary launched by its own developer, with a subset
-of the developer's own handles, needs no signature: it gains nothing the session did not have
-([native programs](native.md#launching-a-program)).
+crates ([native programs](native.md#client-crates-and-the-rust-std-target)). "Shipped signed" means
+signed where a signature gates something:
+- **System Rust** (servers, drivers, beamlet, the kernel) reaches the box in the signed boot
+  bundle, checked by verified boot ([boot](../kernel/boot.md)).
+- **A developer's own program** arrives by SFTP ([file transfer](transfer.md)) and runs with the
+  developer's own authority, unsigned. Code never runs with more authority than its author holds,
+  and any process can create a child and map pages into it, so a signature on code one runs
+  oneself buys nothing enforceable ([native programs](native.md#launching-a-program)).
+- **A program the steward launches with new grants**, for another principal or as a package,
+  needs a signature the principal trusts. That, with trust lists and packages, is
+  M5 (persist, install, share) ([packages](packages.md)).
 
-**Open:** how a Rust program built off the box reaches the box and runs before packages exist
-(packages are M5 (persist, install, share)), and where a developer's signing key lives. The
-recommendation: in M4 (self-hosted development) a binary arrives by SFTP and runs with the
-developer's own authority, needing no signature, and signed packages follow in
-M5 (persist, install, share); a person signs off the box with their own key, which never lives in
-`keyd`, and an agent signs with a key `keyd` holds for it.
+**Open:** none.
+
+### Signing keys
+
+Status: planned · M5 (persist, install, share)
+
+The box only checks signatures against trust lists; it does not care where a private key lives.
+- **A person may sign off the box** with their own key, and that is always valid.
+- **`keyd` may also hold a person's package-signing key**, as its own key with the purpose `pkg`
+  and its own domain-separated preimage ([keyd](../servers/keyd.md)). The rule that keys which
+  authenticate a person never live in `keyd` covers login and approval keys, not this one, and
+  `keyd` still refuses a key enrolled both as a login or approval key and as one of its own.
+- **Every signature with a person's key in `keyd` needs an approval** at `approve@`, showing the
+  package's digest, name and manifest requests. That signature vouches to everyone who trusts the
+  key, so a hijacked session must not become a signing oracle for its owner.
+- **An agent signs with its own key in `keyd`**, without an approval: its code runs only within its
+  lease until a sponsor trusts its key, and that trust is itself a high-stakes approval
+  ([agents](agents.md)).
+
+**Open:** none.
 
 ## Why
 
@@ -114,8 +141,7 @@ meet every wall daily, and makes their agents the first real tenants.
 **Elixir on the box, Rust off it.** The Elixir and Erlang compilers are Erlang and Elixir code,
 and beamlet already runs them. The Rust compiler is millions of lines with an LLVM back end in
 C++, which Redoubt will not carry: no C, and no C++, anywhere in the system. Building Rust
-elsewhere and shipping it signed keeps the box's trusted code small while still running native
-code written for it.
+elsewhere keeps the box's trusted code small while still running native code written for it.
 
 **Signatures for grants, not for running.** Requiring a signature to run any code would stop
 nothing, because a session can already run any Elixir it writes, and would make development

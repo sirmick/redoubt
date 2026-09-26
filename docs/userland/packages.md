@@ -2,8 +2,8 @@
 
 A package is a signed archive of programs and Elixir code with a manifest that requests
 capabilities. A principal installs one with `pkg add`, chooses the version it runs with
-`pkg use`, and removes unused versions with `pkg gc`. Installed packages live in a directory only
-the steward writes; which versions a principal runs (its **profile**) and whose code it runs (its
+`pkg use`, and removes unused versions with `pkg gc`. Installed packages live in a directory no
+session can write; which versions a principal runs (its **profile**) and whose code it runs (its
 **trust list**) are steward records, not files in its space. A signature says who vouches for the
 code; the capabilities it runs with are what the principal grants, never more.
 
@@ -44,15 +44,25 @@ bundle signature, and the reverse.
   capabilities the code asks for ("`/net` connect to 443", "read my config directory"). At install
   or run time the principal grants those requests, narrowed from its own capabilities, and the
   launcher builds the program's namespace from exactly those grants.
-- **Installing is the steward's.** `pkg add` writes the package into
-  `/system/pkgs/<principal>/<name>-<version>-<hash>/`, a directory only the steward writes. The
-  steward records which key signed each installed program.
+- **Verified before it is parsed.** The package server (`pkg`) checks the signature over the whole
+  archive, with the same verifier boot and updates use, against the installing principal's trust
+  list, before it reads a single tar header or manifest byte. An archive no trusted key signed never
+  reaches the parser.
+- **The parser is contained.** A trusted key can still sign a hostile archive. So the steward
+  starts a `pkg` instance per principal for each install, holding the archive it was handed and a
+  write handle to that principal's package directory, `/system/pkgs/<principal>/`, only; each
+  package goes in `<name>-<version>-<hash>/` there. A parser bug reaches only that principal's
+  own packages. Nothing a session holds writes there.
+- **The steward keeps the authority.** `pkg` does the parsing, so the steward never parses an
+  archive, as `init` and the steward never parse an ELF. Profiles, `use` records, trust lists and
+  the grants a manifest requests are steward records; `pkg` asks the steward to record and never
+  holds grant authority. The steward records which key signed each installed program.
 - **Routine when trusted.** Installing a package signed by a key already on the principal's trust
   list needs no approval.
+- **One front end.** `pkg add`, `pkg use` and `pkg gc` are a `pkg` command and a `Redoubt.Pkg`
+  module over the package server ([pkg](../servers/pkg.md)).
 
-**Open:** whether `pkg` is a shell command over the package server, which asks the steward for
-grants, or talks to the steward directly (the recommendation: a `Redoubt.Pkg` module and a `pkg`
-command over the package server).
+**Open:** none.
 
 ### Profiles and upgrades
 
@@ -63,14 +73,22 @@ It is a steward record, not a file the principal can write.
 - **Upgrading is atomic per package.** `pkg add` installs a new version beside the old; `pkg use`
   flips one steward record; flipping back is the rollback; `pkg gc` removes versions no profile
   uses.
-- **Installed code comes only from installed packages.** Neither the steward's launching nor
-  beamlet's platform module loading ever consults the session's writable namespace, so a file
-  dropped in a person's home cannot pose as their installed code ([beamlet](beamlet.md#beamlet-on-redoubt)).
+- **Installed code comes only from installed packages.** `Platform::load_module` resolves a module
+  name only from the system bundle and the profile's package directories, through read-only
+  handles, and the steward launches only installed programs. Neither ever consults the session's
+  writable namespace, so a file dropped in a person's home cannot pose as their installed code
+  ([beamlet](beamlet.md#beamlet-on-redoubt)).
+- **No shadowing.** The system bundle always resolves first, and a package may not define a module
+  the bundle defines: `pkg` refuses it at install. Two packages in one profile may not define the
+  same module: the steward refuses it at `use`.
+- **One's own code is not installed code.** A session that compiles or loads its own code
+  (`Code.compile_string`, `Code.require_file` on its own files) runs it within its own authority.
+  The code-path rule is about what loads implicitly, not a wall against one's own code
+  ([development](development.md#compiling-on-the-box)).
 - **A project has its own package directory** and profile, so a shared toolchain is installed once
   for its members ([the steward](../servers/steward.md)).
 
-**Open:** how `.beam` code in a package reaches a VM (the recommendation: the profile's package
-directories are what `Platform::load_module` reads, and nothing else).
+**Open:** none.
 
 ### Trust lists
 
@@ -84,14 +102,18 @@ grants.
   native code.
 - **Adding a key is a high-stakes approval**, at `approve@`, because it lets code launch with the
   principal's grants.
-- **Removing a key** stops its code launching; the steward records each process's signer, so
-  running ones can be found and stopped.
+- **Removing a key** needs no approval, because it only narrows, and it is audited. New launches and
+  loads of that key's packages are refused at once, and the steward stops the principal's running
+  processes whose recorded signer is that key, by destroying their budgets. `use` records are
+  never switched silently to another version or signer: a package left without a trusted signer is
+  unusable until the principal chooses.
+- **The system key is on no trust list** and cannot be removed: system code is trusted by the
+  bundle's verification, not by a list.
 - **Agents sign with their own keys.** Code an agent builds runs within its lease; running it
   outside needs the sponsor to trust the agent's key, which is a high-stakes approval
   ([agents](agents.md)).
 
-**Open:** whether removing a key from a trust list needs an approval (the recommendation: no,
-since it only narrows).
+**Open:** none.
 
 ### What signatures do not do
 

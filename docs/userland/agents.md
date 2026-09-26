@@ -16,21 +16,23 @@ do, how the agent harness gives it tools, and the game that tests all of it cont
 
 ## How to use it
 
-Alice starts an agent on a task, with a lease scoped to it:
+Alice starts an agent on a task, with a lease scoped to it (the grant syntax is a sketch):
 
 ```elixir
 {:ok, agent} =
   Redoubt.Agent.start(
-    model: gateway,                                   # a gatewayd capability, not a socket
-    lease: [pages: 65_536, processes: 4, weight: 20, time: :timer.hours(2)],
+    pages: 65_536, processes: 4, weight: 20, time: :timer.hours(2),
     labels: [],
-    workspace: [{"/project", ns_lookup("/home/alice/project")}],   # read-only, minted fresh
-    tools: [:files, :code_exec]
+    tools: [
+      {:files, "/project", ns_lookup("/home/alice/project"), :read},   # minted fresh, agent's badge
+      {:files, "/out", ns_lookup("/home/alice/project/out"), :write},
+      {:model, gateway}                                                 # a gatewayd grant, not a socket
+    ]
   )
 
 Redoubt.Agent.prompt(agent, "Audit /project/src for unchecked lengths; write findings to /out")
 Redoubt.Agent.status(agent)     # %{pages: ..., weight: 20, lease_ms: 6_912_000}
-Redoubt.Agent.kill(agent)       # destroys the lease: the agent and its sub-agents end
+Redoubt.Agent.kill(agent)       # the steward ends the lease: the agent and its sub-agents end
 ```
 
 When the agent needs more (another directory, a host to reach), it asks; the request waits for
@@ -175,11 +177,12 @@ An agent never holds a key or an API token. It uses keys through `keyd` (the key
 from M4 (self-hosted development), models through `gatewayd`, which holds the API keys. In
 M1 (separation and containment) no session and no lease holds `keyd` capabilities at all.
 
-From M5 (persist, install, share) a lease may carry a key, and only if its approval named the key.
-Even then a `keyd` capability names one key and one purpose, with the one message shape it may
-sign (for SSH, a signature over a session identifier `keyd` computed itself), never arbitrary
-bytes. Otherwise a hijacked agent would be a signature oracle, and its peer could log in as its
-sponsor elsewhere ([keyd](../servers/keyd.md)).
+A lease holds no key until principals' signing keys exist, which the plan places with keys in leases
+in M5 (persist, install, share). Then a lease carries only a key its approval named, and a `keyd`
+capability names one key and one purpose, with the one message shape it may sign (for SSH, a
+signature over a session identifier `keyd` computed itself), never arbitrary bytes. Otherwise a
+hijacked agent would be a signature oracle, and its peer could log in as its sponsor elsewhere
+([keyd](../servers/keyd.md)).
 
 **Open:** none.
 
@@ -188,26 +191,49 @@ sponsor elsewhere ([keyd](../servers/keyd.md)).
 Status: planned · M4 (self-hosted development)
 
 `Redoubt.Agent` starts and drives an agent from a session. The harness runs in the launcher's VM;
-the agent runs in a VM of its own, in its lease, with its own label set.
+the agent runs in a VM of its own, in its lease, with its own label set, and the model loop runs
+there, through the agent's own `gatewayd` connection.
 
 | Function | What it does |
 | --- | --- |
-| `Agent.start(opts)` | `model`, `lease`, `labels`, `workspace`, `tools`: ask the steward for the lease, mint each capability fresh, start the agent's VM |
+| `Agent.start(opts)` | ask the steward for a lease: `pages`, `processes`, `weight`, `time`, `labels`, and `tools`, each a narrowed grant |
 | `Agent.prompt(agent, text)` | hand the agent a task; `{:error, :lease_expired}` once the lease is gone |
-| `Agent.status(agent)` | the lease's usage, weight and remaining time |
-| `Agent.kill(agent)` | destroy the lease; the agent and its sub-agents end |
+| `Agent.status(agent)` | the lease's usage, weight and remaining time, from the steward |
+| `Agent.kill(agent)` | ask the steward to end the lease; the agent and its sub-agents end |
 
-**Tools are capabilities.** A tool is something the agent holds, not something it is allowed to
-ask for: a file connection (read-only or read-write, rooted where the launcher says), a
-`gatewayd` capability for one model or one set of named hosts, or a sub-budget the agent may
-launch programs in. What the agent holds is the whole of what it can do beyond its own lease;
-there is no permission check to get wrong.
+There is no `pause` or `resume`. No kernel call freezes a budget, none can be emulated (a carve
+that would leave a process's budget with no free weight is refused:
+[R7 (carving)](../kernel/budgets.md#r7-carving)), and a lease's deadline keeps running, so a pause
+would silently eat lease time.
 
-**Open:** three choices. Whether `pause` and `resume` exist, since no kernel call freezes a budget
-(recommended: they do not); who asks the steward for the lease (recommended: the harness, with the
-steward minting a fresh connection per tool); and whether the model loop runs in the agent's VM
-or in the harness (recommended: the agent's VM, with its own `gatewayd` connection, so the
-launcher's VM never parses model output).
+**The steward makes the lease.** The harness asks; the steward places the lease under the
+sponsor's budget for that label set, checks that every tool is the same as or narrower than what
+the launcher holds, refuses a term over `MAX_LEASE` rather than clamping it, and records the
+grant with the principal chain ([the steward](../servers/steward.md)).
+- **Tools are the agent's own connections.** The steward mints each one fresh, with the agent's
+  own badge, so every request through it is the agent's and never its sponsor's. A tool is a file
+  connection (read-only or read-write, rooted where the launcher says), a `gatewayd` capability
+  for the provider the launcher's own gateway grant allows, or a sub-budget to launch programs in.
+  What the agent holds is the whole of what it can do beyond its own lease; there is no permission
+  check to get wrong.
+- **No approval while everything narrows.** A label the launcher lacks (an agent that must read a
+  secret) or a new durable principal goes through an approval at `approve@`.
+- **Sub-agents** are started the same way, by the agent's harness asking the steward through its
+  own connection; the sub-lease sits inside the agent's budget and ends with it.
+- **`kill` and `status` go through the steward.** Ending a lease is always accepted from the
+  sponsor, ahead of admission, and is audited. The launcher never holds the lease's budget handle,
+  so it cannot create processes inside the agent's budget and blur whose work is whose.
+
+What the harness cannot be made to do:
+- **Take code or atoms from the agent.** The link between harness and agent is a typed Redoubt
+  channel, never Erlang distribution, which would give each VM full remote calls into the other.
+  What the harness receives (replies to `prompt`, status) is untrusted data, decoded by a bounded
+  decoder that creates no atoms and no code, never by `binary_to_term`.
+- **Parse model output.** The model's replies reach the agent's VM, not the launcher's.
+- **Hand the agent the sponsor's things.** The agent never gets the sponsor's `/dev/cons`, keys
+  or any budget handle but its own.
+
+**Open:** the exact syntax of a tool grant, which `run --isolated` in [the shell](shell.md) shares.
 
 ### The escape room
 

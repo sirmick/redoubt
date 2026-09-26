@@ -118,13 +118,16 @@ What follows from pipes being served files:
 - **Labels work out.** A user-level server has no label exemption, and a session serves only its
   own children's pipes, so a pipe between two label sets fails, as it should
   ([R1 (flow)](../kernel/ipc.md#r1-flow)).
+- **No stage holds the console.** A native stage never gets the raw `/dev/cons`: an interactive
+  stage's standard input is a pipe the session feeds from the console, so the shell always sees
+  the interrupt key ([the shell](shell.md#interrupting-and-killing-jobs)).
 - **A pipe is readable as a file.** A zero-copy alternative, stages sending pages to each other
   over an endpoint, is not 9P, so a program could not read its input as a file; it is not taken.
 
 **Open:** two choices.
 - The names of the three streams: with no descriptors to duplicate, each child needs distinct
-  names. Recommended: `/dev/stdin`, `/dev/stdout` and `/dev/stderr` namespace entries, with
-  `/dev/cons` bound to all three for an interactive child. Alternative: `/fd/0`, `/fd/1`, `/fd/2`.
+  names. Recommended: `/dev/stdin`, `/dev/stdout` and `/dev/stderr` namespace entries.
+  Alternative: `/fd/0`, `/fd/1`, `/fd/2`.
 - Who serves a pipe. Recommended: the session's VM, which needs `serve` and `reply` natives and a
   9P server codec in beamlet (also needed to capture `System.cmd` output). Alternative: a small
   `piped` server per session, which keeps bulk bytes out of the session's VM at the cost of one
@@ -147,7 +150,10 @@ with the fault's cause, or `killed` when its budget was destroyed
 `:faulted` and `:killed`. When the notice arrives, the launcher disconnects the child's
 connections and releases what typed servers granted it.
 
-**Open:** what the interrupt key does to a native job (see [the shell](shell.md)).
+Ctrl+C destroys the budgets of every native stage of the foreground job
+([the shell](shell.md#interrupting-and-killing-jobs)).
+
+**Open:** none.
 
 ### `redoubt-rt`, the native runtime
 
