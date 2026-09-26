@@ -999,6 +999,17 @@ fn wire_tables(c: &mut Ctx, pages: &[Page]) {
     }
 }
 
+/// The files git tracks under `root`, relative to it, or `None` where `root` is not inside a
+/// repository (a fixture copied to a temporary directory), in which case every file counts.
+fn tracked(root: &Path) -> Option<std::collections::BTreeSet<String>> {
+    let out = std::process::Command::new("git").arg("-C").arg(root).args(["ls-files", "-z"]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let list = String::from_utf8_lossy(&out.stdout);
+    Some(list.split('\0').filter(|s| !s.is_empty()).map(str::to_string).collect())
+}
+
 // ---- C11: code comments and case descriptions ----
 
 /// The notes the book replaced, by file name; C11 holds code to citing the book instead. Fixed
@@ -1019,6 +1030,11 @@ fn code(c: &mut Ctx, defs: &BTreeMap<String, Def>) {
         if top.path().is_dir() && !skip(&name) {
             walk(c.root, &name, &skip, &mut files);
         }
+    }
+    // Only what the repository tracks is held to the book: a checkout may hold untracked
+    // reference sources, and they are not Redoubt's code.
+    if let Some(tracked) = tracked(c.root) {
+        files.retain(|f| tracked.contains(f));
     }
     for f in files {
         let case = f.starts_with("tests/") && f.ends_with(".toml") && !f[6..].contains('/');
