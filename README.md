@@ -45,4 +45,6 @@ the steward, SSH sessions and agents come next ([the plan](docs/plan/m1-separati
 | [Getting started](GETTING-STARTED.md) | build, run, test and debug |
 | [Contributing](CONTRIBUTING.md) | how to send a change |
 
+Marks: [the fort](logo.svg), [the hart](logo-hart.svg), [the initial](logo-r.svg)
+
 Licensed under [LICENSE](LICENSE) and [LICENSES](LICENSES/).
