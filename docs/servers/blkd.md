@@ -49,15 +49,19 @@ Status: built · tested: host:redoubt-blkd::a_request_over_the_bound_is_refused_
 - **`write(sector, data)`**: at most `MAX_SECTORS` sectors, a whole number of them.
 - **`flush`**: returns only when the device says its flush completed, so what was written before
   it is durable. The device must offer flush at negotiation; one that does not is refused at
-  bring-up.
+  bring-up. On a read-only disk nothing was ever written, so `flush` answers at once without asking
+  the device (a broken device still answers `failed`).
 
 Errors: `not_permitted`; `out_of_range` for sectors outside the range; `too_many` for a request
 over the bound; `failed` for a device error or a broken device; `malformed` for a request that
 does not decode.
 
 This is the block-device contract littlefs's power-loss safety rests on
-([fsd](fsd.md#power-loss)): a write overwrites whole sectors, requests complete in order (one is
-outstanding at a time), and `sync` is a `flush` that waits for the device.
+([fsd](fsd.md#power-loss)): a write overwrites whole sectors; a write torn by power loss persists
+a prefix of its sectors, never an arbitrary subset of them; requests complete in order (one is
+outstanding at a time); and `sync` is a `flush` that waits for the device. `blkd` keeps the order
+and the flush itself; the torn-write prefix is the device's behaviour, which `blkd` relies on and
+cannot check (Residual risks).
 
 The table: [libs/wire/tables/blkd.md](../../libs/wire/tables/blkd.md).
 
@@ -108,8 +112,10 @@ Status: built · tested: fuzz:redoubt-blkd/device, host:redoubt-blkd::rewriting_
   looping chain, a `next` out of range, an overflowing length) changes nothing `blkd` believes. Of
   the used ring three values are read, and each is checked: `idx` must be exactly one more than
   the last seen; the entry, read from the slot `blkd`'s own counter names, must name the one
-  descriptor `blkd` submits; `len` must not exceed what the device was given. No device value is
-  ever an index or a length.
+  descriptor `blkd` submits; `len` must not exceed what the device was given. No value the device
+  writes into the rings is ever an index or a length. The two values it states once, the capacity
+  at bring-up and the partition table on disk, are checked before use: the capacity bounds every
+  range, and the table is parsed as hostile ([below](#the-partition-table)).
 - **Bring-up** checks the magic, version 2, the block device ID, and accepts only the features it
   needs (version 1, flush, read-only).
 - **A lie is permanent.** A device that breaks the protocol, or misses `REQUEST_TIMEOUT_US`
@@ -181,7 +187,7 @@ bounds what `blkd` asks for, not what the device does.
 Status: built · tested: fuzz:redoubt-blkd/device, host:redoubt-blkd::rewriting_the_rings_changes_nothing_the_driver_believes, host:redoubt-blkd::a_device_that_lies_about_a_completion_is_refused_and_never_spoken_to_again, host:redoubt-blkd::a_lying_device_becomes_failed_and_stays_failed, host:redoubt-blkd::a_hundred_thousand_random_liars_never_panic_and_never_stray, host:redoubt-blkd::one_clients_read_never_carries_anothers_bytes
 
 Nothing a device writes can corrupt `blkd`'s memory, panic it, or make it return one client's bytes
-to another: no device value is an index or a length, the rings `blkd` writes are never read back,
+to another: no ring value is an index or a length, the rings `blkd` writes are never read back,
 the three used-ring values it reads are checked, and a device that breaks the protocol is refused
 for good.
 
@@ -195,7 +201,7 @@ partition, and no two partitions share one.
 
 ## Failure and restart
 
-Status: built · partly tested: the restart itself is `init`'s and planned; the device reset before reused DMA pages is the kernel's · tested: host:redoubt-blkd::a_lying_device_becomes_failed_and_stays_failed, host:redoubt-blkd::a_disk_with_no_signature_is_refused
+Status: built · partly tested: the exits without a device, a disk or a partition table (`NO_DEVICE`, `NO_DISK`, `NO_PARTITIONS` in `servers/blkd/src/bin/blkd.rs`) are read from the code, not attacked; the restart itself is `init`'s and planned; the device reset before reused DMA pages is the kernel's · tested: host:redoubt-blkd::a_lying_device_becomes_failed_and_stays_failed, host:redoubt-blkd::a_disk_with_no_signature_is_refused
 
 - **No device handles, or no disk, or no valid partition table:** `blkd` exits with a code
   before serving.
@@ -212,6 +218,9 @@ Status: built · partly tested: the restart itself is `init`'s and planned; the 
   or a device that ignores its addresses, can write anywhere in RAM: a compromised kernel.
 - **A slow or lying device holds the disk** for up to `REQUEST_TIMEOUT_US` (10 seconds) before it is
   marked broken; with one request outstanding, every client waits meanwhile.
+- **A torn write is the device's to keep.** littlefs's power-loss safety needs a torn write to
+  persist a prefix of its sectors; `blkd` sends whole sectors in order but cannot make a device
+  that tears differently honour that.
 - **Wrong bytes are not detected.** A device that returns wrong data within the protocol is believed;
   neither `blkd` nor littlefs checksums data. Disk encryption with authentication is beyond M5.
 - **`blkd` does not boot in the bench.** It is attacked by host tests against a hostile fake device

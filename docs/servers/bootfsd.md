@@ -33,14 +33,15 @@ endpoint also serves `ninep_common` ([wire](wire.md#ninep_common)).
 - **Every byte is already there.** A read never waits; an offset past the end reads nothing. Entries
   never change, so every qid version is 0.
 - **Admission** ([R26 (admission fairness)](serving.md#r26-admission-fairness)): at most 32 open
-  fids and 8 minted connections per (account, label set), across at most 16 of those at once
+  fids and 8 minted connections per (account, label set), and per badge for account 0, across at
+  most 16 of those at once
   (`LIMITS`), sized to fit its 256 KiB budget. The bucket count is compiled in, a departure from
   the rule that every shared server takes `buckets=N` from the manifest
   ([init](init.md#the-boot-manifest)).
 
 ### Filling it
 
-Status: built · tested: host:redoubt-bootfsd::a_bad_public_list_stops_the_server, host:redoubt-bootfsd::the_public_list_is_checked_before_anything_is_served, host:redoubt-bootfsd::add_only_appends_to_a_listed_name_in_order, host:redoubt-bootfsd::setup_is_refused_after_seal_and_from_every_minted_connection, host:redoubt-bootfsd::nothing_is_visible_before_seal, host:redoubt-bootfsd::a_client_cannot_publish_into_boot, host:redoubt-bootfsd::the_published_bytes_are_bounded
+Status: built · partly tested: the refusal of `add` and `seal` from badge 0 is read from the code, not attacked · tested: host:redoubt-bootfsd::a_bad_public_list_stops_the_server, host:redoubt-bootfsd::the_public_list_is_checked_before_anything_is_served, host:redoubt-bootfsd::add_only_appends_to_a_listed_name_in_order, host:redoubt-bootfsd::setup_is_refused_after_seal_and_from_every_minted_connection, host:redoubt-bootfsd::nothing_is_visible_before_seal, host:redoubt-bootfsd::a_client_cannot_publish_into_boot, host:redoubt-bootfsd::the_published_bytes_are_bounded
 
 - **The list.** `bootfsd`'s arguments are the `public` list, one name per argument, in the
   manifest's order. Each must be one 9P path component (not empty, `.` or `..`, no `/` or NUL),
@@ -94,7 +95,7 @@ for one that never existed. The rest of the bundle, the manifest included, never
 
 ## Failure and restart
 
-Status: built · tested: host:redoubt-bootfsd::a_bad_public_list_stops_the_server, host:redoubt-bootfsd::serving_connection_rolls_back_discard_missing_capability_and_error
+Status: built · partly tested: that a restarted `bootfsd` serves nothing until sealed again follows from its start (an empty, unsealed table) and is not attacked across a restart · tested: host:redoubt-bootfsd::a_bad_public_list_stops_the_server, host:redoubt-bootfsd::serving_connection_rolls_back_discard_missing_capability_and_error
 
 - **A bad `public` list** stops `bootfsd` with an exit code before it serves.
 - **A connection whose reply is lost** is rolled back ([replies and rollback](serving.md#replies-and-rollback)).

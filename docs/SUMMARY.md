@@ -80,6 +80,7 @@
   - [The 9P skeleton's rollback on a discarded reply](todo/ninep-discard-rollback-test.md)
   - [Compiled-in bucket counts](todo/server-bucket-counts.md)
   - [consoled's interrupt name](todo/consoled-irq-name.md)
+  - [consoled's refused-request handles](todo/consoled-unknown-request-handles.md)
   - [An interrupt before the first receive](todo/irq-level-latch.md)
   - [Scans of every kernel-object frame](todo/kernel-scan-bounds.md)
   - [map_anon's search cost](todo/map-anon-search-cost.md)
