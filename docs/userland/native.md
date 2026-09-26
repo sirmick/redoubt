@@ -54,11 +54,11 @@ fn run(startup: &redoubt_rt::startup::Startup) -> u32 {
 
 ### The loader stub
 
-Status: built · tested: bench:stub-launch, fuzz:stub/plan, host:stub::plan_maps_a_well_formed_segment, host:stub::plan_refuses_two_segments_that_overlap_each_other, host:stub::plan_refuses_a_segment_reaching_into_the_stub_region, host:stub::image_in_bounds_refuses_an_image_overlapping_the_startup_page, host:stub::plan_refuses_writable_and_executable, host:stub::plan_refuses_an_entry_outside_any_executable_segment, host:stub::plan_refuses_more_than_max_phnum_segments, host:stub::read_image_refuses_an_image_len_over_the_cap
+Status: built · tested: bench:stub-launch, fuzz:stub/plan, host:stub::plan_maps_a_well_formed_segment, host:stub::plan_refuses_two_segments_that_overlap_each_other, host:stub::plan_refuses_a_segment_reaching_into_the_stub_region, host:stub::image_in_bounds_refuses_an_image_overlapping_the_startup_page, host:stub::plan_refuses_writable_and_executable, host:stub::plan_refuses_writable_without_readable, host:stub::plan_refuses_a_non_riscv_machine, host:stub::plan_refuses_an_entry_outside_any_executable_segment, host:stub::plan_refuses_more_than_max_phnum_segments, host:stub::read_image_refuses_an_image_len_over_the_cap
 
-Every process after `init` is launched one way. Both halves are built: the launcher's calls, made
-in the bench by a user-class parent, and the stub ([`stub/src/lib.rs`](../../stub/src/lib.rs),
-[`stub/src/main.rs`](../../stub/src/main.rs)):
+By design every process after `init` is launched one way. Both halves are built: the launcher's
+calls, made in the bench by a user-class parent, and the stub
+([`stub/src/lib.rs`](../../stub/src/lib.rs), [`stub/src/main.rs`](../../stub/src/main.rs)):
 1. The launcher creates an empty process in the target budget, naming the endpoint that will
    receive its exit notice ([processes](../kernel/processes.md#creating-and-starting)).
 2. It maps the **loader stub** into the process at its fixed address: a flat binary, the same for
@@ -76,8 +76,8 @@ the stub, the startup page or the stack; a segment writable and executable, or w
 readable; an entry outside every executable segment; more than 64 segments; a machine other than
 RISC-V; and an image longer than the cap. In the bench a user-class parent launches a well-formed
 child and a set of hostile ELFs, including 32 with fuzzed headers, through the real stub: each
-hostile child only exits or faults, the parent's budget returns to the same usage after each, and
-a well-formed child still runs afterwards.
+hostile child only exits or faults, the budget the children run in is back to empty after each,
+and a well-formed child still runs afterwards.
 
 ### Launching from a session
 

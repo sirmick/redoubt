@@ -68,8 +68,8 @@ Status: planned · M1 (separation and containment)
 
 A **lease** is a budget with a deadline, made by the steward for an agent or a session. When the
 deadline passes, the kernel destroys the budget and everything in it; the sponsor can end it
-sooner. A lease is task-scoped: "read `~/project`, write `~/project/out`, connect to
-`203.0.113.0/24:443`, 2 hours, 256 MB, 4 processes, weight 20".
+sooner. A lease is task-scoped: "read `~/project`, write `~/project/out`, the `model` gateway,
+2 hours, 256 MB, 4 processes, weight 20".
 - **At most `MAX_LEASE`, 24 hours.** That is the steward's rule, not the kernel's: the kernel knows
   deadlines, not leases. A longer request is refused, not clamped
   ([budgets](../kernel/budgets.md#deadlines)).
@@ -225,7 +225,9 @@ grant with the principal chain ([the steward](../servers/steward.md)).
 
   Nothing is free-form: there is no "all" and no wildcard beyond `git`'s ref patterns. An unknown
   kind, a path that does not resolve, or a term broader than the launcher holds is refused whole by
-  the steward, before any budget exists.
+  the steward, before any budget exists. Planned cases: each kind is refused when broader than the
+  launcher's; an unknown kind is refused; `run --isolated`'s flags and the keyword list give the
+  same steward request.
 - **Each grant becomes the agent's own connection.** The steward mints each one fresh, with the
   agent's own badge, so every request through it is the agent's and never its sponsor's: a file
   connection rooted where the grant says, a `gatewayd` or `git` capability no wider than the

@@ -109,8 +109,7 @@ whose budget has Alice's `tax` label. A budget's labels are fixed when it is cre
 downward (I6 (labels only grow downward)), so nothing started inside a vault session can shed the
 label.
 
-What the label changes, per the label rule of the servers
-([labels](../servers/README.md#labels)):
+What the label changes, per the label rule of the servers ([labels](../servers/README.md#labels)):
 - **It can read** unlabelled data and data carrying `tax`: reading needs the caller's labels to
   include the object's.
 - **It can write** only data carrying exactly `tax`: writing needs the labels to be equal. So it
@@ -119,10 +118,11 @@ What the label changes, per the label rule of the servers
   ([R1 (flow)](../kernel/ipc.md#r1-flow)), and servers that are sinks refuse it: `ipd` (the TCP/IP
   server) refuses every labelled caller, so a vault session has no network.
 
-What it shows on the SSH channel reaches only Alice, who owns the label; `sshd` keeps each
-channel's labels, and a labelled channel is its owner's terminal only, with no forwarding, no
-subsystems (so no file transfer: [file transfer](transfer.md)) and no `exec`. Data leaves the label only by **declassification**: a request to the steward,
-approved by the label's owner at `approve@` ([the steward](../servers/steward.md)).
+What it shows on the SSH channel reaches only Alice, who owns the label; `sshd` keeps each channel's
+labels, and a labelled channel is its owner's terminal only, with no forwarding, no subsystems (so
+no file transfer: [file transfer](transfer.md)) and no `exec`. Data leaves the label only by
+**declassification**: a request to the steward, approved by the label's owner at `approve@` ([the
+steward](../servers/steward.md)).
 
 **Open:** none.
 

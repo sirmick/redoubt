@@ -28,10 +28,10 @@ $ cargo run -p beamlet -- --exec --schedulers 4 ...                      # grant
 ```
 
 Without `--root`, `file` calls fail with `enotsup`; without `--exec`, opening a port to a program
-fails with `eacces`. The VM's environment starts with only `HOME` (`--env NAME[=VALUE]` adds to it),
-so the rest of the host's is not visible. Tests: `cargo test` in `userland/otp` runs the unit and
-hostile-input tests; the differential suites (`tools/difftest`, `tools/elixir-tests`) need the
-pinned OTP and Elixir toolchains installed.
+fails with `eacces`. The VM's environment starts empty, with `HOME` set to `/` when there is a
+`--root` (`--env NAME[=VALUE]` adds to it), so the host's is not visible. Tests: `cargo test` in
+`userland/otp` runs the unit and hostile-input tests; the differential suites (`tools/difftest`,
+`tools/elixir-tests`) need the pinned OTP and Elixir toolchains installed.
 
 On Redoubt there is no command to run: the steward starts a session's VM when a person logs in
 ([sessions](sessions.md)), and a launcher starts an agent's ([agents](agents.md)). What the code
@@ -97,12 +97,16 @@ Everything the VM gets from outside comes through the `Platform` trait
 | `files` | a file system, as `prim_file` sees it | none: `file` calls fail with `enotsup` |
 | `programs` | starting programs behind ports | none: `open_port` fails with `eacces` |
 
-- **`load_module` is a lookup, not a gate.** It is where the VM looks a module name up on its code
-  path. Code in the VM can also load any bytes it holds with `code:load_binary/3`
-  ([`userland/otp/vm/src/bif/info.rs`](../../userland/otp/vm/src/bif/info.rs)), through the same
-  loader checks. So what confines loaded code is not how it arrived but what the VM holds: every
-  module, however loaded, reaches only what the `Platform` grants. Loading one's own bytecode acts
-  within one's own authority.
+- **`load_module` is a lookup, not a gate.** It is one step of the lookup: a module name is looked
+  for first in the directories added to the front of the code path with `code:add_patha/1`, then
+  through `load_module`, then in the directories added at the end, as BEAM does, and no module is
+  sticky ([`userland/otp/vm/src/vm.rs`](../../userland/otp/vm/src/vm.rs), `locate_module`). So a
+  directory on the front of the path shadows a platform module, in that VM only ([module search
+  order](../todo/module-search-order.md)). Code in the VM can also load any bytes it holds with
+  `code:load_binary/3` ([`userland/otp/vm/src/bif/info.rs`](../../userland/otp/vm/src/bif/info.rs)),
+  through the same loader checks. So what confines loaded code is not how it arrived but what the VM
+  holds: every module, however loaded, reaches only what the `Platform` grants. Loading one's own
+  bytecode acts within one's own authority.
 - **Files are the platform's.** OTP's own `file`, `file_server` and `file_io_server` run
   unchanged over a `Files` trait, path-based and POSIX-shaped: `open`, `read`, `pread`, `pwrite`,
   `seek`, `info`, `list_dir`, `rename`, `delete` and the rest; a 9P client implementing it is
@@ -189,8 +193,9 @@ every server binding is pure Elixir over them:
 
 Handles are resource terms: unforgeable, collected, and never serialisable. A copy of a handle
 inside the VM is the same connection (one badge, one client), so passing one to another Erlang
-process is sharing it. It cannot reach another VM in a message: the term format has no encoding for
-a handle, and a handle crosses between processes only in a kernel call that names it. Delegation is
+process is sharing it. It cannot reach another VM in a message: the term format writes a resource
+as a plain reference, with no state behind it, so a decoded copy grants nothing, and a handle
+crosses between processes only in a kernel call that names it. Delegation is
 always `new_connection`, a typed call on a connection, not a native ([sessions](sessions.md)).
 
 **Open:** two layout choices.
