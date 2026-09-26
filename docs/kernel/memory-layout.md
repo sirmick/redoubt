@@ -15,7 +15,8 @@ to build the map and the kernel uses to rely on it. The end of user space (`USER
 `PAGE_SIZE` (4096, on both widths) are `redoubt-sys`'s, because programs need them. The page-table
 code is the `paging` crate (`libs/paging`), the only code that reads or writes a page-table entry.
 What the mapping calls do with this layout is [memory](memory.md); the rules they keep are
-R11 (memory) and R19 (kernel W^X).
+R11 (memory) and R19 (kernel W^X). This page owns one rule, [R24](#r24-sum-and-mxr-clear): the
+kernel never reaches user memory through a user mapping.
 
 ## The direct physical map
 
@@ -205,7 +206,7 @@ User space uses the same addresses on both widths, all below 2 GiB. On Sv39 the 
 | `0x7FF0_0000` | the startup block, in a launched process | the launcher |
 | `0x7FFE_0000`..`0x8000_0000` | the first thread's stack: 32 pages (128 KiB) reserved, only the top one backed; the rest are backed on first touch | the loader for a boot process; a launcher places its own |
 
-The kernel searches its two areas for the first free run of pages, starting after its last
+The kernel searches its two areas for the first free run of pages, starting at its last
 choice; `map_anon`'s choice is [memory](memory.md)'s. A process started by the loader gets its
 image, its stack and nothing else; its first thread starts with `sp` 16 bytes below
 `0x8000_0000`. On Sv32 the stack top is also the end of user space.
@@ -313,8 +314,9 @@ Status: built · partly tested: no case attacks a translation that outlives an a
 
 `satp` holds the mode, the process's PID as its ASID, and the root table's physical page number
 (`make_satp`). PIDs fit every ASID width, because a PID is a byte. The kernel is PID 1; the loader
-numbers boot processes from 2. The kernel reads the running PID back out of `satp`
-(`current_pid`), so the running address space and the running process are one fact.
+numbers boot processes from 2. The kernel keeps the running PID in a second record of its own
+(`current_pid`), set whenever it switches address space (`set_current_pid`); the two are written
+together, and the PID in `satp` is the ASID the hardware uses.
 
 The kernel runs in whichever address space was current when it trapped, because every address
 space maps the kernel half. Switching process writes `satp` and then runs `sfence.vma` with no
@@ -374,6 +376,22 @@ lender's entry: a reply restores it, and a transfer or an abandoned call removes
 mapping, reservation or unmap overwrites it (I9 (pages W^X, zeroed, lends unmapped);
 [R3 (lends and abandoned calls)](ipc.md#r3-lends-and-abandoned-calls)).
 
+## Security properties
+
+### R24 (SUM and MXR clear)
+
+Status: planned · M1 (separation and containment)
+
+The kernel clears `sstatus.SUM` and `sstatus.MXR` at entry and never sets either. So S-mode
+cannot load or store through a user mapping, and a stray kernel dereference of a user address
+faults. `MXR` is included because with it set, kernel loads could read pages that are
+execute-only. The kernel reaches user memory only by walking the caller's tables and copying
+through the physmap, so no path needs either bit. A boot assertion checks both are clear, and a
+kernel test shows a kernel load through a user address faults
+([todo](../todo/clear-sum-at-entry.md)).
+
+**Open:** none.
+
 ## Residual risks
 
 - **The physmap has a writable alias of user code.** Every user page, code included, is also
@@ -384,9 +402,13 @@ mapping, reservation or unmap overwrites it (I9 (pages W^X, zeroed, lends unmapp
   the current process maps. On Sv39 the physmap also covers the physical range below RAM, where
   device registers sit, as ordinary kernel read-write memory; the kernel never uses those
   addresses, but a stray write through them reaches a device.
-- **RAM larger than the physmap is not refused cleanly.** The loader does not check RAM against
-  `PHYSMAP_SIZE` (128 GiB on Sv39, 2032 MiB on Sv32). A larger machine stops at boot on a later
-  assertion, not on a clear refusal. Follow-up: [todo](../todo/physmap-ram-bound.md).
+- **RAM larger than the physmap is not refused.** The loader maps the physmap to the end of RAM,
+  but the kernel's window stops at `PHYSMAP_SIZE` (128 GiB on Sv39, 2032 MiB on Sv32), and the
+  loader never compares the two. The kernel hands out frames lowest first, so a larger machine
+  boots, and the kernel stops at run time the first time it uses a frame past the bound, which a
+  process can cause by allocating (a breach of I14 (no call panics the kernel) on such a
+  machine). The rule is that the loader refuses to boot it ([boot](boot.md)). Follow-up:
+  [todo](../todo/physmap-ram-bound.md).
 - **Every change flushes everything.** Each map, unmap, lend and address-space switch runs a
   global `sfence.vma`, so ASIDs save no work, and each flush costs page-table walks afterwards.
   It is also a flush of this hart only: with more than one hart, another hart's cached
@@ -395,10 +417,11 @@ mapping, reservation or unmap overwrites it (I9 (pages W^X, zeroed, lends unmapp
   and a thread's return to `EXIT_THREAD` are both instruction page faults the kernel must take.
   The vendored RustSBI delegates them; with a firmware that did not, the boot would never reach
   the kernel. The firmware is in the TCB ([boot](boot.md)).
-- **`SUM` is clear by default, not by the kernel's hand.** The kernel never sets `sstatus.SUM`,
-  and it never clears it either: it relies on the firmware entering S-mode with it clear. With
-  `SUM` set, a kernel bug that dereferenced a user address would read the process's memory
-  instead of faulting. Follow-up: [todo](../todo/clear-sum-at-entry.md).
+- **`SUM` and `MXR` are clear by default, not by the kernel's hand.** The kernel never writes
+  `sstatus.SUM` or `sstatus.MXR`: it relies on the firmware entering S-mode with both clear, which
+  [R24](#r24-sum-and-mxr-clear) says the kernel does itself. With `SUM` set, a kernel bug that
+  dereferenced a user address would read the process's memory instead of faulting. Follow-up:
+  [todo](../todo/clear-sum-at-entry.md).
 - **No guard gap between a segment and the stack.** The stub checks segments against the stub,
   the startup block and the image, not against the stack, and the kernel refuses only an
   overlap. A launcher that puts the stack inside the link range can get a child whose data ends
