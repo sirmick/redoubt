@@ -118,7 +118,8 @@ What the label changes, per the label rule of the servers
   server) refuses every labelled caller, so a vault session has no network.
 
 What it shows on the SSH channel reaches only Alice, who owns the label; `sshd` keeps each
-channel's labels. Data leaves the label only by **declassification**: a request to the steward,
+channel's labels, and a labelled channel is its owner's terminal only, with no forwarding, no
+subsystems (so no file transfer: [file transfer](transfer.md)) and no `exec`. Data leaves the label only by **declassification**: a request to the steward,
 approved by the label's owner at `approve@` ([the steward](../servers/steward.md)).
 
 **Open:** none.
