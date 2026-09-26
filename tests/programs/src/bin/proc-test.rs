@@ -1,6 +1,6 @@
-//! Process creation and exit (WP-K4): `process_create`, `process_map`, `process_start` with its
-//! `arg`, `thread_create`, `thread_exit`, `process_exit`, and the exit notices they produce with
-//! their cause, code, blamed account and blamed labels (KERNEL-SPEC.md, Process, Messages; R10).
+//! Process creation and exit: `process_create`, `process_map`, `process_start` with its `arg`,
+//! `thread_create`, `thread_exit`, `process_exit`, and the exit notices they produce with their
+//! cause, code, blamed account and blamed labels (kernel/processes.md, "Exit notices"; R10).
 //!
 //! It runs as the bundle's first program, so it holds `root`, `system` and `users` and every
 //! device object, and it prints through the console it maps itself -- exactly as `device-test`
@@ -40,7 +40,7 @@ const R_CALL: u8 = 4;
 const R_SEND: u8 = 5;
 /// Receive one call on handle 1 (a receive right), then fault: the call is blamed.
 const R_SERVE_FAULT: u8 = 6;
-/// Receive one call on handle 1, then `process_exit`: `faulted`, blamed on that call (answer 55).
+/// Receive one call on handle 1, then `process_exit`: `faulted`, blamed on that call (R21).
 const R_EXIT_OPEN: u8 = 7;
 /// Receive one call on handle 1, reply to it, then fault: nobody is blamed.
 const R_REPLY_FAULT: u8 = 8;
@@ -111,7 +111,7 @@ fn child(arg: usize) -> ! {
                 role as usize,
             )
             .unwrap();
-            // No intervening yield: the initial thread exits before its worker runs in K4.
+            // No intervening yield: the initial thread exits before its worker runs on one hart.
             rd::thread_exit().expect("initial thread exits");
             panic!("thread_exit returned");
         }
@@ -171,7 +171,7 @@ fn child(arg: usize) -> ! {
             let first = take_call();
             take_call();
             // Blame follows the *current* call, which `serve` moves back to the first one
-            // (answer 82), not the one taken last.
+            // (R21), not the one taken last.
             rd::serve(first).ok();
             if role == R_TWO_EXIT {
                 rd::process_exit(27);
@@ -213,8 +213,8 @@ fn child(arg: usize) -> ! {
 }
 
 /// Wait for ever without running: `receive` with no handle is the one call that sleeps
-/// (KERNEL-SPEC.md, `receive`). A child that spun instead would keep the kernel out of its idle
-/// branch, where the interim timeout sweep lives until WP-K5 arms a timer.
+/// (kernel/timer.md, "Timeouts and `FOREVER`"). A child that spun instead would keep the kernel
+/// out of its idle branch.
 fn sleep() -> ! {
     loop {
         rd::receive(None, rd::FOREVER, 0).ok();
@@ -436,7 +436,7 @@ pub extern "C" fn _start(arg: usize) -> ! {
     test_programs::park()
 }
 
-/// Blame (answers 37, 55, 82): a fault blames the sender of the faulting thread's current call,
+/// Blame (R21): a fault blames the sender of the faulting thread's current call,
 /// and nothing else.
 fn blame(out: &mut Console, parent: &Parent, budget_a: u32, budget_b: u32) {
     // One work endpoint per scenario, owned by this process (class `system`), so R1 lets the
@@ -479,7 +479,7 @@ fn blame(out: &mut Console, parent: &Parent, budget_a: u32, budget_b: u32) {
     );
 
     // Two callers with different accounts: after `serve`, the call `serve` named is blamed, not
-    // the one taken last (answer 37 as the spec now states it, answer 82).
+    // the one taken last (R21).
     let notice = scenario(R_TWO_CALLS, 0, &[(budget_a, R_CALL, 1), (budget_b, R_CALL, 2)]);
     show(out, "blame-serve", &notice);
     let served_first = is(&notice, Cause::Faulted, 15, ACCOUNT_A, &[LABEL]);

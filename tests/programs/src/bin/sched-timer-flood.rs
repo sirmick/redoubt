@@ -1,4 +1,4 @@
-//! Timer interrupts an attacker arms cost the attacker, not a victim (WP-K5; billing): 30 threads
+//! Timer interrupts an attacker arms cost the attacker, not a victim (R12, billing): 30 threads
 //! sleeping a microsecond each, staggered and re-armed, and a variant that also creates budgets
 //! whose deadlines fall a microsecond apart, leave an equal-weight victim at least half.
 

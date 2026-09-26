@@ -160,13 +160,13 @@ fn corrupt_elf(elf: &mut Vec<u8>, corruption: &Corruption) -> Result<()> {
 }
 
 /// Pack the boot bundle: a ustar archive with the kernel first, then the programs in PID order.
-/// The development signing seed (public: see VERIFIED-BOOT.md). NOT FOR PRODUCTION.
+/// The development signing seed (public: see kernel/boot.md). NOT FOR PRODUCTION.
 const DEV_SEED: [u8; 32] = [0x42; 32];
 
 /// Build the boot bundle, sign it, and write `signature || tar` to `path`. `files` are data
 /// entries, placed after the programs. If `tamper`, flip one payload byte after signing, so
 /// the loader must reject it. If `bare_archive`, sign the archive alone instead of the preimage
-/// VERIFIED-BOOT.md states, which the loader must reject too.
+/// kernel/boot.md states, which the loader must reject too.
 pub fn bundle(
     path: &Path,
     kernel: &Path,
@@ -206,7 +206,7 @@ pub fn bundle(
 /// The bytes a case's signature covers: the preimage `redoubt_signing` defines — the same
 /// construction the loader verifies with, so the signer and the verifier cannot drift apart —
 /// or, for the case that proves the loader refuses it, the bare archive with no domain and no
-/// length, which is what a signer that predates the bundle domain produces (answer 120).
+/// length, which is what a signer that predates the bundle domain produces.
 fn preimage(tar: &[u8], bare_archive: bool) -> Vec<u8> {
     if bare_archive {
         return tar.to_vec();
@@ -235,7 +235,7 @@ mod tests {
 
     /// What the bench signs is the documented preimage, and nothing else. The loader hashes
     /// `redoubt_signing::bundle_preamble(len)` and then the archive; the bench writes the same
-    /// two pieces into one buffer. Both are asserted here against the bytes VERIFIED-BOOT.md
+    /// two pieces into one buffer. Both are asserted here against the bytes kernel/boot.md
     /// spells out, so changing either side alone fails before a case boots. The bare archive,
     /// the one forgery a case can ask for, is asserted to be the naked bytes.
     #[test]
@@ -277,7 +277,7 @@ mod tests {
         assert!(keypair.pk.verify(ARCHIVE, &signature).is_err());
 
         // Another Redoubt domain over the same archive: a signature made for packages
-        // (PACKAGES.md) is not a bundle signature.
+        // (servers/pkg.md) is not a bundle signature.
         let mut foreign = b"redoubt.pkg.v1\x00".to_vec();
         foreign.extend_from_slice(&(ARCHIVE.len() as u64).to_le_bytes());
         foreign.extend_from_slice(ARCHIVE);

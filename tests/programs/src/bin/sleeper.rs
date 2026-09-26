@@ -1,4 +1,4 @@
-//! Sleeps on the kernel's timer beside other work (WP-K5): batches of short timeouts of varying
+//! Sleeps on the kernel's timer beside other work (I13): batches of short timeouts of varying
 //! length, each of which must come back `Timeout` and never early, for as long as the machine
 //! runs. A verdict line follows every batch, so one comes after whatever else the case waits for.
 

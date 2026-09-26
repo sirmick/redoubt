@@ -1,4 +1,4 @@
-description = "Ties in the stride queue (WP-K5, OWNER DECISION 4): a sched-trace kernel's record of every queue event, checked pick by pick against the four rank clauses by the bench's independent oracle; in the guest, wakers of one kernel entry run lowest id first and a later entry's wakers first (a1, a2, a3, b3, b2, b1) (virtual time, checked build)"
+description = "Ties in the stride queue (kernel/scheduling.md, \"The current minimum and ties\"): a sched-trace kernel's record of every queue event, checked pick by pick against the four rank clauses by the bench's independent oracle; in the guest, wakers of one kernel entry run lowest id first and a later entry's wakers first (a1, a2, a3, b3, b2, b1) (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true

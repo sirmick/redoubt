@@ -128,7 +128,7 @@ fn free_ports(count: usize) -> Result<Vec<u16>> {
 
 /// QEMU presents virtio-mmio devices in the legacy (version 1) register layout unless told
 /// otherwise (`force-legacy` defaults to on). Our drivers speak only version 2, virtio 1.x's
-/// layout (`blkd`, `netd`: IO-ARCHITECTURE.md), and carry no second layout for a device only
+/// layout (servers/blkd.md, servers/netd.md), and carry no second layout for a device only
 /// QEMU presents, so every case with a virtio device asks for the modern one.
 pub const MODERN_VIRTIO: [&str; 2] = ["-global", "virtio-mmio.force-legacy=false"];
 

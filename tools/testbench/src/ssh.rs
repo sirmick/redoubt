@@ -143,7 +143,8 @@ pub fn run(
     let dir = logs.join("ssh");
     std::fs::create_dir_all(&dir)?;
     // Host keys: checked when the case says which key to expect, as known_hosts under one
-    // alias. The guest's key is not known before WP-S3, so guest cases may accept any.
+    // alias. The guest's key is not known until `sshd` exists (docs/plan/m1-separation.md), so
+    // guest cases may accept any.
     let host_key = match server {
         Server::Guest { host_key, .. } => *host_key,
         Server::Loopback { host_key, .. } => Some(host_key.as_str()),

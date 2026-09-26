@@ -1,6 +1,6 @@
-//! Trusted IPC1 checker. Its serving thread changes a blocked caller's record at a known
-//! boundary, then replies; the main checker judges kernel outcomes and accounting, not text
-//! from a hostile program. Existing redoubt-ipc covers separate address spaces.
+//! Trusted checker of IPC outcomes (R13). Its serving thread changes a blocked caller's record at
+//! a known boundary, then replies; the main checker judges kernel outcomes and accounting, not
+//! text from a hostile program. Existing redoubt-ipc covers separate address spaces.
 #![no_std]
 #![no_main]
 

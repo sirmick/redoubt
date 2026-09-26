@@ -1,8 +1,8 @@
-description = "Every anonymous page a process is given is zero (freed-frame reuse: WP-K1/K2)"
+description = "Every anonymous page a process is given is zero (freed-frame reuse: I9)"
 # Coverage: this shows that every page the attacker gets is zero when mapped. It does not show
 # that the victim's freed frames were among them: the attacker chooses what to lend and the
 # kernel which frames to hand out. Reuse of freed frames needs the kernel's knowledge of
-# physical addresses (the model's invariant I9; kernel cases come with WP-K1/K2).
+# physical addresses (the model's invariant I9).
 arch = ["rv64", "rv32"]
 kind = "boot"
 # PID 3 mem-victim frees pages holding its secret and judges, on the boot endpoint's receive

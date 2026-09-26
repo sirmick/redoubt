@@ -1,9 +1,9 @@
-description = "A device that does not confirm its reset keeps its frames for ever (WP-K5b, answer 173; OD5, OD6, P1-1): two drivers hold DMA runs on one slot; the first faults, the slot's first reset fails (dma-reset-deaf), so its run is quarantined and every handle to the slot is gone; the co-holder's run is quarantined too when it dies after; each destroyed budget's charge moves to its parent; a search of every free page in the tree, with halving chunks until OutOfMemory, takes the recorded free pages (bar at most a page table's worth a last mapping could not pay for) and none of them overlaps a quarantined run (checked build)"
+description = "A device that does not confirm its reset keeps its frames for ever (I16; kernel/devices.md, \"Quarantine\"): two drivers hold DMA runs on one slot; the first faults, the slot's first reset fails (dma-reset-deaf), so its run is quarantined and every handle to the slot is gone; the co-holder's run is quarantined too when it dies after; each destroyed budget's charge moves to its parent; a search of every free page in the tree, with halving chunks until OutOfMemory, takes the recorded free pages (bar at most a page table's worth a last mapping could not pay for) and none of them overlaps a quarantined run (checked build)"
 arch = ["rv64"]
 kind = "boot"
 debug_assertions = true
 kernel_features = ["dma-reset-deaf"]
-# The first program, so it holds every device object (INTERIM, kernel device.rs).
+# The first program, so it holds every device object (kernel/devices.md).
 programs = ["dma-reset-quarantine"]
 timeout_secs = 30
 expect = [

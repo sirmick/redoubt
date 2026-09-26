@@ -1,4 +1,4 @@
-description = "consoled builds for both widths (BUILD-PLAN.md: rv32 keeps compiling)"
+description = "consoled builds for both widths (rv32 keeps compiling)"
 arch = ["rv64", "rv32"]
 kind = "build"
 # Builds the library and `consoled` binary. Boot integration still needs native process

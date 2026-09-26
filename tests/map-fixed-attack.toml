@@ -1,4 +1,4 @@
-description = "map_fixed (R11, answer 172): a range check, an overlap check (stack, untouched reservation, map_anon, both sides of a lend) and the flags rule each refuse with nothing mapped and nothing charged; both halves of the charge check (pages, then page tables) are exact; a huge len is refused within 10 ms; the success path zeroes, enforces flags and unmaps back to baseline; page 0 is user space"
+description = "map_fixed (R11, R22): a range check, an overlap check (stack, untouched reservation, map_anon, both sides of a lend) and the flags rule each refuse with nothing mapped and nothing charged; both halves of the charge check (pages, then page tables) are exact; a huge len is refused within 10 ms; the success path zeroes, enforces flags and unmaps back to baseline; page 0 is user space"
 arch = ["rv64"]
 kind = "boot"
 debug_assertions = true

@@ -181,8 +181,8 @@ pub struct Boot {
     #[serde(default)]
     pub tamper_bundle: bool,
     /// Sign the bare archive, with no domain and no length, instead of the preimage
-    /// VERIFIED-BOOT.md states: a valid signature by the right key over untouched bytes, which
-    /// the loader must still refuse. The container and the archive are otherwise normal.
+    /// kernel/boot.md states ("Verified boot"): a valid signature by the right key over untouched
+    /// bytes, which the loader must still refuse. The container and the archive are otherwise normal.
     #[serde(default)]
     pub sign_bare_archive: bool,
     /// Data entries added to the bundle after the programs: a trace, a manifest, a hostile image.
@@ -197,7 +197,7 @@ pub struct Boot {
     #[serde(default)]
     pub session: Vec<Session>,
     /// The case passes only if the bench fails it for a reason matching this regular
-    /// expression: self-checks proving that a bench feature can fail (TENETS.md 6).
+    /// expression: self-checks proving that a bench feature can fail (TENETS.md, tenet 6).
     pub must_fail: Option<String>,
     /// A check the bench runs on the console log once everything else passed, by name, then its
     /// arguments. The one there is: `sched_oracle`, the stride queue's ranks, floor and lifts over

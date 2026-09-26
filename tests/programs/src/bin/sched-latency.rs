@@ -1,11 +1,12 @@
-//! Latency under a named workload (WP-K5; plan section 10; the targets K5-code-review-5 pinned), in
-//! virtual (instruction) time.
+//! Latency under a named workload (kernel/scheduling.md, "Responsiveness"), in virtual
+//! (instruction) time.
 //!
-//! The workload, at INIT.md's weights: a driver stand-in (1000, from `system`) that waits for the
-//! goldfish RTC's alarm through its device handles; a steward stand-in (1000, from `system`) that
-//! sleeps on timeouts, destroys leases by hand after a timeout (its decision) and waits for leases'
-//! deadlines to destroy them; and N spinning sessions (100 each, from `users`), for N = 1, 4 and
-//! 16. In the N = 16 run a spinning server stand-in (1000, from `system`) joins them.
+//! The workload, at the weights in servers/init.md: a driver stand-in (1000, from `system`) that
+//! waits for the goldfish RTC's alarm through its device handles; a steward stand-in (1000, from
+//! `system`) that sleeps on timeouts, destroys leases by hand after a timeout (its decision) and
+//! waits for leases' deadlines to destroy them; and N spinning sessions (100 each, from `users`),
+//! for N = 1, 4 and 16. In the N = 16 run a spinning server stand-in (1000, from `system`) joins
+//! them.
 //!
 //! Measured, each against its own clock (no difference across two clocks is taken), `K` wakes and
 //! `LEASES` destructions of each kind per N:
@@ -21,13 +22,13 @@
 //! - R10's own kernel time, and the object frames it walks (its cost grows with them), are in the kernel's
 //!   trace (records `X`, `Y`, `Z`); the bench's post-check reports and bounds them.
 //!
-//! The targets (K5-code-review-5, virtual time, N <= 16, this workload): driver and steward wakes
-//! p50 <= 15 ms and p99 <= 50 ms; deadline notice p99 <= 30 ms; R10 kernel time p99 <= 30 ms (the
-//! post-check); a lease's termination from the steward's decision, decision wake + R10, p99 <= 80
-//! ms; the 1000-weight server's share of the spinning CPU at N = 16 at least its weight's less
+//! The targets (kernel/scheduling.md, virtual time, N <= 16, this workload): driver and steward
+//! wakes p50 <= 15 ms and p99 <= 50 ms; deadline notice p99 <= 30 ms; R10 kernel time p99 <= 30 ms
+//! (the post-check); a lease's termination from the steward's decision, decision wake + R10, p99 <=
+//! 80 ms; the 1000-weight server's share of the spinning CPU at N = 16 at least its weight's less
 //! 30/1000. Each is printed as `met` or `missed`; the virtual-time case requires `met`, and the
-//! plain-TCG reference case only reports. Adding objects moves the R10 terms (follow-up
-//! K5-r10-destroy-cost).
+//! plain-TCG reference case only reports. Adding objects moves the R10 terms
+//! (docs/todo/budget-destroy-cost.md).
 
 #![no_std]
 #![no_main]

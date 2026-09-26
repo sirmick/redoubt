@@ -1,4 +1,4 @@
-description = "OD10: a process holds exactly MAX_THREADS (31) threads, its initial one included, with TIDs 1..=31; the next thread_create is TooManyThreads (checked build)"
+description = "A process holds exactly MAX_THREADS (31) threads, its initial one included, with TIDs 1..=31; the next thread_create is TooManyThreads (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true

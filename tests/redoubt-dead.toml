@@ -1,7 +1,7 @@
-description = "R4b and R4's Refused (WP-K2): a server thread that exits holding an open call gives its caller Dead and its lend back intact, the endpoint survives for the next server, and a message the receiving budget cannot pay for is Refused to its sender while the receiver keeps waiting (checked build)"
+description = "R4b and R4's Refused: a server thread that exits holding an open call gives its caller Dead and its lend back intact, the endpoint survives for the next server, and a message the receiving budget cannot pay for is Refused to its sender while the receiver keeps waiting (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# Built with the checks on (docs/testbench.md, "Debug assertions").
+# Built with the checks on (docs/testbench.md, "Checked builds").
 debug_assertions = true
 # PID 2 redoubt-dead: it must be the loader's first program, the one holding root, system and
 # users, since the Refused step carves system's free pages away.

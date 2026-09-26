@@ -1,11 +1,11 @@
 //! Attack test: hand over pages the process has never touched.
 //!
 //! A loader-started program's stack is reserved, and the kernel backs each page with a zeroed
-//! frame on first touch (INTERIM, OD6). Lending, writably lending or transferring such a page
-//! makes the kernel deal with it inside the call. That once re-entered the kernel's
-//! memory-manager cell and panicked the whole machine ("RefCell already borrowed", or a spinlock
-//! deadlock with `smp`), from any unprivileged process. It also left a half-mapped range half
-//! lent, and panicked when backing ran out of RAM. See `tests/lend-untouched-page.toml`.
+//! frame on first touch (kernel/memory.md, "Backing and zeroing"). Lending, writably lending or
+//! transferring such a page makes the kernel deal with it inside the call. That once re-entered
+//! the kernel's memory-manager cell and panicked the whole machine ("RefCell already borrowed",
+//! or a spinlock deadlock with `smp`), from any unprivileged process. It also left a half-mapped
+//! range half lent, and panicked when backing ran out of RAM. See `tests/lend-untouched-page.toml`.
 //!
 //! The verdict is survival only: this program makes every attempt, then reports to
 //! log-server (`DONE`), which names it and powers off. A kernel that panicked on any attempt

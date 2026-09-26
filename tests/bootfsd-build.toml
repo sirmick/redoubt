@@ -1,4 +1,4 @@
-description = "bootfsd builds for both widths (BUILD-PLAN.md: rv32 keeps compiling)"
+description = "bootfsd builds for both widths (rv32 keeps compiling)"
 arch = ["rv64", "rv32"]
 kind = "build"
 # Builds the library and `bootfsd` binary. Boot integration still needs native process startup

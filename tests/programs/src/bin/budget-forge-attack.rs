@@ -1,5 +1,5 @@
 //! Attacker: forge handle indices. It holds root, system and users in slots 1-3, a handle per
-//! device object (WP-K3), and a budget of its own; it passes every other index it can think of
+//! device object, and a budget of its own; it passes every other index it can think of
 //! (0, every unused slot of the first
 //! table page, indices on pages it does not have, which a kernel that dropped the page number
 //! would read as slots 1-3, past the table, wider than 32 bits) to `budget_destroy` and the other

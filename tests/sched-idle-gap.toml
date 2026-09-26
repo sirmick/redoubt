@@ -1,4 +1,4 @@
-description = "A sleeper cannot bank credit across an idle gap (WP-K5, the floor): B keeps half after A wakes into an empty queue; a budget created in the gap enters at the floor (virtual time, checked build)"
+description = "A sleeper cannot bank credit across an idle gap (the floor): B keeps half after A wakes into an empty queue; a budget created in the gap enters at the floor (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
