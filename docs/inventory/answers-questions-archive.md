@@ -89,14 +89,14 @@ residual risk, security caveat, open question and rule ID before the legacy docs
 - status: accepted
 - destination (proposed): kernel (rule-id: R11, System calls, Errors)
 
-### A-50: Kernel package acceptance requirements for map_fixed
+### A-13: Kernel package acceptance requirements for map_fixed
 - type: residual-risk
 - source: ANSWERS.md#172
 - statement: Needs a kernel package (sole kernel writer) with rv64 boot and rv32 compile acceptance and attack cases covering occupied range, outside user space, unaligned, len 0, overflow, W+X, W without R, and budget exhausted; MEMORY-LAYOUT.md must record the stub's address once the loader-stub package fixes it, so program link bases avoid it.
 - status: open
 - destination (proposed): SECURITY
 
-### A-51: Kernel resets and quarantines DMA device frames before reuse (resolves Q147)
+### A-14: Kernel resets and quarantines DMA device frames before reuse (resolves Q147)
 - type: decision
 - source: ANSWERS.md#173
 - statement: When the last handle to a DMA-flagged MMIO device object is released (holder exits, budget destroyed, or closed), the kernel writes 0 to the device's virtio status register, reads it back until 0 (bounded), and only then returns that device's `dma_alloc` frames to the pool. If reset is not confirmed in the bound, or the device is not virtio, its frames are quarantined permanently (charged to the budget holding the device object's grant, not the dead driver) and the device is not handed out again until reboot. The kernel never services the device on the driver's behalf.
@@ -159,7 +159,7 @@ residual risk, security caveat, open question and rule ID before the legacy docs
 - status: open
 - destination (proposed): servers/fsd
 
-### A-52: File.stat/chmod semantics with no mode/owner/atime fields
+### A-23: File.stat/chmod semantics with no mode/owner/atime fields
 - type: decision
 - source: QUESTIONS.md#130
 - statement: No mode, owner, or atime fields exist anywhere below (access is by capability). Recommendation: synthesise a fixed mode for stat, report mtime/size honestly, let chmod/chown succeed as no-ops (since Mix/escript tooling calls chmod and the bits mean nothing). Alternative: :enotsup for both, honest but breaks tools.
@@ -229,7 +229,7 @@ residual risk, security caveat, open question and rule ID before the legacy docs
 - status: open
 - destination (proposed): kernel
 
-### A-58: Lending untouched pages in a call is backed and charged to caller
+### A-33: Lending untouched pages in a call is backed and charged to caller
 - type: decision
 - source: QUESTIONS.md#140
 - statement: The ABI refuses an untouched record, but a call's lend of untouched pages is backed/charged to the caller first, like map_anon; a caller that cannot pay gets InvalidArgument since call's row has no OutOfMemory. Recommendation: state this in R3 or the call row so model and kernel agree.
@@ -257,7 +257,7 @@ residual risk, security caveat, open question and rule ID before the legacy docs
 - status: open
 - destination (proposed): kernel
 
-### A-54: Device handle copyable; two holders of one MMIO range; mapping outlives handle
+### A-37: Device handle copyable; two holders of one MMIO range; mapping outlives handle
 - type: security-caveat
 - source: QUESTIONS.md#144
 - statement: A device handle is copyable, so two processes can both map_device the same range; WP-K3 treats the handle as authority and doesn't track mappings. Addendum: revoking a device handle does not unmap MMIO a holder already mapped, and since the handle is copyable, a process in another budget keeps register access after the owner budget is destroyed. Recommendation: state in KERNEL-SPEC.md that a device is shared like an endpoint (a driver that must be alone is the only holder because init gave it out once); either unmap on destroy, or state plainly that a device mapping outlives its handle.
@@ -355,7 +355,7 @@ residual risk, security caveat, open question and rule ID before the legacy docs
 - status: accepted
 - destination (proposed): kernel
 
-### A-56: Error table and check order live in KERNEL-SPEC, not the model README
+### A-51: Error table and check order live in KERNEL-SPEC, not the model README
 - type: decision
 - source: archive/2026-09-22/ANSWERS.md#14
 - statement: The error table and order of checks are copied into KERNEL-SPEC.md as the single owner; the model conforms to the spec. The decoding-errors-first rule (BadHandle, then TooLarge, then InvalidArgument) is part of what moved.
@@ -376,14 +376,14 @@ residual risk, security caveat, open question and rule ID before the legacy docs
 - status: accepted
 - destination (proposed): kernel
 
-### A-59: Blame goes to most-recently-taken open call, not all open calls
+### A-54: Blame goes to most-recently-taken open call, not all open calls
 - type: decision
 - source: archive/2026-09-22/ANSWERS.md#37
 - statement: Blame goes to the account of the call the faulting thread took most recently (kernel records this per thread on receive delivery); the exit notice's blamed_account is that one account. mint accepts any message id among the caller's open calls; a send is never open.
 - status: accepted
 - destination (proposed): kernel
 
-### A-57: Delayed corruption can misattribute blame
+### A-55: Delayed corruption can misattribute blame
 - type: residual-risk
 - source: archive/2026-09-22/ANSWERS.md#37
 - statement: "delayed corruption can still misattribute; the consequence is a logout."
@@ -565,7 +565,7 @@ residual risk, security caveat, open question and rule ID before the legacy docs
 - status: accepted
 - destination (proposed): kernel
 
-### A-64: fsd message copy renamed copy_file to avoid derive collision
+### A-81: fsd message copy renamed copy_file to avoid derive collision
 - type: decision
 - source: archive/2026-09-22/ANSWERS.md#155
 - statement: copy camel-cases to Copy, which is in the wire generator's RESERVED_TYPES since every generated type derives Copy; the message is renamed copy_file (opcode 17, reply count: u64 unchanged) in NAMESPACES.md and USERLAND.md.
@@ -586,7 +586,7 @@ residual risk, security caveat, open question and rule ID before the legacy docs
 - status: accepted
 - destination (proposed): servers/consoled
 
-### A-65: consoled is the first user of the parking join
+### A-84: consoled is the first user of the parking join
 - type: decision
 - source: archive/2026-09-22/ANSWERS.md#158
 - statement: A read with no input parks rather than answering 0 (which looks like a closed console) or an error the client must poll; it's the smallest first user (one file, one wait condition), and ipd needs the same join.
@@ -723,7 +723,7 @@ residual risk, security caveat, open question and rule ID before the legacy docs
 - status: resolved
 - destination (proposed): kernel
 
-### A-68: Server dies with calls queued
+### A-103: Server dies with calls queued
 - type: decision
 - source: QUESTIONS.md#6
 - statement: Conflicting docs on whether blocked senders get `Dead` or the endpoint survives its receivers; recommendation follows KERNEL-SPEC.md (endpoint survives, queued senders wait for restart).
@@ -842,7 +842,7 @@ residual risk, security caveat, open question and rule ID before the legacy docs
 - status: resolved
 - destination (proposed): kernel
 
-### A-72: JSON integer representation ambiguity
+### A-120: JSON integer representation ambiguity
 - type: decision
 - source: QUESTIONS.md#23
 - statement: Small integers could be written as number or string ambiguously in manifest JSON; final rule (revised from initial "accept both") fixes each field's JSON type by schema, strings only above 2^53.
@@ -891,7 +891,7 @@ residual risk, security caveat, open question and rule ID before the legacy docs
 - status: resolved
 - destination (proposed): kernel
 
-### A-4: Revocation doesn't reach in-flight messages
+### A-127: Revocation doesn't reach in-flight messages
 - type: security-caveat
 - source: QUESTIONS.md#30
 - statement: R10 closes handles in tables but a queued/taken message through a destroyed-budget-stamped handle was still delivered with its badge and replies (including new handles) still reached the sender; recommendation fails queued messages with `Dead` and discards replies whose stamp is destroyed.
@@ -1052,77 +1052,77 @@ residual risk, security caveat, open question and rule ID before the legacy docs
 - status: resolved
 - destination (proposed): servers (shared library)
 
-### A-75: Account-0 admission bucket and dead-client fid leaks
+### A-150: Account-0 admission bucket and dead-client fid leaks
 - type: security-caveat
 - source: QUESTIONS.md#53
 - statement: Account 0 ("none") let every system-class caller share one admission bucket enabling lockout, and nothing released a dead client's fids, letting a crashed/hostile agent exhaust quota; recommendation admits account 0 per badge and adds a kernel notice on last-handle-closed per badge.
 - status: resolved
 - destination (proposed): kernel
 
-### A-79: System-class (steward) reader can't satisfy check for declassification
+### A-151: System-class (steward) reader can't satisfy check for declassification
 - type: decision
 - source: QUESTIONS.md#54
 - statement: `check` compares only label sets, so the unlabelled steward couldn't read a labelled item to snapshot/stat it for declassification; recommendation drives declassification reads through the label owner's own session (later clarified as a short-lived reader budget carrying exactly the item's labels).
 - status: resolved
 - destination (proposed): servers/steward
 
-### A-76: Does a panic count toward crash blame
+### A-152: Does a panic count toward crash blame
 - type: decision
 - source: QUESTIONS.md#55
 - statement: A Rust panic exits via `process_exit` with cause `exited`, not `faulted`, so the most common hostile-input crash might never be blamed; recommendation blames an exit while open calls are held like a fault.
 - status: resolved (changed: blamed per A-134/A-179's most-recent-open-call rule)
 - destination (proposed): kernel
 
-### A-77: Handle kinds can't be checked as originally specified
+### A-153: Handle kinds can't be checked as originally specified
 - type: decision
 - source: QUESTIONS.md#56
 - statement: No syscall reported a handle's kind so a generated helper had nothing to check; options were receive-record kinds, a query call, or check-by-use; recommendation initially chose receive-record kinds, later revised to check-by-use (`WrongObject` on first use, table kind is documentation).
 - status: resolved (revised)
 - destination (proposed): kernel
 
-### A-80: Which open call a fault blames
+### A-154: Which open call a fault blames
 - type: open-question
 - source: QUESTIONS.md#57
 - statement: Ambiguity between "most recently taken call still open" vs "most recently taken call even if replied to"; left open, then replaced by item 82's `serve`-tracked current call.
 - status: superseded by A-179
 - destination (proposed): kernel
 
-### A-81: Panic in a thread with no open calls while sibling threads hold calls
+### A-155: Panic in a thread with no open calls while sibling threads hold calls
 - type: open-question
 - source: QUESTIONS.md#58
 - statement: Blame is per-thread, so a fault in a thread with no open calls would blame nobody; recommendation proposed falling back to the process's most recent open call, later changed to "blame nobody, no fallback" and kept by item 82.
 - status: superseded by A-179
 - destination (proposed): kernel
 
-### A-82: Timing of Dead for a revoked call
+### A-156: Timing of Dead for a revoked call
 - type: decision
 - source: QUESTIONS.md#59
 - statement: Confirms the caller gets `Dead` immediately on revocation, not when the server replies, matching answer 49.
 - status: resolved
 - destination (proposed): kernel
 
-### A-83: Handles-vs-pages OutOfMemory/Refused split
+### A-157: Handles-vs-pages OutOfMemory/Refused split
 - type: decision
 - source: QUESTIONS.md#60
 - statement: Editor's reading of answer 44: pages/page-tables get `Refused` (R4), handles get `OutOfMemory` with message queued; later reversed so every delivery failure is `Refused` (item 72).
 - status: superseded by A-169
 - destination (proposed): kernel
 
-### A-84: blamed_labels field needed for keyed blame
+### A-158: blamed_labels field needed for keyed blame
 - type: decision
 - source: QUESTIONS.md#61
 - statement: Keying blame by label set (answer 48) needs a `blamed_labels` field in the exit notice, not originally stated.
 - status: resolved
 - destination (proposed): kernel
 
-### A-85: Badge notice mechanism details
+### A-159: Badge notice mechanism details
 - type: decision
 - source: QUESTIONS.md#62
 - statement: Badge slot costs 1 page/128 slots (pending kernel confirmation), re-mint withdraws a pending notice, unreceived-message handles count as held, label rule uses last holder's budget, notices precede messages; later made moot when item 69 removed badge notices from the kernel.
-- status: superseded by A-266 (S1-style simplification, badge notices removed)
+- status: superseded by A-166 (S1-style simplification, badge notices removed)
 - destination (proposed): kernel
 
-### A-89: Does the kernel enforce MAX_LEASE
+### A-160: Does the kernel enforce MAX_LEASE
 - type: decision
 - source: QUESTIONS.md#63
 - statement: Only the steward enforces MAX_LEASE; the kernel knows deadlines, not leases (constant later moved to CAPABILITIES.md, see A-175).
@@ -1136,7 +1136,7 @@ residual risk, security caveat, open question and rule ID before the legacy docs
 - status: resolved
 - destination (proposed): kernel
 
-### A-86: Where the loader stub finds the ELF image
+### A-162: Where the loader stub finds the ELF image
 - type: open-question
 - source: QUESTIONS.md#65
 - statement: PACKAGES.md left unspecified where the loader stub finds the ELF image; recommendation makes it a named startup-block entry pointing at parent-mapped pages.
@@ -1164,35 +1164,35 @@ residual risk, security caveat, open question and rule ID before the legacy docs
 - status: resolved
 - destination (proposed): kernel
 
-### A-10: Remove badge notices from the kernel (simplification)
+### A-166: Remove badge notices from the kernel (simplification)
 - type: decision
 - source: QUESTIONS.md#69
 - statement: Proposal to delete the badge slot, badge notice and old I15, replacing them with a server-issued random connection id and `disconnect(id)`; stated residual: a launcher dying without disconnecting leaks its children's connections until its own connection is freed, charged against its own (account, label set); saves an estimated 150-250 lines of error-prone kernel code.
 - status: accepted
 - destination (proposed): kernel
 
-### A-91: Lend charged to both sides while call is open
+### A-167: Lend charged to both sides while call is open
 - type: decision
 - source: QUESTIONS.md#70
 - statement: Taking a call charges lent pages (and their page tables) to the receiver as well as the caller, removing the "over page limit" budget state; cost: a server's budget must cover open lends up front (~4 MiB for 64 open 9P calls).
 - status: accepted
 - destination (proposed): kernel
 
-### A-93: Define "abandoned call" once
+### A-168: Define "abandoned call" once
 - type: decision
 - source: QUESTIONS.md#71
 - statement: Editorial: define "abandoned call" once in R3 instead of restating it in R3/R4b/R10.
 - status: resolved
 - destination (proposed): kernel
 
-### A-6: One delivery-failure outcome — Refused to sender
+### A-169: One delivery-failure outcome — Refused to sender
 - type: decision
 - source: QUESTIONS.md#72
 - statement: A message is delivered only if the receiver's budget can pay for everything it brings; otherwise sender gets `Refused` and the kernel moves on — `receive` never fails for want of pages. Reverses answer 44's "stays queued" outcome.
 - status: accepted
 - destination (proposed): kernel
 
-### A-8: Class is inherited; budget_create takes no class argument
+### A-170: Class is inherited; budget_create takes no class argument
 - type: decision
 - source: QUESTIONS.md#73
 - statement: A class check on `budget_create` alone guards only one of three doors (process_create/budget_destroy also need it); what actually protects system budgets is never handing them to users (item 79).
@@ -1206,21 +1206,21 @@ residual risk, security caveat, open question and rule ID before the legacy docs
 - status: accepted
 - destination (proposed): kernel
 
-### A-12: Startup block becomes one typed wire message
+### A-172: Startup block becomes one typed wire message
 - type: decision
 - source: QUESTIONS.md#75
 - statement: The startup block becomes one WIRE.md message (`namespace`, `handles`, `argv` as `bytes` fields) decoded by `redoubt-wire`, replacing a second framing format with CRCs that protect nothing since the parent writes both sides; saves 200-300 lines in `redoubt-rt`.
 - status: accepted
 - destination (proposed): kernel
 
-### A-14: A budget's own page always charged to its parent
+### A-173: A budget's own page always charged to its parent
 - type: decision
 - source: QUESTIONS.md#76
 - statement: A v4 clause of R6 removes the revocation-scope special case in accounting.
 - status: accepted
 - destination (proposed): kernel
 
-### A-18: random returns one u64
+### A-174: random returns one u64
 - type: decision
 - source: QUESTIONS.md#77
 - statement: Drops `MAX_RANDOM`, a buffer, and a range check; a 32-byte seed now takes four calls.
