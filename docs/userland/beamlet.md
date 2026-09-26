@@ -28,10 +28,10 @@ $ cargo run -p beamlet -- --exec --schedulers 4 ...                      # grant
 ```
 
 Without `--root`, `file` calls fail with `enotsup`; without `--exec`, opening a port to a program
-fails with `eacces`. The VM's environment starts empty (`--env NAME=VALUE` adds to it), so the
-host's is not visible. Tests: `cargo test` in `userland/otp` runs the unit and hostile-input
-tests; the differential suites (`tools/difftest`, `tools/elixir-tests`) need the pinned OTP and
-Elixir toolchains installed.
+fails with `eacces`. The VM's environment starts with only `HOME` (`--env NAME[=VALUE]` adds to it),
+so the rest of the host's is not visible. Tests: `cargo test` in `userland/otp` runs the unit and
+hostile-input tests; the differential suites (`tools/difftest`, `tools/elixir-tests`) need the
+pinned OTP and Elixir toolchains installed.
 
 On Redoubt there is no command to run: the steward starts a session's VM when a person logs in
 ([sessions](sessions.md)), and a launcher starts an agent's ([agents](agents.md)). What the code
@@ -41,7 +41,7 @@ in the VM sees is ordinary Elixir: `File.read!/1`, `IO.puts/1`, `:gen_tcp.connec
 
 ### Loading hostile code
 
-Status: built · partly tested: runs on the host only · tested: host:beamlet-vm::fixtures_load, host:beamlet-vm::every_truncation_is_rejected, host:beamlet-vm::wrong_formats_are_named, host:beamlet-vm::mutants_never_panic, host:beamlet-vm::empty_frames_count_against_the_stack, host:beamlet-vm::rejects_hostile_input, host:beamlet-vm::safe_mode_creates_no_atoms, host:beamlet-vm::nesting_is_bounded, host:beamlet-vm::deep_terms_are_handled_iteratively
+Status: built · partly tested: runs on the host only; the refusal of other OTP versions' opcodes and atom tables is not attacked by a named test · tested: host:beamlet-vm::fixtures_load, host:beamlet-vm::every_truncation_is_rejected, host:beamlet-vm::wrong_formats_are_named, host:beamlet-vm::mutants_never_panic, host:beamlet-vm::empty_frames_count_against_the_stack, host:beamlet-vm::rejects_hostile_input, host:beamlet-vm::safe_mode_creates_no_atoms, host:beamlet-vm::nesting_is_bounded, host:beamlet-vm::deep_terms_are_handled_iteratively
 
 The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re` and
 `beamlet-crypto` ([`userland/otp/vm/src/lib.rs`](../../userland/otp/vm/src/lib.rs)).
@@ -97,25 +97,30 @@ Everything the VM gets from outside comes through the `Platform` trait
 | `files` | a file system, as `prim_file` sees it | none: `file` calls fail with `enotsup` |
 | `programs` | starting programs behind ports | none: `open_port` fails with `eacces` |
 
-- **Code enters only through `load_module`.** That is where an embedder enforces signing or an
-  allowlist. Changing the code path grants nothing, since the same code can load any bytes with
-  `code:load_binary/3`.
+- **`load_module` is a lookup, not a gate.** It is where the VM looks a module name up on its code
+  path. Code in the VM can also load any bytes it holds with `code:load_binary/3`
+  ([`userland/otp/vm/src/bif/info.rs`](../../userland/otp/vm/src/bif/info.rs)), through the same
+  loader checks. So what confines loaded code is not how it arrived but what the VM holds: every
+  module, however loaded, reaches only what the `Platform` grants. Loading one's own bytecode acts
+  within one's own authority.
 - **Files are the platform's.** OTP's own `file`, `file_server` and `file_io_server` run
-  unchanged over a `Files` trait whose operations are 9P's (walk and open, read, write, stat,
-  clunk, create, remove, wstat). Names resolve inside the VM, relative to its own working
+  unchanged over a `Files` trait, path-based and POSIX-shaped: `open`, `read`, `pread`, `pwrite`,
+  `seek`, `info`, `list_dir`, `rename`, `delete` and the rest; a 9P client implementing it is
+  Redoubt's, below. Names resolve inside the VM, relative to its own working
   directory, with `.` and `..` resolved lexically, so no name climbs above `/`. What `/` is, is the
   platform's choice, and the platform must still refuse what the VM cannot see, such as a
   symbolic link out of a mount. An open file belongs to the Erlang process that opened it and
   closes when it exits; a VM has at most 1024 open files.
 - **Programs are a large grant.** A program is outside the VM altogether, so `programs` defaults
-  to none. The host CLI grants it only with `--exec`.
+  to none. The host CLI grants it only with `--exec`, and the programs it then starts are host
+  processes with the user's own rights, not sandboxed.
 - **The host embedding** exposes one directory with `--root` through `cap-std`, and more with
   `--mount`, read-only if asked; a symbolic link resolves within the VM's own name space, and a
   link that would leave a mount is refused.
 
 ### What runs on it
 
-Status: built · partly tested: runs on the host only; the differential suites against the real BEAM need OTP 28 and Elixir installed and are not run by the bench · tested: host:beamlet-vm::decodes_otp_output, host:beamlet-vm::encodes_like_otp, host:beamlet-vm::printing_matches_otp, host:beamlet-vm::matches_otp, host:beamlet-vm::block_hash_handles_every_tail_length, host:beamlet-re::pcre_spellings, host:beamlet-re::braces_are_quantifiers_only_when_counted, host:beamlet-crypto::certificates_round_trip, host:beamlet-crypto::nesting_is_bounded, host:beamlet-crypto::mutants_never_panic
+Status: built · partly tested: runs on the host only; the differential suites against the real BEAM need OTP 28 and Elixir installed and are not run by the bench, and linear-time matching and crypto's refusal without randomness are not attacked by a named test · tested: host:beamlet-vm::decodes_otp_output, host:beamlet-vm::encodes_like_otp, host:beamlet-vm::printing_matches_otp, host:beamlet-vm::matches_otp, host:beamlet-vm::block_hash_handles_every_tail_length, host:beamlet-re::pcre_spellings, host:beamlet-re::braces_are_quantifiers_only_when_counted, host:beamlet-crypto::certificates_round_trip, host:beamlet-crypto::nesting_is_bounded, host:beamlet-crypto::mutants_never_panic
 
 Where beamlet implements something, it behaves as the real BEAM does, and the differential suite
 checks it: each test runs on BEAM and on beamlet and the printed results must be identical
@@ -150,7 +155,7 @@ client over the connections in the VM's namespace, and the kernel's calls for th
 | `console_write`, `console_read` | writes and reads on the `/dev/cons` connection; a read with nothing to read is parked by the server, so input arrives as a completion and `Eof` means the connection ended ([consoled](../servers/consoled.md)) |
 | `console_size` | a fresh `consol` `size` call on every query, never cached; a server that does not serve it refuses the call and the answer is `None` |
 | `random` | the kernel's `random` call |
-| `load_module`, `load_app` | reads from the boot bundle (`/boot`, served by `bootfsd`) and, from M5 (persist, install, share), the principal's profile ([packages](packages.md)); never from the session's writable namespace |
+| `load_module`, `load_app` | looks names up in the boot bundle (`/boot`, served by `bootfsd`) and, from M5 (persist, install, share), the principal's profile ([packages](packages.md)), never in the session's writable namespace; this decides which module a name finds, not what code may run |
 | `files` | the 9P client: walk, open, read, write, stat, clunk on the namespace's connections ([files](files.md)) |
 | `programs` | launching native programs in carved budgets ([native programs](native.md)) |
 
@@ -184,8 +189,9 @@ every server binding is pure Elixir over them:
 
 Handles are resource terms: unforgeable, collected, and never serialisable. A copy of a handle
 inside the VM is the same connection (one badge, one client), so passing one to another Erlang
-process is sharing it, and passing one to another VM is not possible. Delegation is always
-`new_connection`, a typed call on a connection, not a native ([sessions](sessions.md)).
+process is sharing it. It cannot reach another VM in a message: the term format has no encoding for
+a handle, and a handle crosses between processes only in a kernel call that names it. Delegation is
+always `new_connection`, a typed call on a connection, not a native ([sessions](sessions.md)).
 
 **Open:** two layout choices.
 - Launching: the three process calls as natives, with the startup block written by Rust (the

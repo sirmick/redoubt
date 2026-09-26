@@ -43,8 +43,10 @@ iex(3)> File.read("/home/bob/notes.txt")
 authority, only a name:
 
 ```elixir
-iex(4)> bind("/work", ns_lookup("/home/alice/src"))
+iex(4)> {home, _rest} = ns_lookup("/home/alice")
+iex(5)> bind("/h", home)
 :ok
+iex(6)> File.ls!("/h/src")                  # the same files as /home/alice/src
 ```
 
 Leaving the session (`exit`, or closing the SSH connection) ends it: the steward destroys the

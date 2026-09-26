@@ -16,17 +16,18 @@ do, how the agent harness gives it tools, and the game that tests all of it cont
 
 ## How to use it
 
-Alice starts an agent on a task, with a lease scoped to it (the grant syntax is a sketch):
+Alice starts an agent on a task, with a lease scoped to it:
 
 ```elixir
 {:ok, agent} =
   Redoubt.Agent.start(
-    pages: 65_536, processes: 4, weight: 20, time: :timer.hours(2),
+    lease: [time: :timer.hours(2), pages: 65_536, processes: 4, weight: 20],
     labels: [],
-    tools: [
-      {:files, "/project", ns_lookup("/home/alice/project"), :read},   # minted fresh, agent's badge
-      {:files, "/out", ns_lookup("/home/alice/project/out"), :write},
-      {:model, gateway}                                                 # a gatewayd grant, not a socket
+    grants: [
+      read: "~/project",
+      write: "~/project/out",
+      gateway: "model",
+      git: {"origin", fetch: true, push: ["refs/heads/agent/*"]}
     ]
   )
 
@@ -74,9 +75,11 @@ sooner. A lease is task-scoped: "read `~/project`, write `~/project/out`, connec
   ([budgets](../kernel/budgets.md#deadlines)).
 - **Ending a lease is always accepted from the sponsor**, ahead of admission, so an agent that
   floods its sponsor's share of a server cannot stop the sponsor from ending it.
-- **Three crashes blamed on an agent** end every session and lease of its sponsor's with that
-  label set ([crash blame](../servers/README.md)). The sponsor answers for its agents, and a crash
-  loop is stopped at the sponsor.
+- **Three crashes blamed on one (account, label set) within ten minutes** destroy every budget of
+  that (account, label set), sessions and leases alike, and the steward refuses new sessions for it
+  until the window passes: the steward's blame-by-label-set rule
+  ([crash blame](../servers/steward.md#crash-blame)). An agent shares its sponsor's account, so the
+  sponsor answers for its agents, and a crash loop is stopped at the sponsor.
 - **When a lease ends**, the launcher disconnects the agent's connections and releases what typed
   servers granted it; everything is recorded in the audit log from M4 (self-hosted development).
 
@@ -84,7 +87,7 @@ sooner. A lease is task-scoped: "read `~/project`, write `~/project/out`, connec
 
 ### A lease's end is the kernel's
 
-Status: built · tested: bench:budget-deadline, bench:sched-timer-flood, mutation:BudgetDeadlineIgnored, mutation:ExpireBudgetsFirst
+Status: built · partly tested: a process that enters the kernel in a tight loop to put a deadline off is not attacked by a case · tested: bench:budget-deadline, mutation:BudgetDeadlineIgnored
 
 The deadline under a lease is a kernel mechanism, and it is built
 ([budgets](../kernel/budgets.md#deadlines)). When it passes, the kernel destroys the budget exactly
@@ -97,13 +100,13 @@ never fires: a sub-agent's lease inside an agent's never outlives it.
 
 ### An agent cannot crowd out its sponsor
 
-Status: built · partly tested: the serving library's admission holds on the host; the steward and servers that apply it to agents are planned for M1 (separation and containment) · tested: host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end, host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share
+Status: built · partly tested: runs on the host, in the serving library · tested: host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end, host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share
 
 An agent shares its sponsor's account, so its calls count against its sponsor's admission limits
-for that label set. Inside them, every badge has a fair share, so an agent that floods a server
-through its own connection leaves its sponsor a share of the same bucket; and a server that parks
-calls, as the steward does, answers a request to end a lease at once, ahead of admission, whatever
-the bucket holds ([`libs/rt/src/server/admit.rs`](../../libs/rt/src/server/admit.rs),
+for that label set. Inside them, the serving library's admission gives every badge a fair share,
+so an agent that floods a server through its own connection leaves its sponsor a share of the same
+bucket. The host tests put an agent and its sponsor in one bucket and flood it from the agent's
+side ([`libs/rt/src/server/admit.rs`](../../libs/rt/src/server/admit.rs),
 [the serving library](../servers/serving.md)).
 
 ### Delegation only narrows
@@ -196,7 +199,7 @@ there, through the agent's own `gatewayd` connection.
 
 | Function | What it does |
 | --- | --- |
-| `Agent.start(opts)` | ask the steward for a lease: `pages`, `processes`, `weight`, `time`, `labels`, and `tools`, each a narrowed grant |
+| `Agent.start(opts)` | ask the steward for a lease: `lease:` (time, pages, processes, weight), `labels:`, and `grants:` |
 | `Agent.prompt(agent, text)` | hand the agent a task; `{:error, :lease_expired}` once the lease is gone |
 | `Agent.status(agent)` | the lease's usage, weight and remaining time, from the steward |
 | `Agent.kill(agent)` | ask the steward to end the lease; the agent and its sub-agents end |
@@ -207,13 +210,26 @@ that would leave a process's budget with no free weight is refused:
 would silently eat lease time.
 
 **The steward makes the lease.** The harness asks; the steward places the lease under the
-sponsor's budget for that label set, checks that every tool is the same as or narrower than what
+sponsor's budget for that label set, checks that every grant is the same as or narrower than what
 the launcher holds, refuses a term over `MAX_LEASE` rather than clamping it, and records the
 grant with the principal chain ([the steward](../servers/steward.md)).
-- **Tools are the agent's own connections.** The steward mints each one fresh, with the agent's
-  own badge, so every request through it is the agent's and never its sponsor's. A tool is a file
-  connection (read-only or read-write, rooted where the launcher says), a `gatewayd` capability
-  for the provider the launcher's own gateway grant allows, or a sub-budget to launch programs in.
+- **Grants are closed, typed terms**, the same terms the steward's lease request carries.
+  `labels:` is its own option, because adding a label needs an approval. The kinds are:
+  - `read: PATH` and `write: PATH`, each a path in the launcher's namespace; `write` does not imply
+    `read`, so name both when both are meant;
+  - `gateway: NAME`, one of the launcher's own `gatewayd` grants by name, or `{NAME, hosts: [...]}`
+    to narrow it;
+  - `git: {REMOTE, fetch: true, push: [REF_PATTERN, ...], force: false}`
+    ([development](development.md#git-through-a-gateway));
+  - `launch: [pages:, processes:, weight:]`, a sub-budget the agent may start processes in.
+
+  Nothing is free-form: there is no "all" and no wildcard beyond `git`'s ref patterns. An unknown
+  kind, a path that does not resolve, or a term broader than the launcher holds is refused whole by
+  the steward, before any budget exists.
+- **Each grant becomes the agent's own connection.** The steward mints each one fresh, with the
+  agent's own badge, so every request through it is the agent's and never its sponsor's: a file
+  connection rooted where the grant says, a `gatewayd` or `git` capability no wider than the
+  launcher's, or a sub-budget to launch programs in.
   What the agent holds is the whole of what it can do beyond its own lease; there is no permission
   check to get wrong.
 - **No approval while everything narrows.** A label the launcher lacks (an agent that must read a
@@ -233,7 +249,7 @@ What the harness cannot be made to do:
 - **Hand the agent the sponsor's things.** The agent never gets the sponsor's `/dev/cons`, keys
   or any budget handle but its own.
 
-**Open:** the exact syntax of a tool grant, which `run --isolated` in [the shell](shell.md) shares.
+**Open:** none.
 
 ### The escape room
 
