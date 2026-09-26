@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Hart timer backend for platforms with SBI firmware, using the SBI TIME extension. The kernel
-//! owns the timer (RESOURCES.md, The timer); `crate::time` decides what it is armed for.
+//! owns the timer (kernel/timer.md, "The hart timer"); `crate::time` decides what it is armed for.
 //!
 //! SBI TIME rather than Sstc: it works under every SBI firmware on both widths, with no firmware
 //! configuration (Sstc needs `menvcfg.STCE`), and one `ecall` per arming is nothing at a 10 ms
@@ -46,7 +46,7 @@ pub fn timebase() -> u64 { TIMEBASE.load(Ordering::Relaxed) as u64 }
 /// Ticks since boot.
 pub fn now_ticks() -> u64 { riscv::register::time::read64().saturating_sub(BOOT_TICKS.with(|t| *t)) }
 
-/// Monotonic microseconds since boot (KERNEL-SPEC.md, `time_now`), rounded down.
+/// Monotonic microseconds since boot (kernel/timer.md, `time_now`), rounded down.
 pub fn now_us() -> u64 { ticks_to_us(now_ticks()) }
 
 /// Ticks since boot as microseconds, rounded down.

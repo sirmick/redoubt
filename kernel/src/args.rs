@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-//! The kernel argument block, produced by the loader (see `docs/BOOT.md`).
+//! The kernel argument block, produced by the loader (see `docs/kernel/boot.md`).
 //! `init` records its address; everything else reads through it. The reads are `unsafe`
 //! because they dereference that loader-provided pointer, sound as long as `init` was
 //! given the real argument block, which is the loader's contract.

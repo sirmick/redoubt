@@ -20,18 +20,18 @@ redoubt-sys = { path = "../libs/sys" }
 
 [features]
 smp = [] # multi-hart: KernelCell becomes a spinlock (the big kernel lock)
-# Test builds only (WP-K5): record the stride queue's raw events in a bounded ring and print it at
+# Test builds only: record the stride queue's raw events in a bounded ring and print it at
 # `system_reset`, for the bench's independent rank oracle (tools/testbench, sched_oracle).
 sched-trace = []
 # Debug only, never in a bench build but one recorded negative run: rank wakers behind queued
 # budgets of equal pass (the model's R12TieQueuedFirst), to show the oracle catches it.
 sched-inject-tie-fault = ["sched-trace"]
-# Test builds only (WP-K5b, OD7): each DMA device's first reset reports "not confirmed" after the
+# Test builds only: each DMA device's first reset reports "not confirmed" after the
 # real write, so the quarantine path runs. It only ever adds quarantine.
 dma-reset-deaf = []
 
 # Capabilities. Boards select these; code keys on them rather than on the CPU's XLEN.
-# See "Hardware abstraction" in planning/redoubt/PLAN.md.
+# See "Hardware abstraction" in docs/kernel/boot.md.
 sbi = ["dep:sbi-rt", "rand_chacha"] # runs in S-mode under the vendored RustSBI firmware
 plic = ["dep:plic"]                 # standard RISC-V PLIC interrupt controller
 
