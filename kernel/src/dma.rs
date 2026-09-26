@@ -133,7 +133,7 @@ impl MemoryManager {
 
     /// The slot of DMA device `base`.
     pub fn dma_slot(&self, base: u64) -> Option<usize> {
-        self.dma.slots.iter().position(|s| s.is_some_and(|s| s.base == base))
+        self.dma.slots.iter().position(|s| s.as_ref().is_some_and(|s| s.base == base))
     }
 
     fn slot_mut(&mut self, slot: usize) -> &mut Slot {
@@ -143,7 +143,7 @@ impl MemoryManager {
     /// Whether DMA device `base` failed a reset (OD6). Its object is gone by the time any process
     /// runs again, so a live device object never names one.
     pub fn dma_quarantined(&self, base: u64) -> bool {
-        self.dma_slot(base).is_some_and(|s| self.dma.slots[s].is_some_and(|s| s.quarantined))
+        self.dma_slot(base).is_some_and(|s| self.dma.slots[s].as_ref().is_some_and(|s| s.quarantined))
     }
 
     /// `map_device` of DMA device `slot`: it joins `pid`'s reset set (OD3).
@@ -203,7 +203,7 @@ impl MemoryManager {
         let held = |r: &Option<Run>| r.is_some_and(|r| r.state == State::Live && r.holder == Some(pid));
         let mut s = self.account(pid).map_or(0, |a| a.dma_mapped);
         for (i, slot) in self.dma.slots.iter().enumerate() {
-            if slot.is_some_and(|slot| slot.runs.iter().any(held)) {
+            if slot.as_ref().is_some_and(|slot| slot.runs.iter().any(held)) {
                 s |= 1 << i;
             }
         }
@@ -250,7 +250,7 @@ impl MemoryManager {
     /// Reset slot `slot`'s device and wait for it to confirm, within OD4's bound, without
     /// preemption. `false`, touching nothing, for a device that is quarantined or not virtio.
     fn dma_reset(&mut self, slot: usize) -> bool {
-        let s = self.dma.slots[slot].expect("a registered slot");
+        let s = self.dma.slots[slot].as_ref().expect("a registered slot");
         if s.quarantined || !s.virtio {
             return false;
         }
@@ -284,9 +284,11 @@ impl MemoryManager {
         let parent = parent.map(|p| BudgetRef { frame: p, id: self.budget_id(p) });
         for i in 0..MAX_DMA_DEVICES {
             for index in 0..MAX_RUNS {
-                let Some(run) = self.dma.slots[i].and_then(|s| s.runs[index]) else { continue };
-                let dying = run.charged.is_some_and(|b| self.is_live_budget(b) && self.budget(b.frame).dying);
-                if run.state != State::Quarantined || !dying {
+                let Some(run) = self.dma.slots[i].as_ref().and_then(|s| s.runs[index]) else { continue };
+                if run.state != State::Quarantined {
+                    continue;
+                }
+                if !run.charged.is_some_and(|b| self.is_live_budget(b) && self.budget(b.frame).dying) {
                     continue;
                 }
                 if let Some(p) = parent {
