@@ -1,4 +1,4 @@
-# WP-K6 handoff (implementer 3 → fresh implementer)
+# WP-K6 handoff (implementer 4 → fresh implementer)
 
 Plan: `/home/mick/.claude/plans/wash-inbox-1-message-sorted-rocket.md` (approved, final; do not re-plan).
 Branch `wp-k6`, worktree `.worktrees/k6`, base `redoubt` d6715b8f0 (K5b merged). Rebase onto
@@ -21,7 +21,14 @@ Branch `wp-k6`, worktree `.worktrees/k6`, base `redoubt` d6715b8f0 (K5b merged).
 | 7d switch, syscall.rs | d00a3c501 | done; full bench 184 PASS; round 4 (red) reviewing |
 | 8a constants | ac0f4e995 | done; 35 affected cases PASS |
 | 8b Error fold | 7929a361e | done (squashed, implementer 4); core unsafe 20 |
-| 8c-10 | - | not started |
+| 8c layout | f51d0f723 | done; 75 PASS |
+| 9a OD10 TIDs | 6bd0e916d | done; 113 PASS (sched-latency rv64 only FAIL) |
+| 9b renames | e948d0199 | done; red r4/r5 P3-1 folded |
+| 9c cruft sweep | 2e19fc5e4 | done; 115 PASS; core unsafe 19 |
+| 9d no-cruft gate | dc89c3bf3 | done; plants verified |
+| 10a testbench.md | 5a5459247 | done |
+| 10b spec/boot/layout/grants docs | 8d3512ce6 | done |
+| 10c | - | remaining (below) |
 
 Kernel unsafe after 7d: 46 (backends 13, arch 12, core 21); tests/unsafe-budget.toml lowered to
 match at 7d. 8a/8b add or remove none.
@@ -73,26 +80,27 @@ match at 7d. 8a/8b add or remove none.
     (InvalidArgument). Every one was already `|_|`, so no user-visible value changes.
 - Then checkpoint.
 
-## Later
+## Remaining (10c, then the end)
 
-- 8c: libs/abi -> libs/layout (section 4a): the kernel-half map (PHYSMAP_*, physmap_virt,
-  KERNEL_AREA, KERNEL_STACK_*, TRAP_STACK_* (was EXCEPTION_STACK_*), KERNEL_PLIC_BASE,
-  PROCESS_AREA absorbing THREAD_CONTEXT_AREA, THREAD_CONTEXT_PAGES, KERNEL_DMA_REGS/PAGES) and
-  Pid/KERNEL_PID (the loader's own Pid = u8 and KERNEL_PID in alloc.rs go). The kernel's only abi
-  uses left are `redoubt_abi::PID` and `redoubt_abi::arch::*` layout items. `#![forbid(unsafe_code)]`;
-  unsafe-budget: the abi budget becomes libs/layout at 0; kernel/loader/tests Cargo.toml.
-  flatipc is already gone.
-- 9: OD10 TIDs + `thread-limit` (EXCEPTION_TID and IRQ_TID are still reserved in
-  find_free_thread/set_tid), renames, the cruft sweep, `no-cruft`. Also: loader paging.rs's
-  `pub use paging::PteFlags as Pte` alias; services.rs's commented-out debug lines; `ProcessInner.pid`
-  (written, maybe never read). Known cruft for it: the
-  unused `core::fmt::Write` import in tests/programs/src/bin/sleeper.rs (a warning on every
-  build); the kernel's remaining `allow(dead_code)`s (services.rs, io.rs, args.rs, smp.rs,
-  arch process.rs, intc_plic.rs `mask`, debug/shell.rs's `#![allow(dead_code)]`, arch mem.rs's
-  two per-width ones, which want a width `cfg` instead); unused features (`stats_alloc`/
-  `report-memory`, `debug-proc`, `hwsim`, `wrap-print`?, `dump-kernel-pages`?), checked against
-  their `cfg(feature)` users.
-- 10: docs, including docs/testbench.md:180-183 (still describes attack-checker).
+- VALIDATION.md: the note the plan's section 6 asks for (K6 removes kernel-only exceptions the model
+  never had: the callback hold and borrowed-quantum switches; no rule or mutation changes).
+- BUILD-PLAN.md WP-K6 (about line 200): record acceptance (line counts, unsafe). SWARM.md's K6
+  row (about line 103) is the orchestrator's; give it the line counts: `wc -l` over kernel/src
+  and libs/layout at the tip, against d6715b8f0. There is no docs/ASTRA.md (only
+  docs/archive), so ASTRA needs nothing.
+- Then delete this file in its own commit, and run the full bench on the tip
+  (`cargo testbench`, both RUSTSBI_PROTOTYPER vars). Known failures: bench-ssh-loopback*,
+  sched-latency [rv64]; uart-irq rv32 intermittent. Report.
+
+## Notes from implementer 4
+
+- The loader still writes `PNam`; nothing in the kernel reads it since 9c (process_name was
+  the debug shell's). BOOT.md still documents it. Left alone (a loader/BOOT change); raise it
+  with the orchestrator if it should go.
+- 9a found that indexing Account.ipc by `tid - 1` cost about 1 ms of virtual time per process
+  exit (bisected). It is TID-indexed with slot 0 unused. Don't "tidy" that back.
+- no-cruft fails on a stale `[[allow]]`: removing the last Grnt mention in kernel/src/main.rs
+  means removing its allow entry too.
 
 ## Owed from round 1
 
