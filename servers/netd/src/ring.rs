@@ -14,6 +14,8 @@
 //! own counter's slot, each entry's id and length, and checks each ([`crate::rxq`],
 //! [`crate::txq`]).
 
+use redoubt_rt::abi::PAGE_SIZE;
+
 use crate::transport::Transport;
 use crate::virtio::{DeviceError, reg};
 
@@ -42,18 +44,17 @@ pub const USED_IDX_OFF: usize = USED_OFF + 2;
 pub const USED_RING_OFF: usize = USED_OFF + 4;
 const USED_BYTES: usize = 6 + USED_ELEM_BYTES * QUEUE_SIZE as usize;
 
-const PAGE: usize = 4096;
 
 /// The slots start on their own page, so a device writing past a slot lands in slots `netd`
 /// already treats as hostile rather than on the rings.
-pub const SLOTS_OFF: usize = PAGE;
+pub const SLOTS_OFF: usize = PAGE_SIZE;
 /// One slot: the 12-byte header and a frame of up to 1514 bytes, rounded up.
 pub const SLOT_LEN: usize = 2048;
 
 /// Pages in one region.
-pub const REGION_PAGES: usize = (SLOTS_OFF + SLOT_LEN * QUEUE_SIZE as usize).div_ceil(PAGE);
+pub const REGION_PAGES: usize = (SLOTS_OFF + SLOT_LEN * QUEUE_SIZE as usize).div_ceil(PAGE_SIZE);
 /// One region's length in bytes.
-pub const REGION_LEN: usize = REGION_PAGES * PAGE;
+pub const REGION_LEN: usize = REGION_PAGES * PAGE_SIZE;
 
 /// Everything the layout claims, checked where a mistake cannot ship.
 pub const LAYOUT_FITS: () = {

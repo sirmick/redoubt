@@ -8,7 +8,3 @@ allow_panic = true          # the loader is supposed to panic here
 # program can print it. Anchored, so a relayed `[pid N]` line could not match either.
 expect = ['^loader PANIC', 'ELF entry point 0xf+d00000 is outside']
 forbid = ['KMAIN', 'entering kernel']
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]

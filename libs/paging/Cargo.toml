@@ -7,3 +7,4 @@ description = "Typed RISC-V page tables (Sv32 + Sv39): the one place page-table 
 
 [dependencies]
 bitflags = "2"
+redoubt-sys = { path = "../sys" }

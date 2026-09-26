@@ -10,7 +10,7 @@
 //! # Accounting at the trap boundary
 //! There are exactly two ways into user mode (`arch::syscall::resume` and the syscall return) and
 //! one out (the trap handler). Runtime is counted at those, so no path can run user code
-//! unaccounted, whatever ends it (a block, an exit, a fault, a kill, a callback):
+//! unaccounted, whatever ends it (a block, an exit, a fault or a kill):
 //! - [`from_user`] (first thing on a trap from user mode) adds the user time since the last return to the
 //!   pending runtime of the budget that ran, `cur`.
 //! - [`begin_billing`] (after the entry's expiry) starts billing kernel time to `cur`: a system call's time
@@ -30,19 +30,28 @@
 //! `kmain` picks ([`pick`]): the queue's lowest rank, then the next thread of that budget after its
 //! round-robin cursor, in (pid, tid) order; the pick starts a slice. The running thread keeps the
 //! CPU until its slice ends, it blocks or exits, or a budget deadline fires; a wake never preempts
-//! (`time.rs` arms the timer for the slice's end). A legacy direct switch (a borrowed quantum)
-//! runs another budget with no pick: [`leave`] deschedules the old one and the slice continues
-//! (INTERIM, until WP-K6).
+//! (`time.rs` arms the timer for the slice's end).
+//!
+//! # `kmain`'s switch
+//! `kmain` runs its pick with [`switch_to`], a private S-mode `ecall` into the kernel's own trap
+//! handler, which saves `kmain`'s context as it saves a thread's and resumes the picked thread
+//! ([`switch`]). It is not a system call: its tag is outside the call table, and a user-mode
+//! `ecall` with it is an unknown number (`InvalidArgument`) like any other.
 
-use redoubt_abi::{PID, TID};
+use core::convert::TryFrom;
+
+use redoubt_layout::{KERNEL_PID, Pid};
+
+use crate::arch::process::TID;
+use redoubt_sys::MAX_THREADS;
 use redoubt_stride::{Budgets, Cpu, State};
 
-use crate::arch::process::{MAX_PROCESS_COUNT, MAX_THREAD};
+use crate::arch::process::MAX_PROCESS_COUNT;
 use crate::budget::BudgetFrame;
 use crate::cell::KernelCell;
 use crate::handle::BudgetRef;
 use crate::mem::MemoryManager;
-use crate::services::SystemServices;
+use crate::ptable::{ArchProcess, ProcessTable};
 
 /// Time slice, in microseconds (KERNEL-SPEC.md, Constants).
 pub const SLICE_US: u64 = 10_000;
@@ -127,7 +136,7 @@ impl Sched {
     }
 
     /// Budgets with a thread waiting for the CPU, each once.
-    fn runnable(ss: &SystemServices, mm: &MemoryManager) -> ([BudgetRef; MAX_PROCESS_COUNT], usize) {
+    fn runnable(ss: &ProcessTable, mm: &MemoryManager) -> ([BudgetRef; MAX_PROCESS_COUNT], usize) {
         let mut out = [BudgetRef { frame: 0, id: 0 }; MAX_PROCESS_COUNT];
         let mut n = 0;
         for p in ss.processes.iter() {
@@ -228,9 +237,9 @@ pub fn now_ticks() -> u64 { ticks() }
 
 /// Leaving the kernel for `pid` (the kernel itself for PID 1): close the billing, deschedule the
 /// budget that ran if another runs now, reconcile, and start counting user time.
-pub fn leave(pid: PID) {
+pub fn leave(pid: Pid) {
     let now = ticks();
-    SystemServices::with(|ss| {
+    ProcessTable::with(|ss| {
         MemoryManager::with_mut(|mm| {
             SCHED.with(|s| {
                 s.close_billing(mm, now);
@@ -260,7 +269,7 @@ pub fn leave(pid: PID) {
 
 /// What `kmain` runs next: the lowest-ranked queued budget's next thread after its cursor. Starts
 /// a slice. `None` when nothing is runnable.
-pub fn pick(ss: &SystemServices, mm: &mut MemoryManager) -> Option<(PID, TID)> {
+pub fn pick(ss: &ProcessTable, mm: &mut MemoryManager) -> Option<(Pid, TID)> {
     let chosen = SCHED.with(|s| {
         let (list, n) = Sched::runnable(ss, mm);
         s.reconcile(mm, &list[..n]);
@@ -279,15 +288,15 @@ pub fn pick(ss: &SystemServices, mm: &mut MemoryManager) -> Option<(PID, TID)> {
 /// The next runnable thread of budget `b` after its cursor, in (pid, tid) order, wrapping; a tid
 /// of 0 leaves the choice to `activate_process_thread` (a process being set up or handling an
 /// exception).
-fn next_thread(ss: &SystemServices, mm: &MemoryManager, b: BudgetRef) -> Option<(PID, TID)> {
+fn next_thread(ss: &ProcessTable, mm: &MemoryManager, b: BudgetRef) -> Option<(Pid, TID)> {
     let cursor = mm.budget(b.frame).cursor.map(|(p, t)| (p, t as usize));
-    let mut first: Option<(PID, TID)> = None;
-    let mut after: Option<(PID, TID)> = None;
+    let mut first: Option<(Pid, TID)> = None;
+    let mut after: Option<(Pid, TID)> = None;
     for p in ss.processes.iter() {
         if p.free() || p.running() || p.pid.get() == 1 || mm.budget_of(p.pid) != Some(b.frame) {
             continue;
         }
-        let tids: [bool; MAX_THREAD + 1] = match p.ready_threads() {
+        let tids: [bool; MAX_THREADS + 1] = match p.ready_threads() {
             Some(mask) => core::array::from_fn(|t| mask & (1 << t) != 0),
             None => core::array::from_fn(|t| t == 0),
         };
@@ -361,12 +370,47 @@ pub fn slice_over() -> bool { crate::time::slice_end() <= crate::time::now_us() 
 /// The running thread is preempted (its slice ended, or a budget deadline fired): it stays ready,
 /// and the CPU goes to `kmain`, which picks again. Its budget is descheduled as the kernel leaves
 /// for `kmain` ([`leave`]).
-pub fn preempt(ss: &mut SystemServices, tid: TID) {
-    crate::syscall::reset_switchto_caller();
-    let kernel = PID::new(1).expect("PID 1");
-    ss.activate_process_thread(tid, kernel, 0, true, crate::services::PostActivateOp::None)
-        .expect("the kernel can always run");
-    crate::syscall::restore_last_thread(ss);
+pub fn preempt(ss: &mut ProcessTable, tid: TID) {
+    ss.activate_process_thread(tid, KERNEL_PID, 0, true).expect("the kernel can always run");
+}
+
+/// `a0` of `kmain`'s switch: outside the call table (redoubt-sys numbers run from `NUMBER_BASE`
+/// + 1), so a user-mode `ecall` with it is refused as an unknown number.
+const SWITCH_TAG: usize = 0x5357_4954;
+/// The switch's answer in `kmain`'s `a0`: the thread ran, and the CPU is back with `kmain`.
+const RAN: u64 = 0;
+/// The switch's answer in `kmain`'s `a0`: the thread cannot be switched to, and nothing ran.
+const NOT_RUNNABLE: u64 = 1;
+
+/// The picked thread cannot run: it died since it was picked.
+pub struct NotRunnable;
+
+/// `kmain` runs `(pid, tid)` until the CPU comes back to it (the thread blocked, exited or was
+/// preempted). The `ecall`'s trap is [`switch`].
+pub fn switch_to(pid: Pid, tid: TID) -> Result<(), NotRunnable> {
+    match crate::arch::syscall::switch_trap(SWITCH_TAG, pid.get() as usize, tid) as u64 {
+        RAN => Ok(()),
+        _ => Err(NotRunnable),
+    }
+}
+
+/// The trap of [`switch_to`] (an `ecall` from S-mode): make `(pid, tid)` current, or leave
+/// `kmain` current with [`NOT_RUNNABLE`]. Only `kmain` switches, and only with [`SWITCH_TAG`];
+/// anything else is a kernel bug. The caller resumes whatever is current.
+pub fn switch(ss: &mut ProcessTable, tag: usize, pid: usize, tid: TID) {
+    assert!(
+        ss.current_pid() == KERNEL_PID && tag == SWITCH_TAG,
+        "an S-mode ecall that is not kmain's switch: pid {}, a0 {:#x}",
+        ss.current_pid(),
+        tag
+    );
+    let pid = u8::try_from(pid).ok().and_then(Pid::new).expect("kmain switches to a process's PID");
+    let kmain = ArchProcess::with_current(|p| p.current_tid());
+    // `kmain` reads `a0` when it next runs: once the CPU comes back to it.
+    ss.set_redoubt_result(KERNEL_PID, kmain, &[RAN, 0, 0, 0, 0, 0, 0, 0]).expect("kmain exists");
+    if ss.activate_process_thread(kmain, pid, tid, true).is_err() {
+        ss.set_redoubt_result(KERNEL_PID, kmain, &[NOT_RUNNABLE, 0, 0, 0, 0, 0, 0, 0]).expect("kmain exists");
+    }
 }
 
 /// The queue's raw events, for the bench's independent rank oracle (`tools/testbench`,
@@ -395,7 +439,7 @@ pub mod trace {
 
     /// Frames the ring takes (2 MiB), and the records they hold: four words each.
     const PAGES: usize = 512;
-    const PER_PAGE: usize = redoubt_abi::arch::PAGE_SIZE / 32;
+    const PER_PAGE: usize = redoubt_sys::PAGE_SIZE / 32;
     const CAP: usize = PAGES * PER_PAGE;
 
     struct Ring {

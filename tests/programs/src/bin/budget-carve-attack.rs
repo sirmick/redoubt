@@ -17,23 +17,25 @@ const MARGIN: u64 = 100;
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
+    // The bundle's third program: its budgets come from log-server, once, and no device (R2).
+    let rd::Gifts { root, system, users } = rd::take_gifts().expect("the budgets");
     // Let log-server map what serving a message needs before `system`'s usage is read.
     log!(logger, "[attacker] starting");
     test_programs::wait_ms(20);
-    let hog = rd::create(rd::SYSTEM, &rd::spec(rd::free(rd::SYSTEM) - MARGIN, 0, 0)).expect("carve");
-    let u = rd::usage(rd::SYSTEM).unwrap();
+    let hog = rd::create(system, &rd::spec(rd::free(system) - MARGIN, 0, 0)).expect("carve");
+    let u = rd::usage(system).unwrap();
     let (free_procs, free_weight) = (u.processes_limit - u.processes_usage, u.weight_limit - u.weight_carved);
     let attempts: [(u32, u64, u32, u32); 10] = [
-        (rd::SYSTEM, MARGIN + 1, 0, 0),
-        (rd::SYSTEM, u64::MAX, 0, 0),
-        (rd::SYSTEM, 1, free_procs + 1, 0),
-        (rd::SYSTEM, 1, u32::MAX, 0),
-        (rd::SYSTEM, 1, 0, free_weight + 1),
-        (rd::SYSTEM, 1, 0, u32::MAX),
-        (rd::ROOT, 1, 0, 0), // root is full: users took the rest
+        (system, MARGIN + 1, 0, 0),
+        (system, u64::MAX, 0, 0),
+        (system, 1, free_procs + 1, 0),
+        (system, 1, u32::MAX, 0),
+        (system, 1, 0, free_weight + 1),
+        (system, 1, 0, u32::MAX),
+        (root, 1, 0, 0), // root is full: users took the rest
         (hog, u64::MAX, 0, 0),
         (hog, u64::MAX - 1, u32::MAX, u32::MAX),
-        (rd::USERS, u64::MAX / 2 + 1, 0, 0),
+        (users, u64::MAX / 2 + 1, 0, 0),
     ];
     for (parent, pages, processes, weight) in attempts {
         let got = rd::create(parent, &rd::spec(pages, processes, weight));

@@ -6,7 +6,8 @@ use core::num::{NonZeroU64, NonZeroUsize};
 pub use redoubt_sys::{
     Body, BudgetSpec, Call, Cause, Error, ExitNotice, FOREVER, Handle, Handles, Labels, MAX_HANDLES,
     MAX_LEND_PAGES, MAX_MSG_HANDLES, MAX_OPEN_CALLS, MAX_START_HANDLES, MemFlags, Message, MessageKind,
-    MintSource, Number, PAGE_SIZE, Pages, Received, ReceivedBody, ResetKind, Return, Usage, WAIT_CAP, WORDS,
+    MintSource, Number, PAGE_SIZE, Pages, Received, ReceivedBody, ResetKind, Return, USER_AREA_END,
+    Usage, WAIT_CAP, WORDS,
 };
 use redoubt_sys::{RECEIVED_SLOTS, USAGE_SLOTS};
 
@@ -19,8 +20,8 @@ pub const USERS: u32 = 3;
 /// (kernel `device.rs`, `boot_devices`; BOOT.md, `Devs`). **INTERIM** until `init` reads the
 /// boot manifest (WP-R3): the Reset right first, then the console `/chosen/stdout-path` names
 /// and its interrupt, so a program can name those three without a manifest. Everything after
-/// them depends on the machine, so nothing may assume how many there are: use
-/// [`first_free`] to find where a program's own handles start.
+/// them depends on the machine, so nothing may assume how many there are: the devices end at
+/// [`log_rx`], and [`first_free`] finds where a program's own handles start.
 pub const RESET: u32 = 4;
 pub const CONSOLE_MMIO: u32 = 5;
 pub const CONSOLE_IRQ: u32 = 6;
@@ -75,6 +76,11 @@ pub fn map_anon(len: usize, flags: MemFlags) -> Result<usize, Error> {
         Return::Addr(at) => Ok(at),
         _ => Err(Error::InvalidArgument),
     }
+}
+
+/// `map_fixed(addr, len, flags)`: fresh zeroed pages at an address the caller chooses.
+pub fn map_fixed(addr: usize, len: usize, flags: MemFlags) -> Result<(), Error> {
+    redoubt_sys::syscall(&Call::MapFixed { addr, len, flags }).map(|_| ())
 }
 
 pub fn unmap(addr: usize, len: usize) -> Result<(), Error> {
@@ -176,6 +182,39 @@ pub fn raw_error(a0: usize) -> Option<Error> { Error::from_code(a0 as u64) }
 /// `boot_endpoint`, INTERIM). The second program holds it with badge 0, the receive right;
 /// every later one with its own PID as the badge.
 pub const BOOT_ENDPOINT: u32 = 1;
+
+/// Handle 2 of every bundle program but the first: a send on the log endpoint, badged with the
+/// program's PID (kernel `budget.rs`, `boot_log_endpoint`, INTERIM until `init` owns the
+/// console). The badge only names whose line it is.
+pub const LOG: u32 = 2;
+
+/// The first program's receive right on the log endpoint: the kernel installs it last, after the
+/// budgets and the devices, so the devices are `OTHER_DEVICES..log_rx()`. It is `first_free() - 1`
+/// only until the program creates a handle, so a program reads it once, at startup.
+pub fn log_rx() -> u32 { first_free() - 1 }
+
+/// The budgets `log-server` gives its first `TAKE_GIFTS` caller, at the indices its reply
+/// installed here. Never a device (R2).
+pub struct Gifts {
+    pub root: u32,
+    pub system: u32,
+    pub users: u32,
+}
+
+/// Ask `log-server` for the first program's budgets (`op::TAKE_GIFTS`): only the first caller
+/// gets them; any later one gets `Refused`.
+pub fn take_gifts() -> Result<Gifts, Error> {
+    let reply = call_waiting(LOG, &body([crate::op::TAKE_GIFTS, 0, 0, 0]), None, FOREVER)?;
+    if let Some(error) = Error::from_code(reply.words[0] as u64) {
+        return Err(error);
+    }
+    match reply.handles.as_slice() {
+        [Some(root), Some(system), Some(users)] => {
+            Ok(Gifts { root: root.index(), system: system.index(), users: users.index() })
+        }
+        _ => Err(Error::InvalidArgument),
+    }
+}
 
 pub fn endpoint_create() -> Result<u32, Error> {
     match redoubt_sys::syscall(&Call::EndpointCreate)? {
@@ -324,24 +363,22 @@ pub fn body_with(words: [usize; WORDS], handles: &[u32]) -> Body {
 
 /// A page of this process's own memory, for lending and transferring. Touched, so that the
 /// kernel is not asked to back it while it decodes (answer 115).
-pub fn page() -> usize {
-    let range =
-        redoubt_abi::map_memory(None, None, 4096, redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W)
-            .expect("map a page");
-    let at = range.as_mut_ptr() as usize;
-    // SAFETY: the first word of a page this process just mapped read-write.
-    unsafe { (at as *mut u64).write_volatile(0) };
-    at
+pub fn page() -> usize { many_pages(1) }
+
+/// A page of this loader-started program's own stack that it has never touched. The loader
+/// reserves the stack and the kernel backs each page on its first touch (INTERIM until R3's
+/// launcher, OD6), so the page 16 below the current one is reserved and still unbacked in a
+/// program that uses less stack than that.
+pub fn untouched_stack_page() -> usize {
+    let here = 0u8;
+    (core::ptr::addr_of!(here) as usize & !(PAGE_SIZE - 1)) - 16 * PAGE_SIZE
 }
 
 /// `npages` contiguous pages of this process's own memory, all touched.
 pub fn many_pages(npages: usize) -> usize {
-    let flags = redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W;
-    let range = redoubt_abi::map_memory(None, None, npages * 4096, flags).expect("map pages");
-    let at = range.as_mut_ptr() as usize;
+    let at = map_anon(npages * PAGE_SIZE, rw()).expect("map pages");
     for i in 0..npages {
-        // SAFETY: the first word of each page of a range this process just mapped read-write.
-        unsafe { ((at + i * 4096) as *mut u64).write_volatile(0) };
+        poke(at + i * PAGE_SIZE, 0);
     }
     at
 }
@@ -358,21 +395,18 @@ pub fn poke(at: usize, value: u64) {
     unsafe { (at as *mut u64).write_volatile(value) };
 }
 
-/// Protocol for the budget attack cases: a victim living in `system` beside the attacker waits
-/// for the attacker's go, then maps and touches pages in `system` and reports to the checker.
+/// Protocol for the budget attack cases: a victim living in `system` beside the attacker, the
+/// bundle's second program, waits on the boot endpoint for the attacker's go, then maps and
+/// touches pages in `system` and reports to the checker.
 pub mod victim {
-    /// Well-known address of the victim's server.
-    pub const ADDRESS: &[u8; 16] = b"redoubt-bud-vict";
-    /// BlockingScalar: the attacker has made its attempts.
+    /// Call: the attacker has made its attempts.
     pub const GO: usize = 1;
     /// Pages the victim maps and touches afterwards.
     pub const PAGES: usize = 64;
 
     /// Tell the victim the attempts are over. Returns once it has the message.
     pub fn go() {
-        let sid = redoubt_abi::SID::from_bytes(ADDRESS).unwrap();
-        let cid = redoubt_abi::connect(sid).expect("couldn't connect to the victim");
-        redoubt_abi::send_message(cid, redoubt_abi::Message::new_blocking_scalar(GO, 0, 0, 0, 0))
+        super::call_waiting(super::BOOT_ENDPOINT, &super::body([GO, 0, 0, 0]), None, super::FOREVER)
             .expect("victim");
     }
 }
@@ -428,6 +462,34 @@ pub fn thread_create(entry: usize, sp: usize, arg: usize) -> Result<u32, Error> 
         Return::Tid(tid) => Ok(tid),
         _ => Err(Error::InvalidArgument),
     }
+}
+
+/// A thread running `f(arg)` on a fresh stack of its own; when `f` returns, the thread exits.
+pub fn thread(f: fn(usize), arg: usize) -> Result<u32, Error> {
+    const STACK: usize = 4 * PAGE_SIZE;
+    let stack = map_anon(STACK, rw())?;
+    // `f` and `arg` wait at the top of the new stack, where `run` finds them.
+    let top = stack + STACK - 2 * core::mem::size_of::<usize>();
+    let frame = top as *mut usize;
+    // SAFETY: `frame` is the top two words of the stack this process has just mapped read-write.
+    unsafe {
+        frame.write(f as usize);
+        frame.add(1).write(arg);
+    }
+    thread_create(run as extern "C" fn(usize) -> ! as usize, top, top).inspect_err(|_| {
+        unmap(stack, STACK).ok();
+    })
+}
+
+/// A new thread's first code: `f(arg)` from its stack's top (`thread`), then `thread_exit`.
+extern "C" fn run(frame: usize) -> ! {
+    let frame = frame as *const usize;
+    // SAFETY: `thread` wrote a `fn(usize)` and its argument there before starting this thread,
+    // and nothing else writes them: the stack grows down from below them.
+    let (f, arg) = unsafe { (core::mem::transmute::<usize, fn(usize)>(frame.read()), frame.add(1).read()) };
+    f(arg);
+    thread_exit().ok();
+    crate::park()
 }
 
 /// `thread_exit()`. Returns only if the kernel refused.

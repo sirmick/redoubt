@@ -3,8 +3,8 @@ arch = ["rv64"]
 kind = "boot"
 # PID 3 uaf-holder is the borrower whose page is at stake and judges; PID 4 uaf-victim lends
 # it a page and dies; PID 5 uaf-grabber attacks, stamping every page it can get;
-# PID 6 attack-checker ends the case when the holder reports.
-programs = ["log-server", "uaf-holder", "uaf-victim", "uaf-grabber", "attack-checker"]
+# the holder reports to log-server's DONE, which ends the case.
+programs = ["log-server", "uaf-holder", "uaf-victim", "uaf-grabber"]
 timeout_secs = 30
 expect = [
     '^\[pid 3\] \[holder\] holding page',
@@ -12,20 +12,9 @@ expect = [
     '^\[pid 5\] \[grabber\] stamped',
     # The verdict, the holder's; "UAF TEST FAILED" (it sees the grabber's data) is always
     # forbidden. Unforgeable: log-server prefixes it with the holder's kernel-reported PID 3,
-    # and the checker powers off only when PID 3 reports, which it does only on a pass.
+    # and log-server powers off only when PID 3 reports DONE, which it does only on a pass.
     '^\[pid 3\] UAF TEST PASSED',
-    '^\[pid 6\] \[checker\] PID 3 reported; the kernel still serves',
+    '^\[server\] done: reported by pid 3; still serving$',
 ]
 poweroff = true
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]
-
-[[grant]]
-program = "uaf-holder"
-mmio = ["0x10000000:0x1000"]
-
-[[grant]]
-program = "attack-checker"
-mmio = ["0x100000:0x1000"]
+reporter = "uaf-holder"

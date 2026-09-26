@@ -18,7 +18,7 @@
 #![no_main]
 
 use test_programs::rd::{self, Error, FOREVER, Received};
-use test_programs::{Logger, log};
+use test_programs::log;
 
 static mut ENDPOINT: u32 = 0;
 
@@ -28,7 +28,7 @@ fn endpoint() -> u32 {
 }
 
 /// The receiver: it must be waiting, so that delivery runs its whole course.
-fn receiver(_arg: usize) -> ! {
+fn receiver(_arg: usize) {
     loop {
         if let Ok(Received::Message(m)) = rd::receive(Some(endpoint()), FOREVER, 64) {
             rd::reply(m.msg_id.get(), &rd::body([0; rd::WORDS])).ok();
@@ -41,12 +41,12 @@ const PAGES: usize = 3;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let mut logger = Logger::connect();
+    let mut logger = test_programs::logsrv::start();
     log!(logger, "[tight] starting");
     let endpoint = rd::endpoint_create().expect("an endpoint");
     // SAFETY: written before the receiver thread is created.
     unsafe { core::ptr::write_volatile(&raw mut ENDPOINT, endpoint) };
-    redoubt_abi::create_thread_1(receiver, 0).expect("the receiver");
+    rd::thread(receiver, 0).expect("the receiver");
     test_programs::wait_ms(30);
 
     let buf = rd::many_pages(PAGES);

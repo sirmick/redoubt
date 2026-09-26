@@ -7,6 +7,7 @@
 mod budget;
 mod build;
 mod case;
+mod cruft;
 mod peer;
 mod qemu;
 mod sched_oracle;
@@ -95,7 +96,6 @@ fn main() -> Result<()> {
             &programs,
             &[],
             &[],
-            "",
             false,
             false,
             Profile::Release,
@@ -139,6 +139,16 @@ fn main() -> Result<()> {
                 Some(why) => {
                     failures += 1;
                     println!("FAIL  {:<32}        {why}\n      {summary}", case.name);
+                }
+            }
+            continue;
+        }
+        if let Kind::NoCruft(gate) = &case.kind {
+            match cruft::check(&workspace, gate)? {
+                None => println!("PASS  {:<32}", case.name),
+                Some(why) => {
+                    failures += 1;
+                    println!("FAIL  {:<32}\n      {why}", case.name);
                 }
             }
             continue;
@@ -225,7 +235,6 @@ fn prepare(
     programs: &[Program],
     files: &[case::BundleFile],
     extra_kernel_features: &[String],
-    manifest: &str,
     tamper: bool,
     bare_archive: bool,
     profile: Profile,
@@ -245,7 +254,6 @@ fn prepare(
         &builder.artifact(target, "redoubt-kernel", profile),
         &programs,
         &files,
-        manifest,
         tamper,
         bare_archive,
     )?;
@@ -287,7 +295,7 @@ fn run_case(
             return Ok(vec![(String::new(), outcome, elapsed(started))]);
         }
         Kind::Boot(boot) => boot,
-        Kind::UnsafeBudget(_) | Kind::SshLoopback(_) | Kind::HostTests(_) => {
+        Kind::UnsafeBudget(_) | Kind::NoCruft(_) | Kind::SshLoopback(_) | Kind::HostTests(_) => {
             unreachable!("handled before the per-target loop")
         }
     };
@@ -308,7 +316,6 @@ fn run_case(
     // Build everything once, then boot it once per hart count. A build failure is the bench's
     // or the code's problem, never what a `must_fail` is waiting for, so it is not judged.
     let bundle = logs.join(format!("{}-{}.tar", case.name, target.name));
-    let manifest = boot.grant.iter().flat_map(|g| g.manifest_lines()).collect::<Vec<_>>().join("\n");
     let profile = if boot.debug_assertions { Profile::Checked } else { Profile::Release };
     let bundle = match prepare(
         builder,
@@ -317,7 +324,6 @@ fn run_case(
         &boot.programs,
         &boot.file,
         &boot.kernel_features,
-        &manifest,
         boot.tamper_bundle,
         boot.sign_bare_archive,
         profile,

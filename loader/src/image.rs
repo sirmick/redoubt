@@ -9,8 +9,10 @@ use elf::endian::LittleEndian;
 use elf::ElfBytes;
 
 use crate::alloc::PageAllocator;
-use crate::paging::{AddressSpace, Pte};
-use crate::PAGE_SIZE;
+use crate::paging::AddressSpace;
+use paging::PteFlags;
+use redoubt_layout::Pid;
+use redoubt_sys::PAGE_SIZE;
 
 /// Map every `PT_LOAD` segment of `image` into `space` and return the entry point.
 ///
@@ -20,7 +22,7 @@ use crate::PAGE_SIZE;
 pub fn load_elf(
     alloc: &mut PageAllocator,
     space: &AddressSpace,
-    pid: u8,
+    pid: Pid,
     image: &[u8],
     allowed: core::ops::Range<usize>,
     user: bool,
@@ -29,8 +31,8 @@ pub fn load_elf(
     let segments = elf.segments().expect("ELF has no program headers");
 
     for segment in segments.iter().filter(|s| s.p_type == PT_LOAD && s.p_memsz > 0) {
-        let mut flags = if user { Pte::USER } else { Pte::GLOBAL };
-        for (elf_flag, pte_flag) in [(PF_R, Pte::R), (PF_W, Pte::W), (PF_X, Pte::X)] {
+        let mut flags = if user { PteFlags::USER } else { PteFlags::GLOBAL };
+        for (elf_flag, pte_flag) in [(PF_R, PteFlags::R), (PF_W, PteFlags::W), (PF_X, PteFlags::X)] {
             if segment.p_flags & elf_flag != 0 {
                 flags |= pte_flag;
             }
@@ -56,7 +58,7 @@ pub fn load_elf(
             };
             space.map(alloc, page_phys, page_virt, flags);
             // The kernel must not have a writable alias of its own code or constants.
-            if !user && !flags.contains(Pte::W) {
+            if !user && !flags.contains(PteFlags::W) {
                 space.write_protect_in_physmap(alloc, page_phys);
             }
 

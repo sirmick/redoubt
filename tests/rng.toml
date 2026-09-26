@@ -1,10 +1,6 @@
-description = "Kernel RNG is seeded from the device tree: server IDs differ within a boot and between boots"
+description = "Kernel RNG is seeded from the device tree: random words differ within a boot and between boots"
 arch = ["rv64", "rv32"]
 kind = "boot"
 programs = ["log-server", "rng-test"]
 expect = ['rng-seed: \d+ bytes', 'Kernel RNG seeded from the loader', 'RNG TEST PASSED']
-distinct_across_boots = ['first server id: (.*)']
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]
+distinct_across_boots = ['first word: (.*)']

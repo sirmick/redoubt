@@ -6,7 +6,3 @@ kind = "boot"
 debug_assertions = true
 programs = ["log-server"]
 expect = ['^kernel: checks on \(debug assertions, overflow checks\)$']
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]

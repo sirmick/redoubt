@@ -15,7 +15,6 @@
 mod alloc;
 mod args;
 mod dt;
-mod grants;
 mod verify;
 mod image;
 mod paging;
@@ -25,16 +24,18 @@ use core::arch::{asm, global_asm};
 use dt::Platform;
 
 use tar_no_std::TarArchiveRef;
-use redoubt_abi::arch::{
-    EXCEPTION_STACK_PAGES, EXCEPTION_STACK_TOP, KERNEL_AREA, KERNEL_DMA_PAGES, KERNEL_DMA_REGS, KERNEL_PLIC_BASE, KERNEL_STACK_PAGES,
-    KERNEL_STACK_TOP, THREAD_CONTEXT_AREA, THREAD_CONTEXT_PAGES, USER_AREA_END, USER_STACK_TOP,
+use redoubt_layout::{
+    KERNEL_AREA, KERNEL_DMA_PAGES, KERNEL_DMA_REGS, KERNEL_PID, KERNEL_PLIC_BASE, KERNEL_STACK_PAGES, KERNEL_STACK_TOP,
+    PROCESS_AREA, Pid, THREAD_CONTEXT_PAGES, TRAP_STACK_PAGES, TRAP_STACK_TOP,
 };
+use redoubt_sys::{PAGE_SIZE, USER_AREA_END};
 
-use crate::alloc::{PageAllocator, Pid, KERNEL_PID};
-use crate::paging::{AddressSpace, Pte};
+use crate::alloc::PageAllocator;
+use crate::paging::AddressSpace;
+use ::paging::PteFlags;
 
-pub const PAGE_SIZE: usize = 4096;
-
+/// Top of the first thread's stack in every loader process, the same on both widths.
+const USER_STACK_TOP: usize = 0x8000_0000;
 /// Pages of stack reserved for the first thread of an initial process. Only the top
 /// page is backed by memory; the kernel demand-pages the rest.
 const USER_STACK_PAGES: usize = 32;
@@ -87,7 +88,6 @@ struct InitialProcess {
     satp: usize,
     entrypoint: usize,
     sp: usize,
-    env: usize,
 }
 
 #[no_mangle]
@@ -184,22 +184,16 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     let bundle = verify::authenticated_bundle(initrd);
     println!("  bundle signature ok ({} bytes)", bundle.len());
     let archive = TarArchiveRef::new(bundle).expect("boot bundle is not a tar archive");
-    // The device-grant manifest, if present, is a `grants` entry (not a process).
-    let manifest = archive
-        .entries()
-        .find(|e| e.filename().as_str() == Ok("grants"))
-        .and_then(|e| core::str::from_utf8(e.data()).ok())
-        .unwrap_or("");
     let mut entries = archive.entries();
 
     // The kernel is PID 1 and the first entry of the bundle.
     let kernel_image = entries.next().expect("boot bundle is empty");
     let kernel = AddressSpace::new_kernel(&mut alloc, KERNEL_PID);
-    let kernel_flags = Pte::R | Pte::W | Pte::GLOBAL;
+    let kernel_flags = PteFlags::R | PteFlags::W | PteFlags::GLOBAL;
     let kernel_entry =
         image::load_elf(&mut alloc, &kernel, KERNEL_PID, kernel_image.data(), KERNEL_AREA..usize::MAX, false);
     kernel.map_stack(&mut alloc, KERNEL_STACK_TOP, KERNEL_STACK_PAGES, kernel_flags);
-    kernel.map_stack(&mut alloc, EXCEPTION_STACK_TOP, EXCEPTION_STACK_PAGES, kernel_flags);
+    kernel.map_stack(&mut alloc, TRAP_STACK_TOP, TRAP_STACK_PAGES, kernel_flags);
     map_context(&mut alloc, &kernel, KERNEL_PID);
     // Pre-share the tables the kernel will map its interrupt controller and its DMA register
     // window (WP-K5b) into. The kernel maps both at runtime, after these root entries have been
@@ -213,7 +207,6 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
         satp: kernel.satp(),
         entrypoint: kernel_entry,
         sp: KERNEL_STACK_TOP - STACK_PADDING,
-        env: 0,
     };
     println!("  PID 1: {} -> {:#x}", kernel_image.filename().as_str().unwrap_or("?"), kernel_entry);
 
@@ -221,19 +214,22 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     for entry in entries {
         let name = entry.filename();
         let name = name.as_str().unwrap_or("?");
-        if name == "grants" {
-            continue;
-        }
+        // A process reaches a device only through its device handle, so a bundle carrying a
+        // `grants` manifest is refused rather than booted as if it granted something.
+        assert!(
+            name != "grants",
+            "the boot bundle holds a `grants` entry: devices are reached only through handles"
+        );
         assert!(
             count < MAX_PROCESSES,
             "the boot bundle has more than the {} processes the kernel has room for",
             MAX_PROCESSES
         );
-        let pid = count as Pid + 1;
+        let pid = Pid::new(count as u8 + 1).expect("count < MAX_PROCESSES");
 
         let space = AddressSpace::new_user(&mut alloc, pid, &kernel);
         let entrypoint = image::load_elf(&mut alloc, &space, pid, entry.data(), PAGE_SIZE..USER_AREA_END, true);
-        let stack_flags = Pte::R | Pte::W | Pte::USER;
+        let stack_flags = PteFlags::R | PteFlags::W | PteFlags::USER;
         space.map_stack(&mut alloc, USER_STACK_TOP, 1, stack_flags);
         for page in 2..=USER_STACK_PAGES {
             space.reserve(&mut alloc, USER_STACK_TOP - page * PAGE_SIZE, stack_flags);
@@ -242,24 +238,13 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
         println!("  PID {}: {} -> {:#x}", pid, name, entrypoint);
 
         let process =
-            InitialProcess { satp: space.satp(), entrypoint, sp: USER_STACK_TOP - STACK_PADDING, env: 0 };
+            InitialProcess { satp: space.satp(), entrypoint, sp: USER_STACK_TOP - STACK_PADDING };
         *processes.get_mut(count).expect("too many initial processes") = process;
         count += 1;
 
-        // The kernel only needs these tags to count processes and to find `.eh_frame`.
-        // TODO(redoubt): report the `.eh_frame` address so `std` can unwind.
+        // The kernel counts these tags to size its process table (BOOT.md); they carry no data.
         args.begin(b"IniE");
-        args.word(0);
-        args.word(0);
         args.end();
-
-        args.begin(b"PNam");
-        args.word(pid as u32);
-        args.word(name.len() as u32);
-        args.bytes(name.as_bytes());
-        args.end();
-
-        grants::emit(&mut args, manifest, name, pid);
     }
     processes[0] = kernel_process;
     args.finish(ram.start, ram.len(), b"sram");
@@ -270,10 +255,10 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     // pages owned by PID 1.
     unsafe {
         enter_kernel(
-            redoubt_abi::arch::physmap_virt(args_base),
-            redoubt_abi::arch::physmap_virt(processes.as_ptr() as usize),
-            redoubt_abi::arch::physmap_virt(alloc.rpt_base()),
-            redoubt_abi::arch::physmap_virt(xpt),
+            redoubt_layout::physmap_virt(args_base),
+            redoubt_layout::physmap_virt(processes.as_ptr() as usize),
+            redoubt_layout::physmap_virt(alloc.rpt_base()),
+            redoubt_layout::physmap_virt(xpt),
             kernel.satp(),
             kernel_entry,
             KERNEL_STACK_TOP - STACK_PADDING,
@@ -360,7 +345,7 @@ fn emit_devices(args: &mut args::ArgsBuilder, platform: &Platform) {
 fn map_context(alloc: &mut PageAllocator, space: &AddressSpace, pid: Pid) {
     for page in 0..THREAD_CONTEXT_PAGES {
         let phys = alloc.alloc(pid);
-        space.map(alloc, phys, THREAD_CONTEXT_AREA + page * PAGE_SIZE, Pte::R | Pte::W);
+        space.map(alloc, phys, PROCESS_AREA + page * PAGE_SIZE, PteFlags::R | PteFlags::W);
     }
 }
 

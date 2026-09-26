@@ -32,6 +32,9 @@ pub enum Kind {
     Build(Build),
     /// A ratchet on `unsafe` in the trusted computing base. Not a boot; reads the sources.
     UnsafeBudget(UnsafeBudget),
+    /// No leftover of a dropped interface, no silenced dead code, no unread Cargo feature, one
+    /// literal definition of each shared constant (`cruft.rs`). Not a boot; reads the sources.
+    NoCruft(NoCruft),
     /// `cargo test` for host crates, so the suite runs the unit tests that no boot can reach:
     /// a constant both the loader and the bench agree on is right in the machine's eyes even
     /// when it is wrong (see `libs/signing`). Not a boot.
@@ -60,6 +63,45 @@ pub struct SshLoopback {
 #[serde(deny_unknown_fields)]
 pub struct UnsafeBudget {
     pub budget: Vec<Budget>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NoCruft {
+    /// Files and directories searched, relative to the workspace root.
+    pub paths: Vec<String>,
+    /// Patterns no line may match.
+    pub forbidden: Vec<Forbidden>,
+    /// Where `allow(dead_code)` and `allow(unused...)` are refused.
+    pub no_allow_dead: Vec<String>,
+    /// Names with at most one literal-valued definition across `paths` and `definition_paths`.
+    pub one_definition: Vec<String>,
+    /// Searched for `one_definition` only.
+    #[serde(default)]
+    pub definition_paths: Vec<String>,
+    /// The only exemptions, each with its reason.
+    #[serde(default)]
+    pub allow: Vec<Allow>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Forbidden {
+    /// A regular expression; `(?i)` for one that ignores case.
+    pub pattern: String,
+    /// A line that also matches this is not a finding.
+    pub unless: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Allow {
+    /// A file, or a directory prefix.
+    pub path: String,
+    /// The rule exempted there: a `forbidden` pattern, `allow-dead`, `unused-feature`,
+    /// `one-definition:NAME`, `page-alias`, or `*` for every rule.
+    pub rule: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -110,6 +152,10 @@ pub struct Boot {
     /// SBI `SystemFailure` shutdown to 255, which rejection tests must request explicitly.
     #[serde(default)]
     pub poweroff_status: i32,
+    /// The program whose `DONE` to `log-server` ends a `poweroff` case (docs/testbench.md, rule
+    /// F). The case passes only if the one console line starting `[server] done:` names this
+    /// program's PID. Any other such line fails it, as does one in a case with no reporter.
+    pub reporter: Option<String>,
     /// Regular expressions with one capture group. The case is booted twice, and what
     /// each captures must differ between the two boots (for randomness, ASLR, ...).
     #[serde(default)]
@@ -131,9 +177,6 @@ pub struct Boot {
     /// checks on raw-pointer calls and every `debug_assert!` run (a failure is a `PANIC`).
     #[serde(default)]
     pub debug_assertions: bool,
-    /// Device grants written into the bundle's manifest (see DEVICE-GRANTS.md).
-    #[serde(default)]
-    pub grant: Vec<Grant>,
     /// Corrupt the bundle after signing, to test that the loader rejects it.
     #[serde(default)]
     pub tamper_bundle: bool,
@@ -263,34 +306,6 @@ pub enum Step {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Grant {
-    /// The program (bundle file name) these grants apply to.
-    pub program: String,
-    /// MMIO regions as "hex-base:hex-len", e.g. "0x10000000:0x1000".
-    #[serde(default)]
-    pub mmio: Vec<String>,
-    /// Interrupt numbers.
-    #[serde(default)]
-    pub irq: Vec<u32>,
-}
-
-impl Grant {
-    /// The manifest lines for this grant (see DEVICE-GRANTS.md).
-    pub fn manifest_lines(&self) -> Vec<String> {
-        let mut lines = Vec::new();
-        for region in &self.mmio {
-            let (base, len) = region.split_once(':').unwrap_or((region, "0x1000"));
-            lines.push(format!("{} mmio {} {}", self.program, base, len));
-        }
-        for irq in &self.irq {
-            lines.push(format!("{} irq {}", self.program, irq));
-        }
-        lines
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Build {
     pub package: String,
     #[serde(default)]
@@ -335,6 +350,15 @@ fn default_smp() -> Vec<u32> { vec![1] }
 
 fn default_timeout() -> f64 { 60.0 }
 
+impl Boot {
+    /// The reporter's PID: the loader numbers the bundle's programs from 2, in order.
+    pub fn reporter_pid(&self) -> Option<usize> {
+        let reporter = self.reporter.as_ref()?;
+        let index = self.programs.iter().position(|p| matches!(p, Program::TestProgram(name) if name == reporter))?;
+        Some(index + 2)
+    }
+}
+
 impl Case {
     pub fn load(path: &Path) -> Result<Case> {
         let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
@@ -360,6 +384,10 @@ impl Case {
                     check_net(net)?;
                     // The post-check judges one boot's peer files.
                     ensure!(net.peer.is_empty() || boot.distinct_across_boots.is_empty(), "peers need one boot");
+                }
+                if let Some(reporter) = &boot.reporter {
+                    ensure!(boot.poweroff, "a reporter needs poweroff = true");
+                    ensure!(boot.reporter_pid().is_some(), "reporter {reporter:?} is not one of the programs");
                 }
                 check_sessions(&boot.session)
             }

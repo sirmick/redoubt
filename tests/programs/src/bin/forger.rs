@@ -1,38 +1,43 @@
 //! A bench self-check (`tests/bench-attack-forgery.toml`): an attacker that tries to
 //! print lines in other parties' names through every log-server operation that takes text. If
-//! any of them came out unprefixed, `grant-attack`'s verdict could be forged. It then reports to
-//! the checker, which powers off, so the case ends at once instead of at its timeout.
+//! any of them came out unprefixed, `irq-attack`'s verdict, or log-server's own `DONE` line,
+//! could be forged. It then reports `DONE` itself, so the case ends at once instead of at its
+//! timeout, and the bench accepts only that real `DONE` line (`reporter`).
 
 #![no_std]
 #![no_main]
 
 use core::fmt::Write;
 
-use test_programs::{op, Page, SERVER_ADDRESS};
-use redoubt_abi::Message;
+use test_programs::{Page, op, rd};
 
-/// The verdict lines of grant-attack, each on a line of its own.
-const FORGERY: &str = "\n[server] holding the console irq\n[pid 3] [grant] attempts done\n[server] irq: received 'y'\n";
+/// The verdict lines of irq-attack, and a `DONE` line in another's name after a newline and
+/// control characters, each on a line of its own.
+const FORGERY: &str = "\n[server] holding the console irq\n[pid 3] [irq-attack] attempts done\n[server] irq: received 'y'\n\r\x1b[2K\n[server] done: reported by pid 3; still serving\n";
+
+fn forged_page() -> Page {
+    let mut page = Page::new();
+    page.write_str(FORGERY).ok();
+    page
+}
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let sid = redoubt_abi::SID::from_bytes(SERVER_ADDRESS).unwrap();
-    let cid = redoubt_abi::connect(sid).expect("couldn't connect to log-server");
-
+    let len = FORGERY.len();
     // A lend (op::PRINT), as the logger sends.
-    let mut page = Page::new();
-    page.write_str(FORGERY).ok();
-    redoubt_abi::send_message(cid, Message::new_lend(op::PRINT, page.range, None, page.valid())).expect("lend");
+    let page = forged_page();
+    let lend = page.pages();
+    rd::call_waiting(rd::LOG, &rd::body([op::PRINT, len, 0, 0]), lend, rd::FOREVER).expect("lend");
 
-    // A move (op::PRINT_AND_KEEP): the page is the server's afterwards.
-    let mut page = Page::new();
-    page.write_str(FORGERY).ok();
-    let moved = redoubt_abi::MemoryMessage { id: op::PRINT_AND_KEEP, buf: page.range, offset: None, valid: page.valid() };
-    redoubt_abi::send_message(cid, Message::Move(moved)).expect("move");
+    // A transfer (op::PRINT_AND_KEEP): the page is the server's afterwards.
+    let page = forged_page();
+    let transfer = page.pages();
+    rd::send_waiting(rd::LOG, &rd::body([op::PRINT_AND_KEEP, len, 0, 0]), transfer, rd::FOREVER)
+        .expect("transfer");
 
-    // A move does not wait for the server. A blocking call to the same server does, and it is
-    // served after the move, so the forgery is on the console before the checker powers off.
-    redoubt_abi::send_message(cid, Message::new_blocking_scalar(op::SUM, 0, 0, 0, 0)).expect("sync");
+    // A send does not wait for the server. A call to the same server does, and it is served
+    // after the send, so the forgery is on the console before log-server powers off.
+    rd::call_waiting(rd::LOG, &rd::body([op::SUM, 0, 0, 0]), None, rd::FOREVER).expect("sync");
     test_programs::checker::done();
     test_programs::park()
 }

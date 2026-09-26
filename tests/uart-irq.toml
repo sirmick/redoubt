@@ -5,8 +5,8 @@ kind = "boot"
 debug_assertions = true
 # PID 2 log-server is the bundle's first program, so it holds every device object the loader
 # made (INTERIM, kernel device.rs): it maps the console through its MMIO handle and echoes
-# every byte from a thread blocked in `receive` on the console's IRQ handle. No grants: the
-# handle is the authority now (DEVICE-GRANTS.md, Replacement).
+# every byte from a thread blocked in `receive` on the console's IRQ handle, which is the
+# authority (DEVICE-GRANTS.md, Replacement).
 programs = ["log-server"]
 # The server reads **one byte per interrupt**, so every byte needs an interrupt of its own and
 # the FIFO is left with data in it. What that pins: a kernel whose `receive` does not unmask

@@ -6,12 +6,13 @@ license = "MIT OR Apache-2.0"
 description = "Redoubt loader for RISC-V (RV32/RV64) SBI + device-tree platforms (QEMU virt, FPGA softcores)"
 
 [dependencies]
-redoubt-abi = { path = "../libs/abi" }                        # memory layout constants shared with the kernel
+redoubt-layout = { path = "../libs/layout" }                  # the kernel-half map and PIDs, shared with the kernel
 fdt-rs = { version = "0.4", default-features = false }
 sbi-rt = "0.0.3"
 elf = { version = "0.8", default-features = false }
 tar-no-std = { version = "0.5", default-features = false }
 crc = { version = "3", default-features = false }
 paging = { path = "../libs/paging" }
+redoubt-sys = { path = "../libs/sys" }
 ed25519-compact = { version = "2", default-features = false }
 redoubt-signing = { path = "../libs/signing" }              # the bundle signature's preimage

@@ -15,7 +15,3 @@ forward = [22]
 [[session]]
 user = "alice"
 steps = [{ expect = 'Connection timed out during banner exchange' }, { exit = 255 }]
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]

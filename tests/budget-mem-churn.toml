@@ -1,12 +1,9 @@
 description = "The ledger holds under memory churn: system's page usage is exactly stable over 64 map-touch-unmap rounds and 64 lends and returns (R6, I5)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# PID 2 budget-mem-churn (the loader's first program: it holds system); PID 3 log-server.
-programs = ["budget-mem-churn", "log-server"]
+# PID 2 budget-mem-churn, alone (the loader's first program: it holds system, and its own log
+# server thread takes the lends).
+programs = ["budget-mem-churn"]
 smp = [1, 2]
 timeout_secs = 30
 expect = ['^\[pid 2\] \[churn\] system usage \d+ after 64 map rounds and 64 lends$', '^\[pid 2\] CHURN TEST PASSED$']
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]

@@ -3,12 +3,11 @@
 //! Page-table memory is only touched through the `paging` crate, which the kernel uses too.
 
 use paging::{PteFlags, Slot, Table, Window, ENTRIES, LARGEST_LEAF, LEVELS};
-use redoubt_abi::arch::{PHYSMAP_PHYS_BASE, PROCESS_AREA};
+use redoubt_layout::{PHYSMAP_PHYS_BASE, PROCESS_AREA, Pid};
 
-use crate::alloc::{PageAllocator, Pid};
-use crate::PAGE_SIZE;
+use crate::alloc::PageAllocator;
+use redoubt_sys::PAGE_SIZE;
 
-pub use paging::PteFlags as Pte;
 
 const ROOT_KERNEL_START: usize = ENTRIES / 2;
 const ROOT_PROCESS_AREA: usize = paging::vpn(PROCESS_AREA, LEVELS - 1);
@@ -47,7 +46,7 @@ impl AddressSpace {
         let last = ram.end.div_ceil(LARGEST_LEAF);
         for leaf in first..last {
             let phys = leaf * LARGEST_LEAF;
-            let virt = redoubt_abi::arch::physmap_virt(phys);
+            let virt = redoubt_layout::physmap_virt(phys);
             root.slot(paging::vpn(virt, LEVELS - 1)).set(paging::Pte::leaf(phys, flags));
         }
         let kernel_l1 = alloc.alloc(pid);
@@ -65,7 +64,7 @@ impl AddressSpace {
         AddressSpace { root_phys, root, pid }
     }
 
-    pub fn satp(&self) -> usize { paging::make_satp(self.pid as usize, self.root_phys) }
+    pub fn satp(&self) -> usize { paging::make_satp(self.pid.get() as usize, self.root_phys) }
 
     fn leaf_slot(&self, alloc: &mut PageAllocator, virt: usize) -> Slot {
         assert!(paging::is_canonical(virt), "{virt:#x} is not a canonical address");
@@ -107,7 +106,7 @@ impl AddressSpace {
     /// writable alias of its own code, in breach of W^X. The physmap is built from
     /// gigapages, so the superpages covering `phys` are first split into smaller ones.
     pub fn write_protect_in_physmap(&self, alloc: &mut PageAllocator, phys: usize) {
-        let virt = redoubt_abi::arch::physmap_virt(phys);
+        let virt = redoubt_layout::physmap_virt(phys);
         let mut table = self.root;
         for level in (1..LEVELS).rev() {
             let slot = table.slot(paging::vpn(virt, level));

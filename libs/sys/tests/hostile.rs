@@ -148,17 +148,21 @@ fn unused_list_counts_are_stray_slots() {
     assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument), "exit with a handle count");
 }
 
-/// Routing: every a0 that names a Redoubt call is >= NUMBER_BASE and none <= 46 (legacy) does.
+/// Every `a0` outside the call table is an unknown number, refused `InvalidArgument` at decoding:
+/// all of `0..=NUMBER_BASE`, the first number past the table, and any with high bits set.
 #[test]
-fn numbers_never_alias_legacy() {
+fn numbers_outside_the_table_are_unknown() {
     let mut hits = 0;
     for raw in 0..=0x400u64 {
         if let Some(n) = Number::from_raw(raw) {
-            assert!(raw > 46 && raw >= u64::from(NUMBER_BASE), "{n:?} at {raw}");
+            assert!(raw > u64::from(NUMBER_BASE), "{n:?} at {raw}");
             hits += 1;
         }
     }
     assert_eq!(hits, Number::ALL.len());
+    for raw in 0..=u64::from(NUMBER_BASE) {
+        assert_eq!(Call::decode(&[raw, 0, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "a0 = {raw}");
+    }
     assert_eq!(Number::from_raw(u64::from(NUMBER_BASE)), None);
     assert_eq!(Number::from_raw(u64::MAX), None);
     assert_eq!(Number::from_raw(1 << 32 | u64::from(Number::Random as u32)), None, "high bits alias");

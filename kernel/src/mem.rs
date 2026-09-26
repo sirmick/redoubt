@@ -1,30 +1,28 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-use redoubt_abi::{MemoryFlags, MemoryRange, PID, arch::*};
+use redoubt_layout::Pid;
+use redoubt_sys::{MemFlags, PAGE_SIZE, USER_AREA_END};
 
 pub use crate::arch::mem::MemoryMapping;
 use crate::arch::process::Process;
 
 #[derive(Debug)]
-// below suppresses warning from unused Move argument in hosted mode
-#[allow(dead_code)]
 enum ClaimReleaseMove {
     Claim,
     Release,
-    Move(PID /* from */),
+    Move(Pid /* from */),
 }
 
-/// One entry of the loader's `MREx` table (BOOT.md): a device region processes may claim.
-#[cfg(baremetal)]
+/// One entry of the loader's `MREx` table (BOOT.md): a device region, whose frames the ownership
+/// table tracks.
 #[derive(Clone, Copy)]
-struct MemoryRangeExtra {
+struct ExtraRegion {
     start: usize,
     size: usize,
 }
 
-#[cfg(baremetal)]
-impl MemoryRangeExtra {
+impl ExtraRegion {
     /// Words per entry. The loader (one binary for both widths) writes every entry as
     /// `start: u64, size: u64, tag: u32, pad: u32`, each `u64` low word first, so the entry is
     /// six words on rv32 too.
@@ -41,90 +39,96 @@ impl MemoryRangeExtra {
         // address at its end index past the entries counted for it. The loader rounds every
         // region up to a page.
         assert!(size % PAGE_SIZE == 0, "mm: MREx region is not a whole number of pages");
-        MemoryRangeExtra { start, size }
+        ExtraRegion { start, size }
     }
 
     fn contains(&self, addr: usize) -> bool { addr >= self.start && addr - self.start < self.size }
 }
 
-/// Construct a `MemoryRange` describing `addr..addr + size`.
-///
-/// `MemoryRange::new` is `unsafe` because a range may later be handed to a process as
-/// valid, page-aligned memory. Inside the kernel that property is established by the page
-/// tables, and the descriptor's own invariants -- non-null address, non-zero size -- are
-/// exactly what `new` checks and returns an error for. So building the descriptor is a
-/// safe kernel operation: a bad address surfaces later as a mapping error, not as
-/// unsoundness here.
-pub fn memory_range(addr: usize, size: usize) -> Result<MemoryRange, redoubt_abi::Error> {
-    // SAFETY: see the doc comment.
-    unsafe { MemoryRange::new(addr, size) }
+/// Why the page layer refused: the page tables (`arch::mem`) and the frame ownership table here.
+/// Kernel-internal: every system call maps it to the `redoubt_sys::Error` its row names, with
+/// an explicit `map_err` at the call's boundary; there is no `From`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PageError {
+    /// Nothing mapped or reserved there, no table reaches it, or not a frame the table tracks.
+    Unmapped,
+    /// Not a canonical virtual address (Sv39).
+    NonCanonical,
+    /// Reserved for demand paging and not yet backed.
+    Reserved,
+    /// Either alias of a loan (the `S` bit), or not the loan the step expects.
+    Lent,
+    /// Already mapped, reserved or owned: the step needs it free.
+    InUse,
+    /// No free frame, or the owner's budget cannot pay for one (R6).
+    NoFrame,
+    /// No free range of that size in the placement area.
+    NoSpace,
+    /// Not page-aligned.
+    Unaligned,
+    /// Permissions the page tables refuse: W+X, W without R, or none (R11).
+    BadFlags,
+}
+
+/// Where the first page of each placement area is, per process (`ProcessInner`): what
+/// `find_virtual_address` searches when the caller names no address.
+pub const DEFAULT_BASE: usize = 0x6000_0000;
+pub const DEFAULT_MESSAGE_BASE: usize = 0x4000_0000;
+
+/// A placement area: `map_anon`'s (`Default`, 256 MiB from `DEFAULT_BASE`) or the one received
+/// messages are mapped into (`Messages`, one superpage from `DEFAULT_MESSAGE_BASE`).
+#[derive(Clone, Copy, Debug)]
+pub enum MemoryType {
+    Default,
+    Messages,
 }
 
 pub struct MemoryManager {
-    #[cfg_attr(not(baremetal), allow(dead_code))]
     ram_start: usize,
-    #[cfg_attr(not(baremetal), allow(dead_code))]
     ram_size: usize,
-    #[allow(dead_code)]
     ram_name: u32,
-    #[allow(dead_code)]
-    last_ram_page: usize,
     /// Who owns each page of RAM, indexed by page number within RAM. The loader builds
     /// this table and hands it over in `init_from_memory`.
-    #[cfg(baremetal)]
     allocations: &'static mut [RamAllocation],
     /// The same, for the pages of every region in `extra_regions`, back to back.
-    #[cfg(baremetal)]
-    extra_allocations: &'static mut [Option<PID>],
+    extra_allocations: &'static mut [Option<Pid>],
     /// Memory outside RAM that processes may claim: memory-mapped devices. The data of the
-    /// loader's `MREx` tag, `MemoryRangeExtra::WORDS` words per region; see `extra_regions()`.
-    #[cfg(baremetal)]
+    /// loader's `MREx` tag, `ExtraRegion::WORDS` words per region; see `extra_regions()`.
     extra_regions: &'static [u32],
     /// Budgets and the per-process ledger that charges them (`budget.rs`), and the handle tables
     /// (`handle.rs`). Here, beside the ownership table, because a frame changing owner is what
     /// most charges are.
-    #[cfg(baremetal)]
     pub objects: crate::budget::Objects,
     /// DMA devices and the runs `dma_alloc` handed out through them (WP-K5b, `dma.rs`). Here,
     /// beside the ownership table that names their frames' owner, `DMA_OWNER`.
-    #[cfg(baremetal)]
     pub dma: crate::dma::Registry,
 }
 
 /// Owner, in the ownership table, of frames that hold kernel objects (budgets, handle-table
 /// pages). No process has this PID (there are `MAX_PROCESS_COUNT` of them), so such a frame is
 /// never mapped into a process, and `release_all_memory_for_process` never frees one.
-#[cfg(baremetal)]
-pub const OBJECT_OWNER: PID = match PID::new(255) {
+pub const OBJECT_OWNER: Pid = match Pid::new(255) {
     Some(pid) => pid,
     None => unreachable!(),
 };
-#[cfg(baremetal)]
 const _: () = assert!(crate::arch::process::MAX_PROCESS_COUNT < 255);
 /// Owner, in the ownership table, of `dma_alloc` frames (WP-K5b, `dma.rs`). No process has this
 /// PID either, so no generic release, move or lend path, all of which check that the caller
 /// owns the frame, can free or move one: only `dma_release` pools it, after the reset.
-#[cfg(baremetal)]
-pub const DMA_OWNER: PID = match PID::new(254) {
+pub const DMA_OWNER: Pid = match Pid::new(254) {
     Some(pid) => pid,
     None => unreachable!(),
 };
-#[cfg(baremetal)]
 const _: () = assert!(crate::arch::process::MAX_PROCESS_COUNT < 254);
-#[cfg(baremetal)]
-type RamAllocation = Option<PID>;
+type RamAllocation = Option<Pid>;
 
 impl Default for MemoryManager {
     fn default() -> Self { Self::default_hack() }
 }
 
-#[cfg(not(baremetal))]
-std::thread_local!(static MEMORY_MANAGER: core::cell::RefCell<MemoryManager> = core::cell::RefCell::new(MemoryManager::default()));
-
-/// Lock order: `SystemServices` (services.rs) before `MemoryManager`. Code holding the memory
+/// Lock order: `ProcessTable` (ptable.rs) before `MemoryManager`. Code holding the memory
 /// manager never takes the process table, so charging a budget from deep inside the allocator
 /// (`alloc_page`) needs only this cell; code holding the process table may take this one.
-#[cfg(baremetal)]
 static MEMORY_MANAGER: crate::cell::KernelCell<MemoryManager> =
     crate::cell::KernelCell::new(MemoryManager::default_hack());
 /// as the process entry has not yet been created.
@@ -134,64 +138,34 @@ impl MemoryManager {
             ram_start: 0,
             ram_size: 0,
             ram_name: 0,
-            last_ram_page: 0,
-            #[cfg(baremetal)]
             allocations: &mut [],
-            #[cfg(baremetal)]
             extra_allocations: &mut [],
-            #[cfg(baremetal)]
             extra_regions: &[],
-            #[cfg(baremetal)]
             objects: crate::budget::Objects::new(),
-            #[cfg(baremetal)]
             dma: crate::dma::Registry::new(),
         }
     }
-
-    // /// Calls the provided function with the current inner process state.
-    // pub fn with<F, R>(f: F) -> R
-    // where
-    //     F: FnOnce(&MemoryManager) -> R,
-    // {
-    //     #[cfg(baremetal)]
-    //     unsafe {
-    //         f(&MEMORY_MANAGER)
-    //     }
-
-    //     #[cfg(not(baremetal))]
-    //     MEMORY_MANAGER.with(|ss| f(&ss.borrow()))
-    // }
 
     pub fn with_mut<F, R>(f: F) -> R
     where
         F: FnOnce(&mut MemoryManager) -> R,
     {
-        #[cfg(baremetal)]
-        return MEMORY_MANAGER.with(f);
-
-        #[cfg(not(baremetal))]
-        MEMORY_MANAGER.with(|ss| f(&mut ss.borrow_mut()))
+        MEMORY_MANAGER.with(f)
     }
 
-    #[cfg(baremetal)]
     pub fn with<F, R>(f: F) -> R
     where
         F: FnOnce(&MemoryManager) -> R,
     {
-        #[cfg(baremetal)]
-        return MEMORY_MANAGER.with(|mm| f(mm));
-
-        #[cfg(not(baremetal))]
-        MEMORY_MANAGER.with(|ss| f(&ss.borrow_mut()))
+        MEMORY_MANAGER.with(|mm| f(mm))
     }
 
-    #[cfg(baremetal)]
     pub fn init_from_memory(
         &mut self,
         rpt_base: usize,
         xpt_base: usize,
         args: &crate::args::KernelArguments,
-    ) -> Result<(), redoubt_abi::Error> {
+    ) -> Result<(), PageError> {
         use core::slice;
         let mut args_iter = args.iter();
         let xarg_def = args_iter.next().expect("mm: no kernel arguments found");
@@ -214,7 +188,7 @@ impl MemoryManager {
             if tag.name == u32::from_le_bytes(*b"MREx") {
                 assert!(self.extra_regions.is_empty(), "mm: MREx tag appears twice");
                 assert!(
-                    tag.data.len() % MemoryRangeExtra::WORDS == 0,
+                    tag.data.len() % ExtraRegion::WORDS == 0,
                     "mm: MREx is not a whole number of entries"
                 );
                 self.extra_regions = tag.data;
@@ -229,39 +203,23 @@ impl MemoryManager {
         // in, one byte per page of RAM, so it holds these `mem_size` entries; every byte is a
         // valid `Option<PID>` (zero, an unowned page, is `None`). The loader owns it for the
         // kernel and hands it over here, so this is the only reference to it.
-        unsafe { self.allocations = slice::from_raw_parts_mut(rpt_base as *mut Option<PID>, mem_size) };
+        unsafe { self.allocations = slice::from_raw_parts_mut(rpt_base as *mut Option<Pid>, mem_size) };
         // SAFETY: as above, for the table the loader built for the `MREx` regions: one byte per
         // page of them, which is the `extra_size` just counted from the same table.
         unsafe {
-            self.extra_allocations = slice::from_raw_parts_mut(xpt_base as *mut Option<PID>, extra_size)
+            self.extra_allocations = slice::from_raw_parts_mut(xpt_base as *mut Option<Pid>, extra_size)
         }
         Ok(())
-    }
-
-    /// Print the number of RAM bytes used by the specified process.
-    /// This does not include memory such as peripherals and CSRs.
-    #[cfg(baremetal)]
-    pub fn ram_used_by(&self, pid: PID) -> usize {
-        let mut owned_bytes = 0;
-        #[cfg(baremetal)]
-        for owner in &self.allocations[0..self.ram_size / PAGE_SIZE] {
-            if owner == &Some(pid) {
-                owned_bytes += PAGE_SIZE;
-            }
-        }
-        #[cfg(baremetal)]
-        owned_bytes
     }
 
     /// Allocate a single page to the given process, charged to its budget (R6): `OutOfMemory` if
     /// the budget cannot pay. DOES NOT ZERO THE PAGE!!! This function CANNOT zero the page, as
     /// it hasn't been mapped yet.
-    #[cfg(baremetal)]
-    pub fn alloc_page(&mut self, pid: PID) -> Result<usize, redoubt_abi::Error> {
+    pub fn alloc_page(&mut self, pid: Pid) -> Result<usize, PageError> {
         let index = self.alloc_frame(pid)?;
         if self.charge_frame(pid).is_err() {
             self.allocations[index] = None;
-            return Err(redoubt_abi::Error::OutOfMemory);
+            return Err(PageError::NoFrame);
         }
         Ok(self.ram_start + index * PAGE_SIZE)
     }
@@ -269,18 +227,16 @@ impl MemoryManager {
     /// Allocate a page for a process's saved thread contexts (`ProcessImpl`), charged to the
     /// budget the process runs in like any other frame it owns (answer 127: the kernel
     /// charges what a process really costs instead of holding it back from `root` at boot).
-    #[cfg(baremetal)]
-    pub fn alloc_context_page(&mut self, pid: PID) -> Result<usize, redoubt_abi::Error> {
+    pub fn alloc_context_page(&mut self, pid: Pid) -> Result<usize, PageError> {
         self.alloc_page(pid)
     }
 
     /// Take a free frame for `owner`; its index in the ownership table.
-    #[cfg(baremetal)]
-    fn alloc_frame(&mut self, owner: PID) -> Result<usize, redoubt_abi::Error> {
+    fn alloc_frame(&mut self, owner: Pid) -> Result<usize, PageError> {
         // First fit. (The previous next-fit search computed its starting point with `max`
         // where `min` was meant, so it always scanned from the start anyway.)
         let index =
-            self.allocations.iter().position(Option::is_none).ok_or(redoubt_abi::Error::OutOfMemory)?;
+            self.allocations.iter().position(Option::is_none).ok_or(PageError::NoFrame)?;
         self.allocations[index] = Some(owner);
         Ok(index)
     }
@@ -288,14 +244,13 @@ impl MemoryManager {
     /// A frame for the kernel itself (the test-only trace ring), taken at boot before the budget
     /// tree counts what the kernel keeps.
     #[cfg(feature = "sched-trace")]
-    pub fn kernel_frame(&mut self) -> Result<usize, redoubt_abi::Error> {
-        let index = self.alloc_frame(crate::services::KERNEL_PID)?;
+    pub fn kernel_frame(&mut self) -> Result<usize, PageError> {
+        let index = self.alloc_frame(redoubt_layout::KERNEL_PID)?;
         Ok(self.ram_start + index * PAGE_SIZE)
     }
 
     /// A zeroed frame for a kernel object, owned by `OBJECT_OWNER`. The caller charges it to the
     /// budget the cost table names. `OutOfMemory` only if RAM itself is exhausted.
-    #[cfg(baremetal)]
     pub fn alloc_object_frame(&mut self) -> Result<u32, redoubt_sys::Error> {
         let index = self.alloc_frame(OBJECT_OWNER).map_err(|_| redoubt_sys::Error::OutOfMemory)?;
         crate::kframe::zero(self.ram_start + index * PAGE_SIZE);
@@ -303,33 +258,28 @@ impl MemoryManager {
         Ok(index as u32)
     }
 
-    #[cfg(baremetal)]
     pub fn free_object_frame(&mut self, frame: u32) {
         self.object_phys(frame);
         self.allocations[frame as usize] = None;
     }
 
     /// Whether RAM frame `frame` holds a kernel object.
-    #[cfg(baremetal)]
     pub fn is_object_frame(&self, frame: u32) -> bool {
         self.allocations.get(frame as usize) == Some(&Some(OBJECT_OWNER))
     }
 
     /// The physical address of kernel-object frame `frame`. A frame that is not one means a
     /// stale reference to a freed object: a violated invariant (I1), so the kernel stops.
-    #[cfg(baremetal)]
     pub fn object_phys(&self, frame: u32) -> usize {
         assert!(self.is_object_frame(frame), "I1: {} is no object frame", frame);
         self.ram_start + frame as usize * PAGE_SIZE
     }
 
     /// RAM frames in the ownership table.
-    #[cfg(baremetal)]
     pub fn ram_frames(&self) -> u64 { self.allocations.len() as u64 }
 
     /// Whether `[base, end)` touches any of RAM. A device object never may (R11: userspace
     /// never names RAM by physical address), so the boot checks every one against this.
-    #[cfg(baremetal)]
     pub fn overlaps_ram(&self, base: u64, end: u64) -> bool {
         let (ram_start, ram_end) = (self.ram_start as u64, (self.ram_start + self.ram_size) as u64);
         base < ram_end && ram_start < end
@@ -338,8 +288,7 @@ impl MemoryManager {
     /// `npages` contiguous free RAM frames, claimed for `owner` and zeroed through the physmap
     /// (R11: before any process can see them); the physical address of the first. Not charged:
     /// `dma_new_run`, the only caller, charges the run's budget itself (`dma.rs`).
-    #[cfg(baremetal)]
-    pub fn alloc_contiguous(&mut self, owner: PID, npages: usize) -> Result<usize, redoubt_sys::Error> {
+    pub fn alloc_contiguous(&mut self, owner: Pid, npages: usize) -> Result<usize, redoubt_sys::Error> {
         // First fit over the ownership table, as `alloc_frame` is, with a run to fill.
         let mut run = 0;
         let start = self
@@ -360,8 +309,7 @@ impl MemoryManager {
     }
 
     /// Give back `npages` frames from `phys` that `alloc_contiguous` claimed for `owner`.
-    #[cfg(baremetal)]
-    pub fn free_contiguous(&mut self, owner: PID, phys: usize, npages: usize) {
+    pub fn free_contiguous(&mut self, owner: Pid, phys: usize, npages: usize) {
         let start = (phys - self.ram_start) / PAGE_SIZE;
         for entry in &mut self.allocations[start..start + npages] {
             assert!(*entry == Some(owner), "I1: a contiguous run changed owner");
@@ -370,15 +318,13 @@ impl MemoryManager {
     }
 
     /// Whether RAM frame `phys` is a `dma_alloc` frame (`DMA_OWNER`'s).
-    #[cfg(baremetal)]
     pub fn is_dma_frame(&self, phys: usize) -> bool {
         self.is_main_memory(phys as *mut u8)
             && self.allocations[(phys - self.ram_start) / PAGE_SIZE] == Some(DMA_OWNER)
     }
 
     /// RAM frames owned by `pid` in the ownership table.
-    #[cfg(baremetal)]
-    pub fn ram_frames_owned_by(&self, pid: PID) -> usize {
+    pub fn ram_frames_owned_by(&self, pid: Pid) -> usize {
         self.allocations.iter().filter(|owner| **owner == Some(pid)).count()
     }
 
@@ -388,30 +334,21 @@ impl MemoryManager {
         &mut self,
         virt_ptr: *mut u8,
         size: usize,
-        kind: redoubt_abi::MemoryType,
-    ) -> Result<*mut u8, redoubt_abi::Error> {
+        kind: MemoryType,
+    ) -> Result<*mut u8, PageError> {
         // If we were supplied a perfectly good address, return that.
         if !virt_ptr.is_null() {
             return Ok(virt_ptr);
         }
 
-        // let process = Process::current();
         Process::with_inner_mut(|process_inner| {
             let (start, end, initial) = match kind {
-                redoubt_abi::MemoryType::Stack => return Err(redoubt_abi::Error::BadAddress),
-                redoubt_abi::MemoryType::Heap => {
-                    let new_virt = process_inner.mem_heap_base + process_inner.mem_heap_size + PAGE_SIZE;
-                    if new_virt + size > process_inner.mem_heap_base + process_inner.mem_heap_max {
-                        return Err(redoubt_abi::Error::OutOfMemory);
-                    }
-                    return Ok(new_virt as *mut u8);
-                }
-                redoubt_abi::MemoryType::Default => (
+                MemoryType::Default => (
                     process_inner.mem_default_base,
                     process_inner.mem_default_base + 0x1000_0000,
                     process_inner.mem_default_last,
                 ),
-                redoubt_abi::MemoryType::Messages => (
+                MemoryType::Messages => (
                     process_inner.mem_message_base,
                     process_inner.mem_message_base + 0x40_0000, // Limit to one superpage
                     process_inner.mem_message_last,
@@ -420,7 +357,7 @@ impl MemoryManager {
 
             // A request larger than the whole region fits nowhere (and `end - size` would wrap).
             let Some(last_start) = end.checked_sub(size).filter(|last| *last >= start) else {
-                return Err(redoubt_abi::Error::BadAddress);
+                return Err(PageError::NoSpace);
             };
             // Look for a sequence of `size` pages that are free.
             for potential_start in (initial..last_start).step_by(PAGE_SIZE) {
@@ -433,9 +370,8 @@ impl MemoryManager {
                 }
                 if all_free {
                     match kind {
-                        redoubt_abi::MemoryType::Default => process_inner.mem_default_last = potential_start,
-                        redoubt_abi::MemoryType::Messages => process_inner.mem_message_last = potential_start,
-                        other => panic!("invalid kind: {:?}", other),
+                        MemoryType::Default => process_inner.mem_default_last = potential_start,
+                        MemoryType::Messages => process_inner.mem_message_last = potential_start,
                     }
                     return Ok(potential_start as *mut u8);
                 }
@@ -451,14 +387,13 @@ impl MemoryManager {
                 }
                 if all_free {
                     match kind {
-                        redoubt_abi::MemoryType::Default => process_inner.mem_default_last = potential_start,
-                        redoubt_abi::MemoryType::Messages => process_inner.mem_message_last = potential_start,
-                        other => panic!("invalid kind: {:?}", other),
+                        MemoryType::Default => process_inner.mem_default_last = potential_start,
+                        MemoryType::Messages => process_inner.mem_message_last = potential_start,
                     }
                     return Ok(potential_start as *mut u8);
                 }
             }
-            Err(redoubt_abi::Error::BadAddress)
+            Err(PageError::NoSpace)
         })
     }
 
@@ -469,18 +404,14 @@ impl MemoryManager {
         &mut self,
         virt_ptr: *mut u8,
         size: usize,
-        flags: MemoryFlags,
-    ) -> Result<redoubt_abi::MemoryRange, redoubt_abi::Error> {
+        flags: MemFlags,
+    ) -> Result<(), PageError> {
         // If no address was specified, pick the next address that fits
         // in the "default" range
-        let virt = self.find_virtual_address(virt_ptr, size, redoubt_abi::MemoryType::Default)? as usize;
+        let virt = self.find_virtual_address(virt_ptr, size, MemoryType::Default)? as usize;
 
-        if virt & 0xfff != 0 {
-            return Err(redoubt_abi::Error::BadAlignment);
-        }
-
-        if size & 0xfff != 0 {
-            return Err(redoubt_abi::Error::BadAlignment);
+        if virt & 0xfff != 0 || size & 0xfff != 0 {
+            return Err(PageError::Unaligned);
         }
 
         let mut mm = MemoryMapping::current();
@@ -493,53 +424,9 @@ impl MemoryManager {
                 return Err(e);
             }
         }
-        crate::mem::memory_range(virt as usize, size)
+        Ok(())
     }
 
-    /// Attempt to allocate a single page from the default section.
-    /// Note that this will be backed by a real page.
-    #[cfg(baremetal)]
-    pub fn map_zeroed_page(&mut self, pid: PID, is_user: bool) -> Result<*mut usize, redoubt_abi::Error> {
-        let virt =
-            self.find_virtual_address(core::ptr::null_mut(), PAGE_SIZE, redoubt_abi::MemoryType::Default)?
-                as usize;
-
-        // Grab the next available page.  This claims it for this process.
-        let phys = self.alloc_page(pid)?;
-
-        // Actually perform the map.  At this stage, every physical page should be owned by us.
-        if let Err(e) = crate::arch::mem::map_page_inner(
-            self,
-            pid,
-            phys as usize,
-            virt as usize,
-            redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W,
-            false,
-        ) {
-            self.release_page(phys as *mut usize, pid).ok();
-            return Err(e);
-        }
-
-        let virt = virt as *mut usize;
-
-        // Zero-out the page
-        let range_start = virt;
-        let range_end = range_start.wrapping_add(PAGE_SIZE / core::mem::size_of::<usize>());
-        // SAFETY: `bzero` zeroes the page just mapped at `virt`, which the kernel owns until handed out.
-        unsafe {
-            crate::mem::bzero(range_start, range_end);
-        };
-        if is_user {
-            crate::arch::mem::hand_page_to_user(virt as _)?;
-        }
-        // klog!(
-        //     "Mapped {:08x} -> {:08x} (user? {})",
-        //     phys as usize, virt as usize, is_user
-        // );
-        Ok(virt)
-    }
-
-    #[cfg_attr(not(baremetal), allow(dead_code))]
     pub fn is_main_memory(&self, phys: *mut u8) -> bool {
         (phys as usize) >= self.ram_start && (phys as usize) < self.ram_start + self.ram_size
     }
@@ -557,32 +444,26 @@ impl MemoryManager {
     ///
     /// No platform we target (QEMU virt) has peripheral RAM, so this is always false; it is
     /// kept as the extension point for one that does.
-    #[allow(dead_code)]
     pub fn is_peripheral_ram(&self, _phys: usize) -> bool { false }
 
-    /// Attempt to map the given physical address into the virtual address space
-    /// of this process.
+    /// Map the device registers at `phys` into the virtual address space of `pid` (the kernel's
+    /// own: the PLIC). Nothing here reserves pages to back later: reservations are only the
+    /// loader programs' stacks (`reserve_range`, the Setup path).
     ///
     /// # Errors
     ///
-    /// * MemoryInUse - The specified page is already mapped
+    /// * InUse - The specified page is already mapped
     pub fn map_range(
         &mut self,
         phys_ptr: *mut u8,
         virt_ptr: *mut u8,
         size: usize,
-        pid: PID,
-        flags: MemoryFlags,
-        kind: redoubt_abi::MemoryType,
-    ) -> Result<redoubt_abi::MemoryRange, redoubt_abi::Error> {
+        pid: Pid,
+        flags: MemFlags,
+        kind: MemoryType,
+    ) -> Result<(), PageError> {
         let phys = phys_ptr as usize;
         let virt = self.find_virtual_address(virt_ptr, size, kind)?;
-
-        // If no physical address is specified, give the user the next available pages.
-        // Contiguous RAM for a device is `dma_alloc`'s (device.rs), through a device handle.
-        if phys == 0 {
-            return self.reserve_range(virt, size, flags);
-        }
 
         // 1. Attempt to claim all physical pages in the range
         for claim_phys in (phys..(phys + size)).step_by(PAGE_SIZE) {
@@ -612,120 +493,26 @@ impl MemoryManager {
                 return Err(e);
             }
         }
-
-        crate::mem::memory_range(virt as usize, size)
-    }
-
-    /// Attempt to map the given physical address into the virtual address space
-    /// of this process.
-    ///
-    /// # Errors
-    ///
-    /// * MemoryInUse - The specified page is already mapped
-    pub fn unmap_page(&mut self, virt: *mut usize) -> Result<usize, redoubt_abi::Error> {
-        let pid = crate::arch::process::current_pid();
-
-        // If the virtual address has an assigned physical address, release that
-        // address from this process.
-        if let Ok(phys) = crate::arch::mem::virt_to_phys(virt as usize) {
-            self.release_page(phys as *mut usize, pid).ok();
-        }
-
-        // Free the virtual address.
-        crate::arch::mem::unmap_page_inner(self, virt as usize)
-    }
-
-    /// Move a page from one process into another, keeping its permissions.
-    #[allow(dead_code)]
-    pub fn move_page(
-        &mut self,
-        src_pid: PID,
-        src_mapping: &MemoryMapping,
-        src_addr: *mut u8,
-        dest_pid: PID,
-        dest_mapping: &MemoryMapping,
-        dest_addr: *mut u8,
-    ) -> Result<(), redoubt_abi::Error> {
-        let phys_addr = crate::arch::mem::virt_to_phys(src_addr as usize)?;
-        crate::arch::mem::move_page_inner(self, src_mapping, src_addr, dest_pid, dest_mapping, dest_addr)?;
-        self.claim_release_move(phys_addr as *mut usize, dest_pid, ClaimReleaseMove::Move(src_pid))
-    }
-
-    #[allow(dead_code)]
-    /// Move the page in the process mapping listing without manipulating
-    /// the pagetables at all.
-    pub fn move_page_raw(&mut self, phys_addr: *mut usize, dest_pid: PID) -> Result<(), redoubt_abi::Error> {
-        self.claim_release_move(
-            phys_addr as *mut usize,
-            dest_pid,
-            ClaimReleaseMove::Move(crate::arch::process::current_pid()),
-        )
-    }
-
-    /// Mark the page in the current process as being lent.  If the borrow is
-    /// read-only, then additionally remove the "write" bit on it.  If the page
-    /// is writable, then remove it from the current process until the borrow is
-    /// returned.
-    #[allow(dead_code)]
-    pub fn lend_page(
-        &mut self,
-        src_mapping: &MemoryMapping,
-        src_addr: *mut u8,
-        dest_pid: PID,
-        dest_mapping: &MemoryMapping,
-        dest_addr: *mut u8,
-        mutable: bool,
-    ) -> Result<usize, redoubt_abi::Error> {
-        // If this page is to be writable, detach it from this process.
-        // Otherwise, mark it as read-only to prevent a process from modifying
-        // the page while it's borrowed.
-        crate::arch::mem::lend_page_inner(
-            self,
-            src_mapping,
-            src_addr as _,
-            dest_pid,
-            dest_mapping,
-            dest_addr as _,
-            mutable,
-        )
-    }
-
-    /// Return the range from `src_mapping` back to `dest_mapping`
-    #[allow(dead_code)]
-    pub fn unlend_page(
-        &mut self,
-        src_mapping: &MemoryMapping,
-        src_addr: *mut u8,
-        dest_pid: PID,
-        dest_mapping: &MemoryMapping,
-        dest_addr: *mut u8,
-    ) -> Result<usize, redoubt_abi::Error> {
-        // If this page is to be writable, detach it from this process.
-        // Otherwise, mark it as read-only to prevent a process from modifying
-        // the page while it's borrowed.
-        crate::arch::mem::return_page_inner(self, src_mapping, src_addr, dest_pid, dest_mapping, dest_addr)
+        Ok(())
     }
 
     /// A frame changes hands between two processes that are not the running one: a transfer
     /// (R4) or an abandoned lend (R3). The budgets follow the frame, as they do for every other
     /// ownership change.
-    #[cfg(baremetal)]
-    pub fn move_frame(&mut self, phys: usize, from: PID, to: PID) -> Result<(), redoubt_abi::Error> {
+    pub fn move_frame(&mut self, phys: usize, from: Pid, to: Pid) -> Result<(), PageError> {
         self.claim_release_move(phys as *mut usize, to, ClaimReleaseMove::Move(from))
     }
 
     /// Free a frame `pid` owns (an abandoned lend the server replied to, R3).
-    #[cfg(baremetal)]
-    pub fn free_frame_of(&mut self, phys: usize, pid: PID) -> Result<(), redoubt_abi::Error> {
+    pub fn free_frame_of(&mut self, phys: usize, pid: Pid) -> Result<(), PageError> {
         self.release_page(phys as *mut usize, pid)
     }
 
     /// Back every demand-paged page of `[address, address + len)` in the current address
     /// space, so that the range can be lent or moved. Callers hold the memory manager
     /// already, which is why the backing takes `self` instead of borrowing it again.
-    #[cfg(baremetal)]
-    pub fn ensure_range_exists(&mut self, address: usize, len: usize) -> Result<(), redoubt_abi::Error> {
-        let end = address.checked_add(len).ok_or(redoubt_abi::Error::BadAddress)?;
+    pub fn ensure_range_exists(&mut self, address: usize, len: usize) -> Result<(), PageError> {
+        let end = address.checked_add(len).ok_or(PageError::Unmapped)?;
         for page in (address..end).step_by(PAGE_SIZE) {
             crate::arch::mem::ensure_page_exists_inner(self, page)?;
         }
@@ -734,12 +521,11 @@ impl MemoryManager {
 
     /// Refuse to move `[address, address + len)` of the current address space unless every
     /// page is a frame credited to `pid` in the ownership table. A page `pid` was only lent is
-    /// credited to its lender, not to `pid`, so it fails this check; `move_page` would discover
-    /// the mismatch only after changing the page tables, too late to back out. The pages must
-    /// already be backed (`ensure_range_exists`), so each has a frame to check.
-    #[cfg(baremetal)]
-    pub fn check_owned_range(&self, pid: PID, address: usize, len: usize) -> Result<(), redoubt_abi::Error> {
-        let end = address.checked_add(len).ok_or(redoubt_abi::Error::BadAddress)?;
+    /// credited to its lender, not to `pid`, so it fails this check; checked any later, the
+    /// mismatch would surface only after the page tables had changed, too late to back out. The
+    /// pages must already be backed (`ensure_range_exists`), so each has a frame to check.
+    pub fn check_owned_range(&self, pid: Pid, address: usize, len: usize) -> Result<(), PageError> {
+        let end = address.checked_add(len).ok_or(PageError::Unmapped)?;
         for page in (address..end).step_by(PAGE_SIZE) {
             let phys = crate::arch::mem::virt_to_phys(page)?;
             let owner = if self.is_main_memory(phys as *mut u8) {
@@ -748,56 +534,35 @@ impl MemoryManager {
                 self.extra_index(phys).and_then(|index| self.extra_allocations[index])
             };
             if owner != Some(pid) {
-                return Err(redoubt_abi::Error::ShareViolation);
+                return Err(PageError::Lent);
             }
         }
         Ok(())
     }
 
-    /// Claim the given memory for the given process, or release the memory
-    /// back to the free pool.
-    #[cfg(not(baremetal))]
-    fn claim_release_move(
-        &mut self,
-        _addr: *mut usize,
-        _pid: PID,
-        _action: ClaimReleaseMove,
-    ) -> Result<(), redoubt_abi::Error> {
-        Ok(())
-    }
-
-    #[cfg(baremetal)]
     fn claim_release_move(
         &mut self,
         addr: *mut usize,
-        pid: PID,
+        pid: Pid,
         action: ClaimReleaseMove,
-    ) -> Result<(), redoubt_abi::Error> {
+    ) -> Result<(), PageError> {
         /// Modify the memory tracking table to note which process owns
         /// the specified address.
         fn action_inner(
-            owner_addr: &mut Option<PID>,
-            pid: PID,
+            owner_addr: &mut Option<Pid>,
+            pid: Pid,
             action: ClaimReleaseMove,
             allow_alias: bool,
             addr: usize,
-        ) -> Result<(), redoubt_abi::Error> {
+        ) -> Result<(), PageError> {
             if let Some(current_pid) = *owner_addr {
                 if current_pid != pid {
-                    // klog!(
-                    //     "In claim_or_release({}, {}, {:?}) -- addr is owned by {} not {}",
-                    //     owner_addr.map(|v| v.get()).unwrap_or_default(),
-                    //     pid,
-                    //     action,
-                    //     current_pid,
-                    //     pid
-                    // );
                     if let ClaimReleaseMove::Move(existing_pid) = action {
                         if existing_pid != current_pid {
-                            return Err(redoubt_abi::Error::MemoryInUse);
+                            return Err(PageError::InUse);
                         }
                     } else {
-                        return Err(redoubt_abi::Error::MemoryInUse);
+                        return Err(PageError::InUse);
                     }
                 }
             }
@@ -812,7 +577,7 @@ impl MemoryManager {
                                     addr, owner_addr, pid
                                 );
                             } else {
-                                return Err(redoubt_abi::Error::MemoryInUse);
+                                return Err(PageError::InUse);
                             }
                         }
                         *owner_addr = Some(pid);
@@ -824,7 +589,7 @@ impl MemoryManager {
                                 "ERR: physical address {:x} already used by {:?} (requester: {:?})",
                                 addr, owner_addr, pid
                             );
-                            return Err(redoubt_abi::Error::MemoryInUse);
+                            return Err(PageError::InUse);
                         }
                     }
                 }
@@ -841,8 +606,8 @@ impl MemoryManager {
         let addr = addr as usize;
 
         // Ensure the address lies on a page boundary
-        if cfg!(baremetal) && addr & 0xfff != 0 {
-            return Err(redoubt_abi::Error::BadAlignment);
+        if addr & 0xfff != 0 {
+            return Err(PageError::Unaligned);
         }
 
         let mut offset = 0;
@@ -865,7 +630,7 @@ impl MemoryManager {
                         if let Some(old) = before {
                             self.charge_frame(old).expect("re-charging the page just uncharged");
                         }
-                        return Err(redoubt_abi::Error::OutOfMemory);
+                        return Err(PageError::NoFrame);
                     }
                 }
             }
@@ -889,20 +654,16 @@ impl MemoryManager {
             }
             offset += region.size / PAGE_SIZE;
         }
-        // println!(
-        //     "mem: unable to claim or release physical address {:08x}",
-        //     addr
-        // );
-        Err(redoubt_abi::Error::BadAddress)
+        Err(PageError::Unmapped)
     }
 
     /// Mark a given address as being owned by the specified process ID
-    fn claim_page(&mut self, addr: *mut usize, pid: PID) -> Result<(), redoubt_abi::Error> {
+    fn claim_page(&mut self, addr: *mut usize, pid: Pid) -> Result<(), PageError> {
         self.claim_release_move(addr, pid, ClaimReleaseMove::Claim)
     }
 
     /// Mark a given address as no longer being owned by the specified process ID
-    fn release_page(&mut self, addr: *mut usize, pid: PID) -> Result<(), redoubt_abi::Error> {
+    fn release_page(&mut self, addr: *mut usize, pid: Pid) -> Result<(), PageError> {
         self.claim_release_move(addr, pid, ClaimReleaseMove::Release)
     }
 
@@ -912,15 +673,13 @@ impl MemoryManager {
     /// not borrow the memory manager: callers iterate the regions while claiming pages in
     /// `extra_allocations`. `use<>` states that, keeping `self`'s lifetime out of the
     /// returned type.
-    #[cfg(baremetal)]
-    fn extra_regions(&self) -> impl Iterator<Item = MemoryRangeExtra> + use<> {
+    fn extra_regions(&self) -> impl Iterator<Item = ExtraRegion> + use<> {
         let table: &'static [u32] = self.extra_regions;
-        table.chunks_exact(MemoryRangeExtra::WORDS).map(MemoryRangeExtra::from_words)
+        table.chunks_exact(ExtraRegion::WORDS).map(ExtraRegion::from_words)
     }
 
     /// The index into `extra_allocations` for a physical address in one of the extra
     /// (device) regions, if any.
-    #[cfg(baremetal)]
     fn extra_index(&self, phys: usize) -> Option<usize> {
         let mut base = 0;
         for region in self.extra_regions() {
@@ -939,10 +698,9 @@ impl MemoryManager {
     /// # Safety
     /// Only sound as the final step of destroying `pid`: after this, frames it owned may
     /// be handed to other processes, so `pid` must never run again.
-    pub unsafe fn release_all_memory_for_process(&mut self, pid: PID, space: &MemoryMapping) {
-        #[cfg(baremetal)]
+    pub unsafe fn release_all_memory_for_process(&mut self, pid: Pid, space: &MemoryMapping) {
         {
-            let kernel = PID::new(1).unwrap();
+            let kernel = Pid::new(1).unwrap();
 
             // Pass 1: a frame this process has lent out is still mapped in the borrower.
             // Reparent it to the kernel so the frame is not reused while the borrower holds
@@ -967,15 +725,12 @@ impl MemoryManager {
             // Pass 2: release the remaining ownership entries after protected lends moved away.
             self.release_owned_frames(pid);
         }
-        #[cfg(not(baremetal))]
-        let _ = (pid, space);
     }
 
     /// Give back every frame still owned by a process that will never run again. Its protected
     /// lends must already have moved away, or it must never have run (`process_create` rollback).
     /// This shared final step needs no page-table access, including for a partially built space.
-    #[cfg(baremetal)]
-    pub fn release_owned_frames(&mut self, pid: PID) {
+    pub fn release_owned_frames(&mut self, pid: Pid) {
         for idx in 0..self.allocations.len() {
             if self.allocations[idx] == Some(pid) {
                 self.allocations[idx] = None;
@@ -989,155 +744,20 @@ impl MemoryManager {
         self.uncharge_all_frames(pid);
     }
 
-    /// Adjust the flags on the given memory range. This allows for stripping flags from a memory
-    /// range but does not allow adding flags. The memory range must exist, and the flags must be valid.
-    pub fn update_memory_flags(
-        &mut self,
-        range: MemoryRange,
-        flags: MemoryFlags,
-    ) -> Result<(), redoubt_abi::Error> {
-        let virt = range.as_mut_ptr() as usize;
-        let size = range.len();
-        if virt & (PAGE_SIZE - 1) != 0 {
-            return Err(redoubt_abi::Error::BadAlignment);
-        }
-
-        if size & (PAGE_SIZE - 1) != 0 {
-            return Err(redoubt_abi::Error::BadAlignment);
-        }
-
-        // Pre-check the range to ensure the new flags are valid
-        for virt in (virt..(virt + size)).step_by(PAGE_SIZE) {
-            let existing_flags = crate::arch::mem::page_flags(virt).ok_or(redoubt_abi::Error::MemoryInUse)?;
-            // If the new flags add to the range, return an error.
-            if !(!existing_flags & flags).is_empty() {
-                return Err(redoubt_abi::Error::MemoryInUse);
-            }
-        }
-
-        // Now that the flags are validated, perform the update. This is fine as long as
-        // we're unicore.
-        for virt in (virt..(virt + size)).step_by(PAGE_SIZE) {
-            let existing_flags = crate::arch::mem::page_flags(virt).ok_or(redoubt_abi::Error::MemoryInUse)?;
-            // If the new flags add to the range, return an error.
-            if !(!existing_flags & flags).is_empty() {
-                return Err(redoubt_abi::Error::MemoryInUse);
-            }
-
-            crate::arch::mem::update_page_flags(virt, flags)?;
-        }
-
-        Ok(())
-    }
-
-    #[cfg(all(baremetal, any(target_arch = "riscv32", target_arch = "riscv64")))]
-    pub fn check_for_duplicates(&self) {
-        use crate::services::SystemServices;
-
-        SystemServices::with(|system_services| {
-            let current_pid = system_services.current_pid();
-
-            // Activate the debugging process and iterate through it,
-            // noting down each active thread.
-            for phys in (self.ram_start..self.ram_start + self.ram_size).step_by(PAGE_SIZE) {
-                let mut owner = None;
-                for pid in 1..crate::services::MAX_PROCESS_COUNT {
-                    let pid = PID::new(pid as u8).unwrap();
-                    let Ok(process) = system_services.get_process(pid) else {
-                        continue;
-                    };
-                    let Ok(_) = process.activate() else {
-                        continue;
-                    };
-                    match MemoryMapping::current().phys_to_virt(phys) {
-                        Err(e) => {
-                            println!("!!! ERROR {:?} !!!", e);
-                            continue;
-                        }
-                        Ok(None) => continue,
-                        Ok(Some(virt)) => {
-                            let allocation_offset = (phys - self.ram_start) / PAGE_SIZE;
-                            let existing_owner = &self.allocations[allocation_offset];
-                            let eo = existing_owner;
-                            // A `dma_alloc` frame is `DMA_OWNER`'s, mapped by the run's holder.
-                            if eo == &Some(DMA_OWNER) {
-                                continue;
-                            }
-                            if eo != &Some(pid) {
-                                let is_lent = {
-                                    if let Some(existing_owner) = eo {
-                                        system_services
-                                            .get_process(*existing_owner)
-                                            .unwrap()
-                                            .activate()
-                                            .unwrap();
-                                        let is_lent = if let Ok(Some(owned_address)) =
-                                            MemoryMapping::current().phys_to_virt(phys)
-                                        {
-                                            crate::arch::mem::page_is_lent(owned_address as *mut u8)
-                                        } else {
-                                            false
-                                        };
-                                        system_services.get_process(pid).unwrap().activate().unwrap();
-                                        is_lent
-                                    } else {
-                                        false
-                                    }
-                                };
-                                println!(
-                                    "!!! 0x{:08x} is owned by {} ({}) but is mapped to {} ({}) -- {}",
-                                    phys,
-                                    eo.map(|v| v.get() as isize).unwrap_or(-1),
-                                    eo.map(|v| system_services.process_name(v).unwrap_or("<unknown>"))
-                                        .unwrap_or("<none>"),
-                                    pid.get(),
-                                    system_services.process_name(pid).unwrap_or("<unknown>"),
-                                    if is_lent { "page is lent" } else { "duplicate!" },
-                                );
-                            }
-                            if !crate::arch::mem::page_is_lent(virt as *mut u8) {
-                                if owner.is_none() {
-                                    owner = Some((pid, virt));
-                                } else {
-                                    println!(
-                                        "!!! DUPLICATE !!! Page {:08x} owned by both {} ({}) @ {:08x} and {} ({}) @ {:08x}",
-                                        phys,
-                                        owner.map(|v| v.0.get() as isize).unwrap_or(-1),
-                                        owner
-                                            .map(|v| system_services.process_name(v.0).unwrap_or("<unknown>"))
-                                            .unwrap_or("<none>"),
-                                        owner.map(|v| v.1).unwrap_or(0),
-                                        pid.get(),
-                                        system_services.process_name(pid).unwrap_or("<unknown>"),
-                                        virt,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Restore the previous PID
-            system_services.get_process(current_pid).unwrap().activate().unwrap();
-        })
-    }
 }
 
 // --- The Redoubt memory calls (KERNEL-SPEC.md; R11) ------------------------------------------
 //
-// `map_anon`, `unmap` and `set_flags`, which replace the legacy `MapMemory`/`UnmapMemory`/
-// `UpdateMemoryFlags` for Redoubt programs (WP-K6 deletes those). Three rules of R11 shape
-// them: no mapping is ever writable and executable (`Pte::leaf` refuses it, as decoding
-// already did), every page is zeroed before a process first sees it, and **userspace never
-// names an address**: the kernel chooses where each mapping lands, so none of these calls
-// takes a physical address and only `map_anon` returns a virtual one.
+// `map_anon`, `unmap` and `set_flags`. Three rules of R11 shape them: no mapping is ever
+// writable and executable (`Pte::leaf` refuses it, as decoding already did), every page is
+// zeroed before a process first sees it, and **userspace never names an address**: the kernel
+// chooses where each mapping lands, so none of these calls takes a physical address and only
+// `map_anon` returns a virtual one.
 //
 // `map_anon` backs and charges every page at once rather than reserving it for demand paging.
 // The spec's row says "pages charged", and a process that is told it has memory and then
-// faults for want of it has been told a lie; the legacy path's reservations stay where they
-// are, for the legacy path.
-#[cfg(baremetal)]
+// faults for want of it has been told a lie. The only reservations are the loader programs'
+// stacks (`reserve_range`, the Setup path).
 impl MemoryManager {
     /// A range argument: page-aligned, non-empty, and wholly inside user space. Its end.
     fn user_range(addr: usize, len: usize) -> Result<usize, redoubt_sys::Error> {
@@ -1153,7 +773,7 @@ impl MemoryManager {
     /// address the kernel chooses.
     pub fn map_anon(
         &mut self,
-        pid: PID,
+        pid: Pid,
         len: usize,
         flags: redoubt_sys::MemFlags,
     ) -> Result<usize, redoubt_sys::Error> {
@@ -1161,11 +781,8 @@ impl MemoryManager {
         if len == 0 || len % PAGE_SIZE != 0 {
             return Err(bad);
         }
-        let flags = redoubt_flags(flags);
         // The row's own check: no permission at all, or writable without readable.
-        let writable = flags & MemoryFlags::W == MemoryFlags::W;
-        let readable = flags & MemoryFlags::R == MemoryFlags::R;
-        if flags.is_empty() || (writable && !readable) {
+        if flags == MemFlags::NONE || (flags.contains(MemFlags::WRITE) && !flags.contains(MemFlags::READ)) {
             return Err(bad);
         }
         let at = self.map_run(pid, len / PAGE_SIZE, flags, None)?;
@@ -1180,15 +797,15 @@ impl MemoryManager {
     /// nothing is left mapped, and a run the caller passed in stays the caller's to free.
     pub fn map_run(
         &mut self,
-        pid: PID,
+        pid: Pid,
         npages: usize,
-        flags: MemoryFlags,
+        flags: MemFlags,
         phys: Option<usize>,
     ) -> Result<usize, redoubt_sys::Error> {
         let oom = redoubt_sys::Error::OutOfMemory;
         let len = npages.checked_mul(PAGE_SIZE).ok_or(oom)?;
         let at = self
-            .find_virtual_address(core::ptr::null_mut(), len, redoubt_abi::MemoryType::Default)
+            .find_virtual_address(core::ptr::null_mut(), len, MemoryType::Default)
             .map_err(|_| oom)? as usize;
         let ours = phys.is_none();
         for offset in (0..len).step_by(PAGE_SIZE) {
@@ -1214,7 +831,7 @@ impl MemoryManager {
     }
 
     /// Give back what a failed `map_run` had already mapped, and the pages it had allocated.
-    fn undo_run(&mut self, pid: PID, at: usize, done: usize, ours: bool) -> redoubt_sys::Error {
+    fn undo_run(&mut self, pid: Pid, at: usize, done: usize, ours: bool) -> redoubt_sys::Error {
         for offset in (0..done).step_by(PAGE_SIZE) {
             if let Ok(frame) = crate::arch::mem::unmap_page_inner(self, at + offset) {
                 if ours {
@@ -1231,7 +848,7 @@ impl MemoryManager {
     /// MMIO page-ownership table is left alone, as `map_device` left it alone (the handle, not
     /// a page owner, is the authority there). A `dma_alloc` frame only loses its mapping too: it
     /// stays held, and charged, until the process ends (WP-K5b, OD2).
-    pub fn unmap(&mut self, pid: PID, addr: usize, len: usize) -> Result<(), redoubt_sys::Error> {
+    pub fn unmap(&mut self, pid: Pid, addr: usize, len: usize) -> Result<(), redoubt_sys::Error> {
         let end = Self::user_range(addr, len)?;
         for page in (addr..end).step_by(PAGE_SIZE) {
             self.owned_mapping(pid, page)?;
@@ -1249,15 +866,14 @@ impl MemoryManager {
     /// permissions asked for. W+X cannot be decoded and `Pte::leaf` refuses it again.
     pub fn set_flags(
         &mut self,
-        pid: PID,
+        pid: Pid,
         addr: usize,
         len: usize,
         flags: redoubt_sys::MemFlags,
     ) -> Result<(), redoubt_sys::Error> {
         let bad = redoubt_sys::Error::InvalidArgument;
         let end = Self::user_range(addr, len)?;
-        let flags = redoubt_flags(flags);
-        if flags.is_empty() {
+        if flags == MemFlags::NONE {
             return Err(bad);
         }
         for page in (addr..end).step_by(PAGE_SIZE) {
@@ -1282,7 +898,7 @@ impl MemoryManager {
     /// anything mapped or charged.
     pub fn map_fixed(
         &mut self,
-        pid: PID,
+        pid: Pid,
         addr: usize,
         len: usize,
         flags: redoubt_sys::MemFlags,
@@ -1293,7 +909,6 @@ impl MemoryManager {
         if !crate::arch::mem::range_available_in(&space, addr, len) {
             return Err(redoubt_sys::Error::InvalidArgument);
         }
-        let flags = redoubt_flags(flags);
         check_map_flags(flags)?;
         let npages = (len / PAGE_SIZE) as u64;
         // `pid` is the running caller, and only the kernel (which makes no syscalls) has no
@@ -1337,7 +952,7 @@ impl MemoryManager {
     /// The frame behind `page`, which must be a live user mapping of the caller that is not
     /// lent out and, if it is RAM, is credited to the caller (a lend the caller is holding is
     /// its lender's, not its own) or is a `dma_alloc` frame of a run the caller holds.
-    pub(crate) fn owned_mapping(&self, pid: PID, page: usize) -> Result<usize, redoubt_sys::Error> {
+    pub(crate) fn owned_mapping(&self, pid: Pid, page: usize) -> Result<usize, redoubt_sys::Error> {
         let bad = redoubt_sys::Error::InvalidArgument;
         let phys = crate::arch::mem::user_mapping(page).ok_or(bad)?;
         let ram = self.is_main_memory(phys as *mut u8);
@@ -1354,49 +969,20 @@ impl MemoryManager {
 /// Pages just mapped or remapped with `flags` may be fetched from: if they are executable, make
 /// this hart's instruction fetches see what was stored in them (`fence.i`; the pages were zeroed,
 /// or written by their owner before becoming executable, since W^X forbids both at once).
-#[cfg(baremetal)]
-pub(crate) fn sync_if_executable(flags: MemoryFlags) {
-    if flags & MemoryFlags::X == MemoryFlags::X {
+pub(crate) fn sync_if_executable(flags: MemFlags) {
+    if flags.contains(MemFlags::EXECUTE) {
         crate::arch::mem::sync_icache();
     }
-}
-
-/// The ABI's flags as the page-table layer's. There is no W+X: `MemFlags` cannot hold it.
-#[cfg(baremetal)]
-pub(crate) fn redoubt_flags(flags: redoubt_sys::MemFlags) -> MemoryFlags {
-    let has = |bit: redoubt_sys::MemFlags, flag| {
-        if flags.bits() & bit.bits() != 0 { flag } else { MemoryFlags::FREE }
-    };
-    has(redoubt_sys::MemFlags::READ, MemoryFlags::R)
-        | has(redoubt_sys::MemFlags::WRITE, MemoryFlags::W)
-        | has(redoubt_sys::MemFlags::EXECUTE, MemoryFlags::X)
 }
 
 /// R11 for a caller that maps with `.expect` afterwards (`map_fixed`, `process_map`): refuse
 /// empty flags, W+X, and writable without readable before anything is charged or moved, so the
 /// page-table layer's own refusal (`check_permissions`) is never what catches them. Decoding
 /// already refuses W+X; this check does not rest on that (KERNEL-SPEC.md, ABI).
-#[cfg(baremetal)]
-pub(crate) fn check_map_flags(flags: MemoryFlags) -> Result<(), redoubt_sys::Error> {
-    let wx = MemoryFlags::W | MemoryFlags::X;
-    let write_only = flags & MemoryFlags::W == MemoryFlags::W && flags & MemoryFlags::R != MemoryFlags::R;
-    if flags.is_empty() || flags & wx == wx || write_only {
+pub(crate) fn check_map_flags(flags: MemFlags) -> Result<(), redoubt_sys::Error> {
+    let write_only = flags.contains(MemFlags::WRITE) && !flags.contains(MemFlags::READ);
+    if flags == MemFlags::NONE || flags.contains(MemFlags::WRITE | MemFlags::EXECUTE) || write_only {
         return Err(redoubt_sys::Error::InvalidArgument);
     }
     Ok(())
-}
-
-/// Zero the memory in `start..end` with volatile writes.
-///
-/// # Safety
-/// `start..end` must be a single valid, writable, `T`-aligned allocation the caller owns.
-pub unsafe fn bzero<T>(mut start: *mut T, end: *mut T)
-where
-    T: Copy,
-{
-    while start < end {
-        // NOTE(volatile) to prevent this from being transformed into `memclr`
-        core::ptr::write_volatile(start, core::mem::zeroed());
-        start = start.offset(1);
-    }
 }

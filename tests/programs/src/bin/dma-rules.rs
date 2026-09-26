@@ -1,8 +1,7 @@
 //! DMA pages stay put (WP-K5b, OD2; KERNEL-SPEC.md, `dma_alloc`): a `dma_alloc` page can be
 //! neither lent, transferred nor given to another process with `process_map`; `set_flags` works on
 //! it; `unmap` drops only the mapping, so its frames stay held and charged until the process ends;
-//! and a child that allocates and exits gives its budget back every page. Legacy `MapMemory`
-//! refuses any range touching a DMA device, even one it has a grant for (P2-1).
+//! and a child that allocates and exits gives its budget back every page.
 //!
 //! It runs as the bundle's first program, so it holds every device object, and it uses an empty
 //! virtio-mmio slot: DMA-flagged, with no device behind it to program. It prints on the console it
@@ -13,7 +12,6 @@
 
 use core::fmt::Write;
 
-use redoubt_abi::{MemoryAddress, MemoryFlags};
 use test_programs::rd::{self, Cause, Error, MemFlags, Received, ResetKind};
 use test_programs::spawn;
 use uart_16550::MmioSerialPort;
@@ -22,10 +20,6 @@ use uart_16550::MmioSerialPort;
 const DMA_PAGES: usize = 4;
 /// How long a check waits for anything, in microseconds.
 const WAIT: u64 = 2_000_000;
-/// QEMU `virt`'s console, then its first virtio-mmio slot on the next page; the case grants this
-/// program both, so only the DMA rule can refuse the second.
-const UART: usize = 0x1000_0000;
-const VIRTIO: usize = 0x1000_1000;
 
 struct Out(MmioSerialPort);
 
@@ -60,9 +54,8 @@ pub extern "C" fn _start() -> ! {
     out.0.init();
     say!(out, "\n[dma-rules] mapped the console");
 
-    let free = rd::first_free();
-    let Some((dev, at, phys)) =
-        (rd::OTHER_DEVICES..free).find_map(|h| rd::dma_alloc(h, DMA_PAGES).ok().map(|(a, p)| (h, a, p)))
+    let Some((dev, at, phys)) = (rd::OTHER_DEVICES..rd::log_rx())
+        .find_map(|h| rd::dma_alloc(h, DMA_PAGES).ok().map(|(a, p)| (h, a, p)))
     else {
         say!(out, "[dma-rules] FAIL: no device carries the DMA flag");
         test_programs::park()
@@ -146,23 +139,6 @@ pub extern "C" fn _start() -> ! {
         DMA_PAGES,
         empty,
         left
-    );
-
-    // --- Legacy MapMemory (P2-1) -------------------------------------------------------------
-    let rwf = MemoryFlags::R | MemoryFlags::W;
-    let slot = redoubt_abi::map_memory(MemoryAddress::new(VIRTIO), None, rd::PAGE_SIZE, rwf).map(|_| ());
-    let across = redoubt_abi::map_memory(MemoryAddress::new(UART), None, 2 * rd::PAGE_SIZE, rwf).map(|_| ());
-    let beside = redoubt_abi::map_memory(MemoryAddress::new(UART), None, rd::PAGE_SIZE, rwf).map(|_| ());
-    let inside =
-        redoubt_abi::map_memory(MemoryAddress::new(VIRTIO + 0x10), None, rd::PAGE_SIZE, rwf).map(|_| ());
-    let denied = Err(redoubt_abi::Error::AccessDenied);
-    check!(
-        out,
-        slot == denied && across == denied && inside.is_err() && beside.is_ok(),
-        "legacy MapMemory refuses a granted virtio slot, a range reaching into one and an unaligned base inside one ({:?}, {:?}, {:?}), not the page beside it",
-        slot,
-        across,
-        inside
     );
 
     say!(out, "[dma-rules] DMA RULES PASSED");

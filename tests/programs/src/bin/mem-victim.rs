@@ -6,56 +6,70 @@
 #![no_std]
 #![no_main]
 
-use test_programs::{log, mem, Logger};
-use redoubt_abi::{MemoryFlags, Message};
-
+use test_programs::rd::{self, MessageKind, Received};
+use test_programs::{Logger, log, mem};
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
     for _ in 0..mem::SECRET_PAGES {
-        let page = redoubt_abi::map_memory(None, None, 4096, MemoryFlags::R | MemoryFlags::W).expect("couldn't map a page");
+        let page = rd::map_anon(rd::PAGE_SIZE, rd::rw()).expect("couldn't map a page");
         // SAFETY: the kernel just mapped this page, writable, for this process alone.
-        let bytes = unsafe { core::slice::from_raw_parts_mut(page.as_mut_ptr(), page.len()) };
+        let bytes = unsafe { core::slice::from_raw_parts_mut(page as *mut u8, rd::PAGE_SIZE) };
         for chunk in bytes.chunks_mut(mem::SECRET.len()) {
             chunk.copy_from_slice(mem::SECRET);
         }
-        redoubt_abi::unmap_memory(page).expect("couldn't free a page");
+        rd::unmap(page, rd::PAGE_SIZE).expect("couldn't free a page");
     }
     log!(logger, "[mem-victim] left the secret in {} freed pages", mem::SECRET_PAGES);
-
-    // The server exists only now, so the attacker's first request comes after the pages are freed.
-    let sid = redoubt_abi::create_server_with_address(mem::VICTIM_ADDRESS).expect("couldn't create the victim's server");
+    // The bundle's second program: it holds the boot endpoint's receive right. The attacker's
+    // calls wait until this `receive`, after the pages are freed.
     let (mut checked, mut dirty) = (0, 0);
     loop {
-        let envelope = redoubt_abi::receive_message(sid).expect("couldn't receive");
-        // The kernel names the sender; the attacker cannot choose it.
-        let sender = envelope.sender.pid().map_or(0, |pid| pid.get());
-        match &envelope.body {
-            Message::Borrow(m) if m.id == mem::CHECK => {
-                // SAFETY: the kernel lends us this range, readable, until we drop the envelope.
-                let bytes = unsafe { core::slice::from_raw_parts(m.buf.as_ptr(), m.buf.len()) };
+        let Ok(Received::Message(m)) = rd::receive(Some(rd::BOOT_ENDPOINT), rd::FOREVER, 0) else { continue };
+        let MessageKind::Call { lend } = m.kind else { continue };
+        // The kernel writes the badge, the sender's PID; the attacker cannot choose it.
+        let sender = m.badge;
+        match (m.body.words[0], lend) {
+            (mem::CHECK, Some(pages)) => {
+                let len = pages.npages.get() * rd::PAGE_SIZE;
+                // SAFETY: the kernel lends us these pages, readable, until the reply below.
+                let bytes = unsafe { core::slice::from_raw_parts(pages.addr as *const u8, len) };
                 checked += 1;
                 if bytes.iter().any(|&b| b != 0) {
                     dirty += 1;
                     let secret = bytes.windows(mem::SECRET.len()).any(|w| w == mem::SECRET);
-                    log!(logger, "[mem-victim] BREACH: a page from PID {} held data (my secret: {})", sender, secret);
+                    log!(
+                        logger,
+                        "[mem-victim] BREACH: a page from PID {} held data (my secret: {})",
+                        sender,
+                        secret
+                    );
                 }
+                rd::reply(m.msg_id.get(), &rd::body([0; rd::WORDS])).ok();
             }
-            Message::BlockingScalar(m) if m.id == mem::DONE => {
+            (mem::DONE, None) => {
                 if dirty == 0 {
                     log!(logger, "[mem-victim] checked {} pages from PID {}: all zero", checked, sender);
                 } else {
-                    log!(logger, "[mem-victim] BREACH: {} of {} pages from PID {} held data", dirty, checked, sender);
+                    log!(
+                        logger,
+                        "[mem-victim] BREACH: {} of {} pages from PID {} held data",
+                        dirty,
+                        checked,
+                        sender
+                    );
                 }
-                redoubt_abi::return_scalar(envelope.sender, 0).ok();
+                rd::reply(m.msg_id.get(), &rd::body([0; rd::WORDS])).ok();
                 if dirty == 0 {
                     // Off the console too: the checker names this PID and powers off, so a
                     // forged verdict line alone cannot pass the case.
                     test_programs::checker::done();
                 }
             }
-            _ => {}
+            _ => {
+                rd::reply(m.msg_id.get(), &rd::body([0; rd::WORDS])).ok();
+            }
         }
     }
 }

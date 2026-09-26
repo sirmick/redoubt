@@ -18,7 +18,7 @@
 use core::fmt::Write;
 use core::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 
-use uart_16550::MmioSerialPort;
+use crate::console::{self, Console};
 
 use crate::rd::{self, Error, Received};
 use crate::spawn::{self, Image};
@@ -705,15 +705,14 @@ pub mod rtc {
 
     pub fn clear(base: usize) { write(base, CLEAR_INTERRUPT, 1); }
 
-    /// Among the device handles from [`rd::OTHER_DEVICES`]: the RTC's MMIO handle and where it is
-    /// mapped here, and its interrupt handle. The MMIO is the one-page device that is not virtio
-    /// and whose first word (its time's low half, in ns) moves by half a million to a hundred
-    /// million over a millisecond's sleep: nothing else of the others is read, since some fault on
-    /// reads they do not expect. The interrupt is the one a `receive` on which returns when the
-    /// alarm fires.
-    pub fn find() -> Option<(u32, usize, u32)> {
-        let free = rd::first_free();
-        let (mmio, base) = (rd::OTHER_DEVICES..free).find_map(|h| {
+    /// Among `devices` (read with [`rd::log_rx`] before any handle is made): the RTC's MMIO
+    /// handle and where it is mapped here, and its interrupt handle. The MMIO is the one-page
+    /// device that is not virtio and whose first word (its time's low half, in ns) moves by half
+    /// a million to a hundred million over a millisecond's sleep: nothing else of the others is
+    /// read, since some fault on reads they do not expect. The interrupt is the one a `receive`
+    /// on which returns when the alarm fires.
+    pub fn find(devices: core::ops::Range<u32>) -> Option<(u32, usize, u32)> {
+        let (mmio, base) = devices.clone().find_map(|h| {
             let (addr, len) = rd::map_device(h).ok()?;
             if len == rd::PAGE_SIZE && read(addr, 0) != VIRTIO_MAGIC {
                 let a = read(addr, TIME_LOW);
@@ -728,7 +727,7 @@ pub mod rtc {
         })?;
         // Each candidate waits in `receive` while an alarm fires: an alarm that fired while its
         // source was masked would not be seen by a later `receive` (observed on QEMU virt).
-        let irq = (rd::OTHER_DEVICES..free).filter(|h| *h != mmio).find(|h| {
+        let irq = devices.filter(|h| *h != mmio).find(|h| {
             alarm(base, now_ns(base) + 1_000_000);
             let fired = matches!(rd::receive(Some(*h), 3_000, 0), Ok(Received::Interrupt));
             clear(base);
@@ -738,23 +737,14 @@ pub mod rtc {
     }
 }
 
-/// The launcher's UART, once mapped, for [`panicked`].
-static UART: AtomicUsize = AtomicUsize::new(0);
-
 /// A case's panic: say so on the UART (the launcher's; a child has none), then park.
 pub fn panicked(name: &str, info: &core::panic::PanicInfo) -> ! {
-    let uart = UART.load(SeqCst);
-    if uart != 0 {
-        // SAFETY: the launcher mapped this UART and is the bundle's only program.
-        let mut out = unsafe { MmioSerialPort::new(uart) };
-        let _ = writeln!(out, "[{}] FAIL: panic: {}", name, info);
-    }
+    let _ = writeln!(Console, "[{}] FAIL: panic: {}", name, info);
     crate::park()
 }
 
 /// The launcher.
 pub struct Bench {
-    pub out: MmioSerialPort,
     image: Image,
     exit: u32,
     rep: u32,
@@ -771,10 +761,7 @@ pub struct Bench {
 impl Bench {
     pub fn new(name: &'static str) -> Bench {
         let (uart, _) = rd::map_device(rd::CONSOLE_MMIO).expect("uart");
-        UART.store(uart, SeqCst);
-        // SAFETY: this program is the bundle's only one, and owns the UART it just mapped.
-        let mut out = unsafe { MmioSerialPort::new(uart) };
-        out.init();
+        console::init(uart);
         let image = spawn::image();
         let exit = rd::endpoint_create().unwrap();
         let rep = rd::endpoint_create().unwrap();
@@ -787,8 +774,8 @@ impl Bench {
         // The loop's rate alone, over 100 ms.
         let n = spin_until(ticks() + 100_000 * tpu);
         let rate = n / 100;
-        let mut b = Bench { out, image, exit, rep, go: [0; 64], started: 0, tpu, rate, name, failed: false };
-        let _ = writeln!(b.out, "[{}] calibrated: {} ticks/us, {} iterations/ms", name, tpu, rate);
+        let b = Bench { image, exit, rep, go: [0; 64], started: 0, tpu, rate, name, failed: false };
+        let _ = writeln!(Console, "[{}] calibrated: {} ticks/us, {} iterations/ms", name, tpu, rate);
         b
     }
 
@@ -890,17 +877,17 @@ impl Bench {
 
     pub fn check(&mut self, ok: bool, what: core::fmt::Arguments) {
         self.failed |= !ok;
-        let _ = writeln!(self.out, "[{}] {}: {}", self.name, if ok { "ok" } else { "FAIL" }, what);
+        let _ = writeln!(Console, "[{}] {}: {}", self.name, if ok { "ok" } else { "FAIL" }, what);
     }
 
     pub fn note(&mut self, what: core::fmt::Arguments) {
-        let _ = writeln!(self.out, "[{}] {}", self.name, what);
+        let _ = writeln!(Console, "[{}] {}", self.name, what);
     }
 
     /// Report, power off.
-    pub fn finish(mut self, upper: &str) -> ! {
+    pub fn finish(self, upper: &str) -> ! {
         if !self.failed {
-            let _ = writeln!(self.out, "{} TEST PASSED", upper);
+            let _ = writeln!(Console, "{} TEST PASSED", upper);
         }
         let _ = rd::system_reset(rd::RESET, rd::ResetKind::PowerOff);
         crate::park()

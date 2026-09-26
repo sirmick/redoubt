@@ -1,0 +1,24 @@
+description = "A reused PID inherits no authority: a child that draws a dead child's PID holds none of its handles, mappings, badge, log handle, notices or interrupt (checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+# PID 2 alone: it owns the console and every device handle, and it checks itself. Each verdict
+# is a kernel result: BadHandle at every index, the badge the kernel wrote on B's message, the
+# exit notices (B's fault at A's device address), and the console IRQ waking this program.
+programs = ["pid-reuse-authority"]
+timeout_secs = 60
+expect = [
+    '^\[pid 2\] \[pid-reuse\] A \(pid \d+\) exited holding a call, a device mapping, the irq and a budget$',
+    '^\[pid 2\] \[pid-reuse\] B drew pid \d+$',
+    '^\[pid 2\] \[pid-reuse\] B holds nothing at indices 2 to 64, the log handle.s included: true$',
+    '^\[pid 2\] \[pid-reuse\] B.s message carries badge 9$',
+    '^\[pid 2\] \[pid-reuse\] B faulted reading where A.s device was mapped$',
+    '^\[pid 2\] \[pid-reuse\] nothing else reached E or the exit endpoint: true$',
+    "^\\[pid 2\\] \\[pid-reuse\\] the console irq woke this program: 'x'$",
+    '^\[pid 2\] PID REUSE AUTHORITY TEST PASSED$',
+]
+poweroff = true
+
+[[input]]
+after = '^\[pid 2\] \[pid-reuse\] waiting for the console irq$'
+send = "x"

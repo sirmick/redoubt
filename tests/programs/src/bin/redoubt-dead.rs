@@ -12,7 +12,6 @@
 
 #![no_std]
 #![no_main]
-#![allow(unused_must_use)] // `expect!` returns what it checked, for the steps that use it
 
 use test_programs::rd::{self, Error, FOREVER, MessageKind, Received};
 use test_programs::{Logger, log};
@@ -50,7 +49,7 @@ fn short_lived(_arg: usize) {
 
 /// A second server thread, for the `Refused` step: it receives, so that a message the budget
 /// cannot pay for is refused to its *sender* and this thread keeps waiting (R4).
-fn second_server(_arg: usize) -> ! {
+fn second_server(_arg: usize) {
     let mut logger = Logger::connect();
     loop {
         match rd::receive(Some(endpoint()), FOREVER, 0) {
@@ -97,7 +96,7 @@ macro_rules! expect {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let logger = Logger::connect();
+    let logger = test_programs::logsrv::start();
     let mut t = T { logger, failed: false };
     log!(t.logger, "[dead] starting");
     let endpoint = rd::endpoint_create().expect("an endpoint");
@@ -105,21 +104,21 @@ pub extern "C" fn _start() -> ! {
     unsafe { core::ptr::write_volatile(&raw mut ENDPOINT, endpoint) };
 
     // --- R4b: the server thread goes while it holds the call ---------------------------------
-    redoubt_abi::create_thread_1(short_lived, 0).expect("the short-lived server");
+    rd::thread(short_lived, 0).expect("the short-lived server");
     let page = rd::page();
     rd::poke(page, 0xD00D);
     let reply = rd::call(endpoint, &rd::body([1, 0, 0, 0]), rd::pages(page, 1), FOREVER);
-    expect!(t, reply.err(), Some(Error::Dead));
+    let _ = expect!(t, reply.err(), Some(Error::Dead));
     // SAFETY: the server thread is the only writer, and it has finished.
-    expect!(t, unsafe { core::ptr::read_volatile(&raw const SERVER_GONE) }, 1);
+    let _ = expect!(t, unsafe { core::ptr::read_volatile(&raw const SERVER_GONE) }, 1);
     // The lend came back as it was: the caller's page is its own again, unchanged.
-    expect!(t, rd::peek(page), 0xD00D);
+    let _ = expect!(t, rd::peek(page), 0xD00D);
     rd::poke(page, 0xD00E);
-    expect!(t, rd::peek(page), 0xD00E);
+    let _ = expect!(t, rd::peek(page), 0xD00E);
 
     // --- R4: a message the receiving budget cannot pay for -----------------------------------
     // The endpoint survived its server, and a new one receives on it (R4b).
-    redoubt_abi::create_thread_1(second_server, 0).expect("the second server");
+    rd::thread(second_server, 0).expect("the second server");
     test_programs::wait_ms(30);
     // A lend of `MAX_LEND_PAGES`, which the receiver must pay for while the call is open (R3),
     // with the budget it shares with this thread carved down below that.
@@ -130,15 +129,15 @@ pub extern "C" fn _start() -> ! {
     let hog = rd::create(rd::SYSTEM, &rd::spec(free - margin - 1, 0, 0)).expect("a hog budget");
     log!(t.logger, "[dead] system down to {} free pages", rd::free(rd::SYSTEM));
     let refused = rd::call(endpoint, &rd::body([2, 0, 0, 0]), rd::pages(big, rd::MAX_LEND_PAGES), FOREVER);
-    expect!(t, refused.err(), Some(Error::Refused));
+    let _ = expect!(t, refused.err(), Some(Error::Refused));
     // The refused lend is this thread's again, and the receiver never saw it.
     rd::poke(big, 1);
     // SAFETY: the second server is the only writer.
-    expect!(t, unsafe { core::ptr::read_volatile(&raw const SECOND_SAW) }, 0);
-    expect!(t, rd::destroy(hog), Ok(()));
+    let _ = expect!(t, unsafe { core::ptr::read_volatile(&raw const SECOND_SAW) }, 0);
+    let _ = expect!(t, rd::destroy(hog), Ok(()));
     // With the pages back, the same message goes through, to the same waiting receiver.
     let through = rd::call(endpoint, &rd::body([3, 0, 0, 0]), rd::pages(big, rd::MAX_LEND_PAGES), FOREVER);
-    expect!(t, through.map(|r| r.words), Ok([7, rd::MAX_LEND_PAGES, 0, 0]));
+    let _ = expect!(t, through.map(|r| r.words), Ok([7, rd::MAX_LEND_PAGES, 0, 0]));
 
     if t.failed {
         log!(t.logger, "REDOUBT-DEAD TEST FAILED");

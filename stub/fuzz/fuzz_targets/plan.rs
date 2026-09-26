@@ -3,12 +3,12 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
+use redoubt_sys::PAGE_SIZE;
 use stub::{BadImage, Either};
 
 /// A page-aligned, plausible base: fixed, since fuzzing it too would only multiply inputs
 /// without exercising different logic (every check is relative to it).
 const IMAGE_ADDR: usize = 0x1000_0000;
-const PAGE_SIZE: usize = 4096;
 /// A page range disjoint from `IMAGE_ADDR` for a fixed 1-page 'excluded' region (the startup
 /// page, or the stub's own, in real use), so overlap-refusal has something to bite on.
 const EXCLUDE: (usize, usize) = (0x0f00_0000, 0x0f00_0000 + PAGE_SIZE);

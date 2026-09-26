@@ -15,16 +15,20 @@ use test_programs::{Logger, log};
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
+    // The bundle's third program: its budgets come from log-server, once, and no device (R2).
+    let rd::Gifts { system, .. } = rd::take_gifts().expect("the budgets");
     log!(logger, "[attacker] starting");
-    let own = rd::create(rd::SYSTEM, &rd::spec(10, 0, 0)).expect("own");
+    let own = rd::create(system, &rd::spec(10, 0, 0)).expect("own");
     rd::close(own).expect("close");
-    // `own` is now a closed index; 5..=128 were never used; 129..=131 and 257..=259 alias slots
-    // 1-3 of pages 1 and 2, which do not exist; 4096 is the last index, 4097 past the table.
+    // `own` is now a closed index, the last in use; those after it to 128 were never used;
+    // 129..=133 and 257..=261 alias slots 1-5 of pages 1 and 2, which do not exist (on page 0 those
+    // are the boot and log endpoints and the three gifts); 4096 is the last index, 4097 past the
+    // table.
     let mut refused = 0;
     let mut tried = 0;
     let mut forged = [0u32; 140];
     let mut n = 0;
-    for h in (own..=128).chain([129, 130, 131, 257, 258, 259, 4096, 4097, 0x8000_0001, u32::MAX]) {
+    for h in (own..=128).chain([129, 130, 131, 132, 133, 257, 258, 259, 260, 261, 4096, 4097, 0x8000_0001, u32::MAX]) {
         forged[n] = h;
         n += 1;
     }
@@ -50,7 +54,7 @@ pub extern "C" fn _start() -> ! {
     // Where registers are 64 bits wide, an index whose low 32 bits name `system`: a kernel that
     // truncated would destroy it. (On rv32 there is no such value.)
     let wide = match 1usize.checked_shl(32) {
-        Some(bit) => rd::raw_error(rd::raw([destroy, bit | rd::SYSTEM as usize, 0, 0, 0, 0, 0, 0])),
+        Some(bit) => rd::raw_error(rd::raw([destroy, bit | system as usize, 0, 0, 0, 0, 0, 0])),
         None => Some(Error::BadHandle),
     };
     let raw = [
@@ -58,7 +62,7 @@ pub extern "C" fn _start() -> ! {
         rd::raw_error(rd::raw([destroy, usize::MAX, 0, 0, 0, 0, 0, 0])),
         wide,
     ];
-    log!(logger, "[forge] raw index 0, all ones, 2^32 + 2 -> {:?}", raw);
+    log!(logger, "[forge] raw index 0, all ones, 2^32 + {} -> {:?}", system, raw);
     log!(logger, "[forge] attempts done");
     rd::victim::go();
     test_programs::park()

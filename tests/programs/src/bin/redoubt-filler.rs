@@ -11,16 +11,17 @@
 use test_programs::rd::{self, FOREVER};
 use test_programs::redoubt_ipc::op;
 
-fn caller(_arg: usize) -> ! {
-    rd::call(rd::BOOT_ENDPOINT, &rd::body([op::KEEP, 0, 0, 0]), None, FOREVER).ok();
+fn caller(_arg: usize) {
+    rd::call_waiting(rd::BOOT_ENDPOINT, &rd::body([op::KEEP, 0, 0, 0]), None, FOREVER).ok();
     test_programs::park()
 }
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     // Every thread this process can have, each offering one call.
-    while redoubt_abi::create_thread_1(caller, 0).is_ok() {}
-    caller(0)
+    while rd::thread(caller, 0).is_ok() {}
+    caller(0);
+    test_programs::park()
 }
 
 #[panic_handler]

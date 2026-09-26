@@ -7,7 +7,3 @@ kind = "boot"
 programs = ["log-server"]
 expect = ['KMAIN \(clean boot\)']
 forbid = ['^kernel: checks on']
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]

@@ -1,9 +1,9 @@
 //! Programs that run inside Redoubt under the test bench (`tools/testbench`).
 //!
-//! They are `no_std`, because `std` is not ported to rv64 yet, and they print through
-//! `log-server`, which owns the UART. Everything a client prints travels to the server
-//! in lent memory, so plain logging already exercises IPC and the page-table operations
-//! behind it.
+//! They are `no_std`, because `std` is not ported to rv64 yet, and they print through the
+//! bundle's first program, which owns the UART and serves the log endpoint (`logsrv`; by default
+//! `log-server`). Everything a client prints travels there in lent memory, so plain logging
+//! already exercises IPC and the page-table operations behind it.
 //!
 //! Convention: a test program ends by logging `<NAME> TEST PASSED` or `<NAME> TEST FAILED`.
 //! An attack program ends with `attempts done` instead: its own verdict would count for nothing
@@ -13,47 +13,49 @@
 
 use core::fmt::Write;
 
-use redoubt_abi::{CID, MemoryFlags, MemoryRange, MemorySize, Message};
-
+pub mod console;
+pub mod logsrv;
 pub mod rd;
 pub mod sched;
 pub mod spawn;
 
-/// There is no name server yet, so the log server uses a well-known address.
-pub const SERVER_ADDRESS: &[u8; 16] = b"redoubt-ipc-tst!";
-
-/// Message IDs understood by `log-server`.
+/// Operations on the log endpoint (`logsrv`), word 0 of a message; word 1 is a byte count.
 pub mod op {
-    /// Scalar: print the four arguments.
-    pub const PRINT_SCALARS: usize = 1;
-    /// BlockingScalar: reply with the sum of the four arguments.
+    /// Call with words: reply with the sum of words 1-3.
     pub const SUM: usize = 2;
-    /// Borrow: print `valid` bytes of the buffer as UTF-8.
+    /// Call with a lend: print word 1 bytes of it as UTF-8.
     pub const PRINT: usize = 3;
-    /// MutableBorrow: upper-case `valid` bytes of the buffer in place.
+    /// Call with a writable lend: upper-case word 1 bytes of it in place.
     pub const UPPERCASE: usize = 4;
-    /// Move: print `valid` bytes of the buffer. The server keeps the page.
+    /// Send with a transfer: print word 1 bytes of it. The server keeps the pages.
     pub const PRINT_AND_KEEP: usize = 5;
+    /// Call, `log-server` only: the first caller gets `root`, `system` and `users` in the reply
+    /// (`rd::take_gifts`), and never a device; a later one gets `Refused` in word 0.
+    pub const TAKE_GIFTS: usize = 6;
+    /// Call, `log-server` only: the attack checker. It prints `[server] done: reported by pid
+    /// N; still serving`, N the caller's badge, replies, and powers the machine off.
+    pub const DONE: usize = 7;
 }
 
-/// A page of memory that can be lent or moved to a server, and written to as text.
+/// A page of memory that can be lent or transferred to a server, and written to as text.
 pub struct Page {
-    pub range: MemoryRange,
+    pub addr: usize,
     len: usize,
 }
 
 impl Page {
-    pub fn new() -> Self {
-        let range = redoubt_abi::map_memory(None, None, 4096, MemoryFlags::R | MemoryFlags::W)
-            .expect("couldn't allocate a page");
-        Page { range, len: 0 }
-    }
+    pub fn new() -> Self { Page { addr: rd::page(), len: 0 } }
 
     pub fn clear(&mut self) { self.len = 0; }
 
-    pub fn bytes(&self) -> &[u8] { unsafe { core::slice::from_raw_parts(self.range.as_ptr(), self.len) } }
+    /// The text written so far.
+    pub fn bytes(&self) -> &[u8] {
+        // SAFETY: `addr` is this process's own page, and `len` bytes of it were written.
+        unsafe { core::slice::from_raw_parts(self.addr as *const u8, self.len) }
+    }
 
-    pub fn valid(&self) -> Option<MemorySize> { MemorySize::new(self.len) }
+    /// The page, for a lend or a transfer.
+    pub fn pages(&self) -> Option<rd::Pages> { rd::pages(self.addr, 1) }
 }
 
 impl Default for Page {
@@ -62,7 +64,8 @@ impl Default for Page {
 
 impl Write for Page {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        let page = unsafe { core::slice::from_raw_parts_mut(self.range.as_mut_ptr(), self.range.len()) };
+        // SAFETY: `addr` is this process's own read-write page.
+        let page = unsafe { core::slice::from_raw_parts_mut(self.addr as *mut u8, rd::PAGE_SIZE) };
         let dest = page.get_mut(self.len..self.len + s.len()).ok_or(core::fmt::Error)?;
         dest.copy_from_slice(s.as_bytes());
         self.len += s.len();
@@ -70,27 +73,31 @@ impl Write for Page {
     }
 }
 
-/// A connection to `log-server`.
+/// A program's log: a send on the log endpoint (`rd::LOG`), or, in the first program once it
+/// has called `logsrv::start`, the console itself, as `[pid 2]`.
 pub struct Logger {
-    pub cid: CID,
+    endpoint: Option<u32>,
     page: Page,
 }
 
 impl Logger {
-    /// Blocks until `log-server` is up.
+    /// A logger for this thread: every bundle program but the first logs through its slot-2
+    /// handle.
     pub fn connect() -> Self {
-        let sid = redoubt_abi::SID::from_bytes(SERVER_ADDRESS).unwrap();
-        Logger { cid: redoubt_abi::connect(sid).expect("couldn't connect to log-server"), page: Page::new() }
+        let endpoint = if logsrv::started() { None } else { Some(rd::LOG) };
+        Logger { endpoint, page: Page::new() }
     }
 
     pub fn log(&mut self, args: core::fmt::Arguments) {
         self.page.clear();
         self.page.write_fmt(args).ok();
-        redoubt_abi::send_message(
-            self.cid,
-            Message::new_lend(op::PRINT, self.page.range, None, self.page.valid()),
-        )
-        .expect("couldn't lend to log-server");
+        let Some(endpoint) = self.endpoint else {
+            let text = core::str::from_utf8(self.page.bytes()).unwrap_or("<invalid utf-8>");
+            return console::relay(logsrv::FIRST_PID, text);
+        };
+        let body = rd::body([op::PRINT, self.page.len, 0, 0]);
+        rd::call_waiting(endpoint, &body, self.page.pages(), rd::FOREVER)
+            .expect("couldn't lend to the log server");
     }
 }
 
@@ -103,30 +110,23 @@ macro_rules! log {
 /// The test bench notices the missing verdict and times out.
 pub fn park() -> ! {
     loop {
-        redoubt_abi::yield_slice();
+        let _ = rd::receive(None, rd::FOREVER, 0);
     }
 }
 
-/// The attack checker (`attack-checker`): the party that ends an attack case. An attacker's
+/// The attack checker, `log-server`'s `DONE`: the party that ends an attack case. An attacker's
 /// own output can never pass a case, because the attacker could print anything; so a victim
-/// whose verdict is in (or, with no victim, the attacker when done) reports to the checker, and
-/// the checker (whose lines log-server marks with the checker's PID) names the reporter, says
-/// the system is still serving, and powers off.
+/// whose verdict is in (or, with no victim, the attacker when done) reports to the checker,
+/// which names the reporter by its kernel-written badge in a line no relayed text can start
+/// with, says the system is still serving, and powers off. The case's `reporter` pins who.
 /// See docs/testbench.md, "Writing an attack case".
 pub mod checker {
-    use redoubt_abi::Message;
-
-    /// Well-known address of the checker's server.
-    pub const ADDRESS: &[u8; 16] = b"redoubt-checker!";
-    /// BlockingScalar: the sender reports (a victim's verdict is in, or an attacker is done).
-    pub const DONE: usize = 1;
+    use crate::{op, rd};
 
     /// Report to the checker, which names this process and powers off. Blocks until it has
     /// answered, which it does just before powering off.
     pub fn done() {
-        let sid = redoubt_abi::SID::from_bytes(ADDRESS).unwrap();
-        let cid = redoubt_abi::connect(sid).expect("couldn't connect to the attack checker");
-        redoubt_abi::send_message(cid, Message::new_blocking_scalar(DONE, 0, 0, 0, 0))
+        rd::call_waiting(rd::LOG, &rd::body([op::DONE, 0, 0, 0]), None, rd::FOREVER)
             .expect("couldn't reach the checker");
     }
 }
@@ -169,11 +169,9 @@ pub mod redoubt_ipc {
 /// in pages it frees; the attacker lends it every page it gets, and the victim, not the
 /// attacker, says whether any of them held data. See `tests/mem-attack.toml`.
 pub mod mem {
-    /// Well-known address of the victim's server.
-    pub const VICTIM_ADDRESS: &[u8; 16] = b"redoubt-mem-vict";
-    /// Borrow: a page the attacker got; the victim checks that it holds nothing.
+    /// Call with a lend: a page the attacker got; the victim checks that it holds nothing.
     pub const CHECK: usize = 1;
-    /// BlockingScalar: the attacker has lent everything it got.
+    /// Call: the attacker has lent everything it got.
     pub const DONE: usize = 2;
     /// What the victim writes into the pages it frees.
     pub const SECRET: &[u8; 8] = b"SECRET!!";
@@ -185,15 +183,11 @@ pub mod mem {
 /// keeps a page lent to it by a "victim" that then terminates; a "grabber" tries to
 /// reclaim the freed frame. See `tests/uaf-lent-page.toml`.
 pub mod uaf {
-    /// Well-known address of the holder server.
-    pub const HOLDER_ADDRESS: &[u8; 16] = b"redoubt-uaf-hold";
-    /// MutableBorrow: hold this page forever and remember where it is mapped.
+    /// Call with a writable lend: hold this page forever and remember where it is mapped.
     pub const HOLD: usize = 1;
-    /// BlockingScalar: reply once a page has been held (a barrier for the victim's terminator thread).
-    pub const WAIT_HELD: usize = 2;
-    /// BlockingScalar: reply immediately (liveness / ordering for the grabber).
+    /// Call: reply immediately (liveness / ordering for the grabber).
     pub const SYNC: usize = 3;
-    /// BlockingScalar: re-read the held page; reply 1 if it still reads back as the victim's data.
+    /// Call: re-read the held page; reply 1 if it still reads back as the victim's data.
     pub const CHECK: usize = 4;
     /// The victim writes this into the page before lending it.
     pub const VICTIM_SENTINEL: &[u8; 8] = b"VICTIM!!";
@@ -204,8 +198,6 @@ pub mod uaf {
 /// Protocol for the move-a-borrowed-page attack test (`move-borrowed*` binaries). See
 /// `tests/move-borrowed-page.toml`.
 pub mod move_borrowed {
-    /// Well-known address of the attacking server.
-    pub const ADDRESS: &[u8; 16] = b"redoubt-mv-borrw";
     /// What the victim writes into the page it lends.
     pub const VICTIM_TEXT: &str = "victim data";
 }
@@ -213,17 +205,10 @@ pub mod move_borrowed {
 /// Protocol for the return-a-clobbered-lent-page attack test (`return-lent*` binaries). See
 /// `tests/return-lent-unmapped.toml`.
 pub mod return_lent {
-    /// Well-known address of the borrower server.
-    pub const ADDRESS: &[u8; 16] = b"redoubt-ret-lent";
-    /// Fixed user address the lender lends, then attacks from a second thread. Between the
-    /// message region (`0x4000_0000`, one superpage) and the default region (`0x6000_0000`).
+    /// Fixed user address the lender lends, then attacks from a second thread.
     pub const LENT_ADDR: usize = 0x5000_0000;
 }
 
-/// Wait about `ms` milliseconds, reading the `time` CSR (which the kernel lets U-mode
-/// read) but yielding between checks. These processes have no timer preemption, so a pure
-/// busy-loop would never let another runnable thread proceed. Used only to order events
-/// between processes that cannot otherwise synchronise.
 /// Read the 64-bit `time` CSR. On rv64 that is one `rdtime`; on rv32 `time` is 32 bits, so
 /// combine `rdtimeh`/`rdtime`, retrying if the low word wrapped between the two reads.
 pub fn read_time() -> u64 {
@@ -255,10 +240,7 @@ pub fn read_time() -> u64 {
     }
 }
 
-pub fn wait_ms(ms: u64) {
-    // QEMU virt runs the timer at 10 MHz.
-    let deadline = read_time() + ms * 10_000;
-    while read_time() < deadline {
-        redoubt_abi::yield_slice();
-    }
-}
+/// Sleep `ms` milliseconds on the kernel's timer: a `receive` with nothing to receive, which
+/// answers `Timeout`. Used only to order events between processes that cannot otherwise
+/// synchronise, and to wait out `Busy`.
+pub fn wait_ms(ms: u64) { let _ = rd::receive(None, ms * 1000, 0); }

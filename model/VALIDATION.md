@@ -184,3 +184,14 @@ co-holder case (with its mutation) and the parent-at-its-limit case.
 | Command | Result |
 | --- | --- |
 | `cargo test -p redoubt-model --release` | Passed: lib 6, coverage 1, current contracts 16, dma contracts 5, map_fixed 10, mutations 2 (all 127 detected), policy 7, properties 6 (1 ignored), traces 4 (red review round 1 fixes). |
+
+## WP-K6 legacy interface deleted (2026-09-25)
+
+The model never had the legacy interface: no legacy call, callback, grant or SID. K6 also removes
+two kernel-only exceptions the model never had, the callback hold and the borrowed-quantum
+switches (U-mode `SwitchTo` and `Shutdown`). No rule, mutation or trace changes; `model/` is
+untouched from d6715b8f0, and the OD10 TID renumbering reaches no trace with a literal TID.
+
+| Command | Result |
+| --- | --- |
+| `cargo test -p redoubt-model --release` | Passed, unchanged from K5b: lib 6, coverage 1, current contracts 16, dma contracts 5, map_fixed 10, mutations 2 (all 127 detected), policy 7, properties 6 (1 ignored), traces 4. |

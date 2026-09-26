@@ -92,7 +92,8 @@ fn await_round(n: usize) {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let mut logger = Logger::connect();
+    let devices = rd::OTHER_DEVICES..rd::log_rx();
+    let mut logger = test_programs::logsrv::start();
 
     // Idle sleeps: nothing else runs, so only the kernel's timer can end them.
     let mut worst = 0;
@@ -137,7 +138,7 @@ pub extern "C" fn _start() -> ! {
     // Receive on an endpoint nothing arrives on, and on an interrupt that never fires.
     let quiet_ep = rd::endpoint_create().unwrap();
     let r = rd::receive(Some(quiet_ep), 3_000, 0);
-    let irq = (rd::OTHER_DEVICES..rd::first_free())
+    let irq = devices
         .map(|d| (d, rd::receive(Some(d), 1_000, 0)))
         .find(|(_, r)| *r == Err(Error::Timeout));
     log!(

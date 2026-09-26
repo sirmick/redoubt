@@ -5,7 +5,6 @@
 #![no_std]
 #![no_main]
 
-use core::fmt::Write;
 
 use test_programs::rd::{self, Error};
 use test_programs::{Logger, log};

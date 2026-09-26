@@ -42,7 +42,7 @@
 use core::convert::TryFrom;
 
 use redoubt_sys::{Error, PAGE_SIZE};
-use redoubt_abi::PID;
+use redoubt_layout::Pid;
 
 use crate::budget::BudgetFrame;
 use crate::handle::{BudgetRef, DeviceRef, Handle, Object};
@@ -164,7 +164,7 @@ impl MemoryManager {
 
     /// The device `pid`'s handle `index` names, which must be of `kind`: `BadHandle`, then
     /// `WrongObject` (KERNEL-SPEC.md, the order of checks).
-    fn device_of_kind(&self, pid: PID, index: u32, kind: Kind) -> Result<Device, Error> {
+    fn device_of_kind(&self, pid: Pid, index: u32, kind: Kind) -> Result<Device, Error> {
         match self.handle(pid, index)?.object {
             Object::Device(d) if self.device_at(d).kind == kind => Ok(self.device_at(d)),
             _ => Err(Error::WrongObject),
@@ -211,7 +211,7 @@ impl MemoryManager {
     /// `boot_endpoint` gives out the one endpoint. The order is the loader's, which puts the
     /// Reset right first and the console and its interrupt next, so a test program can name
     /// one without a manifest.
-    pub fn boot_devices(&mut self, owner: BudgetFrame, first: Option<PID>, stamp: BudgetRef) {
+    pub fn boot_devices(&mut self, owner: BudgetFrame, first: Option<Pid>, stamp: BudgetRef) {
         let Some(entries) = devs() else {
             println!("Devices: the loader reported none");
             return;
@@ -219,8 +219,7 @@ impl MemoryManager {
         let n = entries.len();
         for words in entries {
             let d = self.decode_entry(words);
-            // A DMA device the kernel cannot reset gets no object at all (WP-K5b, fail closed);
-            // legacy `MapMemory` still refuses it (`dma_ranges`).
+            // A DMA device the kernel cannot reset gets no object at all (WP-K5b, fail closed).
             if d.kind == Kind::Mmio && d.dma && !self.dma_register(d.base) {
                 println!("Devices: no DMA slot for {:x}; it gets no device object", d.base);
                 continue;
@@ -272,8 +271,8 @@ impl MemoryManager {
             }
             2 => {
                 let irq = u32::try_from(base).expect("Devs: an interrupt number too wide");
-                // The timer is a hart resource, not a device (BOOT.md): it is not a PLIC
-                // source, and until WP-K5 the legacy path still delivers it as IRQ 0.
+                // The timer is a hart resource, not a device (BOOT.md), and PLIC source 0 does
+                // not exist.
                 assert!(irq != 0, "Devs: interrupt 0 is the hart timer, not a device");
                 d.kind = Kind::Irq;
                 d.irq = irq;
@@ -301,17 +300,6 @@ fn devs() -> Option<core::slice::ChunksExact<'static, u32>> {
 
 /// The 64-bit value at word `i` of a `Devs` entry, low word first.
 fn entry_value(words: &[u32], i: usize) -> u64 { u64::from(words[i]) | u64::from(words[i + 1]) << 32 }
-
-/// Every DMA-flagged MMIO range the loader reported, as (base, size), whether or not it got a
-/// device object (WP-K5b: legacy `MapMemory` refuses them all). `decode_entry` checked each
-/// at boot.
-pub fn dma_ranges() -> impl Iterator<Item = (u64, u64)> {
-    devs()
-        .into_iter()
-        .flatten()
-        .filter(|w| w[0] == 1 && w[5] & DEVS_DMA != 0)
-        .map(|w| (entry_value(w, 1), entry_value(w, 3)))
-}
 
 /// Words in one `Ctrl` entry: base and size, low word first.
 const CTRL_WORDS: usize = 4;
@@ -351,10 +339,10 @@ impl MemoryManager {
     ///
     /// A DMA device joins the set of devices the caller's death must reset before its DMA
     /// frames are pooled (WP-K5b, OD3): it could be programmed with any of their addresses.
-    pub fn map_device(&mut self, pid: PID, h: u32) -> Result<(usize, usize), Error> {
+    pub fn map_device(&mut self, pid: Pid, h: u32) -> Result<(usize, usize), Error> {
         let d = self.device_of_kind(pid, h, Kind::Mmio)?;
         let slot = self.dma_slot_of(&d);
-        let flags = redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W;
+        let flags = redoubt_sys::MemFlags::READ | redoubt_sys::MemFlags::WRITE;
         let len = d.size as usize;
         let at = self.map_run(pid, len / PAGE_SIZE, flags, Some(d.base as usize))?;
         if let Some(slot) = slot {
@@ -381,7 +369,7 @@ impl MemoryManager {
     /// The memory and its run are held, and charged, until the process ends; they are never
     /// reclaimed while it lives, and at its end they are pooled only once every device that could
     /// hold their address has confirmed a reset (WP-K5b, `dma.rs`).
-    pub fn dma_alloc(&mut self, pid: PID, h: u32, npages: usize) -> Result<(usize, u64), Error> {
+    pub fn dma_alloc(&mut self, pid: Pid, h: u32, npages: usize) -> Result<(usize, u64), Error> {
         let d = self.device_of_kind(pid, h, Kind::Mmio)?;
         if npages == 0 {
             return Err(Error::InvalidArgument);
@@ -389,7 +377,7 @@ impl MemoryManager {
         let Some(slot) = self.dma_slot_of(&d) else { return Err(Error::NotPermitted) };
         // Charged and zeroed before anything is mapped (R6, R11).
         let phys = self.dma_new_run(pid, slot, npages)?;
-        let flags = redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W;
+        let flags = redoubt_sys::MemFlags::READ | redoubt_sys::MemFlags::WRITE;
         match self.map_run(pid, npages, flags, Some(phys)) {
             Ok(at) => Ok((at, phys as u64)),
             Err(e) => {
@@ -402,26 +390,25 @@ impl MemoryManager {
     /// The `system_reset(h(Reset), kind)` handle check. It only checks: the reset itself is
     /// the dispatcher's, after it has let go of the memory manager (`redoubt.rs`), because the
     /// firmware call does not return and a cell held for ever is a spinlock held for ever.
-    pub fn check_reset(&self, pid: PID, h: u32) -> Result<(), Error> {
+    pub fn check_reset(&self, pid: Pid, h: u32) -> Result<(), Error> {
         self.device_of_kind(pid, h, Kind::Reset).map(|_| ())
     }
 }
 
 /// R5: interrupt `irq` fired, if a device object owns it -- the answer the trap handler wants,
-/// so that an interrupt with no device object takes the legacy handler table's path instead
-/// (until WP-K6 deletes that). The kernel masks the source and sets `fired`; a thread already
-/// waiting in `receive` on the handle is answered at once (which clears `fired` again).
+/// so that it masks an interrupt no device object owns. The kernel masks the source and sets
+/// `fired`; a thread already waiting in `receive` on the handle is answered at once (which
+/// clears `fired` again).
 ///
 /// The interrupt controller's claim is completed *first*, while the source is still enabled: a
 /// PLIC silently ignores a completion for a source that is not, and would then never raise that
 /// source again. The masking below follows straight after, so nothing is delivered in between
 /// (the hart takes no trap in supervisor mode), and the next `receive` unmasks it.
-#[cfg(baremetal)]
 pub fn irq_fired(irq: usize) -> bool {
-    crate::services::SystemServices::with_mut(|ss| {
+    crate::ptable::ProcessTable::with_mut(|ss| {
         MemoryManager::with_mut(|mm| {
             let Some(frame) = mm.irq_device(irq) else { return false };
-            crate::arch::irq::enable_all_irqs();
+            crate::arch::irq::complete_irq();
             let mut d = mm.device(frame);
             d.fired = true;
             d.masked = true;
