@@ -73,7 +73,7 @@ fixed order, the same in the kernel and the [model](model.md); the full rows are
 
 ### What `receive` returns
 
-Status: built · partly tested: a record made unwritable while its thread waits is not attacked by a case · tested: bench:redoubt-ipc, bench:timeouts, host:redoubt-sys::received_layout
+Status: built · partly tested: a record made unwritable while its thread waits is not attacked by a case, only one bad when `receive` starts · tested: bench:redoubt-ipc, bench:timeouts, bench:process-attack, host:redoubt-sys::received_layout
 
 One record layout for every result: `(kind, msg_id, badge, account, labels, words, handles,
 buffer, pages)`. A field a kind does not use is 0.
@@ -174,7 +174,7 @@ sequenceDiagram
 
 ## Authority
 
-Status: built · tested: bench:redoubt-ipc-attack, bench:logsrv-badge-forgery, bench:bench-attack-forgery, mutation:R1ChecksReceiverNotOwner
+Status: built · tested: bench:redoubt-ipc-attack, mutation:R1ChecksReceiverNotOwner
 
 - **An endpoint handle with badge 0 is the receive right.** Only it may `receive`, and only its
   holder can [`mint`](objects.md#mint) handles with other badges. `endpoint_create` returns it.
@@ -193,7 +193,7 @@ Status: built · tested: bench:redoubt-ipc-attack, bench:logsrv-badge-forgery, b
 
 ### R1 (flow)
 
-Status: built · partly tested: a call or send between user budgets with different labels is attacked only in the model · tested: bench:budget, bench:process-attack, bench:process-review, mutation:R1SkipLabelCheck, mutation:R1ChecksReceiverNotOwner, mutation:R1ExitNoticeIgnoresLabels, mutation:R1UsageIgnoresLabels
+Status: built · partly tested: a call or send between user budgets with different labels is attacked only in the model; on the target only a `budget_usage` read and an exit notice are · tested: bench:process-attack, bench:process-review, mutation:R1SkipLabelCheck, mutation:R1ChecksReceiverNotOwner, mutation:R1ExitNoticeIgnoresLabels, mutation:R1UsageIgnoresLabels
 
 Information flows from budget A to budget B only if B is class `system` or B's labels include
 all of A's. A message is a flow from the sender's budget to the endpoint's **owner** (the budget
@@ -211,12 +211,13 @@ exiting budget to the owner of the exit endpoint; one that fails the rule is dro
 Status: built · partly tested: turns between several groups are attacked only in the model · tested: bench:redoubt-ipc, mutation:R2FifoAcrossAccounts, mutation:R2NoWaitCap, mutation:R2KeyByAccountOnly, mutation:R2KeyByStampLabels, mutation:R2SystemCallersShareGroup
 
 Senders blocked on an endpoint are grouped by their budget's account and label set, and, for
-account 0 (system callers), by budget as well. Each `receive` takes the oldest message of the
+account 0 (no principal: the boot budgets, and any budget carved without one, of either class),
+by budget as well. Each `receive` takes the oldest message of the
 next group after the one served last, round-robin. A group that already has `WAIT_CAP` (16)
 messages queued on the endpoint gets `Busy` at once. Only queued messages count; a taken call is
 bounded by [R4a](#r4a-open-calls) instead. Keying by label set keeps a vault session and its
-owner's ordinary session, which share an account, from sharing a turn or a cap. Keying system
-callers by budget keeps one busy system server from filling another's cap. With k groups
+owner's ordinary session, which share an account, from sharing a turn or a cap. Keying
+account-0 callers by budget keeps one busy system server from filling another's cap. With k groups
 waiting and the receiver below its open-call limit, each group's oldest message is taken within
 k receives (I11 (fair turns)).
 
@@ -224,18 +225,31 @@ k receives (I11 (fair turns)).
 
 Status: built · tested: bench:redoubt-revoke, bench:timeouts, bench:ipc-outcomes, bench:uaf-lent-page, bench:process-lifecycle, mutation:R3UnmapAbandonedLend, mutation:R3ChargeStaysWithCaller, mutation:AbandonNoticeMissing, mutation:AbandonNoticeRepeated
 
-A lent page stays charged to the caller. Taking the call charges it, with the page tables that
-map it, to the receiving process's budget as well, until `reply` gives it back. A taken call is
-**abandoned** when its caller dies, times out, or is failed by revocation or by the
-destruction of its endpoint ([budgets](budgets.md#r10-destruction)). Then:
+A lend's range must be the caller's own writable RAM. Pages in it that were never touched are
+backed first, charged to the caller like `map_anon`'s; a caller that cannot pay for them gets
+`InvalidArgument`, since `call` has no `OutOfMemory` of its own. A lent page stays charged to
+the caller. Taking the call charges it to the receiving process's budget as well, until `reply`
+gives it back. The page tables that map the lend in the receiver are charged to the receiver
+too, and stay charged after the reply, like any page table of that process, until it ends
+([memory](memory.md#residual-risks)).
+
+A taken call is **abandoned** when its caller dies, times out, or is failed by revocation. Then:
 - the caller's charge ends and the lend becomes the server's alone, still mapped there;
 - the thread holding the call gets one abandoned-call notice, on the endpoint the call arrived
   on (I15 (abandoned calls reported once));
 - the call stays open, and counts against the server's limit, until the server replies; that
   reply reaches nobody, and replying frees the lend.
 
-If the server's reply wins the race with the abandonment, the server learns it from `reply`'s
-result (`discarded`, mask 0) and no notice follows.
+A reply that comes before the abandonment is delivered, and nothing is abandoned. If the
+abandonment comes first and the server replies before it has received the notice, `reply`
+returns `discarded`, mask 0, and no notice follows: the reply closed the call.
+
+The destruction of the endpoint a call arrived on ([budgets](budgets.md#r10-destruction)) also
+abandons the calls taken through it, and fails their callers with `Dead`, but offers no notice:
+the kernel fails the endpoint's receivers first, so there is nowhere left to receive one. A
+server learns it only from its `receive` returning `Dead`. Whether that `Dead` is the stated
+cue that every call taken through the endpoint is abandoned is open
+([todo](../todo/endpoint-destroyed-open-calls.md)).
 
 ```mermaid
 stateDiagram-v2
@@ -252,14 +266,17 @@ stateDiagram-v2
 
 ### R4 (delivery)
 
-Status: built · tested: bench:redoubt-ipc, bench:redoubt-dead, bench:redoubt-tight, bench:move-borrowed-page, mutation:R4IgnoreMaxTransfer, mutation:R4OverdrawOnDelivery, mutation:IpcDropPartial
+Status: built · tested: bench:redoubt-ipc, bench:redoubt-dead, bench:redoubt-tight, mutation:R4IgnoreMaxTransfer, mutation:R4OverdrawOnDelivery, mutation:IpcDropPartial
 
 A message is delivered only if the receiving process's budget can pay for everything it
 brings: the handle-table pages for its handles, a call's open-call page, its lent or transferred
-pages and the page tables to map them. A transfer also needs a `max_transfer` at least its
-size. Handles that would take the receiver past `MAX_HANDLES` (4096) are a cost it cannot pay.
-Otherwise the sender gets `Refused` and the kernel moves on to the next sender. A `receive`
-never fails for want of pages.
+pages and the page tables to map them. A lend is charged to the receiver even when both sides
+share a budget (R3). A transfer is charged to the receiver instead of the sender, so between two
+processes of one budget it moves no charge and costs nothing. A transfer also needs a
+`max_transfer` at least its size. Handles that would take the receiver past `MAX_HANDLES`
+(4096) are a cost it cannot pay, and so is a buffer with no free run of pages for it in the
+receiver's message area. Otherwise the sender gets `Refused` and the kernel moves on to the
+next sender. A `receive` never fails for want of pages.
 
 A **reply is never refused**: its caller is blocked and has nowhere else to put the error.
 Reply handles that do not fit the caller are dropped, each 0 in its slot. The words and the
@@ -295,11 +312,12 @@ another thread may have unmapped it while the call waited. If the reply cannot b
 handle this reply installed in the caller is closed again and its table pages released; the
 caller gets `InvalidArgument`, its lend back and `absent`, and the server gets `discarded`.
 Checking the record, copying, installing or rolling back handles and publishing the outcome are
-one step under the kernel lock, so no unmap, remap or teardown can fall between them.
+one step: the kernel runs with interrupts off and holds the memory manager's guard throughout,
+so no unmap, remap or teardown can fall between them.
 
 ### R14 (unforgeable sender)
 
-Status: built · tested: bench:redoubt-ipc, bench:logsrv-badge-forgery, bench:bench-attack-forgery, bench:pid-reuse-authority
+Status: built · partly tested: every case delivers account 0 and no labels, so a non-zero account or a label set reaching the receiver unchanged is attacked only in the model · tested: bench:redoubt-ipc, bench:bench-attack-forgery, bench:pid-reuse-authority, mutation:MsgNoLabels, mutation:MsgAccountZero
 
 The badge, account and labels a receiver sees are the kernel's: the badge of the handle used,
 and the sender budget's account and labels at the time of sending. No argument of `call` or
@@ -316,7 +334,9 @@ Status: built · tested: bench:redoubt-dead, bench:redoubt-revoke, bench:budget-
   abandoned (R3). The server keeps the lend until it replies and pays for it.
 - **A budget is destroyed:** endpoints it owns are destroyed and everything waiting on them gets
   `Dead`; queued messages sent through a handle it stamped fail with `Dead`; a taken call sent
-  through one is abandoned ([R10 (destruction)](budgets.md#r10-destruction)).
+  through one is abandoned ([R10 (destruction)](budgets.md#r10-destruction)). A taken call on a
+  destroyed endpoint is abandoned with no notice (R3): the server's `Dead` from `receive` is all
+  it learns ([todo](../todo/endpoint-destroyed-open-calls.md)).
 - **Crash blame:** when a server process faults, or exits while it holds open calls, the exit
   notice blames the account and labels of the sender of the ending thread's current call, or
   nobody if it has none ([R21 (crash blame)](processes.md#r21-crash-blame)). A `send` is never blamed. A server calls `serve`
@@ -336,11 +356,14 @@ Status: built · tested: bench:redoubt-dead, bench:redoubt-revoke, bench:budget-
   never another budget's.
 - **A `consumed` lend is gone.** A caller whose taken call times out loses those pages. Callers
   that cannot afford that must not lend them with a short timeout.
-- **Delivery walks every thread.** Finding the next sender scans all threads, bounded by a
-  compile-time constant (`MAX_PROCESS_COUNT` x `MAX_THREADS`) that no process can change. It
-  costs time on every delivery, and that cost is not charged to the caller's budget.
-- **Completion races between harts** are argued from the code (one kernel lock around the whole
-  completion), not attacked by a case.
+- **Delivery walks every thread, twice over.** Finding a receiver scans all threads, and for
+  each waiting receiver finding the next sender scans them all again: up to the square of
+  `MAX_PROCESS_COUNT` x `MAX_THREADS`, compile-time constants no process can change. It costs
+  time on every delivery, and that cost is not charged to the caller's budget.
+- **Completion races between harts** are argued from the code, not attacked by a case. On one
+  hart the kernel runs with interrupts off. On several (a build for more than one hart), each
+  kernel global is guarded by its own lock, and the completion holds the memory manager's for
+  the whole step.
 - **A notice can be lost to a bad record.** If a thread's `receive` record becomes unwritable
   while it waits, an interrupt or abandoned-call notice delivered to it is consumed and the
   thread gets `InvalidArgument` instead. A lost abandoned-call notice leaves the thread holding a
@@ -350,10 +373,11 @@ Status: built · tested: bench:redoubt-dead, bench:redoubt-revoke, bench:budget-
 
 ## Why
 
-- **No queue, no allocation.** A queued message is its blocked sender, and the sender's own
-  thread page (already paid for) holds it. So `call` and `send` allocate nothing, cannot fail
-  for want of kernel memory, and cannot make the kernel allocate on a receiver's behalf. The
-  cost is the thread walk above; clarity wins over speed.
+- **No queue, no allocation for the queue.** A queued message is its blocked sender, and the
+  sender's own thread page (already paid for) holds it. So queueing a `call` or `send`
+  allocates no kernel memory and cannot make the kernel allocate on a receiver's behalf. The
+  only pages they may allocate are the sender's own untouched buffer pages, backed and charged
+  to the sender (R3). The cost is the thread walk above; clarity wins over speed.
 - **Lend, not copy.** A 9P message is up to 64 KiB. Moving pages costs page-table updates, not
   copies, and unmapping them from the caller means neither side can see the other change them
   mid-call.
