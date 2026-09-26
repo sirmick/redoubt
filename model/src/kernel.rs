@@ -1,9 +1,9 @@
-//! The kernel model: KERNEL-SPEC.md's four kinds of object, its system calls and rules R1-R12,
-//! reconciled to the accepted contracts in docs/KERNEL-SPEC.md.
+//! The kernel model: the four kinds of object, the system calls and rules R1-R12 of docs/kernel/
+//! (kernel/objects.md, kernel/abi.md and the pages that own each rule).
 //!
 //! Read it next to the spec. Each system call is one method with the spec's name, and each check
 //! in it cites the rule or table row it implements. Checks run in one fixed order, which the
-//! trace format relies on (README.md, "Order of checks"):
+//! trace format relies on (kernel/abi.md, "Errors and the order of checks"):
 //! 1. **decoding**, as `redoubt-sys` decodes: the call's registers in order, then the record it points to
 //!    (message body, budget spec, handle list): a handle value that cannot be an index is `BadHandle`, a list
 //!    longer than its array is `TooLarge`, any other malformed encoding (unknown flag bits, W+X, an unknown
@@ -21,8 +21,8 @@
 //! ticks (R12).
 //!
 //! `mutation` switches on one deliberate rule break (mutation.rs); `self.broken(..)` marks each
-//! place. With `mutation == None` this is the specified kernel. Where the spec left a choice open,
-//! the site says `(README choice N)`; where a site follows an owner's answer, `(QUESTIONS N)`.
+//! place. With `mutation == None` this is the specified kernel. Where the design leaves a detail
+//! open, the site states the model's choice (kernel/model.md, "What the model is").
 
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
 use alloc::string::String;
@@ -36,15 +36,15 @@ use crate::spec::*;
 pub use crate::syscall::MsgKind;
 use crate::syscall::*;
 
-/// Pages each kind of kernel object costs (KERNEL-SPEC.md, "What objects cost"; R6). A
+/// Pages each kind of kernel object costs (kernel/objects.md, "What objects cost"; R6). A
 /// conformance run writes these into the trace and must use the real kernel's values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Costs {
-    /// A budget's own page, charged to its parent (QUESTIONS 76).
+    /// A budget's own page, charged to its parent.
     pub budget: u64,
-    /// A process object, charged to its creator's budget; it holds the exit notice (QUESTIONS 74).
+    /// A process object, charged to its creator's budget; it holds the exit notice.
     pub process: u64,
-    /// Saved process register contexts, separate from the process/notice object (answer 127).
+    /// Saved process register contexts, separate from the process/notice object.
     pub contexts: u64,
     /// Per-thread IPC state.
     pub thread: u64,
@@ -52,9 +52,9 @@ pub struct Costs {
     pub endpoint: u64,
     /// A handle table costs one page per this many live handles (rounded up).
     pub handles_per_page: u64,
-    /// One page-table page (the root is allocated with the process; README choice 20).
+    /// One page-table page (the root is allocated with the process).
     pub page_table: u64,
-    /// One open call, charged to the receiving process's budget (QUESTIONS 2).
+    /// One open call, charged to the receiving process's budget.
     pub open_call: u64,
 }
 
@@ -78,7 +78,7 @@ impl Default for Costs {
 /// hold: a hostile trace's `costs` line must not make the kernel's sums overflow.
 pub const MAX_COST: u64 = 1 << 16;
 
-/// A device object the loader creates from the device tree (KERNEL-SPEC.md, Device).
+/// A device object the loader creates from the device tree (kernel/devices.md, "Device objects").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeviceSpec {
     Mmio { base: u64, pages: u64, dma: bool, resets: Resets },
@@ -86,10 +86,10 @@ pub enum DeviceSpec {
     Reset,
 }
 
-/// How an MMIO device's reset behaves (WP-K5b, answer 173, OD7): `Always` confirms at once;
-/// `Never` never confirms (a platform residual: IO-ARCHITECTURE, P2-5); `FirstFails` reports
-/// "not confirmed" once, after the real write, then behaves as `Always` (the `dma-reset-deaf`
-/// test feature).
+/// How an MMIO device's reset behaves (kernel/devices.md, "Reset before reuse"): `Always` confirms
+/// at once; `Never` never confirms (a platform residual: kernel/devices.md, Residual risks);
+/// `FirstFails` reports "not confirmed" once, after the real write, then behaves as `Always` (the
+/// `dma-reset-deaf` test feature).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Resets {
     Always,
@@ -112,7 +112,7 @@ pub struct Boot {
     pub root: Limits,
     /// `system`'s reserved share, carved from `root`.
     pub system: Limits,
-    /// `users`, carved from `root`. What `root` keeps is `init`'s own (README choice 19).
+    /// `users`, carved from `root`. What `root` keeps is `init`'s own.
     pub users: Limits,
     /// In `init`'s handle order after the three budgets.
     pub devices: Vec<DeviceSpec>,
@@ -133,9 +133,9 @@ impl Default for Boot {
                 DeviceSpec::Irq { n: 10 },
                 DeviceSpec::Irq { n: 11 },
                 DeviceSpec::Reset,
-                // Appended last (WP-K5b, §5) so every existing handle index keeps its value: a
-                // DMA device whose first-ever reset reports "not confirmed" (the `dma-reset-deaf`
-                // feature), for the quarantine path.
+                // Appended last so every existing handle index keeps its value: a DMA device whose
+                // first-ever reset reports "not confirmed" (the `dma-reset-deaf` feature), for the
+                // quarantine path.
                 DeviceSpec::Mmio { base: 0x1000_2000, pages: 1, dma: true, resets: Resets::FirstFails },
                 // A second healthy DMA device, so one process can allocate through one device and
                 // map another that a co-holder also reaches.
@@ -214,18 +214,18 @@ fn check_boot(b: &Boot) -> Result<(), String> {
     Ok(())
 }
 
-/// Where user virtual addresses end (Sv39's lower half). `process_map`'s `dst` must lie below.
-/// User space has no lower bound: page 0 is in it (MEMORY-LAYOUT.md, Decision 2; K5a-addr0).
+/// Where user virtual addresses end (Sv39's lower half). `process_map`'s `dst` must lie below. User
+/// space has no lower bound: page 0 is in it (kernel/memory-layout.md, "Page 0").
 pub const USER_TOP: u64 = 1 << 38;
 /// Where the kernel places the mappings it chooses addresses for (`map_anon`, received buffers):
-/// above everything the process has mapped, from here (README choice 20).
+/// above everything the process has mapped, from here.
 pub const KERNEL_CHOSEN_BASE: u64 = 0x10_0000_0000;
 /// Physical address of frame 0; `dma_alloc` returns physical addresses from here.
 pub const RAM_BASE: u64 = 0x8000_0000;
 /// The longest `Op::Tick` the model accepts (one hour): a replay of hostile input must finish.
 pub const MAX_TICK: u64 = 3_600_000_000;
 
-/// The pid of `init`, the one process the kernel creates (README choice 27: fixed, not drawn).
+/// The pid of `init`, the one process the kernel creates (fixed, not drawn, so a trace can name it before any result).
 pub const INIT_PID: u64 = 1;
 /// PIDs are ASIDs: Sv39's 16 bits (`init` has 1; the others are drawn from 2..=MAX_PID).
 pub const MAX_PID: u64 = 0xffff;
@@ -254,7 +254,7 @@ pub enum Origin {
     Minted { default_stamp: u64 },
 }
 
-/// KERNEL-SPEC.md, Handle = (object, badge, stamp). `origin` is ghost state.
+/// kernel/objects.md, "Handles": (object, badge, stamp). `origin` is ghost state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Handle {
     pub object: Object,
@@ -267,7 +267,7 @@ pub struct Handle {
 pub struct Budget {
     pub id: u64,
     pub parent: Option<u64>,
-    /// Inherited from the parent (QUESTIONS 73).
+    /// Inherited from the parent.
     pub class: Class,
     pub labels: Vec<u64>,
     pub account: u64,
@@ -320,7 +320,7 @@ pub struct Process {
     pub budget: u64,
     pub started: bool,
     pub threads: BTreeSet<u64>,
-    /// The handle table: index -> handle. Index 0 is never used (QUESTIONS 10).
+    /// The handle table: index -> handle. Index 0 is never used.
     pub handles: BTreeMap<u64, Handle>,
     /// Address space: virtual page number -> mapping.
     pub space: BTreeMap<u64, Mapping>,
@@ -328,17 +328,17 @@ pub struct Process {
     pub tables: BTreeMap<(u8, u64), u64>,
     /// The exit endpoint handle named at `process_create` (none for `init`).
     pub exit_endpoint: Option<Handle>,
-    /// The budget the process object is charged to: its creator's (QUESTIONS 74). The object, and
-    /// the charge, outlive the process until its exit notice is received or dropped.
+    /// The budget the process object is charged to: its creator's. The object, and the charge,
+    /// outlive the process until its exit notice is received or dropped.
     pub creator: u64,
-    /// The next message id this process's threads will receive (QUESTIONS 88).
+    /// The next message id this process's threads will receive.
     pub next_msg_id: u64,
-    /// DMA frames this process holds (WP-K5b, answer 173), by frame id: the union of every
-    /// `dma_alloc` it has not yet lost by dying. Present whether or not currently mapped
-    /// (`unmap` keeps the frame; OD2).
+    /// DMA frames this process holds, by frame id: the union of every `dma_alloc` it has not yet
+    /// lost by dying. Present whether or not currently mapped (`unmap` keeps the frame;
+    /// kernel/devices.md, "`dma_alloc`").
     pub dma: BTreeSet<u64>,
-    /// Every DMA device this process has ever named in `map_device` (OD3's reset set S, with
-    /// `dma`'s own devices).
+    /// Every DMA device this process has ever named in `map_device` (with `dma`'s own devices, the
+    /// reset set S: kernel/devices.md, "Reset before reuse").
     pub dma_mapped: BTreeSet<u64>,
 }
 
@@ -365,9 +365,9 @@ pub struct Thread {
     /// When the blocking call times out; `None` for `FOREVER`.
     pub deadline: Option<u64>,
     /// Its open calls (kernel message records), in the order it took them. A `send` is never an
-    /// open call (QUESTIONS 31).
+    /// open call.
     pub serving: Vec<u64>,
-    /// Its current call: the open call it is working on, or none (QUESTIONS 82). A fault blames it.
+    /// Its current call: the open call it is working on, or none. A fault blames it.
     pub current: Option<u64>,
     pub record: Record,
     /// Present only while executing call; None disposition represents a call without a lend.
@@ -389,8 +389,7 @@ pub struct InFlight {
 #[derive(Clone, Debug)]
 pub struct Msg {
     pub id: u64,
-    /// The message id the receiving process sees, unique within it (QUESTIONS 88); 0 while
-    /// queued.
+    /// The message id the receiving process sees, unique within it; 0 while queued.
     pub rid: u64,
     pub kind: MsgKind,
     pub sender_pid: u64,
@@ -403,21 +402,20 @@ pub struct Msg {
     pub stamp: u64,
     pub account: u64,
     pub labels: Vec<u64>,
-    /// The R2 group it is queued under (QUESTIONS 17).
+    /// The R2 group it is queued under.
     pub key: Key,
     pub words: [u64; WORDS],
-    /// Copies of the handles it carries until it is delivered; one revoked meanwhile is `None`,
-    /// and arrives as 0 (R10; QUESTIONS 86).
+    /// Copies of the handles it carries until it is delivered; one revoked meanwhile is `None`, and
+    /// arrives as 0 (R10).
     pub handles: Vec<Option<Handle>>,
     pub buffer: Option<InFlight>,
     /// `(pid, tid)` of the thread that took it; `None` while queued.
     pub server: Option<(u64, u64)>,
     /// A `call` whose caller still waits for the reply.
     pub caller_waiting: bool,
-    /// The budget charged for this open call (QUESTIONS 2), once taken; it pays for the lend too
-    /// (R3).
+    /// The budget charged for this open call, once taken; it pays for the lend too (R3).
     pub open_payer: Option<u64>,
-    /// The call was abandoned (R3); `notice` while its abandoned-call notice waits (QUESTIONS 81).
+    /// The call was abandoned (R3); `notice` while its abandoned-call notice waits.
     pub abandoned: bool,
     pub notice: bool,
 }
@@ -428,18 +426,18 @@ pub struct ExitNotice {
     pub cause: Cause,
     pub code: u64,
     pub blamed_account: u64,
-    /// The labels of the blamed call's sender (QUESTIONS 48).
+    /// The labels of the blamed call's sender.
     pub blamed_labels: Vec<u64>,
     /// The exiting process's budget.
     pub budget: u64,
-    /// The budget its process object is charged to (its creator's; QUESTIONS 74).
+    /// The budget its process object is charged to (its creator's).
     pub payer: u64,
 }
 
 #[derive(Clone, Debug)]
 pub struct Endpoint {
     pub id: u64,
-    /// The budget it is charged to (its creator's). R1 compares against it (QUESTIONS 4).
+    /// The budget it is charged to (its creator's). R1 compares against it.
     pub owner: u64,
     /// Blocked senders' messages, grouped as R2 says, oldest first.
     pub queue: BTreeMap<Key, VecDeque<u64>>,
@@ -472,16 +470,16 @@ pub struct Frame {
     pub payer: u64,
     /// Abstract contents: the last word written anywhere in the page (0 = zeroed).
     pub content: u64,
-    /// The DMA device it was allocated through (WP-K5b, answer 173), if any. Held until the
-    /// owning process ends (OD2); never freed by `unmap`.
+    /// The DMA device it was allocated through, if any. Held until the owning process ends
+    /// (kernel/devices.md, "`dma_alloc`"); never freed by `unmap`.
     pub dma: Option<u64>,
-    /// Set for ever once a `dma_release` could not confirm every device that might reach it
-    /// (P1-1): its frame is never pooled and its charge only moves at its budget's destruction
-    /// (OD5, N1).
+    /// Set for ever once a `dma_release` could not confirm every device that might reach it: its
+    /// frame is never pooled and its charge only moves at its budget's destruction
+    /// (kernel/devices.md, "Quarantine"; I16).
     pub quarantined: bool,
 }
 
-/// Facts a step reveals that are not system-call results, for the trace (README.md, `note`).
+/// Facts a step reveals that are not system-call results, for the trace (kernel/model.md, "Traces").
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Note {
     /// `process_create` in `creator` returned handle `h` naming process `pid`.
@@ -527,7 +525,8 @@ pub struct Kernel {
     wakes: Vec<Wake>,
     notes: Vec<Note>,
     /// Endpoints where something became deliverable during the step; matched with their
-    /// receivers once the step's other effects are done (README choice 26).
+    /// receivers once the step's other effects are done, so a destruction revokes everything it reaches before
+    /// anything is delivered.
     to_pump: BTreeSet<u64>,
 }
 
@@ -535,8 +534,7 @@ type R<T> = Result<T, Error>;
 
 fn vpn(addr: u64) -> u64 { addr / PAGE_SIZE }
 
-/// Encoding: a register holding a handle must be an index: not `NO_HANDLE`, at most `u32::MAX`
-/// (QUESTIONS 10).
+/// Encoding: a register holding a handle must be an index: not `NO_HANDLE`, at most `u32::MAX`.
 pub fn decode_handle(raw: u64) -> R<u64> {
     if raw == NO_HANDLE || raw > U32_MAX { Err(Error::BadHandle) } else { Ok(raw) }
 }
@@ -550,8 +548,8 @@ pub fn decode_optional_handle(raw: Option<u64>) -> R<Option<u64>> {
     }
 }
 
-/// Encoding: only the R, W and X bits exist, and W+X is refused (R11; QUESTIONS 15, the
-/// decoder refuses it and the kernel's check is this one).
+/// Encoding: only the R, W and X bits exist, and W+X is refused (R11; the decoder refuses it and
+/// the kernel's check is this one).
 fn decode_flags(flags: u64, allow_wx: bool) -> R<()> {
     let wx = flags & FLAG_W != 0 && flags & FLAG_X != 0;
     if flags & !(FLAG_R | FLAG_W | FLAG_X) != 0 || (wx && !allow_wx) {
@@ -643,8 +641,8 @@ impl Kernel {
         if (root, system, users) != (ROOT, SYSTEM, USERS) {
             return Err("boot: budget ids".into());
         }
-        // init: its process object is charged to root, as if root had created it (README choice
-        // 27), and so are its root page table and thread.
+        // init: its process object is charged to root, as if root had created it, and so
+        // are its root page table and thread.
         let pid = INIT_PID;
         k.ghost.slots.insert(pid, Slot { payer: root, endpoint: 0, stamp: 0, badge: 0 });
         k.processes.insert(
@@ -679,7 +677,7 @@ impl Kernel {
                 DeviceSpec::Mmio { base, pages, dma, resets } => {
                     DeviceKind::Mmio { base, pages, dma, resets, quarantined: false }
                 }
-                // Sources start masked; the first `receive` unmasks them (R5; README choice 18).
+                // Sources start masked; the first `receive` unmasks them (R5).
                 DeviceSpec::Irq { n } => DeviceKind::Irq { n, fired: false, masked: true, pending: false },
                 DeviceSpec::Reset => DeviceKind::Reset,
             };
@@ -725,7 +723,7 @@ impl Kernel {
         false
     }
 
-    /// What one page-table page costs (R6; QUESTIONS 13).
+    /// What one page-table page costs (R6).
     pub fn page_table_cost(&self) -> u64 {
         if self.broken(Mutation::R6PageTablesFree) { 0 } else { self.costs.page_table }
     }
@@ -763,9 +761,9 @@ impl Kernel {
         self.next_event().map_or(slice_end, |e| e.min(slice_end))
     }
 
-    /// R2's group for a message from budget `sender` with its `account` and `labels`, sent
-    /// through a handle stamped `stamp`: (account, label set), and for account 0 the sender's
-    /// budget id as well (QUESTIONS 17, 87).
+    /// R2's group for a message from budget `sender` with its `account` and `labels`, sent through
+    /// a handle stamped `stamp`: (account, label set), and for account 0 the sender's budget id as
+    /// well.
     fn queue_key(&self, account: u64, labels: &[u64], stamp: u64, sender: u64) -> Key {
         let budget =
             if account == 0 && !self.broken(Mutation::R2SystemCallersShareGroup) { sender } else { 0 };
@@ -778,9 +776,8 @@ impl Kernel {
         }
     }
 
-    /// A PID for a new process, drawn at random from the free ones (QUESTIONS 88). A PID stays in
-    /// use while its process object lives: while the process runs, and while its exit notice
-    /// waits.
+    /// A PID for a new process, drawn at random from the free ones. A PID stays in use while its
+    /// process object lives: while the process runs, and while its exit notice waits.
     fn draw_pid(&mut self) -> Option<u64> {
         let in_use: BTreeSet<u64> = self
             .processes
@@ -850,8 +847,8 @@ impl Kernel {
     }
 
     /// Create a budget object (after all checks). Its own page is charged to its parent (R6;
-    /// QUESTIONS 76; `root`'s is the kernel's) and its limits are carved from the parent (R7).
-    /// `creator` is the creating caller's budget class, for the ghost.
+    /// `root`'s is the kernel's) and its limits are carved from the parent (R7). `creator` is the
+    /// creating caller's budget class, for the ghost.
     #[allow(clippy::too_many_arguments)]
     fn new_budget(
         &mut self,
@@ -946,7 +943,7 @@ impl Kernel {
         Ok((slots, (pages.len() - before) as u64))
     }
 
-    /// Atomically install copies, charging only newly occupied table pages (answers 111/116).
+    /// Atomically install copies, charging only newly occupied table pages.
     fn install(&mut self, pid: u64, hs: &[Handle]) -> R<Vec<u64>> {
         let (slots, growth) = self.handle_slots(pid, hs.len())?;
         let budget = self.processes[&pid].budget;
@@ -971,9 +968,9 @@ impl Kernel {
         }
     }
 
-    /// Close every handle matching `pred`, wherever it is: process tables, processes' exit
-    /// endpoint references, and messages not yet received, where a closed handle stays in its
-    /// place and arrives as 0 (R10; QUESTIONS 86).
+    /// Close every handle matching `pred`, wherever it is: process tables, processes' exit endpoint
+    /// references, and messages not yet received, where a closed handle stays in its place and
+    /// arrives as 0 (R10).
     fn sweep(&mut self, pred: impl Fn(&Handle) -> bool) {
         let pids: Vec<u64> = self.processes.keys().copied().collect();
         for pid in pids {
@@ -1030,11 +1027,11 @@ impl Kernel {
     }
 
     /// `n` free virtual pages in `pid` for a mapping whose address the kernel chooses: above
-    /// everything already mapped, from `KERNEL_CHOSEN_BASE` (README choice 20). If that space
+    /// everything already mapped, from `KERNEL_CHOSEN_BASE`. If that space
     /// doesn't fit `n` pages -- a `map_fixed` placed a mapping high in `[KERNEL_CHOSEN_BASE,
-    /// USER_TOP)`, which the real kernel's bounded `find_virtual_address` window never sees --
-    /// fall back to the first gap of `n` free pages anywhere in that range, so this stays as
-    /// permissive as the kernel (P1-1).
+    /// USER_TOP)`, which the real kernel's bounded `find_virtual_address` window never sees -- fall
+    /// back to the first gap of `n` free pages anywhere in that range, so this stays as permissive
+    /// as the kernel.
     fn alloc_va(&self, pid: u64, n: u64) -> R<u64> {
         let p = self.processes.get(&pid).ok_or(Error::Dead)?;
         let above = p.space.last_key_value().map_or(0, |(v, _)| v + 1);
@@ -1080,7 +1077,7 @@ impl Kernel {
         }
     }
 
-    /// Unmap `v` from `pid`, freeing (and uncharging) page tables left empty (README choice 20).
+    /// Unmap `v` from `pid`, freeing (and uncharging) page tables left empty.
     fn unmap_page(&mut self, pid: u64, v: u64) -> Option<Mapping> {
         let pt = self.page_table_cost();
         let p = self.processes.get_mut(&pid)?;
@@ -1115,7 +1112,7 @@ impl Kernel {
     /// Every page in `[first, first + n)` is absent from `pid`'s address space (`map_fixed`'s
     /// overlap check): the opposite of `own_range`, wanting nothing there rather than an owned
     /// mapping, and a single `BTreeMap::range` lookup instead of `n` point lookups, so it stays
-    /// cheap even for a huge `n` (P1-2).
+    /// cheap even for a huge `n` (R22).
     fn range_free(&self, pid: u64, first: u64, n: u64) -> bool {
         let Some(p) = self.processes.get(&pid) else { return false };
         p.space.range(first..first + n).next().is_none()
@@ -1247,7 +1244,7 @@ impl Kernel {
     // ---------------------------------------------------------------------------------------
     // Messages.
 
-    /// The open call of thread `tid` that its process knows as `rid` (QUESTIONS 88).
+    /// The open call of thread `tid` that its process knows as `rid`.
     fn open_call_of(&self, tid: u64, rid: u64) -> Option<u64> {
         let t = self.threads.get(&tid)?;
         t.serving.iter().copied().find(|m| self.msgs.get(m).is_some_and(|x| x.rid == rid))
@@ -1297,9 +1294,9 @@ impl Kernel {
     }
 
     /// R3: a taken call is abandoned (its caller died, timed out, or was failed by revocation or
-    /// its endpoint's destruction). The caller's charge for the lend ends; the lend stays mapped
-    /// in the server, charged only there, until the server replies; the open call's abandoned flag
-    /// is set, and the holding thread gets a notice on its endpoint (QUESTIONS 81).
+    /// its endpoint's destruction). The caller's charge for the lend ends; the lend stays mapped in
+    /// the server, charged only there, until the server replies; the open call's abandoned flag is
+    /// set, and the holding thread gets a notice on its endpoint.
     fn abandon(&mut self, mid: u64) {
         let Some(m) = self.msgs.get_mut(&mid) else { return };
         m.caller_waiting = false;
@@ -1417,8 +1414,7 @@ impl Kernel {
 
     /// R2: the next message to take on `e`: the oldest message of the next group after the last
     /// one served, in group order, wrapping around. A process at `MAX_OPEN_CALLS` takes no calls:
-    /// without `calls`, R2's turns skip them, and a group's oldest send is its message (README
-    /// choice 28).
+    /// without `calls`, R2's turns skip them, and a group's oldest send is its message.
     fn next_sender(&self, e: u64, calls: bool) -> Option<u64> {
         use core::ops::Bound::{Excluded, Unbounded};
         let ep = self.endpoints.get(&e)?;
@@ -1439,16 +1435,16 @@ impl Kernel {
         after.into_iter().find_map(head)
     }
 
-    /// The abandoned-call notice waiting for thread `tid` on endpoint `e`, if any (QUESTIONS 81).
+    /// The abandoned-call notice waiting for thread `tid` on endpoint `e`, if any.
     fn notice_for(&self, tid: u64, e: u64) -> Option<u64> {
         let t = self.threads.get(&tid)?;
         t.serving.iter().copied().find(|m| self.msgs.get(m).is_some_and(|x| x.notice && x.endpoint == e))
     }
 
     /// Match waiting receivers on `e` with what is pending there, until nothing more can be
-    /// delivered. Notices come before messages (KERNEL-SPEC.md, Messages): a waiting thread's
-    /// abandoned-call notices, then exit notices in the order queued, to the first receiver
-    /// (README choice 8). A message goes to the first receiver that can take it (one at
+    /// delivered. Notices come before messages (kernel/ipc.md, "What `receive` returns"): a waiting
+    /// thread's abandoned-call notices, then exit notices in the order queued, to the first
+    /// receiver. A message goes to the first receiver that can take it (one at
     /// `MAX_OPEN_CALLS` takes only sends).
     fn pump(&mut self, e: u64) {
         loop {
@@ -1587,7 +1583,7 @@ impl Kernel {
             p.handles.insert(next, *stamps.next().unwrap());
             slots.push(next);
         }
-        // Its id, from the receiving process's own counter (QUESTIONS 88).
+        // Its id, from the receiving process's own counter.
         let rid = if self.broken(Mutation::MsgIdsGlobal) {
             mid
         } else {
@@ -1603,7 +1599,7 @@ impl Kernel {
                     for (i, f) in buf.frames.iter().enumerate() {
                         let map = Mapping {
                             backing: Backing::Frame(*f),
-                            flags: FLAG_R | FLAG_W, // README choice 12
+                            flags: FLAG_R | FLAG_W, // lent and moved pages are read-write in the receiver
                             state: MapState::LentIn(mid),
                         };
                         self.map_page(rpid, rv + i as u64, map);
@@ -1633,8 +1629,7 @@ impl Kernel {
             let kind = if m.kind == MsgKind::Call { BufferKind::Lend } else { BufferKind::Transfer };
             received = Some(Received { kind, addr: rv * PAGE_SIZE, pages });
         }
-        // A call becomes an open call of the thread, and its current call (QUESTIONS 82); a send
-        // is done with (QUESTIONS 31).
+        // A call becomes an open call of the thread, and its current call; a send is done with.
         match m.kind {
             MsgKind::Call => {
                 let never = self.broken(Mutation::CurrentNeverSet);
@@ -1749,8 +1744,7 @@ impl Kernel {
         self.close_call(mid);
     }
 
-    /// Free a process object charged to `payer`, once its exit notice is received or dropped
-    /// (QUESTIONS 74).
+    /// Free a process object charged to `payer`, once its exit notice is received or dropped.
     fn free_process_object(&mut self, pid: u64, payer: u64) {
         self.sweep(|h| h.object == Object::Process(pid));
         self.ghost.process_freed(pid);
@@ -1771,10 +1765,10 @@ impl Kernel {
         for tid in tids {
             self.end_thread(tid);
         }
-        // WP-K5b (answer 173): reset every DMA device this process could reach before any of its
-        // DMA frames can be freed. Decides, per frame, whether it is pooled below (as any other
-        // owned frame) or quarantined for ever (`Frame::quarantined`, kept out of the vpn loop's
-        // `free_frame`, whether or not it is still mapped).
+        // I16: reset every DMA device this process could reach before any of its DMA frames can be
+        // freed. Decides, per frame, whether it is pooled below (as any other owned frame) or
+        // quarantined for ever (`Frame::quarantined`, kept out of the vpn loop's `free_frame`,
+        // whether or not it is still mapped).
         self.dma_release(pid);
         let dma_frames: Vec<u64> = self.processes[&pid].dma.iter().copied().collect();
         let vpns: Vec<u64> = self.processes[&pid].space.keys().copied().collect();
@@ -1789,8 +1783,8 @@ impl Kernel {
                 }
             }
         }
-        // A DMA frame `unmap` had already detached (OD2: still held) is not in `space` above, so
-        // it needs its own pass; `free_frame` on one already freed there is a no-op.
+        // A DMA frame `unmap` had already detached (still held) is not in `space` above, so it
+        // needs its own pass; `free_frame` on one already freed there is a no-op.
         for f in dma_frames {
             if self.frames.get(&f).is_some_and(|fr| !fr.quarantined) {
                 self.free_frame(f);
@@ -1801,7 +1795,7 @@ impl Kernel {
             p.handles.keys().map(|h| (h - 1) / self.costs.handles_per_page).collect::<BTreeSet<_>>().len()
                 as u64;
         self.uncharge(p.budget, table + self.page_table_cost() + self.costs.contexts);
-        // It stops counting against its budget's process limit now (QUESTIONS 106).
+        // It stops counting against its budget's process limit now.
         if let Some(b) = self.budgets.get_mut(&p.budget) {
             b.processes_used = b.processes_used.saturating_sub(1);
         }
@@ -1915,7 +1909,7 @@ impl Kernel {
         if !self.budgets.contains_key(&b) {
             return;
         }
-        // The top's carve returns first, before anything is destroyed (K5-code-review-4 D1).
+        // The top's carve returns first, before anything is destroyed.
         self.sched.return_carve(b);
         // Descendants first: post-order.
         let mut order = Vec::new();
@@ -1941,7 +1935,7 @@ impl Kernel {
             }
         }
         // Process objects charged to the doomed budgets are freed with them, killing the processes
-        // that still run elsewhere; their notices go below, with their payer (QUESTIONS 74).
+        // that still run elsewhere; their notices go below, with their payer.
         if !self.broken(Mutation::R10CreatorDeathSparesProcess) {
             let pids: Vec<u64> =
                 self.processes.values().filter(|p| doomed.contains(&p.creator)).map(|p| p.pid).collect();
@@ -1954,8 +1948,7 @@ impl Kernel {
         for e in eps {
             self.destroy_endpoint(e);
         }
-        // Process objects the doomed budgets paid for go with them, and their notices (QUESTIONS
-        // 74; README choice 21).
+        // Process objects the doomed budgets paid for go with them, and their notices.
         if !self.broken(Mutation::R10ExitNoticesOutlivePayer) {
             let freed: Vec<_> = self
                 .endpoints
@@ -1972,9 +1965,9 @@ impl Kernel {
                 self.free_process_object(pid, payer);
             }
         }
-        // Revocation reaches messages already sent through a doomed stamp (QUESTIONS 30): a queued
-        // one fails its sender with `Dead`; a taken call fails its caller with `Dead` at once and
-        // is abandoned (R3).
+        // Revocation reaches messages already sent through a doomed stamp: a queued one fails its
+        // sender with `Dead`; a taken call fails its caller with `Dead` at once and is abandoned
+        // (R3).
         let revoked: Vec<(u64, bool)> = self
             .msgs
             .values()
@@ -2008,11 +2001,11 @@ impl Kernel {
                 px.weight_used = px.weight_used.saturating_sub(bb.weight);
             }
         }
-        // WP-K5b (answer 173), OD5/N1: every quarantined frame charged to a budget in this
-        // subtree moves to b's parent, after the carve above has returned. Those pages were part
-        // of the subtree's usage, at most its `pages_limit`, and the carve just gave the parent
-        // that whole limit back, so this can never put it over its own (I5); with no parent, the
-        // charge vanishes with the machine's tree.
+        // kernel/devices.md, "Quarantine": every quarantined frame charged to a budget in this
+        // subtree moves to b's parent, after the carve above has returned. Those pages were part of
+        // the subtree's usage, at most its `pages_limit`, and the carve just gave the parent that
+        // whole limit back, so this can never put it over its own (I5); with no parent, the charge
+        // vanishes with the machine's tree.
         if !self.broken(Mutation::K5bQuarantineChargeDropped) {
             let moved: Vec<u64> = self
                 .frames
@@ -2100,7 +2093,7 @@ impl Kernel {
                 }
             }
             // With several threads waiting on one IRQ, a second event can stay pending (masked)
-            // while this one times out: R5 unmasks only when a receive begins (README choice 18).
+            // while this one times out: R5 unmasks only when a receive begins.
             Wait::Irq { device, .. } => {
                 if let Some(d) = self.devices.get_mut(&device) {
                     d.waiters.retain(|x| *x != tid);
@@ -2214,8 +2207,8 @@ impl Kernel {
     /// Apply one op. `None` if the op is not a legal event (it names a thread that does not
     /// exist or is blocked, a tick is longer than `MAX_TICK`, or the machine is halted); the
     /// state is then unchanged.
-    /// Pending question 171: these events would require choosing a late-invalid receive
-    /// result. Keep them outside the oracle until the owner settles that contract.
+    /// These events would require choosing a late-invalid receive result
+    /// (todo/receive-output-late-invalid.md); keep them outside the oracle until that is settled.
     pub fn unsupported_receive_output(&self, op: &Op) -> bool {
         if let Op::Sys { tid, call: Syscall::Receive { .. }, .. } = op {
             if self.threads.get(tid).is_some_and(|t| t.record == Record::CopyFault) {
@@ -2340,10 +2333,9 @@ impl Kernel {
     /// Thread `tid` of `pid` faults: the process ends `faulted`.
     fn fault(&mut self, pid: u64, tid: u64) { self.exit_as(pid, tid, 0, true); }
 
-    /// Process `pid` ends through thread `tid`: by a fault if `fault`, else by an exit with
-    /// `code`. It is reported `faulted` if it faulted or holds open calls (QUESTIONS 55), blaming
-    /// the sender of `tid`'s current call, or nobody if it has none (QUESTIONS 48, 82); otherwise
-    /// `exited`.
+    /// Process `pid` ends through thread `tid`: by a fault if `fault`, else by an exit with `code`.
+    /// It is reported `faulted` if it faulted or holds open calls, blaming the sender of `tid`'s
+    /// current call, or nobody if it has none; otherwise `exited`.
     fn exit_as(&mut self, pid: u64, tid: u64, code: u64, fault: bool) {
         let Some(p) = self.processes.get(&pid) else { return };
         let threads: Vec<u64> = p.threads.iter().copied().collect();
@@ -2358,7 +2350,7 @@ impl Kernel {
             t.and_then(|t| t.current)
         };
         let blamed = blamed.and_then(|m| self.msgs.get(&m));
-        // An exit reported `faulted` keeps its code (README choice 29).
+        // An exit reported `faulted` keeps its code.
         let blame = if fault || open {
             Blame {
                 cause: Cause::Faulted,
@@ -2456,12 +2448,13 @@ impl Kernel {
     }
 
     // ---------------------------------------------------------------------------------------
-    // The system calls, in KERNEL-SPEC.md's table order.
+    // The system calls, in kernel/abi.md's table order.
 
     /// Map `n` fresh zeroed frames at a kernel-chosen address, charging frames and page tables.
     /// `dma`, once `Some(device)` (`dma_alloc`), makes them contiguous, from the top of what was
-    /// ever used, and DMA-owned (WP-K5b, answer 173): held by the process until it ends (OD2),
-    /// armed against `device` and every device the process has already mapped (ghost, I-DMA).
+    /// ever used, and DMA-owned: held by the process until it ends (kernel/devices.md,
+    /// "`dma_alloc`"), armed against `device` and every device the process has already mapped
+    /// (ghost, I16).
     fn map_fresh(&mut self, pid: u64, n: u64, flags: u64, dma: Option<u64>) -> R<(u64, u64)> {
         let b = self.budget_of(pid).ok_or(Error::Dead)?;
         let start = self.alloc_va(pid, n)?;
@@ -2507,7 +2500,7 @@ impl Kernel {
     }
 
     /// `unmap(addr, len)`: own mapping; not currently lent. A DMA frame's mapping goes, but the
-    /// frame itself does not (OD2: held, and charged, until the process ends).
+    /// frame itself does not (held, and charged, until the process ends: kernel/devices.md).
     pub fn unmap(&mut self, pid: u64, addr: u64, len: u64) -> R<()> {
         let (first, n) = user_range(addr, len)?;
         self.own_range(pid, first, n, |_| true)?;
@@ -2537,11 +2530,11 @@ impl Kernel {
     }
 
     /// `map_fixed(addr, len, flags)`: as `map_anon`, but at exactly `addr`; never replaces a
-    /// mapping (KERNEL-SPEC.md R11, answer 172). Same order as the kernel: decode flags, the
-    /// range (`user_range`, page 0 included: K5a-addr0), the whole range's overlap with any of
-    /// `pid`'s mappings (`range_free`, before anything is charged), the flags rule, then the
-    /// charge -- pages alone first, cheaply (P1-2/N2: a hostile `map_fixed(0, USER_TOP)` must
-    /// stay fast, never walking `tables_needed` over pages it was never going to afford).
+    /// mapping (kernel/memory.md R11). Same order as the kernel: decode flags, the range
+    /// (`user_range`, page 0 included), the whole range's overlap with any of `pid`'s mappings
+    /// (`range_free`, before anything is charged), the flags rule, then the charge -- pages alone
+    /// first, cheaply (R22: a hostile `map_fixed(0, USER_TOP)` must stay fast, never walking
+    /// `tables_needed` over pages it was never going to afford).
     pub fn map_fixed(&mut self, pid: u64, addr: u64, len: u64, flags: u64) -> R<()> {
         decode_flags(flags, false)?;
         let (first, n) = user_range(addr, len)?;
@@ -2567,9 +2560,9 @@ impl Kernel {
     }
 
     /// `map_device(h(MMIO)) -> addr`: MMIO device handle. The range is mapped read-write. Device
-    /// pages are not RAM; their page tables are charged. A DMA device (WP-K5b) is added to the
-    /// reset set S this process's death will need (OD3), and every DMA frame it already holds is
-    /// armed against it too (ghost, I-DMA). No handle to a quarantined device survives (OD6).
+    /// pages are not RAM; their page tables are charged. A DMA device is added to the reset set S
+    /// this process's death will need, and every DMA frame it already holds is armed against it too
+    /// (ghost, I16). No handle to a quarantined device survives (kernel/devices.md, "Quarantine").
     pub fn map_device(&mut self, pid: u64, h: u64) -> R<u64> {
         let h = decode_handle(h)?;
         let Object::Device(d) = self.lookup(pid, h)?.object else { return Err(Error::WrongObject) };
@@ -2609,8 +2602,8 @@ impl Kernel {
         Ok(r)
     }
 
-    /// OD3's reset set S for `pid`: the device behind each DMA frame it holds, plus every DMA
-    /// device it ever named in `map_device`.
+    /// The reset set S for `pid` (kernel/devices.md, "Reset before reuse"): the device behind each
+    /// DMA frame it holds, plus every DMA device it ever named in `map_device`.
     fn dma_reach(&self, pid: u64) -> BTreeSet<u64> {
         let Some(p) = self.processes.get(&pid) else { return BTreeSet::new() };
         let mut s = p.dma_mapped.clone();
@@ -2622,10 +2615,10 @@ impl Kernel {
         s
     }
 
-    /// Ghost, I-DMA: every device `pid` could now reach (`dma_reach`) can, in principle, be
-    /// reprogrammed to write any DMA frame it holds, not only the one it was allocated through
-    /// (OD3's residual: a device grant reaches every frame's address). Re-arms every frame it
-    /// holds against the current S, including ones just added.
+    /// Ghost, I16: every device `pid` could now reach (`dma_reach`) can, in principle, be
+    /// reprogrammed to write any DMA frame it holds, not only the one it was allocated through (a
+    /// device grant reaches every frame's address). Re-arms every frame it holds against the
+    /// current S, including ones just added.
     fn dma_arm_current(&mut self, pid: u64) {
         let s = self.dma_reach(pid);
         if s.is_empty() {
@@ -2638,11 +2631,11 @@ impl Kernel {
         }
     }
 
-    /// WP-K5b (answer 173): before any of `pid`'s DMA frames can be freed, reset the set S of
-    /// every device it could reach (OD3). If every device in S confirms *in this call*, its
-    /// frames are left for the ordinary frame-freeing paths to pool; otherwise every one of them
-    /// is quarantined for ever (P1-1: a device already quarantined, or one that fails now, counts
-    /// as not reset, so a co-holder's healthy slots are quarantined too).
+    /// I16: before any of `pid`'s DMA frames can be freed, reset the set S of every device it could
+    /// reach. If every device in S confirms *in this call*, its frames are left for the ordinary
+    /// frame-freeing paths to pool; otherwise every one of them is quarantined for ever (a device
+    /// already quarantined, or one that fails now, counts as not reset, so a co-holder's healthy
+    /// slots are quarantined too).
     fn dma_release(&mut self, pid: u64) {
         let s = self.dma_reach(pid);
         if s.is_empty() {
@@ -2650,8 +2643,8 @@ impl Kernel {
         }
         // Ghost: which devices genuinely confirm, read from each device object before the attempt
         // (a `FirstFails` device's first attempt fails), not from `reset_device`'s answer, so that
-        // neither that answer nor the pooling decision below can hide a device that may still
-        // write (I-DMA; `K5bQuarantinedSlotCountsAsReset`, `K5bFreeBeforeReset`).
+        // neither that answer nor the pooling decision below can hide a device that may still write
+        // (I16; `K5bQuarantinedSlotCountsAsReset`, `K5bFreeBeforeReset`).
         let genuine: Vec<u64> = s
             .iter()
             .copied()
@@ -2692,12 +2685,12 @@ impl Kernel {
         }
     }
 
-    /// One device's reset attempt (OD7): `false`, with no further state change, if it is already
-    /// quarantined or has no reset (`Resets::Never`, IO-ARCHITECTURE's platform residual, P2-5);
+    /// One device's reset attempt: `false`, with no further state change, if it is already
+    /// quarantined or has no reset (`Resets::Never`, a platform residual: kernel/devices.md);
     /// `false` once, consuming the device's one scripted failure (`Resets::FirstFails`, the
     /// `dma-reset-deaf` test feature), then `true` from then on; `true` at once otherwise.
     fn reset_device(&mut self, d: u64) -> bool {
-        // P1-1: a quarantined slot counts as reset only under the mutation named for it.
+        // A quarantined slot counts as reset only under the mutation named for it.
         let quarantined_counts = self.broken(Mutation::K5bQuarantinedSlotCountsAsReset);
         let Some(dev) = self.devices.get_mut(&d) else { return false };
         let DeviceKind::Mmio { quarantined, resets, .. } = &mut dev.kind else { return false };
@@ -2714,9 +2707,10 @@ impl Kernel {
         }
     }
 
-    /// OD6: a device that fails a reset is flagged for ever (until reboot, which the model never
-    /// does), and every handle to it is swept as R10 sweeps (a copy in a message not yet received
-    /// arrives as 0), so nobody can map it or allocate through it again.
+    /// kernel/devices.md, "Quarantine": a device that fails a reset is flagged for ever (until
+    /// reboot, which the model never does), and every handle to it is swept as R10 sweeps (a copy
+    /// in a message not yet received arrives as 0), so nobody can map it or allocate through it
+    /// again.
     fn quarantine_device(&mut self, d: u64) {
         if let Some(dev) = self.devices.get_mut(&d) {
             if let DeviceKind::Mmio { quarantined, .. } = &mut dev.kind {
@@ -2739,8 +2733,8 @@ impl Kernel {
         Ok(self.new_thread(pid))
     }
 
-    /// `thread_exit`. The last thread's exit ends the process as `process_exit(0)` would (README
-    /// answer 170), `faulted` if it holds open calls.
+    /// `thread_exit`. The last thread's exit ends the process as `process_exit(0)` would,
+    /// `faulted` if it holds open calls.
     pub fn thread_exit(&mut self, pid: u64, tid: u64) {
         if self.processes.get(&pid).is_some_and(|p| p.threads.len() == 1) {
             self.exit_as(pid, tid, 0, false);
@@ -2758,18 +2752,18 @@ impl Kernel {
         Ok(())
     }
 
-    /// `process_create(h(budget), h(exit endpoint)) -> h(process)`: the budget's weight not 0;
-    /// the exit endpoint's badge 0 (QUESTIONS 93); the budget's process and page limits (the root
-    /// page table); the process object charged to the caller (QUESTIONS 74). The new handle is
-    /// stamped with the caller's budget (R9).
+    /// `process_create(h(budget), h(exit endpoint)) -> h(process)`: the budget's weight not 0; the
+    /// exit endpoint's badge 0; the budget's process and page limits (the root page table); the
+    /// process object charged to the caller. The new handle is stamped with the caller's budget
+    /// (R9).
     pub fn process_create(&mut self, pid: u64, budget: u64, exit_endpoint: u64) -> R<u64> {
         let budget = decode_handle(budget)?;
         let exit_endpoint = decode_handle(exit_endpoint)?;
         let b = self.lookup_budget(pid, budget)?;
         let (endpoint, exit) = self.lookup_endpoint(pid, exit_endpoint)?;
         let bx = &self.budgets[&b];
-        // A budget with free weight 0 cannot hold a process (QUESTIONS 12; its stride weight is
-        // its free weight, R12).
+        // A budget with free weight 0 cannot hold a process (its stride weight is its free weight,
+        // R12).
         if bx.weight.saturating_sub(bx.weight_used) == 0 && !self.broken(Mutation::ProcessInWeightlessBudget)
         {
             return Err(Error::InvalidArgument);
@@ -2843,7 +2837,8 @@ impl Kernel {
     }
 
     /// `process_map(h(process), src, dst, len, flags)`: process not started; src owned by the
-    /// caller; pages move to the child's budget; not W+X. A DMA page stays put (WP-K5b, OD2).
+    /// caller; pages move to the child's budget; not W+X. A DMA page stays put (kernel/devices.md,
+    /// "`dma_alloc`").
     pub fn process_map(&mut self, pid: u64, process: u64, src: u64, dst: u64, len: u64, flags: u64) -> R<()> {
         let process = decode_handle(process)?;
         decode_flags(flags, false)?;
@@ -2879,10 +2874,10 @@ impl Kernel {
         Ok(())
     }
 
-    /// `process_start(h(process), entry, sp, arg, handles)`: not started; handles copied into
-    /// slots 1..n (at most `MAX_START_HANDLES`, QUESTIONS 10). The child's table and first thread
-    /// are charged to the child's budget. `arg` (the startup page's address, QUESTIONS 40) is not
-    /// checked; it reaches the first thread, which the model does not run.
+    /// `process_start(h(process), entry, sp, arg, handles)`: not started; handles copied into slots
+    /// 1..n (at most `MAX_START_HANDLES`). The child's table and first thread are charged to the
+    /// child's budget. `arg` (the startup page's address) is not checked; it reaches the first
+    /// thread, which the model does not run.
     pub fn process_start(
         &mut self,
         pid: u64,
@@ -2960,8 +2955,8 @@ impl Kernel {
         badge: u64,
         budget: Option<u64>,
     ) -> R<u64> {
-        // Decoding, in register order: the source (a message id of 0 is malformed), the badge (0
-        // is refused, QUESTIONS 15), the optional budget.
+        // Decoding, in register order: the source (a message id of 0 is malformed), the badge (0 is
+        // refused), the optional budget.
         match source {
             MintSource::Handle(h) => {
                 decode_handle(h)?;
@@ -3061,7 +3056,7 @@ impl Kernel {
                 }
                 let (first, n) = buffer_range(b)?;
                 // A lend must be writable; a transfer may be any RAM the caller owns. A DMA page
-                // stays put (WP-K5b, OD2): neither lent nor transferred.
+                // stays put (kernel/devices.md, "`dma_alloc`"): neither lent nor transferred.
                 self.own_range(pid, first, n, |m| match m.backing {
                     Backing::Frame(f) => self.frames[&f].dma.is_none() && (!lend || m.flags & FLAG_W != 0),
                     _ => false,
@@ -3069,8 +3064,8 @@ impl Kernel {
                 Some((first, n))
             }
         };
-        // R1: between two user budgets, only equal label sets; the receiving side is the
-        // endpoint's owner (QUESTIONS 4, 46).
+        // R1: between two user budgets, only equal label sets; the receiving side is the endpoint's
+        // owner.
         let sender = &self.budgets[&self.budget_of(pid).unwrap()];
         let owner_id = self.endpoints[&e].owner;
         let mut owner = &self.budgets[&owner_id];
@@ -3293,7 +3288,7 @@ impl Kernel {
         if !self.record_valid(pid, tid, false) {
             return Outcome::Done(Err(Error::InvalidArgument));
         }
-        // Whatever it returns, the thread has no current call until it takes one (QUESTIONS 82).
+        // Whatever it returns, the thread has no current call until it takes one.
         if !self.broken(Mutation::ReceiveKeepsCurrent) {
             self.threads.get_mut(&tid).unwrap().current = None;
         }
@@ -3353,8 +3348,7 @@ impl Kernel {
     }
 
     /// `reply(msg_id, words, handles)`: `msg_id` is an open call of the caller's thread (a `send`
-    /// never is, QUESTIONS 1); returns the lend (an abandoned call's is freed and its reply
-    /// discarded, R3).
+    /// never is); returns the lend (an abandoned call's is freed and its reply discarded, R3).
     pub fn reply(&mut self, pid: u64, tid: u64, msg_id: u64, words: [u64; WORDS], handles: &[u64]) -> R<Ret> {
         // Decoding: the message id register (0 is malformed), then the body.
         if msg_id == 0 {
@@ -3442,7 +3436,7 @@ impl Kernel {
     }
 
     /// `serve(msg_id)`: `msg_id` is an open call of the caller's thread; it becomes the thread's
-    /// current call, the one a fault blames (QUESTIONS 82).
+    /// current call, the one a fault blames.
     pub fn serve(&mut self, tid: u64, msg_id: u64) -> R<()> {
         if msg_id == 0 {
             return Err(Error::InvalidArgument);
@@ -3464,7 +3458,7 @@ impl Kernel {
     }
 
     /// `budget_create(h(parent), pages, processes, weight, labels, account, deadline) -> h`:
-    /// R6-R8; the class is the parent's (QUESTIONS 73); labels as the spec says; depth
+    /// R6-R8; the class is the parent's; labels as the spec says; depth
     /// < `MAX_DEPTH`.
     #[allow(clippy::too_many_arguments)]
     pub fn budget_create(
@@ -3494,7 +3488,7 @@ impl Kernel {
         if px.depth + 1 >= MAX_DEPTH {
             return Err(Error::TooLarge);
         }
-        // Labels are sorted and deduplicated, a superset of the parent's (README choice 3);
+        // Labels are sorted and deduplicated, a superset of the parent's (else `LabelDenied`);
         // adding labels needs the caller's own budget to be class `system`.
         let mut labels = labels.to_vec();
         labels.sort_unstable();
@@ -3506,7 +3500,7 @@ impl Kernel {
         if labels != px.labels && adder != Class::System {
             return Err(Error::ClassDenied);
         }
-        // R6/R7: carve from the parent's free limits, with the budget's own page (QUESTIONS 76).
+        // R6/R7: carve from the parent's free limits, with the budget's own page.
         let carve_check = !self.broken(Mutation::R7NoCarveCheck);
         let own = if self.broken(Mutation::R6OwnPageChargedToItself) { 0 } else { self.costs.budget };
         if pages.saturating_add(own) > self.free_pages(p) && (carve_check || own > self.free_pages(p)) {
@@ -3515,7 +3509,7 @@ impl Kernel {
         if carve_check && processes > px.processes_limit.saturating_sub(px.processes_used) {
             return Err(Error::OutOfProcesses);
         }
-        // README choice 2. A carve may not leave a budget that holds a process with free weight 0:
+        // A weight over the parent's free weight is `InvalidArgument`. A carve may not leave a budget that holds a process with free weight 0:
         // its stride weight is its free weight, and a weight-0 budget holds no process (R7, R12).
         let free = px.weight.saturating_sub(px.weight_used);
         let holds = self.processes.values().any(|x| x.budget == p);
@@ -3525,14 +3519,14 @@ impl Kernel {
         {
             return Err(Error::InvalidArgument);
         }
-        // R8: the parent's account, unless it is 0 (then the argument; README choice 4).
+        // R8: the parent's account, unless it is 0 (then the argument).
         let account = if px.account != 0 && !self.broken(Mutation::R8AccountFromArgument) {
             px.account
         } else {
             account
         };
         let class = if self.broken(Mutation::ClassNotInherited) { caller } else { px.class };
-        let deadline = if deadline == FOREVER { None } else { Some(deadline) }; // README choice 17
+        let deadline = if deadline == FOREVER { None } else { Some(deadline) }; // a passed deadline destroys at the call's end
         let l = Limits { pages, processes, weight };
         let id = self.new_budget(Some(p), class, labels, account, deadline, l, caller);
         let h = Handle {

@@ -1,4 +1,4 @@
-//! KERNEL-SPEC.md's invariants I1-I15, checked on the kernel model's state after every step.
+//! kernel/invariants.md's invariants I1-I16, checked on the kernel model's state after every step.
 //!
 //! Each check recomputes what should be true from the objects themselves and from ghost records
 //! (ghost.rs: taken from handle tables, budget objects and call arguments at the event), never from
@@ -298,9 +298,9 @@ impl Checker {
             ensure!(k.frames[f].content == 0, "I9: frame {f} was handed out without being zeroed");
         }
         self.frames = now;
-        // I-DMA (WP-K5b, answer 173): a frame waiting in the free pool for reuse (by any path,
-        // DMA or not) is never one a device could still write: `dma_alloc`'s own frames are armed
-        // in the same step they are created, so this checks the pool, not creation.
+        // I16: a frame waiting in the free pool for reuse (by any path, DMA or not) is never one a
+        // device could still write: `dma_alloc`'s own frames are armed in the same step they are
+        // created, so this checks the pool, not creation.
         for f in k.free_frames.keys() {
             ensure!(
                 k.ghost.armed.get(f).is_none_or(BTreeSet::is_empty),
@@ -345,8 +345,9 @@ impl Checker {
                 s.lent_in
             );
             if fr.quarantined {
-                // WP-K5b, OD5: a quarantined frame outlives the process it was held by, mapped
-                // nowhere, charged to its run's budget until that budget is destroyed (N1).
+                // I16 (kernel/devices.md, "Quarantine"): a quarantined frame outlives the process
+                // it was held by, mapped nowhere, charged to its run's budget until that budget is
+                // destroyed, then to its parent (kernel/budgets.md, R10 step 8).
                 ensure!(s.own.is_empty(), "I-DMA: quarantined frame {f} is still mapped by {:?}", s.own);
             } else if let Some(pid) = s.own.first() {
                 ensure!(
@@ -382,8 +383,8 @@ impl Checker {
                     fr.payer
                 );
             } else if fr.dma.is_some() && k.processes.values().any(|p| p.dma.contains(f)) {
-                // WP-K5b, OD2: `unmap` keeps a DMA frame; it stays held (and charged) by its live
-                // owner, mapped nowhere, until the process ends.
+                // kernel/devices.md, "`dma_alloc`": `unmap` keeps a DMA frame; it stays held (and
+                // charged) by its live owner, mapped nowhere, until the process ends.
             } else {
                 return Err(format!("R6: frame {f} is charged to {} but mapped nowhere", fr.payer));
             }
@@ -439,8 +440,8 @@ fn delivered(
                         || k.ghost.owed.get(&p).is_some_and(|o| k.endpoints.contains_key(&o.endpoint)))
             }
             Object::Endpoint(e) => k.endpoints.contains_key(&e),
-            // A quarantined device's object is destroyed as R10 destroys one (WP-K5b, OD6); the
-            // model keeps it only as the flagged registry entry.
+            // A quarantined device's object is destroyed as R10 destroys one (kernel/devices.md,
+            // "Quarantine"); the model keeps it only as the flagged registry entry.
             Object::Device(d) => k
                 .devices
                 .get(&d)
@@ -514,8 +515,8 @@ fn ghost_key(k: &Kernel, m: u64) -> Option<Key> {
 /// every queued message and waiting receiver exist and agree; a queued message is in its sender's
 /// group and was sent through a live handle (R2, R10); a thread blocked in `send`, `call` or
 /// waiting for a reply waits on something that still exists (R10); no budget outlives its
-/// deadline; a process's object is paid by a live budget, and its exit endpoint is a receive right
-/// (QUESTIONS 74, 93); the scheduler's runnable threads are exactly the runnable threads.
+/// deadline; a process's object is paid by a live budget, and its exit endpoint is a receive
+/// right; the scheduler's runnable threads are exactly the runnable threads.
 fn structure(k: &Kernel) -> Check {
     for p in k.processes.values() {
         ensure!(
@@ -714,8 +715,8 @@ fn structure(k: &Kernel) -> Check {
 
 /// What each thread serves (R4a): exactly the calls the ghost saw delivered to it and not yet
 /// replied to; its current call is the one the ghost saw it take or `serve` last, none after a
-/// `receive` returned anything else (QUESTIONS 82); every taken call is served by exactly one live
-/// thread; a process holds at most `MAX_OPEN_CALLS`.
+/// `receive` returned anything else; every taken call is served by exactly one live thread; a
+/// process holds at most `MAX_OPEN_CALLS`.
 fn serving(k: &Kernel) -> Check {
     let mut servers: BTreeMap<u64, u64> = BTreeMap::new();
     for t in k.threads.values() {
@@ -810,8 +811,8 @@ fn page_tables(space: &BTreeMap<u64, crate::kernel::Mapping>) -> u64 {
 /// I5 and R6: recompute every budget's usage from the objects charged to it (the cost table:
 /// budgets' own pages to their parents, process objects to their creators while the process
 /// runs or its notice waits, page tables, threads, handle tables, endpoints, frames, open calls,
-/// and lends to their receivers while the caller waits); usage fits the limits, always (QUESTIONS
-/// 70); children's limits and own pages plus its own objects fit.
+/// and lends to their receivers while the caller waits); usage fits the limits, always; children's
+/// limits and own pages plus its own objects fit.
 fn i5_charging(k: &Kernel) -> Check {
     let c = k.costs;
     let mut pages: BTreeMap<u64, u64> = BTreeMap::new();
@@ -835,7 +836,7 @@ fn i5_charging(k: &Kernel) -> Check {
         *procs.entry(p.budget).or_default() += 1;
     }
     // Process objects, as the ghost recorded them at `process_create`: charged to the creator's
-    // budget while the process runs and while its notice waits (QUESTIONS 74).
+    // budget while the process runs and while its notice waits.
     for (pid, s) in &k.ghost.slots {
         let waiting = k.ghost.owed.get(pid).is_some_and(|o| k.endpoints.contains_key(&o.endpoint));
         if k.budgets.contains_key(&s.payer) && (k.processes.contains_key(pid) || waiting) {
@@ -932,8 +933,7 @@ fn i6_i8_budgets(k: &Kernel) -> Check {
                 b.id
             );
         }
-        // `users`, which the kernel makes class user under `root`, is the one exception (README
-        // spec problem 9).
+        // `users`, which the kernel makes class user under `root`, is the one exception.
         ensure!(
             b.class == p.class || b.id == USERS,
             "I8: budget {} has class {:?}, its parent {:?}",
@@ -1019,10 +1019,9 @@ fn r4_delivery(k: &Kernel) -> Check {
     Ok(())
 }
 
-/// Exit notices (Messages; R1; R10; QUESTIONS 55, 74, 82): every notice the ghost saw owed, whose
-/// endpoint still exists, waits on it (receiving it clears it) if its object's payer lives, and is
-/// gone if the payer does not; it reports what the ghost expects; and every waiting notice is
-/// owed.
+/// Exit notices (Messages; R1; R10): every notice the ghost saw owed, whose endpoint still exists,
+/// waits on it (receiving it clears it) if its object's payer lives, and is gone if the payer does
+/// not; it reports what the ghost expects; and every waiting notice is owed.
 fn exits_owed(k: &Kernel) -> Check {
     for (pid, o) in &k.ghost.owed {
         let Some(e) = k.endpoints.get(&o.endpoint) else { continue };

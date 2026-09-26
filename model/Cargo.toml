@@ -3,9 +3,9 @@ name = "redoubt-model"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "Executable security model of the Redoubt kernel (KERNEL-SPEC.md) and the steward's milestone 1 policy"
+description = "Executable security model of the Redoubt kernel (docs/kernel/model.md) and the steward's milestone 1 policy"
 
-# No dependencies on purpose: the model is read side by side with KERNEL-SPEC.md, and its random
+# No dependencies on purpose: the model is read side by side with docs/kernel/, and its random
 # sequences come from a small seeded generator (src/gen.rs), so every failure is reproducible from
 # one seed and shrinks to a short trace.
 [dependencies]
