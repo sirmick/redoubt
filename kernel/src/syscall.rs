@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering::Relaxed};
+use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering::Relaxed};
 
 use redoubt_abi::arch::PAGE_SIZE;
 use redoubt_abi::arch::USER_AREA_END;
@@ -12,8 +12,7 @@ use crate::arch::process::Process as ArchProcess;
 use crate::cell::KernelCell;
 use crate::irq::{interrupt_claim, interrupt_free};
 use crate::mem::MemoryManager;
-use crate::server::{SenderID, WaitingMessage};
-use crate::services::{PostActivateOp, SystemServices};
+use crate::services::SystemServices;
 
 /* Quoth Xobs:
  The idea behind SWITCHTO_CALLER was that you'd have a process act as a scheduler,
@@ -41,14 +40,6 @@ static SWITCHTO_CALLER: KernelCell<Option<(PID, TID)>> = KernelCell::new(None);
 static ORIGINAL_PID: AtomicU8 = AtomicU8::new(2);
 static ORIGINAL_TID: AtomicUsize = AtomicUsize::new(2);
 
-static NS_TOFU: AtomicBool = AtomicBool::new(false);
-
-#[derive(PartialEq)]
-enum ExecutionType {
-    Blocking,
-    NonBlocking,
-}
-
 pub fn reset_switchto_caller() { SWITCHTO_CALLER.with(|c| *c = None); }
 
 /// After a blocking Redoubt call switched away, point the scheduler back at the thread whose
@@ -57,11 +48,6 @@ pub fn restore_last_thread(ss: &mut SystemServices) {
     if let Some(pid) = PID::new(ORIGINAL_PID.load(Relaxed)) {
         ss.set_last_thread(pid, ORIGINAL_TID.load(Relaxed)).ok();
     }
-}
-
-fn retry_syscall(pid: PID, tid: TID) -> SysCallResult {
-    arch::process::Process::with_current_mut(|p| p.retry_instruction(tid))?;
-    do_yield(pid, tid)
 }
 
 fn do_yield(_pid: PID, tid: TID) -> SysCallResult {
@@ -74,653 +60,11 @@ fn do_yield(_pid: PID, tid: TID) -> SysCallResult {
     SystemServices::with_mut(|ss| {
         // TODO: Advance thread
         let result = ss
-            .activate_process_thread(tid, parent_pid, parent_ctx, true, PostActivateOp::None)
+            .activate_process_thread(tid, parent_pid, parent_ctx, true)
             .map(|_| Ok(redoubt_abi::Result::ResumeProcess))
             .unwrap_or(Err(redoubt_abi::Error::ProcessNotFound));
 
         ss.set_last_thread(PID::new(ORIGINAL_PID.load(Relaxed)).unwrap(), ORIGINAL_TID.load(Relaxed)).ok();
-        result
-    })
-}
-
-fn send_message(pid: PID, tid: TID, cid: CID, message: Message) -> SysCallResult {
-    SystemServices::with_mut(|ss| {
-        let sidx = ss.sidx_from_cid(cid).ok_or(redoubt_abi::Error::ServerNotFound)?;
-
-        let server_pid = ss.server_from_sidx(sidx).expect("server couldn't be located").pid;
-
-        // Remember the address the message came from, in case we need to
-        // return it after the borrow is through.
-        let client_address = match &message {
-            Message::Scalar(_) | Message::BlockingScalar(_) => None,
-            Message::Move(msg) | Message::MutableBorrow(msg) | Message::Borrow(msg) => {
-                MemoryAddress::new(msg.buf.as_ptr() as _)
-            }
-        };
-
-        // Translate memory messages from the client process to the server
-        // process. Additionally, determine whether the call is blocking. If
-        // so, switch to the server context right away.
-        let blocking = message.is_blocking();
-
-        // helper for handling the error-recovery path
-        fn return_thread(ss: &mut SystemServices, sidx: usize, tid: Option<TID>) {
-            if let Some(st) = tid {
-                ss.server_from_sidx_mut(sidx)
-                    .expect("server couldn't be located")
-                    .return_available_thread(st);
-            }
-        }
-
-        // --- decide delivery path BEFORE touching memory ---
-        let has_memory =
-            matches!(&message, Message::Move(_) | Message::MutableBorrow(_) | Message::Borrow(_));
-
-        let (available_tid, can_deliver) = {
-            let (server_pid, avail_tid) = {
-                let server = ss.server_from_sidx_mut(sidx).expect("server couldn't be located");
-                let server_pid = server.pid;
-
-                let avail_tid = server.take_available_thread();
-                (server_pid, avail_tid)
-            };
-
-            // A delivered message consumes at most one slot of the server's
-            // queue:
-            //   * no available thread: the message itself is enqueued by queue_message() in the "queue it"
-            //     path below,
-            //   * available thread + blocking: queue_response() enqueues a WaitingReturn* token -- the
-            //     message goes to the thread directly, but the response bookkeeping still occupies a queue
-            //     slot,
-            //   * available thread + non-blocking: direct handoff, no slot.
-            // So an available thread only exempts *non-blocking* sends from
-            // the capacity probe. Erring toward "full" is cheap: the
-            // dispatcher retries ServerQueueFull once capacity frees. Erring
-            // toward "not full" is unrecoverable for memory messages, because
-            // send_memory() has already moved the client's pages by the time
-            // the enqueue fails, and the ServerQueueFull retry would move
-            // them a second time against a now-empty client mapping. Memory
-            // messages therefore run the authoritative predicate before any
-            // transfer: has_queue_capacity() is exactly queue_message()'s
-            // acceptance rule, and strictly stricter than queue_response()'s.
-            let needs_slot = avail_tid.is_none() || blocking;
-
-            if has_memory {
-                let capacity = if needs_slot {
-                    // The queue array lives in the server's address space.
-                    let current_pid = ss.current_pid();
-                    let server_process = match ss.get_process(server_pid) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            // Give the thread back before returning the error
-                            return_thread(ss, sidx, avail_tid);
-                            return Err(e);
-                        }
-                    };
-                    server_process.mapping.activate().unwrap();
-
-                    let server = ss.server_from_sidx_mut(sidx).expect("server couldn't be located");
-                    let capacity = server.has_queue_capacity();
-
-                    let current_process = ss.get_process(current_pid).expect("client process");
-                    current_process.mapping.activate().unwrap();
-                    capacity
-                } else {
-                    true
-                };
-                (avail_tid, capacity)
-            } else {
-                // Scalar / BlockingScalar: no memory to protect, and the
-                // generation counters live in the kernel-static Server
-                // struct, so this costs no address-space switch. It can miss
-                // a queue full of WaitingReturn* tokens (tokens never move
-                // the generations), but a late ServerQueueFull there merely
-                // retries an idempotent syscall.
-                let server = ss.server_from_sidx_mut(sidx).expect("server couldn't be located");
-                (avail_tid, !needs_slot || server.has_queue_capacity_scalar())
-            }
-        };
-
-        if !can_deliver {
-            return Err(redoubt_abi::Error::ServerQueueFull);
-        }
-
-        // --- Memory transfer (now guaranteed to be deliverable) ---
-        let message = match message {
-            Message::Scalar(_) | Message::BlockingScalar(_) => message,
-            Message::Move(msg) => {
-                let new_virt = ss
-                    .send_memory(
-                        msg.buf.as_mut_ptr() as *mut usize,
-                        server_pid,
-                        core::ptr::null_mut(),
-                        msg.buf.len(),
-                    )
-                    .inspect_err(|_| return_thread(ss, sidx, available_tid))?;
-                Message::Move(MemoryMessage {
-                    id: msg.id,
-                    buf: crate::mem::memory_range(new_virt as usize, msg.buf.len()).map_err(|e| {
-                        return_thread(ss, sidx, available_tid);
-                        e
-                    })?,
-                    offset: msg.offset,
-                    valid: msg.valid,
-                })
-            }
-            Message::MutableBorrow(msg) => {
-                let new_virt = ss
-                    .lend_memory(
-                        msg.buf.as_mut_ptr() as *mut usize,
-                        server_pid,
-                        core::ptr::null_mut(),
-                        msg.buf.len(),
-                        true,
-                    )
-                    .inspect_err(|_| return_thread(ss, sidx, available_tid))?;
-                Message::MutableBorrow(MemoryMessage {
-                    id: msg.id,
-                    buf: crate::mem::memory_range(new_virt as usize, msg.buf.len()).map_err(|e| {
-                        return_thread(ss, sidx, available_tid);
-                        e
-                    })?,
-                    offset: msg.offset,
-                    valid: msg.valid,
-                })
-            }
-            Message::Borrow(msg) => {
-                let new_virt = ss
-                    .lend_memory(
-                        msg.buf.as_mut_ptr() as *mut usize,
-                        server_pid,
-                        core::ptr::null_mut(),
-                        msg.buf.len(),
-                        false,
-                    )
-                    .inspect_err(|_| return_thread(ss, sidx, available_tid))?;
-                // println!(
-                //     "Lending {} bytes from {:08x} in PID {} to {:08x} in PID {}",
-                //     msg.buf.len(),
-                //     msg.buf.as_mut_ptr() as usize,
-                //     pid,
-                //     new_virt as usize,
-                //     server_pid,
-                // );
-                Message::Borrow(MemoryMessage {
-                    id: msg.id,
-                    buf: crate::mem::memory_range(new_virt as usize, msg.buf.len()).map_err(|e| {
-                        return_thread(ss, sidx, available_tid);
-                        e
-                    })?,
-                    offset: msg.offset,
-                    valid: msg.valid,
-                })
-            }
-        };
-
-        // --- Deliver ---
-        // If the server has an available thread to receive the message,
-        // transfer it right away.
-        if let Some(server_tid) = available_tid {
-            // klog!(
-            //     "there are threads available in PID {} to handle this message -- marking as Ready",
-            //     server_pid
-            // );
-            let sender_idx = 0; // lazy-evaluate to a real number for blocking messages; eagerly set to 0 for non-blocking
-            let sender = SenderID::new(sidx, sender_idx, Some(pid));
-            klog!("server connection data: sidx: {}, idx: {}, server pid: {}", sidx, sender_idx, server_pid);
-            let envelope = MessageEnvelope { sender: sender.into(), body: message };
-
-            // Mark the server's context as "Ready". If this fails, return the context
-            // to the blocking list.
-            ss.ready_thread(server_pid, server_tid).map_err(|e| {
-                ss.server_from_sidx_mut(sidx)
-                    .expect("server couldn't be located")
-                    .return_available_thread(server_tid);
-                e
-            })?;
-
-            let runnable = ss.runnable(server_pid, Some(server_tid)).expect("server doesn't exist");
-            // --- NOTE: Returning this value //
-            return if blocking {
-                if !runnable {
-                    // re-bind the envelope because the sender_idx binding is lazily evaluated
-                    let message = envelope.take_message();
-                    let sender_idx = ss
-                        .remember_server_message(sidx, pid, tid, &message, client_address)
-                        .map_err(|e| {
-                            klog!("error remembering server message: {:?}", e);
-                            ss.server_from_sidx_mut(sidx)
-                                .expect("server couldn't be located")
-                                .return_available_thread(server_tid);
-                            e
-                        })?;
-                    let sender = SenderID::new(sidx, sender_idx, Some(pid));
-                    let envelope = MessageEnvelope { sender: sender.into(), body: message };
-
-                    // If it's not runnable (e.g. it's being debugged), switch to the parent.
-                    let (ppid, ptid) = SWITCHTO_CALLER.with(|c| c.take()).unwrap();
-                    klog!(
-                        "Activating Server parent process (server is blocked) and switching away from Client"
-                    );
-                    let result = ss
-                        .activate_process_thread(
-                            tid,
-                            ppid,
-                            ptid,
-                            false,
-                            PostActivateOp::SetThreadResult {
-                                result: redoubt_abi::Result::MessageEnvelope(envelope),
-                            },
-                        )
-                        .map(|_| Ok(redoubt_abi::Result::ResumeProcess))
-                        .unwrap_or(Err(redoubt_abi::Error::ProcessNotFound));
-
-                    if result.is_err() {
-                        return_thread(ss, sidx, available_tid);
-                    }
-
-                    // Keep track of which process owned the quantum. This ensures that the next
-                    // thread in sequence gets to run when this process is activated again.
-                    ss.set_last_thread(
-                        PID::new(ORIGINAL_PID.load(Relaxed)).unwrap(),
-                        ORIGINAL_TID.load(Relaxed),
-                    )
-                    .ok();
-
-                    result
-                } else {
-                    // Switch to the server, since it's in a state to be run.
-                    klog!("Activating Server context and switching away from Client");
-                    let message = envelope.take_message();
-                    match ss.activate_process_thread(
-                        tid,
-                        server_pid,
-                        server_tid,
-                        false,
-                        PostActivateOp::RememberServerMessage {
-                            sidx,
-                            current_pid: pid,
-                            current_thread: tid,
-                            message: &message,
-                            client_address,
-                        },
-                    ) {
-                        Ok(sender_idx) => {
-                            let sender = SenderID::new(sidx, sender_idx, Some(pid));
-                            let envelope = MessageEnvelope { sender: sender.into(), body: message };
-                            Ok(redoubt_abi::Result::MessageEnvelope(envelope))
-                        }
-                        _ => {
-                            return_thread(ss, sidx, available_tid);
-                            Err(redoubt_abi::Error::ProcessNotFound)
-                        }
-                    }
-                }
-            } else {
-                klog!(
-                    "Setting the return value of the Server ({}:{}) to {:?} and returning to Client",
-                    server_pid,
-                    server_tid,
-                    envelope
-                );
-                ss.set_thread_result(server_pid, server_tid, redoubt_abi::Result::MessageEnvelope(envelope))
-                    .map(|_| redoubt_abi::Result::Ok)
-            };
-        }
-        klog!("no threads available in PID {} to handle this message, so queueing", server_pid);
-        // Add this message to the queue.  If the queue is full, this
-        // returns an error.
-        let _queue_idx = ss.queue_server_message(sidx, pid, tid, message, client_address)?;
-        klog!("queued into index {:x}", _queue_idx);
-
-        // Park this context if it's blocking.  This is roughly
-        // equivalent to a "Yield".
-        if blocking {
-            // println!("Returning to parent");
-            let process = ss.get_process(pid).expect("Can't get current process");
-            let ppid = process.ppid;
-            SWITCHTO_CALLER.with(|c| *c = None);
-            let result = ss
-                .activate_process_thread(tid, ppid, 0, false, PostActivateOp::None)
-                .map(|_| Ok(redoubt_abi::Result::ResumeProcess))
-                .unwrap_or(Err(redoubt_abi::Error::ProcessNotFound));
-
-            ss.set_last_thread(PID::new(ORIGINAL_PID.load(Relaxed)).unwrap(), ORIGINAL_TID.load(Relaxed))
-                .ok();
-            result
-        } else {
-            // println!("Returning to Client with Ok result");
-            Ok(redoubt_abi::Result::Ok)
-        }
-    })
-}
-
-fn return_memory(
-    server_pid: PID,
-    server_tid: TID,
-    in_irq: bool,
-    sender: MessageSender,
-    buf: MemoryRange,
-    offset: Option<MemorySize>,
-    valid: Option<MemorySize>,
-) -> SysCallResult {
-    SystemServices::with_mut(|ss| {
-        let sender = SenderID::from(sender);
-
-        let server = ss.server_from_sidx_mut(sender.sidx).ok_or(redoubt_abi::Error::ServerNotFound)?;
-        if server.pid != server_pid {
-            return Err(redoubt_abi::Error::ServerNotFound);
-        }
-        let result = server.take_waiting_message(sender.idx, Some(&buf))?;
-        klog!("waiting message was: {:?}", result);
-        let (client_pid, client_tid, _server_addr, client_addr, len) = match result {
-            WaitingMessage::BorrowedMemory(client_pid, client_ctx, server_addr, client_addr, len) => {
-                (client_pid, client_ctx, server_addr, client_addr, len)
-            }
-            WaitingMessage::MovedMemory => {
-                return Ok(redoubt_abi::Result::Ok);
-            }
-            WaitingMessage::ForgetMemory(range) => {
-                return MemoryManager::with_mut(|mm| {
-                    let mut result = Ok(redoubt_abi::Result::Ok);
-                    let virt = range.as_ptr() as usize;
-                    let size = range.len();
-                    if virt & 0xfff != 0 {
-                        klog!("VIRT NOT DIVISIBLE BY 4: {:08x}", virt);
-                        return Err(redoubt_abi::Error::BadAlignment);
-                    }
-                    for addr in (virt..(virt + size)).step_by(PAGE_SIZE) {
-                        if let Err(e) = mm.unmap_page(addr as *mut usize) {
-                            if result.is_ok() {
-                                result = Err(e);
-                            }
-                        }
-                    }
-                    result
-                });
-            }
-            WaitingMessage::ScalarMessage(_pid, _tid) => {
-                klog!("WARNING: Tried to wait on a message that was a scalar");
-                return Err(redoubt_abi::Error::DoubleFree);
-            }
-            WaitingMessage::None => {
-                klog!("WARNING: Tried to wait on a message that didn't exist -- return memory");
-                return Err(redoubt_abi::Error::DoubleFree);
-            }
-        };
-        // println!(
-        //     "KERNEL({}): Returning {} bytes from {:08x} in PID {} to {:08x} in PID {} in context {}",
-        //     pid,
-        //     len,
-        //     _server_addr.get(),
-        //     pid,
-        //     client_addr.get(),
-        //     client_pid,
-        //     client_tid
-        // );
-        let src_virt = _server_addr.get() as _;
-
-        let return_value = redoubt_abi::Result::MemoryReturned(offset, valid);
-
-        // Return the memory to the calling process
-        ss.return_memory(src_virt, client_pid, client_tid, client_addr.get() as _, len.get())?;
-
-        ss.ready_thread(client_pid, client_tid)?;
-
-        // Return to the server if any of the following are true:
-        //
-        // 1. We're in an interrupt -- interrupts cannot cross process boundaries
-        // 2. The client isn't runnable -- it may be being debugged
-        // 3. We're in the quantum assigned to the server -- this prevents pipeline blockages
-        if in_irq
-            || !ss.runnable(client_pid, Some(client_tid))?
-            || (ORIGINAL_PID.load(Relaxed) == server_pid.get() && ORIGINAL_TID.load(Relaxed) == client_tid)
-        {
-            // Instruct the server to resume and return to the client.
-            ss.set_thread_result(client_pid, client_tid, return_value)?;
-            Ok(redoubt_abi::Result::Ok)
-        } else {
-            // Switch away from the server, but leave it as Runnable
-            ss.unschedule_thread(server_pid, server_tid)?;
-            ss.ready_thread(server_pid, server_tid)?;
-            ss.set_thread_result(server_pid, server_tid, redoubt_abi::Result::Ok)?;
-
-            // Switch to the client
-            ss.switch_to_thread(client_pid, Some(client_tid))?;
-            Ok(return_value)
-        }
-    })
-}
-
-fn return_result(
-    server_pid: PID,
-    server_tid: TID,
-    in_irq: bool,
-    sender: MessageSender,
-    return_value: redoubt_abi::Result,
-) -> SysCallResult {
-    SystemServices::with_mut(|ss| {
-        let sender = SenderID::from(sender);
-
-        let server = ss.server_from_sidx_mut(sender.sidx).ok_or(redoubt_abi::Error::ServerNotFound)?;
-        if server.pid != server_pid {
-            return Err(redoubt_abi::Error::ServerNotFound);
-        }
-        let result = server.take_waiting_message(sender.idx, None)?;
-        let (client_pid, client_tid) = match result {
-            WaitingMessage::ScalarMessage(pid, tid) => (pid, tid),
-            WaitingMessage::ForgetMemory(_) => {
-                klog!("WARNING: Tried to wait on a scalar message that was actually forgettingmemory");
-                return Err(redoubt_abi::Error::DoubleFree);
-            }
-            WaitingMessage::BorrowedMemory(_, _, _, _, _) => {
-                klog!("WARNING: Tried to wait on a scalar message that was actually borrowed memory");
-                return Err(redoubt_abi::Error::DoubleFree);
-            }
-            WaitingMessage::MovedMemory => {
-                klog!("WARNING: Tried to wait on a scalar message that was actually moved memory");
-                return Err(redoubt_abi::Error::DoubleFree);
-            }
-            WaitingMessage::None => {
-                klog!(
-                    "WARNING ({}:{}): Tried to wait on a message that didn't exist (irq? {}) -- return {:?}",
-                    server_pid.get(),
-                    server_tid,
-                    if in_irq { "yes" } else { "no" },
-                    result
-                );
-                return Err(redoubt_abi::Error::DoubleFree);
-            }
-        };
-
-        ss.ready_thread(client_pid, client_tid)?;
-
-        // Return to the server if any of the following are true:
-        //
-        // 1. We're in an interrupt -- interrupts cannot cross process boundaries
-        // 2. The client isn't runnable -- it may be being debugged
-        // 3. We're in the quantum assigned to the server -- this prevents pipeline blockages
-        if in_irq
-            || !ss.runnable(client_pid, Some(client_tid))?
-            || (ORIGINAL_PID.load(Relaxed) == server_pid.get() && ORIGINAL_TID.load(Relaxed) == client_tid)
-        {
-            // Instruct the server to resume and return to the client.
-            ss.set_thread_result(client_pid, client_tid, return_value)?;
-            Ok(redoubt_abi::Result::Ok)
-        } else {
-            ss.unschedule_thread(server_pid, server_tid)?;
-            ss.ready_thread(server_pid, server_tid)?;
-            // Switch away from the server, but leave it as Runnable
-            ss.set_thread_result(server_pid, server_tid, redoubt_abi::Result::Ok)?;
-
-            // Switch to the client
-            ss.switch_to_thread(client_pid, Some(client_tid))?;
-            Ok(return_value)
-        }
-    })
-}
-
-fn reply_and_receive_next(
-    server_pid: PID,
-    server_tid: TID,
-    in_irq: bool,
-    sender: MessageSender,
-    arg0: usize,
-    arg1: usize,
-    arg2: usize,
-    arg3: usize,
-    arg4: usize,
-    scalar_type: usize,
-) -> SysCallResult {
-    let sender = SenderID::from(sender);
-
-    SystemServices::with_mut(|ss| {
-        struct MessageResponse {
-            pid: PID,
-            tid: TID,
-            result: redoubt_abi::Result,
-        }
-
-        let (result, next_message) = {
-            let server = ss.server_from_sidx_mut(sender.sidx).ok_or(redoubt_abi::Error::ServerNotFound)?;
-            if server.pid != server_pid {
-                println!(
-                    "WARNING: PIDs don't match!  The server is from PID {}, but our PID is {}",
-                    server.pid, server_pid
-                );
-                return Err(redoubt_abi::Error::ServerNotFound);
-            }
-
-            let waiting_message = server.take_waiting_message(sender.idx, None)?;
-
-            let next_message = server.take_next_message(sender.sidx);
-            // If there is no message, park the server thread. We do this here because
-            // we cannot hold the `Server` object while we also modify process state.
-            if next_message.is_none() {
-                server.park_thread(server_tid);
-            }
-
-            (waiting_message, next_message)
-        };
-
-        // TODO: Have errors turn into calls to `ReceiveMessage`
-        let response = match result {
-            WaitingMessage::ScalarMessage(pid, tid) => {
-                let result = match scalar_type {
-                    1 => redoubt_abi::Result::Scalar1(arg1),
-                    2 => redoubt_abi::Result::Scalar2(arg1, arg2),
-                    _ => redoubt_abi::Result::Scalar5(arg0, arg1, arg2, arg3, arg4),
-                };
-                MessageResponse { pid, tid, result }
-            }
-            WaitingMessage::ForgetMemory(_) => {
-                klog!("WARNING: Tried to wait on a scalar message that was actually forgetting memory");
-                return Err(redoubt_abi::Error::DoubleFree);
-            }
-            WaitingMessage::BorrowedMemory(pid, tid, _server_addr, client_addr, len) => {
-                let src_virt = _server_addr.get() as _;
-
-                // Return the memory to the calling process
-                ss.return_memory(src_virt, pid, tid, client_addr.get() as _, len.get())?;
-
-                MessageResponse {
-                    pid,
-                    tid,
-                    result: redoubt_abi::Result::MemoryReturned(MemorySize::new(arg3), MemorySize::new(arg4)),
-                }
-            }
-            WaitingMessage::MovedMemory => {
-                klog!("WARNING: Tried to wait on a scalar message that was actually moved memory");
-                return Err(redoubt_abi::Error::DoubleFree);
-            }
-            WaitingMessage::None => {
-                klog!("WARNING: Tried to wait on a message that didn't exist -- receive and return scalar");
-                return Err(redoubt_abi::Error::DoubleFree);
-            }
-        };
-        let client_pid = response.pid;
-        let client_tid = response.tid;
-
-        ss.ready_thread(client_pid, client_tid)?;
-
-        // If there is a pending message, fetch it and schedule the thread to run
-        if let Some(msg) = next_message {
-            if in_irq
-                || !ss.runnable(client_pid, Some(client_tid))?
-                || (ORIGINAL_PID.load(Relaxed) == server_pid.get()
-                    && ORIGINAL_TID.load(Relaxed) == client_tid)
-            {
-                // Switch to the client and return the result
-                ss.set_thread_result(response.pid, response.tid, response.result)?;
-
-                // Return the new message envelope to the server
-                Ok(redoubt_abi::Result::MessageEnvelope(msg))
-            } else {
-                ss.unschedule_thread(server_pid, server_tid)?;
-                ss.ready_thread(server_pid, server_tid)?;
-
-                // When the server is resumed, it will receive this as a return value.
-                ss.set_thread_result(server_pid, server_tid, redoubt_abi::Result::MessageEnvelope(msg))?;
-
-                // Switch to the client
-                ss.switch_to_thread(response.pid, Some(response.tid))?;
-                Ok(response.result)
-            }
-        } else {
-            // Set the thread result for the client and activate the client thread and switch to it
-            ss.activate_process_thread(
-                server_tid,
-                response.pid,
-                response.tid,
-                false,
-                PostActivateOp::SetThreadResult { result: response.result },
-            )
-            .map(|_| Ok(redoubt_abi::Result::ResumeProcess))
-            .unwrap_or(Err(redoubt_abi::Error::ProcessNotFound))
-        }
-    })
-}
-
-fn receive_message(pid: PID, tid: TID, sid: SID, blocking: ExecutionType) -> SysCallResult {
-    SystemServices::with_mut(|ss| {
-        assert!(ss.thread_is_running(pid, tid), "current thread is not running");
-        // See if there is a pending message.  If so, return immediately.
-        let sidx = ss.sidx_from_sid(sid, pid).ok_or(redoubt_abi::Error::ServerNotFound)?;
-        let server = ss.server_from_sidx_mut(sidx).ok_or(redoubt_abi::Error::ServerNotFound)?;
-        // server.print_queue();
-
-        // Ensure the server is for this PID
-        if server.pid != pid {
-            return Err(redoubt_abi::Error::ServerNotFound);
-        }
-
-        // If there is a pending message, return it immediately.
-        if let Some(msg) = server.take_next_message(sidx) {
-            klog!("waiting messages found -- returning {:x?}", msg);
-            return Ok(redoubt_abi::Result::MessageEnvelope(msg));
-        }
-
-        if blocking == ExecutionType::NonBlocking {
-            klog!("nonblocking message -- returning None");
-            return Ok(redoubt_abi::Result::None);
-        }
-
-        // There is no pending message, so return control to the parent
-        // process and mark ourselves as awaiting an event.  When a message
-        // arrives, our return value will already be set to the
-        // MessageEnvelope of the incoming message.
-        klog!("did not have any waiting messages -- parking thread {}", tid);
-        server.park_thread(tid);
-
-        SWITCHTO_CALLER.with(|c| *c = None);
-        let ppid = ss.get_process(pid).expect("Can't get current process").ppid;
-        // TODO: Advance thread
-        let result = ss
-            .activate_process_thread(tid, ppid, 0, false, PostActivateOp::None)
-            .map(|_| Ok(redoubt_abi::Result::ResumeProcess))
-            .unwrap_or(Err(redoubt_abi::Error::ProcessNotFound));
-        ss.set_last_thread(PID::new(ORIGINAL_PID.load(Relaxed)).unwrap(), ORIGINAL_TID.load(Relaxed))
-            .ok();
         result
     })
 }
@@ -734,7 +78,7 @@ pub fn handle(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallResult 
         klog!("[!] Called {:?} that's cannot be called from the interrupt handler!", call);
         Err(redoubt_abi::Error::InvalidSyscall)
     } else {
-        handle_inner(pid, tid, in_irq, call)
+        handle_inner(pid, tid, call)
     };
 
     // println!("KERNEL [{:2}:{:2}] Syscall took {:7} usec: {}", pid, tid, start_time.elapsed().as_micros(),
@@ -749,7 +93,7 @@ pub fn handle(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallResult 
     result
 }
 
-pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallResult {
+pub fn handle_inner(pid: PID, tid: TID, call: SysCall) -> SysCallResult {
     match call {
         SysCall::MapMemory(phys, virt, size, req_flags) => {
             MemoryManager::with_mut(|mm| {
@@ -932,7 +276,7 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
             //     "Activating process thread {} in pid {} coming from pid {} thread {}",
             //     new_context, new_pid, pid, tid
             // );
-            let new_tid = match ss.activate_process_thread(tid, new_pid, new_tid, true, PostActivateOp::None)
+            let new_tid = match ss.activate_process_thread(tid, new_pid, new_tid, true)
             {
                 Ok(t) => t,
                 Err(e) => {
@@ -957,15 +301,13 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
         // deadline and slice end and refused every Redoubt call. A callback returns through
         // `RETURN_FROM_ISR` (`arch::irq`).
         SysCall::ReturnToParent(_pid, _cpuid) => Err(redoubt_abi::Error::UnhandledSyscall),
-        SysCall::ReceiveMessage(sid) => receive_message(pid, tid, sid, ExecutionType::Blocking),
-        SysCall::TryReceiveMessage(sid) => receive_message(pid, tid, sid, ExecutionType::NonBlocking),
         SysCall::WaitEvent => SystemServices::with_mut(|ss| {
             let process = ss.get_process(pid).expect("Can't get current process");
             let ppid = process.ppid;
             SWITCHTO_CALLER.with(|c| *c = None);
             // TODO: Advance thread
             let result = ss
-                .activate_process_thread(tid, ppid, 0, false, PostActivateOp::None)
+                .activate_process_thread(tid, ppid, 0, false)
                 .map(|_| Ok(redoubt_abi::Result::ResumeProcess))
                 .unwrap_or(Err(redoubt_abi::Error::ProcessNotFound));
             ss.set_last_thread(PID::new(ORIGINAL_PID.load(Relaxed)).unwrap(), ORIGINAL_TID.load(Relaxed))
@@ -987,53 +329,6 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
         // The legacy `CreateProcess` is gone on bare metal: it made processes outside every
         // budget (R6), no program uses it, and WP-K4 brings `process_create`. It falls through to
         // `UnhandledSyscall` below.
-        SysCall::CreateServerWithAddress(name) => SystemServices::with_mut(|ss| {
-            const NS_SID: SID = SID::from_u32(
-                u32::from_le_bytes(*b"rdbt"),
-                u32::from_le_bytes(*b"-nam"),
-                u32::from_le_bytes(*b"e-se"),
-                u32::from_le_bytes(*b"rver"),
-            );
-            // This counts on the `name==NS_SID` short-circuiting the NS_TOFU call. Short-circuit evaluation
-            // is the specified behavior in Rust, so this should always be correct.
-            if name == NS_SID && NS_TOFU.swap(true, Relaxed) {
-                return Err(redoubt_abi::Error::ServerExists);
-            }
-            // note: if create_server_with_address() fails on the legitimate boot, it fails-closed forever.
-            // this should never happen - on early boot there is no reason for server creation to fail -
-            // so this is a deliberate choice to simplify the check logic.
-            ss.create_server_with_address(pid, name, true)
-                .map(|(sid, cid)| redoubt_abi::Result::NewServerID(sid, cid))
-        }),
-        SysCall::CreateServer => SystemServices::with_mut(|ss| {
-            ss.create_server(pid, true).map(|(sid, cid)| redoubt_abi::Result::NewServerID(sid, cid))
-        }),
-        SysCall::CreateServerId => {
-            SystemServices::with_mut(|ss| ss.create_server_id().map(redoubt_abi::Result::ServerID))
-        }
-        SysCall::TryConnect(sid) => {
-            SystemServices::with_mut(|ss| ss.connect_to_server(sid).map(redoubt_abi::Result::ConnectionID))
-        }
-        SysCall::ReturnMemory(sender, buf, offset, valid) => {
-            return_memory(pid, tid, in_irq, sender, buf, offset, valid)
-        }
-        SysCall::ReturnScalar1(sender, arg) => {
-            return_result(pid, tid, in_irq, sender, redoubt_abi::Result::Scalar1(arg))
-        }
-        SysCall::ReturnScalar2(sender, arg1, arg2) => {
-            return_result(pid, tid, in_irq, sender, redoubt_abi::Result::Scalar2(arg1, arg2))
-        }
-        SysCall::ReturnScalar5(sender, arg1, arg2, arg3, arg4, arg5) => return_result(
-            pid,
-            tid,
-            in_irq,
-            sender,
-            redoubt_abi::Result::Scalar5(arg1, arg2, arg3, arg4, arg5),
-        ),
-        SysCall::ReplyAndReceiveNext(sender, a0, a1, a2, a3, a4, scalar_type) => {
-            reply_and_receive_next(pid, tid, in_irq, sender, a0, a1, a2, a3, a4, scalar_type)
-        }
-        SysCall::TrySendMessage(cid, message) => send_message(pid, tid, cid, message),
         // The legacy exit, which every `no_std` program still uses. It is `process_exit` with
         // another number: a process the Redoubt calls created gets its exit notice either way
         // (KERNEL-SPEC.md, `process_exit`), so a program does not have to be rewritten before its
@@ -1046,40 +341,6 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
         SysCall::GetProcessId => Ok(redoubt_abi::Result::ProcessID(pid)),
         SysCall::GetThreadId => Ok(redoubt_abi::Result::ThreadID(tid)),
 
-        SysCall::Connect(sid) => {
-            let result = SystemServices::with_mut(|ss| {
-                ss.connect_to_server(sid).map(redoubt_abi::Result::ConnectionID)
-            });
-            match result {
-                Ok(o) => Ok(o),
-                Err(redoubt_abi::Error::ServerNotFound) => retry_syscall(pid, tid),
-                Err(e) => Err(e),
-            }
-        }
-        SysCall::ConnectForProcess(pid, sid) => {
-            let result = SystemServices::with_mut(|ss| {
-                ss.connect_process_to_server(pid, sid).map(redoubt_abi::Result::ConnectionID)
-            });
-            match result {
-                Ok(o) => Ok(o),
-                Err(redoubt_abi::Error::ServerNotFound) => retry_syscall(pid, tid),
-                Err(e) => Err(e),
-            }
-        }
-        SysCall::SendMessage(cid, message) => {
-            let result = send_message(pid, tid, cid, message);
-            match result {
-                Ok(o) => Ok(o),
-                Err(redoubt_abi::Error::ServerQueueFull) => retry_syscall(pid, tid),
-                Err(e) => Err(e),
-            }
-        }
-        SysCall::Disconnect(cid) => {
-            SystemServices::with_mut(|ss| ss.disconnect_from_server(cid).and(Ok(redoubt_abi::Result::Ok)))
-        }
-        SysCall::DestroyServer(sid) => {
-            SystemServices::with_mut(|ss| ss.destroy_server(pid, sid).and(Ok(redoubt_abi::Result::Ok)))
-        }
         SysCall::JoinThread(other_tid) => {
             if other_tid >= crate::arch::process::MAX_THREAD {
                 return Err(redoubt_abi::Error::ThreadNotAvailable);

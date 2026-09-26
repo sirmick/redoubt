@@ -1,20 +1,16 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-use core::num::NonZeroU8;
 
 use redoubt_abi::arch::*;
 // use core::mem;
-use redoubt_abi::{CID, Error, MemoryAddress, Message, PID, SID, TID, ThreadInit};
+use redoubt_abi::{PID, TID, ThreadInit};
 
 use crate::arch;
 use crate::arch::mem::MemoryMapping;
 pub use crate::arch::process::Process as ArchProcess;
 pub use crate::arch::process::Thread;
 use crate::cell::KernelCell;
-use crate::filled_array;
-use crate::platform;
-use crate::server::Server;
 
 /// The kernel is always process 1.
 pub const KERNEL_PID: PID = match PID::new(1) {
@@ -26,8 +22,6 @@ const FIRST_USER_PID: PID = match PID::new(2) {
     Some(pid) => pid,
     None => unreachable!(),
 };
-
-const MAX_SERVER_COUNT: usize = 128;
 
 pub use crate::arch::process::{INITIAL_TID, MAX_PROCESS_COUNT};
 
@@ -65,23 +59,6 @@ pub struct ExceptionHandler {
 pub struct SystemServices {
     /// A table of all processes in the system
     pub processes: [Process; MAX_PROCESS_COUNT],
-
-    /// A table of all servers in the system
-    pub servers: [Option<Server>; MAX_SERVER_COUNT],
-}
-
-pub enum PostActivateOp<'a> {
-    None,
-    SetThreadResult {
-        result: redoubt_abi::Result,
-    },
-    RememberServerMessage {
-        sidx: usize,
-        current_pid: PID,
-        current_thread: TID,
-        message: &'a Message,
-        client_address: Option<MemoryAddress>,
-    },
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -209,9 +186,6 @@ pub struct ProcessInner {
     /// Maximum size of the heap
     pub mem_heap_max: usize,
 
-    /// A mapping of connection IDs to server indexes
-    pub connection_map: [Option<NonZeroU8>; 32],
-
     /// A copy of this process' ID
     pub pid: PID,
 
@@ -229,7 +203,6 @@ impl Default for ProcessInner {
             mem_heap_base: DEFAULT_HEAP_BASE,
             mem_heap_size: 0,
             mem_heap_max: if cfg!(feature = "big-heap") { 1024 * 1024 * 12 } else { 1024 * 512 },
-            connection_map: [None; 32],
             pid: KERNEL_PID,
             _reserved: [0; 1],
         }
@@ -306,9 +279,6 @@ static SYSTEM_SERVICES: KernelCell<SystemServices> = KernelCell::new(SystemServi
         previous_thread: INITIAL_TID as TID,
         exception_handler: None,
     }; MAX_PROCESS_COUNT],
-    // Note we can't use MAX_SERVER_COUNT here because of how Rust's
-    // macro tokenization works
-    servers: filled_array![None; 128],
 });
 
 impl core::fmt::Debug for Process {
@@ -322,23 +292,6 @@ impl core::fmt::Debug for Process {
             self.mapping
         )
     }
-}
-
-/// Get every destination page of a transfer ready before any page moves or is lent: allocate
-/// its page tables and check that it is free. With the source already backed (and, for a move,
-/// owned by the sender), each transfer in the loop can then no longer fail, so running out of
-/// memory, or a destination already in use, refuses the whole transfer with nothing changed.
-fn prepare_destination(
-    mm: &mut crate::mem::MemoryManager,
-    dest_mapping: &arch::mem::MemoryMapping,
-    dest_pid: PID,
-    dest_virt: usize,
-    len: usize,
-) -> Result<(), redoubt_abi::Error> {
-    for offset in (0..len).step_by(PAGE_SIZE) {
-        arch::mem::prepare_map(mm, dest_mapping, dest_pid, dest_virt + offset)?;
-    }
-    Ok(())
 }
 
 impl SystemServices {
@@ -727,23 +680,6 @@ impl SystemServices {
         Ok(())
     }
 
-    pub fn runnable(&self, pid: PID, tid: Option<TID>) -> Result<bool, redoubt_abi::Error> {
-        let process = self.get_process(pid)?;
-        if let Some(tid) = tid {
-            Ok(match process.state {
-                ProcessState::Running(x) => tid == process.current_thread || x & (1 << tid) != 0,
-                ProcessState::Ready(x) if x & (1 << tid) != 0 => true,
-                ProcessState::Sleeping => true,
-                _ => false,
-            })
-        } else {
-            Ok(matches!(
-                process.state,
-                ProcessState::Running(_) | ProcessState::Ready(_) | ProcessState::Sleeping
-            ))
-        }
-    }
-
     /// Mark the specified context as ready to run. If the thread is Sleeping, mark
     /// it as Ready.
     pub fn ready_thread(&mut self, pid: PID, tid: TID) -> Result<(), redoubt_abi::Error> {
@@ -961,16 +897,6 @@ impl SystemServices {
         Ok(())
     }
 
-    pub fn thread_is_running(&self, pid: PID, tid: TID) -> bool {
-        let process = self.get_process(pid).unwrap();
-        if let ProcessState::Running(thread_ids) = process.state {
-            if thread_ids & (1 << tid) == 0 {
-                return true;
-            }
-        }
-        panic!("PID {} TID {} not running: {:?}", pid, tid, process.state);
-    }
-
     pub fn set_thread_result(
         &mut self,
         pid: PID,
@@ -1032,21 +958,13 @@ impl SystemServices {
 
     /// Resume the given process, picking up exactly where it left off. If the
     /// process is in the Setup state, set it up and then resume.
-    ///
-    /// `lazy_arg` is an argument that should be placed in the activated target process,
-    ///   after the activation is complete. The purpose of this is to reduce the incidence
-    ///   of the idiom where we swap into the a target process' memory state just to emplace
-    ///   a small argument or piece of data, only to swap back to then return to it on activation.
-    ///   This optimization improves message latency by around 15% in the fast path.
     pub fn activate_process_thread(
         &mut self,
         previous_tid: TID,
         new_pid: PID,
         mut new_tid: TID,
         can_resume: bool,
-        lazy_arg: PostActivateOp,
     ) -> Result<TID, redoubt_abi::Error> {
-        let mut sender_idx: Option<usize> = None;
         let previous_pid = self.current_pid();
 
         #[cfg(feature = "debug-print")]
@@ -1135,27 +1053,6 @@ impl SystemServices {
             };
             // log_process_update(file!(), line!(), new, old_state);
             new.activate()?;
-            match lazy_arg {
-                PostActivateOp::RememberServerMessage {
-                    sidx,
-                    current_pid,
-                    current_thread,
-                    message,
-                    client_address,
-                } => {
-                    let si = {
-                        let server =
-                            self.server_from_sidx_mut(sidx).expect("couldn't re-discover server index");
-                        server.queue_response(current_pid, current_thread, message, client_address)?
-                    };
-                    sender_idx = Some(si);
-                }
-                PostActivateOp::SetThreadResult { result } => {
-                    let mut arch_process = ArchProcess::current();
-                    arch_process.set_thread_result(new_tid, result);
-                }
-                PostActivateOp::None => (),
-            }
 
             // Mark the previous process as ready to run, since we just switched
             // away
@@ -1211,26 +1108,6 @@ impl SystemServices {
             //     can_resume
             // );
         } else {
-            match lazy_arg {
-                PostActivateOp::RememberServerMessage {
-                    sidx,
-                    current_pid,
-                    current_thread,
-                    message,
-                    client_address,
-                } => {
-                    let si = {
-                        let server =
-                            self.server_from_sidx_mut(sidx).expect("couldn't re-discover server index");
-                        server.queue_response(current_pid, current_thread, message, client_address)?
-                    };
-                    sender_idx = Some(si);
-                }
-                PostActivateOp::SetThreadResult { result } => {
-                    ArchProcess::current().set_thread_result(new_tid, result);
-                }
-                PostActivateOp::None => (),
-            }
             let new = self.get_process_mut(new_pid)?;
 
             // If we wanted to switch to a "new" thread, and it's the same
@@ -1288,326 +1165,7 @@ impl SystemServices {
             self.get_process_mut(new_pid)?.state
         );
 
-        // return argument based upon the lazy_arg type
-        // we get "lucky" in that sender_idx *and* new_tid are both `usize` types underneath
-        Ok(sender_idx.unwrap_or(new_tid))
-    }
-
-    /// Move memory from one process to another.
-    ///
-    /// During this process, memory is deallocated from the first process, then
-    /// we switch contexts and look for a free slot in the second process. After
-    /// that, we switch back to the first process and return.
-    ///
-    /// If no free slot can be found, memory is re-attached to the first
-    /// process.  By following this break-then-make approach, we avoid getting
-    /// into a situation where memory may appear in two different processes at
-    /// once.
-    ///
-    /// The given memory range is guaranteed to be unavailable in the src process
-    /// after this function returns.
-    ///
-    /// # Returns
-    ///
-    /// Returns the virtual address of the memory region in the target process.
-    ///
-    /// # Errors
-    ///
-    /// * **ShareViolation**: Tried to mutably share a region that was already shared
-    /// * **BadAddress**: The provided address was not valid
-    /// * **BadAlignment**: The provided address or length was not page-aligned
-    ///
-    /// # Panics
-    ///
-    /// If the memory should have been able to go into the destination process
-    /// but failed, then the system panics.
-    pub fn send_memory(
-        &mut self,
-        src_virt: *mut usize,
-        dest_pid: PID,
-        dest_virt: *mut usize,
-        len: usize,
-    ) -> Result<*mut usize, redoubt_abi::Error> {
-        if len == 0 {
-            return Err(redoubt_abi::Error::BadAddress);
-        }
-        if len & 0xfff != 0 {
-            return Err(redoubt_abi::Error::BadAddress);
-        }
-        if src_virt as usize & 0xfff != 0 {
-            return Err(redoubt_abi::Error::BadAddress);
-        }
-        if dest_virt as usize & 0xfff != 0 {
-            return Err(redoubt_abi::Error::BadAddress);
-        }
-        if (dest_virt as usize).saturating_add(len) > USER_AREA_END {
-            return Err(redoubt_abi::Error::BadAddress);
-        }
-
-        let current_pid = self.current_pid();
-
-        // Iterators and `ptr.wrapping_add()` operate on `usize` types,
-        // which effectively lowers the `len`.
-        let usize_len = len / core::mem::size_of::<usize>();
-        let usize_page = PAGE_SIZE / core::mem::size_of::<usize>();
-
-        // If the dest and src PID is the same, do nothing.
-        if current_pid == dest_pid {
-            crate::mem::MemoryManager::with_mut(|mm| mm.ensure_range_exists(src_virt as usize, len))?;
-            return Ok(src_virt);
-        }
-
-        let src_mapping = self.get_process(current_pid)?.mapping;
-        let dest_mapping = self.get_process(dest_pid)?.mapping;
-        crate::mem::MemoryManager::with_mut(|mm| {
-            // Back and check every page before moving any, so that a failure leaves nothing
-            // half moved and the moves below cannot fail on ownership.
-            mm.ensure_range_exists(src_virt as usize, len)?;
-            mm.check_owned_range(current_pid, src_virt as usize, len)?;
-
-            // Locate an address to fit the new memory.
-            dest_mapping.activate()?;
-            let dest_virt = mm
-                .find_virtual_address(dest_virt as *mut u8, len, redoubt_abi::MemoryType::Messages)
-                .map_err(|e| {
-                    src_mapping.activate().expect("couldn't undo mapping");
-                    e
-                })? as *mut usize;
-            src_mapping.activate().expect("Couldn't switch back to source mapping");
-            prepare_destination(mm, &dest_mapping, dest_pid, dest_virt as usize, len)?;
-            // The pages become the destination's, and its budget's to pay for (R6): check that
-            // it can, so that the moves below cannot fail on it either.
-            if !mm.can_take_frames(current_pid, dest_pid, (len / PAGE_SIZE) as u64) {
-                return Err(redoubt_abi::Error::OutOfMemory);
-            }
-
-            let mut error = None;
-
-            // Move each subsequent page. Nothing here can fail any more (see above).
-            for offset in (0..usize_len).step_by(usize_page) {
-                assert!(((src_virt.wrapping_add(offset) as usize) & 0xfff) == 0);
-                assert!(((dest_virt.wrapping_add(offset) as usize) & 0xfff) == 0);
-                mm.move_page(
-                    current_pid,
-                    &src_mapping,
-                    src_virt.wrapping_add(offset) as *mut u8,
-                    dest_pid,
-                    &dest_mapping,
-                    dest_virt.wrapping_add(offset) as *mut u8,
-                )
-                .unwrap_or_else(|e| error = Some(e));
-            }
-            error.map_or_else(|| Ok(dest_virt), |e| panic!("a prepared move failed: {:?}", e))
-        })
-        .map(|val| val as *mut usize)
-    }
-
-    /// Lend memory from one process to another.
-    ///
-    /// During this process, memory is marked as `Shared` in the source process.
-    /// If the share is Mutable, then this memory is unmapped from the source
-    /// process.  If the share is immutable, then memory is marked as
-    /// not-writable in the source process.
-    ///
-    /// If no free slot can be found, memory is re-attached to the first
-    /// process.  By following this break-then-make approach, we avoid getting
-    /// into a situation where memory may appear in two different processes at
-    /// once.
-    ///
-    /// If the share is mutable and the memory is already shared, then an error
-    /// is returned.
-    ///
-    /// # Returns
-    ///
-    /// Returns the virtual address of the memory region in the target process.
-    ///
-    /// # Errors
-    ///
-    /// * **ShareViolation**: Tried to mutably share a region that was already shared
-    /// * **BadAddress**: The provided address was not valid
-    /// * **BadAlignment**: The provided address or length was not page-aligned
-    pub fn lend_memory(
-        &mut self,
-        src_virt: *mut usize,
-        dest_pid: PID,
-        dest_virt: *mut usize,
-        len: usize,
-        mutable: bool,
-    ) -> Result<*mut usize, redoubt_abi::Error> {
-        if len == 0 {
-            return Err(redoubt_abi::Error::BadAddress);
-        }
-        if len & 0xfff != 0 {
-            return Err(redoubt_abi::Error::BadAlignment);
-        }
-        if src_virt as usize & 0xfff != 0 {
-            return Err(redoubt_abi::Error::BadAlignment);
-        }
-        if dest_virt as usize & 0xfff != 0 {
-            return Err(redoubt_abi::Error::BadAlignment);
-        }
-        // Iterators and `ptr.wrapping_add()` operate on `usize` types,
-        // which effectively lowers the `len`.
-        let usize_len = len / core::mem::size_of::<usize>();
-        let usize_page = redoubt_abi::arch::PAGE_SIZE / core::mem::size_of::<usize>();
-
-        let current_pid = self.current_pid();
-        // If it's within the same process, ignore the move operation and
-        // just ensure the pages actually exist.
-        if current_pid == dest_pid {
-            MemoryManager::with_mut(|mm| mm.ensure_range_exists(src_virt as usize, len))?;
-            return Ok(src_virt);
-        }
-        let src_mapping = self.get_process(current_pid)?.mapping;
-        let dest_mapping = self.get_process(dest_pid)?.mapping;
-        use crate::mem::MemoryManager;
-        MemoryManager::with_mut(|mm| {
-            // Back every page before lending any, so that a failure leaves nothing half lent.
-            mm.ensure_range_exists(src_virt as usize, len)?;
-            // DMA pages stay put (WP-K5b, OD2): never lent, even by the legacy path.
-            for page in (src_virt as usize..src_virt as usize + len).step_by(PAGE_SIZE) {
-                if mm.is_dma_frame(crate::arch::mem::virt_to_phys(page)?) {
-                    return Err(redoubt_abi::Error::InvalidArgument);
-                }
-            }
-
-            // Locate an address to fit the new memory.
-            dest_mapping.activate()?;
-            let dest_virt = mm
-                .find_virtual_address(dest_virt as *mut u8, len, redoubt_abi::MemoryType::Messages)
-                .map_err(|e| {
-                    src_mapping.activate().unwrap();
-                    // klog!("Couldn't find a virtual address");
-                    e
-                })? as *mut usize;
-            src_mapping.activate().unwrap();
-            prepare_destination(mm, &dest_mapping, dest_pid, dest_virt as usize, len)?;
-
-            let mut error = None;
-
-            // Lend each subsequent page. Nothing here can fail any more (see above).
-            for offset in (0..usize_len).step_by(usize_page) {
-                assert!(((src_virt.wrapping_add(offset) as usize) & 0xfff) == 0);
-                assert!(((dest_virt.wrapping_add(offset) as usize) & 0xfff) == 0);
-                mm.lend_page(
-                    &src_mapping,
-                    src_virt.wrapping_add(offset) as *mut u8,
-                    dest_pid,
-                    &dest_mapping,
-                    dest_virt.wrapping_add(offset) as *mut u8,
-                    mutable,
-                )
-                .unwrap_or_else(|e| {
-                    error = Some(e);
-                    // klog!(
-                    //     "Couldn't lend page {:08x} -> {:08x}",
-                    //     src_virt.wrapping_add(offset) as usize,
-                    //     dest_virt.wrapping_add(offset) as usize
-                    // );
-                    0
-                });
-            }
-            error.map_or_else(
-                || Ok(dest_virt),
-                |e| {
-                    panic!(
-                        "a prepared lend failed: {:08x} in pid {} to {:08x} in pid {}: {:?}",
-                        src_virt as usize, current_pid, dest_virt as usize, dest_pid, e
-                    )
-                },
-            )
-        })
-        .map(|val| val as *mut usize)
-    }
-
-    /// Return memory from one process back to another
-    ///
-    /// During this process, memory is unmapped from the source process.
-    ///
-    /// # Returns
-    ///
-    /// Returns the virtual address of the memory region in the target process.
-    ///
-    /// # Errors
-    ///
-    /// * **ShareViolation**: Tried to mutably share a region that was already shared
-    pub fn return_memory(
-        &mut self,
-        src_virt: *mut usize,
-        dest_pid: PID,
-        _dest_tid: TID,
-        dest_virt: *mut usize,
-        len: usize,
-    ) -> Result<*mut usize, redoubt_abi::Error> {
-        // klog!(
-        //     "Returning from {}:{} to {}:{}",
-        //     self.current_pid(),
-        //     _src_tid,
-        //     dest_pid,
-        //     _dest_tid
-        // );
-        if len == 0 {
-            // klog!("No len");
-            return Err(redoubt_abi::Error::BadAddress);
-        }
-        if len & 0xfff != 0 {
-            // klog!("len not aligned");
-            return Err(redoubt_abi::Error::BadAddress);
-        }
-        if src_virt as usize & 0xfff != 0 {
-            // klog!("Src virt not aligned");
-            return Err(redoubt_abi::Error::BadAddress);
-        }
-        if dest_virt as usize & 0xfff != 0 {
-            // klog!("dest virt not aligned");
-            return Err(redoubt_abi::Error::BadAddress);
-        }
-
-        // If memory is getting returned to the kernel, then it is memory that was
-        // borrowed but
-        if dest_pid.get() == 1 {}
-
-        // Iterators and `ptr.wrapping_add()` operate on `usize` types,
-        // which effectively lowers the `len`.
-        let usize_len = len / core::mem::size_of::<usize>();
-        let usize_page = PAGE_SIZE / core::mem::size_of::<usize>();
-
-        let current_pid = self.current_pid();
-        // If it's within the same process, ignore the operation.
-        if current_pid == dest_pid {
-            return Ok(src_virt);
-        }
-        let src_mapping = self.get_process(current_pid)?.mapping;
-        let dest_mapping = self.get_process(dest_pid)?.mapping;
-        use crate::mem::MemoryManager;
-        MemoryManager::with_mut(|mm| {
-            let mut error = None;
-
-            // Lend each subsequent page.
-            for offset in (0..usize_len).step_by(usize_page) {
-                assert!(((src_virt.wrapping_add(offset) as usize) & 0xfff) == 0);
-                assert!(((dest_virt.wrapping_add(offset) as usize) & 0xfff) == 0);
-                mm.unlend_page(
-                    &src_mapping,
-                    src_virt.wrapping_add(offset) as *mut u8,
-                    dest_pid,
-                    &dest_mapping,
-                    dest_virt.wrapping_add(offset) as *mut u8,
-                )
-                .unwrap_or_else(|e| {
-                    // panic!(
-                    //     "Couldn't unlend {:08x} from {:08x}: {:?}",
-                    //     src_virt.wrapping_add(offset) as usize,
-                    //     dest_virt.wrapping_add(offset) as usize,
-                    //     e
-                    // );
-                    error = Some(e);
-                    0
-                });
-            }
-            error.map_or_else(|| Ok(dest_virt), Err)
-        })
-        .map(|val| val as *mut usize)
+        Ok(new_tid)
     }
 
     /// Create a new thread in the current process.  Execution begins at
@@ -1734,7 +1292,7 @@ impl SystemServices {
         if arch_process.thread_exists(join_tid) {
             // The target thread exists -- put this thread to sleep
             let ppid = self.get_process(pid).unwrap().ppid;
-            self.activate_process_thread(tid, ppid, 0, false, PostActivateOp::None)
+            self.activate_process_thread(tid, ppid, 0, false)
                 .map(|_| Ok(redoubt_abi::Result::ResumeProcess))
                 .unwrap_or(Err(redoubt_abi::Error::ProcessNotFound))
         } else {
@@ -1744,386 +1302,9 @@ impl SystemServices {
         }
     }
 
-    /// Allocate a new server ID for this process and return the address. If the
-    /// server table is full, or if there is not enough memory to map the server queue,
-    /// return an error.
-    ///
-    /// # Errors
-    ///
-    /// * **OutOfMemory**: A new page could not be assigned to store the server queue.
-    /// * **ServerNotFound**: The server queue was full and a free slot could not be found.
-    pub fn create_server_with_address(
-        &mut self,
-        pid: PID,
-        sid: SID,
-        connect: bool,
-    ) -> Result<(SID, CID), redoubt_abi::Error> {
-        // klog!(
-        //     "looking through server list for free server, connect? {}",
-        //     connect
-        // );
-
-        // TODO: Come up with a way to randomize the server ID
-        let ppid = self.get_process(pid)?.ppid.get();
-        if ppid != 1 {
-            return Err(redoubt_abi::Error::AccessDenied);
-        }
-
-        for entry in self.servers.iter_mut() {
-            if *entry == None {
-                // Allocate a single page for the server queue
-                let backing = crate::mem::MemoryManager::with_mut(|mm| {
-                    crate::mem::memory_range(mm.map_zeroed_page(pid, false)? as _, PAGE_SIZE)
-                })?;
-
-                // klog!("initializing new server with backing at {:x?} -- entry is {:?} (connect? {:?})",
-                // backing, *entry, connect); Initialize the server with the given memory
-                // page.
-                Server::init(entry, pid, sid, backing).unwrap();
-
-                let cid = if connect { self.connect_to_server(sid)? } else { 0 };
-                return Ok((sid, cid));
-            }
-        }
-        Err(redoubt_abi::Error::ServerNotFound)
-    }
-
-    /// Generate a new server ID for this process and then create a new server.
-    /// If the
-    /// server table is full, or if there is not enough memory to map the server queue,
-    /// return an error.
-    ///
-    /// # Errors
-    ///
-    /// * **OutOfMemory**: A new page could not be assigned to store the server queue.
-    /// * **ServerNotFound**: The server queue was full and a free slot could not be found.
-    pub fn create_server(&mut self, pid: PID, connect: bool) -> Result<(SID, CID), redoubt_abi::Error> {
-        let sid = self.create_server_id()?;
-        self.create_server_with_address(pid, sid, connect)
-    }
-
-    /// Generate a random server ID and return it to the caller. Doesn't create
-    /// any processes.
-    pub fn create_server_id(&mut self) -> Result<SID, redoubt_abi::Error> {
-        let sid = SID::from_u32(
-            platform::rand::get_u32(),
-            platform::rand::get_u32(),
-            platform::rand::get_u32(),
-            platform::rand::get_u32(),
-        );
-        Ok(sid)
-    }
-
-    /// Destroy the provided server ID and disconnect any processes that are
-    /// connected.
-    pub fn destroy_server(&mut self, pid: PID, sid: SID) -> Result<(), redoubt_abi::Error> {
-        let mut idx_to_destroy = None;
-        // Look through the server list for a server that matches this SID
-        for (idx, entry) in self.servers.iter().enumerate() {
-            if let Some(server) = entry {
-                if server.sid == sid && server.pid == pid {
-                    idx_to_destroy = Some(idx);
-                    break;
-                }
-            }
-        }
-
-        let server_idx = idx_to_destroy.ok_or(redoubt_abi::Error::ServerNotFound)?;
-        let server = self.servers[server_idx].take().unwrap();
-        // Try to destroy the server. This will fail if the server
-        // has any outstanding memory requests.
-        server.destroy(self).map_err(|server| {
-            self.servers[server_idx] = Some(server);
-            redoubt_abi::Error::ServerQueueFull
-        })?;
-
-        let pid = crate::arch::process::current_pid();
-        // println!("KERNEL({}): Server table: {:?}", _pid.get(), self.servers);
-        // Disconnect this server from all processes.
-        for process in self.processes.iter_mut() {
-            if !process.free() {
-                process.activate().unwrap();
-                ArchProcess::with_inner_mut(|process_inner| {
-                    // Look through the connection map for (1) a free slot, and (2) an
-                    // existing connection
-                    #[allow(clippy::manual_flatten)]
-                    for server_idx_opt in process_inner.connection_map.iter_mut() {
-                        if let Some(client_server_idx) = server_idx_opt {
-                            if client_server_idx.get() == (server_idx + 2) as _ {
-                                *server_idx_opt = None;
-                                continue;
-                            }
-                        }
-                    }
-                });
-            }
-        }
-
-        // Switch back to the primary process.
-        self.get_process(pid).unwrap().activate().unwrap();
-        Ok(())
-    }
-
-    /// Connect to a server on behalf of another process.
-    pub fn connect_process_to_server(
-        &mut self,
-        target_pid: PID,
-        sid: SID,
-    ) -> Result<CID, redoubt_abi::Error> {
-        let original_pid = crate::arch::process::current_pid();
-
-        let process = self.get_process_mut(target_pid)?;
-        process.activate()?;
-
-        let result = self.connect_to_server(sid);
-
-        let process = self.get_process_mut(original_pid)?;
-        process.activate().unwrap();
-
-        result
-    }
-
-    /// Allocate a new server ID for this process and return the address. If the
-    /// server table is full, return an error.
-    pub fn connect_to_server(&mut self, sid: SID) -> Result<CID, redoubt_abi::Error> {
-        // Check to see if we've already connected to this server.
-        // While doing this, find a free slot in case we haven't
-        // yet connected.
-
-        let pid = crate::arch::process::current_pid();
-        ArchProcess::with_inner_mut(|process_inner| {
-            assert_eq!(pid, process_inner.pid);
-            let mut slot_idx = None;
-            // Look through the connection map for (1) an existing connection, and (2) a free slot
-            for (connection_idx, server_idx) in process_inner.connection_map.iter().enumerate() {
-                if let Some(server_idx) = server_idx {
-                    let server_idx = server_idx.get() as usize;
-                    // Tombstone or unallocated server index
-                    if server_idx < 2 {
-                        continue;
-                    }
-                    // If a connection to this server ID exists already, return it.
-                    let server_idx = server_idx - 2;
-                    if let Some(allocated_server) = &self.servers[server_idx] {
-                        if allocated_server.sid == sid {
-                            // println!(
-                            //     "KERNEL({}): Existing connection to SID {:x?} found in this process @ {},
-                            // process connection map is: {:?}",     pid.get(),
-                            //     sid,
-                            //     (connection_idx as CID) + 2,
-                            //     process_inner.connection_map,
-                            // );
-                            return Ok((connection_idx as CID) + 2);
-                        }
-                    }
-                }
-            }
-            for (connection_idx, server_idx) in process_inner.connection_map.iter().enumerate() {
-                // If we find an empty slot, use it
-                if server_idx.is_none() {
-                    assert!(slot_idx.is_none());
-                    slot_idx = Some(connection_idx);
-                    break;
-                }
-            }
-            let slot_idx = slot_idx.ok_or(Error::OutOfMemory)?;
-
-            // Look through all servers for one whose SID matches.
-            for (server_idx, server) in self.servers.iter().enumerate() {
-                if let Some(allocated_server) = server {
-                    if allocated_server.sid == sid {
-                        process_inner.connection_map[slot_idx] =
-                            Some(NonZeroU8::new((server_idx as u8) + 2).unwrap());
-                        // println!(
-                        //     "KERNEL({}): New connection to {:x?}. After connection, cid is {} and process
-                        // connection map is: {:?}",     pid.get(),
-                        //     sid,
-                        //     slot_idx + 2,
-                        //     process_inner.connection_map
-                        // );
-                        return Ok((slot_idx as CID) + 2);
-                    }
-                }
-            }
-            Err(redoubt_abi::Error::ServerNotFound) // May also be OutOfMemory if the table is full
-        })
-    }
-
-    /// Invalidate the provided connection ID.
-    pub fn disconnect_from_server(&mut self, cid: CID) -> Result<(), redoubt_abi::Error> {
-        // Check to see if we've already connected to this server.
-        // While doing this, find a free slot in case we haven't
-        // yet connected.
-
-        // Slot indices are offset by two. Ensure we don't underflow.
-        let slot_idx = cid;
-        if slot_idx < 2 {
-            klog!("CID {} is not valid", cid);
-            return Err(redoubt_abi::Error::ServerNotFound);
-        }
-        let slot_idx = (slot_idx - 2) as usize;
-        let pid = crate::arch::process::current_pid();
-        // klog!("KERNEL({}): Server table: {:?}", pid.get(), self.servers);
-        ArchProcess::with_inner_mut(|process_inner| {
-            assert_eq!(pid, process_inner.pid);
-            if slot_idx >= process_inner.connection_map.len() {
-                klog!("Slot index exceeds map length");
-                return Err(redoubt_abi::Error::ServerNotFound);
-            }
-
-            // If the server ID is None, then we weren't connected in the first place.
-            let idx = &mut process_inner.connection_map[slot_idx];
-            if idx.is_none() {
-                klog!("IDX[{}] is already None!", slot_idx);
-                return Err(redoubt_abi::Error::ServerNotFound);
-            }
-
-            // Nullify this connection ID. It may now be reused.
-            *idx = None;
-            // println!("***** disconnected {} {:?}", slot_idx, process_inner.connection_map);
-            klog!("Removing server from table");
-            Ok(())
-        })
-    }
-
-    /// Retrieve the server ID index from the specified SID.
-    /// This may only be called if the SID is a server owned by
-    /// the current process.
-    pub fn sidx_from_sid(&mut self, sid: SID, pid: PID) -> Option<usize> {
-        // println!("KERNEL({}): Server table: {:?}", pid.get(), self.servers);
-        for (idx, slot) in self.servers.iter().enumerate() {
-            if let Some(server) = slot {
-                if server.pid == pid && server.sid == sid {
-                    return Some(idx);
-                }
-            }
-        }
-        None
-    }
-
-    /// Return a server based on the connection id and the current process
-    pub fn server_from_sidx(&self, sidx: usize) -> Option<&Server> {
-        if sidx >= self.servers.len() { None } else { self.servers[sidx].as_ref() }
-    }
-
-    /// Return a server based on the connection id and the current process
-    pub fn server_from_sidx_mut(&mut self, sidx: usize) -> Option<&mut Server> {
-        if sidx >= self.servers.len() { None } else { self.servers[sidx].as_mut() }
-    }
-
-    /// Retrieve a Server ID (Extended) value from the given Connection ID
-    /// within the current process.
-    pub fn sidx_from_cid(&self, cid: CID) -> Option<usize> {
-        // println!("KERNEL({}): Attempting to get SIDX from CID {}", crate::arch::process::current_pid(),
-        // cid);
-        if cid < 2 {
-            return None;
-        }
-
-        let cid = cid - 2;
-
-        ArchProcess::with_inner(|process_inner| {
-            assert_eq!(crate::arch::process::current_pid(), process_inner.pid);
-            if (cid as usize) >= process_inner.connection_map.len() {
-                // println!("KERNEL({}): CID {} > connection map len", crate::arch::process::current_pid(),
-                // cid);
-                return None;
-            }
-            // if process_inner.connection_map[cid].is_none() {
-            //     println!("KERNEL({}): CID {} doesn't exist in the connection map",
-            // crate::arch::process::current_pid(), cid + 2);     println!("KERNEL({}): Process
-            // inner is: {:?}", crate::arch::process::current_pid(), process_inner); }
-            let connection_value = *process_inner.connection_map.get(cid as usize)?;
-            let mut server_idx = connection_value?.get() as usize;
-            if server_idx < 2 {
-                // println!("KERNEL({}): CID {} is no longer valid", crate::arch::process::current_pid(), cid
-                // + 2);
-                return None;
-            }
-            server_idx -= 2;
-            if server_idx >= self.servers.len() {
-                // println!("KERNEL({}): CID {} and server_idx >= {}", crate::arch::process::current_pid(),
-                // cid + 2, server_idx);
-                None
-            } else {
-                // println!("KERNEL({}): SIDX for CID {} found at index {}",
-                // crate::arch::process::current_pid(), cid + 2, server_idx);
-                Some(server_idx)
-            }
-        })
-    }
-
-    /// Switch to the server's memory space and add the message to its server
-    /// queue
-    pub fn queue_server_message(
-        &mut self,
-        sidx: usize,
-        pid: PID,
-        thread: TID,
-        message: Message,
-        original_address: Option<MemoryAddress>,
-    ) -> Result<usize, redoubt_abi::Error> {
-        let current_pid = self.current_pid();
-        let result = {
-            let server_pid = self.server_from_sidx(sidx).ok_or(redoubt_abi::Error::ServerNotFound)?.pid;
-            {
-                let server_process = self.get_process(server_pid)?;
-                server_process.mapping.activate().unwrap();
-            }
-            let server = self.server_from_sidx_mut(sidx).expect("couldn't re-discover server index");
-            server.queue_message(pid, thread, message, original_address)
-        };
-        let current_process = self.get_process(current_pid).expect("couldn't restore previous process");
-        current_process.mapping.activate()?;
-        result
-    }
-
-    /// Switch to the server's address space and add a "remember this address"
-    /// entry to its server queue, then switch back to the original address space.
-    pub fn remember_server_message(
-        &mut self,
-        sidx: usize,
-        current_pid: PID,
-        current_thread: TID,
-        message: &Message,
-        client_address: Option<MemoryAddress>,
-    ) -> Result<usize, redoubt_abi::Error> {
-        let server_pid = self.server_from_sidx(sidx).ok_or(redoubt_abi::Error::ServerNotFound)?.pid;
-        {
-            let server_process = self.get_process(server_pid)?;
-            server_process.mapping.activate()?;
-        }
-        let server = self.server_from_sidx_mut(sidx).expect("couldn't re-discover server index");
-        let result = server.queue_response(current_pid, current_thread, message, client_address);
-        let current_process = self.get_process(current_pid).expect("couldn't find old process");
-        current_process.mapping.activate().expect("couldn't switch back to previous address space");
-        result
-    }
-
-    // /// Get a server index based on a SID
-    // pub fn server_sidx(&mut self, sid: SID) -> Option<usize> {
-    //     for (idx, server) in self.servers.iter_mut().enumerate() {
-    //         if let Some(active_server) = server {
-    //             if active_server.sid == sid {
-    //                 return Some(idx);
-    //             }
-    //         }
-    //     }
-    //     None
-    // }
-
     /// Terminate the given process. Returns the process' parent PID.
     pub fn terminate_process(&mut self, target_pid: PID) -> Result<PID, redoubt_abi::Error> {
         println!("terminate_process: {:?}", target_pid);
-        // To terminate a process, we must perform the following:
-        //
-        // 1. If we have any client connections, remove them.
-        // 2. If there are any clients connected to our server, insert a tombstone so writes fail
-        // 3. If there are any incoming server requests queued, dequeue them and return an error
-        // 4. Mark all "Borrowed" memory as "Free-when-returned". That way, if we've shared memory to a
-        //    Server, it will be reclaimed by the system when it comes back
-
-        self.release_servers_of(target_pid)?;
         // R4b: every call its threads hold open fails its caller with `Dead`, and every message
         // they were sending is withdrawn, before its memory goes.
         crate::mem::MemoryManager::with_mut(|mm| crate::message::process_ending(self, mm, target_pid));
@@ -2139,57 +1320,6 @@ impl SystemServices {
         Ok(parent_pid)
     }
 
-    /// Steps 1 and 2 of ending process `target`: tombstone every connection to its servers,
-    /// drop every message it has queued at others' servers, and free its server entries.
-    /// Leaves whichever address space it visited last active.
-    fn release_servers_of(&mut self, target: PID) -> Result<(), redoubt_abi::Error> {
-        // 1. Find all servers associated with this PID and remove them.
-        for (idx, server) in self.servers.iter_mut().enumerate() {
-            if let Some(server) = server {
-                if server.pid == target {
-                    // This is our server, so look through the connection map of each
-                    // process to determine if this connection needs to be replaced
-                    // with a tombstone.
-                    for process in self.processes.iter() {
-                        // A process that has not run yet has no connections, and cannot be
-                        // activated before its first run sets up its kernel state.
-                        if process.free() || matches!(process.state, ProcessState::Setup(_)) {
-                            continue;
-                        }
-                        process.activate()?;
-                        ArchProcess::with_inner_mut(|process_inner| {
-                            // Look through the connection map for a connection
-                            // that matches this index. Note that connection map entries
-                            // are offset by two, because 0 == free and 1 == "tombstone".
-                            for mapping in process_inner.connection_map.iter_mut().flatten() {
-                                if mapping.get() == (idx as u8) + 2 {
-                                    *mapping = NonZeroU8::new(1).unwrap();
-                                }
-                            }
-                        })
-                    }
-                }
-
-                let process = self.processes[(server.pid.get() - 1) as usize];
-                process.activate().unwrap();
-                // Look through this server's memory space to determine if this process
-                // is mentioned there as having some memory lent out.
-                server.discard_messages_for_pid(target);
-            }
-        }
-
-        // Now that the server has been "Disconnected", free the server entry.
-        #[allow(clippy::manual_flatten)]
-        for server in self.servers.iter_mut() {
-            if let Some(server_inner) = server {
-                if server_inner.pid == target {
-                    *server = None;
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// End process `target` on behalf of the running process (R10 kills the processes of a
     /// destroyed budget), which keeps running: the same teardown as `terminate_process`, then
     /// the running process's address space is active again. `target` must not be the running
@@ -2197,7 +1327,6 @@ impl SystemServices {
     pub fn kill_process(&mut self, target: PID) -> Result<(), redoubt_abi::Error> {
         let current = self.current_pid();
         assert!(target != current, "kill_process on the running process");
-        self.release_servers_of(target)?;
         crate::mem::MemoryManager::with_mut(|mm| crate::message::process_ending(self, mm, target));
         // `terminate` needs no address space: it names the target's mapping itself.
         self.get_process_mut(target)?.terminate()?;
@@ -2207,13 +1336,6 @@ impl SystemServices {
 
     /// Calls the provided function with the current inner process state.
     pub fn shutdown(&mut self) -> Result<(), redoubt_abi::Error> {
-        // Destroy all servers. This will cause all queued messages to be lost.
-        for server_idx in 0..self.servers.len() {
-            if let Some(server) = self.servers[server_idx].take() {
-                server.destroy(self).unwrap();
-            }
-        }
-
         // Destroy all processes. This will cause them to immediately terminate.
         for process in &mut self.processes {
             if !process.free() {

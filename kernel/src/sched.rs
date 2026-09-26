@@ -364,7 +364,7 @@ pub fn slice_over() -> bool { crate::time::slice_end() <= crate::time::now_us() 
 pub fn preempt(ss: &mut SystemServices, tid: TID) {
     crate::syscall::reset_switchto_caller();
     let kernel = PID::new(1).expect("PID 1");
-    ss.activate_process_thread(tid, kernel, 0, true, crate::services::PostActivateOp::None)
+    ss.activate_process_thread(tid, kernel, 0, true)
         .expect("the kernel can always run");
     crate::syscall::restore_last_thread(ss);
 }

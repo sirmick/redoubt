@@ -313,15 +313,6 @@ impl Process {
         }
     }
 
-    pub fn retry_instruction(&mut self, tid: TID) -> Result<(), redoubt_abi::Error> {
-        let process = process_impl();
-        let thread = &mut process.threads[tid];
-        if thread.sepc >= 4 {
-            thread.sepc -= 4;
-        }
-        Ok(())
-    }
-
     /// Initialize this process thread with the given entrypoint and stack
     /// addresses.
     pub fn setup_process(pid: PID, thread_init: ThreadInit) -> Result<(), redoubt_abi::Error> {
