@@ -330,9 +330,12 @@ The model checks it on the kernel model's own exit notices (its P7; `PolicyBlame
 
 Status: planned · M3 (files in and out)
 
-The audit log begins with file transfers. The steward appends a record for every file-transfer
-operation ([sshd](sshd.md#files-in-and-out)) to a file only it can write, append-only, each record
-signed through `keyd`'s `audit` purpose exactly as [below](#the-audit-log).
+The audit log begins with file transfers. On `sshd`'s request the steward starts a transfer server
+for an unlabelled session's channel, in a budget carved from the session's, with the session's file
+binds and a badge on the steward's own endpoint for its records ([sshd](sshd.md#files-in-and-out)).
+The steward appends a record for every file-transfer operation it receives there, taking the
+principal and labels from that badge, to a file only it can write, append-only, each record signed
+through `keyd`'s `audit` purpose exactly as [below](#the-audit-log).
 
 **Open:** none.
 
@@ -379,6 +382,24 @@ given on that console.
 **Open:** how a shared server's bucket count is sized when principals are added at run time; where
 the steward's state lives and how it is protected; how re-minted capabilities
 reach sessions that held the old ones; how a key is enrolled and revoked at run time.
+
+### Packages and trust
+
+Status: planned · M5 (persist, install, share)
+
+The steward keeps each principal's package records and never parses a package
+([packages](pkg.md)):
+- it starts a pkg server per install, handing it the archive, a write handle to that principal's
+  package directory, the principal's trust list and the system bundle's module names, and a badge
+  on which it asks the steward to record;
+- it keeps the profile, `use` records, trust lists, the signer of each installed program and the
+  grants a manifest's requests were given;
+- it launches a package's code with those grants only if a key on the principal's trust list signed
+  it, and refuses at `use` two packages in one profile that define one module;
+- on a key's removal from a trust list it refuses that key's launches and stops the principal's
+  running processes it signed, by destroying their budgets.
+
+**Open:** none.
 
 ### Projects and sharing
 

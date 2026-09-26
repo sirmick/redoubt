@@ -5,7 +5,7 @@ steward's answer, has `keyd` sign the key exchange with the host key it never ho
 each session over its own channel, labelled with the session's labels. It serves `/dev/cons` to
 each session on that channel, and `ssh approve@box`, where only the steward talks. For file
 transfers it only relays: the steward starts a transfer server per channel, holding the session's
-file binds and nothing else. It uses `sunset`, an SSH library in `no_std` Rust without allocation.
+file binds and its audit connection, and nothing else. It uses `sunset`, an SSH library in `no_std` Rust without allocation.
 
 ## Purpose
 
@@ -99,8 +99,8 @@ File transfer is SFTP, for unlabelled sessions only
   transfer server for that session and pipes the channel to it, as it does `/dev/cons`. `sshd` never
   parses SFTP.
 - **The transfer server** is a small native Rust program. The steward starts one per channel, in a
-  budget carved from the session's, holding only the session's file binds: no `/net`, no
-  `/dev/cons`, no powerbox, no budget or process handles. An SFTP-only connection gets a session
+  budget carved from the session's, holding only the session's file binds and one connection to
+  the steward's audit path: no `/net`, no `/dev/cons`, no powerbox, no budget or process handles. An SFTP-only connection gets a session
   budget as a login does, with the transfer server in place of the VM.
 - **Confinement is by capability,** not by path strings: the server holds namespace handles and
   nothing else, so no path, however written, reaches anything outside them, and `..` at a root stays
@@ -137,8 +137,7 @@ Status: planned · M1 (separation and containment)
   asks the steward to start a transfer server for an SFTP request ([files in and out](#files-in-and-out)).
   It never holds a session's file binds itself.
 - It is trusted across the labels of the channels it carries: with the steward it is the
-  confinement check's one named exception ([init](init.md#the-confinement-check)), as the owner
-  decided.
+  confinement check's one named exception ([init](init.md#the-confinement-check)).
 
 **Open:** none.
 
@@ -203,5 +202,5 @@ Status: planned · M1 (separation and containment)
   is small enough to read.
 - **Relay, never parse, transfers.** An SFTP parser inside `sshd` would put a second protocol in the
   process that carries every channel; a transfer server per channel, holding only that session's
-  file binds, keeps a bug in it inside one session's own files. Running SFTP in the session's own VM
+  file binds and its audit connection, keeps a bug in it inside one session's own files. Running SFTP in the session's own VM
   would let the principal skip the audit records.

@@ -30,12 +30,15 @@ Status: planned · M4 (self-hosted development)
 - A capability is granted by the steward, for a session or a lease, and a grant only narrows: a
   lease's capability names no more service, operations or budget than its sponsor's
   ([steward](steward.md#leases)).
-- **Requests are typed**, one message per operation (a model completion, a git fetch or push), never
-  raw HTTP. `gatewayd` builds the outgoing request itself from the checked fields, so a holder cannot
-  reach another path, host or header of the service.
+- **Model requests are typed**, one message per operation, never raw HTTP: `gatewayd` builds the
+  outgoing request itself from the checked fields, so a holder cannot reach another path, host or
+  header of the service. **Git is the one protocol relayed:** the client speaks git's smart HTTP to
+  `gatewayd`, which parses each request and checks its remote, operation, refs and force against the
+  grant before forwarding it with the credential, and passes nothing through unchecked.
 - **Every request is checked** against the capability before anything leaves the box: the service,
   the operation, the model or repository, the size, and what the meter has left; a request over the
-  meter is refused ([R65 (a request only within its capability)](#r65-a-request-only-within-its-capability)).
+  meter is refused
+  ([R65 (a request only within its capability)](#r65-a-request-only-within-its-capability)).
 - **Metering.** The steward owns the meters, so they survive a `gatewayd` restart, and reboots
   once the steward keeps state in M5 (persist, install, share). Before sending,
   `gatewayd` checks the principal's spend cap against the steward's figure, and refuses a request
@@ -75,9 +78,9 @@ Status: planned · M4 (self-hosted development)
 - **API keys** are bearer secrets, not signing keys, so `keyd` cannot hold them: `gatewayd` holds
   them itself, from its arguments, and no operation returns one
   ([R66 (no credential leaves gatewayd)](#r66-no-credential-leaves-gatewayd)).
-- **TLS** is `gatewayd`'s own, to each service's fixed host name, checking the service's
-  certificate against roots `gatewayd` is configured with. `gatewayd` connects by name, as a person
-  does ([ipd](ipd.md#name-scoped-connections)), on its own `ipd` connection whose rule names only the
+- **TLS** is `gatewayd`'s own, to each service's fixed host name, checking the service's certificate
+  against roots `gatewayd` is configured with. `gatewayd` connects by name, as a person does
+  ([ipd](ipd.md#name-scoped-connections)), on its own `ipd` connection whose rule names only the
   services it serves.
 - **Where the keys come from.** In M4 (self-hosted development) the API keys arrive as
   `gatewayd`'s arguments in the boot manifest, which is never public, at the bundle's trust, as
@@ -138,8 +141,8 @@ Status: planned · M4 (self-hosted development)
 
 - **`gatewayd` restarts:** requests in flight fail and are asked again; the meters are the
   steward's and survive.
-- **The service fails or is unreachable:** the request fails with the service's error, and nothing is
-  charged but what the service reported used.
+- **The service fails or is unreachable:** the request fails with the service's error, and nothing
+  is charged but what the service reported used.
 
 **Open:** none.
 
@@ -153,6 +156,9 @@ Status: planned · M4 (self-hosted development)
   TLS out would not hide them, since the key travels inside the TLS plaintext. A leaked key is
   revoked at the provider.
 - **Metering trusts the provider's usage figures.**
+- **The API keys sit in the manifest and the bundle.** Until the steward keeps state, they arrive as
+  `gatewayd`'s arguments, so whoever can read the bundle image holds them, as with `keyd`'s seeds;
+  the manifest is never public, and the bundle is signed, not encrypted.
 - **An answer is untrusted input.** What the model returns can try to steer the agent; the agent's
   capabilities, not the gateway, bound what that can do.
 
@@ -160,6 +166,6 @@ Status: planned · M4 (self-hosted development)
 
 - **No credentials in agent memory.** A key in an agent is a key the agent can leak; a capability to
   a gateway is revoked with the lease.
-- **Typed operations, not a proxy.** A general HTTPS proxy with a key attached lets its holder call any
-  endpoint the key allows; typed operations built by the gateway allow only the named ones.
+- **Typed operations, not a proxy.** A general HTTPS proxy with a key attached lets its holder call
+  any endpoint the key allows; typed operations built by the gateway allow only the named ones.
 - **A sink.** A gateway is a way off the box, so it takes no labelled caller.
