@@ -1,8 +1,8 @@
 description = "Bench self-check: a case's disk and net reach the guest as virtio devices, the disk at its size; the guest powers off cleanly"
 arch = ["rv64"]
 kind = "boot"
-# The first program holds every device object and maps each through its handle: no virtio slot
-# is reachable by legacy MapMemory grants (WP-K5b).
+# The first program holds every device object and maps each through its handle, the only way
+# to reach a device.
 # It prints on the console it maps itself, not through log-server: the UART has one owner.
 programs = ["virtio-probe"]
 timeout_secs = 20
