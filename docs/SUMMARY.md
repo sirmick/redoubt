@@ -7,11 +7,11 @@
 
 # The kernel
 
-- [The kernel]()
-  - [Handles and objects]()
+- [The kernel](kernel/README.md)
+  - [Handles and objects](kernel/objects.md)
   - [IPC](kernel/ipc.md)
   - [Memory]()
-  - [Budgets]()
+  - [Budgets](kernel/budgets.md)
   - [Scheduling]()
   - [Time and timeouts]()
   - [Processes]()
