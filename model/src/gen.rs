@@ -21,7 +21,7 @@ use crate::kernel::{
 use crate::spec::*;
 use crate::syscall::*;
 
-/// A handle to a DMA-flagged device (WP-K5b, answer 173).
+/// A handle to a DMA-flagged device (kernel/devices.md).
 fn dma_device(k: &Kernel, h: &crate::kernel::Handle) -> bool {
     matches!(h.object, Object::Device(d)
         if k.devices.get(&d).is_some_and(|dev| matches!(dev.kind, DeviceKind::Mmio { dma: true, .. })))
@@ -164,7 +164,7 @@ impl Gen {
     /// Generate a runnable thread's event; all actor selection uses the supplied domain.
     fn actor_op(&mut self, k: &Kernel, runnable: &[(u64, u64)]) -> Op {
         // A thread bomb: one process creates threads until it hits MAX_THREADS or its page
-        // limit (RESOURCES.md: a bomb hits its own limit; others keep going).
+        // limit (a bomb hits its own limit; others keep going).
         if self.bomb.is_none() && self.rng.pct(1) {
             let (pid, _) = self.rng.pick(runnable).unwrap();
             self.bomb = Some((pid, 40));
@@ -430,18 +430,18 @@ impl Gen {
             if self.rng.pct(40) {
                 hs.push(self.rng.pick(&endpoints)?);
             }
-            // Now and then a user process that holds a system-class budget: `system` (QUESTIONS 9
-            // says it still cannot make system-class children), or the one init made, which may be
-            // labelled (`budget_usage` must refuse it then).
+            // Now and then a user process that holds a system-class budget: `system` (a user-class
+            // caller still cannot add labels under it: kernel/budgets.md, `ClassDenied`), or the
+            // one init made, which may be labelled (`budget_usage` must refuse it then).
             if k.budgets[&b].class == Class::User && self.rng.pct(30) {
                 let made_system =
                     made.iter().copied().find(|x| *x != SYSTEM && k.budgets[x].class == Class::System);
                 let target = if self.rng.pct(50) { made_system.unwrap_or(SYSTEM) } else { SYSTEM };
                 hs.push(budget_h(target)?);
             }
-            // WP-K5b: now and then DMA devices too, each on its own, so a child can hold DMA
-            // memory, share a device with init or a sibling (the co-holder case), allocate through
-            // one device while mapping another, and quarantine a device by dying.
+            // Now and then DMA devices too, each on its own, so a child can hold DMA memory, share
+            // a device with init or a sibling (the co-holder case), allocate through one device
+            // while mapping another, and quarantine a device by dying.
             for (i, h) in &init.handles {
                 if dma_device(k, h) && self.rng.pct(50) {
                     hs.push(*i);
@@ -461,7 +461,7 @@ impl Gen {
     /// The relay: a user process creates an endpoint and sends it to `init`, which starts
     /// processes in the other budgets it made (labelled ones among them) holding a receive right
     /// to it and naming it as their exit endpoint. So endpoints owned by user budgets are used
-    /// across label sets (R1 against the owner, QUESTIONS 4; exit notices to a user owner) and
+    /// across label sets (R1 against the owner; exit notices to a user owner) and
     /// received outside their owner's budget (R10: calls in flight when the owner is destroyed).
     fn relay_op(&mut self, k: &Kernel) -> Option<Op> {
         let init = k.processes.get(&INIT_PID)?;
@@ -767,7 +767,7 @@ impl Gen {
                 Syscall::Serve { msg_id: m }
             };
         }
-        // WP-K5b: a child holding DMA devices maps them and allocates through them often, so that
+        // A child holding DMA devices maps them and allocates through them often, so that
         // co-holders (one maps a device another allocates through or maps too) and their deaths
         // come up in short sequences.
         if pid != INIT_PID && self.rng.pct(12) && k.processes[&pid].handles.values().any(|h| dma_device(k, h)) {
@@ -920,10 +920,10 @@ impl Gen {
                 }
             }
             96..=98 => {
-                // A mix of a likely-free low address, address 0 (K5a-addr0: user space starts
-                // at 0), an address near USER_TOP (where a lone-mapping process's alloc_va
-                // fallback matters, P1-1), and now and then a page the process already owns
-                // (own_pages), so the overlap refusal fires too.
+                // A mix of a likely-free low address, address 0 (user space starts at 0:
+                // kernel/memory-layout.md), an address near USER_TOP (where a lone-mapping
+                // process's alloc_va fallback matters), and now and then a page the process
+                // already owns (own_pages), so the overlap refusal fires too.
                 let addr = if self.rng.pct(20) {
                     self.own_pages(k, pid, 1, |_| true).0
                 } else {

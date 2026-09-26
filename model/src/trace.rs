@@ -1,5 +1,5 @@
 //! The trace format: a sequence of kernel events and their expected results, as ASCII text.
-//! README.md ("Trace format") is the specification; this module writes and reads it, and
+//! kernel/model.md ("Traces") is the specification; this module writes and reads it, and
 //! [`check`] replays a trace on the model and requires identical output.
 //!
 //! Everything here is `no_std` + `alloc` and works on `&str`, so a kernel-side replayer can use
@@ -587,8 +587,8 @@ fn field<'a>(t: &'a [Token<'a>], key: &str) -> Result<u64, String> {
         .unwrap_or_else(|| Err(format!("missing {key}=")))
 }
 
-/// A field whose value is a bare word, or `default` if the field is absent (WP-K5b's
-/// `resets=always|first-fails|never`, which most traces do not name).
+/// A field whose value is a bare word, or `default` if the field is absent (the DMA reset
+/// outcome `resets=always|first-fails|never`, which most traces do not name).
 fn word_field<'a>(t: &'a [Token<'a>], key: &str, default: &'a str) -> Result<&'a str, String> {
     for x in t {
         if let Token::Field(k, v) = x {
