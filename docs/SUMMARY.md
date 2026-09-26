@@ -37,6 +37,8 @@
   - [ipd](servers/ipd.md)
   - [The resolver](servers/resolver.md)
   - [gatewayd](servers/gatewayd.md)
+  - [sshd](servers/sshd.md)
+  - [consoled](servers/consoled.md)
   - [The wire protocol]()
   - [init and the boot manifest]()
   - [The steward]()
