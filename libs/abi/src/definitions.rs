@@ -14,18 +14,6 @@ pub const MAX_CID: usize = 34;
 #[cfg(feature = "swap")]
 pub const SWAPPER_PID: u8 = 2;
 
-#[cfg(not(target_os = "none"))]
-use core::sync::atomic::AtomicU64;
-
-// Secretly, you can change this by setting the REDOUBT_SEED environment variable.
-// I don't lke environment variables because where do you document features like this?
-// But, this was the most expedient way to get all the threads in Hosted mode to pick up a seed.
-// The code that reads the varable this is all the way over in redoubt-rs\src\arch\hosted\mod.rs#29, and
-// it's glommed onto some other static process initialization code because I don't fully understand
-// what's going on over there.
-#[cfg(not(target_os = "none"))]
-pub static TESTING_RNG_SEED: AtomicU64 = AtomicU64::new(0);
-
 pub mod exceptions;
 pub use exceptions::*;
 
@@ -640,47 +628,3 @@ impl AllocAdvice {
     }
 }
 
-#[cfg(test)]
-mod round_trip {
-    use super::*;
-
-    /// `Result::to_args`/`from_args` are written with opcode *literals* (unlike `SysCall`,
-    /// whose opcodes come from an enum), so a copy-paste can put two variants on one opcode.
-    /// Every result the kernel returns must survive the round trip to the caller unchanged.
-    /// (This caught `Unimplemented` colliding with `Message` on opcode 21.)
-    #[test]
-    fn every_result_round_trips() {
-        let addr = MemoryAddress::new(0x1000).unwrap();
-        let size = MemorySize::new(0x2000).unwrap();
-        let sid = SID::from_u32(1, 2, 3, 4);
-        let scalar = ScalarMessage::from_usize(3, 10, 20, 30, 40);
-        let cases = [
-            Result::Ok,
-            Result::ResumeProcess,
-            Result::RetryCall,
-            Result::None,
-            Result::BlockedProcess,
-            Result::Unimplemented,
-            Result::Error(Error::InternalError),
-            Result::Scalar1(11),
-            Result::Scalar2(11, 22),
-            Result::Scalar5(1, 2, 3, 4, 5),
-            Result::ThreadID(7),
-            Result::ConnectionID(9),
-            Result::ProcessID(PID::new(3).unwrap()),
-            Result::MemoryAddress(addr),
-            Result::MemoryRange(MemoryRange { addr, size }),
-            Result::ServerID(sid),
-            Result::NewServerID(sid, 5),
-            Result::ReadyThreads(1, 2, 3, 4, 5, 6, 7),
-            Result::MemoryReturned(Some(size), None),
-            Result::Message(Message::Scalar(scalar)),
-            Result::UnknownResult(1, 2, 3, 4, 5, 6, 7),
-        ];
-        for case in cases {
-            let args = case.to_args();
-            let decoded = Result::from_args(args);
-            assert_eq!(decoded, case, "{case:?} encoded as {args:?} decoded back to {decoded:?}");
-        }
-    }
-}

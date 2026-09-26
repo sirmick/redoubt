@@ -942,7 +942,6 @@ fn pump(ss: &mut SystemServices, mm: &mut MemoryManager, e: EndpointRef) {
         // abandoned-call notice it belongs to no particular thread -- it is addressed to the
         // endpoint -- so whichever thread is receiving here takes it. Taking it frees the
         // process object, which is what frees the PID (answer 106).
-        #[cfg(baremetal)]
         let exit = crate::process::pending_notice(mm, e).and_then(|(frame, notice)| {
             find_thread(mm, |mm, pid, tid| {
                 let s = slot(mm, pid, tid);
@@ -950,7 +949,6 @@ fn pump(ss: &mut SystemServices, mm: &mut MemoryManager, e: EndpointRef) {
             })
             .map(|(pid, tid)| (frame, notice, pid, tid))
         });
-        #[cfg(baremetal)]
         if let Some((frame, notice, pid, tid)) = exit {
             // A failed output record does not consume the notice or release its PID.
             if let Err(error) = check_receive_record(ss, pid, tid, mm) {
@@ -1190,10 +1188,7 @@ fn is_live(mm: &MemoryManager, h: Handle) -> bool {
         Object::Budget(b) => mm.is_live_budget(b),
         Object::Endpoint(e) => mm.is_live_endpoint(e),
         Object::Device(d) => mm.is_live_device(d),
-        #[cfg(baremetal)]
         Object::Process(p) => mm.is_live_process(p),
-        #[cfg(not(baremetal))]
-        Object::Process(_) => false,
     }
 }
 
@@ -1517,7 +1512,6 @@ pub fn budgets_dying(ss: &mut SystemServices, mm: &mut MemoryManager) {
 /// OD6 (WP-K5b): a DMA device whose reset did not confirm is destroyed as R10 destroys one, so
 /// every handle to it goes, copies in unreceived messages arriving as 0. Its registry slot, keyed
 /// by base, stays flagged until reboot, and no device object is ever made again.
-#[cfg(baremetal)]
 pub fn destroy_quarantined_devices(ss: &mut SystemServices, mm: &mut MemoryManager) {
     if !mm.dma_take_doomed() {
         return;
@@ -1547,7 +1541,6 @@ fn destroy_endpoint(ss: &mut SystemServices, mm: &mut MemoryManager, frame: u32)
     });
     // Every exit notice owed here is dropped, and a process still running loses the ear it was
     // to report to (R10; `process.rs`).
-    #[cfg(baremetal)]
     crate::process::endpoint_dying(mm, e);
     // The handles naming it go first: `budget_destroy`'s later sweep reads every handle's
     // object, and one naming a freed frame would stop the kernel (I1). Unreachable until a

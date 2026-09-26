@@ -158,10 +158,9 @@ max_undocumented = 0
 
 [[budget]]
 # G1: the legacy Xous ABI, linked into the kernel and loader for shared constants and types.
-# Existing code that no budget listed, now counted; no new unsafe. Its on-target modules only:
-# the arm, hosted and test backends never build for riscv. The 44 undocumented uses are
-# pre-existing legacy-interface debt. WP-K6 deletes that interface; do not add to it.
-name = "redoubt-abi (legacy interface, on-target modules)"
+# Existing code that no budget listed, now counted; no new unsafe. The 44 undocumented uses
+# are pre-existing legacy-interface debt. WP-K6 deletes that interface; do not add to it.
+name = "redoubt-abi (legacy interface)"
 paths = [
     "libs/abi/src/lib.rs", "libs/abi/src/arch/mod.rs", "libs/abi/src/arch/riscv", "libs/abi/src/carton.rs",
     "libs/abi/src/definitions.rs", "libs/abi/src/definitions", "libs/abi/src/pagebuffer.rs",

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /// Prints to the debug output directly.
-#[cfg(baremetal)]
 #[macro_export]
 macro_rules! print {
     ($($args:tt)+) => {{
@@ -23,7 +22,6 @@ macro_rules! print {
 }
 
 /// Prints to the debug output directly, with a newline.
-#[cfg(baremetal)]
 #[macro_export]
 macro_rules! println {
 	() => ({

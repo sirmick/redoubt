@@ -49,12 +49,10 @@ enum ExecutionType {
     NonBlocking,
 }
 
-#[cfg(baremetal)]
 pub fn reset_switchto_caller() { SWITCHTO_CALLER.with(|c| *c = None); }
 
 /// After a blocking Redoubt call switched away, point the scheduler back at the thread whose
 /// quantum this is, exactly as `do_yield` does for the legacy calls.
-#[cfg(baremetal)]
 pub fn restore_last_thread(ss: &mut SystemServices) {
     if let Some(pid) = PID::new(ORIGINAL_PID.load(Relaxed)) {
         ss.set_last_thread(pid, ORIGINAL_TID.load(Relaxed)).ok();
@@ -62,20 +60,11 @@ pub fn restore_last_thread(ss: &mut SystemServices) {
 }
 
 fn retry_syscall(pid: PID, tid: TID) -> SysCallResult {
-    if cfg!(baremetal) {
-        arch::process::Process::with_current_mut(|p| p.retry_instruction(tid))?;
-        do_yield(pid, tid)
-    } else {
-        Ok(redoubt_abi::Result::RetryCall)
-    }
+    arch::process::Process::with_current_mut(|p| p.retry_instruction(tid))?;
+    do_yield(pid, tid)
 }
 
 fn do_yield(_pid: PID, tid: TID) -> SysCallResult {
-    // If we're not running on bare metal, treat this as a no-op.
-    if !cfg!(baremetal) {
-        return Ok(redoubt_abi::Result::Ok);
-    }
-
     // The quantum's owner, normally `kmain` through `SwitchTo`. A preemption or a blocking call
     // may have taken the CPU back to `kmain` since (and forgotten the caller); every process's
     // parent is `kmain` then (WP-K5). A yield must never stop the kernel (I14).
@@ -283,7 +272,6 @@ fn send_message(pid: PID, tid: TID, cid: CID, message: Message) -> SysCallResult
 
             // Mark the server's context as "Ready". If this fails, return the context
             // to the blocking list.
-            #[cfg(baremetal)]
             ss.ready_thread(server_pid, server_tid).map_err(|e| {
                 ss.server_from_sidx_mut(sidx)
                     .expect("server couldn't be located")
@@ -293,7 +281,7 @@ fn send_message(pid: PID, tid: TID, cid: CID, message: Message) -> SysCallResult
 
             let runnable = ss.runnable(server_pid, Some(server_tid)).expect("server doesn't exist");
             // --- NOTE: Returning this value //
-            return if blocking && cfg!(baremetal) {
+            return if blocking {
                 if !runnable {
                     // re-bind the envelope because the sender_idx binding is lazily evaluated
                     let message = envelope.take_message();
@@ -368,39 +356,13 @@ fn send_message(pid: PID, tid: TID, cid: CID, message: Message) -> SysCallResult
                         }
                     }
                 }
-            } else if blocking && !cfg!(baremetal) {
-                // re-bind the envelope: lazy eval has to happen now.
-                let message = envelope.take_message();
-                let sender_idx =
-                    ss.remember_server_message(sidx, pid, tid, &message, client_address).map_err(|e| {
-                        klog!("error remembering server message: {:?}", e);
-                        ss.server_from_sidx_mut(sidx)
-                            .expect("server couldn't be located")
-                            .return_available_thread(server_tid);
-                        e
-                    })?;
-                let sender = SenderID::new(sidx, sender_idx, Some(pid));
-                let envelope = MessageEnvelope { sender: sender.into(), body: message };
-
-                klog!("Blocking client, since it sent a blocking message");
-                ss.unschedule_thread(pid, tid)?;
-                ss.switch_to_thread(server_pid, Some(server_tid))?;
-                ss.set_thread_result(server_pid, server_tid, redoubt_abi::Result::MessageEnvelope(envelope))
-                    .map(|_| redoubt_abi::Result::BlockedProcess)
-            } else if cfg!(baremetal) {
+            } else {
                 klog!(
                     "Setting the return value of the Server ({}:{}) to {:?} and returning to Client",
                     server_pid,
                     server_tid,
                     envelope
                 );
-                ss.set_thread_result(server_pid, server_tid, redoubt_abi::Result::MessageEnvelope(envelope))
-                    .map(|_| redoubt_abi::Result::Ok)
-            } else {
-                klog!("setting the return value of the Server to {:?} and returning to Client", envelope);
-                // "Switch to" the server PID when not running on bare metal. This ensures
-                // that it's "Running".
-                ss.switch_to_thread(server_pid, Some(server_tid))?;
                 ss.set_thread_result(server_pid, server_tid, redoubt_abi::Result::MessageEnvelope(envelope))
                     .map(|_| redoubt_abi::Result::Ok)
             };
@@ -414,23 +376,18 @@ fn send_message(pid: PID, tid: TID, cid: CID, message: Message) -> SysCallResult
         // Park this context if it's blocking.  This is roughly
         // equivalent to a "Yield".
         if blocking {
-            if cfg!(baremetal) {
-                // println!("Returning to parent");
-                let process = ss.get_process(pid).expect("Can't get current process");
-                let ppid = process.ppid;
-                SWITCHTO_CALLER.with(|c| *c = None);
-                let result = ss
-                    .activate_process_thread(tid, ppid, 0, false, PostActivateOp::None)
-                    .map(|_| Ok(redoubt_abi::Result::ResumeProcess))
-                    .unwrap_or(Err(redoubt_abi::Error::ProcessNotFound));
+            // println!("Returning to parent");
+            let process = ss.get_process(pid).expect("Can't get current process");
+            let ppid = process.ppid;
+            SWITCHTO_CALLER.with(|c| *c = None);
+            let result = ss
+                .activate_process_thread(tid, ppid, 0, false, PostActivateOp::None)
+                .map(|_| Ok(redoubt_abi::Result::ResumeProcess))
+                .unwrap_or(Err(redoubt_abi::Error::ProcessNotFound));
 
-                ss.set_last_thread(PID::new(ORIGINAL_PID.load(Relaxed)).unwrap(), ORIGINAL_TID.load(Relaxed))
-                    .ok();
-                result
-            } else {
-                ss.unschedule_thread(pid, tid)?;
-                Ok(redoubt_abi::Result::BlockedProcess)
-            }
+            ss.set_last_thread(PID::new(ORIGINAL_PID.load(Relaxed)).unwrap(), ORIGINAL_TID.load(Relaxed))
+                .ok();
+            result
         } else {
             // println!("Returning to Client with Ok result");
             Ok(redoubt_abi::Result::Ok)
@@ -468,7 +425,7 @@ fn return_memory(
                     let mut result = Ok(redoubt_abi::Result::Ok);
                     let virt = range.as_ptr() as usize;
                     let size = range.len();
-                    if cfg!(baremetal) && virt & 0xfff != 0 {
+                    if virt & 0xfff != 0 {
                         klog!("VIRT NOT DIVISIBLE BY 4: {:08x}", virt);
                         return Err(redoubt_abi::Error::BadAlignment);
                     }
@@ -501,48 +458,31 @@ fn return_memory(
         //     client_pid,
         //     client_tid
         // );
-        #[cfg(baremetal)]
         let src_virt = _server_addr.get() as _;
-        #[cfg(not(baremetal))]
-        let src_virt = buf.as_ptr() as _;
 
         let return_value = redoubt_abi::Result::MemoryReturned(offset, valid);
 
         // Return the memory to the calling process
         ss.return_memory(src_virt, client_pid, client_tid, client_addr.get() as _, len.get())?;
 
-        if cfg!(baremetal) {
-            ss.ready_thread(client_pid, client_tid)?;
-        }
+        ss.ready_thread(client_pid, client_tid)?;
 
         // Return to the server if any of the following are true:
         //
-        // 1. We're running in hosted mode -- hosted mode runs all threads simultaneously anyway
-        // 2. We're in an interrupt -- interrupts cannot cross process boundaries
-        // 3. The client isn't runnable -- it may be being debugged
-        // 4. We're in the quantum assigned to the server -- this prevents pipeline blockages
-        if !cfg!(baremetal)
-            || in_irq
+        // 1. We're in an interrupt -- interrupts cannot cross process boundaries
+        // 2. The client isn't runnable -- it may be being debugged
+        // 3. We're in the quantum assigned to the server -- this prevents pipeline blockages
+        if in_irq
             || !ss.runnable(client_pid, Some(client_tid))?
             || (ORIGINAL_PID.load(Relaxed) == server_pid.get() && ORIGINAL_TID.load(Relaxed) == client_tid)
         {
-            // In a hosted environment, `switch_to_thread()` doesn't continue
-            // execution from the new thread. Instead it continues in the old
-            // thread. Therefore, we need to instruct the client to resume, and
-            // return to the server.
-            #[cfg(not(baremetal))]
-            ss.switch_to_thread(client_pid, Some(client_tid))?;
-
-            // In a baremetal environment, the opposite is true -- we instruct
-            // the server to resume and return to the client.
+            // Instruct the server to resume and return to the client.
             ss.set_thread_result(client_pid, client_tid, return_value)?;
             Ok(redoubt_abi::Result::Ok)
         } else {
             // Switch away from the server, but leave it as Runnable
-            if cfg!(baremetal) {
-                ss.unschedule_thread(server_pid, server_tid)?;
-                ss.ready_thread(server_pid, server_tid)?
-            }
+            ss.unschedule_thread(server_pid, server_tid)?;
+            ss.ready_thread(server_pid, server_tid)?;
             ss.set_thread_result(server_pid, server_tid, redoubt_abi::Result::Ok)?;
 
             // Switch to the client
@@ -593,34 +533,23 @@ fn return_result(
             }
         };
 
-        if cfg!(baremetal) {
-            ss.ready_thread(client_pid, client_tid)?;
-        }
+        ss.ready_thread(client_pid, client_tid)?;
 
         // Return to the server if any of the following are true:
         //
-        // 1. We're running in hosted mode -- hosted mode runs all threads simultaneously anyway
-        // 2. We're in an interrupt -- interrupts cannot cross process boundaries
-        // 3. The client isn't runnable -- it may be being debugged
-        // 4. We're in the quantum assigned to the server -- this prevents pipeline blockages
-        if !cfg!(baremetal)
-            || in_irq
+        // 1. We're in an interrupt -- interrupts cannot cross process boundaries
+        // 2. The client isn't runnable -- it may be being debugged
+        // 3. We're in the quantum assigned to the server -- this prevents pipeline blockages
+        if in_irq
             || !ss.runnable(client_pid, Some(client_tid))?
             || (ORIGINAL_PID.load(Relaxed) == server_pid.get() && ORIGINAL_TID.load(Relaxed) == client_tid)
         {
-            // In a hosted environment, `switch_to_thread()` doesn't continue
-            // execution from the new thread. Instead it continues in the old
-            // thread. Therefore, we need to instruct the client to resume, and
-            // return to the server.
-            // In a baremetal environment, the opposite is true -- we instruct
-            // the server to resume and return to the client.
+            // Instruct the server to resume and return to the client.
             ss.set_thread_result(client_pid, client_tid, return_value)?;
             Ok(redoubt_abi::Result::Ok)
         } else {
-            if cfg!(baremetal) {
-                ss.unschedule_thread(server_pid, server_tid)?;
-                ss.ready_thread(server_pid, server_tid)?
-            }
+            ss.unschedule_thread(server_pid, server_tid)?;
+            ss.ready_thread(server_pid, server_tid)?;
             // Switch away from the server, but leave it as Runnable
             ss.set_thread_result(server_pid, server_tid, redoubt_abi::Result::Ok)?;
 
@@ -689,10 +618,7 @@ fn reply_and_receive_next(
                 return Err(redoubt_abi::Error::DoubleFree);
             }
             WaitingMessage::BorrowedMemory(pid, tid, _server_addr, client_addr, len) => {
-                #[cfg(baremetal)]
                 let src_virt = _server_addr.get() as _;
-                #[cfg(not(baremetal))]
-                let src_virt = arg1 as _;
 
                 // Return the memory to the calling process
                 ss.return_memory(src_virt, pid, tid, client_addr.get() as _, len.get())?;
@@ -715,14 +641,11 @@ fn reply_and_receive_next(
         let client_pid = response.pid;
         let client_tid = response.tid;
 
-        if cfg!(baremetal) {
-            ss.ready_thread(client_pid, client_tid)?;
-        }
+        ss.ready_thread(client_pid, client_tid)?;
 
         // If there is a pending message, fetch it and schedule the thread to run
         if let Some(msg) = next_message {
-            if !cfg!(baremetal)
-                || in_irq
+            if in_irq
                 || !ss.runnable(client_pid, Some(client_tid))?
                 || (ORIGINAL_PID.load(Relaxed) == server_pid.get()
                     && ORIGINAL_TID.load(Relaxed) == client_tid)
@@ -733,10 +656,8 @@ fn reply_and_receive_next(
                 // Return the new message envelope to the server
                 Ok(redoubt_abi::Result::MessageEnvelope(msg))
             } else {
-                if cfg!(baremetal) {
-                    ss.unschedule_thread(server_pid, server_tid)?;
-                    ss.ready_thread(server_pid, server_tid)?
-                }
+                ss.unschedule_thread(server_pid, server_tid)?;
+                ss.ready_thread(server_pid, server_tid)?;
 
                 // When the server is resumed, it will receive this as a return value.
                 ss.set_thread_result(server_pid, server_tid, redoubt_abi::Result::MessageEnvelope(msg))?;
@@ -746,30 +667,16 @@ fn reply_and_receive_next(
                 Ok(response.result)
             }
         } else {
-            // For baremetal targets, switch away from this process.
-            if cfg!(baremetal) {
-                // Set the thread result for the client and activate the client thread and switch to it
-                ss.activate_process_thread(
-                    server_tid,
-                    response.pid,
-                    response.tid,
-                    false,
-                    PostActivateOp::SetThreadResult { result: response.result },
-                )
-                .map(|_| Ok(redoubt_abi::Result::ResumeProcess))
-                .unwrap_or(Err(redoubt_abi::Error::ProcessNotFound))
-            }
-            // For hosted targets, simply return `BlockedProcess` indicating we'll make
-            // a callback to their socket at a later time.
-            else {
-                ss.unschedule_thread(server_pid, server_tid)?;
-                // Switch to the client and return the result
-                ss.switch_to_thread(response.pid, Some(response.tid))?;
-                ss.set_thread_result(response.pid, response.tid, response.result)?;
-
-                // Indicate that the server should block its process
-                Ok(redoubt_abi::Result::BlockedProcess)
-            }
+            // Set the thread result for the client and activate the client thread and switch to it
+            ss.activate_process_thread(
+                server_tid,
+                response.pid,
+                response.tid,
+                false,
+                PostActivateOp::SetThreadResult { result: response.result },
+            )
+            .map(|_| Ok(redoubt_abi::Result::ResumeProcess))
+            .unwrap_or(Err(redoubt_abi::Error::ProcessNotFound))
         }
     })
 }
@@ -805,24 +712,16 @@ fn receive_message(pid: PID, tid: TID, sid: SID, blocking: ExecutionType) -> Sys
         klog!("did not have any waiting messages -- parking thread {}", tid);
         server.park_thread(tid);
 
-        // For baremetal targets, switch away from this process.
-        if cfg!(baremetal) {
-            SWITCHTO_CALLER.with(|c| *c = None);
-            let ppid = ss.get_process(pid).expect("Can't get current process").ppid;
-            // TODO: Advance thread
-            let result = ss
-                .activate_process_thread(tid, ppid, 0, false, PostActivateOp::None)
-                .map(|_| Ok(redoubt_abi::Result::ResumeProcess))
-                .unwrap_or(Err(redoubt_abi::Error::ProcessNotFound));
-            ss.set_last_thread(PID::new(ORIGINAL_PID.load(Relaxed)).unwrap(), ORIGINAL_TID.load(Relaxed))
-                .ok();
-            result
-        }
-        // For hosted targets, simply return `BlockedProcess` indicating we'll make
-        // a callback to their socket at a later time.
-        else {
-            ss.unschedule_thread(pid, tid).map(|_| redoubt_abi::Result::BlockedProcess)
-        }
+        SWITCHTO_CALLER.with(|c| *c = None);
+        let ppid = ss.get_process(pid).expect("Can't get current process").ppid;
+        // TODO: Advance thread
+        let result = ss
+            .activate_process_thread(tid, ppid, 0, false, PostActivateOp::None)
+            .map(|_| Ok(redoubt_abi::Result::ResumeProcess))
+            .unwrap_or(Err(redoubt_abi::Error::ProcessNotFound));
+        ss.set_last_thread(PID::new(ORIGINAL_PID.load(Relaxed)).unwrap(), ORIGINAL_TID.load(Relaxed))
+            .ok();
+        result
     })
 }
 
@@ -885,7 +784,6 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                 // `phys = 0` (which allocates a free frame and zeroes it). So reject any range
                 // that touches main RAM, and default-deny device MMIO unless the boot manifest
                 // granted it (tenet 2). PID 1 (the kernel) is trusted and maps its own memory.
-                #[cfg(baremetal)]
                 if !phys_ptr.is_null() {
                     let base = phys_ptr as usize;
                     if pid.get() != 1
@@ -936,12 +834,11 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
             let mut result = Ok(redoubt_abi::Result::Ok);
             let virt = range.as_ptr() as usize;
             let size = range.len();
-            if cfg!(baremetal) && virt & 0xfff != 0 {
+            if virt & 0xfff != 0 {
                 return Err(redoubt_abi::Error::BadAlignment);
             }
-            if cfg!(baremetal) && (virt >= USER_AREA_END || virt.saturating_add(size) >= USER_AREA_END) {
-                // don't allow processes to unmap kernel or page table memory; however, these addresses
-                // only have meaning on actual hardware (baremetal), and not in hosted mode.
+            if virt >= USER_AREA_END || virt.saturating_add(size) >= USER_AREA_END {
+                // don't allow processes to unmap kernel or page table memory.
                 return Err(redoubt_abi::Error::BadAddress);
             }
             for addr in (virt..(virt + size)).step_by(PAGE_SIZE) {
@@ -1067,41 +964,29 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
             let ppid = process.ppid;
             SWITCHTO_CALLER.with(|c| *c = None);
             // TODO: Advance thread
-            if cfg!(baremetal) {
-                let result = ss
-                    .activate_process_thread(tid, ppid, 0, false, PostActivateOp::None)
-                    .map(|_| Ok(redoubt_abi::Result::ResumeProcess))
-                    .unwrap_or(Err(redoubt_abi::Error::ProcessNotFound));
-                ss.set_last_thread(PID::new(ORIGINAL_PID.load(Relaxed)).unwrap(), ORIGINAL_TID.load(Relaxed))
-                    .ok();
-                result
-            } else {
-                Ok(redoubt_abi::Result::Ok)
-            }
+            let result = ss
+                .activate_process_thread(tid, ppid, 0, false, PostActivateOp::None)
+                .map(|_| Ok(redoubt_abi::Result::ResumeProcess))
+                .unwrap_or(Err(redoubt_abi::Error::ProcessNotFound));
+            ss.set_last_thread(PID::new(ORIGINAL_PID.load(Relaxed)).unwrap(), ORIGINAL_TID.load(Relaxed))
+                .ok();
+            result
         }),
         SysCall::CreateThread(thread_init) => SystemServices::with_mut(|ss| {
             ss.create_thread(pid, thread_init).map(|new_tid| {
                 // Set the return value of the existing thread to be the new thread ID
-                if cfg!(baremetal) {
-                    // Immediately switch to the new thread
-                    ss.switch_to_thread(pid, Some(new_tid)).expect("couldn't activate new thread");
-                    ss.set_thread_result(pid, tid, redoubt_abi::Result::ThreadID(new_tid))
-                        .expect("couldn't set new thread ID");
+                // Immediately switch to the new thread
+                ss.switch_to_thread(pid, Some(new_tid)).expect("couldn't activate new thread");
+                ss.set_thread_result(pid, tid, redoubt_abi::Result::ThreadID(new_tid))
+                    .expect("couldn't set new thread ID");
 
-                    // Return `ResumeProcess` since we're switching threads
-                    redoubt_abi::Result::ResumeProcess
-                } else {
-                    redoubt_abi::Result::ThreadID(new_tid)
-                }
+                // Return `ResumeProcess` since we're switching threads
+                redoubt_abi::Result::ResumeProcess
             })
         }),
         // The legacy `CreateProcess` is gone on bare metal: it made processes outside every
         // budget (R6), no program uses it, and WP-K4 brings `process_create`. It falls through to
         // `UnhandledSyscall` below.
-        #[cfg(not(baremetal))]
-        SysCall::CreateProcess(process_init) => SystemServices::with_mut(|ss| {
-            ss.create_process(process_init).map(redoubt_abi::Result::NewProcess)
-        }),
         SysCall::CreateServerWithAddress(name) => SystemServices::with_mut(|ss| {
             const NS_SID: SID = SID::from_u32(
                 u32::from_le_bytes(*b"rdbt"),
@@ -1153,19 +1038,10 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
         // another number: a process the Redoubt calls created gets its exit notice either way
         // (KERNEL-SPEC.md, `process_exit`), so a program does not have to be rewritten before its
         // parent can be told how it ended. (INTERIM until WP-K6 deletes the legacy interface.)
-        #[cfg(baremetal)]
         SysCall::TerminateProcess(ret) => {
             SystemServices::with_mut(|ss| crate::process::process_exit(ss, pid, tid, ret.into()));
             Ok(redoubt_abi::Result::ResumeProcess)
         }
-        #[cfg(not(baremetal))]
-        SysCall::TerminateProcess(_ret) => SystemServices::with_mut(|ss| {
-            ss.unschedule_thread(pid, tid)?;
-            ss.terminate_process(pid)?;
-            // Clear out `SWITCHTO_CALLER` since we're resuming the parent process.
-            SWITCHTO_CALLER.with(|c| *c = None);
-            Ok(redoubt_abi::Result::ResumeProcess)
-        }),
         SysCall::Shutdown => SystemServices::with_mut(|ss| ss.shutdown().map(|_| redoubt_abi::Result::Ok)),
         SysCall::GetProcessId => Ok(redoubt_abi::Result::ProcessID(pid)),
         SysCall::GetThreadId => Ok(redoubt_abi::Result::ThreadID(tid)),

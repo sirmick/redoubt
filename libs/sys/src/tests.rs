@@ -746,8 +746,8 @@ fn error_rows() {
 
 /// `map_fixed`'s kernel-side range check (`MemoryManager::user_range`, kernel/src/mem.rs) is
 /// `addr.checked_add(len)`, in whatever width `usize` is on the target -- genuinely 32 bits on
-/// rv32, where `kernel/src/mem.rs` isn't host-testable (it's `cfg(baremetal)`, and the kernel's
-/// hosted build doesn't build on this host at all). This mirrors that exact check with an
+/// rv32, where `kernel/src/mem.rs` isn't host-testable (the kernel builds only for its RISC-V
+/// targets). This mirrors that exact check with an
 /// explicit `u32`, so a 64-bit host can still exercise the rv32-width wraparound the real check
 /// relies on `checked_add` to refuse (answer 172's "rv32 wrap" attack case).
 ///

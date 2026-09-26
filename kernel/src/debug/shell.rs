@@ -107,7 +107,6 @@ fn handle_character(b: u8) {
                 });
             });
         }
-        #[cfg(all(baremetal, any(target_arch = "riscv32", target_arch = "riscv64")))]
         b'k' => {
             println!("Checking RAM for duplicate pages (this will take a few minutes)");
             crate::mem::MemoryManager::with(|mm| {
@@ -231,7 +230,6 @@ fn print_help() {
     println!("--- + -----------------------");
     println!(" h  | print this message");
     println!(" i  | print irq handlers");
-    #[cfg(all(baremetal, any(target_arch = "riscv32", target_arch = "riscv64")))]
     println!(" k  | check RAM to make sure pages are unique");
     println!(" m  | print MMU page tables of all processes");
     println!(" p  | print all processes");
