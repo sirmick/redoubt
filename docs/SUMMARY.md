@@ -44,9 +44,9 @@
 
 # Userland
 
-- [Userland]()
-  - [Sessions and namespaces]()
-  - [beamlet, the Elixir VM]()
+- [Userland](userland/README.md)
+  - [Sessions and namespaces](userland/sessions.md)
+  - [beamlet, the Elixir VM](userland/beamlet.md)
   - [The shell]()
   - [Files and binds]()
   - [Native programs]()
