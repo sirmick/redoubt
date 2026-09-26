@@ -21,7 +21,7 @@
 //! with (I7) and where the cost table charges the page.
 
 use redoubt_sys::{Error, MAX_LABELS};
-use redoubt_abi::PID;
+use redoubt_layout::Pid;
 
 use crate::budget::{Budget, BudgetFrame};
 use crate::handle::{BudgetRef, EndpointRef, Handle, Object};
@@ -153,7 +153,7 @@ impl MemoryManager {
 
     /// `endpoint_create() -> h` (badge 0, the receive right; R9 stamps it with the caller's
     /// budget).
-    pub fn endpoint_create(&mut self, pid: PID) -> Result<u32, Error> {
+    pub fn endpoint_create(&mut self, pid: Pid) -> Result<u32, Error> {
         // As in `budget_create`: only the kernel has no account, and it makes no Redoubt calls.
         let owner = self.budget_of(pid).ok_or(Error::NotPermitted)?;
         let e = self.new_endpoint(owner)?;
@@ -164,7 +164,7 @@ impl MemoryManager {
 
     /// The endpoint `pid`'s handle `index` names, with the handle: `BadHandle`, then
     /// `WrongObject`.
-    pub fn endpoint_handle(&self, pid: PID, index: u32) -> Result<(EndpointRef, Handle), Error> {
+    pub fn endpoint_handle(&self, pid: Pid, index: u32) -> Result<(EndpointRef, Handle), Error> {
         let handle = self.handle(pid, index)?;
         match handle.object {
             Object::Endpoint(e) => Ok((e, handle)),

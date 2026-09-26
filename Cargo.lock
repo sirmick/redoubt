@@ -158,9 +158,6 @@ name = "compiler_builtins"
 version = "0.1.108"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d68bc55329711cd719c2687bb147bc06211b0521f97ef398280108ccb23227e9"
-dependencies = [
- "rustc-std-workspace-core",
-]
 
 [[package]]
 name = "console_error_panic_hook"
@@ -376,7 +373,7 @@ dependencies = [
  "elf",
  "fdt-rs",
  "paging",
- "redoubt-abi",
+ "redoubt-layout",
  "redoubt-signing",
  "redoubt-sys",
  "sbi-rt",
@@ -510,14 +507,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "redoubt-abi"
-version = "0.9.70"
-dependencies = [
- "compiler_builtins",
- "rustc-std-workspace-core",
-]
-
-[[package]]
 name = "redoubt-blkd"
 version = "0.1.0"
 dependencies = [
@@ -553,7 +542,7 @@ dependencies = [
  "paging",
  "plic",
  "rand_chacha",
- "redoubt-abi",
+ "redoubt-layout",
  "redoubt-stride",
  "redoubt-sys",
  "riscv",
@@ -567,6 +556,13 @@ version = "0.1.0"
 dependencies = [
  "ed25519-compact",
  "redoubt-rt",
+]
+
+[[package]]
+name = "redoubt-layout"
+version = "0.1.0"
+dependencies = [
+ "redoubt-sys",
 ]
 
 [[package]]

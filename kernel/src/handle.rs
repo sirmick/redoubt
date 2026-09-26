@@ -22,7 +22,7 @@
 //! frames always hold the budgets named; every path that reads either checks the id, and a
 //! mismatch (a handle that escaped a sweep, naming a reused frame) stops the kernel (I1).
 
-use redoubt_abi::PID;
+use redoubt_layout::Pid;
 use redoubt_sys::Error;
 
 use crate::budget::{Budget, BudgetFrame};
@@ -42,7 +42,7 @@ const _: () = assert!(HANDLES_PER_PAGE * HANDLE_WORDS * 8 == redoubt_sys::PAGE_S
 /// Bits of a frame index in a handle's first word. Two fit, with the kind above them, because
 /// the physmap reaches at most 2^25 frames.
 const FRAME_BITS: u32 = 28;
-const _: () = assert!(redoubt_abi::arch::PHYSMAP_SIZE / redoubt_sys::PAGE_SIZE <= 1 << FRAME_BITS);
+const _: () = assert!(redoubt_layout::PHYSMAP_SIZE / redoubt_sys::PAGE_SIZE <= 1 << FRAME_BITS);
 
 /// A budget, named by frame and by id (the id is what the spec's stamp is).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -160,7 +160,7 @@ fn position(index: u32) -> Option<(usize, usize)> {
 fn slot_offset(slot: usize, word: usize) -> usize { (slot * HANDLE_WORDS + word) * 8 }
 
 impl MemoryManager {
-    fn table(&self, pid: PID) -> Option<&HandleTable> { self.account(pid).map(|a| &a.handles) }
+    fn table(&self, pid: Pid) -> Option<&HandleTable> { self.account(pid).map(|a| &a.handles) }
 
     fn read_slot(&self, frame: u32, slot: usize) -> Option<Handle> {
         let phys = self.object_phys(frame);
@@ -175,7 +175,7 @@ impl MemoryManager {
     }
 
     /// The handle at `index` in `pid`'s table; `BadHandle` if there is none.
-    pub fn handle(&self, pid: PID, index: u32) -> Result<Handle, Error> {
+    pub fn handle(&self, pid: Pid, index: u32) -> Result<Handle, Error> {
         let (page, slot) = position(index).ok_or(Error::BadHandle)?;
         let frame = self.table(pid).and_then(|t| t.pages[page]).ok_or(Error::BadHandle)?;
         let handle = self.read_slot(frame, slot).ok_or(Error::BadHandle)?;
@@ -199,7 +199,7 @@ impl MemoryManager {
     }
 
     /// The budget `pid`'s handle `index` names: `BadHandle`, then `WrongObject`.
-    pub fn budget_handle(&self, pid: PID, index: u32) -> Result<BudgetFrame, Error> {
+    pub fn budget_handle(&self, pid: Pid, index: u32) -> Result<BudgetFrame, Error> {
         match self.handle(pid, index)?.object {
             Object::Budget(b) => Ok(b.frame),
             _ => Err(Error::WrongObject),
@@ -209,7 +209,7 @@ impl MemoryManager {
     /// Put `handle` at the lowest free index of `pid`'s table. A new table page is charged to
     /// the process's budget (`OutOfMemory` if it cannot pay); a table already holding
     /// `MAX_HANDLES` gets `TooLarge`.
-    pub fn install_handle(&mut self, pid: PID, handle: Handle) -> Result<u32, Error> {
+    pub fn install_handle(&mut self, pid: Pid, handle: Handle) -> Result<u32, Error> {
         // Only the kernel has no account, and it holds no handles (see `budget_create`).
         let budget = self.budget_of(pid).ok_or(Error::NotPermitted)?;
         let table = *self.table(pid).expect("account");
@@ -239,7 +239,7 @@ impl MemoryManager {
 
     /// The table pages `pid` would have to buy to hold `extra` more handles, or `None` if they
     /// would take it past `MAX_HANDLES` (answer 102). Delivery asks before it charges (R4).
-    pub fn table_growth(&self, pid: PID, extra: usize) -> Option<u64> {
+    pub fn table_growth(&self, pid: Pid, extra: usize) -> Option<u64> {
         let table = self.table(pid)?;
         let mut free = 0;
         let mut pages = 0;
@@ -254,7 +254,7 @@ impl MemoryManager {
     }
 
     /// Remove `pid`'s handle `index`, freeing its table page if it was the page's last.
-    fn remove_handle(&mut self, pid: PID, index: u32) {
+    fn remove_handle(&mut self, pid: Pid, index: u32) {
         let Some((page, slot)) = position(index) else { return };
         let Some(frame) = self.table(pid).and_then(|t| t.pages[page]) else { return };
         if self.read_slot(frame, slot).is_none() {
@@ -272,7 +272,7 @@ impl MemoryManager {
     }
 
     /// `handle_close(h)`: `BadHandle` if `h` is not in the caller's table.
-    pub fn handle_close(&mut self, pid: PID, index: u32) -> Result<(), Error> {
+    pub fn handle_close(&mut self, pid: Pid, index: u32) -> Result<(), Error> {
         self.handle(pid, index)?;
         self.remove_handle(pid, index);
         Ok(())
@@ -281,16 +281,16 @@ impl MemoryManager {
     /// Remove every handle for which `doomed` holds, from every process's table (R10).
     pub fn sweep_handles(&mut self, doomed: impl Fn(&Self, &Handle) -> bool) {
         for pid in 1..=crate::arch::process::MAX_PROCESS_COUNT {
-            if let Some(pid) = PID::new(pid as u8) {
+            if let Some(pid) = Pid::new(pid as u8) {
                 self.remove_handles_where(pid, &doomed);
             }
         }
     }
 
     /// Remove every handle of a process that is ending.
-    pub fn close_all_handles(&mut self, pid: PID) { self.remove_handles_where(pid, &|_, _| true); }
+    pub fn close_all_handles(&mut self, pid: Pid) { self.remove_handles_where(pid, &|_, _| true); }
 
-    fn remove_handles_where(&mut self, pid: PID, doomed: &impl Fn(&Self, &Handle) -> bool) {
+    fn remove_handles_where(&mut self, pid: Pid, doomed: &impl Fn(&Self, &Handle) -> bool) {
         for page in 0..MAX_HANDLE_PAGES {
             for slot in 0..HANDLES_PER_PAGE {
                 // Looked up again for every slot: removing a page's last handle frees the page.

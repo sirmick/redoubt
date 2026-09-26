@@ -2,8 +2,8 @@ description = "Ratchet on `unsafe` in the trusted computing base, and on unsafe 
 kind = "unsafe-budget"
 
 # Budgets only go down. Raising one needs a justification in the commit that does it.
-# Every component but the legacy redoubt-abi is at max_undocumented = 0: all `unsafe` in the
-# kernel's and loader's own crates now carries a SAFETY comment or a `# Safety` doc. Keep it
+# Every component is at max_undocumented = 0: all `unsafe` in the
+# kernel's and loader's own crates carries a SAFETY comment or a `# Safety` doc. Keep it
 # that way. Third-party crates.io dependencies are outside the budget: the ratchet counts code
 # this repository owns, and those are pinned by Cargo.lock.
 # Only code that runs on rv64 is counted; see TENETS.md for the baseline.
@@ -164,15 +164,10 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
-# G1: the legacy Xous ABI, linked into the kernel and loader for shared constants and types.
-# Existing code that no budget listed, now counted; no new unsafe. The 44 undocumented uses
-# are pre-existing legacy-interface debt. WP-K6 deletes that interface; do not add to it.
-name = "redoubt-abi (legacy interface)"
-paths = [
-    "libs/abi/src/lib.rs", "libs/abi/src/arch/mod.rs", "libs/abi/src/arch/riscv", "libs/abi/src/carton.rs",
-    "libs/abi/src/definitions.rs", "libs/abi/src/definitions", "libs/abi/src/pagebuffer.rs",
-    "libs/abi/src/process.rs", "libs/abi/src/services.rs", "libs/abi/src/services", "libs/abi/src/string.rs",
-    "libs/abi/src/stringbuffer.rs", "libs/abi/src/syscall.rs",
-]
-max_unsafe = 52
-max_undocumented = 44
+# WP-K6: the kernel-half map and PIDs the loader and kernel share (was libs/abi, whose 52
+# unsafe, 44 undocumented, went with the old interface). `#![forbid(unsafe_code)]`, so this
+# can only stay at 0.
+name = "redoubt-layout (kernel-half map)"
+paths = ["libs/layout/src"]
+max_unsafe = 0
+max_undocumented = 0

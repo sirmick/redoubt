@@ -94,7 +94,7 @@ fn due_budget(now: u64) -> Option<(u64, u64, u32)> {
 
 /// The process a destruction happens under: the one running (whose call or run this entry
 /// interrupted), if it is not the kernel.
-fn running() -> Option<redoubt_abi::PID> {
+fn running() -> Option<redoubt_layout::Pid> {
     let pid = crate::arch::current_pid();
     (pid.get() != 1).then_some(pid)
 }

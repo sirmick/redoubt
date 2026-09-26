@@ -1,0 +1,9 @@
+[package]
+name = "redoubt-layout"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "The kernel half of the Redoubt address map and the boot handoff's PIDs, shared by the loader and the kernel"
+
+[dependencies]
+redoubt-sys = { path = "../sys" }

@@ -15,7 +15,7 @@
 //! `reply`, `serve`, `map_anon`, `unmap`, `set_flags`, `map_device`, `dma_alloc`,
 //! `system_reset` and the `process_*` and `thread_*` families.
 
-use redoubt_abi::PID;
+use redoubt_layout::Pid;
 
 use crate::arch::process::TID;
 use redoubt_sys::{
@@ -41,7 +41,7 @@ pub enum Outcome {
     Resume,
 }
 
-pub fn handle(pid: PID, tid: TID, regs: &[u64; REGS]) -> Outcome {
+pub fn handle(pid: Pid, tid: TID, regs: &[u64; REGS]) -> Outcome {
     // Deadlines that have passed were answered at this entry, before anything else (`time.rs`).
     let result = Call::decode(regs).and_then(|c| dispatch(pid, tid, c));
     // Every error a call returns is in its row of the spec's error table (`Number::can_return`).
@@ -74,7 +74,7 @@ pub fn handle(pid: PID, tid: TID, regs: &[u64; REGS]) -> Outcome {
 }
 
 /// `Ok(None)`: the caller is gone.
-fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
+fn dispatch(pid: Pid, tid: TID, call: Call) -> Result<Option<Return>, Error> {
     let done = |_| Some(Return::Nothing);
     match call {
         Call::HandleClose { handle } => {
@@ -192,7 +192,7 @@ fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
 
 /// `budget_destroy(h)` (R10): mark the subtree, then destroy it (`budget::destroy_subtree`), the
 /// caller last if it is in it.
-fn budget_destroy(pid: PID, _tid: TID, h: u32) -> Result<Option<Return>, Error> {
+fn budget_destroy(pid: Pid, _tid: TID, h: u32) -> Result<Option<Return>, Error> {
     SystemServices::with_mut(|ss| {
         let top = MemoryManager::with_mut(|mm| mm.destroy_begin(pid, h))?;
         let caller_doomed = crate::budget::destroy_subtree(ss, top, Some(pid), false);

@@ -5,7 +5,7 @@ use core::mem;
 /// The current process's bookkeeping lives at a fixed virtual address that the loader
 /// maps, to a different physical page, in every address space. So this one pointer always
 /// refers to whichever process is currently active.
-const PROCESS: *mut ProcessImpl = redoubt_abi::arch::THREAD_CONTEXT_AREA as *mut ProcessImpl;
+const PROCESS: *mut ProcessImpl = redoubt_layout::PROCESS_AREA as *mut ProcessImpl;
 
 /// The current process's `ProcessImpl`.
 ///
@@ -28,7 +28,7 @@ pub const INITIAL_TID: TID = 2;
 pub const IRQ_TID: TID = 0;
 
 use redoubt_sys::PAGE_SIZE;
-use redoubt_abi::PID;
+use redoubt_layout::Pid;
 
 use crate::cell::KernelCell;
 use crate::services::ProcessInner;
@@ -43,7 +43,7 @@ pub const MAX_PROCESS_COUNT: usize = 64;
 #[cfg(target_pointer_width = "32")]
 const MAGIC_RETURN_BASE: usize = 0xff80_0000;
 #[cfg(target_pointer_width = "64")]
-const MAGIC_RETURN_BASE: usize = redoubt_abi::arch::PROCESS_AREA + 0x80_0000;
+const MAGIC_RETURN_BASE: usize = redoubt_layout::PROCESS_AREA + 0x80_0000;
 
 /// This is the address a thread will return to when it exits.
 pub const EXIT_THREAD: usize = MAGIC_RETURN_BASE + 0x3000;
@@ -109,22 +109,22 @@ struct ProcessImpl {
 const HEADER_PADDING: usize =
     mem::size_of::<Thread>() - (2 * mem::size_of::<usize>() + mem::size_of::<ProcessInner>() + 4 + 1);
 
-/// Number of pages `ProcessImpl` occupies at `THREAD_CONTEXT_AREA`: 1 on rv32, 2 on rv64.
+/// Number of pages `ProcessImpl` occupies at `PROCESS_AREA`: 1 on rv32, 2 on rv64.
 #[allow(dead_code)] // used by the loader handoff on rv64
 pub const PROCESS_IMPL_PAGES: usize = mem::size_of::<ProcessImpl>() / PAGE_SIZE;
 
-// The trap handler in asm indexes contexts as `THREAD_CONTEXT_AREA + (n << log2(size_of::<Thread>()))`.
+// The trap handler in asm indexes contexts as `PROCESS_AREA + (n << log2(size_of::<Thread>()))`.
 const _: () = assert!(mem::size_of::<Thread>() == 32 * mem::size_of::<usize>());
 const _: () = assert!(mem::size_of::<ProcessImpl>() == (MAX_THREAD + 1) * mem::size_of::<Thread>());
 const _: () = assert!(mem::size_of::<ProcessImpl>() % PAGE_SIZE == 0);
 // The loader maps this many pages for PID 1 and for every initial process.
 #[cfg(target_pointer_width = "64")]
-const _: () = assert!(PROCESS_IMPL_PAGES == redoubt_abi::arch::THREAD_CONTEXT_PAGES);
+const _: () = assert!(PROCESS_IMPL_PAGES == redoubt_layout::THREAD_CONTEXT_PAGES);
 
 /// Singleton process table. Each process in the system gets allocated from this table.
 struct ProcessTable {
     /// The process upon which the current syscall is operating
-    current: PID,
+    current: Pid,
 
     /// The actual table contents. `true` if a process is allocated,
     /// `false` if it is free.
@@ -132,7 +132,7 @@ struct ProcessTable {
 }
 
 static PROCESS_TABLE: KernelCell<ProcessTable> =
-    KernelCell::new(ProcessTable { current: crate::services::KERNEL_PID, table: [false; MAX_PROCESS_COUNT] });
+    KernelCell::new(ProcessTable { current: redoubt_layout::KERNEL_PID, table: [false; MAX_PROCESS_COUNT] });
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -152,18 +152,18 @@ pub struct InitialProcess {
 }
 
 impl InitialProcess {
-    pub fn pid(&self) -> PID {
+    pub fn pid(&self) -> Pid {
         let pid = crate::arch::mem::pid_from_satp(self.satp);
         // The loader wrote this value. Check it rather than trust it: a zero here would be
         // undefined behaviour in a `NonZeroU8`.
-        PID::new(pid as u8).expect("initial process has PID 0")
+        Pid::new(pid as u8).expect("initial process has PID 0")
     }
 }
 
 #[repr(C)]
 #[derive(Debug)]
 pub struct Process {
-    pid: PID,
+    pid: Pid,
 }
 
 fn fixup_irq(tid: TID) -> TID { if tid == IRQ_TID_SENTINAL { 0 } else { tid } }
@@ -282,7 +282,7 @@ impl Process {
     /// The first run of a loader-bundle program (INTERIM, until R3's `init` launches them), in
     /// its own address space: claim its slot, reset its contexts, start its first thread at
     /// `entry` with stack pointer `sp`, and reserve its stack for demand paging (OD6).
-    pub fn setup_loader_process(pid: PID, entry: usize, sp: usize) {
+    pub fn setup_loader_process(pid: Pid, entry: usize, sp: usize) {
         Self::claim(pid);
         Self::setup_empty_process(pid);
         Self::setup_first_thread(pid, entry, sp, 0);
@@ -300,7 +300,7 @@ impl Process {
     /// WP-K4: claim `pid` in the process table, so that its address space can be activated. It
     /// is a separate step from `setup_empty_process`, which needs that space to be active
     /// already: `set_current_pid` refuses a PID the table does not hold.
-    pub fn claim(pid: PID) {
+    pub fn claim(pid: Pid) {
         let pid_idx = (pid.get() as usize) - 1;
         PROCESS_TABLE.with(|pt| {
             assert!(!pt.table[pid_idx], "process {} is already allocated", pid);
@@ -315,7 +315,7 @@ impl Process {
     /// that `process_impl()` names *its* saved contexts. `MemoryMapping::allocate` zeroed those
     /// frames, and all-zeroes is not a valid `ProcessInner` (its `pid` is a `NonZeroU8`), so
     /// nothing may read them before this runs.
-    pub fn setup_empty_process(pid: PID) {
+    pub fn setup_empty_process(pid: Pid) {
         let process = process_impl();
         assert_eq!(pid, crate::arch::current_pid(), "hardware pid does not match setup pid");
         // By convention thread 0 is the trap thread, so the first ordinary thread is
@@ -336,7 +336,7 @@ impl Process {
     /// the parent has already mapped and the kernel only loads it.
     ///
     /// The process's own address space must be the active one.
-    pub fn setup_first_thread(pid: PID, entry: usize, sp: usize, arg: usize) {
+    pub fn setup_first_thread(pid: Pid, entry: usize, sp: usize, arg: usize) {
         let process = process_impl();
         assert_eq!(pid, crate::arch::current_pid(), "hardware pid does not match setup pid");
         process.allocated_threads |= 1 << INITIAL_TID;
@@ -397,7 +397,7 @@ impl Process {
         print!("{}", _thread);
     }
 
-    pub fn destroy(pid: PID) {
+    pub fn destroy(pid: Pid) {
         let pid_idx = pid.get() as usize - 1;
         PROCESS_TABLE.with(|pt| {
             if pid_idx >= pt.table.len() {
@@ -410,7 +410,7 @@ impl Process {
     /// This is used by debugging routines to sanity check state, which are typically #[cfg]'d out
     /// but with complicated overlapping rules that constantly change. Hence, the #[allow(dead_code)].
     #[allow(dead_code)]
-    pub fn pid(&self) -> PID { self.pid }
+    pub fn pid(&self) -> Pid { self.pid }
 }
 
 impl core::fmt::Display for Thread {
@@ -456,7 +456,7 @@ impl core::fmt::Display for Thread {
     }
 }
 
-pub fn set_current_pid(pid: PID) {
+pub fn set_current_pid(pid: Pid) {
     let pid_idx = (pid.get() - 1) as usize;
     PROCESS_TABLE.with(|pt| {
         match pt.table.get(pid_idx) {
@@ -467,4 +467,4 @@ pub fn set_current_pid(pid: PID) {
     });
 }
 
-pub fn current_pid() -> PID { PROCESS_TABLE.with(|pt| pt.current) }
+pub fn current_pid() -> Pid { PROCESS_TABLE.with(|pt| pt.current) }

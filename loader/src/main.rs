@@ -24,13 +24,13 @@ use core::arch::{asm, global_asm};
 use dt::Platform;
 
 use tar_no_std::TarArchiveRef;
-use redoubt_abi::arch::{
-    EXCEPTION_STACK_PAGES, EXCEPTION_STACK_TOP, KERNEL_AREA, KERNEL_DMA_PAGES, KERNEL_DMA_REGS, KERNEL_PLIC_BASE, KERNEL_STACK_PAGES,
-    KERNEL_STACK_TOP, THREAD_CONTEXT_AREA, THREAD_CONTEXT_PAGES,
+use redoubt_layout::{
+    KERNEL_AREA, KERNEL_DMA_PAGES, KERNEL_DMA_REGS, KERNEL_PID, KERNEL_PLIC_BASE, KERNEL_STACK_PAGES, KERNEL_STACK_TOP,
+    PROCESS_AREA, Pid, THREAD_CONTEXT_PAGES, TRAP_STACK_PAGES, TRAP_STACK_TOP,
 };
 use redoubt_sys::{PAGE_SIZE, USER_AREA_END};
 
-use crate::alloc::{PageAllocator, Pid, KERNEL_PID};
+use crate::alloc::PageAllocator;
 use crate::paging::{AddressSpace, Pte};
 
 /// Top of the first thread's stack in every loader process, the same on both widths.
@@ -192,7 +192,7 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     let kernel_entry =
         image::load_elf(&mut alloc, &kernel, KERNEL_PID, kernel_image.data(), KERNEL_AREA..usize::MAX, false);
     kernel.map_stack(&mut alloc, KERNEL_STACK_TOP, KERNEL_STACK_PAGES, kernel_flags);
-    kernel.map_stack(&mut alloc, EXCEPTION_STACK_TOP, EXCEPTION_STACK_PAGES, kernel_flags);
+    kernel.map_stack(&mut alloc, TRAP_STACK_TOP, TRAP_STACK_PAGES, kernel_flags);
     map_context(&mut alloc, &kernel, KERNEL_PID);
     // Pre-share the tables the kernel will map its interrupt controller and its DMA register
     // window (WP-K5b) into. The kernel maps both at runtime, after these root entries have been
@@ -224,7 +224,7 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
             "the boot bundle has more than the {} processes the kernel has room for",
             MAX_PROCESSES
         );
-        let pid = count as Pid + 1;
+        let pid = Pid::new(count as u8 + 1).expect("count < MAX_PROCESSES");
 
         let space = AddressSpace::new_user(&mut alloc, pid, &kernel);
         let entrypoint = image::load_elf(&mut alloc, &space, pid, entry.data(), PAGE_SIZE..USER_AREA_END, true);
@@ -246,7 +246,7 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
         args.end();
 
         args.begin(b"PNam");
-        args.word(pid as u32);
+        args.word(pid.get() as u32);
         args.word(name.len() as u32);
         args.bytes(name.as_bytes());
         args.end();
@@ -260,10 +260,10 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     // pages owned by PID 1.
     unsafe {
         enter_kernel(
-            redoubt_abi::arch::physmap_virt(args_base),
-            redoubt_abi::arch::physmap_virt(processes.as_ptr() as usize),
-            redoubt_abi::arch::physmap_virt(alloc.rpt_base()),
-            redoubt_abi::arch::physmap_virt(xpt),
+            redoubt_layout::physmap_virt(args_base),
+            redoubt_layout::physmap_virt(processes.as_ptr() as usize),
+            redoubt_layout::physmap_virt(alloc.rpt_base()),
+            redoubt_layout::physmap_virt(xpt),
             kernel.satp(),
             kernel_entry,
             KERNEL_STACK_TOP - STACK_PADDING,
@@ -350,7 +350,7 @@ fn emit_devices(args: &mut args::ArgsBuilder, platform: &Platform) {
 fn map_context(alloc: &mut PageAllocator, space: &AddressSpace, pid: Pid) {
     for page in 0..THREAD_CONTEXT_PAGES {
         let phys = alloc.alloc(pid);
-        space.map(alloc, phys, THREAD_CONTEXT_AREA + page * PAGE_SIZE, Pte::R | Pte::W);
+        space.map(alloc, phys, PROCESS_AREA + page * PAGE_SIZE, Pte::R | Pte::W);
     }
 }
 

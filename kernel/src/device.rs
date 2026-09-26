@@ -42,7 +42,7 @@
 use core::convert::TryFrom;
 
 use redoubt_sys::{Error, PAGE_SIZE};
-use redoubt_abi::PID;
+use redoubt_layout::Pid;
 
 use crate::budget::BudgetFrame;
 use crate::handle::{BudgetRef, DeviceRef, Handle, Object};
@@ -164,7 +164,7 @@ impl MemoryManager {
 
     /// The device `pid`'s handle `index` names, which must be of `kind`: `BadHandle`, then
     /// `WrongObject` (KERNEL-SPEC.md, the order of checks).
-    fn device_of_kind(&self, pid: PID, index: u32, kind: Kind) -> Result<Device, Error> {
+    fn device_of_kind(&self, pid: Pid, index: u32, kind: Kind) -> Result<Device, Error> {
         match self.handle(pid, index)?.object {
             Object::Device(d) if self.device_at(d).kind == kind => Ok(self.device_at(d)),
             _ => Err(Error::WrongObject),
@@ -211,7 +211,7 @@ impl MemoryManager {
     /// `boot_endpoint` gives out the one endpoint. The order is the loader's, which puts the
     /// Reset right first and the console and its interrupt next, so a test program can name
     /// one without a manifest.
-    pub fn boot_devices(&mut self, owner: BudgetFrame, first: Option<PID>, stamp: BudgetRef) {
+    pub fn boot_devices(&mut self, owner: BudgetFrame, first: Option<Pid>, stamp: BudgetRef) {
         let Some(entries) = devs() else {
             println!("Devices: the loader reported none");
             return;
@@ -339,7 +339,7 @@ impl MemoryManager {
     ///
     /// A DMA device joins the set of devices the caller's death must reset before its DMA
     /// frames are pooled (WP-K5b, OD3): it could be programmed with any of their addresses.
-    pub fn map_device(&mut self, pid: PID, h: u32) -> Result<(usize, usize), Error> {
+    pub fn map_device(&mut self, pid: Pid, h: u32) -> Result<(usize, usize), Error> {
         let d = self.device_of_kind(pid, h, Kind::Mmio)?;
         let slot = self.dma_slot_of(&d);
         let flags = redoubt_sys::MemFlags::READ | redoubt_sys::MemFlags::WRITE;
@@ -369,7 +369,7 @@ impl MemoryManager {
     /// The memory and its run are held, and charged, until the process ends; they are never
     /// reclaimed while it lives, and at its end they are pooled only once every device that could
     /// hold their address has confirmed a reset (WP-K5b, `dma.rs`).
-    pub fn dma_alloc(&mut self, pid: PID, h: u32, npages: usize) -> Result<(usize, u64), Error> {
+    pub fn dma_alloc(&mut self, pid: Pid, h: u32, npages: usize) -> Result<(usize, u64), Error> {
         let d = self.device_of_kind(pid, h, Kind::Mmio)?;
         if npages == 0 {
             return Err(Error::InvalidArgument);
@@ -390,7 +390,7 @@ impl MemoryManager {
     /// The `system_reset(h(Reset), kind)` handle check. It only checks: the reset itself is
     /// the dispatcher's, after it has let go of the memory manager (`redoubt.rs`), because the
     /// firmware call does not return and a cell held for ever is a spinlock held for ever.
-    pub fn check_reset(&self, pid: PID, h: u32) -> Result<(), Error> {
+    pub fn check_reset(&self, pid: Pid, h: u32) -> Result<(), Error> {
         self.device_of_kind(pid, h, Kind::Reset).map(|_| ())
     }
 }

@@ -12,7 +12,7 @@
 //! Objects are stored as plain 64-bit words, encoded and decoded by their own modules, so no
 //! frame is ever read as a Rust type with invalid bit patterns (an enum, a reference, a `bool`).
 
-use redoubt_abi::arch::{PHYSMAP_PHYS_BASE, PHYSMAP_SIZE, physmap_virt};
+use redoubt_layout::{PHYSMAP_PHYS_BASE, PHYSMAP_SIZE, physmap_virt};
 use redoubt_sys::PAGE_SIZE;
 
 /// The physmap address of byte `offset` of the frame at `phys`, for an access of `size` bytes.

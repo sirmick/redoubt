@@ -34,8 +34,7 @@ use redoubt_wire::proto::startup::Message;
 const MAX_PHNUM: usize = 64;
 
 /// The ELF class this build's stub accepts: `usize`-width segment addresses only fit this
-/// target's own class, and the stub links for one width at a time (`libs/abi`'s
-/// `target_pointer_width` split).
+/// target's own class, and the stub links for one width at a time.
 #[cfg(target_pointer_width = "32")]
 const ELF_CLASS: Class = Class::ELF32;
 #[cfg(target_pointer_width = "64")]
