@@ -6,7 +6,7 @@ the static files seeded into the filesystem. Everything it produces is written u
 
 | Source | What |
 | --- | --- |
-| `boot.toml` | Proposed boot recipe (not consumed yet): kernel, servers and the `grants` manifest. |
+| `boot.toml` | Proposed boot recipe (not consumed yet): the kernel and the servers. |
 | `disk.toml` | Proposed disk recipe (not consumed yet): partition table and littlefs volume. |
 | `root/` | Planned static filesystem contents; not generated or installed yet. |
 

@@ -1,7 +1,8 @@
 //! Memory churn against the ledger (R6, I5): 64 rounds of map, touch and unmap, and 64 lends to
-//! this program's own log server thread and back (`logsrv::start_serving`), with `system`'s page usage read
-//! after each and required to be exactly where it started. A frame charged and not uncharged (or the reverse)
-//! on any of the legacy paths shows as drift. Must run as the loader's first program, which holds `system`.
+//! this program's own log server thread and back (`logsrv::start_serving`), with `system`'s page
+//! usage read after each and required to be exactly where it started. A frame charged and not
+//! uncharged (or the reverse) on any of those paths shows as drift. Must run as the loader's first
+//! program, which holds `system`.
 
 #![no_std]
 #![no_main]

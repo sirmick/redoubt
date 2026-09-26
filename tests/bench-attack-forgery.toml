@@ -1,7 +1,7 @@
 description = "Bench self-check: an attacker cannot print another party's verdict line through log-server (lend or move)"
 arch = ["rv64"]
 kind = "boot"
-# PID 3 forger sends grant-attack's verdict lines and a DONE line in another's name, each on a
+# PID 3 forger sends irq-attack's verdict lines and a DONE line in another's name, each on a
 # line of its own, once by lend and once by transfer, then reports DONE itself.
 programs = ["log-server", "forger"]
 timeout_secs = 20

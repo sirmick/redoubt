@@ -8,8 +8,8 @@
 //! the UART.
 //!
 //! **Its children cannot print.** A child is a copy of this image (`test_programs::spawn`), so it
-//! holds the code, but its handle table holds only what `process_start` gave it and it has no
-//! device grant, so `map_device` and the legacy `MapMemory` of the UART both refuse it. Every
+//! holds the code, but its handle table holds only what `process_start` gave it, so `map_device`
+//! of the UART refuses it. Every
 //! line below is therefore this process's, and what it says about a child is what the *kernel*
 //! told it in an exit notice: a cause, a code, an account and a label set none of which a child
 //! can choose.

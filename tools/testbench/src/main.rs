@@ -95,7 +95,6 @@ fn main() -> Result<()> {
             &programs,
             &[],
             &[],
-            "",
             false,
             false,
             Profile::Release,
@@ -225,7 +224,6 @@ fn prepare(
     programs: &[Program],
     files: &[case::BundleFile],
     extra_kernel_features: &[String],
-    manifest: &str,
     tamper: bool,
     bare_archive: bool,
     profile: Profile,
@@ -245,7 +243,6 @@ fn prepare(
         &builder.artifact(target, "redoubt-kernel", profile),
         &programs,
         &files,
-        manifest,
         tamper,
         bare_archive,
     )?;
@@ -308,7 +305,6 @@ fn run_case(
     // Build everything once, then boot it once per hart count. A build failure is the bench's
     // or the code's problem, never what a `must_fail` is waiting for, so it is not judged.
     let bundle = logs.join(format!("{}-{}.tar", case.name, target.name));
-    let manifest = boot.grant.iter().flat_map(|g| g.manifest_lines()).collect::<Vec<_>>().join("\n");
     let profile = if boot.debug_assertions { Profile::Checked } else { Profile::Release };
     let bundle = match prepare(
         builder,
@@ -317,7 +313,6 @@ fn run_case(
         &boot.programs,
         &boot.file,
         &boot.kernel_features,
-        &manifest,
         boot.tamper_bundle,
         boot.sign_bare_archive,
         profile,
