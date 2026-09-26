@@ -37,6 +37,10 @@ that is part built and part planned is split in two.
 | `Status: built · partly tested: <gap> · tested: <tests>` | The code exists; the gap says what no test attacks yet, and the tests (when named) cover the rest. |
 | `Status: planned · M2 (usable shell)` | Nothing of it is built; it arrives in the named milestone. The section ends with an **Open:** list of what is still undecided. |
 
+"Built" means the code exists and its named tests pass. A host test or a build case is not a
+boot: code built and host-tested is not thereby running in the integrated system, and running
+there is its own planned section.
+
 A section without its own status line inherits its nearest parent's. Purpose, Residual risks and
 Why sections carry none: they say why and what is left, not what is claimed. Status lines appear
 on the kernel, server and userland pages and on the test bench page; plan, follow-up and idea
