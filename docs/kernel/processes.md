@@ -30,7 +30,8 @@ A process has:
 - an **exit endpoint**, named by its creator, where its exit notice goes;
 - its open calls, at most `MAX_OPEN_CALLS` (64) ([IPC](ipc.md#r4a-open-calls));
 - a **process object**: one page charged to its creator's budget, which holds the exit notice
-  (see [Exit notices](#exit-notices)). A process handle names this object.
+  (see [Exit notices](#exit-notices)), and one count against that budget's process limit. A
+  process handle names this object.
 
 PIDs run from 2 to `MAX_PROCESS_COUNT` (64: the PIDs there are, the kernel's included); PID 1 is
 the kernel. `process_create` draws the PID at random from the free ones: a PID is free when no
@@ -92,7 +93,7 @@ threads. A fault in any thread ends the whole process.
 
 ### Creating and starting
 
-Status: built · partly tested: `OutOfProcesses` from `process_create` and `OutOfMemory` from `process_start` are not attacked by a case · tested: bench:process, bench:process-attack, bench:stub-launch, host:redoubt-model::contexts_are_separate_from_creator_object_on_both_widths, host:redoubt-model::process_map_destination_validation_precedes_started_state, mutation:ProcessInWeightlessBudget, mutation:R6ProcessObjectFree, mutation:R6ProcessObjectChargedToBudget
+Status: built · partly tested: `OutOfProcesses` from `process_create` and `OutOfMemory` from `process_start` are not attacked by a case, and the kernel departs from R6 (charging)'s process-object count (Residual risks) · tested: bench:process, bench:process-attack, bench:stub-launch, host:redoubt-model::contexts_are_separate_from_creator_object_on_both_widths, host:redoubt-model::process_map_destination_validation_precedes_started_state, mutation:ProcessInWeightlessBudget, mutation:R6ProcessObjectFree, mutation:R6ProcessObjectChargedToBudget
 
 | Call | Arguments -> result | What it does |
 | --- | --- | --- |
@@ -117,6 +118,14 @@ What a process costs ([objects](objects.md)):
 - its saved thread contexts, `PROCESS_IMPL_PAGES` (1 page on rv32, 2 on rv64), its root page
   table and every other page-table page, its handle-table pages, one IPC page per thread and the
   pages mapped in it: all charged to **the budget it runs in**, and all given back when it ends.
+
+A process object counts one against its creator's budget's process limit, from `process_create`
+until the object is freed, as its page is charged there
+([R6 (charging)](budgets.md#r6-charging)). The process also counts against the budget it runs in
+while it lives. Because every process limit is carved from `root`'s, live PIDs never exceed
+`root`'s limit, and no budget can take another's PIDs. The kernel departs from this: it counts a
+process only in the budget it runs in, and only while it lives, so an ended process's PID is held
+outside every limit until its notice goes (Residual risks).
 
 **`process_map`** moves pages from the caller into a process that has not started. The source
 must be whole pages of the caller's own RAM, not lent (a reserved page is backed first); device
@@ -325,8 +334,9 @@ Status: built · tested: bench:process-lifecycle, bench:process-attack, bench:st
   budget the process ran in, not those of the blamed sender. A `system`-class server's notice
   can carry a labelled caller's account and labels to a `user`-class owner of its exit endpoint.
   Only a creator holding a `system`-class budget handle can set this up.
-- **PIDs are one global pool of 63.** An ended process's PID stays held while its notice is
-  untaken, and it no longer counts against any process limit. What bounds these PIDs is the
+- **PIDs are one global pool of 63, and untaken notices hold them outside every limit.** The
+  kernel departs from R6's process-object count: an ended process's PID stays held while its
+  notice is untaken, and it no longer counts against any process limit. What bounds these PIDs is the
   creator's pages, so one creator can hold every free PID with a single one-process budget, and
   every other `process_create`, in any part of the budget tree, then gets `OutOfProcesses`.
   Follow-up: [todo](../todo/pid-pool-pinning.md).

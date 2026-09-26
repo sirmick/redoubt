@@ -113,7 +113,7 @@ flowchart TD
 
 ### Charging
 
-Status: built · partly tested: interrupt handling billed to the device's owner is not attacked by a case · tested: bench:sched-sleep-gaming, bench:sched-exit-churn, bench:sched-timer-flood, bench:sched-server-busy, bench:sched-destroy-billing, host:redoubt-stride::a_split_charge_equals_the_whole, host:redoubt-stride::every_charge_counts_at_any_weight, host:redoubt-stride::a_deschedule_charges_at_least_one_unit_and_a_destroy_only_what_ran, mutation:R12ShortRunsFree, mutation:R12DropRemainder, mutation:R12ExitRunsFree, mutation:R12NoMinimumCharge, mutation:R12FoldAtNewWeight
+Status: built · partly tested: interrupt handling billed to the device's owner is not attacked by a case, and the kernel departs from whole-cost billing on a deadline's destruction (Residual risks) · tested: bench:sched-sleep-gaming, bench:sched-exit-churn, bench:sched-timer-flood, bench:sched-server-busy, bench:sched-destroy-billing, host:redoubt-stride::a_split_charge_equals_the_whole, host:redoubt-stride::every_charge_counts_at_any_weight, host:redoubt-stride::a_deschedule_charges_at_least_one_unit_and_a_destroy_only_what_ran, mutation:R12ShortRunsFree, mutation:R12DropRemainder, mutation:R12ExitRunsFree, mutation:R12NoMinimumCharge, mutation:R12FoldAtNewWeight
 
 Runtime is counted in timebase ticks at the trap boundary. There are two ways into user mode
 (resuming a thread, returning from a call) and one way out (the trap handler). On every trap from
@@ -138,10 +138,9 @@ t = rem + ticks x STRIDE;   pass += t / w;   rem = t mod w      (w: the free wei
 
 Kernel time is billed as well:
 - a system call's time is its caller's;
-- an expired timeout is billed to its thread's budget, and a deadline's destruction work to the
-  dying budget, whose debt then moves to its parent ([Inheritance](#inheritance)); each walk
-  that finds an expired item is billed with it, and the last walk, which finds nothing, is
-  nobody's, so one entry does at most one walk nobody pays for;
+- an expired timeout is billed to its thread's budget, and a deadline's destruction as below;
+  each walk that finds an expired item is billed with it, and the last walk, which finds
+  nothing, is nobody's, so one entry does at most one walk nobody pays for;
 - an interrupt's handling is billed to the owner of its device object
   ([R5 (interrupts)](devices.md#r5-interrupts)); one with no device object, to nobody;
 - `kmain`'s pick and switch after a deschedule are the descheduled budget's;
@@ -153,6 +152,13 @@ weight it has once the child is gone, not at the sliver it kept while the child 
 In `bench:sched-destroy-billing` a parent that kept 10 of 1000 destroys the child holding 990 and
 is back on the CPU within twice the destruction's cost and four slices; billed at 10, it would wait
 for seconds.
+
+Every destruction's whole cost is billed to someone. For `budget_destroy` that is the caller, as
+the call's own kernel time. For a deadline it is the top's parent, after its carve returns, or the
+nearest ancestor with free weight above 0 if the parent has none; `root` always has. No part of a
+destruction is billed to nobody ([R10 (destruction)](budgets.md#r10-destruction)). The kernel
+departs from this on a deadline: it bills the dying budget up to the lift, whose debt then moves
+to its parent ([Inheritance](#inheritance)), and the rest to nobody (Residual risks).
 
 A server that works for a caller spends its own budget's CPU: no time is donated
 ([Residual risks](#residual-risks)). CPU charging is separate from page charging
@@ -252,13 +258,20 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-Status: built · tested: bench:sched-share, bench:sched-sleep-gaming, bench:sched-idle-gap, bench:sched-exit-churn, bench:sched-budget-churn, bench:sched-carve-inflation, bench:sched-debt-lift, bench:sched-timer-flood, bench:sched-server-busy, bench:sched-large-weight, host:redoubt-stride::the_crate_and_the_model_agree, host:redoubt-stride::a_broken_model_disagrees, host:redoubt-model::scheduler_fairness, host:redoubt-model::scheduler_contracts_hold, mutation:R12PriorityById, mutation:R12IgnoreWeight, mutation:R12WakeBanksCredit, mutation:R12TieQueuedFirst, mutation:R12RequeueAhead, mutation:R12RequeueLifo, mutation:R12PreemptOnWake, mutation:R12TimeoutWakePreempts, mutation:R12NoFloorWhenIdle, mutation:R12ShortRunsFree, mutation:R12DropRemainder, mutation:R12ExitRunsFree, mutation:R12DestroyDropsDebt, mutation:R12CreateAtFloorOnly, mutation:R12LiftByMax, mutation:R12StrideWeightIsLimit, mutation:R12UnnormalizedLift, mutation:R12LiftCountsEntryWait, mutation:R12FoldAtNewWeight, mutation:R12NoMinimumCharge
+Status: built · partly tested: the bound on a call's kernel time is not attacked by a case, and the kernel departs from it in `map_anon`'s search; a deadline's destruction is billed only in part · tested: bench:sched-share, bench:sched-sleep-gaming, bench:sched-idle-gap, bench:sched-exit-churn, bench:sched-budget-churn, bench:sched-carve-inflation, bench:sched-debt-lift, bench:sched-timer-flood, bench:sched-server-busy, bench:sched-large-weight, host:redoubt-stride::the_crate_and_the_model_agree, host:redoubt-stride::a_broken_model_disagrees, host:redoubt-model::scheduler_fairness, host:redoubt-model::scheduler_contracts_hold, mutation:R12PriorityById, mutation:R12IgnoreWeight, mutation:R12WakeBanksCredit, mutation:R12TieQueuedFirst, mutation:R12RequeueAhead, mutation:R12RequeueLifo, mutation:R12PreemptOnWake, mutation:R12TimeoutWakePreempts, mutation:R12NoFloorWhenIdle, mutation:R12ShortRunsFree, mutation:R12DropRemainder, mutation:R12ExitRunsFree, mutation:R12DestroyDropsDebt, mutation:R12CreateAtFloorOnly, mutation:R12LiftByMax, mutation:R12StrideWeightIsLimit, mutation:R12UnnormalizedLift, mutation:R12LiftCountsEntryWait, mutation:R12FoldAtNewWeight, mutation:R12NoMinimumCharge
 
 A budget's CPU follows its free weight, in one queue with no priority. While it has a runnable
 thread, a budget gets at least its weight's share of the CPU the runnable budgets share. No
 pattern of spinning, sleeping and waking, exiting or faulting, creating, carving and destroying
 budgets, or arming timeouts and deadlines gets it more. The rule's parts are the sections above:
 free weight, the preemption points, the wake rule and ranks, charging and inheritance.
+
+A system call's kernel time is bounded by a constant plus a term linear in the pages it maps or
+the objects it names. It never depends on the extent of an address area or on what other
+processes hold. Billing it to the caller does not excuse it, because every wake waits for it.
+R10's scan of every kernel-object frame is the one stated exception
+([todo](../todo/budget-destroy-cost.md)). The kernel departs from this bound in `map_anon`'s
+address search ([memory](memory.md#residual-risks)).
 
 It is attacked three ways:
 - **Boot cases, in virtual time**, count each budget's work over a window and compare it with
@@ -338,12 +351,16 @@ Status: built · partly tested: a picked thread that dies before the switch, and
   this workload, not a measurement fault. Still to decide: re-pin the target with evidence, assert the true
   sum (decision wake plus R10 time, 80 ms), or change the steward stand-in; and pin the guest seed
   so runs repeat. Follow-up: [todo](../todo/sched-latency-target.md).
-- **The kernel is not preemptible.** A destruction's kernel time delays every wake on the
-  machine. R10's time dominates lease termination and grows with the objects it walks
-  ([budgets](budgets.md); follow-up: [todo](../todo/budget-destroy-cost.md)). Ending a DMA driver
+- **The kernel is not preemptible.** A call's or a destruction's kernel time delays every wake
+  on the machine, which is why R12 bounds a call's kernel time whoever pays for it. R10's time
+  is the stated exception: it dominates lease termination and grows with the objects it walks
+  ([budgets](budgets.md); follow-up: [todo](../todo/budget-destroy-cost.md)). `map_anon`'s
+  search breaks the bound ([memory](memory.md#residual-risks); follow-up:
+  [todo](../todo/map-anon-search-cost.md)). Ending a DMA driver
   adds up to `RESET_US` (1 ms) of reset polling for each device it held, at most
   `MAX_DMA_DEVICES` (16) ([devices](devices.md)).
-- **A deadline's last steps are billed to nobody.** On a deadline the dying budget is billed for
+- **A deadline's last steps are billed to nobody.** The kernel departs from the whole-cost
+  billing rule ([Charging](#charging)). On a deadline the dying budget is billed for
   the destruction's work up to the lift. The rest (closing handles in every table, freeing
   frames) comes after the bill and is charged to no budget. A budget of free weight 0 is charged
   nothing at all, so the deadline of an empty revocation scope costs its creator only the

@@ -188,7 +188,7 @@ Status: built · partly tested: that no call names a physical frame is argued fr
 
 ### R11 (memory)
 
-Status: built · partly tested: W^X is kept for RAM pages only, and device registers and `dma_alloc` pages outside it are not attacked; that a frame freed with data in it comes back zero is attacked only in the model; the absence of any physical-address argument is argued from the call table, not attacked · tested: bench:wx, bench:write-only-attack, bench:map-fixed-attack, bench:device, bench:mem-attack, bench:process-attack, bench:return-lent-unmapped, bench:dma-rules, bench:dma-reset-reuse, mutation:R11NoZeroing, mutation:R11SetFlagsAllowsWx, mutation:R11AllowsWriteOnly, mutation:R11LendStaysMapped, mutation:R11MapFixedSkipsOverlap
+Status: built · partly tested: the kernel departs from per-frame W^X, because `set_flags` makes device registers and `dma_alloc` pages executable on request, and no case attacks it; that a frame freed with data in it comes back zero is attacked only in the model; the absence of any physical-address argument is argued from the call table, not attacked · tested: bench:wx, bench:write-only-attack, bench:map-fixed-attack, bench:device, bench:mem-attack, bench:process-attack, bench:return-lent-unmapped, bench:dma-rules, bench:dma-reset-reuse, mutation:R11NoZeroing, mutation:R11SetFlagsAllowsWx, mutation:R11AllowsWriteOnly, mutation:R11LendStaysMapped, mutation:R11MapFixedSkipsOverlap
 
 - **No RAM page is ever mapped writable and executable** ([W^X](../GLOSSARY.md#wx)): not by one
   entry, and not by two, since a RAM frame has at most one user entry at a time (the kernel's
@@ -196,7 +196,12 @@ Status: built · partly tested: W^X is kept for RAM pages only, and device regis
   bit, is `InvalidArgument`), again by `map_fixed` and `process_map` before they charge, and
   again by the page-table layer, which refuses to build such an entry, so no check rests on
   another. `set_flags` may add `EXECUTE` only to a page it makes not writable in the same call.
-  Device registers and `dma_alloc` pages are not covered (Residual risks).
+- **W^X holds per frame, not only per mapping.** Only RAM that a process owns is ever
+  executable. Device registers and DMA frames are never mapped executable: the device, or
+  another mapping of the same registers (in this process or a co-holder's, since a mapping
+  outlives its handle), can write them underneath. `map_device` and `dma_alloc` map read-write
+  and never executable, and `process_map` refuses device and DMA pages. The kernel departs from
+  this in `set_flags`, which grants `EXECUTE` on both (Residual risks).
 - **Writable implies readable.** The privileged architecture reserves the write-only entry, so
   `map_anon`, `map_fixed`, `set_flags` and `process_map` refuse `WRITE` without `READ`.
 - **Flags are checked before anything is charged or moved** for the new mapping, so a step
@@ -251,7 +256,8 @@ kernel, running the call to its end with interrupts off, would stall every other
   `MAX_LEND_PAGES` (16).
 
 `map_anon` does not meet R22: its search is bounded by its 256 MiB area, not by what is mapped
-in it (Residual risks).
+in it, so it also breaks the bound R12 (scheduling) sets on a call's kernel time (Residual
+risks).
 
 ## Failure and restart
 
@@ -279,22 +285,29 @@ Status: built · tested: bench:touch-beyond-ram, bench:lend-untouched-page, benc
   too. Such tables stay charged to the process's own budget, so a process can strand only its
   own pages, but its usage stays above what it has mapped. Follow-up:
   [todo](../todo/page-table-freeing.md).
-- **`map_anon`'s search costs what the area allows, not what is mapped.** It tries each start
-  in its 256 MiB area (65536 pages) and tests the pages of the run from there until one is
-  taken. One page mapped in the middle of the area makes a request for half of it test about
-  5 × 10^8 pages before it fails, with interrupts off and nothing charged, which stalls every
-  other process meanwhile. The receiver's message area uses the same search over 1024 pages.
-  No case measures it. Follow-up: [todo](../todo/map-anon-search-cost.md).
+- **`map_anon`'s search costs what the area allows, not what is mapped.** It runs before any
+  budget check. It tries each start in its 256 MiB area (65536 pages) and tests the pages of
+  the run from there until one is taken. One page mapped in the middle of the area makes a
+  request for half of it test about 5 × 10^8 pages before it fails. The search's kernel time is
+  billed to the caller, as every call's is, so the caller pays for it in CPU share. The harm is
+  latency: the kernel runs the search with interrupts off, so every wake, timeout, deadline and
+  interrupt on the machine waits for it, and a bill after the fact gives nobody that time back.
+  The kernel departs here from R12, which bounds a call's kernel time by what it
+  maps or names ([scheduling](scheduling.md#r12-scheduling)). The receiver's message area uses
+  the same search over 1024 pages. No case measures it. Follow-up:
+  [todo](../todo/map-anon-search-cost.md).
 - **`map_fixed` can fill `map_anon`'s area.** A process that maps the whole area with
   `map_fixed` makes its own later `map_anon` calls fail with `OutOfMemory`, where the
   [model](model.md), whose placement is unbounded, succeeds. It harms only that process.
-- **W^X does not cover device memory.** `set_flags` accepts `EXECUTE` on mapped device
+- **`set_flags` departs from R11 on device memory.** It accepts `EXECUTE` on mapped device
   registers and on a held `dma_alloc` page, because both count as the caller's own pages. A
   process that maps one device twice with `map_device` gets two mappings of the same physical
   memory, and can make one read-write and the other read-execute. A DMA page made executable
-  is not writable through its mapping, but the device can still write it, so a driver can run
-  code its device wrote. No case attacks either. Follow-up:
-  [todo](../todo/device-mapping-exec.md).
+  is not writable through its mapping, but the device can still write it. So a process holding
+  a device object, such as a block or network driver, can make device registers or its DMA
+  buffers executable, and hostile device input can become injected code in a compromised
+  driver, where W^X would have left the attacker only the driver's own code to reuse. No case
+  attacks it. Follow-up: [todo](../todo/device-mapping-exec.md).
 - **One hart.** `fence.i` and the TLB flush act on the hart that runs the call. Running user
   code on several harts needs them on every hart, and when a thread moves
   ([SMP](../beyond/smp.md)).

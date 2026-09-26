@@ -212,13 +212,19 @@ deadline itself. The only delay is the kernel work already in progress when the 
 
 ### Timer work is paid by whoever asked for it
 
-Status: built · tested: bench:sched-timer-flood
+Status: built · partly tested: the kernel departs from this for a deadline's destruction, and floods of weight-0 deadline budgets past the 64 of the case are not attacked · tested: bench:sched-timer-flood
 
-Each expired item's work is billed to its own budget under R12: a timeout to its thread's budget,
-a deadline to the dying budget, whose debt then moves to its parent. So is the walk that found
-the item. A budget with many timeouts due at once pays one walk for each. The one walk per entry
-that finds nothing more is the kernel's. So a process that arms many timers a microsecond apart,
-or creates many budgets with staggered deadlines, spends its own CPU share, not a neighbour's.
+Each expired item's work is billed under R12: a timeout to its thread's budget, a deadline's
+whole destruction to the dying budget's parent, after its carve returns, or to the nearest
+ancestor with free weight above 0 ([scheduling](scheduling.md#charging)). So is the walk that
+found the item. A budget with many timeouts due at once pays one walk for each. The one walk per
+entry that finds nothing more is the kernel's. So a process that arms many timers a microsecond
+apart, or creates many budgets with staggered deadlines, spends its own CPU share, not a
+neighbour's.
+
+The kernel departs from this for a deadline: it bills the dying budget only up to the lift,
+whose debt then moves to its parent, and the rest, all of it for a budget of free weight 0, to
+nobody (Residual risks).
 
 ## Failure and restart
 
@@ -261,6 +267,11 @@ Status: built · partly tested: a boot with no `Time` tag is not attacked by a c
 - **Expiry walks threads.** A walk is bounded by `MAX_PROCESS_COUNT` x `MAX_THREADS` (64 x 31,
   compile-time constants no process can change) plus the deadline list. Each walk that finds an
   item is billed to the item's budget; the last walk of each entry is paid by nobody.
+- **Part of a deadline's destruction is billed to nobody**, all of it for a budget of free
+  weight 0, so a creator of many empty weight-0 budgets with staggered deadlines has the machine
+  spend time no budget pays for. The 64 deadlines of `bench:sched-timer-flood` leave a victim its
+  share; larger floods are not attacked ([scheduling](scheduling.md#residual-risks)). Follow-up:
+  [todo](../todo/deadline-destroy-billing.md).
 - **Equal-instant order is argued, not attacked.** Timeouts before deadlines at one instant is
   checked by the model's mutation only; no bench case lands a timeout and a deadline on the same
   microsecond.

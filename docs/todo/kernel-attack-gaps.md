@@ -79,6 +79,7 @@ gap: the page's section, the claim, and what no case attacks.
 - Charging: interrupt handling billed to the device object's owner is not attacked.
 - Responsiveness: decision wake plus R10 time is not asserted as one sum; `budget_destroy` call-to-return is recorded, not asserted.
 - Charging: floods of weight-0 budgets with deadlines beyond the 64 of `sched-timer-flood` are not attacked (their destruction is billed to nobody).
+- R12 (scheduling): the bound on a call's kernel time is not attacked; `map_anon`'s search departs from it ([map_anon's search cost](map-anon-search-cost.md)).
 - R23 (no test channels): no case builds the production kernel and scans it for the trace.
 - Failure and restart: a picked thread dying before the switch, and a full queue, are not attacked.
 
@@ -87,6 +88,8 @@ gap: the page's section, the claim, and what no case attacks.
 - The argument block: the kernel's refusals of a malformed block (a tag past the end, a second `MREx`, a bad `Devs` entry, a `Grnt` tag) are not attacked.
 - R16 (image confinement): an image cut short inside its segment data, a writable and executable segment, and a bundle of more than 63 programs are not attacked; the truncated-image case runs on rv64 only.
 - R17: a short or missing seed and a missing timebase are not attacked (every QEMU boot supplies both); nor an initrd under 64 bytes.
+- Verified boot, R15 (verified boot) and R17: the two signature cases run on rv64 only.
+- Devices handed to the first program: a DMA device past the sixteenth getting no object is not attacked (as devices.md's).
 - Failure and restart: a reboot through `system_reset` (the chain rerun, the bundle verified again) is not attacked.
 
 ### memory-layout.md
