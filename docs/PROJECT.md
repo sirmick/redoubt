@@ -36,7 +36,8 @@ Wash has no profile registry, so each member's launch carries its tier's `model`
 The owner's models are named in the tier table: Claude Opus for `frontier` and `workhorse`, Claude
 Sonnet for `light`. Resolve each to the provider's current model ID from `config_options`; if a
 named model is not offered, ask the owner, and do not guess IDs or silently substitute. Keep
-`max_active` at 2. Preserve the models the owner has chosen for running members.
+`max_active` at 3 (one writer per parallel branch plus a reviewer). Preserve the models the owner
+has chosen for running members.
 
 The project root is the orchestrator's working directory (`.` below); resolve it to an absolute
 path before submitting. Call `workspace_configure` with a single setup or patch. This is a
@@ -112,13 +113,26 @@ Size the review panel to the risk ([SWARM](SWARM.md#running-a-package)), in one
 `can_spawn:false`, the worktree as `cwd` and explicit instructions, with role `implementer` or
 `reviewer`:
 
-- Trusted code: `<package>-implementer` plus three reviewers, `<package>-red` (`workhorse`),
-  `<package>-simplifier` and `<package>-editor` (`light`, `capability:"reviewer"`).
+- Tier A ([SWARM](SWARM.md#two-tiers)): `<package>-implementer` plus three reviewers,
+  `<package>-red` (`workhorse`; `effort:"medium"` for the merge gate, set live with
+  `member_control configure`), `<package>-simplifier` and `<package>-editor` (`light`,
+  `capability:"reviewer"`).
+- Tier B: `<package>-implementer` plus one reviewer, `<package>-red` at low if the diff touches a
+  capability, a label boundary, an approval or another budget, else `<package>-editor`. Several
+  Tier B packages share one review round.
 - Tests, docs, comments or tooling configuration only: `<package>-implementer` plus one reviewer.
 
-Keep a package's reviewers through review and fix cycles; do not replace them between rounds.
-Hand members off at about 300K tokens as [SWARM](SWARM.md#staging-commits-and-handoffs) says; the
-orchestrator ends the member and launches a fresh one under a new key from its handoff file.
+Every member's instructions carry its **reading list** (the handoff file if any, one example of
+the work, the pages and code for its first step) and the rule that it reads nothing else before
+writing; `can_spawn:false` does not stop a provider's own sub-agents, so the instructions also say
+that helper agents draft nothing that is reviewed and that the member reads in full every file it
+commits. Watch `usage` in the team view: hand members off at about 250K tokens as
+[SWARM](SWARM.md#staging-commits-and-handoffs) says; the orchestrator ends the member and launches
+a fresh one under a new key from its handoff file.
+
+Keep a package's reviewers through review and fix cycles; do not replace them between rounds. A
+member holds one active assignment: create the next one after it completes, or launch a second
+reviewer when two rounds are ready at once.
 
 Reviewers complete their assignment with `cc:["<package>-implementer"]`. The orchestrator creates a
 round's review assignments together, then waits with
@@ -152,11 +166,14 @@ a blocked approval is not a messaging failure, so report it rather than relaunch
 ## QA and design decisions
 
 Wash owns the durable QA records and the live **Questions** tab. Configure `qa_document` at
-setup: `.wash/QA.md` under the project root, titled `Redoubt QA`. Wash creates the file and
+setup: `.wash/QA-<wave>.md` under the project root (one file per wave; the previous wave's file is
+committed with its merge and left alone), titled `Redoubt QA`. Wash creates the file and
 refreshes its complete history after every QA update, including human answers; it is the only
 writer. The QA file is not documentation and nobody reads it whole: use `workspace_get` with
-`view:"qa"` and a `thread_id`. Check `qa_document_status`; on an error the backend records are safe
-and file writes retry. Always reuse the configured filename when returning to the project.
+`view:"qa"` and a `thread_id`. Thread bodies are at most 2,000 bytes; a plan or a review report is
+a file in the worktree and the thread holds the pointer. Check `qa_document_status`; on an error
+the backend records are safe and file writes retry. Reuse a wave's filename when returning to it
+mid-wave.
 
 Open a question and deliver it in one call with `message_send`:
 
@@ -193,7 +210,17 @@ Use the actual revision, references and evidence, not these placeholders.
   HTML comment opener (`<!` followed by two hyphens) in one: the generated QA file is Markdown, and
   the opener hides everything after it.
 - Recovered members after a backend restart are paused: resume them with `member_control`
-  ([below](#acceptance-and-recovery)).
+  ([below](#acceptance-and-recovery)). The whole workspace pauses when the owner's session ends;
+  on return, `member_control resume` on the orchestrator's own member ID and any working member,
+  then a `workspace_configure` patch, sets it active again; queued messages then dispatch.
+- A thread reply that reaches a member only as a copy (`cc`) does not wake it; send it a direct
+  `instruction` or `answer` as well.
+- `waiting.until_assignments` takes only IDs of assignments already created; create first, then
+  wait.
+- `workspace_get` with `view:"state"` and `inbox_read` can return hundreds of kilobytes; use the
+  team view (`workspace_get({})`) and `view:"qa"` with a `thread_id`.
+- A resolve on a thread whose assignee has ended fails: reassign it to the orchestrator's member ID
+  (not a role name) first.
 
 ## Inbox, status and waiting
 

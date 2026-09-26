@@ -43,9 +43,10 @@ context, so the cheapest capable tier is used.
   flags any answer that would open an insecure or complex door. Asks the Architect when a package
   meets a design decision the pages do not settle, and never lets an implementer guess.
 - Escalates to the owner only a genuine owner choice, and stops only the work that depends on it.
-- Commits and merges; implementers and reviewers do not.
-- Bounds every task it hands out: how many tool calls before the first written result, and what to
-  return.
+- Merges; implementers commit on their own package branch and reviewers commit nothing.
+- Bounds every task it hands out: what to read (a reading list, not "the book"), how many tool
+  calls before the first written result, and what to return. Context is the cost: a member that
+  reads broadly before writing hands off before it has written anything.
 - Keeps a running report for the owner: packages started and their state, questions asked and
   their status, review verdicts, what was fixed or recorded as a follow-up, merges (package and
   commit), what waits on the owner, and the next wave.
@@ -68,9 +69,11 @@ context, so the cheapest capable tier is used.
 
 Builds exactly one package and nothing else, and does not break these rules:
 1. **One package, one worktree, one branch.** No other package's files.
-2. **Stage only the paths the package delivers.** Never `git add -A` or `git commit -a`, and never
-   run git against the shared checkout. Leave the work staged and uncommitted so the reviewers and
-   the orchestrator see the diff, unless the assignment says to commit.
+2. **Stage only the paths the package delivers,** and commit them on the package branch in small
+   groups: never more than about 50K tokens of uncommitted work, never `git add -A` or
+   `git commit -a`, never git against the shared checkout. Reviewers read the branch's commits.
+   Every file committed was read in full by the member that commits it; helper sub-agents draft
+   nothing that is reviewed.
 3. **The design is read-only.** A contradiction, a gap, or a decision the pages do not settle is
    reported as a blocking question naming the page, the rule and the options, never improvised.
 4. **No undocumented `unsafe`,** and the ratchet only falls
@@ -83,6 +86,10 @@ Builds exactly one package and nothing else, and does not break these rules:
 7. **The real harness.** Run the package's cases and the focused tests with `cargo testbench`, and
    report the exact commands and exit codes.
 8. **Rust and formatting,** per [CONTRIBUTING.md](../CONTRIBUTING.md#formatting).
+9. **The pages move with the code.** A section the package builds goes from planned to built in
+   the same commit as the tests its status line names; an Open item the package decides leaves
+   the page in that commit; a rule the code departs from is written as the rule, with the
+   departure as a residual and a follow-up ([lock step](#the-pages-move-with-the-code)).
 
 It reports: what was delivered and the paths changed; the tests run, with exit codes, and each new
 attack case with why its verdict comes from the system; the `unsafe` count before and after, the
@@ -116,8 +123,11 @@ A package is a unit of work one implementer can finish and a panel can review. I
 - **ID and size:** a short ID (letters and a number, such as `K7`, `S2` or `DOC1`) and S (hundreds
   of lines), M (about 1,500) or L (larger). An ID is never a lone R, I or M followed by digits,
   which the book uses for rules, invariants and milestones.
-- **Reads:** the pages and rules it implements.
-- **Delivers:** the paths it owns, which is its staging boundary, and the tests it adds.
+- **Tier:** A or B ([two tiers](#two-tiers)).
+- **Reads:** the pages and rules it implements, as a list: the member reads these and nothing
+  else before it starts.
+- **Delivers:** the paths it owns, which is its staging boundary, the tests it adds, and the
+  **pages** whose status lines or Open lists change.
 - **Needs:** the packages that must be merged first, and the decisions that must be settled.
 - **Accepted when:** the cases that must pass, including every attack case for a security property
   it touches.
@@ -125,6 +135,42 @@ A package is a unit of work one implementer can finish and a panel can review. I
 The remaining work of each milestone, in order, is on its plan page, starting with
 [M1 (separation and containment)](plan/m1-separation.md); the orchestrator cuts it into packages
 and records them in the [claims](#claims).
+
+### Two tiers
+
+The tier is decided by what the code can reach, not by its language. A package is **Tier A** if
+any answer is yes:
+- does it hold, mint or forward a capability, or change what a budget may reach;
+- does it parse input from another label set or from outside the box (a device, the network, a
+  file another principal wrote);
+- does it render or carry an approval;
+- does it run outside one session's own budget: the kernel, the loader, the stub, the runtime
+  library, the wire formats, the model, the drivers, `init`, the steward, `keyd`, `sshd`, `ipd`,
+  the resolver, `gatewayd`, the bench and the checker, and the beamlet VM itself, which runs
+  hostile code.
+
+Everything else is **Tier B**: code that runs inside one session's budget with that session's
+authority, where a bug hurts one principal and the walls below hold. Most Elixir is Tier B: the
+shell, the editor, helpers and client bindings. The agent harness, approval rendering and the
+transfer server are Elixir or Rust and Tier A, because they answer yes above.
+
+| | Tier A | Tier B |
+| --- | --- | --- |
+| Design questions | the Architect, before code | the page's Open list; the Architect only if the package decides one |
+| Panel | red team, simplifier, editor; red at medium for the merge gate | one reviewer: the red team at low if the diff touches any question above, else the editor |
+| Tests | attack cases with system verdicts, mutations where the model covers it | host tests under beamlet, plus one end-to-end bench case |
+| Rounds | its own rounds until OK | batched with other Tier B packages; merged on green with one OK |
+| Gates | the full bench, rv32, the unsafe ratchet, the size budget, the docs checker | the package's cases, the docs checker |
+
+A Tier B package that turns out to touch a question above is re-tiered, not waved through.
+
+### The pages move with the code
+
+There is no documentation package. Every package delivers its page delta, and the bench enforces
+it: the docs checker refuses a status line naming a test that does not exist, a rule cited that no
+page owns, and a security register that disagrees with a page. The editor reviews the pages the
+package names and nothing else; the red team's checklist includes "the page says what the code now
+does". At acceptance the orchestrator updates the plan page's progress and the claims.
 
 **Hotspots** get one writer at a time: the kernel's page tables, memory, messages, call dispatch and
 architecture mapping code, the loader's verification, the bench's bundle builder, and `docs/`.
@@ -139,11 +185,9 @@ changes only through its tables and the generator.
 2. **Design first.** If the package raises an open design question, the Architect settles it (or
    the owner decides) before any code is written.
 3. **Implement,** gated on the package's acceptance command, by default the full bench.
-4. **Review** in rounds. The panel is sized to the risk:
-   - trusted code (the kernel, the loader, the ABI, `unsafe`, anything a rule or an attack case
-     governs): the red team, the simplifier and the editor;
-   - tests, docs, comments or tooling configuration only: one reviewer, the red team for tests or
-     the editor for documentation, adding the others only if the findings show more risk.
+4. **Review** in rounds. The panel is the package's tier ([two tiers](#two-tiers)); tests, docs,
+   comments or tooling configuration alone take one reviewer, the red team for tests or the editor
+   for documentation, adding the others only if the findings show more risk.
 
    The orchestrator creates a round's assignments together and waits for all of them. It then
    decides which findings to apply and sends one fix assignment that cites them by reviewer and
@@ -177,6 +221,27 @@ The decision itself lives in the book, not in QA:
 A package is not accepted with an unresolved blocking thread. A deferred non-blocking question is
 recorded on its page's Open list or as a follow-up in `docs/todo/`.
 
+A thread body is at most 2,000 bytes; a plan, a review report or any deliverable is a file in the
+worktree, and the thread holds the pointer. Each wave starts a fresh QA file; the previous one is
+committed with the wave's merge, as provenance, and is never read whole.
+
+## Simplification
+
+Simplicity is a gate, not a suggestion. The measures:
+- **Size is budgeted like `unsafe`.** Each trusted crate has a line ceiling in the bench that only
+  falls without a reason stated in the commit
+  ([the size budget](testbench.md#the-unsafe-budget); planned until its case exists, tracked in
+  [the plan](plan/m1-separation.md#remaining-work)).
+- **Every Tier A acceptance report says what was deleted.** A kernel package that adds lines and
+  deletes none states why, as an `unsafe` increase must.
+- **Simplifier findings are P2 by default:** each is applied, or declined on the thread with a
+  reason. The simplifier asks three questions of every diff: what can be deleted, what duplicates a
+  mechanism that exists, and is this the one obvious way.
+- **A deletion package after each milestone,** scheduled, with a target: the last one took the
+  kernel from 18,000 lines to 10,400 and `unsafe` from 54 to 44.
+- **A mechanism whose page cannot state its Why in two sentences** is a candidate for removal, and
+  the editor says so.
+
 ## Acceptance
 
 A package is done only when:
@@ -198,14 +263,18 @@ the package's members.
   WIP commit).
 - A commit message says what and why, and ends with a trailer naming the model that wrote it.
 - Nobody pushes without the owner's word.
-- **Handoff** at about 300K tokens of context: the member finishes and commits its current step,
+- **Handoff** at about 250K tokens of context: the member finishes and commits its current step,
   writes `<PACKAGE>-HANDOFF.md` in its worktree (state, next steps, traps, open questions), commits
-  it, reports and stops. The orchestrator ends it and launches a fresh member from that file. A
-  reviewer hands off between rounds, never during one.
+  it, reports and stops. The orchestrator ends it and launches a fresh member from that file, with
+  a reading list of the handoff, one example of the work, and the entries for its next step: never
+  the whole plan. A reviewer hands off between rounds, never during one.
 - A member never ends a turn without a report or a waiting status, and never polls.
 
 ## Cost
 
+- Every call re-sends a member's whole context, so reading is the cost. A member reads what its
+  assignment lists, and derives by grep where it can; a lead that must know a set of pages reads
+  their headings and status lines, not their bodies.
 - Test output fills context. Filter or tail bench and cargo output to the verdict and the failing
   lines; never read a whole log.
 - Repeat a case about five times to confirm a result; twenty only when chasing a flake.
