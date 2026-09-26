@@ -33,10 +33,8 @@ use redoubt_layout::Pid;
 use crate::cell::KernelCell;
 use crate::ptable::ProcessInner;
 
-// use crate::args::KernelArguments;
 pub const DEFAULT_STACK_SIZE: usize = 128 * 1024;
 pub const MAX_PROCESS_COUNT: usize = 64;
-// pub use crate::arch::mem::DEFAULT_STACK_TOP;
 
 /// Base of a range of addresses that are never mapped. Jumping to one of them faults into
 /// the kernel, which uses the faulting address to tell what the program is returning from.
@@ -82,7 +80,6 @@ const HEADER_PADDING: usize =
     mem::size_of::<Thread>() - (2 * mem::size_of::<usize>() + mem::size_of::<ProcessInner>() + 4 + 1);
 
 /// Number of pages `ProcessImpl` occupies at `PROCESS_AREA`: 1 on rv32, 2 on rv64.
-#[allow(dead_code)] // used by the loader handoff on rv64
 pub const PROCESS_IMPL_PAGES: usize = mem::size_of::<ProcessImpl>() / PAGE_SIZE;
 
 // The trap handler in asm indexes contexts as `PROCESS_AREA + (n << log2(size_of::<Thread>()))`.
@@ -274,8 +271,7 @@ impl Process {
     ///
     /// The process's own address space must be the active one, as `setup_first_thread` requires, so
     /// that `process_impl()` names *its* saved contexts. `MemoryMapping::allocate` zeroed those
-    /// frames, and all-zeroes is not a valid `ProcessInner` (its `pid` is a `NonZeroU8`), so
-    /// nothing may read them before this runs.
+    /// frames; this gives the header and `ProcessInner` their starting values.
     pub fn setup_empty_process(pid: Pid) {
         let process = process_impl();
         assert_eq!(pid, crate::arch::current_pid(), "hardware pid does not match setup pid");
@@ -286,7 +282,6 @@ impl Process {
             *thread = Default::default();
         }
         process.inner = Default::default();
-        process.inner.pid = pid;
     }
 
     /// WP-K4: the first thread of a process `process_start` is starting, at `entry` with stack
@@ -336,16 +331,6 @@ impl Process {
         true
     }
 
-    pub fn print_all_threads(&self) {
-        let process = process_impl();
-        for (index, &thread) in process.threads.iter().enumerate() {
-            let tid = index + 1;
-            if thread.registers[1] != 0 {
-                Self::print_thread(tid, &thread);
-            }
-        }
-    }
-
     pub fn print_current_thread(&self) {
         let thread = self.current_thread();
         let tid = self.current_tid();
@@ -366,11 +351,6 @@ impl Process {
             pt.table[pid_idx] = false;
         });
     }
-
-    /// This is used by debugging routines to sanity check state, which are typically #[cfg]'d out
-    /// but with complicated overlapping rules that constantly change. Hence, the #[allow(dead_code)].
-    #[allow(dead_code)]
-    pub fn pid(&self) -> Pid { self.pid }
 }
 
 impl core::fmt::Display for Thread {

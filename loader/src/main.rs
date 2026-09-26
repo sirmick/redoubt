@@ -31,7 +31,8 @@ use redoubt_layout::{
 use redoubt_sys::{PAGE_SIZE, USER_AREA_END};
 
 use crate::alloc::PageAllocator;
-use crate::paging::{AddressSpace, Pte};
+use crate::paging::AddressSpace;
+use ::paging::PteFlags;
 
 /// Top of the first thread's stack in every loader process, the same on both widths.
 const USER_STACK_TOP: usize = 0x8000_0000;
@@ -188,7 +189,7 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     // The kernel is PID 1 and the first entry of the bundle.
     let kernel_image = entries.next().expect("boot bundle is empty");
     let kernel = AddressSpace::new_kernel(&mut alloc, KERNEL_PID);
-    let kernel_flags = Pte::R | Pte::W | Pte::GLOBAL;
+    let kernel_flags = PteFlags::R | PteFlags::W | PteFlags::GLOBAL;
     let kernel_entry =
         image::load_elf(&mut alloc, &kernel, KERNEL_PID, kernel_image.data(), KERNEL_AREA..usize::MAX, false);
     kernel.map_stack(&mut alloc, KERNEL_STACK_TOP, KERNEL_STACK_PAGES, kernel_flags);
@@ -228,7 +229,7 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
 
         let space = AddressSpace::new_user(&mut alloc, pid, &kernel);
         let entrypoint = image::load_elf(&mut alloc, &space, pid, entry.data(), PAGE_SIZE..USER_AREA_END, true);
-        let stack_flags = Pte::R | Pte::W | Pte::USER;
+        let stack_flags = PteFlags::R | PteFlags::W | PteFlags::USER;
         space.map_stack(&mut alloc, USER_STACK_TOP, 1, stack_flags);
         for page in 2..=USER_STACK_PAGES {
             space.reserve(&mut alloc, USER_STACK_TOP - page * PAGE_SIZE, stack_flags);
@@ -350,7 +351,7 @@ fn emit_devices(args: &mut args::ArgsBuilder, platform: &Platform) {
 fn map_context(alloc: &mut PageAllocator, space: &AddressSpace, pid: Pid) {
     for page in 0..THREAD_CONTEXT_PAGES {
         let phys = alloc.alloc(pid);
-        space.map(alloc, phys, PROCESS_AREA + page * PAGE_SIZE, Pte::R | Pte::W);
+        space.map(alloc, phys, PROCESS_AREA + page * PAGE_SIZE, PteFlags::R | PteFlags::W);
     }
 }
 

@@ -13,23 +13,21 @@
 use core::fmt::Write;
 
 use test_programs::rd::{self, Error, MemFlags, ResetKind};
-use uart_16550::MmioSerialPort;
+use test_programs::console::{self, Console};
 
 /// Pages a DMA buffer is asked for.
 const DMA_PAGES: usize = 4;
 
-struct Out(MmioSerialPort);
-
 macro_rules! say {
-    ($out:expr, $($arg:tt)*) => {{ writeln!($out.0, $($arg)*).ok(); }};
+    ($out:expr, $($arg:tt)*) => {{ writeln!($out, $($arg)*).ok(); }};
 }
 
 /// Prints `ok`/`FAIL`, so a check that fails says so on a line the case forbids.
 macro_rules! check {
     ($out:expr, $cond:expr, $($arg:tt)*) => {{
         let ok = $cond;
-        write!($out.0, "[device] {}: ", if ok { "ok" } else { "FAIL" }).ok();
-        writeln!($out.0, $($arg)*).ok();
+        write!($out, "[device] {}: ", if ok { "ok" } else { "FAIL" }).ok();
+        writeln!($out, $($arg)*).ok();
     }};
 }
 
@@ -47,12 +45,9 @@ pub extern "C" fn _start() -> ! {
     // The console's registers, through its device object. Nothing here names an address,
     // and the length comes back with it (QUESTIONS.md 146, pending).
     let (uart, uart_len) = rd::map_device(rd::CONSOLE_MMIO).expect("the console's mmio handle");
-    // SAFETY: `uart` is the console's register page, mapped for this process by the kernel.
-    let mut out = Out(unsafe { MmioSerialPort::new(uart) });
-    out.0.init();
-    // `init` leaves a byte of its own on the wire, so the first line starts after a newline
-    // of ours rather than sharing a line with it.
-    say!(out, "\n[device] mapped the console");
+    console::init(uart);
+    let mut out = Console;
+    say!(out, "[device] mapped the console");
 
     let devices = rd::OTHER_DEVICES..rd::log_rx();
     let free = rd::first_free();

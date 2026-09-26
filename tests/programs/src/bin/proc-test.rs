@@ -22,11 +22,10 @@
 #![no_main]
 
 use core::fmt::Write;
-use core::sync::atomic::{AtomicUsize, Ordering};
 
 use test_programs::rd::{self, Cause, Error, ExitNotice, Received, ResetKind};
 use test_programs::spawn::{self, Image};
-use uart_16550::MmioSerialPort;
+use test_programs::console::{self, Console};
 
 // --- What a child does, from byte 0 of its startup page -----------------------------------------
 /// Exit with the code in byte 1.
@@ -83,17 +82,15 @@ const WAIT: u64 = 2_000_000;
 /// Long enough for every child of a scenario to have started and made its call.
 const BARRIER: u64 = 200_000;
 
-struct Out(MmioSerialPort);
-
 macro_rules! say {
-    ($out:expr, $($arg:tt)*) => {{ writeln!($out.0, $($arg)*).ok(); }};
+    ($out:expr, $($arg:tt)*) => {{ writeln!($out, $($arg)*).ok(); }};
 }
 
 macro_rules! check {
     ($out:expr, $cond:expr, $($arg:tt)*) => {{
         let ok = $cond;
-        write!($out.0, "[proc] {}: ", if ok { "ok" } else { "FAIL" }).ok();
-        writeln!($out.0, $($arg)*).ok();
+        write!($out, "[proc] {}: ", if ok { "ok" } else { "FAIL" }).ok();
+        writeln!($out, $($arg)*).ok();
     }};
 }
 
@@ -305,7 +302,7 @@ fn is(notice: &Option<ExitNotice>, cause: Cause, code: u32, account: u64, labels
     })
 }
 
-fn show(out: &mut Out, what: &str, notice: &Option<ExitNotice>) {
+fn show(out: &mut Console, what: &str, notice: &Option<ExitNotice>) {
     match notice {
         None => say!(out, "[proc] {}: no notice", what),
         Some(n) => say!(
@@ -329,11 +326,9 @@ pub extern "C" fn _start(arg: usize) -> ! {
     }
 
     let (uart, _) = rd::map_device(rd::CONSOLE_MMIO).expect("the console's mmio handle");
-    // SAFETY: `uart` is the console's register page, mapped for this process by the kernel.
-    let mut out = Out(unsafe { MmioSerialPort::new(uart) });
-    out.0.init();
-    CONSOLE.store(uart, Ordering::Relaxed);
-    say!(out, "\n[proc] mapped the console");
+    console::init(uart);
+    let mut out = Console;
+    say!(out, "[proc] mapped the console");
 
     let parent = Parent { image: spawn::image() };
     say!(out, "[proc] image is {} pages", parent.image.pages());
@@ -443,7 +438,7 @@ pub extern "C" fn _start(arg: usize) -> ! {
 
 /// Blame (answers 37, 55, 82): a fault blames the sender of the faulting thread's current call,
 /// and nothing else.
-fn blame(out: &mut Out, parent: &Parent, budget_a: u32, budget_b: u32) {
+fn blame(out: &mut Console, parent: &Parent, budget_a: u32, budget_b: u32) {
     // One work endpoint per scenario, owned by this process (class `system`), so R1 lets the
     // labelled callers through and the label set in a notice is the *caller's*, not ours.
     // Each caller's own notice is awaited too, not just the server's: a caller that has not
@@ -551,7 +546,7 @@ fn blame(out: &mut Out, parent: &Parent, budget_a: u32, budget_b: u32) {
 
 /// R10: destroying the creator's budget frees its children's process objects, killing them
 /// first, and then there is no notice at all.
-fn no_notice(out: &mut Out, parent: &Parent) {
+fn no_notice(out: &mut Console, parent: &Parent) {
     let nest = rd::create(rd::SYSTEM, &rd::spec(600, 4, 50)).expect("a budget for a launcher");
     // The launcher gets a handle to its own budget, so it can create a process there. Its own
     // object is charged *here*, so its notice outlives that budget; its child's is charged in
@@ -583,7 +578,7 @@ fn no_notice(out: &mut Out, parent: &Parent) {
 
 /// `thread_create` and `thread_exit` in this process itself, where the results can be seen
 /// without a notice.
-fn threads(out: &mut Out) {
+fn threads(out: &mut Console) {
     let stack = rd::map_anon(4 * rd::PAGE_SIZE, rd::rw()).expect("a stack");
     let top = stack + 4 * rd::PAGE_SIZE - 16;
     let first = rd::thread_create(entry_of(exiting_thread), top, 0).expect("thread_create");
@@ -618,19 +613,12 @@ extern "C" fn exiting_thread(_arg: usize) -> ! {
 
 extern "C" fn parking_thread(_arg: usize) -> ! { test_programs::park() }
 
-/// The console, once this process has mapped it, so that a panic says so instead of vanishing.
-/// A child never maps it, so a child's panic is silent -- but it sleeps rather than spins, which
-/// keeps the kernel reaching its idle branch, where the interim timeout sweep lives.
-static CONSOLE: AtomicUsize = AtomicUsize::new(0);
-
+/// A panic says so on the console once this process has it (`Console` writes nothing before
+/// `console::init`). A child never has it, so a child's panic is silent -- but it sleeps rather
+/// than spins, which keeps the kernel reaching its idle branch, where the interim timeout sweep
+/// lives.
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    let uart = CONSOLE.load(Ordering::Relaxed);
-    if uart != 0 {
-        // SAFETY: `CONSOLE` holds the console's register page, mapped for this process by the
-        // kernel and never unmapped; this is the only use of it after the main thread stopped.
-        let mut out = Out(unsafe { MmioSerialPort::new(uart) });
-        say!(out, "\n[proc] FAIL: panicked: {}", info);
-    }
+    say!(Console, "\n[proc] FAIL: panicked: {}", info);
     sleep()
 }

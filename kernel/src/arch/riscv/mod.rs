@@ -36,12 +36,8 @@ pub fn init() {
 /// should not exit.
 pub fn idle() -> bool {
     // Park the hart until an interrupt is pending.
-    // SAFETY: `wfi` has no memory effect. (`unsafe` on the vendored rv32 riscv crate,
-    // a safe no-op wrapper on the rv64 one.)
-    #[allow(unused_unsafe)]
-    unsafe {
-        riscv::asm::wfi()
-    };
+    // SAFETY: `wfi` has no memory effect.
+    unsafe { core::arch::asm!("wfi", options(nomem, nostack)) };
 
     // Briefly enable interrupts in Supervisor mode so any pending one drains into its
     // userspace handler; otherwise interrupts stay disabled while in Supervisor mode.

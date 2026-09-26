@@ -25,7 +25,6 @@ pub struct KernelArgumentsIterator {
     offset: usize,
 }
 
-#[allow(dead_code)]
 impl KernelArguments {
     pub fn get() -> Self { KernelArguments { base: KERNEL_ARGUMENTS_BASE.with(|b| *b) as *const u32 } }
 

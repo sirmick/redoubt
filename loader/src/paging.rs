@@ -8,7 +8,6 @@ use redoubt_layout::{PHYSMAP_PHYS_BASE, PROCESS_AREA, Pid};
 use crate::alloc::PageAllocator;
 use redoubt_sys::PAGE_SIZE;
 
-pub use paging::PteFlags as Pte;
 
 const ROOT_KERNEL_START: usize = ENTRIES / 2;
 const ROOT_PROCESS_AREA: usize = paging::vpn(PROCESS_AREA, LEVELS - 1);

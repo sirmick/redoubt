@@ -18,7 +18,6 @@
 
 #![no_std]
 #![no_main]
-#![allow(unused_must_use)] // `expect!` returns what it checked, for the steps that use it
 
 use test_programs::rd::{self, Error, FOREVER, Received};
 use test_programs::redoubt_ipc::op;
@@ -87,21 +86,21 @@ pub extern "C" fn _start() -> ! {
     log!(t.logger, "[ipc] starting");
 
     // --- A call: the kernel attaches the badge, the account and the labels (Messages) --------
-    expect!(t, ask(&mut t, op::ECHO, 41), [42, MY_PID, 0, 0]);
+    let _ = expect!(t, ask(&mut t, op::ECHO, 41), [42, MY_PID, 0, 0]);
 
     // --- A lend (R3, I9): gone from here while the call runs, back with the server's change --
     let page = rd::page();
     rd::poke(page, 0x5150);
     let reply = rd::call_waiting(E, &rd::body([op::LEND, 0, 0, 0]), rd::pages(page, 1), FOREVER);
-    expect!(t, reply.map(|r| words(&r)), Ok([1, 0x5150, 0, 0]));
-    expect!(t, rd::peek(page), 0x5151);
+    let _ = expect!(t, reply.map(|r| words(&r)), Ok([1, 0x5150, 0, 0]));
+    let _ = expect!(t, rd::peek(page), 0x5151);
     // A lend over `MAX_LEND_PAGES` is `TooLarge`, and nothing has moved when it is refused.
     let too_big = rd::pages(page, rd::MAX_LEND_PAGES + 1);
-    expect!(t, rd::call(E, &rd::body([op::LEND, 0, 0, 0]), too_big, FOREVER).err(), Some(Error::TooLarge));
-    expect!(t, rd::peek(page), 0x5151);
+    let _ = expect!(t, rd::call(E, &rd::body([op::LEND, 0, 0, 0]), too_big, FOREVER).err(), Some(Error::TooLarge));
+    let _ = expect!(t, rd::peek(page), 0x5151);
     // A lend of memory that is not this program's is refused too.
     let stranger = rd::pages(0x4000, 1);
-    expect!(
+    let _ = expect!(
         t,
         rd::call(E, &rd::body([op::LEND, 0, 0, 0]), stranger, FOREVER).err(),
         Some(Error::InvalidArgument)
@@ -110,41 +109,41 @@ pub extern "C" fn _start() -> ! {
     // --- A transfer (R4): the receiver must have named a `max_transfer` at least its size ----
     let gift = rd::page();
     rd::poke(gift, 0xC0FFEE);
-    expect!(t, rd::send_waiting(E, &rd::body([0, 7, 0, 0]), rd::pages(gift, 1), FOREVER), Ok(()));
+    let _ = expect!(t, rd::send_waiting(E, &rd::body([0, 7, 0, 0]), rd::pages(gift, 1), FOREVER), Ok(()));
     // The pages are the receiver's for good: this address is not ours to send again.
     let again = rd::send(E, &rd::body([0, 8, 0, 0]), rd::pages(gift, 1), FOREVER);
-    expect!(t, again.err(), Some(Error::InvalidArgument));
+    let _ = expect!(t, again.err(), Some(Error::InvalidArgument));
     // A transfer the receiver never asked for: `Refused` to the sender, the receiver unaffected.
-    expect!(t, ask(&mut t, op::MAX_TRANSFER, 0)[1], 0);
+    let _ = expect!(t, ask(&mut t, op::MAX_TRANSFER, 0)[1], 0);
     let unwanted = rd::page();
     let refused = rd::send(E, &rd::body([0, 9, 0, 0]), rd::pages(unwanted, 1), FOREVER);
-    expect!(t, refused.err(), Some(Error::Refused));
+    let _ = expect!(t, refused.err(), Some(Error::Refused));
     rd::poke(unwanted, 1); // still ours
-    expect!(t, ask(&mut t, op::ECHO, 1)[0], 2);
-    expect!(t, ask(&mut t, op::MAX_TRANSFER, 4)[1], 4);
+    let _ = expect!(t, ask(&mut t, op::ECHO, 1)[0], 2);
+    let _ = expect!(t, ask(&mut t, op::MAX_TRANSFER, 4)[1], 4);
 
     // --- Receive rights and minting (I3, I4) -------------------------------------------------
-    expect!(t, rd::receive(Some(E), 0, 0).err(), Some(Error::NotPermitted));
-    expect!(t, rd::mint_from_handle(E, 7, None).err(), Some(Error::NotPermitted));
+    let _ = expect!(t, rd::receive(Some(E), 0, 0).err(), Some(Error::NotPermitted));
+    let _ = expect!(t, rd::mint_from_handle(E, 7, None).err(), Some(Error::NotPermitted));
     // A badge of 0 does not even decode, offered in raw registers because the typed call cannot
     // carry one: the receive right is never minted (I3).
-    expect!(t, rd::mint_raw(2, E as usize, 0, 0, 0), Some(Error::InvalidArgument));
-    expect!(t, rd::mint_from_message(1, 7, None).err(), Some(Error::InvalidArgument));
+    let _ = expect!(t, rd::mint_raw(2, E as usize, 0, 0, 0), Some(Error::InvalidArgument));
+    let _ = expect!(t, rd::mint_from_message(1, 7, None).err(), Some(Error::InvalidArgument));
     // A handle the server minted arrives in a reply, badged as the server chose (R9).
     let reply = rd::call_waiting(E, &rd::body([op::MINT_BACK, 77, 0, 0]), None, FOREVER);
     let minted = reply.ok().and_then(|r| r.handles.as_slice().first().copied().flatten()).map(|h| h.index());
     t.check(minted.is_some(), format_args!("the server's minted handle arrived: {:?}", minted));
     if let Some(handle) = minted {
         let echo = rd::call_waiting(handle, &rd::body([op::ECHO, 0, 0, 0]), None, FOREVER);
-        expect!(t, echo.map(|r| words(&r)[1]), Ok(77));
-        expect!(t, rd::receive(Some(handle), 0, 0).err(), Some(Error::NotPermitted));
-        expect!(t, rd::close(handle), Ok(()));
+        let _ = expect!(t, echo.map(|r| words(&r)[1]), Ok(77));
+        let _ = expect!(t, rd::receive(Some(handle), 0, 0).err(), Some(Error::NotPermitted));
+        let _ = expect!(t, rd::close(handle), Ok(()));
     }
 
     // --- `serve` and `reply` refuse what the thread does not hold ----------------------------
-    expect!(t, rd::serve(1).err(), Some(Error::InvalidArgument));
-    expect!(t, rd::reply(1, &rd::body([0; rd::WORDS])).err(), Some(Error::InvalidArgument));
-    expect!(t, ask(&mut t, op::SERVE_BAD, 0)[0], op::SERVE_BAD);
+    let _ = expect!(t, rd::serve(1).err(), Some(Error::InvalidArgument));
+    let _ = expect!(t, rd::reply(1, &rd::body([0; rd::WORDS])).err(), Some(Error::InvalidArgument));
+    let _ = expect!(t, ask(&mut t, op::SERVE_BAD, 0)[0], op::SERVE_BAD);
 
     // --- R2: `WAIT_CAP` queued messages per group, `Busy` beyond ------------------------------
     // An endpoint of this program's own that nothing ever receives on. Every bundle program
@@ -165,7 +164,7 @@ pub extern "C" fn _start() -> ! {
         }
         test_programs::wait_ms(1);
     }
-    expect!(t, busy, Some(Error::Busy));
+    let _ = expect!(t, busy, Some(Error::Busy));
 
     // --- R3 and I15: abandoned calls, reported once and freed by their reply ------------------
     // A timeout alone does not establish receipt: it may cancel a still-queued call. A lend's
@@ -203,13 +202,13 @@ pub extern "C" fn _start() -> ! {
         }
     }
     rd::close(never_received).expect("close unused endpoint handle");
-    expect!(t, abandoned, rd::MAX_OPEN_CALLS);
+    let _ = expect!(t, abandoned, rd::MAX_OPEN_CALLS);
     t.check(queued >= 1, format_args!("queued timeout exercised: {}", queued));
     let counts = ask(&mut t, op::COUNTS, 0);
     // Every one was reported exactly once, and every reply freed its call, so the server holds
     // no more open calls than the other programs' own parked ones (`redoubt-filler`'s, which
     // keep arriving while this runs, so only the abandoned ones are counted exactly).
-    expect!(t, counts[1], rd::MAX_OPEN_CALLS);
+    let _ = expect!(t, counts[1], rd::MAX_OPEN_CALLS);
     log!(
         t.logger,
         "[ipc] {} calls abandoned, {} notices, {} open before, {} after",
@@ -233,10 +232,10 @@ pub extern "C" fn _start() -> ! {
         }
     }
     log!(t.logger, "[ipc] table full after {} more endpoints", held);
-    expect!(t, rd::endpoint_create().err(), Some(Error::TooLarge));
+    let _ = expect!(t, rd::endpoint_create().err(), Some(Error::TooLarge));
     // The reply still arrives; its handles are dropped and the `call` is `OutOfMemory`.
     let reply = rd::call_waiting(E, &rd::body([op::REPLY_HANDLES, 2, 0, 0]), None, FOREVER);
-    expect!(t, reply.err(), Some(Error::OutOfMemory));
+    let _ = expect!(t, reply.err(), Some(Error::OutOfMemory));
 
     // --- Answer 116: handles the receiver cannot take refuse the message (R4) -----------------
     // The server fills its own table to `MAX_HANDLES`; a message carrying a handle is then more
@@ -244,10 +243,10 @@ pub extern "C" fn _start() -> ! {
     let filled = ask(&mut t, op::FILL_TABLE, 0)[1];
     t.check(filled > 0, format_args!("the server filled its table: {}", filled));
     let with_handle = rd::send(E, &rd::body_with([0, 12, 0, 0], &[E]), None, FOREVER);
-    expect!(t, with_handle.err(), Some(Error::Refused));
+    let _ = expect!(t, with_handle.err(), Some(Error::Refused));
     // One without a handle costs the same table nothing, and is delivered.
-    expect!(t, rd::send(E, &rd::body([0, 13, 0, 0]), None, FOREVER), Ok(()));
-    expect!(t, ask(&mut t, op::FILL_TABLE, 1)[1], 0);
+    let _ = expect!(t, rd::send(E, &rd::body([0, 13, 0, 0]), None, FOREVER), Ok(()));
+    let _ = expect!(t, ask(&mut t, op::FILL_TABLE, 1)[1], 0);
 
     // --- R4a: at `MAX_OPEN_CALLS` no call is taken, while a send still is ---------------------
     for _ in 0..12 {
@@ -261,10 +260,10 @@ pub extern "C" fn _start() -> ! {
     let Received::Message(full) = rd::receive(Some(full_notice), FOREVER, 0).expect("capacity notice") else {
         panic!("expected capacity notice");
     };
-    expect!(t, full.body.words[1], rd::MAX_OPEN_CALLS);
+    let _ = expect!(t, full.body.words[1], rd::MAX_OPEN_CALLS);
     // A call now stays queued and times out; a `send` is still delivered (answer 105).
-    expect!(t, rd::call(E, &rd::body([op::KEEP, 0, 0, 0]), None, 5_000).err(), Some(Error::Timeout));
-    expect!(t, rd::send(E, &rd::body([0, 99, 0, 0]), None, FOREVER), Ok(()));
+    let _ = expect!(t, rd::call(E, &rd::body([op::KEEP, 0, 0, 0]), None, 5_000).err(), Some(Error::Timeout));
+    let _ = expect!(t, rd::send(E, &rd::body([0, 99, 0, 0]), None, FOREVER), Ok(()));
     // `send` returns once the message is taken; give the server its turn to report it, so the
     // console reads in the order the case expects.
     test_programs::wait_ms(50);

@@ -18,7 +18,6 @@
 
 #![no_std]
 #![no_main]
-#![allow(unused_must_use)] // `expect!` returns what it checked, for the steps that use it
 
 use test_programs::rd::{self, Error, FOREVER, Labels, Usage};
 use test_programs::{Logger, log};
@@ -121,62 +120,62 @@ pub extern "C" fn _start() -> ! {
     t.hold(a);
     // The parent pays the child's own page and counts its limits, never its usage (R6, answer 76).
     let s = system0;
-    expect!(t, rd::usage(rd::SYSTEM), Ok(Usage {
+    let _ = expect!(t, rd::usage(rd::SYSTEM), Ok(Usage {
         pages_usage: s.pages_usage + 101,
         processes_usage: s.processes_usage + 2,
         weight_carved: s.weight_carved + 50,
         ..s
     }));
-    expect!(t, rd::usage(a), Ok(usage(100, 0, 2, 0, 50, 0)));
+    let _ = expect!(t, rd::usage(a), Ok(usage(100, 0, 2, 0, 50, 0)));
     // A revocation scope costs its parent one page, like any budget, and has no usage of its own.
     let scope = expect!(t, rd::create(a, &rd::spec(0, 0, 0)), Ok(base + 1)).unwrap_or(base + 1);
     t.hold(scope);
-    expect!(t, rd::usage(scope), Ok(usage(0, 0, 0, 0, 0, 0)));
-    expect!(t, rd::usage(a), Ok(usage(100, 1, 2, 0, 50, 0)));
+    let _ = expect!(t, rd::usage(scope), Ok(usage(0, 0, 0, 0, 0, 0)));
+    let _ = expect!(t, rd::usage(a), Ok(usage(100, 1, 2, 0, 50, 0)));
     t.i5("carving");
     // Beyond the parent: each limit alone, then the order when several are exceeded.
-    expect!(t, rd::create(a, &rd::spec(99, 0, 0)), Err(Error::OutOfMemory));
-    expect!(t, rd::create(a, &rd::spec(1, 3, 0)), Err(Error::OutOfProcesses));
-    expect!(t, rd::create(a, &rd::spec(1, 0, 51)), Err(Error::InvalidArgument));
-    expect!(t, rd::create(a, &rd::spec(99, 3, 51)), Err(Error::OutOfMemory));
-    expect!(t, rd::create(a, &rd::spec(1, 3, 51)), Err(Error::OutOfProcesses));
+    let _ = expect!(t, rd::create(a, &rd::spec(99, 0, 0)), Err(Error::OutOfMemory));
+    let _ = expect!(t, rd::create(a, &rd::spec(1, 3, 0)), Err(Error::OutOfProcesses));
+    let _ = expect!(t, rd::create(a, &rd::spec(1, 0, 51)), Err(Error::InvalidArgument));
+    let _ = expect!(t, rd::create(a, &rd::spec(99, 3, 51)), Err(Error::OutOfMemory));
+    let _ = expect!(t, rd::create(a, &rd::spec(1, 3, 51)), Err(Error::OutOfProcesses));
     // No pages of its own is fine: its object is the parent's to pay for.
     let pageless = expect!(t, rd::create(a, &rd::spec(0, 1, 0)), Ok(base + 2)).unwrap_or(base + 2);
-    expect!(t, rd::usage(pageless), Ok(usage(0, 0, 1, 0, 0, 0)));
-    expect!(t, rd::destroy(pageless), Ok(()));
+    let _ = expect!(t, rd::usage(pageless), Ok(usage(0, 0, 1, 0, 0, 0)));
+    let _ = expect!(t, rd::destroy(pageless), Ok(()));
     // Exactly the parent's free limits fit (98 pages and the object's one); then not even a scope.
     let full = expect!(t, rd::create(a, &rd::spec(98, 2, 50)), Ok(base + 2)).unwrap_or(base + 2);
-    expect!(t, rd::usage(a), Ok(usage(100, 100, 2, 2, 50, 50)));
-    expect!(t, rd::create(a, &rd::spec(0, 0, 0)), Err(Error::OutOfMemory));
-    expect!(t, rd::create(full, &rd::spec(98, 0, 0)), Err(Error::OutOfMemory));
+    let _ = expect!(t, rd::usage(a), Ok(usage(100, 100, 2, 2, 50, 50)));
+    let _ = expect!(t, rd::create(a, &rd::spec(0, 0, 0)), Err(Error::OutOfMemory));
+    let _ = expect!(t, rd::create(full, &rd::spec(98, 0, 0)), Err(Error::OutOfMemory));
     t.i5("carving to the limit");
-    expect!(t, rd::destroy(full), Ok(()));
-    expect!(t, rd::usage(a), Ok(usage(100, 1, 2, 0, 50, 0)));
+    let _ = expect!(t, rd::destroy(full), Ok(()));
+    let _ = expect!(t, rd::usage(a), Ok(usage(100, 1, 2, 0, 50, 0)));
     // The freed index is the lowest free one, and is reused.
     let again = expect!(t, rd::create(a, &rd::spec(1, 0, 0)), Ok(base + 2)).unwrap_or(base + 2);
-    expect!(t, rd::destroy(again), Ok(()));
+    let _ = expect!(t, rd::destroy(again), Ok(()));
 
     // --- Classes and labels (part of I6 and I8; the rest needs a user-class caller, WP-K4) ----
     // A child's class is its parent's (answer 73), and nothing in a spec asks for a place in the
     // queue: there is one stride queue, ordered by weight alone (answer 103).
     let quick = expect!(t, rd::create(a, &labelled(1, &[])), Ok(base + 2)).unwrap_or(base + 2);
-    expect!(t, rd::create(quick, &labelled(0, &[])), Ok(base + 3));
-    expect!(t, rd::destroy(quick), Ok(()));
+    let _ = expect!(t, rd::create(quick, &labelled(0, &[])), Ok(base + 3));
+    let _ = expect!(t, rd::destroy(quick), Ok(()));
     // A labelled user-class parent: a child dropping the label is refused whoever asks.
     let user_lab = expect!(t, rd::create(rd::USERS, &labelled(1, &[9])), Ok(base + 2)).unwrap_or(base + 2);
-    expect!(t, rd::create(user_lab, &labelled(0, &[])), Err(Error::LabelDenied));
-    expect!(t, rd::destroy(user_lab), Ok(()));
+    let _ = expect!(t, rd::create(user_lab, &labelled(0, &[])), Err(Error::LabelDenied));
+    let _ = expect!(t, rd::destroy(user_lab), Ok(()));
     // A system-class caller may add labels; they are sorted and deduplicated.
     let lab = expect!(t, rd::create(a, &labelled(20, &[5, 3, 5])), Ok(base + 2)).unwrap_or(base + 2);
     t.hold(lab);
-    expect!(t, rd::create(lab, &labelled(1, &[3])), Err(Error::LabelDenied));
-    expect!(t, rd::create(lab, &labelled(1, &[])), Err(Error::LabelDenied));
+    let _ = expect!(t, rd::create(lab, &labelled(1, &[3])), Err(Error::LabelDenied));
+    let _ = expect!(t, rd::create(lab, &labelled(1, &[])), Err(Error::LabelDenied));
     let same =
         expect!(t, rd::create(lab, &labelled(1, &[5, 3, 5, 3, 5, 3, 5, 3])), Ok(base + 3))
             .unwrap_or(base + 3);
     let more = expect!(t, rd::create(lab, &labelled(1, &[7, 5, 3])), Ok(base + 4)).unwrap_or(base + 4);
-    expect!(t, rd::destroy(more), Ok(()));
-    expect!(t, rd::destroy(same), Ok(()));
+    let _ = expect!(t, rd::destroy(more), Ok(()));
+    let _ = expect!(t, rd::destroy(same), Ok(()));
 
     // --- MAX_DEPTH: system is at depth 1, so seven more levels fit and the eighth is refused.
     // `a` is at depth 2, so chain[1..=5] are at depths 3 to 7, and a child of chain[5] would be
@@ -189,8 +188,8 @@ pub extern "C" fn _start() -> ! {
             expect!(t, rd::create(chain[depth - 1], &rd::spec(pages, 0, 0)), Ok(base + 2 + depth as u32))
                 .unwrap_or(0);
     }
-    expect!(t, rd::create(chain[5], &rd::spec(1, 0, 0)), Err(Error::TooLarge));
-    expect!(t, rd::create(chain[5], &labelled(1, &[])), Err(Error::TooLarge));
+    let _ = expect!(t, rd::create(chain[5], &rd::spec(1, 0, 0)), Err(Error::TooLarge));
+    let _ = expect!(t, rd::create(chain[5], &labelled(1, &[])), Err(Error::TooLarge));
     t.i5("depth");
 
     // --- R10, I2, I10: destroy a subtree ----------------------------------------------------
@@ -199,22 +198,22 @@ pub extern "C" fn _start() -> ! {
     let before = rd::usage(a).unwrap();
     // chain[1] carved 18 pages from `a`, and `a` paid its object's page.
     let tree = expect!(t, rd::create(chain[1], &rd::spec(0, 0, 0)), Ok(base + 8)).unwrap_or(base + 8);
-    expect!(t, rd::destroy(chain[1]), Ok(()));
+    let _ = expect!(t, rd::destroy(chain[1]), Ok(()));
     for gone in [chain[1], chain[2], chain[3], chain[4], chain[5], tree] {
-        expect!(t, rd::usage(gone), Err(Error::BadHandle));
-        expect!(t, rd::close(gone), Err(Error::BadHandle));
-        expect!(t, rd::destroy(gone), Err(Error::BadHandle));
+        let _ = expect!(t, rd::usage(gone), Err(Error::BadHandle));
+        let _ = expect!(t, rd::close(gone), Err(Error::BadHandle));
+        let _ = expect!(t, rd::destroy(gone), Err(Error::BadHandle));
     }
-    expect!(t, rd::usage(a), Ok(Usage { pages_usage: before.pages_usage - 19, ..before }));
+    let _ = expect!(t, rd::usage(a), Ok(Usage { pages_usage: before.pages_usage - 19, ..before }));
     // What was never carved from `a`'s subtree is untouched: the scope and the labelled budget.
-    expect!(t, rd::usage(scope), Ok(usage(0, 0, 0, 0, 0, 0)));
-    expect!(t, rd::usage(lab).map(|u| u.pages_limit), Ok(20));
+    let _ = expect!(t, rd::usage(scope), Ok(usage(0, 0, 0, 0, 0, 0)));
+    let _ = expect!(t, rd::usage(lab).map(|u| u.pages_limit), Ok(20));
     // Destroying `a` itself returns system to where it started (I10), handle table included.
-    expect!(t, rd::destroy(a), Ok(()));
+    let _ = expect!(t, rd::destroy(a), Ok(()));
     for gone in [a, scope, lab] {
-        expect!(t, rd::usage(gone), Err(Error::BadHandle));
+        let _ = expect!(t, rd::usage(gone), Err(Error::BadHandle));
     }
-    expect!(t, rd::usage(rd::SYSTEM), Ok(system0));
+    let _ = expect!(t, rd::usage(rd::SYSTEM), Ok(system0));
     t.nheld = 3;
     t.i5("destroy");
 
@@ -228,20 +227,20 @@ pub extern "C" fn _start() -> ! {
             break;
         }
     }
-    expect!(t, rd::usage(rd::SYSTEM), Ok(with_x));
+    let _ = expect!(t, rd::usage(rd::SYSTEM), Ok(with_x));
     // The 129th handle needs a second page: one more page from system, not from x.
-    expect!(t, rd::create(x, &rd::spec(0, 0, 0)), Ok(129));
-    expect!(t, rd::usage(rd::SYSTEM), Ok(Usage { pages_usage: with_x.pages_usage + 1, ..with_x }));
+    let _ = expect!(t, rd::create(x, &rd::spec(0, 0, 0)), Ok(129));
+    let _ = expect!(t, rd::usage(rd::SYSTEM), Ok(Usage { pages_usage: with_x.pages_usage + 1, ..with_x }));
     // One page per scope, all paid by x: the rest of the first page, plus the 129th.
-    expect!(t, rd::usage(x).map(|u| u.pages_usage), Ok(129 - base as u64));
+    let _ = expect!(t, rd::usage(x).map(|u| u.pages_usage), Ok(129 - base as u64));
     // Closing the second page's only handle frees that page.
-    expect!(t, rd::close(129), Ok(()));
-    expect!(t, rd::usage(rd::SYSTEM), Ok(with_x));
-    expect!(t, rd::close(129), Err(Error::BadHandle));
+    let _ = expect!(t, rd::close(129), Ok(()));
+    let _ = expect!(t, rd::usage(rd::SYSTEM), Ok(with_x));
+    let _ = expect!(t, rd::close(129), Err(Error::BadHandle));
     // Destroying x sweeps every scope out of the table.
-    expect!(t, rd::destroy(x), Ok(()));
-    expect!(t, rd::usage(rd::SYSTEM), Ok(system0));
-    expect!(t, rd::usage(128), Err(Error::BadHandle));
+    let _ = expect!(t, rd::destroy(x), Ok(()));
+    let _ = expect!(t, rd::usage(rd::SYSTEM), Ok(system0));
+    let _ = expect!(t, rd::usage(128), Err(Error::BadHandle));
 
     // --- A sequence the model predicts, result by result (WP-C1 compares these) -------------
     // In the trace format (redoubt/model/README.md), from a fresh budget M = (10 pages,
@@ -263,23 +262,23 @@ pub extern "C" fn _start() -> ! {
     //   budget_destroy h:4                         -> ok
     //   budget_usage h:4                           -> err BadHandle
     let m = expect!(t, rd::create(rd::SYSTEM, &rd::spec(10, 1, 10)), Ok(base)).unwrap_or(base);
-    expect!(t, rd::create(m, &rd::spec(5, 0, 0)), Ok(base + 1));
-    expect!(t, rd::usage(m), Ok(usage(10, 6, 1, 0, 10, 0)));
-    expect!(t, rd::create(m, &rd::spec(5, 0, 0)), Err(Error::OutOfMemory));
-    expect!(t, rd::create(m, &rd::spec(0, 0, 0)), Ok(base + 2));
-    expect!(t, rd::create(m, &rd::spec(2, 2, 0)), Err(Error::OutOfProcesses));
-    expect!(t, rd::create(m, &rd::spec(2, 0, 11)), Err(Error::InvalidArgument));
-    expect!(t, rd::usage(m), Ok(usage(10, 7, 1, 0, 10, 0)));
-    expect!(t, rd::destroy(base + 1), Ok(()));
-    expect!(t, rd::usage(m), Ok(usage(10, 1, 1, 0, 10, 0)));
-    expect!(t, rd::usage(base + 1), Err(Error::BadHandle));
+    let _ = expect!(t, rd::create(m, &rd::spec(5, 0, 0)), Ok(base + 1));
+    let _ = expect!(t, rd::usage(m), Ok(usage(10, 6, 1, 0, 10, 0)));
+    let _ = expect!(t, rd::create(m, &rd::spec(5, 0, 0)), Err(Error::OutOfMemory));
+    let _ = expect!(t, rd::create(m, &rd::spec(0, 0, 0)), Ok(base + 2));
+    let _ = expect!(t, rd::create(m, &rd::spec(2, 2, 0)), Err(Error::OutOfProcesses));
+    let _ = expect!(t, rd::create(m, &rd::spec(2, 0, 11)), Err(Error::InvalidArgument));
+    let _ = expect!(t, rd::usage(m), Ok(usage(10, 7, 1, 0, 10, 0)));
+    let _ = expect!(t, rd::destroy(base + 1), Ok(()));
+    let _ = expect!(t, rd::usage(m), Ok(usage(10, 1, 1, 0, 10, 0)));
+    let _ = expect!(t, rd::usage(base + 1), Err(Error::BadHandle));
     // Closing a scope's handle does not destroy the scope: it still costs m its page, until m
     // itself goes.
-    expect!(t, rd::close(base + 2), Ok(()));
-    expect!(t, rd::usage(m), Ok(usage(10, 1, 1, 0, 10, 0)));
-    expect!(t, rd::destroy(m), Ok(()));
-    expect!(t, rd::usage(m), Err(Error::BadHandle));
-    expect!(t, rd::usage(rd::SYSTEM), Ok(system0));
+    let _ = expect!(t, rd::close(base + 2), Ok(()));
+    let _ = expect!(t, rd::usage(m), Ok(usage(10, 1, 1, 0, 10, 0)));
+    let _ = expect!(t, rd::destroy(m), Ok(()));
+    let _ = expect!(t, rd::usage(m), Err(Error::BadHandle));
+    let _ = expect!(t, rd::usage(rd::SYSTEM), Ok(system0));
 
     // --- I10 over many cycles: create, nest, destroy; nothing leaks ----------------------------
     for cycle in 0..500u64 {
@@ -294,12 +293,12 @@ pub extern "C" fn _start() -> ! {
             break;
         }
     }
-    expect!(t, rd::usage(rd::SYSTEM), Ok(system0));
+    let _ = expect!(t, rd::usage(rd::SYSTEM), Ok(system0));
     // A deadline is accepted at creation; this one is an hour away, so the budget is destroyed by
     // hand first. (Enforcement: `budget-deadline`.)
     let lease = rd::BudgetSpec { deadline: rd::time_now().unwrap() + 3_600_000_000, ..rd::spec(2, 0, 0) };
     let l = expect!(t, rd::create(rd::SYSTEM, &lease), Ok(base)).unwrap_or(base);
-    expect!(t, rd::destroy(l), Ok(()));
+    let _ = expect!(t, rd::destroy(l), Ok(()));
     let _ = FOREVER;
 
     // --- time_now and random ------------------------------------------------------------------

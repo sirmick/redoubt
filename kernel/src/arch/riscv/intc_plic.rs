@@ -14,7 +14,6 @@
 use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use plic::Plic;
-use riscv::register::sie;
 use redoubt_layout::KERNEL_PLIC_BASE;
 use redoubt_layout::Pid;
 use redoubt_sys::MemFlags;
@@ -89,7 +88,3 @@ pub fn pending() -> Option<usize> {
         irq.get() as usize
     })
 }
-
-/// For debug output: 1 if external interrupts are unmasked at the hart.
-#[allow(dead_code)]
-pub fn mask() -> usize { sie::read().sext() as usize }

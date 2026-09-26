@@ -75,5 +75,15 @@ pub(crate) fn relay(badge: u64, text: &str) {
     }
 }
 
+/// The console as a writer, for a first program that prints its own lines rather than through
+/// log-server (`proc-test`, `device-test`, the scheduler bench). Before [`init`] it writes nothing.
+pub struct Console;
+
+impl Write for Console {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        locked(|port| port.as_mut().map_or(Ok(()), |port| port.write_str(s)))
+    }
+}
+
 /// Whatever arrived on the UART.
 pub fn receive() -> Option<u8> { with(|port| port.try_receive().ok()) }

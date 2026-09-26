@@ -1,9 +1,6 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-
-
-// use core::mem;
 use redoubt_layout::{KERNEL_PID, Pid};
 
 use crate::arch::process::TID;
@@ -14,19 +11,7 @@ pub use crate::arch::process::Process as ArchProcess;
 pub use crate::arch::process::Thread;
 use crate::cell::KernelCell;
 
-#[allow(dead_code)]
-const FIRST_USER_PID: Pid = match Pid::new(2) {
-    Some(pid) => pid,
-    None => unreachable!(),
-};
-
 pub use crate::arch::process::{INITIAL_TID, MAX_PROCESS_COUNT};
-
-// fn log_process_update(f: &str, l: u32, process: &Process, old_state: ProcessState) {
-//     if process.pid.get() == 3 {
-//         println!("[{}:{}] Updated PID {:?} state: {:?} -> {:?}", f, l, process.pid, old_state,
-// process.state);     }
-// }
 
 /// Why the process table refused a step. Kernel-internal: a system call maps it explicitly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,17 +92,6 @@ pub struct Process {
     pub current_thread: TID,
 }
 
-impl Default for Process {
-    fn default() -> Self {
-        Process {
-            state: ProcessState::Allocated,
-            pid: FIRST_USER_PID,
-            current_thread: 0,
-            mapping: Default::default(),
-        }
-    }
-}
-
 /// This is per-process data.  The arch-specific definitions will instantiate
 /// this struct in order to avoid the need to statically-allocate this for
 /// all possible processes.
@@ -136,12 +110,6 @@ pub struct ProcessInner {
 
     /// The last address that was allocated from
     pub mem_message_last: usize,
-
-    /// A copy of this process' ID
-    pub pid: Pid,
-
-    /// Some reserved data to pad this out to a multiple of 32 bytes.
-    pub _reserved: [u8; 1],
 }
 
 impl Default for ProcessInner {
@@ -151,8 +119,6 @@ impl Default for ProcessInner {
             mem_default_last: crate::mem::DEFAULT_BASE,
             mem_message_base: crate::mem::DEFAULT_MESSAGE_BASE,
             mem_message_last: crate::mem::DEFAULT_MESSAGE_BASE,
-            pid: KERNEL_PID,
-            _reserved: [0; 1],
         }
     }
 }
@@ -285,24 +251,17 @@ impl ProcessTable {
             let pid = init.pid().get();
             let proc_idx = pid - 1;
             let process = &mut self.processes[proc_idx as usize];
-            // println!(
-            //     "Process[{}]: {:?}",
-            //     pid - 1,
-            //     init,
-            // );
             // SAFETY: `from_init_process` records a loader-built satp; the loader guarantees it names a root
             // table.
             unsafe {
                 process.mapping.from_init_process(*init);
                 process.pid = Pid::new(pid as _).unwrap();
             };
-            // let old_state = process.state;
             process.state = if pid == 1 {
                 ProcessState::Running(0)
             } else {
                 ProcessState::Setup { entry: init.entrypoint, sp: init.sp }
             };
-            // log_process_update(file!(), line!(), process, old_state);
         }
 
         // `kmain`'s own context. Its registers are saved at its first switch away (`sched.rs`);
@@ -422,7 +381,6 @@ impl ProcessTable {
     /// it as Ready.
     pub fn ready_thread(&mut self, pid: Pid, tid: TID) -> Result<(), ProcessError> {
         let process = self.get_process_mut(pid)?;
-        // let old_state = process.state;
         process.state = match process.state {
             ProcessState::Free => {
                 panic!("PID {} was not running, so cannot wake thread {}", pid, tid)
@@ -432,7 +390,6 @@ impl ProcessTable {
             ProcessState::Sleeping => ProcessState::Ready(1 << tid),
             other => panic!("PID {} was not in a state to wake thread {}: {:?}", pid, tid, other),
         };
-        // log_process_update(file!(), line!(), process, old_state);
         klog!("Readying ({}:{}) -> {:?}", pid, tid, process.state);
         Ok(())
     }
@@ -456,7 +413,6 @@ impl ProcessTable {
             panic!("no threads were available to run");
         }
 
-        // if thread_mask.is_power_of_two() {
         if thread_mask & (thread_mask - 1) == 0 {
             trailing_zeros(thread_mask)
         } else {
@@ -491,12 +447,7 @@ impl ProcessTable {
     /// If the current process is not running, or if it's "Running" but has no free contexts
     pub fn switch_to_thread(&mut self, pid: Pid, tid: Option<TID>) -> Result<(), ProcessError> {
         let process = self.get_process_mut(pid)?;
-        // klog!(
-        //     "switch_to_thread({}:{:?}): Old state was {:?}",
-        //     pid, tid, process.state
-        // );
 
-        // let old_state = process.state;
         // Determine which thread to switch to
         process.state = match process.state {
             ProcessState::Free => return Err(ProcessError::NotFound),
@@ -540,13 +491,6 @@ impl ProcessTable {
                 ProcessState::Running(ready_threads & !(1 << new_thread))
             }
         };
-        // log_process_update(file!(), line!(), process, old_state);
-
-        // println!(
-        //     "switch_to_thread({}:{:?}): New state is {:?} Thread is ",
-        //     pid, tid, process.state
-        // );
-        // ArchProcess::with_current(|current| current.print_thread());
 
         Ok(())
     }
@@ -560,13 +504,7 @@ impl ProcessTable {
     /// If the current process is not running.
     pub fn unschedule_thread(&mut self, pid: Pid, tid: TID) -> Result<(), ProcessError> {
         let process = self.get_process_mut(pid)?;
-        // klog!(
-        //     "unschedule_thread({}:{}): Old state was {:?}",
-        //     pid, tid, process.state
-        // );
-        // ArchProcess::with_current(|current| current.print_thread());
 
-        // let old_state = process.state;
         process.state = match process.state {
             ProcessState::Running(x) if x & (1 << tid) != 0 => panic!(
                 "PID {} thread {} was already queued for running when `unschedule_thread()` was called",
@@ -681,26 +619,20 @@ impl ProcessTable {
 
             // Set up the new process, if necessary.  Remove the new thread from
             // the list of ready threads.
-            // let old_state = new.state;
             let new = self.get_process_mut(new_pid)?;
             new.state = match new.state {
                 ProcessState::Setup { entry, sp } => {
                     ArchProcess::setup_loader_process(new_pid, entry, sp);
-                    ArchProcess::with_inner_mut(|process_inner| process_inner.pid = new_pid);
 
                     ProcessState::Running(0)
                 }
-                ProcessState::Allocated => {
-                    ArchProcess::with_inner_mut(|process_inner| process_inner.pid = new_pid);
-                    ProcessState::Running(0)
-                }
+                ProcessState::Allocated => ProcessState::Running(0),
                 ProcessState::Free => panic!("process was suddenly Free"),
                 ProcessState::Ready(x) | ProcessState::Running(x) => {
                     ProcessState::Running(x & !(1 << new_tid))
                 }
                 ProcessState::Sleeping => ProcessState::Running(0),
             };
-            // log_process_update(file!(), line!(), new, old_state);
             new.activate();
 
             // Mark the previous process as ready to run, since we just switched
@@ -741,14 +673,7 @@ impl ProcessTable {
                     previous_pid, other
                 ),
             };
-            // log_process_update(file!(), line!(), previous, _oldstate);
             klog!("PID {:?} state change from {:?} -> {:?}", previous_pid, _oldstate, previous.state);
-            // klog!(
-            //     "Set previous process PID {} state to {:?} (with can_resume = {})",
-            //     previous_pid,
-            //     previous.state,
-            //     can_resume
-            // );
         } else {
             let new = self.get_process_mut(new_pid)?;
 
@@ -768,7 +693,6 @@ impl ProcessTable {
             }
 
             // Transition to the new state.
-            // let old_state = new.state;
             new.state = if let ProcessState::Running(x) = new.state {
                 assert!(x & (1 << new.current_thread) == 0);
 
@@ -794,7 +718,6 @@ impl ProcessTable {
             } else {
                 panic!("PID {} invalid process state (not Running): {:?}", previous_pid, new.state)
             };
-            // log_process_update(file!(), line!(), new, old_state);
         }
 
         // Restore the previous thread, if one exists.
@@ -838,14 +761,12 @@ impl ProcessTable {
         let mut new_pid = pid;
         {
             let process = self.get_process_mut(pid)?;
-            // let old_state = process.state;
             process.state = if waiting_threads == 0 {
                 new_pid = KERNEL_PID;
                 ProcessState::Sleeping
             } else {
                 ProcessState::Ready(waiting_threads)
             };
-            // log_process_update(file!(), line!(), process, old_state);
         }
 
         // Switch to the next available TID. This moves the process back to a `Running` state.
@@ -886,43 +807,4 @@ impl ProcessTable {
         Ok(())
     }
 
-    /// Returns the process name, if any, of a given PID
-    pub fn process_name(&self, pid: Pid) -> Option<&str> {
-        let args = crate::args::KernelArguments::get();
-        for arg in args.iter() {
-            if arg.name != u32::from_le_bytes(*b"PNam") {
-                continue;
-            }
-            // SAFETY: `arg.data` is the tag's data, `arg.size` bytes (`arg.data.len()` words) of
-            // the kernel argument block. Viewing those same bytes as `u8` keeps the length and
-            // needs no more alignment than the words already have.
-            let data = unsafe { core::slice::from_raw_parts(arg.data.as_ptr() as *const u8, arg.size) };
-            // Each record is a PID word, a length word, then that many bytes, padded to a word.
-            // A record that does not fit in the tag means a malformed block: stop reading it.
-            let mut offset = 0;
-            while offset + 8 <= data.len() {
-                let check_pid =
-                    u32::from_le_bytes([data[offset], data[offset + 1], data[offset + 2], data[offset + 3]]);
-                let str_len = u32::from_le_bytes([
-                    data[offset + 4],
-                    data[offset + 5],
-                    data[offset + 6],
-                    data[offset + 7],
-                ]) as usize;
-                if str_len > data.len() - offset - 8 {
-                    break;
-                }
-                if check_pid == pid.get() as _ {
-                    if let Ok(s) = core::str::from_utf8(&data[offset + 8..offset + 8 + str_len]) {
-                        return Some(s);
-                    } else {
-                        return None;
-                    }
-                }
-                offset += str_len + 8;
-                offset += (4 - (offset & 3)) & 3;
-            }
-        }
-        None
-    }
 }

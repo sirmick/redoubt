@@ -49,7 +49,7 @@ paths = [
 ]
 # G1: +1, physmap.rs's `Window::new` over the loader's physmap. Existing code that no budget
 # listed, now counted; no new unsafe.
-# WP-K5: -1, the legacy hart-timer path removed (the kernel owns the timer); +1, mem.rs's
+# WP-K5: -1, the old hart-timer path removed (the kernel owns the timer); +1, mem.rs's
 # `sync_icache`, the one `fence.i` (OWNER DECISION 10): executable pages must be fetched as
 # written, and inline asm is the only way to issue the instruction. Net 0.
 # WP-K6: 13, from 16: intc_plic.rs's two `sie` toggles around the interrupt callbacks, and
@@ -89,7 +89,7 @@ paths = [
 # casting it to a struct it is not aligned for, and args.rs prints a tag name through
 # `str::from_utf8` instead of building a slice by hand.
 # WP-K3: device.rs joins the list with none of its own (it reaches frames through kframe.rs
-# and the page tables through arch::mem). -1: the legacy contiguous allocation for a device,
+# and the page tables through arch::mem). -1: the old contiguous allocation for a device,
 # which `dma_alloc` replaces, is deleted, and its `bzero` of the freshly mapped pages with it.
 # G1: +5, existing code that no budget listed, now counted; no new unsafe. cell.rs's three
 # (`SpinLock`/`KernelCell` `Sync` and the lock's access) and the debug console's two (setting
@@ -98,8 +98,10 @@ paths = [
 # register window (the reset of answer 173); no other access to a device's registers needs one.
 # WP-K6: 21, from 27: with the old call interface, server.rs's message queue, ptable.rs's two
 # old message buffers, mem.rs's `bzero` and its use, and the old ceiling's slack of one.
-# WP-K6 8b: 20, from 21: `memory_range`'s `unsafe` `MemoryRange::new` goes with `MemoryRange`.
-max_unsafe = 20
+# WP-K6 8b: 20, from 21: the page layer's range descriptor goes, and its `unsafe` constructor.
+# WP-K6 9c: 19, from 20: ptable.rs's `process_name` (a debug-shell helper) goes with the shell's
+# input side.
+max_unsafe = 19
 max_undocumented = 0
 
 [[budget]]
