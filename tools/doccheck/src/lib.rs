@@ -70,7 +70,7 @@ pub fn check(root: &Path, scope: Scope) -> Vec<Finding> {
     wire_tables(&mut c, &pages);
     summary(&mut c, &pages);
     if scope.code {
-        code(&mut c, &pages, &defs);
+        code(&mut c, &defs);
     }
     let mut out = c.out;
     if let Some(keep) = scope.pages {
@@ -303,6 +303,9 @@ fn has_phrase(lower: &str, phrase: &str) -> bool {
     })
 }
 
+/// Words that look like commit hashes and are not.
+const NOT_HASHES: [&str; 1] = ["ed25519"];
+
 /// C4's patterns; commit hashes only when `hashes`. With `checker`, `C1`..`C12` are this
 /// checker's rule names, not package IDs (the page that documents the checker). One message per
 /// match.
@@ -337,6 +340,7 @@ fn process_refs(s: &str, hashes: bool, checker: bool) -> Vec<String> {
         } else if lw == "wash" {
             out.push("process reference `wash`".into());
         } else if hashes
+            && !NOT_HASHES.contains(&w)
             && (7..=40).contains(&w.len())
             && w.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
             && w.bytes().any(|b| b.is_ascii_digit())
@@ -590,13 +594,8 @@ fn crates(root: &Path) -> BTreeMap<String, (String, BTreeSet<String>)> {
                 let src = fs::read_to_string(root.join(f)).unwrap_or_default();
                 let lines: Vec<&str> = src.lines().collect();
                 for (i, _) in lines.iter().enumerate().filter(|(_, l)| l.trim() == "#[test]") {
-                    for l in lines.iter().skip(i + 1).take(3) {
-                        if let Some(at) = l.find("fn ") {
-                            let rest = &l[at + 3..];
-                            if let Some(end) = rest.find('(') {
-                                tests.insert(rest[..end].to_string());
-                            }
-                        }
+                    if let Some(name) = test_fn(&lines[i + 1..]) {
+                        tests.insert(name.to_string());
                     }
                 }
             }
@@ -604,6 +603,21 @@ fn crates(root: &Path) -> BTreeMap<String, (String, BTreeSet<String>)> {
         }
     }
     out
+}
+
+/// The name of the `fn` a `#[test]` marks: the first line after it that is not a comment or part
+/// of a further attribute, which may span lines.
+fn test_fn<'a>(after: &[&'a str]) -> Option<&'a str> {
+    let mut depth = 0i32;
+    for l in after {
+        let t = l.trim();
+        if depth == 0 && !t.starts_with("#[") && !t.starts_with("//") && !t.is_empty() {
+            let rest = &t[t.find("fn ")? + 3..];
+            return rest.find('(').map(|end| &rest[..end]);
+        }
+        depth += t.matches('[').count() as i32 - t.matches(']').count() as i32;
+    }
+    None
 }
 
 /// The quoted strings of `key = [ ... ]` in a manifest.
@@ -679,11 +693,15 @@ struct Def {
     name: String,
     path: String,
     head: usize,
+    /// The sections that carry the rule further, `### <ID> (<name>), on the timer`: (page, heading).
+    parts: Vec<(String, usize)>,
 }
 
-/// `### <ID> (<name>)` where C5 allows a definition; C5(a) duplicates.
+/// `### <ID> (<name>)` where C5 allows a definition; C5(a) duplicates. A heading that adds words
+/// after the name is a part of the definition and must repeat its name exactly.
 fn definitions(c: &mut Ctx, pages: &[Page]) -> BTreeMap<String, Def> {
     let mut defs: BTreeMap<String, Def> = BTreeMap::new();
+    let mut parts = Vec::new();
     for p in pages {
         let anywhere = p.path == "docs/kernel/invariants.md" || p.path == "docs/testbench.md";
         let props = p.path.starts_with("docs/kernel/") || p.path.starts_with("docs/servers/");
@@ -692,25 +710,45 @@ fn definitions(c: &mut Ctx, pages: &[Page]) -> BTreeMap<String, Def> {
                 let up = head.parent.map(|u| &p.heads[u]);
                 up.is_some_and(|u| u.level == 2 && u.text == "Security properties")
             };
-            let Some((id, name)) = def_heading(head) else { continue };
+            let Some((id, name, part)) = rule_heading(head) else { continue };
             if !(anywhere || (props && in_props())) {
                 continue;
             }
-            if let Some(d) = defs.get(&id) {
+            if part {
+                parts.push((id, name, p.path.clone(), h, head.line));
+            } else if let Some(d) = defs.get(&id) {
                 let msg = format!("{id} is defined twice (also in {})", d.path);
                 c.err(5, &p.path, head.line + 1, msg);
-                continue;
+            } else {
+                defs.insert(id, Def { name, path: p.path.clone(), head: h, parts: Vec::new() });
             }
-            defs.insert(id, Def { name, path: p.path.clone(), head: h });
+        }
+    }
+    for (id, name, path, h, line) in parts {
+        match defs.get_mut(&id) {
+            Some(d) if d.name == name => d.parts.push((path, h)),
+            Some(d) => c.err(5, &path, line + 1, format!("a part of {id} must repeat `{id} ({})`", d.name)),
+            None => c.err(5, &path, line + 1, format!("{id} is not defined")),
         }
     }
     defs
 }
 
+/// A level-3 `<ID> (<name>)` heading: the ID, the name, and whether words follow the name.
+fn rule_heading(head: &Head) -> Option<(String, String, bool)> {
+    let (id, rest) = head.text.split_once(" (")?;
+    if head.level != 3 || !(is_rule_id(id) || id == "Rule F") {
+        return None;
+    }
+    if let Some(name) = rest.strip_suffix(')') {
+        return Some((id.to_string(), name.to_string(), false));
+    }
+    let (name, after) = rest.split_once(')')?;
+    Some((id.to_string(), name.to_string(), true)).filter(|_| !after.is_empty())
+}
+
 fn def_heading(head: &Head) -> Option<(String, String)> {
-    let (id, name) = head.text.split_once(" (")?;
-    let name = name.strip_suffix(')')?;
-    (head.level == 3 && (is_rule_id(id) || id == "Rule F")).then(|| (id.to_string(), name.to_string()))
+    rule_heading(head).filter(|(_, _, part)| !part).map(|(id, name, _)| (id, name))
 }
 
 /// C5(b) and (c).
@@ -778,6 +816,19 @@ fn cells(line: &str) -> Vec<String> {
     t.split('|').map(|x| x.trim().to_string()).collect()
 }
 
+/// `s` without its parenthesised parts.
+fn without_names(s: &str) -> String {
+    let mut depth = 0;
+    s.chars()
+        .filter(|&ch| {
+            depth += (ch == '(') as i32;
+            let keep = depth == 0;
+            depth -= (ch == ')' && depth > 0) as i32;
+            keep
+        })
+        .collect()
+}
+
 fn security(c: &mut Ctx, pages: &[Page], defs: &BTreeMap<String, Def>) {
     const PATH: &str = "docs/SECURITY.md";
     let Some(sec) = pages.iter().find(|p| p.path == PATH) else {
@@ -800,7 +851,9 @@ fn security(c: &mut Ctx, pages: &[Page], defs: &BTreeMap<String, Def>) {
             c.err(7, PATH, i + 1, "register row does not have 6 cells".into());
             continue;
         }
-        for (_, id) in words(&strip_links(&row[1])).into_iter().filter(|(_, w)| is_rule_id(w)) {
+        // The IDs a row states, not those a rule's name mentions (`I7 (every flow obeys R1)`).
+        let rule = without_names(&strip_links(&row[1]));
+        for (_, id) in words(&rule).into_iter().filter(|(_, w)| is_rule_id(w)) {
             rows.insert(id.to_string());
             let Some(d) = defs.get(id) else {
                 c.err(7, PATH, i + 1, format!("{id} is not defined"));
@@ -811,6 +864,20 @@ fn security(c: &mut Ctx, pages: &[Page], defs: &BTreeMap<String, Def>) {
                 c.err(7, PATH, i + 1, format!("{id} has no status on its page"));
                 continue;
             };
+            // The rule's parts add their tests, and a partly tested part makes the rule partly tested.
+            let parts: Vec<&Status> = d
+                .parts
+                .iter()
+                .filter_map(|(path, h)| pages.iter().find(|p| p.path == *path)?.cover(*h))
+                .collect();
+            let mut tests: BTreeSet<String> = st.tests().iter().cloned().collect();
+            parts.iter().for_each(|s| tests.extend(s.tests().iter().cloned()));
+            let partly = parts.iter().any(|s| matches!(s, Status::Partly(_)));
+            let want = if partly && matches!(st, Status::Built(_)) {
+                Status::Partly(Vec::new()).cell()
+            } else {
+                st.cell()
+            };
             let cell = &row[4];
             let forms = [Status::Built(Vec::new()), Status::Partly(Vec::new())];
             let valid = forms
@@ -819,16 +886,16 @@ fn security(c: &mut Ctx, pages: &[Page], defs: &BTreeMap<String, Def>) {
                 .any(|s| s.cell() == *cell);
             if !valid {
                 c.err(7, PATH, i + 1, format!("malformed status `{cell}`"));
-            } else if *cell != st.cell() {
-                c.err(7, PATH, i + 1, format!("status `{cell}` disagrees with {id}'s `{}`", st.cell()));
+            } else if *cell != want {
+                c.err(7, PATH, i + 1, format!("status `{cell}` disagrees with {id}'s `{want}`"));
             }
             let listed: BTreeSet<String> = row[3]
                 .split(',')
                 .map(|t| t.trim().trim_matches('`').to_string())
                 .filter(|t| !matches!(t.as_str(), "" | "-" | "—"))
                 .collect();
-            if listed != st.tests().iter().cloned().collect() {
-                c.err(7, PATH, i + 1, format!("Tested by differs from {id}'s status line"));
+            if listed != tests {
+                c.err(7, PATH, i + 1, format!("Tested by differs from {id}'s status lines"));
             }
         }
         for path in row[2].split('`').skip(1).step_by(2) {
@@ -932,17 +999,14 @@ fn wire_tables(c: &mut Ctx, pages: &[Page]) {
 
 // ---- C11: code comments and case descriptions ----
 
-fn code(c: &mut Ctx, pages: &[Page], defs: &BTreeMap<String, Def>) {
+/// The notes the book replaced, by file name; C11 holds code to citing the book instead. Fixed
+/// here, so the rule outlives the notes themselves.
+const OLD_NOTES: &str = "ANSWERS ARCHITECT-NOTES BOOT BUILD-PLAN CAPABILITIES CONTAINMENT DEBUGGING \
+    DEVICE-GRANTS FORMATTING GAME HISTORY INIT IO-ARCHITECTURE KERNEL-SPEC MEMORY-LAYOUT NAMESPACES OS-API \
+    PACKAGES PLAN PLATFORM-FPGA QUESTIONS RESOURCES STATUS USERLAND-API USERLAND VERIFIED-BOOT WIRE";
+
+fn code(c: &mut Ctx, defs: &BTreeMap<String, Def>) {
     const SKIP: [&str; 3] = ["vendor", "bios", "userland/otp"];
-    let current: BTreeSet<&str> = pages.iter().map(|p| p.path.rsplit('/').next().unwrap_or("")).collect();
-    let mut legacy = Vec::new();
-    walk(c.root, "docs/legacy", &|_| true, &mut legacy);
-    let legacy: Vec<String> = legacy
-        .iter()
-        .filter_map(|p| p.rsplit('/').next())
-        .filter(|n| n.ends_with(".md") && !current.contains(n))
-        .map(str::to_string)
-        .collect();
     let mut files = Vec::new();
     let skip = |p: &str| {
         let name = p.rsplit('/').next().unwrap_or("");
@@ -973,7 +1037,11 @@ fn code(c: &mut Ctx, pages: &[Page], defs: &BTreeMap<String, Def>) {
             let Some(text) = text else { continue };
             let mut msgs = process_refs(text, true, false);
             msgs.extend(
-                legacy.iter().filter(|n| text.contains(n.as_str())).map(|n| format!("legacy doc name `{n}`")),
+                OLD_NOTES
+                    .split_whitespace()
+                    .map(|n| format!("{n}.md"))
+                    .filter(|n| text.contains(n.as_str()))
+                    .map(|n| format!("legacy doc name `{n}`")),
             );
             if text.contains("docs/legacy") {
                 msgs.push("names docs/legacy".into());
