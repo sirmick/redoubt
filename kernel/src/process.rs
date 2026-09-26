@@ -302,7 +302,7 @@ fn new_address_space(ss: &mut SystemServices, mm: &mut MemoryManager, child: PID
     // active one and the hardware PID must match.
     let prepared = ss
         .get_process(child)
-        .and_then(|p| p.activate())
+        .map(|p| p.activate())
         .map(|()| ArchProcess::setup_empty_process(child))
         .map_err(|_| Error::OutOfMemory);
     ss.activate(here).expect("the running process can be activated");
@@ -359,7 +359,6 @@ pub fn process_map(
     // rests on the other (KERNEL-SPEC.md, ABI). It must refuse before any page moves,
     // because a later failure would not put the source back. Not W+X, and not writable
     // without readable.
-    let flags = crate::mem::redoubt_flags(flags);
     crate::mem::check_map_flags(flags)?;
     let child = p.pid;
     let space = ss.mapping_of(child).ok_or(Error::NotPermitted)?;
@@ -467,7 +466,7 @@ pub fn process_start(
     }
     mm.thread_created(child, INITIAL_TID).expect("process_start: the thread page was counted above");
     let here = crate::arch::process::current_pid();
-    ss.get_process(child).and_then(|p| p.activate()).expect("a created process can be activated");
+    ss.get_process(child).expect("a created process exists").activate();
     ArchProcess::setup_first_thread(child, entry, sp, arg);
     ss.activate(here).expect("the running process can be activated");
     ss.start_process(child).expect("a created process can be started");

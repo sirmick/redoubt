@@ -2,37 +2,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Page table entry flags. Sv32 and Sv39 entries use the same low ten bits, including the
-//! two software bits Redoubt uses for lent (`S`) and swapped (`P`) pages, so the flags are the
-//! `paging` crate's `PteFlags` on both widths, and the loader and kernel agree.
+//! software bit Redoubt uses for lent (`S`) pages, so the flags are the `paging` crate's
+//! `PteFlags` on both widths, and the loader and kernel agree.
 
-use redoubt_abi::MemoryFlags;
+use paging::PteFlags;
+use redoubt_sys::MemFlags;
 
-pub use paging::PteFlags as MMUFlags;
-
-pub fn translate_flags(req_flags: MemoryFlags) -> MMUFlags {
-    let mut flags = MMUFlags::NONE;
-
-    // TODO for vex-ii:
-    // Vexii implement A-flag. In this case, we should not just be setting every
-    // readable page to "A", we should add a handler in the IRQ handler that sets "A"
-    // when the page is actually read.
-    if req_flags & redoubt_abi::MemoryFlags::R == redoubt_abi::MemoryFlags::R {
-        flags |= MMUFlags::R;
+/// The entry permissions for a mapping's `flags`.
+pub fn translate_flags(flags: MemFlags) -> PteFlags {
+    let mut pte = PteFlags::NONE;
+    let bits = [
+        (MemFlags::READ, PteFlags::R),
+        (MemFlags::WRITE, PteFlags::W),
+        (MemFlags::EXECUTE, PteFlags::X),
+    ];
+    for (flag, bit) in bits {
+        if flags.contains(flag) {
+            pte |= bit;
+        }
     }
-
-    // TODO for vex-ii:
-    // Vexii implement D-flag. In this case, we should not just be setting every
-    // writeable page to "D", we should add a handler in the IRQ handler that sets "D"
-    // when the page is actually writte.
-    if req_flags & redoubt_abi::MemoryFlags::W == redoubt_abi::MemoryFlags::W {
-        flags |= MMUFlags::W;
-    }
-
-    if req_flags & redoubt_abi::MemoryFlags::X == redoubt_abi::MemoryFlags::X {
-        flags |= MMUFlags::X;
-    }
-    if req_flags & redoubt_abi::MemoryFlags::P == redoubt_abi::MemoryFlags::P {
-        flags |= MMUFlags::P;
-    }
-    flags
+    pte
 }

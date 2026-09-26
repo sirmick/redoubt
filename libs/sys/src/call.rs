@@ -45,6 +45,9 @@ impl MemFlags {
 
     pub const fn bits(self) -> u32 { self.0 }
 
+    /// Whether every flag of `other` is set here.
+    pub const fn contains(self, other: MemFlags) -> bool { self.0 & other.0 == other.0 }
+
     /// `None` if an unknown bit is set, or both `WRITE` and `EXECUTE`.
     pub const fn from_bits(bits: u32) -> Option<MemFlags> {
         let wx = MemFlags::WRITE.0 | MemFlags::EXECUTE.0;

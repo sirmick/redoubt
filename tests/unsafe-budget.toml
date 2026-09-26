@@ -98,7 +98,8 @@ paths = [
 # register window (the reset of answer 173); no other access to a device's registers needs one.
 # WP-K6: 21, from 27: with the old call interface, server.rs's message queue, services.rs's two
 # old message buffers, mem.rs's `bzero` and its use, and the old ceiling's slack of one.
-max_unsafe = 21
+# WP-K6 8b: 20, from 21: `memory_range`'s `unsafe` `MemoryRange::new` goes with `MemoryRange`.
+max_unsafe = 20
 max_undocumented = 0
 
 [[budget]]

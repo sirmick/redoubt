@@ -342,7 +342,7 @@ impl MemoryManager {
     pub fn map_device(&mut self, pid: PID, h: u32) -> Result<(usize, usize), Error> {
         let d = self.device_of_kind(pid, h, Kind::Mmio)?;
         let slot = self.dma_slot_of(&d);
-        let flags = redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W;
+        let flags = redoubt_sys::MemFlags::READ | redoubt_sys::MemFlags::WRITE;
         let len = d.size as usize;
         let at = self.map_run(pid, len / PAGE_SIZE, flags, Some(d.base as usize))?;
         if let Some(slot) = slot {
@@ -377,7 +377,7 @@ impl MemoryManager {
         let Some(slot) = self.dma_slot_of(&d) else { return Err(Error::NotPermitted) };
         // Charged and zeroed before anything is mapped (R6, R11).
         let phys = self.dma_new_run(pid, slot, npages)?;
-        let flags = redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W;
+        let flags = redoubt_sys::MemFlags::READ | redoubt_sys::MemFlags::WRITE;
         match self.map_run(pid, npages, flags, Some(phys)) {
             Ok(at) => Ok((at, phys as u64)),
             Err(e) => {

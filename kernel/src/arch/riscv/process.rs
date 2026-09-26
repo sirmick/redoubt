@@ -190,9 +190,6 @@ impl Process {
         Process { pid }
     }
 
-    /// Mark this process as running on the current core
-    pub fn activate(&mut self) -> Result<(), redoubt_abi::Error> { Ok(()) }
-
     /// Calls the provided function with the current inner process state.
     pub fn with_current<F, R>(f: F) -> R
     where
@@ -242,7 +239,7 @@ impl Process {
     }
 
     /// Set the current thread number.
-    pub fn set_tid(&mut self, tid: TID) -> Result<(), redoubt_abi::Error> {
+    pub fn set_tid(&mut self, tid: TID) {
         let process = process_impl();
         let tid = fixup_irq(tid);
         klog!("Switching to thread {}", tid);
@@ -251,7 +248,6 @@ impl Process {
         if tid == IRQ_TID || tid == EXCEPTION_TID {
             process.allocated_threads |= 1 << tid;
         }
-        Ok(())
     }
 
     pub fn thread_mut(&mut self, tid: TID) -> &mut Thread {
@@ -295,7 +291,7 @@ impl Process {
             mm.reserve_range(
                 stack as *mut u8,
                 DEFAULT_STACK_SIZE,
-                redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W,
+                redoubt_sys::MemFlags::READ | redoubt_sys::MemFlags::WRITE,
             )
             .expect("couldn't reserve stack")
         });
@@ -364,14 +360,11 @@ impl Process {
         process.allocated_threads |= 1 << new_tid;
     }
 
-    /// Destroy a given thread.
-    ///
-    /// # Errors
-    ///     redoubt_abi::ThreadNotAvailable - the thread did not exist
-    pub fn destroy_thread(&mut self, tid: TID) -> Result<(), redoubt_abi::Error> {
+    /// Destroy a given thread: `false` if it did not exist.
+    pub fn destroy_thread(&mut self, tid: TID) -> bool {
         // Ensure this thread is allocated, regardless of the PC it was given.
         if !self.thread_exists(tid) || tid == IRQ_TID {
-            return Err(redoubt_abi::Error::ThreadNotAvailable);
+            return false;
         }
 
         let thread = self.thread_mut(tid);
@@ -380,7 +373,7 @@ impl Process {
         }
         thread.sepc = 0;
         process_impl().allocated_threads &= !(1 << tid);
-        Ok(())
+        true
     }
 
     pub fn print_all_threads(&self) {
@@ -404,7 +397,7 @@ impl Process {
         print!("{}", _thread);
     }
 
-    pub fn destroy(pid: PID) -> Result<(), redoubt_abi::Error> {
+    pub fn destroy(pid: PID) {
         let pid_idx = pid.get() as usize - 1;
         PROCESS_TABLE.with(|pt| {
             if pid_idx >= pt.table.len() {
@@ -412,7 +405,6 @@ impl Process {
             }
             pt.table[pid_idx] = false;
         });
-        Ok(())
     }
 
     /// This is used by debugging routines to sanity check state, which are typically #[cfg]'d out

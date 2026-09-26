@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-use redoubt_abi::{MemoryFlags, MemoryRange, PID};
-use redoubt_sys::{PAGE_SIZE, USER_AREA_END};
+use redoubt_abi::PID;
+use redoubt_sys::{MemFlags, PAGE_SIZE, USER_AREA_END};
 
 pub use crate::arch::mem::MemoryMapping;
 use crate::arch::process::Process;
@@ -44,18 +44,31 @@ impl MemoryRangeExtra {
     fn contains(&self, addr: usize) -> bool { addr >= self.start && addr - self.start < self.size }
 }
 
-/// Construct a `MemoryRange` describing `addr..addr + size`.
-///
-/// `MemoryRange::new` is `unsafe` because a range may later be handed to a process as
-/// valid, page-aligned memory. Inside the kernel that property is established by the page
-/// tables, and the descriptor's own invariants -- non-null address, non-zero size -- are
-/// exactly what `new` checks and returns an error for. So building the descriptor is a
-/// safe kernel operation: a bad address surfaces later as a mapping error, not as
-/// unsoundness here.
-pub fn memory_range(addr: usize, size: usize) -> Result<MemoryRange, redoubt_abi::Error> {
-    // SAFETY: see the doc comment.
-    unsafe { MemoryRange::new(addr, size) }
+/// Why the page layer refused: the page tables (`arch::mem`) and the frame ownership table here.
+/// Kernel-internal: every system call maps it to the `redoubt_sys::Error` its row names, with
+/// an explicit `map_err` at the call's boundary; there is no `From`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PageError {
+    /// Nothing mapped or reserved there, no table reaches it, or not a frame the table tracks.
+    Unmapped,
+    /// Not a canonical virtual address (Sv39).
+    NonCanonical,
+    /// Reserved for demand paging and not yet backed.
+    Reserved,
+    /// Either alias of a loan (the `S` bit), or not the loan the step expects.
+    Lent,
+    /// Already mapped, reserved or owned: the step needs it free.
+    InUse,
+    /// No free frame, or the owner's budget cannot pay for one (R6).
+    NoFrame,
+    /// No free range of that size in the placement area.
+    NoSpace,
+    /// Not page-aligned.
+    Unaligned,
+    /// Permissions the page tables refuse: W+X, W without R, or none (R11).
+    BadFlags,
 }
+
 
 /// Where the first page of each placement area is, per process (`ProcessInner`): what
 /// `find_virtual_address` searches when the caller names no address.
@@ -152,7 +165,7 @@ impl MemoryManager {
         rpt_base: usize,
         xpt_base: usize,
         args: &crate::args::KernelArguments,
-    ) -> Result<(), redoubt_abi::Error> {
+    ) -> Result<(), PageError> {
         use core::slice;
         let mut args_iter = args.iter();
         let xarg_def = args_iter.next().expect("mm: no kernel arguments found");
@@ -214,11 +227,11 @@ impl MemoryManager {
     /// Allocate a single page to the given process, charged to its budget (R6): `OutOfMemory` if
     /// the budget cannot pay. DOES NOT ZERO THE PAGE!!! This function CANNOT zero the page, as
     /// it hasn't been mapped yet.
-    pub fn alloc_page(&mut self, pid: PID) -> Result<usize, redoubt_abi::Error> {
+    pub fn alloc_page(&mut self, pid: PID) -> Result<usize, PageError> {
         let index = self.alloc_frame(pid)?;
         if self.charge_frame(pid).is_err() {
             self.allocations[index] = None;
-            return Err(redoubt_abi::Error::OutOfMemory);
+            return Err(PageError::NoFrame);
         }
         Ok(self.ram_start + index * PAGE_SIZE)
     }
@@ -226,16 +239,16 @@ impl MemoryManager {
     /// Allocate a page for a process's saved thread contexts (`ProcessImpl`), charged to the
     /// budget the process runs in like any other frame it owns (answer 127: the kernel
     /// charges what a process really costs instead of holding it back from `root` at boot).
-    pub fn alloc_context_page(&mut self, pid: PID) -> Result<usize, redoubt_abi::Error> {
+    pub fn alloc_context_page(&mut self, pid: PID) -> Result<usize, PageError> {
         self.alloc_page(pid)
     }
 
     /// Take a free frame for `owner`; its index in the ownership table.
-    fn alloc_frame(&mut self, owner: PID) -> Result<usize, redoubt_abi::Error> {
+    fn alloc_frame(&mut self, owner: PID) -> Result<usize, PageError> {
         // First fit. (The previous next-fit search computed its starting point with `max`
         // where `min` was meant, so it always scanned from the start anyway.)
         let index =
-            self.allocations.iter().position(Option::is_none).ok_or(redoubt_abi::Error::OutOfMemory)?;
+            self.allocations.iter().position(Option::is_none).ok_or(PageError::NoFrame)?;
         self.allocations[index] = Some(owner);
         Ok(index)
     }
@@ -243,7 +256,7 @@ impl MemoryManager {
     /// A frame for the kernel itself (the test-only trace ring), taken at boot before the budget
     /// tree counts what the kernel keeps.
     #[cfg(feature = "sched-trace")]
-    pub fn kernel_frame(&mut self) -> Result<usize, redoubt_abi::Error> {
+    pub fn kernel_frame(&mut self) -> Result<usize, PageError> {
         let index = self.alloc_frame(crate::services::KERNEL_PID)?;
         Ok(self.ram_start + index * PAGE_SIZE)
     }
@@ -334,7 +347,7 @@ impl MemoryManager {
         virt_ptr: *mut u8,
         size: usize,
         kind: MemoryType,
-    ) -> Result<*mut u8, redoubt_abi::Error> {
+    ) -> Result<*mut u8, PageError> {
         // If we were supplied a perfectly good address, return that.
         if !virt_ptr.is_null() {
             return Ok(virt_ptr);
@@ -357,7 +370,7 @@ impl MemoryManager {
 
             // A request larger than the whole region fits nowhere (and `end - size` would wrap).
             let Some(last_start) = end.checked_sub(size).filter(|last| *last >= start) else {
-                return Err(redoubt_abi::Error::BadAddress);
+                return Err(PageError::NoSpace);
             };
             // Look for a sequence of `size` pages that are free.
             for potential_start in (initial..last_start).step_by(PAGE_SIZE) {
@@ -393,7 +406,7 @@ impl MemoryManager {
                     return Ok(potential_start as *mut u8);
                 }
             }
-            Err(redoubt_abi::Error::BadAddress)
+            Err(PageError::NoSpace)
         })
     }
 
@@ -404,18 +417,14 @@ impl MemoryManager {
         &mut self,
         virt_ptr: *mut u8,
         size: usize,
-        flags: MemoryFlags,
-    ) -> Result<redoubt_abi::MemoryRange, redoubt_abi::Error> {
+        flags: MemFlags,
+    ) -> Result<(), PageError> {
         // If no address was specified, pick the next address that fits
         // in the "default" range
         let virt = self.find_virtual_address(virt_ptr, size, MemoryType::Default)? as usize;
 
-        if virt & 0xfff != 0 {
-            return Err(redoubt_abi::Error::BadAlignment);
-        }
-
-        if size & 0xfff != 0 {
-            return Err(redoubt_abi::Error::BadAlignment);
+        if virt & 0xfff != 0 || size & 0xfff != 0 {
+            return Err(PageError::Unaligned);
         }
 
         let mut mm = MemoryMapping::current();
@@ -428,7 +437,7 @@ impl MemoryManager {
                 return Err(e);
             }
         }
-        crate::mem::memory_range(virt as usize, size)
+        Ok(())
     }
 
     pub fn is_main_memory(&self, phys: *mut u8) -> bool {
@@ -456,16 +465,16 @@ impl MemoryManager {
     ///
     /// # Errors
     ///
-    /// * MemoryInUse - The specified page is already mapped
+    /// * InUse - The specified page is already mapped
     pub fn map_range(
         &mut self,
         phys_ptr: *mut u8,
         virt_ptr: *mut u8,
         size: usize,
         pid: PID,
-        flags: MemoryFlags,
+        flags: MemFlags,
         kind: MemoryType,
-    ) -> Result<redoubt_abi::MemoryRange, redoubt_abi::Error> {
+    ) -> Result<(), PageError> {
         let phys = phys_ptr as usize;
         let virt = self.find_virtual_address(virt_ptr, size, kind)?;
 
@@ -497,27 +506,26 @@ impl MemoryManager {
                 return Err(e);
             }
         }
-
-        crate::mem::memory_range(virt as usize, size)
+        Ok(())
     }
 
     /// A frame changes hands between two processes that are not the running one: a transfer
     /// (R4) or an abandoned lend (R3). The budgets follow the frame, as they do for every other
     /// ownership change.
-    pub fn move_frame(&mut self, phys: usize, from: PID, to: PID) -> Result<(), redoubt_abi::Error> {
+    pub fn move_frame(&mut self, phys: usize, from: PID, to: PID) -> Result<(), PageError> {
         self.claim_release_move(phys as *mut usize, to, ClaimReleaseMove::Move(from))
     }
 
     /// Free a frame `pid` owns (an abandoned lend the server replied to, R3).
-    pub fn free_frame_of(&mut self, phys: usize, pid: PID) -> Result<(), redoubt_abi::Error> {
+    pub fn free_frame_of(&mut self, phys: usize, pid: PID) -> Result<(), PageError> {
         self.release_page(phys as *mut usize, pid)
     }
 
     /// Back every demand-paged page of `[address, address + len)` in the current address
     /// space, so that the range can be lent or moved. Callers hold the memory manager
     /// already, which is why the backing takes `self` instead of borrowing it again.
-    pub fn ensure_range_exists(&mut self, address: usize, len: usize) -> Result<(), redoubt_abi::Error> {
-        let end = address.checked_add(len).ok_or(redoubt_abi::Error::BadAddress)?;
+    pub fn ensure_range_exists(&mut self, address: usize, len: usize) -> Result<(), PageError> {
+        let end = address.checked_add(len).ok_or(PageError::Unmapped)?;
         for page in (address..end).step_by(PAGE_SIZE) {
             crate::arch::mem::ensure_page_exists_inner(self, page)?;
         }
@@ -529,8 +537,8 @@ impl MemoryManager {
     /// credited to its lender, not to `pid`, so it fails this check; checked any later, the
     /// mismatch would surface only after the page tables had changed, too late to back out. The
     /// pages must already be backed (`ensure_range_exists`), so each has a frame to check.
-    pub fn check_owned_range(&self, pid: PID, address: usize, len: usize) -> Result<(), redoubt_abi::Error> {
-        let end = address.checked_add(len).ok_or(redoubt_abi::Error::BadAddress)?;
+    pub fn check_owned_range(&self, pid: PID, address: usize, len: usize) -> Result<(), PageError> {
+        let end = address.checked_add(len).ok_or(PageError::Unmapped)?;
         for page in (address..end).step_by(PAGE_SIZE) {
             let phys = crate::arch::mem::virt_to_phys(page)?;
             let owner = if self.is_main_memory(phys as *mut u8) {
@@ -539,7 +547,7 @@ impl MemoryManager {
                 self.extra_index(phys).and_then(|index| self.extra_allocations[index])
             };
             if owner != Some(pid) {
-                return Err(redoubt_abi::Error::ShareViolation);
+                return Err(PageError::Lent);
             }
         }
         Ok(())
@@ -550,7 +558,7 @@ impl MemoryManager {
         addr: *mut usize,
         pid: PID,
         action: ClaimReleaseMove,
-    ) -> Result<(), redoubt_abi::Error> {
+    ) -> Result<(), PageError> {
         /// Modify the memory tracking table to note which process owns
         /// the specified address.
         fn action_inner(
@@ -559,7 +567,7 @@ impl MemoryManager {
             action: ClaimReleaseMove,
             allow_alias: bool,
             addr: usize,
-        ) -> Result<(), redoubt_abi::Error> {
+        ) -> Result<(), PageError> {
             if let Some(current_pid) = *owner_addr {
                 if current_pid != pid {
                     // klog!(
@@ -572,10 +580,10 @@ impl MemoryManager {
                     // );
                     if let ClaimReleaseMove::Move(existing_pid) = action {
                         if existing_pid != current_pid {
-                            return Err(redoubt_abi::Error::MemoryInUse);
+                            return Err(PageError::InUse);
                         }
                     } else {
-                        return Err(redoubt_abi::Error::MemoryInUse);
+                        return Err(PageError::InUse);
                     }
                 }
             }
@@ -590,7 +598,7 @@ impl MemoryManager {
                                     addr, owner_addr, pid
                                 );
                             } else {
-                                return Err(redoubt_abi::Error::MemoryInUse);
+                                return Err(PageError::InUse);
                             }
                         }
                         *owner_addr = Some(pid);
@@ -602,7 +610,7 @@ impl MemoryManager {
                                 "ERR: physical address {:x} already used by {:?} (requester: {:?})",
                                 addr, owner_addr, pid
                             );
-                            return Err(redoubt_abi::Error::MemoryInUse);
+                            return Err(PageError::InUse);
                         }
                     }
                 }
@@ -620,7 +628,7 @@ impl MemoryManager {
 
         // Ensure the address lies on a page boundary
         if addr & 0xfff != 0 {
-            return Err(redoubt_abi::Error::BadAlignment);
+            return Err(PageError::Unaligned);
         }
 
         let mut offset = 0;
@@ -643,7 +651,7 @@ impl MemoryManager {
                         if let Some(old) = before {
                             self.charge_frame(old).expect("re-charging the page just uncharged");
                         }
-                        return Err(redoubt_abi::Error::OutOfMemory);
+                        return Err(PageError::NoFrame);
                     }
                 }
             }
@@ -671,16 +679,16 @@ impl MemoryManager {
         //     "mem: unable to claim or release physical address {:08x}",
         //     addr
         // );
-        Err(redoubt_abi::Error::BadAddress)
+        Err(PageError::Unmapped)
     }
 
     /// Mark a given address as being owned by the specified process ID
-    fn claim_page(&mut self, addr: *mut usize, pid: PID) -> Result<(), redoubt_abi::Error> {
+    fn claim_page(&mut self, addr: *mut usize, pid: PID) -> Result<(), PageError> {
         self.claim_release_move(addr, pid, ClaimReleaseMove::Claim)
     }
 
     /// Mark a given address as no longer being owned by the specified process ID
-    fn release_page(&mut self, addr: *mut usize, pid: PID) -> Result<(), redoubt_abi::Error> {
+    fn release_page(&mut self, addr: *mut usize, pid: PID) -> Result<(), PageError> {
         self.claim_release_move(addr, pid, ClaimReleaseMove::Release)
     }
 
@@ -776,9 +784,7 @@ impl MemoryManager {
                     let Ok(process) = system_services.get_process(pid) else {
                         continue;
                     };
-                    let Ok(_) = process.activate() else {
-                        continue;
-                    };
+                    process.activate();
                     match MemoryMapping::current().phys_to_virt(phys) {
                         Err(e) => {
                             println!("!!! ERROR {:?} !!!", e);
@@ -799,8 +805,7 @@ impl MemoryManager {
                                         system_services
                                             .get_process(*existing_owner)
                                             .unwrap()
-                                            .activate()
-                                            .unwrap();
+                                            .activate();
                                         let is_lent = if let Ok(Some(owned_address)) =
                                             MemoryMapping::current().phys_to_virt(phys)
                                         {
@@ -808,7 +813,7 @@ impl MemoryManager {
                                         } else {
                                             false
                                         };
-                                        system_services.get_process(pid).unwrap().activate().unwrap();
+                                        system_services.get_process(pid).unwrap().activate();
                                         is_lent
                                     } else {
                                         false
@@ -849,7 +854,7 @@ impl MemoryManager {
             }
 
             // Restore the previous PID
-            system_services.get_process(current_pid).unwrap().activate().unwrap();
+            system_services.get_process(current_pid).unwrap().activate();
         })
     }
 }
@@ -889,11 +894,8 @@ impl MemoryManager {
         if len == 0 || len % PAGE_SIZE != 0 {
             return Err(bad);
         }
-        let flags = redoubt_flags(flags);
         // The row's own check: no permission at all, or writable without readable.
-        let writable = flags & MemoryFlags::W == MemoryFlags::W;
-        let readable = flags & MemoryFlags::R == MemoryFlags::R;
-        if flags.is_empty() || (writable && !readable) {
+        if flags == MemFlags::NONE || (flags.contains(MemFlags::WRITE) && !flags.contains(MemFlags::READ)) {
             return Err(bad);
         }
         let at = self.map_run(pid, len / PAGE_SIZE, flags, None)?;
@@ -910,7 +912,7 @@ impl MemoryManager {
         &mut self,
         pid: PID,
         npages: usize,
-        flags: MemoryFlags,
+        flags: MemFlags,
         phys: Option<usize>,
     ) -> Result<usize, redoubt_sys::Error> {
         let oom = redoubt_sys::Error::OutOfMemory;
@@ -984,8 +986,7 @@ impl MemoryManager {
     ) -> Result<(), redoubt_sys::Error> {
         let bad = redoubt_sys::Error::InvalidArgument;
         let end = Self::user_range(addr, len)?;
-        let flags = redoubt_flags(flags);
-        if flags.is_empty() {
+        if flags == MemFlags::NONE {
             return Err(bad);
         }
         for page in (addr..end).step_by(PAGE_SIZE) {
@@ -1021,7 +1022,6 @@ impl MemoryManager {
         if !crate::arch::mem::range_available_in(&space, addr, len) {
             return Err(redoubt_sys::Error::InvalidArgument);
         }
-        let flags = redoubt_flags(flags);
         check_map_flags(flags)?;
         let npages = (len / PAGE_SIZE) as u64;
         // `pid` is the running caller, and only the kernel (which makes no syscalls) has no
@@ -1082,30 +1082,19 @@ impl MemoryManager {
 /// Pages just mapped or remapped with `flags` may be fetched from: if they are executable, make
 /// this hart's instruction fetches see what was stored in them (`fence.i`; the pages were zeroed,
 /// or written by their owner before becoming executable, since W^X forbids both at once).
-pub(crate) fn sync_if_executable(flags: MemoryFlags) {
-    if flags & MemoryFlags::X == MemoryFlags::X {
+pub(crate) fn sync_if_executable(flags: MemFlags) {
+    if flags.contains(MemFlags::EXECUTE) {
         crate::arch::mem::sync_icache();
     }
-}
-
-/// The ABI's flags as the page-table layer's. There is no W+X: `MemFlags` cannot hold it.
-pub(crate) fn redoubt_flags(flags: redoubt_sys::MemFlags) -> MemoryFlags {
-    let has = |bit: redoubt_sys::MemFlags, flag| {
-        if flags.bits() & bit.bits() != 0 { flag } else { MemoryFlags::FREE }
-    };
-    has(redoubt_sys::MemFlags::READ, MemoryFlags::R)
-        | has(redoubt_sys::MemFlags::WRITE, MemoryFlags::W)
-        | has(redoubt_sys::MemFlags::EXECUTE, MemoryFlags::X)
 }
 
 /// R11 for a caller that maps with `.expect` afterwards (`map_fixed`, `process_map`): refuse
 /// empty flags, W+X, and writable without readable before anything is charged or moved, so the
 /// page-table layer's own refusal (`check_permissions`) is never what catches them. Decoding
 /// already refuses W+X; this check does not rest on that (KERNEL-SPEC.md, ABI).
-pub(crate) fn check_map_flags(flags: MemoryFlags) -> Result<(), redoubt_sys::Error> {
-    let wx = MemoryFlags::W | MemoryFlags::X;
-    let write_only = flags & MemoryFlags::W == MemoryFlags::W && flags & MemoryFlags::R != MemoryFlags::R;
-    if flags.is_empty() || flags & wx == wx || write_only {
+pub(crate) fn check_map_flags(flags: MemFlags) -> Result<(), redoubt_sys::Error> {
+    let write_only = flags.contains(MemFlags::WRITE) && !flags.contains(MemFlags::READ);
+    if flags == MemFlags::NONE || flags.contains(MemFlags::WRITE | MemFlags::EXECUTE) || write_only {
         return Err(redoubt_sys::Error::InvalidArgument);
     }
     Ok(())
