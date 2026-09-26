@@ -323,11 +323,21 @@ The model checks it on the kernel model's own exit notices (its P7; `PolicyBlame
 
 **Open:** none.
 
+### The transfer audit log
+
+Status: planned · M3 (files in and out)
+
+The audit log begins with file transfers. The steward appends a record for every file-transfer
+operation ([sshd](sshd.md#files-in-and-out)) to a file only it can write, append-only, each record
+signed through `keyd`'s `audit` purpose exactly as [below](#the-audit-log).
+
+**Open:** none.
+
 ### The audit log
 
 Status: planned · M4 (self-hosted development)
 
-The steward appends a record for every mint, delegation, revocation, approval, denial, lease end,
+The same log extends to every steward action: the steward appends a record for every mint, delegation, revocation, approval, denial, lease end,
 blame and lockout, with the principal chain, to a file only it can write. Each record carries the
 request's labels and is read under the label check
 ([R25 (the label check)](serving.md#r25-the-label-check)), so a labelled request's target never

@@ -150,6 +150,10 @@ Status: planned · M5 (persist, install, share)
   then only with the one message shape it may sign, never arbitrary bytes, or a hijacked agent
   would be a signature oracle that lets its peer log in as its sponsor elsewhere
   ([steward](steward.md#leases)).
+- **A `pkg` purpose.** A key with it signs only a package: the full preimage
+  `"redoubt.pkg.v1\0" || u64_le(len) || archive` that `keyd` builds itself from the archive, in the
+  loader's form, with an approval per signature ([packages](pkg.md#what-is-signed)). It is the one
+  purpose whose signed message is not a 32-byte digest, and R44 is restated to cover it.
 
 **Open:** where sealed keys are kept and what they are sealed with; the message shapes a
 principal's key may sign.

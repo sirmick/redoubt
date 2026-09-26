@@ -1,19 +1,17 @@
 # The supervisor
 
-The supervisor keeps long-running services up after boot: services a principal or the system runs
-beyond `init`'s fixed set of system servers. It starts each from a record, restarts it when it
+The supervisor keeps long-running services up: it starts each from a record, restarts it when it
 exits within limits the record sets, keeps its log, and gives it exactly the authority its record
-names on every start. It is the place for services that come and go at run time, as `init` is for
-the servers the boot manifest names.
+names on every start. Which services it supervises, principals' own or also the system's after
+boot, and whether it takes over restarting from `init` or runs beside it, are open.
 
 ## Purpose
 
-`init` starts and restarts the system servers the signed manifest names, and nothing else. Once the
-steward keeps state and principals install packages, some code must run as a service: a
-principal's own server, a project's build worker, a scheduled task. Without a supervisor each would
-need a session kept open to run it, or its own restart logic. The supervisor gives them one
-mechanism, under the same rules as every launch: the loader stub, fresh connections, and grants no
-wider than their owner's.
+`init` starts and restarts the system servers the signed manifest names. Once the steward keeps
+state and principals install packages, some code must run as a service: a principal's own server,
+or a project's build worker. Without a supervisor each would need a session kept open to run it,
+or its own restart logic. The supervisor gives them one mechanism, under the same rules as every
+launch: the loader stub, fresh connections, and grants no wider than their owner's.
 
 ## Interface
 
@@ -32,19 +30,21 @@ Status: planned · M5 (persist, install, share)
 - **Logs.** A service's console output is kept in a log its owner can read, bounded in size.
 - **Control.** A service's owner can start, stop and inspect it; nobody else can.
 
-**Open:** what the supervisor supervises (principals' services only, or also system services
-after boot); whether it is part of the steward or a server of its own; how services are scheduled
-to run at times; the restart policy's form; where logs live and how they are bounded.
+**Open:** what the supervisor supervises (principals' services only, or also system services after
+boot), and whether it takes over restarting from `init` or runs beside it; whether it is part of the
+steward or a server of its own; whether services can be started at set times; the restart policy's
+form; where logs live and how they are bounded.
 
 ## Authority
 
 Status: planned · M5 (persist, install, share)
 
-- The supervisor holds what it needs to launch: budgets to carve from, as the steward gives it, and
-  connections to the servers whose fresh connections it asks for.
 - A service holds exactly the grants its record names, never its owner's whole set.
+- Whatever the supervisor holds to launch, it holds no `system`-class budget handle: only `init` and
+  the steward do ([R33 (no server holds a system budget)](init.md#r33-no-server-holds-a-system-budget)).
 
-**Open:** whether the supervisor holds budget handles itself or asks the steward for each launch.
+**Open:** whether the supervisor holds handles to its owners' budgets itself or asks the steward for
+each launch.
 
 ## Security properties
 
@@ -64,22 +64,21 @@ Status: planned · M5 (persist, install, share)
 
 - **A service crash-loops:** past its restart limit it stays stopped, and a crash blamed on another
   principal is the steward's to judge ([steward](steward.md#crash-blame)).
-- **The supervisor restarts:** services keep running; it rebuilds its view from the steward's records
-  and the exit notices it holds.
+- **The supervisor restarts:** it holds none of its earlier exit notices; it rebuilds its records from
+  the steward's.
 
-**Open:** how the supervisor learns of services still running after its own restart.
+**Open:** how the supervisor learns which services are still running after its own restart.
 
 ## Residual risks
 
 - **A service runs unattended.** It spends its owner's budget and grants while nobody watches; its
-  lease and budget bound it, not a person.
-- **Logs are a channel between runs.** What a service wrote to its log is readable by its owner, and
-  by nothing else.
+  budget and grants bound it, not a person.
+- **A restart does not clean what the service wrote.** A compromised service that planted state in
+  files it may write finds that state again when it restarts; a restart resets authority, not data.
 
 ## Why
 
-- **Separate from `init`.** `init` runs the fixed set of servers the signed manifest names; services
-  that principals add at run time need records that change, which belong with the steward's state,
-  not in the boot's.
 - **The same launch as everything else.** A supervisor with its own way of starting code would be a
   second place for launch rules to go wrong.
+- **Records with the steward.** A service's record carries grants, and grants are the steward's to
+  keep.

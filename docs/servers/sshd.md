@@ -3,9 +3,9 @@
 `sshd` is the box's front door: SSH, on `ipd`'s port 22. It authenticates a person's key with the
 steward's answer, has `keyd` sign the key exchange with the host key it never holds, and carries
 each session over its own channel, labelled with the session's labels. It serves `/dev/cons` to
-each session on that channel, and `ssh approve@box`, where only the steward talks. SFTP and SCP run
-inside it, confined to the session's own files. It uses `sunset`, an SSH library in `no_std` Rust
-without allocation.
+each session on that channel, and `ssh approve@box`, where only the steward talks. For file
+transfers it only relays: the steward starts a transfer server per channel, holding the session's
+file binds and nothing else. It uses `sunset`, an SSH library in `no_std` Rust without allocation.
 
 ## Purpose
 
@@ -64,8 +64,8 @@ sequenceDiagram
 ```
 *Figure: an SSH login to a vault session. All of it is planned.*
 
-**Open:** the protocol between `sshd` and the steward (with the steward's table); how many channels
-and connections one principal may hold at once.
+**Open:** how many channels and connections one principal may hold at once. The operations
+`sshd` sends the steward are in the steward's table ([steward](steward.md#the-stewards-protocol)).
 
 ### `approve@box`
 
@@ -76,7 +76,10 @@ steward talks: `sshd` relays the steward's rendered requests and the person's an
 a session or agent sends reaches it ([steward](steward.md#the-powerbox-and-approvals)). A session's
 network scope never includes the box's own addresses ([ipd](ipd.md#the-boxs-own-addresses)), so a
 hijacked session cannot log in to `approve@box` over loopback
-([R68 (only the steward on approve@box)](#r68-only-the-steward-on-approvebox)).
+([R68 (only the steward on approve@box)](#r68-only-the-steward-on-approvebox)). An address that
+loops back to the box without being listed as the box's own (a NAT hairpin) is refused only if the
+manifest lists it; the backstop is that `sshd` refuses any login key `keyd` holds, so a hijacked
+session that reaches `approve@box` that way still has no key to sign with.
 
 **Open:** none.
 
@@ -84,13 +87,40 @@ hijacked session cannot log in to `approve@box` over loopback
 
 Status: planned · M3 (files in and out)
 
-SFTP and SCP run inside SSH as subsystems of an unlabelled session's connection, confined to that
-session's namespace: they reach the files the session could, through the same connections, with the
-same label and quota checks, and nothing else. Every transfer is recorded in the audit log. A
-labelled channel has no subsystems, so no file leaves a vault this way.
+File transfer is SFTP, for unlabelled sessions only
+([transfer](../userland/transfer.md) has the operation table).
 
-**Open:** whether SFTP is served by `sshd` itself or by a process started in the session with the
-session's connections; which SFTP version and operations.
+- **`sshd` relays bytes only.** On a `subsystem sftp` request it asks the steward to start the
+  transfer server for that session and pipes the channel to it, as it does `/dev/cons`. `sshd` never
+  parses SFTP.
+- **The transfer server** is a small native Rust program. The steward starts one per channel, in a
+  budget carved from the session's, holding only the session's file binds: no `/net`, no
+  `/dev/cons`, no powerbox, no budget or process handles. An SFTP-only connection gets a session
+  budget as a login does, with the transfer server in place of the VM.
+- **Confinement is by capability,** not by path strings: the server holds namespace handles and
+  nothing else, so no path, however written, reaches anything outside them, and `..` at a root stays
+  at the root.
+- **Unsupported operations fail visibly.** Symlink, readlink and link get "operation unsupported";
+  setting a size truncates, and mtime is set where `fsd` stores it; mode, owner and group get
+  "operation unsupported" rather than a silent no-op.
+- **SCP is served only as SFTP.** Current `scp` clients use SFTP by default; legacy `scp -O`, which
+  runs `scp` on the server, is refused, since there is no `exec` and no shell to run it. Old clients
+  use `sftp` or `scp -s`.
+- **Vault sessions get no SFTP or SCP.** A labelled channel has no subsystems
+  ([R67 (a channel keeps its labels)](#r67-a-channel-keeps-its-labels)); vault input enters by an
+  audited push and output leaves by declassification ([steward](steward.md#declassification-and-push)).
+- **Every operation is audited:** each open (reading and writing), each close with its byte count,
+  remove, rename, mkdir, rmdir and setting attributes gets one record, signed as every audit record
+  is ([steward](steward.md#the-transfer-audit-log)). The principal and labels in a record come from
+  the badge the steward minted for the transfer server, never from the server's own claim.
+
+The attack tests: a path-escape suite (`..`, absolute paths, long and odd names) reaches only the
+session's binds; symlink, chmod and chown are refused; `scp -O` is refused; a subsystem request on a
+vault channel is refused; every operation yields exactly one signed audit record with the right
+principal; a second principal's files are unreachable.
+
+**Open:** auditing at `fsd` of the transfer server's handles, needed only if the audit must survive
+a compromised transfer server.
 
 ## Authority
 
@@ -98,8 +128,12 @@ Status: planned · M1 (separation and containment)
 
 - `sshd` holds its `ipd` listen scope for port 22, `keyd`'s `ssh_host` root badge, a connection to the
   steward, and the `/dev/cons` endpoints it serves to sessions.
-- It holds no private key and decides no login: the steward does.
-- It is trusted across the labels of the channels it carries: it is a named mediator.
+- It holds no private key and decides no login: it asks the steward whose key a login used, and
+  asks the steward to start a transfer server for an SFTP request ([files in and out](#files-in-and-out)).
+  It never holds a session's file binds itself.
+- It is trusted across the labels of the channels it carries: with the steward it is the
+  confinement check's one named exception ([init](init.md#the-confinement-check)), as the owner
+  decided.
 
 **Open:** none.
 
@@ -121,7 +155,9 @@ Status: planned · M1 (separation and containment)
 
 On an `approve@box` connection, authenticated with the person's own approval key, every byte shown
 comes from the steward and every answer goes to it; no session, agent or other channel can write to
-it or open one from inside the box.
+it or open one from inside the box. A route back to the box that the manifest does not list as the
+box's own is the gap in the second half; `sshd`'s refusal of every key `keyd` holds is the backstop,
+so such a session still cannot authenticate there with a `keyd` key.
 
 **Open:** none.
 
@@ -133,7 +169,7 @@ Status: planned · M1 (separation and containment)
   steward. `init` restarts `sshd` ([init](init.md#restarts-and-reboots)).
 - **`keyd` fails a signature:** the key exchange fails and the client sees a closed connection.
 
-**Open:** whether a session survives the loss of its channel long enough to be reattached.
+**Open:** none. A closed channel ends its session (above); there is no reattaching.
 
 ## Residual risks
 
@@ -141,8 +177,12 @@ Status: planned · M1 (separation and containment)
   before or after login, controls every channel and the approval screen, and a network flood delays
   approvals. A separate `sshd` instance for `approve@`, or the physical console, is planned for
   M5 (persist, install, share).
-- **`sshd` is trusted across labels.** It carries every session's channel; a bug in it reaches all of
-  them.
+- **`sshd` is trusted across labels.** As one of the confinement check's named mediators it carries
+  every session's channel; a bug in it reaches all of them.
+- **The transfer audit is accountability, not a wall.** A principal who compromises their own
+  transfer server with crafted input holds only their session's file capabilities, which they had
+  already, and could suppress their own records; they could move data out unaudited through the pty
+  anyway.
 - **An `ssh_host` badge speaks as the box.** A compromised `sshd` can complete key exchanges as the box
   for as long as it runs.
 
@@ -156,3 +196,7 @@ Status: planned · M1 (separation and containment)
   channel, the owner's own authentication, and nothing else keeps the exemption as narrow as it can be.
 - **`sunset`.** An SSH implementation in `no_std` Rust with no allocation, by an author of dropbear,
   is small enough to read.
+- **Relay, never parse, transfers.** An SFTP parser inside `sshd` would put a second protocol in the
+  process that carries every channel; a transfer server per channel, holding only that session's
+  file binds, keeps a bug in it inside one session's own files. Running SFTP in the session's own VM
+  would let the principal skip the audit records.
