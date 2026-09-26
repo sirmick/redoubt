@@ -1,6 +1,7 @@
 # Summary
 
 - [Reading this book](README.md)
+- [A tour of Redoubt](TOUR.md)
 - [Tenets](TENETS.md)
 - [The security register](SECURITY.md)
 - [Glossary](GLOSSARY.md)
