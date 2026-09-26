@@ -85,3 +85,19 @@ fn narrow_cases_fire() {
     assert!(at("c12", 12, "docs/SUMMARY.md", 4));
     assert!(at("c8", 8, "docs/theme/logo.svg", 1));
 }
+
+/// C11 holds only what the repository tracks: a checkout's untracked files (reference sources,
+/// scratch) are not Redoubt's code.
+#[test]
+fn untracked_code_is_not_checked() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c11");
+    let stray = root.join("src/untracked-scratch.rs");
+    std::fs::write(&stray, "// see WP-K6 and answer 12\nfn f() {}\n").unwrap();
+    let findings = check(&root, Scope { pages: None, code: true });
+    std::fs::remove_file(&stray).unwrap();
+    assert!(findings.iter().any(|f| f.rule == 11), "the tracked c11 fixture still fires");
+    assert!(
+        findings.iter().all(|f| f.path != "src/untracked-scratch.rs"),
+        "an untracked file was checked: {findings:#?}"
+    );
+}
