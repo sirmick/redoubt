@@ -879,7 +879,8 @@ mention in GETTING-STARTED. Python leaves the repo's tooling, which fits tenet 3
   `additional-js` for Mermaid.
 - The Mermaid assets written by `mdbook-mermaid install` (pinned to 0.17.1) live in
   `docs/theme/`. They are text (JavaScript), used only to render the book, and never run on
-  Redoubt. The checker allows `docs/theme/*.js` and nothing else that is not Markdown.
+  Redoubt. The checker allows `docs/theme/*.js`, the favicon `docs/theme/favicon.svg` and nothing else
+  that is not Markdown.
 - `docs/SUMMARY.md` lists every page once; `docs/legacy/` and `docs/inventory/` are not in it.
 - Pages must read well raw on GitHub: Mermaid in plain fences (GitHub renders it), svgbob
   fences read as ASCII art, no mdBook-only syntax except the table includes.
@@ -1004,8 +1005,8 @@ lines starting `#`..`######` and a space, outside fences.
   section's status. (c) Its Tested-by cell lists exactly the tests of that status line. (d) Each
   backticked path in Enforced in exists.
 - **C8 no binaries.** No file under `docs/` with extension png, jpg, jpeg, gif, svg, webp, bmp,
-  ico, pdf; no file under `docs/` with a NUL byte in its first 8 KiB; only `.md` files, plus
-  `docs/book.toml` and `docs/theme/*.js`.
+  ico, pdf, except the favicon `docs/theme/favicon.svg`; no file under `docs/` with a NUL byte in
+  its first 8 KiB; only `.md` files, plus `docs/book.toml`, `docs/theme/*.js` and the favicon.
 - **C9 templates.** Kernel and server pages (other than the reference pages named in section
   C3 and each set's `README.md`) have exactly the S2 `##` headings in order; userland, plan, todo and
   beyond pages likewise their own.
