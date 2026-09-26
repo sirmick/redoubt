@@ -21,6 +21,12 @@ use crate::kernel::{
 use crate::spec::*;
 use crate::syscall::*;
 
+/// A handle to a DMA-flagged device (WP-K5b, answer 173).
+fn dma_device(k: &Kernel, h: &crate::kernel::Handle) -> bool {
+    matches!(h.object, Object::Device(d)
+        if k.devices.get(&d).is_some_and(|dev| matches!(dev.kind, DeviceKind::Mmio { dma: true, .. })))
+}
+
 /// splitmix64: small, fast, and good enough to drive a search; not for secrets.
 #[derive(Clone, Debug)]
 pub struct Rng(u64);
@@ -433,6 +439,14 @@ impl Gen {
                 let target = if self.rng.pct(50) { made_system.unwrap_or(SYSTEM) } else { SYSTEM };
                 hs.push(budget_h(target)?);
             }
+            // WP-K5b: now and then DMA devices too, each on its own, so a child can hold DMA
+            // memory, share a device with init or a sibling (the co-holder case), allocate through
+            // one device while mapping another, and quarantine a device by dying.
+            for (i, h) in &init.handles {
+                if dma_device(k, h) && self.rng.pct(50) {
+                    hs.push(*i);
+                }
+            }
             return sys(Syscall::ProcessStart {
                 process: ph,
                 entry: 0x1000,
@@ -751,6 +765,17 @@ impl Gen {
                 Syscall::Reply { msg_id: m, words: [0; WORDS], handles: vec![] }
             } else {
                 Syscall::Serve { msg_id: m }
+            };
+        }
+        // WP-K5b: a child holding DMA devices maps them and allocates through them often, so that
+        // co-holders (one maps a device another allocates through or maps too) and their deaths
+        // come up in short sequences.
+        if pid != INIT_PID && self.rng.pct(12) && k.processes[&pid].handles.values().any(|h| dma_device(k, h)) {
+            let h = self.handle(k, pid, |h| dma_device(k, h));
+            return if self.rng.pct(50) {
+                Syscall::MapDevice { h }
+            } else {
+                Syscall::DmaAlloc { h, npages: self.rng.range(1, 3) }
             };
         }
         let is_endpoint = |h: &crate::kernel::Handle| matches!(h.object, Object::Endpoint(_));

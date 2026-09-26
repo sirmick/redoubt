@@ -49,6 +49,24 @@ Every platform presents the same contract: virtio-mmio devices, a standard inter
   RAM by physical address.
   Clients lend pages to the driver and the driver copies into its own DMA buffers, so client pages
   never reach the device. A DMA driver is trusted like the kernel: kept tiny and audited.
+- **Reset before reuse (answer 173, WP-K5b).** A driver's DMA pages stay with it, and charged to
+  it, until it ends. They can't be lent, transferred or given to another process, and `unmap`
+  drops only the mapping. When the process ends, however it ends, the kernel resets each device it
+  allocated through and each DMA device it mapped: it writes 0 to the virtio status register and
+  reads it back until it reads 0, within 1 ms per device. The pages go back to the pool only if
+  every one of those devices confirms. Otherwise they are quarantined for ever, still charged to
+  the budget that paid for them (to its parent once that budget is destroyed). A device that fails
+  its reset has its object destroyed as R10 does, and its base stays flagged until reboot, so it
+  is never handed out again. Legacy `MapMemory` refuses any DMA device, so a mapping of one always
+  goes through `map_device` and counts.
+  - *Residual:* a reset stops the device for every process holding it. A live co-holder keeps its
+    mapping of a quarantined device (question 144).
+  - *Residual (platform):* the kernel resets only virtio-mmio devices, which it recognizes with
+    one read of each DMA-flagged device at boot. The loader flags only virtio nodes today. A
+    non-virtio DMA device is never reset, so every death that reaches it quarantines, and such a
+    platform gets no driver restart; its answer is hardware confinement (below). A port with DMA
+    devices that are not virtio adds a per-device virtio mark to the loader's device list, and
+    skips that boot read.
 - **Driver confined (hardware).** On the FPGA, devices reach only the DMA memory channel, and
   per-master windows keep devices out of each other's buffers (PLATFORM-FPGA.md). The kernel
   allocates each driver's DMA pages from its window; the driver can then corrupt only its own
@@ -204,13 +222,9 @@ says which.
   platform with no IOMMU. What `blkd` guarantees is the other half: it never *asks* the device for
   anything outside the pages `dma_alloc` gave it, and nothing the device puts in those pages can
   corrupt its own memory or stop it answering.
-- **A restart leaves the device pointed at freed frames.** `blkd`'s DMA pages return to the free
-  pool when it dies, and nothing stops a device already programmed with their physical addresses
-  from writing to them; the restarted `blkd` resets the device at bring-up, but only after those
-  frames may already have been handed to somebody else. Closing it needs the kernel to reset a
-  device whose DMA pages are freed, or the hardware to confine it; until then `blkd`'s restart is
-  a hole the same size as trusting `blkd`, which is what tenet 7 already says of it
-  (QUESTIONS.md 147).
+- **Closed by WP-K5b: a restart no longer leaves the device pointed at freed frames.** `blkd`'s
+  DMA pages go back to the pool only after the kernel has reset the device and the device has
+  confirmed; a device that doesn't confirm keeps them quarantined (DMA, answer 173).
 - A device that answers slowly, or that re-asserts its interrupt without completing anything, makes
   `blkd` spend up to its ten seconds on that one request; it wakes rather than sleeps while it
   does, and the work is paid by `blkd`'s own manifest weight in the one stride queue
@@ -275,8 +289,8 @@ device is broken, on a badge drawn at random above 2^63 that carries no data.
 until 0, bounded) on every exit it controls, its panic included (`redoubt-rt`'s panic hook). A
 kill, a destroyed budget or a fault that is not a panic runs none of its code: the device stays
 live with its rings in freed frames, which QEMU re-reads on every packet, so the frames' next
-owner could steer its DMA anywhere in physical memory. The kernel closes that (answer 173, WP-K5b):
-**until WP-K5b has merged, `netd` is not restarted (WP-R3) and not used off the bench.**
+owner could steer its DMA anywhere in physical memory. The kernel closes that (answer 173, WP-K5b,
+DMA above): the frames are not reused until the device has confirmed a reset.
 
 **What it is handed.** Its startup block names the endpoint it receives on, `netd`; two device
 handles, `net` (the MMIO region, which must carry the DMA flag) and `net-irq`; and `ipd`, a
@@ -307,7 +321,7 @@ without its handles or arguments; a device fault leaves it running and answering
 - Frames reach `ipd` as its `frame` message, a `send` (NAMESPACES.md, `ipd`'s table).
 
 **Stated residuals.** A DMA handle is kernel-level trust, as for `blkd`. A flood of frames costs
-`netd`'s CPU at its large weight. Answer 173's reset needs WP-K5b.
+`netd`'s CPU at its large weight. A reset stops the device for every holder (DMA).
 
 ## The Elixir boundary (beamlet)
 beamlet's `Platform` trait is one asynchronous 9P client: directories, files, sockets and the

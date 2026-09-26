@@ -81,9 +81,20 @@ pub const MAX_COST: u64 = 1 << 16;
 /// A device object the loader creates from the device tree (KERNEL-SPEC.md, Device).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeviceSpec {
-    Mmio { base: u64, pages: u64, dma: bool },
+    Mmio { base: u64, pages: u64, dma: bool, resets: Resets },
     Irq { n: u64 },
     Reset,
+}
+
+/// How an MMIO device's reset behaves (WP-K5b, answer 173, OD7): `Always` confirms at once;
+/// `Never` never confirms (a platform residual: IO-ARCHITECTURE, P2-5); `FirstFails` reports
+/// "not confirmed" once, after the real write, then behaves as `Always` (the `dma-reset-deaf`
+/// test feature).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Resets {
+    Always,
+    FirstFails,
+    Never,
 }
 
 /// A budget's three carved limits (R7).
@@ -117,11 +128,18 @@ impl Default for Boot {
             system: Limits { pages: 256, processes: 8, weight: 250_000 },
             users: Limits { pages: 512, processes: 12, weight: 749_000 },
             devices: vec![
-                DeviceSpec::Mmio { base: 0x1000_0000, pages: 1, dma: false },
-                DeviceSpec::Mmio { base: 0x1000_1000, pages: 1, dma: true },
+                DeviceSpec::Mmio { base: 0x1000_0000, pages: 1, dma: false, resets: Resets::Always },
+                DeviceSpec::Mmio { base: 0x1000_1000, pages: 1, dma: true, resets: Resets::Always },
                 DeviceSpec::Irq { n: 10 },
                 DeviceSpec::Irq { n: 11 },
                 DeviceSpec::Reset,
+                // Appended last (WP-K5b, §5) so every existing handle index keeps its value: a
+                // DMA device whose first-ever reset reports "not confirmed" (the `dma-reset-deaf`
+                // feature), for the quarantine path.
+                DeviceSpec::Mmio { base: 0x1000_2000, pages: 1, dma: true, resets: Resets::FirstFails },
+                // A second healthy DMA device, so one process can allocate through one device and
+                // map another that a co-holder also reaches.
+                DeviceSpec::Mmio { base: 0x1000_3000, pages: 1, dma: true, resets: Resets::Always },
             ],
             costs: Costs::default(),
         }
@@ -315,6 +333,13 @@ pub struct Process {
     pub creator: u64,
     /// The next message id this process's threads will receive (QUESTIONS 88).
     pub next_msg_id: u64,
+    /// DMA frames this process holds (WP-K5b, answer 173), by frame id: the union of every
+    /// `dma_alloc` it has not yet lost by dying. Present whether or not currently mapped
+    /// (`unmap` keeps the frame; OD2).
+    pub dma: BTreeSet<u64>,
+    /// Every DMA device this process has ever named in `map_device` (OD3's reset set S, with
+    /// `dma`'s own devices).
+    pub dma_mapped: BTreeSet<u64>,
 }
 
 /// What a blocked thread waits for.
@@ -428,7 +453,7 @@ pub struct Endpoint {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeviceKind {
-    Mmio { base: u64, pages: u64, dma: bool },
+    Mmio { base: u64, pages: u64, dma: bool, resets: Resets, quarantined: bool },
     Irq { n: u64, fired: bool, masked: bool, pending: bool },
     Reset,
 }
@@ -447,6 +472,13 @@ pub struct Frame {
     pub payer: u64,
     /// Abstract contents: the last word written anywhere in the page (0 = zeroed).
     pub content: u64,
+    /// The DMA device it was allocated through (WP-K5b, answer 173), if any. Held until the
+    /// owning process ends (OD2); never freed by `unmap`.
+    pub dma: Option<u64>,
+    /// Set for ever once a `dma_release` could not confirm every device that might reach it
+    /// (P1-1): its frame is never pooled and its charge only moves at its budget's destruction
+    /// (OD5, N1).
+    pub quarantined: bool,
 }
 
 /// Facts a step reveals that are not system-call results, for the trace (README.md, `note`).
@@ -628,6 +660,8 @@ impl Kernel {
                 exit_endpoint: None,
                 creator: root,
                 next_msg_id: 1,
+                dma: BTreeSet::new(),
+                dma_mapped: BTreeSet::new(),
             },
         );
         let root_table = k.page_table_cost();
@@ -642,7 +676,9 @@ impl Kernel {
         for (i, spec) in boot.devices.iter().enumerate() {
             let id = i as u64 + 1;
             let kind = match *spec {
-                DeviceSpec::Mmio { base, pages, dma } => DeviceKind::Mmio { base, pages, dma },
+                DeviceSpec::Mmio { base, pages, dma, resets } => {
+                    DeviceKind::Mmio { base, pages, dma, resets, quarantined: false }
+                }
                 // Sources start masked; the first `receive` unmasks them (R5; README choice 18).
                 DeviceSpec::Irq { n } => DeviceKind::Irq { n, fired: false, masked: true, pending: false },
                 DeviceSpec::Reset => DeviceKind::Reset,
@@ -981,7 +1017,7 @@ impl Kernel {
             }
         };
         let content = if self.broken(Mutation::R11NoZeroing) { stale } else { 0 };
-        self.frames.insert(f, Frame { payer, content });
+        self.frames.insert(f, Frame { payer, content, dma: None, quarantined: false });
         f
     }
 
@@ -1735,15 +1771,29 @@ impl Kernel {
         for tid in tids {
             self.end_thread(tid);
         }
+        // WP-K5b (answer 173): reset every DMA device this process could reach before any of its
+        // DMA frames can be freed. Decides, per frame, whether it is pooled below (as any other
+        // owned frame) or quarantined for ever (`Frame::quarantined`, kept out of the vpn loop's
+        // `free_frame`, whether or not it is still mapped).
+        self.dma_release(pid);
+        let dma_frames: Vec<u64> = self.processes[&pid].dma.iter().copied().collect();
         let vpns: Vec<u64> = self.processes[&pid].space.keys().copied().collect();
         for v in vpns {
             let m = self.unmap_page(pid, v).unwrap();
             if let Backing::Frame(f) = m.backing {
-                if m.state == MapState::Own
-                    || matches!(m.state, MapState::LentOut(x) if !self.msgs.contains_key(&x))
+                if (m.state == MapState::Own
+                    || matches!(m.state, MapState::LentOut(x) if !self.msgs.contains_key(&x)))
+                    && !self.frames.get(&f).is_some_and(|fr| fr.quarantined)
                 {
                     self.free_frame(f);
                 }
+            }
+        }
+        // A DMA frame `unmap` had already detached (OD2: still held) is not in `space` above, so
+        // it needs its own pass; `free_frame` on one already freed there is a no-op.
+        for f in dma_frames {
+            if self.frames.get(&f).is_some_and(|fr| !fr.quarantined) {
+                self.free_frame(f);
             }
         }
         let p = self.processes.remove(&pid).unwrap();
@@ -1956,6 +2006,31 @@ impl Kernel {
                 px.pages_used = px.pages_used.saturating_sub(bb.pages_limit + own);
                 px.processes_used = px.processes_used.saturating_sub(bb.processes_limit);
                 px.weight_used = px.weight_used.saturating_sub(bb.weight);
+            }
+        }
+        // WP-K5b (answer 173), OD5/N1: every quarantined frame charged to a budget in this
+        // subtree moves to b's parent, after the carve above has returned. Those pages were part
+        // of the subtree's usage, at most its `pages_limit`, and the carve just gave the parent
+        // that whole limit back, so this can never put it over its own (I5); with no parent, the
+        // charge vanishes with the machine's tree.
+        if !self.broken(Mutation::K5bQuarantineChargeDropped) {
+            let moved: Vec<u64> = self
+                .frames
+                .iter()
+                .filter(|(_, fr)| fr.quarantined && doomed.contains(&fr.payer))
+                .map(|(f, _)| *f)
+                .collect();
+            for f in moved {
+                match bb.parent {
+                    Some(p) => {
+                        self.frames.get_mut(&f).unwrap().payer = p;
+                        self.add_usage(p, 1);
+                    }
+                    None => {
+                        self.frames.remove(&f);
+                        self.ghost.armed.remove(&f);
+                    }
+                }
             }
         }
         // Bottom-up (R10 order): each budget's work since entry moves to its parent, and its
@@ -2384,17 +2459,23 @@ impl Kernel {
     // The system calls, in KERNEL-SPEC.md's table order.
 
     /// Map `n` fresh zeroed frames at a kernel-chosen address, charging frames and page tables.
-    fn map_fresh(&mut self, pid: u64, n: u64, flags: u64, contiguous: bool) -> R<(u64, u64)> {
+    /// `dma`, once `Some(device)` (`dma_alloc`), makes them contiguous, from the top of what was
+    /// ever used, and DMA-owned (WP-K5b, answer 173): held by the process until it ends (OD2),
+    /// armed against `device` and every device the process has already mapped (ghost, I-DMA).
+    fn map_fresh(&mut self, pid: u64, n: u64, flags: u64, dma: Option<u64>) -> R<(u64, u64)> {
         let b = self.budget_of(pid).ok_or(Error::Dead)?;
         let start = self.alloc_va(pid, n)?;
         let tables = self.tables_needed(pid, start..start + n);
         self.charge(b, n.checked_add(tables).ok_or(Error::OutOfMemory)?)?;
         let first = self.next_frame;
+        let mut fresh = Vec::new();
         for i in 0..n {
             // Contiguous (dma_alloc): fresh frames from the top of what was ever used.
-            let f = if contiguous {
+            let f = if let Some(d) = dma {
                 self.next_frame += 1;
-                self.frames.insert(first + i, Frame { payer: b, content: 0 });
+                self.frames
+                    .insert(first + i, Frame { payer: b, content: 0, dma: Some(d), quarantined: false });
+                fresh.push(first + i);
                 first + i
             } else {
                 self.alloc_frame(b)
@@ -2404,6 +2485,13 @@ impl Kernel {
                 start + i,
                 Mapping { backing: Backing::Frame(f), flags, state: MapState::Own },
             );
+        }
+        if dma.is_some() {
+            let p = self.processes.get_mut(&pid).unwrap();
+            for f in fresh {
+                p.dma.insert(f);
+            }
+            self.dma_arm_current(pid);
         }
         Ok((start * PAGE_SIZE, RAM_BASE + first * PAGE_SIZE))
     }
@@ -2415,17 +2503,21 @@ impl Kernel {
             return Err(Error::InvalidArgument);
         }
         check_flags(flags, false)?;
-        self.map_fresh(pid, len / PAGE_SIZE, flags, false).map(|x| x.0)
+        self.map_fresh(pid, len / PAGE_SIZE, flags, None).map(|x| x.0)
     }
 
-    /// `unmap(addr, len)`: own mapping; not currently lent.
+    /// `unmap(addr, len)`: own mapping; not currently lent. A DMA frame's mapping goes, but the
+    /// frame itself does not (OD2: held, and charged, until the process ends).
     pub fn unmap(&mut self, pid: u64, addr: u64, len: u64) -> R<()> {
         let (first, n) = user_range(addr, len)?;
         self.own_range(pid, first, n, |_| true)?;
         for v in first..first + n {
             let m = self.unmap_page(pid, v).unwrap();
             if let Backing::Frame(f) = m.backing {
-                self.free_frame(f);
+                let dma = self.frames.get(&f).is_some_and(|fr| fr.dma.is_some());
+                if !dma || self.broken(Mutation::K5bUnmapFreesDma) {
+                    self.free_frame(f);
+                }
             }
         }
         Ok(())
@@ -2475,11 +2567,15 @@ impl Kernel {
     }
 
     /// `map_device(h(MMIO)) -> addr`: MMIO device handle. The range is mapped read-write. Device
-    /// pages are not RAM; their page tables are charged.
+    /// pages are not RAM; their page tables are charged. A DMA device (WP-K5b) is added to the
+    /// reset set S this process's death will need (OD3), and every DMA frame it already holds is
+    /// armed against it too (ghost, I-DMA). No handle to a quarantined device survives (OD6).
     pub fn map_device(&mut self, pid: u64, h: u64) -> R<u64> {
         let h = decode_handle(h)?;
         let Object::Device(d) = self.lookup(pid, h)?.object else { return Err(Error::WrongObject) };
-        let DeviceKind::Mmio { pages, .. } = self.devices[&d].kind else { return Err(Error::WrongObject) };
+        let DeviceKind::Mmio { pages, dma, quarantined, .. } = self.devices[&d].kind else {
+            return Err(Error::WrongObject);
+        };
         let start = self.alloc_va(pid, pages)?;
         let tables = self.tables_needed(pid, start..start + pages);
         self.charge(self.budget_of(pid).unwrap(), tables)?;
@@ -2487,6 +2583,11 @@ impl Kernel {
             let backing = Backing::Device { device: d, page: i };
             self.map_page(pid, start + i, Mapping { backing, flags: FLAG_R | FLAG_W, state: MapState::Own });
         }
+        if dma {
+            self.processes.get_mut(&pid).unwrap().dma_mapped.insert(d);
+            self.dma_arm_current(pid);
+        }
+        self.ghost.flows.push(Flow::DeviceUsed { device: d, quarantined });
         Ok(start * PAGE_SIZE)
     }
 
@@ -2494,14 +2595,137 @@ impl Kernel {
     pub fn dma_alloc(&mut self, pid: u64, h: u64, npages: u64) -> R<(u64, u64)> {
         let h = decode_handle(h)?;
         let Object::Device(d) = self.lookup(pid, h)?.object else { return Err(Error::WrongObject) };
-        let DeviceKind::Mmio { dma, .. } = self.devices[&d].kind else { return Err(Error::WrongObject) };
+        let DeviceKind::Mmio { dma, quarantined, .. } = self.devices[&d].kind else {
+            return Err(Error::WrongObject);
+        };
         if npages == 0 {
             return Err(Error::InvalidArgument);
         }
         if !dma {
             return Err(Error::NotPermitted);
         }
-        self.map_fresh(pid, npages, FLAG_R | FLAG_W, true)
+        let r = self.map_fresh(pid, npages, FLAG_R | FLAG_W, Some(d))?;
+        self.ghost.flows.push(Flow::DeviceUsed { device: d, quarantined });
+        Ok(r)
+    }
+
+    /// OD3's reset set S for `pid`: the device behind each DMA frame it holds, plus every DMA
+    /// device it ever named in `map_device`.
+    fn dma_reach(&self, pid: u64) -> BTreeSet<u64> {
+        let Some(p) = self.processes.get(&pid) else { return BTreeSet::new() };
+        let mut s = p.dma_mapped.clone();
+        for &f in &p.dma {
+            if let Some(d) = self.frames.get(&f).and_then(|fr| fr.dma) {
+                s.insert(d);
+            }
+        }
+        s
+    }
+
+    /// Ghost, I-DMA: every device `pid` could now reach (`dma_reach`) can, in principle, be
+    /// reprogrammed to write any DMA frame it holds, not only the one it was allocated through
+    /// (OD3's residual: a device grant reaches every frame's address). Re-arms every frame it
+    /// holds against the current S, including ones just added.
+    fn dma_arm_current(&mut self, pid: u64) {
+        let s = self.dma_reach(pid);
+        if s.is_empty() {
+            return;
+        }
+        let Some(p) = self.processes.get(&pid) else { return };
+        let frames: Vec<u64> = p.dma.iter().copied().collect();
+        for f in frames {
+            self.ghost.dma_armed(f, s.iter().copied());
+        }
+    }
+
+    /// WP-K5b (answer 173): before any of `pid`'s DMA frames can be freed, reset the set S of
+    /// every device it could reach (OD3). If every device in S confirms *in this call*, its
+    /// frames are left for the ordinary frame-freeing paths to pool; otherwise every one of them
+    /// is quarantined for ever (P1-1: a device already quarantined, or one that fails now, counts
+    /// as not reset, so a co-holder's healthy slots are quarantined too).
+    fn dma_release(&mut self, pid: u64) {
+        let s = self.dma_reach(pid);
+        if s.is_empty() {
+            return;
+        }
+        // Ghost: which devices genuinely confirm, read from each device object before the attempt
+        // (a `FirstFails` device's first attempt fails), not from `reset_device`'s answer, so that
+        // neither that answer nor the pooling decision below can hide a device that may still
+        // write (I-DMA; `K5bQuarantinedSlotCountsAsReset`, `K5bFreeBeforeReset`).
+        let genuine: Vec<u64> = s
+            .iter()
+            .copied()
+            .filter(|d| {
+                let kind = self.devices.get(d).map(|dev| dev.kind);
+                matches!(kind, Some(DeviceKind::Mmio { quarantined: false, resets: Resets::Always, .. }))
+            })
+            .collect();
+        let confirmed: BTreeSet<u64> = s.iter().copied().filter(|&d| self.reset_device(d)).collect();
+        let held = self.processes[&pid].dma.clone();
+        for d in genuine {
+            self.ghost.dma_reset(d, &held);
+        }
+        if self.broken(Mutation::K5bResetClearsCoHolderReach) {
+            // Broken: a confirmed reset is taken to cover every live co-holder too, so each drops
+            // the device from the set its own death will reset.
+            for (&q, p) in self.processes.iter_mut() {
+                if q != pid {
+                    p.dma_mapped.retain(|d| !confirmed.contains(d));
+                }
+            }
+        }
+        if confirmed == s || self.broken(Mutation::K5bFreeBeforeReset) {
+            // Every device in S confirmed: this call's frames are left for the ordinary
+            // frame-freeing paths to pool.
+        } else {
+            let frames: Vec<u64> = self.processes[&pid].dma.iter().copied().collect();
+            for f in frames {
+                if let Some(fr) = self.frames.get_mut(&f) {
+                    fr.quarantined = true;
+                }
+            }
+            for &d in &s {
+                if !confirmed.contains(&d) {
+                    self.quarantine_device(d);
+                }
+            }
+        }
+    }
+
+    /// One device's reset attempt (OD7): `false`, with no further state change, if it is already
+    /// quarantined or has no reset (`Resets::Never`, IO-ARCHITECTURE's platform residual, P2-5);
+    /// `false` once, consuming the device's one scripted failure (`Resets::FirstFails`, the
+    /// `dma-reset-deaf` test feature), then `true` from then on; `true` at once otherwise.
+    fn reset_device(&mut self, d: u64) -> bool {
+        // P1-1: a quarantined slot counts as reset only under the mutation named for it.
+        let quarantined_counts = self.broken(Mutation::K5bQuarantinedSlotCountsAsReset);
+        let Some(dev) = self.devices.get_mut(&d) else { return false };
+        let DeviceKind::Mmio { quarantined, resets, .. } = &mut dev.kind else { return false };
+        if *quarantined {
+            return quarantined_counts;
+        }
+        match resets {
+            Resets::Always => true,
+            Resets::Never => false,
+            Resets::FirstFails => {
+                *resets = Resets::Always;
+                false
+            }
+        }
+    }
+
+    /// OD6: a device that fails a reset is flagged for ever (until reboot, which the model never
+    /// does), and every handle to it is swept as R10 sweeps (a copy in a message not yet received
+    /// arrives as 0), so nobody can map it or allocate through it again.
+    fn quarantine_device(&mut self, d: u64) {
+        if let Some(dev) = self.devices.get_mut(&d) {
+            if let DeviceKind::Mmio { quarantined, .. } = &mut dev.kind {
+                *quarantined = true;
+            }
+        }
+        if !self.broken(Mutation::K5bQuarantinedDeviceUsable) {
+            self.sweep(|h| h.object == Object::Device(d));
+        }
     }
 
     /// `thread_create(entry, sp, arg) -> tid`: pages charged; fewer than `MAX_THREADS`.
@@ -2591,6 +2815,8 @@ impl Kernel {
                 exit_endpoint: Some(exit),
                 creator: payer,
                 next_msg_id: 1,
+                dma: BTreeSet::new(),
+                dma_mapped: BTreeSet::new(),
             },
         );
         match self.install(pid, &[h]) {
@@ -2617,14 +2843,17 @@ impl Kernel {
     }
 
     /// `process_map(h(process), src, dst, len, flags)`: process not started; src owned by the
-    /// caller; pages move to the child's budget; not W+X.
+    /// caller; pages move to the child's budget; not W+X. A DMA page stays put (WP-K5b, OD2).
     pub fn process_map(&mut self, pid: u64, process: u64, src: u64, dst: u64, len: u64, flags: u64) -> R<()> {
         let process = decode_handle(process)?;
         decode_flags(flags, false)?;
         let child = self.lookup_process(pid, process)?;
         let (s, n) = user_range(src, len)?;
         let (d, _) = user_range(dst, len)?;
-        self.own_range(pid, s, n, |m| matches!(m.backing, Backing::Frame(_)))?;
+        self.own_range(pid, s, n, |m| match m.backing {
+            Backing::Frame(f) => self.frames[&f].dma.is_none(),
+            _ => false,
+        })?;
         let cp = self.processes.get(&child);
         if cp.is_some_and(|p| (d..d + n).any(|v| p.space.contains_key(&v))) {
             return Err(Error::InvalidArgument);
@@ -2831,9 +3060,11 @@ impl Kernel {
                     return Err(Error::TooLarge);
                 }
                 let (first, n) = buffer_range(b)?;
-                // A lend must be writable; a transfer may be any RAM the caller owns.
-                self.own_range(pid, first, n, |m| {
-                    matches!(m.backing, Backing::Frame(_)) && (!lend || m.flags & FLAG_W != 0)
+                // A lend must be writable; a transfer may be any RAM the caller owns. A DMA page
+                // stays put (WP-K5b, OD2): neither lent nor transferred.
+                self.own_range(pid, first, n, |m| match m.backing {
+                    Backing::Frame(f) => self.frames[&f].dma.is_none() && (!lend || m.flags & FLAG_W != 0),
+                    _ => false,
                 })?;
                 Some((first, n))
             }

@@ -124,6 +124,9 @@ pub enum Flow {
     Replied { msg: u64 },
     /// Thread `tid` was told that its open call `msg` was abandoned (R3).
     AbandonNotice { tid: u64, msg: u64 },
+    /// `map_device` or `dma_alloc` succeeded on device `device`, which its device object said
+    /// was `quarantined` when the call began (WP-K5b, OD6).
+    DeviceUsed { device: u64, quarantined: bool },
 }
 
 /// I11: while a key's oldest message waits on an endpoint, how often each other key has been
@@ -175,6 +178,12 @@ pub struct Ghost {
     pub exit_expect: BTreeMap<u64, Blame>,
     /// Exit notices owed, by the exiting pid.
     pub owed: BTreeMap<u64, Owed>,
+    /// WP-K5b (answer 173), I-DMA: for a DMA frame, the devices that could still write it (its
+    /// own device, and any it was ever armed against by a later `map_device`). Independent of
+    /// `Frame::quarantined`, so a bug in the real pooling decision cannot hide from it. Cleared
+    /// per device only by that device's own confirmed reset at the frame's holder's death
+    /// (`dma_reset`), never by pooling or by another process's death.
+    pub armed: BTreeMap<u64, BTreeSet<u64>>,
     /// Violations found while a step ran (the checks run after it).
     pub violations: Vec<String>,
 }
@@ -332,6 +341,26 @@ impl Ghost {
         if self.irqs.get(&d).is_some_and(|i| i.undelivered) {
             self.violations
                 .push(format!("R5: a receive on IRQ device {d} waits while its interrupt is undelivered"));
+        }
+    }
+
+    /// WP-K5b, I-DMA: frame `frame` could now be written by every device in `devices`, in
+    /// addition to any it was already armed against.
+    pub fn dma_armed(&mut self, frame: u64, devices: impl IntoIterator<Item = u64>) {
+        self.armed.entry(frame).or_default().extend(devices);
+    }
+
+    /// WP-K5b, I-DMA: `device`'s reset just confirmed as the holder of `frames` died, so it can no
+    /// longer write them. It stays armed against every other frame: a live co-holder that still
+    /// reaches `device` can program it again, and only its own death's reset clears its frames.
+    pub fn dma_reset(&mut self, device: u64, frames: &BTreeSet<u64>) {
+        for f in frames {
+            if let Some(devices) = self.armed.get_mut(f) {
+                devices.remove(&device);
+                if devices.is_empty() {
+                    self.armed.remove(f);
+                }
+            }
         }
     }
 }

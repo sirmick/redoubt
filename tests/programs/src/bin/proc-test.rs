@@ -446,14 +446,25 @@ pub extern "C" fn _start(arg: usize) -> ! {
 fn blame(out: &mut Out, parent: &Parent, budget_a: u32, budget_b: u32) {
     // One work endpoint per scenario, owned by this process (class `system`), so R1 lets the
     // labelled callers through and the label set in a notice is the *caller's*, not ours.
+    // Each caller's own notice is awaited too, not just the server's: a caller that has not
+    // yet run its own `process_exit` still holds its budget's process slot and its PID, and the
+    // next scenario reuses `budget_a`/`budget_b` right away. Without this wait, reuse races the
+    // caller's actual termination and can spuriously refuse the next scenario's start with
+    // `OutOfProcesses`; taking the notice also frees the process object and its PID.
     let scenario = |role: u8, value: u8, callers: &[(u32, u8, u8)]| -> Option<ExitNotice> {
         let work = rd::endpoint_create().expect("a work endpoint");
         let server = parent.start(rd::SYSTEM, role, value, &[work]).expect("a server child");
-        for (budget, caller_role, tag) in callers {
+        let mut caller_runs: [Option<Run>; 2] = [None, None];
+        assert!(callers.len() <= caller_runs.len(), "a scenario has at most two callers");
+        for (slot, (budget, caller_role, tag)) in caller_runs.iter_mut().zip(callers) {
             let badged = rd::mint_from_handle(work, 1 + u64::from(*tag), None).expect("mint");
-            parent.start(*budget, *caller_role, *tag, &[badged]).expect("a caller child");
+            *slot = Some(parent.start(*budget, *caller_role, *tag, &[badged]).expect("a caller child"));
         }
-        parent.notice(&server)
+        let notice = parent.notice(&server);
+        for run in caller_runs.iter().flatten() {
+            parent.notice(run).expect("each caller's exit notice");
+        }
+        notice
     };
 
     let notice = scenario(R_SERVE_FAULT, 0, &[(budget_a, R_CALL, 1)]);

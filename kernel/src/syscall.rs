@@ -896,6 +896,18 @@ pub fn handle_inner(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallR
                         klog!("PID {} tried to map physical RAM {:08x} by address", pid.get(), base);
                         return Err(redoubt_abi::Error::InvalidArgument);
                     }
+                    // WP-K5b (P2-1): no DMA device through the legacy path, whatever the grant,
+                    // so a mapping of one always joins the reset set through `map_device`.
+                    if pid.get() != 1 {
+                        match crate::dma::overlaps_dma_device(base, size.get()) {
+                            None => return Err(redoubt_abi::Error::InvalidArgument),
+                            Some(true) => {
+                                klog!("PID {} denied DMA device {:08x}", pid.get(), base);
+                                return Err(redoubt_abi::Error::AccessDenied);
+                            }
+                            Some(false) => {}
+                        }
+                    }
                     if !crate::grants::may_map_device(mm, pid, base, size.get()) {
                         klog!("PID {} denied device {:08x}", pid.get(), base);
                         return Err(redoubt_abi::Error::AccessDenied);

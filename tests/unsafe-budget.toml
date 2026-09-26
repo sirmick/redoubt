@@ -75,7 +75,7 @@ paths = [
     "kernel/src/budget.rs", "kernel/src/handle.rs", "kernel/src/kframe.rs", "kernel/src/redoubt.rs",
     "kernel/src/device.rs", "kernel/src/message.rs", "kernel/src/process.rs", "kernel/src/cell.rs",
     "kernel/src/debug", "kernel/src/endpoint.rs", "kernel/src/grants.rs", "kernel/src/macros.rs",
-    "kernel/src/time.rs", "kernel/src/sched.rs",
+    "kernel/src/time.rs", "kernel/src/sched.rs", "kernel/src/dma.rs",
 ]
 # WP-K5: time.rs and sched.rs (the kernel's timer and scheduler) have no unsafe.
 # WP-K1: kframe.rs's three (words of kernel-object frames and of records, through the physmap)
@@ -90,7 +90,9 @@ paths = [
 # G1: +5, existing code that no budget listed, now counted; no new unsafe. cell.rs's three
 # (`SpinLock`/`KernelCell` `Sync` and the lock's access) and the debug console's two (setting
 # `OUTPUT` at boot and `print!`'s use of it). The debug pair gained its SAFETY comments here.
-max_unsafe = 25
+# WP-K5b: +2, dma.rs's volatile read and write of a DMA device's registers through the kernel's
+# register window (the reset of answer 173); no other access to a device's registers needs one.
+max_unsafe = 27
 max_undocumented = 0
 
 [[budget]]
