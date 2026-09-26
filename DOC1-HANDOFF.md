@@ -72,12 +72,32 @@ Left for the owner or the next package:
 - SWARM's claims table is the orchestrator's to keep; package IDs must avoid R, I and M (the
   checker reads them as rules, invariants and milestones).
 
+## R3 fixes (assignment c4e3f729, the top-level fixer)
+Commits: `44ee5153c` TENETS; `5836841a2` testbench; `9116b0be4` SECURITY (and invariants.md's I14
+status line, so the register agrees with it); `660976a98` plan (and todo placements,
+verdict-strings widened); `3667e128b` SWARM, PROJECT, GETTING-STARTED; `4cc9655f8` inventory
+misses (fsd, init, beyond/image-cache, docs/README, manifest D3). New todo pages:
+host-shell-scripts, stub-unsafe-budget.
+Left for the owner: whether tenet 3 reaches the build host (TENETS residual + todo); A-22
+(cross-directory rename) and A-27 (shared image cache) are Open with no ruling on record;
+the vulnerability channel in CONTRIBUTING. Not applied: beyond/README.md's title "Beyond M5"
+(outside the pages named; the checker allows it); the inventory's borderline items.
+
 ## Switch-over notes (for the implementer)
 - Checker C2 misses a `#[test]` followed by another attribute before the `fn`.
 - Checker C4 flags `ed25519` as a commit hash.
 - Checker C7 counts an ID inside a rule's name (I7 names R1) as a second ID in the Rule cell;
   SECURITY works round it by citing I7 with its name in the prose above and bare in its row.
 - Delete `docs/.nojekyll` (the one remaining finding).
+- Checker C5's definition pattern skips a heading that adds words after the short name
+  (`### I13 (...), on the timer`, `### R10 (destruction) at a deadline: ...`, `### R12 (scheduling)
+  for timer work` in `kernel/timer.md`), so their tests and gaps never reach C7; SECURITY's
+  residual cells link them by hand until the checker merges them into the owning row.
+- Delete `kernel/assemble.sh` and `kernel/assemble.ps1` (referenced nowhere;
+  todo/host-shell-scripts.md).
+- Code and case files cite testbench headings that no longer exist: "Debug assertions"
+  (`Cargo.toml` and about ten tomls; now "Checked builds"), "Writing an attack case" (now "Rule F
+  (trusted verdicts)") and "Peers" (now "Peers, dials and the capture").
 - `libs/signing/src/lib.rs:3-4`: the comment is stale.
 - Stale process comments in `stub/`, the `blkd`, `netd` and `consoled` bin docs,
   `image/boot.toml` and `libs/wire/tables/example.md`.
