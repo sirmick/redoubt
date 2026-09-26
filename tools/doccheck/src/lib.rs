@@ -44,7 +44,7 @@ const MILESTONES: [(&str, &str); 5] = [
 const EXEMPT: [&str; 4] = ["Purpose", "Residual risks", "Why", "How to use it"];
 /// Directories under `docs/` that hold no pages and take no links (the rendering assets in
 /// `docs/theme` are not pages either, but C8 checks them).
-const EXCLUDED: [&str; 2] = ["docs/legacy", "docs/inventory"];
+const EXCLUDED: [&str; 1] = ["docs/legacy"];
 const ROOT_PAGES: [&str; 3] = ["README.md", "GETTING-STARTED.md", "CONTRIBUTING.md"];
 const PACKAGES: [&str; 17] =
     ["SV", "IPC", "DOC", "HIST", "OD", "K", "D", "B", "E", "C", "W", "A", "L", "T", "V", "G", "S"];
