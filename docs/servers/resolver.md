@@ -1,18 +1,17 @@
 # The resolver
 
-The resolver is the mediated DNS server. A session asks it for a name; it answers only names its
-caller's capability allows, from an allowlist and a blocklist, and records each answer against the
-caller's connection so that [`ipd`](ipd.md) lets that connection reach exactly the addresses it was
-told, for as long as the answer lives. So a principal's network capability can name domains, not
-only prefixes and ports, and an agent cannot use DNS itself as a way out.
+The resolver is the mediated DNS server. It answers only names its caller's rule allows, from an
+allowlist and a blocklist, and never sends a disallowed name upstream. [`ipd`](ipd.md) asks it when
+a person's session connects by name, and filters and pins what it answers. So a principal's network
+capability can name domains, not only prefixes and ports, and DNS itself is not a way out.
 
 ## Purpose
 
 `ipd` scopes sockets by IP prefix and port, because it sees only the address a client chose: DNS
 runs in the client, so a name check in `ipd` alone would check nothing. People need to reach
 services by name, and addresses behind a name change. The resolver closes the gap: it is the one
-place names become addresses, it applies the name rules, and it tells `ipd` what it answered. It
-also stops DNS being a channel: a client that can send arbitrary queries to an arbitrary resolver
+place names become addresses and it applies the name rules; `ipd` asks it at connect time and
+filters what it answers. It also stops DNS being a channel: a client that can send arbitrary queries to an arbitrary resolver
 can encode data in the names it asks for.
 
 ## Interface
@@ -21,49 +20,53 @@ can encode data in the names it asks for.
 
 Status: planned · M4 (self-hosted development)
 
-- A client holds a connection to the resolver whose badge names its **name rules**: an allowlist of
-  domain names and suffixes (`example.org`, `*.example.org`), and a blocklist that wins over it. The
-  rules come from whoever granted the connection, and a grant only narrows them, like an `ipd`
-  scope.
+- **Name rules.** A caller's badge names an allowlist of domain names and suffixes and a blocklist
+  that subtracts from it and always wins. A suffix matches only at a label boundary: `example.com`
+  covers `a.example.com` and never `evilexample.com`. The rules come from whoever granted the
+  connection, and a grant only narrows them.
+- **Callers.** `ipd` asks through its own resolver connection, with the rule of the connection
+  that is connecting ([ipd](ipd.md#name-scoped-connections)). A session's own lookups (for
+  `getaddrinfo`) come on a resolver badge carrying the same rule, minted from the same grant; their
+  answers are only informational, since the session connects by name.
 - **`resolve(name)`** answers the IPv4 addresses for `name` if the rules allow it, with their
-  lifetime; a name the rules do not allow is refused before any query leaves the box
-  ([R63 (only allowed names)](#r63-only-allowed-names)).
-- **Queries go upstream from the resolver alone,** through its own `ipd` connection, to the
-  upstream resolvers its arguments name. Sessions hold no route to port 53 anywhere: their `ipd`
-  scopes do not include one.
+  lifetime. A disallowed name is refused locally with its own error, `refused`, and never sent
+  upstream, so the names queried cannot carry data out; a nonexistent allowed name is the
+  upstream's NXDOMAIN ([R63 (only allowed names)](#r63-only-allowed-names)).
+- **Queries go upstream from the resolver alone,** as DNS over TCP through its own `ipd`
+  connection, to the upstream resolvers its arguments name. Sessions have no route to port 53, and
+  no route to anything by address.
 - **Names are checked strictly**: lower-cased, at most 253 bytes, labels of letters, digits and
   hyphens, no trailing tricks; a name that is not a plain host name is refused.
 - **The resolver is a sink.** Like `ipd` it refuses every labelled caller, since a query leaves the
   box.
 
-**Open:** the transport to the upstream resolvers (DNS over TCP through `ipd`, or over UDP once
-`ipd` serves it, or DNS over TLS through [`gatewayd`](gatewayd.md)); whether a refused name is
-answered differently from a name that does not exist; the protocol table and which page includes
-it.
+The attack test: a disallowed name never reaches upstream (the test upstream sees no query).
+
+**Open:** the protocol table and which page includes it.
 
 ### Connections by name, pinned
 
 Status: planned · M4 (self-hosted development)
 
-Each answer is recorded against the caller's `ipd` connection: for the answer's lifetime, that
-connection may connect to exactly the answered addresses on the ports its name rule allows, and to
-nothing else by name. A client cannot connect to an address it chose itself and claim a name for
-it, and an answer given to one connection widens no other
+`ipd` resolves at connect time: it checks the name against the connecting connection's rule, asks
+the resolver, drops every always-forbidden address from the answer, connects to one of the rest,
+and pins the connection to that address for its whole life
+([ipd](ipd.md#name-scoped-connections)). A client never names an address, and an answer widens
+nothing beyond the one connection it was asked for
 ([R64 (connections by name are pinned)](#r64-connections-by-name-are-pinned)). An agent's scope
 stays prefixes and ports; name rules are for people's sessions and for leases whose approval named
 them.
 
-**Open:** how `ipd` learns an answer (the resolver granting a narrowed rule per answer at `ipd`, or
-`ipd` consulting a table the resolver keeps); what happens to an open connection when its answer
-expires (the recommendation: it stays, and no new connection uses the address).
+**Open:** none.
 
 ### Caching
 
 Status: planned · M4 (self-hosted development)
 
-Answers are cached per (account, label set), never shared across principals: a shared cache tells
-one principal, by how fast it answers, which names another asked for. A cached answer keeps the
-lifetime the upstream gave it, capped by the resolver's own maximum.
+Answers are cached per (account, label set), in practice per account since the resolver is a
+sink, and never shared: a shared cache tells one principal, by how fast it answers, which names
+another asked for. A cached answer keeps the lifetime the upstream gave it, capped by the
+resolver's own maximum.
 
 **Open:** the cap on an answer's lifetime and on the cache's size per (account, label set).
 
@@ -72,7 +75,7 @@ lifetime the upstream gave it, capped by the resolver's own maximum.
 Status: planned · M4 (self-hosted development)
 
 - The resolver holds its endpoint, one `ipd` connection scoped to its upstream resolvers' addresses
-  and port, and whatever it needs to tell `ipd` about answers.
+  and port.
 - A client's authority is its name rules: which names it may have answered.
 - It holds no keys and no device.
 
@@ -94,8 +97,8 @@ it chose, or to learn names outside its rules.
 
 Status: planned · M4 (self-hosted development)
 
-A connection that reaches an address by name reaches only addresses the resolver answered that same
-connection, within the answer's lifetime and the name rule's ports.
+A connection made by name reaches exactly one address, one the resolver answered for that name
+at connect time and that is not always-forbidden, on a port its rule allows, for its whole life.
 
 **Open:** none.
 
@@ -103,17 +106,19 @@ connection, within the answer's lifetime and the name rule's ports.
 
 Status: planned · M4 (self-hosted development)
 
-- **The resolver restarts:** its cache and its recorded answers are gone; connections by name need a
-  fresh `resolve`. Connections already open are `ipd`'s and stay.
-- **An upstream resolver fails or lies:** the answer is an error, or wrong addresses within the name
-  rule's ports; a lie cannot widen what a connection may reach beyond the name rules.
+- **The resolver restarts:** its cache is gone; connections by name made meanwhile fail and are
+  asked again. Connections already open are `ipd`'s, pinned, and stay.
+- **An upstream resolver fails or lies:** the answer is an error, or another address, which `ipd`
+  still filters; a lie cannot reach a forbidden address or a port the rule does not allow.
 
 **Open:** none.
 
 ## Residual risks
 
-- **Upstream answers are believed.** Without DNSSEC, an upstream or on-path attacker can answer an
-  allowed name with any address, which the connection may then reach on the allowed ports.
+- **Upstream answers are believed.** DNS over TCP is unauthenticated: an upstream or on-path
+  attacker can answer an allowed name with another address, and the person's connection goes there
+  on the allowed ports. Forbidden-address filtering still holds. DNS over TLS waits for a TLS
+  implementation.
 - **The allowed names are a channel.** A client may choose which allowed names it asks for and when;
   the resolver bounds the alphabet to its rules, not the timing.
 - **A name's addresses are shared.** An allowed name hosted beside other services on one address

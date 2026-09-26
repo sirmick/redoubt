@@ -37,7 +37,8 @@ with nothing below it.
 - **No typed protocol of its own.** `consoled` serves 9P and `ninep_common` only; the `consol`
   opcodes are answered `malformed` ([below](#the-consol-protocol)).
 - **Admission:** at most 2 parked reads, 4 fids and 4 connections per (account, label set), across
-  at most 4 of those (`LIMITS`), sized to fit its 1 MiB budget.
+  at most 4 of those (`LIMITS`), sized to fit its 1 MiB budget. The bucket count is compiled in,
+  a departure from the rule that every shared server takes `buckets=N` from the manifest.
 
 ### Two threads and the UART
 
@@ -72,7 +73,7 @@ the same endpoint:
 
 The table: [libs/wire/tables/consol.md](../../libs/wire/tables/consol.md).
 
-{{#include ../../libs/wire/tables/consol.md}}
+{{#include ../../libs/wire/tables/consol.md:tables}}
 
 **Open:** how a typed server says "wait" (open on [the serving library](serving.md#parking-a-typed-call)).
 
@@ -86,8 +87,11 @@ endpoint, placed from the boot manifest's `devices` list ([init](init.md#the-boo
 holds the UART: two holders would both reach the registers, and two readers of one FIFO would each
 take half the line.
 
-**Open:** the handles' names: `consoled` takes `uart` and `uart:irq`, while `blkd` takes `disk` and
-`disk-irq`; one rule for both is open on [init](init.md#the-boot-manifest).
+The rule names the handles `NAME` and `NAME-irq` from one `devices` entry
+([init](init.md#the-boot-manifest)); `consoled` departs from it by taking `uart` and `uart:irq`
+([todo](../todo/consoled-irq-name.md)).
+
+**Open:** none.
 
 ## Authority
 
@@ -131,6 +135,9 @@ Status: built · tested: host:redoubt-consoled::a_console_with_no_device_does_no
   admission slots until a key arrives or its caller gives up.
 - **Anyone with a connection reads the console.** What is typed on the physical console is visible to
   every holder of a `consoled` connection.
+- **The code departs from two rules.** Its bucket count is compiled in
+  ([todo](../todo/server-bucket-counts.md)), and its interrupt handle is named `uart:irq`
+  ([todo](../todo/consoled-irq-name.md)).
 - **`consoled` does not run in a boot.** The bench's console is an interim log server holding the
   same UART; the two must never run together.
 

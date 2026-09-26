@@ -69,7 +69,7 @@ because the maintained crate brings six more into the process holding every priv
 
 The table: [libs/wire/tables/keyd.md](../../libs/wire/tables/keyd.md).
 
-{{#include ../../libs/wire/tables/keyd.md}}
+{{#include ../../libs/wire/tables/keyd.md:tables}}
 
 ### Granting and releasing
 
@@ -101,7 +101,9 @@ Status: built · tested: host:redoubt-keyd::one_requests_work_is_bounded, host:r
   most `MAX_RECORD` (8 KiB); over it is `too_many`.
 - **Admission** counts the one thing a client can make `keyd` hold, its grants: at most 8 live
   grants per (account, label set), across at most 16 of those at once (`LIMITS`), sized to fit
-  `keyd`'s 256 KiB budget ([R26 (admission fairness)](serving.md#r26-admission-fairness)).
+  `keyd`'s 256 KiB budget ([R26 (admission fairness)](serving.md#r26-admission-fairness)). The
+  bucket count is compiled in, a departure from the rule that every shared server takes
+  `buckets=N` from the manifest ([init](init.md#the-boot-manifest)).
   `keyd` parks no calls and keeps no other per-caller state, so a flood of signing requests grows
   it by nothing and is bounded by the kernel's fair waiting.
 - **The label check.** `keyd`'s keys carry no labels, so anyone may read a public key or ask
@@ -220,6 +222,8 @@ Status: built · tested: host:redoubt-keyd::bad_key_arguments_stop_keyd_starting
   while keys are unlabelled; with labelled keys it needs a per-key check.
 - **An `ssh_host` badge speaks as the box.** Its holder can complete a key exchange as the box with
   any peer, for as long as it holds the badge.
+- **Its bucket count is compiled in,** so the manifest cannot size it. Follow-up:
+  [todo](../todo/server-bucket-counts.md).
 - **`keyd` does not boot in the bench.** Its behaviour is attacked by host tests against the
   runtime's fake kernel; `keyd-build` only builds it for both widths, and no bench case runs its
   host tests. Follow-up: [todo](../todo/host-tests-in-bench.md).

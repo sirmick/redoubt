@@ -102,8 +102,23 @@ sequenceDiagram
 ```
 *Figure: a vault login. All of it is planned.*
 
-**Open:** the steward's protocol table (login, submit, approve, deny, end a lease, blame) and
-which page includes it.
+**Open:** none.
+
+### The steward's protocol
+
+Status: planned · M1 (separation and containment)
+
+The steward serves one typed protocol, its table `libs/wire/tables/steward.md`, included by this
+page: `login` (from `sshd`), `submit` (from sessions and agents), `approve` and `deny` (from the
+approval channel), `end_lease` (from a sponsor), and `blame(account: u64, labels: bytes,
+server: string)` (from `init`, [init](init.md#restarts-and-reboots)).
+
+**Each operation is accepted only through the badge class it belongs to.** The steward gives a
+root badge per caller role (`sshd`, `init`, the approval channel), and sessions get minted badges.
+An operation on any other badge is refused, with the same answer as an unknown one, so a session
+cannot send `login`, `approve` or `blame`.
+
+**Open:** the table's other operations' fields; it is written with the steward.
 
 ### Leases
 
@@ -176,8 +191,11 @@ trusted key, a declassification. Most things need none.
 - **Rendering.** The steward renders from the structured request: the requester's kind (agent,
   session) and steward-assigned name (`agent-7`) beside its principal, what, where, how long, and
   the label consequences. Every rendered field is printable ASCII (0x20 to 0x7E; anything else is
-  escaped) and capped in length, so bidi and format characters (U+202E, U+2066, U+200B) cannot
-  disguise it. An unlabelled requester's free-text reason is quoted, escaped and marked untrusted.
+  escaped), with no control character (U+0000 to U+001F, U+007F to U+009F) and so no ESC, so no terminal escape can repaint the approval
+  screen and no bidi or format character (U+202E, U+2066, U+200B) can disguise it. A
+  requester-supplied field is at most `FIELD_CAP` (64) characters, counted as Unicode scalar
+  values, and is shown marked as the requester's text. An unlabelled requester's free-text reason
+  is quoted, escaped and marked untrusted.
   A **labelled** requester's request shows only text the steward generates (kind, target, size):
   its free text would be a channel out of the vault.
 - **Binding.** Each request has a random 64-bit id and a hash of its exact content; approving
@@ -215,8 +233,14 @@ The model checks binding, screens, caps and the approval channel (its P3, P4 and
 `PolicyShowLabelledToAll`, `PolicyCapPerAccount`, `PolicyNoPendingCap`,
 `PolicyDeadSessionRequestsKept`) ([R38 (out-of-band approval)](#r38-out-of-band-approval)).
 
-**Open:** the size of the pending-request cap and of a rendered field (the model uses 4 requests
-and 64 bytes).
+**The steward's constants** are the model's, changed only by a new system bundle, never per
+principal: `PENDING_CAP` 4 pending requests per (account, label set); `FIELD_CAP` 64 characters;
+`DECLASSIFY_MAX` 256 bytes; `BLAME_COUNT` 3 blamed crashes within `BLAME_WINDOW`, 10 minutes;
+`MAX_LEASE` 24 hours.
+
+The attack test: a field full of ANSI escapes renders inert.
+
+**Open:** none.
 
 ### Declassification and push
 
@@ -233,7 +257,8 @@ owner declassifies, one item at a time, after a high-stakes approval:
    ([R1 (flow)](../kernel/ipc.md#r1-flow)). There is no standing reader, and the steward stays
    unlabelled. Any other labelled read the steward needs (a labelled volume's `stat`) goes the same
    way.
-2. The approval shows all of it. Items over a size cap, or not printable text, are refused.
+2. The approval shows all of it. Items over `DECLASSIFY_MAX` (256 bytes), or not printable text,
+   are refused.
 3. On approval, the steward copies exactly that snapshot to an unlabelled volume.
 
 A **push** is the mirror, low to high: how input enters a labelled domain in a confined deployment,
@@ -271,9 +296,11 @@ item's labels, and the push's shape (its P6 and P11; `PolicyDeclassifyLive`,
 `PolicyDeclassifyWithoutReader`, `PolicyWriteUp`)
 ([R42 (one approved item)](#r42-one-approved-item)).
 
-**Open:** how the push's steward and writer-budget edges fit the confined placement rule, which
-refuses a server shared between differing label sets; the size cap on a declassified item (the
-model uses 256 bytes).
+The steward's reader and writer budgets are edges of the confinement check's one named
+exception: each carries exactly one label set and dies after one item
+([init](init.md#the-confinement-check)).
+
+**Open:** none.
 
 ### Crash blame
 
@@ -282,7 +309,8 @@ Status: planned · M1 (separation and containment)
 A server that faults, or exits holding open calls, names in its exit notice the account and
 labels of the current call of the thread that failed
 ([R21 (crash blame)](../kernel/processes.md#r21-crash-blame)), and `init` passes them on
-([init](init.md#restarts-and-reboots)). **Three crashes blamed on one (account, label set) within
+([init](init.md#restarts-and-reboots)) through `blame`, which the steward accepts only on `init`'s
+root badge. **Three crashes blamed on one (account, label set) within
 ten minutes destroy every budget of that (account, label set)**, sessions and leases alike, their
 agents with them, and the steward refuses new sessions for it until the window passes, recording
 both in the audit log. A logout alone would not stop a principal logging straight back in, or its
@@ -365,9 +393,12 @@ Status: planned · M1 (separation and containment)
 - It passes a server a narrowing handle only as a revocation scope made for that purpose (R41).
 - Its work is paid for by the steward, not the requester, and it runs at a large manifest weight
   in the one stride queue, bounding the work of any one request and relying on its caps.
+- The steward and `sshd` are the confinement check's one named exception, and only by three kinds
+  of edge: the request and owner-approval path, per-item reader and writer budgets, and
+  lease-ending supervision ([init](init.md#the-confinement-check)). The steward enforces the same
+  rule for every budget and grant it creates.
 
-**Open:** whether the named mediators (the steward, `sshd`) are trusted across the labels they
-serve as a stated part of the confinement claim, and how the claim words it.
+**Open:** none.
 
 ## Security properties
 
@@ -477,8 +508,8 @@ Status: planned · M1 (separation and containment)
   nobody; the consequence is a logout or a restart, not data loss.
 - **Per-record signatures catch edits, not drops.** Until records are chained, a record dropped or
   reordered wholesale is not detected.
-- **The mediators are trusted across labels.** The steward and `sshd` see several label sets; a
-  bug in either reaches all of them.
+- **The mediators are trusted across labels.** The steward and `sshd` are the confinement check's
+  one named exception and see several label sets; a bug in either reaches all of them.
 - **The model is not the steward.** It leaves out SSH, the approval terminal and real
   cryptography; the properties it checks hold for the model, and the steward must be shown to follow
   it.

@@ -1,7 +1,6 @@
-# The `ninep_common` protocol
+The `ninep_common` protocol's message and error tables, included by its owning page, [servers/wire.md](../../../docs/servers/wire.md).
 
-Owned by [servers/wire.md](../../../docs/servers/wire.md).
-
+<!-- ANCHOR: tables -->
 <!-- wire: ninep_common -->
 | Opcode | Message | Fields | Reply |
 | --- | --- | --- | --- |
@@ -13,3 +12,5 @@ Owned by [servers/wire.md](../../../docs/servers/wire.md).
 | --- | --- |
 | 2 | `not_yours` |
 | 3 | `refused` |
+
+<!-- ANCHOR_END: tables -->

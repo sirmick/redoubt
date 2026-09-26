@@ -1,7 +1,6 @@
-# The `blkd` protocol
+The `blkd` protocol's message and error tables, included by its owning page, [servers/blkd.md](../../../docs/servers/blkd.md).
 
-Owned by [servers/blkd.md](../../../docs/servers/blkd.md).
-
+<!-- ANCHOR: tables -->
 <!-- wire: blkd -->
 | Opcode | Message | Fields | Reply |
 | --- | --- | --- | --- |
@@ -17,3 +16,5 @@ Owned by [servers/blkd.md](../../../docs/servers/blkd.md).
 | 3 | `out_of_range` |
 | 4 | `too_many` |
 | 5 | `failed` |
+
+<!-- ANCHOR_END: tables -->

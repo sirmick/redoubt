@@ -99,7 +99,9 @@ clients: a 9P server's connections (`new_connection`, `disconnect`) and a typed 
 - **Shares.** A capability a client mints for itself counts in the share of the one it minted it
   through (`Minted::share` walks up the chain while the requester is the same client), so minting
   more badges buys no bigger share. One minted by someone else for a client (the steward, for a
-  lease's agent) is a share of its own.
+  lease's agent) is a share of its own. Within account 0 every capability minted through a root
+  badge counts in that root's share however deep the chain; the code departs from that rule
+  (R26).
 
 The server admits one `State` before reserving, gives it back if the mint fails, and gives it
 back for each entry `disconnect` frees.
@@ -229,7 +231,7 @@ an R-message sent to a server is refused, and nothing a vector sends mints a con
 
 ### Replies and rollback
 
-Status: built · partly tested: the skeleton's rollback of a `new_connection` whose reply is discarded is attacked through `unmint` and `keyd`'s grant, not by a discarded reply through `serve_with` · tested: host:redoubt-rt::what_was_minted_here_can_be_undone, host:redoubt-rt::a_rooted_mint_is_an_ordinary_connection_rooted_where_the_server_says, host:redoubt-rt::mapping_reborrows_and_failed_reply_recovery, host:redoubt-rt::ownership_lifecycle_partial_reply_and_address_reuse, host:redoubt-keyd::serving_grant_rolls_back_discard_missing_capability_and_error
+Status: built · partly tested: the rollback on a discarded reply is tested through unmint and keyd's grant, not through the 9P skeleton's serve path · tested: host:redoubt-rt::what_was_minted_here_can_be_undone, host:redoubt-rt::a_rooted_mint_is_an_ordinary_connection_rooted_where_the_server_says, host:redoubt-rt::mapping_reborrows_and_failed_reply_recovery, host:redoubt-rt::ownership_lifecycle_partial_reply_and_address_reuse, host:redoubt-keyd::serving_grant_rolls_back_discard_missing_capability_and_error
 
 A successful `reply` says `delivered` or `discarded`, and which of the reply's handle slots were
 installed in the caller ([IPC](../kernel/ipc.md#how-a-call-completes)). Reply success is not
@@ -245,7 +247,9 @@ outcome is known:
   or that its handles survive a later revocation; ordinary `disconnect` and the admission caps
   bound what a client that vanishes afterwards leaves behind.
 
-Rollback reaches only provisional records: a file write already made stays made.
+Rollback reaches only provisional records: a file write already made stays made. A bench case that
+makes the skeleton's `new_connection` replies undeliverable is a follow-up:
+[todo](../todo/ninep-discard-rollback-test.md).
 
 **`finish`** is the one place a call is finished, for 9P, `ninep_common` and typed protocols
 alike. It closes the handles that do not travel before replying, so a caller holding its reply
@@ -321,9 +325,15 @@ counted per (account, label set), and per badge for account 0; within a bucket e
 hold less than `limit / (n + 1)`, so a lone badge never fills its bucket and a second always finds
 room; minting more badges for oneself buys no bigger share; and every bucket at its cap together
 holds fewer open calls than `MAX_OPEN_CALLS` by at least `OPEN_CALL_HEADROOM`, so the server keeps
-room to take calls beyond what its clients hold, including one answered ahead of admission. The kernel's [R2 (fair waiting)](../kernel/ipc.md#r2-fair-waiting)
+room to take calls beyond what its clients hold, including one answered ahead of admission.
+Within account 0, every capability minted through a root badge (one below `FIRST_MINTED_BADGE`,
+given by whoever set the server up) counts in that root's share, however many links deep and
+whoever holds it: a chain of self-mints spends one share, and system callers get separate shares
+only from separate root badges, which the manifest gives. A capability used under a non-zero
+account is keyed by that account. The kernel's [R2 (fair waiting)](../kernel/ipc.md#r2-fair-waiting)
 shares turns at the endpoint the same way; this rule shares what the server holds afterwards.
-The library departs from this for account-0 callers that mint for themselves (Residual risks).
+The code departs from the account-0 rule: `Minted::share` stops folding when the requester's key
+changes, so each self-minted link opens a bucket (Residual risks).
 
 ### R27 (badge allocation)
 
@@ -369,9 +379,11 @@ Status: built · partly tested: the exit after a rejected fallback reply is argu
 - **An account-0 client can spend every bucket.** Account 0 is admitted per badge, so a
   `system`-class client minting connections for itself through a 9P server looks, through each
   new badge, like a new client: the share does not fold, and each link of the chain opens a fresh
-  bucket, until the server's bucket count is spent and new connections are refused. The code
-  names it an open hole (`Minted::share`). `keyd` allows no chain (only a root badge may grant);
-  the 9P skeleton cannot take that rule. Follow-up: [todo](../todo/account0-share-chain.md).
+  bucket, until the server's bucket count is spent and new connections are refused. This is the
+  code departing from R26, which counts the whole chain in its root's share (`Minted::share`
+  stops folding when the requester's key changes). `keyd` allows no chain (only a root badge may
+  grant); the 9P skeleton cannot take that rule. Follow-up:
+  [todo](../todo/account0-share-chain.md).
 - **An undersized server is a channel.** A server sized for fewer buckets than the (account,
   label set)s it serves refuses the latecomers, which tells them others hold state: across
   accounts, and between the label sets of one account, where it is a channel out of a vault. The

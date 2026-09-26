@@ -34,15 +34,22 @@ Status: planned · M1 (separation and containment)
   write needs them equal ([R25 (the label check)](serving.md#r25-the-label-check)). There are no
   per-file labels, owners or permission bits: access is by capability.
 - **A remove succeeds while another connection holds a fid on the file.** An "in use" refusal
-  would be a channel between connections.
+  would be a channel between connections. The remove frees the file's blocks at once, and every
+  other fid on it gets `removed` on its next read, write or stat; only a clunk succeeds. So there
+  is no orphan to track and no invisible data holding quota, and it tells a fid's holder no more
+  than the name vanishing from the directory tells anyone who can walk there. (littlefs itself
+  keeps a removed file readable through open handles; `fsd` does not use that.)
+- **Removing a file is not revocation.** It ends the file, not anyone's access to the volume;
+  revocation is destroying the grant.
 - **Admission** is the serving library's, per (account, label set) with a fair share per badge
   ([R26 (admission fairness)](serving.md#r26-admission-fairness)); a `disconnect` frees a
   client's fids.
 - **Metadata** lives in littlefs user attributes: what `stat` needs (mtime, qid version) and the
   per-file attributes of `get_attr` and `set_attr`.
 
-**Open:** what a connection holding a fid on a removed file sees (the recommendation: the fid
-keeps serving the unlinked file until clunked, and a fresh walk finds nothing).
+The attack test: after a remove, the file's other fids get `removed` on read, write and stat.
+
+**Open:** none.
 
 ### Typed operations
 
@@ -60,10 +67,13 @@ label and quota checks as 9P:
 
 The table: [libs/wire/tables/fsd.md](../../libs/wire/tables/fsd.md).
 
-{{#include ../../libs/wire/tables/fsd.md}}
+{{#include ../../libs/wire/tables/fsd.md:tables}}
 
-**Open:** the size limit on an attribute value, and which attribute numbers `fsd` keeps for
-itself (mtime, qid version).
+**Attributes.** A value is at most littlefs's `attr_max`, 1022 bytes; a larger one is refused as
+too large. Attribute types 0 to 15 are `fsd`'s own (mtime, qid version, and later use), and
+`set_attr` refuses them; types 16 to 255 are the user's.
+
+**Open:** none.
 
 ### Quotas
 
@@ -77,9 +87,19 @@ refused. So Bob filling the `data` volume cannot make Alice's saves fail
 ([R48 (a quota per attach root)](#r48-a-quota-per-attach-root)). The serving library holds no byte
 counters; `fsd` is the only server that meters bytes.
 
-**Open:** how a quota counts littlefs's own overhead (metadata pairs, the inline threshold) and
-blocks shared by a copy; whether a quota of 0 means "none of its own, charged to the parent root"
-or "nothing".
+- **What a quota counts:** the blocks a root actually holds: whole blocks for a file stored in
+  blocks, the byte length for an inline file, and each directory's metadata pair (two blocks),
+  charged to the root that created it. littlefs shares no blocks between files, so `copy_file`
+  writes new blocks and a copy is charged in full.
+- **No promise the disk cannot keep.** The volume root's quota is the usable blocks less a fixed
+  reserve for metadata compaction, and carved quotas never exceed it.
+- **A quota of 0 means nothing:** the connection can read and remove, but not create or grow. A
+  quota is never charged to a parent root, which would reopen a shared pool.
+
+The attack tests: a write past one root's quota is refused while another root still writes; a
+root with quota 0 cannot create a file.
+
+**Open:** none.
 
 ### littlefs
 

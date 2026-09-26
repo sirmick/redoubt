@@ -71,7 +71,7 @@ stateDiagram-v2
 
 The table: [libs/wire/tables/net_ctl.md](../../libs/wire/tables/net_ctl.md).
 
-{{#include ../../libs/wire/tables/net_ctl.md}}
+{{#include ../../libs/wire/tables/net_ctl.md:tables}}
 
 ### Scopes and grants
 
@@ -100,7 +100,7 @@ Status: built · tested: bench:d3-net-attacks, host:redoubt-ipd::a_scope_permits
 
 The table: [libs/wire/tables/ipd.md](../../libs/wire/tables/ipd.md).
 
-{{#include ../../libs/wire/tables/ipd.md}}
+{{#include ../../libs/wire/tables/ipd.md:tables}}
 
 `frame` is `netd`'s: each received frame, as a `send` on the ingress badge with the frame in one
 transferred page ([netd](netd.md#serving-ipd)). Frames count only from the unlabelled ingress badge.
@@ -154,7 +154,8 @@ it serves:
 - `ingress=BADGE`: the badge `netd`'s frames arrive on, once; it has no `/net`;
 - `scope=BADGE:RULE[,RULE...]`: one root badge's scope, at most 8 badges of at most 8 rules; a rule
   is `c:A.B.C.D/LEN:PORTS` or `l:PORTS`, `PORTS` being `P` or `LO-HI`;
-- `buckets=N`: admission buckets, 1 to 32 (default 6);
+- `buckets=N`: admission buckets, 1 to 32 (default 6), parsed by `ipd` itself where the rule has the
+  serving library parse it for every shared server ([todo](../todo/server-bucket-counts.md));
 - `limits=BADGE:INFLIGHT:STATE:SOCKETS`: caps for one scope badge's bucket in place of the defaults,
   at most 8 (an account-0 override, [serving](serving.md#admit)).
 
@@ -197,15 +198,25 @@ does this in the bench.
 
 Status: planned · M4 (self-hosted development)
 
-A person's session may connect by name: its scope names the domains it may reach, and the
-[resolver](resolver.md) answers only those names, recording each answer against the caller's
-connection; `ipd` then lets that connection connect to exactly the addresses the resolver answered
-it, for the answer's lifetime. An agent's scope stays prefixes and ports. A name-scoped check in
-`ipd` alone could see only the address the client chose, so the resolver is what binds a name to
-an address.
+A person's session connects by name, never by address: its connection's rule names the domains
+it may reach, and it writes `connect(name, port)` to a socket's `ctl`.
 
-**Open:** how `ipd` learns the resolver's answers (a grant the resolver makes per answer, or a
-table `ipd` consults); what happens to a connection when its answer expires.
+1. `ipd` checks the name against the connection's rule (a suffix matches only at a label boundary:
+   `example.com` covers `a.example.com`, never `evilexample.com`; a blocklist entry always wins).
+2. `ipd` asks the [resolver](resolver.md) through its own resolver connection.
+3. `ipd` drops every always-forbidden address from the answer: the box's own addresses
+   ([the self set](#the-boxs-own-addresses)), the host, metadata addresses, anything that routes
+   back to the box. It connects to one of the rest, on a port the rule allows.
+4. The connection is pinned to that address for its whole life, so an answer's expiry never
+   matters and nothing is granted per answer.
+
+So a name that resolves to a forbidden address is refused at `ipd`, whatever the resolver said,
+which is also the defence against DNS rebinding. An agent's scope stays prefixes and ports.
+
+The attack tests: a name resolving to a forbidden address is refused; a rebinding attempt (a
+first answer allowed with a lifetime of 0, a second forbidden) fails.
+
+**Open:** none.
 
 ## Authority
 

@@ -26,7 +26,7 @@ and `init`'s only input. Its entries:
 | Entry | Holds |
 | --- | --- |
 | `system` | the `system` budget's pages, processes and weight |
-| `devices` | each device object's name, its device-tree node path, and whether it may do DMA |
+| `devices` | each device's name, its device-tree node path, and whether it may do DMA |
 | `labels` | each label's name, owner principal and 64-bit id |
 | `volumes` | each volume's name, `blkd` partition and label set |
 | `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), device names, volume, the endpoints it receives on, the endpoints it is handed, and arguments |
@@ -42,6 +42,13 @@ and `init`'s only input. Its entries:
   `[a-z0-9_:+-]`, starting with a letter (`fsd:data`, `alice+secrets`), compared byte for byte.
   Names become endpoint names, volume names and 9P paths, so no empty name, NUL, U+FEFF or control
   character may reach them. The startup block applies the same rule (`valid_name`).
+- **One entry per device.** A `devices` entry names one device-tree node, and `init` hands that
+  node's objects together to the one server that holds the entry: `NAME` for the register region
+  and `NAME-irq` for the interrupt, whichever exist. Two entries for one device would let a
+  manifest split it between two holders, and the interrupt's holder could then mask the other's
+  device and time its activity. A device name is at most 60 bytes and may not end in `-irq`, so
+  `NAME-irq` never collides and fits the name rule. `consoled` departs from it: it takes
+  `uart:irq` ([todo](../todo/consoled-irq-name.md)).
 - **No server gets a budget handle.** A `servers` entry names the budget `init` creates for the
   server, never a handle to one; a manifest that grants a server a budget handle is refused
   ([R33 (no server holds a system budget)](#r33-no-server-holds-a-system-budget)).
@@ -49,9 +56,12 @@ and `init`'s only input. Its entries:
   block's `argv` and never interprets them; each server's page defines its own (`keyd`'s keys,
   `ipd`'s addresses and bucket count). `init` checks only that each is UTF-8 with no NUL, and that
   together they leave the startup block inside its page.
-- **Sizing.** Each server's admission is sized to the (account, label set)s it serves, so that
-  its bucket count never binds in normal use: a full server tells a latecomer that others hold
-  state ([serving](serving.md#residual-risks)).
+- **Sizing.** Every shared server takes `buckets=N` as an argument, parsed once in the serving
+  library; none has a compiled-in count. `init` refuses the boot unless N is at least the number
+  of distinct (account, label set)s the manifest routes to that server, plus its system callers.
+  So a server's bucket count never binds in normal use, and a full server cannot tell a latecomer
+  that others hold state ([serving](serving.md#residual-risks)). `bootfsd`, `consoled` and `keyd`
+  depart from it: they compile their counts in ([todo](../todo/server-bucket-counts.md)).
 - **Weights.** One stride queue serves every budget ([scheduling](../kernel/scheduling.md)), so
   the manifest's weights are the whole scheduling policy. `init`, the steward and the drivers
   (`consoled`, `blkd`, `netd`) get weights an order of magnitude above a session's (1000 against
@@ -74,9 +84,11 @@ and `init`'s only input. Its entries:
 ```
 *A fragment: one file server and one principal.*
 
-**Open:** how a device's register region and its interrupt are named, being two objects (the
-recommendation: `NAME` and `NAME-irq`, two entries under the name rule); how a server whose
-bucket count is compiled in (`bootfsd`, `consoled`, `keyd`) is sized by the manifest.
+The attack tests: a manifest that splits a device between two entries, or names a device ending
+in `-irq`, is refused; a manifest giving a server fewer buckets than it serves refuses the boot.
+
+**Open:** none. Sizing a server when principals are added at run time is the steward's, in
+M5 (persist, install, share).
 
 ### The confinement check
 
@@ -101,6 +113,13 @@ labels, so it is a domain of its own. A confined manifest in which a labelled do
 shared unlabelled volume is refused too; data enters such a domain by an audited push from the
 steward ([steward](steward.md)). The refusal is a boot failure, not a warning
 ([R34 (confined placement)](#r34-confined-placement)).
+
+**The one named exception** is the control plane: the steward and `sshd` may reach across label
+sets, and only by three kinds of edge: the request and owner-approval path; per-item reader and
+writer budgets, each carrying exactly one label set and dying after one item (declassification and
+push); and lease-ending supervision. No shared data server, device or core is exempt. `init`
+checks the declared graph at boot, and the steward enforces the same rule for the budgets and
+grants it creates later.
 
 It is a check on the manifest, not a run-time invariant: a capability handed over after boot (by
 `mint`, by a `grant`, by a system server) is outside it, and a system server that hands one
@@ -152,9 +171,8 @@ sequenceDiagram
 ```
 *Figure: the boot from the loader to the first session. All of it is planned.*
 
-**Open:** how the bundle's pages reach `init` and who pays for them (also open on
-[boot](../kernel/boot.md)); whether a launcher copies a program image into every child, as the
-stub requires, or maps image pages read-only from a shared cache.
+**Open:** how the bundle's pages reach `init` and who pays for them (open on
+[boot](../kernel/boot.md)).
 
 ### The key-separation check
 
@@ -209,7 +227,7 @@ child accepts.
 
 The table: [libs/wire/tables/startup.md](../../libs/wire/tables/startup.md).
 
-{{#include ../../libs/wire/tables/startup.md}}
+{{#include ../../libs/wire/tables/startup.md:tables}}
 
 ### Launching through the loader stub
 
@@ -270,12 +288,22 @@ Status: planned · M1 (separation and containment)
 - **Restart.** A server that exits is restarted on the same endpoint. Calls it had taken get
   `Dead` ([R4b (a server dies)](../kernel/ipc.md#r4b-a-server-dies)), and clients see the error
   and retry; senders still waiting on the endpoint are served by the restarted server. The new
-  server starts with empty tables and a newly drawn first badge
-  ([R27 (badge allocation)](serving.md#r27-badge-allocation)).
+  instance gets the same manifest name, arguments and receive endpoint, but a new startup block:
+  `init`, as its launcher, disconnects the dead instance's connections at every server
+  ([releasing grants](wire.md#a-launcher-releases-its-childs-grants)) and mints new ones. The
+  server's own tables start empty, with a newly drawn first badge
+  ([R27 (badge allocation)](serving.md#r27-badge-allocation)), so a client's old connection ids
+  are dead.
 - **Blame.** Each exit notice for a fault names the account and label set of the call the faulting
   thread was serving ([R21 (crash blame)](../kernel/processes.md#r21-crash-blame)). `init` passes
-  them to the steward in one typed message, and the steward's rule decides what happens to that
-  principal's sessions ([steward](steward.md)).
+  them to the steward in one typed call, `blame(account, labels, server)`, in the steward's table,
+  where `server` is the faulting server's manifest name for the audit record; the steward's rule
+  counts by (account, label set) only ([steward](steward.md#crash-blame)).
+- **Only `init` can blame.** The steward accepts `blame` only through a root badge it gives `init`
+  alone: anyone who could send it could have another principal's sessions ended by forging three
+  crashes.
+- **A wedged steward cannot stall restarts.** `init` restarts the server first, then blames, with a
+  timeout; a blame lost to the timeout is reported on the console.
 - **Reboot.** More than 5 restarts of one server within 60 seconds, not stopped by blame, reboots
   the machine: failing closed beats a server that cannot stay up.
 - **The steward** is part of the trusted base; its crash is a bug. If it dies, `init` destroys and
@@ -293,10 +321,10 @@ stateDiagram-v2
 ```
 *Figure: a system server's restarts. All of it is planned.*
 
-**Open:** the layout of the blame message from `init` to the steward (the recommendation: one
-typed call in a `steward` table, carrying the account as a `u64` and the label set as `bytes`);
-whether a restarted server is handed the same startup block, including the same fresh
-connections, or new ones.
+The attack tests: `blame` from any badge but `init`'s is refused; a restarted server's old
+connection ids are dead.
+
+**Open:** none.
 
 ### A worked configuration
 
@@ -394,8 +422,10 @@ Status: planned · M1 (separation and containment)
 
 With `confined` set, no two entries with differing label sets share a server instance, volume,
 endpoint, network instance, device object or core, and no labelled domain reads a shared
-unlabelled volume; a manifest that would place them so fails the boot. The attack verdict is the
-boot failing, not the manifest's claim.
+unlabelled volume; a manifest that would place them so fails the boot. The one exception is the
+control plane: the steward and `sshd`, by the request and owner-approval path, per-item single-label
+reader and writer budgets, and lease-ending supervision only. The attack verdict is the boot
+failing, not the manifest's claim.
 
 **Open:** none.
 
@@ -429,7 +459,13 @@ Status: built · partly tested: the runtime's exit on a refused block is read fr
 - **A confined boot is checked once.** Capabilities handed over after boot are outside the check;
   a system server that hands one across label sets breaks confinement without the kernel noticing.
 - **Every child pays for a copy of its image.** There is no shared text: a launcher copies the ELF
-  into pages charged to the child, and the stub copies each segment again.
+  into pages charged to the child, and the stub copies each segment again. A read-only image cache
+  shared between principals would be a cross-principal timing surface, and is set aside with the
+  shared content store, beyond M5 (persist, install, share).
+- **A blame can be lost.** If the steward does not take `init`'s blame within its timeout, the
+  crash is reported on the console but counts toward no lockout.
+- **The mediators are trusted across labels.** The steward and `sshd` are the confinement check's
+  one exception; a bug in either reaches every label set they serve.
 - **The stub cannot see the stack.** A segment that names the stack's pages is refused by
   `map_fixed`, but nothing checks for a gap between a segment and the stack
   ([memory layout](../kernel/memory-layout.md#residual-risks)).
