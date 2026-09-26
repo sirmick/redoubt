@@ -110,7 +110,8 @@ I16 DMA pages reset before reuse.
   (resolver.md); R65 a request only within its capability, R66 no credential leaves gatewayd
   (gatewayd.md); R67 a channel keeps its labels, R68 only the steward on approve@box (sshd.md);
   R69 no write down onto the console, R70 a stuck UART never hangs the console (consoled.md); R71 no new authority without trust,
-  R72 no rollback below the counter (pkg.md); R73 a restart never widens (supervisor.md).
+  R72 no rollback below the counter (pkg.md); R73 a restart never widens (supervisor.md); R74 a hostile package stays in its principal's
+  packages (pkg.md).
 - The servers set takes the next free numbers, in the order its pages are written (the
   userland template has no Security properties section, so userland pages only cite).
 - `rule F` stays on `docs/testbench.md`.
