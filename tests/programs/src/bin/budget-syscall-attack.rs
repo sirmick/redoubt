@@ -9,7 +9,6 @@
 #![no_std]
 #![no_main]
 
-use redoubt_abi::MemoryFlags;
 use redoubt_sys::{BUDGET_SPEC_SLOTS, NUMBER_BASE};
 use test_programs::rd::{self, Error, Number};
 use test_programs::{Logger, log};
@@ -41,12 +40,10 @@ pub extern "C" fn _start() -> ! {
     }
     let text = _start as *const () as usize & !7;
     // A page mapped, then one unmapped right after it.
-    let pages = redoubt_abi::map_memory(None, None, 8192, MemoryFlags::R | MemoryFlags::W).expect("map");
-    let end = pages.as_ptr() as usize + 4096;
-    // SAFETY: unmapping the second page of this program's own fresh mapping.
-    redoubt_abi::unmap_memory(unsafe { redoubt_abi::MemoryRange::new(end, 4096) }.unwrap()).expect("unmap");
-    // SAFETY: the first page is still mapped, writable and this program's.
-    unsafe { (pages.as_mut_ptr() as *mut u64).write_volatile(1) };
+    let pages = rd::map_anon(2 * rd::PAGE_SIZE, rd::rw()).expect("map");
+    let end = pages + rd::PAGE_SIZE;
+    rd::unmap(end, rd::PAGE_SIZE).expect("unmap");
+    rd::poke(pages, 1);
 
     let create = |rec: usize| call(Number::BudgetCreate, [system as usize, rec, 0, 0, 0, 0, 0]);
     let spec = good_spec();
@@ -93,9 +90,9 @@ pub extern "C" fn _start() -> ! {
     ];
     log!(logger, "[i14] budget_create order -> {:?}", order);
     // A page reserved and never touched: decoding does not back it (QUESTIONS.md 115).
-    let untouched = redoubt_abi::map_memory(None, None, 4096, MemoryFlags::R | MemoryFlags::W).expect("map");
+    let untouched = rd::untouched_stack_page();
     let usage = [
-        call(Number::BudgetUsage, [system as usize, untouched.as_ptr() as usize, 0, 0, 0, 0, 0]),
+        call(Number::BudgetUsage, [system as usize, untouched, 0, 0, 0, 0, 0]),
         call(Number::BudgetUsage, [system as usize, text, 0, 0, 0, 0, 0]),
         call(Number::BudgetUsage, [system as usize, scratch + 1, 0, 0, 0, 0, 0]),
         call(Number::BudgetUsage, [system as usize, KERNEL, 0, 0, 0, 0, 0]),

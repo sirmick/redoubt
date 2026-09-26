@@ -16,7 +16,7 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use test_programs::logsrv::{self, Line};
+use test_programs::logsrv::{self, Line, Sender};
 use test_programs::rd::{self, MessageKind, ResetKind};
 use test_programs::{console, op};
 
@@ -78,11 +78,11 @@ pub extern "C" fn _start() -> ! {
                     rd::close(budget).ok();
                 }
                 given = true;
-                logsrv::say(Line::GiftsGiven(m.badge));
+                logsrv::say(Line::GiftsGiven(Sender(m.badge)));
             }
             op::DONE => {
                 // The badge is the kernel's: nobody can report as another.
-                logsrv::say(Line::Done(m.badge));
+                logsrv::say(Line::Done(Sender(m.badge)));
                 rd::reply(id, &rd::body([0; rd::WORDS])).ok();
                 rd::system_reset(rd::RESET, ResetKind::PowerOff).ok();
                 test_programs::park()

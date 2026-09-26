@@ -8,27 +8,24 @@
 
 use core::fmt::Write;
 
-use redoubt_abi::MemoryFlags;
 use test_programs::{Page, log, logsrv, op, rd};
 
 const ROUNDS: usize = 64;
 const PAGES: usize = 4;
 
 fn map_touch_unmap() {
-    let range =
-        redoubt_abi::map_memory(None, None, PAGES * 4096, MemoryFlags::R | MemoryFlags::W).expect("map");
+    let at = rd::map_anon(PAGES * rd::PAGE_SIZE, rd::rw()).expect("map");
     for page in 0..PAGES {
-        // SAFETY: this program's own fresh mapping.
-        unsafe { (range.as_mut_ptr().add(page * 4096) as *mut u64).write_volatile(page as u64 + 1) };
+        rd::poke(at + page * rd::PAGE_SIZE, page as u64 + 1);
     }
-    redoubt_abi::unmap_memory(range).expect("unmap");
+    rd::unmap(at, PAGES * rd::PAGE_SIZE).expect("unmap");
 }
 
 fn lend(server: u32, page: &mut Page) {
     page.clear();
     page.write_str("churn").ok();
     let body = rd::body([op::UPPERCASE, page.bytes().len(), 0, 0]);
-    rd::call_waiting(server, &body, rd::pages(page.range.as_ptr() as usize, 1), rd::FOREVER).expect("lend");
+    rd::call_waiting(server, &body, page.pages(), rd::FOREVER).expect("lend");
 }
 
 #[no_mangle]

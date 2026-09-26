@@ -13,7 +13,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use uart_16550::MmioSerialPort;
 
-use crate::logsrv::CHILD_BADGES;
+use crate::logsrv::Sender;
 
 struct Port {
     busy: AtomicBool,
@@ -59,19 +59,14 @@ pub(crate) fn line(args: fmt::Arguments) {
     });
 }
 
-/// The one way to print another program's bytes: each line starts `[pid N] ` for a badge below
-/// [`CHILD_BADGES`], which only the kernel writes (the loader's PIDs), and `[badge N] ` for any
-/// other, which only a first program's `logsrv::mint_child` makes. A sender cannot choose N, and
-/// every newline in its text starts a new prefixed line, so it can never begin a line of its
-/// own. Control characters become '?' only to keep the log readable.
+/// The one way to print another program's bytes: each line starts with its [`Sender`] in
+/// brackets, `[pid N] ` or `[badge N] `. A sender cannot choose N, and every newline in its text
+/// starts a new prefixed line, so it can never begin a line of its own. Control characters
+/// become '?' only to keep the log readable.
 pub(crate) fn relay(badge: u64, text: &str) {
     for line in text.split('\n') {
         with(|port| {
-            if badge < CHILD_BADGES {
-                write!(port, "[pid {badge}] ").ok();
-            } else {
-                write!(port, "[badge {badge}] ").ok();
-            }
+            write!(port, "[{}] ", Sender(badge)).ok();
             for c in line.chars() {
                 port.write_char(if c.is_control() && c != '\t' { '?' } else { c }).ok();
             }

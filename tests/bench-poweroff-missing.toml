@@ -2,7 +2,7 @@ description = "Bench self-check: `poweroff = true` fails a guest that passes its
 arch = ["rv64"]
 kind = "boot"
 programs = ["log-server", "ipc-client"]
-timeout_secs = 0.5
+timeout_secs = 3
 expect = ['IPC TEST PASSED']
 poweroff = true
 must_fail = '^timed out waiting for the guest to power off$'

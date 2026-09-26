@@ -8,8 +8,13 @@
 //! straight to the console as `[pid 2]`, since the loader numbers bundle programs from 2. With
 //! siblings to serve it also calls [`start_serving`].
 //!
+//! `log-server` also hands the first program's budgets to the first caller of `TAKE_GIFTS`, and
+//! to no one after it: first caller wins, so a case that uses it runs its attacker as the only
+//! program that asks.
+//!
 //! The badge only says whose line it is; it never authorizes anything here.
 
+use core::fmt;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate::rd::{self, FOREVER, Message, MessageKind, Received};
@@ -21,6 +26,16 @@ pub const FIRST_PID: u64 = 2;
 /// The lowest badge [`mint_child`] makes (R1). The loader's PIDs are at most 64, so a minted
 /// badge can never read as a PID: `console::relay` prints it as `[badge N]`.
 pub const CHILD_BADGES: u64 = 0x100;
+
+/// A message's sender as its badge names it: `pid N` below [`CHILD_BADGES`], which only the
+/// kernel writes (the loader's PIDs), and `badge N` for any other, which only [`mint_child`] makes.
+pub struct Sender(pub u64);
+
+impl fmt::Display for Sender {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.0 < CHILD_BADGES { write!(f, "pid {}", self.0) } else { write!(f, "badge {}", self.0) }
+    }
+}
 
 /// The log endpoint's receive right, read once by [`start`] or `log-server`.
 static LOG_RX: AtomicU32 = AtomicU32::new(0);
@@ -35,9 +50,9 @@ pub enum Line {
     Unexpected(usize),
     /// A byte that arrived on the UART (input from the bench), printed escaped.
     Received(char),
-    GiftsGiven(u64),
+    GiftsGiven(Sender),
     /// Anchored by the bench (`reporter`): no relayed line can start this way.
-    Done(u64),
+    Done(Sender),
 }
 
 pub fn say(line: Line) {
@@ -51,8 +66,8 @@ pub fn say(line: Line) {
         }
         Line::Unexpected(id) => console::line(format_args!("[server] unexpected message, id {id}")),
         Line::Received(byte) => console::line(format_args!("[server] irq: received {byte:?}")),
-        Line::GiftsGiven(pid) => console::line(format_args!("[server] gifts given to pid {pid}")),
-        Line::Done(pid) => console::line(format_args!("[server] done: reported by pid {pid}; still serving")),
+        Line::GiftsGiven(to) => console::line(format_args!("[server] gifts given to {to}")),
+        Line::Done(by) => console::line(format_args!("[server] done: reported by {by}; still serving")),
     }
 }
 

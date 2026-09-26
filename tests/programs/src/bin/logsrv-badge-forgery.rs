@@ -26,7 +26,7 @@ const PANICKED: u32 = 101;
 extern "C" fn forger(_: usize) -> ! {
     let mut page = Page::new();
     page.write_str(FORGERY).ok();
-    let lend = rd::pages(page.range.as_ptr() as usize, 1);
+    let lend = page.pages();
     let body = rd::body([op::PRINT, FORGERY.len(), 0, 0]);
     let code = if rd::call_waiting(1, &body, lend, rd::FOREVER).is_ok() { 0 } else { 1 };
     rd::process_exit(code)

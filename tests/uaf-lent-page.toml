@@ -18,7 +18,3 @@ expect = [
 ]
 poweroff = true
 reporter = "uaf-holder"
-
-[[grant]]
-program = "uaf-holder"
-mmio = ["0x10000000:0x1000"]

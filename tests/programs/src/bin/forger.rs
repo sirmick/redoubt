@@ -26,12 +26,12 @@ pub extern "C" fn _start() -> ! {
     let len = FORGERY.len();
     // A lend (op::PRINT), as the logger sends.
     let page = forged_page();
-    let lend = rd::pages(page.range.as_ptr() as usize, 1);
+    let lend = page.pages();
     rd::call_waiting(rd::LOG, &rd::body([op::PRINT, len, 0, 0]), lend, rd::FOREVER).expect("lend");
 
     // A transfer (op::PRINT_AND_KEEP): the page is the server's afterwards.
     let page = forged_page();
-    let transfer = rd::pages(page.range.as_ptr() as usize, 1);
+    let transfer = page.pages();
     rd::send_waiting(rd::LOG, &rd::body([op::PRINT_AND_KEEP, len, 0, 0]), transfer, rd::FOREVER)
         .expect("transfer");
 

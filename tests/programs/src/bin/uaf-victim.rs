@@ -1,38 +1,34 @@
-//! Use-after-free attack, victim role. Lends a page to the holder and then terminates
-//! while the lend is outstanding, so the kernel's process-teardown path must decide what
-//! to do with a page that another process still has mapped.
+//! Use-after-free attack, victim role. Lends a page to the holder and then exits while the
+//! lend is outstanding, so the kernel's process-teardown path must decide what to do with a
+//! page that another process still has mapped.
 
 #![no_std]
 #![no_main]
 
 use test_programs::uaf::*;
-use test_programs::{log, Logger};
-use redoubt_abi::{MemoryFlags, Message, MemorySize, SID};
-
+use test_programs::{Logger, log, rd};
 
 /// Runs on a second thread: gives the main thread time to lend the page and the holder
-/// time to receive it, then kills this process (including the main thread, which is by
+/// time to receive it, then ends this process (including the main thread, which is by
 /// then blocked in the lend).
-fn terminator(_arg: usize) -> ! {
+extern "C" fn terminator(_arg: usize) -> ! {
     test_programs::wait_ms(50);
-    redoubt_abi::terminate_process(0)
+    rd::process_exit(0)
 }
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
-    let page = redoubt_abi::map_memory(None, None, 4096, MemoryFlags::R | MemoryFlags::W).expect("map failed");
+    let page = rd::page();
+    // SAFETY: `page` is this process's own fresh read-write page.
     unsafe {
-        core::ptr::copy_nonoverlapping(VICTIM_SENTINEL.as_ptr(), page.as_mut_ptr(), VICTIM_SENTINEL.len());
-    }
-
-    let cid = redoubt_abi::connect(SID::from_bytes(HOLDER_ADDRESS).unwrap()).expect("connect failed");
-    redoubt_abi::create_thread_1(terminator, 0).expect("couldn't spawn terminator");
-    log!(logger, "[victim] PID {} lending page, then dying", redoubt_abi::current_pid().unwrap());
-
-    // Mutable lend, which blocks until the holder returns the page. The holder never
-    // does, so this thread stays here until the terminator kills the process.
-    redoubt_abi::send_message(cid, Message::new_lend_mut(HOLD, page, None, MemorySize::new(4096)))
+        core::ptr::copy_nonoverlapping(VICTIM_SENTINEL.as_ptr(), page as *mut u8, VICTIM_SENTINEL.len())
+    };
+    rd::thread(terminator, 0).expect("couldn't spawn terminator");
+    log!(logger, "[victim] lending page, then dying");
+    // A writable lend on the boot endpoint, whose receive right the holder holds. The holder
+    // never replies, so this thread stays here until the terminator ends the process.
+    rd::call_waiting(rd::BOOT_ENDPOINT, &rd::body([HOLD, 0, 0, 0]), rd::pages(page, 1), rd::FOREVER)
         .expect("lend failed");
     unreachable!("the terminator should have ended this process");
 }
