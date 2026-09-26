@@ -82,7 +82,8 @@ receiver's lends and transfers land in a second area, 4 MiB from `DEFAULT_MESSAG
 
 The [model](model.md) places runs differently: above the highest mapping, falling back to the
 first gap large enough. The two agree on outcomes, not addresses, except where the kernel's
-area is full (Residual risks).
+area is full, where a run fits only at its end, and where the kernel's search runs past the
+area's end (Residual risks).
 
 ### `map_fixed`
 

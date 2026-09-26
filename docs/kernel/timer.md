@@ -185,7 +185,7 @@ Status: built · tested: bench:timeouts, bench:budget-deadline, bench:legacy-gon
 
 ### I13 (every blocking call returns by its timeout), on the timer
 
-Status: built · tested: bench:timeouts, bench:timeouts-tcg, bench:sched-latency, bench:sched-wake-no-preempt, mutation:TimeoutIgnoredWhileOthersRun
+Status: built · partly tested: timeouts on more than one hart are not attacked by a case · tested: bench:timeouts, bench:timeouts-tcg, bench:sched-latency, bench:sched-wake-no-preempt, mutation:TimeoutIgnoredWhileOthersRun
 
 I13 is owned by [invariants](invariants.md#i13-every-blocking-call-returns-by-its-timeout); this
 is how the timer keeps it. No thread stays blocked past its timeout. The timer is armed for the

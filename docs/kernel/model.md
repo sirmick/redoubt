@@ -263,7 +263,7 @@ the tests that key on it.
 | [I16 (DMA pages reset before reuse)](invariants.md#i16-dma-pages-reset-before-reuse) | `K5bFreeBeforeReset`, `K5bQuarantinedSlotCountsAsReset`, `K5bUnmapFreesDma`, `K5bQuarantineChargeDropped`, `K5bQuarantinedDeviceUsable`, `K5bResetClearsCoHolderReach` | pooling only after a confirmed reset, co-holders included; `unmap` keeping DMA frames; quarantine's charge and sweep |
 | `policy` | `PolicyVaultWithoutOwnership`, `PolicyApproveIgnoresHash`, `PolicyShowLabelledToAll`, `PolicyNoPendingCap`, `PolicyCapPerAccount`, `PolicyNoFairShare`, `PolicyEndLeaseAdmitted`, `PolicyDeclassifyLive`, `PolicyDeclassifyWithoutReader`, `PolicyBlameNoWindow`, `PolicyBlamePerAccount`, `PolicyNoLockout`, `PolicySequentialIds`, `PolicyLoginWithKeydKey`, `PolicySubAgentOutlivesAgent`, `PolicyUnboundedLease`, `PolicyDeadSessionRequestsKept`, `PolicyRenderNotWhitelisted`, `PolicyLabelledFreeTextShown`, `PolicyWriteUp`, `PolicyServerHoldsSystemBudget`, `PolicyNarrowToSessionBudget`, `PolicyCarveFromUnlabelled`, `PolicyAuditUnfiltered` | the steward model's properties |
 
-Five rules are outside the model and have no variant: R15 (verified boot), R16 (image confinement), R17 (fail closed), R19 (kernel W^X) and R23 (no test channels). The model has no
+Six rules are outside the model and have no variant: R15 (verified boot), R16 (image confinement), R17 (fail closed), R19 (kernel W^X), R23 (no test channels) and R24 (SUM and MXR clear). The model has no
 loader, no bundle, no kernel mappings of its own and no test build. Three rules are in the model
 but have no variant: R18 (device authority), R20 (PID reuse) and R22 (range cost). Scripted
 tests cover R20 (`pid_reuse_only_after_notice_receipt`) and part of R22
@@ -470,8 +470,8 @@ Replay is what turns the model from a reference into evidence about the kernel.
   non-interference comparison leaves out approving or denying a vault request (approval is
   declassification, by design), ending a vault session, and server crashes. A leak through crash
   blame or a session's end is not checked by it.
-- **Rules outside the model** (R15, R16, R17, R19, R23) have no model check at all; their boot
-  cases are their only attack.
+- **Rules outside the model** (R15, R16, R17, R19, R23, R24) have no model check at all; their
+  boot cases are their only attack, and R24, which is planned, has none yet.
 
 ## Why
 

@@ -28,7 +28,7 @@ until the rule is written.
 
 ## Done when
 
-The owner or the architect settles the rule, the IPC page states it under R3, and a case
+The rule is settled, the IPC page states it under R3, and a case
 destroys an endpoint's owner budget while a server in another budget waits in `receive` holding
 taken calls: the `receive` returns `Dead`, each caller gets `Dead`, and a reply to a taken call
 gets the result the rule states.
