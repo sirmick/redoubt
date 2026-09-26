@@ -52,8 +52,10 @@ never switches straight from one process to another. User mode is entered two wa
 thread, or returning from a call) and left one way (a trap), so every instruction a process runs
 is counted against the budget the scheduler picked
 ([R12 (scheduling)](scheduling.md#r12-scheduling)). The kernel runs on one hart with interrupts
-off while it runs, and all of its state sits behind one lock (`KernelCell`,
-`kernel/src/cell.rs`): a nested borrow is a panic, not two live references.
+off while it runs. Each kernel global (the memory manager, the process table, the timer, the
+generator) sits in a `KernelCell` of its own (`kernel/src/cell.rs`): on one hart a
+run-time-checked borrow, so a nested borrow is a panic, not two live references; in a build for
+more than one hart, a spinlock per global.
 
 `bench:no-cruft` reads the sources and fails on a name from a list of call-interface
 identifiers Redoubt does not have, on a silenced dead-code warning (`allow(dead_code)` or
@@ -177,7 +179,7 @@ two, where a file serves two mechanisms).
 | `time.rs` | the kernel's timer: slices, timeouts, deadlines | [timer](timer.md) |
 | `device.rs` | device objects, `map_device`, `dma_alloc`, `system_reset` | [devices](devices.md) |
 | `dma.rs` | DMA device reset and frame quarantine | [devices](devices.md) |
-| `cell.rs` | `KernelCell`, the one lock | [this page](#what-the-kernel-keeps) |
+| `cell.rs` | `KernelCell`, the checked cell each kernel global sits in | [this page](#what-the-kernel-keeps) |
 | `debug/`, `io.rs` | the kernel console | [boot](boot.md) |
 | `platform/sbi/` | SBI start-up, console and reset; `rand.rs`, the ChaCha8 generator | [boot](boot.md), [devices](devices.md) |
 | `arch/riscv/asm.rs` | kernel entry, trap entry, context restore | [ABI](abi.md) |

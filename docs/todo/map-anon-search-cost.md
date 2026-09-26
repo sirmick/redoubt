@@ -8,6 +8,14 @@ the run is tested again from the beginning. The cost is the area's pages times t
 pages: one page mapped in the middle of the area makes a request for half of it test about
 5 × 10^8 pages before it fails. The receiver's message area (1024 pages) uses the same search.
 
+The same loops have two boundary faults. The first pass tries starts from the last placement up
+to, but not including, the last start that fits, so a run that fits only at the area's very end
+is never found, and a request for the whole area fails even when the area is empty. The second
+pass, from the area's start up to the last placement, has no upper bound at all: when the last
+placement lies above the last start that fits, a start there is tried and accepted if its pages
+are free, and the run then extends past the area's end. Only the caller's own address space is
+affected.
+
 The search runs before any budget check. Its kernel time is billed to the caller afterwards, so
 the caller pays in its own pass (R12 (scheduling)); the harm is latency, not billing. The kernel
 is not preemptible and interrupts are off during a call, so every wake, deadline and interrupt
@@ -42,4 +50,7 @@ Fixed in the kernel follow-up package after the documentation rewrite, before th
 - A bench case, `map-anon-search-bound`, maps one page mid-area, asks for half the area, and
   asserts the refusal's time and that a timer wake meanwhile stays within the latency target.
 - A planted mutation that restores the retesting fails that case.
+- The search tries every start from the area's start to its end less the request, the last
+  included, and no other: a request for the whole of an empty area succeeds, and no run extends
+  past the area's end. A host or bench test pins both edges.
 - R12 on the scheduling page carries the sentence above.

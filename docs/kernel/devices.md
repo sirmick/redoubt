@@ -302,7 +302,7 @@ the PLIC for itself alone.
 
 ## Failure and restart
 
-Status: built · partly tested: destroying a device object's owner budget is not attacked by a case · tested: bench:dma-reset-reuse, bench:dma-reset-quarantine, bench:dma-rules, bench:pid-reuse-authority
+Status: built · partly tested: destroying a device object's owner budget, and a device handle closing when the budget that stamped it is destroyed, are not attacked by a case · tested: bench:dma-reset-reuse, bench:dma-reset-quarantine, bench:dma-rules, bench:pid-reuse-authority
 
 - **A driver ends**, however it ends: its device mappings go with its address space, its
   handles close, and its DMA runs are reset and pooled, or quarantined. The device objects

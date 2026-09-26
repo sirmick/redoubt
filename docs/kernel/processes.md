@@ -131,8 +131,9 @@ outside every limit until its notice goes (Residual risks).
 must be whole pages of the caller's own RAM, not lent (a reserved page is backed first); device
 and DMA pages stay put. Every check runs before any page moves. The ranges, the source and the
 flags are `InvalidArgument` (flags never empty, never writable and executable together, never
-writable without readable: [R11 (memory)](memory.md#r11-memory)); a process that has started or
-ended is `NotPermitted`; a destination page already in use is `InvalidArgument`; last, the
+writable without readable: [R11 (memory)](memory.md#r11-memory)); a process that has ended
+(its address space gone) is `NotPermitted`; a destination page already in use is
+`InvalidArgument`; a process that has started is `NotPermitted`; last, the
 process's budget must pay for the page tables and, unless parent and child share a budget, the
 pages (`OutOfMemory`). The exact order is in the
 [ABI reference](abi.md#errors-and-the-order-of-checks). The pages then belong to the process and
@@ -140,11 +141,14 @@ are charged to its budget; the page rules are in [memory](memory.md#the-mapping-
 image and the startup block reach a process this way.
 
 **`process_start`** takes a record of up to `MAX_START_HANDLES` (64: the handles one start
-copies) handle slots. It refuses a longer list (`TooLarge`) before reading it, an unreadable
-record (`InvalidArgument`), a slot that is 0 or not a handle (`BadHandle`), a bad process handle
-(`BadHandle`, `WrongObject`), any listed handle the caller does not hold (`BadHandle`), a process
-already started or ended (`NotPermitted`), and a budget that cannot pay for the first thread and
-the handle-table pages (`OutOfMemory`). Then nothing fails:
+copies) handle slots. It refuses, in this order, while decoding: a process handle of 0 or
+wider than 32 bits (`BadHandle`), a longer list (`TooLarge`) before reading it, an unreadable
+record (`InvalidArgument`), a slot of 0 or wider than 32 bits (`BadHandle`); then a process
+handle the caller does not hold or of another kind (`BadHandle`, `WrongObject`), any listed
+handle the caller does not hold (`BadHandle`), a process already started or ended
+(`NotPermitted`), a child's table that would pass `MAX_HANDLES` (`TooLarge`), and a budget that
+cannot pay for the first thread and the handle-table pages (`OutOfMemory`). Then nothing
+fails:
 - the handles are **copied** into the child's empty table in list order, so they land in slots
   1 to n; the parent keeps its own, and each copy keeps its stamp;
 - the first thread, TID 1, starts at `entry` with `sp` and with `arg` in its first argument
@@ -178,8 +182,9 @@ blame before anything is freed. Then it tears the process down: every open call 
 caller (R4b), every call it made is withdrawn or abandoned
 ([R3 (lends and abandoned calls)](ipc.md#r3-lends-and-abandoned-calls)), and its threads,
 memory, handle table and DMA runs ([devices](devices.md)) go. It stops counting against its
-budget's process limit at once, and its budget is back where it was before the process was
-created. Last, the notice is delivered or dropped:
+budget's process limit at once, and everything it held goes back to that budget, except DMA
+pages quarantined at this end, which stay charged. The process object's page stays charged to
+the creator's budget until the notice goes. Last, the notice is delivered or dropped:
 - **Delivered** to whichever thread receives on the exit endpoint next; notices come before
   messages. Nothing is allocated, because the notice's page was paid for at `process_create`.
   A notice with no receiver waits for one.
@@ -307,7 +312,8 @@ Status: built · tested: bench:process-lifecycle, bench:process-attack, bench:st
 
 - **A process ends** by exiting, faulting or being killed. Its callers get `Dead` and their
   lends back (R4b); a call it made that a server had taken is abandoned, and the server is told
-  once (R3). Its budget gets back every page the process held, exactly.
+  once (R3). Its budget gets back every page the process held, exactly, except DMA pages
+  quarantined at its end ([devices](devices.md#quarantine)).
 - **A thread ends** while others run: only its own calls end, and its process goes on.
 - **A process destroys its own budget, or its creator's:** the call does not return, because
   the process is killed with everything else that budget pays for.

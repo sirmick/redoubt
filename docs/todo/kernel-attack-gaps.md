@@ -52,7 +52,7 @@ gap: the page's section, the claim, and what no case attacks.
 - Devices handed to the first program: the loader's refusal of a device tree with no console, or a console with no interrupt, is not attacked.
 - R5 (interrupts): masking a fired source is attacked only in the model (QEMU's 16550 raises per byte); completing the claim before masking, and billing interrupt time to the IRQ object's owner, are not attacked.
 - R18 (device authority): the kernel's refusal of a malformed `Devs` entry and of a `Grnt` boot argument is not attacked.
-- Failure and restart: destroying a device object's owner budget (IRQ waiters get `Dead`, source masked, handles swept) is not attacked.
+- Failure and restart: destroying a device object's owner budget (IRQ waiters get `Dead`, source masked, handles swept) is not attacked; nor is a device handle closing when the budget that stamped it is destroyed.
 
 ### processes.md
 - Processes and PIDs: that PIDs are drawn at random is not attacked.
