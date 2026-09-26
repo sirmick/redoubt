@@ -115,7 +115,9 @@ networks, multicast, the reserved class E, and every `self=` prefix its argument
 `10.0.2.0/24`, which the emulator maps to the host, where a forwarded port leads back to the
 guest). So a manifest that wrongly scoped `0.0.0.0/0` still cannot reach the box
 ([R59 (never the box's own addresses)](#r59-never-the-boxs-own-addresses)). `d3-net-attacks` tries
-each from a scope allowing everything and checks the capture shows no SYN to them;
+a forwarded self address, `ipd`'s own address, loopback and the gateway from a scope allowing
+everything, and checks the capture shows no SYN to them; the broadcast, "this host", multicast and
+class E refusals are attacked by the host test `the_self_set`;
 `d3-net-self-unrefused` is the same boot without the `self=` entry, and must fail, which proves the
 case catches a missing check.
 
@@ -211,7 +213,9 @@ it may reach, and it writes `connect(name, port)` to a socket's `ctl`.
    matters and nothing is granted per answer.
 
 So a name that resolves to a forbidden address is refused at `ipd`, whatever the resolver said,
-which is also the defence against DNS rebinding. An agent's scope stays prefixes and ports.
+which is also the defence against DNS rebinding. A name the rule does not allow is `refused`, and
+`net_ctl` gains the name-taking `connect` for it. Agents get no sockets at all: an agent reaches
+outside the box only through its `gatewayd` capabilities ([gatewayd](gatewayd.md)).
 
 The attack tests: a name resolving to a forbidden address is refused; a rebinding attempt (a
 first answer allowed with a lifetime of 0, a second forbidden) fails.
@@ -289,6 +293,12 @@ Status: built · tested: host:redoubt-ipd::no_link_is_unreachable_until_it_comes
   `ipd` resolve each sender.
 - **Blind injection.** An off-path attacker needs about 2^19 guesses per connection to inject into
   one, and gains at most a reset; SSH's MAC rejects injected bytes.
+- **A SYN flood holds a listener's backlog.** Each half-open connection keeps a backlog slot for up to
+  3 s before it gives it back, so a flooder can keep a listener from accepting others meanwhile; the
+  listener listens again once its backlog clears.
+- **Connection rates are observable.** Unlabelled principals sharing one `ipd` can see each other's
+  connection rate in admission-slot occupancy and CPU and queue timing; no label boundary is crossed,
+  since labelled callers are refused.
 - **A shared `ipd` is shared state.** Its clients share one stack's memory, timers and link; where
   that matters, each trust domain gets its own `ipd`.
 - **smoltcp is vendored code.** It is read and built from the tree, not fetched, but a bug in it is a
@@ -296,8 +306,9 @@ Status: built · tested: host:redoubt-ipd::no_link_is_unreachable_until_it_comes
 
 ## Why
 
-- **Prefixes and ports, not names.** DNS runs in the client, so a name-scoped check in `ipd` would see
-  only the address the client chose; binding names to addresses needs the resolver.
+- **Names resolved at `ipd`, at connect time.** A name a client resolved for itself could stand for
+  any address; `ipd` resolving the name itself, filtering the answer and pinning the connection
+  makes the name the thing checked, and defeats rebinding.
 - **The box's addresses before the scope.** A scope is written by people and can be wrong; the
   self set is a check no manifest can widen.
 - **A sink.** Labelled data may not leave the box, and the network is the widest way out; refusing

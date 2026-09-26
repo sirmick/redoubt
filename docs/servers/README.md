@@ -162,12 +162,20 @@ one badge per client ([objects](../kernel/objects.md#mint)).
   are gone. `new_connection` returns a random connection id with the handle; only the client that
   received the id can `disconnect(id)`, which frees that connection and everything minted under
   it. Anyone else, like an id that does not exist, gets the same `not_yours`.
-- **The launcher cleans up.** A launcher disconnects a child's connections, and releases its
-  grants from typed servers, when it receives the child's exit notice
-  ([processes](../kernel/processes.md#exit-notices)). The steward does the same at logout and at
-  a lease's end.
 
 The serving library implements all of it once ([serving](serving.md#minted-connections)).
+
+## Cleaning up after a child
+
+Status: planned · M1 (separation and containment)
+
+A launcher disconnects a child's connections, and releases its grants from typed servers, when it
+receives the child's exit notice ([processes](../kernel/processes.md#exit-notices)); the steward
+does the same at logout and at a lease's end. A child's grants never outlive its launcher's
+([wire](wire.md#a-launcher-releases-its-childs-grants)). The serving library provides the
+`disconnect` it uses.
+
+**Open:** none.
 
 ## Restarts and crash blame
 

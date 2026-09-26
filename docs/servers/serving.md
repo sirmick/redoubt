@@ -38,9 +38,11 @@ per kind of resource:
   bucket the steward needs.
 - **A fair share per badge.** Within a bucket each badge is a **share**, and the bucket is the
   ceiling. A share may take one more of a resource only while it holds less than
-  `limit / (n + 1)` of it, where n is the number of shares in the bucket holding that resource,
-  itself included (and at least one). So an agent flooding its sponsor's bucket alone gets half
-  of it, and the sponsor can still take a third ([R26 (admission fairness)](#r26-admission-fairness)).
+  `limit / (n + 1)` of it (and at least one), where n is the number of shares in the bucket
+  holding that resource, itself included. So an agent flooding its sponsor's bucket alone gets
+  half of it, and the sponsor can still take a third
+  ([R26 (admission fairness)](#r26-admission-fairness)). An account-0 bucket is one badge, so it
+  has one share and the bucket's cap is that share's.
 - **Caps sized to fit.** `Limits` names each resource's cap per bucket and the number of buckets
   that may hold anything at once. `Admission::new` refuses limits (`Unsized`) whose buckets could
   hold more open calls than `MAX_OPEN_CALLS` (64) less `OPEN_CALL_HEADROOM` (16), or with a
@@ -95,7 +97,7 @@ clients: a 9P server's connections (`new_connection`, `disconnect`) and a typed 
   that does not exist, get the same `NotYours`. The table is kept in mint order, so the entry's
   descendants all follow it and one forward pass frees them. It allocates nothing, so it cannot
   stop halfway. `disconnect_all` frees everything one client minted, for a client that has lost
-  its ids.
+  its ids; `keyd`'s `release(0)` reaches it, and no 9P operation does.
 - **Shares.** A capability a client mints for itself counts in the share of the one it minted it
   through (`Minted::share` walks up the chain while the requester is the same client), so minting
   more badges buys no bigger share. One minted by someone else for a client (the steward, for a
@@ -134,6 +136,9 @@ state for it.
 - **One thread.** A call is replied to by the thread that took it, and its notice arrives at that
   thread's `receive`, so every serving thread keeps receiving on the endpoint its calls came in
   on. A thread that parked calls and stopped receiving would never learn they were abandoned.
+- **A server never pushes.** Delivery the server starts is a call the client makes and the server
+  parks, answered when the event happens (a console's `resize`); no endpoint is ever handed to the
+  server for it, and the client calls again for the next event.
 
 ```mermaid
 stateDiagram-v2
@@ -231,7 +236,7 @@ an R-message sent to a server is refused, and nothing a vector sends mints a con
 
 ### Replies and rollback
 
-Status: built · partly tested: the rollback on a discarded reply is tested through unmint and keyd's grant, not through the 9P skeleton's serve path · tested: host:redoubt-rt::what_was_minted_here_can_be_undone, host:redoubt-rt::a_rooted_mint_is_an_ordinary_connection_rooted_where_the_server_says, host:redoubt-rt::mapping_reborrows_and_failed_reply_recovery, host:redoubt-rt::ownership_lifecycle_partial_reply_and_address_reuse, host:redoubt-keyd::serving_grant_rolls_back_discard_missing_capability_and_error
+Status: built · partly tested: the rollback on a discarded reply is tested through unmint and keyd's grant, not through the 9P skeleton's serve path · tested: host:redoubt-rt::what_was_minted_here_can_be_undone, host:redoubt-rt::a_rooted_mint_is_an_ordinary_connection_rooted_where_the_server_says, host:redoubt-rt::mapping_reborrows_and_failed_reply_recovery, host:redoubt-keyd::serving_grant_rolls_back_discard_missing_capability_and_error
 
 A successful `reply` says `delivered` or `discarded`, and which of the reply's handle slots were
 installed in the caller ([IPC](../kernel/ipc.md#how-a-call-completes)). Reply success is not
@@ -247,7 +252,9 @@ outcome is known:
   or that its handles survive a later revocation; ordinary `disconnect` and the admission caps
   bound what a client that vanishes afterwards leaves behind.
 
-Rollback reaches only provisional records: a file write already made stays made. A bench case that
+Rollback reaches only provisional records: a file write already made stays made. An operation
+that makes more than one resource needs an explicit policy for each: which of them a missing slot
+rolls back. A bench case that
 makes the skeleton's `new_connection` replies undeliverable is a follow-up:
 [todo](../todo/ninep-discard-rollback-test.md).
 
@@ -321,19 +328,20 @@ could read a's labels itself (`properties` checks exactly that).
 Status: built · partly tested: the library departs from the rule for an account-0 client's self-minted chain; the rule is attacked in host tests with the runtime's fake kernel, and no boot floods a real server · tested: host:redoubt-rt::the_key_is_the_account_and_the_label_set, host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share, host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end, host:redoubt-rt::self_minting_does_not_multiply_the_share, host:redoubt-rt::caps_are_big_enough_for_a_share_to_mean_anything, host:redoubt-rt::open_calls_leave_headroom, host:redoubt-rt::the_worst_order_never_passes_the_headroom
 
 One client cannot use up a shared server that serves others. What a client holds in a server is
-counted per (account, label set), and per badge for account 0; within a bucket each badge may
-hold less than `limit / (n + 1)`, so a lone badge never fills its bucket and a second always finds
-room; minting more badges for oneself buys no bigger share; and every bucket at its cap together
-holds fewer open calls than `MAX_OPEN_CALLS` by at least `OPEN_CALL_HEADROOM`, so the server keeps
-room to take calls beyond what its clients hold, including one answered ahead of admission.
-Within account 0, every capability minted through a root badge (one below `FIRST_MINTED_BADGE`,
-given by whoever set the server up) counts in that root's share, however many links deep and
-whoever holds it: a chain of self-mints spends one share, and system callers get separate shares
-only from separate root badges, which the manifest gives. A capability used under a non-zero
-account is keyed by that account. The kernel's [R2 (fair waiting)](../kernel/ipc.md#r2-fair-waiting)
-shares turns at the endpoint the same way; this rule shares what the server holds afterwards.
-The code departs from the account-0 rule: `Minted::share` stops folding when the requester's key
-changes, so each self-minted link opens a bucket (Residual risks).
+counted per (account, label set), and per badge for account 0; within a bucket of a non-zero account
+each badge may hold less than `limit / (n + 1)` (at least one), so a lone badge never fills its
+bucket and a second always finds room; minting more badges for oneself buys no bigger share; and
+every bucket at its cap together holds fewer open calls than `MAX_OPEN_CALLS` by at least
+`OPEN_CALL_HEADROOM`, so the server keeps room to take calls beyond what its clients hold, including
+one answered ahead of admission. Within account 0, every capability minted through a root badge (one
+below `FIRST_MINTED_BADGE`, given by whoever set the server up) counts in that root's share, however
+many links deep and whoever holds it: a chain of self-mints spends one share, and system callers get
+separate shares only from separate root badges, which the manifest gives. A capability used under a
+non-zero account is keyed by that account. The kernel's
+[R2 (fair waiting)](../kernel/ipc.md#r2-fair-waiting) shares turns at the endpoint the same way;
+this rule shares what the server holds afterwards. The code departs from the account-0 rule: `Minted::share`
+stops folding when the requester's key changes, so each self-minted link opens a bucket (Residual
+risks).
 
 ### R27 (badge allocation)
 
@@ -364,13 +372,13 @@ Status: built · partly tested: the exit after a rejected fallback reply is argu
 - **A request the server cannot answer** (it does not decode, its reply does not fit) gets the
   malformed reply; a reply the kernel rejects is replaced by it; if that too is rejected the
   server exits rather than strand the caller (R4b).
-- **The server panics.** The runtime's panic handler prints once on the console, runs the
-  program's panic hook if it set one (`netd` resets its device there), and exits through
+- **The server panics.** The runtime's panic handler runs the program's panic hook first, if it
+  set one (`netd` resets its device there), then prints once on the console, and exits through
   `process_exit` with code 101. Holding open calls, that is a fault that blames the current
   call's sender (R21).
 - **A client dies** holding connections or parked calls: its parked calls come back as
-  abandoned-call notices and are freed. Its connections stay until its launcher disconnects them,
-  or until a client that lost its ids calls `disconnect_all`.
+  abandoned-call notices and are freed. Its connections stay until its launcher disconnects them
+  ([servers](README.md#cleaning-up-after-a-child)).
 - **The server restarts.** It keeps nothing: its tables start empty and its first badge is drawn
   again (R27). A client's old handle names no connection until it asks for a new one.
 
@@ -387,7 +395,9 @@ Status: built · partly tested: the exit after a rejected fallback reply is argu
 - **An undersized server is a channel.** A server sized for fewer buckets than the (account,
   label set)s it serves refuses the latecomers, which tells them others hold state: across
   accounts, and between the label sets of one account, where it is a channel out of a vault. The
-  manifest must size each server's bucket count to the label sets it serves ([init](init.md)).
+  manifest sizes each server's bucket count to the label sets it serves
+  ([init](init.md#the-boot-manifest)); `bootfsd`, `consoled` and `keyd` compile theirs in
+  ([todo](../todo/server-bucket-counts.md)).
 - **A full bucket makes the last comer wait.** With three or more badges in one bucket, the
   bucket can fill, and a further badge is refused until one gives something back.
 - **A parked call costs its caller and the server.** Each holds one of the caller's

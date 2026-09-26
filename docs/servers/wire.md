@@ -205,9 +205,9 @@ Status: built · tested: host:redoubt-rt::minted_connections_are_admitted_and_fo
 Every 9P endpoint also serves `ninep_common`, typed opcodes 1 to 15. `new_connection(root, quota)`
 mints a fresh connection rooted at `root`, a path relative to the caller's own root that never
 climbs above it, and replies with the connection's endpoint handle and its id. `quota` is the
-byte quota asked for, carved from the caller's, which a file server may refuse (`refused`); at a
-file server a quota of 0 means the connection may read and remove but not create or grow
-([fsd](fsd.md#quotas)). A server that meters no bytes ignores it. `disconnect(id)` frees the connection with that id and
+byte quota asked for: the skeleton passes it to the file server's `minted` hook, which may refuse
+it (`refused`), and a server that meters no bytes ignores it. What a quota means is the file
+server's ([fsd](fsd.md#quotas)). `disconnect(id)` frees the connection with that id and
 everything minted under it; an id the caller did not receive is `not_yours`, the same answer as
 an id that does not exist. Opcodes 1 and 4 to 15 are reserved and malformed. How the skeleton
 serves them is on [the serving library](serving.md#the-9p-server-skeleton).
@@ -236,15 +236,15 @@ each value has one spelling.
   any member the decoder did not take.
 - An error names where it happened (`servers[2].budget.pages`).
 - **Cost is bounded** for a caller that must size its memory before parsing: time linear in the
-  input, heap at most 32 bytes per input byte (2 MiB for the largest file), stack bounded by the
-  depth.
+  input apart from a sort per object to find duplicate names (O(n log n)), heap at most 32 bytes per
+  input byte (2 MiB for the largest file), stack bounded by the depth.
 
 The fuzz target checks it against `serde_json`: whatever it accepts, `serde_json` accepts with the
 same value, and whatever it refuses as plain syntax, `serde_json` refuses.
 
 ## Authority
 
-Status: built · tested: host:redoubt-wire::lengths_are_bounded_by_the_input, host:redoubt-wire-gen::kinds_are_documentation_only
+Status: built · tested: host:redoubt-wire-gen::kinds_are_documentation_only
 
 The library has none. It holds no handles and makes no calls; it decodes what a server received
 and encodes what the server sends. Nothing in a message says who sent it: the badge, account and

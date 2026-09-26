@@ -248,6 +248,8 @@ pub enum ErrorCode {
     Refused,
     Exists,
     NotDir,
+    Removed,
+    TooLarge,
 }
 
 impl ErrorCode {
@@ -258,6 +260,8 @@ impl ErrorCode {
             ErrorCode::Refused => 3,
             ErrorCode::Exists => 4,
             ErrorCode::NotDir => 5,
+            ErrorCode::Removed => 6,
+            ErrorCode::TooLarge => 7,
         }
     }
 
@@ -268,6 +272,8 @@ impl ErrorCode {
             3 => Some(ErrorCode::Refused),
             4 => Some(ErrorCode::Exists),
             5 => Some(ErrorCode::NotDir),
+            6 => Some(ErrorCode::Removed),
+            7 => Some(ErrorCode::TooLarge),
             _ => None,
         }
     }

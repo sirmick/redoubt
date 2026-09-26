@@ -18,7 +18,7 @@ nothing more: it is not a signature oracle.
 
 ### Keys and purposes
 
-Status: built · tested: host:redoubt-keyd::arguments_become_keys_with_root_badges_in_order, host:redoubt-keyd::hostile_arguments_are_refused, host:redoubt-keyd::bad_key_arguments_stop_keyd_starting, host:redoubt-keyd::an_all_zero_seed_is_refused_rather_than_panicking, host:redoubt-keyd::two_keys_may_not_share_a_name_or_a_public_key, host:redoubt-keyd::there_is_a_bound_on_how_many_keys_there_are, host:redoubt-keyd::signatures_are_rfc_8032_ed25519, host:redoubt-keyd::hex_decoding_matches_the_obvious_decoder, bench:keyd-build
+Status: built · tested: host:redoubt-keyd::arguments_become_keys_with_root_badges_in_order, host:redoubt-keyd::hostile_arguments_are_refused, host:redoubt-keyd::bad_key_arguments_stop_keyd_starting, host:redoubt-keyd::an_all_zero_seed_is_refused_rather_than_panicking, host:redoubt-keyd::two_keys_may_not_share_a_name_or_a_public_key, host:redoubt-keyd::there_is_a_bound_on_how_many_keys_there_are, host:redoubt-keyd::signatures_are_rfc_8032_ed25519, host:redoubt-keyd::hex_decoding_matches_the_obvious_decoder
 
 `keyd` reads its keys from its startup block's arguments, one key per argument
 ([init](init.md#the-startup-block)), in the form `name,purpose,seed`:
@@ -153,7 +153,9 @@ Status: planned · M5 (persist, install, share)
 - **A `pkg` purpose.** A key with it signs only a package: the full preimage
   `"redoubt.pkg.v1\0" || u64_le(len) || archive` that `keyd` builds itself from the archive, in the
   loader's form, with an approval per signature ([packages](pkg.md#what-is-signed)). It is the one
-  purpose whose signed message is not a 32-byte digest, and R44 is restated to cover it.
+  purpose whose signed message is not a 32-byte digest. It adds one shape to R44 and no more: a
+  `pkg` signature covers only a preimage `keyd` built under the package domain, which is never an
+  SSH exchange, an audit record or a bundle, since domains are prefix-free.
 
 **Open:** where sealed keys are kept and what they are sealed with; the message shapes a
 principal's key may sign.
@@ -185,12 +187,12 @@ cannot say, so the only way a key leaves `keyd` is a bug in `keyd` itself.
 
 Status: built · tested: host:redoubt-keyd::a_badge_signs_only_its_own_key_and_only_its_own_purpose, host:redoubt-keyd::a_relayed_ssh_user_auth_blob_is_never_what_gets_signed, host:redoubt-keyd::parts_cannot_be_slid_into_each_other, host:redoubt-keyd::the_hash_matches_an_independent_implementation, host:redoubt-keyd::a_granted_capability_names_the_same_key_and_dies_with_release
 
-A badge names one key and one purpose. Every signature `keyd` makes is over exactly 32 bytes, a
-digest `keyd` computed itself: an SSH exchange hash over a transcript naming `keyd`'s own public
-key, or the SHA-256 of a fixed domain string, a length and a record. So a holder of a badge gets
-signatures only in its purpose's shape, and no container that covers longer messages (a boot
-bundle's archive, a package, an SSH user-authentication request, which is at least 36 bytes
-before its user name) can be what a `keyd` signature covers.
+A badge names one key and one purpose. Under the purposes `keyd` holds, `ssh_host` and `audit`,
+every signature is over exactly 32 bytes, a digest `keyd` computed itself: an SSH exchange hash
+over a transcript naming `keyd`'s own public key, or the SHA-256 of a fixed domain string, a length
+and a record. So a holder of a badge gets signatures only in its purpose's shape, and no container
+that covers longer messages (a boot bundle's archive, an SSH user-authentication request, which is
+at least 36 bytes before its user name) can be what a `keyd` signature covers.
 
 ### R45 (constant-time signing)
 
@@ -242,7 +244,7 @@ Status: built · tested: host:redoubt-keyd::bad_key_arguments_stop_keyd_starting
   owner elsewhere. A digest `keyd` builds cannot be one.
 - **No enrolment.** An operation that adds a key is a way to make `keyd` hold a key that
   authenticates a person; with none, keys come only from the signed manifest.
-- **Its own SHA-256.** Fifty lines read once are cheaper to trust than six crates inside the
+- **Its own SHA-256.** About ninety lines read once are cheaper to trust than six crates inside the
   process that holds every private key.
 - **Root badges by position.** A restarted `keyd` gives each root badge the same key without
   storing anything, and grants cannot survive it.

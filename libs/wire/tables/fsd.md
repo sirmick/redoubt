@@ -16,5 +16,7 @@ The `fsd` protocol's message and error tables, included by its owning page, [ser
 | 3 | `refused` |
 | 4 | `exists` |
 | 5 | `not_dir` |
+| 6 | `removed` |
+| 7 | `too_large` |
 
 <!-- ANCHOR_END: tables -->

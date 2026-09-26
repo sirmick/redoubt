@@ -7,12 +7,12 @@ capability can name domains, not only prefixes and ports, and DNS itself is not 
 
 ## Purpose
 
-`ipd` scopes sockets by IP prefix and port, because it sees only the address a client chose: DNS
-runs in the client, so a name check in `ipd` alone would check nothing. People need to reach
-services by name, and addresses behind a name change. The resolver closes the gap: it is the one
-place names become addresses and it applies the name rules; `ipd` asks it at connect time and
-filters what it answers. It also stops DNS being a channel: a client that can send arbitrary queries to an arbitrary resolver
-can encode data in the names it asks for.
+People need to reach services by name, and addresses behind a name change. A name a client
+resolved for itself could stand for any address, so a person connects by name at `ipd`, which
+asks the resolver. The resolver is the one place names become addresses and it applies the name
+rules; `ipd` filters what it answers and pins the connection. It also stops DNS being a channel: a
+client that can send arbitrary queries to an arbitrary resolver can encode data in the names it
+asks for.
 
 ## Interface
 
@@ -53,9 +53,9 @@ the resolver, drops every always-forbidden address from the answer, connects to 
 and pins the connection to that address for its whole life
 ([ipd](ipd.md#name-scoped-connections)). A client never names an address, and an answer widens
 nothing beyond the one connection it was asked for
-([R64 (connections by name are pinned)](#r64-connections-by-name-are-pinned)). An agent's scope
-stays prefixes and ports; name rules are for people's sessions and for leases whose approval named
-them.
+([R64 (connections by name are pinned)](#r64-connections-by-name-are-pinned)). Name rules are for
+people's sessions only; an agent holds no socket and no name rule, and reaches outside the box only
+through `gatewayd` ([gatewayd](gatewayd.md)).
 
 **Open:** none.
 
@@ -126,8 +126,9 @@ Status: planned · M4 (self-hosted development)
 
 ## Why
 
-- **Names at the resolver, addresses at `ipd`.** `ipd` cannot check a name it never sees; the resolver
-  cannot stop a connection it does not carry. Pinning ties the two together.
+- **Names resolved for `ipd`, not for the client.** `ipd` checks the name the session asked for and
+  the resolver answers it; the resolver alone could not stop a connection it does not carry, and
+  `ipd` alone would not know what a name means. Pinning ties the two together.
 - **No route to port 53 for sessions.** A client that can query any resolver can encode anything in
   the names it asks for; one resolver that answers only allowed names closes that.
 - **Per-principal caches.** A shared cache is a timing channel between principals.
