@@ -348,7 +348,8 @@ impersonate. Defined in [the test bench](testbench.md#rule-f-trusted-verdicts).
 
 ### W^X
 
-No page is ever both writable and executable, under any mapping. Defined in
+No RAM page is ever both writable and executable, under any mapping; the kernel's own mappings
+keep the same rule. Device memory is a stated gap. Defined in
 [memory](kernel/memory.md#r11-memory).
 
 ### weight

@@ -1,8 +1,8 @@
 # Kernel attack gaps
 
 Claims the kernel pages state as built that no bench case attacks, or that only the model
-attacks. Each page says "partly tested" for these. The switch-over folds this list into
-`docs/todo/` (one file per gap, or one file per page); until then it is working material.
+attacks. Each page says "partly tested" for these. The top-level set moves this file to
+`docs/todo/kernel-attack-gaps.md`, which `kernel/boot.md` links; until then it is working material.
 Format: page, section: the claim, and what no case attacks.
 
 ## ipc.md
@@ -54,3 +54,30 @@ Format: page, section: the claim, and what no case attacks.
 - Exit notices: a notice dropped because its exit endpoint was destroyed has no case.
 - R21 (crash blame): blame after the blamed sender's budget is destroyed has no case; a thread holding a parked call that receives a send and then faults (blames nobody) is covered only in parts.
 - PID pinning by untaken notices (a cross-budget `OutOfProcesses`) has no case.
+
+## memory.md
+- Backing and zeroing: that a frame freed with data comes back zero is attacked only in the model (`R11NoZeroing`); no case can tell which frames it was handed.
+- Where `map_anon` puts pages: a full placement area, and a request that fits only at the area's end, are not attacked; the search's worst-case cost is not measured.
+- `map_fixed`: its cases run on rv64 only.
+- Instruction fetch after mapping: no case can see a missing `fence.i` (QEMU keeps fetch coherent).
+- Lending at the page-table level: a lend within one process is not attacked across harts or across that process's teardown.
+- R11 (memory): W^X on device registers and `dma_alloc` pages is not attacked (and does not hold: `todo/device-mapping-exec`); the absence of any physical-address argument is argued from the call table.
+- R19 (kernel W^X): no case plants a writable kernel code page to show the boot check stops; the case boots rv64 only.
+- R22 (range cost): only `map_fixed`'s huge length is attacked; `unmap`, `set_flags`, `process_map` and lends with huge ranges are not, and `map_anon`'s search is an exception no case measures.
+
+## scheduling.md
+- One flat stride queue: round-robin among one budget's threads is not attacked.
+- Preemption points: an interrupt's wake not preempting, and another budget's deadline preempting, are not attacked.
+- The current minimum and ties: clauses 1 and 4 are checked on the target only when a run happens to tie; the host tests and model attack them.
+- Charging: interrupt handling billed to the device object's owner is not attacked.
+- Responsiveness: decision wake plus R10 time is not asserted as one sum; `budget_destroy` call-to-return is recorded, not asserted.
+- Charging: floods of weight-0 budgets with deadlines beyond the 64 of `sched-timer-flood` are not attacked (their destruction is billed to nobody).
+- R23 (no test channels): no case builds the production kernel and scans it for the trace.
+- Failure and restart: a picked thread dying before the switch, and a full queue, are not attacked.
+
+## boot.md
+- Firmware: the bench never falling back to QEMU's own firmware is not attacked.
+- The argument block: the kernel's refusals of a malformed block (a tag past the end, a second `MREx`, a bad `Devs` entry, a `Grnt` tag) are not attacked.
+- R16 (image confinement): an image cut short inside its segment data, a writable and executable segment, and a bundle of more than 63 programs are not attacked; the truncated-image case runs on rv64 only.
+- R17 (fail closed): a short or missing seed and a missing timebase are not attacked (every QEMU boot supplies both); nor an initrd under 64 bytes.
+- Failure and restart: a reboot through `system_reset` (the chain rerun, the bundle verified again) is not attacked.
