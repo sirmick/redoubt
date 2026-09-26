@@ -55,7 +55,7 @@ VM in a different budget, and destroying either budget ends that session and not
 `ssh alice+tax@box` opens a **vault session**: one carrying Alice's `tax` label, which can read
 her labelled data and cannot send it anywhere unlabelled
 ([R1 (flow)](../kernel/ipc.md#r1-flow)). `ssh approve@box` is the one place Alice answers
-requests for authority she has not granted yet; only the steward talks to that terminal.
+requests for authority nobody has granted; only the steward talks to that terminal.
 
 In M1 (separation and containment) the session is IEx with the helpers the attack suite needs:
 the console, files, and launching native programs. The working shell (command mode, file

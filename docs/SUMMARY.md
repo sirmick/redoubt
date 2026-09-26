@@ -52,8 +52,8 @@
   - [Native programs](userland/native.md)
   - [Agents, leases and labels](userland/agents.md)
   - [File transfer](userland/transfer.md)
-  - [Development on Redoubt]()
-  - [Packages]()
+  - [Development on Redoubt](userland/development.md)
+  - [Packages](userland/packages.md)
 
 # The plan
 
