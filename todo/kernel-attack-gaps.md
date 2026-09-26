@@ -30,3 +30,27 @@ Format: page, section: the claim, and what no case attacks.
 - Class is trust, not order: that the scheduler never reads class is argued from the code.
 - Deadlines: a process entering the kernel in a tight loop to put its deadline off is not attacked.
 - R10 (destruction): destroying the budget a device object is charged to (the device destroyed, every handle closed) is not checked by a case.
+
+## timer.md
+- Time: that `time_now` counts from the kernel's start is not checked (only monotonic, never early, linear with `rdtime`).
+- Expiry: the order at an equal instant (timeouts before deadlines; (pid, tid); budget id) is attacked only in the model (`ExpireBudgetsFirst`).
+- Budget deadlines: a destroyed child's later deadline leaving the list is shown only by the kernel surviving past it.
+- Failure and restart: a boot with no `Time` tag (or 0) powering off is not attacked (R17's gap too).
+- The hart timer: a stale early hint costing one early interrupt and missing nothing is argued, not attacked.
+
+## devices.md
+- Device objects: the one page a device object costs its owner is not measured; a DMA device past `MAX_DMA_DEVICES` (16) getting no object is not attacked.
+- `dma_alloc`: the `MAX_RUNS` (32) runs-per-device limit is not reached by a case.
+- Reset before reuse: that the reset precedes pooling inside the kernel is attacked only in the model; the reset and quarantine cases run only on rv64.
+- Devices handed to the first program: the loader's refusal of a device tree with no console, or a console with no interrupt, is not attacked.
+- R5 (interrupts): masking a fired source is attacked only in the model (QEMU's 16550 raises per byte); completing the claim before masking, and billing interrupt time to the IRQ object's owner, are not attacked.
+- R18 (device authority): the kernel's refusal of a malformed `Devs` entry and of a `Grnt` boot argument is not attacked.
+- Failure and restart: destroying a device object's owner budget (IRQ waiters get `Dead`, source masked, handles swept) is not attacked.
+
+## processes.md
+- Processes and PIDs: that PIDs are drawn at random is not attacked.
+- Threads: `thread_create` refused with `OutOfMemory`, and the first thread returning from its entry (a fault), have no case.
+- Creating and starting: `OutOfProcesses` from `process_create` and `OutOfMemory` from `process_start` have no case.
+- Exit notices: a notice dropped because its exit endpoint was destroyed has no case.
+- R21 (crash blame): blame after the blamed sender's budget is destroyed has no case; a thread holding a parked call that receives a send and then faults (blames nobody) is covered only in parts.
+- PID pinning by untaken notices (a cross-budget `OutOfProcesses`) has no case.
