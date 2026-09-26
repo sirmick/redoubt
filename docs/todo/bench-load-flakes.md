@@ -18,7 +18,8 @@ Tenet 6 says a flaky test is a bug, in the test or the system, and is fixed rath
 ([the tenets](../TENETS.md#6-tested-to-hell-and-back)). A test that passes only on a quiet machine
 fails on a loaded one, and a bench that leaves processes behind skews the next run.
 
-Belongs to no follow-up package: test and tooling work.
+Fixed in the kernel follow-up package after the documentation rewrite, with the bench and
+tool work it carries.
 
 ## Where
 

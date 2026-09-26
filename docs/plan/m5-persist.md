@@ -9,7 +9,8 @@ The box keeps running and changing without losing what it is:
   the physical console;
 - principals install signed packages, choose whose code they run with trust lists, and share
   projects;
-- the system updates A/B, with rollback protection;
+- the system updates A/B: a bad update rolls back to the other slot, and rollback protection keeps
+  an older signed system from being installed;
 - the service supervisor starts and restarts installed services;
 - the box has wall-clock time, kept in sync;
 - the audit log is chained, verifiable offline, and kept for a set time.

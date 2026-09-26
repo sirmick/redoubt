@@ -16,7 +16,9 @@ attack suite uses: the console, files and launching native programs. The rest of
 
 Each attack is a deterministic program in the test bench. Its outcome is judged by a party the
 attacker cannot impersonate: the kernel, a victim, or a clean power-off, never the attacker's own
-output ([rule F](../testbench.md#rule-f-trusted-verdicts)). "Not yet" means the case waits for the
+output ([rule F](../testbench.md#rule-f-trusted-verdicts)). A covert channel an attack finds is
+recorded as an observation against [the side-channel wall](../TENETS.md#side-channels), not as a
+breach. "Not yet" means the case waits for the
 work below; a case named for part of an attack covers the part the table says.
 
 ### A scripted hostile agent
@@ -42,20 +44,20 @@ Bob, attacking Alice.
 | Attack | Rules | Bench case |
 | --- | --- | --- |
 | Call fuzzing: any arguments to any call get an error, never a kernel panic | [I14 (no call panics the kernel)](../kernel/invariants.md#i14-no-call-panics-the-kernel) | `budget-syscall-attack`, `budget-forge-attack`, `syscall-attack`, `legacy-gone` |
-| Endpoint flooding: 10,000 sender threads calling `fsd`, and Alice is still served in her turn | [R2 (fair waiting)](../kernel/ipc.md#r2-fair-waiting) | not yet |
+| Endpoint flooding: 10,000 sender threads calling `fsd`, and Alice is still served in her turn | [R2 (fair waiting)](../kernel/ipc.md#r2-fair-waiting) | `redoubt-ipc` for the kernel's half (`WAIT_CAP` and turns per group); with `fsd` not yet |
 | A vault session filling its `WAIT_CAP` on a shared server leaves its owner's unlabelled session's turn and cap unaffected | R2, [R37 (vault non-interference)](../servers/steward.md#r37-vault-non-interference) | not yet |
-| A lender destroyed while `fsd` holds its lent pages, and `fsd` survives | [R3 (lends and abandoned calls)](../kernel/ipc.md#r3-lends-and-abandoned-calls) | `uaf-lent-page`, `redoubt-revoke`, `process-lifecycle` for the kernel; with `fsd` not yet |
+| A lender destroyed while `fsd` holds its lent pages, and `fsd` survives | [R3 (lends and abandoned calls)](../kernel/ipc.md#r3-lends-and-abandoned-calls) | `uaf-lent-page`, `process-lifecycle` for the kernel; with `fsd` not yet |
 | Crash blame: Bob crashes `fsd` three times while Alice is busy; every session and lease of Bob's with that label set ends and he cannot log straight back in; Alice is unaffected, also when `fsd` panics rather than faults and when the crashing thread holds her calls open too; a crash from a `send` while a bystander's call is parked blames nobody; a vault session's crashes do not end its owner's unlabelled session | [R21 (crash blame)](../kernel/processes.md#r21-crash-blame), [R40 (blame by label set)](../servers/steward.md#r40-blame-by-label-set) | `process`, `process-attack` for the kernel's blame; the steward's not yet |
 | Pinned open calls: 64 lent calls parked at `ipd` with short timeouts, and `ipd` still takes `netd`'s frames and frees the abandoned calls; SSH sessions survive | [R28 (parked-call accounting)](../servers/serving.md#r28-parked-call-accounting), [R4a (open calls)](../kernel/ipc.md#r4a-open-calls) | `d3-net-pinned`; with SSH not yet |
 | System fairness: a busy `fsd:data` does not fill `blkd`'s `WAIT_CAP` for `fsd:alice-secrets` | R2 | not yet |
 | Server CPU: expensive requests to a server delay other users only by that server's weight | R12 | `sched-server-busy`, `sched-large-weight` |
 | Shared pools: filling the `data` volume does not fail Alice's saves; flooding `fsd` with handles does not grow its table | [R48 (a quota per attach root)](../servers/fsd.md#r48-a-quota-per-attach-root) | not yet |
-| Server authority: no server's startup block holds its budget, and no server can destroy a session | [R33 (no server holds a system budget)](../servers/init.md#r33-no-server-holds-a-system-budget) | not yet |
+| Server authority: no server's startup block holds its budget, a manifest granting one is refused, and no server can destroy a session | [R33 (no server holds a system budget)](../servers/init.md#r33-no-server-holds-a-system-budget) | not yet |
 | `process_create` with a badged exit endpoint, to aim exit notices and blame at a server | R21 | `process-attack` |
 | A reused PID carries authority | [R20 (PID reuse)](../kernel/processes.md#r20-pid-reuse) | `pid-reuse-authority` |
 | Loopback login: a session connects to the box's own `sshd` with a key `keyd` holds | [R59 (never the box's own addresses)](../servers/ipd.md#r59-never-the-boxs-own-addresses) | `d3-net-attacks` for `ipd`'s refusal; the login not yet |
 | No leaky state: while a vault session works, an unlabelled observer sees no change in usage, request and session ids, message ids, PIDs, file versions, qids, directory listings, audit records or approval notifications, and cannot write, truncate, create or remove anything in the vault's volume | R37, R25 | not yet |
-| Hostile launch: a malformed ELF or startup block from a user parent hurts only the child | [R32 (a hostile image hurts only its process)](../servers/init.md#r32-a-hostile-image-hurts-only-its-process), [R31 (startup block checked whole)](../servers/init.md#r31-startup-block-checked-whole) | `stub-launch` |
+| Hostile launch: a malformed ELF or startup block from a user parent hurts only the child | [R32 (a hostile image hurts only its process)](../servers/init.md#r32-a-hostile-image-hurts-only-its-process), [R31 (startup block checked whole)](../servers/init.md#r31-startup-block-checked-whole) | `stub-launch` for a malformed ELF, `process-attack` for malformed startup records at `process_start`; from a user parent not yet |
 | Approval flood: requests hit the per-(account, label set) cap; the steward and Alice's approval screen are unaffected | R38, R26 | not yet |
 | Admission: a crashed or killed client's fids and quota come back when its launcher disconnects it; a system daemon filling its admission slots does not lock out the steward | R26 | not yet in a boot |
 
@@ -93,7 +95,24 @@ In this order. Each step lands with the attack cases for what it builds.
      [scans of every kernel-object frame](../todo/kernel-scan-bounds.md),
      [the kernel's print on a panic](../todo/print-panic-reentry.md),
      [the kernel crate's host test target](../todo/hosted-kernel-tests.md),
-     [a stray file in the kernel's tree](../todo/kernel-test-hello.md).
+     [a stray file in the kernel's tree](../todo/kernel-test-hello.md),
+     [`process_map`'s flag order](../todo/process-map-flag-order.md),
+     [an interrupt before the first receive](../todo/irq-level-latch.md),
+     [freeing empty page tables](../todo/page-table-freeing.md),
+     [records at a device mapping](../todo/mmio-record-frames.md),
+     [DMA reset on rv32](../todo/dma-reset-rv32.md),
+     [calls abandoned by an endpoint's destruction](../todo/endpoint-destroyed-open-calls.md),
+     [reclaiming an endpoint](../todo/endpoint-reclaim.md),
+     [rescaling a carved-down lead](../todo/carve-lead-rescale.md),
+     [the loader stub's unsafe budget](../todo/stub-unsafe-budget.md), and, once the owner decides
+     its rule, [a notice lost to a bad receive record](../todo/receive-output-late-invalid.md).
+   - **The bench and its tools**, with the kernel package:
+     [tests that behaved differently under load](../todo/bench-load-flakes.md),
+     [the test programs' build inputs](../todo/programs-build-rerun.md),
+     [the SSH loopback self-checks](../todo/ssh-loopback-host.md),
+     [the write-only mutation](../todo/write-only-mutation-split.md),
+     [the vendored crates under Miri](../todo/miri-vendored-unsafe.md), and, once the owner
+     decides the rule, [nightly rustfmt drift](../todo/rustfmt-nightly-drift.md).
    - **Servers:** [an account-0 client's share chain](../todo/account0-share-chain.md),
      [the 9P skeleton's rollback on a discarded reply](../todo/ninep-discard-rollback-test.md),
      [compiled-in bucket counts](../todo/server-bucket-counts.md),
@@ -103,7 +122,14 @@ In this order. Each step lands with the attack cases for what it builds.
      [loader stub test coverage](../todo/loader-stub-coverage.md),
      [raw memory calls beside the runtime](../todo/raw-syscall-runtime-audit.md).
    - **beamlet:** [the code path's search order](../todo/module-search-order.md).
-2. **`init` and the boot manifest.** The loader loads only the kernel and `init`
+   - **The documentation switch-over**, which rewrites process references in code and case
+     descriptions: [process names in verdicts and case descriptions](../todo/verdict-strings.md).
+2. **A kernel containment gate.** One boot on QEMU that proves the kernel's primitives alone,
+   before the whole milestone is layered on them: hostile code preempted and ended at its
+   deadline, a budget subtree revoked with messages and lends in flight, and a victim that stays
+   responsive throughout. It proves kernel primitives only; it is not evidence for the steward,
+   approvals, the network or a session.
+3. **`init` and the boot manifest.** The loader loads only the kernel and `init`
    ([boot](../kernel/boot.md#the-loader-loads-only-the-kernel-and-init)); `init` reads the
    manifest, builds the budget tree from it
    ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)), hands each server its
@@ -111,32 +137,42 @@ In this order. Each step lands with the attack cases for what it builds.
    confinement and key-separation checks, and starts every server through the loader stub with
    fresh connections ([init](../servers/init.md)). `blkd`, `netd`, `ipd`, `bootfsd`, `consoled`
    and `keyd` move from the bench's rigs to `init`. A launcher releases its children's grants
-   ([wire](../servers/wire.md#a-launcher-releases-its-childs-grants)).
-3. **beamlet on Redoubt, and IEx on the console.** The VM runs on the kernel with its natives and
+   ([wire](../servers/wire.md#a-launcher-releases-its-childs-grants)). A shared server's
+   terminal fallback and rollback are exercised in a boot, not only in host tests
+   ([serving](../servers/serving.md#replies-and-rollback)), and restarting a driver is a case of
+   its own ([netd](../servers/netd.md#started-by-init)). Until `init` exists the loader's bundle
+   programs run at `system`'s free weight, so one that busy-yields dominates the machine; the
+   measured cases keep them blocked, and `init`'s budget tree ends this. The bench's cases then
+   start their programs through `init`, and the log server's interim `TAKE_GIFTS` fixture goes
+   ([rule F](../testbench.md#rule-f-trusted-verdicts)).
+4. **beamlet on Redoubt, and IEx on the console.** The VM runs on the kernel with its natives and
    asynchronous platform ([beamlet](../userland/beamlet.md#beamlet-on-redoubt)); an interactive
    Elixir shell on the UART console, before SSH exists
    ([the shell](../userland/shell.md#iex-in-a-session)).
-4. **The file server.** `fsd` over `blkd`: one volume per instance, labelled volumes, quotas per
+5. **The file server.** `fsd` over `blkd`: one volume per instance, labelled volumes, quotas per
    attach root, typed operations ([fsd](../servers/fsd.md)); files over 9P from a session
    ([files](../userland/files.md#files-over-9p)).
-5. **The steward.** Principals from the manifest, fixed sub-budgets per label set, sessions,
+6. **The steward.** Principals from the manifest, fixed sub-budgets per label set, sessions,
    leases, the powerbox and approvals, declassification and push, crash blame
    ([the steward](../servers/steward.md)); the server graph, trust tiers and capability holdings
    it runs on ([the servers](../servers/README.md)). The cost of destroying a budget is brought
    under its target first ([budget destruction's cost](../todo/budget-destroy-cost.md)), and the
    steward's decision-wake target is settled ([the target](../todo/sched-latency-target.md)).
-6. **`sshd`.** Sessions over SSH as beamlet VMs running IEx, vault sessions, and `approve@box`
+   The scheduling latency bench, measured with stand-ins for the steward and the drivers, is
+   rerun with the real ones, and its numbers must stay within the target.
+7. **`sshd`.** Sessions over SSH as beamlet VMs running IEx, vault sessions, and `approve@box`
    ([sshd](../servers/sshd.md), [sessions](../userland/sessions.md)).
-7. **The agent and the attack suite.** Alice's agent as its own principal under a lease, with
+8. **The agent and the attack suite.** Alice's agent as its own principal under a lease, with
    delegation that only narrows ([agents](../userland/agents.md)), launching native programs from
    a session ([native programs](../userland/native.md#launching-from-a-session)), and every "not
    yet" above turned into a case.
-8. **The model on the real kernel.** Model traces replayed on the real kernel and compared step by
+9. **The model on the real kernel.** Model traces replayed on the real kernel and compared step by
    step ([the model](../kernel/model.md#replaying-traces-on-the-real-kernel)), after the model and
    the kernel agree on their order of checks ([the model's order of checks](../todo/abi-model-disagreements.md)).
 
-Follow-ups that wait for an owner decision or for the subsystem they touch are tracked in
-[the follow-ups](../todo/README.md); none of them blocks a step above.
+Every follow-up page is placed above except one, which waits for an owner decision: whether
+tenet 3 reaches the build host ([host shell scripts](../todo/host-shell-scripts.md)). It blocks no
+step above.
 
 ## Progress
 

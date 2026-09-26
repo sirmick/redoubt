@@ -104,7 +104,7 @@
   - [The loader stub's unsafe budget](todo/stub-unsafe-budget.md)
   - [Compiled-in bucket counts](todo/server-bucket-counts.md)
   - [The SSH loopback self-checks](todo/ssh-loopback-host.md)
-  - [Verdict lines named after a package](todo/verdict-strings.md)
+  - [Process names in verdicts and case descriptions](todo/verdict-strings.md)
   - [The write-only mutation](todo/write-only-mutation-split.md)
 - [Beyond M5](beyond/README.md)
   - [The FPGA platform](beyond/fpga-platform.md)
