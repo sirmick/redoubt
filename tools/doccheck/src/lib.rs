@@ -74,9 +74,10 @@ pub fn check(root: &Path, scope: Scope) -> Vec<Finding> {
     }
     let mut out = c.out;
     if let Some(keep) = scope.pages {
-        let keep: BTreeSet<String> =
-            keep.iter().map(|p| slashed(p).trim_start_matches("./").to_string()).collect();
-        out.retain(|f| keep.contains(&f.path));
+        let keep: Vec<String> = keep.iter().map(|p| repo_relative(root, p)).collect();
+        out.retain(|f| {
+            keep.iter().any(|k| k.is_empty() || f.path == *k || f.path.starts_with(&format!("{k}/")))
+        });
     }
     out.sort();
     out.dedup();
@@ -222,6 +223,21 @@ fn walk(root: &Path, dir: &str, skip: &dyn Fn(&str) -> bool, out: &mut Vec<Strin
             out.push(rel);
         }
     }
+}
+
+/// A `--pages` path (a file or directory, relative to the repository root or to the current
+/// directory, or absolute) as a repository-relative path.
+fn repo_relative(root: &Path, p: &Path) -> String {
+    let abs = if root.join(p).exists() {
+        root.join(p)
+    } else {
+        std::env::current_dir().unwrap_or_default().join(p)
+    };
+    let rel = match (abs.canonicalize(), root.canonicalize()) {
+        (Ok(a), Ok(r)) => a.strip_prefix(&r).map(Path::to_path_buf).unwrap_or(a),
+        _ => p.to_path_buf(),
+    };
+    slashed(&rel).trim_start_matches("./").trim_end_matches('/').to_string()
 }
 
 fn slashed(p: &Path) -> String { p.to_string_lossy().replace('\\', "/") }

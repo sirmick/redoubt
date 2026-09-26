@@ -26,6 +26,18 @@ fn pages_scope_keeps_only_the_listed_pages() {
     assert!(findings.iter().all(|f| f.path == "docs/README.md"), "{findings:#?}");
 }
 
+#[test]
+fn pages_scope_keeps_a_directory() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c1");
+    for dir in ["docs/kernel", "docs/kernel/", "./docs"] {
+        let findings = check(&root, Scope { pages: Some(vec![dir.into()]), code: false });
+        assert!(
+            findings.iter().any(|f| f.path == "docs/kernel/bad.md" && f.rule == 1),
+            "{dir}: {findings:#?}"
+        );
+    }
+}
+
 macro_rules! fires {
     ($($name:ident: $rule:literal, $tree:literal;)*) => {$(
         #[test]
