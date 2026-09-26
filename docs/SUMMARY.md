@@ -119,3 +119,5 @@
 # Working on Redoubt
 
 - [The test bench](testbench.md)
+- [How Redoubt is built](SWARM.md)
+- [The project workspace](PROJECT.md)
