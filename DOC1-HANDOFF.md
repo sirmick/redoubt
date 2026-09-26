@@ -53,6 +53,43 @@ Everything else on the R1 list is applied, RED-18 as the Architect decided on
 DOC1-timer-rule-ids (citations of I13, R10 and R12 on timer.md; R10 on budgets.md gains the
 deadline-first and equal-instant sentence), and the red team's clarified P3s.
 
+## Top level (assignment 55bcbb40, written by the top-level lead)
+Commits on wp-doc1: `ac2487bdd` glossary, docs/README, SUMMARY, todo index, rustfmt todo;
+`a59276590` TENETS; `86e854009` plan/m1..m5; `8b53b3e37` beyond/ (19 pages from C8, plus
+image-cache); `ce5b957ea` testbench.md (defines Rule F), todo/ssh-loopback-host; `6c3799076`
+SWARM and docs/PROJECT; `0beffa264` root README, GETTING-STARTED, CONTRIBUTING and
+CODE_OF_CONDUCT (git mv'd), TENETS "no shell script on the machine"; `53fe7ebf8` SECURITY.
+`cargo run -q -p redoubt-doccheck` finds only `docs/.nojekyll`; `mdbook build docs` is clean.
+
+Left for the owner or the next package:
+- TENETS keeps one **Open:** (capability closure against same-label delegation).
+- CONTRIBUTING sends vulnerability reports to GitHub's private advisories: confirm the channel.
+- Manifest C7 todo pages never written: `print-panic-reentry` (from the brief; SWARM's review
+  debt describes it), `hosted-kernel-tests`, `raw-syscall-runtime-audit`, `kernel-test-hello`,
+  `verdict-strings`, `bench-load-flakes`, `miri-vendored-unsafe`, `programs-build-rerun`, and the
+  write-only mutation split (SWARM review debt). `shared-image-pages` became
+  `beyond/image-cache.md`.
+- SWARM's claims table is the orchestrator's to keep; package IDs must avoid R, I and M (the
+  checker reads them as rules, invariants and milestones).
+
+## Switch-over notes (for the implementer)
+- Checker C2 misses a `#[test]` followed by another attribute before the `fn`.
+- Checker C4 flags `ed25519` as a commit hash.
+- Checker C7 counts an ID inside a rule's name (I7 names R1) as a second ID in the Rule cell;
+  SECURITY works round it by citing I7 with its name in the prose above and bare in its row.
+- Delete `docs/.nojekyll` (the one remaining finding).
+- `libs/signing/src/lib.rs:3-4`: the comment is stale.
+- Stale process comments in `stub/`, the `blkd`, `netd` and `consoled` bin docs,
+  `image/boot.toml` and `libs/wire/tables/example.md`.
+- Model mutation names `K5b*` (and `Mutation::rule()`'s labels) change; `kernel/model.md`'s
+  Mutations paragraph and table and every status line naming them follow.
+- The Python tour tools (`tools/gen_readme.py`, `tools/test_readme_links.py`) and graphviz in the
+  `Dockerfile` go; the `Dockerfile` has no `mdbook`, `mdbook-mermaid` or `mdbook-svgbob` yet
+  (GETTING-STARTED tells a local machine to `cargo install` them).
+- Root `PROJECT.md` is deleted; Wash's plan document becomes `docs/plan/m1-separation.md` and the
+  orchestrator's start-up read `docs/PROJECT.md`.
+- Root README and GETTING-STARTED are already rewritten (section K step 2 is done).
+
 ## Traps
 - Commit trailer: the model that wrote the commit. Stage by path; never stash; never push.
 - C5(c) does not see a short name wrapped across two lines: keep `R10 (destruction)` on one line.
