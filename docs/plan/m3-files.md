@@ -16,7 +16,7 @@ capabilities and audited. There is no other inbound service and no other way in.
   names) reaches only the session's binds, and a second principal's files are unreachable
   ([sshd](../servers/sshd.md#files-in-and-out),
   [transfer](../userland/transfer.md#confined-to-the-sessions-files)).
-- **Only what 9P can say.** Symlink, chmod and chown requests are refused, and so is the old SCP
+- **Only what 9P can say.** Symlink, chmod and chown requests are refused, and so is the SCP
   protocol (`scp -O`), which runs a command on the server.
 - **No transfers from a vault.** A subsystem request on a vault channel is refused
   ([R67 (a channel keeps its labels)](../servers/sshd.md#r67-a-channel-keeps-its-labels),
@@ -37,7 +37,7 @@ In this order, after [M2 (usable shell)](m2-usable-shell.md):
    ([the steward](../servers/steward.md#the-transfer-audit-log)).
 2. **The transfer server**: SFTP over the session's binds, started by the steward on `sshd`'s
    request ([sshd](../servers/sshd.md#files-in-and-out)).
-3. **SCP** served as SFTP, which current `scp` clients speak; the old protocol and every transfer
+3. **SCP** served as SFTP, which current `scp` clients speak; the SCP protocol (`scp -O`) and every transfer
    on a vault channel refused ([transfer](../userland/transfer.md)).
 
 ## Progress

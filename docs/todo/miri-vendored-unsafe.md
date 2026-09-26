@@ -14,7 +14,8 @@ their `unsafe` out of the ratchet is reasonable only if something else checks it
 `ipd`'s own fuzz targets reach it, and fuzzing finds crashes, not every undefined behaviour
 ([ipd](../servers/ipd.md#residual-risks)).
 
-Belongs to no follow-up package: tooling.
+Fixed in the kernel follow-up package after the documentation rewrite, with the bench and
+tool work it carries.
 
 ## Where
 

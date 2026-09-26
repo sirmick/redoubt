@@ -15,7 +15,8 @@ A mutation shows that the model's checks catch the rule it breaks
 is caught through one, the other place is untested in the model, and the rule's status there rests
 on the bench alone ([R11 (memory)](../kernel/memory.md#r11-memory)).
 
-Belongs to no follow-up package: test-only (the model).
+Fixed in the kernel follow-up package after the documentation rewrite, with the bench and
+tool work it carries.
 
 ## Where
 

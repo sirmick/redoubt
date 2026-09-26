@@ -15,7 +15,8 @@ A bench run could then test a stub built from different dependencies than the tr
 pass or fail for a reason nobody can see in the diff
 ([the loader stub](../servers/init.md#launching-through-the-loader-stub)).
 
-Belongs to no follow-up package: test build tooling.
+Fixed in the kernel follow-up package after the documentation rewrite, with the bench and
+tool work it carries.
 
 ## Where
 
