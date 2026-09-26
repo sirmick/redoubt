@@ -205,7 +205,9 @@ it may reach, and it writes `connect(name, port)` to a socket's `ctl`.
 
 1. `ipd` checks the name against the connection's rule (a suffix matches only at a label boundary:
    `example.com` covers `a.example.com`, never `evilexample.com`; a blocklist entry always wins).
-2. `ipd` asks the [resolver](resolver.md) through its own resolver connection.
+2. `ipd` asks the [resolver](resolver.md) through the resolver connection the steward handed it
+   with this principal's root, one per (account, label set), never shared across roots, so the
+   resolver's cache follows the principal.
 3. `ipd` drops every always-forbidden address from the answer: the box's own addresses
    ([the self set](#the-boxs-own-addresses)), the host, metadata addresses, anything that routes
    back to the box. It connects to one of the rest, on a port the rule allows.
