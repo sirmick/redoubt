@@ -101,6 +101,7 @@
   - [A notice lost to a bad receive record](todo/receive-output-late-invalid.md)
   - [Nightly rustfmt drift](todo/rustfmt-nightly-drift.md)
   - [The steward decision-wake target](todo/sched-latency-target.md)
+  - [The loader stub's unsafe budget](todo/stub-unsafe-budget.md)
   - [Compiled-in bucket counts](todo/server-bucket-counts.md)
   - [The SSH loopback self-checks](todo/ssh-loopback-host.md)
   - [Verdict lines named after a package](todo/verdict-strings.md)
