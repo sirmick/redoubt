@@ -231,7 +231,7 @@ The table: [libs/wire/tables/startup.md](../../libs/wire/tables/startup.md).
 
 ### Launching through the loader stub
 
-Status: built · partly tested: the stub's host tests run in no bench case (`bench:stub-launch` attacks the stub in a boot on both widths) · tested: bench:stub-launch, fuzz:stub/plan, host:stub::plan_maps_a_well_formed_segment, host:stub::plan_refuses_a_segment_reaching_outside_the_image, host:stub::plan_refuses_a_segment_overlapping_an_excluded_range, host:stub::plan_refuses_writable_and_executable, host:stub::plan_refuses_writable_without_readable, host:stub::plan_refuses_a_non_riscv_machine, host:stub::plan_refuses_an_entry_outside_any_executable_segment, host:stub::plan_refuses_two_segments_that_overlap_each_other, host:stub::plan_refuses_a_misaligned_p_align, host:stub::plan_refuses_more_than_max_phnum_segments, host:stub::plan_refuses_a_segment_touching_page_zero, host:stub::plan_refuses_a_segment_reaching_into_the_stub_region, host:stub::plan_refuses_a_non_exec_type, host:stub::image_in_bounds_refuses_an_image_overlapping_the_stub, host:stub::image_in_bounds_refuses_an_image_overlapping_the_startup_page, host:stub::read_image_refuses_a_short_page, host:stub::read_image_refuses_an_image_len_over_the_cap
+Status: built · partly tested: the stub's host tests run in no bench case; its fuzz target has never been run as a campaign; on target the kernel's refusal masks the stub's overlap checks; exit 112 and the unmap of the image copy are not attacked · tested: bench:stub-launch, host:stub::plan_maps_a_well_formed_segment, host:stub::plan_refuses_a_segment_reaching_outside_the_image, host:stub::plan_refuses_a_segment_overlapping_an_excluded_range, host:stub::plan_refuses_writable_and_executable, host:stub::plan_refuses_writable_without_readable, host:stub::plan_refuses_a_non_riscv_machine, host:stub::plan_refuses_an_entry_outside_any_executable_segment, host:stub::plan_refuses_two_segments_that_overlap_each_other, host:stub::plan_refuses_a_misaligned_p_align, host:stub::plan_refuses_more_than_max_phnum_segments, host:stub::plan_refuses_a_segment_touching_page_zero, host:stub::plan_refuses_a_segment_reaching_into_the_stub_region, host:stub::plan_refuses_a_non_exec_type, host:stub::image_in_bounds_refuses_an_image_overlapping_the_stub, host:stub::image_in_bounds_refuses_an_image_overlapping_the_startup_page, host:stub::read_image_refuses_a_short_page, host:stub::read_image_refuses_an_image_len_over_the_cap
 
 Every process after `init` starts the same way, and no launcher parses an ELF: the **loader
 stub** (`stub/`), a small flat binary mapped into the new process, does it there, where a hostile
@@ -259,10 +259,11 @@ executable, or writable without readable; a `p_align` that is not a power of two
 with the segment's offset; an entry outside every executable segment. The stub holds no writable
 data and depends only on `redoubt-sys` and `redoubt-wire`.
 
-**Exit codes.** The stub exits with 110 for a startup block that is missing, does not parse or
-names no image; 111 for a hostile image, including a segment the kernel refuses to map (one over
-the stack); 112 when `map_fixed` is out of memory in the child's budget; and 101 if it panics.
-After the jump, the exit code is the program's.
+**Exit codes.** The stub exits with 110 for a startup block that is missing, does not parse or names
+no image, or whose image overlaps the stub or the startup block or is over `MAX_IMAGE_LEN`; 111 for
+a hostile image, including a segment the kernel refuses to map (one over the stack); 112 when
+`map_fixed` is out of memory in the child's budget; and 101 if it panics. After the jump, the exit
+code is the program's.
 
 The bench's launcher, `stub-launch`, and the net rig (`tests/net/src/rig.rs`, which stands in for
 `init` to launch the real `netd` and `ipd`) both launch this way
@@ -359,7 +360,8 @@ kernel
   own channel.
 - The agent has its own principal, `/work` only and no `/net`; its escalations wait for Alice's
   approval, and the lease's end destroys its budget and everything it passed on.
-- No session or lease holds a `keyd` grant: `keyd`'s purposes are the host key and audit signing.
+- No session or lease holds a `keyd` grant in M1 (separation and containment): `keyd`'s purposes are
+  the host key and audit signing.
 - Bob crashing `fsd:data` three times is blamed on his account each time: his sessions end and he
   is locked out for a while; Alice is not affected.
 
@@ -394,7 +396,7 @@ read two ways, or a name no rule allows.
 
 ### R32 (a hostile image hurts only its process)
 
-Status: built · tested: bench:stub-launch, fuzz:stub/plan, host:stub::plan_refuses_a_segment_overlapping_an_excluded_range, host:stub::plan_refuses_writable_and_executable, host:stub::plan_refuses_two_segments_that_overlap_each_other, host:stub::plan_refuses_a_segment_touching_page_zero, host:stub::plan_refuses_a_segment_reaching_into_the_stub_region, host:stub::image_in_bounds_refuses_an_image_overlapping_the_stub, host:stub::read_image_refuses_an_image_len_over_the_cap
+Status: built · partly tested: the fuzz target has never been run as a campaign, and on target the kernel's own refusal masks the stub's overlap checks, which only host tests pin · tested: bench:stub-launch, host:stub::plan_refuses_a_segment_overlapping_an_excluded_range, host:stub::plan_refuses_writable_and_executable, host:stub::plan_refuses_two_segments_that_overlap_each_other, host:stub::plan_refuses_a_segment_touching_page_zero, host:stub::plan_refuses_a_segment_reaching_into_the_stub_region, host:stub::image_in_bounds_refuses_an_image_overlapping_the_stub, host:stub::read_image_refuses_an_image_len_over_the_cap
 
 No launcher parses an ELF. The loader stub, running as the child, refuses an image whose segments
 overlap each other, the image, the stub, the startup block or page 0, reach past the link range,
@@ -445,7 +447,7 @@ sign with are never one key, and no badge at `keyd` can sign a login.
 Status: built · partly tested: the runtime's exit on a refused block is read from the code, not attacked · tested: bench:stub-launch, host:redoubt-rt::hostile_blocks_are_refused
 
 - **A child's startup block is refused:** the runtime exits with 102 before `main`; the stub
-  exits with 110 if it cannot find the image.
+  exits with 110 if it cannot find the image or the image lies outside its bounds.
 - **A child's image is refused or does not fit:** the stub exits with 111 or 112, and only the
   child is affected; its launcher sees the exit notice and the child's budget returns what it held.
 - What `init` does when a server exits is under [restarts and reboots](#restarts-and-reboots).
@@ -471,6 +473,9 @@ Status: built · partly tested: the runtime's exit on a refused block is read fr
   ([memory layout](../kernel/memory-layout.md#residual-risks)).
 - **The startup block and stub host tests are not in the bench.** Follow-up:
   [todo](../todo/host-tests-in-bench.md).
+- **The stub's checks are not all attacked on their own.** Its fuzz target has not been run as a
+  campaign, the kernel's refusal hides the stub's overlap checks on target, and exit 112 and the
+  image unmap are untested. Follow-up: [todo](../todo/loader-stub-coverage.md).
 - **A restart loop reboots the machine.** A client that can crash a server repeatedly without
   being blamed (a bug the blame rule does not reach) can reboot the box.
 

@@ -35,7 +35,8 @@ Status: planned · M1 (separation and containment)
   per-file labels, owners or permission bits: access is by capability.
 - **A remove succeeds while another connection holds a fid on the file.** An "in use" refusal
   would be a channel between connections. The remove frees the file's blocks at once, and every
-  other fid on it gets `removed` on its next read, write or stat; only a clunk succeeds. So there
+  other fid on it gets `removed` on its next read, write or stat (the `Rerror` text for 9P, the
+  table's `removed` for a typed operation); only a clunk succeeds. So there
   is no orphan to track and no invisible data holding quota, and it tells a fid's holder no more
   than the name vanishing from the directory tells anyone who can walk there. (littlefs itself
   keeps a removed file readable through open handles; `fsd` does not use that.)
@@ -45,7 +46,7 @@ Status: planned · M1 (separation and containment)
   ([R26 (admission fairness)](serving.md#r26-admission-fairness)); a `disconnect` frees a
   client's fids.
 - **Metadata** lives in littlefs user attributes: what `stat` needs (mtime, qid version) and the
-  per-file attributes of `get_attr` and `set_attr`.
+  per-file attributes of `get_attr` and `set_attr`. No access time is kept.
 
 The attack test: after a remove, the file's other fids get `removed` on read, write and stat.
 
@@ -58,8 +59,9 @@ Status: planned · M1 (separation and containment)
 `fsd` serves typed messages on its 9P endpoint for what 9P2000 does not express, with the same
 label and quota checks as 9P:
 
-- **`rename(old_dir, old_name, new_dir, new_name)`**: within one volume; `old_dir` and `new_dir`
-  are the caller's fids on directories. Renaming a directory into itself is refused.
+- **`rename(old_dir, old_name, new_dir, new_name)`**: atomic, within one volume; `old_dir` and
+  `new_dir` are the caller's fids on directories. Renaming a directory into itself is refused. A
+  move across volumes is not `fsd`'s: the client copies and removes, which is not atomic.
 - **`copy_file(src_fid, dst_dir, dst_name)`**: copies a file within the volume and replies with the
   bytes copied.
 - **`set_attr(fid, attr, value)`** and **`get_attr(fid, attr)`**: a file's or directory's user
@@ -69,8 +71,8 @@ The table: [libs/wire/tables/fsd.md](../../libs/wire/tables/fsd.md).
 
 {{#include ../../libs/wire/tables/fsd.md:tables}}
 
-**Attributes.** A value is at most littlefs's `attr_max`, 1022 bytes; a larger one is refused as
-too large. Attribute types 0 to 15 are `fsd`'s own (mtime, qid version, and later use), and
+**Attributes.** A value is at most littlefs's `attr_max`, 1022 bytes; a larger one is refused with
+`too_large`. Attribute types 0 to 15 are `fsd`'s own (mtime, qid version, and later use), and
 `set_attr` refuses them; types 16 to 255 are the user's.
 
 **Open:** none.
@@ -190,8 +192,8 @@ Status: planned · M1 (separation and containment)
 
 Every connection's root has a byte quota carved from its granter's, and no write takes a root past
 it. So one principal filling a shared volume uses up only its own quota and cannot make another's
-writes fail, and a vault session looping on fresh connections cannot use `fsd`'s budget as a
-channel.
+writes fail. (How many connections and fids a client may hold is admission's, R26, not the
+quota's.)
 
 **Open:** none.
 

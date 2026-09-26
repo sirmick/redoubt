@@ -131,10 +131,12 @@ or an agent with a person at the top of the chain.
   count against the sponsor's admission for its label set, with a fair share per badge inside
   ([R26 (admission fairness)](serving.md#r26-admission-fairness)), so an agent cannot lock its
   sponsor out.
-- **A lease is task-scoped**: "read `~/project`, write `~/project/out`, connect to
-  `203.0.113.0/24:443`, 2 hours, 256 MB, 4 processes, weight 20". Its budget has a deadline
-  ([budgets](../kernel/budgets.md)) at most `MAX_LEASE` (24 hours) away. The steward refuses a
-  longer lease rather than shortening it silently; the kernel knows only deadlines, not leases.
+- **A lease is task-scoped**: "read `~/project`, write `~/project/out`, the `model` gateway, 2
+  hours, 256 MB, 4 processes, weight 20". An agent never holds a socket or a name rule: it reaches
+  outside the box only through `gatewayd` capabilities ([gatewayd](gatewayd.md)). Its budget has a
+  deadline ([budgets](../kernel/budgets.md)) at most `MAX_LEASE` (24 hours) away. The steward
+  refuses a longer lease rather than shortening it silently; the kernel knows only deadlines, not
+  leases.
 - **Delegation only narrows.** An agent may start sub-agents as budgets inside its own budget. It
   holds only its own budget handle, so it cannot create siblings, and its lease's end destroys its
   sub-agents with it, whatever their own deadlines. A new durable principal, or a budget with more
@@ -145,9 +147,10 @@ or an agent with a person at the top of the chain.
   connections, the steward passes it a revocation scope made for that purpose, never a budget
   that holds processes, which would let a compromised server end every session
   ([R41 (narrowing by revocation scope)](#r41-narrowing-by-revocation-scope)).
-- **An agent holds no credentials.** It uses keys through `keyd` and models through `gatewayd`. No
-  session or lease holds a `keyd` grant: `keyd`'s purposes are the host key and audit signing
-  ([keyd](keyd.md)).
+- **An agent holds no credentials.** It uses keys through `keyd` and, from
+  M4 (self-hosted development), models through `gatewayd`. In M1 (separation and containment) no
+  session or lease holds a `keyd` grant, since `keyd`'s purposes are the host key and audit
+  signing; keys in leases come in M5 (persist, install, share) ([keyd](keyd.md)).
 - **Assume every agent is compromised** by something it read: it can do what its capabilities
   allow until its lease ends, and nothing more.
 - **Each agent runs in its own VM**; sub-agents with different authority are separate VMs.
@@ -191,13 +194,13 @@ trusted key, a declassification. Most things need none.
 - **Rendering.** The steward renders from the structured request: the requester's kind (agent,
   session) and steward-assigned name (`agent-7`) beside its principal, what, where, how long, and
   the label consequences. Every rendered field is printable ASCII (0x20 to 0x7E; anything else is
-  escaped), with no control character (U+0000 to U+001F, U+007F to U+009F) and so no ESC, so no terminal escape can repaint the approval
-  screen and no bidi or format character (U+202E, U+2066, U+200B) can disguise it. A
-  requester-supplied field is at most `FIELD_CAP` (64) characters, counted as Unicode scalar
-  values, and is shown marked as the requester's text. An unlabelled requester's free-text reason
-  is quoted, escaped and marked untrusted.
-  A **labelled** requester's request shows only text the steward generates (kind, target, size):
-  its free text would be a channel out of the vault.
+  escaped), with no control character (U+0000 to U+001F, U+007F to U+009F) and so no ESC, so no
+  terminal escape can repaint the approval screen and no bidi or format character (U+202E, U+2066,
+  U+200B) can disguise it. A requester-supplied field is at most `FIELD_CAP` (64) characters,
+  counted as Unicode scalar values, and is shown marked as the requester's text. An unlabelled
+  requester's free-text reason is quoted, escaped and marked untrusted. A **labelled** requester's
+  request shows only text the steward generates (kind, target, size): its free text would be a
+  channel out of the vault.
 - **Binding.** Each request has a random 64-bit id and a hash of its exact content; approving
   names both. The request is frozen until answered, and any change makes it a new request.
 - **Limits and labels.** Each (account, label set) has a cap on pending requests, and a session
@@ -337,15 +340,15 @@ signed through `keyd`'s `audit` purpose exactly as [below](#the-audit-log).
 
 Status: planned · M4 (self-hosted development)
 
-The same log extends to every steward action: the steward appends a record for every mint, delegation, revocation, approval, denial, lease end,
-blame and lockout, with the principal chain, to a file only it can write. Each record carries the
-request's labels and is read under the label check
+The same log extends to every steward action: the steward appends a record for every mint,
+delegation, revocation, approval, denial, lease end, blame and lockout, with the principal chain, to
+a file only it can write. Each record carries the request's labels and is read under the label check
 ([R25 (the label check)](serving.md#r25-the-label-check)), so a labelled request's target never
 reaches an unlabelled reader. **Each record is signed**: the steward asks `keyd` to sign it under
-the `audit` purpose over the preimage `"redoubt.audit.v1\0" || u64_le(len) || record`, whose
-digest `keyd` computes itself, and stores the signature beside the record. The steward holds a
-`keyd` grant for that one purpose, never a key. A record cannot be altered undetected by anything
-that can write the file later.
+the `audit` purpose over the preimage `"redoubt.audit.v1\0" || u64_le(len) || record`, whose digest
+`keyd` computes itself, and stores the signature beside the record. The steward holds a `keyd` grant
+for that one purpose, never a key. A record cannot be altered undetected by anything that can write
+the file later.
 
 The model checks that audit views are filtered by labels and that every record's signature binds
 purpose, signer, domain, length and every byte (`PolicyAuditUnfiltered`,
@@ -373,7 +376,8 @@ records, since every server restarts with empty tables. The first owner is enrol
 on the physical console, a trusted path, and delegates from there; approvals can then also be
 given on that console.
 
-**Open:** where the steward's state lives and how it is protected; how re-minted capabilities
+**Open:** how a shared server's bucket count is sized when principals are added at run time; where
+the steward's state lives and how it is protected; how re-minted capabilities
 reach sessions that held the old ones; how a key is enrolled and revoked at run time.
 
 ### Projects and sharing

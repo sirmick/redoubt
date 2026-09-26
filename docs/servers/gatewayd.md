@@ -21,9 +21,12 @@ record.
 
 Status: planned · M4 (self-hosted development)
 
-- A **gateway capability** is a connection to `gatewayd` whose badge names a service (a model
-  provider, a git host), what may be asked of it (models, repositories, read or write), and a
-  **meter**: tokens and money the holder may spend, carved from its principal's.
+- A **gateway capability** is a connection to `gatewayd` whose badge names a grant by name (the
+  `model` gateway, say), optionally narrowed to some of its hosts, with a **meter**: tokens and
+  money the holder may spend, carved from its principal's. A `git` grant names its remotes, grants
+  fetch and push separately, limits push to named ref patterns, and refuses force-push unless
+  granted; the client, a Rust `git`, speaks git's smart HTTP to `gatewayd`
+  (the userland pages on agents and development use these grants).
 - A capability is granted by the steward, for a session or a lease, and a grant only narrows: a
   lease's capability names no more service, operations or budget than its sponsor's
   ([steward](steward.md#leases)).
@@ -33,7 +36,8 @@ Status: planned · M4 (self-hosted development)
 - **Every request is checked** against the capability before anything leaves the box: the service,
   the operation, the model or repository, the size, and what the meter has left; a request over the
   meter is refused ([R65 (a request only within its capability)](#r65-a-request-only-within-its-capability)).
-- **Metering.** The steward owns the meters, so they survive a `gatewayd` restart. Before sending,
+- **Metering.** The steward owns the meters, so they survive a `gatewayd` restart, and reboots
+  once the steward keeps state in M5 (persist, install, share). Before sending,
   `gatewayd` checks the principal's spend cap against the steward's figure, and refuses a request
   over it; after each response it reports the usage the provider gave.
 - **Logging.** Every call is recorded with the principal chain, the capability, the operation and
@@ -61,7 +65,8 @@ sequenceDiagram
 The attack test: a request over the spend cap is refused before anything is sent.
 
 **Open:** the protocol table and its operations for the first provider and for git; how money is
-priced from usage.
+priced from usage; the finer checks on `git` requests beyond remote, operation, refs and force
+(size limits, path rules).
 
 ### Keys and TLS
 
@@ -71,9 +76,12 @@ Status: planned · M4 (self-hosted development)
   them itself, from its arguments, and no operation returns one
   ([R66 (no credential leaves gatewayd)](#r66-no-credential-leaves-gatewayd)).
 - **TLS** is `gatewayd`'s own, to each service's fixed host name, checking the service's
-  certificate against roots `gatewayd` is configured with; `gatewayd` resolves the host name through
-  the [resolver](resolver.md) and reaches it through its own `ipd` connection, scoped to the
+  certificate against roots `gatewayd` is configured with. `gatewayd` connects by name, as a person
+  does ([ipd](ipd.md#name-scoped-connections)), on its own `ipd` connection whose rule names only the
   services it serves.
+- **Where the keys come from.** In M4 (self-hosted development) the API keys arrive as
+  `gatewayd`'s arguments in the boot manifest, which is never public, at the bundle's trust, as
+  `keyd`'s seeds do.
 - A git host's SSH or token credentials are held the same way.
 
 **Open:** the TLS implementation is pure Rust with no C (rustls with a pure-Rust cryptography
@@ -95,9 +103,8 @@ for services outside.
 Status: planned · M4 (self-hosted development)
 
 - `gatewayd` holds its endpoint, the API keys and credentials of the services it serves, one `ipd`
-  connection scoped to those services' addresses and ports, a resolver connection for their names,
-  and a way to append to the audit log.
-- A client's authority is its capability: one service, named operations, a meter.
+  connection whose name rule names those services, and a way to append to the audit log.
+- A client's authority is its capability: one grant, named operations, a meter.
 - It never holds a principal's own keys; `keyd` does.
 
 **Open:** none.

@@ -14,6 +14,8 @@ against the Rust one (`libs/wire/elixir/run-vectors`).
 The server pages mark sections built on these tests. A change that breaks one passes every bench
 run, so "built · tested" can go stale without anything failing where the project looks.
 
+Fixed in the servers follow-up package after the documentation rewrite.
+
 ## Where
 
 - [`tests/`](../../tests): the bench cases; `kind = "host-tests"` cases name the packages they

@@ -29,7 +29,9 @@ defmodule Redoubt.Wire.Proto.Fsd do
     2 => :not_found,
     3 => :refused,
     4 => :exists,
-    5 => :not_dir
+    5 => :not_dir,
+    6 => :removed,
+    7 => :too_large
   }
 
   @doc """
