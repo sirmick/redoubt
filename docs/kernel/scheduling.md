@@ -268,14 +268,17 @@ free weight, the preemption points, the wake rule and ranks, charging and inheri
 
 A system call's kernel time is bounded by a constant plus a term linear in the pages it maps or
 the objects it names. It never depends on the extent of an address area or on what other
-processes hold. Billing it to the caller does not excuse it, because every wake waits for it.
-R10's scan of every kernel-object frame is the one stated exception
+processes hold. A term linear in a fixed kernel constant (`MAX_PROCESS_COUNT`, the platform's
+interrupt count, `MAX_DMA_DEVICES`, a fixed table size) is a constant. A term linear in RAM
+frames or kernel-object frames is not. Billing it to the caller does not excuse it, because
+every wake waits for it. R10 (destruction)'s sweeps are the one stated exception
 ([todo](../todo/budget-destroy-cost.md)). The kernel departs from this bound in `map_anon`'s
 address search ([memory](memory.md#residual-risks)), and in three more scans of every
 kernel-object frame up to the highest one ever used, a mark that grows with the objects every
 other budget creates: `process_create`'s PID draw, which looks for a process object naming each
 candidate PID; the search for an exit notice owed on an endpoint, at each delivery there; and the
-search for an interrupt's IRQ object, on every interrupt (Residual risks).
+search for an interrupt's IRQ object, on every interrupt
+([todo](../todo/kernel-scan-bounds.md)).
 
 It is attacked three ways:
 - **Boot cases, in virtual time**, count each budget's work over a window and compare it with
