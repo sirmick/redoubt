@@ -57,10 +57,6 @@ mod case {
     const PAGE: usize = rd::PAGE_SIZE;
     const SPAN: usize = 2 << 20;
 
-    fn map_fixed(addr: usize, len: usize) -> Result<(), Error> {
-        redoubt_sys::syscall(&rd::Call::MapFixed { addr, len, flags: rd::rw() }).map(|_| ())
-    }
-
     fn usage_pages() -> u64 { rd::usage(rd::SYSTEM).unwrap().pages_usage }
 
     /// Bring `system`'s free pages to exactly `target` with filler in gigabyte 2, as
@@ -77,13 +73,13 @@ mod case {
             }
             if short > opened * SLOTS - filled {
                 assert!(opened < (1 << 30) / SPAN, "the filler must stay inside gigabyte 2");
-                map_fixed(FILL + opened * SPAN, PAGE).expect("open a filler table");
+                rd::map_fixed(FILL + opened * SPAN, PAGE, rd::rw()).expect("open a filler table");
                 opened += 1;
                 continue;
             }
             let (table, slot) = (filled / SLOTS, filled % SLOTS);
             let n = short.min(SLOTS - slot);
-            map_fixed(FILL + table * SPAN + (1 + slot) * PAGE, n * PAGE).expect("fill");
+            rd::map_fixed(FILL + table * SPAN + (1 + slot) * PAGE, n * PAGE, rd::rw()).expect("fill");
             filled += n;
         }
     }
@@ -97,10 +93,10 @@ mod case {
         // frees them, this check says so instead of the case silently testing nothing.
         let before = usage_pages();
         for block in 1..512 {
-            map_fixed(G3 + block * SPAN, PAGE).expect("open a G3 table");
+            rd::map_fixed(G3 + block * SPAN, PAGE, rd::rw()).expect("open a G3 table");
             rd::unmap(G3 + block * SPAN, PAGE).expect("unmap");
         }
-        map_fixed(G4 + SPAN, PAGE).expect("open a G4 table");
+        rd::map_fixed(G4 + SPAN, PAGE, rd::rw()).expect("open a G4 table");
         rd::unmap(G4 + SPAN, PAGE).expect("unmap");
         check(out, usage_pages() - before == 514, "setup left 514 page tables");
 
@@ -108,7 +104,7 @@ mod case {
         let pages = ((G4 + PAGE - at) / PAGE) as u64;
         fill_to(pages + 1);
         let before = usage_pages();
-        let r = map_fixed(at, pages as usize * PAGE);
+        let r = rd::map_fixed(at, pages as usize * PAGE, rd::rw());
         check(out, r == Err(Error::OutOfMemory), "two missing tables a gigabyte apart are both counted");
         check(out, usage_pages() == before, "nothing charged");
     }

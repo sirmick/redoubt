@@ -10,7 +10,6 @@
 #![no_std]
 #![no_main]
 
-use redoubt_abi::MemoryFlags;
 use test_programs::rd::{self, MessageKind, Received, victim};
 use test_programs::{Logger, checker, log};
 
@@ -27,12 +26,9 @@ pub extern "C" fn _start() -> ! {
             }
         }
     }
-    let len = victim::PAGES * 4096;
-    let range =
-        redoubt_abi::map_memory(None, None, len, MemoryFlags::R | MemoryFlags::W).expect("map_memory");
+    let at = rd::map_anon(victim::PAGES * rd::PAGE_SIZE, rd::rw()).expect("map_anon");
     for page in 0..victim::PAGES {
-        // SAFETY: `range` is this process's own fresh mapping of `len` bytes.
-        unsafe { (range.as_mut_ptr().add(page * 4096) as *mut u64).write_volatile(page as u64) };
+        rd::poke(at + page * rd::PAGE_SIZE, page as u64);
     }
     log!(logger, "[victim] mapped and touched {} pages in system after the attack", victim::PAGES);
     checker::done();

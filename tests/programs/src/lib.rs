@@ -13,7 +13,7 @@
 
 use core::fmt::Write;
 
-use redoubt_abi::{CID, MemoryFlags, MemoryRange, MemorySize};
+use redoubt_abi::CID;
 
 pub mod console;
 pub mod logsrv;
@@ -50,24 +50,25 @@ pub mod op {
     pub const DONE: usize = 7;
 }
 
-/// A page of memory that can be lent or moved to a server, and written to as text.
+/// A page of memory that can be lent or transferred to a server, and written to as text.
 pub struct Page {
-    pub range: MemoryRange,
+    pub addr: usize,
     len: usize,
 }
 
 impl Page {
-    pub fn new() -> Self {
-        let range = redoubt_abi::map_memory(None, None, 4096, MemoryFlags::R | MemoryFlags::W)
-            .expect("couldn't allocate a page");
-        Page { range, len: 0 }
-    }
+    pub fn new() -> Self { Page { addr: rd::page(), len: 0 } }
 
     pub fn clear(&mut self) { self.len = 0; }
 
-    pub fn bytes(&self) -> &[u8] { unsafe { core::slice::from_raw_parts(self.range.as_ptr(), self.len) } }
+    /// The text written so far.
+    pub fn bytes(&self) -> &[u8] {
+        // SAFETY: `addr` is this process's own page, and `len` bytes of it were written.
+        unsafe { core::slice::from_raw_parts(self.addr as *const u8, self.len) }
+    }
 
-    pub fn valid(&self) -> Option<MemorySize> { MemorySize::new(self.len) }
+    /// The page, for a lend or a transfer.
+    pub fn pages(&self) -> Option<rd::Pages> { rd::pages(self.addr, 1) }
 }
 
 impl Default for Page {
@@ -76,7 +77,8 @@ impl Default for Page {
 
 impl Write for Page {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        let page = unsafe { core::slice::from_raw_parts_mut(self.range.as_mut_ptr(), self.range.len()) };
+        // SAFETY: `addr` is this process's own read-write page.
+        let page = unsafe { core::slice::from_raw_parts_mut(self.addr as *mut u8, rd::PAGE_SIZE) };
         let dest = page.get_mut(self.len..self.len + s.len()).ok_or(core::fmt::Error)?;
         dest.copy_from_slice(s.as_bytes());
         self.len += s.len();
@@ -107,7 +109,7 @@ impl Logger {
             return console::relay(logsrv::FIRST_PID, text);
         };
         let body = rd::body([op::PRINT, self.page.len, 0, 0]);
-        rd::call_waiting(endpoint, &body, rd::pages(self.page.range.as_ptr() as usize, 1), rd::FOREVER)
+        rd::call_waiting(endpoint, &body, self.page.pages(), rd::FOREVER)
             .expect("couldn't lend to the log server");
     }
 }
@@ -180,11 +182,9 @@ pub mod redoubt_ipc {
 /// in pages it frees; the attacker lends it every page it gets, and the victim, not the
 /// attacker, says whether any of them held data. See `tests/mem-attack.toml`.
 pub mod mem {
-    /// Well-known address of the victim's server.
-    pub const VICTIM_ADDRESS: &[u8; 16] = b"redoubt-mem-vict";
-    /// Borrow: a page the attacker got; the victim checks that it holds nothing.
+    /// Call with a lend: a page the attacker got; the victim checks that it holds nothing.
     pub const CHECK: usize = 1;
-    /// BlockingScalar: the attacker has lent everything it got.
+    /// Call: the attacker has lent everything it got.
     pub const DONE: usize = 2;
     /// What the victim writes into the pages it frees.
     pub const SECRET: &[u8; 8] = b"SECRET!!";
@@ -196,15 +196,11 @@ pub mod mem {
 /// keeps a page lent to it by a "victim" that then terminates; a "grabber" tries to
 /// reclaim the freed frame. See `tests/uaf-lent-page.toml`.
 pub mod uaf {
-    /// Well-known address of the holder server.
-    pub const HOLDER_ADDRESS: &[u8; 16] = b"redoubt-uaf-hold";
-    /// MutableBorrow: hold this page forever and remember where it is mapped.
+    /// Call with a writable lend: hold this page forever and remember where it is mapped.
     pub const HOLD: usize = 1;
-    /// BlockingScalar: reply once a page has been held (a barrier for the victim's terminator thread).
-    pub const WAIT_HELD: usize = 2;
-    /// BlockingScalar: reply immediately (liveness / ordering for the grabber).
+    /// Call: reply immediately (liveness / ordering for the grabber).
     pub const SYNC: usize = 3;
-    /// BlockingScalar: re-read the held page; reply 1 if it still reads back as the victim's data.
+    /// Call: re-read the held page; reply 1 if it still reads back as the victim's data.
     pub const CHECK: usize = 4;
     /// The victim writes this into the page before lending it.
     pub const VICTIM_SENTINEL: &[u8; 8] = b"VICTIM!!";
@@ -215,8 +211,6 @@ pub mod uaf {
 /// Protocol for the move-a-borrowed-page attack test (`move-borrowed*` binaries). See
 /// `tests/move-borrowed-page.toml`.
 pub mod move_borrowed {
-    /// Well-known address of the attacking server.
-    pub const ADDRESS: &[u8; 16] = b"redoubt-mv-borrw";
     /// What the victim writes into the page it lends.
     pub const VICTIM_TEXT: &str = "victim data";
 }
@@ -224,10 +218,7 @@ pub mod move_borrowed {
 /// Protocol for the return-a-clobbered-lent-page attack test (`return-lent*` binaries). See
 /// `tests/return-lent-unmapped.toml`.
 pub mod return_lent {
-    /// Well-known address of the borrower server.
-    pub const ADDRESS: &[u8; 16] = b"redoubt-ret-lent";
-    /// Fixed user address the lender lends, then attacks from a second thread. Between the
-    /// message region (`0x4000_0000`, one superpage) and the default region (`0x6000_0000`).
+    /// Fixed user address the lender lends, then attacks from a second thread.
     pub const LENT_ADDR: usize = 0x5000_0000;
 }
 

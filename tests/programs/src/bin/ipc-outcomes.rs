@@ -27,9 +27,6 @@ const LOAN_PROTECTION: usize = 8;
 fn protected_alias(addr: usize, endpoint: u32) {
     assert_eq!(rd::unmap(addr, rd::PAGE_SIZE), Err(Error::InvalidArgument), "loan alias unmap");
     assert_eq!(rd::set_flags(addr, rd::PAGE_SIZE, rd::MemFlags::READ), Err(Error::InvalidArgument));
-    // SAFETY: `addr` is the page-aligned one-page loan mapping supplied by the kernel.
-    let range = unsafe { redoubt_abi::MemoryRange::new(addr, rd::PAGE_SIZE) }.unwrap();
-    assert_eq!(redoubt_abi::unmap_memory(range), Err(redoubt_abi::Error::ShareViolation));
     let (out, _) = rd::call_outcome(endpoint, &rd::body([0; 4]), rd::pages(addr, 1), 0).unwrap();
     assert_eq!(out.status, Err(Error::InvalidArgument), "loan alias re-lend");
     assert_eq!(rd::send(endpoint, &rd::body([0; 4]), rd::pages(addr, 1), 0), Err(Error::InvalidArgument));
@@ -49,13 +46,7 @@ fn server(_: usize) {
             REMAP => {
                 let addr = m.body.words[1];
                 rd::unmap(addr, rd::PAGE_SIZE).unwrap();
-                redoubt_abi::map_memory(
-                    None,
-                    redoubt_abi::MemoryAddress::new(addr),
-                    rd::PAGE_SIZE,
-                    redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W,
-                )
-                .unwrap();
+                rd::map_fixed(addr, rd::PAGE_SIZE, rd::rw()).unwrap();
                 rd::poke(addr, 0xface);
                 rd::set_flags(addr, rd::PAGE_SIZE, rd::MemFlags::READ).unwrap();
             }
@@ -165,7 +156,11 @@ pub extern "C" fn _start() -> ! {
         for budget in [rd::SYSTEM, 999] {
             for number in [rd::Number::BudgetCreate, rd::Number::BudgetUsage] {
                 let args = [rd::number(number), budget as usize, record, 0, 0, 0, 0, 0];
-                assert_eq!(rd::raw_error(rd::raw(args)), Some(Error::InvalidArgument), "MMIO-backed budget record");
+                assert_eq!(
+                    rd::raw_error(rd::raw(args)),
+                    Some(Error::InvalidArgument),
+                    "MMIO-backed budget record"
+                );
             }
         }
     }

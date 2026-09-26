@@ -1,9 +1,9 @@
-description = "Lending, mutably lending or moving anonymous pages never touched is served, a half-mapped range is refused whole, and running past RAM is the caller's error (verdict: survival only) (checked build)"
+description = "Lending, writably lending or transferring stack pages never touched is served, a half-mapped range is refused whole, and asking past RAM is the caller's error (verdict: survival only) (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 # Built with the checks on (docs/testbench.md, "Debug assertions").
 debug_assertions = true
-# 32 MiB so the lend-past-RAM step (12k pages = 48 MiB) exhausts RAM in milliseconds.
+# 32 MiB so the map-past-RAM step (12k pages = 48 MiB) is past RAM.
 memory_mib = 32
 # PID 2 log-server; PID 3 lend-untouched makes every attempt, then reports DONE.
 programs = ["log-server", "lend-untouched"]
@@ -16,8 +16,10 @@ timeout_secs = 30
 # attempt never reaches it. The attacker's own lines are progress only. `[server] moved page` and
 # relayed `[pid N]` lines are client-triggerable, so they are never the verdict.
 expect = [
+    '^\[pid 3\] \[untouched\] lend Ok\(\(\)\), writable lend Ok\(\(\)\)$',
     '^\[pid 3\] \[untouched\] half-mapped lend refused: true$',
-    '^\[pid 3\] \[untouched\] lend beyond RAM: Err\(OutOfMemory\)$',
+    '^\[pid 3\] \[untouched\] transfer Ok\(\(\)\)$',
+    '^\[pid 3\] \[untouched\] map beyond RAM: Err\(OutOfMemory\)$',
     '^\[server\] done: reported by pid 3; still serving$',
 ]
 forbid = ['FAIL', ': false$']

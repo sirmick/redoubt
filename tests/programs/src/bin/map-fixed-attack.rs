@@ -43,17 +43,13 @@ impl Checker {
     }
 }
 
-fn map_fixed(addr: usize, len: usize, flags: MemFlags) -> Result<(), Error> {
-    redoubt_sys::syscall(&rd::Call::MapFixed { addr, len, flags }).map(|_| ())
-}
-
 fn usage_pages() -> u64 { rd::usage(rd::SYSTEM).unwrap().pages_usage }
 
 /// A failing call must map nothing (a later `map_fixed` at the same address must succeed) and
 /// charge nothing (`system`'s usage is unchanged).
 fn refused(c: &mut Checker, label: &str, addr: usize, len: usize, flags: MemFlags, want: Error) {
     let before = usage_pages();
-    let r = map_fixed(addr, len, flags);
+    let r = rd::map_fixed(addr, len, flags);
     c.check(r == Err(want), label);
     c.check(usage_pages() == before, "nothing charged");
 }
@@ -99,7 +95,7 @@ fn occupied_ranges(c: &mut Checker) {
 
     // Partial overlap: [free, occupied, free] and [occupied, free].
     let addr = 0x5002_0000;
-    map_fixed(addr + PAGE, PAGE, rd::rw()).expect("set up the occupied middle page");
+    rd::map_fixed(addr + PAGE, PAGE, rd::rw()).expect("set up the occupied middle page");
     refused(c, "partial overlap: free, occupied, free", addr, 3 * PAGE, rd::rw(), Error::InvalidArgument);
     refused(c, "partial overlap: occupied, free", addr + PAGE, 2 * PAGE, rd::rw(), Error::InvalidArgument);
     rd::unmap(addr + PAGE, PAGE).expect("unmap the occupied middle page");
@@ -125,12 +121,12 @@ fn lend_server(_: usize) {
     let MessageKind::Call { lend: Some(lend) } = m.kind else { panic!("expected a lend") };
     let before = usage_pages();
     LENT_IN_REFUSED
-        .store(map_fixed(lend.addr, PAGE, rd::rw()) == Err(Error::InvalidArgument), Ordering::Release);
+        .store(rd::map_fixed(lend.addr, PAGE, rd::rw()) == Err(Error::InvalidArgument), Ordering::Release);
     LENT_IN_UNCHARGED.store(usage_pages() == before, Ordering::Release);
     let before = usage_pages();
     let lent_out = m.body.words[0];
     LENT_OUT_REFUSED
-        .store(map_fixed(lent_out, PAGE, rd::rw()) == Err(Error::InvalidArgument), Ordering::Release);
+        .store(rd::map_fixed(lent_out, PAGE, rd::rw()) == Err(Error::InvalidArgument), Ordering::Release);
     LENT_OUT_UNCHARGED.store(usage_pages() == before, Ordering::Release);
     rd::reply(m.msg_id.get(), &rd::body([0; 4])).expect("reply");
     // Block for good rather than exit, so nothing this thread owns changes `system`'s usage
@@ -165,7 +161,7 @@ fn exhausted_budget(c: &mut Checker) {
     let before = u.pages_usage;
 
     let addr = 0x5003_0000;
-    let r = map_fixed(addr, (free + 1) as usize * PAGE, rd::rw());
+    let r = rd::map_fixed(addr, (free + 1) as usize * PAGE, rd::rw());
     c.check(r == Err(Error::OutOfMemory), "an exhausted budget is refused");
     c.check(usage_pages() == before, "nothing charged when the budget is exhausted");
 }
@@ -203,18 +199,18 @@ fn page_table_charge(c: &mut Checker) {
             // Opening costs 2 (3 for the first: gigabyte 2's level-1 table as well). Opening
             // only while more slots are still needed keeps `short` far above that here.
             assert!(opened < (1 << 30) / SPAN, "the filler must stay inside gigabyte 2");
-            map_fixed(FILL + opened * SPAN, PAGE, rd::rw()).expect("open a filler table");
+            rd::map_fixed(FILL + opened * SPAN, PAGE, rd::rw()).expect("open a filler table");
             opened += 1;
             continue;
         }
         let (table, slot) = (filled / SLOTS, filled % SLOTS);
         let n = short.min(SLOTS - slot);
-        map_fixed(FILL + table * SPAN + (1 + slot) * PAGE, n * PAGE, rd::rw()).expect("fill");
+        rd::map_fixed(FILL + table * SPAN + (1 + slot) * PAGE, n * PAGE, rd::rw()).expect("fill");
         filled += n;
     }
 
     let before = usage_pages();
-    let r = map_fixed(AT, PAGES as usize * PAGE, rd::rw());
+    let r = rd::map_fixed(AT, PAGES as usize * PAGE, rd::rw());
     c.check(r == Err(Error::OutOfMemory), "pages fit, their page tables do not");
     c.check(usage_pages() == before, "nothing charged");
 
@@ -224,7 +220,7 @@ fn page_table_charge(c: &mut Checker) {
     c.check(rd::free(rd::SYSTEM) == PAGES + TABLES, "one page freed");
     let before = usage_pages();
     c.check(
-        map_fixed(AT, PAGES as usize * PAGE, rd::rw()).is_ok(),
+        rd::map_fixed(AT, PAGES as usize * PAGE, rd::rw()).is_ok(),
         "exactly enough for pages and page tables",
     );
     c.check(usage_pages() == before + PAGES + TABLES, "charged 2 pages and 4 page tables");
@@ -261,7 +257,7 @@ fn huge_len_is_prompt(c: &mut Checker) {
     let addr = 0x1_0000_0000;
     let before = usage_pages();
     let t0 = rd::time_now().unwrap();
-    let r = map_fixed(addr, USER_AREA_END - addr, rd::rw());
+    let r = rd::map_fixed(addr, USER_AREA_END - addr, rd::rw());
     let elapsed = rd::time_now().unwrap() - t0;
     c.check(r == Err(Error::OutOfMemory), "a huge len is refused");
     c.check(usage_pages() == before, "nothing charged");
@@ -274,7 +270,7 @@ fn success_and_addr_zero(c: &mut Checker) {
     // to baseline.
     let addr = 0x5004_0000;
     let before = usage_pages();
-    map_fixed(addr, PAGE, rd::rw()).expect("map_fixed succeeds");
+    rd::map_fixed(addr, PAGE, rd::rw()).expect("map_fixed succeeds");
     c.check(usage_pages() > before, "a successful map_fixed charges something");
     c.check(rd::peek(addr) == 0, "a fresh page reads zero");
     rd::poke(addr, 0x1234);
@@ -284,7 +280,7 @@ fn success_and_addr_zero(c: &mut Checker) {
 
     // K5a-addr0: page 0 is user space. A second identical call is refused as an overlap.
     let before = usage_pages();
-    map_fixed(0, PAGE, MemFlags::READ).expect("map_fixed(0, ...) succeeds");
+    rd::map_fixed(0, PAGE, MemFlags::READ).expect("map_fixed(0, ...) succeeds");
     c.check(usage_pages() > before, "map_fixed(0, ...) charges something");
     refused(c, "a second map_fixed(0, ...) overlaps", 0, PAGE, MemFlags::READ, Error::InvalidArgument);
     rd::unmap(0, PAGE).expect("unmap page 0");
@@ -293,7 +289,7 @@ fn success_and_addr_zero(c: &mut Checker) {
     // The last page below USER_AREA_END is accepted, and stays mapped while `map_anon` runs:
     // the kernel half of P1-1 (a mapping near the top must not starve the kernel's choice).
     let last = USER_AREA_END - PAGE;
-    map_fixed(last, PAGE, MemFlags::READ).expect("the last page below USER_AREA_END is accepted");
+    rd::map_fixed(last, PAGE, MemFlags::READ).expect("the last page below USER_AREA_END is accepted");
     c.check(
         matches!(rd::map_anon(PAGE, rd::rw()), Ok(_)),
         "map_anon still succeeds with the last page mapped",
@@ -302,7 +298,7 @@ fn success_and_addr_zero(c: &mut Checker) {
     // `map_anon` still succeeds after a `map_fixed` well outside its own bounded window
     // (kernel/src/mem.rs's `find_virtual_address`, `DEFAULT_BASE..+256 MiB`).
     let low = 0x1000_0000;
-    map_fixed(low, PAGE, rd::rw()).expect("a low map_fixed succeeds");
+    rd::map_fixed(low, PAGE, rd::rw()).expect("a low map_fixed succeeds");
     c.check(
         matches!(rd::map_anon(PAGE, rd::rw()), Ok(_)),
         "map_anon still succeeds after an unrelated map_fixed",
@@ -317,7 +313,7 @@ const READ_ONLY_AT: usize = 0x5005_0000;
 /// The child: map a page read-only, check it reads zero, then write it. The write must fault;
 /// the exit codes below say how it got anywhere else.
 extern "C" fn write_read_only(_arg: usize) -> ! {
-    if map_fixed(READ_ONLY_AT, PAGE, MemFlags::READ).is_err() {
+    if rd::map_fixed(READ_ONLY_AT, PAGE, MemFlags::READ).is_err() {
         rd::process_exit(1)
     }
     if rd::peek(READ_ONLY_AT) != 0 {

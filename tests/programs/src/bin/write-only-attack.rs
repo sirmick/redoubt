@@ -66,24 +66,6 @@ fn set_flags(c: &mut Checker) {
     rd::unmap(ro, PAGE).unwrap();
 }
 
-/// The legacy `UpdateMemoryFlags` path (redoubt-abi, not `redoubt-sys`): permissions may
-/// only be stripped, and stripping R while keeping W must not leave a writable-without-
-/// readable page (arch/riscv/mem.rs update_page_flags).
-fn legacy_update_flags(c: &mut Checker) {
-    let rw = rd::map_anon(PAGE, rd::rw()).unwrap();
-    rd::poke(rw, 0x7788);
-    // SAFETY: `rw` is this process's own page-aligned, PAGE-sized mapping from map_anon above.
-    let range = unsafe { redoubt_abi::MemoryRange::new(rw, PAGE) }.unwrap();
-    c.check(
-        redoubt_abi::update_memory_flags(range, redoubt_abi::MemoryFlags::W)
-            == Err(redoubt_abi::Error::MemoryInUse),
-        "update_memory_flags refuses W without R",
-    );
-    c.check(rd::peek(rw) == 0x7788, "refused update_memory_flags kept the contents");
-    c.check(writable_record(rw), "refused update_memory_flags left the page readable and writable");
-    rd::unmap(rw, PAGE).unwrap();
-}
-
 fn process_map(c: &mut Checker) {
     let exit = rd::endpoint_create().unwrap();
     let budget = rd::create(rd::SYSTEM, &rd::spec(32, 1, 10)).unwrap();
@@ -116,7 +98,6 @@ pub extern "C" fn _start(_: usize) -> ! {
     CONSOLE.store(uart, Ordering::Relaxed);
     writeln!(c.0).ok();
     set_flags(&mut c);
-    legacy_update_flags(&mut c);
     process_map(&mut c);
     writeln!(c.0, "[write-only] WRITE-ONLY ATTACK TEST PASSED").ok();
     rd::system_reset(rd::RESET, ResetKind::PowerOff).unwrap();

@@ -77,6 +77,11 @@ pub fn map_anon(len: usize, flags: MemFlags) -> Result<usize, Error> {
     }
 }
 
+/// `map_fixed(addr, len, flags)`: fresh zeroed pages at an address the caller chooses.
+pub fn map_fixed(addr: usize, len: usize, flags: MemFlags) -> Result<(), Error> {
+    redoubt_sys::syscall(&Call::MapFixed { addr, len, flags }).map(|_| ())
+}
+
 pub fn unmap(addr: usize, len: usize) -> Result<(), Error> {
     redoubt_sys::syscall(&Call::Unmap { addr, len }).map(|_| ())
 }
@@ -357,24 +362,22 @@ pub fn body_with(words: [usize; WORDS], handles: &[u32]) -> Body {
 
 /// A page of this process's own memory, for lending and transferring. Touched, so that the
 /// kernel is not asked to back it while it decodes (answer 115).
-pub fn page() -> usize {
-    let range =
-        redoubt_abi::map_memory(None, None, 4096, redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W)
-            .expect("map a page");
-    let at = range.as_mut_ptr() as usize;
-    // SAFETY: the first word of a page this process just mapped read-write.
-    unsafe { (at as *mut u64).write_volatile(0) };
-    at
+pub fn page() -> usize { many_pages(1) }
+
+/// A page of this loader-started program's own stack that it has never touched. The loader
+/// reserves the stack and the kernel backs each page on its first touch (INTERIM until R3's
+/// launcher, OD6), so the page 16 below the current one is reserved and still unbacked in a
+/// program that uses less stack than that.
+pub fn untouched_stack_page() -> usize {
+    let here = 0u8;
+    (core::ptr::addr_of!(here) as usize & !(PAGE_SIZE - 1)) - 16 * PAGE_SIZE
 }
 
 /// `npages` contiguous pages of this process's own memory, all touched.
 pub fn many_pages(npages: usize) -> usize {
-    let flags = redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W;
-    let range = redoubt_abi::map_memory(None, None, npages * 4096, flags).expect("map pages");
-    let at = range.as_mut_ptr() as usize;
+    let at = map_anon(npages * PAGE_SIZE, rw()).expect("map pages");
     for i in 0..npages {
-        // SAFETY: the first word of each page of a range this process just mapped read-write.
-        unsafe { ((at + i * 4096) as *mut u64).write_volatile(0) };
+        poke(at + i * PAGE_SIZE, 0);
     }
     at
 }

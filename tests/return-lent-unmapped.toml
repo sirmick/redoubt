@@ -8,11 +8,11 @@ timeout_secs = 30
 # On the old kernel, unmap cleared the lent PTE, and the borrower's return then asserted and
 # halted the machine. PANIC is always forbidden; the verdict is log-server's DONE line naming PID
 # 4 and its clean power-off, which a panicked kernel never reaches. The lender's own lines are
-# progress: both the unmap and the remap must be refused (ShareViolation), and its page must come
+# progress: both the unmap and the remap must be refused (InvalidArgument), and its page must come
 # back intact.
 expect = [
-    '^\[pid 4\] \[lender\] while lent: unmap Err\(ShareViolation\), remap Err\(ShareViolation\)$',
-    '^\[pid 4\] \[lender\] lend returned Ok\(MemoryReturned\(.*\)\), page intact: true$',
+    '^\[pid 4\] \[lender\] while lent: unmap Err\(InvalidArgument\), remap Err\(InvalidArgument\)$',
+    '^\[pid 4\] \[lender\] lend returned Ok, page intact: true$',
     '^\[server\] done: reported by pid 4; still serving$',
 ]
 forbid = ['intact: false$', 'unmap Ok']

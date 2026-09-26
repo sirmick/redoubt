@@ -6,33 +6,35 @@
 #![no_main]
 
 use test_programs::uaf::*;
-use test_programs::{log, Logger};
-use redoubt_abi::{MemoryFlags, Message, SID};
+use test_programs::{Logger, log, rd};
 
 const PAGES: usize = 64;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
-    let cid = redoubt_abi::connect(SID::from_bytes(HOLDER_ADDRESS).unwrap()).expect("connect failed");
-
+    let call = |op| rd::call_waiting(rd::BOOT_ENDPOINT, &rd::body([op, 0, 0, 0]), None, rd::FOREVER);
     // Ordering: the holder answers SYNC only once it is past receiving the lend. Then give
     // the victim's termination time to complete before we try to reclaim its frame.
-    redoubt_abi::send_message(cid, Message::new_blocking_scalar(SYNC, 0, 0, 0, 0)).expect("sync failed");
+    call(SYNC).expect("sync failed");
     test_programs::wait_ms(100);
-
     let mut grabbed = 0;
     for _ in 0..PAGES {
-        if let Ok(page) = redoubt_abi::map_memory(None, None, 4096, MemoryFlags::R | MemoryFlags::W) {
+        if let Ok(page) = rd::map_anon(rd::PAGE_SIZE, rd::rw()) {
             // Touch every page so it is really backed, then stamp it.
-            let base = page.as_mut_ptr();
-            unsafe { core::ptr::copy_nonoverlapping(GRABBER_SENTINEL.as_ptr(), base, GRABBER_SENTINEL.len()) };
+            // SAFETY: `page` is this process's own fresh read-write page.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    GRABBER_SENTINEL.as_ptr(),
+                    page as *mut u8,
+                    GRABBER_SENTINEL.len(),
+                )
+            };
             grabbed += 1;
         }
     }
     log!(logger, "[grabber] stamped {} pages", grabbed);
-
-    redoubt_abi::send_message(cid, Message::new_blocking_scalar(CHECK, 0, 0, 0, 0)).expect("check failed");
+    call(CHECK).expect("check failed");
     test_programs::park()
 }
 

@@ -1,18 +1,19 @@
-description = "Faulting in more reserved anonymous memory than there is RAM terminates the one process, not the kernel (verdict: survival only)"
+description = "Mapping and touching more anonymous memory than there is RAM is the one process's OutOfMemory, not the kernel's end (verdict: survival only)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 # 32 MiB so the attacker (64 MiB of touches) exhausts RAM in milliseconds.
 memory_mib = 32
 # PID 2 log-server; PID 3 survivor, second, so that it and not the attacker holds the boot
-# endpoint's receive right; PID 4 touch-beyond-ram (dies).
+# endpoint's receive right; PID 4 touch-beyond-ram (runs out, gives it back, exits).
 programs = ["log-server", "touch-beyond-ram-survivor", "touch-beyond-ram"]
 timeout_secs = 30
 # The fault-path allocator once `.expect()`ed and halted the machine on OOM. PANIC is always
 # forbidden; the verdict is the survivor's report, log-server's DONE line naming it, and the clean
-# power-off, which a panicked kernel never reaches. The attacker prints BREACH only if it never
-# died.
+# power-off, which a panicked kernel never reaches. The attacker prints BREACH only if it was
+# never refused.
 expect = [
-    '^\[pid 4\] \[attacker\] touching 16384 reserved pages$',
+    '^\[pid 4\] \[attacker\] mapping and touching up to 16384 pages$',
+    '^\[pid 4\] \[attacker\] refused after \d+ pages: Some\(OutOfMemory\)$',
     '^\[pid 3\] \[survivor\] still scheduled after the attacker exhausted RAM$',
     '^\[server\] done: reported by pid 3; still serving$',
 ]
