@@ -57,11 +57,13 @@ The attack test: after a remove, the file's other fids get `removed` on read, wr
 Status: planned · M1 (separation and containment)
 
 `fsd` serves typed messages on its 9P endpoint for what 9P2000 does not express, with the same
-label and quota checks as 9P:
+label and quota checks as 9P, and exactly these four:
 
 - **`rename(old_dir, old_name, new_dir, new_name)`**: atomic, within one volume; `old_dir` and
-  `new_dir` are the caller's fids on directories. Renaming a directory into itself is refused. A
-  move across volumes is not `fsd`'s: the client copies and removes, which is not atomic.
+  `new_dir` are the caller's fids on directories. Renaming a directory into itself is refused. There
+  is no rename across volumes: one `fsd` serves one volume and cannot act on another's files, so
+  the client's `File.rename` returns `{:error, :exdev}`, and a move is the caller's own copy and
+  remove, which is not atomic.
 - **`copy_file(src_fid, dst_dir, dst_name)`**: copies a file within the volume and replies with the
   bytes copied.
 - **`set_attr(fid, attr, value)`** and **`get_attr(fid, attr)`**: a file's or directory's user
@@ -75,10 +77,7 @@ The table: [libs/wire/tables/fsd.md](../../libs/wire/tables/fsd.md).
 `too_large`. Attribute types 0 to 15 are `fsd`'s own (mtime, qid version, and later use), and
 `set_attr` refuses them; types 16 to 255 are the user's.
 
-**Open:** cross-directory rename. The recommendation is the typed `rename` above, atomic within
-a volume, with a move across volumes left to the client's copy and remove (reported like POSIX's
-`EXDEV`). The alternative is copy and remove everywhere: never atomic, so a crash mid-rename leaves
-both copies or neither. Not decided.
+**Open:** none.
 
 ### Quotas
 

@@ -465,10 +465,11 @@ Status: built · partly tested: the runtime's exit on a refused block is read fr
 - **A confined boot is checked once.** Capabilities handed over after boot are outside the check;
   a system server that hands one across label sets breaks confinement without the kernel noticing.
 - **Every child pays for a copy of its image.** There is no shared text: a launcher copies the ELF
-  into pages charged to the child, and the stub copies each segment again. That cost is the reason
-  the steward may cache a VM image. Whether the stub may instead map image pages read-only from a
-  shared cache is open: such a cache, shared between principals, would be a cross-principal timing
-  surface ([a shared image cache](../beyond/image-cache.md)).
+  into pages charged to the child, and the stub copies each segment again. This is decided, for
+  M1 (separation and containment) and after. A read-only image-page cache shared between principals
+  is not planned: it would be a cross-principal timing surface
+  ([a shared image cache](../beyond/image-cache.md)). The steward may still cache an image's
+  bytes, to avoid reading them again, because each child still gets its own copy.
 - **A blame can be lost.** If the steward does not take `init`'s blame within its timeout, the
   crash is reported on the console but counts toward no lockout.
 - **The mediators are trusted across labels.** The steward and `sshd` are the confinement check's
