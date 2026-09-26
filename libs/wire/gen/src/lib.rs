@@ -1170,7 +1170,7 @@ mod tests {
     /// The real tables: `ninep_common` has a handle reply and a string field; `startup` has no
     /// inline message.
     #[test]
-    fn fenced_tables_parse() {
+    fn tables_parse() {
         let mut found = Vec::new();
         for note in ["libs/wire/tables/ninep_common.md", "libs/wire/tables/startup.md"] {
             let text = std::fs::read_to_string(repo_root().join(note)).unwrap();
