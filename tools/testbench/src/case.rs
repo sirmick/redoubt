@@ -135,9 +135,6 @@ pub struct Boot {
     /// checks on raw-pointer calls and every `debug_assert!` run (a failure is a `PANIC`).
     #[serde(default)]
     pub debug_assertions: bool,
-    /// Device grants written into the bundle's manifest (see DEVICE-GRANTS.md).
-    #[serde(default)]
-    pub grant: Vec<Grant>,
     /// Corrupt the bundle after signing, to test that the loader rejects it.
     #[serde(default)]
     pub tamper_bundle: bool,
@@ -263,34 +260,6 @@ pub enum Step {
     Wait(String),
     /// Close the session's input, read its output until ssh exits, and require this status.
     Exit(i32),
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Grant {
-    /// The program (bundle file name) these grants apply to.
-    pub program: String,
-    /// MMIO regions as "hex-base:hex-len", e.g. "0x10000000:0x1000".
-    #[serde(default)]
-    pub mmio: Vec<String>,
-    /// Interrupt numbers.
-    #[serde(default)]
-    pub irq: Vec<u32>,
-}
-
-impl Grant {
-    /// The manifest lines for this grant (see DEVICE-GRANTS.md).
-    pub fn manifest_lines(&self) -> Vec<String> {
-        let mut lines = Vec::new();
-        for region in &self.mmio {
-            let (base, len) = region.split_once(':').unwrap_or((region, "0x1000"));
-            lines.push(format!("{} mmio {} {}", self.program, base, len));
-        }
-        for irq in &self.irq {
-            lines.push(format!("{} irq {}", self.program, irq));
-        }
-        lines
-    }
 }
 
 #[derive(Debug, Deserialize)]

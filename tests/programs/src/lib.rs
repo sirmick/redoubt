@@ -13,27 +13,14 @@
 
 use core::fmt::Write;
 
-use redoubt_abi::CID;
-
 pub mod console;
 pub mod logsrv;
 pub mod rd;
 pub mod sched;
 pub mod spawn;
 
-/// There is no name server yet, so the log server uses a well-known address.
-pub const SERVER_ADDRESS: &[u8; 16] = b"redoubt-ipc-tst!";
-
-/// A legacy connection to `log-server`, for the programs that still send it legacy messages.
-pub fn connect_legacy() -> CID {
-    let sid = redoubt_abi::SID::from_bytes(SERVER_ADDRESS).unwrap();
-    redoubt_abi::connect(sid).expect("couldn't connect to log-server")
-}
-
 /// Operations on the log endpoint (`logsrv`), word 0 of a message; word 1 is a byte count.
 pub mod op {
-    /// Scalar: print the four arguments.
-    pub const PRINT_SCALARS: usize = 1;
     /// Call with words: reply with the sum of words 1-3.
     pub const SUM: usize = 2;
     /// Call with a lend: print word 1 bytes of it as UTF-8.

@@ -45,7 +45,6 @@ pub enum Line {
     Up,
     ConsoleIrq,
     Listening,
-    Scalars([usize; 4]),
     MovedPage(usize),
     Unexpected(usize),
     /// A byte that arrived on the UART (input from the bench), printed escaped.
@@ -60,7 +59,6 @@ pub fn say(line: Line) {
         Line::Up => console::line(format_args!("[server] PID {FIRST_PID} up")),
         Line::ConsoleIrq => console::line(format_args!("[server] holding the console irq")),
         Line::Listening => console::line(format_args!("[server] PID {FIRST_PID} listening")),
-        Line::Scalars([a, b, c, d]) => console::line(format_args!("[server] scalars: {a} {b} {c} {d}")),
         Line::MovedPage(at) => {
             console::line(format_args!("[server] moved page at {at:#x}; its text follows"))
         }
@@ -152,47 +150,6 @@ pub fn serve(mut extra: impl FnMut(&Message) -> bool) -> ! {
                     rd::reply(id, &rd::body([rd::Error::InvalidArgument as usize, 0, 0, 0])).ok();
                 }
             }
-        }
-    }
-}
-
-/// `log-server`'s legacy server, for the programs not yet on the log endpoint.
-pub fn serve_legacy() -> ! {
-    use redoubt_abi::{MemoryMessage, Message as Legacy};
-
-    fn legacy_text(msg: &MemoryMessage) -> &str {
-        let len = msg.valid.map_or(0, |v| v.get());
-        // SAFETY: the kernel lent or moved us `msg.buf`; `valid` is at most its length.
-        let bytes = unsafe { core::slice::from_raw_parts(msg.buf.as_ptr(), len.min(msg.buf.len())) };
-        core::str::from_utf8(bytes).unwrap_or("<invalid utf-8>")
-    }
-
-    let sid = redoubt_abi::create_server_with_address(crate::SERVER_ADDRESS).expect("couldn't create server");
-    loop {
-        // Dropping the envelope returns lent memory to the sender and frees moved memory.
-        let mut envelope = redoubt_abi::receive_message(sid).expect("couldn't receive message");
-        let sender = envelope.sender;
-        let pid = u64::from(sender.pid().map_or(0, |pid| pid.get()));
-        match &mut envelope.body {
-            Legacy::Scalar(m) if m.id == op::PRINT_SCALARS => {
-                say(Line::Scalars([m.arg1, m.arg2, m.arg3, m.arg4]))
-            }
-            Legacy::BlockingScalar(m) if m.id == op::SUM => {
-                redoubt_abi::return_scalar(sender, m.arg1 + m.arg2 + m.arg3 + m.arg4)
-                    .expect("couldn't reply");
-            }
-            Legacy::Borrow(m) if m.id == op::PRINT => console::relay(pid, legacy_text(m)),
-            Legacy::MutableBorrow(m) if m.id == op::UPPERCASE => {
-                let len = m.valid.map_or(0, |v| v.get()).min(m.buf.len());
-                // SAFETY: the kernel lent us `m.buf` writable until we drop the envelope.
-                unsafe { core::slice::from_raw_parts_mut(m.buf.as_mut_ptr(), len) }.make_ascii_uppercase();
-            }
-            Legacy::Move(m) if m.id == op::PRINT_AND_KEEP => {
-                say(Line::MovedPage(m.buf.as_ptr() as usize));
-                console::relay(pid, legacy_text(m));
-            }
-            Legacy::Scalar(m) | Legacy::BlockingScalar(m) => say(Line::Unexpected(m.id)),
-            Legacy::Borrow(m) | Legacy::MutableBorrow(m) | Legacy::Move(m) => say(Line::Unexpected(m.id)),
         }
     }
 }

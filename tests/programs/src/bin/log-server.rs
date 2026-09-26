@@ -46,8 +46,6 @@ fn uart_irq(_: usize) {
     }
 }
 
-fn legacy(_: usize) { logsrv::serve_legacy() }
-
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     logsrv::start();
@@ -60,7 +58,6 @@ pub extern "C" fn _start() -> ! {
         test_programs::wait_ms(1);
     }
     logsrv::say(Line::ConsoleIrq);
-    rd::thread(legacy, 0).expect("couldn't spawn the legacy server");
     logsrv::say(Line::Listening);
     let mut given = false;
     logsrv::serve(|m| {

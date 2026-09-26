@@ -1,6 +1,7 @@
 //! Hostile process arguments and creator accounting, checked by a trusted parent.
-//! Only the loader's parent has UART/reset grants. Children are trusted probes: the parent
-//! observes kernel errors, usage, delivered handle revocation and exit notices, then resets.
+//! Only the loader's parent holds the UART and Reset handles. Children are trusted probes: the
+//! parent observes kernel errors, usage, delivered handle revocation and exit notices, then
+//! resets.
 #![no_std]
 #![no_main]
 

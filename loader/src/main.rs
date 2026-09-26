@@ -15,7 +15,6 @@
 mod alloc;
 mod args;
 mod dt;
-mod grants;
 mod verify;
 mod image;
 mod paging;
@@ -184,12 +183,6 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     let bundle = verify::authenticated_bundle(initrd);
     println!("  bundle signature ok ({} bytes)", bundle.len());
     let archive = TarArchiveRef::new(bundle).expect("boot bundle is not a tar archive");
-    // The device-grant manifest, if present, is a `grants` entry (not a process).
-    let manifest = archive
-        .entries()
-        .find(|e| e.filename().as_str() == Ok("grants"))
-        .and_then(|e| core::str::from_utf8(e.data()).ok())
-        .unwrap_or("");
     let mut entries = archive.entries();
 
     // The kernel is PID 1 and the first entry of the bundle.
@@ -221,9 +214,12 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     for entry in entries {
         let name = entry.filename();
         let name = name.as_str().unwrap_or("?");
-        if name == "grants" {
-            continue;
-        }
+        // A process reaches a device only through its device handle, so a bundle carrying a
+        // `grants` manifest is refused rather than booted as if it granted something.
+        assert!(
+            name != "grants",
+            "the boot bundle holds a `grants` entry: devices are reached only through handles"
+        );
         assert!(
             count < MAX_PROCESSES,
             "the boot bundle has more than the {} processes the kernel has room for",
@@ -258,8 +254,6 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
         args.word(name.len() as u32);
         args.bytes(name.as_bytes());
         args.end();
-
-        grants::emit(&mut args, manifest, name, pid);
     }
     processes[0] = kernel_process;
     args.finish(ram.start, ram.len(), b"sram");

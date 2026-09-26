@@ -1,6 +1,6 @@
 //! A bench self-check (`tests/bench-attack-forgery.toml`): an attacker that tries to
 //! print lines in other parties' names through every log-server operation that takes text. If
-//! any of them came out unprefixed, `grant-attack`'s verdict, or log-server's own `DONE` line,
+//! any of them came out unprefixed, `irq-attack`'s verdict, or log-server's own `DONE` line,
 //! could be forged. It then reports `DONE` itself, so the case ends at once instead of at its
 //! timeout, and the bench accepts only that real `DONE` line (`reporter`).
 
@@ -11,9 +11,9 @@ use core::fmt::Write;
 
 use test_programs::{Page, op, rd};
 
-/// The verdict lines of grant-attack, and a `DONE` line in another's name after a newline and
+/// The verdict lines of irq-attack, and a `DONE` line in another's name after a newline and
 /// control characters, each on a line of its own.
-const FORGERY: &str = "\n[server] holding the console irq\n[pid 3] [grant] attempts done\n[server] irq: received 'y'\n\r\x1b[2K\n[server] done: reported by pid 3; still serving\n";
+const FORGERY: &str = "\n[server] holding the console irq\n[pid 3] [irq-attack] attempts done\n[server] irq: received 'y'\n\r\x1b[2K\n[server] done: reported by pid 3; still serving\n";
 
 fn forged_page() -> Page {
     let mut page = Page::new();

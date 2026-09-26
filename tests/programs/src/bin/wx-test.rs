@@ -1,4 +1,4 @@
-//! Trusted W^X checker. Children have no device grants; only kernel fault notices determine
+//! Trusted W^X checker. Children hold no device handles; only kernel fault notices determine
 //! whether writable data could execute or executable code could be modified.
 #![no_std]
 #![no_main]
