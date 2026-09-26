@@ -89,7 +89,6 @@ pub fn process_characters<R: SerialRead>(serial: &mut R) {
 }
 
 fn handle_character(b: u8) {
-    use crate::services::ArchProcess;
 
     match b {
         b'i' => {
@@ -136,27 +135,11 @@ fn handle_character(b: u8) {
         b'p' => {
             println!("Printing processes");
             crate::services::SystemServices::with(|system_services| {
-                let current_pid = system_services.current_pid();
                 for process in &system_services.processes {
                     if !process.free() {
-                        process.activate().unwrap();
-                        let mut connection_count = 0;
-                        ArchProcess::with_inner(|process_inner| {
-                            for conn in &process_inner.connection_map {
-                                if conn.is_some() {
-                                    connection_count += 1;
-                                }
-                            }
-                        });
-                        println!(
-                            "{:x?} conns:{}/32 {}",
-                            process,
-                            connection_count,
-                            system_services.process_name(process.pid).unwrap_or("")
-                        );
+                        println!("{:x?} {}", process, system_services.process_name(process.pid).unwrap_or(""));
                     }
                 }
-                system_services.get_process(current_pid).unwrap().activate().unwrap();
             });
         }
         b'P' => {
@@ -201,24 +184,6 @@ fn handle_character(b: u8) {
             });
             println!("{} k total", total_bytes / 1024);
         }
-        b's' => {
-            println!("Servers in use:");
-            crate::services::SystemServices::with(|system_services| {
-                println!(" idx | pid | process              | sid");
-                println!(" --- + --- + -------------------- | ------------------");
-                for (idx, server) in system_services.servers.iter().enumerate() {
-                    if let Some(s) = server {
-                        println!(
-                            " {:3} | {:3} | {:20} | {:x?}",
-                            idx,
-                            s.pid,
-                            system_services.process_name(s.pid).unwrap_or(""),
-                            s.sid
-                        );
-                    }
-                }
-            });
-        }
         b'h' => print_help(),
         _ => {}
     }
@@ -235,5 +200,4 @@ fn print_help() {
     println!(" p  | print all processes");
     println!(" P  | print all processes and threads");
     println!(" r  | report RAM usage of all processes");
-    println!(" s  | print all allocated servers");
 }

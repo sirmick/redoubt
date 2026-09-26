@@ -422,16 +422,6 @@ impl MemoryManager {
         }
     }
 
-    /// Whether `n` frames of `from`'s can become `to`'s: the budget paying for them changes
-    /// only if the two live in different budgets.
-    pub fn can_take_frames(&self, from: PID, to: PID, n: u64) -> bool {
-        match self.budget_of(to) {
-            None => true,
-            Some(to_budget) if self.budget_of(from) == Some(to_budget) => true,
-            Some(to_budget) => n <= self.budget(to_budget).free_pages(),
-        }
-    }
-
     /// Every frame of `pid`'s was just freed at once (`release_all_memory_for_process`).
     pub fn uncharge_all_frames(&mut self, pid: PID) {
         if let Some(budget) = self.budget_of(pid) {

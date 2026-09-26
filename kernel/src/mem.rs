@@ -431,48 +431,6 @@ impl MemoryManager {
         crate::mem::memory_range(virt as usize, size)
     }
 
-    /// Attempt to allocate a single page from the default section.
-    /// Note that this will be backed by a real page.
-    pub fn map_zeroed_page(&mut self, pid: PID, is_user: bool) -> Result<*mut usize, redoubt_abi::Error> {
-        let virt =
-            self.find_virtual_address(core::ptr::null_mut(), PAGE_SIZE, redoubt_abi::MemoryType::Default)?
-                as usize;
-
-        // Grab the next available page.  This claims it for this process.
-        let phys = self.alloc_page(pid)?;
-
-        // Actually perform the map.  At this stage, every physical page should be owned by us.
-        if let Err(e) = crate::arch::mem::map_page_inner(
-            self,
-            pid,
-            phys as usize,
-            virt as usize,
-            redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W,
-            false,
-        ) {
-            self.release_page(phys as *mut usize, pid).ok();
-            return Err(e);
-        }
-
-        let virt = virt as *mut usize;
-
-        // Zero-out the page
-        let range_start = virt;
-        let range_end = range_start.wrapping_add(PAGE_SIZE / core::mem::size_of::<usize>());
-        // SAFETY: `bzero` zeroes the page just mapped at `virt`, which the kernel owns until handed out.
-        unsafe {
-            crate::mem::bzero(range_start, range_end);
-        };
-        if is_user {
-            crate::arch::mem::hand_page_to_user(virt as _)?;
-        }
-        // klog!(
-        //     "Mapped {:08x} -> {:08x} (user? {})",
-        //     phys as usize, virt as usize, is_user
-        // );
-        Ok(virt)
-    }
-
     pub fn is_main_memory(&self, phys: *mut u8) -> bool {
         (phys as usize) >= self.ram_start && (phys as usize) < self.ram_start + self.ram_size
     }
@@ -1289,19 +1247,4 @@ pub(crate) fn check_map_flags(flags: MemoryFlags) -> Result<(), redoubt_sys::Err
         return Err(redoubt_sys::Error::InvalidArgument);
     }
     Ok(())
-}
-
-/// Zero the memory in `start..end` with volatile writes.
-///
-/// # Safety
-/// `start..end` must be a single valid, writable, `T`-aligned allocation the caller owns.
-pub unsafe fn bzero<T>(mut start: *mut T, end: *mut T)
-where
-    T: Copy,
-{
-    while start < end {
-        // NOTE(volatile) to prevent this from being transformed into `memclr`
-        core::ptr::write_volatile(start, core::mem::zeroed());
-        start = start.offset(1);
-    }
 }
