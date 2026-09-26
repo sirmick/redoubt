@@ -1,5 +1,7 @@
 # DOC1 lead handoff
 
+Updated by the second lead after the kernel set (below).
+
 The first lead handed off early: the plan phase (surveys, the manifest, the inventory map)
 filled its context before the kernel set began. A fresh lead continues from here.
 
@@ -20,24 +22,35 @@ filled its context before the kernel set began. A fresh lead continues from here
   (manifest section J). The orchestrator merges them. Once the checker lands, run
   `cargo run -p redoubt-doccheck -- --pages docs/kernel` before every commit.
 
-## Next: the kernel set (manifest H, step W3)
-Order: README, objects, memory, budgets, scheduling, timer, processes, devices, boot,
-memory-layout, abi, invariants, model. ipc.md is done; adjust it as neighbours land. Commit every
-2-3 pages, and never with more than about 50K uncommitted. Stage by path. Send the orchestrator
-a progress message after each commit (hash, pages).
+## The kernel set: written (step W3 done)
+All 14 pages of `docs/kernel/` are committed: README, objects, ipc, memory, budgets,
+scheduling, timer, processes, devices, boot, memory-layout, abi, invariants, model
+(`cd48e40ff`, `df0d1fd71`, `340a7d993`, `c53f651c7`). SUMMARY lists them all.
+`doccheck --pages docs/kernel` is clean except links to pages outside the set (servers,
+TENETS, testbench, todo, beyond); `mdbook build docs` is clean.
+- How they were written: one drafter per page read the code and tests (brief kept at
+  `/tmp/doc1-kernel/BRIEF.md`, notes per page at `/tmp/doc1-kernel/<page>.notes.md`; /tmp is
+  not durable). The lead read and edited README, objects, budgets, timer, devices, processes,
+  memory, scheduling and boot in full. memory-layout, abi, invariants and model were reviewed
+  from their notes and the checker only: the red team (R1) should read those four closely.
+- Rule IDs as written are recorded in the manifest's B3. The servers set starts at R24.
+- Attack gaps: `todo/kernel-attack-gaps.md`, per page. `boot.md` links it as
+  `docs/todo/kernel-attack-gaps.md`, so W6 moves it there.
+- New follow-up slugs the pages link are listed in the manifest's C7 (W6 writes them).
+- Code findings sent to the orchestrator for routing (not doc questions): `set_flags` makes
+  device and DMA pages executable (R11 gap); `map_anon`'s quadratic search before any budget
+  check (a machine-wide stall); `boot_budgets` leaves `root`'s frame uncharged (a one-page
+  overcommit that ends in a kernel stop); a deadline's destruction is billed only in part, and
+  a weight-0 budget's not at all. The pages state each as a residual with a todo link; if the
+  code is fixed first, update the page and its status line.
+- Checker notes: C4 flags `ed25519-compact` as a hash (boot.md writes `ed25519_compact`);
+  C5(c) does not match a short name wrapped across two lines (the pages keep each citation on
+  one line).
+- Small leftovers for the editor: GLOSSARY `PID` sits after `powerbox` (alphabetical order);
+  mutation variants named `K5b*` carry a package ID in their names (rename at switch-over, e.g.
+  `Dma*`, and update devices.md, invariants.md and model.md).
 
-Method that worked for ipc.md:
-- Read the module head (`//!`) and the functions a section describes.
-- For every `tested:` name, confirm that the test actually attacks the section's claim. Grep
-  `tests/programs/src/bin/*.rs` and the case's `expect` lines; a case description is not
-  evidence.
-- Where only the model attacks a claim, write "partly tested: ... attacked only in the model"
-  and add one line to `todo/kernel-attack-gaps.md`.
-- Test names:
-  - `bench:<tests stem>`
-  - `host:<package>::<fn>`: model tests are `host:redoubt-model::...`
-  - `mutation:<variant of model/src/mutation.rs>`
-  - `fuzz:<package>/<target>`
+## Next: review R1, then the servers and userland sets (W4, W5)
 
 ## Fixed decisions a writer must keep
 - New kernel IDs are candidates; you may merge or drop one while writing, and must record the
