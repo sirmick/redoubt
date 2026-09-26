@@ -9,7 +9,9 @@ gap: the page's section, the claim, and what no case attacks.
 ### ipc.md
 - R1 (flow): a call or send between user budgets with different labels is attacked only in the model.
 - R2 (fair waiting): turns between several groups are attacked only in the model.
+- What `receive` returns: a record made unwritable while its thread waits is not attacked (`process-attack` attacks only a record bad when `receive` starts).
 - How a call completes, R13 (one outcome per call): completion races between harts are not attacked.
+- R14 (unforgeable sender): every case delivers account 0 and no labels; a non-zero account or a label set reaching the receiver unchanged is attacked only in the model (`MsgNoLabels`, `MsgAccountZero`).
 
 ### README.md
 - What the kernel keeps: that no driver, file system, naming or policy code sits in the kernel rests on the source map, not a case.
@@ -27,9 +29,13 @@ gap: the page's section, the claim, and what no case attacks.
 
 ### budgets.md
 - R6 (charging): an endpoint's page charge is attacked only in the model.
+- Deadlines: floods of weight-0 deadline budgets past the 64 of `sched-timer-flood` are not attacked ([deadline destruction billing](deadline-destroy-billing.md)).
 - Class is trust, not order: that the scheduler never reads class is argued from the code.
 - Deadlines: a process entering the kernel in a tight loop to put its deadline off is not attacked.
+- Root, system and users: no case checks the boot table (`root`'s 63 processes, the weights, `INIT_WEIGHT`).
 - R10 (destruction): destroying the budget a device object is charged to (the device destroyed, every handle closed) is not checked by a case.
+- R10: no case destroys an endpoint's owner while a receiver waits on it, and no program checks `receive` returning `Dead` ([endpoint destroyed with open calls](endpoint-destroyed-open-calls.md)).
+- R6 (charging): `root`'s own page charged to no one, and a process object's PID outside every process limit, have no case ([root's own page](boot-root-frame.md), [PID pool pinning](pid-pool-pinning.md)).
 
 ### timer.md
 - Time: that `time_now` counts from the kernel's start is not checked (only monotonic, never early, linear with `rdtime`).
