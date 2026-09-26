@@ -1,4 +1,4 @@
-//! Redoubt's wire formats (docs/WIRE.md), shared by every server:
+//! Redoubt's wire formats (servers/wire.md), shared by every server:
 //!
 //! - [`ninep`]: plain 9P2000 with a fixed `msize` of 64 KiB;
 //! - [`typed`]: the typed-message framing, used by the codecs in [`proto`] that

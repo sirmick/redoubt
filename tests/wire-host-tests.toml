@@ -1,0 +1,3 @@
+description = "the wire generator and codecs: the table parser's refusals, the generated Rust matching the checked-in files (the drift check), the codecs against the shared vectors"
+kind = "host-tests"
+packages = ["redoubt-wire-gen", "redoubt-wire"]
