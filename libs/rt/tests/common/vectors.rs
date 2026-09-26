@@ -1,4 +1,4 @@
-//! The 9P2000 conformance vectors (`redoubt/wire/vectors/9p.txt`, WP-W1) run against a real
+//! The 9P2000 conformance vectors (`redoubt/wire/vectors/9p.txt`) run against a real
 //! server, which is what that file says they are for: "for servers' conformance tests too".
 //!
 //! Every line is put at the front of a lend and handed to the server exactly as a client's 9P

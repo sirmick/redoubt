@@ -1,5 +1,5 @@
-//! The kernel's stride queue: its arithmetic and its ranks (KERNEL-SPEC.md R7, R12; the WP-K5
-//! owner decisions). One flat queue over every runnable budget, lowest pass first.
+//! The kernel's stride queue: its arithmetic and its ranks (`kernel/scheduling.md` R12,
+//! `kernel/budgets.md` R7). One flat queue over every runnable budget, lowest pass first.
 //!
 //! This crate holds only the rules, so they can be host-tested and checked against the executable
 //! model (`tests/differential.rs`). The kernel keeps each budget's [`State`] in the budget's own
@@ -18,8 +18,8 @@
 //!   reconcile's wake first; within one reconcile the lower id first; requeues FIFO.
 //! - **Inheritance**: a child enters at `max(floor, parent pass)` ([`entry`]); when destroyed, its work since
 //!   entry is added to its parent's lead, normalized by weight ([`lift`]).
-//! - **Deschedule**: a budget taken off the CPU is charged what it ran, and at least [`MIN_CHARGE`] (owner
-//!   decision 5: a run too short for the clock to see is not free).
+//! - **Deschedule**: a budget taken off the CPU is charged what it ran, and at least [`MIN_CHARGE`] (a run too
+//!   short for the clock to see is not free).
 //!
 //! [`Cpu`] is the wiring itself: the budget whose runtime is accruing, when it is folded, and the
 //! order of the steps at a deschedule, a pick, a creation, a weight change and a destruction. The
@@ -29,7 +29,7 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
-/// Stride scheduling numerator (KERNEL-SPEC.md, Constants).
+/// Stride scheduling numerator (`kernel/scheduling.md`).
 pub const STRIDE: u64 = 1 << 20;
 
 /// The most runtime one charge counts: `RUNTIME_CAP · STRIDE < 2^60`, so a charge plus a

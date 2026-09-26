@@ -1,5 +1,5 @@
-//! Typed-message dispatch (WIRE.md) over `redoubt-wire`'s generated codecs: decode the request,
-//! hand it to the server, and reply with the encoded reply or an error status.
+//! Typed-message dispatch (servers/wire.md) over `redoubt-wire`'s generated codecs: decode the
+//! request, hand it to the server, and reply with the encoded reply or an error status.
 //!
 //! The generated modules share a shape (`Message::decode`, `Reply::encode`, `ErrorCode::encode`)
 //! but no trait, so a server names its protocol by implementing [`Protocol`], a few lines.
@@ -92,7 +92,7 @@ pub trait Protocol {
 /// A successful answer: the reply, the handles that go with it, and what happens to them here.
 pub struct Answer<R> {
     pub reply: R,
-    /// Copied into the caller with the reply (KERNEL-SPEC.md, Messages).
+    /// Copied into the caller with the reply (kernel/ipc.md, "Messages").
     pub handles: Handles,
     /// Close `handles` here once the reply is sent: true for handles made for the caller (a
     /// minted connection), false for handles the server keeps using.
@@ -150,7 +150,7 @@ pub fn answer<P: Protocol, S: TypedServer<P>>(
 ) -> Outcome {
     let none = Handles::new();
     // A request that does not decode, whose reply does not fit the lend, or missing a handle
-    // (revoked on its way: R10) is malformed: status 1 in every protocol (answer 42; WIRE.md).
+    // (revoked on its way: R10) is malformed: status 1 in every protocol (servers/wire.md).
     let malformed = super::MALFORMED;
     let handles = match present(handles) {
         Ok(handles) => handles,

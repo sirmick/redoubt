@@ -161,7 +161,7 @@ fn a_disconnect_frees_its_fids_and_every_connection_minted_under_it() {
     assert_eq!(t.disconnect(&mut k, &a, id1), Err(NOT_YOURS));
 }
 
-/// Red team C1: a disconnect frees a whole subtree in place, however its connections were
+/// A red-team case: a disconnect frees a whole subtree in place, however its connections were
 /// interleaved with others when minted, and leaves no connection under one that is gone.
 #[test]
 fn a_disconnect_frees_an_interleaved_subtree_and_leaves_no_orphan() {
@@ -285,8 +285,9 @@ fn unasked_handles_are_closed_and_other_opcodes_are_malformed() {
 
 #[test]
 fn minted_connections_are_admitted_and_fold_into_the_share_they_came_from() {
-    // Answer 90's attack on a 9P server: an agent in its sponsor's bucket floods it with fids,
-    // through as many connections as it can mint for itself; its sponsor still opens files.
+    // The attack on R26 (servers/serving.md) on a 9P server: an agent in its sponsor's bucket
+    // floods it with fids, through as many connections as it can mint for itself; its sponsor
+    // still opens files.
     let mut t = T::with_limit(12);
     let mut k = FakeKernel::new();
     let steward = caller(9, 0, &[]);
@@ -334,8 +335,8 @@ fn a_client_at_its_connection_cap_costs_the_server_no_walk() {
     t.connect(&mut k, &caller(2, 2002, &[]), "a/b", 0).unwrap();
 }
 
-/// QUESTIONS.md 118: byte quotas are the file server's; the skeleton hands it every grant and
-/// every disconnect.
+/// Byte quotas are the file server's (servers/fsd.md, "Quotas"); the skeleton hands it every
+/// grant and every disconnect.
 #[test]
 fn a_quota_is_the_file_servers_to_grant_and_a_disconnect_reaches_it() {
     let (mut t, mut k) = (T::new(), FakeKernel::new());
@@ -395,7 +396,7 @@ fn random_common_requests_never_panic() {
     }
 }
 
-/// `mint_rooted` (answer 174: `ipd`'s `grant`): a connection rooted where the file server says,
+/// `mint_rooted` (`ipd`'s `grant`): a connection rooted where the file server says,
 /// minted in the same table as `new_connection`'s, admitted, freed by `disconnect` like any other,
 /// and undone by `unmint`.
 #[test]

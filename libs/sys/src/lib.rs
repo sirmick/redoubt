@@ -1,8 +1,9 @@
 //! The Redoubt system call ABI, shared by the kernel and every process.
 //!
-//! The calls, errors and constants are KERNEL-SPEC.md's, under the same names. This crate only
-//! says how they travel: which registers, which records, which numbers (KERNEL-SPEC.md, ABI: the
-//! spec owns the calls, this crate their encoding). What a call *does* is the kernel's business.
+//! The calls, errors and constants are those of docs/kernel/abi.md, under the same names. This
+//! crate only says how they travel: which registers, which records, which numbers (kernel/abi.md:
+//! the kernel pages own the calls, this crate their encoding). What a call *does* is the kernel's
+//! business.
 //!
 //! # Registers
 //!
@@ -56,10 +57,11 @@
 //! Handles going in are all handles. Handles coming out ([`ReceivedHandles`]: in a message, and in
 //! the reply `call` writes back) may have a slot of 0 within the count, which keeps its place: a
 //! handle revoked while its message was in flight (R10), or a reply's handle the caller could not
-//! take (answer 116; its `call` then returns `OutOfMemory`).
+//! take (R4; its `call` then returns `OutOfMemory`).
 //!
 //! A record's page must already be backed: the kernel does not allocate while it decodes, so an
-//! untouched page is `InvalidArgument` (answer 115; the check is the kernel's).
+//! untouched page is `InvalidArgument` (kernel/abi.md, "The record check"; the check is the
+//! kernel's).
 //!
 //! Records can overlap the pages a call acts on; the kernel must copy a record in before it
 //! changes those pages, and copy results out only to memory still the caller's. For example a
@@ -70,13 +72,13 @@
 //!
 //! Decoding in the kernel's direction ([`Call::decode`], [`Body::decode`],
 //! [`BudgetSpec::decode`]) rejects every malformed value with an error and never panics
-//! (KERNEL-SPEC.md I14). It checks the encoding (unknown numbers, tags and flag bits, values too
-//! wide for their field, lists longer than their array, non-zero unused registers and slots) and
-//! the few rules a single value states by itself: no W+X flags, no badge or message id 0,
+//! (kernel/invariants.md I14). It checks the encoding (unknown numbers, tags and flag bits, values
+//! too wide for their field, lists longer than their array, non-zero unused registers and slots)
+//! and the few rules a single value states by itself: no W+X flags, no badge or message id 0,
 //! `process_start`'s count at most [`MAX_START_HANDLES`]. Everything else (does the handle exist,
 //! is the range page-aligned) is the kernel's check.
 //!
-//! Which error, and in what order, is the spec's (KERNEL-SPEC.md, Errors and the order of checks):
+//! Which error, and in what order, is the spec's (kernel/abi.md, "Errors and the order of checks"):
 //! decoding is its stage 1, and this crate implements that stage for registers and slots. In
 //! summary: the first malformed value in register (then slot) order wins; `BadHandle` for a
 //! required handle that is 0 or wider than 32 bits, `TooLarge` for a count above its limit,
@@ -124,7 +126,7 @@ pub use ret::{CallOutcome, LendDisposition, ReplyOutcome, Return, decode_result,
 pub const WORDS: usize = 4;
 /// Handles carried by one message.
 pub const MAX_MSG_HANDLES: usize = 4;
-/// Pages in one lend (= the 9P `msize`, 64 KiB; WIRE.md).
+/// Pages in one lend (= the 9P `msize`, 64 KiB; servers/wire.md).
 pub const MAX_LEND_PAGES: usize = 16;
 /// Threads per process.
 pub const MAX_THREADS: usize = 31;
@@ -146,11 +148,12 @@ pub const FOREVER: u64 = u64::MAX;
 pub const MAX_OPEN_CALLS: usize = 64;
 /// Handles one `process_start` copies into the child at most.
 pub const MAX_START_HANDLES: usize = 64;
-/// Handles one process may hold (answer 102): a call that would add one past it gets
-/// `TooLarge` (`Number::can_return`), and at delivery it is a cost the receiver cannot pay (R4).
+/// Handles one process may hold (kernel/objects.md, "Handles"): a call that would add one past
+/// it gets `TooLarge` (`Number::can_return`), and at delivery it is a cost the receiver cannot pay
+/// (R4).
 pub const MAX_HANDLES: usize = 4096;
 /// The base page, on both Sv32 and Sv39: the unit of lends, transfers and page counts. What each
-/// kernel object costs in pages is KERNEL-SPEC.md's cost table.
+/// kernel object costs in pages is kernel/objects.md, "What objects cost".
 pub const PAGE_SIZE: usize = 4096;
 
 /// The end of user space, per width: `map_fixed` and `process_map` refuse a range that reaches past

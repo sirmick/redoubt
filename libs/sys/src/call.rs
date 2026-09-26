@@ -1,4 +1,4 @@
-//! The system calls and their argument registers (KERNEL-SPEC.md, System calls).
+//! The system calls and their argument registers (kernel/abi.md, "Call numbers and arguments").
 
 use core::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
@@ -6,7 +6,7 @@ use crate::regs::{REGS, Reader, Writer};
 use crate::{Error, MAX_START_HANDLES};
 
 /// An index into the calling process's handle table. Index 0 is never allocated: in a register
-/// or slot it means "no handle" (KERNEL-SPEC.md, Handle).
+/// or slot it means "no handle" (kernel/objects.md, "Handles").
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Handle(pub(crate) NonZeroU32);
 
@@ -207,7 +207,7 @@ pub const NUMBER_BASE: u32 = 0x100;
 macro_rules! calls {
     ($( $(#[$doc:meta])* $variant:ident = $number:literal $name:literal
         $({ $($field:ident: $ty:ty),* })? ; )*) => {
-        /// The call numbers, in KERNEL-SPEC.md's table order, from [`NUMBER_BASE`] + 1.
+        /// The call numbers, in kernel/abi.md's table order, from [`NUMBER_BASE`] + 1.
         #[derive(Clone, Copy, PartialEq, Eq, Debug)]
         #[repr(u32)]
         pub enum Number { $( $variant = NUMBER_BASE + $number, )* }
@@ -220,7 +220,7 @@ macro_rules! calls {
                 Number::ALL.iter().copied().find(|n| *n as u64 == raw)
             }
 
-            /// The name KERNEL-SPEC.md (and the executable model) uses.
+            /// The name kernel/abi.md (and the executable model) uses.
             pub fn name(self) -> &'static str {
                 match self { $( Number::$variant => $name, )* }
             }
@@ -286,8 +286,8 @@ calls! {
     ProcessCreate = 9 "process_create" { budget: Handle, exit_endpoint: Handle };
     ProcessMap = 10 "process_map" { process: Handle, src: usize, dst: usize, len: usize, flags: MemFlags };
     /// `arg` reaches the child's first thread unchanged, in its first argument register, like
-    /// `thread_create`'s (the startup page's address, 0 = none: INIT.md); the kernel does not
-    /// check it. `handles_rec` holds `count` slots (at most
+    /// `thread_create`'s (the startup page's address, 0 = none: servers/init.md); the kernel does
+    /// not check it. `handles_rec` holds `count` slots (at most
     /// [`MAX_START_HANDLES`](crate::MAX_START_HANDLES), else `TooLarge`), one handle each
     /// ([`Handle::from_raw`]), copied into the child's slots 1..=count.
     ProcessStart = 11 "process_start" { process: Handle, entry: usize, sp: usize, arg: usize, handles_rec: usize, count: u32 };
@@ -324,7 +324,7 @@ calls! {
     Random = 24 "random";
     SystemReset = 25 "system_reset" { device: Handle, kind: ResetKind };
     /// Maps zeroed pages at exactly `addr` in the caller's own address space, as `map_anon`
-    /// but at a caller-named address; never replaces a mapping (KERNEL-SPEC.md R11, answer
-    /// 172). Appended last so earlier call numbers keep their values (ABI).
+    /// but at a caller-named address; never replaces a mapping (kernel/memory.md R11). Appended
+    /// last so earlier call numbers keep their values (kernel/abi.md).
     MapFixed = 26 "map_fixed" { addr: usize, len: usize, flags: MemFlags };
 }

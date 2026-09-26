@@ -69,7 +69,7 @@ fn noise_never_panics() {
     }
 }
 
-/// The red team's images (256-byte blocks, 64 of them, program size 16).
+/// Hand-built hostile images (256-byte blocks, 64 of them, program size 16).
 const RED_TEAM: Config = Config { block_size: 256, block_count: 64, prog_size: 16 };
 
 /// Two entries named `x` in one pair: which one a lookup finds would depend on the

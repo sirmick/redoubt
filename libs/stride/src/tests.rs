@@ -107,8 +107,8 @@ fn create_then_destroy_without_a_run_moves_nothing() {
 
 #[test]
 fn a_churned_child_adds_to_a_leading_parent() {
-    // Red review M1: P (100, spinning, lead S/99 after its own slice) destroys C (1), which ran a
-    // slice (work S). The additive rule charges both: P ends at f + S/99 + S/100.
+    // P (100, spinning, lead S/99 after its own slice) destroys C (1), which ran a slice
+    // (work S). The additive rule charges both: P ends at f + S/99 + S/100.
     let s = 10_000 * STRIDE; // one slice of work
     let f: u128 = 1 << 40;
     let mut p = State { pass: f + u128::from(s / 99), rem: s % 99, ..State::default() };

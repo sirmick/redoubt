@@ -1,16 +1,16 @@
 //! The native runtime for Redoubt programs: everything a `no_std` + `alloc` Rust server or
 //! program needs between the ABI (`redoubt-sys`) and its own logic.
 //!
-//! - [`startup`]: the startup block a parent writes (INIT.md), parsed defensively.
+//! - [`startup`]: the startup block a parent writes (servers/init.md), parsed defensively.
 //! - [`handle`]: typed handles and the system calls that are not IPC.
 //! - [`ipc`]: lends and transfers, `call`, `send`, `receive`, `reply`.
 //! - [`heap`]: the global allocator, over `map_anon`.
 //! - [`start`]: the entry point ([`entry!`]), exit codes and the panic handler.
 //! - [`path`]: lexical path cleaning, so `..` never climbs above a root.
 //! - [`client`]: a small synchronous 9P client.
-//! - [`server`]: the shared server library (CONTAINMENT.md): `admit` with a fair share per badge, `check`,
-//!   the 9P server skeleton with `ninep_common` (fresh connections, `disconnect`, byte quotas), parked calls,
-//!   and typed-message dispatch.
+//! - [`server`]: the shared server library (servers/serving.md): `admit` with a fair share per
+//!   badge, `check`, the 9P server skeleton with `ninep_common` (fresh connections, `disconnect`,
+//!   byte quotas), parked calls, and typed-message dispatch.
 //!
 //! Models to copy: `src/bin/echo-server.rs` is a complete 9P server on the skeleton, and
 //! `src/bin/echo-client.rs` a program that uses its namespace; the [`server::typed`] docs show a
@@ -22,21 +22,18 @@
 //!
 //! Handles are `u32` indices and 64-bit values (ids, badges, accounts, time) are `u64` on both
 //! widths; nothing here depends on the machine's word size.
-//!
-//! Pending questions are built as recommended, each at one site marked `QUESTIONS.md N
-//! (pending)`: 108 and 117 here, 112 in [`startup`], 113, 114 and 118 in [`server::ninep`].
 
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]
 
 extern crate alloc;
 
-// QUESTIONS.md 108 and 117 (pending): the layouts of the `startup` message (INIT.md) and of
-// `ninep_common` (NAMESPACES.md) are the design editor's, used as generated from the notes,
-// with WP-R1b's two additions (117): `new_connection`'s `quota`, which a granter needs to set a
-// root's byte quota, and the error `refused` (code 3), which `new_connection` needs for a root
-// that is not there or a cap that is reached. 117 also covers the fair share counting a
-// connection a client minted for itself in the share it came from ([`server::ninep`]).
+// The layouts of the `startup` message (servers/init.md) and of `ninep_common`
+// (servers/wire.md) are generated from their wire tables. `ninep_common` carries
+// `new_connection`'s `quota`, which a granter needs to set a root's byte quota, and the error
+// `refused` (code 3), which `new_connection` needs for a root that is not there or a cap that is
+// reached. A connection a client minted for itself counts in the share it came from
+// (servers/serving.md R26, [`server::ninep`]).
 pub mod client;
 pub mod handle;
 pub mod heap;

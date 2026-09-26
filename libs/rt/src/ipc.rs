@@ -1,5 +1,5 @@
-//! IPC (KERNEL-SPEC.md, Messages; CAPABILITIES.md, IPC): pages to lend and transfer, `call`,
-//! `send`, `receive`, `reply` and `serve`.
+//! IPC (kernel/ipc.md, "Messages"): pages to lend and transfer, `call`, `send`, `receive`,
+//! `reply` and `serve`.
 //!
 //! Words are `u64` here, as in `redoubt-wire`, so one layout serves both widths; a word that does
 //! not fit the machine's word is `InvalidArgument` before anything is sent.
@@ -131,7 +131,7 @@ fn words_of<H: Slot>(body: &BodyOf<H>) -> Words { body.words.map(|w| w as u64) }
 pub struct Reply {
     pub words: Words,
     /// Handles the server sent, now in this process's table; `None` for one that could not be
-    /// taken (answer 116) or was revoked on the way. The recipient owns these handles.
+    /// taken (kernel/ipc.md R4) or was revoked on the way. The recipient owns these handles.
     pub handles: ReceivedHandles,
 }
 
@@ -249,7 +249,7 @@ pub enum Event {
     /// The IRQ handle `receive` named fired.
     Interrupt,
     Exit(ExitNotice),
-    /// An abandoned-call notice (KERNEL-SPEC.md, R3): the open call with this id, which this
+    /// An abandoned-call notice (kernel/ipc.md R3): the open call with this id, which this
     /// thread holds, lost its caller. It stays open, holding one of the process's
     /// `MAX_OPEN_CALLS`, until this thread replies to it; the reply reaches nobody.
     /// [`crate::server::parked::Parked::abandoned`] does that for a parked call.
@@ -290,7 +290,7 @@ pub struct Request {
     pub words: Words,
     /// Handles the caller sent, now in this process's table; `None` for one revoked while the
     /// call was queued (R10), which keeps its slot. A protocol that needs it treats the request
-    /// as `Malformed` (WIRE.md: a missing handle).
+    /// as `Malformed` (servers/wire.md: a missing handle).
     pub handles: ReceivedHandles,
     lend: Option<Mapping>,
 }
@@ -321,7 +321,7 @@ impl Request {
 
     /// Replies, which returns the lend to the caller.
     ///
-    /// The handles are **copied** into the caller (KERNEL-SPEC.md, Messages): this process keeps
+    /// The handles are **copied** into the caller (kernel/ipc.md, "Messages"): this process keeps
     /// its own, and must close any it does not mean to keep (a handle minted for the caller,
     /// say), or its handle table grows by one per reply.
     ///

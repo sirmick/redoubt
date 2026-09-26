@@ -28,11 +28,11 @@ pub const NO_ENDPOINT: u32 = 2;
 pub const RECEIVE_FAILED: u32 = 3;
 pub const BAD_LIMITS: u32 = 4;
 /// The kernel would not give a random word, and a server's first minted badge must be
-/// unpredictable (answer 126). A server that cannot get one does not start.
+/// unpredictable (servers/serving.md R27). A server that cannot get one does not start.
 pub const NO_RANDOM: u32 = 5;
 
 /// What admission lets clients hold: sized so that every bucket at its cap fits [`BUDGET`]
-/// (answer 85). The skeleton holds no calls open, so none are admitted in flight.
+/// (servers/serving.md, `admit`). The skeleton holds no calls open, so none are admitted in flight.
 pub const LIMITS: Limits = Limits { buckets: 16, in_flight: 0, files: 32, state: 8 };
 /// What one of each costs, in bytes: a fid is its table entry and a few steps; a connection its
 /// record and a quota.
