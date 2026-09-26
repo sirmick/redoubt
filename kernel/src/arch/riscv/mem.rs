@@ -49,13 +49,11 @@ pub fn sync_icache() {
 /// First root entry belonging to the kernel half of the address space.
 const ROOT_KERNEL_START: usize = physmap::ENTRIES / 2;
 /// Root entry holding per-process kernel data. Everything else in the kernel half is shared.
-#[allow(dead_code)] // `allocate`
 const ROOT_PROCESS_AREA: usize = physmap::vpn(PROCESS_AREA, physmap::LEVELS - 1);
 
 /// Extract the PID (stored as the ASID) from a raw `satp` value.
 pub fn pid_from_satp(satp: usize) -> usize { physmap::satp_pid(satp) }
 
-#[allow(dead_code)] // `allocate`
 fn make_satp(pid: Pid, root_phys: usize) -> usize { physmap::make_satp(pid.get() as usize, root_phys) }
 
 /// The root table of the address space that `satp` names.
@@ -345,25 +343,6 @@ impl MemoryMapping {
         });
     }
 
-    pub fn phys_to_virt(&self, phys: usize) -> Result<Option<usize>, PageError> {
-        if phys & (PAGE_SIZE - 1) != 0 {
-            return Err(PageError::Unaligned);
-        }
-        let mut found = None;
-        let mut twice = false;
-        self.for_each_user_leaf(|virt, pte| {
-            if pte.phys() == phys {
-                twice |= found.is_some();
-                found = Some(virt);
-            }
-        });
-        if twice {
-            println!("Page is mapped twice within process {:08x}!", phys);
-            return Err(PageError::InUse);
-        }
-        Ok(found)
-    }
-
     pub fn print_map(&self) {
         println!("Memory Maps for PID {}:", pid_from_satp(self.satp));
         self.for_each_user_leaf(|virt, pte| {
@@ -461,11 +440,6 @@ pub fn unmap_page_inner(_mm: &mut MemoryManager, virt: usize) -> Result<usize, P
     slot.set(Pte::EMPTY);
     flush_tlb();
     Ok(phys)
-}
-
-/// Determine if a virtual page has been lent.
-pub fn page_is_lent(src_addr: *mut u8) -> bool {
-    walk(current_root(), src_addr as usize, None).is_ok_and(|slot| slot.get().has(PteFlags::S))
 }
 
 /// Return a page from `src_space` back to `dest_space`.

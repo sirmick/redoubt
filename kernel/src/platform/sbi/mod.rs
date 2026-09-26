@@ -23,7 +23,7 @@ pub fn early_init() {
     #[cfg(any(feature = "debug-print", feature = "print-panics"))]
     // SAFETY: `early_init` runs once, at boot, before anything else can refer to `CONSOLE`,
     // so this is the only reference to it that ever exists. (`SbiConsole` has no state.)
-    crate::debug::shell::init(unsafe { &mut *(&raw mut CONSOLE) });
+    crate::debug::console::init(unsafe { &mut *(&raw mut CONSOLE) });
 }
 
 pub fn init() { rand::init(); }

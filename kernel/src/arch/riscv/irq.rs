@@ -151,13 +151,11 @@ pub extern "C" fn trap_handler(
         let ex = RiscvException::from_regs(sc.bits(), sepc::read(), stval::read());
         let tid = ArchProcess::with_current(|p| p.current_tid());
         println!(
-            "IRQ ({}.{}): {} sepc {:x} sim {:x}", //  reg {:08x?}
+            "IRQ ({}.{}): {} sepc {:x}",
             pid,
             tid,
             ex,
             sepc::read(),
-            intc::mask(),
-            // ArchProcess::with_current(|p| p.current_thread().registers)
         );
     }
     match ex {
@@ -219,7 +217,7 @@ pub extern "C" fn trap_handler(
                     println!(
                         "SPF Handing page {:08x} to pid {} tid {} sepc {:x}",
                         _new_page,
-                        process.pid().get(),
+                        pid,
                         process.current_tid(),
                         process.current_thread().sepc,
                     );

@@ -213,8 +213,7 @@ impl Platform {
                 continue;
             }
             // An interrupt controller belongs to the kernel, so it is not offered as a device
-            // object; it stays in `MREx` (which the legacy claim path and the ownership table
-            // use) and the kernel maps the PLIC for itself.
+            // object; it stays in `MREx` (for the kernel's ownership table) and the kernel maps the PLIC for itself.
             let kernel_only = is_interrupt_controller(&node);
             let is_console = console == Some(name);
             // The interrupts a device raises. `#interrupt-cells` is 1 for the PLIC, which is

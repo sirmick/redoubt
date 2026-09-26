@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-use riscv::register::{sepc, sstatus};
+use riscv::register::sstatus;
 
 use crate::ptable::Thread;
 
@@ -21,12 +21,8 @@ pub fn resume(supervisor: bool, thread: &Thread) -> ! {
     // Leaving the kernel: the scheduler's exit hook (`sched.rs`, accounting at the trap boundary).
     crate::sched::leave(crate::arch::current_pid());
     // SAFETY: sets sepc, the address `sret` will resume at. Harmless until the `sret` in
-    // `_redoubt_resume_context`. (`unsafe` on the upstream `riscv` crate used for rv64, a
-    // no-op wrapper on the vendored rv32 one.)
-    #[allow(unused_unsafe)]
-    unsafe {
-        sepc::write(thread.sepc)
-    };
+    // `_redoubt_resume_context`.
+    unsafe { core::arch::asm!("csrw sepc, {}", in(reg) thread.sepc, options(nomem, nostack)) };
 
     // Return to the appropriate CPU mode
     set_supervisor(supervisor);

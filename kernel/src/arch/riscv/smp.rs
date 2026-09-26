@@ -51,9 +51,10 @@ const STACK_WORDS: usize = 1024;
 /// 16-byte aligned, as the RISC-V psABI requires of `sp`. Only its address and size are used
 /// here; the secondary hart reaches the words themselves through `sp`.
 #[repr(align(16))]
-#[allow(dead_code)]
-struct Stack([usize; STACK_WORDS]);
-static mut SECONDARY_STACK: Stack = Stack([0; STACK_WORDS]);
+struct Stack {
+    _words: [usize; STACK_WORDS],
+}
+static mut SECONDARY_STACK: Stack = Stack { _words: [0; STACK_WORDS] };
 
 #[cfg(target_arch = "riscv64")]
 core::arch::global_asm!(
@@ -114,12 +115,8 @@ extern "C" fn secondary_main(_hartid: usize) -> ! {
     SECONDARY_DONE.store(true, Ordering::Release);
     // Nothing further for it to do: park. (Real SMP would enter the scheduler here.)
     loop {
-        // SAFETY: `wfi` has no memory effect. (`unsafe` on the vendored rv32 riscv crate,
-        // a safe no-op wrapper on the rv64 one.)
-        #[allow(unused_unsafe)]
-        unsafe {
-            riscv::asm::wfi()
-        };
+        // SAFETY: `wfi` has no memory effect.
+        unsafe { core::arch::asm!("wfi", options(nomem, nostack)) };
     }
 }
 

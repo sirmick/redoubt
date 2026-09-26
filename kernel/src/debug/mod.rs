@@ -3,5 +3,5 @@
 
 #[macro_use]
 mod macros;
-pub mod shell;
+pub mod console;
 

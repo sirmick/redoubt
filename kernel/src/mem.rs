@@ -14,14 +14,15 @@ enum ClaimReleaseMove {
     Move(Pid /* from */),
 }
 
-/// One entry of the loader's `MREx` table (BOOT.md): a device region processes may claim.
+/// One entry of the loader's `MREx` table (BOOT.md): a device region, whose frames the ownership
+/// table tracks.
 #[derive(Clone, Copy)]
-struct MemoryRangeExtra {
+struct ExtraRegion {
     start: usize,
     size: usize,
 }
 
-impl MemoryRangeExtra {
+impl ExtraRegion {
     /// Words per entry. The loader (one binary for both widths) writes every entry as
     /// `start: u64, size: u64, tag: u32, pad: u32`, each `u64` low word first, so the entry is
     /// six words on rv32 too.
@@ -38,7 +39,7 @@ impl MemoryRangeExtra {
         // address at its end index past the entries counted for it. The loader rounds every
         // region up to a page.
         assert!(size % PAGE_SIZE == 0, "mm: MREx region is not a whole number of pages");
-        MemoryRangeExtra { start, size }
+        ExtraRegion { start, size }
     }
 
     fn contains(&self, addr: usize) -> bool { addr >= self.start && addr - self.start < self.size }
@@ -69,7 +70,6 @@ pub enum PageError {
     BadFlags,
 }
 
-
 /// Where the first page of each placement area is, per process (`ProcessInner`): what
 /// `find_virtual_address` searches when the caller names no address.
 pub const DEFAULT_BASE: usize = 0x6000_0000;
@@ -93,7 +93,7 @@ pub struct MemoryManager {
     /// The same, for the pages of every region in `extra_regions`, back to back.
     extra_allocations: &'static mut [Option<Pid>],
     /// Memory outside RAM that processes may claim: memory-mapped devices. The data of the
-    /// loader's `MREx` tag, `MemoryRangeExtra::WORDS` words per region; see `extra_regions()`.
+    /// loader's `MREx` tag, `ExtraRegion::WORDS` words per region; see `extra_regions()`.
     extra_regions: &'static [u32],
     /// Budgets and the per-process ledger that charges them (`budget.rs`), and the handle tables
     /// (`handle.rs`). Here, beside the ownership table, because a frame changing owner is what
@@ -188,7 +188,7 @@ impl MemoryManager {
             if tag.name == u32::from_le_bytes(*b"MREx") {
                 assert!(self.extra_regions.is_empty(), "mm: MREx tag appears twice");
                 assert!(
-                    tag.data.len() % MemoryRangeExtra::WORDS == 0,
+                    tag.data.len() % ExtraRegion::WORDS == 0,
                     "mm: MREx is not a whole number of entries"
                 );
                 self.extra_regions = tag.data;
@@ -210,18 +210,6 @@ impl MemoryManager {
             self.extra_allocations = slice::from_raw_parts_mut(xpt_base as *mut Option<Pid>, extra_size)
         }
         Ok(())
-    }
-
-    /// Print the number of RAM bytes used by the specified process.
-    /// This does not include memory such as peripherals and CSRs.
-    pub fn ram_used_by(&self, pid: Pid) -> usize {
-        let mut owned_bytes = 0;
-        for owner in &self.allocations[0..self.ram_size / PAGE_SIZE] {
-            if owner == &Some(pid) {
-                owned_bytes += PAGE_SIZE;
-            }
-        }
-        owned_bytes
     }
 
     /// Allocate a single page to the given process, charged to its budget (R6): `OutOfMemory` if
@@ -353,7 +341,6 @@ impl MemoryManager {
             return Ok(virt_ptr);
         }
 
-        // let process = Process::current();
         Process::with_inner_mut(|process_inner| {
             let (start, end, initial) = match kind {
                 MemoryType::Default => (
@@ -570,14 +557,6 @@ impl MemoryManager {
         ) -> Result<(), PageError> {
             if let Some(current_pid) = *owner_addr {
                 if current_pid != pid {
-                    // klog!(
-                    //     "In claim_or_release({}, {}, {:?}) -- addr is owned by {} not {}",
-                    //     owner_addr.map(|v| v.get()).unwrap_or_default(),
-                    //     pid,
-                    //     action,
-                    //     current_pid,
-                    //     pid
-                    // );
                     if let ClaimReleaseMove::Move(existing_pid) = action {
                         if existing_pid != current_pid {
                             return Err(PageError::InUse);
@@ -675,10 +654,6 @@ impl MemoryManager {
             }
             offset += region.size / PAGE_SIZE;
         }
-        // println!(
-        //     "mem: unable to claim or release physical address {:08x}",
-        //     addr
-        // );
         Err(PageError::Unmapped)
     }
 
@@ -698,9 +673,9 @@ impl MemoryManager {
     /// not borrow the memory manager: callers iterate the regions while claiming pages in
     /// `extra_allocations`. `use<>` states that, keeping `self`'s lifetime out of the
     /// returned type.
-    fn extra_regions(&self) -> impl Iterator<Item = MemoryRangeExtra> + use<> {
+    fn extra_regions(&self) -> impl Iterator<Item = ExtraRegion> + use<> {
         let table: &'static [u32] = self.extra_regions;
-        table.chunks_exact(MemoryRangeExtra::WORDS).map(MemoryRangeExtra::from_words)
+        table.chunks_exact(ExtraRegion::WORDS).map(ExtraRegion::from_words)
     }
 
     /// The index into `extra_allocations` for a physical address in one of the extra
@@ -769,94 +744,6 @@ impl MemoryManager {
         self.uncharge_all_frames(pid);
     }
 
-    pub fn check_for_duplicates(&self) {
-        use crate::ptable::ProcessTable;
-
-        ProcessTable::with(|pt| {
-            let current_pid = pt.current_pid();
-
-            // Activate the debugging process and iterate through it,
-            // noting down each active thread.
-            for phys in (self.ram_start..self.ram_start + self.ram_size).step_by(PAGE_SIZE) {
-                let mut owner = None;
-                for pid in 1..crate::ptable::MAX_PROCESS_COUNT {
-                    let pid = Pid::new(pid as u8).unwrap();
-                    let Ok(process) = pt.get_process(pid) else {
-                        continue;
-                    };
-                    process.activate();
-                    match MemoryMapping::current().phys_to_virt(phys) {
-                        Err(e) => {
-                            println!("!!! ERROR {:?} !!!", e);
-                            continue;
-                        }
-                        Ok(None) => continue,
-                        Ok(Some(virt)) => {
-                            let allocation_offset = (phys - self.ram_start) / PAGE_SIZE;
-                            let existing_owner = &self.allocations[allocation_offset];
-                            let eo = existing_owner;
-                            // A `dma_alloc` frame is `DMA_OWNER`'s, mapped by the run's holder.
-                            if eo == &Some(DMA_OWNER) {
-                                continue;
-                            }
-                            if eo != &Some(pid) {
-                                let is_lent = {
-                                    if let Some(existing_owner) = eo {
-                                        pt
-                                            .get_process(*existing_owner)
-                                            .unwrap()
-                                            .activate();
-                                        let is_lent = if let Ok(Some(owned_address)) =
-                                            MemoryMapping::current().phys_to_virt(phys)
-                                        {
-                                            crate::arch::mem::page_is_lent(owned_address as *mut u8)
-                                        } else {
-                                            false
-                                        };
-                                        pt.get_process(pid).unwrap().activate();
-                                        is_lent
-                                    } else {
-                                        false
-                                    }
-                                };
-                                println!(
-                                    "!!! 0x{:08x} is owned by {} ({}) but is mapped to {} ({}) -- {}",
-                                    phys,
-                                    eo.map(|v| v.get() as isize).unwrap_or(-1),
-                                    eo.map(|v| pt.process_name(v).unwrap_or("<unknown>"))
-                                        .unwrap_or("<none>"),
-                                    pid.get(),
-                                    pt.process_name(pid).unwrap_or("<unknown>"),
-                                    if is_lent { "page is lent" } else { "duplicate!" },
-                                );
-                            }
-                            if !crate::arch::mem::page_is_lent(virt as *mut u8) {
-                                if owner.is_none() {
-                                    owner = Some((pid, virt));
-                                } else {
-                                    println!(
-                                        "!!! DUPLICATE !!! Page {:08x} owned by both {} ({}) @ {:08x} and {} ({}) @ {:08x}",
-                                        phys,
-                                        owner.map(|v| v.0.get() as isize).unwrap_or(-1),
-                                        owner
-                                            .map(|v| pt.process_name(v.0).unwrap_or("<unknown>"))
-                                            .unwrap_or("<none>"),
-                                        owner.map(|v| v.1).unwrap_or(0),
-                                        pid.get(),
-                                        pt.process_name(pid).unwrap_or("<unknown>"),
-                                        virt,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Restore the previous PID
-            pt.get_process(current_pid).unwrap().activate();
-        })
-    }
 }
 
 // --- The Redoubt memory calls (KERNEL-SPEC.md; R11) ------------------------------------------

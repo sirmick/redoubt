@@ -6,18 +6,7 @@
 #[macro_export]
 macro_rules! print {
     ($($args:tt)+) => {{
-        // SAFETY: `OUTPUT` is written only by `shell::init`, before the first `print!`, and only
-        // the boot hart prints (the `smp` spike's `secondary_main` never does), so this is its
-        // only live reference. Known residual: a panic inside this `write!` re-enters through
-        // the panic handler's `println!` while the first reference is live; the handler then
-        // powers off.
-        #[allow(unused_unsafe)]
-        unsafe {
-			use core::fmt::Write;
-            if let Some(stream) = &mut *(&raw mut crate::debug::shell::OUTPUT) {
-                write!(stream, $($args)+).unwrap();
-            }
-        }
+        $crate::debug::console::print(format_args!($($args)+))
     }};
 }
 
