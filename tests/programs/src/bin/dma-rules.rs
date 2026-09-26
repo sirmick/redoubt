@@ -60,9 +60,8 @@ pub extern "C" fn _start() -> ! {
     out.0.init();
     say!(out, "\n[dma-rules] mapped the console");
 
-    let free = rd::first_free();
     let Some((dev, at, phys)) =
-        (rd::OTHER_DEVICES..free).find_map(|h| rd::dma_alloc(h, DMA_PAGES).ok().map(|(a, p)| (h, a, p)))
+        (rd::OTHER_DEVICES..rd::log_rx()).find_map(|h| rd::dma_alloc(h, DMA_PAGES).ok().map(|(a, p)| (h, a, p)))
     else {
         say!(out, "[dma-rules] FAIL: no device carries the DMA flag");
         test_programs::park()

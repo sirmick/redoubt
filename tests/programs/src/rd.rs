@@ -19,8 +19,8 @@ pub const USERS: u32 = 3;
 /// (kernel `device.rs`, `boot_devices`; BOOT.md, `Devs`). **INTERIM** until `init` reads the
 /// boot manifest (WP-R3): the Reset right first, then the console `/chosen/stdout-path` names
 /// and its interrupt, so a program can name those three without a manifest. Everything after
-/// them depends on the machine, so nothing may assume how many there are: use
-/// [`first_free`] to find where a program's own handles start.
+/// them depends on the machine, so nothing may assume how many there are: the devices end at
+/// [`log_rx`], and [`first_free`] finds where a program's own handles start.
 pub const RESET: u32 = 4;
 pub const CONSOLE_MMIO: u32 = 5;
 pub const CONSOLE_IRQ: u32 = 6;
@@ -176,6 +176,16 @@ pub fn raw_error(a0: usize) -> Option<Error> { Error::from_code(a0 as u64) }
 /// `boot_endpoint`, INTERIM). The second program holds it with badge 0, the receive right;
 /// every later one with its own PID as the badge.
 pub const BOOT_ENDPOINT: u32 = 1;
+
+/// Handle 2 of every bundle program but the first: a send on the log endpoint, badged with the
+/// program's PID (kernel `budget.rs`, `boot_log_endpoint`, INTERIM until `init` owns the
+/// console). The badge only names whose line it is.
+pub const LOG: u32 = 2;
+
+/// The first program's receive right on the log endpoint: the kernel installs it last, after the
+/// budgets and the devices, so the devices are `OTHER_DEVICES..log_rx()`. It is `first_free() - 1`
+/// only until the program creates a handle, so a program reads it once, at startup.
+pub fn log_rx() -> u32 { first_free() - 1 }
 
 pub fn endpoint_create() -> Result<u32, Error> {
     match redoubt_sys::syscall(&Call::EndpointCreate)? {

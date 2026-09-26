@@ -43,10 +43,10 @@ pub extern "C" fn _start() -> ! {
         // Minting at all from a handle that is not a receive right.
         rd::mint_from_handle(E, 1, None).err(),
         // Minting from handles this program does not hold.
-        rd::mint_from_handle(2, 1, None).err(),
+        rd::mint_from_handle(rd::first_free(), 1, None).err(),
         rd::mint_from_handle(u32::MAX, 1, None).err(),
         // Narrowing into a budget it does not hold either.
-        rd::mint_from_handle(E, 1, Some(2)).err(),
+        rd::mint_from_handle(E, 1, Some(u32::MAX - 1)).err(),
     ];
     log!(logger, "[attacker] receive rights -> {:?}", rights);
 

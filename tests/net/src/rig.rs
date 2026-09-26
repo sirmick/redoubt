@@ -178,6 +178,9 @@ fn describe(notice: Option<ExitNotice>) -> String {
 struct Rig {
     out: Console,
     ok: bool,
+    /// The device handles: from `OTHER_DEVICES` up to the log endpoint's receive right, which
+    /// the kernel installs last (INTERIM: `tests/programs/src/rd.rs`, `log_rx`).
+    devices: core::ops::Range<u32>,
     /// Where the programs report (`redoubt_net_client::REPORT`); each gets its own badge.
     reports: Endpoint,
     /// Reports taken while waiting for another: (badge, event, value).
@@ -196,10 +199,12 @@ struct Rig {
 /// Runs `mode` and powers the machine off.
 pub fn run(mode: Mode) -> u32 {
     let registers = Mmio::from_handle(h(CONSOLE)).registers().expect("the console's registers");
+    let devices = OTHER_DEVICES..first_free() - 1;
     let reports = Endpoint::create().expect("the report endpoint");
     let mut rig = Rig {
         out: Console(registers),
         ok: true,
+        devices,
         reports,
         backlog: Vec::new(),
         next_badge: 100,
@@ -269,9 +274,8 @@ impl Rig {
 
     /// The network card's MMIO and interrupt handles and its transport version.
     fn find_net(&mut self) -> Result<(Handle, Handle, u32), String> {
-        let free = first_free();
         let (mut virtio, mut irqs) = (Vec::new(), Vec::new());
-        for index in OTHER_DEVICES..free {
+        for index in self.devices.clone() {
             let handle = h(index);
             match Irq::from_handle(handle).wait(0) {
                 Err(Error::Timeout) | Ok(()) => irqs.push(handle),
