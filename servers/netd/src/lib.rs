@@ -1,5 +1,5 @@
 //! `netd`: the virtio-net driver. It owns one network device and serves its frames to one
-//! `ipd` (IO-ARCHITECTURE.md, Networking and `netd`; answer 174).
+//! `ipd` (servers/netd.md).
 //!
 //! # What this is trusted for
 //! On QEMU no hardware confines DMA, so `netd` is inside the TCB (TENETS.md 7), as `blkd` is.
@@ -20,15 +20,16 @@
 //! 4. **No address travels in a message.** Both regions are allocated, both queues configured and the device
 //!    started by the serving thread before the receive thread exists. The receive thread's half ([`RxPart`])
 //!    is handed over in this process's own memory ([`kernel`]).
-//! 5. **A DMA page never leaves `netd`** (answer 173, WP-K5b: from K5b the kernel refuses to lend, transfer
-//!    or `process_map` a `dma_alloc` page). No path here lends, transfers or maps one: each received frame is
-//!    copied into a fresh one-page `Buffer` of anonymous memory before it is sent to `ipd`, a transmit is
-//!    copied out of the caller's lend into a slot, and no reply carries a buffer. DMA addresses exist only as
-//!    numbers inside [`kernel::Device`].
-//! 6. **Either thread leaving its loop stops the device.** The receive thread resets it and tells the serving
-//!    thread on every way out ([`receiver`]); the serving thread resets it on a lie, on a report, and before
-//!    it exits; a panic resets it from the runtime's panic hook ([`kernel::Regs::arm_panic_reset`]). A kill
-//!    or a fault runs none of this (WP-K5b).
+//! 5. **A DMA page never leaves `netd`** (kernel/devices.md, `dma_alloc`: the kernel refuses to
+//!    lend, transfer or `process_map` a `dma_alloc` page). No path here lends, transfers or maps
+//!    one: each received frame is copied into a fresh one-page `Buffer` of anonymous memory before
+//!    it is sent to `ipd`, a transmit is copied out of the caller's lend into a slot, and no reply
+//!    carries a buffer. DMA addresses exist only as numbers inside [`kernel::Device`].
+//! 6. **Either thread leaving its loop stops the device.** The receive thread resets it and tells
+//!    the serving thread on every way out ([`receiver`]); the serving thread resets it on a lie, on
+//!    a report, and before it exits; a panic resets it from the runtime's panic hook
+//!    ([`kernel::Regs::arm_panic_reset`]). A kill or a fault runs none of this; the kernel resets
+//!    the device then (kernel/invariants.md I16).
 //!
 //! # Shape
 //! - [`transport`]: the seam to the kernel, and [`kernel`], its one implementation and the only `unsafe` in
@@ -65,9 +66,9 @@ pub use server::NetServer;
 pub use transport::{Fault, Transport};
 pub use virtio::DeviceError;
 
-/// The first badge a server mints (answer 126: badges at or above it are minted, below it are
-/// the manifest's). `netd`'s client badge is one of `init`'s, below it; the receive thread's
-/// badge is drawn above it, so the two can never be equal.
+/// The first badge a server mints (servers/serving.md, "Minted connections": badges at or above
+/// it are minted, below it are the manifest's). `netd`'s client badge is one of `init`'s, below
+/// it; the receive thread's badge is drawn above it, so the two can never be equal.
 pub const FIRST_MINTED_BADGE: u64 = 1 << 63;
 
 /// Word 0 of the receive thread's one message to the serving thread: the device lied, and the
@@ -85,9 +86,9 @@ pub struct RxPart {
     pub broken: Endpoint,
 }
 
-/// `netd`'s arguments (INIT.md: each server defines its own): exactly one, `client=BADGE`, the
-/// badge `ipd`'s handle carries, in decimal, nonzero and below [`FIRST_MINTED_BADGE`]. Anything
-/// else is refused, and `netd` does not start.
+/// `netd`'s arguments (servers/init.md: each server defines its own): exactly one,
+/// `client=BADGE`, the badge `ipd`'s handle carries, in decimal, nonzero and below
+/// [`FIRST_MINTED_BADGE`]. Anything else is refused, and `netd` does not start.
 pub fn parse_client<'a>(mut args: impl Iterator<Item = &'a str>) -> Option<u64> {
     let arg = args.next()?;
     if args.next().is_some() {

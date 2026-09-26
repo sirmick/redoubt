@@ -1,4 +1,4 @@
-//! The link: smoltcp's [`Device`] over `netd` (IO-ARCHITECTURE.md, `netd`, the `netif` table).
+//! The link: smoltcp's [`Device`] over `netd` (servers/netd.md, "Serving `ipd`").
 //!
 //! **Receiving** is one slot. `netd` pushes each frame as a `send` on the ingress badge; the
 //! server puts it here ([`Link::arrive`]) and has the stack process it at once, so a frame never
@@ -8,14 +8,14 @@
 //! **Transmitting** is a call to `netd` through a [`Netif`], one frame per call. `busy` and a
 //! timeout drop the frame (TCP sends it again); only `failed`, which `netd` answers for good once
 //! its device has lied, puts the link down ([`Link::is_down`]): `ipd` then answers `unreachable`
-//! and asks `netd` again with backoff (answer 174: `ipd` never exits on a link fault).
+//! and asks `netd` again with backoff; `ipd` never exits on a link fault.
 
 use alloc::vec::Vec;
 
 use smoltcp::phy::{self, Device, DeviceCapabilities, Medium};
 use smoltcp::time::Instant;
 
-/// The largest frame `netd` carries: 14 bytes of header and an MTU of 1500 (IO-ARCHITECTURE.md).
+/// The largest frame `netd` carries: 14 bytes of header and an MTU of 1500 (servers/netd.md).
 pub const MAX_FRAME: usize = 1514;
 /// The smallest: a bare Ethernet header.
 pub const MIN_FRAME: usize = 14;

@@ -1,6 +1,6 @@
 //! A listener's `ctl` read (an accept) with nobody connecting waits at most [`CTL_WAIT_US`], then
-//! is answered `timeout` (QA D3-code-review-final): driven through `Ipd::on_call` and
-//! `Ipd::expire` on the rt fake kernel, with the clock the test chooses.
+//! is answered `timeout`: driven through `Ipd::on_call` and `Ipd::expire` on the rt fake kernel,
+//! with the clock the test chooses.
 
 #[path = "../../../libs/rt/tests/common/mod.rs"]
 mod kernel;

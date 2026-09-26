@@ -1,4 +1,4 @@
-//! `consoled` against WP-W1's 9P2000 conformance vectors (`redoubt/wire/vectors/9p.txt`). What
+//! `consoled` against the 9P2000 conformance vectors (`redoubt/wire/vectors/9p.txt`). What
 //! they check is in the runner's own docs; what is checked here on top is what only `consoled`
 //! knows: a run of hostile and well-formed messages neither prints anything on the line nor
 //! swallows a byte that was typed, and — with the line quiet — no vector leaves a call held,

@@ -45,7 +45,7 @@ fn block(receive: Handle, public: &[&str]) -> Vec<u8> {
 }
 
 /// A typed call on `bootfsd`'s 9P endpoint: `add` (buffer-shaped, so it travels in a lend) or
-/// `seal` (inline, so it must travel with no buffer at all: WIRE.md's two shapes).
+/// `seal` (inline, so it must travel with no buffer at all: servers/wire.md's two shapes).
 fn setup(conn: Handle, message: Message<'_>) -> Result<(), ErrorCode> {
     let mut buf = Buffer::new(16).expect("a lend");
     let (opcode, inline) = match message {
@@ -101,7 +101,8 @@ fn a_session_reads_the_public_entries_and_sees_nothing_else() {
 
     let entries = f.as_process(init, || fill(founding));
 
-    // A session gets a fresh connection, as a launcher always does (answer 50).
+    // A session gets a fresh connection, as a launcher always does (servers/init.md,
+    // "Fresh connections per child").
     let session = f.process(1001, &[]);
     let (conn, id) = f
         .as_process(init, || Client::new(Endpoint::from_handle(founding), 4).unwrap().new_connection("", 0))

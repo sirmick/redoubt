@@ -23,7 +23,7 @@ pub const MAX_ENTRIES: usize = 64;
 pub const MAX_BYTES: usize = 8 * 1024 * 1024;
 
 /// What admission lets clients hold, sized so that every bucket at its cap fits [`BUDGET`]
-/// (answer 85). Nothing is ever parked here: every request is answered as it arrives.
+/// (servers/serving.md R26). Nothing is ever parked here: every request is answered as it arrives.
 pub const LIMITS: Limits = Limits { buckets: 16, in_flight: 0, files: 32, state: 8 };
 /// What one of each costs, in bytes: a fid is its table entry and its steps from the root (at
 /// most two, since `/boot` is flat); a minted connection its record.
@@ -159,7 +159,8 @@ impl FileServer for BootFs {
     type Node = Node;
 
     /// Every connection attaches at `/boot` itself. `aname` is ignored: the badge decides what a
-    /// connection may see (NAMESPACES.md), and here every badge sees the same flat directory.
+    /// connection may see (servers/README.md, "Connections"), and here every badge sees the same
+    /// flat directory.
     fn attach(&mut self, _: &Caller, _aname: &str) -> Result<(Node, Qid), NineError> {
         Ok((Node::Root, self.qid(Node::Root)))
     }
@@ -228,7 +229,7 @@ impl FileServer for BootFs {
     }
 }
 
-/// The `bootfs` protocol (NAMESPACES.md), named once for [`redoubt_rt::server::typed`].
+/// The `bootfs` protocol (servers/bootfsd.md), named once for [`redoubt_rt::server::typed`].
 pub struct Bootfs;
 
 impl Protocol for Bootfs {
@@ -258,7 +259,7 @@ impl TypedServer<Bootfs> for BootFs {
         // Only the founding handle fills `/boot`. A minted badge (`new_connection` mints at or
         // above `FIRST_MINTED_BADGE`) is refused, and so is badge 0 — the receive right, which
         // this server keeps and no `mint` creates — so the gate is an explicit set, not a
-        // comparison that happens to exclude them (KERNEL-SPEC.md, Handle).
+        // comparison that happens to exclude them (kernel/objects.md, "Handles").
         if caller.badge == 0 || caller.badge >= FIRST_MINTED_BADGE {
             return Err(ErrorCode::Refused);
         }

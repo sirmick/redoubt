@@ -1,4 +1,4 @@
-//! The `netif` protocol (IO-ARCHITECTURE.md, `netd`) against the fake device: one client, no
+//! The `netif` protocol (servers/netd.md) against the fake device: one client, no
 //! labelled callers, `too_many` for a frame of the wrong length, `busy` for a full ring, and
 //! `failed` for good once the device has lied.
 

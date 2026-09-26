@@ -1,5 +1,5 @@
 //! Every security property `keyd` claims, with a test that tries to break it
-//! (BUILD-PLAN.md, WP-S1; TENETS.md 6).
+//! (servers/keyd.md; TENETS.md 6).
 //!
 //! These drive [`answer_with`] against a fake kernel of a few lines, so every path — minting
 //! included — runs with no system call. `tests/keyd.rs` runs the whole program instead, against
@@ -26,10 +26,10 @@ const AUDIT_SEED: &str = "222222222222222222222222222222222222222222222222222222
 const LOGIN_SEED: &str = "3333333333333333333333333333333333333333333333333333333333333333";
 
 /// The word the tests draw the first granted badge from, so a failure reproduces; on the
-/// machine it is one word of the kernel's CSPRNG (answer 126).
+/// machine it is one word of the kernel's CSPRNG (servers/serving.md R27).
 const TEST_RANDOM: u64 = 0x1234_5678_9abc_def0;
 
-/// The root badges, in manifest order (INIT.md).
+/// The root badges, in manifest order (servers/keyd.md, "Keys and purposes").
 const HOST_BADGE: u64 = 1;
 const AUDIT_BADGE: u64 = 2;
 
@@ -110,7 +110,7 @@ fn ask(
     let opcode = redoubt_rt::wire::typed::opcode(&words).unwrap();
     let received: Vec<Option<Handle>> = handles.iter().copied().map(Some).collect();
     let received = ReceivedHandles::from_slice(&received).unwrap();
-    // An inline message carries no buffer, so its caller lends nothing (WIRE.md); a client
+    // An inline message carries no buffer, so its caller lends nothing (servers/wire.md); a client
     // that lends anyway is refused, which `malformed_requests_are_refused` checks.
     if inline(request) {
         let outcome = answer_with(server, caller, &words, &received, &mut [], kernel);
@@ -185,7 +185,7 @@ fn verifies(public: &[u8; PUBLIC_KEY_LEN], message: &[u8], signature: &[u8]) -> 
 // ---------------------------------------------------------------- the happy path
 
 /// A signature round-trips through a badge-scoped capability, and it is a signature over what
-/// `keyd` built, not over what the caller sent (BUILD-PLAN.md, WP-S1).
+/// `keyd` built, not over what the caller sent (servers/keyd.md R44).
 #[test]
 fn a_signature_round_trips_through_a_badge_scoped_capability() {
     let (mut s, mut k) = (server(), FakeKernel::new());
@@ -302,9 +302,9 @@ fn a_badge_signs_only_its_own_key_and_only_its_own_purpose() {
 
 /// **A request to sign arbitrary bytes is refused.** There is no operation that signs bytes as
 /// they came. The attack that matters is a hijacked holder of a `keys` capability relaying an
-/// SSH user-authentication request from its peer (answer 95): whatever it does with the blob,
-/// no answer verifies as a signature over it, so its peer cannot log in anywhere as the
-/// sponsor.
+/// SSH user-authentication request from its peer (servers/keyd.md R44): whatever it does with
+/// the blob, no answer verifies as a signature over it, so its peer cannot log in anywhere as
+/// the sponsor.
 #[test]
 fn a_relayed_ssh_user_auth_blob_is_never_what_gets_signed() {
     let (mut s, mut k) = (server(), FakeKernel::new());
@@ -463,7 +463,7 @@ fn seed_of(index: usize) -> [u8; 32] {
 /// **Enrolling a login key is refused**, because there is no enrolment: nothing `keyd` serves
 /// adds, replaces or removes a key, so the set it holds after any number of requests is the set
 /// the signed manifest gave it. `holds` is how `init` and `sshd` find out what that is
-/// (CAPABILITIES.md, approvals).
+/// (servers/init.md R35).
 #[test]
 fn no_request_can_put_a_key_into_keyd() {
     let (mut s, mut k) = (server(), FakeKernel::new());
@@ -502,8 +502,8 @@ fn no_request_can_put_a_key_into_keyd() {
 }
 
 /// **A malformed request is refused** with status 1 in this protocol as in every other
-/// (WIRE.md), and the handles it brought — which this protocol never asks for — are closed, so
-/// a client cannot grow `keyd`'s handle table.
+/// (servers/wire.md), and the handles it brought — which this protocol never asks for — are
+/// closed, so a client cannot grow `keyd`'s handle table.
 #[test]
 fn malformed_requests_are_refused_and_their_handles_closed() {
     let (mut s, mut k) = (server(), FakeKernel::new());
@@ -525,7 +525,7 @@ fn malformed_requests_are_refused_and_their_handles_closed() {
 
     // A request carrying handles the table does not name does not decode, so it is malformed
     // like any other, and the handles come back to be closed rather than staying in `keyd`'s
-    // table (CONTAINMENT.md: a client cannot grow a server's handle table).
+    // table (servers/serving.md, "Typed dispatch": a client cannot grow a server's handle table).
     let brought = [Some(Handle::new(41).unwrap()), Some(Handle::new(42).unwrap())];
     let received = ReceivedHandles::from_slice(&brought).unwrap();
     let mut buf = vec![0u8; 64 * 1024];
@@ -622,7 +622,7 @@ fn a_granted_capability_cannot_grant_again() {
 
 /// `grant` and `release`: a fresh capability per client, naming the same key and the same
 /// purpose and no more, released by the one that asked for it and by nobody else. Badge numbers
-/// never come back (answer 86).
+/// never come back (servers/serving.md R27).
 #[test]
 fn a_granted_capability_names_the_same_key_and_dies_with_release() {
     let (mut s, mut k) = (server(), FakeKernel::new());
@@ -674,9 +674,9 @@ fn a_granted_capability_names_the_same_key_and_dies_with_release() {
 }
 
 /// **`release(0)` frees everything this caller granted.** A holder that crashed and was
-/// restarted on the same root badge (INIT.md decision 4) knows none of its ids, and only the
-/// holder of an id can name a capability, so without this its share would stay full for the
-/// life of `keyd`. No grant is ever given the id 0, so it can name nothing else.
+/// restarted on the same root badge (servers/init.md, "Restarts and reboots") knows none of its
+/// ids, and only the holder of an id can name a capability, so without this its share would stay
+/// full for the life of `keyd`. No grant is ever given the id 0, so it can name nothing else.
 #[test]
 fn release_zero_frees_everything_this_caller_granted() {
     let (mut s, mut k) = (server(), FakeKernel::new());
@@ -754,10 +754,11 @@ fn a_grant_that_fails_gives_its_admission_back() {
     assert_eq!(got, LIMITS.state / 2, "the failed attempt cost nothing");
 }
 
-/// The label check on every request (CONTAINMENT.md). `keyd`'s keys are unlabelled in milestone
-/// 1, so a labelled caller may read a public key (no read up: ∅ ⊆ anything) and may not sign,
-/// grant or release (no write down). That is a stated milestone 1 consequence, in INIT.md: a
-/// vault session that must sign needs a labelled key, which is milestone 2.
+/// The label check on every request (servers/serving.md R25). `keyd`'s keys are unlabelled in
+/// milestone 1, so a labelled caller may read a public key (no read up: ∅ ⊆ anything) and may
+/// not sign, grant or release (no write down). That is a stated consequence (servers/keyd.md,
+/// "Bounds and errors"): a vault session that must sign needs a labelled key, which is planned
+/// for M5 (servers/keyd.md, "Sealed keys, labelled keys and keys in leases").
 #[test]
 fn a_labelled_caller_reads_but_does_not_sign() {
     let (mut s, mut k) = (server(), FakeKernel::new());
@@ -815,15 +816,15 @@ fn one_requests_work_is_bounded() {
     );
 }
 
-/// The limits this build ships are the ones CONTAINMENT.md asks for: every bucket at its cap
-/// fits the budget, the open calls they allow leave the headroom, and a cap can seat a share.
+/// The limits this build ships are the ones servers/serving.md R26 asks for: every bucket at its
+/// cap fits the budget, the open calls they allow leave the headroom, and a cap can seat a share.
 #[test]
 fn the_limits_are_sized_as_containment_says() {
     assert!(LIMITS.fits(&COST, BUDGET));
     let keys = || Keys::from_args([format!("k,audit,{AUDIT_SEED}")].iter().map(String::as_str)).unwrap();
     assert!(KeyServer::new(keys(), LIMITS, &COST, BUDGET, TEST_RANDOM).is_ok());
     // Every bucket at its cap: what the budget must cover, and one byte less is refused rather
-    // than rounded (answer 85).
+    // than rounded (servers/serving.md R26).
     let need = u64::from(LIMITS.buckets) * u64::from(LIMITS.state) * COST.state;
     assert!(need <= BUDGET, "the shipped budget covers the shipped caps");
     assert!(KeyServer::new(keys(), LIMITS, &COST, need, TEST_RANDOM).is_ok());

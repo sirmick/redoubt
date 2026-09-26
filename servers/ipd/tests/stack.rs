@@ -349,9 +349,9 @@ fn ephemeral_ports_are_unique() {
     assert_eq!(unique.len(), 40, "a port was used twice");
 }
 
-/// A port draw that lands on a port in use is drawn again (QA D3-code-review-5, P2-3 c): with the
-/// generator set back before each connect, every connect's first draw is the same port, and each
-/// still gets a port of its own, until `PORT_TRIES` draws all land on ports in use.
+/// A port draw that lands on a port in use is drawn again: with the generator set back before each
+/// connect, every connect's first draw is the same port, and each still gets a port of its own,
+/// until `PORT_TRIES` draws all land on ports in use.
 #[test]
 fn a_port_in_use_is_drawn_again() {
     use redoubt_ipd::stack::PORT_TRIES;
@@ -470,10 +470,10 @@ fn martian_sources_are_dropped() {
 }
 
 /// IPv4 that is not TCP gets no answer from anyone, and IPv4 of any protocol from the box's own
-/// addresses is dropped before its protocol is looked at (QA D3-code-review-5, P2-1): without that,
-/// smoltcp answers UDP or an unknown protocol with an ICMP "protocol unreachable", so a spoofed
-/// source gets a reflection, and ipd's own address makes it ask ARP for itself. Every frame ipd
-/// sends is checked as it goes (TCP or ARP only, no ARP for its own), and none may be sent here.
+/// addresses is dropped before its protocol is looked at: without that, smoltcp answers UDP or an
+/// unknown protocol with an ICMP "protocol unreachable", so a spoofed source gets a reflection, and
+/// ipd's own address makes it ask ARP for itself. Every frame ipd sends is checked as it goes (TCP
+/// or ARP only, no ARP for its own), and none may be sent here.
 #[test]
 fn non_tcp_and_martian_datagrams_get_no_answer() {
     use redoubt_ipd::fake::{datagram, echo_request};

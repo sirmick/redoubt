@@ -1,4 +1,4 @@
-//! `netd`, the program: two threads over one virtio-net device (IO-ARCHITECTURE.md, `netd`).
+//! `netd`, the program: two threads over one virtio-net device (servers/netd.md).
 //!
 //! - **The serving thread** maps the registers, allocates both DMA regions, brings the device up (both queues
 //!   configured, every receive slot offered, `DRIVER_OK`) and only then starts the receive thread. It owns
@@ -12,10 +12,12 @@
 //!
 //! **Every exit `netd` controls resets the device first** (status 0, read back), so the device
 //! stops touching its rings before its pages can return to the pool. A kill or a fault runs none
-//! of this code; closing that is the kernel's (answer 173, WP-K5b), and until then `netd` is not
-//! restarted.
+//! of this code; then the kernel resets the device before its DMA pages are reused
+//! (kernel/invariants.md I16). Whether and how `init` restarts `netd` is still open
+//! (servers/netd.md, "Started by `init`").
 //!
-//! **Pending on WP-R3.** `init` does not exist yet; the `tests/net` rig starts this program
+//! **Nothing starts it under `init` yet**, because `init` does not exist yet
+//! (docs/plan/m1-separation.md, step 3). The net rig (`tests/net/src/rig.rs`) starts this program
 //! through the stub with the startup block `init` will write.
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
@@ -47,7 +49,7 @@ pub const BAD_ARGS: u32 = 6;
 /// The kernel would give no random word for the broken badge, or no stack for the receive thread.
 pub const NO_RESOURCES: u32 = 7;
 
-/// The startup-block names of `netd`'s handles (INIT.md; question 149's `NAME` / `NAME-irq`).
+/// The startup-block names of `netd`'s handles (servers/init.md: `NAME` and `NAME-irq`).
 pub const ENDPOINT: &str = "netd";
 pub const NET: &str = "net";
 pub const NET_IRQ: &str = "net-irq";
@@ -100,8 +102,8 @@ pub fn serve(startup: &Startup) -> u32 {
     };
     let mmio = Mmio::from_handle(mmio);
     let Ok(regs) = Regs::map(&mmio) else { return NO_DEVICE };
-    // From here a panic stops the device before the process dies (answer 174). A kill or a
-    // fault runs none of this; that is WP-K5b's (answer 173).
+    // From here a panic stops the device before the process dies (servers/netd.md R57). A kill
+    // or a fault runs none of this; the kernel resets the device then (kernel/invariants.md I16).
     regs.arm_panic_reset();
     let (Ok(rx_view), Ok(tx_view)) =
         (Device::new(regs, &mmio, Some(Irq::from_handle(irq))), Device::new(regs, &mmio, None))
@@ -109,7 +111,7 @@ pub fn serve(startup: &Startup) -> u32 {
         return NO_DEVICE;
     };
     // A device that will not come up leaves `netd` running and refusing: `failed` to every
-    // request, and nothing for `init` to restart (IO-ARCHITECTURE.md, `netd`).
+    // request, and nothing for `init` to restart (servers/netd.md, "Two threads, reset on exit").
     let (mac, tx, rx) = match bring_up(&rx_view, &tx_view) {
         Ok(up) => (up.mac, up.tx, Some(up.rx)),
         Err(_) => (0, redoubt_netd::txq::TxQueue::new(), None),

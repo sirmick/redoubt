@@ -1,4 +1,4 @@
-//! The `netif` protocol (IO-ARCHITECTURE.md, `netd`): `info` and `transmit`, for one client.
+//! The `netif` protocol (servers/netd.md, "Serving `ipd`"): `info` and `transmit`, for one client.
 //!
 //! **One client.** `netd`'s one argument names the badge `ipd`'s handle carries; any other badge,
 //! and any labelled caller, is `not_permitted`. `netd` mints nothing and parks nothing, so a call
@@ -129,7 +129,7 @@ impl<T: Transport> TypedServer<Netif> for NetServer<T> {
         handles: &[Handle],
     ) -> Result<Answer<Reply>, ErrorCode> {
         // No message of `netif` carries a handle; the codec refuses one that brings any, and the
-        // dispatch closes it (CONTAINMENT.md, the shared server library).
+        // dispatch closes it (servers/serving.md, "Authority").
         let _ = handles;
         self.dispatch(caller, request)
     }
