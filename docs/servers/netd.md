@@ -76,9 +76,9 @@ Status: built · tested: host:redoubt-netd::an_honest_device_comes_up_with_two_f
  +------------------------------------+         +------------------------------------+
      |  copied out once, slot zeroed                 ^  copied in from ipd's lend
      v                                               |
- +-------------+   send, one page    +-----+        +-----+
- | netd memory | ------------------> | ipd |  ----> |     |  transmit call
- +-------------+                     +-----+        +-----+
+ +-------------+   send, one page    +-----+   transmit call   |
+ | netd memory | ------------------> | ipd | -------------------'
+ +-------------+                     +-----+
 ```
 *Figure: `netd`'s two DMA regions; descriptor i always names slot i, and only the used ring's index, id and length are read.*
 

@@ -104,7 +104,11 @@ I16 DMA pages reset before reuse.
   power loss leaves before or after (fsd.md); R51 DMA stays in its region, R52 a lie is a
   failure, never corruption, R53 a filesystem sees only its partition (blkd.md); R54 DMA stays in
   netd's regions, R55 a bad frame is content, not a lie, R56 no earlier frame leaks, R57 the
-  device stops before netd does (netd.md).
+  device stops before netd does (netd.md); R58 a scope reaches only what it allows, R59 never the
+  box's own addresses, R60 a sink refuses labels, R61 scopes only narrow, R62 sequence numbers
+  from the kernel (ipd.md); R63 only allowed names, R64 connections by name are pinned
+  (resolver.md); R65 a request only within its capability, R66 no credential leaves gatewayd
+  (gatewayd.md).
 - The servers set takes the next free numbers, in the order its pages are written (the
   userland template has no Security properties section, so userland pages only cite).
 - `rule F` stays on `docs/testbench.md`.
