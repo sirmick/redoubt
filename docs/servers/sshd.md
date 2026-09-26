@@ -1,0 +1,158 @@
+# sshd
+
+`sshd` is the box's front door: SSH, on `ipd`'s port 22. It authenticates a person's key with the
+steward's answer, has `keyd` sign the key exchange with the host key it never holds, and carries
+each session over its own channel, labelled with the session's labels. It serves `/dev/cons` to
+each session on that channel, and `ssh approve@box`, where only the steward talks. SFTP and SCP run
+inside it, confined to the session's own files. It uses `sunset`, an SSH library in `no_std` Rust
+without allocation.
+
+## Purpose
+
+People reach the box only over SSH, so the one process that parses every byte from the network
+before login is also the one that decides which channel a session's output may reach. `sshd` keeps
+both small: it holds no keys and decides no policy. Whose key a login used is the steward's
+question, the host key's signature is `keyd`'s, and a channel's labels come from the session the
+steward started.
+
+## Interface
+
+### Sessions over SSH
+
+Status: planned · M1 (separation and containment)
+
+- **Listening.** `sshd` is the sole holder of an `ipd` scope that listens on TCP port 22.
+- **The host key.** `sshd` holds `keyd`'s `ssh_host` root badge, handed to it by the manifest, and
+  asks `keyd` to sign each key exchange; `keyd` builds the exchange hash itself
+  ([keyd](keyd.md#messages)). The host key is never in `sshd`'s memory, and the steward never holds
+  its badge.
+- **Login.** A user name is `principal` or `principal+label`. `sshd` rejects a login key that `keyd`
+  holds (`holds`), then asks the steward whose key it is; the steward answers with a session, or
+  refuses ([steward](steward.md#authentication-and-sessions)). Login keys are the person's own and
+  never live in `keyd` ([R35 (key separation)](init.md#r35-key-separation)).
+- **A pty session.** A session gets one channel with a pty, on which `sshd` serves its `/dev/cons`
+  ([consoled](consoled.md#the-consol-protocol) has the same protocol): input from the channel,
+  output to it, and the window's size and its changes.
+- **State is per channel**, and each channel carries its session's labels (`alice@`: none;
+  `alice+secrets@`: `{alice-secrets}`); `sshd` applies the label check to them
+  ([R25 (the label check)](serving.md#r25-the-label-check)).
+- **The one sink cleared for a label.** A vault session's output may reach its own channel, which
+  the steward opened for the label's owner, and only a pty channel its owner authenticated: no
+  forwarding, no subsystems, no `exec` on a labelled channel. No other sink has an owner exemption
+  ([R67 (a channel keeps its labels)](#r67-a-channel-keeps-its-labels)).
+- **Ending.** A session's channel closes when the steward ends the session or its VM dies; a closed
+  channel ends the session.
+
+```mermaid
+sequenceDiagram
+    participant C as client
+    participant SH as sshd
+    participant KD as keyd
+    participant ST as steward
+    participant S as session
+    Note over C,S: planned
+    C-->>SH: key exchange
+    SH-->>KD: sign_ssh_exchange(transcript)
+    KD-->>SH: signature
+    C-->>SH: userauth alice+secrets, key K
+    SH-->>KD: holds(K)
+    KD-->>SH: no
+    SH-->>ST: login(alice, secrets, K)
+    ST-->>SH: session, labels {alice-secrets}
+    C-->>SH: pty channel
+    SH-->>S: /dev/cons on the labelled channel
+```
+*Figure: an SSH login to a vault session. All of it is planned.*
+
+**Open:** the protocol between `sshd` and the steward (with the steward's table); how many channels
+and connections one principal may hold at once.
+
+### `approve@box`
+
+Status: planned · M1 (separation and containment)
+
+`ssh approve@box` authenticates with the person's own approval key, and on that connection only the
+steward talks: `sshd` relays the steward's rendered requests and the person's answers, and nothing
+a session or agent sends reaches it ([steward](steward.md#the-powerbox-and-approvals)). A session's
+network scope never includes the box's own addresses ([ipd](ipd.md#the-boxs-own-addresses)), so a
+hijacked session cannot log in to `approve@box` over loopback
+([R68 (only the steward on approve@box)](#r68-only-the-steward-on-approvebox)).
+
+**Open:** none.
+
+### Files in and out
+
+Status: planned · M3 (files in and out)
+
+SFTP and SCP run inside SSH as subsystems of an unlabelled session's connection, confined to that
+session's namespace: they reach the files the session could, through the same connections, with the
+same label and quota checks, and nothing else. Every transfer is recorded in the audit log. A
+labelled channel has no subsystems, so no file leaves a vault this way.
+
+**Open:** whether SFTP is served by `sshd` itself or by a process started in the session with the
+session's connections; which SFTP version and operations.
+
+## Authority
+
+Status: planned · M1 (separation and containment)
+
+- `sshd` holds its `ipd` listen scope for port 22, `keyd`'s `ssh_host` root badge, a connection to the
+  steward, and the `/dev/cons` endpoints it serves to sessions.
+- It holds no private key and decides no login: the steward does.
+- It is trusted across the labels of the channels it carries: it is a named mediator.
+
+**Open:** none.
+
+## Security properties
+
+### R67 (a channel keeps its labels)
+
+Status: planned · M1 (separation and containment)
+
+Each SSH channel carries its session's labels, and a labelled session's output reaches only its own
+pty channel, authenticated by the label's owner, with no forwarding, subsystem or `exec`. So vault
+data leaves the box over SSH only to the person who owns the label, on the channel they opened.
+
+**Open:** none.
+
+### R68 (only the steward on approve@box)
+
+Status: planned · M1 (separation and containment)
+
+On an `approve@box` connection, authenticated with the person's own approval key, every byte shown
+comes from the steward and every answer goes to it; no session, agent or other channel can write to
+it or open one from inside the box.
+
+**Open:** none.
+
+## Failure and restart
+
+Status: planned · M1 (separation and containment)
+
+- **`sshd` crashes:** every SSH connection drops; sessions lose their channel and are ended by the
+  steward. `init` restarts `sshd` ([init](init.md#restarts-and-reboots)).
+- **`keyd` fails a signature:** the key exchange fails and the client sees a closed connection.
+
+**Open:** whether a session survives the loss of its channel long enough to be reattached.
+
+## Residual risks
+
+- **`approve@` shares `sshd` with the most hostile input.** A `sunset` bug reached from any channel,
+  before or after login, controls every channel and the approval screen, and a network flood delays
+  approvals. A separate `sshd` instance for `approve@`, or the physical console, is planned for
+  M5 (persist, install, share).
+- **`sshd` is trusted across labels.** It carries every session's channel; a bug in it reaches all of
+  them.
+- **An `ssh_host` badge speaks as the box.** A compromised `sshd` can complete key exchanges as the box
+  for as long as it runs.
+
+## Why
+
+- **Keys elsewhere.** The process that parses pre-authentication bytes from the whole network is the
+  last place for a key; `keyd` signs, and `sshd` asks.
+- **The steward decides logins.** Principals and their keys are the steward's; `sshd` asking keeps one
+  place that knows them.
+- **One cleared sink.** A vault's output must reach its owner somewhere; one sink, one kind of
+  channel, the owner's own authentication, and nothing else keeps the exemption as narrow as it can be.
+- **`sunset`.** An SSH implementation in `no_std` Rust with no allocation, by an author of dropbear,
+  is small enough to read.
