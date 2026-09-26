@@ -148,7 +148,7 @@ Kernel time is billed as well:
 
 The top of a destruction returns its carve to its parent before any of the destruction's work is
 billed. So the parent, often the caller of `budget_destroy`, pays for the destruction at the
-weight it has once the child is gone, not at the sliver it kept while the child held the rest.
+weight it has once the child is gone (on a deadline the kernel departs from this; see below), not at the sliver it kept while the child held the rest.
 In `bench:sched-destroy-billing` a parent that kept 10 of 1000 destroys the child holding 990 and
 is back on the CPU within twice the destruction's cost and four slices; billed at 10, it would wait
 for seconds.
@@ -258,7 +258,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-Status: built · partly tested: the bound on a call's kernel time is not attacked by a case, and the kernel departs from it in `map_anon`'s search; a deadline's destruction is billed only in part · tested: bench:sched-share, bench:sched-sleep-gaming, bench:sched-idle-gap, bench:sched-exit-churn, bench:sched-budget-churn, bench:sched-carve-inflation, bench:sched-debt-lift, bench:sched-timer-flood, bench:sched-server-busy, bench:sched-large-weight, host:redoubt-stride::the_crate_and_the_model_agree, host:redoubt-stride::a_broken_model_disagrees, host:redoubt-model::scheduler_fairness, host:redoubt-model::scheduler_contracts_hold, mutation:R12PriorityById, mutation:R12IgnoreWeight, mutation:R12WakeBanksCredit, mutation:R12TieQueuedFirst, mutation:R12RequeueAhead, mutation:R12RequeueLifo, mutation:R12PreemptOnWake, mutation:R12TimeoutWakePreempts, mutation:R12NoFloorWhenIdle, mutation:R12ShortRunsFree, mutation:R12DropRemainder, mutation:R12ExitRunsFree, mutation:R12DestroyDropsDebt, mutation:R12CreateAtFloorOnly, mutation:R12LiftByMax, mutation:R12StrideWeightIsLimit, mutation:R12UnnormalizedLift, mutation:R12LiftCountsEntryWait, mutation:R12FoldAtNewWeight, mutation:R12NoMinimumCharge
+Status: built · partly tested: the bound on a call's kernel time is not attacked by a case, and the kernel departs from it in `map_anon`'s search and in three scans of every kernel-object frame (the PID draw, the search for an owed exit notice, the search for an interrupt's IRQ object); a deadline's destruction is billed only in part · tested: bench:sched-share, bench:sched-sleep-gaming, bench:sched-idle-gap, bench:sched-exit-churn, bench:sched-budget-churn, bench:sched-carve-inflation, bench:sched-debt-lift, bench:sched-timer-flood, bench:sched-server-busy, bench:sched-large-weight, host:redoubt-stride::the_crate_and_the_model_agree, host:redoubt-stride::a_broken_model_disagrees, host:redoubt-model::scheduler_fairness, host:redoubt-model::scheduler_contracts_hold, mutation:R12PriorityById, mutation:R12IgnoreWeight, mutation:R12WakeBanksCredit, mutation:R12TieQueuedFirst, mutation:R12RequeueAhead, mutation:R12RequeueLifo, mutation:R12PreemptOnWake, mutation:R12TimeoutWakePreempts, mutation:R12NoFloorWhenIdle, mutation:R12ShortRunsFree, mutation:R12DropRemainder, mutation:R12ExitRunsFree, mutation:R12DestroyDropsDebt, mutation:R12CreateAtFloorOnly, mutation:R12LiftByMax, mutation:R12StrideWeightIsLimit, mutation:R12UnnormalizedLift, mutation:R12LiftCountsEntryWait, mutation:R12FoldAtNewWeight, mutation:R12NoMinimumCharge
 
 A budget's CPU follows its free weight, in one queue with no priority. While it has a runnable
 thread, a budget gets at least its weight's share of the CPU the runnable budgets share. No
@@ -271,7 +271,11 @@ the objects it names. It never depends on the extent of an address area or on wh
 processes hold. Billing it to the caller does not excuse it, because every wake waits for it.
 R10's scan of every kernel-object frame is the one stated exception
 ([todo](../todo/budget-destroy-cost.md)). The kernel departs from this bound in `map_anon`'s
-address search ([memory](memory.md#residual-risks)).
+address search ([memory](memory.md#residual-risks)), and in three more scans of every
+kernel-object frame up to the highest one ever used, a mark that grows with the objects every
+other budget creates: `process_create`'s PID draw, which looks for a process object naming each
+candidate PID; the search for an exit notice owed on an endpoint, at each delivery there; and the
+search for an interrupt's IRQ object, on every interrupt (Residual risks).
 
 It is attacked three ways:
 - **Boot cases, in virtual time**, count each budget's work over a window and compare it with
@@ -356,7 +360,11 @@ Status: built · partly tested: a picked thread that dies before the switch, and
   is the stated exception: it dominates lease termination and grows with the objects it walks
   ([budgets](budgets.md); follow-up: [todo](../todo/budget-destroy-cost.md)). `map_anon`'s
   search breaks the bound ([memory](memory.md#residual-risks); follow-up:
-  [todo](../todo/map-anon-search-cost.md)). Ending a DMA driver
+  [todo](../todo/map-anon-search-cost.md)), and so do the PID draw, the search for an owed exit
+  notice and the search for an interrupt's IRQ object, each a scan of every kernel-object frame
+  up to the highest one used, which other budgets raise by creating objects. Their time is
+  billed (to the caller, or for an interrupt to the IRQ object's owner), but every wake waits
+  for it. Follow-up: [todo](../todo/kernel-scan-bounds.md). Ending a DMA driver
   adds up to `RESET_US` (1 ms) of reset polling for each device it held, at most
   `MAX_DMA_DEVICES` (16) ([devices](devices.md)).
 - **A deadline's last steps are billed to nobody.** The kernel departs from the whole-cost

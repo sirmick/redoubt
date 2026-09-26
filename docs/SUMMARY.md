@@ -76,6 +76,7 @@
   - [Calls abandoned by an endpoint's destruction](todo/endpoint-destroyed-open-calls.md)
   - [Reclaiming an endpoint](todo/endpoint-reclaim.md)
   - [An interrupt before the first receive](todo/irq-level-latch.md)
+  - [Scans of every kernel-object frame](todo/kernel-scan-bounds.md)
   - [map_anon's search cost](todo/map-anon-search-cost.md)
   - [Records at a device mapping](todo/mmio-record-frames.md)
   - [Freeing empty page tables](todo/page-table-freeing.md)

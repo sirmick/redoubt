@@ -170,12 +170,8 @@ because that call never returns.
 Status: built · partly tested: the loader's refusal of a device tree that names no console, or a console with no interrupt, is not attacked by a case · tested: bench:device, bench:irq-attack
 
 The kernel gives every device object to the bundle's first program, which is where `init`
-receives them to place ([below](#which-process-gets-which-device)). The handle order is on
-[boot](boot.md#devices-handed-to-the-first-program): after the three budgets, the Reset right at
-4, the console's MMIO (the device tree's `/chosen/stdout-path`) at 5 and its interrupt at 6,
-then every other MMIO range in device-tree order and every other interrupt, ascending. The
-loader refuses a device tree that names no console, or a console with no interrupt, rather than
-shift those indices. The objects are charged to `system`, and the handles are stamped with
+receives them to place ([below](#which-process-gets-which-device)), in the handle order
+[boot](boot.md#devices-handed-to-the-first-program) gives. The objects are charged to `system`, and the handles are stamped with
 `root`, so they are revoked only with the whole tree ([stamps](objects.md#r9-stamps)). A program
 finds its DMA devices by asking: `dma_alloc` is `NotPermitted` without the flag and
 `WrongObject` on an IRQ or the Reset right.
@@ -363,6 +359,10 @@ Status: built · partly tested: destroying a device object's owner budget, and a
 - **An interrupt's kernel time is billed to the IRQ object's owner** (`system` at boot), not to
   the driver that holds the handle. Masking bounds it to one interrupt per `receive`, at the
   driver's pace.
+- **Finding an interrupt's IRQ object scans every kernel-object frame** up to the highest one
+  ever used, on every interrupt, so interrupt latency grows with the objects other budgets
+  create ([scheduling](scheduling.md#residual-risks)). Follow-up:
+  [todo](../todo/kernel-scan-bounds.md).
 
 ## Why
 

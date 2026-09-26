@@ -6,8 +6,8 @@ At boot the kernel makes `root` with a page limit of every RAM frame it did not 
 itself. `root` carves `system`'s and `users`' pages and pays for their two budget pages, which
 adds up to that whole limit. But `root`'s own budget page is taken from the same frames and
 charged to no budget. So the charges the tree promises total one page more than the free frames.
-If every budget fills to its limit, the last allocation finds no frame, and the kernel stops on
-an assertion instead of refusing the call with `OutOfMemory`.
+If every budget fills to its limit, the last allocation finds no frame, and the kernel panics
+(the frame allocator's `expect`) instead of refusing the call with `OutOfMemory`.
 
 R6 (charging) gains, after "a budget's own page to its parent": "and `root`'s own page to
 `root`: `root`'s limit is the RAM frames the kernel did not keep, less `root`'s own page, so the
@@ -37,3 +37,5 @@ Fixed in the kernel follow-up package after the documentation rewrite, before th
 - A model property checks the same sum at boot and after every carve.
 - An exhaustion attack case fills every budget to its limit; the last allocation gets
   `OutOfMemory` and the kernel keeps running.
+- A planted mutation that leaves `root`'s own page out of its limit (the boot split as it is
+  today) fails the model property and the exhaustion case.
