@@ -2,6 +2,7 @@
 
 - [Reading this book](README.md)
 - [Tenets](TENETS.md)
+- [The security register](SECURITY.md)
 - [Glossary](GLOSSARY.md)
 
 # The kernel
