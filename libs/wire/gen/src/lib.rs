@@ -449,7 +449,7 @@ pub fn parse(source: &str, text: &str) -> Result<Tables, String> {
                 if ninep && m.opcode < NINEP_FIRST_OPCODE {
                     return Err(at(n, format!(
                         "message `{}`: opcode {} is below {NINEP_FIRST_OPCODE}, reserved for `ninep_common`, \
-                         because `{name}` is served on a 9P endpoint (WIRE.md)",
+                         because `{name}` is served on a 9P endpoint (servers/wire.md)",
                         m.name, m.opcode
                     )));
                 }

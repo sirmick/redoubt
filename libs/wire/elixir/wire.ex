@@ -2,7 +2,7 @@
 # Elixir). Hand-written; the per-protocol modules in proto/ are generated and call these.
 defmodule Redoubt.Wire do
   @moduledoc """
-  Typed-message framing (planning/redoubt/WIRE.md), the Elixir twin of redoubt-wire's
+  Typed-message framing (docs/servers/wire.md), the Elixir twin of redoubt-wire's
   `typed` module; the two are held to the same test vectors.
 
   A message is four words (non-negative integers), a buffer (a binary, `<<>>` if none) and a

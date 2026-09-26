@@ -70,8 +70,9 @@ fn c1_reports_each_failure() {
     assert_eq!(lines, BTreeSet::from([3, 7, 9, 17, 23, 25]));
 }
 
-/// `beyond` excuses only M5 (C3); a part of a rule must repeat its name (C5); generated Elixir
-/// comments are code (C11); an anchor-only SUMMARY link names no page (C12).
+/// `beyond` excuses only M5 (C3); a part of a rule must repeat its name (C5); generated and
+/// hand-written Elixir, module docs included, is code (C11); an anchor-only SUMMARY link names no
+/// page (C12).
 #[test]
 fn narrow_cases_fire() {
     let at = |tree: &str, rule: u8, path: &str, line: usize| {
@@ -80,5 +81,6 @@ fn narrow_cases_fire() {
     assert!(at("c3", 3, "docs/README.md", 5));
     assert!(at("c5", 5, "docs/kernel/a.md", 7));
     assert!(at("c11", 11, "libs/wire/elixir/proto/ping.ex", 2));
+    assert!(at("c11", 11, "libs/wire/elixir/wire.ex", 3));
     assert!(at("c12", 12, "docs/SUMMARY.md", 4));
 }

@@ -1020,7 +1020,8 @@ fn code(c: &mut Ctx, defs: &BTreeMap<String, Def>) {
     }
     for f in files {
         let case = f.starts_with("tests/") && f.ends_with(".toml") && !f[6..].contains('/');
-        let elixir = f.starts_with("libs/wire/elixir/proto/") && f.ends_with(".ex");
+        // The wire codecs' Elixir twin, generated and hand-written: comments and module docs alike.
+        let elixir = f.starts_with("libs/wire/elixir/") && (f.ends_with(".ex") || f.ends_with(".exs"));
         if !case && !elixir && !f.ends_with(".rs") {
             continue;
         }
@@ -1029,7 +1030,7 @@ fn code(c: &mut Ctx, defs: &BTreeMap<String, Def>) {
             let text = if case {
                 l.trim_start().strip_prefix("description").and_then(|r| r.trim_start().strip_prefix('='))
             } else if elixir {
-                l.find('#').map(|at| &l[at + 1..])
+                Some(l)
             } else {
                 // A `//` right after a colon is a URL in a string (`https://`), not a comment.
                 l.match_indices("//").find(|(at, _)| !l[..*at].ends_with(':')).map(|(at, _)| &l[at + 2..])

@@ -142,7 +142,7 @@ pub extern "C" fn _start() -> ! {
             }
         }
         if let Some(w) = stat(d, Stats::DRIVER_LOST).filter(|w| w[0] > 0) {
-            b.note(format_args!("N={} driver: {} alarms never delivered (R5; K3's follow-up)", n, w[0]));
+            b.note(format_args!("N={} driver: {} alarms never delivered (R5; todo/irq-level-latch.md)", n, w[0]));
         }
         // Recorded, not judged: one round, R10 plus (runnable budgets + 2) slices.
         match stat(s, Stats::DESTROY) {

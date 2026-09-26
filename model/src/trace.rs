@@ -394,7 +394,7 @@ pub fn record(boot: &Boot, ops: &[Op], mutation: Option<Mutation>) -> Result<Str
     lines.push(format!("start p:{} t:{init_tid}", crate::kernel::INIT_PID));
     for op in ops {
         if k.unsupported_receive_output(op) {
-            return Err("question 171: late-invalid receive output is outside the model oracle".into());
+            return Err("late-invalid receive output is outside the model oracle (todo/receive-output-late-invalid.md)".into());
         }
         let Some(step) = k.step(op) else { continue };
         lines.extend(step_lines(&mut names, op, &step, &k));

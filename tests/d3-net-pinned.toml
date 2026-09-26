@@ -7,7 +7,7 @@ timeout_secs = 180
 expect = [
     '^\[net-rig\] ok: 64 abandoned reads, a read and an accept ended by ipd.s deadlines, the echo: exited 0$',
     '^\[net-rig\] ok: netd and ipd still run ',
-    '^\[net-rig\] D3 NET PINNED PASSED$',
+    '^\[net-rig\] NET PINNED PASSED$',
 ]
 forbid = ['\[net-rig\] FAIL']
 poweroff = true
