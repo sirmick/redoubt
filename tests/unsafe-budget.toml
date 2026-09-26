@@ -52,7 +52,9 @@ paths = [
 # WP-K5: -1, the legacy hart-timer path removed (the kernel owns the timer); +1, mem.rs's
 # `sync_icache`, the one `fence.i` (OWNER DECISION 10): executable pages must be fetched as
 # written, and inline asm is the only way to issue the instruction. Net 0.
-max_unsafe = 16
+# WP-K6: 13, from 16: intc_plic.rs's two `sie` toggles around the interrupt callbacks, and
+# mem.rs's dead `from_raw`.
+max_unsafe = 13
 max_undocumented = 0
 
 [[budget]]
@@ -64,14 +66,16 @@ paths = [
 ]
 # G1: +3, smp.rs's hart-block `Sync`, its write of the block and the parked hart's `wfi`
 # (the `smp` spike). Existing code that no budget listed, now counted; no new unsafe.
-max_unsafe = 13
+# WP-K6: 12, from 13: the old ceiling's slack. syscall.rs's hand-made S-mode trap stays, as
+# `kmain`'s private switch (`switch_trap`).
+max_unsafe = 12
 max_undocumented = 0
 
 [[budget]]
 name = "kernel: core"
 paths = [
     "kernel/src/main.rs", "kernel/src/mem.rs", "kernel/src/services.rs",
-    "kernel/src/syscall.rs", "kernel/src/args.rs", "kernel/src/io.rs",
+    "kernel/src/args.rs", "kernel/src/io.rs",
     "kernel/src/budget.rs", "kernel/src/handle.rs", "kernel/src/kframe.rs", "kernel/src/redoubt.rs",
     "kernel/src/device.rs", "kernel/src/message.rs", "kernel/src/process.rs", "kernel/src/cell.rs",
     "kernel/src/debug", "kernel/src/endpoint.rs",
@@ -92,7 +96,9 @@ paths = [
 # `OUTPUT` at boot and `print!`'s use of it). The debug pair gained its SAFETY comments here.
 # WP-K5b: +2, dma.rs's volatile read and write of a DMA device's registers through the kernel's
 # register window (the reset of answer 173); no other access to a device's registers needs one.
-max_unsafe = 27
+# WP-K6: 21, from 27: with the old call interface, server.rs's message queue, services.rs's two
+# old message buffers, mem.rs's `bzero` and its use, and the old ceiling's slack of one.
+max_unsafe = 21
 max_undocumented = 0
 
 [[budget]]

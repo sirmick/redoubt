@@ -500,7 +500,6 @@ pub fn thread_exit(ss: &mut SystemServices, pid: PID, tid: TID) {
         return;
     }
     ss.destroy_thread(pid, tid).expect("the running thread can be destroyed");
-    crate::syscall::reset_switchto_caller();
 }
 
 // --- Exit, fault and kill ---------------------------------------------------------------------------
@@ -589,7 +588,6 @@ fn end_process(ss: &mut SystemServices, pid: PID) {
         let tid = ArchProcess::with_current(|p| p.current_tid());
         ss.unschedule_thread(pid, tid).ok();
         ss.terminate_process(pid).expect("the running process exists");
-        crate::syscall::reset_switchto_caller();
     } else {
         ss.kill_process(pid).expect("a process that is ending exists");
     }

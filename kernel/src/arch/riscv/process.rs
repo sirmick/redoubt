@@ -25,7 +25,7 @@ pub const INITIAL_TID: TID = 2;
 pub const IRQ_TID: TID = 0;
 
 use redoubt_abi::arch::PAGE_SIZE;
-use redoubt_abi::{PID, TID, ThreadInit};
+use redoubt_abi::{PID, TID};
 
 use crate::cell::KernelCell;
 use crate::services::ProcessInner;
@@ -44,9 +44,6 @@ const MAGIC_RETURN_BASE: usize = redoubt_abi::arch::PROCESS_AREA + 0x80_0000;
 
 /// This is the address a thread will return to when it exits.
 pub const EXIT_THREAD: usize = MAGIC_RETURN_BASE + 0x3000;
-
-/// This is the address a thread will return to when it finishes handling an exception.
-pub const RETURN_FROM_EXCEPTION_HANDLER: usize = MAGIC_RETURN_BASE + 0x4000;
 
 /// Support processing interrupts, which normally are TID 0. Since
 /// the TID is a NonZeroU8, we must pick a value here that can be
@@ -149,9 +146,6 @@ pub struct InitialProcess {
 
     /// Address of the top of the stack
     pub sp: usize,
-
-    /// Address of the environment block
-    pub env: usize,
 }
 
 impl InitialProcess {
@@ -264,13 +258,6 @@ impl Process {
         &mut process.threads[tid]
     }
 
-    pub fn thread(&self, tid: TID) -> &Thread {
-        let process = process_impl();
-        let tid = fixup_irq(tid);
-        assert!(tid < process.threads.len(), "attempt to retrieve an invalid thread {}", tid);
-        &process.threads[tid]
-    }
-
     pub fn find_free_thread(&self) -> Option<TID> {
         let process = process_impl();
         let start = process.last_tid_allocated as usize;
@@ -284,16 +271,8 @@ impl Process {
         None
     }
 
-    pub fn set_thread_result(&mut self, thread_nr: TID, result: redoubt_abi::Result) {
-        let vals = result.to_args();
-        let thread = self.thread_mut(thread_nr);
-        for (src, dest) in vals.iter().zip(thread.registers[9..].iter_mut()) {
-            *dest = *src;
-        }
-    }
-
     /// The Redoubt result registers `a0..=a7` of a thread that was waiting (`redoubt-sys`
-    /// encodes them; the legacy `Result` shape does not fit them).
+    /// encodes them).
     pub fn set_thread_registers(&mut self, thread_nr: TID, regs: &[usize; 8]) {
         let thread = self.thread_mut(thread_nr);
         for (src, dest) in regs.iter().zip(thread.registers[9..].iter_mut()) {
@@ -301,85 +280,22 @@ impl Process {
         }
     }
 
-    /// Initialize this process thread with the given entrypoint and stack
-    /// addresses.
-    pub fn setup_process(pid: PID, thread_init: ThreadInit) -> Result<(), redoubt_abi::Error> {
-        let process = process_impl();
-        let tid = INITIAL_TID;
-
-        assert_eq!(pid, crate::arch::current_pid(), "hardware pid does not match setup pid");
-        assert!(tid != IRQ_TID, "tried to init using the irq thread");
-        assert!(tid - 1 < process.threads.len(), "tried to init a thread that's out of range");
-        assert!(
-            tid == INITIAL_TID,
-            "tried to init using a thread {} that wasn't {}. This probably isn't what you want.",
-            tid,
-            INITIAL_TID
-        );
-
-        klog!("Setting up new process {}", pid.get());
-        let pid_idx = (pid.get() as usize) - 1;
-        PROCESS_TABLE.with(|pt| {
-            assert!(!pt.table[pid_idx], "process {} is already allocated", pid);
-            pt.table[pid_idx] = true;
+    /// The first run of a loader-bundle program (INTERIM, until R3's `init` launches them), in
+    /// its own address space: claim its slot, reset its contexts, start its first thread at
+    /// `entry` with stack pointer `sp`, and reserve its stack for demand paging (OD6).
+    pub fn setup_loader_process(pid: PID, entry: usize, sp: usize) {
+        Self::claim(pid);
+        Self::setup_empty_process(pid);
+        Self::setup_first_thread(pid, entry, sp, 0);
+        let stack = (sp - DEFAULT_STACK_SIZE) & !(PAGE_SIZE - 1);
+        crate::mem::MemoryManager::with_mut(|mm| {
+            mm.reserve_range(
+                stack as *mut u8,
+                DEFAULT_STACK_SIZE,
+                redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W,
+            )
+            .expect("couldn't reserve stack")
         });
-
-        // By convention, thread 0 is the trap thread. Therefore, thread 1 is
-        // the first default thread. There is an offset of 1 due to how the
-        // interrupt handler functions.
-        process.hardware_thread = tid + 1;
-        process.allocated_threads = 1 << tid;
-        process.last_tid_allocated = tid as u8;
-
-        // Reset the thread state, since it's possibly uninitialized memory
-        for thread in process.threads.iter_mut() {
-            *thread = Default::default();
-        }
-
-        let thread = &mut process.threads[tid];
-
-        thread.sepc = thread_init.call as usize;
-        thread.registers[1] = thread_init.stack.as_ptr() as usize + thread_init.stack.len();
-        thread.registers[9] = thread_init.arg1;
-        thread.registers[10] = thread_init.arg2;
-        thread.registers[11] = thread_init.arg3;
-        thread.registers[12] = thread_init.arg4;
-
-        klog!("thread_init: {:x?}  thread: {:x?}", thread_init, thread);
-
-        #[cfg(any(feature = "debug-print", feature = "print-panics"))]
-        {
-            let pid = pid.get();
-            if pid != 1 {
-                klog!(
-                    "initializing PID {} thread {} with entrypoint {:08x}, stack @ {:08x}, arg {:08x}",
-                    pid,
-                    tid,
-                    thread.sepc,
-                    thread.registers[1],
-                    thread.registers[9],
-                );
-            }
-        }
-
-        process.inner = Default::default();
-        process.inner.pid = pid;
-
-        // Mark the stack as "unallocated-but-free"
-        let init_sp = (thread_init.stack.as_ptr() as usize) & !0xfff;
-        if init_sp != 0 {
-            let stack_size = thread_init.stack.len();
-            crate::mem::MemoryManager::with_mut(|memory_manager| {
-                memory_manager
-                    .reserve_range(
-                        init_sp as *mut u8,
-                        stack_size,
-                        redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W,
-                    )
-                    .expect("couldn't reserve stack")
-            });
-        }
-        Ok(())
     }
 
     /// WP-K4: claim `pid` in the process table, so that its address space can be activated. It
@@ -396,7 +312,7 @@ impl Process {
     /// Initialize the context storage of the address space `process_create` just allocated. It has no thread
     /// yet: nothing can run in it until `process_start`.
     ///
-    /// The process's own address space must be the active one, as `setup_process` requires, so
+    /// The process's own address space must be the active one, as `setup_first_thread` requires, so
     /// that `process_impl()` names *its* saved contexts. `MemoryMapping::allocate` zeroed those
     /// frames, and all-zeroes is not a valid `ProcessInner` (its `pid` is a `NonZeroU8`), so
     /// nothing may read them before this runs.
@@ -416,7 +332,7 @@ impl Process {
     }
 
     /// WP-K4: the first thread of a process `process_start` is starting, at `entry` with stack
-    /// pointer `sp` and one argument. Unlike `setup_process` this reserves no stack: a Redoubt
+    /// pointer `sp` and one argument. Unlike `setup_loader_process` this reserves no stack: a Redoubt
     /// process is given every page it has by its parent (`process_map`), so `sp` is an address
     /// the parent has already mapped and the kernel only loads it.
     ///
@@ -432,8 +348,8 @@ impl Process {
         thread.registers[9] = arg;
     }
 
-    /// WP-K4: `thread_create(entry, sp, arg)`. As `setup_thread`, without the legacy
-    /// `ThreadInit`'s stack range: the caller has mapped its own stack and passes `sp`.
+    /// WP-K4: `thread_create(entry, sp, arg)`. The caller has mapped its own stack and passes
+    /// `sp`.
     pub fn setup_redoubt_thread(&mut self, new_tid: TID, entry: usize, sp: usize, arg: usize) {
         let process = process_impl();
         let thread = &mut process.threads[new_tid];
@@ -445,64 +361,23 @@ impl Process {
         process.allocated_threads |= 1 << new_tid;
     }
 
-    pub fn setup_thread(&mut self, new_tid: TID, setup: ThreadInit) -> Result<(), redoubt_abi::Error> {
-        let entrypoint = setup.call as usize;
-        // Create the new context and set it to run in the new address space.
-        let pid = self.pid.get();
-        let thread = self.thread_mut(new_tid);
-        let sp = setup.stack.as_ptr() as usize + setup.stack.len();
-        if sp <= 16 {
-            return Err(redoubt_abi::Error::BadAddress);
-        }
-        // Zero out the thread registers, including special ones like `$tp`.
-        // This should already have been done by the destructor, but do it
-        // again anyway.
-        for val in &mut thread.registers {
-            *val = 0;
-        }
-        thread.sepc = 0;
-        crate::arch::syscall::invoke(
-            thread,
-            pid == 1,
-            entrypoint,
-            (sp - 16) & !0xf,
-            EXIT_THREAD,
-            &[setup.arg1, setup.arg2, setup.arg3, setup.arg4],
-        );
-        process_impl().allocated_threads |= 1 << new_tid;
-        Ok(())
-    }
-
-    /// Destroy a given thread and return its return value.
-    ///
-    /// # Returns
-    ///     The return value of the function
+    /// Destroy a given thread.
     ///
     /// # Errors
     ///     redoubt_abi::ThreadNotAvailable - the thread did not exist
-    pub fn destroy_thread(&mut self, tid: TID) -> Result<usize, redoubt_abi::Error> {
+    pub fn destroy_thread(&mut self, tid: TID) -> Result<(), redoubt_abi::Error> {
         // Ensure this thread is allocated, regardless of the PC it was given.
         if !self.thread_exists(tid) || tid == IRQ_TID {
             return Err(redoubt_abi::Error::ThreadNotAvailable);
         }
 
         let thread = self.thread_mut(tid);
-        // thread.registers[0] == x1
-        // thread.registers[1] == x2
-        // ...
-        // thread.registers[4] == x5 == t0
-        // ...
-        // thread.registers[9] == x10 == a0
-        // thread.registers[10] == x11 == a1
-        let return_value = thread.registers[9];
-
         for val in &mut thread.registers {
             *val = 0;
         }
         thread.sepc = 0;
         process_impl().allocated_threads &= !(1 << tid);
-
-        Ok(return_value)
+        Ok(())
     }
 
     pub fn print_all_threads(&self) {
@@ -537,33 +412,10 @@ impl Process {
         Ok(())
     }
 
-    pub fn find_thread<F>(&self, op: F) -> Option<(TID, &mut Thread)>
-    where
-        F: Fn(TID, &Thread) -> bool,
-    {
-        let process = process_impl();
-        for (idx, thread) in process.threads.iter_mut().enumerate() {
-            if process.allocated_threads & (1 << idx) == 0 {
-                continue;
-            }
-            if op(idx, thread) {
-                return Some((idx, thread));
-            }
-        }
-        None
-    }
-
     /// This is used by debugging routines to sanity check state, which are typically #[cfg]'d out
     /// but with complicated overlapping rules that constantly change. Hence, the #[allow(dead_code)].
     #[allow(dead_code)]
     pub fn pid(&self) -> PID { self.pid }
-}
-
-impl Thread {
-
-    pub fn a0(&self) -> usize { self.registers[9] }
-
-    pub fn a1(&self) -> usize { self.registers[10] }
 }
 
 impl core::fmt::Display for Thread {

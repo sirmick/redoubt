@@ -517,9 +517,9 @@ impl MemoryManager {
 
     /// Refuse to move `[address, address + len)` of the current address space unless every
     /// page is a frame credited to `pid` in the ownership table. A page `pid` was only lent is
-    /// credited to its lender, not to `pid`, so it fails this check; `move_page` would discover
-    /// the mismatch only after changing the page tables, too late to back out. The pages must
-    /// already be backed (`ensure_range_exists`), so each has a frame to check.
+    /// credited to its lender, not to `pid`, so it fails this check; checked any later, the
+    /// mismatch would surface only after the page tables had changed, too late to back out. The
+    /// pages must already be backed (`ensure_range_exists`), so each has a frame to check.
     pub fn check_owned_range(&self, pid: PID, address: usize, len: usize) -> Result<(), redoubt_abi::Error> {
         let end = address.checked_add(len).ok_or(redoubt_abi::Error::BadAddress)?;
         for page in (address..end).step_by(PAGE_SIZE) {

@@ -271,8 +271,8 @@ impl MemoryManager {
             }
             2 => {
                 let irq = u32::try_from(base).expect("Devs: an interrupt number too wide");
-                // The timer is a hart resource, not a device (BOOT.md): it is not a PLIC
-                // source, and until WP-K5 the legacy path still delivers it as IRQ 0.
+                // The timer is a hart resource, not a device (BOOT.md), and PLIC source 0 does
+                // not exist.
                 assert!(irq != 0, "Devs: interrupt 0 is the hart timer, not a device");
                 d.kind = Kind::Irq;
                 d.irq = irq;

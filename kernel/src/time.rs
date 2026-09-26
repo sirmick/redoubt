@@ -14,8 +14,9 @@
 //! the server budget's deadline, gets `Timeout` with its lend consumed, not `Dead` with it
 //! returned.
 //!
-//! It runs at every kernel entry but the kernel's own `SwitchTo`, first, before anything reads
-//! the entering process, so a deadline that has passed beats any operation that enters later.
+//! It runs at every kernel entry but `kmain`'s switch (`sched::switch_to`), first, before
+//! anything reads the entering process, so a deadline that has passed beats any operation that
+//! enters later.
 //! `kmain` expires, then picks, then switches, with no kernel entry in between.
 //!
 //! # Hints

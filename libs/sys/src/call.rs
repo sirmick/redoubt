@@ -193,10 +193,8 @@ impl Arg for ResetKind {
     fn read(r: &mut Reader) -> Result<Self, Error> { r.tag(&[ResetKind::PowerOff, ResetKind::Reboot]) }
 }
 
-/// Added to every call's number in the table below. Until WP-K6 deletes the legacy Redoubt calls,
-/// the kernel serves both interfaces, and the legacy numbers (0..=46, `redoubt_abi::SysCallNumber`) use
-/// the same register, `a0`; numbers from here up are disjoint from them, so the kernel routes a
-/// call by `a0` alone. WP-K6 can set this to 0.
+/// Added to every call's number in the table below. Every `a0` outside the table, this one and
+/// all below it included, is an unknown number: `InvalidArgument` at decoding.
 pub const NUMBER_BASE: u32 = 0x100;
 
 /// The one table of calls. Each entry gives a [`Number`] variant and its value (plus

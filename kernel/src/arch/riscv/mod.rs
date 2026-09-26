@@ -12,7 +12,7 @@ mod mmu_flags;
 pub mod panic;
 pub mod process;
 mod physmap;
-#[cfg(all(feature = "smp", feature = "sbi"))]
+#[cfg(feature = "smp")]
 pub mod smp;
 pub mod syscall;
 

@@ -84,9 +84,7 @@ impl Number {
     /// Whether this call can return `error`: the errors of its row in KERNEL-SPEC.md's error
     /// table (in what order they are checked is the spec's), plus decoding's general
     /// `InvalidArgument`, and `OutOfMemory` for a call that adds a handle to its caller's table.
-    /// The kernel's interim refusals
-    /// (a call not built yet, or made from a legacy interrupt callback) are outside it; the
-    /// kernel checks every error it returns against this in debug builds.
+    /// The kernel checks every error it returns against this in debug builds.
     pub fn can_return(self, error: Error) -> bool { self.errors().0 & 1 << error as u32 != 0 }
 
     fn errors(self) -> Errors {

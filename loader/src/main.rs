@@ -86,7 +86,6 @@ struct InitialProcess {
     satp: usize,
     entrypoint: usize,
     sp: usize,
-    env: usize,
 }
 
 #[no_mangle]
@@ -206,7 +205,6 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
         satp: kernel.satp(),
         entrypoint: kernel_entry,
         sp: KERNEL_STACK_TOP - STACK_PADDING,
-        env: 0,
     };
     println!("  PID 1: {} -> {:#x}", kernel_image.filename().as_str().unwrap_or("?"), kernel_entry);
 
@@ -238,15 +236,12 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
         println!("  PID {}: {} -> {:#x}", pid, name, entrypoint);
 
         let process =
-            InitialProcess { satp: space.satp(), entrypoint, sp: USER_STACK_TOP - STACK_PADDING, env: 0 };
+            InitialProcess { satp: space.satp(), entrypoint, sp: USER_STACK_TOP - STACK_PADDING };
         *processes.get_mut(count).expect("too many initial processes") = process;
         count += 1;
 
-        // The kernel only needs these tags to count processes and to find `.eh_frame`.
-        // TODO(redoubt): report the `.eh_frame` address so `std` can unwind.
+        // The kernel counts these tags to size its process table (BOOT.md); they carry no data.
         args.begin(b"IniE");
-        args.word(0);
-        args.word(0);
         args.end();
 
         args.begin(b"PNam");
