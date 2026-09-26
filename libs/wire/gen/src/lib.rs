@@ -1,9 +1,9 @@
-//! Generates the typed-message codecs from the tables in the design notes (WIRE.md: "one
-//! layout per message type, defined by a table in the owning server's note ... the Rust and
-//! Elixir codecs are generated from those tables, so sender and receiver cannot disagree").
+//! Generates the typed-message codecs from the protocol tables (servers/wire.md: one layout
+//! per message type, defined by a table the owning server's page includes; the Rust and
+//! Elixir codecs are generated from those tables, so sender and receiver cannot disagree).
 //!
-//! The notes are the single source of truth. This crate reads every `docs/*.md`
-//! and `libs/wire/tables/*.md` (skipping fenced code blocks), finds each message table
+//! The tables are the single source of truth. This crate reads every `libs/wire/tables/*.md`
+//! (skipping fenced code blocks), finds each message table
 //! marked `<!-- wire: NAME -->` and each error table marked `<!-- wire-errors: NAME -->`, and
 //! emits `libs/wire/src/proto/NAME.rs`, `libs/wire/elixir/proto/NAME.ex`, and
 //! `libs/wire/src/proto/mod.rs` listing the Rust modules. The generated files are checked
@@ -865,17 +865,16 @@ pub fn elixir(p: &Protocol) -> String {
     s
 }
 
-/// The notes that may hold tables, relative to the repository root, sorted.
+/// The files that may hold tables, relative to the repository root, sorted.
 pub fn sources(root: &Path) -> Result<Vec<PathBuf>, String> {
     let mut found = Vec::new();
-    for dir in ["docs", "libs/wire/tables"] {
-        let entries = std::fs::read_dir(root.join(dir)).map_err(|e| format!("{dir}: {e}"))?;
-        for entry in entries {
-            let path = entry.map_err(|e| format!("{dir}: {e}"))?.path();
-            if path.extension().is_some_and(|x| x == "md") {
-                let rel = path.strip_prefix(root).map_err(|e| e.to_string())?;
-                found.push(rel.to_path_buf());
-            }
+    let dir = "libs/wire/tables";
+    let entries = std::fs::read_dir(root.join(dir)).map_err(|e| format!("{dir}: {e}"))?;
+    for entry in entries {
+        let path = entry.map_err(|e| format!("{dir}: {e}"))?.path();
+        if path.extension().is_some_and(|x| x == "md") {
+            let rel = path.strip_prefix(root).map_err(|e| e.to_string())?;
+            found.push(rel.to_path_buf());
         }
     }
     found.sort();
@@ -1168,36 +1167,17 @@ mod tests {
         assert!(protocols(bare).unwrap_err().contains("needs a `<!-- wire: NAME -->`"));
     }
 
-    /// `text` with the fenced message table replaced by what WP-R1b writes when it unfences
-    /// it: the marker, the table, and an empty error table. `None` if there is no such fence.
-    fn unfence(text: &str, name: &str) -> Option<String> {
-        let lines: Vec<&str> = text.lines().collect();
-        let header = |l: &str| cells(l.trim()).is_some_and(|c| c == MESSAGE_HEADER);
-        let open = (0..lines.len()).find(|&i| lines[i].trim().starts_with("```") && lines.get(i + 1).is_some_and(|l| header(l)))?;
-        let close = (open + 1..lines.len()).find(|&i| lines[i].trim().starts_with("```"))?;
-        let mut out: Vec<String> = lines[..open].iter().map(|l| l.to_string()).collect();
-        out.push(format!("<!-- wire: {name} -->"));
-        out.extend(lines[open + 1..close].iter().map(|l| l.trim().to_string()));
-        out.extend(["".into(), format!("<!-- wire-errors: {name} -->"), "| Code | Error |".into(), "| --- | --- |".into()]);
-        out.extend(lines[close + 1..].iter().map(|l| l.to_string()));
-        Some(out.join("\n") + "\n")
-    }
-
-    /// The tables WP-R1b unfences (NAMESPACES.md `ninep_common`, INIT.md `startup`), read
-    /// from the notes as they stand, with the fence stripped: the generator can express both.
-    /// Once R1b has unfenced them, the notes are parsed as they are.
+    /// The real tables: `ninep_common` has a handle reply and a string field; `startup` has no
+    /// inline message.
     #[test]
-    fn fenced_r1b_tables_parse() {
+    fn fenced_tables_parse() {
         let mut found = Vec::new();
-        for (note, name) in [("docs/NAMESPACES.md", "ninep_common"), ("docs/INIT.md", "startup")] {
+        for note in ["libs/wire/tables/ninep_common.md", "libs/wire/tables/startup.md"] {
             let text = std::fs::read_to_string(repo_root().join(note)).unwrap();
-            let text = unfence(&text, name).unwrap_or(text);
             let tables = parse(note, &text).unwrap_or_else(|e| panic!("{e}"));
             found.push(tables);
         }
         let p = link(found).unwrap();
-        // By name, not by position: INIT.md holds `keyd`'s tables as well (WP-S1), and other
-        // notes will grow more, so this must not depend on how many a note happens to have.
         let by_name = |want: &str| p.iter().find(|t| t.name == want).unwrap_or_else(|| panic!("{want}"));
         let (n, s) = (by_name("ninep_common"), by_name("startup"));
         let names: Vec<&str> = n.messages.iter().map(|m| m.name.as_str()).collect();
@@ -1248,13 +1228,15 @@ mod tests {
         assert!(protocols(&format!("```\n{table}")).unwrap_err().contains("unclosed code fence"));
     }
 
-    /// WIRE.md shows an example table in a code fence and names the markers in prose; it
-    /// defines no protocol.
+    /// The authoring guide shows tables in code fences and names the markers in prose; the only
+    /// protocol it defines is `example`.
     #[test]
-    fn wire_md_defines_no_protocol() {
-        let text = std::fs::read_to_string(repo_root().join("docs/WIRE.md")).unwrap();
-        assert!(text.contains("<!-- wire: example -->"), "WIRE.md no longer shows its example");
-        assert_eq!(parse("docs/WIRE.md", &text), Ok(Tables::default()));
+    fn the_guide_defines_only_example() {
+        let note = "libs/wire/tables/example.md";
+        let text = std::fs::read_to_string(repo_root().join(note)).unwrap();
+        let p = link(vec![parse(note, &text).unwrap()]).unwrap();
+        let names: Vec<&str> = p.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["example"]);
     }
 
     #[test]
