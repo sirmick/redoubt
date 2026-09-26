@@ -475,7 +475,7 @@ fn blame(out: &mut Console, parent: &Parent, budget_a: u32, budget_b: u32) {
     check!(
         out,
         is(&notice, Cause::Faulted, 9, ACCOUNT_A, &[LABEL]),
-        "process_exit holding an open call is faulted, blamed on that call (answer 55)"
+        "process_exit holding an open call is faulted, blamed on that call"
     );
 
     // Two callers with different accounts: after `serve`, the call `serve` named is blamed, not

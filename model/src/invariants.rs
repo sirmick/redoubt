@@ -251,7 +251,7 @@ impl Checker {
                     );
                 }
                 Flow::DeviceUsed { device, quarantined } => {
-                    ensure!(!quarantined, "OD6: quarantined device {device} was handed out again");
+                    ensure!(!quarantined, "I16: quarantined device {device} was handed out again");
                 }
                 Flow::Woken { .. } | Flow::AbandonNotice { .. } => {}
             }
@@ -304,7 +304,7 @@ impl Checker {
         for f in k.free_frames.keys() {
             ensure!(
                 k.ghost.armed.get(f).is_none_or(BTreeSet::is_empty),
-                "I-DMA: free frame {f} is still armed against {:?}",
+                "I16: free frame {f} is still armed against {:?}",
                 k.ghost.armed.get(f)
             );
         }
@@ -348,7 +348,7 @@ impl Checker {
                 // I16 (kernel/devices.md, "Quarantine"): a quarantined frame outlives the process
                 // it was held by, mapped nowhere, charged to its run's budget until that budget is
                 // destroyed, then to its parent (kernel/budgets.md, R10 step 8).
-                ensure!(s.own.is_empty(), "I-DMA: quarantined frame {f} is still mapped by {:?}", s.own);
+                ensure!(s.own.is_empty(), "I16: quarantined frame {f} is still mapped by {:?}", s.own);
             } else if let Some(pid) = s.own.first() {
                 ensure!(
                     k.budget_of(*pid) == Some(fr.payer),

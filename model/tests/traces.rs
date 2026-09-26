@@ -84,7 +84,7 @@ fn a_rule_breaking_kernel_fails_replay() {
             || matches!(m, Mutation::OpenCallsUnlimited | Mutation::R4aOpenCallsPerThread | Mutation::R4aFullTakesNothing)
             // Ghost-only: while the dropped device's resets confirm, every answer is the same; only
             // I16 (kernel_sequence, dma_contracts) sees the frame pooled while still armed.
-            || *m == Mutation::K5bResetClearsCoHolderReach
+            || *m == Mutation::DmaResetClearsCoHolderReach
     };
     for m in Mutation::ALL.into_iter().filter(|m| !invisible(m)) {
         let detected = texts.iter().position(|text| {

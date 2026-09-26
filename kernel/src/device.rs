@@ -230,7 +230,7 @@ impl MemoryManager {
                 self.install_handle(pid, handle).expect("boot: no room for a device handle");
             }
         }
-        println!("Devices: {} objects, all held by the first program (INTERIM)", n);
+        println!("Devices: {} objects, all held by the first program", n);
     }
 
     /// One `Devs` entry: kind, two 64-bit values (low word first), a flag word (kernel/boot.md).
@@ -358,7 +358,7 @@ impl MemoryManager {
         if !d.dma {
             return None;
         }
-        assert!(!self.dma_quarantined(d.base), "I-DMA: a live device object names a quarantined device");
+        assert!(!self.dma_quarantined(d.base), "I16: a live device object names a quarantined device");
         Some(self.dma_slot(d.base).expect("every DMA device object has a registry slot"))
     }
 

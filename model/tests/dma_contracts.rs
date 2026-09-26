@@ -144,11 +144,11 @@ fn exit_pools_after_reset() {
 /// Reset before reuse (kernel/devices.md): one death's confirmed reset of a device does not
 /// cover a live co-holder that still reaches it. B allocates through device 7 and maps device 2;
 /// A maps device 2 and exits, which resets it; B can still program device 2, so its own death must
-/// reset it again before B's frame is pooled. Under `K5bResetClearsCoHolderReach` it is not, and
+/// reset it again before B's frame is pooled. Under `DmaResetClearsCoHolderReach` it is not, and
 /// I16 reports the frame.
 #[test]
 fn reset_at_one_death_does_not_cover_a_co_holder() {
-    for mutation in [None, Some(Mutation::K5bResetClearsCoHolderReach)] {
+    for mutation in [None, Some(Mutation::DmaResetClearsCoHolderReach)] {
         let mut w = World::new(mutation);
         assert!(matches!(w.k.processes[&1].handles[&DMA2].object, Object::Device(7)));
         let (_, b, tb) = child(&mut w, USERS, vec![DMA, DMA2]);
@@ -163,7 +163,7 @@ fn reset_at_one_death_does_not_cover_a_co_holder() {
                 r.unwrap();
                 assert!(w.k.frames.values().all(|f| f.dma.is_none()), "B's frame pooled after both resets");
             }
-            Some(_) => assert!(r.unwrap_err().contains("I-DMA"), "the dropped reach is caught"),
+            Some(_) => assert!(r.unwrap_err().contains("I16"), "the dropped reach is caught"),
         }
     }
 }

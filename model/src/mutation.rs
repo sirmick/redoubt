@@ -282,22 +282,22 @@ pub enum Mutation {
     // kernel/devices.md, I16: DMA device reset and frame quarantine.
     /// A dying process's DMA frames are pooled even when a device in its reset set did not
     /// confirm: the acceptance mutation.
-    K5bFreeBeforeReset,
+    DmaFreeBeforeReset,
     /// A device already quarantined counts as reset: a co-holder's healthy runs are
     /// pooled after their shared device was quarantined by another death.
-    K5bQuarantinedSlotCountsAsReset,
+    DmaQuarantinedSlotCountsAsReset,
     /// `unmap` frees a DMA frame instead of only dropping its mapping (kernel/devices.md).
-    K5bUnmapFreesDma,
+    DmaUnmapFrees,
     /// A quarantined frame's charge is dropped instead of moving to its budget's destroyed
     /// parent (kernel/devices.md, "Quarantine").
-    K5bQuarantineChargeDropped,
+    DmaQuarantineChargeDropped,
     /// A quarantined device's handles are not swept, so it can be mapped and allocated through
     /// again (kernel/devices.md, "Quarantine").
-    K5bQuarantinedDeviceUsable,
+    DmaQuarantinedDeviceUsable,
     /// A confirmed reset at one death drops the device from every live co-holder's reset set, so
     /// a co-holder's later death pools frames the device can still write (kernel/devices.md,
     /// "Reset before reuse").
-    K5bResetClearsCoHolderReach,
+    DmaResetClearsCoHolderReach,
 }
 
 impl Mutation {
@@ -425,17 +425,17 @@ impl Mutation {
             PolicyNarrowToSessionBudget,
             PolicyCarveFromUnlabelled,
             PolicyAuditUnfiltered,
-            K5bFreeBeforeReset,
-            K5bQuarantinedSlotCountsAsReset,
-            K5bUnmapFreesDma,
-            K5bQuarantineChargeDropped,
-            K5bQuarantinedDeviceUsable,
-            K5bResetClearsCoHolderReach,
+            DmaFreeBeforeReset,
+            DmaQuarantinedSlotCountsAsReset,
+            DmaUnmapFrees,
+            DmaQuarantineChargeDropped,
+            DmaQuarantinedDeviceUsable,
+            DmaResetClearsCoHolderReach,
         ]
     };
 
-    /// What it breaks: "R1".."R12" (R4a and R4b count as R4), a spec paragraph or call, an old
-    /// question or answer number (docs/todo/verdict-strings.md), or "policy".
+    /// The rule or invariant it breaks, by the ID the book defines it under (kernel/model.md,
+    /// "Mutations"), or "policy" for the steward model's.
     pub fn rule(self) -> &'static str {
         use Mutation::*;
         match self {
@@ -454,11 +454,9 @@ impl Mutation {
             R3UnmapAbandonedLend | R3ChargeStaysWithCaller | AbandonNoticeMissing | AbandonNoticeRepeated => {
                 "R3"
             }
-            R4IgnoreMaxTransfer
-            | R4OverdrawOnDelivery
-            | R4aOpenCallsPerThread
-            | R4aFullTakesNothing
-            | R4bDeadServerFakesReply => "R4",
+            R4IgnoreMaxTransfer | R4OverdrawOnDelivery => "R4",
+            R4aOpenCallsPerThread | R4aFullTakesNothing | OpenCallsUnlimited | ReceiveDropsOpenCalls => "R4a",
+            R4bDeadServerFakesReply => "R4b",
             R5NoMaskOnFire | R5NoUnmaskOnReceive => "R5",
             R6ChargeAncestors
             | R6OwnPageChargedToItself
@@ -468,7 +466,7 @@ impl Mutation {
             | R6ProcessObjectFree
             | R6ProcessObjectChargedToBudget
             | R6LendChargedOnce => "R6",
-            R7NoCarveCheck | R7CarveToZeroFree => "R7",
+            R7NoCarveCheck | R7CarveToZeroFree | ProcessInWeightlessBudget => "R7",
             R8AccountFromArgument => "R8",
             R9ReceivedHandleRestamped | R9MintStampsCaller | R9MsgStampIsSenderBudget => "R9",
             R10KeepForeignHandles
@@ -478,13 +476,13 @@ impl Mutation {
             | R10RevokedMessageDelivered
             | R10RevokedCallAnswered
             | R10SweptHandlesDropped
-            | R10CreatorDeathSparesProcess => "R10",
+            | R10CreatorDeathSparesProcess
+            | BudgetDeadlineIgnored => "R10",
             R11NoZeroing
             | R11SetFlagsAllowsWx
             | R11AllowsWriteOnly
             | R11LendStaysMapped
             | R11MapFixedSkipsOverlap => "R11",
-            IpcWrongLend | IpcDropPartial | IpcFalseDelivery | IpcSkipOutputCheck | IpcLeakRollback => "IPC",
             R12PriorityById
             | R12IgnoreWeight
             | R12WakeBanksCredit
@@ -505,30 +503,27 @@ impl Mutation {
             | R12LiftCountsEntryWait
             | R12FoldAtNewWeight
             | R12NoMinimumCharge => "R12",
-            MsgNoLabels
-            | MsgBadgeZero
-            | MsgAccountZero
-            | MsgIdsGlobal
-            | ExitNoticeDroppedIfNoReceiver
-            | BlameNobody
+            IpcWrongLend | IpcDropPartial | IpcFalseDelivery | IpcSkipOutputCheck | IpcLeakRollback => "R13",
+            MsgNoLabels | MsgBadgeZero | MsgAccountZero | MsgIdsGlobal => "R14",
+            BlameNobody
             | BlameNewestCall
-            | ExitWithOpenCallsNotFaulted => "Messages",
-            CurrentNeverSet | ReceiveKeepsCurrent => "Process",
-            ServeIgnored => "serve",
-            BudgetDeadlineIgnored | ClassNotInherited | ExpireBudgetsFirst => "Budget",
-            TimeoutIgnoredWhileOthersRun => "I13",
-            LabelsAddedByParentClass => "budget_create",
-            ReceiveWithBadgedHandle => "Handle",
-            ExitEndpointBadged => "process_create",
-            MintFromUnservedMessage => "mint",
-            OpenCallsUnlimited | ReceiveDropsOpenCalls => "QUESTIONS 2",
-            ProcessInWeightlessBudget => "QUESTIONS 12",
-            K5bFreeBeforeReset
-            | K5bQuarantinedSlotCountsAsReset
-            | K5bUnmapFreesDma
-            | K5bQuarantineChargeDropped
-            | K5bQuarantinedDeviceUsable
-            | K5bResetClearsCoHolderReach => "answer 173",
+            | ExitWithOpenCallsNotFaulted
+            | CurrentNeverSet
+            | ReceiveKeepsCurrent
+            | ServeIgnored
+            | ExitEndpointBadged
+            | ExitNoticeDroppedIfNoReceiver => "R21",
+            MintFromUnservedMessage => "I3",
+            ReceiveWithBadgedHandle => "I4",
+            LabelsAddedByParentClass => "I6",
+            ClassNotInherited => "I8",
+            TimeoutIgnoredWhileOthersRun | ExpireBudgetsFirst => "I13",
+            DmaFreeBeforeReset
+            | DmaQuarantinedSlotCountsAsReset
+            | DmaUnmapFrees
+            | DmaQuarantineChargeDropped
+            | DmaQuarantinedDeviceUsable
+            | DmaResetClearsCoHolderReach => "I16",
             _ => "policy",
         }
     }

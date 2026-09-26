@@ -2006,7 +2006,7 @@ impl Kernel {
         // the subtree's usage, at most its `pages_limit`, and the carve just gave the parent that
         // whole limit back, so this can never put it over its own (I5); with no parent, the charge
         // vanishes with the machine's tree.
-        if !self.broken(Mutation::K5bQuarantineChargeDropped) {
+        if !self.broken(Mutation::DmaQuarantineChargeDropped) {
             let moved: Vec<u64> = self
                 .frames
                 .iter()
@@ -2508,7 +2508,7 @@ impl Kernel {
             let m = self.unmap_page(pid, v).unwrap();
             if let Backing::Frame(f) = m.backing {
                 let dma = self.frames.get(&f).is_some_and(|fr| fr.dma.is_some());
-                if !dma || self.broken(Mutation::K5bUnmapFreesDma) {
+                if !dma || self.broken(Mutation::DmaUnmapFrees) {
                     self.free_frame(f);
                 }
             }
@@ -2644,7 +2644,7 @@ impl Kernel {
         // Ghost: which devices genuinely confirm, read from each device object before the attempt
         // (a `FirstFails` device's first attempt fails), not from `reset_device`'s answer, so that
         // neither that answer nor the pooling decision below can hide a device that may still write
-        // (I16; `K5bQuarantinedSlotCountsAsReset`, `K5bFreeBeforeReset`).
+        // (I16; `DmaQuarantinedSlotCountsAsReset`, `DmaFreeBeforeReset`).
         let genuine: Vec<u64> = s
             .iter()
             .copied()
@@ -2658,7 +2658,7 @@ impl Kernel {
         for d in genuine {
             self.ghost.dma_reset(d, &held);
         }
-        if self.broken(Mutation::K5bResetClearsCoHolderReach) {
+        if self.broken(Mutation::DmaResetClearsCoHolderReach) {
             // Broken: a confirmed reset is taken to cover every live co-holder too, so each drops
             // the device from the set its own death will reset.
             for (&q, p) in self.processes.iter_mut() {
@@ -2667,7 +2667,7 @@ impl Kernel {
                 }
             }
         }
-        if confirmed == s || self.broken(Mutation::K5bFreeBeforeReset) {
+        if confirmed == s || self.broken(Mutation::DmaFreeBeforeReset) {
             // Every device in S confirmed: this call's frames are left for the ordinary
             // frame-freeing paths to pool.
         } else {
@@ -2691,7 +2691,7 @@ impl Kernel {
     /// `dma-reset-deaf` test feature), then `true` from then on; `true` at once otherwise.
     fn reset_device(&mut self, d: u64) -> bool {
         // A quarantined slot counts as reset only under the mutation named for it.
-        let quarantined_counts = self.broken(Mutation::K5bQuarantinedSlotCountsAsReset);
+        let quarantined_counts = self.broken(Mutation::DmaQuarantinedSlotCountsAsReset);
         let Some(dev) = self.devices.get_mut(&d) else { return false };
         let DeviceKind::Mmio { quarantined, resets, .. } = &mut dev.kind else { return false };
         if *quarantined {
@@ -2717,7 +2717,7 @@ impl Kernel {
                 *quarantined = true;
             }
         }
-        if !self.broken(Mutation::K5bQuarantinedDeviceUsable) {
+        if !self.broken(Mutation::DmaQuarantinedDeviceUsable) {
             self.sweep(|h| h.object == Object::Device(d));
         }
     }

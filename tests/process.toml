@@ -21,7 +21,7 @@ expect = [
     '^\[proc\] ok: returning final worker exits its empty process with code zero$',
     '^\[proc\] ok: a labelled process.s notice reaches a system-class reader \(R1\)$',
     '^\[proc\] ok: a server that faults blames the account and labels of its current call.s sender$',
-    '^\[proc\] ok: process_exit holding an open call is faulted, blamed on that call \(answer 55\)$',
+    '^\[proc\] ok: process_exit holding an open call is faulted, blamed on that call$',
     '^\[proc\] ok: a thread holding two callers. calls blames the one `serve` named, not the other$',
     '^\[proc\] ok: a crash after replying blames nobody: the reply cleared the current call$',
     '^\[proc\] ok: a send is never an open call, so a crash after taking one blames nobody$',
