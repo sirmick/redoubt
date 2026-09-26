@@ -106,7 +106,8 @@ Status: built · tested: bench:rustsbi-boot, bench:loader-rejects-kernel-address
 1. **Reads the device tree** (`loader/src/dt.rs`, over `fdt-rs`), once, into one record: RAM,
    the initrd's range, `/chosen/rng-seed`, the timebase and hart count, every MMIO `reg`
    outside RAM, each device's interrupts, the console `/chosen/stdout-path` names and its
-   interrupt, the PLIC with this hart's S-mode context, and the CLINT. A region that does not
+   interrupt, the PLIC with hart 0's S-mode context (the loader takes the boot hart to be hart
+   0; Residual risks), and the CLINT. A region that does not
    start on a page is skipped and said so. Nothing after this step touches the tree.
 2. **Keeps memory it must not hand out.** The allocator (`loader/src/alloc.rs`) gives out
    zeroed pages from the top of RAM down and never from the firmware (all RAM below the
@@ -170,7 +171,7 @@ by `kernel/src/args.rs`. It is a run of tags, `XArg` first:
 | `MREx` | every MMIO region in the tree, controllers included, six words each: start (2), size in whole pages (2), the node name's first four bytes, 0 | `mem.rs`: the MMIO ownership table | no MMIO table; a second `MREx` stops the boot |
 | `Ctrl` | the PLIC and CLINT ranges, four words each: base (2), size (2) | `device.rs` | no controller check |
 | `Devs` | one entry per device object, six words each (below) | `device.rs` | no device objects |
-| `Plic` | PLIC base (2), size (2), this hart's S-mode context, 0 | `arch/riscv/intc_plic.rs` | no external interrupts |
+| `Plic` | PLIC base (2), size (2), hart 0's S-mode context, 0 | `arch/riscv/intc_plic.rs` | no external interrupts |
 | `Seed` | `/chosen/rng-seed`: 16 to 64 bytes, zero-padded to words | `platform/sbi/rand.rs` | the boot stops ([R17](#r17-fail-closed)) |
 | `Time` | the timebase: ticks of the `time` counter per second (2) | `arch/riscv/timer_sbi.rs` | the boot stops (R17) |
 | `IniE` | nothing; one per program, counted to size the process table | `ptable.rs` | only the kernel runs |
@@ -205,7 +206,7 @@ mean "has a PLIC" or "runs under SBI".
   firmware: console, power-off, the timer, the RNG) and `plic` (the interrupt controller). New
   hardware is a new backend file and feature.
 - **Board features** only compose them: `qemu-virt = ["sbi", "plic"]`.
-- **Discovered, not written in:** RAM, MMIO regions, interrupts, the PLIC, this hart's context,
+- **Discovered, not written in:** RAM, MMIO regions, interrupts, the PLIC, hart 0's context,
   the timebase and the seed come from the device tree, read by the loader alone. The kernel has
   no device-tree parser.
 - **Width-bound only:** page-table geometry (`libs/paging`), the saved-context size and the trap
@@ -290,7 +291,7 @@ bench's builder).
 
 ### Verified boot
 
-Status: built · tested: bench:verified-boot-rejects-tamper, bench:verified-boot-rejects-bare-archive, host:redoubt-signing::preamble_is_the_documented_bytes, host:redoubt-signing::domain_is_prefix_free, host:testbench::the_signed_bytes_are_the_documented_preimage, host:testbench::golden_signature_over_a_known_archive
+Status: built · partly tested: the two boot cases run on rv64 only; the rv32 loader's check is the same code, not attacked · tested: bench:verified-boot-rejects-tamper, bench:verified-boot-rejects-bare-archive, host:redoubt-signing::preamble_is_the_documented_bytes, host:redoubt-signing::domain_is_prefix_free, host:testbench::the_signed_bytes_are_the_documented_preimage, host:testbench::golden_signature_over_a_known_archive
 
 - **Algorithm:** Ed25519 (RFC 8032), through the pure-Rust `no_std` crate `ed25519_compact`.
   One public key is compiled into the loader (`loader/src/verify.rs`). There is no algorithm
@@ -378,7 +379,7 @@ Status: built · tested: bench:loader-rejects-grants, bench:irq-attack, bench:de
 
 ### R15 (verified boot)
 
-Status: built · tested: bench:verified-boot-rejects-tamper, bench:verified-boot-rejects-bare-archive, host:testbench::golden_signature_over_a_known_archive
+Status: built · partly tested: the two boot cases run on rv64 only · tested: bench:verified-boot-rejects-tamper, bench:verified-boot-rejects-bare-archive, host:testbench::golden_signature_over_a_known_archive
 
 No byte of the bundle is parsed or run before its signature checks. The loader reads only the
 bundle's range from the device tree, verifies the signature over
@@ -408,7 +409,7 @@ would be written into all of them.
 
 ### R17 (fail closed)
 
-Status: built · partly tested: a short or missing seed and a missing timebase are not attacked by a case (every QEMU boot supplies both) · tested: bench:verified-boot-rejects-tamper, bench:verified-boot-rejects-bare-archive
+Status: built · partly tested: a short or missing seed and a missing timebase are not attacked by a case (every QEMU boot supplies both); the two signature cases run on rv64 only; the loader departs from this for RAM past the physmap (Residual risks) · tested: bench:verified-boot-rejects-tamper, bench:verified-boot-rejects-bare-archive
 
 The boot never runs degraded. Each of these powers the machine off through SBI SRST with
 `SystemFailure` rather than boot: a bad bundle signature; an initrd too short to be signed; a
@@ -419,6 +420,10 @@ interrupt; a bundle that is not a tar, is empty, holds `grants` or too many prog
 R16 refuses; a full argument block; any argument-block refusal of the kernel's. A refusal of
 the loader's prints `loader PANIC` and one of the kernel's a kernel panic; both then power off.
 The two boot cases require the power-off and QEMU's status 255.
+
+The loader refuses to boot when RAM extends past `PHYSMAP_SIZE` (the size of the kernel's
+direct physical map), with a clear message. The loader departs from this today: it maps the
+physmap to the end of RAM without comparing the two (Residual risks).
 
 ## Failure and restart
 
@@ -465,6 +470,17 @@ Status: built · partly tested: a reboot through `system_reset` is not attacked 
 - **The kernel's argument-block refusals are argued from the code**, not attacked by a case;
   nor are the short-seed and missing-timebase refusals (R17) or the three R16 gaps
   ([attack gaps](../todo/kernel-attack-gaps.md)).
+- **RAM past the physmap is not refused at boot.** The loader maps the physmap to the end of
+  RAM, but the kernel's window stops at `PHYSMAP_SIZE` (128 GiB on Sv39), and nothing compares
+  the two. On a machine with more RAM the kernel boots, then stops the first time it uses a
+  frame past the bound, which a process can cause by allocating
+  ([memory layout](memory-layout.md#residual-risks)). Follow-up:
+  [todo](../todo/physmap-ram-bound.md).
+- **The loader takes the boot hart to be hart 0.** It reads the PLIC context of the CPU whose
+  `reg` is 0 (`loader/src/dt.rs`), not of the hart id the firmware passes in `a0`, and nothing
+  compares the two. Firmware that boots on another hart would have the kernel claim and
+  complete interrupts in hart 0's context, and its drivers would get no interrupts. Follow-up:
+  [todo](../todo/boot-hart-context.md).
 - **Device indices are positional.** Past the fixed three, a device's handle index depends on
   the device tree's order and on which DMA devices the kernel could register. A program that
   pins one depends on the machine. Placement by name is planned

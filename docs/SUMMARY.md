@@ -65,6 +65,7 @@
 - [Follow-ups]()
   - [Kernel attack gaps](todo/kernel-attack-gaps.md)
   - [The model's order of checks](todo/abi-model-disagreements.md)
+  - [The boot hart's interrupt context](todo/boot-hart-context.md)
   - [Root's own page](todo/boot-root-frame.md)
   - [Budget destruction's cost](todo/budget-destroy-cost.md)
   - [Rescaling a carved-down lead](todo/carve-lead-rescale.md)

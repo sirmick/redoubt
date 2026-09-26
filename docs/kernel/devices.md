@@ -84,7 +84,7 @@ charged to the caller's budget ([R6 (charging)](budgets.md)), but the ownership 
 them as the kernel's, not the process's, so no path that frees or moves a process's own pages
 can reach them. While the process lives its runs **stay put**:
 - a lend, a transfer or a `process_map` of a DMA page is `InvalidArgument`;
-- `set_flags` works on them as on any page;
+- `set_flags` works on them as on any page, `EXECUTE` included, which R11 forbids (Residual risks);
 - `unmap` drops only the mapping: the pages stay held, charged and out of the pool.
 
 A run's device joins the caller's reset set, as a mapped DMA device does. The pages leave the
@@ -363,9 +363,10 @@ Status: built · partly tested: destroying a device object's owner budget is not
 - **An interrupt can be lost before the first `receive`:** seen once on QEMU, cause not found.
   Drivers drain their rings after every `receive`. Follow-up: [todo](../todo/irq-level-latch.md).
 - **A device mapping or DMA page can be made executable.** `set_flags` refuses writable and
-  executable together, but not executable on a device range or a DMA page. Two `map_device`
-  mappings of one range can be one writable and one executable, and a device can write a DMA
-  page that is executable. Follow-up: [todo](../todo/device-mapping-exec.md).
+  executable together, but not executable on a device range or a DMA page, which R11 forbids.
+  Two `map_device` mappings of one range can be one writable and one executable, and a device
+  can write a DMA page that is executable
+  ([memory](memory.md#residual-risks)). Follow-up: [todo](../todo/device-mapping-exec.md).
 - **Page tables stay after `unmap`.** The tables that mapped a device range or a run stay
   charged to the process until it ends. Follow-up: [todo](../todo/page-table-freeing.md).
 - **An interrupt's kernel time is billed to the IRQ object's owner** (`system` at boot), not to
