@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Handle tables (KERNEL-SPEC.md, Handle; I1): per process, an index names a (object, badge,
+//! Handle tables (kernel/objects.md, "Handles"; I1): per process, an index names a (object, badge,
 //! stamp) triple that only the kernel writes, so a process can use only what its own table
 //! holds.
 //!
@@ -15,7 +15,7 @@
 //! freed when its last is removed, each charged one page to the process's budget. A new handle
 //! takes the lowest free index (as the model does), so a table filled without closing any
 //! handle costs exactly ceil(n / 128) pages; one with holes costs a page per page in use, which
-//! is what the memory really costs (answer 111).
+//! is what the memory really costs (kernel/objects.md, "Handles").
 //!
 //! The object and the stamp each name a budget by frame and by id. R10's sweep closes every
 //! handle naming or stamped with a budget before that budget's frame is freed (I2), so both
@@ -31,8 +31,8 @@ use crate::mem::MemoryManager;
 
 /// Handles in one table page: `PAGE_SIZE` / 32 bytes.
 pub const HANDLES_PER_PAGE: usize = 128;
-/// Handles one process may hold (answer 102; the ABI's constant): a table is an array of this
-/// many divided by 128 pages. Installing one more is `TooLarge`.
+/// Handles one process may hold (kernel/objects.md; the ABI's constant): a table is an array of
+/// this many divided by 128 pages. Installing one more is `TooLarge`.
 pub use redoubt_sys::MAX_HANDLES;
 /// Table pages a process may have.
 pub const MAX_HANDLE_PAGES: usize = MAX_HANDLES / HANDLES_PER_PAGE;
@@ -72,7 +72,7 @@ pub struct ProcessRef {
     pub id: u64,
 }
 
-/// What a handle names (KERNEL-SPEC.md, Objects).
+/// What a handle names (kernel/objects.md, "The four object kinds").
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Object {
     Budget(BudgetRef),
@@ -81,7 +81,7 @@ pub enum Object {
     Process(ProcessRef),
 }
 
-/// KERNEL-SPEC.md, Handle = (object, badge, stamp).
+/// kernel/objects.md, "Handles": a handle = (object, badge, stamp).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Handle {
     pub object: Object,
@@ -219,7 +219,7 @@ impl MemoryManager {
                 Some(frame) => frame,
                 None => {
                     // One page per table page in use, charged when the page is first needed and
-                    // returned when it empties (answer 111).
+                    // returned when it empties (kernel/objects.md, "Handles").
                     self.charge(budget, 1)?;
                     let frame = self.alloc_object_frame().inspect_err(|_| self.uncharge(budget, 1))?;
                     self.account_mut(pid).expect("account").handles.pages[page] = Some(frame);
@@ -233,12 +233,12 @@ impl MemoryManager {
             self.account_mut(pid).expect("account").handles.live[page] += 1;
             return Ok((page * HANDLES_PER_PAGE + slot + 1) as u32);
         }
-        // Past MAX_HANDLES (answer 102).
+        // Past MAX_HANDLES (kernel/objects.md, "Handles").
         Err(Error::TooLarge)
     }
 
     /// The table pages `pid` would have to buy to hold `extra` more handles, or `None` if they
-    /// would take it past `MAX_HANDLES` (answer 102). Delivery asks before it charges (R4).
+    /// would take it past `MAX_HANDLES` (kernel/objects.md). Delivery asks before it charges (R4).
     pub fn table_growth(&self, pid: Pid, extra: usize) -> Option<u64> {
         let table = self.table(pid)?;
         let mut free = 0;

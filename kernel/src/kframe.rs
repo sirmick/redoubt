@@ -31,8 +31,8 @@ fn at(phys: usize, offset: usize, size: usize) -> usize {
 /// The word at byte `offset` (a multiple of 8) of the frame at `phys`.
 pub fn read(phys: usize, offset: usize) -> u64 {
     let virt = at(phys, offset, 8);
-    // SAFETY: `at` checked that this is an aligned word inside a RAM frame, and the loader maps
-    // all of RAM read-write at the physmap in every address space (MEMORY-LAYOUT.md). Every bit
+    // SAFETY: `at` checked that this is an aligned word inside a RAM frame, and the loader maps all
+    // of RAM read-write at the physmap in every address space (kernel/memory-layout.md). Every bit
     // pattern is a valid `u64`. A process may write its own frame concurrently only from another
     // hart; the volatile read then sees one value or the other, never undefined behaviour in the
     // kernel's view.

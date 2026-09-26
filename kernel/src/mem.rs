@@ -14,8 +14,8 @@ enum ClaimReleaseMove {
     Move(Pid /* from */),
 }
 
-/// One entry of the loader's `MREx` table (BOOT.md): a device region, whose frames the ownership
-/// table tracks.
+/// One entry of the loader's `MREx` table (kernel/boot.md): a device region, whose frames the
+/// ownership table tracks.
 #[derive(Clone, Copy)]
 struct ExtraRegion {
     start: usize,
@@ -99,7 +99,7 @@ pub struct MemoryManager {
     /// (`handle.rs`). Here, beside the ownership table, because a frame changing owner is what
     /// most charges are.
     pub objects: crate::budget::Objects,
-    /// DMA devices and the runs `dma_alloc` handed out through them (WP-K5b, `dma.rs`). Here,
+    /// DMA devices and the runs `dma_alloc` handed out through them (`dma.rs`). Here,
     /// beside the ownership table that names their frames' owner, `DMA_OWNER`.
     pub dma: crate::dma::Registry,
 }
@@ -112,7 +112,7 @@ pub const OBJECT_OWNER: Pid = match Pid::new(255) {
     None => unreachable!(),
 };
 const _: () = assert!(crate::arch::process::MAX_PROCESS_COUNT < 255);
-/// Owner, in the ownership table, of `dma_alloc` frames (WP-K5b, `dma.rs`). No process has this
+/// Owner, in the ownership table, of `dma_alloc` frames (`dma.rs`). No process has this
 /// PID either, so no generic release, move or lend path, all of which check that the caller
 /// owns the frame, can free or move one: only `dma_release` pools it, after the reset.
 pub const DMA_OWNER: Pid = match Pid::new(254) {
@@ -225,7 +225,7 @@ impl MemoryManager {
     }
 
     /// Allocate a page for a process's saved thread contexts (`ProcessImpl`), charged to the
-    /// budget the process runs in like any other frame it owns (answer 127: the kernel
+    /// budget the process runs in like any other frame it owns (kernel/objects.md: the kernel
     /// charges what a process really costs instead of holding it back from `root` at boot).
     pub fn alloc_context_page(&mut self, pid: Pid) -> Result<usize, PageError> {
         self.alloc_page(pid)
@@ -706,14 +706,13 @@ impl MemoryManager {
             // Reparent it to the kernel so the frame is not reused while the borrower holds
             // it; it is freed when the borrower returns it. Which frames are lent is read
             // from this process's own page table, where the "shared" bit actually lives --
-            // not guessed from a physical address. (INTERIM: the kernel then holds such a
-            // frame uncharged; under answer 70, WP-K2's lends are charged to the borrower too
-            // while the call is open, and to it alone once abandoned, R3.)
+            // not guessed from a physical address. (The caller's charge ends here; the lend
+            // stays charged to the server that holds it until it comes back, kernel/ipc.md R3.)
             space.for_each_lent_frame(|phys| {
                 if self.is_main_memory(phys as *mut u8) {
                     let idx = (phys - self.ram_start) / PAGE_SIZE;
-                    // A DMA frame is never lent (OD2), and stays `DMA_OWNER`'s whatever happens:
-                    // only `dma_release` pools it.
+                    // A DMA frame is never lent (kernel/devices.md), and stays `DMA_OWNER`'s
+                    // whatever happens: only `dma_release` pools it.
                     if self.allocations[idx] != Some(DMA_OWNER) {
                         self.allocations[idx] = Some(kernel);
                     }
@@ -746,7 +745,7 @@ impl MemoryManager {
 
 }
 
-// --- The Redoubt memory calls (KERNEL-SPEC.md; R11) ------------------------------------------
+// --- The Redoubt memory calls (kernel/memory.md; R11) ----------------------------------------
 //
 // `map_anon`, `unmap` and `set_flags`. Three rules of R11 shape them: no mapping is ever
 // writable and executable (`Pte::leaf` refuses it, as decoding already did), every page is
@@ -847,7 +846,7 @@ impl MemoryManager {
     /// caller's budget; a device's registers are not RAM and only lose their mapping -- the
     /// MMIO page-ownership table is left alone, as `map_device` left it alone (the handle, not
     /// a page owner, is the authority there). A `dma_alloc` frame only loses its mapping too: it
-    /// stays held, and charged, until the process ends (WP-K5b, OD2).
+    /// stays held, and charged, until the process ends (kernel/devices.md, `dma_alloc`).
     pub fn unmap(&mut self, pid: Pid, addr: usize, len: usize) -> Result<(), redoubt_sys::Error> {
         let end = Self::user_range(addr, len)?;
         for page in (addr..end).step_by(PAGE_SIZE) {
@@ -886,16 +885,16 @@ impl MemoryManager {
         Ok(())
     }
 
-    /// `map_fixed(addr, len, flags)`: as `map_anon`, but at exactly `addr` (R11, answer 172) --
-    /// zeroed pages, charged to the caller's budget, that never replace a mapping. Checked in
-    /// the order KERNEL-SPEC.md's Errors row gives: the range (`user_range`), then that range's
-    /// overlap with any of the caller's mappings (`range_available_in`, over the whole range
-    /// before anything is charged or allocated -- `undo_run`'s rollback leaks page tables, so
-    /// nothing here may need it), then the flags (`check_map_flags`, shared with `process_map`,
-    /// so W+X and W-without-R are refused here and can never reach `map_page_inner`'s `.expect`
-    /// below), then a charge check for the pages and the page tables they need. Only once all
-    /// of that holds does the guaranteed-success mapping loop run, so a failure never leaves
-    /// anything mapped or charged.
+    /// `map_fixed(addr, len, flags)`: as `map_anon`, but at exactly `addr` (R11;
+    /// kernel/memory.md, `map_fixed`) -- zeroed pages, charged to the caller's budget, that never
+    /// replace a mapping. Checked in the order kernel/abi.md's row gives: the range
+    /// (`user_range`), then that range's overlap with any of the caller's mappings
+    /// (`range_available_in`, over the whole range before anything is charged or allocated --
+    /// `undo_run`'s rollback leaks page tables, so nothing here may need it), then the flags
+    /// (`check_map_flags`, shared with `process_map`, so W+X and W-without-R are refused here and
+    /// can never reach `map_page_inner`'s `.expect` below), then a charge check for the pages and
+    /// the page tables they need. Only once all of that holds does the guaranteed-success mapping
+    /// loop run, so a failure never leaves anything mapped or charged.
     pub fn map_fixed(
         &mut self,
         pid: Pid,
@@ -936,7 +935,7 @@ impl MemoryManager {
             // exists for each is an assumption: a budget's free_pages is backed by free
             // physical frames. It holds because `boot_budgets` gives `root` only the RAM frames
             // the kernel did not keep, every child carves its limit out of its parent's, and
-            // nothing is held back (answer 127). `process_map` relies on the same thing only
+            // nothing is held back. `process_map` relies on the same thing only
             // for page tables (its `prepare_map` `.expect`, which allocates through `walk`);
             // failing on data frames with `.expect` is new here. `map_run` instead treats a
             // failed `alloc_page` as live and unwinds, which leaks page tables (see above).
@@ -978,7 +977,7 @@ pub(crate) fn sync_if_executable(flags: MemFlags) {
 /// R11 for a caller that maps with `.expect` afterwards (`map_fixed`, `process_map`): refuse
 /// empty flags, W+X, and writable without readable before anything is charged or moved, so the
 /// page-table layer's own refusal (`check_permissions`) is never what catches them. Decoding
-/// already refuses W+X; this check does not rest on that (KERNEL-SPEC.md, ABI).
+/// already refuses W+X; this check does not rest on that (kernel/abi.md).
 pub(crate) fn check_map_flags(flags: MemFlags) -> Result<(), redoubt_sys::Error> {
     let write_only = flags.contains(MemFlags::WRITE) && !flags.contains(MemFlags::READ);
     if flags == MemFlags::NONE || flags.contains(MemFlags::WRITE | MemFlags::EXECUTE) || write_only {

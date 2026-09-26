@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! DMA device reset and frame quarantine (WP-K5b; answer 173, KERNEL-SPEC.md Device).
+//! DMA device reset and frame quarantine (kernel/devices.md, "Reset before reuse" and
+//! "Quarantine"; I16).
 //!
 //! A DMA device may still hold the physical address of a `dma_alloc` frame after the process that
 //! programmed it has died. So no such frame goes back to the pool until every device that could
-//! hold its address has been reset (OD1): the device each of the dying process's runs came
-//! through, plus every DMA device it ever mapped (OD3, the reset set S). A device that does not
-//! confirm its reset keeps the process's frames for ever (quarantine), and its device object is
-//! destroyed as R10 destroys one, so nobody is handed it again until reboot (OD6).
+//! hold its address has been reset: the device each of the dying process's runs came through,
+//! plus every DMA device it ever mapped (the reset set S). A device that does not confirm its
+//! reset keeps the process's frames for ever (quarantine), and its device object is destroyed as
+//! R10 destroys one, so nobody is handed it again until reboot.
 //!
 //! # Where things are
 //! - **The registry**: one slot per DMA device, keyed by MMIO base, so a slot outlives its device object. At
@@ -41,7 +42,7 @@ const VIRTIO_VERSION: usize = 0x004;
 const VIRTIO_STATUS: usize = 0x070;
 const MAGIC_VIRT: u32 = 0x7472_6976;
 
-/// OD4: how long one reset may take to confirm, on the `time` CSR, with a backstop on the
+/// How long one reset may take to confirm, on the `time` CSR, with a backstop on the
 /// number of status reads should time not advance.
 const RESET_US: u64 = 1000;
 const RESET_READS: u32 = 100_000;
@@ -61,7 +62,8 @@ struct Run {
     /// The process holding it; `None` once it died.
     holder: Option<Pid>,
     /// The budget paying for its frames: the holder's at `dma_alloc`, then (quarantined) the
-    /// destroyed budget's parent (OD5, N1); `None` once the root's tree is gone.
+    /// destroyed budget's parent (kernel/devices.md, "Quarantine"); `None` once the root's tree
+    /// is gone.
     charged: Option<BudgetRef>,
     state: State,
 }
@@ -70,7 +72,7 @@ struct Run {
 struct Slot {
     base: u64,
     /// Whether the device answered as virtio-mmio at boot. Any other device is never reset,
-    /// so every death that reaches it quarantines (IO-ARCHITECTURE.md, the platform residual).
+    /// so every death that reaches it quarantines (kernel/devices.md, "Residual risks").
     virtio: bool,
     quarantined: bool,
     runs: [Option<Run>; MAX_RUNS],
@@ -81,7 +83,7 @@ pub struct Registry {
     /// A slot was quarantined and its device object not destroyed yet (`message.rs`,
     /// `destroy_quarantined_devices`).
     doomed: bool,
-    /// `dma-reset-deaf` (OD7): the slots whose first reset has already been made to fail.
+    /// `dma-reset-deaf`: the slots whose first reset has already been made to fail.
     #[cfg(feature = "dma-reset-deaf")]
     deaf_spent: u16,
 }
@@ -140,13 +142,13 @@ impl MemoryManager {
         self.dma.slots[slot].as_mut().expect("a registered slot")
     }
 
-    /// Whether DMA device `base` failed a reset (OD6). Its object is gone by the time any process
-    /// runs again, so a live device object never names one.
+    /// Whether DMA device `base` failed a reset (kernel/devices.md, "Quarantine"). Its object is
+    /// gone by the time any process runs again, so a live device object never names one.
     pub fn dma_quarantined(&self, base: u64) -> bool {
         self.dma_slot(base).is_some_and(|s| self.dma.slots[s].as_ref().is_some_and(|s| s.quarantined))
     }
 
-    /// `map_device` of DMA device `slot`: it joins `pid`'s reset set (OD3).
+    /// `map_device` of DMA device `slot`: it joins `pid`'s reset set.
     pub fn dma_mapped(&mut self, pid: Pid, slot: usize) {
         self.account_mut(pid).expect("a running process has an account").dma_mapped |= 1 << slot;
     }
@@ -198,7 +200,7 @@ impl MemoryManager {
     /// Process `pid` is ending (`Process::terminate`, after its own frames went and before its
     /// account is closed): reset its S. Only if every slot in S confirmed in this call are its
     /// runs pooled; otherwise all of them are quarantined, and every slot that did not confirm is
-    /// quarantined too (P1-1: an already-quarantined slot never counts as reset).
+    /// quarantined too (an already-quarantined slot never counts as reset).
     pub fn dma_release(&mut self, pid: Pid) {
         let held = |r: &Option<Run>| r.is_some_and(|r| r.state == State::Live && r.holder == Some(pid));
         let mut s = self.account(pid).map_or(0, |a| a.dma_mapped);
@@ -219,7 +221,7 @@ impl MemoryManager {
                     continue;
                 }
                 if pooled {
-                    // P1-1b: pooled only after every slot of S confirmed in this very call.
+                    // Pooled only after every slot of S confirmed in this very call.
                     assert!(
                         confirmed & s == s && confirmed & 1 << i != 0,
                         "P1-1: a run pooled before its reset"
@@ -247,7 +249,7 @@ impl MemoryManager {
     /// destroyed, as R10 destroys one.
     pub fn dma_take_doomed(&mut self) -> bool { core::mem::take(&mut self.dma.doomed) }
 
-    /// Reset slot `slot`'s device and wait for it to confirm, within OD4's bound, without
+    /// Reset slot `slot`'s device and wait for it to confirm, within `RESET_US`, without
     /// preemption. `false`, touching nothing, for a device that is quarantined or not virtio.
     fn dma_reset(&mut self, slot: usize) -> bool {
         let s = self.dma.slots[slot].as_ref().expect("a registered slot");
@@ -266,7 +268,7 @@ impl MemoryManager {
                 break;
             }
         }
-        // OD7, test builds only: the first reset of each device reports "not confirmed" after
+        // Test builds only: the first reset of each device reports "not confirmed" after
         // the real write, so the quarantine path runs on a device that would reset.
         #[cfg(feature = "dma-reset-deaf")]
         if self.dma.deaf_spent & 1 << slot == 0 {
@@ -276,7 +278,7 @@ impl MemoryManager {
         confirmed
     }
 
-    /// R10, after `top`'s carve went back to `parent` (N1): every quarantined run charged to a
+    /// R10, after `top`'s carve went back to `parent`: every quarantined run charged to a
     /// dying budget is charged to `parent` instead. Those pages were part of the dying subtree's
     /// usage, at most `top`'s limit, which the parent just got back whole, so the charge cannot
     /// fail (I5). With no parent the charge ends with the tree.
