@@ -42,7 +42,9 @@ const MILESTONES: [(&str, &str); 5] = [
     ("M5", "persist, install, share"),
 ];
 const EXEMPT: [&str; 4] = ["Purpose", "Residual risks", "Why", "How to use it"];
-const EXCLUDED: [&str; 3] = ["docs/legacy", "docs/inventory", "docs/theme"];
+/// Directories under `docs/` that hold no pages and take no links (the rendering assets in
+/// `docs/theme` are not pages either, but C8 checks them).
+const EXCLUDED: [&str; 2] = ["docs/legacy", "docs/inventory"];
 const ROOT_PAGES: [&str; 3] = ["README.md", "GETTING-STARTED.md", "CONTRIBUTING.md"];
 const PACKAGES: [&str; 17] =
     ["SV", "IPC", "DOC", "HIST", "OD", "K", "D", "B", "E", "C", "W", "A", "L", "T", "V", "G", "S"];
@@ -198,7 +200,7 @@ fn heading(line: &str) -> Option<(usize, &str)> {
 
 fn page_paths(root: &Path) -> Vec<String> {
     let mut out = Vec::new();
-    walk(root, "docs", &|p| EXCLUDED.contains(&p), &mut out);
+    walk(root, "docs", &|p| EXCLUDED.contains(&p) || p == "docs/theme", &mut out);
     out.retain(|p| p.ends_with(".md"));
     out.extend(ROOT_PAGES.iter().filter(|p| root.join(p).is_file()).map(|p| p.to_string()));
     out.sort();
@@ -433,20 +435,32 @@ fn parse_status(line: &str) -> Option<Status> {
     (0..MILESTONES.len()).find(|&i| m == milestone(i)).map(Status::Planned)
 }
 
-fn parse_tests(r: &str) -> Option<Vec<String>> {
+/// One test of a status line, split by kind (S3's `test`).
+enum Test<'a> {
+    Bench(&'a str),
+    Host(&'a str, &'a str),
+    Mutation(&'a str),
+    Fuzz(&'a str, &'a str),
+}
+
+fn parse_test(t: &str) -> Option<Test<'_>> {
     let name = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '-'));
-    r.split(", ")
-        .map(|t| {
-            let ok = match t.split_once(':') {
-                Some(("bench", c)) => name(c),
-                Some(("host", r)) => r.split_once("::").is_some_and(|(p, f)| name(p) && name(f)),
-                Some(("mutation", v)) => name(v),
-                Some(("fuzz", r)) => r.split_once('/').is_some_and(|(p, f)| name(p) && name(f)),
-                _ => false,
-            };
-            ok.then(|| t.to_string())
-        })
-        .collect()
+    let test = match t.split_once(':')? {
+        ("bench", c) => Test::Bench(c),
+        ("host", r) => r.split_once("::").map(|(p, f)| Test::Host(p, f))?,
+        ("mutation", v) => Test::Mutation(v),
+        ("fuzz", r) => r.split_once('/').map(|(p, f)| Test::Fuzz(p, f))?,
+        _ => return None,
+    };
+    let ok = match test {
+        Test::Bench(a) | Test::Mutation(a) => name(a),
+        Test::Host(a, b) | Test::Fuzz(a, b) => name(a) && name(b),
+    };
+    ok.then_some(test)
+}
+
+fn parse_tests(r: &str) -> Option<Vec<String>> {
+    r.split(", ").map(|t| parse_test(t).map(|_| t.to_string())).collect()
 }
 
 fn needs_status(path: &str) -> bool {
@@ -525,18 +539,14 @@ fn is_open(p: &Page, i: usize) -> bool { !p.fenced[i] && p.lines[i].trim_start()
 
 fn test_exists(c: &mut Ctx, t: &str) -> bool {
     let crates = c.crates.get_or_insert_with(|| crates(c.root));
-    match t.split_once(':') {
-        Some(("bench", case)) => c.root.join(format!("tests/{case}.toml")).is_file(),
-        Some(("host", r)) => {
-            r.split_once("::").is_some_and(|(p, f)| crates.get(p).is_some_and(|(_, tests)| tests.contains(f)))
-        }
-        Some(("mutation", v)) => mutations(c.root).contains(v),
-        Some(("fuzz", r)) => r.split_once('/').is_some_and(|(p, f)| {
-            crates
-                .get(p)
-                .is_some_and(|(dir, _)| c.root.join(format!("{dir}/fuzz/fuzz_targets/{f}.rs")).is_file())
-        }),
-        _ => false,
+    match parse_test(t) {
+        Some(Test::Bench(case)) => c.root.join(format!("tests/{case}.toml")).is_file(),
+        Some(Test::Host(p, f)) => crates.get(p).is_some_and(|(_, tests)| tests.contains(f)),
+        Some(Test::Mutation(v)) => mutations(c.root).contains(v),
+        Some(Test::Fuzz(p, f)) => crates
+            .get(p)
+            .is_some_and(|(dir, _)| c.root.join(format!("{dir}/fuzz/fuzz_targets/{f}.rs")).is_file()),
+        None => false,
     }
 }
 
@@ -634,7 +644,7 @@ fn milestones_and_process(c: &mut Ctx, p: &Page) {
         for (at, w) in words(l) {
             let Some(m) = MILESTONES.iter().position(|(id, _)| *id == w) else { continue };
             let before = &l[..at];
-            let beyond = before.ends_with("beyond ") || before.ends_with("Beyond ");
+            let beyond = w == "M5" && (before.ends_with("beyond ") || before.ends_with("Beyond "));
             if !beyond && !l[at + 2..].starts_with(&format!(" ({})", MILESTONES[m].1)) {
                 c.err(3, &p.path, i + 1, format!("`{w}` must read `{}`", milestone(m)));
             }
@@ -729,8 +739,7 @@ fn bad_link(root: &Path, from: &str, t: &str) -> Option<String> {
     let (path, anchor) = t.split_once('#').map_or((t, None), |(p, a)| (p, Some(a)));
     let target = if path.is_empty() { Some(from.to_string()) } else { resolve(from, path) };
     let Some(target) = target else { return Some("leaves the repository".into()) };
-    if ["docs/legacy", "docs/inventory"].iter().any(|x| target == *x || target.starts_with(&format!("{x}/")))
-    {
+    if EXCLUDED.iter().any(|x| target == *x || target.starts_with(&format!("{x}/"))) {
         return Some("links into an excluded directory".into());
     }
     if !root.join(&target).exists() {
@@ -755,9 +764,6 @@ fn cells(line: &str) -> Vec<String> {
 
 fn security(c: &mut Ctx, pages: &[Page], defs: &BTreeMap<String, Def>) {
     const PATH: &str = "docs/SECURITY.md";
-    if !c.exists("docs") {
-        return;
-    }
     let Some(sec) = pages.iter().find(|p| p.path == PATH) else {
         return c.err(7, PATH, 1, "docs/SECURITY.md is missing".into());
     };
@@ -790,9 +796,11 @@ fn security(c: &mut Ctx, pages: &[Page], defs: &BTreeMap<String, Def>) {
                 continue;
             };
             let cell = &row[4];
-            let valid = cell == "built"
-                || cell == "built, partly tested"
-                || (0..MILESTONES.len()).any(|m| *cell == format!("planned · {}", milestone(m)));
+            let forms = [Status::Built(Vec::new()), Status::Partly(Vec::new())];
+            let valid = forms
+                .into_iter()
+                .chain((0..MILESTONES.len()).map(Status::Planned))
+                .any(|s| s.cell() == *cell);
             if !valid {
                 c.err(7, PATH, i + 1, format!("malformed status `{cell}`"));
             } else if *cell != st.cell() {
@@ -825,7 +833,7 @@ fn security(c: &mut Ctx, pages: &[Page], defs: &BTreeMap<String, Def>) {
 
 fn no_binaries(c: &mut Ctx) {
     let mut files = Vec::new();
-    walk(c.root, "docs", &|p| p == "docs/legacy" || p == "docs/inventory", &mut files);
+    walk(c.root, "docs", &|p| EXCLUDED.contains(&p), &mut files);
     for f in files {
         let ext = f.rsplit_once('.').map_or(String::new(), |(_, e)| e.to_lowercase());
         let theme_js = f.strip_prefix("docs/theme/").is_some_and(|r| !r.contains('/') && ext == "js");
@@ -932,15 +940,19 @@ fn code(c: &mut Ctx, pages: &[Page], defs: &BTreeMap<String, Def>) {
     }
     for f in files {
         let case = f.starts_with("tests/") && f.ends_with(".toml") && !f[6..].contains('/');
-        if !case && !f.ends_with(".rs") {
+        let elixir = f.starts_with("libs/wire/elixir/proto/") && f.ends_with(".ex");
+        if !case && !elixir && !f.ends_with(".rs") {
             continue;
         }
         let src = fs::read_to_string(c.root.join(&f)).unwrap_or_default();
         for (i, l) in src.lines().enumerate() {
             let text = if case {
                 l.trim_start().strip_prefix("description").and_then(|r| r.trim_start().strip_prefix('='))
+            } else if elixir {
+                l.find('#').map(|at| &l[at + 1..])
             } else {
-                l.find("//").map(|at| &l[at + 2..])
+                // A `//` right after a colon is a URL in a string (`https://`), not a comment.
+                l.match_indices("//").find(|(at, _)| !l[..*at].ends_with(':')).map(|(at, _)| &l[at + 2..])
             };
             let Some(text) = text else { continue };
             let mut msgs = process_refs(text, true, false);
@@ -968,17 +980,16 @@ fn code(c: &mut Ctx, pages: &[Page], defs: &BTreeMap<String, Def>) {
 
 fn summary(c: &mut Ctx, pages: &[Page]) {
     const PATH: &str = "docs/SUMMARY.md";
-    if !c.exists("docs") {
-        return;
-    }
     let Some(sum) = pages.iter().find(|p| p.path == PATH) else {
         return c.err(12, PATH, 1, "docs/SUMMARY.md is missing".into());
     };
     let mut count: BTreeMap<String, usize> = BTreeMap::new();
     for (i, l) in sum.lines.iter().enumerate().filter(|(i, _)| !sum.fenced[*i]) {
         for t in link_targets(l).iter().filter(|t| !is_url(t)) {
-            let target = resolve(PATH, t.split('#').next().unwrap_or("")).unwrap_or_default();
-            if !c.exists(&target) || target.is_empty() {
+            let path = t.split('#').next().unwrap_or("");
+            let target =
+                if path.is_empty() { String::new() } else { resolve(PATH, path).unwrap_or_default() };
+            if target.is_empty() || !c.exists(&target) {
                 c.err(12, PATH, i + 1, format!("link `{t}`: no such page"));
             }
             *count.entry(target.clone()).or_default() += 1;
