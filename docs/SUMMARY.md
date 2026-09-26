@@ -1,6 +1,7 @@
 # Summary
 
 - [Reading this book](README.md)
+- [Tenets](TENETS.md)
 - [Glossary](GLOSSARY.md)
 
 # The kernel
