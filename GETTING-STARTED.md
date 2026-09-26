@@ -1,20 +1,12 @@
 # Getting started with Redoubt
 
-Redoubt is a small, auditable RISC-V microkernel in pure Rust. Today the runtime is **beamlet**, a
-safe-Rust BEAM (Erlang/Elixir) VM. The full, diagrammatic tour is **[README.html](https://sirmick.github.io/redoubt/README.html)**;
-the design of record is [`docs/`](docs/README.md).
+How to build Redoubt, boot it under QEMU, run the test bench, debug the kernel and render the
+book. What Redoubt is, and what each part does, is in [the book](docs/README.md).
 
-## Host requirements
+## Prerequisites
 
-**Docker** supplies the OS build/test environment: Rust with the RISC-V bare-metal targets,
-QEMU for both widths, OpenSSH and graphviz. It does **not** install OTP or Elixir; beamlet's
-differential and Elixir tests have the additional prerequisites in section 7.
-
-Prefer your own environment? Install Rust + the `riscv64imac-unknown-none-elf`,
-`riscv32imac-unknown-none-elf` and `riscv64gc-unknown-none-elf` targets, `qemu-system-misc`, a C
-toolchain, and `graphviz` (only to regenerate `README.html`).
-
-## 1. Enter the container
+The dev container has everything the operating system needs: Rust with the RISC-V bare-metal
+targets, QEMU for both widths and OpenSSH.
 
 ```sh
 ./dev.sh                 # build the image (first time), then a shell in /work
@@ -22,96 +14,108 @@ toolchain, and `graphviz` (only to regenerate `README.html`).
 ./dev.sh ./test          # run one command and exit
 ```
 
-The container mounts only this directory as `/work` plus the agent CLIs' config dirs; nothing else
-from your home. See the header of [`dev.sh`](dev.sh).
+The container mounts only this directory, as `/work`, plus the agent tools' configuration
+directories; nothing else from your home ([`dev.sh`](dev.sh)).
 
-## 2. Build the firmware (once)
+Your own machine instead needs:
+- Rust (stable, and nightly for `rustfmt`) with the targets `riscv64imac-unknown-none-elf`,
+  `riscv32imac-unknown-none-elf` and `riscv64gc-unknown-none-elf`;
+- `qemu-system-riscv64` and `qemu-system-riscv32`;
+- OpenSSH, for the bench's SSH sessions;
+- `mdbook`, `mdbook-mermaid` and `mdbook-svgbob`, to render the book
+  (`cargo install mdbook mdbook-mermaid mdbook-svgbob`).
+
+## Firmware
 
 ```sh
-./scripts/build-bios.sh  # builds the vendored RustSBI Prototyper in bios/, both widths
+./scripts/build-bios.sh  # builds the vendored RustSBI prototyper in bios/, both widths
 ```
 
-Both rv32 and rv64 boot only the vendored RustSBI firmware. If `bios/target/` is already
-populated for both widths, skip this.
+Both widths boot only the vendored RustSBI firmware; there is no fallback to QEMU's own. Skip
+this if `bios/target/` is already built for both widths. A checkout elsewhere (a worktree) can
+point at built images with `RUSTSBI_PROTOTYPER` and `RUSTSBI_PROTOTYPER_RV32`.
 
-## 3. Build the operating system
+## Build
 
 ```sh
-./build --arch rv64              # kernel + loader
+./build --arch rv64              # the kernel and the loader
 ./build --arch rv32
 ./build --arch rv64 --programs   # also the in-guest test programs
+./mkimage                        # the signed boot bundle, in target/image/redoubt.bundle
 ```
 
-Builds are size-optimized release builds by default, which is required for the rv32 memory
-layout. Pass `--debug` only when working on a configuration that fits the debug image.
-`--arch` is `rv32` or `rv64`. Build, launch and image scripts default to rv64; `./test`
-without `--arch` uses each case's declared architecture list, which may include both widths.
+Builds are size-optimised release builds, which the rv32 memory layout needs. `--debug` is for a
+configuration that fits a debug image. The scripts default to rv64.
 
-## 4. Launch it in a VM
+## Run
 
 ```sh
-./launch --arch rv64                       # prints the exact QEMU line, then boots; Ctrl-A X quits
+./launch --arch rv64                       # prints the QEMU command, then boots; Ctrl-A X quits
 ./launch --arch rv64 --program log-server  # start a test program after the kernel
 ./launch --arch rv32 --smp 4
 ./launch --arch rv64 --print-only          # show the QEMU command and exit
-./launch --arch rv64 --debug               # pause with a gdb stub on :1234
+./launch --arch rv64 --debug               # pause, with a GDB stub on :1234
 ```
 
-`launch` assembles and signs the boot bundle, prints the exact `qemu-system-riscv*` command line,
-and wires the guest serial console to your stdin/stdout. See [`docs/DEBUGGING.md`](docs/DEBUGGING.md).
+`launch` assembles and signs the boot bundle, prints the exact `qemu-system-riscv*` command, and
+wires the guest's serial console to your terminal.
 
-## 5. Run the tests
+## Test
 
 ```sh
 ./test --arch rv64            # the whole bench on rv64
 ./test --arch rv64 timer      # cases whose name contains "timer"
-./test --arch rv32 budget
-./test --list
+./test --list                 # every case, with its description
+cargo testbench               # the same bench, every case on the widths it declares
 ```
 
-The bench boots real images under QEMU and asserts on the console, including attack cases whose
-verdict comes from the system (the kernel, a victim, or a clean power-off), never the attacker's own
-output. Console logs land in `target/testbench/`. Writing cases: [`docs/testbench.md`](docs/testbench.md).
+The bench boots real images under QEMU and judges the console from outside, including attack
+cases whose verdict comes from the system, never from the attacker. Logs land in
+`target/testbench/`. How cases are written and judged: [the test bench](docs/testbench.md).
+Before sending a change, run the whole bench, and check that rv32 still compiles.
 
-## 6. Build an image
+## Debug
+
+The kernel has no debugger; debugging is done from the host, through QEMU's GDB stub. Release builds
+carry no debug information, so ask for it while keeping the optimisation (the rv32 image size needs
+it):
 
 ```sh
-./mkimage                     # signed boot bundle → target/image/redoubt.bundle
+CARGO_PROFILE_RELEASE_DEBUG=2 ./launch --arch rv64 --program log-server --debug
+# then, in another shell, with a GDB that knows RISC-V (gdb-multiarch):
+gdb target/riscv64imac-unknown-none-elf/release/redoubt-kernel
+(gdb) target remote :1234
+(gdb) break kmain
+(gdb) continue
 ```
 
-Disk-image recipes (littlefs) live in [`image/`](image/) and are not built yet.
+Keep the environment override on `launch`: it rebuilds the image, loader included. `--debug` only
+pauses QEMU and opens the stub; it does not add debug information. Check that the kernel's own
+sources are in it with `readelf --debug-dump=info` (a `kernel/src/main.rs` compilation unit); a
+`.debug_info` section alone may hold only dependencies' sources.
 
-## 7. beamlet (the BEAM VM)
+## beamlet
 
-The VM currently runs on the host; its Redoubt platform and boot integration are still planned.
-For differential/Elixir tests, separately install **OTP 28.5.0.6** and **Elixir 1.20.4**.
-The repository and Docker image do not provide these installations. `tools/env.sh` only adds
-`toolchains/otp-28.5.0.6/bin` and `toolchains/elixir-1.20.4/bin` to PATH; set
-`BEAMLET_TOOLCHAINS` to another installation root with that layout, or put matching installations
-on PATH yourself. Check `erl -noshell -eval 'io:format("~s~n", [erlang:system_info(otp_release)]), halt().'`
-and `elixir --version` before running those suites. Pure-Rust unit tests do not require them.
+beamlet, the Elixir VM, runs on the host. Its differential and Elixir suites also need
+OTP 28.5.0.6 and Elixir 1.20.4, which neither the repository nor the container provides:
+`tools/env.sh` puts `toolchains/otp-28.5.0.6/bin` and `toolchains/elixir-1.20.4/bin` on the path,
+and `BEAMLET_TOOLCHAINS` names another root with that layout. The pure-Rust unit tests need
+neither.
 
 ```sh
 cd userland/otp
-. tools/env.sh                # put the pinned OTP/Elixir on PATH
-cargo test                    # unit + hostile-input tests
+. tools/env.sh                # the pinned OTP and Elixir on the path
+cargo test                    # unit and hostile-input tests
 tools/difftest                # differential tests against the real BEAM
-tools/elixir-tests            # run Elixir's own suite on beamlet
+tools/elixir-tests            # Elixir's own suite on beamlet
 ```
 
-## Regenerating the documentation page
+## The book
 
 ```sh
-python3 tools/gen_readme.py   # DOT → SVG → README.html (needs graphviz)
+mdbook build docs             # renders docs/ into target/book
+mdbook serve docs             # the same, on localhost, rebuilt on every change
+cargo run -q -p redoubt-doccheck   # the docs checker: status lines, IDs, links, the register
 ```
 
-## Where to read next
-
-| Want | Read |
-| --- | --- |
-| The tour, with diagrams | [README.html](https://sirmick.github.io/redoubt/README.html) |
-| What the project believes (outranks everything) | [`docs/TENETS.md`](docs/TENETS.md) |
-| Where the code stands | [`docs/STATUS.md`](docs/STATUS.md) |
-| The precise kernel | [`docs/KERNEL-SPEC.md`](docs/KERNEL-SPEC.md) |
-| The plan | [`docs/PLAN.md`](docs/PLAN.md), [`docs/BUILD-PLAN.md`](docs/BUILD-PLAN.md) |
-| The design index + glossary | [`docs/README.md`](docs/README.md) |
+The pages are plain Markdown and read on GitHub as they are.
