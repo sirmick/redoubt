@@ -26,7 +26,7 @@ use dt::Platform;
 
 use tar_no_std::TarArchiveRef;
 use redoubt_abi::arch::{
-    EXCEPTION_STACK_PAGES, EXCEPTION_STACK_TOP, KERNEL_AREA, KERNEL_PLIC_BASE, KERNEL_STACK_PAGES,
+    EXCEPTION_STACK_PAGES, EXCEPTION_STACK_TOP, KERNEL_AREA, KERNEL_DMA_PAGES, KERNEL_DMA_REGS, KERNEL_PLIC_BASE, KERNEL_STACK_PAGES,
     KERNEL_STACK_TOP, THREAD_CONTEXT_AREA, THREAD_CONTEXT_PAGES, USER_AREA_END, USER_STACK_TOP,
 };
 
@@ -201,13 +201,14 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     kernel.map_stack(&mut alloc, KERNEL_STACK_TOP, KERNEL_STACK_PAGES, kernel_flags);
     kernel.map_stack(&mut alloc, EXCEPTION_STACK_TOP, EXCEPTION_STACK_PAGES, kernel_flags);
     map_context(&mut alloc, &kernel, KERNEL_PID);
-    // Pre-share the tables the kernel will map its interrupt controller into. The kernel
-    // maps the PLIC at runtime, after these root entries have been copied into every user
-    // address space, so the intermediate tables must exist and be shared now (see
-    // AddressSpace::reserve_tables). The PLIC is the only such runtime kernel mapping.
+    // Pre-share the tables the kernel will map its interrupt controller and its DMA register
+    // window (WP-K5b) into. The kernel maps both at runtime, after these root entries have been
+    // copied into every user address space, so the intermediate tables must exist and be shared
+    // now (see AddressSpace::reserve_tables). These are the only runtime kernel mappings.
     if let Some(plic) = &platform.plic {
         kernel.reserve_tables(&mut alloc, KERNEL_PLIC_BASE, plic.range.len().next_multiple_of(PAGE_SIZE));
     }
+    kernel.reserve_tables(&mut alloc, KERNEL_DMA_REGS, KERNEL_DMA_PAGES * PAGE_SIZE);
     let kernel_process = InitialProcess {
         satp: kernel.satp(),
         entrypoint: kernel_entry,

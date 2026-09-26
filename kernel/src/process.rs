@@ -316,6 +316,8 @@ fn drop_unstarted(ss: &mut SystemServices, mm: &mut MemoryManager, child: PID) {
     // frames it owns, which is what this frees -- and it needs no address space, so a
     // `process_create` that ran out of pages halfway through building one is the same case.
     mm.release_owned_frames(child);
+    // Nor `dma_release`: a process that has never run has allocated no DMA memory.
+    debug_assert!(!mm.dma_holds_any(child), "an unstarted process holds a DMA run");
     mm.process_ended(child);
     ss.free_process_slot(child);
 }
@@ -346,7 +348,8 @@ pub fn process_map(
     mm.ensure_range_exists(src, len).map_err(|_| Error::InvalidArgument)?;
     for i in 0..pages {
         let phys = mm.owned_mapping(pid, src + i * page_size)?;
-        if !mm.is_main_memory(phys as *mut u8) {
+        // DMA pages stay put (WP-K5b, OD2): held by their process until it ends.
+        if !mm.is_main_memory(phys as *mut u8) || mm.is_dma_frame(phys) {
             return Err(Error::InvalidArgument);
         }
     }

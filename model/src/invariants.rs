@@ -18,7 +18,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::ghost::{Blame, Flow, Key, group};
-use crate::kernel::{Backing, Handle, Kernel, MapState, MsgKind, Object, Origin, ROOT, USERS, Wait};
+use crate::kernel::{Backing, DeviceKind, Handle, Kernel, MapState, MsgKind, Object, Origin, ROOT, USERS, Wait};
 use crate::spec::*;
 use crate::syscall::{MintSource, Ret};
 
@@ -250,6 +250,9 @@ impl Checker {
                         "I15: thread {tid} was told twice that call {msg} was abandoned"
                     );
                 }
+                Flow::DeviceUsed { device, quarantined } => {
+                    ensure!(!quarantined, "OD6: quarantined device {device} was handed out again");
+                }
                 Flow::Woken { .. } | Flow::AbandonNotice { .. } => {}
             }
         }
@@ -295,6 +298,16 @@ impl Checker {
             ensure!(k.frames[f].content == 0, "I9: frame {f} was handed out without being zeroed");
         }
         self.frames = now;
+        // I-DMA (WP-K5b, answer 173): a frame waiting in the free pool for reuse (by any path,
+        // DMA or not) is never one a device could still write: `dma_alloc`'s own frames are armed
+        // in the same step they are created, so this checks the pool, not creation.
+        for f in k.free_frames.keys() {
+            ensure!(
+                k.ghost.armed.get(f).is_none_or(BTreeSet::is_empty),
+                "I-DMA: free frame {f} is still armed against {:?}",
+                k.ghost.armed.get(f)
+            );
+        }
         let mut seen: BTreeMap<u64, Seen> = BTreeMap::new();
         for p in k.processes.values() {
             for (v, m) in &p.space {
@@ -331,7 +344,11 @@ impl Checker {
                 s.own,
                 s.lent_in
             );
-            if let Some(pid) = s.own.first() {
+            if fr.quarantined {
+                // WP-K5b, OD5: a quarantined frame outlives the process it was held by, mapped
+                // nowhere, charged to its run's budget until that budget is destroyed (N1).
+                ensure!(s.own.is_empty(), "I-DMA: quarantined frame {f} is still mapped by {:?}", s.own);
+            } else if let Some(pid) = s.own.first() {
                 ensure!(
                     k.budget_of(*pid) == Some(fr.payer),
                     "R6: frame {f} owned by process {pid} is charged to {}",
@@ -364,6 +381,9 @@ impl Checker {
                     "R6: frame {f} in flight is charged to {}",
                     fr.payer
                 );
+            } else if fr.dma.is_some() && k.processes.values().any(|p| p.dma.contains(f)) {
+                // WP-K5b, OD2: `unmap` keeps a DMA frame; it stays held (and charged) by its live
+                // owner, mapped nowhere, until the process ends.
             } else {
                 return Err(format!("R6: frame {f} is charged to {} but mapped nowhere", fr.payer));
             }
@@ -419,7 +439,12 @@ fn delivered(
                         || k.ghost.owed.get(&p).is_some_and(|o| k.endpoints.contains_key(&o.endpoint)))
             }
             Object::Endpoint(e) => k.endpoints.contains_key(&e),
-            Object::Device(d) => k.devices.contains_key(&d),
+            // A quarantined device's object is destroyed as R10 destroys one (WP-K5b, OD6); the
+            // model keeps it only as the flagged registry entry.
+            Object::Device(d) => k
+                .devices
+                .get(&d)
+                .is_some_and(|dev| !matches!(dev.kind, DeviceKind::Mmio { quarantined: true, .. })),
         };
         let closed = !k.budgets.contains_key(&sent.stamp) || !live;
         let stamp = sent.stamp;

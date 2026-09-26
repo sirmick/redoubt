@@ -1,20 +1,17 @@
 description = "Bench self-check: a case's disk and net reach the guest as virtio devices, the disk at its size; the guest powers off cleanly"
 arch = ["rv64"]
 kind = "boot"
-programs = ["log-server", "virtio-probe"]
+# The first program holds every device object and maps each through its handle: no virtio slot
+# is reachable by legacy MapMemory grants (WP-K5b).
+# It prints on the console it maps itself, not through log-server: the UART has one owner.
+programs = ["virtio-probe"]
 timeout_secs = 20
-expect = ['network device, mac 52:54:00:12:34:56', 'block device, 8192 sectors', '2 device\(s\)']
+# In handle order, which is the loader's: the disk comes before the network card.
+expect = ['block device, 8192 sectors', 'network device, mac 52:54:00:12:34:56', '2 device\(s\)']
+forbid = ['\[virtio\] FAIL']
 poweroff = true
 
 [disk]
 size_kib = 4096
 
 [net]
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]
-
-[[grant]]
-program = "virtio-probe"
-mmio = ["0x10001000:0x8000", "0x100000:0x1000"]

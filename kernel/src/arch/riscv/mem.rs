@@ -448,6 +448,17 @@ pub fn map_page_inner(
     Ok(())
 }
 
+/// Map device registers `phys` at kernel address `virt`, read-write and for the kernel alone (no
+/// U bit): WP-K5b's DMA register window. The loader created and shared the tables above it
+/// (`reserve_tables`), so nothing is allocated and every address space sees the page; a missing
+/// table is a boot bug, and the kernel stops.
+pub fn map_kernel_page(phys: usize, virt: usize) {
+    let slot = walk(current_root(), virt, None).expect("the loader shares the window's page tables");
+    assert!(!is_occupied(slot.get()), "kernel window page {:x} is already mapped", virt);
+    slot.set(Pte::leaf(phys, translate_flags(MemoryFlags::R | MemoryFlags::W)));
+    flush_tlb();
+}
+
 /// Ummap the given page from the current address space.  Never allocate a new
 /// page.
 ///

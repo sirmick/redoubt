@@ -116,7 +116,8 @@ receiving on it.
 - IRQ: an interrupt number, a `fired` flag and a `masked` flag;
 - Reset: the right to power off or reboot (given only to `init`).
 
-The loader creates device objects from the device tree; `init` receives them all.
+The loader creates device objects from the device tree; `init` receives them all. None is created
+later, so a DMA device destroyed for failing its reset (R10) is gone until reboot.
 
 **Handle** = (object, badge: u64, stamp: budget id), an index into a process's handle table.
 **Index 0 is never allocated** and means "no handle" where a handle is optional. For an endpoint,
@@ -337,13 +338,21 @@ endpoint, calls in flight to it, and receives waiting on it, fail with `Dead`; a
 the server had taken is abandoned (R3). Revocation reaches messages already sent: a queued message
 sent through a handle stamped with B or a descendant fails its sender with `Dead`; a taken call sent
 through one fails its caller with `Dead` at once and is abandoned (R3).
+A DMA device that fails the reset of a process's end (R11) is destroyed the same way, at that end:
+every handle naming it closes, in every table and every message not yet received, and its page
+goes back to its owner. Its base stays flagged until reboot, so no handle names it again; a live
+co-holder keeps the mapping it already has (question 144).
 
 **R11. Memory.** No mapping is ever writable and executable, and none is writable without being
 readable: the privileged architecture reserves that page-table encoding, so every call that
 installs or changes user permissions (`map_anon`, `map_fixed`, `set_flags`, `process_map`) refuses it with
 `InvalidArgument`, and a writable user page is always readable. Every page is zeroed before a process
 first sees it. Userspace never maps RAM by physical address; a DMA driver learns the physical
-address of pages the kernel gave it. A page-table page is allocated when a mapping first needs it
+address of pages the kernel gave it. Those pages stay with the process that allocated them, and
+none goes back to the pool until every DMA device that could hold its address has confirmed a
+reset: each device the process allocated through, and each DMA device it mapped (answer 173). The
+trigger is the end of that process, not the close of a device's last handle, because handles copy
+and a mapping outlives its handle. A page-table page is allocated when a mapping first needs it
 and freed when it maps nothing. The kernel chooses the addresses `map_anon`, `map_device` and
 `dma_alloc` return; nothing may depend on them. `map_fixed` is the one call that puts new pages
 at an address the caller names, so that the loader stub can place a program's segments at their
@@ -397,15 +406,15 @@ partial reply remains valid on `OutOfMemory`. No argument can make the kernel pa
 | Call | Arguments -> result | Checks |
 | --- | --- | --- |
 | `map_anon` | len, flags -> addr | pages charged; not W+X; zeroed |
-| `unmap` | addr, len | own mapping; not currently lent |
+| `unmap` | addr, len | own mapping; not currently lent; a `dma_alloc` page loses only its mapping |
 | `set_flags` | addr, len, flags | own mapping; not W+X |
-| `map_device` | h(MMIO) -> addr | MMIO device handle |
-| `dma_alloc` | h(MMIO), npages -> addr, phys | DMA flag; pages charged; contiguous; zeroed |
+| `map_device` | h(MMIO) -> addr | MMIO device handle; a DMA device joins the set the caller's end resets (R11) |
+| `dma_alloc` | h(MMIO), npages -> addr, phys | DMA flag; pages charged; contiguous; zeroed; held and charged until the process ends, never reclaimed while it lives, and never lent, transferred or `process_map`ped (R11); at most 32 per device, quarantined ones included |
 | `thread_create` | entry, sp, arg -> tid | pages charged; fewer than `MAX_THREADS` |
 | `thread_exit` | - | siblings survive without a process notice; last thread is `process_exit(0)` |
 | `process_exit` | code | exit notice `exited`, or `faulted` while the process holds open calls |
 | `process_create` | h(budget), h(exit endpoint) -> h(process) | budget's free weight not 0 (R7); exit endpoint's badge 0; the budget's process and page limits; process object charged to the caller |
-| `process_map` | h(process), src, dst, len, flags | process not started; src owned by caller; pages move to the child's budget; not W+X |
+| `process_map` | h(process), src, dst, len, flags | process not started; src owned by caller, not a `dma_alloc` page; pages move to the child's budget; not W+X |
 | `process_start` | h(process), entry, sp, arg, handles | not started; at most `MAX_START_HANDLES` handles, copied into slots 1..n; `arg` reaches the first thread unchanged, like `thread_create`'s (the startup page's address, 0 = none: INIT.md) |
 | `endpoint_create` | -> h (badge 0) | pages charged |
 | `mint` | source, badge, optional h(budget) -> h | see below |
@@ -535,16 +544,16 @@ and its budget cannot pay, and with `TooLarge` when the new handle would be past
 | `unmap` | - | `InvalidArgument` (range; a page not the caller's own mapping, or lent out) |
 | `set_flags` | flags: `InvalidArgument` | `InvalidArgument` (range; flags 0, or W without R; a page not the caller's own mapping) |
 | `map_device` | h: `BadHandle` | `BadHandle`, `WrongObject` (not MMIO), `OutOfMemory` (page tables) |
-| `dma_alloc` | h: `BadHandle` | `BadHandle`, `WrongObject`, `InvalidArgument` (npages 0), `NotPermitted` (no DMA flag), `OutOfMemory` |
+| `dma_alloc` | h: `BadHandle` | `BadHandle`, `WrongObject`, `InvalidArgument` (npages 0), `NotPermitted` (no DMA flag), `OutOfMemory` (pages, or the device's 32 allocations in use) |
 | `thread_create` | - | `TooManyThreads`, `OutOfMemory` |
 | `thread_exit` | - | - |
 | `process_exit` | code: `InvalidArgument` | - |
 | `process_create` | each h: `BadHandle` | `BadHandle`, `WrongObject` (budget), `BadHandle`, `WrongObject` (exit endpoint), `InvalidArgument` (budget free weight 0), `NotPermitted` (exit endpoint's badge not 0), `OutOfProcesses`, `OutOfMemory` (the budget: page tables; then the caller: the process object) |
-| `process_map` | h: `BadHandle`; flags: `InvalidArgument` | `BadHandle`, `WrongObject`, `InvalidArgument` (src range, not the caller's own RAM; dst range, occupied; flags 0, or W without R), `NotPermitted` (started), `OutOfMemory` (the child's budget) |
+| `process_map` | h: `BadHandle`; flags: `InvalidArgument` | `BadHandle`, `WrongObject`, `InvalidArgument` (src range, not the caller's own RAM or a `dma_alloc` page; dst range, occupied; flags 0, or W without R), `NotPermitted` (started), `OutOfMemory` (the child's budget) |
 | `process_start` | h: `BadHandle`; `arg`: not checked; count over `MAX_START_HANDLES`: `TooLarge`; list: record, each h `BadHandle` | `BadHandle`, `WrongObject`, `BadHandle` (each h), `NotPermitted` (started), `OutOfMemory` (the child's budget: thread, then table) |
 | `endpoint_create` | - | `OutOfMemory` |
 | `mint` | source: tag `InvalidArgument`, message id 0 `InvalidArgument`, handle `BadHandle`; badge 0: `InvalidArgument`; budget h: `BadHandle` | source: a message id that is not an open call of the caller's thread (a `send`'s id included) `InvalidArgument`, its endpoint or stamp gone `Dead`; or a handle `BadHandle`, `WrongObject`; budget: `BadHandle`, `WrongObject`; `NotPermitted` (a handle source's badge not 0), `NotPermitted` (budget not the default stamp or below) |
-| `call` | h: `BadHandle`; lend: exactly one of address and page count 0 is `InvalidArgument`; body: record (read and written), count `TooLarge`, each h `BadHandle` | `BadHandle`, `WrongObject` (not an endpoint), `BadHandle` (each h), `TooLarge` (lend over `MAX_LEND_PAGES`), `InvalidArgument` (lend not page-aligned or not the caller's own writable RAM), `LabelDenied` (R1), `Busy` (R2); at delivery: `Refused` (R4), `Timeout`, `Dead`, `InvalidArgument` (reply output cannot commit; rollback newly installed reply handles, absent reply), `OutOfMemory` (reply handles do not fit; the committed reply arrives without them, R4); disposition accompanies every return |
+| `call` | h: `BadHandle`; lend: exactly one of address and page count 0 is `InvalidArgument`; body: record (read and written), count `TooLarge`, each h `BadHandle` | `BadHandle`, `WrongObject` (not an endpoint), `BadHandle` (each h), `TooLarge` (lend over `MAX_LEND_PAGES`), `InvalidArgument` (lend not page-aligned, not the caller's own writable RAM, or a `dma_alloc` page), `LabelDenied` (R1), `Busy` (R2); at delivery: `Refused` (R4), `Timeout`, `Dead`, `InvalidArgument` (reply output cannot commit; rollback newly installed reply handles, absent reply), `OutOfMemory` (reply handles do not fit; the committed reply arrives without them, R4); disposition accompanies every return |
 | `send` | as `call`, with the transfer for the lend and body input-only | as `call` without the lend limit; at delivery only: `Refused` (R4), `Timeout`, `Dead` |
 | `receive` | h (0 = none): `BadHandle`; record | `BadHandle`, `WrongObject` (not an endpoint or IRQ), `NotPermitted` (badge not 0); at delivery: `Timeout`, `Dead` (endpoint destroyed) |
 | `reply` | msg_id 0: `InvalidArgument`; body: record, count `TooLarge`, each h `BadHandle` | `InvalidArgument` (msg_id not an open call of the caller's thread, including a `send`'s id), `BadHandle` (each h) |

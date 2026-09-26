@@ -1514,6 +1514,24 @@ pub fn budgets_dying(ss: &mut SystemServices, mm: &mut MemoryManager) {
     });
 }
 
+/// OD6 (WP-K5b): a DMA device whose reset did not confirm is destroyed as R10 destroys one, so
+/// every handle to it goes, copies in unreceived messages arriving as 0. Its registry slot, keyed
+/// by base, stays flagged until reboot, and no device object is ever made again.
+#[cfg(baremetal)]
+pub fn destroy_quarantined_devices(ss: &mut SystemServices, mm: &mut MemoryManager) {
+    if !mm.dma_take_doomed() {
+        return;
+    }
+    while let Some(frame) = (0..=mm.objects.high_frame).find(|frame| {
+        mm.is_device_frame(*frame) && {
+            let d = mm.device(*frame);
+            d.kind == crate::device::Kind::Mmio && mm.dma_quarantined(d.base)
+        }
+    }) {
+        destroy_device(ss, mm, frame);
+    }
+}
+
 /// Destroy an endpoint (R10): blocked senders and receivers get `Dead`, then calls in flight
 /// that a server took fail with `Dead` and are abandoned (R3), and the page goes back to its
 /// owner. Receivers go first, so none is offered an abandoned-call notice on the way out.

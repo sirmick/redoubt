@@ -283,10 +283,28 @@ pub enum Mutation {
     PolicyCarveFromUnlabelled,
     /// Audit records are read without their labels (QUESTIONS 92).
     PolicyAuditUnfiltered,
+    // WP-K5b, answer 173: DMA device reset and frame quarantine.
+    /// A dying process's DMA frames are pooled even when a device in its reset set did not
+    /// confirm: the acceptance mutation.
+    K5bFreeBeforeReset,
+    /// A device already quarantined counts as reset (P1-1): a co-holder's healthy runs are
+    /// pooled after their shared device was quarantined by another death.
+    K5bQuarantinedSlotCountsAsReset,
+    /// `unmap` frees a DMA frame instead of only dropping its mapping (OD2).
+    K5bUnmapFreesDma,
+    /// A quarantined frame's charge is dropped instead of moving to its budget's destroyed
+    /// parent (OD5, N1).
+    K5bQuarantineChargeDropped,
+    /// A quarantined device's handles are not swept, so it can be mapped and allocated through
+    /// again (OD6).
+    K5bQuarantinedDeviceUsable,
+    /// A confirmed reset at one death drops the device from every live co-holder's reset set, so
+    /// a co-holder's later death pools frames the device can still write (OD3).
+    K5bResetClearsCoHolderReach,
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 121] = {
+    pub const ALL: [Mutation; 127] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -410,6 +428,12 @@ impl Mutation {
             PolicyNarrowToSessionBudget,
             PolicyCarveFromUnlabelled,
             PolicyAuditUnfiltered,
+            K5bFreeBeforeReset,
+            K5bQuarantinedSlotCountsAsReset,
+            K5bUnmapFreesDma,
+            K5bQuarantineChargeDropped,
+            K5bQuarantinedDeviceUsable,
+            K5bResetClearsCoHolderReach,
         ]
     };
 
@@ -502,6 +526,12 @@ impl Mutation {
             MintFromUnservedMessage => "mint",
             OpenCallsUnlimited | ReceiveDropsOpenCalls => "QUESTIONS 2",
             ProcessInWeightlessBudget => "QUESTIONS 12",
+            K5bFreeBeforeReset
+            | K5bQuarantinedSlotCountsAsReset
+            | K5bUnmapFreesDma
+            | K5bQuarantineChargeDropped
+            | K5bQuarantinedDeviceUsable
+            | K5bResetClearsCoHolderReach => "answer 173",
             _ => "policy",
         }
     }

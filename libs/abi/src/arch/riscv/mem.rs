@@ -24,6 +24,9 @@ mod layout {
     /// Root entries 1020..=1021: where the kernel maps the platform's interrupt controller
     /// (up to 8 MiB; a QEMU `virt` PLIC is 6 MiB, which is why this needs two 4 MiB roots).
     pub const KERNEL_PLIC_BASE: usize = 0xff00_0000;
+    /// The last 64 KiB of root entry 1021: the kernel's window on DMA devices' registers
+    /// (WP-K5b), one page per device, so a PLIC must end below it.
+    pub const KERNEL_DMA_REGS: usize = 0xff7f_0000;
     /// Root entry 1022: per-process kernel data.
     pub const PROCESS_AREA: usize = 0xff80_0000;
     pub const THREAD_CONTEXT_AREA: usize = PROCESS_AREA;
@@ -60,6 +63,9 @@ mod layout {
     pub const KERNEL_AREA: usize = 0xffff_ffff_c000_0000;
     /// Where the kernel maps the platform's interrupt controller.
     pub const KERNEL_PLIC_BASE: usize = 0xffff_ffff_f000_0000;
+    /// The kernel's window on DMA devices' registers (WP-K5b), one page per device: right
+    /// after the largest PLIC (64 MiB), far below the kernel stacks and image.
+    pub const KERNEL_DMA_REGS: usize = 0xffff_ffff_f400_0000;
     pub const KERNEL_STACK_TOP: usize = 0xffff_ffff_fff8_0000;
     pub const KERNEL_STACK_PAGES: usize = 8;
     pub const EXCEPTION_STACK_TOP: usize = 0xffff_ffff_ffff_0000;
@@ -68,6 +74,18 @@ mod layout {
     pub const USER_STACK_TOP: usize = 0x8000_0000;
 }
 pub use layout::*;
+
+/// Pages in the DMA register window: one per DMA device the kernel can reset (WP-K5b).
+pub const KERNEL_DMA_PAGES: usize = 16;
+const _: () = {
+    let end = KERNEL_DMA_REGS + KERNEL_DMA_PAGES * PAGE_SIZE;
+    // In the shared kernel half, clear of the physmap, the per-process area and the kernel
+    // stacks and image; the PLIC's own end is checked at boot, against its reported size.
+    assert!(KERNEL_DMA_REGS > KERNEL_PLIC_BASE);
+    assert!(KERNEL_DMA_REGS >= PHYSMAP_BASE + PHYSMAP_SIZE);
+    assert!(end <= PROCESS_AREA || KERNEL_DMA_REGS >= PROCESS_AREA + (1 << 30));
+    assert!(end <= KERNEL_STACK_TOP - KERNEL_STACK_PAGES * PAGE_SIZE);
+};
 
 /// The virtual address at which the kernel's physmap sees physical frame `phys`:
 /// `PHYSMAP_BASE + (phys - PHYSMAP_PHYS_BASE)`. rv64 maps from physical 0

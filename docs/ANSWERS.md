@@ -167,6 +167,26 @@ killed mid-traffic whose frames are reallocated, then the new owner's writes int
 reach nothing and peer bytes land nowhere; a device that ignores reset keeps its frames
 quarantined. Until WP-K5b merges, no driver restart (WP-R3) and no off-bench network use.
 
+**Note (WP-K5b, owner-approved plan, 2026-09-24):** three readings of the decision above.
+- *The trigger is the end of the process holding the frames, not the release of the last
+  handle.* Handles copy across tables and messages, a mapping outlives its handle (question 144),
+  and `init` keeps a copy of each device handle to grant it again, so a last-handle trigger would
+  never fire on a driver crash. When a process ends, the kernel resets the devices it allocated
+  through and every DMA device it mapped. Its frames go back to the pool only if every one of
+  those devices confirms a reset in that same step. Otherwise all of them are quarantined, and a
+  device quarantined earlier never counts as reset (KERNEL-SPEC.md, R11).
+- *The quarantine charge stays on the budget that paid for the frames*, the dead driver's, which
+  paid for them within its limit. When that budget is destroyed, the charge moves to its parent
+  after the destroyed budget's carve has returned, so the parent never goes over its limit. This
+  refines "charged to the budget that holds the device object's grant": that budget could be
+  pushed past its limit, and I5 (usage within the limit) would no longer hold.
+- *"Not handed out again" means the device object is destroyed* as R10 destroys one: every
+  handle to it closes, including copies in unreceived messages, and its base stays flagged until
+  reboot (KERNEL-SPEC.md, R10). The plan also had `map_device` and `dma_alloc` refuse a flagged
+  device with `NotPermitted`, but once the object is destroyed no handle can reach it, so neither
+  call has that error. The Architect settled this reading of the plan in Wash QA K5b-od6-sweep,
+  2026-09-25.
+
 ## Network decisions (Mick, 2026-09-24)
 
 Mick approved the thirteen OWNER DECISIONS of the WP-D3 plan (QA D3-plan, after the red team's

@@ -212,22 +212,25 @@ impl MemoryManager {
     /// Reset right first and the console and its interrupt next, so a test program can name
     /// one without a manifest.
     pub fn boot_devices(&mut self, owner: BudgetFrame, first: Option<PID>, stamp: BudgetRef) {
-        let Some(tag) =
-            crate::args::KernelArguments::get().iter().find(|a| a.name == u32::from_le_bytes(*b"Devs"))
-        else {
+        let Some(entries) = devs() else {
             println!("Devices: the loader reported none");
             return;
         };
-        assert!(tag.data.len() % ENTRY_WORDS == 0, "Devs is not a whole number of entries");
-        for words in tag.data.chunks_exact(ENTRY_WORDS) {
+        let n = entries.len();
+        for words in entries {
             let d = self.decode_entry(words);
+            // A DMA device the kernel cannot reset gets no object at all (WP-K5b, fail closed);
+            // legacy `MapMemory` still refuses it (`dma_ranges`).
+            if d.kind == Kind::Mmio && d.dma && !self.dma_register(d.base) {
+                println!("Devices: no DMA slot for {:x}; it gets no device object", d.base);
+                continue;
+            }
             let device = self.new_device(owner, &d).expect("boot: no room for a device object");
             if let Some(pid) = first {
                 let handle = Handle { object: Object::Device(device), badge: 0, stamp };
                 self.install_handle(pid, handle).expect("boot: no room for a device handle");
             }
         }
-        let n = tag.data.len() / ENTRY_WORDS;
         println!("Devices: {} objects, all held by the first program (INTERIM)", n);
     }
 
@@ -235,8 +238,7 @@ impl MemoryManager {
     /// Every check here is fail-closed: a malformed entry stops the boot rather than becoming
     /// an object that names something it must not.
     fn decode_entry(&self, words: &[u32]) -> Device {
-        let value = |i: usize| u64::from(words[i]) | u64::from(words[i + 1]) << 32;
-        let (base, size, flags) = (value(1), value(3), words[5]);
+        let (base, size, flags) = (entry_value(words, 1), entry_value(words, 3), words[5]);
         let none = BudgetRef { frame: 0, id: 0 };
         let mut d = Device {
             id: 0,
@@ -266,7 +268,7 @@ impl MemoryManager {
                 d.kind = Kind::Mmio;
                 d.base = base;
                 d.size = size;
-                d.dma = flags & 1 != 0;
+                d.dma = flags & DEVS_DMA != 0;
             }
             2 => {
                 let irq = u32::try_from(base).expect("Devs: an interrupt number too wide");
@@ -287,6 +289,30 @@ impl MemoryManager {
 
 /// Words in one `Devs` entry.
 const ENTRY_WORDS: usize = 6;
+/// An MMIO `Devs` entry's flag: the device is a bus master (BOOT.md).
+const DEVS_DMA: u32 = 1;
+
+/// The loader's `Devs` entries (BOOT.md), or `None` if it reported none.
+fn devs() -> Option<core::slice::ChunksExact<'static, u32>> {
+    let tag = crate::args::KernelArguments::get().iter().find(|a| a.name == u32::from_le_bytes(*b"Devs"))?;
+    assert!(tag.data.len() % ENTRY_WORDS == 0, "Devs is not a whole number of entries");
+    Some(tag.data.chunks_exact(ENTRY_WORDS))
+}
+
+/// The 64-bit value at word `i` of a `Devs` entry, low word first.
+fn entry_value(words: &[u32], i: usize) -> u64 { u64::from(words[i]) | u64::from(words[i + 1]) << 32 }
+
+/// Every DMA-flagged MMIO range the loader reported, as (base, size), whether or not it got a
+/// device object (WP-K5b: legacy `MapMemory` refuses them all). `decode_entry` checked each
+/// at boot.
+pub fn dma_ranges() -> impl Iterator<Item = (u64, u64)> {
+    devs()
+        .into_iter()
+        .flatten()
+        .filter(|w| w[0] == 1 && w[5] & DEVS_DMA != 0)
+        .map(|w| (entry_value(w, 1), entry_value(w, 3)))
+}
+
 /// Words in one `Ctrl` entry: base and size, low word first.
 const CTRL_WORDS: usize = 4;
 
@@ -322,31 +348,52 @@ impl MemoryManager {
     /// entries would be a mechanism the design does not otherwise have: a device mapping
     /// behaves like pages transferred to another process, which revocation does not reach
     /// either. Whoever hands out a device handle is handing out the device.
+    ///
+    /// A DMA device joins the set of devices the caller's death must reset before its DMA
+    /// frames are pooled (WP-K5b, OD3): it could be programmed with any of their addresses.
     pub fn map_device(&mut self, pid: PID, h: u32) -> Result<(usize, usize), Error> {
         let d = self.device_of_kind(pid, h, Kind::Mmio)?;
+        let slot = self.dma_slot_of(&d);
         let flags = redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W;
         let len = d.size as usize;
-        self.map_run(pid, len / PAGE_SIZE, flags, Some(d.base as usize)).map(|at| (at, len))
+        let at = self.map_run(pid, len / PAGE_SIZE, flags, Some(d.base as usize))?;
+        if let Some(slot) = slot {
+            self.dma_mapped(pid, slot);
+        }
+        Ok((at, len))
+    }
+
+    /// The registry slot of DMA device `d`, which every DMA device object has (`boot_devices`
+    /// makes none beyond the registry). A live object never names a quarantined device: its
+    /// quarantine destroyed the object (OD6).
+    fn dma_slot_of(&self, d: &Device) -> Option<usize> {
+        if !d.dma {
+            return None;
+        }
+        assert!(!self.dma_quarantined(d.base), "I-DMA: a live device object names a quarantined device");
+        Some(self.dma_slot(d.base).expect("every DMA device object has a registry slot"))
     }
 
     /// `dma_alloc(h(MMIO), npages) -> addr, phys` (KERNEL-SPEC.md; IO-ARCHITECTURE.md, DMA):
     /// contiguous, zeroed RAM the device may be programmed with. **The one call that returns a
     /// physical address**, and only for a device the platform says is a bus master.
+    ///
+    /// The memory and its run are held, and charged, until the process ends; they are never
+    /// reclaimed while it lives, and at its end they are pooled only once every device that could
+    /// hold their address has confirmed a reset (WP-K5b, `dma.rs`).
     pub fn dma_alloc(&mut self, pid: PID, h: u32, npages: usize) -> Result<(usize, u64), Error> {
         let d = self.device_of_kind(pid, h, Kind::Mmio)?;
         if npages == 0 {
             return Err(Error::InvalidArgument);
         }
-        if !d.dma {
-            return Err(Error::NotPermitted);
-        }
+        let Some(slot) = self.dma_slot_of(&d) else { return Err(Error::NotPermitted) };
         // Charged and zeroed before anything is mapped (R6, R11).
-        let phys = self.alloc_contiguous(pid, npages)?;
+        let phys = self.dma_new_run(pid, slot, npages)?;
         let flags = redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W;
         match self.map_run(pid, npages, flags, Some(phys)) {
             Ok(at) => Ok((at, phys as u64)),
             Err(e) => {
-                self.free_frames(pid, phys, npages);
+                self.dma_drop_run(slot, phys);
                 Err(e)
             }
         }
