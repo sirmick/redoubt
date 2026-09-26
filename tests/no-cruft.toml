@@ -1,0 +1,56 @@
+description = "No cruft (WP-K6): no name of the dropped interface, no silenced dead code, no Cargo feature nothing reads, one literal definition of PAGE_SIZE and USER_AREA_END"
+kind = "no-cruft"
+paths = ["kernel", "libs", "loader", "tests", "stub", "tools/testbench", ".cargo/config.toml"]
+no_allow_dead = ["kernel/src", "libs/layout", "libs/paging", "loader/src", "tests/programs/src"]
+one_definition = ["PAGE_SIZE", "USER_AREA_END"]
+# The model is outside `paths` but may not grow a third definition either.
+definition_paths = ["model/src"]
+
+# Names of the dropped interface. Only `xous` ignores case: with `(?i)`, `SysCall` would match
+# `redoubt_sys::syscall`.
+forbidden = [
+    { pattern = '(?i)\bxous\b' },
+    { pattern = 'redoubt_abi' }, { pattern = 'redoubt-abi' }, { pattern = 'SysCall' }, { pattern = 'rsyscall' },
+    { pattern = '\bSID\b' }, { pattern = '\bCID\b' }, { pattern = 'MessageEnvelope' }, { pattern = 'ScalarMessage' },
+    { pattern = 'BlockingScalar' }, { pattern = 'MemoryMessage' }, { pattern = 'ClaimInterrupt' },
+    { pattern = 'claim_interrupt' }, { pattern = 'ReturnToParent' }, { pattern = 'PREVIOUS_PAIR' },
+    { pattern = 'HANDLING_IRQ' }, { pattern = 'in_callback' }, { pattern = 'finish_isr' },
+    { pattern = 'RETURN_FROM_ISR' }, { pattern = 'RETURN_FROM_EXCEPTION_HANDLER' }, { pattern = 'EXCEPTION_TID' },
+    { pattern = 'connection_map' }, { pattern = 'ThreadInit' }, { pattern = 'ProcessInit' },
+    { pattern = 'MemoryFlags' }, { pattern = 'MemoryRange' }, { pattern = 'MemoryAddress' }, { pattern = 'MemorySize' },
+    { pattern = 'Grnt' }, { pattern = 'may_map_device' }, { pattern = 'may_claim_irq' }, { pattern = 'create_server' },
+    { pattern = 'connect_to_server' }, { pattern = 'PlatformSpecific' }, { pattern = 'platform_call' },
+    { pattern = 'ExceptionHandler' }, { pattern = 'SystemServices' }, { pattern = 'map_memory' },
+    { pattern = 'send_message' }, { pattern = 'yield_slice' }, { pattern = 'create_thread_1' },
+    { pattern = 'UnhandledSyscall' }, { pattern = 'flatipc' }, { pattern = 'LEGACY_' }, { pattern = 'until WP-K6' },
+    { pattern = 'INTERIM.*K6' },
+    # The hosted build's leftovers: after OD1 all are unconditional or dead.
+    { pattern = 'baremetal' }, { pattern = 'cfg\(ci\)' }, { pattern = 'crossbeam_no_atomic_64' },
+    # "legacy" survives only where it names virtio-mmio v1's own legacy interface.
+    { pattern = '(?i)legacy', unless = '(?i)virtio' },
+]
+
+[[allow]]
+path = "tests/no-cruft.toml"
+rule = "*"
+reason = "the gate's own pattern file"
+
+[[allow]]
+path = "tests/programs/src/bin/legacy-gone.rs"
+rule = "*"
+reason = "legacy-gone checks that every old call number is refused, so it names them"
+
+[[allow]]
+path = "tests/legacy-gone.toml"
+rule = "*"
+reason = "legacy-gone's case, which names the old calls in its expected lines"
+
+[[allow]]
+path = "kernel/src/main.rs"
+rule = "Grnt"
+reason = "the kernel refuses a boot argument carrying a device grant (Grnt): the refusal names it"
+
+[[allow]]
+path = "model/src/spec.rs"
+rule = "one-definition:PAGE_SIZE"
+reason = "the executable model is the spec's independent oracle and depends on no implementation crate, so it states the page size itself"
