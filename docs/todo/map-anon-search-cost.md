@@ -44,13 +44,18 @@ Fixed in the kernel follow-up package after the documentation rewrite, before th
 
 ## Done when
 
-- The search skips ahead: when page `p` is taken, the next candidate start is `p` plus one
-  page, so the search is one pass over the area (at most 65536 probes for the default area,
-  1024 for the message area).
+- The search is one scan of the starts in [area start, area end less the request], the last
+  included. It begins at the lower of the last placement and that last start, wraps once to the
+  area's start, and skips ahead: when page `p` is taken, the next candidate start is `p` plus
+  one page. So it is one pass over the area (at most 65536 probes for the default area, 1024 for
+  the message area), and a whole-area request or a run that fits only at the end is found.
 - A bench case, `map-anon-search-bound`, maps one page mid-area, asks for half the area, and
   asserts the refusal's time and that a timer wake meanwhile stays within the latency target.
-- A planted mutation that restores the retesting fails that case.
-- The search tries every start from the area's start to its end less the request, the last
-  included, and no other: a request for the whole of an empty area succeeds, and no run extends
-  past the area's end. A host or bench test pins both edges.
+  It also asserts placement: every returned run lies inside its area; a whole-area request
+  succeeds in an empty area; a run that fits only at the area's end succeeds; and a wrap after
+  a high last placement stays inside the area.
+- A planted mutation that restores the retesting fails that case, and one that drops the wrap
+  bound fails its placement assertions.
+- [Memory layout](../kernel/memory-layout.md)'s area rows state the containment (`map_anon` and
+  message deliveries land inside their areas); it needs no new rule ID.
 - R12 on the scheduling page carries the sentence above.

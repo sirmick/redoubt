@@ -30,8 +30,9 @@ A process has:
 - an **exit endpoint**, named by its creator, where its exit notice goes;
 - its open calls, at most `MAX_OPEN_CALLS` (64) ([IPC](ipc.md#r4a-open-calls));
 - a **process object**: one page charged to its creator's budget, which holds the exit notice
-  (see [Exit notices](#exit-notices)), and one count against that budget's process limit. A
-  process handle names this object.
+  (see [Exit notices](#exit-notices)), and by R6 (charging) one count against that budget's
+  process limit, a count the kernel departs from ([below](#creating-and-starting)). A process
+  handle names this object.
 
 PIDs run from 2 to `MAX_PROCESS_COUNT` (64: the PIDs there are, the kernel's included); PID 1 is
 the kernel. `process_create` draws the PID at random from the free ones: a PID is free when no
@@ -347,9 +348,14 @@ Status: built · tested: bench:process-lifecycle, bench:process-attack, bench:st
   creator's pages, so one creator can hold every free PID with a single one-process budget, and
   every other `process_create`, in any part of the budget tree, then gets `OutOfProcesses`.
   Follow-up: [todo](../todo/pid-pool-pinning.md).
-- **Finding a process object scans every object frame.** Drawing a PID and matching a notice to
-  its endpoint walk all kernel object frames, a cost bounded by RAM and not charged to the
-  caller's budget.
+- **Finding a process object scans every object frame.** Drawing a PID looks for a process
+  object naming each candidate PID, and matching a notice to its endpoint looks for one owing a
+  notice there; each walks every kernel-object frame up to the highest one ever used, a mark
+  bounded only by RAM that any budget raises by creating objects. The time is billed to the
+  caller, as every call's is, but the kernel runs it with interrupts off, so every wake waits
+  for it; this departs from R12 (scheduling)'s bound on a call's kernel time
+  ([scheduling](scheduling.md#r12-scheduling)). Follow-up:
+  [todo](../todo/kernel-scan-bounds.md).
 - **`process_map` backs its source before it checks the flags.** A `process_map` with bad flags
   may first make the caller's untouched source pages real, at the caller's cost, before it
   refuses. The model's proof of the write-without-read refusal goes through `set_flags`, not

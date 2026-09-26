@@ -73,7 +73,7 @@ fixed order, the same in the kernel and the [model](model.md); the full rows are
 
 ### What `receive` returns
 
-Status: built · partly tested: a record made unwritable while its thread waits is not attacked by a case, only one bad when `receive` starts · tested: bench:redoubt-ipc, bench:timeouts, bench:process-attack, host:redoubt-sys::received_layout
+Status: built · partly tested: a record made unwritable while its thread waits is attacked only for an exit notice (`process-attack`); for a message, an interrupt or an abandoned-call notice it is not attacked by a case · tested: bench:redoubt-ipc, bench:timeouts, bench:process-attack, host:redoubt-sys::received_layout
 
 One record layout for every result: `(kind, msg_id, badge, account, labels, words, handles,
 buffer, pages)`. A field a kind does not use is 0.

@@ -171,7 +171,7 @@ by `kernel/src/args.rs`. It is a run of tags, `XArg` first:
 | `MREx` | every MMIO region in the tree, controllers included, six words each: start (2), size in bytes rounded up to whole pages (2), the node name's first four bytes, 0 | `mem.rs`: the MMIO ownership table | no MMIO table; a second `MREx` stops the boot |
 | `Ctrl` | the PLIC and CLINT ranges, four words each: base (2), size (2) | `device.rs` | no controller check |
 | `Devs` | one entry per device object, six words each (below) | `device.rs` | no device objects |
-| `Plic` | PLIC base (2), size (2), hart 0's S-mode context, 0 | `arch/riscv/intc_plic.rs` | no external interrupts |
+| `Plic` | PLIC base (2), size (2), the PLIC's S-mode context of the boot hart (the hart ID the firmware passes in `a0`), matched to the cpu node whose `reg` is that ID, 0; a device tree with a PLIC but no S-mode context for the boot hart stops the boot (R17). The loader departs from this: it takes hart 0's context (Residual risks) | `arch/riscv/intc_plic.rs` | no external interrupts |
 | `Seed` | `/chosen/rng-seed`: 16 to 64 bytes, zero-padded to words | `platform/sbi/rand.rs` | the boot stops ([R17](#r17-fail-closed)) |
 | `Time` | the timebase: ticks of the `time` counter per second (2) | `arch/riscv/timer_sbi.rs` | the boot stops (R17) |
 | `IniE` | nothing; one per program, counted to size the process table | `ptable.rs` | only the kernel runs |
@@ -206,7 +206,7 @@ mean "has a PLIC" or "runs under SBI".
   firmware: console, power-off, the timer, the RNG) and `plic` (the interrupt controller). New
   hardware is a new backend file and feature.
 - **Board features** only compose them: `qemu-virt = ["sbi", "plic"]`.
-- **Discovered, not written in:** RAM, MMIO regions, interrupts, the PLIC, hart 0's context,
+- **Discovered, not written in:** RAM, MMIO regions, interrupts, the PLIC, the boot hart's context,
   the timebase and the seed come from the device tree, read by the loader alone. The kernel has
   no device-tree parser.
 - **Width-bound only:** page-table geometry (`libs/paging`), the saved-context size and the trap
@@ -409,7 +409,7 @@ would be written into all of them.
 
 ### R17 (fail closed)
 
-Status: built · partly tested: a short or missing seed and a missing timebase are not attacked by a case (every QEMU boot supplies both); the two signature cases run on rv64 only; the loader departs from this for RAM past the physmap (Residual risks) · tested: bench:verified-boot-rejects-tamper, bench:verified-boot-rejects-bare-archive
+Status: built · partly tested: a short or missing seed and a missing timebase are not attacked by a case (every QEMU boot supplies both); the two signature cases run on rv64 only; the loader departs from this for RAM past the physmap and for a boot hart with no PLIC context (Residual risks) · tested: bench:verified-boot-rejects-tamper, bench:verified-boot-rejects-bare-archive
 
 The boot never runs degraded. Each of these powers the machine off through SBI SRST with
 `SystemFailure` rather than boot: a bad bundle signature; an initrd too short to be signed; a
@@ -420,6 +420,10 @@ interrupt; a bundle that is not a tar, is empty, holds `grants` or too many prog
 R16 refuses; a full argument block; any argument-block refusal of the kernel's. A refusal of
 the loader's prints `loader PANIC` and one of the kernel's a kernel panic; both then power off.
 The two boot cases require the power-off and QEMU's status 255.
+
+A device tree with a PLIC but no S-mode context for the boot hart stops the boot too
+([the `Plic` row](#the-argument-block)); the loader departs from this by taking hart 0's
+context.
 
 The loader refuses to boot when RAM extends past `PHYSMAP_SIZE` (the size of the kernel's
 direct physical map), with a clear message. The loader departs from this today: it maps the
@@ -476,11 +480,13 @@ Status: built · partly tested: a reboot through `system_reset` is not attacked 
   frame past the bound, which a process can cause by allocating
   ([memory layout](memory-layout.md#residual-risks)). Follow-up:
   [todo](../todo/physmap-ram-bound.md).
-- **The loader takes the boot hart to be hart 0.** It reads the PLIC context of the CPU whose
-  `reg` is 0 (`loader/src/dt.rs`), not of the hart id the firmware passes in `a0`, and nothing
-  compares the two. Firmware that boots on another hart would have the kernel claim and
-  complete interrupts in hart 0's context, and its drivers would get no interrupts. Follow-up:
-  [todo](../todo/boot-hart-context.md).
+- **The loader takes the boot hart to be hart 0,** departing from the `Plic` row's rule. It
+  reads the PLIC context of the CPU whose `reg` is 0 (`loader/src/dt.rs`), not of the hart ID
+  the firmware passes in `a0`. On firmware whose boot hart is another, the failure is silent: if
+  hart 0 has an S-mode context, the kernel enables interrupts there, they are raised on the
+  parked hart 0, and no driver hears its device; if it has none, the boot goes on with no
+  `Plic` tag and no external interrupts. No interrupt reaches the wrong owner, because claims
+  and R5 (interrupts) route by source. Follow-up: [todo](../todo/boot-hart-context.md).
 - **Device indices are positional.** Past the fixed three, a device's handle index depends on
   the device tree's order and on which DMA devices the kernel could register. A program that
   pins one depends on the machine. Placement by name is planned
