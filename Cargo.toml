@@ -27,6 +27,7 @@ members = [
   "tests/programs",
   "tests/net",
   "tests/net/client",
+  "tools/doccheck",
   "tools/testbench",
   "tools/vendor-check",
   "vendor/getrandom",
