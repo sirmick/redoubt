@@ -13,7 +13,6 @@ use test_programs::spawn;
 use uart_16550::MmioSerialPort;
 
 const WAIT: u64 = 2_000_000;
-const PAGE: usize = rd::PAGE_SIZE;
 const DEST: usize = 0x0800_0000;
 const ACCOUNT: u64 = 47;
 static CONSOLE: AtomicUsize = AtomicUsize::new(0);
@@ -24,7 +23,7 @@ extern "C" fn invalidate_notice_record(_: usize) -> ! {
     // Single-hart K4 schedules this sibling only after the parent blocks in Receive:
     // thread_create returns to the parent, which performs no intervening yielding call.
     // Thus initial output validation already succeeded before this unmap executes.
-    rd::unmap(LATE_RECORD.load(Ordering::Acquire), PAGE).unwrap();
+    rd::unmap(LATE_RECORD.load(Ordering::Acquire), rd::PAGE_SIZE).unwrap();
     rd::destroy(LATE_BUDGET.load(Ordering::Acquire) as u32).unwrap();
     rd::thread_exit().unwrap();
     panic!("thread_exit returned")
@@ -151,31 +150,31 @@ fn arguments(c: &mut Checker, image: &spawn::Image) {
     c.check(rd::process_create(budget, badged) == Err(Error::NotPermitted), "badged exit refused");
     rd::close(badged).unwrap();
     let process = rd::process_create(budget, exit).unwrap();
-    let src = rd::map_anon(2 * PAGE, rd::rw()).unwrap();
+    let src = rd::map_anon(2 * rd::PAGE_SIZE, rd::rw()).unwrap();
     rd::poke(src, 0x1122);
-    rd::poke(src + PAGE, 0x3344);
-    rd::unmap(src + PAGE, PAGE).unwrap();
+    rd::poke(src + rd::PAGE_SIZE, 0x3344);
+    rd::unmap(src + rd::PAGE_SIZE, rd::PAGE_SIZE).unwrap();
     let before = rd::usage(budget).unwrap();
     for (source, dst, len, flags) in [
-        (src, DEST, PAGE, rd::rw() | MemFlags::EXECUTE),
-        (src + 1, DEST, PAGE, rd::rw()),
-        (src, DEST + 1, PAGE, rd::rw()),
-        (src, DEST, PAGE - 1, rd::rw()),
+        (src, DEST, rd::PAGE_SIZE, rd::rw() | MemFlags::EXECUTE),
+        (src + 1, DEST, rd::PAGE_SIZE, rd::rw()),
+        (src, DEST + 1, rd::PAGE_SIZE, rd::rw()),
+        (src, DEST, rd::PAGE_SIZE - 1, rd::rw()),
         (src, DEST, 0, rd::rw()),
-        (0, DEST, PAGE, rd::rw()),
-        (src, DEST, 2 * PAGE, rd::rw()),
-        (src, usize::MAX & !(PAGE - 1), 2 * PAGE, rd::rw()),
+        (0, DEST, rd::PAGE_SIZE, rd::rw()),
+        (src, DEST, 2 * rd::PAGE_SIZE, rd::rw()),
+        (src, usize::MAX & !(rd::PAGE_SIZE - 1), 2 * rd::PAGE_SIZE, rd::rw()),
     ] {
         assert_eq!(rd::process_map(process, source, dst, len, flags), Err(Error::InvalidArgument));
         assert_eq!(rd::usage(budget), Ok(before));
         assert_eq!(rd::peek(src), 0x1122);
     }
     c.check(true, "hostile mapping ranges and W+X refused without moving source");
-    rd::process_map(process, src, DEST, PAGE, rd::rw()).unwrap();
-    let second = rd::map_anon(PAGE, rd::rw()).unwrap();
+    rd::process_map(process, src, DEST, rd::PAGE_SIZE, rd::rw()).unwrap();
+    let second = rd::map_anon(rd::PAGE_SIZE, rd::rw()).unwrap();
     rd::poke(second, 0x5566);
     let occupied = rd::usage(budget).unwrap();
-    assert_eq!(rd::process_map(process, second, DEST, PAGE, rd::rw()), Err(Error::InvalidArgument));
+    assert_eq!(rd::process_map(process, second, DEST, rd::PAGE_SIZE, rd::rw()), Err(Error::InvalidArgument));
     assert_eq!(rd::usage(budget), Ok(occupied));
     assert_eq!(rd::peek(second), 0x5566);
     c.check(true, "occupied destination refused without losing caller page");
@@ -219,17 +218,17 @@ fn arguments(c: &mut Checker, image: &spawn::Image) {
     assert_eq!(redoubt_sys::syscall(&wrong_object_bad_slot), Err(Error::BadHandle));
     assert_eq!(rd::usage(budget), Ok(occupied));
     c.check(true, "invalid startup records and handles leave process unchanged");
-    rd::unmap(second, PAGE).unwrap();
+    rd::unmap(second, rd::PAGE_SIZE).unwrap();
     rd::destroy(budget).unwrap();
     notice(exit, Cause::Killed, 0);
 
     let budget = rd::create(rd::SYSTEM, &rd::spec(200, 1, 10)).unwrap();
     let child = spawn::spawn(image, budget, exit, sleeper as *const () as usize, &[], &[]).unwrap();
-    let src = rd::map_anon(PAGE, rd::rw()).unwrap();
+    let src = rd::map_anon(rd::PAGE_SIZE, rd::rw()).unwrap();
     rd::poke(src, 7);
-    assert_eq!(rd::process_map(child.process, src, DEST, PAGE, rd::rw()), Err(Error::NotPermitted));
+    assert_eq!(rd::process_map(child.process, src, DEST, rd::PAGE_SIZE, rd::rw()), Err(Error::NotPermitted));
     assert_eq!(
-        rd::process_map(child.process, src, spawn::IMAGE_BASE, PAGE, rd::rw()),
+        rd::process_map(child.process, src, spawn::IMAGE_BASE, rd::PAGE_SIZE, rd::rw()),
         Err(Error::InvalidArgument)
     );
     assert_eq!(
@@ -237,7 +236,7 @@ fn arguments(c: &mut Checker, image: &spawn::Image) {
         Err(Error::NotPermitted)
     );
     assert_eq!(rd::peek(src), 7);
-    rd::unmap(src, PAGE).unwrap();
+    rd::unmap(src, rd::PAGE_SIZE).unwrap();
     c.check(true, "started process rejects mapping and restart");
     rd::destroy(budget).unwrap();
     notice(exit, Cause::Killed, 0);
@@ -282,12 +281,12 @@ fn late_record(c: &mut Checker) {
     let exit = rd::endpoint_create().unwrap();
     let budget = rd::create(rd::SYSTEM, &rd::spec(32, 1, 5)).unwrap();
     let process = rd::process_create(budget, exit).unwrap();
-    let record = rd::map_anon(PAGE, rd::rw()).unwrap();
+    let record = rd::map_anon(rd::PAGE_SIZE, rd::rw()).unwrap();
     rd::poke(record, 0);
-    let stack = rd::map_anon(4 * PAGE, rd::rw()).unwrap();
+    let stack = rd::map_anon(4 * rd::PAGE_SIZE, rd::rw()).unwrap();
     LATE_RECORD.store(record, Ordering::Release);
     LATE_BUDGET.store(budget as usize, Ordering::Release);
-    rd::thread_create(invalidate_notice_record as *const () as usize, stack + 4 * PAGE - 16, 0).unwrap();
+    rd::thread_create(invalidate_notice_record as *const () as usize, stack + 4 * rd::PAGE_SIZE - 16, 0).unwrap();
     let receive =
         Call::Receive { from: Some(rd::h(exit)), timeout: WAIT, max_transfer: 0, received_rec: record };
     assert_eq!(redoubt_sys::syscall(&receive), Err(Error::InvalidArgument));

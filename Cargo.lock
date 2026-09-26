@@ -378,6 +378,7 @@ dependencies = [
  "paging",
  "redoubt-abi",
  "redoubt-signing",
+ "redoubt-sys",
  "sbi-rt",
  "tar-no-std",
 ]
@@ -444,6 +445,7 @@ name = "paging"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.13.1",
+ "redoubt-sys",
 ]
 
 [[package]]
@@ -890,7 +892,6 @@ dependencies = [
 name = "test-programs"
 version = "0.1.0"
 dependencies = [
- "redoubt-abi",
  "redoubt-rt",
  "redoubt-sys",
  "stub",

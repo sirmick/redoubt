@@ -16,7 +16,9 @@ use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use plic::Plic;
 use riscv::register::sie;
 use redoubt_abi::arch::KERNEL_PLIC_BASE;
-use redoubt_abi::{MemoryFlags, MemoryType, PID};
+use redoubt_abi::{MemoryFlags, PID};
+
+use crate::mem::MemoryType;
 
 /// Sources are enabled at this priority. The context threshold is 0, so any non-zero
 /// priority is delivered.

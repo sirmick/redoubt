@@ -152,3 +152,20 @@ pub const MAX_HANDLES: usize = 4096;
 /// The base page, on both Sv32 and Sv39: the unit of lends, transfers and page counts. What each
 /// kernel object costs in pages is KERNEL-SPEC.md's cost table.
 pub const PAGE_SIZE: usize = 4096;
+
+/// The end of user space, per width: `map_fixed` and `process_map` refuse a range that reaches past
+/// it. Sv32 gives user space the lower 2 GiB, Sv39 the lower 256 GiB (root entries 0..=255).
+pub mod rv32 {
+    pub const USER_AREA_END: u64 = 0x8000_0000;
+}
+/// See [`rv32`].
+pub mod rv64 {
+    pub const USER_AREA_END: u64 = 0x40_0000_0000;
+}
+#[cfg(target_pointer_width = "32")]
+use rv32 as width;
+#[cfg(target_pointer_width = "64")]
+use rv64 as width;
+/// This target's end of user space ([`rv32`], [`rv64`]); host crates get rv64's. It is the one
+/// per-width constant: no encoding has a width `cfg`.
+pub const USER_AREA_END: usize = width::USER_AREA_END as usize;

@@ -19,13 +19,16 @@ fn process_impl() -> &'static mut ProcessImpl {
     // SAFETY: see the function's doc comment.
     unsafe { &mut *PROCESS }
 }
+/// A thread's number within its process: an index into its saved contexts.
+pub type TID = usize;
+
 pub const MAX_THREAD: TID = 31;
 pub const EXCEPTION_TID: TID = 1;
 pub const INITIAL_TID: TID = 2;
 pub const IRQ_TID: TID = 0;
 
-use redoubt_abi::arch::PAGE_SIZE;
-use redoubt_abi::{PID, TID};
+use redoubt_sys::PAGE_SIZE;
+use redoubt_abi::PID;
 
 use crate::cell::KernelCell;
 use crate::services::ProcessInner;

@@ -22,7 +22,6 @@ static STUB_BIN: &[u8] = include_bytes!(env!("STUB_BIN"));
 /// A well-formed ELF the stub should map and jump to.
 static CHILD_ELF: &[u8] = include_bytes!(env!("STUB_CHILD_ELF"));
 
-const PAGE: usize = 4096;
 /// Where this launcher puts the copied program image in the child: page-aligned and outside the
 /// program link range (`0x1_0000..STUB_ENTRY`, MEMORY-LAYOUT.md).
 const IMAGE_AT: usize = 0x4000_0000;
@@ -112,13 +111,13 @@ pub extern "C" fn _start(_arg: usize) -> ! {
     // The code segment moved onto the read-only segment's page (same offset within the page, so
     // `p_align` still holds): two segments overlap.
     hostile(&mut out, "overlapping segments", n, OUTSIDE, Expect::Code(BAD_IMAGE), &|e| {
-        let at = ro_vaddr + e.ph(rx, Ph::Vaddr) % PAGE;
+        let at = ro_vaddr + e.ph(rx, Ph::Vaddr) % rd::PAGE_SIZE;
         e.set_ph(rx, Ph::Vaddr, at);
     });
     // A segment straddling the stub's first page.
     hostile(&mut out, "segment over the stub", n, OUTSIDE, Expect::Code(BAD_IMAGE), &|e| {
-        e.set_ph(ro, Ph::Vaddr, STUB_ENTRY - PAGE);
-        e.set_ph(ro, Ph::Memsz, 2 * PAGE);
+        e.set_ph(ro, Ph::Vaddr, STUB_ENTRY - rd::PAGE_SIZE);
+        e.set_ph(ro, Ph::Memsz, 2 * rd::PAGE_SIZE);
     });
     hostile(&mut out, "segment over the startup page", n, INSIDE, Expect::Code(BAD_IMAGE), &|e| {
         e.set_ph(ro, Ph::Vaddr, INSIDE.startup_at);
@@ -126,7 +125,7 @@ pub extern "C" fn _start(_arg: usize) -> ! {
     // The stub cannot see the stack; the kernel refuses the overlap (`InvalidArgument`), which
     // the stub reports as a bad image (round-3 red note 1).
     hostile(&mut out, "segment over the stack", n, INSIDE, Expect::Code(BAD_IMAGE), &|e| {
-        e.set_ph(ro, Ph::Vaddr, INSIDE.stack_top - PAGE);
+        e.set_ph(ro, Ph::Vaddr, INSIDE.stack_top - rd::PAGE_SIZE);
     });
     hostile(&mut out, "entry in a read-only segment", n, OUTSIDE, Expect::Code(BAD_IMAGE), &|e| {
         e.set_entry(ro_vaddr);
@@ -261,20 +260,20 @@ fn launch(budget: u32, image: &[u8], image_len: usize, layout: Layout) -> Result
     let rw = rd::MemFlags::READ | rd::MemFlags::WRITE;
 
     // 3. Map the loader stub, a flat binary, read+exec, at its fixed address.
-    let stub_pages = STUB_BIN.len().next_multiple_of(PAGE);
+    let stub_pages = STUB_BIN.len().next_multiple_of(rd::PAGE_SIZE);
     let scratch = rd::map_anon(stub_pages, rw).map_err(at("scratch for stub"))?;
     copy_in(scratch, STUB_BIN);
     rd::process_map(process, scratch, STUB_ENTRY, stub_pages, rd::MemFlags::READ | rd::MemFlags::EXECUTE)
         .map_err(at("map the stub"))?;
 
     // 4. Copy the program's ELF bytes in, read-write, as data.
-    let image_pages = image.len().next_multiple_of(PAGE);
+    let image_pages = image.len().next_multiple_of(rd::PAGE_SIZE);
     let scratch = rd::map_anon(image_pages, rw).map_err(at("scratch for image"))?;
     copy_in(scratch, image);
     rd::process_map(process, scratch, IMAGE_AT, image_pages, rw).map_err(at("map the image"))?;
 
     // A stack (`process_start`'s `sp`, the stub's own and then the started program's).
-    let stack_len = STACK_PAGES * PAGE;
+    let stack_len = STACK_PAGES * rd::PAGE_SIZE;
     let stack_scratch = rd::map_anon(stack_len, rw).map_err(at("scratch for stack"))?;
     rd::process_map(process, stack_scratch, layout.stack_top - stack_len, stack_len, rw)
         .map_err(at("map the stack"))?;
@@ -284,9 +283,9 @@ fn launch(budget: u32, image: &[u8], image_len: usize, layout: Layout) -> Result
         .image(IMAGE_AT, image_len)
         .finish()
         .map_err(|_| ("a startup block", rd::Error::InvalidArgument))?;
-    let page_scratch = rd::map_anon(PAGE, rw).map_err(at("scratch for startup"))?;
+    let page_scratch = rd::map_anon(rd::PAGE_SIZE, rw).map_err(at("scratch for startup"))?;
     copy_in(page_scratch, &block);
-    rd::process_map(process, page_scratch, layout.startup_at, PAGE, rd::MemFlags::READ)
+    rd::process_map(process, page_scratch, layout.startup_at, rd::PAGE_SIZE, rd::MemFlags::READ)
         .map_err(at("map the startup page"))?;
 
     rd::process_start(process, STUB_ENTRY, layout.stack_top - 16, layout.startup_at, &[])

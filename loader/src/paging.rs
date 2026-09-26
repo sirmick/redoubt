@@ -6,7 +6,7 @@ use paging::{PteFlags, Slot, Table, Window, ENTRIES, LARGEST_LEAF, LEVELS};
 use redoubt_abi::arch::{PHYSMAP_PHYS_BASE, PROCESS_AREA};
 
 use crate::alloc::{PageAllocator, Pid};
-use crate::PAGE_SIZE;
+use redoubt_sys::PAGE_SIZE;
 
 pub use paging::PteFlags as Pte;
 

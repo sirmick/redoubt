@@ -48,7 +48,9 @@
 //! [`thread_create`]) takes only the scheduler and borrows the memory manager in phases. The
 //! functions that take both are only ever called from a dispatcher that holds both.
 
-use redoubt_abi::{PID, TID};
+use redoubt_abi::PID;
+
+use crate::arch::process::TID;
 use redoubt_sys::{
     Cause, Error, ExitNotice, Handle as AbiHandle, Labels, MAX_LABELS, MAX_START_HANDLES, MemFlags,
 };
@@ -80,7 +82,7 @@ const W_BLAMED_ACCOUNT: usize = 10;
 const W_BLAMED_NLABELS: usize = 11;
 const W_BLAMED_LABELS: usize = 12; // MAX_LABELS words
 const WORDS: usize = W_BLAMED_LABELS + MAX_LABELS;
-const _: () = assert!(WORDS * 8 <= redoubt_abi::arch::PAGE_SIZE);
+const _: () = assert!(WORDS * 8 <= redoubt_sys::PAGE_SIZE);
 
 /// `process_start` has run.
 const F_STARTED: u64 = 1;
@@ -339,7 +341,7 @@ pub fn process_map(
     len: usize,
     flags: MemFlags,
 ) -> Result<(), Error> {
-    let page_size = redoubt_abi::arch::PAGE_SIZE;
+    let page_size = redoubt_sys::PAGE_SIZE;
     let r = mm.process_handle(pid, process_h)?;
     let p = mm.process_at(r);
     // Stage 2: the ranges, then the source, which must be the caller's own backed RAM, mapped
@@ -399,13 +401,13 @@ pub fn process_map(
 /// A source and destination range: both page-aligned, the same non-empty whole number of pages,
 /// and inside user space. Anything else is `InvalidArgument`.
 fn whole_pages(src: usize, dst: usize, len: usize) -> Result<usize, Error> {
-    let page = redoubt_abi::arch::PAGE_SIZE;
+    let page = redoubt_sys::PAGE_SIZE;
     if len == 0 || len % page != 0 || src % page != 0 || dst % page != 0 {
         return Err(Error::InvalidArgument);
     }
     let src_end = src.checked_add(len).ok_or(Error::InvalidArgument)?;
     let dst_end = dst.checked_add(len).ok_or(Error::InvalidArgument)?;
-    if src_end > redoubt_abi::arch::USER_AREA_END || dst_end > redoubt_abi::arch::USER_AREA_END {
+    if src_end > redoubt_sys::USER_AREA_END || dst_end > redoubt_sys::USER_AREA_END {
         return Err(Error::InvalidArgument);
     }
     Ok(len / page)

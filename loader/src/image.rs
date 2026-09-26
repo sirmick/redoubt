@@ -10,7 +10,7 @@ use elf::ElfBytes;
 
 use crate::alloc::PageAllocator;
 use crate::paging::{AddressSpace, Pte};
-use crate::PAGE_SIZE;
+use redoubt_sys::PAGE_SIZE;
 
 /// Map every `PT_LOAD` segment of `image` into `space` and return the entry point.
 ///

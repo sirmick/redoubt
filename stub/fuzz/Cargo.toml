@@ -13,6 +13,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 stub = { path = ".." }
+redoubt-sys = { path = "../../libs/sys" }
 
 [[bin]]
 name = "plan"

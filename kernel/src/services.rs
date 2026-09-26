@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 
-use redoubt_abi::arch::*;
+
 // use core::mem;
-use redoubt_abi::{PID, TID};
+use redoubt_abi::PID;
+
+use crate::arch::process::TID;
 
 use crate::arch;
 use crate::arch::mem::MemoryMapping;
@@ -139,10 +141,10 @@ pub struct ProcessInner {
 impl Default for ProcessInner {
     fn default() -> Self {
         ProcessInner {
-            mem_default_base: DEFAULT_BASE,
-            mem_default_last: DEFAULT_BASE,
-            mem_message_base: DEFAULT_MESSAGE_BASE,
-            mem_message_last: DEFAULT_MESSAGE_BASE,
+            mem_default_base: crate::mem::DEFAULT_BASE,
+            mem_default_last: crate::mem::DEFAULT_BASE,
+            mem_message_base: crate::mem::DEFAULT_MESSAGE_BASE,
+            mem_message_last: crate::mem::DEFAULT_MESSAGE_BASE,
             pid: KERNEL_PID,
             _reserved: [0; 1],
         }
@@ -256,7 +258,7 @@ impl SystemServices {
             // refuses a bundle with more processes than the kernel has room for. This is the
             // kernel's side of that check: a count beyond either limit means the two disagree,
             // and the boot stops here rather than at an index somewhere later.
-            let capacity = (redoubt_abi::arch::PAGE_SIZE / size_of::<crate::arch::process::InitialProcess>())
+            let capacity = (redoubt_sys::PAGE_SIZE / size_of::<crate::arch::process::InitialProcess>())
                 .min(crate::arch::process::MAX_PROCESS_COUNT);
             assert!(
                 init_count <= capacity,

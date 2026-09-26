@@ -28,7 +28,6 @@ pub const STACK_PAGES: usize = 8;
 /// Where a child's startup page lands; `process_start`'s `arg` (INIT.md, Startup block).
 pub const STARTUP_AT: usize = 0x0f00_0000;
 
-const PAGE: usize = 4096;
 /// Pages of image this helper can carry. Test programs are far smaller than this.
 const MAX_IMAGE_PAGES: usize = 256;
 
@@ -88,11 +87,11 @@ pub fn image() -> Image {
         if memsz == 0 {
             continue;
         }
-        lo = lo.min(vaddr & !(PAGE - 1));
-        hi = hi.max((vaddr + memsz).next_multiple_of(PAGE));
+        lo = lo.min(vaddr & !(rd::PAGE_SIZE - 1));
+        hi = hi.max((vaddr + memsz).next_multiple_of(rd::PAGE_SIZE));
     }
     assert!(lo != usize::MAX && hi > lo, "no loadable segments");
-    let pages = (hi - lo) / PAGE;
+    let pages = (hi - lo) / rd::PAGE_SIZE;
     assert!(pages <= MAX_IMAGE_PAGES, "the image is larger than this helper carries");
 
     let mut flags = [0u32; MAX_IMAGE_PAGES];
@@ -106,8 +105,8 @@ pub fn image() -> Image {
         if memsz == 0 {
             continue;
         }
-        let first = ((vaddr & !(PAGE - 1)) - lo) / PAGE;
-        let last = ((vaddr + memsz).next_multiple_of(PAGE) - lo) / PAGE;
+        let first = ((vaddr & !(rd::PAGE_SIZE - 1)) - lo) / rd::PAGE_SIZE;
+        let last = ((vaddr + memsz).next_multiple_of(rd::PAGE_SIZE) - lo) / rd::PAGE_SIZE;
         for slot in flags[first..last].iter_mut() {
             *slot |= read(ph + flags_at, 4) as u32;
         }
@@ -185,10 +184,10 @@ pub fn spawn(
 /// Copy this program's image into fresh pages and hand each run of equally-permissioned pages to
 /// the child at the address it has here.
 pub fn give_image(process: u32, image: &Image) -> Result<(), Error> {
-    let scratch = rd::map_anon(image.pages * PAGE, rd::rw())?;
+    let scratch = rd::map_anon(image.pages * rd::PAGE_SIZE, rd::rw())?;
     for page in 0..image.pages {
         if image.flags[page] != 0 {
-            copy(scratch + page * PAGE, image.base + page * PAGE, PAGE);
+            copy(scratch + page * rd::PAGE_SIZE, image.base + page * rd::PAGE_SIZE, rd::PAGE_SIZE);
         }
     }
     let mut page = 0;
@@ -199,8 +198,8 @@ pub fn give_image(process: u32, image: &Image) -> Result<(), Error> {
             end += 1;
         }
         if flags != 0 {
-            let len = (end - page) * PAGE;
-            rd::process_map(process, scratch + page * PAGE, image.base + page * PAGE, len, mem_flags(flags))?;
+            let len = (end - page) * rd::PAGE_SIZE;
+            rd::process_map(process, scratch + page * rd::PAGE_SIZE, image.base + page * rd::PAGE_SIZE, len, mem_flags(flags))?;
         }
         page = end;
     }
@@ -210,28 +209,28 @@ pub fn give_image(process: u32, image: &Image) -> Result<(), Error> {
 /// The child's stack: read-write, never executable, at a fixed address it knows nothing about
 /// (its stack pointer arrives in a register).
 fn give_stack(process: u32) -> Result<(), Error> {
-    let scratch = rd::map_anon(STACK_PAGES * PAGE, rd::rw())?;
-    let len = STACK_PAGES * PAGE;
+    let scratch = rd::map_anon(STACK_PAGES * rd::PAGE_SIZE, rd::rw())?;
+    let len = STACK_PAGES * rd::PAGE_SIZE;
     rd::process_map(process, scratch, STACK_TOP - len, len, rd::rw())
 }
 
 /// The startup page (INIT.md, Startup block): one ordinary page, mapped **read-only**, whose
 /// address the child receives as `arg`.
 fn give_startup(process: u32, startup: &[u8]) -> Result<usize, Error> {
-    assert!(startup.len() <= PAGE, "a startup block fits in one page");
-    let scratch = rd::map_anon(PAGE, rd::rw())?;
+    assert!(startup.len() <= rd::PAGE_SIZE, "a startup block fits in one page");
+    let scratch = rd::map_anon(rd::PAGE_SIZE, rd::rw())?;
     for (i, byte) in startup.iter().enumerate() {
         // SAFETY: `scratch` is a page this process has just mapped read-write, and `i` is
         // within it (asserted above); a one-byte write.
         unsafe { (scratch as *mut u8).add(i).write_volatile(*byte) };
     }
-    rd::process_map(process, scratch, STARTUP_AT, PAGE, MemFlags::READ)?;
+    rd::process_map(process, scratch, STARTUP_AT, rd::PAGE_SIZE, MemFlags::READ)?;
     Ok(STARTUP_AT)
 }
 
 /// Read a byte of this process's startup page, wherever `arg` put it.
 pub fn startup_byte(arg: usize, i: usize) -> u8 {
     // SAFETY: `arg` is the address the parent mapped a readable page at, and `i` is inside it
-    // (the caller passes an offset below `PAGE`).
+    // (the caller passes an offset below `rd::PAGE_SIZE`).
     unsafe { ((arg + i) as *const u8).read_volatile() }
 }

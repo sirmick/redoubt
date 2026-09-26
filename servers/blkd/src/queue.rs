@@ -27,6 +27,8 @@
 //! Anything else ends the request with [`DeviceError::Io`], and [`crate::disk::Disk`] then
 //! refuses every later request rather than keep talking to a device that has lied.
 
+use redoubt_rt::abi::PAGE_SIZE;
+
 use crate::transport::Transport;
 use crate::virtio::{self, DATA_LEN, DeviceError, REQUEST_TIMEOUT_US, reg};
 
@@ -70,17 +72,16 @@ pub const STATUS_OFF: usize = HEADER_OFF + HEADER_BYTES;
 /// The data buffer, on its own page so that a device writing past the end of it (which it cannot
 /// be asked to do, but may do anyway) lands in pages this driver expects to be hostile rather
 /// than on the rings it is about to read.
-pub const DATA_OFF: usize = PAGE;
+pub const DATA_OFF: usize = PAGE_SIZE;
 
 /// A page, which is what `dma_alloc` hands out (KERNEL-SPEC.md).
-const PAGE: usize = 4096;
 
 /// Pages in the DMA region: one for the rings, the header and the status byte, then
 /// [`DATA_LEN`] bytes of data buffer.
-pub const DMA_PAGES: usize = 1 + DATA_LEN.div_ceil(PAGE);
+pub const DMA_PAGES: usize = 1 + DATA_LEN.div_ceil(PAGE_SIZE);
 
 /// The region's length in bytes.
-pub const DMA_LEN: usize = DMA_PAGES * PAGE;
+pub const DMA_LEN: usize = DMA_PAGES * PAGE_SIZE;
 
 /// Everything the layout claims, checked where a mistake cannot ship: the rings, the header and
 /// the status byte fit in the first page, the data buffer fits the rest, and the alignments

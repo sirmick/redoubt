@@ -138,7 +138,7 @@ pub fn run() {
 
     // `virt_to_phys` returns the page-aligned frame base, so add the page offset back to get
     // the exact physical address of the block and the trampoline entry.
-    const OFFSET: usize = redoubt_abi::arch::PAGE_SIZE - 1;
+    const OFFSET: usize = redoubt_sys::PAGE_SIZE - 1;
     let block_virt = BLOCK.0.get() as usize;
     let tramp_virt = _smp_secondary_start as *const () as usize;
     let block_phys = match crate::arch::mem::virt_to_phys(block_virt) {

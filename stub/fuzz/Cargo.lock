@@ -109,5 +109,6 @@ name = "stub-fuzz"
 version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
+ "redoubt-sys",
  "stub",
 ]

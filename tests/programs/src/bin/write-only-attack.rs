@@ -14,7 +14,6 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use test_programs::rd::{self, Error, MemFlags, ResetKind};
 use uart_16550::MmioSerialPort;
 
-const PAGE: usize = rd::PAGE_SIZE;
 const DEST: usize = 0x0800_0000;
 static CONSOLE: AtomicUsize = AtomicUsize::new(0);
 
@@ -32,49 +31,49 @@ fn writable_record(page: usize) -> bool { rd::usage_raw(rd::SYSTEM, page).is_ok(
 
 fn set_flags(c: &mut Checker) {
     c.check(
-        rd::map_anon(PAGE, MemFlags::WRITE) == Err(Error::InvalidArgument),
+        rd::map_anon(rd::PAGE_SIZE, MemFlags::WRITE) == Err(Error::InvalidArgument),
         "map_anon refuses W without R",
     );
 
-    let rw = rd::map_anon(2 * PAGE, rd::rw()).unwrap();
+    let rw = rd::map_anon(2 * rd::PAGE_SIZE, rd::rw()).unwrap();
     rd::poke(rw, 0x1122);
-    rd::poke(rw + PAGE, 0x3344);
+    rd::poke(rw + rd::PAGE_SIZE, 0x3344);
     c.check(
-        rd::set_flags(rw, PAGE, MemFlags::WRITE) == Err(Error::InvalidArgument),
+        rd::set_flags(rw, rd::PAGE_SIZE, MemFlags::WRITE) == Err(Error::InvalidArgument),
         "set_flags refuses W without R",
     );
     c.check(
-        rd::set_flags(rw, 2 * PAGE, MemFlags::WRITE) == Err(Error::InvalidArgument),
+        rd::set_flags(rw, 2 * rd::PAGE_SIZE, MemFlags::WRITE) == Err(Error::InvalidArgument),
         "set_flags refuses W without R over a range",
     );
     // Still readable (the reads below would fault otherwise) and still a writable record.
-    c.check(rd::peek(rw) == 0x1122 && rd::peek(rw + PAGE) == 0x3344, "refused set_flags kept the contents");
+    c.check(rd::peek(rw) == 0x1122 && rd::peek(rw + rd::PAGE_SIZE) == 0x3344, "refused set_flags kept the contents");
     c.check(
-        writable_record(rw) && writable_record(rw + PAGE),
+        writable_record(rw) && writable_record(rw + rd::PAGE_SIZE),
         "refused set_flags left the pages readable and writable",
     );
 
-    let ro = rd::map_anon(PAGE, MemFlags::READ).unwrap();
+    let ro = rd::map_anon(rd::PAGE_SIZE, MemFlags::READ).unwrap();
     rd::peek(ro);
     c.check(
-        rd::set_flags(ro, PAGE, MemFlags::WRITE) == Err(Error::InvalidArgument),
+        rd::set_flags(ro, rd::PAGE_SIZE, MemFlags::WRITE) == Err(Error::InvalidArgument),
         "set_flags refuses W without R on a read-only page",
     );
     c.check(!writable_record(ro), "refused set_flags did not make a read-only page writable");
     rd::peek(ro);
-    rd::unmap(rw, 2 * PAGE).unwrap();
-    rd::unmap(ro, PAGE).unwrap();
+    rd::unmap(rw, 2 * rd::PAGE_SIZE).unwrap();
+    rd::unmap(ro, rd::PAGE_SIZE).unwrap();
 }
 
 fn process_map(c: &mut Checker) {
     let exit = rd::endpoint_create().unwrap();
     let budget = rd::create(rd::SYSTEM, &rd::spec(32, 1, 10)).unwrap();
     let process = rd::process_create(budget, exit).unwrap();
-    let src = rd::map_anon(PAGE, rd::rw()).unwrap();
+    let src = rd::map_anon(rd::PAGE_SIZE, rd::rw()).unwrap();
     rd::poke(src, 0x5566);
     let before = rd::usage(budget).unwrap();
     c.check(
-        rd::process_map(process, src, DEST, PAGE, MemFlags::WRITE) == Err(Error::InvalidArgument),
+        rd::process_map(process, src, DEST, rd::PAGE_SIZE, MemFlags::WRITE) == Err(Error::InvalidArgument),
         "process_map refuses W without R",
     );
     c.check(rd::usage(budget) == Ok(before), "refused process_map charged the child nothing");
@@ -82,7 +81,7 @@ fn process_map(c: &mut Checker) {
     c.check(writable_record(src), "refused process_map left the source readable and writable");
     // The destination is still free in the child: occupied, this would be InvalidArgument.
     c.check(
-        rd::process_map(process, src, DEST, PAGE, rd::rw()) == Ok(()),
+        rd::process_map(process, src, DEST, rd::PAGE_SIZE, rd::rw()) == Ok(()),
         "refused process_map mapped nothing",
     );
     rd::destroy(budget).unwrap();

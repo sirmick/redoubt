@@ -6,7 +6,7 @@
 
 use core::ops::Range;
 
-use crate::PAGE_SIZE;
+use redoubt_sys::PAGE_SIZE;
 
 pub type Pid = u8;
 pub const KERNEL_PID: Pid = 1;

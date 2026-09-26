@@ -15,7 +15,9 @@
 //! `reply`, `serve`, `map_anon`, `unmap`, `set_flags`, `map_device`, `dma_alloc`,
 //! `system_reset` and the `process_*` and `thread_*` families.
 
-use redoubt_abi::{PID, TID};
+use redoubt_abi::PID;
+
+use crate::arch::process::TID;
 use redoubt_sys::{
     BUDGET_SPEC_SLOTS, BudgetSpec, Call, CallOutcome, Error, LendDisposition, Number, REGS, Return,
     USAGE_SLOTS, encode_result,
@@ -221,7 +223,7 @@ fn record_frames<const N: usize>(mm: &MemoryManager, addr: usize, write: bool) -
 
 fn write_record_to<const N: usize>(addr: usize, frames: &[usize; N], slots: &[u64; N]) {
     for i in 0..N {
-        kframe::write(frames[i], (addr + i * 8) % redoubt_abi::arch::PAGE_SIZE, slots[i]);
+        kframe::write(frames[i], (addr + i * 8) % redoubt_sys::PAGE_SIZE, slots[i]);
     }
 }
 
@@ -232,7 +234,7 @@ pub fn read_record<const N: usize>(mm: &MemoryManager, addr: usize, output: bool
     if output {
         record_frames::<N>(mm, addr, true)?;
     }
-    Ok(core::array::from_fn(|i| kframe::read(frames[i], (addr + i * 8) % redoubt_abi::arch::PAGE_SIZE)))
+    Ok(core::array::from_fn(|i| kframe::read(frames[i], (addr + i * 8) % redoubt_sys::PAGE_SIZE)))
 }
 
 /// Read a handle-list record under the ownership guard used by fixed records.
@@ -247,7 +249,7 @@ pub fn read_slots<const N: usize>(mm: &MemoryManager, addr: usize, n: usize) -> 
         *frame = record_frames::<1>(mm, at, false)?[0];
     }
     for i in 0..n {
-        slots[i] = kframe::read(frames[i], (addr + i * 8) % redoubt_abi::arch::PAGE_SIZE);
+        slots[i] = kframe::read(frames[i], (addr + i * 8) % redoubt_sys::PAGE_SIZE);
     }
     Ok(slots)
 }
