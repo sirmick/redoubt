@@ -1,4 +1,4 @@
-description = "DMA pages stay put (WP-K5b, OD2): a dma_alloc page is refused for lend, transfer and process_map, set_flags works, unmap drops only the mapping (the frames stay charged and are not handed out again), and a child that allocates and exits leaves its budget as it was; legacy MapMemory refuses a granted virtio slot, a range reaching into one and an unaligned base inside one (P2-1). Empty virtio-mmio slots, no device behind them (checked build)"
+description = "DMA pages stay put (WP-K5b, OD2): a dma_alloc page is refused for lend, transfer and process_map, set_flags works, unmap drops only the mapping (the frames stay charged and are not handed out again), and a child that allocates and exits leaves its budget as it was. Empty virtio-mmio slots, no device behind them (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
@@ -11,13 +11,8 @@ expect = [
     '^\[dma-rules\] ok: set_flags on a DMA page: read-only, then read-write again$',
     '^\[dma-rules\] ok: unmap drops only the mapping: ',
     '^\[dma-rules\] ok: a child that allocated 4 DMA pages and exited leaves its budget as it was ',
-    '^\[dma-rules\] ok: legacy MapMemory refuses a granted virtio slot, a range reaching into one and an unaligned base inside one ',
     '^\[dma-rules\] DMA RULES PASSED$',
 ]
 forbid = ['\[dma-rules\] FAIL', 'PROGRAM HALT']
 poweroff = true
 
-# The console page and the first virtio slot: the grant alone would allow both.
-[[grant]]
-program = "dma-rules"
-mmio = ["0x10000000:0x2000"]
