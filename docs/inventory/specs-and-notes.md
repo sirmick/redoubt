@@ -270,6 +270,349 @@ no gaps and no IDs beyond I15/R12 currently exist in code.
 - status: planned
 - destination (proposed): kernel (budgets) ; plan/M5 (persist, install, share) — legacy "milestone 2" maps toward the brief's M5 steward-persistence scope, not M2 (usable shell)
 
+## Part 3: residual risks and trust assumptions stated in the legacy specs themselves
+
+Walk of each legacy spec for its own residuals, trust assumptions, "not implemented", "out of
+scope", "trusted", "remains", and open qualifications (Part 2 drew mostly from STATUS/BUILD-PLAN/
+ASTRA; this part drives from the specs). WIRE.md, MEMORY-LAYOUT.md and USERLAND.md contain no such
+language — they state built fact only, nothing to inventory.
+
+### S-38: KERNEL-SPEC device handoff open question
+- type: open-question
+- source: KERNEL-SPEC.md#Devices (~line 26)
+- statement: "implemented Devs/Ctrl handoff while device-policy question 143 remains open. Neither current [encoding is a final answer]."
+- status: open
+- destination (proposed): kernel (devices)
+
+### S-39: KERNEL-SPEC handle-table sizing assumption
+- type: security-caveat
+- source: KERNEL-SPEC.md (~line 154)
+- statement: "The handle-table figure assumes a handle of 24-32 bytes (object reference, 64-bit badge...)" — a sizing assumption, not a proven bound.
+- status: built
+- destination (proposed): kernel (memory/handles)
+
+### S-40: CAPABILITIES connection-leak residual
+- type: residual-risk
+- source: CAPABILITIES.md (~line 39)
+- statement: "Stated residual: a launcher that dies without disconnecting leaks its children's connections until its own connection is freed, and the leak counts against its own (account, label set)."
+- status: built
+- destination (proposed): kernel (capabilities) / servers overview
+
+### S-41: CAPABILITIES untrusted free-text reason
+- type: security-caveat
+- source: CAPABILITIES.md (~line 186)
+- statement: "A labelled requester's free-text reason is quoted, escaped and marked untrusted" on the approval screen.
+- status: built
+- destination (proposed): servers (steward/approvals)
+
+### S-42: CAPABILITIES milestone-1 approval-channel residual
+- type: residual-risk
+- source: CAPABILITIES.md (~lines 196-202)
+- statement: "Stated milestone 1 residual: approve@ shares sshd with the most hostile input, so a sunset bug reached from any channel controls the screen and a network flood delays approvals. Milestone 2 gives approve@ its own sshd instance or the console." Later: high-stakes approvals need a fresh ssh approve-hs@box connection accepting only an FIDO sk- key; "sunset's sk- support is unverified."
+- status: planned (milestone-1 residual, closes in legacy milestone 2)
+- destination (proposed): servers/sshd ; SECURITY
+
+### S-43: CAPABILITIES trusted-path option
+- type: follow-up
+- source: CAPABILITIES.md (~line 203)
+- statement: "A physical approval button or display on the board is an option (PLATFORM-FPGA.md)."
+- status: open
+- destination (proposed): beyond
+
+### S-44: CONTAINMENT declassification residual
+- type: residual-risk
+- source: CONTAINMENT.md (~line 73)
+- statement: "Stated residual: text an agent wrote and a human approved can still carry a hidden message. No system can prevent that."
+- status: built
+- destination (proposed): SECURITY / TENETS
+
+### S-45: CONTAINMENT push topology open question
+- type: open-question
+- source: CONTAINMENT.md#Push (~line 77)
+- statement: "Accepted target, unresolved topology: answer 153 specifies this push; question 164 remains open on reconciling its steward/helper edges with answer 152's confined placement rule. Do not infer a blanket system-server exemption or an implemented confined workflow from the operation below."
+- status: open
+- destination (proposed): SECURITY / plan/M1
+
+### S-46: CONTAINMENT sshd milestone-1 sink-sharing residual
+- type: residual-risk
+- source: CONTAINMENT.md (~line 115)
+- statement: "Stated milestone 1 residual: that channel, every other channel and approve@box share one sshd, so a sunset bug reached from any channel reaches them all (CAPABILITIES.md, approvals)." Duplicates/reinforces S-42 from the sshd-sink angle.
+- status: planned
+- destination (proposed): servers/sshd
+
+### S-47: CONTAINMENT covert channels out of scope
+- type: non-goal
+- source: CONTAINMENT.md#Covert and timing channels (~line 236)
+- statement: "Covert communication is out of scope: ... on one machine, power, heat, EM and the clock couple any two domains, so no OS can prevent or bound it; the only zero is placement ... the attacker is assumed to have a perfect clock."
+- status: planned
+- destination (proposed): TENETS
+
+### S-48: CONTAINMENT server-CPU-weight residual
+- type: residual-risk
+- source: CONTAINMENT.md (~line 263)
+- statement: "Stated residual: that work is paid by the server's weight, not the requester's; for the steward, whose weight is large, by the steward." (matches S-49/RESOURCES wording)
+- status: built
+- destination (proposed): SECURITY / kernel (scheduling)
+
+### S-49: CONTAINMENT microarchitectural residual list
+- type: residual-risk
+- source: CONTAINMENT.md (~line 271)
+- statement: "Residual, stated: memory bandwidth, and the shared L2 across cores until the RTL partitions it; shared-server caches and the disk (a vault's reads warm a cache the unlabelled session can time); server CPU (above). On QEMU and ordinary hardware, none of the microarchitectural channels are closed."
+- status: open (RTL-dependent)
+- destination (proposed): SECURITY ; PLATFORM-FPGA follow-on
+
+### S-50: CONTAINMENT channel table's out-of-scope physical row
+- type: non-goal
+- source: CONTAINMENT.md (~line 293, channel table)
+- statement: "power delivery, heat, EM emission, shared clock | out of scope — physical substrate | placement only: do not co-locate."
+- status: planned
+- destination (proposed): TENETS
+
+### S-51: RESOURCES server-CPU-weight residual (canonical statement)
+- type: residual-risk
+- source: RESOURCES.md (~line 57)
+- statement: "Stated residual: work a server does for a user is paid by the server's weight, not the requester's (and the steward's by the steward); CONTAINMENT.md." Own the canonical wording; S-48 is CONTAINMENT's cross-reference of the same fact.
+- status: built
+- destination (proposed): kernel (scheduling/budgets)
+
+### S-52: INIT keyd `holds` over-broad answer residual
+- type: residual-risk
+- source: INIT.md (~line 325)
+- statement: "Residual: it answers about every key, not only the badge's, because that is the question its askers have; when keys carry labels (milestone 2) it needs a check per key rather than the badge's alone."
+- status: built (residual until legacy milestone 2)
+- destination (proposed): servers/keyd
+
+### S-53: INIT keyd session-secret residual
+- type: residual-risk
+- source: INIT.md#Stated residuals (~line 339)
+- statement: "sign_ssh_exchange hands keyd the session's shared secret K ... So a compromised keyd does not only speak as the box: it can derive any session's keys and read the traffic ... so the secret reaching keyd stands, and keyd is written to be small enough to read."
+- status: built
+- destination (proposed): servers/keyd ; SECURITY
+
+### S-54: INIT seed storage residual
+- type: residual-risk
+- source: INIT.md (~line 345, continuation of Stated residuals)
+- statement: "The seeds live in init's memory and in the bundle image, at the same trust as the bundle" (signed, never encrypted — VERIFIED-BOOT.md), which INIT.md calls the stated residual for the boot-key material.
+- status: built
+- destination (proposed): kernel (boot) ; servers/keyd
+
+### S-55: INIT bundle-encryption non-goal
+- type: caveat
+- source: INIT.md (~line 187)
+- statement: "the bundle is signed, never encrypted (VERIFIED-BOOT.md). That is the stated residual for [key material carried in it]."
+- status: built
+- destination (proposed): kernel (boot)
+
+### S-56: INIT loader has no keys / never parses ELF (trust boundary)
+- type: security-caveat
+- source: INIT.md (~line 169)
+- statement: "[the loader handles] untrusted input in the system (every agent's requests), so it holds no keys and never parses an ELF." States a trust-boundary design fact, not a gap.
+- status: built
+- destination (proposed): kernel (boot/loader)
+
+### S-57: IO-ARCHITECTURE DMA reset residual (per-holder)
+- type: residual-risk
+- source: IO-ARCHITECTURE.md (~line 62)
+- statement: "Residual: a reset stops the device for every process holding it. A live co-holder keeps its mapping of a quarantined device (question 144)."
+- status: open
+- destination (proposed): kernel (devices)
+
+### S-58: IO-ARCHITECTURE virtio-only reset platform residual
+- type: residual-risk
+- source: IO-ARCHITECTURE.md (~line 64)
+- statement: "Residual (platform): the kernel resets only virtio-mmio devices... A non-virtio DMA device is never reset, so every death that reaches it quarantines, and such a platform gets no driver restart; its answer is hardware confinement." (Reinforces S-4/STATUS wording with the exact mechanism and the FPGA answer.)
+- status: built (residual on non-virtio platforms)
+- destination (proposed): kernel (devices) ; PLATFORM-FPGA
+
+### S-59: IO-ARCHITECTURE blkd TCB trust statement
+- type: security-caveat
+- source: IO-ARCHITECTURE.md#blkd (~line 90)
+- statement: "What blkd is trusted for. On QEMU no hardware confines DMA, so blkd is inside the TCB (tenet 7): it programs a device with physical addresses, and a device that ignores them can write anywhere in RAM. blkd cannot make that untrue; what it is written to guarantee is the other half: it never asks the device to touch anything but the pages dma_alloc gave it..."
+- status: built
+- destination (proposed): servers/blkd ; SECURITY
+
+### S-60: IO-ARCHITECTURE littlefs checksum residue
+- type: residual-risk
+- source: IO-ARCHITECTURE.md (~line 83)
+- statement: "The residue (littlefs does not checksum data): NAMESPACES.md." — data corruption from the disk is undetected by the filesystem layer.
+- status: built
+- destination (proposed): servers/fsd ; kernel (storage overview)
+
+### S-61: IO-ARCHITECTURE blkd stated residuals (DMA trust, wrong-bytes)
+- type: residual-risk
+- source: IO-ARCHITECTURE.md#Stated residuals (~lines 220-235)
+- statement: "A DMA handle is kernel-level trust, so a compromised blkd is a compromised kernel on a platform with no IOMMU." Also: "A device that answers slowly, or that re-asserts its interrupt without completing anything, makes blkd spend up to its ten seconds on that one request... One request is outstanding at a time, so the whole disk waits with it." Also: "A device can return wrong bytes for a sector it was asked for, and blkd cannot tell: the virtio-blk protocol has no checksum, and littlefs checksums only metadata. That is the same residual the filesystem already states, and what disk encryption (Later) would close."
+- status: built
+- destination (proposed): servers/blkd
+
+### S-62: IO-ARCHITECTURE blkd DMA-restart gate (now closed)
+- type: decision
+- source: IO-ARCHITECTURE.md (~line 224)
+- statement: "Closed by WP-K5b: a restart no longer leaves the device pointed at freed frames. blkd's DMA pages go back to the pool only after the kernel has reset the device and the device has confirmed; a device that doesn't confirm keeps them quarantined (DMA, answer 173)." Note this resolves the legacy follow-up "A driver's restart leaves its device pointed at freed frames" (QUESTIONS 147) for blkd specifically.
+- status: resolved
+- destination (proposed): servers/blkd — cite as a closed history point, not a live gap
+
+### S-63: IO-ARCHITECTURE netd DMA/flood residuals
+- type: residual-risk
+- source: IO-ARCHITECTURE.md#netd (~line 323)
+- statement: "Stated residuals. A DMA handle is kernel-level trust, as for blkd. A flood of frames costs netd's CPU at its large weight. A reset stops the device for every holder (DMA)."
+- status: built
+- destination (proposed): servers/netd
+
+### S-64: IO-ARCHITECTURE disk-encryption deferral
+- type: follow-up
+- source: IO-ARCHITECTURE.md#Later (~line 339)
+- statement: "Disk encryption ... Deferred: on QEMU the host is the disk and is trusted, and on the FPGA the host is the root of trust (PLATFORM-FPGA.md); it returns with a platform whose disk is outside the trust boundary."
+- status: planned
+- destination (proposed): beyond
+
+### S-65: IO-ARCHITECTURE gatewayd not yet built
+- type: follow-up
+- source: IO-ARCHITECTURE.md#Later (~line 344, LLM gateway)
+- statement: "LLM gateway (gatewayd; milestone 3). Holds API keys, meters token and money budgets per principal, logs calls; a label sink cleared for nothing (an on-box model can be cleared for labels). Agents hold a handle to it, never a key."
+- status: planned
+- destination (proposed): plan/M4 (self-hosted development) — brief's M4 names gatewayd explicitly
+
+### S-66: IO-ARCHITECTURE RustSBI partition-enforcement gap
+- type: security-caveat
+- source: IO-ARCHITECTURE.md (~line 376)
+- statement: "RustSBI must enforce the partition. Its domain support is currently unchecked, so Linux on reserved cores remains deferred until that support exists and is tested on QEMU virt."
+- status: open
+- destination (proposed): PLATFORM-FPGA / kernel (boot)
+
+### S-67: NAMESPACES consoled typed parking not integrated
+- type: acceptance-gap
+- source: NAMESPACES.md (~line 189)
+- statement: "Current implementation: the console's own typed-opcode callback in consoled still rejects unsupported operations; the size/resize behavior above is the accepted target, not evidence that either handler is integrated. Question 163 remains open for typed parking."
+- status: open
+- destination (proposed): servers/consoled
+
+### S-68: NAMESPACES 9P codec fuzzing statement
+- type: security-caveat
+- source: NAMESPACES.md (~line 58)
+- statement: "The 9P codec parses untrusted bytes, so it is written once, shared by every server, and fuzzed. Independent 9P implementations give differential tests. Every 9P server runs the conformance corpus (libs/wire/vectors/9p.txt) against the skeleton..."
+- status: built
+- destination (proposed): servers (wire protocol page)
+
+### S-69: NAMESPACES per-volume isolation statement
+- type: security-caveat
+- source: NAMESPACES.md (~line 356)
+- statement: "One instance per volume. An untrusted medium gets its own server holding only that medium, so a parser exploit reaches that medium and nothing else."
+- status: built
+- destination (proposed): servers/fsd
+
+### S-70: PACKAGES signature scope caveat
+- type: security-caveat
+- source: PACKAGES.md (~line 69)
+- statement: "What signatures do not do. A hijacked agent can run code it wrote: any process can create a child and map pages into it (the launcher needs exactly that), and IEx evaluates any Elixir. The property that holds is that such code never runs with more authority than its author already holds. Signatures gate only what the steward launches with new grants."
+- status: built
+- destination (proposed): userland (packages) ; SECURITY
+
+### S-71: VERIFIED-BOOT chain-of-trust gap (loader unverified on QEMU)
+- type: residual-risk
+- source: VERIFIED-BOOT.md#Chain of trust (~line 8)
+- statement: "On a real device the chain is ROM -> firmware -> loader -> bundle... QEMU loads the loader directly with -kernel, so the loader itself is not verified here. What is verified is the link that matters for running code: the loader authenticates the boot bundle before executing any of it."
+- status: built (QEMU-scoped residual)
+- destination (proposed): kernel (boot) ; SECURITY
+
+### S-72: VERIFIED-BOOT development key not for production
+- type: security-caveat
+- source: VERIFIED-BOOT.md#Development key
+- statement: "The bench signs with a key derived from a fixed, public seed ([0x42; 32])... Its public key is compiled into the loader as DEV_PUBLIC_KEY. It is not for production: a real deployment generates a secret key and replaces it."
+- status: built
+- destination (proposed): kernel (boot)
+
+### S-73: VERIFIED-BOOT "Not covered" list
+- type: non-goal
+- source: VERIFIED-BOOT.md#Not covered
+- statement: "Verifying the loader itself (needs firmware or ROM support; the FPGA's boot ROM can do it, PLATFORM-FPGA.md). M-of-N signatures, rollback protection and key rotation (PACKAGES.md, system updates). Encrypting the bundle (this is integrity and authenticity, not confidentiality)."
+- status: planned
+- destination (proposed): kernel (boot) ; TENETS (as an explicit non-goal boundary) ; beyond (M-of-N/rollback/rotation belong in plan/M5 per PACKAGES.md)
+
+### S-74: BOOT device-encoding not a policy answer
+- type: caveat
+- source: BOOT.md (~line 94)
+- statement: "Current device encoding (WP-K3). These are the loader/kernel's implemented handoff, not an implicit answer to open question 143 about the target device policy."
+- status: built (interim)
+- destination (proposed): kernel (boot/devices)
+
+### S-75: BOOT interim handle order
+- type: follow-up
+- source: BOOT.md (~line 110)
+- statement: "The current handle order is interim: reset, the chosen console's MMIO and IRQ, then other MMIO in device-tree order and other IRQs ascending."
+- status: planned
+- destination (proposed): kernel (boot/devices)
+
+### S-76: GAME covert/RTL out of scope for the attack game
+- type: non-goal
+- source: GAME.md (~lines 25-40, 60, 73)
+- statement: "covert channels are out of scope" for grant assumptions; "A covert channel is out of scope: an observation, not a red win (TENETS.md, Purpose and threat model)"; table row: "Out of scope (covert) | A path through shared physical state no OS can close (power, heat, EM, clock, or an RTL-reduced resource) | An observation for the RTL/deployment lists; neither a red win nor a blue loss; no answer required."
+- status: planned
+- destination (proposed): TENETS ; plan pages (attack-suite definitions)
+
+### S-77: GAME approval channel vs. human judgment
+- type: security-caveat
+- source: GAME.md#Collusion through the human (~line 32)
+- statement: "The design protects the approval channel from the requester (TENETS.md, tenet 2; CAPABILITIES.md); it does not protect the human's judgment. Win: an approval that grants more than the human intended."
+- status: built
+- destination (proposed): TENETS ; SECURITY
+
+### S-78: PLATFORM-FPGA shared-L2 residual channel
+- type: residual-risk
+- source: PLATFORM-FPGA.md (~line 25)
+- statement: "The shared L2 is partitioned between cores by the RTL; until it is, cross-core cache timing is a stated residual channel (CONTAINMENT.md)."
+- status: open
+- destination (proposed): PLATFORM-FPGA ; SECURITY
+
+### S-79: PLATFORM-FPGA host-card trust boundary
+- type: security-caveat
+- source: PLATFORM-FPGA.md (~lines 20-24)
+- statement: "The host cannot change the card. The bitstream loads from on-card flash with host write access disabled. A host that can reload the bitstream owns the card, whatever the DMA windows say; otherwise the host is in the TCB (like Linux in the partition mode)."
+- status: built (design requirement, hardware not yet built)
+- destination (proposed): PLATFORM-FPGA
+
+### S-80: PLATFORM-FPGA loader-verification and approval-button options
+- type: follow-up
+- source: PLATFORM-FPGA.md (~lines 53-55)
+- statement: "Root of trust. A boot ROM in the bitstream that verifies the loader closes the 'loader itself is unverified' gap (VERIFIED-BOOT.md)." "Approval button (option). A physical approval button or small display on the card would be a trusted path even against a compromised client machine (CAPABILITIES.md)."
+- status: open
+- destination (proposed): beyond (this is explicitly beyond-M5 platform work per the brief)
+
+### S-81: PLATFORM-FPGA open device-placement question
+- type: open-question
+- source: PLATFORM-FPGA.md#Open
+- statement: "Which devices sit on card A itself versus served by the host."
+- status: open
+- destination (proposed): beyond
+
+### S-82: PLATFORM-FPGA RustSBI domain-support gap (cross-ref of S-66)
+- type: security-caveat
+- source: PLATFORM-FPGA.md / IO-ARCHITECTURE.md (~line 376)
+- statement: Same fact as S-66, stated from the FPGA partitioning angle: RustSBI's domain support is unchecked, so Linux on reserved cores is deferred until it is tested on QEMU virt.
+- status: open
+- destination (proposed): PLATFORM-FPGA
+
+### S-83: testbench K4 readback gate (cross-ref)
+- type: acceptance-gap
+- source: testbench.md (~line 226)
+- statement: "K4's clean guest byte-readback gate remains unfinished until that R2/R3 handoff (answer 169). Reviewed process-lifecycle integration may land independently; the current expected loader rejection does not establish this acceptance, and no interim boot-data ABI is implied." Same gate as S-10; testbench states the exact bench-level evidence boundary.
+- status: open
+- destination (proposed): plan/M1
+
+### S-84: testbench network verdicts are bench-authoritative
+- type: security-caveat
+- source: testbench.md (~line 289)
+- statement: "Every verdict comes from the bench: the guest's own claims about the network are not trusted." Self-checks: bench-net-peer-twice, bench-net-peer-count, bench-net-peer-pcap-empty.
+- status: built
+- destination (proposed): plan (verification/testbench overview page)
+
+## Count of new items per spec (S-38 onward)
+
+KERNEL-SPEC 2, CAPABILITIES 4, CONTAINMENT 7, RESOURCES 1, INIT 5, IO-ARCHITECTURE 10,
+NAMESPACES 3, PACKAGES 1, WIRE 0, BOOT 2, VERIFIED-BOOT 3, MEMORY-LAYOUT 0, USERLAND 0,
+USERLAND-API 0 (already covered by S-9/consoled and Part 1 cross-refs; no new item needed),
+GAME 2, PLATFORM-FPGA 4, testbench 2. Total new: S-38..S-84 = 47 items.
+
 ## Notes for the red team / lead
 
 - ANSWERS.md and QUESTIONS.md are reader A's territory; only referenced here where STATUS/BUILD-PLAN/ASTRA
