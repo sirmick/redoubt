@@ -26,7 +26,7 @@
 //! (one on rv32, two on rv64), in addition to its page tables and mapped RAM (answer 127).
 //! Frame charges follow ownership in `mem.rs`; handle-table pages are charged in `handle.rs`.
 
-use redoubt_abi::PID;
+use redoubt_layout::Pid;
 use redoubt_sys::{BudgetSpec, Error, FOREVER, MAX_DEPTH, MAX_LABELS, Usage};
 
 use crate::arch::process::{INITIAL_TID, MAX_PROCESS_COUNT, MAX_THREAD};
@@ -176,7 +176,7 @@ impl Objects {
     }
 }
 
-fn account_index(pid: PID) -> Option<usize> {
+fn account_index(pid: Pid) -> Option<usize> {
     let index = usize::from(pid.get()) - 1;
     (index < MAX_PROCESS_COUNT).then_some(index)
 }
@@ -326,7 +326,7 @@ impl MemoryManager {
     }
 
     /// The next message id process `pid` hands a sender (I12).
-    pub fn next_msg_id(&mut self, pid: PID) -> u64 {
+    pub fn next_msg_id(&mut self, pid: Pid) -> u64 {
         let account = self.account_mut(pid).expect("account");
         let id = account.next_msg_id;
         account.next_msg_id = id.checked_add(1).expect("I12: message ids exhausted");
@@ -334,14 +334,14 @@ impl MemoryManager {
     }
 
     /// The frame of thread `tid`'s IPC page, if it has one.
-    pub fn ipc_frame(&self, pid: PID, tid: usize) -> Option<u32> {
+    pub fn ipc_frame(&self, pid: Pid, tid: usize) -> Option<u32> {
         self.account(pid).and_then(|a| a.ipc.get(tid).copied()).filter(|f| *f != 0)
     }
 
     /// Give thread `tid` its IPC page. Its cost is [`THREAD_PAGES`], charged when the thread was
     /// created, so the frame is already paid for; one missing here would mean the kernel
     /// over-committed RAM, which `boot_budgets` reserves against, so it stops (fail closed).
-    fn give_ipc_frame(&mut self, pid: PID, tid: usize) {
+    fn give_ipc_frame(&mut self, pid: Pid, tid: usize) {
         if self.account(pid).is_none() || tid >= MAX_THREAD || self.ipc_frame(pid, tid).is_some() {
             return;
         }
@@ -351,7 +351,7 @@ impl MemoryManager {
 
     /// Take thread `tid`'s IPC page back. Its contents are dead by now: `message.rs` unwinds
     /// what the thread waited for and the calls it held before the thread goes.
-    fn take_ipc_frame(&mut self, pid: PID, tid: usize) {
+    fn take_ipc_frame(&mut self, pid: Pid, tid: usize) {
         if let Some(frame) = self.ipc_frame(pid, tid) {
             self.account_mut(pid).expect("account").ipc[tid] = 0;
             self.free_object_frame(frame);
@@ -379,11 +379,11 @@ impl MemoryManager {
         self.store(frame, &b);
     }
 
-    pub fn account(&self, pid: PID) -> Option<&Account> {
+    pub fn account(&self, pid: Pid) -> Option<&Account> {
         account_index(pid).map(|i| &self.objects.accounts[i]).filter(|a| a.budget.is_some())
     }
 
-    pub fn account_mut(&mut self, pid: PID) -> Option<&mut Account> {
+    pub fn account_mut(&mut self, pid: Pid) -> Option<&mut Account> {
         let accounts = &mut self.objects.accounts;
         account_index(pid).map(move |i| &mut accounts[i]).filter(|a| a.budget.is_some())
     }
@@ -402,10 +402,10 @@ impl MemoryManager {
     pub fn is_at_or_below(&self, b: BudgetFrame, ancestor: BudgetFrame) -> bool { self.below(b, ancestor) }
 
     /// The budget process `pid` lives in; `None` for the kernel.
-    pub fn budget_of(&self, pid: PID) -> Option<BudgetFrame> { self.account(pid).and_then(|a| a.budget) }
+    pub fn budget_of(&self, pid: Pid) -> Option<BudgetFrame> { self.account(pid).and_then(|a| a.budget) }
 
     /// A RAM frame became `pid`'s: charge it to `pid`'s budget, if it has one.
-    pub fn charge_frame(&mut self, pid: PID) -> Result<(), Error> {
+    pub fn charge_frame(&mut self, pid: Pid) -> Result<(), Error> {
         if let Some(budget) = self.budget_of(pid) {
             self.charge(budget, 1)?;
             self.account_mut(pid).expect("account").frames += 1;
@@ -414,7 +414,7 @@ impl MemoryManager {
     }
 
     /// A RAM frame stopped being `pid`'s.
-    pub fn uncharge_frame(&mut self, pid: PID) {
+    pub fn uncharge_frame(&mut self, pid: Pid) {
         if let Some(budget) = self.budget_of(pid) {
             let account = self.account_mut(pid).expect("account");
             account.frames = account.frames.checked_sub(1).expect("I5: frame count underflow");
@@ -423,7 +423,7 @@ impl MemoryManager {
     }
 
     /// Every frame of `pid`'s was just freed at once (`release_all_memory_for_process`).
-    pub fn uncharge_all_frames(&mut self, pid: PID) {
+    pub fn uncharge_all_frames(&mut self, pid: Pid) {
         if let Some(budget) = self.budget_of(pid) {
             let frames = core::mem::take(&mut self.account_mut(pid).expect("account").frames);
             self.uncharge(budget, frames);
@@ -436,7 +436,7 @@ impl MemoryManager {
     /// its own, with no threads yet. Its address space is charged to `budget` frame by frame as
     /// it is built (`process.rs`, and answer 127); its object page is the *creator's*, which
     /// `process_create` charges separately. Nothing changes on an error.
-    pub fn process_created(&mut self, pid: PID, budget: BudgetFrame) -> Result<(), Error> {
+    pub fn process_created(&mut self, pid: Pid, budget: BudgetFrame) -> Result<(), Error> {
         let index = account_index(pid).ok_or(Error::InvalidArgument)?;
         let mut b = self.budget(budget);
         // A budget with no free weight holds no process (R12: its stride weight is its free
@@ -455,7 +455,7 @@ impl MemoryManager {
 
     /// Everything the process still has charged goes back to its budget. Its frames were
     /// released just before (`uncharge_all_frames`); its handle table goes here.
-    pub fn process_ended(&mut self, pid: PID) {
+    pub fn process_ended(&mut self, pid: Pid) {
         let Some(budget) = self.budget_of(pid) else { return };
         self.close_all_handles(pid);
         for tid in 0..MAX_THREAD {
@@ -470,7 +470,7 @@ impl MemoryManager {
         self.store(budget, &b);
     }
 
-    pub fn thread_created(&mut self, pid: PID, tid: usize) -> Result<(), Error> {
+    pub fn thread_created(&mut self, pid: Pid, tid: usize) -> Result<(), Error> {
         if let Some(budget) = self.budget_of(pid) {
             self.charge(budget, THREAD_PAGES)?;
             self.account_mut(pid).expect("account").threads += 1;
@@ -479,7 +479,7 @@ impl MemoryManager {
         Ok(())
     }
 
-    pub fn thread_ended(&mut self, pid: PID, tid: usize) {
+    pub fn thread_ended(&mut self, pid: Pid, tid: usize) {
         if let Some(budget) = self.budget_of(pid) {
             self.take_ipc_frame(pid, tid);
             let account = self.account_mut(pid).expect("account");
@@ -507,7 +507,7 @@ impl MemoryManager {
         // (answer 127): a process's saved contexts and its root page table are charged to
         // the budget it runs in as they are allocated, like any other frame it owns, so every
         // charged page has a real frame behind it without a reservation.
-        let pages = self.ram_frames() - self.ram_frames_owned_by(crate::services::KERNEL_PID) as u64;
+        let pages = self.ram_frames() - self.ram_frames_owned_by(redoubt_layout::KERNEL_PID) as u64;
         let processes = (MAX_PROCESS_COUNT - 1) as u32;
         let (sys_pages, sys_processes, sys_weight) = (pages / 4, processes / 4, ROOT_WEIGHT / 4);
         // `users` gets the rest of the weight but what `root` keeps for `init`.
@@ -536,7 +536,7 @@ impl MemoryManager {
         let mut bundle = [None; MAX_PROCESS_COUNT];
         let mut nbundle = 0;
         for index in 2..=MAX_PROCESS_COUNT {
-            let pid = PID::new(index as u8).expect("PIDs start at 1");
+            let pid = Pid::new(index as u8).expect("PIDs start at 1");
             let frames = self.ram_frames_owned_by(pid) as u64;
             if frames == 0 {
                 continue;
@@ -585,7 +585,7 @@ impl MemoryManager {
     /// program's table is left as `init`'s will be: `root`, `system` and `users`, then a handle
     /// to every device object the machine has (`device.rs`, `boot_devices`), then only the log
     /// endpoint's receive right (`boot_log_endpoint`).
-    fn boot_endpoint(&mut self, system: BudgetFrame, bundle: &[Option<PID>]) {
+    fn boot_endpoint(&mut self, system: BudgetFrame, bundle: &[Option<Pid>]) {
         let Some(Some(server)) = bundle.get(1).copied() else { return };
         let endpoint = self.new_endpoint(system).expect("boot: system cannot pay for the endpoint");
         let owner = self.endpoint(endpoint.frame).owner;
@@ -604,7 +604,7 @@ impl MemoryManager {
     /// the budgets and the devices, so it is the highest index in its table. Every later program
     /// gets a send in slot 2, after the boot endpoint's slot 1, badged with its own PID. The
     /// badge only says whose line it is: the server prints it and grants nothing on it.
-    fn boot_log_endpoint(&mut self, system: BudgetFrame, bundle: &[Option<PID>]) {
+    fn boot_log_endpoint(&mut self, system: BudgetFrame, bundle: &[Option<Pid>]) {
         let Some(Some(first)) = bundle.first().copied() else { return };
         let endpoint = self.new_endpoint(system).expect("boot: system cannot pay for the log endpoint");
         let owner = self.endpoint(endpoint.frame).owner;
@@ -676,7 +676,7 @@ impl MemoryManager {
 
     /// `budget_create(h(parent), spec) -> h`, after decoding. The checks follow KERNEL-SPEC.md's
     /// row for `budget_create`, in order.
-    pub fn budget_create(&mut self, pid: PID, parent: u32, spec: &BudgetSpec) -> Result<u32, Error> {
+    pub fn budget_create(&mut self, pid: Pid, parent: u32, spec: &BudgetSpec) -> Result<u32, Error> {
         // Only the kernel (PID 1) has no account, and it makes no Redoubt calls; `NotPermitted` is
         // there so that a bug cannot turn into a panic.
         let caller = self.budget_of(pid).ok_or(Error::NotPermitted)?;
@@ -743,7 +743,7 @@ impl MemoryManager {
     }
 
     /// `budget_usage(h) -> counters`, after decoding.
-    pub fn budget_usage(&self, pid: PID, h: u32) -> Result<Usage, Error> {
+    pub fn budget_usage(&self, pid: Pid, h: u32) -> Result<Usage, Error> {
         // As in `budget_create`: only the kernel has no account.
         let caller = self.budget(self.budget_of(pid).ok_or(Error::NotPermitted)?);
         let frame = self.budget_handle(pid, h)?;
@@ -786,7 +786,7 @@ impl MemoryManager {
     /// First step of `budget_destroy(h)`: check the handle and mark the budget and everything
     /// below it dying. The caller then kills every process in a dying budget
     /// (`process_is_doomed`), and finishes with [`MemoryManager::destroy_marked`].
-    pub fn destroy_begin(&mut self, pid: PID, h: u32) -> Result<BudgetFrame, Error> {
+    pub fn destroy_begin(&mut self, pid: Pid, h: u32) -> Result<BudgetFrame, Error> {
         let top = self.budget_handle(pid, h)?;
         self.mark_dying(top);
         Ok(top)
@@ -818,7 +818,7 @@ impl MemoryManager {
     }
 
     /// Whether `pid` lives in a budget that is being destroyed.
-    pub fn process_is_doomed(&self, pid: PID) -> bool {
+    pub fn process_is_doomed(&self, pid: Pid) -> bool {
         self.budget_of(pid).is_some_and(|b| self.budget(b).dying)
     }
 
@@ -935,7 +935,7 @@ impl MemoryManager {
 /// flight are failed or abandoned and its endpoints and devices destroyed; then its handles are
 /// swept and its frames freed. `caller` is the process whose call or whose interrupted run this
 /// is, if any. Returns whether the caller is gone (it must not be resumed).
-pub fn destroy_subtree(ss: &mut SystemServices, top: BudgetFrame, caller: Option<PID>, bill: bool) -> bool {
+pub fn destroy_subtree(ss: &mut SystemServices, top: BudgetFrame, caller: Option<Pid>, bill: bool) -> bool {
     let started = crate::sched::now_ticks();
     #[cfg(feature = "sched-trace")]
     let top_id = MemoryManager::with(|mm| mm.budget_id(top));
@@ -949,7 +949,7 @@ pub fn destroy_subtree(ss: &mut SystemServices, top: BudgetFrame, caller: Option
     );
     let mut caller_doomed = false;
     for index in 1..=MAX_PROCESS_COUNT {
-        let Some(victim) = PID::new(index as u8) else { continue };
+        let Some(victim) = Pid::new(index as u8) else { continue };
         if !MemoryManager::with(|mm| mm.process_is_doomed(victim)) {
             continue;
         }

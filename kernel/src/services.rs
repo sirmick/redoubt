@@ -4,7 +4,7 @@
 
 
 // use core::mem;
-use redoubt_abi::PID;
+use redoubt_layout::{KERNEL_PID, Pid};
 
 use crate::arch::process::TID;
 
@@ -14,13 +14,8 @@ pub use crate::arch::process::Process as ArchProcess;
 pub use crate::arch::process::Thread;
 use crate::cell::KernelCell;
 
-/// The kernel is always process 1.
-pub const KERNEL_PID: PID = match PID::new(1) {
-    Some(pid) => pid,
-    None => unreachable!(),
-};
 #[allow(dead_code)]
-const FIRST_USER_PID: PID = match PID::new(2) {
+const FIRST_USER_PID: Pid = match Pid::new(2) {
     Some(pid) => pid,
     None => unreachable!(),
 };
@@ -106,7 +101,7 @@ pub struct Process {
     state: ProcessState,
 
     /// This process' PID. This should match up with the index in the process table.
-    pub pid: PID,
+    pub pid: Pid,
 
     /// The current thread ID
     pub current_thread: TID,
@@ -143,7 +138,7 @@ pub struct ProcessInner {
     pub mem_message_last: usize,
 
     /// A copy of this process' ID
-    pub pid: PID,
+    pub pid: Pid,
 
     /// Some reserved data to pad this out to a multiple of 32 bytes.
     pub _reserved: [u8; 1],
@@ -299,7 +294,7 @@ impl SystemServices {
             // table.
             unsafe {
                 process.mapping.from_init_process(*init);
-                process.pid = PID::new(pid as _).unwrap();
+                process.pid = Pid::new(pid as _).unwrap();
             };
             // let old_state = process.state;
             process.state = if pid == 1 {
@@ -323,7 +318,7 @@ impl SystemServices {
     pub fn allocate_process_slot(
         &mut self,
         mm: &mut crate::mem::MemoryManager,
-        pid: PID,
+        pid: Pid,
     ) -> Result<(), ProcessError> {
         let entry =
             self.processes.get_mut(pid.get() as usize - 1).ok_or(ProcessError::NotFound)?;
@@ -345,7 +340,7 @@ impl SystemServices {
 
     /// WP-K4: give back the slot of a process that never started (a `process_create` that failed
     /// after its address space was made). Its frames have already been released.
-    pub fn free_process_slot(&mut self, pid: PID) {
+    pub fn free_process_slot(&mut self, pid: Pid) {
         ArchProcess::destroy(pid);
         if let Some(entry) = self.processes.get_mut(pid.get() as usize - 1) {
             entry.state = ProcessState::Free;
@@ -354,7 +349,7 @@ impl SystemServices {
     }
 
     /// WP-K4: `process_start` has set up the first thread; the process becomes runnable.
-    pub fn start_process(&mut self, pid: PID) -> Result<(), ProcessError> {
+    pub fn start_process(&mut self, pid: Pid) -> Result<(), ProcessError> {
         let process = self.get_process_mut(pid)?;
         match process.state {
             ProcessState::Allocated => {
@@ -370,7 +365,7 @@ impl SystemServices {
     /// to reserve, and the calling thread keeps running with the new thread's id as its result.
     pub fn create_redoubt_thread(
         &mut self,
-        pid: PID,
+        pid: Pid,
         entry: usize,
         sp: usize,
         arg: usize,
@@ -391,7 +386,7 @@ impl SystemServices {
         Ok(new_tid)
     }
 
-    pub fn get_process(&self, pid: PID) -> Result<&Process, ProcessError> {
+    pub fn get_process(&self, pid: Pid) -> Result<&Process, ProcessError> {
         // PID0 doesn't exist -- process IDs are offset by 1.
         let pid_idx = pid.get() as usize - 1;
         if pid_idx >= self.processes.len() {
@@ -406,7 +401,7 @@ impl SystemServices {
         }
     }
 
-    pub fn get_process_mut(&mut self, pid: PID) -> Result<&mut Process, ProcessError> {
+    pub fn get_process_mut(&mut self, pid: Pid) -> Result<&mut Process, ProcessError> {
         // PID0 doesn't exist -- process IDs are offset by 1.
         let pid_idx = pid.get() as usize - 1;
         if pid_idx >= self.processes.len() {
@@ -421,11 +416,11 @@ impl SystemServices {
         }
     }
 
-    pub fn current_pid(&self) -> PID { arch::process::current_pid() }
+    pub fn current_pid(&self) -> Pid { arch::process::current_pid() }
 
     /// Mark the specified context as ready to run. If the thread is Sleeping, mark
     /// it as Ready.
-    pub fn ready_thread(&mut self, pid: PID, tid: TID) -> Result<(), ProcessError> {
+    pub fn ready_thread(&mut self, pid: Pid, tid: TID) -> Result<(), ProcessError> {
         let process = self.get_process_mut(pid)?;
         // let old_state = process.state;
         process.state = match process.state {
@@ -492,7 +487,7 @@ impl SystemServices {
     /// # Panics
     ///
     /// If the current process is not running, or if it's "Running" but has no free contexts
-    pub fn switch_to_thread(&mut self, pid: PID, tid: Option<TID>) -> Result<(), ProcessError> {
+    pub fn switch_to_thread(&mut self, pid: Pid, tid: Option<TID>) -> Result<(), ProcessError> {
         let process = self.get_process_mut(pid)?;
         // klog!(
         //     "switch_to_thread({}:{:?}): Old state was {:?}",
@@ -561,7 +556,7 @@ impl SystemServices {
     /// # Panics
     ///
     /// If the current process is not running.
-    pub fn unschedule_thread(&mut self, pid: PID, tid: TID) -> Result<(), ProcessError> {
+    pub fn unschedule_thread(&mut self, pid: Pid, tid: TID) -> Result<(), ProcessError> {
         let process = self.get_process_mut(pid)?;
         // klog!(
         //     "unschedule_thread({}:{}): Old state was {:?}",
@@ -586,13 +581,13 @@ impl SystemServices {
 
     /// The address space of `pid`, for the Redoubt memory steps that edit another process's
     /// page tables without switching to it (`message.rs`).
-    pub fn mapping_of(&self, pid: PID) -> Option<MemoryMapping> {
+    pub fn mapping_of(&self, pid: Pid) -> Option<MemoryMapping> {
         self.get_process(pid).ok().map(|p| p.mapping)
     }
 
     /// Make `pid`'s address space the active one, for the steps that must run in it (choosing a
     /// buffer's address, writing a record into the receiver's own memory).
-    pub fn activate(&self, pid: PID) -> Result<(), ProcessError> {
+    pub fn activate(&self, pid: Pid) -> Result<(), ProcessError> {
         self.get_process(pid)?.activate();
         Ok(())
     }
@@ -601,7 +596,7 @@ impl SystemServices {
     /// `pid` is not the running process, it visits `pid`'s address space and comes back.
     pub fn set_redoubt_result(
         &mut self,
-        pid: PID,
+        pid: Pid,
         tid: TID,
         regs: &[u64; redoubt_sys::REGS],
     ) -> Result<(), ProcessError> {
@@ -623,7 +618,7 @@ impl SystemServices {
     pub fn activate_process_thread(
         &mut self,
         previous_tid: TID,
-        new_pid: PID,
+        new_pid: Pid,
         mut new_tid: TID,
         can_resume: bool,
     ) -> Result<TID, ProcessError> {
@@ -817,7 +812,7 @@ impl SystemServices {
     /// # Errors
     ///
     /// * **ThreadNotAvailable**: The thread does not exist in this process
-    pub fn destroy_thread(&mut self, pid: PID, tid: TID) -> Result<bool, ProcessError> {
+    pub fn destroy_thread(&mut self, pid: Pid, tid: TID) -> Result<bool, ProcessError> {
         let current_pid = self.current_pid();
         assert_eq!(pid, current_pid);
 
@@ -858,7 +853,7 @@ impl SystemServices {
     }
 
     /// Terminate the given process, the running one; the CPU goes to `kmain`.
-    pub fn terminate_process(&mut self, target_pid: PID) -> Result<(), ProcessError> {
+    pub fn terminate_process(&mut self, target_pid: Pid) -> Result<(), ProcessError> {
         println!("terminate_process: {:?}", target_pid);
         // R4b: every call its threads hold open fails its caller with `Dead`, and every message
         // they were sending is withdrawn, before its memory goes.
@@ -878,7 +873,7 @@ impl SystemServices {
     /// destroyed budget), which keeps running: the same teardown as `terminate_process`, then
     /// the running process's address space is active again. `target` must not be the running
     /// process.
-    pub fn kill_process(&mut self, target: PID) -> Result<(), ProcessError> {
+    pub fn kill_process(&mut self, target: Pid) -> Result<(), ProcessError> {
         let current = self.current_pid();
         assert!(target != current, "kill_process on the running process");
         crate::mem::MemoryManager::with_mut(|mm| crate::message::process_ending(self, mm, target));
@@ -890,7 +885,7 @@ impl SystemServices {
     }
 
     /// Returns the process name, if any, of a given PID
-    pub fn process_name(&self, pid: PID) -> Option<&str> {
+    pub fn process_name(&self, pid: Pid) -> Option<&str> {
         let args = crate::args::KernelArguments::get();
         for arg in args.iter() {
             if arg.name != u32::from_le_bytes(*b"PNam") {

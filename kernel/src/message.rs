@@ -38,7 +38,7 @@ use core::cmp::Ordering;
 use core::num::{NonZeroU64, NonZeroUsize};
 
 use redoubt_sys::PAGE_SIZE;
-use redoubt_abi::PID;
+use redoubt_layout::{KERNEL_PID, Pid};
 
 use crate::arch::process::TID;
 use redoubt_sys::{
@@ -53,7 +53,7 @@ use crate::endpoint::Group;
 use crate::handle::{BudgetRef, DeviceRef, EndpointRef, Handle, Object};
 use crate::kframe;
 use crate::mem::MemoryManager;
-use crate::services::{KERNEL_PID, SystemServices};
+use crate::services::SystemServices;
 
 /// The cost table (KERNEL-SPEC.md, What objects cost), in pages.
 pub const OPEN_CALL_PAGES: u64 = 1;
@@ -173,7 +173,7 @@ struct Slot {
     current: u32,
 }
 
-fn thread_phys(mm: &MemoryManager, pid: PID, tid: TID) -> Option<usize> {
+fn thread_phys(mm: &MemoryManager, pid: Pid, tid: TID) -> Option<usize> {
     let frame = mm.ipc_frame(pid, tid)?;
     let phys = mm.object_phys(frame);
     let magic = kframe::read(phys, 0);
@@ -182,11 +182,11 @@ fn thread_phys(mm: &MemoryManager, pid: PID, tid: TID) -> Option<usize> {
     Some(phys)
 }
 
-fn tword(mm: &MemoryManager, pid: PID, tid: TID, i: usize) -> u64 {
+fn tword(mm: &MemoryManager, pid: Pid, tid: TID, i: usize) -> u64 {
     thread_phys(mm, pid, tid).map_or(0, |phys| kframe::read(phys, i * 8))
 }
 
-fn set_tword(mm: &MemoryManager, pid: PID, tid: TID, i: usize, value: u64) {
+fn set_tword(mm: &MemoryManager, pid: Pid, tid: TID, i: usize, value: u64) {
     if let Some(phys) = thread_phys(mm, pid, tid) {
         kframe::write(phys, 0, THREAD_MAGIC);
         kframe::write(phys, i * 8, value);
@@ -199,7 +199,7 @@ fn frame_word(frame: u32) -> u64 { u64::from(frame) + 1 }
 
 /// The fixed part of `(pid, tid)`'s IPC page. A thread with no page waits for nothing and holds
 /// nothing, which is what all-zero words say.
-fn slot(mm: &MemoryManager, pid: PID, tid: TID) -> Slot {
+fn slot(mm: &MemoryManager, pid: Pid, tid: TID) -> Slot {
     let w = |i| tword(mm, pid, tid, i);
     let wait = Wait::from_word(w(W_WAIT));
     let reply = wait == Wait::Reply;
@@ -224,7 +224,7 @@ fn slot(mm: &MemoryManager, pid: PID, tid: TID) -> Slot {
 }
 
 /// The message `(pid, tid)` is sending.
-fn msg(mm: &MemoryManager, pid: PID, tid: TID) -> Msg {
+fn msg(mm: &MemoryManager, pid: Pid, tid: TID) -> Msg {
     let w = |i| tword(mm, pid, tid, i);
     let mut words = [0; WORDS];
     for (i, word) in words.iter_mut().enumerate() {
@@ -256,7 +256,7 @@ fn msg(mm: &MemoryManager, pid: PID, tid: TID) -> Msg {
     }
 }
 
-fn store_msg(mm: &MemoryManager, pid: PID, tid: TID, m: &Msg) {
+fn store_msg(mm: &MemoryManager, pid: Pid, tid: TID, m: &Msg) {
     let set = |i, v| set_tword(mm, pid, tid, i, v);
     set(W_KIND, m.kind as u64);
     set(W_BADGE, m.badge);
@@ -315,8 +315,8 @@ const F_NOTICE: u64 = 4;
 #[derive(Clone, Copy)]
 struct OpenCall {
     rid: u64,
-    caller: (PID, TID),
-    server: (PID, TID),
+    caller: (Pid, TID),
+    server: (Pid, TID),
     endpoint: EndpointRef,
     badge: u64,
     stamp: BudgetRef,
@@ -333,7 +333,7 @@ struct OpenCall {
     nlabels: usize,
 }
 
-fn pid_of(word: u64) -> PID { PID::new(word as u8).expect("I1: an open call names no process") }
+fn pid_of(word: u64) -> Pid { Pid::new(word as u8).expect("I1: an open call names no process") }
 
 fn open_call_at(mm: &MemoryManager, frame: u32) -> OpenCall {
     let phys = mm.object_phys(frame);
@@ -387,11 +387,11 @@ fn store_open_call(mm: &MemoryManager, frame: u32, c: &OpenCall) {
 
 // --- The open-call list ---------------------------------------------------------------------------
 
-fn nth_call(mm: &MemoryManager, pid: PID, tid: TID, index: usize) -> u32 {
+fn nth_call(mm: &MemoryManager, pid: Pid, tid: TID, index: usize) -> u32 {
     tword(mm, pid, tid, W_CALLS + index) as u32
 }
 
-fn push_open_call(mm: &mut MemoryManager, pid: PID, tid: TID, frame: u32) {
+fn push_open_call(mm: &mut MemoryManager, pid: Pid, tid: TID, frame: u32) {
     let n = slot(mm, pid, tid).ncalls;
     assert!(n < MAX_OPEN_CALLS, "R4a: a thread took a call past MAX_OPEN_CALLS");
     set_tword(mm, pid, tid, W_CALLS + n, u64::from(frame));
@@ -399,7 +399,7 @@ fn push_open_call(mm: &mut MemoryManager, pid: PID, tid: TID, frame: u32) {
     mm.account_mut(pid).expect("account").open_calls += 1;
 }
 
-fn drop_open_call(mm: &mut MemoryManager, pid: PID, tid: TID, frame: u32) {
+fn drop_open_call(mm: &mut MemoryManager, pid: Pid, tid: TID, frame: u32) {
     let n = slot(mm, pid, tid).ncalls;
     let Some(at) = (0..n).find(|i| nth_call(mm, pid, tid, *i) == frame) else { return };
     for i in at..n - 1 {
@@ -415,7 +415,7 @@ fn drop_open_call(mm: &mut MemoryManager, pid: PID, tid: TID, frame: u32) {
 }
 
 /// The open call of thread `(pid, tid)` that its process knows as `rid`.
-fn open_call_of(mm: &MemoryManager, pid: PID, tid: TID, rid: u64) -> Option<u32> {
+fn open_call_of(mm: &MemoryManager, pid: Pid, tid: TID, rid: u64) -> Option<u32> {
     let n = slot(mm, pid, tid).ncalls;
     (0..n).map(|i| nth_call(mm, pid, tid, i)).find(|f| open_call_at(mm, *f).rid == rid)
 }
@@ -423,9 +423,9 @@ fn open_call_of(mm: &MemoryManager, pid: PID, tid: TID, rid: u64) -> Option<u32>
 // --- Walking the threads ---------------------------------------------------------------------------
 
 /// Call `f` for every thread that has an IPC page, until it answers `Some`.
-fn find_thread<T>(mm: &MemoryManager, mut f: impl FnMut(&MemoryManager, PID, TID) -> Option<T>) -> Option<T> {
+fn find_thread<T>(mm: &MemoryManager, mut f: impl FnMut(&MemoryManager, Pid, TID) -> Option<T>) -> Option<T> {
     for index in 1..=MAX_PROCESS_COUNT {
-        let Some(pid) = PID::new(index as u8) else { continue };
+        let Some(pid) = Pid::new(index as u8) else { continue };
         for tid in 0..MAX_THREAD {
             if mm.ipc_frame(pid, tid).is_none() {
                 continue;
@@ -439,13 +439,13 @@ fn find_thread<T>(mm: &MemoryManager, mut f: impl FnMut(&MemoryManager, PID, TID
 }
 
 /// Whether `(pid, tid)` is a sender queued on `e`.
-fn queued_on(mm: &MemoryManager, pid: PID, tid: TID, e: EndpointRef) -> bool {
+fn queued_on(mm: &MemoryManager, pid: Pid, tid: TID, e: EndpointRef) -> bool {
     let s = slot(mm, pid, tid);
     s.wait == Wait::Send && s.endpoint == Some(e)
 }
 
 /// The R2 group of a queued sender.
-fn group_of(mm: &MemoryManager, pid: PID, tid: TID) -> Group {
+fn group_of(mm: &MemoryManager, pid: Pid, tid: TID) -> Group {
     Group::of(&mm.budget_at(msg(mm, pid, tid).sender_budget))
 }
 
@@ -453,13 +453,13 @@ fn group_of(mm: &MemoryManager, pid: PID, tid: TID) -> Group {
 
 /// Whether `(pid, tid)` is the thread making the system call. It was never taken off the ready
 /// list, so an answer for it is just its registers: `settle` resumes it.
-fn is_running(ss: &SystemServices, pid: PID, tid: TID) -> bool {
+fn is_running(ss: &SystemServices, pid: Pid, tid: TID) -> bool {
     ss.current_pid() == pid && crate::arch::process::Process::current().current_tid() == tid
 }
 
 /// Hand a thread its result. One that was blocked goes back on the ready list; the thread making
 /// the call was never off it.
-fn wake(ss: &mut SystemServices, mm: &MemoryManager, pid: PID, tid: TID, result: Result<Return, Error>) {
+fn wake(ss: &mut SystemServices, mm: &MemoryManager, pid: Pid, tid: TID, result: Result<Return, Error>) {
     set_tword(mm, pid, tid, W_WAIT, Wait::None as u64);
     if !is_running(ss, pid, tid) {
         // A waiting thread belongs to a live process, so this cannot fail.
@@ -479,7 +479,7 @@ fn wake(ss: &mut SystemServices, mm: &MemoryManager, pid: PID, tid: TID, result:
 fn answer_record<const N: usize>(
     ss: &mut SystemServices,
     mm: &MemoryManager,
-    pid: PID,
+    pid: Pid,
     tid: TID,
     slots: &[u64; N],
     result: Result<Return, Error>,
@@ -494,7 +494,7 @@ fn answer_record<const N: usize>(
 
 /// Say what a thread is waiting for, and until when. It does not block yet: the delivery attempt
 /// that follows may answer it at once, and `settle` then never takes it off the ready list.
-fn mark(mm: &mut MemoryManager, pid: PID, tid: TID, wait: Wait, timeout: u64) {
+fn mark(mm: &mut MemoryManager, pid: Pid, tid: TID, wait: Wait, timeout: u64) {
     // Timeouts are relative microseconds, added with saturation, so `FOREVER` never expires.
     let deadline = crate::time::now_us().saturating_add(timeout);
     set_tword(mm, pid, tid, W_WAIT, wait as u64);
@@ -513,7 +513,7 @@ fn mark(mm: &mut MemoryManager, pid: PID, tid: TID, wait: Wait, timeout: u64) {
 fn settle(
     ss: &mut SystemServices,
     mm: &mut MemoryManager,
-    pid: PID,
+    pid: Pid,
     tid: TID,
 ) -> Result<Option<Return>, Error> {
     let s = slot(mm, pid, tid);
@@ -535,7 +535,7 @@ fn settle(
 /// A blocked thread's wait ends without an answer: what it waited for is unwound and it gets
 /// `error`. This is the one meaning of a timeout (I13), of `Refused` (R4), of `Dead` from
 /// revocation or an endpoint's destruction (R10), whatever the thread was waiting for.
-fn fail_wait(ss: &mut SystemServices, mm: &mut MemoryManager, pid: PID, tid: TID, error: Error) {
+fn fail_wait(ss: &mut SystemServices, mm: &mut MemoryManager, pid: Pid, tid: TID, error: Error) {
     let waiting = slot(mm, pid, tid);
     let result = match waiting.wait {
         Wait::Send if msg(mm, pid, tid).kind == MsgKind::Call => {
@@ -570,7 +570,7 @@ fn call_result(
 /// Undo what `(pid, tid)`'s page says it waits for: a queued message's buffer goes back to it;
 /// a taken call is abandoned (R3). Returns the endpoint of an abandoned call, which is owed a
 /// pump once the thread is dealt with: its server may be waiting there for the notice.
-fn unwind(ss: &SystemServices, mm: &mut MemoryManager, pid: PID, tid: TID) -> Option<EndpointRef> {
+fn unwind(ss: &SystemServices, mm: &mut MemoryManager, pid: Pid, tid: TID) -> Option<EndpointRef> {
     let s = slot(mm, pid, tid);
     match s.wait {
         Wait::Send => {
@@ -590,7 +590,7 @@ fn unwind(ss: &SystemServices, mm: &mut MemoryManager, pid: PID, tid: TID) -> Op
 /// `mint(source, badge, budget?) -> h` (KERNEL-SPEC.md, `mint`; R9, I3, I4).
 pub fn mint(
     mm: &mut MemoryManager,
-    pid: PID,
+    pid: Pid,
     tid: TID,
     source: MintSource,
     badge: u64,
@@ -648,7 +648,7 @@ pub fn mint(
 /// call**, or nobody (answers 37, 55, 82; KERNEL-SPEC.md, Messages). A thread with no current
 /// call blames nobody, even when other threads of its process hold open calls, and a `send` is
 /// never blamed because a send is never an open call.
-pub fn current_call_blame(mm: &MemoryManager, pid: PID, tid: TID) -> Option<(u64, Labels)> {
+pub fn current_call_blame(mm: &MemoryManager, pid: Pid, tid: TID) -> Option<(u64, Labels)> {
     let frame = frame_of(u64::from(slot(mm, pid, tid).current))?;
     let call = open_call_at(mm, frame);
     let mut labels = Labels::new();
@@ -659,7 +659,7 @@ pub fn current_call_blame(mm: &MemoryManager, pid: PID, tid: TID) -> Option<(u64
 }
 
 /// `serve(msg_id)`: the call becomes the thread's current call, the one a fault blames.
-pub fn serve(mm: &mut MemoryManager, pid: PID, tid: TID, msg_id: u64) -> Result<(), Error> {
+pub fn serve(mm: &mut MemoryManager, pid: Pid, tid: TID, msg_id: u64) -> Result<(), Error> {
     let frame = open_call_of(mm, pid, tid, msg_id).ok_or(Error::InvalidArgument)?;
     set_tword(mm, pid, tid, W_CURRENT, frame_word(frame));
     Ok(())
@@ -674,7 +674,7 @@ pub fn serve(mm: &mut MemoryManager, pid: PID, tid: TID, msg_id: u64) -> Result<
 pub fn send(
     ss: &mut SystemServices,
     mm: &mut MemoryManager,
-    pid: PID,
+    pid: Pid,
     tid: TID,
     kind: MsgKind,
     h: u32,
@@ -752,7 +752,7 @@ pub fn send(
 /// The handles a body names, looked up in the caller's table in order (`BadHandle`).
 fn lookup_handles(
     mm: &MemoryManager,
-    pid: PID,
+    pid: Pid,
     body: &Body,
 ) -> Result<([Option<Handle>; MAX_MSG_HANDLES], usize), Error> {
     let mut handles = [None; MAX_MSG_HANDLES];
@@ -764,7 +764,7 @@ fn lookup_handles(
 
 /// A lend or transfer range: page-aligned, non-empty, backed, all the caller's own RAM, and for
 /// a lend writable (KERNEL-SPEC.md, `call`'s row). Anything else is `InvalidArgument`.
-fn check_buffer(mm: &mut MemoryManager, pid: PID, pages: Pages, lend: bool) -> Result<(), Error> {
+fn check_buffer(mm: &mut MemoryManager, pid: Pid, pages: Pages, lend: bool) -> Result<(), Error> {
     if pages.addr % PAGE_SIZE != 0 {
         return Err(Error::InvalidArgument);
     }
@@ -785,7 +785,7 @@ fn check_buffer(mm: &mut MemoryManager, pid: PID, pages: Pages, lend: bool) -> R
 
 /// Take the buffer out of the sender's address space (I9: a lent page is unmapped from its
 /// lender until the call ends). Every page was checked by [`check_buffer`], so nothing fails.
-fn take_buffer(ss: &SystemServices, pid: PID, addr: usize, npages: usize) {
+fn take_buffer(ss: &SystemServices, pid: Pid, addr: usize, npages: usize) {
     let space = ss.mapping_of(pid).expect("the sending process is alive");
     for i in 0..npages {
         crate::arch::mem::lend_out(&space, addr + i * PAGE_SIZE).expect("a checked range lends");
@@ -801,7 +801,7 @@ fn take_buffer(ss: &SystemServices, pid: PID, addr: usize, npages: usize) {
 fn receive_irq(
     ss: &mut SystemServices,
     mm: &mut MemoryManager,
-    pid: PID,
+    pid: Pid,
     tid: TID,
     device: DeviceRef,
     timeout: u64,
@@ -863,7 +863,7 @@ pub fn destroy_device(ss: &mut SystemServices, mm: &mut MemoryManager, frame: u3
 pub fn receive(
     ss: &mut SystemServices,
     mm: &mut MemoryManager,
-    pid: PID,
+    pid: Pid,
     tid: TID,
     from: Option<u32>,
     timeout: u64,
@@ -975,11 +975,11 @@ fn pump(ss: &mut SystemServices, mm: &mut MemoryManager, e: EndpointRef) {
 /// R2: the next message to take on `e` — the oldest message of the next group after the one
 /// served last, in group order, wrapping round once. Without `calls` a process at
 /// `MAX_OPEN_CALLS` skips calls, so a group's oldest *send* is its message (R4a).
-fn next_sender(mm: &MemoryManager, e: EndpointRef, calls: bool) -> Option<(PID, TID)> {
+fn next_sender(mm: &MemoryManager, e: EndpointRef, calls: bool) -> Option<(Pid, TID)> {
     let cursor = mm.endpoint_at(e).cursor;
     // Rank 0: groups after the cursor. Rank 1: those at or before it, taken only once the others
     // are done, which is the wrap-around. Then group order, then age.
-    let mut best: Option<(u8, Group, u64, PID, TID)> = None;
+    let mut best: Option<(u8, Group, u64, Pid, TID)> = None;
     find_thread::<()>(mm, |mm, pid, tid| {
         if !queued_on(mm, pid, tid, e) || (!calls && msg(mm, pid, tid).kind == MsgKind::Call) {
             return None;
@@ -1011,9 +1011,9 @@ fn deliver(
     ss: &mut SystemServices,
     mm: &mut MemoryManager,
     e: EndpointRef,
-    rpid: PID,
+    rpid: Pid,
     rtid: TID,
-    spid: PID,
+    spid: Pid,
     stid: TID,
 ) {
     // The receiver's record must still be its own writable memory. Another of its threads may
@@ -1047,7 +1047,7 @@ fn deliver(
 /// is the error a record earns, and every call's row carries it (decoding, stage 1).
 fn check_receive_record(
     ss: &mut SystemServices,
-    pid: PID,
+    pid: Pid,
     tid: TID,
     mm: &MemoryManager,
 ) -> Result<(), Error> {
@@ -1068,9 +1068,9 @@ fn prepare(
     ss: &SystemServices,
     mm: &mut MemoryManager,
     e: EndpointRef,
-    rpid: PID,
+    rpid: Pid,
     rtid: TID,
-    spid: PID,
+    spid: Pid,
     stid: TID,
 ) -> Result<Message, Error> {
     let m = msg(mm, spid, stid);
@@ -1193,7 +1193,7 @@ fn is_live(mm: &MemoryManager, h: Handle) -> bool {
 /// A message's copies of its handles move into `pid`'s table, each keeping its slot: one R10
 /// revoked meanwhile, or one `pid` cannot pay for, is 0 there. Returns whether any was dropped
 /// for want of room.
-fn install_handles(mm: &mut MemoryManager, pid: PID, handles: &[Option<Handle>]) -> (ReceivedHandles, bool) {
+fn install_handles(mm: &mut MemoryManager, pid: Pid, handles: &[Option<Handle>]) -> (ReceivedHandles, bool) {
     let mut slots = ReceivedHandles::new();
     let mut dropped = false;
     for item in handles {
@@ -1217,7 +1217,7 @@ fn install_handles(mm: &mut MemoryManager, pid: PID, handles: &[Option<Handle>])
 fn choose_buffer_address(
     ss: &SystemServices,
     mm: &mut MemoryManager,
-    rpid: PID,
+    rpid: Pid,
     pages: usize,
 ) -> Result<usize, Error> {
     let here = crate::arch::process::current_pid();
@@ -1234,7 +1234,7 @@ fn choose_buffer_address(
 /// Allocate the page tables that map the buffer at `at`, charged to the receiver's budget. The
 /// R4 decision counted exactly these, and the address was free when it was chosen, so neither
 /// step can fail here.
-fn reserve_buffer(ss: &SystemServices, mm: &mut MemoryManager, rpid: PID, at: usize, pages: usize) {
+fn reserve_buffer(ss: &SystemServices, mm: &mut MemoryManager, rpid: Pid, at: usize, pages: usize) {
     let space = ss.mapping_of(rpid).expect("the receiving process is alive");
     for i in 0..pages {
         crate::arch::mem::prepare_map(mm, &space, rpid, at + i * PAGE_SIZE)
@@ -1244,7 +1244,7 @@ fn reserve_buffer(ss: &SystemServices, mm: &mut MemoryManager, rpid: PID, at: us
 
 /// Map the buffer into the receiver: a lend stays the sender's (whose entry remembers the loan),
 /// a transfer changes owner and payer together. Every page was prepared, so nothing fails.
-fn move_buffer(ss: &SystemServices, mm: &mut MemoryManager, m: &Msg, spid: PID, rpid: PID, at: usize) {
+fn move_buffer(ss: &SystemServices, mm: &mut MemoryManager, m: &Msg, spid: Pid, rpid: Pid, at: usize) {
     if m.buf_pages == 0 {
         return;
     }
@@ -1272,7 +1272,7 @@ fn move_buffer(ss: &SystemServices, mm: &mut MemoryManager, m: &Msg, spid: PID, 
 }
 
 /// Put a queued message's buffer back in its sender's address space.
-fn give_buffer_back(ss: &SystemServices, mm: &MemoryManager, pid: PID, tid: TID) {
+fn give_buffer_back(ss: &SystemServices, mm: &MemoryManager, pid: Pid, tid: TID) {
     let m = msg(mm, pid, tid);
     if m.buf_pages == 0 {
         return;
@@ -1293,7 +1293,7 @@ fn give_buffer_back(ss: &SystemServices, mm: &MemoryManager, pid: PID, tid: TID)
 pub fn reply(
     ss: &mut SystemServices,
     mm: &mut MemoryManager,
-    pid: PID,
+    pid: Pid,
     tid: TID,
     msg_id: u64,
     body_rec: usize,
@@ -1432,7 +1432,7 @@ fn abandon(ss: &SystemServices, mm: &mut MemoryManager, frame: u32) {
 
 /// A thread is ending. What it waited for is withdrawn; a caller still waiting on a call it
 /// holds gets `Dead` and its lend back, and an abandoned lend is freed (R4b).
-pub fn thread_ending(ss: &mut SystemServices, mm: &mut MemoryManager, pid: PID, tid: TID) {
+pub fn thread_ending(ss: &mut SystemServices, mm: &mut MemoryManager, pid: Pid, tid: TID) {
     // Not `fail_wait`: a dying thread gets no answer and must not go back on the ready list.
     let served = unwind(ss, mm, pid, tid);
     set_tword(mm, pid, tid, W_WAIT, Wait::None as u64);
@@ -1470,7 +1470,7 @@ fn finish_served(ss: &mut SystemServices, mm: &mut MemoryManager, frame: u32) {
 }
 
 /// A process is ending: every one of its threads does (R4b).
-pub fn process_ending(ss: &mut SystemServices, mm: &mut MemoryManager, pid: PID) {
+pub fn process_ending(ss: &mut SystemServices, mm: &mut MemoryManager, pid: Pid) {
     for tid in 0..MAX_THREAD {
         if mm.ipc_frame(pid, tid).is_some() {
             thread_ending(ss, mm, pid, tid);
@@ -1554,7 +1554,7 @@ fn fail_all(
     ss: &mut SystemServices,
     mm: &mut MemoryManager,
     error: Error,
-    mut doomed: impl FnMut(&MemoryManager, PID, TID) -> bool,
+    mut doomed: impl FnMut(&MemoryManager, Pid, TID) -> bool,
 ) {
     while let Some((pid, tid)) = find_thread(mm, |mm, pid, tid| doomed(mm, pid, tid).then_some((pid, tid))) {
         fail_wait(ss, mm, pid, tid, error);
@@ -1565,11 +1565,11 @@ fn fail_all(
 /// deadline, the first in (pid, tid) order), and the earliest deadline still to come (`u64::MAX`
 /// for none). Only the threads of processes whose cached earliest timeout has come are read; each
 /// such cache is recomputed on the way.
-pub fn next_timeout(mm: &mut MemoryManager, now: u64) -> (Option<(u64, PID, TID)>, u64) {
-    let mut due: Option<(u64, PID, TID)> = None;
+pub fn next_timeout(mm: &mut MemoryManager, now: u64) -> (Option<(u64, Pid, TID)>, u64) {
+    let mut due: Option<(u64, Pid, TID)> = None;
     let mut next = u64::MAX;
     for index in 1..=MAX_PROCESS_COUNT {
-        let Some(pid) = PID::new(index as u8) else { continue };
+        let Some(pid) = Pid::new(index as u8) else { continue };
         let Some(earliest) = mm.account(pid).map(|a| a.earliest_timeout) else { continue };
         if earliest > now {
             next = next.min(earliest);
@@ -1605,13 +1605,13 @@ pub fn next_timeout(mm: &mut MemoryManager, now: u64) -> (Option<(u64, PID, TID)
 
 /// The blocking call of `(pid, tid)` reached its timeout: it returns `Timeout` (I13), with what
 /// it waited for unwound (a queued message's buffer back, a taken call abandoned).
-pub fn time_out(ss: &mut SystemServices, mm: &mut MemoryManager, pid: PID, tid: TID) {
+pub fn time_out(ss: &mut SystemServices, mm: &mut MemoryManager, pid: Pid, tid: TID) {
     fail_wait(ss, mm, pid, tid, Error::Timeout);
 }
 
 /// After `reply` freed an open call, the process may be able to take calls again (R4a) and an
 /// abandoned-call notice may be waiting: try every endpoint its threads receive on.
-fn poke_receivers(ss: &mut SystemServices, mm: &mut MemoryManager, pid: PID) {
+fn poke_receivers(ss: &mut SystemServices, mm: &mut MemoryManager, pid: Pid) {
     for tid in 0..MAX_THREAD {
         let s = slot(mm, pid, tid);
         if s.wait == Wait::Receive {

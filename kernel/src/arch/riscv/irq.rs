@@ -68,7 +68,7 @@ fn preempt() -> ! {
 /// A system call: every user-mode `ecall`, and the only decoder, `redoubt::handle` (redoubt-sys).
 /// It never returns to the trap handler: the caller resumes past its `ecall` with the result,
 /// or whatever is current runs.
-fn system_call(pid: redoubt_abi::PID, regs: [usize; 8]) -> ! {
+fn system_call(pid: redoubt_layout::Pid, regs: [usize; 8]) -> ! {
     let tid = ArchProcess::with_current_mut(|p| {
         p.current_thread_mut().sepc += 4;
         p.current_tid()

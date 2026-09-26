@@ -10,14 +10,12 @@ resolver = "2"
 # Dependency versions enforced by Cargo.lock.
 [dependencies]
 stats_alloc = { version = "0.1.8", optional = true }
-redoubt-abi = { path = "../libs/abi", features = [
-    "forget-memory-messages",
-] }
 rand_chacha = { version = "0.3.1", optional = true, default-features = false }
 sbi-rt = { version = "0.0.3", optional = true }
 plic = { version = "0.0.3", optional = true, features = ["primitive-id"] }
 riscv = "0.16"
 paging = { path = "../libs/paging" }
+redoubt-layout = { path = "../libs/layout" }
 redoubt-stride = { path = "../libs/stride" }
 redoubt-sys = { path = "../libs/sys" }
 

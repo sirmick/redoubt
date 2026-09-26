@@ -8,7 +8,7 @@ members = [
   "model",
   "kernel",
   "loader",
-  "libs/abi",
+  "libs/layout",
   "libs/paging",
   "libs/rt",
   "libs/signing",

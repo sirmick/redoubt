@@ -6,10 +6,8 @@
 
 use core::ops::Range;
 
+use redoubt_layout::{KERNEL_PID, Pid};
 use redoubt_sys::PAGE_SIZE;
-
-pub type Pid = u8;
-pub const KERNEL_PID: Pid = 1;
 
 const MAX_RESERVED: usize = 8;
 
@@ -21,7 +19,8 @@ pub struct PageAllocator {
     /// itself, the device tree, the boot bundle).
     reserved: [Range<usize>; MAX_RESERVED],
     reserved_count: usize,
-    rpt: &'static mut [Pid],
+    /// One owner PID byte per page, 0 for a free page.
+    rpt: &'static mut [u8],
 }
 
 impl PageAllocator {
@@ -82,8 +81,8 @@ impl PageAllocator {
         let base = self.alloc_contiguous(pages.div_ceil(PAGE_SIZE), KERNEL_PID);
         // SAFETY: `base` is a fresh, zeroed allocation of at least `pages` bytes that is
         // never handed out again, so this is the only reference to it for the rest of the
-        // loader's life. `Pid` is `u8`, for which all-zeroes is valid.
-        self.rpt = unsafe { core::slice::from_raw_parts_mut(base as *mut Pid, pages) };
+        // loader's life. All-zeroes is a valid `u8`.
+        self.rpt = unsafe { core::slice::from_raw_parts_mut(base as *mut u8, pages) };
         let rpt_range = base..base + pages.next_multiple_of(PAGE_SIZE);
         self.set_owner(rpt_range, KERNEL_PID);
     }
@@ -98,7 +97,7 @@ impl PageAllocator {
         }
         let first = (range.start - self.ram.start) / PAGE_SIZE;
         let last = (range.end - self.ram.start).div_ceil(PAGE_SIZE);
-        self.rpt[first..last].fill(owner);
+        self.rpt[first..last].fill(owner.get());
     }
 
     pub fn free_bytes(&self) -> usize { self.rpt.iter().filter(|p| **p == 0).count() * PAGE_SIZE }

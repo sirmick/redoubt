@@ -48,7 +48,7 @@
 //! [`thread_create`]) takes only the scheduler and borrows the memory manager in phases. The
 //! functions that take both are only ever called from a dispatcher that holds both.
 
-use redoubt_abi::PID;
+use redoubt_layout::Pid;
 
 use crate::arch::process::TID;
 use redoubt_sys::{
@@ -97,7 +97,7 @@ pub struct Proc {
     pub id: u64,
     /// The budget charged for this object (`process_create`'s caller's).
     pub creator: BudgetRef,
-    pub pid: PID,
+    pub pid: Pid,
     /// The exit endpoint, until it is destroyed.
     pub endpoint: Option<EndpointRef>,
     flags: u64,
@@ -142,7 +142,7 @@ impl MemoryManager {
         Proc {
             id: w(W_ID),
             creator: BudgetRef { frame: frame_of(w(W_CREATOR)).unwrap_or(0), id: w(W_CREATOR_ID) },
-            pid: PID::new(w(W_PID) as u8).expect("I1: a process object names no PID"),
+            pid: Pid::new(w(W_PID) as u8).expect("I1: a process object names no PID"),
             endpoint: frame_of(w(W_ENDPOINT)).map(|frame| EndpointRef { frame, id: w(W_ENDPOINT_ID) }),
             flags: w(W_FLAGS),
             cause: w(W_CAUSE),
@@ -193,7 +193,7 @@ impl MemoryManager {
     }
 
     /// The process object `pid`'s handle `index` names: `BadHandle`, then `WrongObject`.
-    pub fn process_handle(&self, pid: PID, index: u32) -> Result<ProcessRef, Error> {
+    pub fn process_handle(&self, pid: Pid, index: u32) -> Result<ProcessRef, Error> {
         match self.handle(pid, index)?.object {
             Object::Process(p) => Ok(p),
             _ => Err(Error::WrongObject),
@@ -208,23 +208,23 @@ impl MemoryManager {
 
 /// The object frame of the process `pid`, if it has one. The loader's own programs have none:
 /// nobody created them and nobody is owed their notice (`budget.rs`, `boot_budgets`).
-pub fn object_of(mm: &MemoryManager, pid: PID) -> Option<u32> {
+pub fn object_of(mm: &MemoryManager, pid: Pid) -> Option<u32> {
     mm.find_process(|mm, frame| mm.process(frame).pid == pid)
 }
 
 /// A PID drawn at random from the free ASIDs (KERNEL-SPEC.md, Process): free in the process
 /// table, and named by no process object, so a PID is not reused while a notice still names it
 /// (answer 106). Random so that nothing can predict which ASID a process will get.
-fn random_free_pid(ss: &SystemServices, mm: &MemoryManager) -> Option<PID> {
-    let free = |pid: PID| ss.get_process(pid).is_err() && object_of(mm, pid).is_none();
-    let count = (2..=MAX_PROCESS_COUNT).filter(|i| PID::new(*i as u8).is_some_and(free)).count();
+fn random_free_pid(ss: &SystemServices, mm: &MemoryManager) -> Option<Pid> {
+    let free = |pid: Pid| ss.get_process(pid).is_err() && object_of(mm, pid).is_none();
+    let count = (2..=MAX_PROCESS_COUNT).filter(|i| Pid::new(*i as u8).is_some_and(free)).count();
     if count == 0 {
         return None;
     }
     let mut bytes = [0u8; 8];
     crate::platform::rand::fill(&mut bytes);
     let nth = (u64::from_le_bytes(bytes) % count as u64) as usize;
-    (2..=MAX_PROCESS_COUNT).filter_map(|i| PID::new(i as u8)).filter(|pid| free(*pid)).nth(nth)
+    (2..=MAX_PROCESS_COUNT).filter_map(|i| Pid::new(i as u8)).filter(|pid| free(*pid)).nth(nth)
 }
 
 // --- `process_create` ---------------------------------------------------------------------------
@@ -234,7 +234,7 @@ fn random_free_pid(ss: &SystemServices, mm: &MemoryManager) -> Option<PID> {
 pub fn process_create(
     ss: &mut SystemServices,
     mm: &mut MemoryManager,
-    pid: PID,
+    pid: Pid,
     budget_h: u32,
     endpoint_h: u32,
 ) -> Result<u32, Error> {
@@ -295,7 +295,7 @@ pub fn process_create(
 
 /// Give `child` an address space and a slot in the process table, but no thread: it cannot run
 /// until `process_start`. Every frame it takes is charged to the budget it runs in (answer 127).
-fn new_address_space(ss: &mut SystemServices, mm: &mut MemoryManager, child: PID) -> Result<(), Error> {
+fn new_address_space(ss: &mut SystemServices, mm: &mut MemoryManager, child: Pid) -> Result<(), Error> {
     let here = crate::arch::process::current_pid();
     ss.allocate_process_slot(mm, child).map_err(|_| Error::OutOfMemory)?;
     // `setup_empty_process` writes the new space's own `ProcessImpl`, so that space must be the
@@ -312,7 +312,7 @@ fn new_address_space(ss: &mut SystemServices, mm: &mut MemoryManager, child: PID
 /// Undo a `process_create` that failed after the address space was made. The process has never
 /// run, so nothing waits on it and nothing holds its handles; this is `Process::terminate` minus
 /// everything that needs the memory manager it does not already hold.
-fn drop_unstarted(ss: &mut SystemServices, mm: &mut MemoryManager, child: PID) {
+fn drop_unstarted(ss: &mut SystemServices, mm: &mut MemoryManager, child: Pid) {
     // Not `release_all_memory_for_process`: that one first walks the page tables for frames the
     // process lent out, and a process that has never run has lent nothing. What is left is the
     // frames it owns, which is what this frees -- and it needs no address space, so a
@@ -334,7 +334,7 @@ fn drop_unstarted(ss: &mut SystemServices, mm: &mut MemoryManager, child: PID) {
 pub fn process_map(
     ss: &mut SystemServices,
     mm: &mut MemoryManager,
-    pid: PID,
+    pid: Pid,
     process_h: u32,
     src: usize,
     dst: usize,
@@ -422,7 +422,7 @@ fn whole_pages(src: usize, dst: usize, len: usize) -> Result<usize, Error> {
 pub fn process_start(
     ss: &mut SystemServices,
     mm: &mut MemoryManager,
-    pid: PID,
+    pid: Pid,
     process_h: u32,
     entry: usize,
     sp: usize,
@@ -482,7 +482,7 @@ pub fn process_start(
 /// `OutOfMemory` when the process's budget cannot pay for the thread's page.
 pub fn thread_create(
     ss: &mut SystemServices,
-    pid: PID,
+    pid: Pid,
     entry: usize,
     sp: usize,
     arg: usize,
@@ -494,7 +494,7 @@ pub fn thread_create(
 ///
 /// The final thread performs `process_exit(0)` (answer 170). Classify open calls and snapshot
 /// current-call blame before any thread cleanup destroys the evidence.
-pub fn thread_exit(ss: &mut SystemServices, pid: PID, tid: TID) {
+pub fn thread_exit(ss: &mut SystemServices, pid: Pid, tid: TID) {
     let last = MemoryManager::with(|mm| mm.account(pid).is_none_or(|a| a.threads <= 1));
     if last {
         process_exit(ss, pid, tid, 0);
@@ -508,7 +508,7 @@ pub fn thread_exit(ss: &mut SystemServices, pid: PID, tid: TID) {
 /// `process_exit(code)` (KERNEL-SPEC.md): `exited`, or `faulted` while the process holds open
 /// calls -- which is where a Rust panic lands (answer 55). A server that means to exit replies to
 /// every open call first (R4b).
-pub fn process_exit(ss: &mut SystemServices, pid: PID, tid: TID, code: u32) {
+pub fn process_exit(ss: &mut SystemServices, pid: Pid, tid: TID, code: u32) {
     let open = MemoryManager::with(|mm| mm.account(pid).map_or(0, |a| a.open_calls));
     let cause = if open == 0 { Cause::Exited } else { Cause::Faulted };
     died(ss, pid, tid, cause, code);
@@ -516,14 +516,14 @@ pub fn process_exit(ss: &mut SystemServices, pid: PID, tid: TID, code: u32) {
 
 /// A process faulted: the trap handler could not make sense of the trap and the process cannot go
 /// on (`arch::irq`). `code` is the RISC-V exception cause.
-pub fn faulted(pid: PID, code: u32) {
+pub fn faulted(pid: Pid, code: u32) {
     let tid = ArchProcess::with_current(|p| p.current_tid());
     SystemServices::with_mut(|ss| died(ss, pid, tid, Cause::Faulted, code));
 }
 
 /// R10: destroying a budget kills the processes running in it. The notice has cause `killed`
 /// (`died` drops it if the object is going too, which [`budgets_dying`] sees to afterwards).
-pub fn killed(ss: &mut SystemServices, victim: PID) { died(ss, victim, INITIAL_TID, Cause::Killed, 0); }
+pub fn killed(ss: &mut SystemServices, victim: Pid) { died(ss, victim, INITIAL_TID, Cause::Killed, 0); }
 
 /// The one path out of a process, whatever ended it: record the notice, tear the process down,
 /// then deliver the notice or drop it.
@@ -531,7 +531,7 @@ pub fn killed(ss: &mut SystemServices, victim: PID) { died(ss, victim, INITIAL_T
 /// The order matters. Blame is read first, because the teardown frees the open call it names.
 /// The budget the process ran in is read first too, because R1 compares *its* labels with the
 /// exit endpoint's owner, and the teardown may be the last thing keeping it alive.
-fn died(ss: &mut SystemServices, pid: PID, tid: TID, cause: Cause, code: u32) {
+fn died(ss: &mut SystemServices, pid: Pid, tid: TID, cause: Cause, code: u32) {
     let recorded = MemoryManager::with_mut(|mm| record(mm, pid, tid, cause, code));
     let Some((object, flow)) = recorded else { return };
     end_process(ss, pid);
@@ -545,7 +545,7 @@ fn died(ss: &mut SystemServices, pid: PID, tid: TID, cause: Cause, code: u32) {
 /// something already dead, changes nothing.
 fn record(
     mm: &mut MemoryManager,
-    pid: PID,
+    pid: Pid,
     tid: TID,
     cause: Cause,
     code: u32,
@@ -581,7 +581,7 @@ fn record(
 /// Tear the process down: R4b for its threads' open calls, then its memory, handle table and
 /// process-table slot. The running process is dealt with as `budget_destroy` deals with a caller
 /// that destroyed its own budget.
-fn end_process(ss: &mut SystemServices, pid: PID) {
+fn end_process(ss: &mut SystemServices, pid: Pid) {
     if ss.get_process(pid).is_err() {
         return;
     }

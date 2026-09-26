@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-use redoubt_abi::PID;
+use redoubt_layout::Pid;
 use redoubt_sys::{MemFlags, PAGE_SIZE, USER_AREA_END};
 
 pub use crate::arch::mem::MemoryMapping;
@@ -11,7 +11,7 @@ use crate::arch::process::Process;
 enum ClaimReleaseMove {
     Claim,
     Release,
-    Move(PID /* from */),
+    Move(Pid /* from */),
 }
 
 /// One entry of the loader's `MREx` table (BOOT.md): a device region processes may claim.
@@ -91,7 +91,7 @@ pub struct MemoryManager {
     /// this table and hands it over in `init_from_memory`.
     allocations: &'static mut [RamAllocation],
     /// The same, for the pages of every region in `extra_regions`, back to back.
-    extra_allocations: &'static mut [Option<PID>],
+    extra_allocations: &'static mut [Option<Pid>],
     /// Memory outside RAM that processes may claim: memory-mapped devices. The data of the
     /// loader's `MREx` tag, `MemoryRangeExtra::WORDS` words per region; see `extra_regions()`.
     extra_regions: &'static [u32],
@@ -107,7 +107,7 @@ pub struct MemoryManager {
 /// Owner, in the ownership table, of frames that hold kernel objects (budgets, handle-table
 /// pages). No process has this PID (there are `MAX_PROCESS_COUNT` of them), so such a frame is
 /// never mapped into a process, and `release_all_memory_for_process` never frees one.
-pub const OBJECT_OWNER: PID = match PID::new(255) {
+pub const OBJECT_OWNER: Pid = match Pid::new(255) {
     Some(pid) => pid,
     None => unreachable!(),
 };
@@ -115,12 +115,12 @@ const _: () = assert!(crate::arch::process::MAX_PROCESS_COUNT < 255);
 /// Owner, in the ownership table, of `dma_alloc` frames (WP-K5b, `dma.rs`). No process has this
 /// PID either, so no generic release, move or lend path, all of which check that the caller
 /// owns the frame, can free or move one: only `dma_release` pools it, after the reset.
-pub const DMA_OWNER: PID = match PID::new(254) {
+pub const DMA_OWNER: Pid = match Pid::new(254) {
     Some(pid) => pid,
     None => unreachable!(),
 };
 const _: () = assert!(crate::arch::process::MAX_PROCESS_COUNT < 254);
-type RamAllocation = Option<PID>;
+type RamAllocation = Option<Pid>;
 
 impl Default for MemoryManager {
     fn default() -> Self { Self::default_hack() }
@@ -203,18 +203,18 @@ impl MemoryManager {
         // in, one byte per page of RAM, so it holds these `mem_size` entries; every byte is a
         // valid `Option<PID>` (zero, an unowned page, is `None`). The loader owns it for the
         // kernel and hands it over here, so this is the only reference to it.
-        unsafe { self.allocations = slice::from_raw_parts_mut(rpt_base as *mut Option<PID>, mem_size) };
+        unsafe { self.allocations = slice::from_raw_parts_mut(rpt_base as *mut Option<Pid>, mem_size) };
         // SAFETY: as above, for the table the loader built for the `MREx` regions: one byte per
         // page of them, which is the `extra_size` just counted from the same table.
         unsafe {
-            self.extra_allocations = slice::from_raw_parts_mut(xpt_base as *mut Option<PID>, extra_size)
+            self.extra_allocations = slice::from_raw_parts_mut(xpt_base as *mut Option<Pid>, extra_size)
         }
         Ok(())
     }
 
     /// Print the number of RAM bytes used by the specified process.
     /// This does not include memory such as peripherals and CSRs.
-    pub fn ram_used_by(&self, pid: PID) -> usize {
+    pub fn ram_used_by(&self, pid: Pid) -> usize {
         let mut owned_bytes = 0;
         for owner in &self.allocations[0..self.ram_size / PAGE_SIZE] {
             if owner == &Some(pid) {
@@ -227,7 +227,7 @@ impl MemoryManager {
     /// Allocate a single page to the given process, charged to its budget (R6): `OutOfMemory` if
     /// the budget cannot pay. DOES NOT ZERO THE PAGE!!! This function CANNOT zero the page, as
     /// it hasn't been mapped yet.
-    pub fn alloc_page(&mut self, pid: PID) -> Result<usize, PageError> {
+    pub fn alloc_page(&mut self, pid: Pid) -> Result<usize, PageError> {
         let index = self.alloc_frame(pid)?;
         if self.charge_frame(pid).is_err() {
             self.allocations[index] = None;
@@ -239,12 +239,12 @@ impl MemoryManager {
     /// Allocate a page for a process's saved thread contexts (`ProcessImpl`), charged to the
     /// budget the process runs in like any other frame it owns (answer 127: the kernel
     /// charges what a process really costs instead of holding it back from `root` at boot).
-    pub fn alloc_context_page(&mut self, pid: PID) -> Result<usize, PageError> {
+    pub fn alloc_context_page(&mut self, pid: Pid) -> Result<usize, PageError> {
         self.alloc_page(pid)
     }
 
     /// Take a free frame for `owner`; its index in the ownership table.
-    fn alloc_frame(&mut self, owner: PID) -> Result<usize, PageError> {
+    fn alloc_frame(&mut self, owner: Pid) -> Result<usize, PageError> {
         // First fit. (The previous next-fit search computed its starting point with `max`
         // where `min` was meant, so it always scanned from the start anyway.)
         let index =
@@ -257,7 +257,7 @@ impl MemoryManager {
     /// tree counts what the kernel keeps.
     #[cfg(feature = "sched-trace")]
     pub fn kernel_frame(&mut self) -> Result<usize, PageError> {
-        let index = self.alloc_frame(crate::services::KERNEL_PID)?;
+        let index = self.alloc_frame(redoubt_layout::KERNEL_PID)?;
         Ok(self.ram_start + index * PAGE_SIZE)
     }
 
@@ -300,7 +300,7 @@ impl MemoryManager {
     /// `npages` contiguous free RAM frames, claimed for `owner` and zeroed through the physmap
     /// (R11: before any process can see them); the physical address of the first. Not charged:
     /// `dma_new_run`, the only caller, charges the run's budget itself (`dma.rs`).
-    pub fn alloc_contiguous(&mut self, owner: PID, npages: usize) -> Result<usize, redoubt_sys::Error> {
+    pub fn alloc_contiguous(&mut self, owner: Pid, npages: usize) -> Result<usize, redoubt_sys::Error> {
         // First fit over the ownership table, as `alloc_frame` is, with a run to fill.
         let mut run = 0;
         let start = self
@@ -321,7 +321,7 @@ impl MemoryManager {
     }
 
     /// Give back `npages` frames from `phys` that `alloc_contiguous` claimed for `owner`.
-    pub fn free_contiguous(&mut self, owner: PID, phys: usize, npages: usize) {
+    pub fn free_contiguous(&mut self, owner: Pid, phys: usize, npages: usize) {
         let start = (phys - self.ram_start) / PAGE_SIZE;
         for entry in &mut self.allocations[start..start + npages] {
             assert!(*entry == Some(owner), "I1: a contiguous run changed owner");
@@ -336,7 +336,7 @@ impl MemoryManager {
     }
 
     /// RAM frames owned by `pid` in the ownership table.
-    pub fn ram_frames_owned_by(&self, pid: PID) -> usize {
+    pub fn ram_frames_owned_by(&self, pid: Pid) -> usize {
         self.allocations.iter().filter(|owner| **owner == Some(pid)).count()
     }
 
@@ -471,7 +471,7 @@ impl MemoryManager {
         phys_ptr: *mut u8,
         virt_ptr: *mut u8,
         size: usize,
-        pid: PID,
+        pid: Pid,
         flags: MemFlags,
         kind: MemoryType,
     ) -> Result<(), PageError> {
@@ -512,12 +512,12 @@ impl MemoryManager {
     /// A frame changes hands between two processes that are not the running one: a transfer
     /// (R4) or an abandoned lend (R3). The budgets follow the frame, as they do for every other
     /// ownership change.
-    pub fn move_frame(&mut self, phys: usize, from: PID, to: PID) -> Result<(), PageError> {
+    pub fn move_frame(&mut self, phys: usize, from: Pid, to: Pid) -> Result<(), PageError> {
         self.claim_release_move(phys as *mut usize, to, ClaimReleaseMove::Move(from))
     }
 
     /// Free a frame `pid` owns (an abandoned lend the server replied to, R3).
-    pub fn free_frame_of(&mut self, phys: usize, pid: PID) -> Result<(), PageError> {
+    pub fn free_frame_of(&mut self, phys: usize, pid: Pid) -> Result<(), PageError> {
         self.release_page(phys as *mut usize, pid)
     }
 
@@ -537,7 +537,7 @@ impl MemoryManager {
     /// credited to its lender, not to `pid`, so it fails this check; checked any later, the
     /// mismatch would surface only after the page tables had changed, too late to back out. The
     /// pages must already be backed (`ensure_range_exists`), so each has a frame to check.
-    pub fn check_owned_range(&self, pid: PID, address: usize, len: usize) -> Result<(), PageError> {
+    pub fn check_owned_range(&self, pid: Pid, address: usize, len: usize) -> Result<(), PageError> {
         let end = address.checked_add(len).ok_or(PageError::Unmapped)?;
         for page in (address..end).step_by(PAGE_SIZE) {
             let phys = crate::arch::mem::virt_to_phys(page)?;
@@ -556,14 +556,14 @@ impl MemoryManager {
     fn claim_release_move(
         &mut self,
         addr: *mut usize,
-        pid: PID,
+        pid: Pid,
         action: ClaimReleaseMove,
     ) -> Result<(), PageError> {
         /// Modify the memory tracking table to note which process owns
         /// the specified address.
         fn action_inner(
-            owner_addr: &mut Option<PID>,
-            pid: PID,
+            owner_addr: &mut Option<Pid>,
+            pid: Pid,
             action: ClaimReleaseMove,
             allow_alias: bool,
             addr: usize,
@@ -683,12 +683,12 @@ impl MemoryManager {
     }
 
     /// Mark a given address as being owned by the specified process ID
-    fn claim_page(&mut self, addr: *mut usize, pid: PID) -> Result<(), PageError> {
+    fn claim_page(&mut self, addr: *mut usize, pid: Pid) -> Result<(), PageError> {
         self.claim_release_move(addr, pid, ClaimReleaseMove::Claim)
     }
 
     /// Mark a given address as no longer being owned by the specified process ID
-    fn release_page(&mut self, addr: *mut usize, pid: PID) -> Result<(), PageError> {
+    fn release_page(&mut self, addr: *mut usize, pid: Pid) -> Result<(), PageError> {
         self.claim_release_move(addr, pid, ClaimReleaseMove::Release)
     }
 
@@ -723,9 +723,9 @@ impl MemoryManager {
     /// # Safety
     /// Only sound as the final step of destroying `pid`: after this, frames it owned may
     /// be handed to other processes, so `pid` must never run again.
-    pub unsafe fn release_all_memory_for_process(&mut self, pid: PID, space: &MemoryMapping) {
+    pub unsafe fn release_all_memory_for_process(&mut self, pid: Pid, space: &MemoryMapping) {
         {
-            let kernel = PID::new(1).unwrap();
+            let kernel = Pid::new(1).unwrap();
 
             // Pass 1: a frame this process has lent out is still mapped in the borrower.
             // Reparent it to the kernel so the frame is not reused while the borrower holds
@@ -755,7 +755,7 @@ impl MemoryManager {
     /// Give back every frame still owned by a process that will never run again. Its protected
     /// lends must already have moved away, or it must never have run (`process_create` rollback).
     /// This shared final step needs no page-table access, including for a partially built space.
-    pub fn release_owned_frames(&mut self, pid: PID) {
+    pub fn release_owned_frames(&mut self, pid: Pid) {
         for idx in 0..self.allocations.len() {
             if self.allocations[idx] == Some(pid) {
                 self.allocations[idx] = None;
@@ -780,7 +780,7 @@ impl MemoryManager {
             for phys in (self.ram_start..self.ram_start + self.ram_size).step_by(PAGE_SIZE) {
                 let mut owner = None;
                 for pid in 1..crate::services::MAX_PROCESS_COUNT {
-                    let pid = PID::new(pid as u8).unwrap();
+                    let pid = Pid::new(pid as u8).unwrap();
                     let Ok(process) = system_services.get_process(pid) else {
                         continue;
                     };
@@ -886,7 +886,7 @@ impl MemoryManager {
     /// address the kernel chooses.
     pub fn map_anon(
         &mut self,
-        pid: PID,
+        pid: Pid,
         len: usize,
         flags: redoubt_sys::MemFlags,
     ) -> Result<usize, redoubt_sys::Error> {
@@ -910,7 +910,7 @@ impl MemoryManager {
     /// nothing is left mapped, and a run the caller passed in stays the caller's to free.
     pub fn map_run(
         &mut self,
-        pid: PID,
+        pid: Pid,
         npages: usize,
         flags: MemFlags,
         phys: Option<usize>,
@@ -944,7 +944,7 @@ impl MemoryManager {
     }
 
     /// Give back what a failed `map_run` had already mapped, and the pages it had allocated.
-    fn undo_run(&mut self, pid: PID, at: usize, done: usize, ours: bool) -> redoubt_sys::Error {
+    fn undo_run(&mut self, pid: Pid, at: usize, done: usize, ours: bool) -> redoubt_sys::Error {
         for offset in (0..done).step_by(PAGE_SIZE) {
             if let Ok(frame) = crate::arch::mem::unmap_page_inner(self, at + offset) {
                 if ours {
@@ -961,7 +961,7 @@ impl MemoryManager {
     /// MMIO page-ownership table is left alone, as `map_device` left it alone (the handle, not
     /// a page owner, is the authority there). A `dma_alloc` frame only loses its mapping too: it
     /// stays held, and charged, until the process ends (WP-K5b, OD2).
-    pub fn unmap(&mut self, pid: PID, addr: usize, len: usize) -> Result<(), redoubt_sys::Error> {
+    pub fn unmap(&mut self, pid: Pid, addr: usize, len: usize) -> Result<(), redoubt_sys::Error> {
         let end = Self::user_range(addr, len)?;
         for page in (addr..end).step_by(PAGE_SIZE) {
             self.owned_mapping(pid, page)?;
@@ -979,7 +979,7 @@ impl MemoryManager {
     /// permissions asked for. W+X cannot be decoded and `Pte::leaf` refuses it again.
     pub fn set_flags(
         &mut self,
-        pid: PID,
+        pid: Pid,
         addr: usize,
         len: usize,
         flags: redoubt_sys::MemFlags,
@@ -1011,7 +1011,7 @@ impl MemoryManager {
     /// anything mapped or charged.
     pub fn map_fixed(
         &mut self,
-        pid: PID,
+        pid: Pid,
         addr: usize,
         len: usize,
         flags: redoubt_sys::MemFlags,
@@ -1065,7 +1065,7 @@ impl MemoryManager {
     /// The frame behind `page`, which must be a live user mapping of the caller that is not
     /// lent out and, if it is RAM, is credited to the caller (a lend the caller is holding is
     /// its lender's, not its own) or is a `dma_alloc` frame of a run the caller holds.
-    pub(crate) fn owned_mapping(&self, pid: PID, page: usize) -> Result<usize, redoubt_sys::Error> {
+    pub(crate) fn owned_mapping(&self, pid: Pid, page: usize) -> Result<usize, redoubt_sys::Error> {
         let bad = redoubt_sys::Error::InvalidArgument;
         let phys = crate::arch::mem::user_mapping(page).ok_or(bad)?;
         let ram = self.is_main_memory(phys as *mut u8);

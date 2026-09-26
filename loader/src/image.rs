@@ -10,6 +10,7 @@ use elf::ElfBytes;
 
 use crate::alloc::PageAllocator;
 use crate::paging::{AddressSpace, Pte};
+use redoubt_layout::Pid;
 use redoubt_sys::PAGE_SIZE;
 
 /// Map every `PT_LOAD` segment of `image` into `space` and return the entry point.
@@ -20,7 +21,7 @@ use redoubt_sys::PAGE_SIZE;
 pub fn load_elf(
     alloc: &mut PageAllocator,
     space: &AddressSpace,
-    pid: u8,
+    pid: Pid,
     image: &[u8],
     allowed: core::ops::Range<usize>,
     user: bool,

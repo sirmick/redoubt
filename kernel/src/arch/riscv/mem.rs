@@ -15,8 +15,7 @@
 //! currently active address space.
 
 use ::riscv::register::satp;
-use redoubt_abi::arch::{KERNEL_AREA, PROCESS_AREA, THREAD_CONTEXT_AREA, physmap_virt};
-use redoubt_abi::PID;
+use redoubt_layout::{KERNEL_AREA, PROCESS_AREA, Pid, physmap_virt};
 use redoubt_sys::{MemFlags, PAGE_SIZE, USER_AREA_END};
 
 use super::mmu_flags::translate_flags;
@@ -57,7 +56,7 @@ const ROOT_PROCESS_AREA: usize = physmap::vpn(PROCESS_AREA, physmap::LEVELS - 1)
 pub fn pid_from_satp(satp: usize) -> usize { physmap::satp_pid(satp) }
 
 #[allow(dead_code)] // `allocate`
-fn make_satp(pid: PID, root_phys: usize) -> usize { physmap::make_satp(pid.get() as usize, root_phys) }
+fn make_satp(pid: Pid, root_phys: usize) -> usize { physmap::make_satp(pid.get() as usize, root_phys) }
 
 /// The root table of the address space that `satp` names.
 fn root_of(satp: usize) -> Table {
@@ -76,7 +75,7 @@ fn current_root() -> Table { root_of(satp::read().bits()) }
 fn walk(
     root: Table,
     virt: usize,
-    mut alloc: Option<(&mut MemoryManager, PID)>,
+    mut alloc: Option<(&mut MemoryManager, Pid)>,
 ) -> Result<Slot, PageError> {
     if !physmap::is_canonical(virt) {
         return Err(PageError::NonCanonical);
@@ -104,7 +103,7 @@ fn walk(
 fn map_page_in(
     root: Table,
     mm: &mut MemoryManager,
-    pid: PID,
+    pid: Pid,
     phys: usize,
     virt: usize,
     flags: PteFlags,
@@ -161,7 +160,7 @@ pub fn tables_needed(space: &MemoryMapping, virt: usize, pages: usize) -> usize 
 pub fn prepare_map(
     mm: &mut MemoryManager,
     space: &MemoryMapping,
-    pid: PID,
+    pid: Pid,
     virt: usize,
 ) -> Result<(), PageError> {
     let slot = walk(root_of(space.satp), virt, Some((mm, pid)))?;
@@ -244,7 +243,7 @@ pub fn verify_kernel_wx() -> usize {
     executable
 }
 
-fn user_flag(pid: PID) -> PteFlags { if pid.get() != 1 { PteFlags::USER } else { PteFlags::NONE } }
+fn user_flag(pid: Pid) -> PteFlags { if pid.get() != 1 { PteFlags::USER } else { PteFlags::NONE } }
 
 #[derive(Copy, Clone, Default, PartialEq)]
 pub struct MemoryMapping {
@@ -273,11 +272,11 @@ impl MemoryMapping {
     /// Allocate a brand-new memory mapping. The new address space contains:
     ///
     ///     1. Every shared kernel root entry (physmap and kernel), copied from the current root.
-    ///     2. `ProcessImpl` pages at `THREAD_CONTEXT_AREA`, so the process can be run.
+    ///     2. `ProcessImpl` pages at `PROCESS_AREA`, so the process can be run.
     ///
     /// All pages, including the page tables themselves, are owned by `pid`, so they are
     /// released along with everything else when the process is destroyed.
-    pub fn allocate(&mut self, mm: &mut MemoryManager, pid: PID) -> Result<(), PageError> {
+    pub fn allocate(&mut self, mm: &mut MemoryManager, pid: Pid) -> Result<(), PageError> {
         if self.satp != 0 {
             return Err(PageError::InUse);
         }
@@ -296,7 +295,7 @@ impl MemoryMapping {
             let context_phys = mm.alloc_context_page(pid)?;
             // SAFETY: a freshly allocated frame, as above.
             unsafe { window().zero_frame(context_phys) };
-            let virt = THREAD_CONTEXT_AREA + page * PAGE_SIZE;
+            let virt = PROCESS_AREA + page * PAGE_SIZE;
             map_page_in(root, mm, pid, context_phys, virt, PteFlags::R | PteFlags::W)?;
         }
 
@@ -308,7 +307,7 @@ impl MemoryMapping {
     pub fn current() -> MemoryMapping { MemoryMapping { satp: satp::read().bits() } }
 
     /// Get the "PID" (actually, ASID) from the current mapping
-    pub fn get_pid(&self) -> Option<PID> { PID::new(pid_from_satp(self.satp) as _) }
+    pub fn get_pid(&self) -> Option<Pid> { Pid::new(pid_from_satp(self.satp) as _) }
 
     pub fn is_kernel(&self) -> bool { self.get_pid().map(|v| v.get() == 1).unwrap_or(false) }
 
@@ -416,7 +415,7 @@ pub const DEFAULT_MEMORY_MAPPING: MemoryMapping = MemoryMapping { satp: 0 };
 /// * NoFrame - Tried to allocate a new pagetable, but ran out of memory.
 pub fn map_page_inner(
     mm: &mut MemoryManager,
-    pid: PID,
+    pid: Pid,
     phys: usize,
     virt: usize,
     req_flags: MemFlags,
@@ -474,7 +473,7 @@ pub fn return_page_inner(
     _mm: &mut MemoryManager,
     src_space: &MemoryMapping,
     src_addr: *mut u8,
-    _dest_pid: PID,
+    _dest_pid: Pid,
     dest_space: &MemoryMapping,
     dest_addr: *mut u8,
 ) -> Result<usize, PageError> {
@@ -548,7 +547,7 @@ pub fn drop_lent(space: &MemoryMapping, virt: usize) -> Result<usize, PageError>
 /// buffer also gets the protected `S` marker; a send's transferred buffer does not.
 pub fn map_into(
     mm: &mut MemoryManager,
-    pid: PID,
+    pid: Pid,
     space: &MemoryMapping,
     phys: usize,
     virt: usize,
@@ -570,7 +569,7 @@ pub fn map_into(
 /// child, where the parent chooses the permissions and W^X is checked before we get here (R11).
 pub fn map_into_with(
     mm: &mut MemoryManager,
-    pid: PID,
+    pid: Pid,
     space: &MemoryMapping,
     phys: usize,
     virt: usize,

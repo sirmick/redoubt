@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use riscv::register::{satp, sie, sstatus};
-use redoubt_abi::PID;
+use redoubt_layout::Pid;
 
 mod asm;
 pub mod exception;
@@ -16,7 +16,7 @@ mod physmap;
 pub mod smp;
 pub mod syscall;
 
-pub fn current_pid() -> PID { PID::new(mem::pid_from_satp(satp::read().bits()) as _).unwrap() }
+pub fn current_pid() -> Pid { Pid::new(mem::pid_from_satp(satp::read().bits()) as _).unwrap() }
 
 pub fn init() {
     irq::init();

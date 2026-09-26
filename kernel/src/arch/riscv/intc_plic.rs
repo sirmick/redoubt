@@ -15,8 +15,8 @@ use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use plic::Plic;
 use riscv::register::sie;
-use redoubt_abi::arch::KERNEL_PLIC_BASE;
-use redoubt_abi::PID;
+use redoubt_layout::KERNEL_PLIC_BASE;
+use redoubt_layout::Pid;
 use redoubt_sys::MemFlags;
 
 use crate::mem::MemoryType;
@@ -50,14 +50,14 @@ pub fn init() {
     let size = crate::args::wide(arg.data, 2);
     CONTEXT.store(arg.data[4] as usize, Ordering::Relaxed);
     // The DMA register window (WP-K5b) follows the PLIC's mapping.
-    assert!(size <= redoubt_abi::arch::KERNEL_DMA_REGS - KERNEL_PLIC_BASE, "the PLIC runs into the DMA window");
+    assert!(size <= redoubt_layout::KERNEL_DMA_REGS - KERNEL_PLIC_BASE, "the PLIC runs into the DMA window");
 
     crate::mem::MemoryManager::with_mut(|mm| {
         mm.map_range(
             base as *mut u8,
             KERNEL_PLIC_BASE as *mut u8,
             size,
-            PID::new(1).unwrap(),
+            Pid::new(1).unwrap(),
             MemFlags::READ | MemFlags::WRITE,
             MemoryType::Default,
         )
