@@ -39,6 +39,8 @@
   - [gatewayd](servers/gatewayd.md)
   - [sshd](servers/sshd.md)
   - [consoled](servers/consoled.md)
+  - [Packages](servers/pkg.md)
+  - [The supervisor](servers/supervisor.md)
   - [The wire protocol]()
   - [init and the boot manifest]()
   - [The steward]()
