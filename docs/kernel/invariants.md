@@ -397,7 +397,7 @@ side 200 times.
 
 ### I14 (no call panics the kernel)
 
-Status: built · tested: bench:budget-syscall-attack, bench:syscall-attack, bench:redoubt-tight, host:redoubt-sys::malformed_calls_are_refused, fuzz:redoubt-sys/decode, host:redoubt-model::kernel_sequences
+Status: built · partly tested: two breaches are stated and not yet closed: under exhaustion the boot tree's uncharged page leaves the last allocation with no frame, and on a machine with more RAM than the physmap the first frame past it stops the kernel (Residual risks) · tested: bench:budget-syscall-attack, bench:syscall-attack, bench:redoubt-tight, host:redoubt-sys::malformed_calls_are_refused, fuzz:redoubt-sys/decode, host:redoubt-model::kernel_sequences
 
 No sequence of system calls, with any arguments, panics the kernel. A malformed value is an
 error, never a stop.
@@ -502,6 +502,11 @@ cases.
   behind I5 stop the kernel when they fail. A bug that breaks them halts the machine for every
   principal on the box, though it does not hand one process another's memory or objects. No
   argument reaches those checks (I14), but a kernel bug can.
+- **Two stated breaches of I14.** The boot tree promises one page more than there is, so when
+  every budget fills to its limit the last allocation finds no frame and the kernel stops
+  ([budgets](budgets.md#residual-risks)); and a machine with more RAM than the physmap boots, and
+  stops the first time a process's allocation reaches a frame past it
+  ([memory layout](memory-layout.md#residual-risks)).
 - **System-class servers are trusted with I7.** R1 does not check a flow into or out of a
   `system` budget, so a system server that hands a receive right across label sets, or mixes two
   label sets' data, breaks label separation and the kernel cannot see it
