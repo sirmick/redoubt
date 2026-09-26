@@ -72,7 +72,8 @@ session's namespace, walks the rest of it on that connection, and reads.
   per-file metadata is the file server's typed `set_attr` and `get_attr`, kept in littlefs
   attributes.
 - **An error is a Redoubt error first.** The file server refuses with its own reasons
-  (`not_found`, `refused`, `exists`, `not_dir`), and labels and budgets add theirs.
+  (`not_found`, `refused`, `exists`, `not_dir`, `removed` for a fid whose file was removed,
+  `too_large` for an attribute over its limit), and labels and budgets add theirs.
 
 | Operation | What happens |
 | --- | --- |
@@ -110,8 +111,7 @@ another's files. So what an operation costs depends on where its two ends are:
 | Operation | Within one volume | Across volumes |
 | --- | --- | --- |
 | copy (`File.cp`, `cp_r`, `cp`) | the file server's `copy_file`: no bytes cross into the VM | a read and write loop in the VM |
-| rename in one directory | a 9P `wstat` with the new name | (not possible: one directory is one volume) |
-| move between directories (`File.rename`, `mv`) | the file server's `rename` | a copy and a remove: not atomic |
+| rename or move (`File.rename`, `mv`) | the file server's `rename`, atomic, within one directory or between two | a copy and a remove in the VM: not atomic |
 | remove (`rm`, `rm_rf`) | a 9P `remove`, recursively for `rm_rf` | |
 | make a directory (`mkdir`, `mkdir_p`) | a 9P `create` with the directory bit | |
 
