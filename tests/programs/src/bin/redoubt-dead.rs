@@ -50,7 +50,7 @@ fn short_lived(_arg: usize) {
 
 /// A second server thread, for the `Refused` step: it receives, so that a message the budget
 /// cannot pay for is refused to its *sender* and this thread keeps waiting (R4).
-fn second_server(_arg: usize) -> ! {
+fn second_server(_arg: usize) {
     let mut logger = Logger::connect();
     loop {
         match rd::receive(Some(endpoint()), FOREVER, 0) {
@@ -105,7 +105,7 @@ pub extern "C" fn _start() -> ! {
     unsafe { core::ptr::write_volatile(&raw mut ENDPOINT, endpoint) };
 
     // --- R4b: the server thread goes while it holds the call ---------------------------------
-    redoubt_abi::create_thread_1(short_lived, 0).expect("the short-lived server");
+    rd::thread(short_lived, 0).expect("the short-lived server");
     let page = rd::page();
     rd::poke(page, 0xD00D);
     let reply = rd::call(endpoint, &rd::body([1, 0, 0, 0]), rd::pages(page, 1), FOREVER);
@@ -119,7 +119,7 @@ pub extern "C" fn _start() -> ! {
 
     // --- R4: a message the receiving budget cannot pay for -----------------------------------
     // The endpoint survived its server, and a new one receives on it (R4b).
-    redoubt_abi::create_thread_1(second_server, 0).expect("the second server");
+    rd::thread(second_server, 0).expect("the second server");
     test_programs::wait_ms(30);
     // A lend of `MAX_LEND_PAGES`, which the receiver must pay for while the call is open (R3),
     // with the budget it shares with this thread carved down below that.

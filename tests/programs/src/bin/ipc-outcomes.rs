@@ -126,7 +126,7 @@ pub extern "C" fn _start() -> ! {
     let mut logger = test_programs::logsrv::start();
     let endpoint = rd::endpoint_create().unwrap();
     ENDPOINT.store(endpoint as usize, Ordering::Release);
-    redoubt_abi::create_thread_1(server, 0).expect("server");
+    rd::thread(server, 0).expect("server");
     let page = rd::page();
 
     // Recognized call errors retain even malformed raw lend arguments, before decoding h.

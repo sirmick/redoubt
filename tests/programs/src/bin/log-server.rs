@@ -26,7 +26,7 @@ static ECHOING: AtomicBool = AtomicBool::new(false);
 /// A thread of its own, blocked in `receive` on the console's IRQ handle (R5). It echoes
 /// every byte the bench types, as the server's own line, which is the evidence the attack
 /// cases take their verdict from.
-extern "C" fn uart_irq(_: usize) -> ! {
+fn uart_irq(_: usize) {
     ECHOING.store(true, Ordering::Release);
     loop {
         match rd::receive(Some(rd::CONSOLE_IRQ), rd::FOREVER, 0) {
@@ -46,7 +46,7 @@ extern "C" fn uart_irq(_: usize) -> ! {
     }
 }
 
-extern "C" fn legacy(_: usize) -> ! { logsrv::serve_legacy() }
+fn legacy(_: usize) { logsrv::serve_legacy() }
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {

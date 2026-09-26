@@ -11,7 +11,7 @@ use test_programs::{Logger, log, rd};
 /// Runs on a second thread: gives the main thread time to lend the page and the holder
 /// time to receive it, then ends this process (including the main thread, which is by
 /// then blocked in the lend).
-extern "C" fn terminator(_arg: usize) -> ! {
+fn terminator(_arg: usize) {
     test_programs::wait_ms(50);
     rd::process_exit(0)
 }

@@ -463,14 +463,35 @@ pub fn thread_create(entry: usize, sp: usize, arg: usize) -> Result<u32, Error> 
     }
 }
 
-/// `thread_exit()`. Returns only if the kernel refused.
-/// A thread running `f(arg)` on a fresh stack of its own.
-pub fn thread(f: extern "C" fn(usize) -> !, arg: usize) -> Result<u32, Error> {
+/// A thread running `f(arg)` on a fresh stack of its own; when `f` returns, the thread exits.
+pub fn thread(f: fn(usize), arg: usize) -> Result<u32, Error> {
     const STACK: usize = 4 * PAGE_SIZE;
     let stack = map_anon(STACK, rw())?;
-    thread_create(f as usize, stack + STACK - 16, arg)
+    // `f` and `arg` wait at the top of the new stack, where `run` finds them.
+    let top = stack + STACK - 2 * core::mem::size_of::<usize>();
+    let frame = top as *mut usize;
+    // SAFETY: `frame` is the top two words of the stack this process has just mapped read-write.
+    unsafe {
+        frame.write(f as usize);
+        frame.add(1).write(arg);
+    }
+    thread_create(run as extern "C" fn(usize) -> ! as usize, top, top).inspect_err(|_| {
+        unmap(stack, STACK).ok();
+    })
 }
 
+/// A new thread's first code: `f(arg)` from its stack's top (`thread`), then `thread_exit`.
+extern "C" fn run(frame: usize) -> ! {
+    let frame = frame as *const usize;
+    // SAFETY: `thread` wrote a `fn(usize)` and its argument there before starting this thread,
+    // and nothing else writes them: the stack grows down from below them.
+    let (f, arg) = unsafe { (core::mem::transmute::<usize, fn(usize)>(frame.read()), frame.add(1).read()) };
+    f(arg);
+    thread_exit().ok();
+    crate::park()
+}
+
+/// `thread_exit()`. Returns only if the kernel refused.
 pub fn thread_exit() -> Result<(), Error> { redoubt_sys::syscall(&Call::ThreadExit).map(|_| ()) }
 
 /// `process_exit(code)`. Never returns on success.
