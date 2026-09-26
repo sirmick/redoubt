@@ -1,16 +1,16 @@
-//! Capabilities a server mints for its clients, once for every server (CAPABILITIES.md, "a
+//! Capabilities a server mints for its clients, once for every server (servers/init.md, "a
 //! launcher never passes its own connection to a child"): 9P's `new_connection`/`disconnect`
 //! and a typed server's `grant`/`release` are the same table with a different payload.
 //!
 //! - [`Minted::reserve`] then [`Minted::commit`] mint one: a badge from a counter starting at
-//!   [`FIRST_MINTED_BADGE`] that is never reused (answer 86), a random id (never a counter: CONTAINMENT.md),
-//!   and a handle minted from the message in hand, so it is stamped like the handle the request came through
-//!   and dies with it. Between the two the server has the last word (a file server's quota) before any handle
-//!   exists.
+//!   [`FIRST_MINTED_BADGE`] that is never reused (servers/serving.md R27), a random id (never a
+//!   counter: servers/serving.md), and a handle minted from the message in hand, so it is stamped
+//!   like the handle the request came through and dies with it. Between the two the server has
+//!   the last word (a file server's quota) before any handle exists.
 //! - [`Minted::disconnect`] frees the capability with `id` and everything minted under it, for the client
 //!   that received the id and nobody else: the same answer whether the id is somebody else's or nobody's.
 //! - A capability a client mints for itself counts in the share of the one it minted it through
-//!   ([`Minted::share`]), so minting more badges buys no bigger share (answer 117).
+//!   ([`Minted::share`]), so minting more badges buys no bigger share (servers/serving.md R26).
 //!
 //! Admission is the server's: it admits one [`super::Resource::State`] before reserving, gives it
 //! back if the mint fails, and gives it back for each entry [`Minted::disconnect`] hands it.
@@ -34,9 +34,10 @@ pub const FIRST_MINTED_BADGE: u64 = 1 << 63;
 /// 2^62 badges are left to count through afterwards.
 const SPAN: u64 = 1 << 62;
 
-/// Where a table's counter starts, from one word of the kernel's CSPRNG (answer 126): uniform
-/// over [`SPAN`] badges above [`FIRST_MINTED_BADGE`], so two incarnations of a server agree on
-/// a badge with probability 2^-62 per badge they hand out, and each still has 2^62 to give.
+/// Where a table's counter starts, from one word of the kernel's CSPRNG (servers/serving.md
+/// R27): uniform over [`SPAN`] badges above [`FIRST_MINTED_BADGE`], so two incarnations of a
+/// server agree on a badge with probability 2^-62 per badge they hand out, and each still has
+/// 2^62 to give.
 pub const fn first_badge(random: u64) -> u64 { FIRST_MINTED_BADGE | (random % SPAN) }
 
 /// The caller did not receive the id it named: the same answer whether the id is somebody
@@ -48,7 +49,7 @@ pub struct NotYours;
 /// system call.
 pub trait Minter {
     /// A handle to the endpoint the request came in on, with `badge`, stamped like the handle
-    /// the request came through (CAPABILITIES.md, minting keeps the stamp).
+    /// the request came through (kernel/objects.md R9).
     fn mint(&mut self, badge: NonZeroU64) -> Result<Handle, Error>;
     /// A random `u64`.
     fn random(&mut self) -> Result<u64, Error>;
@@ -122,7 +123,7 @@ impl Ticket {
 /// the one it was minted through, which [`Minted::disconnect`] relies on.
 pub struct Minted<T> {
     entries: Vec<Entry<T>>,
-    /// The next badge; only ever goes up, so a badge is never reused (answer 86).
+    /// The next badge; only ever goes up, so a badge is never reused (servers/serving.md R27).
     next_badge: u64,
     /// The badge [`Minted::commit`] made since [`Minted::answering`], so a server whose reply
     /// never reached its caller can undo it.
@@ -156,18 +157,19 @@ impl<T> Minted<T> {
     }
 
     /// The share `caller`'s requests count in: its badge, or, for a capability it minted for
-    /// itself, the share of the one it minted it through (answer 117), so minting more badges
-    /// buys no bigger share. A capability minted *for another client* is a share of its own,
-    /// which is what the steward does for a lease's agent.
+    /// itself, the share of the one it minted it through (servers/serving.md R26), so minting
+    /// more badges buys no bigger share. A capability minted *for another client* is a share of
+    /// its own, which is what the steward does for a lease's agent.
     ///
     /// **It cannot tell "for itself" from "for another" within account 0.** `AdmitKey` keys
-    /// account 0 by badge (CONTAINMENT.md, because the budget a system caller shares does not
+    /// account 0 by badge (servers/serving.md, because the budget a system caller shares does not
     /// travel), so a system caller minting for itself looks, through the new badge, like a
     /// different client: the fold stops and the chain opens a fresh bucket per link. A server
     /// whose clients can chain must say what stops one of them spending every bucket it has —
     /// `keyd` allows no chain at all (only a root badge may grant); the 9P skeleton cannot take
     /// that rule, because minting a connection for a child is how attenuation works there, so
-    /// for it this is an open hole, reported with WP-S1 rather than closed here.
+    /// for it this is an open hole, tracked in docs/todo/account0-share-chain.md rather than
+    /// closed here.
     pub fn share(&self, caller: &Caller) -> u64 {
         let client = AdmitKey::of(caller);
         let mut badge = caller.badge;
@@ -206,7 +208,7 @@ impl<T> Minted<T> {
         kernel: &mut impl Minter,
     ) -> Result<(Handle, u64, u64), MintError> {
         let Ticket { badge, id, requester, requester_share } = ticket;
-        // Never reused, whatever happens to this capability (answer 86).
+        // Never reused, whatever happens to this capability (servers/serving.md R27).
         self.next_badge = badge.get().wrapping_add(1);
         let handle = kernel.mint(badge).map_err(|_| MintError::Failed)?;
         self.minted_here = Some(badge.get());
@@ -348,9 +350,10 @@ mod tests {
         t.commit(ticket, value, k).unwrap()
     }
 
-    /// Answer 126: the first badge is drawn from the kernel's randomness, above 2^63, with room
-    /// left to count through. Two incarnations of a server therefore do not hand the same badge
-    /// to their first client, which is what a stale handle from before a restart would name.
+    /// servers/serving.md R27: the first badge is drawn from the kernel's randomness, above
+    /// 2^63, with room left to count through. Two incarnations of a server therefore do not hand
+    /// the same badge to their first client, which is what a stale handle from before a restart
+    /// would name.
     #[test]
     fn the_first_badge_is_random_and_leaves_room() {
         for random in [0, 1, u64::MAX, 0x9e37_79b9_7f4a_7c15, SPAN, SPAN - 1] {
@@ -394,8 +397,8 @@ mod tests {
     }
 
     /// A capability a client minted for itself counts in the share of the one it minted it
-    /// through, so minting more badges buys no bigger share (answer 117). One minted *for*
-    /// another client is a share of its own.
+    /// through, so minting more badges buys no bigger share (servers/serving.md R26). One minted
+    /// *for* another client is a share of its own.
     #[test]
     fn a_chain_a_client_minted_for_itself_folds_into_its_own_share() {
         let (mut t, mut k) = (Minted::<u32>::new(0), Fake::new());
@@ -406,7 +409,7 @@ mod tests {
         let share = t.share(&through);
         let (_, _, grandchild) = mint(&mut t, &mut k, &through, share, 0);
         assert_eq!(t.share(&Caller { badge: grandchild, ..alice }), alice.badge);
-        // Handed to somebody else, it is a share of its own (question 117).
+        // Handed to somebody else, it is a share of its own.
         let bob = Caller { badge: child, account: 2002, ..alice };
         assert_eq!(t.share(&bob), child);
     }

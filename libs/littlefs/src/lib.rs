@@ -3,7 +3,7 @@
 //! This implements the littlefs on-disk format, **version 2.1** (`SPEC.md` of
 //! littlefs-project/littlefs, vendored with `DESIGN.md` in `diff/c/`, checked against the C
 //! reference v2.11.3), for `fsd`: one filesystem server per volume
-//! (docs/NAMESPACES.md). Images this crate writes mount in the C reference and the
+//! (docs/servers/fsd.md). Images this crate writes mount in the C reference and the
 //! other way round; the C code runs only on the host, as a test oracle (`diff/`).
 //!
 //! # Shape
@@ -72,7 +72,7 @@
 //!   `tests/model.rs`, random operations against an in-memory model, with handles held open
 //!   and volumes run full; `tests/crash.rs`, power failure at every write of fixed and random
 //!   workloads (`MODEL_TRACE`, `MODEL_PEEK` and `MODEL_SEEDS` help debug the model test);
-//!   `tests/hostile.rs`, corrupted and noise images, and the review's images.
+//!   `tests/hostile.rs`, corrupted and noise images, and hand-built hostile ones.
 //! - `diff/` (its own workspace, outside the root one; needs a C compiler): the C reference
 //!   v2.11.3 as an oracle. `cargo test --release` there runs Rust-writes-C-reads and the
 //!   reverse, both taking turns on one image, and the reference with wear levelling on.

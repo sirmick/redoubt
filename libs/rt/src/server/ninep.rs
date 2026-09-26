@@ -1,4 +1,4 @@
-//! A 9P2000 server skeleton (NAMESPACES.md): it keeps the protocol state (connections, fids,
+//! A 9P2000 server skeleton (servers/serving.md): it keeps the protocol state (connections, fids,
 //! open modes, directory offsets) and applies every rule that does not depend on what the files
 //! are; a [`FileServer`] supplies the files. `src/bin/echo-server.rs` is the model server.
 //!
@@ -6,22 +6,24 @@
 //! ([`WORDS_9P`]) with the T-message at the start of its lend; the reply's words are all zero and
 //! the R-message is written at the start of the same lend. A 9P call with another word non-zero,
 //! or with no lend, is malformed: its reply is status 1 ([`MALFORMED`]), as for every typed
-//! protocol (answers 41 and 42), and nothing is written in the lend. Handles sent with a 9P call
+//! protocol (servers/wire.md), and nothing is written in the lend. Handles sent with a 9P call
 //! are closed unread. Any other word 0 is a typed opcode ([`NineServer::serve_with`]): the
 //! `ninep_common` operations every 9P server serves, or the server's own protocol.
 //!
-//! **Connections** (CAPABILITIES.md, one badge, one client). One badge is one client. A launcher
-//! never passes its own connection to a child: it asks for a fresh one with `new_connection`,
-//! which the skeleton serves ([`ninep_common`]):
-//! - `new_connection(root, quota)` mints a connection rooted at `root`, a path relative to the caller's own
-//!   root, cleaned so it never climbs above it, and walked with the same label checks as a `Twalk`. The new
-//!   badge comes from a counter starting at [`FIRST_MINTED_BADGE`] and is never reused (answer 86), so a
-//!   handle revoked in flight never reaches a later connection. The reply carries the handle and a random
-//!   64-bit connection id; the minted connection is charged to the requester's [`Resource::State`].
-//! - `disconnect(id)` frees that connection and every connection minted under it: their fids are clunked,
-//!   their admission released, and the file server told ([`FileServer::disconnected`]). Only the connection
-//!   that asked for the id (the same badge, account and label set) may name it (answer 69); anyone else, like
-//!   an id that does not exist, gets the same refusal.
+//! **Connections** (servers/wire.md, one connection per endpoint handle). One badge is one
+//! client. A launcher never passes its own connection to a child: it asks for a fresh one with
+//! `new_connection`, which the skeleton serves ([`ninep_common`]):
+//! - `new_connection(root, quota)` mints a connection rooted at `root`, a path relative to the
+//!   caller's own root, cleaned so it never climbs above it, and walked with the same label checks
+//!   as a `Twalk`. The new badge comes from a counter starting at [`FIRST_MINTED_BADGE`] and is
+//!   never reused (servers/serving.md R27), so a handle revoked in flight never reaches a later
+//!   connection. The reply carries the handle and a random 64-bit connection id; the minted
+//!   connection is charged to the requester's [`Resource::State`].
+//! - `disconnect(id)` frees that connection and every connection minted under it: their fids are
+//!   clunked, their admission released, and the file server told ([`FileServer::disconnected`]).
+//!   Only the connection that asked for the id (the same badge, account and label set) may name it
+//!   (servers/serving.md, "Minted connections"); anyone else, like an id that does not exist, gets
+//!   the same refusal.
 //! - Badges below [`FIRST_MINTED_BADGE`] are the server's own: whoever set the server up minted them, and
 //!   [`FileServer::attach`] says what each means. A badge at or above it that the skeleton has not minted, or
 //!   has disconnected, is no connection at all.
@@ -36,11 +38,10 @@
 //! gains nothing by minting more connections; a connection someone else minted for it (the
 //! steward, for a lease's agent) is a share of its own.
 //!
-//! **Byte quotas** (answer 85; NAMESPACES.md, Filesystem servers) are the file server's.
-//! As accepted in answer 118, the skeleton only carries `new_connection`'s `quota` to
-//! [`FileServer::minted`], which may refuse the grant, and tells the server when the connection
-//! goes ([`FileServer::disconnected`]). Only `fsd` meters bytes, and it knows what a file costs
-//! on its medium (WP-D2); the skeleton does not.
+//! **Byte quotas** (servers/fsd.md, "Quotas") are the file server's. The skeleton only carries
+//! `new_connection`'s `quota` to [`FileServer::minted`], which may refuse the grant, and tells the
+//! server when the connection goes ([`FileServer::disconnected`]). Only `fsd` meters bytes, and it
+//! knows what a file costs on its medium; the skeleton does not.
 //!
 //! **What the skeleton guarantees a [`FileServer`]**, whatever the client sends:
 //! - At most [`MAX_FIDS`] fids per connection, each charged to its client ([`Admission`],
@@ -55,10 +56,11 @@
 //!   directory read continues only from where the last one ended.
 //!
 //! **Labels** ([`check`], on every request, against [`FileServer::labels`] of the object named):
-//! - `Read` on the attach root; on the directory walked from, and on every node walked into (a qid is a read,
-//!   answer 52), for a `Twalk` and a `new_connection` alike; on the node for `Tstat`, `Tread` and opening for
-//!   reading; on every directory entry listed (entries the caller cannot read are left out).
-//! - `Write` (equal label sets, answer 51) on the node for `Twrite`, opening for writing, truncation
+//! - `Read` on the attach root; on the directory walked from, and on every node walked into (a qid
+//!   is a read, servers/serving.md R25), for a `Twalk` and a `new_connection` alike; on the node
+//!   for `Tstat`, `Tread` and opening for reading; on every directory entry listed (entries the
+//!   caller cannot read are left out).
+//! - `Write` (equal label sets, R25) on the node for `Twrite`, opening for writing, truncation
 //!   (`OTRUNC`) and `Tremove`, and on the directory for `Tcreate`.
 //!
 //! **Protocol corners.** `Tversion` is accepted at any time and clunks every fid of the
@@ -66,19 +68,20 @@
 //! is by capability). `Twstat` is refused. `Tflush` is answered at once: requests are handled one
 //! at a time, so none is ever in flight to flush.
 //!
-//! **Waiting** (WP-R4; CONTAINMENT.md: a server parks calls rather than blocking). A read whose
-//! answer is not there yet ([`FileServer::read`] returning [`Read::Wait`]), or a write that cannot
-//! be taken yet ([`FileServer::write_or_wait`] returning [`Write::Wait`], answer 174), is not answered:
-//! [`NineServer::serve_parking`] hands the request back with its T-message still in its lend, the
-//! server parks it ([`super::parked::Parked`], charged to the same buckets and shares through
-//! [`NineServer::admission_mut`]), and serves it again when it can be answered. Nothing of the
-//! request is kept in the skeleton meanwhile, so a `Tclunk` or `Tversion` while a read waits
+//! **Waiting** (servers/serving.md, "Parked calls": a server parks calls rather than blocking). A
+//! read whose answer is not there yet ([`FileServer::read`] returning [`Read::Wait`]), or a write
+//! that cannot be taken yet ([`FileServer::write_or_wait`] returning [`Write::Wait`]), is not
+//! answered: [`NineServer::serve_parking`] hands the request back with its T-message still in its
+//! lend, the server parks it ([`super::parked::Parked`], charged to the same buckets and shares
+//! through [`NineServer::admission_mut`]), and serves it again when it can be answered. Nothing of
+//! the request is kept in the skeleton meanwhile, so a `Tclunk` or `Tversion` while a read waits
 //! simply makes the second serving an `Rerror`.
 //!
 //! **Memory.** Every allocation a request makes fails cleanly with an `Rerror` ("out of memory")
 //! rather than killing the server. A server's budget needs headroom beyond its own use: lends
-//! whose callers died stay charged to it until it replies (R3), up to `MAX_OPEN_CALLS` ×
-//! `MAX_LEND_PAGES` pages (1024), and while that pushes it over its limit its allocations fail.
+//! whose callers died stay charged to it until it replies (kernel/ipc.md R3), up to
+//! `MAX_OPEN_CALLS` × `MAX_LEND_PAGES` pages (1024), and while that pushes it over its limit its
+//! allocations fail.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -111,14 +114,14 @@ pub const DMDIR: u32 = 0x8000_0000;
 use super::minted::NotYours;
 pub use super::minted::{FIRST_MINTED_BADGE, Minter, first_badge};
 
-/// The typed opcodes `ninep_common` owns on every 9P endpoint (answer 113). A
+/// The typed opcodes `ninep_common` owns on every 9P endpoint (servers/wire.md). A
 /// server's own protocol on the same endpoint uses opcodes above them; an opcode in this range
 /// that `ninep_common` does not define is malformed.
 pub const NINEP_COMMON_OPCODES: RangeInclusive<u64> = 1..=15;
 
 /// The status of a `disconnect` naming an id the caller did not
 /// receive, the same whether the id belongs to someone else or to nobody, so nothing is
-/// revealed: code 2, as accepted in answer 114 and the `ninep_common` error table.
+/// revealed: code 2, as in the `ninep_common` error table.
 pub const NOT_YOURS: u32 = 2;
 
 /// Open modes (intro(5)): the access in the low two bits, then flags.
@@ -198,7 +201,7 @@ pub enum Read {
     Wait,
 }
 
-/// What [`FileServer::write_or_wait`] did (answer 174: a write may wait as a read does).
+/// What [`FileServer::write_or_wait`] did (a write may wait as a read does).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Write {
     /// This many bytes of the data were written (at most its length).
@@ -409,14 +412,14 @@ impl<S: FileServer> NineServer<S> {
     /// all its connections, `limits.state` the connections it has minted; the limits must leave
     /// the open-call headroom ([`Admission::new`]) and should fit the server's budget
     /// ([`Limits::fits`]). `random` is one word of the kernel's CSPRNG, which is where the
-    /// minted badges start (answer 126: see [`super::minted`]); a server that cannot get one
-    /// must not start, because a predictable first badge is a hole across a restart.
+    /// minted badges start (servers/serving.md R27: see [`super::minted`]); a server that cannot
+    /// get one must not start, because a predictable first badge is a hole across a restart.
     pub fn new(fs: S, limits: Limits, random: u64) -> Result<NineServer<S>, Unsized> {
         Ok(NineServer::with_admission(fs, Admission::new(limits)?, random))
     }
 
     /// As [`NineServer::new`], with an [`Admission`] the server built itself: one with
-    /// per-badge overrides (`Admission::with_overrides`, answer 174).
+    /// per-badge overrides (`Admission::with_overrides`).
     pub fn with_admission(fs: S, admission: Admission, random: u64) -> NineServer<S> {
         NineServer {
             fs,
@@ -490,8 +493,8 @@ impl<S: FileServer> NineServer<S> {
         own: impl FnOnce(&mut Self, Request) -> Result<(), Error>,
     ) -> Result<Option<Request>, Error> {
         let (caller, words) = (request.caller, request.words);
-        // A missing handle (revoked on its way, R10) makes any request malformed (WIRE.md); the
-        // ones present are closed all the same.
+        // A missing handle (revoked on its way, R10) makes any request malformed
+        // (servers/wire.md); the ones present are closed all the same.
         let (handles, missing) = match super::typed::present(&request.handles) {
             Ok(handles) => (handles, false),
             Err(present) => (present, true),
@@ -531,7 +534,8 @@ impl<S: FileServer> NineServer<S> {
         let outcome = self.answer_common(&caller, &words, &handles, request.lend(), &mut kernel);
         let sent = finish(request, &outcome);
         // new_connection requires slot 0's capability. Discard or a missing required handle
-        // rolls back its provisional connection and admission charge (answer 168).
+        // rolls back its provisional connection and admission charge (servers/serving.md,
+        // "Replies and rollback").
         if let Some(badge) = self.minted.minted_here() {
             if !sent.as_ref().is_ok_and(|outcome| outcome.accepted(1)) {
                 self.forget(badge);
@@ -815,16 +819,16 @@ impl<S: FileServer> NineServer<S> {
 
     /// Mints a connection rooted at `root`, a node the **file server** chose rather than a path
     /// the caller walked: `ipd`'s typed `grant`, whose root carries a scope no wider than the
-    /// caller's (answer 174). It is minted exactly as `new_connection` mints one, in the same
-    /// table: admission first, then a badge above 2^63 and a random id, the file server's
+    /// caller's (servers/ipd.md R61). It is minted exactly as `new_connection` mints one, in the
+    /// same table: admission first, then a badge above 2^63 and a random id, the file server's
     /// [`FileServer::minted`] hook (with no quota), then the handle, so `disconnect` frees it like
     /// any other. Returns (handle, id, badge). The caller replies with the handle and, unless the
     /// reply was delivered with it installed, undoes the connection with [`NineServer::unmint`]
-    /// (answer 168). Deciding that `root` is no wider than the caller's own is the file server's,
-    /// and so is deciding that the caller may mint at all: unlike `new_connection`, this does not
-    /// attach the caller's own root or check its labels first, so the file server calls it only
-    /// for a caller it has authorised (`ipd` refuses labelled callers and checks the caller's
-    /// scope before it mints).
+    /// (servers/serving.md, "Replies and rollback"). Deciding that `root` is no wider than the
+    /// caller's own is the file server's, and so is deciding that the caller may mint at all:
+    /// unlike `new_connection`, this does not attach the caller's own root or check its labels
+    /// first, so the file server calls it only for a caller it has authorised (`ipd` refuses
+    /// labelled callers and checks the caller's scope before it mints).
     pub fn mint_rooted(
         &mut self,
         caller: &Caller,
@@ -841,7 +845,8 @@ impl<S: FileServer> NineServer<S> {
     }
 
     /// Undoes a connection [`NineServer::mint_rooted`] made, and everything under it: its reply
-    /// was not delivered, or the handle did not arrive (answer 168).
+    /// was not delivered, or the handle did not arrive (servers/serving.md, "Replies and
+    /// rollback").
     pub fn unmint(&mut self, badge: u64) { self.forget(badge) }
 
     /// The minting both `new_connection` and `mint_rooted` share, its admission taken.
@@ -1047,8 +1052,8 @@ impl<S: FileServer> NineServer<S> {
         Ok(())
     }
 
-    /// A node's qid reaches the caller only if the caller may read the node: answer 52, "a qid
-    /// is a read". The one place walks and attaches enforce it.
+    /// A node's qid reaches the caller only if the caller may read the node: servers/serving.md
+    /// R25, "metadata is a read of its node". The one place walks and attaches enforce it.
     fn may_read(&self, caller: &Caller, node: &S::Node) -> Result<(), NineError> {
         self.check_labels(caller, node, Access::Read)
     }

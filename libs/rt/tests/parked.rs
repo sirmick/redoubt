@@ -1,6 +1,6 @@
-//! Parked calls on the fake kernel (answers 81 and 82): a call held open is resumed under
-//! `serve`, an abandoned one is replied to at once, and one past its server-side deadline is
-//! answered with a timeout.
+//! Parked calls on the fake kernel (servers/serving.md, "Parked calls"): a call held open is
+//! resumed under `serve`, an abandoned one is replied to at once, and one past its server-side
+//! deadline is answered with a timeout.
 
 mod common;
 
@@ -17,8 +17,8 @@ const WAKE: u64 = 2;
 /// The status of a parked call past its deadline.
 const TIMED_OUT: u64 = 5;
 /// The longest a call stays parked (µs). Long enough that A's parked call cannot expire while B
-/// retries its wake-up, however loaded the machine (QA D3-code-review-3: at 200 ms it could,
-/// and B then retried for ever).
+/// retries its wake-up, however loaded the machine (at 200 ms it could, and B then retried for
+/// ever).
 const LONGEST: u64 = 2_000_000;
 
 /// A server that parks `WAIT` calls and answers one with 42 for each `WAKE`, until its endpoint
@@ -103,7 +103,7 @@ fn parked_calls_are_served_abandoned_and_expired() {
     waiter_done.store(true, std::sync::atomic::Ordering::Release);
     assert_eq!(waker.join().unwrap(), 1, "A's call was answered without B's wake-up (it expired)");
     assert_eq!(woken, 42);
-    // The server made A's call its current call before it answered it (answer 82).
+    // The server made A's call its current call before it answered it (kernel/processes.md R21).
     // (A's is the only call resumed so far; B's were answered as they came.)
     let log = f.log(server);
     let served = log.iter().position(|(call, _)| *call == "serve").expect("serve before resuming");
@@ -183,9 +183,9 @@ fn parking_is_admitted_per_bucket_and_share() {
     assert_eq!(server_thread.join().unwrap(), 1);
 }
 
-/// Answer 90's attack on a server that parks calls (the steward's shape): an agent floods its
-/// sponsor's bucket; the sponsor still parks its own calls, and ending the agent's lease is
-/// answered at once, ahead of admission, whatever the bucket holds.
+/// The attack on R26 (servers/serving.md) on a server that parks calls (the steward's shape): an
+/// agent floods its sponsor's bucket; the sponsor still parks its own calls, and ending the
+/// agent's lease is answered at once, ahead of admission, whatever the bucket holds.
 #[test]
 fn an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end() {
     const END_LEASE: u64 = 3;

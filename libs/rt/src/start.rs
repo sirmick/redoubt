@@ -2,12 +2,12 @@
 //! panic handler.
 //!
 //! The startup page's address arrives in the first argument register (`a0`): `process_start`'s
-//! argument (answer 40), passed on by the loader stub.
+//! argument (servers/init.md, "The startup block"), passed on by the loader stub.
 //!
 //! A panic exits through `process_exit` with [`exit::PANIC`]. If the process holds open calls
 //! then, the kernel counts it as a fault and blames the sender of the panicking thread's current
-//! call (answer 82: the call it took last, or the parked call it named with `serve`), so a crash
-//! on hostile input is blamed however the process died.
+//! call (kernel/processes.md R21: the call it took last, or the parked call it named with
+//! `serve`), so a crash on hostile input is blamed however the process died.
 
 use core::fmt::{self, Write};
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
@@ -89,7 +89,7 @@ fn startup_block(addr: usize) -> Result<Startup<'static>, crate::startup::Startu
         return Err(StartupError::BadLength);
     }
     // SAFETY: the loader stub passes the address of the startup page the parent mapped into
-    // this process (INIT.md, PACKAGES.md); it is one whole page (checked aligned above), stays
+    // this process (servers/init.md); it is one whole page (checked aligned above), stays
     // mapped for the life of the process, and nothing in this process writes it. A parent that
     // passes a bad address can only fault its own child, which it controls anyway.
     let bytes = unsafe { core::slice::from_raw_parts(addr as *const u8, MAX_BLOCK) };
@@ -116,17 +116,17 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 
 /// Sets the one function the panic handler runs before anything else, for a program that must
 /// put something right before it dies: `netd` resets its device so it stops writing into pages
-/// that are about to be freed (IO-ARCHITECTURE.md, `netd`; answer 174). It may be set once;
-/// `false` if one was already set. The hook must be short and bounded, must not allocate (the
-/// panic may be the heap's) and must not rely on anything but its own atomics: it runs on a
-/// thread that has just panicked. A panic inside it skips it and exits.
+/// that are about to be freed (servers/netd.md R57). It may be set once; `false` if one was
+/// already set. The hook must be short and bounded, must not allocate (the panic may be the
+/// heap's) and must not rely on anything but its own atomics: it runs on a thread that has just
+/// panicked. A panic inside it skips it and exits.
 pub fn set_panic_hook(hook: fn()) -> bool {
     PANIC_HOOK.compare_exchange(0, hook as usize, Ordering::AcqRel, Ordering::Acquire).is_ok()
 }
 
 /// Runs the panic hook, once per process. A later panic on another thread finds it already
 /// running and waits, bounded, for it to finish, so no thread reaches `process_exit` while the
-/// first is still stopping the device (QA D3-code-review-3). A panic inside the hook itself
+/// first is still stopping the device. A panic inside the hook itself
 /// finds it running too; its wait is the same bounded one, and then it exits.
 ///
 /// Crate-private on the machine: only the panic handler runs it, and any other call would spend

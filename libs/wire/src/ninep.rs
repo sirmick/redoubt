@@ -1,5 +1,5 @@
 //! Plain 9P2000 (no `.u`, no `.L`), as in Plan 9's intro(5), with `msize` fixed at 64 KiB
-//! (WIRE.md). A message travels in a lent buffer: `size[4] type[1] tag[2]` and the body.
+//! (servers/wire.md). A message travels in a lent buffer: `size[4] type[1] tag[2]` and the body.
 //!
 //! [`Message::decode`] returns borrowed views into the buffer; [`Message::encode`] writes
 //! into one. Decoding is strict: the size field must frame the message exactly, every
@@ -9,7 +9,7 @@
 //!
 //! What the codec does not judge: whether a walk name is `..` or contains `/`, whether a
 //! fid is in use, whether `version` is "9P2000". Those are protocol state and belong to the
-//! server (NAMESPACES.md: servers clean paths themselves).
+//! server (userland/sessions.md: servers clean paths themselves).
 
 use crate::codec::{Error, Reader, Writer};
 use crate::MSIZE;
