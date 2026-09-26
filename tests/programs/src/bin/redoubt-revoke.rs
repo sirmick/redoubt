@@ -20,7 +20,6 @@
 
 #![no_std]
 #![no_main]
-#![allow(unused_must_use)] // `expect!` returns what it checked, for the steps that use it
 
 use test_programs::rd::{self, Error, FOREVER, MessageKind, Received};
 use test_programs::{Logger, log};
@@ -60,7 +59,7 @@ fn code(result: Result<rd::ReceivedBody, Error>) -> usize {
 }
 
 /// A caller whose message stays queued: nothing receives on `SILENT`.
-fn queued_caller(_arg: usize) -> ! {
+fn queued_caller(_arg: usize) {
     let handle = get(&raw const STAMPED_SILENT);
     let result = rd::call(handle, &rd::body([1, 0, 0, 0]), None, FOREVER);
     put(&raw mut QUEUED_RESULT, code(result));
@@ -68,7 +67,7 @@ fn queued_caller(_arg: usize) -> ! {
 }
 
 /// A caller whose call a server takes and parks, so that revocation abandons it (R3).
-fn taken_caller(_arg: usize) -> ! {
+fn taken_caller(_arg: usize) {
     let handle = get(&raw const STAMPED_SERVED);
     let result = rd::call(handle, &rd::body([2, 0, 0, 0]), None, FOREVER);
     if let Ok(reply) = &result {
@@ -80,7 +79,7 @@ fn taken_caller(_arg: usize) -> ! {
 
 /// A sender whose message carries a handle that revocation will take away before anyone
 /// receives it.
-fn carrier(_arg: usize) -> ! {
+fn carrier(_arg: usize) {
     let silent = get(&raw const SILENT);
     let carried = get(&raw const CARRIED);
     rd::send(silent, &rd::body_with([3, 0, 0, 0], &[carried]), None, FOREVER).ok();
@@ -89,7 +88,7 @@ fn carrier(_arg: usize) -> ! {
 
 /// The server thread: it takes one call, parks it, and answers the abandoned-call notice that
 /// revocation produces, replying with a handle that must reach nobody.
-fn server(_arg: usize) -> ! {
+fn server(_arg: usize) {
     let mut logger = Logger::connect();
     let served = get(&raw const SERVED);
     loop {
@@ -137,7 +136,7 @@ macro_rules! expect {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let logger = Logger::connect();
+    let logger = test_programs::logsrv::start();
     let mut t = T { logger, failed: false };
     log!(t.logger, "[revoke] starting");
 
@@ -151,13 +150,13 @@ pub extern "C" fn _start() -> ! {
     // --- I3: a budget handle only narrows ----------------------------------------------------
     // An endpoint handle is stamped with its creator's budget, here `system`. Minting into
     // `root` (above it) or `users` (beside it) is refused; into a child of `system`, allowed.
-    expect!(t, rd::mint_from_handle(silent, 5, Some(rd::ROOT)).err(), Some(Error::NotPermitted));
-    expect!(t, rd::mint_from_handle(silent, 5, Some(rd::USERS)).err(), Some(Error::NotPermitted));
+    let _ = expect!(t, rd::mint_from_handle(silent, 5, Some(rd::ROOT)).err(), Some(Error::NotPermitted));
+    let _ = expect!(t, rd::mint_from_handle(silent, 5, Some(rd::USERS)).err(), Some(Error::NotPermitted));
     let stamped_silent = rd::mint_from_handle(silent, 5, Some(scope)).expect("mint into the scope");
     let stamped_served = rd::mint_from_handle(served, 6, Some(scope)).expect("mint into the scope");
     let carried = rd::mint_from_handle(silent, 7, Some(scope2)).expect("mint into the second scope");
     // A handle minted into a budget is a handle like any other while that budget lives.
-    expect!(t, rd::close(rd::mint_from_handle(silent, 8, Some(scope)).expect("mint")), Ok(()));
+    let _ = expect!(t, rd::close(rd::mint_from_handle(silent, 8, Some(scope)).expect("mint")), Ok(()));
 
     // SAFETY: written here, before any thread that reads them is created.
     unsafe {
@@ -167,10 +166,10 @@ pub extern "C" fn _start() -> ! {
         core::ptr::write_volatile(&raw mut STAMPED_SERVED, stamped_served);
         core::ptr::write_volatile(&raw mut CARRIED, carried);
     }
-    redoubt_abi::create_thread_1(server, 0).expect("the server thread");
-    redoubt_abi::create_thread_1(queued_caller, 0).expect("the queued caller");
-    redoubt_abi::create_thread_1(taken_caller, 0).expect("the taken caller");
-    redoubt_abi::create_thread_1(carrier, 0).expect("the carrier");
+    rd::thread(server, 0).expect("the server thread");
+    rd::thread(queued_caller, 0).expect("the queued caller");
+    rd::thread(taken_caller, 0).expect("the taken caller");
+    rd::thread(carrier, 0).expect("the carrier");
     // Let each of them reach its call; none of them can return until the destruction below.
     test_programs::wait_ms(100);
     // SAFETY: each slot has one writer, and this thread only reads.
@@ -180,10 +179,10 @@ pub extern "C" fn _start() -> ! {
             core::ptr::read_volatile(&raw const TAKEN_RESULT),
         )
     };
-    expect!(t, (queued, taken), (0, 0));
+    let _ = expect!(t, (queued, taken), (0, 0));
 
     // --- R10: destroying the stamp fails both messages with `Dead` ---------------------------
-    expect!(t, rd::destroy(scope), Ok(()));
+    let _ = expect!(t, rd::destroy(scope), Ok(()));
     test_programs::wait_ms(100);
     // SAFETY: as above.
     let (queued, taken, replied) = unsafe {
@@ -194,21 +193,21 @@ pub extern "C" fn _start() -> ! {
         )
     };
     let dead = 2 + Error::Dead as usize;
-    expect!(t, queued, dead);
-    expect!(t, taken, dead);
+    let _ = expect!(t, queued, dead);
+    let _ = expect!(t, taken, dead);
     // The server's reply to the abandoned call reached nobody, handles and all.
-    expect!(t, replied, 0);
+    let _ = expect!(t, replied, 0);
 
     // --- R10: a handle inside a queued message, revoked before anyone received it ------------
-    expect!(t, rd::destroy(scope2), Ok(()));
+    let _ = expect!(t, rd::destroy(scope2), Ok(()));
     match rd::receive(Some(silent), 1_000_000, 0) {
         Ok(Received::Message(m)) => {
             let slots = m.body.handles.as_slice();
             log!(t.logger, "[revoke] the carried handle arrived as {:?}", slots);
-            expect!(t, m.body.words[0], 3);
-            expect!(t, slots.len(), 1);
-            expect!(t, slots.first().copied().flatten().is_none(), true);
-            expect!(t, matches!(m.kind, MessageKind::Send { transfer: None }), true);
+            let _ = expect!(t, m.body.words[0], 3);
+            let _ = expect!(t, slots.len(), 1);
+            let _ = expect!(t, slots.first().copied().flatten().is_none(), true);
+            let _ = expect!(t, matches!(m.kind, MessageKind::Send { transfer: None }), true);
         }
         other => t.check(false, format_args!("the carrier's message: {:?}", other)),
     }

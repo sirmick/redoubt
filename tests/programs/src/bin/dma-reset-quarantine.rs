@@ -150,7 +150,7 @@ pub extern "C" fn _start() -> ! {
     // which matters only if it dies, and it never does before the power-off.
     let mut slots = [0u32; MAX_SLOTS];
     let mut count = 0;
-    for h in rd::OTHER_DEVICES..rd::first_free() {
+    for h in rd::OTHER_DEVICES..rd::log_rx() {
         let Ok((at, len)) = rd::map_device(h) else { continue };
         // SAFETY: `at` maps `len` bytes of this device's registers; its first word is the magic.
         let magic = unsafe { (at as *const u32).read_volatile() };

@@ -10,7 +10,3 @@ programs = ["log-server", "ipc-client", "sleeper"]
 smp = [1, 2]
 expect = ["IPC TEST PASSED", '\[sleeper\] ok: 50 sleeps returned Timeout, none early']
 forbid = ['\[sleeper\] FAIL']
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]

@@ -3,6 +3,5 @@
 
 #[macro_use]
 mod macros;
-#[cfg(baremetal)]
-pub mod shell;
+pub mod console;
 

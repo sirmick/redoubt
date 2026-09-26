@@ -1,5 +1,2 @@
 [alias]
 testbench = "run --quiet --package testbench --"
-
-[build]
-rustflags = ["--cfg", "crossbeam_no_atomic_64"]

@@ -1,14 +1,9 @@
-//! Attack test for `MapMemory` (see the fix in `kernel/src/syscall.rs`).
-//!
-//! Two invariants a hostile process must not be able to break:
-//!   1. RAM handed out anonymously (`phys = 0`) is zeroed before the process sees it.
-//!   2. A process cannot map a physical RAM frame *by address*: that would let it point at another process's
-//!      freed page and read what was left there.
+//! Attack test: anonymous memory (`map_anon`) is zeroed before a process sees it.
 //!
 //! `mem-victim` has just freed pages holding its secret. This program takes twice as many
-//! anonymous pages, tries to map several physical addresses inside main RAM, and lends every
-//! page it gets to the victim. The victim, not this program, says whether any held data (README
-//! "Writing an attack case"); this program's own reports are progress only.
+//! anonymous pages and lends every one to the victim, untouched. The victim, not this program,
+//! says whether any held data (README "Writing an attack case"); this program's own reports are
+//! progress only. There is no call that maps RAM by physical address to try.
 //!
 //! What this shows is that every page handed out is zero when mapped. It does not show that
 //! the victim's freed frames were among them: this program chooses what to lend and the kernel
@@ -18,58 +13,32 @@
 #![no_std]
 #![no_main]
 
-use test_programs::{Logger, log, mem};
-use redoubt_abi::{CID, MemoryAddress, MemoryFlags, MemoryRange, Message};
+use test_programs::{Logger, log, mem, rd};
 
-/// Physical addresses inside QEMU `virt` main RAM (base 0x8000_0000, 256 MiB, on both
-/// widths). Mapping any of these by explicit address must be refused.
-const RAM_ADDRS: &[usize] = &[0x8000_0000, 0x8100_0000, 0x88ff_f000];
 /// Anonymous pages to take: twice what the victim freed.
 const PAGES: usize = 2 * mem::SECRET_PAGES;
-
-fn lend(victim: CID, page: MemoryRange) {
-    redoubt_abi::send_message(victim, Message::new_lend(mem::CHECK, page, None, None))
-        .expect("couldn't lend to the victim");
-}
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
-    let sid = redoubt_abi::SID::from_bytes(mem::VICTIM_ADDRESS).unwrap();
-    let victim = redoubt_abi::connect(sid).expect("couldn't connect to the victim");
-    let flags = MemoryFlags::R | MemoryFlags::W;
-
-    // (1) Anonymous RAM: every page goes to the victim to inspect.
+    // Slot 1: a send on the boot endpoint, whose receive right the victim holds.
     let mut lent = 0;
     for _ in 0..PAGES {
-        match redoubt_abi::map_memory(None, None, 4096, flags) {
+        match rd::map_anon(rd::PAGE_SIZE, rd::rw()) {
             Ok(page) => {
                 // Lend it untouched: the kernel backs anonymous pages on first use, and lending
                 // one it has never touched must be served, not a kernel panic (WP-K0,
                 // lend-untouched-page). The victim sees zeroes either way.
-                lend(victim, page);
+                let body = rd::body([mem::CHECK, 0, 0, 0]);
+                rd::call_waiting(rd::BOOT_ENDPOINT, &body, rd::pages(page, 1), rd::FOREVER)
+                    .expect("couldn't lend to the victim");
                 lent += 1;
             }
             Err(e) => log!(logger, "[mem-attack] anonymous map failed: {:?}", e),
         }
     }
     log!(logger, "[mem-attack] lent {} anonymous pages to the victim", lent);
-
-    // (2) Mapping physical RAM by address must be refused; anything mapped goes to the victim.
-    for &phys in RAM_ADDRS {
-        match redoubt_abi::map_memory(MemoryAddress::new(phys), None, 4096, flags) {
-            Err(redoubt_abi::Error::InvalidArgument) => {
-                log!(logger, "[mem-attack] {:#x}: refused (InvalidArgument)", phys);
-            }
-            Err(e) => log!(logger, "[mem-attack] {:#x}: refused with another error {:?}", phys, e),
-            Ok(page) => {
-                log!(logger, "[mem-attack] {:#x}: MAPPED, lending it to the victim", phys);
-                lend(victim, page);
-            }
-        }
-    }
-
-    redoubt_abi::send_message(victim, Message::new_blocking_scalar(mem::DONE, 0, 0, 0, 0))
+    rd::call_waiting(rd::BOOT_ENDPOINT, &rd::body([mem::DONE, 0, 0, 0]), None, rd::FOREVER)
         .expect("couldn't reach the victim");
     test_programs::park()
 }

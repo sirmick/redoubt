@@ -152,8 +152,8 @@ Outstanding follow-ups, none blocking:
   demand-reserved source pages. Only the caller's own budget changes, as with its other
   refusals; moving the flags check first would change error precedence, so decide with the
   Errors table.
-- `libs/abi`'s 44 undocumented unsafe uses remain legacy debt for K6, as does the legacy
-  `UpdateMemoryFlags` call (now refusing write-without-read too).
+- WP-K6 removed libs/abi (its 52 unsafe, 44 undocumented) and the old call interface; every
+  budget is now at max_undocumented = 0.
 
 ## Cross-cutting review records
 

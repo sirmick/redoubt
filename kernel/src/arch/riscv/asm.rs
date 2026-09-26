@@ -6,15 +6,15 @@
 //! Ported from the original `asm.S` to `global_asm!` so the build needs no C toolchain and
 //! no prebuilt blobs. The two widths differ only mechanically: a saved context is
 //! `32 x size_of::<usize>()` bytes (256 on rv64, 128 on rv32), so context N lives at
-//! `THREAD_CONTEXT_AREA + (N << CTX_SHIFT)`; the load/store width and the reservation-clear
+//! `PROCESS_AREA + (N << CTX_SHIFT)`; the load/store width and the reservation-clear
 //! instruction change with the register width. All of that is confined to the small,
 //! `cfg`-gated preamble below; the entry paths are shared. Addresses come from
-//! `redoubt_abi::arch` rather than being repeated as literals. There is no suspend/resume
+//! `redoubt_layout` rather than being repeated as literals. There is no suspend/resume
 //! entry path (Redoubt has no low-power suspend).
 
 use core::arch::global_asm;
 
-use redoubt_abi::arch::{EXCEPTION_STACK_TOP, THREAD_CONTEXT_AREA};
+use redoubt_layout::{PROCESS_AREA, TRAP_STACK_TOP};
 
 /// `log2(size of a saved context)`: contexts are indexed by `n << CTX_SHIFT`.
 const CTX_SHIFT: usize = (32 * core::mem::size_of::<usize>()).trailing_zeros() as usize;
@@ -228,7 +228,7 @@ flush_mmu:
     sfence.vma
     ret
 "#,
-    context_area = const THREAD_CONTEXT_AREA,
-    exception_sp = const EXCEPTION_STACK_TOP - 16,
+    context_area = const PROCESS_AREA,
+    exception_sp = const TRAP_STACK_TOP - 16,
     ctx_shift = const CTX_SHIFT,
 );

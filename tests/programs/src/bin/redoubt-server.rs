@@ -26,7 +26,7 @@ fn max_transfer() -> usize {
 
 /// A filler thread: one call this server will park, so that `MAX_OPEN_CALLS` can be reached
 /// (each blocked caller holds exactly one open call).
-fn filler(_arg: usize) -> ! {
+fn filler(_arg: usize) {
     // SAFETY: written by the main thread before any filler thread is created.
     let handle = unsafe { core::ptr::read_volatile(&raw const SELF_HANDLE) };
     rd::call_waiting(handle, &rd::body([op::KEEP, 0, 0, 0]), None, FOREVER).ok();
@@ -60,7 +60,7 @@ pub extern "C" fn _start() -> ! {
             // before creating the thread that reads it. A filler already running reads either
             // that value or the one it was created with, which are equal.
             unsafe { core::ptr::write_volatile(&raw mut SELF_HANDLE, self_handle(&mut logger)) };
-            if redoubt_abi::create_thread_1(filler, 0).is_ok() {
+            if rd::thread(filler, 0).is_ok() {
                 pending = true;
             } else {
                 log!(logger, "[server] out of threads with {} parked", nparked);

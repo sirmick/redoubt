@@ -4,7 +4,7 @@
 //! itself is the `paging` crate, which the loader uses too.
 
 pub use paging::*;
-use redoubt_abi::arch::{PHYSMAP_BASE, PHYSMAP_PHYS_BASE, PHYSMAP_SIZE};
+use redoubt_layout::{PHYSMAP_BASE, PHYSMAP_PHYS_BASE, PHYSMAP_SIZE};
 
 /// The kernel's view of physical memory.
 pub fn window() -> Window {

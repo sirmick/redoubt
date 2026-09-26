@@ -6,11 +6,12 @@
 #![no_main]
 
 use test_programs::rd;
-use test_programs::{Logger, log};
+use test_programs::log;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let mut logger = Logger::connect();
+    let mut logger = test_programs::logsrv::start();
+    test_programs::logsrv::start_serving();
     // Let the bystander start and block in its server before `system` goes.
     test_programs::wait_ms(20);
     log!(logger, "[destroyer] destroying system");

@@ -27,9 +27,6 @@ const LOAN_PROTECTION: usize = 8;
 fn protected_alias(addr: usize, endpoint: u32) {
     assert_eq!(rd::unmap(addr, rd::PAGE_SIZE), Err(Error::InvalidArgument), "loan alias unmap");
     assert_eq!(rd::set_flags(addr, rd::PAGE_SIZE, rd::MemFlags::READ), Err(Error::InvalidArgument));
-    // SAFETY: `addr` is the page-aligned one-page loan mapping supplied by the kernel.
-    let range = unsafe { redoubt_abi::MemoryRange::new(addr, rd::PAGE_SIZE) }.unwrap();
-    assert_eq!(redoubt_abi::unmap_memory(range), Err(redoubt_abi::Error::ShareViolation));
     let (out, _) = rd::call_outcome(endpoint, &rd::body([0; 4]), rd::pages(addr, 1), 0).unwrap();
     assert_eq!(out.status, Err(Error::InvalidArgument), "loan alias re-lend");
     assert_eq!(rd::send(endpoint, &rd::body([0; 4]), rd::pages(addr, 1), 0), Err(Error::InvalidArgument));
@@ -49,13 +46,7 @@ fn server(_: usize) {
             REMAP => {
                 let addr = m.body.words[1];
                 rd::unmap(addr, rd::PAGE_SIZE).unwrap();
-                redoubt_abi::map_memory(
-                    None,
-                    redoubt_abi::MemoryAddress::new(addr),
-                    rd::PAGE_SIZE,
-                    redoubt_abi::MemoryFlags::R | redoubt_abi::MemoryFlags::W,
-                )
-                .unwrap();
+                rd::map_fixed(addr, rd::PAGE_SIZE, rd::rw()).unwrap();
                 rd::poke(addr, 0xface);
                 rd::set_flags(addr, rd::PAGE_SIZE, rd::MemFlags::READ).unwrap();
             }
@@ -132,10 +123,10 @@ fn raw_call(endpoint: u32, record: usize, lend: Option<rd::Pages>) -> CallOutcom
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let mut logger = Logger::connect();
+    let mut logger = test_programs::logsrv::start();
     let endpoint = rd::endpoint_create().unwrap();
     ENDPOINT.store(endpoint as usize, Ordering::Release);
-    redoubt_abi::create_thread_1(server, 0).expect("server");
+    rd::thread(server, 0).expect("server");
     let page = rd::page();
 
     // Recognized call errors retain even malformed raw lend arguments, before decoding h.
@@ -155,8 +146,24 @@ pub extern "C" fn _start() -> ! {
             }
         );
     }
-    let (mmio, _) = rd::map_device(rd::CONSOLE_MMIO).unwrap();
+    let (mmio, len) = rd::map_device(rd::CONSOLE_MMIO).unwrap();
     assert_eq!(raw_call(endpoint, mmio, None).status, Err(Error::InvalidArgument));
+    // Nor are budget records: input and output records at `mmio` are refused with
+    // InvalidArgument (not a kernel fault, as rv32 once gave) before any nonzero handle is looked
+    // up. `mmio + len - 8` straddles the end of the mapping: its second slot lies past the
+    // mapping, so this row does not isolate the device check.
+    for record in [mmio, mmio + len - 8] {
+        for budget in [rd::SYSTEM, 999] {
+            for number in [rd::Number::BudgetCreate, rd::Number::BudgetUsage] {
+                let args = [rd::number(number), budget as usize, record, 0, 0, 0, 0, 0];
+                assert_eq!(
+                    rd::raw_error(rd::raw(args)),
+                    Some(Error::InvalidArgument),
+                    "MMIO-backed budget record"
+                );
+            }
+        }
+    }
     assert_eq!(TAKEN.load(Ordering::Acquire), 0, "invalid records were never delivered");
     rd::set_flags(page, rd::PAGE_SIZE, rd::rw()).unwrap();
     log!(logger, "IPC1 initial readonly/MMIO records refused before delivery");

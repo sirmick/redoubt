@@ -11,8 +11,9 @@ what comes next: `docs/` (start with its `README.md` and `STATUS.md`).
 | `tools/testbench/` | Host tool: builds, injects programs, boots QEMU, asserts on the console and over SSH |
 | `tests/`          | Test cases for the bench, one TOML file each (`data/`: files they read; `keys/`: SSH test keys) |
 
-The kernel is in `kernel/`, the boot loader (both widths) in `loader/`, the legacy
-`redoubt-abi` syscall ABI in `libs/abi/`, and the new `redoubt-sys` ABI in `libs/sys/`.
+The kernel is in `kernel/`, the boot loader (both widths) in `loader/`, the system-call ABI
+(`redoubt-sys`) in `libs/sys/`, and the kernel half of the address map that the loader and the
+kernel share (`redoubt-layout`) in `libs/layout/`.
 
 ## Running tests
 
@@ -74,6 +75,13 @@ coverage for a configuration the bench does not (or cannot yet) boot.
 what no boot can reach: a constant the loader and the bench share is right in the machine's eyes
 even when it is wrong, so the signing domain's bytes are pinned by a unit test instead
 (`host-tests.toml`).
+
+`kind = "no-cruft"` reads the sources and boots nothing (`no-cruft.toml`, `cruft.rs`). It fails on
+a line naming the interface WP-K6 removed (its `forbidden` patterns), on `allow(dead_code)` or
+`allow(unused...)` in the kernel, loader, layout, paging or test programs, on a Cargo feature no
+`cfg(feature)` reads, and on a second literal definition of `PAGE_SIZE` or `USER_AREA_END` or any
+`const PAGE` alias. Its `[[allow]]` entries (path, rule, reason) are the only exemptions, and an
+entry that no longer covers anything fails the case too.
 
 In-guest programs print through `log-server` (`test_programs::Logger`) and finish with
 `<NAME> TEST PASSED` or `<NAME> TEST FAILED`; attack programs end with `attempts done` instead
@@ -149,7 +157,7 @@ the always-forbidden list, and list what must not happen instead (`forbid = ['KM
 text to differ.
 
 A hostile program is an ordinary `programs` entry (a test-programs binary such as
-`grant-attack`, or `{ package, bin }` from any crate); how its case must judge it is below.
+`irq-attack`, or `{ package, bin }` from any crate); how its case must judge it is below.
 Hostile *data* for a program to use, such as a malformed ELF for a parent to launch, is a
 `[[file]]` entry (below), which takes the same sources, corrupted ones included.
 
@@ -173,14 +181,23 @@ The pattern:
 - **Give the verdict to a party the attacker does not control:**
   - the kernel or the loader refusing (`loader-rejects-*`, `kernel-wx`), with `KMAIN` or a
     later stage forbidden so no program ever ran;
-  - a victim that owns what is attacked and still has it afterwards (`grant-attack`,
-    `irq-attack`: log-server still hears UART input sent after every attempt; `mem-attack`,
+  - a victim that owns what is attacked and still has it afterwards (`irq-attack`:
+    log-server still hears UART input sent after every attempt; `mem-attack`,
     `uaf-lent-page`: the victim inspects the pages). What was refused stays the attacker's
     report, required as progress;
-  - `attack-checker`: a victim reports to it once its verdict is in (or, with no victim, the
-    attacker once it is done), through `test_programs::checker::done()`; it names the reporter
-    as the kernel reports it, and powers off. Such a case sets `poweroff = true`, so it also
-    needs that clean power-off: a forged console line alone cannot pass it.
+  - `log-server`'s `DONE`: a victim calls `test_programs::checker::done()` once its verdict is
+    in (or, with no victim, the attacker once it is done). log-server prints one
+    `[server] done:` line naming the caller by the badge the kernel gave its handle, and powers
+    off. Such a case sets `poweroff = true` and `reporter` to that program (rule F, below), so it
+    needs the clean power-off and the right reporter: a forged console line alone cannot pass it.
+
+**Rule F.** The bundle's first program owns the console: it holds the console's device handles,
+and every other program's text reaches the UART only relayed through it, each line prefixed
+with the sender's `[pid N]` or `[badge N]`. Only log-server prints `[server] done:`. A case with
+`reporter` passes only if exactly one line starts `[server] done:` and it names the reporter's
+PID; any other such line fails it, as does one in a case with no `reporter`
+(`bench-reporter-mismatch` checks the rule itself). A first program that powers off by itself
+therefore prints no such line.
 - **Make the attacker use what it gets**, so a breach shows where the attacker cannot hide or
   fake it (a raw line on a UART it should not own, a power-off, a victim that stops hearing).
 
@@ -198,9 +215,11 @@ from = { path = "tests/data/bundle-file.txt" }      # or any `programs` form, e.
                                                    # { corrupt = "rng-test", with = { truncate = 80 } }
 ```
 
-Entry names must all differ (and differ from `kernel` and `grants`). This is the planned path
+Entry names must all differ (and differ from `kernel`). The loader refuses a bundle entry named
+`grants` (`loader-rejects-grants`), and the bench refuses a `[[grant]]` table: a program reaches a
+device only through the handles it is given. A data entry is the planned path
 for a model trace to reach an in-guest replayer; the replayer compares results itself and prints
-a verdict line for `expect`/`forbid`. Today's loader starts every entry but `grants` as a process, so it refuses data
+a verdict line for `expect`/`forbid`. Today's loader starts every entry as a process, so it refuses data
 entries (`bench-bundle-file`). WP-R3 changes it to load only the kernel and `init`, after the
 R2 stub lets init launch the remaining programs. Init then receives the verified bundle and
 supplies the permitted public entries to `bootfsd` (INIT.md).

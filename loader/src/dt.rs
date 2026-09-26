@@ -208,13 +208,12 @@ impl Platform {
             // region that does not start on one is dropped here, loudly, so that the kernel's
             // boot checks stay a check against a hostile argument block rather than a limit on
             // which machines boot.
-            if base % crate::PAGE_SIZE != 0 {
+            if base % redoubt_sys::PAGE_SIZE != 0 {
                 crate::println!("  {} at {:#x} does not start on a page; skipped", name, base);
                 continue;
             }
             // An interrupt controller belongs to the kernel, so it is not offered as a device
-            // object; it stays in `MREx` (which the legacy claim path and the ownership table
-            // use) and the kernel maps the PLIC for itself.
+            // object; it stays in `MREx` (for the kernel's ownership table) and the kernel maps the PLIC for itself.
             let kernel_only = is_interrupt_controller(&node);
             let is_console = console == Some(name);
             // The interrupts a device raises. `#interrupt-cells` is 1 for the PLIC, which is

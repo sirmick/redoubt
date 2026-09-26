@@ -34,8 +34,7 @@ use redoubt_wire::proto::startup::Message;
 const MAX_PHNUM: usize = 64;
 
 /// The ELF class this build's stub accepts: `usize`-width segment addresses only fit this
-/// target's own class, and the stub links for one width at a time (`libs/abi`'s
-/// `target_pointer_width` split).
+/// target's own class, and the stub links for one width at a time.
 #[cfg(target_pointer_width = "32")]
 const ELF_CLASS: Class = Class::ELF32;
 #[cfg(target_pointer_width = "64")]
@@ -448,7 +447,7 @@ mod tests {
     #[test]
     fn plan_maps_a_well_formed_segment() {
         let code = [0x13, 0x00, 0x00, 0x00]; // a RISC-V nop, as ordinary file bytes
-        let image = elf64(0x1_0000, &[(PF_R | PF_X, 0x1_0000, &code, 4096)]);
+        let image = elf64(0x1_0000, &[(PF_R | PF_X, 0x1_0000, &code, PAGE_SIZE as u64)]);
         let mut mapped = Vec::new();
         let entry = plan::<()>(&image, 0x2000_0000, &[], |segment| {
             mapped.push((segment.first_page, segment.pages, segment.file_offset, segment.flags));
@@ -462,7 +461,7 @@ mod tests {
     #[test]
     fn plan_refuses_a_segment_reaching_outside_the_image() {
         // filesz claims more bytes than the image actually holds after this segment's offset.
-        let mut image = elf64(0x1_0000, &[(PF_R, 0x1_0000, &[1, 2, 3, 4], 4096)]);
+        let mut image = elf64(0x1_0000, &[(PF_R, 0x1_0000, &[1, 2, 3, 4], PAGE_SIZE as u64)]);
         // Corrupt p_filesz (at phoff + 32) to claim far more than the image holds.
         image[EHDR_LEN + 32..EHDR_LEN + 40].copy_from_slice(&(u32::MAX as u64).to_le_bytes());
         let result = plan::<()>(&image, 0x2000_0000, &[], |_| Ok(()));
@@ -472,7 +471,7 @@ mod tests {
     #[test]
     fn plan_refuses_a_segment_overlapping_an_excluded_range() {
         let code = [0u8; 4];
-        let image = elf64(0x1_0000, &[(PF_R | PF_X, 0x1_0000, &code, 4096)]);
+        let image = elf64(0x1_0000, &[(PF_R | PF_X, 0x1_0000, &code, PAGE_SIZE as u64)]);
         // The startup page, say, sits right where this segment would land.
         let exclude = [(0x1_0000, 0x1_1000)];
         let result = plan::<()>(&image, 0x2000_0000, &exclude, |_| Ok(()));
@@ -482,7 +481,7 @@ mod tests {
     #[test]
     fn plan_refuses_writable_and_executable() {
         let code = [0u8; 4];
-        let image = elf64(0x1_0000, &[(PF_W | PF_X, 0x1_0000, &code, 4096)]);
+        let image = elf64(0x1_0000, &[(PF_W | PF_X, 0x1_0000, &code, PAGE_SIZE as u64)]);
         let result = plan::<()>(&image, 0x2000_0000, &[], |_| Ok(()));
         assert_eq!(result, Err(Either::A(BadImage::BadFlags)));
     }
@@ -490,7 +489,7 @@ mod tests {
     #[test]
     fn plan_refuses_writable_without_readable() {
         let code = [0u8; 4];
-        let image = elf64(0x1_0000, &[(PF_W, 0x1_0000, &code, 4096)]);
+        let image = elf64(0x1_0000, &[(PF_W, 0x1_0000, &code, PAGE_SIZE as u64)]);
         let result = plan::<()>(&image, 0x2000_0000, &[], |_| Ok(()));
         assert_eq!(result, Err(Either::A(BadImage::BadFlags)));
     }
@@ -498,7 +497,7 @@ mod tests {
     #[test]
     fn plan_surfaces_the_callers_own_error() {
         let code = [0u8; 4];
-        let image = elf64(0x1_0000, &[(PF_R | PF_X, 0x1_0000, &code, 4096)]);
+        let image = elf64(0x1_0000, &[(PF_R | PF_X, 0x1_0000, &code, PAGE_SIZE as u64)]);
         let result = plan(&image, 0x2000_0000, &[], |_| Err(42));
         assert_eq!(result, Err(Either::B(42)));
     }
@@ -533,7 +532,7 @@ mod tests {
     #[test]
     fn plan_refuses_a_non_riscv_machine() {
         let code = [0u8; 4];
-        let mut image = elf64(0x1_0000, &[(PF_R | PF_X, 0x1_0000, &code, 4096)]);
+        let mut image = elf64(0x1_0000, &[(PF_R | PF_X, 0x1_0000, &code, PAGE_SIZE as u64)]);
         // e_machine sits right after e_ident (16) and e_type (2).
         image[18..20].copy_from_slice(&0u16.to_le_bytes()); // EM_NONE
         let result = plan::<()>(&image, 0x2000_0000, &[], |_| Ok(()));
@@ -544,7 +543,7 @@ mod tests {
     fn plan_refuses_an_entry_outside_any_executable_segment() {
         let code = [0u8; 4];
         // Readable only: e_entry names a byte inside it, but nothing here is executable.
-        let image = elf64(0x1_0000, &[(PF_R, 0x1_0000, &code, 4096)]);
+        let image = elf64(0x1_0000, &[(PF_R, 0x1_0000, &code, PAGE_SIZE as u64)]);
         let result = plan::<()>(&image, 0x2000_0000, &[], |_| Ok(()));
         assert_eq!(result, Err(Either::A(BadImage::EntryNotExecutable)));
     }
@@ -553,7 +552,7 @@ mod tests {
     fn plan_refuses_two_segments_that_overlap_each_other() {
         let code = [0u8; 4];
         // Neither overlaps `exclude`; they overlap each other instead.
-        let image = elf64(0x1_0000, &[(PF_R | PF_X, 0x1_0000, &code, 4096), (PF_R, 0x1_0000, &code, 4096)]);
+        let image = elf64(0x1_0000, &[(PF_R | PF_X, 0x1_0000, &code, PAGE_SIZE as u64), (PF_R, 0x1_0000, &code, PAGE_SIZE as u64)]);
         let result = plan::<()>(&image, 0x2000_0000, &[], |_| Ok(()));
         assert_eq!(result, Err(Either::A(BadImage::Overlaps)));
     }
@@ -561,7 +560,7 @@ mod tests {
     #[test]
     fn plan_refuses_a_misaligned_p_align() {
         let code = [0u8; 4];
-        let mut image = elf64(0x1_0000, &[(PF_R | PF_X, 0x1_0000, &code, 4096)]);
+        let mut image = elf64(0x1_0000, &[(PF_R | PF_X, 0x1_0000, &code, PAGE_SIZE as u64)]);
         // p_align is the phdr's last 8-byte field, right after the one program header (EHDR_LEN
         // + p_type + p_flags + p_offset + p_vaddr + p_paddr + p_filesz + p_memsz = 64 + 48).
         image[112..120].copy_from_slice(&3u64.to_le_bytes()); // not a power of two
@@ -573,7 +572,7 @@ mod tests {
     fn plan_refuses_more_than_max_phnum_segments() {
         let code = [0u8; 4];
         let segments: Vec<_> =
-            (0..MAX_PHNUM + 1).map(|_| (PF_R | PF_X, 0x1_0000, code.as_slice(), 4096)).collect();
+            (0..MAX_PHNUM + 1).map(|_| (PF_R | PF_X, 0x1_0000, code.as_slice(), PAGE_SIZE as u64)).collect();
         let image = elf64(0x1_0000, &segments);
         let result = plan::<()>(&image, 0x2000_0000, &[], |_| Ok(()));
         assert_eq!(result, Err(Either::A(BadImage::TooManySegments)));
@@ -583,7 +582,7 @@ mod tests {
     fn plan_refuses_a_segment_touching_page_zero() {
         let code = [0u8; 4];
         // vaddr 0: MEMORY-LAYOUT.md's link range starts at 0x1_0000, never page 0.
-        let image = elf64(0, &[(PF_R | PF_X, 0, &code, 4096)]);
+        let image = elf64(0, &[(PF_R | PF_X, 0, &code, PAGE_SIZE as u64)]);
         let result = plan::<()>(&image, 0x2000_0000, &[], |_| Ok(()));
         assert_eq!(result, Err(Either::A(BadImage::OutOfLinkRange)));
     }
@@ -601,7 +600,7 @@ mod tests {
     #[test]
     fn plan_refuses_a_non_exec_type() {
         let code = [0u8; 4];
-        let mut image = elf64(0x1_0000, &[(PF_R | PF_X, 0x1_0000, &code, 4096)]);
+        let mut image = elf64(0x1_0000, &[(PF_R | PF_X, 0x1_0000, &code, PAGE_SIZE as u64)]);
         image[16..18].copy_from_slice(&3u16.to_le_bytes()); // ET_DYN, not ET_EXEC
         let result = plan::<()>(&image, 0x2000_0000, &[], |_| Ok(()));
         assert_eq!(result, Err(Either::A(BadImage::WrongType)));

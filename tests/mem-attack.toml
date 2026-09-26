@@ -1,30 +1,23 @@
-description = "A process cannot map physical RAM by address, and every anonymous page it is given is zero (freed-frame reuse: WP-K1/K2)"
+description = "Every anonymous page a process is given is zero (freed-frame reuse: WP-K1/K2)"
 # Coverage: this shows that every page the attacker gets is zero when mapped. It does not show
 # that the victim's freed frames were among them: the attacker chooses what to lend and the
 # kernel which frames to hand out. Reuse of freed frames needs the kernel's knowledge of
 # physical addresses (the model's invariant I9; kernel cases come with WP-K1/K2).
 arch = ["rv64", "rv32"]
 kind = "boot"
-# PID 3 mem-victim frees pages holding its secret and judges; PID 4 mem-attack lends it every
-# page it can get, anonymous or mapped by physical address; PID 5 attack-checker ends the case.
-programs = ["log-server", "mem-victim", "mem-attack", "attack-checker"]
+# PID 3 mem-victim frees pages holding its secret and judges, on the boot endpoint's receive
+# right; PID 4 mem-attack lends it every anonymous page it can get.
+programs = ["log-server", "mem-victim", "mem-attack"]
 expect = [
     '^\[pid 3\] \[mem-victim\] left the secret in 64 freed pages$',
     # Progress, the attacker's report.
     '^\[pid 4\] \[mem-attack\] lent 128 anonymous pages to the victim$',
     # The verdict, the victim's. Unforgeable: log-server prefixes it with the victim's
-    # kernel-reported PID 3, and the checker powers off only when PID 3 reports.
+    # kernel-reported PID 3, and log-server powers off only when PID 3 reports DONE.
     '^\[pid 3\] \[mem-victim\] checked 128 pages from PID 4: all zero$',
-    '^\[pid 5\] \[checker\] PID 3 reported; the kernel still serves',
+    '^\[server\] done: reported by pid 3; still serving$',
 ]
-# A page with data (the victim's report), or a mapping by physical address (the attacker's).
-forbid = ['BREACH', 'MAPPED', 'another error']
+# A page with data (the victim's report).
+forbid = ['BREACH']
 poweroff = true
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]
-
-[[grant]]
-program = "attack-checker"
-mmio = ["0x100000:0x1000"]
+reporter = "mem-victim"

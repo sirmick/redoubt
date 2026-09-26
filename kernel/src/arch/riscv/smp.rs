@@ -51,9 +51,10 @@ const STACK_WORDS: usize = 1024;
 /// 16-byte aligned, as the RISC-V psABI requires of `sp`. Only its address and size are used
 /// here; the secondary hart reaches the words themselves through `sp`.
 #[repr(align(16))]
-#[allow(dead_code)]
-struct Stack([usize; STACK_WORDS]);
-static mut SECONDARY_STACK: Stack = Stack([0; STACK_WORDS]);
+struct Stack {
+    _words: [usize; STACK_WORDS],
+}
+static mut SECONDARY_STACK: Stack = Stack { _words: [0; STACK_WORDS] };
 
 #[cfg(target_arch = "riscv64")]
 core::arch::global_asm!(
@@ -114,12 +115,8 @@ extern "C" fn secondary_main(_hartid: usize) -> ! {
     SECONDARY_DONE.store(true, Ordering::Release);
     // Nothing further for it to do: park. (Real SMP would enter the scheduler here.)
     loop {
-        // SAFETY: `wfi` has no memory effect. (`unsafe` on the vendored rv32 riscv crate,
-        // a safe no-op wrapper on the rv64 one.)
-        #[allow(unused_unsafe)]
-        unsafe {
-            riscv::asm::wfi()
-        };
+        // SAFETY: `wfi` has no memory effect.
+        unsafe { core::arch::asm!("wfi", options(nomem, nostack)) };
     }
 }
 
@@ -138,7 +135,7 @@ pub fn run() {
 
     // `virt_to_phys` returns the page-aligned frame base, so add the page offset back to get
     // the exact physical address of the block and the trampoline entry.
-    const OFFSET: usize = redoubt_abi::arch::PAGE_SIZE - 1;
+    const OFFSET: usize = redoubt_sys::PAGE_SIZE - 1;
     let block_virt = BLOCK.0.get() as usize;
     let tramp_virt = _smp_secondary_start as *const () as usize;
     let block_phys = match crate::arch::mem::virt_to_phys(block_virt) {

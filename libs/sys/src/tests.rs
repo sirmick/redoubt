@@ -746,8 +746,8 @@ fn error_rows() {
 
 /// `map_fixed`'s kernel-side range check (`MemoryManager::user_range`, kernel/src/mem.rs) is
 /// `addr.checked_add(len)`, in whatever width `usize` is on the target -- genuinely 32 bits on
-/// rv32, where `kernel/src/mem.rs` isn't host-testable (it's `cfg(baremetal)`, and the kernel's
-/// hosted build doesn't build on this host at all). This mirrors that exact check with an
+/// rv32, where `kernel/src/mem.rs` isn't host-testable (the kernel builds only for its RISC-V
+/// targets). This mirrors that exact check with an
 /// explicit `u32`, so a 64-bit host can still exercise the rv32-width wraparound the real check
 /// relies on `checked_add` to refuse (answer 172's "rv32 wrap" attack case).
 ///
@@ -764,9 +764,9 @@ fn user_range_at_width(addr: u32, len: u32, page_size: u32, user_area_end: u32) 
 
 #[test]
 fn map_fixed_range_check_refuses_rv32_wraparound() {
-    // rv32's PAGE_SIZE and USER_AREA_END (redoubt_abi::arch, 32-bit layout).
-    let page_size = 4096u32;
-    let user_area_end = 0x8000_0000u32;
+    // rv32's PAGE_SIZE and USER_AREA_END.
+    let page_size = crate::PAGE_SIZE as u32;
+    let user_area_end = crate::rv32::USER_AREA_END as u32;
     // addr + len wraps past u32::MAX: an unchecked add would land well under
     // `user_area_end` and be wrongly accepted. `checked_add` must refuse it instead.
     let addr = 0xFFFF_F000u32;

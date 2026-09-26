@@ -7,23 +7,21 @@
 
 use core::fmt::Write;
 
-use test_programs::{Logger, Page, log, move_borrowed};
-use redoubt_abi::Message;
+use test_programs::{Logger, Page, log, move_borrowed, rd};
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
-    let sid = redoubt_abi::SID::from_bytes(move_borrowed::ADDRESS).unwrap();
-    let server = redoubt_abi::connect(sid).expect("couldn't connect to move-borrowed");
     let mut page = Page::new();
     page.write_str(move_borrowed::VICTIM_TEXT).ok();
-    let result = redoubt_abi::send_message(server, Message::new_lend(1, page.range, None, page.valid()));
+    // Slot 1: a send on the boot endpoint, whose receive right `move-borrowed` holds.
+    let result = rd::call_waiting(rd::BOOT_ENDPOINT, &rd::body([1, 0, 0, 0]), page.pages(), rd::FOREVER);
     let text = core::str::from_utf8(page.bytes()).unwrap_or("<not utf-8>");
     let intact = result.is_ok() && text == move_borrowed::VICTIM_TEXT;
     log!(
         logger,
-        "[victim] lend returned {:?}, page {}: {}",
-        result,
+        "[victim] lend returned {}, page {}: {}",
+        if result.is_ok() { "Ok" } else { "an error" },
         if intact { "intact" } else { "CHANGED" },
         text
     );

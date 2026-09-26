@@ -33,7 +33,7 @@
 
 use core::ptr::NonNull;
 
-pub const PAGE_SIZE: usize = 4096;
+use redoubt_sys::PAGE_SIZE;
 
 // Mode-specific parameters. Sv32: 2 levels of 1024 entries, 10 VPN bits, satp mode bit 31,
 // 9-bit ASID. Sv39: 3 levels of 512 entries, 9 VPN bits, satp mode 8<<60, 16-bit ASID.

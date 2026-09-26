@@ -3,37 +3,27 @@ arch = ["rv64", "rv32"]
 kind = "boot"
 # Built with the checks on (docs/testbench.md, "Debug assertions").
 debug_assertions = true
-# PID 2 the attacker (the loader's first program, holding root, system, users and every device
-# object); PID 3 log-server; PID 4 budget-victim, in system beside the attacker; PID 5
-# attack-checker. The attacker holds the Reset right, so `system_reset` is offered only handles
-# of other kinds: powering the machine off here would end the case before its verdict. The
-# 4000 random calls cannot reach it either -- a call decodes only with every register it does
-# not use set to zero, and `system_reset` needs a live Reset handle in `a1` and a known kind in
-# `a2`, so a value drawn for one register is refused on another.
-programs = ["budget-syscall-attack", "log-server", "budget-victim", "attack-checker"]
+# PID 2 log-server; PID 3 budget-victim, second, in system beside the attacker and holding the
+# boot endpoint's receive right; PID 4 the attacker, whose first act is to take root, system
+# and users from log-server (TAKE_GIFTS). It holds no device: `system_reset` is offered only
+# handles of other kinds. The 4000 random calls cannot reach a Reset right either.
+programs = ["log-server", "budget-victim", "budget-syscall-attack"]
 timeout_secs = 30
 # Each targeted attempt's error is pinned as progress, so a refusal for the wrong reason (or in
 # the wrong order) fails. The verdict is the kernel surviving (PANIC is always forbidden), the
-# victim's pages and the checker's power-off.
+# victim's pages and its DONE and the power-off.
 expect = [
-    '^\[pid 2\] \[i14\] budget_create records -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(TooLarge\), Some\(TooLarge\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(OutOfMemory\), Some\(InvalidArgument\)\]$',
-    '^\[pid 2\] \[i14\] budget_create order -> \[Some\(BadHandle\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(InvalidArgument\)\]$',
-    '^\[pid 2\] \[i14\] budget_usage -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(BadHandle\)\]$',
-    '^\[pid 2\] \[i14\] MMIO budget input/output records refused before use$',
-    '^\[pid 2\] \[i14\] random -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), None\]$',
-    '^\[pid 2\] \[i14\] other -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(BadHandle\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(WrongObject\), Some\(BadHandle\), Some\(WrongObject\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(WrongObject\), Some\(Timeout\)\]$',
-    '^\[pid 2\] \[i14\] \d+ random calls: \d+ refused, 0 with an unknown result code$',
-    '^\[pid 2\] \[i14\] attempts done$',
-    '^\[pid 4\] \[victim\] mapped and touched 64 pages in system after the attack$',
-    '^\[pid 5\] \[checker\] PID 4 reported; the kernel still serves',
+    '^\[server\] gifts given to pid 4$',
+    '^\[pid 4\] \[i14\] budget_create records -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(TooLarge\), Some\(TooLarge\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(OutOfMemory\), Some\(InvalidArgument\)\]$',
+    '^\[pid 4\] \[i14\] budget_create order -> \[Some\(BadHandle\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(InvalidArgument\)\]$',
+    '^\[pid 4\] \[i14\] budget_usage -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(BadHandle\)\]$',
+    '^\[pid 4\] \[i14\] random -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), None\]$',
+    '^\[pid 4\] \[i14\] other -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(BadHandle\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(WrongObject\), Some\(BadHandle\), Some\(WrongObject\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(WrongObject\), Some\(Timeout\)\]$',
+    '^\[pid 4\] \[i14\] \d+ random calls: \d+ refused, 0 with an unknown result code$',
+    '^\[pid 4\] \[i14\] attempts done$',
+    '^\[pid 3\] \[victim\] mapped and touched 64 pages in system after the attack$',
+    '^\[server\] done: reported by pid 3; still serving$',
 ]
 forbid = ['BREACH']
 poweroff = true
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]
-
-[[grant]]
-program = "attack-checker"
-mmio = ["0x100000:0x1000"]
+reporter = "budget-victim"

@@ -1,27 +1,24 @@
-//! Trusted W^X checker. Children have no device grants; only kernel fault notices determine
+//! Trusted W^X checker. Children hold no device handles; only kernel fault notices determine
 //! whether writable data could execute or executable code could be modified.
 #![no_std]
 #![no_main]
 use core::fmt::Write;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use redoubt_abi::{MemoryFlags, SysCall};
-use test_programs::{
-    rd::{self, Cause, Received, ResetKind},
-    spawn,
-};
+use test_programs::rd::{self, Cause, MemFlags, Received, ResetKind};
+use test_programs::spawn;
 use uart_16550::MmioSerialPort;
 static UART: AtomicUsize = AtomicUsize::new(0);
 extern "C" fn attack(arg: usize) -> ! {
     if spawn::startup_byte(arg, 0) == 1 {
-        let page = redoubt_abi::map_memory(None, None, 4096, MemoryFlags::R | MemoryFlags::W).unwrap();
+        let page = rd::page();
         // SAFETY: the attacker owns this writable page; the word is RISC-V `ret`.
-        unsafe { (page.as_mut_ptr() as *mut u32).write_volatile(0x0000_8067) };
-        // Legacy permissions may only narrow, so adding X must fail. The verdict is the
-        // ensuing kernel instruction-page fault, not the result reported by this attacker.
-        redoubt_abi::update_memory_flags(page, MemoryFlags::R | MemoryFlags::X).ok();
+        unsafe { (page as *mut u32).write_volatile(0x0000_8067) };
+        // Adding X while the page is writable must fail. The verdict is the ensuing kernel
+        // instruction-page fault, not the result reported by this attacker.
+        rd::set_flags(page, rd::PAGE_SIZE, rd::rw() | MemFlags::EXECUTE).ok();
         // SAFETY: deliberately hostile execution of non-executable memory; must fault.
-        let jump: extern "C" fn() = unsafe { core::mem::transmute(page.as_ptr()) };
+        let jump: extern "C" fn() = unsafe { core::mem::transmute(page as *const u8) };
         jump();
     } else {
         let code = attack as *const () as usize;
@@ -38,20 +35,10 @@ pub extern "C" fn _start() -> ! {
     let mut out = unsafe { MmioSerialPort::new(uart) };
     out.init();
     writeln!(out).ok();
-    for flags in [
-        MemoryFlags::R | MemoryFlags::W | MemoryFlags::X,
-        MemoryFlags::W | MemoryFlags::X,
-        MemoryFlags::empty(),
-    ] {
-        assert!(
-            redoubt_abi::rsyscall(SysCall::MapMemory(
-                None,
-                None,
-                redoubt_abi::MemorySize::new(4096).unwrap(),
-                flags
-            ))
-            .is_err()
-        );
+    let page = rd::page();
+    for flags in [rd::rw() | MemFlags::EXECUTE, MemFlags::WRITE | MemFlags::EXECUTE, MemFlags::NONE] {
+        assert!(rd::map_anon(rd::PAGE_SIZE, flags).is_err());
+        assert!(rd::set_flags(page, rd::PAGE_SIZE, flags).is_err());
     }
     writeln!(out, "[wx] checker: kernel refuses W+X and empty permissions").ok();
     let image = spawn::image();

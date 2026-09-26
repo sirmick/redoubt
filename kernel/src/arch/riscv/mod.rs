@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use riscv::register::{satp, sie, sstatus};
-use redoubt_abi::PID;
+use redoubt_layout::Pid;
 
 mod asm;
 pub mod exception;
@@ -12,11 +12,11 @@ mod mmu_flags;
 pub mod panic;
 pub mod process;
 mod physmap;
-#[cfg(all(feature = "smp", feature = "sbi"))]
+#[cfg(feature = "smp")]
 pub mod smp;
 pub mod syscall;
 
-pub fn current_pid() -> PID { PID::new(mem::pid_from_satp(satp::read().bits()) as _).unwrap() }
+pub fn current_pid() -> Pid { Pid::new(mem::pid_from_satp(satp::read().bits()) as _).unwrap() }
 
 pub fn init() {
     irq::init();
@@ -36,12 +36,8 @@ pub fn init() {
 /// should not exit.
 pub fn idle() -> bool {
     // Park the hart until an interrupt is pending.
-    // SAFETY: `wfi` has no memory effect. (`unsafe` on the vendored rv32 riscv crate,
-    // a safe no-op wrapper on the rv64 one.)
-    #[allow(unused_unsafe)]
-    unsafe {
-        riscv::asm::wfi()
-    };
+    // SAFETY: `wfi` has no memory effect.
+    unsafe { core::arch::asm!("wfi", options(nomem, nostack)) };
 
     // Briefly enable interrupts in Supervisor mode so any pending one drains into its
     // userspace handler; otherwise interrupts stay disabled while in Supervisor mode.

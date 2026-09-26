@@ -21,8 +21,8 @@
 //!   slot * PAGE_SIZE`, in tables the loader shared.
 //! - **S's mapped half**: `Account::dma_mapped`, a bit per slot, set by `map_device`.
 
-use redoubt_abi::PID;
-use redoubt_abi::arch::{KERNEL_DMA_PAGES, KERNEL_DMA_REGS};
+use redoubt_layout::Pid;
+use redoubt_layout::{KERNEL_DMA_PAGES, KERNEL_DMA_REGS};
 use redoubt_sys::{Error, PAGE_SIZE};
 
 use crate::handle::BudgetRef;
@@ -59,7 +59,7 @@ struct Run {
     phys: usize,
     npages: usize,
     /// The process holding it; `None` once it died.
-    holder: Option<PID>,
+    holder: Option<Pid>,
     /// The budget paying for its frames: the holder's at `dma_alloc`, then (quarantined) the
     /// destroyed budget's parent (OD5, N1); `None` once the root's tree is gone.
     charged: Option<BudgetRef>,
@@ -147,12 +147,12 @@ impl MemoryManager {
     }
 
     /// `map_device` of DMA device `slot`: it joins `pid`'s reset set (OD3).
-    pub fn dma_mapped(&mut self, pid: PID, slot: usize) {
+    pub fn dma_mapped(&mut self, pid: Pid, slot: usize) {
         self.account_mut(pid).expect("a running process has an account").dma_mapped |= 1 << slot;
     }
 
     /// The process holding the Live run that frame `phys` belongs to, if it is a DMA frame.
-    pub fn dma_holder(&self, phys: usize) -> Option<PID> {
+    pub fn dma_holder(&self, phys: usize) -> Option<Pid> {
         self.dma.slots.iter().flatten().flat_map(|s| s.runs.iter().flatten()).find_map(|r| {
             let inside = phys >= r.phys && phys < r.phys + r.npages * PAGE_SIZE;
             (inside && r.state == State::Live).then_some(r.holder).flatten()
@@ -163,7 +163,7 @@ impl MemoryManager {
     /// `pid`'s budget directly (never through its frame ledger, which `uncharge_all_frames`
     /// empties before the reset), recorded as a Live run of `slot` held by `pid`. Nothing changes
     /// on failure.
-    pub fn dma_new_run(&mut self, pid: PID, slot: usize, npages: usize) -> Result<usize, Error> {
+    pub fn dma_new_run(&mut self, pid: Pid, slot: usize, npages: usize) -> Result<usize, Error> {
         let oom = Error::OutOfMemory;
         let index = self.slot_mut(slot).runs.iter().position(Option::is_none).ok_or(oom)?;
         let budget = self.budget_of(pid).ok_or(oom)?;
@@ -199,7 +199,7 @@ impl MemoryManager {
     /// account is closed): reset its S. Only if every slot in S confirmed in this call are its
     /// runs pooled; otherwise all of them are quarantined, and every slot that did not confirm is
     /// quarantined too (P1-1: an already-quarantined slot never counts as reset).
-    pub fn dma_release(&mut self, pid: PID) {
+    pub fn dma_release(&mut self, pid: Pid) {
         let held = |r: &Option<Run>| r.is_some_and(|r| r.state == State::Live && r.holder == Some(pid));
         let mut s = self.account(pid).map_or(0, |a| a.dma_mapped);
         for (i, slot) in self.dma.slots.iter().enumerate() {
@@ -300,16 +300,7 @@ impl MemoryManager {
     }
 
     /// Whether `pid` holds any run (a `process_create` rollback's child never may).
-    pub fn dma_holds_any(&self, pid: PID) -> bool {
+    pub fn dma_holds_any(&self, pid: Pid) -> bool {
         self.dma.slots.iter().flatten().flat_map(|s| s.runs.iter().flatten()).any(|r| r.holder == Some(pid))
     }
-}
-
-/// Whether `[base, base + size)`, rounded out to whole pages, touches any DMA-flagged device the
-/// loader reported, registered or not (legacy `MapMemory`; WP-K5b, P2-1). `None` if the rounding
-/// overflows. Device ranges are whole pages (`device.rs`, `decode_entry`).
-pub fn overlaps_dma_device(base: usize, size: usize) -> Option<bool> {
-    let start = (base & !(PAGE_SIZE - 1)) as u64;
-    let end = base.checked_add(size)?.checked_next_multiple_of(PAGE_SIZE)? as u64;
-    Some(crate::device::dma_ranges().any(|(b, s)| start < b + s && b < end))
 }

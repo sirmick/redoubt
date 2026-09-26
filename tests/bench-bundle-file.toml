@@ -3,7 +3,7 @@ arch = ["rv64"]
 kind = "boot"
 programs = ["log-server"]
 timeout_secs = 20
-# Today's loader starts every bundle entry except `grants` as a process, so it refuses a data
+# Today's loader starts every bundle entry as a process, so it refuses a data
 # entry. Its complaint quotes the entry's first bytes, "DATA" (68, 65, 84, 65), right after
 # loading log-server: the bytes arrived as they were, signed, after the programs. When the
 # loader loads only the kernel and init (WP-R3 after the R2 stub), this becomes a clean boot in which a
@@ -16,7 +16,3 @@ forbid = ['KMAIN']
 [[file]]
 name = "data"
 from = { path = "tests/data/bundle-file.txt" }
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]

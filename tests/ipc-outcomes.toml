@@ -2,7 +2,7 @@ description = "IPC1 trusted real-kernel checker: initial record validation, over
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
-programs = ["ipc-outcomes", "log-server"]
+programs = ["ipc-outcomes"]
 timeout_secs = 60
 expect = [
     '^\[pid 2\] IPC1 initial readonly/MMIO records refused before delivery$',
@@ -15,7 +15,3 @@ expect = [
     '^\[pid 2\] IPC1 KERNEL OUTCOMES PASSED$',
 ]
 forbid = ['IPC1 FAILED']
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]

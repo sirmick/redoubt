@@ -37,7 +37,7 @@ pub extern "C" fn _start() -> ! {
 
     let mut found = 0;
     // Every MMIO device object; an interrupt or the Reset right is `WrongObject` and skipped.
-    for handle in rd::OTHER_DEVICES..rd::first_free() {
+    for handle in rd::OTHER_DEVICES..rd::log_rx() {
         let Ok((at, len)) = rd::map_device(handle) else { continue };
         let read = |offset: usize| -> u32 {
             // SAFETY: `at` maps `len` bytes of this device's registers, whole pages, and every

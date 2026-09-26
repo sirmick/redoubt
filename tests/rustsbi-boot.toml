@@ -3,7 +3,3 @@ arch = ["rv32", "rv64"]
 kind = "boot"
 programs = ["log-server", "ipc-client"]
 expect = ['bundle signature ok', 'KMAIN \(clean boot\)', 'IPC TEST PASSED']
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]

@@ -41,7 +41,8 @@ or "runs under SBI".
 ## Boot bundle
 A plain ustar archive of ELF executables, passed as the initrd and signed (VERIFIED-BOOT.md owns the
 container). First entry = kernel (PID 1), the rest = initial processes in PID order; the file name
-becomes the process name. A `grants` entry carries device grants (DEVICE-GRANTS.md). Parsed with the
+becomes the process name. The loader refuses an entry named `grants`: devices reach programs only as
+handles (DEVICE-GRANTS.md). Parsed with the
 `tar-no-std` and `elf` crates. ELFs are loaded by program header, so there is no execute-in-place
 from flash; not needed on these targets.
 
@@ -86,11 +87,9 @@ end of the block, so a truncated or malformed block cannot make the kernel read 
 | `Plic` | PLIC base (2 words), size (2), this hart's S-mode context                 |
 | `Seed` | RNG seed (32 bytes); a kernel with no `Seed` panics                       |
 | `Time` | timebase in ticks per second (2 words)                                    |
-| `Grnt` | one per granted process: pid, MMIO count, IRQ count, then the regions (four words each) and IRQs (DEVICE-GRANTS.md) |
 | `Devs` | device entries, six words each: kind, first value (2 words), second value (2), flags; layout below |
 | `Ctrl` | controller ranges, four words each: physical base (2 words), size (2); excluded from device mappings |
 | `IniE` | one per initial process; today only counted, to size the process table    |
-| `PNam` | one per initial process: pid, name length in bytes, then the name, padded to a word. `process_name` walks these records within the tag's own length |
 
 **Current device encoding (WP-K3).** These are the loader/kernel's implemented handoff, not an
 implicit answer to open question 143 about the target device policy. `Devs` entries are:
@@ -118,7 +117,7 @@ question 146 still tracks accepting that result shape into the target specificat
 
 **Decided change** (PACKAGES.md, launching): the loader will verify the bundle and load only the
 kernel and `init`; `init` launches every other process through the loader stub, from the bundle's
-pages. `IniE`/`PNam` per process and the `grants` entry then go, replaced by the boot manifest
+pages. `IniE` per process then goes, replaced by the boot manifest
 (INIT.md).
 
 Default builds run only the boot hart; with 2 or 4 harts the extra harts stay parked in the

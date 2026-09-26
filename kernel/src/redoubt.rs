@@ -2,9 +2,8 @@
 
 //! The Redoubt system calls (KERNEL-SPEC.md), decoded by `redoubt-sys`.
 //!
-//! Until WP-K6 deletes it, the legacy Redoubt interface is served beside this one: the trap handler
-//! sends every `ecall` whose `a0` is at least `redoubt_sys::NUMBER_BASE` here, and the rest to
-//! `syscall.rs`. The two share nothing but the kernel's objects.
+//! The trap handler sends every user-mode `ecall` here; an `a0` outside the call table is an
+//! unknown number (`InvalidArgument`).
 //!
 //! Every call runs the spec's stages in order (KERNEL-SPEC.md, Errors and the order of checks):
 //! `Call::decode` checks the registers; the records a call passes are then checked and copied
@@ -16,7 +15,9 @@
 //! `reply`, `serve`, `map_anon`, `unmap`, `set_flags`, `map_device`, `dma_alloc`,
 //! `system_reset` and the `process_*` and `thread_*` families.
 
-use redoubt_abi::{PID, TID};
+use redoubt_layout::Pid;
+
+use crate::arch::process::TID;
 use redoubt_sys::{
     BUDGET_SPEC_SLOTS, BudgetSpec, Call, CallOutcome, Error, LendDisposition, Number, REGS, Return,
     USAGE_SLOTS, encode_result,
@@ -25,11 +26,11 @@ use redoubt_sys::{
 use crate::kframe;
 use crate::mem::MemoryManager;
 use crate::message::MsgKind;
-use crate::services::SystemServices;
+use crate::ptable::ProcessTable;
 
 /// The scheduler and the memory manager together, in the one order the kernel borrows them.
-fn with_both<T>(f: impl FnOnce(&mut SystemServices, &mut MemoryManager) -> T) -> T {
-    SystemServices::with_mut(|ss| MemoryManager::with_mut(|mm| f(ss, mm)))
+fn with_both<T>(f: impl FnOnce(&mut ProcessTable, &mut MemoryManager) -> T) -> T {
+    ProcessTable::with_mut(|ss| MemoryManager::with_mut(|mm| f(ss, mm)))
 }
 
 /// What the trap handler does after a call.
@@ -40,20 +41,12 @@ pub enum Outcome {
     Resume,
 }
 
-pub fn handle(pid: PID, tid: TID, in_irq: bool, regs: &[u64; REGS]) -> Outcome {
-    // A legacy interrupt callback runs on borrowed time inside another process's quantum; it
-    // gets none of these calls. (INTERIM: WP-K3 replaces callbacks with IRQ handles.) Deadlines
-    // that have passed were answered at this entry, before anything else (`time.rs`).
-
-    let result = if in_irq {
-        Err(Error::NotPermitted)
-    } else {
-        Call::decode(regs).and_then(|c| dispatch(pid, tid, c))
-    };
+pub fn handle(pid: Pid, tid: TID, regs: &[u64; REGS]) -> Outcome {
+    // Deadlines that have passed were answered at this entry, before anything else (`time.rs`).
+    let result = Call::decode(regs).and_then(|c| dispatch(pid, tid, c));
     // Every error a call returns is in its row of the spec's error table (`Number::can_return`).
-    // The interim refusal of legacy callbacks is outside the table, and an unknown number has no
-    // row (it is `InvalidArgument`).
-    if let (Err(error), false, Some(number)) = (&result, in_irq, Number::from_raw(regs[0])) {
+    // An unknown number has no row (it is `InvalidArgument`).
+    if let (Err(error), Some(number)) = (&result, Number::from_raw(regs[0])) {
         debug_assert!(number.can_return(*error), "{} returned {:?}, outside its row", number.name(), error);
     }
     match result {
@@ -81,7 +74,7 @@ pub fn handle(pid: PID, tid: TID, in_irq: bool, regs: &[u64; REGS]) -> Outcome {
 }
 
 /// `Ok(None)`: the caller is gone.
-fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
+fn dispatch(pid: Pid, tid: TID, call: Call) -> Result<Option<Return>, Error> {
     let done = |_| Some(Return::Nothing);
     match call {
         Call::HandleClose { handle } => {
@@ -183,15 +176,15 @@ fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
         // These three end a thread or a process, so they take the scheduler alone: tearing a
         // process down borrows the memory manager itself (`process.rs`, Locks).
         Call::ThreadCreate { entry, sp, arg } => {
-            SystemServices::with_mut(|ss| crate::process::thread_create(ss, pid, entry, sp, arg))
+            ProcessTable::with_mut(|ss| crate::process::thread_create(ss, pid, entry, sp, arg))
                 .map(|tid| Some(Return::Tid(tid)))
         }
         Call::ThreadExit => {
-            SystemServices::with_mut(|ss| crate::process::thread_exit(ss, pid, tid));
+            ProcessTable::with_mut(|ss| crate::process::thread_exit(ss, pid, tid));
             Ok(None)
         }
         Call::ProcessExit { code } => {
-            SystemServices::with_mut(|ss| crate::process::process_exit(ss, pid, tid, code));
+            ProcessTable::with_mut(|ss| crate::process::process_exit(ss, pid, tid, code));
             Ok(None)
         }
     }
@@ -199,8 +192,8 @@ fn dispatch(pid: PID, tid: TID, call: Call) -> Result<Option<Return>, Error> {
 
 /// `budget_destroy(h)` (R10): mark the subtree, then destroy it (`budget::destroy_subtree`), the
 /// caller last if it is in it.
-fn budget_destroy(pid: PID, _tid: TID, h: u32) -> Result<Option<Return>, Error> {
-    SystemServices::with_mut(|ss| {
+fn budget_destroy(pid: Pid, _tid: TID, h: u32) -> Result<Option<Return>, Error> {
+    ProcessTable::with_mut(|ss| {
         let top = MemoryManager::with_mut(|mm| mm.destroy_begin(pid, h))?;
         let caller_doomed = crate::budget::destroy_subtree(ss, top, Some(pid), false);
         Ok(if caller_doomed { None } else { Some(Return::Nothing) })
@@ -230,7 +223,7 @@ fn record_frames<const N: usize>(mm: &MemoryManager, addr: usize, write: bool) -
 
 fn write_record_to<const N: usize>(addr: usize, frames: &[usize; N], slots: &[u64; N]) {
     for i in 0..N {
-        kframe::write(frames[i], (addr + i * 8) % redoubt_abi::arch::PAGE_SIZE, slots[i]);
+        kframe::write(frames[i], (addr + i * 8) % redoubt_sys::PAGE_SIZE, slots[i]);
     }
 }
 
@@ -241,7 +234,7 @@ pub fn read_record<const N: usize>(mm: &MemoryManager, addr: usize, output: bool
     if output {
         record_frames::<N>(mm, addr, true)?;
     }
-    Ok(core::array::from_fn(|i| kframe::read(frames[i], (addr + i * 8) % redoubt_abi::arch::PAGE_SIZE)))
+    Ok(core::array::from_fn(|i| kframe::read(frames[i], (addr + i * 8) % redoubt_sys::PAGE_SIZE)))
 }
 
 /// Read a handle-list record under the ownership guard used by fixed records.
@@ -256,7 +249,7 @@ pub fn read_slots<const N: usize>(mm: &MemoryManager, addr: usize, n: usize) -> 
         *frame = record_frames::<1>(mm, at, false)?[0];
     }
     for i in 0..n {
-        slots[i] = kframe::read(frames[i], (addr + i * 8) % redoubt_abi::arch::PAGE_SIZE);
+        slots[i] = kframe::read(frames[i], (addr + i * 8) % redoubt_sys::PAGE_SIZE);
     }
     Ok(slots)
 }
