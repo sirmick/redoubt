@@ -1,4 +1,4 @@
-description = "Sleeping and waking cannot buy more than a budget's weight (WP-K5, R12): near-slice and 20 us bursts with 1 us naps, and long sleeps with bursts, against an equal-weight spinner (virtual time, checked build)"
+description = "Sleeping and waking cannot buy more than a budget's weight (R12): near-slice and 20 us bursts with 1 us naps, and long sleeps with bursts, against an equal-weight spinner (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true

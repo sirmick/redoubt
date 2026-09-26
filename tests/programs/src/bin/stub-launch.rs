@@ -1,11 +1,11 @@
-//! The real loader stub (WP-R2), launched exactly as PACKAGES.md's "Launching a process"
-//! describes: a flat binary mapped at a fixed address, a copied ELF image, a startup page naming
-//! it. A user parent (this program) launches a well-formed child (`fixture-child`,
+//! The real loader stub, launched exactly as servers/init.md's "Launching through the loader
+//! stub" describes: a flat binary mapped at a fixed address, a copied ELF image, a startup page
+//! naming it. A user parent (this program) launches a well-formed child (`fixture-child`,
 //! `stub/src/bin/fixture-child.rs`, which exits 77 from its own entry) and then hostile images
 //! built by patching that child's headers. Each hostile child must exit with one of the stub's
 //! own codes or fault. Nothing else may be affected: this parent keeps running, the children's
-//! budget is empty again after every child, and a well-formed child still runs at the end
-//! (WP-R2 acceptance; `tests/stub-launch.toml`).
+//! budget is empty again after every child, and a well-formed child still runs at the end (R32;
+//! `tests/stub-launch.toml`).
 #![no_std]
 #![no_main]
 
@@ -23,7 +23,7 @@ static STUB_BIN: &[u8] = include_bytes!(env!("STUB_BIN"));
 static CHILD_ELF: &[u8] = include_bytes!(env!("STUB_CHILD_ELF"));
 
 /// Where this launcher puts the copied program image in the child: page-aligned and outside the
-/// program link range (`0x1_0000..STUB_ENTRY`, MEMORY-LAYOUT.md).
+/// program link range (`0x1_0000..STUB_ENTRY`, kernel/memory-layout.md).
 const IMAGE_AT: usize = 0x4000_0000;
 const STACK_PAGES: usize = 8;
 const WAIT: u64 = 2_000_000;
@@ -251,9 +251,9 @@ fn check(
     passed
 }
 
-/// Starts `image` through the real stub, exactly as PACKAGES.md's "Launching a process"
-/// describes, with the startup block naming `image_len` bytes, and returns its exit notice.
-/// The child runs in `budget`.
+/// Starts `image` through the real stub, exactly as servers/init.md's "Launching through the
+/// loader stub" describes, with the startup block naming `image_len` bytes, and returns its exit
+/// notice. The child runs in `budget`.
 fn launch(budget: u32, image: &[u8], image_len: usize, layout: Layout) -> Result<Option<ExitNotice>, Step> {
     let exit = rd::endpoint_create().map_err(at("an exit endpoint"))?;
     let process = rd::process_create(budget, exit).map_err(at("process_create"))?;
@@ -278,7 +278,7 @@ fn launch(budget: u32, image: &[u8], image_len: usize, layout: Layout) -> Result
     rd::process_map(process, stack_scratch, layout.stack_top - stack_len, stack_len, rw)
         .map_err(at("map the stack"))?;
 
-    // The startup page, naming the image (INIT.md, Startup block; PACKAGES.md step 4).
+    // The startup page, naming the image (servers/init.md, "The startup block").
     let block = StartupBuilder::new(0)
         .image(IMAGE_AT, image_len)
         .finish()
@@ -295,7 +295,8 @@ fn launch(budget: u32, image: &[u8], image_len: usize, layout: Layout) -> Result
         Ok(Received::Exit(notice)) => Some(notice),
         _ => None,
     };
-    // Receiving the notice freed the process object and its handle (KERNEL-SPEC.md, Process).
+    // Receiving the notice freed the process object and its handle (kernel/processes.md, "Exit
+    // notices").
     rd::close(exit).map_err(at("close the exit endpoint"))?;
     Ok(notice)
 }

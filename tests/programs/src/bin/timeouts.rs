@@ -1,4 +1,4 @@
-//! Timeouts on the kernel's own timer (WP-K5; KERNEL-SPEC.md, I13 and IPC completion): every
+//! Timeouts on the kernel's own timer (I13; kernel/ipc.md, "How a call completes"): every
 //! blocking call returns by its timeout, with the ownership the completion table gives, and a
 //! reply racing a timeout lands on exactly one side.
 //!

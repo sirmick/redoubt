@@ -1,6 +1,6 @@
 //! A budget's destruction is charged to its parent at the weight the parent has once the child is
-//! gone (WP-K5; K5-code-review-4 D1, the orchestrator's ruling): the top's carve returns before any
-//! destruction work is billed.
+//! gone (kernel/scheduling.md, "Charging"): the top's carve returns before any destruction work
+//! is billed.
 //!
 //! P (weight 1000) runs one process and has carved 990 of that weight to its child C, which holds
 //! four processes (blocked; they do no work that would move up with C's debt). As its window
@@ -13,9 +13,8 @@
 //! Asserted: from P's `budget_destroy` to its running again, and any later wait, at most twice the
 //! destruction's cost (the work, then V catching up its charge) plus four slices (slice rounding,
 //! and P's entry into the call, which runs before the carve is back and so is charged at the weight
-//! P kept, as KERNEL-SPEC R12 states). The cost is
-//! measured first, on a copy this program destroys itself with nothing else to run (P cannot tell
-//! its kernel time from its wait after it).
+//! P kept, as kernel/scheduling.md R12 states). The cost is measured first, on a copy this program
+//! destroys itself with nothing else to run (P cannot tell its kernel time from its wait after it).
 
 #![no_std]
 #![no_main]
@@ -60,7 +59,7 @@ pub extern "C" fn _start() -> ! {
     let v = b.budget(rd::USERS, 1000, 1, rd::FOREVER);
     let c = child_of(&b, p);
     // V spins from well before P's window, so the floor has passed what P's own start-up ran up
-    // while carved down (charged at the weight it kept: KERNEL-SPEC R12, accepted), and P wakes
+    // while carved down (charged at the weight it kept: kernel/scheduling.md R12), and P wakes
     // at the floor.
     b.start(v, Role::Spin, &[], &[]);
     b.go(10_000, 100_000 + WINDOW_US);
@@ -70,7 +69,7 @@ pub extern "C" fn _start() -> ! {
     let (took, gap) = (w[pi][0][0] as u64, w[pi][0][1] as u64);
     // The destruction itself, then V catching up its charge (at P's restored weight), then slice
     // rounding; and two slices for the few hundred microseconds P runs, entering the call, before
-    // the carve is back (charged at the weight it kept: KERNEL-SPEC R12, accepted). Billed at the
+    // the carve is back (charged at the weight it kept: kernel/scheduling.md R12). Billed at the
     // kept weight, the destruction alone would keep P off the CPU for seconds.
     let bound = 2 * cost + 4 * SLICE_US;
     b.check(

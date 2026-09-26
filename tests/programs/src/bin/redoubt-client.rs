@@ -1,4 +1,4 @@
-//! The client side of the Redoubt IPC case (WP-K2), and the program that drives the script.
+//! The client side of the Redoubt IPC case, and the program that drives the script.
 //! Everything here crosses an address space: this program holds a badged handle to the boot
 //! endpoint, `redoubt-server` holds its receive right.
 //!
@@ -10,7 +10,7 @@
 //! that cannot be stolen (I3, I4); `WAIT_CAP` queued messages per group and `Busy` beyond (R2);
 //! every abandoned call reported once and freed by its reply (R3, I15); a message whose handle
 //! the receiver's full table cannot take, refused to its sender, and a reply whose handles do
-//! not fit, delivered without them with `OutOfMemory` (answers 107 and 116); `MAX_OPEN_CALLS`
+//! not fit, delivered without them with `OutOfMemory` (R4); `MAX_OPEN_CALLS`
 //! with sends still delivered (R4a).
 //!
 //! The checks this program prints are its own; the lines that only the kernel or the server can
@@ -222,7 +222,7 @@ pub extern "C" fn _start() -> ! {
     let full_notice = rd::endpoint_create().expect("capacity endpoint");
     let notify = rd::mint_from_handle(full_notice, 1, None).expect("capacity sender");
 
-    // --- A reply whose handles do not fit the caller (answers 107, 116) ----------------------
+    // --- A reply whose handles do not fit the caller (R4) ------------------------------------
     // Fill this program's table to `MAX_HANDLES` with endpoints of its own.
     let mut held = 0;
     while rd::endpoint_create().is_ok() {
@@ -237,7 +237,7 @@ pub extern "C" fn _start() -> ! {
     let reply = rd::call_waiting(E, &rd::body([op::REPLY_HANDLES, 2, 0, 0]), None, FOREVER);
     let _ = expect!(t, reply.err(), Some(Error::OutOfMemory));
 
-    // --- Answer 116: handles the receiver cannot take refuse the message (R4) -----------------
+    // --- Handles the receiver cannot take refuse the message (R4) -----------------------------
     // The server fills its own table to `MAX_HANDLES`; a message carrying a handle is then more
     // than it can pay for, so its *sender* is refused, exactly as for any other cost.
     let filled = ask(&mut t, op::FILL_TABLE, 0)[1];
@@ -261,7 +261,7 @@ pub extern "C" fn _start() -> ! {
         panic!("expected capacity notice");
     };
     let _ = expect!(t, full.body.words[1], rd::MAX_OPEN_CALLS);
-    // A call now stays queued and times out; a `send` is still delivered (answer 105).
+    // A call now stays queued and times out; a `send` is still delivered (R4a).
     let _ = expect!(t, rd::call(E, &rd::body([op::KEEP, 0, 0, 0]), None, 5_000).err(), Some(Error::Timeout));
     let _ = expect!(t, rd::send(E, &rd::body([0, 99, 0, 0]), None, FOREVER), Ok(()));
     // `send` returns once the message is taken; give the server its turn to report it, so the

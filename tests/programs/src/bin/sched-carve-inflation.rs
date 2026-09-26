@@ -1,8 +1,8 @@
-//! Carving moves share, never duplicates it (WP-K5; stride weight is free weight, OWNER DECISION
-//! 7): U (weight 200) spins and carves C (100), which spins too, against a victim V of weight
-//! 200; then a nested chain. U's subtree gets at most half. And the refusals: a carve that would
-//! leave a budget holding a process with no free weight, and a process in a budget whose weight
-//! is all carved.
+//! Carving moves share, never duplicates it (stride weight is free weight; kernel/scheduling.md,
+//! "Running while carved down"): U (weight 200) spins and carves C (100), which spins too,
+//! against a victim V of weight 200; then a nested chain. U's subtree gets at most half. And the
+//! refusals: a carve that would leave a budget holding a process with no free weight, and a
+//! process in a budget whose weight is all carved (R7).
 
 #![no_std]
 #![no_main]

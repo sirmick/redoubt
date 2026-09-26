@@ -1,4 +1,4 @@
-description = "WP-D3 (answer 174): the real netd and ipd, launched through the loader stub by the tests/net rig (pre-R3). A client granted 10.0.9.100/32 port 7 connects to the bench's peer there and round-trips bytes (the peer counts exactly 1 connection); a listener granted port 8000 with a backlog of 2 echoes the bench's dial through a forwarded port. The capture shows no SYN to the box's own addresses, no non-TCP IPv4 and ARP only for the gateway"
+description = "The real netd and ipd, launched through the loader stub by the tests/net rig until init starts the servers. A client granted 10.0.9.100/32 port 7 connects to the bench's peer there and round-trips bytes (the peer counts exactly 1 connection); a listener granted port 8000 with a backlog of 2 echoes the bench's dial through a forwarded port. The capture shows no SYN to the box's own addresses, no non-TCP IPv4 and ARP only for the gateway"
 arch = ["rv64"]
 kind = "boot"
 programs = [{ package = "redoubt-net-tests", bin = "net-rig" }]

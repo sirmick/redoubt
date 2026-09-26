@@ -1,4 +1,4 @@
-description = "IPC1 trusted real-kernel checker: initial record validation, overlapping lend, queued cancellation, partial reply, output failure rollback, taken revocation and server death"
+description = "The IPC outcomes, checked by a trusted real-kernel checker: initial record validation, overlapping lend, queued cancellation, partial reply, output failure rollback, taken revocation and server death"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true

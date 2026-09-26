@@ -1,5 +1,6 @@
-//! An independent check of the kernel's stride ranks (WP-K5; KERNEL-SPEC.md R12, the owner's four
-//! rank clauses), over the raw events a `sched-trace` kernel prints at `system_reset`.
+//! An independent check of the kernel's stride ranks (kernel/scheduling.md R12, the four rank
+//! clauses of "The current minimum and ties"), over the raw events a `sched-trace` kernel prints
+//! at `system_reset`.
 //!
 //! The kernel's trace says what its queue did, never why: a budget woke (`W`), was requeued (`R`),
 //! left the queue (`D`), had its pass changed (`P`), or was picked (`K`); each record carries the
@@ -13,9 +14,10 @@
 //!
 //! A destruction's lift (a child's work since entry moving to its parent) is recorded as a group
 //! of nine records, every operand and the result, and recomputed here from the rule as the spec
-//! states it (KERNEL-SPEC.md R12, Inheritance): W = (child pass - max(entry, floor))+ x child weight
-//! + child remainder; the parent becomes max(its pass, floor) + W / its weight, keeping its
-//! remainder only if it was not below the floor, the remainders carried.
+//! states it (kernel/scheduling.md R12, "Inheritance"):
+//! W = (child pass - max(entry, floor))+ x child weight + child remainder; the parent becomes
+//! max(its pass, floor) + W / its weight, keeping its remainder only if it was not below the
+//! floor, the remainders carried.
 //!
 //! It does not only trust the passes it is given. It keeps its own **floor**, the queue's lowest
 //! pass, never lowered (so it holds while the queue is empty) and raised after a reconcile's wakes,

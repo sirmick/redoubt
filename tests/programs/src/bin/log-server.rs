@@ -4,11 +4,11 @@
 //! `DONE` (the attack checker: it names the reporter and powers off).
 //!
 //! It takes the UART through `map_device` on the console MMIO handle and waits for input in
-//! `receive` on the console IRQ handle (KERNEL-SPEC.md, R5: the kernel masks the source when
+//! `receive` on the console IRQ handle (kernel/devices.md, R5: the kernel masks the source when
 //! it fires and the next receive unmasks it; there is no acknowledge call).
 //!
 //! Attack cases take their verdict from lines an attacker cannot write (docs/testbench.md,
-//! "Writing an attack case"): a client's bytes print only through `logsrv`'s relay, prefixed
+//! "Rule F (trusted verdicts)"): a client's bytes print only through `logsrv`'s relay, prefixed
 //! with its badge, and this server's own lines are `logsrv::Line`'s closed set of templates.
 
 #![no_std]
@@ -68,8 +68,9 @@ pub extern "C" fn _start() -> ! {
                 rd::reply(id, &rd::body([rd::Error::Refused as usize, 0, 0, 0])).ok();
             }
             op::TAKE_GIFTS => {
-                // The budgets only, never a device (R2). Message handles are copied
-                // (KERNEL-SPEC.md), so this server then closes its own.
+                // The budgets only, never a device (docs/testbench.md, "Rule F (trusted
+                // verdicts)"). Message handles are copied (kernel/ipc.md, "Messages"), so this
+                // server then closes its own.
                 rd::reply(id, &rd::body_with([0; rd::WORDS], &[rd::ROOT, rd::SYSTEM, rd::USERS])).ok();
                 for budget in [rd::ROOT, rd::SYSTEM, rd::USERS] {
                     rd::close(budget).ok();

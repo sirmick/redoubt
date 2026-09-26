@@ -1,4 +1,4 @@
-description = "Carving moves share, never duplicates it (WP-K5, free weight): a carving subtree gets at most half, nested too; carving a process-holding budget to zero and a process in a fully carved budget are refused (virtual time, checked build)"
+description = "Carving moves share, never duplicates it (free weight): a carving subtree gets at most half, nested too; carving a process-holding budget to zero and a process in a fully carved budget are refused (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true

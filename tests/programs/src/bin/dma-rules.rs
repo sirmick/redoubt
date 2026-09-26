@@ -1,4 +1,4 @@
-//! DMA pages stay put (WP-K5b, OD2; KERNEL-SPEC.md, `dma_alloc`): a `dma_alloc` page can be
+//! DMA pages stay put (kernel/devices.md, `dma_alloc`): a `dma_alloc` page can be
 //! neither lent, transferred nor given to another process with `process_map`; `set_flags` works on
 //! it; `unmap` drops only the mapping, so its frames stay held and charged until the process ends;
 //! and a child that allocates and exits gives its budget back every page.
@@ -62,7 +62,7 @@ pub extern "C" fn _start() -> ! {
     };
     say!(out, "[dma-rules] a DMA buffer of {} pages through device handle {}", DMA_PAGES, dev);
 
-    // --- Lend and transfer (OD2) -----------------------------------------------------------
+    // --- Lend and transfer -----------------------------------------------------------------
     let ep = rd::endpoint_create().expect("an endpoint");
     let send = rd::mint_from_handle(ep, 1, None).expect("a send handle");
     let body = rd::body([0; rd::WORDS]);
@@ -86,7 +86,7 @@ pub extern "C" fn _start() -> ! {
         control
     );
 
-    // --- process_map (OD2) -----------------------------------------------------------------
+    // --- process_map -----------------------------------------------------------------------
     let budget =
         rd::create(rd::SYSTEM, &rd::spec(spawn::image().pages() as u64 + 96, 1, 10)).expect("a budget");
     let exit = rd::endpoint_create().expect("an exit endpoint");

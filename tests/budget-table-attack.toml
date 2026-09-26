@@ -1,4 +1,4 @@
-description = "Exhausting the handle table ends in TooLarge at MAX_HANDLES = 4096 (QUESTIONS.md 102) (32 pages of 128), each page charged to the holder's budget and freed when emptied or swept; system keeps serving"
+description = "Exhausting the handle table ends in TooLarge at MAX_HANDLES = 4096 (32 pages of 128), each page charged to the holder's budget and freed when emptied or swept; system keeps serving"
 arch = ["rv64", "rv32"]
 kind = "boot"
 # PID 2 log-server; PID 3 budget-victim, second, in system beside the attacker and holding the

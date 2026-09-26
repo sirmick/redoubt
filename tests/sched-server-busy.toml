@@ -1,4 +1,4 @@
-description = "A system server busy on one user's requests delays other users only by its weight (WP-K5): the server's work stays within its share and two spinning users keep theirs (virtual time, checked build)"
+description = "A system server busy on one user's requests delays other users only by its weight (R12): the server's work stays within its share and two spinning users keep theirs (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true

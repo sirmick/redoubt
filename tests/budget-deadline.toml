@@ -1,4 +1,4 @@
-description = "A budget's deadline destroys it (WP-K5, R10): the running spinner inside it is killed at the deadline, killed notices blame nobody and arrive on time, a call its server took is abandoned once and the reply discarded, a send queued through a handle stamped with it fails Dead, every handle to it is revoked, system's usage is restored (I10); a past deadline destroys at once, FOREVER never, and a destroyed child's later deadline never fires (virtual time, checked build)"
+description = "A budget's deadline destroys it (R10): the running spinner inside it is killed at the deadline, killed notices blame nobody and arrive on time, a call its server took is abandoned once and the reply discarded, a send queued through a handle stamped with it fails Dead, every handle to it is revoked, system's usage is restored (I10); a past deadline destroys at once, FOREVER never, and a destroyed child's later deadline never fires (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true

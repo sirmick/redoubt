@@ -1,4 +1,4 @@
-description = "K4 hostile mapping/startup, R8 accounts, R9 creation stamps, I8 user-class restrictions, pending exit-record rollback and creator-paid notice exhaustion"
+description = "Hostile mapping/startup, R8 accounts, R9 creation stamps, I8 user-class restrictions, pending exit-record rollback and creator-paid notice exhaustion"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true

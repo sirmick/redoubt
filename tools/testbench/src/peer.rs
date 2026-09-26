@@ -1,6 +1,6 @@
-//! The far side of a `[net]` case's network (answer 174; docs/testbench.md, "Peers"): hosts the
-//! guest may reach, connections the bench dials into the guest, and a capture of every frame the
-//! guest sent, all judged after the boot by the bench, never by anything in the guest.
+//! The far side of a `[net]` case's network (docs/testbench.md, "Peers, dials and the capture"):
+//! hosts the guest may reach, connections the bench dials into the guest, and a capture of every
+//! frame the guest sent, all judged after the boot by the bench, never by anything in the guest.
 //!
 //! - **Peers.** Each `[[net.peer]]` is a QEMU `guestfwd` to a program: for every connection the guest makes
 //!   to that address, libslirp starts `testbench peer-helper` ([`helper`]) with the connection on its
@@ -53,7 +53,7 @@ pub const GATEWAY: Ipv4Addr = Ipv4Addr::new(10, 0, 2, 2);
 /// guest routes out goes to that MAC (its gateway). What stays unjudged is a guest frame claiming
 /// slirp's source *and* sent to a broadcast or to the guest's own MAC, which leaves the guest for
 /// nothing but slirp's ARP handling; the guest's stack (smoltcp) sets every source to the card's
-/// own MAC, so it does not send one (QA D3-code-review-6).
+/// own MAC, so it does not send one.
 pub const SLIRP_MAC: [u8; 6] = [0x52, 0x55, 10, 0, 2, 2];
 
 /// The hidden subcommand libslirp runs for each connection to a peer.

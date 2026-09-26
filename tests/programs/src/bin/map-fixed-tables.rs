@@ -1,4 +1,4 @@
-//! Regression case for `tables_needed` across gigabytes (K5a review round 2, N1).
+//! Regression case for `tables_needed` across gigabytes (R22; kernel/memory.md, `map_fixed`).
 //!
 //! `tables_needed` (kernel/src/arch/riscv/mem.rs) once deduplicated missing tables by their
 //! index in their parent table. On Sv39 a level-1 index recurs in every gigabyte, so two missing
@@ -86,8 +86,9 @@ mod case {
     pub fn run(out: &mut MmioSerialPort) {
         const G3: usize = 0xC000_0000;
         const G4: usize = 0x1_0000_0000;
-        // Build every table between the two holes: L1(G3) and the level-0 tables of G3's blocks
-        // 1..=511, then L1(G4) and the level-0 table of G4's block 1. Map and unmap one page in
+        // Build every table between the two holes: the level-1 table of the gigabyte at 3 GiB and
+        // the level-0 tables of its blocks 1..=511, then the level-1 table of the gigabyte at
+        // 4 GiB and the level-0 table of its block 1. Map and unmap one page in
         // each: the kernel keeps a table once it exists, so 514 tables stay charged. If it ever
         // frees them, this check says so instead of the case silently testing nothing.
         let before = usage_pages();

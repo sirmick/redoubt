@@ -1,11 +1,11 @@
-//! Device objects and the Redoubt memory calls (WP-K3): `map_device`, `dma_alloc`,
-//! `system_reset`, `map_anon`, `unmap` and `set_flags` (KERNEL-SPEC.md; R11).
+//! Device objects and the Redoubt memory calls: `map_device`, `dma_alloc`, `system_reset`,
+//! `map_anon`, `unmap` and `set_flags` (kernel/devices.md, kernel/memory.md; R11).
 //!
 //! It runs as the bundle's first program, so it holds every device object the loader made
-//! (INTERIM, kernel `device.rs`), and it prints through the console it maps itself -- there is
-//! no `log-server` in this case, because only one process can own the UART. Its last act is
-//! `system_reset`, so the case's verdict is its lines *and* a clean power-off: a program that
-//! never reached the end cannot produce one.
+//! (kernel `device.rs`; docs/plan/m1-separation.md moves them to `init`), and it prints through
+//! the console it maps itself -- there is no `log-server` in this case, because only one process
+//! can own the UART. Its last act is `system_reset`, so the case's verdict is its lines *and* a
+//! clean power-off: a program that never reached the end cannot produce one.
 
 #![no_std]
 #![no_main]
@@ -43,7 +43,7 @@ fn word(at: usize) -> u64 { rd::peek(at) }
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     // The console's registers, through its device object. Nothing here names an address,
-    // and the length comes back with it (QUESTIONS.md 146, pending).
+    // and the length comes back with it (kernel/devices.md, `map_device`).
     let (uart, uart_len) = rd::map_device(rd::CONSOLE_MMIO).expect("the console's mmio handle");
     console::init(uart);
     let mut out = Console;
