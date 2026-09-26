@@ -67,7 +67,7 @@ switch.
 
 ## The objects at a glance
 
-Status: built · tested: bench:budget, bench:redoubt-ipc, bench:process, bench:device, bench:budget-forge-attack
+Status: built · partly tested: an endpoint's page is attacked only in the model and a device object's page by no case ([objects](objects.md#what-objects-cost)), and that no id is ever reused is not visible to a process ([I12 (ids never reused)](invariants.md#i12-ids-never-reused)) · tested: bench:budget, bench:redoubt-ipc, bench:process, bench:device, bench:budget-forge-attack
 
 A process holds **handles**: indices into a handle table that only the kernel writes. A handle
 names an object, a **badge** (a 64-bit number the minting server chose; 0 for the receive right)

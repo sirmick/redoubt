@@ -222,7 +222,7 @@ through the PLIC ([timer](timer.md)). The loader drops an interrupt 0 that a dev
 
 ### Devices handed to the first program
 
-Status: built · tested: bench:device, bench:irq-attack, bench:rustsbi-boot
+Status: built · partly tested: the loader's refusal of a tree with no console or no console interrupt, and the kernel's refusal of an object for a DMA device past the sixteenth, are not attacked by a case · tested: bench:device, bench:irq-attack, bench:rustsbi-boot
 
 The kernel hands every device object to the bundle's first program, in `Devs` order, and
 gives the others none. This is the built handoff, positional, and not the placement policy

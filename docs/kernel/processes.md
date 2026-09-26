@@ -264,7 +264,7 @@ parent.
 
 ### R21 (crash blame)
 
-Status: built · partly tested: blame after the blamed sender's budget is destroyed is not attacked by a case · tested: bench:process, bench:process-attack, mutation:BlameNobody, mutation:BlameNewestCall, mutation:ExitWithOpenCallsNotFaulted, mutation:CurrentNeverSet, mutation:ReceiveKeepsCurrent, mutation:ServeIgnored, mutation:ExitEndpointBadged
+Status: built · partly tested: blame after the blamed sender's budget is destroyed is not attacked by a case, and a thread that holds a parked call, then receives a send and faults (blaming nobody), is attacked only in parts · tested: bench:process, bench:process-attack, mutation:BlameNobody, mutation:BlameNewestCall, mutation:ExitWithOpenCallsNotFaulted, mutation:CurrentNeverSet, mutation:ReceiveKeepsCurrent, mutation:ServeIgnored, mutation:ExitEndpointBadged
 
 Crash blame names the sender of the current call, or nobody. When a process ends `faulted`, its
 notice blames the account and labels of the sender of the **current call** of the thread that

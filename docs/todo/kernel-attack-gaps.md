@@ -43,6 +43,7 @@ gap: the page's section, the claim, and what no case attacks.
 - Budget deadlines: a destroyed child's later deadline leaving the list is shown only by the kernel surviving past it.
 - Failure and restart: a boot with no `Time` tag (or 0) powering off is not attacked (R17 (fail closed)'s gap too).
 - The hart timer: a stale early hint costing one early interrupt and missing nothing is argued, not attacked.
+- A passed deadline comes first: a process entering the kernel in a tight loop to put its deadline off is not attacked (the same gap as budgets.md's).
 
 ### devices.md
 - Device objects: the one page a device object costs its owner is not measured; a DMA device past `MAX_DMA_DEVICES` (16) getting no object is not attacked.
