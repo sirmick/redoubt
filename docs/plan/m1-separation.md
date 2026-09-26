@@ -112,7 +112,9 @@ In this order. Each step lands with the attack cases for what it builds.
      [the SSH loopback self-checks](../todo/ssh-loopback-host.md),
      [the write-only mutation](../todo/write-only-mutation-split.md),
      [the vendored crates under Miri](../todo/miri-vendored-unsafe.md), and, once the owner
-     decides the rule, [nightly rustfmt drift](../todo/rustfmt-nightly-drift.md).
+     decides the rule, [nightly rustfmt drift](../todo/rustfmt-nightly-drift.md); and
+     [a size budget for the trusted crates](../todo/size-budget.md), the gate that
+     [simplification](../SWARM.md#simplification) relies on.
    - **Servers:** [an account-0 client's share chain](../todo/account0-share-chain.md),
      [the 9P skeleton's rollback on a discarded reply](../todo/ninep-discard-rollback-test.md),
      [compiled-in bucket counts](../todo/server-bucket-counts.md),

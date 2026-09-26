@@ -100,6 +100,7 @@
   - [Raw memory calls beside the runtime](todo/raw-syscall-runtime-audit.md)
   - [A notice lost to a bad receive record](todo/receive-output-late-invalid.md)
   - [Nightly rustfmt drift](todo/rustfmt-nightly-drift.md)
+  - [A size budget for the trusted crates](todo/size-budget.md)
   - [The steward decision-wake target](todo/sched-latency-target.md)
   - [The loader stub's unsafe budget](todo/stub-unsafe-budget.md)
   - [Compiled-in bucket counts](todo/server-bucket-counts.md)
