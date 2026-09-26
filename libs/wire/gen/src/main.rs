@@ -1,6 +1,6 @@
-//! `cargo run -p redoubt-wire-gen` writes the typed-message codecs from the tables in the
-//! notes; `-- --check` only lists generated files that are out of date (exit 1). The test
-//! `generated_files_are_current` makes the same check on every `cargo test`.
+//! `cargo run -p redoubt-wire-gen` writes the typed-message codecs from the tables in
+//! `libs/wire/tables`; `-- --check` only lists generated files that are out of date (exit 1).
+//! The test `generated_files_are_current` makes the same check on every `cargo test`.
 
 use std::process::ExitCode;
 
