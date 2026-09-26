@@ -52,8 +52,9 @@ fn verdict(b: bool) -> &'static str { if b { "met" } else { "missed" } }
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    let devices = rd::OTHER_DEVICES..rd::log_rx();
     let mut b = Bench::new("latency");
-    let Some((rtc_mmio, rtc_base, rtc_irq)) = rtc::find() else {
+    let Some((rtc_mmio, rtc_base, rtc_irq)) = rtc::find(devices) else {
         b.check(false, format_args!("no goldfish RTC among the device handles"));
         b.finish("SCHED-LATENCY")
     };

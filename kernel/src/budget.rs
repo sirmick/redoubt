@@ -579,6 +579,7 @@ impl MemoryManager {
         // themselves are charged to, and die with, `system`.
         self.boot_devices(system, first, stamp);
         self.boot_endpoint(system, &bundle[..nbundle]);
+        self.boot_log_endpoint(system, &bundle[..nbundle]);
         println!(
             "Budgets: root {} pages, system {} (the loader's processes), users {}",
             pages, sys_pages, users_pages
@@ -591,8 +592,9 @@ impl MemoryManager {
     ///
     /// The **second** program gets the receive right (badge 0, handle 1) and every later one a
     /// handle badged with its own PID, so a server can tell its clients apart. The first
-    /// program's table is left exactly as `init`'s will be: `root`, `system` and `users`, then
-    /// a handle to every device object the machine has (`device.rs`, `boot_devices`).
+    /// program's table is left as `init`'s will be: `root`, `system` and `users`, then a handle
+    /// to every device object the machine has (`device.rs`, `boot_devices`), then only the log
+    /// endpoint's receive right (`boot_log_endpoint`).
     fn boot_endpoint(&mut self, system: BudgetFrame, bundle: &[Option<PID>]) {
         let Some(Some(server)) = bundle.get(1).copied() else { return };
         let endpoint = self.new_endpoint(system).expect("boot: system cannot pay for the endpoint");
@@ -603,6 +605,23 @@ impl MemoryManager {
             let badge = if *pid == server { 0 } else { u64::from(pid.get()) };
             let handle = Handle { object: Object::Endpoint(endpoint), badge, stamp: owner };
             self.install_handle(*pid, handle).expect("boot: no room for a program's endpoint handle");
+        }
+    }
+
+    /// INTERIM (until WP-R3's `init` owns the console): the log endpoint, one in every boot.
+    ///
+    /// The first program, which owns the console, gets the receive right, installed last, after
+    /// the budgets and the devices, so it is the highest index in its table. Every later program
+    /// gets a send in slot 2, after the boot endpoint's slot 1, badged with its own PID. The
+    /// badge only says whose line it is: the server prints it and grants nothing on it.
+    fn boot_log_endpoint(&mut self, system: BudgetFrame, bundle: &[Option<PID>]) {
+        let Some(Some(first)) = bundle.first().copied() else { return };
+        let endpoint = self.new_endpoint(system).expect("boot: system cannot pay for the log endpoint");
+        let owner = self.endpoint(endpoint.frame).owner;
+        for pid in bundle.iter().flatten() {
+            let badge = if *pid == first { 0 } else { u64::from(pid.get()) };
+            let handle = Handle { object: Object::Endpoint(endpoint), badge, stamp: owner };
+            self.install_handle(*pid, handle).expect("boot: no room for a program's log handle");
         }
     }
 

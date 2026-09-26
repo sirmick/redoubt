@@ -705,15 +705,14 @@ pub mod rtc {
 
     pub fn clear(base: usize) { write(base, CLEAR_INTERRUPT, 1); }
 
-    /// Among the device handles from [`rd::OTHER_DEVICES`]: the RTC's MMIO handle and where it is
-    /// mapped here, and its interrupt handle. The MMIO is the one-page device that is not virtio
-    /// and whose first word (its time's low half, in ns) moves by half a million to a hundred
-    /// million over a millisecond's sleep: nothing else of the others is read, since some fault on
-    /// reads they do not expect. The interrupt is the one a `receive` on which returns when the
-    /// alarm fires.
-    pub fn find() -> Option<(u32, usize, u32)> {
-        let free = rd::first_free();
-        let (mmio, base) = (rd::OTHER_DEVICES..free).find_map(|h| {
+    /// Among `devices` (read with [`rd::log_rx`] before any handle is made): the RTC's MMIO
+    /// handle and where it is mapped here, and its interrupt handle. The MMIO is the one-page
+    /// device that is not virtio and whose first word (its time's low half, in ns) moves by half
+    /// a million to a hundred million over a millisecond's sleep: nothing else of the others is
+    /// read, since some fault on reads they do not expect. The interrupt is the one a `receive`
+    /// on which returns when the alarm fires.
+    pub fn find(devices: core::ops::Range<u32>) -> Option<(u32, usize, u32)> {
+        let (mmio, base) = devices.clone().find_map(|h| {
             let (addr, len) = rd::map_device(h).ok()?;
             if len == rd::PAGE_SIZE && read(addr, 0) != VIRTIO_MAGIC {
                 let a = read(addr, TIME_LOW);
@@ -728,7 +727,7 @@ pub mod rtc {
         })?;
         // Each candidate waits in `receive` while an alarm fires: an alarm that fired while its
         // source was masked would not be seen by a later `receive` (observed on QEMU virt).
-        let irq = (rd::OTHER_DEVICES..free).filter(|h| *h != mmio).find(|h| {
+        let irq = devices.filter(|h| *h != mmio).find(|h| {
             alarm(base, now_ns(base) + 1_000_000);
             let fired = matches!(rd::receive(Some(*h), 3_000, 0), Ok(Received::Interrupt));
             clear(base);

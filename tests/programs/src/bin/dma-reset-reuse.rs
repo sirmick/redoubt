@@ -92,8 +92,8 @@ pub extern "C" fn _start() -> ! {
     out.0.init();
     say!(out, "\n[dma-reset-reuse] mapped the console");
 
-    let free = rd::first_free();
-    let disk = (rd::OTHER_DEVICES..free).find_map(|h| {
+    let mut devices = rd::OTHER_DEVICES..rd::log_rx();
+    let disk = devices.clone().find_map(|h| {
         let (at, len) = rd::map_device(h).ok()?;
         let virtio = len >= rd::PAGE_SIZE && read(at, MAGIC) == u32::from_le_bytes(*b"virt");
         (virtio && read(at, DEVICE_ID) == BLOCK).then_some((h, at))
@@ -134,7 +134,6 @@ pub extern "C" fn _start() -> ! {
     let destroyed = rd::destroy(budget);
     let mut reused = 0;
     let mut dirty = 0;
-    let mut devices = rd::OTHER_DEVICES..free;
     let mut device = devices.next();
     while let Some(h) = device {
         let Ok((_, phys)) = rd::dma_alloc(h, RUN_PAGES) else {
