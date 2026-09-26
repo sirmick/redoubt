@@ -32,7 +32,7 @@ Status: built · tested: bench:netd-host-tests, bench:d3-net-tcp, host:redoubt-n
 
 The table: [libs/wire/tables/netif.md](../../libs/wire/tables/netif.md).
 
-{{#include ../../libs/wire/tables/netif.md}}
+{{#include ../../libs/wire/tables/netif.md:tables}}
 
 ### Rings and slots
 

@@ -61,7 +61,7 @@ outstanding at a time), and `sync` is a `flush` that waits for the device.
 
 The table: [libs/wire/tables/blkd.md](../../libs/wire/tables/blkd.md).
 
-{{#include ../../libs/wire/tables/blkd.md}}
+{{#include ../../libs/wire/tables/blkd.md:tables}}
 
 ### The DMA region
 

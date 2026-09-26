@@ -188,8 +188,15 @@ releases every grant it made for that child, at every server, and disconnects th
 connections ([init](init.md#fresh-connections-per-child)), so a dead child's grants do not hold
 their servers' admission for the life of the launcher.
 
-**Open:** whether a launcher that dies itself leaves the release to its own launcher through
-`disconnect_all`, or whether each server learns of the child's exit directly.
+**A child's grants never outlive its launcher's:** disconnecting a launcher's connection releases
+every connection minted under it, at every depth. Servers track no exits. A child's connections
+were minted through its launcher's, so when a launcher dies and its own launcher disconnects it,
+every descendant's connections go with it. An orphaned child keeps running in its budget, if that
+budget lives, but loses its server connections: it fails closed.
+
+The attack test: killing a launcher leaves its orphan's connections dead at every server.
+
+**Open:** none.
 
 ### `ninep_common`
 
@@ -198,15 +205,16 @@ Status: built · tested: host:redoubt-rt::minted_connections_are_admitted_and_fo
 Every 9P endpoint also serves `ninep_common`, typed opcodes 1 to 15. `new_connection(root, quota)`
 mints a fresh connection rooted at `root`, a path relative to the caller's own root that never
 climbs above it, and replies with the connection's endpoint handle and its id. `quota` is the
-byte quota asked for (0: none of its own), which a file server may refuse (`refused`); a server
-that meters no bytes ignores it. `disconnect(id)` frees the connection with that id and
+byte quota asked for, carved from the caller's, which a file server may refuse (`refused`); at a
+file server a quota of 0 means the connection may read and remove but not create or grow
+([fsd](fsd.md#quotas)). A server that meters no bytes ignores it. `disconnect(id)` frees the connection with that id and
 everything minted under it; an id the caller did not receive is `not_yours`, the same answer as
 an id that does not exist. Opcodes 1 and 4 to 15 are reserved and malformed. How the skeleton
 serves them is on [the serving library](serving.md#the-9p-server-skeleton).
 
 The table: [libs/wire/tables/ninep_common.md](../../libs/wire/tables/ninep_common.md).
 
-{{#include ../../libs/wire/tables/ninep_common.md}}
+{{#include ../../libs/wire/tables/ninep_common.md:tables}}
 
 ### Strict JSON
 

@@ -1,7 +1,6 @@
-# The `keyd` protocol
+The `keyd` protocol's message and error tables, included by its owning page, [servers/keyd.md](../../../docs/servers/keyd.md).
 
-Owned by [servers/keyd.md](../../../docs/servers/keyd.md).
-
+<!-- ANCHOR: tables -->
 <!-- wire: keyd -->
 | Opcode | Message | Fields | Reply |
 | --- | --- | --- | --- |
@@ -18,3 +17,5 @@ Owned by [servers/keyd.md](../../../docs/servers/keyd.md).
 | 2 | `not_permitted` |
 | 3 | `too_many` |
 | 4 | `failed` |
+
+<!-- ANCHOR_END: tables -->

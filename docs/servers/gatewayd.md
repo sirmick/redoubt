@@ -33,8 +33,9 @@ Status: planned · M4 (self-hosted development)
 - **Every request is checked** against the capability before anything leaves the box: the service,
   the operation, the model or repository, the size, and what the meter has left; a request over the
   meter is refused ([R65 (a request only within its capability)](#r65-a-request-only-within-its-capability)).
-- **Metering** counts tokens and money per principal, from the provider's own usage figures in each
-  answer, and refuses further requests once a meter is spent.
+- **Metering.** The steward owns the meters, so they survive a `gatewayd` restart. Before sending,
+  `gatewayd` checks the principal's spend cap against the steward's figure, and refuses a request
+  over it; after each response it reports the usage the provider gave.
 - **Logging.** Every call is recorded with the principal chain, the capability, the operation and
   its cost, in the steward's audit log ([steward](steward.md#the-audit-log)).
 
@@ -47,19 +48,20 @@ sequenceDiagram
     participant S as steward (audit)
     Note over A,S: planned
     A-->>G: complete(model, prompt) on its gateway capability
-    G-->>G: check service, model, size;<br/>meter has room
+    G-->>S: spend cap and the principal's figure
+    G-->>G: check service, model, size;<br/>under the cap
     G-->>I: TLS connection to the provider<br/>(gatewayd's own scope)
     G-->>P: HTTPS request with the API key
     P-->>G: completion and usage
-    G-->>G: charge the meter
-    G-->>S: audit record: principal chain,<br/>operation, cost
+    G-->>S: usage for the meter; audit record:<br/>principal chain, operation, cost
     G-->>A: the completion (no key, no headers)
 ```
 *Figure: an agent's model call through `gatewayd`. All of it is planned.*
 
+The attack test: a request over the spend cap is refused before anything is sent.
+
 **Open:** the protocol table and its operations for the first provider and for git; how money is
-priced from usage (a table in `gatewayd`'s arguments, or the provider's own figures); whether the
-meter is kept by `gatewayd` or by the steward.
+priced from usage.
 
 ### Keys and TLS
 
@@ -74,9 +76,9 @@ Status: planned · M4 (self-hosted development)
   services it serves.
 - A git host's SSH or token credentials are held the same way.
 
-**Open:** the TLS implementation (a pure-Rust, `no_std` library, or one written here); where API
-keys live across a reboot once the steward keeps state; whether a TLS client key, if a service
-needs one, lives in `keyd`.
+**Open:** the TLS implementation is pure Rust with no C (rustls with a pure-Rust cryptography
+provider, not one wrapping C); which provider is still to be chosen. Where API keys live across a
+reboot once the steward keeps state.
 
 ### A label sink
 
@@ -127,20 +129,22 @@ could send elsewhere.
 
 Status: planned · M4 (self-hosted development)
 
-- **`gatewayd` restarts:** requests in flight fail and are asked again; meters are kept by whoever
-  keeps them across the restart.
+- **`gatewayd` restarts:** requests in flight fail and are asked again; the meters are the
+  steward's and survive.
 - **The service fails or is unreachable:** the request fails with the service's error, and nothing is
   charged but what the service reported used.
 
-**Open:** where meters survive a `gatewayd` restart.
+**Open:** none.
 
 ## Residual risks
 
 - **The service sees what the agent sends.** A prompt carries whatever the agent put in it; the
   gateway limits where it goes and how much, not what it says. Labelled data never reaches it, since
   it is a sink.
-- **A key held by `gatewayd` is exposed to a `gatewayd` bug.** It is the one process holding every API
-  key; a compromise leaks them, and a leaked key is revoked at the provider.
+- **The keys sit beside the response parser.** `gatewayd` holds every API key and parses provider
+  responses (TLS, HTTP, JSON) in one process, so a response-parser bug reaches the keys. Splitting
+  TLS out would not hide them, since the key travels inside the TLS plaintext. A leaked key is
+  revoked at the provider.
 - **Metering trusts the provider's usage figures.**
 - **An answer is untrusted input.** What the model returns can try to steer the agent; the agent's
   capabilities, not the gateway, bound what that can do.

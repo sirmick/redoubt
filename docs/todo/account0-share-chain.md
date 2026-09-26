@@ -2,20 +2,23 @@
 
 ## What
 
-Admission keys account 0 by badge, and a capability a client mints for itself folds into its
-parent's share only when the requester is the same client (the same badge, account and label
-set). A `system`-class client of a 9P server that mints connections for itself therefore looks,
-through each new badge, like a new client: the chain opens a fresh bucket per link, until the
-server's bucket count is spent and every later connection is refused. The code names it an open
-hole in `Minted::share`.
+Admission keys account 0 by badge (`AdmitKey::of`), and `Minted::share` folds a capability into
+its parent's share only while the requester's key stays the same. A `system`-class client of a 9P
+server that mints connections for itself therefore looks, through each new badge, like a new
+client: the chain opens a fresh bucket per link, until the server's bucket count is spent and every
+later connection is refused. The rule,
+[R26 (admission fairness)](../servers/serving.md#r26-admission-fairness), is that within account 0
+every capability minted through a root badge counts in that root's share, however many links deep
+and whoever holds it; the code departs from it.
 
 ## Why it matters
 
-Every driver, file server and daemon is account 0. One of them, compromised or buggy, can starve
-a shared server of buckets, so the steward, `sshd` or another server cannot get a connection
-([R26 (admission fairness)](../servers/serving.md#r26-admission-fairness)). `keyd` avoids it by
-letting only a root badge grant; the 9P skeleton cannot, because minting a connection for a child
-is how attenuation works there.
+Every driver, file server and daemon is account 0. One of them, compromised or fed hostile input
+(`sshd`, `netd`, a driver), can take every `State` bucket of a 9P server and starve every other
+client, the steward and principals included (R26). It is availability
+across principals, not an escape. `keyd` avoids it by letting only a root badge grant.
+
+Fixed in the servers follow-up package after the documentation rewrite.
 
 ## Where
 
@@ -26,7 +29,8 @@ is how attenuation works there.
 
 ## Done when
 
-A chain of connections an account-0 client mints for itself counts in one bucket (for instance,
-fold while the requester's account and label set match, ignoring the badge, for minted badges),
-and a host test has an account-0 client mint a chain past the bucket count while another client
-still gets a connection.
+- For an account-0 caller, `Minted::share` walks parent links to the root badge the chain was
+  minted through; a capability used under a non-zero account is keyed by that account, as before.
+- A `libs/rt` host test has an account-0 caller chain N links and flood: the chain holds one
+  bucket's worth, and a second client is still admitted.
+- A mutation restoring the stop-at-key-change fold fails that test.

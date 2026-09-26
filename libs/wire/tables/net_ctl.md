@@ -1,7 +1,6 @@
-# The `net_ctl` protocol
+The `net_ctl` protocol's message and error tables, included by its owning page, [servers/ipd.md](../../../docs/servers/ipd.md).
 
-Owned by [servers/ipd.md](../../../docs/servers/ipd.md).
-
+<!-- ANCHOR: tables -->
 <!-- wire: net_ctl -->
 | Opcode | Message | Fields | Reply |
 | --- | --- | --- | --- |
@@ -20,3 +19,5 @@ Owned by [servers/ipd.md](../../../docs/servers/ipd.md).
 | 6 | `unreachable` |
 | 7 | `refused` |
 | 8 | `timeout` |
+
+<!-- ANCHOR_END: tables -->

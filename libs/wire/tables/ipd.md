@@ -1,7 +1,6 @@
-# The `ipd` protocol
+The `ipd` protocol's message and error tables, included by its owning page, [servers/ipd.md](../../../docs/servers/ipd.md).
 
-Owned by [servers/ipd.md](../../../docs/servers/ipd.md).
-
+<!-- ANCHOR: tables -->
 <!-- wire: ipd ninep -->
 | Opcode | Kind | Message | Fields | Reply |
 | --- | --- | --- | --- | --- |
@@ -13,3 +12,5 @@ Owned by [servers/ipd.md](../../../docs/servers/ipd.md).
 | --- | --- |
 | 2 | `not_permitted` |
 | 3 | `too_many` |
+
+<!-- ANCHOR_END: tables -->
