@@ -21,7 +21,7 @@ pub extern "C" fn _start() -> ! {
     let mut envelope = redoubt_abi::receive_message(sid).expect("couldn't receive");
     if let Message::Borrow(m) = &envelope.body {
         let message = MemoryMessage { id: op::PRINT_AND_KEEP, buf: m.buf, offset: None, valid: None };
-        let result = redoubt_abi::send_message(logger.cid, Message::Move(message));
+        let result = redoubt_abi::send_message(test_programs::connect_legacy(), Message::Move(message));
         log!(logger, "[move-borrowed] moving the borrowed page on: {:?}", result);
     }
     drop(envelope); // returns the page to its lender

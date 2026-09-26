@@ -13,7 +13,3 @@ expect = [
     '^\[pid 4\] \[victim\] lend returned Ok\(MemoryReturned\(.*\)\), page intact: victim data$',
 ]
 forbid = ['CHANGED', '^\[server\] moved page']
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]

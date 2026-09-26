@@ -7,7 +7,3 @@ programs = ["log-server"]
 expect = ['Kernel RNG seeded from the loader']
 forbid = ['KMAIN']
 must_fail = '^forbidden output /KMAIN/: KMAIN'
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]

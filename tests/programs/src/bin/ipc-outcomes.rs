@@ -132,7 +132,7 @@ fn raw_call(endpoint: u32, record: usize, lend: Option<rd::Pages>) -> CallOutcom
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let mut logger = Logger::connect();
+    let mut logger = test_programs::logsrv::start();
     let endpoint = rd::endpoint_create().unwrap();
     ENDPOINT.store(endpoint as usize, Ordering::Release);
     redoubt_abi::create_thread_1(server, 0).expect("server");
@@ -155,8 +155,20 @@ pub extern "C" fn _start() -> ! {
             }
         );
     }
-    let (mmio, _) = rd::map_device(rd::CONSOLE_MMIO).unwrap();
+    let (mmio, len) = rd::map_device(rd::CONSOLE_MMIO).unwrap();
     assert_eq!(raw_call(endpoint, mmio, None).status, Err(Error::InvalidArgument));
+    // Nor are budget records: input and output records at `mmio` are refused with
+    // InvalidArgument (not a kernel fault, as rv32 once gave) before any nonzero handle is looked
+    // up. `mmio + len - 8` straddles the end of the mapping: its second slot lies past the
+    // mapping, so this row does not isolate the device check.
+    for record in [mmio, mmio + len - 8] {
+        for budget in [rd::SYSTEM, 999] {
+            for number in [rd::Number::BudgetCreate, rd::Number::BudgetUsage] {
+                let args = [rd::number(number), budget as usize, record, 0, 0, 0, 0, 0];
+                assert_eq!(rd::raw_error(rd::raw(args)), Some(Error::InvalidArgument), "MMIO-backed budget record");
+            }
+        }
+    }
     assert_eq!(TAKEN.load(Ordering::Acquire), 0, "invalid records were never delivered");
     rd::set_flags(page, rd::PAGE_SIZE, rd::rw()).unwrap();
     log!(logger, "IPC1 initial readonly/MMIO records refused before delivery");

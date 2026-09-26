@@ -5,7 +5,3 @@ programs = ["log-server"]
 # The verdict is the kernel's own boot-time check, printed before any program runs; anchored,
 # so a program's relayed `[pid N]` line could not match it.
 expect = ['^W\^X verified: [1-9]\d* executable kernel pages, none writable under any alias', '^\[server\] PID 2 listening']
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]

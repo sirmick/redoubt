@@ -137,7 +137,7 @@ macro_rules! expect {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let logger = Logger::connect();
+    let logger = test_programs::logsrv::start();
     let mut t = T { logger, failed: false };
     log!(t.logger, "[revoke] starting");
 

@@ -16,7 +16,3 @@ forbid = ['KMAIN']
 [[file]]
 name = "data"
 from = { path = "tests/data/bundle-file.txt" }
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]

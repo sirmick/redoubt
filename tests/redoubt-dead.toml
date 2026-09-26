@@ -4,8 +4,8 @@ kind = "boot"
 # Built with the checks on (docs/testbench.md, "Debug assertions").
 debug_assertions = true
 # PID 2 redoubt-dead: it must be the loader's first program, the one holding root, system and
-# users, since the Refused step carves system's free pages away. PID 3 log-server.
-programs = ["redoubt-dead", "log-server"]
+# users, since the Refused step carves system's free pages away.
+programs = ["redoubt-dead"]
 timeout_secs = 30
 expect = [
     '^\[pid 2\] \[dead\] server took a call with a lend of Some\(1\) pages, and exits$',
@@ -14,7 +14,3 @@ expect = [
     '^\[pid 2\] REDOUBT-DEAD TEST PASSED$',
 ]
 forbid = ['\[dead\] FAIL', 'REDOUBT-DEAD TEST FAILED']
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]

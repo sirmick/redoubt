@@ -5,28 +5,21 @@ kind = "boot"
 debug_assertions = true
 # 32 MiB so the lend-past-RAM step (12k pages = 48 MiB) exhausts RAM in milliseconds.
 memory_mib = 32
-# PID 2 log-server; PID 3 lend-untouched makes every attempt; PID 4 attack-checker ends it.
-programs = ["log-server", "lend-untouched", "attack-checker"]
+# PID 2 log-server; PID 3 lend-untouched makes every attempt, then reports DONE.
+programs = ["log-server", "lend-untouched"]
 smp = [1, 4]
 timeout_secs = 30
-# The kernel once backed such pages while holding its memory-manager cell and panicked
-# ("RefCell already borrowed"; with `smp`, a deadlock and a timeout), left a half-mapped range
-# half lent, and panicked when backing ran out of RAM. PANIC is always forbidden, and the
-# verdict is the checker's clean power-off under its own PID: a kernel that panicked on any
-# attempt never reaches it. The attacker's own lines are progress only. `[server] moved page`
-# and relayed `[pid N]` lines are client-triggerable, so they are never the verdict.
+# The kernel once backed such pages while holding its memory-manager cell and panicked ("RefCell
+# already borrowed"; with `smp`, a deadlock and a timeout), left a half-mapped range half lent,
+# and panicked when backing ran out of RAM. PANIC is always forbidden, and the verdict is
+# log-server's DONE line naming PID 3 and its clean power-off: a kernel that panicked on any
+# attempt never reaches it. The attacker's own lines are progress only. `[server] moved page` and
+# relayed `[pid N]` lines are client-triggerable, so they are never the verdict.
 expect = [
     '^\[pid 3\] \[untouched\] half-mapped lend refused: true$',
     '^\[pid 3\] \[untouched\] lend beyond RAM: Err\(OutOfMemory\)$',
-    '^\[pid 4\] \[checker\] PID 3 reported; the kernel still serves',
+    '^\[server\] done: reported by pid 3; still serving$',
 ]
 forbid = ['FAIL', ': false$']
 poweroff = true
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]
-
-[[grant]]
-program = "attack-checker"
-mmio = ["0x100000:0x1000"]
+reporter = "lend-untouched"

@@ -30,6 +30,8 @@ fn good_spec() -> [u64; BUDGET_SPEC_SLOTS] { rd::spec(1, 0, 0).encode() }
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
+    // The bundle's third program: its budgets come from log-server, once, and no device (R2).
+    let rd::Gifts { system, .. } = rd::take_gifts().expect("the budgets");
     log!(logger, "[attacker] starting");
     let scratch = (&raw mut SCRATCH) as usize;
     // Decoding never backs an untouched page (QUESTIONS.md 115), so touch every page of SCRATCH.
@@ -46,7 +48,7 @@ pub extern "C" fn _start() -> ! {
     // SAFETY: the first page is still mapped, writable and this program's.
     unsafe { (pages.as_mut_ptr() as *mut u64).write_volatile(1) };
 
-    let create = |rec: usize| call(Number::BudgetCreate, [rd::SYSTEM as usize, rec, 0, 0, 0, 0, 0]);
+    let create = |rec: usize| call(Number::BudgetCreate, [system as usize, rec, 0, 0, 0, 0, 0]);
     let spec = good_spec();
     let at = |slots: &[u64; BUDGET_SPEC_SLOTS]| {
         for (i, slot) in slots.iter().enumerate() {
@@ -87,39 +89,21 @@ pub extern "C" fn _start() -> ! {
         call(Number::BudgetCreate, [0, scratch + 4, 0, 0, 0, 0, 0]),
         call(Number::BudgetCreate, [999, scratch + 4, 0, 0, 0, 0, 0]),
         call(Number::BudgetCreate, [999, at(&spec), 0, 0, 0, 0, 0]),
-        call(Number::BudgetCreate, [rd::SYSTEM as usize, at(&spec), 1, 0, 0, 0, 0]),
+        call(Number::BudgetCreate, [system as usize, at(&spec), 1, 0, 0, 0, 0]),
     ];
     log!(logger, "[i14] budget_create order -> {:?}", order);
     // A page reserved and never touched: decoding does not back it (QUESTIONS.md 115).
     let untouched = redoubt_abi::map_memory(None, None, 4096, MemoryFlags::R | MemoryFlags::W).expect("map");
     let usage = [
-        call(Number::BudgetUsage, [rd::SYSTEM as usize, untouched.as_ptr() as usize, 0, 0, 0, 0, 0]),
-        call(Number::BudgetUsage, [rd::SYSTEM as usize, text, 0, 0, 0, 0, 0]),
-        call(Number::BudgetUsage, [rd::SYSTEM as usize, scratch + 1, 0, 0, 0, 0, 0]),
-        call(Number::BudgetUsage, [rd::SYSTEM as usize, KERNEL, 0, 0, 0, 0, 0]),
-        call(Number::BudgetUsage, [rd::SYSTEM as usize, end - 8, 0, 0, 0, 0, 0]),
+        call(Number::BudgetUsage, [system as usize, untouched.as_ptr() as usize, 0, 0, 0, 0, 0]),
+        call(Number::BudgetUsage, [system as usize, text, 0, 0, 0, 0, 0]),
+        call(Number::BudgetUsage, [system as usize, scratch + 1, 0, 0, 0, 0, 0]),
+        call(Number::BudgetUsage, [system as usize, KERNEL, 0, 0, 0, 0, 0]),
+        call(Number::BudgetUsage, [system as usize, end - 8, 0, 0, 0, 0, 0]),
         call(Number::BudgetUsage, [999, text, 0, 0, 0, 0, 0]),
         call(Number::BudgetUsage, [999, scratch, 0, 0, 0, 0, 0]),
     ];
     log!(logger, "[i14] budget_usage -> {:?}", usage);
-    // A non-DMA device mapping is not record storage. Input and output records at `mmio`
-    // are refused with InvalidArgument (not a kernel fault, as rv32 once gave) before any
-    // nonzero handle is looked up. `mmio + len - 8` straddles the end of the mapping: its
-    // second slot lies past the mapping, so this case does not isolate the device check.
-    let (mmio, len) = rd::map_device(rd::CONSOLE_MMIO).expect("console mapping");
-    for record in [mmio, mmio + len - 8] {
-        for budget in [rd::SYSTEM, 999] {
-            for number in [Number::BudgetCreate, Number::BudgetUsage] {
-                assert_eq!(
-                    call(number, [budget as usize, record, 0, 0, 0, 0, 0]),
-                    Some(Error::InvalidArgument),
-                    "MMIO-backed budget record"
-                );
-            }
-        }
-    }
-    rd::unmap(mmio, len).expect("unmap console");
-    log!(logger, "[i14] MMIO budget input/output records refused before use");
     // `random` takes no arguments (answer 77): its old buffer and length are stray registers.
     let random = [
         call(Number::Random, [text, 8, 0, 0, 0, 0, 0]),
@@ -138,7 +122,7 @@ pub extern "C" fn _start() -> ! {
         call(Number::TimeNow, [0, 0, 0, 0, 0, 0, 1]),
         call(Number::HandleClose, [0, 0, 0, 0, 0, 0, 0]),
         call(Number::HandleClose, [999, 0, 0, 0, 0, 0, 0]),
-        call(Number::HandleClose, [rd::SYSTEM as usize, 1, 0, 0, 0, 0, 0]),
+        call(Number::HandleClose, [system as usize, 1, 0, 0, 0, 0, 0]),
         call(Number::BudgetDestroy, [999, 0, 0, 0, 0, 0, 0]),
         // The memory and device calls (WP-K3): a stray register, flags that cannot be decoded
         // (W+X, an unknown bit), no length, a range that is not the caller's, and handles of
@@ -150,9 +134,9 @@ pub extern "C" fn _start() -> ! {
         call(Number::Unmap, [KERNEL, 4096, 0, 0, 0, 0, 0]),
         call(Number::SetFlags, [text, 4096, 6, 0, 0, 0, 0]),
         call(Number::MapDevice, [0, 0, 0, 0, 0, 0, 0]),
-        call(Number::MapDevice, [rd::SYSTEM as usize, 0, 0, 0, 0, 0, 0]),
+        call(Number::MapDevice, [system as usize, 0, 0, 0, 0, 0, 0]),
         call(Number::DmaAlloc, [999, 1, 0, 0, 0, 0, 0]),
-        call(Number::SystemReset, [rd::SYSTEM as usize, 1, 0, 0, 0, 0, 0]),
+        call(Number::SystemReset, [system as usize, 1, 0, 0, 0, 0, 0]),
         call(Number::SystemReset, [999, 9, 0, 0, 0, 0, 0]),
         // `endpoint_create` takes no arguments: a stray register is malformed.
         call(Number::EndpointCreate, [0, 0, 0, 0, 0, 0, 1]),
@@ -167,11 +151,11 @@ pub extern "C" fn _start() -> ! {
         call(Number::Mint, [1, 0, 0, 1, 0, 0, 0]),
         // `receive` on a budget handle is the wrong kind of object; on 0 it sleeps, and a
         // timeout of 0 makes that a poll that answers at once.
-        call(Number::Receive, [rd::SYSTEM as usize, 0, 0, 0, scratch, 0, 0]),
+        call(Number::Receive, [system as usize, 0, 0, 0, scratch, 0, 0]),
         call(Number::Receive, [0, 0, 0, 0, scratch, 0, 0]),
     ];
     log!(logger, "[i14] other -> {:?}", other);
-    let sandbox = rd::create(rd::SYSTEM, &rd::spec(200, 0, 0)).expect("sandbox");
+    let sandbox = rd::create(system, &rd::spec(200, 0, 0)).expect("sandbox");
 
     // Random calls over hostile values. Never destroy or close slots 1-3: losing `system` would
     // kill this program and the victim, which is not the attack. `system_reset` is in the

@@ -12,7 +12,7 @@ use redoubt_abi::{MemoryFlags, Message};
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
-    let cid = logger.cid;
+    let cid = test_programs::connect_legacy();
     let mut failures = 0;
     log!(logger, "[ipc] PID {} connected", redoubt_abi::current_pid().unwrap());
 
@@ -65,6 +65,9 @@ pub extern "C" fn _start() -> ! {
     let gift_addr = gift.range.as_ptr() as usize;
     let message = redoubt_abi::MemoryMessage { id: op::PRINT_AND_KEEP, buf: gift.range, offset: None, valid: gift.valid() };
     redoubt_abi::send_message(cid, Message::Move(message)).expect("couldn't move");
+    // A move does not wait for the server; a blocking call after it does, so the server has
+    // printed the moved page before the lines below.
+    redoubt_abi::send_message(cid, Message::new_blocking_scalar(op::SUM, 0, 0, 0, 0)).expect("sync");
     // The address must be unmapped here now, so mapping a fresh page there must succeed.
     let remap = redoubt_abi::map_memory(None, redoubt_abi::MemoryAddress::new(gift_addr), 4096, MemoryFlags::R | MemoryFlags::W);
     let ok = remap.is_ok();

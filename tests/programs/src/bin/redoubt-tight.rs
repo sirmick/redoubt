@@ -18,7 +18,7 @@
 #![no_main]
 
 use test_programs::rd::{self, Error, FOREVER, Received};
-use test_programs::{Logger, log};
+use test_programs::log;
 
 static mut ENDPOINT: u32 = 0;
 
@@ -41,7 +41,7 @@ const PAGES: usize = 3;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    let mut logger = Logger::connect();
+    let mut logger = test_programs::logsrv::start();
     log!(logger, "[tight] starting");
     let endpoint = rd::endpoint_create().expect("an endpoint");
     // SAFETY: written before the receiver thread is created.

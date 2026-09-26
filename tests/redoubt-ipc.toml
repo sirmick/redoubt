@@ -33,7 +33,3 @@ expect = [
 # A call replied to twice, or a notice delivered twice, would say so; so would any check in the
 # client. PANIC is always forbidden.
 forbid = ['\[ipc\] FAIL', 'replied twice', 'reported \d+ times, FAIL', 'REDOUBT-IPC TEST FAILED']
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]

@@ -11,7 +11,3 @@ expect = ['^loader PANIC', 'signature is invalid']
 forbid = ['KMAIN', 'bundle signature ok']
 poweroff = true             # and the refusal stops the machine, rather than limping on
 poweroff_status = 255       # RustSBI preserves the loader's SBI SystemFailure reason
-
-[[grant]]
-program = "log-server"
-mmio = ["0x10000000:0x1000"]
