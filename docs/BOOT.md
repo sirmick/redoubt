@@ -90,7 +90,6 @@ end of the block, so a truncated or malformed block cannot make the kernel read 
 | `Devs` | device entries, six words each: kind, first value (2 words), second value (2), flags; layout below |
 | `Ctrl` | controller ranges, four words each: physical base (2 words), size (2); excluded from device mappings |
 | `IniE` | one per initial process; today only counted, to size the process table    |
-| `PNam` | one per initial process: pid, name length in bytes, then the name, padded to a word. `process_name` walks these records within the tag's own length |
 
 **Current device encoding (WP-K3).** These are the loader/kernel's implemented handoff, not an
 implicit answer to open question 143 about the target device policy. `Devs` entries are:
@@ -118,7 +117,7 @@ question 146 still tracks accepting that result shape into the target specificat
 
 **Decided change** (PACKAGES.md, launching): the loader will verify the bundle and load only the
 kernel and `init`; `init` launches every other process through the loader stub, from the bundle's
-pages. `IniE`/`PNam` per process then go, replaced by the boot manifest
+pages. `IniE` per process then goes, replaced by the boot manifest
 (INIT.md).
 
 Default builds run only the boot hart; with 2 or 4 harts the extra harts stay parked in the

@@ -245,12 +245,6 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
         // The kernel counts these tags to size its process table (BOOT.md); they carry no data.
         args.begin(b"IniE");
         args.end();
-
-        args.begin(b"PNam");
-        args.word(pid.get() as u32);
-        args.word(name.len() as u32);
-        args.bytes(name.as_bytes());
-        args.end();
     }
     processes[0] = kernel_process;
     args.finish(ram.start, ram.len(), b"sram");
