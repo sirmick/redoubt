@@ -1,5 +1,5 @@
 //! The TCP/IP stack: smoltcp's interface and sockets, and `ipd`'s table of whose each socket is
-//! (NAMESPACES.md, What `ipd` serves; answer 174).
+//! (servers/ipd.md).
 //!
 //! # Whose a socket is
 //! Every socket belongs to one [`Owner`]: the badge of the connection that made it and the
@@ -8,7 +8,7 @@
 //! removes it. A socket its owner has closed, aborted or disconnected is no longer visible and
 //! lingers at most [`LINGER_US`] more before `ipd` resets it.
 //!
-//! # What a socket costs its owner (QA D3-code-review-5, P2-2)
+//! # What a socket costs its owner
 //! Each socket is one `State` unit in the 9P skeleton's shared admission, in its owner's bucket
 //! and share, so sockets get the library's buckets, fair shares (an agent cannot take all of its
 //! sponsor's) and worst-case sizing. The stack cannot reach the admission from inside a request,
@@ -17,19 +17,19 @@
 //! gives its unit back only when it is removed ([`Stack::take_freed`]), so a bucket stays held
 //! while its sockets linger. Outside a request nothing can make a socket.
 //!
-//! # Initial sequence numbers (answer 174, decision 11)
-//! smoltcp draws an ISN from its interface's PRNG, which is seeded only when an interface is
-//! made. So the main interface never makes one: each active open is connected through the
-//! context of a **fresh interface** seeded from the kernel's CSPRNG ([`Entropy`]), and each SYN
-//! to a listening port is taken in through a fresh one's ingress. The fresh interface has the
-//! same address and route but an empty neighbour cache, so a reply it would send at once is
-//! lost rather than sent; the SYN-ACK goes out later from the main interface, carrying the ISN
-//! the fresh one drew. **Stated (QA D3-code-review-5):** when every listening socket of the port is
-//! busy, the fresh interface answers the SYN with an RST, and its empty cache turns that into one
-//! ARP request for the next hop instead: under a SYN flood at a full backlog, one ARP broadcast
-//! per SYN (1:1, no amplification), never for one of the box's own addresses (their SYNs are
-//! dropped as martian first). With no seed there is no open: the connect answers `unreachable`, the SYN
-//! is dropped, and nothing falls back to the main PRNG.
+//! # Initial sequence numbers (servers/ipd.md R62)
+//! smoltcp draws an ISN from its interface's PRNG, which is seeded only when an interface is made.
+//! So the main interface never makes one: each active open is connected through the context of a
+//! **fresh interface** seeded from the kernel's CSPRNG ([`Entropy`]), and each SYN to a listening
+//! port is taken in through a fresh one's ingress. The fresh interface has the same address and
+//! route but an empty neighbour cache, so a reply it would send at once is lost rather than sent;
+//! the SYN-ACK goes out later from the main interface, carrying the ISN the fresh one drew.
+//! **Stated** (servers/ipd.md, "Residual risks"): when every listening socket of the port is busy,
+//! the fresh interface answers the SYN with an RST, and its empty cache turns that into one ARP
+//! request for the next hop instead: under a SYN flood at a full backlog, one ARP broadcast per SYN
+//! (1:1, no amplification), never for one of the box's own addresses (their SYNs are dropped as
+//! martian first). With no seed there is no open: the connect answers `unreachable`, the SYN is
+//! dropped, and nothing falls back to the main PRNG.
 //!
 //! # What is checked before smoltcp sees anything
 //! A `connect` is refused (`not_permitted`) to the box's own addresses ([`SelfSet`]) before the
@@ -90,7 +90,7 @@ pub struct Owner {
     pub key: AdmitKey,
 }
 
-/// Why a `ctl` operation failed: `net_ctl`'s error names (NAMESPACES.md).
+/// Why a `ctl` operation failed: `net_ctl`'s error names (servers/ipd.md, "The `/net` tree").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CtlError {
     NotPermitted,
@@ -117,7 +117,7 @@ impl CtlError {
     }
 }
 
-/// A socket's state as `ctl` reads it (NAMESPACES.md).
+/// A socket's state as `ctl` reads it (servers/ipd.md, "The `/net` tree").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u32)]
 pub enum Status {
@@ -183,7 +183,7 @@ struct Entry {
     id: u64,
     owner: Owner,
     /// The port-ownership group of the connection that made it (a listener's port belongs to
-    /// it: NAMESPACES.md, `listen`).
+    /// it: servers/ipd.md, "The `/net` tree", Ports).
     group: u64,
     /// The owner's number for it; `None` once released, and for a backlog socket.
     n: Option<u32>,
@@ -968,7 +968,7 @@ pub enum Class {
     /// IPv4 that is not TCP, from anywhere: dropped. `ipd` serves only TCP, and the main
     /// interface would answer it with an ICMP "protocol unreachable" to its claimed source: a
     /// reflection for anyone who spoofs one, and a packet to the box's own addresses if the
-    /// source were one (QA D3-code-review-5).
+    /// source were one.
     NotTcp,
     /// A SYN without ACK to `ipd`'s own address.
     Syn { port: u16 },
@@ -983,7 +983,7 @@ pub enum Class {
 /// **Martian sources.** IPv4 of any protocol from `ipd`'s own address, `127/8` or `0/8`
 /// ([`martian_source`]), or from any other of the box's own addresses ([`SelfSet`]) except the
 /// gateway, is dropped, before its protocol is looked at. The gateway is kept: on QEMU it is where
-/// forwarded connections arrive from (answer 174). **Then every IPv4 packet that is not TCP is
+/// forwarded connections arrive from. **Then every IPv4 packet that is not TCP is
 /// dropped** ([`Class::NotTcp`]), so nothing but TCP ever reaches smoltcp from the wire.
 pub fn classify(frame: &[u8], net: &Net) -> Class {
     let own = net.addr;

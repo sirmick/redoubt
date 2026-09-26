@@ -15,8 +15,8 @@ use crate::kernel::{Endpoint, Handle, MsgKind};
 use crate::spec::{Cause, Class, Error};
 use crate::syscall::{Message, MintSource, Ret};
 
-/// R2's group (QUESTIONS 17, 87): blocked senders are grouped, capped and served round-robin by
-/// (account, label set), and for account 0 by the sender's budget id as well (0 otherwise).
+/// R2's group: blocked senders are grouped, capped and served round-robin by (account, label set),
+/// and for account 0 by the sender's budget id as well (0 otherwise).
 pub type Key = (u64, Vec<u64>, u64);
 
 /// The group of a sender in budget `budget` with `account` and `labels` (R2).
@@ -35,7 +35,7 @@ pub struct Sent {
     pub labels: Vec<u64>,
     pub account: u64,
     pub endpoint: u64,
-    /// The endpoint's owner budget, its class and labels (R1 compares against it, QUESTIONS 4).
+    /// The endpoint's owner budget, its class and labels (R1 compares against it).
     pub owner_class: Class,
     pub owner_labels: Vec<u64>,
     /// The badge and stamp of the handle the message was sent through.
@@ -68,7 +68,7 @@ impl Blame {
 }
 
 /// A process object as `process_create` made it: who pays for it (the caller's budget, read from
-/// the caller's process object; QUESTIONS 74), and the exit endpoint handle it named.
+/// the caller's process object), and the exit endpoint handle it named.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Slot {
     pub payer: u64,
@@ -125,7 +125,7 @@ pub enum Flow {
     /// Thread `tid` was told that its open call `msg` was abandoned (R3).
     AbandonNotice { tid: u64, msg: u64 },
     /// `map_device` or `dma_alloc` succeeded on device `device`, which its device object said
-    /// was `quarantined` when the call began (WP-K5b, OD6).
+    /// was `quarantined` when the call began (kernel/devices.md, "Quarantine").
     DeviceUsed { device: u64, quarantined: bool },
 }
 
@@ -165,11 +165,11 @@ pub struct Ghost {
     /// Pending receives on endpoints, by thread.
     pub receiving: BTreeMap<u64, Receiving>,
     /// Calls delivered to each thread and not yet replied to (its open calls), in the order it
-    /// took them. A `send` is never served (QUESTIONS 31).
+    /// took them. A `send` is never served.
     pub served: BTreeMap<u64, Vec<u64>>,
-    /// Each thread's current call (QUESTIONS 82).
+    /// Each thread's current call.
     pub current: BTreeMap<u64, u64>,
-    /// The message ids each process was given, by (pid, id), and the last one (QUESTIONS 88).
+    /// The message ids each process was given, by (pid, id), and the last one.
     pub rids: BTreeMap<(u64, u64), u64>,
     pub last_rid: BTreeMap<u64, u64>,
     /// Each process object, by pid.
@@ -178,11 +178,11 @@ pub struct Ghost {
     pub exit_expect: BTreeMap<u64, Blame>,
     /// Exit notices owed, by the exiting pid.
     pub owed: BTreeMap<u64, Owed>,
-    /// WP-K5b (answer 173), I-DMA: for a DMA frame, the devices that could still write it (its
-    /// own device, and any it was ever armed against by a later `map_device`). Independent of
-    /// `Frame::quarantined`, so a bug in the real pooling decision cannot hide from it. Cleared
-    /// per device only by that device's own confirmed reset at the frame's holder's death
-    /// (`dma_reset`), never by pooling or by another process's death.
+    /// I16: for a DMA frame, the devices that could still write it (its own device, and any it
+    /// was ever armed against by a later `map_device`). Independent of `Frame::quarantined`, so a
+    /// bug in the real pooling decision cannot hide from it. Cleared per device only by that
+    /// device's own confirmed reset at the frame's holder's death (`dma_reset`), never by pooling
+    /// or by another process's death.
     pub armed: BTreeMap<u64, BTreeSet<u64>>,
     /// Violations found while a step ran (the checks run after it).
     pub violations: Vec<String>,
@@ -203,8 +203,8 @@ impl Ghost {
     pub fn labels(&self, b: u64) -> Vec<u64> { self.labels_at_creation.get(&b).cloned().unwrap_or_default() }
 
     /// Message `id` was delivered to thread `tid` of process `pid`: a call, as the ghost recorded
-    /// it when sent, becomes its newest open call and its current call. I12 (QUESTIONS 88): the id
-    /// it sees is its process's next, never 0, never reused within the process.
+    /// it when sent, becomes its newest open call and its current call. I12: the id it sees is its
+    /// process's next, never 0, never reused within the process.
     pub fn delivered(&mut self, tid: u64, pid: u64, id: u64, msg: &Message) {
         if self.sent.get(&id).is_some_and(|s| s.kind == MsgKind::Call) {
             self.served.entry(tid).or_default().push(id);
@@ -270,9 +270,9 @@ impl Ghost {
     }
 
     /// Process `pid` begins to die through thread `tid` (a fault if `fault`, else an exit); its
-    /// threads are `threads`. Its notice must say `faulted` if it faulted or holds open calls
-    /// (QUESTIONS 55), blaming the account and labels of `tid`'s current call, or nobody (QUESTIONS
-    /// 48, 82); otherwise `exited`, blaming nobody.
+    /// threads are `threads`. Its notice must say `faulted` if it faulted or holds open calls,
+    /// blaming the account and labels of `tid`'s current call, or nobody (R21); otherwise
+    /// `exited`, blaming nobody.
     pub fn exiting(&mut self, pid: u64, tid: u64, threads: &[u64], fault: bool) {
         let open = threads.iter().any(|t| self.served.get(t).is_some_and(|v| !v.is_empty()));
         let blame = if fault || open {
@@ -344,15 +344,15 @@ impl Ghost {
         }
     }
 
-    /// WP-K5b, I-DMA: frame `frame` could now be written by every device in `devices`, in
-    /// addition to any it was already armed against.
+    /// I16: frame `frame` could now be written by every device in `devices`, in addition to any it
+    /// was already armed against.
     pub fn dma_armed(&mut self, frame: u64, devices: impl IntoIterator<Item = u64>) {
         self.armed.entry(frame).or_default().extend(devices);
     }
 
-    /// WP-K5b, I-DMA: `device`'s reset just confirmed as the holder of `frames` died, so it can no
-    /// longer write them. It stays armed against every other frame: a live co-holder that still
-    /// reaches `device` can program it again, and only its own death's reset clears its frames.
+    /// I16: `device`'s reset just confirmed as the holder of `frames` died, so it can no longer
+    /// write them. It stays armed against every other frame: a live co-holder that still reaches
+    /// `device` can program it again, and only its own death's reset clears its frames.
     pub fn dma_reset(&mut self, device: u64, frames: &BTreeSet<u64>) {
         for f in frames {
             if let Some(devices) = self.armed.get_mut(f) {

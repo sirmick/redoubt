@@ -1,4 +1,4 @@
-//! The socket capability (NAMESPACES.md, The network tree; answer 174): **IP prefixes and ports
+//! The socket capability (servers/ipd.md, "Scopes and grants"): **IP prefixes and ports
 //! only**, and never the box's own addresses.
 //!
 //! A [`Scope`] is at most [`MAX_RULES`] rules, each a **connect** rule (an IPv4 prefix and a port
@@ -125,9 +125,9 @@ impl Scope {
         requested.rules.iter().all(|r| self.rules.iter().any(|held| r.within(held)))
     }
 
-    /// The `bytes` layout of `ipd`'s `grant` (NAMESPACES.md): `count: u8`, then per rule
+    /// The `bytes` layout of `ipd`'s `grant` (servers/ipd.md): `count: u8`, then per rule
     /// `kind: u8` (1 connect, 2 listen), `addr: bytes[4]` (network order; zero for listen),
-    /// `len: u8` (zero for listen), `lo: u16`, `hi: u16`, little-endian as all of WIRE.md.
+    /// `len: u8` (zero for listen), `lo: u16`, `hi: u16`, little-endian as all of servers/wire.md.
     pub fn decode(bytes: &[u8]) -> Result<Scope, BadScope> {
         let (&count, mut rest) = bytes.split_first().ok_or(BadScope)?;
         if usize::from(count) > MAX_RULES || rest.len() != usize::from(count) * RULE_BYTES {
@@ -173,7 +173,7 @@ impl Scope {
 /// Bytes of one encoded rule.
 pub const RULE_BYTES: usize = 10;
 
-/// The box's own addresses, refused to every scope (NAMESPACES.md; CAPABILITIES.md, approvals):
+/// The box's own addresses, refused to every scope (servers/ipd.md R59):
 /// `ipd`'s address, its network's network and broadcast addresses, the limited broadcast, the
 /// loopback and "this host" networks, multicast and the reserved class E, and every `self=`
 /// prefix the manifest lists (on QEMU, `10.0.2.0/24`, which slirp maps to the host).

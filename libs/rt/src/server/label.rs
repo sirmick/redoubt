@@ -1,7 +1,7 @@
-//! The label check (CONTAINMENT.md, the shared server library; answer 51): no read up, and
-//! writes only between equal label sets. There is no blind write-up: data enters a vault by the
-//! vault session reading it down from where it is. System servers are exempt from the kernel's check (R1) and
-//! apply this one to every request, using the label set the kernel attached to the message.
+//! The label check (servers/serving.md R25): no read up, and writes only between equal label
+//! sets. There is no blind write-up: data enters a vault by the vault session reading it down from
+//! where it is. System servers are exempt from the kernel's check (kernel/ipc.md R1) and apply
+//! this one to every request, using the label set the kernel attached to the message.
 
 /// What a request does to an object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

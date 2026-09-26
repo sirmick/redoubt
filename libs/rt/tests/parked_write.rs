@@ -1,7 +1,6 @@
-//! A write that waits (`Write::Wait`, answer 174) under `serve_parking`, on the fake kernel: it is
-//! parked like a waiting read, charged to the same admission, answered at once when its caller
-//! gives up, and refused with the server's timeout when its deadline passes (QA
-//! D3-code-review-3).
+//! A write that waits (`Write::Wait`) under `serve_parking`, on the fake kernel: it is parked like
+//! a waiting read, charged to the same admission, answered at once when its caller gives up, and
+//! refused with the server's timeout when its deadline passes.
 
 mod common;
 

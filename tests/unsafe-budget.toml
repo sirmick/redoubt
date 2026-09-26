@@ -6,8 +6,8 @@ kind = "unsafe-budget"
 # kernel's and loader's own crates carries a SAFETY comment or a `# Safety` doc. Keep it
 # that way. Third-party crates.io dependencies are outside the budget: the ratchet counts code
 # this repository owns, and those are pinned by Cargo.lock.
-# Only code that runs on rv64 is counted; see TENETS.md for the baseline.
-# G1: every on-target source file is listed. A file left out of every budget is not counted
+# Only code that runs on rv64 is counted; see docs/testbench.md, "The unsafe budget".
+# Every on-target source file is listed. A file left out of every budget is not counted
 # at all, and the checker cannot notice; add new sources to a budget when they land.
 # vendor/ (smoltcp and its dependencies for ipd, getrandom) is third-party code pinned by
 # checksum and outside the ratchet (vendor/README.md), like other crates.io dependencies.
@@ -19,7 +19,7 @@ max_unsafe = 12
 max_undocumented = 0
 
 [[budget]]
-# WP-K5: the kernel's stride queue rules, linked into the kernel. `#![forbid(unsafe_code)]`.
+# The kernel's stride queue rules, linked into the kernel. `#![forbid(unsafe_code)]`.
 name = "redoubt-stride (scheduler rules)"
 paths = ["libs/stride/src"]
 max_unsafe = 0
@@ -32,7 +32,7 @@ max_unsafe = 17 # +3: fdt-rs DevTree::from_raw_pointer, the static index buffer,
 max_undocumented = 0
 
 [[budget]]
-# WP-V1: the boot bundle's signature preimage, linked into the loader, so it is TCB. It is
+# The boot bundle's signature preimage, linked into the loader, so it is TCB. It is
 # `#![forbid(unsafe_code)]`; the budget says so where the rest of the TCB is counted.
 name = "redoubt-signing (signature preimages)"
 paths = ["libs/signing/src"]
@@ -47,13 +47,9 @@ paths = [
     "kernel/src/arch/riscv/asm.rs", "kernel/src/platform/sbi", "kernel/src/arch/riscv/physmap.rs",
     "kernel/src/platform/mod.rs",
 ]
-# G1: +1, physmap.rs's `Window::new` over the loader's physmap. Existing code that no budget
-# listed, now counted; no new unsafe.
-# WP-K5: -1, the old hart-timer path removed (the kernel owns the timer); +1, mem.rs's
-# `sync_icache`, the one `fence.i` (OWNER DECISION 10): executable pages must be fetched as
-# written, and inline asm is the only way to issue the instruction. Net 0.
-# WP-K6: 13, from 16: intc_plic.rs's two `sie` toggles around the interrupt callbacks, and
-# mem.rs's dead `from_raw`.
+# Includes physmap.rs's `Window::new` over the loader's physmap, and mem.rs's `sync_icache`,
+# the one `fence.i`: executable pages must be fetched as written, and inline asm is the only way
+# to issue the instruction.
 max_unsafe = 13
 max_undocumented = 0
 
@@ -64,10 +60,8 @@ paths = [
     "kernel/src/arch/riscv/mod.rs", "kernel/src/arch/riscv/exception.rs", "kernel/src/arch/riscv/panic.rs",
     "kernel/src/arch/riscv/smp.rs", "kernel/src/arch/mod.rs",
 ]
-# G1: +3, smp.rs's hart-block `Sync`, its write of the block and the parked hart's `wfi`
-# (the `smp` spike). Existing code that no budget listed, now counted; no new unsafe.
-# WP-K6: 12, from 13: the old ceiling's slack. syscall.rs's hand-made S-mode trap stays, as
-# `kmain`'s private switch (`switch_trap`).
+# Includes smp.rs's hart-block `Sync`, its write of the block and the parked hart's `wfi` (the
+# `smp` spike), and syscall.rs's hand-made S-mode trap, `kmain`'s private switch (`switch_trap`).
 max_unsafe = 12
 max_undocumented = 0
 
@@ -81,26 +75,13 @@ paths = [
     "kernel/src/debug", "kernel/src/endpoint.rs",
     "kernel/src/time.rs", "kernel/src/sched.rs", "kernel/src/dma.rs",
 ]
-# WP-K5: time.rs and sched.rs (the kernel's timer and scheduler) have no unsafe.
-# WP-K1: kframe.rs's three (words of kernel-object frames and of records, through the physmap)
-# replace mem.rs's three needless ones in the deleted `print_ownership`; the total is unchanged.
-# WP-A2: -1, kframe.rs's `write_byte` (its one user, the old byte-writing `random`, is gone).
-# WP-K0b: -2, mem.rs reads the loader's `MREx` table through a safe slice of words instead of
-# casting it to a struct it is not aligned for, and args.rs prints a tag name through
-# `str::from_utf8` instead of building a slice by hand.
-# WP-K3: device.rs joins the list with none of its own (it reaches frames through kframe.rs
-# and the page tables through arch::mem). -1: the old contiguous allocation for a device,
-# which `dma_alloc` replaces, is deleted, and its `bzero` of the freshly mapped pages with it.
-# G1: +5, existing code that no budget listed, now counted; no new unsafe. cell.rs's three
-# (`SpinLock`/`KernelCell` `Sync` and the lock's access) and the debug console's two (setting
-# `OUTPUT` at boot and `print!`'s use of it). The debug pair gained its SAFETY comments here.
-# WP-K5b: +2, dma.rs's volatile read and write of a DMA device's registers through the kernel's
-# register window (the reset of answer 173); no other access to a device's registers needs one.
-# WP-K6: 21, from 27: with the old call interface, server.rs's message queue, ptable.rs's two
-# old message buffers, mem.rs's `bzero` and its use, and the old ceiling's slack of one.
-# WP-K6 8b: 20, from 21: the page layer's range descriptor goes, and its `unsafe` constructor.
-# WP-K6 9c: 19, from 20: ptable.rs's `process_name` (a debug-shell helper) goes with the shell's
-# input side.
+# time.rs and sched.rs (the kernel's timer and scheduler) have no unsafe, and device.rs none of
+# its own (it reaches frames through kframe.rs and the page tables through arch::mem). Among
+# the 19: kframe.rs's three (words of kernel-object frames and of records, through the
+# physmap); cell.rs's three (`SpinLock`/`KernelCell` `Sync` and the lock's access); the debug
+# console's two (setting `OUTPUT` at boot and `print!`'s use of it); dma.rs's volatile read and
+# write of a DMA device's registers through the kernel's register window (the reset before reuse,
+# I16), the only access to a device's registers that needs one.
 max_unsafe = 19
 max_undocumented = 0
 
@@ -113,7 +94,7 @@ max_undocumented = 0
 [[budget]]
 name = "redoubt-rt (native runtime): the heap's free lists, page buffers and lends, the startup page"
 paths = ["libs/rt/src"]
-# +1 (WP-D3, answer 174): start.rs turns the panic hook's stored address back into its `fn()`,
+# Includes start.rs turning the panic hook's stored address back into its `fn()`,
 # the one way a program (netd) can stop its device before the panic handler exits.
 max_unsafe = 10
 max_undocumented = 0
@@ -121,12 +102,12 @@ max_undocumented = 0
 [[budget]]
 name = "keyd (holds every private key; signs, never exports)"
 paths = ["servers/keyd/src"]
-# WP-S1: none, and the crate says `#![forbid(unsafe_code)]`, so this can only stay at 0.
+# None, and the crate says `#![forbid(unsafe_code)]`, so this can only stay at 0.
 max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
-# WP-D1: a DMA driver is TCB without DMA confinement (TENETS.md 7). The four unsafe
+# A DMA driver is TCB without DMA confinement (TENETS.md, tenet 7). The four unsafe
 # blocks in src/kernel.rs perform volatile MMIO register and DMA byte reads/writes.
 name = "blkd (virtio-blk driver; DMA, so TCB)"
 paths = ["servers/blkd/src"]
@@ -134,7 +115,7 @@ max_unsafe = 4
 max_undocumented = 0
 
 [[budget]]
-# WP-D3 (answer 174): netd is a DMA driver, TCB like blkd. src/kernel.rs holds all of it: volatile
+# netd is a DMA driver, TCB like blkd. src/kernel.rs holds all of it: volatile
 # register reads (32- and 8-bit) and writes, volatile DMA byte reads, writes and zeroing, and the
 # one Box::from_raw that hands the receive thread its half.
 name = "netd (virtio-net driver; DMA, so TCB)"
@@ -143,7 +124,7 @@ max_unsafe = 7
 max_undocumented = 0
 
 [[budget]]
-# WP-D3 (answer 174): ipd forbids unsafe code; smoltcp and its dependencies are vendored third-party
+# ipd forbids unsafe code; smoltcp and its dependencies are vendored third-party
 # code outside this count (vendor/README.md: pinned by checksum, heapless's Vec and LinearMap read).
 name = "ipd (the TCP/IP stack; /net over 9P)"
 paths = ["servers/ipd/src"]
@@ -151,14 +132,14 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
-# WP-R4: both crates forbid unsafe code. consoled uses the runtime's Registers for MMIO.
+# Both crates forbid unsafe code. consoled uses the runtime's Registers for MMIO.
 name = "bootfsd and consoled (the first two 9P servers)"
 paths = ["servers/bootfsd/src", "servers/consoled/src"]
 max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
-# G1: the wire codecs are linked into the runtime, so they run on target. The crate says
+# The wire codecs are linked into the runtime, so they run on target. The crate says
 # `#![forbid(unsafe_code)]`, so this can only stay at 0.
 name = "redoubt-wire (protocol codecs)"
 paths = ["libs/wire/src"]
@@ -166,8 +147,7 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
-# WP-K6: the kernel-half map and PIDs the loader and kernel share (was libs/abi, whose 52
-# unsafe, 44 undocumented, went with the old interface). `#![forbid(unsafe_code)]`, so this
+# The kernel-half map and PIDs the loader and kernel share. `#![forbid(unsafe_code)]`, so this
 # can only stay at 0.
 name = "redoubt-layout (kernel-half map)"
 paths = ["libs/layout/src"]

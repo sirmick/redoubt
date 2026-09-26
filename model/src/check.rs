@@ -264,7 +264,8 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
         loop {
             // This helper calls receive directly, outside the generator's actor selection.
             // Retire a one-shot call-output fault through an explicit event first: late
-            // receive-output failure is outside the accepted oracle domain (question 171).
+            // receive-output failure is outside the accepted oracle domain
+            // (todo/receive-output-late-invalid.md).
             if k.threads[&tid].record == crate::syscall::Record::CopyFault {
                 step(k, Op::Record { pid, tid, record: crate::syscall::Record::Owned }, ops)?;
             }
@@ -328,10 +329,10 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
         return Ok(());
     }
     step(&mut k, Op::Sys { pid, tid, call: Syscall::BudgetDestroy { h: bh } }, &mut ops)?;
-    // The child's processes' objects are charged to their creator (QUESTIONS 74) and stay until
-    // their notices are received (I10: "once its processes' exit notices are received or
-    // dropped"): the creator receives them. A message arriving instead changes the creator's state,
-    // and the sequence proves nothing.
+    // The child's processes' objects are charged to their creator and stay until their notices
+    // are received (I10: "once its processes' exit notices are received or dropped"): the creator
+    // receives them. A message arriving instead changes the creator's state, and the sequence
+    // proves nothing.
     if !drain(&mut k, &mut ops, &mut step)? {
         return Ok(());
     }
@@ -347,10 +348,10 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
     Ok(())
 }
 
-/// The flood (PLAN.md's milestone 1 attack case "endpoint flooding: 10,000 blocked senders on
-/// `fsd`, and Alice is still served in her turn"), on a boot big enough to hold it. A system
-/// server receives on one endpoint; Bob's processes (two label sets of one account, so two R2
-/// groups) run up to 31 threads each, every thread calling with no timeout; a crowd of up to
+/// The flood (plan/m1-separation.md's attack case "endpoint flooding: 10,000 sender threads
+/// calling `fsd`, and Alice is still served in her turn"), on a boot big enough to hold it. A
+/// system server receives on one endpoint; Bob's processes (two label sets of one account, so two
+/// R2 groups) run up to 31 threads each, every thread calling with no timeout; a crowd of up to
 /// eight other accounts queues `WAIT_CAP` calls each; Alice makes one call in the middle of the
 /// flood. Most of Bob's calls get `Busy` (R2's cap per group); Alice's call must be taken within
 /// as many receives as there are groups (I11). The server receives with two threads in turn; half
@@ -458,7 +459,7 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
         run(&mut k, INIT_PID, 1, Syscall::HandleClose { h: me })?;
     }
     // The crowd: other accounts, one process each, WAIT_CAP threads calling. The first two have
-    // account 0, so each is its own group only by its budget id (QUESTIONS 87).
+    // account 0, so each is its own group only by its budget id.
     // At least three, so that more than MAX_OPEN_CALLS calls can queue.
     let crowd = rng.range(3, 8);
     let mut crowd_threads = Vec::new();
@@ -584,7 +585,7 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
     if alice_msg.is_some() && !alice_served {
         return Err(fail(String::from("I11: Alice's call was never taken")));
     }
-    // A process at MAX_OPEN_CALLS takes no calls but still takes sends (R4a; QUESTIONS 81).
+    // A process at MAX_OPEN_CALLS takes no calls but still takes sends (R4a).
     if k.open_calls(spid) >= crate::spec::MAX_OPEN_CALLS {
         let send = Syscall::Send {
             h: e,
@@ -607,8 +608,8 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
     Ok(())
 }
 
-/// R12, as scenarios over the scheduler alone, one drawn per seed. Each is a WP-K5 acceptance
-/// line or an owner decision, and each has the deliberate breaks it must catch (mutation.rs):
+/// R12, as scenarios over the scheduler alone, one drawn per seed. Each is an attack on
+/// kernel/scheduling.md R12, and each has the deliberate breaks it must catch (mutation.rs):
 ///
 /// | Scenario | Property |
 /// | --- | --- |
@@ -925,8 +926,7 @@ fn sched_debt_lift(rng: &mut Rng, mutation: Option<Mutation>) -> Sr {
         sim.run(SLICE);
     }
     // Within one round: the lift leaves S a sliver above the floor, so it may wait for each
-    // runnable budget still exactly at the floor (K5-debt-lift-bound), never for the lineage's
-    // raw debt.
+    // runnable budget still exactly at the floor, never for the lineage's raw debt.
     let waited = sim.now - created;
     if sim.ran(s) == 0 || waited > (n + 1 + 2) * SLICE {
         return Err(format!("R12: a sibling created after a lineage's destruction waited {waited} µs").into());
@@ -1146,8 +1146,9 @@ fn sched_shell(rng: &mut Rng, mutation: Option<Mutation>) -> Sr {
 /// (share) Random weighted budgets, spinners and sleepers in one flat queue.
 /// For every budget runnable throughout (a spinner), over every
 /// interval: it received at least its weight's share of the others' CPU time, less a bound of a
-/// few slices. Sleepers do what RESOURCES.md's attack test describes: sleep (sometimes long), then
-/// run a burst, so a budget that could bank credit while asleep would take it back in the burst.
+/// few slices. Sleepers do what kernel/scheduling.md R12's attack cases describe: sleep (sometimes
+/// long), then run a burst, so a budget that could bank credit while asleep would take it back in
+/// the burst.
 ///
 /// The bound: stride keeps every runnable budget's pass within one slice's stride of the lowest,
 /// so an always-runnable budget i lags its share by at most about SLICE x w_i / w_min, plus a
@@ -1264,9 +1265,9 @@ mod churn_variants {
         (0..300).any(|seed| budget_churn_variant(&mut Rng::new(seed), Some(m), variant).is_err())
     }
 
-    /// Why budget churn has its spinning-parent and deadline variants (red review M1): with the
-    /// parent blocked, a lift by `max` is indistinguishable from the additive rule, so the blocking
-    /// churner alone lets `R12LiftByMax` survive; either variant with a running parent catches it.
+    /// Why budget churn has its spinning-parent and deadline variants: with the parent blocked,
+    /// a lift by `max` is indistinguishable from the additive rule, so the blocking churner alone
+    /// lets `R12LiftByMax` survive; either variant with a running parent catches it.
     #[test]
     fn lift_by_max_needs_a_running_parent() {
         assert!(!caught(Mutation::R12LiftByMax, 0), "the blocking churner alone should not see a max lift");

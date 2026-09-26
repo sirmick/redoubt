@@ -58,7 +58,7 @@ pub mod feature {
     /// virtio-blk: the device is read-only (§5.2.3).
     pub const BLK_RO: u32 = 5;
     /// virtio-blk: the device understands a flush request, which is what makes `sync` mean
-    /// anything (IO-ARCHITECTURE.md, `blkd`'s contract).
+    /// anything (servers/blkd.md, "Messages").
     pub const BLK_FLUSH: u32 = 9;
     /// The device is a 1.x device and uses the 1.x queue layout (§6).
     pub const VERSION_1: u32 = 32;
@@ -83,7 +83,7 @@ pub mod blk_status {
 /// block size (§5.2.6: "the offset (multiplied by 512)").
 pub const SECTOR_SIZE: u32 = 512;
 
-/// The most sectors one `read` or `write` may carry (IO-ARCHITECTURE.md, Bounds). 64 sectors is
+/// The most sectors one `read` or `write` may carry (servers/blkd.md, "Messages"). 64 sectors is
 /// 32 KiB: comfortably inside one `MAX_LEND_PAGES` lend with its encoding, and a whole number of
 /// littlefs blocks at every block size `fsd` uses.
 pub const MAX_SECTORS: u32 = 64;
@@ -172,7 +172,7 @@ pub struct Features {
 ///
 /// `blkd` accepts exactly three bits and offers no others: `VERSION_1`, without which the queue
 /// layout is not the one below; `BLK_FLUSH`, without which `sync` could not be honoured and the
-/// contract `fsd` rests on would be a lie (IO-ARCHITECTURE.md); and `BLK_RO`, which is not needed
+/// contract `fsd` rests on would be a lie (servers/blkd.md); and `BLK_RO`, which is not needed
 /// but is accepted so that a read-only device is refused at the door rather than per write.
 /// Everything else — indirect descriptors, event indices, discard, write zeroes, multiqueue — is
 /// left unaccepted, so the device may not use any of it and the ring stays the one described in

@@ -1,5 +1,5 @@
 //! A test fixture, not part of the stub itself: the smallest possible ELF for `stub-launch`
-//! (`tests/programs`, WP-R2) to run *through* the real stub. Links at the ordinary default
+//! (`tests/programs`) to run *through* the real stub. Links at the ordinary default
 //! address (`build.rs` scopes `-Tstub.x` to the `stub` bin only), so this is exactly the shape
 //! of program the stub is meant to load. On reaching its own entry it exits with [`OK`], which
 //! only happens if the stub actually mapped its segments and jumped here.

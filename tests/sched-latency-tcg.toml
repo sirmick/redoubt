@@ -1,4 +1,4 @@
-description = "Reference run in real time (no icount), reporting without judging: latency under the named workload (WP-K5), as sched-latency, with host load showing up as guest latency; the rank oracle still checks every pick (plain TCG, checked build)"
+description = "Reference run in real time (no icount), reporting without judging: latency under the named workload, as sched-latency, with host load showing up as guest latency; the rank oracle still checks every pick (plain TCG, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true

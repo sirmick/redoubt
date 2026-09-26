@@ -1,7 +1,7 @@
 description = "The legacy interface is gone: every number below the Redoubt call table (on rv64 also with bit 32 or 63 set), the first above it and the kernel's private switch tag are refused from user mode with InvalidArgument and zeros, and nothing the old calls asked for happens (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# Built with the checks on (docs/testbench.md, "Debug assertions").
+# Built with the checks on (docs/testbench.md, "Checked builds").
 debug_assertions = true
 # PID 2 log-server; PID 3 legacy-gone, alone with the boot receive right. It takes the budgets
 # from log-server (TAKE_GIFTS) to spawn the children that jump to the old magic addresses.

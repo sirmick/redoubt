@@ -147,7 +147,7 @@ fn the_echo_servers_caps_fit_its_budget() {
     assert!(echo_server::LIMITS.fits(&echo_server::COST, echo_server::BUDGET));
 }
 
-/// INIT.md, launching gives fresh connections: a launcher asks the server for a connection for
+/// servers/init.md, "Fresh connections per child": a launcher asks the server for a connection for
 /// its child, passes that, and disconnects it when the child is done. Only the launcher can.
 #[test]
 fn a_launcher_gives_its_child_a_fresh_connection_and_disconnects_it() {

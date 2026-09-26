@@ -1,5 +1,4 @@
-//! `ipd`, the program: one thread serving `/net` over 9P for one network (NAMESPACES.md, What
-//! `ipd` serves in milestone 1; answer 174).
+//! `ipd`, the program: one thread serving `/net` over 9P for one network (servers/ipd.md).
 //!
 //! **The loop.** Each turn answers expired parked calls, asks `netd` for the MAC while the link
 //! is down, then waits for one event: a call is served (answered or parked) and nothing else
@@ -8,8 +7,9 @@
 //! polled and parked calls whose sockets moved are served again. A call is followed by a
 //! `receive` with no wait, so the stack is polled as soon as nothing more is queued.
 //!
-//! **Pending on WP-R3.** `init` does not exist yet; the `tests/net` rig starts this program
-//! through the stub with the startup block `init` will write.
+//! **Started by the net rig until `init` exists.** The `tests/net` rig starts this program
+//! through the loader stub with the startup block `init` will write; `init` starting it is
+//! planned (servers/ipd.md, "Started by `init`"; plan/m1-separation.md).
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 
@@ -40,7 +40,7 @@ pub const BAD_ARGS: u32 = 6;
 /// The kernel would give no random word for the minted badges.
 pub const NO_RESOURCES: u32 = 7;
 
-/// The startup-block names of `ipd`'s handles (INIT.md).
+/// The startup-block names of `ipd`'s handles (servers/init.md, "The startup block").
 pub const ENDPOINT: &str = "ipd";
 pub const NETD: &str = "netd";
 

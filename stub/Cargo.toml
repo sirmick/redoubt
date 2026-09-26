@@ -3,7 +3,7 @@ name = "stub"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "The Redoubt loader stub (WP-R2): a flat binary, system-signed and the same for every process, that parses its child's own ELF image from memory and jumps to it (PACKAGES.md, Launching a process)"
+description = "The Redoubt loader stub: a flat binary, system-signed and the same for every process, that parses its child's own ELF image from memory and jumps to it (docs/servers/init.md, Launching through the loader stub)"
 
 [lib]
 name = "stub"

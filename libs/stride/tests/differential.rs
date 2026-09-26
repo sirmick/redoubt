@@ -9,7 +9,7 @@
 //! Destructions come in the kernel's shapes too: a leaf whose threads were blocked first; the
 //! budget on the CPU, destroyed with its threads (a deadline: nothing deschedules it first); and a
 //! whole subtree at once, bottom-up (R10's order), the top's carve returned first (the kernel's
-//! `mark_dying`, K5-code-review-4 D1).
+//! `mark_dying`).
 
 use std::collections::{BTreeMap, BTreeSet};
 

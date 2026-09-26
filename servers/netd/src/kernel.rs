@@ -1,5 +1,5 @@
 //! The seam's one real implementation, [`Transport`] over the kernel's device calls
-//! (KERNEL-SPEC.md: `map_device`, `dma_alloc`, `receive` on an IRQ handle), and the hand-over of
+//! (kernel/devices.md: `map_device`, `dma_alloc`, `receive` on an IRQ handle), and the hand-over of
 //! the receive thread's half to that thread.
 //!
 //! **This is the only module in `netd` with `unsafe` in it**:
@@ -95,7 +95,7 @@ impl Regs {
     ///
     /// Only the first call stores anything: a flag is claimed first, then the length, then the
     /// base, which the hook reads first. So the hook sees either nothing or one mapping's base and
-    /// length together, never one's base with another's length (QA D3-code-review-3).
+    /// length together, never one's base with another's length.
     pub fn arm_panic_reset(&self) -> bool {
         if PANIC_ARMED.swap(true, Ordering::AcqRel) {
             return false;

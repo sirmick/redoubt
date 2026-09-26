@@ -1,5 +1,5 @@
 //! The vendored crates are the published ones, unmodified, and they are the ones that build
-//! (vendor/README.md; answer 174).
+//! (vendor/README.md).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

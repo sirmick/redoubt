@@ -1,4 +1,4 @@
-//! The keys `keyd` holds, and the purposes they may be used for (INIT.md, keyd).
+//! The keys `keyd` holds, and the purposes they may be used for (servers/keyd.md).
 //!
 //! **Where they come from.** The boot manifest, one key per argument of `keyd`'s `servers`
 //! entry, which reaches the process in its startup block. Milestone 1 generates no key on the
@@ -10,8 +10,7 @@
 //! SSH exchange hash that `keyd` computed itself from a transcript naming `keyd`'s own public
 //! key; a badge with [`Purpose::Audit`] can ask only for a signature over an audit record under
 //! a fixed domain string. Neither can ask for a signature over bytes of the caller's choosing,
-//! which is what makes a stolen badge useless as a signature oracle (CAPABILITIES.md, Agents 7;
-//! answer 95).
+//! which is what makes a stolen badge useless as a signature oracle (servers/keyd.md R44).
 //!
 //! **Constant time.** Nothing here branches or indexes on *secret* material: the seed is decoded
 //! with arithmetic rather than comparisons, and the signature itself is `ed25519-compact`'s (see
@@ -29,9 +28,9 @@ use redoubt_rt::startup::valid_name;
 /// badge space or its startup work unbounded.
 pub const MAX_KEYS: usize = 16;
 
-/// Ed25519 (RFC 8032): the one signature scheme on the box (VERIFIED-BOOT.md, PACKAGES.md), so
-/// no message of this protocol carries an algorithm name. `sshd` frames `ssh-ed25519` in its own
-/// blobs, which it must do anyway; this is the name it frames.
+/// Ed25519 (RFC 8032): the one signature scheme on the box (kernel/boot.md, "Verified boot";
+/// servers/pkg.md), so no message of this protocol carries an algorithm name. `sshd` frames
+/// `ssh-ed25519` in its own blobs, which it must do anyway; this is the name it frames.
 pub const ALGORITHM: &str = "ssh-ed25519";
 /// A public key, in bytes.
 pub const PUBLIC_KEY_LEN: usize = 32;
@@ -79,10 +78,10 @@ impl Purpose {
 pub enum KeyError {
     /// Not `name,purpose,seed`.
     BadArgument,
-    /// The name breaks the manifest's rule (INIT.md, Names).
+    /// The name breaks the manifest's rule (servers/init.md, "The boot manifest").
     BadName,
     /// A purpose outside [`Purpose`]. There is deliberately no purpose for a key that
-    /// authenticates a person to the box (CAPABILITIES.md, approvals).
+    /// authenticates a person to the box (servers/keyd.md, "Keys and purposes").
     UnknownPurpose,
     /// The seed is not exactly [`SEED_HEX_LEN`] lower-case hex digits.
     BadSeed,
@@ -139,8 +138,8 @@ impl Key {
 }
 
 /// Every key `keyd` holds, in the order the manifest gave them. The key in position `i` has
-/// root badge `i + 1` (INIT.md), so a restarted `keyd` gives the same badge the same meaning
-/// without keeping anything across the restart.
+/// root badge `i + 1` (servers/keyd.md, "Keys and purposes"), so a restarted `keyd` gives the
+/// same badge the same meaning without keeping anything across the restart.
 pub struct Keys {
     keys: Vec<Key>,
 }
@@ -170,7 +169,7 @@ impl Keys {
 
     pub fn get(&self, index: usize) -> Option<&Key> { self.keys.get(index) }
 
-    /// The key a root badge names: badges 1..=n are the keys in argument order (INIT.md).
+    /// The key a root badge names: badges 1..=n are the keys in argument order (servers/keyd.md).
     /// Badge 0 is the receive right and names no key.
     pub fn by_root_badge(&self, badge: u64) -> Option<usize> {
         let index = badge.checked_sub(1)?;
@@ -179,11 +178,11 @@ impl Keys {
 
     /// The labels of the key in `index`. Milestone 1 gives `keyd`'s keys no labels: the
     /// manifest has no field for them, so every key is unlabelled, which `check` turns into
-    /// "anyone may read a public key, only an unlabelled caller may sign" (INIT.md).
+    /// "anyone may read a public key, only an unlabelled caller may sign" (servers/keyd.md).
     pub fn labels(&self, _index: usize) -> &[u64] { &[] }
 
     /// Whether any key here has this public key: what `sshd` asks before accepting a login key,
-    /// and what `init` asks before trusting one (CAPABILITIES.md, approvals). Plain `==`: a
+    /// and what `init` asks before trusting one (servers/init.md R35). Plain `==`: a
     /// public key is published, so there is nothing here to compare in constant time, and the
     /// asker already holds the key it is asking about.
     pub fn holds(&self, public: &[u8]) -> bool { self.keys.iter().any(|key| key.public()[..] == *public) }

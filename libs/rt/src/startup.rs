@@ -1,13 +1,13 @@
-//! The startup block (INIT.md): one page a parent writes for its child, naming the handles it
-//! installed in the child's slots 1..=n (`process_start`). The parent may be hostile, so parsing
-//! bounds everything, checks everything up front, and never panics.
+//! The startup block (servers/init.md): one page a parent writes for its child, naming the
+//! handles it installed in the child's slots 1..=n (`process_start`). The parent may be hostile,
+//! so parsing bounds everything, checks everything up front, and never panics.
 //!
 //! # Format
 //!
-//! One typed message, `startup` (INIT.md's table; its codec is generated into
+//! One typed message, `startup` (servers/init.md's table; its codec is generated into
 //! [`redoubt_wire::proto::startup`]), laid out as a typed operation written into a file is: the
-//! opcode as a `u32`, then the buffer-shape encoding of its fields (WIRE.md). In front of it, the
-//! page holds the message's length (a `u32`, QUESTIONS.md 112); the rest of the page is not read.
+//! opcode as a `u32`, then the buffer-shape encoding of its fields (servers/wire.md). In front of
+//! it, the page holds the message's length (a `u32`); the rest of the page is not read.
 //!
 //! | Field | Holds |
 //! | --- | --- |
@@ -32,7 +32,7 @@ use crate::path;
 /// The largest block: one page.
 pub const MAX_BLOCK: usize = PAGE_SIZE;
 const VERSION: u32 = 1;
-/// The longest handle name (INIT.md, Names).
+/// The longest handle name (servers/init.md, Names).
 pub const MAX_NAME: usize = 64;
 
 /// Why a startup block was refused.
@@ -53,13 +53,13 @@ pub enum StartupError {
     Duplicate,
     /// Longer than [`MAX_BLOCK`], or out of memory for its entries.
     TooLarge,
-    /// `image_addr`/`image_len` break INIT.md's rule: one is 0 and the other is not,
+    /// `image_addr`/`image_len` break servers/init.md's rule: one is 0 and the other is not,
     /// `image_addr` is not page-aligned, `image_addr + image_len` overflows, or either does not
     /// fit this target's `usize` (rv32).
     BadImage,
 }
 
-/// Whether `name` may name a handle: the boot manifest's rule (INIT.md, Names; answer 64), 1-64
+/// Whether `name` may name a handle: the boot manifest's rule (servers/init.md, Names), 1-64
 /// bytes of `[a-z0-9_:+-]` starting with a letter, so no empty name, NUL, U+FEFF or control
 /// character reaches anything that uses it.
 pub fn valid_name(name: &str) -> bool {
@@ -69,7 +69,7 @@ pub fn valid_name(name: &str) -> bool {
         && bytes.iter().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_:+-".contains(b))
 }
 
-/// QUESTIONS.md 112 (pending): how the message sits in its page. A typed message has no overall
+/// How the message sits in its page. A typed message has no overall
 /// length and its decoder refuses trailing bytes, but the rest of the page is not read, so the
 /// page starts with the message's length in bytes, a little-endian `u32`, and the message
 /// follows. Reading and writing the frame are both here.
@@ -110,7 +110,7 @@ enum Entry<'a> {
 #[derive(Clone, Debug)]
 pub struct Startup<'a> {
     entries: Vec<Entry<'a>>,
-    /// `(image_addr, image_len)`, `None` when the block named no image (INIT.md, Startup block).
+    /// `(image_addr, image_len)`, `None` when the block named no image (servers/init.md).
     image: Option<(usize, usize)>,
 }
 
@@ -166,10 +166,10 @@ impl<'a> Startup<'a> {
 
     fn entries(&self) -> impl Iterator<Item = Entry<'a>> + '_ { self.entries.iter().copied() }
 
-    /// `(image_addr, image_len)`, the program image the loader stub loads (INIT.md, Startup
-    /// block; PACKAGES.md, Launching a process): the address of its first byte and its exact
-    /// byte length, both already checked non-overflowing and page-aligned. `None` for a process
-    /// started at its own entry rather than through the stub.
+    /// `(image_addr, image_len)`, the program image the loader stub loads (servers/init.md,
+    /// "The startup block" and "Launching through the loader stub"): the address of its first
+    /// byte and its exact byte length, both already checked non-overflowing and page-aligned.
+    /// `None` for a process started at its own entry rather than through the stub.
     pub fn image(&self) -> Option<(usize, usize)> { self.image }
 
     /// The namespace table: (path, handle), in block order.
@@ -211,8 +211,8 @@ impl<'a> Startup<'a> {
     }
 }
 
-/// INIT.md's `image_addr`/`image_len` rule: `image_addr` is 0 exactly when `image_len` is, is
-/// page-aligned, and `image_addr + image_len` does not overflow. Both 0 is "no image".
+/// servers/init.md's `image_addr`/`image_len` rule: `image_addr` is 0 exactly when `image_len`
+/// is, is page-aligned, and `image_addr + image_len` does not overflow. Both 0 is "no image".
 fn parse_image(image_addr: u64, image_len: u64) -> Result<Option<(usize, usize)>, StartupError> {
     if image_addr == 0 && image_len == 0 {
         return Ok(None);
@@ -255,10 +255,11 @@ fn push<'a>(entries: &mut Vec<Entry<'a>>, entry: Entry<'a>) -> Result<(), Startu
 /// Writes a startup block, for launchers (`init`, the steward) and tests. [`finish`] parses the
 /// result, so a builder can only produce blocks the parser accepts.
 ///
-/// **A launcher never passes its own connection to a child** (answer 50): every handle named in a
-/// child's namespace is a fresh connection the server made for that child (`new_connection`,
-/// [`crate::client::Client::new_connection`]), which the launcher disconnects when the child
-/// exits. A copied connection would share the launcher's fids and admission with the child.
+/// **A launcher never passes its own connection to a child** (servers/init.md): every handle
+/// named in a child's namespace is a fresh connection the server made for that child
+/// (`new_connection`, [`crate::client::Client::new_connection`]), which the launcher disconnects
+/// when the child exits. A copied connection would share the launcher's fids and admission with
+/// the child.
 ///
 /// [`finish`]: StartupBuilder::finish
 pub struct StartupBuilder {
@@ -286,8 +287,8 @@ impl StartupBuilder {
         }
     }
 
-    /// Names the program image the loader stub loads at `addr..addr + len` (INIT.md, Startup
-    /// block): `addr` must be page-aligned for [`finish`](Self::finish) to accept it.
+    /// Names the program image the loader stub loads at `addr..addr + len` (servers/init.md,
+    /// "The startup block"): `addr` must be page-aligned for [`finish`](Self::finish) to accept it.
     pub fn image(&mut self, addr: usize, len: usize) -> &mut Self {
         self.image_addr = addr as u64;
         self.image_len = len as u64;
@@ -383,7 +384,7 @@ mod tests {
         assert_eq!(Startup::parse(&page).unwrap().args().count(), 3);
     }
 
-    /// The page is the length word and then exactly INIT.md's `startup` message, as the
+    /// The page is the length word and then exactly servers/init.md's `startup` message, as the
     /// generated codec writes it: opcode 1, then the fields.
     #[test]
     fn the_page_is_the_wire_message() {

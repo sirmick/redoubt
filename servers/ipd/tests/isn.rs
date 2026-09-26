@@ -1,4 +1,4 @@
-//! Initial sequence numbers (answer 174, decision 11): every open, active or passive, draws one
+//! Initial sequence numbers (servers/ipd.md R62): every open, active or passive, draws one
 //! seed from the CSPRNG for a fresh interface, and its ISN is that seed's; the main interface's
 //! PRNG never makes one; and with no seed there is no open, never a fallback.
 

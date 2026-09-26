@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The scheduler: one stride queue over every runnable budget (KERNEL-SPEC.md R7, R12; RESOURCES.md,
-//! Scheduling; the WP-K5 owner decisions). The rules themselves (charging with an exact remainder,
-//! the floor, ranks, inheritance) and their wiring to a CPU (when runtime is folded, what a
-//! deschedule, a pick, a weight change and a destruction do, in what order) are `redoubt-stride`'s
-//! ([`Cpu`]), checked there against the executable model; this module keeps their state in the
-//! budgets' frames and drives them from the trap boundary.
+//! The scheduler: one stride queue over every runnable budget (kernel/scheduling.md; R7, R12).
+//! The rules themselves (charging with an exact remainder, the floor, ranks, inheritance) and
+//! their wiring to a CPU (when runtime is folded, what a deschedule, a pick, a weight change and a
+//! destruction do, in what order) are `redoubt-stride`'s ([`Cpu`]), checked there against the
+//! executable model; this module keeps their state in the budgets' frames and drives them from the
+//! trap boundary.
 //!
 //! # Accounting at the trap boundary
 //! There are exactly two ways into user mode (`arch::syscall::resume` and the syscall return) and
@@ -53,7 +53,7 @@ use crate::handle::BudgetRef;
 use crate::mem::MemoryManager;
 use crate::ptable::{ArchProcess, ProcessTable};
 
-/// Time slice, in microseconds (KERNEL-SPEC.md, Constants).
+/// Time slice, in microseconds (kernel/timer.md, "The hart timer").
 pub const SLICE_US: u64 = 10_000;
 
 struct Sched {

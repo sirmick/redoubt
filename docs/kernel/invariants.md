@@ -450,7 +450,7 @@ caller's death.
 
 ### I16 (DMA pages reset before reuse)
 
-Status: built · partly tested: a co-holder that still reaches a device reset at another holder's death is attacked only in the model, and the reset and quarantine cases boot rv64 only (`dma-rules` runs on both widths) · tested: bench:dma-reset-reuse, bench:dma-reset-quarantine, bench:dma-rules, host:redoubt-model::reset_at_one_death_does_not_cover_a_co_holder, host:redoubt-model::deaf_device_quarantines_the_co_holder_too, host:redoubt-model::exit_pools_after_reset, mutation:K5bFreeBeforeReset, mutation:K5bQuarantinedSlotCountsAsReset, mutation:K5bResetClearsCoHolderReach, mutation:K5bUnmapFreesDma
+Status: built · partly tested: a co-holder that still reaches a device reset at another holder's death is attacked only in the model, and the reset and quarantine cases boot rv64 only (`dma-rules` runs on both widths) · tested: bench:dma-reset-reuse, bench:dma-reset-quarantine, bench:dma-rules, host:redoubt-model::reset_at_one_death_does_not_cover_a_co_holder, host:redoubt-model::deaf_device_quarantines_the_co_holder_too, host:redoubt-model::exit_pools_after_reset, mutation:DmaFreeBeforeReset, mutation:DmaQuarantinedSlotCountsAsReset, mutation:DmaResetClearsCoHolderReach, mutation:DmaUnmapFrees
 
 A page `dma_alloc` handed out goes back to the free pool only after every device that could still
 write it has confirmed a reset: the device it was allocated through and every DMA device its

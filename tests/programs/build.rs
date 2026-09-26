@@ -1,8 +1,8 @@
-//! Builds the loader stub (`stub/`, WP-R2) as a flat binary for whatever target/profile
+//! Builds the loader stub (`stub/`) as a flat binary for whatever target/profile
 //! `test-programs` itself is being built for, and embeds it via `include_bytes!` so a launcher
-//! test program never needs to read it from the boot bundle (that path is K4's bundle-file
-//! readback, R3's gate -- WP-R2 does not depend on it: PACKAGES.md's stub is "a flat binary...
-//! the same for everyone", not something a program reads at runtime).
+//! test program never needs to read it from the boot bundle (servers/init.md, "Launching through
+//! the loader stub": the stub is mapped into the child, not something a program reads at
+//! runtime).
 //!
 //! Mirrors `tools/testbench/src/build.rs`'s own nested `cargo build` calls and
 //! `bios/xtask`'s ELF->flat conversion with `rust-objcopy`.
@@ -30,8 +30,8 @@ fn main() {
     let stub_target_dir = workspace.join("target/wp-r2-stub-build");
     build(&workspace, &stub_target_dir, &target, profile);
 
-    // `stub` itself: objcopied to the flat binary a launcher maps (PACKAGES.md: "a flat
-    // binary... mapping it needs no parsing").
+    // `stub` itself: objcopied to the flat binary a launcher maps (servers/init.md, "Launching
+    // through the loader stub": mapping it needs no parsing).
     let stub_elf = stub_target_dir.join(&target).join(profile_dir).join("stub");
     let stub_bin = out_dir.join("stub.bin");
     objcopy(&stub_elf, &stub_bin);
@@ -39,7 +39,7 @@ fn main() {
     println!("cargo:rerun-if-changed={}", stub_elf.display());
 
     // `fixture-child`: kept as an ordinary ELF -- the image the stub itself parses, exactly as
-    // PACKAGES.md's step 4 hands it a program's bytes. Stripped, as a shipped program would be:
+    // servers/init.md's step 4 hands it a program's bytes. Stripped, as a shipped program would be:
     // the rv32 build otherwise carries debug sections from the prebuilt `core`, several pages
     // the launcher would copy for nothing.
     let child_elf = stub_target_dir.join(&target).join(profile_dir).join("fixture-child");

@@ -1,7 +1,7 @@
 //! `ipd`'s dispatch: what each event on its endpoint does. The program ([`crate`]'s `bin/ipd.rs`)
 //! and the host tests drive the same [`Ipd`].
 //!
-//! **Labelled callers get nothing** (NAMESPACES.md; CONTAINMENT.md: `ipd` is a sink). A caller
+//! **Labelled callers get nothing** (servers/ipd.md R60: `ipd` is a sink). A caller
 //! whose budget carries any label is refused before its request is decoded: before 9P,
 //! `ninep_common`, `grant` or admission, so it opens no bucket and cannot even make a socket by
 //! reading `clone`, which the skeleton's label check alone would let it read.
@@ -10,12 +10,12 @@
 //! or write for at most [`DATA_WAIT_US`], then `timeout`. They are served again once the stack
 //! says they would not wait, and an abandoned one is answered at once.
 //!
-//! **Sockets are paid for in the shared admission** (QA D3-code-review-5, P2-2): around each 9P
+//! **Sockets are paid for in the shared admission** (servers/ipd.md, "Sizing"): around each 9P
 //! request the caller's bucket and share reserve up to [`SOCKETS_PER_REQUEST`] `State` units
 //! ([`open_sockets`]), the stack makes sockets only from them, and the unused go back
 //! ([`close_sockets`]); a removed socket's unit goes back after each poll ([`settle_sockets`]).
 //!
-//! **Crash blame never lands on a parked caller** (KERNEL-SPEC.md, the current call). The stack
+//! **Crash blame never lands on a parked caller** (kernel/processes.md R21). The stack
 //! is polled only right after a `receive` that returned something other than a call, so no call
 //! is current while smoltcp runs; [`Ipd::current`] tracks it and [`Ipd::poll`] checks it.
 
@@ -40,7 +40,7 @@ use crate::stack::{Entropy, MAX_BACKLOG, Owner, Room, WaitFor};
 pub const CTL_WAIT_US: u64 = 60_000_000;
 /// How long a `data` read or write waits (µs).
 pub const DATA_WAIT_US: u64 = 30_000_000;
-/// `grant`'s opcode, and the ingress `frame`'s (NAMESPACES.md, `ipd`'s table).
+/// `grant`'s opcode, and the ingress `frame`'s (servers/ipd.md, `ipd`'s table).
 pub const GRANT: u64 = 16;
 pub const FRAME: u64 = 17;
 
@@ -329,7 +329,8 @@ fn serve_own<N: Netif, E: Entropy>(
         answer_grant(nine, &caller, &words, &handles, request.lend(), &mut kernel)
     };
     let sent = finish(request, &outcome);
-    // The connection is undone unless the reply was delivered with its handle (answer 168).
+    // The connection is undone unless the reply was delivered with its handle (servers/serving.md,
+    // "Replies and rollback").
     if let Some(badge) = minted {
         if !sent.as_ref().is_ok_and(|o| o.accepted(1)) {
             nine.unmint(badge);

@@ -1,14 +1,14 @@
-//! The names KERNEL-SPEC.md defines: constants, errors, and the small value types of its calls.
+//! The names docs/kernel/ defines: constants, errors, and the small value types of its calls.
 //!
-//! Everything here has the spec's name verbatim. The few values the spec leaves to the ABI
-//! (flag bits, enum tags, the page size) are marked "encoding"; they are `redoubt-sys`'s values
-//! (WP-A1), which owns them.
+//! Everything here has the spec's name verbatim. The few values the spec leaves to the ABI (flag
+//! bits, enum tags, the page size) are marked "encoding"; they are `redoubt-sys`'s values, which
+//! owns them.
 
-/// Machine words in a message (KERNEL-SPEC.md, Constants).
+/// Machine words in a message (kernel/ipc.md, "Messages").
 pub const WORDS: usize = 4;
 /// Handles carried by one message.
 pub const MAX_MSG_HANDLES: usize = 4;
-/// Maximum live handles per process (answer 116).
+/// Maximum live handles per process.
 pub const MAX_HANDLES: u64 = 4096;
 /// Pages in one lend.
 pub const MAX_LEND_PAGES: u64 = 16;
@@ -26,16 +26,16 @@ pub const STRIDE: u64 = 1 << 20;
 pub const SLICE: u64 = 10_000;
 /// A timeout that never expires.
 pub const FOREVER: u64 = u64::MAX;
-/// Taken-but-unreplied calls per process (QUESTIONS 2, as answered).
+/// Taken-but-unreplied calls per process.
 pub const MAX_OPEN_CALLS: u64 = 64;
-/// Handles in `process_start`'s list (QUESTIONS 10).
+/// Handles in `process_start`'s list.
 pub const MAX_START_HANDLES: usize = 64;
-/// "No handle" in an optional-handle slot, and never a handle index (QUESTIONS 10). The ABI's
-/// sentinel; this is the one place the model names it.
+/// "No handle" in an optional-handle slot, and never a handle index. The ABI's sentinel; this is
+/// the one place the model names it.
 pub const NO_HANDLE: u64 = 0;
 
-/// Encoding: the page size. KERNEL-SPEC.md counts memory in pages without stating a size;
-/// both Sv32 and Sv39 use 4 KiB base pages.
+/// Encoding: the page size. The model counts memory in pages; both Sv32 and Sv39 use 4 KiB base
+/// pages (kernel/memory.md).
 pub const PAGE_SIZE: u64 = 4096;
 
 /// Encoding of mapping flags (`map_anon`, `set_flags`, `process_map`), as `redoubt-sys`'s
@@ -44,7 +44,7 @@ pub const FLAG_R: u64 = 1;
 pub const FLAG_W: u64 = 2;
 pub const FLAG_X: u64 = 4;
 
-/// The error enum (KERNEL-SPEC.md, Errors), in the spec's order.
+/// The error enum (kernel/abi.md, "Errors and their codes"), in the order of its codes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Error {
     BadHandle,
@@ -135,7 +135,7 @@ pub const RESET_REBOOT: u64 = 2;
 /// counts) and of a handle index.
 pub const U32_MAX: u64 = u32::MAX as u64;
 
-/// The counters `budget_usage` returns (QUESTIONS 11): each carved limit with its usage (R6, R7).
+/// The counters `budget_usage` returns: each carved limit with its usage (R6, R7).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct Counters {
     pub pages_limit: u64,

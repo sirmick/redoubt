@@ -1,0 +1,3 @@
+description = "the docs checker: each rule fires on its bad fixture and not on the good tree, the book and the code follow every rule, the code's comments included, and the book builds without a warning"
+kind = "host-tests"
+packages = ["redoubt-doccheck"]

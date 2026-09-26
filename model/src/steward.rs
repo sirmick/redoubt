@@ -1,9 +1,8 @@
 //! The steward's milestone 1 policy, as a layer above the kernel model.
 //!
-//! Sources: CAPABILITIES.md (principals, agents, the powerbox and approvals), CONTAINMENT.md
-//! (sessions and vaults, declassification, crash blame, the steward's own records), INIT.md
-//! (milestone 1: stateless, principals from the boot manifest, `ssh approve@box`), and the owner's
-//! answers (17, 18, 33-35, 48, 51, 54, 79, 80, 89-92, 117, 125, 153).
+//! Source: servers/steward.md (principals, sessions and vaults, leases, the powerbox and
+//! approvals, declassification and push, crash blame, the audit log), with servers/init.md (the
+//! boot manifest, restarts) and servers/serving.md (admission).
 //!
 //! Everything here runs on the kernel model. `init` creates the server's endpoint and starts the
 //! steward in the `system` budget with the `users` and `system` budgets and that endpoint; the
@@ -12,7 +11,7 @@
 //! session and agent lease is a `budget_create`; every session has a **process** in its budget
 //! holding its own connection to the server, narrowed to a revocation scope in the session.
 //! Sessions' work is real calls to the server, and crash blame comes from the kernel's exit notices
-//! of the server (CONTAINMENT.md, "Crash blame"), which the steward receives. So the kernel's
+//! of the server (servers/steward.md, "Crash blame"), which the steward receives. So the kernel's
 //! invariants apply to everything the policy does, and non-interference (P10, policy.rs) is judged
 //! on kernel results.
 //!
@@ -21,10 +20,11 @@
 //! real cryptography (ids come from a keyed mixer, content hashes from FNV-1a; the real steward
 //! uses a CSPRNG and a cryptographic hash). Audit signatures are opaque ideal-keyd tokens,
 //! bound to purpose/domain/length/exact bytes; no cryptographic security is inferred. Confined
-//! push/read-down are policy observations only: open topology 164 is not resolved here.
+//! push/read-down are policy observations only: the confinement check's named exception
+//! (servers/init.md, "The confinement check") is not modelled here.
 //!
 //! Policy numbers the design leaves open are constants here (`PENDING_CAP`, `DECLASSIFY_MAX`,
-//! `FIELD_CAP`, `MAX_LEASE`, session sizes; README choice 23).
+//! `FIELD_CAP`, `MAX_LEASE`, session sizes).
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
@@ -37,18 +37,19 @@ use crate::mutation::Mutation;
 use crate::spec::{Counters, Error, FOREVER, WORDS};
 use crate::syscall::{Message, MintSource, Op, Outcome, Ret, Syscall};
 
-/// Pending approval requests per (account, label set) (CAPABILITIES.md; QUESTIONS 17).
+/// Pending approval requests per (account, label set) (servers/steward.md, "The powerbox and
+/// approvals").
 pub const PENDING_CAP: usize = 4;
-/// Crash blame: this many crashes blamed on one (account, label set) within `BLAME_WINDOW` log
-/// out its sessions (QUESTIONS 48).
+/// Crash blame: this many crashes blamed on one (account, label set) within `BLAME_WINDOW` log out
+/// its sessions.
 pub const BLAME_COUNT: usize = 3;
 pub const BLAME_WINDOW: u64 = 10 * 60 * 1_000_000;
-/// Declassification refuses items over this many bytes (CONTAINMENT.md: "a size cap").
+/// Declassification refuses items over this many bytes (servers/steward.md, "Declassification and
+/// push").
 pub const DECLASSIFY_MAX: usize = 256;
 /// Every rendered free-text field is cut to this many characters.
 pub const FIELD_CAP: usize = 64;
-/// The longest lease: 24 hours (CAPABILITIES.md; QUESTIONS 33, 78: the steward's, not the
-/// kernel's).
+/// The longest lease: 24 hours (servers/steward.md, "Leases": the steward's, not the kernel's).
 pub const MAX_LEASE: u64 = 24 * 3600 * 1_000_000;
 /// Processes in a principal's top budget, split between its sub-budgets.
 pub const PRINCIPAL_PROCESSES: u64 = 12;
@@ -56,7 +57,8 @@ pub const PRINCIPAL_PROCESSES: u64 = 12;
 pub const SESSION: Limits = Limits { pages: 40, processes: 1, weight: 5 };
 pub const AGENT: Limits = Limits { pages: 40, processes: 2, weight: 4 };
 
-/// A principal from the boot manifest (INIT.md, `principals`). Keys are abstract ids.
+/// A principal from the boot manifest (servers/init.md, "The boot manifest"). Keys are abstract
+/// ids.
 #[derive(Clone, Debug)]
 pub struct PrincipalSpec {
     pub name: String,
@@ -114,9 +116,9 @@ pub struct Principal {
     /// The top budget (kernel id) and the steward's handle to it.
     pub budget: u64,
     pub h: u64,
-    /// Fixed sub-budgets of the top budget, one per label set the principal may use (none, and
-    /// each owned label), split at boot: (budget id, handle). Sessions are carved from the one for
-    /// their label set, so one label set's leases never move another's free limits (QUESTIONS 89).
+    /// Fixed sub-budgets of the top budget, one per label set the principal may use (none, and each
+    /// owned label), split at boot: (budget id, handle). Sessions are carved from the one for their
+    /// label set, so one label set's leases never move another's free limits.
     pub subs: BTreeMap<Vec<u64>, (u64, u64)>,
 }
 
@@ -135,7 +137,7 @@ pub struct Session {
     pub kind: SessionKind,
     /// The steward-assigned name the approval screen shows (`session-3`, `agent-7`).
     pub name: String,
-    /// The session's labels; its SSH channel carries the same (CONTAINMENT.md).
+    /// The session's labels; its SSH channel carries the same (servers/steward.md).
     pub labels: Vec<u64>,
     pub budget: u64,
     pub h: u64,
@@ -237,7 +239,7 @@ pub enum Audit {
         principal: usize,
         labels: Vec<u64>,
     },
-    /// `reader` is the budget the snapshot was read through (QUESTIONS 54).
+    /// `reader` is the budget the snapshot was read through.
     Declassified {
         id: u64,
         label: u64,
@@ -267,7 +269,7 @@ pub enum Audit {
 }
 
 impl Audit {
-    /// The labels a record carries: a reader sees it only if its labels ⊇ these (QUESTIONS 92).
+    /// The labels a record carries: a reader sees it only if its labels ⊇ these.
     pub fn labels(&self) -> &[u64] {
         match self {
             Audit::Pushed { labels, .. }
@@ -312,7 +314,7 @@ pub struct Steward {
     pub declassified: Vec<(u64, Vec<u8>)>,
     /// Blame times per (account, label set).
     pub blames: BTreeMap<(u64, Vec<u64>), Vec<u64>>,
-    /// Logged-out (account, label set)s and when their lockout ends (QUESTIONS 91).
+    /// Logged-out (account, label set)s and when their lockout ends.
     pub locked: BTreeMap<(u64, Vec<u64>), u64>,
     pub audit: Vec<Audit>,
     pub audit_signatures: Vec<AuditSignature>,
@@ -324,7 +326,7 @@ pub struct Steward {
     /// Sessions started so far, per principal (drives session ids and names).
     started: BTreeMap<usize, u64>,
     /// The badge of the next session's connection to the server: each session gets its own
-    /// (CAPABILITIES.md, one badge, one client).
+    /// (servers/serving.md, "Minted connections").
     next_badge: u64,
     secret: u64,
     counter: u64,
@@ -372,8 +374,8 @@ fn content_hash(content: &Content, snapshot: &Option<Vec<u8>>, reason: &str, lab
     h
 }
 
-/// Printable ASCII only (QUESTIONS 34: a whitelist, so bidi and format characters go too), cut
-/// to `cap` characters, with quotes and backslashes escaped so a field cannot end its own quoting.
+/// Printable ASCII only (a whitelist, so bidi and format characters go too), cut to `cap`
+/// characters, with quotes and backslashes escaped so a field cannot end its own quoting.
 pub fn sanitize(s: &str, cap: usize, whitelist: bool) -> String {
     let mut out = String::new();
     let keep = |c: &char| if whitelist { (' '..='~').contains(c) } else { !c.is_control() };
@@ -406,7 +408,7 @@ impl Steward {
     /// principal's top budget.
     pub fn new(manifest: &Manifest, secret: u64, mutation: Option<Mutation>) -> Res<Steward> {
         // The manifest: accounts non-zero and distinct; no key in both roles; no login or
-        // approval key that keyd holds (CAPABILITIES.md, "The approval key is the person's own").
+        // approval key that keyd holds (servers/steward.md, "The powerbox and approvals").
         let mut accounts = BTreeSet::new();
         let mut logins = BTreeSet::new();
         let mut approvals = BTreeSet::new();
@@ -431,9 +433,9 @@ impl Steward {
         let mut k = Kernel::boot(&boot, mutation).map_err(|_| Denied::BadManifest)?;
         let init = Proc { pid: INIT_PID, tid: *k.processes[&INIT_PID].threads.first().unwrap() };
         let e = handle(run(&mut k, init, Syscall::EndpointCreate)?.0)?;
-        // init creates the server's endpoint (INIT.md), so its receive right is stamped `root` and
-        // the steward can narrow connections to scopes anywhere (mint only narrows; README choice
-        // 30).
+        // init creates the server's endpoint (servers/init.md), so its receive right is stamped
+        // `root` and the steward can narrow connections to scopes anywhere (mint only narrows
+        // to the default stamp's descendants).
         let srv = handle(run(&mut k, init, Syscall::EndpointCreate)?.0)?;
         // init's slots: 1 root, 2 system, 3 users. The steward gets users (1), system (2) and the
         // server's endpoint (3).
@@ -500,8 +502,8 @@ impl Steward {
     fn sys(&mut self, call: Syscall) -> Res<Ret> { run(&mut self.k, self.me, call).map(|x| x.0) }
 
     /// Start the server: a process in `system` receiving on the server endpoint (slot 1), named
-    /// with the steward's exit endpoint. INIT.md: a restarted server receives on the same endpoint.
-    /// It is given no budget handle: only `init` and the steward hold system budgets (QUESTIONS 79).
+    /// with the steward's exit endpoint. servers/init.md: a restarted server receives on the same
+    /// endpoint. It is given no budget handle: only `init` and the steward hold system budgets.
     fn start_server(&mut self) -> Res<()> {
         let ph = handle(self.sys(Syscall::ProcessCreate { budget: 2, exit_endpoint: self.exits })?)?;
         let mut handles = vec![self.srv];
@@ -562,7 +564,7 @@ impl Steward {
             match self.sys(Syscall::Receive { h: Some(self.exits), timeout: 0, max_transfer: 0 }) {
                 Ok(Ret::ExitNotice { pid, blamed_account, blamed_labels, .. }) => {
                     if pid == self.server.pid {
-                        // INIT.md: init passes each exit notice's blame to the steward.
+                        // servers/init.md: init passes each exit notice's blame to the steward.
                         self.blame(blamed_account, blamed_labels);
                         let _ = self.start_server();
                     }
@@ -589,10 +591,10 @@ impl Steward {
         self.principals.iter().position(|p| p.spec.name == name)
     }
 
-    /// A session: a budget under `parent` (a handle the steward holds), and a process in it
-    /// holding a connection to the server: a handle with its own badge, narrowed to a revocation
-    /// scope inside the session budget, so ending the session revokes it and the steward never
-    /// hands a budget out (QUESTIONS 80).
+    /// A session: a budget under `parent` (a handle the steward holds), and a process in it holding
+    /// a connection to the server: a handle with its own badge, narrowed to a revocation scope
+    /// inside the session budget, so ending the session revokes it and the steward never hands a
+    /// budget out.
     fn new_session(
         &mut self,
         principal: usize,
@@ -633,8 +635,7 @@ impl Steward {
                 return Err(e);
             }
         };
-        // A random id and a per-principal name: nothing another principal can count
-        // (QUESTIONS 18; README choice 22).
+        // A random id and a per-principal name: nothing another principal can count.
         let n = self.started.entry(principal).or_insert(0);
         *n += 1;
         let name = format!("{}-{}", if kind == SessionKind::Agent { "agent" } else { "session" }, n);
@@ -659,7 +660,7 @@ impl Steward {
     pub fn login(&mut self, name: &str, label: Option<u64>, key: u64) -> Res<u64> {
         let p = self.principal(name).ok_or(Denied::UnknownPrincipal)?;
         let spec = &self.principals[p].spec;
-        // sshd rejects authentication with any key keyd holds (CAPABILITIES.md): otherwise a
+        // sshd rejects authentication with any key keyd holds (servers/steward.md): otherwise a
         // hijacked session could log in over loopback by asking keyd to sign.
         let held_by_keyd = self.keyd.contains(&key) && !self.broken(Mutation::PolicyLoginWithKeydKey);
         if !spec.login_keys.contains(&key) || held_by_keyd {
@@ -681,7 +682,7 @@ impl Steward {
         Ok(id)
     }
 
-    /// The handle of principal `p`'s sub-budget for `labels` (QUESTIONS 89).
+    /// The handle of principal `p`'s sub-budget for `labels`.
     fn sub(&self, p: usize, labels: &[u64]) -> u64 {
         let set = if self.broken(Mutation::PolicyCarveFromUnlabelled) { &[][..] } else { labels };
         // A label set with no sub-budget cannot happen (only owned labels get sessions); the
@@ -690,8 +691,7 @@ impl Steward {
         subs.get(set).or_else(|| subs.get(&Vec::new())).map_or(self.principals[p].h, |s| s.1)
     }
 
-    /// New sessions of a logged-out (account, label set) are refused until its window passes
-    /// (QUESTIONS 91).
+    /// New sessions of a logged-out (account, label set) are refused until its window passes.
     fn not_locked(&self, p: usize, labels: &[u64]) -> Res<()> {
         let key = (self.principals[p].spec.account, labels.to_vec());
         match self.locked.get(&key) {
@@ -709,15 +709,15 @@ impl Steward {
         Ok(())
     }
 
-    /// Whether `lease` is one the steward grants (QUESTIONS 33: at most `MAX_LEASE`).
+    /// Whether `lease` is one the steward grants (at most `MAX_LEASE`).
     fn lease_ok(&self, lease: u64) -> bool {
         lease > 0 && (lease <= MAX_LEASE || self.broken(Mutation::PolicyUnboundedLease))
     }
 
     /// An unlabelled session starts an agent on a lease: a budget with a deadline. A login
-    /// session's agent is carved from its principal's budget; an agent's sub-agent from the
-    /// agent's own budget, its lease ending no later than the agent's (QUESTIONS 33). Labelled
-    /// sessions may only submit requests (a labelled agent needs an approval).
+    /// session's agent is carved from its principal's budget; an agent's sub-agent from the agent's
+    /// own budget, its lease ending no later than the agent's. Labelled sessions may only submit
+    /// requests (a labelled agent needs an approval).
     pub fn start_agent(&mut self, session: u64, lease: u64) -> Res<u64> {
         let s = self.sessions.get(&session).ok_or(Denied::UnknownSession)?.clone();
         if !s.labels.is_empty() {
@@ -749,9 +749,9 @@ impl Steward {
         Ok(id)
     }
 
-    /// A session writes item `item` of label `label`'s volume. Every write needs equal labels
-    /// (QUESTIONS 51: no write down, and no blind write up), so only a vault session carrying
-    /// exactly that label writes there.
+    /// A session writes item `item` of label `label`'s volume. Every write needs equal labels (no
+    /// write down, and no blind write up), so only a vault session carrying exactly that label
+    /// writes there.
     pub fn write_item(&mut self, session: u64, label: u64, item: u64, bytes: Vec<u8>) -> Res<()> {
         let s = self.sessions.get(&session).ok_or(Denied::UnknownSession)?;
         let allowed = if self.broken(Mutation::PolicyWriteUp) {
@@ -768,10 +768,10 @@ impl Steward {
         Ok(())
     }
 
-    /// Read item `item` of `label` through a short-lived reader budget carrying exactly that
-    /// label, which the steward creates and destroys (QUESTIONS 54): the steward itself stays
-    /// unlabelled. Returns the bytes and the reader's budget id. The model reads the volume
-    /// directly; the reader budget stands for the process that would.
+    /// Read item `item` of `label` through a short-lived reader budget carrying exactly that label,
+    /// which the steward creates and destroys: the steward itself stays unlabelled. Returns the
+    /// bytes and the reader's budget id. The model reads the volume directly; the reader budget
+    /// stands for the process that would.
     fn read_item(&mut self, label: u64, item: u64) -> Res<(Vec<u8>, u64)> {
         let bytes = self.vault.get(&(label, item)).cloned().unwrap_or_default();
         if self.broken(Mutation::PolicyDeclassifyWithoutReader) {
@@ -867,8 +867,8 @@ impl Steward {
         self.requests.values().filter(|r| r.session == session).count()
     }
 
-    /// A session's fair share of its bucket: the cap divided among the bucket's live sessions,
-    /// at least one (QUESTIONS 90).
+    /// A session's fair share of its bucket: the cap divided among the bucket's live sessions, at
+    /// least one.
     pub fn share(&self, session: u64) -> usize {
         let Some(s) = self.sessions.get(&session) else { return 0 };
         let account = self.principals[s.principal].spec.account;
@@ -880,7 +880,7 @@ impl Steward {
         (PENDING_CAP / n.max(1)).max(1)
     }
 
-    /// Pending requests of the requester's (account, label set) (QUESTIONS 17).
+    /// Pending requests of the requester's (account, label set).
     fn pending_of(&self, account: u64, labels: &[u64]) -> usize {
         let per_label_set = !self.broken(Mutation::PolicyCapPerAccount);
         self.requests
@@ -889,10 +889,10 @@ impl Steward {
             .count()
     }
 
-    /// Submit a request. The approver is the requester's principal; a labelled request is
-    /// refused unless the approver owns every label on it; a declassification snapshots the item
-    /// now. Each (account, label set) has at most `PENDING_CAP` pending requests, and each session
-    /// at most its fair share of them (QUESTIONS 90).
+    /// Submit a request. The approver is the requester's principal; a labelled request is refused
+    /// unless the approver owns every label on it; a declassification snapshots the item now. Each
+    /// (account, label set) has at most `PENDING_CAP` pending requests, and each session at most
+    /// its fair share of them.
     pub fn submit(&mut self, session: u64, content: Content, reason: &str) -> Res<u64> {
         let s = self.sessions.get(&session).ok_or(Denied::UnknownSession)?.clone();
         let approver = s.principal;
@@ -992,8 +992,8 @@ impl Steward {
                         .map(|b| sanitize(&String::from_utf8_lossy(b), DECLASSIFY_MAX, wl));
                     format!("declassify item {item} of label {label}: \"{}\"", shown.unwrap_or_default())
                 }
-                // A labelled requester's free text is not shown (QUESTIONS 35): it could carry
-                // the vault out; only declassification may.
+                // A labelled requester's free text is not shown: it could carry the vault out; only
+                // declassification may.
                 Content::Note { .. } if free_text_withheld => {
                     String::from("a note (text withheld: labelled session)")
                 }
@@ -1102,7 +1102,7 @@ impl Steward {
 
     /// Session `by` ends agent session `lease`. Accepted whenever `by` is a session of the lease's
     /// sponsor, ahead of any admission: an agent filling its sponsor's buckets cannot keep its
-    /// sponsor from ending it (QUESTIONS 90).
+    /// sponsor from ending it.
     pub fn end_lease(&mut self, by: u64, lease: u64) -> Res<()> {
         let b = self.sessions.get(&by).ok_or(Denied::UnknownSession)?;
         let l = self.sessions.get(&lease).ok_or(Denied::UnknownSession)?;
@@ -1119,19 +1119,19 @@ impl Steward {
     }
 
     /// The audit file as a reader with labels `reader` may read it: the records whose labels it
-    /// holds (QUESTIONS 92).
+    /// holds.
     pub fn audit_view(&self, reader: &[u64]) -> Vec<&Audit> {
         let all = self.broken(Mutation::PolicyAuditUnfiltered);
         self.audit.iter().filter(|a| all || crate::spec::superset(reader, a.labels())).collect()
     }
 
     // -------------------------------------------------------------------------------------------
-    // Crash blame (CONTAINMENT.md): from the kernel's exit notices of the server (`poll`).
+    // Crash blame (servers/steward.md R40): from the kernel's exit notices of the server (`poll`).
 
     /// Three crashes blamed on one (account, label set) within ten minutes log out that account's
     /// sessions with that label set, and their agents, and refuse new ones until the window has
-    /// passed (QUESTIONS 48, 91: keyed by label set too, so a vault crashing a shared server cannot
-    /// log out its owner's unlabelled sessions). Account 0 (nothing being served) blames nobody.
+    /// passed (keyed by label set too, so a vault crashing a shared server cannot log out its
+    /// owner's unlabelled sessions). Account 0 (nothing being served) blames nobody.
     fn blame(&mut self, account: u64, labels: Vec<u64>) {
         if account == 0 {
             return;
@@ -1193,8 +1193,9 @@ fn started(notes: Vec<Note>) -> Res<Proc> {
         .ok_or(Denied::Kernel(Error::Dead))
 }
 
-/// Ideal keyd authority for answer 125. This is an unforgeable symbolic token, not a
-/// cryptographic implementation. Constructing this authority represents a trusted boot grant.
+/// Ideal keyd authority for signed audit records (servers/steward.md, "The audit log"). This is an
+/// unforgeable symbolic token, not a cryptographic implementation. Constructing this authority
+/// represents a trusted boot grant.
 #[derive(Clone, Debug)]
 pub struct AuditKeyd {
     signer: u64,
@@ -1237,8 +1238,9 @@ impl Audit {
     pub fn bytes(&self) -> Vec<u8> { format!("{self:?}").into_bytes() }
 }
 
-/// One owner-triggered push awaiting its one out-of-band approval (answer 153). No requester
-/// session API produces these, and a ticket never represents a queue, batch or standing path.
+/// One owner-triggered push awaiting its one out-of-band approval (servers/steward.md R42). No
+/// requester session API produces these, and a ticket never represents a queue, batch or standing
+/// path.
 #[derive(Clone, Debug)]
 pub struct PushRequest {
     pub principal: usize,
@@ -1258,7 +1260,8 @@ impl Steward {
     }
 
     /// Per-record authentication only: dropping or reordering valid record/signature pairs is
-    /// outside answer 125's guarantee. A milestone-2 operator verifier is not implemented here.
+    /// outside the audit log's guarantee. The operator verifier (servers/steward.md, "Retention,
+    /// chaining and the verifier") is not implemented here.
     pub fn audit_authentic(&self) -> bool {
         self.audit.len() == self.audit_signatures.len()
             && self.audit.iter().zip(&self.audit_signatures).all(|(r, s)| s.verify(1, "audit", &r.bytes()))
@@ -1370,9 +1373,10 @@ pub struct ConnectionShare {
     pub root: u64,
     pub used: usize,
 }
-/// Observable admission abstraction for answer 117. `grant` presupposes the server already
-/// checked mint authority; bucket metadata comes from authenticated kernel metadata. It grants
-/// no authority to mint across accounts or labels and models no confined placement topology.
+/// Observable admission abstraction for the self-minted share (servers/serving.md R26). `grant`
+/// presupposes the server already checked mint authority; bucket metadata comes from authenticated
+/// kernel metadata. It grants no authority to mint across accounts or labels and models no confined
+/// placement topology.
 #[derive(Clone, Debug)]
 pub struct ConnectionShares {
     pub connections: BTreeMap<u64, ConnectionShare>,

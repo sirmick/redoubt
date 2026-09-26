@@ -4,8 +4,8 @@
 //! drained before every wait. (Transmit never waits on an interrupt at all: its queue is marked
 //! `NO_INTERRUPT`, and the serving thread takes completed buffers back on each `transmit`.)
 //!
-//! **Every way out stops the device and says so** (IO-ARCHITECTURE.md, `netd`: either thread
-//! leaving its loop resets). A lie, a fault reading the rings, or the interrupt handle failing all
+//! **Every way out stops the device and says so** (servers/netd.md R57: either thread leaving
+//! its loop resets). A lie, a fault reading the rings, or the interrupt handle failing all
 //! end the loop the same way: the device is reset, so it writes nothing more into its receive
 //! slots, and the serving thread is told, so it answers `failed` from then on instead of
 //! transmitting on a device that nobody is receiving from. Only an interrupt that has not arrived
@@ -40,8 +40,8 @@ pub fn receive<T: Transport>(
         // Drain until the used ring is empty before every wait, the first one included (the
         // device may have completed buffers between DRIVER_OK and it), so an interrupt that was
         // never delivered cannot leave frames waiting: the last, empty drain is the re-check of
-        // the used index right before blocking (K5 review 5: on QEMU `virt` an interrupt raised
-        // while the IRQ object was masked was lost once, on a driver's first receive).
+        // the used index right before blocking (on QEMU `virt` an interrupt raised while the IRQ
+        // object was masked was lost once, on a driver's first receive: todo/irq-level-latch.md).
         loop {
             match virtio::ack_interrupt(t).and_then(|()| rx.drain(t, scratch, &mut forward)) {
                 Ok(0) => break,

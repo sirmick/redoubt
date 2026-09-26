@@ -1,16 +1,16 @@
-//! The `blkd` server: the typed protocol of IO-ARCHITECTURE.md, over `redoubt-rt`'s shared
-//! server library.
+//! The `blkd` server: the typed protocol of servers/blkd.md, over `redoubt-rt`'s shared server
+//! library.
 //!
 //! **A typed protocol, not 9P.** `blkd` serves four fixed operations on ranges of sectors and has
-//! no namespace to walk; WIRE.md lists the block protocol among the typed ones.
+//! no namespace to walk (servers/blkd.md, "Messages").
 //!
 //! **A range is a badge.** The root badge of GPT entry *i* is *i* + 1, counting every entry of the
-//! array, used or not, as `keyd`'s badge is the index of its key argument (INIT.md). So `init`
-//! mints each volume's range from the manifest's entry number without asking `blkd` anything, a
-//! restarted `blkd` gives the same badges the same meaning from the same disk while holding no
-//! state across the restart, and a badge naming an **unused** entry is refused exactly as one past
-//! the end is. Counting positions among the used entries instead would renumber every volume after
-//! a gap, and `gdisk` leaves gaps routinely.
+//! array, used or not, as `keyd`'s badge is the index of its key argument (servers/keyd.md). So
+//! `init` mints each volume's range from the manifest's entry number without asking `blkd`
+//! anything, a restarted `blkd` gives the same badges the same meaning from the same disk while
+//! holding no state across the restart, and a badge naming an **unused** entry is refused exactly
+//! as one past the end is. Counting positions among the used entries instead would renumber every
+//! volume after a gap, and `gdisk` leaves gaps routinely.
 //!
 //! **`blkd` mints nothing and remembers nothing.** There is no `grant` and no `release`: every
 //! range comes from the boot manifest through a badge `init` minted. So a client can make `blkd`
@@ -48,7 +48,7 @@ pub struct BlockServer<T: Transport> {
     roots: Vec<Option<Range>>,
     /// Where a read's bytes live while the reply borrows them. **`blkd`'s own memory, not the DMA
     /// region**: the device's bytes are copied here once, with a length `blkd` chose, so nothing
-    /// the reply is built from can change underneath it (IO-ARCHITECTURE.md, DMA).
+    /// the reply is built from can change underneath it (servers/blkd.md, "The DMA region").
     scratch: Vec<u8>,
 }
 
@@ -96,10 +96,10 @@ impl<T: Transport> BlockServer<T> {
         buf_len: usize,
     ) -> Result<Answer<Reply<'s>>, ErrorCode> {
         let range = self.resolve(caller)?;
-        // The label check on every request (CONTAINMENT.md). A range carries no labels in
-        // milestone 1 (IO-ARCHITECTURE.md), so a read is allowed to anyone holding the badge and
-        // a write only to an unlabelled caller; when volumes' labels reach `blkd` this is the one
-        // line that changes. `flush` is a write: it is how a write becomes durable.
+        // The label check on every request (servers/serving.md R25). A range carries no labels
+        // in milestone 1, so a read is allowed to anyone holding the badge and a write only to an
+        // unlabelled caller; when volumes' labels reach `blkd` this is the one line that
+        // changes. `flush` is a write: it is how a write becomes durable.
         let access = match request {
             Message::Info(_) | Message::Read(_) => Access::Read,
             Message::Write(_) | Message::Flush(_) => Access::Write,
@@ -134,9 +134,9 @@ impl<T: Transport> BlockServer<T> {
         buf_len: usize,
     ) -> Result<Answer<Reply<'s>>, ErrorCode> {
         let bytes = sectors_to_bytes(count)?;
-        // The reply is `u32` length + data (WIRE.md), written into the lend the request came in.
-        // Checking it here means a caller that asked for more than it lent is refused before the
-        // disk is touched, rather than after, with the answer thrown away.
+        // The reply is `u32` length + data (servers/wire.md), written into the lend the request
+        // came in. Checking it here means a caller that asked for more than it lent is refused
+        // before the disk is touched, rather than after, with the answer thrown away.
         if bytes.checked_add(4).is_none_or(|needed| needed > buf_len) {
             return Err(ErrorCode::TooMany);
         }
@@ -148,7 +148,7 @@ impl<T: Transport> BlockServer<T> {
     }
 
     fn write(&mut self, range: Range, sector: u64, data: &[u8]) -> Result<(), ErrorCode> {
-        // Whole sectors only (IO-ARCHITECTURE.md, `blkd`'s contract). A length that is not a
+        // Whole sectors only (servers/blkd.md, "Messages"). A length that is not a
         // whole number of sectors is a request no sender could mean: `malformed`.
         if data.is_empty() || !data.len().is_multiple_of(SECTOR_SIZE as usize) {
             return Err(ErrorCode::Malformed);
@@ -162,8 +162,8 @@ impl<T: Transport> BlockServer<T> {
     }
 }
 
-/// A range's labels in milestone 1: none (IO-ARCHITECTURE.md). Named, so the one place this
-/// changes is obvious when volumes' labels reach `blkd`.
+/// A range's labels in milestone 1: none. Named, so the one place this changes is obvious when
+/// volumes' labels reach `blkd`.
 const NO_LABELS: &[u64] = &[];
 
 /// `count` sectors as bytes, refusing more than one request may carry.
@@ -222,7 +222,7 @@ impl<T: Transport> TypedServer<Blkd> for Serving<'_, T> {
         // No message of this protocol carries a handle, and the codec refuses a request whose
         // handle count is not its layout's, so a request that brought one never reaches here: it
         // is malformed, and the dispatch closes what it brought, so a client cannot grow `blkd`'s
-        // handle table (CONTAINMENT.md, the shared server library).
+        // handle table (servers/serving.md, "Authority").
         debug_assert!(handles.is_empty(), "the codec refuses handles this protocol does not name");
         let _ = handles;
         self.server.dispatch(caller, request, self.buf_len)

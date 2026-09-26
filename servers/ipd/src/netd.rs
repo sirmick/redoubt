@@ -1,4 +1,4 @@
-//! The link's calls to `netd` (IO-ARCHITECTURE.md, the `netif` table): `info` for the MAC, and
+//! The link's calls to `netd` (servers/netd.md, "Serving `ipd`"): `info` for the MAC, and
 //! `transmit`, one frame per call in a one-page lend `ipd` keeps and reuses.
 //!
 //! A transmit waits at most [`TRANSMIT_TIMEOUT_US`]: `busy`, a length `netd` refused, or no

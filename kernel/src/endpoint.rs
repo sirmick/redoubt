@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Endpoints (KERNEL-SPEC.md, Endpoint): the object clients call and servers receive on.
+//! Endpoints (kernel/ipc.md): the object clients call and servers receive on.
 //!
 //! # Where an endpoint lives
 //! One RAM frame of its own, allocated to `mem::OBJECT_OWNER`, exactly as a budget is
@@ -28,7 +28,7 @@ use crate::handle::{BudgetRef, EndpointRef, Handle, Object};
 use crate::kframe;
 use crate::mem::MemoryManager;
 
-/// The cost table (KERNEL-SPEC.md, What objects cost), in pages.
+/// The cost table (kernel/objects.md, "What objects cost"), in pages.
 pub const ENDPOINT_PAGES: u64 = 1;
 
 /// First word of every endpoint frame, so that a frame read as an endpoint that is not one is
@@ -36,7 +36,7 @@ pub const ENDPOINT_PAGES: u64 = 1;
 const MAGIC: u64 = u64::from_le_bytes(*b"endpoint");
 
 /// R2's group: a sender budget's (account, label set), plus its budget id when the account is 0,
-/// so that two system callers in different budgets never share a turn or a cap (CONTAINMENT.md).
+/// so that two system callers in different budgets never share a turn or a cap (kernel/ipc.md R2).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Group {
     pub account: u64,

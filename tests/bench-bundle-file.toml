@@ -1,4 +1,4 @@
-description = "Bench self-check: the loader finds a [[file]] entry in the signed bundle after the programs (today it refuses it; clean guest readback remains a K4 gate for the R2/R3 handoff)"
+description = "Bench self-check: the loader finds a [[file]] entry in the signed bundle after the programs (today it refuses it; the entry read back in the guest waits for the loader that loads only the kernel and init: testbench.md, \"Data entries for init\")"
 arch = ["rv64"]
 kind = "boot"
 programs = ["log-server"]
@@ -6,9 +6,9 @@ timeout_secs = 20
 # Today's loader starts every bundle entry as a process, so it refuses a data
 # entry. Its complaint quotes the entry's first bytes, "DATA" (68, 65, 84, 65), right after
 # loading log-server: the bytes arrived as they were, signed, after the programs. When the
-# loader loads only the kernel and init (WP-R3 after the R2 stub), this becomes a clean boot in which a
-# guest program reads the entry back. Answer 169 permits lifecycle integration first;
-# this refusal test does not satisfy the retained clean-readback gate.
+# loader loads only the kernel and init (docs/plan/m1-separation.md), this becomes a clean boot
+# in which a guest program reads the entry back (docs/testbench.md, "Data entries for `init`").
+# This refusal test does not stand in for that readback.
 allow_panic = true
 expect = ['bundle signature ok', 'PID 2: log-server', 'loader PANIC', 'invalid ELF: BadMagic\(\[68, 65, 84, 65\]\)']
 forbid = ['KMAIN']

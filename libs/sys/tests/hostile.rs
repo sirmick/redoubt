@@ -1,5 +1,5 @@
-//! Hostile inputs to the decoders, from WP-A2's review: per-kind field sets, bit flips, width
-//! and count edges, the order of `mint`'s checks, and a revoked handle in a received message.
+//! Hostile inputs to the decoders: per-kind field sets, bit flips, width and count edges, the
+//! order of `mint`'s checks, and a revoked handle in a received message.
 
 use core::num::{NonZeroU64, NonZeroUsize};
 
@@ -33,7 +33,7 @@ fn exit(cause: Cause) -> Received {
     Received::Exit(ExitNotice { pid: 3, cause, code: 1, blamed_account: 0, blamed_labels: Labels::new() })
 }
 
-/// R10: a handle revoked while its message is queued "arrives as 0", and WIRE.md numbers
+/// R10: a handle revoked while its message is queued "arrives as 0", and servers/wire.md numbers
 /// handles by slot, so the 0 keeps its slot and the message still decodes.
 #[test]
 fn revoked_handle_in_a_received_message() {
@@ -63,8 +63,9 @@ fn kinds_are_separated_only_by_slot_zero() {
     assert_eq!(Received::decode(&slots), Err(Error::InvalidArgument));
 }
 
-/// For every kind, exactly the spec's fields may be non-zero (KERNEL-SPEC.md, ABI: "a field a
-/// kind does not use is 0 or empty"). Slots outside the set never decode for any value.
+/// For every kind, exactly the spec's fields may be non-zero (kernel/abi.md, "The receive
+/// record": "a field the kind does not use is 0"). Slots outside the set never decode for any
+/// value.
 #[test]
 fn per_kind_field_sets_match_the_spec() {
     let all: Vec<usize> = (1..RECEIVED_SLOTS).collect();
@@ -168,8 +169,8 @@ fn numbers_outside_the_table_are_unknown() {
     assert_eq!(Number::from_raw(1 << 32 | u64::from(Number::Random as u32)), None, "high bits alias");
 }
 
-/// A budget spec carries no scheduling flag (answer 103): the slot that held one is the label
-/// count, and a count over `MAX_LABELS` is `TooLarge`, however large.
+/// A budget spec carries no scheduling flag (kernel/scheduling.md R12): the slot that held one is
+/// the label count, and a count over `MAX_LABELS` is `TooLarge`, however large.
 #[test]
 fn a_budget_spec_asks_for_no_place_in_the_queue() {
     let spec = BudgetSpec {

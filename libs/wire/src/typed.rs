@@ -1,10 +1,10 @@
-//! Framing for typed messages (WIRE.md): everything that is not 9P uses 9P's encoding
-//! ([`crate::codec`]), laid out by a table in the owning server's note. The per-protocol
+//! Framing for typed messages (servers/wire.md): everything that is not 9P uses 9P's encoding
+//! ([`crate::codec`]), laid out by a table in `libs/wire/tables/`. The per-protocol
 //! codecs in [`crate::proto`] are generated from those tables by `redoubt-wire-gen`; this
 //! module is the part they share.
 //!
 //! A message is `WORDS` (4) machine words, up to 4 handles, and at most one buffer
-//! (KERNEL-SPEC.md, Messages). **Word 0 of a request is its opcode.** Each message type is
+//! (kernel/ipc.md, "Messages"). **Word 0 of a request is its opcode.** Each message type is
 //! one of two shapes, fixed by its table, and its reply has the same shape:
 //!
 //! - **inline**: the request's fields and the reply's fields are each fixed-size integers
@@ -34,9 +34,9 @@
 use crate::codec::{Error, Reader, Writer};
 use crate::MSIZE;
 
-/// Machine words in a message (KERNEL-SPEC.md `WORDS`).
+/// Machine words in a message (kernel/ipc.md `WORDS`).
 pub const WORDS: usize = 4;
-/// Handle slots in a message (KERNEL-SPEC.md `MAX_MSG_HANDLES`).
+/// Handle slots in a message (kernel/ipc.md `MAX_MSG_HANDLES`).
 pub const MAX_MSG_HANDLES: usize = 4;
 /// Bytes an inline message carries: words 1..=3 at 32 bits each (see the module docs).
 pub const INLINE_BYTES: usize = 12;
@@ -45,14 +45,14 @@ pub const INLINE_BYTES: usize = 12;
 pub type Words = [u64; WORDS];
 
 /// Error code 1 in every protocol (and a 9P call's reply status): `Malformed`, a request that
-/// does not decode (WIRE.md, Errors). The generator adds it to every error table and refuses
+/// does not decode (servers/wire.md). The generator adds it to every error table and refuses
 /// a table that gives code 1 another meaning; a protocol's own codes start at 2.
 pub const MALFORMED: u32 = 1;
 
 /// The kind of object a handle slot must name, as a table writes it (`handle[N] KIND`;
-/// KERNEL-SPEC.md, Objects). Documentation only: the kernel does not report a received
-/// handle's kind, so nothing checks it on receipt, and a handle of the wrong kind is found by
-/// use (`WrongObject` on first use, answer 56).
+/// kernel/objects.md). Documentation only: the kernel does not report a received handle's
+/// kind, so nothing checks it on receipt, and a handle of the wrong kind is found by use
+/// (`WrongObject` on first use).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandleKind {
     Endpoint,
@@ -64,7 +64,7 @@ pub enum HandleKind {
 }
 
 impl HandleKind {
-    /// Every kind, in WIRE.md's order.
+    /// Every kind, in `libs/wire/tables/example.md`'s order.
     pub const ALL: [HandleKind; 6] = [
         HandleKind::Endpoint,
         HandleKind::Budget,

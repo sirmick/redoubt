@@ -1,12 +1,12 @@
-//! How big `ipd` is allowed to get, from its arguments (NAMESPACES.md, the milestone manifest;
-//! answer 174): admission for the 9P skeleton's buckets, the sockets `ipd` counts itself, and
-//! the check that every bucket at its cap fits, or `ipd` does not start.
+//! How big `ipd` is allowed to get, from its arguments (servers/ipd.md, "Sizing"): admission for
+//! the 9P skeleton's buckets, the sockets `ipd` counts itself, and the check that every bucket at
+//! its cap fits, or `ipd` does not start.
 
 use alloc::vec::Vec;
 
 use crate::args::{BadArgs, Config};
 
-/// Parked calls one default bucket may hold (NAMESPACES.md, the milestone manifest).
+/// Parked calls one default bucket may hold (servers/ipd.md, "Sizing").
 pub const DEFAULT_IN_FLIGHT: u32 = 5;
 /// Sockets one default bucket may hold.
 pub const DEFAULT_SOCKETS: u32 = 8;
@@ -29,7 +29,7 @@ pub const CONNECTION_BYTES: u64 = 512;
 pub fn files_for(sockets: u32) -> u32 { (2 * sockets + 8).min(redoubt_rt::server::ninep::MAX_FIDS as u32) }
 
 /// A bucket's `State` units: its connections and its sockets, which are paid for in the same
-/// resource (QA D3-code-review-5, P2-2).
+/// resource.
 pub fn state_for(state: u32, sockets: u32) -> u32 { state.saturating_add(sockets) }
 
 /// How `ipd` is sized: admission for the skeleton, and the socket caps `ipd` counts itself.
@@ -41,16 +41,15 @@ pub struct Sizing {
 }
 
 impl Config {
-    /// Sizes `ipd` from its arguments, or refuses to start (answer 174): the overrides must be
-    /// root scope badges, and the worst case, every override's bucket and every other bucket at
-    /// the defaults, must leave `MAX_OPEN_CALLS`' headroom and fit [`BUDGET`].
+    /// Sizes `ipd` from its arguments, or refuses to start: the overrides must be root scope
+    /// badges, and the worst case, every override's bucket and every other bucket at the defaults,
+    /// must leave `MAX_OPEN_CALLS`' headroom and fit [`BUDGET`].
     ///
     /// Sockets are `State` units ([`state_for`]), so the admission's own worst case covers their
     /// memory, each unit costed as a socket (a connection costs less), and a bucket's sockets are
     /// bounded by its units. The stack's bound on live sockets is those units at their worst: an
     /// override below the default can be idle while a default bucket takes its slot, so each
-    /// override slot counts `max(its units, the default's)`, as the admission counts its caps
-    /// (QA D3-code-review-3 and -5).
+    /// override slot counts `max(its units, the default's)`, as the admission counts its caps.
     pub fn sizing(&self) -> Result<Sizing, BadArgs> {
         use redoubt_rt::server::{Admission, Cost, Limits, Override};
         let limits = Limits {

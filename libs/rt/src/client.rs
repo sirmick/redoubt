@@ -170,8 +170,8 @@ impl Client {
     /// `new_connection`: a fresh connection to this server rooted at `root` (relative to this
     /// connection's root; it never climbs above it), with `quota` bytes carved from this
     /// connection's quota (0 shares it). Returns the connection and its id, which only this
-    /// connection may `disconnect`. What a launcher gives each child (INIT.md, launching gives
-    /// fresh connections).
+    /// connection may `disconnect`. What a launcher gives each child (servers/init.md, "Fresh
+    /// connections per child").
     /// A refusal is `Remote`, whatever its reason: which root exists, which cap was reached and
     /// which quota was refused are the server's business, not the caller's.
     pub fn new_connection(&mut self, root: &str, quota: u64) -> Result<(Endpoint, u64), ClientError> {
@@ -201,8 +201,8 @@ impl Client {
     /// `disconnect`: frees the connection with `id`, which this connection received from
     /// [`Client::new_connection`], and every connection minted under it. A `Remote` error is all
     /// a caller learns: a server answers an id belonging to someone else exactly as it answers
-    /// one that never existed (QUESTIONS.md 114), so a client cannot probe for other clients'
-    /// ids.
+    /// one that never existed (servers/wire.md, `ninep_common`), so a client cannot probe for
+    /// other clients' ids.
     pub fn disconnect(&mut self, id: u64) -> Result<(), ClientError> {
         let words = ninep_common::Message::Disconnect(ninep_common::Disconnect { id }).encode(&mut [])?;
         let (reply, _) = self.endpoint.call(&words, &[], None, self.timeout).into_result()?;

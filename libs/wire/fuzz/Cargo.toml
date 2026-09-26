@@ -1,5 +1,5 @@
 # Fuzz targets for redoubt-wire (TENETS.md 6: fuzz what parses). Host-only; excluded from the
-# workspace; how to run them and the recorded results are in README.md. serde_json is a test
+# workspace; how to run them is in README.md. serde_json is a test
 # oracle for the json target only; it is never linked into anything that runs on Redoubt.
 [package]
 name = "redoubt-wire-fuzz"

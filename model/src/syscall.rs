@@ -1,5 +1,5 @@
-//! The system calls of KERNEL-SPEC.md as data, their results, and the other things that can
-//! happen to the machine (a user memory access, a fault, an interrupt, time passing).
+//! The system calls of kernel/abi.md as data, their results, and the other things that can happen
+//! to the machine (a user memory access, a fault, an interrupt, time passing).
 //!
 //! Every argument is a raw `u64` (or a list of them), as it arrives from user mode: a handle is
 //! an index into the caller's table, an address is a user virtual address, a class is its
@@ -26,7 +26,7 @@ pub enum MintSource {
     Handle(u64),
 }
 
-/// One system call with its arguments, in KERNEL-SPEC.md's table order and argument order.
+/// One system call with its arguments, in kernel/abi.md's table order and argument order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Syscall {
     MapAnon {
@@ -69,7 +69,7 @@ pub enum Syscall {
         len: u64,
         flags: u64,
     },
-    /// `arg` is the address of the child's startup page, 0 for none (QUESTIONS 40).
+    /// `arg` is the address of the child's startup page, 0 for none.
     ProcessStart {
         process: u64,
         entry: u64,
@@ -137,8 +137,8 @@ pub enum Syscall {
         h: u64,
         kind: u64,
     },
-    /// As `MapAnon`, but at exactly `addr`; never replaces a mapping (KERNEL-SPEC.md R11,
-    /// answer 172). Appended last so earlier call numbers keep their values.
+    /// As `MapAnon`, but at exactly `addr`; never replaces a mapping (kernel/memory.md R11).
+    /// Appended last so earlier call numbers keep their values.
     MapFixed {
         addr: u64,
         len: u64,
@@ -146,8 +146,8 @@ pub enum Syscall {
     },
 }
 
-/// The calls' names, in KERNEL-SPEC.md's table order (the order of `redoubt-sys`'s numbers,
-/// from 1). The one list of them: [`Syscall::name`], the trace and the tests use it.
+/// The calls' names, in kernel/abi.md's table order (the order of `redoubt-sys`'s numbers, from 1).
+/// The one list of them: [`Syscall::name`], the trace and the tests use it.
 pub const CALL_NAMES: [&str; 26] = [
     "map_anon",
     "unmap",
@@ -214,17 +214,17 @@ impl Syscall {
     pub fn name(&self) -> &'static str { CALL_NAMES[self.number() - 1] }
 }
 
-/// How a message was sent. `receive` returns it (QUESTIONS 1): a `call`'s message is owed a
-/// reply and may carry a lend; a `send`'s may carry a transfer and cannot be replied to.
+/// How a message was sent. `receive` returns it: a `call`'s message is owed a reply and may carry a
+/// lend; a `send`'s may carry a transfer and cannot be replied to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MsgKind {
     Call,
     Send,
 }
 
-/// A delivered message, as `receive` returns it (KERNEL-SPEC.md, Messages). `msg_id` is unique
-/// within the receiving process; a handle revoked while the message was queued arrives as 0
-/// (R10).
+/// A delivered message, as `receive` returns it (kernel/ipc.md, "What `receive` returns"). `msg_id`
+/// is unique within the receiving process; a handle revoked while the message was queued arrives as
+/// 0 (R10).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Message {
     pub kind: MsgKind,
@@ -302,7 +302,7 @@ pub enum Ret {
     },
     Tid(u64),
     Handle(u64),
-    /// Status, memory ownership and committed reply are independent (answers 167-168).
+    /// Status, memory ownership and committed reply are independent.
     Call(CallCompletion),
     /// Successful server completion, including abandoned and uncommittable replies.
     Replied {
@@ -314,8 +314,8 @@ pub enum Ret {
     Interrupt {
         h: u64,
     },
-    /// `blamed_labels` is the label set of the blamed call's sender: blame is keyed by
-    /// (account, label set) (QUESTIONS 48).
+    /// `blamed_labels` is the label set of the blamed call's sender: blame is keyed by (account,
+    /// label set).
     ExitNotice {
         pid: u64,
         cause: Cause,

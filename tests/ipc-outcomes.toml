@@ -1,17 +1,17 @@
-description = "IPC1 trusted real-kernel checker: initial record validation, overlapping lend, queued cancellation, partial reply, output failure rollback, taken revocation and server death"
+description = "The IPC outcomes, checked by a trusted real-kernel checker: initial record validation, overlapping lend, queued cancellation, partial reply, output failure rollback, taken revocation and server death"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
 programs = ["ipc-outcomes"]
 timeout_secs = 60
 expect = [
-    '^\[pid 2\] IPC1 initial readonly/MMIO records refused before delivery$',
-    '^\[pid 2\] IPC1 record inside returned lend committed$',
-    '^\[pid 2\] IPC1 late readonly/unmap/remap discarded; handles and table pages rolled back$',
-    '^\[pid 2\] IPC1 partial OOM reply preserves words, slots and installed mask$',
-    '^\[pid 2\] IPC1 both loan aliases protected; frame and charges preserved$',
-    '^\[pid 2\] IPC1 taken revocation consumed lend; server observed discard$',
-    '^\[pid 2\] IPC1 server death returned lend without reply$',
-    '^\[pid 2\] IPC1 KERNEL OUTCOMES PASSED$',
+    '^\[pid 2\] ipc-outcomes initial readonly/MMIO records refused before delivery$',
+    '^\[pid 2\] ipc-outcomes record inside returned lend committed$',
+    '^\[pid 2\] ipc-outcomes late readonly/unmap/remap discarded; handles and table pages rolled back$',
+    '^\[pid 2\] ipc-outcomes partial OOM reply preserves words, slots and installed mask$',
+    '^\[pid 2\] ipc-outcomes both loan aliases protected; frame and charges preserved$',
+    '^\[pid 2\] ipc-outcomes taken revocation consumed lend; server observed discard$',
+    '^\[pid 2\] ipc-outcomes server death returned lend without reply$',
+    '^\[pid 2\] ipc-outcomes KERNEL OUTCOMES PASSED$',
 ]
-forbid = ['IPC1 FAILED']
+forbid = ['ipc-outcomes FAILED']

@@ -1,4 +1,4 @@
-description = "Timeouts on the kernel's own timer (WP-K5, I13): idle sleeps end on time and never early; queued call and send time out with buffers returned; a taken call times out with its lend consumed, one abandoned-call notice and a discarded reply; receive times out on an endpoint and an interrupt; FOREVER and a saturating timeout never expire; a reply racing a timeout lands on exactly one side 200 times; rdtime is monotonic and in step with time_now (virtual time, checked build)"
+description = "Timeouts on the kernel's own timer (I13): idle sleeps end on time and never early; queued call and send time out with buffers returned; a taken call times out with its lend consumed, one abandoned-call notice and a discarded reply; receive times out on an endpoint and an interrupt; FOREVER and a saturating timeout never expire; a reply racing a timeout lands on exactly one side 200 times; rdtime is monotonic and in step with time_now (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true

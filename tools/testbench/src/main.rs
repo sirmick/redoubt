@@ -53,7 +53,7 @@ struct Args {
     /// With --run, print the QEMU command line and exit without booting.
     #[arg(long)]
     print_only: bool,
-    /// With --run, start QEMU paused with a gdb stub on :1234 (see docs/DEBUGGING.md).
+    /// With --run, start QEMU paused with a gdb stub on :1234.
     #[arg(long)]
     debug: bool,
     /// Report a case whose firmware or OpenSSH is missing as SKIP instead of FAIL.

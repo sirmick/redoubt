@@ -1,9 +1,10 @@
-//! The kernel half of the address map, and the PIDs the boot handoff carries (BOOT.md).
+//! The kernel half of the address map, and the PIDs the boot handoff carries
+//! (`docs/kernel/boot.md`).
 //!
 //! The loader builds this map and the kernel asserts it, so both take it from here. None of
 //! it is user-visible: these addresses have no U bit (R11), and the user ABI (`redoubt-sys`)
 //! speaks in handles, so publishing them there would couple userspace to the kernel's layout.
-//! See `docs/MEMORY-LAYOUT.md`.
+//! See `docs/kernel/memory-layout.md`.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -22,7 +23,7 @@ pub const KERNEL_PID: Pid = match Pid::new(1) {
     None => unreachable!(),
 };
 
-/// Sv32 layout. The physmap design of `docs/MEMORY-LAYOUT.md` scaled to two
+/// Sv32 layout. The physmap design of `docs/kernel/memory-layout.md` scaled to two
 /// levels: the kernel half is the upper 2 GiB (root entries 512..=1023, 4 MiB each), and
 /// RAM is identity-mapped low in it so `PHYSMAP_BASE == PHYSMAP_PHYS_BASE`.
 #[cfg(target_pointer_width = "32")]
@@ -38,7 +39,7 @@ mod width {
     /// (up to 8 MiB; a QEMU `virt` PLIC is 6 MiB, which is why this needs two 4 MiB roots).
     pub const KERNEL_PLIC_BASE: usize = 0xff00_0000;
     /// The last 64 KiB of root entry 1021: the kernel's window on DMA devices' registers
-    /// (WP-K5b), one page per device, so a PLIC must end below it.
+    /// (`docs/kernel/devices.md`), one page per device, so a PLIC must end below it.
     pub const KERNEL_DMA_REGS: usize = 0xff7f_0000;
     /// Root entry 1022: per-process kernel data, `ProcessImpl` at its base.
     pub const PROCESS_AREA: usize = 0xff80_0000;
@@ -52,7 +53,7 @@ mod width {
     pub const TRAP_STACK_PAGES: usize = 8;
 }
 
-/// Sv39 layout. See `docs/MEMORY-LAYOUT.md`.
+/// Sv39 layout. See `docs/kernel/memory-layout.md`.
 #[cfg(target_pointer_width = "64")]
 mod width {
     /// Root entries 256..=383: physical memory `[PHYSMAP_PHYS_BASE, +PHYSMAP_SIZE)` mapped
@@ -68,7 +69,7 @@ mod width {
     pub const KERNEL_AREA: usize = 0xffff_ffff_c000_0000;
     /// Where the kernel maps the platform's interrupt controller.
     pub const KERNEL_PLIC_BASE: usize = 0xffff_ffff_f000_0000;
-    /// The kernel's window on DMA devices' registers (WP-K5b), one page per device: right
+    /// The kernel's window on DMA devices' registers, one page per device: right
     /// after the largest PLIC (64 MiB), far below the kernel stacks and image.
     pub const KERNEL_DMA_REGS: usize = 0xffff_ffff_f400_0000;
     pub const KERNEL_STACK_TOP: usize = 0xffff_ffff_fff8_0000;
@@ -78,7 +79,8 @@ mod width {
 }
 pub use width::*;
 
-/// Pages in the DMA register window: one per DMA device the kernel can reset (WP-K5b).
+/// Pages in the DMA register window: one per DMA device the kernel can reset
+/// (`docs/kernel/devices.md`).
 pub const KERNEL_DMA_PAGES: usize = 16;
 const _: () = {
     let end = KERNEL_DMA_REGS + KERNEL_DMA_PAGES * PAGE_SIZE;

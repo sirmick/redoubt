@@ -1,12 +1,12 @@
-description = "Endpoints and messages (WP-K2) across address spaces: a call with words, handles and a lend; a transfer and one the receiver never asked for (R4); the badge, account and labels the kernel attaches; minting, a badge of 0 refused in raw registers, and receive rights (I3, I4); WAIT_CAP per group (R2); abandoned calls reported once and freed by their reply (R3, I15); a message whose handle the receiver's full table cannot take, refused to its sender (answer 116); MAX_OPEN_CALLS with sends still delivered (R4a); a reply whose handles do not fit the caller (answers 107, 116) (checked build)"
+description = "Endpoints and messages across address spaces: a call with words, handles and a lend; a transfer and one the receiver never asked for (R4); the badge, account and labels the kernel attaches; minting, a badge of 0 refused in raw registers, and receive rights (I3, I4); WAIT_CAP per group (R2); abandoned calls reported once and freed by their reply (R3, I15); a message whose handle the receiver's full table cannot take, refused to its sender (R4); MAX_OPEN_CALLS with sends still delivered (R4a); a reply whose handles do not fit the caller (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# Built with the checks on (docs/testbench.md, "Debug assertions").
+# Built with the checks on (docs/testbench.md, "Checked builds").
 debug_assertions = true
 # PID 2 log-server (the loader's first program: it holds root, system and users, and does not
 # use them); PID 3 redoubt-server, which the kernel gives the boot endpoint's receive right;
 # PID 4 redoubt-client, badged 4; PID 5 redoubt-filler, badged 5. See kernel budget.rs,
-# `boot_endpoint` (INTERIM, until WP-K4's process_start passes handles).
+# `boot_endpoint`, and kernel/boot.md, "Devices handed to the first program".
 programs = ["log-server", "redoubt-server", "redoubt-client", "redoubt-filler"]
 timeout_secs = 60
 # The lines that matter are the server's and the client's own checks. A client cannot forge the

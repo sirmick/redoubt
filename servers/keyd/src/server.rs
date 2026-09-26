@@ -1,21 +1,23 @@
-//! The `keyd` server: the typed protocol of INIT.md, over `redoubt-rt`'s shared server library.
+//! The `keyd` server: the typed protocol of servers/keyd.md, over `redoubt-rt`'s shared server
+//! library.
 //!
 //! **A typed protocol, not 9P.** `keyd` serves six fixed operations and no namespace. 9P would
 //! give it files, and a file that answers `Tread` is the export this server must not have; the
 //! skeleton's fids, walks and directory reads would all be machinery for something there is
-//! nothing to name. WIRE.md lists `keyd` among the typed protocols, and this is why.
+//! nothing to name. That is why `keyd`'s protocol is typed (servers/keyd.md, "Messages").
 //!
 //! **Every request** resolves the caller's badge to one key and one purpose, applies
 //! [`check`] to the key's labels, and only then does any work. A badge that names no key, that
 //! names a key whose purpose does not allow the operation, or that fails the label check, all
 //! get `not_permitted`, which says no more than that.
 //!
-//! **Admission** ([`Admission`], CONTAINMENT.md) counts the one thing a client can make `keyd`
-//! hold: capabilities it was granted, which are the shared library's [`Minted`] table, the same
-//! one 9P's `new_connection` and `disconnect` keep. Nothing else here outlives a request —
-//! `keyd` parks no calls and keeps no per-caller state — so a flood of signing requests makes
-//! `keyd` grow by nothing, and is bounded by the kernel's own fair waiting per (account, label
-//! set) (R2) and by each request's bounded work ([`crate::ssh::MAX_PART`], [`MAX_RECORD`]).
+//! **Admission** ([`Admission`], servers/serving.md R26) counts the one thing a client can make
+//! `keyd` hold: capabilities it was granted, which are the shared library's [`Minted`] table,
+//! the same one 9P's `new_connection` and `disconnect` keep. Nothing else here outlives a
+//! request — `keyd` parks no calls and keeps no per-caller state — so a flood of signing
+//! requests makes `keyd` grow by nothing, and is bounded by the kernel's own fair waiting per
+//! (account, label set) (R2) and by each request's bounded work ([`crate::ssh::MAX_PART`],
+//! [`MAX_RECORD`]).
 
 use redoubt_rt::abi::{Error, Handle, Handles, ReceivedHandles};
 use redoubt_rt::ipc::{Caller, Request, Words};
@@ -37,11 +39,12 @@ use crate::ssh::{self, Transcript};
 ///
 /// The domain alone is not enough, and that is why [`audit_digest`] exists. A prefix in front
 /// of caller bytes only separates protocols whose own messages cannot start with it, and a
-/// signature container that covers raw bytes — the boot bundle's is `signature || tar`, with no
-/// domain of its own (VERIFIED-BOOT.md) — has no such guarantee: 17 bytes of domain and 8 of
-/// length sit inside a `ustar` header's 100-byte name field, and the attacker picks the rest.
-/// So `keyd` does not sign `domain || record` at all: it signs the SHA-256 of it, 32 bytes,
-/// which no container whose messages are longer can ever be.
+/// signature container that covers raw bytes with no domain of its own has no such guarantee:
+/// 17 bytes of domain and 8 of length would sit inside, say, a `ustar` header's 100-byte name
+/// field, and the attacker picks the rest. (The boot bundle's signature does carry a domain of
+/// its own: kernel/boot.md, "Verified boot".) So `keyd` does not sign `domain || record` at all:
+/// it signs the SHA-256 of it, 32 bytes, which no container whose messages are longer can ever
+/// be (servers/keyd.md R44).
 pub const AUDIT_DOMAIN: &[u8] = b"redoubt.audit.v1\0";
 
 /// The most an audit record may be: enough for a record the steward writes, small enough that
@@ -52,11 +55,12 @@ pub const MAX_RECORD: usize = 8 * 1024;
 /// cannot collide with a real one.
 pub const ALL_GRANTS: u64 = 0;
 
-/// What a client may hold in `keyd` at once, per (account, label set) (CONTAINMENT.md).
+/// What a client may hold in `keyd` at once, per (account, label set) (servers/serving.md R26).
 ///
 /// - `buckets`: the (account, label set)s `keyd` serves at once — `sshd` and the steward (account 0, one
 ///   bucket each by badge), and a bucket per logged-in principal and per labelled session of one. Sized for
-///   more than milestone 1 has, so the cap does not bind in normal use (answer 118).
+///   more than milestone 1 has, so the cap does not bind in normal use; the count is compiled in
+///   rather than taken from the manifest (docs/todo/server-bucket-counts.md).
 /// - `in_flight` is 0: no call is ever parked here; every request is answered as it is taken.
 /// - `files` is 0: `keyd` has no files.
 /// - `state`: capabilities `grant` has made and `release` has not freed.
@@ -86,10 +90,10 @@ pub struct KeyServer {
 impl KeyServer {
     /// Serves `keys` under `limits`. Refuses limits that do not leave the open-call headroom or
     /// that cannot seat a fair share ([`Admission::new`]), and limits whose caps at their
-    /// ceiling would not fit `budget` bytes (answer 85).
+    /// ceiling would not fit `budget` bytes (servers/serving.md R26).
     /// `random` is one word of the kernel's CSPRNG, which is where the granted badges start
-    /// (answer 126): a `keyd` that cannot get one does not start, because a predictable first
-    /// badge is a hole across a restart (see [`redoubt_rt::server::minted`]).
+    /// (servers/serving.md R27): a `keyd` that cannot get one does not start, because a
+    /// predictable first badge is a hole across a restart (see [`redoubt_rt::server::minted`]).
     pub fn new(
         keys: Keys,
         limits: Limits,
@@ -119,7 +123,7 @@ impl KeyServer {
     pub fn serve(&mut self, mut request: Request) -> Result<(), Error> {
         let (caller, words, handles) = (request.caller, request.words, request.handles);
         self.granted.answering();
-        // Minting from the message id keeps the caller's stamp (CAPABILITIES.md) and borrows
+        // Minting from the message id keeps the caller's stamp (kernel/objects.md) and borrows
         // nothing, so the lend is read on the same path as everything else.
         let mut kernel = Kernel(request.id());
         let outcome = answer_with(self, &caller, &words, &handles, request.lend(), &mut kernel);
@@ -163,7 +167,7 @@ impl KeyServer {
         kernel: &mut impl Minter,
     ) -> Result<Answer<Reply<'s>>, ErrorCode> {
         let index = self.resolve(caller)?;
-        // The label check on every request (CONTAINMENT.md). Signing and granting put the
+        // The label check on every request (servers/serving.md R25). Signing and granting put the
         // caller's data into something the key vouches for, or make new state, so they are
         // writes and need equal labels; reading a public key is a read.
         let access = match request {
@@ -187,24 +191,25 @@ impl KeyServer {
                 // question `sshd` has: is this login key one of `keyd`'s? The answer is about a
                 // public key the asker already holds, and public keys are published, so it
                 // tells nobody anything they could not learn by connecting. When keys carry
-                // labels (milestone 2) this needs a `check` per key, not the badge's alone.
+                // labels (planned for M5) this needs a `check` per key, not the badge's alone.
                 let held = u32::from(self.keys.holds(key));
                 Ok(Answer::new(Reply::Holds(HoldsReply { held })))
             }
             // `grant`: a fresh capability with the caller's own key and purpose, stamped like
             // the handle the request came through, so a launcher never passes its own on
-            // (INIT.md). Nothing granted is ever wider than the badge it came through.
+            // (servers/wire.md, "Granting and releasing"). Nothing granted is ever wider than the
+            // badge it came through.
             Message::Grant(Grant {}) => {
                 // **Only a root badge may grant.** A granted capability cannot grant again,
                 // so grants never chain. Without that rule a system-class caller escapes its
-                // cap: `admit` keys account 0 by badge (CONTAINMENT.md, because the budget id
+                // cap: `admit` keys account 0 by badge (servers/serving.md, because the budget id
                 // a system caller shares does not travel), and `share` folds a capability into
                 // its parent's only when the requester and the caller are the same client,
                 // which two badges of account 0 never are. One daemon could then open a fresh
                 // bucket per chained grant until `LIMITS.buckets` were spent and nobody, the
                 // steward included, could grant at all. Milestone 1 needs no chain: only the
                 // steward and `sshd` hold `keyd` capabilities, both through root badges, and
-                // no session or lease holds `keys` at all (answer 124).
+                // no session or lease holds `keys` at all.
                 if caller.badge >= FIRST_GRANTED_BADGE {
                     return Err(ErrorCode::NotPermitted);
                 }
@@ -235,9 +240,10 @@ impl KeyServer {
             //
             // **`release(0)` frees everything this caller granted.** No grant is ever given the
             // id 0, so it cannot name one. It is what a holder asks for when its ids are gone:
-            // a server that crashed and was restarted on the same root badge (INIT.md decision
-            // 4) comes back knowing nothing, and without this its share would stay full for the
-            // life of `keyd`, because only the holder of an id can name a capability.
+            // a server that crashed and was restarted on the same root badge (servers/init.md,
+            // "Restarts and reboots") comes back knowing nothing, and without this its share
+            // would stay full for the life of `keyd`, because only the holder of an id can name
+            // a capability.
             Message::Release(Release { id }) => {
                 let admission = &mut self.admission;
                 let mut freed = |gone: Entry<usize>| {
@@ -273,7 +279,7 @@ impl KeyServer {
         let transcript =
             Transcript { v_c: m.v_c, v_s: m.v_s, i_c: m.i_c, i_s: m.i_s, q_c: m.q_c, q_s: m.q_s, k: m.k };
         // A part over the work bound is `too_many`; a transcript no key exchange could have
-        // produced is a bad length, which is `malformed` in every protocol (WIRE.md).
+        // produced is a bad length, which is `malformed` in every protocol (servers/wire.md).
         let hash = ssh::exchange_hash(&transcript, key.public()).map_err(|e| match e {
             ssh::BadTranscript::TooLong => ErrorCode::TooMany,
             ssh::BadTranscript::BadShape => ErrorCode::Malformed,
@@ -351,7 +357,7 @@ impl<K: Minter> TypedServer<Keyd> for Serving<'_, '_, K> {
         // No message of this protocol carries a handle, and the codec refuses a request whose
         // handle count is not its layout's, so a request that brought one never reaches here:
         // it is malformed, and the dispatch closes what it brought, so a client cannot grow
-        // `keyd`'s handle table (CONTAINMENT.md, the shared server library).
+        // `keyd`'s handle table (servers/serving.md, "Typed dispatch").
         debug_assert!(handles.is_empty(), "the codec refuses handles this protocol does not name");
         let _ = handles;
         self.server.dispatch(caller, request, self.kernel)

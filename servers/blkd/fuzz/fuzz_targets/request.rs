@@ -24,7 +24,7 @@ use redoubt_rt::ipc::Caller;
 const FIRST: Entry = Entry { first_lba: 64, last_lba: 1063 };
 const SECOND: Entry = Entry { first_lba: 2048, last_lba: 4095 };
 const SECTORS: u64 = 8192;
-/// The lend a caller makes: `MAX_LEND_PAGES`, 64 KiB (WIRE.md).
+/// The lend a caller makes: `MAX_LEND_PAGES`, 64 KiB (kernel/ipc.md).
 const LEND: usize = 64 * 1024;
 
 struct Bytes<'a>(&'a [u8]);

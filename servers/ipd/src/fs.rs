@@ -1,6 +1,6 @@
-//! `/net` as a 9P file server (NAMESPACES.md, What `ipd` serves in milestone 1): the tree, whose
-//! sockets each connection sees, and what each file does. Everything a file holds is typed
-//! (WIRE.md's encoding), never text.
+//! `/net` as a 9P file server (servers/ipd.md, "The `/net` tree"): the tree, whose sockets each
+//! connection sees, and what each file does. Everything a file holds is typed (servers/wire.md,
+//! "The encoding"), never text.
 //!
 //! ```text
 //! /              the connection's root; its node carries the connection's scope
@@ -31,8 +31,8 @@ use crate::link::Netif;
 use crate::scope::Scope;
 use crate::stack::{CtlError, Entropy, Owner, Ready, Stack, WaitFor};
 
-/// A scope's id: never reused. 64 bits, so no count of grants a box could make wraps it (QA
-/// D3-code-review-5: a 32-bit counter panicked or wrapped after 2^32).
+/// A scope's id: never reused. 64 bits, so no count of grants a box could make wraps it (a 32-bit
+/// counter would panic or wrap after 2^32).
 pub type ScopeId = u64;
 
 /// Where a node is in the tree.

@@ -1,7 +1,7 @@
 description = "Lending, writably lending or transferring stack pages never touched is served, a half-mapped range is refused whole, and asking past RAM is the caller's error (verdict: survival only) (checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# Built with the checks on (docs/testbench.md, "Debug assertions").
+# Built with the checks on (docs/testbench.md, "Checked builds").
 debug_assertions = true
 # 32 MiB so the map-past-RAM step (12k pages = 48 MiB) is past RAM.
 memory_mib = 32

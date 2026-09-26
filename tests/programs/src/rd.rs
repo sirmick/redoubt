@@ -1,4 +1,4 @@
-//! Redoubt system calls (KERNEL-SPEC.md) through `redoubt-sys`, for the budget and handle-table
+//! Redoubt system calls (docs/kernel/abi.md) through `redoubt-sys`, for the budget and handle-table
 //! cases. Records live on the caller's stack, 8-byte aligned by their `[u64; N]` type.
 
 use core::num::{NonZeroU64, NonZeroUsize};
@@ -17,8 +17,9 @@ pub const SYSTEM: u32 = 2;
 pub const USERS: u32 = 3;
 
 /// Then every device object the loader made from the device tree, in the loader's order
-/// (kernel `device.rs`, `boot_devices`; BOOT.md, `Devs`). **INTERIM** until `init` reads the
-/// boot manifest (WP-R3): the Reset right first, then the console `/chosen/stdout-path` names
+/// (kernel `device.rs`, `boot_devices`; kernel/boot.md, "Devices handed to the first program"),
+/// until `init` places them from the boot manifest (kernel/devices.md, "Which process gets which
+/// device"): the Reset right first, then the console `/chosen/stdout-path` names
 /// and its interrupt, so a program can name those three without a manifest. Everything after
 /// them depends on the machine, so nothing may assume how many there are: the devices end at
 /// [`log_rx`], and [`first_free`] finds where a program's own handles start.
@@ -36,9 +37,9 @@ pub fn h(index: u32) -> Handle { Handle::new(index).expect("handle 0") }
 /// counting on a number. `budget_usage` answers `BadHandle` only for an index that holds
 /// nothing, and writes nothing then.
 ///
-/// **INTERIM** with the handles above it (WP-K3): once `process_start` passes a handle list
-/// (WP-K4) and `init` hands each program its own from the boot manifest (WP-R3), a program
-/// is told what it holds and none of this is needed.
+/// Needed only while the loader hands out the handles above: once `init` hands each program its
+/// own from the boot manifest (docs/plan/m1-separation.md), a program is told what it holds and
+/// none of this is needed.
 pub fn first_free() -> u32 {
     let mut rec = [0u64; USAGE_SLOTS];
     let at = rec.as_mut_ptr() as usize;
@@ -47,9 +48,9 @@ pub fn first_free() -> u32 {
         .expect("a table with a free index")
 }
 
-// --- Devices and memory (WP-K3) ----------------------------------------------------------
+// --- Devices and memory -----------------------------------------------------------------
 
-/// `map_device(h(MMIO)) -> addr, len` (QUESTIONS.md 146, pending).
+/// `map_device(h(MMIO)) -> addr, len` (kernel/devices.md).
 pub fn map_device(device: u32) -> Result<(usize, usize), Error> {
     match redoubt_sys::syscall(&Call::MapDevice { device: h(device) })? {
         Return::Mapping { addr, len } => Ok((addr, len)),
@@ -176,16 +177,16 @@ pub fn number(call: Number) -> usize { call as usize }
 /// The error a raw call's `a0` names (`None` for success or an unknown code).
 pub fn raw_error(a0: usize) -> Option<Error> { Error::from_code(a0 as u64) }
 
-// --- Endpoints and messages (WP-K2) ----------------------------------------------------------
+// --- Endpoints and messages -----------------------------------------------------------------
 
 /// Handle 1 of every bundle program but the first: the boot endpoint (kernel `budget.rs`,
-/// `boot_endpoint`, INTERIM). The second program holds it with badge 0, the receive right;
-/// every later one with its own PID as the badge.
+/// `boot_endpoint`; kernel/boot.md, "Devices handed to the first program"). The second program
+/// holds it with badge 0, the receive right; every later one with its own PID as the badge.
 pub const BOOT_ENDPOINT: u32 = 1;
 
 /// Handle 2 of every bundle program but the first: a send on the log endpoint, badged with the
-/// program's PID (kernel `budget.rs`, `boot_log_endpoint`, INTERIM until `init` owns the
-/// console). The badge only names whose line it is.
+/// program's PID (kernel `budget.rs`, `boot_log_endpoint`), until `init` owns the console
+/// (docs/plan/m1-separation.md). The badge only names whose line it is.
 pub const LOG: u32 = 2;
 
 /// The first program's receive right on the log endpoint: the kernel installs it last, after the
@@ -194,7 +195,7 @@ pub const LOG: u32 = 2;
 pub fn log_rx() -> u32 { first_free() - 1 }
 
 /// The budgets `log-server` gives its first `TAKE_GIFTS` caller, at the indices its reply
-/// installed here. Never a device (R2).
+/// installed here. Never a device (docs/testbench.md, "Rule F (trusted verdicts)").
 pub struct Gifts {
     pub root: u32,
     pub system: u32,
@@ -291,8 +292,7 @@ pub fn call(endpoint: u32, body: &Body, lend: Option<Pages>, timeout: u64) -> Re
 }
 
 /// `call`, waiting out `Busy`: the endpoint's group is at `WAIT_CAP` (R2). Every program of
-/// the bundle lives in `system` with account 0, so they are all one group and share one cap
-/// until processes can be created in budgets of their own (WP-K4).
+/// the bundle lives in `system` with account 0, so they are all one group and share one cap.
 pub fn call_waiting(
     endpoint: u32,
     body: &Body,
@@ -362,12 +362,12 @@ pub fn body_with(words: [usize; WORDS], handles: &[u32]) -> Body {
 }
 
 /// A page of this process's own memory, for lending and transferring. Touched, so that the
-/// kernel is not asked to back it while it decodes (answer 115).
+/// kernel is not asked to back it while it decodes.
 pub fn page() -> usize { many_pages(1) }
 
 /// A page of this loader-started program's own stack that it has never touched. The loader
-/// reserves the stack and the kernel backs each page on its first touch (INTERIM until R3's
-/// launcher, OD6), so the page 16 below the current one is reserved and still unbacked in a
+/// reserves the stack and the kernel backs each page on its first touch (kernel/memory.md,
+/// "Backing and zeroing"), so the page 16 below the current one is reserved and still unbacked in a
 /// program that uses less stack than that.
 pub fn untouched_stack_page() -> usize {
     let here = 0u8;
@@ -411,7 +411,7 @@ pub mod victim {
     }
 }
 
-// --- Processes and threads (WP-K4) -------------------------------------------------------
+// --- Processes and threads --------------------------------------------------------------
 
 /// `process_create(h(budget), h(exit endpoint)) -> h(process)`.
 pub fn process_create(budget: u32, exit_endpoint: u32) -> Result<u32, Error> {

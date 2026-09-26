@@ -2,11 +2,11 @@
 //! self-checks use it to prove that a case's `disk` and `net` reach the guest: it prints
 //! each device's kind and what identifies it (a disk's size, a network card's MAC).
 //!
-//! It runs as the bundle's first program, so it holds every device object the loader made
-//! (INTERIM, kernel `device.rs`), maps each through its handle, and prints through the console
-//! it maps itself, as `device-test` does. No virtio slot is reachable by legacy `MapMemory`
-//! (WP-K5b). It reads only the virtio-mmio identification registers and the start of each
-//! device's configuration space, both of which are plain loads; it drives no queues.
+//! It runs as the bundle's first program, so it holds every device object the loader made (until
+//! `init` places each device: kernel/devices.md, "Which process gets which device"), maps each
+//! through its handle, and prints through the console it maps itself, as `device-test` does. It
+//! reads only the virtio-mmio identification registers and the start of each device's
+//! configuration space, both of which are plain loads; it drives no queues.
 
 #![no_std]
 #![no_main]

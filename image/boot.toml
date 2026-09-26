@@ -4,9 +4,10 @@
 # `kernel` must be first. The loader refuses a `grants` entry: devices are reached only
 # through their handles.
 #
-# NOTE: not yet consumed by a tool. `./mkimage` currently builds a kernel-only bundle through
-# the bench's builder; this file records the intended shape for when `init` and the servers
-# exist (docs/INIT.md, docs/PLAN.md).
+# NOTE: not yet consumed by a tool. `./mkimage` builds its bundle through the bench's builder;
+# this file records the intended shape for when `init` and the servers exist. Then the loader
+# loads only the kernel and `init`, and `init` starts every other entry from the boot manifest
+# (docs/kernel/boot.md, docs/servers/init.md; planned in docs/plan/m1-separation.md).
 
 [[entry]]
 name = "kernel"
