@@ -46,9 +46,12 @@ exit status the case names (0 by default; 255 for an SBI system failure).
 
 In-guest programs print through the log server and finish with `<NAME> TEST PASSED` or
 `<NAME> TEST FAILED`; attack programs end with `attempts done` instead. The log server starts every
-line it prints for a client with `[pid N] `, N the sender's PID as the kernel reports it, on every
-path that takes client text. Lines without that prefix come from the kernel, the loader, the log
-server's own fixed templates, or a program that owns the UART.
+line it prints for a client with the sender's badge, as the kernel reports it, on every path that
+takes client text: `[pid N] ` for a badge below 0x100, and `[badge N] ` for any other. The loader
+numbers bundle programs from 2 to at most 64 and gives each its PID as its badge, and every badge
+a test program mints is 0x100 or more, so a minted badge can never print as a PID and forge a
+bundle program's line (`tests/programs/src/logsrv.rs`). Lines without a prefix come from the
+kernel, the loader, the log server's own fixed templates, or a program that owns the UART.
 
 ### Rule F (trusted verdicts)
 
@@ -59,7 +62,8 @@ wrote a line, and an attacker can print anything, including another program's `P
 attack case passes only on a line the attacker cannot write:
 
 - **The kernel or the loader**, refusing: a line with no `[pid` prefix, with `KMAIN` or a later
-  stage forbidden so that no program ever ran (`loader-rejects-*`, `kernel-wx`).
+  stage forbidden so that no program ever ran (`loader-rejects-*`), or an anchored line the kernel
+  prints at boot before any program starts, which a relayed line cannot match (`kernel-wx`).
 - **A victim** that owns what is attacked and still has it afterwards: the log server still hears
   UART input after every attempt (`irq-attack`); a victim inspects its pages (`mem-attack`,
   `uaf-lent-page`).
@@ -70,6 +74,27 @@ attack case passes only on a line the attacker cannot write:
   by the badge the kernel gave its handle, and powers off. A case that names a `reporter` passes
   only if exactly one line starts `[server] done:` and it names the reporter's PID; any other such
   line fails it, as does one in a case with no `reporter`.
+- **A sole first program judging the kernel.** In `map-fixed-attack`, `write-only-attack` and
+  `process-attack` one program runs, alone: it holds the console and the reset, makes every
+  refused call itself, and prints its own unprefixed `ok:` lines. It is trusted because nothing
+  else runs that could impersonate it, and because what it attacks is the kernel, not another
+  party in the case: each `ok:` line reports a kernel result it read back (the error, the budget's
+  usage, the mapping left in place), and the case also needs a clean power-off, which a fault in
+  the program prevents. The residual: a kernel bug that corrupted this program's own memory could
+  make it misreport, and no second party would see it.
+
+**Program order.** A program that attacks another program, or the fixture, is never the first. In a case with several programs, the
+first is the trusted tester (the log server, unless the case is one of the sole-program cases
+above), and the case's `programs` list fixes the order of the rest, so which PID and which handles
+each program gets is the case's choice, never a race.
+
+**Gifts.** A budget-attack case needs its attacker to hold budgets. The log server hands the first
+program's three budgets (`root`, `system` and `users`), and never a device or a DMA device, to the
+first caller of `TAKE_GIFTS`, and refuses every later caller (`tests/programs/src/bin/log-server.rs`).
+The residual: a benign sibling that happens to call first takes the gifts; the attacker then fails
+loudly on `Refused`, never passes silently. That is acceptable only while the log server is the
+interim fixture; once `init` starts a case's programs, the gifts go
+([M1 (separation and containment)](plan/m1-separation.md#remaining-work)).
 
 Every verdict pattern is anchored with `^` and pinned to its writer, with a comment beside it saying
 why it cannot be forged. The attacker's own lines may be required as progress (so a refusal for the
@@ -84,7 +109,9 @@ description says so ("verdict: survival only").
 Status: built · partly tested: that an unknown field or table is refused is read from the code, not attacked by a case · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing
 
 A case is one TOML file. Paths in it are relative to the workspace root, and an unknown field or
-table is an error, so a misspelling cannot silently drop a check.
+table is an error, so a misspelling cannot silently drop a check. The one exception is a `programs`
+entry (and a bundle file's `from`): its forms are told apart by their keys, so an extra key in one
+is ignored rather than refused (`tools/testbench/src/case.rs`).
 
 ```toml
 description = "What this proves"
@@ -112,16 +139,23 @@ after = "claimed irq 10"
 send = "xyz"
 ```
 
-The kinds:
+A `boot` case also takes `allow_panic`, `tamper_bundle`, `sign_bare_archive` and
+`distinct_across_boots` ([hostile inputs](#hostile-inputs)), `[[file]]`
+([bundle files](#bundle-files)), `[disk]` and `[net]` ([devices](#devices-and-the-network)),
+`[[session]]` ([SSH sessions](#ssh-sessions)), `must_fail` ([self-checks](#self-checks)), and
+`poweroff_status`: the QEMU exit status a `poweroff` case requires (0 by default; 255 for an SBI
+system failure, which a rejection case asks for).
 
-| Kind | What it does |
-| --- | --- |
-| `boot` | boots the kernel with `programs` as its first processes and judges the run |
-| `build` | only checks that a package compiles for each target: coverage for what the bench does not boot |
-| `host-tests` | runs `cargo test` on the host for the named workspace packages, for what no boot can reach (a constant the loader and the bench share is right in the machine's eyes even when it is wrong) |
-| `ssh-loopback` | runs `[[session]]`s against a host OpenSSH server with no guest, to check the session runner on its own |
-| `unsafe-budget` | the ratchet on `unsafe` ([below](#the-unsafe-budget)) |
-| `no-cruft` | the source gate ([below](#the-no-cruft-gate)) |
+The kinds, and the fields each takes besides `description` and `arch`:
+
+| Kind | What it does | Its fields |
+| --- | --- | --- |
+| `boot` | boots the kernel with `programs` as its first processes and judges the run | those above |
+| `build` | only checks that a package compiles for each target: coverage for what the bench does not boot | `package`, `features` |
+| `host-tests` | runs `cargo test` on the host for the named workspace packages, for what no boot can reach (a constant the loader and the bench share is right in the machine's eyes even when it is wrong) | `packages` |
+| `ssh-loopback` | runs `[[session]]`s against a host OpenSSH server with no guest, to check the session runner on its own | `authorized` (the test keys the server accepts), `[[session]]`, `timeout_secs`, `host_key` (default: the server's own), `must_fail` |
+| `unsafe-budget` | the ratchet on `unsafe` ([below](#the-unsafe-budget)) | `[[budget]]`: `name`, `paths`, `max_unsafe`, `max_undocumented` |
+| `no-cruft` | the source gate ([below](#the-no-cruft-gate)) | `paths`, `[[forbidden]]` (`pattern`, `unless`), `no_allow_dead`, `one_definition`, `definition_paths`, `[[allow]]` (`path`, `rule`, `reason`) |
 
 A `post_check` judges the console after the boot has passed. `sched_oracle` rebuilds the
 scheduler's order from the raw events a tracing kernel prints and checks every pick against its own
@@ -157,8 +191,9 @@ then panic, and every case forbids `PANIC`:
 - arithmetic overflow, wherever the kernel or the loader does not use a checked or wrapping
   operation on purpose.
 
-A handful of cases use the profile over both widths, to keep the run short: `budget`,
-`budget-syscall-attack`, `lend-untouched-page`, `ipc`, `all-together` and `smp-spike`. The kernel
+Many cases use the profile: every case file with `debug_assertions = true`, most of them over
+both widths (`budget`, `budget-syscall-attack`, `lend-untouched-page`, `ipc` and `smp-spike` among
+them), and some, such as `all-together`, on rv64 only. The kernel
 prints one line under `cfg!(debug_assertions)`: `bench-debug-assertions` expects it, and
 `bench-debug-assertions-off` forbids it in an ordinary boot. To check the whole suite:
 
@@ -267,8 +302,9 @@ expect = "hello\n"
   and the guest's address stay where they were; the peers sit outside the /24 the guest is
   configured for, reached through its gateway. `restrict=on` still holds.
 - **The capture.** A case with peers records every frame on the guest's card, before slirp, and
-  reads it fail closed: missing, empty, cut or malformed fails the case. The guest may send only ARP
-  requests for the gateway and IPv4 TCP, never a fragment and never a SYN to a `self_forbidden`
+  reads it fail closed: missing, empty, cut or malformed fails the case (`net.truncate_capture`
+  cuts it on purpose, for the self-checks). The guest may send only ARP requests for the gateway,
+  ARP replies (to any address) and IPv4 TCP, never a fragment and never a SYN to a `self_forbidden`
   prefix. Each peer's count must also match the distinct SYNs to it in the capture, and a case with
   peers needs one that expects a connection, whose SYN shows the capture was live.
 
@@ -316,8 +352,9 @@ must_fail = '^regex$'        # passes only if the run fails with a matching reas
 ```
 
 `must_fail` is judged against the run's verdict only (console, sessions, devices); a build error or
-the bench's own trouble is a failure regardless. The pattern is anchored and quotes the evidence, so
-a case cannot pass by failing for some other reason. An attack case can have a self-check of its own:
+the bench's own trouble is a failure regardless. Each case writes its pattern anchored and quoting
+the evidence, so it cannot pass by failing for some other reason; the bench does not enforce the
+anchoring, so a reviewer checks it. An attack case can have a self-check of its own:
 `d3-net-self-unrefused` runs `d3-net-attacks`'s boot with `ipd` not told one of the box's addresses,
 and must fail on the SYN the capture then shows.
 
@@ -326,12 +363,38 @@ and must fail on the SYN the capture then shows.
 Status: built · tested: bench:unsafe-budget, host:testbench::actual_source_counts_still_enforce_the_budget, host:testbench::empty_configuration_is_not_coverage, host:testbench::every_configured_root_must_contain_rust_source, host:testbench::missing_paths_fail_regardless_of_extension, host:testbench::unreadable_source_reports_its_path, host:testbench::broken_nested_symlink_is_not_silently_skipped, host:testbench::zero_unsafe_source_is_valid_as_a_file_or_nested_directory
 
 `unsafe-budget.toml` lists every source directory of the trusted computing base that runs on the
-target, each with the most uses of `unsafe` it may hold and the most that may lack a `// SAFETY:`
-justification (zero everywhere). The case counts both and fails if either is over. Budgets only go
-down; raising one needs a stated reason in the change that does it. A source file left out of every
-budget would not be counted at all, so every on-target source is listed, and a configured path with
-no Rust source in it fails. Vendored third-party crates are pinned by checksum instead
-(`vendor-check`) and are outside the ratchet.
+target, each with the most uses of `unsafe` it may hold and the most that may lack a justification
+(zero everywhere): a `// SAFETY:` comment above an `unsafe` block, and a `# Safety` section in the
+doc comment of an `unsafe fn` or `unsafe impl`. The case counts both and fails if either is over.
+Budgets only go down; raising one needs a stated reason in the change that does it.
+
+A configured path with no Rust source in it fails, but a source directory left out of every budget
+is not counted at all, and the ratchet cannot prove that every on-target source is configured. The
+loader stub (`stub/src`), which runs on the target and uses `unsafe`, is in no budget today
+([todo](todo/stub-unsafe-budget.md)). Vendored third-party crates are outside the ratchet
+([below](#vendored-dependencies)).
+
+## Vendored dependencies
+
+Status: built · partly tested: provenance against crates.io needs the network, so no bench case runs it; it is run by hand in the review of any change to `vendor/` · tested: bench:vendor-check, bench:vendor-build, host:redoubt-vendor-check::the_real_structure_passes, host:redoubt-vendor-check::a_renamed_header_fails_before_any_download, host:redoubt-vendor-check::a_missing_row_fails, host:redoubt-vendor-check::a_row_without_its_directory_and_a_stray_directory_fail, host:redoubt-vendor-check::vendored_files_are_the_published_bytes, host:redoubt-vendor-check::the_vendored_copies_are_the_ones_that_build, host:redoubt-vendor-check::the_patches_point_at_vendor, host:redoubt-vendor-check::the_readme_records_each_crate
+
+`vendor/` holds third-party crates exactly as crates.io published them, each used through a
+`[patch.crates-io]` path, and `vendor/README.md` records each one's version, license and published
+checksum. Two checks guard them, and they prove different things:
+
+- **Integrity since vendoring** (`vendor-check`, every bench run): every file is byte for byte what
+  `vendor/SHA256SUMS` records, nothing is added or removed, and the build takes the crates from
+  `vendor/`, never from a registry copy. The checksums were taken from the tree itself, so this
+  proves the crates have not changed since they were vendored, not that they are what crates.io
+  published. `vendor-build` checks they build `no_std` for both widths.
+- **Provenance** (`tools/vendor-check/provenance.sh`, in review): downloads each published crate,
+  checks its SHA-256 against the live crates.io index and against `vendor/README.md`, and compares
+  it with the vendored copy. It fails closed: before any download it checks that the README's
+  table and `vendor/` name the same crates, in the same number, and it exits 0 only if every crate
+  it checked matches on all three counts and it checked as many crates as `vendor/` holds.
+
+The residuals: provenance is only as current as the last review that ran it, and the vendored
+crates' `unsafe` has never run under Miri ([todo](todo/miri-vendored-unsafe.md)).
 
 ## The no-cruft gate
 
@@ -342,8 +405,9 @@ Status: built · tested: bench:no-cruft
 - `allow(dead_code)` or `allow(unused...)` in the kernel, the loader, the layout and paging crates
   or the test programs;
 - a Cargo feature that no `cfg(feature)` reads;
-- a second literal definition of `PAGE_SIZE` or `USER_AREA_END`, or any `const PAGE` alias, the
-  model included.
+- a second literal definition of `PAGE_SIZE` or `USER_AREA_END`, or any `const PAGE` alias; the
+  model is searched too, and its own `PAGE_SIZE` in `model/src/spec.rs` is an `[[allow]]`, because
+  the model is the independent oracle and depends on no implementation crate.
 
 Its `[[allow]]` entries (path, rule, reason) are the only exemptions, and an entry that no longer
 covers anything fails the case too.
@@ -355,7 +419,9 @@ covers anything fails the case too.
 Status: built · partly tested: no bench case runs it yet; it is run by hand before every change to the book · tested: host:redoubt-doccheck::good_tree_is_clean, host:redoubt-doccheck::narrow_cases_fire, host:redoubt-doccheck::c1_reports_each_failure, host:redoubt-doccheck::pages_scope_keeps_only_the_listed_pages, host:redoubt-doccheck::pages_scope_keeps_a_directory
 
 `redoubt-doccheck` (`tools/doccheck`) holds this book to its own rules:
-`cargo run -q -p redoubt-doccheck` prints each finding as `path:line: C<n>: message`. It checks that
+`cargo run -q -p redoubt-doccheck` prints each finding as `path:line: C<n>: message`;
+`--pages <path>...` keeps only the findings on those pages, and `--code` adds C11, the check of
+code comments and case descriptions for the documentation switch-over. It checks that
 every section has one well-formed status line and every test it names exists; that milestones carry
 their names; that no page carries process references; that every rule ID is defined once and cited
 by its short name; that every relative link resolves; that the [security register](SECURITY.md)
