@@ -58,8 +58,8 @@ Every session starts with IEx's read-eval-print loop over the session's console 
 `/dev/cons` ([consoled](../servers/consoled.md) on the UART, [sshd](../servers/sshd.md) for an SSH
 channel). In M1 (separation and containment) the shell is what the attack suite needs and no
 more: the console, reading and writing files through OTP's `File`, and launching a native program
-through the launch natives ([beamlet](beamlet.md#natives)). IEx itself runs on beamlet with a
-transcript that matches the real BEAM's ([beamlet](beamlet.md#what-runs-on-it)).
+through the launch natives ([beamlet](beamlet.md#natives)). What IEx does on beamlet is
+[beamlet](beamlet.md#what-runs-on-it)'s.
 
 Everything the prompt evaluates runs with the session's authority, in the session's VM. There is
 nothing the shell can do that the session's handles do not allow, and nothing a helper adds to
@@ -176,16 +176,19 @@ would type. `run --isolated tool.exs` starts a child VM through the same launch 
 lease ([agents](agents.md#the-agent-harness)), with capabilities the same as or narrower than the
 session's. With no grants, the child gets a budget of its own carved from the session's (bounded
 CPU and memory, ended by destroying it), a read-only view of the current directory and no network.
+More is granted with flags that map one to one onto the agent harness's grant kinds
+([agents](agents.md#the-agent-harness)): `--read P`, `--write P`, `--gateway N`,
+`--git REMOTE[:fetch|:push=PATTERN]` and `--launch pages=..,processes=..,weight=..`.
 
-**Open:** the grant syntax for `run --isolated`, which follows the agent harness's.
+**Open:** none.
 
 ### Native programs and pipes
 
 Status: planned · M2 (usable shell)
 
-A native stage is a program in a budget of its own, joined to the next by a pipe the shell's VM
-serves. `pipe(~w(grep error log.txt | wc -l))` is the short form, and its value is the lines of
-the last stage's standard output; `Redoubt.Cmd` is the explicit form:
+A native stage is a program in a budget of its own, joined to the next by a served pipe file.
+`pipe(~w(grep error log.txt | wc -l))` is the short form, and its value is the lines of the last
+stage's standard output; `Redoubt.Cmd` is the explicit form:
 
 ```elixir
 {:ok, [job]} = Cmd.new() |> Cmd.source("log.txt") |> Cmd.pipe({"grep", ["error"]}) |> Cmd.run()
@@ -214,7 +217,7 @@ The interrupt key:
 - **Ctrl+C with a job in the foreground** destroys the budget of every native stage of that job.
   Elixir work is ended by killing the evaluating Erlang process with an untrappable exit (`:kill`),
   and IEx starts a fresh evaluator. The session and its VM survive; its bindings are whatever IEx
-  keeps.
+  keeps, and the page states which once a case interrupts `x = 1; loop()` and checks `x`.
 - **Ctrl+C at an idle prompt** clears the line. The BEAM's break menu is never reachable, and a
   session ends only by `exit` or Ctrl+D.
 - **Ctrl+G** is `edlin`'s job-control menu.

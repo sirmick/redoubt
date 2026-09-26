@@ -4,8 +4,9 @@ Redoubt is developed on Redoubt. A developer, or a developer's agent, works in a
 lives in their home volume, `git` reaches its remotes through a gateway, and the Elixir and Erlang
 compilers run on the box in beamlet. Rust, including the kernel and the servers, is built off the
 box, because the Rust compiler is not ported: system code ships in the signed boot bundle, and a
-developer's own program arrives by SFTP. The server APIs, the client crates and a Rust `std` target
-exist so that programs written on the box can use the system.
+developer's own program arrives by SFTP. The server APIs and client crates let programs written for
+the box use the system; whether Rust's `std` gets a Redoubt target is open
+([native programs](native.md#client-crates-and-the-rust-std-target)).
 
 ## Purpose
 
@@ -27,8 +28,9 @@ iex(4)> mix test                                 # the Elixir compiler and ExUni
 iex(5)> git commit -am "shell: complete labels" ; git push
 ```
 
-Rust is built on the developer's own machine. A program for one's own use arrives by SFTP and
-runs unsigned; with packages, from M5 (persist, install, share), it arrives as a signed package:
+Rust is built on the developer's own machine. A program for one's own use arrives by SFTP and runs
+unsigned, then and later. A program the steward is to launch with new grants, for another
+principal, arrives from M5 (persist, install, share) as a signed package:
 
 ```text
 laptop$ cargo build --release --target riscv64gc-unknown-redoubt-elf
@@ -41,7 +43,7 @@ iex(6)> pkg add "/home/alice/in/logscan-1.3.xpkg"
 
 ### The compilers on beamlet
 
-Status: built · partly tested: runs on the host only; the compiler cases (`tests/elixir/compiler_test.ex`, `tests/erlang/selfcompile.erl`) are differential suites that need OTP 28 and Elixir installed and are not run by the bench
+Status: built · partly tested: runs on the host only; the compiler cases (`tests/elixir/compiler_test.ex`, `tests/erlang/selfcompile.erl`) are differential suites that need OTP 28 and Elixir installed and are not run by the bench, and they only compile, load and call: nothing checks the chunk equality or the error handler below
 
 Elixir's compiler (`Code.compile_string`, `Code.eval_string`) and OTP's Erlang compiler
 (`compile:forms`) run on beamlet, and the modules they produce load and run in the same VM
@@ -51,7 +53,7 @@ The code, atom, export and literal chunks they write are identical to BEAM's; co
 (debug information, documentation) differ in bytes, because the deflate implementation differs,
 and decode to the same terms. A call to a function not yet loaded goes to the process's error
 handler, which Elixir's parallel compiler uses to wait for modules
-([beamlet](beamlet.md#what-runs-on-it)).
+([`userland/otp/DESIGN.md`](../../userland/otp/DESIGN.md)).
 
 ### Compiling on the box
 
@@ -98,15 +100,15 @@ for people and agents alike ([gatewayd](../servers/gatewayd.md)).
 Status: planned · M4 (self-hosted development)
 
 The Rust compiler is not ported, so native programs, servers and the kernel are built off the box
-with the `riscv64gc-unknown-redoubt-elf` target and the Rust `std` target, against the client
-crates ([native programs](native.md#client-crates-and-the-rust-std-target)). "Shipped signed" means
-signed where a signature gates something:
+with the `riscv64gc-unknown-redoubt-elf` target, against the client crates ([native
+programs](native.md#client-crates-and-the-rust-std-target)). "Shipped signed" means signed where a
+signature gates something:
 - **System Rust** (servers, drivers, beamlet, the kernel) reaches the box in the signed boot
   bundle, checked by verified boot ([boot](../kernel/boot.md)).
 - **A developer's own program** arrives by SFTP ([file transfer](transfer.md)) and runs with the
   developer's own authority, unsigned. Code never runs with more authority than its author holds,
   and any process can create a child and map pages into it, so a signature on code one runs
-  oneself buys nothing enforceable ([native programs](native.md#launching-a-program)).
+  oneself buys nothing enforceable ([native programs](native.md#launching-from-a-session)).
 - **A program the steward launches with new grants**, for another principal or as a package,
   needs a signature the principal trusts. That, with trust lists and packages, is
   M5 (persist, install, share) ([packages](packages.md)).

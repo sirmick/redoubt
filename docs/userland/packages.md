@@ -122,7 +122,7 @@ Status: planned · M5 (persist, install, share)
 A hijacked agent can run code it wrote: any process can create a child and map pages into it
 (the launcher needs exactly that), and IEx evaluates any Elixir. What holds is that such code
 never runs with more authority than its author already holds. Signatures gate only what the
-steward launches with **new** grants ([native programs](native.md#launching-a-program)).
+steward launches with **new** grants ([native programs](native.md#launching-from-a-session)).
 
 What a signature does buy:
 - **No launch with new authority without trust.** Code gets grants from the steward only if a

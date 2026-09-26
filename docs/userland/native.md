@@ -5,8 +5,7 @@ budget of its own, with exactly the handles and namespace its launcher wrote int
 block. The session launches one when a stage must run apart from the session's VM: untrusted
 input, work that needs its own address space, or authority the session should not lend. Programs
 are written against `redoubt-rt`, the native runtime; they read and write their standard streams
-as files, join into pipelines through pipe files the shell serves, and end when their budget is
-destroyed.
+as files, join into pipelines through served pipe files, and end when their budget is destroyed.
 
 ## Purpose
 
@@ -30,7 +29,7 @@ The explicit form gives every authority by name:
 ```elixir
 {:ok, job} =
   Redoubt.Process.start("/boot/bin/grep", ["-n", "needle"],
-    namespace: [{"/", work}, {"/dev/stdin", pipe_r}, {"/dev/stdout", pipe_w}],
+    namespace: [{"/", work}, {"/dev/stdin", pipe_r}, {"/dev/stdout", pipe_w}],   # recommended names
     handles:   [keys: keyd],
     budget:    [pages: 4096, processes: 1, weight: 10])
 Job.await(job).exit
@@ -53,15 +52,16 @@ fn run(startup: &redoubt_rt::startup::Startup) -> u32 {
 
 ## What it can and cannot do
 
-### Launching a program
+### The loader stub
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:stub-launch, fuzz:stub/plan, host:stub::plan_maps_a_well_formed_segment, host:stub::plan_refuses_two_segments_that_overlap_each_other, host:stub::plan_refuses_a_segment_reaching_into_the_stub_region, host:stub::image_in_bounds_refuses_an_image_overlapping_the_startup_page, host:stub::plan_refuses_writable_and_executable, host:stub::plan_refuses_an_entry_outside_any_executable_segment, host:stub::plan_refuses_more_than_max_phnum_segments, host:stub::read_image_refuses_an_image_len_over_the_cap
 
-One mechanism launches every process after `init`, at boot or from a session
-([init](../servers/init.md)):
+Every process after `init` is launched one way. Both halves are built: the launcher's calls, made
+in the bench by a user-class parent, and the stub ([`stub/src/lib.rs`](../../stub/src/lib.rs),
+[`stub/src/main.rs`](../../stub/src/main.rs)):
 1. The launcher creates an empty process in the target budget, naming the endpoint that will
    receive its exit notice ([processes](../kernel/processes.md#creating-and-starting)).
-2. It maps the **loader stub** into the process: a flat, system-signed binary, the same for
+2. It maps the **loader stub** into the process at its fixed address: a flat binary, the same for
    everyone, which needs no parsing to map.
 3. It copies the program's ELF bytes into pages and moves them into the process as data, writes
    the startup block (namespace, named handles, arguments) into a page mapped read-only, and
@@ -71,9 +71,21 @@ One mechanism launches every process after `init`, at boot or from a session
    and jumps to the entry point.
 
 The launcher copies bytes and never parses an ELF, so a malicious ELF can at most compromise the
-process it was going to become. From a session, the launch natives do the three process calls and
-Rust writes the startup block ([beamlet](beamlet.md#natives)); the namespace, the handles and the
-budget come from the Elixir caller, so every authority the child gets is on that one call.
+process it was going to become. The stub refuses, by exiting: segments that overlap each other,
+the stub, the startup page or the stack; a segment writable and executable, or writable without
+readable; an entry outside every executable segment; more than 64 segments; a machine other than
+RISC-V; and an image longer than the cap. In the bench a user-class parent launches a well-formed
+child and a set of hostile ELFs, including 32 with fuzzed headers, through the real stub: each
+hostile child only exits or faults, the parent's budget returns to the same usage after each, and
+a well-formed child still runs afterwards.
+
+### Launching from a session
+
+Status: planned · M1 (separation and containment)
+
+A session launches a native program through beamlet's launch natives
+([beamlet](beamlet.md#natives)). The namespace, the handles and the budget come from the Elixir
+caller, so every authority the child gets is on that one call.
 - **The launcher reads the program.** There is no kernel path lookup: a session that cannot read
   a program's file cannot run it. In M1 (separation and containment) programs come from the boot
   bundle, `/boot`.
@@ -86,7 +98,9 @@ budget come from the Elixir caller, so every authority the child gets is on that
 - **No dynamic linking.** Code shared at run time is a server, not a library. The dynamic part of
   the system is the BEAM, whose modules load at run time.
 
-**Open:** none.
+**Open:** how the launch natives divide the work. The recommendation: the three process calls as
+natives, with Rust writing the startup block (the encoder exists in `redoubt-wire`) from the
+namespace and handles the Elixir caller gives, so policy stays in Elixir and encoding in Rust.
 
 ### Standard input and output, and pipes
 
@@ -94,7 +108,10 @@ Status: planned · M2 (usable shell)
 
 There is no pipe object, no file-descriptor table and no inheritance. A program's standard
 streams are names in its namespace, and a pipe is a 9P file that somebody serves: a pipeline is
-the shell binding names in each child's namespace before starting it.
+the shell binding names in each child's namespace before starting it. The names used here
+(`/dev/stdin`, `/dev/stdout`) and the session's VM as the pipes' server are the recommended answers
+to the two choices open at the end of this section. One part is decided: an interactive stage's
+standard input is a pipe the session feeds from the console.
 
 ```mermaid
 flowchart LR
@@ -102,21 +119,21 @@ flowchart LR
     P1 -.->|"its /dev/stdin"| SO["sort<br/>budget 2"]
     SO -.->|"its /dev/stdout"| P2["pipe 2"]
     P2 -.->|"its /dev/stdin"| U["uniq<br/>budget 3"]
-    subgraph VM["the session's VM serves the pipes"]
+    subgraph VM["the session's VM serves the pipes (recommended)"]
         P1
         P2
     end
 ```
-*Figure: a pipeline. Every part is planned (dashed). Each stage runs in its own budget; each pipe
-is a file the session's VM serves, bound as one stage's `/dev/stdout` and the next stage's
-`/dev/stdin`.*
+*Figure: a pipeline, with the recommended names and server. Every part is planned (dashed). Each
+stage runs in its own budget; each pipe is a served file, bound as one stage's standard output and
+the next stage's standard input.*
 
 What follows from pipes being served files:
 - **Backpressure is free.** A write is a `call`, and the server replies when there is room.
 - **End of file falls out of the exit notice.** When a stage exits, the launcher disconnects its
   connections, and the pipe's server sees its last writer go; the next stage reads end of file.
-- **Labels work out.** A user-level server has no label exemption, and a session serves only its
-  own children's pipes, so a pipe between two label sets fails, as it should
+- **Labels work out.** Whoever serves a pipe is a user-level server with no label exemption,
+  serving one session's stages, so a pipe between two label sets fails, as it should
   ([R1 (flow)](../kernel/ipc.md#r1-flow)).
 - **No stage holds the console.** A native stage never gets the raw `/dev/cons`: an interactive
   stage's standard input is a pipe the session feeds from the console, so the shell always sees
@@ -157,7 +174,7 @@ Ctrl+C destroys the budgets of every native stage of the foreground job
 
 ### `redoubt-rt`, the native runtime
 
-Status: built · tested: bench:rt-build, bench:d3-net-tcp, host:redoubt-rt::echo_pair_runs_on_the_runtime, host:redoubt-rt::a_launcher_gives_its_child_a_fresh_connection_and_disconnects_it, host:redoubt-rt::exit_codes_reach_the_parent, host:redoubt-rt::a_panic_is_reported_on_the_console_once, host:redoubt-rt::heap_over_map_anon, host:redoubt-rt::call_lend_and_reply, host:redoubt-rt::send_transfers_pages_for_good, host:redoubt-rt::timeouts_dead_endpoints_and_refusals, host:redoubt-rt::ownership_lifecycle_partial_reply_and_address_reuse, host:redoubt-rt::mapping_reborrows_and_failed_reply_recovery, host:redoubt-rt::the_9p_client_closes_handles_a_hostile_server_sends
+Status: built · partly tested: the 9P client's walk limit and its checks of a reply's tag, type and counts are not attacked; only its closing of stray handles is · tested: bench:rt-build, bench:d3-net-tcp, host:redoubt-rt::echo_pair_runs_on_the_runtime, host:redoubt-rt::a_launcher_gives_its_child_a_fresh_connection_and_disconnects_it, host:redoubt-rt::exit_codes_reach_the_parent, host:redoubt-rt::a_panic_is_reported_on_the_console_once, host:redoubt-rt::heap_over_map_anon, host:redoubt-rt::call_lend_and_reply, host:redoubt-rt::send_transfers_pages_for_good, host:redoubt-rt::timeouts_dead_endpoints_and_refusals, host:redoubt-rt::ownership_lifecycle_partial_reply_and_address_reuse, host:redoubt-rt::mapping_reborrows_and_failed_reply_recovery, host:redoubt-rt::the_9p_client_closes_handles_a_hostile_server_sends
 
 `redoubt-rt` is everything a `no_std` Rust program or server needs between the system-call ABI
 (`redoubt-sys`) and its own logic ([`libs/rt/src/lib.rs`](../../libs/rt/src/lib.rs)). It builds
@@ -209,8 +226,8 @@ Status: planned · M4 (self-hosted development)
 For Redoubt to be developed on Redoubt, native programs need more than the runtime: a client
 crate for each server's API (the file server's typed calls, `keyd`, the steward, `ipd`'s
 `/net`), speaking the servers' own wire protocol ([the wire protocol](../servers/wire.md)), and
-a Rust `std` target so ordinary crates build for the box. Programs are built off the box and
-shipped signed ([development](development.md)).
+perhaps a Rust `std` target so ordinary crates build for the box. Programs are built off the box
+([development](development.md)).
 
 **Open:** the shape of the client API and of `std`. The recommendation is to grow one client API
 from the operations real callers need, not from a speculative facade, and to settle in one place
@@ -227,7 +244,7 @@ wreck the process it was about to become. seL4 and Fuchsia launch the same way.
 
 **Standard streams as names, pipes as files.** Unix hands a child its parent's descriptors, and
 the child inherits whatever the parent forgot to close. Here a child has exactly the names its
-launcher bound: `/dev/stdin` is a file like any other, and a pipe is a server's file whose
+launcher bound: a standard stream is a file like any other, and a pipe is a server's file whose
 backpressure and end-of-file come from 9P and the exit notice with no new kernel object.
 
 **Killing by budget.** A per-process kill would be a new authority (who may kill whom?) and would

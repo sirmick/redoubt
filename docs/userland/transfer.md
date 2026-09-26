@@ -1,11 +1,11 @@
 # File transfer
 
 Files come in and go out over SSH: SFTP, and SCP served as SFTP, inside the same SSH connection a
-person logs in with, and nothing else. A transfer runs in a small transfer server the steward
-starts for the channel, holding only the session's file binds, so it can reach no file the person
-could not reach at the prompt, and every operation it performs is recorded in the audit log.
-Vault sessions have no file transfer at all. There is no FTP, no HTTP upload and no shared
-network drive: SSH is the only inbound service.
+person logs in with, and nothing else. A transfer runs in a small transfer server the steward starts
+for the channel, holding only the session's file binds and its audit connection, so it can reach no
+file the person could not reach at the prompt, and every operation it performs is recorded in the
+audit log. Vault sessions have no file transfer at all. There is no FTP, no HTTP upload and no
+shared network drive: SSH is the only inbound service.
 
 ## Purpose
 
@@ -49,7 +49,9 @@ person's own key, which never lives in `keyd` ([sshd](../servers/sshd.md)).
   SCP protocol (`scp -O`, which runs `scp -t` or `scp -f` on the server) is refused: Redoubt has no
   `exec` and no shell to run it, and one protocol parser is less than two. Older clients use `sftp`
   or `scp -s`.
-- **Inbound traffic other than SSH is refused**, so SFTP is the only way files arrive from outside.
+- **Inbound traffic other than SSH is refused**, so SSH, with SFTP inside it, is the only inbound
+  service. (Outbound fetches, such as `git` through a gateway, are a session's own requests, not a
+  service.)
 
 **Open:** none.
 
@@ -57,9 +59,9 @@ person's own key, which never lives in `keyd` ([sshd](../servers/sshd.md)).
 
 Status: planned · M3 (files in and out)
 
-The transfer server holds the session's file binds and nothing else: no `/net`, no `/dev/cons`,
-no powerbox connection, no budget or process handles. That is narrower than the session, as a
-launch always may be.
+The transfer server holds the session's file binds and one connection to the steward's audit path
+([Audited](#audited)), and nothing else: no `/net`, no `/dev/cons`, no powerbox connection, no
+budget or process handles. That is narrower than the session, as a launch always may be.
 - **Confinement is by capability, not by path strings.** The server reaches files only through the
   namespace connections it holds, so no path, however it is written, reaches anything else. `..`
   at a connection's root stays at the root, by 9P's walk; cleaning names lexically makes them
@@ -67,7 +69,8 @@ launch always may be.
 - **Unsupported operations fail visibly.** `SYMLINK`, `READLINK` and `LINK` get
   `SSH_FX_OP_UNSUPPORTED`. `SETSTAT` honours a size (truncation), and a modification time where the
   file server stores one; a mode, a user or a group gets `SSH_FX_OP_UNSUPPORTED` rather than a
-  silent success.
+  silent success. This is the same rule the `File` API follows on the box
+  ([files](files.md#files-over-9p)).
 - **The same budget and file rules.** Its pages and CPU are charged to the session's budget, a
   full volume refuses the write, a rename between volumes is a copy and a remove, and removing an
   open file succeeds ([files](files.md)).
@@ -93,8 +96,12 @@ Status: planned · M3 (files in and out)
 
 Every operation a transfer performs is one record in the audit log: each open (for reading and for
 writing, since files go out as well as in), each close with its byte count, and each remove,
-rename, mkdir, rmdir and setstat. Records go through the steward's audit path and are signed, as
-every audit record is, through `keyd`'s audit purpose ([keyd](../servers/keyd.md)). The principal
+rename, mkdir, rmdir and setstat. The log that holds them comes with transfers: written by the
+steward, append-only, recording transfers, with each record signed through `keyd`'s audit purpose
+over `redoubt.audit.v1`, the record's length and the record ([keyd](../servers/keyd.md)). The same
+log grows to every steward action in M4 (self-hosted development), and chaining (which catches
+dropped or reordered records) and the offline verifier come with log retention in
+M5 (persist, install, share) ([the steward](../servers/steward.md)). The principal
 and labels in a record come from the badge the steward minted for the transfer server, never from
 the server's own claim, so the server cannot forge whose transfer it was.
 
@@ -103,9 +110,8 @@ with crafted input holds only their session's file capabilities, which they alre
 could suppress their own records, and they could move data out unaudited through their terminal
 anyway.
 
-**Open:** the audit log's first milestone is being decided; and whether the file server audits
-transfer handles itself, which matters only if the audit must survive a compromised transfer
-server.
+**Open:** the audit log's first milestone; and whether the file server audits transfer handles
+itself, which matters only if the audit must survive a compromised transfer server.
 
 ## Why
 

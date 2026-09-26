@@ -32,8 +32,9 @@ The shell's helpers are the same operations with short names: `cat`, `cp`, `mv`,
 prefix:
 
 ```elixir
-bind("/src", ns_lookup("/home/alice/projects/redoubt"))
-File.ls!("/src")
+{home, _rest} = ns_lookup("/home/alice")   # the connection behind the prefix
+bind("/h", home)
+File.ls!("/h/projects")                     # the same files as /home/alice/projects
 ```
 
 Redoubt-only operations are in `Redoubt.File`: `copy_file` (a copy the server does), `rename`
@@ -75,21 +76,27 @@ session's namespace, walks the rest of it on that connection, and reads.
 
 | Operation | What happens |
 | --- | --- |
-| `File.stat` | name, length, mtime and qid; attributes through `get_attr` |
+| `File.stat`, `:file.read_file_info` | what 9P and the file server have: the type (from the qid), the size, the modification time if the server stores it, and `access` when the server says what this connection may do; `mode`, `uid`, `gid`, `links`, `inode` and `major_device` are `:undefined`; attributes through `get_attr` |
 | `File.ls` | a read of a directory fid; entries the caller may not read are left out |
 | `File.rm` of an open file | succeeds: an "in use" refusal would tell one client about another |
-| `File.ln_s`, `File.ln` | refused: 9P2000 has no links, and binds do their job |
-| `File.chmod`, `File.chown` | there are no mode or owner bits: access is by capability |
+| `File.chmod`, `File.chown` | `{:error, :enotsup}`: there are no mode or owner bits, and access is by capability |
+| `File.ln_s`, `File.ln` | `{:error, :enotsup}`: 9P2000 has no links, and binds do their job |
+| `File.write_stat` | applies the modification and access times only; `{:error, :enotsup}` if it carries a mode, a user or a group |
 
-**Open:** two choices at the boundary with OTP.
-- `stat` and `chmod`: synthesise a fixed mode for `stat`, report the modification time and size
-  honestly, and let `chmod` and `chown` succeed and do nothing, because Mix and escript call
-  `chmod` and the bits mean nothing here (recommended); or refuse both with `:enotsup`, honest but
-  breaking those tools.
-- Error vocabularies: `File` expects POSIX atoms (`:enoent`, `:eacces`) and Redoubt has its own
-  (`:refused`, `:not_yours`, a label or budget refusal). Recommended: Redoubt errors keep their own
-  atoms everywhere, and the `File` boundary maps them to POSIX atoms only there, so OTP code sees
-  what it expects and new code sees the truth.
+**Refuse visibly; report only real fields.** The `File` API does not emulate POSIX: no program
+should rely on a permission bit that no server enforces, because authority on Redoubt is the
+capability, never a mode bit. `:undefined` is within OTP's own `file_info` type for exactly these
+fields, so nothing is invented. This is the one statement of the rule; file transfer follows it
+([file transfer](transfer.md#confined-to-the-sessions-files)). Standard-library code that does
+arithmetic on a mode (the mode preservation in `File.cp` and `File.cp_r`, Mix's check that a file
+is executable) is adjusted in beamlet's platform layer to skip the mode, never fed a fake one; the
+M4 (self-hosted development) case that compiles a Mix project on the box catches any caller that
+breaks.
+
+**Open:** error vocabularies. `File` expects POSIX atoms (`:enoent`, `:eacces`) and Redoubt has its
+own (`:refused`, `:not_yours`, a label or budget refusal). Recommended: Redoubt errors keep their
+own atoms everywhere, and the `File` boundary maps them to POSIX atoms only there, so OTP code sees
+what it expects and new code sees the truth.
 
 ### Copying, moving, removing and binds
 
