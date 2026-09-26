@@ -16,10 +16,8 @@ mod cell;
 mod device;
 mod dma;
 mod endpoint;
-mod grants;
 mod handle;
 mod io;
-mod irq;
 mod kframe;
 mod mem;
 mod message;
@@ -49,6 +47,9 @@ pub unsafe extern "C" fn init(
     args::KernelArguments::init(arg_offset);
     platform::early_init();
     let args = args::KernelArguments::get();
+    // A process reaches a device only through its device handle: a boot whose arguments still
+    // carry a device grant (`Grnt`) is refused rather than run as if it granted something.
+    assert!(args.iter().all(|arg| arg.name != u32::from_le_bytes(*b"Grnt")), "a Grnt boot argument");
     // Everything needs memory, so the first thing we should do is initialize the memory manager.
     crate::mem::MemoryManager::with_mut(|mm| {
         mm.init_from_memory(rpt_offset, xpt_offset, &args).expect("couldn't initialize memory manager")

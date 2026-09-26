@@ -1,17 +1,14 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-use core::sync::atomic::{AtomicBool, Ordering};
-
-use redoubt_abi::{PID, SysCall, TID};
+use redoubt_abi::SysCall;
 use riscv::register::{scause, sepc, sstatus, stval};
 
 use crate::arch::current_pid;
 use crate::arch::exception::RiscvException;
 use crate::arch::mem::MemoryMapping;
-use crate::arch::process::{EXIT_THREAD, RETURN_FROM_ISR, Thread};
+use crate::arch::process::{EXIT_THREAD, Thread};
 use crate::arch::process::{Process as ArchProcess, RETURN_FROM_EXCEPTION_HANDLER};
-use crate::cell::KernelCell;
 use crate::services::SystemServices;
 
 extern "Rust" {
@@ -38,7 +35,7 @@ fn return_registers(args: &[usize; 8], context: &Thread) -> ! {
 }
 
 /// The interrupt controller backend. Every backend provides `enable_irq`, `disable_irq`,
-/// `disable_all_irqs`, `enable_all_irqs`, `pending` and `mask`; add a new controller
+/// `complete`, `pending` and `mask`; add a new controller
 /// (AIA, CLIC, ...) as another file and capability feature.
 #[cfg_attr(feature = "plic", path = "intc_plic.rs")]
 mod intc;
@@ -59,11 +56,8 @@ pub fn enable_irq(irq_no: usize) { intc::enable_irq(irq_no); }
 
 pub fn disable_irq(irq_no: usize) { intc::disable_irq(irq_no); }
 
-/// Hold off every interrupt source while a userspace handler runs; Redoubt does not nest them.
-/// The kernel's timer is not a source here: timeouts expire during a callback too.
-pub fn disable_all_irqs() { intc::disable_all_irqs(); }
-
-pub fn enable_all_irqs() { intc::enable_all_irqs(); }
+/// Complete the interrupt the trap handler claimed (`intc::pending`).
+pub fn complete_irq() { intc::complete(); }
 
 /// Resume whatever is current now: after the entering thread's process died at this entry, or
 /// once a trap is fully handled.
@@ -80,59 +74,6 @@ fn preempt() -> ! {
     let tid = ArchProcess::with_current(|p| p.current_tid());
     SystemServices::with_mut(|ss| crate::sched::preempt(ss, tid));
     resume_current()
-}
-
-/// A legacy interrupt callback is running: set only here, as the kernel starts one, and
-/// cleared only as it ends ([`finish_isr`]).
-static HANDLING_IRQ: AtomicBool = AtomicBool::new(false);
-
-/// The (PID, TID) to resume after an interrupt handler returns. Set when an interrupt
-/// redirects into a userspace handler, cleared when it finishes. Nothing else sets it: the
-/// legacy `ReturnToParent`, which could, is refused (`syscall.rs`).
-static PREVIOUS_PAIR: KernelCell<Option<(PID, TID)>> = KernelCell::new(None);
-
-/// The process whose handler the running callback is: only its IRQ thread ends the callback.
-static CALLBACK_OWNER: KernelCell<Option<PID>> = KernelCell::new(None);
-
-/// Whether a legacy interrupt callback is running (on borrowed time, with a process to resume
-/// after it): the kernel dispatched one and it has not returned. Its calls are limited (the
-/// Redoubt ones are refused), and budget deadlines and slice-end preemption wait until it has
-/// finished (`time.rs`).
-pub fn in_callback() -> bool { HANDLING_IRQ.load(Ordering::Relaxed) }
-
-/// Finish the running callback, if `(pid, tid)` is its handler's thread (the owner's IRQ
-/// thread). Return `false` if there was none, or if this is anyone else: another process that
-/// reaches `RETURN_FROM_ISR`, or ends a thread or faults, while a callback runs ends nothing.
-fn finish_isr(pid: PID, tid: TID) -> bool {
-    let owner = CALLBACK_OWNER.with(|o| *o);
-    if !HANDLING_IRQ.load(Ordering::Relaxed) || owner != Some(pid) || tid != crate::arch::process::IRQ_TID {
-        return false;
-    }
-    HANDLING_IRQ.store(false, Ordering::Relaxed);
-    CALLBACK_OWNER.with(|o| *o = None);
-
-    // If we hit this address, then an ISR has just returned.  Since
-    // we're in an interrupt context, it is safe to access this
-    // global variable.
-    let (previous_pid, previous_context) =
-        PREVIOUS_PAIR.with(|p| p.take()).expect("got RETURN_FROM_ISR with no previous PID");
-    // println!(
-    //     "ISR: Resuming previous pair of ({}, {})",
-    //     previous_pid, previous_context
-    // );
-    // Switch to the previous process' address space.
-    SystemServices::with_mut(|ss| {
-        ss.finish_callback_and_resume(previous_pid, previous_context).expect("unable to resume previous PID")
-    });
-
-    // Re-enable interrupts now that they're handled
-    enable_all_irqs();
-    // Budget deadlines and slice ends waited while the callback ran (`time.rs`): arm for them
-    // now, whichever way it ended (a return, a thread exit or a fault). One already past fires
-    // as soon as the kernel lets interrupts in.
-    crate::time::rearm();
-
-    true
 }
 
 /// Convert a RISC-V `Exception` into a Redoubt exception argument list.
@@ -227,7 +168,7 @@ pub extern "C" fn trap_handler(
         {
             resume_current();
         }
-        if from_user && destroyed && !in_callback() {
+        if from_user && destroyed {
             preempt();
         }
     }
@@ -266,7 +207,7 @@ pub extern "C" fn trap_handler(
             // A Redoubt call (redoubt-sys): its numbers start above every legacy one.
             if a0 >= redoubt_sys::NUMBER_BASE as usize {
                 let regs = [a0, a1, a2, a3, a4, a5, a6, a7].map(|r| r as u64);
-                match crate::redoubt::handle(pid, tid, in_callback(), &regs) {
+                match crate::redoubt::handle(pid, tid, &regs) {
                     // Every result register holds at most 32 bits or one `usize` (redoubt-sys).
                     crate::redoubt::Outcome::Return(out) => ArchProcess::with_current_mut(|p| {
                         return_registers(&out.map(|r| r as usize), p.current_thread())
@@ -285,7 +226,7 @@ pub extern "C" fn trap_handler(
                 })
             });
 
-            let response = crate::syscall::handle(pid, tid, in_callback(), call)
+            let response = crate::syscall::handle(pid, tid, call)
                 .unwrap_or_else(redoubt_abi::Result::Error);
 
             // println!("Syscall Result: {:?}", response);
@@ -305,9 +246,8 @@ pub extern "C" fn trap_handler(
         // The kernel's timer: what was due was answered at this entry; arm for what is next.
         RiscvException::SupervisorTimerInterrupt(_) => {
             crate::time::on_interrupt();
-            // The running thread's slice is over: preempt it (R12). Not inside a legacy callback,
-            // which runs on the interrupted thread's time until it returns (INTERIM, WP-K6).
-            if from_user && !in_callback() && crate::sched::slice_over() {
+            // The running thread's slice is over: preempt it (R12).
+            if from_user && crate::sched::slice_over() {
                 preempt();
             }
             resume_current();
@@ -321,24 +261,14 @@ pub extern "C" fn trap_handler(
             let pending = intc::pending();
 
             if let Some(irq) = pending {
-                // R5: an interrupt with a device object is the kernel's to record, not a
-                // callback: it masks the source, sets `fired` and wakes whoever is in
-                // `receive` on the handle. Nothing runs in userspace on the way, so there is
-                // no ISR to return from and no pair to remember; completing the claim is all
-                // that is left before resuming whatever was interrupted.
+                // R5: an interrupt with a device object is the kernel's to record: it masks the
+                // source, sets `fired` and wakes whoever is in `receive` on the handle. One with no
+                // device object has nobody to tell: complete the claim, then mask the source so it
+                // cannot storm.
                 if !crate::device::irq_fired(irq) {
-                    // Remember who to resume once the userspace handler returns. A source with
-                    // no handler is only masked: no callback runs, so none is recorded.
-                    if let Some(owner) = crate::irq::interrupt_owner(irq) {
-                        CALLBACK_OWNER.with(|o| *o = Some(owner));
-                        PREVIOUS_PAIR.with(|previous| {
-                            if previous.is_none() {
-                                *previous = Some((pid, crate::arch::process::current_tid()));
-                            }
-                        });
-                        HANDLING_IRQ.store(true, Ordering::Relaxed);
-                    }
-                    crate::irq::handle(irq).expect("Couldn't handle IRQ");
+                    klog!("[!] Masked IRQ #{}, which no device object owns", irq);
+                    complete_irq();
+                    disable_irq(irq);
                 }
                 crate::sched::bill_irq(irq, started);
             }
@@ -401,26 +331,12 @@ pub extern "C" fn trap_handler(
             let tid = ArchProcess::with_current(|process| process.current_tid());
             // Ordinary thread returns use the same lifecycle policy as explicit thread_exit:
             // the final return snapshots open calls/blame before process_exit(0) cleanup (170).
-            // IRQ callbacks have their separate RETURN_FROM_ISR path below.
             SystemServices::with_mut(|ss| crate::process::thread_exit(ss, pid, tid));
-
-            finish_isr(pid, tid);
 
             // Teardown selected a surviving sibling or another process.
             ArchProcess::with_current_mut(|p| {
                 crate::arch::syscall::resume(current_pid().get() == 1, p.current_thread())
             });
-        }
-
-        RiscvException::InstructionPageFault(RETURN_FROM_ISR, _offset) => {
-            let tid = ArchProcess::with_current(|p| p.current_tid());
-            if finish_isr(pid, tid) {
-                // Budget deadlines that fell due while the callback ran were held back; the
-                // callback is over, so answer them now, then run whatever is current.
-                crate::time::expire_at_entry();
-                resume_current();
-            }
-            // Anyone else jumping there faults like any wild jump (below).
         }
 
         // Handle faulted instruction pages, because we can now actually have instruction pages that are
@@ -484,8 +400,6 @@ pub extern "C" fn trap_handler(
         #[allow(clippy::empty_loop)]
         loop {}
     }
-
-    finish_isr(pid, ArchProcess::with_current(|p| p.current_tid()));
 
     // If it's not a failure in the kernel, the process faults: it is torn down and its exit
     // notice, cause `faulted`, blames the sender of the faulting thread's current call

@@ -42,9 +42,6 @@ const MAGIC_RETURN_BASE: usize = 0xff80_0000;
 #[cfg(target_pointer_width = "64")]
 const MAGIC_RETURN_BASE: usize = redoubt_abi::arch::PROCESS_AREA + 0x80_0000;
 
-/// This is the address a program will jump to in order to return from an ISR.
-pub const RETURN_FROM_ISR: usize = MAGIC_RETURN_BASE + 0x2000;
-
 /// This is the address a thread will return to when it exits.
 pub const EXIT_THREAD: usize = MAGIC_RETURN_BASE + 0x3000;
 
@@ -572,8 +569,6 @@ impl Process {
 }
 
 impl Thread {
-    /// The current stack pointer for this thread
-    pub fn stack_pointer(&self) -> usize { self.registers[1] }
 
     pub fn a0(&self) -> usize { self.registers[9] }
 
@@ -635,5 +630,3 @@ pub fn set_current_pid(pid: PID) {
 }
 
 pub fn current_pid() -> PID { PROCESS_TABLE.with(|pt| pt.current) }
-
-pub fn current_tid() -> TID { process_impl().hardware_thread - 1 }

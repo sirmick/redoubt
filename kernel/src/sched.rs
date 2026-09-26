@@ -10,7 +10,7 @@
 //! # Accounting at the trap boundary
 //! There are exactly two ways into user mode (`arch::syscall::resume` and the syscall return) and
 //! one out (the trap handler). Runtime is counted at those, so no path can run user code
-//! unaccounted, whatever ends it (a block, an exit, a fault, a kill, a callback):
+//! unaccounted, whatever ends it (a block, an exit, a fault or a kill):
 //! - [`from_user`] (first thing on a trap from user mode) adds the user time since the last return to the
 //!   pending runtime of the budget that ran, `cur`.
 //! - [`begin_billing`] (after the entry's expiry) starts billing kernel time to `cur`: a system call's time

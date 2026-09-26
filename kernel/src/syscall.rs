@@ -10,7 +10,6 @@ use redoubt_abi::*;
 use crate::arch;
 use crate::arch::process::Process as ArchProcess;
 use crate::cell::KernelCell;
-use crate::irq::{interrupt_claim, interrupt_free};
 use crate::mem::MemoryManager;
 use crate::services::SystemServices;
 
@@ -69,17 +68,12 @@ fn do_yield(_pid: PID, tid: TID) -> SysCallResult {
     })
 }
 
-pub fn handle(pid: PID, tid: TID, in_irq: bool, call: SysCall) -> SysCallResult {
-    klog!("KERNEL({}:{}): Syscall {:x?}, in_irq={}", pid, tid, call, in_irq);
+pub fn handle(pid: PID, tid: TID, call: SysCall) -> SysCallResult {
+    klog!("KERNEL({}:{}): Syscall {:x?}", pid, tid, call);
     // let call_string = format!("{:x?}", call);
     // let start_time = std::time::Instant::now();
     #[allow(clippy::let_and_return)]
-    let result = if in_irq && !call.can_call_from_interrupt() {
-        klog!("[!] Called {:?} that's cannot be called from the interrupt handler!", call);
-        Err(redoubt_abi::Error::InvalidSyscall)
-    } else {
-        handle_inner(pid, tid, call)
-    };
+    let result = handle_inner(pid, tid, call);
 
     // println!("KERNEL [{:2}:{:2}] Syscall took {:7} usec: {}", pid, tid, start_time.elapsed().as_micros(),
     // call_string);
@@ -126,8 +120,8 @@ pub fn handle_inner(pid: PID, tid: TID, call: SysCall) -> SysCallResult {
                 // A process must never name a physical RAM frame: it could point at another
                 // process's freed page and read what was left there. Anonymous RAM comes from
                 // `phys = 0` (which allocates a free frame and zeroes it). So reject any range
-                // that touches main RAM, and default-deny device MMIO unless the boot manifest
-                // granted it (tenet 2). PID 1 (the kernel) is trusted and maps its own memory.
+                // that touches main RAM, and refuse device MMIO: a process reaches a device only
+                // through its handle. PID 1 (the kernel) is trusted and maps its own memory.
                 if !phys_ptr.is_null() {
                     let base = phys_ptr as usize;
                     if pid.get() != 1
@@ -138,8 +132,8 @@ pub fn handle_inner(pid: PID, tid: TID, call: SysCall) -> SysCallResult {
                         klog!("PID {} tried to map physical RAM {:08x} by address", pid.get(), base);
                         return Err(redoubt_abi::Error::InvalidArgument);
                     }
-                    // WP-K5b (P2-1): no DMA device through the legacy path, whatever the grant,
-                    // so a mapping of one always joins the reset set through `map_device`.
+                    // WP-K5b (P2-1): no DMA device through the legacy path, so a mapping of one
+                    // always joins the reset set through `map_device`.
                     if pid.get() != 1 {
                         match crate::dma::overlaps_dma_device(base, size.get()) {
                             None => return Err(redoubt_abi::Error::InvalidArgument),
@@ -150,7 +144,8 @@ pub fn handle_inner(pid: PID, tid: TID, call: SysCall) -> SysCallResult {
                             Some(false) => {}
                         }
                     }
-                    if !crate::grants::may_map_device(mm, pid, base, size.get()) {
+                    // A process reaches a device only through its device handle (`map_device`).
+                    if pid.get() != 1 {
                         klog!("PID {} denied device {:08x}", pid.get(), base);
                         return Err(redoubt_abi::Error::AccessDenied);
                     }
@@ -289,17 +284,8 @@ pub fn handle_inner(pid: PID, tid: TID, call: SysCall) -> SysCallResult {
             ORIGINAL_TID.store(new_tid, Relaxed);
             Ok(redoubt_abi::Result::ResumeProcess)
         }),
-        SysCall::ClaimInterrupt(no, callback, arg) => {
-            interrupt_claim(no, pid as definitions::PID, callback, arg).map(|_| redoubt_abi::Result::Ok)
-        }
-        SysCall::FreeInterrupt(no) => {
-            interrupt_free(no, pid as definitions::PID).map(|_| redoubt_abi::Result::Ok)
-        }
         SysCall::Yield => do_yield(pid, tid),
-        // Refused, to everyone (WP-K5): nothing in the tree calls it, and it put the kernel in the
-        // state of a running interrupt callback with none running, which held every budget
-        // deadline and slice end and refused every Redoubt call. A callback returns through
-        // `RETURN_FROM_ISR` (`arch::irq`).
+        // Refused, to everyone (WP-K5): nothing in the tree calls it.
         SysCall::ReturnToParent(_pid, _cpuid) => Err(redoubt_abi::Error::UnhandledSyscall),
         SysCall::WaitEvent => SystemServices::with_mut(|ss| {
             let process = ss.get_process(pid).expect("Can't get current process");
