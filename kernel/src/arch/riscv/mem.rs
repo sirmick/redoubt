@@ -18,7 +18,7 @@ use ::riscv::register::satp;
 use redoubt_abi::{MemoryFlags, PID, arch::*};
 
 pub use super::mmu_flags::MMUFlags;
-use super::mmu_flags::{translate_flags, untranslate_flags};
+use super::mmu_flags::translate_flags;
 use super::physmap::{self, Pte, Slot, Table, window};
 use crate::arch::process::InitialProcess;
 use crate::mem::MemoryManager;
@@ -264,10 +264,6 @@ impl core::fmt::Debug for MemoryMapping {
 
 /// Controls MMU configurations.
 impl MemoryMapping {
-    /// # Safety
-    /// `satp` must name a root page table, as built by the loader.
-    #[allow(dead_code)]
-    pub unsafe fn from_raw(&mut self, satp: usize) { self.satp = satp; }
 
     /// # Safety
     /// `init` must be a process description produced by the loader.
@@ -313,9 +309,6 @@ impl MemoryMapping {
     /// Get the "PID" (actually, ASID) from the current mapping
     pub fn get_pid(&self) -> Option<PID> { PID::new(pid_from_satp(self.satp) as _) }
 
-    #[allow(dead_code)]
-    pub fn is_allocated(&self) -> bool { self.get_pid().is_some() }
-
     pub fn is_kernel(&self) -> bool { self.get_pid().map(|v| v.get() == 1).unwrap_or(false) }
 
     /// Set this mapping as the systemwide mapping.
@@ -353,7 +346,6 @@ impl MemoryMapping {
         });
     }
 
-    #[allow(dead_code)]
     pub fn phys_to_virt(&self, phys: usize) -> Result<Option<usize>, redoubt_abi::Error> {
         if phys & (PAGE_SIZE - 1) != 0 {
             return Err(redoubt_abi::Error::BadAlignment);
@@ -416,18 +408,6 @@ impl MemoryMapping {
 
 pub const DEFAULT_MEMORY_MAPPING: MemoryMapping = MemoryMapping { satp: 0 };
 
-/// When we allocate pages, they are owned by the kernel so we can zero
-/// them out.  After that is done, hand the page to the user.
-pub fn hand_page_to_user(virt: *mut u8) -> Result<(), redoubt_abi::Error> {
-    let slot = walk(current_root(), virt as usize, None)?;
-    if !slot.get().is_valid() {
-        return Err(redoubt_abi::Error::BadAddress);
-    }
-    slot.set(slot.get().with(MMUFlags::USER));
-    flush_tlb();
-    Ok(())
-}
-
 /// Map the given page into the current address space.  If necessary,
 /// allocate new page tables on behalf of `pid`.
 ///
@@ -483,67 +463,9 @@ pub fn unmap_page_inner(_mm: &mut MemoryManager, virt: usize) -> Result<usize, r
     Ok(phys)
 }
 
-/// Move a page from one address space to another.
-pub fn move_page_inner(
-    mm: &mut MemoryManager,
-    src_space: &MemoryMapping,
-    src_addr: *mut u8,
-    dest_pid: PID,
-    dest_space: &MemoryMapping,
-    dest_addr: *mut u8,
-) -> Result<(), redoubt_abi::Error> {
-    let src = walk(root_of(src_space.satp), src_addr as usize, None)?;
-    let previous = src.get();
-    if !previous.is_valid() || previous.has(MMUFlags::S) {
-        return Err(redoubt_abi::Error::BadAddress);
-    }
-    // Map in the destination first: if that fails, nothing has changed.
-    let flags = translate_flags(untranslate_flags(previous.flags().bits())) | user_flag(dest_pid);
-    map_page_in(root_of(dest_space.satp), mm, dest_pid, previous.phys(), dest_addr as usize, flags)?;
-    src.set(Pte::EMPTY);
-    flush_tlb();
-    Ok(())
-}
-
 /// Determine if a virtual page has been lent.
 pub fn page_is_lent(src_addr: *mut u8) -> bool {
     walk(current_root(), src_addr as usize, None).is_ok_and(|slot| slot.get().has(MMUFlags::S))
-}
-
-/// Mark the given virtual address as being lent: clear `VALID`, so that this process
-/// cannot touch the page while it is lent, and set `S` to remember that it is lent.
-///
-/// # Errors
-///
-/// * **ShareViolation**: Tried to share a page that is not ours, or is already shared
-pub fn lend_page_inner(
-    mm: &mut MemoryManager,
-    src_space: &MemoryMapping,
-    src_addr: *mut u8,
-    dest_pid: PID,
-    dest_space: &MemoryMapping,
-    dest_addr: *mut u8,
-    mutable: bool,
-) -> Result<usize, redoubt_abi::Error> {
-    let src = walk(root_of(src_space.satp), src_addr as usize, None)?;
-    let current = src.get();
-    let phys = current.phys();
-
-    // Sharing a page that is not ours, or that is already shared, is a violation.
-    if !current.is_valid() || current.has(MMUFlags::S) {
-        return Err(redoubt_abi::Error::ShareViolation);
-    }
-
-    let mut new_flags = MMUFlags::R | user_flag(dest_pid);
-    if mutable && current.has(MMUFlags::W) {
-        new_flags |= MMUFlags::W;
-    }
-
-    // Map in the destination first: if that fails, nothing has changed.
-    map_page_in(root_of(dest_space.satp), mm, dest_pid, phys, dest_addr as usize, new_flags | MMUFlags::S)?;
-    src.set(current.without(MMUFlags::VALID).with(MMUFlags::S));
-    flush_tlb();
-    Ok(phys)
 }
 
 /// Return a page from `src_space` back to `dest_space`.
@@ -752,15 +674,6 @@ pub fn virt_to_phys(virt: usize) -> Result<usize, redoubt_abi::Error> {
     checked_phys(walk(current_root(), virt, None)?.get())
 }
 
-/// Translate `virt` in the address space of `pid`. No address space switch is needed.
-#[allow(dead_code)]
-pub fn virt_to_phys_pid(pid: PID, virt: usize) -> Result<usize, redoubt_abi::Error> {
-    let mapping = crate::services::SystemServices::with(|ss| {
-        ss.get_process(pid).map(|p| p.mapping).or(Err(redoubt_abi::Error::InvalidPID))
-    })?;
-    checked_phys(walk(root_of(mapping.satp), virt, None)?.get())
-}
-
 /// Back a reserved (demand-paged) address with a real, zeroed page.
 ///
 /// Takes the memory manager rather than borrowing it: the lend and move paths reach here
@@ -791,11 +704,6 @@ pub fn ensure_page_exists_inner(mm: &mut MemoryManager, address: usize) -> Resul
     unsafe { window().zero_frame(new_page) };
     slot.set(Pte::leaf(new_page, reservation.flags() | MMUFlags::USER));
     flush_tlb();
-    // A reservation made executable (the legacy `MapMemory`) is fetched from once it faults in:
-    // the zeroed frame must not be seen through what the icache held for its last use.
-    if reservation.has(MMUFlags::X) {
-        sync_icache();
-    }
 
     Ok(new_page)
 }
@@ -824,8 +732,7 @@ pub fn user_frame(virt: usize, write: bool) -> Result<usize, redoubt_sys::Error>
 
 /// `set_flags` (KERNEL-SPEC.md, R11): give a mapped user page exactly the permissions
 /// `flags` asks for, keeping everything else about the entry (its frame, `USER`, the
-/// accessed and dirty bits). Unlike the legacy `update_page_flags`, which only strips, this
-/// may also add one: a program maps a page writable, writes code into it, and then makes it
+/// accessed and dirty bits). It may add a permission as well as drop one: a program maps a page writable, writes code into it, and then makes it
 /// executable and not writable, which is what W^X asks of it. `Pte::leaf` refuses the
 /// combination that would break W^X, as decoding already did.
 ///
@@ -893,39 +800,4 @@ pub fn page_flags(virt: usize) -> Option<MemoryFlags> {
         }
     }
     (!flags.is_empty()).then_some(flags)
-}
-
-/// Remove permissions from a page. Permissions can only be dropped, never added.
-pub fn update_page_flags(virt: usize, flags: MemoryFlags) -> Result<(), redoubt_abi::Error> {
-    // Stripping every permission would turn the entry into a pointer to another table.
-    if (flags & (MemoryFlags::R | MemoryFlags::W | MemoryFlags::X)).is_empty() {
-        return Err(redoubt_abi::Error::MemoryInUse);
-    }
-
-    let slot = walk(current_root(), virt, None).or(Err(redoubt_abi::Error::OutOfMemory))?;
-    let mut pte = slot.get();
-    if pte.has(MMUFlags::S) {
-        return Err(redoubt_abi::Error::ShareViolation);
-    }
-
-    for (requested, bit) in
-        [(MemoryFlags::X, MMUFlags::X), (MemoryFlags::R, MMUFlags::R), (MemoryFlags::W, MMUFlags::W)]
-    {
-        if (flags & requested).is_empty() {
-            pte = pte.without(bit);
-        } else if !pte.has(bit) {
-            return Err(redoubt_abi::Error::ShareViolation);
-        }
-    }
-
-    // Dropping R while keeping W (R11) would leave a writable-without-readable encoding,
-    // an invalid result like the all-stripped case above; use the same error and refuse
-    // before the entry changes.
-    if pte.has(MMUFlags::W) && !pte.has(MMUFlags::R) {
-        return Err(redoubt_abi::Error::MemoryInUse);
-    }
-
-    slot.set(pte);
-    flush_tlb();
-    Ok(())
 }

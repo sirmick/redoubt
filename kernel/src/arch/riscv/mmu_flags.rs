@@ -36,21 +36,3 @@ pub fn translate_flags(req_flags: MemoryFlags) -> MMUFlags {
     }
     flags
 }
-
-pub fn untranslate_flags(req_flags: usize) -> MemoryFlags {
-    let req_flags = MMUFlags::from_bits_truncate(req_flags);
-    let mut flags = redoubt_abi::MemoryFlags::FREE;
-    if req_flags & MMUFlags::R == MMUFlags::R {
-        flags |= redoubt_abi::MemoryFlags::R;
-    }
-    if req_flags & MMUFlags::W == MMUFlags::W {
-        flags |= redoubt_abi::MemoryFlags::W;
-    }
-    if req_flags & MMUFlags::X == MMUFlags::X {
-        flags |= redoubt_abi::MemoryFlags::X;
-    }
-    if req_flags & MMUFlags::P == MMUFlags::P {
-        flags |= redoubt_abi::MemoryFlags::P;
-    }
-    flags
-}

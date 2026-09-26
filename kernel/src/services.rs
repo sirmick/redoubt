@@ -171,15 +171,6 @@ pub struct ProcessInner {
     /// The last address that was allocated from
     pub mem_message_last: usize,
 
-    /// Base address of the heap
-    pub mem_heap_base: usize,
-
-    /// Current size of the heap
-    pub mem_heap_size: usize,
-
-    /// Maximum size of the heap
-    pub mem_heap_max: usize,
-
     /// A copy of this process' ID
     pub pid: PID,
 
@@ -194,9 +185,6 @@ impl Default for ProcessInner {
             mem_default_last: DEFAULT_BASE,
             mem_message_base: DEFAULT_MESSAGE_BASE,
             mem_message_last: DEFAULT_MESSAGE_BASE,
-            mem_heap_base: DEFAULT_HEAP_BASE,
-            mem_heap_size: 0,
-            mem_heap_max: if cfg!(feature = "big-heap") { 1024 * 1024 * 12 } else { 1024 * 512 },
             pid: KERNEL_PID,
             _reserved: [0; 1],
         }

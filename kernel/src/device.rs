@@ -219,8 +219,7 @@ impl MemoryManager {
         let n = entries.len();
         for words in entries {
             let d = self.decode_entry(words);
-            // A DMA device the kernel cannot reset gets no object at all (WP-K5b, fail closed);
-            // legacy `MapMemory` still refuses it (`dma_ranges`).
+            // A DMA device the kernel cannot reset gets no object at all (WP-K5b, fail closed).
             if d.kind == Kind::Mmio && d.dma && !self.dma_register(d.base) {
                 println!("Devices: no DMA slot for {:x}; it gets no device object", d.base);
                 continue;
@@ -301,17 +300,6 @@ fn devs() -> Option<core::slice::ChunksExact<'static, u32>> {
 
 /// The 64-bit value at word `i` of a `Devs` entry, low word first.
 fn entry_value(words: &[u32], i: usize) -> u64 { u64::from(words[i]) | u64::from(words[i + 1]) << 32 }
-
-/// Every DMA-flagged MMIO range the loader reported, as (base, size), whether or not it got a
-/// device object (WP-K5b: legacy `MapMemory` refuses them all). `decode_entry` checked each
-/// at boot.
-pub fn dma_ranges() -> impl Iterator<Item = (u64, u64)> {
-    devs()
-        .into_iter()
-        .flatten()
-        .filter(|w| w[0] == 1 && w[5] & DEVS_DMA != 0)
-        .map(|w| (entry_value(w, 1), entry_value(w, 3)))
-}
 
 /// Words in one `Ctrl` entry: base and size, low word first.
 const CTRL_WORDS: usize = 4;
