@@ -13,7 +13,7 @@ and most malicious agents can run on it, do real work, and not get out.
 - It runs on RISC-V softcores, nearly always over virtio (block, network, console). It never has
   a local display, keyboard or mouse. People reach it over SSH.
 - **Auditable by construction.** Everything that runs on the machine is Rust, with assembly only
-  where Rust cannot reach. There is no C and no shell script on the machine, userland included. The
+  where Rust cannot reach. No C and no shell script runs on the machine, userland included. The
   trusted computing base (the firmware interface, the loader and the kernel) is small enough to
   read like a textbook.
 - **Authority is capabilities.** There is no ambient authority: no root, no user IDs that grant
@@ -33,7 +33,8 @@ were complete; each section's status line says what is built today ([reading thi
 it likes. It controls every process it runs, including its whole Elixir VM (beamlet is outside
 the trusted computing base), and it may compromise a server it talks to. It may be an agent, a
 person logged in over SSH, or several of them colluding with a pre-arranged code. It has a
-perfect clock: secrets are protected by constant-time code and isolation, never by hiding time.
+perfect clock: secrets are protected by isolation, and by constant-time code where a rule claims it
+([side channels](#side-channels)), never by hiding time.
 
 **Trusted:** the firmware interface, the loader and the kernel; the servers that hold system
 authority (`init`, the steward, `keyd`) and `sshd`, which carries each channel's labels; a driver
@@ -52,6 +53,10 @@ only its own handles, and the kernel stamps every message with its sender
   a shared clock or any other physical coupling. On one machine these couple any two domains, so
   no operating system can close or bound them; the only zero is placement, which is a
   deployment's choice ([the FPGA platform](beyond/fpga-platform.md)).
+
+**Not claimed:** the boot bundle's confidentiality. Verified boot proves the bundle's integrity;
+it does not hide it. Seeds and anything else in the bundle are readable by whoever reads the
+bundle image ([boot's residual risks](kernel/boot.md#residual-risks)).
 
 Software closes every **intentional** path: a message, a write, a read up, a sink, metadata, a
 counter or a shared cap. An intentional path across a label boundary is a design hole, whatever
@@ -100,6 +105,11 @@ sink, metadata, a counter or a shared cap. **The label set, not the capability s
 isolation unit.** Two budgets with equal label sets are one **trust domain**, and a handle passed
 between them crosses nothing. Two budgets with differing label sets have no path the OS carries,
 except one item at a time through the steward, after the label's owner approves it.
+
+The residual is stated: **there is no non-collusion guarantee within one label set.** Two agents
+with different handle sets but the same label set are not kept from cooperating; the kernel
+carries messages between whoever holds each other's handles. Agents that must not collude get
+different labels ([labels and vaults](userland/agents.md#labels-and-vaults)).
 
 - The kernel refuses a `call` or `send` between two `user` budgets whose label sets differ, and
   checks exit notices and usage reads the same way ([R1 (flow)](kernel/ipc.md#r1-flow)); servers
@@ -253,9 +263,13 @@ close:
   ([serving](servers/serving.md#residual-risks)).
 
 A confined deployment removes the shared servers, endpoints, devices and cores; what is left is
-hardware's, and hardware placement is [beyond M5](beyond/fpga-platform.md). Secrets are handled by
-constant-time code ([R45 (constant-time signing)](servers/keyd.md#r45-constant-time-signing)), so
-there is nothing secret-dependent to time.
+hardware's, and hardware placement is [beyond M5](beyond/fpga-platform.md).
+
+Constant time is claimed for one thing: `keyd`'s signing, whatever the key and the nonce
+([R45 (constant-time signing)](servers/keyd.md#r45-constant-time-signing)). That claim is partly
+tested: its timing tests need an optimised build that no bench case runs. No other code that
+handles a secret is claimed constant-time; such a secret rests on isolation alone, and its timing
+is a side channel like the others above.
 
 ## Network policy
 
@@ -330,10 +344,16 @@ like a textbook example of each mechanism.
 - Assembly is limited to what the language cannot express (trap entry and exit, the context
   switch, the first instructions after reset) and is written inside Rust sources, never as prebuilt
   objects.
-- No C, no C toolchain in the build, no binary blobs, no bindings to C libraries, and no shell
-  scripts on the machine. One exception, on the build host only: test oracles and fuzz drivers
-  (the littlefs C reference, libFuzzer) may be C or C++, in crates outside the workspace build,
-  never linked into anything that runs on the machine.
+- No C, no C toolchain in the build, no binary blobs, and no bindings to C libraries. No C and no
+  shell script runs on the machine. One exception, on the build host only: test oracles and fuzz
+  drivers (the littlefs C reference, libFuzzer) may be C or C++, in crates outside the workspace
+  build, never linked into anything that runs on the machine.
+- The residual is stated: the build host runs shell scripts. They are `build`, `test`, `launch`,
+  `mkimage` and `dev.sh` at the root, `scripts/build-bios.sh`, `scripts/pi-ensure.sh`,
+  `scripts/ssh-key-ensure.sh`, `tools/vendor-check/provenance.sh`, `libs/wire/elixir/run-vectors`
+  and the Elixir runtime's tools under `userland/otp/tools/`. Whether this tenet reaches the build
+  host is the owner's to decide; until then they are listed in
+  [host shell scripts](todo/host-shell-scripts.md).
 - The build is one pinned toolchain (`rustc` and `cargo`), and reproducible.
 
 ### 4. Open, auditable standards
