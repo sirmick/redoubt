@@ -1,0 +1,14 @@
+description = "OD10: a process holds exactly MAX_THREADS (31) threads, its initial one included, with TIDs 1..=31; the next thread_create is TooManyThreads (checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+# The first program, alone; the TIDs and the refusal are the kernel's answers.
+programs = ["thread-limit"]
+timeout_secs = 60
+expect = [
+    '^\[pid 2\] \[thread-limit\] 31 threads, the initial one included$',
+    '^\[pid 2\] \[thread-limit\] TIDs distinct and within 1\.\.=31, all used: true$',
+    '^\[pid 2\] \[thread-limit\] the next thread_create: TooManyThreads$',
+    '^\[pid 2\] THREAD LIMIT TEST PASSED$',
+]
+forbid = ['\[thread-limit\] FAIL']

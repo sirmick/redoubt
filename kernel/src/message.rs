@@ -22,7 +22,7 @@
 //!
 //! Walking every thread to pick the next sender costs more than a queue would. The design asks
 //! for the walk anyway: R2 serves groups round-robin, so a receive must consider every waiting
-//! group. The walk is bounded by `MAX_PROCESS_COUNT * MAX_THREAD`, a compile-time constant no
+//! group. The walk is bounded by `MAX_PROCESS_COUNT * MAX_THREADS`, a compile-time constant no
 //! process can influence (TENETS.md: clarity beats speed).
 //!
 //! # Locks
@@ -44,10 +44,10 @@ use crate::arch::process::TID;
 use redoubt_sys::{
     Body, CallOutcome, Error, Handle as AbiHandle, Labels, LendDisposition, MAX_LABELS, MAX_LEND_PAGES,
     MAX_MSG_HANDLES, MAX_OPEN_CALLS, Message, MessageKind, MintSource, Pages, RECEIVED_SLOTS, Received,
-    ReceivedBody, ReceivedHandles, ReplyOutcome, Return, WAIT_CAP, WORDS, encode_result,
+    MAX_THREADS, ReceivedBody, ReceivedHandles, ReplyOutcome, Return, WAIT_CAP, WORDS, encode_result,
 };
 
-use crate::arch::process::{MAX_PROCESS_COUNT, MAX_THREAD};
+use crate::arch::process::MAX_PROCESS_COUNT;
 use crate::budget::Class;
 use crate::endpoint::Group;
 use crate::handle::{BudgetRef, DeviceRef, EndpointRef, Handle, Object};
@@ -426,7 +426,7 @@ fn open_call_of(mm: &MemoryManager, pid: Pid, tid: TID, rid: u64) -> Option<u32>
 fn find_thread<T>(mm: &MemoryManager, mut f: impl FnMut(&MemoryManager, Pid, TID) -> Option<T>) -> Option<T> {
     for index in 1..=MAX_PROCESS_COUNT {
         let Some(pid) = Pid::new(index as u8) else { continue };
-        for tid in 0..MAX_THREAD {
+        for tid in 1..=MAX_THREADS {
             if mm.ipc_frame(pid, tid).is_none() {
                 continue;
             }
@@ -1471,7 +1471,7 @@ fn finish_served(ss: &mut SystemServices, mm: &mut MemoryManager, frame: u32) {
 
 /// A process is ending: every one of its threads does (R4b).
 pub fn process_ending(ss: &mut SystemServices, mm: &mut MemoryManager, pid: Pid) {
-    for tid in 0..MAX_THREAD {
+    for tid in 1..=MAX_THREADS {
         if mm.ipc_frame(pid, tid).is_some() {
             thread_ending(ss, mm, pid, tid);
         }
@@ -1576,7 +1576,7 @@ pub fn next_timeout(mm: &mut MemoryManager, now: u64) -> (Option<(u64, Pid, TID)
             continue;
         }
         let mut exact = u64::MAX;
-        for tid in 0..MAX_THREAD {
+        for tid in 1..=MAX_THREADS {
             if mm.ipc_frame(pid, tid).is_none() {
                 continue;
             }
@@ -1612,7 +1612,7 @@ pub fn time_out(ss: &mut SystemServices, mm: &mut MemoryManager, pid: Pid, tid: 
 /// After `reply` freed an open call, the process may be able to take calls again (R4a) and an
 /// abandoned-call notice may be waiting: try every endpoint its threads receive on.
 fn poke_receivers(ss: &mut SystemServices, mm: &mut MemoryManager, pid: Pid) {
-    for tid in 0..MAX_THREAD {
+    for tid in 1..=MAX_THREADS {
         let s = slot(mm, pid, tid);
         if s.wait == Wait::Receive {
             if let Some(e) = s.endpoint {

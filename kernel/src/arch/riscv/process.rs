@@ -19,15 +19,15 @@ fn process_impl() -> &'static mut ProcessImpl {
     // SAFETY: see the function's doc comment.
     unsafe { &mut *PROCESS }
 }
-/// A thread's number within its process: an index into its saved contexts.
+/// A thread's number within its process, `1..=MAX_THREADS` (KERNEL-SPEC.md). Thread `tid`'s
+/// saved context is context `tid` of `ProcessImpl` (context 0 is the header), so `tid` is
+/// also the number the trap handler reads from `hardware_thread`, where 0 means no thread.
 pub type TID = usize;
 
-pub const MAX_THREAD: TID = 31;
-pub const EXCEPTION_TID: TID = 1;
-pub const INITIAL_TID: TID = 2;
-pub const IRQ_TID: TID = 0;
+/// The first thread of every process.
+pub const INITIAL_TID: TID = 1;
 
-use redoubt_sys::PAGE_SIZE;
+use redoubt_sys::{MAX_THREADS, PAGE_SIZE};
 use redoubt_layout::Pid;
 
 use crate::cell::KernelCell;
@@ -48,32 +48,6 @@ const MAGIC_RETURN_BASE: usize = redoubt_layout::PROCESS_AREA + 0x80_0000;
 /// This is the address a thread will return to when it exits.
 pub const EXIT_THREAD: usize = MAGIC_RETURN_BASE + 0x3000;
 
-/// Support processing interrupts, which normally are TID 0. Since
-/// the TID is a NonZeroU8, we must pick a value here that can be
-/// used throughout the rest of the kernel.
-const IRQ_TID_SENTINAL: TID = 255;
-
-// Thread IDs have three possible meaning:
-// Logical Thread ID: What the user sees
-// Thread Context Index: An index into the thread slice
-// Hardware Thread ID: The index that the ISR uses
-//
-// The Hardware Thread ID is always equal to the Thread Context
-// Index, minus one. For example, the default thread ID is
-// Hardware Thread ID 1 is Thread Context Index 0.
-// The Logical Thread ID is equal to the Hardware Thread ID
-// plus one again. This is because the ISR context is Thread
-// Context Index 0.
-// Therefore, the first Logical Thread ID is 1, which maps
-// to Hardware Thread ID 2, which is Thread Context Index 1.
-//
-// +-----------------+-----------------+-----------------+
-// |    Thread ID    |  Context Index  | Hardware Thread |
-// +=================+=================+=================+
-// |   ISR Context   |        0        |        1        |
-// |        1        |        1        |        2        |
-// |        2        |        2        |        3        |
-
 // ProcessImpl occupies a multiple of pages mapped to virtual address `0xff80_1000`.
 // Each thread is 128 bytes (32 4-byte registers). The first "thread" does not exist,
 // and instead is any bookkeeping information related to the process.
@@ -83,8 +57,8 @@ struct ProcessImpl {
     /// Used by the interrupt handler to calculate offsets
     scratch: usize,
 
-    /// The currently-active thread for this process. This must
-    /// be the 2nd item, because the ISR directly writes this value.
+    /// The currently-active thread for this process, 0 for none. This must
+    /// be the 2nd item, because the ISR directly reads this value.
     hardware_thread: usize,
 
     /// Global parameters used by the operating system
@@ -100,10 +74,8 @@ struct ProcessImpl {
     /// "context 0" and the ISR can find context N at `N * size_of::<Thread>()`.
     _padding: [u8; HEADER_PADDING],
 
-    /// This enables the kernel to keep track of threads in the
-    /// target process, and know which threads are ready to
-    /// receive messages.
-    threads: [Thread; MAX_THREAD],
+    /// The saved contexts: thread `tid`'s is `threads[tid - 1]`.
+    threads: [Thread; MAX_THREADS],
 }
 
 const HEADER_PADDING: usize =
@@ -115,7 +87,7 @@ pub const PROCESS_IMPL_PAGES: usize = mem::size_of::<ProcessImpl>() / PAGE_SIZE;
 
 // The trap handler in asm indexes contexts as `PROCESS_AREA + (n << log2(size_of::<Thread>()))`.
 const _: () = assert!(mem::size_of::<Thread>() == 32 * mem::size_of::<usize>());
-const _: () = assert!(mem::size_of::<ProcessImpl>() == (MAX_THREAD + 1) * mem::size_of::<Thread>());
+const _: () = assert!(mem::size_of::<ProcessImpl>() == (MAX_THREADS + 1) * mem::size_of::<Thread>());
 const _: () = assert!(mem::size_of::<ProcessImpl>() % PAGE_SIZE == 0);
 // The loader maps this many pages for PID 1 and for every initial process.
 #[cfg(target_pointer_width = "64")]
@@ -166,8 +138,6 @@ pub struct Process {
     pid: Pid,
 }
 
-fn fixup_irq(tid: TID) -> TID { if tid == IRQ_TID_SENTINAL { 0 } else { tid } }
-
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 /// Everything required to keep track of a single thread of execution.
@@ -217,52 +187,42 @@ impl Process {
     }
 
     pub fn current_thread_mut(&mut self) -> &mut Thread {
-        let process = process_impl();
-        assert!(process.hardware_thread != 0, "thread number was 0");
-        &mut process.threads[process.hardware_thread - 1]
+        let tid = self.current_tid();
+        self.thread_mut(tid)
     }
 
     pub fn current_thread(&self) -> &Thread {
-        let process = process_impl();
-        &mut process.threads[process.hardware_thread - 1]
-        // self.thread(process.hardware_thread - 1)
+        let tid = self.current_tid();
+        assert!(valid_tid(tid), "no current thread");
+        &process_impl().threads[tid - 1]
     }
 
-    pub fn current_tid(&self) -> TID {
-        let process = process_impl();
-        process.hardware_thread - 1
-    }
+    pub fn current_tid(&self) -> TID { process_impl().hardware_thread }
 
     pub fn thread_exists(&self, tid: TID) -> bool {
-        let tid = fixup_irq(tid);
-        tid < MAX_THREAD && process_impl().allocated_threads & (1 << tid) != 0
+        valid_tid(tid) && process_impl().allocated_threads & (1 << tid) != 0
     }
 
     /// Set the current thread number.
     pub fn set_tid(&mut self, tid: TID) {
-        let process = process_impl();
-        let tid = fixup_irq(tid);
         klog!("Switching to thread {}", tid);
-        assert!(tid < process.threads.len(), "attempt to switch to an invalid thread {}", tid);
-        process.hardware_thread = tid + 1;
-        if tid == IRQ_TID || tid == EXCEPTION_TID {
-            process.allocated_threads |= 1 << tid;
-        }
+        assert!(valid_tid(tid), "attempt to switch to an invalid thread {}", tid);
+        process_impl().hardware_thread = tid;
     }
 
     pub fn thread_mut(&mut self, tid: TID) -> &mut Thread {
-        let process = process_impl();
-        let tid = fixup_irq(tid);
-        assert!(tid < process.threads.len(), "attempt to retrieve an invalid thread {}", tid);
-        &mut process.threads[tid]
+        assert!(valid_tid(tid), "attempt to retrieve an invalid thread {}", tid);
+        &mut process_impl().threads[tid - 1]
     }
 
+    /// A free TID, searching round from the last one handed out; `None` once `MAX_THREADS`
+    /// threads exist (OD10: the initial thread counts).
     pub fn find_free_thread(&self) -> Option<TID> {
         let process = process_impl();
         let start = process.last_tid_allocated as usize;
-        for offset in 0..MAX_THREAD {
-            let tid = (start + offset) % MAX_THREAD;
-            if tid != IRQ_TID && tid != EXCEPTION_TID && process.allocated_threads & (1 << tid) == 0 {
+        for offset in 0..MAX_THREADS {
+            let tid = (start + offset) % MAX_THREADS + 1;
+            if process.allocated_threads & (1 << tid) == 0 {
                 process.last_tid_allocated = tid as u8;
                 return Some(tid);
             }
@@ -318,9 +278,7 @@ impl Process {
     pub fn setup_empty_process(pid: Pid) {
         let process = process_impl();
         assert_eq!(pid, crate::arch::current_pid(), "hardware pid does not match setup pid");
-        // By convention thread 0 is the trap thread, so the first ordinary thread is
-        // `INITIAL_TID`; the hardware thread number is one more than the TID.
-        process.hardware_thread = INITIAL_TID + 1;
+        process.hardware_thread = INITIAL_TID;
         process.allocated_threads = 0;
         process.last_tid_allocated = INITIAL_TID as u8;
         for thread in process.threads.iter_mut() {
@@ -340,7 +298,7 @@ impl Process {
         let process = process_impl();
         assert_eq!(pid, crate::arch::current_pid(), "hardware pid does not match setup pid");
         process.allocated_threads |= 1 << INITIAL_TID;
-        let thread = &mut process.threads[INITIAL_TID];
+        let thread = &mut process.threads[INITIAL_TID - 1];
         *thread = Default::default();
         thread.sepc = entry;
         thread.registers[1] = sp;
@@ -350,8 +308,9 @@ impl Process {
     /// WP-K4: `thread_create(entry, sp, arg)`. The caller has mapped its own stack and passes
     /// `sp`.
     pub fn setup_redoubt_thread(&mut self, new_tid: TID, entry: usize, sp: usize, arg: usize) {
+        assert!(valid_tid(new_tid), "attempt to create an invalid thread {}", new_tid);
         let process = process_impl();
-        let thread = &mut process.threads[new_tid];
+        let thread = &mut process.threads[new_tid - 1];
         *thread = Default::default();
         thread.sepc = entry;
         thread.registers[0] = EXIT_THREAD;
@@ -363,7 +322,7 @@ impl Process {
     /// Destroy a given thread: `false` if it did not exist.
     pub fn destroy_thread(&mut self, tid: TID) -> bool {
         // Ensure this thread is allocated, regardless of the PC it was given.
-        if !self.thread_exists(tid) || tid == IRQ_TID {
+        if !self.thread_exists(tid) {
             return false;
         }
 
@@ -378,8 +337,8 @@ impl Process {
 
     pub fn print_all_threads(&self) {
         let process = process_impl();
-        for (tid_idx, &thread) in process.threads.iter().enumerate() {
-            let tid = tid_idx;
+        for (index, &thread) in process.threads.iter().enumerate() {
+            let tid = index + 1;
             if thread.registers[1] != 0 {
                 Self::print_thread(tid, &thread);
             }
@@ -455,6 +414,9 @@ impl core::fmt::Display for Thread {
         Ok(())
     }
 }
+
+/// Whether `tid` names a thread slot: `1..=MAX_THREADS`.
+fn valid_tid(tid: TID) -> bool { (1..=MAX_THREADS).contains(&tid) }
 
 pub fn set_current_pid(pid: Pid) {
     let pid_idx = (pid.get() - 1) as usize;

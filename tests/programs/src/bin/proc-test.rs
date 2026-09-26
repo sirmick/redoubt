@@ -588,7 +588,7 @@ fn threads(out: &mut Out) {
     let top = stack + 4 * rd::PAGE_SIZE - 16;
     let first = rd::thread_create(entry_of(exiting_thread), top, 0).expect("thread_create");
     check!(out, first != 0, "thread_create returns a thread id");
-    // Every thread slot but this one and the trap thread's, then one more.
+    // Every thread slot but this one's, then one more.
     let mut made = 1;
     loop {
         let stack = match rd::map_anon(rd::PAGE_SIZE, rd::rw()) {
