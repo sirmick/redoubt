@@ -431,10 +431,8 @@ small bad tree it must fire on and a good one it must not. `mdbook build docs` r
 
 ### The docs checker in the bench
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:docs
 
 A `host-tests` case runs the checker's tests, among them one that checks this whole book and one
-that builds it with `mdbook` and fails on any warning; the checker then also reads code comments and
+that builds it with `mdbook` and fails on any warning; the checker also reads code comments and
 case descriptions, so they cite pages and rule IDs that exist.
-
-**Open:** none.
