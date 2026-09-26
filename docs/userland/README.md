@@ -88,13 +88,13 @@ provider through a `gatewayd` capability that holds the API key, never through a
 Status: planned · M4 (self-hosted development)
 
 Redoubt is developed on Redoubt. A developer works in a session like any other: `git` reaches its
-remotes through a gateway, the Elixir and Erlang compilers run on the box in beamlet, and Rust is
-built off the box and shipped signed ([development](development.md)). Programs and libraries
-reach other principals as signed packages from M5 (persist, install, share)
-([packages](packages.md)).
+remotes through a `gatewayd` git capability, the Elixir and Erlang compilers run on the box in
+beamlet, and Rust is built off the box. System code arrives in the signed boot bundle; a
+developer's own program arrives by SFTP and runs, unsigned, with the developer's own authority
+([development](development.md)). Programs and libraries reach other principals as signed packages
+from M5 (persist, install, share) ([packages](packages.md)).
 
-**Open:** how a Rust program built off the box reaches it and runs before packages exist (see
-[development](development.md)).
+**Open:** none.
 
 ## The layers
 
