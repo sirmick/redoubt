@@ -7,6 +7,7 @@
 mod budget;
 mod build;
 mod case;
+mod cruft;
 mod peer;
 mod qemu;
 mod sched_oracle;
@@ -138,6 +139,16 @@ fn main() -> Result<()> {
                 Some(why) => {
                     failures += 1;
                     println!("FAIL  {:<32}        {why}\n      {summary}", case.name);
+                }
+            }
+            continue;
+        }
+        if let Kind::NoCruft(gate) = &case.kind {
+            match cruft::check(&workspace, gate)? {
+                None => println!("PASS  {:<32}", case.name),
+                Some(why) => {
+                    failures += 1;
+                    println!("FAIL  {:<32}\n      {why}", case.name);
                 }
             }
             continue;
@@ -284,7 +295,7 @@ fn run_case(
             return Ok(vec![(String::new(), outcome, elapsed(started))]);
         }
         Kind::Boot(boot) => boot,
-        Kind::UnsafeBudget(_) | Kind::SshLoopback(_) | Kind::HostTests(_) => {
+        Kind::UnsafeBudget(_) | Kind::NoCruft(_) | Kind::SshLoopback(_) | Kind::HostTests(_) => {
             unreachable!("handled before the per-target loop")
         }
     };

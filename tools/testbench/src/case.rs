@@ -32,6 +32,9 @@ pub enum Kind {
     Build(Build),
     /// A ratchet on `unsafe` in the trusted computing base. Not a boot; reads the sources.
     UnsafeBudget(UnsafeBudget),
+    /// No leftover of a dropped interface, no silenced dead code, no unread Cargo feature, one
+    /// literal definition of each shared constant (`cruft.rs`). Not a boot; reads the sources.
+    NoCruft(NoCruft),
     /// `cargo test` for host crates, so the suite runs the unit tests that no boot can reach:
     /// a constant both the loader and the bench agree on is right in the machine's eyes even
     /// when it is wrong (see `libs/signing`). Not a boot.
@@ -60,6 +63,45 @@ pub struct SshLoopback {
 #[serde(deny_unknown_fields)]
 pub struct UnsafeBudget {
     pub budget: Vec<Budget>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NoCruft {
+    /// Files and directories searched, relative to the workspace root.
+    pub paths: Vec<String>,
+    /// Patterns no line may match.
+    pub forbidden: Vec<Forbidden>,
+    /// Where `allow(dead_code)` and `allow(unused...)` are refused.
+    pub no_allow_dead: Vec<String>,
+    /// Names with at most one literal-valued definition across `paths` and `definition_paths`.
+    pub one_definition: Vec<String>,
+    /// Searched for `one_definition` only.
+    #[serde(default)]
+    pub definition_paths: Vec<String>,
+    /// The only exemptions, each with its reason.
+    #[serde(default)]
+    pub allow: Vec<Allow>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Forbidden {
+    /// A regular expression; `(?i)` for one that ignores case.
+    pub pattern: String,
+    /// A line that also matches this is not a finding.
+    pub unless: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Allow {
+    /// A file, or a directory prefix.
+    pub path: String,
+    /// The rule exempted there: a `forbidden` pattern, `allow-dead`, `unused-feature`,
+    /// `one-definition:NAME`, `page-alias`, or `*` for every rule.
+    pub rule: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Deserialize)]
