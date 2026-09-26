@@ -54,7 +54,7 @@ the current project first.
   "max_active":2,
   "max_members":16,
   "document":{"path":"./docs/BUILD-PLAN.md","title":"Redoubt build plan"},
-  "qa_document":{"path":"./docs/WORKSPACE-QA.md","title":"Redoubt QA"},
+  "qa_document":{"path":"./.wash/QA.md","title":"Redoubt QA"},
   "members":{
     "architect":{
       "name":"Architect","model":"<frontier model ID>","effort":"high","approval":"auto","cwd":".",
@@ -173,7 +173,7 @@ rather than repeatedly launching the same blocked preset.
 ## First-class QA and design decisions
 
 Wash owns the durable QA records and the live **Questions** Markdown tab. Configure
-`qa_document` during workspace setup: `docs/WORKSPACE-QA.md` under the project root, title
+`qa_document` during workspace setup: `.wash/QA.md` under the project root, title
 `Redoubt QA`. Wash creates the file and atomically refreshes its complete history after
 every QA update, including actual human answers. The tab shows its path and write errors.
 Check `qa_document_status`; on error the backend records are safe and file writes retry.
@@ -219,7 +219,7 @@ Only the orchestrator or a reviewer tagged to that package can resolve, with evi
 Use the actual revision/references/evidence, not these placeholders. Pending human
 decisions prevent resolution. Reopen with a reason when evidence changes. Acceptance
 requires no unresolved blocking QA; record any deferred nonblocking question explicitly.
-At acceptance the orchestrator can commit the generated WORKSPACE-QA.md with the
+At acceptance the orchestrator can commit the generated `.wash/QA.md` with the
 review evidence; no per-question commit or manual export is needed. Wash is its only
 writer. `qa_document:null` stops file updates without deleting the file or QA records.
 Persist formal decisions/evidence in the owning project documents.

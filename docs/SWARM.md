@@ -36,7 +36,8 @@ not an automatic Wash runner. Acknowledge inbox messages and end the turn after 
 ## Questions and acceptance evidence
 
 QA is a first-class Wash record, surfaced as a live Questions Markdown tab. Wash is its sole
-writer; configure `qa_document` as `docs/WORKSPACE-QA.md` when setting up the workspace.
+writer; configure `qa_document` as `.wash/QA.md` when setting up the workspace (it is not
+documentation, so it lives outside `docs/`).
 Wash creates or loads that filename, then writes complete Markdown history after QA changes and human answers.
 Reusing it restores Wash checkpoints (threads, attribution and pending owner decisions); ordinary
 Markdown is preserved. Reassign reopened unfinished questions to the current team. Conflicting
