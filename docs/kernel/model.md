@@ -217,15 +217,8 @@ A **mutation** is one deliberate break planted in the model. Each variant of `en
 `self.broken(Mutation::...)`: one site for most variants, two or three where the rule is kept in
 more than one place, and a direct comparison with the mutation for `AbandonNoticeMissing` and
 `R11LendStaysMapped`. With no mutation, the model is the specified kernel.
-`Mutation::ALL` lists all 127 variants. `Mutation::rule()` names what each one breaks, but not
-always by the IDs these pages use. It returns `R1` to `R12` for the variants named after those
-rules, folding the open-call and dead-server variants into their parent rule, `I13` for one,
-and `policy` for the steward's. The rest return
-the name of the design text or the call they were written from: `IPC` for the R13 variants,
-`Messages`, `Process`, `Budget`, `Handle`, `serve`, `budget_create`, `process_create`, `mint`,
-and labels that name no page at all for the open-call limit, a weightless budget and I16's
-variants. The table below maps every variant to its ID; the code's grouping matters only to
-the tests that key on it.
+`Mutation::ALL` lists all 127 variants. `Mutation::rule()` returns the ID each one breaks, as in
+the table below, and `policy` for the steward's.
 
 - `every_rule_has_a_mutation` requires at least one variant for every kernel rule numbered 1
   to 12.
@@ -260,7 +253,7 @@ the tests that key on it.
 | [I6 (labels only grow downward)](invariants.md#i6-labels-only-grow-downward) | `LabelsAddedByParentClass` | adding labels needs a system-class caller |
 | [I8 (class and account inherited)](invariants.md#i8-class-and-account-inherited) | `ClassNotInherited` | a child's class is its parent's |
 | [I13 (every blocking call returns by its timeout)](invariants.md#i13-every-blocking-call-returns-by-its-timeout) | `TimeoutIgnoredWhileOthersRun`, `ExpireBudgetsFirst` | timeouts expire while others run; at one instant, timeouts before deadlines |
-| [I16 (DMA pages reset before reuse)](invariants.md#i16-dma-pages-reset-before-reuse) | `K5bFreeBeforeReset`, `K5bQuarantinedSlotCountsAsReset`, `K5bUnmapFreesDma`, `K5bQuarantineChargeDropped`, `K5bQuarantinedDeviceUsable`, `K5bResetClearsCoHolderReach` | pooling only after a confirmed reset, co-holders included; `unmap` keeping DMA frames; quarantine's charge and sweep |
+| [I16 (DMA pages reset before reuse)](invariants.md#i16-dma-pages-reset-before-reuse) | `DmaFreeBeforeReset`, `DmaQuarantinedSlotCountsAsReset`, `DmaUnmapFrees`, `DmaQuarantineChargeDropped`, `DmaQuarantinedDeviceUsable`, `DmaResetClearsCoHolderReach` | pooling only after a confirmed reset, co-holders included; `unmap` keeping DMA frames; quarantine's charge and sweep |
 | `policy` | `PolicyVaultWithoutOwnership`, `PolicyApproveIgnoresHash`, `PolicyShowLabelledToAll`, `PolicyNoPendingCap`, `PolicyCapPerAccount`, `PolicyNoFairShare`, `PolicyEndLeaseAdmitted`, `PolicyDeclassifyLive`, `PolicyDeclassifyWithoutReader`, `PolicyBlameNoWindow`, `PolicyBlamePerAccount`, `PolicyNoLockout`, `PolicySequentialIds`, `PolicyLoginWithKeydKey`, `PolicySubAgentOutlivesAgent`, `PolicyUnboundedLease`, `PolicyDeadSessionRequestsKept`, `PolicyRenderNotWhitelisted`, `PolicyLabelledFreeTextShown`, `PolicyWriteUp`, `PolicyServerHoldsSystemBudget`, `PolicyNarrowToSessionBudget`, `PolicyCarveFromUnlabelled`, `PolicyAuditUnfiltered` | the steward model's properties |
 
 Six rules are outside the model and have no variant: R15 (verified boot), R16 (image confinement), R17 (fail closed), R19 (kernel W^X), R23 (no test channels) and R24 (SUM and MXR clear). The model has no
@@ -336,7 +329,7 @@ The tests:
   results cannot show them: the `policy` variants; R12's, since scheduling shows only in timing;
   `R5NoMaskOnFire`, since every result is the same and the model's own R5 check catches it; the
   three open-call-limit variants, since random traces never reach the limit (the flood does);
-  and `K5bResetClearsCoHolderReach`, which only the I16 ghost check sees.
+  and `DmaResetClearsCoHolderReach`, which only the I16 ghost check sees.
 - `the_example_trace_is_what_the_model_does` rebuilds the example and requires the same text.
 - `hostile_traces_are_refused_cleanly` feeds fixed worst cases and 500 randomly damaged traces
   to the replayer. Each worst case must give an error; a damaged trace must not panic, and may

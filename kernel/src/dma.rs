@@ -224,7 +224,7 @@ impl MemoryManager {
                     // Pooled only after every slot of S confirmed in this very call.
                     assert!(
                         confirmed & s == s && confirmed & 1 << i != 0,
-                        "P1-1: a run pooled before its reset"
+                        "I16: a run pooled before its reset"
                     );
                     let run = run.take().expect("held");
                     self.pool(run);
