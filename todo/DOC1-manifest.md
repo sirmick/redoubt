@@ -85,6 +85,12 @@ I16 DMA pages reset before reuse.
   seed, no timebase: power off); R18 device objects are the only device authority; R19 the
   kernel's own mappings are W^X; R20 a reused PID inherits nothing; R21 crash blame names the
   current call's sender or nobody; R22 a range call costs what the page tables need, never what the length asks (the inventory, Q-12); R23 the production kernel carries no test-only diagnostic channel such as the scheduling trace (Q-29).
+- **Final kernel list (as written):** R13 one outcome per call, R14 unforgeable sender (ipc.md);
+  R15 verified boot, R16 image confinement, R17 fail closed (boot.md); R18 device authority
+  (devices.md); R19 kernel W^X, R22 range cost (memory.md); R20 PID reuse, R21 crash blame, with
+  "the exit endpoint is a receive right" folded in (processes.md); R23 no test channels
+  (scheduling.md); I16 DMA pages reset before reuse (invariants.md). Short names are the
+  parentheses of the defining headings. The servers set starts at R24.
 - The servers set takes the next free numbers, in the order its pages are written (the
   userland template has no Security properties section, so userland pages only cite).
 - `rule F` stays on `docs/testbench.md`.
@@ -476,6 +482,32 @@ switch-over does not rename "IPC1" verdict lines. From the inventory (D3): `benc
 `miri-vendored-unsafe.md`, `dma-reset-rv32.md`, `programs-build-rerun.md` (verify first),
 `account0-share-chain.md`, `page-table-freeing.md`, `mmio-record-frames.md`,
 `endpoint-destroyed-open-calls.md`, `shared-image-pages.md`.
+Found while writing the kernel set (each linked from the page named; the kernel pages' own
+notes give the Done-when):
+- `device-mapping-exec.md` (memory, devices): `set_flags` accepts EXECUTE on device registers
+  and held DMA pages; two `map_device` mappings can be one RW and one RX alias. Done when both
+  refuse EXECUTE on non-RAM and DMA frames, with an attack case.
+- `map-anon-search-cost.md` (memory): `map_anon`'s address search runs before any budget check
+  and is quadratic in its 256 MiB area, uncharged and non-preemptible: a machine-wide stall for
+  one page of budget. Done when the budget is checked first and the search is linear, with a
+  timing case.
+- `boot-root-frame.md` (budgets): `root`'s own frame is uncharged, so the boot tree promises one
+  page more than exists; exhaustion ends in a kernel stop. Done when `root`'s limit counts it.
+- `deadline-destroy-billing.md` (scheduling): a deadline's destruction is billed only up to the
+  lift, and a weight-0 budget's not at all. Done when the whole destruction has a payer.
+- `endpoint-reclaim.md` (objects): no call destroys an endpoint; it lives until its owner budget
+  dies. Decide whether one should be reclaimable on its own.
+- `pid-pool-pinning.md` (processes): untaken notices hold PIDs outside every process limit, so
+  one creator can take the global pool of 63. Done when a pending notice counts somewhere.
+- `abi-model-disagreements.md` (abi): the model and the kernel order some checks differently
+  (`budget_create`, `process_create`, `receive`) and the model lacks `MAX_RUNS` and the 256 MiB
+  area. Done when they agree.
+- `clear-sum-at-entry.md` (memory-layout): the kernel relies on the firmware leaving
+  `sstatus.SUM` clear; clear it at entry.
+- `physmap-ram-bound.md` (memory-layout): refuse, or clamp, RAM above `PHYSMAP_SIZE` in the
+  loader.
+`kernel-attack-gaps.md` is kept as working material in the root `todo/` during DOC1 and moves
+to `docs/todo/` with the top-level set.
 
 ### C8. `docs/beyond/` (one file per idea)
 `fpga-platform.md` (with local inference and the approval button), `smp.md`, `rv32.md`,

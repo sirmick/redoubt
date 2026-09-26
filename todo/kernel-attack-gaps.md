@@ -81,3 +81,62 @@ Format: page, section: the claim, and what no case attacks.
 - R16 (image confinement): an image cut short inside its segment data, a writable and executable segment, and a bundle of more than 63 programs are not attacked; the truncated-image case runs on rv64 only.
 - R17 (fail closed): a short or missing seed and a missing timebase are not attacked (every QEMU boot supplies both); nor an initrd under 64 bytes.
 - Failure and restart: a reboot through `system_reset` (the chain rerun, the bundle verified again) is not attacked.
+
+## memory-layout.md
+- physmap / kernel half: no case has a user-mode load, store or fetch at a mapped kernel-half
+  address (physmap, kernel image, per-process context page). `legacy-gone` only jumps to
+  never-mapped per-process addresses.
+- kernel W^X boot check: `kernel-wx` is rv64 only; the check runs on rv32 but no case reads it.
+- end of user space on rv32: `map-fixed-attack` is rv64 only; rv32 is covered only by
+  `host:redoubt-sys::map_fixed_range_check_refuses_rv32_wraparound`, a hand copy of the
+  kernel's `user_range`, not the kernel.
+- page 0 on rv32: same (host copy only).
+- `satp`/TLB: no case attacks a stale translation surviving an address-space switch or an unmap
+  (single hart, global flush; argued from the code).
+- lent bit: no case has a lender load or store its own lent-out page (it faults by the code).
+- placement areas: the message area (`0x4000_0000`, 4 MiB) and `map_anon` area bases are not
+  attacked as addresses (not security claims; listed for completeness).
+
+## abi.md
+- The kernel keeps every register outside a0-a7 across an `ecall`: no case attacks it.
+- A record at a device mapping: attacked (bench:ipc-outcomes) only as a `call` body and as
+  `budget_create`/`budget_usage` records; `send`, `reply`, `receive`, `process_start` records at a
+  device mapping are not attacked (they share `record_frames`).
+- The order of checks after decoding: pinned by a case only for the first checks of
+  `budget_create`, `budget_usage` (records before the handle: budget-syscall-attack), `call`
+  (record before endpoint lookup: ipc-outcomes), `receive` (WrongObject), `serve`,
+  `process_start` (count before record: process-attack). The rest of each row (stages 2 to 5)
+  is not attacked.
+- Kernel against model order: no trace replay (model.md P · M1), so the two rows below were
+  found by reading only.
+- A valid call number with bit 32 set on rv64: not attacked (legacy-gone does it for 0..=46 only).
+
+## invariants.md
+- I7: a message between user budgets with different labels: no case (same gap as ipc.md R1).
+- I9: reuse of a freed frame (a case cannot choose which frame it gets; mem-attack says so): model only.
+- I9: a lender's own read or write of a page it has lent: no case (return-lent-unmapped tries
+  unmap/remap only).
+- I11: turns among several groups on one endpoint: model only (same as ipc.md R2).
+- I12: budget and message id never reused: invisible to a process, model only; endpoint, device and
+  process-object ids: nothing attacks them, not even the model (it checks budget ids only).
+- I13: timeouts on a multi-hart boot: `timeouts` has no `smp` key.
+- I16: a live co-holder that still reaches a device reset at another holder's death: model only (`reset_at_one_death_does_not_cover_a_co_holder`).
+- I16: `dma-reset-reuse` and `dma-reset-quarantine` are `arch = ["rv64"]` only.
+- I1 and I10: no mutation targets I1 alone; I10's `R10KeepCarvedLimits` is caught first by the
+  per-step R6 recount, so `budget_lifecycle`'s own check may be doing no unique work. Not a gap in
+  the kernel, a note on the model.
+
+## model.md
+- every_rule_has_a_mutation: requires variants only for rules numbered 1 to 12; nothing
+  requires R13, R14, R21, I16 (or R4a/R4b separately) to keep a variant.
+- R18 (device authority), R20 (PID reuse), R22 (range cost): modelled, but no mutation;
+  R20 and part of R22 have scripted host tests only.
+- R15, R16, R17, R19, R23: not in the model at all.
+- redoubt-stride differential: `a_broken_model_disagrees` does not list `R12ExitRunsFree` or
+  `R12TimeoutWakePreempts` (ExitRunsFree's site is in `sched.rs`, which the differential
+  drives via `thread_exited`, so it could be added).
+- steward_noninterference: leaves out vault approve/deny, ending a vault session, and server
+  crashes; a leak through crash blame or session end is unchecked.
+- Model replay on the real kernel: no case; every "attacked only in the model" on kernel pages
+  rests on it.
+- budget-test's hand-copied model sequence: nothing checks it still matches the model.

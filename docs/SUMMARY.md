@@ -17,10 +17,10 @@
   - [Processes](kernel/processes.md)
   - [Devices and DMA](kernel/devices.md)
   - [Boot and verified boot](kernel/boot.md)
-  - [Memory layout]()
-  - [System call reference]()
-  - [Invariants]()
-  - [The executable model]()
+  - [Memory layout](kernel/memory-layout.md)
+  - [System call reference](kernel/abi.md)
+  - [Invariants](kernel/invariants.md)
+  - [The executable model](kernel/model.md)
 
 # The servers
 

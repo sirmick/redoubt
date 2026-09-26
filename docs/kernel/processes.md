@@ -308,8 +308,7 @@ Status: built · tested: bench:process-lifecycle, bench:process-attack, bench:st
 - **Restart is policy.** The kernel restarts nothing. The endpoint a server received on outlives
   it, so callers queued there wait for the server `init` starts again
   ([init](../servers/init.md#restarts-and-reboots)).
-- No argument to any process or thread call can make the kernel panic (I14 (no call panics the
-  kernel)).
+- No argument to any process or thread call can make the kernel panic (I14 (no call panics the kernel)).
 
 ## Residual risks
 
