@@ -90,14 +90,18 @@ In this order. Each step lands with the attack cases for what it builds.
      [clearing SUM and MXR at entry](../todo/clear-sum-at-entry.md)
      ([R24 (SUM and MXR clear)](../kernel/memory-layout.md#r24-sum-and-mxr-clear)),
      [the boot hart's interrupt context](../todo/boot-hart-context.md),
-     [scans of every kernel-object frame](../todo/kernel-scan-bounds.md).
+     [scans of every kernel-object frame](../todo/kernel-scan-bounds.md),
+     [the kernel's print on a panic](../todo/print-panic-reentry.md),
+     [the kernel crate's host test target](../todo/hosted-kernel-tests.md),
+     [a stray file in the kernel's tree](../todo/kernel-test-hello.md).
    - **Servers:** [an account-0 client's share chain](../todo/account0-share-chain.md),
      [the 9P skeleton's rollback on a discarded reply](../todo/ninep-discard-rollback-test.md),
      [compiled-in bucket counts](../todo/server-bucket-counts.md),
      [consoled's interrupt name](../todo/consoled-irq-name.md),
      [consoled's refused-request handles](../todo/consoled-unknown-request-handles.md),
      [host tests the bench does not run](../todo/host-tests-in-bench.md),
-     [loader stub test coverage](../todo/loader-stub-coverage.md).
+     [loader stub test coverage](../todo/loader-stub-coverage.md),
+     [raw memory calls beside the runtime](../todo/raw-syscall-runtime-audit.md).
    - **beamlet:** [the code path's search order](../todo/module-search-order.md).
 2. **`init` and the boot manifest.** The loader loads only the kernel and `init`
    ([boot](../kernel/boot.md#the-loader-loads-only-the-kernel-and-init)); `init` reads the

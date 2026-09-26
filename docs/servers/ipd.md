@@ -304,7 +304,8 @@ Status: built · tested: host:redoubt-ipd::no_link_is_unreachable_until_it_comes
 - **A shared `ipd` is shared state.** Its clients share one stack's memory, timers and link; where
   that matters, each trust domain gets its own `ipd`.
 - **smoltcp is vendored code.** It is read and built from the tree, not fetched, but a bug in it is a
-  bug in `ipd`; it is fuzzed only through `ipd`'s own targets.
+  bug in `ipd`; it is fuzzed only through `ipd`'s own targets, and its `unsafe` has never run
+  under Miri ([todo](../todo/miri-vendored-unsafe.md)).
 
 ## Why
 

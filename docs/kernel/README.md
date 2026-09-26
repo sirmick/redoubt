@@ -224,6 +224,9 @@ two, where a file serves two mechanisms).
   overlap RAM or an interrupt controller), and it checks its own mappings are W^X before the
   first process runs ([R19 (kernel W^X)](memory.md#r19-kernel-wx)). The loader is TCB for the
   rest ([boot](boot.md)).
+- **A panic while printing re-enters the console.** A panic inside `print!` reaches the panic
+  handler's own `println!` while the first write still holds the console; the handler then powers
+  off. Follow-up: [todo](../todo/print-panic-reentry.md).
 - **Test builds carry more.** The kernel source has features only some bench cases turn on:
   `sched-trace`, `dma-reset-deaf` and `smp`, and `sched-inject-tie-fault` for a recorded negative
   run. A production build leaves them off
