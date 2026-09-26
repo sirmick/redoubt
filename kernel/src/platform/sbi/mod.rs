@@ -38,15 +38,3 @@ pub fn reset(reboot: bool) {
         sbi_rt::system_reset(sbi_rt::Shutdown, sbi_rt::NoReason);
     }
 }
-
-/// `SysCall::PlatformSpecific` for SBI platforms. There are no platform calls any more: the hart
-/// timer, whose two calls these were, is the kernel's (`time.rs`). The legacy call itself goes
-/// with WP-K6.
-pub fn platform_call(
-    _pid: redoubt_abi::PID,
-    _op: usize,
-    _a2: usize,
-    _a3: usize,
-) -> Result<redoubt_abi::Result, redoubt_abi::Error> {
-    Err(redoubt_abi::Error::UnhandledSyscall)
-}

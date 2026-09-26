@@ -2,9 +2,8 @@
 
 //! The Redoubt system calls (KERNEL-SPEC.md), decoded by `redoubt-sys`.
 //!
-//! Until WP-K6 deletes it, the legacy Redoubt interface is served beside this one: the trap handler
-//! sends every `ecall` whose `a0` is at least `redoubt_sys::NUMBER_BASE` here, and the rest to
-//! `syscall.rs`. The two share nothing but the kernel's objects.
+//! The trap handler sends every user-mode `ecall` here; an `a0` outside the call table is an
+//! unknown number (`InvalidArgument`).
 //!
 //! Every call runs the spec's stages in order (KERNEL-SPEC.md, Errors and the order of checks):
 //! `Call::decode` checks the registers; the records a call passes are then checked and copied

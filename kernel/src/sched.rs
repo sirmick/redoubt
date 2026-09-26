@@ -30,9 +30,13 @@
 //! `kmain` picks ([`pick`]): the queue's lowest rank, then the next thread of that budget after its
 //! round-robin cursor, in (pid, tid) order; the pick starts a slice. The running thread keeps the
 //! CPU until its slice ends, it blocks or exits, or a budget deadline fires; a wake never preempts
-//! (`time.rs` arms the timer for the slice's end). A legacy direct switch (a borrowed quantum)
-//! runs another budget with no pick: [`leave`] deschedules the old one and the slice continues
-//! (INTERIM, until WP-K6).
+//! (`time.rs` arms the timer for the slice's end).
+//!
+//! # `kmain`'s switch
+//! `kmain` runs its pick with [`switch_to`], a private S-mode `ecall` into the kernel's own trap
+//! handler, which saves `kmain`'s context as it saves a thread's and resumes the picked thread
+//! ([`switch`]). It is not a system call: its tag is outside the call table, and a user-mode
+//! `ecall` with it is an unknown number (`InvalidArgument`) like any other.
 
 use redoubt_abi::{PID, TID};
 use redoubt_stride::{Budgets, Cpu, State};
@@ -42,7 +46,7 @@ use crate::budget::BudgetFrame;
 use crate::cell::KernelCell;
 use crate::handle::BudgetRef;
 use crate::mem::MemoryManager;
-use crate::services::SystemServices;
+use crate::services::{ArchProcess, KERNEL_PID, SystemServices};
 
 /// Time slice, in microseconds (KERNEL-SPEC.md, Constants).
 pub const SLICE_US: u64 = 10_000;
@@ -362,11 +366,46 @@ pub fn slice_over() -> bool { crate::time::slice_end() <= crate::time::now_us() 
 /// and the CPU goes to `kmain`, which picks again. Its budget is descheduled as the kernel leaves
 /// for `kmain` ([`leave`]).
 pub fn preempt(ss: &mut SystemServices, tid: TID) {
-    crate::syscall::reset_switchto_caller();
-    let kernel = PID::new(1).expect("PID 1");
-    ss.activate_process_thread(tid, kernel, 0, true)
-        .expect("the kernel can always run");
-    crate::syscall::restore_last_thread(ss);
+    ss.activate_process_thread(tid, KERNEL_PID, 0, true).expect("the kernel can always run");
+}
+
+/// `a0` of `kmain`'s switch: outside the call table (redoubt-sys numbers run from `NUMBER_BASE`
+/// + 1), so a user-mode `ecall` with it is refused as an unknown number.
+const SWITCH_TAG: usize = 0x5357_4954;
+/// The switch's answer in `kmain`'s `a0`: the thread ran, and the CPU is back with `kmain`.
+const RAN: u64 = 0;
+/// The switch's answer in `kmain`'s `a0`: the thread cannot be switched to, and nothing ran.
+const NOT_RUNNABLE: u64 = 1;
+
+/// The picked thread cannot run: it died since it was picked.
+pub struct NotRunnable;
+
+/// `kmain` runs `(pid, tid)` until the CPU comes back to it (the thread blocked, exited or was
+/// preempted). The `ecall`'s trap is [`switch`].
+pub fn switch_to(pid: PID, tid: TID) -> Result<(), NotRunnable> {
+    match crate::arch::syscall::switch_trap(SWITCH_TAG, pid.get() as usize, tid) as u64 {
+        RAN => Ok(()),
+        _ => Err(NotRunnable),
+    }
+}
+
+/// The trap of [`switch_to`] (an `ecall` from S-mode): make `(pid, tid)` current, or leave
+/// `kmain` current with [`NOT_RUNNABLE`]. Only `kmain` switches, and only with [`SWITCH_TAG`];
+/// anything else is a kernel bug. The caller resumes whatever is current.
+pub fn switch(ss: &mut SystemServices, tag: usize, pid: usize, tid: TID) {
+    assert!(
+        ss.current_pid() == KERNEL_PID && tag == SWITCH_TAG,
+        "an S-mode ecall that is not kmain's switch: pid {}, a0 {:#x}",
+        ss.current_pid(),
+        tag
+    );
+    let pid = PID::new(pid as u8).expect("kmain switches to a process");
+    let kmain = ArchProcess::with_current(|p| p.current_tid());
+    // `kmain` reads `a0` when it next runs: once the CPU comes back to it.
+    ss.set_redoubt_result(KERNEL_PID, kmain, &[RAN, 0, 0, 0, 0, 0, 0, 0]).expect("kmain exists");
+    if ss.activate_process_thread(kmain, pid, tid, true).is_err() {
+        ss.set_redoubt_result(KERNEL_PID, kmain, &[NOT_RUNNABLE, 0, 0, 0, 0, 0, 0, 0]).expect("kmain exists");
+    }
 }
 
 /// The queue's raw events, for the bench's independent rank oracle (`tools/testbench`,

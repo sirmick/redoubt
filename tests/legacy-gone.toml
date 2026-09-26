@@ -1,0 +1,35 @@
+description = "The legacy interface is gone: every number below the Redoubt call table (on rv64 also with bit 32 or 63 set), the first above it and the kernel's private switch tag are refused from user mode with InvalidArgument and zeros, and nothing the old calls asked for happens (checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# Built with the checks on (docs/testbench.md, "Debug assertions").
+debug_assertions = true
+# PID 2 log-server; PID 3 legacy-gone, alone with the boot receive right. It takes the budgets
+# from log-server (TAKE_GIFTS) to spawn the children that jump to the old magic addresses.
+programs = ["log-server", "legacy-gone"]
+timeout_secs = 60
+# Progress, the attacker's report: each line is a kernel result read by the program (a call's
+# registers, map_fixed, an exit notice). A number that is not refused prints FAIL, forbidden.
+# The verdict: the flag the legacy rows' callback would set is clear after the console's
+# interrupt fired (log-server's echo), and log-server's DONE names PID 3 with a clean power-off,
+# which a stopped kernel never reaches.
+expect = [
+    '^\[server\] gifts given to pid 3$',
+    '^\[pid 3\] \[legacy-gone\] (261|355) numbers swept$',
+    '^\[pid 3\] \[legacy-gone\] SwitchTo \(7\) -> refused: true$',
+    '^\[pid 3\] \[legacy-gone\] Shutdown \(23\) -> refused: true$',
+    '^\[pid 3\] \[legacy-gone\] the private switch tag from user mode -> refused: true$',
+    '^\[pid 3\] \[legacy-gone\] map_fixed at the MapMemory rows. address -> fresh page: true$',
+    '^\[pid 3\] \[legacy-gone\] a child jumping to the old RETURN_FROM_ISR faulted: true$',
+    '^\[pid 3\] \[legacy-gone\] a child jumping to the old RETURN_FROM_EXCEPTION_HANDLER faulted: true$',
+    '^\[pid 3\] \[legacy-gone\] waiting for the console interrupt$',
+    "^\\[server\\] irq: received 'y'$",
+    '^\[pid 3\] \[legacy-gone\] no callback ran: true$',
+    '^\[server\] done: reported by pid 3; still serving$',
+]
+forbid = ['\] FAIL', 'BREACH']
+poweroff = true
+reporter = "legacy-gone"
+
+[[input]]
+after = '^\[pid 3\] \[legacy-gone\] waiting for the console interrupt$'
+send = "y"

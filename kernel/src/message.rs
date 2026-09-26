@@ -51,7 +51,7 @@ use crate::endpoint::Group;
 use crate::handle::{BudgetRef, DeviceRef, EndpointRef, Handle, Object};
 use crate::kframe;
 use crate::mem::MemoryManager;
-use crate::services::SystemServices;
+use crate::services::{KERNEL_PID, SystemServices};
 
 /// The cost table (KERNEL-SPEC.md, What objects cost), in pages.
 pub const OPEN_CALL_PAGES: u64 = 1;
@@ -525,12 +525,8 @@ fn settle(
         // fail_wait published the full outcome, including a lend consumed after receipt.
         return Ok(None);
     }
-    let ppid = ss.get_process(pid).expect("the running process").ppid;
-    crate::syscall::reset_switchto_caller();
     // `can_resume: false` is what takes this thread off the ready list (services.rs).
-    ss.activate_process_thread(tid, ppid, 0, false)
-        .expect("the parent of a running process can run");
-    crate::syscall::restore_last_thread(ss);
+    ss.activate_process_thread(tid, KERNEL_PID, 0, false).expect("the kernel can always run");
     Ok(None)
 }
 

@@ -4,6 +4,11 @@
 #![no_main]
 #![no_std]
 
+// `kmain`'s switch enters the trap handler as an S-mode `ecall` would (`sched::switch_to`); only
+// SBI firmware leaves S-mode `ecall` to the kernel's own design.
+#[cfg(not(feature = "sbi"))]
+compile_error!("the kernel runs under SBI firmware: enable the `sbi` feature (or `qemu-virt`)");
+
 #[macro_use]
 mod debug;
 
@@ -25,7 +30,6 @@ mod platform;
 mod process;
 mod redoubt;
 mod services;
-mod syscall;
 mod sched;
 mod time;
 
@@ -86,7 +90,7 @@ pub unsafe extern "C" fn init(
 pub extern "C" fn kmain() {
     // SMP bring-up spike: start a second hart and validate the spinlock big-kernel-lock
     // under real cross-hart contention before entering the scheduler. See arch/riscv/smp.rs.
-    #[cfg(all(feature = "smp", feature = "sbi"))]
+    #[cfg(feature = "smp")]
     crate::arch::smp::run();
 
     // The loader wrote every boot program's image: make instruction fetch see it before the
@@ -107,10 +111,9 @@ pub extern "C" fn kmain() {
             Some((pid, tid)) => {
                 #[cfg(feature = "debug-print")]
                 println!("  ->PID{:?}:{}", pid, tid); // keep this succinct as it happens often
-                use arch::syscall::kernel_syscall;
                 // A process that cannot be switched to (it died since it was picked) is simply
                 // not run: pick again.
-                if kernel_syscall(redoubt_abi::SysCall::SwitchTo(pid, tid)).is_err() {
+                if crate::sched::switch_to(pid, tid).is_err() {
                     continue;
                 }
             }

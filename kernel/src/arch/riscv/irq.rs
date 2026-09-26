@@ -1,27 +1,17 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-use redoubt_abi::SysCall;
 use riscv::register::{scause, sepc, sstatus, stval};
 
 use crate::arch::current_pid;
 use crate::arch::exception::RiscvException;
 use crate::arch::mem::MemoryMapping;
 use crate::arch::process::{EXIT_THREAD, Thread};
-use crate::arch::process::{Process as ArchProcess, RETURN_FROM_EXCEPTION_HANDLER};
+use crate::arch::process::Process as ArchProcess;
 use crate::services::SystemServices;
 
 extern "Rust" {
     fn _redoubt_syscall_return_result(args: &[usize; 8], context: &Thread) -> !;
-}
-
-/// Resume `context`, delivering `result` in its argument registers.
-///
-/// The result is serialized with `to_args()` rather than by reinterpreting the enum's
-/// memory as eight registers. The two only coincide when every field is exactly one
-/// register wide, which is not the case on rv64 (e.g. a `SID` is four `u32`s).
-fn return_result(result: &redoubt_abi::Result, context: &Thread) -> ! {
-    return_registers(&result.to_args(), context)
 }
 
 /// Resume `context` with `a0..=a7` = `args`.
@@ -42,13 +32,12 @@ mod intc;
 
 /// The hart timer backend. The timer is the kernel's (`crate::time`), never a device userspace
 /// owns.
-#[cfg_attr(feature = "sbi", path = "timer_sbi.rs")]
+#[path = "timer_sbi.rs"]
 pub mod timer;
 
 pub fn init() {
     #[cfg(feature = "plic")]
     intc::init();
-    #[cfg(feature = "sbi")]
     timer::init();
 }
 
@@ -76,40 +65,20 @@ fn preempt() -> ! {
     resume_current()
 }
 
-/// Convert a RISC-V `Exception` into a Redoubt exception argument list.
-fn generate_exception_args(ex: &RiscvException) -> Option<[usize; 3]> {
-    match *ex {
-        RiscvException::InstructionAddressMisaligned(epc, addr) => {
-            Some([redoubt_abi::ExceptionType::InstructionAddressMisaligned as usize, epc, addr])
-        }
-        RiscvException::InstructionAccessFault(epc, addr) => {
-            Some([redoubt_abi::ExceptionType::InstructionAccessFault as usize, epc, addr])
-        }
-        RiscvException::IllegalInstruction(epc, instruction) => {
-            Some([redoubt_abi::ExceptionType::IllegalInstruction as usize, epc, instruction])
-        }
-        RiscvException::LoadAddressMisaligned(epc, addr) => {
-            Some([redoubt_abi::ExceptionType::LoadAddressMisaligned as usize, epc, addr])
-        }
-        RiscvException::LoadAccessFault(epc, addr) => {
-            Some([redoubt_abi::ExceptionType::LoadAccessFault as usize, epc, addr])
-        }
-        RiscvException::StoreAddressMisaligned(epc, addr) => {
-            Some([redoubt_abi::ExceptionType::StoreAddressMisaligned as usize, epc, addr])
-        }
-        RiscvException::StoreAccessFault(epc, addr) => {
-            Some([redoubt_abi::ExceptionType::StoreAccessFault as usize, epc, addr])
-        }
-        RiscvException::InstructionPageFault(epc, addr) => {
-            Some([redoubt_abi::ExceptionType::InstructionPageFault as usize, epc, addr])
-        }
-        RiscvException::LoadPageFault(epc, addr) => {
-            Some([redoubt_abi::ExceptionType::LoadPageFault as usize, epc, addr])
-        }
-        RiscvException::StorePageFault(epc, addr) => {
-            Some([redoubt_abi::ExceptionType::StorePageFault as usize, epc, addr])
-        }
-        _ => None,
+/// A system call: every user-mode `ecall`, and the only decoder, `redoubt::handle` (redoubt-sys).
+/// It never returns to the trap handler: the caller resumes past its `ecall` with the result,
+/// or whatever is current runs.
+fn system_call(pid: redoubt_abi::PID, regs: [usize; 8]) -> ! {
+    let tid = ArchProcess::with_current_mut(|p| {
+        p.current_thread_mut().sepc += 4;
+        p.current_tid()
+    });
+    match crate::redoubt::handle(pid, tid, &regs.map(|r| r as u64)) {
+        // Every result register holds at most 32 bits or one `usize` (redoubt-sys).
+        crate::redoubt::Outcome::Return(out) => ArchProcess::with_current_mut(|p| {
+            return_registers(&out.map(|r| r as usize), p.current_thread())
+        }),
+        crate::redoubt::Outcome::Resume => resume_current(),
     }
 }
 
@@ -155,7 +124,7 @@ pub extern "C" fn trap_handler(
     if from_user {
         crate::sched::from_user();
     }
-    // Every entry but the kernel's own `SwitchTo` answers the deadlines that have passed first
+    // Every entry but `kmain`'s switch answers the deadlines that have passed first
     // (`time.rs`), so a deadline beats anything that enters after it. If that ended the entering
     // process (a budget deadline), there is nothing of it left to handle: run what is current.
     // A budget deadline is a preemption point (R12): the entering thread yields the CPU before
@@ -192,57 +161,13 @@ pub extern "C" fn trap_handler(
         );
     }
     match ex {
-        // Syscall
-        RiscvException::CallFromSMode(_epc, _) | RiscvException::CallFromUMode(_epc, _) => {
-            // We got here because of an `ecall` instruction, either from User mode (sc==8)
-            // or from Supervisor mode (sc==9).  When we return, skip past the `ecall`
-            // instruction.
-            // If this is a call such as `SwitchTo`, then we will want to adjust the return
-            // value of the current process prior to performing the switch in order to
-            // avoid constantly executing the same instruction.
-            let tid = ArchProcess::with_current_mut(|p| {
-                p.current_thread_mut().sepc += 4;
-                p.current_tid()
-            });
-            // A Redoubt call (redoubt-sys): its numbers start above every legacy one.
-            if a0 >= redoubt_sys::NUMBER_BASE as usize {
-                let regs = [a0, a1, a2, a3, a4, a5, a6, a7].map(|r| r as u64);
-                match crate::redoubt::handle(pid, tid, &regs) {
-                    // Every result register holds at most 32 bits or one `usize` (redoubt-sys).
-                    crate::redoubt::Outcome::Return(out) => ArchProcess::with_current_mut(|p| {
-                        return_registers(&out.map(|r| r as usize), p.current_thread())
-                    }),
-                    crate::redoubt::Outcome::Resume => ArchProcess::with_current_mut(|p| {
-                        crate::arch::syscall::resume(current_pid().get() == 1, p.current_thread())
-                    }),
-                }
-            }
-            let call = SysCall::from_args(a0, a1, a2, a3, a4, a5, a6, a7).unwrap_or_else(|_| {
-                ArchProcess::with_current_mut(|p| {
-                    return_result(
-                        &redoubt_abi::Result::Error(redoubt_abi::Error::UnhandledSyscall),
-                        p.current_thread(),
-                    )
-                })
-            });
-
-            let response = crate::syscall::handle(pid, tid, call)
-                .unwrap_or_else(redoubt_abi::Result::Error);
-
-            // println!("Syscall Result: {:?}", response);
-            ArchProcess::with_current_mut(|p| {
-                let thread = p.current_thread();
-                // If we're resuming a process that was previously sleeping, restore the
-                // thread context. Otherwise, keep the thread context the same and pass
-                // the return values in 8 argument registers.
-                if response == redoubt_abi::Result::ResumeProcess {
-                    crate::arch::syscall::resume(current_pid().get() == 1, thread);
-                } else {
-                    // println!("Returning to address {:08x}", thread.sepc);
-                    return_result(&response, thread);
-                }
-            });
+        // `kmain`'s switch (`sched::switch_to`), the one S-mode `ecall`: resumed past it.
+        RiscvException::CallFromSMode(..) => {
+            ArchProcess::with_current_mut(|p| p.current_thread_mut().sepc += 4);
+            SystemServices::with_mut(|ss| crate::sched::switch(ss, a0, a1, a2));
+            resume_current()
         }
+        RiscvException::CallFromUMode(..) => system_call(pid, [a0, a1, a2, a3, a4, a5, a6, a7]),
         // The kernel's timer: what was due was answered at this entry; arm for what is next.
         RiscvException::SupervisorTimerInterrupt(_) => {
             crate::time::on_interrupt();
@@ -276,7 +201,7 @@ pub extern "C" fn trap_handler(
         }
 
         // See if it's a known exception, such as writing to a demand-paged area
-        // or returning from a handler or thread. If so, handle the exception
+        // or returning from a thread. If so, handle the exception
         // and return right away.
         RiscvException::StorePageFault(_pc, addr) | RiscvException::LoadPageFault(_pc, addr) => {
             #[cfg(all(feature = "debug-print", feature = "print-panics"))]
@@ -304,26 +229,6 @@ pub extern "C" fn trap_handler(
             .ok(); // If this fails, fall through.
         }
 
-        RiscvException::InstructionPageFault(RETURN_FROM_EXCEPTION_HANDLER, _offset) => {
-            // A process can branch here on purpose without ever having entered an
-            // exception handler. Only perform the resume dance if the process was
-            // genuinely in an Exception state; otherwise fall through to the
-            // unhandled-fault path, which terminates just this process.
-            if SystemServices::with_mut(|ss| ss.finish_exception_handler_and_resume(pid)).is_ok() {
-                ArchProcess::with_current_mut(|p| {
-                    let pc_adjust = a0 as isize;
-                    if pc_adjust < 0 {
-                        p.current_thread_mut().sepc -= pc_adjust.abs() as usize;
-                    } else {
-                        p.current_thread_mut().sepc += pc_adjust.abs() as usize;
-                    }
-                    crate::arch::syscall::resume(pid.get() == 1, p.current_thread());
-                });
-            }
-            // On Err: do nothing here, let control reach the bottom-of-handler
-            // containment that calls terminate_process(pid).
-        }
-
         RiscvException::InstructionPageFault(EXIT_THREAD, _offset)
             if ArchProcess::with_current(|process| process.current_tid())
                 >= crate::arch::process::INITIAL_TID =>
@@ -343,37 +248,6 @@ pub extern "C" fn trap_handler(
         // swapped out.
         _ => {
             println!("!!! Unrecognized exception: {:x?}", ex);
-        }
-    }
-
-    // This exception is not due to something we're aware of. In this case,
-    // determine if there is an exception handler in this particular program
-    // and call that handler if so.
-    if let Some(args) = generate_exception_args(&ex) {
-        if let Some(handler) = SystemServices::with_mut(|ss| ss.begin_exception_handler(pid)) {
-            klog!("Exception handler for process exists ({:x?})", handler);
-            // If this is the sort of exception that may be able to be handled by
-            // the userspace program, generate a list of arguments to pass to
-            // the handler.
-            // Invoke the handler in userspace and exit this exception handler.
-            klog!(
-                "At start of exception, current thread was: {}",
-                SystemServices::with(|ss| ss.get_process(pid).unwrap().current_thread)
-            );
-            ArchProcess::with_current_mut(|process| {
-                crate::arch::syscall::invoke(
-                    process.thread_mut(crate::arch::process::EXCEPTION_TID),
-                    current_pid().get() == 1,
-                    handler.pc,
-                    handler.sp,
-                    RETURN_FROM_EXCEPTION_HANDLER,
-                    &args,
-                );
-                crate::arch::syscall::resume(
-                    current_pid().get() == 1,
-                    process.thread(crate::arch::process::EXCEPTION_TID),
-                )
-            });
         }
     }
 

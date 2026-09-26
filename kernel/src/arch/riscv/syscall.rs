@@ -9,17 +9,6 @@ extern "C" {
     fn _redoubt_resume_context(regs: *const usize) -> !;
 }
 
-pub fn invoke(thread: &mut Thread, supervisor: bool, pc: usize, sp: usize, ret_addr: usize, args: &[usize]) {
-    set_supervisor(supervisor);
-    thread.registers[0] = ret_addr;
-    thread.registers[1] = sp;
-    assert!(args.len() <= 8, "too many arguments to invoke()");
-    for (idx, arg) in args.iter().enumerate() {
-        thread.registers[9 + idx] = *arg;
-    }
-    thread.sepc = pc;
-}
-
 fn set_supervisor(supervisor: bool) {
     // SAFETY: sets sstatus.SPP, which only chooses the privilege mode the next `sret`
     // returns to. It has no effect until `resume` issues that `sret`.
@@ -54,23 +43,18 @@ pub fn resume(supervisor: bool, thread: &Thread) -> ! {
     unsafe { _redoubt_resume_context(thread.registers.as_ptr()) };
 }
 
-/// Make a syscall from inside the kernel (PID 1).
+/// `kmain`'s switch (`sched::switch_to`): an `ecall` from S-mode into the kernel's own trap
+/// handler, with `a0..=a2` = `tag`, `pid`, `tid`. Returns the `a0` that `kmain` is resumed with.
 ///
-/// Without SBI firmware, the loader delegates S-mode `ecall` back to S-mode, so the
-/// kernel can simply `ecall` into its own trap handler.
-#[cfg(not(feature = "sbi"))]
-pub fn kernel_syscall(call: redoubt_abi::SysCall) -> redoubt_abi::SysCallResult { redoubt_abi::rsyscall(call) }
-
-/// Make a syscall from inside the kernel (PID 1).
-///
-/// Under SBI firmware an S-mode `ecall` is a call into that firmware and never reaches us. Instead, enter the trap handler directly, with the
-/// CSRs set up exactly as the hardware would have left them for an `ecall` from S-mode.
-#[cfg(feature = "sbi")]
-pub fn kernel_syscall(call: redoubt_abi::SysCall) -> redoubt_abi::SysCallResult {
-    let mut args = call.as_args();
+/// Under SBI firmware an S-mode `ecall` is a call into that firmware and never reaches the kernel.
+/// So this enters the trap handler directly, with the CSRs set up exactly as the hardware would
+/// have left them for an `ecall` from S-mode.
+pub fn switch_trap(tag: usize, pid: usize, tid: usize) -> usize {
+    let mut a0 = tag;
     // SAFETY: this hand-crafts the CSR state of an `ecall`-from-S-mode trap and jumps to
-    // the trap vector, so the kernel takes its own syscall exactly as hardware would
-    // deliver it. sepc points just past the block, so the handler resumes here.
+    // the trap vector, so the kernel takes its own trap exactly as hardware would deliver
+    // it. The handler saves every register of this context and restores it on the way back;
+    // sepc points just past the block, so it resumes here.
     unsafe {
         core::arch::asm!(
             // The handler resumes at sepc + 4, as if stepping over a 4-byte `ecall`.
@@ -86,18 +70,15 @@ pub fn kernel_syscall(call: redoubt_abi::SysCall) -> redoubt_abi::SysCallResult 
             ".balign 4",
             "2:",
             tmp = out(reg) _,
-            inlateout("a0") args[0],
-            inlateout("a1") args[1],
-            inlateout("a2") args[2],
-            inlateout("a3") args[3],
-            inlateout("a4") args[4],
-            inlateout("a5") args[5],
-            inlateout("a6") args[6],
-            inlateout("a7") args[7],
+            inlateout("a0") a0,
+            inlateout("a1") pid => _,
+            inlateout("a2") tid => _,
+            lateout("a3") _,
+            lateout("a4") _,
+            lateout("a5") _,
+            lateout("a6") _,
+            lateout("a7") _,
         )
     };
-    match redoubt_abi::Result::from_args(args) {
-        redoubt_abi::Result::Error(e) => Err(e),
-        other => Ok(other),
-    }
+    a0
 }

@@ -497,9 +497,9 @@ pub fn return_page_inner(
 
 /// Take `virt` out of `space`, remembering the loan: clear `VALID` so the lender cannot touch
 /// the page, and set `S` so that its entry is the record of the loan (I9). Returns the frame.
-/// This is `lend_page_inner` without the other half: a Redoubt message is taken out of its
-/// sender when it is sent and mapped into its receiver only when someone takes it, which may be
-/// much later or never (`message.rs`).
+/// It maps nothing into the receiver: a Redoubt message is taken out of its sender when it is
+/// sent and mapped into its receiver only when someone takes it, which may be much later or
+/// never (`message.rs`).
 pub fn lend_out(space: &MemoryMapping, virt: usize) -> Result<usize, redoubt_abi::Error> {
     let slot = walk(root_of(space.satp), virt, None)?;
     let pte = slot.get();
