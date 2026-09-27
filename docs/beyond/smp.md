@@ -2,8 +2,8 @@
 
 ## Idea
 
-The kernel runs user code on every hart, not only the boot hart. The FPGA platform's 32 hardware
-threads make it matter ([the FPGA platform](fpga-platform.md)).
+The kernel runs user code on every hart, not only the boot hart. The FPGA platform's cores, two
+hardware threads each, make it matter ([the FPGA platform](fpga-platform.md)).
 
 What exists: a two-hart spike, in which a second hart started through SBI's hart management
 contends with the first on the kernel lock without losing updates (`bench:smp-spike`, a checked
@@ -31,7 +31,6 @@ nothing needs the speed.
   [memory layout](../kernel/memory-layout.md#residual-risks)).
 - **Locking** for the per-process thread-context pages, and finer locking only once the above is
   stable and attacked.
-- **One budget per core,** and `keyd` on a core of its own, where the platform allows.
 
 **Attack cases:** a page unmapped, lent or returned on one hart and still reachable through another
 hart's TLB; a page made executable on one hart and run stale on another; completion races between
