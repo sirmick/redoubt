@@ -210,7 +210,7 @@ carved ([R7](budgets.md#r7-carving)).
 
 ### Responsiveness
 
-Status: built · partly tested: the rv64 steward decision-wake p99 target is missed in some runs, and decision wake plus R10 time is not asserted as one sum · tested: bench:sched-latency
+Status: built · partly tested: the guest seed is not pinned, the steward decision-wake p99 is still held to 50 ms and missed in some runs, and decision wake plus R10 time is not asserted as one sum · tested: bench:sched-latency
 
 No wake latency follows from weight. A wake waits out the running thread's slice, a waking
 budget keeps a pass above the floor if it has one, and several budgets can tie at the floor. So
@@ -222,21 +222,40 @@ The workload (`tests/programs/src/bin/sched-latency.rs`): a driver stand-in (wei
 `system`) that sleeps on timeouts, destroys leases by hand after a timeout (its decision) and
 waits for other leases' deadlines; and N spinning sessions of weight 100 from `users`, for
 N = 1, 4 and 16. At N = 16 a spinning server of weight 1000 joins them. Each run takes 200 wakes
-and 50 destructions of each kind, in virtual (instruction-count) time on QEMU, on rv64 and rv32.
+and 50 destructions of each kind, on QEMU, on rv64 and rv32.
+
+**Targets are guest instructions.** The case runs under `-icount shift=3,sleep=off` with the RTC
+on the same clock (`-rtc clock=vm`; [`tests/sched-latency.toml`](../../tests/sched-latency.toml)):
+every guest instruction advances virtual time by 2^3 ns, and idle time skips to the next timer
+deadline. So 1 ms is 125,000 instructions, and each target below is that many instructions; the
+milliseconds are for reading. Host load does not change a result.
+
+**The gate runs one pinned seed.** The guest's boot RNG seed decides the PIDs the kernel draws,
+which shift instruction counts and so the phase of every later event; with it pinned, a run
+repeats exactly, and the case prints the seed so that a failure replays. One seed hides the
+spread, so a **sweep** of about 16 seeds measures it. A target that the stride rank decides (how
+many spinners' slices a waking budget with a lead lands behind) is the sweep's worst case plus a
+stated margin. The sweep's seeds and worst case are recorded here with the target they set.
 
 | Measure | Target |
 | --- | --- |
 | driver wake: the RTC's time when the driver runs, less the alarm it set | p50 <= 15 ms, p99 <= 50 ms |
 | steward timer wake: `time_now` when it runs, less its timeout's deadline | p50 <= 15 ms, p99 <= 50 ms |
-| steward decision wake: the same, for the timeout after which it destroys a lease | p50 <= 15 ms, p99 <= 50 ms |
+| steward decision wake: the same, for the timeout after which it destroys a lease | p50 <= 15 ms; p99 set from the sweep, expected about 100 ms (the case still holds it to 50 ms) |
 | deadline notice: the lease's `killed` notice received, less the lease's deadline | p99 <= 30 ms |
 | R10 kernel time of one destruction, from the trace | p99 <= 30 ms |
-| a lease's end from the steward's decision: decision wake + R10 | p99 <= 80 ms, as the sum of the two |
+| a lease's end from the steward's decision: decision wake + R10 | p99 <= the decision-wake target plus the R10 target, each stated and the sum asserted |
 | `budget_destroy`, call to return | recorded against one round: 30 ms plus (runnable budgets + 2) slices |
 | the 1000-weight server's share of the spinning CPU at N = 16 | at least 384 less 30 per thousand |
 
+In instructions: 15 ms is 1,875,000, 30 ms is 3,750,000, 50 ms is 6,250,000 and one 10 ms slice
+is 1,250,000.
+
 The case fails on any `missed`. `bench:sched-latency-tcg` runs the same workload in host time and
 only reports, with the oracle still checking every pick.
+
+On hardware (the softcores) the same workload is measured in cycles, from `rdcycle` or `mtime`
+at the stated clock rate. That is a characterisation of the board, not a gate.
 
 ## Authority
 
@@ -351,13 +370,13 @@ Status: built · partly tested: a picked thread that dies before the switch, and
 - **Wakeup is prompt but not bounded.** A wake waits out the running slice, may keep a larger
   pass, and may tie. Human control rests on a measured steward lease-termination latency, not a
   proven bound, until something needs a real-time rule ([TENETS](../TENETS.md#guarantees)).
-- **The steward decision-wake target is missed on rv64.** In some runs at N = 16 the steward
-  stand-in lands behind several weight-100 spinners' slices, and its decision-wake p99 passes
-  the 50 ms target (up to about 100 ms). The run-to-run difference comes from the guest's boot RNG
-  seed, which shifts PID allocation and so the instruction-count phase. It is a real miss under
-  this workload, not a measurement fault. Still to decide: re-pin the target with evidence, assert the true
-  sum (decision wake plus R10 time, 80 ms), or change the steward stand-in; and pin the guest seed
-  so runs repeat. Follow-up: [todo](../todo/sched-latency-target.md).
+- **The steward decision wake is held to a target it misses.** In some runs at N = 16 the steward
+  stand-in wakes with a lead of a few milliseconds of its own runtime, lands behind several
+  weight-100 spinners' slices, and its decision-wake p99 passes 50 ms (up to about 100 ms). It is
+  a real miss under this workload, not a measurement fault. The case departs from the rule in
+  [Responsiveness](#responsiveness): the guest seed comes from host entropy on every boot, so
+  runs do not repeat and the case fails in some; it still asserts 50 ms; and it does not assert
+  the lease-end sum. Follow-up: [todo](../todo/sched-latency-target.md).
 - **The kernel is not preemptible.** A call's or a destruction's kernel time delays every wake
   on the machine, which is why R12 bounds a call's kernel time whoever pays for it. R10's time
   is the stated exception: it dominates lease termination and grows with the objects it walks
@@ -392,8 +411,10 @@ Status: built · partly tested: a picked thread that dies before the switch, and
 - **Scheduling is observable.** `rdtime` is readable in user mode, so a thread that times its own
   gaps learns how busy the machine is. Timing channels are out of scope
   ([TENETS](../TENETS.md#threat-model)).
-- **Measured on QEMU, on one hart.** The targets are virtual time under `icount`; no hardware run
-  is measured. The queue and its accounting drive one hart. The cases that read the trace run a
+- **Measured on QEMU, on one hart.** The targets are guest instructions under `icount`; no
+  hardware run is measured, and a hardware run will characterise in cycles, not gate. A target
+  set from a sweep holds for the seeds swept, not for every seed. The queue and its accounting
+  drive one hart. The cases that read the trace run a
   kernel built with it, which has a record at every queue event and 2 MiB less RAM for the budget
   tree.
 
@@ -412,6 +433,10 @@ Status: built · partly tested: a picked thread that dies before the switch, and
 - **No preemption on wake.** One preemption source, the timer, keeps accounting to a single point
   and makes a flood of wakes cost nothing extra. The price is that wake latency is measured, not
   derived.
+- **Instructions, a pinned seed and a sweep.** Host time makes a gate depend on the machine it
+  runs on; guest instructions do not. A pinned seed makes a failure replay exactly, and the sweep
+  keeps the pinned seed from hiding a worse phase. The lease-end target stays the sum of its two
+  parts, so a slower wake cannot hide inside the destruction's allowance, or the reverse.
 - **Ticks, an exact remainder, one tick at least.** Whole microseconds would let a run under 1 µs
   go free, and a large weight would round short runs to nothing. Counting at the trap boundary
   means no exit path runs unaccounted.
