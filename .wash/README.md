@@ -11,6 +11,7 @@ This directory is the project's process: how Redoubt is built, by whom, and the 
 | `plan.toml` | the plan graph: packages, their order and state | Wash only |
 | `qa/<thread>.md` | one file per question: the discussion behind each decision | Wash only |
 | `local/` | handoffs, plans, scratch; never committed | members |
+| [history-rewrite.md](history-rewrite.md), `history-rewrite.tsv` | the one rewrite of the history, and how to check it | the owner |
 
 ## Where to start
 
