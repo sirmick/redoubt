@@ -79,9 +79,11 @@ between groups, completion races between harts) are listed in
 
 ## Remaining work
 
-In this order. Each step lands with the attack cases for what it builds.
+Each part lands with the attack cases for what it builds. The order the parts run in, and which
+are under way, is kept with the project's work plan ([AGENTS.md](../../AGENTS.md)), not on this
+page.
 
-1. **The follow-up packages.** The fixes found while writing this book, before anything is built
+- **The follow-up packages.** The fixes found while writing this book, before anything is built
    on top of them.
    - **Kernel:** [executable device and DMA pages](../todo/device-mapping-exec.md),
      [`map_anon`'s search cost](../todo/map-anon-search-cost.md),
@@ -111,10 +113,11 @@ In this order. Each step lands with the attack cases for what it builds.
      [the test programs' build inputs](../todo/programs-build-rerun.md),
      [the SSH loopback self-checks](../todo/ssh-loopback-host.md),
      [the write-only mutation](../todo/write-only-mutation-split.md),
-     [the vendored crates under Miri](../todo/miri-vendored-unsafe.md), and, once the owner
-     decides the rule, [nightly rustfmt drift](../todo/rustfmt-nightly-drift.md); and
-     [a size budget for the trusted crates](../todo/size-budget.md), the gate that
-     [simplification](../SWARM.md#simplification) relies on.
+     [the vendored crates under Miri](../todo/miri-vendored-unsafe.md),
+     [paths the docs checker names that no longer exist](../todo/doccheck-stale-paths.md), and,
+     once the owner decides the rule, [nightly rustfmt drift](../todo/rustfmt-nightly-drift.md); and
+     [a size budget for the trusted crates](../todo/size-budget.md), the gate that keeps the
+     trusted crates from growing unseen.
    - **Servers:** [an account-0 client's share chain](../todo/account0-share-chain.md),
      [the 9P skeleton's rollback on a discarded reply](../todo/ninep-discard-rollback-test.md),
      [compiled-in bucket counts](../todo/server-bucket-counts.md),
@@ -126,12 +129,12 @@ In this order. Each step lands with the attack cases for what it builds.
    - **beamlet:** [the code path's search order](../todo/module-search-order.md).
    - **The documentation switch-over**, which rewrites process references in code and case
      descriptions: [process names in verdicts and case descriptions](../todo/verdict-strings.md).
-2. **A kernel containment gate.** One boot on QEMU that proves the kernel's primitives alone,
+- **A kernel containment gate.** One boot on QEMU that proves the kernel's primitives alone,
    before the whole milestone is layered on them: hostile code preempted and ended at its
    deadline, a budget subtree revoked with messages and lends in flight, and a victim that stays
    responsive throughout. It proves kernel primitives only; it is not evidence for the steward,
    approvals, the network or a session.
-3. **`init` and the boot manifest.** The loader loads only the kernel and `init`
+- **`init` and the boot manifest.** The loader loads only the kernel and `init`
    ([boot](../kernel/boot.md#the-loader-loads-only-the-kernel-and-init)); `init` reads the
    manifest, builds the budget tree from it
    ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)), hands each server its
@@ -147,14 +150,14 @@ In this order. Each step lands with the attack cases for what it builds.
    measured cases keep them blocked, and `init`'s budget tree ends this. The bench's cases then
    start their programs through `init`, and the log server's interim `TAKE_GIFTS` fixture goes
    ([rule F](../testbench.md#rule-f-trusted-verdicts)).
-4. **beamlet on Redoubt, and IEx on the console.** The VM runs on the kernel with its natives and
+- **beamlet on Redoubt, and IEx on the console.** The VM runs on the kernel with its natives and
    asynchronous platform ([beamlet](../userland/beamlet.md#beamlet-on-redoubt)); an interactive
    Elixir shell on the UART console, before SSH exists
    ([the shell](../userland/shell.md#iex-in-a-session)).
-5. **The file server.** `fsd` over `blkd`: one volume per instance, labelled volumes, quotas per
+- **The file server.** `fsd` over `blkd`: one volume per instance, labelled volumes, quotas per
    attach root, typed operations ([fsd](../servers/fsd.md)); files over 9P from a session
    ([files](../userland/files.md#files-over-9p)).
-6. **The steward.** Principals from the manifest, fixed sub-budgets per label set, sessions,
+- **The steward.** Principals from the manifest, fixed sub-budgets per label set, sessions,
    leases, the powerbox and approvals, declassification and push, crash blame
    ([the steward](../servers/steward.md)); the server graph, trust tiers and capability holdings
    it runs on ([the servers](../servers/README.md)). The cost of destroying a budget is brought
@@ -162,19 +165,19 @@ In this order. Each step lands with the attack cases for what it builds.
    steward's decision-wake target is settled ([the target](../todo/sched-latency-target.md)).
    The scheduling latency bench, measured with stand-ins for the steward and the drivers, is
    rerun with the real ones, and its numbers must stay within the target.
-7. **`sshd`.** Sessions over SSH as beamlet VMs running IEx, vault sessions, and `approve@box`
+- **`sshd`.** Sessions over SSH as beamlet VMs running IEx, vault sessions, and `approve@box`
    ([sshd](../servers/sshd.md), [sessions](../userland/sessions.md)).
-8. **The agent and the attack suite.** Alice's agent as its own principal under a lease, with
+- **The agent and the attack suite.** Alice's agent as its own principal under a lease, with
    delegation that only narrows ([agents](../userland/agents.md)), launching native programs from
    a session ([native programs](../userland/native.md#launching-from-a-session)), and every "not
    yet" above turned into a case.
-9. **The model on the real kernel.** Model traces replayed on the real kernel and compared step by
+- **The model on the real kernel.** Model traces replayed on the real kernel and compared step by
    step ([the model](../kernel/model.md#replaying-traces-on-the-real-kernel)), after the model and
    the kernel agree on their order of checks ([the model's order of checks](../todo/abi-model-disagreements.md)).
 
 Every follow-up page is placed above except one, which waits for an owner decision: whether
-tenet 3 reaches the build host ([host shell scripts](../todo/host-shell-scripts.md)). It blocks no
-step above.
+tenet 3 reaches the build host ([host shell scripts](../todo/host-shell-scripts.md)). It blocks
+nothing above.
 
 ## Progress
 

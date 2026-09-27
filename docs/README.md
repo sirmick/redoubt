@@ -22,8 +22,8 @@ planned. The [tenets](TENETS.md) outrank every other page.
 8. [The test bench](testbench.md): how every claim in this book is tested.
 
 To build and run Redoubt, see
-[GETTING-STARTED.md](../GETTING-STARTED.md). How the work itself is organised is in
-[SWARM.md](SWARM.md) and [PROJECT.md](PROJECT.md).
+[GETTING-STARTED.md](../GETTING-STARTED.md). How the work itself is organised, and in what
+order, is outside this book: [AGENTS.md](../AGENTS.md) is the way in.
 
 ## Written as if complete
 

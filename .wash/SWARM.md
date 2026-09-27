@@ -3,20 +3,35 @@
 Redoubt is built by a small swarm of AI agents under one human owner, run in Wash. Work is cut
 into **packages**; each package has one implementer and a panel of read-only reviewers, a resident
 Architect answers design questions, and an orchestrator plans, integrates and merges. This page
-is the process: the roles, what a package is, how one runs and is accepted, how questions are
-decided, and the current claims. The Wash setup itself (models, MCP calls, the QA file) is in
-[PROJECT.md](PROJECT.md). The [tenets](TENETS.md) outrank this page, and the owner's instructions
-in a session outrank it too.
+is the process: the roles, what a package is, how one runs and is accepted, and how questions are
+decided. The Wash setup itself is in [PROJECT.md](PROJECT.md). The [tenets](../docs/TENETS.md)
+outrank this page, and the owner's instructions in a session outrank it too.
 
-This page and PROJECT.md are the only ones in the book that carry process material: package IDs,
-QA thread names, review rounds. Every other page describes the system, and its provenance lives in
-git.
+Process material lives in `.wash/` and nowhere else: package IDs, thread names and review rounds
+never appear in [the book](../docs/README.md), which describes the system; its provenance is in
+git and in this directory.
+
+## What is recorded where
+
+One definition of each thing. The book states the rules, the plan and what is built; Wash records
+only what exists nowhere else, and links to the book for the rest.
+
+| What | Where | Written by |
+| --- | --- | --- |
+| the rules, each milestone's goal and remaining work, what is built | [the book](../docs/README.md) | the implementer, the Architect |
+| the order of the work, and its state | the plan graph, `.wash/plan.toml` | Wash, through `plan_set` and `plan_accept` |
+| the discussion behind a decision | `.wash/qa/<thread>.md`, one file per thread, kept for good | Wash |
+| a package's acceptance evidence | the trailers on its merge commit, from `plan_accept` | Wash, committed by the orchestrator |
+| handoffs, plans, scratch | `.wash/local/`, never committed | members |
+
+A plan node's body is a link to its plan step or its `docs/todo/` pages, never a restatement of
+them, and a resolved thread ends with a link to the page where its rule was written.
 
 ## Roles
 
 | Role | Tier | Job |
 | --- | --- | --- |
-| Orchestrator | frontier | plans the waves, keeps the claims, launches and ends package members, integrates and merges one package at a time; never implements |
+| Orchestrator | frontier | plans the work in the plan graph, launches and ends package members, integrates and merges one package at a time; never implements |
 | Architect | frontier | the resident design authority: answers design questions from the pages, records owner decisions, applies accepted rules to the owning page |
 | Implementer | workhorse | builds exactly one package in its own worktree and branch |
 | Red team | workhorse | reviews a package for a way to break it: a rule or invariant violated, a label or capability bypassed, an attack case whose verdict could be forged |
@@ -34,9 +49,12 @@ context, so the cheapest capable tier is used.
 
 ### The orchestrator
 
-- Owns the [claims](#claims) and the order of work, derived from the [plan](plan/m1-separation.md).
-- Starts a package the moment every package it needs is merged, in its own worktree
-  (`.worktrees/<package>`) and branch (`wp-<package>`).
+- Owns the plan graph: the packages, their order (`needs`) and their state, cut from the
+  milestone's remaining work on its plan page, starting with
+  [M1 (separation and containment)](../docs/plan/m1-separation.md#remaining-work).
+- Starts a package the moment every node it needs is done, in its own worktree
+  (`.worktrees/<package>`) and branch (`wp-<package>`). Wash refuses an earlier start unless the
+  call gives an override, which it records on the node.
 - Sizes the review panel to the risk ([running a package](#running-a-package)) and keeps the same
   reviewers through every round of one package.
 - Rules on a member's question itself when the pages settle it or a recommendation is clear, and
@@ -47,9 +65,8 @@ context, so the cheapest capable tier is used.
 - Bounds every task it hands out: what to read (a reading list, not "the book"), how many tool
   calls before the first written result, and what to return. Context is the cost: a member that
   reads broadly before writing hands off before it has written anything.
-- Keeps a running report for the owner: packages started and their state, questions asked and
-  their status, review verdicts, what was fixed or recorded as a follow-up, merges (package and
-  commit), what waits on the owner, and the next wave.
+- Answers the owner's status questions from `plan_get`; if the plan does not explain what is
+  happening, the plan is wrong, and it fixes the plan first.
 
 ### The Architect
 
@@ -64,6 +81,7 @@ context, so the cheapest capable tier is used.
   approval.
 - Edits pages, not code or tests. Source wins for current behaviour: a page that disagrees with the
   code is a finding, reported, not hidden.
+- May add and edit plan nodes that have not started; only the orchestrator moves a started one.
 
 ### The implementer
 
@@ -77,12 +95,12 @@ Builds exactly one package and nothing else, and does not break these rules:
 3. **The design is read-only.** A contradiction, a gap, or a decision the pages do not settle is
    reported as a blocking question naming the page, the rule and the options, never improvised.
 4. **No undocumented `unsafe`,** and the ratchet only falls
-   ([the unsafe budget](testbench.md#the-unsafe-budget)).
+   ([the unsafe budget](../docs/testbench.md#the-unsafe-budget)).
 5. **rv32 keeps compiling:** the kernel, the loader, `redoubt-sys`, `redoubt-rt` and the servers.
 6. **Every behaviour lands with its test.** A security property lands with an attack case whose
    verdict comes from the system, never from the attacker
-   ([rule F](testbench.md#rule-f-trusted-verdicts)); a bug fix lands with the test that would have
-   caught it.
+   ([rule F](../docs/testbench.md#rule-f-trusted-verdicts)); a bug fix lands with the test that
+   would have caught it.
 7. **The real harness.** Run the package's cases and the focused tests with `cargo testbench`, and
    report the exact commands and exit codes.
 8. **Rust and formatting,** per [CONTRIBUTING.md](../CONTRIBUTING.md#formatting).
@@ -90,6 +108,9 @@ Builds exactly one package and nothing else, and does not break these rules:
    the same commit as the tests its status line names; an Open item the package decides leaves
    the page in that commit; a rule the code departs from is written as the rule, with the
    departure as a residual and a follow-up ([lock step](#the-pages-move-with-the-code)).
+10. **A clean branch at acceptance.** Before the merge the implementer rebuilds its branch into
+    logical commits, each with a clean message ([commits](#staging-commits-and-handoffs)): no
+    WIP, fix-round or review-label commits reach the main history.
 
 It reports: what was delivered and the paths changed; the tests run, with exit codes, and each new
 attack case with why its verdict comes from the system; the `unsafe` count before and after, the
@@ -111,30 +132,25 @@ One angle each, read-only: a reviewer reports findings and edits, creates and st
   triggers it, and what breaks. A claim without a mechanism is not a finding. Say **delete**
   (nothing depends on it, and what was checked), **trim** (keep the rule, cut the text) or
   **keep** (what depends on it). A residual the pages already state is noted and passed over.
-- **Severity** P0, P1 or P2 on each finding, and one verdict at the end: `Merge verdict: BLOCK`,
+- **Severity** P0, P1 or P2 on each finding, and one verdict as the **first line** of the result
+  (Wash copies it into the merge commit's `Reviewed-by` trailer): `Merge verdict: BLOCK`,
   `Merge verdict: OK` or `Merge verdict: OK with notes`. `No issues found.` is a valid result.
 - A reviewer completes its assignment copying the implementer, so the implementer already holds
   every finding.
 
 ## Packages
 
-A package is a unit of work one implementer can finish and a panel can review. It is written as:
+A package is a unit of work one implementer can finish and a panel can review. It is a `package`
+node in the plan graph, under its milestone, and is written as:
 
 - **ID and size:** a short ID (letters and a number, such as `K7`, `S2` or `DOC1`) and S (hundreds
   of lines), M (about 1,500) or L (larger). An ID is never a lone R, I or M followed by digits,
   which the book uses for rules, invariants and milestones.
 - **Tier:** A or B ([two tiers](#two-tiers)).
-- **Reads:** the pages and rules it implements, as a list: the member reads these and nothing
-  else before it starts.
-- **Delivers:** the paths it owns, which is its staging boundary, the tests it adds, and the
-  **pages** whose status lines or Open lists change.
-- **Needs:** the packages that must be merged first, and the decisions that must be settled.
-- **Accepted when:** the cases that must pass, including every attack case for a security property
-  it touches.
-
-The remaining work of each milestone, in order, is on its plan page, starting with
-[M1 (separation and containment)](plan/m1-separation.md); the orchestrator cuts it into packages
-and records them in the [claims](#claims).
+- **Body:** links only: the plan step it builds and the `docs/todo/` pages it closes. Its reading
+  list, owned paths, tests and acceptance cases go in the implementer's instructions, from those
+  pages.
+- **Needs:** the nodes that must be done first, and the QA threads that must be resolved.
 
 ### Two tiers
 
@@ -170,7 +186,7 @@ There is no documentation package. Every package delivers its page delta, and th
 it: the docs checker refuses a status line naming a test that does not exist, a rule cited that no
 page owns, and a security register that disagrees with a page. The editor reviews the pages the
 package names and nothing else; the red team's checklist includes "the page says what the code now
-does". At acceptance the orchestrator updates the plan page's progress and the claims.
+does". At acceptance the orchestrator updates the plan page's progress.
 
 **Hotspots** get one writer at a time: the kernel's page tables, memory, messages, call dispatch and
 architecture mapping code, the loader's verification, the bench's bundle builder, and `docs/`.
@@ -180,8 +196,8 @@ changes only through its tables and the generator.
 ## Running a package
 
 1. **Worktree.** The orchestrator makes `.worktrees/<package>` on `wp-<package>`, and launches the
-   implementer and the reviewers with it as their working directory, so the reviewers see the
-   writer's diff.
+   implementer and the reviewers on the package's node with it as their working directory, so the
+   reviewers see the writer's diff.
 2. **Design first.** If the package raises an open design question, the Architect settles it (or
    the owner decides) before any code is written.
 3. **Implement,** gated on the package's acceptance command, by default the full bench.
@@ -194,19 +210,19 @@ changes only through its tables and the generator.
    number (for example "red 3, editor 1") rather than restating them. Each round refreshes the diff
    and the evidence; retained context is not evidence.
 5. **Fix and re-review** until the verdicts are OK, or the remaining findings are recorded as
-   follow-ups.
+   follow-ups in `docs/todo/`.
 6. **Accept and merge** ([acceptance](#acceptance)).
 
 Review may be batched for small changes; trusted-code work gets its own round with the red team. A
-package merged before its review is **merged (review due)**, not done, and that debt is cleared
-before the next wave.
+package merged before its review keeps its node in the state `review-due`, not done, and that debt
+is cleared before the next package starts.
 
 ## Questions and decisions
 
 Questions are Wash QA threads, one per question, named `<package>-<topic>`. A question opens with
 the page and rule involved, the contradiction or gap, a recommendation and the evidence. Answers
 carry the thread, so the question, its answers and any owner decision stay together. Only the
-orchestrator, or a reviewer of the thread's package, resolves a thread, with evidence; a pending
+orchestrator, or a reviewer on the thread's node, resolves a thread, with evidence; a pending
 owner decision prevents that. A thread reopens with a reason when the evidence changes.
 
 The decision itself lives in the book, not in QA:
@@ -214,24 +230,24 @@ The decision itself lives in the book, not in QA:
   property takes the next free rule ID.
 - An undecided question on a planned section is an item of that section's **Open:** list; deciding
   it removes the item and writes the rule.
-- An owner decision that changes a guarantee or a wall is written on the [tenets](TENETS.md).
-- Provenance (who decided, when, on which thread) is the commit message and the QA thread. The
-  pages carry no decision numbers and no dates.
+- An owner decision that changes a guarantee or a wall is written on the
+  [tenets](../docs/TENETS.md).
+- Provenance (who decided, when, on which thread) is the thread file and the merge commit's `QA:`
+  trailer. The pages carry no decision numbers and no dates.
 
 A package is not accepted with an unresolved blocking thread. A deferred non-blocking question is
 recorded on its page's Open list or as a follow-up in `docs/todo/`.
 
 A thread body is at most 2,000 bytes; a plan, a review report or any deliverable is a file in the
-worktree, and the thread holds the pointer. Each wave starts a fresh QA file; the previous one is
-committed with the wave's merge, as provenance, and is never read whole.
+worktree, and the thread holds the pointer. Wash writes each thread to `.wash/qa/<thread>.md` as
+it changes; nobody edits those files, and they are committed with the merge that resolves them.
 
 ## Simplification
 
 Simplicity is a gate, not a suggestion. The measures:
 - **Size is budgeted like `unsafe`.** Each trusted crate has a line ceiling in the bench that only
   falls without a reason stated in the commit
-  ([the size budget](testbench.md#the-unsafe-budget); planned until its case exists, tracked in
-  [the plan](plan/m1-separation.md#remaining-work)).
+  ([the size budget](../docs/todo/size-budget.md), planned until its case exists).
 - **Every Tier A acceptance report says what was deleted.** A kernel package that adds lines and
   deletes none states why, as an `unsafe` increase must.
 - **Simplifier findings are P2 by default:** each is applied, or declined on the thread with a
@@ -253,21 +269,31 @@ A package is done only when:
 - the pages it changes say what the code now does, with status lines naming the new tests;
 - no blocking question is open.
 
-The orchestrator then rebases the branch, reruns the bench, merges, updates the claims, and ends
-the package's members.
+The orchestrator then rebases the branch, reruns the bench, and calls `plan_accept` with each
+gate's command and exit code. Wash sets the node done and returns the trailer block and the
+`.wash/` files to stage; the orchestrator merges with the trailers as the message's last
+paragraph, stages those files in the merge, and ends the package's members.
 
 ## Staging, commits and handoffs
 
 - Stage by path. Never `git add -A` or `git commit -a` in a shared worktree, never stage another
   session's work, never `git stash` (the stash is shared by every worktree; set work aside with a
-  WIP commit).
-- A commit message says what and why, and ends with a trailer naming the model that wrote it.
+  WIP commit, and fold it before the merge).
+- **A commit message says what changed and why,** in the book's voice: `<component>: <what>`, then
+  a body. It carries no package IDs, thread names, answer numbers or review labels; those belong in
+  trailers. An owner decision is stated in plain words ("Owner decision: …"). It ends with a
+  trailer naming the model that wrote it.
+- A package's merge commit carries the trailers `plan_accept` returns: `Plan-Node`, `QA`, `Gates`
+  and `Reviewed-by`.
+- `.wash/plan.toml` and `.wash/qa/` are committed only with a package's merge, or in one commit
+  when the owner parks or ends the workspace. Nothing else commits them.
 - Nobody pushes without the owner's word.
-- **Handoff** at about 250K tokens of context: the member finishes and commits its current step,
-  writes `<PACKAGE>-HANDOFF.md` in its worktree (state, next steps, traps, open questions), commits
-  it, reports and stops. The orchestrator ends it and launches a fresh member from that file, with
-  a reading list of the handoff, one example of the work, and the entries for its next step: never
-  the whole plan. A reviewer hands off between rounds, never during one.
+- **Handoff** at about 300K tokens of context (Wash warns the orchestrator at `context_warn`): the
+  member finishes and commits its current step, writes its handoff with `member_update {handoff}`
+  (state, next steps, traps, open questions; Wash keeps it in `.wash/local/`, out of git), reports
+  and stops. The orchestrator ends it and launches a fresh member with `handoff_from`, and a
+  reading list of one example of the work and the entries for its next step: never the whole plan.
+  A reviewer hands off between rounds, never during one.
 - A member never ends a turn without a report or a waiting status, and never polls.
 
 ## Cost
@@ -281,34 +307,3 @@ the package's members.
 - Expensive tests run sparingly: the `consoled` flood test runs once per round, in loops of at most
   twenty.
 - Build artefacts, caches and logs stay on the project root's filesystem.
-
-## Claims
-
-The ledger of package state. `waiting` means an unmet dependency or an unsettled decision; `ready`
-still needs a scoped assignment; `building` and `review` describe execution; `merged` is not
-accepted until its review is done. Merged packages leave the table; their record is in git.
-"Step" below is a step of the remaining work on the plan for
-[M1 (separation and containment)](plan/m1-separation.md#remaining-work).
-
-| Package | State | What | Needs |
-| --- | --- | --- | --- |
-| DOC1 | review | the documentation rewrite, on `wp-doc1` | owner review, then the switch-over and the deletion of the old docs |
-| kernel follow-ups | waiting | the kernel items of step 1 | DOC1's switch-over |
-| server follow-ups | waiting | the server items of step 1 | DOC1's switch-over |
-| beamlet follow-up | waiting | the module search order, step 1 | DOC1's switch-over |
-| HIST1 | waiting | the git history rewrite | the old docs deleted |
-| IPC1 | review | the IPC completion checker; its remaining gates are model replay on the real kernel, the timer, the serving path and concurrency | step 9 |
-| typed parking | waiting | parking a typed call in the serving library | an owner decision; blocks the console's `resize` |
-| the kernel containment gate | waiting | step 2 | the follow-ups |
-| init and the manifest | waiting | step 3 | the follow-ups |
-| beamlet on Redoubt; IEx on the console | waiting | step 4 | `init` |
-| the file server | waiting | step 5 | `init` |
-| the steward, `keyd` and `sshd` in a boot | waiting | steps 6 and 7 | the file server, beamlet |
-| the agent and the attack suite | waiting | step 8 | everything above |
-
-## Review debt
-
-Outstanding, none blocking, each with its page:
-[the kernel's print on a panic](todo/print-panic-reentry.md),
-[`process_map`'s flag order](todo/process-map-flag-order.md) and
-[the write-only mutation](todo/write-only-mutation-split.md).

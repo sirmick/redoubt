@@ -28,5 +28,5 @@ checker it runs); the crates it covers: `kernel`, `loader`, `stub`, `libs/sys`, 
 - Ceilings can only fall: the case also fails when a ceiling in the list is higher than the last
   committed one, unless the commit message of the change states the reason (the case reads it
   from `git log -1`, as the unsafe ratchet does for its reason).
-- The case runs in the full bench, and [how Redoubt is built](../SWARM.md#simplification) cites
-  it as the size gate.
+- The case runs in the full bench, and [the test bench](../testbench.md) describes it beside
+  the unsafe budget.
