@@ -320,6 +320,11 @@ Status: built · tested: bench:touch-beyond-ram, bench:lend-untouched-page, benc
   buffers executable, and hostile device input can become injected code in a compromised
   driver, where W^X would have left the attacker only the driver's own code to reuse. No case
   attacks it. Follow-up: [todo](../todo/device-mapping-exec.md).
+- **User cache-block invalidation is not turned off.** The firmware enables `cbo.inval` below
+  M-mode and the kernel never writes `senvcfg`, so on a hart with a write-back cache a process
+  may be able to discard the kernel's zeroes on a page it was just given and read the previous
+  owner's data from DRAM. QEMU has no cache, so the bench cannot show it. Follow-up:
+  [todo](../todo/user-cache-invalidate.md).
 - **One hart.** `fence.i` and the TLB flush act on the hart that runs the call. Running user
   code on several harts needs them on every hart, and when a thread moves
   ([SMP](../beyond/smp.md)).

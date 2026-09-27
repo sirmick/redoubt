@@ -108,6 +108,7 @@
   - [Compiled-in bucket counts](todo/server-bucket-counts.md)
   - [The SSH loopback self-checks](todo/ssh-loopback-host.md)
   - [Process names in verdicts and case descriptions](todo/verdict-strings.md)
+  - [User cache-block invalidation](todo/user-cache-invalidate.md)
   - [The write-only mutation](todo/write-only-mutation-split.md)
 - [Beyond M5](beyond/README.md)
   - [The FPGA platform](beyond/fpga-platform.md)
