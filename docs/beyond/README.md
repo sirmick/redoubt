@@ -8,7 +8,7 @@ recorded as ruled out, with the reason, so they are not proposed again without o
 
 | Page | The idea |
 | --- | --- |
-| [The FPGA platform](fpga-platform.md) | Redoubt on its own softcore cards, with DMA confined in hardware, local inference and an approval button |
+| [The FPGA platform](fpga-platform.md) | Redoubt on softcores: a DE10-Nano scale model and a Kintex-7 PCIe card with DMA confined in hardware |
 | [SMP](smp.md) | the kernel on several harts |
 | [rv32](rv32.md) | the full stack on 32-bit RISC-V, booted in every milestone |
 | [Other runtimes](runtimes.md) | Python and Java, ported to Rust |
@@ -24,7 +24,7 @@ recorded as ruled out, with the reason, so they are not proposed again without o
 | [A shared image cache](image-cache.md) | program images shared read-only between principals (ruled out as a channel) |
 | [The link layer](link-layer.md) | VLANs, rate limits and routing, in `linkd` and `routerd` |
 | [A browser GUI](browser-gui.md) | a desktop in the browser (conflicts with the no-GUI non-goal) |
-| [Hardware approval](hardware-approval.md) | high-stakes approvals signed by a FIDO key or a button on the board |
+| [Hardware approval](hardware-approval.md) | high-stakes approvals signed by a FIDO key |
 | [ASLR](aslr.md) | randomised address-space layout |
 | [Scheduling extensions](scheduling-extensions.md) | time donation and CPU quotas |
 | [Label extensions](label-extensions.md) | taint-on-read and integrity labels |
