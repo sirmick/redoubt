@@ -78,6 +78,18 @@ pub unsafe extern "C" fn init(
         // lost the checks fails instead of passing quietly (`bench-debug-assertions`).
         println!("kernel: checks on (debug assertions, overflow checks)");
     }
+    // Test builds only: a print, then a panic, inside `print!` (debug/console.rs).
+    #[cfg(feature = "panic-in-print")]
+    {
+        struct Panics;
+        impl core::fmt::Display for Panics {
+            fn fmt(&self, _: &mut core::fmt::Formatter) -> core::fmt::Result {
+                println!("a Display printed inside print!");
+                panic!("a Display panicked inside print!")
+            }
+        }
+        println!("panic-in-print: {}", Panics);
+    }
 
     // rand::init() already clears the initial pipe, but pump the TRNG a little more out of no other reason
     // than sheer paranoia

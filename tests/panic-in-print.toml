@@ -1,0 +1,17 @@
+description = "A print or a panic inside the kernel's print! does not take the console a second time: a test build prints a value whose Display prints and then panics at boot; the inner print goes to the firmware's stateless console and leaves the outer print's claim in place, so the panic handler reports through that console too, marked as struck while printing, then powers off (panic-in-print, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+kernel_features = ["panic-in-print"]
+programs = ["rng-test"]
+timeout_secs = 20
+allow_panic = true          # the kernel is supposed to panic here
+poweroff = true
+poweroff_status = 255
+# The verdict is the kernel's own panic line: only the path that avoids `OUTPUT` marks it, and
+# an inner print that released the outer print's claim would leave it unmarked.
+expect = [
+    'a Display printed inside print!$',
+    '^\(while printing\) PANIC in PID 1: panicked at kernel/src/main.rs:[0-9]+:[0-9]+:$',
+    '^a Display panicked inside print!$',
+]

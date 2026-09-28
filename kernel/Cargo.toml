@@ -32,6 +32,9 @@ dma-reset-deaf = []
 # Test builds only: at the first system call the kernel loads the caller's `ecall` straight
 # through the user mapping, which must fault (R24).
 sum-probe = []
+# Test builds only: print a value whose `Display` prints and then panics, at boot, so both strike
+# inside `print!` (debug/console.rs).
+panic-in-print = []
 
 # Capabilities. Boards select these; code keys on them rather than on the CPU's XLEN.
 # See "Hardware abstraction" in docs/kernel/boot.md.

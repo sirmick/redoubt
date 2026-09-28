@@ -429,11 +429,13 @@ naming both ranges.
 
 ## Failure and restart
 
-Status: built · partly tested: a reboot through `system_reset` is not attacked by a case · tested: bench:verified-boot-rejects-tamper, bench:loader-rejects-grants, bench:device
+Status: built · partly tested: a reboot through `system_reset` is not attacked by a case · tested: bench:verified-boot-rejects-tamper, bench:loader-rejects-grants, bench:device, bench:panic-in-print
 
 - **A refused boot** powers off. Nothing retries it and nothing boots in its place: someone
   must fix the bundle or the machine.
-- **A kernel panic** at boot or later powers off the same way.
+- **A kernel panic** at boot or later powers off the same way. A panic inside `print!` does not
+  take the console that print holds: it writes through the firmware's console, which keeps no
+  state, and marks its line `(while printing)`.
 - **A reboot** (`system_reset` with the Reset right, [devices](devices.md)) starts the chain
   again from the firmware, so the bundle is verified on every boot.
 - **After the handoff the loader is gone.** Its pages and the bundle's are unowned in the

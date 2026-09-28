@@ -413,8 +413,9 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
 The other diagnostic features are off by default in the same way: `sched-inject-tie-fault`, a
 debug-only break of the tie rule that implies the trace, and `debug-print`, which prints every
 pick's PID and thread and every trap. `dma-reset-deaf` is a test-only fault, not a channel
-([devices](devices.md)), and so is `sum-probe`, a stray kernel load that must fault
-([R24 (SUM and MXR clear)](memory-layout.md#r24-sum-and-mxr-clear)).
+([devices](devices.md)), and so are `sum-probe`, a stray kernel load that must fault
+([R24 (SUM and MXR clear)](memory-layout.md#r24-sum-and-mxr-clear)), and `panic-in-print`, a
+panic inside `print!` ([boot](boot.md#failure-and-restart)).
 
 ## Failure and restart
 

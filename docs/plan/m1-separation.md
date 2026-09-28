@@ -85,8 +85,7 @@ page.
 
 - **The follow-up packages.** The fixes found while writing this book, before anything is built
    on top of them.
-   - **Kernel:** [the kernel's print on a panic](../todo/print-panic-reentry.md),
-     [the kernel crate's host test target](../todo/hosted-kernel-tests.md),
+   - **Kernel:** [the kernel crate's host test target](../todo/hosted-kernel-tests.md),
      [a stray file in the kernel's tree](../todo/kernel-test-hello.md),
      [DMA reset on rv32](../todo/dma-reset-rv32.md), and
      [the steward's decision wake on rv64, and R10's thin margin](../todo/sched-rv64-decision-wake.md).

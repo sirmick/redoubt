@@ -3,22 +3,27 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use core::fmt;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::args::KernelArguments;
 use crate::io::SerialWrite;
 
 /// The kernel console, which `print!` writes to.
-pub static mut OUTPUT: Option<Output> = None;
+pub static mut OUTPUT: Option<Output<'static>> = None;
+
+/// Set while `print` holds its reference to `OUTPUT`, so that a print or a panic inside the write
+/// takes no second one.
+static IN_PRINT: AtomicBool = AtomicBool::new(false);
 
 /// The kernel console: a serial port, lines optionally wrapped at 80 columns (`wrap-print`).
-pub struct Output {
-    serial: &'static mut dyn SerialWrite,
+pub struct Output<'a> {
+    serial: &'a mut dyn SerialWrite,
     #[cfg(feature = "wrap-print")]
     character_count: usize,
 }
 
-impl Output {
-    fn new(serial: &'static mut dyn SerialWrite) -> Output {
+impl<'a> Output<'a> {
+    fn new(serial: &'a mut dyn SerialWrite) -> Output<'a> {
         Output {
             serial,
             #[cfg(feature = "wrap-print")]
@@ -27,7 +32,7 @@ impl Output {
     }
 }
 
-impl fmt::Write for Output {
+impl fmt::Write for Output<'_> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         for c in s.bytes() {
             #[cfg(feature = "wrap-print")]
@@ -54,13 +59,35 @@ impl fmt::Write for Output {
 /// Write `args` to the console, if it is set up (`print!`).
 pub fn print(args: fmt::Arguments) {
     use fmt::Write;
+    // A print inside this one (a `Display` that prints) takes the stateless console instead.
+    if IN_PRINT.swap(true, Ordering::Relaxed) {
+        print_stateless(args);
+        return;
+    }
     // SAFETY: `OUTPUT` is written only by `init`, before the first `print!`, and only the boot
     // hart prints (the `smp` spike's `secondary_main` never does), so this is its only live
-    // reference. Known residual: a panic inside this `write_fmt` re-enters through the panic
-    // handler's `println!` while the first reference is live; the handler then powers off.
+    // reference: a print or a panic inside this `write_fmt` finds `IN_PRINT` set and takes none.
     if let Some(stream) = unsafe { &mut *(&raw mut OUTPUT) } {
         stream.write_fmt(args).unwrap();
     }
+    IN_PRINT.store(false, Ordering::Relaxed);
+}
+
+/// Write the panic handler's `args`. A panic that struck inside `print` must not take `OUTPUT`
+/// while that print's reference is live, so it writes to the stateless console, and says so.
+pub fn print_panic(args: fmt::Arguments) {
+    if IN_PRINT.load(Ordering::Relaxed) {
+        print_stateless(format_args!("\r\n(while printing) {}\r\n", args));
+    } else {
+        println!("{}", args);
+    }
+}
+
+/// Write `args` to the firmware's console, which keeps no state of its own, so any number of
+/// writers may use it at once.
+fn print_stateless(args: fmt::Arguments) {
+    use fmt::Write;
+    let _ = Output::new(&mut crate::platform::sbi::SbiConsole).write_fmt(args);
 }
 
 /// Take `serial` as the kernel console and print the kernel arguments.
