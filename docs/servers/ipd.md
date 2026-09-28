@@ -18,7 +18,7 @@ at all.
 
 ### The `/net` tree
 
-Status: built · tested: bench:d3-net-tcp, bench:ipd-host-tests, host:redoubt-ipd::clone_makes_a_socket_and_tcp_lists_only_the_callers, host:redoubt-ipd::a_connect_waits_then_carries_data_through_the_files, host:redoubt-ipd::ctl_refusals_are_named_and_checked_before_the_stack, host:redoubt-ipd::a_listener_accepts_through_ctl, host:redoubt-ipd::numbers_are_per_connection_and_invisible_to_others, host:redoubt-ipd::a_connection_carries_bytes_both_ways_and_ends, host:redoubt-ipd::a_far_host_is_reached_through_the_gateway, host:redoubt-ipd::a_write_waits_while_the_send_buffer_is_full, host:redoubt-ipd::a_listener_accepts_its_backlog_and_listens_again, host:redoubt-ipd::the_conformance_vectors_run_against_ipd, host:redoubt-ipd::a_client_connects_and_echoes_through_the_program
+Status: built · tested: bench:net-tcp, bench:ipd-host-tests, host:redoubt-ipd::clone_makes_a_socket_and_tcp_lists_only_the_callers, host:redoubt-ipd::a_connect_waits_then_carries_data_through_the_files, host:redoubt-ipd::ctl_refusals_are_named_and_checked_before_the_stack, host:redoubt-ipd::a_listener_accepts_through_ctl, host:redoubt-ipd::numbers_are_per_connection_and_invisible_to_others, host:redoubt-ipd::a_connection_carries_bytes_both_ways_and_ends, host:redoubt-ipd::a_far_host_is_reached_through_the_gateway, host:redoubt-ipd::a_write_waits_while_the_send_buffer_is_full, host:redoubt-ipd::a_listener_accepts_its_backlog_and_listens_again, host:redoubt-ipd::the_conformance_vectors_run_against_ipd, host:redoubt-ipd::a_client_connects_and_echoes_through_the_program
 
 `/net` is served over the [9P server skeleton](serving.md#the-9p-server-skeleton). Everything a
 file holds is typed, in the wire encoding ([wire](wire.md#the-encoding)), never text.
@@ -75,7 +75,7 @@ The table: [libs/wire/tables/net_ctl.md](../../libs/wire/tables/net_ctl.md).
 
 ### Scopes and grants
 
-Status: built · tested: bench:d3-net-attacks, host:redoubt-ipd::a_scope_permits_exactly_what_its_rules_contain, host:redoubt-ipd::a_grant_only_narrows, host:redoubt-ipd::a_grant_never_widens_or_adds_listen, host:redoubt-ipd::the_encoding_is_canonical_and_round_trips, host:redoubt-ipd::only_a_root_badge_with_a_scope_attaches, host:redoubt-ipd::new_connection_keeps_the_scope, host:redoubt-ipd::a_grant_narrows_and_disconnect_frees_everything, host:redoubt-ipd::grant_mints_a_narrower_connection, host:redoubt-ipd::a_grant_nobody_received_is_undone, host:redoubt-ipd::connects_outside_the_scope_or_to_the_box_are_refused_and_send_nothing
+Status: built · tested: bench:net-attacks, host:redoubt-ipd::a_scope_permits_exactly_what_its_rules_contain, host:redoubt-ipd::a_grant_only_narrows, host:redoubt-ipd::a_grant_never_widens_or_adds_listen, host:redoubt-ipd::the_encoding_is_canonical_and_round_trips, host:redoubt-ipd::only_a_root_badge_with_a_scope_attaches, host:redoubt-ipd::new_connection_keeps_the_scope, host:redoubt-ipd::a_grant_narrows_and_disconnect_frees_everything, host:redoubt-ipd::grant_mints_a_narrower_connection, host:redoubt-ipd::a_grant_nobody_received_is_undone, host:redoubt-ipd::connects_outside_the_scope_or_to_the_box_are_refused_and_send_nothing
 
 - **A scope** is at most `MAX_RULES` (8) rules, each a **connect** rule (an IPv4 prefix and a port
   range) or a **listen** rule (a port range). A connection may connect to an address and port only
@@ -107,23 +107,23 @@ transferred page ([netd](netd.md#serving-ipd)). Frames count only from the unlab
 
 ### The box's own addresses
 
-Status: built · tested: bench:d3-net-attacks, bench:d3-net-self-unrefused, host:redoubt-ipd::the_self_set, host:redoubt-ipd::connects_outside_the_scope_or_to_the_box_are_refused_and_send_nothing
+Status: built · tested: bench:net-attacks, bench:bench-net-self-unrefused, host:redoubt-ipd::the_self_set, host:redoubt-ipd::connects_outside_the_scope_or_to_the_box_are_refused_and_send_nothing
 
 Before any scope is looked at, `ipd` refuses every address of the box itself: its own address, its
 network's network and broadcast addresses, the limited broadcast, the loopback and "this host"
 networks, multicast, the reserved class E, and every `self=` prefix its arguments list (on QEMU
 `10.0.2.0/24`, which the emulator maps to the host, where a forwarded port leads back to the
 guest). So a manifest that wrongly scoped `0.0.0.0/0` still cannot reach the box
-([R59 (never the box's own addresses)](#r59-never-the-boxs-own-addresses)). `d3-net-attacks` tries
+([R59 (never the box's own addresses)](#r59-never-the-boxs-own-addresses)). `net-attacks` tries
 a forwarded self address, `ipd`'s own address, loopback and the gateway from a scope allowing
 everything, and checks the capture shows no SYN to them; the broadcast, "this host", multicast and
 class E refusals are attacked by the host test `the_self_set`;
-`d3-net-self-unrefused` is the same boot without the `self=` entry, and must fail, which proves the
+`bench-net-self-unrefused` is the same boot without the `self=` entry, and must fail, which proves the
 case catches a missing check.
 
 ### Labelled callers
 
-Status: built · tested: bench:d3-net-attacks, host:redoubt-ipd::a_labelled_caller_gets_nothing_and_holds_no_bucket, host:redoubt-ipd::frames_count_only_from_the_unlabelled_ingress_badge
+Status: built · tested: bench:net-attacks, host:redoubt-ipd::a_labelled_caller_gets_nothing_and_holds_no_bucket, host:redoubt-ipd::frames_count_only_from_the_unlabelled_ingress_badge
 
 `ipd` is a sink, cleared for nothing. A caller whose message carries any label is refused before
 its request is decoded: before 9P, `ninep_common`, `grant` or admission. So it opens no bucket and
@@ -132,14 +132,14 @@ cannot even make a socket by reading `clone`, which the label check alone would 
 
 ### Pinned and abandoned calls
 
-Status: built · tested: bench:d3-net-pinned, host:redoubt-ipd::parked_calls_are_freed_when_abandoned_and_capped_by_the_share, host:redoubt-ipd::two_reads_one_byte_one_answer_and_ipd_goes_on, host:redoubt-ipd::an_accept_nobody_answers_ends_with_the_ctl_deadline
+Status: built · tested: bench:net-pinned, host:redoubt-ipd::parked_calls_are_freed_when_abandoned_and_capped_by_the_share, host:redoubt-ipd::two_reads_one_byte_one_answer_and_ipd_goes_on, host:redoubt-ipd::an_accept_nobody_answers_ends_with_the_ctl_deadline
 
 Every waiting read or write is parked with a server-side deadline, in the caller's bucket and share
 ([R28 (parked-call accounting)](serving.md#r28-parked-call-accounting)); it is served again once
 the stack says it would not wait, and an abandoned one is answered at once. The stack is polled only
 right after a `receive` that returned something other than a call, so no call is current while
 smoltcp runs, and a crash inside it blames no parked caller
-([R21 (crash blame)](../kernel/processes.md#r21-crash-blame)). In `d3-net-pinned` a client abandons
+([R21 (crash blame)](../kernel/processes.md#r21-crash-blame)). In `net-pinned` a client abandons
 64 parked reads, each answered and freed; a read with nothing coming ends at the 30 s deadline, a
 listener's `ctl` read at the 60 s one, and the connection still works after.
 
@@ -238,16 +238,16 @@ Status: built · tested: host:redoubt-ipd::only_a_root_badge_with_a_scope_attach
 
 ### R58 (a scope reaches only what it allows)
 
-Status: built · tested: bench:d3-net-attacks, host:redoubt-ipd::a_scope_permits_exactly_what_its_rules_contain, host:redoubt-ipd::connects_outside_the_scope_or_to_the_box_are_refused_and_send_nothing, host:redoubt-ipd::numbers_are_per_connection_and_invisible_to_others
+Status: built · tested: bench:net-attacks, host:redoubt-ipd::a_scope_permits_exactly_what_its_rules_contain, host:redoubt-ipd::connects_outside_the_scope_or_to_the_box_are_refused_and_send_nothing, host:redoubt-ipd::numbers_are_per_connection_and_invisible_to_others
 
 A connection connects only to an address and port some connect rule of its scope contains, and
 listens only on a port some listen rule contains; a refused connect sends nothing. In
-`d3-net-attacks` a client scoped to one host reaches nothing at another (the peer counts none)
+`net-attacks` a client scoped to one host reaches nothing at another (the peer counts none)
 while its control to the scoped host succeeds.
 
 ### R59 (never the box's own addresses)
 
-Status: built · tested: bench:d3-net-attacks, bench:d3-net-self-unrefused, host:redoubt-ipd::the_self_set
+Status: built · tested: bench:net-attacks, bench:bench-net-self-unrefused, host:redoubt-ipd::the_self_set
 
 No connection reaches an address of the box itself, whatever its scope: `ipd`'s own address,
 loopback, broadcast, multicast and every `self=` prefix are refused before the scope is consulted.
@@ -255,7 +255,7 @@ So a hijacked session cannot reach `approve@box` or any other service of the box
 
 ### R60 (a sink refuses labels)
 
-Status: built · tested: bench:d3-net-attacks, host:redoubt-ipd::a_labelled_caller_gets_nothing_and_holds_no_bucket
+Status: built · tested: bench:net-attacks, host:redoubt-ipd::a_labelled_caller_gets_nothing_and_holds_no_bucket
 
 `ipd` refuses every caller whose message carries a label, before decoding its request or admitting
 it, so no labelled data leaves the box through the network and a labelled caller opens no bucket

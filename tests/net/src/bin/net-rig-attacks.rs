@@ -1,4 +1,4 @@
-//! The rig for d3-net-attacks (`src/rig.rs`, `Mode::Attacks`). The bundle's first program: the
+//! The rig for net-attacks (`src/rig.rs`, `Mode::Attacks`). The bundle's first program: the
 //! kernel starts it directly, with no startup block.
 
 #![cfg_attr(target_os = "none", no_std, no_main)]

@@ -17,7 +17,7 @@ policy. Everything above the link is `ipd`'s.
 
 ### Serving `ipd`
 
-Status: built · partly tested: the drop of a frame `ipd` does not take within `SEND_TIMEOUT_US` is read from the code, not attacked · tested: bench:netd-host-tests, bench:d3-net-tcp, host:redoubt-netd::info_and_transmit_for_the_client, host:redoubt-netd::anyone_else_is_not_permitted, host:redoubt-netd::a_frame_of_the_wrong_length_is_too_many, host:redoubt-netd::a_full_ring_is_busy_and_a_lie_is_failed_for_good, host:redoubt-netd::a_request_that_does_not_decode_is_malformed, host:redoubt-netd::arguments_are_exactly_one_client_badge, host:redoubt-netd::randomized_requests_reach_the_wire_only_from_the_client, fuzz:redoubt-netd/request
+Status: built · partly tested: the drop of a frame `ipd` does not take within `SEND_TIMEOUT_US` is read from the code, not attacked · tested: bench:netd-host-tests, bench:net-tcp, host:redoubt-netd::info_and_transmit_for_the_client, host:redoubt-netd::anyone_else_is_not_permitted, host:redoubt-netd::a_frame_of_the_wrong_length_is_too_many, host:redoubt-netd::a_full_ring_is_busy_and_a_lie_is_failed_for_good, host:redoubt-netd::a_request_that_does_not_decode_is_malformed, host:redoubt-netd::arguments_are_exactly_one_client_badge, host:redoubt-netd::randomized_requests_reach_the_wire_only_from_the_client, fuzz:redoubt-netd/request
 
 - **One client.** `netd`'s one argument names the badge `ipd`'s handle carries. Any other badge, and
   any labelled caller, gets `not_permitted`. `netd` mints nothing for a client and parks nothing,

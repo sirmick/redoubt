@@ -97,7 +97,6 @@
   - [init does not check bucket counts](todo/server-bucket-counts.md)
   - [The SSH loopback self-checks](todo/ssh-loopback-host.md)
   - [The unsafe budget's stated reason](todo/unsafe-ratchet-reason.md)
-  - [Process names in verdicts and case descriptions](todo/verdict-strings.md)
   - [User cache-block invalidation](todo/user-cache-invalidate.md)
   - [The write-only mutation](todo/write-only-mutation-split.md)
 - [Beyond M5](beyond/README.md)

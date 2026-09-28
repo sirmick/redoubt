@@ -368,7 +368,7 @@ shell's. Any other probe failure fails every loopback case
 
 ## Self-checks
 
-Status: built · tested: bench:bench-attack-forgery, bench:bench-console-after-expect, bench:bench-poweroff-missing, bench:bench-reporter-mismatch, bench:bench-debug-assertions, bench:bench-debug-assertions-off, bench:bench-net-peer-twice, bench:bench-net-peer-count, bench:bench-net-peer-pcap-empty, bench:d3-net-self-unrefused
+Status: built · tested: bench:bench-attack-forgery, bench:bench-console-after-expect, bench:bench-poweroff-missing, bench:bench-reporter-mismatch, bench:bench-debug-assertions, bench:bench-debug-assertions-off, bench:bench-net-peer-twice, bench:bench-net-peer-count, bench:bench-net-peer-pcap-empty, bench:bench-net-self-unrefused
 
 The harness can fail, and each feature shows it. Cases named `bench-*` check the bench itself:
 each feature has a case that passes only if the feature works and, where the bench can be
@@ -382,7 +382,7 @@ must_fail = '^regex$'        # passes only if the run fails with a matching reas
 the bench's own trouble is a failure regardless. Each case writes its pattern anchored and quoting
 the evidence, so it cannot pass by failing for some other reason; the bench does not enforce the
 anchoring, so a reviewer checks it. An attack case can have a self-check of its own:
-`d3-net-self-unrefused` runs `d3-net-attacks`'s boot with `ipd` not told one of the box's addresses,
+`bench-net-self-unrefused` runs `net-attacks`'s boot with `ipd` not told one of the box's addresses,
 and must fail on the SYN the capture then shows.
 
 ## The unsafe budget

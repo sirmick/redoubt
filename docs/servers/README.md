@@ -109,13 +109,13 @@ nothing.
 
 ### Who checks, and sinks
 
-Status: built · partly tested: only `ipd`'s refusal of labelled callers is attacked in a boot; the skeleton's checks are attacked in host tests · tested: bench:d3-net-attacks, host:redoubt-rt::labels_are_checked_on_every_request
+Status: built · partly tested: only `ipd`'s refusal of labelled callers is attacked in a boot; the skeleton's checks are attacked in host tests · tested: bench:net-attacks, host:redoubt-rt::labels_are_checked_on_every_request
 
 - **Every 9P server** gets the check from the skeleton, against the labels its file server
   reports for each node ([serving](serving.md#the-9p-server-skeleton)).
 - **A sink** is a server whose output leaves a principal or the machine. A sink is cleared for no
   label and refuses every labelled caller before it reads the request. `ipd` is one
-  ([ipd](ipd.md)); in `d3-net-attacks` a labelled caller's connect reaches nothing on the
+  ([ipd](ipd.md)); in `net-attacks` a labelled caller's connect reaches nothing on the
   network while its unlabelled twin's does.
 - **User-level servers get no exemption.** A server in a `user` budget is under
   [R1](../kernel/ipc.md#r1-flow): a vault session cannot call an unlabelled user server. A
@@ -249,13 +249,13 @@ and so stays a co-holder ([devices](../kernel/devices.md#which-process-gets-whic
 
 ### `netd` and `ipd`
 
-Status: built · tested: bench:d3-net-tcp, bench:d3-net-attacks
+Status: built · tested: bench:net-tcp, bench:net-attacks
 
 `netd`, the network card's driver, moves Ethernet frames between the card and one client, `ipd`.
 `ipd`, the TCP/IP server, serves the `/net` tree to its callers, each scoped to the prefixes and
 ports its badge allows ([ipd](ipd.md), [netd](netd.md)). A test program in the first program's
 place launches the real `netd` and `ipd` through the loader stub and starts the cases' clients:
-`d3-net-tcp` carries TCP both ways through them, and `d3-net-attacks` shows a scope's refusals
+`net-tcp` carries TCP both ways through them, and `net-attacks` shows a scope's refusals
 from the bench's own network peers.
 
 ```mermaid

@@ -2,7 +2,7 @@
 //! stands in for `init` until `init` starts the servers (docs/plan/m1-separation.md), with
 //! clients, a victim and attackers beside them. What each case checks is in `src/rig.rs`; what
 //! the bench checks from outside (the peers' counts and the capture) is in its
-//! `tests/d3-net-*.toml`.
+//! `tests/net-*.toml` and `tests/bench-net-*.toml`.
 
 #![no_std]
 
