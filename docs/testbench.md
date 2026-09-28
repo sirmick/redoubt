@@ -166,7 +166,7 @@ The kinds, and the fields each takes besides `description` and `arch`:
 | --- | --- | --- |
 | `boot` | boots the kernel with `programs` as its first processes and judges the run | those above |
 | `build` | only checks that a package compiles for each target: coverage for what the bench does not boot | `package`, `features` |
-| `host-tests` | runs `cargo test` on the host for the named workspace packages, for what no boot can reach (a constant the loader and the bench share is right in the machine's eyes even when it is wrong) | `packages` |
+| `host-tests` | runs `cargo test` on the host for the named workspace packages, for what no boot can reach (a constant the loader and the bench share is right in the machine's eyes even when it is wrong); with `miri`, under nightly Miri | `packages`, `tests` (the test files to run; default all), `miri` |
 | `ssh-loopback` | runs `[[session]]`s against a host OpenSSH server with no guest, to check the session runner on its own | `authorized` (the test keys the server accepts), `[[session]]`, `timeout_secs`, `host_key` (default: the server's own), `server_log` (patterns each of which must match a line of the server's own log), `must_fail` |
 | `unsafe-budget` | the ratchet on `unsafe` ([below](#the-unsafe-budget)) | `[[budget]]`: `name`, `paths`, `max_unsafe`, `max_undocumented`; `[[uncounted]]`: `path`, `reason` |
 | `size-budget` | the ceiling on each trusted crate's size ([below](#the-size-budget)) | `[[crate]]`: `name`, `paths`, `max_lines` |
@@ -387,7 +387,7 @@ and must fail on the SYN the capture then shows.
 
 ## The unsafe budget
 
-Status: built · tested: bench:unsafe-budget, host:testbench::actual_source_counts_still_enforce_the_budget, host:testbench::empty_configuration_is_not_coverage, host:testbench::every_configured_root_must_contain_rust_source, host:testbench::missing_paths_fail_regardless_of_extension, host:testbench::unreadable_source_reports_its_path, host:testbench::broken_nested_symlink_is_not_silently_skipped, host:testbench::zero_unsafe_source_is_valid_as_a_file_or_nested_directory, host:testbench::every_on_target_source_is_in_a_budget, host:testbench::a_long_safety_block_directly_above_justifies
+Status: built · tested: bench:unsafe-budget, host:testbench::actual_source_counts_still_enforce_the_budget, host:testbench::empty_configuration_is_not_coverage, host:testbench::every_configured_root_must_contain_rust_source, host:testbench::missing_paths_fail_regardless_of_extension, host:testbench::unreadable_source_reports_its_path, host:testbench::broken_nested_symlink_is_not_silently_skipped, host:testbench::zero_unsafe_source_is_valid_as_a_file_or_nested_directory, host:testbench::every_on_target_source_is_in_a_budget, host:testbench::a_long_safety_block_directly_above_justifies, bench:rt-miri, host:testbench::a_miri_case_runs_its_files_under_miri
 
 `unsafe-budget.toml` lists every source directory of the trusted computing base that runs on the
 target, each with the most uses of `unsafe` it may hold and the most that may lack a justification
@@ -405,6 +405,14 @@ member fails too. Vendored third-party crates are outside the ratchet
 workspace's members, and `userland/otp` is its own workspace whose `no_std` crates (`re`, `crypto`,
 `vm`) no budget counts. They are not in the trusted computing base; if one ever joins it, it joins
 the workspace and the gate sees it.
+
+The ratchet counts `unsafe`; it does not check it. `rt-miri` runs the native runtime's host tests
+under Miri (Stacked Borrows, isolation off), which checks the heap's free lists, page buffers and
+lends that a native run only executes. It runs the files that finish in seconds; `ipc` and `echo`
+take minutes under Miri and are run by hand. Without nightly Miri the case is missing, not passed.
+With the runtime's page-buffer aliasing fix reverted, `mapping_views` fails it with the Stacked
+Borrows error `not granting access to tag <wildcard> because that would remove [Unique for <…>]
+which is strongly protected`.
 
 ## The size budget
 

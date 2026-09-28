@@ -159,6 +159,12 @@ pub struct Allow {
 pub struct HostTests {
     /// Workspace packages whose `cargo test` must pass, on the host.
     pub packages: Vec<String>,
+    /// The integration test files to run (`--test NAME`); every test target when empty.
+    #[serde(default)]
+    pub tests: Vec<String>,
+    /// Run under nightly Miri, which checks the `unsafe` a native run only executes.
+    #[serde(default)]
+    pub miri: bool,
 }
 
 #[derive(Debug, Deserialize)]

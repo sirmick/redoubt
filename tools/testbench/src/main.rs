@@ -197,10 +197,12 @@ fn main() -> Result<()> {
         }
         if let Kind::HostTests(host) = &case.kind {
             let started = Instant::now();
-            let outcome = match builder.cargo_test(&host.packages) {
-                Ok(None) => Outcome::Pass,
-                Ok(Some(why)) => Outcome::Fail(format!("host tests failed:\n      {why}")),
-                Err(e) => Outcome::Fail(format!("bench error: {e:#}")),
+            let available = if host.miri { build::miri_available() } else { Ok(()) };
+            let outcome = match available.map(|()| builder.cargo_test(host)) {
+                Err(why) => missing(why),
+                Ok(Ok(None)) => Outcome::Pass,
+                Ok(Ok(Some(why))) => Outcome::Fail(format!("host tests failed:\n      {why}")),
+                Ok(Err(e)) => Outcome::Fail(format!("bench error: {e:#}")),
             };
             failures += report(&case.name, outcome, started.elapsed().as_secs_f32());
             continue;
