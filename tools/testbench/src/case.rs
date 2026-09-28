@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 
 /// Output that fails any boot test, on top of the case's own `forbid` list.
@@ -35,6 +35,9 @@ pub enum Kind {
     /// No leftover of a dropped interface, no silenced dead code, no unread Cargo feature, one
     /// literal definition of each shared constant (`cruft.rs`). Not a boot; reads the sources.
     NoCruft(NoCruft),
+    /// Every Rust source formatted with the repository's `rustfmt.toml` under nightly
+    /// (`fmt.rs`). Not a boot; runs `cargo +nightly fmt --check`.
+    Fmt(Fmt),
     /// `cargo test` for host crates, so the suite runs the unit tests that no boot can reach:
     /// a constant both the loader and the bench agree on is right in the machine's eyes even
     /// when it is wrong (see `libs/signing`). Not a boot.
@@ -82,6 +85,24 @@ pub struct NoCruft {
     /// The only exemptions, each with its reason.
     #[serde(default)]
     pub allow: Vec<Allow>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Fmt {
+    /// Cargo workspace roots, relative to the workspace root (`.` for it), each checked with
+    /// `cargo +nightly fmt --all --check`.
+    pub roots: Vec<String>,
+    /// Workspace roots left unformatted, each with its reason.
+    #[serde(default)]
+    pub skip: Vec<Skip>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Skip {
+    pub path: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -354,7 +375,8 @@ impl Boot {
     /// The reporter's PID: the loader numbers the bundle's programs from 2, in order.
     pub fn reporter_pid(&self) -> Option<usize> {
         let reporter = self.reporter.as_ref()?;
-        let index = self.programs.iter().position(|p| matches!(p, Program::TestProgram(name) if name == reporter))?;
+        let index =
+            self.programs.iter().position(|p| matches!(p, Program::TestProgram(name) if name == reporter))?;
         Some(index + 2)
     }
 }
@@ -378,16 +400,25 @@ impl Case {
                     ensure!(groups >= 2, "distinct_across_boots /{pattern}/ needs a capture group");
                 }
                 if !boot.session.is_empty() {
-                    ensure!(boot.net.as_ref().is_some_and(|n| n.forward.contains(&22)), "sessions need net.forward = [22]");
+                    ensure!(
+                        boot.net.as_ref().is_some_and(|n| n.forward.contains(&22)),
+                        "sessions need net.forward = [22]"
+                    );
                 }
                 if let Some(net) = &boot.net {
                     check_net(net)?;
                     // The post-check judges one boot's peer files.
-                    ensure!(net.peer.is_empty() || boot.distinct_across_boots.is_empty(), "peers need one boot");
+                    ensure!(
+                        net.peer.is_empty() || boot.distinct_across_boots.is_empty(),
+                        "peers need one boot"
+                    );
                 }
                 if let Some(reporter) = &boot.reporter {
                     ensure!(boot.poweroff, "a reporter needs poweroff = true");
-                    ensure!(boot.reporter_pid().is_some(), "reporter {reporter:?} is not one of the programs");
+                    ensure!(
+                        boot.reporter_pid().is_some(),
+                        "reporter {reporter:?} is not one of the programs"
+                    );
                 }
                 check_sessions(&boot.session)
             }
@@ -407,7 +438,10 @@ fn check_net(net: &Net) -> Result<()> {
     if !net.peer.is_empty() {
         ensure!(net.peer.iter().any(|p| p.connections > 0), "peers need one with connections > 0");
     }
-    ensure!(net.self_forbidden.is_empty() || !net.peer.is_empty(), "self_forbidden needs peers (the capture)");
+    ensure!(
+        net.self_forbidden.is_empty() || !net.peer.is_empty(),
+        "self_forbidden needs peers (the capture)"
+    );
     ensure!(net.truncate_capture.is_none() || !net.peer.is_empty(), "truncate_capture needs peers");
     for prefix in &net.self_forbidden {
         crate::peer::parse_prefix(prefix)?;
@@ -437,9 +471,14 @@ fn check_sessions(sessions: &[Session]) -> Result<()> {
         for (number, step) in session.steps.iter().enumerate() {
             match step {
                 Step::Wait(mark) => {
-                    ensure!(marks.contains(mark.as_str()), "session {user} waits for mark {mark:?}, which no session sets")
+                    ensure!(
+                        marks.contains(mark.as_str()),
+                        "session {user} waits for mark {mark:?}, which no session sets"
+                    )
                 }
-                Step::Exit(_) => ensure!(number + 1 == session.steps.len(), "session {user}: `exit` must be the last step"),
+                Step::Exit(_) => {
+                    ensure!(number + 1 == session.steps.len(), "session {user}: `exit` must be the last step")
+                }
                 _ => {}
             }
         }

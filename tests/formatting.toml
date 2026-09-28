@@ -1,0 +1,24 @@
+# Not named rustfmt.toml: rustfmt would take that as the configuration for everything under tests/.
+description = "Every Rust source is formatted with the repository's rustfmt.toml under nightly: the workspace and each cargo workspace outside it"
+kind = "fmt"
+roots = [
+    ".",
+    "libs/littlefs/diff",
+    "libs/littlefs/fuzz",
+    "libs/rt/fuzz",
+    "libs/sys/fuzz",
+    "libs/wire/fuzz",
+    "servers/blkd/fuzz",
+    "servers/ipd/fuzz",
+    "servers/netd/fuzz",
+    "stub/fuzz",
+    "userland/otp",
+]
+
+[[skip]]
+path = "bios"
+reason = "RustSBI, upstream's code with its own rustfmt.toml; only built here, never formatted"
+
+[[skip]]
+path = "tools/doccheck/tests/fixtures/good"
+reason = "the docs checker's input: its layout (a multi-line cfg_attr) is what the checker is tested on"
